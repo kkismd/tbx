@@ -286,8 +286,6 @@ END
 | ステートメント | 説明 |
 | -------------- | ---- |
 | PRINTLN str    | PUTSTR str の後に改行を出力する |
-| DPRINTLN n     | PUTDEC n の後に改行を出力する |
-| HPRINTLN n     | PUTHEX n の後に改行を出力する |
 | NEWLINE        | 改行のみを出力する（`PUTCHR 10` 相当） |
 
 インタプリタ内部の文字列表現は以下の方針で実装する。
