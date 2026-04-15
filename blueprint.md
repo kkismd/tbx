@@ -145,11 +145,11 @@ DEF FIZZBUZZ
           PRINT "FizzBuzz"
           GOTO 99
   10
-        BIF I % 3 = 0, 2               ; REM 不成立の場合は20にジャンプ
+        BIF I % 3 = 0, 20              ; REM 不成立の場合は20にジャンプ
           PRINT "Fizz"
           GOTO 99
   20
-        BIF I % 5 = 0, 3               ; REM 不成立の場合は30にジャンプ
+        BIF I % 5 = 0, 30              ; REM 不成立の場合は30にジャンプ
           PRINT "Buzz"
           GOTO 99
   30
