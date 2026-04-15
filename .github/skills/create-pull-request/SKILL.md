@@ -66,7 +66,16 @@ gh pr create \
 rm /tmp/pr_body.md
 ```
 
+### 5. マージ後のクリーンアップ
+
+PRがマージされたら、mainブランチに戻って最新の状態を取得する。
+
+```bash
+git checkout main && git pull
+```
+
 ### 注意点
 
 - `--body "..."` は使わない（`\n` がエスケープされず改行にならない）
 - `Closes #N` をbodyに含めることでissueと自動リンクされる
+- マージ後は必ず `git checkout main && git pull` でmainを最新化する
