@@ -17,9 +17,20 @@ git checkout -b issue/N-short-description
 
 ### 2. 変更をステージしてコミットする
 
+コミットメッセージは `.git/COMMIT_MSG` に書き出し、`-F` オプションで渡す。
+`.git/` 配下はGitが自動的に無視するため、プロジェクト外の `/tmp` を使う必要はない。
+
 ```bash
 git add <ファイル>
-git commit -m "コミットメッセージ"
+
+# Write commit message to a temp file inside .git/
+cat > .git/COMMIT_MSG << 'EOF'
+コミットメッセージ本文
+
+Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>
+EOF
+
+git commit -F .git/COMMIT_MSG
 ```
 
 コミットメッセージの形式:
@@ -41,9 +52,11 @@ git push -u origin <ブランチ名>
 PRのdescriptionは **必ず `--body-file` オプション** でファイルを渡す。
 `--body` に文字列を直接渡すと `\n` がリテラルのまま送信されてしまい、改行が反映されない。
 
+一時ファイルは `.git/PR_BODY.md` に書き出す（プロジェクト外の `/tmp` は使わない）。
+
 ```bash
-# 一時ファイルにdescriptionを書き出す
-cat > /tmp/pr_body.md << 'EOF'
+# Write PR description to a temp file inside .git/
+cat > .git/PR_BODY.md << 'EOF'
 ## 概要
 
 （変更の要約をここに書く）
@@ -56,14 +69,11 @@ cat > /tmp/pr_body.md << 'EOF'
 Closes #N
 EOF
 
-# --body-file でファイルを渡してPRを作成する
+# Pass the file with --body-file
 gh pr create \
   --title "PRタイトル" \
-  --body-file /tmp/pr_body.md \
+  --body-file .git/PR_BODY.md \
   --base main
-
-# 一時ファイルを削除する
-rm /tmp/pr_body.md
 ```
 
 ### 5. マージ後のクリーンアップ
@@ -77,5 +87,7 @@ git checkout main && git pull
 ### 注意点
 
 - `--body "..."` は使わない（`\n` がエスケープされず改行にならない）
+- 一時ファイルは `.git/` 配下に書く（`/tmp` などプロジェクト外は使わない）
+- `.git/` 配下はGitが自動的に無視するため、コミットやgitignoreの心配が不要
 - `Closes #N` をbodyに含めることでissueと自動リンクされる
 - マージ後は必ず `git checkout main && git pull` でmainを最新化する
