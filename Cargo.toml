@@ -1,0 +1,13 @@
+[package]
+name = "tbx"
+version = "0.1.0"
+edition = "2021"
+description = "Tiny BASIC eXtensible - a bootstrappable BASIC interpreter"
+
+[lib]
+name = "tbx"
+path = "src/lib.rs"
+
+[[bin]]
+name = "tbx"
+path = "src/main.rs"
