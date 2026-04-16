@@ -38,7 +38,16 @@ impl std::fmt::Display for Cell {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Cell::Int(n) => write!(f, "{}", n),
-            Cell::Float(v) => write!(f, "{}", v),
+            Cell::Float(v) => {
+                // Always include a decimal point so Float is visually distinct from Int.
+                // e.g. 1.0 → "1.0", not "1".
+                let s = format!("{v}");
+                if s.contains('.') || s.contains('e') || s.contains('E') {
+                    write!(f, "{s}")
+                } else {
+                    write!(f, "{s}.0")
+                }
+            }
             Cell::Addr(a) => write!(f, "addr:{}", a),
             Cell::Xt(x) => write!(f, "xt:{}", x.0),
             Cell::Bool(b) => write!(f, "{}", b),
@@ -122,13 +131,14 @@ impl Cell {
     ///
     /// - `Bool(true)` → `true`
     /// - `Bool(false)` → `false`
-    /// - `Int(0)` → `false`
-    /// - any other `Int` → `true`
+    /// - `Int(0)` → `false`, any other `Int` → `true`
+    /// - `Float(0.0)` → `false`, any other `Float` → `true` (NaN is truthy)
     /// - all other variants → `false`
     pub fn is_truthy(&self) -> bool {
         match self {
             Cell::Bool(b) => *b,
             Cell::Int(n) => *n != 0,
+            Cell::Float(n) => *n != 0.0,
             _ => false,
         }
     }
@@ -192,6 +202,9 @@ mod tests {
     #[test]
     fn test_display_float() {
         assert_eq!(Cell::Float(3.14).to_string(), "3.14");
+        // Integer-valued floats must include a decimal point to be distinct from Int.
+        assert_eq!(Cell::Float(1.0).to_string(), "1.0");
+        assert_eq!(Cell::Float(-0.0).to_string(), "-0.0");
     }
 
     #[test]
@@ -283,8 +296,11 @@ mod tests {
         assert!(Cell::Int(1).is_truthy());
         assert!(Cell::Int(-1).is_truthy());
         assert!(!Cell::Int(0).is_truthy());
-        // non-Int/Bool variants are falsy
-        assert!(!Cell::Float(1.0).is_truthy());
+        // Float: non-zero is truthy
+        assert!(Cell::Float(1.0).is_truthy());
+        assert!(Cell::Float(-1.0).is_truthy());
+        assert!(!Cell::Float(0.0).is_truthy());
+        // non-Int/Bool/Float variants are falsy
         assert!(!Cell::None.is_truthy());
         assert!(!Cell::Array.is_truthy());
         assert!(!Cell::Addr(1).is_truthy());
