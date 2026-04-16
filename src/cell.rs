@@ -39,13 +39,18 @@ impl std::fmt::Display for Cell {
         match self {
             Cell::Int(n) => write!(f, "{}", n),
             Cell::Float(v) => {
-                // Always include a decimal point so Float is visually distinct from Int.
-                // e.g. 1.0 → "1.0", not "1".
-                let s = format!("{v}");
-                if s.contains('.') || s.contains('e') || s.contains('E') {
-                    write!(f, "{s}")
+                // Non-finite values (inf, -inf, NaN) are printed as-is.
+                // Finite values always include a decimal point to be visually
+                // distinct from Int (e.g. 1.0 → "1.0", not "1").
+                if v.is_finite() {
+                    let s = format!("{v}");
+                    if s.contains('.') || s.contains('e') {
+                        write!(f, "{s}")
+                    } else {
+                        write!(f, "{s}.0")
+                    }
                 } else {
-                    write!(f, "{s}.0")
+                    write!(f, "{v}")
                 }
             }
             Cell::Addr(a) => write!(f, "addr:{}", a),
@@ -204,7 +209,10 @@ mod tests {
         assert_eq!(Cell::Float(3.14).to_string(), "3.14");
         // Integer-valued floats must include a decimal point to be distinct from Int.
         assert_eq!(Cell::Float(1.0).to_string(), "1.0");
-        assert_eq!(Cell::Float(-0.0).to_string(), "-0.0");
+        // Non-finite values are printed as-is (no spurious ".0" appended).
+        assert_eq!(Cell::Float(f64::INFINITY).to_string(), "inf");
+        assert_eq!(Cell::Float(f64::NEG_INFINITY).to_string(), "-inf");
+        assert_eq!(Cell::Float(f64::NAN).to_string(), "NaN");
     }
 
     #[test]
