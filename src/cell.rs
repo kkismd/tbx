@@ -34,6 +34,121 @@ pub enum Cell {
     StringDesc(usize),
 }
 
+impl std::fmt::Display for Cell {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Cell::Int(n) => write!(f, "{}", n),
+            Cell::Float(v) => {
+                // Non-finite values (inf, -inf, NaN) are printed as-is.
+                // Finite values always include a decimal point to be visually
+                // distinct from Int (e.g. 1.0 → "1.0", not "1").
+                if v.is_finite() {
+                    let s = format!("{v}");
+                    if s.contains('.') || s.contains('e') {
+                        write!(f, "{s}")
+                    } else {
+                        write!(f, "{s}.0")
+                    }
+                } else {
+                    write!(f, "{v}")
+                }
+            }
+            Cell::Addr(a) => write!(f, "addr:{}", a),
+            Cell::Xt(x) => write!(f, "xt:{}", x.0),
+            Cell::Bool(b) => write!(f, "{}", b),
+            Cell::None => write!(f, "<none>"),
+            Cell::Array => write!(f, "<array>"),
+            Cell::StringDesc(i) => write!(f, "str:{}", i),
+        }
+    }
+}
+
+impl Cell {
+    /// Returns the `i64` value if this cell is `Int`, otherwise `None`.
+    pub fn as_int(&self) -> Option<i64> {
+        if let Cell::Int(n) = self {
+            Some(*n)
+        } else {
+            None
+        }
+    }
+
+    /// Returns the `f64` value if this cell is `Float`, otherwise `None`.
+    pub fn as_float(&self) -> Option<f64> {
+        if let Cell::Float(v) = self {
+            Some(*v)
+        } else {
+            None
+        }
+    }
+
+    /// Returns the `bool` value if this cell is `Bool`, otherwise `None`.
+    pub fn as_bool(&self) -> Option<bool> {
+        if let Cell::Bool(b) = self {
+            Some(*b)
+        } else {
+            None
+        }
+    }
+
+    /// Returns the `usize` address if this cell is `Addr`, otherwise `None`.
+    pub fn as_addr(&self) -> Option<usize> {
+        if let Cell::Addr(a) = self {
+            Some(*a)
+        } else {
+            None
+        }
+    }
+
+    /// Returns the `Xt` value if this cell is `Xt`, otherwise `None`.
+    pub fn as_xt(&self) -> Option<Xt> {
+        if let Cell::Xt(x) = self {
+            Some(*x)
+        } else {
+            None
+        }
+    }
+
+    /// Returns the string pool index if this cell is `StringDesc`, otherwise `None`.
+    pub fn as_string_desc(&self) -> Option<usize> {
+        if let Cell::StringDesc(i) = self {
+            Some(*i)
+        } else {
+            None
+        }
+    }
+
+    /// Returns a static string naming the variant. Useful for error messages and debugging.
+    pub fn type_name(&self) -> &'static str {
+        match self {
+            Cell::Int(_) => "Int",
+            Cell::Float(_) => "Float",
+            Cell::Addr(_) => "Addr",
+            Cell::Xt(_) => "Xt",
+            Cell::Bool(_) => "Bool",
+            Cell::None => "None",
+            Cell::Array => "Array",
+            Cell::StringDesc(_) => "StringDesc",
+        }
+    }
+
+    /// Evaluates the cell as a boolean condition.
+    ///
+    /// - `Bool(true)` → `true`
+    /// - `Bool(false)` → `false`
+    /// - `Int(0)` → `false`, any other `Int` → `true`
+    /// - `Float(0.0)` → `false`, any other `Float` → `true` (NaN is truthy)
+    /// - all other variants → `false`
+    pub fn is_truthy(&self) -> bool {
+        match self {
+            Cell::Bool(b) => *b,
+            Cell::Int(n) => *n != 0,
+            Cell::Float(n) => *n != 0.0,
+            _ => false,
+        }
+    }
+}
+
 impl PartialEq for Cell {
     fn eq(&self, other: &Self) -> bool {
         match (self, other) {
@@ -79,5 +194,123 @@ mod tests {
     fn test_variant_mismatch_not_equal() {
         assert_ne!(Cell::Int(1), Cell::Float(1.0));
         assert_ne!(Cell::Bool(true), Cell::Int(1));
+    }
+
+    // --- Display ---
+
+    #[test]
+    fn test_display_int() {
+        assert_eq!(Cell::Int(42).to_string(), "42");
+        assert_eq!(Cell::Int(-1).to_string(), "-1");
+    }
+
+    #[test]
+    fn test_display_float() {
+        assert_eq!(Cell::Float(3.14).to_string(), "3.14");
+        // Integer-valued floats must include a decimal point to be distinct from Int.
+        assert_eq!(Cell::Float(1.0).to_string(), "1.0");
+        // Non-finite values are printed as-is (no spurious ".0" appended).
+        assert_eq!(Cell::Float(f64::INFINITY).to_string(), "inf");
+        assert_eq!(Cell::Float(f64::NEG_INFINITY).to_string(), "-inf");
+        assert_eq!(Cell::Float(f64::NAN).to_string(), "NaN");
+    }
+
+    #[test]
+    fn test_display_addr() {
+        assert_eq!(Cell::Addr(1234).to_string(), "addr:1234");
+    }
+
+    #[test]
+    fn test_display_xt() {
+        assert_eq!(Cell::Xt(Xt(5)).to_string(), "xt:5");
+    }
+
+    #[test]
+    fn test_display_bool() {
+        assert_eq!(Cell::Bool(true).to_string(), "true");
+        assert_eq!(Cell::Bool(false).to_string(), "false");
+    }
+
+    #[test]
+    fn test_display_none() {
+        assert_eq!(Cell::None.to_string(), "<none>");
+    }
+
+    #[test]
+    fn test_display_array() {
+        assert_eq!(Cell::Array.to_string(), "<array>");
+    }
+
+    #[test]
+    fn test_display_string_desc() {
+        assert_eq!(Cell::StringDesc(0).to_string(), "str:0");
+    }
+
+    // --- Type conversion methods ---
+
+    #[test]
+    fn test_as_int() {
+        assert_eq!(Cell::Int(7).as_int(), Some(7));
+        assert_eq!(Cell::Float(1.0).as_int(), None);
+    }
+
+    #[test]
+    fn test_as_float() {
+        assert_eq!(Cell::Float(2.5).as_float(), Some(2.5));
+        assert_eq!(Cell::Int(1).as_float(), None);
+    }
+
+    #[test]
+    fn test_as_bool() {
+        assert_eq!(Cell::Bool(true).as_bool(), Some(true));
+        assert_eq!(Cell::Bool(false).as_bool(), Some(false));
+        assert_eq!(Cell::Int(1).as_bool(), None);
+    }
+
+    #[test]
+    fn test_as_addr() {
+        assert_eq!(Cell::Addr(100).as_addr(), Some(100));
+        assert_eq!(Cell::Int(100).as_addr(), None);
+    }
+
+    #[test]
+    fn test_as_xt() {
+        assert_eq!(Cell::Xt(Xt(3)).as_xt(), Some(Xt(3)));
+        assert_eq!(Cell::Int(3).as_xt(), None);
+    }
+
+    #[test]
+    fn test_as_string_desc() {
+        assert_eq!(Cell::StringDesc(2).as_string_desc(), Some(2));
+        assert_eq!(Cell::Int(2).as_string_desc(), None);
+    }
+
+    #[test]
+    fn test_type_name() {
+        assert_eq!(Cell::Int(0).type_name(), "Int");
+        assert_eq!(Cell::Float(0.0).type_name(), "Float");
+        assert_eq!(Cell::Addr(0).type_name(), "Addr");
+        assert_eq!(Cell::Xt(Xt(0)).type_name(), "Xt");
+        assert_eq!(Cell::Bool(false).type_name(), "Bool");
+        assert_eq!(Cell::None.type_name(), "None");
+        assert_eq!(Cell::Array.type_name(), "Array");
+        assert_eq!(Cell::StringDesc(0).type_name(), "StringDesc");
+    }
+
+    #[test]
+    fn test_is_truthy() {
+        assert!(Cell::Bool(true).is_truthy());
+        assert!(!Cell::Bool(false).is_truthy());
+        assert!(Cell::Int(1).is_truthy());
+        assert!(Cell::Int(-1).is_truthy());
+        assert!(!Cell::Int(0).is_truthy());
+        // Float: non-zero is truthy
+        assert!(Cell::Float(1.0).is_truthy());
+        assert!(Cell::Float(-1.0).is_truthy());
+        assert!(!Cell::Float(0.0).is_truthy());
+        // non-Int/Bool/Float variants are falsy
+        assert!(!Cell::None.is_truthy());
+        assert!(!Cell::Array.is_truthy());
+        assert!(!Cell::Addr(1).is_truthy());
     }
 }
