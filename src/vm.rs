@@ -22,17 +22,24 @@ pub struct VM {
     pub pc: usize,
     /// Base pointer: index into data_stack marking the current stack frame base
     pub bp: usize,
-    /// End of system dictionary in `dictionary` (data layer boundary)
+    /// Boundary index in `dictionary` after all system primitives are registered.
+    /// Set to `dictionary.len()` once system initialization is complete.
     pub dp_sys: usize,
-    /// End of standard library in `dictionary` (data layer boundary)
+    /// Boundary index in `dictionary` after the standard library is loaded.
+    /// Set to `dictionary.len()` once standard library loading is complete.
     pub dp_lib: usize,
-    /// End of user dictionary in `dictionary` (data layer boundary)
+    /// Boundary index in `dictionary` at the start of the current user session.
+    /// Set to `dictionary.len()` before user code is accepted.
     pub dp_user: usize,
-    /// End of system entries in `headers` (header layer boundary, mirrors `dp_sys`)
+    /// Boundary index in `headers` after all system primitives are registered.
+    /// Mirrors `dp_sys` for the header layer. Updated alongside `dp_sys`.
+    /// Used by FORGET to determine the lower bound for header rollback.
     pub hdr_sys: usize,
-    /// End of standard library entries in `headers` (header layer boundary, mirrors `dp_lib`)
+    /// Boundary index in `headers` after the standard library is loaded.
+    /// Mirrors `dp_lib` for the header layer. Updated alongside `dp_lib`.
     pub hdr_lib: usize,
-    /// End of user entries in `headers` (header layer boundary, mirrors `dp_user`)
+    /// Boundary index in `headers` at the start of the current user session.
+    /// Mirrors `dp_user` for the header layer. Updated alongside `dp_user`.
     pub hdr_user: usize,
     /// Index of the most recently registered entry in `headers` (head of linked list)
     pub latest: Option<usize>,
