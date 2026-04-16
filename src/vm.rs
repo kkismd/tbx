@@ -41,6 +41,9 @@ pub struct VM {
     /// Boundary index in `headers` at the start of the current user session.
     /// Mirrors `dp_user` for the header layer. Updated alongside `dp_user`.
     pub hdr_user: usize,
+    /// Dictionary pointer (HERE): index of the next free write position in `dictionary`.
+    /// Starts at 0 and advances as words are compiled or `ALLOT` is called.
+    pub dp: usize,
     /// Index of the most recently registered entry in `headers` (head of linked list)
     pub latest: Option<Xt>,
 }
@@ -62,6 +65,7 @@ impl VM {
             hdr_sys: 0,
             hdr_lib: 0,
             hdr_user: 0,
+            dp: 0,
             latest: None,
         }
     }
@@ -122,6 +126,7 @@ mod tests {
         assert!(vm.data_stack.is_empty());
         assert!(vm.return_stack.is_empty());
         assert!(vm.latest.is_none());
+        assert_eq!(vm.dp, 0);
     }
 
     #[test]
