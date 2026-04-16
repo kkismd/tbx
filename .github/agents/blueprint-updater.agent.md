@@ -26,7 +26,7 @@ GitHubのissueに記載された要件・議論を読み込み、`blueprint.md` 
 
 ### ステップ1：issueの把握
 
-GitHubのMCPサーバー（`github` ツール）を使ってissueの本文・コメントを取得し、内容を日本語で要約する。
+`github-mcp-server-issue_read`（method: `get`）でissueの本文を、（method: `get_comments`）でコメントを取得し、内容を日本語で要約する。
 
 ### ステップ2：blueprint.mdの現状確認
 
