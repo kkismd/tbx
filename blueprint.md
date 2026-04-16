@@ -68,6 +68,41 @@ eXtensibleなTiny BASICという意味で TBX という名前をつける。
 * DP_USER: ユーザー辞書の終端
 * DP（辞書ポインタ / HERE）: 現在の書き込み先（DP_USER より先の空き領域の先頭）
 
+#### 辞書エントリの構造（ヘッダとデータの分離）
+
+> Issue #51「辞書エントリの管理方法について」に基づく設計方針
+
+辞書は**ヘッダ層**と**データ層**を分離した二層構造で実装する。
+
+| 層 | フィールド名 | 型 | 内容 |
+| --- | --- | --- | --- |
+| ヘッダ層 | `headers` | `Vec<WordEntry>` | ワード名・フラグ・データアドレスを保持する構造体の配列 |
+| データ層 | `dictionary` | `Vec<Cell>` | コンパイル済みコードをフラットに格納するCell配列 |
+
+**ヘッダ層**はリンクリスト構造を持つ。各エントリに `prev: Option<usize>` フィールドを持たせ、`headers` 配列内の前エントリのインデックスを格納する。これにより以下を実現する。
+
+* **シャドウイング**: 同名ワードを新たに登録する際、既存エントリを書き換えずに末尾に追加するだけでよい。検索は末尾（`latest`）から `prev` をたどって行うため、最新の定義が自動的に優先される。
+* **FORGET による巻き戻し**: `latest` を特定のインデックスまで戻し、それ以降の `headers` エントリと `dictionary` データを破棄するだけで定義を取り消せる。
+
+**データ層**はフラットな `Vec<Cell>` 配列であり、`pc` はこの配列へのインデックスとして機能する。DP_SYS / DP_LIB / DP_USER / DP もこの配列へのオフセットとして管理する。
+
+```rust
+struct WordEntry {
+    name: String,                  // word name
+    flags: u8,                     // attribute flags (IMMEDIATE etc.)
+    data_address: usize,           // offset into dictionary Vec<Cell>
+    handler: Option<fn(&mut VM)>,  // Rust function for primitives; None for compiled words
+    prev: Option<usize>,           // index of previous WordEntry in headers (linked list)
+}
+
+struct VM {
+    headers: Vec<WordEntry>,   // word headers (linked list via prev field)
+    dictionary: Vec<Cell>,     // flat code/data storage; pc indexes into this
+    string_pool: Vec<u8>,      // string data (length-prefixed)
+    // ... stacks, registers, boundary pointers
+}
+```
+
 #### ヒープ
 
 辞書ポインタ DP より先の未使用メモリ空間を**ヒープ**として扱う。`ALLOT` プリミティブで DP を進めることで領域を確保する。ヒープはユーザープログラムからも利用できる汎用領域であり、コンパイラが内部で一時データ（トークン・ディスクリプタなど）を置く場所でもある。
@@ -364,8 +399,9 @@ enum Cell {
 }
 
 struct VM {
-    dictionary: Vec<Cell>,
-    string_pool: Vec<u8>, // all string data packed here
+    headers: Vec<WordEntry>,  // word headers (linked list via prev field)
+    dictionary: Vec<Cell>,    // flat code/data storage; pc indexes into this
+    string_pool: Vec<u8>,     // all string data packed here
     pc: usize,
 }
 ```
