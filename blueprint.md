@@ -86,13 +86,20 @@ eXtensibleなTiny BASICという意味で TBX という名前をつける。
 
 **データ層**はフラットな `Vec<Cell>` 配列であり、`pc` はこの配列へのインデックスとして機能する。DP_SYS / DP_LIB / DP_USER / DP もこの配列へのオフセットとして管理する。
 
+`WordEntry.data_address` は両種のワードで共通して使う Xt である。
+
+* **コンパイル済みワード**: `dictionary[data_address]` から始まる `Cell::Xt` の列がワード本体。インナ・インタプリタはこの列を順に実行する。
+* **プリミティブ**: `data_address` をネイティブディスパッチのインデックスとして用い、インナ・インタプリタが対応する Rust 実装を呼び出す。関数ポインタは `WordEntry` には持たせず、VM 内部のディスパッチテーブルで管理する。
+
 ```rust
 struct WordEntry {
-    name: String,                  // word name
-    flags: u8,                     // attribute flags (IMMEDIATE etc.)
-    data_address: usize,           // offset into dictionary Vec<Cell>
-    handler: Option<fn(&mut VM)>,  // Rust function for primitives; None for compiled words
-    prev: Option<usize>,           // index of previous WordEntry in headers (linked list)
+    name: String,             // word name
+    flags: u8,                // attribute flags (IMMEDIATE etc.)
+    data_address: usize,      // Xt — offset into dictionary Vec<Cell>;
+                              //   compiled words: start of Xt sequence
+                              //   primitives: native dispatch index
+    is_primitive: bool,       // true if native Rust implementation
+    prev: Option<usize>,      // index of previous WordEntry in headers (linked list)
 }
 
 struct VM {
