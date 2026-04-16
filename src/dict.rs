@@ -1,4 +1,4 @@
-use crate::cell::Cell;
+use crate::cell::{Cell, Xt};
 
 /// Function pointer type for native Rust primitives.
 pub type PrimFn = fn(&mut crate::vm::VM);
@@ -47,7 +47,7 @@ pub struct WordEntry {
     ///
     /// **Do not set this field directly.** It is automatically managed by
     /// `VM::register()`, which overwrites any value set here.
-    pub(crate) prev: Option<usize>,
+    pub(crate) prev: Option<Xt>,
 }
 
 impl WordEntry {

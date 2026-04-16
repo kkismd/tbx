@@ -1,5 +1,5 @@
 use crate::dict::WordEntry;
-use crate::cell::Cell;
+use crate::cell::{Cell, Xt};
 
 /// The TBX virtual machine.
 ///
@@ -35,7 +35,7 @@ pub struct VM {
     /// End of user entries in `headers` (header layer boundary, mirrors `dp_user`)
     pub hdr_user: usize,
     /// Index of the most recently registered entry in `headers` (head of linked list)
-    pub latest: Option<usize>,
+    pub latest: Option<Xt>,
 }
 
 impl VM {
@@ -60,23 +60,23 @@ impl VM {
     }
 
     /// Register a word entry in the header table, linking it into the search list.
-    /// Returns the index (Xt) of the newly added entry.
-    pub fn register(&mut self, mut entry: WordEntry) -> usize {
-        let idx = self.headers.len();
+    /// Returns the `Xt` (execution token) of the newly added entry.
+    pub fn register(&mut self, mut entry: WordEntry) -> Xt {
+        let xt = Xt(self.headers.len());
         entry.prev = self.latest;
-        self.latest = Some(idx);
+        self.latest = Some(xt);
         self.headers.push(entry);
-        idx
+        xt
     }
 
     /// Look up a word by name, searching from newest to oldest entry via the linked list.
-    /// Returns the header index (Xt) if found.
-    pub fn lookup(&self, name: &str) -> Option<usize> {
+    /// Returns the `Xt` (header index) if found.
+    pub fn lookup(&self, name: &str) -> Option<Xt> {
         let mut current = self.latest;
-        while let Some(idx) = current {
-            let entry = &self.headers[idx];
+        while let Some(xt) = current {
+            let entry = &self.headers[xt.index()];
             if entry.name == name {
-                return Some(idx);
+                return Some(xt);
             }
             current = entry.prev;
         }
@@ -131,8 +131,8 @@ mod tests {
         vm.register(WordEntry::new_primitive("HALT", noop));
         vm.register(WordEntry::new_primitive("DROP", noop));
 
-        assert_eq!(vm.lookup("HALT"), Some(0));
-        assert_eq!(vm.lookup("DROP"), Some(1));
+        assert_eq!(vm.lookup("HALT"), Some(Xt(0)));
+        assert_eq!(vm.lookup("DROP"), Some(Xt(1)));
         assert_eq!(vm.lookup("MISSING"), None);
     }
 
@@ -143,7 +143,7 @@ mod tests {
         vm.register(WordEntry::new_word("FOO", 10)); // shadows the first
 
         // Lookup should find the newer (index 1) entry
-        assert_eq!(vm.lookup("FOO"), Some(1));
+        assert_eq!(vm.lookup("FOO"), Some(Xt(1)));
     }
 
     #[test]
@@ -153,8 +153,8 @@ mod tests {
         vm.register(WordEntry::new_primitive("B", noop));
         vm.register(WordEntry::new_primitive("C", noop));
 
-        assert_eq!(vm.lookup("A"), Some(0));
-        assert_eq!(vm.lookup("B"), Some(1));
-        assert_eq!(vm.lookup("C"), Some(2));
+        assert_eq!(vm.lookup("A"), Some(Xt(0)));
+        assert_eq!(vm.lookup("B"), Some(Xt(1)));
+        assert_eq!(vm.lookup("C"), Some(Xt(2)));
     }
 }
