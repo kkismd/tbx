@@ -40,7 +40,7 @@ impl PartialEq for Cell {
             // For floats, treat NaN as equal to NaN (value identity semantics).
             // IEEE 754 defines NaN != NaN, but for TBX value equality we use
             // structural equality so that NaN cells compare as equal.
-            (Cell::Float(a), Cell::Float(b)) => a.is_nan() && b.is_nan() || a == b,
+            (Cell::Float(a), Cell::Float(b)) => (a.is_nan() && b.is_nan()) || (a == b),
             (Cell::Int(a), Cell::Int(b)) => a == b,
             (Cell::Addr(a), Cell::Addr(b)) => a == b,
             (Cell::Xt(a), Cell::Xt(b)) => a == b,
