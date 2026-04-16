@@ -3,18 +3,22 @@ use crate::cell::Cell;
 
 /// The TBX virtual machine.
 ///
-/// Holds all runtime state: dictionary, string pool, stacks, and registers.
+/// The dictionary is split into two layers:
+/// - `headers`: word name/flag/kind metadata, forming a linked list via `prev`
+/// - `dictionary`: flat `Vec<Cell>` array of compiled code; `pc` indexes into this
 #[derive(Debug)]
 pub struct VM {
-    /// The dictionary: all registered words (system primitives + user-defined)
-    pub dictionary: Vec<WordEntry>,
+    /// Word header table (linked list via `WordEntry::prev`)
+    pub headers: Vec<WordEntry>,
+    /// Flat code/data storage; `pc` is an index into this array
+    pub dictionary: Vec<Cell>,
     /// String pool: all string data packed as length-prefixed byte sequences
     pub string_pool: Vec<u8>,
     /// Data stack: operand stack for arithmetic and parameter passing
     pub data_stack: Vec<Cell>,
     /// Return stack: saves (pc, bp) pairs on word calls
     pub return_stack: Vec<(usize, usize)>,
-    /// Program counter: index of the currently executing word in the dictionary
+    /// Program counter: index into `dictionary` of the currently executing cell
     pub pc: usize,
     /// Base pointer: index into data_stack marking the current stack frame base
     pub bp: usize,
@@ -24,12 +28,15 @@ pub struct VM {
     pub dp_lib: usize,
     /// End of user dictionary
     pub dp_user: usize,
+    /// Index of the most recently registered entry in `headers` (head of linked list)
+    pub latest: Option<usize>,
 }
 
 impl VM {
-    /// Create a new VM with empty dictionary and stacks.
+    /// Create a new VM with empty header table, dictionary, and stacks.
     pub fn new() -> Self {
         Self {
+            headers: Vec::new(),
             dictionary: Vec::new(),
             string_pool: Vec::new(),
             data_stack: Vec::new(),
@@ -39,18 +46,32 @@ impl VM {
             dp_sys: 0,
             dp_lib: 0,
             dp_user: 0,
+            latest: None,
         }
     }
 
-    /// Look up a word by name, searching from newest to oldest entry.
-    /// Returns the dictionary index (Xt) if found.
+    /// Register a word entry in the header table, linking it into the search list.
+    /// Returns the index (Xt) of the newly added entry.
+    pub fn register(&mut self, mut entry: WordEntry) -> usize {
+        let idx = self.headers.len();
+        entry.prev = self.latest;
+        self.latest = Some(idx);
+        self.headers.push(entry);
+        idx
+    }
+
+    /// Look up a word by name, searching from newest to oldest entry via the linked list.
+    /// Returns the header index (Xt) if found.
     pub fn lookup(&self, name: &str) -> Option<usize> {
-        self.dictionary
-            .iter()
-            .enumerate()
-            .rev()
-            .find(|(_, entry)| entry.name == name)
-            .map(|(idx, _)| idx)
+        let mut current = self.latest;
+        while let Some(idx) = current {
+            let entry = &self.headers[idx];
+            if entry.name == name {
+                return Some(idx);
+            }
+            current = entry.prev;
+        }
+        None
     }
 
     /// Push a value onto the data stack.
@@ -73,13 +94,18 @@ impl Default for VM {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::dict::WordEntry;
+
+    fn noop(_vm: &mut VM) {}
 
     #[test]
     fn test_vm_new() {
         let vm = VM::new();
+        assert!(vm.headers.is_empty());
         assert!(vm.dictionary.is_empty());
         assert!(vm.data_stack.is_empty());
         assert!(vm.return_stack.is_empty());
+        assert!(vm.latest.is_none());
     }
 
     #[test]
@@ -91,14 +117,35 @@ mod tests {
     }
 
     #[test]
-    fn test_lookup() {
+    fn test_register_and_lookup() {
         let mut vm = VM::new();
-        use crate::dict::WordEntry;
-        vm.dictionary.push(WordEntry::new_primitive("HALT"));
-        vm.dictionary.push(WordEntry::new_primitive("DROP"));
+        vm.register(WordEntry::new_primitive("HALT", noop));
+        vm.register(WordEntry::new_primitive("DROP", noop));
 
         assert_eq!(vm.lookup("HALT"), Some(0));
         assert_eq!(vm.lookup("DROP"), Some(1));
         assert_eq!(vm.lookup("MISSING"), None);
+    }
+
+    #[test]
+    fn test_lookup_shadows_older_entry() {
+        let mut vm = VM::new();
+        vm.register(WordEntry::new_word("FOO", 0));
+        vm.register(WordEntry::new_word("FOO", 10)); // shadows the first
+
+        // Lookup should find the newer (index 1) entry
+        assert_eq!(vm.lookup("FOO"), Some(1));
+    }
+
+    #[test]
+    fn test_lookup_linked_list_order() {
+        let mut vm = VM::new();
+        vm.register(WordEntry::new_primitive("A", noop));
+        vm.register(WordEntry::new_primitive("B", noop));
+        vm.register(WordEntry::new_primitive("C", noop));
+
+        assert_eq!(vm.lookup("A"), Some(0));
+        assert_eq!(vm.lookup("B"), Some(1));
+        assert_eq!(vm.lookup("C"), Some(2));
     }
 }
