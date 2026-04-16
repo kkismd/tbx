@@ -76,7 +76,7 @@ eXtensibleなTiny BASICという意味で TBX という名前をつける。
 
 | 層 | フィールド名 | 型 | 内容 |
 | --- | --- | --- | --- |
-| ヘッダ層 | `headers` | `Vec<WordEntry>` | ワード名・フラグ・データアドレスを保持する構造体の配列 |
+| ヘッダ層 | `headers` | `Vec<WordEntry>` | ワード名・フラグ・エントリ種別を保持する構造体の配列 |
 | データ層 | `dictionary` | `Vec<Cell>` | コンパイル済みコードをフラットに格納するCell配列 |
 
 **ヘッダ層**はリンクリスト構造を持つ。各エントリに `prev: Option<usize>` フィールドを持たせ、`headers` 配列内の前エントリのインデックスを格納する。これにより以下を実現する。
@@ -86,13 +86,26 @@ eXtensibleなTiny BASICという意味で TBX という名前をつける。
 
 **データ層**はフラットな `Vec<Cell>` 配列であり、`pc` はこの配列へのインデックスとして機能する。DP_SYS / DP_LIB / DP_USER / DP もこの配列へのオフセットとして管理する。
 
+`WordEntry` はエントリの種別を `EntryKind` enum として保持する。`Cell`（データスタックや変数の値）と `EntryKind`（辞書エントリの属性）を明確に分離することで、辞書の多様なエントリをひとつの型で統一的に扱える。
+
 ```rust
+// how a name in the dictionary is interpreted
+enum EntryKind {
+    /// compiled word — usize is the start offset into dictionary Vec<Cell>
+    Word(usize),
+    /// native Rust primitive — holds a function pointer
+    Primitive(fn(&mut Vm)),
+    /// global variable — usize is the index of the storage cell in dictionary
+    Variable(usize),
+    /// constant — value is stored directly in the dictionary entry
+    Constant(Cell),
+}
+
 struct WordEntry {
-    name: String,                  // word name
-    flags: u8,                     // attribute flags (IMMEDIATE etc.)
-    data_address: usize,           // offset into dictionary Vec<Cell>
-    handler: Option<fn(&mut VM)>,  // Rust function for primitives; None for compiled words
-    prev: Option<usize>,           // index of previous WordEntry in headers (linked list)
+    name: String,           // word name
+    flags: u8,              // attribute flags (IMMEDIATE etc.)
+    kind: EntryKind,        // how this entry is executed or accessed
+    prev: Option<usize>,    // index of previous WordEntry in headers (linked list)
 }
 
 struct VM {
