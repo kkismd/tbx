@@ -43,8 +43,11 @@ pub struct WordEntry {
     pub flags: u8,
     /// How this entry is executed or accessed
     pub kind: EntryKind,
-    /// Index of the previous entry in `VM::headers` (linked list for search)
-    pub prev: Option<usize>,
+    /// Index of the previous entry in `VM::headers` (linked list for search).
+    ///
+    /// **Do not set this field directly.** It is automatically managed by
+    /// `VM::register()`, which overwrites any value set here.
+    pub(crate) prev: Option<usize>,
 }
 
 impl WordEntry {

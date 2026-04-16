@@ -22,12 +22,18 @@ pub struct VM {
     pub pc: usize,
     /// Base pointer: index into data_stack marking the current stack frame base
     pub bp: usize,
-    /// End of system dictionary (primitives registered at startup)
+    /// End of system dictionary in `dictionary` (data layer boundary)
     pub dp_sys: usize,
-    /// End of standard library dictionary
+    /// End of standard library in `dictionary` (data layer boundary)
     pub dp_lib: usize,
-    /// End of user dictionary
+    /// End of user dictionary in `dictionary` (data layer boundary)
     pub dp_user: usize,
+    /// End of system entries in `headers` (header layer boundary, mirrors `dp_sys`)
+    pub hdr_sys: usize,
+    /// End of standard library entries in `headers` (header layer boundary, mirrors `dp_lib`)
+    pub hdr_lib: usize,
+    /// End of user entries in `headers` (header layer boundary, mirrors `dp_user`)
+    pub hdr_user: usize,
     /// Index of the most recently registered entry in `headers` (head of linked list)
     pub latest: Option<usize>,
 }
@@ -46,6 +52,9 @@ impl VM {
             dp_sys: 0,
             dp_lib: 0,
             dp_user: 0,
+            hdr_sys: 0,
+            hdr_lib: 0,
+            hdr_user: 0,
             latest: None,
         }
     }
