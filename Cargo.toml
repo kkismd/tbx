@@ -2,6 +2,7 @@
 name = "tbx"
 version = "0.1.0"
 edition = "2021"
+rust-version = "1.76"
 description = "Tiny BASIC eXtensible - a bootstrappable BASIC interpreter"
 
 [lib]
