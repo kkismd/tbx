@@ -96,3 +96,157 @@ impl WordEntry {
         self.flags & FLAG_IMMEDIATE != 0
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::cell::Cell;
+
+    /// A dummy primitive function used to obtain a concrete `PrimFn` value in tests.
+    fn dummy_prim(_vm: &mut crate::vm::VM) {}
+
+    // --- FLAG_IMMEDIATE constant ---
+
+    #[test]
+    fn test_flag_immediate_value() {
+        // FLAG_IMMEDIATE must be exactly bit 0 (0b0000_0001).
+        assert_eq!(FLAG_IMMEDIATE, 0b0000_0001);
+    }
+
+    // --- new_primitive ---
+
+    #[test]
+    fn test_new_primitive_name() {
+        let entry = WordEntry::new_primitive("dup", dummy_prim);
+        assert_eq!(entry.name, "dup");
+    }
+
+    #[test]
+    fn test_new_primitive_flags_zero() {
+        let entry = WordEntry::new_primitive("dup", dummy_prim);
+        assert_eq!(entry.flags, 0);
+    }
+
+    #[test]
+    fn test_new_primitive_prev_none() {
+        let entry = WordEntry::new_primitive("dup", dummy_prim);
+        assert!(entry.prev.is_none());
+    }
+
+    #[test]
+    fn test_new_primitive_kind() {
+        let entry = WordEntry::new_primitive("dup", dummy_prim);
+        assert!(matches!(entry.kind, EntryKind::Primitive(_)));
+    }
+
+    // --- new_word ---
+
+    #[test]
+    fn test_new_word_name() {
+        let entry = WordEntry::new_word("square", 42);
+        assert_eq!(entry.name, "square");
+    }
+
+    #[test]
+    fn test_new_word_flags_zero() {
+        let entry = WordEntry::new_word("square", 42);
+        assert_eq!(entry.flags, 0);
+    }
+
+    #[test]
+    fn test_new_word_prev_none() {
+        let entry = WordEntry::new_word("square", 42);
+        assert!(entry.prev.is_none());
+    }
+
+    #[test]
+    fn test_new_word_kind_offset() {
+        let entry = WordEntry::new_word("square", 42);
+        assert!(matches!(entry.kind, EntryKind::Word(42)));
+    }
+
+    // --- new_variable ---
+
+    #[test]
+    fn test_new_variable_name() {
+        let entry = WordEntry::new_variable("counter", 10);
+        assert_eq!(entry.name, "counter");
+    }
+
+    #[test]
+    fn test_new_variable_flags_zero() {
+        let entry = WordEntry::new_variable("counter", 10);
+        assert_eq!(entry.flags, 0);
+    }
+
+    #[test]
+    fn test_new_variable_prev_none() {
+        let entry = WordEntry::new_variable("counter", 10);
+        assert!(entry.prev.is_none());
+    }
+
+    #[test]
+    fn test_new_variable_kind_idx() {
+        let entry = WordEntry::new_variable("counter", 10);
+        assert!(matches!(entry.kind, EntryKind::Variable(10)));
+    }
+
+    // --- new_constant ---
+
+    #[test]
+    fn test_new_constant_name() {
+        let entry = WordEntry::new_constant("MAX", Cell::Int(100));
+        assert_eq!(entry.name, "MAX");
+    }
+
+    #[test]
+    fn test_new_constant_flags_zero() {
+        let entry = WordEntry::new_constant("MAX", Cell::Int(100));
+        assert_eq!(entry.flags, 0);
+    }
+
+    #[test]
+    fn test_new_constant_prev_none() {
+        let entry = WordEntry::new_constant("MAX", Cell::Int(100));
+        assert!(entry.prev.is_none());
+    }
+
+    #[test]
+    fn test_new_constant_kind_value() {
+        let entry = WordEntry::new_constant("MAX", Cell::Int(100));
+        assert!(matches!(entry.kind, EntryKind::Constant(Cell::Int(100))));
+    }
+
+    // --- is_immediate ---
+
+    #[test]
+    fn test_is_immediate_false_by_default() {
+        // All constructors set flags = 0, so is_immediate() must return false.
+        let entry = WordEntry::new_primitive("dup", dummy_prim);
+        assert!(!entry.is_immediate());
+    }
+
+    #[test]
+    fn test_is_immediate_true_when_flag_set() {
+        let mut entry = WordEntry::new_primitive("if", dummy_prim);
+        entry.flags |= FLAG_IMMEDIATE;
+        assert!(entry.is_immediate());
+    }
+
+    #[test]
+    fn test_is_immediate_ignores_other_bits() {
+        // Setting bits other than FLAG_IMMEDIATE must not affect is_immediate().
+        let mut entry = WordEntry::new_primitive("dup", dummy_prim);
+        entry.flags = 0b1111_1110; // all bits except bit 0
+        assert!(!entry.is_immediate());
+    }
+
+    #[test]
+    fn test_is_immediate_true_with_other_bits_also_set() {
+        // is_immediate() should return true whenever FLAG_IMMEDIATE bit is set,
+        // regardless of other bits.
+        let mut entry = WordEntry::new_primitive("if", dummy_prim);
+        entry.flags = 0b1111_1111; // all bits including bit 0
+        assert!(entry.is_immediate());
+    }
+}
