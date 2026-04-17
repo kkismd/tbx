@@ -103,6 +103,54 @@ impl VM {
     pub fn pop(&mut self) -> Option<Cell> {
         self.data_stack.pop()
     }
+
+    /// Seal the system dictionary boundary.
+    ///
+    /// Records the current `dp` and `headers.len()` as the end of the system
+    /// dictionary layer. Call this once all system primitives have been registered.
+    pub fn seal_sys(&mut self) {
+        self.dp_sys = self.dp;
+        self.hdr_sys = self.headers.len();
+    }
+
+    /// Seal the standard library dictionary boundary.
+    ///
+    /// Records the current `dp` and `headers.len()` as the end of the standard
+    /// library layer. Call this once the standard library has been loaded.
+    pub fn seal_lib(&mut self) {
+        self.dp_lib = self.dp;
+        self.hdr_lib = self.headers.len();
+    }
+
+    /// Seal the user dictionary boundary.
+    ///
+    /// Records the current `dp` and `headers.len()` as the end of the user
+    /// dictionary layer. Call this before accepting user code in a new session.
+    pub fn seal_user(&mut self) {
+        self.dp_user = self.dp;
+        self.hdr_user = self.headers.len();
+    }
+
+    /// Intern a string into the string pool using the length-prefix format.
+    ///
+    /// Appends the string as: one byte for the length followed by the UTF-8
+    /// bytes of the string. Returns the index of the length byte in `string_pool`.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `s` is 256 bytes or longer (length must fit in a `u8`).
+    pub fn intern_string(&mut self, s: &str) -> usize {
+        let bytes = s.as_bytes();
+        assert!(
+            bytes.len() < 256,
+            "string too long for string pool: {} bytes (max 255)",
+            bytes.len()
+        );
+        let idx = self.string_pool.len();
+        self.string_pool.push(bytes.len() as u8);
+        self.string_pool.extend_from_slice(bytes);
+        idx
+    }
 }
 
 impl Default for VM {
@@ -168,5 +216,108 @@ mod tests {
         assert_eq!(vm.lookup("A"), Some(Xt(0)));
         assert_eq!(vm.lookup("B"), Some(Xt(1)));
         assert_eq!(vm.lookup("C"), Some(Xt(2)));
+    }
+
+    #[test]
+    fn test_seal_sys() {
+        let mut vm = VM::new();
+        vm.dp = 10;
+        vm.headers.push(WordEntry::new_primitive("A", noop));
+        vm.headers.push(WordEntry::new_primitive("B", noop));
+        vm.seal_sys();
+        assert_eq!(vm.dp_sys, 10);
+        assert_eq!(vm.hdr_sys, 2);
+        // lib and user remain untouched
+        assert_eq!(vm.dp_lib, 0);
+        assert_eq!(vm.dp_user, 0);
+    }
+
+    #[test]
+    fn test_seal_lib() {
+        let mut vm = VM::new();
+        vm.dp = 20;
+        vm.headers.push(WordEntry::new_primitive("X", noop));
+        vm.seal_lib();
+        assert_eq!(vm.dp_lib, 20);
+        assert_eq!(vm.hdr_lib, 1);
+        assert_eq!(vm.dp_sys, 0);
+        assert_eq!(vm.dp_user, 0);
+    }
+
+    #[test]
+    fn test_seal_user() {
+        let mut vm = VM::new();
+        vm.dp = 42;
+        vm.headers.push(WordEntry::new_primitive("Y", noop));
+        vm.seal_user();
+        assert_eq!(vm.dp_user, 42);
+        assert_eq!(vm.hdr_user, 1);
+        assert_eq!(vm.dp_sys, 0);
+        assert_eq!(vm.dp_lib, 0);
+    }
+
+    #[test]
+    fn test_seal_progression() {
+        // Simulate registering system -> lib -> user words and sealing each layer.
+        let mut vm = VM::new();
+
+        vm.dp = 5;
+        vm.headers.push(WordEntry::new_primitive("SYS1", noop));
+        vm.seal_sys();
+
+        vm.dp = 15;
+        vm.headers.push(WordEntry::new_primitive("LIB1", noop));
+        vm.seal_lib();
+
+        vm.dp = 30;
+        vm.headers.push(WordEntry::new_primitive("USR1", noop));
+        vm.seal_user();
+
+        assert_eq!(vm.dp_sys, 5);
+        assert_eq!(vm.hdr_sys, 1);
+        assert_eq!(vm.dp_lib, 15);
+        assert_eq!(vm.hdr_lib, 2);
+        assert_eq!(vm.dp_user, 30);
+        assert_eq!(vm.hdr_user, 3);
+    }
+
+    #[test]
+    fn test_intern_string_basic() {
+        let mut vm = VM::new();
+        let idx = vm.intern_string("hello");
+        assert_eq!(idx, 0);
+        assert_eq!(vm.string_pool[0], 5); // length byte
+        assert_eq!(&vm.string_pool[1..6], b"hello");
+    }
+
+    #[test]
+    fn test_intern_string_multiple() {
+        let mut vm = VM::new();
+        let idx1 = vm.intern_string("hi");
+        let idx2 = vm.intern_string("world");
+        // "hi" occupies bytes 0..=2 (1 length + 2 data)
+        assert_eq!(idx1, 0);
+        assert_eq!(idx2, 3); // 1 (len) + 2 (data) = 3
+        assert_eq!(vm.string_pool[idx1], 2);
+        assert_eq!(&vm.string_pool[idx1 + 1..idx1 + 3], b"hi");
+        assert_eq!(vm.string_pool[idx2], 5);
+        assert_eq!(&vm.string_pool[idx2 + 1..idx2 + 6], b"world");
+    }
+
+    #[test]
+    fn test_intern_string_empty() {
+        let mut vm = VM::new();
+        let idx = vm.intern_string("");
+        assert_eq!(idx, 0);
+        assert_eq!(vm.string_pool[0], 0); // zero-length string
+        assert_eq!(vm.string_pool.len(), 1);
+    }
+
+    #[test]
+    #[should_panic(expected = "string too long")]
+    fn test_intern_string_too_long() {
+        let mut vm = VM::new();
+        let long_str = "x".repeat(256);
+        vm.intern_string(&long_str);
     }
 }
