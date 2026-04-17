@@ -3,8 +3,9 @@
 pub enum TbxError {
     /// A string was too long to store in the string pool.
     ///
-    /// The pool uses a single byte for the length prefix, so strings must be
-    /// at most 255 bytes when encoded as UTF-8.
+    /// The pool uses a two-byte little-endian length prefix (`u16`), so strings
+    /// must be at most 65535 bytes when encoded as UTF-8. This limit applies at
+    /// the lexer/parser level before the string reaches the pool.
     StringTooLong { len: usize },
 }
 
@@ -14,7 +15,7 @@ impl std::fmt::Display for TbxError {
             TbxError::StringTooLong { len } => {
                 write!(
                     f,
-                    "string too long for string pool: {} bytes (max 255)",
+                    "string too long for string pool: {} bytes (max 65535)",
                     len
                 )
             }
@@ -32,6 +33,6 @@ mod tests {
     fn test_string_too_long_display() {
         let e = TbxError::StringTooLong { len: 300 };
         assert!(e.to_string().contains("300"));
-        assert!(e.to_string().contains("255"));
+        assert!(e.to_string().contains("65535"));
     }
 }
