@@ -134,15 +134,10 @@ impl VM {
 
     /// Intern a string into the string pool using the length-prefix format.
     ///
-    /// Appends the string as: one byte for the length followed by the UTF-8
-    /// bytes of the string. Returns the index of the length byte in `string_pool`.
+    /// Appends the string as: one byte for the UTF-8 byte length followed by
+    /// the raw bytes. Returns the index of the length byte in `string_pool`.
     ///
-    /// # Panics
-    ///
-    /// Append a string to the string pool using length-prefix format.
-    ///
-    /// Stores one byte for the UTF-8 byte length followed by the raw bytes.
-    /// Returns the index of the length byte in `string_pool`.
+    /// # Errors
     ///
     /// Returns `Err(TbxError::StringTooLong)` if `s` is 256 bytes or longer,
     /// since the length prefix is a single `u8` (max value 255).
@@ -227,8 +222,8 @@ mod tests {
     fn test_seal_sys() {
         let mut vm = VM::new();
         vm.dp = 10;
-        vm.headers.push(WordEntry::new_primitive("A", noop));
-        vm.headers.push(WordEntry::new_primitive("B", noop));
+        vm.register(WordEntry::new_primitive("A", noop));
+        vm.register(WordEntry::new_primitive("B", noop));
         vm.seal_sys();
         assert_eq!(vm.dp_sys, 10);
         assert_eq!(vm.hdr_sys, 2);
@@ -241,7 +236,7 @@ mod tests {
     fn test_seal_lib() {
         let mut vm = VM::new();
         vm.dp = 20;
-        vm.headers.push(WordEntry::new_primitive("X", noop));
+        vm.register(WordEntry::new_primitive("X", noop));
         vm.seal_lib();
         assert_eq!(vm.dp_lib, 20);
         assert_eq!(vm.hdr_lib, 1);
@@ -253,7 +248,7 @@ mod tests {
     fn test_seal_user() {
         let mut vm = VM::new();
         vm.dp = 42;
-        vm.headers.push(WordEntry::new_primitive("Y", noop));
+        vm.register(WordEntry::new_primitive("Y", noop));
         vm.seal_user();
         assert_eq!(vm.dp_user, 42);
         assert_eq!(vm.hdr_user, 1);
@@ -267,15 +262,15 @@ mod tests {
         let mut vm = VM::new();
 
         vm.dp = 5;
-        vm.headers.push(WordEntry::new_primitive("SYS1", noop));
+        vm.register(WordEntry::new_primitive("SYS1", noop));
         vm.seal_sys();
 
         vm.dp = 15;
-        vm.headers.push(WordEntry::new_primitive("LIB1", noop));
+        vm.register(WordEntry::new_primitive("LIB1", noop));
         vm.seal_lib();
 
         vm.dp = 30;
-        vm.headers.push(WordEntry::new_primitive("USR1", noop));
+        vm.register(WordEntry::new_primitive("USR1", noop));
         vm.seal_user();
 
         assert_eq!(vm.dp_sys, 5);
@@ -333,5 +328,16 @@ mod tests {
         let result = vm.intern_string(&max_str);
         assert!(result.is_ok());
         assert_eq!(vm.string_pool[0], 255);
+        assert_eq!(vm.string_pool.len(), 256); // 1 length byte + 255 data bytes
+        assert_eq!(&vm.string_pool[1..], max_str.as_bytes());
+    }
+
+    #[test]
+    fn test_intern_string_multibyte_utf8() {
+        let mut vm = VM::new();
+        // "あ" is 3 bytes in UTF-8; the length prefix must record byte length, not char count
+        let idx = vm.intern_string("あ").unwrap();
+        assert_eq!(vm.string_pool[idx], 3);
+        assert_eq!(&vm.string_pool[idx + 1..idx + 4], "あ".as_bytes());
     }
 }
