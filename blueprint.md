@@ -432,11 +432,11 @@ struct VM {
 }
 ```
 
-文字列プール内のフォーマット: 先頭1バイトに文字列長を格納し、続いてその長さ分の文字データを配置する（長さプレフィックス方式）。
+文字列プール内のフォーマット: 先頭2バイト（`u16` little-endian）に文字列長を格納し、続いてその長さ分の文字データを配置する（length-prefix方式）。
 
 `PUTSTR` 実行時の動作:
 1. `pc` が指す `Cell::StringDesc(idx)` を読み出す。
-2. `string_pool[idx]` から長さを取得し、`string_pool[idx+1..]` から文字列データを読み出す。
+2. `string_pool[idx..idx+2]` から `u16` little-endian で長さを取得し、`string_pool[idx+2..]` から文字列データを読み出す。
 3. 出力する（改行なし）。
 4. `pc` を +1 する（すべての命令は1 Cell固定長）。
 
