@@ -1,5 +1,6 @@
 use crate::dict::WordEntry;
 use crate::cell::{Cell, Xt};
+use crate::error::TbxError;
 
 /// The TBX virtual machine.
 ///
@@ -138,18 +139,22 @@ impl VM {
     ///
     /// # Panics
     ///
-    /// Panics if `s` is 256 bytes or longer (length must fit in a `u8`).
-    pub fn intern_string(&mut self, s: &str) -> usize {
+    /// Append a string to the string pool using length-prefix format.
+    ///
+    /// Stores one byte for the UTF-8 byte length followed by the raw bytes.
+    /// Returns the index of the length byte in `string_pool`.
+    ///
+    /// Returns `Err(TbxError::StringTooLong)` if `s` is 256 bytes or longer,
+    /// since the length prefix is a single `u8` (max value 255).
+    pub fn intern_string(&mut self, s: &str) -> Result<usize, TbxError> {
         let bytes = s.as_bytes();
-        assert!(
-            bytes.len() < 256,
-            "string too long for string pool: {} bytes (max 255)",
-            bytes.len()
-        );
+        if bytes.len() > 255 {
+            return Err(TbxError::StringTooLong { len: bytes.len() });
+        }
         let idx = self.string_pool.len();
         self.string_pool.push(bytes.len() as u8);
         self.string_pool.extend_from_slice(bytes);
-        idx
+        Ok(idx)
     }
 }
 
@@ -284,7 +289,7 @@ mod tests {
     #[test]
     fn test_intern_string_basic() {
         let mut vm = VM::new();
-        let idx = vm.intern_string("hello");
+        let idx = vm.intern_string("hello").unwrap();
         assert_eq!(idx, 0);
         assert_eq!(vm.string_pool[0], 5); // length byte
         assert_eq!(&vm.string_pool[1..6], b"hello");
@@ -293,8 +298,8 @@ mod tests {
     #[test]
     fn test_intern_string_multiple() {
         let mut vm = VM::new();
-        let idx1 = vm.intern_string("hi");
-        let idx2 = vm.intern_string("world");
+        let idx1 = vm.intern_string("hi").unwrap();
+        let idx2 = vm.intern_string("world").unwrap();
         // "hi" occupies bytes 0..=2 (1 length + 2 data)
         assert_eq!(idx1, 0);
         assert_eq!(idx2, 3); // 1 (len) + 2 (data) = 3
@@ -307,17 +312,26 @@ mod tests {
     #[test]
     fn test_intern_string_empty() {
         let mut vm = VM::new();
-        let idx = vm.intern_string("");
+        let idx = vm.intern_string("").unwrap();
         assert_eq!(idx, 0);
         assert_eq!(vm.string_pool[0], 0); // zero-length string
         assert_eq!(vm.string_pool.len(), 1);
     }
 
     #[test]
-    #[should_panic(expected = "string too long")]
     fn test_intern_string_too_long() {
         let mut vm = VM::new();
         let long_str = "x".repeat(256);
-        vm.intern_string(&long_str);
+        let result = vm.intern_string(&long_str);
+        assert!(matches!(result, Err(crate::error::TbxError::StringTooLong { len: 256 })));
+    }
+
+    #[test]
+    fn test_intern_string_max_length() {
+        let mut vm = VM::new();
+        let max_str = "x".repeat(255);
+        let result = vm.intern_string(&max_str);
+        assert!(result.is_ok());
+        assert_eq!(vm.string_pool[0], 255);
     }
 }
