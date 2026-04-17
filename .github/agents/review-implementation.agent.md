@@ -96,6 +96,13 @@ Critical / Warning の問題を以下の2段階で記録する。
 `gh pr review` コマンドでレビューコメントを投稿する（PRへの書き込みはMCPサーバーに対応ツールがないため `gh` CLIを使用する）。
 全コメントをまとめて `REQUEST_CHANGES`（Criticalあり）または `COMMENT`（Warningのみ）で提出する。
 
+> **注意**: `implement-issue` エージェントと同じユーザートークンで動作している場合、GitHubの制約により「PRの作成者は自分のPRをレビューできない」エラー（`GraphQL: Can't request changes on your own pull request`）が発生する。その場合は `gh pr comment` にフォールバックする。
+>
+> ```bash
+> # フォールバック: 通常コメントとして投稿
+> gh pr comment <PR番号> --body-file "$(git rev-parse --git-dir)/REVIEW_BODY.md"
+> ```
+
 コメントのフォーマット：
 
 ```
