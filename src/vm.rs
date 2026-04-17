@@ -83,9 +83,16 @@ impl VM {
 
     /// Look up a word by name, searching from newest to oldest entry via the linked list.
     /// Returns the `Xt` (header index) if found.
+    ///
+    /// Returns `None` if the word is not found or if an out-of-bounds index is
+    /// encountered in the linked list (defensive guard against corrupted state).
     pub fn lookup(&self, name: &str) -> Option<Xt> {
         let mut current = self.latest;
         while let Some(xt) = current {
+            if xt.index() >= self.headers.len() {
+                // Defensive: index is out of bounds; the linked list is corrupted.
+                break;
+            }
             let entry = &self.headers[xt.index()];
             if entry.name == name {
                 return Some(xt);
@@ -344,5 +351,16 @@ mod tests {
         let idx = vm.intern_string("あ").unwrap();
         assert_eq!(u16::from_le_bytes([vm.string_pool[idx], vm.string_pool[idx + 1]]), 3);
         assert_eq!(&vm.string_pool[idx + 2..idx + 5], "あ".as_bytes());
+    }
+
+    #[test]
+    fn test_lookup_out_of_bounds_latest_returns_none() {
+        // Simulate corrupted state: vm.latest points to an index beyond headers.len().
+        // lookup() must return None instead of panicking.
+        let mut vm = VM::new();
+        // Directly set latest to an out-of-bounds Xt (index 99, but headers is empty)
+        vm.latest = Some(Xt(99));
+        // Should return None, not panic
+        assert_eq!(vm.lookup("FOO"), None);
     }
 }
