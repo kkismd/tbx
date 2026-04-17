@@ -24,8 +24,12 @@ pub enum Cell {
     Int(i64),
     /// 64-bit floating point
     Float(f64),
-    /// Memory address (result of address-of operator &)
-    Addr(usize),
+    /// Address into `VM::dictionary` — used for global variables and heap pointers.
+    /// Produced by the address-of operator `&` applied to a global (dictionary-allocated) variable.
+    DictAddr(usize),
+    /// Address into `VM::data_stack` relative to `VM::bp` — used for local variables.
+    /// Produced by the address-of operator `&` applied to a local (stack-frame) variable.
+    StackAddr(usize),
     /// Execution token — type-safe index into `VM::headers` (word header array), not into `dictionary`
     Xt(Xt),
     /// Boolean value for logical/comparison operations
@@ -57,7 +61,8 @@ impl std::fmt::Display for Cell {
                     write!(f, "{v}")
                 }
             }
-            Cell::Addr(a) => write!(f, "addr:{}", a),
+            Cell::DictAddr(a) => write!(f, "dict:{}", a),
+            Cell::StackAddr(a) => write!(f, "stack:{}", a),
             Cell::Xt(x) => write!(f, "xt:{}", x.0),
             Cell::Bool(b) => write!(f, "{}", b),
             Cell::None => write!(f, "<none>"),
@@ -95,9 +100,18 @@ impl Cell {
         }
     }
 
-    /// Returns the `usize` address if this cell is `Addr`, otherwise `None`.
-    pub fn as_addr(&self) -> Option<usize> {
-        if let Cell::Addr(a) = self {
+    /// Returns the `usize` index if this cell is `DictAddr`, otherwise `None`.
+    pub fn as_dict_addr(&self) -> Option<usize> {
+        if let Cell::DictAddr(a) = self {
+            Some(*a)
+        } else {
+            None
+        }
+    }
+
+    /// Returns the `usize` offset if this cell is `StackAddr`, otherwise `None`.
+    pub fn as_stack_addr(&self) -> Option<usize> {
+        if let Cell::StackAddr(a) = self {
             Some(*a)
         } else {
             None
@@ -127,7 +141,8 @@ impl Cell {
         match self {
             Cell::Int(_) => "Int",
             Cell::Float(_) => "Float",
-            Cell::Addr(_) => "Addr",
+            Cell::DictAddr(_) => "DictAddr",
+            Cell::StackAddr(_) => "StackAddr",
             Cell::Xt(_) => "Xt",
             Cell::Bool(_) => "Bool",
             Cell::None => "None",
@@ -161,7 +176,8 @@ impl PartialEq for Cell {
             // structural equality so that NaN cells compare as equal.
             (Cell::Float(a), Cell::Float(b)) => (a.is_nan() && b.is_nan()) || (a == b),
             (Cell::Int(a), Cell::Int(b)) => a == b,
-            (Cell::Addr(a), Cell::Addr(b)) => a == b,
+            (Cell::DictAddr(a), Cell::DictAddr(b)) => a == b,
+            (Cell::StackAddr(a), Cell::StackAddr(b)) => a == b,
             (Cell::Xt(a), Cell::Xt(b)) => a == b,
             (Cell::Bool(a), Cell::Bool(b)) => a == b,
             (Cell::None, Cell::None) => true,
@@ -220,8 +236,13 @@ mod tests {
     }
 
     #[test]
-    fn test_display_addr() {
-        assert_eq!(Cell::Addr(1234).to_string(), "addr:1234");
+    fn test_display_dict_addr() {
+        assert_eq!(Cell::DictAddr(1234).to_string(), "dict:1234");
+    }
+
+    #[test]
+    fn test_display_stack_addr() {
+        assert_eq!(Cell::StackAddr(5).to_string(), "stack:5");
     }
 
     #[test]
@@ -272,9 +293,17 @@ mod tests {
     }
 
     #[test]
-    fn test_as_addr() {
-        assert_eq!(Cell::Addr(100).as_addr(), Some(100));
-        assert_eq!(Cell::Int(100).as_addr(), None);
+    fn test_as_dict_addr() {
+        assert_eq!(Cell::DictAddr(100).as_dict_addr(), Some(100));
+        assert_eq!(Cell::Int(100).as_dict_addr(), None);
+        assert_eq!(Cell::StackAddr(100).as_dict_addr(), None);
+    }
+
+    #[test]
+    fn test_as_stack_addr() {
+        assert_eq!(Cell::StackAddr(8).as_stack_addr(), Some(8));
+        assert_eq!(Cell::Int(8).as_stack_addr(), None);
+        assert_eq!(Cell::DictAddr(8).as_stack_addr(), None);
     }
 
     #[test]
@@ -293,7 +322,8 @@ mod tests {
     fn test_type_name() {
         assert_eq!(Cell::Int(0).type_name(), "Int");
         assert_eq!(Cell::Float(0.0).type_name(), "Float");
-        assert_eq!(Cell::Addr(0).type_name(), "Addr");
+        assert_eq!(Cell::DictAddr(0).type_name(), "DictAddr");
+        assert_eq!(Cell::StackAddr(0).type_name(), "StackAddr");
         assert_eq!(Cell::Xt(Xt(0)).type_name(), "Xt");
         assert_eq!(Cell::Bool(false).type_name(), "Bool");
         assert_eq!(Cell::None.type_name(), "None");
@@ -315,6 +345,7 @@ mod tests {
         // non-Int/Bool/Float variants are falsy
         assert!(!Cell::None.is_truthy());
         assert!(!Cell::Array.is_truthy());
-        assert!(!Cell::Addr(1).is_truthy());
+        assert!(!Cell::DictAddr(1).is_truthy());
+        assert!(!Cell::StackAddr(1).is_truthy());
     }
 }
