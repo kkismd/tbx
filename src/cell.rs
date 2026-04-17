@@ -2,8 +2,12 @@
 ///
 /// Distinct from an index into `VM::dictionary` (the flat code/data array).
 /// `lookup()` returns `Option<Xt>`; `register()` returns `Xt`.
+///
+/// The inner index is intentionally `pub(crate)` to prevent external callers
+/// from constructing arbitrary `Xt` values. Valid `Xt` tokens are obtained
+/// only through `VM::register()` or `VM::lookup()`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct Xt(pub usize);
+pub struct Xt(pub(crate) usize);
 
 impl Xt {
     /// Returns the raw index into `VM::headers`.
