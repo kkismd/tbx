@@ -136,7 +136,12 @@ mod tests {
     #[test]
     fn test_new_primitive_kind() {
         let entry = WordEntry::new_primitive("dup", dummy_prim);
-        assert!(matches!(entry.kind, EntryKind::Primitive(_)));
+        // Verify both the variant and that the stored function pointer is dummy_prim.
+        // Use fn_addr_eq to avoid the unpredictable_function_pointer_comparisons lint.
+        let EntryKind::Primitive(stored_fn) = entry.kind else {
+            panic!("expected EntryKind::Primitive");
+        };
+        assert!(std::ptr::fn_addr_eq(stored_fn, dummy_prim as PrimFn));
     }
 
     // --- new_word ---
