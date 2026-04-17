@@ -76,9 +76,14 @@ gh pr create \
   --base main
 ```
 
-### 5. マージ後のクリーンアップ
+### 5. PRのレビュー待機
 
-PRがマージされたら、mainブランチに戻って最新の状態を取得する。
+PR作成後はトピックブランチにとどまり、ユーザーのマージ完了の報告を待つ。
+mainへ戻るのはユーザーから「マージしました」と連絡があってからにする。
+
+### 6. マージ後のクリーンアップ
+
+ユーザーからマージ完了の連絡を受けたら、mainブランチに戻って最新の状態を取得する。
 
 ```bash
 git checkout main && git pull
@@ -90,4 +95,4 @@ git checkout main && git pull
 - 一時ファイルは `.git/` 配下に書く（`/tmp` などプロジェクト外は使わない）
 - `.git/` 配下はGitが自動的に無視するため、コミットやgitignoreの心配が不要
 - `Closes #N` をbodyに含めることでissueと自動リンクされる
-- マージ後は必ず `git checkout main && git pull` でmainを最新化する
+- PR作成後すぐにmainへ戻らない。ユーザーのマージ完了報告を待ってから `git checkout main && git pull` を実行する
