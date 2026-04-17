@@ -89,6 +89,11 @@ git worktree remove ../tbx-improve-short-description
 git checkout main && git pull
 ```
 
+> **untracked ファイルが残っている場合**: `Cargo.lock` や `target/` など gitignore 対象のファイルが残っていると `git worktree remove` が失敗する。その場合は `--force` を付ける。
+> ```bash
+> git worktree remove --force ../tbx-improve-short-description
+> ```
+
 ### 注意点
 
 - `--body "..."` は使わない（`\n` がエスケープされず改行にならない）
