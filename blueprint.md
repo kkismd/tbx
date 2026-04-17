@@ -376,15 +376,6 @@ TOKEN  ( -- addr )   ; addr points to descriptor on heap
 
 `x |> f(y)` は `x` が先にスタックに積まれ、次に `y` が積まれ、arity=2 で `f` が呼ばれる。結果として `f(x, y)` と同等になる。
 
-**関数を値として渡す場合:**
-
-`|>` 右辺は常に「実行」として解釈するため、関数を値として渡したい場合は `&f`（Xtを返す式）を使う。
-
-```
-x |> transform          -- calls transform(x)
-apply(&transform, x)    -- passes transform as a value (Xt)
-```
-
 **SYAへの組み込み:**
 
 演算子テーブルに `|>` を追加し、SYAの通常の二項演算子処理フローに乗せる。`|>` を検出した直後の識別子トークンは、`(` の有無にかかわらずパーサーが関数呼び出しとして解釈する。
