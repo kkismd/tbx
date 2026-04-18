@@ -464,6 +464,17 @@ pub fn here_prim(vm: &mut VM) -> Result<(), TbxError> {
     Ok(())
 }
 
+/// STATE — push the current compile mode flag as an Int (0 = execute, 1 = compile).
+pub fn state_prim(vm: &mut VM) -> Result<(), TbxError> {
+    vm.push(Cell::Int(if vm.is_compiling { 1 } else { 0 }));
+    Ok(())
+}
+
+/// HALT — stop VM execution by returning a Halted error.
+pub fn halt_prim(_vm: &mut VM) -> Result<(), TbxError> {
+    Err(TbxError::Halted)
+}
+
 /// Register all stack primitives into the VM's dictionary.
 pub fn register_all(vm: &mut VM) {
     vm.register(WordEntry::new_primitive("DROP", drop_prim));
@@ -493,6 +504,8 @@ pub fn register_all(vm: &mut VM) {
     vm.register(WordEntry::new_primitive("APPEND", append_prim));
     vm.register(WordEntry::new_primitive("ALLOT", allot_prim));
     vm.register(WordEntry::new_primitive("HERE", here_prim));
+    vm.register(WordEntry::new_primitive("STATE", state_prim));
+    vm.register(WordEntry::new_primitive("HALT", halt_prim));
 }
 
 #[cfg(test)]
@@ -1602,5 +1615,39 @@ mod tests {
             allot_prim(&mut vm),
             Err(TbxError::DictionaryOverflow { .. })
         ));
+    }
+
+    // --- state_prim ---
+
+    #[test]
+    fn test_state_execute_mode() {
+        let mut vm = VM::new();
+        state_prim(&mut vm).unwrap();
+        assert_eq!(vm.pop().unwrap(), Cell::Int(0));
+    }
+
+    #[test]
+    fn test_state_compile_mode() {
+        let mut vm = VM::new();
+        vm.is_compiling = true;
+        state_prim(&mut vm).unwrap();
+        assert_eq!(vm.pop().unwrap(), Cell::Int(1));
+    }
+
+    // --- halt_prim ---
+
+    #[test]
+    fn test_halt_returns_halted() {
+        let mut vm = VM::new();
+        assert!(matches!(halt_prim(&mut vm), Err(TbxError::Halted)));
+    }
+
+    #[test]
+    fn test_halt_leaves_stack_unchanged() {
+        let mut vm = VM::new();
+        vm.push(Cell::Int(42));
+        let _ = halt_prim(&mut vm);
+        assert_eq!(vm.data_stack.len(), 1);
+        assert_eq!(vm.pop().unwrap(), Cell::Int(42));
     }
 }
