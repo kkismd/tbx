@@ -163,18 +163,18 @@ impl VM {
     /// the stored data is not valid UTF-8.
     pub fn resolve_string(&self, idx: usize) -> Result<String, TbxError> {
         if idx + 2 > self.string_pool.len() {
-            return Err(TbxError::TypeError {
-                expected: "valid string index",
-                got: "out of bounds",
+            return Err(TbxError::IndexOutOfBounds {
+                index: idx,
+                size: self.string_pool.len(),
             });
         }
         let len = u16::from_le_bytes([self.string_pool[idx], self.string_pool[idx + 1]]) as usize;
         let start = idx + 2;
         let end = start + len;
         if end > self.string_pool.len() {
-            return Err(TbxError::TypeError {
-                expected: "valid string data",
-                got: "truncated",
+            return Err(TbxError::IndexOutOfBounds {
+                index: end,
+                size: self.string_pool.len(),
             });
         }
         String::from_utf8(self.string_pool[start..end].to_vec()).map_err(|_| TbxError::TypeError {

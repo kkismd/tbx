@@ -1370,7 +1370,7 @@ mod tests {
     #[test]
     fn test_putdec_type_error() {
         let mut vm = VM::new();
-        vm.push(Cell::Float(3.14));
+        vm.push(Cell::Float(3.5));
         assert!(matches!(
             putdec_prim(&mut vm),
             Err(TbxError::TypeError { .. })
