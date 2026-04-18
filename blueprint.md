@@ -190,7 +190,8 @@ DEF MYWORD
   10
       VAR I
       LET &I, 1
-      PRINT I
+      PUTDEC I
+      PUTSTR "\n"
       LET &I, I + 1
       BIT I > 10, 99
       GOTO 10
@@ -199,25 +200,34 @@ END
 ```
 
 ```basic
+REM FizzBuzz（コアステートメントのみで記述）
 DEF FIZZBUZZ
       VAR I
-      FOR &I,1,100
-        BIF (I % 3 = 0) & (I % 5 = 0), 10 ; REM 不成立の場合は10にジャンプ
-          PRINT "FizzBuzz"
-          GOTO 99
+      LET &I, 1
   10
-        BIF I % 3 = 0, 20              ; REM 不成立の場合は20にジャンプ
-          PRINT "Fizz"
-          GOTO 99
+        BIF (I % 3 = 0) & (I % 5 = 0), 20 ; REM 不成立の場合は20にジャンプ
+          PUTSTR "FizzBuzz\n"
+          GOTO 90
   20
-        BIF I % 5 = 0, 30              ; REM 不成立の場合は30にジャンプ
-          PRINT "Buzz"
-          GOTO 99
+        BIF I % 3 = 0, 30              ; REM 不成立の場合は30にジャンプ
+          PUTSTR "Fizz\n"
+          GOTO 90
   30
-          PRINT I
-  99        
-      NEXT &I
+        BIF I % 5 = 0, 40              ; REM 不成立の場合は40にジャンプ
+          PUTSTR "Buzz\n"
+          GOTO 90
+  40
+          PUTDEC I
+          PUTSTR "\n"
+  90
+      LET &I, I + 1
+      BIF I > 100, 99
+      GOTO 10
+  99
 END
+```
+
+上記の例ではコアステートメントのみを使用している。`PRINT`（値を出力して改行）や `FOR` / `NEXT`（ループ制御）は標準ライブラリ層で定義する予定であり、コア言語には含まない。
 ```
 
 辞書操作
