@@ -16,6 +16,12 @@ impl Xt {
     }
 }
 
+/// Return frame for the return stack, saving the program counter and base pointer
+#[derive(Debug, Clone)]
+pub enum ReturnFrame {
+    Call { pc: usize, bp: usize },
+ }
+
 /// Cell is the fundamental value type of the TBX VM.
 /// It represents all values that can exist on the stack or in the dictionary.
 #[derive(Debug, Clone)]
@@ -34,12 +40,11 @@ pub enum Cell {
     Xt(Xt),
     /// Boolean value for logical/comparison operations
     Bool(bool),
-    /// Empty / null value
-    None,
-    /// Reserved for future array support
-    Array,
     /// Index into the string pool (length-prefixed)
     StringDesc(usize),
+    /// Reserved for future array support
+    Array,
+    None,
 }
 
 impl std::fmt::Display for Cell {
@@ -65,9 +70,9 @@ impl std::fmt::Display for Cell {
             Cell::StackAddr(a) => write!(f, "stack:{}", a),
             Cell::Xt(x) => write!(f, "xt:{}", x.0),
             Cell::Bool(b) => write!(f, "{}", b),
-            Cell::None => write!(f, "<none>"),
-            Cell::Array => write!(f, "<array>"),
             Cell::StringDesc(i) => write!(f, "str:{}", i),
+            Cell::Array => write!(f, "<array>"),
+            Cell::None => write!(f, "<none>"),
         }
     }
 }
@@ -145,9 +150,9 @@ impl Cell {
             Cell::StackAddr(_) => "StackAddr",
             Cell::Xt(_) => "Xt",
             Cell::Bool(_) => "Bool",
-            Cell::None => "None",
-            Cell::Array => "Array",
             Cell::StringDesc(_) => "StringDesc",
+            Cell::Array => "Array",
+            Cell::None => "None",
         }
     }
 

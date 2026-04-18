@@ -1,5 +1,5 @@
-use crate::cell::Cell;
-use crate::dict::WordEntry;
+use crate::cell::{Cell, ReturnFrame};
+use crate::dict::{EntryKind, WordEntry};
 use crate::error::TbxError;
 use crate::vm::VM;
 
@@ -32,7 +32,9 @@ pub fn fetch_prim(vm: &mut VM) -> Result<(), TbxError> {
     match addr {
         Cell::DictAddr(a) => {
             let size = vm.dictionary.len();
-            let value = vm.dictionary.get(a)
+            let value = vm
+                .dictionary
+                .get(a)
                 .ok_or(TbxError::IndexOutOfBounds { index: a, size })?
                 .clone();
             vm.push(value);
@@ -42,7 +44,9 @@ pub fn fetch_prim(vm: &mut VM) -> Result<(), TbxError> {
             // TODO: vm.bp との加算をvmにカプセル化したい。その中で範囲チェックも行う。
             let idx = vm.bp + a;
             let size = vm.data_stack.len();
-            let value = vm.data_stack.get(idx)
+            let value = vm
+                .data_stack
+                .get(idx)
                 .ok_or(TbxError::IndexOutOfBounds { index: idx, size })?
                 .clone();
             vm.push(value);
@@ -51,7 +55,7 @@ pub fn fetch_prim(vm: &mut VM) -> Result<(), TbxError> {
         _ => Err(TbxError::TypeError {
             expected: "address",
             got: "non-address",
-        })
+        }),
     }
 }
 
@@ -62,22 +66,66 @@ pub fn store_prim(vm: &mut VM) -> Result<(), TbxError> {
     match addr {
         Cell::DictAddr(a) => {
             let size = vm.dictionary.len();
-            *vm.dictionary.get_mut(a)
+            *vm.dictionary
+                .get_mut(a)
                 .ok_or(TbxError::IndexOutOfBounds { index: a, size })? = value;
             Ok(())
         }
         Cell::StackAddr(a) => {
             let idx = vm.bp + a;
             let size = vm.data_stack.len();
-            *vm.data_stack.get_mut(idx)
+            *vm.data_stack
+                .get_mut(idx)
                 .ok_or(TbxError::IndexOutOfBounds { index: idx, size })? = value;
             Ok(())
         }
         _ => Err(TbxError::TypeError {
             expected: "address",
             got: "non-address",
+        }),
+    }
+}
+
+/// CALL — call an execution token (Xt).
+pub fn call_prim(vm: &mut VM) -> Result<(), TbxError> {
+    let xt_cell = vm
+        .dictionary
+        .get(vm.pc + 1)
+        .ok_or(TbxError::IndexOutOfBounds {
+            index: vm.pc + 1,
+            size: vm.dictionary.len(),
+        })?;
+    if let Cell::Xt(x) = xt_cell {
+        let offset = match vm.headers[x.index()].kind {
+            EntryKind::Word(offset) => offset,
+            _ => {
+                return Err(TbxError::TypeError {
+                    expected: "callable (primitive or word)",
+                    got: "non-callable",
+                })
+            }
+        };
+        let pc = vm.pc + 2; // CALL命令の次の命令のアドレス)
+        let bp = vm.bp;
+        let return_frame = ReturnFrame::Call { pc, bp };
+        vm.return_stack.push(return_frame);
+        vm.bp = vm.data_stack.len();
+        vm.pc = offset;
+        Ok(())
+    } else {
+        Err(TbxError::TypeError {
+            expected: "Xt",
+            got: xt_cell.type_name(),
         })
     }
+}
+
+pub fn exit_prim(vm: &mut VM) -> Result<(), TbxError> {
+    let return_frame = vm.return_stack.pop().ok_or(TbxError::StackUnderflow)?;
+    let ReturnFrame::Call { pc, bp } = return_frame;
+    vm.pc = pc;
+    vm.bp = bp;
+    Ok(())
 }
 
 /// Register all stack primitives into the VM's dictionary.
@@ -87,6 +135,8 @@ pub fn register_all(vm: &mut VM) {
     vm.register(WordEntry::new_primitive("SWAP", swap_prim));
     vm.register(WordEntry::new_primitive("FETCH", fetch_prim));
     vm.register(WordEntry::new_primitive("STORE", store_prim));
+    vm.register(WordEntry::new_primitive("CALL", call_prim));
+    vm.register(WordEntry::new_primitive("EXIT", exit_prim));
 }
 
 #[cfg(test)]
@@ -194,9 +244,9 @@ mod tests {
     fn test_fetch_stack_addr() {
         // This test also verifies that fetch_prim correctly adds vm.bp to the address.
         let mut vm = VM::new();
-        vm.push(Cell::Int(10));   // data_stack[0] = 10
-        vm.push(Cell::Int(20));   // data_stack[1] = 20
-        vm.bp = 1;                // base pointer at index 1
+        vm.push(Cell::Int(10)); // data_stack[0] = 10
+        vm.push(Cell::Int(20)); // data_stack[1] = 20
+        vm.bp = 1; // base pointer at index 1
         vm.push(Cell::StackAddr(0)); // address of data_stack[bp + 0] = data_stack[1] = 20
         fetch_prim(&mut vm).unwrap();
         assert_eq!(vm.pop(), Ok(Cell::Int(20)));
@@ -220,7 +270,7 @@ mod tests {
         let mut vm = VM::new();
         assert_eq!(fetch_prim(&mut vm), Err(TbxError::StackUnderflow));
     }
-    
+
     #[test]
     fn test_store_dict_addr() {
         let mut vm = VM::new();
@@ -267,5 +317,68 @@ mod tests {
         let mut vm = VM::new();
         vm.push(Cell::Int(123)); // value to store
         assert_eq!(store_prim(&mut vm), Err(TbxError::StackUnderflow));
+    }
+
+    #[test]
+    fn test_call_and_exit() {
+        let mut vm = VM::new();
+        register_all(&mut vm); // Ensure CALL and EXIT are registered
+        let dummy_xt = vm.register(WordEntry::new_word("TEST", 10));
+        vm.dictionary.push(Cell::None);
+        vm.dictionary.push(Cell::Xt(dummy_xt)); // code for TEST: CALL EXIT
+
+        vm.pc = 0;
+        call_prim(&mut vm).unwrap();
+        assert_eq!(vm.pc, 10); // After CALL, pc should be at TEST's code
+    }
+
+    #[test]
+    fn test_exit_restores_pc_bp() {
+        let mut vm = VM::new();
+        register_all(&mut vm); // Ensure CALL and EXIT are registered
+        vm.return_stack.push(ReturnFrame::Call { pc: 42, bp: 99 });
+        exit_prim(&mut vm).unwrap();
+        assert_eq!(vm.pc, 42);
+        assert_eq!(vm.bp, 99);
+    }
+
+    #[test]
+    fn test_exit_underflow() {
+        let mut vm = VM::new();
+        assert_eq!(exit_prim(&mut vm), Err(TbxError::StackUnderflow));
+    }
+
+    #[test]
+    fn test_call_type_error() {
+        let mut vm = VM::new();
+        register_all(&mut vm); // Ensure CALL and EXIT are registered
+        vm.dictionary.push(Cell::None);
+        vm.dictionary.push(Cell::Int(123)); // Not an Xt
+        vm.pc = 0;
+        assert_eq!(
+            call_prim(&mut vm),
+            Err(TbxError::TypeError {
+                expected: "Xt",
+                got: "Int"
+            })
+        );
+    }
+
+    #[test]
+    fn test_call_non_word_xt() {
+        let mut vm = VM::new();
+        register_all(&mut vm);
+        let drop_xt = vm.lookup("DROP").unwrap();
+        vm.dictionary.push(Cell::None);
+        vm.dictionary.push(Cell::Xt(drop_xt)); // Xt exists but points to a Primitive
+        vm.pc = 0;
+        let original_bp = vm.bp;
+        let original_rs_len = vm.return_stack.len();
+        assert!(call_prim(&mut vm).is_err());
+
+        // Verify that VM state remains unchanged after error
+        assert_eq!(vm.pc, 0);
+        assert_eq!(vm.bp, original_bp);
+        assert_eq!(vm.return_stack.len(), original_rs_len);
     }
 }
