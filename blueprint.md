@@ -221,9 +221,7 @@ DEF FIZZBUZZ
           PUTSTR "\n"
   90
       LET &I, I + 1
-      BIF I > 100, 99
-      GOTO 10
-  99
+      BIT I > 100, 10
 END
 ```
 
