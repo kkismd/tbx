@@ -363,4 +363,22 @@ mod tests {
             })
         );
     }
+
+    #[test]
+    fn test_call_non_word_xt() {
+        let mut vm = VM::new();
+        register_all(&mut vm);
+        let drop_xt = vm.lookup("DROP").unwrap();
+        vm.dictionary.push(Cell::None);
+        vm.dictionary.push(Cell::Xt(drop_xt)); // Xt exists but points to a Primitive
+        vm.pc = 0;
+        let original_bp = vm.bp;
+        let original_rs_len = vm.return_stack.len();
+        assert!(call_prim(&mut vm).is_err());
+
+        // Verify that VM state remains unchanged after error
+        assert_eq!(vm.pc, 0);
+        assert_eq!(vm.bp, original_bp);
+        assert_eq!(vm.return_stack.len(), original_rs_len);
+    }
 }
