@@ -88,33 +88,34 @@ pub fn store_prim(vm: &mut VM) -> Result<(), TbxError> {
 
 /// CALL — call an execution token (Xt).
 pub fn call_prim(vm: &mut VM) -> Result<(), TbxError> {
-    let xt = vm
+    let xt_cell = vm
         .dictionary
         .get(vm.pc + 1)
         .ok_or(TbxError::IndexOutOfBounds {
             index: vm.pc + 1,
             size: vm.dictionary.len(),
         })?;
-    if let Cell::Xt(x) = xt {
-        let pc = vm.pc + 2; // CALL instruction is 2 cells: opcode + xt
-        let bp = vm.bp;
-        let return_frame = ReturnFrame::Call { pc, bp };
-        vm.return_stack.push(return_frame);
-        vm.bp = vm.data_stack.len();
-        match vm.headers[x.index()].kind {
-            EntryKind::Word(offset) => vm.pc = offset,
+    if let Cell::Xt(x) = xt_cell {
+        let offset = match vm.headers[x.index()].kind {
+            EntryKind::Word(offset) => offset,
             _ => {
                 return Err(TbxError::TypeError {
                     expected: "callable (primitive or word)",
                     got: "non-callable",
                 })
             }
-        }
+        };
+        let pc = vm.pc + 2; // CALL命令の次の命令のアドレス)
+        let bp = vm.bp;
+        let return_frame = ReturnFrame::Call { pc, bp };
+        vm.return_stack.push(return_frame);
+        vm.bp = vm.data_stack.len();
+        vm.pc = offset;
         Ok(())
     } else {
         Err(TbxError::TypeError {
             expected: "Xt",
-            got: xt.type_name(),
+            got: xt_cell.type_name(),
         })
     }
 }
@@ -354,9 +355,12 @@ mod tests {
         vm.dictionary.push(Cell::None);
         vm.dictionary.push(Cell::Int(123)); // Not an Xt
         vm.pc = 0;
-        assert_eq!(call_prim(&mut vm), Err(TbxError::TypeError {
-            expected: "Xt",
-            got: "Int"
-        }));
+        assert_eq!(
+            call_prim(&mut vm),
+            Err(TbxError::TypeError {
+                expected: "Xt",
+                got: "Int"
+            })
+        );
     }
 }
