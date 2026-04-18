@@ -9,6 +9,14 @@ pub enum TbxError {
     StringTooLong { len: usize },
     /// A pop was attempted on an empty data stack.
     StackUnderflow,
+    /// A value of the wrong type was provided.
+    ///
+    /// `expected` describes the type(s) the operation accepts;
+    /// `got` describes the type that was actually on the stack.
+    TypeError {
+        expected: &'static str,
+        got: &'static str,
+    },
 }
 
 impl std::fmt::Display for TbxError {
@@ -22,6 +30,9 @@ impl std::fmt::Display for TbxError {
                 )
             }
             TbxError::StackUnderflow => write!(f, "stack underflow"),
+            TbxError::TypeError { expected, got } => {
+                write!(f, "type error: expected {}, got {}", expected, got)
+            }
         }
     }
 }
@@ -49,5 +60,16 @@ mod tests {
     fn test_stack_underflow_debug() {
         let e = TbxError::StackUnderflow;
         assert!(format!("{:?}", e).contains("StackUnderflow"));
+    }
+
+    #[test]
+    fn test_type_error_display() {
+        let e = TbxError::TypeError {
+            expected: "address",
+            got: "Int",
+        };
+        let msg = e.to_string();
+        assert!(msg.contains("address"));
+        assert!(msg.contains("Int"));
     }
 }
