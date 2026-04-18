@@ -1,3 +1,4 @@
+use crate::dict::WordEntry;
 use crate::error::TbxError;
 use crate::vm::VM;
 
@@ -22,6 +23,13 @@ pub fn swap_prim(vm: &mut VM) -> Result<(), TbxError> {
     vm.push(a);
     vm.push(b);
     Ok(())
+}
+
+/// Register all stack primitives (DROP, DUP, SWAP) into the VM's dictionary.
+pub fn register_all(vm: &mut VM) {
+    vm.register(WordEntry::new_primitive("DROP", drop_prim));
+    vm.register(WordEntry::new_primitive("DUP", dup_prim));
+    vm.register(WordEntry::new_primitive("SWAP", swap_prim));
 }
 
 #[cfg(test)]
@@ -89,5 +97,30 @@ mod tests {
         let mut vm = VM::new();
         vm.push(Cell::Int(1));
         assert_eq!(swap_prim(&mut vm), Err(TbxError::StackUnderflow));
+    }
+
+    // --- register_all ---
+
+    #[test]
+    fn test_register_all_registers_drop_dup_swap() {
+        let mut vm = VM::new();
+        register_all(&mut vm);
+        assert!(vm.lookup("DROP").is_some());
+        assert!(vm.lookup("DUP").is_some());
+        assert!(vm.lookup("SWAP").is_some());
+    }
+
+    #[test]
+    fn test_register_all_drop_is_callable() {
+        let mut vm = VM::new();
+        register_all(&mut vm);
+        let xt = vm.lookup("DROP").unwrap();
+        vm.push(Cell::Int(99));
+        if let crate::dict::EntryKind::Primitive(f) = vm.headers[xt.index()].kind {
+            f(&mut vm).unwrap();
+        } else {
+            panic!("DROP is not a Primitive");
+        }
+        assert_eq!(vm.pop(), Err(TbxError::StackUnderflow));
     }
 }

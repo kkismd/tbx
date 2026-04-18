@@ -14,7 +14,8 @@ pub enum EntryKind {
     Variable(usize),
     /// Constant — value stored directly in this entry
     Constant(Cell),
-    /// Handled by the inner interpreter: push next cell as a literal value
+    /// Handled by the inner interpreter: push next cell as a literal value.
+    /// TODO: dispatched in the inner interpreter loop (to be implemented in a future task).
     Lit,
 }
 
