@@ -18,6 +18,7 @@ pub enum TbxError {
         got: &'static str,
     },
     IndexOutOfBounds { index: usize, size: usize },
+    DivisionByZero,
 }
 
 impl std::fmt::Display for TbxError {
@@ -37,6 +38,7 @@ impl std::fmt::Display for TbxError {
             TbxError::IndexOutOfBounds { index, size } => {
                 write!(f, "index out of bounds: index {}, size {}", index, size)
             }
+            TbxError::DivisionByZero => write!(f, "division by zero"),
         }
     }
 }
@@ -75,5 +77,11 @@ mod tests {
         let msg = e.to_string();
         assert!(msg.contains("address"));
         assert!(msg.contains("Int"));
+    }
+
+    #[test]
+    fn test_division_by_zero_display() {
+        let e = TbxError::DivisionByZero;
+        assert!(e.to_string().contains("division by zero"));
     }
 }
