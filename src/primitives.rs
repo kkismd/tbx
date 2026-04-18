@@ -222,18 +222,30 @@ pub fn mod_prim(vm: &mut VM) -> Result<(), TbxError> {
 }
 
 /// EQ — equality comparison. Pushes Bool(true) if the two top values are equal.
+/// Int/Float mixed pairs are compared by promoting Int to Float.
 pub fn eq_prim(vm: &mut VM) -> Result<(), TbxError> {
     let b = vm.pop()?;
     let a = vm.pop()?;
-    vm.push(Cell::Bool(a == b));
+    let result = match (&a, &b) {
+        (Cell::Int(x), Cell::Float(y)) => (*x as f64) == *y,
+        (Cell::Float(x), Cell::Int(y)) => *x == (*y as f64),
+        _ => a == b,
+    };
+    vm.push(Cell::Bool(result));
     Ok(())
 }
 
 /// NEQ — inequality comparison. Pushes Bool(true) if the two top values are not equal.
+/// Int/Float mixed pairs are compared by promoting Int to Float.
 pub fn neq_prim(vm: &mut VM) -> Result<(), TbxError> {
     let b = vm.pop()?;
     let a = vm.pop()?;
-    vm.push(Cell::Bool(a != b));
+    let result = match (&a, &b) {
+        (Cell::Int(x), Cell::Float(y)) => (*x as f64) != *y,
+        (Cell::Float(x), Cell::Int(y)) => *x != (*y as f64),
+        _ => a != b,
+    };
+    vm.push(Cell::Bool(result));
     Ok(())
 }
 
@@ -885,6 +897,42 @@ mod tests {
     }
 
     #[test]
+    fn test_eq_int_float_promotion() {
+        let mut vm = VM::new();
+        vm.push(Cell::Int(1));
+        vm.push(Cell::Float(1.0));
+        eq_prim(&mut vm).unwrap();
+        assert_eq!(vm.pop(), Ok(Cell::Bool(true)));
+    }
+
+    #[test]
+    fn test_eq_float_int_promotion() {
+        let mut vm = VM::new();
+        vm.push(Cell::Float(2.0));
+        vm.push(Cell::Int(2));
+        eq_prim(&mut vm).unwrap();
+        assert_eq!(vm.pop(), Ok(Cell::Bool(true)));
+    }
+
+    #[test]
+    fn test_eq_int_float_not_equal() {
+        let mut vm = VM::new();
+        vm.push(Cell::Int(1));
+        vm.push(Cell::Float(1.5));
+        eq_prim(&mut vm).unwrap();
+        assert_eq!(vm.pop(), Ok(Cell::Bool(false)));
+    }
+
+    #[test]
+    fn test_neq_int_float_promotion() {
+        let mut vm = VM::new();
+        vm.push(Cell::Int(1));
+        vm.push(Cell::Float(1.0));
+        neq_prim(&mut vm).unwrap();
+        assert_eq!(vm.pop(), Ok(Cell::Bool(false)));
+    }
+
+    #[test]
     fn test_neq_int() {
         let mut vm = VM::new();
         vm.push(Cell::Int(1));
@@ -958,6 +1006,23 @@ mod tests {
     }
 
     #[test]
+    fn test_gt_float_int() {
+        let mut vm = VM::new();
+        vm.push(Cell::Float(3.5));
+        vm.push(Cell::Int(2));
+        gt_prim(&mut vm).unwrap();
+        assert_eq!(vm.pop(), Ok(Cell::Bool(true)));
+    }
+
+    #[test]
+    fn test_gt_type_error() {
+        let mut vm = VM::new();
+        vm.push(Cell::Bool(true));
+        vm.push(Cell::Int(1));
+        assert!(matches!(gt_prim(&mut vm), Err(TbxError::TypeError { .. })));
+    }
+
+    #[test]
     fn test_le_int_equal() {
         let mut vm = VM::new();
         vm.push(Cell::Int(2));
@@ -985,6 +1050,23 @@ mod tests {
     }
 
     #[test]
+    fn test_le_float_int() {
+        let mut vm = VM::new();
+        vm.push(Cell::Float(1.5));
+        vm.push(Cell::Int(2));
+        le_prim(&mut vm).unwrap();
+        assert_eq!(vm.pop(), Ok(Cell::Bool(true)));
+    }
+
+    #[test]
+    fn test_le_type_error() {
+        let mut vm = VM::new();
+        vm.push(Cell::Bool(true));
+        vm.push(Cell::Int(1));
+        assert!(matches!(le_prim(&mut vm), Err(TbxError::TypeError { .. })));
+    }
+
+    #[test]
     fn test_ge_int_equal() {
         let mut vm = VM::new();
         vm.push(Cell::Int(2));
@@ -1009,6 +1091,23 @@ mod tests {
         vm.push(Cell::Int(2));
         ge_prim(&mut vm).unwrap();
         assert_eq!(vm.pop(), Ok(Cell::Bool(false)));
+    }
+
+    #[test]
+    fn test_ge_float_int() {
+        let mut vm = VM::new();
+        vm.push(Cell::Float(2.0));
+        vm.push(Cell::Int(2));
+        ge_prim(&mut vm).unwrap();
+        assert_eq!(vm.pop(), Ok(Cell::Bool(true)));
+    }
+
+    #[test]
+    fn test_ge_type_error() {
+        let mut vm = VM::new();
+        vm.push(Cell::Bool(true));
+        vm.push(Cell::Int(1));
+        assert!(matches!(ge_prim(&mut vm), Err(TbxError::TypeError { .. })));
     }
 
     // --- AND / OR tests ---
