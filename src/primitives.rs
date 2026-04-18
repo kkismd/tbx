@@ -1,3 +1,4 @@
+use crate::cell::Cell;
 use crate::dict::WordEntry;
 use crate::error::TbxError;
 use crate::vm::VM;
@@ -25,11 +26,67 @@ pub fn swap_prim(vm: &mut VM) -> Result<(), TbxError> {
     Ok(())
 }
 
-/// Register all stack primitives (DROP, DUP, SWAP) into the VM's dictionary.
+/// FETCH — fetch a value from an address and push it onto the stack.
+pub fn fetch_prim(vm: &mut VM) -> Result<(), TbxError> {
+    let addr = vm.pop()?;
+    match addr {
+        Cell::DictAddr(a) => {
+            let size = vm.dictionary.len();
+            let value = vm.dictionary.get(a)
+                .ok_or(TbxError::IndexOutOfBounds { index: a, size })?
+                .clone();
+            vm.push(value);
+            Ok(())
+        }
+        Cell::StackAddr(a) => {
+            // TODO: vm.bp との加算をvmにカプセル化したい。その中で範囲チェックも行う。
+            let idx = vm.bp + a;
+            let size = vm.data_stack.len();
+            let value = vm.data_stack.get(idx)
+                .ok_or(TbxError::IndexOutOfBounds { index: idx, size })?
+                .clone();
+            vm.push(value);
+            Ok(())
+        }
+        _ => Err(TbxError::TypeError {
+            expected: "address",
+            got: "non-address",
+        })
+    }
+}
+
+/// STORE — pop a value and an address, and store the value at the address.
+pub fn store_prim(vm: &mut VM) -> Result<(), TbxError> {
+    let addr = vm.pop()?;
+    let value = vm.pop()?;
+    match addr {
+        Cell::DictAddr(a) => {
+            let size = vm.dictionary.len();
+            *vm.dictionary.get_mut(a)
+                .ok_or(TbxError::IndexOutOfBounds { index: a, size })? = value;
+            Ok(())
+        }
+        Cell::StackAddr(a) => {
+            let idx = vm.bp + a;
+            let size = vm.data_stack.len();
+            *vm.data_stack.get_mut(idx)
+                .ok_or(TbxError::IndexOutOfBounds { index: idx, size })? = value;
+            Ok(())
+        }
+        _ => Err(TbxError::TypeError {
+            expected: "address",
+            got: "non-address",
+        })
+    }
+}
+
+/// Register all stack primitives into the VM's dictionary.
 pub fn register_all(vm: &mut VM) {
     vm.register(WordEntry::new_primitive("DROP", drop_prim));
     vm.register(WordEntry::new_primitive("DUP", dup_prim));
     vm.register(WordEntry::new_primitive("SWAP", swap_prim));
+    vm.register(WordEntry::new_primitive("FETCH", fetch_prim));
+    vm.register(WordEntry::new_primitive("STORE", store_prim));
 }
 
 #[cfg(test)]
@@ -122,5 +179,93 @@ mod tests {
             panic!("DROP is not a Primitive");
         }
         assert_eq!(vm.pop(), Err(TbxError::StackUnderflow));
+    }
+
+    #[test]
+    fn test_fetch_dict_addr() {
+        let mut vm = VM::new();
+        vm.dictionary.push(Cell::Int(123)); // dict[0] = 123
+        vm.push(Cell::DictAddr(0));
+        fetch_prim(&mut vm).unwrap();
+        assert_eq!(vm.pop(), Ok(Cell::Int(123)));
+    }
+
+    #[test]
+    fn test_fetch_stack_addr() {
+        // This test also verifies that fetch_prim correctly adds vm.bp to the address.
+        let mut vm = VM::new();
+        vm.push(Cell::Int(10));   // data_stack[0] = 10
+        vm.push(Cell::Int(20));   // data_stack[1] = 20
+        vm.bp = 1;                // base pointer at index 1
+        vm.push(Cell::StackAddr(0)); // address of data_stack[bp + 0] = data_stack[1] = 20
+        fetch_prim(&mut vm).unwrap();
+        assert_eq!(vm.pop(), Ok(Cell::Int(20)));
+    }
+
+    #[test]
+    fn test_fetch_type_error() {
+        let mut vm = VM::new();
+        vm.push(Cell::Int(42)); // Not an address
+        assert_eq!(
+            fetch_prim(&mut vm),
+            Err(TbxError::TypeError {
+                expected: "address",
+                got: "non-address"
+            })
+        );
+    }
+
+    #[test]
+    fn test_fetch_underflow() {
+        let mut vm = VM::new();
+        assert_eq!(fetch_prim(&mut vm), Err(TbxError::StackUnderflow));
+    }
+    
+    #[test]
+    fn test_store_dict_addr() {
+        let mut vm = VM::new();
+        vm.dictionary.push(Cell::Int(0)); // dict[0] = 0
+        vm.push(Cell::Int(123)); // value to store
+        vm.push(Cell::DictAddr(0)); // address to store at
+        store_prim(&mut vm).unwrap();
+        assert_eq!(vm.dictionary[0], Cell::Int(123));
+    }
+
+    #[test]
+    fn test_store_stack_addr() {
+        let mut vm = VM::new();
+        vm.push(Cell::Int(0)); // data_stack[0] = 0
+        vm.bp = 0;
+        vm.push(Cell::Int(123)); // value to store
+        vm.push(Cell::StackAddr(0)); // address to store at
+        store_prim(&mut vm).unwrap();
+        assert_eq!(vm.data_stack[0], Cell::Int(123));
+    }
+
+    #[test]
+    fn test_store_type_error() {
+        let mut vm = VM::new();
+        vm.push(Cell::Int(123)); // value to store
+        vm.push(Cell::Int(0)); // Not an address
+        assert_eq!(
+            store_prim(&mut vm),
+            Err(TbxError::TypeError {
+                expected: "address",
+                got: "non-address"
+            })
+        );
+    }
+
+    #[test]
+    fn test_store_underflow() {
+        let mut vm = VM::new();
+        assert_eq!(store_prim(&mut vm), Err(TbxError::StackUnderflow));
+    }
+
+    #[test]
+    fn test_store_underflow_one_value() {
+        let mut vm = VM::new();
+        vm.push(Cell::Int(123)); // value to store
+        assert_eq!(store_prim(&mut vm), Err(TbxError::StackUnderflow));
     }
 }
