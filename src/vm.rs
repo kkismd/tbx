@@ -108,8 +108,12 @@ impl VM {
     }
 
     /// Pop a value from the data stack.
-    pub fn pop(&mut self) -> Option<Cell> {
-        self.data_stack.pop()
+    ///
+    /// # Errors
+    ///
+    /// Returns `Err(TbxError::StackUnderflow)` if the data stack is empty.
+    pub fn pop(&mut self) -> Result<Cell, TbxError> {
+        self.data_stack.pop().ok_or(TbxError::StackUnderflow)
     }
 
     /// Seal the system dictionary boundary.
@@ -173,7 +177,9 @@ mod tests {
     use super::*;
     use crate::dict::WordEntry;
 
-    fn noop(_vm: &mut VM) {}
+    fn noop(_vm: &mut VM) -> Result<(), crate::error::TbxError> {
+        Ok(())
+    }
 
     #[test]
     fn test_vm_new() {
@@ -190,8 +196,8 @@ mod tests {
     fn test_push_pop() {
         let mut vm = VM::new();
         vm.push(Cell::Int(42));
-        assert_eq!(vm.pop(), Some(Cell::Int(42)));
-        assert_eq!(vm.pop(), None);
+        assert_eq!(vm.pop(), Ok(Cell::Int(42)));
+        assert_eq!(vm.pop(), Err(crate::error::TbxError::StackUnderflow));
     }
 
     #[test]

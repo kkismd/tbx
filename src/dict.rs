@@ -1,7 +1,7 @@
 use crate::cell::{Cell, Xt};
 
 /// Function pointer type for native Rust primitives.
-pub type PrimFn = fn(&mut crate::vm::VM);
+pub type PrimFn = fn(&mut crate::vm::VM) -> Result<(), crate::error::TbxError>;
 
 /// How a dictionary entry is executed or accessed.
 #[derive(Clone)]
@@ -14,6 +14,9 @@ pub enum EntryKind {
     Variable(usize),
     /// Constant — value stored directly in this entry
     Constant(Cell),
+    /// Handled by the inner interpreter: push next cell as a literal value.
+    /// TODO: dispatched in the inner interpreter loop (to be implemented in a future task).
+    Lit,
 }
 
 impl std::fmt::Debug for EntryKind {
@@ -23,6 +26,7 @@ impl std::fmt::Debug for EntryKind {
             EntryKind::Primitive(ptr) => write!(f, "Primitive({ptr:p})"),
             EntryKind::Variable(idx) => write!(f, "Variable({idx})"),
             EntryKind::Constant(cell) => write!(f, "Constant({cell:?})"),
+            EntryKind::Lit => write!(f, "Lit"),
         }
     }
 }
@@ -103,7 +107,9 @@ mod tests {
     use crate::cell::Cell;
 
     /// A dummy primitive function used to obtain a concrete `PrimFn` value in tests.
-    fn dummy_prim(_vm: &mut crate::vm::VM) {}
+    fn dummy_prim(_vm: &mut crate::vm::VM) -> Result<(), crate::error::TbxError> {
+        Ok(())
+    }
 
     // --- FLAG_IMMEDIATE constant ---
 

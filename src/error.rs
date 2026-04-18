@@ -7,6 +7,8 @@ pub enum TbxError {
     /// must be at most 65535 bytes when encoded as UTF-8. This limit applies at
     /// the lexer/parser level before the string reaches the pool.
     StringTooLong { len: usize },
+    /// A pop was attempted on an empty data stack.
+    StackUnderflow,
 }
 
 impl std::fmt::Display for TbxError {
@@ -19,6 +21,7 @@ impl std::fmt::Display for TbxError {
                     len
                 )
             }
+            TbxError::StackUnderflow => write!(f, "stack underflow"),
         }
     }
 }
@@ -34,5 +37,17 @@ mod tests {
         let e = TbxError::StringTooLong { len: 300 };
         assert!(e.to_string().contains("300"));
         assert!(e.to_string().contains("65535"));
+    }
+
+    #[test]
+    fn test_stack_underflow_display() {
+        let e = TbxError::StackUnderflow;
+        assert!(e.to_string().contains("stack underflow"));
+    }
+
+    #[test]
+    fn test_stack_underflow_debug() {
+        let e = TbxError::StackUnderflow;
+        assert!(format!("{:?}", e).contains("StackUnderflow"));
     }
 }
