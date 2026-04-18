@@ -31,15 +31,23 @@ pub fn fetch_prim(vm: &mut VM) -> Result<(), TbxError> {
     let addr = vm.pop()?;
     match addr {
         Cell::DictAddr(a) => {
-            let value = vm.dictionary[a].clone();
+            let size = vm.dictionary.len();
+            let value = vm.dictionary.get(a)
+                .ok_or(TbxError::IndexOutOfBounds { index: a, size })?
+                .clone();
             vm.push(value);
             Ok(())
         }
         Cell::StackAddr(a) => {
             // TODO: vm.bp との加算をvmにカプセル化したい。その中で範囲チェックも行う。
-            let value = vm.data_stack[vm.bp + a].clone();
+            let idx = vm.bp + a;
+            let size = vm.data_stack.len();
+            let value = vm.data_stack.get(idx)
+                .ok_or(TbxError::IndexOutOfBounds { index: idx, size })?
+                .clone();
             vm.push(value);
-            Ok(())        }
+            Ok(())
+        }
         _ => Err(TbxError::TypeError {
             expected: "address",
             got: "non-address",
@@ -53,11 +61,16 @@ pub fn store_prim(vm: &mut VM) -> Result<(), TbxError> {
     let value = vm.pop()?;
     match addr {
         Cell::DictAddr(a) => {
-            vm.dictionary[a] = value;
+            let size = vm.dictionary.len();
+            *vm.dictionary.get_mut(a)
+                .ok_or(TbxError::IndexOutOfBounds { index: a, size })? = value;
             Ok(())
         }
         Cell::StackAddr(a) => {
-            vm.data_stack[vm.bp + a] = value;
+            let idx = vm.bp + a;
+            let size = vm.data_stack.len();
+            *vm.data_stack.get_mut(idx)
+                .ok_or(TbxError::IndexOutOfBounds { index: idx, size })? = value;
             Ok(())
         }
         _ => Err(TbxError::TypeError {
@@ -67,7 +80,7 @@ pub fn store_prim(vm: &mut VM) -> Result<(), TbxError> {
     }
 }
 
-/// Register all stack primitives (DROP, DUP, SWAP) into the VM's dictionary.
+/// Register all stack primitives into the VM's dictionary.
 pub fn register_all(vm: &mut VM) {
     vm.register(WordEntry::new_primitive("DROP", drop_prim));
     vm.register(WordEntry::new_primitive("DUP", dup_prim));
@@ -246,6 +259,13 @@ mod tests {
     #[test]
     fn test_store_underflow() {
         let mut vm = VM::new();
+        assert_eq!(store_prim(&mut vm), Err(TbxError::StackUnderflow));
+    }
+
+    #[test]
+    fn test_store_underflow_one_value() {
+        let mut vm = VM::new();
+        vm.push(Cell::Int(123)); // value to store
         assert_eq!(store_prim(&mut vm), Err(TbxError::StackUnderflow));
     }
 }

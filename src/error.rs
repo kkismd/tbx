@@ -17,6 +17,7 @@ pub enum TbxError {
         expected: &'static str,
         got: &'static str,
     },
+    IndexOutOfBounds { index: usize, size: usize },
 }
 
 impl std::fmt::Display for TbxError {
@@ -32,6 +33,9 @@ impl std::fmt::Display for TbxError {
             TbxError::StackUnderflow => write!(f, "stack underflow"),
             TbxError::TypeError { expected, got } => {
                 write!(f, "type error: expected {}, got {}", expected, got)
+            }
+            TbxError::IndexOutOfBounds { index, size } => {
+                write!(f, "index out of bounds: index {}, size {}", index, size)
             }
         }
     }
