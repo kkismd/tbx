@@ -1,5 +1,5 @@
 use crate::dict::WordEntry;
-use crate::cell::{Cell, Xt};
+use crate::cell::{Cell, ReturnFrame, Xt};
 use crate::error::TbxError;
 
 /// The TBX virtual machine.
@@ -18,7 +18,7 @@ pub struct VM {
     /// Data stack: operand stack for arithmetic and parameter passing
     pub data_stack: Vec<Cell>,
     /// Return stack: saves (pc, bp) pairs on word calls
-    pub return_stack: Vec<(usize, usize)>,
+    pub return_stack: Vec<ReturnFrame>,
     /// Program counter: index into `dictionary` of the currently executing cell
     pub pc: usize,
     /// Base pointer: index into data_stack marking the current stack frame base
