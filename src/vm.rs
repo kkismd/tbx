@@ -47,6 +47,9 @@ pub struct VM {
     pub dp: usize,
     /// Index of the most recently registered entry in `headers` (head of linked list)
     pub latest: Option<Xt>,
+    /// Output buffer: collects text from PUTSTR / PUTCHR / PUTDEC / PUTHEX.
+    /// Flushed to stdout at appropriate points (e.g. end of interpretation cycle).
+    pub output_buffer: String,
 }
 
 impl VM {
@@ -68,6 +71,7 @@ impl VM {
             hdr_user: 0,
             dp: 0,
             latest: None,
+            output_buffer: String::new(),
         }
     }
 
@@ -141,6 +145,42 @@ impl VM {
     pub fn seal_user(&mut self) {
         self.dp_user = self.dp;
         self.hdr_user = self.headers.len();
+    }
+
+    /// Append text to the output buffer.
+    pub fn write_output(&mut self, s: &str) {
+        self.output_buffer.push_str(s);
+    }
+
+    /// Take the current output buffer contents, leaving it empty.
+    pub fn take_output(&mut self) -> String {
+        std::mem::take(&mut self.output_buffer)
+    }
+
+    /// Resolve a StringDesc index to the string stored in the string pool.
+    ///
+    /// Returns `Err(TbxError::TypeError)` if the index is out of bounds or
+    /// the stored data is not valid UTF-8.
+    pub fn resolve_string(&self, idx: usize) -> Result<String, TbxError> {
+        if idx + 2 > self.string_pool.len() {
+            return Err(TbxError::TypeError {
+                expected: "valid string index",
+                got: "out of bounds",
+            });
+        }
+        let len = u16::from_le_bytes([self.string_pool[idx], self.string_pool[idx + 1]]) as usize;
+        let start = idx + 2;
+        let end = start + len;
+        if end > self.string_pool.len() {
+            return Err(TbxError::TypeError {
+                expected: "valid string data",
+                got: "truncated",
+            });
+        }
+        String::from_utf8(self.string_pool[start..end].to_vec()).map_err(|_| TbxError::TypeError {
+            expected: "valid UTF-8",
+            got: "invalid bytes",
+        })
     }
 
     /// Intern a string into the string pool using the length-prefix format.
