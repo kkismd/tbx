@@ -117,6 +117,17 @@ enum ReturnFrame {
 * `ALLOT N` — DP を N セル分進めて領域を確保する。確保した領域の先頭アドレスを返す。
 * `HERE` — 現在のDPの値（次の書き込み先アドレス）をスタックに積む。
 
+> Issue #125「ヒープポインタDPのオーバーフロー対策が未定義」に基づく設計方針
+
+**辞書の最大サイズ: `MAX_DICTIONARY_CELLS = 1_048_576`（1Mセル ≒ 8MB）**
+
+これはコア言語の仕様として規定する定数であり、`STRING_MAX_LENGTH` と同じスタイルでコア定数モジュールに定義する。
+
+* `ALLOT`・`APPEND`・`LITERAL` 等、DP を進めるすべての操作で DP 上限チェックを行う。
+  - チェック方法: `let new_dp = dp + n; if new_dp > MAX_DICTIONARY_CELLS { return Err(TbxError::DictionaryOverflow { requested: new_dp, limit: MAX_DICTIONARY_CELLS }); }`
+  - 超過時は `TbxError::DictionaryOverflow { requested: usize, limit: usize }` を返す（既存の `TbxError::StringTooLong { len }` と同じスタイル）。
+* `ALLOT N` の引数 N が負値の場合は `TbxError::InvalidAllotCount` を返す。DP を後退させる操作は仕様として禁止する。
+
 #### 永続化
 
 * 辞書の永続化はメモリのダンプ（スナップショット保存）とリストア（ロード）によって行う。
