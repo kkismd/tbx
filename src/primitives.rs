@@ -345,6 +345,81 @@ pub fn or_prim(vm: &mut VM) -> Result<(), TbxError> {
     Ok(())
 }
 
+/// PUTSTR — output the string referenced by a StringDesc on the stack (no newline).
+/// Escape sequences (\n, \t, \\) in the stored string are output literally
+/// as they were already expanded at compile time (during intern).
+pub fn putstr_prim(vm: &mut VM) -> Result<(), TbxError> {
+    let cell = vm.pop()?;
+    match cell {
+        Cell::StringDesc(idx) => {
+            let s = vm.resolve_string(idx)?;
+            vm.write_output(&s);
+            Ok(())
+        }
+        _ => Err(TbxError::TypeError {
+            expected: "StringDesc",
+            got: cell.type_name(),
+        }),
+    }
+}
+
+/// PUTCHR — output the integer value on the stack as a single ASCII character (no newline).
+pub fn putchr_prim(vm: &mut VM) -> Result<(), TbxError> {
+    let cell = vm.pop()?;
+    match cell {
+        Cell::Int(code) => {
+            if !(0..=127).contains(&code) {
+                return Err(TbxError::TypeError {
+                    expected: "ASCII code (0-127)",
+                    got: "out of range",
+                });
+            }
+            let ch = code as u8 as char;
+            vm.write_output(&ch.to_string());
+            Ok(())
+        }
+        _ => Err(TbxError::TypeError {
+            expected: "Int",
+            got: cell.type_name(),
+        }),
+    }
+}
+
+/// PUTDEC — output the integer value on the stack as a signed decimal number (no newline).
+pub fn putdec_prim(vm: &mut VM) -> Result<(), TbxError> {
+    let cell = vm.pop()?;
+    match cell {
+        Cell::Int(n) => {
+            vm.write_output(&n.to_string());
+            Ok(())
+        }
+        _ => Err(TbxError::TypeError {
+            expected: "Int",
+            got: cell.type_name(),
+        }),
+    }
+}
+
+/// PUTHEX — output the integer value on the stack as $-prefixed uppercase hex (no newline).
+/// Negative values are output as two's complement 64-bit representation.
+pub fn puthex_prim(vm: &mut VM) -> Result<(), TbxError> {
+    let cell = vm.pop()?;
+    match cell {
+        Cell::Int(n) => {
+            if n < 0 {
+                vm.write_output(&format!("${:X}", n as u64));
+            } else {
+                vm.write_output(&format!("${:X}", n));
+            }
+            Ok(())
+        }
+        _ => Err(TbxError::TypeError {
+            expected: "Int",
+            got: cell.type_name(),
+        }),
+    }
+}
+
 /// Register all stack primitives into the VM's dictionary.
 pub fn register_all(vm: &mut VM) {
     vm.register(WordEntry::new_primitive("DROP", drop_prim));
@@ -367,6 +442,10 @@ pub fn register_all(vm: &mut VM) {
     vm.register(WordEntry::new_primitive("GE", ge_prim));
     vm.register(WordEntry::new_primitive("AND", and_prim));
     vm.register(WordEntry::new_primitive("OR", or_prim));
+    vm.register(WordEntry::new_primitive("PUTSTR", putstr_prim));
+    vm.register(WordEntry::new_primitive("PUTCHR", putchr_prim));
+    vm.register(WordEntry::new_primitive("PUTDEC", putdec_prim));
+    vm.register(WordEntry::new_primitive("PUTHEX", puthex_prim));
 }
 
 #[cfg(test)]
@@ -1173,5 +1252,164 @@ mod tests {
         vm.push(Cell::Int(5));
         or_prim(&mut vm).unwrap();
         assert_eq!(vm.pop(), Ok(Cell::Bool(true)));
+    }
+
+    // --- PUTSTR tests ---
+
+    #[test]
+    fn test_putstr_basic() {
+        let mut vm = VM::new();
+        let idx = vm.intern_string("hello").unwrap();
+        vm.push(Cell::StringDesc(idx));
+        putstr_prim(&mut vm).unwrap();
+        assert_eq!(vm.take_output(), "hello");
+    }
+
+    #[test]
+    fn test_putstr_empty() {
+        let mut vm = VM::new();
+        let idx = vm.intern_string("").unwrap();
+        vm.push(Cell::StringDesc(idx));
+        putstr_prim(&mut vm).unwrap();
+        assert_eq!(vm.take_output(), "");
+    }
+
+    #[test]
+    fn test_putstr_type_error() {
+        let mut vm = VM::new();
+        vm.push(Cell::Int(42));
+        assert!(matches!(
+            putstr_prim(&mut vm),
+            Err(TbxError::TypeError { .. })
+        ));
+    }
+
+    #[test]
+    fn test_putstr_underflow() {
+        let mut vm = VM::new();
+        assert!(matches!(
+            putstr_prim(&mut vm),
+            Err(TbxError::StackUnderflow)
+        ));
+    }
+
+    // --- PUTCHR tests ---
+
+    #[test]
+    fn test_putchr_basic() {
+        let mut vm = VM::new();
+        vm.push(Cell::Int(65)); // 'A'
+        putchr_prim(&mut vm).unwrap();
+        assert_eq!(vm.take_output(), "A");
+    }
+
+    #[test]
+    fn test_putchr_newline() {
+        let mut vm = VM::new();
+        vm.push(Cell::Int(10)); // '\n'
+        putchr_prim(&mut vm).unwrap();
+        assert_eq!(vm.take_output(), "\n");
+    }
+
+    #[test]
+    fn test_putchr_out_of_range() {
+        let mut vm = VM::new();
+        vm.push(Cell::Int(128));
+        assert!(matches!(
+            putchr_prim(&mut vm),
+            Err(TbxError::TypeError { .. })
+        ));
+    }
+
+    #[test]
+    fn test_putchr_negative() {
+        let mut vm = VM::new();
+        vm.push(Cell::Int(-1));
+        assert!(matches!(
+            putchr_prim(&mut vm),
+            Err(TbxError::TypeError { .. })
+        ));
+    }
+
+    #[test]
+    fn test_putchr_type_error() {
+        let mut vm = VM::new();
+        vm.push(Cell::Bool(true));
+        assert!(matches!(
+            putchr_prim(&mut vm),
+            Err(TbxError::TypeError { .. })
+        ));
+    }
+
+    // --- PUTDEC tests ---
+
+    #[test]
+    fn test_putdec_positive() {
+        let mut vm = VM::new();
+        vm.push(Cell::Int(42));
+        putdec_prim(&mut vm).unwrap();
+        assert_eq!(vm.take_output(), "42");
+    }
+
+    #[test]
+    fn test_putdec_negative() {
+        let mut vm = VM::new();
+        vm.push(Cell::Int(-7));
+        putdec_prim(&mut vm).unwrap();
+        assert_eq!(vm.take_output(), "-7");
+    }
+
+    #[test]
+    fn test_putdec_zero() {
+        let mut vm = VM::new();
+        vm.push(Cell::Int(0));
+        putdec_prim(&mut vm).unwrap();
+        assert_eq!(vm.take_output(), "0");
+    }
+
+    #[test]
+    fn test_putdec_type_error() {
+        let mut vm = VM::new();
+        vm.push(Cell::Float(3.5));
+        assert!(matches!(
+            putdec_prim(&mut vm),
+            Err(TbxError::TypeError { .. })
+        ));
+    }
+
+    // --- PUTHEX tests ---
+
+    #[test]
+    fn test_puthex_positive() {
+        let mut vm = VM::new();
+        vm.push(Cell::Int(255));
+        puthex_prim(&mut vm).unwrap();
+        assert_eq!(vm.take_output(), "$FF");
+    }
+
+    #[test]
+    fn test_puthex_zero() {
+        let mut vm = VM::new();
+        vm.push(Cell::Int(0));
+        puthex_prim(&mut vm).unwrap();
+        assert_eq!(vm.take_output(), "$0");
+    }
+
+    #[test]
+    fn test_puthex_negative() {
+        let mut vm = VM::new();
+        vm.push(Cell::Int(-1));
+        puthex_prim(&mut vm).unwrap();
+        assert_eq!(vm.take_output(), "$FFFFFFFFFFFFFFFF");
+    }
+
+    #[test]
+    fn test_puthex_type_error() {
+        let mut vm = VM::new();
+        vm.push(Cell::Bool(true));
+        assert!(matches!(
+            puthex_prim(&mut vm),
+            Err(TbxError::TypeError { .. })
+        ));
     }
 }
