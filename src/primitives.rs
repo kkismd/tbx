@@ -1,4 +1,5 @@
 use crate::cell::{Cell, ReturnFrame};
+use crate::constants::MAX_DICTIONARY_CELLS;
 use crate::dict::{EntryKind, WordEntry};
 use crate::error::TbxError;
 use crate::vm::VM;
@@ -420,6 +421,49 @@ pub fn puthex_prim(vm: &mut VM) -> Result<(), TbxError> {
     }
 }
 
+/// APPEND — pop a Cell and write it to dictionary[dp], advancing dp by 1.
+pub fn append_prim(vm: &mut VM) -> Result<(), TbxError> {
+    let cell = vm.pop()?;
+    vm.dict_write(cell)
+}
+
+/// ALLOT — pop N from the stack, advance dp by N cells, and push the start address.
+pub fn allot_prim(vm: &mut VM) -> Result<(), TbxError> {
+    let cell = vm.pop()?;
+    let n = match cell {
+        Cell::Int(n) => n,
+        _ => {
+            return Err(TbxError::TypeError {
+                expected: "Int",
+                got: cell.type_name(),
+            })
+        }
+    };
+    if n < 0 {
+        return Err(TbxError::InvalidAllotCount);
+    }
+    let count = n as usize;
+    let new_dp = vm.dp + count;
+    if new_dp > MAX_DICTIONARY_CELLS {
+        return Err(TbxError::DictionaryOverflow {
+            requested: new_dp,
+            limit: MAX_DICTIONARY_CELLS,
+        });
+    }
+    let start = vm.dp;
+    for _ in 0..count {
+        vm.dict_write(Cell::None)?;
+    }
+    vm.push(Cell::DictAddr(start));
+    Ok(())
+}
+
+/// HERE — push the current dictionary pointer as a DictAddr.
+pub fn here_prim(vm: &mut VM) -> Result<(), TbxError> {
+    vm.push(Cell::DictAddr(vm.dp));
+    Ok(())
+}
+
 /// Register all stack primitives into the VM's dictionary.
 pub fn register_all(vm: &mut VM) {
     vm.register(WordEntry::new_primitive("DROP", drop_prim));
@@ -446,12 +490,16 @@ pub fn register_all(vm: &mut VM) {
     vm.register(WordEntry::new_primitive("PUTCHR", putchr_prim));
     vm.register(WordEntry::new_primitive("PUTDEC", putdec_prim));
     vm.register(WordEntry::new_primitive("PUTHEX", puthex_prim));
+    vm.register(WordEntry::new_primitive("APPEND", append_prim));
+    vm.register(WordEntry::new_primitive("ALLOT", allot_prim));
+    vm.register(WordEntry::new_primitive("HERE", here_prim));
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::cell::Cell;
+    use crate::constants::MAX_DICTIONARY_CELLS;
 
     // --- drop_prim ---
 
@@ -1410,6 +1458,136 @@ mod tests {
         assert!(matches!(
             puthex_prim(&mut vm),
             Err(TbxError::TypeError { .. })
+        ));
+    }
+
+    // --- append_prim ---
+
+    #[test]
+    fn test_append_writes_to_dictionary() {
+        let mut vm = VM::new();
+        vm.push(Cell::Int(42));
+        append_prim(&mut vm).unwrap();
+        assert_eq!(vm.dictionary.len(), 1);
+        assert_eq!(vm.dp, 1);
+        assert!(matches!(vm.dictionary[0], Cell::Int(42)));
+    }
+
+    #[test]
+    fn test_append_xt_value() {
+        let mut vm = VM::new();
+        vm.push(Cell::Xt(crate::cell::Xt(5)));
+        append_prim(&mut vm).unwrap();
+        assert_eq!(vm.dictionary.len(), 1);
+        assert!(matches!(vm.dictionary[0], Cell::Xt(_)));
+    }
+
+    #[test]
+    fn test_append_multiple() {
+        let mut vm = VM::new();
+        vm.push(Cell::Int(10));
+        append_prim(&mut vm).unwrap();
+        vm.push(Cell::Int(20));
+        append_prim(&mut vm).unwrap();
+        vm.push(Cell::Int(30));
+        append_prim(&mut vm).unwrap();
+        assert_eq!(vm.dp, 3);
+        assert!(matches!(vm.dictionary[0], Cell::Int(10)));
+        assert!(matches!(vm.dictionary[1], Cell::Int(20)));
+        assert!(matches!(vm.dictionary[2], Cell::Int(30)));
+    }
+
+    #[test]
+    fn test_append_empty_stack() {
+        let mut vm = VM::new();
+        assert!(matches!(
+            append_prim(&mut vm),
+            Err(TbxError::StackUnderflow)
+        ));
+    }
+
+    // --- allot_prim ---
+
+    #[test]
+    fn test_allot_reserves_cells() {
+        let mut vm = VM::new();
+        vm.push(Cell::Int(5));
+        allot_prim(&mut vm).unwrap();
+        assert_eq!(vm.dp, 5);
+        assert_eq!(vm.dictionary.len(), 5);
+        // Returns start address
+        assert_eq!(vm.pop().unwrap(), Cell::DictAddr(0));
+    }
+
+    #[test]
+    fn test_allot_after_append() {
+        let mut vm = VM::new();
+        vm.push(Cell::Int(100));
+        append_prim(&mut vm).unwrap();
+        vm.push(Cell::Int(3));
+        allot_prim(&mut vm).unwrap();
+        assert_eq!(vm.dp, 4);
+        assert_eq!(vm.pop().unwrap(), Cell::DictAddr(1));
+    }
+
+    #[test]
+    fn test_allot_zero() {
+        let mut vm = VM::new();
+        vm.push(Cell::Int(0));
+        allot_prim(&mut vm).unwrap();
+        assert_eq!(vm.dp, 0);
+        assert_eq!(vm.pop().unwrap(), Cell::DictAddr(0));
+    }
+
+    #[test]
+    fn test_allot_negative() {
+        let mut vm = VM::new();
+        vm.push(Cell::Int(-1));
+        assert!(matches!(
+            allot_prim(&mut vm),
+            Err(TbxError::InvalidAllotCount)
+        ));
+    }
+
+    #[test]
+    fn test_allot_type_error() {
+        let mut vm = VM::new();
+        vm.push(Cell::Bool(true));
+        assert!(matches!(
+            allot_prim(&mut vm),
+            Err(TbxError::TypeError { .. })
+        ));
+    }
+
+    // --- here_prim ---
+
+    #[test]
+    fn test_here_initial() {
+        let mut vm = VM::new();
+        here_prim(&mut vm).unwrap();
+        assert_eq!(vm.pop().unwrap(), Cell::DictAddr(0));
+    }
+
+    #[test]
+    fn test_here_after_append() {
+        let mut vm = VM::new();
+        vm.push(Cell::Int(1));
+        append_prim(&mut vm).unwrap();
+        vm.push(Cell::Int(2));
+        append_prim(&mut vm).unwrap();
+        here_prim(&mut vm).unwrap();
+        assert_eq!(vm.pop().unwrap(), Cell::DictAddr(2));
+    }
+
+    // --- dict_write overflow ---
+
+    #[test]
+    fn test_allot_overflow() {
+        let mut vm = VM::new();
+        vm.push(Cell::Int((MAX_DICTIONARY_CELLS + 1) as i64));
+        assert!(matches!(
+            allot_prim(&mut vm),
+            Err(TbxError::DictionaryOverflow { .. })
         ));
     }
 }

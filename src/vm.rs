@@ -1,4 +1,5 @@
 use crate::cell::{Cell, ReturnFrame, Xt};
+use crate::constants::MAX_DICTIONARY_CELLS;
 use crate::dict::WordEntry;
 use crate::error::TbxError;
 
@@ -118,6 +119,27 @@ impl VM {
     /// Returns `Err(TbxError::StackUnderflow)` if the data stack is empty.
     pub fn pop(&mut self) -> Result<Cell, TbxError> {
         self.data_stack.pop().ok_or(TbxError::StackUnderflow)
+    }
+
+    /// Write a cell to `dictionary[dp]` and advance dp by 1.
+    ///
+    /// Maintains the invariant `dp == dictionary.len()` by always using `push`.
+    /// Checks the dictionary size limit before writing.
+    pub fn dict_write(&mut self, cell: Cell) -> Result<(), TbxError> {
+        debug_assert_eq!(
+            self.dp,
+            self.dictionary.len(),
+            "dp must equal dictionary.len()"
+        );
+        if self.dp >= MAX_DICTIONARY_CELLS {
+            return Err(TbxError::DictionaryOverflow {
+                requested: self.dp + 1,
+                limit: MAX_DICTIONARY_CELLS,
+            });
+        }
+        self.dictionary.push(cell);
+        self.dp += 1;
+        Ok(())
     }
 
     /// Seal the system dictionary boundary.

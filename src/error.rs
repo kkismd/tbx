@@ -24,6 +24,13 @@ pub enum TbxError {
         size: usize,
     },
     DivisionByZero,
+    /// The dictionary pointer exceeded the maximum allowed size.
+    DictionaryOverflow {
+        requested: usize,
+        limit: usize,
+    },
+    /// ALLOT was called with a negative count.
+    InvalidAllotCount,
 }
 
 impl std::fmt::Display for TbxError {
@@ -44,6 +51,14 @@ impl std::fmt::Display for TbxError {
                 write!(f, "index out of bounds: index {}, size {}", index, size)
             }
             TbxError::DivisionByZero => write!(f, "division by zero"),
+            TbxError::DictionaryOverflow { requested, limit } => {
+                write!(
+                    f,
+                    "dictionary overflow: requested {} cells (limit {})",
+                    requested, limit
+                )
+            }
+            TbxError::InvalidAllotCount => write!(f, "ALLOT count must be non-negative"),
         }
     }
 }
