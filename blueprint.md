@@ -51,6 +51,19 @@ enum ReturnFrame {
 * `ReturnFrame::Call` の場合: 保存された `return_pc` と `saved_bp` を復元して通常のリターンを行う。
 * `ReturnFrame::TopLevel` の場合: 実行を正常終了する（これがトップレベル終端の唯一のメカニズムである）。
 * リターンスタックが空の状態で `EXIT` が呼ばれた場合: 実装バグとして `StackUnderflow` エラーを返す。
+
+> Issue #124「スタック深度制限（データスタック・リターンスタック）の仕様が未明記」に基づく設計方針
+
+**スタック深度の上限値: `MAX_DATA_STACK_DEPTH = 65_536`（データスタック、65536セル）／ `MAX_RETURN_STACK_DEPTH = 4_096`（リターンスタック、4096フレーム）**
+
+両値はコア言語の仕様として規定する定数であり、`MAX_DICTIONARY_CELLS` と同じスタイルでコア定数モジュールに定義する。
+
+* データスタック：`vm.push()` メソッドでプッシュ前に `data_stack.len() >= MAX_DATA_STACK_DEPTH` をチェックする。
+  - 超過時は `TbxError::DataStackOverflow { depth: usize, limit: usize }` を返す（既存の `TbxError::StringTooLong { len }` と同じスタイル）。
+* リターンスタック：`CALL` 実行時に `return_stack.len() >= MAX_RETURN_STACK_DEPTH` をチェックする。
+  - 超過時は `TbxError::ReturnStackOverflow { depth: usize, limit: usize }` を返す（同上）。
+* いずれもスタックへの唯一の書き込み経路で1箇所のみチェックすれば十分である。
+
 * 組み込みの自己拡張コンパイラ
   * 辞書の読み書きとポインタ: 辞書に新しいコードを書き込む手段。
   * レキシカルスキャナ: プログラムテキストを識別子、演算子、数値リテラル、文字列リテラルなどのトークンとして切り出す。
