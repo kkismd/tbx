@@ -1506,6 +1506,19 @@ mod tests {
         ));
     }
 
+    #[test]
+    fn test_append_overflow() {
+        let mut vm = VM::new();
+        vm.dp = MAX_DICTIONARY_CELLS;
+        // Manually grow dictionary to match dp invariant
+        vm.dictionary.resize(MAX_DICTIONARY_CELLS, Cell::None);
+        vm.push(Cell::Int(1));
+        assert!(matches!(
+            append_prim(&mut vm),
+            Err(TbxError::DictionaryOverflow { .. })
+        ));
+    }
+
     // --- allot_prim ---
 
     #[test]
