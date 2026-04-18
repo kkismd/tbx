@@ -1,5 +1,5 @@
-use crate::dict::WordEntry;
 use crate::cell::{Cell, ReturnFrame, Xt};
+use crate::dict::WordEntry;
 use crate::error::TbxError;
 
 /// The TBX virtual machine.
@@ -160,7 +160,8 @@ impl VM {
             return Err(TbxError::StringTooLong { len: bytes.len() });
         }
         let idx = self.string_pool.len();
-        self.string_pool.extend_from_slice(&(bytes.len() as u16).to_le_bytes());
+        self.string_pool
+            .extend_from_slice(&(bytes.len() as u16).to_le_bytes());
         self.string_pool.extend_from_slice(bytes);
         Ok(idx)
     }
@@ -302,7 +303,10 @@ mod tests {
         let idx = vm.intern_string("hello").unwrap();
         assert_eq!(idx, 0);
         // length prefix: u16 little-endian, so [5, 0]
-        assert_eq!(u16::from_le_bytes([vm.string_pool[0], vm.string_pool[1]]), 5);
+        assert_eq!(
+            u16::from_le_bytes([vm.string_pool[0], vm.string_pool[1]]),
+            5
+        );
         assert_eq!(&vm.string_pool[2..7], b"hello");
     }
 
@@ -314,9 +318,15 @@ mod tests {
         // "hi" occupies bytes 0..=3 (2 length bytes + 2 data bytes)
         assert_eq!(idx1, 0);
         assert_eq!(idx2, 4); // 2 (len) + 2 (data) = 4
-        assert_eq!(u16::from_le_bytes([vm.string_pool[idx1], vm.string_pool[idx1 + 1]]), 2);
+        assert_eq!(
+            u16::from_le_bytes([vm.string_pool[idx1], vm.string_pool[idx1 + 1]]),
+            2
+        );
         assert_eq!(&vm.string_pool[idx1 + 2..idx1 + 4], b"hi");
-        assert_eq!(u16::from_le_bytes([vm.string_pool[idx2], vm.string_pool[idx2 + 1]]), 5);
+        assert_eq!(
+            u16::from_le_bytes([vm.string_pool[idx2], vm.string_pool[idx2 + 1]]),
+            5
+        );
         assert_eq!(&vm.string_pool[idx2 + 2..idx2 + 7], b"world");
     }
 
@@ -326,7 +336,10 @@ mod tests {
         let idx = vm.intern_string("").unwrap();
         assert_eq!(idx, 0);
         // zero-length string: 2 length bytes (both 0) + 0 data bytes
-        assert_eq!(u16::from_le_bytes([vm.string_pool[0], vm.string_pool[1]]), 0);
+        assert_eq!(
+            u16::from_le_bytes([vm.string_pool[0], vm.string_pool[1]]),
+            0
+        );
         assert_eq!(vm.string_pool.len(), 2);
     }
 
@@ -335,7 +348,10 @@ mod tests {
         let mut vm = VM::new();
         let long_str = "x".repeat(65536);
         let result = vm.intern_string(&long_str);
-        assert!(matches!(result, Err(crate::error::TbxError::StringTooLong { len: 65536 })));
+        assert!(matches!(
+            result,
+            Err(crate::error::TbxError::StringTooLong { len: 65536 })
+        ));
     }
 
     #[test]
@@ -345,7 +361,10 @@ mod tests {
         let result = vm.intern_string(&max_str);
         assert!(result.is_ok());
         // length prefix: u16 little-endian 65535 = [0xFF, 0xFF]
-        assert_eq!(u16::from_le_bytes([vm.string_pool[0], vm.string_pool[1]]), 65535);
+        assert_eq!(
+            u16::from_le_bytes([vm.string_pool[0], vm.string_pool[1]]),
+            65535
+        );
         assert_eq!(vm.string_pool.len(), 65537); // 2 length bytes + 65535 data bytes
         assert_eq!(&vm.string_pool[2..], max_str.as_bytes());
     }
@@ -355,7 +374,10 @@ mod tests {
         let mut vm = VM::new();
         // "あ" is 3 bytes in UTF-8; the length prefix must record byte length, not char count
         let idx = vm.intern_string("あ").unwrap();
-        assert_eq!(u16::from_le_bytes([vm.string_pool[idx], vm.string_pool[idx + 1]]), 3);
+        assert_eq!(
+            u16::from_le_bytes([vm.string_pool[idx], vm.string_pool[idx + 1]]),
+            3
+        );
         assert_eq!(&vm.string_pool[idx + 2..idx + 5], "あ".as_bytes());
     }
 

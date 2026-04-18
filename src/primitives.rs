@@ -188,9 +188,9 @@ pub fn div_prim(vm: &mut VM) -> Result<(), TbxError> {
     match (a, b) {
         (Cell::Int(_), Cell::Int(0)) => return Err(TbxError::DivisionByZero),
         (Cell::Int(x), Cell::Int(y)) => vm.push(Cell::Int(x / y)),
-        (Cell::Float(_), Cell::Float(y)) if y == 0.0 => return Err(TbxError::DivisionByZero),
+        (Cell::Float(_), Cell::Float(0.0)) => return Err(TbxError::DivisionByZero),
         (Cell::Float(x), Cell::Float(y)) => vm.push(Cell::Float(x / y)),
-        (Cell::Int(_), Cell::Float(y)) if y == 0.0 => return Err(TbxError::DivisionByZero),
+        (Cell::Int(_), Cell::Float(0.0)) => return Err(TbxError::DivisionByZero),
         (Cell::Int(x), Cell::Float(y)) => vm.push(Cell::Float(x as f64 / y)),
         (Cell::Float(_), Cell::Int(0)) => return Err(TbxError::DivisionByZero),
         (Cell::Float(x), Cell::Int(y)) => vm.push(Cell::Float(x / y as f64)),
@@ -520,10 +520,13 @@ mod tests {
         let mut vm = VM::new();
         vm.push(Cell::Int(2));
         vm.push(Cell::Bool(true)); // Not a number
-        assert_eq!(add_prim(&mut vm), Err(TbxError::TypeError {
-            expected: "number",
-            got: "non-number"
-        }));
+        assert_eq!(
+            add_prim(&mut vm),
+            Err(TbxError::TypeError {
+                expected: "number",
+                got: "non-number"
+            })
+        );
     }
 
     // --- sub_prim ---

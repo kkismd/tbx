@@ -6,7 +6,9 @@ pub enum TbxError {
     /// The pool uses a two-byte little-endian length prefix (`u16`), so strings
     /// must be at most 65535 bytes when encoded as UTF-8. This limit applies at
     /// the lexer/parser level before the string reaches the pool.
-    StringTooLong { len: usize },
+    StringTooLong {
+        len: usize,
+    },
     /// A pop was attempted on an empty data stack.
     StackUnderflow,
     /// A value of the wrong type was provided.
@@ -17,7 +19,10 @@ pub enum TbxError {
         expected: &'static str,
         got: &'static str,
     },
-    IndexOutOfBounds { index: usize, size: usize },
+    IndexOutOfBounds {
+        index: usize,
+        size: usize,
+    },
     DivisionByZero,
 }
 
