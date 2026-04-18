@@ -221,6 +221,118 @@ pub fn mod_prim(vm: &mut VM) -> Result<(), TbxError> {
     Ok(())
 }
 
+/// EQ — equality comparison. Pushes Bool(true) if the two top values are equal.
+pub fn eq_prim(vm: &mut VM) -> Result<(), TbxError> {
+    let b = vm.pop()?;
+    let a = vm.pop()?;
+    vm.push(Cell::Bool(a == b));
+    Ok(())
+}
+
+/// NEQ — inequality comparison. Pushes Bool(true) if the two top values are not equal.
+pub fn neq_prim(vm: &mut VM) -> Result<(), TbxError> {
+    let b = vm.pop()?;
+    let a = vm.pop()?;
+    vm.push(Cell::Bool(a != b));
+    Ok(())
+}
+
+/// LT — less than. Pushes Bool(true) if a < b (numeric only, with Int/Float promotion).
+pub fn lt_prim(vm: &mut VM) -> Result<(), TbxError> {
+    let b = vm.pop()?;
+    let a = vm.pop()?;
+    let result = match (&a, &b) {
+        (Cell::Int(x), Cell::Int(y)) => x < y,
+        (Cell::Float(x), Cell::Float(y)) => x < y,
+        (Cell::Int(x), Cell::Float(y)) => (*x as f64) < *y,
+        (Cell::Float(x), Cell::Int(y)) => *x < (*y as f64),
+        _ => {
+            return Err(TbxError::TypeError {
+                expected: "number",
+                got: "non-number",
+            })
+        }
+    };
+    vm.push(Cell::Bool(result));
+    Ok(())
+}
+
+/// GT — greater than. Pushes Bool(true) if a > b (numeric only, with Int/Float promotion).
+pub fn gt_prim(vm: &mut VM) -> Result<(), TbxError> {
+    let b = vm.pop()?;
+    let a = vm.pop()?;
+    let result = match (&a, &b) {
+        (Cell::Int(x), Cell::Int(y)) => x > y,
+        (Cell::Float(x), Cell::Float(y)) => x > y,
+        (Cell::Int(x), Cell::Float(y)) => (*x as f64) > *y,
+        (Cell::Float(x), Cell::Int(y)) => *x > (*y as f64),
+        _ => {
+            return Err(TbxError::TypeError {
+                expected: "number",
+                got: "non-number",
+            })
+        }
+    };
+    vm.push(Cell::Bool(result));
+    Ok(())
+}
+
+/// LE — less than or equal. Pushes Bool(true) if a <= b (numeric only, with Int/Float promotion).
+pub fn le_prim(vm: &mut VM) -> Result<(), TbxError> {
+    let b = vm.pop()?;
+    let a = vm.pop()?;
+    let result = match (&a, &b) {
+        (Cell::Int(x), Cell::Int(y)) => x <= y,
+        (Cell::Float(x), Cell::Float(y)) => x <= y,
+        (Cell::Int(x), Cell::Float(y)) => (*x as f64) <= *y,
+        (Cell::Float(x), Cell::Int(y)) => *x <= (*y as f64),
+        _ => {
+            return Err(TbxError::TypeError {
+                expected: "number",
+                got: "non-number",
+            })
+        }
+    };
+    vm.push(Cell::Bool(result));
+    Ok(())
+}
+
+/// GE — greater than or equal. Pushes Bool(true) if a >= b (numeric only, with Int/Float promotion).
+pub fn ge_prim(vm: &mut VM) -> Result<(), TbxError> {
+    let b = vm.pop()?;
+    let a = vm.pop()?;
+    let result = match (&a, &b) {
+        (Cell::Int(x), Cell::Int(y)) => x >= y,
+        (Cell::Float(x), Cell::Float(y)) => x >= y,
+        (Cell::Int(x), Cell::Float(y)) => (*x as f64) >= *y,
+        (Cell::Float(x), Cell::Int(y)) => *x >= (*y as f64),
+        _ => {
+            return Err(TbxError::TypeError {
+                expected: "number",
+                got: "non-number",
+            })
+        }
+    };
+    vm.push(Cell::Bool(result));
+    Ok(())
+}
+
+/// AND — logical AND. Evaluates both operands with is_truthy() and pushes the result as Bool.
+pub fn and_prim(vm: &mut VM) -> Result<(), TbxError> {
+    let b = vm.pop()?;
+    let a = vm.pop()?;
+    vm.push(Cell::Bool(a.is_truthy() && b.is_truthy()));
+    Ok(())
+}
+
+/// OR — logical OR. Evaluates both operands with is_truthy() and pushes the result as Bool.
+pub fn or_prim(vm: &mut VM) -> Result<(), TbxError> {
+    let b = vm.pop()?;
+    let a = vm.pop()?;
+    vm.push(Cell::Bool(a.is_truthy() || b.is_truthy()));
+    Ok(())
+}
+
 /// Register all stack primitives into the VM's dictionary.
 pub fn register_all(vm: &mut VM) {
     vm.register(WordEntry::new_primitive("DROP", drop_prim));
@@ -235,6 +347,14 @@ pub fn register_all(vm: &mut VM) {
     vm.register(WordEntry::new_primitive("MUL", mul_prim));
     vm.register(WordEntry::new_primitive("DIV", div_prim));
     vm.register(WordEntry::new_primitive("MOD", mod_prim));
+    vm.register(WordEntry::new_primitive("EQ", eq_prim));
+    vm.register(WordEntry::new_primitive("NEQ", neq_prim));
+    vm.register(WordEntry::new_primitive("LT", lt_prim));
+    vm.register(WordEntry::new_primitive("GT", gt_prim));
+    vm.register(WordEntry::new_primitive("LE", le_prim));
+    vm.register(WordEntry::new_primitive("GE", ge_prim));
+    vm.register(WordEntry::new_primitive("AND", and_prim));
+    vm.register(WordEntry::new_primitive("OR", or_prim));
 }
 
 #[cfg(test)]
@@ -733,5 +853,226 @@ mod tests {
         vm.push(Cell::Int(7));
         vm.push(Cell::Float(3.0));
         assert!(matches!(mod_prim(&mut vm), Err(TbxError::TypeError { .. })));
+    }
+
+    // --- EQ / NEQ tests ---
+
+    #[test]
+    fn test_eq_int_equal() {
+        let mut vm = VM::new();
+        vm.push(Cell::Int(42));
+        vm.push(Cell::Int(42));
+        eq_prim(&mut vm).unwrap();
+        assert_eq!(vm.pop(), Ok(Cell::Bool(true)));
+    }
+
+    #[test]
+    fn test_eq_int_not_equal() {
+        let mut vm = VM::new();
+        vm.push(Cell::Int(1));
+        vm.push(Cell::Int(2));
+        eq_prim(&mut vm).unwrap();
+        assert_eq!(vm.pop(), Ok(Cell::Bool(false)));
+    }
+
+    #[test]
+    fn test_eq_different_types() {
+        let mut vm = VM::new();
+        vm.push(Cell::Int(1));
+        vm.push(Cell::Bool(true));
+        eq_prim(&mut vm).unwrap();
+        assert_eq!(vm.pop(), Ok(Cell::Bool(false)));
+    }
+
+    #[test]
+    fn test_neq_int() {
+        let mut vm = VM::new();
+        vm.push(Cell::Int(1));
+        vm.push(Cell::Int(2));
+        neq_prim(&mut vm).unwrap();
+        assert_eq!(vm.pop(), Ok(Cell::Bool(true)));
+    }
+
+    #[test]
+    fn test_neq_equal() {
+        let mut vm = VM::new();
+        vm.push(Cell::Int(5));
+        vm.push(Cell::Int(5));
+        neq_prim(&mut vm).unwrap();
+        assert_eq!(vm.pop(), Ok(Cell::Bool(false)));
+    }
+
+    // --- LT / GT / LE / GE tests ---
+
+    #[test]
+    fn test_lt_int() {
+        let mut vm = VM::new();
+        vm.push(Cell::Int(1));
+        vm.push(Cell::Int(2));
+        lt_prim(&mut vm).unwrap();
+        assert_eq!(vm.pop(), Ok(Cell::Bool(true)));
+    }
+
+    #[test]
+    fn test_lt_int_false() {
+        let mut vm = VM::new();
+        vm.push(Cell::Int(3));
+        vm.push(Cell::Int(2));
+        lt_prim(&mut vm).unwrap();
+        assert_eq!(vm.pop(), Ok(Cell::Bool(false)));
+    }
+
+    #[test]
+    fn test_lt_float_int() {
+        let mut vm = VM::new();
+        vm.push(Cell::Float(1.5));
+        vm.push(Cell::Int(2));
+        lt_prim(&mut vm).unwrap();
+        assert_eq!(vm.pop(), Ok(Cell::Bool(true)));
+    }
+
+    #[test]
+    fn test_lt_type_error() {
+        let mut vm = VM::new();
+        vm.push(Cell::Bool(true));
+        vm.push(Cell::Int(1));
+        assert!(matches!(lt_prim(&mut vm), Err(TbxError::TypeError { .. })));
+    }
+
+    #[test]
+    fn test_gt_int() {
+        let mut vm = VM::new();
+        vm.push(Cell::Int(3));
+        vm.push(Cell::Int(2));
+        gt_prim(&mut vm).unwrap();
+        assert_eq!(vm.pop(), Ok(Cell::Bool(true)));
+    }
+
+    #[test]
+    fn test_gt_int_false() {
+        let mut vm = VM::new();
+        vm.push(Cell::Int(1));
+        vm.push(Cell::Int(2));
+        gt_prim(&mut vm).unwrap();
+        assert_eq!(vm.pop(), Ok(Cell::Bool(false)));
+    }
+
+    #[test]
+    fn test_le_int_equal() {
+        let mut vm = VM::new();
+        vm.push(Cell::Int(2));
+        vm.push(Cell::Int(2));
+        le_prim(&mut vm).unwrap();
+        assert_eq!(vm.pop(), Ok(Cell::Bool(true)));
+    }
+
+    #[test]
+    fn test_le_int_less() {
+        let mut vm = VM::new();
+        vm.push(Cell::Int(1));
+        vm.push(Cell::Int(2));
+        le_prim(&mut vm).unwrap();
+        assert_eq!(vm.pop(), Ok(Cell::Bool(true)));
+    }
+
+    #[test]
+    fn test_le_int_greater() {
+        let mut vm = VM::new();
+        vm.push(Cell::Int(3));
+        vm.push(Cell::Int(2));
+        le_prim(&mut vm).unwrap();
+        assert_eq!(vm.pop(), Ok(Cell::Bool(false)));
+    }
+
+    #[test]
+    fn test_ge_int_equal() {
+        let mut vm = VM::new();
+        vm.push(Cell::Int(2));
+        vm.push(Cell::Int(2));
+        ge_prim(&mut vm).unwrap();
+        assert_eq!(vm.pop(), Ok(Cell::Bool(true)));
+    }
+
+    #[test]
+    fn test_ge_int_greater() {
+        let mut vm = VM::new();
+        vm.push(Cell::Int(3));
+        vm.push(Cell::Int(2));
+        ge_prim(&mut vm).unwrap();
+        assert_eq!(vm.pop(), Ok(Cell::Bool(true)));
+    }
+
+    #[test]
+    fn test_ge_int_less() {
+        let mut vm = VM::new();
+        vm.push(Cell::Int(1));
+        vm.push(Cell::Int(2));
+        ge_prim(&mut vm).unwrap();
+        assert_eq!(vm.pop(), Ok(Cell::Bool(false)));
+    }
+
+    // --- AND / OR tests ---
+
+    #[test]
+    fn test_and_true_true() {
+        let mut vm = VM::new();
+        vm.push(Cell::Bool(true));
+        vm.push(Cell::Bool(true));
+        and_prim(&mut vm).unwrap();
+        assert_eq!(vm.pop(), Ok(Cell::Bool(true)));
+    }
+
+    #[test]
+    fn test_and_true_false() {
+        let mut vm = VM::new();
+        vm.push(Cell::Bool(true));
+        vm.push(Cell::Bool(false));
+        and_prim(&mut vm).unwrap();
+        assert_eq!(vm.pop(), Ok(Cell::Bool(false)));
+    }
+
+    #[test]
+    fn test_and_int_truthy() {
+        let mut vm = VM::new();
+        vm.push(Cell::Int(1));
+        vm.push(Cell::Int(2));
+        and_prim(&mut vm).unwrap();
+        assert_eq!(vm.pop(), Ok(Cell::Bool(true)));
+    }
+
+    #[test]
+    fn test_and_int_zero_falsy() {
+        let mut vm = VM::new();
+        vm.push(Cell::Int(1));
+        vm.push(Cell::Int(0));
+        and_prim(&mut vm).unwrap();
+        assert_eq!(vm.pop(), Ok(Cell::Bool(false)));
+    }
+
+    #[test]
+    fn test_or_false_false() {
+        let mut vm = VM::new();
+        vm.push(Cell::Bool(false));
+        vm.push(Cell::Bool(false));
+        or_prim(&mut vm).unwrap();
+        assert_eq!(vm.pop(), Ok(Cell::Bool(false)));
+    }
+
+    #[test]
+    fn test_or_true_false() {
+        let mut vm = VM::new();
+        vm.push(Cell::Bool(true));
+        vm.push(Cell::Bool(false));
+        or_prim(&mut vm).unwrap();
+        assert_eq!(vm.pop(), Ok(Cell::Bool(true)));
+    }
+
+    #[test]
+    fn test_or_int_zero_and_nonzero() {
+        let mut vm = VM::new();
+        vm.push(Cell::Int(0));
+        vm.push(Cell::Int(5));
+        or_prim(&mut vm).unwrap();
+        assert_eq!(vm.pop(), Ok(Cell::Bool(true)));
     }
 }
