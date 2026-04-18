@@ -51,6 +51,9 @@ pub struct VM {
     /// Output buffer: collects text from PUTSTR / PUTCHR / PUTDEC / PUTHEX.
     /// Flushed to stdout at appropriate points (e.g. end of interpretation cycle).
     pub output_buffer: String,
+    /// Compile mode flag: false = execution mode (STATE=0), true = compile mode (STATE=1).
+    /// Toggled by DEF (enter compile mode) and END (return to execution mode).
+    pub is_compiling: bool,
 }
 
 impl VM {
@@ -73,6 +76,7 @@ impl VM {
             dp: 0,
             latest: None,
             output_buffer: String::new(),
+            is_compiling: false,
         }
     }
 

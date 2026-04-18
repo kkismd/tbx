@@ -31,6 +31,8 @@ pub enum TbxError {
     },
     /// ALLOT was called with a negative count.
     InvalidAllotCount,
+    /// HALT was executed, requesting the VM to stop.
+    Halted,
 }
 
 impl std::fmt::Display for TbxError {
@@ -59,6 +61,7 @@ impl std::fmt::Display for TbxError {
                 )
             }
             TbxError::InvalidAllotCount => write!(f, "ALLOT count must be non-negative"),
+            TbxError::Halted => write!(f, "execution halted"),
         }
     }
 }
