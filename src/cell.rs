@@ -20,7 +20,7 @@ impl Xt {
 #[derive(Debug, Clone)]
 pub enum ReturnFrame {
     Call { pc: usize, bp: usize },
- }
+}
 
 /// Cell is the fundamental value type of the TBX VM.
 /// It represents all values that can exist on the stack or in the dictionary.
@@ -231,7 +231,7 @@ mod tests {
 
     #[test]
     fn test_display_float() {
-        assert_eq!(Cell::Float(3.14).to_string(), "3.14");
+        assert_eq!(Cell::Float(3.125).to_string(), "3.125");
         // Integer-valued floats must include a decimal point to be distinct from Int.
         assert_eq!(Cell::Float(1.0).to_string(), "1.0");
         // Non-finite values are printed as-is (no spurious ".0" appended).
