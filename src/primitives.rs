@@ -450,6 +450,26 @@ pub fn literal_prim(vm: &mut VM) -> Result<(), TbxError> {
     vm.dict_write(value)?;
     Ok(())
 }
+
+/// TOKEN — parse the next token from `src_buf` and push three values:
+/// `kind`, `len`, and `val` onto the data stack.
+///
+/// Stack effect: `( -- kind len val )`
+///
+/// Returns `Err(TbxError::EndOfInput)` if the source buffer is exhausted.
+pub fn token_prim(vm: &mut VM) -> Result<(), TbxError> {
+    // parse_next_token stores the result in vm.current_token and returns a ref.
+    // Clone the three fields immediately to avoid borrow conflicts.
+    let (kind, len, val) = {
+        let tok = vm.parse_next_token()?;
+        (tok.kind, tok.len, tok.val.clone())
+    };
+    vm.push(Cell::Int(kind));
+    vm.push(Cell::Int(len));
+    vm.push(val);
+    Ok(())
+}
+
 /// Register all stack primitives into the VM's dictionary.
 pub fn register_all(vm: &mut VM) {
     vm.register(WordEntry::new_primitive("DROP", drop_prim));
@@ -515,6 +535,7 @@ pub fn register_all(vm: &mut VM) {
     let mut literal_entry = WordEntry::new_primitive("LITERAL", literal_prim);
     literal_entry.flags |= crate::dict::FLAG_IMMEDIATE;
     vm.register(literal_entry);
+    vm.register(WordEntry::new_primitive("TOKEN", token_prim));
 }
 
 #[cfg(test)]

@@ -1,7 +1,25 @@
 use crate::cell::{Cell, ReturnFrame, Xt};
-use crate::constants::MAX_DICTIONARY_CELLS;
+use crate::constants::{MAX_DICTIONARY_CELLS, TOK_DELIM, TOK_ID, TOK_NUM, TOK_OP, TOK_STR};
 use crate::dict::WordEntry;
 use crate::error::TbxError;
+
+/// Descriptor for a single token produced by `VM::parse_next_token`.
+///
+/// Stored in `VM::current_token` after each successful parse.
+/// `TOKEN` pushes the three fields onto the data stack as:
+///   `kind` (bottom), `len`, `val` (top)
+#[derive(Debug, Clone, PartialEq)]
+pub struct TokenDescriptor {
+    /// Token kind code (TOK_ID / TOK_NUM / TOK_OP / TOK_DELIM / TOK_STR)
+    pub kind: i64,
+    /// Length of the token in characters.
+    /// For string literals this is the length of the content, excluding quotes.
+    pub len: i64,
+    /// For TOK_NUM: `Cell::Int(n)` where n is the parsed value.
+    /// For all other kinds: `Cell::DictAddr(offset)` where offset is the
+    /// byte offset of the token start in `VM::src_buf`.
+    pub val: Cell,
+}
 
 /// The TBX virtual machine.
 ///
@@ -54,6 +72,13 @@ pub struct VM {
     /// Compile mode flag: false = execution mode (STATE=0), true = compile mode (STATE=1).
     /// Toggled by DEF (enter compile mode) and END (return to execution mode).
     pub is_compiling: bool,
+    /// Source buffer holding the text to be lexed by `parse_next_token`.
+    pub src_buf: String,
+    /// Current read position (byte offset) within `src_buf`.
+    pub src_pos: usize,
+    /// The most recently parsed token, or `None` if `parse_next_token` has not
+    /// been called yet (or the buffer has been reset).
+    pub current_token: Option<TokenDescriptor>,
 }
 
 impl VM {
@@ -77,6 +102,9 @@ impl VM {
             latest: None,
             output_buffer: String::new(),
             is_compiling: false,
+            src_buf: String::new(),
+            src_pos: 0,
+            current_token: None,
         }
     }
 
@@ -183,7 +211,120 @@ impl VM {
         std::mem::take(&mut self.output_buffer)
     }
 
-    /// Run the inner interpreter starting from the given dictionary offset.
+    /// Parse the next token from `src_buf` starting at `src_pos`.
+    ///
+    /// Skips leading whitespace (space, tab, newline), then classifies the next
+    /// token according to the rules below, advances `src_pos` past the token,
+    /// stores the result in `current_token`, and returns a reference to it.
+    ///
+    /// Token classification:
+    /// - `"…"` → TOK_STR; `val` = DictAddr(start_offset of content), `len` = content length
+    /// - ASCII digit or `-` followed by digit → TOK_NUM; `val` = Int(n)
+    /// - ASCII alphabetic or `_` → TOK_ID; `val` = DictAddr(start_offset)
+    /// - `+`, `-`, `*`, `/`, `=`, `<`, `>`, `&`, `|`, `!`, `%`, `^`, `~`, `,` → TOK_OP
+    /// - `;` → TOK_DELIM
+    /// - anything else → TOK_OP
+    ///
+    /// Returns `Err(TbxError::EndOfInput)` when `src_pos` reaches the end of
+    /// `src_buf` after whitespace has been skipped.
+    pub fn parse_next_token(&mut self) -> Result<&TokenDescriptor, TbxError> {
+        // Skip leading whitespace.
+        while self.src_pos < self.src_buf.len() {
+            let b = self.src_buf.as_bytes()[self.src_pos];
+            if b == b' ' || b == b'\t' || b == b'\n' || b == b'\r' {
+                self.src_pos += 1;
+            } else {
+                break;
+            }
+        }
+
+        if self.src_pos >= self.src_buf.len() {
+            return Err(TbxError::EndOfInput);
+        }
+
+        let start = self.src_pos;
+        let b = self.src_buf.as_bytes()[start];
+
+        let tok = if b == b'"' {
+            // String literal: consume opening quote, then read until closing quote or end.
+            self.src_pos += 1; // skip opening '"'
+            let content_start = self.src_pos;
+            while self.src_pos < self.src_buf.len() && self.src_buf.as_bytes()[self.src_pos] != b'"'
+            {
+                self.src_pos += 1;
+            }
+            let len = (self.src_pos - content_start) as i64;
+            if self.src_pos < self.src_buf.len() {
+                self.src_pos += 1; // skip closing '"'
+            }
+            TokenDescriptor {
+                kind: TOK_STR,
+                len,
+                val: Cell::DictAddr(content_start),
+            }
+        } else if b.is_ascii_digit()
+            || (b == b'-'
+                && self.src_pos + 1 < self.src_buf.len()
+                && self.src_buf.as_bytes()[self.src_pos + 1].is_ascii_digit())
+        {
+            // Numeric literal (positive or negative integer).
+            let neg = b == b'-';
+            if neg {
+                self.src_pos += 1;
+            }
+            while self.src_pos < self.src_buf.len()
+                && self.src_buf.as_bytes()[self.src_pos].is_ascii_digit()
+            {
+                self.src_pos += 1;
+            }
+            let raw = &self.src_buf[if neg { start + 1 } else { start }..self.src_pos];
+            let n: i64 = raw.parse().unwrap_or(0);
+            let val = if neg { -n } else { n };
+            let len = (self.src_pos - start) as i64;
+            TokenDescriptor {
+                kind: TOK_NUM,
+                len,
+                val: Cell::Int(val),
+            }
+        } else if b.is_ascii_alphabetic() || b == b'_' {
+            // Identifier.
+            while self.src_pos < self.src_buf.len() {
+                let c = self.src_buf.as_bytes()[self.src_pos];
+                if c.is_ascii_alphanumeric() || c == b'_' {
+                    self.src_pos += 1;
+                } else {
+                    break;
+                }
+            }
+            let len = (self.src_pos - start) as i64;
+            TokenDescriptor {
+                kind: TOK_ID,
+                len,
+                val: Cell::DictAddr(start),
+            }
+        } else if b == b';' {
+            // Delimiter.
+            self.src_pos += 1;
+            TokenDescriptor {
+                kind: TOK_DELIM,
+                len: 1,
+                val: Cell::DictAddr(start),
+            }
+        } else {
+            // Operator (single character): +, -, *, /, =, <, >, &, |, !, %, ^, ~, ,
+            // and any other character.
+            self.src_pos += 1;
+            TokenDescriptor {
+                kind: TOK_OP,
+                len: 1,
+                val: Cell::DictAddr(start),
+            }
+        };
+
+        self.current_token = Some(tok);
+        Ok(self.current_token.as_ref().unwrap())
+    }
+
     ///
     /// Pushes a `ReturnFrame::TopLevel` sentinel before entering the loop.
     /// Execution ends when EXIT pops the TopLevel frame (normal end) or
@@ -998,5 +1139,176 @@ mod tests {
             result,
             Err(crate::error::TbxError::MarkerNotFound)
         ));
+    }
+
+    // ────────────────────────────────────────────────────────────────────────
+    // parse_next_token tests
+    // ────────────────────────────────────────────────────────────────────────
+
+    #[test]
+    fn test_parse_identifier() {
+        let mut vm = VM::new();
+        vm.src_buf = "hello".to_string();
+        let tok = vm.parse_next_token().unwrap().clone();
+        assert_eq!(tok.kind, crate::constants::TOK_ID);
+        assert_eq!(tok.len, 5);
+        assert_eq!(tok.val, Cell::DictAddr(0));
+    }
+
+    #[test]
+    fn test_parse_identifier_with_underscore() {
+        let mut vm = VM::new();
+        vm.src_buf = "my_var".to_string();
+        let tok = vm.parse_next_token().unwrap().clone();
+        assert_eq!(tok.kind, crate::constants::TOK_ID);
+        assert_eq!(tok.len, 6);
+        assert_eq!(tok.val, Cell::DictAddr(0));
+    }
+
+    #[test]
+    fn test_parse_numeric_literal() {
+        let mut vm = VM::new();
+        vm.src_buf = "42".to_string();
+        let tok = vm.parse_next_token().unwrap().clone();
+        assert_eq!(tok.kind, crate::constants::TOK_NUM);
+        assert_eq!(tok.val, Cell::Int(42));
+        assert_eq!(tok.len, 2);
+    }
+
+    #[test]
+    fn test_parse_negative_number() {
+        let mut vm = VM::new();
+        vm.src_buf = "-42".to_string();
+        let tok = vm.parse_next_token().unwrap().clone();
+        assert_eq!(tok.kind, crate::constants::TOK_NUM);
+        assert_eq!(tok.val, Cell::Int(-42));
+        assert_eq!(tok.len, 3);
+    }
+
+    #[test]
+    fn test_parse_minus_alone_is_op() {
+        // A lone '-' not followed by a digit must be TOK_OP.
+        let mut vm = VM::new();
+        vm.src_buf = "- ".to_string();
+        let tok = vm.parse_next_token().unwrap().clone();
+        assert_eq!(tok.kind, crate::constants::TOK_OP);
+    }
+
+    #[test]
+    fn test_parse_operator() {
+        let mut vm = VM::new();
+        vm.src_buf = "+".to_string();
+        let tok = vm.parse_next_token().unwrap().clone();
+        assert_eq!(tok.kind, crate::constants::TOK_OP);
+        assert_eq!(tok.len, 1);
+        assert_eq!(tok.val, Cell::DictAddr(0));
+    }
+
+    #[test]
+    fn test_parse_delimiter() {
+        let mut vm = VM::new();
+        vm.src_buf = ";".to_string();
+        let tok = vm.parse_next_token().unwrap().clone();
+        assert_eq!(tok.kind, crate::constants::TOK_DELIM);
+        assert_eq!(tok.len, 1);
+        assert_eq!(tok.val, Cell::DictAddr(0));
+    }
+
+    #[test]
+    fn test_parse_string_literal() {
+        let mut vm = VM::new();
+        vm.src_buf = r#""hello""#.to_string();
+        let tok = vm.parse_next_token().unwrap().clone();
+        assert_eq!(tok.kind, crate::constants::TOK_STR);
+        // len = length of content, not including quotes
+        assert_eq!(tok.len, 5);
+        // val = DictAddr of content start (offset 1, after the opening quote)
+        assert_eq!(tok.val, Cell::DictAddr(1));
+    }
+
+    #[test]
+    fn test_parse_skips_leading_whitespace() {
+        let mut vm = VM::new();
+        vm.src_buf = "   foo".to_string();
+        let tok = vm.parse_next_token().unwrap().clone();
+        assert_eq!(tok.kind, crate::constants::TOK_ID);
+        // After skipping 3 spaces, "foo" starts at offset 3.
+        assert_eq!(tok.val, Cell::DictAddr(3));
+        assert_eq!(tok.len, 3);
+    }
+
+    #[test]
+    fn test_parse_end_of_input() {
+        let mut vm = VM::new();
+        vm.src_buf = String::new();
+        let result = vm.parse_next_token();
+        assert_eq!(result, Err(crate::error::TbxError::EndOfInput));
+    }
+
+    #[test]
+    fn test_parse_end_of_input_after_whitespace() {
+        let mut vm = VM::new();
+        vm.src_buf = "   ".to_string();
+        let result = vm.parse_next_token();
+        assert_eq!(result, Err(crate::error::TbxError::EndOfInput));
+    }
+
+    #[test]
+    fn test_parse_multiple_tokens_sequentially() {
+        let mut vm = VM::new();
+        vm.src_buf = "foo 42 +".to_string();
+
+        let tok1 = vm.parse_next_token().unwrap().clone();
+        assert_eq!(tok1.kind, crate::constants::TOK_ID);
+        assert_eq!(tok1.len, 3);
+
+        let tok2 = vm.parse_next_token().unwrap().clone();
+        assert_eq!(tok2.kind, crate::constants::TOK_NUM);
+        assert_eq!(tok2.val, Cell::Int(42));
+
+        let tok3 = vm.parse_next_token().unwrap().clone();
+        assert_eq!(tok3.kind, crate::constants::TOK_OP);
+    }
+
+    // ────────────────────────────────────────────────────────────────────────
+    // token_prim (TOKEN primitive) tests
+    // ────────────────────────────────────────────────────────────────────────
+
+    #[test]
+    fn test_token_prim_pushes_three_values() {
+        use crate::primitives::token_prim;
+        let mut vm = VM::new();
+        vm.src_buf = "abc".to_string();
+        token_prim(&mut vm).unwrap();
+        // Stack (bottom→top): kind, len, val
+        let val = vm.pop().unwrap();
+        let len = vm.pop().unwrap();
+        let kind = vm.pop().unwrap();
+        assert_eq!(kind, Cell::Int(crate::constants::TOK_ID));
+        assert_eq!(len, Cell::Int(3));
+        assert_eq!(val, Cell::DictAddr(0));
+    }
+
+    #[test]
+    fn test_token_prim_end_of_input_error() {
+        use crate::primitives::token_prim;
+        let mut vm = VM::new();
+        vm.src_buf = String::new();
+        let result = token_prim(&mut vm);
+        assert_eq!(result, Err(crate::error::TbxError::EndOfInput));
+    }
+
+    #[test]
+    fn test_token_prim_numeric_on_stack() {
+        use crate::primitives::token_prim;
+        let mut vm = VM::new();
+        vm.src_buf = "123".to_string();
+        token_prim(&mut vm).unwrap();
+        let val = vm.pop().unwrap();
+        let len = vm.pop().unwrap();
+        let kind = vm.pop().unwrap();
+        assert_eq!(kind, Cell::Int(crate::constants::TOK_NUM));
+        assert_eq!(len, Cell::Int(3));
+        assert_eq!(val, Cell::Int(123));
     }
 }

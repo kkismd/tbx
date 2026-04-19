@@ -37,6 +37,8 @@ pub enum TbxError {
     InvalidReturn,
     /// DROP_TO_MARKER executed but no Cell::Marker was found on the data stack.
     MarkerNotFound,
+    /// TOKEN was called but no more input is available in src_buf.
+    EndOfInput,
 }
 
 impl std::fmt::Display for TbxError {
@@ -69,6 +71,9 @@ impl std::fmt::Display for TbxError {
             TbxError::InvalidReturn => write!(f, "RETURN with value at top level is not allowed"),
             TbxError::MarkerNotFound => {
                 write!(f, "DROP_TO_MARKER: no marker found on the data stack")
+            }
+            TbxError::EndOfInput => {
+                write!(f, "TOKEN: no more input available in source buffer")
             }
         }
     }
