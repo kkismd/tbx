@@ -211,6 +211,7 @@ GOSUB ~ RETURNで呼び出すサブルーチンをなくし、手続きや関数
 | None          | -              | 空を表す値                                                                               |
 | Array         | -              | 将来の拡張                                                                               |
 | StringDesc    | usize          | 文字列プール内の先頭インデックス                                                         |
+| Marker        | -              | データスタック上のsentinel。ステートメント境界を示す特殊値（Issue #151）                 |
 
 
 #### コア言語でサポートされるステートメント
@@ -446,6 +447,50 @@ IMMEDIATE name    ( -- )
 * ステートメントが実行される前のSPを保存しておき、ステートメント実行中にSPが変化しても終了後に保存したSPに復帰する。
 * ステートメントのパラメータとして記述される式の中ではワード呼び出しは`MYFUNC(1,2,3)`という形式で記述する。
 * 式の評価の途中で即値や変数や関数呼び出しはスタックに値を積み、算術、比較演算子はスタックの値を消費する。
+
+> Issue #151「ステートメントの実行後にスタックをクリアする仕様」に基づく設計方針
+
+##### ステートメント境界のスタッククリア（マーカー方式）
+
+ステートメントが返した値がデータスタックに残留するのを防ぐため、**マーカー方式**を採用する。各ステートメントのコンパイル時に `Cell::Marker` をsentinelとしてスタックに積み、ステートメント実行後に `DROP_TO_MARKER` でMarkerまで巻き戻す。
+
+コンパイル後の命令列は以下の繰り返しになる:
+
+```
+LIT(Marker)            -- push statement boundary sentinel
+... arg expression ... -- push arguments via expression evaluation
+CALL(stmt, arity, 0)   -- invoke statement word
+DROP_TO_MARKER         -- rewind stack to the sentinel (inclusive)
+```
+
+スタック遷移（arity=1、値を返さない場合）:
+
+```
+[B]        -- before
+[B+1]      -- LIT(Marker)
+[B+2]      -- push arg
+CALL:      bp = B+1, EXIT -> truncate(B+1) -> [B+1]  (Marker remains)
+DROP_TO_MARKER: -> [B]
+```
+
+スタック遷移（arity=1、値を返す場合）:
+
+```
+[B]        -- before
+[B+1]      -- LIT(Marker)
+[B+2]      -- push arg
+CALL:      bp = B+1, RETURN_VAL -> truncate(B+1) -> push retval -> [B+2]
+DROP_TO_MARKER: -> [B]  (retval also removed)
+```
+
+この方式を採用した理由:
+- コンパイラがSPをコンパイル時に追跡する仕組みが不要（SYAパーサーは実行時SP差分方式のため）
+- ワードの戻り型に関係なく普遍的に機能（辞書フラグやフロー分析が不要）
+- ロジックが最もシンプルであり、メモリ効率・速度よりもシンプルさを優先する設計方針に合致する
+
+追加が必要なもの:
+- `Cell::Marker` — 新しいCellバリアント（データスタック上のsentinelとして識別可能な特殊値）
+- `DROP_TO_MARKER` — 新プリミティブ（Markerを見つけるまでpopし続け、Markerも除去する）
 
 ##### 式評価器のモジュール構成
 
