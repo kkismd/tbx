@@ -37,6 +37,11 @@ pub enum TbxError {
     InvalidReturn,
     /// DROP_TO_MARKER executed but no Cell::Marker was found on the data stack.
     MarkerNotFound,
+    /// The return stack depth exceeded the maximum allowed limit.
+    ReturnStackOverflow {
+        depth: usize,
+        limit: usize,
+    },
 }
 
 impl std::fmt::Display for TbxError {
@@ -69,6 +74,13 @@ impl std::fmt::Display for TbxError {
             TbxError::InvalidReturn => write!(f, "RETURN with value at top level is not allowed"),
             TbxError::MarkerNotFound => {
                 write!(f, "DROP_TO_MARKER: no marker found on the data stack")
+            }
+            TbxError::ReturnStackOverflow { depth, limit } => {
+                write!(
+                    f,
+                    "return stack overflow: depth {} exceeds limit {}",
+                    depth, limit
+                )
             }
         }
     }

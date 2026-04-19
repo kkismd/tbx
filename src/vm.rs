@@ -1,5 +1,5 @@
 use crate::cell::{Cell, ReturnFrame, Xt};
-use crate::constants::MAX_DICTIONARY_CELLS;
+use crate::constants::{MAX_DICTIONARY_CELLS, MAX_RETURN_STACK_DEPTH};
 use crate::dict::WordEntry;
 use crate::error::TbxError;
 
@@ -223,6 +223,12 @@ impl VM {
                 EntryKind::Word(offset) => {
                     let return_pc = self.pc + 1;
                     let saved_bp = self.bp;
+                    if self.return_stack.len() >= MAX_RETURN_STACK_DEPTH {
+                        return Err(TbxError::ReturnStackOverflow {
+                            depth: self.return_stack.len(),
+                            limit: MAX_RETURN_STACK_DEPTH,
+                        });
+                    }
                     self.return_stack.push(ReturnFrame::Call {
                         return_pc,
                         saved_bp,
@@ -284,6 +290,12 @@ impl VM {
                             let saved_bp = self.bp;
                             if self.data_stack.len() < arity {
                                 return Err(TbxError::StackUnderflow);
+                            }
+                            if self.return_stack.len() >= MAX_RETURN_STACK_DEPTH {
+                                return Err(TbxError::ReturnStackOverflow {
+                                    depth: self.return_stack.len(),
+                                    limit: MAX_RETURN_STACK_DEPTH,
+                                });
                             }
                             self.return_stack.push(ReturnFrame::Call {
                                 return_pc,
@@ -998,5 +1010,86 @@ mod tests {
             result,
             Err(crate::error::TbxError::MarkerNotFound)
         ));
+    }
+
+    #[test]
+    fn test_word_call_return_stack_overflow() {
+        // Verify that calling a word via EntryKind::Word when the return stack is at
+        // MAX_RETURN_STACK_DEPTH returns ReturnStackOverflow.
+        use crate::constants::MAX_RETURN_STACK_DEPTH;
+
+        let mut vm = VM::new();
+        crate::primitives::register_all(&mut vm);
+
+        let exit_xt = vm.lookup("EXIT").unwrap();
+
+        // Build a simple word body: EXIT
+        let word_offset = vm.dp;
+        vm.dict_write(Cell::Xt(exit_xt)).unwrap();
+        let word_xt = vm.register(crate::dict::WordEntry::new_word("MY_WORD", word_offset));
+
+        // Pre-fill the return stack to its limit with dummy frames
+        for _ in 0..MAX_RETURN_STACK_DEPTH {
+            vm.return_stack.push(ReturnFrame::Call {
+                return_pc: 0,
+                saved_bp: 0,
+            });
+        }
+
+        // Emit top-level: Xt(MY_WORD)
+        let start = vm.dp;
+        vm.dict_write(Cell::Xt(word_xt)).unwrap();
+
+        let result = vm.run(start);
+        assert!(
+            matches!(
+                result,
+                Err(crate::error::TbxError::ReturnStackOverflow { .. })
+            ),
+            "expected ReturnStackOverflow, got {:?}",
+            result
+        );
+    }
+
+    #[test]
+    fn test_call_instruction_return_stack_overflow() {
+        // Verify that the CALL instruction (EntryKind::Call) also enforces the return stack limit.
+        use crate::constants::MAX_RETURN_STACK_DEPTH;
+
+        let mut vm = VM::new();
+        crate::primitives::register_all(&mut vm);
+
+        let call_xt = vm.lookup("CALL").unwrap();
+        let exit_xt = vm.lookup("EXIT").unwrap();
+
+        // Build word body: EXIT
+        let word_offset = vm.dp;
+        vm.dict_write(Cell::Xt(exit_xt)).unwrap();
+        let word_xt = vm.register(crate::dict::WordEntry::new_word("CALLEE", word_offset));
+
+        // Pre-fill the return stack to its limit
+        for _ in 0..MAX_RETURN_STACK_DEPTH {
+            vm.return_stack.push(ReturnFrame::Call {
+                return_pc: 0,
+                saved_bp: 0,
+            });
+        }
+
+        // Emit top-level: CALL CALLEE arity=0 local_count=0
+        let start = vm.dp;
+        vm.dict_write(Cell::Xt(call_xt)).unwrap();
+        vm.dict_write(Cell::Xt(word_xt)).unwrap();
+        vm.dict_write(Cell::Int(0)).unwrap(); // arity=0
+        vm.dict_write(Cell::Int(0)).unwrap(); // local_count=0
+
+        let result = vm.run(start);
+        assert!(
+            matches!(
+                result,
+                Err(crate::error::TbxError::ReturnStackOverflow { .. })
+            ),
+            "expected ReturnStackOverflow, got {:?}",
+            result
+        );
     }
 }
