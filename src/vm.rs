@@ -161,7 +161,10 @@ impl VM {
     ///
     /// Returns `Err(TbxError::IndexOutOfBounds)` if `bp + local_idx` is out of range.
     pub fn local_read(&self, local_idx: usize) -> Result<Cell, TbxError> {
-        let idx = self.bp + local_idx;
+        let idx = self.bp.checked_add(local_idx).ok_or(TbxError::IndexOutOfBounds {
+            index: usize::MAX,
+            size: self.data_stack.len(),
+        })?;
         let size = self.data_stack.len();
         self.data_stack
             .get(idx)
@@ -175,7 +178,10 @@ impl VM {
     ///
     /// Returns `Err(TbxError::IndexOutOfBounds)` if `bp + local_idx` is out of range.
     pub fn local_write(&mut self, local_idx: usize, cell: Cell) -> Result<(), TbxError> {
-        let idx = self.bp + local_idx;
+        let idx = self.bp.checked_add(local_idx).ok_or(TbxError::IndexOutOfBounds {
+            index: usize::MAX,
+            size: self.data_stack.len(),
+        })?;
         let size = self.data_stack.len();
         *self
             .data_stack
@@ -1148,6 +1154,119 @@ mod tests {
                 Err(crate::error::TbxError::ReturnStackOverflow { .. })
             ),
             "expected ReturnStackOverflow, got {:?}",
+            result
+        );
+    }
+
+    // --- dict_read tests ---
+
+    #[test]
+    fn test_dict_read_ok() {
+        let mut vm = VM::new();
+        vm.dictionary.push(Cell::Int(99));
+        vm.dp = 1;
+        assert_eq!(vm.dict_read(0), Ok(Cell::Int(99)));
+    }
+
+    #[test]
+    fn test_dict_read_out_of_bounds() {
+        let vm = VM::new();
+        let result = vm.dict_read(0);
+        assert!(
+            matches!(result, Err(crate::error::TbxError::IndexOutOfBounds { .. })),
+            "expected IndexOutOfBounds, got {:?}",
+            result
+        );
+    }
+
+    // --- dict_write_at tests ---
+
+    #[test]
+    fn test_dict_write_at_ok() {
+        let mut vm = VM::new();
+        vm.dictionary.push(Cell::Int(0));
+        vm.dp = 1;
+        assert!(vm.dict_write_at(0, Cell::Int(42)).is_ok());
+        assert_eq!(vm.dictionary[0], Cell::Int(42));
+    }
+
+    #[test]
+    fn test_dict_write_at_out_of_bounds() {
+        let mut vm = VM::new();
+        let result = vm.dict_write_at(0, Cell::Int(42));
+        assert!(
+            matches!(result, Err(crate::error::TbxError::IndexOutOfBounds { .. })),
+            "expected IndexOutOfBounds, got {:?}",
+            result
+        );
+    }
+
+    // --- local_read tests ---
+
+    #[test]
+    fn test_local_read_ok() {
+        let mut vm = VM::new();
+        vm.data_stack.push(Cell::Int(10));
+        vm.data_stack.push(Cell::Int(20));
+        vm.bp = 1;
+        assert_eq!(vm.local_read(0), Ok(Cell::Int(20)));
+    }
+
+    #[test]
+    fn test_local_read_out_of_bounds() {
+        let mut vm = VM::new();
+        vm.bp = 0;
+        let result = vm.local_read(0);
+        assert!(
+            matches!(result, Err(crate::error::TbxError::IndexOutOfBounds { .. })),
+            "expected IndexOutOfBounds, got {:?}",
+            result
+        );
+    }
+
+    #[test]
+    fn test_local_read_overflow() {
+        let mut vm = VM::new();
+        vm.bp = usize::MAX;
+        let result = vm.local_read(1);
+        assert!(
+            matches!(result, Err(crate::error::TbxError::IndexOutOfBounds { .. })),
+            "expected IndexOutOfBounds on overflow, got {:?}",
+            result
+        );
+    }
+
+    // --- local_write tests ---
+
+    #[test]
+    fn test_local_write_ok() {
+        let mut vm = VM::new();
+        vm.data_stack.push(Cell::Int(0));
+        vm.bp = 0;
+        assert!(vm.local_write(0, Cell::Int(55)).is_ok());
+        assert_eq!(vm.data_stack[0], Cell::Int(55));
+    }
+
+    #[test]
+    fn test_local_write_out_of_bounds() {
+        let mut vm = VM::new();
+        vm.bp = 0;
+        let result = vm.local_write(0, Cell::Int(55));
+        assert!(
+            matches!(result, Err(crate::error::TbxError::IndexOutOfBounds { .. })),
+            "expected IndexOutOfBounds, got {:?}",
+            result
+        );
+    }
+
+    #[test]
+    fn test_local_write_overflow() {
+        let mut vm = VM::new();
+        vm.bp = usize::MAX;
+        let result = vm.local_write(1, Cell::Int(55));
+        assert!(
+            matches!(result, Err(crate::error::TbxError::IndexOutOfBounds { .. })),
+            "expected IndexOutOfBounds on overflow, got {:?}",
             result
         );
     }
