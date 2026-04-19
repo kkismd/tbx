@@ -38,24 +38,12 @@ pub fn fetch_prim(vm: &mut VM) -> Result<(), TbxError> {
     let addr = vm.pop()?;
     match addr {
         Cell::DictAddr(a) => {
-            let size = vm.dictionary.len();
-            let value = vm
-                .dictionary
-                .get(a)
-                .ok_or(TbxError::IndexOutOfBounds { index: a, size })?
-                .clone();
+            let value = vm.dict_read(a)?;
             vm.push(value);
             Ok(())
         }
         Cell::StackAddr(a) => {
-            // TODO: vm.bp との加算をvmにカプセル化したい。その中で範囲チェックも行う。
-            let idx = vm.bp + a;
-            let size = vm.data_stack.len();
-            let value = vm
-                .data_stack
-                .get(idx)
-                .ok_or(TbxError::IndexOutOfBounds { index: idx, size })?
-                .clone();
+            let value = vm.local_read(a)?;
             vm.push(value);
             Ok(())
         }
@@ -72,18 +60,11 @@ pub fn store_prim(vm: &mut VM) -> Result<(), TbxError> {
     let value = vm.pop()?;
     match addr {
         Cell::DictAddr(a) => {
-            let size = vm.dictionary.len();
-            *vm.dictionary
-                .get_mut(a)
-                .ok_or(TbxError::IndexOutOfBounds { index: a, size })? = value;
+            vm.dict_write_at(a, value)?;
             Ok(())
         }
         Cell::StackAddr(a) => {
-            let idx = vm.bp + a;
-            let size = vm.data_stack.len();
-            *vm.data_stack
-                .get_mut(idx)
-                .ok_or(TbxError::IndexOutOfBounds { index: idx, size })? = value;
+            vm.local_write(a, value)?;
             Ok(())
         }
         _ => Err(TbxError::TypeError {

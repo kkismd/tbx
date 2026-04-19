@@ -125,6 +125,65 @@ impl VM {
         self.data_stack.pop().ok_or(TbxError::StackUnderflow)
     }
 
+    /// Read a cell from the dictionary at the given index, with bounds checking.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Err(TbxError::IndexOutOfBounds)` if `idx` is out of range.
+    pub fn dict_read(&self, idx: usize) -> Result<Cell, TbxError> {
+        let size = self.dictionary.len();
+        self.dictionary
+            .get(idx)
+            .cloned()
+            .ok_or(TbxError::IndexOutOfBounds { index: idx, size })
+    }
+
+    /// Write a cell to an arbitrary dictionary index, with bounds checking.
+    ///
+    /// Unlike `dict_write`, this does not advance `dp`; it overwrites an
+    /// existing slot identified by `idx`.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Err(TbxError::IndexOutOfBounds)` if `idx` is out of range.
+    pub fn dict_write_at(&mut self, idx: usize, cell: Cell) -> Result<(), TbxError> {
+        let size = self.dictionary.len();
+        *self
+            .dictionary
+            .get_mut(idx)
+            .ok_or(TbxError::IndexOutOfBounds { index: idx, size })? = cell;
+        Ok(())
+    }
+
+    /// Read a local variable from the data stack at `bp + local_idx`.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Err(TbxError::IndexOutOfBounds)` if `bp + local_idx` is out of range.
+    pub fn local_read(&self, local_idx: usize) -> Result<Cell, TbxError> {
+        let idx = self.bp + local_idx;
+        let size = self.data_stack.len();
+        self.data_stack
+            .get(idx)
+            .cloned()
+            .ok_or(TbxError::IndexOutOfBounds { index: idx, size })
+    }
+
+    /// Write a local variable to the data stack at `bp + local_idx`.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Err(TbxError::IndexOutOfBounds)` if `bp + local_idx` is out of range.
+    pub fn local_write(&mut self, local_idx: usize, cell: Cell) -> Result<(), TbxError> {
+        let idx = self.bp + local_idx;
+        let size = self.data_stack.len();
+        *self
+            .data_stack
+            .get_mut(idx)
+            .ok_or(TbxError::IndexOutOfBounds { index: idx, size })? = cell;
+        Ok(())
+    }
+
     /// Write a cell to `dictionary[dp]` and advance dp by 1.
     ///
     /// Maintains the invariant `dp == dictionary.len()` by always using `push`.
