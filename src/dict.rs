@@ -26,6 +26,9 @@ pub enum EntryKind {
     /// RETURN_VAL instruction: returns a value from the current word.
     /// Handled by the inner interpreter (not a PrimFn).
     ReturnVal,
+    /// DROP_TO_MARKER instruction: pops the data stack until a Cell::Marker is found (inclusive).
+    /// Handled by the inner interpreter (not a PrimFn).
+    DropToMarker,
 }
 
 impl std::fmt::Debug for EntryKind {
@@ -39,6 +42,7 @@ impl std::fmt::Debug for EntryKind {
             EntryKind::Call => write!(f, "Call"),
             EntryKind::Exit => write!(f, "Exit"),
             EntryKind::ReturnVal => write!(f, "ReturnVal"),
+            EntryKind::DropToMarker => write!(f, "DropToMarker"),
         }
     }
 }

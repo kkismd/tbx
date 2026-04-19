@@ -35,6 +35,8 @@ pub enum TbxError {
     Halted,
     /// RETURN with a value was executed at the top level (outside any word definition).
     InvalidReturn,
+    /// DROP_TO_MARKER executed but no Cell::Marker was found on the data stack.
+    MarkerNotFound,
 }
 
 impl std::fmt::Display for TbxError {
@@ -65,6 +67,9 @@ impl std::fmt::Display for TbxError {
             TbxError::InvalidAllotCount => write!(f, "ALLOT count must be non-negative"),
             TbxError::Halted => write!(f, "execution halted"),
             TbxError::InvalidReturn => write!(f, "RETURN with value at top level is not allowed"),
+            TbxError::MarkerNotFound => {
+                write!(f, "DROP_TO_MARKER: no marker found on the data stack")
+            }
         }
     }
 }
@@ -109,5 +114,11 @@ mod tests {
     fn test_division_by_zero_display() {
         let e = TbxError::DivisionByZero;
         assert!(e.to_string().contains("division by zero"));
+    }
+
+    #[test]
+    fn test_marker_not_found_display() {
+        let e = TbxError::MarkerNotFound;
+        assert!(e.to_string().contains("marker"));
     }
 }

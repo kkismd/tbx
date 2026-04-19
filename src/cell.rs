@@ -46,6 +46,9 @@ pub enum Cell {
     /// Reserved for future array support
     Array,
     None,
+    /// Sentinel value placed on the data stack to mark a statement boundary.
+    /// Consumed by DROP_TO_MARKER to restore the stack after a statement call.
+    Marker,
 }
 
 impl std::fmt::Display for Cell {
@@ -74,6 +77,7 @@ impl std::fmt::Display for Cell {
             Cell::StringDesc(i) => write!(f, "str:{}", i),
             Cell::Array => write!(f, "<array>"),
             Cell::None => write!(f, "<none>"),
+            Cell::Marker => write!(f, "<marker>"),
         }
     }
 }
@@ -154,6 +158,7 @@ impl Cell {
             Cell::StringDesc(_) => "StringDesc",
             Cell::Array => "Array",
             Cell::None => "None",
+            Cell::Marker => "Marker",
         }
     }
 
