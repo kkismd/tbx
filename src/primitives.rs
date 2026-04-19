@@ -503,8 +503,8 @@ pub fn register_all(vm: &mut VM) {
         kind: EntryKind::DropToMarker,
         prev: None,
     });
-    // TODO(#164): LIT_MARKER is registered with flags=0, allowing user code to call it directly.
-    // Once a FLAG_SYSTEM mechanism is in place, protect this word from user access.
+    // TODO(#164): LIT_MARKER and DROP_TO_MARKER are registered with flags=0, allowing user code
+    // to call them directly. Once a FLAG_SYSTEM mechanism is in place, protect these words.
     vm.register(WordEntry::new_primitive("LIT_MARKER", lit_marker_prim));
     vm.register(WordEntry {
         name: "LIT".to_string(),

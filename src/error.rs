@@ -115,4 +115,10 @@ mod tests {
         let e = TbxError::DivisionByZero;
         assert!(e.to_string().contains("division by zero"));
     }
+
+    #[test]
+    fn test_marker_not_found_display() {
+        let e = TbxError::MarkerNotFound;
+        assert!(e.to_string().contains("marker"));
+    }
 }
