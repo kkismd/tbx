@@ -217,6 +217,9 @@ impl VM {
     /// token according to the rules below, advances `src_pos` past the token,
     /// stores the result in `current_token`, and returns a reference to it.
     ///
+    /// **ASCII-only**: `src_buf` is scanned byte-by-byte (`as_bytes()`). Multi-byte
+    /// UTF-8 characters are not supported; non-ASCII input produces unspecified results.
+    ///
     /// Token classification:
     /// - `"…"` → TOK_STR; `val` = DictAddr(start_offset of content), `len` = content length
     /// - ASCII digit or `-` followed by digit → TOK_NUM; `val` = Int(n)
@@ -224,6 +227,10 @@ impl VM {
     /// - `+`, `-`, `*`, `/`, `=`, `<`, `>`, `&`, `|`, `!`, `%`, `^`, `~`, `,` → TOK_OP
     /// - `;` → TOK_DELIM
     /// - anything else → TOK_OP
+    ///
+    /// For TOK_ID / TOK_OP / TOK_DELIM / TOK_STR, `val` is `Cell::DictAddr(byte_offset)`
+    /// where the offset is into `src_buf`, **not** into `dictionary`.
+    /// TODO(#166): introduce `Cell::SrcAddr` to eliminate the semantic overlap with DictAddr.
     ///
     /// Returns `Err(TbxError::EndOfInput)` when `src_pos` reaches the end of
     /// `src_buf` after whitespace has been skipped.
@@ -269,8 +276,8 @@ impl VM {
                 && self.src_buf.as_bytes()[self.src_pos + 1].is_ascii_digit())
         {
             // Numeric literal (positive or negative integer).
-            let neg = b == b'-';
-            if neg {
+            // Advance past optional '-' sign and digit sequence.
+            if b == b'-' {
                 self.src_pos += 1;
             }
             while self.src_pos < self.src_buf.len()
@@ -278,14 +285,14 @@ impl VM {
             {
                 self.src_pos += 1;
             }
-            let raw = &self.src_buf[if neg { start + 1 } else { start }..self.src_pos];
+            // Parse the full slice (including sign) to correctly handle i64::MIN.
+            let raw = &self.src_buf[start..self.src_pos];
             let n: i64 = raw.parse().map_err(|_| TbxError::NumberOutOfRange)?;
-            let val = if neg { -n } else { n };
             let len = (self.src_pos - start) as i64;
             TokenDescriptor {
                 kind: TOK_NUM,
                 len,
-                val: Cell::Int(val),
+                val: Cell::Int(n),
             }
         } else if b.is_ascii_alphabetic() || b == b'_' {
             // Identifier.
@@ -1328,5 +1335,14 @@ mod tests {
         vm.src_buf = "99999999999999999999".to_string();
         let result = vm.parse_next_token();
         assert_eq!(result, Err(crate::error::TbxError::NumberOutOfRange));
+    }
+
+    #[test]
+    fn test_parse_next_token_i64_min_is_valid() {
+        let mut vm = VM::new();
+        vm.src_buf = "-9223372036854775808".to_string(); // i64::MIN
+        let tok = vm.parse_next_token().unwrap().clone();
+        assert_eq!(tok.kind, crate::constants::TOK_NUM);
+        assert_eq!(tok.val, Cell::Int(i64::MIN));
     }
 }
