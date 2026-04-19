@@ -817,7 +817,10 @@ mod tests {
         vm.dict_write(Cell::Int(0)).unwrap();
 
         let result = vm.run(start);
-        assert!(matches!(result, Err(crate::error::TbxError::TypeError { .. })));
+        assert!(matches!(
+            result,
+            Err(crate::error::TbxError::TypeError { .. })
+        ));
     }
 
     #[test]
@@ -842,7 +845,10 @@ mod tests {
         vm.dict_write(Cell::Int(0)).unwrap();
 
         let result = vm.run(start);
-        assert!(matches!(result, Err(crate::error::TbxError::StackUnderflow)));
+        assert!(matches!(
+            result,
+            Err(crate::error::TbxError::StackUnderflow)
+        ));
     }
 
     #[test]
