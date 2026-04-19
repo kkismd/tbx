@@ -23,6 +23,9 @@ pub enum EntryKind {
     /// EXIT instruction: returns from the current word.
     /// Handled by the inner interpreter (not a PrimFn).
     Exit,
+    /// RETURN_VAL instruction: returns a value from the current word.
+    /// Handled by the inner interpreter (not a PrimFn).
+    ReturnVal,
 }
 
 impl std::fmt::Debug for EntryKind {
@@ -35,6 +38,7 @@ impl std::fmt::Debug for EntryKind {
             EntryKind::Lit => write!(f, "Lit"),
             EntryKind::Call => write!(f, "Call"),
             EntryKind::Exit => write!(f, "Exit"),
+            EntryKind::ReturnVal => write!(f, "ReturnVal"),
         }
     }
 }
