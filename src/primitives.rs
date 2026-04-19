@@ -486,6 +486,12 @@ pub fn register_all(vm: &mut VM) {
         prev: None,
     });
     vm.register(WordEntry {
+        name: "RETURN_VAL".to_string(),
+        flags: 0,
+        kind: EntryKind::ReturnVal,
+        prev: None,
+    });
+    vm.register(WordEntry {
         name: "LIT".to_string(),
         flags: 0,
         kind: EntryKind::Lit,
