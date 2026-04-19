@@ -335,9 +335,10 @@ impl VM {
                 }
                 EntryKind::DropToMarker => {
                     loop {
-                        match self.pop()? {
-                            Cell::Marker => break,
-                            _ => {} // discrard non-marker cells
+                        match self.data_stack.pop() {
+                            Some(Cell::Marker) => break,
+                            Some(_) => {} // discard non-marker cells
+                            None => return Err(TbxError::MarkerNotFound),
                         }
                     }
                     self.pc += 1;
@@ -904,8 +905,6 @@ mod tests {
         let exit_xt = vm.lookup("EXIT").unwrap();
         let drop_to_marker_xt = vm.lookup("DROP_TO_MARKER").unwrap();
 
-        let stmt_offset = 9; // STMT body starts at start+9 (will be adjusted below)
-                             // We place the word body relative to dp: dp+9
         let start = vm.dp;
         let stmt_xt = vm.register(crate::dict::WordEntry::new_word("STMT", start + 9));
 
@@ -920,7 +919,6 @@ mod tests {
         vm.dict_write(Cell::Xt(exit_xt)).unwrap(); // [start+8] top-level end
         vm.dict_write(Cell::Xt(exit_xt)).unwrap(); // [start+9] STMT body
 
-        let _ = stmt_offset; // suppress unused warning
         vm.run(start).unwrap();
 
         // Marker and arg should be gone; stack must be empty.
@@ -974,5 +972,31 @@ mod tests {
 
         // return value 99 must also be discarded by DROP_TO_MARKER.
         assert!(vm.data_stack.is_empty());
+    }
+
+    #[test]
+    fn test_drop_to_marker_without_marker_returns_error() {
+        // Verifies that DROP_TO_MARKER returns MarkerNotFound when no Marker is on the stack.
+        //
+        // Top-level layout:
+        //   [start+0] LIT
+        //   [start+1] Int(1)           <- non-marker value
+        //   [start+2] DROP_TO_MARKER   <- should fail: no Marker present
+        let mut vm = VM::new();
+        crate::primitives::register_all(&mut vm);
+
+        let lit_xt = vm.lookup("LIT").unwrap();
+        let drop_to_marker_xt = vm.lookup("DROP_TO_MARKER").unwrap();
+
+        let start = vm.dp;
+        vm.dict_write(Cell::Xt(lit_xt)).unwrap(); // [start+0]
+        vm.dict_write(Cell::Int(1)).unwrap(); // [start+1]
+        vm.dict_write(Cell::Xt(drop_to_marker_xt)).unwrap(); // [start+2]
+
+        let result = vm.run(start);
+        assert!(matches!(
+            result,
+            Err(crate::error::TbxError::MarkerNotFound)
+        ));
     }
 }
