@@ -19,7 +19,8 @@ impl Xt {
 /// Return frame for the return stack, saving the program counter and base pointer
 #[derive(Debug, Clone)]
 pub enum ReturnFrame {
-    Call { pc: usize, bp: usize },
+    Call { return_pc: usize, saved_bp: usize },
+    TopLevel, // Sentinel value for the bottom of the return stack
 }
 
 /// Cell is the fundamental value type of the TBX VM.

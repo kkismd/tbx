@@ -17,6 +17,12 @@ pub enum EntryKind {
     /// Handled by the inner interpreter: push next cell as a literal value.
     /// TODO: dispatched in the inner interpreter loop (to be implemented in a future task).
     Lit,
+    /// CALL instruction: reads next cell as Xt and enters the word body.
+    /// Handled by the inner interpreter (not a PrimFn).
+    Call,
+    /// EXIT instruction: returns from the current word.
+    /// Handled by the inner interpreter (not a PrimFn).
+    Exit,
 }
 
 impl std::fmt::Debug for EntryKind {
@@ -27,6 +33,8 @@ impl std::fmt::Debug for EntryKind {
             EntryKind::Variable(idx) => write!(f, "Variable({idx})"),
             EntryKind::Constant(cell) => write!(f, "Constant({cell:?})"),
             EntryKind::Lit => write!(f, "Lit"),
+            EntryKind::Call => write!(f, "Call"),
+            EntryKind::Exit => write!(f, "Exit"),
         }
     }
 }

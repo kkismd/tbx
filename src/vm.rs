@@ -183,6 +183,130 @@ impl VM {
         std::mem::take(&mut self.output_buffer)
     }
 
+    /// Run the inner interpreter starting from the given dictionary offset.
+    ///
+    /// Pushes a `ReturnFrame::TopLevel` sentinel before entering the loop.
+    /// Execution ends when EXIT pops the TopLevel frame (normal end) or
+    /// when a primitive returns `Err(TbxError::Halted)`.
+    pub fn run(&mut self, start_offset: usize) -> Result<(), TbxError> {
+        use crate::cell::ReturnFrame;
+        use crate::dict::EntryKind;
+
+        self.return_stack.push(ReturnFrame::TopLevel);
+        self.pc = start_offset;
+
+        loop {
+            let entry_kind = self
+                .headers
+                .get(
+                    self.dictionary
+                        .get(self.pc)
+                        .and_then(|c: &Cell| c.as_xt())
+                        .ok_or(TbxError::TypeError {
+                            expected: "Xt",
+                            got: "non-Xt",
+                        })?
+                        .index(),
+                )
+                .ok_or(TbxError::IndexOutOfBounds {
+                    index: self.pc,
+                    size: self.headers.len(),
+                })?
+                .kind
+                .clone();
+
+            match entry_kind {
+                EntryKind::Primitive(f) => {
+                    f(self)?;
+                    self.pc += 1;
+                }
+                EntryKind::Word(offset) => {
+                    let return_pc = self.pc + 1;
+                    let saved_bp = self.bp;
+                    self.return_stack.push(ReturnFrame::Call {
+                        return_pc,
+                        saved_bp,
+                    });
+                    self.bp = self.data_stack.len();
+                    self.pc = offset;
+                }
+                EntryKind::Call => {
+                    let target_xt = self
+                        .dictionary
+                        .get(self.pc + 1)
+                        .and_then(|c: &Cell| c.as_xt())
+                        .ok_or(TbxError::IndexOutOfBounds {
+                            index: self.pc + 1,
+                            size: self.dictionary.len(),
+                        })?;
+                    match self
+                        .headers
+                        .get(target_xt.index())
+                        .ok_or(TbxError::IndexOutOfBounds {
+                            index: target_xt.index(),
+                            size: self.headers.len(),
+                        })?
+                        .kind
+                        .clone()
+                    {
+                        EntryKind::Word(offset) => {
+                            let return_pc = self.pc + 2;
+                            let saved_bp = self.bp;
+                            self.return_stack.push(ReturnFrame::Call {
+                                return_pc,
+                                saved_bp,
+                            });
+                            self.bp = self.data_stack.len();
+                            self.pc = offset;
+                        }
+                        _ => {
+                            return Err(TbxError::TypeError {
+                                expected: "Word",
+                                got: "non-Word",
+                            })
+                        }
+                    }
+                }
+                EntryKind::Exit => {
+                    match self.return_stack.pop().ok_or(TbxError::StackUnderflow)? {
+                        ReturnFrame::Call {
+                            return_pc,
+                            saved_bp,
+                        } => {
+                            self.pc = return_pc;
+                            self.bp = saved_bp;
+                        }
+                        ReturnFrame::TopLevel => break,
+                    }
+                }
+                EntryKind::Lit => {
+                    self.pc += 1;
+                    let literal = self
+                        .dictionary
+                        .get(self.pc)
+                        .ok_or(TbxError::IndexOutOfBounds {
+                            index: self.pc,
+                            size: self.dictionary.len(),
+                        })?
+                        .clone();
+                    self.push(literal);
+                    self.pc += 1;
+                }
+                EntryKind::Variable(idx) => {
+                    self.push(Cell::DictAddr(idx));
+                    self.pc += 1;
+                }
+                EntryKind::Constant(ref c) => {
+                    let val = c.clone();
+                    self.push(val);
+                    self.pc += 1;
+                }
+            }
+        }
+
+        Ok(())
+    }
+
     /// Resolve a StringDesc index to the string stored in the string pool.
     ///
     /// Returns `Err(TbxError::TypeError)` if the index is out of bounds or
@@ -456,5 +580,74 @@ mod tests {
         vm.latest = Some(Xt(99));
         // Should return None, not panic
         assert_eq!(vm.lookup("FOO"), None);
+    }
+
+    #[test]
+    fn test_run_primitive_drop() {
+        // Verify that the inner interpreter can execute a primitive (DROP) via an Xt cell.
+        let mut vm = VM::new();
+        crate::primitives::register_all(&mut vm);
+
+        let drop_xt = vm.lookup("DROP").unwrap();
+        let exit_xt = vm.lookup("EXIT").unwrap();
+
+        // Program: [Xt(DROP), Xt(EXIT)]
+        vm.dict_write(Cell::Xt(drop_xt)).unwrap();
+        vm.dict_write(Cell::Xt(exit_xt)).unwrap();
+
+        vm.push(Cell::Int(99));
+        vm.run(0).unwrap();
+
+        // DROP should have removed the 99
+        assert_eq!(vm.pop(), Err(crate::error::TbxError::StackUnderflow));
+    }
+
+    #[test]
+    fn test_run_lit() {
+        // Verify that EntryKind::Lit pushes the next cell as a literal value.
+        let mut vm = VM::new();
+        crate::primitives::register_all(&mut vm);
+
+        let lit_xt = vm.lookup("LIT").unwrap();
+        let exit_xt = vm.lookup("EXIT").unwrap();
+
+        // Program: [Xt(LIT), Int(42), Xt(EXIT)]
+        vm.dict_write(Cell::Xt(lit_xt)).unwrap();
+        vm.dict_write(Cell::Int(42)).unwrap();
+        vm.dict_write(Cell::Xt(exit_xt)).unwrap();
+
+        vm.run(0).unwrap();
+
+        assert_eq!(vm.pop(), Ok(Cell::Int(42)));
+    }
+
+    #[test]
+    fn test_run_word_call() {
+        // Verify that EntryKind::Word dispatches correctly via the inner interpreter.
+        // Layout:
+        //   [0] Xt(MY_WORD)  <- top-level: call MY_WORD
+        //   [1] Xt(EXIT)     <- top-level exit
+        //   [2] Xt(DUP)      <- MY_WORD body: DUP
+        //   [3] Xt(EXIT)     <- MY_WORD body: EXIT
+        let mut vm = VM::new();
+        crate::primitives::register_all(&mut vm);
+
+        let dup_xt = vm.lookup("DUP").unwrap();
+        let exit_xt = vm.lookup("EXIT").unwrap();
+
+        // Register MY_WORD pointing to offset 2
+        let my_word_xt = vm.register(crate::dict::WordEntry::new_word("MY_WORD", 2));
+
+        vm.dict_write(Cell::Xt(my_word_xt)).unwrap(); // [0]
+        vm.dict_write(Cell::Xt(exit_xt)).unwrap(); // [1]
+        vm.dict_write(Cell::Xt(dup_xt)).unwrap(); // [2]
+        vm.dict_write(Cell::Xt(exit_xt)).unwrap(); // [3]
+
+        vm.push(Cell::Int(7));
+        vm.run(0).unwrap();
+
+        // DUP should have duplicated the 7
+        assert_eq!(vm.pop(), Ok(Cell::Int(7)));
+        assert_eq!(vm.pop(), Ok(Cell::Int(7)));
     }
 }
