@@ -78,7 +78,7 @@ impl std::fmt::Display for TbxError {
             TbxError::ReturnStackOverflow { depth, limit } => {
                 write!(
                     f,
-                    "return stack overflow: depth {} exceeds limit {}",
+                    "return stack overflow: depth {} reached or exceeded limit {}",
                     depth, limit
                 )
             }
