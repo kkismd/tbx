@@ -239,22 +239,36 @@ impl VM {
                             index: self.pc + 1,
                             size: self.dictionary.len(),
                         })?;
-                    let arity = self
+                    let arity_raw = self
                         .dictionary
                         .get(self.pc + 2)
                         .and_then(|c: &Cell| c.as_int())
                         .ok_or(TbxError::TypeError {
                             expected: "Int (arity)",
                             got: "non-Int",
-                        })? as usize;
-                    let local_count = self
+                        })?;
+                    if arity_raw < 0 {
+                        return Err(TbxError::TypeError {
+                            expected: "non-negative Int (arity)",
+                            got: "negative value",
+                        });
+                    }
+                    let arity = arity_raw as usize;
+                    let local_count_raw = self
                         .dictionary
                         .get(self.pc + 3)
                         .and_then(|c: &Cell| c.as_int())
                         .ok_or(TbxError::TypeError {
                             expected: "Int (local count)",
                             got: "non-Int",
-                        })? as usize;
+                        })?;
+                    if local_count_raw < 0 {
+                        return Err(TbxError::TypeError {
+                            expected: "non-negative Int (local count)",
+                            got: "negative value",
+                        });
+                    }
+                    let local_count = local_count_raw as usize;
                     match self
                         .headers
                         .get(target_xt.index())
@@ -268,6 +282,9 @@ impl VM {
                         EntryKind::Word(offset) => {
                             let return_pc = self.pc + 4;
                             let saved_bp = self.bp;
+                            if self.data_stack.len() < arity {
+                                return Err(TbxError::StackUnderflow);
+                            }
                             self.return_stack.push(ReturnFrame::Call {
                                 return_pc,
                                 saved_bp,
@@ -311,7 +328,9 @@ impl VM {
                             self.pc = return_pc;
                             self.bp = saved_bp;
                         }
-                        ReturnFrame::TopLevel => break,
+                        ReturnFrame::TopLevel => {
+                            return Err(TbxError::InvalidReturn);
+                        }
                     }
                 }
                 EntryKind::Lit => {
@@ -774,5 +793,74 @@ mod tests {
         // Only return value 42 remains.
         assert_eq!(vm.pop(), Ok(Cell::Int(42)));
         assert!(vm.data_stack.is_empty());
+    }
+
+    #[test]
+    fn test_call_negative_arity_returns_error() {
+        // Verify that a negative arity operand in CALL returns a TypeError.
+        let mut vm = VM::new();
+        crate::primitives::register_all(&mut vm);
+
+        let call_xt = vm.lookup("CALL").unwrap();
+        let exit_xt = vm.lookup("EXIT").unwrap();
+
+        // Dummy word body: just EXIT
+        let word_offset = vm.dp;
+        vm.dict_write(Cell::Xt(exit_xt)).unwrap();
+        let dummy_xt = vm.register(crate::dict::WordEntry::new_word("DUMMY", word_offset));
+
+        // Top-level: CALL DUMMY arity=-1 local_count=0
+        let start = vm.dp;
+        vm.dict_write(Cell::Xt(call_xt)).unwrap();
+        vm.dict_write(Cell::Xt(dummy_xt)).unwrap();
+        vm.dict_write(Cell::Int(-1)).unwrap(); // negative arity
+        vm.dict_write(Cell::Int(0)).unwrap();
+
+        let result = vm.run(start);
+        assert!(matches!(result, Err(crate::error::TbxError::TypeError { .. })));
+    }
+
+    #[test]
+    fn test_call_arity_exceeds_stack_returns_underflow() {
+        // Verify that calling with arity > stack depth returns StackUnderflow.
+        let mut vm = VM::new();
+        crate::primitives::register_all(&mut vm);
+
+        let call_xt = vm.lookup("CALL").unwrap();
+        let exit_xt = vm.lookup("EXIT").unwrap();
+
+        // Dummy word body: just EXIT
+        let word_offset = vm.dp;
+        vm.dict_write(Cell::Xt(exit_xt)).unwrap();
+        let dummy_xt = vm.register(crate::dict::WordEntry::new_word("DUMMY2", word_offset));
+
+        // Top-level: CALL DUMMY2 arity=5 local_count=0, but stack is empty
+        let start = vm.dp;
+        vm.dict_write(Cell::Xt(call_xt)).unwrap();
+        vm.dict_write(Cell::Xt(dummy_xt)).unwrap();
+        vm.dict_write(Cell::Int(5)).unwrap(); // arity=5, stack is empty
+        vm.dict_write(Cell::Int(0)).unwrap();
+
+        let result = vm.run(start);
+        assert!(matches!(result, Err(crate::error::TbxError::StackUnderflow)));
+    }
+
+    #[test]
+    fn test_return_val_at_top_level_returns_error() {
+        // Verify that RETURN_VAL executed at top level (outside a word) returns InvalidReturn.
+        // Layout: [Xt(LIT), Int(42), Xt(RETURN_VAL)]
+        let mut vm = VM::new();
+        crate::primitives::register_all(&mut vm);
+
+        let lit_xt = vm.lookup("LIT").unwrap();
+        let return_val_xt = vm.lookup("RETURN_VAL").unwrap();
+
+        let start = vm.dp;
+        vm.dict_write(Cell::Xt(lit_xt)).unwrap();
+        vm.dict_write(Cell::Int(42)).unwrap();
+        vm.dict_write(Cell::Xt(return_val_xt)).unwrap();
+
+        let result = vm.run(start);
+        assert!(matches!(result, Err(crate::error::TbxError::InvalidReturn)));
     }
 }

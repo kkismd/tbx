@@ -33,6 +33,8 @@ pub enum TbxError {
     InvalidAllotCount,
     /// HALT was executed, requesting the VM to stop.
     Halted,
+    /// RETURN with a value was executed at the top level (outside any word definition).
+    InvalidReturn,
 }
 
 impl std::fmt::Display for TbxError {
@@ -62,6 +64,7 @@ impl std::fmt::Display for TbxError {
             }
             TbxError::InvalidAllotCount => write!(f, "ALLOT count must be non-negative"),
             TbxError::Halted => write!(f, "execution halted"),
+            TbxError::InvalidReturn => write!(f, "RETURN with value at top level is not allowed"),
         }
     }
 }
