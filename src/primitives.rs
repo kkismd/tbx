@@ -10,6 +10,12 @@ pub fn drop_prim(vm: &mut VM) -> Result<(), TbxError> {
     Ok(())
 }
 
+/// LIT_MARKER — push a Cell::Marker sentinel onto the data stack.
+pub fn lit_marker_prim(vm: &mut VM) -> Result<(), TbxError> {
+    vm.push(Cell::Marker);
+    Ok(())
+}
+
 /// DUP — duplicate the top element of the data stack.
 pub fn dup_prim(vm: &mut VM) -> Result<(), TbxError> {
     let top = vm.pop()?;
@@ -491,6 +497,13 @@ pub fn register_all(vm: &mut VM) {
         kind: EntryKind::ReturnVal,
         prev: None,
     });
+    vm.register(WordEntry {
+        name: "DROP_TO_MARKER".to_string(),
+        flags: 0,
+        kind: EntryKind::DropToMarker,
+        prev: None,
+    });
+    vm.register(WordEntry::new_primitive("LIT_MARKER", lit_marker_prim));
     vm.register(WordEntry {
         name: "LIT".to_string(),
         flags: 0,

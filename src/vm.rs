@@ -333,6 +333,16 @@ impl VM {
                         }
                     }
                 }
+                EntryKind::DropToMarker => {
+                    loop {
+                        match self.pop()? {
+                            Cell::Marker => break,
+                            _ => {} // discrard non-marker cells
+                        }
+                    }
+                    self.pc += 1;
+                }
+
                 EntryKind::Lit => {
                     self.pc += 1;
                     let literal = self
@@ -868,5 +878,101 @@ mod tests {
 
         let result = vm.run(start);
         assert!(matches!(result, Err(crate::error::TbxError::InvalidReturn)));
+    }
+
+    #[test]
+    fn test_drop_to_marker_after_void_statement() {
+        // Verifies that DROP_TO_MARKER clears Marker + args after a void return statement.
+        //
+        // Top-level layout:
+        //   [start+0] LIT_MARKER
+        //   [start+1] LIT
+        //   [start+2] Int(42)       <- argument
+        //   [start+3] CALL
+        //   [start+4] Xt(STMT)
+        //   [start+5] Int(1)        <- arity=1
+        //   [start+6] Int(0)        <- local_count=0
+        //   [start+7] DROP_TO_MARKER
+        //   [start+8] EXIT          <- top-level end
+        //   [start+9] EXIT          <- STMT body (void return)
+        let mut vm = VM::new();
+        crate::primitives::register_all(&mut vm);
+
+        let lit_marker_xt = vm.lookup("LIT_MARKER").unwrap();
+        let lit_xt = vm.lookup("LIT").unwrap();
+        let call_xt = vm.lookup("CALL").unwrap();
+        let exit_xt = vm.lookup("EXIT").unwrap();
+        let drop_to_marker_xt = vm.lookup("DROP_TO_MARKER").unwrap();
+
+        let stmt_offset = 9; // STMT body starts at start+9 (will be adjusted below)
+                             // We place the word body relative to dp: dp+9
+        let start = vm.dp;
+        let stmt_xt = vm.register(crate::dict::WordEntry::new_word("STMT", start + 9));
+
+        vm.dict_write(Cell::Xt(lit_marker_xt)).unwrap(); // [start+0]
+        vm.dict_write(Cell::Xt(lit_xt)).unwrap(); // [start+1]
+        vm.dict_write(Cell::Int(42)).unwrap(); // [start+2]
+        vm.dict_write(Cell::Xt(call_xt)).unwrap(); // [start+3]
+        vm.dict_write(Cell::Xt(stmt_xt)).unwrap(); // [start+4]
+        vm.dict_write(Cell::Int(1)).unwrap(); // [start+5] arity=1
+        vm.dict_write(Cell::Int(0)).unwrap(); // [start+6] local_count=0
+        vm.dict_write(Cell::Xt(drop_to_marker_xt)).unwrap(); // [start+7]
+        vm.dict_write(Cell::Xt(exit_xt)).unwrap(); // [start+8] top-level end
+        vm.dict_write(Cell::Xt(exit_xt)).unwrap(); // [start+9] STMT body
+
+        let _ = stmt_offset; // suppress unused warning
+        vm.run(start).unwrap();
+
+        // Marker and arg should be gone; stack must be empty.
+        assert!(vm.data_stack.is_empty());
+    }
+
+    #[test]
+    fn test_drop_to_marker_after_value_returning_statement() {
+        // Verifies that DROP_TO_MARKER discards the return value as well as Marker + args.
+        //
+        // Top-level layout:
+        //   [start+0]  LIT_MARKER
+        //   [start+1]  LIT
+        //   [start+2]  Int(42)       <- argument
+        //   [start+3]  CALL
+        //   [start+4]  Xt(STMT2)
+        //   [start+5]  Int(1)        <- arity=1
+        //   [start+6]  Int(0)        <- local_count=0
+        //   [start+7]  DROP_TO_MARKER
+        //   [start+8]  EXIT          <- top-level end
+        //   [start+9]  LIT           <- STMT2 body: push 99
+        //   [start+10] Int(99)
+        //   [start+11] RETURN_VAL    <- return with value 99
+        let mut vm = VM::new();
+        crate::primitives::register_all(&mut vm);
+
+        let lit_marker_xt = vm.lookup("LIT_MARKER").unwrap();
+        let lit_xt = vm.lookup("LIT").unwrap();
+        let call_xt = vm.lookup("CALL").unwrap();
+        let exit_xt = vm.lookup("EXIT").unwrap();
+        let drop_to_marker_xt = vm.lookup("DROP_TO_MARKER").unwrap();
+        let return_val_xt = vm.lookup("RETURN_VAL").unwrap();
+
+        let start = vm.dp;
+        let stmt2_xt = vm.register(crate::dict::WordEntry::new_word("STMT2", start + 9));
+
+        vm.dict_write(Cell::Xt(lit_marker_xt)).unwrap(); // [start+0]
+        vm.dict_write(Cell::Xt(lit_xt)).unwrap(); // [start+1]
+        vm.dict_write(Cell::Int(42)).unwrap(); // [start+2] arg
+        vm.dict_write(Cell::Xt(call_xt)).unwrap(); // [start+3]
+        vm.dict_write(Cell::Xt(stmt2_xt)).unwrap(); // [start+4]
+        vm.dict_write(Cell::Int(1)).unwrap(); // [start+5] arity=1
+        vm.dict_write(Cell::Int(0)).unwrap(); // [start+6] local_count=0
+        vm.dict_write(Cell::Xt(drop_to_marker_xt)).unwrap(); // [start+7]
+        vm.dict_write(Cell::Xt(exit_xt)).unwrap(); // [start+8] top-level end
+        vm.dict_write(Cell::Xt(lit_xt)).unwrap(); // [start+9]  STMT2: LIT 99
+        vm.dict_write(Cell::Int(99)).unwrap(); // [start+10]
+        vm.dict_write(Cell::Xt(return_val_xt)).unwrap(); // [start+11] RETURN_VAL
+
+        vm.run(start).unwrap();
+
+        // return value 99 must also be discarded by DROP_TO_MARKER.
+        assert!(vm.data_stack.is_empty());
     }
 }
