@@ -267,18 +267,16 @@ impl VM {
         self.pc = start_offset;
 
         loop {
+            let xt = self
+                .dict_read(self.pc)?
+                .as_xt()
+                .ok_or(TbxError::TypeError {
+                    expected: "Xt",
+                    got: "non-Xt",
+                })?;
             let entry_kind = self
                 .headers
-                .get(
-                    self.dictionary
-                        .get(self.pc)
-                        .and_then(|c: &Cell| c.as_xt())
-                        .ok_or(TbxError::TypeError {
-                            expected: "Xt",
-                            got: "non-Xt",
-                        })?
-                        .index(),
-                )
+                .get(xt.index())
                 .ok_or(TbxError::IndexOutOfBounds {
                     index: self.pc,
                     size: self.headers.len(),
@@ -309,17 +307,15 @@ impl VM {
                 }
                 EntryKind::Call => {
                     let target_xt = self
-                        .dictionary
-                        .get(self.pc + 1)
-                        .and_then(|c: &Cell| c.as_xt())
-                        .ok_or(TbxError::IndexOutOfBounds {
-                            index: self.pc + 1,
-                            size: self.dictionary.len(),
+                        .dict_read(self.pc + 1)?
+                        .as_xt()
+                        .ok_or(TbxError::TypeError {
+                            expected: "Xt",
+                            got: "non-Xt",
                         })?;
                     let arity_raw = self
-                        .dictionary
-                        .get(self.pc + 2)
-                        .and_then(|c: &Cell| c.as_int())
+                        .dict_read(self.pc + 2)?
+                        .as_int()
                         .ok_or(TbxError::TypeError {
                             expected: "Int (arity)",
                             got: "non-Int",
@@ -332,9 +328,8 @@ impl VM {
                     }
                     let arity = arity_raw as usize;
                     let local_count_raw = self
-                        .dictionary
-                        .get(self.pc + 3)
-                        .and_then(|c: &Cell| c.as_int())
+                        .dict_read(self.pc + 3)?
+                        .as_int()
                         .ok_or(TbxError::TypeError {
                             expected: "Int (local count)",
                             got: "non-Int",
@@ -429,14 +424,7 @@ impl VM {
 
                 EntryKind::Lit => {
                     self.pc += 1;
-                    let literal = self
-                        .dictionary
-                        .get(self.pc)
-                        .ok_or(TbxError::IndexOutOfBounds {
-                            index: self.pc,
-                            size: self.dictionary.len(),
-                        })?
-                        .clone();
+                    let literal = self.dict_read(self.pc)?;
                     self.push(literal);
                     self.pc += 1;
                 }
