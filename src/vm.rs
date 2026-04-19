@@ -161,10 +161,13 @@ impl VM {
     ///
     /// Returns `Err(TbxError::IndexOutOfBounds)` if `bp + local_idx` is out of range.
     pub fn local_read(&self, local_idx: usize) -> Result<Cell, TbxError> {
-        let idx = self.bp.checked_add(local_idx).ok_or(TbxError::IndexOutOfBounds {
-            index: usize::MAX,
-            size: self.data_stack.len(),
-        })?;
+        let idx = self
+            .bp
+            .checked_add(local_idx)
+            .ok_or(TbxError::IndexOutOfBounds {
+                index: usize::MAX,
+                size: self.data_stack.len(),
+            })?;
         let size = self.data_stack.len();
         self.data_stack
             .get(idx)
@@ -178,10 +181,13 @@ impl VM {
     ///
     /// Returns `Err(TbxError::IndexOutOfBounds)` if `bp + local_idx` is out of range.
     pub fn local_write(&mut self, local_idx: usize, cell: Cell) -> Result<(), TbxError> {
-        let idx = self.bp.checked_add(local_idx).ok_or(TbxError::IndexOutOfBounds {
-            index: usize::MAX,
-            size: self.data_stack.len(),
-        })?;
+        let idx = self
+            .bp
+            .checked_add(local_idx)
+            .ok_or(TbxError::IndexOutOfBounds {
+                index: usize::MAX,
+                size: self.data_stack.len(),
+            })?;
         let size = self.data_stack.len();
         *self
             .data_stack
