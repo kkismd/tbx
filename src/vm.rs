@@ -254,9 +254,10 @@ impl VM {
                 self.src_pos += 1;
             }
             let len = (self.src_pos - content_start) as i64;
-            if self.src_pos < self.src_buf.len() {
-                self.src_pos += 1; // skip closing '"'
+            if self.src_pos >= self.src_buf.len() {
+                return Err(TbxError::UnterminatedString);
             }
+            self.src_pos += 1; // skip closing '"'
             TokenDescriptor {
                 kind: TOK_STR,
                 len,
@@ -278,7 +279,7 @@ impl VM {
                 self.src_pos += 1;
             }
             let raw = &self.src_buf[if neg { start + 1 } else { start }..self.src_pos];
-            let n: i64 = raw.parse().unwrap_or(0);
+            let n: i64 = raw.parse().map_err(|_| TbxError::NumberOutOfRange)?;
             let val = if neg { -n } else { n };
             let len = (self.src_pos - start) as i64;
             TokenDescriptor {
@@ -1310,5 +1311,22 @@ mod tests {
         assert_eq!(kind, Cell::Int(crate::constants::TOK_NUM));
         assert_eq!(len, Cell::Int(3));
         assert_eq!(val, Cell::Int(123));
+    }
+
+    #[test]
+    fn test_parse_next_token_unterminated_string_returns_error() {
+        let mut vm = VM::new();
+        vm.src_buf = r#""hello"#.to_string(); // missing closing quote
+        let result = vm.parse_next_token();
+        assert_eq!(result, Err(crate::error::TbxError::UnterminatedString));
+    }
+
+    #[test]
+    fn test_parse_next_token_number_out_of_range_returns_error() {
+        let mut vm = VM::new();
+        // larger than i64::MAX (9223372036854775807)
+        vm.src_buf = "99999999999999999999".to_string();
+        let result = vm.parse_next_token();
+        assert_eq!(result, Err(crate::error::TbxError::NumberOutOfRange));
     }
 }

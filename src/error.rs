@@ -39,6 +39,10 @@ pub enum TbxError {
     MarkerNotFound,
     /// TOKEN was called but no more input is available in src_buf.
     EndOfInput,
+    /// A numeric literal in the source buffer could not be parsed as i64.
+    NumberOutOfRange,
+    /// A string literal was opened with `"` but no closing `"` was found.
+    UnterminatedString,
 }
 
 impl std::fmt::Display for TbxError {
@@ -74,6 +78,12 @@ impl std::fmt::Display for TbxError {
             }
             TbxError::EndOfInput => {
                 write!(f, "TOKEN: no more input available in source buffer")
+            }
+            TbxError::NumberOutOfRange => {
+                write!(f, "numeric literal out of i64 range")
+            }
+            TbxError::UnterminatedString => {
+                write!(f, "unterminated string literal: missing closing '\"'")
             }
         }
     }
