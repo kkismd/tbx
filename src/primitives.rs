@@ -1,4 +1,4 @@
-use crate::cell::{Cell, ReturnFrame};
+use crate::cell::Cell;
 use crate::constants::MAX_DICTIONARY_CELLS;
 use crate::dict::{EntryKind, WordEntry};
 use crate::error::TbxError;
@@ -85,48 +85,6 @@ pub fn store_prim(vm: &mut VM) -> Result<(), TbxError> {
             got: "non-address",
         }),
     }
-}
-
-/// CALL — call an execution token (Xt).
-pub fn call_prim(vm: &mut VM) -> Result<(), TbxError> {
-    let xt_cell = vm
-        .dictionary
-        .get(vm.pc + 1)
-        .ok_or(TbxError::IndexOutOfBounds {
-            index: vm.pc + 1,
-            size: vm.dictionary.len(),
-        })?;
-    if let Cell::Xt(x) = xt_cell {
-        let offset = match vm.headers[x.index()].kind {
-            EntryKind::Word(offset) => offset,
-            _ => {
-                return Err(TbxError::TypeError {
-                    expected: "callable (primitive or word)",
-                    got: "non-callable",
-                })
-            }
-        };
-        let pc = vm.pc + 2; // CALL命令の次の命令のアドレス)
-        let bp = vm.bp;
-        let return_frame = ReturnFrame::Call { pc, bp };
-        vm.return_stack.push(return_frame);
-        vm.bp = vm.data_stack.len();
-        vm.pc = offset;
-        Ok(())
-    } else {
-        Err(TbxError::TypeError {
-            expected: "Xt",
-            got: xt_cell.type_name(),
-        })
-    }
-}
-
-pub fn exit_prim(vm: &mut VM) -> Result<(), TbxError> {
-    let return_frame = vm.return_stack.pop().ok_or(TbxError::StackUnderflow)?;
-    let ReturnFrame::Call { pc, bp } = return_frame;
-    vm.pc = pc;
-    vm.bp = bp;
-    Ok(())
 }
 
 pub fn add_prim(vm: &mut VM) -> Result<(), TbxError> {
@@ -475,6 +433,17 @@ pub fn halt_prim(_vm: &mut VM) -> Result<(), TbxError> {
     Err(TbxError::Halted)
 }
 
+/// LITERAL — compile a literal value into the dictionary as LIT + value (2 cells).
+pub fn literal_prim(vm: &mut VM) -> Result<(), TbxError> {
+    let value = vm.pop()?;
+    let lit_xt = vm.lookup("LIT").ok_or(TbxError::TypeError {
+        expected: "LIT word to be registered",
+        got: "not found",
+    })?;
+    vm.dict_write(Cell::Xt(lit_xt))?;
+    vm.dict_write(value)?;
+    Ok(())
+}
 /// Register all stack primitives into the VM's dictionary.
 pub fn register_all(vm: &mut VM) {
     vm.register(WordEntry::new_primitive("DROP", drop_prim));
@@ -482,8 +451,6 @@ pub fn register_all(vm: &mut VM) {
     vm.register(WordEntry::new_primitive("SWAP", swap_prim));
     vm.register(WordEntry::new_primitive("FETCH", fetch_prim));
     vm.register(WordEntry::new_primitive("STORE", store_prim));
-    vm.register(WordEntry::new_primitive("CALL", call_prim));
-    vm.register(WordEntry::new_primitive("EXIT", exit_prim));
     vm.register(WordEntry::new_primitive("ADD", add_prim));
     vm.register(WordEntry::new_primitive("SUB", sub_prim));
     vm.register(WordEntry::new_primitive("MUL", mul_prim));
@@ -506,6 +473,27 @@ pub fn register_all(vm: &mut VM) {
     vm.register(WordEntry::new_primitive("HERE", here_prim));
     vm.register(WordEntry::new_primitive("STATE", state_prim));
     vm.register(WordEntry::new_primitive("HALT", halt_prim));
+    vm.register(WordEntry {
+        name: "CALL".to_string(),
+        flags: 0,
+        kind: EntryKind::Call,
+        prev: None,
+    });
+    vm.register(WordEntry {
+        name: "EXIT".to_string(),
+        flags: 0,
+        kind: EntryKind::Exit,
+        prev: None,
+    });
+    vm.register(WordEntry {
+        name: "LIT".to_string(),
+        flags: 0,
+        kind: EntryKind::Lit,
+        prev: None,
+    });
+    let mut literal_entry = WordEntry::new_primitive("LITERAL", literal_prim);
+    literal_entry.flags |= crate::dict::FLAG_IMMEDIATE;
+    vm.register(literal_entry);
 }
 
 #[cfg(test)]
@@ -687,69 +675,6 @@ mod tests {
         let mut vm = VM::new();
         vm.push(Cell::Int(123)); // value to store
         assert_eq!(store_prim(&mut vm), Err(TbxError::StackUnderflow));
-    }
-
-    #[test]
-    fn test_call_and_exit() {
-        let mut vm = VM::new();
-        register_all(&mut vm); // Ensure CALL and EXIT are registered
-        let dummy_xt = vm.register(WordEntry::new_word("TEST", 10));
-        vm.dictionary.push(Cell::None);
-        vm.dictionary.push(Cell::Xt(dummy_xt)); // code for TEST: CALL EXIT
-
-        vm.pc = 0;
-        call_prim(&mut vm).unwrap();
-        assert_eq!(vm.pc, 10); // After CALL, pc should be at TEST's code
-    }
-
-    #[test]
-    fn test_exit_restores_pc_bp() {
-        let mut vm = VM::new();
-        register_all(&mut vm); // Ensure CALL and EXIT are registered
-        vm.return_stack.push(ReturnFrame::Call { pc: 42, bp: 99 });
-        exit_prim(&mut vm).unwrap();
-        assert_eq!(vm.pc, 42);
-        assert_eq!(vm.bp, 99);
-    }
-
-    #[test]
-    fn test_exit_underflow() {
-        let mut vm = VM::new();
-        assert_eq!(exit_prim(&mut vm), Err(TbxError::StackUnderflow));
-    }
-
-    #[test]
-    fn test_call_type_error() {
-        let mut vm = VM::new();
-        register_all(&mut vm); // Ensure CALL and EXIT are registered
-        vm.dictionary.push(Cell::None);
-        vm.dictionary.push(Cell::Int(123)); // Not an Xt
-        vm.pc = 0;
-        assert_eq!(
-            call_prim(&mut vm),
-            Err(TbxError::TypeError {
-                expected: "Xt",
-                got: "Int"
-            })
-        );
-    }
-
-    #[test]
-    fn test_call_non_word_xt() {
-        let mut vm = VM::new();
-        register_all(&mut vm);
-        let drop_xt = vm.lookup("DROP").unwrap();
-        vm.dictionary.push(Cell::None);
-        vm.dictionary.push(Cell::Xt(drop_xt)); // Xt exists but points to a Primitive
-        vm.pc = 0;
-        let original_bp = vm.bp;
-        let original_rs_len = vm.return_stack.len();
-        assert!(call_prim(&mut vm).is_err());
-
-        // Verify that VM state remains unchanged after error
-        assert_eq!(vm.pc, 0);
-        assert_eq!(vm.bp, original_bp);
-        assert_eq!(vm.return_stack.len(), original_rs_len);
     }
 
     #[test]
@@ -1649,5 +1574,22 @@ mod tests {
         let _ = halt_prim(&mut vm);
         assert_eq!(vm.data_stack.len(), 1);
         assert_eq!(vm.pop().unwrap(), Cell::Int(42));
+    }
+
+    #[test]
+    fn test_literal_compiles_lit_and_value() {
+        // LITERAL should write [Xt(LIT), value] into the dictionary.
+        let mut vm = VM::new();
+        crate::primitives::register_all(&mut vm);
+
+        let lit_xt = vm.lookup("LIT").unwrap();
+        let dp_before = vm.dp;
+
+        vm.push(Cell::Int(123));
+        crate::primitives::literal_prim(&mut vm).unwrap();
+
+        assert_eq!(vm.dictionary[dp_before], Cell::Xt(lit_xt));
+        assert_eq!(vm.dictionary[dp_before + 1], Cell::Int(123));
+        assert_eq!(vm.dp, dp_before + 2);
     }
 }
