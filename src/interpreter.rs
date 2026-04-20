@@ -165,21 +165,36 @@ impl Interpreter {
         let buf_start = self.vm.dp;
 
         // Write statement and arguments to the dictionary (LIT_MARKER … DROP_TO_MARKER).
-        self.write_stmt_to_dict(
+        // On failure, reset dp so subsequent exec_line calls start from a clean state.
+        if let Err(e) = self.write_stmt_to_dict(
             &stmt_name,
             &tokens[idx..],
             stmt_pos_line,
             stmt_pos_col,
             line,
-        )?;
+        ) {
+            self.vm.dp = buf_start;
+            self.vm.dictionary.truncate(buf_start);
+            return Err(e);
+        }
 
         // Append EXIT to terminate the temporary code buffer.
-        let exit_xt = self.vm.lookup("EXIT").ok_or_else(|| {
-            make_err(TbxError::UndefinedSymbol {
-                name: "EXIT".into(),
-            })
-        })?;
-        self.vm.dict_write(Cell::Xt(exit_xt)).map_err(&make_err)?;
+        // On failure, reset dp before returning.
+        let exit_xt = match self.vm.lookup("EXIT") {
+            Some(xt) => xt,
+            None => {
+                self.vm.dp = buf_start;
+                self.vm.dictionary.truncate(buf_start);
+                return Err(make_err(TbxError::UndefinedSymbol {
+                    name: "EXIT".into(),
+                }));
+            }
+        };
+        if let Err(e) = self.vm.dict_write(Cell::Xt(exit_xt)) {
+            self.vm.dp = buf_start;
+            self.vm.dictionary.truncate(buf_start);
+            return Err(make_err(e));
+        }
 
         // Save VM state snapshots for rollback on error.
         let saved_data_stack_len = self.vm.data_stack.len();
@@ -563,5 +578,65 @@ GREET";
         let src = "DEF OUTER\nDEF INNER\nEND\nEND";
         let result = interp.exec_source(src);
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_def_error_rolls_back() {
+        // A DEF body with an undefined symbol should fail and roll back.
+        let mut interp = Interpreter::new();
+        let src = "DEF BAD\nNOSUCH 1\nEND";
+        assert!(interp.exec_source(src).is_err());
+        // After rollback, defining and calling a valid word must succeed.
+        interp
+            .exec_source("DEF GOOD\nPUTDEC 99\nEND\nGOOD")
+            .unwrap();
+        let out = interp.take_output();
+        assert!(
+            out.contains("99"),
+            "expected '99' in output after rollback, got: {:?}",
+            out
+        );
+    }
+
+    // Helper: tokenize a source fragment into SpannedTokens, stripping Newline/Eof.
+    fn tokenize_args(s: &str) -> Vec<SpannedToken> {
+        let mut lex = Lexer::new(s);
+        let mut tokens = Vec::new();
+        loop {
+            let st = lex.next_token();
+            match &st.token {
+                Token::Newline | Token::Eof => break,
+                _ => tokens.push(st),
+            }
+        }
+        tokens
+    }
+
+    #[test]
+    fn test_count_top_level_arity_single() {
+        let tokens = tokenize_args("42");
+        assert_eq!(count_top_level_arity(&tokens), Ok(1));
+    }
+
+    #[test]
+    fn test_count_top_level_arity_multiple() {
+        let tokens = tokenize_args("1 , 2 , 3");
+        assert_eq!(count_top_level_arity(&tokens), Ok(3));
+    }
+
+    #[test]
+    fn test_count_top_level_arity_nested_parens() {
+        // Commas inside parentheses must not be counted.
+        let tokens = tokenize_args("f(1,2)");
+        assert_eq!(count_top_level_arity(&tokens), Ok(1));
+    }
+
+    #[test]
+    fn test_count_top_level_arity_unmatched_rparen() {
+        let tokens = tokenize_args(")");
+        assert!(matches!(
+            count_top_level_arity(&tokens),
+            Err(TbxError::InvalidExpression { .. })
+        ));
     }
 }
