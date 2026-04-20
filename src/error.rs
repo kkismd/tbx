@@ -148,4 +148,10 @@ mod tests {
         let e = TbxError::MarkerNotFound;
         assert!(e.to_string().contains("marker"));
     }
+
+    #[test]
+    fn test_integer_overflow_display() {
+        let e = TbxError::IntegerOverflow;
+        assert!(e.to_string().contains("integer overflow"));
+    }
 }

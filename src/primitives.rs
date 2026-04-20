@@ -669,6 +669,14 @@ mod tests {
         assert_eq!(add_prim(&mut vm), Err(TbxError::IntegerOverflow));
     }
 
+    #[test]
+    fn test_add_overflow_negative() {
+        let mut vm = VM::new();
+        vm.push(Cell::Int(i64::MIN)).unwrap();
+        vm.push(Cell::Int(-1)).unwrap();
+        assert_eq!(add_prim(&mut vm), Err(TbxError::IntegerOverflow));
+    }
+
     // --- sub_prim ---
 
     #[test]
@@ -714,6 +722,14 @@ mod tests {
         assert_eq!(sub_prim(&mut vm), Err(TbxError::IntegerOverflow));
     }
 
+    #[test]
+    fn test_sub_overflow_positive() {
+        let mut vm = VM::new();
+        vm.push(Cell::Int(i64::MAX)).unwrap();
+        vm.push(Cell::Int(-1)).unwrap();
+        assert_eq!(sub_prim(&mut vm), Err(TbxError::IntegerOverflow));
+    }
+
     // --- mul_prim ---
 
     #[test]
@@ -755,6 +771,14 @@ mod tests {
     fn test_mul_overflow() {
         let mut vm = VM::new();
         vm.push(Cell::Int(i64::MAX)).unwrap();
+        vm.push(Cell::Int(2)).unwrap();
+        assert_eq!(mul_prim(&mut vm), Err(TbxError::IntegerOverflow));
+    }
+
+    #[test]
+    fn test_mul_overflow_negative() {
+        let mut vm = VM::new();
+        vm.push(Cell::Int(i64::MIN)).unwrap();
         vm.push(Cell::Int(2)).unwrap();
         assert_eq!(mul_prim(&mut vm), Err(TbxError::IntegerOverflow));
     }
