@@ -78,7 +78,10 @@ pub fn add_prim(vm: &mut VM) -> Result<(), TbxError> {
     let b = vm.pop_number()?;
     let a = vm.pop_number()?;
     match (a, b) {
-        (Cell::Int(x), Cell::Int(y)) => vm.push(Cell::Int(x + y))?,
+        (Cell::Int(x), Cell::Int(y)) => {
+            let result = x.checked_add(y).ok_or(TbxError::IntegerOverflow)?;
+            vm.push(Cell::Int(result))?;
+        }
         (Cell::Float(x), Cell::Float(y)) => vm.push(Cell::Float(x + y))?,
         (Cell::Int(x), Cell::Float(y)) => vm.push(Cell::Float(x as f64 + y))?,
         (Cell::Float(x), Cell::Int(y)) => vm.push(Cell::Float(x + y as f64))?,
@@ -91,7 +94,10 @@ pub fn sub_prim(vm: &mut VM) -> Result<(), TbxError> {
     let b = vm.pop_number()?;
     let a = vm.pop_number()?;
     match (a, b) {
-        (Cell::Int(x), Cell::Int(y)) => vm.push(Cell::Int(x - y))?,
+        (Cell::Int(x), Cell::Int(y)) => {
+            let result = x.checked_sub(y).ok_or(TbxError::IntegerOverflow)?;
+            vm.push(Cell::Int(result))?;
+        }
         (Cell::Float(x), Cell::Float(y)) => vm.push(Cell::Float(x - y))?,
         (Cell::Int(x), Cell::Float(y)) => vm.push(Cell::Float(x as f64 - y))?,
         (Cell::Float(x), Cell::Int(y)) => vm.push(Cell::Float(x - y as f64))?,
@@ -104,7 +110,10 @@ pub fn mul_prim(vm: &mut VM) -> Result<(), TbxError> {
     let b = vm.pop_number()?;
     let a = vm.pop_number()?;
     match (a, b) {
-        (Cell::Int(x), Cell::Int(y)) => vm.push(Cell::Int(x * y))?,
+        (Cell::Int(x), Cell::Int(y)) => {
+            let result = x.checked_mul(y).ok_or(TbxError::IntegerOverflow)?;
+            vm.push(Cell::Int(result))?;
+        }
         (Cell::Float(x), Cell::Float(y)) => vm.push(Cell::Float(x * y))?,
         (Cell::Int(x), Cell::Float(y)) => vm.push(Cell::Float(x as f64 * y))?,
         (Cell::Float(x), Cell::Int(y)) => vm.push(Cell::Float(x * y as f64))?,
@@ -119,7 +128,10 @@ pub fn div_prim(vm: &mut VM) -> Result<(), TbxError> {
     let a = vm.pop_number()?;
     match (a, b) {
         (Cell::Int(_), Cell::Int(0)) => return Err(TbxError::DivisionByZero),
-        (Cell::Int(x), Cell::Int(y)) => vm.push(Cell::Int(x / y))?,
+        (Cell::Int(x), Cell::Int(y)) => {
+            let result = x.checked_div(y).ok_or(TbxError::IntegerOverflow)?;
+            vm.push(Cell::Int(result))?;
+        }
         (Cell::Float(_), Cell::Float(y)) if y == 0.0 => return Err(TbxError::DivisionByZero),
         (Cell::Float(x), Cell::Float(y)) => vm.push(Cell::Float(x / y))?,
         (Cell::Int(_), Cell::Float(y)) if y == 0.0 => return Err(TbxError::DivisionByZero),
@@ -137,7 +149,8 @@ pub fn mod_prim(vm: &mut VM) -> Result<(), TbxError> {
     if b == 0 {
         return Err(TbxError::DivisionByZero);
     }
-    vm.push(Cell::Int(a % b))?;
+    let result = a.checked_rem(b).ok_or(TbxError::IntegerOverflow)?;
+    vm.push(Cell::Int(result))?;
     Ok(())
 }
 
@@ -648,6 +661,22 @@ mod tests {
         ));
     }
 
+    #[test]
+    fn test_add_overflow() {
+        let mut vm = VM::new();
+        vm.push(Cell::Int(i64::MAX)).unwrap();
+        vm.push(Cell::Int(1)).unwrap();
+        assert_eq!(add_prim(&mut vm), Err(TbxError::IntegerOverflow));
+    }
+
+    #[test]
+    fn test_add_overflow_negative() {
+        let mut vm = VM::new();
+        vm.push(Cell::Int(i64::MIN)).unwrap();
+        vm.push(Cell::Int(-1)).unwrap();
+        assert_eq!(add_prim(&mut vm), Err(TbxError::IntegerOverflow));
+    }
+
     // --- sub_prim ---
 
     #[test]
@@ -685,6 +714,22 @@ mod tests {
         assert!(matches!(sub_prim(&mut vm), Err(TbxError::TypeError { .. })));
     }
 
+    #[test]
+    fn test_sub_overflow() {
+        let mut vm = VM::new();
+        vm.push(Cell::Int(i64::MIN)).unwrap();
+        vm.push(Cell::Int(1)).unwrap();
+        assert_eq!(sub_prim(&mut vm), Err(TbxError::IntegerOverflow));
+    }
+
+    #[test]
+    fn test_sub_overflow_positive() {
+        let mut vm = VM::new();
+        vm.push(Cell::Int(i64::MAX)).unwrap();
+        vm.push(Cell::Int(-1)).unwrap();
+        assert_eq!(sub_prim(&mut vm), Err(TbxError::IntegerOverflow));
+    }
+
     // --- mul_prim ---
 
     #[test]
@@ -720,6 +765,22 @@ mod tests {
         vm.push(Cell::Int(1)).unwrap();
         vm.push(Cell::Bool(true)).unwrap();
         assert!(matches!(mul_prim(&mut vm), Err(TbxError::TypeError { .. })));
+    }
+
+    #[test]
+    fn test_mul_overflow() {
+        let mut vm = VM::new();
+        vm.push(Cell::Int(i64::MAX)).unwrap();
+        vm.push(Cell::Int(2)).unwrap();
+        assert_eq!(mul_prim(&mut vm), Err(TbxError::IntegerOverflow));
+    }
+
+    #[test]
+    fn test_mul_overflow_negative() {
+        let mut vm = VM::new();
+        vm.push(Cell::Int(i64::MIN)).unwrap();
+        vm.push(Cell::Int(2)).unwrap();
+        assert_eq!(mul_prim(&mut vm), Err(TbxError::IntegerOverflow));
     }
 
     // --- div_prim ---
@@ -809,6 +870,15 @@ mod tests {
         assert!(matches!(div_prim(&mut vm), Err(TbxError::TypeError { .. })));
     }
 
+    #[test]
+    fn test_div_overflow() {
+        // i64::MIN / -1 overflows because the result (i64::MAX + 1) is out of range.
+        let mut vm = VM::new();
+        vm.push(Cell::Int(i64::MIN)).unwrap();
+        vm.push(Cell::Int(-1)).unwrap();
+        assert_eq!(div_prim(&mut vm), Err(TbxError::IntegerOverflow));
+    }
+
     // --- mod_prim ---
 
     #[test]
@@ -851,6 +921,15 @@ mod tests {
         vm.push(Cell::Int(7)).unwrap();
         vm.push(Cell::Float(3.0)).unwrap();
         assert!(matches!(mod_prim(&mut vm), Err(TbxError::TypeError { .. })));
+    }
+
+    #[test]
+    fn test_mod_overflow() {
+        // i64::MIN % -1 overflows for the same reason as i64::MIN / -1.
+        let mut vm = VM::new();
+        vm.push(Cell::Int(i64::MIN)).unwrap();
+        vm.push(Cell::Int(-1)).unwrap();
+        assert_eq!(mod_prim(&mut vm), Err(TbxError::IntegerOverflow));
     }
 
     // --- EQ / NEQ tests ---

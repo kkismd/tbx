@@ -47,6 +47,8 @@ pub enum TbxError {
         depth: usize,
         limit: usize,
     },
+    /// An integer arithmetic operation produced a result outside the `i64` range.
+    IntegerOverflow,
 }
 
 impl std::fmt::Display for TbxError {
@@ -94,6 +96,7 @@ impl std::fmt::Display for TbxError {
                     depth, limit
                 )
             }
+            TbxError::IntegerOverflow => write!(f, "integer overflow"),
         }
     }
 }
@@ -144,5 +147,11 @@ mod tests {
     fn test_marker_not_found_display() {
         let e = TbxError::MarkerNotFound;
         assert!(e.to_string().contains("marker"));
+    }
+
+    #[test]
+    fn test_integer_overflow_display() {
+        let e = TbxError::IntegerOverflow;
+        assert!(e.to_string().contains("integer overflow"));
     }
 }
