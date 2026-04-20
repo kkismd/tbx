@@ -208,6 +208,7 @@ impl VM {
         }
     }
 
+    /// Read a cell from the dictionary at the given index, with bounds checking.
     ///
     /// # Errors
     ///
@@ -1418,6 +1419,15 @@ mod tests {
         ));
     }
 
+    #[test]
+    fn test_pop_bool_underflow() {
+        let mut vm = VM::new();
+        assert!(matches!(
+            vm.pop_bool(),
+            Err(crate::error::TbxError::StackUnderflow)
+        ));
+    }
+
     // --- pop_string_desc tests ---
 
     #[test]
@@ -1434,6 +1444,15 @@ mod tests {
         assert!(matches!(
             vm.pop_string_desc(),
             Err(crate::error::TbxError::TypeError { .. })
+        ));
+    }
+
+    #[test]
+    fn test_pop_string_desc_underflow() {
+        let mut vm = VM::new();
+        assert!(matches!(
+            vm.pop_string_desc(),
+            Err(crate::error::TbxError::StackUnderflow)
         ));
     }
 
@@ -1456,6 +1475,14 @@ mod tests {
         ));
     }
 
+    #[test]
+    fn test_pop_xt_underflow() {
+        let mut vm = VM::new();
+        assert!(matches!(
+            vm.pop_xt(),
+            Err(crate::error::TbxError::StackUnderflow)
+        ));
+    }
     // --- pop_number tests ---
 
     #[test]
