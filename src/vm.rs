@@ -267,20 +267,18 @@ impl VM {
         self.pc = start_offset;
 
         loop {
+            let xt = self
+                .dict_read(self.pc)?
+                .as_xt()
+                .ok_or(TbxError::TypeError {
+                    expected: "Xt",
+                    got: "non-Xt",
+                })?;
             let entry_kind = self
                 .headers
-                .get(
-                    self.dictionary
-                        .get(self.pc)
-                        .and_then(|c: &Cell| c.as_xt())
-                        .ok_or(TbxError::TypeError {
-                            expected: "Xt",
-                            got: "non-Xt",
-                        })?
-                        .index(),
-                )
+                .get(xt.index())
                 .ok_or(TbxError::IndexOutOfBounds {
-                    index: self.pc,
+                    index: xt.index(),
                     size: self.headers.len(),
                 })?
                 .kind
@@ -308,22 +306,20 @@ impl VM {
                     self.pc = offset;
                 }
                 EntryKind::Call => {
-                    let target_xt = self
-                        .dictionary
-                        .get(self.pc + 1)
-                        .and_then(|c: &Cell| c.as_xt())
-                        .ok_or(TbxError::IndexOutOfBounds {
-                            index: self.pc + 1,
-                            size: self.dictionary.len(),
-                        })?;
-                    let arity_raw = self
-                        .dictionary
-                        .get(self.pc + 2)
-                        .and_then(|c: &Cell| c.as_int())
-                        .ok_or(TbxError::TypeError {
-                            expected: "Int (arity)",
-                            got: "non-Int",
-                        })?;
+                    let target_xt =
+                        self.dict_read(self.pc + 1)?
+                            .as_xt()
+                            .ok_or(TbxError::TypeError {
+                                expected: "Xt",
+                                got: "non-Xt",
+                            })?;
+                    let arity_raw =
+                        self.dict_read(self.pc + 2)?
+                            .as_int()
+                            .ok_or(TbxError::TypeError {
+                                expected: "Int (arity)",
+                                got: "non-Int",
+                            })?;
                     if arity_raw < 0 {
                         return Err(TbxError::TypeError {
                             expected: "non-negative Int (arity)",
@@ -331,14 +327,13 @@ impl VM {
                         });
                     }
                     let arity = arity_raw as usize;
-                    let local_count_raw = self
-                        .dictionary
-                        .get(self.pc + 3)
-                        .and_then(|c: &Cell| c.as_int())
-                        .ok_or(TbxError::TypeError {
-                            expected: "Int (local count)",
-                            got: "non-Int",
-                        })?;
+                    let local_count_raw =
+                        self.dict_read(self.pc + 3)?
+                            .as_int()
+                            .ok_or(TbxError::TypeError {
+                                expected: "Int (local count)",
+                                got: "non-Int",
+                            })?;
                     if local_count_raw < 0 {
                         return Err(TbxError::TypeError {
                             expected: "non-negative Int (local count)",
@@ -429,14 +424,7 @@ impl VM {
 
                 EntryKind::Lit => {
                     self.pc += 1;
-                    let literal = self
-                        .dictionary
-                        .get(self.pc)
-                        .ok_or(TbxError::IndexOutOfBounds {
-                            index: self.pc,
-                            size: self.dictionary.len(),
-                        })?
-                        .clone();
+                    let literal = self.dict_read(self.pc)?;
                     self.push(literal);
                     self.pc += 1;
                 }
@@ -943,6 +931,30 @@ mod tests {
             result,
             Err(crate::error::TbxError::StackUnderflow)
         ));
+    }
+
+    #[test]
+    fn test_call_target_xt_type_mismatch_returns_type_error() {
+        // Verify that a non-Xt value at pc+1 (target_xt position) returns TypeError.
+        // This confirms the error type for type mismatch is TypeError, not IndexOutOfBounds.
+        let mut vm = VM::new();
+        crate::primitives::register_all(&mut vm);
+
+        let call_xt = vm.lookup("CALL").unwrap();
+
+        // Top-level: CALL <Int instead of Xt> arity=0 local_count=0
+        let start = vm.dp;
+        vm.dict_write(Cell::Xt(call_xt)).unwrap();
+        vm.dict_write(Cell::Int(999)).unwrap(); // wrong type: Int instead of Xt
+        vm.dict_write(Cell::Int(0)).unwrap();
+        vm.dict_write(Cell::Int(0)).unwrap();
+
+        let result = vm.run(start);
+        assert!(
+            matches!(result, Err(crate::error::TbxError::TypeError { .. })),
+            "expected TypeError for non-Xt target_xt, got {:?}",
+            result
+        );
     }
 
     #[test]
