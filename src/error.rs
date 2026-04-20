@@ -47,6 +47,8 @@ pub enum TbxError {
         depth: usize,
         limit: usize,
     },
+    /// An integer arithmetic operation produced a result outside the `i64` range.
+    IntegerOverflow,
 }
 
 impl std::fmt::Display for TbxError {
@@ -94,6 +96,7 @@ impl std::fmt::Display for TbxError {
                     depth, limit
                 )
             }
+            TbxError::IntegerOverflow => write!(f, "integer overflow"),
         }
     }
 }
