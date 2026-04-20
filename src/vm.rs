@@ -1558,9 +1558,7 @@ mod tests {
         // Verify that pushing beyond MAX_DATA_STACK_DEPTH returns DataStackOverflow.
         use crate::constants::MAX_DATA_STACK_DEPTH;
         let mut vm = VM::new();
-        for _ in 0..MAX_DATA_STACK_DEPTH {
-            vm.push(Cell::Int(0)).unwrap();
-        }
+        vm.data_stack.resize(MAX_DATA_STACK_DEPTH, Cell::Int(0));
         let result = vm.push(Cell::Int(0));
         assert!(
             matches!(
