@@ -16,6 +16,7 @@ struct CompileState {
     dp_at_def: usize,
     /// Header count at the start of DEF (for rollback on error).
     hdr_len_at_def: usize,
+    saved_latest: Option<crate::cell::Xt>,
 }
 
 /// Error produced by the outer interpreter, including source location information.
@@ -120,7 +121,7 @@ impl Interpreter {
             return Ok(());
         }
 
-        // Handle DEF: begin comiling a new word.
+        // Handle DEF: begin compiling a new word.
         if stmt_name.eq_ignore_ascii_case("DEF") {
             return self.handle_def(&tokens[idx..], line, stmt_pos_line, stmt_pos_col);
         }
@@ -128,6 +129,21 @@ impl Interpreter {
         // Handle END: finish compiling the current word.
         if stmt_name.eq_ignore_ascii_case("END") && self.compile_state.is_some() {
             return self.handle_end(line, stmt_pos_line, stmt_pos_col);
+        }
+
+        // If we are in compile mode, write this statement to the dictionary instead of executing it.
+        if self.compile_state.is_some() {
+            let result = self.handle_compile_stmt_to_dict(
+                &tokens,
+                idx - 1,
+                line,
+                stmt_pos_line,
+                stmt_pos_col,
+            );
+            if result.is_err() {
+                self.rollback_def();
+            }
+            return result;
         }
 
         // If we are in compile mode, write this statement to the dictionary instead of executing it.
@@ -321,6 +337,7 @@ impl Interpreter {
         let dp_at_def = self.vm.dp;
         let hdr_len_at_def = self.vm.headers.len();
 
+        let saved_latest = self.vm.latest;
         // Register the new word immediately (forward calls within the body will resolve).
         let entry = crate::dict::WordEntry::new_word(&name, self.vm.dp);
         self.vm.register(entry);
@@ -330,6 +347,7 @@ impl Interpreter {
             word_name: name,
             dp_at_def,
             hdr_len_at_def,
+            saved_latest,
         });
 
         Ok(())
@@ -363,6 +381,16 @@ impl Interpreter {
         self.compile_state = None;
 
         Ok(())
+    }
+
+    fn rollback_def(&mut self) {
+        if let Some(state) = &self.compile_state.take() {
+            self.vm.dp = state.dp_at_def;
+            self.vm.dictionary.truncate(state.dp_at_def);
+            self.vm.headers.truncate(state.hdr_len_at_def);
+            self.vm.latest = state.saved_latest;
+            self.vm.is_compiling = false;
+        }
     }
 
     fn handle_compile_stmt_to_dict(
