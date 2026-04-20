@@ -8,6 +8,16 @@ use crate::init_vm;
 use crate::lexer::{Lexer, SpannedToken, Token};
 use crate::vm::VM;
 
+#[allow(dead_code)]
+struct CompileState {
+    /// Name of the word being compiled.
+    word_name: String,
+    /// Dictionary pointer at the start of DEF (for rollback on error).
+    dp_at_def: usize,
+    /// Header count at the start of DEF (for rollback on error).
+    hdr_len_at_def: usize,
+}
+
 /// Error produced by the outer interpreter, including source location information.
 pub struct InterpreterError {
     pub line: usize,
@@ -43,6 +53,7 @@ impl std::fmt::Display for InterpreterError {
 // (e.g., via a VM-level pending token buffer).
 pub struct Interpreter {
     vm: VM,
+    compile_state: Option<CompileState>,
 }
 
 impl Default for Interpreter {
@@ -54,7 +65,10 @@ impl Default for Interpreter {
 impl Interpreter {
     /// Create a new `Interpreter` backed by a fully initialized VM.
     pub fn new() -> Self {
-        Self { vm: init_vm() }
+        Self {
+            vm: init_vm(),
+            compile_state: None,
+        }
     }
 
     /// Execute a single source line.
@@ -104,6 +118,27 @@ impl Interpreter {
         // Handle REM: skip the rest of the line.
         if stmt_name.eq_ignore_ascii_case("REM") {
             return Ok(());
+        }
+
+        // Handle DEF: begin comiling a new word.
+        if stmt_name.eq_ignore_ascii_case("DEF") {
+            return self.handle_def(&tokens[idx..], line, stmt_pos_line, stmt_pos_col);
+        }
+
+        // Handle END: finish compiling the current word.
+        if stmt_name.eq_ignore_ascii_case("END") && self.compile_state.is_some() {
+            return self.handle_end(line, stmt_pos_line, stmt_pos_col);
+        }
+
+        // If we are in compile mode, write this statement to the dictionary instead of executing it.
+        if self.compile_state.is_some() {
+            return self.handle_compile_stmt_to_dict(
+                &tokens,
+                idx - 1,
+                line,
+                stmt_pos_line,
+                stmt_pos_col,
+            );
         }
 
         // Look up the statement word.
@@ -245,6 +280,176 @@ impl Interpreter {
         run_result.map_err(make_err)
     }
 
+    fn handle_def(
+        &mut self,
+        arg_tokens: &[SpannedToken],
+        source_line: &str,
+        line: usize,
+        col: usize,
+    ) -> Result<(), InterpreterError> {
+        let make_err = |e: TbxError| InterpreterError {
+            line,
+            col,
+            source_line: source_line.to_string(),
+            kind: e,
+        };
+
+        // Next token must be the word name.
+        let name = match arg_tokens.first() {
+            Some(st) => match &st.token {
+                Token::Ident(n) => n.clone(),
+                _ => {
+                    return Err(make_err(TbxError::InvalidExpression {
+                        reason: "expected word name after DEF",
+                    }))
+                }
+            },
+            None => {
+                return Err(make_err(TbxError::InvalidExpression {
+                    reason: "expected word name after DEF",
+                }))
+            }
+        };
+
+        // Snapshot for rollback.
+        let dp_at_def = self.vm.dp;
+        let hdr_len_at_def = self.vm.headers.len();
+
+        // Register the new word immediately (forward calls within the body will resolve).
+        let entry = crate::dict::WordEntry::new_word(&name, self.vm.dp);
+        self.vm.register(entry);
+
+        self.vm.is_compiling = true;
+        self.compile_state = Some(CompileState {
+            word_name: name,
+            dp_at_def,
+            hdr_len_at_def,
+        });
+
+        Ok(())
+    }
+
+    fn handle_end(
+        &mut self,
+        source_line: &str,
+        line: usize,
+        col: usize,
+    ) -> Result<(), InterpreterError> {
+        let make_err = |e: TbxError| InterpreterError {
+            line,
+            col,
+            source_line: source_line.to_string(),
+            kind: e,
+        };
+
+        // Write EXIT to terminate the word body.
+        let exit_xt = self.vm.lookup("EXIT").ok_or_else(|| {
+            make_err(TbxError::UndefinedSymbol {
+                name: "EXIT".into(),
+            })
+        })?;
+        self.vm.dict_write(Cell::Xt(exit_xt)).map_err(&make_err)?;
+
+        // Seal user-defined space.
+        self.vm.seal_user();
+
+        self.vm.is_compiling = false;
+        self.compile_state = None;
+
+        Ok(())
+    }
+
+    fn handle_compile_stmt_to_dict(
+        &mut self,
+        tokens: &[SpannedToken],
+        stmt_idx: usize,
+        source_line: &str,
+        line: usize,
+        col: usize,
+    ) -> Result<(), InterpreterError> {
+        let make_err = |e: TbxError| InterpreterError {
+            line,
+            col,
+            source_line: source_line.to_string(),
+            kind: e,
+        };
+
+        let stmt_tok = &tokens[stmt_idx];
+        let stmt_name = match &stmt_tok.token {
+            Token::Ident(name) => name.clone(),
+            _ => return Ok(()),
+        };
+        let arg_tokens = &tokens[stmt_idx + 1..];
+
+        // Look up the statement word.
+        let stmt_xt = self.vm.lookup(&stmt_name).ok_or_else(|| {
+            make_err(TbxError::UndefinedSymbol {
+                name: stmt_name.clone(),
+            })
+        })?;
+
+        // Reject system-internal words.
+        let stmt_flags = self.vm.headers[stmt_xt.index()].flags;
+        if stmt_flags & FLAG_SYSTEM != 0 {
+            return Err(make_err(TbxError::UndefinedSymbol {
+                name: stmt_name.clone(),
+            }));
+        }
+
+        // Compile the argument expression.
+        let arg_cells = {
+            let mut compiler = ExprCompiler::new(&mut self.vm);
+            compiler.compile_expr(arg_tokens).map_err(&make_err)?
+        };
+
+        let arity = count_top_level_arity(arg_tokens).map_err(&make_err)?;
+
+        let stmt_is_word = matches!(
+            self.vm.headers[stmt_xt.index()].kind,
+            crate::dict::EntryKind::Word(_)
+        );
+
+        // Look up required system words.
+        let lit_marker_xt = self.vm.lookup("LIT_MARKER").ok_or_else(|| {
+            make_err(TbxError::UndefinedSymbol {
+                name: "LIT_MARKER".into(),
+            })
+        })?;
+        let call_xt = self.vm.lookup("CALL").ok_or_else(|| {
+            make_err(TbxError::UndefinedSymbol {
+                name: "CALL".into(),
+            })
+        })?;
+        let drop_to_marker_xt = self.vm.lookup("DROP_TO_MARKER").ok_or_else(|| {
+            make_err(TbxError::UndefinedSymbol {
+                name: "DROP_TO_MARKER".into(),
+            })
+        })?;
+
+        // Write to dictionary (no EXIT here — END will write it).
+        self.vm
+            .dict_write(Cell::Xt(lit_marker_xt))
+            .map_err(&make_err)?;
+        for cell in arg_cells {
+            self.vm.dict_write(cell).map_err(&make_err)?;
+        }
+        if stmt_is_word {
+            self.vm.dict_write(Cell::Xt(call_xt)).map_err(&make_err)?;
+            self.vm.dict_write(Cell::Xt(stmt_xt)).map_err(&make_err)?;
+            self.vm
+                .dict_write(Cell::Int(arity as i64))
+                .map_err(&make_err)?;
+            self.vm.dict_write(Cell::Int(0)).map_err(&make_err)?;
+        } else {
+            self.vm.dict_write(Cell::Xt(stmt_xt)).map_err(&make_err)?;
+        }
+        self.vm
+            .dict_write(Cell::Xt(drop_to_marker_xt))
+            .map_err(&make_err)?;
+
+        Ok(())
+    }
+
     /// Execute a multi-line source string.
     ///
     /// Splits `src` by newlines and calls `exec_line` for each.
@@ -381,5 +586,39 @@ mod tests {
         interp.exec_line("PUTDEC 1").unwrap();
         let out = interp.take_output();
         assert!(out.contains('1'));
+    }
+
+    #[test]
+    fn test_def_end_basic() {
+        // Define a word GREET that prints 42, then call it.
+        let mut interp = Interpreter::new();
+        let src = "\
+DEF GREET
+PUTDEC 42
+END
+GREET";
+        interp.exec_source(src).unwrap();
+        let out = interp.take_output();
+        assert!(
+            out.contains("42"),
+            "expected '42' in output, got: {:?}",
+            out
+        );
+    }
+
+    #[test]
+    fn test_def_missing_name_is_error() {
+        let mut interp = Interpreter::new();
+        let result = interp.exec_line("DEF");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_end_outside_def_is_not_intercepted() {
+        // END outside DEF should fall through to normal execution (likely error or no-op).
+        let mut interp = Interpreter::new();
+        // END is not in compile mode so it goes to the normal lookup path.
+        // It may be undefined — just check it doesn't panic.
+        let _ = interp.exec_line("END");
     }
 }
