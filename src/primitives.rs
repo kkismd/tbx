@@ -1316,6 +1316,24 @@ mod tests {
     }
 
     #[test]
+    fn test_band_type_error_top() {
+        // b (stack top) is non-Int; first pop should fail with TypeError.
+        let mut vm = VM::new();
+        vm.push(Cell::Int(1)).unwrap();
+        vm.push(Cell::Bool(true)).unwrap();
+        assert!(matches!(
+            band_prim(&mut vm),
+            Err(TbxError::TypeError { .. })
+        ));
+    }
+
+    #[test]
+    fn test_band_underflow() {
+        let mut vm = VM::new();
+        assert_eq!(band_prim(&mut vm), Err(TbxError::StackUnderflow));
+    }
+
+    #[test]
     fn test_bor_basic() {
         let mut vm = VM::new();
         vm.push(Cell::Int(1)).unwrap();
@@ -1339,6 +1357,21 @@ mod tests {
         vm.push(Cell::Bool(false)).unwrap();
         vm.push(Cell::Int(1)).unwrap();
         assert!(matches!(bor_prim(&mut vm), Err(TbxError::TypeError { .. })));
+    }
+
+    #[test]
+    fn test_bor_type_error_top() {
+        // b (stack top) is non-Int; first pop should fail with TypeError.
+        let mut vm = VM::new();
+        vm.push(Cell::Int(1)).unwrap();
+        vm.push(Cell::Bool(false)).unwrap();
+        assert!(matches!(bor_prim(&mut vm), Err(TbxError::TypeError { .. })));
+    }
+
+    #[test]
+    fn test_bor_underflow() {
+        let mut vm = VM::new();
+        assert_eq!(bor_prim(&mut vm), Err(TbxError::StackUnderflow));
     }
 
     // --- PUTSTR tests ---
