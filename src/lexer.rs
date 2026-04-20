@@ -318,31 +318,66 @@ impl<'a> Lexer<'a> {
         let raw = &self.source[start_off..end_off];
         let raw_len = end_off - start_off;
 
-        if is_line_num {
-            let n: i64 = raw.parse().unwrap_or(0);
+        // A float at line-start is not a valid line number label.
+        if is_line_num && is_float {
             return SpannedToken {
-                token: Token::LineNum(n),
+                token: Token::Error(format!("invalid line number: {raw}")),
                 pos: start_pos,
                 source_offset: start_off,
                 source_len: raw_len,
             };
         }
 
+        if is_line_num {
+            match raw.parse::<i64>() {
+                Ok(n) => {
+                    return SpannedToken {
+                        token: Token::LineNum(n),
+                        pos: start_pos,
+                        source_offset: start_off,
+                        source_len: raw_len,
+                    }
+                }
+                Err(_) => {
+                    return SpannedToken {
+                        token: Token::Error(format!("integer literal out of range: {raw}")),
+                        pos: start_pos,
+                        source_offset: start_off,
+                        source_len: raw_len,
+                    }
+                }
+            }
+        }
+
         if is_float {
-            let f: f64 = raw.parse().unwrap_or(0.0);
-            SpannedToken {
-                token: Token::FloatLit(f),
-                pos: start_pos,
-                source_offset: start_off,
-                source_len: raw_len,
+            match raw.parse::<f64>() {
+                Ok(f) => SpannedToken {
+                    token: Token::FloatLit(f),
+                    pos: start_pos,
+                    source_offset: start_off,
+                    source_len: raw_len,
+                },
+                Err(_) => SpannedToken {
+                    token: Token::Error(format!("float literal out of range: {raw}")),
+                    pos: start_pos,
+                    source_offset: start_off,
+                    source_len: raw_len,
+                },
             }
         } else {
-            let n: i64 = raw.parse().unwrap_or(0);
-            SpannedToken {
-                token: Token::IntLit(n),
-                pos: start_pos,
-                source_offset: start_off,
-                source_len: raw_len,
+            match raw.parse::<i64>() {
+                Ok(n) => SpannedToken {
+                    token: Token::IntLit(n),
+                    pos: start_pos,
+                    source_offset: start_off,
+                    source_len: raw_len,
+                },
+                Err(_) => SpannedToken {
+                    token: Token::Error(format!("integer literal out of range: {raw}")),
+                    pos: start_pos,
+                    source_offset: start_off,
+                    source_len: raw_len,
+                },
             }
         }
     }
@@ -1146,6 +1181,40 @@ mod tests {
                 Token::RParen,
                 Token::Eof,
             ]
+        );
+    }
+
+    // --- integer overflow → Error ---
+
+    #[test]
+    fn test_intlit_overflow_yields_error() {
+        let toks = tokens("X 99999999999999999999");
+        assert!(
+            matches!(toks[1], Token::Error(_)),
+            "expected Error, got {:?}",
+            toks[1]
+        );
+    }
+
+    #[test]
+    fn test_linenum_overflow_yields_error() {
+        let toks = tokens("99999999999999999999 PRINT");
+        assert!(
+            matches!(toks[0], Token::Error(_)),
+            "expected Error, got {:?}",
+            toks[0]
+        );
+    }
+
+    // --- float at line-start → Error ---
+
+    #[test]
+    fn test_float_at_line_start_yields_error() {
+        let toks = tokens("3.14 X");
+        assert!(
+            matches!(toks[0], Token::Error(_)),
+            "expected Error, got {:?}",
+            toks[0]
         );
     }
 }
