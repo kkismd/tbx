@@ -584,15 +584,7 @@ CALL実行時にコンパイル時確定のローカル変数スロット数を 
 
 > Issue #93「アドレス空間の統一: dictionary と data_stack が別々で Cell::Addr が曖昧」に基づく設計方針
 
-`dictionary`（`Vec<Cell>`）と `data_stack`（`Vec<Cell>`）は別々の配列として管理し、`Cell` のアドレスバリアントを2種類に分けることで参照先を明示する。
-
-```rust
-pub enum Cell {
-    DictAddr(usize),   // dictionary[n] — global variables, heap pointers, TOKEN descriptors
-    StackAddr(usize),  // data_stack[bp + n] — local variables (BP-relative offset)
-    // ...
-}
-```
+`dictionary`（`Vec<Cell>`）と `data_stack`（`Vec<Cell>`）は別々の配列として管理し、`Cell` のアドレスバリアントを2種類（`DictAddr(usize)` と `StackAddr(usize)`）に分けることで参照先を明示する（実装: `src/cell.rs`）。
 
 `FETCH` / `STORE` はパターンマッチで参照先を切り替える。
 

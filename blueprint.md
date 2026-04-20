@@ -37,16 +37,9 @@ eXtensibleなTiny BASICという意味で TBX という名前をつける。
   * リターンスタック: 手続きからの戻り先アドレスと呼び出し元のBPを退避する。リターンスタックはシステム専用であり、ユーザーコードからの直接アクセス手段（Forthにおける `>R` / `R>` / `R@` 相当）は提供しない。TBXはワード定義に引数リストを持ち、CALL時にスタックフレームを構成するアーキテクチャのため、ローカル変数によりリターンスタックの一時退避用途が不要となる。
     * EXIT: void returnプリミティブ。`data_stack.truncate(bp)` で引数・ローカル変数を解放し、リターンスタックから戻り先アドレスと元のBPを復元して呼び出し元に制御を戻す
     * RETURN_VAL: 値returnプリミティブ（新設）。スタックトップを退避 → `data_stack.truncate(bp)` → 戻り値を再pushし、リターンスタックから戻り先アドレスと元のBPを復元して呼び出し元に制御を戻す
-    * `ReturnFrame` 列挙型: リターンスタックに積まれるフレームの種別を表す型。以下の2バリアントを持つ。
+    * `ReturnFrame` 列挙型: リターンスタックに積まれるフレームの種別を表す型。`Call`（戻り先PCと保存BP）と `TopLevel`（番哨フレーム）の2バリアントを持つ（実装: `src/cell.rs`）。
 
 > Issue #116「ワード本体の終端判定機構（EXIT規約）が仕様に明記されていない」に基づく設計方針
-
-```rust
-enum ReturnFrame {
-    Call { return_pc: usize, saved_bp: usize }, // normal word call frame
-    TopLevel,                                    // sentinel frame for top-level execution
-}
-```
 
 **番哨フレーム方式（Sentinel Frame）**：トップレベル（「地の文」）のXt列実行開始前に `ReturnFrame::TopLevel` をリターンスタックに積む。インナ・インタプリタは `EXIT` 実行時に常にリターンスタックをpopし、取り出したフレームの種別で処理を分岐する。
 * `ReturnFrame::Call` の場合: 保存された `return_pc` と `saved_bp` を復元して通常のリターンを行う。
