@@ -1,6 +1,6 @@
 use crate::cell::Cell;
 use crate::constants::MAX_DICTIONARY_CELLS;
-use crate::dict::{EntryKind, WordEntry};
+use crate::dict::{EntryKind, WordEntry, FLAG_SYSTEM};
 use crate::error::TbxError;
 use crate::vm::VM;
 
@@ -432,34 +432,34 @@ pub fn register_all(vm: &mut VM) {
     vm.register(WordEntry::new_primitive("HALT", halt_prim));
     vm.register(WordEntry {
         name: "CALL".to_string(),
-        flags: 0,
+        flags: FLAG_SYSTEM,
         kind: EntryKind::Call,
         prev: None,
     });
     vm.register(WordEntry {
         name: "EXIT".to_string(),
-        flags: 0,
+        flags: FLAG_SYSTEM,
         kind: EntryKind::Exit,
         prev: None,
     });
     vm.register(WordEntry {
         name: "RETURN_VAL".to_string(),
-        flags: 0,
+        flags: FLAG_SYSTEM,
         kind: EntryKind::ReturnVal,
         prev: None,
     });
     vm.register(WordEntry {
         name: "DROP_TO_MARKER".to_string(),
-        flags: 0,
+        flags: FLAG_SYSTEM,
         kind: EntryKind::DropToMarker,
         prev: None,
     });
-    // TODO(#164): LIT_MARKER and DROP_TO_MARKER are registered with flags=0, allowing user code
-    // to call them directly. Once a FLAG_SYSTEM mechanism is in place, protect these words.
-    vm.register(WordEntry::new_primitive("LIT_MARKER", lit_marker_prim));
+    let mut lit_marker_entry = WordEntry::new_primitive("LIT_MARKER", lit_marker_prim);
+    lit_marker_entry.flags |= FLAG_SYSTEM;
+    vm.register(lit_marker_entry);
     vm.register(WordEntry {
         name: "LIT".to_string(),
-        flags: 0,
+        flags: FLAG_SYSTEM,
         kind: EntryKind::Lit,
         prev: None,
     });
