@@ -306,20 +306,20 @@ impl VM {
                     self.pc = offset;
                 }
                 EntryKind::Call => {
-                    let target_xt = self
-                        .dict_read(self.pc + 1)?
-                        .as_xt()
-                        .ok_or(TbxError::TypeError {
-                            expected: "Xt",
-                            got: "non-Xt",
-                        })?;
-                    let arity_raw = self
-                        .dict_read(self.pc + 2)?
-                        .as_int()
-                        .ok_or(TbxError::TypeError {
-                            expected: "Int (arity)",
-                            got: "non-Int",
-                        })?;
+                    let target_xt =
+                        self.dict_read(self.pc + 1)?
+                            .as_xt()
+                            .ok_or(TbxError::TypeError {
+                                expected: "Xt",
+                                got: "non-Xt",
+                            })?;
+                    let arity_raw =
+                        self.dict_read(self.pc + 2)?
+                            .as_int()
+                            .ok_or(TbxError::TypeError {
+                                expected: "Int (arity)",
+                                got: "non-Int",
+                            })?;
                     if arity_raw < 0 {
                         return Err(TbxError::TypeError {
                             expected: "non-negative Int (arity)",
@@ -327,13 +327,13 @@ impl VM {
                         });
                     }
                     let arity = arity_raw as usize;
-                    let local_count_raw = self
-                        .dict_read(self.pc + 3)?
-                        .as_int()
-                        .ok_or(TbxError::TypeError {
-                            expected: "Int (local count)",
-                            got: "non-Int",
-                        })?;
+                    let local_count_raw =
+                        self.dict_read(self.pc + 3)?
+                            .as_int()
+                            .ok_or(TbxError::TypeError {
+                                expected: "Int (local count)",
+                                got: "non-Int",
+                            })?;
                     if local_count_raw < 0 {
                         return Err(TbxError::TypeError {
                             expected: "non-negative Int (local count)",
