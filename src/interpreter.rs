@@ -27,6 +27,18 @@ pub struct InterpreterError {
     pub kind: TbxError,
 }
 
+impl InterpreterError {
+    /// Construct a new `InterpreterError` with the given location and error kind.
+    fn new(line: usize, col: usize, source_line: &str, kind: TbxError) -> Self {
+        InterpreterError {
+            line,
+            col,
+            source_line: source_line.to_string(),
+            kind,
+        }
+    }
+}
+
 impl std::fmt::Debug for InterpreterError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
@@ -133,12 +145,12 @@ impl Interpreter {
 
         // If we are in compile mode, write this statement to the dictionary instead of executing it.
         if self.compile_state.is_some() {
-            let result = self.handle_compile_stmt_to_dict(
-                &tokens,
-                idx - 1,
-                line,
+            let result = self.write_stmt_to_dict(
+                &stmt_name,
+                &tokens[idx..],
                 stmt_pos_line,
                 stmt_pos_col,
+                line,
             );
             if result.is_err() {
                 self.rollback_def();
@@ -146,131 +158,27 @@ impl Interpreter {
             return result;
         }
 
-        // If we are in compile mode, write this statement to the dictionary instead of executing it.
-        if self.compile_state.is_some() {
-            return self.handle_compile_stmt_to_dict(
-                &tokens,
-                idx - 1,
-                line,
-                stmt_pos_line,
-                stmt_pos_col,
-            );
-        }
-
-        // Look up the statement word.
-        let stmt_xt = self.vm.lookup(&stmt_name).ok_or_else(|| InterpreterError {
-            line: stmt_pos_line,
-            col: stmt_pos_col,
-            source_line: line.to_string(),
-            kind: TbxError::UndefinedSymbol {
-                name: stmt_name.clone(),
-            },
-        })?;
-
-        // Reject system-internal words from user code.
-        let stmt_flags = self.vm.headers[stmt_xt.index()].flags;
-        if stmt_flags & FLAG_SYSTEM != 0 {
-            return Err(InterpreterError {
-                line: stmt_pos_line,
-                col: stmt_pos_col,
-                source_line: line.to_string(),
-                kind: TbxError::UndefinedSymbol {
-                    name: stmt_name.clone(),
-                },
-            });
-        }
-
-        // Remaining tokens are the argument expression.
-        let arg_tokens = &tokens[idx..];
-
-        // Compile the argument expression to a cell sequence.
-        let arg_cells = {
-            let mut compiler = ExprCompiler::new(&mut self.vm);
-            compiler
-                .compile_expr(arg_tokens)
-                .map_err(|e| InterpreterError {
-                    line: stmt_pos_line,
-                    col: stmt_pos_col,
-                    source_line: line.to_string(),
-                    kind: e,
-                })?
-        };
-
-        // Determine arity from top-level comma count.
-        let arity = count_top_level_arity(arg_tokens).map_err(|e| InterpreterError {
-            line: stmt_pos_line,
-            col: stmt_pos_col,
-            source_line: line.to_string(),
-            kind: e,
-        })?;
-
-        // Check whether the statement is a compiled word (needs CALL with arity/locals)
-        // or a primitive/other (called directly by placing Xt in the code stream).
-        let stmt_is_word = matches!(
-            self.vm.headers[stmt_xt.index()].kind,
-            crate::dict::EntryKind::Word(_)
-        );
-
         // Helper closure for wrapping TbxError into InterpreterError.
-        let make_err = |e: TbxError| InterpreterError {
-            line: stmt_pos_line,
-            col: stmt_pos_col,
-            source_line: line.to_string(),
-            kind: e,
-        };
+        let make_err = |e: TbxError| InterpreterError::new(stmt_pos_line, stmt_pos_col, line, e);
 
-        // Look up required system words for building the code buffer.
-        // These must always be present after init_vm(); return a proper error if missing.
-        let lit_marker_xt = self.vm.lookup("LIT_MARKER").ok_or_else(|| {
-            make_err(TbxError::UndefinedSymbol {
-                name: "LIT_MARKER".into(),
-            })
-        })?;
-        let call_xt = self.vm.lookup("CALL").ok_or_else(|| {
-            make_err(TbxError::UndefinedSymbol {
-                name: "CALL".into(),
-            })
-        })?;
-        let drop_to_marker_xt = self.vm.lookup("DROP_TO_MARKER").ok_or_else(|| {
-            make_err(TbxError::UndefinedSymbol {
-                name: "DROP_TO_MARKER".into(),
-            })
-        })?;
+        // Save the current dictionary pointer to use as the buffer start.
+        let buf_start = self.vm.dp;
+
+        // Write statement and arguments to the dictionary (LIT_MARKER … DROP_TO_MARKER).
+        self.write_stmt_to_dict(
+            &stmt_name,
+            &tokens[idx..],
+            stmt_pos_line,
+            stmt_pos_col,
+            line,
+        )?;
+
+        // Append EXIT to terminate the temporary code buffer.
         let exit_xt = self.vm.lookup("EXIT").ok_or_else(|| {
             make_err(TbxError::UndefinedSymbol {
                 name: "EXIT".into(),
             })
         })?;
-
-        // Save the current dictionary pointer to use as the buffer start.
-        let buf_start = self.vm.dp;
-
-        // Build temporary code buffer:
-        //   Xt(LIT_MARKER)
-        //   [arg_cells]
-        //   For compiled words: Xt(CALL), Xt(stmt), Int(arity), Int(0)
-        //   For primitives:     Xt(stmt)  (dispatched directly by the inner interpreter)
-        //   Xt(DROP_TO_MARKER)
-        //   Xt(EXIT)
-        self.vm
-            .dict_write(Cell::Xt(lit_marker_xt))
-            .map_err(&make_err)?;
-        for cell in arg_cells {
-            self.vm.dict_write(cell).map_err(&make_err)?;
-        }
-        if stmt_is_word {
-            self.vm.dict_write(Cell::Xt(call_xt)).map_err(&make_err)?;
-            self.vm.dict_write(Cell::Xt(stmt_xt)).map_err(&make_err)?;
-            self.vm
-                .dict_write(Cell::Int(arity as i64))
-                .map_err(&make_err)?;
-            self.vm.dict_write(Cell::Int(0)).map_err(&make_err)?;
-        } else {
-            self.vm.dict_write(Cell::Xt(stmt_xt)).map_err(&make_err)?;
-        }
-        self.vm
-            .dict_write(Cell::Xt(drop_to_marker_xt))
-            .map_err(&make_err)?;
         self.vm.dict_write(Cell::Xt(exit_xt)).map_err(&make_err)?;
 
         // Save VM state snapshots for rollback on error.
@@ -303,12 +211,7 @@ impl Interpreter {
         line: usize,
         col: usize,
     ) -> Result<(), InterpreterError> {
-        let make_err = |e: TbxError| InterpreterError {
-            line,
-            col,
-            source_line: source_line.to_string(),
-            kind: e,
-        };
+        let make_err = |e: TbxError| InterpreterError::new(line, col, source_line, e);
 
         if self.compile_state.is_some() {
             return Err(make_err(TbxError::InvalidExpression {
@@ -359,12 +262,7 @@ impl Interpreter {
         line: usize,
         col: usize,
     ) -> Result<(), InterpreterError> {
-        let make_err = |e: TbxError| InterpreterError {
-            line,
-            col,
-            source_line: source_line.to_string(),
-            kind: e,
-        };
+        let make_err = |e: TbxError| InterpreterError::new(line, col, source_line, e);
 
         // Write EXIT to terminate the word body.
         let exit_xt = self.vm.lookup("EXIT").ok_or_else(|| {
@@ -393,57 +291,55 @@ impl Interpreter {
         }
     }
 
-    fn handle_compile_stmt_to_dict(
+    /// Write a single statement and its arguments to the dictionary.
+    ///
+    /// Emits: `LIT_MARKER [arg_cells] (CALL stmt arity 0 | stmt) DROP_TO_MARKER`
+    ///
+    /// This is used both during interpretation (followed by `EXIT` + run) and during
+    /// compilation (within a DEF body; `EXIT` is written by `handle_end`).
+    fn write_stmt_to_dict(
         &mut self,
-        tokens: &[SpannedToken],
-        stmt_idx: usize,
+        stmt_name: &str,
+        arg_tokens: &[SpannedToken],
+        err_line: usize,
+        err_col: usize,
         source_line: &str,
-        line: usize,
-        col: usize,
     ) -> Result<(), InterpreterError> {
-        let make_err = |e: TbxError| InterpreterError {
-            line,
-            col,
-            source_line: source_line.to_string(),
-            kind: e,
-        };
-
-        let stmt_tok = &tokens[stmt_idx];
-        let stmt_name = match &stmt_tok.token {
-            Token::Ident(name) => name.clone(),
-            _ => return Ok(()),
-        };
-        let arg_tokens = &tokens[stmt_idx + 1..];
+        let make_err = |e: TbxError| InterpreterError::new(err_line, err_col, source_line, e);
 
         // Look up the statement word.
-        let stmt_xt = self.vm.lookup(&stmt_name).ok_or_else(|| {
+        let stmt_xt = self.vm.lookup(stmt_name).ok_or_else(|| {
             make_err(TbxError::UndefinedSymbol {
-                name: stmt_name.clone(),
+                name: stmt_name.to_string(),
             })
         })?;
 
-        // Reject system-internal words.
+        // Reject system-internal words from user code.
         let stmt_flags = self.vm.headers[stmt_xt.index()].flags;
         if stmt_flags & FLAG_SYSTEM != 0 {
             return Err(make_err(TbxError::UndefinedSymbol {
-                name: stmt_name.clone(),
+                name: stmt_name.to_string(),
             }));
         }
 
-        // Compile the argument expression.
+        // Compile the argument expression to a cell sequence.
         let arg_cells = {
             let mut compiler = ExprCompiler::new(&mut self.vm);
             compiler.compile_expr(arg_tokens).map_err(&make_err)?
         };
 
+        // Determine arity from top-level comma count.
         let arity = count_top_level_arity(arg_tokens).map_err(&make_err)?;
 
+        // Check whether the statement is a compiled word (needs CALL with arity/locals)
+        // or a primitive/other (called directly by placing Xt in the code stream).
         let stmt_is_word = matches!(
             self.vm.headers[stmt_xt.index()].kind,
             crate::dict::EntryKind::Word(_)
         );
 
-        // Look up required system words.
+        // Look up required system words for building the code buffer.
+        // These must always be present after init_vm(); return a proper error if missing.
         let lit_marker_xt = self.vm.lookup("LIT_MARKER").ok_or_else(|| {
             make_err(TbxError::UndefinedSymbol {
                 name: "LIT_MARKER".into(),
@@ -460,7 +356,12 @@ impl Interpreter {
             })
         })?;
 
-        // Write to dictionary (no EXIT here — END will write it).
+        // Build code sequence:
+        //   Xt(LIT_MARKER)
+        //   [arg_cells]
+        //   For compiled words: Xt(CALL), Xt(stmt), Int(arity), Int(0)
+        //   For primitives:     Xt(stmt)  (dispatched directly by the inner interpreter)
+        //   Xt(DROP_TO_MARKER)
         self.vm
             .dict_write(Cell::Xt(lit_marker_xt))
             .map_err(&make_err)?;
