@@ -294,6 +294,12 @@ impl Interpreter {
             kind: e,
         };
 
+        if self.compile_state.is_some() {
+            return Err(make_err(TbxError::InvalidExpression {
+                reason: "nested DEF is not allowed",
+            }));
+        }
+
         // Next token must be the word name.
         let name = match arg_tokens.first() {
             Some(st) => match &st.token {
@@ -620,5 +626,13 @@ GREET";
         // END is not in compile mode so it goes to the normal lookup path.
         // It may be undefined — just check it doesn't panic.
         let _ = interp.exec_line("END");
+    }
+
+    #[test]
+    fn test_nested_def_is_error() {
+        let mut interp = Interpreter::new();
+        let src = "DEF OUTER\nDEF INNER\nEND\nEND";
+        let result = interp.exec_source(src);
+        assert!(result.is_err());
     }
 }
