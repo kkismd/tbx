@@ -346,6 +346,31 @@ pub fn halt_prim(_vm: &mut VM) -> Result<(), TbxError> {
     Err(TbxError::Halted)
 }
 
+/// NEGATE — negate the numeric value on top of the data stack.
+///
+/// - `Cell::Int(n)` → `Cell::Int(-n)` (returns `IntegerOverflow` for `i64::MIN`)
+/// - `Cell::Float(v)` → `Cell::Float(-v)`
+/// - any other type → `TbxError::TypeError`
+pub fn negate_prim(vm: &mut VM) -> Result<(), TbxError> {
+    let val = vm.pop()?;
+    match val {
+        Cell::Int(n) => {
+            let result = n.checked_neg().ok_or(TbxError::IntegerOverflow)?;
+            vm.push(Cell::Int(result))?;
+        }
+        Cell::Float(v) => {
+            vm.push(Cell::Float(-v))?;
+        }
+        other => {
+            return Err(TbxError::TypeError {
+                expected: "Int or Float",
+                got: other.type_name(),
+            });
+        }
+    }
+    Ok(())
+}
+
 /// LITERAL — compile a literal value into the dictionary as LIT + value (2 cells).
 pub fn literal_prim(vm: &mut VM) -> Result<(), TbxError> {
     let value = vm.pop()?;
@@ -377,6 +402,7 @@ pub fn register_all(vm: &mut VM) {
     vm.register(WordEntry::new_primitive("GE", ge_prim));
     vm.register(WordEntry::new_primitive("AND", and_prim));
     vm.register(WordEntry::new_primitive("OR", or_prim));
+    vm.register(WordEntry::new_primitive("NEGATE", negate_prim));
     vm.register(WordEntry::new_primitive("PUTSTR", putstr_prim));
     vm.register(WordEntry::new_primitive("PUTCHR", putchr_prim));
     vm.register(WordEntry::new_primitive("PUTDEC", putdec_prim));
