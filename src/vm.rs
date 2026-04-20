@@ -1517,4 +1517,28 @@ mod tests {
             Err(crate::error::TbxError::StackUnderflow)
         ));
     }
+
+    // --- integration tests ---
+
+    #[test]
+    fn test_run_putdec_outputs_number() {
+        // Verify that a program of [LIT 42 PUTDEC EXIT] writes "42" to the output buffer.
+        let mut vm = VM::new();
+        crate::primitives::register_all(&mut vm);
+
+        let lit_xt = vm.lookup("LIT").unwrap();
+        let putdec_xt = vm.lookup("PUTDEC").unwrap();
+        let exit_xt = vm.lookup("EXIT").unwrap();
+
+        let start = vm.dp;
+        vm.dict_write(Cell::Xt(lit_xt)).unwrap();
+        vm.dict_write(Cell::Int(42)).unwrap();
+        vm.dict_write(Cell::Xt(putdec_xt)).unwrap();
+        vm.dict_write(Cell::Xt(exit_xt)).unwrap();
+
+        vm.run(start).unwrap();
+
+        assert_eq!(vm.take_output(), "42");
+        assert_eq!(vm.pop(), Err(crate::error::TbxError::StackUnderflow));
+    }
 }
