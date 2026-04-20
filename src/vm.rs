@@ -125,7 +125,89 @@ impl VM {
         self.data_stack.pop().ok_or(TbxError::StackUnderflow)
     }
 
-    /// Read a cell from the dictionary at the given index, with bounds checking.
+    /// Pop an `Int` value from the data stack.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Err(TbxError::StackUnderflow)` if the stack is empty.
+    /// Returns `Err(TbxError::TypeError)` if the top value is not `Cell::Int`.
+    pub fn pop_int(&mut self) -> Result<i64, TbxError> {
+        match self.pop()? {
+            Cell::Int(n) => Ok(n),
+            other => Err(TbxError::TypeError {
+                expected: "Int",
+                got: other.type_name(),
+            }),
+        }
+    }
+
+    /// Pop a `Bool` value from the data stack.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Err(TbxError::StackUnderflow)` if the stack is empty.
+    /// Returns `Err(TbxError::TypeError)` if the top value is not `Cell::Bool`.
+    pub fn pop_bool(&mut self) -> Result<bool, TbxError> {
+        match self.pop()? {
+            Cell::Bool(b) => Ok(b),
+            other => Err(TbxError::TypeError {
+                expected: "Bool",
+                got: other.type_name(),
+            }),
+        }
+    }
+
+    /// Pop a `StringDesc` value from the data stack, returning its pool index.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Err(TbxError::StackUnderflow)` if the stack is empty.
+    /// Returns `Err(TbxError::TypeError)` if the top value is not `Cell::StringDesc`.
+    pub fn pop_string_desc(&mut self) -> Result<usize, TbxError> {
+        match self.pop()? {
+            Cell::StringDesc(idx) => Ok(idx),
+            other => Err(TbxError::TypeError {
+                expected: "StringDesc",
+                got: other.type_name(),
+            }),
+        }
+    }
+
+    /// Pop an `Xt` value from the data stack.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Err(TbxError::StackUnderflow)` if the stack is empty.
+    /// Returns `Err(TbxError::TypeError)` if the top value is not `Cell::Xt`.
+    pub fn pop_xt(&mut self) -> Result<Xt, TbxError> {
+        match self.pop()? {
+            Cell::Xt(xt) => Ok(xt),
+            other => Err(TbxError::TypeError {
+                expected: "Xt",
+                got: other.type_name(),
+            }),
+        }
+    }
+
+    /// Pop a numeric value (`Int` or `Float`) from the data stack.
+    ///
+    /// Returns the cell as-is if it is `Cell::Int` or `Cell::Float`.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Err(TbxError::StackUnderflow)` if the stack is empty.
+    /// Returns `Err(TbxError::TypeError)` if the top value is neither `Int` nor `Float`.
+    pub fn pop_number(&mut self) -> Result<Cell, TbxError> {
+        let cell = self.pop()?;
+        match &cell {
+            Cell::Int(_) | Cell::Float(_) => Ok(cell),
+            other => Err(TbxError::TypeError {
+                expected: "number",
+                got: other.type_name(),
+            }),
+        }
+    }
+
     ///
     /// # Errors
     ///
@@ -1287,5 +1369,125 @@ mod tests {
             "expected IndexOutOfBounds on overflow, got {:?}",
             result
         );
+    }
+
+    // --- pop_int tests ---
+
+    #[test]
+    fn test_pop_int_ok() {
+        let mut vm = VM::new();
+        vm.push(Cell::Int(42));
+        assert_eq!(vm.pop_int(), Ok(42));
+    }
+
+    #[test]
+    fn test_pop_int_underflow() {
+        let mut vm = VM::new();
+        assert!(matches!(
+            vm.pop_int(),
+            Err(crate::error::TbxError::StackUnderflow)
+        ));
+    }
+
+    #[test]
+    fn test_pop_int_type_error() {
+        let mut vm = VM::new();
+        vm.push(Cell::Bool(true));
+        assert!(matches!(
+            vm.pop_int(),
+            Err(crate::error::TbxError::TypeError { .. })
+        ));
+    }
+
+    // --- pop_bool tests ---
+
+    #[test]
+    fn test_pop_bool_ok() {
+        let mut vm = VM::new();
+        vm.push(Cell::Bool(true));
+        assert_eq!(vm.pop_bool(), Ok(true));
+    }
+
+    #[test]
+    fn test_pop_bool_type_error() {
+        let mut vm = VM::new();
+        vm.push(Cell::Int(1));
+        assert!(matches!(
+            vm.pop_bool(),
+            Err(crate::error::TbxError::TypeError { .. })
+        ));
+    }
+
+    // --- pop_string_desc tests ---
+
+    #[test]
+    fn test_pop_string_desc_ok() {
+        let mut vm = VM::new();
+        vm.push(Cell::StringDesc(7));
+        assert_eq!(vm.pop_string_desc(), Ok(7));
+    }
+
+    #[test]
+    fn test_pop_string_desc_type_error() {
+        let mut vm = VM::new();
+        vm.push(Cell::Int(0));
+        assert!(matches!(
+            vm.pop_string_desc(),
+            Err(crate::error::TbxError::TypeError { .. })
+        ));
+    }
+
+    // --- pop_xt tests ---
+
+    #[test]
+    fn test_pop_xt_ok() {
+        let mut vm = VM::new();
+        vm.push(Cell::Xt(Xt(3)));
+        assert_eq!(vm.pop_xt(), Ok(Xt(3)));
+    }
+
+    #[test]
+    fn test_pop_xt_type_error() {
+        let mut vm = VM::new();
+        vm.push(Cell::Int(3));
+        assert!(matches!(
+            vm.pop_xt(),
+            Err(crate::error::TbxError::TypeError { .. })
+        ));
+    }
+
+    // --- pop_number tests ---
+
+    #[test]
+    fn test_pop_number_int() {
+        let mut vm = VM::new();
+        vm.push(Cell::Int(10));
+        assert_eq!(vm.pop_number(), Ok(Cell::Int(10)));
+    }
+
+    #[test]
+    fn test_pop_number_float() {
+        let mut vm = VM::new();
+        vm.push(Cell::Float(3.14));
+        assert_eq!(vm.pop_number(), Ok(Cell::Float(3.14)));
+    }
+
+    #[test]
+    fn test_pop_number_type_error() {
+        let mut vm = VM::new();
+        vm.push(Cell::Bool(false));
+        assert!(matches!(
+            vm.pop_number(),
+            Err(crate::error::TbxError::TypeError { .. })
+        ));
+    }
+
+    #[test]
+    fn test_pop_number_underflow() {
+        let mut vm = VM::new();
+        assert!(matches!(
+            vm.pop_number(),
+            Err(crate::error::TbxError::StackUnderflow)
+        ));
     }
 }
