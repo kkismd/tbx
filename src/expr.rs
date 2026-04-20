@@ -899,4 +899,65 @@ mod tests {
             ]
         );
     }
+
+    // ------------------------------------------------------------------
+    // Error: & applied to a function name (non-variable) → TypeError
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn test_address_of_function_error() {
+        let mut vm = make_vm();
+        // Register "F" as a compiled word (not a variable).
+        vm.register(WordEntry::new_word("F", 0));
+
+        let tokens = lex("&F");
+        let err = ExprCompiler::new(&mut vm)
+            .compile_expr(&tokens)
+            .unwrap_err();
+        assert!(
+            matches!(
+                err,
+                TbxError::TypeError { expected, .. } if expected.contains("variable identifier after unary &")
+            ),
+            "expected TypeError for & applied to function, got: {err:?}"
+        );
+    }
+
+    // ------------------------------------------------------------------
+    // Error: & applied to a non-identifier token (e.g. integer literal) → TypeError
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn test_address_of_non_ident_error() {
+        let mut vm = make_vm();
+        // "&123" — the token after & is an integer literal, not an identifier.
+        let tokens = lex("&123");
+        let err = ExprCompiler::new(&mut vm)
+            .compile_expr(&tokens)
+            .unwrap_err();
+        assert!(
+            matches!(
+                err,
+                TbxError::TypeError { expected, .. } if expected.contains("identifier after unary &")
+            ),
+            "expected TypeError for & applied to non-identifier, got: {err:?}"
+        );
+    }
+
+    // ------------------------------------------------------------------
+    // Error: & applied to an undefined symbol → UndefinedSymbol
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn test_address_of_undefined_error() {
+        let mut vm = make_vm();
+        let tokens = lex("&NOEXIST");
+        let err = ExprCompiler::new(&mut vm)
+            .compile_expr(&tokens)
+            .unwrap_err();
+        assert!(
+            matches!(err, TbxError::UndefinedSymbol { ref name } if name == "NOEXIST"),
+            "expected UndefinedSymbol for &NOEXIST, got: {err:?}"
+        );
+    }
 }
