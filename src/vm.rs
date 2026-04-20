@@ -1523,8 +1523,8 @@ mod tests {
     #[test]
     fn test_run_putdec_outputs_number() {
         // Verify that a program of [LIT 42 PUTDEC EXIT] writes "42" to the output buffer.
-        let mut vm = VM::new();
-        crate::primitives::register_all(&mut vm);
+        // Uses init_vm() to also validate the full initialization (register_all + seal_sys).
+        let mut vm = crate::init_vm();
 
         let lit_xt = vm.lookup("LIT").unwrap();
         let putdec_xt = vm.lookup("PUTDEC").unwrap();
