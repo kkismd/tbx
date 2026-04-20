@@ -1,5 +1,5 @@
 use crate::cell::{Cell, ReturnFrame, Xt};
-use crate::constants::{MAX_DICTIONARY_CELLS, MAX_RETURN_STACK_DEPTH};
+use crate::constants::{MAX_DATA_STACK_DEPTH, MAX_DICTIONARY_CELLS, MAX_RETURN_STACK_DEPTH};
 use crate::dict::WordEntry;
 use crate::error::TbxError;
 
@@ -112,8 +112,20 @@ impl VM {
     }
 
     /// Push a value onto the data stack.
-    pub fn push(&mut self, cell: Cell) {
+    ///
+    /// # Errors
+    ///
+    /// Returns `Err(TbxError::DataStackOverflow)` if the data stack is at or above
+    /// `MAX_DATA_STACK_DEPTH`.
+    pub fn push(&mut self, cell: Cell) -> Result<(), TbxError> {
+        if self.data_stack.len() >= MAX_DATA_STACK_DEPTH {
+            return Err(TbxError::DataStackOverflow {
+                depth: self.data_stack.len(),
+                limit: MAX_DATA_STACK_DEPTH,
+            });
+        }
         self.data_stack.push(cell);
+        Ok(())
     }
 
     /// Pop a value from the data stack.
@@ -452,7 +464,7 @@ impl VM {
                             });
                             self.bp = self.data_stack.len() - arity;
                             for _ in 0..local_count {
-                                self.push(Cell::Int(0));
+                                self.push(Cell::Int(0))?;
                             }
                             self.pc = offset;
                         }
@@ -485,7 +497,7 @@ impl VM {
                             saved_bp,
                         } => {
                             self.data_stack.truncate(self.bp);
-                            self.push(retval);
+                            self.push(retval)?;
                             self.pc = return_pc;
                             self.bp = saved_bp;
                         }
@@ -508,16 +520,16 @@ impl VM {
                 EntryKind::Lit => {
                     self.pc += 1;
                     let literal = self.dict_read(self.pc)?;
-                    self.push(literal);
+                    self.push(literal)?;
                     self.pc += 1;
                 }
                 EntryKind::Variable(idx) => {
-                    self.push(Cell::DictAddr(idx));
+                    self.push(Cell::DictAddr(idx))?;
                     self.pc += 1;
                 }
                 EntryKind::Constant(ref c) => {
                     let val = c.clone();
-                    self.push(val);
+                    self.push(val)?;
                     self.pc += 1;
                 }
             }
@@ -605,7 +617,7 @@ mod tests {
     #[test]
     fn test_push_pop() {
         let mut vm = VM::new();
-        vm.push(Cell::Int(42));
+        vm.push(Cell::Int(42)).unwrap();
         assert_eq!(vm.pop(), Ok(Cell::Int(42)));
         assert_eq!(vm.pop(), Err(crate::error::TbxError::StackUnderflow));
     }
@@ -814,7 +826,7 @@ mod tests {
         vm.dict_write(Cell::Xt(drop_xt)).unwrap();
         vm.dict_write(Cell::Xt(exit_xt)).unwrap();
 
-        vm.push(Cell::Int(99));
+        vm.push(Cell::Int(99)).unwrap();
         vm.run(0).unwrap();
 
         // DROP should have removed the 99
@@ -869,11 +881,10 @@ mod tests {
         vm.dict_write(Cell::Xt(dup_xt)).unwrap(); // [5]
         vm.dict_write(Cell::Xt(exit_xt)).unwrap(); // [6]
 
-        vm.push(Cell::Int(7)); // argument
+        vm.push(Cell::Int(7)).unwrap(); // argument
         vm.run(0).unwrap();
 
         // DUP duplicated the arg, but EXIT truncates to bp.
-        // arity=1, so bp points at the arg. EXIT truncates everything from bp onward.
         // Result: stack is empty (void return clears args)
         assert!(vm.data_stack.is_empty());
     }
@@ -910,7 +921,7 @@ mod tests {
         vm.dict_write(Cell::Int(100)).unwrap(); // [6]
         vm.dict_write(Cell::Xt(return_val_xt)).unwrap(); // [7]
 
-        vm.push(Cell::Int(7)); // argument (will be cleaned up)
+        vm.push(Cell::Int(7)).unwrap(); // argument (will be cleaned up)
         vm.run(0).unwrap();
 
         // RETURN_VAL should leave only the return value (100) on the stack
@@ -950,8 +961,8 @@ mod tests {
         vm.dict_write(Cell::Int(42)).unwrap(); // [6]
         vm.dict_write(Cell::Xt(return_val_xt)).unwrap(); // [7]
 
-        vm.push(Cell::Int(10)); // arg a
-        vm.push(Cell::Int(20)); // arg b
+        vm.push(Cell::Int(10)).unwrap(); // arg a
+        vm.push(Cell::Int(20)).unwrap(); // arg b
         vm.run(0).unwrap();
 
         // args (10, 20) and local (0) should be cleaned up.
@@ -1377,7 +1388,7 @@ mod tests {
     #[test]
     fn test_pop_int_ok() {
         let mut vm = VM::new();
-        vm.push(Cell::Int(42));
+        vm.push(Cell::Int(42)).unwrap();
         assert_eq!(vm.pop_int(), Ok(42));
     }
 
@@ -1393,7 +1404,7 @@ mod tests {
     #[test]
     fn test_pop_int_type_error() {
         let mut vm = VM::new();
-        vm.push(Cell::Bool(true));
+        vm.push(Cell::Bool(true)).unwrap();
         assert!(matches!(
             vm.pop_int(),
             Err(crate::error::TbxError::TypeError { .. })
@@ -1405,14 +1416,14 @@ mod tests {
     #[test]
     fn test_pop_bool_ok() {
         let mut vm = VM::new();
-        vm.push(Cell::Bool(true));
+        vm.push(Cell::Bool(true)).unwrap();
         assert_eq!(vm.pop_bool(), Ok(true));
     }
 
     #[test]
     fn test_pop_bool_type_error() {
         let mut vm = VM::new();
-        vm.push(Cell::Int(1));
+        vm.push(Cell::Int(1)).unwrap();
         assert!(matches!(
             vm.pop_bool(),
             Err(crate::error::TbxError::TypeError { .. })
@@ -1433,14 +1444,14 @@ mod tests {
     #[test]
     fn test_pop_string_desc_ok() {
         let mut vm = VM::new();
-        vm.push(Cell::StringDesc(7));
+        vm.push(Cell::StringDesc(7)).unwrap();
         assert_eq!(vm.pop_string_desc(), Ok(7));
     }
 
     #[test]
     fn test_pop_string_desc_type_error() {
         let mut vm = VM::new();
-        vm.push(Cell::Int(0));
+        vm.push(Cell::Int(0)).unwrap();
         assert!(matches!(
             vm.pop_string_desc(),
             Err(crate::error::TbxError::TypeError { .. })
@@ -1461,14 +1472,14 @@ mod tests {
     #[test]
     fn test_pop_xt_ok() {
         let mut vm = VM::new();
-        vm.push(Cell::Xt(Xt(3)));
+        vm.push(Cell::Xt(Xt(3))).unwrap();
         assert_eq!(vm.pop_xt(), Ok(Xt(3)));
     }
 
     #[test]
     fn test_pop_xt_type_error() {
         let mut vm = VM::new();
-        vm.push(Cell::Int(3));
+        vm.push(Cell::Int(3)).unwrap();
         assert!(matches!(
             vm.pop_xt(),
             Err(crate::error::TbxError::TypeError { .. })
@@ -1488,21 +1499,21 @@ mod tests {
     #[test]
     fn test_pop_number_int() {
         let mut vm = VM::new();
-        vm.push(Cell::Int(10));
+        vm.push(Cell::Int(10)).unwrap();
         assert_eq!(vm.pop_number(), Ok(Cell::Int(10)));
     }
 
     #[test]
     fn test_pop_number_float() {
         let mut vm = VM::new();
-        vm.push(Cell::Float(2.5));
+        vm.push(Cell::Float(2.5)).unwrap();
         assert_eq!(vm.pop_number(), Ok(Cell::Float(2.5)));
     }
 
     #[test]
     fn test_pop_number_type_error() {
         let mut vm = VM::new();
-        vm.push(Cell::Bool(false));
+        vm.push(Cell::Bool(false)).unwrap();
         assert!(matches!(
             vm.pop_number(),
             Err(crate::error::TbxError::TypeError { .. })
@@ -1540,5 +1551,25 @@ mod tests {
 
         assert_eq!(vm.take_output(), "42");
         assert_eq!(vm.pop(), Err(crate::error::TbxError::StackUnderflow));
+    }
+
+    #[test]
+    fn test_data_stack_overflow() {
+        // Verify that pushing beyond MAX_DATA_STACK_DEPTH returns DataStackOverflow.
+        use crate::constants::MAX_DATA_STACK_DEPTH;
+        let mut vm = VM::new();
+        vm.data_stack.resize(MAX_DATA_STACK_DEPTH, Cell::Int(0));
+        let result = vm.push(Cell::Int(0));
+        assert!(
+            matches!(
+                result,
+                Err(crate::error::TbxError::DataStackOverflow {
+                    depth,
+                    limit
+                }) if depth == MAX_DATA_STACK_DEPTH && limit == MAX_DATA_STACK_DEPTH
+            ),
+            "expected DataStackOverflow, got {:?}",
+            result
+        );
     }
 }
