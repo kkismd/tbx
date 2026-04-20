@@ -12,15 +12,15 @@ pub fn drop_prim(vm: &mut VM) -> Result<(), TbxError> {
 
 /// LIT_MARKER — push a Cell::Marker sentinel onto the data stack.
 pub fn lit_marker_prim(vm: &mut VM) -> Result<(), TbxError> {
-    vm.push(Cell::Marker);
+    vm.push(Cell::Marker)?;
     Ok(())
 }
 
 /// DUP — duplicate the top element of the data stack.
 pub fn dup_prim(vm: &mut VM) -> Result<(), TbxError> {
     let top = vm.pop()?;
-    vm.push(top.clone());
-    vm.push(top);
+    vm.push(top.clone())?;
+    vm.push(top)?;
     Ok(())
 }
 
@@ -28,8 +28,8 @@ pub fn dup_prim(vm: &mut VM) -> Result<(), TbxError> {
 pub fn swap_prim(vm: &mut VM) -> Result<(), TbxError> {
     let a = vm.pop()?;
     let b = vm.pop()?;
-    vm.push(a);
-    vm.push(b);
+    vm.push(a)?;
+    vm.push(b)?;
     Ok(())
 }
 
@@ -39,12 +39,12 @@ pub fn fetch_prim(vm: &mut VM) -> Result<(), TbxError> {
     match addr {
         Cell::DictAddr(a) => {
             let value = vm.dict_read(a)?;
-            vm.push(value);
+            vm.push(value)?;
             Ok(())
         }
         Cell::StackAddr(a) => {
             let value = vm.local_read(a)?;
-            vm.push(value);
+            vm.push(value)?;
             Ok(())
         }
         _ => Err(TbxError::TypeError {
@@ -78,10 +78,10 @@ pub fn add_prim(vm: &mut VM) -> Result<(), TbxError> {
     let b = vm.pop_number()?;
     let a = vm.pop_number()?;
     match (a, b) {
-        (Cell::Int(x), Cell::Int(y)) => vm.push(Cell::Int(x + y)),
-        (Cell::Float(x), Cell::Float(y)) => vm.push(Cell::Float(x + y)),
-        (Cell::Int(x), Cell::Float(y)) => vm.push(Cell::Float(x as f64 + y)),
-        (Cell::Float(x), Cell::Int(y)) => vm.push(Cell::Float(x + y as f64)),
+        (Cell::Int(x), Cell::Int(y)) => vm.push(Cell::Int(x + y))?,
+        (Cell::Float(x), Cell::Float(y)) => vm.push(Cell::Float(x + y))?,
+        (Cell::Int(x), Cell::Float(y)) => vm.push(Cell::Float(x as f64 + y))?,
+        (Cell::Float(x), Cell::Int(y)) => vm.push(Cell::Float(x + y as f64))?,
         _ => unreachable!("pop_number guarantees Int or Float"),
     }
     Ok(())
@@ -91,10 +91,10 @@ pub fn sub_prim(vm: &mut VM) -> Result<(), TbxError> {
     let b = vm.pop_number()?;
     let a = vm.pop_number()?;
     match (a, b) {
-        (Cell::Int(x), Cell::Int(y)) => vm.push(Cell::Int(x - y)),
-        (Cell::Float(x), Cell::Float(y)) => vm.push(Cell::Float(x - y)),
-        (Cell::Int(x), Cell::Float(y)) => vm.push(Cell::Float(x as f64 - y)),
-        (Cell::Float(x), Cell::Int(y)) => vm.push(Cell::Float(x - y as f64)),
+        (Cell::Int(x), Cell::Int(y)) => vm.push(Cell::Int(x - y))?,
+        (Cell::Float(x), Cell::Float(y)) => vm.push(Cell::Float(x - y))?,
+        (Cell::Int(x), Cell::Float(y)) => vm.push(Cell::Float(x as f64 - y))?,
+        (Cell::Float(x), Cell::Int(y)) => vm.push(Cell::Float(x - y as f64))?,
         _ => unreachable!("pop_number guarantees Int or Float"),
     }
     Ok(())
@@ -104,10 +104,10 @@ pub fn mul_prim(vm: &mut VM) -> Result<(), TbxError> {
     let b = vm.pop_number()?;
     let a = vm.pop_number()?;
     match (a, b) {
-        (Cell::Int(x), Cell::Int(y)) => vm.push(Cell::Int(x * y)),
-        (Cell::Float(x), Cell::Float(y)) => vm.push(Cell::Float(x * y)),
-        (Cell::Int(x), Cell::Float(y)) => vm.push(Cell::Float(x as f64 * y)),
-        (Cell::Float(x), Cell::Int(y)) => vm.push(Cell::Float(x * y as f64)),
+        (Cell::Int(x), Cell::Int(y)) => vm.push(Cell::Int(x * y))?,
+        (Cell::Float(x), Cell::Float(y)) => vm.push(Cell::Float(x * y))?,
+        (Cell::Int(x), Cell::Float(y)) => vm.push(Cell::Float(x as f64 * y))?,
+        (Cell::Float(x), Cell::Int(y)) => vm.push(Cell::Float(x * y as f64))?,
         _ => unreachable!("pop_number guarantees Int or Float"),
     }
     Ok(())
@@ -119,13 +119,13 @@ pub fn div_prim(vm: &mut VM) -> Result<(), TbxError> {
     let a = vm.pop_number()?;
     match (a, b) {
         (Cell::Int(_), Cell::Int(0)) => return Err(TbxError::DivisionByZero),
-        (Cell::Int(x), Cell::Int(y)) => vm.push(Cell::Int(x / y)),
+        (Cell::Int(x), Cell::Int(y)) => vm.push(Cell::Int(x / y))?,
         (Cell::Float(_), Cell::Float(y)) if y == 0.0 => return Err(TbxError::DivisionByZero),
-        (Cell::Float(x), Cell::Float(y)) => vm.push(Cell::Float(x / y)),
+        (Cell::Float(x), Cell::Float(y)) => vm.push(Cell::Float(x / y))?,
         (Cell::Int(_), Cell::Float(y)) if y == 0.0 => return Err(TbxError::DivisionByZero),
-        (Cell::Int(x), Cell::Float(y)) => vm.push(Cell::Float(x as f64 / y)),
+        (Cell::Int(x), Cell::Float(y)) => vm.push(Cell::Float(x as f64 / y))?,
         (Cell::Float(_), Cell::Int(0)) => return Err(TbxError::DivisionByZero),
-        (Cell::Float(x), Cell::Int(y)) => vm.push(Cell::Float(x / y as f64)),
+        (Cell::Float(x), Cell::Int(y)) => vm.push(Cell::Float(x / y as f64))?,
         _ => unreachable!("pop_number guarantees Int or Float"),
     }
     Ok(())
@@ -137,7 +137,7 @@ pub fn mod_prim(vm: &mut VM) -> Result<(), TbxError> {
     if b == 0 {
         return Err(TbxError::DivisionByZero);
     }
-    vm.push(Cell::Int(a % b));
+    vm.push(Cell::Int(a % b))?;
     Ok(())
 }
 
@@ -151,7 +151,7 @@ pub fn eq_prim(vm: &mut VM) -> Result<(), TbxError> {
         (Cell::Float(x), Cell::Int(y)) => *x == (*y as f64),
         _ => a == b,
     };
-    vm.push(Cell::Bool(result));
+    vm.push(Cell::Bool(result))?;
     Ok(())
 }
 
@@ -165,7 +165,7 @@ pub fn neq_prim(vm: &mut VM) -> Result<(), TbxError> {
         (Cell::Float(x), Cell::Int(y)) => *x != (*y as f64),
         _ => a != b,
     };
-    vm.push(Cell::Bool(result));
+    vm.push(Cell::Bool(result))?;
     Ok(())
 }
 
@@ -180,7 +180,7 @@ pub fn lt_prim(vm: &mut VM) -> Result<(), TbxError> {
         (Cell::Float(x), Cell::Int(y)) => *x < (*y as f64),
         _ => unreachable!("pop_number guarantees Int or Float"),
     };
-    vm.push(Cell::Bool(result));
+    vm.push(Cell::Bool(result))?;
     Ok(())
 }
 
@@ -195,7 +195,7 @@ pub fn gt_prim(vm: &mut VM) -> Result<(), TbxError> {
         (Cell::Float(x), Cell::Int(y)) => *x > (*y as f64),
         _ => unreachable!("pop_number guarantees Int or Float"),
     };
-    vm.push(Cell::Bool(result));
+    vm.push(Cell::Bool(result))?;
     Ok(())
 }
 
@@ -210,7 +210,7 @@ pub fn le_prim(vm: &mut VM) -> Result<(), TbxError> {
         (Cell::Float(x), Cell::Int(y)) => *x <= (*y as f64),
         _ => unreachable!("pop_number guarantees Int or Float"),
     };
-    vm.push(Cell::Bool(result));
+    vm.push(Cell::Bool(result))?;
     Ok(())
 }
 
@@ -225,7 +225,7 @@ pub fn ge_prim(vm: &mut VM) -> Result<(), TbxError> {
         (Cell::Float(x), Cell::Int(y)) => *x >= (*y as f64),
         _ => unreachable!("pop_number guarantees Int or Float"),
     };
-    vm.push(Cell::Bool(result));
+    vm.push(Cell::Bool(result))?;
     Ok(())
 }
 
@@ -233,7 +233,7 @@ pub fn ge_prim(vm: &mut VM) -> Result<(), TbxError> {
 pub fn and_prim(vm: &mut VM) -> Result<(), TbxError> {
     let b = vm.pop()?;
     let a = vm.pop()?;
-    vm.push(Cell::Bool(a.is_truthy() && b.is_truthy()));
+    vm.push(Cell::Bool(a.is_truthy() && b.is_truthy()))?;
     Ok(())
 }
 
@@ -241,7 +241,7 @@ pub fn and_prim(vm: &mut VM) -> Result<(), TbxError> {
 pub fn or_prim(vm: &mut VM) -> Result<(), TbxError> {
     let b = vm.pop()?;
     let a = vm.pop()?;
-    vm.push(Cell::Bool(a.is_truthy() || b.is_truthy()));
+    vm.push(Cell::Bool(a.is_truthy() || b.is_truthy()))?;
     Ok(())
 }
 
@@ -312,19 +312,19 @@ pub fn allot_prim(vm: &mut VM) -> Result<(), TbxError> {
     for _ in 0..count {
         vm.dict_write(Cell::None)?;
     }
-    vm.push(Cell::DictAddr(start));
+    vm.push(Cell::DictAddr(start))?;
     Ok(())
 }
 
 /// HERE — push the current dictionary pointer as a DictAddr.
 pub fn here_prim(vm: &mut VM) -> Result<(), TbxError> {
-    vm.push(Cell::DictAddr(vm.dp));
+    vm.push(Cell::DictAddr(vm.dp))?;
     Ok(())
 }
 
 /// STATE — push the current compile mode flag as an Int (0 = execute, 1 = compile).
 pub fn state_prim(vm: &mut VM) -> Result<(), TbxError> {
-    vm.push(Cell::Int(if vm.is_compiling { 1 } else { 0 }));
+    vm.push(Cell::Int(if vm.is_compiling { 1 } else { 0 }))?;
     Ok(())
 }
 
@@ -422,8 +422,8 @@ mod tests {
     #[test]
     fn test_drop_removes_top() {
         let mut vm = VM::new();
-        vm.push(Cell::Int(1));
-        vm.push(Cell::Int(2));
+        vm.push(Cell::Int(1)).unwrap();
+        vm.push(Cell::Int(2)).unwrap();
         drop_prim(&mut vm).unwrap();
         assert_eq!(vm.pop(), Ok(Cell::Int(1)));
     }
@@ -439,7 +439,7 @@ mod tests {
     #[test]
     fn test_dup_duplicates_top() {
         let mut vm = VM::new();
-        vm.push(Cell::Int(42));
+        vm.push(Cell::Int(42)).unwrap();
         dup_prim(&mut vm).unwrap();
         // Both copies must be on the stack; the original is below.
         assert_eq!(vm.pop(), Ok(Cell::Int(42)));
@@ -458,8 +458,8 @@ mod tests {
     #[test]
     fn test_swap_exchanges_top_two() {
         let mut vm = VM::new();
-        vm.push(Cell::Int(1));
-        vm.push(Cell::Int(2));
+        vm.push(Cell::Int(1)).unwrap();
+        vm.push(Cell::Int(2)).unwrap();
         swap_prim(&mut vm).unwrap();
         // After swap: 1 is on top, 2 is below.
         assert_eq!(vm.pop(), Ok(Cell::Int(1)));
@@ -475,7 +475,7 @@ mod tests {
     #[test]
     fn test_swap_underflow_one_element() {
         let mut vm = VM::new();
-        vm.push(Cell::Int(1));
+        vm.push(Cell::Int(1)).unwrap();
         assert_eq!(swap_prim(&mut vm), Err(TbxError::StackUnderflow));
     }
 
@@ -503,7 +503,7 @@ mod tests {
         vm.dict_write(Cell::Xt(drop_xt)).unwrap();
         vm.dict_write(Cell::Xt(exit_xt)).unwrap();
 
-        vm.push(Cell::Int(99));
+        vm.push(Cell::Int(99)).unwrap();
         vm.run(start).unwrap();
 
         // DROP must have consumed the only stack element.
@@ -514,7 +514,7 @@ mod tests {
     fn test_fetch_dict_addr() {
         let mut vm = VM::new();
         vm.dictionary.push(Cell::Int(123)); // dict[0] = 123
-        vm.push(Cell::DictAddr(0));
+        vm.push(Cell::DictAddr(0)).unwrap();
         fetch_prim(&mut vm).unwrap();
         assert_eq!(vm.pop(), Ok(Cell::Int(123)));
     }
@@ -523,10 +523,10 @@ mod tests {
     fn test_fetch_stack_addr() {
         // This test also verifies that fetch_prim correctly adds vm.bp to the address.
         let mut vm = VM::new();
-        vm.push(Cell::Int(10)); // data_stack[0] = 10
-        vm.push(Cell::Int(20)); // data_stack[1] = 20
+        vm.push(Cell::Int(10)).unwrap(); // data_stack[0] = 10
+        vm.push(Cell::Int(20)).unwrap(); // data_stack[1] = 20
         vm.bp = 1; // base pointer at index 1
-        vm.push(Cell::StackAddr(0)); // address of data_stack[bp + 0] = data_stack[1] = 20
+        vm.push(Cell::StackAddr(0)).unwrap(); // address of data_stack[bp + 0] = data_stack[1] = 20
         fetch_prim(&mut vm).unwrap();
         assert_eq!(vm.pop(), Ok(Cell::Int(20)));
     }
@@ -534,7 +534,7 @@ mod tests {
     #[test]
     fn test_fetch_type_error() {
         let mut vm = VM::new();
-        vm.push(Cell::Int(42)); // Not an address
+        vm.push(Cell::Int(42)).unwrap(); // Not an address
         assert_eq!(
             fetch_prim(&mut vm),
             Err(TbxError::TypeError {
@@ -554,8 +554,8 @@ mod tests {
     fn test_store_dict_addr() {
         let mut vm = VM::new();
         vm.dictionary.push(Cell::Int(0)); // dict[0] = 0
-        vm.push(Cell::Int(123)); // value to store
-        vm.push(Cell::DictAddr(0)); // address to store at
+        vm.push(Cell::Int(123)).unwrap(); // value to store
+        vm.push(Cell::DictAddr(0)).unwrap(); // address to store at
         store_prim(&mut vm).unwrap();
         assert_eq!(vm.dictionary[0], Cell::Int(123));
     }
@@ -563,10 +563,10 @@ mod tests {
     #[test]
     fn test_store_stack_addr() {
         let mut vm = VM::new();
-        vm.push(Cell::Int(0)); // data_stack[0] = 0
+        vm.push(Cell::Int(0)).unwrap(); // data_stack[0] = 0
         vm.bp = 0;
-        vm.push(Cell::Int(123)); // value to store
-        vm.push(Cell::StackAddr(0)); // address to store at
+        vm.push(Cell::Int(123)).unwrap(); // value to store
+        vm.push(Cell::StackAddr(0)).unwrap(); // address to store at
         store_prim(&mut vm).unwrap();
         assert_eq!(vm.data_stack[0], Cell::Int(123));
     }
@@ -574,8 +574,8 @@ mod tests {
     #[test]
     fn test_store_type_error() {
         let mut vm = VM::new();
-        vm.push(Cell::Int(123)); // value to store
-        vm.push(Cell::Int(0)); // Not an address
+        vm.push(Cell::Int(123)).unwrap(); // value to store
+        vm.push(Cell::Int(0)).unwrap(); // Not an address
         assert_eq!(
             store_prim(&mut vm),
             Err(TbxError::TypeError {
@@ -594,15 +594,15 @@ mod tests {
     #[test]
     fn test_store_underflow_one_value() {
         let mut vm = VM::new();
-        vm.push(Cell::Int(123)); // value to store
+        vm.push(Cell::Int(123)).unwrap(); // value to store
         assert_eq!(store_prim(&mut vm), Err(TbxError::StackUnderflow));
     }
 
     #[test]
     fn test_add_int() {
         let mut vm = VM::new();
-        vm.push(Cell::Int(2));
-        vm.push(Cell::Int(3));
+        vm.push(Cell::Int(2)).unwrap();
+        vm.push(Cell::Int(3)).unwrap();
         add_prim(&mut vm).unwrap();
         assert_eq!(vm.pop(), Ok(Cell::Int(5)));
     }
@@ -610,8 +610,8 @@ mod tests {
     #[test]
     fn test_add_float() {
         let mut vm = VM::new();
-        vm.push(Cell::Float(2.5));
-        vm.push(Cell::Float(3.5));
+        vm.push(Cell::Float(2.5)).unwrap();
+        vm.push(Cell::Float(3.5)).unwrap();
         add_prim(&mut vm).unwrap();
         assert_eq!(vm.pop(), Ok(Cell::Float(6.0)));
     }
@@ -619,8 +619,8 @@ mod tests {
     #[test]
     fn test_add_int_float() {
         let mut vm = VM::new();
-        vm.push(Cell::Int(2));
-        vm.push(Cell::Float(3.5));
+        vm.push(Cell::Int(2)).unwrap();
+        vm.push(Cell::Float(3.5)).unwrap();
         add_prim(&mut vm).unwrap();
         assert_eq!(vm.pop(), Ok(Cell::Float(5.5)));
     }
@@ -628,8 +628,8 @@ mod tests {
     #[test]
     fn test_add_float_int() {
         let mut vm = VM::new();
-        vm.push(Cell::Float(2.5));
-        vm.push(Cell::Int(3));
+        vm.push(Cell::Float(2.5)).unwrap();
+        vm.push(Cell::Int(3)).unwrap();
         add_prim(&mut vm).unwrap();
         assert_eq!(vm.pop(), Ok(Cell::Float(5.5)));
     }
@@ -637,8 +637,8 @@ mod tests {
     #[test]
     fn test_add_type_error() {
         let mut vm = VM::new();
-        vm.push(Cell::Int(2));
-        vm.push(Cell::Bool(true)); // Not a number
+        vm.push(Cell::Int(2)).unwrap();
+        vm.push(Cell::Bool(true)).unwrap(); // Not a number
         assert!(matches!(
             add_prim(&mut vm),
             Err(TbxError::TypeError {
@@ -653,8 +653,8 @@ mod tests {
     #[test]
     fn test_sub_int() {
         let mut vm = VM::new();
-        vm.push(Cell::Int(10));
-        vm.push(Cell::Int(3));
+        vm.push(Cell::Int(10)).unwrap();
+        vm.push(Cell::Int(3)).unwrap();
         sub_prim(&mut vm).unwrap();
         assert_eq!(vm.pop(), Ok(Cell::Int(7)));
     }
@@ -662,8 +662,8 @@ mod tests {
     #[test]
     fn test_sub_float() {
         let mut vm = VM::new();
-        vm.push(Cell::Float(5.5));
-        vm.push(Cell::Float(2.0));
+        vm.push(Cell::Float(5.5)).unwrap();
+        vm.push(Cell::Float(2.0)).unwrap();
         sub_prim(&mut vm).unwrap();
         assert_eq!(vm.pop(), Ok(Cell::Float(3.5)));
     }
@@ -671,8 +671,8 @@ mod tests {
     #[test]
     fn test_sub_int_float() {
         let mut vm = VM::new();
-        vm.push(Cell::Int(5));
-        vm.push(Cell::Float(1.5));
+        vm.push(Cell::Int(5)).unwrap();
+        vm.push(Cell::Float(1.5)).unwrap();
         sub_prim(&mut vm).unwrap();
         assert_eq!(vm.pop(), Ok(Cell::Float(3.5)));
     }
@@ -680,8 +680,8 @@ mod tests {
     #[test]
     fn test_sub_type_error() {
         let mut vm = VM::new();
-        vm.push(Cell::Bool(false));
-        vm.push(Cell::Int(1));
+        vm.push(Cell::Bool(false)).unwrap();
+        vm.push(Cell::Int(1)).unwrap();
         assert!(matches!(sub_prim(&mut vm), Err(TbxError::TypeError { .. })));
     }
 
@@ -690,8 +690,8 @@ mod tests {
     #[test]
     fn test_mul_int() {
         let mut vm = VM::new();
-        vm.push(Cell::Int(4));
-        vm.push(Cell::Int(5));
+        vm.push(Cell::Int(4)).unwrap();
+        vm.push(Cell::Int(5)).unwrap();
         mul_prim(&mut vm).unwrap();
         assert_eq!(vm.pop(), Ok(Cell::Int(20)));
     }
@@ -699,8 +699,8 @@ mod tests {
     #[test]
     fn test_mul_float() {
         let mut vm = VM::new();
-        vm.push(Cell::Float(2.5));
-        vm.push(Cell::Float(4.0));
+        vm.push(Cell::Float(2.5)).unwrap();
+        vm.push(Cell::Float(4.0)).unwrap();
         mul_prim(&mut vm).unwrap();
         assert_eq!(vm.pop(), Ok(Cell::Float(10.0)));
     }
@@ -708,8 +708,8 @@ mod tests {
     #[test]
     fn test_mul_float_int() {
         let mut vm = VM::new();
-        vm.push(Cell::Float(2.5));
-        vm.push(Cell::Int(4));
+        vm.push(Cell::Float(2.5)).unwrap();
+        vm.push(Cell::Int(4)).unwrap();
         mul_prim(&mut vm).unwrap();
         assert_eq!(vm.pop(), Ok(Cell::Float(10.0)));
     }
@@ -717,8 +717,8 @@ mod tests {
     #[test]
     fn test_mul_type_error() {
         let mut vm = VM::new();
-        vm.push(Cell::Int(1));
-        vm.push(Cell::Bool(true));
+        vm.push(Cell::Int(1)).unwrap();
+        vm.push(Cell::Bool(true)).unwrap();
         assert!(matches!(mul_prim(&mut vm), Err(TbxError::TypeError { .. })));
     }
 
@@ -727,8 +727,8 @@ mod tests {
     #[test]
     fn test_div_int() {
         let mut vm = VM::new();
-        vm.push(Cell::Int(10));
-        vm.push(Cell::Int(3));
+        vm.push(Cell::Int(10)).unwrap();
+        vm.push(Cell::Int(3)).unwrap();
         div_prim(&mut vm).unwrap();
         assert_eq!(vm.pop(), Ok(Cell::Int(3))); // truncation toward zero
     }
@@ -736,8 +736,8 @@ mod tests {
     #[test]
     fn test_div_int_negative() {
         let mut vm = VM::new();
-        vm.push(Cell::Int(-7));
-        vm.push(Cell::Int(2));
+        vm.push(Cell::Int(-7)).unwrap();
+        vm.push(Cell::Int(2)).unwrap();
         div_prim(&mut vm).unwrap();
         assert_eq!(vm.pop(), Ok(Cell::Int(-3))); // truncation toward zero
     }
@@ -745,8 +745,8 @@ mod tests {
     #[test]
     fn test_div_float() {
         let mut vm = VM::new();
-        vm.push(Cell::Float(7.0));
-        vm.push(Cell::Float(2.0));
+        vm.push(Cell::Float(7.0)).unwrap();
+        vm.push(Cell::Float(2.0)).unwrap();
         div_prim(&mut vm).unwrap();
         assert_eq!(vm.pop(), Ok(Cell::Float(3.5)));
     }
@@ -754,8 +754,8 @@ mod tests {
     #[test]
     fn test_div_int_float() {
         let mut vm = VM::new();
-        vm.push(Cell::Int(7));
-        vm.push(Cell::Float(2.0));
+        vm.push(Cell::Int(7)).unwrap();
+        vm.push(Cell::Float(2.0)).unwrap();
         div_prim(&mut vm).unwrap();
         assert_eq!(vm.pop(), Ok(Cell::Float(3.5)));
     }
@@ -763,8 +763,8 @@ mod tests {
     #[test]
     fn test_div_float_int() {
         let mut vm = VM::new();
-        vm.push(Cell::Float(7.0));
-        vm.push(Cell::Int(2));
+        vm.push(Cell::Float(7.0)).unwrap();
+        vm.push(Cell::Int(2)).unwrap();
         div_prim(&mut vm).unwrap();
         assert_eq!(vm.pop(), Ok(Cell::Float(3.5)));
     }
@@ -772,40 +772,40 @@ mod tests {
     #[test]
     fn test_div_by_zero_int() {
         let mut vm = VM::new();
-        vm.push(Cell::Int(5));
-        vm.push(Cell::Int(0));
+        vm.push(Cell::Int(5)).unwrap();
+        vm.push(Cell::Int(0)).unwrap();
         assert_eq!(div_prim(&mut vm), Err(TbxError::DivisionByZero));
     }
 
     #[test]
     fn test_div_by_zero_float() {
         let mut vm = VM::new();
-        vm.push(Cell::Float(5.0));
-        vm.push(Cell::Float(0.0));
+        vm.push(Cell::Float(5.0)).unwrap();
+        vm.push(Cell::Float(0.0)).unwrap();
         assert_eq!(div_prim(&mut vm), Err(TbxError::DivisionByZero));
     }
 
     #[test]
     fn test_div_by_zero_int_float() {
         let mut vm = VM::new();
-        vm.push(Cell::Int(5));
-        vm.push(Cell::Float(0.0));
+        vm.push(Cell::Int(5)).unwrap();
+        vm.push(Cell::Float(0.0)).unwrap();
         assert_eq!(div_prim(&mut vm), Err(TbxError::DivisionByZero));
     }
 
     #[test]
     fn test_div_by_zero_float_int() {
         let mut vm = VM::new();
-        vm.push(Cell::Float(5.0));
-        vm.push(Cell::Int(0));
+        vm.push(Cell::Float(5.0)).unwrap();
+        vm.push(Cell::Int(0)).unwrap();
         assert_eq!(div_prim(&mut vm), Err(TbxError::DivisionByZero));
     }
 
     #[test]
     fn test_div_type_error() {
         let mut vm = VM::new();
-        vm.push(Cell::Bool(true));
-        vm.push(Cell::Int(1));
+        vm.push(Cell::Bool(true)).unwrap();
+        vm.push(Cell::Int(1)).unwrap();
         assert!(matches!(div_prim(&mut vm), Err(TbxError::TypeError { .. })));
     }
 
@@ -814,8 +814,8 @@ mod tests {
     #[test]
     fn test_mod_int() {
         let mut vm = VM::new();
-        vm.push(Cell::Int(7));
-        vm.push(Cell::Int(3));
+        vm.push(Cell::Int(7)).unwrap();
+        vm.push(Cell::Int(3)).unwrap();
         mod_prim(&mut vm).unwrap();
         assert_eq!(vm.pop(), Ok(Cell::Int(1)));
     }
@@ -823,8 +823,8 @@ mod tests {
     #[test]
     fn test_mod_negative() {
         let mut vm = VM::new();
-        vm.push(Cell::Int(-7));
-        vm.push(Cell::Int(2));
+        vm.push(Cell::Int(-7)).unwrap();
+        vm.push(Cell::Int(2)).unwrap();
         mod_prim(&mut vm).unwrap();
         assert_eq!(vm.pop(), Ok(Cell::Int(-1))); // truncation toward zero
     }
@@ -832,24 +832,24 @@ mod tests {
     #[test]
     fn test_mod_by_zero() {
         let mut vm = VM::new();
-        vm.push(Cell::Int(5));
-        vm.push(Cell::Int(0));
+        vm.push(Cell::Int(5)).unwrap();
+        vm.push(Cell::Int(0)).unwrap();
         assert_eq!(mod_prim(&mut vm), Err(TbxError::DivisionByZero));
     }
 
     #[test]
     fn test_mod_float_rejected() {
         let mut vm = VM::new();
-        vm.push(Cell::Float(7.0));
-        vm.push(Cell::Float(3.0));
+        vm.push(Cell::Float(7.0)).unwrap();
+        vm.push(Cell::Float(3.0)).unwrap();
         assert!(matches!(mod_prim(&mut vm), Err(TbxError::TypeError { .. })));
     }
 
     #[test]
     fn test_mod_int_float_rejected() {
         let mut vm = VM::new();
-        vm.push(Cell::Int(7));
-        vm.push(Cell::Float(3.0));
+        vm.push(Cell::Int(7)).unwrap();
+        vm.push(Cell::Float(3.0)).unwrap();
         assert!(matches!(mod_prim(&mut vm), Err(TbxError::TypeError { .. })));
     }
 
@@ -858,8 +858,8 @@ mod tests {
     #[test]
     fn test_eq_int_equal() {
         let mut vm = VM::new();
-        vm.push(Cell::Int(42));
-        vm.push(Cell::Int(42));
+        vm.push(Cell::Int(42)).unwrap();
+        vm.push(Cell::Int(42)).unwrap();
         eq_prim(&mut vm).unwrap();
         assert_eq!(vm.pop(), Ok(Cell::Bool(true)));
     }
@@ -867,8 +867,8 @@ mod tests {
     #[test]
     fn test_eq_int_not_equal() {
         let mut vm = VM::new();
-        vm.push(Cell::Int(1));
-        vm.push(Cell::Int(2));
+        vm.push(Cell::Int(1)).unwrap();
+        vm.push(Cell::Int(2)).unwrap();
         eq_prim(&mut vm).unwrap();
         assert_eq!(vm.pop(), Ok(Cell::Bool(false)));
     }
@@ -876,8 +876,8 @@ mod tests {
     #[test]
     fn test_eq_different_types() {
         let mut vm = VM::new();
-        vm.push(Cell::Int(1));
-        vm.push(Cell::Bool(true));
+        vm.push(Cell::Int(1)).unwrap();
+        vm.push(Cell::Bool(true)).unwrap();
         eq_prim(&mut vm).unwrap();
         assert_eq!(vm.pop(), Ok(Cell::Bool(false)));
     }
@@ -885,8 +885,8 @@ mod tests {
     #[test]
     fn test_eq_int_float_promotion() {
         let mut vm = VM::new();
-        vm.push(Cell::Int(1));
-        vm.push(Cell::Float(1.0));
+        vm.push(Cell::Int(1)).unwrap();
+        vm.push(Cell::Float(1.0)).unwrap();
         eq_prim(&mut vm).unwrap();
         assert_eq!(vm.pop(), Ok(Cell::Bool(true)));
     }
@@ -894,8 +894,8 @@ mod tests {
     #[test]
     fn test_eq_float_int_promotion() {
         let mut vm = VM::new();
-        vm.push(Cell::Float(2.0));
-        vm.push(Cell::Int(2));
+        vm.push(Cell::Float(2.0)).unwrap();
+        vm.push(Cell::Int(2)).unwrap();
         eq_prim(&mut vm).unwrap();
         assert_eq!(vm.pop(), Ok(Cell::Bool(true)));
     }
@@ -903,8 +903,8 @@ mod tests {
     #[test]
     fn test_eq_int_float_not_equal() {
         let mut vm = VM::new();
-        vm.push(Cell::Int(1));
-        vm.push(Cell::Float(1.5));
+        vm.push(Cell::Int(1)).unwrap();
+        vm.push(Cell::Float(1.5)).unwrap();
         eq_prim(&mut vm).unwrap();
         assert_eq!(vm.pop(), Ok(Cell::Bool(false)));
     }
@@ -912,8 +912,8 @@ mod tests {
     #[test]
     fn test_neq_int_float_promotion() {
         let mut vm = VM::new();
-        vm.push(Cell::Int(1));
-        vm.push(Cell::Float(1.0));
+        vm.push(Cell::Int(1)).unwrap();
+        vm.push(Cell::Float(1.0)).unwrap();
         neq_prim(&mut vm).unwrap();
         assert_eq!(vm.pop(), Ok(Cell::Bool(false)));
     }
@@ -921,8 +921,8 @@ mod tests {
     #[test]
     fn test_neq_int() {
         let mut vm = VM::new();
-        vm.push(Cell::Int(1));
-        vm.push(Cell::Int(2));
+        vm.push(Cell::Int(1)).unwrap();
+        vm.push(Cell::Int(2)).unwrap();
         neq_prim(&mut vm).unwrap();
         assert_eq!(vm.pop(), Ok(Cell::Bool(true)));
     }
@@ -930,8 +930,8 @@ mod tests {
     #[test]
     fn test_neq_equal() {
         let mut vm = VM::new();
-        vm.push(Cell::Int(5));
-        vm.push(Cell::Int(5));
+        vm.push(Cell::Int(5)).unwrap();
+        vm.push(Cell::Int(5)).unwrap();
         neq_prim(&mut vm).unwrap();
         assert_eq!(vm.pop(), Ok(Cell::Bool(false)));
     }
@@ -941,8 +941,8 @@ mod tests {
     #[test]
     fn test_lt_int() {
         let mut vm = VM::new();
-        vm.push(Cell::Int(1));
-        vm.push(Cell::Int(2));
+        vm.push(Cell::Int(1)).unwrap();
+        vm.push(Cell::Int(2)).unwrap();
         lt_prim(&mut vm).unwrap();
         assert_eq!(vm.pop(), Ok(Cell::Bool(true)));
     }
@@ -950,8 +950,8 @@ mod tests {
     #[test]
     fn test_lt_int_false() {
         let mut vm = VM::new();
-        vm.push(Cell::Int(3));
-        vm.push(Cell::Int(2));
+        vm.push(Cell::Int(3)).unwrap();
+        vm.push(Cell::Int(2)).unwrap();
         lt_prim(&mut vm).unwrap();
         assert_eq!(vm.pop(), Ok(Cell::Bool(false)));
     }
@@ -959,8 +959,8 @@ mod tests {
     #[test]
     fn test_lt_float_int() {
         let mut vm = VM::new();
-        vm.push(Cell::Float(1.5));
-        vm.push(Cell::Int(2));
+        vm.push(Cell::Float(1.5)).unwrap();
+        vm.push(Cell::Int(2)).unwrap();
         lt_prim(&mut vm).unwrap();
         assert_eq!(vm.pop(), Ok(Cell::Bool(true)));
     }
@@ -968,16 +968,16 @@ mod tests {
     #[test]
     fn test_lt_type_error() {
         let mut vm = VM::new();
-        vm.push(Cell::Bool(true));
-        vm.push(Cell::Int(1));
+        vm.push(Cell::Bool(true)).unwrap();
+        vm.push(Cell::Int(1)).unwrap();
         assert!(matches!(lt_prim(&mut vm), Err(TbxError::TypeError { .. })));
     }
 
     #[test]
     fn test_gt_int() {
         let mut vm = VM::new();
-        vm.push(Cell::Int(3));
-        vm.push(Cell::Int(2));
+        vm.push(Cell::Int(3)).unwrap();
+        vm.push(Cell::Int(2)).unwrap();
         gt_prim(&mut vm).unwrap();
         assert_eq!(vm.pop(), Ok(Cell::Bool(true)));
     }
@@ -985,8 +985,8 @@ mod tests {
     #[test]
     fn test_gt_int_false() {
         let mut vm = VM::new();
-        vm.push(Cell::Int(1));
-        vm.push(Cell::Int(2));
+        vm.push(Cell::Int(1)).unwrap();
+        vm.push(Cell::Int(2)).unwrap();
         gt_prim(&mut vm).unwrap();
         assert_eq!(vm.pop(), Ok(Cell::Bool(false)));
     }
@@ -994,8 +994,8 @@ mod tests {
     #[test]
     fn test_gt_float_int() {
         let mut vm = VM::new();
-        vm.push(Cell::Float(3.5));
-        vm.push(Cell::Int(2));
+        vm.push(Cell::Float(3.5)).unwrap();
+        vm.push(Cell::Int(2)).unwrap();
         gt_prim(&mut vm).unwrap();
         assert_eq!(vm.pop(), Ok(Cell::Bool(true)));
     }
@@ -1003,16 +1003,16 @@ mod tests {
     #[test]
     fn test_gt_type_error() {
         let mut vm = VM::new();
-        vm.push(Cell::Bool(true));
-        vm.push(Cell::Int(1));
+        vm.push(Cell::Bool(true)).unwrap();
+        vm.push(Cell::Int(1)).unwrap();
         assert!(matches!(gt_prim(&mut vm), Err(TbxError::TypeError { .. })));
     }
 
     #[test]
     fn test_le_int_equal() {
         let mut vm = VM::new();
-        vm.push(Cell::Int(2));
-        vm.push(Cell::Int(2));
+        vm.push(Cell::Int(2)).unwrap();
+        vm.push(Cell::Int(2)).unwrap();
         le_prim(&mut vm).unwrap();
         assert_eq!(vm.pop(), Ok(Cell::Bool(true)));
     }
@@ -1020,8 +1020,8 @@ mod tests {
     #[test]
     fn test_le_int_less() {
         let mut vm = VM::new();
-        vm.push(Cell::Int(1));
-        vm.push(Cell::Int(2));
+        vm.push(Cell::Int(1)).unwrap();
+        vm.push(Cell::Int(2)).unwrap();
         le_prim(&mut vm).unwrap();
         assert_eq!(vm.pop(), Ok(Cell::Bool(true)));
     }
@@ -1029,8 +1029,8 @@ mod tests {
     #[test]
     fn test_le_int_greater() {
         let mut vm = VM::new();
-        vm.push(Cell::Int(3));
-        vm.push(Cell::Int(2));
+        vm.push(Cell::Int(3)).unwrap();
+        vm.push(Cell::Int(2)).unwrap();
         le_prim(&mut vm).unwrap();
         assert_eq!(vm.pop(), Ok(Cell::Bool(false)));
     }
@@ -1038,8 +1038,8 @@ mod tests {
     #[test]
     fn test_le_float_int() {
         let mut vm = VM::new();
-        vm.push(Cell::Float(1.5));
-        vm.push(Cell::Int(2));
+        vm.push(Cell::Float(1.5)).unwrap();
+        vm.push(Cell::Int(2)).unwrap();
         le_prim(&mut vm).unwrap();
         assert_eq!(vm.pop(), Ok(Cell::Bool(true)));
     }
@@ -1047,16 +1047,16 @@ mod tests {
     #[test]
     fn test_le_type_error() {
         let mut vm = VM::new();
-        vm.push(Cell::Bool(true));
-        vm.push(Cell::Int(1));
+        vm.push(Cell::Bool(true)).unwrap();
+        vm.push(Cell::Int(1)).unwrap();
         assert!(matches!(le_prim(&mut vm), Err(TbxError::TypeError { .. })));
     }
 
     #[test]
     fn test_ge_int_equal() {
         let mut vm = VM::new();
-        vm.push(Cell::Int(2));
-        vm.push(Cell::Int(2));
+        vm.push(Cell::Int(2)).unwrap();
+        vm.push(Cell::Int(2)).unwrap();
         ge_prim(&mut vm).unwrap();
         assert_eq!(vm.pop(), Ok(Cell::Bool(true)));
     }
@@ -1064,8 +1064,8 @@ mod tests {
     #[test]
     fn test_ge_int_greater() {
         let mut vm = VM::new();
-        vm.push(Cell::Int(3));
-        vm.push(Cell::Int(2));
+        vm.push(Cell::Int(3)).unwrap();
+        vm.push(Cell::Int(2)).unwrap();
         ge_prim(&mut vm).unwrap();
         assert_eq!(vm.pop(), Ok(Cell::Bool(true)));
     }
@@ -1073,8 +1073,8 @@ mod tests {
     #[test]
     fn test_ge_int_less() {
         let mut vm = VM::new();
-        vm.push(Cell::Int(1));
-        vm.push(Cell::Int(2));
+        vm.push(Cell::Int(1)).unwrap();
+        vm.push(Cell::Int(2)).unwrap();
         ge_prim(&mut vm).unwrap();
         assert_eq!(vm.pop(), Ok(Cell::Bool(false)));
     }
@@ -1082,8 +1082,8 @@ mod tests {
     #[test]
     fn test_ge_float_int() {
         let mut vm = VM::new();
-        vm.push(Cell::Float(2.0));
-        vm.push(Cell::Int(2));
+        vm.push(Cell::Float(2.0)).unwrap();
+        vm.push(Cell::Int(2)).unwrap();
         ge_prim(&mut vm).unwrap();
         assert_eq!(vm.pop(), Ok(Cell::Bool(true)));
     }
@@ -1091,8 +1091,8 @@ mod tests {
     #[test]
     fn test_ge_type_error() {
         let mut vm = VM::new();
-        vm.push(Cell::Bool(true));
-        vm.push(Cell::Int(1));
+        vm.push(Cell::Bool(true)).unwrap();
+        vm.push(Cell::Int(1)).unwrap();
         assert!(matches!(ge_prim(&mut vm), Err(TbxError::TypeError { .. })));
     }
 
@@ -1101,8 +1101,8 @@ mod tests {
     #[test]
     fn test_and_true_true() {
         let mut vm = VM::new();
-        vm.push(Cell::Bool(true));
-        vm.push(Cell::Bool(true));
+        vm.push(Cell::Bool(true)).unwrap();
+        vm.push(Cell::Bool(true)).unwrap();
         and_prim(&mut vm).unwrap();
         assert_eq!(vm.pop(), Ok(Cell::Bool(true)));
     }
@@ -1110,8 +1110,8 @@ mod tests {
     #[test]
     fn test_and_true_false() {
         let mut vm = VM::new();
-        vm.push(Cell::Bool(true));
-        vm.push(Cell::Bool(false));
+        vm.push(Cell::Bool(true)).unwrap();
+        vm.push(Cell::Bool(false)).unwrap();
         and_prim(&mut vm).unwrap();
         assert_eq!(vm.pop(), Ok(Cell::Bool(false)));
     }
@@ -1119,8 +1119,8 @@ mod tests {
     #[test]
     fn test_and_int_truthy() {
         let mut vm = VM::new();
-        vm.push(Cell::Int(1));
-        vm.push(Cell::Int(2));
+        vm.push(Cell::Int(1)).unwrap();
+        vm.push(Cell::Int(2)).unwrap();
         and_prim(&mut vm).unwrap();
         assert_eq!(vm.pop(), Ok(Cell::Bool(true)));
     }
@@ -1128,8 +1128,8 @@ mod tests {
     #[test]
     fn test_and_int_zero_falsy() {
         let mut vm = VM::new();
-        vm.push(Cell::Int(1));
-        vm.push(Cell::Int(0));
+        vm.push(Cell::Int(1)).unwrap();
+        vm.push(Cell::Int(0)).unwrap();
         and_prim(&mut vm).unwrap();
         assert_eq!(vm.pop(), Ok(Cell::Bool(false)));
     }
@@ -1137,8 +1137,8 @@ mod tests {
     #[test]
     fn test_or_false_false() {
         let mut vm = VM::new();
-        vm.push(Cell::Bool(false));
-        vm.push(Cell::Bool(false));
+        vm.push(Cell::Bool(false)).unwrap();
+        vm.push(Cell::Bool(false)).unwrap();
         or_prim(&mut vm).unwrap();
         assert_eq!(vm.pop(), Ok(Cell::Bool(false)));
     }
@@ -1146,8 +1146,8 @@ mod tests {
     #[test]
     fn test_or_true_false() {
         let mut vm = VM::new();
-        vm.push(Cell::Bool(true));
-        vm.push(Cell::Bool(false));
+        vm.push(Cell::Bool(true)).unwrap();
+        vm.push(Cell::Bool(false)).unwrap();
         or_prim(&mut vm).unwrap();
         assert_eq!(vm.pop(), Ok(Cell::Bool(true)));
     }
@@ -1155,8 +1155,8 @@ mod tests {
     #[test]
     fn test_or_int_zero_and_nonzero() {
         let mut vm = VM::new();
-        vm.push(Cell::Int(0));
-        vm.push(Cell::Int(5));
+        vm.push(Cell::Int(0)).unwrap();
+        vm.push(Cell::Int(5)).unwrap();
         or_prim(&mut vm).unwrap();
         assert_eq!(vm.pop(), Ok(Cell::Bool(true)));
     }
@@ -1167,7 +1167,7 @@ mod tests {
     fn test_putstr_basic() {
         let mut vm = VM::new();
         let idx = vm.intern_string("hello").unwrap();
-        vm.push(Cell::StringDesc(idx));
+        vm.push(Cell::StringDesc(idx)).unwrap();
         putstr_prim(&mut vm).unwrap();
         assert_eq!(vm.take_output(), "hello");
     }
@@ -1176,7 +1176,7 @@ mod tests {
     fn test_putstr_empty() {
         let mut vm = VM::new();
         let idx = vm.intern_string("").unwrap();
-        vm.push(Cell::StringDesc(idx));
+        vm.push(Cell::StringDesc(idx)).unwrap();
         putstr_prim(&mut vm).unwrap();
         assert_eq!(vm.take_output(), "");
     }
@@ -1184,7 +1184,7 @@ mod tests {
     #[test]
     fn test_putstr_type_error() {
         let mut vm = VM::new();
-        vm.push(Cell::Int(42));
+        vm.push(Cell::Int(42)).unwrap();
         assert!(matches!(
             putstr_prim(&mut vm),
             Err(TbxError::TypeError { .. })
@@ -1205,7 +1205,7 @@ mod tests {
     #[test]
     fn test_putchr_basic() {
         let mut vm = VM::new();
-        vm.push(Cell::Int(65)); // 'A'
+        vm.push(Cell::Int(65)).unwrap(); // 'A'
         putchr_prim(&mut vm).unwrap();
         assert_eq!(vm.take_output(), "A");
     }
@@ -1213,7 +1213,7 @@ mod tests {
     #[test]
     fn test_putchr_newline() {
         let mut vm = VM::new();
-        vm.push(Cell::Int(10)); // '\n'
+        vm.push(Cell::Int(10)).unwrap(); // '\n'
         putchr_prim(&mut vm).unwrap();
         assert_eq!(vm.take_output(), "\n");
     }
@@ -1221,7 +1221,7 @@ mod tests {
     #[test]
     fn test_putchr_out_of_range() {
         let mut vm = VM::new();
-        vm.push(Cell::Int(128));
+        vm.push(Cell::Int(128)).unwrap();
         assert!(matches!(
             putchr_prim(&mut vm),
             Err(TbxError::TypeError { .. })
@@ -1231,7 +1231,7 @@ mod tests {
     #[test]
     fn test_putchr_negative() {
         let mut vm = VM::new();
-        vm.push(Cell::Int(-1));
+        vm.push(Cell::Int(-1)).unwrap();
         assert!(matches!(
             putchr_prim(&mut vm),
             Err(TbxError::TypeError { .. })
@@ -1241,7 +1241,7 @@ mod tests {
     #[test]
     fn test_putchr_type_error() {
         let mut vm = VM::new();
-        vm.push(Cell::Bool(true));
+        vm.push(Cell::Bool(true)).unwrap();
         assert!(matches!(
             putchr_prim(&mut vm),
             Err(TbxError::TypeError { .. })
@@ -1253,7 +1253,7 @@ mod tests {
     #[test]
     fn test_putdec_positive() {
         let mut vm = VM::new();
-        vm.push(Cell::Int(42));
+        vm.push(Cell::Int(42)).unwrap();
         putdec_prim(&mut vm).unwrap();
         assert_eq!(vm.take_output(), "42");
     }
@@ -1261,7 +1261,7 @@ mod tests {
     #[test]
     fn test_putdec_negative() {
         let mut vm = VM::new();
-        vm.push(Cell::Int(-7));
+        vm.push(Cell::Int(-7)).unwrap();
         putdec_prim(&mut vm).unwrap();
         assert_eq!(vm.take_output(), "-7");
     }
@@ -1269,7 +1269,7 @@ mod tests {
     #[test]
     fn test_putdec_zero() {
         let mut vm = VM::new();
-        vm.push(Cell::Int(0));
+        vm.push(Cell::Int(0)).unwrap();
         putdec_prim(&mut vm).unwrap();
         assert_eq!(vm.take_output(), "0");
     }
@@ -1277,7 +1277,7 @@ mod tests {
     #[test]
     fn test_putdec_type_error() {
         let mut vm = VM::new();
-        vm.push(Cell::Float(3.5));
+        vm.push(Cell::Float(3.5)).unwrap();
         assert!(matches!(
             putdec_prim(&mut vm),
             Err(TbxError::TypeError { .. })
@@ -1289,7 +1289,7 @@ mod tests {
     #[test]
     fn test_puthex_positive() {
         let mut vm = VM::new();
-        vm.push(Cell::Int(255));
+        vm.push(Cell::Int(255)).unwrap();
         puthex_prim(&mut vm).unwrap();
         assert_eq!(vm.take_output(), "$FF");
     }
@@ -1297,7 +1297,7 @@ mod tests {
     #[test]
     fn test_puthex_zero() {
         let mut vm = VM::new();
-        vm.push(Cell::Int(0));
+        vm.push(Cell::Int(0)).unwrap();
         puthex_prim(&mut vm).unwrap();
         assert_eq!(vm.take_output(), "$0");
     }
@@ -1305,7 +1305,7 @@ mod tests {
     #[test]
     fn test_puthex_negative() {
         let mut vm = VM::new();
-        vm.push(Cell::Int(-1));
+        vm.push(Cell::Int(-1)).unwrap();
         puthex_prim(&mut vm).unwrap();
         assert_eq!(vm.take_output(), "$FFFFFFFFFFFFFFFF");
     }
@@ -1313,7 +1313,7 @@ mod tests {
     #[test]
     fn test_puthex_type_error() {
         let mut vm = VM::new();
-        vm.push(Cell::Bool(true));
+        vm.push(Cell::Bool(true)).unwrap();
         assert!(matches!(
             puthex_prim(&mut vm),
             Err(TbxError::TypeError { .. })
@@ -1325,7 +1325,7 @@ mod tests {
     #[test]
     fn test_append_writes_to_dictionary() {
         let mut vm = VM::new();
-        vm.push(Cell::Int(42));
+        vm.push(Cell::Int(42)).unwrap();
         append_prim(&mut vm).unwrap();
         assert_eq!(vm.dictionary.len(), 1);
         assert_eq!(vm.dp, 1);
@@ -1335,7 +1335,7 @@ mod tests {
     #[test]
     fn test_append_xt_value() {
         let mut vm = VM::new();
-        vm.push(Cell::Xt(crate::cell::Xt(5)));
+        vm.push(Cell::Xt(crate::cell::Xt(5))).unwrap();
         append_prim(&mut vm).unwrap();
         assert_eq!(vm.dictionary.len(), 1);
         assert!(matches!(vm.dictionary[0], Cell::Xt(_)));
@@ -1344,11 +1344,11 @@ mod tests {
     #[test]
     fn test_append_multiple() {
         let mut vm = VM::new();
-        vm.push(Cell::Int(10));
+        vm.push(Cell::Int(10)).unwrap();
         append_prim(&mut vm).unwrap();
-        vm.push(Cell::Int(20));
+        vm.push(Cell::Int(20)).unwrap();
         append_prim(&mut vm).unwrap();
-        vm.push(Cell::Int(30));
+        vm.push(Cell::Int(30)).unwrap();
         append_prim(&mut vm).unwrap();
         assert_eq!(vm.dp, 3);
         assert!(matches!(vm.dictionary[0], Cell::Int(10)));
@@ -1371,7 +1371,7 @@ mod tests {
         vm.dp = MAX_DICTIONARY_CELLS;
         // Manually grow dictionary to match dp invariant
         vm.dictionary.resize(MAX_DICTIONARY_CELLS, Cell::None);
-        vm.push(Cell::Int(1));
+        vm.push(Cell::Int(1)).unwrap();
         assert!(matches!(
             append_prim(&mut vm),
             Err(TbxError::DictionaryOverflow { .. })
@@ -1383,7 +1383,7 @@ mod tests {
     #[test]
     fn test_allot_reserves_cells() {
         let mut vm = VM::new();
-        vm.push(Cell::Int(5));
+        vm.push(Cell::Int(5)).unwrap();
         allot_prim(&mut vm).unwrap();
         assert_eq!(vm.dp, 5);
         assert_eq!(vm.dictionary.len(), 5);
@@ -1394,9 +1394,9 @@ mod tests {
     #[test]
     fn test_allot_after_append() {
         let mut vm = VM::new();
-        vm.push(Cell::Int(100));
+        vm.push(Cell::Int(100)).unwrap();
         append_prim(&mut vm).unwrap();
-        vm.push(Cell::Int(3));
+        vm.push(Cell::Int(3)).unwrap();
         allot_prim(&mut vm).unwrap();
         assert_eq!(vm.dp, 4);
         assert_eq!(vm.pop().unwrap(), Cell::DictAddr(1));
@@ -1405,7 +1405,7 @@ mod tests {
     #[test]
     fn test_allot_zero() {
         let mut vm = VM::new();
-        vm.push(Cell::Int(0));
+        vm.push(Cell::Int(0)).unwrap();
         allot_prim(&mut vm).unwrap();
         assert_eq!(vm.dp, 0);
         assert_eq!(vm.pop().unwrap(), Cell::DictAddr(0));
@@ -1414,7 +1414,7 @@ mod tests {
     #[test]
     fn test_allot_negative() {
         let mut vm = VM::new();
-        vm.push(Cell::Int(-1));
+        vm.push(Cell::Int(-1)).unwrap();
         assert!(matches!(
             allot_prim(&mut vm),
             Err(TbxError::InvalidAllotCount)
@@ -1424,7 +1424,7 @@ mod tests {
     #[test]
     fn test_allot_type_error() {
         let mut vm = VM::new();
-        vm.push(Cell::Bool(true));
+        vm.push(Cell::Bool(true)).unwrap();
         assert!(matches!(
             allot_prim(&mut vm),
             Err(TbxError::TypeError { .. })
@@ -1443,9 +1443,9 @@ mod tests {
     #[test]
     fn test_here_after_append() {
         let mut vm = VM::new();
-        vm.push(Cell::Int(1));
+        vm.push(Cell::Int(1)).unwrap();
         append_prim(&mut vm).unwrap();
-        vm.push(Cell::Int(2));
+        vm.push(Cell::Int(2)).unwrap();
         append_prim(&mut vm).unwrap();
         here_prim(&mut vm).unwrap();
         assert_eq!(vm.pop().unwrap(), Cell::DictAddr(2));
@@ -1456,7 +1456,8 @@ mod tests {
     #[test]
     fn test_allot_overflow() {
         let mut vm = VM::new();
-        vm.push(Cell::Int((MAX_DICTIONARY_CELLS + 1) as i64));
+        vm.push(Cell::Int((MAX_DICTIONARY_CELLS + 1) as i64))
+            .unwrap();
         assert!(matches!(
             allot_prim(&mut vm),
             Err(TbxError::DictionaryOverflow { .. })
@@ -1491,7 +1492,7 @@ mod tests {
     #[test]
     fn test_halt_leaves_stack_unchanged() {
         let mut vm = VM::new();
-        vm.push(Cell::Int(42));
+        vm.push(Cell::Int(42)).unwrap();
         let _ = halt_prim(&mut vm);
         assert_eq!(vm.data_stack.len(), 1);
         assert_eq!(vm.pop().unwrap(), Cell::Int(42));
@@ -1506,7 +1507,7 @@ mod tests {
         let lit_xt = vm.lookup("LIT").unwrap();
         let dp_before = vm.dp;
 
-        vm.push(Cell::Int(123));
+        vm.push(Cell::Int(123)).unwrap();
         crate::primitives::literal_prim(&mut vm).unwrap();
 
         assert_eq!(vm.dictionary[dp_before], Cell::Xt(lit_xt));

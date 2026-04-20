@@ -42,6 +42,11 @@ pub enum TbxError {
         depth: usize,
         limit: usize,
     },
+    /// The data stack depth exceeded the maximum allowed limit.
+    DataStackOverflow {
+        depth: usize,
+        limit: usize,
+    },
 }
 
 impl std::fmt::Display for TbxError {
@@ -79,6 +84,13 @@ impl std::fmt::Display for TbxError {
                 write!(
                     f,
                     "return stack overflow: depth {} reached or exceeded limit {}",
+                    depth, limit
+                )
+            }
+            TbxError::DataStackOverflow { depth, limit } => {
+                write!(
+                    f,
+                    "data stack overflow: depth {} reached or exceeded limit {}",
                     depth, limit
                 )
             }
