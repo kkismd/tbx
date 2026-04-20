@@ -678,7 +678,7 @@ mod tests {
 
     #[test]
     fn test_kind_code_floatlit() {
-        assert_eq!(Token::FloatLit(3.14).kind_code(), Some(TOK_NUM));
+        assert_eq!(Token::FloatLit(1.25).kind_code(), Some(TOK_NUM));
     }
 
     #[test]
@@ -766,10 +766,10 @@ mod tests {
     #[test]
     fn test_floatlit_simple() {
         assert_eq!(
-            tokens("X 3.14"),
+            tokens("X 1.25"),
             vec![
                 Token::Ident("X".to_string()),
-                Token::FloatLit(3.14),
+                Token::FloatLit(1.25),
                 Token::Eof
             ]
         );
@@ -1210,7 +1210,7 @@ mod tests {
 
     #[test]
     fn test_float_at_line_start_yields_error() {
-        let toks = tokens("3.14 X");
+        let toks = tokens("1.25 X");
         assert!(
             matches!(toks[0], Token::Error(_)),
             "expected Error, got {:?}",
