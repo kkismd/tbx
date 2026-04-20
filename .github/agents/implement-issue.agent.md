@@ -61,7 +61,7 @@ Rustのベストプラクティスに従いコードを実装する。
 ```bash
 cargo build
 cargo test
-cargo clippy -- -D warnings
+cargo clippy --all-targets -- -D warnings
 ```
 
 ビルドエラー・テスト失敗・clippy警告がある場合は修正してから次のステップに進む。
