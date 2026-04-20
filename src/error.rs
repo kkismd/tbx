@@ -53,6 +53,13 @@ pub enum TbxError {
     UndefinedSymbol {
         name: String,
     },
+    /// An expression is syntactically invalid.
+    ///
+    /// `reason` describes the specific error (e.g. mismatched parentheses,
+    /// unknown operator).
+    InvalidExpression {
+        reason: &'static str,
+    },
 }
 
 impl std::fmt::Display for TbxError {
@@ -102,6 +109,9 @@ impl std::fmt::Display for TbxError {
             }
             TbxError::IntegerOverflow => write!(f, "integer overflow"),
             TbxError::UndefinedSymbol { name } => write!(f, "undefined symbol: '{name}'"),
+            TbxError::InvalidExpression { reason } => {
+                write!(f, "invalid expression: {reason}")
+            }
         }
     }
 }

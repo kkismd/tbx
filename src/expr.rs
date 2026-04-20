@@ -218,8 +218,11 @@ impl<'a> ExprCompiler<'a> {
                                 pop_ops_while(&mut op_stack, &mut output, self.vm, prec, left)?;
                                 op_stack.push(OpItem::BinOp { prim, prec });
                                 prev_was_operand = false;
+                            } else {
+                                return Err(TbxError::InvalidExpression {
+                                    reason: "unknown operator in expression",
+                                });
                             }
-                            // Unknown operator strings are silently ignored.
                         }
                     }
                 }
@@ -237,7 +240,13 @@ impl<'a> ExprCompiler<'a> {
                     // Pop operators to output until the nearest LParen.
                     loop {
                         match op_stack.last() {
-                            Some(OpItem::LParen { .. }) | None => break,
+                            Some(OpItem::LParen { .. }) => break,
+                            None => {
+                                // No matching '(' found — unmatched ')'.
+                                return Err(TbxError::InvalidExpression {
+                                    reason: "unmatched ')' in expression",
+                                });
+                            }
                             _ => {
                                 let op = op_stack.pop().unwrap();
                                 emit_op_item(&op, &mut output, self.vm)?;
@@ -419,7 +428,10 @@ fn emit_op_item(op: &OpItem, output: &mut Vec<Cell>, vm: &VM) -> Result<(), TbxE
             // no VM instruction is emitted.
         }
         OpItem::LParen { .. } => {
-            // A stray LParen (mismatched parenthesis) — silently skip.
+            // A stray LParen surviving to drain means an unmatched '(' — error.
+            return Err(TbxError::InvalidExpression {
+                reason: "unmatched '(' in expression",
+            });
         }
     }
     Ok(())
@@ -786,5 +798,57 @@ mod tests {
             .compile_expr(&tokens)
             .unwrap_err();
         assert!(matches!(err, TbxError::UndefinedSymbol { name } if name == "NOEXIST"));
+    }
+
+    // ------------------------------------------------------------------
+    // Error: unmatched '(' (missing closing paren)
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn test_unmatched_lparen_error() {
+        let mut vm = make_vm();
+        let tokens = lex("(1 + 2");
+        let err = ExprCompiler::new(&mut vm)
+            .compile_expr(&tokens)
+            .unwrap_err();
+        assert!(
+            matches!(err, TbxError::InvalidExpression { reason } if reason.contains("unmatched '('")),
+            "expected InvalidExpression for unmatched '(', got: {err:?}"
+        );
+    }
+
+    // ------------------------------------------------------------------
+    // Error: unmatched ')' (no opening paren)
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn test_unmatched_rparen_error() {
+        let mut vm = make_vm();
+        let tokens = lex("1 + 2)");
+        let err = ExprCompiler::new(&mut vm)
+            .compile_expr(&tokens)
+            .unwrap_err();
+        assert!(
+            matches!(err, TbxError::InvalidExpression { reason } if reason.contains("unmatched ')'")),
+            "expected InvalidExpression for unmatched ')', got: {err:?}"
+        );
+    }
+
+    // ------------------------------------------------------------------
+    // Error: unknown operator
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn test_unknown_operator_error() {
+        // "!" is lexed as Op("!") but is not in binary_op_info.
+        let mut vm = make_vm();
+        let tokens = lex("1 ! 2");
+        let err = ExprCompiler::new(&mut vm)
+            .compile_expr(&tokens)
+            .unwrap_err();
+        assert!(
+            matches!(err, TbxError::InvalidExpression { .. }),
+            "expected InvalidExpression for unknown operator, got: {err:?}"
+        );
     }
 }
