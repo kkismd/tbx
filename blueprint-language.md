@@ -254,9 +254,12 @@ TOKEN  ( -- kind len val )
 | `MYVAR`    | TOK_ID    | 5     | 識別子はそのまま |
 | `42`       | TOK_NUM   | 2     | 数値リテラル |
 | `+`        | TOK_OP    | 1     | 演算子 |
+| `;`        | TOK_DELIM | 1     | 区切り文字 |
 | `"hello"`  | TOK_STR   | 7     | クォート2文字を含む（`"` + `hello` + `"`） |
 | `"\n"`     | TOK_STR   | 4     | クォート2文字 + バックスラッシュ + `n` |
 | `"\\"`     | TOK_STR   | 4     | クォート2文字 + `\\` |
+
+`val` が `Cell::DictAddr(ソースオフセット)` のトークン（TOK_ID・TOK_OP・TOK_DELIM・TOK_STR）は `source[val..val+len]` で生テキストを参照できる。TOK_NUM の `val` は `Cell::Int(解析済み整数値)` であり、ソースオフセットではない点に注意。
 
 文字列リテラルを処理するTBXコードは、`val`（DictAddr）が指す生ソーステキストから自分でクォート除去とエスケープ展開を行う必要がある。
 
