@@ -278,7 +278,7 @@ impl VM {
                 .headers
                 .get(xt.index())
                 .ok_or(TbxError::IndexOutOfBounds {
-                    index: self.pc,
+                    index: xt.index(),
                     size: self.headers.len(),
                 })?
                 .kind
@@ -931,6 +931,30 @@ mod tests {
             result,
             Err(crate::error::TbxError::StackUnderflow)
         ));
+    }
+
+    #[test]
+    fn test_call_target_xt_type_mismatch_returns_type_error() {
+        // Verify that a non-Xt value at pc+1 (target_xt position) returns TypeError.
+        // This confirms the error type for type mismatch is TypeError, not IndexOutOfBounds.
+        let mut vm = VM::new();
+        crate::primitives::register_all(&mut vm);
+
+        let call_xt = vm.lookup("CALL").unwrap();
+
+        // Top-level: CALL <Int instead of Xt> arity=0 local_count=0
+        let start = vm.dp;
+        vm.dict_write(Cell::Xt(call_xt)).unwrap();
+        vm.dict_write(Cell::Int(999)).unwrap(); // wrong type: Int instead of Xt
+        vm.dict_write(Cell::Int(0)).unwrap();
+        vm.dict_write(Cell::Int(0)).unwrap();
+
+        let result = vm.run(start);
+        assert!(
+            matches!(result, Err(crate::error::TbxError::TypeError { .. })),
+            "expected TypeError for non-Xt target_xt, got {:?}",
+            result
+        );
     }
 
     #[test]
