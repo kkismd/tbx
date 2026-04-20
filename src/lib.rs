@@ -2,6 +2,7 @@ pub mod cell;
 pub mod constants;
 pub mod dict;
 pub mod error;
+pub mod lexer;
 pub mod primitives;
 pub mod vm;
 
