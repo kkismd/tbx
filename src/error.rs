@@ -49,6 +49,10 @@ pub enum TbxError {
     },
     /// An integer arithmetic operation produced a result outside the `i64` range.
     IntegerOverflow,
+    /// A symbol name was not found in the dictionary.
+    UndefinedSymbol {
+        name: String,
+    },
 }
 
 impl std::fmt::Display for TbxError {
@@ -97,6 +101,7 @@ impl std::fmt::Display for TbxError {
                 )
             }
             TbxError::IntegerOverflow => write!(f, "integer overflow"),
+            TbxError::UndefinedSymbol { name } => write!(f, "undefined symbol: '{name}'"),
         }
     }
 }
