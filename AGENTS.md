@@ -20,7 +20,7 @@
 | `spec-discussion` | 「issue #N の仕様を検討したい」 | 仕様の選択肢提示・ユーザーとの対話・issueへの決定記録 |
 | `implement-issue` | 「issue #N を実装して」 | issueを読んでRustコードを実装しPRを作成 |
 | `review-implementation` | 「PR #N をレビューして」 | PRのコードをレビューし問題をコメント・issueに登録 |
-| `blueprint-updater` | 「issue #N の設計をblueprint.mdに反映して」 | blueprint.mdに設計方針を記録しPRを作成 |
+| `blueprint-updater` | 「issue #N の設計をblueprint.mdに反映して」 | `blueprint.md` / `blueprint-language.md` / `blueprint-bootstrap.md` に設計方針を記録しPRを作成 |
 
 ## 言語ルール
 
