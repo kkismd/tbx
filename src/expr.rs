@@ -938,7 +938,7 @@ mod tests {
         assert!(
             matches!(
                 err,
-                TbxError::TypeError { expected, .. } if expected.contains("identifier after unary &")
+                TbxError::TypeError { expected, .. } if expected == "identifier after unary &"
             ),
             "expected TypeError for & applied to non-identifier, got: {err:?}"
         );
