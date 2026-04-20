@@ -75,63 +75,48 @@ pub fn store_prim(vm: &mut VM) -> Result<(), TbxError> {
 }
 
 pub fn add_prim(vm: &mut VM) -> Result<(), TbxError> {
-    let b = vm.pop()?;
-    let a = vm.pop()?;
+    let b = vm.pop_number()?;
+    let a = vm.pop_number()?;
     match (a, b) {
         (Cell::Int(x), Cell::Int(y)) => vm.push(Cell::Int(x + y)),
         (Cell::Float(x), Cell::Float(y)) => vm.push(Cell::Float(x + y)),
         (Cell::Int(x), Cell::Float(y)) => vm.push(Cell::Float(x as f64 + y)),
         (Cell::Float(x), Cell::Int(y)) => vm.push(Cell::Float(x + y as f64)),
-        _ => {
-            return Err(TbxError::TypeError {
-                expected: "number",
-                got: "non-number",
-            })
-        }
+        _ => unreachable!("pop_number guarantees Int or Float"),
     }
     Ok(())
 }
 
 pub fn sub_prim(vm: &mut VM) -> Result<(), TbxError> {
-    let b = vm.pop()?;
-    let a = vm.pop()?;
+    let b = vm.pop_number()?;
+    let a = vm.pop_number()?;
     match (a, b) {
         (Cell::Int(x), Cell::Int(y)) => vm.push(Cell::Int(x - y)),
         (Cell::Float(x), Cell::Float(y)) => vm.push(Cell::Float(x - y)),
         (Cell::Int(x), Cell::Float(y)) => vm.push(Cell::Float(x as f64 - y)),
         (Cell::Float(x), Cell::Int(y)) => vm.push(Cell::Float(x - y as f64)),
-        _ => {
-            return Err(TbxError::TypeError {
-                expected: "number",
-                got: "non-number",
-            })
-        }
+        _ => unreachable!("pop_number guarantees Int or Float"),
     }
     Ok(())
 }
 
 pub fn mul_prim(vm: &mut VM) -> Result<(), TbxError> {
-    let b = vm.pop()?;
-    let a = vm.pop()?;
+    let b = vm.pop_number()?;
+    let a = vm.pop_number()?;
     match (a, b) {
         (Cell::Int(x), Cell::Int(y)) => vm.push(Cell::Int(x * y)),
         (Cell::Float(x), Cell::Float(y)) => vm.push(Cell::Float(x * y)),
         (Cell::Int(x), Cell::Float(y)) => vm.push(Cell::Float(x as f64 * y)),
         (Cell::Float(x), Cell::Int(y)) => vm.push(Cell::Float(x * y as f64)),
-        _ => {
-            return Err(TbxError::TypeError {
-                expected: "number",
-                got: "non-number",
-            })
-        }
+        _ => unreachable!("pop_number guarantees Int or Float"),
     }
     Ok(())
 }
 
 #[allow(clippy::redundant_guards)] // Float(0.0) pattern also matches -0.0; use guard for clarity
 pub fn div_prim(vm: &mut VM) -> Result<(), TbxError> {
-    let b = vm.pop()?;
-    let a = vm.pop()?;
+    let b = vm.pop_number()?;
+    let a = vm.pop_number()?;
     match (a, b) {
         (Cell::Int(_), Cell::Int(0)) => return Err(TbxError::DivisionByZero),
         (Cell::Int(x), Cell::Int(y)) => vm.push(Cell::Int(x / y)),
@@ -141,29 +126,18 @@ pub fn div_prim(vm: &mut VM) -> Result<(), TbxError> {
         (Cell::Int(x), Cell::Float(y)) => vm.push(Cell::Float(x as f64 / y)),
         (Cell::Float(_), Cell::Int(0)) => return Err(TbxError::DivisionByZero),
         (Cell::Float(x), Cell::Int(y)) => vm.push(Cell::Float(x / y as f64)),
-        _ => {
-            return Err(TbxError::TypeError {
-                expected: "number",
-                got: "non-number",
-            })
-        }
+        _ => unreachable!("pop_number guarantees Int or Float"),
     }
     Ok(())
 }
 
 pub fn mod_prim(vm: &mut VM) -> Result<(), TbxError> {
-    let b = vm.pop()?;
-    let a = vm.pop()?;
-    match (a, b) {
-        (Cell::Int(_), Cell::Int(0)) => return Err(TbxError::DivisionByZero),
-        (Cell::Int(x), Cell::Int(y)) => vm.push(Cell::Int(x % y)),
-        _ => {
-            return Err(TbxError::TypeError {
-                expected: "Int",
-                got: "non-Int",
-            })
-        }
+    let b = vm.pop_int()?;
+    let a = vm.pop_int()?;
+    if b == 0 {
+        return Err(TbxError::DivisionByZero);
     }
+    vm.push(Cell::Int(a % b));
     Ok(())
 }
 
@@ -197,19 +171,14 @@ pub fn neq_prim(vm: &mut VM) -> Result<(), TbxError> {
 
 /// LT — less than. Pushes Bool(true) if a < b (numeric only, with Int/Float promotion).
 pub fn lt_prim(vm: &mut VM) -> Result<(), TbxError> {
-    let b = vm.pop()?;
-    let a = vm.pop()?;
+    let b = vm.pop_number()?;
+    let a = vm.pop_number()?;
     let result = match (&a, &b) {
         (Cell::Int(x), Cell::Int(y)) => x < y,
         (Cell::Float(x), Cell::Float(y)) => x < y,
         (Cell::Int(x), Cell::Float(y)) => (*x as f64) < *y,
         (Cell::Float(x), Cell::Int(y)) => *x < (*y as f64),
-        _ => {
-            return Err(TbxError::TypeError {
-                expected: "number",
-                got: "non-number",
-            })
-        }
+        _ => unreachable!("pop_number guarantees Int or Float"),
     };
     vm.push(Cell::Bool(result));
     Ok(())
@@ -217,19 +186,14 @@ pub fn lt_prim(vm: &mut VM) -> Result<(), TbxError> {
 
 /// GT — greater than. Pushes Bool(true) if a > b (numeric only, with Int/Float promotion).
 pub fn gt_prim(vm: &mut VM) -> Result<(), TbxError> {
-    let b = vm.pop()?;
-    let a = vm.pop()?;
+    let b = vm.pop_number()?;
+    let a = vm.pop_number()?;
     let result = match (&a, &b) {
         (Cell::Int(x), Cell::Int(y)) => x > y,
         (Cell::Float(x), Cell::Float(y)) => x > y,
         (Cell::Int(x), Cell::Float(y)) => (*x as f64) > *y,
         (Cell::Float(x), Cell::Int(y)) => *x > (*y as f64),
-        _ => {
-            return Err(TbxError::TypeError {
-                expected: "number",
-                got: "non-number",
-            })
-        }
+        _ => unreachable!("pop_number guarantees Int or Float"),
     };
     vm.push(Cell::Bool(result));
     Ok(())
@@ -237,19 +201,14 @@ pub fn gt_prim(vm: &mut VM) -> Result<(), TbxError> {
 
 /// LE — less than or equal. Pushes Bool(true) if a <= b (numeric only, with Int/Float promotion).
 pub fn le_prim(vm: &mut VM) -> Result<(), TbxError> {
-    let b = vm.pop()?;
-    let a = vm.pop()?;
+    let b = vm.pop_number()?;
+    let a = vm.pop_number()?;
     let result = match (&a, &b) {
         (Cell::Int(x), Cell::Int(y)) => x <= y,
         (Cell::Float(x), Cell::Float(y)) => x <= y,
         (Cell::Int(x), Cell::Float(y)) => (*x as f64) <= *y,
         (Cell::Float(x), Cell::Int(y)) => *x <= (*y as f64),
-        _ => {
-            return Err(TbxError::TypeError {
-                expected: "number",
-                got: "non-number",
-            })
-        }
+        _ => unreachable!("pop_number guarantees Int or Float"),
     };
     vm.push(Cell::Bool(result));
     Ok(())
@@ -257,19 +216,14 @@ pub fn le_prim(vm: &mut VM) -> Result<(), TbxError> {
 
 /// GE — greater than or equal. Pushes Bool(true) if a >= b (numeric only, with Int/Float promotion).
 pub fn ge_prim(vm: &mut VM) -> Result<(), TbxError> {
-    let b = vm.pop()?;
-    let a = vm.pop()?;
+    let b = vm.pop_number()?;
+    let a = vm.pop_number()?;
     let result = match (&a, &b) {
         (Cell::Int(x), Cell::Int(y)) => x >= y,
         (Cell::Float(x), Cell::Float(y)) => x >= y,
         (Cell::Int(x), Cell::Float(y)) => (*x as f64) >= *y,
         (Cell::Float(x), Cell::Int(y)) => *x >= (*y as f64),
-        _ => {
-            return Err(TbxError::TypeError {
-                expected: "number",
-                got: "non-number",
-            })
-        }
+        _ => unreachable!("pop_number guarantees Int or Float"),
     };
     vm.push(Cell::Bool(result));
     Ok(())
@@ -295,75 +249,43 @@ pub fn or_prim(vm: &mut VM) -> Result<(), TbxError> {
 /// Escape sequences (\n, \t, \\) in the stored string are output literally
 /// as they were already expanded at compile time (during intern).
 pub fn putstr_prim(vm: &mut VM) -> Result<(), TbxError> {
-    let cell = vm.pop()?;
-    match cell {
-        Cell::StringDesc(idx) => {
-            let s = vm.resolve_string(idx)?;
-            vm.write_output(&s);
-            Ok(())
-        }
-        _ => Err(TbxError::TypeError {
-            expected: "StringDesc",
-            got: cell.type_name(),
-        }),
-    }
+    let idx = vm.pop_string_desc()?;
+    let s = vm.resolve_string(idx)?;
+    vm.write_output(&s);
+    Ok(())
 }
 
 /// PUTCHR — output the integer value on the stack as a single ASCII character (no newline).
 pub fn putchr_prim(vm: &mut VM) -> Result<(), TbxError> {
-    let cell = vm.pop()?;
-    match cell {
-        Cell::Int(code) => {
-            if !(0..=127).contains(&code) {
-                return Err(TbxError::TypeError {
-                    expected: "ASCII code (0-127)",
-                    got: "out of range",
-                });
-            }
-            let ch = code as u8 as char;
-            vm.write_output(&ch.to_string());
-            Ok(())
-        }
-        _ => Err(TbxError::TypeError {
-            expected: "Int",
-            got: cell.type_name(),
-        }),
+    let code = vm.pop_int()?;
+    if !(0..=127).contains(&code) {
+        return Err(TbxError::TypeError {
+            expected: "ASCII code (0-127)",
+            got: "out of range",
+        });
     }
+    let ch = code as u8 as char;
+    vm.write_output(&ch.to_string());
+    Ok(())
 }
 
 /// PUTDEC — output the integer value on the stack as a signed decimal number (no newline).
 pub fn putdec_prim(vm: &mut VM) -> Result<(), TbxError> {
-    let cell = vm.pop()?;
-    match cell {
-        Cell::Int(n) => {
-            vm.write_output(&n.to_string());
-            Ok(())
-        }
-        _ => Err(TbxError::TypeError {
-            expected: "Int",
-            got: cell.type_name(),
-        }),
-    }
+    let n = vm.pop_int()?;
+    vm.write_output(&n.to_string());
+    Ok(())
 }
 
 /// PUTHEX — output the integer value on the stack as $-prefixed uppercase hex (no newline).
 /// Negative values are output as two's complement 64-bit representation.
 pub fn puthex_prim(vm: &mut VM) -> Result<(), TbxError> {
-    let cell = vm.pop()?;
-    match cell {
-        Cell::Int(n) => {
-            if n < 0 {
-                vm.write_output(&format!("${:X}", n as u64));
-            } else {
-                vm.write_output(&format!("${:X}", n));
-            }
-            Ok(())
-        }
-        _ => Err(TbxError::TypeError {
-            expected: "Int",
-            got: cell.type_name(),
-        }),
+    let n = vm.pop_int()?;
+    if n < 0 {
+        vm.write_output(&format!("${:X}", n as u64));
+    } else {
+        vm.write_output(&format!("${:X}", n));
     }
+    Ok(())
 }
 
 /// APPEND — pop a Cell and write it to dictionary[dp], advancing dp by 1.
@@ -374,16 +296,7 @@ pub fn append_prim(vm: &mut VM) -> Result<(), TbxError> {
 
 /// ALLOT — pop N from the stack, advance dp by N cells, and push the start address.
 pub fn allot_prim(vm: &mut VM) -> Result<(), TbxError> {
-    let cell = vm.pop()?;
-    let n = match cell {
-        Cell::Int(n) => n,
-        _ => {
-            return Err(TbxError::TypeError {
-                expected: "Int",
-                got: cell.type_name(),
-            })
-        }
-    };
+    let n = vm.pop_int()?;
     if n < 0 {
         return Err(TbxError::InvalidAllotCount);
     }
@@ -720,13 +633,13 @@ mod tests {
         let mut vm = VM::new();
         vm.push(Cell::Int(2));
         vm.push(Cell::Bool(true)); // Not a number
-        assert_eq!(
+        assert!(matches!(
             add_prim(&mut vm),
             Err(TbxError::TypeError {
                 expected: "number",
-                got: "non-number"
+                ..
             })
-        );
+        ));
     }
 
     // --- sub_prim ---
