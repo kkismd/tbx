@@ -151,7 +151,7 @@ impl<'a> ExprCompiler<'a> {
                         // Binary bitwise-AND (precedence 6, left-associative).
                         pop_ops_while(&mut op_stack, &mut output, self.vm, 6, true)?;
                         op_stack.push(OpItem::BinOp {
-                            prim: "AND",
+                            prim: "BAND",
                             prec: 6,
                         });
                         prev_was_operand = false;
@@ -452,7 +452,7 @@ fn binary_op_info(op: &str) -> Option<(&'static str, u8, bool)> {
         ">=" => Some(("GE", 4, true)),
         "=" => Some(("EQ", 5, true)),
         "<>" => Some(("NEQ", 5, true)),
-        "|" => Some(("OR", 7, true)),
+        "|" => Some(("BOR", 7, true)),
         "&&" => Some(("AND", 8, true)),
         "||" => Some(("OR", 9, true)),
         _ => None,
