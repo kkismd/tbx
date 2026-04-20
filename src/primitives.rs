@@ -491,16 +491,22 @@ mod tests {
     }
 
     #[test]
-    fn test_register_all_drop_is_callable() {
+    fn test_register_all_drop_callable_via_inner_interpreter() {
+        // Verify that the registered DROP word can be invoked through the inner interpreter.
         let mut vm = VM::new();
         register_all(&mut vm);
-        let xt = vm.lookup("DROP").unwrap();
+        let drop_xt = vm.lookup("DROP").unwrap();
+        let exit_xt = vm.lookup("EXIT").unwrap();
+
+        // Write a tiny program: [Xt(DROP), Xt(EXIT)]
+        let start = vm.dp;
+        vm.dict_write(Cell::Xt(drop_xt)).unwrap();
+        vm.dict_write(Cell::Xt(exit_xt)).unwrap();
+
         vm.push(Cell::Int(99));
-        if let crate::dict::EntryKind::Primitive(f) = vm.headers[xt.index()].kind {
-            f(&mut vm).unwrap();
-        } else {
-            panic!("DROP is not a Primitive");
-        }
+        vm.run(start).unwrap();
+
+        // DROP must have consumed the only stack element.
         assert_eq!(vm.pop(), Err(TbxError::StackUnderflow));
     }
 
