@@ -50,6 +50,9 @@ impl std::fmt::Debug for EntryKind {
 /// Flag bit: word executes immediately even in compile mode
 pub const FLAG_IMMEDIATE: u8 = 0b0000_0001;
 
+/// Flag bit: word is an internal system word and cannot be called directly from user code.
+pub const FLAG_SYSTEM: u8 = 0b0000_0010;
+
 /// A single entry in the TBX word header table.
 ///
 /// The header table (`VM::headers`) and the flat code array (`VM::dictionary`)
