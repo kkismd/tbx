@@ -151,7 +151,7 @@ impl<'a> ExprCompiler<'a> {
                         // Binary bitwise-AND (precedence 6, left-associative).
                         pop_ops_while(&mut op_stack, &mut output, self.vm, 6, true)?;
                         op_stack.push(OpItem::BinOp {
-                            prim: "AND",
+                            prim: "BAND",
                             prec: 6,
                         });
                         prev_was_operand = false;
@@ -452,7 +452,7 @@ fn binary_op_info(op: &str) -> Option<(&'static str, u8, bool)> {
         ">=" => Some(("GE", 4, true)),
         "=" => Some(("EQ", 5, true)),
         "<>" => Some(("NEQ", 5, true)),
-        "|" => Some(("OR", 7, true)),
+        "|" => Some(("BOR", 7, true)),
         "&&" => Some(("AND", 8, true)),
         "||" => Some(("OR", 9, true)),
         _ => None,
@@ -849,6 +849,54 @@ mod tests {
         assert!(
             matches!(err, TbxError::InvalidExpression { .. }),
             "expected InvalidExpression for unknown operator, got: {err:?}"
+        );
+    }
+
+    // ------------------------------------------------------------------
+    // Binary & / | compile to BAND / BOR
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn test_binary_band_compiles() {
+        // `1 & 3` should compile to: LIT 1 LIT 3 BAND
+        let mut vm = make_vm();
+        let tokens = lex("1 & 3");
+        let result = ExprCompiler::new(&mut vm).compile_expr(&tokens).unwrap();
+
+        let lit_xt = vm.lookup("LIT").unwrap();
+        let band_xt = vm.lookup("BAND").unwrap();
+
+        assert_eq!(
+            result,
+            vec![
+                Cell::Xt(lit_xt),
+                Cell::Int(1),
+                Cell::Xt(lit_xt),
+                Cell::Int(3),
+                Cell::Xt(band_xt),
+            ]
+        );
+    }
+
+    #[test]
+    fn test_binary_bor_compiles() {
+        // `1 | 2` should compile to: LIT 1 LIT 2 BOR
+        let mut vm = make_vm();
+        let tokens = lex("1 | 2");
+        let result = ExprCompiler::new(&mut vm).compile_expr(&tokens).unwrap();
+
+        let lit_xt = vm.lookup("LIT").unwrap();
+        let bor_xt = vm.lookup("BOR").unwrap();
+
+        assert_eq!(
+            result,
+            vec![
+                Cell::Xt(lit_xt),
+                Cell::Int(1),
+                Cell::Xt(lit_xt),
+                Cell::Int(2),
+                Cell::Xt(bor_xt),
+            ]
         );
     }
 }

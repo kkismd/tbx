@@ -258,6 +258,22 @@ pub fn or_prim(vm: &mut VM) -> Result<(), TbxError> {
     Ok(())
 }
 
+/// BAND — bitwise AND. Both operands must be Int.
+pub fn band_prim(vm: &mut VM) -> Result<(), TbxError> {
+    let b = vm.pop_int()?;
+    let a = vm.pop_int()?;
+    vm.push(Cell::Int(a & b))?;
+    Ok(())
+}
+
+/// BOR — bitwise OR. Both operands must be Int.
+pub fn bor_prim(vm: &mut VM) -> Result<(), TbxError> {
+    let b = vm.pop_int()?;
+    let a = vm.pop_int()?;
+    vm.push(Cell::Int(a | b))?;
+    Ok(())
+}
+
 /// PUTSTR — output the string referenced by a StringDesc on the stack (no newline).
 /// Escape sequences (\n, \t, \\) in the stored string are output literally
 /// as they were already expanded at compile time (during intern).
@@ -402,6 +418,8 @@ pub fn register_all(vm: &mut VM) {
     vm.register(WordEntry::new_primitive("GE", ge_prim));
     vm.register(WordEntry::new_primitive("AND", and_prim));
     vm.register(WordEntry::new_primitive("OR", or_prim));
+    vm.register(WordEntry::new_primitive("BAND", band_prim));
+    vm.register(WordEntry::new_primitive("BOR", bor_prim));
     vm.register(WordEntry::new_primitive("NEGATE", negate_prim));
     vm.register(WordEntry::new_primitive("PUTSTR", putstr_prim));
     vm.register(WordEntry::new_primitive("PUTCHR", putchr_prim));
@@ -1264,6 +1282,96 @@ mod tests {
         vm.push(Cell::Int(5)).unwrap();
         or_prim(&mut vm).unwrap();
         assert_eq!(vm.pop(), Ok(Cell::Bool(true)));
+    }
+
+    // --- BAND / BOR tests ---
+
+    #[test]
+    fn test_band_basic() {
+        let mut vm = VM::new();
+        vm.push(Cell::Int(1)).unwrap();
+        vm.push(Cell::Int(3)).unwrap();
+        band_prim(&mut vm).unwrap();
+        assert_eq!(vm.pop(), Ok(Cell::Int(1)));
+    }
+
+    #[test]
+    fn test_band_zero() {
+        let mut vm = VM::new();
+        vm.push(Cell::Int(0)).unwrap();
+        vm.push(Cell::Int(5)).unwrap();
+        band_prim(&mut vm).unwrap();
+        assert_eq!(vm.pop(), Ok(Cell::Int(0)));
+    }
+
+    #[test]
+    fn test_band_type_error() {
+        let mut vm = VM::new();
+        vm.push(Cell::Bool(true)).unwrap();
+        vm.push(Cell::Int(1)).unwrap();
+        assert!(matches!(
+            band_prim(&mut vm),
+            Err(TbxError::TypeError { .. })
+        ));
+    }
+
+    #[test]
+    fn test_band_type_error_top() {
+        // b (stack top) is non-Int; first pop should fail with TypeError.
+        let mut vm = VM::new();
+        vm.push(Cell::Int(1)).unwrap();
+        vm.push(Cell::Bool(true)).unwrap();
+        assert!(matches!(
+            band_prim(&mut vm),
+            Err(TbxError::TypeError { .. })
+        ));
+    }
+
+    #[test]
+    fn test_band_underflow() {
+        let mut vm = VM::new();
+        assert_eq!(band_prim(&mut vm), Err(TbxError::StackUnderflow));
+    }
+
+    #[test]
+    fn test_bor_basic() {
+        let mut vm = VM::new();
+        vm.push(Cell::Int(1)).unwrap();
+        vm.push(Cell::Int(2)).unwrap();
+        bor_prim(&mut vm).unwrap();
+        assert_eq!(vm.pop(), Ok(Cell::Int(3)));
+    }
+
+    #[test]
+    fn test_bor_same() {
+        let mut vm = VM::new();
+        vm.push(Cell::Int(5)).unwrap();
+        vm.push(Cell::Int(5)).unwrap();
+        bor_prim(&mut vm).unwrap();
+        assert_eq!(vm.pop(), Ok(Cell::Int(5)));
+    }
+
+    #[test]
+    fn test_bor_type_error() {
+        let mut vm = VM::new();
+        vm.push(Cell::Bool(false)).unwrap();
+        vm.push(Cell::Int(1)).unwrap();
+        assert!(matches!(bor_prim(&mut vm), Err(TbxError::TypeError { .. })));
+    }
+
+    #[test]
+    fn test_bor_type_error_top() {
+        // b (stack top) is non-Int; first pop should fail with TypeError.
+        let mut vm = VM::new();
+        vm.push(Cell::Int(1)).unwrap();
+        vm.push(Cell::Bool(false)).unwrap();
+        assert!(matches!(bor_prim(&mut vm), Err(TbxError::TypeError { .. })));
+    }
+
+    #[test]
+    fn test_bor_underflow() {
+        let mut vm = VM::new();
+        assert_eq!(bor_prim(&mut vm), Err(TbxError::StackUnderflow));
     }
 
     // --- PUTSTR tests ---
