@@ -1495,8 +1495,8 @@ mod tests {
     #[test]
     fn test_pop_number_float() {
         let mut vm = VM::new();
-        vm.push(Cell::Float(3.14));
-        assert_eq!(vm.pop_number(), Ok(Cell::Float(3.14)));
+        vm.push(Cell::Float(2.5));
+        assert_eq!(vm.pop_number(), Ok(Cell::Float(2.5)));
     }
 
     #[test]
