@@ -18,7 +18,11 @@ pub struct InterpreterError {
 
 impl std::fmt::Debug for InterpreterError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "line {}:{}: {:?}", self.line, self.col, self.kind)
+        write!(
+            f,
+            "line {}:{}: {:?}\n  {}",
+            self.line, self.col, self.kind, self.source_line
+        )
     }
 }
 
@@ -142,7 +146,12 @@ impl Interpreter {
         };
 
         // Determine arity from top-level comma count.
-        let arity = count_top_level_arity(arg_tokens);
+        let arity = count_top_level_arity(arg_tokens).map_err(|e| InterpreterError {
+            line: stmt_pos_line,
+            col: stmt_pos_col,
+            source_line: line.to_string(),
+            kind: e,
+        })?;
 
         // Check whether the statement is a compiled word (needs CALL with arity/locals)
         // or a primitive/other (called directly by placing Xt in the code stream).
@@ -151,15 +160,6 @@ impl Interpreter {
             crate::dict::EntryKind::Word(_)
         );
 
-        // Look up required system words for building the code buffer.
-        let lit_marker_xt = self.vm.lookup("LIT_MARKER").unwrap();
-        let call_xt = self.vm.lookup("CALL").unwrap();
-        let drop_to_marker_xt = self.vm.lookup("DROP_TO_MARKER").unwrap();
-        let exit_xt = self.vm.lookup("EXIT").unwrap();
-
-        // Save the current dictionary pointer to use as the buffer start.
-        let buf_start = self.vm.dp;
-
         // Helper closure for wrapping TbxError into InterpreterError.
         let make_err = |e: TbxError| InterpreterError {
             line: stmt_pos_line,
@@ -167,6 +167,32 @@ impl Interpreter {
             source_line: line.to_string(),
             kind: e,
         };
+
+        // Look up required system words for building the code buffer.
+        // These must always be present after init_vm(); return a proper error if missing.
+        let lit_marker_xt = self.vm.lookup("LIT_MARKER").ok_or_else(|| {
+            make_err(TbxError::UndefinedSymbol {
+                name: "LIT_MARKER".into(),
+            })
+        })?;
+        let call_xt = self.vm.lookup("CALL").ok_or_else(|| {
+            make_err(TbxError::UndefinedSymbol {
+                name: "CALL".into(),
+            })
+        })?;
+        let drop_to_marker_xt = self.vm.lookup("DROP_TO_MARKER").ok_or_else(|| {
+            make_err(TbxError::UndefinedSymbol {
+                name: "DROP_TO_MARKER".into(),
+            })
+        })?;
+        let exit_xt = self.vm.lookup("EXIT").ok_or_else(|| {
+            make_err(TbxError::UndefinedSymbol {
+                name: "EXIT".into(),
+            })
+        })?;
+
+        // Save the current dictionary pointer to use as the buffer start.
+        let buf_start = self.vm.dp;
 
         // Build temporary code buffer:
         //   Xt(LIT_MARKER)
@@ -196,12 +222,25 @@ impl Interpreter {
             .map_err(&make_err)?;
         self.vm.dict_write(Cell::Xt(exit_xt)).map_err(&make_err)?;
 
+        // Save VM state snapshots for rollback on error.
+        let saved_data_stack_len = self.vm.data_stack.len();
+        let saved_return_stack_len = self.vm.return_stack.len();
+        let saved_bp = self.vm.bp;
+
         // Execute the temporary buffer.
         let run_result = self.vm.run(buf_start);
 
         // Reset the dictionary pointer to discard the temporary buffer.
         self.vm.dp = buf_start;
         self.vm.dictionary.truncate(buf_start);
+
+        // On error, restore stacks and bp to their pre-run state so that
+        // subsequent exec_line calls start from a clean VM state.
+        if run_result.is_err() {
+            self.vm.data_stack.truncate(saved_data_stack_len);
+            self.vm.return_stack.truncate(saved_return_stack_len);
+            self.vm.bp = saved_bp;
+        }
 
         run_result.map_err(make_err)
     }
@@ -231,10 +270,12 @@ impl Interpreter {
 /// Count the number of top-level comma-separated arguments in a token slice.
 ///
 /// "Top-level" means not nested inside parentheses.
-/// Returns 0 for an empty slice, otherwise `top_level_commas + 1`.
-fn count_top_level_arity(tokens: &[SpannedToken]) -> usize {
+/// Returns `Ok(0)` for an empty slice, otherwise `Ok(top_level_commas + 1)`.
+///
+/// Returns `Err(TbxError::InvalidExpression)` if an unmatched `)` is found.
+fn count_top_level_arity(tokens: &[SpannedToken]) -> Result<usize, TbxError> {
     if tokens.is_empty() {
-        return 0;
+        return Ok(0);
     }
     let mut depth: usize = 0;
     let mut commas: usize = 0;
@@ -242,13 +283,15 @@ fn count_top_level_arity(tokens: &[SpannedToken]) -> usize {
         match &st.token {
             Token::LParen => depth += 1,
             Token::RParen => {
-                depth = depth.saturating_sub(1);
+                depth = depth.checked_sub(1).ok_or(TbxError::InvalidExpression {
+                    reason: "unmatched ')' in argument list",
+                })?;
             }
             Token::Comma if depth == 0 => commas += 1,
             _ => {}
         }
     }
-    commas + 1
+    Ok(commas + 1)
 }
 
 #[cfg(test)]
@@ -325,6 +368,18 @@ mod tests {
 
     #[test]
     fn test_count_top_level_arity_empty() {
-        assert_eq!(count_top_level_arity(&[]), 0);
+        assert_eq!(count_top_level_arity(&[]), Ok(0));
+    }
+
+    #[test]
+    fn test_vm_state_restored_after_error() {
+        // After a runtime error the data stack, return stack, and bp must be clean.
+        let mut interp = Interpreter::new();
+        // Force a runtime error by calling an undefined symbol at runtime.
+        let _ = interp.exec_line("NOSUCHWORD");
+        // A subsequent valid call must still work.
+        interp.exec_line("PUTDEC 1").unwrap();
+        let out = interp.take_output();
+        assert!(out.contains('1'));
     }
 }
