@@ -588,12 +588,16 @@ impl Interpreter {
 
         // Compile the argument expression to a cell sequence.
         // Local variables in the current compile scope shadow globals (local_table checked first).
-        let arg_cells = {
+        let (arg_cells, expr_patch_offsets) = {
             let local_table_opt: Option<&HashMap<String, usize>> =
                 self.compile_state.as_ref().map(|s| &s.local_table);
             let self_word = self.compile_state.as_ref().map(|s| s.word_name.clone());
-            let mut compiler = ExprCompiler::with_context(&mut self.vm, local_table_opt, self_word);
-            compiler.compile_expr(arg_tokens).map_err(&make_err)?
+            let self_hdr_idx = self.compile_state.as_ref().map(|s| s.hdr_len_at_def);
+            let mut compiler =
+                ExprCompiler::with_context(&mut self.vm, local_table_opt, self_word, self_hdr_idx);
+            let cells = compiler.compile_expr(arg_tokens).map_err(&make_err)?;
+            let offsets = std::mem::take(&mut compiler.patch_offsets);
+            (cells, offsets)
         };
 
         // Determine arity from top-level comma count.
@@ -622,8 +626,18 @@ impl Interpreter {
         self.vm
             .dict_write(Cell::Xt(lit_marker_xt))
             .map_err(&make_err)?;
+        // Record base_dp after LIT_MARKER so that expr_patch_offsets can be
+        // translated to absolute dictionary positions.
+        let base_dp = self.vm.dp;
         for cell in arg_cells {
             self.vm.dict_write(cell).map_err(&make_err)?;
+        }
+        // Register self-recursive local_count placeholder positions found inside
+        // the argument expression.
+        if let Some(state) = &mut self.compile_state {
+            for offset in expr_patch_offsets {
+                state.call_patch_list.push(base_dp + offset);
+            }
         }
         if stmt_is_word {
             // Determine local_count for the CALL instruction.
@@ -786,14 +800,26 @@ impl Interpreter {
         })?;
 
         // Compile the condition expression directly into the dictionary.
-        let cond_cells = {
+        let (cond_cells, expr_patch_offsets) = {
             let local_table_opt = self.compile_state.as_ref().map(|s| &s.local_table);
             let self_word = self.compile_state.as_ref().map(|s| s.word_name.clone());
-            let mut compiler = ExprCompiler::with_context(&mut self.vm, local_table_opt, self_word);
-            compiler.compile_expr(cond_tokens).map_err(&make_err)?
+            let self_hdr_idx = self.compile_state.as_ref().map(|s| s.hdr_len_at_def);
+            let mut compiler =
+                ExprCompiler::with_context(&mut self.vm, local_table_opt, self_word, self_hdr_idx);
+            let cells = compiler.compile_expr(cond_tokens).map_err(&make_err)?;
+            let offsets = std::mem::take(&mut compiler.patch_offsets);
+            (cells, offsets)
         };
+        let base_dp = self.vm.dp;
         for cell in cond_cells {
             self.vm.dict_write(cell).map_err(&make_err)?;
+        }
+        // Register self-recursive local_count placeholder positions found inside
+        // the condition expression.
+        if let Some(state) = &mut self.compile_state {
+            for offset in expr_patch_offsets {
+                state.call_patch_list.push(base_dp + offset);
+            }
         }
 
         // Emit BIF or BIT.
@@ -824,15 +850,30 @@ impl Interpreter {
 
         if !arg_tokens.is_empty() {
             // Compile the return expression directly into the dictionary.
-            let expr_cells = {
+            let (expr_cells, expr_patch_offsets) = {
                 let local_table_opt = self.compile_state.as_ref().map(|s| &s.local_table);
                 let self_word = self.compile_state.as_ref().map(|s| s.word_name.clone());
-                let mut compiler =
-                    ExprCompiler::with_context(&mut self.vm, local_table_opt, self_word);
-                compiler.compile_expr(arg_tokens).map_err(&make_err)?
+                let self_hdr_idx = self.compile_state.as_ref().map(|s| s.hdr_len_at_def);
+                let mut compiler = ExprCompiler::with_context(
+                    &mut self.vm,
+                    local_table_opt,
+                    self_word,
+                    self_hdr_idx,
+                );
+                let cells = compiler.compile_expr(arg_tokens).map_err(&make_err)?;
+                let offsets = std::mem::take(&mut compiler.patch_offsets);
+                (cells, offsets)
             };
+            let base_dp = self.vm.dp;
             for cell in expr_cells {
                 self.vm.dict_write(cell).map_err(&make_err)?;
+            }
+            // Register self-recursive local_count placeholder positions found inside
+            // the return expression.
+            if let Some(state) = &mut self.compile_state {
+                for offset in expr_patch_offsets {
+                    state.call_patch_list.push(base_dp + offset);
+                }
             }
             // Emit RETURN_VAL to return the top-of-stack value from the word.
             let return_val_xt = self.lookup_required("RETURN_VAL", line, col, source_line)?;
@@ -1602,5 +1643,77 @@ PUTDEC FACT(5)
         let mut interp = Interpreter::new();
         interp.exec_source(src).unwrap();
         assert_eq!(interp.take_output(), "120");
+    }
+
+    #[test]
+    fn test_recursive_with_var_expr() {
+        // Regression test for issue #222: self-recursive call inside a LET expression
+        // (processed by ExprCompiler) must have its local_count back-patched.
+        // Previously, local_count=0 was permanently embedded and caused IndexOutOfBounds
+        // at runtime when the VAR slot was accessed.
+        // Uses BIT (branch if true) so the base case label is reached when N <= 1 is true.
+        let src = r#"
+DEF FACT(N)
+  VAR R
+  BIT N <= 1, 10
+    LET &R, N * FACT(N - 1)
+    RETURN R
+  10 RETURN 1
+END
+PUTDEC FACT(5)
+PUTSTR "\n"
+"#;
+        let mut interp = Interpreter::new();
+        interp.exec_source(src).unwrap();
+        assert_eq!(interp.take_output(), "120\n");
+    }
+
+    #[test]
+    fn test_recursive_self_call_in_return_expr() {
+        // Regression test for issue #222: self-recursive call inside RETURN expression
+        // (compile_return path) must have its local_count back-patched.
+        let src = r#"
+DEF FACT(N)
+  VAR R
+  BIT N <= 1, 10
+    LET &R, N - 1
+    RETURN N * FACT(R)
+  10 RETURN 1
+END
+PUTDEC FACT(5)
+PUTSTR "\n"
+"#;
+        let mut interp = Interpreter::new();
+        interp.exec_source(src).unwrap();
+        assert_eq!(interp.take_output(), "120\n");
+    }
+
+    #[test]
+    fn test_recursive_self_call_in_bif_condition() {
+        // Regression test for issue #222: self-recursive call inside BIF/BIT condition
+        // expression (compile_branch path) must have its local_count back-patched.
+        //
+        // MYGT(R) appears directly inside the BIT condition `MYGT(R) > 0`, which is
+        // compiled by compile_branch via ExprCompiler. Without the fix, local_count=0
+        // would be permanently embedded, causing IndexOutOfBounds when the VAR R slot
+        // is accessed inside the recursive call.
+        //
+        // Trace: MYGT(3)->2, MYGT(2)->2, MYGT(1)->1, MYGT(0)->0
+        let src = r#"
+DEF MYGT(N)
+  VAR R
+  BIT N <= 0, 10
+    LET &R, N - 1
+    BIT MYGT(R) > 0, 20
+      RETURN 1
+    20 RETURN 2
+  10 RETURN 0
+END
+PUTDEC MYGT(3)
+PUTSTR "\n"
+"#;
+        let mut interp = Interpreter::new();
+        interp.exec_source(src).unwrap();
+        assert_eq!(interp.take_output(), "2\n");
     }
 }
