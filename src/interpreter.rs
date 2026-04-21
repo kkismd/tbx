@@ -409,6 +409,15 @@ impl Interpreter {
         let exit_xt = self.lookup_required("EXIT", line, col, source_line)?;
         self.vm.dict_write(Cell::Xt(exit_xt)).map_err(&make_err)?;
 
+        // Check for unresolved forward label references BEFORE taking compile_state,
+        // so that rollback_def() can still work if an error is detected.
+        if let Some(state) = &self.compile_state {
+            if let Some(&(label, _)) = state.patch_list.first() {
+                self.rollback_def();
+                return Err(make_err(TbxError::UndefinedLabel { label }));
+            }
+        }
+
         // Take the compile state to get local_count and patch list.
         let state = self
             .compile_state
@@ -420,11 +429,6 @@ impl Interpreter {
             self.vm
                 .dict_write_at(pos, Cell::Int(state.local_count as i64))
                 .map_err(&make_err)?;
-        }
-
-        // Check for unresolved forward label references.
-        if let Some((label, _)) = state.patch_list.first() {
-            return Err(make_err(TbxError::UndefinedLabel { label: *label }));
         }
 
         // Update the word header with the confirmed local_count.
@@ -668,11 +672,17 @@ impl Interpreter {
         line: usize,
         col: usize,
     ) -> Result<(), InterpreterError> {
+        let make_err = |e: TbxError| InterpreterError::new(line, col, source_line, e);
         let dp = self.vm.dp;
         let state = self
             .compile_state
             .as_mut()
             .expect("register_label called outside compile mode");
+
+        // Reject duplicate label definitions within the same word.
+        if state.label_table.contains_key(&n) {
+            return Err(make_err(TbxError::DuplicateLabel { label: n }));
+        }
         state.label_table.insert(n, dp);
 
         // Collect all dictionary positions that are waiting for this label.
@@ -690,7 +700,6 @@ impl Interpreter {
             self.vm.dictionary[patch_pos] = Cell::Int(dp as i64);
         }
 
-        let _ = (source_line, line, col); // reserved for future error reporting
         Ok(())
     }
 
@@ -734,11 +743,13 @@ impl Interpreter {
         let make_err = |e: TbxError| InterpreterError::new(line, col, source_line, e);
 
         // Split at the last top-level comma: left = condition expression, right = label.
-        let split_pos = last_top_level_comma(arg_tokens).ok_or_else(|| {
-            make_err(TbxError::InvalidExpression {
-                reason: "BIF/BIT requires syntax: BIF cond, label",
-            })
-        })?;
+        let split_pos = last_top_level_comma(arg_tokens)
+            .map_err(&make_err)?
+            .ok_or_else(|| {
+                make_err(TbxError::InvalidExpression {
+                    reason: "BIF/BIT requires syntax: BIF cond, label",
+                })
+            })?;
         let cond_tokens = &arg_tokens[..split_pos];
         let label_tokens = &arg_tokens[split_pos + 1..];
 
@@ -841,18 +852,22 @@ fn count_top_level_arity(tokens: &[SpannedToken]) -> Result<usize, TbxError> {
 ///
 /// "Top-level" means not nested inside parentheses.
 /// Returns `None` if no top-level comma is found.
-fn last_top_level_comma(tokens: &[SpannedToken]) -> Option<usize> {
+fn last_top_level_comma(tokens: &[SpannedToken]) -> Result<Option<usize>, TbxError> {
     let mut depth: usize = 0;
     let mut last_comma = None;
     for (i, st) in tokens.iter().enumerate() {
         match &st.token {
             Token::LParen => depth += 1,
-            Token::RParen => depth = depth.saturating_sub(1),
+            Token::RParen => {
+                depth = depth.checked_sub(1).ok_or(TbxError::InvalidExpression {
+                    reason: "unmatched ')' in argument list",
+                })?;
+            }
             Token::Comma if depth == 0 => last_comma = Some(i),
             _ => {}
         }
     }
-    last_comma
+    Ok(last_comma)
 }
 
 /// Parse a label number from a token slice.
@@ -1308,9 +1323,47 @@ FWDTEST
 
         let toks = tokenize_args("I > 10, 99");
         let comma_pos = last_top_level_comma(&toks);
-        assert!(comma_pos.is_some(), "should find a top-level comma");
+        assert!(
+            comma_pos.unwrap().is_some(),
+            "should find a top-level comma"
+        );
 
         let toks_no_comma = tokenize_args("42");
-        assert_eq!(last_top_level_comma(&toks_no_comma), None);
+        assert_eq!(last_top_level_comma(&toks_no_comma).unwrap(), None);
+    }
+
+    #[test]
+    fn test_duplicate_label_is_error() {
+        // Defining the same label twice in one word must produce DuplicateLabel.
+        let src = "DEF DUPWORD\n  10\n  PUTDEC 1\n  10\nEND";
+        let mut interp = Interpreter::new();
+        let result = interp.exec_source(src);
+        assert!(result.is_err(), "expected error for duplicate label");
+        let err = result.unwrap_err();
+        assert!(
+            matches!(err.kind, TbxError::DuplicateLabel { label: 10 }),
+            "expected DuplicateLabel(10), got: {:?}",
+            err.kind
+        );
+    }
+
+    #[test]
+    fn test_undefined_label_error_rollback_allows_redefine() {
+        // After UndefinedLabel error, the VM should roll back so that the word
+        // can be redefined successfully.
+        let mut interp = Interpreter::new();
+
+        // First attempt: GOTO to undefined label 999 — should error.
+        let result = interp.exec_source("DEF REDEFWORD\n  GOTO 999\nEND");
+        assert!(result.is_err());
+
+        // Second attempt: valid definition of the same name — should succeed.
+        let result2 = interp.exec_source("DEF REDEFWORD\n  PUTDEC 7\nEND\nREDEFWORD");
+        assert!(
+            result2.is_ok(),
+            "redefine after rollback failed: {:?}",
+            result2.unwrap_err()
+        );
+        assert_eq!(interp.take_output(), "7");
     }
 }
