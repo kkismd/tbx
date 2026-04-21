@@ -388,6 +388,11 @@ impl Interpreter {
         // Register the new word immediately (forward calls within the body will resolve).
         let entry = crate::dict::WordEntry::new_word(&name, self.vm.dp);
         self.vm.register(entry);
+        // Smudge: hide the word from lookup until END completes, so that operator primitives
+        // with the same name (e.g. ADD, MUL) are not shadowed during body compilation.
+        if let Some(last) = self.vm.headers.last_mut() {
+            last.flags |= crate::dict::FLAG_HIDDEN;
+        }
 
         self.vm.is_compiling = true;
         self.compile_state = Some(CompileState {
@@ -440,11 +445,13 @@ impl Interpreter {
                 .map_err(&make_err)?;
         }
 
-        // Update the word header with the confirmed local_count.
+        // Update the word header with the confirmed local_count and unsmudge (make visible).
         // The word was registered as the last entry at hdr_len_at_def.
         let word_hdr_idx = state.hdr_len_at_def;
         if word_hdr_idx < self.vm.headers.len() {
             self.vm.headers[word_hdr_idx].local_count = state.local_count;
+            // Unsmudge: clear FLAG_HIDDEN so the word is now visible to lookup.
+            self.vm.headers[word_hdr_idx].flags &= !crate::dict::FLAG_HIDDEN;
         }
 
         // Seal user-defined space.
@@ -1513,5 +1520,21 @@ PUTDEC CHOOSE(0, 100, 200)
         let mut interp = Interpreter::new();
         interp.exec_source(src).unwrap();
         assert_eq!(interp.take_output(), "100 200");
+    }
+
+    #[test]
+    fn test_def_word_named_after_operator_primitive() {
+        // DEF ADD(A, B) RETURN A + B END must not cause infinite recursion.
+        // During body compilation, FLAG_HIDDEN prevents the compiler from resolving
+        // the `+` operator to the partially-compiled ADD word instead of the primitive.
+        let src = r#"
+DEF ADD(A, B)
+  RETURN A + B
+END
+PUTDEC ADD(3, 4)
+"#;
+        let mut interp = Interpreter::new();
+        interp.exec_source(src).unwrap();
+        assert_eq!(interp.take_output(), "7");
     }
 }

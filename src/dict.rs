@@ -67,6 +67,9 @@ pub const FLAG_IMMEDIATE: u8 = 0b0000_0001;
 /// Flag bit: word is an internal system word and cannot be called directly from user code.
 pub const FLAG_SYSTEM: u8 = 0b0000_0010;
 
+/// Flag bit: word is currently being compiled (smudge flag). Hidden from lookup until END.
+pub const FLAG_HIDDEN: u8 = 0b0000_0100;
+
 /// A single entry in the TBX word header table.
 ///
 /// The header table (`VM::headers`) and the flat code array (`VM::dictionary`)
@@ -300,5 +303,15 @@ mod tests {
         let mut entry = WordEntry::new_primitive("if", dummy_prim);
         entry.flags = 0b1111_1111; // all bits including bit 0
         assert!(entry.is_immediate());
+    }
+
+    // --- FLAG_HIDDEN constant ---
+
+    #[test]
+    fn test_flag_hidden_value() {
+        // FLAG_HIDDEN must be bit 2 (0b0000_0100), distinct from FLAG_IMMEDIATE and FLAG_SYSTEM.
+        assert_eq!(FLAG_HIDDEN, 0b0000_0100);
+        assert_eq!(FLAG_HIDDEN & FLAG_IMMEDIATE, 0);
+        assert_eq!(FLAG_HIDDEN & FLAG_SYSTEM, 0);
     }
 }
