@@ -227,7 +227,10 @@ COMPILE_EXPR    ( -- )
 | リファレンス `&X`（ローカル） | `Xt(LIT)`, `StackAddr(n)` | 2 |
 | 単項演算子 `-` | `Xt(NEGATE)` | 1 |
 | 二項演算子 `+` | `Xt(ADD)` | 1 |
-| 関数呼び出し `F(...)` | 引数列 + `Xt(CALL)`, `Xt(F)`, `arity`, `local_count` | 引数分 + 4 |
+| ワード呼び出し `W(...)` | 引数列 + `Xt(CALL)`, `Xt(W)`, `Int(arity)`, `Int(local_count)` | 引数分 + 4 |
+| プリミティブ/変数/定数呼び出し `P(...)` | 引数列 + `Xt(P)` | 引数分 + 1 |
+
+> `CALL` は `EntryKind::Word` 専用。プリミティブ・変数・定数は直接 `Xt` を出力する。
 
 トークン・ディスクリプタ
 
@@ -453,14 +456,16 @@ DROP_TO_MARKER: -> [B]  (retval also removed)
 
 > Issue #87「操車場アルゴリズムでの関数適用について」に基づく設計方針
 
-式内での関数呼び出し（例: `MYFUNC(1, 2, 3)`）のarity（引数の数）は**コンパイル時カウンター方式**で確定する（選択肢A）。`ExprCompiler` はSYA処理中にコンマをカウントし、`(` 検出時にarity=1でフレームを開き、内側のコンマが現れるたびにインクリメントする。確定したarityはCALL命令のインラインオペランドとして bytecode に埋め込む。
+式内での関数呼び出し（例: `MYFUNC(1, 2, 3)`）のarity（引数の数）は**コンパイル時カウンター方式**で確定する（選択肢A）。`ExprCompiler` はSYA処理中にコンマをカウントし、`(` 検出時にarity=1でフレームを開き、内側のコンマが現れるたびにインクリメントする。arityはコンパイル時に確定し、**ワード呼び出し（`EntryKind::Word`）の場合のみ** CALL 命令のインラインオペランドとして bytecode に埋め込む。
 
 処理の流れ:
 
 1. `f(` を検出した時点で、演算子スタックに `LParen { call: Some((xt, arity: 1)) }` を積む
 2. 引数はコンマを通じて順次コンパイルされる（コンマは引数区切りとして arity をインクリメント）
-3. `)` で arity を確定し、`[Xt(CALL), Xt(f), Int(arity), Int(0)]` を出力キューに追加する
-4. 空の引数 `f()` の場合は arity=0 として直接出力する
+3. `)` で arity を確定し、呼び出し対象の `EntryKind` に応じて出力を分岐する:
+   - `EntryKind::Word` の場合: `[Xt(CALL), Xt(f), Int(arity), Int(0)]` を出力キューに追加する
+   - プリミティブ・変数・定数の場合: `[Xt(f)]` のみを出力キューに追加する（CALL なし）
+4. 空の引数 `f()` の場合は arity=0 として同様に分岐して出力する
 
 > Issue #194「blueprint-language.md：arity確定方式の記述（SP差分方式）がCOMPILE_EXPRテーブルと矛盾している」に基づく設計方針
 
