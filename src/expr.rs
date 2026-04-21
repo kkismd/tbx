@@ -62,20 +62,6 @@ impl<'a> ExprCompiler<'a> {
         }
     }
 
-    /// Create an `ExprCompiler` with an optional local variable table.
-    ///
-    /// When `local_table` is `Some`, local variables shadow same-named globals.
-    pub fn with_local_table_opt(
-        vm: &'a mut VM,
-        local_table: Option<&'a HashMap<String, usize>>,
-    ) -> Self {
-        Self {
-            vm,
-            local_table,
-            self_word: None,
-        }
-    }
-
     /// Create an `ExprCompiler` with a local variable table and the name of the
     /// word currently being compiled (for self-recursive call resolution).
     pub fn with_context(

@@ -119,9 +119,7 @@ impl VM {
     /// itself (for recursion) but still hidden from other lookups (e.g. operator
     /// primitives with the same name).
     pub fn lookup_including_self(&self, name: &str, self_word: Option<&str>) -> Option<Xt> {
-        let allow_hidden = self_word
-            .map(|sw| sw.eq_ignore_ascii_case(name))
-            .unwrap_or(false);
+        let allow_hidden = self_word.map(|sw| sw == name).unwrap_or(false);
         let mut current = self.latest;
         while let Some(xt) = current {
             if xt.index() >= self.headers.len() {
