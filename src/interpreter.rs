@@ -84,7 +84,7 @@ impl Interpreter {
         }
     }
 
-    /// Look up a required system symbol by name, returning an `InterpreterError` if not found.
+    /// Look up a required symbol by name, returning an `InterpreterError` if not found.
     fn lookup_required(
         &self,
         name: &str,
