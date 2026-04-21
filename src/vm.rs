@@ -422,20 +422,16 @@ impl VM {
                     self.pc = offset;
                 }
                 EntryKind::Call => {
-                    let target_xt =
-                        self.dict_read(self.pc + 1)?
-                            .as_xt()
-                            .ok_or(TbxError::TypeError {
-                                expected: "Xt",
-                                got: "non-Xt",
-                            })?;
-                    let arity_raw =
-                        self.dict_read(self.pc + 2)?
-                            .as_int()
-                            .ok_or(TbxError::TypeError {
-                                expected: "Int (arity)",
-                                got: "non-Int",
-                            })?;
+                    let xt_cell = self.dict_read(self.pc + 1)?;
+                    let target_xt = xt_cell.as_xt().ok_or_else(|| TbxError::TypeError {
+                        expected: "Xt",
+                        got: xt_cell.type_name(),
+                    })?;
+                    let arity_cell = self.dict_read(self.pc + 2)?;
+                    let arity_raw = arity_cell.as_int().ok_or_else(|| TbxError::TypeError {
+                        expected: "Int (arity)",
+                        got: arity_cell.type_name(),
+                    })?;
                     if arity_raw < 0 {
                         return Err(TbxError::TypeError {
                             expected: "non-negative Int (arity)",
@@ -443,12 +439,13 @@ impl VM {
                         });
                     }
                     let arity = arity_raw as usize;
+                    let local_count_cell = self.dict_read(self.pc + 3)?;
                     let local_count_raw =
-                        self.dict_read(self.pc + 3)?
+                        local_count_cell
                             .as_int()
-                            .ok_or(TbxError::TypeError {
+                            .ok_or_else(|| TbxError::TypeError {
                                 expected: "Int (local count)",
-                                got: "non-Int",
+                                got: local_count_cell.type_name(),
                             })?;
                     if local_count_raw < 0 {
                         return Err(TbxError::TypeError {
