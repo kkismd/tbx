@@ -57,7 +57,7 @@ pub struct ExprCompiler<'a> {
     /// (`Cell::Int(0)`) was written for a self-recursive CALL instruction.
     /// The caller must translate these to absolute dictionary positions and add them to
     /// `CompileState::call_patch_list` after writing the cells to the dictionary.
-    pub patch_offsets: Vec<usize>,
+    pub(crate) patch_offsets: Vec<usize>,
 }
 
 impl<'a> ExprCompiler<'a> {

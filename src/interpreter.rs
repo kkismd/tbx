@@ -1667,4 +1667,45 @@ PUTSTR "\n"
         interp.exec_source(src).unwrap();
         assert_eq!(interp.take_output(), "120\n");
     }
+
+    #[test]
+    fn test_recursive_self_call_in_return_expr() {
+        // Regression test for issue #222: self-recursive call inside RETURN expression
+        // (compile_return path) must have its local_count back-patched.
+        let src = r#"
+DEF FACT(N)
+  VAR R
+  BIT N <= 1, 10
+    LET &R, N - 1
+    RETURN N * FACT(R)
+  10 RETURN 1
+END
+PUTDEC FACT(5)
+PUTSTR "\n"
+"#;
+        let mut interp = Interpreter::new();
+        interp.exec_source(src).unwrap();
+        assert_eq!(interp.take_output(), "120\n");
+    }
+
+    #[test]
+    fn test_recursive_self_call_in_bif_condition() {
+        // Regression test for issue #222: self-recursive call inside BIF/BIT condition
+        // expression (compile_branch path) must have its local_count back-patched.
+        // COUNTDOWN(N) uses BIF with a recursive sub-expression in the condition.
+        let src = r#"
+DEF SUM(N)
+  VAR R
+  BIT N <= 0, 10
+    LET &R, SUM(N - 1)
+    RETURN N + R
+  10 RETURN 0
+END
+PUTDEC SUM(5)
+PUTSTR "\n"
+"#;
+        let mut interp = Interpreter::new();
+        interp.exec_source(src).unwrap();
+        assert_eq!(interp.take_output(), "15\n");
+    }
 }
