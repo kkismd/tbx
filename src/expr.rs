@@ -50,6 +50,14 @@ pub struct ExprCompiler<'a> {
     /// Name of the word currently being compiled, used to allow self-recursive lookups.
     /// Only this word's hidden entry (FLAG_HIDDEN) is visible to identifier resolution.
     self_word: Option<String>,
+    /// Header index of the word currently being compiled (for self-recursive call detection).
+    /// `None` outside of compile mode or when patching is not needed.
+    self_hdr_idx: Option<usize>,
+    /// Offsets within the compiled output `Vec<Cell>` where a `local_count` placeholder
+    /// (`Cell::Int(0)`) was written for a self-recursive CALL instruction.
+    /// The caller must translate these to absolute dictionary positions and add them to
+    /// `CompileState::call_patch_list` after writing the cells to the dictionary.
+    pub patch_offsets: Vec<usize>,
 }
 
 impl<'a> ExprCompiler<'a> {
@@ -59,20 +67,28 @@ impl<'a> ExprCompiler<'a> {
             vm,
             local_table: None,
             self_word: None,
+            self_hdr_idx: None,
+            patch_offsets: Vec::new(),
         }
     }
 
     /// Create an `ExprCompiler` with a local variable table and the name of the
     /// word currently being compiled (for self-recursive call resolution).
+    /// `self_hdr_idx` is the header index of the word being compiled; when
+    /// a call to that same index is encountered in an expression, a `local_count`
+    /// placeholder is emitted and its offset recorded in `patch_offsets`.
     pub fn with_context(
         vm: &'a mut VM,
         local_table: Option<&'a HashMap<String, usize>>,
         self_word: Option<String>,
+        self_hdr_idx: Option<usize>,
     ) -> Self {
         Self {
             vm,
             local_table,
             self_word,
+            self_hdr_idx,
+            patch_offsets: Vec::new(),
         }
     }
 
@@ -151,7 +167,14 @@ impl<'a> ExprCompiler<'a> {
 
                         if next_is_rparen {
                             // Zero-argument call: emit based on entry kind.
-                            emit_call_by_kind(&mut output, xt, 0, self.vm)?;
+                            emit_call_by_kind(
+                                &mut output,
+                                xt,
+                                0,
+                                self.vm,
+                                self.self_hdr_idx,
+                                &mut self.patch_offsets,
+                            )?;
                             i += 2; // skip '(' and ')'
                             prev_was_operand = true;
                         } else {
@@ -172,7 +195,14 @@ impl<'a> ExprCompiler<'a> {
                             }
                             _ => {
                                 // Treat as a nullary call: emit based on entry kind.
-                                emit_call_by_kind(&mut output, xt, 0, self.vm)?;
+                                emit_call_by_kind(
+                                    &mut output,
+                                    xt,
+                                    0,
+                                    self.vm,
+                                    self.self_hdr_idx,
+                                    &mut self.patch_offsets,
+                                )?;
                             }
                         }
                         prev_was_operand = true;
@@ -307,7 +337,14 @@ impl<'a> ExprCompiler<'a> {
                         call: Some((xt, arity)),
                     }) = op_stack.pop()
                     {
-                        emit_call_by_kind(&mut output, xt, arity, self.vm)?;
+                        emit_call_by_kind(
+                            &mut output,
+                            xt,
+                            arity,
+                            self.vm,
+                            self.self_hdr_idx,
+                            &mut self.patch_offsets,
+                        )?;
                     }
                     prev_was_operand = true;
                 }
@@ -416,6 +453,8 @@ fn emit_local_read(output: &mut Vec<Cell>, idx: usize, vm: &VM) -> Result<(), Tb
 /// Emit the function-call sequence based on the `EntryKind` of `xt`.
 ///
 /// - `EntryKind::Word`: emits `Xt(CALL)`, `Xt(xt)`, `Int(arity)`, `Int(local_count)`
+///   - When `xt.index() == self_hdr_idx` (self-recursive call), emits `Int(0)` as a
+///     placeholder and records the offset in `patch_offsets` for later back-patching.
 /// - `EntryKind::Primitive` / `Variable` / `Constant`: emits `Xt(xt)` directly
 /// - Any internal kind (Lit, Call, Exit, ReturnVal, DropToMarker): returns `InvalidExpression`
 fn emit_call_by_kind(
@@ -423,16 +462,25 @@ fn emit_call_by_kind(
     xt: Xt,
     arity: usize,
     vm: &VM,
+    self_hdr_idx: Option<usize>,
+    patch_offsets: &mut Vec<usize>,
 ) -> Result<(), TbxError> {
     let kind = vm.headers[xt.index()].kind.clone();
     match kind {
         EntryKind::Word(_) => {
             let call_xt = require_xt(vm, "CALL")?;
-            let local_count = vm.headers[xt.index()].local_count;
             output.push(Cell::Xt(call_xt));
             output.push(Cell::Xt(xt));
             output.push(Cell::Int(arity as i64));
-            output.push(Cell::Int(local_count as i64));
+            // For a self-recursive call the local_count is not yet finalized — emit
+            // a placeholder (0) and record the offset so the caller can back-patch it.
+            if self_hdr_idx.is_some_and(|idx| idx == xt.index()) {
+                patch_offsets.push(output.len());
+                output.push(Cell::Int(0));
+            } else {
+                let local_count = vm.headers[xt.index()].local_count;
+                output.push(Cell::Int(local_count as i64));
+            }
         }
         EntryKind::Primitive(_) | EntryKind::Variable(_) | EntryKind::Constant(_) => {
             output.push(Cell::Xt(xt));
