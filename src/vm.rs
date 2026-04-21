@@ -112,18 +112,24 @@ impl VM {
         None
     }
 
-    /// Like `lookup`, but also returns entries with `FLAG_HIDDEN` set.
+    /// Like `lookup`, but also returns the entry with `FLAG_HIDDEN` set **only when**
+    /// the name matches `self_word`.
     ///
-    /// Use this when resolving user-defined word calls (including self-recursive calls)
-    /// during compilation. Operator-primitive resolution should use the regular `lookup`.
-    pub fn lookup_any(&self, name: &str) -> Option<Xt> {
+    /// This supports self-recursive calls during compilation: a word is visible to
+    /// itself (for recursion) but still hidden from other lookups (e.g. operator
+    /// primitives with the same name).
+    pub fn lookup_including_self(&self, name: &str, self_word: Option<&str>) -> Option<Xt> {
+        let allow_hidden = self_word
+            .map(|sw| sw.eq_ignore_ascii_case(name))
+            .unwrap_or(false);
         let mut current = self.latest;
         while let Some(xt) = current {
             if xt.index() >= self.headers.len() {
                 break;
             }
             let entry = &self.headers[xt.index()];
-            if entry.name == name {
+            let is_hidden = entry.flags & crate::dict::FLAG_HIDDEN != 0;
+            if entry.name == name && (!is_hidden || allow_hidden) {
                 return Some(xt);
             }
             current = entry.prev;
@@ -899,21 +905,42 @@ mod tests {
     }
 
     #[test]
-    fn test_lookup_any_finds_hidden_entry() {
-        // lookup_any must return FLAG_HIDDEN entries (needed for self-recursive calls).
+    fn test_lookup_including_self_finds_hidden_entry_only_for_self() {
+        // lookup_including_self must return the hidden entry only when the name matches self_word.
         use crate::dict::FLAG_HIDDEN;
         let mut vm = VM::new();
         crate::primitives::register_all(&mut vm);
 
-        // Register a user word with the same name as a primitive and smudge it.
+        // Register two user words and smudge both.
         vm.register(WordEntry::new_word("FACT", 500));
-        let user_xt = vm.lookup("FACT").unwrap();
+        let fact_xt = vm.lookup("FACT").unwrap();
         vm.headers.last_mut().unwrap().flags |= FLAG_HIDDEN;
 
-        // Regular lookup returns None (hidden).
+        vm.register(WordEntry::new_word("HELPER", 600));
+        let helper_xt = vm.lookup("HELPER").unwrap();
+        vm.headers.last_mut().unwrap().flags |= FLAG_HIDDEN;
+
+        // Regular lookup returns None for both (both hidden).
         assert_eq!(vm.lookup("FACT"), None);
-        // lookup_any returns the hidden entry.
-        assert_eq!(vm.lookup_any("FACT"), Some(user_xt));
+        assert_eq!(vm.lookup("HELPER"), None);
+
+        // lookup_including_self with self_word="FACT" finds FACT but NOT HELPER.
+        assert_eq!(
+            vm.lookup_including_self("FACT", Some("FACT")),
+            Some(fact_xt)
+        );
+        assert_eq!(vm.lookup_including_self("HELPER", Some("FACT")), None);
+
+        // With self_word="HELPER", finds HELPER but NOT FACT.
+        assert_eq!(
+            vm.lookup_including_self("HELPER", Some("HELPER")),
+            Some(helper_xt)
+        );
+        assert_eq!(vm.lookup_including_self("FACT", Some("HELPER")), None);
+
+        // With self_word=None, finds neither.
+        assert_eq!(vm.lookup_including_self("FACT", None), None);
+        assert_eq!(vm.lookup_including_self("HELPER", None), None);
     }
 
     #[test]

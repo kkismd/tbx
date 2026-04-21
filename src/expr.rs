@@ -47,6 +47,9 @@ pub struct ExprCompiler<'a> {
     /// Optional local variable table passed in during compile mode.
     /// Local variables shadow same-named globals: this table is checked first.
     local_table: Option<&'a HashMap<String, usize>>,
+    /// Name of the word currently being compiled, used to allow self-recursive lookups.
+    /// Only this word's hidden entry (FLAG_HIDDEN) is visible to identifier resolution.
+    self_word: Option<String>,
 }
 
 impl<'a> ExprCompiler<'a> {
@@ -55,6 +58,7 @@ impl<'a> ExprCompiler<'a> {
         Self {
             vm,
             local_table: None,
+            self_word: None,
         }
     }
 
@@ -65,7 +69,25 @@ impl<'a> ExprCompiler<'a> {
         vm: &'a mut VM,
         local_table: Option<&'a HashMap<String, usize>>,
     ) -> Self {
-        Self { vm, local_table }
+        Self {
+            vm,
+            local_table,
+            self_word: None,
+        }
+    }
+
+    /// Create an `ExprCompiler` with a local variable table and the name of the
+    /// word currently being compiled (for self-recursive call resolution).
+    pub fn with_context(
+        vm: &'a mut VM,
+        local_table: Option<&'a HashMap<String, usize>>,
+        self_word: Option<String>,
+    ) -> Self {
+        Self {
+            vm,
+            local_table,
+            self_word,
+        }
     }
 
     /// Parse `tokens` and return the corresponding RPN instruction sequence.
@@ -125,7 +147,7 @@ impl<'a> ExprCompiler<'a> {
 
                     let xt = self
                         .vm
-                        .lookup_any(&name)
+                        .lookup_including_self(&name, self.self_word.as_deref())
                         .ok_or_else(|| TbxError::UndefinedSymbol { name: name.clone() })?;
 
                     // Peek ahead: is this a function call (`F(`)?
@@ -199,9 +221,12 @@ impl<'a> ExprCompiler<'a> {
                                     output.push(Cell::Xt(xt_lit));
                                     output.push(Cell::StackAddr(idx));
                                 } else {
-                                    let xt = self.vm.lookup(&name).ok_or_else(|| {
-                                        TbxError::UndefinedSymbol { name: name.clone() }
-                                    })?;
+                                    let xt = self
+                                        .vm
+                                        .lookup_including_self(&name, self.self_word.as_deref())
+                                        .ok_or_else(|| TbxError::UndefinedSymbol {
+                                            name: name.clone(),
+                                        })?;
                                     let kind = self.vm.headers[xt.index()].kind.clone();
                                     match kind {
                                         EntryKind::Variable(addr) => {

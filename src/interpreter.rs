@@ -390,9 +390,7 @@ impl Interpreter {
         self.vm.register(entry);
         // Smudge: hide the word from lookup until END completes, so that operator primitives
         // with the same name (e.g. ADD, MUL) are not shadowed during body compilation.
-        if let Some(last) = self.vm.headers.last_mut() {
-            last.flags |= crate::dict::FLAG_HIDDEN;
-        }
+        self.vm.headers[hdr_len_at_def].flags |= crate::dict::FLAG_HIDDEN;
 
         self.vm.is_compiling = true;
         self.compile_state = Some(CompileState {
@@ -568,13 +566,17 @@ impl Interpreter {
         let make_err = |e: TbxError| InterpreterError::new(err_line, err_col, source_line, e);
 
         // Look up the statement word.
-        // Use lookup_any so that a word currently being compiled (FLAG_HIDDEN) can be called
-        // recursively as a statement from within its own body.
-        let stmt_xt = self.vm.lookup_any(stmt_name).ok_or_else(|| {
-            make_err(TbxError::UndefinedSymbol {
-                name: stmt_name.to_string(),
-            })
-        })?;
+        // Allow resolving the currently-compiled word (FLAG_HIDDEN) so that self-recursive
+        // statement calls work. Other hidden words remain invisible.
+        let self_word_opt = self.compile_state.as_ref().map(|s| s.word_name.as_str());
+        let stmt_xt = self
+            .vm
+            .lookup_including_self(stmt_name, self_word_opt)
+            .ok_or_else(|| {
+                make_err(TbxError::UndefinedSymbol {
+                    name: stmt_name.to_string(),
+                })
+            })?;
 
         // Reject system-internal words from user code.
         let stmt_flags = self.vm.headers[stmt_xt.index()].flags;
@@ -589,7 +591,8 @@ impl Interpreter {
         let arg_cells = {
             let local_table_opt: Option<&HashMap<String, usize>> =
                 self.compile_state.as_ref().map(|s| &s.local_table);
-            let mut compiler = ExprCompiler::with_local_table_opt(&mut self.vm, local_table_opt);
+            let self_word = self.compile_state.as_ref().map(|s| s.word_name.clone());
+            let mut compiler = ExprCompiler::with_context(&mut self.vm, local_table_opt, self_word);
             compiler.compile_expr(arg_tokens).map_err(&make_err)?
         };
 
@@ -785,7 +788,8 @@ impl Interpreter {
         // Compile the condition expression directly into the dictionary.
         let cond_cells = {
             let local_table_opt = self.compile_state.as_ref().map(|s| &s.local_table);
-            let mut compiler = ExprCompiler::with_local_table_opt(&mut self.vm, local_table_opt);
+            let self_word = self.compile_state.as_ref().map(|s| s.word_name.clone());
+            let mut compiler = ExprCompiler::with_context(&mut self.vm, local_table_opt, self_word);
             compiler.compile_expr(cond_tokens).map_err(&make_err)?
         };
         for cell in cond_cells {
@@ -822,8 +826,9 @@ impl Interpreter {
             // Compile the return expression directly into the dictionary.
             let expr_cells = {
                 let local_table_opt = self.compile_state.as_ref().map(|s| &s.local_table);
+                let self_word = self.compile_state.as_ref().map(|s| s.word_name.clone());
                 let mut compiler =
-                    ExprCompiler::with_local_table_opt(&mut self.vm, local_table_opt);
+                    ExprCompiler::with_context(&mut self.vm, local_table_opt, self_word);
                 compiler.compile_expr(arg_tokens).map_err(&make_err)?
             };
             for cell in expr_cells {
@@ -1542,6 +1547,43 @@ PUTDEC ADD(3, 4)
         let mut interp = Interpreter::new();
         interp.exec_source(src).unwrap();
         assert_eq!(interp.take_output(), "7");
+    }
+
+    #[test]
+    fn test_def_word_named_after_mul_primitive() {
+        // MUL is the primitive for `*`. A user word named MUL must not shadow it during body.
+        let src = r#"
+DEF MUL(A, B)
+  RETURN A * B
+END
+PUTDEC MUL(3, 4)
+"#;
+        let mut interp = Interpreter::new();
+        interp.exec_source(src).unwrap();
+        assert_eq!(interp.take_output(), "12");
+    }
+
+    #[test]
+    fn test_def_word_named_after_lt_primitive() {
+        // LT is the primitive for `<`. A user word named LT must not shadow it during body.
+        // Use LT result inside another DEF to verify correctness.
+        // Note: multi-arg statement calls use comma syntax: WORD arg1, arg2
+        let src = r#"
+DEF LT(A, B)
+  RETURN A < B
+END
+DEF CHECK(A, B)
+  BIF LT(A, B), 99
+    PUTSTR "yes"
+  99
+  RETURN
+END
+CHECK 1, 2
+CHECK 5, 3
+"#;
+        let mut interp = Interpreter::new();
+        interp.exec_source(src).unwrap();
+        assert_eq!(interp.take_output(), "yes");
     }
 
     #[test]
