@@ -1804,6 +1804,33 @@ GREET";
     }
 
     #[test]
+    fn test_semicolon_partial_exec_on_error() {
+        // When a later segment errors, prior segments have already executed.
+        // This documents the expected partial-execution semantics.
+        let mut interp = Interpreter::new();
+        let result = interp.exec_line("PUTDEC 1; NOSUCHWORD");
+        assert!(result.is_err(), "second segment should return an error");
+        // First segment's output is already flushed.
+        assert_eq!(interp.take_output(), "1");
+    }
+
+    #[test]
+    fn test_semicolon_leading() {
+        // A leading semicolon produces an empty first segment, which is skipped.
+        let mut interp = Interpreter::new();
+        interp.exec_line("; PUTDEC 1").unwrap();
+        assert_eq!(interp.take_output(), "1");
+    }
+
+    #[test]
+    fn test_semicolon_consecutive() {
+        // Consecutive semicolons produce empty segments that are silently skipped.
+        let mut interp = Interpreter::new();
+        interp.exec_line("PUTDEC 1;; PUTDEC 2").unwrap();
+        assert_eq!(interp.take_output(), "12");
+    }
+
+    #[test]
     fn test_recursive_self_call_in_bif_condition() {
         // Regression test for issue #222: self-recursive call inside BIF/BIT condition
         // expression (compile_branch path) must have its local_count back-patched.
