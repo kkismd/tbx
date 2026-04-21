@@ -230,6 +230,15 @@ impl Interpreter {
                 return result;
             }
 
+            // Handle RETURN in compile mode: emit EXIT (void) or [expr] RETURN_VAL.
+            if stmt_name.eq_ignore_ascii_case("RETURN") {
+                let result = self.compile_return(&tokens[idx..], line, stmt_pos_line, stmt_pos_col);
+                if result.is_err() {
+                    self.rollback_def();
+                }
+                return result;
+            }
+
             let result = self.write_stmt_to_dict(
                 &stmt_name,
                 &tokens[idx..],
@@ -777,6 +786,53 @@ impl Interpreter {
 
         // Emit jump target (with back-patch if this is a forward reference).
         self.emit_jump_target(label_n, source_line, line, col)?;
+        Ok(())
+    }
+
+    /// Compile a `RETURN` statement inside a DEF body.
+    ///
+    /// - `RETURN` (no args)   → `Xt(EXIT)`
+    /// - `RETURN expr`        → `[expr cells] Xt(RETURN_VAL)`
+    ///
+    /// Unlike regular statements, no `LIT_MARKER`/`DROP_TO_MARKER` wrapper is emitted,
+    /// because RETURN must not discard the return value from the stack.
+    fn compile_return(
+        &mut self,
+        arg_tokens: &[SpannedToken],
+        source_line: &str,
+        line: usize,
+        col: usize,
+    ) -> Result<(), InterpreterError> {
+        let make_err = |e: TbxError| InterpreterError::new(line, col, source_line, e);
+
+        // Determine whether arg_tokens carries an expression (non-empty, not just Eof/newline).
+        let has_expr = arg_tokens
+            .first()
+            .map(|t| !matches!(t.token, Token::Eof | Token::Newline))
+            .unwrap_or(false);
+
+        if has_expr {
+            // Compile the return expression directly into the dictionary.
+            let expr_cells = {
+                let local_table_opt = self.compile_state.as_ref().map(|s| &s.local_table);
+                let mut compiler =
+                    ExprCompiler::with_local_table_opt(&mut self.vm, local_table_opt);
+                compiler.compile_expr(arg_tokens).map_err(&make_err)?
+            };
+            for cell in expr_cells {
+                self.vm.dict_write(cell).map_err(&make_err)?;
+            }
+            // Emit RETURN_VAL to return the top-of-stack value from the word.
+            let return_val_xt = self.lookup_required("RETURN_VAL", line, col, source_line)?;
+            self.vm
+                .dict_write(Cell::Xt(return_val_xt))
+                .map_err(&make_err)?;
+        } else {
+            // Void return: emit EXIT to leave the word immediately.
+            let exit_xt = self.lookup_required("EXIT", line, col, source_line)?;
+            self.vm.dict_write(Cell::Xt(exit_xt)).map_err(&make_err)?;
+        }
+
         Ok(())
     }
 
@@ -1386,5 +1442,64 @@ FWDTEST
             result2.unwrap_err()
         );
         assert_eq!(interp.take_output(), "7");
+    }
+
+    #[test]
+    fn test_return_with_value() {
+        // RETURN A + B compiles to [expr cells] Xt(RETURN_VAL).
+        // SUM(3, 4) should leave 7 on the caller's stack.
+        // Note: the word is named SUM (not ADD) to avoid shadowing the built-in ADD primitive
+        // that the `+` operator relies on internally.
+        let src = r#"
+DEF SUM(A, B)
+  RETURN A + B
+END
+PUTDEC SUM(3, 4)
+"#;
+        let mut interp = Interpreter::new();
+        interp.exec_source(src).unwrap();
+        assert_eq!(interp.take_output(), "7");
+    }
+
+    #[test]
+    fn test_return_void() {
+        // RETURN (no args) inside a conditional block compiles to Xt(EXIT).
+        // When FLAG=0, BIF jumps over PUTDEC, and RETURN exits the word early;
+        // output should be empty.
+        let src = r#"
+DEF PRINTIF(FLAG, VAL)
+  BIF FLAG, 99
+    PUTDEC VAL
+  99
+  RETURN
+END
+PRINTIF 0, 42
+"#;
+        let mut interp = Interpreter::new();
+        interp.exec_source(src).unwrap();
+        assert_eq!(
+            interp.take_output(),
+            "",
+            "RETURN void should exit without output"
+        );
+    }
+
+    #[test]
+    fn test_return_val_in_conditional() {
+        // BIF + RETURN expr: when FLAG=1 return A, else return B.
+        let src = r#"
+DEF CHOOSE(FLAG, A, B)
+  BIF FLAG, 10
+    RETURN A
+  10
+  RETURN B
+END
+PUTDEC CHOOSE(1, 100, 200)
+PUTSTR " "
+PUTDEC CHOOSE(0, 100, 200)
+"#;
+        let mut interp = Interpreter::new();
+        interp.exec_source(src).unwrap();
+        assert_eq!(interp.take_output(), "100 200");
     }
 }
