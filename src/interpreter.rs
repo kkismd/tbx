@@ -1,6 +1,6 @@
 //! Outer interpreter: tokenizes source text and executes statements via the inner interpreter.
 
-use crate::cell::Cell;
+use crate::cell::{Cell, Xt};
 use crate::dict::FLAG_SYSTEM;
 use crate::error::TbxError;
 use crate::expr::ExprCompiler;
@@ -82,6 +82,26 @@ impl Interpreter {
             vm: init_vm(),
             compile_state: None,
         }
+    }
+
+    /// Look up a required symbol by name, returning an `InterpreterError` if not found.
+    fn lookup_required(
+        &self,
+        name: &str,
+        line: usize,
+        col: usize,
+        source_line: &str,
+    ) -> Result<Xt, InterpreterError> {
+        self.vm.lookup(name).ok_or_else(|| {
+            InterpreterError::new(
+                line,
+                col,
+                source_line,
+                TbxError::UndefinedSymbol {
+                    name: name.to_string(),
+                },
+            )
+        })
     }
 
     /// Execute a single source line.
@@ -180,14 +200,12 @@ impl Interpreter {
 
         // Append EXIT to terminate the temporary code buffer.
         // On failure, reset dp before returning.
-        let exit_xt = match self.vm.lookup("EXIT") {
-            Some(xt) => xt,
-            None => {
+        let exit_xt = match self.lookup_required("EXIT", stmt_pos_line, stmt_pos_col, line) {
+            Ok(xt) => xt,
+            Err(e) => {
                 self.vm.dp = buf_start;
                 self.vm.dictionary.truncate(buf_start);
-                return Err(make_err(TbxError::UndefinedSymbol {
-                    name: "EXIT".into(),
-                }));
+                return Err(e);
             }
         };
         if let Err(e) = self.vm.dict_write(Cell::Xt(exit_xt)) {
@@ -280,11 +298,7 @@ impl Interpreter {
         let make_err = |e: TbxError| InterpreterError::new(line, col, source_line, e);
 
         // Write EXIT to terminate the word body.
-        let exit_xt = self.vm.lookup("EXIT").ok_or_else(|| {
-            make_err(TbxError::UndefinedSymbol {
-                name: "EXIT".into(),
-            })
-        })?;
+        let exit_xt = self.lookup_required("EXIT", line, col, source_line)?;
         self.vm.dict_write(Cell::Xt(exit_xt)).map_err(&make_err)?;
 
         // Seal user-defined space.
@@ -323,11 +337,7 @@ impl Interpreter {
         let make_err = |e: TbxError| InterpreterError::new(err_line, err_col, source_line, e);
 
         // Look up the statement word.
-        let stmt_xt = self.vm.lookup(stmt_name).ok_or_else(|| {
-            make_err(TbxError::UndefinedSymbol {
-                name: stmt_name.to_string(),
-            })
-        })?;
+        let stmt_xt = self.lookup_required(stmt_name, err_line, err_col, source_line)?;
 
         // Reject system-internal words from user code.
         let stmt_flags = self.vm.headers[stmt_xt.index()].flags;
@@ -355,21 +365,10 @@ impl Interpreter {
 
         // Look up required system words for building the code buffer.
         // These must always be present after init_vm(); return a proper error if missing.
-        let lit_marker_xt = self.vm.lookup("LIT_MARKER").ok_or_else(|| {
-            make_err(TbxError::UndefinedSymbol {
-                name: "LIT_MARKER".into(),
-            })
-        })?;
-        let call_xt = self.vm.lookup("CALL").ok_or_else(|| {
-            make_err(TbxError::UndefinedSymbol {
-                name: "CALL".into(),
-            })
-        })?;
-        let drop_to_marker_xt = self.vm.lookup("DROP_TO_MARKER").ok_or_else(|| {
-            make_err(TbxError::UndefinedSymbol {
-                name: "DROP_TO_MARKER".into(),
-            })
-        })?;
+        let lit_marker_xt = self.lookup_required("LIT_MARKER", err_line, err_col, source_line)?;
+        let call_xt = self.lookup_required("CALL", err_line, err_col, source_line)?;
+        let drop_to_marker_xt =
+            self.lookup_required("DROP_TO_MARKER", err_line, err_col, source_line)?;
 
         // Build code sequence:
         //   Xt(LIT_MARKER)
