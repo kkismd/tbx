@@ -29,6 +29,17 @@ pub enum EntryKind {
     /// DROP_TO_MARKER instruction: pops the data stack until a Cell::Marker is found (inclusive).
     /// Handled by the inner interpreter (not a PrimFn).
     DropToMarker,
+    /// GOTO instruction: reads next cell as target address, jumps unconditionally.
+    /// Handled by the inner interpreter (not a PrimFn).
+    Goto,
+    /// BIF (Branch If False) instruction: pops condition, jumps if falsy.
+    /// Reads next cell as target address.
+    /// Handled by the inner interpreter (not a PrimFn).
+    BranchIfFalse,
+    /// BIT (Branch If True) instruction: pops condition, jumps if truthy.
+    /// Reads next cell as target address.
+    /// Handled by the inner interpreter (not a PrimFn).
+    BranchIfTrue,
 }
 
 impl std::fmt::Debug for EntryKind {
@@ -43,6 +54,9 @@ impl std::fmt::Debug for EntryKind {
             EntryKind::Exit => write!(f, "Exit"),
             EntryKind::ReturnVal => write!(f, "ReturnVal"),
             EntryKind::DropToMarker => write!(f, "DropToMarker"),
+            EntryKind::Goto => write!(f, "Goto"),
+            EntryKind::BranchIfFalse => write!(f, "BranchIfFalse"),
+            EntryKind::BranchIfTrue => write!(f, "BranchIfTrue"),
         }
     }
 }

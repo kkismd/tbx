@@ -485,6 +485,27 @@ pub fn register_all(vm: &mut VM) {
         local_count: 0,
         prev: None,
     });
+    vm.register(WordEntry {
+        name: "GOTO".to_string(),
+        flags: FLAG_SYSTEM,
+        kind: EntryKind::Goto,
+        local_count: 0,
+        prev: None,
+    });
+    vm.register(WordEntry {
+        name: "BIF".to_string(),
+        flags: FLAG_SYSTEM,
+        kind: EntryKind::BranchIfFalse,
+        local_count: 0,
+        prev: None,
+    });
+    vm.register(WordEntry {
+        name: "BIT".to_string(),
+        flags: FLAG_SYSTEM,
+        kind: EntryKind::BranchIfTrue,
+        local_count: 0,
+        prev: None,
+    });
     let mut lit_marker_entry = WordEntry::new_primitive("LIT_MARKER", lit_marker_prim);
     lit_marker_entry.flags |= FLAG_SYSTEM;
     vm.register(lit_marker_entry);

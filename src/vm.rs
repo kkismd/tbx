@@ -233,6 +233,27 @@ impl VM {
             .ok_or(TbxError::IndexOutOfBounds { index: idx, size })
     }
 
+    /// Read the cell at `offset` as a jump target address.
+    ///
+    /// Expects `Cell::Int`; returns the address as `usize`.
+    ///
+    /// # Errors
+    ///
+    /// - `Err(TbxError::IndexOutOfBounds)` if `offset` is beyond the dictionary end.
+    /// - `Err(TbxError::TypeError)` if the cell at `offset` is not a `Cell::Int`.
+    /// - `Err(TbxError::InvalidJumpTarget)` if the address is negative.
+    fn read_jump_target(&self, offset: usize) -> Result<usize, TbxError> {
+        let cell = self.dict_read(offset)?;
+        let raw = cell.as_int().ok_or_else(|| TbxError::TypeError {
+            expected: "Int (jump target)",
+            got: cell.type_name(),
+        })?;
+        if raw < 0 {
+            return Err(TbxError::InvalidJumpTarget { address: raw });
+        }
+        Ok(raw as usize)
+    }
+
     /// Write a cell to an arbitrary dictionary index, with bounds checking.
     ///
     /// Unlike `dict_write`, this does not advance `dp`; it overwrites an
@@ -362,13 +383,11 @@ impl VM {
         self.pc = start_offset;
 
         loop {
-            let xt = self
-                .dict_read(self.pc)?
-                .as_xt()
-                .ok_or(TbxError::TypeError {
-                    expected: "Xt",
-                    got: "non-Xt",
-                })?;
+            let dispatch_cell = self.dict_read(self.pc)?;
+            let xt = dispatch_cell.as_xt().ok_or_else(|| TbxError::TypeError {
+                expected: "Xt",
+                got: dispatch_cell.type_name(),
+            })?;
             let entry_kind = self
                 .headers
                 .get(xt.index())
@@ -401,20 +420,16 @@ impl VM {
                     self.pc = offset;
                 }
                 EntryKind::Call => {
-                    let target_xt =
-                        self.dict_read(self.pc + 1)?
-                            .as_xt()
-                            .ok_or(TbxError::TypeError {
-                                expected: "Xt",
-                                got: "non-Xt",
-                            })?;
-                    let arity_raw =
-                        self.dict_read(self.pc + 2)?
-                            .as_int()
-                            .ok_or(TbxError::TypeError {
-                                expected: "Int (arity)",
-                                got: "non-Int",
-                            })?;
+                    let xt_cell = self.dict_read(self.pc + 1)?;
+                    let target_xt = xt_cell.as_xt().ok_or_else(|| TbxError::TypeError {
+                        expected: "Xt",
+                        got: xt_cell.type_name(),
+                    })?;
+                    let arity_cell = self.dict_read(self.pc + 2)?;
+                    let arity_raw = arity_cell.as_int().ok_or_else(|| TbxError::TypeError {
+                        expected: "Int (arity)",
+                        got: arity_cell.type_name(),
+                    })?;
                     if arity_raw < 0 {
                         return Err(TbxError::TypeError {
                             expected: "non-negative Int (arity)",
@@ -422,12 +437,13 @@ impl VM {
                         });
                     }
                     let arity = arity_raw as usize;
+                    let local_count_cell = self.dict_read(self.pc + 3)?;
                     let local_count_raw =
-                        self.dict_read(self.pc + 3)?
+                        local_count_cell
                             .as_int()
-                            .ok_or(TbxError::TypeError {
+                            .ok_or_else(|| TbxError::TypeError {
                                 expected: "Int (local count)",
-                                got: "non-Int",
+                                got: local_count_cell.type_name(),
                             })?;
                     if local_count_raw < 0 {
                         return Err(TbxError::TypeError {
@@ -517,6 +533,29 @@ impl VM {
                         }
                     }
                     self.pc += 1;
+                }
+
+                EntryKind::Goto => {
+                    let target = self.read_jump_target(self.pc + 1)?;
+                    self.pc = target;
+                }
+                EntryKind::BranchIfFalse => {
+                    let cond = self.pop()?;
+                    let target = self.read_jump_target(self.pc + 1)?;
+                    if !cond.is_truthy() {
+                        self.pc = target;
+                    } else {
+                        self.pc += 2;
+                    }
+                }
+                EntryKind::BranchIfTrue => {
+                    let cond = self.pop()?;
+                    let target = self.read_jump_target(self.pc + 1)?;
+                    if cond.is_truthy() {
+                        self.pc = target;
+                    } else {
+                        self.pc += 2;
+                    }
                 }
 
                 EntryKind::Lit => {
@@ -833,6 +872,26 @@ mod tests {
 
         // DROP should have removed the 99
         assert_eq!(vm.pop(), Err(crate::error::TbxError::StackUnderflow));
+    }
+
+    #[test]
+    fn test_run_non_xt_at_pc_errors_with_type_name() {
+        // Verify that when a non-Xt cell is found at the PC position,
+        // TypeError.got reports the actual cell type via type_name().
+        let mut vm = VM::new();
+        crate::primitives::register_all(&mut vm);
+
+        // Place Cell::Int(42) at offset 0 instead of an Xt.
+        vm.dict_write(Cell::Int(42)).unwrap();
+
+        let result = vm.run(0);
+        assert_eq!(
+            result,
+            Err(crate::error::TbxError::TypeError {
+                expected: "Xt",
+                got: "Int",
+            })
+        );
     }
 
     #[test]
@@ -1629,6 +1688,339 @@ mod tests {
                 Err(crate::error::TbxError::TypeError { .. })
             ),
             "expected TypeError for Constant CALL target"
+        );
+    }
+
+    // --- GOTO / BIF / BIT ---
+
+    #[test]
+    fn test_run_goto() {
+        // Verify that GOTO jumps unconditionally to the specified offset.
+        //
+        // Layout:
+        //   [0] Xt(GOTO)     <- GOTO instruction
+        //   [1] Int(3)       <- target address = 3
+        //   [2] Xt(DUP)      <- should be skipped
+        //   [3] Xt(EXIT)     <- landing point; exits immediately
+        let mut vm = VM::new();
+        crate::primitives::register_all(&mut vm);
+
+        let goto_xt = vm.lookup("GOTO").unwrap();
+        let dup_xt = vm.lookup("DUP").unwrap();
+        let exit_xt = vm.lookup("EXIT").unwrap();
+
+        vm.dict_write(Cell::Xt(goto_xt)).unwrap(); // [0]
+        vm.dict_write(Cell::Int(3)).unwrap(); // [1] target = 3
+        vm.dict_write(Cell::Xt(dup_xt)).unwrap(); // [2] skipped
+        vm.dict_write(Cell::Xt(exit_xt)).unwrap(); // [3]
+
+        vm.run(0).unwrap();
+
+        // DUP was skipped, so stack must be empty.
+        assert!(vm.data_stack.is_empty());
+    }
+
+    #[test]
+    fn test_run_bif_taken() {
+        // BIF: when condition is falsy, branch is taken (jumps to target).
+        //
+        // Layout:
+        //   [0] Xt(BIF)      <- BIF instruction
+        //   [1] Int(4)       <- target address = 4
+        //   [2] Xt(DUP)      <- fall-through path (should be skipped)
+        //   [3] Xt(EXIT)     <- fall-through exit (should be skipped)
+        //   [4] Xt(EXIT)     <- branch target; exits immediately
+        let mut vm = VM::new();
+        crate::primitives::register_all(&mut vm);
+
+        let bif_xt = vm.lookup("BIF").unwrap();
+        let dup_xt = vm.lookup("DUP").unwrap();
+        let exit_xt = vm.lookup("EXIT").unwrap();
+
+        vm.dict_write(Cell::Xt(bif_xt)).unwrap(); // [0]
+        vm.dict_write(Cell::Int(4)).unwrap(); // [1] target = 4
+        vm.dict_write(Cell::Xt(dup_xt)).unwrap(); // [2] skipped
+        vm.dict_write(Cell::Xt(exit_xt)).unwrap(); // [3] skipped
+        vm.dict_write(Cell::Xt(exit_xt)).unwrap(); // [4] branch target
+
+        // Push falsy condition; BIF should branch.
+        vm.push(Cell::Bool(false)).unwrap();
+        vm.run(0).unwrap();
+
+        // DUP was skipped, so stack must be empty.
+        assert!(vm.data_stack.is_empty());
+    }
+
+    #[test]
+    fn test_run_bif_not_taken() {
+        // BIF: when condition is truthy, fall-through occurs (no jump).
+        //
+        // Layout:
+        //   [0] Xt(BIF)      <- BIF instruction
+        //   [1] Int(5)       <- target address (not taken)
+        //   [2] Xt(LIT)      <- fall-through: push Int(42)
+        //   [3] Int(42)
+        //   [4] Xt(EXIT)
+        //   [5] Xt(EXIT)     <- branch target (not reached)
+        let mut vm = VM::new();
+        crate::primitives::register_all(&mut vm);
+
+        let bif_xt = vm.lookup("BIF").unwrap();
+        let lit_xt = vm.lookup("LIT").unwrap();
+        let exit_xt = vm.lookup("EXIT").unwrap();
+
+        vm.dict_write(Cell::Xt(bif_xt)).unwrap(); // [0]
+        vm.dict_write(Cell::Int(5)).unwrap(); // [1] target = 5 (not taken)
+        vm.dict_write(Cell::Xt(lit_xt)).unwrap(); // [2]
+        vm.dict_write(Cell::Int(42)).unwrap(); // [3]
+        vm.dict_write(Cell::Xt(exit_xt)).unwrap(); // [4]
+        vm.dict_write(Cell::Xt(exit_xt)).unwrap(); // [5] not reached
+
+        // Push truthy condition; BIF should fall through.
+        vm.push(Cell::Bool(true)).unwrap();
+        vm.run(0).unwrap();
+
+        // Fall-through pushed 42 onto the stack.
+        assert_eq!(vm.pop(), Ok(Cell::Int(42)));
+    }
+
+    #[test]
+    fn test_run_bit_taken() {
+        // BIT: when condition is truthy, branch is taken (jumps to target).
+        //
+        // Layout:
+        //   [0] Xt(BIT)      <- BIT instruction
+        //   [1] Int(4)       <- target address = 4
+        //   [2] Xt(DUP)      <- fall-through path (should be skipped)
+        //   [3] Xt(EXIT)     <- fall-through exit (should be skipped)
+        //   [4] Xt(EXIT)     <- branch target; exits immediately
+        let mut vm = VM::new();
+        crate::primitives::register_all(&mut vm);
+
+        let bit_xt = vm.lookup("BIT").unwrap();
+        let dup_xt = vm.lookup("DUP").unwrap();
+        let exit_xt = vm.lookup("EXIT").unwrap();
+
+        vm.dict_write(Cell::Xt(bit_xt)).unwrap(); // [0]
+        vm.dict_write(Cell::Int(4)).unwrap(); // [1] target = 4
+        vm.dict_write(Cell::Xt(dup_xt)).unwrap(); // [2] skipped
+        vm.dict_write(Cell::Xt(exit_xt)).unwrap(); // [3] skipped
+        vm.dict_write(Cell::Xt(exit_xt)).unwrap(); // [4] branch target
+
+        // Push truthy condition; BIT should branch.
+        vm.push(Cell::Bool(true)).unwrap();
+        vm.run(0).unwrap();
+
+        // DUP was skipped, so stack must be empty.
+        assert!(vm.data_stack.is_empty());
+    }
+
+    #[test]
+    fn test_run_bit_not_taken() {
+        // BIT: when condition is falsy, fall-through occurs (no jump).
+        //
+        // Layout:
+        //   [0] Xt(BIT)      <- BIT instruction
+        //   [1] Int(5)       <- target address (not taken)
+        //   [2] Xt(LIT)      <- fall-through: push Int(42)
+        //   [3] Int(42)
+        //   [4] Xt(EXIT)
+        //   [5] Xt(EXIT)     <- branch target (not reached)
+        let mut vm = VM::new();
+        crate::primitives::register_all(&mut vm);
+
+        let bit_xt = vm.lookup("BIT").unwrap();
+        let lit_xt = vm.lookup("LIT").unwrap();
+        let exit_xt = vm.lookup("EXIT").unwrap();
+
+        vm.dict_write(Cell::Xt(bit_xt)).unwrap(); // [0]
+        vm.dict_write(Cell::Int(5)).unwrap(); // [1] target = 5 (not taken)
+        vm.dict_write(Cell::Xt(lit_xt)).unwrap(); // [2]
+        vm.dict_write(Cell::Int(42)).unwrap(); // [3]
+        vm.dict_write(Cell::Xt(exit_xt)).unwrap(); // [4]
+        vm.dict_write(Cell::Xt(exit_xt)).unwrap(); // [5] not reached
+
+        // Push falsy condition; BIT should fall through.
+        vm.push(Cell::Bool(false)).unwrap();
+        vm.run(0).unwrap();
+
+        // Fall-through pushed 42 onto the stack.
+        assert_eq!(vm.pop(), Ok(Cell::Int(42)));
+    }
+
+    // --- error cases for GOTO/BIF/BIT ---
+
+    #[test]
+    fn test_run_goto_negative_target_errors() {
+        // GOTO with a negative target address must return InvalidJumpTarget.
+        let mut vm = VM::new();
+        crate::primitives::register_all(&mut vm);
+
+        let goto_xt = vm.lookup("GOTO").unwrap();
+
+        vm.dict_write(Cell::Xt(goto_xt)).unwrap(); // [0]
+        vm.dict_write(Cell::Int(-1)).unwrap(); // [1] negative target
+
+        let result = vm.run(0);
+        assert_eq!(
+            result,
+            Err(crate::error::TbxError::InvalidJumpTarget { address: -1 })
+        );
+    }
+
+    #[test]
+    fn test_run_goto_non_int_target_errors() {
+        // GOTO with a non-Int operand (Cell::Xt) must return TypeError with got = "Xt".
+        let mut vm = VM::new();
+        crate::primitives::register_all(&mut vm);
+
+        let goto_xt = vm.lookup("GOTO").unwrap();
+        let exit_xt = vm.lookup("EXIT").unwrap();
+
+        vm.dict_write(Cell::Xt(goto_xt)).unwrap(); // [0]
+        vm.dict_write(Cell::Xt(exit_xt)).unwrap(); // [1] Xt instead of Int
+
+        let result = vm.run(0);
+        assert_eq!(
+            result,
+            Err(crate::error::TbxError::TypeError {
+                expected: "Int (jump target)",
+                got: "Xt",
+            })
+        );
+    }
+
+    #[test]
+    fn test_run_goto_out_of_bounds_target_errors() {
+        // GOTO with a target beyond the dictionary end must return IndexOutOfBounds.
+        let mut vm = VM::new();
+        crate::primitives::register_all(&mut vm);
+
+        let goto_xt = vm.lookup("GOTO").unwrap();
+
+        vm.dict_write(Cell::Xt(goto_xt)).unwrap(); // [0]
+        vm.dict_write(Cell::Int(9999)).unwrap(); // [1] out-of-bounds target
+
+        let result = vm.run(0);
+        assert!(matches!(
+            result,
+            Err(crate::error::TbxError::IndexOutOfBounds { .. })
+        ));
+    }
+
+    #[test]
+    fn test_run_bif_empty_stack_errors() {
+        // BIF with an empty stack must return StackUnderflow.
+        let mut vm = VM::new();
+        crate::primitives::register_all(&mut vm);
+
+        let bif_xt = vm.lookup("BIF").unwrap();
+        let exit_xt = vm.lookup("EXIT").unwrap();
+
+        vm.dict_write(Cell::Xt(bif_xt)).unwrap(); // [0]
+        vm.dict_write(Cell::Int(3)).unwrap(); // [1] target
+        vm.dict_write(Cell::Xt(exit_xt)).unwrap(); // [2] (not reached)
+
+        // No condition pushed — expect StackUnderflow.
+        let result = vm.run(0);
+        assert_eq!(result, Err(crate::error::TbxError::StackUnderflow));
+    }
+
+    #[test]
+    fn test_run_bit_empty_stack_errors() {
+        // BIT with an empty stack must return StackUnderflow.
+        let mut vm = VM::new();
+        crate::primitives::register_all(&mut vm);
+
+        let bit_xt = vm.lookup("BIT").unwrap();
+        let exit_xt = vm.lookup("EXIT").unwrap();
+
+        vm.dict_write(Cell::Xt(bit_xt)).unwrap(); // [0]
+        vm.dict_write(Cell::Int(3)).unwrap(); // [1] target
+        vm.dict_write(Cell::Xt(exit_xt)).unwrap(); // [2] (not reached)
+
+        // No condition pushed — expect StackUnderflow.
+        let result = vm.run(0);
+        assert_eq!(result, Err(crate::error::TbxError::StackUnderflow));
+    }
+
+    #[test]
+    fn test_run_bif_negative_target_errors() {
+        // BIF with a negative target address must return InvalidJumpTarget.
+        let mut vm = VM::new();
+        crate::primitives::register_all(&mut vm);
+
+        let bif_xt = vm.lookup("BIF").unwrap();
+
+        vm.dict_write(Cell::Xt(bif_xt)).unwrap(); // [0]
+        vm.dict_write(Cell::Int(-5)).unwrap(); // [1] negative target
+
+        vm.push(Cell::Bool(false)).unwrap(); // falsy → branch would be taken
+        let result = vm.run(0);
+        assert_eq!(
+            result,
+            Err(crate::error::TbxError::InvalidJumpTarget { address: -5 })
+        );
+    }
+
+    #[test]
+    fn test_run_bit_negative_target_errors() {
+        // BIT with a negative target address must return InvalidJumpTarget.
+        let mut vm = VM::new();
+        crate::primitives::register_all(&mut vm);
+
+        let bit_xt = vm.lookup("BIT").unwrap();
+
+        vm.dict_write(Cell::Xt(bit_xt)).unwrap(); // [0]
+        vm.dict_write(Cell::Int(-3)).unwrap(); // [1] negative target
+
+        vm.push(Cell::Bool(true)).unwrap(); // truthy → branch would be taken
+        let result = vm.run(0);
+        assert_eq!(
+            result,
+            Err(crate::error::TbxError::InvalidJumpTarget { address: -3 })
+        );
+    }
+
+    #[test]
+    fn test_run_bif_negative_target_errors_on_fallthrough() {
+        // BIF with a negative target address must return InvalidJumpTarget
+        // even when the condition is truthy (fall-through path).
+        // read_jump_target is always evaluated regardless of the condition.
+        let mut vm = VM::new();
+        crate::primitives::register_all(&mut vm);
+
+        let bif_xt = vm.lookup("BIF").unwrap();
+
+        vm.dict_write(Cell::Xt(bif_xt)).unwrap(); // [0]
+        vm.dict_write(Cell::Int(-1)).unwrap(); // [1] negative target
+
+        vm.push(Cell::Bool(true)).unwrap(); // truthy → fall-through would be taken
+        let result = vm.run(0);
+        assert_eq!(
+            result,
+            Err(crate::error::TbxError::InvalidJumpTarget { address: -1 })
+        );
+    }
+
+    #[test]
+    fn test_run_bit_negative_target_errors_on_fallthrough() {
+        // BIT with a negative target address must return InvalidJumpTarget
+        // even when the condition is falsy (fall-through path).
+        // read_jump_target is always evaluated regardless of the condition.
+        let mut vm = VM::new();
+        crate::primitives::register_all(&mut vm);
+
+        let bit_xt = vm.lookup("BIT").unwrap();
+
+        vm.dict_write(Cell::Xt(bit_xt)).unwrap(); // [0]
+        vm.dict_write(Cell::Int(-2)).unwrap(); // [1] negative target
+
+        vm.push(Cell::Bool(false)).unwrap(); // falsy → fall-through would be taken
+        let result = vm.run(0);
+        assert_eq!(
+            result,
+            Err(crate::error::TbxError::InvalidJumpTarget { address: -2 })
         );
     }
 }
