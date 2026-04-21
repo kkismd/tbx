@@ -4,6 +4,8 @@
 //! flat RPN instruction sequence (`Vec<Cell>`) that can be appended to the VM
 //! dictionary or executed directly.
 
+use std::collections::HashMap;
+
 use crate::cell::{Cell, Xt};
 use crate::dict::EntryKind;
 use crate::error::TbxError;
@@ -42,12 +44,28 @@ enum OpItem {
 /// The caller receives the instruction sequence and decides how to use it.
 pub struct ExprCompiler<'a> {
     vm: &'a mut VM,
+    /// Optional local variable table passed in during compile mode.
+    /// Local variables shadow same-named globals: this table is checked first.
+    local_table: Option<&'a HashMap<String, usize>>,
 }
 
 impl<'a> ExprCompiler<'a> {
-    /// Create an `ExprCompiler` backed by the given VM.
+    /// Create an `ExprCompiler` backed by the given VM (no local variable table).
     pub fn new(vm: &'a mut VM) -> Self {
-        Self { vm }
+        Self {
+            vm,
+            local_table: None,
+        }
+    }
+
+    /// Create an `ExprCompiler` with an optional local variable table.
+    ///
+    /// When `local_table` is `Some`, local variables shadow same-named globals.
+    pub fn with_local_table_opt(
+        vm: &'a mut VM,
+        local_table: Option<&'a HashMap<String, usize>>,
+    ) -> Self {
+        Self { vm, local_table }
     }
 
     /// Parse `tokens` and return the corresponding RPN instruction sequence.
@@ -95,6 +113,16 @@ impl<'a> ExprCompiler<'a> {
                 // Identifiers (variables, constants, function calls)
                 // -------------------------------------------------------
                 Token::Ident(name) => {
+                    // Check local variable table first — locals shadow globals.
+                    if let Some(idx) = self.local_table.and_then(|lt| lt.get(&name)).copied() {
+                        // Peek ahead: a local variable cannot be called like a function.
+                        // Just emit a local variable read: LIT StackAddr(idx) FETCH.
+                        emit_local_read(&mut output, idx, self.vm)?;
+                        prev_was_operand = true;
+                        i += 1;
+                        continue;
+                    }
+
                     let xt = self
                         .vm
                         .lookup(&name)
@@ -157,27 +185,37 @@ impl<'a> ExprCompiler<'a> {
                         prev_was_operand = false;
                     } else {
                         // Unary address-of operator: eagerly consume the next identifier
-                        // and emit LIT DictAddr(addr) WITHOUT a FETCH instruction.
+                        // and emit LIT addr WITHOUT a FETCH instruction.
                         i += 1;
                         let next_tok = tokens.get(i).map(|st| st.token.clone());
                         match next_tok {
                             Some(Token::Ident(name)) => {
-                                let xt = self.vm.lookup(&name).ok_or_else(|| {
-                                    TbxError::UndefinedSymbol { name: name.clone() }
-                                })?;
-                                let kind = self.vm.headers[xt.index()].kind.clone();
-                                match kind {
-                                    EntryKind::Variable(addr) => {
-                                        // Emit address only — no FETCH.
-                                        let xt_lit = require_xt(self.vm, "LIT")?;
-                                        output.push(Cell::Xt(xt_lit));
-                                        output.push(Cell::DictAddr(addr));
-                                    }
-                                    _ => {
-                                        return Err(TbxError::TypeError {
-                                            expected: "variable identifier after unary &",
-                                            got: "non-variable",
-                                        });
+                                // Check local table first — locals shadow globals.
+                                if let Some(idx) =
+                                    self.local_table.and_then(|lt| lt.get(&name)).copied()
+                                {
+                                    // Emit StackAddr — no FETCH.
+                                    let xt_lit = require_xt(self.vm, "LIT")?;
+                                    output.push(Cell::Xt(xt_lit));
+                                    output.push(Cell::StackAddr(idx));
+                                } else {
+                                    let xt = self.vm.lookup(&name).ok_or_else(|| {
+                                        TbxError::UndefinedSymbol { name: name.clone() }
+                                    })?;
+                                    let kind = self.vm.headers[xt.index()].kind.clone();
+                                    match kind {
+                                        EntryKind::Variable(addr) => {
+                                            // Emit address only — no FETCH.
+                                            let xt_lit = require_xt(self.vm, "LIT")?;
+                                            output.push(Cell::Xt(xt_lit));
+                                            output.push(Cell::DictAddr(addr));
+                                        }
+                                        _ => {
+                                            return Err(TbxError::TypeError {
+                                                expected: "variable identifier after unary &",
+                                                got: "non-variable",
+                                            });
+                                        }
                                     }
                                 }
                             }
@@ -354,9 +392,19 @@ fn emit_var_read(output: &mut Vec<Cell>, addr: usize, vm: &VM) -> Result<(), Tbx
     Ok(())
 }
 
+/// Emit the local-variable-read sequence: `Xt(LIT)`, `StackAddr(idx)`, `Xt(FETCH)`.
+fn emit_local_read(output: &mut Vec<Cell>, idx: usize, vm: &VM) -> Result<(), TbxError> {
+    let lit_xt = require_xt(vm, "LIT")?;
+    let fetch_xt = require_xt(vm, "FETCH")?;
+    output.push(Cell::Xt(lit_xt));
+    output.push(Cell::StackAddr(idx));
+    output.push(Cell::Xt(fetch_xt));
+    Ok(())
+}
+
 /// Emit the function-call sequence based on the `EntryKind` of `xt`.
 ///
-/// - `EntryKind::Word`: emits `Xt(CALL)`, `Xt(xt)`, `Int(arity)`, `Int(0)`
+/// - `EntryKind::Word`: emits `Xt(CALL)`, `Xt(xt)`, `Int(arity)`, `Int(local_count)`
 /// - `EntryKind::Primitive` / `Variable` / `Constant`: emits `Xt(xt)` directly
 /// - Any internal kind (Lit, Call, Exit, ReturnVal, DropToMarker): returns `InvalidExpression`
 fn emit_call_by_kind(
@@ -369,10 +417,11 @@ fn emit_call_by_kind(
     match kind {
         EntryKind::Word(_) => {
             let call_xt = require_xt(vm, "CALL")?;
+            let local_count = vm.headers[xt.index()].local_count;
             output.push(Cell::Xt(call_xt));
             output.push(Cell::Xt(xt));
             output.push(Cell::Int(arity as i64));
-            output.push(Cell::Int(0));
+            output.push(Cell::Int(local_count as i64));
         }
         EntryKind::Primitive(_) | EntryKind::Variable(_) | EntryKind::Constant(_) => {
             output.push(Cell::Xt(xt));
@@ -1130,6 +1179,7 @@ mod tests {
             name: "INTERNAL".to_string(),
             flags: 0,
             kind: EntryKind::Lit,
+            local_count: 0,
             prev: None,
         });
 

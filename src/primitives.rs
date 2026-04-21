@@ -54,10 +54,36 @@ pub fn fetch_prim(vm: &mut VM) -> Result<(), TbxError> {
     }
 }
 
-/// STORE — pop a value and an address, and store the value at the address.
+/// STORE — pop addr (top) then value (below), and store value at addr.
+///
+/// Stack convention: `[..., value, addr]` → STORE → `[...]`
 pub fn store_prim(vm: &mut VM) -> Result<(), TbxError> {
     let addr = vm.pop()?;
     let value = vm.pop()?;
+    match addr {
+        Cell::DictAddr(a) => {
+            vm.dict_write_at(a, value)?;
+            Ok(())
+        }
+        Cell::StackAddr(a) => {
+            vm.local_write(a, value)?;
+            Ok(())
+        }
+        _ => Err(TbxError::TypeError {
+            expected: "address",
+            got: "non-address",
+        }),
+    }
+}
+
+/// LET — pop value (top) then addr (below), and store value at addr.
+///
+/// Designed for the `LET &var, value` statement pattern where `&var` is
+/// pushed before `value` (left-to-right argument evaluation via comma).
+/// Stack convention: `[..., addr, value]` → LET → `[...]`
+pub fn let_prim(vm: &mut VM) -> Result<(), TbxError> {
+    let value = vm.pop()?;
+    let addr = vm.pop()?;
     match addr {
         Cell::DictAddr(a) => {
             vm.dict_write_at(a, value)?;
@@ -405,6 +431,7 @@ pub fn register_all(vm: &mut VM) {
     vm.register(WordEntry::new_primitive("SWAP", swap_prim));
     vm.register(WordEntry::new_primitive("FETCH", fetch_prim));
     vm.register(WordEntry::new_primitive("STORE", store_prim));
+    vm.register(WordEntry::new_primitive("LET", let_prim));
     vm.register(WordEntry::new_primitive("ADD", add_prim));
     vm.register(WordEntry::new_primitive("SUB", sub_prim));
     vm.register(WordEntry::new_primitive("MUL", mul_prim));
@@ -434,24 +461,28 @@ pub fn register_all(vm: &mut VM) {
         name: "CALL".to_string(),
         flags: FLAG_SYSTEM,
         kind: EntryKind::Call,
+        local_count: 0,
         prev: None,
     });
     vm.register(WordEntry {
         name: "EXIT".to_string(),
         flags: FLAG_SYSTEM,
         kind: EntryKind::Exit,
+        local_count: 0,
         prev: None,
     });
     vm.register(WordEntry {
         name: "RETURN_VAL".to_string(),
         flags: FLAG_SYSTEM,
         kind: EntryKind::ReturnVal,
+        local_count: 0,
         prev: None,
     });
     vm.register(WordEntry {
         name: "DROP_TO_MARKER".to_string(),
         flags: FLAG_SYSTEM,
         kind: EntryKind::DropToMarker,
+        local_count: 0,
         prev: None,
     });
     let mut lit_marker_entry = WordEntry::new_primitive("LIT_MARKER", lit_marker_prim);
@@ -461,6 +492,7 @@ pub fn register_all(vm: &mut VM) {
         name: "LIT".to_string(),
         flags: FLAG_SYSTEM,
         kind: EntryKind::Lit,
+        local_count: 0,
         prev: None,
     });
     let mut literal_entry = WordEntry::new_primitive("LITERAL", literal_prim);
