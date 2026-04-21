@@ -568,7 +568,13 @@ impl Interpreter {
         let make_err = |e: TbxError| InterpreterError::new(err_line, err_col, source_line, e);
 
         // Look up the statement word.
-        let stmt_xt = self.lookup_required(stmt_name, err_line, err_col, source_line)?;
+        // Use lookup_any so that a word currently being compiled (FLAG_HIDDEN) can be called
+        // recursively as a statement from within its own body.
+        let stmt_xt = self.vm.lookup_any(stmt_name).ok_or_else(|| {
+            make_err(TbxError::UndefinedSymbol {
+                name: stmt_name.to_string(),
+            })
+        })?;
 
         // Reject system-internal words from user code.
         let stmt_flags = self.vm.headers[stmt_xt.index()].flags;
@@ -1536,5 +1542,23 @@ PUTDEC ADD(3, 4)
         let mut interp = Interpreter::new();
         interp.exec_source(src).unwrap();
         assert_eq!(interp.take_output(), "7");
+    }
+
+    #[test]
+    fn test_self_recursive_word() {
+        // Self-recursive calls must work even though the word is FLAG_HIDDEN during compilation.
+        // FACT(N): returns N! (factorial). BIF N, 10 jumps to label 10 when N=0 (base case).
+        let src = r#"
+DEF FACT(N)
+  BIF N, 10
+    RETURN N * FACT(N - 1)
+  10
+  RETURN 1
+END
+PUTDEC FACT(5)
+"#;
+        let mut interp = Interpreter::new();
+        interp.exec_source(src).unwrap();
+        assert_eq!(interp.take_output(), "120");
     }
 }

@@ -125,7 +125,7 @@ impl<'a> ExprCompiler<'a> {
 
                     let xt = self
                         .vm
-                        .lookup(&name)
+                        .lookup_any(&name)
                         .ok_or_else(|| TbxError::UndefinedSymbol { name: name.clone() })?;
 
                     // Peek ahead: is this a function call (`F(`)?

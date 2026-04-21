@@ -112,6 +112,25 @@ impl VM {
         None
     }
 
+    /// Like `lookup`, but also returns entries with `FLAG_HIDDEN` set.
+    ///
+    /// Use this when resolving user-defined word calls (including self-recursive calls)
+    /// during compilation. Operator-primitive resolution should use the regular `lookup`.
+    pub fn lookup_any(&self, name: &str) -> Option<Xt> {
+        let mut current = self.latest;
+        while let Some(xt) = current {
+            if xt.index() >= self.headers.len() {
+                break;
+            }
+            let entry = &self.headers[xt.index()];
+            if entry.name == name {
+                return Some(xt);
+            }
+            current = entry.prev;
+        }
+        None
+    }
+
     /// Push a value onto the data stack.
     ///
     /// # Errors
@@ -877,6 +896,24 @@ mod tests {
         // After clearing FLAG_HIDDEN, the user word should shadow the primitive.
         vm.headers.last_mut().unwrap().flags &= !FLAG_HIDDEN;
         assert_ne!(vm.lookup("ADD"), Some(sys_xt));
+    }
+
+    #[test]
+    fn test_lookup_any_finds_hidden_entry() {
+        // lookup_any must return FLAG_HIDDEN entries (needed for self-recursive calls).
+        use crate::dict::FLAG_HIDDEN;
+        let mut vm = VM::new();
+        crate::primitives::register_all(&mut vm);
+
+        // Register a user word with the same name as a primitive and smudge it.
+        vm.register(WordEntry::new_word("FACT", 500));
+        let user_xt = vm.lookup("FACT").unwrap();
+        vm.headers.last_mut().unwrap().flags |= FLAG_HIDDEN;
+
+        // Regular lookup returns None (hidden).
+        assert_eq!(vm.lookup("FACT"), None);
+        // lookup_any returns the hidden entry.
+        assert_eq!(vm.lookup_any("FACT"), Some(user_xt));
     }
 
     #[test]
