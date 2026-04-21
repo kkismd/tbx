@@ -468,27 +468,13 @@ impl VM {
                             }
                             self.pc = offset;
                         }
-                        EntryKind::Primitive(f) => {
-                            // Arguments are already on the stack; the primitive reads them
-                            // directly. Primitives do not support local variables.
-                            if local_count != 0 {
-                                return Err(TbxError::TypeError {
-                                    expected: "local_count == 0 for Primitive",
-                                    got: "non-zero local_count",
-                                });
-                            }
-                            if self.data_stack.len() < arity {
-                                return Err(TbxError::StackUnderflow);
-                            }
-                            f(self)?;
-                            // Advance past CALL + target_xt + arity + local_count (4 cells).
-                            self.pc += 4;
-                        }
                         _ => {
+                            // CALL targets only compiled Words. Primitives, Variables, and
+                            // Constants are called via direct Xt dispatch, not CALL.
                             return Err(TbxError::TypeError {
-                                expected: "Word",
+                                expected: "Word (CALL target must be a compiled word)",
                                 got: "non-Word",
-                            })
+                            });
                         }
                     }
                 }
@@ -1590,138 +1576,58 @@ mod tests {
     }
 
     #[test]
-    fn test_call_primitive_dup() {
-        // Verify that a CALL instruction can invoke a Primitive word (DUP).
-        // Layout:
-        //   [0] Xt(CALL)   <- CALL instruction
-        //   [1] Xt(DUP)    <- target primitive
-        //   [2] Int(1)     <- arity = 1
-        //   [3] Int(0)     <- local_count = 0
-        //   [4] Xt(EXIT)   <- top-level exit
-        //
-        // DUP duplicates the top of stack. After CALL DUP, stack should be [5, 5].
-        let mut vm = VM::new();
-        crate::primitives::register_all(&mut vm);
+    fn test_call_non_word_target_rejected() {
+        // CALL must only target compiled Words; Primitive/Variable/Constant must be rejected.
+        use crate::dict::{EntryKind, WordEntry};
 
-        let call_xt = vm.lookup("CALL").unwrap();
-        let dup_xt = vm.lookup("DUP").unwrap();
-        let exit_xt = vm.lookup("EXIT").unwrap();
+        fn try_call(kind: EntryKind) -> Result<(), crate::error::TbxError> {
+            let mut vm = VM::new();
+            crate::primitives::register_all(&mut vm);
+            let call_xt = vm.lookup("CALL").unwrap();
+            let exit_xt = vm.lookup("EXIT").unwrap();
+            let target_xt = vm.register(WordEntry {
+                name: "TARGET".to_string(),
+                flags: 0,
+                kind,
+                prev: None,
+            });
+            vm.dict_write(Cell::Xt(call_xt)).unwrap();
+            vm.dict_write(Cell::Xt(target_xt)).unwrap();
+            vm.dict_write(Cell::Int(0)).unwrap(); // arity=0
+            vm.dict_write(Cell::Int(0)).unwrap(); // local_count=0
+            vm.dict_write(Cell::Xt(exit_xt)).unwrap();
+            vm.run(0)
+        }
 
-        vm.dict_write(Cell::Xt(call_xt)).unwrap(); // [0]
-        vm.dict_write(Cell::Xt(dup_xt)).unwrap(); // [1]
-        vm.dict_write(Cell::Int(1)).unwrap(); // [2] arity=1
-        vm.dict_write(Cell::Int(0)).unwrap(); // [3] local_count=0
-        vm.dict_write(Cell::Xt(exit_xt)).unwrap(); // [4]
+        fn dummy(_vm: &mut VM) -> Result<(), crate::error::TbxError> {
+            Ok(())
+        }
 
-        vm.push(Cell::Int(5)).unwrap(); // argument
-        vm.run(0).unwrap();
-
-        // DUP should have duplicated 5 on the stack.
-        assert_eq!(vm.pop(), Ok(Cell::Int(5)));
-        assert_eq!(vm.pop(), Ok(Cell::Int(5)));
-        assert!(vm.data_stack.is_empty());
-    }
-
-    #[test]
-    fn test_call_primitive_nonzero_local_count_returns_error() {
-        // Verify that CALL targeting a Primitive with local_count != 0 returns TypeError.
-        // Primitives do not support local variables; local_count must be 0.
-        // Layout:
-        //   [0] Xt(CALL)   <- CALL instruction
-        //   [1] Xt(DUP)    <- target primitive
-        //   [2] Int(1)     <- arity = 1
-        //   [3] Int(1)     <- local_count = 1 (invalid for primitives)
-        //   [4] Xt(EXIT)   <- unreachable
-        let mut vm = VM::new();
-        crate::primitives::register_all(&mut vm);
-
-        let call_xt = vm.lookup("CALL").unwrap();
-        let dup_xt = vm.lookup("DUP").unwrap();
-        let exit_xt = vm.lookup("EXIT").unwrap();
-
-        vm.dict_write(Cell::Xt(call_xt)).unwrap(); // [0]
-        vm.dict_write(Cell::Xt(dup_xt)).unwrap(); // [1]
-        vm.dict_write(Cell::Int(1)).unwrap(); // [2] arity=1
-        vm.dict_write(Cell::Int(1)).unwrap(); // [3] local_count=1 (invalid)
-        vm.dict_write(Cell::Xt(exit_xt)).unwrap(); // [4]
-
-        vm.push(Cell::Int(5)).unwrap();
-        let result = vm.run(0);
-
+        // Primitive
         assert!(
             matches!(
-                result,
-                Err(crate::error::TbxError::TypeError {
-                    expected: "local_count == 0 for Primitive",
-                    got: "non-zero local_count",
-                })
+                try_call(EntryKind::Primitive(dummy)),
+                Err(crate::error::TbxError::TypeError { .. })
             ),
-            "expected TypeError for non-zero local_count, got {:?}",
-            result
+            "expected TypeError for Primitive CALL target"
         );
-    }
 
-    #[test]
-    fn test_call_primitive_arity_underflow_returns_error() {
-        // Verify that CALL targeting a Primitive with arity > stack depth returns StackUnderflow.
-        // Layout:
-        //   [0] Xt(CALL)   <- CALL instruction
-        //   [1] Xt(DUP)    <- target primitive
-        //   [2] Int(2)     <- arity = 2 (but stack has only 1 item)
-        //   [3] Int(0)     <- local_count = 0
-        //   [4] Xt(EXIT)   <- unreachable
-        let mut vm = VM::new();
-        crate::primitives::register_all(&mut vm);
-
-        let call_xt = vm.lookup("CALL").unwrap();
-        let dup_xt = vm.lookup("DUP").unwrap();
-        let exit_xt = vm.lookup("EXIT").unwrap();
-
-        vm.dict_write(Cell::Xt(call_xt)).unwrap(); // [0]
-        vm.dict_write(Cell::Xt(dup_xt)).unwrap(); // [1]
-        vm.dict_write(Cell::Int(2)).unwrap(); // [2] arity=2
-        vm.dict_write(Cell::Int(0)).unwrap(); // [3] local_count=0
-        vm.dict_write(Cell::Xt(exit_xt)).unwrap(); // [4]
-
-        vm.push(Cell::Int(5)).unwrap(); // only 1 item on stack, but arity=2
-        let result = vm.run(0);
-
+        // Variable
         assert!(
-            matches!(result, Err(crate::error::TbxError::StackUnderflow)),
-            "expected StackUnderflow, got {:?}",
-            result
+            matches!(
+                try_call(EntryKind::Variable(0)),
+                Err(crate::error::TbxError::TypeError { .. })
+            ),
+            "expected TypeError for Variable CALL target"
         );
-    }
 
-    #[test]
-    fn test_call_primitive_two_args() {
-        // Verify that a CALL instruction can invoke a two-argument Primitive (ADD).
-        // Layout:
-        //   [0] Xt(CALL)   <- CALL instruction
-        //   [1] Xt(+)      <- target primitive (pops 2, pushes 1)
-        //   [2] Int(2)     <- arity = 2
-        //   [3] Int(0)     <- local_count = 0
-        //   [4] Xt(EXIT)   <- top-level exit
-        //
-        // After CALL + with [3, 4] on stack, result should be [7].
-        let mut vm = VM::new();
-        crate::primitives::register_all(&mut vm);
-
-        let call_xt = vm.lookup("CALL").unwrap();
-        let add_xt = vm.lookup("ADD").unwrap();
-        let exit_xt = vm.lookup("EXIT").unwrap();
-
-        vm.dict_write(Cell::Xt(call_xt)).unwrap(); // [0]
-        vm.dict_write(Cell::Xt(add_xt)).unwrap(); // [1]
-        vm.dict_write(Cell::Int(2)).unwrap(); // [2] arity=2
-        vm.dict_write(Cell::Int(0)).unwrap(); // [3] local_count=0
-        vm.dict_write(Cell::Xt(exit_xt)).unwrap(); // [4]
-
-        vm.push(Cell::Int(3)).unwrap();
-        vm.push(Cell::Int(4)).unwrap();
-        vm.run(0).unwrap();
-
-        assert_eq!(vm.pop(), Ok(Cell::Int(7)));
-        assert!(vm.data_stack.is_empty());
+        // Constant
+        assert!(
+            matches!(
+                try_call(EntryKind::Constant(Cell::Int(42))),
+                Err(crate::error::TbxError::TypeError { .. })
+            ),
+            "expected TypeError for Constant CALL target"
+        );
     }
 }
