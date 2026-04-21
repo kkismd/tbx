@@ -476,6 +476,8 @@ impl Interpreter {
         self.vm.dict_write(Cell::None).map_err(&make_err)?;
         let entry = crate::dict::WordEntry::new_variable(&name, storage_idx);
         self.vm.register(entry);
+        // Seal so that FORGET does not roll back the storage cell.
+        self.vm.seal_user();
 
         Ok(())
     }
@@ -550,11 +552,11 @@ impl Interpreter {
             // For self-recursive calls (word currently being compiled), local_count is not yet
             // known — write 0 as placeholder and add the position to the patch list.
             // For all other calls, use the callee's confirmed local_count from the header.
-            let callee_name = self.vm.headers[stmt_xt.index()].name.clone();
+            // Compare by header index (not name) to handle shadowed/redefined words correctly.
             let is_self_recursive = self
                 .compile_state
                 .as_ref()
-                .map(|s| s.word_name == callee_name)
+                .map(|s| stmt_xt.index() == s.hdr_len_at_def)
                 .unwrap_or(false);
 
             self.vm.dict_write(Cell::Xt(call_xt)).map_err(&make_err)?;
@@ -906,5 +908,41 @@ SHADOW 42";
             "expected '42\\n' (local shadows global), got: {:?}",
             out
         );
+    }
+
+    #[test]
+    fn test_def_param_and_var_combined() {
+        // A word with both a formal parameter and a local VAR should work correctly.
+        let mut interp = Interpreter::new();
+        let src = "\
+DEF ADDONE(X)
+  VAR R
+  LET &R, X + 1
+  PUTDEC R
+  PUTSTR \"\\n\"
+END
+ADDONE 10";
+        interp.exec_source(src).unwrap();
+        let out = interp.take_output();
+        assert_eq!(out, "11\n", "expected '11\\n', got: {:?}", out);
+    }
+
+    #[test]
+    fn test_def_var_isolated_across_calls() {
+        // Each call to a word with VAR locals must get its own independent slot.
+        // Calling ADDONE twice should produce independent results.
+        let mut interp = Interpreter::new();
+        let src = "\
+DEF ADDONE(X)
+  VAR R
+  LET &R, X + 1
+  PUTDEC R
+  PUTSTR \"\\n\"
+END
+ADDONE 5
+ADDONE 20";
+        interp.exec_source(src).unwrap();
+        let out = interp.take_output();
+        assert_eq!(out, "6\n21\n", "expected '6\\n21\\n', got: {:?}", out);
     }
 }
