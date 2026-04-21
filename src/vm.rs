@@ -383,13 +383,11 @@ impl VM {
         self.pc = start_offset;
 
         loop {
-            let xt = self
-                .dict_read(self.pc)?
-                .as_xt()
-                .ok_or(TbxError::TypeError {
-                    expected: "Xt",
-                    got: "non-Xt",
-                })?;
+            let dispatch_cell = self.dict_read(self.pc)?;
+            let xt = dispatch_cell.as_xt().ok_or_else(|| TbxError::TypeError {
+                expected: "Xt",
+                got: dispatch_cell.type_name(),
+            })?;
             let entry_kind = self
                 .headers
                 .get(xt.index())
