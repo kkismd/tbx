@@ -805,13 +805,7 @@ impl Interpreter {
     ) -> Result<(), InterpreterError> {
         let make_err = |e: TbxError| InterpreterError::new(line, col, source_line, e);
 
-        // Determine whether arg_tokens carries an expression (non-empty, not just Eof/newline).
-        let has_expr = arg_tokens
-            .first()
-            .map(|t| !matches!(t.token, Token::Eof | Token::Newline))
-            .unwrap_or(false);
-
-        if has_expr {
+        if !arg_tokens.is_empty() {
             // Compile the return expression directly into the dictionary.
             let expr_cells = {
                 let local_table_opt = self.compile_state.as_ref().map(|s| &s.local_table);
@@ -1481,6 +1475,24 @@ PRINTIF 0, 42
             interp.take_output(),
             "",
             "RETURN void should exit without output"
+        );
+
+        // FLAG=1: BIF does not jump, PUTDEC executes, then RETURN exits.
+        let src2 = r#"
+DEF PRINTIF(FLAG, VAL)
+  BIF FLAG, 99
+    PUTDEC VAL
+  99
+  RETURN
+END
+PRINTIF 1, 42
+"#;
+        let mut interp2 = Interpreter::new();
+        interp2.exec_source(src2).unwrap();
+        assert_eq!(
+            interp2.take_output(),
+            "42",
+            "RETURN void after PUTDEC should produce output"
         );
     }
 
