@@ -243,13 +243,11 @@ impl VM {
     /// - `Err(TbxError::TypeError)` if the cell at `offset` is not a `Cell::Int`.
     /// - `Err(TbxError::InvalidJumpTarget)` if the address is negative.
     fn read_jump_target(&self, offset: usize) -> Result<usize, TbxError> {
-        let raw = self
-            .dict_read(offset)?
-            .as_int()
-            .ok_or(TbxError::TypeError {
-                expected: "Int (jump target)",
-                got: "non-Int",
-            })?;
+        let cell = self.dict_read(offset)?;
+        let raw = cell.as_int().ok_or_else(|| TbxError::TypeError {
+            expected: "Int (jump target)",
+            got: cell.type_name(),
+        })?;
         if raw < 0 {
             return Err(TbxError::InvalidJumpTarget { address: raw });
         }
@@ -1857,7 +1855,7 @@ mod tests {
 
     #[test]
     fn test_run_goto_non_int_target_errors() {
-        // GOTO with a non-Int operand must return TypeError.
+        // GOTO with a non-Int operand (Cell::Xt) must return TypeError with got = "Xt".
         let mut vm = VM::new();
         crate::primitives::register_all(&mut vm);
 
@@ -1868,10 +1866,13 @@ mod tests {
         vm.dict_write(Cell::Xt(exit_xt)).unwrap(); // [1] Xt instead of Int
 
         let result = vm.run(0);
-        assert!(matches!(
+        assert_eq!(
             result,
-            Err(crate::error::TbxError::TypeError { .. })
-        ));
+            Err(crate::error::TbxError::TypeError {
+                expected: "Int (jump target)",
+                got: "Xt",
+            })
+        );
     }
 
     #[test]
