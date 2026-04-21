@@ -236,8 +236,12 @@ impl VM {
     /// Read the cell at `offset` as a jump target address.
     ///
     /// Expects `Cell::Int`; returns the address as `usize`.
-    /// Returns `Err(TbxError::TypeError)` if the cell is not an `Int`.
-    /// Returns `Err(TbxError::InvalidJumpTarget)` if the address is negative.
+    ///
+    /// # Errors
+    ///
+    /// - `Err(TbxError::IndexOutOfBounds)` if `offset` is beyond the dictionary end.
+    /// - `Err(TbxError::TypeError)` if the cell at `offset` is not a `Cell::Int`.
+    /// - `Err(TbxError::InvalidJumpTarget)` if the address is negative.
     fn read_jump_target(&self, offset: usize) -> Result<usize, TbxError> {
         let raw = self
             .dict_read(offset)?
@@ -1959,6 +1963,48 @@ mod tests {
         assert_eq!(
             result,
             Err(crate::error::TbxError::InvalidJumpTarget { address: -3 })
+        );
+    }
+
+    #[test]
+    fn test_run_bif_negative_target_errors_on_fallthrough() {
+        // BIF with a negative target address must return InvalidJumpTarget
+        // even when the condition is truthy (fall-through path).
+        // read_jump_target is always evaluated regardless of the condition.
+        let mut vm = VM::new();
+        crate::primitives::register_all(&mut vm);
+
+        let bif_xt = vm.lookup("BIF").unwrap();
+
+        vm.dict_write(Cell::Xt(bif_xt)).unwrap(); // [0]
+        vm.dict_write(Cell::Int(-1)).unwrap(); // [1] negative target
+
+        vm.push(Cell::Bool(true)).unwrap(); // truthy → fall-through would be taken
+        let result = vm.run(0);
+        assert_eq!(
+            result,
+            Err(crate::error::TbxError::InvalidJumpTarget { address: -1 })
+        );
+    }
+
+    #[test]
+    fn test_run_bit_negative_target_errors_on_fallthrough() {
+        // BIT with a negative target address must return InvalidJumpTarget
+        // even when the condition is falsy (fall-through path).
+        // read_jump_target is always evaluated regardless of the condition.
+        let mut vm = VM::new();
+        crate::primitives::register_all(&mut vm);
+
+        let bit_xt = vm.lookup("BIT").unwrap();
+
+        vm.dict_write(Cell::Xt(bit_xt)).unwrap(); // [0]
+        vm.dict_write(Cell::Int(-2)).unwrap(); // [1] negative target
+
+        vm.push(Cell::Bool(false)).unwrap(); // falsy → fall-through would be taken
+        let result = vm.run(0);
+        assert_eq!(
+            result,
+            Err(crate::error::TbxError::InvalidJumpTarget { address: -2 })
         );
     }
 }
