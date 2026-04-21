@@ -1345,6 +1345,27 @@ FWDTEST
             "expected DuplicateLabel(10), got: {:?}",
             err.kind
         );
+
+        // After rollback, the same word name can be redefined successfully.
+        let result2 = interp.exec_source("DEF DUPWORD\n  PUTDEC 5\nEND\nDUPWORD");
+        assert!(
+            result2.is_ok(),
+            "redefine after DuplicateLabel rollback failed: {:?}",
+            result2.unwrap_err()
+        );
+        assert_eq!(interp.take_output(), "5");
+    }
+
+    #[test]
+    fn test_last_top_level_comma_unmatched_paren_errors() {
+        // An unmatched ')' must produce an InvalidExpression error.
+        let toks = tokenize_args("42 ), 99");
+        let result = last_top_level_comma(&toks);
+        assert!(
+            matches!(result, Err(TbxError::InvalidExpression { .. })),
+            "expected InvalidExpression for unmatched ')', got: {:?}",
+            result
+        );
     }
 
     #[test]
