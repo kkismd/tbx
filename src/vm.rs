@@ -103,7 +103,31 @@ impl VM {
                 break;
             }
             let entry = &self.headers[xt.index()];
-            if entry.name == name {
+            // Skip hidden (smudge) entries — they are still being compiled.
+            if entry.name == name && entry.flags & crate::dict::FLAG_HIDDEN == 0 {
+                return Some(xt);
+            }
+            current = entry.prev;
+        }
+        None
+    }
+
+    /// Like `lookup`, but also returns the entry with `FLAG_HIDDEN` set **only when**
+    /// the name matches `self_word`.
+    ///
+    /// This supports self-recursive calls during compilation: a word is visible to
+    /// itself (for recursion) but still hidden from other lookups (e.g. operator
+    /// primitives with the same name).
+    pub fn lookup_including_self(&self, name: &str, self_word: Option<&str>) -> Option<Xt> {
+        let allow_hidden = self_word.map(|sw| sw == name).unwrap_or(false);
+        let mut current = self.latest;
+        while let Some(xt) = current {
+            if xt.index() >= self.headers.len() {
+                break;
+            }
+            let entry = &self.headers[xt.index()];
+            let is_hidden = entry.flags & crate::dict::FLAG_HIDDEN != 0;
+            if entry.name == name && (!is_hidden || allow_hidden) {
                 return Some(xt);
             }
             current = entry.prev;
@@ -852,6 +876,69 @@ mod tests {
         vm.latest = Some(Xt(99));
         // Should return None, not panic
         assert_eq!(vm.lookup("FOO"), None);
+    }
+
+    #[test]
+    fn test_lookup_skips_hidden_entry() {
+        // FLAG_HIDDEN entries must be invisible to lookup.
+        // If a system primitive and a hidden user word share a name,
+        // lookup must return the system primitive.
+        use crate::dict::FLAG_HIDDEN;
+        let mut vm = VM::new();
+        crate::primitives::register_all(&mut vm);
+
+        // "ADD" is already registered as a system primitive.
+        let sys_xt = vm.lookup("ADD").unwrap();
+
+        // Register a user word with the same name and smudge it.
+        vm.register(WordEntry::new_word("ADD", 999));
+        vm.headers.last_mut().unwrap().flags |= FLAG_HIDDEN;
+
+        // lookup("ADD") must still return the system primitive, not the hidden entry.
+        assert_eq!(vm.lookup("ADD"), Some(sys_xt));
+
+        // After clearing FLAG_HIDDEN, the user word should shadow the primitive.
+        vm.headers.last_mut().unwrap().flags &= !FLAG_HIDDEN;
+        assert_ne!(vm.lookup("ADD"), Some(sys_xt));
+    }
+
+    #[test]
+    fn test_lookup_including_self_finds_hidden_entry_only_for_self() {
+        // lookup_including_self must return the hidden entry only when the name matches self_word.
+        use crate::dict::FLAG_HIDDEN;
+        let mut vm = VM::new();
+        crate::primitives::register_all(&mut vm);
+
+        // Register two user words and smudge both.
+        vm.register(WordEntry::new_word("FACT", 500));
+        let fact_xt = vm.lookup("FACT").unwrap();
+        vm.headers.last_mut().unwrap().flags |= FLAG_HIDDEN;
+
+        vm.register(WordEntry::new_word("HELPER", 600));
+        let helper_xt = vm.lookup("HELPER").unwrap();
+        vm.headers.last_mut().unwrap().flags |= FLAG_HIDDEN;
+
+        // Regular lookup returns None for both (both hidden).
+        assert_eq!(vm.lookup("FACT"), None);
+        assert_eq!(vm.lookup("HELPER"), None);
+
+        // lookup_including_self with self_word="FACT" finds FACT but NOT HELPER.
+        assert_eq!(
+            vm.lookup_including_self("FACT", Some("FACT")),
+            Some(fact_xt)
+        );
+        assert_eq!(vm.lookup_including_self("HELPER", Some("FACT")), None);
+
+        // With self_word="HELPER", finds HELPER but NOT FACT.
+        assert_eq!(
+            vm.lookup_including_self("HELPER", Some("HELPER")),
+            Some(helper_xt)
+        );
+        assert_eq!(vm.lookup_including_self("FACT", Some("HELPER")), None);
+
+        // With self_word=None, finds neither.
+        assert_eq!(vm.lookup_including_self("FACT", None), None);
+        assert_eq!(vm.lookup_including_self("HELPER", None), None);
     }
 
     #[test]

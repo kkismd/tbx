@@ -388,6 +388,9 @@ impl Interpreter {
         // Register the new word immediately (forward calls within the body will resolve).
         let entry = crate::dict::WordEntry::new_word(&name, self.vm.dp);
         self.vm.register(entry);
+        // Smudge: hide the word from lookup until END completes, so that operator primitives
+        // with the same name (e.g. ADD, MUL) are not shadowed during body compilation.
+        self.vm.headers[hdr_len_at_def].flags |= crate::dict::FLAG_HIDDEN;
 
         self.vm.is_compiling = true;
         self.compile_state = Some(CompileState {
@@ -440,11 +443,13 @@ impl Interpreter {
                 .map_err(&make_err)?;
         }
 
-        // Update the word header with the confirmed local_count.
+        // Update the word header with the confirmed local_count and unsmudge (make visible).
         // The word was registered as the last entry at hdr_len_at_def.
         let word_hdr_idx = state.hdr_len_at_def;
         if word_hdr_idx < self.vm.headers.len() {
             self.vm.headers[word_hdr_idx].local_count = state.local_count;
+            // Unsmudge: clear FLAG_HIDDEN so the word is now visible to lookup.
+            self.vm.headers[word_hdr_idx].flags &= !crate::dict::FLAG_HIDDEN;
         }
 
         // Seal user-defined space.
@@ -561,7 +566,17 @@ impl Interpreter {
         let make_err = |e: TbxError| InterpreterError::new(err_line, err_col, source_line, e);
 
         // Look up the statement word.
-        let stmt_xt = self.lookup_required(stmt_name, err_line, err_col, source_line)?;
+        // Allow resolving the currently-compiled word (FLAG_HIDDEN) so that self-recursive
+        // statement calls work. Other hidden words remain invisible.
+        let self_word_opt = self.compile_state.as_ref().map(|s| s.word_name.as_str());
+        let stmt_xt = self
+            .vm
+            .lookup_including_self(stmt_name, self_word_opt)
+            .ok_or_else(|| {
+                make_err(TbxError::UndefinedSymbol {
+                    name: stmt_name.to_string(),
+                })
+            })?;
 
         // Reject system-internal words from user code.
         let stmt_flags = self.vm.headers[stmt_xt.index()].flags;
@@ -576,7 +591,8 @@ impl Interpreter {
         let arg_cells = {
             let local_table_opt: Option<&HashMap<String, usize>> =
                 self.compile_state.as_ref().map(|s| &s.local_table);
-            let mut compiler = ExprCompiler::with_local_table_opt(&mut self.vm, local_table_opt);
+            let self_word = self.compile_state.as_ref().map(|s| s.word_name.clone());
+            let mut compiler = ExprCompiler::with_context(&mut self.vm, local_table_opt, self_word);
             compiler.compile_expr(arg_tokens).map_err(&make_err)?
         };
 
@@ -772,7 +788,8 @@ impl Interpreter {
         // Compile the condition expression directly into the dictionary.
         let cond_cells = {
             let local_table_opt = self.compile_state.as_ref().map(|s| &s.local_table);
-            let mut compiler = ExprCompiler::with_local_table_opt(&mut self.vm, local_table_opt);
+            let self_word = self.compile_state.as_ref().map(|s| s.word_name.clone());
+            let mut compiler = ExprCompiler::with_context(&mut self.vm, local_table_opt, self_word);
             compiler.compile_expr(cond_tokens).map_err(&make_err)?
         };
         for cell in cond_cells {
@@ -809,8 +826,9 @@ impl Interpreter {
             // Compile the return expression directly into the dictionary.
             let expr_cells = {
                 let local_table_opt = self.compile_state.as_ref().map(|s| &s.local_table);
+                let self_word = self.compile_state.as_ref().map(|s| s.word_name.clone());
                 let mut compiler =
-                    ExprCompiler::with_local_table_opt(&mut self.vm, local_table_opt);
+                    ExprCompiler::with_context(&mut self.vm, local_table_opt, self_word);
                 compiler.compile_expr(arg_tokens).map_err(&make_err)?
             };
             for cell in expr_cells {
@@ -1513,5 +1531,76 @@ PUTDEC CHOOSE(0, 100, 200)
         let mut interp = Interpreter::new();
         interp.exec_source(src).unwrap();
         assert_eq!(interp.take_output(), "100 200");
+    }
+
+    #[test]
+    fn test_def_word_named_after_operator_primitive() {
+        // DEF ADD(A, B) RETURN A + B END must not cause infinite recursion.
+        // During body compilation, FLAG_HIDDEN prevents the compiler from resolving
+        // the `+` operator to the partially-compiled ADD word instead of the primitive.
+        let src = r#"
+DEF ADD(A, B)
+  RETURN A + B
+END
+PUTDEC ADD(3, 4)
+"#;
+        let mut interp = Interpreter::new();
+        interp.exec_source(src).unwrap();
+        assert_eq!(interp.take_output(), "7");
+    }
+
+    #[test]
+    fn test_def_word_named_after_mul_primitive() {
+        // MUL is the primitive for `*`. A user word named MUL must not shadow it during body.
+        let src = r#"
+DEF MUL(A, B)
+  RETURN A * B
+END
+PUTDEC MUL(3, 4)
+"#;
+        let mut interp = Interpreter::new();
+        interp.exec_source(src).unwrap();
+        assert_eq!(interp.take_output(), "12");
+    }
+
+    #[test]
+    fn test_def_word_named_after_lt_primitive() {
+        // LT is the primitive for `<`. A user word named LT must not shadow it during body.
+        // Use LT result inside another DEF to verify correctness.
+        // Note: multi-arg statement calls use comma syntax: WORD arg1, arg2
+        let src = r#"
+DEF LT(A, B)
+  RETURN A < B
+END
+DEF CHECK(A, B)
+  BIF LT(A, B), 99
+    PUTSTR "yes"
+  99
+  RETURN
+END
+CHECK 1, 2
+CHECK 5, 3
+"#;
+        let mut interp = Interpreter::new();
+        interp.exec_source(src).unwrap();
+        assert_eq!(interp.take_output(), "yes");
+    }
+
+    #[test]
+    fn test_self_recursive_word() {
+        // Self-recursive calls must work even though the word is FLAG_HIDDEN during compilation.
+        // FACT(N): returns N! (factorial). BIF N, 10 jumps to label 10 when N=0 (base case).
+        let src = r#"
+DEF FACT(N)
+  BIF N, 10
+    RETURN N * FACT(N - 1)
+  10
+  RETURN 1
+END
+PUTDEC FACT(5)
+"#;
+        let mut interp = Interpreter::new();
+        interp.exec_source(src).unwrap();
+        assert_eq!(interp.take_output(), "120");
     }
 }
