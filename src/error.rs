@@ -64,6 +64,14 @@ pub enum TbxError {
     InvalidExpression {
         reason: &'static str,
     },
+    /// A GOTO/BIF/BIT referenced a label that was never defined in the current word.
+    UndefinedLabel {
+        label: i64,
+    },
+    /// The same line-number label was defined more than once in the same word.
+    DuplicateLabel {
+        label: i64,
+    },
 }
 
 impl std::fmt::Display for TbxError {
@@ -119,6 +127,8 @@ impl std::fmt::Display for TbxError {
             TbxError::InvalidExpression { reason } => {
                 write!(f, "invalid expression: {reason}")
             }
+            TbxError::UndefinedLabel { label } => write!(f, "undefined label: {label}"),
+            TbxError::DuplicateLabel { label } => write!(f, "duplicate label: {label}"),
         }
     }
 }

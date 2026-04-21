@@ -30,6 +30,10 @@ struct CompileState {
     /// that refer to the currently-compiled word (self-recursive calls).
     /// Patched to the final `local_count` when END is compiled.
     call_patch_list: Vec<usize>,
+    /// Maps line-number label to dictionary offset recorded when the label was seen.
+    label_table: HashMap<i64, usize>,
+    /// (label_number, dict_offset_of_placeholder) waiting to be back-patched.
+    patch_list: Vec<(i64, usize)>,
 }
 
 /// Error produced by the outer interpreter, including source location information.
@@ -143,8 +147,17 @@ impl Interpreter {
 
         let mut idx = 0;
 
-        // Skip optional line number.
-        if matches!(tokens[idx].token, Token::LineNum(_)) {
+        // Skip optional line number; in compile mode, register it as a label.
+        if let Token::LineNum(n) = tokens[idx].token {
+            if self.compile_state.is_some() {
+                let label_n = n;
+                let ln_line = tokens[idx].pos.line;
+                let ln_col = tokens[idx].pos.col;
+                self.register_label(label_n, line, ln_line, ln_col)
+                    .inspect_err(|_e| {
+                        self.rollback_def();
+                    })?;
+            }
             idx += 1;
             if idx >= tokens.len() {
                 return Ok(());
@@ -188,6 +201,35 @@ impl Interpreter {
 
         // If we are in compile mode, write this statement to the dictionary instead of executing it.
         if self.compile_state.is_some() {
+            // Handle GOTO in compile mode: emit Xt(GOTO) Int(target).
+            if stmt_name.eq_ignore_ascii_case("GOTO") {
+                let result = self.compile_goto(&tokens[idx..], line, stmt_pos_line, stmt_pos_col);
+                if result.is_err() {
+                    self.rollback_def();
+                }
+                return result;
+            }
+
+            // Handle BIF in compile mode: branch if false.
+            if stmt_name.eq_ignore_ascii_case("BIF") {
+                let result =
+                    self.compile_branch(false, &tokens[idx..], line, stmt_pos_line, stmt_pos_col);
+                if result.is_err() {
+                    self.rollback_def();
+                }
+                return result;
+            }
+
+            // Handle BIT in compile mode: branch if true.
+            if stmt_name.eq_ignore_ascii_case("BIT") {
+                let result =
+                    self.compile_branch(true, &tokens[idx..], line, stmt_pos_line, stmt_pos_col);
+                if result.is_err() {
+                    self.rollback_def();
+                }
+                return result;
+            }
+
             let result = self.write_stmt_to_dict(
                 &stmt_name,
                 &tokens[idx..],
@@ -348,6 +390,8 @@ impl Interpreter {
             arity,
             local_count: 0,
             call_patch_list: Vec::new(),
+            label_table: HashMap::new(),
+            patch_list: Vec::new(),
         });
 
         Ok(())
@@ -364,6 +408,15 @@ impl Interpreter {
         // Write EXIT to terminate the word body.
         let exit_xt = self.lookup_required("EXIT", line, col, source_line)?;
         self.vm.dict_write(Cell::Xt(exit_xt)).map_err(&make_err)?;
+
+        // Check for unresolved forward label references BEFORE taking compile_state,
+        // so that rollback_def() can still work if an error is detected.
+        if let Some(state) = &self.compile_state {
+            if let Some(&(label, _)) = state.patch_list.first() {
+                self.rollback_def();
+                return Err(make_err(TbxError::UndefinedLabel { label }));
+            }
+        }
 
         // Take the compile state to get local_count and patch list.
         let state = self
@@ -607,6 +660,165 @@ impl Interpreter {
     pub fn take_output(&mut self) -> String {
         self.vm.take_output()
     }
+
+    /// Register a line-number label at the current dictionary pointer.
+    ///
+    /// Inserts the label into the label table and back-patches any forward
+    /// references that were left as `Int(0)` placeholders.
+    fn register_label(
+        &mut self,
+        n: i64,
+        source_line: &str,
+        line: usize,
+        col: usize,
+    ) -> Result<(), InterpreterError> {
+        let make_err = |e: TbxError| InterpreterError::new(line, col, source_line, e);
+        let dp = self.vm.dp;
+        let state = self
+            .compile_state
+            .as_mut()
+            .expect("register_label called outside compile mode");
+
+        // Reject duplicate label definitions within the same word.
+        if state.label_table.contains_key(&n) {
+            return Err(make_err(TbxError::DuplicateLabel { label: n }));
+        }
+        state.label_table.insert(n, dp);
+
+        // Collect all dictionary positions that are waiting for this label.
+        let patches: Vec<usize> = state
+            .patch_list
+            .iter()
+            .filter(|(lbl, _)| *lbl == n)
+            .map(|(_, pos)| *pos)
+            .collect();
+        state.patch_list.retain(|(lbl, _)| *lbl != n);
+
+        // Apply back-patches (must end the borrow of compile_state first).
+        let _ = state;
+        for patch_pos in patches {
+            self.vm.dictionary[patch_pos] = Cell::Int(dp as i64);
+        }
+
+        Ok(())
+    }
+
+    /// Compile `GOTO N` into the dictionary.
+    ///
+    /// Emits: `Xt(GOTO) Int(target)`
+    /// If `N` is unknown (forward reference), emits `Int(0)` and registers a back-patch entry.
+    fn compile_goto(
+        &mut self,
+        arg_tokens: &[SpannedToken],
+        source_line: &str,
+        line: usize,
+        col: usize,
+    ) -> Result<(), InterpreterError> {
+        let make_err = |e: TbxError| InterpreterError::new(line, col, source_line, e);
+
+        let label_n = parse_label_number(arg_tokens).ok_or_else(|| {
+            make_err(TbxError::InvalidExpression {
+                reason: "GOTO requires an integer label",
+            })
+        })?;
+
+        let goto_xt = self.lookup_required("GOTO", line, col, source_line)?;
+        self.vm.dict_write(Cell::Xt(goto_xt)).map_err(&make_err)?;
+        self.emit_jump_target(label_n, source_line, line, col)?;
+        Ok(())
+    }
+
+    /// Compile `BIF cond, N` or `BIT cond, N` into the dictionary.
+    ///
+    /// `is_truthy`: `true` → BIT (branch if true), `false` → BIF (branch if false).
+    /// Emits: `[condition cells] Xt(BIF|BIT) Int(target)`
+    fn compile_branch(
+        &mut self,
+        is_truthy: bool,
+        arg_tokens: &[SpannedToken],
+        source_line: &str,
+        line: usize,
+        col: usize,
+    ) -> Result<(), InterpreterError> {
+        let make_err = |e: TbxError| InterpreterError::new(line, col, source_line, e);
+
+        // Split at the last top-level comma: left = condition expression, right = label.
+        let split_pos = last_top_level_comma(arg_tokens)
+            .map_err(&make_err)?
+            .ok_or_else(|| {
+                make_err(TbxError::InvalidExpression {
+                    reason: "BIF/BIT requires syntax: BIF cond, label",
+                })
+            })?;
+        let cond_tokens = &arg_tokens[..split_pos];
+        let label_tokens = &arg_tokens[split_pos + 1..];
+
+        // Parse label number.
+        let label_n = parse_label_number(label_tokens).ok_or_else(|| {
+            make_err(TbxError::InvalidExpression {
+                reason: "BIF/BIT label must be an integer",
+            })
+        })?;
+
+        // Compile the condition expression directly into the dictionary.
+        let cond_cells = {
+            let local_table_opt = self.compile_state.as_ref().map(|s| &s.local_table);
+            let mut compiler = ExprCompiler::with_local_table_opt(&mut self.vm, local_table_opt);
+            compiler.compile_expr(cond_tokens).map_err(&make_err)?
+        };
+        for cell in cond_cells {
+            self.vm.dict_write(cell).map_err(&make_err)?;
+        }
+
+        // Emit BIF or BIT.
+        let branch_name = if is_truthy { "BIT" } else { "BIF" };
+        let branch_xt = self.lookup_required(branch_name, line, col, source_line)?;
+        self.vm.dict_write(Cell::Xt(branch_xt)).map_err(&make_err)?;
+
+        // Emit jump target (with back-patch if this is a forward reference).
+        self.emit_jump_target(label_n, source_line, line, col)?;
+        Ok(())
+    }
+
+    /// Emit a jump target address cell into the dictionary.
+    ///
+    /// If the label is already known, emits `Int(addr)`.
+    /// If the label is unknown (forward reference), emits `Int(0)` and records the position
+    /// in `patch_list` for back-patching when the label is defined.
+    fn emit_jump_target(
+        &mut self,
+        label_n: i64,
+        source_line: &str,
+        line: usize,
+        col: usize,
+    ) -> Result<(), InterpreterError> {
+        let make_err = |e: TbxError| InterpreterError::new(line, col, source_line, e);
+
+        // Check whether the label is already known (backward reference).
+        let target_opt = self
+            .compile_state
+            .as_ref()
+            .expect("emit_jump_target called outside compile mode")
+            .label_table
+            .get(&label_n)
+            .copied();
+
+        if let Some(target) = target_opt {
+            self.vm
+                .dict_write(Cell::Int(target as i64))
+                .map_err(&make_err)?;
+        } else {
+            // Forward reference: emit placeholder and record position for back-patching.
+            let patch_pos = self.vm.dp;
+            self.vm.dict_write(Cell::Int(0)).map_err(&make_err)?;
+            self.compile_state
+                .as_mut()
+                .expect("emit_jump_target called outside compile mode")
+                .patch_list
+                .push((label_n, patch_pos));
+        }
+        Ok(())
+    }
 }
 
 /// Count the number of top-level comma-separated arguments in a token slice.
@@ -634,6 +846,43 @@ fn count_top_level_arity(tokens: &[SpannedToken]) -> Result<usize, TbxError> {
         }
     }
     Ok(commas + 1)
+}
+
+/// Find the position of the last top-level comma in a token slice.
+///
+/// "Top-level" means not nested inside parentheses.
+/// Returns `None` if no top-level comma is found.
+fn last_top_level_comma(tokens: &[SpannedToken]) -> Result<Option<usize>, TbxError> {
+    let mut depth: usize = 0;
+    let mut last_comma = None;
+    for (i, st) in tokens.iter().enumerate() {
+        match &st.token {
+            Token::LParen => depth += 1,
+            Token::RParen => {
+                depth = depth.checked_sub(1).ok_or(TbxError::InvalidExpression {
+                    reason: "unmatched ')' in argument list",
+                })?;
+            }
+            Token::Comma if depth == 0 => last_comma = Some(i),
+            _ => {}
+        }
+    }
+    Ok(last_comma)
+}
+
+/// Parse a label number from a token slice.
+///
+/// Skips leading `Newline`/`Eof` tokens and returns the integer value of the
+/// first meaningful token if it is an `IntLit` or `LineNum`.
+fn parse_label_number(tokens: &[SpannedToken]) -> Option<i64> {
+    let tok = tokens
+        .iter()
+        .find(|st| !matches!(st.token, Token::Newline | Token::Eof))?;
+    match &tok.token {
+        Token::IntLit(n) => Some(*n),
+        Token::LineNum(n) => Some(*n),
+        _ => None,
+    }
 }
 
 #[cfg(test)]
@@ -944,5 +1193,198 @@ ADDONE 20";
         interp.exec_source(src).unwrap();
         let out = interp.take_output();
         assert_eq!(out, "6\n21\n", "expected '6\\n21\\n', got: {:?}", out);
+    }
+
+    // --- issue #224: line-number labels, GOTO, BIF, BIT in compile mode ---
+
+    #[test]
+    fn test_goto_backward_compiles() {
+        // Compile a word containing a backward GOTO; just verify compilation succeeds.
+        let mut interp = Interpreter::new();
+        interp
+            .exec_source("DEF MYWORD\n  10\n  GOTO 10\nEND")
+            .unwrap();
+        assert!(
+            interp.vm.lookup("MYWORD").is_some(),
+            "MYWORD should be defined"
+        );
+    }
+
+    #[test]
+    fn test_loop_1_to_10() {
+        // A counted loop using GOTO and BIT that prints 1..10.
+        let src = r#"
+DEF MYWORD
+  VAR I
+  LET &I, 1
+  10
+    PUTDEC I
+    PUTSTR "\n"
+    LET &I, I + 1
+    BIT I > 10, 99
+    GOTO 10
+  99
+END
+MYWORD
+"#;
+        let mut interp = Interpreter::new();
+        interp.exec_source(src).unwrap();
+        let output = interp.take_output();
+        let expected: String = (1..=10).map(|i| format!("{}\n", i)).collect();
+        assert_eq!(output, expected, "loop output mismatch");
+    }
+
+    #[test]
+    fn test_bif_skips_on_false() {
+        // BIF condition,label — branch if condition is false (zero).
+        // When I = 0 (false), BIF should jump to label 99 and skip PUTDEC.
+        let src = r#"
+DEF TESTBIF
+  VAR I
+  LET &I, 0
+  BIF I, 99
+  PUTDEC 42
+  PUTSTR "\n"
+  99
+END
+TESTBIF
+"#;
+        let mut interp = Interpreter::new();
+        interp.exec_source(src).unwrap();
+        // Condition I=0 is false, so BIF should jump over PUTDEC.
+        let output = interp.take_output();
+        assert_eq!(output, "", "BIF with false condition should skip PUTDEC");
+    }
+
+    #[test]
+    fn test_bif_falls_through_on_true() {
+        // BIF condition,label — when condition is true (non-zero), should NOT branch.
+        let src = r#"
+DEF TESTBIF2
+  VAR I
+  LET &I, 1
+  BIF I, 99
+  PUTDEC 42
+  PUTSTR "\n"
+  99
+END
+TESTBIF2
+"#;
+        let mut interp = Interpreter::new();
+        interp.exec_source(src).unwrap();
+        let output = interp.take_output();
+        assert_eq!(
+            output, "42\n",
+            "BIF with true condition should fall through to PUTDEC"
+        );
+    }
+
+    #[test]
+    fn test_forward_reference_backpatch() {
+        // GOTO to a label that appears AFTER the GOTO (forward reference).
+        // The word should execute without getting stuck.
+        let src = r#"
+DEF FWDTEST
+  GOTO 99
+  PUTDEC 999
+  PUTSTR "\n"
+  99
+  PUTDEC 1
+  PUTSTR "\n"
+END
+FWDTEST
+"#;
+        let mut interp = Interpreter::new();
+        interp.exec_source(src).unwrap();
+        let output = interp.take_output();
+        // GOTO 99 skips PUTDEC 999; only PUTDEC 1 should execute.
+        assert_eq!(output, "1\n", "forward GOTO should skip first PUTDEC");
+    }
+
+    #[test]
+    fn test_undefined_label_is_error() {
+        // Referencing a label that is never defined should produce UndefinedLabel at END.
+        let mut interp = Interpreter::new();
+        let result = interp.exec_source("DEF BADWORD\n  GOTO 999\nEND");
+        assert!(result.is_err(), "expected error for undefined label");
+        let err = result.unwrap_err();
+        assert!(
+            matches!(err.kind, TbxError::UndefinedLabel { label: 999 }),
+            "expected UndefinedLabel(999), got: {:?}",
+            err.kind
+        );
+    }
+
+    #[test]
+    fn test_label_table_and_patch_list_helpers() {
+        // Unit tests for the module-level helper functions.
+        let toks = tokenize_args("42");
+        assert_eq!(parse_label_number(&toks), Some(42));
+
+        let toks = tokenize_args("I > 10, 99");
+        let comma_pos = last_top_level_comma(&toks);
+        assert!(
+            comma_pos.unwrap().is_some(),
+            "should find a top-level comma"
+        );
+
+        let toks_no_comma = tokenize_args("42");
+        assert_eq!(last_top_level_comma(&toks_no_comma).unwrap(), None);
+    }
+
+    #[test]
+    fn test_duplicate_label_is_error() {
+        // Defining the same label twice in one word must produce DuplicateLabel.
+        let src = "DEF DUPWORD\n  10\n  PUTDEC 1\n  10\nEND";
+        let mut interp = Interpreter::new();
+        let result = interp.exec_source(src);
+        assert!(result.is_err(), "expected error for duplicate label");
+        let err = result.unwrap_err();
+        assert!(
+            matches!(err.kind, TbxError::DuplicateLabel { label: 10 }),
+            "expected DuplicateLabel(10), got: {:?}",
+            err.kind
+        );
+
+        // After rollback, the same word name can be redefined successfully.
+        let result2 = interp.exec_source("DEF DUPWORD\n  PUTDEC 5\nEND\nDUPWORD");
+        assert!(
+            result2.is_ok(),
+            "redefine after DuplicateLabel rollback failed: {:?}",
+            result2.unwrap_err()
+        );
+        assert_eq!(interp.take_output(), "5");
+    }
+
+    #[test]
+    fn test_last_top_level_comma_unmatched_paren_errors() {
+        // An unmatched ')' must produce an InvalidExpression error.
+        let toks = tokenize_args("42 ), 99");
+        let result = last_top_level_comma(&toks);
+        assert!(
+            matches!(result, Err(TbxError::InvalidExpression { .. })),
+            "expected InvalidExpression for unmatched ')', got: {:?}",
+            result
+        );
+    }
+
+    #[test]
+    fn test_undefined_label_error_rollback_allows_redefine() {
+        // After UndefinedLabel error, the VM should roll back so that the word
+        // can be redefined successfully.
+        let mut interp = Interpreter::new();
+
+        // First attempt: GOTO to undefined label 999 — should error.
+        let result = interp.exec_source("DEF REDEFWORD\n  GOTO 999\nEND");
+        assert!(result.is_err());
+
+        // Second attempt: valid definition of the same name — should succeed.
+        let result2 = interp.exec_source("DEF REDEFWORD\n  PUTDEC 7\nEND\nREDEFWORD");
+        assert!(
+            result2.is_ok(),
+            "redefine after rollback failed: {:?}",
+            result2.unwrap_err()
+        );
+        assert_eq!(interp.take_output(), "7");
     }
 }
