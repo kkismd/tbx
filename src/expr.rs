@@ -114,8 +114,8 @@ impl<'a> ExprCompiler<'a> {
                             .unwrap_or(false);
 
                         if next_is_rparen {
-                            // Zero-argument call: emit CALL xt 0 0 directly.
-                            emit_call(&mut output, xt, 0, self.vm)?;
+                            // Zero-argument call: emit based on entry kind.
+                            emit_call_by_kind(&mut output, xt, 0, self.vm)?;
                             i += 2; // skip '(' and ')'
                             prev_was_operand = true;
                         } else {
@@ -135,8 +135,8 @@ impl<'a> ExprCompiler<'a> {
                                 emit_var_read(&mut output, addr, self.vm)?;
                             }
                             _ => {
-                                // Treat as a nullary function call: CALL xt 0 0
-                                emit_call(&mut output, xt, 0, self.vm)?;
+                                // Treat as a nullary call: emit based on entry kind.
+                                emit_call_by_kind(&mut output, xt, 0, self.vm)?;
                             }
                         }
                         prev_was_operand = true;
@@ -258,7 +258,7 @@ impl<'a> ExprCompiler<'a> {
                         call: Some((xt, arity)),
                     }) = op_stack.pop()
                     {
-                        emit_call(&mut output, xt, arity, self.vm)?;
+                        emit_call_by_kind(&mut output, xt, arity, self.vm)?;
                     }
                     prev_was_operand = true;
                 }
@@ -354,13 +354,35 @@ fn emit_var_read(output: &mut Vec<Cell>, addr: usize, vm: &VM) -> Result<(), Tbx
     Ok(())
 }
 
-/// Emit the function-call sequence: `Xt(CALL)`, `Xt(xt)`, `Int(arity)`, `Int(0)`.
-fn emit_call(output: &mut Vec<Cell>, xt: Xt, arity: usize, vm: &VM) -> Result<(), TbxError> {
-    let call_xt = require_xt(vm, "CALL")?;
-    output.push(Cell::Xt(call_xt));
-    output.push(Cell::Xt(xt));
-    output.push(Cell::Int(arity as i64));
-    output.push(Cell::Int(0));
+/// Emit the function-call sequence based on the `EntryKind` of `xt`.
+///
+/// - `EntryKind::Word`: emits `Xt(CALL)`, `Xt(xt)`, `Int(arity)`, `Int(0)`
+/// - `EntryKind::Primitive` / `Variable` / `Constant`: emits `Xt(xt)` directly
+/// - Any internal kind (Lit, Call, Exit, ReturnVal, DropToMarker): returns `InvalidExpression`
+fn emit_call_by_kind(
+    output: &mut Vec<Cell>,
+    xt: Xt,
+    arity: usize,
+    vm: &VM,
+) -> Result<(), TbxError> {
+    let kind = vm.headers[xt.index()].kind.clone();
+    match kind {
+        EntryKind::Word(_) => {
+            let call_xt = require_xt(vm, "CALL")?;
+            output.push(Cell::Xt(call_xt));
+            output.push(Cell::Xt(xt));
+            output.push(Cell::Int(arity as i64));
+            output.push(Cell::Int(0));
+        }
+        EntryKind::Primitive(_) | EntryKind::Variable(_) | EntryKind::Constant(_) => {
+            output.push(Cell::Xt(xt));
+        }
+        _ => {
+            return Err(TbxError::InvalidExpression {
+                reason: "invalid entry kind in function call position",
+            });
+        }
+    }
     Ok(())
 }
 
@@ -958,6 +980,167 @@ mod tests {
         assert!(
             matches!(err, TbxError::UndefinedSymbol { ref name } if name == "NOEXIST"),
             "expected UndefinedSymbol for &NOEXIST, got: {err:?}"
+        );
+    }
+
+    // ------------------------------------------------------------------
+    // Primitive: zero-argument call P() → Xt(p) only (no CALL)
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn test_primitive_zero_arg_call() {
+        let mut vm = make_vm();
+        fn dummy(_vm: &mut VM) -> Result<(), TbxError> {
+            Ok(())
+        }
+        let p_xt = vm.register(WordEntry::new_primitive("P", dummy));
+
+        let tokens = lex("P()");
+        let result = ExprCompiler::new(&mut vm).compile_expr(&tokens).unwrap();
+
+        // A Primitive call must emit only Xt(p) — no CALL prefix.
+        assert_eq!(result, vec![Cell::Xt(p_xt)]);
+    }
+
+    // ------------------------------------------------------------------
+    // Primitive: call with arguments P(1, 2) → LIT 1, LIT 2, Xt(p)
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn test_primitive_call_with_args() {
+        let mut vm = make_vm();
+        fn dummy(_vm: &mut VM) -> Result<(), TbxError> {
+            Ok(())
+        }
+        let p_xt = vm.register(WordEntry::new_primitive("P", dummy));
+        let lit_xt = vm.lookup("LIT").unwrap();
+
+        let tokens = lex("P(1, 2)");
+        let result = ExprCompiler::new(&mut vm).compile_expr(&tokens).unwrap();
+
+        // Arguments are pushed normally; the callee is emitted as a bare Xt.
+        assert_eq!(
+            result,
+            vec![
+                Cell::Xt(lit_xt),
+                Cell::Int(1),
+                Cell::Xt(lit_xt),
+                Cell::Int(2),
+                Cell::Xt(p_xt),
+            ]
+        );
+    }
+
+    // ------------------------------------------------------------------
+    // Primitive: no-paren reference P → Xt(p) only (no CALL)
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn test_primitive_no_paren() {
+        let mut vm = make_vm();
+        fn dummy(_vm: &mut VM) -> Result<(), TbxError> {
+            Ok(())
+        }
+        let p_xt = vm.register(WordEntry::new_primitive("P", dummy));
+
+        let tokens = lex("P");
+        let result = ExprCompiler::new(&mut vm).compile_expr(&tokens).unwrap();
+
+        // Without parentheses a Primitive is emitted as a bare Xt, not CALL.
+        assert_eq!(result, vec![Cell::Xt(p_xt)]);
+    }
+
+    // ------------------------------------------------------------------
+    // Word: no-paren reference F → CALL Xt(F) Int(0) Int(0)
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn test_word_no_paren_emits_call() {
+        let mut vm = make_vm();
+        let f_xt = vm.register(WordEntry::new_word("F", 0));
+
+        let tokens = lex("F");
+        let result = ExprCompiler::new(&mut vm).compile_expr(&tokens).unwrap();
+
+        // A bare Word identifier (no parentheses) is treated as a nullary call
+        // and must emit the CALL 4-cell form, same as F().
+        let call_xt = vm.lookup("CALL").unwrap();
+        assert_eq!(
+            result,
+            vec![
+                Cell::Xt(call_xt),
+                Cell::Xt(f_xt),
+                Cell::Int(0),
+                Cell::Int(0),
+            ]
+        );
+    }
+
+    // ------------------------------------------------------------------
+    // Variable: V() emits Xt(v) directly (not a value read)
+    // V without parens → FETCH (value read); V() → Xt(v) (bare push)
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn test_variable_paren_emits_xt_not_fetch() {
+        let mut vm = make_vm();
+        let v_xt = vm.register(WordEntry::new_variable("V", 0));
+
+        // V() should emit only Xt(v) — not the LIT+DictAddr+FETCH sequence
+        // that a bare `V` (no parentheses) would produce.
+        let tokens = lex("V()");
+        let result = ExprCompiler::new(&mut vm).compile_expr(&tokens).unwrap();
+        assert_eq!(result, vec![Cell::Xt(v_xt)]);
+    }
+
+    #[test]
+    fn test_variable_no_paren_emits_fetch() {
+        let mut vm = make_vm();
+        let v_xt = vm.register(WordEntry::new_variable("V", 0));
+
+        // A bare `V` (no parens) reads the variable value:
+        // LIT DictAddr(addr) FETCH
+        let lit_xt = vm.lookup("LIT").unwrap();
+        let fetch_xt = vm.lookup("FETCH").unwrap();
+
+        // Retrieve the dict address stored in the Variable entry.
+        let addr = match vm.headers[v_xt.index()].kind.clone() {
+            EntryKind::Variable(a) => a,
+            _ => panic!("expected Variable kind"),
+        };
+
+        let tokens = lex("V");
+        let result = ExprCompiler::new(&mut vm).compile_expr(&tokens).unwrap();
+        assert_eq!(
+            result,
+            vec![Cell::Xt(lit_xt), Cell::DictAddr(addr), Cell::Xt(fetch_xt),]
+        );
+    }
+
+    // ------------------------------------------------------------------
+    // Internal kind call rejected → InvalidExpression
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn test_internal_kind_call_rejected() {
+        use crate::dict::EntryKind;
+        let mut vm = make_vm();
+        // Register an entry whose kind is an internal-only variant (Lit).
+        vm.register(WordEntry {
+            name: "INTERNAL".to_string(),
+            flags: 0,
+            kind: EntryKind::Lit,
+            prev: None,
+        });
+
+        // Calling it with () must be rejected.
+        let tokens = lex("INTERNAL()");
+        let err = ExprCompiler::new(&mut vm)
+            .compile_expr(&tokens)
+            .unwrap_err();
+        assert!(
+            matches!(err, TbxError::InvalidExpression { .. }),
+            "expected InvalidExpression for internal kind call, got: {err:?}"
         );
     }
 }
