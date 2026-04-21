@@ -145,24 +145,65 @@ impl Interpreter {
             return Ok(());
         }
 
-        let mut idx = 0;
+        // Split token list into segments at each Semicolon.
+        // Semicolons cannot appear inside expressions, so a flat split is correct.
+        let semi_positions: Vec<usize> = tokens
+            .iter()
+            .enumerate()
+            .filter_map(|(i, st)| matches!(st.token, Token::Semicolon).then_some(i))
+            .collect();
 
-        // Skip optional line number; in compile mode, register it as a label.
-        if let Token::LineNum(n) = tokens[idx].token {
-            if self.compile_state.is_some() {
-                let label_n = n;
-                let ln_line = tokens[idx].pos.line;
-                let ln_col = tokens[idx].pos.col;
-                self.register_label(label_n, line, ln_line, ln_col)
-                    .inspect_err(|_e| {
-                        self.rollback_def();
-                    })?;
-            }
-            idx += 1;
-            if idx >= tokens.len() {
-                return Ok(());
-            }
+        let mut boundaries: Vec<(usize, usize)> = Vec::with_capacity(semi_positions.len() + 1);
+        let mut start = 0;
+        for &pos in &semi_positions {
+            boundaries.push((start, pos));
+            start = pos + 1;
         }
+        boundaries.push((start, tokens.len()));
+
+        let mut first_segment = true;
+        for (seg_start_orig, seg_end) in boundaries {
+            let mut seg_start = seg_start_orig;
+
+            // Only the first segment may begin with a line number.
+            if first_segment {
+                first_segment = false;
+                if seg_start < seg_end {
+                    if let Token::LineNum(n) = tokens[seg_start].token {
+                        if self.compile_state.is_some() {
+                            let ln_line = tokens[seg_start].pos.line;
+                            let ln_col = tokens[seg_start].pos.col;
+                            self.register_label(n, line, ln_line, ln_col)
+                                .inspect_err(|_e| {
+                                    self.rollback_def();
+                                })?;
+                        }
+                        seg_start += 1;
+                    }
+                }
+            }
+
+            // Skip empty segments (e.g., trailing semicolon or bare line number).
+            if seg_start >= seg_end {
+                continue;
+            }
+
+            self.exec_segment(&tokens[seg_start..seg_end], line)?;
+        }
+
+        Ok(())
+    }
+
+    /// Executes a single statement segment (a slice of tokens with no Semicolons).
+    ///
+    /// `tokens` must be non-empty and must not contain `Token::LineNum` at index 0
+    /// (the caller is responsible for stripping it on the first segment).
+    fn exec_segment(
+        &mut self,
+        tokens: &[SpannedToken],
+        source_line: &str,
+    ) -> Result<(), InterpreterError> {
+        let mut idx = 0;
 
         // Extract statement name.
         let stmt_tok = &tokens[idx];
@@ -174,36 +215,42 @@ impl Interpreter {
         let stmt_pos_col = stmt_tok.pos.col;
         idx += 1;
 
-        // Handle REM: skip the rest of the line.
+        // Handle REM: skip the rest of the segment (lexer already consumed trailing input).
         if stmt_name.eq_ignore_ascii_case("REM") {
             return Ok(());
         }
 
         // Handle DEF: begin compiling a new word.
         if stmt_name.eq_ignore_ascii_case("DEF") {
-            return self.handle_def(&tokens[idx..], line, stmt_pos_line, stmt_pos_col);
+            return self.handle_def(&tokens[idx..], source_line, stmt_pos_line, stmt_pos_col);
         }
 
         // Handle END: finish compiling the current word.
         if stmt_name.eq_ignore_ascii_case("END") && self.compile_state.is_some() {
-            return self.handle_end(line, stmt_pos_line, stmt_pos_col);
+            return self.handle_end(source_line, stmt_pos_line, stmt_pos_col);
         }
 
         // Handle VAR in compile mode: register a local variable (no code emitted).
         if stmt_name.eq_ignore_ascii_case("VAR") && self.compile_state.is_some() {
-            return self.handle_var(&tokens[idx..], line, stmt_pos_line, stmt_pos_col);
+            return self.handle_var(&tokens[idx..], source_line, stmt_pos_line, stmt_pos_col);
         }
 
         // Handle VAR at top level: declare a global variable (allocates a dictionary slot).
         if stmt_name.eq_ignore_ascii_case("VAR") && self.compile_state.is_none() {
-            return self.handle_global_var(&tokens[idx..], line, stmt_pos_line, stmt_pos_col);
+            return self.handle_global_var(
+                &tokens[idx..],
+                source_line,
+                stmt_pos_line,
+                stmt_pos_col,
+            );
         }
 
         // If we are in compile mode, write this statement to the dictionary instead of executing it.
         if self.compile_state.is_some() {
             // Handle GOTO in compile mode: emit Xt(GOTO) Int(target).
             if stmt_name.eq_ignore_ascii_case("GOTO") {
-                let result = self.compile_goto(&tokens[idx..], line, stmt_pos_line, stmt_pos_col);
+                let result =
+                    self.compile_goto(&tokens[idx..], source_line, stmt_pos_line, stmt_pos_col);
                 if result.is_err() {
                     self.rollback_def();
                 }
@@ -212,8 +259,13 @@ impl Interpreter {
 
             // Handle BIF in compile mode: branch if false.
             if stmt_name.eq_ignore_ascii_case("BIF") {
-                let result =
-                    self.compile_branch(false, &tokens[idx..], line, stmt_pos_line, stmt_pos_col);
+                let result = self.compile_branch(
+                    false,
+                    &tokens[idx..],
+                    source_line,
+                    stmt_pos_line,
+                    stmt_pos_col,
+                );
                 if result.is_err() {
                     self.rollback_def();
                 }
@@ -222,8 +274,13 @@ impl Interpreter {
 
             // Handle BIT in compile mode: branch if true.
             if stmt_name.eq_ignore_ascii_case("BIT") {
-                let result =
-                    self.compile_branch(true, &tokens[idx..], line, stmt_pos_line, stmt_pos_col);
+                let result = self.compile_branch(
+                    true,
+                    &tokens[idx..],
+                    source_line,
+                    stmt_pos_line,
+                    stmt_pos_col,
+                );
                 if result.is_err() {
                     self.rollback_def();
                 }
@@ -232,7 +289,8 @@ impl Interpreter {
 
             // Handle RETURN in compile mode: emit EXIT (void) or [expr] RETURN_VAL.
             if stmt_name.eq_ignore_ascii_case("RETURN") {
-                let result = self.compile_return(&tokens[idx..], line, stmt_pos_line, stmt_pos_col);
+                let result =
+                    self.compile_return(&tokens[idx..], source_line, stmt_pos_line, stmt_pos_col);
                 if result.is_err() {
                     self.rollback_def();
                 }
@@ -244,7 +302,7 @@ impl Interpreter {
                 &tokens[idx..],
                 stmt_pos_line,
                 stmt_pos_col,
-                line,
+                source_line,
             );
             if result.is_err() {
                 self.rollback_def();
@@ -253,7 +311,8 @@ impl Interpreter {
         }
 
         // Helper closure for wrapping TbxError into InterpreterError.
-        let make_err = |e: TbxError| InterpreterError::new(stmt_pos_line, stmt_pos_col, line, e);
+        let make_err =
+            |e: TbxError| InterpreterError::new(stmt_pos_line, stmt_pos_col, source_line, e);
 
         // Save the current dictionary pointer to use as the buffer start.
         let buf_start = self.vm.dp;
@@ -265,7 +324,7 @@ impl Interpreter {
             &tokens[idx..],
             stmt_pos_line,
             stmt_pos_col,
-            line,
+            source_line,
         ) {
             self.vm.dp = buf_start;
             self.vm.dictionary.truncate(buf_start);
@@ -274,7 +333,7 @@ impl Interpreter {
 
         // Append EXIT to terminate the temporary code buffer.
         // On failure, reset dp before returning.
-        let exit_xt = match self.lookup_required("EXIT", stmt_pos_line, stmt_pos_col, line) {
+        let exit_xt = match self.lookup_required("EXIT", stmt_pos_line, stmt_pos_col, source_line) {
             Ok(xt) => xt,
             Err(e) => {
                 self.vm.dp = buf_start;
@@ -1686,6 +1745,89 @@ PUTSTR "\n"
         let mut interp = Interpreter::new();
         interp.exec_source(src).unwrap();
         assert_eq!(interp.take_output(), "120\n");
+    }
+
+    // --- issue #234: semicolon-separated multiple statements ---
+
+    #[test]
+    fn test_semicolon_two_statements_interpret_mode() {
+        // Two statements on one line separated by semicolon must both execute.
+        let mut interp = Interpreter::new();
+        interp.exec_line("PUTSTR \"a\"; PUTDEC 42").unwrap();
+        assert_eq!(interp.take_output(), "a42");
+    }
+
+    #[test]
+    fn test_semicolon_three_statements() {
+        // Three semicolon-separated statements must all execute in order.
+        let mut interp = Interpreter::new();
+        interp.exec_line("PUTDEC 1; PUTDEC 2; PUTDEC 3").unwrap();
+        assert_eq!(interp.take_output(), "123");
+    }
+
+    #[test]
+    fn test_semicolon_trailing() {
+        // A trailing semicolon (empty last segment) must be silently ignored.
+        let mut interp = Interpreter::new();
+        interp.exec_line("PUTDEC 1;").unwrap();
+        assert_eq!(interp.take_output(), "1");
+    }
+
+    #[test]
+    fn test_semicolon_rem_stops_execution() {
+        // REM causes the lexer to consume the rest of the input, so statements
+        // after a REM segment are never seen.
+        let mut interp = Interpreter::new();
+        interp.exec_line("PUTDEC 1; REM x; PUTDEC 2").unwrap();
+        assert_eq!(interp.take_output(), "1");
+    }
+
+    #[test]
+    fn test_semicolon_with_paren_args() {
+        // Parenthesised arguments must not be confused with segment boundaries.
+        let mut interp = Interpreter::new();
+        interp.exec_line("PUTDEC ADD(1,2); PUTDEC 3").unwrap();
+        assert_eq!(interp.take_output(), "33");
+    }
+
+    #[test]
+    fn test_semicolon_in_def_block() {
+        // Semicolons inside a DEF block must compile each segment independently.
+        let mut interp = Interpreter::new();
+        let src = "\
+DEF GREET
+  PUTSTR \"hi\"; PUTSTR \"\\n\"
+END
+GREET";
+        interp.exec_source(src).unwrap();
+        assert_eq!(interp.take_output(), "hi\n");
+    }
+
+    #[test]
+    fn test_semicolon_partial_exec_on_error() {
+        // When a later segment errors, prior segments have already executed.
+        // This documents the expected partial-execution semantics.
+        let mut interp = Interpreter::new();
+        let result = interp.exec_line("PUTDEC 1; NOSUCHWORD");
+        assert!(result.is_err(), "second segment should return an error");
+        // First segment's output is already flushed.
+        assert_eq!(interp.take_output(), "1");
+    }
+
+    #[test]
+    fn test_semicolon_leading() {
+        // A leading semicolon produces an empty first segment, which is skipped.
+        let mut interp = Interpreter::new();
+        interp.exec_line("; PUTDEC 1").unwrap();
+        assert_eq!(interp.take_output(), "1");
+    }
+
+    #[test]
+    fn test_semicolon_consecutive() {
+        // Consecutive semicolons produce empty segments that are silently skipped.
+        let mut interp = Interpreter::new();
+        interp.exec_line("PUTDEC 1;; PUTDEC 2").unwrap();
+        assert_eq!(interp.take_output(), "12");
     }
 
     #[test]

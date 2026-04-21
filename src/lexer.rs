@@ -29,8 +29,7 @@ pub enum Token {
     /// Comma `,`. Acts as a low-priority binary operator (argument separator).
     /// Maps to TOK_OP.
     Comma,
-    /// Semicolon `;`. Statement terminator or inline comment start.
-    /// The outer interpreter decides which; maps to TOK_DELIM.
+    /// Semicolon `;`. Statement terminator; maps to TOK_DELIM.
     Semicolon,
     /// Ampersand `&`. Used as both unary reference and binary bitwise AND.
     /// The SYA parser determines unary vs binary from context. Maps to TOK_OP.
