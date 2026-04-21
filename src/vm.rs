@@ -1576,29 +1576,58 @@ mod tests {
     }
 
     #[test]
-    fn test_call_primitive_target_rejected() {
-        // After PR #217, expr.rs never generates CALL for Primitives.
-        // CALL must only target compiled Words; a Primitive target must return TypeError.
-        let mut vm = VM::new();
-        crate::primitives::register_all(&mut vm);
+    fn test_call_non_word_target_rejected() {
+        // CALL must only target compiled Words; Primitive/Variable/Constant must be rejected.
+        use crate::dict::{EntryKind, WordEntry};
 
-        let call_xt = vm.lookup("CALL").unwrap();
-        let dup_xt = vm.lookup("DUP").unwrap();
-        let exit_xt = vm.lookup("EXIT").unwrap();
+        fn try_call(kind: EntryKind) -> Result<(), crate::error::TbxError> {
+            let mut vm = VM::new();
+            crate::primitives::register_all(&mut vm);
+            let call_xt = vm.lookup("CALL").unwrap();
+            let exit_xt = vm.lookup("EXIT").unwrap();
+            let target_xt = vm.register(WordEntry {
+                name: "TARGET".to_string(),
+                flags: 0,
+                kind,
+                prev: None,
+            });
+            vm.dict_write(Cell::Xt(call_xt)).unwrap();
+            vm.dict_write(Cell::Xt(target_xt)).unwrap();
+            vm.dict_write(Cell::Int(0)).unwrap(); // arity=0
+            vm.dict_write(Cell::Int(0)).unwrap(); // local_count=0
+            vm.dict_write(Cell::Xt(exit_xt)).unwrap();
+            vm.run(0)
+        }
 
-        vm.dict_write(Cell::Xt(call_xt)).unwrap(); // [0] CALL
-        vm.dict_write(Cell::Xt(dup_xt)).unwrap(); // [1] Primitive target (invalid)
-        vm.dict_write(Cell::Int(1)).unwrap(); // [2] arity=1
-        vm.dict_write(Cell::Int(0)).unwrap(); // [3] local_count=0
-        vm.dict_write(Cell::Xt(exit_xt)).unwrap(); // [4]
+        fn dummy(_vm: &mut VM) -> Result<(), crate::error::TbxError> {
+            Ok(())
+        }
 
-        vm.push(Cell::Int(5)).unwrap();
-        let result = vm.run(0);
-
+        // Primitive
         assert!(
-            matches!(result, Err(crate::error::TbxError::TypeError { .. })),
-            "expected TypeError when CALL targets a Primitive, got {:?}",
-            result
+            matches!(
+                try_call(EntryKind::Primitive(dummy)),
+                Err(crate::error::TbxError::TypeError { .. })
+            ),
+            "expected TypeError for Primitive CALL target"
+        );
+
+        // Variable
+        assert!(
+            matches!(
+                try_call(EntryKind::Variable(0)),
+                Err(crate::error::TbxError::TypeError { .. })
+            ),
+            "expected TypeError for Variable CALL target"
+        );
+
+        // Constant
+        assert!(
+            matches!(
+                try_call(EntryKind::Constant(Cell::Int(42))),
+                Err(crate::error::TbxError::TypeError { .. })
+            ),
+            "expected TypeError for Constant CALL target"
         );
     }
 }
