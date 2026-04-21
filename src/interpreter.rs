@@ -1692,20 +1692,28 @@ PUTSTR "\n"
     fn test_recursive_self_call_in_bif_condition() {
         // Regression test for issue #222: self-recursive call inside BIF/BIT condition
         // expression (compile_branch path) must have its local_count back-patched.
-        // COUNTDOWN(N) uses BIF with a recursive sub-expression in the condition.
+        //
+        // MYGT(R) appears directly inside the BIT condition `MYGT(R) > 0`, which is
+        // compiled by compile_branch via ExprCompiler. Without the fix, local_count=0
+        // would be permanently embedded, causing IndexOutOfBounds when the VAR R slot
+        // is accessed inside the recursive call.
+        //
+        // Trace: MYGT(3)->2, MYGT(2)->2, MYGT(1)->1, MYGT(0)->0
         let src = r#"
-DEF SUM(N)
+DEF MYGT(N)
   VAR R
   BIT N <= 0, 10
-    LET &R, SUM(N - 1)
-    RETURN N + R
+    LET &R, N - 1
+    BIT MYGT(R) > 0, 20
+      RETURN 1
+    20 RETURN 2
   10 RETURN 0
 END
-PUTDEC SUM(5)
+PUTDEC MYGT(3)
 PUTSTR "\n"
 "#;
         let mut interp = Interpreter::new();
         interp.exec_source(src).unwrap();
-        assert_eq!(interp.take_output(), "15\n");
+        assert_eq!(interp.take_output(), "2\n");
     }
 }
