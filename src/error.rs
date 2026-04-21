@@ -72,6 +72,14 @@ pub enum TbxError {
     DuplicateLabel {
         label: i64,
     },
+    /// An operand value is outside the valid range.
+    ///
+    /// The operand has the correct type but its value is not acceptable
+    /// (e.g., a negative arity or local_count in a CALL instruction).
+    InvalidOperand {
+        name: &'static str,
+        reason: &'static str,
+    },
 }
 
 impl std::fmt::Display for TbxError {
@@ -129,6 +137,9 @@ impl std::fmt::Display for TbxError {
             }
             TbxError::UndefinedLabel { label } => write!(f, "undefined label: {label}"),
             TbxError::DuplicateLabel { label } => write!(f, "duplicate label: {label}"),
+            TbxError::InvalidOperand { name, reason } => {
+                write!(f, "invalid operand '{name}': {reason}")
+            }
         }
     }
 }
@@ -193,5 +204,16 @@ mod tests {
         let msg = e.to_string();
         assert!(msg.contains("-7"));
         assert!(msg.contains("negative"));
+    }
+
+    #[test]
+    fn test_invalid_operand_display() {
+        let e = TbxError::InvalidOperand {
+            name: "arity",
+            reason: "must be non-negative",
+        };
+        let msg = e.to_string();
+        assert!(msg.contains("arity"));
+        assert!(msg.contains("must be non-negative"));
     }
 }
