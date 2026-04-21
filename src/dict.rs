@@ -66,6 +66,10 @@ pub struct WordEntry {
     pub flags: u8,
     /// How this entry is executed or accessed
     pub kind: EntryKind,
+    /// Number of VAR-declared local variables in this word's body.
+    /// Set to 0 at registration time and patched to the final count when END is compiled.
+    /// Used by callers to emit the correct `local_count` operand in CALL instructions.
+    pub local_count: usize,
     /// Index of the previous entry in `VM::headers` (linked list for search).
     ///
     /// **Do not set this field directly.** It is automatically managed by
@@ -80,6 +84,7 @@ impl WordEntry {
             name: name.to_string(),
             flags: 0,
             kind: EntryKind::Primitive(f),
+            local_count: 0,
             prev: None,
         }
     }
@@ -90,6 +95,7 @@ impl WordEntry {
             name: name.to_string(),
             flags: 0,
             kind: EntryKind::Word(offset),
+            local_count: 0,
             prev: None,
         }
     }
@@ -100,6 +106,7 @@ impl WordEntry {
             name: name.to_string(),
             flags: 0,
             kind: EntryKind::Variable(idx),
+            local_count: 0,
             prev: None,
         }
     }
@@ -110,6 +117,7 @@ impl WordEntry {
             name: name.to_string(),
             flags: 0,
             kind: EntryKind::Constant(value),
+            local_count: 0,
             prev: None,
         }
     }

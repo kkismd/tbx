@@ -1589,6 +1589,7 @@ mod tests {
                 name: "TARGET".to_string(),
                 flags: 0,
                 kind,
+                local_count: 0,
                 prev: None,
             });
             vm.dict_write(Cell::Xt(call_xt)).unwrap();

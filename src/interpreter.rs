@@ -1,5 +1,7 @@
 //! Outer interpreter: tokenizes source text and executes statements via the inner interpreter.
 
+use std::collections::HashMap;
+
 use crate::cell::{Cell, Xt};
 use crate::dict::FLAG_SYSTEM;
 use crate::error::TbxError;
@@ -17,6 +19,17 @@ struct CompileState {
     /// Header count at the start of DEF (for rollback on error).
     hdr_len_at_def: usize,
     saved_latest: Option<crate::cell::Xt>,
+    /// Local variable table: maps variable name to StackAddr index.
+    /// Parameters are assigned indices 0..arity, VAR locals start at arity.
+    local_table: HashMap<String, usize>,
+    /// Number of formal parameters parsed from DEF WORD(X, Y, ...).
+    arity: usize,
+    /// Number of VAR-declared local variables encountered so far.
+    local_count: usize,
+    /// Dictionary offsets of the `local_count` placeholder (Int(0)) in CALL instructions
+    /// that refer to the currently-compiled word (self-recursive calls).
+    /// Patched to the final `local_count` when END is compiled.
+    call_patch_list: Vec<usize>,
 }
 
 /// Error produced by the outer interpreter, including source location information.
@@ -163,6 +176,16 @@ impl Interpreter {
             return self.handle_end(line, stmt_pos_line, stmt_pos_col);
         }
 
+        // Handle VAR in compile mode: register a local variable (no code emitted).
+        if stmt_name.eq_ignore_ascii_case("VAR") && self.compile_state.is_some() {
+            return self.handle_var(&tokens[idx..], line, stmt_pos_line, stmt_pos_col);
+        }
+
+        // Handle VAR at top level: declare a global variable (allocates a dictionary slot).
+        if stmt_name.eq_ignore_ascii_case("VAR") && self.compile_state.is_none() {
+            return self.handle_global_var(&tokens[idx..], line, stmt_pos_line, stmt_pos_col);
+        }
+
         // If we are in compile mode, write this statement to the dictionary instead of executing it.
         if self.compile_state.is_some() {
             let result = self.write_stmt_to_dict(
@@ -269,6 +292,43 @@ impl Interpreter {
             }
         };
 
+        // Parse optional formal parameter list: DEF WORD(X, Y, ...)
+        let mut local_table: HashMap<String, usize> = HashMap::new();
+        let mut arity: usize = 0;
+        let rest = &arg_tokens[1..];
+        if rest
+            .first()
+            .map(|st| matches!(st.token, Token::LParen))
+            .unwrap_or(false)
+        {
+            let mut idx = 1; // skip '('
+            while idx < rest.len() {
+                match &rest[idx].token {
+                    Token::RParen => {
+                        break;
+                    }
+                    Token::Ident(param) => {
+                        local_table.insert(param.clone(), arity);
+                        arity += 1;
+                        idx += 1;
+                        // Skip optional comma.
+                        if rest
+                            .get(idx)
+                            .map(|st| matches!(st.token, Token::Comma))
+                            .unwrap_or(false)
+                        {
+                            idx += 1;
+                        }
+                    }
+                    _ => {
+                        return Err(make_err(TbxError::InvalidExpression {
+                            reason: "expected identifier or ')' in parameter list",
+                        }))
+                    }
+                }
+            }
+        }
+
         // Snapshot for rollback.
         let dp_at_def = self.vm.dp;
         let hdr_len_at_def = self.vm.headers.len();
@@ -284,6 +344,10 @@ impl Interpreter {
             dp_at_def,
             hdr_len_at_def,
             saved_latest,
+            local_table,
+            arity,
+            local_count: 0,
+            call_patch_list: Vec::new(),
         });
 
         Ok(())
@@ -301,11 +365,30 @@ impl Interpreter {
         let exit_xt = self.lookup_required("EXIT", line, col, source_line)?;
         self.vm.dict_write(Cell::Xt(exit_xt)).map_err(&make_err)?;
 
+        // Take the compile state to get local_count and patch list.
+        let state = self
+            .compile_state
+            .take()
+            .expect("compile_state must be Some in handle_end");
+
+        // Patch all self-recursive CALL instructions with the confirmed local_count.
+        for &pos in &state.call_patch_list {
+            self.vm
+                .dict_write_at(pos, Cell::Int(state.local_count as i64))
+                .map_err(&make_err)?;
+        }
+
+        // Update the word header with the confirmed local_count.
+        // The word was registered as the last entry at hdr_len_at_def.
+        let word_hdr_idx = state.hdr_len_at_def;
+        if word_hdr_idx < self.vm.headers.len() {
+            self.vm.headers[word_hdr_idx].local_count = state.local_count;
+        }
+
         // Seal user-defined space.
         self.vm.seal_user();
 
         self.vm.is_compiling = false;
-        self.compile_state = None;
 
         Ok(())
     }
@@ -320,9 +403,86 @@ impl Interpreter {
         }
     }
 
+    /// Register a local variable declared with `VAR name` during compile mode.
+    ///
+    /// Adds `name` to the local variable table and increments `local_count`.
+    /// No code is emitted to the dictionary.
+    fn handle_var(
+        &mut self,
+        arg_tokens: &[SpannedToken],
+        source_line: &str,
+        line: usize,
+        col: usize,
+    ) -> Result<(), InterpreterError> {
+        let make_err = |e: TbxError| InterpreterError::new(line, col, source_line, e);
+
+        let name = match arg_tokens.first() {
+            Some(st) => match &st.token {
+                Token::Ident(n) => n.clone(),
+                _ => {
+                    return Err(make_err(TbxError::InvalidExpression {
+                        reason: "expected variable name after VAR",
+                    }))
+                }
+            },
+            None => {
+                return Err(make_err(TbxError::InvalidExpression {
+                    reason: "expected variable name after VAR",
+                }))
+            }
+        };
+
+        let state = self
+            .compile_state
+            .as_mut()
+            .expect("handle_var called outside compile mode");
+        let idx = state.arity + state.local_count;
+        state.local_table.insert(name, idx);
+        state.local_count += 1;
+
+        Ok(())
+    }
+
+    /// Declare a global variable at the top level.
+    ///
+    /// Allocates one cell in the dictionary as storage and registers a
+    /// `Variable` header entry. The initial value is `Cell::None`.
+    fn handle_global_var(
+        &mut self,
+        arg_tokens: &[SpannedToken],
+        source_line: &str,
+        line: usize,
+        col: usize,
+    ) -> Result<(), InterpreterError> {
+        let make_err = |e: TbxError| InterpreterError::new(line, col, source_line, e);
+
+        let name = match arg_tokens.first() {
+            Some(st) => match &st.token {
+                Token::Ident(n) => n.clone(),
+                _ => {
+                    return Err(make_err(TbxError::InvalidExpression {
+                        reason: "expected variable name after VAR",
+                    }))
+                }
+            },
+            None => {
+                return Err(make_err(TbxError::InvalidExpression {
+                    reason: "expected variable name after VAR",
+                }))
+            }
+        };
+
+        let storage_idx = self.vm.dp;
+        self.vm.dict_write(Cell::None).map_err(&make_err)?;
+        let entry = crate::dict::WordEntry::new_variable(&name, storage_idx);
+        self.vm.register(entry);
+
+        Ok(())
+    }
+
     /// Write a single statement and its arguments to the dictionary.
     ///
-    /// Emits: `LIT_MARKER [arg_cells] (CALL stmt arity 0 | stmt) DROP_TO_MARKER`
+    /// Emits: `LIT_MARKER [arg_cells] (CALL stmt arity local_count | stmt) DROP_TO_MARKER`
     ///
     /// This is used both during interpretation (followed by `EXIT` + run) and during
     /// compilation (within a DEF body; `EXIT` is written by `handle_end`).
@@ -348,8 +508,11 @@ impl Interpreter {
         }
 
         // Compile the argument expression to a cell sequence.
+        // Local variables in the current compile scope shadow globals (local_table checked first).
         let arg_cells = {
-            let mut compiler = ExprCompiler::new(&mut self.vm);
+            let local_table_opt: Option<&HashMap<String, usize>> =
+                self.compile_state.as_ref().map(|s| &s.local_table);
+            let mut compiler = ExprCompiler::with_local_table_opt(&mut self.vm, local_table_opt);
             compiler.compile_expr(arg_tokens).map_err(&make_err)?
         };
 
@@ -373,7 +536,7 @@ impl Interpreter {
         // Build code sequence:
         //   Xt(LIT_MARKER)
         //   [arg_cells]
-        //   For compiled words: Xt(CALL), Xt(stmt), Int(arity), Int(0)
+        //   For compiled words: Xt(CALL), Xt(stmt), Int(arity), Int(local_count)
         //   For primitives:     Xt(stmt)  (dispatched directly by the inner interpreter)
         //   Xt(DROP_TO_MARKER)
         self.vm
@@ -383,12 +546,35 @@ impl Interpreter {
             self.vm.dict_write(cell).map_err(&make_err)?;
         }
         if stmt_is_word {
+            // Determine local_count for the CALL instruction.
+            // For self-recursive calls (word currently being compiled), local_count is not yet
+            // known — write 0 as placeholder and add the position to the patch list.
+            // For all other calls, use the callee's confirmed local_count from the header.
+            let callee_name = self.vm.headers[stmt_xt.index()].name.clone();
+            let is_self_recursive = self
+                .compile_state
+                .as_ref()
+                .map(|s| s.word_name == callee_name)
+                .unwrap_or(false);
+
             self.vm.dict_write(Cell::Xt(call_xt)).map_err(&make_err)?;
             self.vm.dict_write(Cell::Xt(stmt_xt)).map_err(&make_err)?;
             self.vm
                 .dict_write(Cell::Int(arity as i64))
                 .map_err(&make_err)?;
-            self.vm.dict_write(Cell::Int(0)).map_err(&make_err)?;
+
+            if is_self_recursive {
+                let patch_pos = self.vm.dp;
+                self.vm.dict_write(Cell::Int(0)).map_err(&make_err)?;
+                if let Some(state) = &mut self.compile_state {
+                    state.call_patch_list.push(patch_pos);
+                }
+            } else {
+                let callee_local_count = self.vm.headers[stmt_xt.index()].local_count;
+                self.vm
+                    .dict_write(Cell::Int(callee_local_count as i64))
+                    .map_err(&make_err)?;
+            }
         } else {
             self.vm.dict_write(Cell::Xt(stmt_xt)).map_err(&make_err)?;
         }
@@ -649,5 +835,76 @@ GREET";
         interp.exec_line("PUTDEC ADD(1, 2)").unwrap();
         let out = interp.take_output();
         assert_eq!(out, "3", "expected '3', got: {:?}", out);
+    }
+
+    // --- issue #205: DEF formal parameters and VAR locals ---
+
+    #[test]
+    fn test_def_with_param_double() {
+        // DEF DOUBLE(X) multiplies its argument by 2.
+        let mut interp = Interpreter::new();
+        let src = "\
+DEF DOUBLE(X)
+  PUTDEC X * 2
+  PUTSTR \"\\n\"
+END
+DOUBLE 21";
+        interp.exec_source(src).unwrap();
+        let out = interp.take_output();
+        assert_eq!(out, "42\n", "expected '42\\n', got: {:?}", out);
+    }
+
+    #[test]
+    fn test_def_with_var_counter() {
+        // DEF COUNTER declares a local VAR and assigns it.
+        let mut interp = Interpreter::new();
+        let src = "\
+DEF COUNTER
+  VAR I
+  LET &I, 1
+  PUTDEC I
+  PUTSTR \"\\n\"
+END
+COUNTER";
+        interp.exec_source(src).unwrap();
+        let out = interp.take_output();
+        assert_eq!(out, "1\n", "expected '1\\n', got: {:?}", out);
+    }
+
+    #[test]
+    fn test_def_param_multiple_calls() {
+        // Calling a parameterized word multiple times must work correctly.
+        let mut interp = Interpreter::new();
+        let src = "\
+DEF DOUBLE(X)
+  PUTDEC X * 2
+  PUTSTR \"\\n\"
+END
+DOUBLE 3
+DOUBLE 10";
+        interp.exec_source(src).unwrap();
+        let out = interp.take_output();
+        assert_eq!(out, "6\n20\n", "expected '6\\n20\\n', got: {:?}", out);
+    }
+
+    #[test]
+    fn test_def_param_local_shadows_global() {
+        // A formal parameter should shadow a global variable of the same name.
+        let mut interp = Interpreter::new();
+        let src = "\
+VAR X
+LET &X, 99
+DEF SHADOW(X)
+  PUTDEC X
+  PUTSTR \"\\n\"
+END
+SHADOW 42";
+        interp.exec_source(src).unwrap();
+        let out = interp.take_output();
+        assert_eq!(
+            out, "42\n",
+            "expected '42\\n' (local shadows global), got: {:?}",
+            out
+        );
     }
 }
