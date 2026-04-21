@@ -875,6 +875,26 @@ mod tests {
     }
 
     #[test]
+    fn test_run_non_xt_at_pc_errors_with_type_name() {
+        // Verify that when a non-Xt cell is found at the PC position,
+        // TypeError.got reports the actual cell type via type_name().
+        let mut vm = VM::new();
+        crate::primitives::register_all(&mut vm);
+
+        // Place Cell::Int(42) at offset 0 instead of an Xt.
+        vm.dict_write(Cell::Int(42)).unwrap();
+
+        let result = vm.run(0);
+        assert_eq!(
+            result,
+            Err(crate::error::TbxError::TypeError {
+                expected: "Xt",
+                got: "Int",
+            })
+        );
+    }
+
+    #[test]
     fn test_run_lit() {
         // Verify that EntryKind::Lit pushes the next cell as a literal value.
         let mut vm = VM::new();
