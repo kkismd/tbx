@@ -1051,6 +1051,73 @@ mod tests {
     }
 
     // ------------------------------------------------------------------
+    // Word: no-paren reference F → CALL Xt(F) Int(0) Int(0)
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn test_word_no_paren_emits_call() {
+        let mut vm = make_vm();
+        let f_xt = vm.register(WordEntry::new_word("F", 0));
+
+        let tokens = lex("F");
+        let result = ExprCompiler::new(&mut vm).compile_expr(&tokens).unwrap();
+
+        // A bare Word identifier (no parentheses) is treated as a nullary call
+        // and must emit the CALL 4-cell form, same as F().
+        let call_xt = vm.lookup("CALL").unwrap();
+        assert_eq!(
+            result,
+            vec![
+                Cell::Xt(call_xt),
+                Cell::Xt(f_xt),
+                Cell::Int(0),
+                Cell::Int(0),
+            ]
+        );
+    }
+
+    // ------------------------------------------------------------------
+    // Variable: V() emits Xt(v) directly (not a value read)
+    // V without parens → FETCH (value read); V() → Xt(v) (bare push)
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn test_variable_paren_emits_xt_not_fetch() {
+        let mut vm = make_vm();
+        let v_xt = vm.register(WordEntry::new_variable("V", 0));
+
+        // V() should emit only Xt(v) — not the LIT+DictAddr+FETCH sequence
+        // that a bare `V` (no parentheses) would produce.
+        let tokens = lex("V()");
+        let result = ExprCompiler::new(&mut vm).compile_expr(&tokens).unwrap();
+        assert_eq!(result, vec![Cell::Xt(v_xt)]);
+    }
+
+    #[test]
+    fn test_variable_no_paren_emits_fetch() {
+        let mut vm = make_vm();
+        let v_xt = vm.register(WordEntry::new_variable("V", 0));
+
+        // A bare `V` (no parens) reads the variable value:
+        // LIT DictAddr(addr) FETCH
+        let lit_xt = vm.lookup("LIT").unwrap();
+        let fetch_xt = vm.lookup("FETCH").unwrap();
+
+        // Retrieve the dict address stored in the Variable entry.
+        let addr = match vm.headers[v_xt.index()].kind.clone() {
+            EntryKind::Variable(a) => a,
+            _ => panic!("expected Variable kind"),
+        };
+
+        let tokens = lex("V");
+        let result = ExprCompiler::new(&mut vm).compile_expr(&tokens).unwrap();
+        assert_eq!(
+            result,
+            vec![Cell::Xt(lit_xt), Cell::DictAddr(addr), Cell::Xt(fetch_xt),]
+        );
+    }
+
+    // ------------------------------------------------------------------
     // Internal kind call rejected → InvalidExpression
     // ------------------------------------------------------------------
 
