@@ -1145,7 +1145,7 @@ mod tests {
         let result = vm.run(start);
         assert!(matches!(
             result,
-            Err(crate::error::TbxError::InvalidOperand { .. })
+            Err(crate::error::TbxError::InvalidOperand { value: -1, .. })
         ));
     }
 
@@ -1173,7 +1173,7 @@ mod tests {
         let result = vm.run(start);
         assert!(matches!(
             result,
-            Err(crate::error::TbxError::InvalidOperand { .. })
+            Err(crate::error::TbxError::InvalidOperand { value: -1, .. })
         ));
     }
 
