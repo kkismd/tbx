@@ -565,20 +565,28 @@ pub fn end_prim(vm: &mut VM) -> Result<(), TbxError> {
         }
     }
 
+    // Save rollback information before consuming compile_state.
+    // If dict_write_at fails after take(), we need these to restore the VM.
+    let (dp_at_def, hdr_len_at_def, saved_latest) =
+        vm.compile_state.as_ref().map(|s| s.rollback_info()).ok_or(
+            TbxError::InvalidExpression {
+                reason: "END without matching DEF",
+            },
+        )?;
+
     // Take the compile state.
     let state = vm.compile_state.take().ok_or(TbxError::InvalidExpression {
         reason: "END without matching DEF",
     })?;
 
     // Patch all self-recursive CALL instructions with the confirmed local_count.
-    // If patching fails, reset is_compiling to avoid leaving the VM in an inconsistent state.
+    // If patching fails, perform a full rollback so the VM is left in a clean state.
     for &pos in &state.call_patch_list {
         if let Err(e) = vm.dict_write_at(pos, Cell::Int(state.local_count as i64)) {
-            vm.is_compiling = false;
+            vm.rollback_def_explicit(dp_at_def, hdr_len_at_def, saved_latest);
             return Err(e);
         }
     }
-
     // Update word header: confirm local_count, unsmudge.
     let word_hdr_idx = state.word_hdr_idx();
     if word_hdr_idx < vm.headers.len() {

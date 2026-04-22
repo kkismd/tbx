@@ -69,6 +69,14 @@ impl CompileState {
     pub(crate) fn word_hdr_idx(&self) -> usize {
         self.hdr_len_at_def
     }
+
+    /// Return the rollback information saved at the start of this definition.
+    ///
+    /// Callers that need to roll back after `compile_state.take()` should capture
+    /// this tuple first, then perform the rollback manually.
+    pub(crate) fn rollback_info(&self) -> (usize, usize, Option<Xt>) {
+        (self.dp_at_def, self.hdr_len_at_def, self.saved_latest)
+    }
 }
 
 /// The TBX virtual machine.
@@ -758,6 +766,25 @@ impl VM {
             self.latest = state.saved_latest;
             self.is_compiling = false;
         }
+    }
+
+    /// Perform a definition rollback using explicitly supplied snapshot values.
+    ///
+    /// This is used when `compile_state` has already been taken (via `.take()`) but
+    /// an error occurs afterwards — the caller must have saved `rollback_info()` before
+    /// calling `.take()`.
+    pub(crate) fn rollback_def_explicit(
+        &mut self,
+        dp_at_def: usize,
+        hdr_len_at_def: usize,
+        saved_latest: Option<Xt>,
+    ) {
+        self.dp = dp_at_def;
+        self.dictionary.truncate(dp_at_def);
+        self.headers.truncate(hdr_len_at_def);
+        self.latest = saved_latest;
+        self.compile_state = None;
+        self.is_compiling = false;
     }
 
     /// Find the first header entry whose `kind` satisfies `pred`.
