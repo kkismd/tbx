@@ -2358,6 +2358,86 @@ mod tests {
         assert!(vm.headers[xt.index()].is_immediate());
     }
 
+    // --- immediate_prim ---
+
+    #[test]
+    fn test_immediate_prim_sets_flag() {
+        // IMMEDIATE FOO should set FLAG_IMMEDIATE on the word "FOO".
+        use std::collections::VecDeque;
+        let mut vm = VM::new();
+        // Register a plain word entry so lookup("FOO") succeeds.
+        let entry = crate::dict::WordEntry::new_word("FOO", 0);
+        vm.register(entry);
+        assert!(!vm.headers[vm.lookup("FOO").unwrap().index()].is_immediate());
+        vm.token_stream = Some(VecDeque::from([make_ident_token("FOO")]));
+        immediate_prim(&mut vm).unwrap();
+        assert!(vm.headers[vm.lookup("FOO").unwrap().index()].is_immediate());
+    }
+
+    #[test]
+    fn test_immediate_prim_is_idempotent() {
+        // Calling IMMEDIATE twice on the same word must not corrupt the flags.
+        use std::collections::VecDeque;
+        let mut vm = VM::new();
+        let entry = crate::dict::WordEntry::new_word("BAR", 0);
+        vm.register(entry);
+        for _ in 0..2 {
+            vm.token_stream = Some(VecDeque::from([make_ident_token("BAR")]));
+            immediate_prim(&mut vm).unwrap();
+        }
+        let xt = vm.lookup("BAR").unwrap();
+        // Only FLAG_IMMEDIATE should be set (bit-OR idempotent).
+        assert_eq!(
+            vm.headers[xt.index()].flags & crate::dict::FLAG_IMMEDIATE,
+            crate::dict::FLAG_IMMEDIATE
+        );
+    }
+
+    #[test]
+    fn test_immediate_prim_non_ident_token_returns_error() {
+        // A non-Ident token must produce an InvalidExpression error.
+        use std::collections::VecDeque;
+        let mut vm = VM::new();
+        let tok = crate::lexer::SpannedToken {
+            token: crate::lexer::Token::IntLit(1),
+            pos: crate::lexer::Position { line: 1, col: 1 },
+            source_offset: 0,
+            source_len: 1,
+        };
+        vm.token_stream = Some(VecDeque::from([tok]));
+        let err = immediate_prim(&mut vm).unwrap_err();
+        assert!(matches!(err, TbxError::InvalidExpression { .. }));
+    }
+
+    #[test]
+    fn test_immediate_prim_undefined_word_returns_error() {
+        // Specifying a word name that is not in the dictionary must return UndefinedSymbol.
+        use std::collections::VecDeque;
+        let mut vm = VM::new();
+        vm.token_stream = Some(VecDeque::from([make_ident_token("NOSUCHWORD")]));
+        let err = immediate_prim(&mut vm).unwrap_err();
+        assert!(
+            matches!(err, TbxError::UndefinedSymbol { ref name } if name == "NOSUCHWORD"),
+            "expected UndefinedSymbol(NOSUCHWORD), got {err:?}"
+        );
+    }
+
+    #[test]
+    fn test_immediate_prim_no_stream_returns_token_stream_empty() {
+        // token_stream is None → TokenStreamEmpty.
+        let mut vm = VM::new();
+        assert_eq!(immediate_prim(&mut vm), Err(TbxError::TokenStreamEmpty));
+    }
+
+    #[test]
+    fn test_immediate_prim_registered_in_register_all() {
+        // register_all() must include IMMEDIATE in the dictionary with FLAG_IMMEDIATE.
+        let mut vm = VM::new();
+        crate::primitives::register_all(&mut vm);
+        let xt = vm.lookup("IMMEDIATE").unwrap();
+        assert!(vm.headers[xt.index()].is_immediate());
+    }
+
     // ---------------------------------------------------------------------------
     // Error-path tests for IMMEDIATE primitives
     // ---------------------------------------------------------------------------
