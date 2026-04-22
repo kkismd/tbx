@@ -1,0 +1,8 @@
+REM hello world
+
+DEF HELLO
+  PUTSTR "hello\n"
+END
+
+HELLO
+HALT

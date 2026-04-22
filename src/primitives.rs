@@ -492,7 +492,11 @@ pub fn def_prim(vm: &mut VM) -> Result<(), TbxError> {
                             match vm.next_token() {
                                 Ok(t) if matches!(t.token, crate::lexer::Token::Comma) => {}
                                 Ok(t) if matches!(t.token, crate::lexer::Token::RParen) => break,
-                                Ok(_) => {} // ignore other tokens
+                                Ok(_) => {
+                                    return Err(TbxError::InvalidExpression {
+                                        reason: "expected ',' or ')' after parameter name",
+                                    })
+                                }
                                 Err(TbxError::TokenStreamEmpty) => break,
                                 Err(e) => return Err(e),
                             }
@@ -567,8 +571,12 @@ pub fn end_prim(vm: &mut VM) -> Result<(), TbxError> {
     })?;
 
     // Patch all self-recursive CALL instructions with the confirmed local_count.
+    // If patching fails, reset is_compiling to avoid leaving the VM in an inconsistent state.
     for &pos in &state.call_patch_list {
-        vm.dict_write_at(pos, Cell::Int(state.local_count as i64))?;
+        if let Err(e) = vm.dict_write_at(pos, Cell::Int(state.local_count as i64)) {
+            vm.is_compiling = false;
+            return Err(e);
+        }
     }
 
     // Update word header: confirm local_count, unsmudge.
