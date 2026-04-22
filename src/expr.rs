@@ -1239,6 +1239,7 @@ mod tests {
             name: "INTERNAL".to_string(),
             flags: 0,
             kind: EntryKind::Lit,
+            arity: 0,
             local_count: 0,
             prev: None,
         });

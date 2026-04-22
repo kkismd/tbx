@@ -207,7 +207,10 @@ impl Interpreter {
 
                 // Clone the kind to determine how to dispatch without holding a borrow on self.vm.
                 let kind = self.vm.headers[xt.index()].kind.clone();
-                // Also capture local_count to guard against words that require a call frame.
+                // Capture arity and local_count to guard against words that require a call frame.
+                // vm.run() does not set up bp or local variable slots; words with formal
+                // parameters or VAR locals would access the wrong stack positions.
+                let arity = self.vm.headers[xt.index()].arity;
                 let local_count = self.vm.headers[xt.index()].local_count;
 
                 // Feed remaining tokens into vm.token_stream.
@@ -224,13 +227,14 @@ impl Interpreter {
                     // temporary-buffer issues when the primitive writes to the dictionary).
                     crate::dict::EntryKind::Primitive(f) => f(&mut self.vm),
                     // User-defined word: run via vm.run(), passing the body start address.
-                    // Guard: words with VAR locals require a CALL frame (bp/stack setup)
-                    // that vm.run() alone does not provide. Reject them here to prevent
+                    // Guard: words with formal parameters (arity > 0) or VAR locals
+                    // (local_count > 0) require a CALL frame (bp/stack setup) that
+                    // vm.run() alone does not provide. Reject them here to prevent
                     // silent stack corruption.
                     crate::dict::EntryKind::Word(body_addr) => {
-                        if local_count > 0 {
+                        if arity > 0 || local_count > 0 {
                             Err(TbxError::InvalidExpression {
-                                reason: "IMMEDIATE user word with VAR locals cannot be called without a CALL frame",
+                                reason: "IMMEDIATE user word with parameters or VAR locals cannot be called without a CALL frame",
                             })
                         } else {
                             self.vm.run(body_addr)
@@ -1386,7 +1390,8 @@ IWORD
 END
 OUTER";
         interp.exec_source(src).unwrap();
-        // IWORD runs at compile time (inside DEF OUTER) and at call time.
+        // IWORD is IMMEDIATE, so it executes immediately at compile time inside DEF OUTER
+        // and is NOT compiled into OUTER's body. Calling OUTER does not re-execute IWORD.
         let out = interp.take_output();
         assert!(
             out.contains("77"),
@@ -1398,7 +1403,7 @@ OUTER";
     #[test]
     fn test_user_defined_immediate_word_with_locals_returns_error() {
         // A user word with VAR locals cannot be IMMEDIATE-dispatched directly
-        // because vm.run() does not set up the CALL frame.
+        // because vm.run() does not set up the CALL frame (bp / local slots).
         let mut interp = Interpreter::new();
         let src = "\
 DEF ILOCAL
@@ -1411,6 +1416,24 @@ ILOCAL";
         assert!(
             result.is_err(),
             "expected error when IMMEDIATE word has VAR locals"
+        );
+    }
+
+    #[test]
+    fn test_user_defined_immediate_word_with_arity_returns_error() {
+        // A user word with formal parameters (arity > 0) cannot be IMMEDIATE-dispatched
+        // directly because vm.run() does not set up the CALL frame.
+        let mut interp = Interpreter::new();
+        let src = "\
+DEF IPARAM(X)
+PUTDEC X
+END
+IMMEDIATE IPARAM
+IPARAM 42";
+        let result = interp.exec_source(src);
+        assert!(
+            result.is_err(),
+            "expected error when IMMEDIATE word has formal parameters"
         );
     }
 }

@@ -469,7 +469,7 @@ pub fn immediate_prim(vm: &mut VM) -> Result<(), TbxError> {
     };
     let xt = vm
         .lookup(&name)
-        .ok_or(TbxError::UndefinedSymbol { name: name.clone() })?;
+        .ok_or_else(|| TbxError::UndefinedSymbol { name: name.clone() })?;
     vm.headers[xt.index()].flags |= FLAG_IMMEDIATE;
     Ok(())
 }
@@ -616,9 +616,10 @@ pub fn end_prim(vm: &mut VM) -> Result<(), TbxError> {
             return Err(e);
         }
     }
-    // Update word header: confirm local_count, unsmudge.
+    // Update word header: confirm arity, local_count, unsmudge.
     let word_hdr_idx = state.word_hdr_idx();
     if word_hdr_idx < vm.headers.len() {
+        vm.headers[word_hdr_idx].arity = state.arity;
         vm.headers[word_hdr_idx].local_count = state.local_count;
         vm.headers[word_hdr_idx].flags &= !crate::dict::FLAG_HIDDEN;
     }
@@ -912,6 +913,7 @@ pub fn register_all(vm: &mut VM) {
         name: "CALL".to_string(),
         flags: FLAG_SYSTEM,
         kind: EntryKind::Call,
+        arity: 0,
         local_count: 0,
         prev: None,
     });
@@ -919,6 +921,7 @@ pub fn register_all(vm: &mut VM) {
         name: "EXIT".to_string(),
         flags: FLAG_SYSTEM,
         kind: EntryKind::Exit,
+        arity: 0,
         local_count: 0,
         prev: None,
     });
@@ -926,6 +929,7 @@ pub fn register_all(vm: &mut VM) {
         name: "RETURN_VAL".to_string(),
         flags: FLAG_SYSTEM,
         kind: EntryKind::ReturnVal,
+        arity: 0,
         local_count: 0,
         prev: None,
     });
@@ -933,6 +937,7 @@ pub fn register_all(vm: &mut VM) {
         name: "DROP_TO_MARKER".to_string(),
         flags: FLAG_SYSTEM,
         kind: EntryKind::DropToMarker,
+        arity: 0,
         local_count: 0,
         prev: None,
     });
@@ -940,6 +945,7 @@ pub fn register_all(vm: &mut VM) {
         name: "GOTO".to_string(),
         flags: FLAG_SYSTEM,
         kind: EntryKind::Goto,
+        arity: 0,
         local_count: 0,
         prev: None,
     });
@@ -947,6 +953,7 @@ pub fn register_all(vm: &mut VM) {
         name: "BIF".to_string(),
         flags: FLAG_SYSTEM,
         kind: EntryKind::BranchIfFalse,
+        arity: 0,
         local_count: 0,
         prev: None,
     });
@@ -954,6 +961,7 @@ pub fn register_all(vm: &mut VM) {
         name: "BIT".to_string(),
         flags: FLAG_SYSTEM,
         kind: EntryKind::BranchIfTrue,
+        arity: 0,
         local_count: 0,
         prev: None,
     });
@@ -964,6 +972,7 @@ pub fn register_all(vm: &mut VM) {
         name: "LIT".to_string(),
         flags: FLAG_SYSTEM,
         kind: EntryKind::Lit,
+        arity: 0,
         local_count: 0,
         prev: None,
     });

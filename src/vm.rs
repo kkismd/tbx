@@ -1927,6 +1927,7 @@ mod tests {
                 name: "TARGET".to_string(),
                 flags: 0,
                 kind,
+                arity: 0,
                 local_count: 0,
                 prev: None,
             });
