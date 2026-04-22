@@ -2,6 +2,7 @@ use crate::cell::Cell;
 use crate::constants::MAX_DICTIONARY_CELLS;
 use crate::dict::{EntryKind, WordEntry, FLAG_SYSTEM};
 use crate::error::TbxError;
+use crate::lexer::Token;
 use crate::vm::VM;
 
 /// DROP — discard the top element of the data stack.
@@ -424,6 +425,28 @@ pub fn literal_prim(vm: &mut VM) -> Result<(), TbxError> {
     vm.dict_write(value)?;
     Ok(())
 }
+/// HEADER — read the next token as a word name and create a new dictionary entry.
+///
+/// `HEADER name ( -- )` — consumes the next identifier token from `vm.token_stream`,
+/// creates a new `WordEntry` with `EntryKind::Word(vm.dp)` at the current DP,
+/// and registers it via `vm.register()`. The `immediate` flag is `false` (not set).
+///
+/// This is the TBX equivalent of Forth's `CREATE`.
+pub fn header_prim(vm: &mut VM) -> Result<(), TbxError> {
+    let tok = vm.next_token()?;
+    let name = match tok.token {
+        Token::Ident(n) => n,
+        _ => {
+            return Err(TbxError::InvalidExpression {
+                reason: "HEADER: expected identifier token",
+            })
+        }
+    };
+    let entry = WordEntry::new_word(&name, vm.dp);
+    vm.register(entry);
+    Ok(())
+}
+
 /// Register all stack primitives into the VM's dictionary.
 pub fn register_all(vm: &mut VM) {
     vm.register(WordEntry::new_primitive("DROP", drop_prim));
@@ -519,6 +542,7 @@ pub fn register_all(vm: &mut VM) {
     let mut literal_entry = WordEntry::new_primitive("LITERAL", literal_prim);
     literal_entry.flags |= crate::dict::FLAG_IMMEDIATE;
     vm.register(literal_entry);
+    vm.register(WordEntry::new_primitive("HEADER", header_prim));
 }
 
 #[cfg(test)]
@@ -1779,5 +1803,83 @@ mod tests {
         assert_eq!(vm.dictionary[dp_before], Cell::Xt(lit_xt));
         assert_eq!(vm.dictionary[dp_before + 1], Cell::Int(123));
         assert_eq!(vm.dp, dp_before + 2);
+    }
+
+    // --- header_prim ---
+
+    fn make_ident_token(name: &str) -> crate::lexer::SpannedToken {
+        crate::lexer::SpannedToken {
+            token: crate::lexer::Token::Ident(name.to_string()),
+            pos: crate::lexer::Position { line: 1, col: 1 },
+            source_offset: 0,
+            source_len: name.len(),
+        }
+    }
+
+    #[test]
+    fn test_header_prim_registers_entry_with_ident() {
+        // HEADER with an Ident token should register a new word entry at current DP.
+        use std::collections::VecDeque;
+        let mut vm = VM::new();
+        let dp_before = vm.dp;
+        vm.token_stream = Some(VecDeque::from([make_ident_token("MYWORD")]));
+        header_prim(&mut vm).unwrap();
+
+        let xt = vm.latest.unwrap();
+        let entry = &vm.headers[xt.index()];
+        assert_eq!(entry.name, "MYWORD");
+        assert!(matches!(entry.kind, crate::dict::EntryKind::Word(d) if d == dp_before));
+        assert!(!entry.is_immediate());
+    }
+
+    #[test]
+    fn test_header_prim_does_not_advance_dp() {
+        // HEADER must not modify vm.dp — data allocation is the caller's responsibility.
+        use std::collections::VecDeque;
+        let mut vm = VM::new();
+        let dp_before = vm.dp;
+        vm.token_stream = Some(VecDeque::from([make_ident_token("WORD2")]));
+        header_prim(&mut vm).unwrap();
+        assert_eq!(vm.dp, dp_before);
+    }
+
+    #[test]
+    fn test_header_prim_non_ident_token_returns_error() {
+        // A non-Ident token should produce an InvalidExpression error.
+        use std::collections::VecDeque;
+        let mut vm = VM::new();
+        let tok = crate::lexer::SpannedToken {
+            token: crate::lexer::Token::IntLit(42),
+            pos: crate::lexer::Position { line: 1, col: 1 },
+            source_offset: 0,
+            source_len: 2,
+        };
+        vm.token_stream = Some(VecDeque::from([tok]));
+        let err = header_prim(&mut vm).unwrap_err();
+        assert!(matches!(err, TbxError::InvalidExpression { .. }));
+    }
+
+    #[test]
+    fn test_header_prim_no_stream_returns_token_stream_empty() {
+        // token_stream is None → TokenStreamEmpty.
+        let mut vm = VM::new();
+        assert_eq!(header_prim(&mut vm), Err(TbxError::TokenStreamEmpty));
+    }
+
+    #[test]
+    fn test_header_prim_empty_stream_returns_token_stream_empty() {
+        // token_stream is an empty VecDeque → TokenStreamEmpty.
+        use std::collections::VecDeque;
+        let mut vm = VM::new();
+        vm.token_stream = Some(VecDeque::new());
+        assert_eq!(header_prim(&mut vm), Err(TbxError::TokenStreamEmpty));
+    }
+
+    #[test]
+    fn test_header_prim_registered_in_register_all() {
+        // register_all() must include HEADER in the dictionary.
+        let mut vm = VM::new();
+        crate::primitives::register_all(&mut vm);
+        assert!(vm.lookup("HEADER").is_some());
     }
 }
