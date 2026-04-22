@@ -136,7 +136,7 @@ pub struct VM {
     pub token_stream: Option<VecDeque<SpannedToken>>,
     /// State maintained during compilation of a new word definition (DEF..END).
     /// `None` in execution mode; `Some(...)` while compiling.
-    pub compile_state: Option<CompileState>,
+    pub(crate) compile_state: Option<CompileState>,
 }
 
 impl VM {

@@ -643,16 +643,16 @@ pub fn goto_prim(vm: &mut VM) -> Result<(), TbxError> {
         });
     }
 
-    let label_tok = vm.next_token()?;
-    let label_n = match &label_tok.token {
-        crate::lexer::Token::IntLit(n) => *n,
-        crate::lexer::Token::LineNum(n) => *n,
-        _ => {
-            return Err(TbxError::InvalidExpression {
-                reason: "GOTO requires an integer label",
-            })
-        }
+    // Drain remaining tokens and parse the label number, skipping Newline/Eof,
+    // consistent with bif_prim/bit_prim which also use parse_label_number().
+    let remaining: Vec<crate::lexer::SpannedToken> = {
+        let stream = vm.token_stream.as_mut().ok_or(TbxError::TokenStreamEmpty)?;
+        stream.drain(..).collect()
     };
+    let label_n =
+        crate::lexer::parse_label_number(&remaining).ok_or(TbxError::InvalidExpression {
+            reason: "GOTO requires an integer label",
+        })?;
 
     // Find the runtime Goto entry by kind (not by name, to avoid shadowing by this primitive).
     let goto_xt =
@@ -2370,6 +2370,22 @@ mod tests {
         assert!(
             matches!(err, TbxError::InvalidExpression { .. }),
             "expected InvalidExpression, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn test_end_unresolved_label_error() {
+        // END must return UndefinedLabel when patch_list contains forward references
+        // that were never resolved (i.e., a GOTO target label was never defined).
+        let mut vm = make_compiling_vm("LABELWORD");
+        // Manually inject an unresolved forward reference (label 99) into patch_list.
+        if let Some(state) = vm.compile_state.as_mut() {
+            state.patch_list.push((99, 0));
+        }
+        let err = end_prim(&mut vm).unwrap_err();
+        assert!(
+            matches!(err, TbxError::UndefinedLabel { label: 99 }),
+            "expected UndefinedLabel {{ label: 99 }}, got {err:?}"
         );
     }
 
