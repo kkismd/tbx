@@ -449,6 +449,31 @@ pub fn header_prim(vm: &mut VM) -> Result<(), TbxError> {
     Ok(())
 }
 
+/// IMMEDIATE — read the next token as a word name and set FLAG_IMMEDIATE on it.
+///
+/// `IMMEDIATE name ( -- )` — consumes the next identifier token from `vm.token_stream`,
+/// looks up the word in the dictionary, and sets its `FLAG_IMMEDIATE` flag.
+/// Returns an error if the word is not found or the token is not an identifier.
+///
+/// Unlike Forth's `IMMEDIATE` (which implicitly operates on the most recently defined word),
+/// TBX requires the target word name to be specified explicitly.
+pub fn immediate_prim(vm: &mut VM) -> Result<(), TbxError> {
+    let tok = vm.next_token()?;
+    let name = match tok.token {
+        Token::Ident(n) => n,
+        _ => {
+            return Err(TbxError::InvalidExpression {
+                reason: "IMMEDIATE: expected identifier token",
+            })
+        }
+    };
+    let xt = vm
+        .lookup(&name)
+        .ok_or(TbxError::UndefinedSymbol { name: name.clone() })?;
+    vm.headers[xt.index()].flags |= FLAG_IMMEDIATE;
+    Ok(())
+}
+
 // ---------------------------------------------------------------------------
 // IMMEDIATE compile-time primitives
 // ---------------------------------------------------------------------------
@@ -954,6 +979,10 @@ pub fn register_all(vm: &mut VM) {
     let mut header_entry = WordEntry::new_primitive("HEADER", header_prim);
     header_entry.flags = FLAG_IMMEDIATE | FLAG_SYSTEM;
     vm.register(header_entry);
+    // IMMEDIATE: reads next token and sets FLAG_IMMEDIATE on the named word.
+    let mut immediate_entry = WordEntry::new_primitive("IMMEDIATE", immediate_prim);
+    immediate_entry.flags = FLAG_IMMEDIATE | FLAG_SYSTEM;
+    vm.register(immediate_entry);
     // IMMEDIATE system words: DEF, END, VAR, GOTO, BIF, BIT, RETURN
     let mut def_entry = WordEntry::new_primitive("DEF", def_prim);
     def_entry.flags = FLAG_IMMEDIATE | FLAG_SYSTEM;

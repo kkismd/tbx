@@ -197,7 +197,7 @@ impl Interpreter {
 
         // IMMEDIATE word dispatch: execute immediately regardless of compile/interpret mode.
         // If the looked-up word has FLAG_IMMEDIATE set, feed the remaining tokens into
-        // vm.token_stream and call the primitive directly (not via vm.run()).
+        // vm.token_stream and execute it directly.
         if let Some(xt) = self.vm.lookup(&stmt_name) {
             let flags = self.vm.headers[xt.index()].flags;
             if flags & crate::dict::FLAG_IMMEDIATE != 0 {
@@ -205,17 +205,8 @@ impl Interpreter {
                     InterpreterError::new(stmt_pos_line, stmt_pos_col, source_line, e)
                 };
 
-                // Get the primitive function pointer before any other borrows.
-                let prim_fn = match self.vm.headers[xt.index()].kind.clone() {
-                    crate::dict::EntryKind::Primitive(f) => f,
-                    _ => {
-                        // TODO(#245): user-defined IMMEDIATE words are not yet supported.
-                        // Currently only EntryKind::Primitive can be flagged as IMMEDIATE.
-                        return Err(make_err(TbxError::InvalidExpression {
-                            reason: "IMMEDIATE word must be a primitive",
-                        }));
-                    }
-                };
+                // Clone the kind to determine how to dispatch without holding a borrow on self.vm.
+                let kind = self.vm.headers[xt.index()].kind.clone();
 
                 // Feed remaining tokens into vm.token_stream.
                 let remaining: VecDeque<SpannedToken> = tokens[idx..].iter().cloned().collect();
@@ -226,9 +217,19 @@ impl Interpreter {
                 let saved_return_stack_len = self.vm.return_stack.len();
                 let saved_bp = self.vm.bp;
 
-                // Call the primitive directly (not through vm.run() to avoid
-                // the temporary-buffer issues when the primitive writes to the dictionary).
-                let run_result = prim_fn(&mut self.vm);
+                let run_result = match kind {
+                    // Native primitive: call the function pointer directly (avoids
+                    // temporary-buffer issues when the primitive writes to the dictionary).
+                    crate::dict::EntryKind::Primitive(f) => f(&mut self.vm),
+                    // User-defined word: run via vm.run(), passing the body start address.
+                    crate::dict::EntryKind::Word(body_addr) => self.vm.run(body_addr),
+                    _ => {
+                        self.vm.token_stream = None;
+                        return Err(make_err(TbxError::InvalidExpression {
+                            reason: "IMMEDIATE word kind is not executable",
+                        }));
+                    }
+                };
 
                 // Clear token stream.
                 self.vm.token_stream = None;
