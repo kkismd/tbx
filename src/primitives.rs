@@ -525,18 +525,14 @@ pub fn def_prim(vm: &mut VM) -> Result<(), TbxError> {
     vm.headers[hdr_len_at_def].flags |= crate::dict::FLAG_HIDDEN;
 
     vm.is_compiling = true;
-    vm.compile_state = Some(CompileState {
-        word_name: name,
+    vm.compile_state = Some(CompileState::new_for_def(
+        name,
         dp_at_def,
         hdr_len_at_def,
         saved_latest,
         local_table,
         arity,
-        local_count: 0,
-        call_patch_list: Vec::new(),
-        label_table: HashMap::new(),
-        patch_list: Vec::new(),
-    });
+    ));
 
     Ok(())
 }
@@ -550,15 +546,11 @@ pub fn end_prim(vm: &mut VM) -> Result<(), TbxError> {
     }
 
     // Write EXIT to terminate the word body.
-    let exit_xt = vm
-        .headers
-        .iter()
-        .enumerate()
-        .find(|(_, e)| matches!(e.kind, EntryKind::Exit))
-        .map(|(i, _)| crate::cell::Xt(i))
-        .ok_or(TbxError::UndefinedSymbol {
-            name: "EXIT".to_string(),
-        })?;
+    let exit_xt =
+        vm.find_by_kind(|k| matches!(k, EntryKind::Exit))
+            .ok_or(TbxError::UndefinedSymbol {
+                name: "EXIT".to_string(),
+            })?;
     vm.dict_write(Cell::Xt(exit_xt))?;
 
     // Check for unresolved forward label references BEFORE taking compile_state.
@@ -570,10 +562,9 @@ pub fn end_prim(vm: &mut VM) -> Result<(), TbxError> {
     }
 
     // Take the compile state.
-    let state = vm
-        .compile_state
-        .take()
-        .expect("compile_state must be Some in end_prim");
+    let state = vm.compile_state.take().ok_or(TbxError::InvalidExpression {
+        reason: "END without matching DEF",
+    })?;
 
     // Patch all self-recursive CALL instructions with the confirmed local_count.
     for &pos in &state.call_patch_list {
@@ -581,7 +572,7 @@ pub fn end_prim(vm: &mut VM) -> Result<(), TbxError> {
     }
 
     // Update word header: confirm local_count, unsmudge.
-    let word_hdr_idx = state.hdr_len_at_def;
+    let word_hdr_idx = state.word_hdr_idx();
     if word_hdr_idx < vm.headers.len() {
         vm.headers[word_hdr_idx].local_count = state.local_count;
         vm.headers[word_hdr_idx].flags &= !crate::dict::FLAG_HIDDEN;
@@ -648,15 +639,11 @@ pub fn goto_prim(vm: &mut VM) -> Result<(), TbxError> {
     };
 
     // Find the runtime Goto entry by kind (not by name, to avoid shadowing by this primitive).
-    let goto_xt = vm
-        .headers
-        .iter()
-        .enumerate()
-        .find(|(_, e)| matches!(e.kind, EntryKind::Goto))
-        .map(|(i, _)| crate::cell::Xt(i))
-        .ok_or(TbxError::UndefinedSymbol {
-            name: "GOTO".to_string(),
-        })?;
+    let goto_xt =
+        vm.find_by_kind(|k| matches!(k, EntryKind::Goto))
+            .ok_or(TbxError::UndefinedSymbol {
+                name: "GOTO".to_string(),
+            })?;
     vm.dict_write(Cell::Xt(goto_xt))?;
     emit_jump_target_to_dict(vm, label_n)
 }
@@ -702,15 +689,27 @@ fn compile_branch_prim(vm: &mut VM, is_truthy: bool) -> Result<(), TbxError> {
     })?;
 
     // Compile condition expression.
-    let local_table = vm.compile_state.as_ref().map(|s| s.local_table.clone());
+    // Temporarily take local_table out of compile_state so we can pass a reference
+    // to ExprCompiler while also holding &mut VM.  Always restore it afterward.
     let self_word = vm.compile_state.as_ref().map(|s| s.word_name.clone());
-    let self_hdr_idx = vm.compile_state.as_ref().map(|s| s.hdr_len_at_def);
-    let (cond_cells, patch_offsets) = {
-        let mut compiler = ExprCompiler::with_context(vm, local_table, self_word, self_hdr_idx);
-        let cells = compiler.compile_expr(cond_tokens)?;
-        let offsets = std::mem::take(&mut compiler.patch_offsets);
-        (cells, offsets)
+    let self_hdr_idx = vm.compile_state.as_ref().map(|s| s.word_hdr_idx());
+    let local_table = vm
+        .compile_state
+        .as_mut()
+        .map(|s| std::mem::take(&mut s.local_table));
+    let compile_result: Result<(Vec<Cell>, Vec<usize>), TbxError> = {
+        let local_table_ref = local_table.as_ref();
+        let mut compiler = ExprCompiler::with_context(vm, local_table_ref, self_word, self_hdr_idx);
+        compiler.compile_expr(cond_tokens).map(|cells| {
+            let offsets = std::mem::take(&mut compiler.patch_offsets);
+            (cells, offsets)
+        })
     };
+    // Restore local_table regardless of success or failure.
+    if let (Some(state), Some(lt)) = (vm.compile_state.as_mut(), local_table) {
+        state.local_table = lt;
+    }
+    let (cond_cells, patch_offsets) = compile_result?;
 
     let base_dp = vm.dp;
     for cell in cond_cells {
@@ -725,20 +724,12 @@ fn compile_branch_prim(vm: &mut VM, is_truthy: bool) -> Result<(), TbxError> {
 
     // Emit BIF or BIT runtime instruction (found by kind to avoid shadowing).
     let branch_xt = if is_truthy {
-        vm.headers
-            .iter()
-            .enumerate()
-            .find(|(_, e)| matches!(e.kind, EntryKind::BranchIfTrue))
-            .map(|(i, _)| crate::cell::Xt(i))
+        vm.find_by_kind(|k| matches!(k, EntryKind::BranchIfTrue))
             .ok_or(TbxError::UndefinedSymbol {
                 name: "BIT".to_string(),
             })?
     } else {
-        vm.headers
-            .iter()
-            .enumerate()
-            .find(|(_, e)| matches!(e.kind, EntryKind::BranchIfFalse))
-            .map(|(i, _)| crate::cell::Xt(i))
+        vm.find_by_kind(|k| matches!(k, EntryKind::BranchIfFalse))
             .ok_or(TbxError::UndefinedSymbol {
                 name: "BIF".to_string(),
             })?
@@ -764,27 +755,37 @@ pub fn return_prim(vm: &mut VM) -> Result<(), TbxError> {
 
     if expr_tokens.is_empty() {
         // Void return: emit EXIT.
-        let exit_xt = vm
-            .headers
-            .iter()
-            .enumerate()
-            .find(|(_, e)| matches!(e.kind, EntryKind::Exit))
-            .map(|(i, _)| crate::cell::Xt(i))
-            .ok_or(TbxError::UndefinedSymbol {
-                name: "EXIT".to_string(),
-            })?;
+        let exit_xt =
+            vm.find_by_kind(|k| matches!(k, EntryKind::Exit))
+                .ok_or(TbxError::UndefinedSymbol {
+                    name: "EXIT".to_string(),
+                })?;
         vm.dict_write(Cell::Xt(exit_xt))?;
     } else {
         // Compile return expression.
-        let local_table = vm.compile_state.as_ref().map(|s| s.local_table.clone());
+        // Temporarily take local_table out of compile_state so we can pass a reference
+        // to ExprCompiler while also holding &mut VM.  Always restore it afterward.
         let self_word = vm.compile_state.as_ref().map(|s| s.word_name.clone());
-        let self_hdr_idx = vm.compile_state.as_ref().map(|s| s.hdr_len_at_def);
-        let (expr_cells, patch_offsets) = {
-            let mut compiler = ExprCompiler::with_context(vm, local_table, self_word, self_hdr_idx);
-            let cells = compiler.compile_expr(&expr_tokens)?;
-            let offsets = std::mem::take(&mut compiler.patch_offsets);
-            (cells, offsets)
+        let self_hdr_idx = vm.compile_state.as_ref().map(|s| s.word_hdr_idx());
+        let local_table = vm
+            .compile_state
+            .as_mut()
+            .map(|s| std::mem::take(&mut s.local_table));
+        let compile_result: Result<(Vec<Cell>, Vec<usize>), TbxError> = {
+            let local_table_ref = local_table.as_ref();
+            let mut compiler =
+                ExprCompiler::with_context(vm, local_table_ref, self_word, self_hdr_idx);
+            compiler.compile_expr(&expr_tokens).map(|cells| {
+                let offsets = std::mem::take(&mut compiler.patch_offsets);
+                (cells, offsets)
+            })
         };
+        // Restore local_table regardless of success or failure.
+        if let (Some(state), Some(lt)) = (vm.compile_state.as_mut(), local_table) {
+            state.local_table = lt;
+        }
+        let (expr_cells, patch_offsets) = compile_result?;
+
         let base_dp = vm.dp;
         for cell in expr_cells {
             vm.dict_write(cell)?;
@@ -796,11 +797,7 @@ pub fn return_prim(vm: &mut VM) -> Result<(), TbxError> {
         }
         // Find RETURN_VAL by kind.
         let return_val_xt = vm
-            .headers
-            .iter()
-            .enumerate()
-            .find(|(_, e)| matches!(e.kind, EntryKind::ReturnVal))
-            .map(|(i, _)| crate::cell::Xt(i))
+            .find_by_kind(|k| matches!(k, EntryKind::ReturnVal))
             .ok_or(TbxError::UndefinedSymbol {
                 name: "RETURN_VAL".to_string(),
             })?;
@@ -819,7 +816,9 @@ fn emit_jump_target_to_dict(vm: &mut VM, label_n: i64) -> Result<(), TbxError> {
     let target_opt = vm
         .compile_state
         .as_ref()
-        .expect("emit_jump_target_to_dict called outside compile mode")
+        .ok_or(TbxError::InvalidExpression {
+            reason: "GOTO/BIF/BIT outside compile mode",
+        })?
         .label_table
         .get(&label_n)
         .copied();
@@ -831,7 +830,9 @@ fn emit_jump_target_to_dict(vm: &mut VM, label_n: i64) -> Result<(), TbxError> {
         vm.dict_write(Cell::Int(0))?;
         vm.compile_state
             .as_mut()
-            .expect("emit_jump_target_to_dict called outside compile mode")
+            .ok_or(TbxError::InvalidExpression {
+                reason: "GOTO/BIF/BIT outside compile mode",
+            })?
             .patch_list
             .push((label_n, patch_pos));
     }
@@ -2335,5 +2336,124 @@ mod tests {
         crate::primitives::register_all(&mut vm);
         let xt = vm.lookup("HEADER").unwrap();
         assert!(vm.headers[xt.index()].is_immediate());
+    }
+
+    // ---------------------------------------------------------------------------
+    // Error-path tests for IMMEDIATE primitives
+    // ---------------------------------------------------------------------------
+
+    /// Helper: build a VM with all primitives registered and return a minimal token stream.
+    fn make_vm_with_tokens(tokens: Vec<crate::lexer::Token>) -> VM {
+        use std::collections::VecDeque;
+        let mut vm = VM::new();
+        register_all(&mut vm);
+        let spanned: Vec<crate::lexer::SpannedToken> = tokens
+            .into_iter()
+            .map(|t| crate::lexer::SpannedToken {
+                token: t,
+                pos: crate::lexer::Position { line: 1, col: 1 },
+                source_offset: 0,
+                source_len: 1,
+            })
+            .collect();
+        vm.token_stream = Some(VecDeque::from(spanned));
+        vm
+    }
+
+    // --- def_prim error paths ---
+
+    #[test]
+    fn test_def_nested_error() {
+        // DEF inside an already-compiling context must return InvalidExpression.
+        use std::collections::VecDeque;
+        let mut vm = VM::new();
+        register_all(&mut vm);
+        vm.is_compiling = true;
+        vm.token_stream = Some(VecDeque::from([make_ident_token("FOO")]));
+        let err = def_prim(&mut vm).unwrap_err();
+        assert!(
+            matches!(err, TbxError::InvalidExpression { .. }),
+            "expected InvalidExpression, got {err:?}"
+        );
+    }
+
+    // --- end_prim error paths ---
+
+    #[test]
+    fn test_end_outside_def_error() {
+        // END called when is_compiling == false must return InvalidExpression.
+        let mut vm = VM::new();
+        register_all(&mut vm);
+        // is_compiling is false by default; compile_state is None.
+        let err = end_prim(&mut vm).unwrap_err();
+        assert!(
+            matches!(err, TbxError::InvalidExpression { .. }),
+            "expected InvalidExpression, got {err:?}"
+        );
+    }
+
+    // --- goto_prim error paths ---
+
+    #[test]
+    fn test_goto_outside_def_error() {
+        // GOTO outside a DEF body must return InvalidExpression.
+        let mut vm = make_vm_with_tokens(vec![crate::lexer::Token::IntLit(10)]);
+        let err = goto_prim(&mut vm).unwrap_err();
+        assert!(
+            matches!(err, TbxError::InvalidExpression { .. }),
+            "expected InvalidExpression, got {err:?}"
+        );
+    }
+
+    // --- bif_prim error paths ---
+
+    #[test]
+    fn test_bif_outside_def_error() {
+        // BIF outside a DEF body must return InvalidExpression.
+        let mut vm = make_vm_with_tokens(vec![]);
+        let err = bif_prim(&mut vm).unwrap_err();
+        assert!(
+            matches!(err, TbxError::InvalidExpression { .. }),
+            "expected InvalidExpression, got {err:?}"
+        );
+    }
+
+    // --- bit_prim error paths ---
+
+    #[test]
+    fn test_bit_outside_def_error() {
+        // BIT outside a DEF body must return InvalidExpression.
+        let mut vm = make_vm_with_tokens(vec![]);
+        let err = bit_prim(&mut vm).unwrap_err();
+        assert!(
+            matches!(err, TbxError::InvalidExpression { .. }),
+            "expected InvalidExpression, got {err:?}"
+        );
+    }
+
+    // --- return_prim error paths ---
+
+    #[test]
+    fn test_return_outside_def_error() {
+        // RETURN outside a DEF body must return InvalidExpression.
+        let mut vm = make_vm_with_tokens(vec![]);
+        let err = return_prim(&mut vm).unwrap_err();
+        assert!(
+            matches!(err, TbxError::InvalidExpression { .. }),
+            "expected InvalidExpression, got {err:?}"
+        );
+    }
+
+    // --- var_prim error paths ---
+
+    #[test]
+    fn test_var_no_name_token_stream_empty() {
+        // VAR with an empty token stream must return TokenStreamEmpty.
+        use std::collections::VecDeque;
+        let mut vm = VM::new();
+        register_all(&mut vm);
+        vm.token_stream = Some(VecDeque::new());
+        let err = var_prim(&mut vm).unwrap_err();
+        assert_eq!(err, TbxError::TokenStreamEmpty);
     }
 }

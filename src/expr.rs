@@ -44,9 +44,10 @@ enum OpItem {
 /// The caller receives the instruction sequence and decides how to use it.
 pub struct ExprCompiler<'a> {
     vm: &'a mut VM,
-    /// Optional local variable table passed in during compile mode.
+    /// Optional reference to the local variable table for the word being compiled.
     /// Local variables shadow same-named globals: this table is checked first.
-    local_table: Option<HashMap<String, usize>>,
+    /// Passed as a reference to avoid cloning the table on every statement.
+    local_table: Option<&'a HashMap<String, usize>>,
     /// Name of the word currently being compiled, used to allow self-recursive lookups.
     /// Only this word's hidden entry (FLAG_HIDDEN) is visible to identifier resolution.
     self_word: Option<String>,
@@ -72,14 +73,16 @@ impl<'a> ExprCompiler<'a> {
         }
     }
 
-    /// Create an `ExprCompiler` with a local variable table and the name of the
-    /// word currently being compiled (for self-recursive call resolution).
+    /// Create an `ExprCompiler` with a reference to the local variable table and the
+    /// name of the word currently being compiled (for self-recursive call resolution).
+    ///
+    /// `local_table` is borrowed rather than cloned to avoid per-statement HashMap copies.
     /// `self_hdr_idx` is the header index of the word being compiled; when
     /// a call to that same index is encountered in an expression, a `local_count`
     /// placeholder is emitted and its offset recorded in `patch_offsets`.
     pub fn with_context(
         vm: &'a mut VM,
-        local_table: Option<HashMap<String, usize>>,
+        local_table: Option<&'a HashMap<String, usize>>,
         self_word: Option<String>,
         self_hdr_idx: Option<usize>,
     ) -> Self {
@@ -138,12 +141,7 @@ impl<'a> ExprCompiler<'a> {
                 // -------------------------------------------------------
                 Token::Ident(name) => {
                     // Check local variable table first — locals shadow globals.
-                    if let Some(idx) = self
-                        .local_table
-                        .as_ref()
-                        .and_then(|lt| lt.get(&name))
-                        .copied()
-                    {
+                    if let Some(idx) = self.local_table.and_then(|lt| lt.get(&name)).copied() {
                         emit_local_read(&mut output, idx, self.vm)?;
                         prev_was_operand = true;
                         i += 1;
@@ -232,11 +230,8 @@ impl<'a> ExprCompiler<'a> {
                         match next_tok {
                             Some(Token::Ident(name)) => {
                                 // Check local table first — locals shadow globals.
-                                if let Some(idx) = self
-                                    .local_table
-                                    .as_ref()
-                                    .and_then(|lt| lt.get(&name))
-                                    .copied()
+                                if let Some(idx) =
+                                    self.local_table.and_then(|lt| lt.get(&name)).copied()
                                 {
                                     // Emit StackAddr — no FETCH.
                                     let xt_lit = require_xt(self.vm, "LIT")?;

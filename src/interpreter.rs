@@ -355,20 +355,32 @@ impl Interpreter {
 
         // Compile the argument expression to a cell sequence.
         // Local variables in the current compile scope shadow globals (local_table checked first).
-        let (arg_cells, expr_patch_offsets) = {
-            let local_table = self
-                .vm
-                .compile_state
-                .as_ref()
-                .map(|s| s.local_table.clone());
-            let self_word = self.vm.compile_state.as_ref().map(|s| s.word_name.clone());
-            let self_hdr_idx = self.vm.compile_state.as_ref().map(|s| s.hdr_len_at_def);
+        // Temporarily take local_table out of compile_state so we can pass a reference to
+        // ExprCompiler while also holding &mut VM.  Always restore it afterward.
+        let self_word = self.vm.compile_state.as_ref().map(|s| s.word_name.clone());
+        let self_hdr_idx = self.vm.compile_state.as_ref().map(|s| s.word_hdr_idx());
+        let local_table = self
+            .vm
+            .compile_state
+            .as_mut()
+            .map(|s| std::mem::take(&mut s.local_table));
+        let compile_result: Result<(Vec<Cell>, Vec<usize>), InterpreterError> = {
+            let local_table_ref = local_table.as_ref();
             let mut compiler =
-                ExprCompiler::with_context(&mut self.vm, local_table, self_word, self_hdr_idx);
-            let cells = compiler.compile_expr(arg_tokens).map_err(&make_err)?;
-            let offsets = std::mem::take(&mut compiler.patch_offsets);
-            (cells, offsets)
+                ExprCompiler::with_context(&mut self.vm, local_table_ref, self_word, self_hdr_idx);
+            compiler
+                .compile_expr(arg_tokens)
+                .map_err(&make_err)
+                .map(|cells| {
+                    let offsets = std::mem::take(&mut compiler.patch_offsets);
+                    (cells, offsets)
+                })
         };
+        // Restore local_table regardless of success or failure.
+        if let (Some(state), Some(lt)) = (self.vm.compile_state.as_mut(), local_table) {
+            state.local_table = lt;
+        }
+        let (arg_cells, expr_patch_offsets) = compile_result?;
 
         // Determine arity from top-level comma count.
         let arity = count_top_level_arity(arg_tokens).map_err(&make_err)?;
@@ -419,7 +431,7 @@ impl Interpreter {
                 .vm
                 .compile_state
                 .as_ref()
-                .map(|s| stmt_xt.index() == s.hdr_len_at_def)
+                .map(|s| stmt_xt.index() == s.word_hdr_idx())
                 .unwrap_or(false);
 
             self.vm.dict_write(Cell::Xt(call_xt)).map_err(&make_err)?;

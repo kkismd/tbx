@@ -1,6 +1,6 @@
 use crate::cell::{Cell, ReturnFrame, Xt};
 use crate::constants::{MAX_DATA_STACK_DEPTH, MAX_DICTIONARY_CELLS, MAX_RETURN_STACK_DEPTH};
-use crate::dict::WordEntry;
+use crate::dict::{EntryKind, WordEntry};
 use crate::error::TbxError;
 use crate::lexer::SpannedToken;
 use std::collections::HashMap;
@@ -12,11 +12,12 @@ pub struct CompileState {
     /// Name of the word being compiled.
     pub word_name: String,
     /// Dictionary pointer at the start of DEF (for rollback on error).
-    pub dp_at_def: usize,
-    /// Header count at the start of DEF (for rollback on error).
-    pub hdr_len_at_def: usize,
+    dp_at_def: usize,
+    /// Header index of the word being compiled.
+    /// Used both for rollback (restoring headers) and for self-recursive call detection.
+    hdr_len_at_def: usize,
     /// Saved `latest` pointer before DEF (restored on rollback).
-    pub saved_latest: Option<crate::cell::Xt>,
+    saved_latest: Option<crate::cell::Xt>,
     /// Local variable table: maps variable name to StackAddr index.
     /// Parameters are assigned indices 0..arity, VAR locals start at arity.
     pub local_table: HashMap<String, usize>,
@@ -32,6 +33,42 @@ pub struct CompileState {
     pub label_table: HashMap<i64, usize>,
     /// (label_number, dict_offset_of_placeholder) waiting to be back-patched.
     pub patch_list: Vec<(i64, usize)>,
+}
+
+impl CompileState {
+    /// Create a new `CompileState` for a DEF..END compilation.
+    ///
+    /// The rollback fields (`dp_at_def`, `hdr_len_at_def`, `saved_latest`) are kept
+    /// private; they are only used by `VM::rollback_def()`.
+    pub(crate) fn new_for_def(
+        word_name: String,
+        dp_at_def: usize,
+        hdr_len_at_def: usize,
+        saved_latest: Option<Xt>,
+        local_table: HashMap<String, usize>,
+        arity: usize,
+    ) -> Self {
+        Self {
+            word_name,
+            dp_at_def,
+            hdr_len_at_def,
+            saved_latest,
+            local_table,
+            arity,
+            local_count: 0,
+            call_patch_list: Vec::new(),
+            label_table: HashMap::new(),
+            patch_list: Vec::new(),
+        }
+    }
+
+    /// Return the header-table index of the word currently being compiled.
+    ///
+    /// This is used for self-recursive call detection and for updating the
+    /// word's `local_count` and smudge flag when END finalises the definition.
+    pub(crate) fn word_hdr_idx(&self) -> usize {
+        self.hdr_len_at_def
+    }
 }
 
 /// The TBX virtual machine.
@@ -722,6 +759,19 @@ impl VM {
             self.is_compiling = false;
         }
     }
+
+    /// Find the first header entry whose `kind` satisfies `pred`.
+    ///
+    /// Returns `Some(Xt)` for the first match, or `None` if no entry matches.
+    /// Useful for locating runtime instruction entries (e.g. `Goto`, `BranchIfFalse`)
+    /// that may be shadowed by IMMEDIATE primitives of the same name.
+    pub fn find_by_kind(&self, pred: impl Fn(&EntryKind) -> bool) -> Option<Xt> {
+        self.headers
+            .iter()
+            .enumerate()
+            .find(|(_, e)| pred(&e.kind))
+            .map(|(i, _)| Xt(i))
+    }
 }
 
 impl Default for VM {
@@ -740,15 +790,11 @@ mod tests {
     }
 
     /// Find the Xt of the first header entry whose kind matches the predicate.
+    /// Delegates to `VM::find_by_kind`; panics if the entry is not found.
     /// Used to locate runtime instructions (Goto, BranchIfFalse, BranchIfTrue)
     /// which may be shadowed by IMMEDIATE primitives of the same name.
     fn find_by_kind(vm: &VM, pred: impl Fn(&EntryKind) -> bool) -> Xt {
-        vm.headers
-            .iter()
-            .enumerate()
-            .find(|(_, e)| pred(&e.kind))
-            .map(|(i, _)| Xt(i))
-            .expect("entry not found by kind")
+        vm.find_by_kind(pred).expect("entry not found by kind")
     }
 
     #[test]
