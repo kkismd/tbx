@@ -501,14 +501,16 @@ pub fn def_prim(vm: &mut VM) -> Result<(), TbxError> {
 
     // Parse optional parameter list: DEF WORD(X, Y, ...)
     //
-    // DFA states:
-    //   LParenOrEnd    — after word name: expect '(' or EOL
-    //   ParamOrRParen  — after '(' or after registering a param: expect ident or ')'
-    //   Param          — after ',': next must be ident (')'  is trailing-comma error)
+    // DFA with 4 states:
+    //   LParenOrEnd      — after word name: expect '(' or EOL
+    //   FirstParamOrEnd  — right after '(': expect ident or ')'  (comma here = leading-comma error)
+    //   CommaOrRParen    — after registering a param: expect ',' or ')'  (ident here = missing-comma error)
+    //   NextParam        — after ',': next must be ident  (')' = trailing-comma error)
     enum DefParseState {
         LParenOrEnd,
-        ParamOrRParen,
-        Param,
+        FirstParamOrEnd,
+        CommaOrRParen,
+        NextParam,
     }
 
     let mut local_table: HashMap<String, usize> = HashMap::new();
@@ -520,7 +522,7 @@ pub fn def_prim(vm: &mut VM) -> Result<(), TbxError> {
             Ok(tok) => match (&state, tok.token) {
                 // --- LParenOrEnd ---
                 (DefParseState::LParenOrEnd, crate::lexer::Token::LParen) => {
-                    state = DefParseState::ParamOrRParen;
+                    state = DefParseState::FirstParamOrEnd;
                 }
                 (DefParseState::LParenOrEnd, _) => {
                     return Err(TbxError::InvalidExpression {
@@ -528,36 +530,46 @@ pub fn def_prim(vm: &mut VM) -> Result<(), TbxError> {
                     });
                 }
 
-                // --- ParamOrRParen ---
-                (DefParseState::ParamOrRParen, crate::lexer::Token::RParen) => {
-                    break; // Normal end of parameter list.
+                // --- FirstParamOrEnd: immediately after '(' ---
+                (DefParseState::FirstParamOrEnd, crate::lexer::Token::RParen) => {
+                    break; // Empty parameter list: DEF WORD().
                 }
-                (DefParseState::ParamOrRParen, crate::lexer::Token::Ident(param)) => {
+                (DefParseState::FirstParamOrEnd, crate::lexer::Token::Ident(param)) => {
                     local_table.insert(param, arity);
                     arity += 1;
-                    state = DefParseState::ParamOrRParen;
+                    state = DefParseState::CommaOrRParen;
                 }
-                (DefParseState::ParamOrRParen, crate::lexer::Token::Comma) => {
-                    state = DefParseState::Param;
-                }
-                (DefParseState::ParamOrRParen, _) => {
+                (DefParseState::FirstParamOrEnd, _) => {
                     return Err(TbxError::InvalidExpression {
-                        reason: "expected identifier, ',' or ')' in parameter list",
+                        reason: "expected identifier or ')' after '('",
                     });
                 }
 
-                // --- Param ---
-                (DefParseState::Param, crate::lexer::Token::Ident(param)) => {
+                // --- CommaOrRParen: after registering a parameter ---
+                (DefParseState::CommaOrRParen, crate::lexer::Token::RParen) => {
+                    break; // Normal end of parameter list.
+                }
+                (DefParseState::CommaOrRParen, crate::lexer::Token::Comma) => {
+                    state = DefParseState::NextParam;
+                }
+                (DefParseState::CommaOrRParen, _) => {
+                    return Err(TbxError::InvalidExpression {
+                        reason: "expected ',' or ')' after parameter name",
+                    });
+                }
+
+                // --- NextParam: after ',' ---
+                (DefParseState::NextParam, crate::lexer::Token::Ident(param)) => {
                     local_table.insert(param, arity);
                     arity += 1;
-                    state = DefParseState::ParamOrRParen;
+                    state = DefParseState::CommaOrRParen;
                 }
-                (DefParseState::Param, crate::lexer::Token::RParen) => {
+                (DefParseState::NextParam, crate::lexer::Token::RParen) => {
                     return Err(TbxError::InvalidExpression {
                         reason: "trailing comma before ')' is not allowed",
                     });
                 }
-                (DefParseState::Param, _) => {
+                (DefParseState::NextParam, _) => {
                     return Err(TbxError::InvalidExpression {
                         reason: "expected identifier after ',' in parameter list",
                     });
@@ -2641,6 +2653,46 @@ mod tests {
         assert!(
             matches!(err, TbxError::InvalidExpression { .. }),
             "expected InvalidExpression for trailing comma, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn test_def_params_without_comma() {
+        // DEF WORD(X Y) — missing comma between parameters must return InvalidExpression.
+        use std::collections::VecDeque;
+        let mut vm = VM::new();
+        register_all(&mut vm);
+        vm.token_stream = Some(VecDeque::from([
+            make_ident_token("WORD"),
+            make_lparen_token(),
+            make_ident_token("X"),
+            make_ident_token("Y"),
+            make_rparen_token(),
+        ]));
+        let err = def_prim(&mut vm).unwrap_err();
+        assert!(
+            matches!(err, TbxError::InvalidExpression { .. }),
+            "expected InvalidExpression for missing comma between params, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn test_def_leading_comma() {
+        // DEF WORD(,X) — leading comma must return InvalidExpression.
+        use std::collections::VecDeque;
+        let mut vm = VM::new();
+        register_all(&mut vm);
+        vm.token_stream = Some(VecDeque::from([
+            make_ident_token("WORD"),
+            make_lparen_token(),
+            make_comma_token(),
+            make_ident_token("X"),
+            make_rparen_token(),
+        ]));
+        let err = def_prim(&mut vm).unwrap_err();
+        assert!(
+            matches!(err, TbxError::InvalidExpression { .. }),
+            "expected InvalidExpression for leading comma, got {err:?}"
         );
     }
 
