@@ -2761,6 +2761,28 @@ mod tests {
         assert_eq!(state.local_table.get("Y").copied(), Some(1));
     }
 
+    #[test]
+    fn test_def_prim_empty_params_enters_compile_mode() {
+        // DEF WORD() — explicit empty parameter list must enter compile mode with arity=0.
+        use std::collections::VecDeque;
+        let mut vm = VM::new();
+        register_all(&mut vm);
+        vm.token_stream = Some(VecDeque::from([
+            make_ident_token("WORD"),
+            make_lparen_token(),
+            make_rparen_token(),
+        ]));
+        def_prim(&mut vm).unwrap();
+        assert!(vm.is_compiling, "is_compiling must be true after DEF");
+        let state = vm
+            .compile_state
+            .as_ref()
+            .expect("compile_state must be set");
+        assert_eq!(state.word_name, "WORD");
+        assert_eq!(state.arity, 0);
+        assert!(state.local_table.is_empty());
+    }
+
     // --- end_prim normal case ---
 
     #[test]
