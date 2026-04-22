@@ -500,50 +500,101 @@ pub fn def_prim(vm: &mut VM) -> Result<(), TbxError> {
     };
 
     // Parse optional parameter list: DEF WORD(X, Y, ...)
+    //
+    // DFA with 4 states:
+    //   LParenOrEnd      — after word name: expect '(' or EOL
+    //   FirstParamOrEnd  — right after '(': expect ident or ')'  (comma here = leading-comma error)
+    //   CommaOrRParen    — after registering a param: expect ',' or ')'  (ident here = missing-comma error)
+    //   NextParam        — after ',': next must be ident  (')' = trailing-comma error)
+    enum DefParseState {
+        LParenOrEnd,
+        FirstParamOrEnd,
+        CommaOrRParen,
+        NextParam,
+    }
+
     let mut local_table: HashMap<String, usize> = HashMap::new();
     let mut arity: usize = 0;
+    let mut state = DefParseState::LParenOrEnd;
 
-    match vm.next_token() {
-        Ok(tok) if matches!(tok.token, crate::lexer::Token::LParen) => {
-            // Parse parameters until ')'
-            loop {
-                match vm.next_token() {
-                    Ok(tok) => match tok.token {
-                        crate::lexer::Token::RParen => break,
-                        crate::lexer::Token::Ident(param) => {
-                            local_table.insert(param, arity);
-                            arity += 1;
-                            // Skip optional comma or check for RParen.
-                            match vm.next_token() {
-                                Ok(t) if matches!(t.token, crate::lexer::Token::Comma) => {}
-                                Ok(t) if matches!(t.token, crate::lexer::Token::RParen) => break,
-                                Ok(_) => {
-                                    return Err(TbxError::InvalidExpression {
-                                        reason: "expected ',' or ')' after parameter name",
-                                    })
-                                }
-                                Err(TbxError::TokenStreamEmpty) => break,
-                                Err(e) => return Err(e),
-                            }
-                        }
-                        _ => {
-                            return Err(TbxError::InvalidExpression {
-                                reason: "expected identifier or ')' in parameter list",
-                            })
-                        }
-                    },
-                    Err(TbxError::TokenStreamEmpty) => break,
-                    Err(e) => return Err(e),
+    loop {
+        match vm.next_token() {
+            Ok(tok) => match (&state, tok.token) {
+                // --- LParenOrEnd ---
+                (DefParseState::LParenOrEnd, crate::lexer::Token::LParen) => {
+                    state = DefParseState::FirstParamOrEnd;
                 }
-            }
+                (DefParseState::LParenOrEnd, _) => {
+                    return Err(TbxError::InvalidExpression {
+                        reason: "expected '(' or end of line after word name in DEF",
+                    });
+                }
+
+                // --- FirstParamOrEnd: immediately after '(' ---
+                (DefParseState::FirstParamOrEnd, crate::lexer::Token::RParen) => {
+                    break; // Empty parameter list: DEF WORD().
+                }
+                (DefParseState::FirstParamOrEnd, crate::lexer::Token::Ident(param)) => {
+                    if local_table.contains_key(&param) {
+                        return Err(TbxError::InvalidExpression {
+                            reason: "duplicate parameter name in parameter list",
+                        });
+                    }
+                    local_table.insert(param, arity);
+                    arity += 1;
+                    state = DefParseState::CommaOrRParen;
+                }
+                (DefParseState::FirstParamOrEnd, _) => {
+                    return Err(TbxError::InvalidExpression {
+                        reason: "expected identifier or ')' after '('",
+                    });
+                }
+
+                // --- CommaOrRParen: after registering a parameter ---
+                (DefParseState::CommaOrRParen, crate::lexer::Token::RParen) => {
+                    break; // Normal end of parameter list.
+                }
+                (DefParseState::CommaOrRParen, crate::lexer::Token::Comma) => {
+                    state = DefParseState::NextParam;
+                }
+                (DefParseState::CommaOrRParen, _) => {
+                    return Err(TbxError::InvalidExpression {
+                        reason: "expected ',' or ')' after parameter name",
+                    });
+                }
+
+                // --- NextParam: after ',' ---
+                (DefParseState::NextParam, crate::lexer::Token::Ident(param)) => {
+                    if local_table.contains_key(&param) {
+                        return Err(TbxError::InvalidExpression {
+                            reason: "duplicate parameter name in parameter list",
+                        });
+                    }
+                    local_table.insert(param, arity);
+                    arity += 1;
+                    state = DefParseState::CommaOrRParen;
+                }
+                (DefParseState::NextParam, crate::lexer::Token::RParen) => {
+                    return Err(TbxError::InvalidExpression {
+                        reason: "trailing comma before ')' is not allowed",
+                    });
+                }
+                (DefParseState::NextParam, _) => {
+                    return Err(TbxError::InvalidExpression {
+                        reason: "expected identifier after ',' in parameter list",
+                    });
+                }
+            },
+            Err(TbxError::TokenStreamEmpty) => match state {
+                DefParseState::LParenOrEnd => break, // No parameter list — normal end.
+                _ => {
+                    return Err(TbxError::InvalidExpression {
+                        reason: "unclosed '(' in parameter list",
+                    });
+                }
+            },
+            Err(e) => return Err(e),
         }
-        Ok(_) => {
-            return Err(TbxError::InvalidExpression {
-                reason: "expected '(' or end of line after word name in DEF",
-            })
-        }
-        Err(TbxError::TokenStreamEmpty) => {} // End of stream — no parameters
-        Err(e) => return Err(e),
     }
 
     // Snapshot for rollback.
@@ -2509,6 +2560,198 @@ mod tests {
         );
     }
 
+    // --- def_prim error paths: unclosed parentheses and trailing comma ---
+
+    /// Helper: build a SpannedToken with LParen.
+    fn make_lparen_token() -> crate::lexer::SpannedToken {
+        crate::lexer::SpannedToken {
+            token: crate::lexer::Token::LParen,
+            pos: crate::lexer::Position { line: 1, col: 5 },
+            source_offset: 4,
+            source_len: 1,
+        }
+    }
+
+    /// Helper: build a SpannedToken with Comma.
+    fn make_comma_token() -> crate::lexer::SpannedToken {
+        crate::lexer::SpannedToken {
+            token: crate::lexer::Token::Comma,
+            pos: crate::lexer::Position { line: 1, col: 7 },
+            source_offset: 6,
+            source_len: 1,
+        }
+    }
+
+    /// Helper: build a SpannedToken with RParen.
+    fn make_rparen_token() -> crate::lexer::SpannedToken {
+        crate::lexer::SpannedToken {
+            token: crate::lexer::Token::RParen,
+            pos: crate::lexer::Position { line: 1, col: 9 },
+            source_offset: 8,
+            source_len: 1,
+        }
+    }
+
+    #[test]
+    fn test_def_unclosed_paren_no_params() {
+        // DEF WORD( — unclosed '(' with no parameters must return InvalidExpression.
+        use std::collections::VecDeque;
+        let mut vm = VM::new();
+        register_all(&mut vm);
+        vm.token_stream = Some(VecDeque::from([
+            make_ident_token("WORD"),
+            make_lparen_token(),
+        ]));
+        let err = def_prim(&mut vm).unwrap_err();
+        assert!(
+            matches!(err, TbxError::InvalidExpression { .. }),
+            "expected InvalidExpression for unclosed '(', got {err:?}"
+        );
+    }
+
+    #[test]
+    fn test_def_unclosed_paren_with_param() {
+        // DEF WORD(X — unclosed '(' after one parameter must return InvalidExpression.
+        use std::collections::VecDeque;
+        let mut vm = VM::new();
+        register_all(&mut vm);
+        vm.token_stream = Some(VecDeque::from([
+            make_ident_token("WORD"),
+            make_lparen_token(),
+            make_ident_token("X"),
+        ]));
+        let err = def_prim(&mut vm).unwrap_err();
+        assert!(
+            matches!(err, TbxError::InvalidExpression { .. }),
+            "expected InvalidExpression for unclosed '(' after param, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn test_def_unclosed_paren_after_comma() {
+        // DEF WORD(X, — unclosed '(' after comma must return InvalidExpression.
+        use std::collections::VecDeque;
+        let mut vm = VM::new();
+        register_all(&mut vm);
+        vm.token_stream = Some(VecDeque::from([
+            make_ident_token("WORD"),
+            make_lparen_token(),
+            make_ident_token("X"),
+            make_comma_token(),
+        ]));
+        let err = def_prim(&mut vm).unwrap_err();
+        assert!(
+            matches!(err, TbxError::InvalidExpression { .. }),
+            "expected InvalidExpression for unclosed '(' after comma, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn test_def_trailing_comma() {
+        // DEF WORD(X,) — trailing comma before ')' must return InvalidExpression.
+        use std::collections::VecDeque;
+        let mut vm = VM::new();
+        register_all(&mut vm);
+        vm.token_stream = Some(VecDeque::from([
+            make_ident_token("WORD"),
+            make_lparen_token(),
+            make_ident_token("X"),
+            make_comma_token(),
+            make_rparen_token(),
+        ]));
+        let err = def_prim(&mut vm).unwrap_err();
+        assert!(
+            matches!(err, TbxError::InvalidExpression { .. }),
+            "expected InvalidExpression for trailing comma, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn test_def_params_without_comma() {
+        // DEF WORD(X Y) — missing comma between parameters must return InvalidExpression.
+        use std::collections::VecDeque;
+        let mut vm = VM::new();
+        register_all(&mut vm);
+        vm.token_stream = Some(VecDeque::from([
+            make_ident_token("WORD"),
+            make_lparen_token(),
+            make_ident_token("X"),
+            make_ident_token("Y"),
+            make_rparen_token(),
+        ]));
+        let err = def_prim(&mut vm).unwrap_err();
+        assert!(
+            matches!(err, TbxError::InvalidExpression { .. }),
+            "expected InvalidExpression for missing comma between params, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn test_def_leading_comma() {
+        // DEF WORD(,X) — leading comma must return InvalidExpression.
+        use std::collections::VecDeque;
+        let mut vm = VM::new();
+        register_all(&mut vm);
+        vm.token_stream = Some(VecDeque::from([
+            make_ident_token("WORD"),
+            make_lparen_token(),
+            make_comma_token(),
+            make_ident_token("X"),
+            make_rparen_token(),
+        ]));
+        let err = def_prim(&mut vm).unwrap_err();
+        assert!(
+            matches!(err, TbxError::InvalidExpression { .. }),
+            "expected InvalidExpression for leading comma, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn test_def_duplicate_param_name() {
+        // DEF WORD(X, X) — duplicate parameter name must return InvalidExpression.
+        use std::collections::VecDeque;
+        let mut vm = VM::new();
+        register_all(&mut vm);
+        vm.token_stream = Some(VecDeque::from([
+            make_ident_token("WORD"),
+            make_lparen_token(),
+            make_ident_token("X"),
+            make_comma_token(),
+            make_ident_token("X"),
+            make_rparen_token(),
+        ]));
+        let err = def_prim(&mut vm).unwrap_err();
+        assert!(
+            matches!(err, TbxError::InvalidExpression { .. }),
+            "expected InvalidExpression for duplicate param name, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn test_def_invalid_token_after_comma() {
+        // DEF WORD(X, 42) — non-ident token after comma must return InvalidExpression.
+        use std::collections::VecDeque;
+        let mut vm = VM::new();
+        register_all(&mut vm);
+        vm.token_stream = Some(VecDeque::from([
+            make_ident_token("WORD"),
+            make_lparen_token(),
+            make_ident_token("X"),
+            make_comma_token(),
+            crate::lexer::SpannedToken {
+                token: crate::lexer::Token::IntLit(42),
+                pos: crate::lexer::Position { line: 1, col: 9 },
+                source_offset: 8,
+                source_len: 2,
+            },
+        ]));
+        let err = def_prim(&mut vm).unwrap_err();
+        assert!(
+            matches!(err, TbxError::InvalidExpression { .. }),
+            "expected InvalidExpression for non-ident after comma, got {err:?}"
+        );
+    }
+
     // --- def_prim normal cases ---
 
     #[test]
@@ -2537,31 +2780,13 @@ mod tests {
         let mut vm = VM::new();
         register_all(&mut vm);
         // Tokens: WORD ( X , Y )
-        let lparen = crate::lexer::SpannedToken {
-            token: crate::lexer::Token::LParen,
-            pos: crate::lexer::Position { line: 1, col: 5 },
-            source_offset: 4,
-            source_len: 1,
-        };
-        let comma = crate::lexer::SpannedToken {
-            token: crate::lexer::Token::Comma,
-            pos: crate::lexer::Position { line: 1, col: 7 },
-            source_offset: 6,
-            source_len: 1,
-        };
-        let rparen = crate::lexer::SpannedToken {
-            token: crate::lexer::Token::RParen,
-            pos: crate::lexer::Position { line: 1, col: 9 },
-            source_offset: 8,
-            source_len: 1,
-        };
         vm.token_stream = Some(VecDeque::from([
             make_ident_token("WORD"),
-            lparen,
+            make_lparen_token(),
             make_ident_token("X"),
-            comma,
+            make_comma_token(),
             make_ident_token("Y"),
-            rparen,
+            make_rparen_token(),
         ]));
         def_prim(&mut vm).unwrap();
         assert!(vm.is_compiling, "is_compiling must be true after DEF");
@@ -2572,6 +2797,28 @@ mod tests {
         assert_eq!(state.arity, 2);
         assert_eq!(state.local_table.get("X").copied(), Some(0));
         assert_eq!(state.local_table.get("Y").copied(), Some(1));
+    }
+
+    #[test]
+    fn test_def_prim_empty_params_enters_compile_mode() {
+        // DEF WORD() — explicit empty parameter list must enter compile mode with arity=0.
+        use std::collections::VecDeque;
+        let mut vm = VM::new();
+        register_all(&mut vm);
+        vm.token_stream = Some(VecDeque::from([
+            make_ident_token("WORD"),
+            make_lparen_token(),
+            make_rparen_token(),
+        ]));
+        def_prim(&mut vm).unwrap();
+        assert!(vm.is_compiling, "is_compiling must be true after DEF");
+        let state = vm
+            .compile_state
+            .as_ref()
+            .expect("compile_state must be set");
+        assert_eq!(state.word_name, "WORD");
+        assert_eq!(state.arity, 0);
+        assert!(state.local_table.is_empty());
     }
 
     // --- end_prim normal case ---
