@@ -29,6 +29,7 @@ cargo fmt --check
 
 | エージェント名 | 起動プロンプト例 | 役割 |
 | --- | --- | --- |
+| `plan-issue` | 「issue #N の実装計画を立てて」 | issueを調べて実装方針・変更ファイル・注意点をissueコメントに記録 |
 | `spec-discussion` | 「issue #N の仕様を検討したい」 | 仕様の選択肢提示・ユーザーとの対話・issueへの決定記録 |
 | `implement-issue` | 「issue #N を実装して」 | issueを読んでRustコードを実装しPRを作成 |
 | `review-implementation` | 「PR #N をレビューして」 | PRのコードをレビューし問題をコメント・issueに登録 |
