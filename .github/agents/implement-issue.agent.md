@@ -89,39 +89,45 @@ PR作成が完了したら、ユーザーへの報告より先に `review-implem
 
 #### 各ループ内の手順
 
-1. `review-implementation` エージェントを起動する（**ユーザーへの確認は不要**）：
+1. `review-implementation` エージェントを起動する前に、現在のPRコメント件数を記録する：
+   ```
+   review_before_count = <get_comments で取得したコメント件数>
+   ```
+
+2. `review-implementation` エージェントを起動する（**ユーザーへの確認は不要**）：
    ```
    review-implementation エージェントを起動: PR #<PR番号> をレビューしてください
    ```
 
-2. レビュー完了後、`github-mcp-server-pull_request_read`（method: `get_comments`）でPRコメントを取得し、
-   最新のレビューコメントに **🔴** または **🟡** が含まれるか確認する。
+3. レビュー完了後、`github-mcp-server-pull_request_read`（method: `get_comments`）でPRコメントを再取得する。
 
-3. **指摘なし**（🔴・🟡 が存在しない）→ ループを終了してステップ7へ進む。
+4. **新しいコメントが追加されていない**（取得件数 == `review_before_count`）→ 指摘なし。ループを終了してステップ7へ進む。
 
-4. **指摘あり** かつ `loop_count < 3` の場合：
-   - `loop_count` をインクリメントする
-   - PRコメントの指摘内容をすべて読み、修正を行う
-   - 修正後に必ず以下を実行し、エラー・警告がないことを確認する：
-     ```bash
-     cargo build
-     cargo test
-     cargo clippy -- -D warnings
-     ```
-   - 以下の形式でコミットしてpushする：
-     ```bash
-     git add <変更ファイル>
-     cat > "$(git rev-parse --git-dir)/COMMIT_MSG" << 'EOF'
-     レビュー指摘の修正 (<loop_count>回目)
-     
-     Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>
-     EOF
-     git commit -F "$(git rev-parse --git-dir)/COMMIT_MSG"
-     git push
-     ```
-   - ループの先頭（手順1）へ戻る
+5. **新しいコメントが追加された場合**、最新コメントに **🔴** または **🟡** が含まれるか確認する：
+   - **含まれない**（🟢 Info のみ、またはApproveコメント）→ ループを終了してステップ7へ進む。
+   - **含まれる** かつ `loop_count < 3` の場合：
+     - `loop_count` をインクリメントする
+     - 新しいPRコメントの指摘内容をすべて読み、修正を行う
+     - 修正後に必ず以下を実行し、エラー・警告がないことを確認する：
+       ```bash
+       cargo build
+       cargo test
+       cargo clippy --all-targets -- -D warnings
+       ```
+     - 以下の形式でコミットしてpushする：
+       ```bash
+       git add <変更ファイル>
+       cat > "$(git rev-parse --git-dir)/COMMIT_MSG" << 'EOF'
+       レビュー指摘の修正 (<loop_count>回目)
+       
+       Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>
+       EOF
+       git commit -F "$(git rev-parse --git-dir)/COMMIT_MSG"
+       git push
+       ```
+     - ループの先頭（手順1）へ戻る
 
-5. `loop_count >= 3` に達した場合はループを終了し、未解消の指摘が残っている旨をステップ7で報告する。
+6. `loop_count >= 3` に達した場合はループを終了し、未解消の指摘が残っている旨をステップ7で報告する。
 
 ### ステップ7：ユーザーへの最終報告
 
