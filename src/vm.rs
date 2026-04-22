@@ -758,7 +758,7 @@ impl VM {
     ///
     /// Restores `dp`, `headers`, and `latest` to the state captured at DEF time.
     /// Clears `is_compiling` and drops `compile_state`.
-    pub fn rollback_def(&mut self) {
+    pub(crate) fn rollback_def(&mut self) {
         if let Some(state) = self.compile_state.take() {
             self.dp = state.dp_at_def;
             self.dictionary.truncate(state.dp_at_def);
@@ -792,7 +792,7 @@ impl VM {
     /// Returns `Some(Xt)` for the first match, or `None` if no entry matches.
     /// Useful for locating runtime instruction entries (e.g. `Goto`, `BranchIfFalse`)
     /// that may be shadowed by IMMEDIATE primitives of the same name.
-    pub fn find_by_kind(&self, pred: impl Fn(&EntryKind) -> bool) -> Option<Xt> {
+    pub(crate) fn find_by_kind(&self, pred: impl Fn(&EntryKind) -> bool) -> Option<Xt> {
         self.headers
             .iter()
             .enumerate()

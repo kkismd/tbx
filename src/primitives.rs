@@ -2450,6 +2450,56 @@ mod tests {
         assert_eq!(state.local_table.get("Y").copied(), Some(1));
     }
 
+    // --- end_prim normal case ---
+
+    #[test]
+    fn test_end_prim_normal() {
+        // end_prim called after def_prim should:
+        // - write EXIT into the dictionary
+        // - clear FLAG_HIDDEN on the word header (unsmudge)
+        // - set is_compiling to false
+        let mut vm = make_compiling_vm("MYWORD");
+
+        // Record the word header index before calling end_prim.
+        let word_hdr_idx = vm
+            .compile_state
+            .as_ref()
+            .map(|s| s.word_hdr_idx())
+            .expect("compile_state must be set");
+
+        // The word should be hidden (smudged) while being compiled.
+        assert!(
+            vm.headers[word_hdr_idx].flags & crate::dict::FLAG_HIDDEN != 0,
+            "word must be hidden during compilation"
+        );
+
+        end_prim(&mut vm).unwrap();
+
+        // is_compiling must be cleared.
+        assert!(!vm.is_compiling, "is_compiling must be false after END");
+
+        // FLAG_HIDDEN must be cleared (unsmudged).
+        assert_eq!(
+            vm.headers[word_hdr_idx].flags & crate::dict::FLAG_HIDDEN,
+            0,
+            "FLAG_HIDDEN must be cleared after END"
+        );
+
+        // The last cell written to the dictionary must be EXIT (an Xt pointing to
+        // an Exit entry).
+        let exit_cell = vm.dict_read(vm.dp - 1).expect("dict_read should succeed");
+        assert!(
+            matches!(exit_cell, crate::cell::Cell::Xt(_)),
+            "last written cell must be an Xt (EXIT), got {exit_cell:?}"
+        );
+        if let crate::cell::Cell::Xt(xt) = exit_cell {
+            assert!(
+                matches!(vm.headers[xt.index()].kind, crate::dict::EntryKind::Exit),
+                "EXIT xt must point to an Exit entry"
+            );
+        }
+    }
+
     #[test]
     fn test_end_outside_def_error() {
         // END called when is_compiling == false must return InvalidExpression.

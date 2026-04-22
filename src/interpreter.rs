@@ -503,11 +503,11 @@ impl Interpreter {
     ) -> Result<(), InterpreterError> {
         let make_err = |e: TbxError| InterpreterError::new(line, col, source_line, e);
         let dp = self.vm.dp;
-        let state = self
-            .vm
-            .compile_state
-            .as_mut()
-            .expect("register_label called outside compile mode");
+        let state = self.vm.compile_state.as_mut().ok_or_else(|| {
+            make_err(TbxError::InvalidExpression {
+                reason: "register_label called outside compile mode",
+            })
+        })?;
 
         // Reject duplicate label definitions within the same word.
         if state.label_table.contains_key(&n) {
