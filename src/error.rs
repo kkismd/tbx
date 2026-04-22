@@ -81,6 +81,11 @@ pub enum TbxError {
         value: i64,
         reason: &'static str,
     },
+    /// The token stream is empty or has not been set on the VM.
+    ///
+    /// Returned by `VM::next_token()` when `token_stream` is `None` or the
+    /// `VecDeque` has been fully consumed.
+    TokenStreamEmpty,
 }
 
 impl std::fmt::Display for TbxError {
@@ -145,6 +150,7 @@ impl std::fmt::Display for TbxError {
             } => {
                 write!(f, "invalid operand '{name}' (value: {value}): {reason}")
             }
+            TbxError::TokenStreamEmpty => write!(f, "token stream is empty or not set"),
         }
     }
 }
@@ -223,5 +229,11 @@ mod tests {
         assert!(msg.contains("arity"));
         assert!(msg.contains("-1"));
         assert!(msg.contains("must be non-negative"));
+    }
+
+    #[test]
+    fn test_token_stream_empty_display() {
+        let e = TbxError::TokenStreamEmpty;
+        assert!(e.to_string().contains("token stream"));
     }
 }
