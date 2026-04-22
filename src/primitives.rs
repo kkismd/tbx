@@ -768,10 +768,10 @@ pub fn return_prim(vm: &mut VM) -> Result<(), TbxError> {
         });
     }
 
-    // Drain remaining tokens.
-    let expr_tokens: Vec<crate::lexer::SpannedToken> = match vm.token_stream.as_mut() {
-        Some(stream) => stream.drain(..).collect(),
-        None => Vec::new(),
+    // Drain remaining tokens; require token_stream to be set (same contract as goto_prim / bif_prim).
+    let expr_tokens: Vec<crate::lexer::SpannedToken> = {
+        let stream = vm.token_stream.as_mut().ok_or(TbxError::TokenStreamEmpty)?;
+        stream.drain(..).collect()
     };
 
     if expr_tokens.is_empty() {
@@ -2806,5 +2806,65 @@ mod tests {
                 vm.headers[xt.index()].kind
             );
         }
+    }
+
+    #[test]
+    fn test_return_prim_with_expr_writes_return_val() {
+        // RETURN 42 inside DEF should:
+        //   1. compile the expression (emitting Xt(LIT), Cell::Int(42) to the dictionary),
+        //   2. emit Xt(RETURN_VAL) immediately after,
+        //   3. restore local_table in compile_state.
+        use std::collections::VecDeque;
+        let mut vm = make_compiling_vm("RETEXPR");
+        let dp_before = vm.dp;
+
+        // Provide token stream with the integer literal 42.
+        vm.token_stream = Some(VecDeque::from([crate::lexer::SpannedToken {
+            token: crate::lexer::Token::IntLit(42),
+            pos: crate::lexer::Position { line: 1, col: 1 },
+            source_offset: 0,
+            source_len: 2,
+        }]));
+        return_prim(&mut vm).unwrap();
+
+        // ExprCompiler emits Xt(LIT) then the value for integer literals.
+        // Dictionary layout: [Xt(LIT), Int(42), Xt(RETURN_VAL)]
+        let cell0 = vm.dict_read(dp_before).unwrap();
+        assert!(
+            matches!(cell0, Cell::Xt(_)),
+            "expected Xt(LIT) at dp+0, got {:?}",
+            cell0
+        );
+
+        let cell1 = vm.dict_read(dp_before + 1).unwrap();
+        assert_eq!(
+            cell1,
+            Cell::Int(42),
+            "expected Int(42) at dp+1, got {:?}",
+            cell1
+        );
+
+        let cell2 = vm.dict_read(dp_before + 2).unwrap();
+        assert!(
+            matches!(cell2, Cell::Xt(_)),
+            "expected Xt(RETURN_VAL) at dp+2, got {:?}",
+            cell2
+        );
+        if let Cell::Xt(xt) = cell2 {
+            assert!(
+                matches!(
+                    vm.headers[xt.index()].kind,
+                    crate::dict::EntryKind::ReturnVal
+                ),
+                "expected ReturnVal kind, got {:?}",
+                vm.headers[xt.index()].kind
+            );
+        }
+
+        // local_table must have been restored in compile_state.
+        assert!(
+            vm.compile_state.is_some(),
+            "compile_state should still be set after return_prim"
+        );
     }
 }

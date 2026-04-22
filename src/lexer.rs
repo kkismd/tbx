@@ -1261,4 +1261,56 @@ mod tests {
             toks[0]
         );
     }
+
+    // ---------------------------------------------------------------------------
+    // Tests for parse_label_number and last_top_level_comma helper functions
+    // ---------------------------------------------------------------------------
+
+    /// Returns SpannedTokens for the given source string, stopping before Newline/Eof.
+    fn tokenize_args(s: &str) -> Vec<SpannedToken> {
+        let mut lex = Lexer::new(s);
+        let mut result = Vec::new();
+        loop {
+            let st = lex.next_token();
+            match &st.token {
+                Token::Newline | Token::Eof => break,
+                _ => result.push(st),
+            }
+        }
+        result
+    }
+
+    #[test]
+    fn test_parse_label_number_and_last_top_level_comma() {
+        // parse_label_number returns the integer when the token slice starts with one.
+        let toks = tokenize_args("42");
+        assert_eq!(parse_label_number(&toks), Some(42));
+
+        // last_top_level_comma returns Some(pos) when a top-level comma is present.
+        let toks = tokenize_args("I > 10, 99");
+        let comma_pos = last_top_level_comma(&toks);
+        assert!(
+            comma_pos.unwrap().is_some(),
+            "should find a top-level comma"
+        );
+
+        // last_top_level_comma returns None when no comma is present.
+        let toks_no_comma = tokenize_args("42");
+        assert_eq!(last_top_level_comma(&toks_no_comma).unwrap(), None);
+    }
+
+    #[test]
+    fn test_last_top_level_comma_unmatched_paren_errors() {
+        // An unmatched ')' must produce an InvalidExpression error.
+        let toks = tokenize_args("42 ), 99");
+        let result = last_top_level_comma(&toks);
+        assert!(
+            matches!(
+                result,
+                Err(crate::error::TbxError::InvalidExpression { .. })
+            ),
+            "expected InvalidExpression for unmatched ')', got: {:?}",
+            result
+        );
+    }
 }

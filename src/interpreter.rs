@@ -198,52 +198,50 @@ impl Interpreter {
         // IMMEDIATE word dispatch: execute immediately regardless of compile/interpret mode.
         // If the looked-up word has FLAG_IMMEDIATE set, feed the remaining tokens into
         // vm.token_stream and call the primitive directly (not via vm.run()).
-        {
-            if let Some(xt) = self.vm.lookup(&stmt_name) {
-                let flags = self.vm.headers[xt.index()].flags;
-                if flags & crate::dict::FLAG_IMMEDIATE != 0 {
-                    let make_err = |e: TbxError| {
-                        InterpreterError::new(stmt_pos_line, stmt_pos_col, source_line, e)
-                    };
+        if let Some(xt) = self.vm.lookup(&stmt_name) {
+            let flags = self.vm.headers[xt.index()].flags;
+            if flags & crate::dict::FLAG_IMMEDIATE != 0 {
+                let make_err = |e: TbxError| {
+                    InterpreterError::new(stmt_pos_line, stmt_pos_col, source_line, e)
+                };
 
-                    // Get the primitive function pointer before any other borrows.
-                    let prim_fn = match self.vm.headers[xt.index()].kind.clone() {
-                        crate::dict::EntryKind::Primitive(f) => f,
-                        _ => {
-                            // TODO: user-defined IMMEDIATE words are not yet supported.
-                            // Currently only EntryKind::Primitive can be flagged as IMMEDIATE.
-                            return Err(make_err(TbxError::InvalidExpression {
-                                reason: "IMMEDIATE word must be a primitive",
-                            }));
-                        }
-                    };
-
-                    // Feed remaining tokens into vm.token_stream.
-                    let remaining: VecDeque<SpannedToken> = tokens[idx..].iter().cloned().collect();
-                    self.vm.token_stream = Some(remaining);
-
-                    // Save VM state for rollback on error.
-                    let saved_data_stack_len = self.vm.data_stack.len();
-                    let saved_return_stack_len = self.vm.return_stack.len();
-                    let saved_bp = self.vm.bp;
-
-                    // Call the primitive directly (not through vm.run() to avoid
-                    // the temporary-buffer issues when the primitive writes to the dictionary).
-                    let run_result = prim_fn(&mut self.vm);
-
-                    // Clear token stream.
-                    self.vm.token_stream = None;
-
-                    // On error, rollback compile state and stacks.
-                    if run_result.is_err() {
-                        self.vm.rollback_def();
-                        self.vm.data_stack.truncate(saved_data_stack_len);
-                        self.vm.return_stack.truncate(saved_return_stack_len);
-                        self.vm.bp = saved_bp;
+                // Get the primitive function pointer before any other borrows.
+                let prim_fn = match self.vm.headers[xt.index()].kind.clone() {
+                    crate::dict::EntryKind::Primitive(f) => f,
+                    _ => {
+                        // TODO: user-defined IMMEDIATE words are not yet supported.
+                        // Currently only EntryKind::Primitive can be flagged as IMMEDIATE.
+                        return Err(make_err(TbxError::InvalidExpression {
+                            reason: "IMMEDIATE word must be a primitive",
+                        }));
                     }
+                };
 
-                    return run_result.map_err(make_err);
+                // Feed remaining tokens into vm.token_stream.
+                let remaining: VecDeque<SpannedToken> = tokens[idx..].iter().cloned().collect();
+                self.vm.token_stream = Some(remaining);
+
+                // Save VM state for rollback on error.
+                let saved_data_stack_len = self.vm.data_stack.len();
+                let saved_return_stack_len = self.vm.return_stack.len();
+                let saved_bp = self.vm.bp;
+
+                // Call the primitive directly (not through vm.run() to avoid
+                // the temporary-buffer issues when the primitive writes to the dictionary).
+                let run_result = prim_fn(&mut self.vm);
+
+                // Clear token stream.
+                self.vm.token_stream = None;
+
+                // On error, rollback compile state and stacks.
+                if run_result.is_err() {
+                    self.vm.rollback_def();
+                    self.vm.data_stack.truncate(saved_data_stack_len);
+                    self.vm.return_stack.truncate(saved_return_stack_len);
+                    self.vm.bp = saved_bp;
                 }
+
+                return run_result.map_err(make_err);
             }
         }
 
@@ -992,26 +990,6 @@ FWDTEST
     }
 
     #[test]
-    fn test_label_table_and_patch_list_helpers() {
-        // Unit tests for the shared lexer helper functions.
-        let toks = tokenize_args("42");
-        assert_eq!(crate::lexer::parse_label_number(&toks), Some(42));
-
-        let toks = tokenize_args("I > 10, 99");
-        let comma_pos = crate::lexer::last_top_level_comma(&toks);
-        assert!(
-            comma_pos.unwrap().is_some(),
-            "should find a top-level comma"
-        );
-
-        let toks_no_comma = tokenize_args("42");
-        assert_eq!(
-            crate::lexer::last_top_level_comma(&toks_no_comma).unwrap(),
-            None
-        );
-    }
-
-    #[test]
     fn test_duplicate_label_is_error() {
         // Defining the same label twice in one word must produce DuplicateLabel.
         let src = "DEF DUPWORD\n  10\n  PUTDEC 1\n  10\nEND";
@@ -1033,18 +1011,6 @@ FWDTEST
             result2.unwrap_err()
         );
         assert_eq!(interp.take_output(), "5");
-    }
-
-    #[test]
-    fn test_last_top_level_comma_unmatched_paren_errors() {
-        // An unmatched ')' must produce an InvalidExpression error.
-        let toks = tokenize_args("42 ), 99");
-        let result = crate::lexer::last_top_level_comma(&toks);
-        assert!(
-            matches!(result, Err(TbxError::InvalidExpression { .. })),
-            "expected InvalidExpression for unmatched ')', got: {:?}",
-            result
-        );
     }
 
     #[test]
