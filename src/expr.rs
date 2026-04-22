@@ -46,7 +46,7 @@ pub struct ExprCompiler<'a> {
     vm: &'a mut VM,
     /// Optional local variable table passed in during compile mode.
     /// Local variables shadow same-named globals: this table is checked first.
-    local_table: Option<&'a HashMap<String, usize>>,
+    local_table: Option<HashMap<String, usize>>,
     /// Name of the word currently being compiled, used to allow self-recursive lookups.
     /// Only this word's hidden entry (FLAG_HIDDEN) is visible to identifier resolution.
     self_word: Option<String>,
@@ -79,7 +79,7 @@ impl<'a> ExprCompiler<'a> {
     /// placeholder is emitted and its offset recorded in `patch_offsets`.
     pub fn with_context(
         vm: &'a mut VM,
-        local_table: Option<&'a HashMap<String, usize>>,
+        local_table: Option<HashMap<String, usize>>,
         self_word: Option<String>,
         self_hdr_idx: Option<usize>,
     ) -> Self {
@@ -138,9 +138,12 @@ impl<'a> ExprCompiler<'a> {
                 // -------------------------------------------------------
                 Token::Ident(name) => {
                     // Check local variable table first — locals shadow globals.
-                    if let Some(idx) = self.local_table.and_then(|lt| lt.get(&name)).copied() {
-                        // Peek ahead: a local variable cannot be called like a function.
-                        // Just emit a local variable read: LIT StackAddr(idx) FETCH.
+                    if let Some(idx) = self
+                        .local_table
+                        .as_ref()
+                        .and_then(|lt| lt.get(&name))
+                        .copied()
+                    {
                         emit_local_read(&mut output, idx, self.vm)?;
                         prev_was_operand = true;
                         i += 1;
@@ -229,8 +232,11 @@ impl<'a> ExprCompiler<'a> {
                         match next_tok {
                             Some(Token::Ident(name)) => {
                                 // Check local table first — locals shadow globals.
-                                if let Some(idx) =
-                                    self.local_table.and_then(|lt| lt.get(&name)).copied()
+                                if let Some(idx) = self
+                                    .local_table
+                                    .as_ref()
+                                    .and_then(|lt| lt.get(&name))
+                                    .copied()
                                 {
                                     // Emit StackAddr — no FETCH.
                                     let xt_lit = require_xt(self.vm, "LIT")?;

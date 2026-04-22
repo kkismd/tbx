@@ -1,6 +1,6 @@
 //! Outer interpreter: tokenizes source text and executes statements via the inner interpreter.
 
-use std::collections::HashMap;
+use std::collections::VecDeque;
 
 use crate::cell::{Cell, Xt};
 use crate::dict::FLAG_SYSTEM;
@@ -9,32 +9,6 @@ use crate::expr::ExprCompiler;
 use crate::init_vm;
 use crate::lexer::{Lexer, SpannedToken, Token};
 use crate::vm::VM;
-
-#[allow(dead_code)]
-struct CompileState {
-    /// Name of the word being compiled.
-    word_name: String,
-    /// Dictionary pointer at the start of DEF (for rollback on error).
-    dp_at_def: usize,
-    /// Header count at the start of DEF (for rollback on error).
-    hdr_len_at_def: usize,
-    saved_latest: Option<crate::cell::Xt>,
-    /// Local variable table: maps variable name to StackAddr index.
-    /// Parameters are assigned indices 0..arity, VAR locals start at arity.
-    local_table: HashMap<String, usize>,
-    /// Number of formal parameters parsed from DEF WORD(X, Y, ...).
-    arity: usize,
-    /// Number of VAR-declared local variables encountered so far.
-    local_count: usize,
-    /// Dictionary offsets of the `local_count` placeholder (Int(0)) in CALL instructions
-    /// that refer to the currently-compiled word (self-recursive calls).
-    /// Patched to the final `local_count` when END is compiled.
-    call_patch_list: Vec<usize>,
-    /// Maps line-number label to dictionary offset recorded when the label was seen.
-    label_table: HashMap<i64, usize>,
-    /// (label_number, dict_offset_of_placeholder) waiting to be back-patched.
-    patch_list: Vec<(i64, usize)>,
-}
 
 /// Error produced by the outer interpreter, including source location information.
 pub struct InterpreterError {
@@ -83,7 +57,6 @@ impl std::fmt::Display for InterpreterError {
 // (e.g., via a VM-level pending token buffer).
 pub struct Interpreter {
     vm: VM,
-    compile_state: Option<CompileState>,
 }
 
 impl Default for Interpreter {
@@ -95,10 +68,7 @@ impl Default for Interpreter {
 impl Interpreter {
     /// Create a new `Interpreter` backed by a fully initialized VM.
     pub fn new() -> Self {
-        Self {
-            vm: init_vm(),
-            compile_state: None,
-        }
+        Self { vm: init_vm() }
     }
 
     /// Look up a required symbol by name, returning an `InterpreterError` if not found.
@@ -170,12 +140,12 @@ impl Interpreter {
                 first_segment = false;
                 if seg_start < seg_end {
                     if let Token::LineNum(n) = tokens[seg_start].token {
-                        if self.compile_state.is_some() {
+                        if self.vm.compile_state.is_some() {
                             let ln_line = tokens[seg_start].pos.line;
                             let ln_col = tokens[seg_start].pos.col;
                             self.register_label(n, line, ln_line, ln_col)
                                 .inspect_err(|_e| {
-                                    self.rollback_def();
+                                    self.vm.rollback_def();
                                 })?;
                         }
                         seg_start += 1;
@@ -220,83 +190,58 @@ impl Interpreter {
             return Ok(());
         }
 
-        // Handle DEF: begin compiling a new word.
-        if stmt_name.eq_ignore_ascii_case("DEF") {
-            return self.handle_def(&tokens[idx..], source_line, stmt_pos_line, stmt_pos_col);
+        // IMMEDIATE word dispatch: execute immediately regardless of compile/interpret mode.
+        // If the looked-up word has FLAG_IMMEDIATE set, feed the remaining tokens into
+        // vm.token_stream and call the primitive directly (not via vm.run()).
+        {
+            if let Some(xt) = self.vm.lookup(&stmt_name) {
+                let flags = self.vm.headers[xt.index()].flags;
+                if flags & crate::dict::FLAG_IMMEDIATE != 0 {
+                    let make_err = |e: TbxError| {
+                        InterpreterError::new(stmt_pos_line, stmt_pos_col, source_line, e)
+                    };
+
+                    // Get the primitive function pointer before any other borrows.
+                    let prim_fn = match self.vm.headers[xt.index()].kind.clone() {
+                        crate::dict::EntryKind::Primitive(f) => f,
+                        _ => {
+                            return Err(make_err(TbxError::InvalidExpression {
+                                reason: "IMMEDIATE word must be a primitive",
+                            }));
+                        }
+                    };
+
+                    // Feed remaining tokens into vm.token_stream.
+                    let remaining: VecDeque<SpannedToken> = tokens[idx..].iter().cloned().collect();
+                    self.vm.token_stream = Some(remaining);
+
+                    // Save VM state for rollback on error.
+                    let saved_data_stack_len = self.vm.data_stack.len();
+                    let saved_return_stack_len = self.vm.return_stack.len();
+                    let saved_bp = self.vm.bp;
+
+                    // Call the primitive directly (not through vm.run() to avoid
+                    // the temporary-buffer issues when the primitive writes to the dictionary).
+                    let run_result = prim_fn(&mut self.vm);
+
+                    // Clear token stream.
+                    self.vm.token_stream = None;
+
+                    // On error, rollback compile state and stacks.
+                    if run_result.is_err() {
+                        self.vm.rollback_def();
+                        self.vm.data_stack.truncate(saved_data_stack_len);
+                        self.vm.return_stack.truncate(saved_return_stack_len);
+                        self.vm.bp = saved_bp;
+                    }
+
+                    return run_result.map_err(make_err);
+                }
+            }
         }
 
-        // Handle END: finish compiling the current word.
-        if stmt_name.eq_ignore_ascii_case("END") && self.compile_state.is_some() {
-            return self.handle_end(source_line, stmt_pos_line, stmt_pos_col);
-        }
-
-        // Handle VAR in compile mode: register a local variable (no code emitted).
-        if stmt_name.eq_ignore_ascii_case("VAR") && self.compile_state.is_some() {
-            return self.handle_var(&tokens[idx..], source_line, stmt_pos_line, stmt_pos_col);
-        }
-
-        // Handle VAR at top level: declare a global variable (allocates a dictionary slot).
-        if stmt_name.eq_ignore_ascii_case("VAR") && self.compile_state.is_none() {
-            return self.handle_global_var(
-                &tokens[idx..],
-                source_line,
-                stmt_pos_line,
-                stmt_pos_col,
-            );
-        }
-
-        // If we are in compile mode, write this statement to the dictionary instead of executing it.
-        if self.compile_state.is_some() {
-            // Handle GOTO in compile mode: emit Xt(GOTO) Int(target).
-            if stmt_name.eq_ignore_ascii_case("GOTO") {
-                let result =
-                    self.compile_goto(&tokens[idx..], source_line, stmt_pos_line, stmt_pos_col);
-                if result.is_err() {
-                    self.rollback_def();
-                }
-                return result;
-            }
-
-            // Handle BIF in compile mode: branch if false.
-            if stmt_name.eq_ignore_ascii_case("BIF") {
-                let result = self.compile_branch(
-                    false,
-                    &tokens[idx..],
-                    source_line,
-                    stmt_pos_line,
-                    stmt_pos_col,
-                );
-                if result.is_err() {
-                    self.rollback_def();
-                }
-                return result;
-            }
-
-            // Handle BIT in compile mode: branch if true.
-            if stmt_name.eq_ignore_ascii_case("BIT") {
-                let result = self.compile_branch(
-                    true,
-                    &tokens[idx..],
-                    source_line,
-                    stmt_pos_line,
-                    stmt_pos_col,
-                );
-                if result.is_err() {
-                    self.rollback_def();
-                }
-                return result;
-            }
-
-            // Handle RETURN in compile mode: emit EXIT (void) or [expr] RETURN_VAL.
-            if stmt_name.eq_ignore_ascii_case("RETURN") {
-                let result =
-                    self.compile_return(&tokens[idx..], source_line, stmt_pos_line, stmt_pos_col);
-                if result.is_err() {
-                    self.rollback_def();
-                }
-                return result;
-            }
-
+        // In compile mode: write this statement to the dictionary instead of executing it.
+        if self.vm.compile_state.is_some() {
             let result = self.write_stmt_to_dict(
                 &stmt_name,
                 &tokens[idx..],
@@ -305,7 +250,7 @@ impl Interpreter {
                 source_line,
             );
             if result.is_err() {
-                self.rollback_def();
+                self.vm.rollback_def();
             }
             return result;
         }
@@ -370,250 +315,12 @@ impl Interpreter {
         run_result.map_err(make_err)
     }
 
-    fn handle_def(
-        &mut self,
-        arg_tokens: &[SpannedToken],
-        source_line: &str,
-        line: usize,
-        col: usize,
-    ) -> Result<(), InterpreterError> {
-        let make_err = |e: TbxError| InterpreterError::new(line, col, source_line, e);
-
-        if self.compile_state.is_some() {
-            return Err(make_err(TbxError::InvalidExpression {
-                reason: "nested DEF is not allowed",
-            }));
-        }
-
-        // Next token must be the word name.
-        let name = match arg_tokens.first() {
-            Some(st) => match &st.token {
-                Token::Ident(n) => n.clone(),
-                _ => {
-                    return Err(make_err(TbxError::InvalidExpression {
-                        reason: "expected word name after DEF",
-                    }))
-                }
-            },
-            None => {
-                return Err(make_err(TbxError::InvalidExpression {
-                    reason: "expected word name after DEF",
-                }))
-            }
-        };
-
-        // Parse optional formal parameter list: DEF WORD(X, Y, ...)
-        let mut local_table: HashMap<String, usize> = HashMap::new();
-        let mut arity: usize = 0;
-        let rest = &arg_tokens[1..];
-        if rest
-            .first()
-            .map(|st| matches!(st.token, Token::LParen))
-            .unwrap_or(false)
-        {
-            let mut idx = 1; // skip '('
-            while idx < rest.len() {
-                match &rest[idx].token {
-                    Token::RParen => {
-                        break;
-                    }
-                    Token::Ident(param) => {
-                        local_table.insert(param.clone(), arity);
-                        arity += 1;
-                        idx += 1;
-                        // Skip optional comma.
-                        if rest
-                            .get(idx)
-                            .map(|st| matches!(st.token, Token::Comma))
-                            .unwrap_or(false)
-                        {
-                            idx += 1;
-                        }
-                    }
-                    _ => {
-                        return Err(make_err(TbxError::InvalidExpression {
-                            reason: "expected identifier or ')' in parameter list",
-                        }))
-                    }
-                }
-            }
-        }
-
-        // Snapshot for rollback.
-        let dp_at_def = self.vm.dp;
-        let hdr_len_at_def = self.vm.headers.len();
-
-        let saved_latest = self.vm.latest;
-        // Register the new word immediately (forward calls within the body will resolve).
-        let entry = crate::dict::WordEntry::new_word(&name, self.vm.dp);
-        self.vm.register(entry);
-        // Smudge: hide the word from lookup until END completes, so that operator primitives
-        // with the same name (e.g. ADD, MUL) are not shadowed during body compilation.
-        self.vm.headers[hdr_len_at_def].flags |= crate::dict::FLAG_HIDDEN;
-
-        self.vm.is_compiling = true;
-        self.compile_state = Some(CompileState {
-            word_name: name,
-            dp_at_def,
-            hdr_len_at_def,
-            saved_latest,
-            local_table,
-            arity,
-            local_count: 0,
-            call_patch_list: Vec::new(),
-            label_table: HashMap::new(),
-            patch_list: Vec::new(),
-        });
-
-        Ok(())
-    }
-
-    fn handle_end(
-        &mut self,
-        source_line: &str,
-        line: usize,
-        col: usize,
-    ) -> Result<(), InterpreterError> {
-        let make_err = |e: TbxError| InterpreterError::new(line, col, source_line, e);
-
-        // Write EXIT to terminate the word body.
-        let exit_xt = self.lookup_required("EXIT", line, col, source_line)?;
-        self.vm.dict_write(Cell::Xt(exit_xt)).map_err(&make_err)?;
-
-        // Check for unresolved forward label references BEFORE taking compile_state,
-        // so that rollback_def() can still work if an error is detected.
-        if let Some(state) = &self.compile_state {
-            if let Some(&(label, _)) = state.patch_list.first() {
-                self.rollback_def();
-                return Err(make_err(TbxError::UndefinedLabel { label }));
-            }
-        }
-
-        // Take the compile state to get local_count and patch list.
-        let state = self
-            .compile_state
-            .take()
-            .expect("compile_state must be Some in handle_end");
-
-        // Patch all self-recursive CALL instructions with the confirmed local_count.
-        for &pos in &state.call_patch_list {
-            self.vm
-                .dict_write_at(pos, Cell::Int(state.local_count as i64))
-                .map_err(&make_err)?;
-        }
-
-        // Update the word header with the confirmed local_count and unsmudge (make visible).
-        // The word was registered as the last entry at hdr_len_at_def.
-        let word_hdr_idx = state.hdr_len_at_def;
-        if word_hdr_idx < self.vm.headers.len() {
-            self.vm.headers[word_hdr_idx].local_count = state.local_count;
-            // Unsmudge: clear FLAG_HIDDEN so the word is now visible to lookup.
-            self.vm.headers[word_hdr_idx].flags &= !crate::dict::FLAG_HIDDEN;
-        }
-
-        // Seal user-defined space.
-        self.vm.seal_user();
-
-        self.vm.is_compiling = false;
-
-        Ok(())
-    }
-
-    fn rollback_def(&mut self) {
-        if let Some(state) = &self.compile_state.take() {
-            self.vm.dp = state.dp_at_def;
-            self.vm.dictionary.truncate(state.dp_at_def);
-            self.vm.headers.truncate(state.hdr_len_at_def);
-            self.vm.latest = state.saved_latest;
-            self.vm.is_compiling = false;
-        }
-    }
-
-    /// Register a local variable declared with `VAR name` during compile mode.
-    ///
-    /// Adds `name` to the local variable table and increments `local_count`.
-    /// No code is emitted to the dictionary.
-    fn handle_var(
-        &mut self,
-        arg_tokens: &[SpannedToken],
-        source_line: &str,
-        line: usize,
-        col: usize,
-    ) -> Result<(), InterpreterError> {
-        let make_err = |e: TbxError| InterpreterError::new(line, col, source_line, e);
-
-        let name = match arg_tokens.first() {
-            Some(st) => match &st.token {
-                Token::Ident(n) => n.clone(),
-                _ => {
-                    return Err(make_err(TbxError::InvalidExpression {
-                        reason: "expected variable name after VAR",
-                    }))
-                }
-            },
-            None => {
-                return Err(make_err(TbxError::InvalidExpression {
-                    reason: "expected variable name after VAR",
-                }))
-            }
-        };
-
-        let state = self
-            .compile_state
-            .as_mut()
-            .expect("handle_var called outside compile mode");
-        let idx = state.arity + state.local_count;
-        state.local_table.insert(name, idx);
-        state.local_count += 1;
-
-        Ok(())
-    }
-
-    /// Declare a global variable at the top level.
-    ///
-    /// Allocates one cell in the dictionary as storage and registers a
-    /// `Variable` header entry. The initial value is `Cell::None`.
-    fn handle_global_var(
-        &mut self,
-        arg_tokens: &[SpannedToken],
-        source_line: &str,
-        line: usize,
-        col: usize,
-    ) -> Result<(), InterpreterError> {
-        let make_err = |e: TbxError| InterpreterError::new(line, col, source_line, e);
-
-        let name = match arg_tokens.first() {
-            Some(st) => match &st.token {
-                Token::Ident(n) => n.clone(),
-                _ => {
-                    return Err(make_err(TbxError::InvalidExpression {
-                        reason: "expected variable name after VAR",
-                    }))
-                }
-            },
-            None => {
-                return Err(make_err(TbxError::InvalidExpression {
-                    reason: "expected variable name after VAR",
-                }))
-            }
-        };
-
-        let storage_idx = self.vm.dp;
-        self.vm.dict_write(Cell::None).map_err(&make_err)?;
-        let entry = crate::dict::WordEntry::new_variable(&name, storage_idx);
-        self.vm.register(entry);
-        // Seal so that FORGET does not roll back the storage cell.
-        self.vm.seal_user();
-
-        Ok(())
-    }
-
     /// Write a single statement and its arguments to the dictionary.
     ///
     /// Emits: `LIT_MARKER [arg_cells] (CALL stmt arity local_count | stmt) DROP_TO_MARKER`
     ///
     /// This is used both during interpretation (followed by `EXIT` + run) and during
-    /// compilation (within a DEF body; `EXIT` is written by `handle_end`).
+    /// compilation (within a DEF body; `EXIT` is written by the END primitive).
     fn write_stmt_to_dict(
         &mut self,
         stmt_name: &str,
@@ -627,10 +334,11 @@ impl Interpreter {
         // Look up the statement word.
         // Allow resolving the currently-compiled word (FLAG_HIDDEN) so that self-recursive
         // statement calls work. Other hidden words remain invisible.
-        let self_word_opt = self.compile_state.as_ref().map(|s| s.word_name.as_str());
+        let self_word_opt: Option<String> =
+            self.vm.compile_state.as_ref().map(|s| s.word_name.clone());
         let stmt_xt = self
             .vm
-            .lookup_including_self(stmt_name, self_word_opt)
+            .lookup_including_self(stmt_name, self_word_opt.as_deref())
             .ok_or_else(|| {
                 make_err(TbxError::UndefinedSymbol {
                     name: stmt_name.to_string(),
@@ -648,12 +356,15 @@ impl Interpreter {
         // Compile the argument expression to a cell sequence.
         // Local variables in the current compile scope shadow globals (local_table checked first).
         let (arg_cells, expr_patch_offsets) = {
-            let local_table_opt: Option<&HashMap<String, usize>> =
-                self.compile_state.as_ref().map(|s| &s.local_table);
-            let self_word = self.compile_state.as_ref().map(|s| s.word_name.clone());
-            let self_hdr_idx = self.compile_state.as_ref().map(|s| s.hdr_len_at_def);
+            let local_table = self
+                .vm
+                .compile_state
+                .as_ref()
+                .map(|s| s.local_table.clone());
+            let self_word = self.vm.compile_state.as_ref().map(|s| s.word_name.clone());
+            let self_hdr_idx = self.vm.compile_state.as_ref().map(|s| s.hdr_len_at_def);
             let mut compiler =
-                ExprCompiler::with_context(&mut self.vm, local_table_opt, self_word, self_hdr_idx);
+                ExprCompiler::with_context(&mut self.vm, local_table, self_word, self_hdr_idx);
             let cells = compiler.compile_expr(arg_tokens).map_err(&make_err)?;
             let offsets = std::mem::take(&mut compiler.patch_offsets);
             (cells, offsets)
@@ -693,7 +404,7 @@ impl Interpreter {
         }
         // Register self-recursive local_count placeholder positions found inside
         // the argument expression.
-        if let Some(state) = &mut self.compile_state {
+        if let Some(state) = &mut self.vm.compile_state {
             for offset in expr_patch_offsets {
                 state.call_patch_list.push(base_dp + offset);
             }
@@ -705,6 +416,7 @@ impl Interpreter {
             // For all other calls, use the callee's confirmed local_count from the header.
             // Compare by header index (not name) to handle shadowed/redefined words correctly.
             let is_self_recursive = self
+                .vm
                 .compile_state
                 .as_ref()
                 .map(|s| stmt_xt.index() == s.hdr_len_at_def)
@@ -719,7 +431,7 @@ impl Interpreter {
             if is_self_recursive {
                 let patch_pos = self.vm.dp;
                 self.vm.dict_write(Cell::Int(0)).map_err(&make_err)?;
-                if let Some(state) = &mut self.compile_state {
+                if let Some(state) = &mut self.vm.compile_state {
                     state.call_patch_list.push(patch_pos);
                 }
             } else {
@@ -773,6 +485,7 @@ impl Interpreter {
         let make_err = |e: TbxError| InterpreterError::new(line, col, source_line, e);
         let dp = self.vm.dp;
         let state = self
+            .vm
             .compile_state
             .as_mut()
             .expect("register_label called outside compile mode");
@@ -798,193 +511,6 @@ impl Interpreter {
             self.vm.dictionary[patch_pos] = Cell::Int(dp as i64);
         }
 
-        Ok(())
-    }
-
-    /// Compile `GOTO N` into the dictionary.
-    ///
-    /// Emits: `Xt(GOTO) Int(target)`
-    /// If `N` is unknown (forward reference), emits `Int(0)` and registers a back-patch entry.
-    fn compile_goto(
-        &mut self,
-        arg_tokens: &[SpannedToken],
-        source_line: &str,
-        line: usize,
-        col: usize,
-    ) -> Result<(), InterpreterError> {
-        let make_err = |e: TbxError| InterpreterError::new(line, col, source_line, e);
-
-        let label_n = parse_label_number(arg_tokens).ok_or_else(|| {
-            make_err(TbxError::InvalidExpression {
-                reason: "GOTO requires an integer label",
-            })
-        })?;
-
-        let goto_xt = self.lookup_required("GOTO", line, col, source_line)?;
-        self.vm.dict_write(Cell::Xt(goto_xt)).map_err(&make_err)?;
-        self.emit_jump_target(label_n, source_line, line, col)?;
-        Ok(())
-    }
-
-    /// Compile `BIF cond, N` or `BIT cond, N` into the dictionary.
-    ///
-    /// `is_truthy`: `true` → BIT (branch if true), `false` → BIF (branch if false).
-    /// Emits: `[condition cells] Xt(BIF|BIT) Int(target)`
-    fn compile_branch(
-        &mut self,
-        is_truthy: bool,
-        arg_tokens: &[SpannedToken],
-        source_line: &str,
-        line: usize,
-        col: usize,
-    ) -> Result<(), InterpreterError> {
-        let make_err = |e: TbxError| InterpreterError::new(line, col, source_line, e);
-
-        // Split at the last top-level comma: left = condition expression, right = label.
-        let split_pos = last_top_level_comma(arg_tokens)
-            .map_err(&make_err)?
-            .ok_or_else(|| {
-                make_err(TbxError::InvalidExpression {
-                    reason: "BIF/BIT requires syntax: BIF cond, label",
-                })
-            })?;
-        let cond_tokens = &arg_tokens[..split_pos];
-        let label_tokens = &arg_tokens[split_pos + 1..];
-
-        // Parse label number.
-        let label_n = parse_label_number(label_tokens).ok_or_else(|| {
-            make_err(TbxError::InvalidExpression {
-                reason: "BIF/BIT label must be an integer",
-            })
-        })?;
-
-        // Compile the condition expression directly into the dictionary.
-        let (cond_cells, expr_patch_offsets) = {
-            let local_table_opt = self.compile_state.as_ref().map(|s| &s.local_table);
-            let self_word = self.compile_state.as_ref().map(|s| s.word_name.clone());
-            let self_hdr_idx = self.compile_state.as_ref().map(|s| s.hdr_len_at_def);
-            let mut compiler =
-                ExprCompiler::with_context(&mut self.vm, local_table_opt, self_word, self_hdr_idx);
-            let cells = compiler.compile_expr(cond_tokens).map_err(&make_err)?;
-            let offsets = std::mem::take(&mut compiler.patch_offsets);
-            (cells, offsets)
-        };
-        let base_dp = self.vm.dp;
-        for cell in cond_cells {
-            self.vm.dict_write(cell).map_err(&make_err)?;
-        }
-        // Register self-recursive local_count placeholder positions found inside
-        // the condition expression.
-        if let Some(state) = &mut self.compile_state {
-            for offset in expr_patch_offsets {
-                state.call_patch_list.push(base_dp + offset);
-            }
-        }
-
-        // Emit BIF or BIT.
-        let branch_name = if is_truthy { "BIT" } else { "BIF" };
-        let branch_xt = self.lookup_required(branch_name, line, col, source_line)?;
-        self.vm.dict_write(Cell::Xt(branch_xt)).map_err(&make_err)?;
-
-        // Emit jump target (with back-patch if this is a forward reference).
-        self.emit_jump_target(label_n, source_line, line, col)?;
-        Ok(())
-    }
-
-    /// Compile a `RETURN` statement inside a DEF body.
-    ///
-    /// - `RETURN` (no args)   → `Xt(EXIT)`
-    /// - `RETURN expr`        → `[expr cells] Xt(RETURN_VAL)`
-    ///
-    /// Unlike regular statements, no `LIT_MARKER`/`DROP_TO_MARKER` wrapper is emitted,
-    /// because RETURN must not discard the return value from the stack.
-    fn compile_return(
-        &mut self,
-        arg_tokens: &[SpannedToken],
-        source_line: &str,
-        line: usize,
-        col: usize,
-    ) -> Result<(), InterpreterError> {
-        let make_err = |e: TbxError| InterpreterError::new(line, col, source_line, e);
-
-        if !arg_tokens.is_empty() {
-            // Compile the return expression directly into the dictionary.
-            let (expr_cells, expr_patch_offsets) = {
-                let local_table_opt = self.compile_state.as_ref().map(|s| &s.local_table);
-                let self_word = self.compile_state.as_ref().map(|s| s.word_name.clone());
-                let self_hdr_idx = self.compile_state.as_ref().map(|s| s.hdr_len_at_def);
-                let mut compiler = ExprCompiler::with_context(
-                    &mut self.vm,
-                    local_table_opt,
-                    self_word,
-                    self_hdr_idx,
-                );
-                let cells = compiler.compile_expr(arg_tokens).map_err(&make_err)?;
-                let offsets = std::mem::take(&mut compiler.patch_offsets);
-                (cells, offsets)
-            };
-            let base_dp = self.vm.dp;
-            for cell in expr_cells {
-                self.vm.dict_write(cell).map_err(&make_err)?;
-            }
-            // Register self-recursive local_count placeholder positions found inside
-            // the return expression.
-            if let Some(state) = &mut self.compile_state {
-                for offset in expr_patch_offsets {
-                    state.call_patch_list.push(base_dp + offset);
-                }
-            }
-            // Emit RETURN_VAL to return the top-of-stack value from the word.
-            let return_val_xt = self.lookup_required("RETURN_VAL", line, col, source_line)?;
-            self.vm
-                .dict_write(Cell::Xt(return_val_xt))
-                .map_err(&make_err)?;
-        } else {
-            // Void return: emit EXIT to leave the word immediately.
-            let exit_xt = self.lookup_required("EXIT", line, col, source_line)?;
-            self.vm.dict_write(Cell::Xt(exit_xt)).map_err(&make_err)?;
-        }
-
-        Ok(())
-    }
-
-    /// Emit a jump target address cell into the dictionary.
-    ///
-    /// If the label is already known, emits `Int(addr)`.
-    /// If the label is unknown (forward reference), emits `Int(0)` and records the position
-    /// in `patch_list` for back-patching when the label is defined.
-    fn emit_jump_target(
-        &mut self,
-        label_n: i64,
-        source_line: &str,
-        line: usize,
-        col: usize,
-    ) -> Result<(), InterpreterError> {
-        let make_err = |e: TbxError| InterpreterError::new(line, col, source_line, e);
-
-        // Check whether the label is already known (backward reference).
-        let target_opt = self
-            .compile_state
-            .as_ref()
-            .expect("emit_jump_target called outside compile mode")
-            .label_table
-            .get(&label_n)
-            .copied();
-
-        if let Some(target) = target_opt {
-            self.vm
-                .dict_write(Cell::Int(target as i64))
-                .map_err(&make_err)?;
-        } else {
-            // Forward reference: emit placeholder and record position for back-patching.
-            let patch_pos = self.vm.dp;
-            self.vm.dict_write(Cell::Int(0)).map_err(&make_err)?;
-            self.compile_state
-                .as_mut()
-                .expect("emit_jump_target called outside compile mode")
-                .patch_list
-                .push((label_n, patch_pos));
-        }
         Ok(())
     }
 }
@@ -1020,6 +546,7 @@ fn count_top_level_arity(tokens: &[SpannedToken]) -> Result<usize, TbxError> {
 ///
 /// "Top-level" means not nested inside parentheses.
 /// Returns `None` if no top-level comma is found.
+#[cfg(test)]
 fn last_top_level_comma(tokens: &[SpannedToken]) -> Result<Option<usize>, TbxError> {
     let mut depth: usize = 0;
     let mut last_comma = None;
@@ -1042,6 +569,7 @@ fn last_top_level_comma(tokens: &[SpannedToken]) -> Result<Option<usize>, TbxErr
 ///
 /// Skips leading `Newline`/`Eof` tokens and returns the integer value of the
 /// first meaningful token if it is an `IntLit` or `LineNum`.
+#[cfg(test)]
 fn parse_label_number(tokens: &[SpannedToken]) -> Option<i64> {
     let tok = tokens
         .iter()

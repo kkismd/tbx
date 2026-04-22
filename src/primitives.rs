@@ -1,9 +1,11 @@
 use crate::cell::Cell;
 use crate::constants::MAX_DICTIONARY_CELLS;
-use crate::dict::{EntryKind, WordEntry, FLAG_SYSTEM};
+use crate::dict::{EntryKind, WordEntry, FLAG_IMMEDIATE, FLAG_SYSTEM};
 use crate::error::TbxError;
+use crate::expr::ExprCompiler;
 use crate::lexer::Token;
-use crate::vm::VM;
+use crate::vm::{CompileState, VM};
+use std::collections::HashMap;
 
 /// DROP — discard the top element of the data stack.
 pub fn drop_prim(vm: &mut VM) -> Result<(), TbxError> {
@@ -447,6 +449,431 @@ pub fn header_prim(vm: &mut VM) -> Result<(), TbxError> {
     Ok(())
 }
 
+// ---------------------------------------------------------------------------
+// IMMEDIATE compile-time primitives
+// ---------------------------------------------------------------------------
+
+/// DEF — begin compiling a new word definition.
+/// Reads word name and optional parameter list from token_stream.
+pub fn def_prim(vm: &mut VM) -> Result<(), TbxError> {
+    // Nested DEF is not allowed.
+    if vm.is_compiling {
+        return Err(TbxError::InvalidExpression {
+            reason: "nested DEF is not allowed",
+        });
+    }
+
+    // Read word name from token stream.
+    let name_tok = vm.next_token()?;
+    let name = match name_tok.token {
+        crate::lexer::Token::Ident(n) => n,
+        _ => {
+            return Err(TbxError::InvalidExpression {
+                reason: "expected word name after DEF",
+            })
+        }
+    };
+
+    // Parse optional parameter list: DEF WORD(X, Y, ...)
+    let mut local_table: HashMap<String, usize> = HashMap::new();
+    let mut arity: usize = 0;
+
+    match vm.next_token() {
+        Ok(tok) if matches!(tok.token, crate::lexer::Token::LParen) => {
+            // Parse parameters until ')'
+            loop {
+                match vm.next_token() {
+                    Ok(tok) => match tok.token {
+                        crate::lexer::Token::RParen => break,
+                        crate::lexer::Token::Ident(param) => {
+                            local_table.insert(param, arity);
+                            arity += 1;
+                            // Skip optional comma or check for RParen.
+                            match vm.next_token() {
+                                Ok(t) if matches!(t.token, crate::lexer::Token::Comma) => {}
+                                Ok(t) if matches!(t.token, crate::lexer::Token::RParen) => break,
+                                Ok(_) => {} // ignore other tokens
+                                Err(TbxError::TokenStreamEmpty) => break,
+                                Err(e) => return Err(e),
+                            }
+                        }
+                        _ => {
+                            return Err(TbxError::InvalidExpression {
+                                reason: "expected identifier or ')' in parameter list",
+                            })
+                        }
+                    },
+                    Err(TbxError::TokenStreamEmpty) => break,
+                    Err(e) => return Err(e),
+                }
+            }
+        }
+        Ok(_) => {} // Not LParen — no parameters; discard the token
+        Err(TbxError::TokenStreamEmpty) => {} // End of stream — no parameters
+        Err(e) => return Err(e),
+    }
+
+    // Snapshot for rollback.
+    let dp_at_def = vm.dp;
+    let hdr_len_at_def = vm.headers.len();
+    let saved_latest = vm.latest;
+
+    // Register the new word (smudged until END).
+    let entry = crate::dict::WordEntry::new_word(&name, vm.dp);
+    vm.register(entry);
+    // Smudge: hide the word from lookup until END completes.
+    vm.headers[hdr_len_at_def].flags |= crate::dict::FLAG_HIDDEN;
+
+    vm.is_compiling = true;
+    vm.compile_state = Some(CompileState {
+        word_name: name,
+        dp_at_def,
+        hdr_len_at_def,
+        saved_latest,
+        local_table,
+        arity,
+        local_count: 0,
+        call_patch_list: Vec::new(),
+        label_table: HashMap::new(),
+        patch_list: Vec::new(),
+    });
+
+    Ok(())
+}
+
+/// END — finish compiling the current word definition.
+pub fn end_prim(vm: &mut VM) -> Result<(), TbxError> {
+    if !vm.is_compiling {
+        return Err(TbxError::InvalidExpression {
+            reason: "END outside DEF",
+        });
+    }
+
+    // Write EXIT to terminate the word body.
+    let exit_xt = vm
+        .headers
+        .iter()
+        .enumerate()
+        .find(|(_, e)| matches!(e.kind, EntryKind::Exit))
+        .map(|(i, _)| crate::cell::Xt(i))
+        .ok_or(TbxError::UndefinedSymbol {
+            name: "EXIT".to_string(),
+        })?;
+    vm.dict_write(Cell::Xt(exit_xt))?;
+
+    // Check for unresolved forward label references BEFORE taking compile_state.
+    if let Some(state) = &vm.compile_state {
+        if let Some(&(label, _)) = state.patch_list.first() {
+            vm.rollback_def();
+            return Err(TbxError::UndefinedLabel { label });
+        }
+    }
+
+    // Take the compile state.
+    let state = vm
+        .compile_state
+        .take()
+        .expect("compile_state must be Some in end_prim");
+
+    // Patch all self-recursive CALL instructions with the confirmed local_count.
+    for &pos in &state.call_patch_list {
+        vm.dict_write_at(pos, Cell::Int(state.local_count as i64))?;
+    }
+
+    // Update word header: confirm local_count, unsmudge.
+    let word_hdr_idx = state.hdr_len_at_def;
+    if word_hdr_idx < vm.headers.len() {
+        vm.headers[word_hdr_idx].local_count = state.local_count;
+        vm.headers[word_hdr_idx].flags &= !crate::dict::FLAG_HIDDEN;
+    }
+
+    vm.seal_user();
+    vm.is_compiling = false;
+
+    Ok(())
+}
+
+/// VAR — declare a local variable (in compile mode) or global variable (in execute mode).
+pub fn var_prim(vm: &mut VM) -> Result<(), TbxError> {
+    let name_tok = vm.next_token()?;
+    let name = match name_tok.token {
+        crate::lexer::Token::Ident(n) => n,
+        _ => {
+            return Err(TbxError::InvalidExpression {
+                reason: "expected variable name after VAR",
+            })
+        }
+    };
+
+    if vm.is_compiling {
+        // Local variable: add to compile state's local table.
+        let state = vm
+            .compile_state
+            .as_mut()
+            .ok_or(TbxError::InvalidExpression {
+                reason: "VAR in compile mode but no compile_state",
+            })?;
+        let idx = state.arity + state.local_count;
+        state.local_table.insert(name, idx);
+        state.local_count += 1;
+    } else {
+        // Global variable: allocate storage in dictionary.
+        let storage_idx = vm.dp;
+        vm.dict_write(Cell::None)?;
+        let entry = crate::dict::WordEntry::new_variable(&name, storage_idx);
+        vm.register(entry);
+        vm.seal_user();
+    }
+
+    Ok(())
+}
+
+/// GOTO — compile GOTO N into the dictionary (compile mode only).
+pub fn goto_prim(vm: &mut VM) -> Result<(), TbxError> {
+    if !vm.is_compiling {
+        return Err(TbxError::InvalidExpression {
+            reason: "GOTO outside DEF",
+        });
+    }
+
+    let label_tok = vm.next_token()?;
+    let label_n = match &label_tok.token {
+        crate::lexer::Token::IntLit(n) => *n,
+        crate::lexer::Token::LineNum(n) => *n,
+        _ => {
+            return Err(TbxError::InvalidExpression {
+                reason: "GOTO requires an integer label",
+            })
+        }
+    };
+
+    // Find the runtime Goto entry by kind (not by name, to avoid shadowing by this primitive).
+    let goto_xt = vm
+        .headers
+        .iter()
+        .enumerate()
+        .find(|(_, e)| matches!(e.kind, EntryKind::Goto))
+        .map(|(i, _)| crate::cell::Xt(i))
+        .ok_or(TbxError::UndefinedSymbol {
+            name: "GOTO".to_string(),
+        })?;
+    vm.dict_write(Cell::Xt(goto_xt))?;
+    emit_jump_target_to_dict(vm, label_n)
+}
+
+/// BIF — compile BIF cond, label into the dictionary (compile mode only).
+pub fn bif_prim(vm: &mut VM) -> Result<(), TbxError> {
+    compile_branch_prim(vm, false)
+}
+
+/// BIT — compile BIT cond, label into the dictionary (compile mode only).
+pub fn bit_prim(vm: &mut VM) -> Result<(), TbxError> {
+    compile_branch_prim(vm, true)
+}
+
+/// Shared implementation for BIF and BIT primitives.
+fn compile_branch_prim(vm: &mut VM, is_truthy: bool) -> Result<(), TbxError> {
+    if !vm.is_compiling {
+        let reason = if is_truthy {
+            "BIT outside DEF"
+        } else {
+            "BIF outside DEF"
+        };
+        return Err(TbxError::InvalidExpression { reason });
+    }
+
+    // Drain all remaining tokens from the token stream.
+    let all_tokens: Vec<crate::lexer::SpannedToken> = {
+        let stream = vm.token_stream.as_mut().ok_or(TbxError::TokenStreamEmpty)?;
+        stream.drain(..).collect()
+    };
+
+    // Split at the last top-level comma: left=cond_tokens, right=label_tokens.
+    let split_pos =
+        last_top_level_comma_tokens(&all_tokens)?.ok_or(TbxError::InvalidExpression {
+            reason: "BIF/BIT requires syntax: BIF cond, label",
+        })?;
+    let cond_tokens = &all_tokens[..split_pos];
+    let label_tokens = &all_tokens[split_pos + 1..];
+
+    // Parse label number.
+    let label_n = parse_label_from_tokens(label_tokens).ok_or(TbxError::InvalidExpression {
+        reason: "BIF/BIT label must be an integer",
+    })?;
+
+    // Compile condition expression.
+    let local_table = vm.compile_state.as_ref().map(|s| s.local_table.clone());
+    let self_word = vm.compile_state.as_ref().map(|s| s.word_name.clone());
+    let self_hdr_idx = vm.compile_state.as_ref().map(|s| s.hdr_len_at_def);
+    let (cond_cells, patch_offsets) = {
+        let mut compiler = ExprCompiler::with_context(vm, local_table, self_word, self_hdr_idx);
+        let cells = compiler.compile_expr(cond_tokens)?;
+        let offsets = std::mem::take(&mut compiler.patch_offsets);
+        (cells, offsets)
+    };
+
+    let base_dp = vm.dp;
+    for cell in cond_cells {
+        vm.dict_write(cell)?;
+    }
+    // Register self-recursive local_count placeholder positions.
+    if let Some(state) = vm.compile_state.as_mut() {
+        for offset in patch_offsets {
+            state.call_patch_list.push(base_dp + offset);
+        }
+    }
+
+    // Emit BIF or BIT runtime instruction (found by kind to avoid shadowing).
+    let branch_xt = if is_truthy {
+        vm.headers
+            .iter()
+            .enumerate()
+            .find(|(_, e)| matches!(e.kind, EntryKind::BranchIfTrue))
+            .map(|(i, _)| crate::cell::Xt(i))
+            .ok_or(TbxError::UndefinedSymbol {
+                name: "BIT".to_string(),
+            })?
+    } else {
+        vm.headers
+            .iter()
+            .enumerate()
+            .find(|(_, e)| matches!(e.kind, EntryKind::BranchIfFalse))
+            .map(|(i, _)| crate::cell::Xt(i))
+            .ok_or(TbxError::UndefinedSymbol {
+                name: "BIF".to_string(),
+            })?
+    };
+    vm.dict_write(Cell::Xt(branch_xt))?;
+
+    emit_jump_target_to_dict(vm, label_n)
+}
+
+/// RETURN — compile a RETURN statement inside a DEF body.
+pub fn return_prim(vm: &mut VM) -> Result<(), TbxError> {
+    if !vm.is_compiling {
+        return Err(TbxError::InvalidExpression {
+            reason: "RETURN outside DEF",
+        });
+    }
+
+    // Drain remaining tokens.
+    let expr_tokens: Vec<crate::lexer::SpannedToken> = match vm.token_stream.as_mut() {
+        Some(stream) => stream.drain(..).collect(),
+        None => Vec::new(),
+    };
+
+    if expr_tokens.is_empty() {
+        // Void return: emit EXIT.
+        let exit_xt = vm
+            .headers
+            .iter()
+            .enumerate()
+            .find(|(_, e)| matches!(e.kind, EntryKind::Exit))
+            .map(|(i, _)| crate::cell::Xt(i))
+            .ok_or(TbxError::UndefinedSymbol {
+                name: "EXIT".to_string(),
+            })?;
+        vm.dict_write(Cell::Xt(exit_xt))?;
+    } else {
+        // Compile return expression.
+        let local_table = vm.compile_state.as_ref().map(|s| s.local_table.clone());
+        let self_word = vm.compile_state.as_ref().map(|s| s.word_name.clone());
+        let self_hdr_idx = vm.compile_state.as_ref().map(|s| s.hdr_len_at_def);
+        let (expr_cells, patch_offsets) = {
+            let mut compiler = ExprCompiler::with_context(vm, local_table, self_word, self_hdr_idx);
+            let cells = compiler.compile_expr(&expr_tokens)?;
+            let offsets = std::mem::take(&mut compiler.patch_offsets);
+            (cells, offsets)
+        };
+        let base_dp = vm.dp;
+        for cell in expr_cells {
+            vm.dict_write(cell)?;
+        }
+        if let Some(state) = vm.compile_state.as_mut() {
+            for offset in patch_offsets {
+                state.call_patch_list.push(base_dp + offset);
+            }
+        }
+        // Find RETURN_VAL by kind.
+        let return_val_xt = vm
+            .headers
+            .iter()
+            .enumerate()
+            .find(|(_, e)| matches!(e.kind, EntryKind::ReturnVal))
+            .map(|(i, _)| crate::cell::Xt(i))
+            .ok_or(TbxError::UndefinedSymbol {
+                name: "RETURN_VAL".to_string(),
+            })?;
+        vm.dict_write(Cell::Xt(return_val_xt))?;
+    }
+
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Helper functions for IMMEDIATE primitives
+// ---------------------------------------------------------------------------
+
+/// Emit a jump target into the dictionary, with forward-reference back-patch support.
+fn emit_jump_target_to_dict(vm: &mut VM, label_n: i64) -> Result<(), TbxError> {
+    let target_opt = vm
+        .compile_state
+        .as_ref()
+        .expect("emit_jump_target_to_dict called outside compile mode")
+        .label_table
+        .get(&label_n)
+        .copied();
+
+    if let Some(target) = target_opt {
+        vm.dict_write(Cell::Int(target as i64))?;
+    } else {
+        let patch_pos = vm.dp;
+        vm.dict_write(Cell::Int(0))?;
+        vm.compile_state
+            .as_mut()
+            .expect("emit_jump_target_to_dict called outside compile mode")
+            .patch_list
+            .push((label_n, patch_pos));
+    }
+    Ok(())
+}
+
+/// Find the last top-level comma in a token slice.
+fn last_top_level_comma_tokens(
+    tokens: &[crate::lexer::SpannedToken],
+) -> Result<Option<usize>, TbxError> {
+    let mut depth: usize = 0;
+    let mut last_comma = None;
+    for (i, st) in tokens.iter().enumerate() {
+        match &st.token {
+            crate::lexer::Token::LParen => depth += 1,
+            crate::lexer::Token::RParen => {
+                depth = depth.checked_sub(1).ok_or(TbxError::InvalidExpression {
+                    reason: "unmatched ')' in argument list",
+                })?;
+            }
+            crate::lexer::Token::Comma if depth == 0 => last_comma = Some(i),
+            _ => {}
+        }
+    }
+    Ok(last_comma)
+}
+
+/// Parse a label number from a token slice (skips Newline/Eof tokens).
+fn parse_label_from_tokens(tokens: &[crate::lexer::SpannedToken]) -> Option<i64> {
+    let tok = tokens.iter().find(|st| {
+        !matches!(
+            st.token,
+            crate::lexer::Token::Newline | crate::lexer::Token::Eof
+        )
+    })?;
+    match &tok.token {
+        crate::lexer::Token::IntLit(n) => Some(*n),
+        crate::lexer::Token::LineNum(n) => Some(*n),
+        _ => None,
+    }
+}
+
 /// Register all stack primitives into the VM's dictionary.
 pub fn register_all(vm: &mut VM) {
     vm.register(WordEntry::new_primitive("DROP", drop_prim));
@@ -545,6 +972,28 @@ pub fn register_all(vm: &mut VM) {
     let mut header_entry = WordEntry::new_primitive("HEADER", header_prim);
     header_entry.flags |= crate::dict::FLAG_IMMEDIATE;
     vm.register(header_entry);
+    // IMMEDIATE system words: DEF, END, VAR, GOTO, BIF, BIT, RETURN
+    let mut def_entry = WordEntry::new_primitive("DEF", def_prim);
+    def_entry.flags = FLAG_IMMEDIATE | FLAG_SYSTEM;
+    vm.register(def_entry);
+    let mut end_entry = WordEntry::new_primitive("END", end_prim);
+    end_entry.flags = FLAG_IMMEDIATE | FLAG_SYSTEM;
+    vm.register(end_entry);
+    let mut var_entry = WordEntry::new_primitive("VAR", var_prim);
+    var_entry.flags = FLAG_IMMEDIATE | FLAG_SYSTEM;
+    vm.register(var_entry);
+    let mut goto_entry = WordEntry::new_primitive("GOTO", goto_prim);
+    goto_entry.flags = FLAG_IMMEDIATE | FLAG_SYSTEM;
+    vm.register(goto_entry);
+    let mut bif_entry = WordEntry::new_primitive("BIF", bif_prim);
+    bif_entry.flags = FLAG_IMMEDIATE | FLAG_SYSTEM;
+    vm.register(bif_entry);
+    let mut bit_entry = WordEntry::new_primitive("BIT", bit_prim);
+    bit_entry.flags = FLAG_IMMEDIATE | FLAG_SYSTEM;
+    vm.register(bit_entry);
+    let mut return_entry = WordEntry::new_primitive("RETURN", return_prim);
+    return_entry.flags = FLAG_IMMEDIATE | FLAG_SYSTEM;
+    vm.register(return_entry);
 }
 
 #[cfg(test)]

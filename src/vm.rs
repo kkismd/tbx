@@ -3,7 +3,36 @@ use crate::constants::{MAX_DATA_STACK_DEPTH, MAX_DICTIONARY_CELLS, MAX_RETURN_ST
 use crate::dict::WordEntry;
 use crate::error::TbxError;
 use crate::lexer::SpannedToken;
+use std::collections::HashMap;
 use std::collections::VecDeque;
+
+/// State maintained during compilation of a new word definition (DEF..END).
+#[derive(Debug)]
+pub struct CompileState {
+    /// Name of the word being compiled.
+    pub word_name: String,
+    /// Dictionary pointer at the start of DEF (for rollback on error).
+    pub dp_at_def: usize,
+    /// Header count at the start of DEF (for rollback on error).
+    pub hdr_len_at_def: usize,
+    /// Saved `latest` pointer before DEF (restored on rollback).
+    pub saved_latest: Option<crate::cell::Xt>,
+    /// Local variable table: maps variable name to StackAddr index.
+    /// Parameters are assigned indices 0..arity, VAR locals start at arity.
+    pub local_table: HashMap<String, usize>,
+    /// Number of formal parameters parsed from DEF WORD(X, Y, ...).
+    pub arity: usize,
+    /// Number of VAR-declared local variables encountered so far.
+    pub local_count: usize,
+    /// Dictionary offsets of the `local_count` placeholder (Int(0)) in CALL instructions
+    /// that refer to the currently-compiled word (self-recursive calls).
+    /// Patched to the final `local_count` when END is compiled.
+    pub call_patch_list: Vec<usize>,
+    /// Maps line-number label to dictionary offset recorded when the label was seen.
+    pub label_table: HashMap<i64, usize>,
+    /// (label_number, dict_offset_of_placeholder) waiting to be back-patched.
+    pub patch_list: Vec<(i64, usize)>,
+}
 
 /// The TBX virtual machine.
 ///
@@ -60,6 +89,9 @@ pub struct VM {
     /// Primitives consume tokens one at a time via `next_token()`.
     /// Set to `None` outside of immediate-word execution.
     pub token_stream: Option<VecDeque<SpannedToken>>,
+    /// State maintained during compilation of a new word definition (DEF..END).
+    /// `None` in execution mode; `Some(...)` while compiling.
+    pub compile_state: Option<CompileState>,
 }
 
 impl VM {
@@ -84,6 +116,7 @@ impl VM {
             output_buffer: String::new(),
             is_compiling: false,
             token_stream: None,
+            compile_state: None,
         }
     }
 
@@ -676,6 +709,19 @@ impl VM {
         self.string_pool.extend_from_slice(bytes);
         Ok(idx)
     }
+    /// Roll back a partially-compiled word definition on error.
+    ///
+    /// Restores `dp`, `headers`, and `latest` to the state captured at DEF time.
+    /// Clears `is_compiling` and drops `compile_state`.
+    pub fn rollback_def(&mut self) {
+        if let Some(state) = self.compile_state.take() {
+            self.dp = state.dp_at_def;
+            self.dictionary.truncate(state.dp_at_def);
+            self.headers.truncate(state.hdr_len_at_def);
+            self.latest = state.saved_latest;
+            self.is_compiling = false;
+        }
+    }
 }
 
 impl Default for VM {
@@ -687,10 +733,22 @@ impl Default for VM {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::dict::WordEntry;
+    use crate::dict::{EntryKind, WordEntry};
 
     fn noop(_vm: &mut VM) -> Result<(), crate::error::TbxError> {
         Ok(())
+    }
+
+    /// Find the Xt of the first header entry whose kind matches the predicate.
+    /// Used to locate runtime instructions (Goto, BranchIfFalse, BranchIfTrue)
+    /// which may be shadowed by IMMEDIATE primitives of the same name.
+    fn find_by_kind(vm: &VM, pred: impl Fn(&EntryKind) -> bool) -> Xt {
+        vm.headers
+            .iter()
+            .enumerate()
+            .find(|(_, e)| pred(&e.kind))
+            .map(|(i, _)| Xt(i))
+            .expect("entry not found by kind")
     }
 
     #[test]
@@ -1853,7 +1911,7 @@ mod tests {
         let mut vm = VM::new();
         crate::primitives::register_all(&mut vm);
 
-        let goto_xt = vm.lookup("GOTO").unwrap();
+        let goto_xt = find_by_kind(&vm, |k| matches!(k, EntryKind::Goto));
         let dup_xt = vm.lookup("DUP").unwrap();
         let exit_xt = vm.lookup("EXIT").unwrap();
 
@@ -1881,7 +1939,7 @@ mod tests {
         let mut vm = VM::new();
         crate::primitives::register_all(&mut vm);
 
-        let bif_xt = vm.lookup("BIF").unwrap();
+        let bif_xt = find_by_kind(&vm, |k| matches!(k, EntryKind::BranchIfFalse));
         let dup_xt = vm.lookup("DUP").unwrap();
         let exit_xt = vm.lookup("EXIT").unwrap();
 
@@ -1913,7 +1971,7 @@ mod tests {
         let mut vm = VM::new();
         crate::primitives::register_all(&mut vm);
 
-        let bif_xt = vm.lookup("BIF").unwrap();
+        let bif_xt = find_by_kind(&vm, |k| matches!(k, EntryKind::BranchIfFalse));
         let lit_xt = vm.lookup("LIT").unwrap();
         let exit_xt = vm.lookup("EXIT").unwrap();
 
@@ -1945,7 +2003,7 @@ mod tests {
         let mut vm = VM::new();
         crate::primitives::register_all(&mut vm);
 
-        let bit_xt = vm.lookup("BIT").unwrap();
+        let bit_xt = find_by_kind(&vm, |k| matches!(k, EntryKind::BranchIfTrue));
         let dup_xt = vm.lookup("DUP").unwrap();
         let exit_xt = vm.lookup("EXIT").unwrap();
 
@@ -1977,7 +2035,7 @@ mod tests {
         let mut vm = VM::new();
         crate::primitives::register_all(&mut vm);
 
-        let bit_xt = vm.lookup("BIT").unwrap();
+        let bit_xt = find_by_kind(&vm, |k| matches!(k, EntryKind::BranchIfTrue));
         let lit_xt = vm.lookup("LIT").unwrap();
         let exit_xt = vm.lookup("EXIT").unwrap();
 
@@ -2004,7 +2062,7 @@ mod tests {
         let mut vm = VM::new();
         crate::primitives::register_all(&mut vm);
 
-        let goto_xt = vm.lookup("GOTO").unwrap();
+        let goto_xt = find_by_kind(&vm, |k| matches!(k, EntryKind::Goto));
 
         vm.dict_write(Cell::Xt(goto_xt)).unwrap(); // [0]
         vm.dict_write(Cell::Int(-1)).unwrap(); // [1] negative target
@@ -2022,7 +2080,7 @@ mod tests {
         let mut vm = VM::new();
         crate::primitives::register_all(&mut vm);
 
-        let goto_xt = vm.lookup("GOTO").unwrap();
+        let goto_xt = find_by_kind(&vm, |k| matches!(k, EntryKind::Goto));
         let exit_xt = vm.lookup("EXIT").unwrap();
 
         vm.dict_write(Cell::Xt(goto_xt)).unwrap(); // [0]
@@ -2044,7 +2102,7 @@ mod tests {
         let mut vm = VM::new();
         crate::primitives::register_all(&mut vm);
 
-        let goto_xt = vm.lookup("GOTO").unwrap();
+        let goto_xt = find_by_kind(&vm, |k| matches!(k, EntryKind::Goto));
 
         vm.dict_write(Cell::Xt(goto_xt)).unwrap(); // [0]
         vm.dict_write(Cell::Int(9999)).unwrap(); // [1] out-of-bounds target
@@ -2062,7 +2120,7 @@ mod tests {
         let mut vm = VM::new();
         crate::primitives::register_all(&mut vm);
 
-        let bif_xt = vm.lookup("BIF").unwrap();
+        let bif_xt = find_by_kind(&vm, |k| matches!(k, EntryKind::BranchIfFalse));
         let exit_xt = vm.lookup("EXIT").unwrap();
 
         vm.dict_write(Cell::Xt(bif_xt)).unwrap(); // [0]
@@ -2080,7 +2138,7 @@ mod tests {
         let mut vm = VM::new();
         crate::primitives::register_all(&mut vm);
 
-        let bit_xt = vm.lookup("BIT").unwrap();
+        let bit_xt = find_by_kind(&vm, |k| matches!(k, EntryKind::BranchIfTrue));
         let exit_xt = vm.lookup("EXIT").unwrap();
 
         vm.dict_write(Cell::Xt(bit_xt)).unwrap(); // [0]
@@ -2098,7 +2156,7 @@ mod tests {
         let mut vm = VM::new();
         crate::primitives::register_all(&mut vm);
 
-        let bif_xt = vm.lookup("BIF").unwrap();
+        let bif_xt = find_by_kind(&vm, |k| matches!(k, EntryKind::BranchIfFalse));
 
         vm.dict_write(Cell::Xt(bif_xt)).unwrap(); // [0]
         vm.dict_write(Cell::Int(-5)).unwrap(); // [1] negative target
@@ -2117,7 +2175,7 @@ mod tests {
         let mut vm = VM::new();
         crate::primitives::register_all(&mut vm);
 
-        let bit_xt = vm.lookup("BIT").unwrap();
+        let bit_xt = find_by_kind(&vm, |k| matches!(k, EntryKind::BranchIfTrue));
 
         vm.dict_write(Cell::Xt(bit_xt)).unwrap(); // [0]
         vm.dict_write(Cell::Int(-3)).unwrap(); // [1] negative target
@@ -2138,7 +2196,7 @@ mod tests {
         let mut vm = VM::new();
         crate::primitives::register_all(&mut vm);
 
-        let bif_xt = vm.lookup("BIF").unwrap();
+        let bif_xt = find_by_kind(&vm, |k| matches!(k, EntryKind::BranchIfFalse));
 
         vm.dict_write(Cell::Xt(bif_xt)).unwrap(); // [0]
         vm.dict_write(Cell::Int(-1)).unwrap(); // [1] negative target
@@ -2159,7 +2217,7 @@ mod tests {
         let mut vm = VM::new();
         crate::primitives::register_all(&mut vm);
 
-        let bit_xt = vm.lookup("BIT").unwrap();
+        let bit_xt = find_by_kind(&vm, |k| matches!(k, EntryKind::BranchIfTrue));
 
         vm.dict_write(Cell::Xt(bit_xt)).unwrap(); // [0]
         vm.dict_write(Cell::Int(-2)).unwrap(); // [1] negative target
