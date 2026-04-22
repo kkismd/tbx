@@ -2,6 +2,8 @@ use crate::cell::{Cell, ReturnFrame, Xt};
 use crate::constants::{MAX_DATA_STACK_DEPTH, MAX_DICTIONARY_CELLS, MAX_RETURN_STACK_DEPTH};
 use crate::dict::WordEntry;
 use crate::error::TbxError;
+use crate::lexer::SpannedToken;
+use std::collections::VecDeque;
 
 /// The TBX virtual machine.
 ///
@@ -54,6 +56,10 @@ pub struct VM {
     /// Compile mode flag: false = execution mode (STATE=0), true = compile mode (STATE=1).
     /// Toggled by DEF (enter compile mode) and END (return to execution mode).
     pub is_compiling: bool,
+    /// Token stream set by the outer interpreter before calling vm.run() for IMMEDIATE words.
+    /// Primitives consume tokens one at a time via `next_token()`.
+    /// Set to `None` outside of immediate-word execution.
+    pub token_stream: Option<VecDeque<SpannedToken>>,
 }
 
 impl VM {
@@ -77,6 +83,23 @@ impl VM {
             latest: None,
             output_buffer: String::new(),
             is_compiling: false,
+            token_stream: None,
+        }
+    }
+
+    /// Consume the next token from the token stream.
+    ///
+    /// Returns `TbxError::TokenStreamEmpty` if `token_stream` is `None` or empty.
+    ///
+    /// Note: when the stream is exhausted, `token_stream` remains `Some([])` rather
+    /// than being reset to `None`. The caller (outer interpreter) is responsible for
+    /// setting `token_stream` back to `None` after the immediate-word execution
+    /// completes, so that `is_some()` reliably indicates "currently in an
+    /// immediate-word execution context".
+    pub fn next_token(&mut self) -> Result<SpannedToken, TbxError> {
+        match &mut self.token_stream {
+            Some(stream) => stream.pop_front().ok_or(TbxError::TokenStreamEmpty),
+            None => Err(TbxError::TokenStreamEmpty),
         }
     }
 
@@ -2147,5 +2170,70 @@ mod tests {
             result,
             Err(crate::error::TbxError::InvalidJumpTarget { address: -2 })
         );
+    }
+
+    // ── next_token() tests ────────────────────────────────────────────────────
+
+    fn make_spanned(token: crate::lexer::Token) -> crate::lexer::SpannedToken {
+        crate::lexer::SpannedToken {
+            token,
+            pos: crate::lexer::Position { line: 1, col: 1 },
+            source_offset: 0,
+            source_len: 1,
+        }
+    }
+
+    #[test]
+    fn test_next_token_none_stream() {
+        // token_stream is None → TokenStreamEmpty
+        let mut vm = VM::new();
+        assert_eq!(
+            vm.next_token(),
+            Err(crate::error::TbxError::TokenStreamEmpty)
+        );
+    }
+
+    #[test]
+    fn test_next_token_empty_stream() {
+        // token_stream is an empty VecDeque → TokenStreamEmpty
+        let mut vm = VM::new();
+        vm.token_stream = Some(VecDeque::new());
+        assert_eq!(
+            vm.next_token(),
+            Err(crate::error::TbxError::TokenStreamEmpty)
+        );
+    }
+
+    #[test]
+    fn test_next_token_single_token() {
+        // Providing one token returns Ok(token)
+        let mut vm = VM::new();
+        let tok = make_spanned(crate::lexer::Token::Ident("HELLO".to_string()));
+        vm.token_stream = Some(VecDeque::from([tok.clone()]));
+        assert_eq!(vm.next_token(), Ok(tok));
+    }
+
+    #[test]
+    fn test_next_token_exhausted_after_consume() {
+        // After consuming the single token, the next call returns TokenStreamEmpty
+        let mut vm = VM::new();
+        let tok = make_spanned(crate::lexer::Token::Ident("X".to_string()));
+        vm.token_stream = Some(VecDeque::from([tok]));
+        let _ = vm.next_token(); // consume
+        assert_eq!(
+            vm.next_token(),
+            Err(crate::error::TbxError::TokenStreamEmpty)
+        );
+    }
+
+    #[test]
+    fn test_next_token_fifo_order() {
+        // Two tokens are returned in FIFO (push-back / pop-front) order
+        let mut vm = VM::new();
+        let tok1 = make_spanned(crate::lexer::Token::IntLit(1));
+        let tok2 = make_spanned(crate::lexer::Token::IntLit(2));
+        vm.token_stream = Some(VecDeque::from([tok1.clone(), tok2.clone()]));
+        assert_eq!(vm.next_token(), Ok(tok1));
+        assert_eq!(vm.next_token(), Ok(tok2));
     }
 }
