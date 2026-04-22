@@ -1390,13 +1390,14 @@ IWORD
 END
 OUTER";
         interp.exec_source(src).unwrap();
-        // IWORD is IMMEDIATE, so it executes immediately at compile time inside DEF OUTER
+        // IWORD is IMMEDIATE, so it executes exactly once at compile time inside DEF OUTER
         // and is NOT compiled into OUTER's body. Calling OUTER does not re-execute IWORD.
+        // Using exact-match to distinguish "compiled into body" (outputs "7777") from
+        // "IMMEDIATE only" (outputs "77" once at compile time).
         let out = interp.take_output();
-        assert!(
-            out.contains("77"),
-            "expected '77' in output, got: {:?}",
-            out
+        assert_eq!(
+            out, "77",
+            "expected exactly '77' (compile-time only), got: {out:?}"
         );
     }
 
