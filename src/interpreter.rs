@@ -1371,26 +1371,41 @@ IWORD";
 
     #[test]
     fn test_user_defined_immediate_word_executes_during_compile() {
-        // A user word flagged as IMMEDIATE should also execute during compilation of another word.
+        // A user word flagged as IMMEDIATE should execute at compile time, not be compiled into
+        // the calling word's body.
+
         let mut interp = Interpreter::new();
-        let src = "\
+
+        // Phase 1: define IWORD, mark it IMMEDIATE, then compile OUTER which references IWORD.
+        // Because IWORD is IMMEDIATE it should be executed immediately during compilation of OUTER
+        // and must NOT be stored into OUTER's body.
+        interp
+            .exec_source(
+                "\
 DEF IWORD
 PUTDEC 77
 END
 IMMEDIATE IWORD
 DEF OUTER
 IWORD
-END
-OUTER";
-        interp.exec_source(src).unwrap();
-        // IWORD is IMMEDIATE, so it executes exactly once at compile time inside DEF OUTER
-        // and is NOT compiled into OUTER's body. Calling OUTER does not re-execute IWORD.
-        // Using exact-match to distinguish "compiled into body" (outputs "7777") from
-        // "IMMEDIATE only" (outputs "77" once at compile time).
-        let out = interp.take_output();
+END",
+            )
+            .unwrap();
+
+        // IWORD ran once at compile time, so output should be "77".
+        let compile_out = interp.take_output();
         assert_eq!(
-            out, "77",
-            "expected exactly '77' (compile-time only), got: {out:?}"
+            compile_out, "77",
+            "IWORD must execute during compilation of OUTER (got: {compile_out:?})"
+        );
+
+        // Phase 2: call OUTER at runtime. Since IWORD was not compiled into OUTER's body,
+        // executing OUTER should produce no output.
+        interp.exec_source("OUTER").unwrap();
+        let runtime_out = interp.take_output();
+        assert_eq!(
+            runtime_out, "",
+            "OUTER must not re-execute IWORD at runtime (got: {runtime_out:?})"
         );
     }
 
