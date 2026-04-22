@@ -44,8 +44,9 @@ enum OpItem {
 /// The caller receives the instruction sequence and decides how to use it.
 pub struct ExprCompiler<'a> {
     vm: &'a mut VM,
-    /// Optional local variable table passed in during compile mode.
+    /// Optional reference to the local variable table for the word being compiled.
     /// Local variables shadow same-named globals: this table is checked first.
+    /// Passed as a reference to avoid cloning the table on every statement.
     local_table: Option<&'a HashMap<String, usize>>,
     /// Name of the word currently being compiled, used to allow self-recursive lookups.
     /// Only this word's hidden entry (FLAG_HIDDEN) is visible to identifier resolution.
@@ -72,8 +73,10 @@ impl<'a> ExprCompiler<'a> {
         }
     }
 
-    /// Create an `ExprCompiler` with a local variable table and the name of the
-    /// word currently being compiled (for self-recursive call resolution).
+    /// Create an `ExprCompiler` with a reference to the local variable table and the
+    /// name of the word currently being compiled (for self-recursive call resolution).
+    ///
+    /// `local_table` is borrowed rather than cloned to avoid per-statement HashMap copies.
     /// `self_hdr_idx` is the header index of the word being compiled; when
     /// a call to that same index is encountered in an expression, a `local_count`
     /// placeholder is emitted and its offset recorded in `patch_offsets`.
@@ -139,8 +142,6 @@ impl<'a> ExprCompiler<'a> {
                 Token::Ident(name) => {
                     // Check local variable table first — locals shadow globals.
                     if let Some(idx) = self.local_table.and_then(|lt| lt.get(&name)).copied() {
-                        // Peek ahead: a local variable cannot be called like a function.
-                        // Just emit a local variable read: LIT StackAddr(idx) FETCH.
                         emit_local_read(&mut output, idx, self.vm)?;
                         prev_was_operand = true;
                         i += 1;

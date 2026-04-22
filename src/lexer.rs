@@ -628,6 +628,51 @@ impl<'a> Lexer<'a> {
 }
 
 // ---------------------------------------------------------------------------
+// Token-slice helpers shared across the crate
+// ---------------------------------------------------------------------------
+
+/// Find the last top-level comma in a token slice.
+///
+/// "Top-level" means not nested inside parentheses.
+/// Returns `None` if no top-level comma is found.
+pub(crate) fn last_top_level_comma(
+    tokens: &[SpannedToken],
+) -> Result<Option<usize>, crate::error::TbxError> {
+    let mut depth: usize = 0;
+    let mut last_comma = None;
+    for (i, st) in tokens.iter().enumerate() {
+        match &st.token {
+            Token::LParen => depth += 1,
+            Token::RParen => {
+                depth = depth
+                    .checked_sub(1)
+                    .ok_or(crate::error::TbxError::InvalidExpression {
+                        reason: "unmatched ')' in argument list",
+                    })?;
+            }
+            Token::Comma if depth == 0 => last_comma = Some(i),
+            _ => {}
+        }
+    }
+    Ok(last_comma)
+}
+
+/// Parse a label number from a token slice.
+///
+/// Skips leading `Newline`/`Eof` tokens and returns the integer value of the
+/// first meaningful token if it is an `IntLit` or `LineNum`.
+pub(crate) fn parse_label_number(tokens: &[SpannedToken]) -> Option<i64> {
+    let tok = tokens
+        .iter()
+        .find(|st| !matches!(st.token, Token::Newline | Token::Eof))?;
+    match &tok.token {
+        Token::IntLit(n) => Some(*n),
+        Token::LineNum(n) => Some(*n),
+        _ => None,
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 
@@ -1214,6 +1259,58 @@ mod tests {
             matches!(toks[0], Token::Error(_)),
             "expected Error, got {:?}",
             toks[0]
+        );
+    }
+
+    // ---------------------------------------------------------------------------
+    // Tests for parse_label_number and last_top_level_comma helper functions
+    // ---------------------------------------------------------------------------
+
+    /// Returns SpannedTokens for the given source string, stopping before Newline/Eof.
+    fn tokenize_args(s: &str) -> Vec<SpannedToken> {
+        let mut lex = Lexer::new(s);
+        let mut result = Vec::new();
+        loop {
+            let st = lex.next_token();
+            match &st.token {
+                Token::Newline | Token::Eof => break,
+                _ => result.push(st),
+            }
+        }
+        result
+    }
+
+    #[test]
+    fn test_parse_label_number_and_last_top_level_comma() {
+        // parse_label_number returns the integer when the token slice starts with one.
+        let toks = tokenize_args("42");
+        assert_eq!(parse_label_number(&toks), Some(42));
+
+        // last_top_level_comma returns Some(pos) when a top-level comma is present.
+        let toks = tokenize_args("I > 10, 99");
+        let comma_pos = last_top_level_comma(&toks);
+        assert!(
+            comma_pos.unwrap().is_some(),
+            "should find a top-level comma"
+        );
+
+        // last_top_level_comma returns None when no comma is present.
+        let toks_no_comma = tokenize_args("42");
+        assert_eq!(last_top_level_comma(&toks_no_comma).unwrap(), None);
+    }
+
+    #[test]
+    fn test_last_top_level_comma_unmatched_paren_errors() {
+        // An unmatched ')' must produce an InvalidExpression error.
+        let toks = tokenize_args("42 ), 99");
+        let result = last_top_level_comma(&toks);
+        assert!(
+            matches!(
+                result,
+                Err(crate::error::TbxError::InvalidExpression { .. })
+            ),
+            "expected InvalidExpression for unmatched ')', got: {:?}",
+            result
         );
     }
 }

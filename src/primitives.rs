@@ -1,9 +1,11 @@
 use crate::cell::Cell;
 use crate::constants::MAX_DICTIONARY_CELLS;
-use crate::dict::{EntryKind, WordEntry, FLAG_SYSTEM};
+use crate::dict::{EntryKind, WordEntry, FLAG_IMMEDIATE, FLAG_SYSTEM};
 use crate::error::TbxError;
+use crate::expr::ExprCompiler;
 use crate::lexer::Token;
-use crate::vm::VM;
+use crate::vm::{CompileState, VM};
+use std::collections::HashMap;
 
 /// DROP — discard the top element of the data stack.
 pub fn drop_prim(vm: &mut VM) -> Result<(), TbxError> {
@@ -447,6 +449,407 @@ pub fn header_prim(vm: &mut VM) -> Result<(), TbxError> {
     Ok(())
 }
 
+// ---------------------------------------------------------------------------
+// IMMEDIATE compile-time primitives
+// ---------------------------------------------------------------------------
+
+/// DEF — begin compiling a new word definition.
+/// Reads word name and optional parameter list from token_stream.
+pub fn def_prim(vm: &mut VM) -> Result<(), TbxError> {
+    // Nested DEF is not allowed.
+    if vm.is_compiling {
+        return Err(TbxError::InvalidExpression {
+            reason: "nested DEF is not allowed",
+        });
+    }
+
+    // Read word name from token stream.
+    let name_tok = vm.next_token()?;
+    let name = match name_tok.token {
+        crate::lexer::Token::Ident(n) => n,
+        _ => {
+            return Err(TbxError::InvalidExpression {
+                reason: "expected word name after DEF",
+            })
+        }
+    };
+
+    // Parse optional parameter list: DEF WORD(X, Y, ...)
+    let mut local_table: HashMap<String, usize> = HashMap::new();
+    let mut arity: usize = 0;
+
+    match vm.next_token() {
+        Ok(tok) if matches!(tok.token, crate::lexer::Token::LParen) => {
+            // Parse parameters until ')'
+            loop {
+                match vm.next_token() {
+                    Ok(tok) => match tok.token {
+                        crate::lexer::Token::RParen => break,
+                        crate::lexer::Token::Ident(param) => {
+                            local_table.insert(param, arity);
+                            arity += 1;
+                            // Skip optional comma or check for RParen.
+                            match vm.next_token() {
+                                Ok(t) if matches!(t.token, crate::lexer::Token::Comma) => {}
+                                Ok(t) if matches!(t.token, crate::lexer::Token::RParen) => break,
+                                Ok(_) => {
+                                    return Err(TbxError::InvalidExpression {
+                                        reason: "expected ',' or ')' after parameter name",
+                                    })
+                                }
+                                Err(TbxError::TokenStreamEmpty) => break,
+                                Err(e) => return Err(e),
+                            }
+                        }
+                        _ => {
+                            return Err(TbxError::InvalidExpression {
+                                reason: "expected identifier or ')' in parameter list",
+                            })
+                        }
+                    },
+                    Err(TbxError::TokenStreamEmpty) => break,
+                    Err(e) => return Err(e),
+                }
+            }
+        }
+        Ok(_) => {
+            return Err(TbxError::InvalidExpression {
+                reason: "expected '(' or end of line after word name in DEF",
+            })
+        }
+        Err(TbxError::TokenStreamEmpty) => {} // End of stream — no parameters
+        Err(e) => return Err(e),
+    }
+
+    // Snapshot for rollback.
+    let dp_at_def = vm.dp;
+    let hdr_len_at_def = vm.headers.len();
+    let saved_latest = vm.latest;
+
+    // Register the new word (smudged until END).
+    let entry = crate::dict::WordEntry::new_word(&name, vm.dp);
+    vm.register(entry);
+    // Smudge: hide the word from lookup until END completes.
+    vm.headers[hdr_len_at_def].flags |= crate::dict::FLAG_HIDDEN;
+
+    vm.is_compiling = true;
+    vm.compile_state = Some(CompileState::new_for_def(
+        name,
+        dp_at_def,
+        hdr_len_at_def,
+        saved_latest,
+        local_table,
+        arity,
+    ));
+
+    Ok(())
+}
+
+/// END — finish compiling the current word definition.
+pub fn end_prim(vm: &mut VM) -> Result<(), TbxError> {
+    if !vm.is_compiling {
+        return Err(TbxError::InvalidExpression {
+            reason: "END outside DEF",
+        });
+    }
+
+    // Write EXIT to terminate the word body.
+    let exit_xt =
+        vm.find_by_kind(|k| matches!(k, EntryKind::Exit))
+            .ok_or(TbxError::UndefinedSymbol {
+                name: "EXIT".to_string(),
+            })?;
+    vm.dict_write(Cell::Xt(exit_xt))?;
+
+    // Check for unresolved forward label references BEFORE taking compile_state.
+    if let Some(state) = &vm.compile_state {
+        if let Some(&(label, _)) = state.patch_list.first() {
+            vm.rollback_def();
+            return Err(TbxError::UndefinedLabel { label });
+        }
+    }
+
+    // Save rollback information before consuming compile_state.
+    // If dict_write_at fails after take(), we need these to restore the VM.
+    let (dp_at_def, hdr_len_at_def, saved_latest) =
+        vm.compile_state.as_ref().map(|s| s.rollback_info()).ok_or(
+            TbxError::InvalidExpression {
+                reason: "END without matching DEF",
+            },
+        )?;
+
+    // Take the compile state.
+    let state = vm.compile_state.take().ok_or(TbxError::InvalidExpression {
+        reason: "END without matching DEF",
+    })?;
+
+    // Patch all self-recursive CALL instructions with the confirmed local_count.
+    // If patching fails, perform a full rollback so the VM is left in a clean state.
+    for &pos in &state.call_patch_list {
+        if let Err(e) = vm.dict_write_at(pos, Cell::Int(state.local_count as i64)) {
+            vm.rollback_def_explicit(dp_at_def, hdr_len_at_def, saved_latest);
+            return Err(e);
+        }
+    }
+    // Update word header: confirm local_count, unsmudge.
+    let word_hdr_idx = state.word_hdr_idx();
+    if word_hdr_idx < vm.headers.len() {
+        vm.headers[word_hdr_idx].local_count = state.local_count;
+        vm.headers[word_hdr_idx].flags &= !crate::dict::FLAG_HIDDEN;
+    }
+
+    vm.seal_user();
+    vm.is_compiling = false;
+
+    Ok(())
+}
+
+/// VAR — declare a local variable (in compile mode) or global variable (in execute mode).
+pub fn var_prim(vm: &mut VM) -> Result<(), TbxError> {
+    let name_tok = vm.next_token()?;
+    let name = match name_tok.token {
+        crate::lexer::Token::Ident(n) => n,
+        _ => {
+            return Err(TbxError::InvalidExpression {
+                reason: "expected variable name after VAR",
+            })
+        }
+    };
+
+    if vm.is_compiling {
+        // Local variable: add to compile state's local table.
+        let state = vm
+            .compile_state
+            .as_mut()
+            .ok_or(TbxError::InvalidExpression {
+                reason: "VAR in compile mode but no compile_state",
+            })?;
+        let idx = state.arity + state.local_count;
+        state.local_table.insert(name, idx);
+        state.local_count += 1;
+    } else {
+        // Global variable: allocate storage in dictionary.
+        let storage_idx = vm.dp;
+        vm.dict_write(Cell::None)?;
+        let entry = crate::dict::WordEntry::new_variable(&name, storage_idx);
+        vm.register(entry);
+        vm.seal_user();
+    }
+
+    Ok(())
+}
+
+/// GOTO — compile GOTO N into the dictionary (compile mode only).
+pub fn goto_prim(vm: &mut VM) -> Result<(), TbxError> {
+    if !vm.is_compiling {
+        return Err(TbxError::InvalidExpression {
+            reason: "GOTO outside DEF",
+        });
+    }
+
+    // Drain remaining tokens and parse the label number, skipping Newline/Eof,
+    // consistent with bif_prim/bit_prim which also use parse_label_number().
+    let remaining: Vec<crate::lexer::SpannedToken> = {
+        let stream = vm.token_stream.as_mut().ok_or(TbxError::TokenStreamEmpty)?;
+        stream.drain(..).collect()
+    };
+    let label_n =
+        crate::lexer::parse_label_number(&remaining).ok_or(TbxError::InvalidExpression {
+            reason: "GOTO requires an integer label",
+        })?;
+
+    // Find the runtime Goto entry by kind (not by name, to avoid shadowing by this primitive).
+    let goto_xt =
+        vm.find_by_kind(|k| matches!(k, EntryKind::Goto))
+            .ok_or(TbxError::UndefinedSymbol {
+                name: "GOTO".to_string(),
+            })?;
+    vm.dict_write(Cell::Xt(goto_xt))?;
+    emit_jump_target_to_dict(vm, label_n)
+}
+
+/// BIF — compile BIF cond, label into the dictionary (compile mode only).
+pub fn bif_prim(vm: &mut VM) -> Result<(), TbxError> {
+    compile_branch_prim(vm, false)
+}
+
+/// BIT — compile BIT cond, label into the dictionary (compile mode only).
+pub fn bit_prim(vm: &mut VM) -> Result<(), TbxError> {
+    compile_branch_prim(vm, true)
+}
+
+/// Shared implementation for BIF and BIT primitives.
+fn compile_branch_prim(vm: &mut VM, is_truthy: bool) -> Result<(), TbxError> {
+    if !vm.is_compiling {
+        let reason = if is_truthy {
+            "BIT outside DEF"
+        } else {
+            "BIF outside DEF"
+        };
+        return Err(TbxError::InvalidExpression { reason });
+    }
+
+    // Drain all remaining tokens from the token stream.
+    let all_tokens: Vec<crate::lexer::SpannedToken> = {
+        let stream = vm.token_stream.as_mut().ok_or(TbxError::TokenStreamEmpty)?;
+        stream.drain(..).collect()
+    };
+
+    // Split at the last top-level comma: left=cond_tokens, right=label_tokens.
+    let split_pos =
+        crate::lexer::last_top_level_comma(&all_tokens)?.ok_or(TbxError::InvalidExpression {
+            reason: "BIF/BIT requires syntax: BIF cond, label",
+        })?;
+    let cond_tokens = &all_tokens[..split_pos];
+    let label_tokens = &all_tokens[split_pos + 1..];
+
+    // Parse label number.
+    let label_n =
+        crate::lexer::parse_label_number(label_tokens).ok_or(TbxError::InvalidExpression {
+            reason: "BIF/BIT label must be an integer",
+        })?;
+
+    // Compile condition expression.
+    let (cond_cells, patch_offsets) = compile_expr_taking_local_table(vm, cond_tokens)?;
+
+    let base_dp = vm.dp;
+    for cell in cond_cells {
+        vm.dict_write(cell)?;
+    }
+    // Register self-recursive local_count placeholder positions.
+    if let Some(state) = vm.compile_state.as_mut() {
+        for offset in patch_offsets {
+            state.call_patch_list.push(base_dp + offset);
+        }
+    }
+
+    // Emit BIF or BIT runtime instruction (found by kind to avoid shadowing).
+    let branch_xt = if is_truthy {
+        vm.find_by_kind(|k| matches!(k, EntryKind::BranchIfTrue))
+            .ok_or(TbxError::UndefinedSymbol {
+                name: "BIT".to_string(),
+            })?
+    } else {
+        vm.find_by_kind(|k| matches!(k, EntryKind::BranchIfFalse))
+            .ok_or(TbxError::UndefinedSymbol {
+                name: "BIF".to_string(),
+            })?
+    };
+    vm.dict_write(Cell::Xt(branch_xt))?;
+
+    emit_jump_target_to_dict(vm, label_n)
+}
+
+/// RETURN — compile a RETURN statement inside a DEF body.
+pub fn return_prim(vm: &mut VM) -> Result<(), TbxError> {
+    if !vm.is_compiling {
+        return Err(TbxError::InvalidExpression {
+            reason: "RETURN outside DEF",
+        });
+    }
+
+    // Drain remaining tokens; require token_stream to be set (same contract as goto_prim / bif_prim).
+    let expr_tokens: Vec<crate::lexer::SpannedToken> = {
+        let stream = vm.token_stream.as_mut().ok_or(TbxError::TokenStreamEmpty)?;
+        stream.drain(..).collect()
+    };
+
+    if expr_tokens.is_empty() {
+        // Void return: emit EXIT.
+        let exit_xt =
+            vm.find_by_kind(|k| matches!(k, EntryKind::Exit))
+                .ok_or(TbxError::UndefinedSymbol {
+                    name: "EXIT".to_string(),
+                })?;
+        vm.dict_write(Cell::Xt(exit_xt))?;
+    } else {
+        // Compile return expression.
+        let (expr_cells, patch_offsets) = compile_expr_taking_local_table(vm, &expr_tokens)?;
+
+        let base_dp = vm.dp;
+        for cell in expr_cells {
+            vm.dict_write(cell)?;
+        }
+        if let Some(state) = vm.compile_state.as_mut() {
+            for offset in patch_offsets {
+                state.call_patch_list.push(base_dp + offset);
+            }
+        }
+        // Find RETURN_VAL by kind.
+        let return_val_xt = vm
+            .find_by_kind(|k| matches!(k, EntryKind::ReturnVal))
+            .ok_or(TbxError::UndefinedSymbol {
+                name: "RETURN_VAL".to_string(),
+            })?;
+        vm.dict_write(Cell::Xt(return_val_xt))?;
+    }
+
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Helper functions for IMMEDIATE primitives
+// ---------------------------------------------------------------------------
+
+/// Compile an expression while temporarily taking `local_table` out of `compile_state`.
+///
+/// `ExprCompiler::with_context` requires `&mut VM`, but `local_table` lives inside
+/// `vm.compile_state`.  By taking it out first we can pass `&mut vm` to `ExprCompiler`
+/// and reference `local_table` separately without violating the borrow checker.
+/// The table is always restored to `compile_state` after compilation, even on error.
+fn compile_expr_taking_local_table(
+    vm: &mut VM,
+    tokens: &[crate::lexer::SpannedToken],
+) -> Result<(Vec<Cell>, Vec<usize>), TbxError> {
+    let self_word = vm.compile_state.as_ref().map(|s| s.word_name.clone());
+    let self_hdr_idx = vm.compile_state.as_ref().map(|s| s.word_hdr_idx());
+    let local_table = vm
+        .compile_state
+        .as_mut()
+        .map(|s| std::mem::take(&mut s.local_table));
+    let result: Result<(Vec<Cell>, Vec<usize>), TbxError> = {
+        let local_table_ref = local_table.as_ref();
+        let mut compiler = ExprCompiler::with_context(vm, local_table_ref, self_word, self_hdr_idx);
+        compiler.compile_expr(tokens).map(|cells| {
+            let offsets = std::mem::take(&mut compiler.patch_offsets);
+            (cells, offsets)
+        })
+    };
+    // Restore local_table regardless of success or failure.
+    if let (Some(state), Some(lt)) = (vm.compile_state.as_mut(), local_table) {
+        state.local_table = lt;
+    }
+    result
+}
+
+/// Emit a jump target into the dictionary, with forward-reference back-patch support.
+fn emit_jump_target_to_dict(vm: &mut VM, label_n: i64) -> Result<(), TbxError> {
+    let target_opt = vm
+        .compile_state
+        .as_ref()
+        .ok_or(TbxError::InvalidExpression {
+            reason: "GOTO/BIF/BIT outside compile mode",
+        })?
+        .label_table
+        .get(&label_n)
+        .copied();
+
+    if let Some(target) = target_opt {
+        vm.dict_write(Cell::Int(target as i64))?;
+    } else {
+        let patch_pos = vm.dp;
+        vm.dict_write(Cell::Int(0))?;
+        vm.compile_state
+            .as_mut()
+            .ok_or(TbxError::InvalidExpression {
+                reason: "GOTO/BIF/BIT outside compile mode",
+            })?
+            .patch_list
+            .push((label_n, patch_pos));
+    }
+    Ok(())
+}
+
 /// Register all stack primitives into the VM's dictionary.
 pub fn register_all(vm: &mut VM) {
     vm.register(WordEntry::new_primitive("DROP", drop_prim));
@@ -539,12 +942,40 @@ pub fn register_all(vm: &mut VM) {
         local_count: 0,
         prev: None,
     });
+    // LITERAL: system-internal compile-time primitive.
+    // Not IMMEDIATE — it must not be caught by the interpreter's IMMEDIATE dispatch,
+    // because it reads its argument from the data stack (not from the token stream).
+    // FLAG_SYSTEM prevents it from being called as a user statement word.
     let mut literal_entry = WordEntry::new_primitive("LITERAL", literal_prim);
-    literal_entry.flags |= crate::dict::FLAG_IMMEDIATE;
+    literal_entry.flags = FLAG_SYSTEM;
     vm.register(literal_entry);
+    // HEADER: IMMEDIATE so the outer interpreter feeds the token stream before calling it.
+    // Also FLAG_SYSTEM to mark it as a system word consistent with other compile-time words.
     let mut header_entry = WordEntry::new_primitive("HEADER", header_prim);
-    header_entry.flags |= crate::dict::FLAG_IMMEDIATE;
+    header_entry.flags = FLAG_IMMEDIATE | FLAG_SYSTEM;
     vm.register(header_entry);
+    // IMMEDIATE system words: DEF, END, VAR, GOTO, BIF, BIT, RETURN
+    let mut def_entry = WordEntry::new_primitive("DEF", def_prim);
+    def_entry.flags = FLAG_IMMEDIATE | FLAG_SYSTEM;
+    vm.register(def_entry);
+    let mut end_entry = WordEntry::new_primitive("END", end_prim);
+    end_entry.flags = FLAG_IMMEDIATE | FLAG_SYSTEM;
+    vm.register(end_entry);
+    let mut var_entry = WordEntry::new_primitive("VAR", var_prim);
+    var_entry.flags = FLAG_IMMEDIATE | FLAG_SYSTEM;
+    vm.register(var_entry);
+    let mut goto_entry = WordEntry::new_primitive("GOTO", goto_prim);
+    goto_entry.flags = FLAG_IMMEDIATE | FLAG_SYSTEM;
+    vm.register(goto_entry);
+    let mut bif_entry = WordEntry::new_primitive("BIF", bif_prim);
+    bif_entry.flags = FLAG_IMMEDIATE | FLAG_SYSTEM;
+    vm.register(bif_entry);
+    let mut bit_entry = WordEntry::new_primitive("BIT", bit_prim);
+    bit_entry.flags = FLAG_IMMEDIATE | FLAG_SYSTEM;
+    vm.register(bit_entry);
+    let mut return_entry = WordEntry::new_primitive("RETURN", return_prim);
+    return_entry.flags = FLAG_IMMEDIATE | FLAG_SYSTEM;
+    vm.register(return_entry);
 }
 
 #[cfg(test)]
@@ -1807,6 +2238,16 @@ mod tests {
         assert_eq!(vm.dp, dp_before + 2);
     }
 
+    #[test]
+    fn test_literal_prim_is_not_immediate() {
+        // LITERAL must NOT have FLAG_IMMEDIATE; it is a system-internal compile-time primitive
+        // that must not be caught by the interpreter's IMMEDIATE dispatch.
+        let mut vm = VM::new();
+        crate::primitives::register_all(&mut vm);
+        let xt = vm.lookup("LITERAL").unwrap();
+        assert!(!vm.headers[xt.index()].is_immediate());
+    }
+
     // --- header_prim ---
 
     fn make_ident_token(name: &str) -> crate::lexer::SpannedToken {
@@ -1886,5 +2327,550 @@ mod tests {
         crate::primitives::register_all(&mut vm);
         let xt = vm.lookup("HEADER").unwrap();
         assert!(vm.headers[xt.index()].is_immediate());
+    }
+
+    // ---------------------------------------------------------------------------
+    // Error-path tests for IMMEDIATE primitives
+    // ---------------------------------------------------------------------------
+
+    /// Helper: build a VM with all primitives registered and return a minimal token stream.
+    fn make_vm_with_tokens(tokens: Vec<crate::lexer::Token>) -> VM {
+        use std::collections::VecDeque;
+        let mut vm = VM::new();
+        register_all(&mut vm);
+        let spanned: Vec<crate::lexer::SpannedToken> = tokens
+            .into_iter()
+            .map(|t| crate::lexer::SpannedToken {
+                token: t,
+                pos: crate::lexer::Position { line: 1, col: 1 },
+                source_offset: 0,
+                source_len: 1,
+            })
+            .collect();
+        vm.token_stream = Some(VecDeque::from(spanned));
+        vm
+    }
+
+    // --- def_prim error paths ---
+
+    #[test]
+    fn test_def_nested_error() {
+        // DEF inside an already-compiling context must return InvalidExpression.
+        use std::collections::VecDeque;
+        let mut vm = VM::new();
+        register_all(&mut vm);
+        vm.is_compiling = true;
+        vm.token_stream = Some(VecDeque::from([make_ident_token("FOO")]));
+        let err = def_prim(&mut vm).unwrap_err();
+        assert!(
+            matches!(err, TbxError::InvalidExpression { .. }),
+            "expected InvalidExpression, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn test_def_unexpected_token_after_name_error() {
+        // A token other than '(' or end-of-stream after the word name must return InvalidExpression.
+        use std::collections::VecDeque;
+        let mut vm = VM::new();
+        register_all(&mut vm);
+        // Supply: WORD <IntLit>  — IntLit is not LParen.
+        vm.token_stream = Some(VecDeque::from([
+            make_ident_token("WORD"),
+            crate::lexer::SpannedToken {
+                token: crate::lexer::Token::IntLit(42),
+                pos: crate::lexer::Position { line: 1, col: 6 },
+                source_offset: 5,
+                source_len: 2,
+            },
+        ]));
+        let err = def_prim(&mut vm).unwrap_err();
+        assert!(
+            matches!(err, TbxError::InvalidExpression { .. }),
+            "expected InvalidExpression for unexpected token after word name, got {err:?}"
+        );
+    }
+
+    // --- def_prim normal cases ---
+
+    #[test]
+    fn test_def_prim_no_params_enters_compile_mode() {
+        // DEF WORD (no parameter list) must set is_compiling to true with no locals.
+        use std::collections::VecDeque;
+        let mut vm = VM::new();
+        register_all(&mut vm);
+        // Provide only the word name token; token stream ends after that.
+        vm.token_stream = Some(VecDeque::from([make_ident_token("MYWORD")]));
+        def_prim(&mut vm).unwrap();
+        assert!(vm.is_compiling, "is_compiling must be true after DEF");
+        let state = vm
+            .compile_state
+            .as_ref()
+            .expect("compile_state must be set");
+        assert_eq!(state.word_name, "MYWORD");
+        assert_eq!(state.arity, 0);
+        assert!(state.local_table.is_empty());
+    }
+
+    #[test]
+    fn test_def_prim_with_params_sets_local_table_and_arity() {
+        // DEF WORD(X, Y) must enter compile mode with arity=2 and local_table {X:0, Y:1}.
+        use std::collections::VecDeque;
+        let mut vm = VM::new();
+        register_all(&mut vm);
+        // Tokens: WORD ( X , Y )
+        let lparen = crate::lexer::SpannedToken {
+            token: crate::lexer::Token::LParen,
+            pos: crate::lexer::Position { line: 1, col: 5 },
+            source_offset: 4,
+            source_len: 1,
+        };
+        let comma = crate::lexer::SpannedToken {
+            token: crate::lexer::Token::Comma,
+            pos: crate::lexer::Position { line: 1, col: 7 },
+            source_offset: 6,
+            source_len: 1,
+        };
+        let rparen = crate::lexer::SpannedToken {
+            token: crate::lexer::Token::RParen,
+            pos: crate::lexer::Position { line: 1, col: 9 },
+            source_offset: 8,
+            source_len: 1,
+        };
+        vm.token_stream = Some(VecDeque::from([
+            make_ident_token("WORD"),
+            lparen,
+            make_ident_token("X"),
+            comma,
+            make_ident_token("Y"),
+            rparen,
+        ]));
+        def_prim(&mut vm).unwrap();
+        assert!(vm.is_compiling, "is_compiling must be true after DEF");
+        let state = vm
+            .compile_state
+            .as_ref()
+            .expect("compile_state must be set");
+        assert_eq!(state.arity, 2);
+        assert_eq!(state.local_table.get("X").copied(), Some(0));
+        assert_eq!(state.local_table.get("Y").copied(), Some(1));
+    }
+
+    // --- end_prim normal case ---
+
+    #[test]
+    fn test_end_prim_normal() {
+        // end_prim called after def_prim should:
+        // - write EXIT into the dictionary
+        // - clear FLAG_HIDDEN on the word header (unsmudge)
+        // - set is_compiling to false
+        let mut vm = make_compiling_vm("MYWORD");
+
+        // Record the word header index before calling end_prim.
+        let word_hdr_idx = vm
+            .compile_state
+            .as_ref()
+            .map(|s| s.word_hdr_idx())
+            .expect("compile_state must be set");
+
+        // The word should be hidden (smudged) while being compiled.
+        assert!(
+            vm.headers[word_hdr_idx].flags & crate::dict::FLAG_HIDDEN != 0,
+            "word must be hidden during compilation"
+        );
+
+        end_prim(&mut vm).unwrap();
+
+        // is_compiling must be cleared.
+        assert!(!vm.is_compiling, "is_compiling must be false after END");
+
+        // FLAG_HIDDEN must be cleared (unsmudged).
+        assert_eq!(
+            vm.headers[word_hdr_idx].flags & crate::dict::FLAG_HIDDEN,
+            0,
+            "FLAG_HIDDEN must be cleared after END"
+        );
+
+        // The last cell written to the dictionary must be EXIT (an Xt pointing to
+        // an Exit entry).
+        let exit_cell = vm.dict_read(vm.dp - 1).expect("dict_read should succeed");
+        assert!(
+            matches!(exit_cell, crate::cell::Cell::Xt(_)),
+            "last written cell must be an Xt (EXIT), got {exit_cell:?}"
+        );
+        if let crate::cell::Cell::Xt(xt) = exit_cell {
+            assert!(
+                matches!(vm.headers[xt.index()].kind, crate::dict::EntryKind::Exit),
+                "EXIT xt must point to an Exit entry"
+            );
+        }
+    }
+
+    #[test]
+    fn test_end_outside_def_error() {
+        // END called when is_compiling == false must return InvalidExpression.
+        let mut vm = VM::new();
+        register_all(&mut vm);
+        // is_compiling is false by default; compile_state is None.
+        let err = end_prim(&mut vm).unwrap_err();
+        assert!(
+            matches!(err, TbxError::InvalidExpression { .. }),
+            "expected InvalidExpression, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn test_end_unresolved_label_error() {
+        // END must return UndefinedLabel when patch_list contains forward references
+        // that were never resolved (i.e., a GOTO target label was never defined).
+        let mut vm = make_compiling_vm("LABELWORD");
+        // Manually inject an unresolved forward reference (label 99) into patch_list.
+        if let Some(state) = vm.compile_state.as_mut() {
+            state.patch_list.push((99, 0));
+        }
+        let err = end_prim(&mut vm).unwrap_err();
+        assert!(
+            matches!(err, TbxError::UndefinedLabel { label: 99 }),
+            "expected UndefinedLabel {{ label: 99 }}, got {err:?}"
+        );
+    }
+
+    // --- goto_prim error paths ---
+
+    #[test]
+    fn test_goto_outside_def_error() {
+        // GOTO outside a DEF body must return InvalidExpression.
+        let mut vm = make_vm_with_tokens(vec![crate::lexer::Token::IntLit(10)]);
+        let err = goto_prim(&mut vm).unwrap_err();
+        assert!(
+            matches!(err, TbxError::InvalidExpression { .. }),
+            "expected InvalidExpression, got {err:?}"
+        );
+    }
+
+    // --- bif_prim error paths ---
+
+    #[test]
+    fn test_bif_outside_def_error() {
+        // BIF outside a DEF body must return InvalidExpression.
+        let mut vm = make_vm_with_tokens(vec![]);
+        let err = bif_prim(&mut vm).unwrap_err();
+        assert!(
+            matches!(err, TbxError::InvalidExpression { .. }),
+            "expected InvalidExpression, got {err:?}"
+        );
+    }
+
+    // --- bit_prim error paths ---
+
+    #[test]
+    fn test_bit_outside_def_error() {
+        // BIT outside a DEF body must return InvalidExpression.
+        let mut vm = make_vm_with_tokens(vec![]);
+        let err = bit_prim(&mut vm).unwrap_err();
+        assert!(
+            matches!(err, TbxError::InvalidExpression { .. }),
+            "expected InvalidExpression, got {err:?}"
+        );
+    }
+
+    // --- return_prim error paths ---
+
+    #[test]
+    fn test_return_outside_def_error() {
+        // RETURN outside a DEF body must return InvalidExpression.
+        let mut vm = make_vm_with_tokens(vec![]);
+        let err = return_prim(&mut vm).unwrap_err();
+        assert!(
+            matches!(err, TbxError::InvalidExpression { .. }),
+            "expected InvalidExpression, got {err:?}"
+        );
+    }
+
+    // --- var_prim error paths ---
+
+    #[test]
+    fn test_var_no_name_token_stream_empty() {
+        // VAR with an empty token stream must return TokenStreamEmpty.
+        use std::collections::VecDeque;
+        let mut vm = VM::new();
+        register_all(&mut vm);
+        vm.token_stream = Some(VecDeque::new());
+        let err = var_prim(&mut vm).unwrap_err();
+        assert_eq!(err, TbxError::TokenStreamEmpty);
+    }
+
+    // ---------------------------------------------------------------------------
+    // Normal-case (happy-path) tests for IMMEDIATE primitives
+    // ---------------------------------------------------------------------------
+
+    /// Helper: create a VM in compile mode by calling def_prim with the given word name.
+    /// Returns the VM with is_compiling == true and a fresh CompileState.
+    fn make_compiling_vm(word_name: &str) -> VM {
+        use std::collections::VecDeque;
+        let mut vm = VM::new();
+        register_all(&mut vm);
+        // Feed the word name token; def_prim will also try to read a second token
+        // (checking for LParen), but TokenStreamEmpty is tolerated there.
+        vm.token_stream = Some(VecDeque::from([make_ident_token(word_name)]));
+        def_prim(&mut vm).unwrap();
+        vm
+    }
+
+    // --- var_prim normal cases ---
+
+    #[test]
+    fn test_var_prim_local_variable() {
+        // VAR X inside DEF should register X in compile_state.local_table.
+        use std::collections::VecDeque;
+        let mut vm = make_compiling_vm("TESTWORD");
+        vm.token_stream = Some(VecDeque::from([make_ident_token("X")]));
+        var_prim(&mut vm).unwrap();
+        let state = vm.compile_state.as_ref().unwrap();
+        assert_eq!(state.local_table.get("X").copied(), Some(0));
+        assert_eq!(state.local_count, 1);
+    }
+
+    #[test]
+    fn test_var_prim_global_variable() {
+        // VAR MYVAR outside DEF should register a Variable entry in the dictionary.
+        use std::collections::VecDeque;
+        let mut vm = VM::new();
+        register_all(&mut vm);
+        // is_compiling is false by default.
+        vm.token_stream = Some(VecDeque::from([make_ident_token("MYVAR")]));
+        var_prim(&mut vm).unwrap();
+        let xt = vm.lookup("MYVAR").expect("MYVAR should be registered");
+        assert!(
+            matches!(
+                vm.headers[xt.index()].kind,
+                crate::dict::EntryKind::Variable(_)
+            ),
+            "expected Variable entry, got {:?}",
+            vm.headers[xt.index()].kind
+        );
+    }
+
+    // --- goto_prim normal case ---
+
+    #[test]
+    fn test_goto_prim_writes_dict() {
+        // GOTO 10 inside DEF should write [Xt(goto_rt), Int(0)] to the dictionary
+        // (forward reference: label not yet seen, so placeholder Int(0) is emitted
+        // and (10, dict_offset) is pushed to patch_list).
+        use std::collections::VecDeque;
+        let mut vm = make_compiling_vm("GOTOWORD");
+        let dp_before = vm.dp;
+        vm.token_stream = Some(VecDeque::from([crate::lexer::SpannedToken {
+            token: crate::lexer::Token::IntLit(10),
+            pos: crate::lexer::Position { line: 1, col: 1 },
+            source_offset: 0,
+            source_len: 2,
+        }]));
+        goto_prim(&mut vm).unwrap();
+        // dict[dp_before] = Xt(goto runtime entry), dict[dp_before+1] = Int(0) placeholder.
+        let goto_cell = vm.dict_read(dp_before).unwrap();
+        let target_cell = vm.dict_read(dp_before + 1).unwrap();
+        assert!(
+            matches!(goto_cell, Cell::Xt(_)),
+            "expected Xt for GOTO opcode, got {:?}",
+            goto_cell
+        );
+        assert_eq!(
+            target_cell,
+            Cell::Int(0),
+            "expected forward-ref placeholder Int(0)"
+        );
+        // patch_list should record the forward reference.
+        let state = vm.compile_state.as_ref().unwrap();
+        assert_eq!(state.patch_list, vec![(10, dp_before + 1)]);
+    }
+
+    // --- bif_prim normal case ---
+
+    #[test]
+    fn test_bif_prim_writes_dict() {
+        // BIF 1, 20 inside DEF should compile condition (LIT, Int(1)),
+        // then emit [Xt(bif_rt), Int(0)] as a forward reference placeholder.
+        use std::collections::VecDeque;
+        let mut vm = make_compiling_vm("BIFWORD");
+        let dp_before = vm.dp;
+        // Token stream: condition=IntLit(1), Comma, label=IntLit(20)
+        let make_tok = |t| crate::lexer::SpannedToken {
+            token: t,
+            pos: crate::lexer::Position { line: 1, col: 1 },
+            source_offset: 0,
+            source_len: 1,
+        };
+        vm.token_stream = Some(VecDeque::from([
+            make_tok(crate::lexer::Token::IntLit(1)),
+            make_tok(crate::lexer::Token::Comma),
+            make_tok(crate::lexer::Token::IntLit(20)),
+        ]));
+        bif_prim(&mut vm).unwrap();
+        // Condition expression for literal 1: [Xt(LIT), Int(1)] then [Xt(bif_rt), Int(0)].
+        let lit_cell = vm.dict_read(dp_before).unwrap();
+        let val_cell = vm.dict_read(dp_before + 1).unwrap();
+        let bif_cell = vm.dict_read(dp_before + 2).unwrap();
+        let target_cell = vm.dict_read(dp_before + 3).unwrap();
+        assert!(
+            matches!(lit_cell, Cell::Xt(_)),
+            "expected LIT Xt, got {:?}",
+            lit_cell
+        );
+        assert_eq!(val_cell, Cell::Int(1));
+        assert!(
+            matches!(bif_cell, Cell::Xt(_)),
+            "expected BIF Xt, got {:?}",
+            bif_cell
+        );
+        assert_eq!(
+            target_cell,
+            Cell::Int(0),
+            "expected forward-ref placeholder"
+        );
+        // patch_list should record label 20.
+        let state = vm.compile_state.as_ref().unwrap();
+        assert!(
+            state.patch_list.iter().any(|&(lbl, _)| lbl == 20),
+            "expected patch_list to contain label 20, got {:?}",
+            state.patch_list
+        );
+    }
+
+    // --- bit_prim normal case ---
+
+    #[test]
+    fn test_bit_prim_writes_dict() {
+        // BIT 1, 30 inside DEF should compile condition then emit [Xt(bit_rt), Int(0)].
+        use std::collections::VecDeque;
+        let mut vm = make_compiling_vm("BITWORD");
+        let dp_before = vm.dp;
+        let make_tok = |t| crate::lexer::SpannedToken {
+            token: t,
+            pos: crate::lexer::Position { line: 1, col: 1 },
+            source_offset: 0,
+            source_len: 1,
+        };
+        vm.token_stream = Some(VecDeque::from([
+            make_tok(crate::lexer::Token::IntLit(1)),
+            make_tok(crate::lexer::Token::Comma),
+            make_tok(crate::lexer::Token::IntLit(30)),
+        ]));
+        bit_prim(&mut vm).unwrap();
+        // [Xt(LIT), Int(1), Xt(bit_rt), Int(0)]
+        let lit_cell = vm.dict_read(dp_before).unwrap();
+        let val_cell = vm.dict_read(dp_before + 1).unwrap();
+        let bit_cell = vm.dict_read(dp_before + 2).unwrap();
+        let target_cell = vm.dict_read(dp_before + 3).unwrap();
+        assert!(
+            matches!(lit_cell, Cell::Xt(_)),
+            "expected LIT Xt, got {:?}",
+            lit_cell
+        );
+        assert_eq!(val_cell, Cell::Int(1));
+        assert!(
+            matches!(bit_cell, Cell::Xt(_)),
+            "expected BIT Xt, got {:?}",
+            bit_cell
+        );
+        assert_eq!(
+            target_cell,
+            Cell::Int(0),
+            "expected forward-ref placeholder"
+        );
+        let state = vm.compile_state.as_ref().unwrap();
+        assert!(
+            state.patch_list.iter().any(|&(lbl, _)| lbl == 30),
+            "expected patch_list to contain label 30, got {:?}",
+            state.patch_list
+        );
+    }
+
+    // --- return_prim normal case ---
+
+    #[test]
+    fn test_return_prim_void_writes_exit() {
+        // RETURN with no expression inside DEF should emit Xt(EXIT) to the dictionary.
+        use std::collections::VecDeque;
+        let mut vm = make_compiling_vm("RETWORD");
+        let dp_before = vm.dp;
+        // Empty token stream → void return.
+        vm.token_stream = Some(VecDeque::new());
+        return_prim(&mut vm).unwrap();
+        let cell = vm.dict_read(dp_before).unwrap();
+        assert!(
+            matches!(cell, Cell::Xt(_)),
+            "expected Xt(EXIT), got {:?}",
+            cell
+        );
+        // Verify it is the EXIT entry by checking kind.
+        if let Cell::Xt(xt) = cell {
+            assert!(
+                matches!(vm.headers[xt.index()].kind, crate::dict::EntryKind::Exit),
+                "expected Exit kind, got {:?}",
+                vm.headers[xt.index()].kind
+            );
+        }
+    }
+
+    #[test]
+    fn test_return_prim_with_expr_writes_return_val() {
+        // RETURN 42 inside DEF should:
+        //   1. compile the expression (emitting Xt(LIT), Cell::Int(42) to the dictionary),
+        //   2. emit Xt(RETURN_VAL) immediately after,
+        //   3. restore local_table in compile_state.
+        use std::collections::VecDeque;
+        let mut vm = make_compiling_vm("RETEXPR");
+        let dp_before = vm.dp;
+
+        // Provide token stream with the integer literal 42.
+        vm.token_stream = Some(VecDeque::from([crate::lexer::SpannedToken {
+            token: crate::lexer::Token::IntLit(42),
+            pos: crate::lexer::Position { line: 1, col: 1 },
+            source_offset: 0,
+            source_len: 2,
+        }]));
+        return_prim(&mut vm).unwrap();
+
+        // ExprCompiler emits Xt(LIT) then the value for integer literals.
+        // Dictionary layout: [Xt(LIT), Int(42), Xt(RETURN_VAL)]
+        let cell0 = vm.dict_read(dp_before).unwrap();
+        assert!(
+            matches!(cell0, Cell::Xt(_)),
+            "expected Xt(LIT) at dp+0, got {:?}",
+            cell0
+        );
+
+        let cell1 = vm.dict_read(dp_before + 1).unwrap();
+        assert_eq!(
+            cell1,
+            Cell::Int(42),
+            "expected Int(42) at dp+1, got {:?}",
+            cell1
+        );
+
+        let cell2 = vm.dict_read(dp_before + 2).unwrap();
+        assert!(
+            matches!(cell2, Cell::Xt(_)),
+            "expected Xt(RETURN_VAL) at dp+2, got {:?}",
+            cell2
+        );
+        if let Cell::Xt(xt) = cell2 {
+            assert!(
+                matches!(
+                    vm.headers[xt.index()].kind,
+                    crate::dict::EntryKind::ReturnVal
+                ),
+                "expected ReturnVal kind, got {:?}",
+                vm.headers[xt.index()].kind
+            );
+        }
+
+        // local_table must have been restored in compile_state.
+        assert!(
+            vm.compile_state.is_some(),
+            "compile_state should still be set after return_prim"
+        );
     }
 }
