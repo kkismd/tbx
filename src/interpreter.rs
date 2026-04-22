@@ -197,7 +197,7 @@ impl Interpreter {
 
         // IMMEDIATE word dispatch: execute immediately regardless of compile/interpret mode.
         // If the looked-up word has FLAG_IMMEDIATE set, feed the remaining tokens into
-        // vm.token_stream and call the primitive directly (not via vm.run()).
+        // vm.token_stream and execute it directly.
         if let Some(xt) = self.vm.lookup(&stmt_name) {
             let flags = self.vm.headers[xt.index()].flags;
             if flags & crate::dict::FLAG_IMMEDIATE != 0 {
@@ -205,17 +205,13 @@ impl Interpreter {
                     InterpreterError::new(stmt_pos_line, stmt_pos_col, source_line, e)
                 };
 
-                // Get the primitive function pointer before any other borrows.
-                let prim_fn = match self.vm.headers[xt.index()].kind.clone() {
-                    crate::dict::EntryKind::Primitive(f) => f,
-                    _ => {
-                        // TODO(#245): user-defined IMMEDIATE words are not yet supported.
-                        // Currently only EntryKind::Primitive can be flagged as IMMEDIATE.
-                        return Err(make_err(TbxError::InvalidExpression {
-                            reason: "IMMEDIATE word must be a primitive",
-                        }));
-                    }
-                };
+                // Clone the kind to determine how to dispatch without holding a borrow on self.vm.
+                let kind = self.vm.headers[xt.index()].kind.clone();
+                // Capture arity and local_count to guard against words that require a call frame.
+                // vm.run() does not set up bp or local variable slots; words with formal
+                // parameters or VAR locals would access the wrong stack positions.
+                let arity = self.vm.headers[xt.index()].arity;
+                let local_count = self.vm.headers[xt.index()].local_count;
 
                 // Feed remaining tokens into vm.token_stream.
                 let remaining: VecDeque<SpannedToken> = tokens[idx..].iter().cloned().collect();
@@ -226,9 +222,28 @@ impl Interpreter {
                 let saved_return_stack_len = self.vm.return_stack.len();
                 let saved_bp = self.vm.bp;
 
-                // Call the primitive directly (not through vm.run() to avoid
-                // the temporary-buffer issues when the primitive writes to the dictionary).
-                let run_result = prim_fn(&mut self.vm);
+                let run_result = match kind {
+                    // Native primitive: call the function pointer directly (avoids
+                    // temporary-buffer issues when the primitive writes to the dictionary).
+                    crate::dict::EntryKind::Primitive(f) => f(&mut self.vm),
+                    // User-defined word: run via vm.run(), passing the body start address.
+                    // Guard: words with formal parameters (arity > 0) or VAR locals
+                    // (local_count > 0) require a CALL frame (bp/stack setup) that
+                    // vm.run() alone does not provide. Reject them here to prevent
+                    // silent stack corruption.
+                    crate::dict::EntryKind::Word(body_addr) => {
+                        if arity > 0 || local_count > 0 {
+                            Err(TbxError::InvalidExpression {
+                                reason: "IMMEDIATE user word with parameters or VAR locals cannot be called without a CALL frame",
+                            })
+                        } else {
+                            self.vm.run(body_addr)
+                        }
+                    }
+                    _ => Err(TbxError::InvalidExpression {
+                        reason: "IMMEDIATE word kind is not executable",
+                    }),
+                };
 
                 // Clear token stream.
                 self.vm.token_stream = None;
@@ -1335,5 +1350,162 @@ PUTSTR "\n"
         let mut interp = Interpreter::new();
         interp.exec_source(src).unwrap();
         assert_eq!(interp.take_output(), "2\n");
+    }
+
+    // --- user-defined IMMEDIATE word dispatch (issue #245) ---
+
+    #[test]
+    fn test_user_defined_immediate_word_executes_in_interpret_mode() {
+        // A user word flagged as IMMEDIATE should execute immediately in interpret mode.
+        let mut interp = Interpreter::new();
+        let src = "\
+DEF IWORD
+PUTDEC 99
+END
+IMMEDIATE IWORD
+IWORD";
+        interp.exec_source(src).unwrap();
+        let out = interp.take_output();
+        assert_eq!(out, "99", "expected '99' in output, got: {:?}", out);
+    }
+
+    #[test]
+    fn test_user_defined_immediate_word_executes_during_compile() {
+        // A user word flagged as IMMEDIATE should execute at compile time, not be compiled into
+        // the calling word's body.
+
+        let mut interp = Interpreter::new();
+
+        // Phase 1: define IWORD, mark it IMMEDIATE, then compile OUTER which references IWORD.
+        // Because IWORD is IMMEDIATE it should be executed immediately during compilation of OUTER
+        // and must NOT be stored into OUTER's body.
+        interp
+            .exec_source(
+                "\
+DEF IWORD
+PUTDEC 77
+END
+IMMEDIATE IWORD
+DEF OUTER
+IWORD
+END",
+            )
+            .unwrap();
+
+        // IWORD ran once at compile time, so output should be "77".
+        let compile_out = interp.take_output();
+        assert_eq!(
+            compile_out, "77",
+            "IWORD must execute during compilation of OUTER (got: {compile_out:?})"
+        );
+
+        // Phase 2: call OUTER at runtime. Since IWORD was not compiled into OUTER's body,
+        // executing OUTER should produce no output.
+        interp.exec_source("OUTER").unwrap();
+        let runtime_out = interp.take_output();
+        assert_eq!(
+            runtime_out, "",
+            "OUTER must not re-execute IWORD at runtime (got: {runtime_out:?})"
+        );
+    }
+
+    #[test]
+    fn test_user_defined_immediate_word_with_locals_returns_error() {
+        // A user word with VAR locals cannot be IMMEDIATE-dispatched directly
+        // because vm.run() does not set up the CALL frame (bp / local slots).
+        let mut interp = Interpreter::new();
+        let src = "\
+DEF ILOCAL
+VAR X
+PUTDEC 1
+END
+IMMEDIATE ILOCAL
+ILOCAL";
+        let result = interp.exec_source(src);
+        assert!(
+            result.is_err(),
+            "expected error when IMMEDIATE word has VAR locals"
+        );
+    }
+
+    #[test]
+    fn test_user_defined_immediate_word_with_arity_returns_error() {
+        // A user word with formal parameters (arity > 0) cannot be IMMEDIATE-dispatched
+        // directly because vm.run() does not set up the CALL frame.
+        let mut interp = Interpreter::new();
+        let src = "\
+DEF IPARAM(X)
+PUTDEC X
+END
+IMMEDIATE IPARAM
+IPARAM 42";
+        let result = interp.exec_source(src);
+        assert!(
+            result.is_err(),
+            "expected error when IMMEDIATE word has formal parameters"
+        );
+    }
+
+    #[test]
+    fn test_immediate_on_constant_returns_error_and_rolls_back() {
+        // Applying FLAG_IMMEDIATE to a Constant dictionary entry and invoking it should
+        // return an error (the `_ =>` branch) and roll back compile_state so
+        // that the interpreter can be reused normally.
+        let mut interp = Interpreter::new();
+
+        // Register a Constant entry with FLAG_IMMEDIATE directly via the VM,
+        // since TBX has no built-in CONSTANT keyword.
+        {
+            use crate::cell::Cell;
+            use crate::dict::{WordEntry, FLAG_IMMEDIATE};
+            let mut entry = WordEntry::new_constant("MAGIC", Cell::Int(42));
+            entry.flags |= FLAG_IMMEDIATE;
+            interp.vm.register(entry);
+        }
+
+        // Calling the IMMEDIATE-flagged constant inside a DEF should fail.
+        let bad = "DEF BAD\nMAGIC\nEND";
+        assert!(
+            interp.exec_source(bad).is_err(),
+            "expected error when an IMMEDIATE Constant is dispatched"
+        );
+
+        // After the error the interpreter must be fully recovered: define and
+        // call a valid word to confirm compile_state was properly rolled back.
+        interp
+            .exec_source("DEF OK\nPUTDEC 7\nEND\nOK")
+            .expect("interpreter should be reusable after IMMEDIATE-Constant error");
+        assert_eq!(
+            interp.take_output(),
+            "7",
+            "expected '7' from OK after rollback"
+        );
+    }
+
+    #[test]
+    fn test_immediate_on_variable_returns_error_and_rolls_back() {
+        // VAR X outside a DEF creates a global Variable entry. Marking it IMMEDIATE
+        // and invoking it inside a DEF should trigger the `_ =>` branch, return an
+        // error, and leave the interpreter in a clean state.
+        let mut interp = Interpreter::new();
+
+        // VAR outside DEF creates a global Variable; IMMEDIATE marks it FLAG_IMMEDIATE.
+        interp.exec_source("VAR V\nIMMEDIATE V").unwrap();
+
+        let bad = "DEF BAD\nV\nEND";
+        assert!(
+            interp.exec_source(bad).is_err(),
+            "expected error when an IMMEDIATE Variable is dispatched"
+        );
+
+        // The interpreter should be reusable after the rollback.
+        interp
+            .exec_source("DEF OK2\nPUTDEC 8\nEND\nOK2")
+            .expect("interpreter should be reusable after IMMEDIATE-Variable error");
+        assert_eq!(
+            interp.take_output(),
+            "8",
+            "expected '8' from OK2 after rollback"
+        );
     }
 }

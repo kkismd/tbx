@@ -83,6 +83,10 @@ pub struct WordEntry {
     pub flags: u8,
     /// How this entry is executed or accessed
     pub kind: EntryKind,
+    /// Number of formal parameters declared in `DEF WORD(A, B, ...)`.
+    /// Set to 0 at registration time and patched to the final count when END is compiled.
+    /// Used to detect unsupported IMMEDIATE dispatch of parameterised words.
+    pub arity: usize,
     /// Number of VAR-declared local variables in this word's body.
     /// Set to 0 at registration time and patched to the final count when END is compiled.
     /// Used by callers to emit the correct `local_count` operand in CALL instructions.
@@ -101,6 +105,7 @@ impl WordEntry {
             name: name.to_string(),
             flags: 0,
             kind: EntryKind::Primitive(f),
+            arity: 0,
             local_count: 0,
             prev: None,
         }
@@ -112,6 +117,7 @@ impl WordEntry {
             name: name.to_string(),
             flags: 0,
             kind: EntryKind::Word(offset),
+            arity: 0,
             local_count: 0,
             prev: None,
         }
@@ -123,6 +129,7 @@ impl WordEntry {
             name: name.to_string(),
             flags: 0,
             kind: EntryKind::Variable(idx),
+            arity: 0,
             local_count: 0,
             prev: None,
         }
@@ -134,6 +141,7 @@ impl WordEntry {
             name: name.to_string(),
             flags: 0,
             kind: EntryKind::Constant(value),
+            arity: 0,
             local_count: 0,
             prev: None,
         }
