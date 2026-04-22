@@ -240,12 +240,9 @@ impl Interpreter {
                             self.vm.run(body_addr)
                         }
                     }
-                    _ => {
-                        self.vm.token_stream = None;
-                        return Err(make_err(TbxError::InvalidExpression {
-                            reason: "IMMEDIATE word kind is not executable",
-                        }));
-                    }
+                    _ => Err(TbxError::InvalidExpression {
+                        reason: "IMMEDIATE word kind is not executable",
+                    }),
                 };
 
                 // Clear token stream.
@@ -1369,11 +1366,7 @@ IMMEDIATE IWORD
 IWORD";
         interp.exec_source(src).unwrap();
         let out = interp.take_output();
-        assert!(
-            out.contains("99"),
-            "expected '99' in output, got: {:?}",
-            out
-        );
+        assert_eq!(out, "99", "expected '99' in output, got: {:?}", out);
     }
 
     #[test]
@@ -1435,6 +1428,69 @@ IPARAM 42";
         assert!(
             result.is_err(),
             "expected error when IMMEDIATE word has formal parameters"
+        );
+    }
+
+    #[test]
+    fn test_immediate_on_constant_returns_error_and_rolls_back() {
+        // Applying FLAG_IMMEDIATE to a Constant dictionary entry and invoking it should
+        // return an error (the `_ =>` branch) and roll back compile_state so
+        // that the interpreter can be reused normally.
+        let mut interp = Interpreter::new();
+
+        // Register a Constant entry with FLAG_IMMEDIATE directly via the VM,
+        // since TBX has no built-in CONSTANT keyword.
+        {
+            use crate::cell::Cell;
+            use crate::dict::{WordEntry, FLAG_IMMEDIATE};
+            let mut entry = WordEntry::new_constant("MAGIC", Cell::Int(42));
+            entry.flags |= FLAG_IMMEDIATE;
+            interp.vm.register(entry);
+        }
+
+        // Calling the IMMEDIATE-flagged constant inside a DEF should fail.
+        let bad = "DEF BAD\nMAGIC\nEND";
+        assert!(
+            interp.exec_source(bad).is_err(),
+            "expected error when an IMMEDIATE Constant is dispatched"
+        );
+
+        // After the error the interpreter must be fully recovered: define and
+        // call a valid word to confirm compile_state was properly rolled back.
+        interp
+            .exec_source("DEF OK\nPUTDEC 7\nEND\nOK")
+            .expect("interpreter should be reusable after IMMEDIATE-Constant error");
+        assert_eq!(
+            interp.take_output(),
+            "7",
+            "expected '7' from OK after rollback"
+        );
+    }
+
+    #[test]
+    fn test_immediate_on_variable_returns_error_and_rolls_back() {
+        // VAR X outside a DEF creates a global Variable entry. Marking it IMMEDIATE
+        // and invoking it inside a DEF should trigger the `_ =>` branch, return an
+        // error, and leave the interpreter in a clean state.
+        let mut interp = Interpreter::new();
+
+        // VAR outside DEF creates a global Variable; IMMEDIATE marks it FLAG_IMMEDIATE.
+        interp.exec_source("VAR V\nIMMEDIATE V").unwrap();
+
+        let bad = "DEF BAD\nV\nEND";
+        assert!(
+            interp.exec_source(bad).is_err(),
+            "expected error when an IMMEDIATE Variable is dispatched"
+        );
+
+        // The interpreter should be reusable after the rollback.
+        interp
+            .exec_source("DEF OK2\nPUTDEC 8\nEND\nOK2")
+            .expect("interpreter should be reusable after IMMEDIATE-Variable error");
+        assert_eq!(
+            interp.take_output(),
+            "8",
+            "expected '8' from OK2 after rollback"
         );
     }
 }
