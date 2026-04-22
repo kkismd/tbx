@@ -710,27 +710,7 @@ fn compile_branch_prim(vm: &mut VM, is_truthy: bool) -> Result<(), TbxError> {
         })?;
 
     // Compile condition expression.
-    // Temporarily take local_table out of compile_state so we can pass a reference
-    // to ExprCompiler while also holding &mut VM.  Always restore it afterward.
-    let self_word = vm.compile_state.as_ref().map(|s| s.word_name.clone());
-    let self_hdr_idx = vm.compile_state.as_ref().map(|s| s.word_hdr_idx());
-    let local_table = vm
-        .compile_state
-        .as_mut()
-        .map(|s| std::mem::take(&mut s.local_table));
-    let compile_result: Result<(Vec<Cell>, Vec<usize>), TbxError> = {
-        let local_table_ref = local_table.as_ref();
-        let mut compiler = ExprCompiler::with_context(vm, local_table_ref, self_word, self_hdr_idx);
-        compiler.compile_expr(cond_tokens).map(|cells| {
-            let offsets = std::mem::take(&mut compiler.patch_offsets);
-            (cells, offsets)
-        })
-    };
-    // Restore local_table regardless of success or failure.
-    if let (Some(state), Some(lt)) = (vm.compile_state.as_mut(), local_table) {
-        state.local_table = lt;
-    }
-    let (cond_cells, patch_offsets) = compile_result?;
+    let (cond_cells, patch_offsets) = compile_expr_taking_local_table(vm, cond_tokens)?;
 
     let base_dp = vm.dp;
     for cell in cond_cells {
@@ -784,28 +764,7 @@ pub fn return_prim(vm: &mut VM) -> Result<(), TbxError> {
         vm.dict_write(Cell::Xt(exit_xt))?;
     } else {
         // Compile return expression.
-        // Temporarily take local_table out of compile_state so we can pass a reference
-        // to ExprCompiler while also holding &mut VM.  Always restore it afterward.
-        let self_word = vm.compile_state.as_ref().map(|s| s.word_name.clone());
-        let self_hdr_idx = vm.compile_state.as_ref().map(|s| s.word_hdr_idx());
-        let local_table = vm
-            .compile_state
-            .as_mut()
-            .map(|s| std::mem::take(&mut s.local_table));
-        let compile_result: Result<(Vec<Cell>, Vec<usize>), TbxError> = {
-            let local_table_ref = local_table.as_ref();
-            let mut compiler =
-                ExprCompiler::with_context(vm, local_table_ref, self_word, self_hdr_idx);
-            compiler.compile_expr(&expr_tokens).map(|cells| {
-                let offsets = std::mem::take(&mut compiler.patch_offsets);
-                (cells, offsets)
-            })
-        };
-        // Restore local_table regardless of success or failure.
-        if let (Some(state), Some(lt)) = (vm.compile_state.as_mut(), local_table) {
-            state.local_table = lt;
-        }
-        let (expr_cells, patch_offsets) = compile_result?;
+        let (expr_cells, patch_offsets) = compile_expr_taking_local_table(vm, &expr_tokens)?;
 
         let base_dp = vm.dp;
         for cell in expr_cells {
@@ -831,6 +790,37 @@ pub fn return_prim(vm: &mut VM) -> Result<(), TbxError> {
 // ---------------------------------------------------------------------------
 // Helper functions for IMMEDIATE primitives
 // ---------------------------------------------------------------------------
+
+/// Compile an expression while temporarily taking `local_table` out of `compile_state`.
+///
+/// `ExprCompiler::with_context` requires `&mut VM`, but `local_table` lives inside
+/// `vm.compile_state`.  By taking it out first we can pass `&mut vm` to `ExprCompiler`
+/// and reference `local_table` separately without violating the borrow checker.
+/// The table is always restored to `compile_state` after compilation, even on error.
+fn compile_expr_taking_local_table(
+    vm: &mut VM,
+    tokens: &[crate::lexer::SpannedToken],
+) -> Result<(Vec<Cell>, Vec<usize>), TbxError> {
+    let self_word = vm.compile_state.as_ref().map(|s| s.word_name.clone());
+    let self_hdr_idx = vm.compile_state.as_ref().map(|s| s.word_hdr_idx());
+    let local_table = vm
+        .compile_state
+        .as_mut()
+        .map(|s| std::mem::take(&mut s.local_table));
+    let result: Result<(Vec<Cell>, Vec<usize>), TbxError> = {
+        let local_table_ref = local_table.as_ref();
+        let mut compiler = ExprCompiler::with_context(vm, local_table_ref, self_word, self_hdr_idx);
+        compiler.compile_expr(tokens).map(|cells| {
+            let offsets = std::mem::take(&mut compiler.patch_offsets);
+            (cells, offsets)
+        })
+    };
+    // Restore local_table regardless of success or failure.
+    if let (Some(state), Some(lt)) = (vm.compile_state.as_mut(), local_table) {
+        state.local_table = lt;
+    }
+    result
+}
 
 /// Emit a jump target into the dictionary, with forward-reference back-patch support.
 fn emit_jump_target_to_dict(vm: &mut VM, label_n: i64) -> Result<(), TbxError> {

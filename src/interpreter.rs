@@ -360,8 +360,10 @@ impl Interpreter {
 
         // Compile the argument expression to a cell sequence.
         // Local variables in the current compile scope shadow globals (local_table checked first).
-        // Temporarily take local_table out of compile_state so we can pass a reference to
-        // ExprCompiler while also holding &mut VM.  Always restore it afterward.
+        // Uses the same take-compile-restore pattern as `compile_expr_taking_local_table` in
+        // primitives.rs: take local_table out first so we can pass `&mut VM` to ExprCompiler,
+        // then restore it unconditionally.  The error type here is InterpreterError (not TbxError)
+        // due to the `make_err` wrapper, so the helper cannot be shared directly.
         let self_word = self.vm.compile_state.as_ref().map(|s| s.word_name.clone());
         let self_hdr_idx = self.vm.compile_state.as_ref().map(|s| s.word_hdr_idx());
         let local_table = self
@@ -675,11 +677,10 @@ GREET";
 
     #[test]
     fn test_end_outside_def_is_not_intercepted() {
-        // END outside DEF should fall through to normal execution (likely error or no-op).
+        // END outside DEF is handled by end_prim (FLAG_IMMEDIATE), which checks
+        // is_compiling and returns InvalidExpression when called in interpret mode.
         let mut interp = Interpreter::new();
-        // END is not in compile mode so it goes to the normal lookup path.
-        // It may be undefined — just check it doesn't panic.
-        let _ = interp.exec_line("END");
+        assert!(interp.exec_line("END").is_err());
     }
 
     #[test]
