@@ -1145,7 +1145,11 @@ mod tests {
         let result = vm.run(start);
         assert!(matches!(
             result,
-            Err(crate::error::TbxError::InvalidOperand { value: -1, .. })
+            Err(crate::error::TbxError::InvalidOperand {
+                name: "arity",
+                value: -1,
+                ..
+            })
         ));
     }
 
@@ -1173,7 +1177,11 @@ mod tests {
         let result = vm.run(start);
         assert!(matches!(
             result,
-            Err(crate::error::TbxError::InvalidOperand { value: -1, .. })
+            Err(crate::error::TbxError::InvalidOperand {
+                name: "local_count",
+                value: -1,
+                ..
+            })
         ));
     }
 
