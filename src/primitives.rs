@@ -535,6 +535,11 @@ pub fn def_prim(vm: &mut VM) -> Result<(), TbxError> {
                     break; // Empty parameter list: DEF WORD().
                 }
                 (DefParseState::FirstParamOrEnd, crate::lexer::Token::Ident(param)) => {
+                    if local_table.contains_key(&param) {
+                        return Err(TbxError::InvalidExpression {
+                            reason: "duplicate parameter name in parameter list",
+                        });
+                    }
                     local_table.insert(param, arity);
                     arity += 1;
                     state = DefParseState::CommaOrRParen;
@@ -560,6 +565,11 @@ pub fn def_prim(vm: &mut VM) -> Result<(), TbxError> {
 
                 // --- NextParam: after ',' ---
                 (DefParseState::NextParam, crate::lexer::Token::Ident(param)) => {
+                    if local_table.contains_key(&param) {
+                        return Err(TbxError::InvalidExpression {
+                            reason: "duplicate parameter name in parameter list",
+                        });
+                    }
                     local_table.insert(param, arity);
                     arity += 1;
                     state = DefParseState::CommaOrRParen;
@@ -2693,6 +2703,52 @@ mod tests {
         assert!(
             matches!(err, TbxError::InvalidExpression { .. }),
             "expected InvalidExpression for leading comma, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn test_def_duplicate_param_name() {
+        // DEF WORD(X, X) — duplicate parameter name must return InvalidExpression.
+        use std::collections::VecDeque;
+        let mut vm = VM::new();
+        register_all(&mut vm);
+        vm.token_stream = Some(VecDeque::from([
+            make_ident_token("WORD"),
+            make_lparen_token(),
+            make_ident_token("X"),
+            make_comma_token(),
+            make_ident_token("X"),
+            make_rparen_token(),
+        ]));
+        let err = def_prim(&mut vm).unwrap_err();
+        assert!(
+            matches!(err, TbxError::InvalidExpression { .. }),
+            "expected InvalidExpression for duplicate param name, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn test_def_invalid_token_after_comma() {
+        // DEF WORD(X, 42) — non-ident token after comma must return InvalidExpression.
+        use std::collections::VecDeque;
+        let mut vm = VM::new();
+        register_all(&mut vm);
+        vm.token_stream = Some(VecDeque::from([
+            make_ident_token("WORD"),
+            make_lparen_token(),
+            make_ident_token("X"),
+            make_comma_token(),
+            crate::lexer::SpannedToken {
+                token: crate::lexer::Token::IntLit(42),
+                pos: crate::lexer::Position { line: 1, col: 9 },
+                source_offset: 8,
+                source_len: 2,
+            },
+        ]));
+        let err = def_prim(&mut vm).unwrap_err();
+        assert!(
+            matches!(err, TbxError::InvalidExpression { .. }),
+            "expected InvalidExpression for non-ident after comma, got {err:?}"
         );
     }
 
