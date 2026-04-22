@@ -542,7 +542,9 @@ pub fn register_all(vm: &mut VM) {
     let mut literal_entry = WordEntry::new_primitive("LITERAL", literal_prim);
     literal_entry.flags |= crate::dict::FLAG_IMMEDIATE;
     vm.register(literal_entry);
-    vm.register(WordEntry::new_primitive("HEADER", header_prim));
+    let mut header_entry = WordEntry::new_primitive("HEADER", header_prim);
+    header_entry.flags |= crate::dict::FLAG_IMMEDIATE;
+    vm.register(header_entry);
 }
 
 #[cfg(test)]
@@ -1830,6 +1832,8 @@ mod tests {
         assert_eq!(entry.name, "MYWORD");
         assert!(matches!(entry.kind, crate::dict::EntryKind::Word(d) if d == dp_before));
         assert!(!entry.is_immediate());
+        // Must be visible via normal lookup (not smudged).
+        assert!(vm.lookup("MYWORD").is_some());
     }
 
     #[test]
@@ -1877,9 +1881,10 @@ mod tests {
 
     #[test]
     fn test_header_prim_registered_in_register_all() {
-        // register_all() must include HEADER in the dictionary.
+        // register_all() must include HEADER in the dictionary with FLAG_IMMEDIATE.
         let mut vm = VM::new();
         crate::primitives::register_all(&mut vm);
-        assert!(vm.lookup("HEADER").is_some());
+        let xt = vm.lookup("HEADER").unwrap();
+        assert!(vm.headers[xt.index()].is_immediate());
     }
 }
