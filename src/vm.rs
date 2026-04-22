@@ -455,9 +455,10 @@ impl VM {
                         got: arity_cell.type_name(),
                     })?;
                     if arity_raw < 0 {
-                        return Err(TbxError::TypeError {
-                            expected: "non-negative Int (arity)",
-                            got: "negative value",
+                        return Err(TbxError::InvalidOperand {
+                            name: "arity",
+                            value: arity_raw,
+                            reason: "must be non-negative",
                         });
                     }
                     let arity = arity_raw as usize;
@@ -470,9 +471,10 @@ impl VM {
                                 got: local_count_cell.type_name(),
                             })?;
                     if local_count_raw < 0 {
-                        return Err(TbxError::TypeError {
-                            expected: "non-negative Int (local count)",
-                            got: "negative value",
+                        return Err(TbxError::InvalidOperand {
+                            name: "local_count",
+                            value: local_count_raw,
+                            reason: "must be non-negative",
                         });
                     }
                     let local_count = local_count_raw as usize;
@@ -1121,7 +1123,7 @@ mod tests {
 
     #[test]
     fn test_call_negative_arity_returns_error() {
-        // Verify that a negative arity operand in CALL returns a TypeError.
+        // Verify that a negative arity operand in CALL returns an InvalidOperand error.
         let mut vm = VM::new();
         crate::primitives::register_all(&mut vm);
 
@@ -1143,7 +1145,43 @@ mod tests {
         let result = vm.run(start);
         assert!(matches!(
             result,
-            Err(crate::error::TbxError::TypeError { .. })
+            Err(crate::error::TbxError::InvalidOperand {
+                name: "arity",
+                value: -1,
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn test_call_negative_local_count_returns_error() {
+        // Verify that a negative local_count operand in CALL returns an InvalidOperand error.
+        let mut vm = VM::new();
+        crate::primitives::register_all(&mut vm);
+
+        let call_xt = vm.lookup("CALL").unwrap();
+        let exit_xt = vm.lookup("EXIT").unwrap();
+
+        // Dummy word body: just EXIT
+        let word_offset = vm.dp;
+        vm.dict_write(Cell::Xt(exit_xt)).unwrap();
+        let dummy_xt = vm.register(crate::dict::WordEntry::new_word("DUMMY_LC", word_offset));
+
+        // Top-level: CALL DUMMY_LC arity=0 local_count=-1
+        let start = vm.dp;
+        vm.dict_write(Cell::Xt(call_xt)).unwrap();
+        vm.dict_write(Cell::Xt(dummy_xt)).unwrap();
+        vm.dict_write(Cell::Int(0)).unwrap(); // arity=0
+        vm.dict_write(Cell::Int(-1)).unwrap(); // negative local_count
+
+        let result = vm.run(start);
+        assert!(matches!(
+            result,
+            Err(crate::error::TbxError::InvalidOperand {
+                name: "local_count",
+                value: -1,
+                ..
+            })
         ));
     }
 
