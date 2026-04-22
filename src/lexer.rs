@@ -628,6 +628,51 @@ impl<'a> Lexer<'a> {
 }
 
 // ---------------------------------------------------------------------------
+// Token-slice helpers shared across the crate
+// ---------------------------------------------------------------------------
+
+/// Find the last top-level comma in a token slice.
+///
+/// "Top-level" means not nested inside parentheses.
+/// Returns `None` if no top-level comma is found.
+pub(crate) fn last_top_level_comma(
+    tokens: &[SpannedToken],
+) -> Result<Option<usize>, crate::error::TbxError> {
+    let mut depth: usize = 0;
+    let mut last_comma = None;
+    for (i, st) in tokens.iter().enumerate() {
+        match &st.token {
+            Token::LParen => depth += 1,
+            Token::RParen => {
+                depth = depth
+                    .checked_sub(1)
+                    .ok_or(crate::error::TbxError::InvalidExpression {
+                        reason: "unmatched ')' in argument list",
+                    })?;
+            }
+            Token::Comma if depth == 0 => last_comma = Some(i),
+            _ => {}
+        }
+    }
+    Ok(last_comma)
+}
+
+/// Parse a label number from a token slice.
+///
+/// Skips leading `Newline`/`Eof` tokens and returns the integer value of the
+/// first meaningful token if it is an `IntLit` or `LineNum`.
+pub(crate) fn parse_label_number(tokens: &[SpannedToken]) -> Option<i64> {
+    let tok = tokens
+        .iter()
+        .find(|st| !matches!(st.token, Token::Newline | Token::Eof))?;
+    match &tok.token {
+        Token::IntLit(n) => Some(*n),
+        Token::LineNum(n) => Some(*n),
+        _ => None,
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 

@@ -554,45 +554,6 @@ fn count_top_level_arity(tokens: &[SpannedToken]) -> Result<usize, TbxError> {
     Ok(commas + 1)
 }
 
-/// Find the position of the last top-level comma in a token slice.
-///
-/// "Top-level" means not nested inside parentheses.
-/// Returns `None` if no top-level comma is found.
-#[cfg(test)]
-fn last_top_level_comma(tokens: &[SpannedToken]) -> Result<Option<usize>, TbxError> {
-    let mut depth: usize = 0;
-    let mut last_comma = None;
-    for (i, st) in tokens.iter().enumerate() {
-        match &st.token {
-            Token::LParen => depth += 1,
-            Token::RParen => {
-                depth = depth.checked_sub(1).ok_or(TbxError::InvalidExpression {
-                    reason: "unmatched ')' in argument list",
-                })?;
-            }
-            Token::Comma if depth == 0 => last_comma = Some(i),
-            _ => {}
-        }
-    }
-    Ok(last_comma)
-}
-
-/// Parse a label number from a token slice.
-///
-/// Skips leading `Newline`/`Eof` tokens and returns the integer value of the
-/// first meaningful token if it is an `IntLit` or `LineNum`.
-#[cfg(test)]
-fn parse_label_number(tokens: &[SpannedToken]) -> Option<i64> {
-    let tok = tokens
-        .iter()
-        .find(|st| !matches!(st.token, Token::Newline | Token::Eof))?;
-    match &tok.token {
-        Token::IntLit(n) => Some(*n),
-        Token::LineNum(n) => Some(*n),
-        _ => None,
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1025,19 +986,22 @@ FWDTEST
 
     #[test]
     fn test_label_table_and_patch_list_helpers() {
-        // Unit tests for the module-level helper functions.
+        // Unit tests for the shared lexer helper functions.
         let toks = tokenize_args("42");
-        assert_eq!(parse_label_number(&toks), Some(42));
+        assert_eq!(crate::lexer::parse_label_number(&toks), Some(42));
 
         let toks = tokenize_args("I > 10, 99");
-        let comma_pos = last_top_level_comma(&toks);
+        let comma_pos = crate::lexer::last_top_level_comma(&toks);
         assert!(
             comma_pos.unwrap().is_some(),
             "should find a top-level comma"
         );
 
         let toks_no_comma = tokenize_args("42");
-        assert_eq!(last_top_level_comma(&toks_no_comma).unwrap(), None);
+        assert_eq!(
+            crate::lexer::last_top_level_comma(&toks_no_comma).unwrap(),
+            None
+        );
     }
 
     #[test]
@@ -1068,7 +1032,7 @@ FWDTEST
     fn test_last_top_level_comma_unmatched_paren_errors() {
         // An unmatched ')' must produce an InvalidExpression error.
         let toks = tokenize_args("42 ), 99");
-        let result = last_top_level_comma(&toks);
+        let result = crate::lexer::last_top_level_comma(&toks);
         assert!(
             matches!(result, Err(TbxError::InvalidExpression { .. })),
             "expected InvalidExpression for unmatched ')', got: {:?}",

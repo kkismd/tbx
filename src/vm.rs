@@ -20,19 +20,19 @@ pub struct CompileState {
     saved_latest: Option<crate::cell::Xt>,
     /// Local variable table: maps variable name to StackAddr index.
     /// Parameters are assigned indices 0..arity, VAR locals start at arity.
-    pub local_table: HashMap<String, usize>,
+    pub(crate) local_table: HashMap<String, usize>,
     /// Number of formal parameters parsed from DEF WORD(X, Y, ...).
-    pub arity: usize,
+    pub(crate) arity: usize,
     /// Number of VAR-declared local variables encountered so far.
-    pub local_count: usize,
+    pub(crate) local_count: usize,
     /// Dictionary offsets of the `local_count` placeholder (Int(0)) in CALL instructions
     /// that refer to the currently-compiled word (self-recursive calls).
     /// Patched to the final `local_count` when END is compiled.
-    pub call_patch_list: Vec<usize>,
+    pub(crate) call_patch_list: Vec<usize>,
     /// Maps line-number label to dictionary offset recorded when the label was seen.
-    pub label_table: HashMap<i64, usize>,
+    pub(crate) label_table: HashMap<i64, usize>,
     /// (label_number, dict_offset_of_placeholder) waiting to be back-patched.
-    pub patch_list: Vec<(i64, usize)>,
+    pub(crate) patch_list: Vec<(i64, usize)>,
 }
 
 impl CompileState {
