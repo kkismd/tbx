@@ -90,6 +90,12 @@ impl VM {
     /// Consume the next token from the token stream.
     ///
     /// Returns `TbxError::TokenStreamEmpty` if `token_stream` is `None` or empty.
+    ///
+    /// Note: when the stream is exhausted, `token_stream` remains `Some([])` rather
+    /// than being reset to `None`. The caller (outer interpreter) is responsible for
+    /// setting `token_stream` back to `None` after the immediate-word execution
+    /// completes, so that `is_some()` reliably indicates "currently in an
+    /// immediate-word execution context".
     pub fn next_token(&mut self) -> Result<SpannedToken, TbxError> {
         match &mut self.token_stream {
             Some(stream) => stream.pop_front().ok_or(TbxError::TokenStreamEmpty),
@@ -2222,7 +2228,7 @@ mod tests {
 
     #[test]
     fn test_next_token_fifo_order() {
-        // Two tokens are returned in FIFO (push-front / pop-front) order
+        // Two tokens are returned in FIFO (push-back / pop-front) order
         let mut vm = VM::new();
         let tok1 = make_spanned(crate::lexer::Token::IntLit(1));
         let tok2 = make_spanned(crate::lexer::Token::IntLit(2));
