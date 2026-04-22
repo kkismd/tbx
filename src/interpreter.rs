@@ -185,8 +185,13 @@ impl Interpreter {
         let stmt_pos_col = stmt_tok.pos.col;
         idx += 1;
 
+        // Normalize the statement name to uppercase for case-insensitive keyword matching.
+        // This preserves backward compatibility with lowercase variants of built-in words
+        // (e.g. `def`, `end`, `rem`) while keeping user-defined word lookups consistent.
+        let stmt_name = stmt_name.to_ascii_uppercase();
+
         // Handle REM: skip the rest of the segment (lexer already consumed trailing input).
-        if stmt_name.eq_ignore_ascii_case("REM") {
+        if stmt_name == "REM" {
             return Ok(());
         }
 

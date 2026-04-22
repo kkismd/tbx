@@ -512,7 +512,11 @@ pub fn def_prim(vm: &mut VM) -> Result<(), TbxError> {
                 }
             }
         }
-        Ok(_) => {} // Not LParen — no parameters; discard the token
+        Ok(_) => {
+            return Err(TbxError::InvalidExpression {
+                reason: "expected '(' or end of line after word name in DEF",
+            })
+        }
         Err(TbxError::TokenStreamEmpty) => {} // End of stream — no parameters
         Err(e) => return Err(e),
     }
@@ -2358,7 +2362,93 @@ mod tests {
         );
     }
 
-    // --- end_prim error paths ---
+    #[test]
+    fn test_def_unexpected_token_after_name_error() {
+        // A token other than '(' or end-of-stream after the word name must return InvalidExpression.
+        use std::collections::VecDeque;
+        let mut vm = VM::new();
+        register_all(&mut vm);
+        // Supply: WORD <IntLit>  — IntLit is not LParen.
+        vm.token_stream = Some(VecDeque::from([
+            make_ident_token("WORD"),
+            crate::lexer::SpannedToken {
+                token: crate::lexer::Token::IntLit(42),
+                pos: crate::lexer::Position { line: 1, col: 6 },
+                source_offset: 5,
+                source_len: 2,
+            },
+        ]));
+        let err = def_prim(&mut vm).unwrap_err();
+        assert!(
+            matches!(err, TbxError::InvalidExpression { .. }),
+            "expected InvalidExpression for unexpected token after word name, got {err:?}"
+        );
+    }
+
+    // --- def_prim normal cases ---
+
+    #[test]
+    fn test_def_prim_no_params_enters_compile_mode() {
+        // DEF WORD (no parameter list) must set is_compiling to true with no locals.
+        use std::collections::VecDeque;
+        let mut vm = VM::new();
+        register_all(&mut vm);
+        // Provide only the word name token; token stream ends after that.
+        vm.token_stream = Some(VecDeque::from([make_ident_token("MYWORD")]));
+        def_prim(&mut vm).unwrap();
+        assert!(vm.is_compiling, "is_compiling must be true after DEF");
+        let state = vm
+            .compile_state
+            .as_ref()
+            .expect("compile_state must be set");
+        assert_eq!(state.word_name, "MYWORD");
+        assert_eq!(state.arity, 0);
+        assert!(state.local_table.is_empty());
+    }
+
+    #[test]
+    fn test_def_prim_with_params_sets_local_table_and_arity() {
+        // DEF WORD(X, Y) must enter compile mode with arity=2 and local_table {X:0, Y:1}.
+        use std::collections::VecDeque;
+        let mut vm = VM::new();
+        register_all(&mut vm);
+        // Tokens: WORD ( X , Y )
+        let lparen = crate::lexer::SpannedToken {
+            token: crate::lexer::Token::LParen,
+            pos: crate::lexer::Position { line: 1, col: 5 },
+            source_offset: 4,
+            source_len: 1,
+        };
+        let comma = crate::lexer::SpannedToken {
+            token: crate::lexer::Token::Comma,
+            pos: crate::lexer::Position { line: 1, col: 7 },
+            source_offset: 6,
+            source_len: 1,
+        };
+        let rparen = crate::lexer::SpannedToken {
+            token: crate::lexer::Token::RParen,
+            pos: crate::lexer::Position { line: 1, col: 9 },
+            source_offset: 8,
+            source_len: 1,
+        };
+        vm.token_stream = Some(VecDeque::from([
+            make_ident_token("WORD"),
+            lparen,
+            make_ident_token("X"),
+            comma,
+            make_ident_token("Y"),
+            rparen,
+        ]));
+        def_prim(&mut vm).unwrap();
+        assert!(vm.is_compiling, "is_compiling must be true after DEF");
+        let state = vm
+            .compile_state
+            .as_ref()
+            .expect("compile_state must be set");
+        assert_eq!(state.arity, 2);
+        assert_eq!(state.local_table.get("X").copied(), Some(0));
+        assert_eq!(state.local_table.get("Y").copied(), Some(1));
+    }
 
     #[test]
     fn test_end_outside_def_error() {
