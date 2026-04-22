@@ -457,6 +457,7 @@ impl VM {
                     if arity_raw < 0 {
                         return Err(TbxError::InvalidOperand {
                             name: "arity",
+                            value: arity_raw,
                             reason: "must be non-negative",
                         });
                     }
@@ -472,6 +473,7 @@ impl VM {
                     if local_count_raw < 0 {
                         return Err(TbxError::InvalidOperand {
                             name: "local_count",
+                            value: local_count_raw,
                             reason: "must be non-negative",
                         });
                     }

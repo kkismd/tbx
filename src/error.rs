@@ -78,6 +78,7 @@ pub enum TbxError {
     /// (e.g., a negative arity or local_count in a CALL instruction).
     InvalidOperand {
         name: &'static str,
+        value: i64,
         reason: &'static str,
     },
 }
@@ -137,8 +138,12 @@ impl std::fmt::Display for TbxError {
             }
             TbxError::UndefinedLabel { label } => write!(f, "undefined label: {label}"),
             TbxError::DuplicateLabel { label } => write!(f, "duplicate label: {label}"),
-            TbxError::InvalidOperand { name, reason } => {
-                write!(f, "invalid operand '{name}': {reason}")
+            TbxError::InvalidOperand {
+                name,
+                value,
+                reason,
+            } => {
+                write!(f, "invalid operand '{name}' (value: {value}): {reason}")
             }
         }
     }
@@ -210,10 +215,13 @@ mod tests {
     fn test_invalid_operand_display() {
         let e = TbxError::InvalidOperand {
             name: "arity",
+            value: -1,
             reason: "must be non-negative",
         };
         let msg = e.to_string();
+        assert!(msg.contains("invalid operand"));
         assert!(msg.contains("arity"));
+        assert!(msg.contains("-1"));
         assert!(msg.contains("must be non-negative"));
     }
 }
