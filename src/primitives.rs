@@ -952,11 +952,17 @@ pub fn register_all(vm: &mut VM) {
         local_count: 0,
         prev: None,
     });
+    // LITERAL: system-internal compile-time primitive.
+    // Not IMMEDIATE — it must not be caught by the interpreter's IMMEDIATE dispatch,
+    // because it reads its argument from the data stack (not from the token stream).
+    // FLAG_SYSTEM prevents it from being called as a user statement word.
     let mut literal_entry = WordEntry::new_primitive("LITERAL", literal_prim);
-    literal_entry.flags |= crate::dict::FLAG_IMMEDIATE;
+    literal_entry.flags = FLAG_SYSTEM;
     vm.register(literal_entry);
+    // HEADER: IMMEDIATE so the outer interpreter feeds the token stream before calling it.
+    // Also FLAG_SYSTEM to mark it as a system word consistent with other compile-time words.
     let mut header_entry = WordEntry::new_primitive("HEADER", header_prim);
-    header_entry.flags |= crate::dict::FLAG_IMMEDIATE;
+    header_entry.flags = FLAG_IMMEDIATE | FLAG_SYSTEM;
     vm.register(header_entry);
     // IMMEDIATE system words: DEF, END, VAR, GOTO, BIF, BIT, RETURN
     let mut def_entry = WordEntry::new_primitive("DEF", def_prim);

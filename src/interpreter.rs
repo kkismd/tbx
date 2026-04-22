@@ -209,7 +209,7 @@ impl Interpreter {
                 let prim_fn = match self.vm.headers[xt.index()].kind.clone() {
                     crate::dict::EntryKind::Primitive(f) => f,
                     _ => {
-                        // TODO: user-defined IMMEDIATE words are not yet supported.
+                        // TODO(#245): user-defined IMMEDIATE words are not yet supported.
                         // Currently only EntryKind::Primitive can be flagged as IMMEDIATE.
                         return Err(make_err(TbxError::InvalidExpression {
                             reason: "IMMEDIATE word must be a primitive",
