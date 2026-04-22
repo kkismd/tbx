@@ -81,16 +81,77 @@ cargo clippy --all-targets -- -D warnings
   Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>
   ```
 
-### ステップ6：レビューの自動起動
+### ステップ6：レビュー＆修正ループ
 
-PR作成が完了したら、ユーザーへの報告より先に `review-implementation` エージェントを起動してレビューを実施する。
-**ユーザーへの確認は不要**。PR番号を渡して即座に起動する。
+PR作成が完了したら、ユーザーへの報告より先に `review-implementation` エージェントを起動し、指摘がなくなるまで修正サイクルを繰り返す。
 
+**ループの上限は3回**とする（無限ループ防止）。状態はすべて `sql` ツールで永続化する。まずループ開始前に以下を実行してテーブルと初期値を準備する：
+
+```sql
+-- session_state テーブルを作成（なければ）
+CREATE TABLE IF NOT EXISTS session_state (key TEXT PRIMARY KEY, value TEXT);
+
+-- ループカウンターと初回のコメント/レビュー件数を初期化
+INSERT OR REPLACE INTO session_state (key, value) VALUES ('review_loop_count', '0');
+INSERT OR REPLACE INTO session_state (key, value) VALUES ('review_before_comment_count', '0');
+INSERT OR REPLACE INTO session_state (key, value) VALUES ('review_before_review_count', '0');
 ```
-review-implementation エージェントを起動: PR #<作成したPR番号> をレビューしてください
-```
 
-レビューが完了したら、実装とレビュー両方の結果をまとめてユーザーに報告する。
+#### 各ループ内の手順
+
+1. `review-implementation` エージェントを起動する前に、現在の件数を SQL に保存する：
+   ```sql
+   -- <N_comments> と <N_reviews> は get_comments / get_reviews で取得した件数に置き換える
+   INSERT OR REPLACE INTO session_state (key, value) VALUES ('review_before_comment_count', '<N_comments>');
+   INSERT OR REPLACE INTO session_state (key, value) VALUES ('review_before_review_count', '<N_reviews>');
+   ```
+
+2. `review-implementation` エージェントを起動する（**ユーザーへの確認は不要**）：
+   ```
+   review-implementation エージェントを起動: PR #<PR番号> をレビューしてください
+   ```
+
+3. レビュー完了後、`get_comments` と `get_reviews` の両方を再取得し、SQL に保存した件数と比較する。
+
+4. **新しいコメントもレビューも追加されていない**（どちらの件数も変化なし）→ 指摘なし。ループを終了してステップ7へ進む。
+
+5. **新しいコメントまたはレビューが追加された場合**、追加された内容に **🔴** または **🟡** が含まれるか確認する：
+   - **含まれない**（🟢 Info のみ、またはApproveレビュー）→ ループを終了してステップ7へ進む。
+   - **含まれる** かつ `loop_count < 3` の場合：
+     - `loop_count` をインクリメントする：
+       ```sql
+       UPDATE session_state SET value = CAST(CAST(value AS INTEGER) + 1 AS TEXT) WHERE key = 'review_loop_count';
+       SELECT CAST(value AS INTEGER) AS loop_count FROM session_state WHERE key = 'review_loop_count';
+       ```
+     - 新しいコメント・レビューの指摘内容をすべて読み、修正を行う
+     - 修正後に必ず以下を実行し、エラー・警告がないことを確認する：
+       ```bash
+       cargo build
+       cargo test
+       cargo clippy --all-targets -- -D warnings
+       ```
+     - 以下の形式でコミットしてpushする（事前に SQL で `loop_count` の値を取得しておくこと）：
+       ```bash
+       git add -A
+       # LOOP_COUNT には SQL の SELECT 結果（整数）を代入する
+       # 例: loop_count が 1 の場合 → LOOP_COUNT=1
+       LOOP_COUNT=<SQLで取得した数値>
+       printf 'レビュー指摘の修正 (%d回目)\n\nCo-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>\n' "$LOOP_COUNT" \
+         > "$(git rev-parse --git-dir)/COMMIT_MSG"
+       git commit -F "$(git rev-parse --git-dir)/COMMIT_MSG"
+       git push
+       ```
+     - ループの先頭（手順1）へ戻る
+   - **含まれる** かつ `loop_count >= 3` の場合：
+     - ループを終了し、未解消の指摘が残っている旨をステップ7で報告する。
+
+### ステップ7：ユーザーへの最終報告
+
+実装・PR作成・レビューループの結果をまとめてユーザーに報告する。報告内容に含めるもの：
+
+- 作成したPRのURL
+- 実行したループ回数（例：「レビュー指摘を2回修正しました」）
+- 最終レビューの結果（指摘なし / 未解消の指摘が残っている場合はその内容）
 
 ## 動作確認・デバッグの方針
 
