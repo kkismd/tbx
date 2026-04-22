@@ -2724,31 +2724,13 @@ mod tests {
         let mut vm = VM::new();
         register_all(&mut vm);
         // Tokens: WORD ( X , Y )
-        let lparen = crate::lexer::SpannedToken {
-            token: crate::lexer::Token::LParen,
-            pos: crate::lexer::Position { line: 1, col: 5 },
-            source_offset: 4,
-            source_len: 1,
-        };
-        let comma = crate::lexer::SpannedToken {
-            token: crate::lexer::Token::Comma,
-            pos: crate::lexer::Position { line: 1, col: 7 },
-            source_offset: 6,
-            source_len: 1,
-        };
-        let rparen = crate::lexer::SpannedToken {
-            token: crate::lexer::Token::RParen,
-            pos: crate::lexer::Position { line: 1, col: 9 },
-            source_offset: 8,
-            source_len: 1,
-        };
         vm.token_stream = Some(VecDeque::from([
             make_ident_token("WORD"),
-            lparen,
+            make_lparen_token(),
             make_ident_token("X"),
-            comma,
+            make_comma_token(),
             make_ident_token("Y"),
-            rparen,
+            make_rparen_token(),
         ]));
         def_prim(&mut vm).unwrap();
         assert!(vm.is_compiling, "is_compiling must be true after DEF");
