@@ -130,10 +130,12 @@ INSERT OR REPLACE INTO session_state (key, value) VALUES ('review_before_review_
        cargo test
        cargo clippy --all-targets -- -D warnings
        ```
-     - 以下の形式でコミットしてpushする（`LOOP_COUNT` には SQL から取得した実際の数値を代入すること）：
+     - 以下の形式でコミットしてpushする（事前に SQL で `loop_count` の値を取得しておくこと）：
        ```bash
        git add -A
-       LOOP_COUNT=$(実際の数値)  # SQL の SELECT 結果を使う
+       # LOOP_COUNT には SQL の SELECT 結果（整数）を代入する
+       # 例: loop_count が 1 の場合 → LOOP_COUNT=1
+       LOOP_COUNT=<SQLで取得した数値>
        printf 'レビュー指摘の修正 (%d回目)\n\nCo-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>\n' "$LOOP_COUNT" \
          > "$(git rev-parse --git-dir)/COMMIT_MSG"
        git commit -F "$(git rev-parse --git-dir)/COMMIT_MSG"
