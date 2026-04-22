@@ -2238,6 +2238,16 @@ mod tests {
         assert_eq!(vm.dp, dp_before + 2);
     }
 
+    #[test]
+    fn test_literal_prim_is_not_immediate() {
+        // LITERAL must NOT have FLAG_IMMEDIATE; it is a system-internal compile-time primitive
+        // that must not be caught by the interpreter's IMMEDIATE dispatch.
+        let mut vm = VM::new();
+        crate::primitives::register_all(&mut vm);
+        let xt = vm.lookup("LITERAL").unwrap();
+        assert!(!vm.headers[xt.index()].is_immediate());
+    }
+
     // --- header_prim ---
 
     fn make_ident_token(name: &str) -> crate::lexer::SpannedToken {

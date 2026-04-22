@@ -676,7 +676,7 @@ GREET";
     }
 
     #[test]
-    fn test_end_outside_def_is_not_intercepted() {
+    fn test_end_outside_def_returns_error() {
         // END outside DEF is handled by end_prim (FLAG_IMMEDIATE), which checks
         // is_compiling and returns InvalidExpression when called in interpret mode.
         let mut interp = Interpreter::new();
