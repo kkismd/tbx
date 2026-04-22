@@ -85,7 +85,18 @@ cargo clippy --all-targets -- -D warnings
 
 PR作成が完了したら、ユーザーへの報告より先に `review-implementation` エージェントを起動し、指摘がなくなるまで修正サイクルを繰り返す。
 
-**ループの上限は3回**とする（無限ループ防止）。ループカウンターを `loop_count = 0` で初期化する。
+**ループの上限は3回**とする（無限ループ防止）。ループカウンターは `sql` ツールで永続化する：
+
+```sql
+-- ループ開始前に初期化
+INSERT OR REPLACE INTO session_state (key, value) VALUES ('review_loop_count', '0');
+
+-- インクリメント時
+UPDATE session_state SET value = CAST(CAST(value AS INTEGER) + 1 AS TEXT) WHERE key = 'review_loop_count';
+
+-- 参照時
+SELECT CAST(value AS INTEGER) FROM session_state WHERE key = 'review_loop_count';
+```
 
 #### 各ループ内の手順
 
@@ -107,7 +118,7 @@ PR作成が完了したら、ユーザーへの報告より先に `review-implem
 5. **新しいコメントまたはレビューが追加された場合**、追加された内容に **🔴** または **🟡** が含まれるか確認する：
    - **含まれない**（🟢 Info のみ、またはApproveレビュー）→ ループを終了してステップ7へ進む。
    - **含まれる** かつ `loop_count < 3` の場合：
-     - `loop_count` をインクリメントする
+     - `loop_count` をインクリメントする（SQL の `session_state` を更新する）
      - 新しいコメント・レビューの指摘内容をすべて読み、修正を行う
      - 修正後に必ず以下を実行し、エラー・警告がないことを確認する：
        ```bash
@@ -115,11 +126,11 @@ PR作成が完了したら、ユーザーへの報告より先に `review-implem
        cargo test
        cargo clippy --all-targets -- -D warnings
        ```
-     - 以下の形式でコミットしてpushする：
+     - 以下の形式でコミットしてpushする（`N` には実際のループ回数を代入すること）：
        ```bash
-       git add <変更ファイル>
+       git add -A
        cat > "$(git rev-parse --git-dir)/COMMIT_MSG" << 'EOF'
-       レビュー指摘の修正 (<loop_count>回目)
+       レビュー指摘の修正 (N回目)
        
        Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>
        EOF
