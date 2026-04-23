@@ -1916,4 +1916,69 @@ PUTDEC 99
             .expect("compile_program should succeed after runtime error");
         assert_eq!(interp.take_output(), "42");
     }
+
+    // --- compile_program + IMMEDIATE (issue #264) ---
+
+    #[test]
+    fn test_compile_program_immediate_at_ground_level() {
+        // An IMMEDIATE word used at ground level during compile_program should execute
+        // immediately (not be compiled into the main routine).
+        let mut interp = Interpreter::new();
+        let src = "\
+DEF IWORD
+PUTDEC 55
+END
+IMMEDIATE IWORD
+IWORD";
+        interp.compile_program(src).unwrap();
+        // IWORD is IMMEDIATE, so it runs once during the compile phase (IMMEDIATE IWORD sets the
+        // flag, then IWORD is executed immediately as ground-level code).
+        let out = interp.take_output();
+        assert_eq!(
+            out, "55",
+            "expected '55' from IMMEDIATE word at ground level, got: {out:?}"
+        );
+    }
+
+    #[test]
+    fn test_compile_program_immediate_in_expression_is_error() {
+        // An IMMEDIATE word used inside an expression (argument to a statement) must
+        // produce an InvalidExpression error.
+        let mut interp = Interpreter::new();
+        // Create a global variable V and mark it IMMEDIATE.
+        interp.exec_source("VAR V\nIMMEDIATE V").unwrap();
+        // Using V inside an expression should fail.
+        let result = interp.compile_program("PUTDEC V");
+        assert!(
+            result.is_err(),
+            "expected error when IMMEDIATE word appears inside an expression"
+        );
+        assert!(
+            matches!(
+                result.unwrap_err().kind,
+                crate::error::TbxError::InvalidExpression { .. }
+            ),
+            "expected TbxError::InvalidExpression"
+        );
+    }
+
+    #[test]
+    fn test_exec_line_immediate_in_expression_is_error() {
+        // Regression: interpreter mode (exec_line) should also reject IMMEDIATE words
+        // inside expressions, returning InvalidExpression.
+        let mut interp = Interpreter::new();
+        interp.exec_source("VAR V\nIMMEDIATE V").unwrap();
+        let result = interp.exec_source("PUTDEC V");
+        assert!(
+            result.is_err(),
+            "expected error when IMMEDIATE word appears inside an expression in exec_line"
+        );
+        assert!(
+            matches!(
+                result.unwrap_err().kind,
+                crate::error::TbxError::InvalidExpression { .. }
+            ),
+            "expected TbxError::InvalidExpression"
+        );
+    }
 }
