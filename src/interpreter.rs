@@ -1995,7 +1995,7 @@ PUTDEC 42";
         let mut interp = Interpreter::new();
         // Define a plain Word entry and mark it IMMEDIATE.
         interp
-            .exec_source("DEF IWORD\nRETURN\nEND\nIMMEDIATE IWORD")
+            .exec_source("DEF IWORD(X)\nRETURN\nEND\nIMMEDIATE IWORD")
             .unwrap();
         // Using IWORD in FNAME(args) form inside an expression should fail.
         let result = interp.compile_program("PUTDEC IWORD(1)");
@@ -2040,7 +2040,7 @@ PUTDEC 42";
         // produces an InvalidExpression error (exec_source path).
         let mut interp = Interpreter::new();
         interp
-            .exec_source("DEF IWORD\nRETURN\nEND\nIMMEDIATE IWORD")
+            .exec_source("DEF IWORD(X)\nRETURN\nEND\nIMMEDIATE IWORD")
             .unwrap();
         let result = interp.exec_source("PUTDEC IWORD(1)");
         assert!(
