@@ -7,7 +7,7 @@
 use std::collections::HashMap;
 
 use crate::cell::{Cell, Xt};
-use crate::dict::EntryKind;
+use crate::dict::{EntryKind, FLAG_IMMEDIATE};
 use crate::error::TbxError;
 use crate::lexer::{SpannedToken, Token};
 use crate::vm::VM;
@@ -162,6 +162,14 @@ impl<'a> ExprCompiler<'a> {
                         .vm
                         .lookup_including_self(&name, self.self_word.as_deref())
                         .ok_or_else(|| TbxError::UndefinedSymbol { name: name.clone() })?;
+
+                    // Reject IMMEDIATE words inside expressions.
+                    // Per spec, IMMEDIATE words are only allowed at statement level.
+                    if self.vm.headers[xt.index()].flags & FLAG_IMMEDIATE != 0 {
+                        return Err(TbxError::InvalidExpression {
+                            reason: "IMMEDIATE word cannot appear inside an expression",
+                        });
+                    }
 
                     // Peek ahead: is this a function call (`F(`)?
                     let next_is_lparen = tokens
