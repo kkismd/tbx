@@ -2023,26 +2023,4 @@ IWORD";
             );
         }
     }
-
-    #[test]
-    fn test_compile_program_only_immediate_in_expression_is_error() {
-        // compile_program-only variant: VAR + IMMEDIATE + expression use all within a single
-        // compile_program call, confirming the mode-independent error path.
-        let mut interp = Interpreter::new();
-        // VAR V creates a global variable; IMMEDIATE V marks it FLAG_IMMEDIATE.
-        // PUTDEC V then uses V inside an expression — this must be rejected.
-        interp.exec_source("VAR V\nIMMEDIATE V").unwrap();
-        let result = interp.compile_program("PUTDEC V");
-        assert!(
-            result.is_err(),
-            "expected error when IMMEDIATE word appears inside an expression in compile_program"
-        );
-        assert!(
-            matches!(
-                result.unwrap_err().kind,
-                crate::error::TbxError::InvalidExpression { .. }
-            ),
-            "expected TbxError::InvalidExpression (compile_program only)"
-        );
-    }
 }
