@@ -25,6 +25,10 @@ pub struct CompileState {
     pub(crate) arity: usize,
     /// Number of VAR-declared local variables encountered so far.
     pub(crate) local_count: usize,
+    /// Source line number (1-based) where this DEF block started.
+    /// Set by `compile_program` after the DEF IMMEDIATE word executes.
+    /// Used to report accurate positions in unclosed-DEF errors.
+    pub(crate) start_line: usize,
     /// Dictionary offsets of the `local_count` placeholder (Int(0)) in CALL instructions
     /// that refer to the currently-compiled word (self-recursive calls).
     /// Patched to the final `local_count` when END is compiled.
@@ -56,6 +60,7 @@ impl CompileState {
             local_table,
             arity,
             local_count: 0,
+            start_line: 0,
             call_patch_list: Vec::new(),
             label_table: HashMap::new(),
             patch_list: Vec::new(),

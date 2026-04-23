@@ -46,6 +46,11 @@ impl std::fmt::Display for InterpreterError {
     }
 }
 
+/// Token list and segment boundaries produced by `parse_line_into_segments`.
+///
+/// The `Vec<(usize, usize)>` contains `(start, end)` index pairs into the token list.
+type ParsedSegments = (Vec<SpannedToken>, Vec<(usize, usize)>);
+
 /// The TBX outer interpreter.
 ///
 /// Processes source text line by line, compiling and executing each statement
@@ -91,17 +96,20 @@ impl Interpreter {
         })
     }
 
-    /// Execute a single source line.
+    /// Tokenizes `source_line` and splits it into non-empty statement segments.
     ///
-    /// Tokenizes `line`, resolves the statement word, builds a temporary code buffer,
-    /// and runs it through the inner interpreter.
+    /// Segments are delimited by semicolons.  A leading `LineNum` token on the
+    /// first segment is stripped; if the interpreter is currently inside a DEF
+    /// body, it is also registered as a branch-target label.  Empty segments
+    /// (e.g. a trailing semicolon) are omitted from the result.
     ///
-    /// Returns `Ok(())` on success, or an `InterpreterError` containing position
-    /// and error details on failure.
-    pub fn exec_line(&mut self, line: &str) -> Result<(), InterpreterError> {
-        let mut lex = Lexer::new(line);
-
-        // Collect all tokens on this line.
+    /// Returns a tuple of `(tokens, boundaries)` where each boundary `(start, end)`
+    /// is a half-open index range into `tokens`.
+    fn parse_line_into_segments(
+        &mut self,
+        source_line: &str,
+    ) -> Result<ParsedSegments, InterpreterError> {
+        let mut lex = Lexer::new(source_line);
         let mut tokens: Vec<SpannedToken> = Vec::new();
         loop {
             let st = lex.next_token();
@@ -112,7 +120,7 @@ impl Interpreter {
         }
 
         if tokens.is_empty() {
-            return Ok(());
+            return Ok((tokens, Vec::new()));
         }
 
         // Split token list into segments at each Semicolon.
@@ -123,16 +131,17 @@ impl Interpreter {
             .filter_map(|(i, st)| matches!(st.token, Token::Semicolon).then_some(i))
             .collect();
 
-        let mut boundaries: Vec<(usize, usize)> = Vec::with_capacity(semi_positions.len() + 1);
+        let mut raw_boundaries: Vec<(usize, usize)> = Vec::with_capacity(semi_positions.len() + 1);
         let mut start = 0;
         for &pos in &semi_positions {
-            boundaries.push((start, pos));
+            raw_boundaries.push((start, pos));
             start = pos + 1;
         }
-        boundaries.push((start, tokens.len()));
+        raw_boundaries.push((start, tokens.len()));
 
+        let mut boundaries: Vec<(usize, usize)> = Vec::with_capacity(raw_boundaries.len());
         let mut first_segment = true;
-        for (seg_start_orig, seg_end) in boundaries {
+        for (seg_start_orig, seg_end) in raw_boundaries {
             let mut seg_start = seg_start_orig;
 
             // Only the first segment may begin with a line number.
@@ -141,26 +150,41 @@ impl Interpreter {
                 if seg_start < seg_end {
                     if let Token::LineNum(n) = tokens[seg_start].token {
                         if self.vm.compile_state.is_some() {
+                            // Inside a DEF body: register as a branch-target label.
                             let ln_line = tokens[seg_start].pos.line;
                             let ln_col = tokens[seg_start].pos.col;
-                            self.register_label(n, line, ln_line, ln_col)
+                            self.register_label(n, source_line, ln_line, ln_col)
                                 .inspect_err(|_e| {
                                     self.vm.rollback_def();
                                 })?;
                         }
+                        // Line numbers outside DEF are silently discarded.
                         seg_start += 1;
                     }
                 }
             }
 
-            // Skip empty segments (e.g., trailing semicolon or bare line number).
-            if seg_start >= seg_end {
-                continue;
+            // Omit empty segments (e.g. trailing semicolon or bare line number).
+            if seg_start < seg_end {
+                boundaries.push((seg_start, seg_end));
             }
-
-            self.exec_segment(&tokens[seg_start..seg_end], line)?;
         }
 
+        Ok((tokens, boundaries))
+    }
+
+    /// Execute a single source line.
+    ///
+    /// Tokenizes `line`, resolves the statement word, builds a temporary code buffer,
+    /// and runs it through the inner interpreter.
+    ///
+    /// Returns `Ok(())` on success, or an `InterpreterError` containing position
+    /// and error details on failure.
+    pub fn exec_line(&mut self, line: &str) -> Result<(), InterpreterError> {
+        let (tokens, boundaries) = self.parse_line_into_segments(line)?;
+        for (seg_start, seg_end) in boundaries {
+            self.exec_segment(&tokens[seg_start..seg_end], line)?;
+        }
         Ok(())
     }
 
@@ -201,62 +225,13 @@ impl Interpreter {
         if let Some(xt) = self.vm.lookup(&stmt_name) {
             let flags = self.vm.headers[xt.index()].flags;
             if flags & crate::dict::FLAG_IMMEDIATE != 0 {
-                let make_err = |e: TbxError| {
-                    InterpreterError::new(stmt_pos_line, stmt_pos_col, source_line, e)
-                };
-
-                // Clone the kind to determine how to dispatch without holding a borrow on self.vm.
-                let kind = self.vm.headers[xt.index()].kind.clone();
-                // Capture arity and local_count to guard against words that require a call frame.
-                // vm.run() does not set up bp or local variable slots; words with formal
-                // parameters or VAR locals would access the wrong stack positions.
-                let arity = self.vm.headers[xt.index()].arity;
-                let local_count = self.vm.headers[xt.index()].local_count;
-
-                // Feed remaining tokens into vm.token_stream.
-                let remaining: VecDeque<SpannedToken> = tokens[idx..].iter().cloned().collect();
-                self.vm.token_stream = Some(remaining);
-
-                // Save VM state for rollback on error.
-                let saved_data_stack_len = self.vm.data_stack.len();
-                let saved_return_stack_len = self.vm.return_stack.len();
-                let saved_bp = self.vm.bp;
-
-                let run_result = match kind {
-                    // Native primitive: call the function pointer directly (avoids
-                    // temporary-buffer issues when the primitive writes to the dictionary).
-                    crate::dict::EntryKind::Primitive(f) => f(&mut self.vm),
-                    // User-defined word: run via vm.run(), passing the body start address.
-                    // Guard: words with formal parameters (arity > 0) or VAR locals
-                    // (local_count > 0) require a CALL frame (bp/stack setup) that
-                    // vm.run() alone does not provide. Reject them here to prevent
-                    // silent stack corruption.
-                    crate::dict::EntryKind::Word(body_addr) => {
-                        if arity > 0 || local_count > 0 {
-                            Err(TbxError::InvalidExpression {
-                                reason: "IMMEDIATE user word with parameters or VAR locals cannot be called without a CALL frame",
-                            })
-                        } else {
-                            self.vm.run(body_addr)
-                        }
-                    }
-                    _ => Err(TbxError::InvalidExpression {
-                        reason: "IMMEDIATE word kind is not executable",
-                    }),
-                };
-
-                // Clear token stream.
-                self.vm.token_stream = None;
-
-                // On error, rollback compile state and stacks.
-                if run_result.is_err() {
-                    self.vm.rollback_def();
-                    self.vm.data_stack.truncate(saved_data_stack_len);
-                    self.vm.return_stack.truncate(saved_return_stack_len);
-                    self.vm.bp = saved_bp;
-                }
-
-                return run_result.map_err(make_err);
+                return self.exec_immediate_word(
+                    xt,
+                    &tokens[idx..],
+                    stmt_pos_line,
+                    stmt_pos_col,
+                    source_line,
+                );
             }
         }
 
@@ -505,6 +480,74 @@ impl Interpreter {
         self.vm.take_output()
     }
 
+    /// Execute an IMMEDIATE word, regardless of compile/interpret mode.
+    ///
+    /// Sets up `vm.token_stream` with the remaining tokens, dispatches the word
+    /// (Primitive or zero-arity Word), then clears the stream.
+    ///
+    /// On error, rolls back compile state and stack state before returning.
+    fn exec_immediate_word(
+        &mut self,
+        xt: Xt,
+        tokens_after_stmt: &[SpannedToken],
+        stmt_pos_line: usize,
+        stmt_pos_col: usize,
+        source_line: &str,
+    ) -> Result<(), InterpreterError> {
+        let make_err =
+            |e: TbxError| InterpreterError::new(stmt_pos_line, stmt_pos_col, source_line, e);
+
+        // Clone fields needed for dispatch before the mutable borrow below.
+        let kind = self.vm.headers[xt.index()].kind.clone();
+        let arity = self.vm.headers[xt.index()].arity;
+        let local_count = self.vm.headers[xt.index()].local_count;
+
+        // Feed remaining tokens into vm.token_stream so the IMMEDIATE word can
+        // consume them via vm.next_token().
+        let remaining: VecDeque<SpannedToken> = tokens_after_stmt.iter().cloned().collect();
+        self.vm.token_stream = Some(remaining);
+
+        // Save VM state for rollback on error.
+        let saved_data_stack_len = self.vm.data_stack.len();
+        let saved_return_stack_len = self.vm.return_stack.len();
+        let saved_bp = self.vm.bp;
+
+        let run_result = match kind {
+            // Native primitive: call the function pointer directly (avoids
+            // temporary-buffer issues when the primitive writes to the dictionary).
+            crate::dict::EntryKind::Primitive(f) => f(&mut self.vm),
+            // User-defined word: run via vm.run(), passing the body start address.
+            // Guard: words with formal parameters (arity > 0) or VAR locals
+            // (local_count > 0) require a CALL frame (bp/stack setup) that
+            // vm.run() alone does not provide.
+            crate::dict::EntryKind::Word(body_addr) => {
+                if arity > 0 || local_count > 0 {
+                    Err(TbxError::InvalidExpression {
+                        reason: "IMMEDIATE user word with parameters or VAR locals cannot be called without a CALL frame",
+                    })
+                } else {
+                    self.vm.run(body_addr)
+                }
+            }
+            _ => Err(TbxError::InvalidExpression {
+                reason: "IMMEDIATE word kind is not executable",
+            }),
+        };
+
+        // Clear token stream.
+        self.vm.token_stream = None;
+
+        // On error, rollback compile state and stacks.
+        if run_result.is_err() {
+            self.vm.rollback_def();
+            self.vm.data_stack.truncate(saved_data_stack_len);
+            self.vm.return_stack.truncate(saved_return_stack_len);
+            self.vm.bp = saved_bp;
+        }
+
+        run_result.map_err(make_err)
+    }
+
     /// Register a line-number label at the current dictionary pointer.
     ///
     /// Inserts the label into the label table and back-patches any forward
@@ -544,6 +587,213 @@ impl Interpreter {
         for patch_pos in patches {
             self.vm.dictionary[patch_pos] = Cell::Int(dp as i64);
         }
+
+        Ok(())
+    }
+
+    /// Compile and run a full TBX source program in program mode.
+    ///
+    /// Processes `source` in a single pass:
+    /// - DEF blocks are compiled into the dictionary immediately (existing `is_compiling` flow).
+    /// - Ground-level (non-DEF) statements are collected into a main-routine buffer and
+    ///   executed as a single unit after all line processing completes.
+    ///
+    /// This is the "full program mode" entry point; use `exec_source` for interactive mode.
+    pub fn compile_program(&mut self, source: &str) -> Result<(), InterpreterError> {
+        let mut main_cells: Vec<Cell> = Vec::new();
+
+        for (line_idx, line) in source.lines().enumerate() {
+            let line_num = line_idx + 1; // 1-based line number
+            let (tokens, boundaries) = self.parse_line_into_segments(line)?;
+            for (seg_start, seg_end) in boundaries {
+                let was_compiling = self.vm.compile_state.is_some();
+                self.compile_program_segment(&tokens[seg_start..seg_end], line, &mut main_cells)?;
+                // If DEF just started on this segment, record the source line number.
+                if !was_compiling {
+                    if let Some(state) = &mut self.vm.compile_state {
+                        state.start_line = line_num;
+                    }
+                }
+            }
+        }
+
+        // --- Finalise: build and run the main routine ---
+
+        // Guard: if a DEF block was left unclosed (no matching END), roll back the
+        // partial definition and return an error.  Leaving compile_state set would
+        // corrupt subsequent calls because every statement would be treated as part
+        // of the unfinished word body.
+        if self.vm.compile_state.is_some() {
+            // Capture the word name and DEF start line before rollback for a more informative error message.
+            let word_name = self
+                .vm
+                .compile_state
+                .as_ref()
+                .map(|s| s.word_name.clone())
+                .unwrap_or_default();
+            let def_start_line = self
+                .vm
+                .compile_state
+                .as_ref()
+                .map(|s| s.start_line)
+                .unwrap_or(0);
+            self.vm.rollback_def();
+            return Err(InterpreterError::new(
+                def_start_line,
+                0,
+                &format!("DEF {word_name}"),
+                TbxError::InvalidExpression {
+                    reason: "DEF without matching END at end of source",
+                },
+            ));
+        }
+
+        // If there are no ground-level statements, nothing to execute.
+        if main_cells.is_empty() {
+            return Ok(());
+        }
+
+        let main_start = self.vm.dp;
+
+        // Write collected ground-level cells to the dictionary.
+        for cell in main_cells {
+            if let Err(e) = self.vm.dict_write(cell) {
+                self.vm.dp = main_start;
+                self.vm.dictionary.truncate(main_start);
+                return Err(InterpreterError::new(0, 0, "", e));
+            }
+        }
+
+        // Append EXIT to terminate the main routine.
+        let exit_xt = match self.lookup_required("EXIT", 0, 0, "") {
+            Ok(xt) => xt,
+            Err(e) => {
+                self.vm.dp = main_start;
+                self.vm.dictionary.truncate(main_start);
+                return Err(e);
+            }
+        };
+        if let Err(e) = self.vm.dict_write(Cell::Xt(exit_xt)) {
+            self.vm.dp = main_start;
+            self.vm.dictionary.truncate(main_start);
+            return Err(InterpreterError::new(0, 0, "", e));
+        }
+
+        // Save stack/bp state for rollback on runtime error or HALT.
+        let saved_data_stack_len = self.vm.data_stack.len();
+        let saved_return_stack_len = self.vm.return_stack.len();
+        let saved_bp = self.vm.bp;
+
+        // Execute the main routine.
+        let run_result = self.vm.run(main_start);
+
+        // Release main-routine memory regardless of outcome.
+        self.vm.dp = main_start;
+        self.vm.dictionary.truncate(main_start);
+
+        match run_result {
+            Ok(()) => Ok(()),
+            // HALT is normal termination in program mode.
+            // Restore stacks because DROP_TO_MARKER may not have run after HALT.
+            Err(TbxError::Halted) => {
+                self.vm.data_stack.truncate(saved_data_stack_len);
+                self.vm.return_stack.truncate(saved_return_stack_len);
+                self.vm.bp = saved_bp;
+                Ok(())
+            }
+            Err(e) => {
+                self.vm.data_stack.truncate(saved_data_stack_len);
+                self.vm.return_stack.truncate(saved_return_stack_len);
+                self.vm.bp = saved_bp;
+                // TODO(#275): Runtime errors from the main-routine execution carry no source
+                // position because compiled cells do not store their origin.  A future
+                // improvement would embed (line, col) metadata alongside each statement's
+                // cells so the inner interpreter can report accurate locations.
+                Err(InterpreterError::new(0, 0, "", e))
+            }
+        }
+    }
+
+    /// Process a single statement segment in program-compile mode.
+    ///
+    /// Behaves like `exec_segment`, except ground-level (non-IMMEDIATE, non-DEF-body)
+    /// statements are not executed immediately; instead their compiled cells are drained
+    /// from the dictionary into `main_cells` for deferred execution.
+    fn compile_program_segment(
+        &mut self,
+        tokens: &[SpannedToken],
+        source_line: &str,
+        main_cells: &mut Vec<Cell>,
+    ) -> Result<(), InterpreterError> {
+        let mut idx = 0;
+
+        // Extract statement name.
+        let stmt_tok = &tokens[idx];
+        let stmt_name = match &stmt_tok.token {
+            Token::Ident(name) => name.clone(),
+            _ => return Ok(()), // not an identifier — skip
+        };
+        let stmt_pos_line = stmt_tok.pos.line;
+        let stmt_pos_col = stmt_tok.pos.col;
+        idx += 1;
+
+        // Normalize to uppercase for case-insensitive keyword matching.
+        let stmt_name = stmt_name.to_ascii_uppercase();
+
+        // Handle REM: skip the rest of the segment.
+        if stmt_name == "REM" {
+            return Ok(());
+        }
+
+        // IMMEDIATE word dispatch: execute immediately regardless of compile/interpret mode.
+        // Delegates to exec_immediate_word helper to avoid code duplication with exec_segment.
+        if let Some(xt) = self.vm.lookup(&stmt_name) {
+            let flags = self.vm.headers[xt.index()].flags;
+            if flags & crate::dict::FLAG_IMMEDIATE != 0 {
+                return self.exec_immediate_word(
+                    xt,
+                    &tokens[idx..],
+                    stmt_pos_line,
+                    stmt_pos_col,
+                    source_line,
+                );
+            }
+        }
+
+        // Inside a DEF body: write statement to dictionary directly (same as exec_segment).
+        if self.vm.compile_state.is_some() {
+            let result = self.write_stmt_to_dict(
+                &stmt_name,
+                &tokens[idx..],
+                stmt_pos_line,
+                stmt_pos_col,
+                source_line,
+            );
+            if result.is_err() {
+                self.vm.rollback_def();
+            }
+            return result;
+        }
+
+        // Ground-level statement: compile to a temporary dict area, then drain into main_cells.
+        let buf_start = self.vm.dp;
+        if let Err(e) = self.write_stmt_to_dict(
+            &stmt_name,
+            &tokens[idx..],
+            stmt_pos_line,
+            stmt_pos_col,
+            source_line,
+        ) {
+            self.vm.dp = buf_start;
+            self.vm.dictionary.truncate(buf_start);
+            return Err(e);
+        }
+
+        // Drain the newly written cells from the dictionary into the main-cells buffer.
+        // This keeps the dictionary region clean so that subsequent DEF compilations
+        // do not interleave with ground-level code.
+        main_cells.extend(self.vm.dictionary.drain(buf_start..));
+        self.vm.dp = buf_start;
 
         Ok(())
     }
@@ -1507,5 +1757,163 @@ IPARAM 42";
             "8",
             "expected '8' from OK2 after rollback"
         );
+    }
+
+    // --- compile_program (issue #263: full program mode) ---
+
+    #[test]
+    fn test_compile_program_ground_only() {
+        // Ground-level statements only (no DEF); should execute in order.
+        let mut interp = Interpreter::new();
+        let src = r#"
+PUTDEC 1
+PUTSTR "\n"
+PUTDEC 2
+PUTSTR "\n"
+"#;
+        interp.compile_program(src).unwrap();
+        assert_eq!(interp.take_output(), "1\n2\n");
+    }
+
+    #[test]
+    fn test_compile_program_def_then_ground() {
+        // DEF defined first, called from ground-level afterward.
+        let mut interp = Interpreter::new();
+        let src = r#"
+DEF GREET
+  PUTDEC 42
+  PUTSTR "\n"
+END
+GREET
+"#;
+        interp.compile_program(src).unwrap();
+        assert_eq!(interp.take_output(), "42\n");
+    }
+
+    #[test]
+    fn test_compile_program_interleaved() {
+        // DEF → ground → DEF → ground.
+        // The second DEF word must be callable from the second ground statement.
+        let mut interp = Interpreter::new();
+        let src = r#"
+DEF FIRST
+  PUTDEC 1
+END
+FIRST
+DEF SECOND
+  PUTDEC 2
+END
+SECOND
+"#;
+        interp.compile_program(src).unwrap();
+        // Both ground statements must run; FIRST must be callable from ground.
+        assert_eq!(interp.take_output(), "12");
+    }
+
+    #[test]
+    fn test_compile_program_halt_terminates_normally() {
+        // HALT in ground-level code should terminate without error.
+        let mut interp = Interpreter::new();
+        let src = r#"
+PUTDEC 7
+HALT
+PUTDEC 99
+"#;
+        interp.compile_program(src).unwrap();
+        // Only the output before HALT should appear.
+        assert_eq!(interp.take_output(), "7");
+    }
+
+    #[test]
+    fn test_compile_program_undefined_word_is_error() {
+        // Calling a non-existent word in ground-level code must return an error.
+        let mut interp = Interpreter::new();
+        let result = interp.compile_program("NOSUCHWORD 1");
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(
+            matches!(err.kind, TbxError::UndefinedSymbol { .. }),
+            "expected UndefinedSymbol, got: {:?}",
+            err.kind
+        );
+    }
+
+    #[test]
+    fn test_compile_program_exec_source_still_passes() {
+        // Verify that exec_source-based tests are unaffected (regression guard).
+        let mut interp = Interpreter::new();
+        let src = "DEF GREET\nPUTDEC 42\nEND\nGREET";
+        interp.exec_source(src).unwrap();
+        assert_eq!(
+            interp.take_output(),
+            "42",
+            "expected '42' from exec_source regression check"
+        );
+    }
+
+    #[test]
+    fn test_compile_program_unclosed_def_is_error() {
+        // A DEF without a matching END must return an error and leave the VM in a
+        // clean state (compile_state = None) so that subsequent calls work correctly.
+        let mut interp = Interpreter::new();
+        let result = interp.compile_program("DEF NOEND\nPUTDEC 1");
+        assert!(result.is_err(), "expected error for unclosed DEF");
+        assert!(
+            matches!(result.unwrap_err().kind, TbxError::InvalidExpression { .. }),
+            "expected InvalidExpression for unclosed DEF"
+        );
+        // The VM must be reusable after rollback.
+        interp
+            .compile_program("PUTDEC 99")
+            .expect("should succeed after unclosed-DEF rollback");
+        assert_eq!(interp.take_output(), "99");
+    }
+
+    #[test]
+    fn test_compile_program_unclosed_def_reports_def_line() {
+        // The error for an unclosed DEF must carry the 1-based line number of
+        // the DEF keyword, not 0.
+        let mut interp = Interpreter::new();
+        // DEF is on line 3 (1-based).
+        let src = "PUTDEC 1\nPUTDEC 2\nDEF NOEND\nPUTDEC 3";
+        let result = interp.compile_program(src);
+        assert!(result.is_err(), "expected error for unclosed DEF");
+        let err = result.unwrap_err();
+        assert_eq!(
+            err.line, 3,
+            "error line should point to the DEF line (3), got {}",
+            err.line
+        );
+    }
+
+    #[test]
+    fn test_compile_program_line_number_outside_def_ignored() {
+        // Line-number labels appearing outside a DEF block are silently skipped;
+        // the following statement must still execute normally.
+        let mut interp = Interpreter::new();
+        interp.compile_program("10 PUTDEC 1").unwrap();
+        assert_eq!(
+            interp.take_output(),
+            "1",
+            "statement after ignored line-number label should execute"
+        );
+    }
+
+    #[test]
+    fn test_compile_program_runtime_error_cleans_up() {
+        // A runtime error (e.g. division by zero) must return Err and leave the
+        // VM in a reusable state so that a subsequent compile_program call works.
+        let mut interp = Interpreter::new();
+        // Division by zero triggers a runtime error inside vm.run().
+        let result = interp.compile_program("PUTDEC 1 / 0");
+        assert!(
+            result.is_err(),
+            "expected error from runtime division by zero"
+        );
+        // The data stack must be restored so that the VM is reusable.
+        interp
+            .compile_program("PUTDEC 42")
+            .expect("compile_program should succeed after runtime error");
+        assert_eq!(interp.take_output(), "42");
     }
 }
