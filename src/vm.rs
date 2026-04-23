@@ -707,8 +707,14 @@ impl VM {
                         expected: "Int (array base)",
                         got: base_cell.type_name(),
                     })?;
-                    // base is always a valid dictionary index (usize origin), so
-                    // base_raw < 0 cannot occur in well-formed bytecode.  Cast directly.
+                    // base is a dictionary index and must be non-negative.
+                    if base_raw < 0 {
+                        return Err(TbxError::InvalidOperand {
+                            name: "array base",
+                            value: base_raw,
+                            reason: "must be non-negative",
+                        });
+                    }
                     let base = base_raw as usize;
 
                     let size_cell = self.dict_read(self.pc + 2)?;
