@@ -177,6 +177,14 @@ impl<'a> ExprCompiler<'a> {
                             .unwrap_or(false);
 
                         if next_is_rparen {
+                            // Arrays require exactly one index expression: NUMS(I).
+                            if matches!(&self.vm.headers[xt.index()].kind, EntryKind::Array { .. })
+                            {
+                                return Err(TbxError::InvalidExpression {
+                                    reason:
+                                        "array index expression must not be empty: use NAME(index)",
+                                });
+                            }
                             // Zero-argument call: emit based on entry kind.
                             emit_call_by_kind(
                                 &mut output,
@@ -433,19 +441,30 @@ impl<'a> ExprCompiler<'a> {
                 Token::Comma => {
                     // A comma is an argument separator when the nearest enclosing
                     // parenthesis belongs to a function call (not an array index).
-                    let in_func_call = op_stack
+                    let nearest_lparen = op_stack
                         .iter()
                         .rev()
-                        .find(|op| matches!(op, OpItem::LParen { .. }))
-                        .map(|op| {
-                            matches!(
-                                op,
-                                OpItem::LParen {
-                                    call: Some(LParenCall::Function(..))
-                                }
-                            )
+                        .find(|op| matches!(op, OpItem::LParen { .. }));
+
+                    // Array index expressions must be a single expression — commas are
+                    // not allowed inside array subscripts.
+                    if matches!(
+                        nearest_lparen,
+                        Some(OpItem::LParen {
+                            call: Some(LParenCall::Array(..))
                         })
-                        .unwrap_or(false);
+                    ) {
+                        return Err(TbxError::InvalidExpression {
+                            reason: "array index must be a single expression: use NAME(index)",
+                        });
+                    }
+
+                    let in_func_call = matches!(
+                        nearest_lparen,
+                        Some(OpItem::LParen {
+                            call: Some(LParenCall::Function(..))
+                        })
+                    );
 
                     if in_func_call {
                         // Flush operators accumulated for this argument.
@@ -1466,6 +1485,56 @@ mod tests {
         assert!(
             matches!(err, TbxError::InvalidExpression { .. }),
             "bare array name without () should produce InvalidExpression, got {err:?}"
+        );
+    }
+
+    // ------------------------------------------------------------------
+    // NUMS() with no index should produce a clear error.
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn test_array_empty_index_is_error() {
+        let mut vm = make_vm();
+        let array_base = vm.dp;
+        for _ in 0..5 {
+            vm.dict_write(Cell::None).unwrap();
+        }
+        vm.register(WordEntry::new_array("NUMS", array_base, 5));
+
+        let tokens = lex("NUMS()");
+        let err = ExprCompiler::new(&mut vm)
+            .compile_expr(&tokens)
+            .unwrap_err();
+        assert!(
+            matches!(err, TbxError::InvalidExpression { .. }),
+            "NUMS() with no index should produce InvalidExpression, got {err:?}"
+        );
+    }
+
+    // ------------------------------------------------------------------
+    // NUMS(I, J) with multiple indices should produce a clear error.
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn test_array_multi_index_is_error() {
+        let mut vm = make_vm();
+        let array_base = vm.dp;
+        for _ in 0..5 {
+            vm.dict_write(Cell::None).unwrap();
+        }
+        vm.register(WordEntry::new_array("NUMS", array_base, 5));
+        // Also register a variable I so the expression is otherwise valid.
+        let i_addr = vm.dp;
+        vm.dict_write(Cell::Int(0)).unwrap();
+        vm.register(WordEntry::new_variable("I", i_addr));
+
+        let tokens = lex("NUMS(I, I)");
+        let err = ExprCompiler::new(&mut vm)
+            .compile_expr(&tokens)
+            .unwrap_err();
+        assert!(
+            matches!(err, TbxError::InvalidExpression { .. }),
+            "NUMS(I, I) with multiple indices should produce InvalidExpression, got {err:?}"
         );
     }
 }
