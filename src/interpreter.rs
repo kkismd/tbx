@@ -1990,8 +1990,8 @@ PUTDEC 42";
         // Verify that an IMMEDIATE word used in FNAME(args) form inside an expression
         // produces an InvalidExpression error (compile_program path).
         //
-        // FLAG_IMMEDIATE check (expr.rs L168) executes before the next_is_lparen check
-        // (expr.rs L175), so function-call syntax IWORD(1) also triggers the same error.
+        // The FLAG_IMMEDIATE check in the expression evaluator runs before the
+        // function-call syntax check, so FNAME(args) form also triggers InvalidExpression.
         let mut interp = Interpreter::new();
         // Define a plain Word entry and mark it IMMEDIATE.
         interp
@@ -2002,6 +2002,28 @@ PUTDEC 42";
         assert!(
             result.is_err(),
             "expected error when IMMEDIATE word appears in FNAME(args) form inside an expression"
+        );
+        assert!(
+            matches!(
+                result.unwrap_err().kind,
+                crate::error::TbxError::InvalidExpression { .. }
+            ),
+            "expected TbxError::InvalidExpression"
+        );
+    }
+
+    #[test]
+    fn test_compile_program_immediate_fname_zero_args_in_expression_is_error() {
+        // Verify that an IMMEDIATE word used in FNAME() zero-argument form inside an
+        // expression also produces an InvalidExpression error (compile_program path).
+        let mut interp = Interpreter::new();
+        interp
+            .exec_source("DEF IWORD\nRETURN\nEND\nIMMEDIATE IWORD")
+            .unwrap();
+        let result = interp.compile_program("PUTDEC IWORD()");
+        assert!(
+            result.is_err(),
+            "expected error when IMMEDIATE word appears in FNAME() form inside an expression"
         );
         assert!(
             matches!(
@@ -2024,6 +2046,28 @@ PUTDEC 42";
         assert!(
             result.is_err(),
             "expected error when IMMEDIATE word appears in FNAME(args) form inside an expression (exec_source)"
+        );
+        assert!(
+            matches!(
+                result.unwrap_err().kind,
+                crate::error::TbxError::InvalidExpression { .. }
+            ),
+            "expected TbxError::InvalidExpression"
+        );
+    }
+
+    #[test]
+    fn test_exec_source_immediate_fname_zero_args_in_expression_is_error() {
+        // Verify that an IMMEDIATE word used in FNAME() zero-argument form inside an
+        // expression also produces an InvalidExpression error (exec_source path).
+        let mut interp = Interpreter::new();
+        interp
+            .exec_source("DEF IWORD\nRETURN\nEND\nIMMEDIATE IWORD")
+            .unwrap();
+        let result = interp.exec_source("PUTDEC IWORD()");
+        assert!(
+            result.is_err(),
+            "expected error when IMMEDIATE word appears in FNAME() form inside an expression (exec_source)"
         );
         assert!(
             matches!(
