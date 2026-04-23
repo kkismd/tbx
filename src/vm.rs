@@ -2636,4 +2636,25 @@ mod tests {
             "B(3) on a size-3 array should produce ArrayIndexOutOfBounds, got: {result:?}"
         );
     }
+
+    #[test]
+    fn test_e2e_dim_dynamic_index_write_read() {
+        // Reproduce the core use case from issue #253: LET &NUMS(I), value with a
+        // variable index.  Writes via dynamic index, reads back via the same.
+        let out = run_source(
+            "VAR I\n\
+             DIM NUMS(5)\n\
+             LET &I, 1\n\
+             LET &NUMS(I), 2\n\
+             LET &I, I+1\n\
+             LET &NUMS(I), 10\n\
+             PUTDEC NUMS(1) * NUMS(2)",
+        )
+        .expect("source should run without error");
+        assert_eq!(
+            out.trim(),
+            "20",
+            "NUMS(1)*NUMS(2) should equal 20 after dynamic-index writes"
+        );
+    }
 }
