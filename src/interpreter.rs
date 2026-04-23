@@ -602,10 +602,18 @@ impl Interpreter {
     pub fn compile_program(&mut self, source: &str) -> Result<(), InterpreterError> {
         let mut main_cells: Vec<Cell> = Vec::new();
 
-        for line in source.lines() {
+        for (line_idx, line) in source.lines().enumerate() {
+            let line_num = line_idx + 1; // 1-based line number
             let (tokens, boundaries) = self.parse_line_into_segments(line)?;
             for (seg_start, seg_end) in boundaries {
+                let was_compiling = self.vm.compile_state.is_some();
                 self.compile_program_segment(&tokens[seg_start..seg_end], line, &mut main_cells)?;
+                // If DEF just started on this segment, record the source line number.
+                if !was_compiling {
+                    if let Some(state) = &mut self.vm.compile_state {
+                        state.start_line = line_num;
+                    }
+                }
             }
         }
 
@@ -616,16 +624,22 @@ impl Interpreter {
         // corrupt subsequent calls because every statement would be treated as part
         // of the unfinished word body.
         if self.vm.compile_state.is_some() {
-            // Capture the word name before rollback for a more informative error message.
+            // Capture the word name and DEF start line before rollback for a more informative error message.
             let word_name = self
                 .vm
                 .compile_state
                 .as_ref()
                 .map(|s| s.word_name.clone())
                 .unwrap_or_default();
+            let def_start_line = self
+                .vm
+                .compile_state
+                .as_ref()
+                .map(|s| s.start_line)
+                .unwrap_or(0);
             self.vm.rollback_def();
             return Err(InterpreterError::new(
-                0,
+                def_start_line,
                 0,
                 &format!("DEF {word_name}"),
                 TbxError::InvalidExpression {
@@ -1853,6 +1867,23 @@ PUTDEC 99
             .compile_program("PUTDEC 99")
             .expect("should succeed after unclosed-DEF rollback");
         assert_eq!(interp.take_output(), "99");
+    }
+
+    #[test]
+    fn test_compile_program_unclosed_def_reports_def_line() {
+        // The error for an unclosed DEF must carry the 1-based line number of
+        // the DEF keyword, not 0.
+        let mut interp = Interpreter::new();
+        // DEF is on line 3 (1-based).
+        let src = "PUTDEC 1\nPUTDEC 2\nDEF NOEND\nPUTDEC 3";
+        let result = interp.compile_program(src);
+        assert!(result.is_err(), "expected error for unclosed DEF");
+        let err = result.unwrap_err();
+        assert_eq!(
+            err.line, 3,
+            "error line should point to the DEF line (3), got {}",
+            err.line
+        );
     }
 
     #[test]
