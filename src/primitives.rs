@@ -2815,6 +2815,29 @@ mod tests {
     }
 
     #[test]
+    fn test_def_duplicate_param_name_first_and_third() {
+        // DEF WORD(X, Y, X) — duplicate between 1st and 3rd param must return InvalidExpression.
+        use std::collections::VecDeque;
+        let mut vm = VM::new();
+        register_all(&mut vm);
+        vm.token_stream = Some(VecDeque::from([
+            make_ident_token("WORD"),
+            make_lparen_token(),
+            make_ident_token("X"),
+            make_comma_token(),
+            make_ident_token("Y"),
+            make_comma_token(),
+            make_ident_token("X"),
+            make_rparen_token(),
+        ]));
+        let err = def_prim(&mut vm).unwrap_err();
+        assert!(
+            matches!(err, TbxError::InvalidExpression { .. }),
+            "expected InvalidExpression for first-and-third duplicate param, got {err:?}"
+        );
+    }
+
+    #[test]
     fn test_def_invalid_token_after_comma() {
         // DEF WORD(X, 42) — non-ident token after comma must return InvalidExpression.
         use std::collections::VecDeque;
