@@ -981,13 +981,9 @@ pub fn dim_prim(vm: &mut VM) -> Result<(), TbxError> {
     }
 
     // Check that the allocation fits within the dictionary limit.
-    let new_dp = vm
-        .dp
-        .checked_add(size)
-        .ok_or(TbxError::DictionaryOverflow {
-            requested: usize::MAX,
-            limit: MAX_DICTIONARY_CELLS,
-        })?;
+    // Use saturating_add so that the error message shows a meaningful requested value
+    // rather than usize::MAX when the addition itself would overflow.
+    let new_dp = vm.dp.saturating_add(size);
     if new_dp > MAX_DICTIONARY_CELLS {
         return Err(TbxError::DictionaryOverflow {
             requested: new_dp,
@@ -3455,6 +3451,51 @@ mod tests {
         assert!(
             matches!(err, TbxError::InvalidExpression { reason } if reason.contains("DIM")),
             "expected InvalidExpression mentioning DIM, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn test_dim_dictionary_overflow() {
+        use std::collections::VecDeque;
+        let mut vm = make_exec_vm();
+
+        // Fill the dictionary so that only 2 cells remain.
+        while vm.dp + 2 < MAX_DICTIONARY_CELLS {
+            vm.dict_write(Cell::None).unwrap();
+        }
+
+        // DIM BUF(3) — requires 3 cells but only 2 are available.
+        vm.token_stream = Some(VecDeque::from([
+            crate::lexer::SpannedToken {
+                token: Token::Ident("BUF".to_string()),
+                pos: crate::lexer::Position { line: 1, col: 1 },
+                source_offset: 0,
+                source_len: 3,
+            },
+            crate::lexer::SpannedToken {
+                token: Token::LParen,
+                pos: crate::lexer::Position { line: 1, col: 4 },
+                source_offset: 3,
+                source_len: 1,
+            },
+            crate::lexer::SpannedToken {
+                token: Token::IntLit(3),
+                pos: crate::lexer::Position { line: 1, col: 5 },
+                source_offset: 4,
+                source_len: 1,
+            },
+            crate::lexer::SpannedToken {
+                token: Token::RParen,
+                pos: crate::lexer::Position { line: 1, col: 6 },
+                source_offset: 5,
+                source_len: 1,
+            },
+        ]));
+
+        let err = dim_prim(&mut vm).unwrap_err();
+        assert!(
+            matches!(err, TbxError::DictionaryOverflow { .. }),
+            "DIM with insufficient space should return DictionaryOverflow, got {err:?}"
         );
     }
 }
