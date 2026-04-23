@@ -116,7 +116,7 @@ INSERT OR REPLACE INTO session_state (key, value) VALUES ('review_before_review_
 4. **新しいコメントもレビューも追加されていない**（どちらの件数も変化なし）→ 指摘なし。ループを終了してステップ7へ進む。
 
 5. **新しいコメントまたはレビューが追加された場合**、追加された内容に **🔴** または **🟡** が含まれるか確認する：
-   - **含まれない**（🟢 Info のみ、またはApproveレビュー）→ ループを終了してステップ7へ進む。
+   - **含まれない**（🟢 Info のみ、またはApproveレビュー）→ **ステップ6後処理A**へ進む。
    - **含まれる** かつ `loop_count < 3` の場合：
      - `loop_count` をインクリメントする：
        ```sql
@@ -143,7 +143,77 @@ INSERT OR REPLACE INTO session_state (key, value) VALUES ('review_before_review_
        ```
      - ループの先頭（手順1）へ戻る
    - **含まれる** かつ `loop_count >= 3` の場合：
-     - ループを終了し、未解消の指摘が残っている旨をステップ7で報告する。
+     - ループを終了し、**ステップ6後処理B**へ進む。
+
+### ステップ6後処理A：🟢 Info 指摘の issue 登録
+
+🟢 Info のみでループが正常終了した場合（新しいコメント/レビューが追加されていない場合を除く）、新しく追加されたコメントの中に 🟢 が含まれているか確認する。
+
+- **🟢 を含むコメントがある場合**、各指摘について `gh issue create` で新しい GitHub issue を登録する。
+
+  **ラベルの準備**（初回のみ）：
+  ```bash
+  # info-finding ラベルが存在しない場合は作成する
+  gh label create info-finding --description "Review info-level finding" --color "0075ca" 2>/dev/null || true
+  ```
+
+  **issue のフォーマット（1指摘1issue）**：
+  ```markdown
+  ## 概要
+
+  （🟢 Info コメントの指摘内容）
+
+  ## 問題の詳細
+
+  （何が問題か・なぜ気になるかを具体的に説明）
+
+  ## 期待される状態
+
+  （どう改善されるべきか）
+
+  ## 発見PR
+
+  PR #<PR番号> のレビューで検出（Info レベル）
+  ```
+
+  ```bash
+  cat > "$(git rev-parse --git-dir)/INFO_ISSUE_BODY.md" << 'EOF'
+  （上記フォーマットで記述）
+  EOF
+
+  gh issue create \
+    --title "（指摘内容の要約）" \
+    --body-file "$(git rev-parse --git-dir)/INFO_ISSUE_BODY.md" \
+    --label "info-finding"
+  ```
+
+- **🟢 を含むコメントがない場合**（指摘なし、または Approve のみ）、issue 登録は行わない。
+
+いずれの場合もステップ7へ進む。
+
+### ステップ6後処理B：🔴/🟡 残存時の PR へのコメント記録
+
+loop_count >= 3 かつ 🔴/🟡 が残っている場合、以下を実行する。
+
+1. 未解消の 🔴/🟡 指摘内容をすべて読み取る。
+
+2. `gh pr comment` で未解消一覧を PR にコメント追加する：
+   ```bash
+   cat > "$(git rev-parse --git-dir)/UNRESOLVED_COMMENT.md" << 'EOF'
+   ## ⚠️ 未解消の指摘（レビュー修正ループ上限到達）
+
+   レビュー修正を3回試みましたが、以下の指摘が未解消のまま残っています。
+   手動での対応をお願いします。
+
+   （未解消の 🔴/🟡 指摘一覧）
+   EOF
+
+   gh pr comment <PR番号> --body-file "$(git rev-parse --git-dir)/UNRESOLVED_COMMENT.md"
+   ```
+
+3. さらに新しく追加されたコメントの中に 🟢 Info 指摘が含まれている場合は、**ステップ6後処理A** と同様の手順で新 issue として登録する。
+
+4. ステップ7へ進む。
 
 ### ステップ7：ユーザーへの最終報告
 
@@ -151,7 +221,10 @@ INSERT OR REPLACE INTO session_state (key, value) VALUES ('review_before_review_
 
 - 作成したPRのURL
 - 実行したループ回数（例：「レビュー指摘を2回修正しました」）
-- 最終レビューの結果（指摘なし / 未解消の指摘が残っている場合はその内容）
+- 最終レビューの結果（以下のいずれか）：
+  - 指摘なし（クリーン）
+  - 🟢 Info 指摘が残り、新しい GitHub issue として登録した（issue 番号を列挙）
+  - 🔴/🟡 がループ上限で残存し、PRにコメントを記録した（未解消指摘の要約）
 
 ## 動作確認・デバッグの方針
 
