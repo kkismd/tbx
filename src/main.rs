@@ -18,27 +18,22 @@ fn run_file(path: &str) -> std::process::ExitCode {
 
     let mut interp = Interpreter::new();
 
-    for line in src.lines() {
-        match interp.exec_line(line) {
-            Ok(()) => {
-                let out = interp.take_output();
-                print!("{out}");
-                let _ = io::stdout().flush();
-            }
-            Err(err) if matches!(err.kind, TbxError::Halted) => {
-                let out = interp.take_output();
-                print!("{out}");
-                let _ = io::stdout().flush();
-                return std::process::ExitCode::SUCCESS;
-            }
-            Err(err) => {
-                print_error(&err);
-                return std::process::ExitCode::FAILURE;
-            }
+    match interp.compile_program(&src) {
+        Ok(()) => {
+            let out = interp.take_output();
+            print!("{out}");
+            let _ = io::stdout().flush();
+            std::process::ExitCode::SUCCESS
+        }
+        Err(err) => {
+            // Flush any output that was produced before the error.
+            let out = interp.take_output();
+            print!("{out}");
+            let _ = io::stdout().flush();
+            print_error(&err);
+            std::process::ExitCode::FAILURE
         }
     }
-
-    std::process::ExitCode::SUCCESS
 }
 
 fn run_stdin() -> std::process::ExitCode {
