@@ -46,6 +46,11 @@ impl std::fmt::Display for InterpreterError {
     }
 }
 
+/// Token list and segment boundaries produced by `parse_line_into_segments`.
+///
+/// The `Vec<(usize, usize)>` contains `(start, end)` index pairs into the token list.
+type ParsedSegments = (Vec<SpannedToken>, Vec<(usize, usize)>);
+
 /// The TBX outer interpreter.
 ///
 /// Processes source text line by line, compiling and executing each statement
@@ -91,17 +96,20 @@ impl Interpreter {
         })
     }
 
-    /// Execute a single source line.
+    /// Tokenizes `source_line` and splits it into non-empty statement segments.
     ///
-    /// Tokenizes `line`, resolves the statement word, builds a temporary code buffer,
-    /// and runs it through the inner interpreter.
+    /// Segments are delimited by semicolons.  A leading `LineNum` token on the
+    /// first segment is stripped; if the interpreter is currently inside a DEF
+    /// body, it is also registered as a branch-target label.  Empty segments
+    /// (e.g. a trailing semicolon) are omitted from the result.
     ///
-    /// Returns `Ok(())` on success, or an `InterpreterError` containing position
-    /// and error details on failure.
-    pub fn exec_line(&mut self, line: &str) -> Result<(), InterpreterError> {
-        let mut lex = Lexer::new(line);
-
-        // Collect all tokens on this line.
+    /// Returns a tuple of `(tokens, boundaries)` where each boundary `(start, end)`
+    /// is a half-open index range into `tokens`.
+    fn parse_line_into_segments(
+        &mut self,
+        source_line: &str,
+    ) -> Result<ParsedSegments, InterpreterError> {
+        let mut lex = Lexer::new(source_line);
         let mut tokens: Vec<SpannedToken> = Vec::new();
         loop {
             let st = lex.next_token();
@@ -112,7 +120,7 @@ impl Interpreter {
         }
 
         if tokens.is_empty() {
-            return Ok(());
+            return Ok((tokens, Vec::new()));
         }
 
         // Split token list into segments at each Semicolon.
@@ -123,16 +131,17 @@ impl Interpreter {
             .filter_map(|(i, st)| matches!(st.token, Token::Semicolon).then_some(i))
             .collect();
 
-        let mut boundaries: Vec<(usize, usize)> = Vec::with_capacity(semi_positions.len() + 1);
+        let mut raw_boundaries: Vec<(usize, usize)> = Vec::with_capacity(semi_positions.len() + 1);
         let mut start = 0;
         for &pos in &semi_positions {
-            boundaries.push((start, pos));
+            raw_boundaries.push((start, pos));
             start = pos + 1;
         }
-        boundaries.push((start, tokens.len()));
+        raw_boundaries.push((start, tokens.len()));
 
+        let mut boundaries: Vec<(usize, usize)> = Vec::with_capacity(raw_boundaries.len());
         let mut first_segment = true;
-        for (seg_start_orig, seg_end) in boundaries {
+        for (seg_start_orig, seg_end) in raw_boundaries {
             let mut seg_start = seg_start_orig;
 
             // Only the first segment may begin with a line number.
@@ -141,26 +150,41 @@ impl Interpreter {
                 if seg_start < seg_end {
                     if let Token::LineNum(n) = tokens[seg_start].token {
                         if self.vm.compile_state.is_some() {
+                            // Inside a DEF body: register as a branch-target label.
                             let ln_line = tokens[seg_start].pos.line;
                             let ln_col = tokens[seg_start].pos.col;
-                            self.register_label(n, line, ln_line, ln_col)
+                            self.register_label(n, source_line, ln_line, ln_col)
                                 .inspect_err(|_e| {
                                     self.vm.rollback_def();
                                 })?;
                         }
+                        // Line numbers outside DEF are silently discarded.
                         seg_start += 1;
                     }
                 }
             }
 
-            // Skip empty segments (e.g., trailing semicolon or bare line number).
-            if seg_start >= seg_end {
-                continue;
+            // Omit empty segments (e.g. trailing semicolon or bare line number).
+            if seg_start < seg_end {
+                boundaries.push((seg_start, seg_end));
             }
-
-            self.exec_segment(&tokens[seg_start..seg_end], line)?;
         }
 
+        Ok((tokens, boundaries))
+    }
+
+    /// Execute a single source line.
+    ///
+    /// Tokenizes `line`, resolves the statement word, builds a temporary code buffer,
+    /// and runs it through the inner interpreter.
+    ///
+    /// Returns `Ok(())` on success, or an `InterpreterError` containing position
+    /// and error details on failure.
+    pub fn exec_line(&mut self, line: &str) -> Result<(), InterpreterError> {
+        let (tokens, boundaries) = self.parse_line_into_segments(line)?;
+        for (seg_start, seg_end) in boundaries {
+            self.exec_segment(&tokens[seg_start..seg_end], line)?;
+        }
         Ok(())
     }
 
@@ -578,73 +602,9 @@ impl Interpreter {
     pub fn compile_program(&mut self, source: &str) -> Result<(), InterpreterError> {
         let mut main_cells: Vec<Cell> = Vec::new();
 
-        // TODO(#263): The tokenize-and-segment loop below duplicates the logic in
-        // exec_line.  A shared private helper (e.g. `parse_line_into_segments`)
-        // would eliminate the duplication and reduce the risk of divergence when
-        // the segmentation rules change.
         for line in source.lines() {
-            // Tokenize the line.
-            let mut lex = Lexer::new(line);
-            let mut tokens: Vec<SpannedToken> = Vec::new();
-            loop {
-                let st = lex.next_token();
-                match &st.token {
-                    Token::Newline | Token::Eof => break,
-                    _ => tokens.push(st),
-                }
-            }
-
-            if tokens.is_empty() {
-                continue;
-            }
-
-            // Split at Semicolons into segments (same logic as exec_line).
-            let semi_positions: Vec<usize> = tokens
-                .iter()
-                .enumerate()
-                .filter_map(|(i, st)| matches!(st.token, Token::Semicolon).then_some(i))
-                .collect();
-
-            let mut boundaries: Vec<(usize, usize)> = Vec::with_capacity(semi_positions.len() + 1);
-            let mut start = 0;
-            for &pos in &semi_positions {
-                boundaries.push((start, pos));
-                start = pos + 1;
-            }
-            boundaries.push((start, tokens.len()));
-
-            let mut first_segment = true;
-            for (seg_start_orig, seg_end) in boundaries {
-                let mut seg_start = seg_start_orig;
-
-                // Only the first segment on a line may begin with a line number.
-                if first_segment {
-                    first_segment = false;
-                    if seg_start < seg_end {
-                        if let Token::LineNum(n) = tokens[seg_start].token {
-                            if self.vm.compile_state.is_some() {
-                                // Inside a DEF body: register as a branch target label.
-                                let ln_line = tokens[seg_start].pos.line;
-                                let ln_col = tokens[seg_start].pos.col;
-                                self.register_label(n, line, ln_line, ln_col).inspect_err(
-                                    |_e| {
-                                        self.vm.rollback_def();
-                                    },
-                                )?;
-                            }
-                            // Line-number labels outside DEF are not supported in program mode;
-                            // silently skip them (consistent with the no-GOTO-in-ground-level
-                            // decision in the implementation plan).
-                            seg_start += 1;
-                        }
-                    }
-                }
-
-                // Skip empty segments (e.g. trailing semicolon).
-                if seg_start >= seg_end {
-                    continue;
-                }
-
+            let (tokens, boundaries) = self.parse_line_into_segments(line)?;
+            for (seg_start, seg_end) in boundaries {
                 self.compile_program_segment(&tokens[seg_start..seg_end], line, &mut main_cells)?;
             }
         }
@@ -731,7 +691,7 @@ impl Interpreter {
                 self.vm.data_stack.truncate(saved_data_stack_len);
                 self.vm.return_stack.truncate(saved_return_stack_len);
                 self.vm.bp = saved_bp;
-                // TODO: Runtime errors from the main-routine execution carry no source
+                // TODO(#275): Runtime errors from the main-routine execution carry no source
                 // position because compiled cells do not store their origin.  A future
                 // improvement would embed (line, col) metadata alongside each statement's
                 // cells so the inner interpreter can report accurate locations.
