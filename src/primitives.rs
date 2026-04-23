@@ -535,11 +535,6 @@ pub fn def_prim(vm: &mut VM) -> Result<(), TbxError> {
                     break; // Empty parameter list: DEF WORD().
                 }
                 (DefParseState::FirstParamOrEnd, crate::lexer::Token::Ident(param)) => {
-                    if local_table.contains_key(&param) {
-                        return Err(TbxError::InvalidExpression {
-                            reason: "duplicate parameter name in parameter list",
-                        });
-                    }
                     local_table.insert(param, arity);
                     arity += 1;
                     state = DefParseState::CommaOrRParen;
