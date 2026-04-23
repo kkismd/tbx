@@ -201,62 +201,13 @@ impl Interpreter {
         if let Some(xt) = self.vm.lookup(&stmt_name) {
             let flags = self.vm.headers[xt.index()].flags;
             if flags & crate::dict::FLAG_IMMEDIATE != 0 {
-                let make_err = |e: TbxError| {
-                    InterpreterError::new(stmt_pos_line, stmt_pos_col, source_line, e)
-                };
-
-                // Clone the kind to determine how to dispatch without holding a borrow on self.vm.
-                let kind = self.vm.headers[xt.index()].kind.clone();
-                // Capture arity and local_count to guard against words that require a call frame.
-                // vm.run() does not set up bp or local variable slots; words with formal
-                // parameters or VAR locals would access the wrong stack positions.
-                let arity = self.vm.headers[xt.index()].arity;
-                let local_count = self.vm.headers[xt.index()].local_count;
-
-                // Feed remaining tokens into vm.token_stream.
-                let remaining: VecDeque<SpannedToken> = tokens[idx..].iter().cloned().collect();
-                self.vm.token_stream = Some(remaining);
-
-                // Save VM state for rollback on error.
-                let saved_data_stack_len = self.vm.data_stack.len();
-                let saved_return_stack_len = self.vm.return_stack.len();
-                let saved_bp = self.vm.bp;
-
-                let run_result = match kind {
-                    // Native primitive: call the function pointer directly (avoids
-                    // temporary-buffer issues when the primitive writes to the dictionary).
-                    crate::dict::EntryKind::Primitive(f) => f(&mut self.vm),
-                    // User-defined word: run via vm.run(), passing the body start address.
-                    // Guard: words with formal parameters (arity > 0) or VAR locals
-                    // (local_count > 0) require a CALL frame (bp/stack setup) that
-                    // vm.run() alone does not provide. Reject them here to prevent
-                    // silent stack corruption.
-                    crate::dict::EntryKind::Word(body_addr) => {
-                        if arity > 0 || local_count > 0 {
-                            Err(TbxError::InvalidExpression {
-                                reason: "IMMEDIATE user word with parameters or VAR locals cannot be called without a CALL frame",
-                            })
-                        } else {
-                            self.vm.run(body_addr)
-                        }
-                    }
-                    _ => Err(TbxError::InvalidExpression {
-                        reason: "IMMEDIATE word kind is not executable",
-                    }),
-                };
-
-                // Clear token stream.
-                self.vm.token_stream = None;
-
-                // On error, rollback compile state and stacks.
-                if run_result.is_err() {
-                    self.vm.rollback_def();
-                    self.vm.data_stack.truncate(saved_data_stack_len);
-                    self.vm.return_stack.truncate(saved_return_stack_len);
-                    self.vm.bp = saved_bp;
-                }
-
-                return run_result.map_err(make_err);
+                return self.exec_immediate_word(
+                    xt,
+                    &tokens[idx..],
+                    stmt_pos_line,
+                    stmt_pos_col,
+                    source_line,
+                );
             }
         }
 
@@ -505,6 +456,74 @@ impl Interpreter {
         self.vm.take_output()
     }
 
+    /// Execute an IMMEDIATE word, regardless of compile/interpret mode.
+    ///
+    /// Sets up `vm.token_stream` with the remaining tokens, dispatches the word
+    /// (Primitive or zero-arity Word), then clears the stream.
+    ///
+    /// On error, rolls back compile state and stack state before returning.
+    fn exec_immediate_word(
+        &mut self,
+        xt: Xt,
+        tokens_after_stmt: &[SpannedToken],
+        stmt_pos_line: usize,
+        stmt_pos_col: usize,
+        source_line: &str,
+    ) -> Result<(), InterpreterError> {
+        let make_err =
+            |e: TbxError| InterpreterError::new(stmt_pos_line, stmt_pos_col, source_line, e);
+
+        // Clone fields needed for dispatch before the mutable borrow below.
+        let kind = self.vm.headers[xt.index()].kind.clone();
+        let arity = self.vm.headers[xt.index()].arity;
+        let local_count = self.vm.headers[xt.index()].local_count;
+
+        // Feed remaining tokens into vm.token_stream so the IMMEDIATE word can
+        // consume them via vm.next_token().
+        let remaining: VecDeque<SpannedToken> = tokens_after_stmt.iter().cloned().collect();
+        self.vm.token_stream = Some(remaining);
+
+        // Save VM state for rollback on error.
+        let saved_data_stack_len = self.vm.data_stack.len();
+        let saved_return_stack_len = self.vm.return_stack.len();
+        let saved_bp = self.vm.bp;
+
+        let run_result = match kind {
+            // Native primitive: call the function pointer directly (avoids
+            // temporary-buffer issues when the primitive writes to the dictionary).
+            crate::dict::EntryKind::Primitive(f) => f(&mut self.vm),
+            // User-defined word: run via vm.run(), passing the body start address.
+            // Guard: words with formal parameters (arity > 0) or VAR locals
+            // (local_count > 0) require a CALL frame (bp/stack setup) that
+            // vm.run() alone does not provide.
+            crate::dict::EntryKind::Word(body_addr) => {
+                if arity > 0 || local_count > 0 {
+                    Err(TbxError::InvalidExpression {
+                        reason: "IMMEDIATE user word with parameters or VAR locals cannot be called without a CALL frame",
+                    })
+                } else {
+                    self.vm.run(body_addr)
+                }
+            }
+            _ => Err(TbxError::InvalidExpression {
+                reason: "IMMEDIATE word kind is not executable",
+            }),
+        };
+
+        // Clear token stream.
+        self.vm.token_stream = None;
+
+        // On error, rollback compile state and stacks.
+        if run_result.is_err() {
+            self.vm.rollback_def();
+            self.vm.data_stack.truncate(saved_data_stack_len);
+            self.vm.return_stack.truncate(saved_return_stack_len);
+            self.vm.bp = saved_bp;
+        }
+
+        run_result.map_err(make_err)
+    }
+
     /// Register a line-number label at the current dictionary pointer.
     ///
     /// Inserts the label into the label table and back-patches any forward
@@ -633,11 +652,18 @@ impl Interpreter {
         // corrupt subsequent calls because every statement would be treated as part
         // of the unfinished word body.
         if self.vm.compile_state.is_some() {
+            // Capture the word name before rollback for a more informative error message.
+            let word_name = self
+                .vm
+                .compile_state
+                .as_ref()
+                .map(|s| s.word_name.clone())
+                .unwrap_or_default();
             self.vm.rollback_def();
             return Err(InterpreterError::new(
                 0,
                 0,
-                "",
+                &format!("DEF {word_name}"),
                 TbxError::InvalidExpression {
                     reason: "DEF without matching END at end of source",
                 },
@@ -675,7 +701,7 @@ impl Interpreter {
             return Err(InterpreterError::new(0, 0, "", e));
         }
 
-        // Save stack/bp state for rollback on runtime error.
+        // Save stack/bp state for rollback on runtime error or HALT.
         let saved_data_stack_len = self.vm.data_stack.len();
         let saved_return_stack_len = self.vm.return_stack.len();
         let saved_bp = self.vm.bp;
@@ -690,7 +716,13 @@ impl Interpreter {
         match run_result {
             Ok(()) => Ok(()),
             // HALT is normal termination in program mode.
-            Err(TbxError::Halted) => Ok(()),
+            // Restore stacks because DROP_TO_MARKER may not have run after HALT.
+            Err(TbxError::Halted) => {
+                self.vm.data_stack.truncate(saved_data_stack_len);
+                self.vm.return_stack.truncate(saved_return_stack_len);
+                self.vm.bp = saved_bp;
+                Ok(())
+            }
             Err(e) => {
                 self.vm.data_stack.truncate(saved_data_stack_len);
                 self.vm.return_stack.truncate(saved_return_stack_len);
@@ -732,51 +764,17 @@ impl Interpreter {
         }
 
         // IMMEDIATE word dispatch: execute immediately regardless of compile/interpret mode.
-        // This mirrors the same block in exec_segment exactly.
+        // Delegates to exec_immediate_word helper to avoid code duplication with exec_segment.
         if let Some(xt) = self.vm.lookup(&stmt_name) {
             let flags = self.vm.headers[xt.index()].flags;
             if flags & crate::dict::FLAG_IMMEDIATE != 0 {
-                let make_err = |e: TbxError| {
-                    InterpreterError::new(stmt_pos_line, stmt_pos_col, source_line, e)
-                };
-
-                let kind = self.vm.headers[xt.index()].kind.clone();
-                let arity = self.vm.headers[xt.index()].arity;
-                let local_count = self.vm.headers[xt.index()].local_count;
-
-                let remaining: VecDeque<SpannedToken> = tokens[idx..].iter().cloned().collect();
-                self.vm.token_stream = Some(remaining);
-
-                let saved_data_stack_len = self.vm.data_stack.len();
-                let saved_return_stack_len = self.vm.return_stack.len();
-                let saved_bp = self.vm.bp;
-
-                let run_result = match kind {
-                    crate::dict::EntryKind::Primitive(f) => f(&mut self.vm),
-                    crate::dict::EntryKind::Word(body_addr) => {
-                        if arity > 0 || local_count > 0 {
-                            Err(TbxError::InvalidExpression {
-                                reason: "IMMEDIATE user word with parameters or VAR locals cannot be called without a CALL frame",
-                            })
-                        } else {
-                            self.vm.run(body_addr)
-                        }
-                    }
-                    _ => Err(TbxError::InvalidExpression {
-                        reason: "IMMEDIATE word kind is not executable",
-                    }),
-                };
-
-                self.vm.token_stream = None;
-
-                if run_result.is_err() {
-                    self.vm.rollback_def();
-                    self.vm.data_stack.truncate(saved_data_stack_len);
-                    self.vm.return_stack.truncate(saved_return_stack_len);
-                    self.vm.bp = saved_bp;
-                }
-
-                return run_result.map_err(make_err);
+                return self.exec_immediate_word(
+                    xt,
+                    &tokens[idx..],
+                    stmt_pos_line,
+                    stmt_pos_col,
+                    source_line,
+                );
             }
         }
 
@@ -1864,7 +1862,11 @@ PUTDEC 99
         let mut interp = Interpreter::new();
         let src = "DEF GREET\nPUTDEC 42\nEND\nGREET";
         interp.exec_source(src).unwrap();
-        assert!(interp.take_output().contains("42"));
+        assert_eq!(
+            interp.take_output(),
+            "42",
+            "expected '42' from exec_source regression check"
+        );
     }
 
     #[test]
