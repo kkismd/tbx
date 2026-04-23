@@ -216,6 +216,26 @@ LIT:
 
 インナ・インタプリタが `LIT` のXtに到達すると、次のセル（`pc+1`）を値としてデータスタックに積み、`pc` を2進める。ここで `pc` はLIT自身のXtが格納されたセルを指している。通常の1セル命令では `pc += 1` だが、LITはインライン・オペランドを伴うため `pc += 2` となる。
 
+##### OFFSET — 配列インデックス命令
+
+スタックトップのインデックスを消費し、配列要素のアドレス（`DictAddr`）をスタックに積む内部命令。インライン・オペランドとして配列先頭インデックス（`base`）と要素数（`size`）の2セルを持つ。
+
+```
+OFFSET:
+  idx = pop()
+  base = dictionary[pc + 1]  (Int)
+  size = dictionary[pc + 2]  (Int)
+  bounds_check(idx, size)    --> ArrayIndexOutOfBounds if out of range
+  push(DictAddr(base + idx))
+  pc += 3
+```
+
+- `dictionary[pc+1]`：`Int(base)` — 配列の先頭要素が格納されている辞書インデックス
+- `dictionary[pc+2]`：`Int(size)` — 配列の要素数。境界チェックに使用する
+- スタックからインデックス `idx` をポップし、`0 <= idx < size` を検証する。範囲外の場合は `ArrayIndexOutOfBounds` エラーを発生させる
+- 検証通過後、`DictAddr(base + idx)` をデータスタックに積む
+- LIT が `pc += 2`（インライン・オペランド1個）であるのに対し、OFFSET はインライン・オペランドを2個（`base` と `size`）持つため `pc += 3` となる
+
 パーサーと検索
 
 | ステートメント | 説明                                                                                       |
@@ -246,6 +266,8 @@ COMPILE_EXPR    ( -- )
 | ローカル変数 `X` | `Xt(LIT)`, `StackAddr(n)`, `Xt(FETCH)` | 3 |
 | リファレンス `&A`（グローバル） | `Xt(LIT)`, `DictAddr(n)` | 2 |
 | リファレンス `&X`（ローカル） | `Xt(LIT)`, `StackAddr(n)` | 2 |
+| 配列読み出し `NUMS(I)` | index式 + `Xt(OFFSET)`, `Int(base)`, `Int(size)`, `Xt(FETCH)` | index式 + 4 |
+| 配列リファレンス `&NUMS(I)` | index式 + `Xt(OFFSET)`, `Int(base)`, `Int(size)` | index式 + 3 |
 | 単項演算子 `-` | `Xt(NEGATE)` | 1 |
 | 二項演算子 `+` | `Xt(ADD)` | 1 |
 | ワード呼び出し `W(...)` | 引数列 + `Xt(CALL)`, `Xt(W)`, `Int(arity)`, `Int(local_count)` | 引数分 + 4 |
