@@ -72,7 +72,7 @@ Xt(EXIT)                                // detect TopLevel sentinel frame and ex
 ```
 
 - ステートメント名を辞書で検索し、見つからなければエラー。
-- `arity`（引数の数）はステートメントのシグネチャから確定する（例: `PUTDEC` は1、`LET` は2）。
+- `arity`（引数の数）はステートメントのシグネチャから確定する（例: `PUTDEC` は1、`SET` は2）。
 - `Int(0)` は `local_count`（ステートメント呼び出し側はローカル変数を確保しない）。
 - `CALL` 命令は `EntryKind::Word` 専用であるため、プリミティブ等に対して使用することはできない。
 - `vm.run()` は `ReturnFrame::TopLevel` 番哨フレームを通じて `EXIT` 実行時に終了する。

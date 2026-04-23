@@ -79,12 +79,12 @@ pub fn store_prim(vm: &mut VM) -> Result<(), TbxError> {
     }
 }
 
-/// LET — pop value (top) then addr (below), and store value at addr.
+/// SET — pop value (top) then addr (below), and store value at addr.
 ///
-/// Designed for the `LET &var, value` statement pattern where `&var` is
+/// Designed for the `SET &var, value` statement pattern where `&var` is
 /// pushed before `value` (left-to-right argument evaluation via comma).
-/// Stack convention: `[..., addr, value]` → LET → `[...]`
-pub fn let_prim(vm: &mut VM) -> Result<(), TbxError> {
+/// Stack convention: `[..., addr, value]` → SET → `[...]`
+pub fn set_prim(vm: &mut VM) -> Result<(), TbxError> {
     let value = vm.pop()?;
     let addr = vm.pop()?;
     match addr {
@@ -1010,7 +1010,7 @@ pub fn register_all(vm: &mut VM) {
     vm.register(WordEntry::new_primitive("SWAP", swap_prim));
     vm.register(WordEntry::new_primitive("FETCH", fetch_prim));
     vm.register(WordEntry::new_primitive("STORE", store_prim));
-    vm.register(WordEntry::new_primitive("LET", let_prim));
+    vm.register(WordEntry::new_primitive("SET", set_prim));
     vm.register(WordEntry::new_primitive("ADD", add_prim));
     vm.register(WordEntry::new_primitive("SUB", sub_prim));
     vm.register(WordEntry::new_primitive("MUL", mul_prim));

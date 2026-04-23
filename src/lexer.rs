@@ -1200,9 +1200,9 @@ mod tests {
     #[test]
     fn test_reference_operator() {
         assert_eq!(
-            tokens("LET &I, 42"),
+            tokens("SET &I, 42"),
             vec![
-                Token::Ident("LET".to_string()),
+                Token::Ident("SET".to_string()),
                 Token::Ampersand,
                 Token::Ident("I".to_string()),
                 Token::Comma,
