@@ -1922,21 +1922,24 @@ PUTDEC 99
     #[test]
     fn test_compile_program_immediate_at_ground_level() {
         // An IMMEDIATE word used at ground level during compile_program should execute
-        // immediately (not be compiled into the main routine).
+        // immediately (not be compiled into the main routine), and subsequent ground-level
+        // statements must still be compiled and executed normally.
         let mut interp = Interpreter::new();
         let src = "\
 DEF IWORD
 PUTDEC 55
 END
 IMMEDIATE IWORD
-IWORD";
+IWORD
+PUTDEC 42";
         interp.compile_program(src).unwrap();
-        // IWORD is IMMEDIATE, so it runs once during the compile phase (IMMEDIATE IWORD sets the
-        // flag, then IWORD is executed immediately as ground-level code).
+        // IWORD executes immediately at ground level (output "55").
+        // The subsequent PUTDEC 42 is compiled into the main routine and executes after
+        // the IMMEDIATE word, producing "42".
         let out = interp.take_output();
         assert_eq!(
-            out, "55",
-            "expected '55' from IMMEDIATE word at ground level, got: {out:?}"
+            out, "5542",
+            "expected '5542': IMMEDIATE word output followed by continued compilation, got: {out:?}"
         );
     }
 
@@ -1963,8 +1966,8 @@ IWORD";
     }
 
     #[test]
-    fn test_exec_line_immediate_in_expression_is_error() {
-        // Regression: interpreter mode (exec_line) should also reject IMMEDIATE words
+    fn test_exec_source_immediate_in_expression_is_error() {
+        // Regression: interpreter mode (exec_source) should also reject IMMEDIATE words
         // inside expressions, returning InvalidExpression.
         let mut interp = Interpreter::new();
         interp.exec_source("VAR V\nIMMEDIATE V").unwrap();
