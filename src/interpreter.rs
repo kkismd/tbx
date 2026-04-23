@@ -802,7 +802,7 @@ DOUBLE 21";
         let src = "\
 DEF COUNTER
   VAR I
-  LET &I, 1
+  SET &I, 1
   PUTDEC I
   PUTSTR \"\\n\"
 END
@@ -834,7 +834,7 @@ DOUBLE 10";
         let mut interp = Interpreter::new();
         let src = "\
 VAR X
-LET &X, 99
+SET &X, 99
 DEF SHADOW(X)
   PUTDEC X
   PUTSTR \"\\n\"
@@ -856,7 +856,7 @@ SHADOW 42";
         let src = "\
 DEF ADDONE(X)
   VAR R
-  LET &R, X + 1
+  SET &R, X + 1
   PUTDEC R
   PUTSTR \"\\n\"
 END
@@ -874,7 +874,7 @@ ADDONE 10";
         let src = "\
 DEF ADDONE(X)
   VAR R
-  LET &R, X + 1
+  SET &R, X + 1
   PUTDEC R
   PUTSTR \"\\n\"
 END
@@ -906,11 +906,11 @@ ADDONE 20";
         let src = r#"
 DEF MYWORD
   VAR I
-  LET &I, 1
+  SET &I, 1
   10
     PUTDEC I
     PUTSTR "\n"
-    LET &I, I + 1
+    SET &I, I + 1
     BIT I > 10, 99
     GOTO 10
   99
@@ -931,7 +931,7 @@ MYWORD
         let src = r#"
 DEF TESTBIF
   VAR I
-  LET &I, 0
+  SET &I, 0
   BIF I, 99
   PUTDEC 42
   PUTSTR "\n"
@@ -952,7 +952,7 @@ TESTBIF
         let src = r#"
 DEF TESTBIF2
   VAR I
-  LET &I, 1
+  SET &I, 1
   BIF I, 99
   PUTDEC 42
   PUTSTR "\n"
@@ -1199,7 +1199,7 @@ PUTDEC FACT(5)
 
     #[test]
     fn test_recursive_with_var_expr() {
-        // Regression test for issue #222: self-recursive call inside a LET expression
+        // Regression test for issue #222: self-recursive call inside a SET expression
         // (processed by ExprCompiler) must have its local_count back-patched.
         // Previously, local_count=0 was permanently embedded and caused IndexOutOfBounds
         // at runtime when the VAR slot was accessed.
@@ -1208,7 +1208,7 @@ PUTDEC FACT(5)
 DEF FACT(N)
   VAR R
   BIT N <= 1, 10
-    LET &R, N * FACT(N - 1)
+    SET &R, N * FACT(N - 1)
     RETURN R
   10 RETURN 1
 END
@@ -1228,7 +1228,7 @@ PUTSTR "\n"
 DEF FACT(N)
   VAR R
   BIT N <= 1, 10
-    LET &R, N - 1
+    SET &R, N - 1
     RETURN N * FACT(R)
   10 RETURN 1
 END
@@ -1338,7 +1338,7 @@ GREET";
 DEF MYGT(N)
   VAR R
   BIT N <= 0, 10
-    LET &R, N - 1
+    SET &R, N - 1
     BIT MYGT(R) > 0, 20
       RETURN 1
     20 RETURN 2

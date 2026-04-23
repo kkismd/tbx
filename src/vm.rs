@@ -2579,7 +2579,7 @@ mod tests {
     }
 
     // ------------------------------------------------------------------
-    // End-to-end integration tests: DIM + LET &NUMS(I) + NUMS(I) read
+    // End-to-end integration tests: DIM + SET &NUMS(I) + NUMS(I) read
     // ------------------------------------------------------------------
 
     /// Run a multi-line TBX source snippet through the full interpreter pipeline.
@@ -2595,16 +2595,16 @@ mod tests {
         // DIM A(3), write each element, read A(1) back via PUTDEC.
         let out = run_source(
             "DIM A(3)\n\
-             LET &A(0), 10\n\
-             LET &A(1), 99\n\
-             LET &A(2), 30\n\
+             SET &A(0), 10\n\
+             SET &A(1), 99\n\
+             SET &A(2), 30\n\
              PUTDEC A(1)",
         )
         .expect("source should run without error");
         assert_eq!(
             out.trim(),
             "99",
-            "A(1) should contain 99 after LET &A(1), 99"
+            "A(1) should contain 99 after SET &A(1), 99"
         );
     }
 
@@ -2614,10 +2614,10 @@ mod tests {
         let out = run_source(
             "VAR I\n\
              DIM NUMS(5)\n\
-             LET &I, 1\n\
-             LET &NUMS(0), 2\n\
-             LET &I, I+1\n\
-             LET &NUMS(1), 10\n\
+             SET &I, 1\n\
+             SET &NUMS(0), 2\n\
+             SET &I, I+1\n\
+             SET &NUMS(1), 10\n\
              PUTDEC NUMS(0) * NUMS(1)",
         )
         .expect("source should run without error");
@@ -2639,15 +2639,15 @@ mod tests {
 
     #[test]
     fn test_e2e_dim_dynamic_index_write_read() {
-        // Reproduce the core use case from issue #253: LET &NUMS(I), value with a
+        // Reproduce the core use case from issue #253: SET &NUMS(I), value with a
         // variable index.  Writes via dynamic index, reads back via the same.
         let out = run_source(
             "VAR I\n\
              DIM NUMS(5)\n\
-             LET &I, 1\n\
-             LET &NUMS(I), 2\n\
-             LET &I, I+1\n\
-             LET &NUMS(I), 10\n\
+             SET &I, 1\n\
+             SET &NUMS(I), 2\n\
+             SET &I, I+1\n\
+             SET &NUMS(I), 10\n\
              PUTDEC NUMS(1) * NUMS(2)",
         )
         .expect("source should run without error");
