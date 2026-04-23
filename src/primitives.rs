@@ -927,6 +927,85 @@ fn emit_jump_target_to_dict(vm: &mut VM, label_n: i64) -> Result<(), TbxError> {
     Ok(())
 }
 
+/// DIM — declare a global array. Syntax: `DIM NAME(SIZE)`.
+///
+/// Allocates `SIZE` cells of `Cell::None` in the dictionary and registers the
+/// array under `NAME` as an `EntryKind::Array` entry.
+///
+/// This word is IMMEDIATE and executes at read time (like VAR).
+/// Using DIM inside a DEF..END block is not allowed.
+pub fn dim_prim(vm: &mut VM) -> Result<(), TbxError> {
+    if vm.is_compiling {
+        return Err(TbxError::InvalidExpression {
+            reason: "DIM is not allowed inside DEF",
+        });
+    }
+
+    // Read array name.
+    let tok = vm.next_token()?;
+    let name = match tok.token {
+        Token::Ident(n) => n,
+        _ => {
+            return Err(TbxError::InvalidExpression {
+                reason: "expected array name after DIM",
+            })
+        }
+    };
+
+    // Read '('.
+    let tok = vm.next_token()?;
+    if !matches!(tok.token, Token::LParen) {
+        return Err(TbxError::InvalidExpression {
+            reason: "expected '(' after DIM NAME",
+        });
+    }
+
+    // Read size (must be a positive integer literal).
+    let tok = vm.next_token()?;
+    let size = match tok.token {
+        Token::IntLit(n) if n <= 0 => return Err(TbxError::InvalidAllotCount),
+        Token::IntLit(n) => n as usize,
+        _ => {
+            return Err(TbxError::InvalidExpression {
+                reason: "expected positive integer size in DIM NAME(SIZE)",
+            })
+        }
+    };
+
+    // Read ')'.
+    let tok = vm.next_token()?;
+    if !matches!(tok.token, Token::RParen) {
+        return Err(TbxError::InvalidExpression {
+            reason: "expected ')' after DIM NAME(SIZE",
+        });
+    }
+
+    // Check that the allocation fits within the dictionary limit.
+    let new_dp = vm
+        .dp
+        .checked_add(size)
+        .ok_or(TbxError::DictionaryOverflow {
+            requested: usize::MAX,
+            limit: MAX_DICTIONARY_CELLS,
+        })?;
+    if new_dp > MAX_DICTIONARY_CELLS {
+        return Err(TbxError::DictionaryOverflow {
+            requested: new_dp,
+            limit: MAX_DICTIONARY_CELLS,
+        });
+    }
+
+    // Allocate storage and register the array entry.
+    let base = vm.dp;
+    for _ in 0..size {
+        vm.dict_write(Cell::None)?;
+    }
+    let entry = crate::dict::WordEntry::new_array(&name, base, size);
+    vm.register(entry);
+    vm.seal_user();
+    Ok(())
+}
+
 /// Register all stack primitives into the VM's dictionary.
 pub fn register_all(vm: &mut VM) {
     vm.register(WordEntry::new_primitive("DROP", drop_prim));
@@ -1065,6 +1144,22 @@ pub fn register_all(vm: &mut VM) {
     let mut return_entry = WordEntry::new_primitive("RETURN", return_prim);
     return_entry.flags = FLAG_IMMEDIATE | FLAG_SYSTEM;
     vm.register(return_entry);
+    // OFFSET: system-internal instruction handled by the inner interpreter.
+    // Pops an index from the data stack, bounds-checks it against inline base/size
+    // operands, and pushes the element address.
+    vm.register(WordEntry {
+        name: "OFFSET".to_string(),
+        flags: FLAG_SYSTEM,
+        kind: EntryKind::Offset,
+        arity: 0,
+        local_count: 0,
+        prev: None,
+    });
+    // DIM: IMMEDIATE so the outer interpreter feeds the token stream before calling it.
+    // FLAG_SYSTEM marks it as a system word consistent with other compile-time declarations.
+    let mut dim_entry = WordEntry::new_primitive("DIM", dim_prim);
+    dim_entry.flags = FLAG_IMMEDIATE | FLAG_SYSTEM;
+    vm.register(dim_entry);
 }
 
 #[cfg(test)]
@@ -3236,6 +3331,130 @@ mod tests {
         assert!(
             vm.compile_state.is_some(),
             "compile_state should still be set after return_prim"
+        );
+    }
+
+    // ------------------------------------------------------------------
+    // DIM primitive tests
+    // ------------------------------------------------------------------
+
+    /// Helper: build a minimal execution-mode VM with all primitives registered.
+    fn make_exec_vm() -> VM {
+        let mut vm = VM::new();
+        register_all(&mut vm);
+        vm
+    }
+
+    #[test]
+    fn test_dim_allocates_storage_and_registers_array() {
+        use std::collections::VecDeque;
+        let mut vm = make_exec_vm();
+
+        // DIM NUMS(3) — should allocate 3 cells and register an Array entry.
+        vm.token_stream = Some(VecDeque::from([
+            crate::lexer::SpannedToken {
+                token: Token::Ident("NUMS".to_string()),
+                pos: crate::lexer::Position { line: 1, col: 1 },
+                source_offset: 0,
+                source_len: 4,
+            },
+            crate::lexer::SpannedToken {
+                token: Token::LParen,
+                pos: crate::lexer::Position { line: 1, col: 5 },
+                source_offset: 4,
+                source_len: 1,
+            },
+            crate::lexer::SpannedToken {
+                token: Token::IntLit(3),
+                pos: crate::lexer::Position { line: 1, col: 6 },
+                source_offset: 5,
+                source_len: 1,
+            },
+            crate::lexer::SpannedToken {
+                token: Token::RParen,
+                pos: crate::lexer::Position { line: 1, col: 7 },
+                source_offset: 6,
+                source_len: 1,
+            },
+        ]));
+
+        let dp_before = vm.dp;
+        dim_prim(&mut vm).unwrap();
+
+        // dp should have advanced by 3.
+        assert_eq!(vm.dp, dp_before + 3, "dp should advance by 3");
+
+        // Each allocated cell must be Cell::None.
+        for offset in 0..3 {
+            assert_eq!(
+                vm.dict_read(dp_before + offset).unwrap(),
+                Cell::None,
+                "allocated cell at offset {offset} should be None"
+            );
+        }
+
+        // The word "NUMS" must be visible as an Array entry.
+        let xt = vm.lookup("NUMS").expect("NUMS should be registered");
+        assert!(
+            matches!(
+                vm.headers[xt.index()].kind,
+                crate::dict::EntryKind::Array { base, size } if base == dp_before && size == 3
+            ),
+            "expected Array {{ base: {dp_before}, size: 3 }}, got {:?}",
+            vm.headers[xt.index()].kind
+        );
+    }
+
+    #[test]
+    fn test_dim_zero_size_returns_error() {
+        use std::collections::VecDeque;
+        let mut vm = make_exec_vm();
+
+        vm.token_stream = Some(VecDeque::from([
+            crate::lexer::SpannedToken {
+                token: Token::Ident("BUF".to_string()),
+                pos: crate::lexer::Position { line: 1, col: 1 },
+                source_offset: 0,
+                source_len: 3,
+            },
+            crate::lexer::SpannedToken {
+                token: Token::LParen,
+                pos: crate::lexer::Position { line: 1, col: 4 },
+                source_offset: 3,
+                source_len: 1,
+            },
+            crate::lexer::SpannedToken {
+                token: Token::IntLit(0),
+                pos: crate::lexer::Position { line: 1, col: 5 },
+                source_offset: 4,
+                source_len: 1,
+            },
+            crate::lexer::SpannedToken {
+                token: Token::RParen,
+                pos: crate::lexer::Position { line: 1, col: 6 },
+                source_offset: 5,
+                source_len: 1,
+            },
+        ]));
+
+        let err = dim_prim(&mut vm).unwrap_err();
+        assert_eq!(
+            err,
+            TbxError::InvalidAllotCount,
+            "DIM with size 0 should return InvalidAllotCount"
+        );
+    }
+
+    #[test]
+    fn test_dim_inside_def_returns_error() {
+        let mut vm = make_compiling_vm("MYWORD");
+        // token_stream doesn't matter — DIM should refuse inside DEF.
+        use std::collections::VecDeque;
+        vm.token_stream = Some(VecDeque::new());
+        let err = dim_prim(&mut vm).unwrap_err();
+        assert!(
+            matches!(err, TbxError::InvalidExpression { reason } if reason.contains("DIM")),
+            "expected InvalidExpression mentioning DIM, got {err:?}"
         );
     }
 }

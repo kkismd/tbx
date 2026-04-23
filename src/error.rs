@@ -23,6 +23,11 @@ pub enum TbxError {
         index: usize,
         size: usize,
     },
+    /// An array index was out of the valid range `[0, size)`.
+    ArrayIndexOutOfBounds {
+        index: i64,
+        size: usize,
+    },
     DivisionByZero,
     /// The dictionary pointer exceeded the maximum allowed size.
     DictionaryOverflow {
@@ -104,6 +109,9 @@ impl std::fmt::Display for TbxError {
             }
             TbxError::IndexOutOfBounds { index, size } => {
                 write!(f, "index out of bounds: index {}, size {}", index, size)
+            }
+            TbxError::ArrayIndexOutOfBounds { index, size } => {
+                write!(f, "array index out of bounds: index {index}, size {size}")
             }
             TbxError::DivisionByZero => write!(f, "division by zero"),
             TbxError::DictionaryOverflow { requested, limit } => {

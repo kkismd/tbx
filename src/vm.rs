@@ -700,6 +700,31 @@ impl VM {
                     self.push(val)?;
                     self.pc += 1;
                 }
+                EntryKind::Offset => {
+                    // Read inline operands: base at pc+1, size at pc+2.
+                    let base_cell = self.dict_read(self.pc + 1)?;
+                    let base = base_cell.as_int().ok_or_else(|| TbxError::TypeError {
+                        expected: "Int (array base)",
+                        got: base_cell.type_name(),
+                    })? as usize;
+                    let size_cell = self.dict_read(self.pc + 2)?;
+                    let size = size_cell.as_int().ok_or_else(|| TbxError::TypeError {
+                        expected: "Int (array size)",
+                        got: size_cell.type_name(),
+                    })? as usize;
+                    let idx = self.pop_int()?;
+                    if idx < 0 || idx as usize >= size {
+                        return Err(TbxError::ArrayIndexOutOfBounds { index: idx, size });
+                    }
+                    self.push(Cell::DictAddr(base + idx as usize))?;
+                    self.pc += 3;
+                }
+                EntryKind::Array { base, .. } => {
+                    // Normally reached only via OFFSET during expression evaluation.
+                    // Direct dispatch pushes the base address as a conservative fallback.
+                    self.push(Cell::DictAddr(base))?;
+                    self.pc += 1;
+                }
             }
         }
 
