@@ -981,8 +981,9 @@ pub fn dim_prim(vm: &mut VM) -> Result<(), TbxError> {
     }
 
     // Check that the allocation fits within the dictionary limit.
-    // Use saturating_add so that the error message shows a meaningful requested value
-    // rather than usize::MAX when the addition itself would overflow.
+    // Use saturating_add to guard against usize overflow when dp + size > usize::MAX.
+    // In practice this cannot occur given MAX_DICTIONARY_CELLS = 1_048_576, but the
+    // guard makes the overflow behaviour explicit rather than relying on wrapping.
     let new_dp = vm.dp.saturating_add(size);
     if new_dp > MAX_DICTIONARY_CELLS {
         return Err(TbxError::DictionaryOverflow {

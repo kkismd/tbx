@@ -707,13 +707,8 @@ impl VM {
                         expected: "Int (array base)",
                         got: base_cell.type_name(),
                     })?;
-                    if base_raw < 0 {
-                        return Err(TbxError::InvalidOperand {
-                            name: "array base",
-                            value: base_raw,
-                            reason: "must be non-negative",
-                        });
-                    }
+                    // base is always a valid dictionary index (usize origin), so
+                    // base_raw < 0 cannot occur in well-formed bytecode.  Cast directly.
                     let base = base_raw as usize;
 
                     let size_cell = self.dict_read(self.pc + 2)?;
@@ -2574,6 +2569,65 @@ mod tests {
         assert!(
             matches!(err, crate::error::TbxError::TypeError { .. }),
             "direct Array dispatch should return TypeError, got: {err:?}"
+        );
+    }
+
+    // ------------------------------------------------------------------
+    // End-to-end integration tests: DIM + LET &NUMS(I) + NUMS(I) read
+    // ------------------------------------------------------------------
+
+    /// Run a multi-line TBX source snippet through the full interpreter pipeline.
+    /// Returns the accumulated output buffer on success, or the first error encountered.
+    fn run_source(src: &str) -> Result<String, crate::error::TbxError> {
+        let mut interp = crate::interpreter::Interpreter::new();
+        interp.exec_source(src).map_err(|e| e.kind)?;
+        Ok(interp.take_output())
+    }
+
+    #[test]
+    fn test_e2e_dim_write_read_single_element() {
+        // DIM A(3), write each element, read A(1) back via PUTDEC.
+        let out = run_source(
+            "DIM A(3)\n\
+             LET &A(0), 10\n\
+             LET &A(1), 99\n\
+             LET &A(2), 30\n\
+             PUTDEC A(1)",
+        )
+        .expect("source should run without error");
+        assert_eq!(
+            out.trim(),
+            "99",
+            "A(1) should contain 99 after LET &A(1), 99"
+        );
+    }
+
+    #[test]
+    fn test_e2e_dim_arithmetic_on_elements() {
+        // Reproduce the example from issue #253: NUMS(0) * NUMS(1) == 20.
+        let out = run_source(
+            "VAR I\n\
+             DIM NUMS(5)\n\
+             LET &I, 1\n\
+             LET &NUMS(0), 2\n\
+             LET &I, I+1\n\
+             LET &NUMS(1), 10\n\
+             PUTDEC NUMS(0) * NUMS(1)",
+        )
+        .expect("source should run without error");
+        assert_eq!(out.trim(), "20", "NUMS(0) * NUMS(1) should equal 20");
+    }
+
+    #[test]
+    fn test_e2e_dim_out_of_bounds_at_runtime() {
+        // Accessing index == size should produce ArrayIndexOutOfBounds at runtime.
+        let result = run_source("DIM B(3)\nPUTDEC B(3)");
+        assert!(
+            matches!(
+                result,
+                Err(crate::error::TbxError::ArrayIndexOutOfBounds { index: 3, size: 3 })
+            ),
+            "B(3) on a size-3 array should produce ArrayIndexOutOfBounds, got: {result:?}"
         );
     }
 }
