@@ -2809,7 +2809,7 @@ mod tests {
         ]));
         let err = def_prim(&mut vm).unwrap_err();
         assert!(
-            matches!(err, TbxError::InvalidExpression { .. }),
+            matches!(err, TbxError::InvalidExpression { reason } if reason.contains("duplicate parameter name")),
             "expected InvalidExpression for duplicate param name, got {err:?}"
         );
     }
@@ -2832,7 +2832,7 @@ mod tests {
         ]));
         let err = def_prim(&mut vm).unwrap_err();
         assert!(
-            matches!(err, TbxError::InvalidExpression { .. }),
+            matches!(err, TbxError::InvalidExpression { reason } if reason.contains("duplicate parameter name")),
             "expected InvalidExpression for first-and-third duplicate param, got {err:?}"
         );
     }
