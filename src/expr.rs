@@ -219,10 +219,9 @@ impl<'a> ExprCompiler<'a> {
                         }
                     } else {
                         // Variable read or nullary call (no parentheses).
-                        let kind = self.vm.headers[xt.index()].kind.clone();
-                        match kind {
+                        match &self.vm.headers[xt.index()].kind {
                             EntryKind::Variable(addr) => {
-                                emit_var_read(&mut output, addr, self.vm)?;
+                                emit_var_read(&mut output, *addr, self.vm)?;
                             }
                             EntryKind::Array { .. } => {
                                 // Arrays must always be accessed with index syntax NAME(index).
@@ -280,15 +279,15 @@ impl<'a> ExprCompiler<'a> {
                                         .ok_or_else(|| TbxError::UndefinedSymbol {
                                             name: name.clone(),
                                         })?;
-                                    let kind = self.vm.headers[xt.index()].kind.clone();
-                                    match kind {
+                                    match &self.vm.headers[xt.index()].kind {
                                         EntryKind::Variable(addr) => {
                                             // Emit address only — no FETCH.
                                             let xt_lit = require_xt(self.vm, "LIT")?;
                                             output.push(Cell::Xt(xt_lit));
-                                            output.push(Cell::DictAddr(addr));
+                                            output.push(Cell::DictAddr(*addr));
                                         }
                                         EntryKind::Array { base, size } => {
+                                            let (base, size) = (*base, *size);
                                             // Array address-of: &NUMS(I)
                                             // Consume '(' and compile the index expression,
                                             // then emit OFFSET without a trailing FETCH.
@@ -310,6 +309,11 @@ impl<'a> ExprCompiler<'a> {
                                                     reason: "missing ')' in array index expression",
                                                 })?;
                                             let index_toks = &tokens[idx_start..close_pos];
+                                            if index_toks.is_empty() {
+                                                return Err(TbxError::InvalidExpression {
+                                                    reason: "array index expression must not be empty: use &NAME(index)",
+                                                });
+                                            }
                                             // Recursively compile the index expression.
                                             let index_cells = self.compile_expr(index_toks)?;
                                             output.extend(index_cells);
@@ -1535,6 +1539,29 @@ mod tests {
         assert!(
             matches!(err, TbxError::InvalidExpression { .. }),
             "NUMS(I, I) with multiple indices should produce InvalidExpression, got {err:?}"
+        );
+    }
+
+    // ------------------------------------------------------------------
+    // &NUMS() with no index should produce a clear error.
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn test_array_address_of_empty_index_is_error() {
+        let mut vm = make_vm();
+        let array_base = vm.dp;
+        for _ in 0..5 {
+            vm.dict_write(Cell::None).unwrap();
+        }
+        vm.register(WordEntry::new_array("NUMS", array_base, 5));
+
+        let tokens = lex("&NUMS()");
+        let err = ExprCompiler::new(&mut vm)
+            .compile_expr(&tokens)
+            .unwrap_err();
+        assert!(
+            matches!(err, TbxError::InvalidExpression { .. }),
+            "&NUMS() with no index should produce InvalidExpression, got {err:?}"
         );
     }
 }
