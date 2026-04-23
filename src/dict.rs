@@ -40,6 +40,24 @@ pub enum EntryKind {
     /// Reads next cell as target address.
     /// Handled by the inner interpreter (not a PrimFn).
     BranchIfTrue,
+    /// Global array — registered by `DIM NAME(SIZE)`.
+    ///
+    /// The dictionary cells `[base, base+size)` hold the array elements.
+    Array {
+        /// First dictionary index of the array storage.
+        base: usize,
+        /// Number of elements in the array.
+        size: usize,
+    },
+    /// OFFSET instruction — handled by the inner interpreter.
+    ///
+    /// Inline operands in the dictionary:
+    ///   - `dictionary[pc+1]`: `Cell::Int(base)` — first element index
+    ///   - `dictionary[pc+2]`: `Cell::Int(size)` — number of elements
+    ///
+    /// Pops an index from the data stack, performs bounds checking, and
+    /// pushes `Cell::DictAddr(base + idx)`.  pc advances by 3.
+    Offset,
 }
 
 impl std::fmt::Debug for EntryKind {
@@ -57,6 +75,8 @@ impl std::fmt::Debug for EntryKind {
             EntryKind::Goto => write!(f, "Goto"),
             EntryKind::BranchIfFalse => write!(f, "BranchIfFalse"),
             EntryKind::BranchIfTrue => write!(f, "BranchIfTrue"),
+            EntryKind::Array { base, size } => write!(f, "Array(base={base}, size={size})"),
+            EntryKind::Offset => write!(f, "Offset"),
         }
     }
 }
@@ -141,6 +161,18 @@ impl WordEntry {
             name: name.to_string(),
             flags: 0,
             kind: EntryKind::Constant(value),
+            arity: 0,
+            local_count: 0,
+            prev: None,
+        }
+    }
+
+    /// Create a new global array entry with a given storage base and size in `dictionary`.
+    pub fn new_array(name: &str, base: usize, size: usize) -> Self {
+        Self {
+            name: name.to_string(),
+            flags: 0,
+            kind: EntryKind::Array { base, size },
             arity: 0,
             local_count: 0,
             prev: None,
