@@ -190,11 +190,14 @@ impl<'a> ExprCompiler<'a> {
                             prev_was_operand = true;
                         } else {
                             // Peek the entry kind to distinguish arrays from function calls.
-                            let kind = self.vm.headers[xt.index()].kind.clone();
-                            if let EntryKind::Array { base, size } = kind {
+                            // Use a reference to avoid cloning (no VM methods are called in
+                            // either branch, only op_stack — a local Vec — is mutated).
+                            if let EntryKind::Array { base, size } =
+                                &self.vm.headers[xt.index()].kind
+                            {
                                 // Array index access: open an array-paren frame.
                                 op_stack.push(OpItem::LParen {
-                                    call: Some(LParenCall::Array(base, size)),
+                                    call: Some(LParenCall::Array(*base, *size)),
                                 });
                             } else {
                                 // Function call with arguments: open a function-call
@@ -569,8 +572,8 @@ fn emit_call_by_kind(
     self_hdr_idx: Option<usize>,
     patch_offsets: &mut Vec<usize>,
 ) -> Result<(), TbxError> {
-    let kind = vm.headers[xt.index()].kind.clone();
-    match kind {
+    // Match by reference: `vm` is immutable here so no borrow conflict arises.
+    match &vm.headers[xt.index()].kind {
         EntryKind::Word(_) => {
             let call_xt = require_xt(vm, "CALL")?;
             output.push(Cell::Xt(call_xt));

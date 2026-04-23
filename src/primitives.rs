@@ -976,7 +976,7 @@ pub fn dim_prim(vm: &mut VM) -> Result<(), TbxError> {
     let tok = vm.next_token()?;
     if !matches!(tok.token, Token::RParen) {
         return Err(TbxError::InvalidExpression {
-            reason: "expected ')' after DIM NAME(SIZE",
+            reason: "expected ')' after DIM NAME(SIZE)",
         });
     }
 
