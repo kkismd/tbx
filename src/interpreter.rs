@@ -628,6 +628,22 @@ impl Interpreter {
 
         // --- Finalise: build and run the main routine ---
 
+        // Guard: if a DEF block was left unclosed (no matching END), roll back the
+        // partial definition and return an error.  Leaving compile_state set would
+        // corrupt subsequent calls because every statement would be treated as part
+        // of the unfinished word body.
+        if self.vm.compile_state.is_some() {
+            self.vm.rollback_def();
+            return Err(InterpreterError::new(
+                0,
+                0,
+                "",
+                TbxError::InvalidExpression {
+                    reason: "DEF without matching END at end of source",
+                },
+            ));
+        }
+
         // If there are no ground-level statements, nothing to execute.
         if main_cells.is_empty() {
             return Ok(());
@@ -1849,5 +1865,23 @@ PUTDEC 99
         let src = "DEF GREET\nPUTDEC 42\nEND\nGREET";
         interp.exec_source(src).unwrap();
         assert!(interp.take_output().contains("42"));
+    }
+
+    #[test]
+    fn test_compile_program_unclosed_def_is_error() {
+        // A DEF without a matching END must return an error and leave the VM in a
+        // clean state (compile_state = None) so that subsequent calls work correctly.
+        let mut interp = Interpreter::new();
+        let result = interp.compile_program("DEF NOEND\nPUTDEC 1");
+        assert!(result.is_err(), "expected error for unclosed DEF");
+        assert!(
+            matches!(result.unwrap_err().kind, TbxError::InvalidExpression { .. }),
+            "expected InvalidExpression for unclosed DEF"
+        );
+        // The VM must be reusable after rollback.
+        interp
+            .compile_program("PUTDEC 99")
+            .expect("should succeed after unclosed-DEF rollback");
+        assert_eq!(interp.take_output(), "99");
     }
 }
