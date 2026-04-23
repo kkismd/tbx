@@ -1974,7 +1974,7 @@ PUTDEC 42";
         let result = interp.exec_source("PUTDEC V");
         assert!(
             result.is_err(),
-            "expected error when IMMEDIATE word appears inside an expression in exec_line"
+            "expected error when IMMEDIATE word appears inside an expression in exec_source"
         );
         assert!(
             matches!(
