@@ -578,6 +578,10 @@ impl Interpreter {
     pub fn compile_program(&mut self, source: &str) -> Result<(), InterpreterError> {
         let mut main_cells: Vec<Cell> = Vec::new();
 
+        // TODO(#263): The tokenize-and-segment loop below duplicates the logic in
+        // exec_line.  A shared private helper (e.g. `parse_line_into_segments`)
+        // would eliminate the duplication and reduce the risk of divergence when
+        // the segmentation rules change.
         for line in source.lines() {
             // Tokenize the line.
             let mut lex = Lexer::new(line);
@@ -727,6 +731,10 @@ impl Interpreter {
                 self.vm.data_stack.truncate(saved_data_stack_len);
                 self.vm.return_stack.truncate(saved_return_stack_len);
                 self.vm.bp = saved_bp;
+                // TODO: Runtime errors from the main-routine execution carry no source
+                // position because compiled cells do not store their origin.  A future
+                // improvement would embed (line, col) metadata alongside each statement's
+                // cells so the inner interpreter can report accurate locations.
                 Err(InterpreterError::new(0, 0, "", e))
             }
         }
@@ -1885,5 +1893,36 @@ PUTDEC 99
             .compile_program("PUTDEC 99")
             .expect("should succeed after unclosed-DEF rollback");
         assert_eq!(interp.take_output(), "99");
+    }
+
+    #[test]
+    fn test_compile_program_line_number_outside_def_ignored() {
+        // Line-number labels appearing outside a DEF block are silently skipped;
+        // the following statement must still execute normally.
+        let mut interp = Interpreter::new();
+        interp.compile_program("10 PUTDEC 1").unwrap();
+        assert_eq!(
+            interp.take_output(),
+            "1",
+            "statement after ignored line-number label should execute"
+        );
+    }
+
+    #[test]
+    fn test_compile_program_runtime_error_cleans_up() {
+        // A runtime error (e.g. division by zero) must return Err and leave the
+        // VM in a reusable state so that a subsequent compile_program call works.
+        let mut interp = Interpreter::new();
+        // Division by zero triggers a runtime error inside vm.run().
+        let result = interp.compile_program("PUTDEC 1 / 0");
+        assert!(
+            result.is_err(),
+            "expected error from runtime division by zero"
+        );
+        // The data stack must be restored so that the VM is reusable.
+        interp
+            .compile_program("PUTDEC 42")
+            .expect("compile_program should succeed after runtime error");
+        assert_eq!(interp.take_output(), "42");
     }
 }
