@@ -10,6 +10,11 @@ use crate::init_vm;
 use crate::lexer::{Lexer, SpannedToken, Token};
 use crate::vm::VM;
 
+/// Maximum allowed nesting depth for USE statements.
+///
+/// Prevents stack overflows caused by circular USE chains.
+const MAX_USE_DEPTH: usize = 64;
+
 /// Error produced by the outer interpreter, including source location information.
 pub struct InterpreterError {
     pub line: usize,
@@ -62,6 +67,9 @@ type ParsedSegments = (Vec<SpannedToken>, Vec<(usize, usize)>);
 // (e.g., via a VM-level pending token buffer).
 pub struct Interpreter {
     vm: VM,
+    /// Current USE nesting depth. Incremented each time `exec_source` is called
+    /// via a USE statement, decremented on return. Guards against circular USE chains.
+    use_depth: usize,
 }
 
 impl Default for Interpreter {
@@ -73,7 +81,10 @@ impl Default for Interpreter {
 impl Interpreter {
     /// Create a new `Interpreter` backed by a fully initialized VM.
     pub fn new() -> Self {
-        Self { vm: init_vm() }
+        Self {
+            vm: init_vm(),
+            use_depth: 0,
+        }
     }
 
     /// Look up a required symbol by name, returning an `InterpreterError` if not found.
@@ -543,9 +554,32 @@ impl Interpreter {
             self.vm.data_stack.truncate(saved_data_stack_len);
             self.vm.return_stack.truncate(saved_return_stack_len);
             self.vm.bp = saved_bp;
+            // Discard any pending USE path set before the error.
+            self.vm.pending_use_path = None;
         }
 
-        run_result.map_err(make_err)
+        run_result.map_err(make_err)?;
+
+        // If use_prim stored a path, read the file and execute it now.
+        if let Some(path) = self.vm.pending_use_path.take() {
+            if self.use_depth >= MAX_USE_DEPTH {
+                return Err(make_err(TbxError::UseNestingDepthExceeded {
+                    limit: MAX_USE_DEPTH,
+                }));
+            }
+            let source = std::fs::read_to_string(&path).map_err(|e| {
+                make_err(TbxError::FileNotFound {
+                    path,
+                    reason: e.to_string(),
+                })
+            })?;
+            self.use_depth += 1;
+            let result = self.exec_source(&source);
+            self.use_depth -= 1;
+            result?;
+        }
+
+        Ok(())
     }
 
     /// Register a line-number label at the current dictionary pointer.
@@ -2293,5 +2327,142 @@ PUTDEC 42";
                 "expected TbxError::InvalidExpression (compile_program)"
             );
         }
+    }
+
+    // --- USE ---
+
+    #[test]
+    fn test_use_loads_and_executes_file() {
+        // Create a temporary TBX file that defines a word.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let lib_path = dir.path().join("lib.tbx");
+        std::fs::write(&lib_path, "DEF HELLO\nPUTSTR \"hello\"\nEND\n").unwrap();
+
+        let mut interp = Interpreter::new();
+        let src = format!("USE \"{}\"\nHELLO", lib_path.display());
+        interp.exec_source(&src).unwrap();
+        assert!(interp.take_output().contains("hello"));
+    }
+
+    #[test]
+    fn test_use_compile_program_mode() {
+        // USE must also work when called from compile_program (the full-program entry point).
+        // This covers the compile_program_segment -> exec_immediate_word code path.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let lib_path = dir.path().join("lib.tbx");
+        std::fs::write(&lib_path, "DEF GREET\nPUTSTR \"greet\"\nEND\n").unwrap();
+
+        let mut interp = Interpreter::new();
+        let src = format!("USE \"{}\"\nGREET", lib_path.display());
+        interp.compile_program(&src).unwrap();
+        assert!(interp.take_output().contains("greet"));
+    }
+
+    #[test]
+    fn test_use_file_not_found_error() {
+        let mut interp = Interpreter::new();
+        let result = interp.exec_source("USE \"/nonexistent/path/does_not_exist.tbx\"");
+        assert!(result.is_err());
+        assert!(
+            matches!(result.unwrap_err().kind, TbxError::FileNotFound { .. }),
+            "expected TbxError::FileNotFound"
+        );
+    }
+
+    #[test]
+    fn test_use_non_string_argument_error() {
+        let mut interp = Interpreter::new();
+        let result = interp.exec_source("USE 42");
+        assert!(result.is_err());
+        assert!(
+            matches!(result.unwrap_err().kind, TbxError::InvalidExpression { .. }),
+            "expected TbxError::InvalidExpression"
+        );
+    }
+
+    #[test]
+    fn test_use_trailing_token_error() {
+        // USE "path" EXTRA_TOKEN must return InvalidExpression.
+        // The error is raised before file access, so a real file is not needed.
+        let mut interp = Interpreter::new();
+        let result = interp.exec_source("USE \"/dummy_does_not_exist.tbx\" EXTRA");
+        assert!(result.is_err());
+        assert!(
+            matches!(result.unwrap_err().kind, TbxError::InvalidExpression { .. }),
+            "expected TbxError::InvalidExpression for trailing token"
+        );
+    }
+
+    #[test]
+    fn test_use_inside_def_error() {
+        // USE inside a DEF body must return InvalidExpression.
+        // The error is raised before file access, so a real file is not needed.
+        let mut interp = Interpreter::new();
+        let result = interp.exec_source("DEF BADWORD\nUSE \"/dummy_does_not_exist.tbx\"\nEND");
+        assert!(result.is_err());
+        assert!(
+            matches!(result.unwrap_err().kind, TbxError::InvalidExpression { .. }),
+            "expected TbxError::InvalidExpression when USE is inside DEF"
+        );
+    }
+
+    #[test]
+    fn test_use_nesting_depth_exceeded() {
+        // Create a file that USEs itself to trigger circular USE detection.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let lib_path = dir.path().join("self_use.tbx");
+        // Write a file that USEs itself.
+        let content = format!("USE \"{}\"\n", lib_path.display());
+        std::fs::write(&lib_path, &content).unwrap();
+
+        let mut interp = Interpreter::new();
+        let src = format!("USE \"{}\"", lib_path.display());
+        let result = interp.exec_source(&src);
+        assert!(result.is_err());
+        assert!(
+            matches!(
+                result.unwrap_err().kind,
+                TbxError::UseNestingDepthExceeded { .. }
+            ),
+            "expected TbxError::UseNestingDepthExceeded for circular USE"
+        );
+    }
+
+    #[test]
+    fn test_use_halt_in_loaded_file_does_not_stop_caller() {
+        // HALT inside a USEd file terminates that file's execution but the
+        // calling program continues (exec_source treats Halted as Ok(())).
+        let dir = tempfile::tempdir().expect("tempdir");
+        let lib_path = dir.path().join("lib_halt.tbx");
+        // GREET is defined before HALT; NEVER is defined after HALT.
+        std::fs::write(
+            &lib_path,
+            "DEF GREET\nPUTSTR \"hi\"\nEND\nHALT\nDEF NEVER\nPUTSTR \"never\"\nEND\n",
+        )
+        .unwrap();
+
+        let mut interp = Interpreter::new();
+        let src = format!("USE \"{}\"", lib_path.display());
+        // USE must succeed (HALT in the loaded file is not propagated to caller).
+        interp.exec_source(&src).unwrap();
+
+        // GREET (defined before HALT) must be available.
+        interp.exec_source("GREET").unwrap();
+        assert!(
+            interp.take_output().contains("hi"),
+            "GREET defined before HALT should be callable after USE"
+        );
+
+        // NEVER (defined after HALT) must NOT be available — confirms HALT
+        // actually stopped file execution at the HALT line.
+        let result = interp.exec_source("NEVER");
+        assert!(
+            result.is_err(),
+            "NEVER defined after HALT should not be callable"
+        );
+        assert!(
+            matches!(result.unwrap_err().kind, TbxError::UndefinedSymbol { .. }),
+            "expected UndefinedSymbol for word defined after HALT"
+        );
     }
 }

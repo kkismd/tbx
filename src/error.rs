@@ -97,6 +97,18 @@ pub enum TbxError {
     CompileStackNotEmpty {
         count: usize,
     },
+    /// A file requested via USE could not be found or read.
+    FileNotFound {
+        path: String,
+        reason: String,
+    },
+    /// USE nesting depth exceeded the maximum allowed limit.
+    ///
+    /// Prevents infinite recursion caused by circular USE chains
+    /// (e.g. A.tbx USEs B.tbx which USEs A.tbx again).
+    UseNestingDepthExceeded {
+        limit: usize,
+    },
 }
 
 impl std::fmt::Display for TbxError {
@@ -169,6 +181,15 @@ impl std::fmt::Display for TbxError {
                 write!(
                     f,
                     "compile stack has {count} unpatched item(s) at END; word definition is incomplete"
+                )
+            }
+            TbxError::FileNotFound { path, reason } => {
+                write!(f, "USE: file not found: '{path}': {reason}")
+            }
+            TbxError::UseNestingDepthExceeded { limit } => {
+                write!(
+                    f,
+                    "USE: nesting depth exceeded limit of {limit} (possible circular USE)"
                 )
             }
         }

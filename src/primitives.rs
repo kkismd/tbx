@@ -1098,6 +1098,49 @@ fn compile_expr_prim(vm: &mut VM) -> Result<(), TbxError> {
     Ok(())
 }
 
+/// USE — load and execute a TBX source file at compile time.
+///
+/// Syntax: `USE "path/to/file.tbx"`
+///
+/// Reads the next token from the token stream, expecting a `StringLit`.
+/// Stores the path in `vm.pending_use_path` so that the outer interpreter
+/// (`exec_immediate_word`) can read the file and call `exec_source` after
+/// this primitive returns.
+/// Returns an error if additional tokens follow the path argument on the
+/// same statement, since USE accepts exactly one argument.
+/// Returns an error if called inside a DEF body (`is_compiling` is true),
+/// because `exec_source` would corrupt the active compile state.
+fn use_prim(vm: &mut VM) -> Result<(), TbxError> {
+    // Guard: USE inside a DEF body would corrupt compile_state via exec_source.
+    if vm.is_compiling {
+        return Err(TbxError::InvalidExpression {
+            reason: "USE cannot be called inside a DEF body",
+        });
+    }
+
+    let tok = vm.next_token()?;
+    let path = match tok.token {
+        crate::lexer::Token::StringLit(p) => p,
+        _ => {
+            return Err(TbxError::InvalidExpression {
+                reason: "USE expects a string literal as its argument",
+            })
+        }
+    };
+
+    // Reject any extra tokens on the same statement (e.g. USE "f.tbx" EXTRA).
+    if let Some(stream) = &vm.token_stream {
+        if !stream.is_empty() {
+            return Err(TbxError::InvalidExpression {
+                reason: "USE does not accept tokens after the path argument",
+            });
+        }
+    }
+
+    vm.pending_use_path = Some(path);
+    Ok(())
+}
+
 /// Register all stack primitives into the VM's dictionary.
 pub fn register_all(vm: &mut VM) {
     vm.register(WordEntry::new_primitive("DROP", drop_prim));
@@ -1276,6 +1319,12 @@ pub fn register_all(vm: &mut VM) {
         .find_by_kind(|k| matches!(k, EntryKind::Goto))
         .expect("GOTO runtime entry must exist");
     vm.register(WordEntry::new_constant("JUMP_ALWAYS", Cell::Xt(goto_xt)));
+
+    // USE: IMMEDIATE so the outer interpreter feeds the token stream before calling it.
+    // No FLAG_SYSTEM: USE is user-redefinable.
+    let mut use_entry = WordEntry::new_primitive("USE", use_prim);
+    use_entry.flags = FLAG_IMMEDIATE;
+    vm.register(use_entry);
 }
 
 #[cfg(test)]
