@@ -1108,7 +1108,16 @@ fn compile_expr_prim(vm: &mut VM) -> Result<(), TbxError> {
 /// this primitive returns.
 /// Returns an error if additional tokens follow the path argument on the
 /// same statement, since USE accepts exactly one argument.
-pub(crate) fn use_prim(vm: &mut VM) -> Result<(), TbxError> {
+/// Returns an error if called inside a DEF body (`is_compiling` is true),
+/// because `exec_source` would corrupt the active compile state.
+fn use_prim(vm: &mut VM) -> Result<(), TbxError> {
+    // Guard: USE inside a DEF body would corrupt compile_state via exec_source.
+    if vm.is_compiling {
+        return Err(TbxError::InvalidExpression {
+            reason: "USE cannot be called inside a DEF body",
+        });
+    }
+
     let tok = vm.next_token()?;
     let path = match tok.token {
         crate::lexer::Token::StringLit(p) => p,

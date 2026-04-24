@@ -2360,4 +2360,38 @@ PUTDEC 42";
             "expected TbxError::InvalidExpression"
         );
     }
+
+    #[test]
+    fn test_use_trailing_token_error() {
+        // USE "path" EXTRA_TOKEN must return InvalidExpression.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let lib_path = dir.path().join("lib.tbx");
+        std::fs::write(&lib_path, "").unwrap();
+
+        let mut interp = Interpreter::new();
+        let src = format!("USE \"{}\" EXTRA", lib_path.display());
+        let result = interp.exec_source(&src);
+        assert!(result.is_err());
+        assert!(
+            matches!(result.unwrap_err().kind, TbxError::InvalidExpression { .. }),
+            "expected TbxError::InvalidExpression for trailing token"
+        );
+    }
+
+    #[test]
+    fn test_use_inside_def_error() {
+        // USE inside a DEF body must return InvalidExpression.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let lib_path = dir.path().join("lib.tbx");
+        std::fs::write(&lib_path, "").unwrap();
+
+        let mut interp = Interpreter::new();
+        let src = format!("DEF BADWORD\nUSE \"{}\"\nEND", lib_path.display());
+        let result = interp.exec_source(&src);
+        assert!(result.is_err());
+        assert!(
+            matches!(result.unwrap_err().kind, TbxError::InvalidExpression { .. }),
+            "expected TbxError::InvalidExpression when USE is inside DEF"
+        );
+    }
 }
