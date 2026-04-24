@@ -21,7 +21,7 @@ GitHubのissueに記載されたタスクを読み込み、`blueprint.md` と既
 ### ステップ1：issueの把握
 
 `github-mcp-server-issue_read`（method: `get`）でissueの本文を、（method: `get_comments`）でコメントを取得し、内容を日本語で要約する。
-依存issueが記載されている場合は、それらが完了済みか確認する（未完了なら実施前にユーザーに報告する）。
+issue本文またはコメントに `Closes #N`・`Depends on #N`・`Blocked by #N` などの形式で他のissue番号が参照されている場合は依存issueとして扱う。`github-mcp-server-issue_read`（method: `get`）でそれぞれの状態を取得し、`state` が `closed` であれば完了と判断する。未完了（`state` が `open`）のものがある場合は**計画作成を中断**し、その旨をユーザーに報告して依存issueの完了後に再起動するよう促す。
 
 ### ステップ2：コードベース調査
 
