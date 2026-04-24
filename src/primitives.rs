@@ -3751,6 +3751,16 @@ mod tests {
     }
 
     #[test]
+    fn test_compile_expr_prim_no_token_stream_error() {
+        // COMPILE_EXPR with token_stream == None must return TokenStreamEmpty.
+        let mut vm = make_compiling_vm("TESTWORD");
+        // Explicitly set token_stream to None.
+        vm.token_stream = None;
+        let err = compile_expr_prim(&mut vm).unwrap_err();
+        assert_eq!(err, TbxError::TokenStreamEmpty);
+    }
+
+    #[test]
     fn test_compile_expr_prim_empty_token_stream_error() {
         // COMPILE_EXPR with no tokens in the stream must return TokenStreamEmpty.
         let mut vm = make_compiling_vm("TESTWORD");
