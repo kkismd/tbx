@@ -2383,13 +2383,9 @@ PUTDEC 42";
     #[test]
     fn test_use_trailing_token_error() {
         // USE "path" EXTRA_TOKEN must return InvalidExpression.
-        let dir = tempfile::tempdir().expect("tempdir");
-        let lib_path = dir.path().join("lib.tbx");
-        std::fs::write(&lib_path, "").unwrap();
-
+        // The error is raised before file access, so a real file is not needed.
         let mut interp = Interpreter::new();
-        let src = format!("USE \"{}\" EXTRA", lib_path.display());
-        let result = interp.exec_source(&src);
+        let result = interp.exec_source("USE \"/dummy_does_not_exist.tbx\" EXTRA");
         assert!(result.is_err());
         assert!(
             matches!(result.unwrap_err().kind, TbxError::InvalidExpression { .. }),
@@ -2400,13 +2396,9 @@ PUTDEC 42";
     #[test]
     fn test_use_inside_def_error() {
         // USE inside a DEF body must return InvalidExpression.
-        let dir = tempfile::tempdir().expect("tempdir");
-        let lib_path = dir.path().join("lib.tbx");
-        std::fs::write(&lib_path, "").unwrap();
-
+        // The error is raised before file access, so a real file is not needed.
         let mut interp = Interpreter::new();
-        let src = format!("DEF BADWORD\nUSE \"{}\"\nEND", lib_path.display());
-        let result = interp.exec_source(&src);
+        let result = interp.exec_source("DEF BADWORD\nUSE \"/dummy_does_not_exist.tbx\"\nEND");
         assert!(result.is_err());
         assert!(
             matches!(result.unwrap_err().kind, TbxError::InvalidExpression { .. }),
@@ -2433,6 +2425,29 @@ PUTDEC 42";
                 TbxError::UseNestingDepthExceeded { .. }
             ),
             "expected TbxError::UseNestingDepthExceeded for circular USE"
+        );
+    }
+
+    #[test]
+    fn test_use_halt_in_loaded_file_does_not_stop_caller() {
+        // HALT inside a USEd file terminates that file's execution but the
+        // calling program continues (exec_source treats Halted as Ok(())).
+        let dir = tempfile::tempdir().expect("tempdir");
+        let lib_path = dir.path().join("lib_halt.tbx");
+        // The file defines GREET before HALT, so the word is available after USE.
+        std::fs::write(
+            &lib_path,
+            "DEF GREET\nPUTSTR \"hi\"\nEND\nHALT\nDEF NEVER\nPUTSTR \"never\"\nEND\n",
+        )
+        .unwrap();
+
+        let mut interp = Interpreter::new();
+        let src = format!("USE \"{}\"\nGREET", lib_path.display());
+        // USE must succeed and GREET must be callable.
+        interp.exec_source(&src).unwrap();
+        assert!(
+            interp.take_output().contains("hi"),
+            "GREET defined before HALT should be callable after USE"
         );
     }
 }

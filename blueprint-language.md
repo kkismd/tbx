@@ -154,6 +154,8 @@ USE "path/to/file.tbx"    ( -- )
 - **冪等性**: 毎回ロード（include 方式）。同一ファイルを複数回 USE すると複数回実行される
 - **制限**: `DEF…END` ブロック内での使用は不可（compile_state を壊すため）
 - **エラー**: ファイルが存在しない・読み込めない場合は `TbxError::FileNotFound` を返す
+- **ネスト深さ制限**: USE はネストして呼び出せる（USE されたファイル内からさらに USE できる）が、深さが `MAX_USE_DEPTH`（64）を超えると `TbxError::UseNestingDepthExceeded` を返す。循環 USE（A が B を USE し B が A を USE するなど）もこの制限で検出される
+- **USE 先の HALT**: USE されたファイル内で `HALT` が実行された場合、そのファイルの処理は終了するが、呼び出し元のプログラムは継続する（`exec_source` が `TbxError::Halted` を `Ok(())` として処理するため）
 
 ```basic
 USE "stdlib.tbx"   ' stdlib.tbx を読み込み、定義されたワードを利用可能にする
