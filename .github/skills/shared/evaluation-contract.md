@@ -1,9 +1,9 @@
 # 評価契約 (Evaluation Contract)
 
 他の skill が **subagent による評価ループ**を組み込む際に参照する最小テンプレート集。
-フル仕様（Red flags・評価軸の詳細・ワークフロー全体）は `.github/skills/empirical-prompt-tuning/SKILL.md` を参照。
+フル仕様（Red flags・評価軸の詳細・ワークフロー全体）は `empirical-prompt-tuning` skill のドキュメントを参照。
 
-このファイルは `empirical-prompt-tuning/SKILL.md` の **抜粋・参照用コピー**であり、
+このファイルは `empirical-prompt-tuning` skill の核心部分の **抜粋・参照用コピー**であり、
 独立した単一ソースではない。内容を変更する場合は SKILL.md 側との整合を保つこと。
 
 > **利用場面**: 他の skill の手順の中に「要件チェックリスト」「subagent 実行」「評価記録」を組み込みたいとき、
@@ -29,7 +29,7 @@
 2. <通常項目>
 3. <通常項目>
 ...
-（[critical] は最低 1 つ必須。事後に付け外しをしない。）
+（[critical] は最低 1 つ必須。事後に付け外しをしない。判定規則は本ファイル「成功判定ルール」節を参照。）
 
 ## タスク
 1. 対象プロンプトに従ってシナリオを実行し、成果物を生成する。
@@ -110,4 +110,4 @@
 
 ## 参照
 
-詳細なワークフロー・評価軸・Red flags は `.github/skills/empirical-prompt-tuning/SKILL.md` を参照。
+フル仕様（Red flags・評価軸の詳細・ワークフロー全体）は `empirical-prompt-tuning` skill のドキュメントを参照。
