@@ -1927,11 +1927,17 @@ PUTDEC 99
         let mut interp = Interpreter::new();
         let src = "FORWARD_WORD\nDEF FORWARD_WORD\n  PUTDEC 1\nEND";
         let result = interp.compile_program(src);
-        let err = result.expect_err("expected UndefinedSymbol error for forward reference, but got Ok");
+        let err =
+            result.expect_err("expected UndefinedSymbol error for forward reference, but got Ok");
         assert!(
             matches!(err.kind, TbxError::UndefinedSymbol { .. }),
             "expected UndefinedSymbol error kind"
         );
+        // The VM must be reusable after the error (no compile state left over).
+        interp
+            .compile_program("PUTDEC 1")
+            .expect("VM should be reusable after UndefinedSymbol error");
+        assert_eq!(interp.take_output(), "1");
     }
 
     #[test]
@@ -1960,35 +1966,36 @@ PUTDEC 99
 
     #[test]
     fn test_compile_program_ground_deferred_execution() {
-        // Verifies that ground-level statements in compile_program are collected
-        // into a main routine and executed as a unit after ALL DEFs are compiled —
-        // even when DEFs and ground statements are interleaved throughout the source.
+        // Proves that ground-level statements are deferred: they are collected into
+        // a main routine and executed AFTER all IMMEDIATE words have been processed.
         //
-        // The scenario uses a shared variable whose value is written by one ground
-        // statement and read by another.  Because ground statements run in source
-        // order after all DEFs are compiled, the sequence VAR→SET→READ must be
-        // consistent regardless of where the DEF appears in the source.
+        // The key observable property: an IMMEDIATE word that appears between two
+        // ground statements runs at compile time, so its output appears BEFORE the
+        // output of both ground statements, even though it sits between them in source.
+        //
+        // Source order:
+        //   PUTDEC 1              ← ground stmt (deferred)
+        //   IMMEDIATE SHOW        ← marks SHOW as IMMEDIATE (flag-set only, no output yet)
+        //   SHOW                  ← now IMMEDIATE: runs at compile time → outputs "99"
+        //   PUTDEC 2              ← ground stmt (deferred)
+        //
+        // Deferred execution produces: "99" (compile-time) + "1" + "2" (runtime) = "9912".
+        // If ground statements executed inline, PUTDEC 1 would run before SHOW:
+        // output would be "1" + "99" + "2" = "1992" — a different result.
         let mut interp = Interpreter::new();
         let src = "\
-VAR X
-SET &X, 0
-DEF INCX
-  SET &X, X + 10
+DEF SHOW
+  PUTDEC 99
 END
-SET &X, 5
-INCX
-PUTDEC X";
-        // Expected execution order of ground statements (deferred, run after DEF is compiled):
-        //   VAR X       → X defined (= 0)
-        //   SET &X, 0   → X = 0
-        //   SET &X, 5   → X = 5
-        //   INCX        → X = 5 + 10 = 15
-        //   PUTDEC X    → outputs "15"
+PUTDEC 1
+IMMEDIATE SHOW
+SHOW
+PUTDEC 2";
         interp.compile_program(src).unwrap();
         assert_eq!(
             interp.take_output(),
-            "15",
-            "expected ground statements to execute in source order after all DEFs are compiled"
+            "9912",
+            "expected IMMEDIATE output ('99') before deferred ground output ('12')"
         );
     }
 
