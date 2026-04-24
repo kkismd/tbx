@@ -1106,17 +1106,30 @@ fn compile_expr_prim(vm: &mut VM) -> Result<(), TbxError> {
 /// Stores the path in `vm.pending_use_path` so that the outer interpreter
 /// (`exec_immediate_word`) can read the file and call `exec_source` after
 /// this primitive returns.
-pub fn use_prim(vm: &mut VM) -> Result<(), TbxError> {
+/// Returns an error if additional tokens follow the path argument on the
+/// same statement, since USE accepts exactly one argument.
+pub(crate) fn use_prim(vm: &mut VM) -> Result<(), TbxError> {
     let tok = vm.next_token()?;
-    match tok.token {
-        crate::lexer::Token::StringLit(path) => {
-            vm.pending_use_path = Some(path);
-            Ok(())
+    let path = match tok.token {
+        crate::lexer::Token::StringLit(p) => p,
+        _ => {
+            return Err(TbxError::InvalidExpression {
+                reason: "USE expects a string literal as its argument",
+            })
         }
-        _ => Err(TbxError::InvalidExpression {
-            reason: "USE expects a string literal as its argument",
-        }),
+    };
+
+    // Reject any extra tokens on the same statement (e.g. USE "f.tbx" EXTRA).
+    if let Some(stream) = &vm.token_stream {
+        if !stream.is_empty() {
+            return Err(TbxError::InvalidExpression {
+                reason: "USE does not accept tokens after the path argument",
+            });
+        }
     }
+
+    vm.pending_use_path = Some(path);
+    Ok(())
 }
 
 /// Register all stack primitives into the VM's dictionary.

@@ -551,8 +551,12 @@ impl Interpreter {
 
         // If use_prim stored a path, read the file and execute it now.
         if let Some(path) = self.vm.pending_use_path.take() {
-            let source = std::fs::read_to_string(&path)
-                .map_err(|_| make_err(TbxError::FileNotFound { path }))?;
+            let source = std::fs::read_to_string(&path).map_err(|e| {
+                make_err(TbxError::FileNotFound {
+                    path,
+                    reason: e.to_string(),
+                })
+            })?;
             self.exec_source(&source)?;
         }
 
