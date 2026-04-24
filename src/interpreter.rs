@@ -543,9 +543,20 @@ impl Interpreter {
             self.vm.data_stack.truncate(saved_data_stack_len);
             self.vm.return_stack.truncate(saved_return_stack_len);
             self.vm.bp = saved_bp;
+            // Discard any pending USE path set before the error.
+            self.vm.pending_use_path = None;
         }
 
-        run_result.map_err(make_err)
+        run_result.map_err(make_err)?;
+
+        // If use_prim stored a path, read the file and execute it now.
+        if let Some(path) = self.vm.pending_use_path.take() {
+            let source = std::fs::read_to_string(&path)
+                .map_err(|_| make_err(TbxError::FileNotFound { path: path.clone() }))?;
+            self.exec_source(&source)?;
+        }
+
+        Ok(())
     }
 
     /// Register a line-number label at the current dictionary pointer.
@@ -2293,5 +2304,42 @@ PUTDEC 42";
                 "expected TbxError::InvalidExpression (compile_program)"
             );
         }
+    }
+
+    // --- USE ---
+
+    #[test]
+    fn test_use_loads_and_executes_file() {
+        // Create a temporary TBX file that defines a word.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let lib_path = dir.path().join("lib.tbx");
+        std::fs::write(&lib_path, "DEF HELLO\nPUTSTR \"hello\"\nEND\n").unwrap();
+
+        let mut interp = Interpreter::new();
+        let src = format!("USE \"{}\"\nHELLO", lib_path.display());
+        interp.exec_source(&src).unwrap();
+        assert!(interp.take_output().contains("hello"));
+    }
+
+    #[test]
+    fn test_use_file_not_found_error() {
+        let mut interp = Interpreter::new();
+        let result = interp.exec_source("USE \"/nonexistent/path/does_not_exist.tbx\"");
+        assert!(result.is_err());
+        assert!(
+            matches!(result.unwrap_err().kind, TbxError::FileNotFound { .. }),
+            "expected TbxError::FileNotFound"
+        );
+    }
+
+    #[test]
+    fn test_use_non_string_argument_error() {
+        let mut interp = Interpreter::new();
+        let result = interp.exec_source("USE 42");
+        assert!(result.is_err());
+        assert!(
+            matches!(result.unwrap_err().kind, TbxError::InvalidExpression { .. }),
+            "expected TbxError::InvalidExpression"
+        );
     }
 }

@@ -1098,6 +1098,27 @@ fn compile_expr_prim(vm: &mut VM) -> Result<(), TbxError> {
     Ok(())
 }
 
+/// USE — load and execute a TBX source file at compile time.
+///
+/// Syntax: `USE "path/to/file.tbx"`
+///
+/// Reads the next token from the token stream, expecting a `StringLit`.
+/// Stores the path in `vm.pending_use_path` so that the outer interpreter
+/// (`exec_immediate_word`) can read the file and call `exec_source` after
+/// this primitive returns.
+pub fn use_prim(vm: &mut VM) -> Result<(), TbxError> {
+    let tok = vm.next_token()?;
+    match tok.token {
+        crate::lexer::Token::StringLit(path) => {
+            vm.pending_use_path = Some(path);
+            Ok(())
+        }
+        _ => Err(TbxError::InvalidExpression {
+            reason: "USE expects a string literal as its argument",
+        }),
+    }
+}
+
 /// Register all stack primitives into the VM's dictionary.
 pub fn register_all(vm: &mut VM) {
     vm.register(WordEntry::new_primitive("DROP", drop_prim));
@@ -1276,6 +1297,12 @@ pub fn register_all(vm: &mut VM) {
         .find_by_kind(|k| matches!(k, EntryKind::Goto))
         .expect("GOTO runtime entry must exist");
     vm.register(WordEntry::new_constant("JUMP_ALWAYS", Cell::Xt(goto_xt)));
+
+    // USE: IMMEDIATE so the outer interpreter feeds the token stream before calling it.
+    // No FLAG_SYSTEM: USE is user-redefinable.
+    let mut use_entry = WordEntry::new_primitive("USE", use_prim);
+    use_entry.flags = FLAG_IMMEDIATE;
+    vm.register(use_entry);
 }
 
 #[cfg(test)]

@@ -145,6 +145,12 @@ pub struct VM {
     /// Compile-time stack: used by IMMEDIATE words to pass values between
     /// compile-time word invocations (e.g. CS_PUSH / CS_POP for IF/ENDIF).
     pub(crate) compile_stack: Vec<Cell>,
+    /// Path of a file to be loaded after the current IMMEDIATE word returns.
+    ///
+    /// Set by `use_prim` when it encounters a USE "path" statement.
+    /// Drained by `exec_immediate_word` in the interpreter, which calls
+    /// `exec_source` on the file content.
+    pub(crate) pending_use_path: Option<String>,
 }
 
 impl VM {
@@ -171,6 +177,7 @@ impl VM {
             token_stream: None,
             compile_state: None,
             compile_stack: Vec::new(),
+            pending_use_path: None,
         }
     }
 

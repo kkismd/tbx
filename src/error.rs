@@ -97,6 +97,10 @@ pub enum TbxError {
     CompileStackNotEmpty {
         count: usize,
     },
+    /// A file requested via USE could not be found or read.
+    FileNotFound {
+        path: String,
+    },
 }
 
 impl std::fmt::Display for TbxError {
@@ -170,6 +174,9 @@ impl std::fmt::Display for TbxError {
                     f,
                     "compile stack has {count} unpatched item(s) at END; word definition is incomplete"
                 )
+            }
+            TbxError::FileNotFound { path } => {
+                write!(f, "file not found: '{path}'")
             }
         }
     }
