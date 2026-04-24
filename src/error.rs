@@ -91,6 +91,12 @@ pub enum TbxError {
     /// Returned by `VM::next_token()` when `token_stream` is `None` or the
     /// `VecDeque` has been fully consumed.
     TokenStreamEmpty,
+    /// compile_stack has leftover items when END is executed.
+    ///
+    /// Word definition is incomplete — some compile-time values were not consumed.
+    CompileStackNotEmpty {
+        count: usize,
+    },
 }
 
 impl std::fmt::Display for TbxError {
@@ -159,6 +165,12 @@ impl std::fmt::Display for TbxError {
                 write!(f, "invalid operand '{name}' (value: {value}): {reason}")
             }
             TbxError::TokenStreamEmpty => write!(f, "token stream is empty or not set"),
+            TbxError::CompileStackNotEmpty { count } => {
+                write!(
+                    f,
+                    "compile stack has {count} unpatched item(s) at END; word definition is incomplete"
+                )
+            }
         }
     }
 }

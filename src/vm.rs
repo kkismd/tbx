@@ -142,6 +142,9 @@ pub struct VM {
     /// State maintained during compilation of a new word definition (DEF..END).
     /// `None` in execution mode; `Some(...)` while compiling.
     pub(crate) compile_state: Option<CompileState>,
+    /// Compile-time stack: used by IMMEDIATE words to pass values between
+    /// compile-time word invocations (e.g. CS_PUSH / CS_POP for IF/ENDIF).
+    pub compile_stack: Vec<Cell>,
 }
 
 impl VM {
@@ -167,6 +170,7 @@ impl VM {
             is_compiling: false,
             token_stream: None,
             compile_state: None,
+            compile_stack: Vec::new(),
         }
     }
 
