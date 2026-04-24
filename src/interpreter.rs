@@ -1920,6 +1920,117 @@ PUTDEC 99
     // --- compile_program + IMMEDIATE (issue #264) ---
 
     #[test]
+    fn test_compile_program_immediate_executes_before_main_cells() {
+        // An IMMEDIATE word at ground level executes during the compile phase, so its
+        // output appears before the output produced by main_cells at run time.
+        // Source:
+        //   DEF IWORD / PUTSTR "IM" / END
+        //   IMMEDIATE IWORD
+        //   PUTSTR "BEFORE"   <- deferred (compiled into main_cells)
+        //   IWORD             <- IMMEDIATE word (executes immediately)
+        //   PUTSTR "AFTER"    <- deferred (compiled into main_cells)
+        //
+        // Expected: "IM" is emitted during compile, then "BEFORE" and "AFTER" at run
+        // time, giving "IMBEFOREAFTER".
+        let mut interp = Interpreter::new();
+        let src = "\
+DEF IWORD
+PUTSTR \"IM\"
+END
+IMMEDIATE IWORD
+PUTSTR \"BEFORE\"
+IWORD
+PUTSTR \"AFTER\"";
+        interp.compile_program(src).unwrap();
+        let out = interp.take_output();
+        assert_eq!(
+            out, "IMBEFOREAFTER",
+            "IMMEDIATE word should produce output during compile, main_cells run after; got: {out:?}"
+        );
+    }
+
+    #[test]
+    fn test_compile_program_immediate_not_compiled_into_main_cells() {
+        // An IMMEDIATE word at ground level must NOT be compiled into main_cells, so
+        // it is executed exactly once (during compile) and never again at run time.
+        // Source:
+        //   DEF ONCE / PUTSTR "X" / END
+        //   IMMEDIATE ONCE
+        //   ONCE              <- this line is the IMMEDIATE invocation
+        //
+        // Expected: "X" appears once only.
+        let mut interp = Interpreter::new();
+        let src = "\
+DEF ONCE
+PUTSTR \"X\"
+END
+IMMEDIATE ONCE
+ONCE";
+        interp.compile_program(src).unwrap();
+        let out = interp.take_output();
+        assert_eq!(
+            out, "X",
+            "IMMEDIATE word should execute once during compile and not be added to main_cells; got: {out:?}"
+        );
+    }
+
+    #[test]
+    fn test_compile_program_multiple_immediate_words_execute_in_order() {
+        // Multiple IMMEDIATE words at ground level must execute in source order.
+        // Source:
+        //   DEF A / PUTSTR "A" / END
+        //   IMMEDIATE A
+        //   DEF B / PUTSTR "B" / END
+        //   IMMEDIATE B
+        //   A
+        //   B
+        //   PUTSTR "C"
+        //
+        // Compile phase: A executes → "A", B executes → "B".
+        // Run phase: A (not immediate here), B, PUTSTR "C" execute → "ABC" total? No:
+        //   A and B are plain word calls after the IMMEDIATE declaration, so they run
+        //   at run time.  Combined with compile-time output: "AB" then "ABC" = "ABABC".
+        //   Wait — only the *IMMEDIATE invocations* (lines "A" and "B" that are
+        //   matched as immediate calls) run early; the subsequent "A", "B", "PUTSTR C"
+        //   lines are ordinary ground-level statements compiled into main_cells.
+        //   Expected: "AB" (compile) + "ABC" (run) = "ABABC".
+        //
+        // NOTE: In this test the sources lines are:
+        //   line 1: DEF A … END
+        //   line 2: IMMEDIATE A          <- marks A as immediate
+        //   line 3: DEF B … END
+        //   line 4: IMMEDIATE B          <- marks B as immediate
+        //   line 5: A                    <- ground-level call, A is IMMEDIATE → runs now
+        //   line 6: B                    <- ground-level call, B is IMMEDIATE → runs now
+        //   line 7: PUTSTR "C"           <- deferred
+        //
+        // Compile output: "AB" (from lines 5 and 6)
+        // Run output:     "C"  (from line 7)
+        // Total:          "ABC"
+        let mut interp = Interpreter::new();
+        let src = "\
+DEF A
+PUTSTR \"A\"
+END
+IMMEDIATE A
+DEF B
+PUTSTR \"B\"
+END
+IMMEDIATE B
+A
+B
+PUTSTR \"C\"";
+        interp.compile_program(src).unwrap();
+        let out = interp.take_output();
+        assert_eq!(
+            out, "ABC",
+            "multiple IMMEDIATE words should execute in source order during compile; got: {out:?}"
+        );
+    }
+
+    // --- compile_program: ground-level IMMEDIATE execution order (issue #277) ---
+
+    #[test]
     fn test_compile_program_immediate_at_ground_level() {
         // An IMMEDIATE word used at ground level during compile_program should execute
         // immediately (not be compiled into the main routine), and subsequent ground-level
