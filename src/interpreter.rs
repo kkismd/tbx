@@ -10,6 +10,11 @@ use crate::init_vm;
 use crate::lexer::{Lexer, SpannedToken, Token};
 use crate::vm::VM;
 
+/// Maximum allowed nesting depth for USE statements.
+///
+/// Prevents stack overflows caused by circular USE chains.
+const MAX_USE_DEPTH: usize = 64;
+
 /// Error produced by the outer interpreter, including source location information.
 pub struct InterpreterError {
     pub line: usize,
@@ -62,6 +67,9 @@ type ParsedSegments = (Vec<SpannedToken>, Vec<(usize, usize)>);
 // (e.g., via a VM-level pending token buffer).
 pub struct Interpreter {
     vm: VM,
+    /// Current USE nesting depth. Incremented each time `exec_source` is called
+    /// via a USE statement, decremented on return. Guards against circular USE chains.
+    use_depth: usize,
 }
 
 impl Default for Interpreter {
@@ -73,7 +81,10 @@ impl Default for Interpreter {
 impl Interpreter {
     /// Create a new `Interpreter` backed by a fully initialized VM.
     pub fn new() -> Self {
-        Self { vm: init_vm() }
+        Self {
+            vm: init_vm(),
+            use_depth: 0,
+        }
     }
 
     /// Look up a required symbol by name, returning an `InterpreterError` if not found.
@@ -551,13 +562,21 @@ impl Interpreter {
 
         // If use_prim stored a path, read the file and execute it now.
         if let Some(path) = self.vm.pending_use_path.take() {
+            if self.use_depth >= MAX_USE_DEPTH {
+                return Err(make_err(TbxError::UseNestingDepthExceeded {
+                    limit: MAX_USE_DEPTH,
+                }));
+            }
             let source = std::fs::read_to_string(&path).map_err(|e| {
                 make_err(TbxError::FileNotFound {
                     path,
                     reason: e.to_string(),
                 })
             })?;
-            self.exec_source(&source)?;
+            self.use_depth += 1;
+            let result = self.exec_source(&source);
+            self.use_depth -= 1;
+            result?;
         }
 
         Ok(())
@@ -2392,6 +2411,28 @@ PUTDEC 42";
         assert!(
             matches!(result.unwrap_err().kind, TbxError::InvalidExpression { .. }),
             "expected TbxError::InvalidExpression when USE is inside DEF"
+        );
+    }
+
+    #[test]
+    fn test_use_nesting_depth_exceeded() {
+        // Create a file that USEs itself to trigger circular USE detection.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let lib_path = dir.path().join("self_use.tbx");
+        // Write a file that USEs itself.
+        let content = format!("USE \"{}\"\n", lib_path.display());
+        std::fs::write(&lib_path, &content).unwrap();
+
+        let mut interp = Interpreter::new();
+        let src = format!("USE \"{}\"", lib_path.display());
+        let result = interp.exec_source(&src);
+        assert!(result.is_err());
+        assert!(
+            matches!(
+                result.unwrap_err().kind,
+                TbxError::UseNestingDepthExceeded { .. }
+            ),
+            "expected TbxError::UseNestingDepthExceeded for circular USE"
         );
     }
 }
