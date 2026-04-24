@@ -99,6 +99,12 @@ INSERT OR REPLACE INTO session_state (key, value) VALUES ('review_before_review_
 
 #### 各ループ内の手順
 
+0. **ループ先頭での上限チェック**：ループカウンターを確認し、上限に達していれば直ちに終了する。
+   ```sql
+   SELECT CAST(value AS INTEGER) AS loop_count FROM session_state WHERE key = 'review_loop_count';
+   ```
+   `loop_count >= 3` の場合: **ステップ6後処理B**へ進む（以降の手順を実行しない）。
+
 1. `review-implementation` エージェントを起動する前に、現在の件数を SQL に保存する：
    ```sql
    -- <N_comments> と <N_reviews> は get_comments / get_reviews で取得した件数に置き換える
@@ -117,7 +123,7 @@ INSERT OR REPLACE INTO session_state (key, value) VALUES ('review_before_review_
 
 5. **新しいコメントまたはレビューが追加された場合**、追加された内容に **🔴** または **🟡** が含まれるか確認する：
    - **含まれない**（🟢 Info のみ、またはApproveレビュー）→ **ステップ6後処理A**へ進む。
-   - **含まれる** かつ `loop_count < 3` の場合：
+   - **含まれる** 場合（手順0のガードを通過済みのため `loop_count < 3` が保証されている）：
      - `loop_count` をインクリメントする：
        ```sql
        UPDATE session_state SET value = CAST(CAST(value AS INTEGER) + 1 AS TEXT) WHERE key = 'review_loop_count';
@@ -141,9 +147,7 @@ INSERT OR REPLACE INTO session_state (key, value) VALUES ('review_before_review_
        git commit -F "$(git rev-parse --git-dir)/COMMIT_MSG"
        git push
        ```
-     - ループの先頭（手順1）へ戻る
-   - **含まれる** かつ `loop_count >= 3` の場合：
-     - ループを終了し、**ステップ6後処理B**へ進む。
+     - ループの先頭（手順0）へ戻る
 
 ### ステップ6後処理A：🟢 Info 指摘の issue 登録
 
