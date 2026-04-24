@@ -3695,5 +3695,10 @@ mod tests {
             !vm.is_compiling,
             "is_compiling must be false after rollback"
         );
+        // compile_stack must be cleared after rollback to prevent state leakage.
+        assert!(
+            vm.compile_stack.is_empty(),
+            "compile_stack must be empty after rollback"
+        );
     }
 }

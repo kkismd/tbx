@@ -144,7 +144,7 @@ pub struct VM {
     pub(crate) compile_state: Option<CompileState>,
     /// Compile-time stack: used by IMMEDIATE words to pass values between
     /// compile-time word invocations (e.g. CS_PUSH / CS_POP for IF/ENDIF).
-    pub compile_stack: Vec<Cell>,
+    pub(crate) compile_stack: Vec<Cell>,
 }
 
 impl VM {
@@ -823,6 +823,9 @@ impl VM {
             self.latest = state.saved_latest;
             self.is_compiling = false;
         }
+        // Always clear the compile stack on rollback to prevent state leakage
+        // into the next DEF..END compilation.
+        self.compile_stack.clear();
     }
 
     /// Perform a definition rollback using explicitly supplied snapshot values.
@@ -842,6 +845,9 @@ impl VM {
         self.latest = saved_latest;
         self.compile_state = None;
         self.is_compiling = false;
+        // Always clear the compile stack on rollback to prevent state leakage
+        // into the next DEF..END compilation.
+        self.compile_stack.clear();
     }
 
     /// Find the first header entry whose `kind` satisfies `pred`.
