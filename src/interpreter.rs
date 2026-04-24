@@ -552,7 +552,7 @@ impl Interpreter {
         // If use_prim stored a path, read the file and execute it now.
         if let Some(path) = self.vm.pending_use_path.take() {
             let source = std::fs::read_to_string(&path)
-                .map_err(|_| make_err(TbxError::FileNotFound { path: path.clone() }))?;
+                .map_err(|_| make_err(TbxError::FileNotFound { path }))?;
             self.exec_source(&source)?;
         }
 
@@ -2319,6 +2319,20 @@ PUTDEC 42";
         let src = format!("USE \"{}\"\nHELLO", lib_path.display());
         interp.exec_source(&src).unwrap();
         assert!(interp.take_output().contains("hello"));
+    }
+
+    #[test]
+    fn test_use_compile_program_mode() {
+        // USE must also work when called from compile_program (the full-program entry point).
+        // This covers the compile_program_segment -> exec_immediate_word code path.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let lib_path = dir.path().join("lib.tbx");
+        std::fs::write(&lib_path, "DEF GREET\nPUTSTR \"greet\"\nEND\n").unwrap();
+
+        let mut interp = Interpreter::new();
+        let src = format!("USE \"{}\"\nGREET", lib_path.display());
+        interp.compile_program(&src).unwrap();
+        assert!(interp.take_output().contains("greet"));
     }
 
     #[test]

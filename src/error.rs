@@ -176,7 +176,7 @@ impl std::fmt::Display for TbxError {
                 )
             }
             TbxError::FileNotFound { path } => {
-                write!(f, "file not found: '{path}'")
+                write!(f, "USE: file not found: '{path}'")
             }
         }
     }
