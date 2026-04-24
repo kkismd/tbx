@@ -1,6 +1,6 @@
 ---
 name: improve-workflow
-description: ワークフロー改善（エージェント定義・CI設定・命令ファイルなどのメタ設定変更）をブランチ・PRで管理する手順。issueに紐づかない改善作業に使用する。
+description: ワークフロー改善（エージェント定義・CI設定・命令ファイルなどのメタ設定変更）をブランチ・PRで管理する手順。skill/agent ファイルを変更した際の description-body 整合チェック（Iteration 0）を含む。issueに紐づかない改善作業に使用する。
 ---
 
 ## ワークフロー改善手順
