@@ -1020,7 +1020,14 @@ fn cs_push_prim(vm: &mut VM) -> Result<(), TbxError> {
 }
 
 /// CS_POP — move a value from the compile stack to the data stack.
+///
+/// Must be called in compile mode (inside a IMMEDIATE word invocation).
 fn cs_pop_prim(vm: &mut VM) -> Result<(), TbxError> {
+    if !vm.is_compiling {
+        return Err(TbxError::InvalidExpression {
+            reason: "CS_POP outside compile mode",
+        });
+    }
     let val = vm.compile_stack.pop().ok_or(TbxError::StackUnderflow)?;
     vm.push(val)?;
     Ok(())
@@ -1030,6 +1037,15 @@ fn cs_pop_prim(vm: &mut VM) -> Result<(), TbxError> {
 /// and write the result to the dictionary.
 ///
 /// Consumes all remaining tokens from `token_stream`.
+///
+/// # Rollback contract
+///
+/// If `dict_write` fails partway through writing compiled cells, the dictionary
+/// may be left in a partially-written state. The caller is responsible for
+/// invoking `rollback_def()` to restore the dictionary to a consistent state.
+/// In practice, `COMPILE_EXPR` is only called from within IMMEDIATE word bodies
+/// (themselves compiled into a DEF..END definition), so any error will propagate
+/// to `compile_program`, which calls `rollback_def()` on any `Err` return.
 fn compile_expr_prim(vm: &mut VM) -> Result<(), TbxError> {
     if !vm.is_compiling {
         return Err(TbxError::InvalidExpression {
@@ -3656,10 +3672,22 @@ mod tests {
     // --- cs_pop_prim ---
 
     #[test]
-    fn test_cs_pop_prim_empty_compile_stack_error() {
-        // CS_POP with an empty compile_stack must return StackUnderflow.
+    fn test_cs_pop_prim_outside_compile_mode_error() {
+        // CS_POP called when is_compiling == false must return InvalidExpression.
         let mut vm = VM::new();
         register_all(&mut vm);
+        vm.compile_stack.push(Cell::Int(1));
+        let err = cs_pop_prim(&mut vm).unwrap_err();
+        assert!(
+            matches!(err, TbxError::InvalidExpression { .. }),
+            "expected InvalidExpression, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn test_cs_pop_prim_empty_compile_stack_error() {
+        // CS_POP with an empty compile_stack must return StackUnderflow.
+        let mut vm = make_compiling_vm("TESTWORD");
         assert!(vm.compile_stack.is_empty());
         let err = cs_pop_prim(&mut vm).unwrap_err();
         assert_eq!(err, TbxError::StackUnderflow);
@@ -3668,15 +3696,14 @@ mod tests {
     #[test]
     fn test_cs_pop_prim_moves_value_to_data_stack() {
         // CS_POP must pop the top of compile_stack and push it onto the data stack.
-        let mut vm = VM::new();
-        register_all(&mut vm);
+        let mut vm = make_compiling_vm("TESTWORD");
         vm.compile_stack.push(Cell::Int(99));
         cs_pop_prim(&mut vm).unwrap();
         assert!(vm.compile_stack.is_empty());
         assert_eq!(vm.pop(), Ok(Cell::Int(99)));
     }
 
-    // --- end_prim with non-empty compile_stack ---
+    // --- compile_expr_prim ---
 
     #[test]
     fn test_end_prim_compile_stack_not_empty_error() {
@@ -3699,6 +3726,63 @@ mod tests {
         assert!(
             vm.compile_stack.is_empty(),
             "compile_stack must be empty after rollback"
+        );
+    }
+
+    #[test]
+    fn test_compile_expr_prim_outside_compile_mode_error() {
+        // COMPILE_EXPR called when is_compiling == false must return InvalidExpression.
+        let mut vm = VM::new();
+        register_all(&mut vm);
+        vm.token_stream = Some(
+            vec![crate::lexer::SpannedToken {
+                token: crate::lexer::Token::Ident("X".to_string()),
+                pos: crate::lexer::Position { line: 1, col: 1 },
+                source_offset: 0,
+                source_len: 1,
+            }]
+            .into(),
+        );
+        let err = compile_expr_prim(&mut vm).unwrap_err();
+        assert!(
+            matches!(err, TbxError::InvalidExpression { .. }),
+            "expected InvalidExpression, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn test_compile_expr_prim_empty_token_stream_error() {
+        // COMPILE_EXPR with no tokens in the stream must return TokenStreamEmpty.
+        let mut vm = make_compiling_vm("TESTWORD");
+        vm.token_stream = Some(std::collections::VecDeque::new());
+        let err = compile_expr_prim(&mut vm).unwrap_err();
+        assert_eq!(err, TbxError::TokenStreamEmpty);
+    }
+
+    #[test]
+    fn test_compile_expr_prim_compiles_literal_to_dict() {
+        // COMPILE_EXPR with a single integer literal must emit cells to dict.
+        let mut vm = make_compiling_vm("TESTWORD");
+        let dp_before = vm.dp;
+        vm.token_stream = Some(
+            vec![crate::lexer::SpannedToken {
+                token: crate::lexer::Token::IntLit(42),
+                pos: crate::lexer::Position { line: 1, col: 1 },
+                source_offset: 0,
+                source_len: 2,
+            }]
+            .into(),
+        );
+        compile_expr_prim(&mut vm).unwrap();
+        // At least one cell must have been written.
+        assert!(vm.dp > dp_before, "dict must grow after COMPILE_EXPR");
+        // token_stream must be drained.
+        assert!(
+            vm.token_stream
+                .as_ref()
+                .map(|s| s.is_empty())
+                .unwrap_or(true),
+            "token_stream must be empty after COMPILE_EXPR"
         );
     }
 }
