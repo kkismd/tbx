@@ -110,17 +110,45 @@ Critical / Warning の問題および Info の気づきを以下の2段階で記
 
 #### 5-1. PRへのレビューコメント投稿
 
-`gh pr review` コマンドでレビューコメントを投稿する（PRへの書き込みはMCPサーバーに対応ツールがないため `gh` CLIを使用する）。
-全コメントをまとめて `REQUEST_CHANGES`（Criticalあり）または `COMMENT`（Warningのみ、またはInfoのみ）で提出する。
+**投稿は2種類に分けて行う**:
 
-> **注意**: `implement-issue` エージェントと同じユーザートークンで動作している場合、GitHubの制約により「PRの作成者は自分のPRをレビューできない」エラー（`GraphQL: Can't request changes on your own pull request`）が発生する。その場合は `gh pr comment` にフォールバックする。
+**① Critical / Warning のまとめ投稿**（`gh pr review`）
+
+Critical / Warning の指摘をまとめて1件のレビューとして投稿する。
+
+```bash
+cat > "$(git rev-parse --git-dir)/REVIEW_BODY.md" << 'EOF'
+（Critical / Warning の指摘内容。各指摘を上記フォーマットで並べる）
+EOF
+
+gh pr review <PR番号> --request-changes --body-file "$(git rev-parse --git-dir)/REVIEW_BODY.md"
+# Critical がない場合は --request-changes の代わりに --comment を使う
+```
+
+> **注意**: `implement-issue` エージェントと同じユーザートークンで動作している場合、GitHubの制約により「PRの作成者は自分のPRをレビューできない」エラー（`GraphQL: Can't request changes on your own pull request`）が発生する。その場合は **同じ REVIEW_BODY.md をそのまま使って** 以下にフォールバックする（フォールバック時は通常コメントになるため変更要求の強度は失われる）。
 >
 > ```bash
-> # フォールバック: 通常コメントとして投稿
+> # フォールバック: 通常コメントとして投稿（Critical/Warning まとめて1件、同じ REVIEW_BODY.md を再利用）
 > gh pr comment <PR番号> --body-file "$(git rev-parse --git-dir)/REVIEW_BODY.md"
 > ```
 
-コメントのフォーマット：
+**② Info の個別投稿**（`gh pr comment`）
+
+Info 指摘は `gh pr review` とは別に、**1指摘1コメント**でそれぞれ `gh pr comment` を呼び出して投稿する（`implement-issue` が後から個別に読み取って GitHub issue を登録するため、まとめて1件にしない）。
+
+```bash
+# Info 指摘ごとに別ファイルで投稿（Info が複数あれば繰り返す）
+cat > "$(git rev-parse --git-dir)/INFO_COMMENT_1.md" << 'EOF'
+🟢 **[Info]**
+（1件目の Info 指摘内容）
+**期待される状態**: （どう改善されるべきか）
+EOF
+gh pr comment <PR番号> --body-file "$(git rev-parse --git-dir)/INFO_COMMENT_1.md"
+```
+
+Critical / Warning がなく Info のみの場合も同様に `gh pr comment` で個別投稿する（`gh pr review` は使わない）。
+
+コメントの共通フォーマット：
 
 ```
 🔴 **[Critical]** または 🟡 **[Warning]** または 🟢 **[Info]**
@@ -131,9 +159,6 @@ Critical / Warning の問題および Info の気づきを以下の2段階で記
 
 （関連する blueprint.md のセクションがあれば）参照: blueprint.md「セクション名」
 ```
-
-Info 指摘は複数あっても1件のコメントにまとめず、**1指摘1コメント**で投稿する。
-これにより `implement-issue` が後から個別に読み取って GitHub issue を登録できる。
 
 #### 5-2. GitHub Issueの登録
 
@@ -167,7 +192,19 @@ Issueのフォーマット：
 PR #N のレビューで検出
 ```
 
-Issueにはラベル `review-finding` を付与する（ラベルが存在しない場合は作成する）。
+Issueにはラベル `review-finding` を付与する（ラベルが存在しない場合は以下で作成する）。
+
+```bash
+gh label create "review-finding" --description "Review-detected finding" --color "e11d48" 2>/dev/null || true
+
+# Issue本文をファイルに書き出してから登録する（本文が複数行になるため --body-file を使う）
+cat > "$(git rev-parse --git-dir)/ISSUE_BODY.md" << 'EOF'
+（上記フォーマットで本文を記述）
+EOF
+
+gh issue create --title "（問題の概要）" --label "review-finding" --body-file "$(git rev-parse --git-dir)/ISSUE_BODY.md"
+```
+
 Warning は Issue登録不要（PRコメントのみ）。
 
 ### ステップ6：レビュー結果のサマリ報告
