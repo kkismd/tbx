@@ -1917,6 +1917,73 @@ PUTDEC 99
         assert_eq!(interp.take_output(), "42");
     }
 
+    // --- compile_program integration tests (issue #266) ---
+
+    #[test]
+    fn test_compile_program_forward_reference_is_error() {
+        // In single-pass compilation, a ground-level reference to a word that
+        // has not yet been defined (i.e. the DEF appears after the reference)
+        // must produce an UndefinedSymbol error.
+        let mut interp = Interpreter::new();
+        let src = "FORWARD_WORD\nDEF FORWARD_WORD\n  PUTDEC 1\nEND";
+        let result = interp.compile_program(src);
+        assert!(
+            result.is_err(),
+            "expected UndefinedSymbol error for forward reference, but got Ok"
+        );
+        assert!(
+            matches!(result.unwrap_err().kind, TbxError::UndefinedSymbol { .. }),
+            "expected UndefinedSymbol error kind"
+        );
+    }
+
+    #[test]
+    fn test_exec_line_then_compile_program_coexistence() {
+        // A word defined via exec_line must be callable from a subsequent
+        // compile_program on the same Interpreter instance.
+        let mut interp = Interpreter::new();
+        interp.exec_line("DEF HELLO").unwrap();
+        interp.exec_line("PUTDEC 99").unwrap();
+        interp.exec_line("END").unwrap();
+        interp.compile_program("HELLO").unwrap();
+        assert_eq!(interp.take_output(), "99");
+    }
+
+    #[test]
+    fn test_compile_program_then_exec_line_coexistence() {
+        // A word defined inside compile_program must be callable via exec_line
+        // on the same Interpreter instance afterwards.
+        let mut interp = Interpreter::new();
+        interp
+            .compile_program("DEF ADD1(X)\nRETURN X + 1\nEND")
+            .unwrap();
+        interp.exec_line("PUTDEC ADD1(41)").unwrap();
+        assert_eq!(interp.take_output(), "42");
+    }
+
+    #[test]
+    fn test_compile_program_ground_deferred_execution() {
+        // Ground-level statements are executed after ALL DEFs have been compiled,
+        // even when DEFs and ground statements are interleaved in the source.
+        // Expected output is "12": PRINT_A runs first, then PRINT_B.
+        let mut interp = Interpreter::new();
+        let src = "\
+DEF PRINT_A
+  PUTDEC 1
+END
+PRINT_A
+DEF PRINT_B
+  PUTDEC 2
+END
+PRINT_B";
+        interp.compile_program(src).unwrap();
+        assert_eq!(
+            interp.take_output(),
+            "12",
+            "expected ground statements to execute after all DEFs are compiled"
+        );
+    }
+
     // --- compile_program + IMMEDIATE (issue #264) ---
 
     #[test]
