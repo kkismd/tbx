@@ -624,6 +624,13 @@ pub fn end_prim(vm: &mut VM) -> Result<(), TbxError> {
         });
     }
 
+    // Check for unpatched compile-stack items before finalising the word.
+    if !vm.compile_stack.is_empty() {
+        let count = vm.compile_stack.len();
+        vm.rollback_def();
+        return Err(TbxError::CompileStackNotEmpty { count });
+    }
+
     // Write EXIT to terminate the word body.
     let exit_xt =
         vm.find_by_kind(|k| matches!(k, EntryKind::Exit))
@@ -998,6 +1005,99 @@ pub fn dim_prim(vm: &mut VM) -> Result<(), TbxError> {
     Ok(())
 }
 
+/// CS_PUSH — move a value from the data stack to the compile stack.
+///
+/// Must be called in compile mode (inside a IMMEDIATE word invocation).
+fn cs_push_prim(vm: &mut VM) -> Result<(), TbxError> {
+    if !vm.is_compiling {
+        return Err(TbxError::InvalidExpression {
+            reason: "CS_PUSH outside compile mode",
+        });
+    }
+    let val = vm.pop()?;
+    vm.compile_stack.push(val);
+    Ok(())
+}
+
+/// CS_POP — move a value from the compile stack to the data stack.
+///
+/// Must be called in compile mode (inside a IMMEDIATE word invocation).
+fn cs_pop_prim(vm: &mut VM) -> Result<(), TbxError> {
+    if !vm.is_compiling {
+        return Err(TbxError::InvalidExpression {
+            reason: "CS_POP outside compile mode",
+        });
+    }
+    let val = vm.compile_stack.pop().ok_or(TbxError::StackUnderflow)?;
+    vm.push(val)?;
+    Ok(())
+}
+
+/// COMPILE_EXPR — compile the remaining tokens in the token stream as an expression
+/// and write the result to the dictionary.
+///
+/// Consumes all remaining tokens from `token_stream`.
+///
+/// # Rollback contract
+///
+/// If `dict_write` fails partway through writing compiled cells, the dictionary
+/// may be left in a partially-written state. The caller is responsible for
+/// invoking `rollback_def()` to restore the dictionary to a consistent state.
+/// In practice, `COMPILE_EXPR` is only called from within IMMEDIATE word bodies
+/// (themselves compiled into a DEF..END definition), so any error will propagate
+/// to `compile_program`, which calls `rollback_def()` on any `Err` return.
+fn compile_expr_prim(vm: &mut VM) -> Result<(), TbxError> {
+    if !vm.is_compiling {
+        return Err(TbxError::InvalidExpression {
+            reason: "COMPILE_EXPR outside compile mode",
+        });
+    }
+    // Drain all remaining tokens from the stream.
+    let tokens: Vec<crate::lexer::SpannedToken> = match vm.token_stream.as_mut() {
+        Some(stream) => stream.drain(..).collect(),
+        None => return Err(TbxError::TokenStreamEmpty),
+    };
+    if tokens.is_empty() {
+        return Err(TbxError::TokenStreamEmpty);
+    }
+    // Compile the expression using the current local variable table.
+    // Use the take-compile-restore pattern to satisfy borrow checker:
+    // take local_table out of compile_state, pass &mut VM to ExprCompiler,
+    // then restore local_table unconditionally.
+    let self_word = vm.compile_state.as_ref().map(|s| s.word_name.clone());
+    let self_hdr_idx = vm.compile_state.as_ref().map(|s| s.word_hdr_idx());
+    let local_table = vm
+        .compile_state
+        .as_mut()
+        .map(|s| std::mem::take(&mut s.local_table));
+    let compile_result: Result<(Vec<Cell>, Vec<usize>), TbxError> = {
+        let local_table_ref = local_table.as_ref();
+        let mut compiler =
+            crate::expr::ExprCompiler::with_context(vm, local_table_ref, self_word, self_hdr_idx);
+        compiler.compile_expr(&tokens).map(|cells| {
+            let offsets = std::mem::take(&mut compiler.patch_offsets);
+            (cells, offsets)
+        })
+    };
+    // Restore local_table regardless of success or failure.
+    if let (Some(state), Some(lt)) = (vm.compile_state.as_mut(), local_table) {
+        state.local_table = lt;
+    }
+    let (cells, patch_offsets) = compile_result?;
+    // Write compiled cells to the dictionary.
+    let base_dp = vm.dp;
+    for cell in &cells {
+        vm.dict_write(cell.clone())?;
+    }
+    // Register patch offsets (adjust by base_dp to get absolute dictionary positions).
+    if let Some(state) = vm.compile_state.as_mut() {
+        for offset in patch_offsets {
+            state.call_patch_list.push(base_dp + offset);
+        }
+    }
+    Ok(())
+}
+
 /// Register all stack primitives into the VM's dictionary.
 pub fn register_all(vm: &mut VM) {
     vm.register(WordEntry::new_primitive("DROP", drop_prim));
@@ -1152,6 +1252,30 @@ pub fn register_all(vm: &mut VM) {
     let mut dim_entry = WordEntry::new_primitive("DIM", dim_prim);
     dim_entry.flags = FLAG_IMMEDIATE | FLAG_SYSTEM;
     vm.register(dim_entry);
+
+    // Compile-stack primitives for IMMEDIATE word authoring.
+    // No FLAG_IMMEDIATE or FLAG_SYSTEM: these are compiled into DEF bodies as statements
+    // and called at runtime by IMMEDIATE words (e.g. IF/ENDIF).
+    vm.register(WordEntry::new_primitive("CS_PUSH", cs_push_prim));
+    vm.register(WordEntry::new_primitive("CS_POP", cs_pop_prim));
+    vm.register(WordEntry::new_primitive("COMPILE_EXPR", compile_expr_prim));
+
+    // Runtime branch/jump Xt constants — allows TBX code to write:
+    //   APPEND JUMP_FALSE, APPEND JUMP_ALWAYS, etc.
+    let bif_xt = vm
+        .find_by_kind(|k| matches!(k, EntryKind::BranchIfFalse))
+        .expect("BIF runtime entry must exist");
+    vm.register(WordEntry::new_constant("JUMP_FALSE", Cell::Xt(bif_xt)));
+
+    let bit_xt = vm
+        .find_by_kind(|k| matches!(k, EntryKind::BranchIfTrue))
+        .expect("BIT runtime entry must exist");
+    vm.register(WordEntry::new_constant("JUMP_TRUE", Cell::Xt(bit_xt)));
+
+    let goto_xt = vm
+        .find_by_kind(|k| matches!(k, EntryKind::Goto))
+        .expect("GOTO runtime entry must exist");
+    vm.register(WordEntry::new_constant("JUMP_ALWAYS", Cell::Xt(goto_xt)));
 }
 
 #[cfg(test)]
@@ -3515,6 +3639,160 @@ mod tests {
         assert!(
             matches!(err, TbxError::DictionaryOverflow { .. }),
             "DIM with insufficient space should return DictionaryOverflow, got {err:?}"
+        );
+    }
+
+    // --- cs_push_prim ---
+
+    #[test]
+    fn test_cs_push_prim_outside_compile_mode_error() {
+        // CS_PUSH called when is_compiling == false must return InvalidExpression.
+        let mut vm = VM::new();
+        register_all(&mut vm);
+        vm.push(Cell::Int(42)).unwrap();
+        let err = cs_push_prim(&mut vm).unwrap_err();
+        assert!(
+            matches!(err, TbxError::InvalidExpression { .. }),
+            "expected InvalidExpression, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn test_cs_push_prim_moves_value_to_compile_stack() {
+        // CS_PUSH must pop the top of the data stack and push it onto compile_stack.
+        let mut vm = make_compiling_vm("TESTWORD");
+        vm.push(Cell::Int(7)).unwrap();
+        cs_push_prim(&mut vm).unwrap();
+        // data stack must be empty.
+        assert_eq!(vm.pop(), Err(TbxError::StackUnderflow));
+        // compile_stack must hold the value.
+        assert_eq!(vm.compile_stack.last(), Some(&Cell::Int(7)));
+    }
+
+    // --- cs_pop_prim ---
+
+    #[test]
+    fn test_cs_pop_prim_outside_compile_mode_error() {
+        // CS_POP called when is_compiling == false must return InvalidExpression.
+        let mut vm = VM::new();
+        register_all(&mut vm);
+        vm.compile_stack.push(Cell::Int(1));
+        let err = cs_pop_prim(&mut vm).unwrap_err();
+        assert!(
+            matches!(err, TbxError::InvalidExpression { .. }),
+            "expected InvalidExpression, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn test_cs_pop_prim_empty_compile_stack_error() {
+        // CS_POP with an empty compile_stack must return StackUnderflow.
+        let mut vm = make_compiling_vm("TESTWORD");
+        assert!(vm.compile_stack.is_empty());
+        let err = cs_pop_prim(&mut vm).unwrap_err();
+        assert_eq!(err, TbxError::StackUnderflow);
+    }
+
+    #[test]
+    fn test_cs_pop_prim_moves_value_to_data_stack() {
+        // CS_POP must pop the top of compile_stack and push it onto the data stack.
+        let mut vm = make_compiling_vm("TESTWORD");
+        vm.compile_stack.push(Cell::Int(99));
+        cs_pop_prim(&mut vm).unwrap();
+        assert!(vm.compile_stack.is_empty());
+        assert_eq!(vm.pop(), Ok(Cell::Int(99)));
+    }
+
+    // --- compile_expr_prim ---
+
+    #[test]
+    fn test_end_prim_compile_stack_not_empty_error() {
+        // end_prim must return CompileStackNotEmpty and rollback when compile_stack
+        // has leftover items at the end of the word definition.
+        let mut vm = make_compiling_vm("MYWORD");
+        // Manually leave an item on compile_stack to simulate an incomplete definition.
+        vm.compile_stack.push(Cell::Int(1));
+        let err = end_prim(&mut vm).unwrap_err();
+        assert!(
+            matches!(err, TbxError::CompileStackNotEmpty { count: 1 }),
+            "expected CompileStackNotEmpty {{ count: 1 }}, got {err:?}"
+        );
+        // VM must have been rolled back: is_compiling should be false.
+        assert!(
+            !vm.is_compiling,
+            "is_compiling must be false after rollback"
+        );
+        // compile_stack must be cleared after rollback to prevent state leakage.
+        assert!(
+            vm.compile_stack.is_empty(),
+            "compile_stack must be empty after rollback"
+        );
+    }
+
+    #[test]
+    fn test_compile_expr_prim_outside_compile_mode_error() {
+        // COMPILE_EXPR called when is_compiling == false must return InvalidExpression.
+        let mut vm = VM::new();
+        register_all(&mut vm);
+        vm.token_stream = Some(
+            vec![crate::lexer::SpannedToken {
+                token: crate::lexer::Token::Ident("X".to_string()),
+                pos: crate::lexer::Position { line: 1, col: 1 },
+                source_offset: 0,
+                source_len: 1,
+            }]
+            .into(),
+        );
+        let err = compile_expr_prim(&mut vm).unwrap_err();
+        assert!(
+            matches!(err, TbxError::InvalidExpression { .. }),
+            "expected InvalidExpression, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn test_compile_expr_prim_no_token_stream_error() {
+        // COMPILE_EXPR with token_stream == None must return TokenStreamEmpty.
+        let mut vm = make_compiling_vm("TESTWORD");
+        // Explicitly set token_stream to None.
+        vm.token_stream = None;
+        let err = compile_expr_prim(&mut vm).unwrap_err();
+        assert_eq!(err, TbxError::TokenStreamEmpty);
+    }
+
+    #[test]
+    fn test_compile_expr_prim_empty_token_stream_error() {
+        // COMPILE_EXPR with no tokens in the stream must return TokenStreamEmpty.
+        let mut vm = make_compiling_vm("TESTWORD");
+        vm.token_stream = Some(std::collections::VecDeque::new());
+        let err = compile_expr_prim(&mut vm).unwrap_err();
+        assert_eq!(err, TbxError::TokenStreamEmpty);
+    }
+
+    #[test]
+    fn test_compile_expr_prim_compiles_literal_to_dict() {
+        // COMPILE_EXPR with a single integer literal must emit cells to dict.
+        let mut vm = make_compiling_vm("TESTWORD");
+        let dp_before = vm.dp;
+        vm.token_stream = Some(
+            vec![crate::lexer::SpannedToken {
+                token: crate::lexer::Token::IntLit(42),
+                pos: crate::lexer::Position { line: 1, col: 1 },
+                source_offset: 0,
+                source_len: 2,
+            }]
+            .into(),
+        );
+        compile_expr_prim(&mut vm).unwrap();
+        // At least one cell must have been written.
+        assert!(vm.dp > dp_before, "dict must grow after COMPILE_EXPR");
+        // token_stream must be drained.
+        assert!(
+            vm.token_stream
+                .as_ref()
+                .map(|s| s.is_empty())
+                .unwrap_or(true),
+            "token_stream must be empty after COMPILE_EXPR"
         );
     }
 }

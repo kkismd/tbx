@@ -142,6 +142,9 @@ pub struct VM {
     /// State maintained during compilation of a new word definition (DEF..END).
     /// `None` in execution mode; `Some(...)` while compiling.
     pub(crate) compile_state: Option<CompileState>,
+    /// Compile-time stack: used by IMMEDIATE words to pass values between
+    /// compile-time word invocations (e.g. CS_PUSH / CS_POP for IF/ENDIF).
+    pub(crate) compile_stack: Vec<Cell>,
 }
 
 impl VM {
@@ -167,6 +170,7 @@ impl VM {
             is_compiling: false,
             token_stream: None,
             compile_state: None,
+            compile_stack: Vec::new(),
         }
     }
 
@@ -819,6 +823,9 @@ impl VM {
             self.latest = state.saved_latest;
             self.is_compiling = false;
         }
+        // Always clear the compile stack on rollback to prevent state leakage
+        // into the next DEF..END compilation.
+        self.compile_stack.clear();
     }
 
     /// Perform a definition rollback using explicitly supplied snapshot values.
@@ -838,6 +845,9 @@ impl VM {
         self.latest = saved_latest;
         self.compile_state = None;
         self.is_compiling = false;
+        // Always clear the compile stack on rollback to prevent state leakage
+        // into the next DEF..END compilation.
+        self.compile_stack.clear();
     }
 
     /// Find the first header entry whose `kind` satisfies `pred`.
