@@ -1917,6 +1917,88 @@ PUTDEC 99
         assert_eq!(interp.take_output(), "42");
     }
 
+    // --- compile_program integration tests (issue #266) ---
+
+    #[test]
+    fn test_compile_program_forward_reference_is_error() {
+        // In single-pass compilation, a ground-level reference to a word that
+        // has not yet been defined (i.e. the DEF appears after the reference)
+        // must produce an UndefinedSymbol error.
+        let mut interp = Interpreter::new();
+        let src = "FORWARD_WORD\nDEF FORWARD_WORD\n  PUTDEC 1\nEND";
+        let result = interp.compile_program(src);
+        let err =
+            result.expect_err("expected UndefinedSymbol error for forward reference, but got Ok");
+        assert!(
+            matches!(err.kind, TbxError::UndefinedSymbol { .. }),
+            "expected UndefinedSymbol error kind"
+        );
+        // The VM must be reusable after the error (no compile state left over).
+        interp
+            .compile_program("PUTDEC 1")
+            .expect("VM should be reusable after UndefinedSymbol error");
+        assert_eq!(interp.take_output(), "1");
+    }
+
+    #[test]
+    fn test_exec_line_then_compile_program_coexistence() {
+        // A word defined via exec_line must be callable from a subsequent
+        // compile_program on the same Interpreter instance.
+        let mut interp = Interpreter::new();
+        interp.exec_line("DEF HELLO").unwrap();
+        interp.exec_line("PUTDEC 99").unwrap();
+        interp.exec_line("END").unwrap();
+        interp.compile_program("HELLO").unwrap();
+        assert_eq!(interp.take_output(), "99");
+    }
+
+    #[test]
+    fn test_compile_program_then_exec_line_coexistence() {
+        // A word defined inside compile_program must be callable via exec_line
+        // on the same Interpreter instance afterwards.
+        let mut interp = Interpreter::new();
+        interp
+            .compile_program("DEF ADD1(X)\nRETURN X + 1\nEND")
+            .unwrap();
+        interp.exec_line("PUTDEC ADD1(41)").unwrap();
+        assert_eq!(interp.take_output(), "42");
+    }
+
+    #[test]
+    fn test_compile_program_ground_deferred_execution() {
+        // Proves that ground-level statements are deferred: they are collected into
+        // a main routine and executed AFTER all IMMEDIATE words have been processed.
+        //
+        // The key observable property: an IMMEDIATE word that appears between two
+        // ground statements runs at compile time, so its output appears BEFORE the
+        // output of both ground statements, even though it sits between them in source.
+        //
+        // Source order:
+        //   PUTDEC 1              ← ground stmt (deferred)
+        //   IMMEDIATE SHOW        ← marks SHOW as IMMEDIATE (flag-set only, no output yet)
+        //   SHOW                  ← now IMMEDIATE: runs at compile time → outputs "99"
+        //   PUTDEC 2              ← ground stmt (deferred)
+        //
+        // Deferred execution produces: "99" (compile-time) + "1" + "2" (runtime) = "9912".
+        // If ground statements executed inline, PUTDEC 1 would run before SHOW:
+        // output would be "1" + "99" + "2" = "1992" — a different result.
+        let mut interp = Interpreter::new();
+        let src = "\
+DEF SHOW
+  PUTDEC 99
+END
+PUTDEC 1
+IMMEDIATE SHOW
+SHOW
+PUTDEC 2";
+        interp.compile_program(src).unwrap();
+        assert_eq!(
+            interp.take_output(),
+            "9912",
+            "expected IMMEDIATE output ('99') before deferred ground output ('12')"
+        );
+    }
+
     // --- compile_program + IMMEDIATE (issue #264) ---
 
     #[test]
