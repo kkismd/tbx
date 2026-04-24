@@ -2434,7 +2434,7 @@ PUTDEC 42";
         // calling program continues (exec_source treats Halted as Ok(())).
         let dir = tempfile::tempdir().expect("tempdir");
         let lib_path = dir.path().join("lib_halt.tbx");
-        // The file defines GREET before HALT, so the word is available after USE.
+        // GREET is defined before HALT; NEVER is defined after HALT.
         std::fs::write(
             &lib_path,
             "DEF GREET\nPUTSTR \"hi\"\nEND\nHALT\nDEF NEVER\nPUTSTR \"never\"\nEND\n",
@@ -2442,12 +2442,27 @@ PUTDEC 42";
         .unwrap();
 
         let mut interp = Interpreter::new();
-        let src = format!("USE \"{}\"\nGREET", lib_path.display());
-        // USE must succeed and GREET must be callable.
+        let src = format!("USE \"{}\"", lib_path.display());
+        // USE must succeed (HALT in the loaded file is not propagated to caller).
         interp.exec_source(&src).unwrap();
+
+        // GREET (defined before HALT) must be available.
+        interp.exec_source("GREET").unwrap();
         assert!(
             interp.take_output().contains("hi"),
             "GREET defined before HALT should be callable after USE"
+        );
+
+        // NEVER (defined after HALT) must NOT be available — confirms HALT
+        // actually stopped file execution at the HALT line.
+        let result = interp.exec_source("NEVER");
+        assert!(
+            result.is_err(),
+            "NEVER defined after HALT should not be callable"
+        );
+        assert!(
+            matches!(result.unwrap_err().kind, TbxError::UndefinedSymbol { .. }),
+            "expected UndefinedSymbol for word defined after HALT"
         );
     }
 }
