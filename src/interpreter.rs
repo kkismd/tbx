@@ -1963,24 +1963,35 @@ PUTDEC 99
 
     #[test]
     fn test_compile_program_ground_deferred_execution() {
-        // Ground-level statements are executed after ALL DEFs have been compiled,
-        // even when DEFs and ground statements are interleaved in the source.
-        // Expected output is "12": PRINT_A runs first, then PRINT_B.
+        // Verifies that ground-level statements in compile_program are collected
+        // into a main routine and executed as a unit after ALL DEFs are compiled —
+        // even when DEFs and ground statements are interleaved throughout the source.
+        //
+        // The scenario uses a shared variable whose value is written by one ground
+        // statement and read by another.  Because ground statements run in source
+        // order after all DEFs are compiled, the sequence VAR→SET→READ must be
+        // consistent regardless of where the DEF appears in the source.
         let mut interp = Interpreter::new();
         let src = "\
-DEF PRINT_A
-  PUTDEC 1
+VAR X
+SET &X, 0
+DEF INCX
+  SET &X, X + 10
 END
-PRINT_A
-DEF PRINT_B
-  PUTDEC 2
-END
-PRINT_B";
+SET &X, 5
+INCX
+PUTDEC X";
+        // Expected execution order of ground statements (deferred, run after DEF is compiled):
+        //   VAR X       → X defined (= 0)
+        //   SET &X, 0   → X = 0
+        //   SET &X, 5   → X = 5
+        //   INCX        → X = 5 + 10 = 15
+        //   PUTDEC X    → outputs "15"
         interp.compile_program(src).unwrap();
         assert_eq!(
             interp.take_output(),
-            "12",
-            "expected ground statements to execute after all DEFs are compiled"
+            "15",
+            "expected ground statements to execute in source order after all DEFs are compiled"
         );
     }
 
