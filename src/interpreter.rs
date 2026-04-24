@@ -1927,12 +1927,9 @@ PUTDEC 99
         let mut interp = Interpreter::new();
         let src = "FORWARD_WORD\nDEF FORWARD_WORD\n  PUTDEC 1\nEND";
         let result = interp.compile_program(src);
+        let err = result.expect_err("expected UndefinedSymbol error for forward reference, but got Ok");
         assert!(
-            result.is_err(),
-            "expected UndefinedSymbol error for forward reference, but got Ok"
-        );
-        assert!(
-            matches!(result.unwrap_err().kind, TbxError::UndefinedSymbol { .. }),
+            matches!(err.kind, TbxError::UndefinedSymbol { .. }),
             "expected UndefinedSymbol error kind"
         );
     }
