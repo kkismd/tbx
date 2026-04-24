@@ -1,6 +1,6 @@
 ---
 name: improve-workflow
-description: ワークフロー改善（エージェント定義・CI設定・命令ファイルなどのメタ設定変更）をブランチ・PRで管理する手順。issueに紐づかない改善作業に使用する。
+description: ワークフロー改善（エージェント定義・CI設定・命令ファイルなどのメタ設定変更）をブランチ・PRで管理する手順。skill/agent ファイルを変更した際の description-body 整合チェック（Iteration 0）を含む。issueに紐づかない改善作業に使用する。
 ---
 
 ## ワークフロー改善手順
@@ -22,6 +22,19 @@ git checkout -b improve/short-description
 
 - ブランチ名は `improve/内容の要約` の形式にする（例: `improve/agent-tmp-restriction`）
 - 分岐元が `main` になっていることを確認する（`git log --oneline -1 main` で確認）
+
+### 1.5. 変更ファイルの静的チェック（skill / agent ファイルを変更した場合のみ）
+
+変更した SKILL.md / agent.md の frontmatter `description` と body を比較し、乖離がないことを確認する。
+
+チェック観点:
+- `description` が謳うトリガー・用途を body がカバーしているか
+- body に追加した機能・手順が `description` に反映されているか
+
+乖離がある場合はコミット前に修正する。
+
+> **重要な skill への大幅な変更（新規作成を含む）の場合**は、PR 作成後に
+> `empirical-prompt-tuning` skill を実施して実行精度を検証することを検討する。
 
 ### 2. 変更をステージしてコミットする
 
