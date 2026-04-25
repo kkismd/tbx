@@ -656,10 +656,15 @@ impl Interpreter {
                     path: canonical.display().to_string(),
                 }));
             }
+            // canonicalize() succeeded, so the file exists.  If read_to_string
+            // fails here (e.g. permission denied), we still report FileNotFound
+            // because there is no separate "file unreadable" error variant.
+            // The reason string (e.g. "Permission denied (os error 13)") tells
+            // the user the actual cause.
             let source = std::fs::read_to_string(&canonical).map_err(|e| {
                 make_err(TbxError::FileNotFound {
                     path: canonical.display().to_string(),
-                    reason: e.to_string(),
+                    reason: format!("read failed: {e}"),
                 })
             })?;
             self.loading_files.insert(canonical.clone());
@@ -2565,16 +2570,16 @@ PUTDEC 42";
         // UseNestingDepthExceeded.  We reduce max_use_depth to 2 so only 3
         // temporary files are needed (A→B→C where C tries to USE D, which
         // exceeds the limit).
+        //
+        // The depth check fires before canonicalize(), so d.tbx does not need
+        // to exist on disk — we never get that far.
         let dir = tempfile::tempdir().expect("tempdir");
-        let path_d = dir.path().join("d.tbx");
         let path_c = dir.path().join("c.tbx");
         let path_b = dir.path().join("b.tbx");
         let path_a = dir.path().join("a.tbx");
-        // d.tbx is never actually loaded; it just needs to exist so that
-        // canonicalize() in a.tbx/b.tbx/c.tbx does not fail.
-        // (The depth check fires before canonicalize for c.tbx → d.tbx.)
-        // Actually the depth check fires before we attempt to load d.tbx at all.
-        std::fs::write(&path_d, "PUTDEC 4\n").unwrap();
+        // Use a non-existent path for d.tbx; the depth check fires before
+        // canonicalize() is called, so the file need not exist.
+        let path_d = dir.path().join("d.tbx");
         std::fs::write(&path_c, format!("USE \"{}\"\n", path_d.display())).unwrap();
         std::fs::write(&path_b, format!("USE \"{}\"\n", path_c.display())).unwrap();
         std::fs::write(&path_a, format!("USE \"{}\"\n", path_b.display())).unwrap();
