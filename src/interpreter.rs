@@ -2279,6 +2279,24 @@ PUTDEC 99
     }
 
     #[test]
+    fn test_exec_line_goto_outside_def_is_error() {
+        // GOTO appearing at ground level (outside a DEF block) must produce an error
+        // in interpreter mode (exec_line) just as it does in full-program mode.
+        // This verifies the spec documented in blueprint-bootstrap.md Phase 3.
+        let mut interp = Interpreter::new();
+        let result = interp.exec_line("GOTO 10");
+        assert!(
+            result.is_err(),
+            "GOTO at ground level via exec_line should be an error"
+        );
+        let err = result.unwrap_err();
+        assert!(
+            err.to_string().contains("GOTO outside DEF"),
+            "error message should mention 'GOTO outside DEF', got: {err}"
+        );
+    }
+
+    #[test]
     fn test_compile_program_then_exec_line_coexistence() {
         // A word defined inside compile_program must be callable via exec_line
         // on the same Interpreter instance afterwards.
