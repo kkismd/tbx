@@ -2143,6 +2143,7 @@ PUTDEC 99
     fn test_compile_program_goto_outside_def_is_error() {
         // GOTO appearing outside a DEF body in ground-level code must produce
         // a compile-time error ("GOTO outside DEF"), not a runtime failure.
+        // The interpreter must also remain reusable after this compile error.
         let mut interp = Interpreter::new();
         let result = interp.compile_program("GOTO 10");
         assert!(
@@ -2154,6 +2155,11 @@ PUTDEC 99
             err.to_string().contains("GOTO outside DEF"),
             "error message should mention 'GOTO outside DEF', got: {err}"
         );
+        // Verify that the interpreter is still usable after the compile error.
+        interp
+            .compile_program("PUTDEC 1")
+            .expect("interpreter should be reusable after GOTO compile error");
+        assert_eq!(interp.take_output(), "1");
     }
 
     #[test]
