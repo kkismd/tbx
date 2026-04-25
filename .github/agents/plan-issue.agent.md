@@ -25,7 +25,7 @@ issue本文またはコメントに `Closes #N`・`Depends on #N`・`Blocked by 
 
 ### ステップ2：コードベース調査
 
-- `blueprint.md`（およびそこから参照される `blueprint-bootstrap.md`・`blueprint-language.md`）を読み込み、issueに関連する設計方針を特定する。
+- `blueprint.md`（およびそこから参照される `blueprint-language.md`）を読み込み、issueに関連する設計方針を特定する。
 - 既存のソースファイル（`src/` 配下）をglobで一覧し、関連するコードを把握する。
 - `Cargo.toml` が存在する場合は依存クレートや設定を確認する。
 

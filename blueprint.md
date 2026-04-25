@@ -160,4 +160,4 @@ eXtensibleなTiny BASICという意味で TBX という名前をつける。
 
 ## ブートストラップ
 
-ブートストラップ計画（フェーズ1〜4の実装順序）については [`blueprint-bootstrap.md`](./blueprint-bootstrap.md) を参照してください。
+ブートストラップ計画（フェーズ1〜4の実装順序）は完了済みです。アーカイブとして [Wiki の bootstrap ページ](https://github.com/kkismd/tbx/wiki/bootstrap) を参照してください。
