@@ -94,6 +94,8 @@ DEF 開始時に両構造体を生成し、END 完了後に破棄する。行番
 
 | プリミティブ | スタック効果 | 説明 |
 | ------------ | ------------ | ---- |
+| `APPEND`     | `( cell -- )` | スタックトップの Cell を `dictionary[DP]` に書き込み DP を +1 進める |
+| `HERE`       | `( -- addr )` | 現在の辞書ポインタ（次の書き込み先の DictAddr）をデータスタックに積む |
 | `CS_PUSH`    | `( val -- )` | データスタックのトップを compile_stack に移動する |
 | `CS_POP`     | `( -- val )` | compile_stack のトップをデータスタックに移動する |
 | `PATCH_ADDR` | `( addr -- )` | `DictAddr(addr)` をポップし、`dictionary[addr] = Cell::Int(DP)` を書き込む（前方参照のバックパッチ） |
@@ -141,8 +143,10 @@ IMMEDIATE ENDIF
 4. `APPEND 0` — ジャンプ先プレースホルダーとして 0 を書き込む
 
 **ENDIF の動作**（コンパイル時）:
-1. `CS_POP` — IF が積んだプレースホルダーのアドレスを取り出す
+1. `CS_POP` — IF が積んだプレースホルダーのアドレスを取り出す（`PATCH_ADDR CS_POP` の引数として式評価される）
 2. `PATCH_ADDR` — そのアドレスに現在の DP（ENDIF 直後の位置）を書き込む
+
+> `PATCH_ADDR CS_POP` は1ステートメントであり、`CS_POP`（式）が先に評価されてアドレスをデータスタックに積み、次に `PATCH_ADDR`（ステートメント）がそのアドレスをポップしてパッチする。
 
 実行時、条件が偽のとき BIF はパッチ済みのジャンプ先（= ENDIF 直後の位置）にジャンプする。
 
@@ -179,24 +183,31 @@ ENDIF はパッチ対象が JUMP_ALWAYS プレースホルダー（B）に変わ
 
 ELIF（elseif）は ELSE と IF を組み合わせた動作を単一ワードで実現する。直前の IF/ELIF のプレースホルダーをパッチしたうえで、新たな条件コードと BIF プレースホルダーをコンパイルスタックに積む。
 
-コンパイルスタックの遷移（ELSE と同じ外部契約）:
+ELIF は2つのパッチ対象（B: JUMP_ALWAYS プレースホルダー、C: 新しい BIF プレースホルダー）を生成する。どちらも ENDIF 実行時点の DP（= ENDIF 直後の位置）にジャンプする必要がある。
+
+コンパイルスタックの遷移:
 - 入力: `CS = [A]`（直前の IF/ELIF の BIF プレースホルダーアドレス）
-- 出力: `CS = [B']`（この ELIF の BIF プレースホルダーアドレス）
+- 出力: `CS = [B, C]`（B = JUMP_ALWAYS プレースホルダーアドレス、C = 新しい BIF プレースホルダーアドレス）
 
 ```
 DEF ELIF
   APPEND JUMP_ALWAYS       REM emit unconditional jump to skip this elif-body
   VAR JUMP_PLACEHOLDER
-  JUMP_PLACEHOLDER = HERE  REM save JUMP_ALWAYS placeholder address
+  JUMP_PLACEHOLDER = HERE  REM save JUMP_ALWAYS placeholder address (B)
   APPEND 0                 REM emit placeholder; DP = elif-body start
-  PATCH_ADDR CS_POP        REM patch previous IF/ELIF's BIF placeholder with current DP
+  PATCH_ADDR CS_POP        REM patch previous IF/ELIF's BIF placeholder (A) with current DP
+  CS_PUSH JUMP_PLACEHOLDER REM push B onto CS (deeper entry)
   COMPILE_EXPR             REM compile new condition expression
   APPEND JUMP_FALSE        REM emit new BIF instruction
-  CS_PUSH HERE             REM save new BIF placeholder address
+  CS_PUSH HERE             REM push new BIF placeholder address (C) on CS (top)
   APPEND 0                 REM emit placeholder
-  PATCH_ADDR JUMP_PLACEHOLDER  REM patch JUMP_ALWAYS placeholder to point after new BIF+placeholder
 END
 IMMEDIATE ELIF
 ```
 
-> **注意**: 上記のコード例はアルゴリズムの概要を示すものであり、最終的な TBX 実装はローカル変数の扱いや `PATCH_ADDR` のセマンティクスに合わせて調整が必要である。
+ELIF 後の ENDIF は CS から B と C の両方をポップしてパッチする必要がある。このため ENDIF は ELIF が使われる場合に **複数エントリをパッチする拡張** が必要となる。拡張方針として以下の2案がある。
+
+- **カウント方式**: ELIF が JUMP_ALWAYS エントリ数をコンパイルスタックに積んでおき、ENDIF がその数だけ追加でポップしてパッチする。
+- **フォワード参照チェーン方式**: 各 JUMP_ALWAYS プレースホルダーが次のプレースホルダーのアドレスを持つリンクリストを形成し、ENDIF がチェーンを辿ってすべてパッチする。
+
+> **注意**: 上記のコード例はアルゴリズムの概要を示すものであり、ENDIF の拡張設計（カウント方式 vs チェーン方式）の選択を含め、最終的な TBX 実装は別途決定する必要がある。
