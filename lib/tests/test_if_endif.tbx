@@ -1,0 +1,45 @@
+REM lib/tests/test_if_endif.tbx — TBX tests for IF/ENDIF control structures
+USE "lib/tests/helper.tbx"
+
+DEF CHECK_POS(X)
+  IF X > 0
+    RETURN 1
+  ENDIF
+  RETURN 0
+END
+ASSERT CHECK_POS(5) = 1
+ASSERT CHECK_POS(0) = 0
+ASSERT CHECK_POS(-3) = 0
+
+DEF SIGN(X)
+  IF X > 0
+    RETURN 1
+  ENDIF
+  IF X < 0
+    RETURN -1
+  ENDIF
+  RETURN 0
+END
+ASSERT SIGN(7) = 1
+ASSERT SIGN(-7) = -1
+ASSERT SIGN(0) = 0
+
+DEF NESTED(X)
+  IF X > 0
+    IF X > 10
+      RETURN 2
+    ENDIF
+    RETURN 1
+  ENDIF
+  RETURN 0
+END
+ASSERT NESTED(15) = 2
+ASSERT NESTED(5) = 1
+ASSERT NESTED(-1) = 0
+
+REM ASSERT_MSG integration tests
+ASSERT_MSG CHECK_POS(5) = 1, "CHECK_POS: positive"
+ASSERT_MSG CHECK_POS(0) = 0, "CHECK_POS: zero"
+ASSERT_MSG SIGN(7) = 1, "SIGN: positive"
+ASSERT_MSG SIGN(-7) = -1, "SIGN: negative"
+ASSERT_MSG SIGN(0) = 0, "SIGN: zero"

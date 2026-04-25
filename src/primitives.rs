@@ -391,6 +391,18 @@ pub fn halt_prim(_vm: &mut VM) -> Result<(), TbxError> {
     Err(TbxError::Halted)
 }
 
+/// ASSERT_FAIL — raise an AssertionFailed error unconditionally.
+pub fn assert_fail_prim(_vm: &mut VM) -> Result<(), TbxError> {
+    Err(TbxError::AssertionFailed)
+}
+
+/// ASSERT_FAIL_MSG — pop a string message from the stack and raise AssertionFailedWithMessage.
+pub fn assert_fail_msg_prim(vm: &mut VM) -> Result<(), TbxError> {
+    let idx = vm.pop_string_desc()?;
+    let message = vm.resolve_string(idx)?;
+    Err(TbxError::AssertionFailedWithMessage { message })
+}
+
 /// NEGATE — negate the numeric value on top of the data stack.
 ///
 /// - `Cell::Int(n)` → `Cell::Int(-n)` (returns `IntegerOverflow` for `i64::MIN`)
@@ -1207,6 +1219,11 @@ pub fn register_all(vm: &mut VM) {
     vm.register(WordEntry::new_primitive("HERE", here_prim));
     vm.register(WordEntry::new_primitive("STATE", state_prim));
     vm.register(WordEntry::new_primitive("HALT", halt_prim));
+    vm.register(WordEntry::new_primitive("ASSERT_FAIL", assert_fail_prim));
+    vm.register(WordEntry::new_primitive(
+        "ASSERT_FAIL_MSG",
+        assert_fail_msg_prim,
+    ));
     vm.register(WordEntry {
         name: "CALL".to_string(),
         flags: FLAG_SYSTEM,
@@ -2602,6 +2619,52 @@ mod tests {
         let _ = halt_prim(&mut vm);
         assert_eq!(vm.data_stack.len(), 1);
         assert_eq!(vm.pop().unwrap(), Cell::Int(42));
+    }
+
+    // --- assert_fail_prim ---
+
+    #[test]
+    fn test_assert_fail_returns_assertion_failed() {
+        let mut vm = VM::new();
+        assert!(matches!(
+            assert_fail_prim(&mut vm),
+            Err(TbxError::AssertionFailed)
+        ));
+    }
+
+    #[test]
+    fn test_assert_fail_leaves_stack_unchanged() {
+        let mut vm = VM::new();
+        vm.push(Cell::Int(1)).unwrap();
+        let _ = assert_fail_prim(&mut vm);
+        assert_eq!(vm.data_stack.len(), 1);
+        assert_eq!(vm.pop().unwrap(), Cell::Int(1));
+    }
+
+    // --- assert_fail_msg_prim ---
+
+    #[test]
+    fn test_assert_fail_msg_returns_assertion_failed_with_message() {
+        let mut vm = VM::new();
+        let idx = vm.intern_string("SIGN(7) should be 1").unwrap();
+        vm.push(Cell::StringDesc(idx)).unwrap();
+        let result = assert_fail_msg_prim(&mut vm);
+        assert!(matches!(
+            result,
+            Err(TbxError::AssertionFailedWithMessage { .. })
+        ));
+        if let Err(TbxError::AssertionFailedWithMessage { message }) = result {
+            assert_eq!(message, "SIGN(7) should be 1");
+        }
+    }
+
+    #[test]
+    fn test_assert_fail_msg_pops_message_from_stack() {
+        let mut vm = VM::new();
+        let idx = vm.intern_string("msg").unwrap();
+        vm.push(Cell::StringDesc(idx)).unwrap();
+        let _ = assert_fail_msg_prim(&mut vm);
+        assert_eq!(vm.data_stack.len(), 0);
     }
 
     #[test]

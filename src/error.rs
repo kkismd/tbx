@@ -109,6 +109,13 @@ pub enum TbxError {
     UseNestingDepthExceeded {
         limit: usize,
     },
+
+    /// Assertion explicitly failed via ASSERT_FAIL.
+    AssertionFailed,
+    /// Assertion explicitly failed via ASSERT_FAIL_MSG with a custom message.
+    AssertionFailedWithMessage {
+        message: String,
+    },
 }
 
 impl std::fmt::Display for TbxError {
@@ -191,6 +198,10 @@ impl std::fmt::Display for TbxError {
                     f,
                     "USE: nesting depth exceeded limit of {limit} (possible circular USE)"
                 )
+            }
+            TbxError::AssertionFailed => write!(f, "assertion failed"),
+            TbxError::AssertionFailedWithMessage { message } => {
+                write!(f, "assertion failed: {message}")
             }
         }
     }
@@ -276,5 +287,21 @@ mod tests {
     fn test_token_stream_empty_display() {
         let e = TbxError::TokenStreamEmpty;
         assert!(e.to_string().contains("token stream"));
+    }
+
+    #[test]
+    fn test_assertion_failed_display() {
+        let e = TbxError::AssertionFailed;
+        assert!(e.to_string().contains("assertion failed"));
+    }
+
+    #[test]
+    fn test_assertion_failed_with_message_display() {
+        let e = TbxError::AssertionFailedWithMessage {
+            message: "SIGN(7) should be 1".to_string(),
+        };
+        let msg = e.to_string();
+        assert!(msg.contains("assertion failed"));
+        assert!(msg.contains("SIGN(7) should be 1"));
     }
 }
