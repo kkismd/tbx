@@ -72,3 +72,20 @@ DEF COUNT_POS(N)
 END
 ASSERT_MSG COUNT_POS(3) = 3, "COUNT_POS: positives in [0..3]"
 ASSERT_MSG COUNT_POS(0) = 0, "COUNT_POS: no positives when N=0"
+
+REM IF/ENDIF containing WHILE/ENDWH: verify compile-stack symmetry in both nesting orders.
+DEF COND_SUM(FLAG, N)
+  VAR I
+  VAR S
+  SET &I, 0
+  SET &S, 0
+  IF FLAG > 0
+    WHILE I < N
+      SET &S, S + I
+      SET &I, I + 1
+    ENDWH
+  ENDIF
+  RETURN S
+END
+ASSERT_MSG COND_SUM(1, 4) = 6, "COND_SUM: flag=1 sums 0+1+2+3=6"
+ASSERT_MSG COND_SUM(0, 4) = 0, "COND_SUM: flag=0 skips loop"

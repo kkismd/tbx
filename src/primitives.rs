@@ -1072,8 +1072,8 @@ fn cs_pop_prim(vm: &mut VM) -> Result<(), TbxError> {
 
 /// PATCH_ADDR — pop a DictAddr from the data stack, then write Cell::Int(dp) at that address.
 ///
-/// Used by ENDIF (and future ELSE, ENDWHILE) to back-patch a previously emitted
-/// jump-target placeholder.  The address on the stack is typically saved by IF via
+/// Used by ENDIF, ENDWH, and future ELSE to back-patch a previously emitted
+/// jump-target placeholder.  The address on the stack is typically saved by IF/WHILE via
 /// CS_PUSH/CS_POP.
 ///
 /// Must be called in compile mode (inside an IMMEDIATE word invocation).
