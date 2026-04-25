@@ -1,6 +1,7 @@
 //! Outer interpreter: tokenizes source text and executes statements via the inner interpreter.
 
-use std::collections::VecDeque;
+use std::collections::{HashSet, VecDeque};
+use std::path::PathBuf;
 
 use crate::cell::{Cell, Xt};
 use crate::dict::FLAG_SYSTEM;
@@ -12,8 +13,10 @@ use crate::vm::VM;
 
 /// Maximum allowed nesting depth for USE statements.
 ///
-/// Prevents stack overflows caused by circular USE chains.
-const MAX_USE_DEPTH: usize = 64;
+/// Acts as a safety net for non-circular but excessively deep USE chains.
+/// Circular references are detected precisely by `loading_files` (method B)
+/// before this limit is reached.
+const MAX_USE_DEPTH: usize = 256;
 
 /// Error produced by the outer interpreter, including source location information.
 pub struct InterpreterError {
@@ -77,8 +80,16 @@ type ParsedSegments = (Vec<SpannedToken>, Vec<(usize, usize)>);
 pub struct Interpreter {
     vm: VM,
     /// Current USE nesting depth. Incremented each time `exec_source` is called
-    /// via a USE statement, decremented on return. Guards against circular USE chains.
+    /// via a USE statement, decremented on return. Acts as a safety net against
+    /// excessively deep (but non-circular) USE chains.
     use_depth: usize,
+    /// Set of canonicalized paths currently being loaded via USE.
+    ///
+    /// A path is inserted before `exec_source` is called and removed after it
+    /// returns (whether with success or error). If a path is already present
+    /// when a USE is about to start, a circular reference is detected and
+    /// `TbxError::CircularUse` is returned.
+    loading_files: HashSet<PathBuf>,
 }
 
 impl Default for Interpreter {
@@ -112,6 +123,7 @@ impl Interpreter {
         let mut interp = Self {
             vm: init_vm(),
             use_depth: 0,
+            loading_files: HashSet::new(),
         };
         const STDLIB: &str = include_str!("../lib/basic.tbx");
         interp.exec_source(STDLIB)?;
@@ -599,15 +611,35 @@ impl Interpreter {
                     limit: MAX_USE_DEPTH,
                 }));
             }
-            let source = std::fs::read_to_string(&path).map_err(|e| {
+            // Canonicalize the path before reading so that different textual
+            // representations of the same file (e.g. relative vs absolute)
+            // are treated as identical for circular-reference detection.
+            // canonicalize() fails if the file does not exist, so we report
+            // FileNotFound in that case rather than the generic IO error.
+            let canonical = std::fs::canonicalize(&path).map_err(|e| {
                 make_err(TbxError::FileNotFound {
-                    path,
+                    path: path.clone(),
                     reason: e.to_string(),
                 })
             })?;
+            // Detect circular USE: if this path is already being loaded we
+            // are in a cycle (e.g. A → B → A).
+            if self.loading_files.contains(&canonical) {
+                return Err(make_err(TbxError::CircularUse {
+                    path: canonical.display().to_string(),
+                }));
+            }
+            let source = std::fs::read_to_string(&canonical).map_err(|e| {
+                make_err(TbxError::FileNotFound {
+                    path: canonical.display().to_string(),
+                    reason: e.to_string(),
+                })
+            })?;
+            self.loading_files.insert(canonical.clone());
             self.use_depth += 1;
             let result = self.exec_source(&source);
             self.use_depth -= 1;
+            self.loading_files.remove(&canonical);
             result?;
         }
 
@@ -2439,8 +2471,9 @@ PUTDEC 42";
     }
 
     #[test]
-    fn test_use_nesting_depth_exceeded() {
-        // Create a file that USEs itself to trigger circular USE detection.
+    fn test_use_self_reference_returns_circular_error() {
+        // A file that USEs itself must be detected as a circular USE (not
+        // UseNestingDepthExceeded) because loading_files catches the cycle.
         let dir = tempfile::tempdir().expect("tempdir");
         let lib_path = dir.path().join("self_use.tbx");
         // Write a file that USEs itself.
@@ -2452,11 +2485,50 @@ PUTDEC 42";
         let result = interp.exec_source(&src);
         assert!(result.is_err());
         assert!(
-            matches!(
-                result.unwrap_err().kind,
-                TbxError::UseNestingDepthExceeded { .. }
-            ),
-            "expected TbxError::UseNestingDepthExceeded for circular USE"
+            matches!(result.unwrap_err().kind, TbxError::CircularUse { .. }),
+            "expected TbxError::CircularUse for self-referencing USE"
+        );
+    }
+
+    #[test]
+    fn test_use_mutual_circular_returns_circular_error() {
+        // A → B → A must be detected as circular USE.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path_a = dir.path().join("a.tbx");
+        let path_b = dir.path().join("b.tbx");
+        // a.tbx USEs b.tbx; b.tbx USEs a.tbx back.
+        std::fs::write(&path_a, format!("USE \"{}\"\n", path_b.display())).unwrap();
+        std::fs::write(&path_b, format!("USE \"{}\"\n", path_a.display())).unwrap();
+
+        let mut interp = Interpreter::new();
+        let src = format!("USE \"{}\"", path_a.display());
+        let result = interp.exec_source(&src);
+        assert!(result.is_err());
+        assert!(
+            matches!(result.unwrap_err().kind, TbxError::CircularUse { .. }),
+            "expected TbxError::CircularUse for mutual circular USE (A→B→A)"
+        );
+    }
+
+    #[test]
+    fn test_use_linear_chain_succeeds() {
+        // A non-circular chain A → B → C must succeed.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path_c = dir.path().join("c.tbx");
+        let path_b = dir.path().join("b.tbx");
+        let path_a = dir.path().join("a.tbx");
+        std::fs::write(&path_c, "DEF HELLO\nPUTSTR \"hello\"\nEND\n").unwrap();
+        std::fs::write(&path_b, format!("USE \"{}\"\n", path_c.display())).unwrap();
+        std::fs::write(&path_a, format!("USE \"{}\"\n", path_b.display())).unwrap();
+
+        let mut interp = Interpreter::new();
+        let src = format!("USE \"{}\"", path_a.display());
+        interp.exec_source(&src).unwrap();
+        // HELLO (defined in c.tbx) must be callable after the chain completes.
+        interp.exec_source("HELLO").unwrap();
+        assert!(
+            interp.take_output().contains("hello"),
+            "linear chain A→B→C must succeed and define HELLO"
         );
     }
 
