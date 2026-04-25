@@ -27,16 +27,15 @@ cargo fmt --check
 
 ## エージェント一覧
 
-| エージェント名 | 起動プロンプト例 | 役割 |
-| --- | --- | --- |
-| `plan-issue` | 「issue #N の実装計画を立てて」 | issueを調べて実装方針・変更ファイル・注意点をissueコメントに記録 |
-| `spec-discussion` | 「issue #N の仕様を検討したい」 | 仕様の選択肢提示・ユーザーとの対話・issueへの決定記録 |
-| `implement-issue` | 「issue #N を実装して」 | issueを読んでRustコードを実装しPRを作成 |
-| `review-implementation` | 「PR #N をレビューして」 | PRのコードをレビューし問題をコメント・issueに登録 |
-| `blueprint-updater` | 「issue #N の設計をblueprint.mdに反映して」 | `blueprint.md` / `blueprint-language.md` / `blueprint-bootstrap.md` に設計方針を記録しPRを作成 |
+| エージェント名 | 役割 |
+| --- | --- |
+| `plan-issue` | issueを調べて実装方針・変更ファイル・注意点をissueコメントに記録 |
+| `spec-discussion` | 仕様の選択肢提示・ユーザーとの対話・issueへの決定記録 |
+| `implement-issue` | issueを読んでRustコードを実装しPRを作成 |
+| `review-implementation` | PRのコードをレビューし問題をコメント・issueに登録 |
+| `blueprint-updater` | `blueprint.md` / `blueprint-language.md` / `blueprint-bootstrap.md` に設計方針を記録しPRを作成 |
 
 ## 言語ルール
 
-- ユーザーとの対話は**日本語**で行う。
 - コードのコメントは**英語**で記述する。
 - コミットメッセージは**日本語**で記述する。
