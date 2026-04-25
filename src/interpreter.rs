@@ -2164,12 +2164,23 @@ PUTDEC 99
             "runtime error must point to line 2, got {}",
             err.line
         );
+        // Column and source line are also expected to be accurate.
+        assert_eq!(
+            err.col, 1,
+            "column should point to the start of the PUTDEC keyword (col 1), got {}",
+            err.col
+        );
+        assert!(
+            err.source_line.contains("1 / 0"),
+            "source_line should contain the failing expression, got: {:?}",
+            err.source_line
+        );
     }
 
     #[test]
     fn test_compile_program_runtime_error_in_user_word_line_number() {
-        // A runtime error inside a user-defined word called from line 3 must
-        // report line 3 (the call site in the main routine).
+        // A runtime error inside a user-defined word called from line 6 must
+        // report line 6 (the call site in the main routine).
         let mut interp = Interpreter::new();
         let src = "DEF BAD_WORD\n  PUTDEC 1 / 0\nEND\nPUTDEC 1\nPUTDEC 2\nBAD_WORD";
         let result = interp.compile_program(src);
@@ -2183,6 +2194,17 @@ PUTDEC 99
             err.line, 6,
             "runtime error must point to line 6 (the BAD_WORD call site), got {}",
             err.line
+        );
+        // Column and source line are also expected to be accurate.
+        assert_eq!(
+            err.col, 1,
+            "column should point to the start of BAD_WORD keyword (col 1), got {}",
+            err.col
+        );
+        assert!(
+            err.source_line.contains("BAD_WORD"),
+            "source_line should contain the call site identifier, got: {:?}",
+            err.source_line
         );
     }
 
