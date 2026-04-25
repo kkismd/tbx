@@ -51,6 +51,12 @@ impl std::fmt::Display for InterpreterError {
     }
 }
 
+impl std::error::Error for InterpreterError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        Some(&self.kind)
+    }
+}
+
 /// Token list and segment boundaries produced by `parse_line_into_segments`.
 ///
 /// The `Vec<(usize, usize)>` contains `(start, end)` index pairs into the token list.
