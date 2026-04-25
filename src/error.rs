@@ -201,10 +201,7 @@ impl std::fmt::Display for TbxError {
                 write!(f, "USE: file not found: '{path}': {reason}")
             }
             TbxError::UseNestingDepthExceeded { limit } => {
-                write!(
-                    f,
-                    "USE: nesting depth exceeded limit of {limit} (possible circular USE)"
-                )
+                write!(f, "USE: nesting depth exceeded limit of {limit}")
             }
             TbxError::CircularUse { path } => {
                 write!(f, "USE: circular USE detected: '{path}'")
