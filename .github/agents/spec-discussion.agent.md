@@ -13,7 +13,7 @@ issueに記載された課題について設計の選択肢を提示し、ユー
 
 - **目的**: Tiny BASICのミニマリズムとForthの自己拡張性を融合させた処理系
 - **実装言語**: Rust
-- **設計ドキュメント**: `blueprint.md`（プロジェクトルートに存在）
+- **設計ドキュメント**: `blueprint.md` / `blueprint-language.md` / `blueprint-compiler.md`（プロジェクトルートに存在）
 - **設計原則**: コア言語を最小限に保ち、標準ライブラリ層で拡張する
 
 ## ワークフロー
@@ -23,7 +23,7 @@ issueに記載された課題について設計の選択肢を提示し、ユー
 `github-mcp-server-issue_read`（method: `get`）でissueの本文を、（method: `get_comments`）で既存コメントを取得する。
 既存コメントに `## 仕様決定` セクションが含まれている場合は仕様決定済みと判断し、その旨を日本語でユーザーに報告して終了する。新たな選択肢提示・対話・コメント投稿は行わない。
 
-`blueprint.md` を読み込み、issueに関連する設計方針・制約・既存の仕様を特定する。
+`blueprint.md`（およびそこから参照される `blueprint-language.md`・`blueprint-compiler.md`）を読み込み、issueに関連する設計方針・制約・既存の仕様を特定する。
 
 ### ステップ2：設計の選択肢を提示する
 

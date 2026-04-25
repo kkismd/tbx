@@ -33,7 +33,7 @@ cargo fmt --check
 | `spec-discussion` | 仕様の選択肢提示・ユーザーとの対話・issueへの決定記録 |
 | `implement-issue` | issueを読んでRustコードを実装しPRを作成 |
 | `review-implementation` | PRのコードをレビューし問題をコメント・issueに登録 |
-| `blueprint-updater` | `blueprint.md` / `blueprint-language.md` に設計方針を記録しPRを作成 |
+| `blueprint-updater` | `blueprint.md` / `blueprint-language.md` / `blueprint-compiler.md` に設計方針を記録しPRを作成 |
 
 ## 言語ルール
 
