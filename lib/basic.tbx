@@ -1,0 +1,20 @@
+REM basic.tbx — BASIC-style control structures standard library
+
+REM IF expr ... ENDIF
+REM
+REM  IF compiles the condition expression, emits a JUMP_FALSE instruction,
+REM  saves the placeholder address on the compile stack, and emits a 0 placeholder.
+REM  ENDIF patches the placeholder with the current HERE value.
+
+DEF IF
+  COMPILE_EXPR
+  APPEND JUMP_FALSE
+  CS_PUSH HERE
+  APPEND 0
+END
+IMMEDIATE IF
+
+DEF ENDIF
+  PATCH_ADDR CS_POP
+END
+IMMEDIATE ENDIF

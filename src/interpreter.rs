@@ -80,11 +80,21 @@ impl Default for Interpreter {
 
 impl Interpreter {
     /// Create a new `Interpreter` backed by a fully initialized VM.
+    ///
+    /// The standard library (`lib/basic.tbx`) is embedded at compile time via
+    /// `include_str!` and evaluated during construction so that built-in control
+    /// structures such as `IF`/`ENDIF` are always available without an explicit `USE`.
     pub fn new() -> Self {
-        Self {
+        let mut interp = Self {
             vm: init_vm(),
             use_depth: 0,
-        }
+        };
+        const STDLIB: &str = include_str!("../lib/basic.tbx");
+        interp
+            .exec_source(STDLIB)
+            .expect("failed to load lib/basic.tbx");
+        interp.vm.seal_lib();
+        interp
     }
 
     /// Look up a required symbol by name, returning an `InterpreterError` if not found.
@@ -2463,6 +2473,74 @@ PUTDEC 42";
         assert!(
             matches!(result.unwrap_err().kind, TbxError::UndefinedSymbol { .. }),
             "expected UndefinedSymbol for word defined after HALT"
+        );
+    }
+
+    // --- IF / ENDIF (lib/basic.tbx) ---
+
+    #[test]
+    fn test_if_endif_condition_true_executes_body() {
+        // IF with a true condition must execute the body.
+        let mut interp = Interpreter::new();
+        let src = "\
+DEF CHECK(X)
+  IF X > 0
+    PUTSTR \"yes\"
+  ENDIF
+END
+CHECK 5";
+        interp.exec_source(src).unwrap();
+        let out = interp.take_output();
+        assert_eq!(out, "yes", "expected 'yes', got: {:?}", out);
+    }
+
+    #[test]
+    fn test_if_endif_condition_false_skips_body() {
+        // IF with a false condition must skip the body.
+        let mut interp = Interpreter::new();
+        let src = "\
+DEF CHECK(X)
+  IF X > 0
+    PUTSTR \"yes\"
+  ENDIF
+  PUTSTR \"done\"
+END
+CHECK 0";
+        interp.exec_source(src).unwrap();
+        let out = interp.take_output();
+        assert_eq!(out, "done", "expected 'done', got: {:?}", out);
+    }
+
+    #[test]
+    fn test_if_endif_in_def_multiple_calls() {
+        // A DEF containing IF/ENDIF must be callable multiple times with different results.
+        let mut interp = Interpreter::new();
+        let src = "\
+DEF SIGN(X)
+  IF X > 0
+    PUTSTR \"+\"
+  ENDIF
+  IF X < 0
+    PUTSTR \"-\"
+  ENDIF
+END
+SIGN 1
+SIGN -1
+SIGN 0";
+        interp.exec_source(src).unwrap();
+        let out = interp.take_output();
+        assert_eq!(out, "+-", "expected '+-', got: {:?}", out);
+    }
+
+    #[test]
+    fn test_if_endif_outside_def_is_error() {
+        // IF/ENDIF outside a DEF body requires compile mode; using them at top level
+        // (interpret mode) must return an error because COMPILE_EXPR needs compile mode.
+        let mut interp = Interpreter::new();
+        let result = interp.exec_line("IF 1 > 0");
+        assert!(
+            result.is_err(),
+            "IF outside DEF should return an error (no compile mode)"
         );
     }
 }
