@@ -2140,6 +2140,29 @@ PUTDEC 99
     }
 
     #[test]
+    fn test_compile_program_goto_outside_def_is_error() {
+        // GOTO appearing outside a DEF body in ground-level code must produce
+        // a compile-time error ("GOTO outside DEF"), not a runtime failure.
+        // The interpreter must also remain reusable after this compile error.
+        let mut interp = Interpreter::new();
+        let result = interp.compile_program("GOTO 10");
+        assert!(
+            result.is_err(),
+            "GOTO at ground level should be a compile error"
+        );
+        let err = result.unwrap_err();
+        assert!(
+            err.to_string().contains("GOTO outside DEF"),
+            "error message should mention 'GOTO outside DEF', got: {err}"
+        );
+        // Verify that the interpreter is still usable after the compile error.
+        interp
+            .compile_program("PUTDEC 1")
+            .expect("interpreter should be reusable after GOTO compile error");
+        assert_eq!(interp.take_output(), "1");
+    }
+
+    #[test]
     fn test_compile_program_runtime_error_cleans_up() {
         // A runtime error (e.g. division by zero) must return Err and leave the
         // VM in a reusable state so that a subsequent compile_program call works.
@@ -2253,6 +2276,30 @@ PUTDEC 99
         interp.exec_line("END").unwrap();
         interp.compile_program("HELLO").unwrap();
         assert_eq!(interp.take_output(), "99");
+    }
+
+    #[test]
+    fn test_exec_line_goto_outside_def_is_error() {
+        // GOTO appearing at ground level (outside a DEF block) must produce an error
+        // in interpreter mode (exec_line) just as it does in full-program mode.
+        // This verifies the spec documented in blueprint-bootstrap.md Phase 3.
+        // The interpreter must remain usable (REPL can continue) after the error.
+        let mut interp = Interpreter::new();
+        let result = interp.exec_line("GOTO 10");
+        assert!(
+            result.is_err(),
+            "GOTO at ground level via exec_line should be an error"
+        );
+        let err = result.unwrap_err();
+        assert!(
+            err.to_string().contains("GOTO outside DEF"),
+            "error message should mention 'GOTO outside DEF', got: {err}"
+        );
+        // Verify that the interpreter is still reusable after the error (REPL continuity).
+        interp
+            .exec_line("PUTDEC 1")
+            .expect("exec_line should be reusable after GOTO-outside-DEF error");
+        assert_eq!(interp.take_output(), "1");
     }
 
     #[test]
