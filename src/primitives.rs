@@ -393,9 +393,7 @@ pub fn halt_prim(_vm: &mut VM) -> Result<(), TbxError> {
 
 /// ASSERT_FAIL — raise an AssertionFailed error unconditionally.
 pub fn assert_fail_prim(_vm: &mut VM) -> Result<(), TbxError> {
-    Err(TbxError::AssertionFailed {
-        message: "ASSERT_FAIL".to_string(),
-    })
+    Err(TbxError::AssertionFailed)
 }
 
 /// NEGATE — negate the numeric value on top of the data stack.
@@ -2610,6 +2608,26 @@ mod tests {
         let _ = halt_prim(&mut vm);
         assert_eq!(vm.data_stack.len(), 1);
         assert_eq!(vm.pop().unwrap(), Cell::Int(42));
+    }
+
+    // --- assert_fail_prim ---
+
+    #[test]
+    fn test_assert_fail_returns_assertion_failed() {
+        let mut vm = VM::new();
+        assert!(matches!(
+            assert_fail_prim(&mut vm),
+            Err(TbxError::AssertionFailed)
+        ));
+    }
+
+    #[test]
+    fn test_assert_fail_leaves_stack_unchanged() {
+        let mut vm = VM::new();
+        vm.push(Cell::Int(1)).unwrap();
+        let _ = assert_fail_prim(&mut vm);
+        assert_eq!(vm.data_stack.len(), 1);
+        assert_eq!(vm.pop().unwrap(), Cell::Int(1));
     }
 
     #[test]
