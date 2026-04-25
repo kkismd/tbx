@@ -121,15 +121,15 @@ INSERT OR REPLACE INTO session_state (key, value) VALUES ('review_before_review_
 
 4. **新しいコメントもレビューも追加されていない**（どちらの件数も変化なし）→ 指摘なし。ループを終了してステップ7へ進む。
 
-5. **新しいコメントまたはレビューが追加された場合**、追加された内容に **🔴** または **🟡** が含まれるか確認する：
-   - **含まれない**（🟢 Info のみ、またはApproveレビュー）→ **ステップ6後処理A**へ進む。
+5. **新しいコメントまたはレビューが追加された場合**、追加された内容に **🔴/🟡/🟢** のいずれかが含まれるか確認する：
+   - **含まれない**（Approveレビューのみ）→ ループを終了してステップ7へ進む。
    - **含まれる** 場合（手順0のガードを通過済みのため `loop_count < 3` が保証されている）：
      - `loop_count` をインクリメントする：
        ```sql
        UPDATE session_state SET value = CAST(CAST(value AS INTEGER) + 1 AS TEXT) WHERE key = 'review_loop_count';
        SELECT CAST(value AS INTEGER) AS loop_count FROM session_state WHERE key = 'review_loop_count';
        ```
-     - 新しいコメント・レビューの指摘内容をすべて読み、修正を行う
+     - 新しいコメント・レビューの **🔴/🟡/🟢 を問わずすべての指摘**に対して修正を行う
      - 修正後に必ず以下を実行し、エラー・警告がないことを確認する：
        ```bash
        cargo build
@@ -151,7 +151,7 @@ INSERT OR REPLACE INTO session_state (key, value) VALUES ('review_before_review_
 
 ### ステップ6後処理A：🟢 Info 指摘の issue 登録
 
-🟢 Info のみでループが正常終了した場合（新しいコメント/レビューが追加されていない場合を除く）、新しく追加されたコメントの中に 🟢 が含まれているか確認する。
+ループ上限（3回）に達して終了した場合（**後処理Bからのみ呼ばれる**）、新しく追加されたコメントの中に 🟢 が含まれているか確認する。
 
 - **🟢 を含むコメントがある場合**、各指摘について `gh issue create` で新しい GitHub issue を登録する。
 
