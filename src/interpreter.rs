@@ -821,10 +821,13 @@ impl Interpreter {
         let saved_return_stack_len = self.vm.return_stack.len();
         let saved_bp = self.vm.bp;
 
+        // Capture main-routine size before execution so that ALLOT or other dp-advancing
+        // operations inside vm.run() do not skew the length used for position lookup.
+        let main_len = self.vm.dp - main_start;
+
         // Execute the main routine.
         let run_result = self.vm.run(main_start);
         let error_pc = self.vm.pc;
-        let main_len = self.vm.dp - main_start;
 
         // Release main-routine memory regardless of outcome.
         self.vm.dp = main_start;
@@ -1005,10 +1008,14 @@ fn resolve_source_pos(
     }
 
     // Strategy 2: scan return stack for a call frame pointing just after the main routine.
-    let upper_bound = main_start + main_len + 4;
+    // The main routine spans [main_start, main_start + main_len); EXIT occupies the last cell.
+    // A valid return_pc from a call inside the main routine must satisfy:
+    //   main_start < return_pc < main_start + main_len
+    // (return_pc = pc + 1 for EntryKind::Word, pc + 4 for EntryKind::Call; both are
+    // strictly less than main_start + main_len because EXIT follows the last statement.)
     for frame in return_stack.iter().rev() {
         if let ReturnFrame::Call { return_pc, .. } = frame {
-            if *return_pc > main_start && *return_pc <= upper_bound {
+            if *return_pc > main_start && *return_pc < main_start + main_len {
                 let offset = return_pc - main_start - 1;
                 if let Some(pos) = lookup(offset) {
                     return pos;
