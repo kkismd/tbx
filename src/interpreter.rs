@@ -2282,7 +2282,7 @@ PUTDEC 99
     fn test_exec_line_goto_outside_def_is_error() {
         // GOTO appearing at ground level (outside a DEF block) must produce an error
         // in interpreter mode (exec_line) just as it does in full-program mode.
-        // This verifies the spec documented in blueprint-bootstrap.md Phase 3.
+        // This verifies the spec documented in blueprint-language.md §"GOTO/BIF scope constraints".
         // The interpreter must remain usable (REPL can continue) after the error.
         let mut interp = Interpreter::new();
         let result = interp.exec_line("GOTO 10");
