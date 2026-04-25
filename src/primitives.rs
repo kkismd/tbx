@@ -380,6 +380,21 @@ pub fn here_prim(vm: &mut VM) -> Result<(), TbxError> {
     Ok(())
 }
 
+/// HERE_INT — push the current dictionary pointer as a plain `Cell::Int`.
+///
+/// Unlike `HERE` (which returns `Cell::DictAddr`), `HERE_INT` returns an integer
+/// value suitable for use as a backward jump target with `APPEND`.
+/// Jump instructions (`JUMP_ALWAYS`, `JUMP_FALSE`, `JUMP_TRUE`) require their
+/// target operand to be `Cell::Int`; `Cell::DictAddr` is rejected by the inner
+/// interpreter's `read_jump_target` function.
+///
+/// Typical use in compile-time words:
+///   `CS_PUSH HERE_INT`  — save loop-start address for a backward JUMP_ALWAYS.
+pub fn here_int_prim(vm: &mut VM) -> Result<(), TbxError> {
+    vm.push(Cell::Int(vm.dp as i64))?;
+    Ok(())
+}
+
 /// STATE — push the current compile mode flag as an Int (0 = execute, 1 = compile).
 pub fn state_prim(vm: &mut VM) -> Result<(), TbxError> {
     vm.push(Cell::Int(if vm.is_compiling { 1 } else { 0 }))?;
@@ -1217,6 +1232,7 @@ pub fn register_all(vm: &mut VM) {
     vm.register(WordEntry::new_primitive("APPEND", append_prim));
     vm.register(WordEntry::new_primitive("ALLOT", allot_prim));
     vm.register(WordEntry::new_primitive("HERE", here_prim));
+    vm.register(WordEntry::new_primitive("HERE_INT", here_int_prim));
     vm.register(WordEntry::new_primitive("STATE", state_prim));
     vm.register(WordEntry::new_primitive("HALT", halt_prim));
     vm.register(WordEntry::new_primitive("ASSERT_FAIL", assert_fail_prim));

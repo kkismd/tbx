@@ -1,0 +1,81 @@
+REM lib/tests/test_while_endwh.tbx — TBX tests for WHILE/ENDWH control structures
+USE "lib/tests/helper.tbx"
+USE "lib/basic.tbx"
+
+REM Count up: loop body must execute the expected number of times.
+DEF COUNT_UP(N)
+  VAR I
+  VAR S
+  SET &I, 0
+  SET &S, 0
+  WHILE I < N
+    SET &S, S + 1
+    SET &I, I + 1
+  ENDWH
+  RETURN S
+END
+ASSERT COUNT_UP(5) = 5
+ASSERT COUNT_UP(1) = 1
+
+REM Condition false from the start: body must not execute at all.
+ASSERT COUNT_UP(0) = 0
+
+REM Count down: accumulate sum 3+2+1 = 6.
+DEF SUM_DOWN(N)
+  VAR I
+  VAR S
+  SET &I, N
+  SET &S, 0
+  WHILE I > 0
+    SET &S, S + I
+    SET &I, I - 1
+  ENDWH
+  RETURN S
+END
+ASSERT SUM_DOWN(3) = 6
+ASSERT SUM_DOWN(0) = 0
+
+REM Nested WHILE: multiplication by repeated addition.
+DEF MULTIPLY(A, B)
+  VAR I
+  VAR J
+  VAR R
+  SET &I, 0
+  SET &R, 0
+  WHILE I < A
+    SET &J, 0
+    WHILE J < B
+      SET &R, R + 1
+      SET &J, J + 1
+    ENDWH
+    SET &I, I + 1
+  ENDWH
+  RETURN R
+END
+ASSERT MULTIPLY(3, 4) = 12
+ASSERT MULTIPLY(0, 5) = 0
+ASSERT MULTIPLY(5, 0) = 0
+
+REM WHILE with nested IF/ENDIF: count positive integers in 1..N.
+DEF COUNT_POS(N)
+  VAR I
+  VAR S
+  SET &I, 0
+  SET &S, 0
+  WHILE I <= N
+    IF I > 0
+      SET &S, S + 1
+    ENDIF
+    SET &I, I + 1
+  ENDWH
+  RETURN S
+END
+ASSERT COUNT_POS(3) = 3
+ASSERT COUNT_POS(0) = 0
+
+REM ASSERT_MSG variants for clearer failure messages.
+ASSERT_MSG COUNT_UP(5) = 5, "COUNT_UP: 5 iterations"
+ASSERT_MSG COUNT_UP(0) = 0, "COUNT_UP: zero iterations"
+ASSERT_MSG SUM_DOWN(3) = 6, "SUM_DOWN: 3+2+1=6"
+ASSERT_MSG MULTIPLY(3, 4) = 12, "MULTIPLY: 3*4=12"
+ASSERT_MSG COUNT_POS(3) = 3, "COUNT_POS: positives in [0..3]"
