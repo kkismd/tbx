@@ -2283,6 +2283,7 @@ PUTDEC 99
         // GOTO appearing at ground level (outside a DEF block) must produce an error
         // in interpreter mode (exec_line) just as it does in full-program mode.
         // This verifies the spec documented in blueprint-bootstrap.md Phase 3.
+        // The interpreter must remain usable (REPL can continue) after the error.
         let mut interp = Interpreter::new();
         let result = interp.exec_line("GOTO 10");
         assert!(
@@ -2294,6 +2295,11 @@ PUTDEC 99
             err.to_string().contains("GOTO outside DEF"),
             "error message should mention 'GOTO outside DEF', got: {err}"
         );
+        // Verify that the interpreter is still reusable after the error (REPL continuity).
+        interp
+            .exec_line("PUTDEC 1")
+            .expect("exec_line should be reusable after GOTO-outside-DEF error");
+        assert_eq!(interp.take_output(), "1");
     }
 
     #[test]
