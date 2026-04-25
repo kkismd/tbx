@@ -81,22 +81,33 @@ impl Default for Interpreter {
 impl Interpreter {
     /// Create a new `Interpreter` backed by a fully initialized VM.
     ///
-    /// The standard library (`lib/basic.tbx`) is embedded at compile time via
-    /// `include_str!` and evaluated during construction so that built-in control
-    /// structures such as `IF`/`ENDIF` are always available without an explicit `USE`.
+    /// Loads the standard library (`lib/basic.tbx`) embedded at compile time.
+    /// Panics if the standard library fails to load, which indicates a bug in
+    /// the library source rather than a runtime failure.
+    ///
+    /// For a fallible variant that returns an error instead of panicking,
+    /// use [`Interpreter::try_new`].
     pub fn new() -> Self {
+        // lib/basic.tbx is embedded at compile time and is always syntactically valid TBX.
+        // A panic here indicates a bug in the standard library source, not a runtime failure.
+        Self::try_new().unwrap_or_else(|e| {
+            panic!("internal error: failed to load lib/basic.tbx: {e}");
+        })
+    }
+
+    /// Create a new `Interpreter`, returning an error if the standard library fails to load.
+    ///
+    /// This is the fallible counterpart of [`Interpreter::new`]. Prefer this in contexts
+    /// where proper error propagation is possible.
+    pub fn try_new() -> Result<Self, InterpreterError> {
         let mut interp = Self {
             vm: init_vm(),
             use_depth: 0,
         };
         const STDLIB: &str = include_str!("../lib/basic.tbx");
-        // lib/basic.tbx is embedded at compile time and is always syntactically valid TBX.
-        // An error here indicates a bug in the standard library source, not a runtime failure.
-        if let Err(e) = interp.exec_source(STDLIB) {
-            panic!("internal error: failed to load lib/basic.tbx: {e}");
-        }
+        interp.exec_source(STDLIB)?;
         interp.vm.seal_lib();
-        interp
+        Ok(interp)
     }
 
     /// Look up a required symbol by name, returning an `InterpreterError` if not found.
