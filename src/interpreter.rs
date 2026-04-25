@@ -3,7 +3,7 @@
 use std::collections::{HashSet, VecDeque};
 use std::path::PathBuf;
 
-use crate::cell::{Cell, Xt};
+use crate::cell::{Cell, ReturnFrame, Xt};
 use crate::dict::FLAG_SYSTEM;
 use crate::error::TbxError;
 use crate::expr::ExprCompiler;
@@ -731,13 +731,20 @@ impl Interpreter {
     /// This is the "full program mode" entry point; use `exec_source` for interactive mode.
     pub fn compile_program(&mut self, source: &str) -> Result<(), InterpreterError> {
         let mut main_cells: Vec<Cell> = Vec::new();
+        let mut stmt_positions: Vec<(usize, usize, usize, String)> = Vec::new();
 
         for (line_idx, line) in source.lines().enumerate() {
             let line_num = line_idx + 1; // 1-based line number
             let (tokens, boundaries) = self.parse_line_into_segments(line)?;
             for (seg_start, seg_end) in boundaries {
                 let was_compiling = self.vm.compile_state.is_some();
-                self.compile_program_segment(&tokens[seg_start..seg_end], line, &mut main_cells)?;
+                self.compile_program_segment(
+                    &tokens[seg_start..seg_end],
+                    line,
+                    &mut main_cells,
+                    &mut stmt_positions,
+                    line_num,
+                )?;
                 // If DEF just started on this segment, record the source line number.
                 if !was_compiling {
                     if let Some(state) = &mut self.vm.compile_state {
@@ -816,6 +823,8 @@ impl Interpreter {
 
         // Execute the main routine.
         let run_result = self.vm.run(main_start);
+        let error_pc = self.vm.pc;
+        let main_len = self.vm.dp - main_start;
 
         // Release main-routine memory regardless of outcome.
         self.vm.dp = main_start;
@@ -832,14 +841,17 @@ impl Interpreter {
                 Ok(())
             }
             Err(e) => {
+                let (line, col, source) = resolve_source_pos(
+                    error_pc,
+                    &self.vm.return_stack,
+                    main_start,
+                    main_len,
+                    &stmt_positions,
+                );
                 self.vm.data_stack.truncate(saved_data_stack_len);
                 self.vm.return_stack.truncate(saved_return_stack_len);
                 self.vm.bp = saved_bp;
-                // TODO(#275): Runtime errors from the main-routine execution carry no source
-                // position because compiled cells do not store their origin.  A future
-                // improvement would embed (line, col) metadata alongside each statement's
-                // cells so the inner interpreter can report accurate locations.
-                Err(InterpreterError::new(0, 0, "", e))
+                Err(InterpreterError::new(line, col, &source, e))
             }
         }
     }
@@ -849,11 +861,20 @@ impl Interpreter {
     /// Behaves like `exec_segment`, except ground-level (non-IMMEDIATE, non-DEF-body)
     /// statements are not executed immediately; instead their compiled cells are drained
     /// from the dictionary into `main_cells` for deferred execution.
+    ///
+    /// `stmt_positions` receives one entry per ground-level statement compiled:
+    /// `(start_offset_in_main_cells, line, col, source_line_text)`.
+    ///
+    /// `absolute_line` is the 1-based line number of this segment in the full source file
+    /// (the token positions produced by `parse_line_into_segments` are relative to a single
+    /// line and cannot be used for source-level position recording).
     fn compile_program_segment(
         &mut self,
         tokens: &[SpannedToken],
         source_line: &str,
         main_cells: &mut Vec<Cell>,
+        stmt_positions: &mut Vec<(usize, usize, usize, String)>,
+        absolute_line: usize,
     ) -> Result<(), InterpreterError> {
         let mut idx = 0;
 
@@ -919,14 +940,84 @@ impl Interpreter {
             return Err(e);
         }
 
+        // Record the offset of this statement in main_cells for source-position lookup.
+        let stmt_offset = main_cells.len();
+
         // Drain the newly written cells from the dictionary into the main-cells buffer.
         // This keeps the dictionary region clean so that subsequent DEF compilations
         // do not interleave with ground-level code.
         main_cells.extend(self.vm.dictionary.drain(buf_start..));
         self.vm.dp = buf_start;
 
+        // Only record an entry when at least one cell was produced.
+        if main_cells.len() > stmt_offset {
+            stmt_positions.push((
+                stmt_offset,
+                absolute_line,
+                stmt_pos_col,
+                source_line.to_string(),
+            ));
+        }
+
         Ok(())
     }
+}
+
+/// Resolve the source position for a runtime error that occurred during `compile_program`.
+///
+/// Looks up `stmt_positions` — a table of `(start_offset, line, col, source_text)` entries
+/// built by `compile_program_segment` — to find the statement that was executing when the
+/// error occurred.
+///
+/// Two strategies are attempted in order:
+///
+/// 1. **Direct PC match**: if `error_pc` falls inside `[main_start, main_start + main_len)`,
+///    use `offset = error_pc - main_start` and search the table.
+/// 2. **Return-stack scan**: walk `return_stack` from the end (most-recently-pushed) toward
+///    the front, looking for a `ReturnFrame::Call { return_pc }` whose `return_pc` falls
+///    just past the main-routine range `(main_start, main_start + main_len + 4]`.
+///    Use `offset = return_pc - main_start - 1` (points at the call cell) and search the table.
+///
+/// The table search finds the entry with the largest `start` that is ≤ `offset`.
+///
+/// Returns `(0, 0, String::new())` when neither strategy finds a match (fallback).
+fn resolve_source_pos(
+    error_pc: usize,
+    return_stack: &[ReturnFrame],
+    main_start: usize,
+    main_len: usize,
+    stmt_positions: &[(usize, usize, usize, String)],
+) -> (usize, usize, String) {
+    let lookup = |offset: usize| -> Option<(usize, usize, String)> {
+        stmt_positions
+            .iter()
+            .rev()
+            .find(|(start, ..)| *start <= offset)
+            .map(|(_, line, col, src)| (*line, *col, src.clone()))
+    };
+
+    // Strategy 1: error_pc is inside the main routine.
+    if error_pc >= main_start && error_pc < main_start + main_len {
+        let offset = error_pc - main_start;
+        if let Some(pos) = lookup(offset) {
+            return pos;
+        }
+    }
+
+    // Strategy 2: scan return stack for a call frame pointing just after the main routine.
+    let upper_bound = main_start + main_len + 4;
+    for frame in return_stack.iter().rev() {
+        if let ReturnFrame::Call { return_pc, .. } = frame {
+            if *return_pc > main_start && *return_pc <= upper_bound {
+                let offset = return_pc - main_start - 1;
+                if let Some(pos) = lookup(offset) {
+                    return pos;
+                }
+            }
+        }
+    }
+
+    (0, 0, String::new())
 }
 
 /// Count the number of top-level comma-separated arguments in a token slice.
@@ -2045,6 +2136,47 @@ PUTDEC 99
             .compile_program("PUTDEC 42")
             .expect("compile_program should succeed after runtime error");
         assert_eq!(interp.take_output(), "42");
+    }
+
+    #[test]
+    fn test_compile_program_runtime_error_line_number() {
+        // A runtime error must carry the correct 1-based source line number,
+        // not the placeholder 0 that was used before issue #275 was fixed.
+        let mut interp = Interpreter::new();
+        // The division-by-zero is on line 2.
+        let src = "PUTDEC 1\nPUTDEC 1 / 0\nPUTDEC 3";
+        let result = interp.compile_program(src);
+        let err = result.expect_err("expected runtime error from division by zero");
+        assert_ne!(
+            err.line, 0,
+            "runtime error line must not be 0 (was: {})",
+            err.line
+        );
+        assert_eq!(
+            err.line, 2,
+            "runtime error must point to line 2, got {}",
+            err.line
+        );
+    }
+
+    #[test]
+    fn test_compile_program_runtime_error_in_user_word_line_number() {
+        // A runtime error inside a user-defined word called from line 3 must
+        // report line 3 (the call site in the main routine).
+        let mut interp = Interpreter::new();
+        let src = "DEF BAD_WORD\n  PUTDEC 1 / 0\nEND\nPUTDEC 1\nPUTDEC 2\nBAD_WORD";
+        let result = interp.compile_program(src);
+        let err = result.expect_err("expected runtime error from division by zero in user word");
+        assert_ne!(
+            err.line, 0,
+            "runtime error line must not be 0 (was: {})",
+            err.line
+        );
+        assert_eq!(
+            err.line, 6,
+            "runtime error must point to line 6 (the BAD_WORD call site), got {}",
+            err.line
+        );
     }
 
     // --- compile_program integration tests (issue #266) ---
