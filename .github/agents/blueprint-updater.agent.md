@@ -100,12 +100,6 @@ gh pr create \
 - `Closes #N` をPR descriptionに含めてissueとリンクする
 - コミットメッセージ末尾に必ず Co-authored-by trailerを含める
 
-マージ後のクリーンアップ（ユーザーからマージ完了の連絡を受けてから）:
-```bash
-git checkout main && git pull
-git branch -d issue/N-short-description
-```
-
 ## 言語・スタイルのルール
 
 - ユーザーとのやりとりは**日本語**で行う
