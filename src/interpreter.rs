@@ -53,7 +53,10 @@ impl std::fmt::Display for InterpreterError {
 
 impl std::error::Error for InterpreterError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        Some(&self.kind)
+        // Display already formats `self.kind` inline (see the Display impl above),
+        // so we do not chain the source here.  Returning Some(&self.kind) would cause
+        // error reporters like `anyhow` / `eyre` to print the same message twice.
+        None
     }
 }
 
@@ -2572,6 +2575,18 @@ SIGN 0";
         assert!(
             result.is_err(),
             "ENDIF without IF should return an error (empty compile stack)"
+        );
+    }
+
+    #[test]
+    fn test_if_without_endif_is_error() {
+        // IF without a matching ENDIF leaves the compile stack non-empty when END is
+        // reached, which must produce a CompileStackNotEmpty error.
+        let mut interp = Interpreter::new();
+        let result = interp.exec_source("DEF FOO(X)\n  IF X > 0\nEND");
+        assert!(
+            result.is_err(),
+            "IF without ENDIF should return an error (non-empty compile stack at END)"
         );
     }
 
