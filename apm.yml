@@ -1,8 +1,0 @@
-name: tbx
-version: 1.0.0
-description: APM project for tbx
-author: SHIMADA Keiki
-dependencies:
-  apm: []
-  mcp: []
-scripts: {}
