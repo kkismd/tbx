@@ -978,7 +978,7 @@ impl Interpreter {
 ///    use `offset = error_pc - main_start` and search the table.
 /// 2. **Return-stack scan**: walk `return_stack` from the end (most-recently-pushed) toward
 ///    the front, looking for a `ReturnFrame::Call { return_pc }` whose `return_pc` falls
-///    just past the main-routine range `(main_start, main_start + main_len + 4]`.
+///    inside the main-routine range `(main_start, main_start + main_len)`.
 ///    Use `offset = return_pc - main_start - 1` (points at the call cell) and search the table.
 ///
 /// The table search finds the entry with the largest `start` that is ≤ `offset`.
