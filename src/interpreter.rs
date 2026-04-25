@@ -599,16 +599,28 @@ impl Interpreter {
             // temporary-buffer issues when the primitive writes to the dictionary).
             crate::dict::EntryKind::Primitive(f) => f(&mut self.vm),
             // User-defined word: run via vm.run(), passing the body start address.
-            // Guard: words with formal parameters (arity > 0) or VAR locals
-            // (local_count > 0) require a CALL frame (bp/stack setup) that
-            // vm.run() alone does not provide.
+            // arity > 0 is rejected: argument expressions are not evaluated before
+            // exec_immediate_word is called (see issue #347).
+            // local_count > 0 is supported by setting up a minimal CALL frame
+            // (bp + local slots), which RET at the end of the body will clean up.
             crate::dict::EntryKind::Word(body_addr) => {
-                if arity > 0 || local_count > 0 {
+                if arity > 0 {
                     Err(TbxError::InvalidExpression {
-                        reason: "IMMEDIATE user word with parameters or VAR locals cannot be called without a CALL frame",
+                        reason: "IMMEDIATE user word with parameters (arity > 0) cannot be called: argument evaluation is not supported (see issue #347)",
                     })
                 } else {
-                    self.vm.run(body_addr)
+                    let mut push_err: Option<TbxError> = None;
+                    self.vm.bp = self.vm.data_stack.len();
+                    for _ in 0..local_count {
+                        if let Err(e) = self.vm.push(Cell::Int(0)) {
+                            push_err = Some(e);
+                            break;
+                        }
+                    }
+                    match push_err {
+                        Some(e) => Err(e),
+                        None => self.vm.run(body_addr),
+                    }
                 }
             }
             _ => Err(TbxError::InvalidExpression {
@@ -715,7 +727,7 @@ impl Interpreter {
         // Apply back-patches (must end the borrow of compile_state first).
         let _ = state;
         for patch_pos in patches {
-            self.vm.dictionary[patch_pos] = Cell::Int(dp as i64);
+            self.vm.dictionary[patch_pos] = Cell::DictAddr(dp);
         }
 
         Ok(())
@@ -1900,22 +1912,25 @@ END",
     }
 
     #[test]
-    fn test_user_defined_immediate_word_with_locals_returns_error() {
-        // A user word with VAR locals cannot be IMMEDIATE-dispatched directly
-        // because vm.run() does not set up the CALL frame (bp / local slots).
+    fn test_user_defined_immediate_word_with_locals_works() {
+        // A user word with VAR locals can be IMMEDIATE-dispatched: exec_immediate_word
+        // sets up bp and pushes local slots before vm.run(), so RET can clean them up.
         let mut interp = Interpreter::new();
         let src = "\
 DEF ILOCAL
 VAR X
-PUTDEC 1
+SET &X, 42
+PUTDEC X
 END
 IMMEDIATE ILOCAL
 ILOCAL";
         let result = interp.exec_source(src);
         assert!(
-            result.is_err(),
-            "expected error when IMMEDIATE word has VAR locals"
+            result.is_ok(),
+            "expected success when IMMEDIATE word has VAR locals, got: {:?}",
+            result
         );
+        assert_eq!(interp.take_output(), "42");
     }
 
     #[test]

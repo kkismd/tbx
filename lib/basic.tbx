@@ -27,21 +27,9 @@ REM  saves the exit-placeholder address on the compile stack, and emits a 0
 REM  placeholder.
 REM  ENDWH pops the exit placeholder, emits a JUMP_ALWAYS back to loop_start,
 REM  and patches the exit placeholder with the current HERE value.
-REM
-REM  _ENDWH_TEMP is a global scratch variable used by ENDWH to hold the
-REM  exit-placeholder address temporarily.  IMMEDIATE words cannot have VAR
-REM  locals (no call frame is set up for them), so global storage is used instead.
-REM  Nesting is safe: each ENDWH execution reads/writes _ENDWH_TEMP atomically
-REM  within a single compile-time call before returning.
-
-VAR _ENDWH_TEMP
-
-REM  NOTE: When ELSE/ELIF is implemented, add the following declaration here
-REM  for the same reason (IMMEDIATE words cannot have VAR locals):
-REM    VAR _ELSE_TEMP
 
 DEF WHILE
-  CS_PUSH HERE_INT
+  CS_PUSH HERE
   COMPILE_EXPR
   APPEND JUMP_FALSE
   CS_PUSH HERE
@@ -50,9 +38,10 @@ END
 IMMEDIATE WHILE
 
 DEF ENDWH
-  SET &_ENDWH_TEMP, CS_POP
+  VAR EXIT_PH
+  SET &EXIT_PH, CS_POP
   APPEND JUMP_ALWAYS
   APPEND CS_POP
-  PATCH_ADDR _ENDWH_TEMP
+  PATCH_ADDR EXIT_PH
 END
 IMMEDIATE ENDWH

@@ -96,10 +96,9 @@ DEF 開始時に両構造体を生成し、END 完了後に破棄する。行番
 | ------------ | ------------ | ---- |
 | `APPEND`     | `( cell -- )` | スタックトップの Cell を `dictionary[DP]` に書き込み DP を +1 進める |
 | `HERE`       | `( -- addr )` | 現在の辞書ポインタ（次の書き込み先の DictAddr）をデータスタックに積む |
-| `HERE_INT`   | `( -- int )` | 現在の辞書ポインタを `Cell::Int` としてデータスタックに積む。`JUMP_ALWAYS` 等の後方ジャンプターゲット用。`HERE` が `Cell::DictAddr` を返すのに対し、ジャンプ命令の内部インタプリタは `Cell::Int` のみを受け付けるため、ループ先頭アドレスの保存には `HERE_INT` を使用する |
 | `CS_PUSH`    | `( val -- )` | データスタックのトップを compile_stack に移動する |
 | `CS_POP`     | `( -- val )` | compile_stack のトップをデータスタックに移動する |
-| `PATCH_ADDR` | `( addr -- )` | `DictAddr(addr)` をポップし、`dictionary[addr] = Cell::Int(DP)` を書き込む（前方参照のバックパッチ） |
+| `PATCH_ADDR` | `( addr -- )` | `DictAddr(addr)` をポップし、`dictionary[addr] = Cell::DictAddr(DP)` を書き込む（前方参照のバックパッチ） |
 | `COMPILE_EXPR` | `( -- )` | ソースから式を1つ読み取ってコンパイルし、命令列を `dictionary[DP..]` に書き込む |
 | `JUMP_FALSE` | `( -- xt )` | `BranchIfFalse`（BIF）のXt定数をデータスタックに積む |
 | `JUMP_TRUE`  | `( -- xt )` | `BranchIfTrue`（BIT）のXt定数をデータスタックに積む |
@@ -117,30 +116,13 @@ PATCH_ADDR CS_POP   -- back-patch the placeholder with current DP
 
 ---
 
-## IMMEDIATE ワードにおける VAR の制約
-
-IMMEDIATE ワード（`IMMEDIATE` で宣言されたユーザー定義ワード）は、**インナ・インタプリタから CALL フレームなしで呼び出される**。CALL フレームが存在しないため、`VAR` ローカル変数（`StackAddr` でアクセスされる局所領域）は使用できない。
-
-`arity > 0` または `local_count > 0`（`VAR` 宣言あり）のワードを IMMEDIATE として実行しようとするとエラーになる。
-
-**一時値の保存方法**: IMMEDIATE ワード内で一時的な値を保存する必要がある場合は、以下のいずれかを用いる:
-
-1. **グローバル変数**（`VAR` を DEF 外で宣言）: 辞書上に固定スロットを確保する。コンパイルは単一スレッドで逐次実行されるため、同一 IMMEDIATE ワードのネスト呼び出しは発生せず競合しない。
-2. **コンパイルスタックの一時退避**: `CS_POP` でデータスタックに移動し、後で `CS_PUSH` で戻す。ただし順序の制約があるため適用できない場面もある。
-
-**実装例**: `WHILE/ENDWH`（`lib/basic.tbx` 参照）では `VAR _ENDWH_TEMP`（DEF 外で宣言したグローバル変数）を一時領域として使用している。
-
----
-
 ## WHILE...ENDWH の実装記録
 
 WHILE と ENDWH は `lib/basic.tbx` に TBX コードとして実装されたコンパイルワードである。
 
 ```
-VAR _ENDWH_TEMP
-
 DEF WHILE
-  CS_PUSH HERE_INT
+  CS_PUSH HERE
   COMPILE_EXPR
   APPEND JUMP_FALSE
   CS_PUSH HERE
@@ -149,26 +131,28 @@ END
 IMMEDIATE WHILE
 
 DEF ENDWH
-  SET &_ENDWH_TEMP, CS_POP
+  VAR EXIT_PH
+  SET &EXIT_PH, CS_POP
   APPEND JUMP_ALWAYS
   APPEND CS_POP
-  PATCH_ADDR _ENDWH_TEMP
+  PATCH_ADDR EXIT_PH
 END
 IMMEDIATE ENDWH
 ```
 
 **WHILE の動作**（コンパイル時）:
-1. `CS_PUSH HERE_INT` — ループ先頭アドレスを **`Cell::Int`** としてコンパイルスタックに積む。`JUMP_ALWAYS` のターゲットは `Cell::Int` でなければならないため、`Cell::DictAddr` を返す `HERE` ではなく `HERE_INT` を使用する
+1. `CS_PUSH HERE` — ループ先頭アドレスを `Cell::DictAddr` としてコンパイルスタックに積む
 2. `COMPILE_EXPR` — 条件式をコンパイルし命令列に書き込む
 3. `APPEND JUMP_FALSE` — BIF 命令のXtを書き込む
 4. `CS_PUSH HERE` — 脱出先プレースホルダーのアドレス（`Cell::DictAddr`）をコンパイルスタックに積む
-5. `APPEND 0` — ジャンプ先プレースホルダーとして `Cell::Int(0)` を書き込む
+5. `APPEND 0` — ジャンプ先プレースホルダーとして `Cell::Int(0)` を書き込む（`PATCH_ADDR` で `Cell::DictAddr` に上書きされる）
 
 **ENDWH の動作**（コンパイル時）:
-1. `SET &_ENDWH_TEMP, CS_POP` — 脱出先プレースホルダーアドレス（トップ）をグローバル変数に退避する; CS=[loop_start]
-2. `APPEND JUMP_ALWAYS` — 無条件ジャンプ命令のXtを書き込む
-3. `APPEND CS_POP` — ループ先頭アドレスをコンパイルスタックから取り出して辞書に書き込む（JUMP_ALWAYS のターゲット）; CS=[]
-4. `PATCH_ADDR _ENDWH_TEMP` — グローバル変数から脱出先プレースホルダーアドレスを読み出し、現在の DP（ループ脱出位置）を書き込む
+1. `VAR EXIT_PH` — ローカル変数を宣言
+2. `EXIT_PH = CS_POP` — 脱出先プレースホルダーアドレス（トップ）をローカル変数に退避する; CS=[loop_start]
+3. `APPEND JUMP_ALWAYS` — 無条件ジャンプ命令のXtを書き込む
+4. `APPEND CS_POP` — ループ先頭アドレスをコンパイルスタックから取り出して辞書に書き込む（JUMP_ALWAYS のターゲット）; CS=[]
+5. `PATCH_ADDR EXIT_PH` — ローカル変数から脱出先プレースホルダーアドレスを読み出し、現在の DP（ループ脱出位置）を `Cell::DictAddr` として書き込む
 
 生成されるバイトコード構造:
 ```
