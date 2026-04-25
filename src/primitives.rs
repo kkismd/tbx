@@ -902,6 +902,16 @@ fn compile_expr_taking_local_table(
 }
 
 /// Emit a jump target into the dictionary, with forward-reference back-patch support.
+///
+/// # Design note: why `Cell::Int`, not `Cell::DictAddr`
+///
+/// Jump targets are raw program-counter indices, not typed data pointers.
+/// `Cell::DictAddr` is a typed pointer used for FETCH/STORE (data access).
+/// `Cell::Int` is the untyped integer used for arithmetic *and* control flow (pc values).
+/// Writing `Cell::Int(target)` here, and having `read_jump_target` accept only `Cell::Int`,
+/// prevents accidental confusion between "data address" and "execution address" at runtime.
+/// `PATCH_ADDR` follows the same convention: it takes a `DictAddr` operand (where to write)
+/// and writes `Cell::Int(dp)` (the pc value) — each type carries the correct semantic.
 fn emit_jump_target_to_dict(vm: &mut VM, label_n: i64) -> Result<(), TbxError> {
     let target_opt = vm
         .compile_state
@@ -1031,6 +1041,29 @@ fn cs_pop_prim(vm: &mut VM) -> Result<(), TbxError> {
     let val = vm.compile_stack.pop().ok_or(TbxError::StackUnderflow)?;
     vm.push(val)?;
     Ok(())
+}
+
+/// PATCH_ADDR — pop a DictAddr from the data stack, then write Cell::Int(dp) at that address.
+///
+/// Used by ENDIF (and future ELSE, ENDWHILE) to back-patch a previously emitted
+/// jump-target placeholder.  The address on the stack is typically saved by IF via
+/// CS_PUSH/CS_POP.
+///
+/// Must be called in compile mode (inside an IMMEDIATE word invocation).
+fn patch_addr_prim(vm: &mut VM) -> Result<(), TbxError> {
+    if !vm.is_compiling {
+        return Err(TbxError::InvalidExpression {
+            reason: "PATCH_ADDR outside compile mode",
+        });
+    }
+    let addr = vm.pop()?;
+    match addr {
+        Cell::DictAddr(a) => vm.dict_write_at(a, Cell::Int(vm.dp as i64)),
+        _ => Err(TbxError::TypeError {
+            expected: "DictAddr",
+            got: addr.type_name(),
+        }),
+    }
 }
 
 /// COMPILE_EXPR — compile the remaining tokens in the token stream as an expression
@@ -1301,6 +1334,7 @@ pub fn register_all(vm: &mut VM) {
     // and called at runtime by IMMEDIATE words (e.g. IF/ENDIF).
     vm.register(WordEntry::new_primitive("CS_PUSH", cs_push_prim));
     vm.register(WordEntry::new_primitive("CS_POP", cs_pop_prim));
+    vm.register(WordEntry::new_primitive("PATCH_ADDR", patch_addr_prim));
     vm.register(WordEntry::new_primitive("COMPILE_EXPR", compile_expr_prim));
 
     // Runtime branch/jump Xt constants — allows TBX code to write:
@@ -3843,5 +3877,61 @@ mod tests {
                 .unwrap_or(true),
             "token_stream must be empty after COMPILE_EXPR"
         );
+    }
+
+    // --- patch_addr_prim ---
+
+    #[test]
+    fn test_patch_addr_prim_outside_compile_mode_error() {
+        // PATCH_ADDR called when is_compiling == false must return InvalidExpression.
+        let mut vm = VM::new();
+        register_all(&mut vm);
+        vm.push(Cell::DictAddr(0)).unwrap();
+        let err = patch_addr_prim(&mut vm).unwrap_err();
+        assert!(
+            matches!(err, TbxError::InvalidExpression { .. }),
+            "expected InvalidExpression, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn test_patch_addr_prim_wrong_type_error() {
+        // PATCH_ADDR with a non-DictAddr on the stack must return TypeError.
+        let mut vm = make_compiling_vm("TESTWORD");
+        vm.push(Cell::Int(99)).unwrap();
+        let err = patch_addr_prim(&mut vm).unwrap_err();
+        assert!(
+            matches!(
+                err,
+                TbxError::TypeError {
+                    expected: "DictAddr",
+                    ..
+                }
+            ),
+            "expected TypeError(DictAddr), got {err:?}"
+        );
+    }
+
+    #[test]
+    fn test_patch_addr_prim_writes_int_dp_at_addr() {
+        // PATCH_ADDR must pop DictAddr(a) and write Cell::Int(dp) at dict[a].
+        let mut vm = make_compiling_vm("TESTWORD");
+        // Write a placeholder at a known position.
+        let placeholder_pos = vm.dp;
+        vm.dict_write(Cell::Int(0)).unwrap();
+        // Push some more cells so dp advances past the placeholder.
+        vm.dict_write(Cell::Int(1)).unwrap();
+        vm.dict_write(Cell::Int(2)).unwrap();
+        let expected_dp = vm.dp;
+        // Push the placeholder address onto the data stack and call PATCH_ADDR.
+        vm.push(Cell::DictAddr(placeholder_pos)).unwrap();
+        patch_addr_prim(&mut vm).unwrap();
+        // dict[placeholder_pos] must now hold Cell::Int(dp).
+        assert_eq!(
+            vm.dict_read(placeholder_pos).unwrap(),
+            Cell::Int(expected_dp as i64)
+        );
+        // Data stack must be empty.
+        assert_eq!(vm.pop(), Err(TbxError::StackUnderflow));
     }
 }

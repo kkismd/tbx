@@ -51,6 +51,15 @@ impl std::fmt::Display for InterpreterError {
     }
 }
 
+impl std::error::Error for InterpreterError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        // Display already formats `self.kind` inline (see the Display impl above),
+        // so we do not chain the source here.  Returning Some(&self.kind) would cause
+        // error reporters like `anyhow` / `eyre` to print the same message twice.
+        None
+    }
+}
+
 /// Token list and segment boundaries produced by `parse_line_into_segments`.
 ///
 /// The `Vec<(usize, usize)>` contains `(start, end)` index pairs into the token list.
@@ -80,11 +89,34 @@ impl Default for Interpreter {
 
 impl Interpreter {
     /// Create a new `Interpreter` backed by a fully initialized VM.
+    ///
+    /// Loads the standard library (`lib/basic.tbx`) embedded at compile time.
+    /// Panics if the standard library fails to load, which indicates a bug in
+    /// the library source rather than a runtime failure.
+    ///
+    /// For a fallible variant that returns an error instead of panicking,
+    /// use [`Interpreter::try_new`].
     pub fn new() -> Self {
-        Self {
+        // lib/basic.tbx is embedded at compile time and is always syntactically valid TBX.
+        // A panic here indicates a bug in the standard library source, not a runtime failure.
+        Self::try_new().unwrap_or_else(|e| {
+            panic!("internal error: failed to load lib/basic.tbx: {e}");
+        })
+    }
+
+    /// Create a new `Interpreter`, returning an error if the standard library fails to load.
+    ///
+    /// This is the fallible counterpart of [`Interpreter::new`]. Prefer this in contexts
+    /// where proper error propagation is possible.
+    pub fn try_new() -> Result<Self, InterpreterError> {
+        let mut interp = Self {
             vm: init_vm(),
             use_depth: 0,
-        }
+        };
+        const STDLIB: &str = include_str!("../lib/basic.tbx");
+        interp.exec_source(STDLIB)?;
+        interp.vm.seal_lib();
+        Ok(interp)
     }
 
     /// Look up a required symbol by name, returning an `InterpreterError` if not found.
@@ -2464,5 +2496,132 @@ PUTDEC 42";
             matches!(result.unwrap_err().kind, TbxError::UndefinedSymbol { .. }),
             "expected UndefinedSymbol for word defined after HALT"
         );
+    }
+
+    // --- IF / ENDIF (lib/basic.tbx) ---
+
+    #[test]
+    fn test_if_endif_condition_true_executes_body() {
+        // IF with a true condition must execute the body.
+        let mut interp = Interpreter::new();
+        let src = "\
+DEF CHECK(X)
+  IF X > 0
+    PUTSTR \"yes\"
+  ENDIF
+END
+CHECK 5";
+        interp.exec_source(src).unwrap();
+        let out = interp.take_output();
+        assert_eq!(out, "yes", "expected 'yes', got: {:?}", out);
+    }
+
+    #[test]
+    fn test_if_endif_condition_false_skips_body() {
+        // IF with a false condition must skip the body.
+        let mut interp = Interpreter::new();
+        let src = "\
+DEF CHECK(X)
+  IF X > 0
+    PUTSTR \"yes\"
+  ENDIF
+  PUTSTR \"done\"
+END
+CHECK 0";
+        interp.exec_source(src).unwrap();
+        let out = interp.take_output();
+        assert_eq!(out, "done", "expected 'done', got: {:?}", out);
+    }
+
+    #[test]
+    fn test_if_endif_in_def_multiple_calls() {
+        // A DEF containing IF/ENDIF must be callable multiple times with different results.
+        let mut interp = Interpreter::new();
+        let src = "\
+DEF SIGN(X)
+  IF X > 0
+    PUTSTR \"+\"
+  ENDIF
+  IF X < 0
+    PUTSTR \"-\"
+  ENDIF
+END
+SIGN 1
+SIGN -1
+SIGN 0";
+        interp.exec_source(src).unwrap();
+        let out = interp.take_output();
+        assert_eq!(out, "+-", "expected '+-', got: {:?}", out);
+    }
+
+    #[test]
+    fn test_if_endif_outside_def_is_error() {
+        // IF/ENDIF outside a DEF body requires compile mode; using them at top level
+        // (interpret mode) must return an error because COMPILE_EXPR needs compile mode.
+        let mut interp = Interpreter::new();
+        let result = interp.exec_line("IF 1 > 0");
+        assert!(
+            result.is_err(),
+            "IF outside DEF should return an error (no compile mode)"
+        );
+    }
+
+    #[test]
+    fn test_endif_without_if_is_error() {
+        // ENDIF without a preceding IF leaves the compile stack empty when CS_POP is
+        // called inside the ENDIF body, which must produce a StackUnderflow error.
+        let mut interp = Interpreter::new();
+        let result = interp.exec_source("DEF FOO\n  ENDIF\nEND");
+        assert!(
+            result.is_err(),
+            "ENDIF without IF should return an error (empty compile stack)"
+        );
+    }
+
+    #[test]
+    fn test_if_without_endif_is_error() {
+        // IF without a matching ENDIF leaves the compile stack non-empty when END is
+        // reached, which must produce a CompileStackNotEmpty error.
+        let mut interp = Interpreter::new();
+        let result = interp.exec_source("DEF FOO(X)\n  IF X > 0\nEND");
+        assert!(
+            result.is_err(),
+            "IF without ENDIF should return an error (non-empty compile stack at END)"
+        );
+    }
+
+    #[test]
+    fn test_endif_outside_def_is_error() {
+        // ENDIF at top level (interpret mode) must return an error because CS_POP
+        // checks is_compiling before PATCH_ADDR is reached.
+        let mut interp = Interpreter::new();
+        let result = interp.exec_line("ENDIF");
+        assert!(
+            result.is_err(),
+            "ENDIF at top level should return an error (no compile mode)"
+        );
+    }
+
+    #[test]
+    fn test_if_endif_nested() {
+        // Nested IF/ENDIF must work correctly because compile_stack is LIFO.
+        // Inner ENDIF patches only the inner IF placeholder; outer ENDIF patches only
+        // the outer IF placeholder.
+        let mut interp = Interpreter::new();
+        let src = "\
+DEF NESTED(X)
+  IF X > 0
+    IF X > 10
+      PUTSTR \"big\"
+    ENDIF
+    PUTSTR \"pos\"
+  ENDIF
+END
+NESTED 15
+NESTED 5
+NESTED -1";
+        interp.exec_source(src).unwrap();
+        let out = interp.take_output();
+        assert_eq!(out, "bigpospos", "expected 'bigpospos', got: {:?}", out);
     }
 }
