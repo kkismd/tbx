@@ -2140,6 +2140,23 @@ PUTDEC 99
     }
 
     #[test]
+    fn test_compile_program_goto_outside_def_is_error() {
+        // GOTO appearing outside a DEF body in ground-level code must produce
+        // a compile-time error ("GOTO outside DEF"), not a runtime failure.
+        let mut interp = Interpreter::new();
+        let result = interp.compile_program("GOTO 10");
+        assert!(
+            result.is_err(),
+            "GOTO at ground level should be a compile error"
+        );
+        let err = result.unwrap_err();
+        assert!(
+            err.to_string().contains("GOTO outside DEF"),
+            "error message should mention 'GOTO outside DEF', got: {err}"
+        );
+    }
+
+    #[test]
     fn test_compile_program_runtime_error_cleans_up() {
         // A runtime error (e.g. division by zero) must return Err and leave the
         // VM in a reusable state so that a subsequent compile_program call works.
