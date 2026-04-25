@@ -90,9 +90,11 @@ impl Interpreter {
             use_depth: 0,
         };
         const STDLIB: &str = include_str!("../lib/basic.tbx");
-        interp
-            .exec_source(STDLIB)
-            .expect("failed to load lib/basic.tbx");
+        // lib/basic.tbx is embedded at compile time and is always syntactically valid TBX.
+        // An error here indicates a bug in the standard library source, not a runtime failure.
+        if let Err(e) = interp.exec_source(STDLIB) {
+            panic!("internal error: failed to load lib/basic.tbx: {e}");
+        }
         interp.vm.seal_lib();
         interp
     }
@@ -2541,6 +2543,18 @@ SIGN 0";
         assert!(
             result.is_err(),
             "IF outside DEF should return an error (no compile mode)"
+        );
+    }
+
+    #[test]
+    fn test_endif_without_if_is_error() {
+        // ENDIF without a preceding IF leaves the compile stack empty when CS_POP is
+        // called inside the ENDIF body, which must produce a StackUnderflow error.
+        let mut interp = Interpreter::new();
+        let result = interp.exec_source("DEF FOO\n  ENDIF\nEND");
+        assert!(
+            result.is_err(),
+            "ENDIF without IF should return an error (empty compile stack)"
         );
     }
 }
