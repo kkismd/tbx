@@ -967,6 +967,7 @@ impl Interpreter {
 }
 
 /// Source-position metadata for one ground-level statement compiled by `compile_program_segment`.
+#[derive(Debug)]
 struct StmtPosition {
     /// Offset of the statement's first cell in the `main_cells` buffer.
     offset: usize,
