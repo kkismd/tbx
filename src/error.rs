@@ -109,6 +109,11 @@ pub enum TbxError {
     UseNestingDepthExceeded {
         limit: usize,
     },
+
+    /// Assertion failed with a message.
+    AssertionFailed {
+        message: String,
+    },
 }
 
 impl std::fmt::Display for TbxError {
@@ -192,6 +197,7 @@ impl std::fmt::Display for TbxError {
                     "USE: nesting depth exceeded limit of {limit} (possible circular USE)"
                 )
             }
+            TbxError::AssertionFailed { message } => write!(f, "assertion failed: {message}"),
         }
     }
 }

@@ -391,6 +391,13 @@ pub fn halt_prim(_vm: &mut VM) -> Result<(), TbxError> {
     Err(TbxError::Halted)
 }
 
+/// ASSERT_FAIL — raise an AssertionFailed error unconditionally.
+pub fn assert_fail_prim(_vm: &mut VM) -> Result<(), TbxError> {
+    Err(TbxError::AssertionFailed {
+        message: "ASSERT_FAIL".to_string(),
+    })
+}
+
 /// NEGATE — negate the numeric value on top of the data stack.
 ///
 /// - `Cell::Int(n)` → `Cell::Int(-n)` (returns `IntegerOverflow` for `i64::MIN`)
@@ -1207,6 +1214,7 @@ pub fn register_all(vm: &mut VM) {
     vm.register(WordEntry::new_primitive("HERE", here_prim));
     vm.register(WordEntry::new_primitive("STATE", state_prim));
     vm.register(WordEntry::new_primitive("HALT", halt_prim));
+    vm.register(WordEntry::new_primitive("ASSERT_FAIL", assert_fail_prim));
     vm.register(WordEntry {
         name: "CALL".to_string(),
         flags: FLAG_SYSTEM,

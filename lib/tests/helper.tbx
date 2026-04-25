@@ -1,0 +1,8 @@
+REM lib/tests/helper.tbx — test support words for TBX library tests
+
+DEF ASSERT(COND)
+  IF COND
+    RETURN
+  ENDIF
+  ASSERT_FAIL
+END
