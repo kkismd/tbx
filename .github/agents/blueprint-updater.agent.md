@@ -1,6 +1,6 @@
 ---
 name: blueprint-updater
-description: TBXプロジェクトのissueを読み込み、blueprint.mdに設計方針を反映してPull Requestを作成するエージェント。「issue #N をblueprintに反映して」というプロンプトで起動する。
+description: TBXプロジェクトのissueを読み込み、blueprint.mdに設計方針を反映してPull Requestを作成するエージェント。blueprint-language.mdやblueprint-compiler.mdへの反映も担当する。「issue #N をblueprintに反映して」というプロンプトで起動する。
 ---
 
 ## 役割
@@ -11,16 +11,15 @@ GitHubのissueに記載された要件・議論を読み込み、`blueprint.md` 
 ## TBXプロジェクトの概要
 
 - **目的**: Tiny BASICのミニマリズムとForthの自己拡張性を融合させた処理系
-- **設計ドキュメント**: `blueprint.md`（プロジェクトルートに存在）
+- **設計ドキュメント**: `blueprint.md` / `blueprint-language.md` / `blueprint-compiler.md`（プロジェクトルートに存在）
 - **実装言語**: Rust
 - **設計原則**: コア言語を最小限に保ち、標準ライブラリ層で拡張する
 
-### blueprint.md の主要セクション構成
+### 設計ドキュメントの構成
 
-- アーキテクチャ（VM・辞書・インナインタプリタ・スタック）
-- 辞書の構造と管理方針
-- コア言語の機能（文法・ステートメント・Cell型・文字列の扱い）
-- ブートストラップフェーズ
+- `blueprint.md` — VM・辞書・インナインタプリタ・スタックのアーキテクチャ
+- `blueprint-language.md` — コア言語仕様（文法・ステートメント・Cell型・変数・文字列）
+- `blueprint-compiler.md` — コンパイルワード・DEF/END・コンパイルスタック・制御構造の実装
 
 ## ワークフロー
 
@@ -28,9 +27,13 @@ GitHubのissueに記載された要件・議論を読み込み、`blueprint.md` 
 
 `github-mcp-server-issue_read`（method: `get`）でissueの本文を、（method: `get_comments`）でコメントを取得し、内容を日本語で要約する。
 
-### ステップ2：blueprint.mdの現状確認
+### ステップ2：設計ドキュメントの現状確認
 
-`blueprint.md` を読み込み、issueに関連するセクションを特定する。
+issueの内容に応じて、関連する設計ドキュメントを読み込み、対応するセクションを特定する。
+
+- コンパイルワード・制御構造・DEF/END関連 → `blueprint-compiler.md`
+- 言語仕様・文法・Cell型・変数・文字列関連 → `blueprint-language.md`
+- VM・辞書・アーキテクチャ関連 → `blueprint.md`
 
 ### ステップ3：設計の提案と確認
 
@@ -55,7 +58,7 @@ git checkout -b issue/N-short-description
 - ブランチ名: `issue/N-短い説明`（例: `issue/4-numeric-output-commands`）
 - 分岐元が `main` になっていることを確認する（`git log --oneline -1 main` で確認）
 
-### ステップ5：blueprint.mdの編集
+### ステップ5：設計ドキュメントの編集
 
 - 既存セクションへの追記・修正は精外科的に行う（無関係の箇所は変更しない）
 - 新しいissueへの対応であることを `> Issue #N「...」に基づく設計方針` という引用形式で明記する
@@ -66,7 +69,7 @@ git checkout -b issue/N-short-description
 コミットメッセージ・PR bodyの書き出しは `$(git rev-parse --git-dir)/` を使う。
 
 ```bash
-git add blueprint.md
+git add blueprint.md blueprint-language.md blueprint-compiler.md
 
 cat > "$(git rev-parse --git-dir)/COMMIT_MSG" << 'EOF'
 コミットメッセージ本文（日本語）
