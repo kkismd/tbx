@@ -20,7 +20,7 @@ fn test_lib_tbx_files() {
     let tests_dir = PathBuf::from(manifest_dir).join("lib/tests");
     let mut test_files: Vec<PathBuf> = std::fs::read_dir(&tests_dir)
         .unwrap_or_else(|e| panic!("cannot read lib/tests/: {e}"))
-        .filter_map(|e| e.ok())
+        .map(|e| e.unwrap_or_else(|e| panic!("cannot read dir entry in lib/tests/: {e}")))
         .map(|e| e.path())
         .filter(|p| {
             p.is_file()
