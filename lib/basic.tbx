@@ -36,6 +36,10 @@ REM  within a single compile-time call before returning.
 
 VAR _ENDWH_TEMP
 
+REM  NOTE: When ELSE/ELIF is implemented, add the following declaration here
+REM  for the same reason (IMMEDIATE words cannot have VAR locals):
+REM    VAR _ELSE_TEMP
+
 DEF WHILE
   CS_PUSH HERE_INT
   COMPILE_EXPR
