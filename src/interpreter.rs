@@ -619,7 +619,15 @@ impl Interpreter {
                     }
                     match push_err {
                         Some(e) => Err(e),
-                        None => self.vm.run(body_addr),
+                        None => {
+                            let result = self.vm.run(body_addr);
+                            // On success, clean up the local slots that were pushed above.
+                            // On error, the rollback block below handles truncation.
+                            if result.is_ok() {
+                                self.vm.data_stack.truncate(saved_data_stack_len);
+                            }
+                            result
+                        }
                     }
                 }
             }
@@ -1914,7 +1922,8 @@ END",
     #[test]
     fn test_user_defined_immediate_word_with_locals_works() {
         // A user word with VAR locals can be IMMEDIATE-dispatched: exec_immediate_word
-        // sets up bp and pushes local slots before vm.run(), so RET can clean them up.
+        // sets up bp and pushes local slots before vm.run(), so they are cleaned up
+        // after successful execution (no stack leak).
         let mut interp = Interpreter::new();
         let src = "\
 DEF ILOCAL
@@ -1931,6 +1940,39 @@ ILOCAL";
             result
         );
         assert_eq!(interp.take_output(), "42");
+        // Data stack must be empty after the IMMEDIATE call — local slots must not leak.
+        assert!(
+            interp.vm.data_stack.is_empty(),
+            "data stack must be empty after IMMEDIATE word with locals (got {} items)",
+            interp.vm.data_stack.len()
+        );
+    }
+
+    #[test]
+    fn test_user_defined_immediate_word_with_locals_no_stack_leak_across_calls() {
+        // Calling an IMMEDIATE word with VAR locals multiple times must not accumulate
+        // items on the data stack (regression test for the stack-leak bug).
+        let mut interp = Interpreter::new();
+        let src = "\
+DEF ILOCAL2
+VAR A
+VAR B
+SET &A, 1
+SET &B, 2
+END
+IMMEDIATE ILOCAL2
+DEF OUTER
+ILOCAL2
+ILOCAL2
+ILOCAL2
+END";
+        let result = interp.exec_source(src);
+        assert!(result.is_ok(), "expected success, got: {:?}", result);
+        assert!(
+            interp.vm.data_stack.is_empty(),
+            "data stack must be empty after compiling OUTER (got {} items)",
+            interp.vm.data_stack.len()
+        );
     }
 
     #[test]
