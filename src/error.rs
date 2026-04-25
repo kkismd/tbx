@@ -112,6 +112,10 @@ pub enum TbxError {
 
     /// Assertion explicitly failed via ASSERT_FAIL.
     AssertionFailed,
+    /// Assertion explicitly failed via ASSERT_FAIL_MSG with a custom message.
+    AssertionFailedWithMessage {
+        message: String,
+    },
 }
 
 impl std::fmt::Display for TbxError {
@@ -196,6 +200,9 @@ impl std::fmt::Display for TbxError {
                 )
             }
             TbxError::AssertionFailed => write!(f, "assertion failed"),
+            TbxError::AssertionFailedWithMessage { message } => {
+                write!(f, "assertion failed: {message}")
+            }
         }
     }
 }
@@ -286,5 +293,15 @@ mod tests {
     fn test_assertion_failed_display() {
         let e = TbxError::AssertionFailed;
         assert!(e.to_string().contains("assertion failed"));
+    }
+
+    #[test]
+    fn test_assertion_failed_with_message_display() {
+        let e = TbxError::AssertionFailedWithMessage {
+            message: "SIGN(7) should be 1".to_string(),
+        };
+        let msg = e.to_string();
+        assert!(msg.contains("assertion failed"));
+        assert!(msg.contains("SIGN(7) should be 1"));
     }
 }
