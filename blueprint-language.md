@@ -154,7 +154,8 @@ USE "path/to/file.tbx"    ( -- )
 - **冪等性**: 毎回ロード（include 方式）。同一ファイルを複数回 USE すると複数回実行される
 - **制限**: `DEF…END` ブロック内での使用は不可（compile_state を壊すため）
 - **エラー**: ファイルが存在しない・読み込めない場合は `TbxError::FileNotFound` を返す
-- **ネスト深さ制限**: USE はネストして呼び出せる（USE されたファイル内からさらに USE できる）が、深さが `MAX_USE_DEPTH`（64）を超えると `TbxError::UseNestingDepthExceeded` を返す。循環 USE（A が B を USE し B が A を USE するなど）もこの制限で検出される
+- **ネスト深さ制限**: USE はネストして呼び出せる（USE されたファイル内からさらに USE できる）が、深さが `MAX_USE_DEPTH`（64）を超えると `TbxError::UseNestingDepthExceeded` を返す
+- **循環参照の検出**: `Interpreter` は現在ロード中のファイルのセット（`loading_files: HashSet<PathBuf>`）を保持している。USE 実行時にパスを正規化（`canonicalize`）し、すでにセット内に存在する場合は `TbxError::CircularUse { path }` を返す。循環 USE（A が B を USE し B が A を USE するなど）は `UseNestingDepthExceeded` ではなく `CircularUse` で精確に検出される。`UseNestingDepthExceeded` は非循環の異常な深さに対する安全網として機能する
 - **USE 先の HALT**: USE されたファイル内で `HALT` が実行された場合、そのファイルの処理は終了するが、呼び出し元のプログラムは継続する（`exec_source` が `TbxError::Halted` を `Ok(())` として処理するため）
 
 ```basic

@@ -104,10 +104,17 @@ pub enum TbxError {
     },
     /// USE nesting depth exceeded the maximum allowed limit.
     ///
-    /// Prevents infinite recursion caused by circular USE chains
-    /// (e.g. A.tbx USEs B.tbx which USEs A.tbx again).
+    /// Acts as a safety net for non-circular but excessively deep USE chains.
     UseNestingDepthExceeded {
         limit: usize,
+    },
+    /// A circular USE was detected: the same file is already being loaded.
+    ///
+    /// Returned when `exec_source` detects that the file to be loaded is
+    /// already present in the `loading_files` set, indicating a cycle such as
+    /// A.tbx → B.tbx → A.tbx.
+    CircularUse {
+        path: String,
     },
 
     /// Assertion explicitly failed via ASSERT_FAIL.
@@ -194,10 +201,10 @@ impl std::fmt::Display for TbxError {
                 write!(f, "USE: file not found: '{path}': {reason}")
             }
             TbxError::UseNestingDepthExceeded { limit } => {
-                write!(
-                    f,
-                    "USE: nesting depth exceeded limit of {limit} (possible circular USE)"
-                )
+                write!(f, "USE: nesting depth exceeded limit of {limit}")
+            }
+            TbxError::CircularUse { path } => {
+                write!(f, "USE: circular USE detected: '{path}'")
             }
             TbxError::AssertionFailed => write!(f, "assertion failed"),
             TbxError::AssertionFailedWithMessage { message } => {
