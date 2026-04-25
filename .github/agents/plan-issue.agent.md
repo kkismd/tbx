@@ -25,7 +25,7 @@ issue本文またはコメントに `Closes #N`・`Depends on #N`・`Blocked by 
 
 ### ステップ2：コードベース調査
 
-- `blueprint.md` を読み込み、issueに関連する設計方針を特定する。
+- `blueprint.md`（およびそこから参照される `blueprint-bootstrap.md`・`blueprint-language.md`）を読み込み、issueに関連する設計方針を特定する。
 - 既存のソースファイル（`src/` 配下）をglobで一覧し、関連するコードを把握する。
 - `Cargo.toml` が存在する場合は依存クレートや設定を確認する。
 
@@ -48,7 +48,7 @@ issue本文またはコメントに `Closes #N`・`Depends on #N`・`Blocked by 
 ```
 
 複数の実装方針が考えられる場合は、候補を列挙して各方針のトレードオフを記載すること。
-blueprint.mdに記載のない仕様については「未確定」と明示する。
+issueやblueprint.mdに記載のない仕様・実装判断については「未確定」と明示し、合理的なデフォルトを選択して注意点セクションに記載した上で実装者の判断に委ねる。
 
 #### 計画の品質チェックリスト
 
