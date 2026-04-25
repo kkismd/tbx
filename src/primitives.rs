@@ -2590,6 +2590,28 @@ mod tests {
         assert_eq!(vm.pop().unwrap(), Cell::DictAddr(2));
     }
 
+    // --- here_int_prim ---
+
+    #[test]
+    fn test_here_int_initial() {
+        // HERE_INT at dp=0 must push Cell::Int(0), not DictAddr.
+        let mut vm = VM::new();
+        here_int_prim(&mut vm).unwrap();
+        assert_eq!(vm.pop().unwrap(), Cell::Int(0));
+    }
+
+    #[test]
+    fn test_here_int_after_append() {
+        // HERE_INT after two appends must push Cell::Int(2).
+        let mut vm = VM::new();
+        vm.push(Cell::Int(1)).unwrap();
+        append_prim(&mut vm).unwrap();
+        vm.push(Cell::Int(2)).unwrap();
+        append_prim(&mut vm).unwrap();
+        here_int_prim(&mut vm).unwrap();
+        assert_eq!(vm.pop().unwrap(), Cell::Int(2));
+    }
+
     // --- dict_write overflow ---
 
     #[test]

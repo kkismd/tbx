@@ -14,11 +14,11 @@ DEF COUNT_UP(N)
   ENDWH
   RETURN S
 END
-ASSERT COUNT_UP(5) = 5
-ASSERT COUNT_UP(1) = 1
+ASSERT_MSG COUNT_UP(5) = 5, "COUNT_UP: 5 iterations"
+ASSERT_MSG COUNT_UP(1) = 1, "COUNT_UP: 1 iteration"
 
 REM Condition false from the start: body must not execute at all.
-ASSERT COUNT_UP(0) = 0
+ASSERT_MSG COUNT_UP(0) = 0, "COUNT_UP: zero iterations"
 
 REM Count down: accumulate sum 3+2+1 = 6.
 DEF SUM_DOWN(N)
@@ -32,8 +32,8 @@ DEF SUM_DOWN(N)
   ENDWH
   RETURN S
 END
-ASSERT SUM_DOWN(3) = 6
-ASSERT SUM_DOWN(0) = 0
+ASSERT_MSG SUM_DOWN(3) = 6, "SUM_DOWN: 3+2+1=6"
+ASSERT_MSG SUM_DOWN(0) = 0, "SUM_DOWN: zero iterations"
 
 REM Nested WHILE: multiplication by repeated addition.
 DEF MULTIPLY(A, B)
@@ -52,9 +52,9 @@ DEF MULTIPLY(A, B)
   ENDWH
   RETURN R
 END
-ASSERT MULTIPLY(3, 4) = 12
-ASSERT MULTIPLY(0, 5) = 0
-ASSERT MULTIPLY(5, 0) = 0
+ASSERT_MSG MULTIPLY(3, 4) = 12, "MULTIPLY: 3*4=12"
+ASSERT_MSG MULTIPLY(0, 5) = 0, "MULTIPLY: outer loop skipped"
+ASSERT_MSG MULTIPLY(5, 0) = 0, "MULTIPLY: inner loop skipped"
 
 REM WHILE with nested IF/ENDIF: count positive integers in 1..N.
 DEF COUNT_POS(N)
@@ -70,12 +70,5 @@ DEF COUNT_POS(N)
   ENDWH
   RETURN S
 END
-ASSERT COUNT_POS(3) = 3
-ASSERT COUNT_POS(0) = 0
-
-REM ASSERT_MSG variants for clearer failure messages.
-ASSERT_MSG COUNT_UP(5) = 5, "COUNT_UP: 5 iterations"
-ASSERT_MSG COUNT_UP(0) = 0, "COUNT_UP: zero iterations"
-ASSERT_MSG SUM_DOWN(3) = 6, "SUM_DOWN: 3+2+1=6"
-ASSERT_MSG MULTIPLY(3, 4) = 12, "MULTIPLY: 3*4=12"
 ASSERT_MSG COUNT_POS(3) = 3, "COUNT_POS: positives in [0..3]"
+ASSERT_MSG COUNT_POS(0) = 0, "COUNT_POS: no positives when N=0"
