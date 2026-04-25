@@ -14,9 +14,15 @@ use crate::vm::VM;
 /// Maximum allowed nesting depth for USE statements.
 ///
 /// Acts as a safety net for non-circular but excessively deep USE chains.
-/// Circular references are detected precisely by `loading_files` (method B)
-/// before this limit is reached.
-const MAX_USE_DEPTH: usize = 256;
+/// Circular references are detected precisely by `loading_files` before this
+/// limit is reached, so this constant guards only against pathological
+/// (non-circular) deep nesting.
+///
+/// 64 levels is sufficient for any realistic library hierarchy; each
+/// `exec_source` frame allocates several KB of stack space (lexer, token
+/// buffer, VM execution context), and the typical thread stack (1–8 MB) is
+/// exhausted well before 256 levels regardless of platform.
+const MAX_USE_DEPTH: usize = 64;
 
 /// Error produced by the outer interpreter, including source location information.
 pub struct InterpreterError {
@@ -83,12 +89,23 @@ pub struct Interpreter {
     /// via a USE statement, decremented on return. Acts as a safety net against
     /// excessively deep (but non-circular) USE chains.
     use_depth: usize,
+    /// Effective upper bound for `use_depth`. Defaults to `MAX_USE_DEPTH`.
+    /// Exposed as a field so that tests can set a smaller value without
+    /// creating hundreds of temporary files.
+    max_use_depth: usize,
     /// Set of canonicalized paths currently being loaded via USE.
     ///
     /// A path is inserted before `exec_source` is called and removed after it
     /// returns (whether with success or error). If a path is already present
     /// when a USE is about to start, a circular reference is detected and
     /// `TbxError::CircularUse` is returned.
+    ///
+    /// Note: if `exec_source` panics, `loading_files` will not be cleaned up.
+    /// A full RAII guard is not feasible here because holding a mutable
+    /// borrow of `loading_files` (via the guard) conflicts with the
+    /// `&mut self` borrow required by the recursive `exec_source` call.
+    /// In practice this is acceptable: panics in `exec_source` signal
+    /// unrecoverable programmer errors and typically abort the process.
     loading_files: HashSet<PathBuf>,
 }
 
@@ -123,6 +140,7 @@ impl Interpreter {
         let mut interp = Self {
             vm: init_vm(),
             use_depth: 0,
+            max_use_depth: MAX_USE_DEPTH,
             loading_files: HashSet::new(),
         };
         const STDLIB: &str = include_str!("../lib/basic.tbx");
@@ -535,6 +553,15 @@ impl Interpreter {
         self.vm.take_output()
     }
 
+    /// Override the maximum USE nesting depth (test-only).
+    ///
+    /// Allows unit tests to trigger `TbxError::UseNestingDepthExceeded`
+    /// without creating hundreds of temporary files.
+    #[cfg(test)]
+    fn set_max_use_depth(&mut self, max: usize) {
+        self.max_use_depth = max;
+    }
+
     /// Execute an IMMEDIATE word, regardless of compile/interpret mode.
     ///
     /// Sets up `vm.token_stream` with the remaining tokens, dispatches the word
@@ -606,9 +633,9 @@ impl Interpreter {
 
         // If use_prim stored a path, read the file and execute it now.
         if let Some(path) = self.vm.pending_use_path.take() {
-            if self.use_depth >= MAX_USE_DEPTH {
+            if self.use_depth >= self.max_use_depth {
                 return Err(make_err(TbxError::UseNestingDepthExceeded {
-                    limit: MAX_USE_DEPTH,
+                    limit: self.max_use_depth,
                 }));
             }
             // Canonicalize the path before reading so that different textual
@@ -2529,6 +2556,42 @@ PUTDEC 42";
         assert!(
             interp.take_output().contains("hello"),
             "linear chain A→B→C must succeed and define HELLO"
+        );
+    }
+
+    #[test]
+    fn test_use_nesting_depth_exceeded() {
+        // Verify that a non-circular but excessively deep USE chain triggers
+        // UseNestingDepthExceeded.  We reduce max_use_depth to 2 so only 3
+        // temporary files are needed (A→B→C where C tries to USE D, which
+        // exceeds the limit).
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path_d = dir.path().join("d.tbx");
+        let path_c = dir.path().join("c.tbx");
+        let path_b = dir.path().join("b.tbx");
+        let path_a = dir.path().join("a.tbx");
+        // d.tbx is never actually loaded; it just needs to exist so that
+        // canonicalize() in a.tbx/b.tbx/c.tbx does not fail.
+        // (The depth check fires before canonicalize for c.tbx → d.tbx.)
+        // Actually the depth check fires before we attempt to load d.tbx at all.
+        std::fs::write(&path_d, "PUTDEC 4\n").unwrap();
+        std::fs::write(&path_c, format!("USE \"{}\"\n", path_d.display())).unwrap();
+        std::fs::write(&path_b, format!("USE \"{}\"\n", path_c.display())).unwrap();
+        std::fs::write(&path_a, format!("USE \"{}\"\n", path_b.display())).unwrap();
+
+        let mut interp = Interpreter::new();
+        // With max_use_depth=2, the chain A(depth=0)→B(depth=1)→C(depth=2)
+        // reaches the limit when C tries to USE D.
+        interp.set_max_use_depth(2);
+        let src = format!("USE \"{}\"", path_a.display());
+        let result = interp.exec_source(&src);
+        assert!(result.is_err());
+        assert!(
+            matches!(
+                result.unwrap_err().kind,
+                TbxError::UseNestingDepthExceeded { .. }
+            ),
+            "expected TbxError::UseNestingDepthExceeded for non-circular deep USE"
         );
     }
 
