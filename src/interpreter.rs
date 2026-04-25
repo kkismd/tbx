@@ -731,7 +731,7 @@ impl Interpreter {
     /// This is the "full program mode" entry point; use `exec_source` for interactive mode.
     pub fn compile_program(&mut self, source: &str) -> Result<(), InterpreterError> {
         let mut main_cells: Vec<Cell> = Vec::new();
-        let mut stmt_positions: Vec<(usize, usize, usize, String)> = Vec::new();
+        let mut stmt_positions: Vec<StmtPosition> = Vec::new();
 
         for (line_idx, line) in source.lines().enumerate() {
             let line_num = line_idx + 1; // 1-based line number
@@ -876,7 +876,7 @@ impl Interpreter {
         tokens: &[SpannedToken],
         source_line: &str,
         main_cells: &mut Vec<Cell>,
-        stmt_positions: &mut Vec<(usize, usize, usize, String)>,
+        stmt_positions: &mut Vec<StmtPosition>,
         absolute_line: usize,
     ) -> Result<(), InterpreterError> {
         let mut idx = 0;
@@ -954,23 +954,34 @@ impl Interpreter {
 
         // Only record an entry when at least one cell was produced.
         if main_cells.len() > stmt_offset {
-            stmt_positions.push((
-                stmt_offset,
-                absolute_line,
-                stmt_pos_col,
-                source_line.to_string(),
-            ));
+            stmt_positions.push(StmtPosition {
+                offset: stmt_offset,
+                line: absolute_line,
+                col: stmt_pos_col,
+                source: source_line.to_string(),
+            });
         }
 
         Ok(())
     }
 }
 
+/// Source-position metadata for one ground-level statement compiled by `compile_program_segment`.
+struct StmtPosition {
+    /// Offset of the statement's first cell in the `main_cells` buffer.
+    offset: usize,
+    /// 1-based line number in the full source file.
+    line: usize,
+    /// 1-based column number of the statement keyword.
+    col: usize,
+    /// Full text of the source line containing the statement.
+    source: String,
+}
+
 /// Resolve the source position for a runtime error that occurred during `compile_program`.
 ///
-/// Looks up `stmt_positions` — a table of `(start_offset, line, col, source_text)` entries
-/// built by `compile_program_segment` — to find the statement that was executing when the
-/// error occurred.
+/// Looks up `stmt_positions` — a table of `StmtPosition` entries built by
+/// `compile_program_segment` — to find the statement that was executing when the error occurred.
 ///
 /// Two strategies are attempted in order:
 ///
@@ -981,7 +992,7 @@ impl Interpreter {
 ///    inside the main-routine range `(main_start, main_start + main_len)`.
 ///    Use `offset = return_pc - main_start - 1` (points at the call cell) and search the table.
 ///
-/// The table search finds the entry with the largest `start` that is ≤ `offset`.
+/// The table search finds the entry with the largest `offset` that is ≤ the computed offset.
 ///
 /// Returns `(0, 0, String::new())` when neither strategy finds a match (fallback).
 fn resolve_source_pos(
@@ -989,14 +1000,14 @@ fn resolve_source_pos(
     return_stack: &[ReturnFrame],
     main_start: usize,
     main_len: usize,
-    stmt_positions: &[(usize, usize, usize, String)],
+    stmt_positions: &[StmtPosition],
 ) -> (usize, usize, String) {
     let lookup = |offset: usize| -> Option<(usize, usize, String)> {
         stmt_positions
             .iter()
             .rev()
-            .find(|(start, ..)| *start <= offset)
-            .map(|(_, line, col, src)| (*line, *col, src.clone()))
+            .find(|sp| sp.offset <= offset)
+            .map(|sp| (sp.line, sp.col, sp.source.clone()))
     };
 
     // Strategy 1: error_pc is inside the main routine.
@@ -2924,5 +2935,36 @@ NESTED -1";
         interp.exec_source(src).unwrap();
         let out = interp.take_output();
         assert_eq!(out, "bigpospos", "expected 'bigpospos', got: {:?}", out);
+    }
+
+    #[test]
+    fn test_resolve_source_pos_fallback() {
+        // error_pc is outside main routine, return stack is empty → fallback (0, 0, "")
+        let (line, col, src) = resolve_source_pos(
+            999, // error_pc outside main
+            &[], // empty return stack
+            0,   // main_start
+            10,  // main_len
+            &[], // empty stmt_positions
+        );
+        assert_eq!(line, 0);
+        assert_eq!(col, 0);
+        assert!(src.is_empty());
+    }
+
+    #[test]
+    fn test_compile_program_runtime_error_nested_word_line_number() {
+        // DEF INNER → DEF OUTER(calls INNER) → OUTER call at line 7
+        // Error in INNER, but err.line should point to OUTER call site (line 7)
+        let mut interp = Interpreter::new();
+        let src = "DEF INNER\n  PUTDEC 1 / 0\nEND\nDEF OUTER\n  INNER\nEND\nOUTER";
+        let result = interp.compile_program(src);
+        let err = result.expect_err("expected runtime error");
+        assert_ne!(err.line, 0, "line must not be 0");
+        assert_eq!(
+            err.line, 7,
+            "error must point to OUTER call site at line 7, got {}",
+            err.line
+        );
     }
 }
