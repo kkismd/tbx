@@ -158,6 +158,8 @@ eXtensibleなTiny BASICという意味で TBX という名前をつける。
 
 コア言語の機能（文法・値の種類・ステートメント・式・変数・文字列）については [`blueprint-language.md`](./blueprint-language.md) を参照してください。
 
+コンパイルワードの設計と実装（DEF/END・RETURN・コンパイルスタックプリミティブ・制御構造）については [`blueprint-compiler.md`](./blueprint-compiler.md) を参照してください。
+
 ## ブートストラップ
 
 ブートストラップ計画（フェーズ1〜4の実装順序）は完了済みです。アーカイブとして [Wiki の bootstrap ページ](https://github.com/kkismd/tbx/wiki/bootstrap) を参照してください。
