@@ -2574,4 +2574,39 @@ SIGN 0";
             "ENDIF without IF should return an error (empty compile stack)"
         );
     }
+
+    #[test]
+    fn test_endif_outside_def_is_error() {
+        // ENDIF at top level (interpret mode) must return an error because CS_POP
+        // checks is_compiling before PATCH_ADDR is reached.
+        let mut interp = Interpreter::new();
+        let result = interp.exec_line("ENDIF");
+        assert!(
+            result.is_err(),
+            "ENDIF at top level should return an error (no compile mode)"
+        );
+    }
+
+    #[test]
+    fn test_if_endif_nested() {
+        // Nested IF/ENDIF must work correctly because compile_stack is LIFO.
+        // Inner ENDIF patches only the inner IF placeholder; outer ENDIF patches only
+        // the outer IF placeholder.
+        let mut interp = Interpreter::new();
+        let src = "\
+DEF NESTED(X)
+  IF X > 0
+    IF X > 10
+      PUTSTR \"big\"
+    ENDIF
+    PUTSTR \"pos\"
+  ENDIF
+END
+NESTED 15
+NESTED 5
+NESTED -1";
+        interp.exec_source(src).unwrap();
+        let out = interp.take_output();
+        assert_eq!(out, "bigpospos", "expected 'bigpospos', got: {:?}", out);
+    }
 }
