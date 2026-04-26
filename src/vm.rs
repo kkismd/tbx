@@ -376,23 +376,24 @@ impl VM {
 
     /// Read the cell at `offset` as a jump target address.
     ///
-    /// Expects `Cell::Int`; returns the address as `usize`.
+    /// Expects `Cell::Int` or `Cell::DictAddr`; returns the address as `usize`.
     ///
     /// # Errors
     ///
     /// - `Err(TbxError::IndexOutOfBounds)` if `offset` is beyond the dictionary end.
-    /// - `Err(TbxError::TypeError)` if the cell at `offset` is not a `Cell::Int`.
-    /// - `Err(TbxError::InvalidJumpTarget)` if the address is negative.
+    /// - `Err(TbxError::TypeError)` if the cell at `offset` is neither `Cell::Int` nor `Cell::DictAddr`.
+    /// - `Err(TbxError::InvalidJumpTarget)` if the address is a negative `Cell::Int`.
     fn read_jump_target(&self, offset: usize) -> Result<usize, TbxError> {
         let cell = self.dict_read(offset)?;
-        let raw = cell.as_int().ok_or_else(|| TbxError::TypeError {
-            expected: "Int (jump target)",
-            got: cell.type_name(),
-        })?;
-        if raw < 0 {
-            return Err(TbxError::InvalidJumpTarget { address: raw });
+        match cell {
+            Cell::Int(n) if n >= 0 => Ok(n as usize),
+            Cell::DictAddr(a) => Ok(a),
+            Cell::Int(n) => Err(TbxError::InvalidJumpTarget { address: n }),
+            _ => Err(TbxError::TypeError {
+                expected: "Int or DictAddr (jump target)",
+                got: cell.type_name(),
+            }),
         }
-        Ok(raw as usize)
     }
 
     /// Write a cell to an arbitrary dictionary index, with bounds checking.
@@ -2234,7 +2235,7 @@ mod tests {
         assert_eq!(
             result,
             Err(crate::error::TbxError::TypeError {
-                expected: "Int (jump target)",
+                expected: "Int or DictAddr (jump target)",
                 got: "Xt",
             })
         );
@@ -2256,6 +2257,29 @@ mod tests {
             result,
             Err(crate::error::TbxError::IndexOutOfBounds { .. })
         ));
+    }
+
+    #[test]
+    fn test_run_goto_with_dict_addr_target() {
+        // GOTO with a DictAddr target (backward-jump / WHILE-ENDWH style) must work.
+        // Layout:
+        //   [0] Goto
+        //   [1] DictAddr(3)  ← jumps forward to EXIT (simulates a resolved DictAddr target)
+        //   [2] Int(99)      ← unreachable
+        //   [3] EXIT
+        let mut vm = VM::new();
+        crate::primitives::register_all(&mut vm);
+
+        let goto_xt = find_by_kind(&vm, |k| matches!(k, EntryKind::Goto));
+        let exit_xt = vm.lookup("EXIT").unwrap();
+
+        vm.dict_write(Cell::Xt(goto_xt)).unwrap(); // [0]
+        vm.dict_write(Cell::DictAddr(3)).unwrap(); // [1] DictAddr target
+        vm.dict_write(Cell::Int(99)).unwrap(); // [2] unreachable
+        vm.dict_write(Cell::Xt(exit_xt)).unwrap(); // [3]
+
+        // Must not error: DictAddr is a valid jump target.
+        vm.run(0).unwrap();
     }
 
     #[test]

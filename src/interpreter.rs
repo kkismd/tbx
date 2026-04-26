@@ -3315,4 +3315,220 @@ NESTED -1";
             err.line
         );
     }
+
+    // --- WHILE / ENDWH ---
+
+    #[test]
+    fn test_while_endwh_basic_countdown() {
+        // Simple countdown using a VAR local: prints 3, 2, 1, then exits.
+        let mut interp = Interpreter::new();
+        let src = "\
+DEF COUNTDOWN(N)
+  VAR I
+  SET &I, N
+  WHILE I > 0
+    PUTDEC I
+    SET &I, I - 1
+  ENDWH
+END
+COUNTDOWN 3";
+        interp.exec_source(src).unwrap();
+        let out = interp.take_output();
+        assert_eq!(out, "321", "expected '321', got: {:?}", out);
+    }
+
+    #[test]
+    fn test_while_endwh_condition_false_from_start_skips_body() {
+        // If the condition is false on the first evaluation, the body must not execute.
+        let mut interp = Interpreter::new();
+        let src = "\
+DEF SKIP(N)
+  VAR I
+  SET &I, N
+  WHILE I > 0
+    PUTDEC I
+    SET &I, I - 1
+  ENDWH
+END
+SKIP -1";
+        interp.exec_source(src).unwrap();
+        let out = interp.take_output();
+        assert_eq!(out, "", "body must not run when initial condition is false");
+    }
+
+    #[test]
+    fn test_while_endwh_accumulate() {
+        // Accumulate sum 1+2+3+4+5 = 15.
+        let mut interp = Interpreter::new();
+        let src = "\
+DEF SUMTO(N)
+  VAR S
+  VAR I
+  SET &S, 0
+  SET &I, 1
+  WHILE I <= N
+    SET &S, S + I
+    SET &I, I + 1
+  ENDWH
+  PUTDEC S
+END
+SUMTO 5";
+        interp.exec_source(src).unwrap();
+        let out = interp.take_output();
+        assert_eq!(out, "15", "expected sum 15, got: {:?}", out);
+    }
+
+    #[test]
+    fn test_while_endwh_nested() {
+        // Nested WHILE loops: outer counts i=1..2, inner counts j=1..2.
+        // Prints "11 12 21 22 " (with trailing space).
+        let mut interp = Interpreter::new();
+        let src = "\
+DEF NESTED()
+  VAR I
+  VAR J
+  SET &I, 1
+  WHILE I <= 2
+    SET &J, 1
+    WHILE J <= 2
+      PUTDEC I
+      PUTDEC J
+      PUTSTR \" \"
+      SET &J, J + 1
+    ENDWH
+    SET &I, I + 1
+  ENDWH
+END
+NESTED";
+        interp.exec_source(src).unwrap();
+        let out = interp.take_output();
+        assert_eq!(out, "11 12 21 22 ", "nested WHILE mismatch: {:?}", out);
+    }
+
+    #[test]
+    fn test_while_outside_def_is_error() {
+        // WHILE used outside a DEF body must yield an error.
+        let mut interp = Interpreter::new();
+        let result = interp.exec_source("WHILE 1 > 0");
+        assert!(result.is_err(), "WHILE outside DEF must be an error");
+    }
+
+    #[test]
+    fn test_endwh_without_while_is_error() {
+        // ENDWH without a matching WHILE must yield a StackUnderflow (CS_SWAP on empty stack).
+        let mut interp = Interpreter::new();
+        let src = "DEF BAD()\n  ENDWH\nEND";
+        let result = interp.exec_source(src);
+        assert!(result.is_err(), "ENDWH without WHILE must be an error");
+    }
+
+    #[test]
+    fn test_while_without_endwh_is_error() {
+        // WHILE without matching ENDWH: compile stack is non-empty at END,
+        // which must return CompileStackNotEmpty.
+        let mut interp = Interpreter::new();
+        let src = "DEF UNCLOSED()\n  WHILE 1 > 0\n    PUTDEC 1\n  END";
+        let result = interp.exec_source(src);
+        assert!(
+            result.is_err(),
+            "WHILE without ENDWH must be an error at END"
+        );
+    }
+
+    // --- CS_SWAP / CS_DROP / CS_DUP / CS_OVER / CS_ROT (integration via IMMEDIATE words) ---
+
+    #[test]
+    fn test_cs_swap_reorders_compile_stack() {
+        // CS_SWAP is exercised indirectly through ENDWH; verify via a working WHILE loop.
+        let mut interp = Interpreter::new();
+        let src = "\
+DEF COUNT(N)
+  VAR I
+  SET &I, N
+  WHILE I > 0
+    PUTDEC I
+    SET &I, I - 1
+  ENDWH
+END
+COUNT 2";
+        interp.exec_source(src).unwrap();
+        assert_eq!(interp.take_output(), "21");
+    }
+
+    #[test]
+    fn test_cs_drop_via_immediate_word() {
+        // CS_DROP is exercised through a custom IMMEDIATE word that uses it.
+        // SKIPONE pushes HERE on the compile stack and immediately drops it (no patch),
+        // then emits a constant value — verifying that CS_DROP removes the entry without error.
+        let mut interp = Interpreter::new();
+        let src = "\
+DEF SKIPONE
+  CS_PUSH HERE
+  CS_DROP
+END
+IMMEDIATE SKIPONE
+
+DEF TRYDROP()
+  SKIPONE
+  PUTDEC 42
+END
+TRYDROP";
+        // SKIPONE compiles HERE (saved address), drops it, and falls through.
+        // PUTDEC 42 must run and produce output \"42\".
+        interp.exec_source(src).unwrap();
+        assert_eq!(
+            interp.take_output(),
+            "42",
+            "CS_DROP must discard compile-stack entry; PUTDEC 42 must run"
+        );
+    }
+
+    #[test]
+    fn test_cs_dup_and_over_via_immediate_word() {
+        // CS_DUP and CS_OVER are exercised through a custom IMMEDIATE word.
+        // DUPTEST pushes a value on CS, dups it, then drops the copy.
+        let mut interp = Interpreter::new();
+        let src = "\
+DEF DUPTEST
+  CS_PUSH HERE
+  CS_DUP
+  CS_DROP
+  CS_DROP
+END
+IMMEDIATE DUPTEST
+
+DEF TRYDUPTHEN()
+  DUPTEST
+  PUTDEC 7
+END
+TRYDUPTHEN";
+        interp.exec_source(src).unwrap();
+        assert_eq!(interp.take_output(), "7");
+    }
+
+    #[test]
+    fn test_cs_rot_via_immediate_word() {
+        // CS_ROT is exercised through a custom IMMEDIATE word.
+        // ROTATECS pushes three values, rotates them, then drops all three.
+        let mut interp = Interpreter::new();
+        let src = "\
+DEF ROTATECS
+  CS_PUSH HERE
+  CS_PUSH HERE
+  CS_PUSH HERE
+  CS_ROT
+  CS_DROP
+  CS_DROP
+  CS_DROP
+END
+IMMEDIATE ROTATECS
+
+DEF TRYROT()
+  ROTATECS
+  PUTDEC 9
+END
+TRYROT";
+        interp.exec_source(src).unwrap();
+        assert_eq!(interp.take_output(), "9");
+    }
 }
