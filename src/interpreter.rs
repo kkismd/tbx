@@ -3695,4 +3695,24 @@ NOOP_LOOP(4)";
             .exec_source(src)
             .expect("correct nesting must succeed");
     }
+
+    #[test]
+    fn test_if_else_endwh_cross_nesting_error() {
+        // IF ... ELSE ... ENDWH must fail with MismatchedControlStructure.
+        // ELSE does not push to control_stack, so ENDWH sees ControlKind::If on top.
+        let mut interp = Interpreter::new();
+        let src = "DEF BAD(X)\n  IF X > 0\n    PUTDEC X\n  ELSE\n    PUTDEC 0\n  ENDWH\nEND";
+        let result = interp.exec_source(src);
+        match result {
+            Err(e)
+                if matches!(
+                    e.kind,
+                    crate::error::TbxError::MismatchedControlStructure {
+                        close_word: "ENDWH",
+                        open_word: "IF",
+                    }
+                ) => {}
+            other => panic!("expected MismatchedControlStructure(ENDWH/IF), got {other:?}"),
+        }
+    }
 }

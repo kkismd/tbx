@@ -652,7 +652,7 @@ pub fn end_prim(vm: &mut VM) -> Result<(), TbxError> {
     if !vm.control_stack.is_empty() {
         let count = vm.control_stack.len();
         vm.rollback_def();
-        return Err(TbxError::CompileStackNotEmpty { count });
+        return Err(TbxError::ControlStackNotEmpty { count });
     }
 
     // Write EXIT to terminate the word body.

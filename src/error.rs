@@ -93,6 +93,13 @@ pub enum TbxError {
     CompileStackNotEmpty {
         count: usize,
     },
+    /// control_stack has leftover items when END is executed.
+    ///
+    /// Word definition is incomplete — some control-structure open words (IF/WHILE)
+    /// were not closed by matching ENDIF/ENDWH.
+    ControlStackNotEmpty {
+        count: usize,
+    },
     /// A file requested via USE could not be found or read.
     FileNotFound {
         path: String,
@@ -206,6 +213,12 @@ impl std::fmt::Display for TbxError {
                 write!(
                     f,
                     "compile stack has {count} unpatched item(s) at END; word definition is incomplete"
+                )
+            }
+            TbxError::ControlStackNotEmpty { count } => {
+                write!(
+                    f,
+                    "control stack has {count} unclosed structure(s) at END; missing ENDIF or ENDWH"
                 )
             }
             TbxError::FileNotFound { path, reason } => {
