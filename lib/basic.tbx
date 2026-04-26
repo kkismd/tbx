@@ -74,8 +74,9 @@ DEF ELSIF
   REM emit unconditional jump at end of current branch body
   APPEND JUMP_ALWAYS
   VAR B
-  REM save JUMP_ALWAYS placeholder address (B); dp is now elsif condition start
+  REM save JUMP_ALWAYS placeholder address (B)
   SET &B, HERE
+  REM emit placeholder; dp is now elsif condition start
   APPEND 0
   REM patch previous BIF placeholder (C) with current dp (= elsif condition start)
   PATCH_ADDR CS_POP
@@ -98,8 +99,9 @@ DEF ELSE
   REM emit unconditional jump at end of if/elsif branch
   APPEND JUMP_ALWAYS
   VAR B
-  REM save JUMP_ALWAYS placeholder address (B); dp is now else body start
+  REM save JUMP_ALWAYS placeholder address (B)
   SET &B, HERE
+  REM emit placeholder; dp is now else body start
   APPEND 0
   REM patch previous BIF placeholder (C) with current dp (= else body start)
   PATCH_ADDR CS_POP

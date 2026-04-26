@@ -157,67 +157,127 @@ IMMEDIATE ENDIF
 
 ---
 
-## ELSE / ELIF の設計方針
+## ELSE / ELSIF の実装記録
 
-> 未実装。以下は IF...ENDIF の実装パターンを踏まえた設計方針を記録する。
+`IF ... ELSIF ... ELSE ... ENDIF` は `lib/basic.tbx` に TBX コードとして実装されている。
+ENDIF の拡張方針は issue #338 で**カウント方式**に決定した。
 
-### ELSE
+### コンパイルスタック構造（カウント方式）
 
-ELSE は「IF ブロックの本体末尾に無条件ジャンプを挿入し、IF の BIF プレースホルダーを ELSE 直後に向けてパッチする」コンパイルワードとして実装する。
+コンパイルスタックのフォーマットは `[B1...BN, N, C]`（C がトップ）。
+
+- `C` : 直前の条件分岐（BIF）のジャンプ先プレースホルダーアドレス
+- `N` : ELSIF の呼び出し回数（= 蓄積された JUMP_ALWAYS プレースホルダーの数）
+- `B1...BN` : 各 if/elsif ブロック末尾の JUMP_ALWAYS プレースホルダーアドレス
+
+### IF（変更）
+
+`CS_PUSH 0`（初期カウント）を追加し、コンパイルスタックを `[0, A]` 形式に変更した。
+
+```
+DEF IF
+  COMPILE_EXPR
+  APPEND JUMP_FALSE
+  CS_PUSH 0        REM initial count: number of ELSIF calls so far
+  CS_PUSH HERE     REM BIF jump-target placeholder address (A)
+  APPEND 0
+END
+IMMEDIATE IF
+```
+
+### ENDIF（変更）
+
+`WHILE`/`ENDWH` ループで蓄積された `JUMP_ALWAYS` プレースホルダーを一括パッチする。
+`WHILE`/`ENDWH` は `lib/basic.tbx` で ENDIF より前に定義されていること。
+
+```
+DEF ENDIF
+  PATCH_ADDR CS_POP     REM patch last BIF/JUMP_ALWAYS placeholder (C)
+  VAR N
+  SET &N, CS_POP        REM retrieve ELSIF call count
+  VAR I
+  SET &I, 0
+  WHILE I < N
+    PATCH_ADDR CS_POP   REM patch each accumulated JUMP_ALWAYS placeholder (Bi)
+    SET &I, I + 1
+  ENDWH
+END
+IMMEDIATE ENDIF
+```
+
+### ELSIF（新規）
+
+直前の BIF プレースホルダーをパッチし、JUMP_ALWAYS と新しい BIF をコンパイルスタックに積む。
 
 コンパイルスタックの遷移:
-- IF 実行後: `CS = [A]`（A = BIF のジャンプ先プレースホルダーアドレス）
-- ELSE 実行後: `CS = [B]`（B = JUMP_ALWAYS のジャンプ先プレースホルダーアドレス、A はパッチ済み）
-- ENDIF 実行後: `CS = []`（B はパッチ済み）
+- 入力: `CS = [..., N, C]`（C がトップ）
+- 出力: `CS = [..., B, N+1, C_new]`（C パッチ済み、B は JUMP_ALWAYS プレースホルダー）
+
+```
+DEF ELSIF
+  APPEND JUMP_ALWAYS       REM emit unconditional jump at end of current branch body
+  VAR B
+  SET &B, HERE             REM save JUMP_ALWAYS placeholder address (B)
+  APPEND 0                 REM emit placeholder
+  PATCH_ADDR CS_POP        REM patch previous BIF placeholder (C); DP now = elsif condition start
+  VAR N
+  SET &N, CS_POP           REM pop the ELSIF count
+  CS_PUSH B                REM push B (JUMP_ALWAYS placeholder)
+  CS_PUSH N + 1            REM push incremented count
+  COMPILE_EXPR             REM compile the elsif condition expression
+  APPEND JUMP_FALSE        REM emit new BIF instruction
+  CS_PUSH HERE             REM push new BIF placeholder address (C_new)
+  APPEND 0
+END
+IMMEDIATE ELSIF
+```
+
+### ELSE（新規）
+
+直前の BIF プレースホルダーをパッチし、JUMP_ALWAYS プレースホルダーをカウントの上に積む。
+
+コンパイルスタックの遷移:
+- 入力: `CS = [..., N, C]`（C がトップ）
+- 出力: `CS = [..., N, B]`（C パッチ済み、B は JUMP_ALWAYS プレースホルダー、N は変化なし）
 
 ```
 DEF ELSE
-  APPEND JUMP_ALWAYS       REM emit unconditional jump to skip else-body
-  VAR JUMP_PLACEHOLDER
-  JUMP_PLACEHOLDER = HERE  REM save JUMP_ALWAYS placeholder address
-  APPEND 0                 REM emit placeholder; DP now = else-body start
-  PATCH_ADDR CS_POP        REM patch IF's BIF placeholder (A) with current DP
-  CS_PUSH JUMP_PLACEHOLDER REM push JUMP_ALWAYS placeholder (B) for ENDIF
+  APPEND JUMP_ALWAYS       REM emit unconditional jump at end of if/elsif branch
+  VAR B
+  SET &B, HERE             REM save JUMP_ALWAYS placeholder address (B)
+  APPEND 0                 REM emit placeholder
+  PATCH_ADDR CS_POP        REM patch previous BIF placeholder (C); DP now = else body start
+  CS_PUSH B                REM push B on top of N
 END
 IMMEDIATE ELSE
 ```
 
-ENDIF はパッチ対象が JUMP_ALWAYS プレースホルダー（B）に変わるだけで変更不要。
+### コンパイルスタックのトレース
 
-### ELIF
+**IF...ELSE...ENDIF**:
 
-ELIF（elseif）は ELSE と IF を組み合わせた動作を単一ワードで実現する。直前の IF/ELIF のプレースホルダーをパッチしたうえで、新たな条件コードと BIF プレースホルダーをコンパイルスタックに積む。
+| 時点 | CS |
+|---|---|
+| IF 後 | `[0, A]` |
+| ELSE 後 | `[0, B]`（A パッチ済み）|
+| ENDIF 後 | `[]`（B パッチ、N=0、ループ 0 回）|
 
-ELIF は2つのパッチ対象（B: JUMP_ALWAYS プレースホルダー、C: 新しい BIF プレースホルダー）を生成する。どちらも ENDIF 実行時点の DP（= ENDIF 直後の位置）にジャンプする必要がある。
+**IF...ELSIF...ENDIF**:
 
-コンパイルスタックの遷移:
-- 入力: `CS = [A]`（直前の IF/ELIF の BIF プレースホルダーアドレス）
-- 出力: `CS = [B, C]`（B = JUMP_ALWAYS プレースホルダーアドレス、C = 新しい BIF プレースホルダーアドレス）
+| 時点 | CS |
+|---|---|
+| IF 後 | `[0, A]` |
+| ELSIF 後 | `[B1, 1, C]`（A パッチ済み）|
+| ENDIF 後 | `[]`（C パッチ、N=1、B1 パッチ）|
 
-```
-DEF ELIF
-  APPEND JUMP_ALWAYS       REM emit unconditional jump to skip this elif-body
-  VAR JUMP_PLACEHOLDER
-  JUMP_PLACEHOLDER = HERE  REM save JUMP_ALWAYS placeholder address (B)
-  APPEND 0                 REM emit placeholder; DP = elif condition check start
-  PATCH_ADDR CS_POP        REM patch previous IF/ELIF's BIF placeholder (A) with current DP
-  CS_PUSH JUMP_PLACEHOLDER REM push B onto CS (deeper entry)
-  COMPILE_EXPR             REM compile new condition expression
-  APPEND JUMP_FALSE        REM emit new BIF instruction
-  CS_PUSH HERE             REM push new BIF placeholder address (C) on CS (top)
-  APPEND 0                 REM emit placeholder
-END
-IMMEDIATE ELIF
-```
+**IF...ELSIF...ELSE...ENDIF**:
 
-ELIF 後の ENDIF は CS から B と C の両方をポップしてパッチする必要がある。このため ENDIF は ELIF が使われる場合に **複数エントリをパッチする拡張** が必要となる。拡張方針として以下の2案がある。
-
-- **カウント方式**: ELIF が JUMP_ALWAYS エントリ数をコンパイルスタックに積んでおき、ENDIF がその数だけ追加でポップしてパッチする。
-- **フォワード参照チェーン方式**: 各 JUMP_ALWAYS プレースホルダーが次のプレースホルダーのアドレスを持つリンクリストを形成し、ENDIF がチェーンを辿ってすべてパッチする。
-
-拡張方針の選択については issue #338 でトラッキングする。
-
-> **注意**: 上記のコード例はアルゴリズムの概要を示すものであり、ENDIF の拡張設計（カウント方式 vs チェーン方式）の選択を含め、最終的な TBX 実装は別途決定する必要がある。
+| 時点 | CS |
+|---|---|
+| IF 後 | `[0, A]` |
+| ELSIF 後 | `[B1, 1, C]`（A パッチ済み）|
+| ELSE 後 | `[B1, 1, B_new]`（C パッチ済み）|
+| ENDIF 後 | `[]`（B_new パッチ、N=1、B1 パッチ）|
 
 ---
 
