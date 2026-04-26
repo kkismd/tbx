@@ -376,21 +376,18 @@ impl VM {
 
     /// Read the cell at `offset` as a jump target address.
     ///
-    /// Expects `Cell::Int` or `Cell::DictAddr`; returns the address as `usize`.
+    /// Expects `Cell::DictAddr`; returns the address as `usize`.
     ///
     /// # Errors
     ///
     /// - `Err(TbxError::IndexOutOfBounds)` if `offset` is beyond the dictionary end.
-    /// - `Err(TbxError::TypeError)` if the cell at `offset` is neither `Cell::Int` nor `Cell::DictAddr`.
-    /// - `Err(TbxError::InvalidJumpTarget)` if the address is a negative `Cell::Int`.
+    /// - `Err(TbxError::TypeError)` if the cell at `offset` is not `Cell::DictAddr`.
     fn read_jump_target(&self, offset: usize) -> Result<usize, TbxError> {
         let cell = self.dict_read(offset)?;
         match cell {
-            Cell::Int(n) if n >= 0 => Ok(n as usize),
             Cell::DictAddr(a) => Ok(a),
-            Cell::Int(n) => Err(TbxError::InvalidJumpTarget { address: n }),
             _ => Err(TbxError::TypeError {
-                expected: "Int or DictAddr (jump target)",
+                expected: "DictAddr (jump target)",
                 got: cell.type_name(),
             }),
         }
@@ -2061,7 +2058,7 @@ mod tests {
         let exit_xt = vm.lookup("EXIT").unwrap();
 
         vm.dict_write(Cell::Xt(goto_xt)).unwrap(); // [0]
-        vm.dict_write(Cell::Int(3)).unwrap(); // [1] target = 3
+        vm.dict_write(Cell::DictAddr(3)).unwrap(); // [1] target = 3
         vm.dict_write(Cell::Xt(dup_xt)).unwrap(); // [2] skipped
         vm.dict_write(Cell::Xt(exit_xt)).unwrap(); // [3]
 
@@ -2077,7 +2074,7 @@ mod tests {
         //
         // Layout:
         //   [0] Xt(BIF)      <- BIF instruction
-        //   [1] Int(4)       <- target address = 4
+        //   [1] DictAddr(4)  <- target address = 4
         //   [2] Xt(DUP)      <- fall-through path (should be skipped)
         //   [3] Xt(EXIT)     <- fall-through exit (should be skipped)
         //   [4] Xt(EXIT)     <- branch target; exits immediately
@@ -2089,7 +2086,7 @@ mod tests {
         let exit_xt = vm.lookup("EXIT").unwrap();
 
         vm.dict_write(Cell::Xt(bif_xt)).unwrap(); // [0]
-        vm.dict_write(Cell::Int(4)).unwrap(); // [1] target = 4
+        vm.dict_write(Cell::DictAddr(4)).unwrap(); // [1] target = 4
         vm.dict_write(Cell::Xt(dup_xt)).unwrap(); // [2] skipped
         vm.dict_write(Cell::Xt(exit_xt)).unwrap(); // [3] skipped
         vm.dict_write(Cell::Xt(exit_xt)).unwrap(); // [4] branch target
@@ -2107,12 +2104,12 @@ mod tests {
         // BIF: when condition is truthy, fall-through occurs (no jump).
         //
         // Layout:
-        //   [0] Xt(BIF)      <- BIF instruction
-        //   [1] Int(5)       <- target address (not taken)
-        //   [2] Xt(LIT)      <- fall-through: push Int(42)
+        //   [0] Xt(BIF)         <- BIF instruction
+        //   [1] DictAddr(5)     <- target address (not taken)
+        //   [2] Xt(LIT)         <- fall-through: push Int(42)
         //   [3] Int(42)
         //   [4] Xt(EXIT)
-        //   [5] Xt(EXIT)     <- branch target (not reached)
+        //   [5] Xt(EXIT)        <- branch target (not reached)
         let mut vm = VM::new();
         crate::primitives::register_all(&mut vm);
 
@@ -2121,7 +2118,7 @@ mod tests {
         let exit_xt = vm.lookup("EXIT").unwrap();
 
         vm.dict_write(Cell::Xt(bif_xt)).unwrap(); // [0]
-        vm.dict_write(Cell::Int(5)).unwrap(); // [1] target = 5 (not taken)
+        vm.dict_write(Cell::DictAddr(5)).unwrap(); // [1] target = 5 (not taken)
         vm.dict_write(Cell::Xt(lit_xt)).unwrap(); // [2]
         vm.dict_write(Cell::Int(42)).unwrap(); // [3]
         vm.dict_write(Cell::Xt(exit_xt)).unwrap(); // [4]
@@ -2141,7 +2138,7 @@ mod tests {
         //
         // Layout:
         //   [0] Xt(BIT)      <- BIT instruction
-        //   [1] Int(4)       <- target address = 4
+        //   [1] DictAddr(4)  <- target address = 4
         //   [2] Xt(DUP)      <- fall-through path (should be skipped)
         //   [3] Xt(EXIT)     <- fall-through exit (should be skipped)
         //   [4] Xt(EXIT)     <- branch target; exits immediately
@@ -2153,7 +2150,7 @@ mod tests {
         let exit_xt = vm.lookup("EXIT").unwrap();
 
         vm.dict_write(Cell::Xt(bit_xt)).unwrap(); // [0]
-        vm.dict_write(Cell::Int(4)).unwrap(); // [1] target = 4
+        vm.dict_write(Cell::DictAddr(4)).unwrap(); // [1] target = 4
         vm.dict_write(Cell::Xt(dup_xt)).unwrap(); // [2] skipped
         vm.dict_write(Cell::Xt(exit_xt)).unwrap(); // [3] skipped
         vm.dict_write(Cell::Xt(exit_xt)).unwrap(); // [4] branch target
@@ -2171,12 +2168,12 @@ mod tests {
         // BIT: when condition is falsy, fall-through occurs (no jump).
         //
         // Layout:
-        //   [0] Xt(BIT)      <- BIT instruction
-        //   [1] Int(5)       <- target address (not taken)
-        //   [2] Xt(LIT)      <- fall-through: push Int(42)
+        //   [0] Xt(BIT)         <- BIT instruction
+        //   [1] DictAddr(5)     <- target address (not taken)
+        //   [2] Xt(LIT)         <- fall-through: push Int(42)
         //   [3] Int(42)
         //   [4] Xt(EXIT)
-        //   [5] Xt(EXIT)     <- branch target (not reached)
+        //   [5] Xt(EXIT)        <- branch target (not reached)
         let mut vm = VM::new();
         crate::primitives::register_all(&mut vm);
 
@@ -2185,7 +2182,7 @@ mod tests {
         let exit_xt = vm.lookup("EXIT").unwrap();
 
         vm.dict_write(Cell::Xt(bit_xt)).unwrap(); // [0]
-        vm.dict_write(Cell::Int(5)).unwrap(); // [1] target = 5 (not taken)
+        vm.dict_write(Cell::DictAddr(5)).unwrap(); // [1] target = 5 (not taken)
         vm.dict_write(Cell::Xt(lit_xt)).unwrap(); // [2]
         vm.dict_write(Cell::Int(42)).unwrap(); // [3]
         vm.dict_write(Cell::Xt(exit_xt)).unwrap(); // [4]
@@ -2203,25 +2200,29 @@ mod tests {
 
     #[test]
     fn test_run_goto_negative_target_errors() {
-        // GOTO with a negative target address must return InvalidJumpTarget.
+        // GOTO with a Cell::Int operand (including negative) must return TypeError,
+        // because only Cell::DictAddr is accepted as a jump target.
         let mut vm = VM::new();
         crate::primitives::register_all(&mut vm);
 
         let goto_xt = find_by_kind(&vm, |k| matches!(k, EntryKind::Goto));
 
         vm.dict_write(Cell::Xt(goto_xt)).unwrap(); // [0]
-        vm.dict_write(Cell::Int(-1)).unwrap(); // [1] negative target
+        vm.dict_write(Cell::Int(-1)).unwrap(); // [1] Int is not a valid jump target
 
         let result = vm.run(0);
         assert_eq!(
             result,
-            Err(crate::error::TbxError::InvalidJumpTarget { address: -1 })
+            Err(crate::error::TbxError::TypeError {
+                expected: "DictAddr (jump target)",
+                got: "Int",
+            })
         );
     }
 
     #[test]
     fn test_run_goto_non_int_target_errors() {
-        // GOTO with a non-Int operand (Cell::Xt) must return TypeError with got = "Xt".
+        // GOTO with a non-DictAddr operand (Cell::Xt) must return TypeError with got = "Xt".
         let mut vm = VM::new();
         crate::primitives::register_all(&mut vm);
 
@@ -2229,13 +2230,13 @@ mod tests {
         let exit_xt = vm.lookup("EXIT").unwrap();
 
         vm.dict_write(Cell::Xt(goto_xt)).unwrap(); // [0]
-        vm.dict_write(Cell::Xt(exit_xt)).unwrap(); // [1] Xt instead of Int
+        vm.dict_write(Cell::Xt(exit_xt)).unwrap(); // [1] Xt instead of DictAddr
 
         let result = vm.run(0);
         assert_eq!(
             result,
             Err(crate::error::TbxError::TypeError {
-                expected: "Int or DictAddr (jump target)",
+                expected: "DictAddr (jump target)",
                 got: "Xt",
             })
         );
@@ -2250,7 +2251,7 @@ mod tests {
         let goto_xt = find_by_kind(&vm, |k| matches!(k, EntryKind::Goto));
 
         vm.dict_write(Cell::Xt(goto_xt)).unwrap(); // [0]
-        vm.dict_write(Cell::Int(9999)).unwrap(); // [1] out-of-bounds target
+        vm.dict_write(Cell::DictAddr(9999)).unwrap(); // [1] out-of-bounds target
 
         let result = vm.run(0);
         assert!(matches!(
@@ -2292,7 +2293,7 @@ mod tests {
         let exit_xt = vm.lookup("EXIT").unwrap();
 
         vm.dict_write(Cell::Xt(bif_xt)).unwrap(); // [0]
-        vm.dict_write(Cell::Int(3)).unwrap(); // [1] target
+        vm.dict_write(Cell::DictAddr(3)).unwrap(); // [1] target
         vm.dict_write(Cell::Xt(exit_xt)).unwrap(); // [2] (not reached)
 
         // No condition pushed — expect StackUnderflow.
@@ -2310,7 +2311,7 @@ mod tests {
         let exit_xt = vm.lookup("EXIT").unwrap();
 
         vm.dict_write(Cell::Xt(bit_xt)).unwrap(); // [0]
-        vm.dict_write(Cell::Int(3)).unwrap(); // [1] target
+        vm.dict_write(Cell::DictAddr(3)).unwrap(); // [1] target
         vm.dict_write(Cell::Xt(exit_xt)).unwrap(); // [2] (not reached)
 
         // No condition pushed — expect StackUnderflow.
@@ -2320,45 +2321,53 @@ mod tests {
 
     #[test]
     fn test_run_bif_negative_target_errors() {
-        // BIF with a negative target address must return InvalidJumpTarget.
+        // BIF with a Cell::Int operand (including negative) must return TypeError,
+        // because only Cell::DictAddr is accepted as a jump target.
         let mut vm = VM::new();
         crate::primitives::register_all(&mut vm);
 
         let bif_xt = find_by_kind(&vm, |k| matches!(k, EntryKind::BranchIfFalse));
 
         vm.dict_write(Cell::Xt(bif_xt)).unwrap(); // [0]
-        vm.dict_write(Cell::Int(-5)).unwrap(); // [1] negative target
+        vm.dict_write(Cell::Int(-5)).unwrap(); // [1] Int is not a valid jump target
 
         vm.push(Cell::Bool(false)).unwrap(); // falsy → branch would be taken
         let result = vm.run(0);
         assert_eq!(
             result,
-            Err(crate::error::TbxError::InvalidJumpTarget { address: -5 })
+            Err(crate::error::TbxError::TypeError {
+                expected: "DictAddr (jump target)",
+                got: "Int",
+            })
         );
     }
 
     #[test]
     fn test_run_bit_negative_target_errors() {
-        // BIT with a negative target address must return InvalidJumpTarget.
+        // BIT with a Cell::Int operand (including negative) must return TypeError,
+        // because only Cell::DictAddr is accepted as a jump target.
         let mut vm = VM::new();
         crate::primitives::register_all(&mut vm);
 
         let bit_xt = find_by_kind(&vm, |k| matches!(k, EntryKind::BranchIfTrue));
 
         vm.dict_write(Cell::Xt(bit_xt)).unwrap(); // [0]
-        vm.dict_write(Cell::Int(-3)).unwrap(); // [1] negative target
+        vm.dict_write(Cell::Int(-3)).unwrap(); // [1] Int is not a valid jump target
 
         vm.push(Cell::Bool(true)).unwrap(); // truthy → branch would be taken
         let result = vm.run(0);
         assert_eq!(
             result,
-            Err(crate::error::TbxError::InvalidJumpTarget { address: -3 })
+            Err(crate::error::TbxError::TypeError {
+                expected: "DictAddr (jump target)",
+                got: "Int",
+            })
         );
     }
 
     #[test]
     fn test_run_bif_negative_target_errors_on_fallthrough() {
-        // BIF with a negative target address must return InvalidJumpTarget
+        // BIF with a Cell::Int operand must return TypeError
         // even when the condition is truthy (fall-through path).
         // read_jump_target is always evaluated regardless of the condition.
         let mut vm = VM::new();
@@ -2367,19 +2376,22 @@ mod tests {
         let bif_xt = find_by_kind(&vm, |k| matches!(k, EntryKind::BranchIfFalse));
 
         vm.dict_write(Cell::Xt(bif_xt)).unwrap(); // [0]
-        vm.dict_write(Cell::Int(-1)).unwrap(); // [1] negative target
+        vm.dict_write(Cell::Int(-1)).unwrap(); // [1] Int is not a valid jump target
 
         vm.push(Cell::Bool(true)).unwrap(); // truthy → fall-through would be taken
         let result = vm.run(0);
         assert_eq!(
             result,
-            Err(crate::error::TbxError::InvalidJumpTarget { address: -1 })
+            Err(crate::error::TbxError::TypeError {
+                expected: "DictAddr (jump target)",
+                got: "Int",
+            })
         );
     }
 
     #[test]
     fn test_run_bit_negative_target_errors_on_fallthrough() {
-        // BIT with a negative target address must return InvalidJumpTarget
+        // BIT with a Cell::Int operand must return TypeError
         // even when the condition is falsy (fall-through path).
         // read_jump_target is always evaluated regardless of the condition.
         let mut vm = VM::new();
@@ -2388,13 +2400,16 @@ mod tests {
         let bit_xt = find_by_kind(&vm, |k| matches!(k, EntryKind::BranchIfTrue));
 
         vm.dict_write(Cell::Xt(bit_xt)).unwrap(); // [0]
-        vm.dict_write(Cell::Int(-2)).unwrap(); // [1] negative target
+        vm.dict_write(Cell::Int(-2)).unwrap(); // [1] Int is not a valid jump target
 
         vm.push(Cell::Bool(false)).unwrap(); // falsy → fall-through would be taken
         let result = vm.run(0);
         assert_eq!(
             result,
-            Err(crate::error::TbxError::InvalidJumpTarget { address: -2 })
+            Err(crate::error::TbxError::TypeError {
+                expected: "DictAddr (jump target)",
+                got: "Int",
+            })
         );
     }
 

@@ -273,24 +273,22 @@ D:  ...（ENDWH 直後）
 3. `APPEND CS_POP` — CS から A（DictAddr）をポップして辞書に書き込む（JUMP_ALWAYS のジャンプ先ターゲット）
 4. `PATCH_ADDR CS_POP` — CS から Caddr をポップし、`dictionary[Caddr]` に現在の DP（= ENDWH 直後）を書き込む（BIF のジャンプ先を確定）
 
-### `read_jump_target` の拡張
+### `read_jump_target` の簡略化
 
-バックジャンプ（ENDWH → ループ先頭 A）のターゲットは `Cell::DictAddr` として辞書に書き込まれる。そのため `vm.rs` の `read_jump_target` を拡張し、`Cell::DictAddr(a)` を有効なジャンプターゲットとして受け付けるようにした（後方互換あり）。
+全ジャンプターゲットは `Cell::DictAddr` に統一されている。そのため `vm.rs` の `read_jump_target` は `Cell::DictAddr(a)` のみを受け付け、それ以外は `TypeError` を返す。
 
 ```rust
 fn read_jump_target(&self, offset: usize) -> Result<usize, TbxError> {
     let cell = self.dict_read(offset)?;
     match cell {
-        Cell::Int(n) if n >= 0 => Ok(n as usize),
         Cell::DictAddr(a) => Ok(a),
-        Cell::Int(n) => Err(TbxError::InvalidJumpTarget { address: n }),
         _ => Err(TbxError::TypeError {
-            expected: "Int or DictAddr (jump target)",
+            expected: "DictAddr (jump target)",
             got: cell.type_name(),
         }),
     }
 }
 ```
 
-フォワードジャンプ（BIF → ENDWH 直後 D）は従来どおり `PATCH_ADDR` が `Cell::Int(dp)` を書き込む。両方を受け付けることで、辞書内のジャンプターゲットの型が `Int`（フォワード）と `DictAddr`（バックワード）の2種類混在することになるが、`read_jump_target` で統一的に処理される。
+フォワードジャンプ（BIF → ENDWH 直後 D）は `PATCH_ADDR` が `Cell::DictAddr(dp)` を書き込む。バックジャンプ（ENDWH → ループ先頭 A）のターゲットも `Cell::DictAddr` として辞書に書き込まれる。すべてのジャンプターゲットが `Cell::DictAddr` に統一されているため、算術整数と実行アドレスが型レベルで区別される。
 

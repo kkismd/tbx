@@ -756,7 +756,7 @@ impl Interpreter {
         // Apply back-patches (must end the borrow of compile_state first).
         let _ = state;
         for patch_pos in patches {
-            self.vm.dictionary[patch_pos] = Cell::Int(dp as i64);
+            self.vm.dictionary[patch_pos] = Cell::DictAddr(dp);
         }
 
         Ok(())

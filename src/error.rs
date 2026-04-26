@@ -54,10 +54,6 @@ pub enum TbxError {
     },
     /// An integer arithmetic operation produced a result outside the `i64` range.
     IntegerOverflow,
-    /// A jump target address is negative and therefore invalid.
-    InvalidJumpTarget {
-        address: i64,
-    },
     /// A symbol name was not found in the dictionary.
     UndefinedSymbol {
         name: String,
@@ -174,9 +170,6 @@ impl std::fmt::Display for TbxError {
                 )
             }
             TbxError::IntegerOverflow => write!(f, "integer overflow"),
-            TbxError::InvalidJumpTarget { address } => {
-                write!(f, "invalid jump target: negative address {address}")
-            }
             TbxError::UndefinedSymbol { name } => write!(f, "undefined symbol: '{name}'"),
             TbxError::InvalidExpression { reason } => {
                 write!(f, "invalid expression: {reason}")
@@ -266,14 +259,6 @@ mod tests {
     fn test_integer_overflow_display() {
         let e = TbxError::IntegerOverflow;
         assert!(e.to_string().contains("integer overflow"));
-    }
-
-    #[test]
-    fn test_invalid_jump_target_display() {
-        let e = TbxError::InvalidJumpTarget { address: -7 };
-        let msg = e.to_string();
-        assert!(msg.contains("-7"));
-        assert!(msg.contains("negative"));
     }
 
     #[test]
