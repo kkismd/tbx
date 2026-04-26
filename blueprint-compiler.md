@@ -103,7 +103,7 @@ DEF 開始時に両構造体を生成し、END 完了後に破棄する。行番
 | `CS_DUP`     | `( a -- a a )` | compile_stack のトップを複製する |
 | `CS_OVER`    | `( a b -- a b a )` | compile_stack の2番目をトップにコピーする |
 | `CS_ROT`     | `( a b c -- b c a )` | compile_stack の3番目をトップに移動する |
-| `PATCH_ADDR` | `( addr -- )` | `DictAddr(addr)` をポップし、`dictionary[addr] = Cell::Int(DP)` を書き込む（前方参照のバックパッチ） |
+| `PATCH_ADDR` | `( addr -- )` | `DictAddr(addr)` をポップし、`dictionary[addr] = Cell::DictAddr(DP)` を書き込む（前方参照のバックパッチ） |
 | `COMPILE_EXPR` | `( -- )` | ソースから式を1つ読み取ってコンパイルし、命令列を `dictionary[DP..]` に書き込む |
 | `JUMP_FALSE` | `( -- xt )` | `BranchIfFalse`（BIF）のXt定数をデータスタックに積む |
 | `JUMP_TRUE`  | `( -- xt )` | `BranchIfTrue`（BIT）のXt定数をデータスタックに積む |

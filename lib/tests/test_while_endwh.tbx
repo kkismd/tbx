@@ -1,0 +1,44 @@
+REM lib/tests/test_while_endwh.tbx — TBX tests for WHILE/ENDWH control structures
+USE "lib/tests/helper.tbx"
+
+REM --- Zero-iteration: condition is false from the start ---
+REM The body must not execute; SUMTO(0) should return 0.
+
+DEF SUMTO(N)
+  VAR I
+  VAR S
+  SET &I, 1
+  SET &S, 0
+  WHILE I <= N
+    SET &S, S + I
+    SET &I, I + 1
+  ENDWH
+  RETURN S
+END
+ASSERT SUMTO(0) = 0
+
+REM --- Single-iteration loop ---
+ASSERT SUMTO(1) = 1
+
+REM --- Multi-iteration loop: sum 1..5 = 15 ---
+ASSERT SUMTO(5) = 15
+
+REM --- Nested WHILE loops: outer i=1..3, inner j=1..2 => 6 iterations ---
+
+DEF NESTED_COUNT
+  VAR I
+  VAR J
+  VAR C
+  SET &I, 1
+  SET &C, 0
+  WHILE I <= 3
+    SET &J, 1
+    WHILE J <= 2
+      SET &C, C + 1
+      SET &J, J + 1
+    ENDWH
+    SET &I, I + 1
+  ENDWH
+  RETURN C
+END
+ASSERT NESTED_COUNT() = 6

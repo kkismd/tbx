@@ -2046,10 +2046,10 @@ mod tests {
         // Verify that GOTO jumps unconditionally to the specified offset.
         //
         // Layout:
-        //   [0] Xt(GOTO)     <- GOTO instruction
-        //   [1] Int(3)       <- target address = 3
-        //   [2] Xt(DUP)      <- should be skipped
-        //   [3] Xt(EXIT)     <- landing point; exits immediately
+        //   [0] Xt(GOTO)        <- GOTO instruction
+        //   [1] DictAddr(3)     <- target address = 3
+        //   [2] Xt(DUP)         <- should be skipped
+        //   [3] Xt(EXIT)        <- landing point; exits immediately
         let mut vm = VM::new();
         crate::primitives::register_all(&mut vm);
 
