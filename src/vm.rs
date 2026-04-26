@@ -2260,6 +2260,29 @@ mod tests {
     }
 
     #[test]
+    fn test_run_goto_with_dict_addr_target() {
+        // GOTO with a DictAddr target (backward-jump / WHILE-ENDWH style) must work.
+        // Layout:
+        //   [0] Goto
+        //   [1] DictAddr(3)  ← jumps forward to EXIT (simulates a resolved DictAddr target)
+        //   [2] Int(99)      ← unreachable
+        //   [3] EXIT
+        let mut vm = VM::new();
+        crate::primitives::register_all(&mut vm);
+
+        let goto_xt = find_by_kind(&vm, |k| matches!(k, EntryKind::Goto));
+        let exit_xt = vm.lookup("EXIT").unwrap();
+
+        vm.dict_write(Cell::Xt(goto_xt)).unwrap(); // [0]
+        vm.dict_write(Cell::DictAddr(3)).unwrap(); // [1] DictAddr target
+        vm.dict_write(Cell::Int(99)).unwrap(); // [2] unreachable
+        vm.dict_write(Cell::Xt(exit_xt)).unwrap(); // [3]
+
+        // Must not error: DictAddr is a valid jump target.
+        vm.run(0).unwrap();
+    }
+
+    #[test]
     fn test_run_bif_empty_stack_errors() {
         // BIF with an empty stack must return StackUnderflow.
         let mut vm = VM::new();

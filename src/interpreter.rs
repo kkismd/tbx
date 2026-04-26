@@ -3458,31 +3458,28 @@ COUNT 2";
     #[test]
     fn test_cs_drop_via_immediate_word() {
         // CS_DROP is exercised through a custom IMMEDIATE word that uses it.
-        // MYIF discards the compile-stack entry saved by CS_PUSH.
+        // SKIPONE pushes HERE on the compile stack and immediately drops it (no patch),
+        // then emits a constant value — verifying that CS_DROP removes the entry without error.
         let mut interp = Interpreter::new();
         let src = "\
-DEF NULLIF
-  COMPILE_EXPR
-  APPEND JUMP_FALSE
+DEF SKIPONE
   CS_PUSH HERE
-  APPEND 0
   CS_DROP
 END
-IMMEDIATE NULLIF
+IMMEDIATE SKIPONE
 
-DEF TRYNULL(X)
-  NULLIF X > 0
+DEF TRYDROP()
+  SKIPONE
   PUTDEC 42
 END
-TRYNULL 5";
-        // NULLIF drops the placeholder address, so no back-patch occurs.
-        // The word body runs unconditionally (the placeholder 0 is left in the dictionary
-        // but never patched; this is intentional for the test).
-        let result = interp.exec_source(src);
-        // The definition compiles without error — that is the key assertion.
-        assert!(
-            result.is_ok(),
-            "CS_DROP in IMMEDIATE word must not error: {result:?}"
+TRYDROP";
+        // SKIPONE compiles HERE (saved address), drops it, and falls through.
+        // PUTDEC 42 must run and produce output \"42\".
+        interp.exec_source(src).unwrap();
+        assert_eq!(
+            interp.take_output(),
+            "42",
+            "CS_DROP must discard compile-stack entry; PUTDEC 42 must run"
         );
     }
 
