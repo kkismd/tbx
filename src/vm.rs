@@ -2199,7 +2199,7 @@ mod tests {
     // --- error cases for GOTO/BIF/BIT ---
 
     #[test]
-    fn test_run_goto_negative_target_errors() {
+    fn test_run_goto_int_target_errors() {
         // GOTO with a Cell::Int operand (including negative) must return TypeError,
         // because only Cell::DictAddr is accepted as a jump target.
         let mut vm = VM::new();
@@ -2320,7 +2320,7 @@ mod tests {
     }
 
     #[test]
-    fn test_run_bif_negative_target_errors() {
+    fn test_run_bif_int_target_errors() {
         // BIF with a Cell::Int operand (including negative) must return TypeError,
         // because only Cell::DictAddr is accepted as a jump target.
         let mut vm = VM::new();
@@ -2343,7 +2343,7 @@ mod tests {
     }
 
     #[test]
-    fn test_run_bit_negative_target_errors() {
+    fn test_run_bit_int_target_errors() {
         // BIT with a Cell::Int operand (including negative) must return TypeError,
         // because only Cell::DictAddr is accepted as a jump target.
         let mut vm = VM::new();
@@ -2366,7 +2366,7 @@ mod tests {
     }
 
     #[test]
-    fn test_run_bif_negative_target_errors_on_fallthrough() {
+    fn test_run_bif_int_target_errors_on_fallthrough() {
         // BIF with a Cell::Int operand must return TypeError
         // even when the condition is truthy (fall-through path).
         // read_jump_target is always evaluated regardless of the condition.
@@ -2390,7 +2390,7 @@ mod tests {
     }
 
     #[test]
-    fn test_run_bit_negative_target_errors_on_fallthrough() {
+    fn test_run_bit_int_target_errors_on_fallthrough() {
         // BIT with a Cell::Int operand must return TypeError
         // even when the condition is falsy (fall-through path).
         // read_jump_target is always evaluated regardless of the condition.
