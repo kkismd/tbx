@@ -1,3 +1,23 @@
+/// Identifies which kind of control structure opened a compile-time scope.
+///
+/// Pushed onto `VM::control_stack` by `CTRL_OPEN_IF` / `CTRL_OPEN_WHILE` and
+/// popped (with validation) by `CTRL_CLOSE_IF` / `CTRL_CLOSE_WHILE`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ControlKind {
+    If,
+    While,
+}
+
+impl ControlKind {
+    /// Returns a human-readable keyword name used in error messages.
+    pub fn keyword(&self) -> &'static str {
+        match self {
+            ControlKind::If => "IF",
+            ControlKind::While => "WHILE",
+        }
+    }
+}
+
 /// Execution token: a type-safe index into `VM::headers` (the word header table).
 ///
 /// Distinct from an index into `VM::dictionary` (the flat code/data array).

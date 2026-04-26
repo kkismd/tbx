@@ -113,6 +113,24 @@ pub enum TbxError {
         path: String,
     },
 
+    /// ENDIF/ENDWH was reached but the control stack top does not match.
+    ///
+    /// For example, `IF ... WHILE ... ENDIF` causes `CTRL_CLOSE_IF` to find
+    /// `While` on the top of the control stack instead of `If`.
+    MismatchedControlStructure {
+        /// The closing keyword that was encountered (e.g. "ENDIF")
+        close_word: &'static str,
+        /// The opening keyword at the top of the control stack (e.g. "WHILE")
+        open_word: &'static str,
+    },
+    /// ENDIF/ENDWH was reached but the control stack is empty.
+    ///
+    /// Indicates a closing keyword without a matching opening keyword.
+    UnopenedControlStructure {
+        /// The closing keyword that was encountered (e.g. "ENDWH")
+        keyword: &'static str,
+    },
+
     /// Assertion explicitly failed via ASSERT_FAIL.
     AssertionFailed,
     /// Assertion explicitly failed via ASSERT_FAIL_MSG with a custom message.
@@ -198,6 +216,18 @@ impl std::fmt::Display for TbxError {
             }
             TbxError::CircularUse { path } => {
                 write!(f, "USE: circular USE detected: '{path}'")
+            }
+            TbxError::MismatchedControlStructure {
+                close_word,
+                open_word,
+            } => {
+                write!(
+                    f,
+                    "mismatched control structure: '{close_word}' does not match '{open_word}'"
+                )
+            }
+            TbxError::UnopenedControlStructure { keyword } => {
+                write!(f, "no matching open for '{keyword}'")
             }
             TbxError::AssertionFailed => write!(f, "assertion failed"),
             TbxError::AssertionFailedWithMessage { message } => {

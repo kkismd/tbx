@@ -1,4 +1,4 @@
-use crate::cell::Cell;
+use crate::cell::{Cell, ControlKind};
 use crate::constants::MAX_DICTIONARY_CELLS;
 use crate::dict::{EntryKind, WordEntry, FLAG_IMMEDIATE, FLAG_SYSTEM};
 use crate::error::TbxError;
@@ -1138,6 +1138,78 @@ fn cs_rot_prim(vm: &mut VM) -> Result<(), TbxError> {
     Ok(())
 }
 
+/// CTRL_OPEN_IF — push `ControlKind::If` onto the control stack.
+///
+/// Called at the start of `DEF IF` to record that an IF-block is being opened.
+/// Must be called in compile mode.
+fn ctrl_open_if_prim(vm: &mut VM) -> Result<(), TbxError> {
+    if !vm.is_compiling {
+        return Err(TbxError::InvalidExpression {
+            reason: "CTRL_OPEN_IF outside compile mode",
+        });
+    }
+    vm.control_stack.push(ControlKind::If);
+    Ok(())
+}
+
+/// CTRL_OPEN_WHILE — push `ControlKind::While` onto the control stack.
+///
+/// Called at the start of `DEF WHILE` to record that a WHILE-loop is being opened.
+/// Must be called in compile mode.
+fn ctrl_open_while_prim(vm: &mut VM) -> Result<(), TbxError> {
+    if !vm.is_compiling {
+        return Err(TbxError::InvalidExpression {
+            reason: "CTRL_OPEN_WHILE outside compile mode",
+        });
+    }
+    vm.control_stack.push(ControlKind::While);
+    Ok(())
+}
+
+/// CTRL_CLOSE_IF — validate and pop `ControlKind::If` from the control stack.
+///
+/// Called at the start of `DEF ENDIF` before touching `compile_stack` (fail-fast).
+/// Returns `UnopenedControlStructure` if the stack is empty, or
+/// `MismatchedControlStructure` if the top entry is not `If`.
+/// Must be called in compile mode.
+fn ctrl_close_if_prim(vm: &mut VM) -> Result<(), TbxError> {
+    if !vm.is_compiling {
+        return Err(TbxError::InvalidExpression {
+            reason: "CTRL_CLOSE_IF outside compile mode",
+        });
+    }
+    match vm.control_stack.pop() {
+        None => Err(TbxError::UnopenedControlStructure { keyword: "ENDIF" }),
+        Some(ControlKind::If) => Ok(()),
+        Some(got) => Err(TbxError::MismatchedControlStructure {
+            close_word: "ENDIF",
+            open_word: got.keyword(),
+        }),
+    }
+}
+
+/// CTRL_CLOSE_WHILE — validate and pop `ControlKind::While` from the control stack.
+///
+/// Called at the start of `DEF ENDWH` before touching `compile_stack` (fail-fast).
+/// Returns `UnopenedControlStructure` if the stack is empty, or
+/// `MismatchedControlStructure` if the top entry is not `While`.
+/// Must be called in compile mode.
+fn ctrl_close_while_prim(vm: &mut VM) -> Result<(), TbxError> {
+    if !vm.is_compiling {
+        return Err(TbxError::InvalidExpression {
+            reason: "CTRL_CLOSE_WHILE outside compile mode",
+        });
+    }
+    match vm.control_stack.pop() {
+        None => Err(TbxError::UnopenedControlStructure { keyword: "ENDWH" }),
+        Some(ControlKind::While) => Ok(()),
+        Some(got) => Err(TbxError::MismatchedControlStructure {
+            close_word: "ENDWH",
+            open_word: got.keyword(),
+        }),
+    }
+}
+
 /// PATCH_ADDR — pop a DictAddr from the data stack, then write Cell::DictAddr(dp) at that address.
 ///
 /// Used by ENDIF, ENDWH, and future ELSE to back-patch a previously emitted
@@ -1441,6 +1513,21 @@ pub fn register_all(vm: &mut VM) {
     vm.register(WordEntry::new_primitive("CS_ROT", cs_rot_prim));
     vm.register(WordEntry::new_primitive("PATCH_ADDR", patch_addr_prim));
     vm.register(WordEntry::new_primitive("COMPILE_EXPR", compile_expr_prim));
+    // Control-structure kind stack primitives.
+    // Used by IF/WHILE/ENDIF/ENDWH to detect cross-nesting at compile time.
+    vm.register(WordEntry::new_primitive("CTRL_OPEN_IF", ctrl_open_if_prim));
+    vm.register(WordEntry::new_primitive(
+        "CTRL_OPEN_WHILE",
+        ctrl_open_while_prim,
+    ));
+    vm.register(WordEntry::new_primitive(
+        "CTRL_CLOSE_IF",
+        ctrl_close_if_prim,
+    ));
+    vm.register(WordEntry::new_primitive(
+        "CTRL_CLOSE_WHILE",
+        ctrl_close_while_prim,
+    ));
 
     // Runtime branch/jump Xt constants — allows TBX code to write:
     //   APPEND JUMP_FALSE, APPEND JUMP_ALWAYS, etc.
@@ -1469,7 +1556,7 @@ pub fn register_all(vm: &mut VM) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::cell::Cell;
+    use crate::cell::{Cell, ControlKind};
     use crate::constants::MAX_DICTIONARY_CELLS;
 
     // --- drop_prim ---
@@ -4318,5 +4405,147 @@ mod tests {
         );
         // Data stack must be empty.
         assert_eq!(vm.pop(), Err(TbxError::StackUnderflow));
+    }
+
+    // --- CTRL_OPEN_IF / CTRL_OPEN_WHILE / CTRL_CLOSE_IF / CTRL_CLOSE_WHILE ---
+
+    #[test]
+    fn test_ctrl_open_if_outside_compile_mode_error() {
+        let mut vm = VM::new();
+        assert_eq!(
+            ctrl_open_if_prim(&mut vm),
+            Err(TbxError::InvalidExpression {
+                reason: "CTRL_OPEN_IF outside compile mode"
+            })
+        );
+    }
+
+    #[test]
+    fn test_ctrl_open_while_outside_compile_mode_error() {
+        let mut vm = VM::new();
+        assert_eq!(
+            ctrl_open_while_prim(&mut vm),
+            Err(TbxError::InvalidExpression {
+                reason: "CTRL_OPEN_WHILE outside compile mode"
+            })
+        );
+    }
+
+    #[test]
+    fn test_ctrl_close_if_outside_compile_mode_error() {
+        let mut vm = VM::new();
+        assert_eq!(
+            ctrl_close_if_prim(&mut vm),
+            Err(TbxError::InvalidExpression {
+                reason: "CTRL_CLOSE_IF outside compile mode"
+            })
+        );
+    }
+
+    #[test]
+    fn test_ctrl_close_while_outside_compile_mode_error() {
+        let mut vm = VM::new();
+        assert_eq!(
+            ctrl_close_while_prim(&mut vm),
+            Err(TbxError::InvalidExpression {
+                reason: "CTRL_CLOSE_WHILE outside compile mode"
+            })
+        );
+    }
+
+    #[test]
+    fn test_ctrl_open_if_pushes_if_kind() {
+        let mut vm = VM::new();
+        vm.is_compiling = true;
+        ctrl_open_if_prim(&mut vm).unwrap();
+        assert_eq!(vm.control_stack, vec![ControlKind::If]);
+    }
+
+    #[test]
+    fn test_ctrl_open_while_pushes_while_kind() {
+        let mut vm = VM::new();
+        vm.is_compiling = true;
+        ctrl_open_while_prim(&mut vm).unwrap();
+        assert_eq!(vm.control_stack, vec![ControlKind::While]);
+    }
+
+    #[test]
+    fn test_ctrl_close_if_empty_stack_error() {
+        let mut vm = VM::new();
+        vm.is_compiling = true;
+        assert_eq!(
+            ctrl_close_if_prim(&mut vm),
+            Err(TbxError::UnopenedControlStructure { keyword: "ENDIF" })
+        );
+    }
+
+    #[test]
+    fn test_ctrl_close_while_empty_stack_error() {
+        let mut vm = VM::new();
+        vm.is_compiling = true;
+        assert_eq!(
+            ctrl_close_while_prim(&mut vm),
+            Err(TbxError::UnopenedControlStructure { keyword: "ENDWH" })
+        );
+    }
+
+    #[test]
+    fn test_ctrl_close_if_matching_pops_if() {
+        let mut vm = VM::new();
+        vm.is_compiling = true;
+        vm.control_stack.push(ControlKind::If);
+        ctrl_close_if_prim(&mut vm).unwrap();
+        assert!(vm.control_stack.is_empty());
+    }
+
+    #[test]
+    fn test_ctrl_close_while_matching_pops_while() {
+        let mut vm = VM::new();
+        vm.is_compiling = true;
+        vm.control_stack.push(ControlKind::While);
+        ctrl_close_while_prim(&mut vm).unwrap();
+        assert!(vm.control_stack.is_empty());
+    }
+
+    #[test]
+    fn test_ctrl_close_if_mismatched_while_error() {
+        // Simulates: WHILE ... ENDIF  (cross-nesting error)
+        let mut vm = VM::new();
+        vm.is_compiling = true;
+        vm.control_stack.push(ControlKind::While);
+        assert_eq!(
+            ctrl_close_if_prim(&mut vm),
+            Err(TbxError::MismatchedControlStructure {
+                close_word: "ENDIF",
+                open_word: "WHILE"
+            })
+        );
+    }
+
+    #[test]
+    fn test_ctrl_close_while_mismatched_if_error() {
+        // Simulates: IF ... ENDWH  (cross-nesting error)
+        let mut vm = VM::new();
+        vm.is_compiling = true;
+        vm.control_stack.push(ControlKind::If);
+        assert_eq!(
+            ctrl_close_while_prim(&mut vm),
+            Err(TbxError::MismatchedControlStructure {
+                close_word: "ENDWH",
+                open_word: "IF"
+            })
+        );
+    }
+
+    #[test]
+    fn test_ctrl_nested_if_while_correct_order() {
+        // Simulates: IF ... WHILE ... ENDWH ... ENDIF  (correct nesting)
+        let mut vm = VM::new();
+        vm.is_compiling = true;
+        ctrl_open_if_prim(&mut vm).unwrap();
+        ctrl_open_while_prim(&mut vm).unwrap();
+        ctrl_close_while_prim(&mut vm).unwrap();
+        ctrl_close_if_prim(&mut vm).unwrap();
+        assert!(vm.control_stack.is_empty());
     }
 }
