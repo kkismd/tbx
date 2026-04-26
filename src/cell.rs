@@ -2,7 +2,7 @@
 ///
 /// Pushed onto `VM::control_stack` by `CTRL_OPEN_IF` / `CTRL_OPEN_WHILE` and
 /// popped (with validation) by `CTRL_CLOSE_IF` / `CTRL_CLOSE_WHILE`.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ControlKind {
     If,
     While,

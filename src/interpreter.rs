@@ -3585,4 +3585,114 @@ TRYROT";
             "ELSE at top level should return an error (no compile mode)"
         );
     }
+
+    // --- Control-structure mismatch detection (issue #358) ---
+
+    #[test]
+    fn test_if_while_endif_endwh_cross_nesting_error() {
+        // IF ... WHILE ... ENDIF  must fail with MismatchedControlStructure.
+        let mut interp = Interpreter::new();
+        let src =
+            "DEF BAD(X)\n  IF X > 0\n    WHILE X > 0\n      SET &X, X - 1\n    ENDIF\n  ENDWH\nEND";
+        let result = interp.exec_source(src);
+        match result {
+            Err(e)
+                if matches!(
+                    e.kind,
+                    crate::error::TbxError::MismatchedControlStructure {
+                        close_word: "ENDIF",
+                        open_word: "WHILE",
+                    }
+                ) => {}
+            other => panic!("expected MismatchedControlStructure(ENDIF/WHILE), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_if_endwh_cross_nesting_error() {
+        // IF ... ENDWH  must fail with MismatchedControlStructure.
+        let mut interp = Interpreter::new();
+        let src = "DEF BAD(X)\n  IF X > 0\n    PUTDEC X\n  ENDWH\nEND";
+        let result = interp.exec_source(src);
+        match result {
+            Err(e)
+                if matches!(
+                    e.kind,
+                    crate::error::TbxError::MismatchedControlStructure {
+                        close_word: "ENDWH",
+                        open_word: "IF",
+                    }
+                ) => {}
+            other => panic!("expected MismatchedControlStructure(ENDWH/IF), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_endwh_without_while_unopened_error() {
+        // ENDWH with no preceding WHILE must fail with UnopenedControlStructure.
+        let mut interp = Interpreter::new();
+        let src = "DEF BAD()\n  ENDWH\nEND";
+        let result = interp.exec_source(src);
+        match result {
+            Err(e)
+                if matches!(
+                    e.kind,
+                    crate::error::TbxError::UnopenedControlStructure { keyword: "ENDWH" }
+                ) => {}
+            other => panic!("expected UnopenedControlStructure(ENDWH), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_endif_without_if_unopened_error() {
+        // ENDIF with no preceding IF must fail with UnopenedControlStructure.
+        let mut interp = Interpreter::new();
+        let src = "DEF BAD()\n  ENDIF\nEND";
+        let result = interp.exec_source(src);
+        match result {
+            Err(e)
+                if matches!(
+                    e.kind,
+                    crate::error::TbxError::UnopenedControlStructure { keyword: "ENDIF" }
+                ) => {}
+            other => panic!("expected UnopenedControlStructure(ENDIF), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_correct_if_while_endwh_endif_nesting() {
+        // IF ... WHILE ... ENDWH ... ENDIF  must compile and run correctly.
+        let mut interp = Interpreter::new();
+        let src = "\
+DEF COUNT_DOWN(X)
+  IF X > 0
+    WHILE X > 0
+      SET &X, X - 1
+    ENDWH
+  ENDIF
+END
+COUNT_DOWN(3)";
+        interp
+            .exec_source(src)
+            .expect("correct nesting must succeed");
+    }
+
+    #[test]
+    fn test_correct_while_if_endif_endwh_nesting() {
+        // WHILE ... IF ... ENDIF ... ENDWH  must compile and run correctly.
+        let mut interp = Interpreter::new();
+        let src = "\
+DEF NOOP_LOOP(X)
+  WHILE X > 0
+    IF X > 1
+      SET &X, X - 1
+    ENDIF
+    SET &X, X - 1
+  ENDWH
+END
+NOOP_LOOP(4)";
+        interp
+            .exec_source(src)
+            .expect("correct nesting must succeed");
+    }
 }

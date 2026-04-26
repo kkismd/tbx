@@ -643,6 +643,18 @@ pub fn end_prim(vm: &mut VM) -> Result<(), TbxError> {
         return Err(TbxError::CompileStackNotEmpty { count });
     }
 
+    // Defensive check: control_stack must also be empty at END.
+    // Under normal operation this invariant is guaranteed because each CTRL_OPEN_*
+    // call is paired with a matching CTRL_CLOSE_* call, and CTRL_CLOSE_* also
+    // empties compile_stack items (so CompileStackNotEmpty fires first).
+    // The explicit check here guards against future code paths where CTRL_OPEN_*
+    // is called without a corresponding CS_PUSH.
+    if !vm.control_stack.is_empty() {
+        let count = vm.control_stack.len();
+        vm.rollback_def();
+        return Err(TbxError::CompileStackNotEmpty { count });
+    }
+
     // Write EXIT to terminate the word body.
     let exit_xt =
         vm.find_by_kind(|k| matches!(k, EntryKind::Exit))
