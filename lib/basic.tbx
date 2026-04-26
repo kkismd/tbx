@@ -33,6 +33,7 @@ DEF WHILE
   COMPILE_EXPR
   APPEND JUMP_FALSE
   CS_PUSH HERE
+  REM Placeholder written as Int(0); PATCH_ADDR (in ENDWH) will overwrite it with a DictAddr.
   APPEND 0
 END
 IMMEDIATE WHILE

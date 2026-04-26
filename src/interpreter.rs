@@ -621,10 +621,11 @@ impl Interpreter {
                         Some(e) => Err(e),
                         None => {
                             let result = self.vm.run(body_addr);
-                            // On success, clean up the local slots that were pushed above.
-                            // On error, the rollback block below handles truncation.
+                            // On success, clean up the local slots and restore bp.
+                            // On error, the rollback block below handles truncation and bp.
                             if result.is_ok() {
                                 self.vm.data_stack.truncate(saved_data_stack_len);
+                                self.vm.bp = saved_bp;
                             }
                             result
                         }
@@ -1990,6 +1991,54 @@ IPARAM 42";
         assert!(
             result.is_err(),
             "expected error when IMMEDIATE word has formal parameters"
+        );
+    }
+
+    #[test]
+    fn test_endwh_without_while_returns_error_and_rolls_back() {
+        // ENDWH without a preceding WHILE causes CS_POP stack underflow.
+        // After the error the interpreter must be reusable.
+        // lib/basic.tbx (which defines WHILE/ENDWH) is loaded by Interpreter::new().
+        let mut interp = Interpreter::new();
+
+        let bad = "DEF BAD\nENDWH\nEND";
+        assert!(
+            interp.exec_source(bad).is_err(),
+            "expected error when ENDWH has no matching WHILE"
+        );
+
+        // The interpreter should recover and execute normal code.
+        interp
+            .exec_source("PUTDEC 1")
+            .expect("interpreter should be reusable after ENDWH-without-WHILE error");
+        assert_eq!(
+            interp.take_output(),
+            "1",
+            "expected '1' after rollback from ENDWH-without-WHILE"
+        );
+    }
+
+    #[test]
+    fn test_while_without_endwh_returns_error_and_rolls_back() {
+        // WHILE without ENDWH leaves an unpatched placeholder on the compile stack.
+        // END should return an error because the compile stack is not empty.
+        // lib/basic.tbx (which defines WHILE/ENDWH) is loaded by Interpreter::new().
+        let mut interp = Interpreter::new();
+
+        let bad = "DEF BAD\nWHILE 1 = 1\nPUTDEC 1\nEND";
+        assert!(
+            interp.exec_source(bad).is_err(),
+            "expected error when WHILE has no matching ENDWH"
+        );
+
+        // The interpreter should recover and execute normal code.
+        interp
+            .exec_source("PUTDEC 1")
+            .expect("interpreter should be reusable after WHILE-without-ENDWH error");
+        assert_eq!(
+            interp.take_output(),
+            "1",
+            "expected '1' after rollback from WHILE-without-ENDWH"
         );
     }
 
