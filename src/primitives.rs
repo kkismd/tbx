@@ -1055,6 +1055,90 @@ fn cs_pop_prim(vm: &mut VM) -> Result<(), TbxError> {
     Ok(())
 }
 
+/// CS_SWAP — swap the top two values on the compile stack: ( a b -- b a ).
+///
+/// Must be called in compile mode (inside an IMMEDIATE word invocation).
+fn cs_swap_prim(vm: &mut VM) -> Result<(), TbxError> {
+    if !vm.is_compiling {
+        return Err(TbxError::InvalidExpression {
+            reason: "CS_SWAP outside compile mode",
+        });
+    }
+    let len = vm.compile_stack.len();
+    if len < 2 {
+        return Err(TbxError::StackUnderflow);
+    }
+    vm.compile_stack.swap(len - 1, len - 2);
+    Ok(())
+}
+
+/// CS_DROP — discard the top value on the compile stack: ( a -- ).
+///
+/// Must be called in compile mode (inside an IMMEDIATE word invocation).
+fn cs_drop_prim(vm: &mut VM) -> Result<(), TbxError> {
+    if !vm.is_compiling {
+        return Err(TbxError::InvalidExpression {
+            reason: "CS_DROP outside compile mode",
+        });
+    }
+    vm.compile_stack.pop().ok_or(TbxError::StackUnderflow)?;
+    Ok(())
+}
+
+/// CS_DUP — duplicate the top value on the compile stack: ( a -- a a ).
+///
+/// Must be called in compile mode (inside an IMMEDIATE word invocation).
+fn cs_dup_prim(vm: &mut VM) -> Result<(), TbxError> {
+    if !vm.is_compiling {
+        return Err(TbxError::InvalidExpression {
+            reason: "CS_DUP outside compile mode",
+        });
+    }
+    let top = vm
+        .compile_stack
+        .last()
+        .ok_or(TbxError::StackUnderflow)?
+        .clone();
+    vm.compile_stack.push(top);
+    Ok(())
+}
+
+/// CS_OVER — copy the second value on the compile stack to the top: ( a b -- a b a ).
+///
+/// Must be called in compile mode (inside an IMMEDIATE word invocation).
+fn cs_over_prim(vm: &mut VM) -> Result<(), TbxError> {
+    if !vm.is_compiling {
+        return Err(TbxError::InvalidExpression {
+            reason: "CS_OVER outside compile mode",
+        });
+    }
+    let len = vm.compile_stack.len();
+    if len < 2 {
+        return Err(TbxError::StackUnderflow);
+    }
+    let second = vm.compile_stack[len - 2].clone();
+    vm.compile_stack.push(second);
+    Ok(())
+}
+
+/// CS_ROT — rotate the top three values on the compile stack: ( a b c -- b c a ).
+///
+/// Must be called in compile mode (inside an IMMEDIATE word invocation).
+fn cs_rot_prim(vm: &mut VM) -> Result<(), TbxError> {
+    if !vm.is_compiling {
+        return Err(TbxError::InvalidExpression {
+            reason: "CS_ROT outside compile mode",
+        });
+    }
+    let len = vm.compile_stack.len();
+    if len < 3 {
+        return Err(TbxError::StackUnderflow);
+    }
+    let a = vm.compile_stack.remove(len - 3);
+    vm.compile_stack.push(a);
+    Ok(())
+}
+
 /// PATCH_ADDR — pop a DictAddr from the data stack, then write Cell::Int(dp) at that address.
 ///
 /// Used by ENDIF (and future ELSE, ENDWHILE) to back-patch a previously emitted
@@ -1348,9 +1432,14 @@ pub fn register_all(vm: &mut VM) {
 
     // Compile-stack primitives for IMMEDIATE word authoring.
     // No FLAG_IMMEDIATE or FLAG_SYSTEM: these are compiled into DEF bodies as statements
-    // and called at runtime by IMMEDIATE words (e.g. IF/ENDIF).
+    // and called at runtime by IMMEDIATE words (e.g. IF/ENDIF, WHILE/ENDWH).
     vm.register(WordEntry::new_primitive("CS_PUSH", cs_push_prim));
     vm.register(WordEntry::new_primitive("CS_POP", cs_pop_prim));
+    vm.register(WordEntry::new_primitive("CS_SWAP", cs_swap_prim));
+    vm.register(WordEntry::new_primitive("CS_DROP", cs_drop_prim));
+    vm.register(WordEntry::new_primitive("CS_DUP", cs_dup_prim));
+    vm.register(WordEntry::new_primitive("CS_OVER", cs_over_prim));
+    vm.register(WordEntry::new_primitive("CS_ROT", cs_rot_prim));
     vm.register(WordEntry::new_primitive("PATCH_ADDR", patch_addr_prim));
     vm.register(WordEntry::new_primitive("COMPILE_EXPR", compile_expr_prim));
 
@@ -3847,6 +3936,170 @@ mod tests {
         cs_pop_prim(&mut vm).unwrap();
         assert!(vm.compile_stack.is_empty());
         assert_eq!(vm.pop(), Ok(Cell::Int(99)));
+    }
+
+    // --- cs_swap_prim ---
+
+    #[test]
+    fn test_cs_swap_outside_compile_mode_error() {
+        let mut vm = VM::new();
+        assert_eq!(
+            cs_swap_prim(&mut vm),
+            Err(TbxError::InvalidExpression {
+                reason: "CS_SWAP outside compile mode"
+            })
+        );
+    }
+
+    #[test]
+    fn test_cs_swap_underflow_one_element() {
+        let mut vm = make_compiling_vm("TESTWORD");
+        vm.compile_stack.push(Cell::Int(1));
+        assert_eq!(cs_swap_prim(&mut vm), Err(TbxError::StackUnderflow));
+    }
+
+    #[test]
+    fn test_cs_swap_underflow_empty() {
+        let mut vm = make_compiling_vm("TESTWORD");
+        assert_eq!(cs_swap_prim(&mut vm), Err(TbxError::StackUnderflow));
+    }
+
+    #[test]
+    fn test_cs_swap_swaps_top_two() {
+        let mut vm = make_compiling_vm("TESTWORD");
+        vm.compile_stack.push(Cell::Int(10));
+        vm.compile_stack.push(Cell::Int(20));
+        cs_swap_prim(&mut vm).unwrap();
+        assert_eq!(vm.compile_stack.pop(), Some(Cell::Int(10)));
+        assert_eq!(vm.compile_stack.pop(), Some(Cell::Int(20)));
+        assert!(vm.compile_stack.is_empty());
+    }
+
+    // --- cs_drop_prim ---
+
+    #[test]
+    fn test_cs_drop_outside_compile_mode_error() {
+        let mut vm = VM::new();
+        assert_eq!(
+            cs_drop_prim(&mut vm),
+            Err(TbxError::InvalidExpression {
+                reason: "CS_DROP outside compile mode"
+            })
+        );
+    }
+
+    #[test]
+    fn test_cs_drop_underflow() {
+        let mut vm = make_compiling_vm("TESTWORD");
+        assert_eq!(cs_drop_prim(&mut vm), Err(TbxError::StackUnderflow));
+    }
+
+    #[test]
+    fn test_cs_drop_removes_top() {
+        let mut vm = make_compiling_vm("TESTWORD");
+        vm.compile_stack.push(Cell::Int(1));
+        vm.compile_stack.push(Cell::Int(2));
+        cs_drop_prim(&mut vm).unwrap();
+        assert_eq!(vm.compile_stack.len(), 1);
+        assert_eq!(vm.compile_stack[0], Cell::Int(1));
+    }
+
+    // --- cs_dup_prim ---
+
+    #[test]
+    fn test_cs_dup_outside_compile_mode_error() {
+        let mut vm = VM::new();
+        assert_eq!(
+            cs_dup_prim(&mut vm),
+            Err(TbxError::InvalidExpression {
+                reason: "CS_DUP outside compile mode"
+            })
+        );
+    }
+
+    #[test]
+    fn test_cs_dup_underflow() {
+        let mut vm = make_compiling_vm("TESTWORD");
+        assert_eq!(cs_dup_prim(&mut vm), Err(TbxError::StackUnderflow));
+    }
+
+    #[test]
+    fn test_cs_dup_duplicates_top() {
+        let mut vm = make_compiling_vm("TESTWORD");
+        vm.compile_stack.push(Cell::Int(42));
+        cs_dup_prim(&mut vm).unwrap();
+        assert_eq!(vm.compile_stack.len(), 2);
+        assert_eq!(vm.compile_stack[0], Cell::Int(42));
+        assert_eq!(vm.compile_stack[1], Cell::Int(42));
+    }
+
+    // --- cs_over_prim ---
+
+    #[test]
+    fn test_cs_over_outside_compile_mode_error() {
+        let mut vm = VM::new();
+        assert_eq!(
+            cs_over_prim(&mut vm),
+            Err(TbxError::InvalidExpression {
+                reason: "CS_OVER outside compile mode"
+            })
+        );
+    }
+
+    #[test]
+    fn test_cs_over_underflow_one_element() {
+        let mut vm = make_compiling_vm("TESTWORD");
+        vm.compile_stack.push(Cell::Int(1));
+        assert_eq!(cs_over_prim(&mut vm), Err(TbxError::StackUnderflow));
+    }
+
+    #[test]
+    fn test_cs_over_copies_second_to_top() {
+        let mut vm = make_compiling_vm("TESTWORD");
+        vm.compile_stack.push(Cell::Int(10)); // bottom
+        vm.compile_stack.push(Cell::Int(20)); // top
+        cs_over_prim(&mut vm).unwrap();
+        // Stack should be [10, 20, 10] with 10 on top
+        assert_eq!(vm.compile_stack.len(), 3);
+        assert_eq!(vm.compile_stack[2], Cell::Int(10));
+        assert_eq!(vm.compile_stack[1], Cell::Int(20));
+        assert_eq!(vm.compile_stack[0], Cell::Int(10));
+    }
+
+    // --- cs_rot_prim ---
+
+    #[test]
+    fn test_cs_rot_outside_compile_mode_error() {
+        let mut vm = VM::new();
+        assert_eq!(
+            cs_rot_prim(&mut vm),
+            Err(TbxError::InvalidExpression {
+                reason: "CS_ROT outside compile mode"
+            })
+        );
+    }
+
+    #[test]
+    fn test_cs_rot_underflow_two_elements() {
+        let mut vm = make_compiling_vm("TESTWORD");
+        vm.compile_stack.push(Cell::Int(1));
+        vm.compile_stack.push(Cell::Int(2));
+        assert_eq!(cs_rot_prim(&mut vm), Err(TbxError::StackUnderflow));
+    }
+
+    #[test]
+    fn test_cs_rot_rotates_top_three() {
+        // ( a b c -- b c a )  where a=1 (bottom), b=2, c=3 (top)
+        let mut vm = make_compiling_vm("TESTWORD");
+        vm.compile_stack.push(Cell::Int(1)); // a
+        vm.compile_stack.push(Cell::Int(2)); // b
+        vm.compile_stack.push(Cell::Int(3)); // c
+        cs_rot_prim(&mut vm).unwrap();
+        // Result: [b=2, c=3, a=1] with a=1 on top
+        assert_eq!(vm.compile_stack.len(), 3);
+        assert_eq!(vm.compile_stack[0], Cell::Int(2));
+        assert_eq!(vm.compile_stack[1], Cell::Int(3));
+        assert_eq!(vm.compile_stack[2], Cell::Int(1));
     }
 
     // --- compile_expr_prim ---

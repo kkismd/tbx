@@ -18,3 +18,28 @@ DEF ENDIF
   PATCH_ADDR CS_POP
 END
 IMMEDIATE ENDIF
+
+REM WHILE expr ... ENDWH
+REM
+REM  WHILE compiles the condition expression, saves the loop-start address on the
+REM  compile stack, emits JUMP_FALSE, saves the placeholder address, and emits a
+REM  0 placeholder. ENDWH uses CS_SWAP to reorder the two saved addresses,
+REM  emits JUMP_ALWAYS back to the loop start (as DictAddr), then patches the
+REM  JUMP_FALSE placeholder with the current HERE value (= ENDWH+1).
+
+DEF WHILE
+  CS_PUSH HERE
+  COMPILE_EXPR
+  APPEND JUMP_FALSE
+  CS_PUSH HERE
+  APPEND 0
+END
+IMMEDIATE WHILE
+
+DEF ENDWH
+  CS_SWAP
+  APPEND JUMP_ALWAYS
+  APPEND CS_POP
+  PATCH_ADDR CS_POP
+END
+IMMEDIATE ENDWH

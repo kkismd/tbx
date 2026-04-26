@@ -3315,4 +3315,130 @@ NESTED -1";
             err.line
         );
     }
+
+    // --- WHILE / ENDWH ---
+
+    #[test]
+    fn test_while_endwh_basic_countdown() {
+        // Simple countdown using a VAR local: prints 3, 2, 1, then exits.
+        let mut interp = Interpreter::new();
+        let src = "\
+DEF COUNTDOWN(N)
+  VAR I
+  SET &I, N
+  WHILE I > 0
+    PUTDEC I
+    SET &I, I - 1
+  ENDWH
+END
+COUNTDOWN 3";
+        interp.exec_source(src).unwrap();
+        let out = interp.take_output();
+        assert_eq!(out, "321", "expected '321', got: {:?}", out);
+    }
+
+    #[test]
+    fn test_while_endwh_condition_false_from_start_skips_body() {
+        // If the condition is false on the first evaluation, the body must not execute.
+        let mut interp = Interpreter::new();
+        let src = "\
+DEF SKIP(N)
+  VAR I
+  SET &I, N
+  WHILE I > 0
+    PUTDEC I
+    SET &I, I - 1
+  ENDWH
+END
+SKIP -1";
+        interp.exec_source(src).unwrap();
+        let out = interp.take_output();
+        assert_eq!(out, "", "body must not run when initial condition is false");
+    }
+
+    #[test]
+    fn test_while_endwh_accumulate() {
+        // Accumulate sum 1+2+3+4+5 = 15.
+        let mut interp = Interpreter::new();
+        let src = "\
+DEF SUMTO(N)
+  VAR S
+  VAR I
+  SET &S, 0
+  SET &I, 1
+  WHILE I <= N
+    SET &S, S + I
+    SET &I, I + 1
+  ENDWH
+  PUTDEC S
+END
+SUMTO 5";
+        interp.exec_source(src).unwrap();
+        let out = interp.take_output();
+        assert_eq!(out, "15", "expected sum 15, got: {:?}", out);
+    }
+
+    #[test]
+    fn test_while_endwh_nested() {
+        // Nested WHILE loops: outer counts i=1..2, inner counts j=1..2.
+        // Prints "11 12 21 22 " (with trailing space).
+        let mut interp = Interpreter::new();
+        let src = "\
+DEF NESTED()
+  VAR I
+  VAR J
+  SET &I, 1
+  WHILE I <= 2
+    SET &J, 1
+    WHILE J <= 2
+      PUTDEC I
+      PUTDEC J
+      PUTSTR \" \"
+      SET &J, J + 1
+    ENDWH
+    SET &I, I + 1
+  ENDWH
+END
+NESTED";
+        interp.exec_source(src).unwrap();
+        let out = interp.take_output();
+        assert_eq!(out, "11 12 21 22 ", "nested WHILE mismatch: {:?}", out);
+    }
+
+    #[test]
+    fn test_while_outside_def_is_error() {
+        // WHILE used outside a DEF body must yield an error.
+        let mut interp = Interpreter::new();
+        let result = interp.exec_source("WHILE 1 > 0");
+        assert!(result.is_err(), "WHILE outside DEF must be an error");
+    }
+
+    #[test]
+    fn test_endwh_without_while_is_error() {
+        // ENDWH without a matching WHILE must yield a StackUnderflow (CS_SWAP on empty stack).
+        let mut interp = Interpreter::new();
+        let src = "DEF BAD()\n  ENDWH\nEND";
+        let result = interp.exec_source(src);
+        assert!(result.is_err(), "ENDWH without WHILE must be an error");
+    }
+
+    // --- CS_SWAP / CS_DROP / CS_DUP / CS_OVER / CS_ROT (integration via IMMEDIATE words) ---
+
+    #[test]
+    fn test_cs_swap_reorders_compile_stack() {
+        // CS_SWAP is exercised indirectly through ENDWH; verify via a working WHILE loop.
+        let mut interp = Interpreter::new();
+        let src = "\
+DEF COUNT(N)
+  VAR I
+  SET &I, N
+  WHILE I > 0
+    PUTDEC I
+    SET &I, I - 1
+  ENDWH
+END
+COUNT 2";
+        interp.exec_source(src).unwrap();
+        assert_eq!(interp.take_output(), "21");
+    }
 }

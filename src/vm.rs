@@ -376,23 +376,24 @@ impl VM {
 
     /// Read the cell at `offset` as a jump target address.
     ///
-    /// Expects `Cell::Int`; returns the address as `usize`.
+    /// Expects `Cell::Int` or `Cell::DictAddr`; returns the address as `usize`.
     ///
     /// # Errors
     ///
     /// - `Err(TbxError::IndexOutOfBounds)` if `offset` is beyond the dictionary end.
-    /// - `Err(TbxError::TypeError)` if the cell at `offset` is not a `Cell::Int`.
-    /// - `Err(TbxError::InvalidJumpTarget)` if the address is negative.
+    /// - `Err(TbxError::TypeError)` if the cell at `offset` is neither `Cell::Int` nor `Cell::DictAddr`.
+    /// - `Err(TbxError::InvalidJumpTarget)` if the address is a negative `Cell::Int`.
     fn read_jump_target(&self, offset: usize) -> Result<usize, TbxError> {
         let cell = self.dict_read(offset)?;
-        let raw = cell.as_int().ok_or_else(|| TbxError::TypeError {
-            expected: "Int (jump target)",
-            got: cell.type_name(),
-        })?;
-        if raw < 0 {
-            return Err(TbxError::InvalidJumpTarget { address: raw });
+        match cell {
+            Cell::Int(n) if n >= 0 => Ok(n as usize),
+            Cell::DictAddr(a) => Ok(a),
+            Cell::Int(n) => Err(TbxError::InvalidJumpTarget { address: n }),
+            _ => Err(TbxError::TypeError {
+                expected: "Int or DictAddr (jump target)",
+                got: cell.type_name(),
+            }),
         }
-        Ok(raw as usize)
     }
 
     /// Write a cell to an arbitrary dictionary index, with bounds checking.
@@ -2234,7 +2235,7 @@ mod tests {
         assert_eq!(
             result,
             Err(crate::error::TbxError::TypeError {
-                expected: "Int (jump target)",
+                expected: "Int or DictAddr (jump target)",
                 got: "Xt",
             })
         );
