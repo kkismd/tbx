@@ -1142,8 +1142,8 @@ fn cs_rot_prim(vm: &mut VM) -> Result<(), TbxError> {
 
 /// PATCH_ADDR — pop a DictAddr from the data stack, then write Cell::Int(dp) at that address.
 ///
-/// Used by ENDIF (and future ELSE, ENDWHILE) to back-patch a previously emitted
-/// jump-target placeholder.  The address on the stack is typically saved by IF via
+/// Used by ENDIF, ENDWH, and future ELSE to back-patch a previously emitted
+/// jump-target placeholder.  The address on the stack is typically saved by IF/WHILE via
 /// CS_PUSH/CS_POP.
 ///
 /// Must be called in compile mode (inside an IMMEDIATE word invocation).
@@ -3976,6 +3976,18 @@ mod tests {
         assert!(vm.compile_stack.is_empty());
     }
 
+    #[test]
+    fn test_cs_swap_swaps_dict_addr_values() {
+        // CS_SWAP must work with Cell::DictAddr values, as used in WHILE/ENDWH.
+        let mut vm = make_compiling_vm("TESTWORD");
+        vm.compile_stack.push(Cell::DictAddr(10));
+        vm.compile_stack.push(Cell::DictAddr(20));
+        cs_swap_prim(&mut vm).unwrap();
+        assert_eq!(vm.compile_stack.pop(), Some(Cell::DictAddr(10)));
+        assert_eq!(vm.compile_stack.pop(), Some(Cell::DictAddr(20)));
+        assert!(vm.compile_stack.is_empty());
+    }
+
     // --- cs_drop_prim ---
 
     #[test]
@@ -4034,6 +4046,17 @@ mod tests {
         assert_eq!(vm.compile_stack[1], Cell::Int(42));
     }
 
+    #[test]
+    fn test_cs_dup_duplicates_dict_addr() {
+        // CS_DUP must work with Cell::DictAddr values.
+        let mut vm = make_compiling_vm("TESTWORD");
+        vm.compile_stack.push(Cell::DictAddr(42));
+        cs_dup_prim(&mut vm).unwrap();
+        assert_eq!(vm.compile_stack.len(), 2);
+        assert_eq!(vm.compile_stack[0], Cell::DictAddr(42));
+        assert_eq!(vm.compile_stack[1], Cell::DictAddr(42));
+    }
+
     // --- cs_over_prim ---
 
     #[test]
@@ -4045,6 +4068,12 @@ mod tests {
                 reason: "CS_OVER outside compile mode"
             })
         );
+    }
+
+    #[test]
+    fn test_cs_over_underflow_empty() {
+        let mut vm = make_compiling_vm("TESTWORD");
+        assert_eq!(cs_over_prim(&mut vm), Err(TbxError::StackUnderflow));
     }
 
     #[test]
@@ -4067,6 +4096,19 @@ mod tests {
         assert_eq!(vm.compile_stack[0], Cell::Int(10));
     }
 
+    #[test]
+    fn test_cs_over_copies_dict_addr() {
+        // CS_OVER must work with Cell::DictAddr values.
+        let mut vm = make_compiling_vm("TESTWORD");
+        vm.compile_stack.push(Cell::DictAddr(10));
+        vm.compile_stack.push(Cell::DictAddr(20));
+        cs_over_prim(&mut vm).unwrap();
+        assert_eq!(vm.compile_stack.len(), 3);
+        assert_eq!(vm.compile_stack[2], Cell::DictAddr(10));
+        assert_eq!(vm.compile_stack[1], Cell::DictAddr(20));
+        assert_eq!(vm.compile_stack[0], Cell::DictAddr(10));
+    }
+
     // --- cs_rot_prim ---
 
     #[test]
@@ -4078,6 +4120,19 @@ mod tests {
                 reason: "CS_ROT outside compile mode"
             })
         );
+    }
+
+    #[test]
+    fn test_cs_rot_underflow_empty() {
+        let mut vm = make_compiling_vm("TESTWORD");
+        assert_eq!(cs_rot_prim(&mut vm), Err(TbxError::StackUnderflow));
+    }
+
+    #[test]
+    fn test_cs_rot_underflow_one_element() {
+        let mut vm = make_compiling_vm("TESTWORD");
+        vm.compile_stack.push(Cell::Int(1));
+        assert_eq!(cs_rot_prim(&mut vm), Err(TbxError::StackUnderflow));
     }
 
     #[test]
@@ -4101,6 +4156,21 @@ mod tests {
         assert_eq!(vm.compile_stack[0], Cell::Int(2));
         assert_eq!(vm.compile_stack[1], Cell::Int(3));
         assert_eq!(vm.compile_stack[2], Cell::Int(1));
+    }
+
+    #[test]
+    fn test_cs_rot_rotates_dict_addr_values() {
+        // CS_ROT must work with Cell::DictAddr values (as used in WHILE/ENDWH).
+        // ( a b c -- b c a ) with DictAddr values
+        let mut vm = make_compiling_vm("TESTWORD");
+        vm.compile_stack.push(Cell::DictAddr(1)); // a
+        vm.compile_stack.push(Cell::DictAddr(2)); // b
+        vm.compile_stack.push(Cell::DictAddr(3)); // c
+        cs_rot_prim(&mut vm).unwrap();
+        assert_eq!(vm.compile_stack.len(), 3);
+        assert_eq!(vm.compile_stack[0], Cell::DictAddr(2));
+        assert_eq!(vm.compile_stack[1], Cell::DictAddr(3));
+        assert_eq!(vm.compile_stack[2], Cell::DictAddr(1));
     }
 
     // --- compile_expr_prim ---
