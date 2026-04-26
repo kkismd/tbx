@@ -1134,8 +1134,9 @@ fn cs_rot_prim(vm: &mut VM) -> Result<(), TbxError> {
     if len < 3 {
         return Err(TbxError::StackUnderflow);
     }
-    let a = vm.compile_stack.remove(len - 3);
-    vm.compile_stack.push(a);
+    // ( a b c -- b c a ): swap positions to achieve rotation in O(1).
+    vm.compile_stack.swap(len - 3, len - 2); // [a,b,c] → [b,a,c]
+    vm.compile_stack.swap(len - 2, len - 1); // [b,a,c] → [b,c,a]
     Ok(())
 }
 

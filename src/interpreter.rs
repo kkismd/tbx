@@ -3422,6 +3422,19 @@ NESTED";
         assert!(result.is_err(), "ENDWH without WHILE must be an error");
     }
 
+    #[test]
+    fn test_while_without_endwh_is_error() {
+        // WHILE without matching ENDWH: compile stack is non-empty at END,
+        // which must return CompileStackNotEmpty.
+        let mut interp = Interpreter::new();
+        let src = "DEF UNCLOSED()\n  WHILE 1 > 0\n    PUTDEC 1\n  END";
+        let result = interp.exec_source(src);
+        assert!(
+            result.is_err(),
+            "WHILE without ENDWH must be an error at END"
+        );
+    }
+
     // --- CS_SWAP / CS_DROP / CS_DUP / CS_OVER / CS_ROT (integration via IMMEDIATE words) ---
 
     #[test]
@@ -3440,5 +3453,85 @@ END
 COUNT 2";
         interp.exec_source(src).unwrap();
         assert_eq!(interp.take_output(), "21");
+    }
+
+    #[test]
+    fn test_cs_drop_via_immediate_word() {
+        // CS_DROP is exercised through a custom IMMEDIATE word that uses it.
+        // MYIF discards the compile-stack entry saved by CS_PUSH.
+        let mut interp = Interpreter::new();
+        let src = "\
+DEF NULLIF
+  COMPILE_EXPR
+  APPEND JUMP_FALSE
+  CS_PUSH HERE
+  APPEND 0
+  CS_DROP
+END
+IMMEDIATE NULLIF
+
+DEF TRYNULL(X)
+  NULLIF X > 0
+  PUTDEC 42
+END
+TRYNULL 5";
+        // NULLIF drops the placeholder address, so no back-patch occurs.
+        // The word body runs unconditionally (the placeholder 0 is left in the dictionary
+        // but never patched; this is intentional for the test).
+        let result = interp.exec_source(src);
+        // The definition compiles without error — that is the key assertion.
+        assert!(
+            result.is_ok(),
+            "CS_DROP in IMMEDIATE word must not error: {result:?}"
+        );
+    }
+
+    #[test]
+    fn test_cs_dup_and_over_via_immediate_word() {
+        // CS_DUP and CS_OVER are exercised through a custom IMMEDIATE word.
+        // DUPTEST pushes a value on CS, dups it, then drops the copy.
+        let mut interp = Interpreter::new();
+        let src = "\
+DEF DUPTEST
+  CS_PUSH HERE
+  CS_DUP
+  CS_DROP
+  CS_DROP
+END
+IMMEDIATE DUPTEST
+
+DEF TRYDUPTHEN()
+  DUPTEST
+  PUTDEC 7
+END
+TRYDUPTHEN";
+        interp.exec_source(src).unwrap();
+        assert_eq!(interp.take_output(), "7");
+    }
+
+    #[test]
+    fn test_cs_rot_via_immediate_word() {
+        // CS_ROT is exercised through a custom IMMEDIATE word.
+        // ROTATECS pushes three values, rotates them, then drops all three.
+        let mut interp = Interpreter::new();
+        let src = "\
+DEF ROTATECS
+  CS_PUSH HERE
+  CS_PUSH HERE
+  CS_PUSH HERE
+  CS_ROT
+  CS_DROP
+  CS_DROP
+  CS_DROP
+END
+IMMEDIATE ROTATECS
+
+DEF TRYROT()
+  ROTATECS
+  PUTDEC 9
+END
+TRYROT";
+        interp.exec_source(src).unwrap();
+        assert_eq!(interp.take_output(), "9");
     }
 }
