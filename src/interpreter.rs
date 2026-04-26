@@ -565,7 +565,14 @@ impl Interpreter {
     /// Execute an IMMEDIATE word, regardless of compile/interpret mode.
     ///
     /// Sets up `vm.token_stream` with the remaining tokens, dispatches the word
-    /// (Primitive or zero-arity Word), then clears the stream.
+    /// (Primitive or zero-arity Word, including those with VAR locals), then
+    /// clears the stream.
+    ///
+    /// **Limitation**: `RETURN expr` (value-returning return) is not supported
+    /// inside IMMEDIATE words because `vm.run()` uses a `TopLevel` sentinel
+    /// instead of a full CALL frame.  Using `RETURN expr` will produce a
+    /// `TbxError::InvalidReturn` (which is rolled back cleanly).
+    /// Void `RETURN` (EXIT) works correctly.
     ///
     /// On error, rolls back compile state and stack state before returning.
     fn exec_immediate_word(
@@ -2089,6 +2096,69 @@ IMMEDIATE IFULL",
         assert!(
             interp.vm.token_stream.is_none(),
             "token_stream must be cleared after push overflow"
+        );
+    }
+
+    #[test]
+    fn test_immediate_word_var_early_void_return() {
+        // A void RETURN (EXIT) inside an IMMEDIATE word with VAR locals must
+        // exit early and leave the stack clean.
+        let mut interp = Interpreter::new();
+        let src = "\
+DEF IEARLY
+VAR X
+SET &X, 99
+RETURN
+PUTDEC X
+END
+IMMEDIATE IEARLY
+IEARLY";
+        interp
+            .exec_source(src)
+            .expect("early void RETURN in IMMEDIATE word must succeed");
+        // PUTDEC after RETURN must not execute.
+        assert_eq!(interp.take_output(), "", "PUTDEC after RETURN must not run");
+        assert_eq!(
+            interp.vm.data_stack.len(),
+            0,
+            "data stack must be clean after early RETURN"
+        );
+    }
+
+    #[test]
+    fn test_immediate_word_var_return_expr_errors() {
+        // RETURN expr (value-returning) inside an IMMEDIATE word must return
+        // TbxError::InvalidReturn because vm.run() uses a TopLevel sentinel
+        // instead of a proper CALL frame.  VM state must be rolled back cleanly.
+        let mut interp = Interpreter::new();
+        let setup = "\
+DEF IRETVAL
+VAR X
+SET &X, 5
+RETURN X
+END
+IMMEDIATE IRETVAL";
+        interp
+            .exec_source(setup)
+            .expect("definition phase must succeed");
+
+        let before_len = interp.vm.data_stack.len();
+        let before_bp = interp.vm.bp;
+
+        let result = interp.exec_source("IRETVAL");
+        assert!(result.is_err(), "RETURN expr in IMMEDIATE word must error");
+        assert_eq!(
+            interp.vm.data_stack.len(),
+            before_len,
+            "data_stack must be restored after InvalidReturn"
+        );
+        assert_eq!(
+            interp.vm.bp, before_bp,
+            "bp must be restored after InvalidReturn"
+        );
+        assert!(
+            interp.vm.token_stream.is_none(),
+            "token_stream must be cleared after InvalidReturn"
         );
     }
 
