@@ -42,3 +42,22 @@ DEF NESTED_COUNT
   RETURN C
 END
 ASSERT NESTED_COUNT() = 6
+
+REM --- RETURN from inside WHILE body (early exit) ---
+REM Returns the first I in 1..N such that I*I > N, or 0 if N < 1.
+
+DEF FIND_EXCEEDER(N)
+  VAR I
+  SET &I, 1
+  WHILE I <= N
+    IF I * I > N
+      RETURN I
+    ENDIF
+    SET &I, I + 1
+  ENDWH
+  RETURN 0
+END
+ASSERT FIND_EXCEEDER(0) = 0
+ASSERT FIND_EXCEEDER(3) = 2
+ASSERT FIND_EXCEEDER(4) = 3
+ASSERT FIND_EXCEEDER(9) = 4

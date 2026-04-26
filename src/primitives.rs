@@ -4298,7 +4298,7 @@ mod tests {
     }
 
     #[test]
-    fn test_patch_addr_prim_writes_int_dp_at_addr() {
+    fn test_patch_addr_prim_writes_dict_addr_at_addr() {
         // PATCH_ADDR must pop DictAddr(a) and write Cell::DictAddr(dp) at dict[a].
         let mut vm = make_compiling_vm("TESTWORD");
         // Write a placeholder at a known position.
