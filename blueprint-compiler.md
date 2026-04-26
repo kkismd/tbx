@@ -124,36 +124,48 @@ PATCH_ADDR CS_POP   -- back-patch the placeholder with current DP
 ## IF...ENDIF の実装記録
 
 IF と ENDIF は `lib/basic.tbx` に TBX コードとして実装されたコンパイルワードである。
+ELSIF/ELSE のカウント方式導入（issue #356）に伴い、IF は初期カウント `CS_PUSH 0` を追加し、
+ENDIF は WHILE ループで複数の JUMP_ALWAYS プレースホルダーをパッチするよう拡張された。
 
 ```
-REM IF expr ... ENDIF
 DEF IF
   COMPILE_EXPR
   APPEND JUMP_FALSE
-  CS_PUSH HERE
+  CS_PUSH 0        REM initial count: number of ELSIF calls so far
+  CS_PUSH HERE     REM BIF jump-target placeholder address (A)
   APPEND 0
 END
 IMMEDIATE IF
 
 DEF ENDIF
-  PATCH_ADDR CS_POP
+  PATCH_ADDR CS_POP     REM patch last BIF/JUMP_ALWAYS placeholder (C)
+  VAR N
+  SET &N, CS_POP        REM retrieve ELSIF call count
+  VAR I
+  SET &I, 0
+  WHILE I < N
+    PATCH_ADDR CS_POP   REM patch each accumulated JUMP_ALWAYS placeholder (Bi)
+    SET &I, I + 1
+  ENDWH
 END
 IMMEDIATE ENDIF
 ```
 
 **IF の動作**（コンパイル時）:
 1. `COMPILE_EXPR` — 条件式をコンパイルし命令列に書き込む
-2. `APPEND JUMP_FALSE` — BIF 命令のXtを書き込む
-3. `CS_PUSH HERE` — 次に書き込む位置（ジャンプ先プレースホルダーのアドレス）をコンパイルスタックに積む
-4. `APPEND 0` — ジャンプ先プレースホルダーとして 0 を書き込む
+2. `APPEND JUMP_FALSE` — BIF 命令の Xt を書き込む
+3. `CS_PUSH 0` — ELSIF 呼び出し回数の初期カウント（0）をコンパイルスタックに積む
+4. `CS_PUSH HERE` — ジャンプ先プレースホルダーのアドレスをコンパイルスタックに積む
+5. `APPEND 0` — ジャンプ先プレースホルダーとして 0 を書き込む
+
+コンパイルスタック: `[0, A]`（0 が底、A がトップ）
 
 **ENDIF の動作**（コンパイル時）:
-1. `CS_POP` — IF が積んだプレースホルダーのアドレスを取り出す（`PATCH_ADDR CS_POP` の引数として式評価される）
-2. `PATCH_ADDR` — そのアドレスに現在の DP（ENDIF 直後の位置）を書き込む
+1. `PATCH_ADDR CS_POP` — トップのプレースホルダー（C または ELSE の B）を現在の DP でパッチする
+2. `SET &N, CS_POP` — ELSIF カウント N を取り出す
+3. WHILE ループで N 回、蓄積された JUMP_ALWAYS プレースホルダー（B1…BN）を現在の DP でパッチする
 
-> `PATCH_ADDR CS_POP` は1ステートメントであり、`CS_POP`（式）が先に評価されてアドレスをデータスタックに積み、次に `PATCH_ADDR`（ステートメント）がそのアドレスをポップしてパッチする。
-
-実行時、条件が偽のとき BIF はパッチ済みのジャンプ先（= ENDIF 直後の位置）にジャンプする。
+> ELSIF/ELSE を使わない場合、CS は `[0, A]` のまま ENDIF に到達する。N=0 なのでループは 0 回実行され、旧実装と同じ動作になる（後方互換性が保たれる）。
 
 ---
 
@@ -278,6 +290,15 @@ IMMEDIATE ELSE
 | ELSIF 後 | `[B1, 1, C]`（A パッチ済み）|
 | ELSE 後 | `[B1, 1, B_new]`（C パッチ済み）|
 | ENDIF 後 | `[]`（B_new パッチ、N=1、B1 パッチ）|
+
+### 既知の制限事項
+
+- **ELSE の二重使用**: `IF ... ELSE ... ELSE ... ENDIF` を書いてもコンパイルエラーにならない。
+  2番目の `ELSE` は最初の ELSE が積んだ JUMP_ALWAYS プレースホルダーを BIF プレースホルダーとして扱い、
+  誤ったアドレスにパッチしてしまう。現時点では二重 ELSE の検出は行わず、未定義動作とする。
+
+- **ELSIF/ELSE を IF なしで使用**: コンパイルスタックが空の状態で `CS_POP` が呼ばれ、
+  `StackUnderflow` エラーとなる。実用上は問題ないが、エラーメッセージは汎用的なスタックアンダーフローとなる。
 
 ---
 
