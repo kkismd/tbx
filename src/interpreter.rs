@@ -3715,4 +3715,24 @@ NOOP_LOOP(4)";
             other => panic!("expected MismatchedControlStructure(ENDWH/IF), got {other:?}"),
         }
     }
+
+    #[test]
+    fn test_if_elsif_endwh_cross_nesting_error() {
+        // IF ... ELSIF ... ENDWH must fail with MismatchedControlStructure.
+        // ELSIF does not push to control_stack, so ENDWH sees ControlKind::If on top.
+        let mut interp = Interpreter::new();
+        let src = "DEF BAD(X)\n  IF X > 2\n    PUTDEC X\n  ELSIF X > 0\n    PUTDEC 1\n  ENDWH\nEND";
+        let result = interp.exec_source(src);
+        match result {
+            Err(e)
+                if matches!(
+                    e.kind,
+                    crate::error::TbxError::MismatchedControlStructure {
+                        close_word: "ENDWH",
+                        open_word: "IF",
+                    }
+                ) => {}
+            other => panic!("expected MismatchedControlStructure(ENDWH/IF), got {other:?}"),
+        }
+    }
 }

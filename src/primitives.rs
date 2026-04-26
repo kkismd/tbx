@@ -4560,4 +4560,32 @@ mod tests {
         ctrl_close_if_prim(&mut vm).unwrap();
         assert!(vm.control_stack.is_empty());
     }
+
+    #[test]
+    fn test_end_prim_control_stack_not_empty_error() {
+        // end_prim must return ControlStackNotEmpty and rollback when control_stack
+        // has leftover items (defensive check for future code paths).
+        let mut vm = make_compiling_vm("MYWORD2");
+        // Manually leave an item on control_stack without a matching compile_stack entry.
+        vm.control_stack.push(ControlKind::If);
+        let err = end_prim(&mut vm).unwrap_err();
+        assert!(
+            matches!(err, TbxError::ControlStackNotEmpty { count: 1 }),
+            "expected ControlStackNotEmpty {{ count: 1 }}, got {err:?}"
+        );
+        // VM must have been rolled back.
+        assert!(
+            !vm.is_compiling,
+            "is_compiling must be false after rollback"
+        );
+        // Both stacks must be cleared after rollback.
+        assert!(
+            vm.compile_stack.is_empty(),
+            "compile_stack must be empty after rollback"
+        );
+        assert!(
+            vm.control_stack.is_empty(),
+            "control_stack must be empty after rollback"
+        );
+    }
 }
