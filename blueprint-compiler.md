@@ -90,7 +90,7 @@ DEF 開始時に両構造体を生成し、END 完了後に破棄する。行番
 
 ## コンパイルスタックプリミティブ
 
-コンパイルワードの実装に使用するプリミティブ群。このうち `CS_PUSH` / `CS_POP` / `CS_SWAP` / `CS_DROP` / `CS_DUP` / `CS_OVER` / `CS_ROT` / `PATCH_ADDR` / `COMPILE_EXPR` は **コンパイルモード（`is_compiling = true`）専用** であり、実行モード中に呼ばれた場合はエラーとする。`APPEND` / `HERE` / `JUMP_FALSE` / `JUMP_TRUE` / `JUMP_ALWAYS` は汎用プリミティブであり、コンパイルモード以外でも使用できる。
+コンパイルワードの実装に使用するプリミティブ群。このうち `CS_PUSH` / `CS_POP` / `CS_SWAP` / `CS_DROP` / `CS_DUP` / `CS_OVER` / `CS_ROT` / `PATCH_ADDR` / `COMPILE_EXPR` / `CTRL_OPEN_IF` / `CTRL_OPEN_WHILE` / `CTRL_CLOSE_IF` / `CTRL_CLOSE_WHILE` は **コンパイルモード（`is_compiling = true`）専用** であり、実行モード中に呼ばれた場合はエラーとする。`APPEND` / `HERE` / `JUMP_FALSE` / `JUMP_TRUE` / `JUMP_ALWAYS` は汎用プリミティブであり、コンパイルモード以外でも使用できる。
 
 | プリミティブ | スタック効果 | 説明 |
 | ------------ | ------------ | ---- |
@@ -108,6 +108,10 @@ DEF 開始時に両構造体を生成し、END 完了後に破棄する。行番
 | `JUMP_FALSE` | `( -- xt )` | `BranchIfFalse`（BIF）のXt定数をデータスタックに積む |
 | `JUMP_TRUE`  | `( -- xt )` | `BranchIfTrue`（BIT）のXt定数をデータスタックに積む |
 | `JUMP_ALWAYS` | `( -- xt )` | `Goto` のXt定数をデータスタックに積む |
+| `CTRL_OPEN_IF`     | `( -- )` | `control_stack` に `ControlKind::If` を積む（IF の先頭で呼ぶ） |
+| `CTRL_OPEN_WHILE`  | `( -- )` | `control_stack` に `ControlKind::While` を積む（WHILE の先頭で呼ぶ） |
+| `CTRL_CLOSE_IF`    | `( -- )` | `control_stack` のトップが `If` か検証してポップする（ENDIF の先頭でフェイルファスト） |
+| `CTRL_CLOSE_WHILE` | `( -- )` | `control_stack` のトップが `While` か検証してポップする（ENDWH の先頭でフェイルファスト） |
 
 `PATCH_ADDR` はコンパイルスタックと組み合わせて分岐命令のアドレスを事後的に埋める用途で使用する。典型的なパターン:
 
@@ -129,6 +133,7 @@ ENDIF は WHILE ループで複数の JUMP_ALWAYS プレースホルダーをパ
 
 ```
 DEF IF
+  CTRL_OPEN_IF
   COMPILE_EXPR
   APPEND JUMP_FALSE
   CS_PUSH 0        REM initial count: number of ELSIF calls so far
@@ -138,6 +143,7 @@ END
 IMMEDIATE IF
 
 DEF ENDIF
+  CTRL_CLOSE_IF
   PATCH_ADDR CS_POP     REM patch last BIF/JUMP_ALWAYS placeholder (C)
   VAR N
   SET &N, CS_POP        REM retrieve ELSIF call count
@@ -184,10 +190,11 @@ ENDIF の拡張方針は issue #338 で**カウント方式**に決定した。
 
 ### IF（変更）
 
-`CS_PUSH 0`（初期カウント）を追加し、コンパイルスタックを `[0, A]` 形式に変更した。
+`CTRL_OPEN_IF`（初期カウント前）と `CS_PUSH 0`（初期カウント）を追加し、コンパイルスタックを `[0, A]` 形式に変更した。
 
 ```
 DEF IF
+  CTRL_OPEN_IF
   COMPILE_EXPR
   APPEND JUMP_FALSE
   CS_PUSH 0        REM initial count: number of ELSIF calls so far
@@ -199,11 +206,12 @@ IMMEDIATE IF
 
 ### ENDIF（変更）
 
-`WHILE`/`ENDWH` ループで蓄積された `JUMP_ALWAYS` プレースホルダーを一括パッチする。
+`CTRL_CLOSE_IF` を先頭に追加し、compile_stack を触る前にフェイルファストで制御スタックを検証する。`WHILE`/`ENDWH` ループで蓄積された `JUMP_ALWAYS` プレースホルダーを一括パッチする。
 `WHILE`/`ENDWH` は `lib/basic.tbx` で ENDIF より前に定義されていること。
 
 ```
 DEF ENDIF
+  CTRL_CLOSE_IF
   PATCH_ADDR CS_POP     REM patch last BIF/JUMP_ALWAYS placeholder (C)
   VAR N
   SET &N, CS_POP        REM retrieve ELSIF call count
@@ -309,6 +317,7 @@ WHILE と ENDWH は `lib/basic.tbx` に TBX コードとして実装されたコ
 ```
 REM WHILE expr ... ENDWH
 DEF WHILE
+  CTRL_OPEN_WHILE
   CS_PUSH HERE
   COMPILE_EXPR
   APPEND JUMP_FALSE
@@ -318,6 +327,7 @@ END
 IMMEDIATE WHILE
 
 DEF ENDWH
+  CTRL_CLOSE_WHILE
   CS_SWAP
   APPEND JUMP_ALWAYS
   APPEND CS_POP
@@ -349,10 +359,11 @@ D:  ...（ENDWH 直後）
 
 ### ENDWH の動作トレース
 
-1. `CS_SWAP` — CS を `[A, Caddr]` → `[Caddr, A]` に並び替える（A がトップ）
-2. `APPEND JUMP_ALWAYS` — 無条件ジャンプ命令の Xt を辞書に書き込む
-3. `APPEND CS_POP` — CS から A（DictAddr）をポップして辞書に書き込む（JUMP_ALWAYS のジャンプ先ターゲット）
-4. `PATCH_ADDR CS_POP` — CS から Caddr をポップし、`dictionary[Caddr]` に現在の DP（= ENDWH 直後）を書き込む（BIF のジャンプ先を確定）
+1. `CTRL_CLOSE_WHILE` — `control_stack` のトップが `While` か検証してポップする（フェイルファスト）
+2. `CS_SWAP` — CS を `[A, Caddr]` → `[Caddr, A]` に並び替える（A がトップ）
+3. `APPEND JUMP_ALWAYS` — 無条件ジャンプ命令の Xt を辞書に書き込む
+4. `APPEND CS_POP` — CS から A（DictAddr）をポップして辞書に書き込む（JUMP_ALWAYS のジャンプ先ターゲット）
+5. `PATCH_ADDR CS_POP` — CS から Caddr をポップし、`dictionary[Caddr]` に現在の DP（= ENDWH 直後）を書き込む（BIF のジャンプ先を確定）
 
 ### `read_jump_target` の簡略化
 

@@ -9,6 +9,7 @@ REM  emits JUMP_ALWAYS back to the loop start (as DictAddr), then patches the
 REM  JUMP_FALSE placeholder with the current HERE value (= ENDWH+1).
 
 DEF WHILE
+  CTRL_OPEN_WHILE
   CS_PUSH HERE
   COMPILE_EXPR
   APPEND JUMP_FALSE
@@ -18,6 +19,7 @@ END
 IMMEDIATE WHILE
 
 DEF ENDWH
+  CTRL_CLOSE_WHILE
   CS_SWAP
   APPEND JUMP_ALWAYS
   APPEND CS_POP
@@ -45,6 +47,7 @@ REM  and patches each accumulated JUMP_ALWAYS placeholder B1...BN using WHILE/EN
 REM  WHILE/ENDWH must be defined before ENDIF.
 
 DEF IF
+  CTRL_OPEN_IF
   COMPILE_EXPR
   APPEND JUMP_FALSE
   REM push initial ELSIF count (0), then BIF placeholder address (A)
@@ -55,6 +58,7 @@ END
 IMMEDIATE IF
 
 DEF ENDIF
+  CTRL_CLOSE_IF
   REM patch last BIF/JUMP_ALWAYS placeholder (C)
   PATCH_ADDR CS_POP
   VAR N

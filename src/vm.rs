@@ -145,6 +145,13 @@ pub struct VM {
     /// Compile-time stack: used by IMMEDIATE words to pass values between
     /// compile-time word invocations (e.g. CS_PUSH / CS_POP for IF/ENDIF).
     pub(crate) compile_stack: Vec<Cell>,
+    /// Control-structure kind stack: tracks which control structures are currently
+    /// open during compilation, independently of `compile_stack`.
+    ///
+    /// `CTRL_OPEN_IF` / `CTRL_OPEN_WHILE` push onto this stack; `CTRL_CLOSE_IF` /
+    /// `CTRL_CLOSE_WHILE` pop and validate the top entry (fail-fast before touching
+    /// `compile_stack`).  Cleared on rollback alongside `compile_stack`.
+    pub(crate) control_stack: Vec<crate::cell::ControlKind>,
     /// Path of a file to be loaded after the current IMMEDIATE word returns.
     ///
     /// Set by `use_prim` when it encounters a USE "path" statement.
@@ -177,6 +184,7 @@ impl VM {
             token_stream: None,
             compile_state: None,
             compile_stack: Vec::new(),
+            control_stack: Vec::new(),
             pending_use_path: None,
         }
     }
@@ -831,6 +839,7 @@ impl VM {
         // Always clear the compile stack on rollback to prevent state leakage
         // into the next DEF..END compilation.
         self.compile_stack.clear();
+        self.control_stack.clear();
     }
 
     /// Perform a definition rollback using explicitly supplied snapshot values.
@@ -853,6 +862,7 @@ impl VM {
         // Always clear the compile stack on rollback to prevent state leakage
         // into the next DEF..END compilation.
         self.compile_stack.clear();
+        self.control_stack.clear();
     }
 
     /// Find the first header entry whose `kind` satisfies `pred`.
