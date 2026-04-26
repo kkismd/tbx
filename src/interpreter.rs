@@ -611,21 +611,35 @@ impl Interpreter {
                     })
                 } else {
                     // Set up local variable slots when the word declares VARs.
-                    if local_count > 0 {
+                    // push() errors are propagated as run_result so that the
+                    // existing rollback block below (token_stream clear,
+                    // rollback_def, stack/bp restore) handles all cleanup
+                    // uniformly without an early return.
+                    let push_err = if local_count > 0 {
                         self.vm.bp = self.vm.data_stack.len();
+                        let mut err = None;
                         for _ in 0..local_count {
                             if let Err(e) = self.vm.push(crate::cell::Cell::Int(0)) {
-                                return Err(make_err(e));
+                                err = Some(e);
+                                break;
                             }
                         }
+                        err
+                    } else {
+                        None
+                    };
+
+                    if let Some(e) = push_err {
+                        Err(e)
+                    } else {
+                        let result = self.vm.run(body_addr);
+                        // On success, tear down the local slots.
+                        if result.is_ok() && local_count > 0 {
+                            self.vm.data_stack.truncate(saved_data_stack_len);
+                            self.vm.bp = saved_bp;
+                        }
+                        result
                     }
-                    let result = self.vm.run(body_addr);
-                    // On success, tear down the local slots.
-                    if result.is_ok() && local_count > 0 {
-                        self.vm.data_stack.truncate(saved_data_stack_len);
-                        self.vm.bp = saved_bp;
-                    }
-                    result
                 }
             }
             _ => Err(TbxError::InvalidExpression {
@@ -2024,6 +2038,58 @@ IMMEDIATE IMULTI
 IMULTI";
         interp.exec_source(src).expect("should succeed");
         assert_eq!(interp.take_output(), "1020");
+    }
+
+    #[test]
+    fn test_immediate_word_var_push_overflow_rolls_back() {
+        // When vm.push() fails during local-slot allocation (DataStackOverflow),
+        // the rollback block must run: token_stream cleared, stack and bp restored.
+        use crate::cell::Cell;
+        use crate::constants::MAX_DATA_STACK_DEPTH;
+
+        let mut interp = Interpreter::new();
+
+        // Define an IMMEDIATE word with one VAR local.
+        interp
+            .exec_source(
+                "\
+DEF IFULL
+VAR X
+END
+IMMEDIATE IFULL",
+            )
+            .expect("definition phase must succeed");
+
+        // Fill the data stack to its limit so the next push overflows.
+        interp
+            .vm
+            .data_stack
+            .resize(MAX_DATA_STACK_DEPTH, Cell::Int(0));
+        let before_len = interp.vm.data_stack.len();
+        let before_bp = interp.vm.bp;
+
+        // Calling the IMMEDIATE word must return an error (DataStackOverflow).
+        let result = interp.exec_source("IFULL");
+        assert!(
+            result.is_err(),
+            "expected DataStackOverflow when stack is full, got: {:?}",
+            result
+        );
+
+        // VM state must be fully restored after the error.
+        assert_eq!(
+            interp.vm.data_stack.len(),
+            before_len,
+            "data_stack must be restored to its pre-call length"
+        );
+        assert_eq!(
+            interp.vm.bp, before_bp,
+            "bp must be restored after push overflow"
+        );
+        assert!(
+            interp.vm.token_stream.is_none(),
+            "token_stream must be cleared after push overflow"
+        );
     }
 
     #[test]
