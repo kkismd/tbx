@@ -640,7 +640,10 @@ impl Interpreter {
                         Err(e)
                     } else {
                         let result = self.vm.run(body_addr);
-                        // On success, tear down the local slots.
+                        // On success, tear down all local slots.  truncate()
+                        // removes both the zero-initialised local slots and any
+                        // surplus values the word may have left on the stack —
+                        // IMMEDIATE words do not return values via the data stack.
                         if result.is_ok() && local_count > 0 {
                             self.vm.data_stack.truncate(saved_data_stack_len);
                             self.vm.bp = saved_bp;
@@ -2096,6 +2099,59 @@ IMMEDIATE IFULL",
         assert!(
             interp.vm.token_stream.is_none(),
             "token_stream must be cleared after push overflow"
+        );
+    }
+
+    #[test]
+    fn test_immediate_word_var_partial_push_overflow_rolls_back() {
+        // Verify rollback when the Nth push (not the first) overflows.
+        // Use a word with 2 VAR locals and fill the stack so that the
+        // first push succeeds but the second overflows.
+        use crate::cell::Cell;
+        use crate::constants::MAX_DATA_STACK_DEPTH;
+
+        let mut interp = Interpreter::new();
+
+        // Define an IMMEDIATE word with two VAR locals.
+        interp
+            .exec_source(
+                "\
+DEF IPARTIAL
+VAR A
+VAR B
+END
+IMMEDIATE IPARTIAL",
+            )
+            .expect("definition phase must succeed");
+
+        // Fill the stack to MAX - 1 so the first push succeeds, second overflows.
+        interp
+            .vm
+            .data_stack
+            .resize(MAX_DATA_STACK_DEPTH - 1, Cell::Int(0));
+        let before_len = interp.vm.data_stack.len();
+        let before_bp = interp.vm.bp;
+
+        let result = interp.exec_source("IPARTIAL");
+        assert!(
+            result.is_err(),
+            "expected overflow on second local slot push, got: {:?}",
+            result
+        );
+
+        // After the error the stack must be restored to its original length.
+        assert_eq!(
+            interp.vm.data_stack.len(),
+            before_len,
+            "data_stack must be restored after partial push overflow"
+        );
+        assert_eq!(
+            interp.vm.bp, before_bp,
+            "bp must be restored after partial push overflow"
+        );
+        assert!(
+            interp.vm.token_stream.is_none(),
+            "token_stream must be cleared after partial push overflow"
         );
     }
 
