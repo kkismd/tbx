@@ -1,24 +1,5 @@
 REM basic.tbx — BASIC-style control structures standard library
 
-REM IF expr ... ENDIF
-REM
-REM  IF compiles the condition expression, emits a JUMP_FALSE instruction,
-REM  saves the placeholder address on the compile stack, and emits a 0 placeholder.
-REM  ENDIF patches the placeholder with the current HERE value.
-
-DEF IF
-  COMPILE_EXPR
-  APPEND JUMP_FALSE
-  CS_PUSH HERE
-  APPEND 0
-END
-IMMEDIATE IF
-
-DEF ENDIF
-  PATCH_ADDR CS_POP
-END
-IMMEDIATE ENDIF
-
 REM WHILE expr ... ENDWH
 REM
 REM  WHILE compiles the condition expression, saves the loop-start address on the
@@ -43,3 +24,86 @@ DEF ENDWH
   PATCH_ADDR CS_POP
 END
 IMMEDIATE ENDWH
+
+REM IF expr ... ELSIF expr ... ELSE ... ENDIF
+REM
+REM  IF compiles the condition expression, emits a JUMP_FALSE instruction,
+REM  pushes an initial ELSIF count (0) and the placeholder address on the compile
+REM  stack, and emits a 0 placeholder.  The compile stack after IF is [0, A].
+REM
+REM  ELSIF patches the current BIF placeholder (C), pops the count N, emits
+REM  JUMP_ALWAYS (saving its placeholder B), increments the count, compiles the
+REM  new condition, and emits a new BIF with its placeholder C_new.
+REM  Compile stack after ELSIF: [B1...BN, B, N+1, C_new].
+REM
+REM  ELSE patches the current BIF placeholder (C), emits JUMP_ALWAYS (saving its
+REM  placeholder B), and pushes B on top of the unchanged count N.
+REM  Compile stack after ELSE: [B1...BN, N, B].
+REM
+REM  ENDIF patches the last placeholder (C or B from ELSE), then pops the count N
+REM  and patches each accumulated JUMP_ALWAYS placeholder B1...BN using WHILE/ENDWH.
+REM  WHILE/ENDWH must be defined before ENDIF.
+
+DEF IF
+  COMPILE_EXPR
+  APPEND JUMP_FALSE
+  REM push initial ELSIF count (0), then BIF placeholder address (A)
+  CS_PUSH 0
+  CS_PUSH HERE
+  APPEND 0
+END
+IMMEDIATE IF
+
+DEF ENDIF
+  REM patch last BIF/JUMP_ALWAYS placeholder (C)
+  PATCH_ADDR CS_POP
+  VAR N
+  REM retrieve ELSIF call count
+  SET &N, CS_POP
+  VAR I
+  SET &I, 0
+  WHILE I < N
+    REM patch each accumulated JUMP_ALWAYS placeholder (Bi)
+    PATCH_ADDR CS_POP
+    SET &I, I + 1
+  ENDWH
+END
+IMMEDIATE ENDIF
+
+DEF ELSIF
+  REM emit unconditional jump at end of current branch body
+  APPEND JUMP_ALWAYS
+  VAR B
+  REM save JUMP_ALWAYS placeholder address (B); dp is now elsif condition start
+  SET &B, HERE
+  APPEND 0
+  REM patch previous BIF placeholder (C) with current dp (= elsif condition start)
+  PATCH_ADDR CS_POP
+  REM pop the ELSIF count
+  VAR N
+  SET &N, CS_POP
+  REM push B (JUMP_ALWAYS placeholder) and incremented count onto compile stack
+  CS_PUSH B
+  CS_PUSH N + 1
+  REM compile the elsif condition expression
+  COMPILE_EXPR
+  REM emit new BIF instruction and push new BIF placeholder address (C_new)
+  APPEND JUMP_FALSE
+  CS_PUSH HERE
+  APPEND 0
+END
+IMMEDIATE ELSIF
+
+DEF ELSE
+  REM emit unconditional jump at end of if/elsif branch
+  APPEND JUMP_ALWAYS
+  VAR B
+  REM save JUMP_ALWAYS placeholder address (B); dp is now else body start
+  SET &B, HERE
+  APPEND 0
+  REM patch previous BIF placeholder (C) with current dp (= else body start)
+  PATCH_ADDR CS_POP
+  REM count N remains on compile stack; push B on top
+  CS_PUSH B
+END
+IMMEDIATE ELSE
