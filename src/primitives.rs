@@ -915,15 +915,14 @@ fn compile_expr_taking_local_table(
 
 /// Emit a jump target into the dictionary, with forward-reference back-patch support.
 ///
-/// # Design note: why `Cell::Int`, not `Cell::DictAddr`
+/// # Design note: why `Cell::DictAddr`
 ///
-/// Jump targets are raw program-counter indices, not typed data pointers.
-/// `Cell::DictAddr` is a typed pointer used for FETCH/STORE (data access).
-/// `Cell::Int` is the untyped integer used for arithmetic *and* control flow (pc values).
-/// Writing `Cell::Int(target)` here, and having `read_jump_target` accept only `Cell::Int`,
-/// prevents accidental confusion between "data address" and "execution address" at runtime.
-/// `PATCH_ADDR` follows the same convention: it takes a `DictAddr` operand (where to write)
-/// and writes `Cell::Int(dp)` (the pc value) — each type carries the correct semantic.
+/// Jump targets are emitted as `Cell::DictAddr` to carry explicit type information.
+/// Using a typed cell variant means that `read_jump_target` can reject any other cell type
+/// at runtime, turning a wrong-type bug into an immediate error rather than silent
+/// mis-execution.  Both forward-reference placeholders and resolved targets use the same
+/// `Cell::DictAddr` type, so back-patching (via `PATCH_ADDR`) is simply an in-place
+/// overwrite of one `DictAddr` value with another.
 fn emit_jump_target_to_dict(vm: &mut VM, label_n: i64) -> Result<(), TbxError> {
     let target_opt = vm
         .compile_state
@@ -1055,7 +1054,7 @@ fn cs_pop_prim(vm: &mut VM) -> Result<(), TbxError> {
     Ok(())
 }
 
-/// PATCH_ADDR — pop a DictAddr from the data stack, then write Cell::Int(dp) at that address.
+/// PATCH_ADDR — pop a DictAddr from the data stack, then write Cell::DictAddr(dp) at that address.
 ///
 /// Used by ENDIF, ENDWH, and future ELSE to back-patch a previously emitted
 /// jump-target placeholder.  The address on the stack is typically saved by IF/WHILE via

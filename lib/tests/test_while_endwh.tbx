@@ -89,3 +89,18 @@ DEF COND_SUM(FLAG, N)
 END
 ASSERT_MSG COND_SUM(1, 4) = 6, "COND_SUM: flag=1 sums 0+1+2+3=6"
 ASSERT_MSG COND_SUM(0, 4) = 0, "COND_SUM: flag=0 skips loop"
+
+REM WHILE loop with early RETURN: return the first element greater than THRESHOLD.
+DEF FIND_FIRST_GT(N, THRESHOLD)
+  VAR I
+  SET &I, 0
+  WHILE I < N
+    IF I > THRESHOLD
+      RETURN I
+    ENDIF
+    SET &I, I + 1
+  ENDWH
+  RETURN -1
+END
+ASSERT_MSG FIND_FIRST_GT(10, 3) = 4, "FIND_FIRST_GT: first element > 3 in 0..9 is 4"
+ASSERT_MSG FIND_FIRST_GT(3, 5) = -1, "FIND_FIRST_GT: no element > 5 in 0..2"
