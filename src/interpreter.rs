@@ -3531,4 +3531,58 @@ TRYROT";
         interp.exec_source(src).unwrap();
         assert_eq!(interp.take_output(), "9");
     }
+
+    #[test]
+    fn test_elsif_without_if_is_error() {
+        // ELSIF without a preceding IF leaves the compile stack empty when CS_POP is
+        // called inside the ELSIF body, which must produce a StackUnderflow error.
+        let mut interp = Interpreter::new();
+        let result = interp.exec_source("DEF FOO(X)\n  ELSIF X > 0\nEND");
+        assert!(
+            result.is_err(),
+            "ELSIF without IF should return an error (empty compile stack)"
+        );
+    }
+
+    #[test]
+    fn test_else_without_if_is_error() {
+        // ELSE without a preceding IF leaves the compile stack empty when CS_POP is
+        // called inside the ELSE body, which must produce a StackUnderflow error.
+        let mut interp = Interpreter::new();
+        let result = interp.exec_source("DEF FOO(X)\n  ELSE\nEND");
+        assert!(
+            result.is_err(),
+            "ELSE without IF should return an error (empty compile stack)"
+        );
+    }
+
+    #[test]
+    fn test_elsif_outside_def_is_error() {
+        // ELSIF at top level (interpret mode) must return an error.
+        // The ELSIF body executes APPEND JUMP_ALWAYS and APPEND 0 first (APPEND does
+        // not check is_compiling), then fails at CS_POP which detects is_compiling=false
+        // and returns InvalidExpression.  Note: the two APPEND calls write to the
+        // dictionary before the error is raised.
+        let mut interp = Interpreter::new();
+        let result = interp.exec_line("ELSIF 1 > 0");
+        assert!(
+            result.is_err(),
+            "ELSIF at top level should return an error (no compile mode)"
+        );
+    }
+
+    #[test]
+    fn test_else_outside_def_is_error() {
+        // ELSE at top level (interpret mode) must return an error.
+        // The ELSE body executes APPEND JUMP_ALWAYS and APPEND 0 first (APPEND does
+        // not check is_compiling), then fails at CS_POP which detects is_compiling=false
+        // and returns InvalidExpression.  Note: the two APPEND calls write to the
+        // dictionary before the error is raised.
+        let mut interp = Interpreter::new();
+        let result = interp.exec_line("ELSE");
+        assert!(
+            result.is_err(),
+            "ELSE at top level should return an error (no compile mode)"
+        );
+    }
 }
