@@ -565,7 +565,14 @@ impl Interpreter {
     /// Execute an IMMEDIATE word, regardless of compile/interpret mode.
     ///
     /// Sets up `vm.token_stream` with the remaining tokens, dispatches the word
-    /// (Primitive or zero-arity Word), then clears the stream.
+    /// (Primitive or zero-arity Word, including those with VAR locals), then
+    /// clears the stream.
+    ///
+    /// **Limitation**: `RETURN expr` (value-returning return) is not supported
+    /// inside IMMEDIATE words because `vm.run()` uses a `TopLevel` sentinel
+    /// instead of a full CALL frame.  Using `RETURN expr` will produce a
+    /// `TbxError::InvalidReturn` (which is rolled back cleanly).
+    /// Void `RETURN` (EXIT) works correctly.
     ///
     /// On error, rolls back compile state and stack state before returning.
     fn exec_immediate_word(
@@ -599,16 +606,50 @@ impl Interpreter {
             // temporary-buffer issues when the primitive writes to the dictionary).
             crate::dict::EntryKind::Primitive(f) => f(&mut self.vm),
             // User-defined word: run via vm.run(), passing the body start address.
-            // Guard: words with formal parameters (arity > 0) or VAR locals
-            // (local_count > 0) require a CALL frame (bp/stack setup) that
-            // vm.run() alone does not provide.
+            // Guard: words with formal parameters (arity > 0) still require a
+            // CALL frame and are rejected.  Words with only VAR locals
+            // (local_count > 0, arity == 0) are supported: we set up bp and
+            // push zero-initialised local slots manually, then tear them down
+            // after the word returns.
             crate::dict::EntryKind::Word(body_addr) => {
-                if arity > 0 || local_count > 0 {
+                if arity > 0 {
                     Err(TbxError::InvalidExpression {
-                        reason: "IMMEDIATE user word with parameters or VAR locals cannot be called without a CALL frame",
+                        reason: "IMMEDIATE user word with parameters cannot be called without a CALL frame",
                     })
                 } else {
-                    self.vm.run(body_addr)
+                    // Set up local variable slots when the word declares VARs.
+                    // push() errors are propagated as run_result so that the
+                    // existing rollback block below (token_stream clear,
+                    // rollback_def, stack/bp restore) handles all cleanup
+                    // uniformly without an early return.
+                    let push_err = if local_count > 0 {
+                        self.vm.bp = self.vm.data_stack.len();
+                        let mut err = None;
+                        for _ in 0..local_count {
+                            if let Err(e) = self.vm.push(crate::cell::Cell::Int(0)) {
+                                err = Some(e);
+                                break;
+                            }
+                        }
+                        err
+                    } else {
+                        None
+                    };
+
+                    if let Some(e) = push_err {
+                        Err(e)
+                    } else {
+                        let result = self.vm.run(body_addr);
+                        // On success, tear down all local slots.  truncate()
+                        // removes both the zero-initialised local slots and any
+                        // surplus values the word may have left on the stack —
+                        // IMMEDIATE words do not return values via the data stack.
+                        if result.is_ok() && local_count > 0 {
+                            self.vm.data_stack.truncate(saved_data_stack_len);
+                            self.vm.bp = saved_bp;
+                        }
+                        result
+                    }
                 }
             }
             _ => Err(TbxError::InvalidExpression {
@@ -1900,21 +1941,280 @@ END",
     }
 
     #[test]
-    fn test_user_defined_immediate_word_with_locals_returns_error() {
-        // A user word with VAR locals cannot be IMMEDIATE-dispatched directly
-        // because vm.run() does not set up the CALL frame (bp / local slots).
+    fn test_user_defined_immediate_word_with_locals_succeeds() {
+        // A user word with VAR locals should now work as an IMMEDIATE word.
+        // The interpreter must set up bp and local slots before calling run().
         let mut interp = Interpreter::new();
         let src = "\
 DEF ILOCAL
 VAR X
-PUTDEC 1
+SET &X, 99
+PUTDEC X
 END
 IMMEDIATE ILOCAL
 ILOCAL";
-        let result = interp.exec_source(src);
+        interp
+            .exec_source(src)
+            .expect("IMMEDIATE word with VAR should succeed");
+        assert_eq!(interp.take_output(), "99");
+    }
+
+    #[test]
+    fn test_immediate_word_var_read_write() {
+        // VAR local declared in an IMMEDIATE word can be written and read back.
+        let mut interp = Interpreter::new();
+        let src = "\
+DEF IWORD
+VAR A
+SET &A, 42
+PUTDEC A
+END
+IMMEDIATE IWORD
+IWORD";
+        interp.exec_source(src).expect("should succeed");
+        assert_eq!(interp.take_output(), "42");
+    }
+
+    #[test]
+    fn test_immediate_word_var_isolated_from_outer_stack() {
+        // After an IMMEDIATE word with VAR locals runs, the data stack must be
+        // back to its original length (local slots cleaned up).
+        let mut interp = Interpreter::new();
+        let src = "\
+DEF ICLEAN
+VAR A
+VAR B
+SET &A, 1
+SET &B, 2
+END
+IMMEDIATE ICLEAN
+ICLEAN";
+        interp.exec_source(src).expect("should succeed");
+        assert_eq!(
+            interp.vm.data_stack.len(),
+            0,
+            "data stack must be clean after IMMEDIATE word with locals"
+        );
+    }
+
+    #[test]
+    fn test_immediate_word_var_during_compile() {
+        // An IMMEDIATE word with VAR locals invoked inside a DEF…END block must
+        // execute at compile time and produce output, while the outer word's
+        // body must execute silently at call time.
+        let mut interp = Interpreter::new();
+        let src = "\
+DEF ICOMP
+VAR X
+SET &X, 55
+PUTDEC X
+END
+IMMEDIATE ICOMP
+DEF OUTER
+ICOMP
+END";
+        interp
+            .exec_source(src)
+            .expect("compile phase should succeed");
+        let compile_out = interp.take_output();
+        assert_eq!(
+            compile_out, "55",
+            "ICOMP must execute during compilation of OUTER (got: {compile_out:?})"
+        );
+        interp
+            .exec_source("OUTER")
+            .expect("runtime phase should succeed");
+        let runtime_out = interp.take_output();
+        assert_eq!(
+            runtime_out, "",
+            "OUTER must not re-execute ICOMP at runtime (got: {runtime_out:?})"
+        );
+    }
+
+    #[test]
+    fn test_immediate_word_multiple_vars() {
+        // Multiple VAR locals declared in an IMMEDIATE word must be independent.
+        let mut interp = Interpreter::new();
+        let src = "\
+DEF IMULTI
+VAR P
+VAR Q
+SET &P, 10
+SET &Q, 20
+PUTDEC P
+PUTDEC Q
+END
+IMMEDIATE IMULTI
+IMULTI";
+        interp.exec_source(src).expect("should succeed");
+        assert_eq!(interp.take_output(), "1020");
+    }
+
+    #[test]
+    fn test_immediate_word_var_push_overflow_rolls_back() {
+        // When vm.push() fails during local-slot allocation (DataStackOverflow),
+        // the rollback block must run: token_stream cleared, stack and bp restored.
+        use crate::cell::Cell;
+        use crate::constants::MAX_DATA_STACK_DEPTH;
+
+        let mut interp = Interpreter::new();
+
+        // Define an IMMEDIATE word with one VAR local.
+        interp
+            .exec_source(
+                "\
+DEF IFULL
+VAR X
+END
+IMMEDIATE IFULL",
+            )
+            .expect("definition phase must succeed");
+
+        // Fill the data stack to its limit so the next push overflows.
+        interp
+            .vm
+            .data_stack
+            .resize(MAX_DATA_STACK_DEPTH, Cell::Int(0));
+        let before_len = interp.vm.data_stack.len();
+        let before_bp = interp.vm.bp;
+
+        // Calling the IMMEDIATE word must return an error (DataStackOverflow).
+        let result = interp.exec_source("IFULL");
         assert!(
             result.is_err(),
-            "expected error when IMMEDIATE word has VAR locals"
+            "expected DataStackOverflow when stack is full, got: {:?}",
+            result
+        );
+
+        // VM state must be fully restored after the error.
+        assert_eq!(
+            interp.vm.data_stack.len(),
+            before_len,
+            "data_stack must be restored to its pre-call length"
+        );
+        assert_eq!(
+            interp.vm.bp, before_bp,
+            "bp must be restored after push overflow"
+        );
+        assert!(
+            interp.vm.token_stream.is_none(),
+            "token_stream must be cleared after push overflow"
+        );
+    }
+
+    #[test]
+    fn test_immediate_word_var_partial_push_overflow_rolls_back() {
+        // Verify rollback when the Nth push (not the first) overflows.
+        // Use a word with 2 VAR locals and fill the stack so that the
+        // first push succeeds but the second overflows.
+        use crate::cell::Cell;
+        use crate::constants::MAX_DATA_STACK_DEPTH;
+
+        let mut interp = Interpreter::new();
+
+        // Define an IMMEDIATE word with two VAR locals.
+        interp
+            .exec_source(
+                "\
+DEF IPARTIAL
+VAR A
+VAR B
+END
+IMMEDIATE IPARTIAL",
+            )
+            .expect("definition phase must succeed");
+
+        // Fill the stack to MAX - 1 so the first push succeeds, second overflows.
+        interp
+            .vm
+            .data_stack
+            .resize(MAX_DATA_STACK_DEPTH - 1, Cell::Int(0));
+        let before_len = interp.vm.data_stack.len();
+        let before_bp = interp.vm.bp;
+
+        let result = interp.exec_source("IPARTIAL");
+        assert!(
+            result.is_err(),
+            "expected overflow on second local slot push, got: {:?}",
+            result
+        );
+
+        // After the error the stack must be restored to its original length.
+        assert_eq!(
+            interp.vm.data_stack.len(),
+            before_len,
+            "data_stack must be restored after partial push overflow"
+        );
+        assert_eq!(
+            interp.vm.bp, before_bp,
+            "bp must be restored after partial push overflow"
+        );
+        assert!(
+            interp.vm.token_stream.is_none(),
+            "token_stream must be cleared after partial push overflow"
+        );
+    }
+
+    #[test]
+    fn test_immediate_word_var_early_void_return() {
+        // A void RETURN (EXIT) inside an IMMEDIATE word with VAR locals must
+        // exit early and leave the stack clean.
+        let mut interp = Interpreter::new();
+        let src = "\
+DEF IEARLY
+VAR X
+SET &X, 99
+RETURN
+PUTDEC X
+END
+IMMEDIATE IEARLY
+IEARLY";
+        interp
+            .exec_source(src)
+            .expect("early void RETURN in IMMEDIATE word must succeed");
+        // PUTDEC after RETURN must not execute.
+        assert_eq!(interp.take_output(), "", "PUTDEC after RETURN must not run");
+        assert_eq!(
+            interp.vm.data_stack.len(),
+            0,
+            "data stack must be clean after early RETURN"
+        );
+    }
+
+    #[test]
+    fn test_immediate_word_var_return_expr_errors() {
+        // RETURN expr (value-returning) inside an IMMEDIATE word must return
+        // TbxError::InvalidReturn because vm.run() uses a TopLevel sentinel
+        // instead of a proper CALL frame.  VM state must be rolled back cleanly.
+        let mut interp = Interpreter::new();
+        let setup = "\
+DEF IRETVAL
+VAR X
+SET &X, 5
+RETURN X
+END
+IMMEDIATE IRETVAL";
+        interp
+            .exec_source(setup)
+            .expect("definition phase must succeed");
+
+        let before_len = interp.vm.data_stack.len();
+        let before_bp = interp.vm.bp;
+
+        let result = interp.exec_source("IRETVAL");
+        assert!(result.is_err(), "RETURN expr in IMMEDIATE word must error");
+        assert_eq!(
+            interp.vm.data_stack.len(),
+            before_len,
+            "data_stack must be restored after InvalidReturn"
+        );
+        assert_eq!(
+            interp.vm.bp, before_bp,
+            "bp must be restored after InvalidReturn"
+        );
+        assert!(
+            interp.vm.token_stream.is_none(),
+            "token_stream must be cleared after InvalidReturn"
         );
     }
 
