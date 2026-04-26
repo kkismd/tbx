@@ -915,15 +915,13 @@ fn compile_expr_taking_local_table(
 
 /// Emit a jump target into the dictionary, with forward-reference back-patch support.
 ///
-/// # Design note: why `Cell::Int`, not `Cell::DictAddr`
+/// # Design note: why `Cell::DictAddr`, not `Cell::Int`
 ///
-/// Jump targets are raw program-counter indices, not typed data pointers.
-/// `Cell::DictAddr` is a typed pointer used for FETCH/STORE (data access).
-/// `Cell::Int` is the untyped integer used for arithmetic *and* control flow (pc values).
-/// Writing `Cell::Int(target)` here, and having `read_jump_target` accept only `Cell::Int`,
-/// prevents accidental confusion between "data address" and "execution address" at runtime.
+/// Jump targets are execution-address indices into the dictionary.
+/// Using `Cell::DictAddr` makes the semantic explicit at the type level and prevents
+/// accidental confusion between arithmetic integers and program-counter values.
 /// `PATCH_ADDR` follows the same convention: it takes a `DictAddr` operand (where to write)
-/// and writes `Cell::Int(dp)` (the pc value) — each type carries the correct semantic.
+/// and writes `Cell::DictAddr(dp)` (the target pc value).
 fn emit_jump_target_to_dict(vm: &mut VM, label_n: i64) -> Result<(), TbxError> {
     let target_opt = vm
         .compile_state
@@ -936,10 +934,10 @@ fn emit_jump_target_to_dict(vm: &mut VM, label_n: i64) -> Result<(), TbxError> {
         .copied();
 
     if let Some(target) = target_opt {
-        vm.dict_write(Cell::Int(target as i64))?;
+        vm.dict_write(Cell::DictAddr(target))?;
     } else {
         let patch_pos = vm.dp;
-        vm.dict_write(Cell::Int(0))?;
+        vm.dict_write(Cell::DictAddr(0))?;
         vm.compile_state
             .as_mut()
             .ok_or(TbxError::InvalidExpression {
@@ -1140,7 +1138,7 @@ fn cs_rot_prim(vm: &mut VM) -> Result<(), TbxError> {
     Ok(())
 }
 
-/// PATCH_ADDR — pop a DictAddr from the data stack, then write Cell::Int(dp) at that address.
+/// PATCH_ADDR — pop a DictAddr from the data stack, then write Cell::DictAddr(dp) at that address.
 ///
 /// Used by ENDIF, ENDWH, and future ELSE to back-patch a previously emitted
 /// jump-target placeholder.  The address on the stack is typically saved by IF/WHILE via
@@ -1155,7 +1153,7 @@ fn patch_addr_prim(vm: &mut VM) -> Result<(), TbxError> {
     }
     let addr = vm.pop()?;
     match addr {
-        Cell::DictAddr(a) => vm.dict_write_at(a, Cell::Int(vm.dp as i64)),
+        Cell::DictAddr(a) => vm.dict_write_at(a, Cell::DictAddr(vm.dp)),
         _ => Err(TbxError::TypeError {
             expected: "DictAddr",
             got: addr.type_name(),
@@ -3490,8 +3488,8 @@ mod tests {
 
     #[test]
     fn test_goto_prim_writes_dict() {
-        // GOTO 10 inside DEF should write [Xt(goto_rt), Int(0)] to the dictionary
-        // (forward reference: label not yet seen, so placeholder Int(0) is emitted
+        // GOTO 10 inside DEF should write [Xt(goto_rt), DictAddr(0)] to the dictionary
+        // (forward reference: label not yet seen, so placeholder DictAddr(0) is emitted
         // and (10, dict_offset) is pushed to patch_list).
         use std::collections::VecDeque;
         let mut vm = make_compiling_vm("GOTOWORD");
@@ -3503,7 +3501,7 @@ mod tests {
             source_len: 2,
         }]));
         goto_prim(&mut vm).unwrap();
-        // dict[dp_before] = Xt(goto runtime entry), dict[dp_before+1] = Int(0) placeholder.
+        // dict[dp_before] = Xt(goto runtime entry), dict[dp_before+1] = DictAddr(0) placeholder.
         let goto_cell = vm.dict_read(dp_before).unwrap();
         let target_cell = vm.dict_read(dp_before + 1).unwrap();
         assert!(
@@ -3513,8 +3511,8 @@ mod tests {
         );
         assert_eq!(
             target_cell,
-            Cell::Int(0),
-            "expected forward-ref placeholder Int(0)"
+            Cell::DictAddr(0),
+            "expected forward-ref placeholder DictAddr(0)"
         );
         // patch_list should record the forward reference.
         let state = vm.compile_state.as_ref().unwrap();
@@ -3526,7 +3524,7 @@ mod tests {
     #[test]
     fn test_bif_prim_writes_dict() {
         // BIF 1, 20 inside DEF should compile condition (LIT, Int(1)),
-        // then emit [Xt(bif_rt), Int(0)] as a forward reference placeholder.
+        // then emit [Xt(bif_rt), DictAddr(0)] as a forward reference placeholder.
         use std::collections::VecDeque;
         let mut vm = make_compiling_vm("BIFWORD");
         let dp_before = vm.dp;
@@ -3543,7 +3541,7 @@ mod tests {
             make_tok(crate::lexer::Token::IntLit(20)),
         ]));
         bif_prim(&mut vm).unwrap();
-        // Condition expression for literal 1: [Xt(LIT), Int(1)] then [Xt(bif_rt), Int(0)].
+        // Condition expression for literal 1: [Xt(LIT), Int(1)] then [Xt(bif_rt), DictAddr(0)].
         let lit_cell = vm.dict_read(dp_before).unwrap();
         let val_cell = vm.dict_read(dp_before + 1).unwrap();
         let bif_cell = vm.dict_read(dp_before + 2).unwrap();
@@ -3561,7 +3559,7 @@ mod tests {
         );
         assert_eq!(
             target_cell,
-            Cell::Int(0),
+            Cell::DictAddr(0),
             "expected forward-ref placeholder"
         );
         // patch_list should record label 20.
@@ -3577,7 +3575,7 @@ mod tests {
 
     #[test]
     fn test_bit_prim_writes_dict() {
-        // BIT 1, 30 inside DEF should compile condition then emit [Xt(bit_rt), Int(0)].
+        // BIT 1, 30 inside DEF should compile condition then emit [Xt(bit_rt), DictAddr(0)].
         use std::collections::VecDeque;
         let mut vm = make_compiling_vm("BITWORD");
         let dp_before = vm.dp;
@@ -3593,7 +3591,7 @@ mod tests {
             make_tok(crate::lexer::Token::IntLit(30)),
         ]));
         bit_prim(&mut vm).unwrap();
-        // [Xt(LIT), Int(1), Xt(bit_rt), Int(0)]
+        // [Xt(LIT), Int(1), Xt(bit_rt), DictAddr(0)]
         let lit_cell = vm.dict_read(dp_before).unwrap();
         let val_cell = vm.dict_read(dp_before + 1).unwrap();
         let bit_cell = vm.dict_read(dp_before + 2).unwrap();
@@ -3611,7 +3609,7 @@ mod tests {
         );
         assert_eq!(
             target_cell,
-            Cell::Int(0),
+            Cell::DictAddr(0),
             "expected forward-ref placeholder"
         );
         let state = vm.compile_state.as_ref().unwrap();
@@ -4300,12 +4298,12 @@ mod tests {
     }
 
     #[test]
-    fn test_patch_addr_prim_writes_int_dp_at_addr() {
-        // PATCH_ADDR must pop DictAddr(a) and write Cell::Int(dp) at dict[a].
+    fn test_patch_addr_prim_writes_dict_addr_at_addr() {
+        // PATCH_ADDR must pop DictAddr(a) and write Cell::DictAddr(dp) at dict[a].
         let mut vm = make_compiling_vm("TESTWORD");
         // Write a placeholder at a known position.
         let placeholder_pos = vm.dp;
-        vm.dict_write(Cell::Int(0)).unwrap();
+        vm.dict_write(Cell::DictAddr(0)).unwrap();
         // Push some more cells so dp advances past the placeholder.
         vm.dict_write(Cell::Int(1)).unwrap();
         vm.dict_write(Cell::Int(2)).unwrap();
@@ -4313,10 +4311,10 @@ mod tests {
         // Push the placeholder address onto the data stack and call PATCH_ADDR.
         vm.push(Cell::DictAddr(placeholder_pos)).unwrap();
         patch_addr_prim(&mut vm).unwrap();
-        // dict[placeholder_pos] must now hold Cell::Int(dp).
+        // dict[placeholder_pos] must now hold Cell::DictAddr(dp).
         assert_eq!(
             vm.dict_read(placeholder_pos).unwrap(),
-            Cell::Int(expected_dp as i64)
+            Cell::DictAddr(expected_dp)
         );
         // Data stack must be empty.
         assert_eq!(vm.pop(), Err(TbxError::StackUnderflow));
