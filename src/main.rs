@@ -25,9 +25,10 @@ fn run_file(path: &str) -> std::process::ExitCode {
     // when only a bare filename is given (e.g. "foo.tbx" -> parent is "").
     if let Ok(abs_path) = std::fs::canonicalize(path) {
         if let Some(parent) = abs_path.parent() {
-            interp
-                .set_base_dir(parent.to_path_buf())
-                .expect("canonicalized path parent must be absolute");
+            if let Err(e) = interp.set_base_dir(parent.to_path_buf()) {
+                eprintln!("Error: {e}");
+                return std::process::ExitCode::FAILURE;
+            }
         }
     }
 
