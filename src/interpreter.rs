@@ -107,6 +107,17 @@ pub struct Interpreter {
     /// In practice this is acceptable: panics in `exec_source` signal
     /// unrecoverable programmer errors and typically abort the process.
     loading_files: HashSet<PathBuf>,
+    /// Optional base directory used to resolve relative USE paths.
+    ///
+    /// When set, relative paths in USE statements are resolved against this
+    /// directory rather than the current working directory. This makes the
+    /// interpreter independent of the process CWD, which is important for
+    /// tests and embedded use cases where the CWD may differ from the
+    /// directory containing the TBX source files.
+    ///
+    /// Absolute paths are not affected. When `None` (the default), relative
+    /// paths are resolved against the CWD as before.
+    base_dir: Option<PathBuf>,
 }
 
 impl Default for Interpreter {
@@ -142,6 +153,7 @@ impl Interpreter {
             use_depth: 0,
             max_use_depth: MAX_USE_DEPTH,
             loading_files: HashSet::new(),
+            base_dir: None,
         };
         const STDLIB: &str = include_str!("../lib/basic.tbx");
         interp.exec_source(STDLIB)?;
@@ -562,6 +574,17 @@ impl Interpreter {
         self.max_use_depth = max;
     }
 
+    /// Set the base directory used to resolve relative USE paths.
+    ///
+    /// When set, relative paths in USE statements are resolved against `dir`
+    /// instead of the process current working directory. This allows the
+    /// interpreter to operate correctly regardless of the CWD.
+    ///
+    /// Absolute paths in USE statements are never affected by this setting.
+    pub fn set_base_dir(&mut self, dir: PathBuf) {
+        self.base_dir = Some(dir);
+    }
+
     /// Execute an IMMEDIATE word, regardless of compile/interpret mode.
     ///
     /// Sets up `vm.token_stream` with the remaining tokens, dispatches the word
@@ -684,7 +707,21 @@ impl Interpreter {
             // are treated as identical for circular-reference detection.
             // canonicalize() fails if the file does not exist, so we report
             // FileNotFound in that case rather than the generic IO error.
-            let canonical = std::fs::canonicalize(&path).map_err(|e| {
+            //
+            // If a base_dir is set and the path is relative, resolve it
+            // against base_dir rather than the process CWD. This makes the
+            // interpreter independent of the CWD, which is important for
+            // tests and embedded use cases.
+            let resolved_path = if std::path::Path::new(&path).is_relative() {
+                if let Some(base) = &self.base_dir {
+                    base.join(&path)
+                } else {
+                    PathBuf::from(&path)
+                }
+            } else {
+                PathBuf::from(&path)
+            };
+            let canonical = std::fs::canonicalize(&resolved_path).map_err(|e| {
                 make_err(TbxError::FileNotFound {
                     path: path.clone(),
                     reason: e.to_string(),

@@ -1,12 +1,15 @@
 // Integration test runner for TBX standard library tests.
 //
-// NOTE: USE paths in .tbx files are resolved relative to CWD.
-// `cargo test` sets CWD to the package root, which satisfies this requirement.
-use std::path::PathBuf;
+// NOTE: USE paths in .tbx files are resolved relative to `base_dir`.
+// `run_tbx_test` sets `base_dir` to `CARGO_MANIFEST_DIR` so that relative
+// paths like `USE "lib/tests/helper.tbx"` work correctly regardless of the
+// process CWD.
+use std::path::{Path, PathBuf};
 use tbx::interpreter::Interpreter;
 
-fn run_tbx_test(path: &PathBuf) -> Result<(), String> {
+fn run_tbx_test(path: &PathBuf, base_dir: &Path) -> Result<(), String> {
     let mut interp = Interpreter::new();
+    interp.set_base_dir(base_dir.to_path_buf());
     let src = std::fs::read_to_string(path)
         .map_err(|e| format!("cannot read {}: {e}", path.display()))?;
     interp
@@ -17,7 +20,8 @@ fn run_tbx_test(path: &PathBuf) -> Result<(), String> {
 #[test]
 fn test_lib_tbx_files() {
     let manifest_dir = env!("CARGO_MANIFEST_DIR");
-    let tests_dir = PathBuf::from(manifest_dir).join("lib/tests");
+    let base_dir = PathBuf::from(manifest_dir);
+    let tests_dir = base_dir.join("lib/tests");
     let mut test_files: Vec<PathBuf> = std::fs::read_dir(&tests_dir)
         .unwrap_or_else(|e| panic!("cannot read lib/tests/: {e}"))
         .map(|e| e.unwrap_or_else(|e| panic!("cannot read dir entry in lib/tests/: {e}")))
@@ -40,7 +44,7 @@ fn test_lib_tbx_files() {
     let mut failures: Vec<String> = Vec::new();
     for path in &test_files {
         eprintln!("running tbx test: {}", path.display());
-        if let Err(e) = run_tbx_test(path) {
+        if let Err(e) = run_tbx_test(path, &base_dir) {
             failures.push(e);
         }
     }
