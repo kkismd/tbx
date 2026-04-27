@@ -90,6 +90,39 @@ DEF 開始時に両構造体を生成し、END 完了後に破棄する。行番
 
 ## コンパイルスタックプリミティブ
 
+> Issue #365「blueprint-compiler.md を compile_stack/CS_OPEN_TAG 新設計に更新する」に基づく設計方針
+
+### compile_stack の型：`Vec<CompileEntry>`
+
+`VM` はコンパイル時専用のスタック `compile_stack: Vec<CompileEntry>` を1本持つ。
+PR #364 以前は `compile_stack: Vec<Cell>`（値スタック）と `control_stack: Vec<ControlKind>`（制御スタック）の2本構成だったが、これらを `Vec<CompileEntry>` として統合した。
+
+`CompileEntry` は2つのバリアントを持つ:
+
+```rust
+pub enum CompileEntry {
+    Cell(Cell),    // regular value: address, integer, Xt, …
+    Tag(String),   // control-structure scope tag, e.g. "IF" or "WHILE"
+}
+```
+
+**タグラスト方式（tag-last layout）**
+
+制御構造を開く際、`CS_OPEN_TAG` による `Tag` エントリは常に **コンパイルスタックの最上部** に積む（タグラスト）。これにより以下の性質が成り立つ:
+
+- `CS_CLOSE_TAG` はトップの1エントリを検査するだけで制御構造の対応関係を検証できる
+- `CS_POP` がタグをデータスタックに誤って移動しようとした場合 `TypeError` を返す（防衛）
+- `CS_SWAP` / `CS_DROP` 等のスタック操作は種別を問わず行えるが、タグの位置不変性の維持は tbx 側コードの責任とする
+
+**エラー型**
+
+| エラー型 | フィールド | 説明 |
+| -------- | ---------- | ---- |
+| `MismatchedTag` | `expected: String`, `found: String` | `CS_CLOSE_TAG` が期待するタグと異なるタグをトップに発見した（例: `IF ... WHILE ... ENDIF`） |
+| `NoOpenTag` | `expected: String` | `CS_CLOSE_TAG` 呼び出し時にコンパイルスタックが空、またはトップが `Cell` エントリだった（対応する `CS_OPEN_TAG` が存在しない） |
+
+---
+
 コンパイルワードの実装に使用するプリミティブ群。このうち `CS_PUSH` / `CS_POP` / `CS_SWAP` / `CS_DROP` / `CS_DUP` / `CS_OVER` / `CS_ROT` / `PATCH_ADDR` / `COMPILE_EXPR` / `CS_OPEN_TAG` / `CS_CLOSE_TAG` は **コンパイルモード（`is_compiling = true`）専用** であり、実行モード中に呼ばれた場合はエラーとする。`APPEND` / `HERE` / `JUMP_FALSE` / `JUMP_TRUE` / `JUMP_ALWAYS` は汎用プリミティブであり、コンパイルモード以外でも使用できる。
 
 | プリミティブ | スタック効果 | 説明 |
