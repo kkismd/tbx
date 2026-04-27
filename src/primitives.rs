@@ -1027,9 +1027,6 @@ pub fn dim_prim(vm: &mut VM) -> Result<(), TbxError> {
 
 /// CS_PUSH — move a value from the data stack to the compile stack.
 ///
-/// Must be called in compile mode (inside a IMMEDIATE word invocation).
-/// CS_PUSH — move a value from the data stack to the compile stack.
-///
 /// Must be called in compile mode (inside an IMMEDIATE word invocation).
 fn cs_push_prim(vm: &mut VM) -> Result<(), TbxError> {
     if !vm.is_compiling {
@@ -4264,6 +4261,30 @@ mod tests {
             "compile_stack must be empty after rollback"
         );
     }
+
+    #[test]
+    fn test_end_prim_tag_on_compile_stack_error() {
+        // end_prim must return CompileStackNotEmpty and rollback when a Tag entry
+        // is left on compile_stack (simulates an unclosed IF or WHILE).
+        let mut vm = make_compiling_vm("MYWORD3");
+        vm.compile_stack
+            .push(CompileEntry::Tag("IF".to_string()));
+        let err = end_prim(&mut vm).unwrap_err();
+        assert!(
+            matches!(err, TbxError::CompileStackNotEmpty { count: 1 }),
+            "expected CompileStackNotEmpty {{ count: 1 }}, got {err:?}"
+        );
+        // VM must have been rolled back.
+        assert!(
+            !vm.is_compiling,
+            "is_compiling must be false after rollback"
+        );
+        assert!(
+            vm.compile_stack.is_empty(),
+            "compile_stack must be empty after rollback"
+        );
+    }
+
 
     #[test]
     fn test_compile_expr_prim_outside_compile_mode_error() {
