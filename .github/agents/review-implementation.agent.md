@@ -136,7 +136,7 @@ gh pr review <PR番号> --request-changes --body-file "$(git rev-parse --git-dir
 
 **② Info の投稿**（`gh pr comment`）
 
-Info 指摘は `gh pr review` とは別に `gh pr comment` で投稿する。**テストカバレッジに関する複数の指摘は1件の Info にまとめて投稿する**（`implement-issue` が後から読み取って GitHub issue を登録するため、テストカバレッジ以外の Info は1指摘1コメントで個別投稿する）。
+Info 指摘は `gh pr review` とは別に `gh pr comment` で投稿する。**テストカバレッジに関する指摘は件数にかかわらず（1件でも複数でも）常に1件の Info にまとめて投稿する**（`implement-issue` が後から読み取って GitHub issue を登録するため、テストカバレッジ以外の Info は1指摘1コメントで個別投稿する）。
 
 ```bash
 # テストカバレッジの Info は複数あっても1ファイルにまとめて1回投稿する
