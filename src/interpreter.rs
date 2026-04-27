@@ -597,6 +597,11 @@ impl Interpreter {
     /// `std::fs::canonicalize(&dir)` or `std::env::current_dir()` to obtain
     /// an absolute path before calling this method.
     pub fn set_base_dir(&mut self, dir: PathBuf) {
+        debug_assert!(
+            dir.is_absolute(),
+            "set_base_dir requires an absolute path; got: {}",
+            dir.display()
+        );
         self.base_dir = Some(dir);
     }
 
@@ -3277,6 +3282,36 @@ PUTDEC 42";
         assert!(
             interp.take_output().contains("nested"),
             "base_dir should be applied to nested USE chains"
+        );
+    }
+
+    #[test]
+    fn test_set_base_dir_nested_use_from_subdirectory_requires_base_relative_paths() {
+        // Known limitation: relative paths in nested USE files are always resolved
+        // against base_dir, NOT against the including file's directory.
+        //
+        // Given: base_dir = /tmp/dir, modules/a.tbx USEs "utils.tbx"
+        //   => looks for /tmp/dir/utils.tbx (not /tmp/dir/modules/utils.tbx)
+        //
+        // This test documents the expected behavior. If files in subdirectories
+        // need to USE siblings, they must use paths relative to base_dir.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let modules_dir = dir.path().join("modules");
+        std::fs::create_dir(&modules_dir).unwrap();
+        let path_a = modules_dir.join("a.tbx");
+        // utils.tbx is placed at base_dir root (not under modules/)
+        let path_utils = dir.path().join("utils.tbx");
+        std::fs::write(&path_utils, "DEF UTIL_WORD\nPUTSTR \"util\"\nEND\n").unwrap();
+        // a.tbx references utils.tbx with the base_dir-relative path "utils.tbx"
+        std::fs::write(&path_a, "USE \"utils.tbx\"\n").unwrap();
+
+        let mut interp = Interpreter::new();
+        interp.set_base_dir(dir.path().to_path_buf());
+        // a.tbx USEs "utils.tbx" which resolves to base_dir/utils.tbx — success.
+        interp.exec_source("USE \"modules/a.tbx\"\nUTIL_WORD").unwrap();
+        assert!(
+            interp.take_output().contains("util"),
+            "USE in subdirectory file should succeed when path is relative to base_dir"
         );
     }
 

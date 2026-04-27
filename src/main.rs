@@ -18,6 +18,16 @@ fn run_file(path: &str) -> std::process::ExitCode {
 
     let mut interp = Interpreter::new();
 
+    // Resolve the base directory from the input file's parent directory.
+    // This makes relative USE paths inside the program file independent of
+    // the process CWD.
+    if let Some(base) = std::path::Path::new(path)
+        .parent()
+        .and_then(|p| std::fs::canonicalize(p).ok())
+    {
+        interp.set_base_dir(base);
+    }
+
     match interp.compile_program(&src) {
         Ok(()) => {
             let out = interp.take_output();
