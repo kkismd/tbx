@@ -86,7 +86,7 @@ PRの本文に `Closes #N` や `Fixes #N` などのissueリンクが含まれて
 |--------|------|------|
 | 🔴 Critical | バグ・設計との明確な乖離 | PRコメント + **条件付きで** GitHub Issue登録（後述） |
 | 🟡 Warning | 改善が望ましい箇所 | PRコメントのみ |
-| 🟢 Info | 軽微な気づき | Info指摘がある場合は**必ずPRコメントとして投稿**する（`implement-issue` が後処理で読み取るため省略不可） |
+| 🟢 Info | 軽微な気づき | PRコメントとして投稿する |
 
 問題が見つからない場合はその旨を報告してコメント・Issue登録は行わない。
 
@@ -137,7 +137,7 @@ gh pr review <PR番号> --request-changes --body-file "$(git rev-parse --git-dir
 
 **② Info の投稿**（`gh pr comment`）
 
-Info 指摘は `gh pr review` とは別に `gh pr comment` で投稿する。**テストカバレッジに関する指摘は件数にかかわらず（1件でも複数でも）常に1件の Info にまとめて投稿する**（`implement-issue` が後から読み取って GitHub issue を登録するため、テストカバレッジ以外の Info は1指摘1コメントで個別投稿する）。
+Info 指摘は `gh pr review` とは別に `gh pr comment` で投稿する。**テストカバレッジに関する指摘は件数にかかわらず（1件でも複数でも）常に1件の Info にまとめて投稿する**（テストカバレッジ以外の Info は1指摘1コメントで個別投稿する）。
 
 ```bash
 # テストカバレッジの Info は複数あっても1ファイルにまとめて1回投稿する
