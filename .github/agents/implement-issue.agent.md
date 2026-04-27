@@ -124,15 +124,16 @@ INSERT OR REPLACE INTO session_state (key, value) VALUES ('review_before_review_
 
 4. **新しいコメントもレビューも追加されていない**（どちらの件数も変化なし）→ 指摘なし。ループを終了してステップ7へ進む。
 
-5. **新しいコメントまたはレビューが追加された場合**、追加された内容に **🔴/🟡/🟢** のいずれかが含まれるか確認する：
-   - **含まれない**（Approveレビューのみ）→ ループを終了してステップ7へ進む。
-   - **含まれる** 場合（手順0のガードを通過済みのため `loop_count < 3` が保証されている）：
+5. **新しいコメントまたはレビューが追加された場合**、追加された内容を確認する：
+   - **🔴/🟡/🟢 のいずれも含まれない**（Approveレビューのみ）→ ループを終了してステップ7へ進む。
+   - **🟢 Info のみ含まれる**（🔴/🟡 はない）→ ループを終了してステップ6後処理Aへ進む（Infoは修正対象ではなくIssue登録対象）。
+   - **🔴/🟡 が含まれる** 場合（手順0のガードを通過済みのため `loop_count < 3` が保証されている）：
      - `loop_count` をインクリメントする：
        ```sql
        UPDATE session_state SET value = CAST(CAST(value AS INTEGER) + 1 AS TEXT) WHERE key = 'review_loop_count';
        SELECT CAST(value AS INTEGER) AS loop_count FROM session_state WHERE key = 'review_loop_count';
        ```
-     - 新しいコメント・レビューの **🔴/🟡/🟢 を問わずすべての指摘**に対して修正を行う
+     - 新しいコメント・レビューの **🔴/🟡 の指摘のみ**を修正対象とする（🟢 Info は修正しない）
      - 修正後に必ず以下を実行し、エラー・警告がないことを確認する：
        ```bash
        cargo build
