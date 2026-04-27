@@ -3326,9 +3326,12 @@ PUTDEC 42";
         let mut interp = Interpreter::new();
         let result = interp.set_base_dir(PathBuf::from("relative/path"));
         assert!(result.is_err());
+        let TbxError::InvalidArgument { message } = result.unwrap_err() else {
+            panic!("expected TbxError::InvalidArgument");
+        };
         assert!(
-            matches!(result.unwrap_err(), TbxError::InvalidArgument { .. }),
-            "relative path should return InvalidArgument"
+            message.contains("relative/path"),
+            "error message should include the invalid path; got: {message}"
         );
     }
 
