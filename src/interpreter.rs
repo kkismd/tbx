@@ -581,6 +581,21 @@ impl Interpreter {
     /// interpreter to operate correctly regardless of the CWD.
     ///
     /// Absolute paths in USE statements are never affected by this setting.
+    ///
+    /// # Nested USE
+    ///
+    /// All relative paths in nested `USE` statements (including those inside
+    /// files loaded via `USE`) are also resolved against this `base_dir`.
+    /// The directory of the including file is **not** considered; resolution
+    /// always starts from the single `base_dir` set here.
+    ///
+    /// # Relative `dir`
+    ///
+    /// `dir` should be an absolute path. If a relative path is supplied,
+    /// `std::fs::canonicalize` will still resolve it against the process CWD,
+    /// so the CWD dependency is not eliminated. Use
+    /// `std::fs::canonicalize(&dir)` or `std::env::current_dir()` to obtain
+    /// an absolute path before calling this method.
     pub fn set_base_dir(&mut self, dir: PathBuf) {
         self.base_dir = Some(dir);
     }
@@ -723,7 +738,7 @@ impl Interpreter {
             };
             let canonical = std::fs::canonicalize(&resolved_path).map_err(|e| {
                 make_err(TbxError::FileNotFound {
-                    path: path.clone(),
+                    path: resolved_path.display().to_string(),
                     reason: e.to_string(),
                 })
             })?;
@@ -3192,6 +3207,76 @@ PUTDEC 42";
         assert!(
             matches!(result.unwrap_err().kind, TbxError::UndefinedSymbol { .. }),
             "expected UndefinedSymbol for word defined after HALT"
+        );
+    }
+
+    // --- USE set_base_dir ---
+
+    #[test]
+    fn test_set_base_dir_resolves_relative_use_path() {
+        // A relative USE path should be resolved from base_dir, not from CWD.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let lib_path = dir.path().join("lib.tbx");
+        std::fs::write(&lib_path, "DEF HELLO\nPUTSTR \"hello\"\nEND\n").unwrap();
+
+        let mut interp = Interpreter::new();
+        // Set base_dir to the temp directory so that the relative path "lib.tbx"
+        // resolves to the file created above.
+        interp.set_base_dir(dir.path().to_path_buf());
+        // Use a relative path: only the file name, relative to base_dir.
+        interp.exec_source("USE \"lib.tbx\"\nHELLO").unwrap();
+        assert!(
+            interp.take_output().contains("hello"),
+            "relative USE should succeed when base_dir is set"
+        );
+    }
+
+    #[test]
+    fn test_set_base_dir_file_not_found_error_contains_resolved_path() {
+        // When a USE path does not exist, the FileNotFound error should report
+        // the resolved (base_dir-joined) path, not the raw relative string.
+        let dir = tempfile::tempdir().expect("tempdir");
+
+        let mut interp = Interpreter::new();
+        interp.set_base_dir(dir.path().to_path_buf());
+        let result = interp.exec_source("USE \"no_such_file.tbx\"");
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(
+            matches!(err.kind, TbxError::FileNotFound { .. }),
+            "expected TbxError::FileNotFound"
+        );
+        // The error path must contain the base_dir component so that the user
+        // can see which absolute path was attempted.
+        if let TbxError::FileNotFound { path, .. } = &err.kind {
+            assert!(
+                path.contains(dir.path().to_str().unwrap()),
+                "FileNotFound path should contain base_dir; got: {path}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_set_base_dir_inherited_by_nested_use() {
+        // Nested USE (b.tbx USEd from a.tbx) should also resolve relative paths
+        // against the same base_dir.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path_c = dir.path().join("c.tbx");
+        let path_b = dir.path().join("b.tbx");
+        let path_a = dir.path().join("a.tbx");
+        std::fs::write(&path_c, "DEF NESTED\nPUTSTR \"nested\"\nEND\n").unwrap();
+        // b.tbx references c.tbx with a relative path
+        std::fs::write(&path_b, "USE \"c.tbx\"\n").unwrap();
+        // a.tbx references b.tbx with a relative path
+        std::fs::write(&path_a, "USE \"b.tbx\"\n").unwrap();
+
+        let mut interp = Interpreter::new();
+        interp.set_base_dir(dir.path().to_path_buf());
+        // All USE paths are relative; base_dir must be applied throughout the chain.
+        interp.exec_source("USE \"a.tbx\"\nNESTED").unwrap();
+        assert!(
+            interp.take_output().contains("nested"),
+            "base_dir should be applied to nested USE chains"
         );
     }
 
