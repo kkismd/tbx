@@ -21,16 +21,11 @@ fn run_file(path: &str) -> std::process::ExitCode {
     // Resolve the base directory from the input file's parent directory.
     // This makes relative USE paths inside the program file independent of
     // the process CWD.
-    if let Some(parent) = std::path::Path::new(path).parent() {
-        match std::fs::canonicalize(parent) {
-            Ok(abs) => interp.set_base_dir(abs),
-            Err(e) => {
-                eprintln!(
-                    "Warning: cannot resolve base directory '{}': {}",
-                    parent.display(),
-                    e
-                );
-            }
+    // Canonicalize the file path itself first to avoid the empty-parent issue
+    // when only a bare filename is given (e.g. "foo.tbx" -> parent is "").
+    if let Ok(abs_path) = std::fs::canonicalize(path) {
+        if let Some(parent) = abs_path.parent() {
+            interp.set_base_dir(parent.to_path_buf());
         }
     }
 

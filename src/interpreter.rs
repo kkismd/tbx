@@ -597,7 +597,7 @@ impl Interpreter {
     /// `std::fs::canonicalize(&dir)` or `std::env::current_dir()` to obtain
     /// an absolute path before calling this method.
     pub fn set_base_dir(&mut self, dir: PathBuf) {
-        assert!(
+        debug_assert!(
             dir.is_absolute(),
             "set_base_dir requires an absolute path; got: {}",
             dir.display()
