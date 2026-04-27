@@ -121,6 +121,7 @@ INSERT OR REPLACE INTO session_state (key, value) VALUES ('review_before_review_
    ```
 
 3. レビュー完了後、`get_comments` と `get_reviews` の両方を再取得し、SQL に保存した件数と比較する。
+   > **注**: SQL に保存したベースライン件数は review 依頼のたびに更新されるため、前のループで既に検出した 🟢 コメントは「新しいコメント」として再検出されない。二重 issue 登録は発生しない。
 
 4. **新しいコメントもレビューも追加されていない**（どちらの件数も変化なし）→ 指摘なし。ループを終了してステップ7へ進む。
 
