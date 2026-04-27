@@ -123,16 +123,11 @@ INSERT OR REPLACE INTO session_state (key, value) VALUES ('review_before_review_
 3. レビュー完了後、`get_comments` と `get_reviews` の両方を再取得し、SQL に保存した件数と比較する。
    > **注**: SQL に保存したベースライン件数は review 依頼のたびに更新されるため、前のループで既に検出した 🟢 コメントは「新しいコメント」として再検出されない。二重 issue 登録は発生しない。
 
-4. **新しいコメントもレビューも追加されていない**（どちらの件数も変化なし）→ 指摘なし。`pending_info_comments` テーブルを確認する：
-   ```sql
-   SELECT COUNT(*) AS cnt FROM pending_info_comments;
-   ```
-   - cnt ≥ 1 の場合（前ループで保存済みの 🟢 がある）→ ループを終了してステップ6後処理Aへ進む
-   - cnt = 0 またはテーブルが存在しない場合 → ループを終了してステップ7へ進む
+4. **新しいコメントもレビューも追加されていない**（どちらの件数も変化なし）→ 指摘なし。ループを終了してステップ7へ進む。
 
 5. **新しいコメントまたはレビューが追加された場合**、追加された内容を確認する：
-   - **🔴/🟡/🟢 のいずれも含まれない**（Approveレビューのみ）→ `pending_info_comments` テーブルを確認し（手順4と同様）、cnt ≥ 1 なら後処理Aへ、cnt = 0 ならステップ7へ進む。
-   - **🟢 Info のみ含まれる**（🔴/🟡 はない）→ ループを終了してステップ6後処理Aへ進む（Infoは修正対象ではなくIssue登録対象）。
+   - **🔴/🟡/🟢 のいずれも含まれない**（Approveレビューのみ）→ ループを終了してステップ7へ進む。
+   - **🟢 Info のみ含まれる**（🔴/🟡 はない）→ ループを終了してステップ7へ進む。
    - **🔴/🟡 が含まれる** 場合（手順0のガードを通過済みのため `loop_count < 3` が保証されている）：
      - `loop_count` をインクリメントする：
        ```sql
@@ -140,11 +135,6 @@ INSERT OR REPLACE INTO session_state (key, value) VALUES ('review_before_review_
        SELECT CAST(value AS INTEGER) AS loop_count FROM session_state WHERE key = 'review_loop_count';
        ```
      - 新しいコメント・レビューの **🔴/🟡 の指摘のみ**を修正対象とする（🟢 Info は修正しない）
-     - **🟢 Info が混在している場合**は、ループ間で失われないよう SQL に保存する（次ループで 🟢 が「新しいコメント」として再検出されなくなるため）：
-       ```sql
-       CREATE TABLE IF NOT EXISTS pending_info_comments (id INTEGER PRIMARY KEY AUTOINCREMENT, body TEXT NOT NULL);
-       INSERT INTO pending_info_comments (body) VALUES ('<🟢 コメントの本文>');
-       ```
      - 修正後に必ず以下を実行し、エラー・警告がないことを確認する：
        ```bash
        cargo build
@@ -163,64 +153,6 @@ INSERT OR REPLACE INTO session_state (key, value) VALUES ('review_before_review_
        git push
        ```
      - ループの先頭（手順0）へ戻る
-
-### ステップ6後処理A：🟢 Info 指摘の issue 登録
-
-**呼び出し元**: 以下のいずれかから呼ばれる。
-- 手順5「🟢 Info のみ含まれる」分岐（ループ上限未達でも直接ここに来る）
-- 手順4・手順5「Approveのみ」分岐で `pending_info_comments` に保存済みの 🟢 がある場合
-- ステップ6後処理B（ループ上限 3 回に達した場合）
-
-**🟢 指摘の取得元は2つある**。両方を合わせて issue 登録対象とする：
-1. **新しく追加されたコメント**（現在のループで review-implementation が投稿した 🟢）
-2. **SQL の `pending_info_comments`**（前ループで 🔴/🟡 と混在し保存された 🟢）
-
-登録後は SQL テーブルをクリアする（テーブルが存在しない場合も安全に動作する）：
-```sql
-DROP TABLE IF EXISTS pending_info_comments;
-```
-
-- **🟢 を含むコメントがある場合**（上記1または2）、各指摘について `gh issue create` で新しい GitHub issue を登録する。
-
-  **ラベルの準備**（初回のみ）：
-  ```bash
-  # info-finding ラベルが存在しない場合は作成する
-  gh label create info-finding --description "Review info-level finding" --color "0075ca" 2>/dev/null || true
-  ```
-
-  **issue のフォーマット（1指摘1issue）**：
-  ```markdown
-  ## 概要
-
-  （🟢 Info コメントの指摘内容）
-
-  ## 問題の詳細
-
-  （何が問題か・なぜ気になるかを具体的に説明）
-
-  ## 期待される状態
-
-  （どう改善されるべきか）
-
-  ## 発見PR
-
-  PR #<PR番号> のレビューで検出（Info レベル）
-  ```
-
-  ```bash
-  cat > "$(git rev-parse --git-dir)/INFO_ISSUE_BODY.md" << 'EOF'
-  （上記フォーマットで記述）
-  EOF
-
-  gh issue create \
-    --title "（指摘内容の要約）" \
-    --body-file "$(git rev-parse --git-dir)/INFO_ISSUE_BODY.md" \
-    --label "info-finding"
-  ```
-
-- **🟢 を含むコメントがない場合**（指摘なし、または Approve のみ）、issue 登録は行わない。
-
-いずれの場合もステップ7へ進む。
 
 ### ステップ6後処理B：ループ上限到達時の処理
 
@@ -246,9 +178,7 @@ loop_count >= 3 でここに到達した場合、以下の2ブロックをそれ
 
 #### 🔴/🟡 の有無によらず常に実行
 
-3. 新しく追加されたコメントの中に 🟢 Info 指摘が含まれている場合は、**ステップ6後処理Aを実行する**（🟢 がなければスキップ）。
-
-4. ステップ7へ進む。
+3. ステップ7へ進む。
 
 ### ステップ7：ユーザーへの最終報告
 
@@ -258,7 +188,6 @@ loop_count >= 3 でここに到達した場合、以下の2ブロックをそれ
 - 実行したループ回数（例：「レビュー指摘を2回修正しました」）
 - 最終レビューの結果（以下のいずれか）：
   - 指摘なし（クリーン）
-  - 🟢 Info 指摘が残り、新しい GitHub issue として登録した（issue 番号を列挙）
   - 🔴/🟡 がループ上限で残存し、PRにコメントを記録した（未解消指摘の要約）
 
 ## 動作確認・デバッグの方針
