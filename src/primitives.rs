@@ -4513,6 +4513,9 @@ mod tests {
     #[test]
     fn test_cs_close_tag_mismatched_tag_error() {
         // CS_CLOSE_TAG with a tag that does not match must return MismatchedTag.
+        // Unlike the Cell-on-top case, a mismatched Tag is consumed (not restored):
+        // the caller always encounters a compile error and rollback_def() clears
+        // compile_stack anyway.
         let mut vm = make_compiling_vm("TESTWORD");
         vm.compile_stack.push(CompileEntry::Tag("IF".to_string()));
         let idx = vm.intern_string("WHILE").unwrap();
@@ -4527,6 +4530,12 @@ mod tests {
                 } if expected == "WHILE" && found == "IF"
             ),
             "expected MismatchedTag(WHILE/IF), got {err:?}"
+        );
+        // After MismatchedTag the tag is consumed (not restored), which is intentional:
+        // a compile error always triggers rollback_def() that clears compile_stack.
+        assert!(
+            vm.compile_stack.is_empty(),
+            "mismatched tag must be consumed, not restored"
         );
     }
 
