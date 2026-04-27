@@ -31,7 +31,12 @@ fn main() {
         })
         .collect();
     tbx_files.sort();
+    assert!(
+        !tbx_files.is_empty(),
+        "no test_*.tbx files found in lib/tests/"
+    );
 
+    let mut seen = std::collections::HashSet::new();
     let mut out = String::new();
     for path in &tbx_files {
         let file_name = path
@@ -44,6 +49,14 @@ fn main() {
             .strip_suffix(".tbx")
             .expect("file_name ends with .tbx");
         let fn_name = stem.replace('-', "_");
+
+        // Detect collisions caused by files that differ only in '-' vs '_'.
+        if !seen.insert(fn_name.clone()) {
+            panic!(
+                "build.rs: duplicate test function name `{fn_name}` \
+                 (check for files differing only in `-` vs `_`)"
+            );
+        }
 
         writeln!(
             out,
