@@ -123,7 +123,7 @@ pub enum CompileEntry {
 
 ---
 
-コンパイルワードの実装に使用するプリミティブ群。このうち `CS_PUSH` / `CS_POP` / `CS_SWAP` / `CS_DROP` / `CS_DUP` / `CS_OVER` / `CS_ROT` / `PATCH_ADDR` / `COMPILE_EXPR` / `CS_OPEN_TAG` / `CS_CLOSE_TAG` は **コンパイルモード（`is_compiling = true`）専用** であり、実行モード中に呼ばれた場合はエラーとする。`APPEND` / `HERE` / `JUMP_FALSE` / `JUMP_TRUE` / `JUMP_ALWAYS` は汎用プリミティブであり、コンパイルモード以外でも使用できる。
+コンパイルワードの実装に使用するプリミティブ群。このうち `CS_PUSH` / `CS_POP` / `CS_SWAP` / `CS_DROP` / `CS_DUP` / `CS_OVER` / `CS_ROT` / `PATCH_ADDR` / `COMPILE_EXPR` / `COMPILE_LVALUE` / `SKIP_EQ` / `CS_OPEN_TAG` / `CS_CLOSE_TAG` は **コンパイルモード（`is_compiling = true`）専用** であり、実行モード中に呼ばれた場合はエラーとする。`APPEND` / `HERE` / `JUMP_FALSE` / `JUMP_TRUE` / `JUMP_ALWAYS` / `ASSIGN_XT` は汎用プリミティブであり、コンパイルモード以外でも使用できる。
 
 | プリミティブ | スタック効果 | 説明 |
 | ------------ | ------------ | ---- |
@@ -138,9 +138,12 @@ pub enum CompileEntry {
 | `CS_ROT`     | `( a b c -- b c a )` | compile_stack の3番目をトップに移動する |
 | `PATCH_ADDR` | `( addr -- )` | `DictAddr(addr)` をポップし、`dictionary[addr] = Cell::DictAddr(DP)` を書き込む（前方参照のバックパッチ） |
 | `COMPILE_EXPR` | `( -- )` | ソースから式を1つ読み取ってコンパイルし、命令列を `dictionary[DP..]` に書き込む |
+| `COMPILE_LVALUE` | `( -- )` | トークンストリームから識別子を1つ読み、変数アドレスを `LIT addr` として `dictionary[DP..]` に書き込む。ローカル変数は `StackAddr`、グローバル変数は `DictAddr` に解決する |
+| `SKIP_EQ`    | `( -- )` | トークンストリームから次のトークンを読み、`=` であることを検証して破棄する。`=` 以外の場合は `InvalidExpression` |
 | `JUMP_FALSE` | `( -- xt )` | `BranchIfFalse`（BIF）のXt定数をデータスタックに積む |
 | `JUMP_TRUE`  | `( -- xt )` | `BranchIfTrue`（BIT）のXt定数をデータスタックに積む |
 | `JUMP_ALWAYS` | `( -- xt )` | `Goto` のXt定数をデータスタックに積む |
+| `ASSIGN_XT`  | `( -- xt )` | `SET` のXt定数をデータスタックに積む。`APPEND ASSIGN_XT` で SET 命令を辞書に書き込むために使用する |
 | `CS_OPEN_TAG` | `( str -- )` | データスタックから `StringDesc` をポップし、文字列を解決して `CompileEntry::Tag(string)` を compile_stack に積む。制御構造の開始を記録するために使用する |
 | `CS_CLOSE_TAG` | `( str -- )` | データスタックから `StringDesc` をポップし、compile_stack のトップが一致する `Tag` であることを検証してポップする。不一致なら `MismatchedTag`、タグがなければ `NoOpenTag` を返す |
 
@@ -423,3 +426,48 @@ fn read_jump_target(&self, offset: usize) -> Result<usize, TbxError> {
 
 フォワードジャンプ（BIF → ENDWH 直後 D）は `PATCH_ADDR` が `Cell::DictAddr(dp)` を書き込む。バックジャンプ（ENDWH → ループ先頭 A）のターゲットも `Cell::DictAddr` として辞書に書き込まれる。すべてのジャンプターゲットが `Cell::DictAddr` に統一されているため、算術整数と実行アドレスが型レベルで区別される。
 
+
+---
+
+## LET — BASIC スタイル代入文の実装記録
+
+> Issue #391「LET文の実装」に基づく設計方針
+
+`LET I = 10` は `SET &I, 10` の糖衣構文として `lib/basic.tbx` に TBX コンパイルワードとして実装する。
+
+### 必要な新プリミティブ
+
+`COMPILE_LVALUE` と `SKIP_EQ` を新たに追加する（上記プリミティブ一覧を参照）。
+`ASSIGN_XT` 定数も追加し、`APPEND ASSIGN_XT` で SET 命令を辞書に書き込めるようにする。
+
+### LET の実装（`lib/basic.tbx`）
+
+```
+DEF LET
+  COMPILE_LVALUE    REM read variable name, emit LIT addr
+  SKIP_EQ           REM consume '='
+  COMPILE_EXPR      REM compile right-hand side expression
+  APPEND ASSIGN_XT  REM emit SET instruction
+END
+IMMEDIATE LET
+```
+
+**LET の動作**（コンパイル時）:
+1. `COMPILE_LVALUE` — トークンストリームから識別子を読み、`LIT StackAddr(idx)` または `LIT DictAddr(addr)` を辞書に書き込む
+2. `SKIP_EQ` — `=` トークンを読み捨てる
+3. `COMPILE_EXPR` — 残りのトークンを式としてコンパイルし命令列に書き込む
+4. `APPEND ASSIGN_XT` — SET 命令の Xt を辞書に書き込む
+
+生成されるコード（`LET I = X + 1` の場合、I はローカル変数）:
+
+```
+LIT StackAddr(idx_of_I)
+[X + 1 の命令列]
+SET
+```
+
+これは `SET &I, X + 1` が生成するコードと同等。
+
+**制約**:
+- DEF ボディ内専用（コンパイルモード）。トップレベルでは `SET &I, expr` を使うこと
+- 配列要素への代入（`LET A(I) = ...`）は非対応

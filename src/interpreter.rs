@@ -3935,4 +3935,63 @@ NOOP_LOOP(4)";
             other => panic!("expected MismatchedTag(WHILE/IF), got {other:?}"),
         }
     }
+
+    // --- LET compile word ---
+
+    #[test]
+    fn test_let_local_variable_basic() {
+        // LET I = 10 inside a DEF body assigns a local variable.
+        let mut interp = Interpreter::new();
+        let src = "DEF TESTLET\n  VAR I\n  LET I = 10\n  PUTDEC I\nEND\nTESTLET";
+        interp.exec_source(src).unwrap();
+        assert_eq!(interp.take_output(), "10");
+    }
+
+    #[test]
+    fn test_let_local_arithmetic_expr() {
+        // LET with an arithmetic RHS expression.
+        let mut interp = Interpreter::new();
+        let src = "DEF TESTLET(X)\n  VAR R\n  LET R = X * 2 + 1\n  PUTDEC R\nEND\nTESTLET 5";
+        interp.exec_source(src).unwrap();
+        assert_eq!(interp.take_output(), "11");
+    }
+
+    #[test]
+    fn test_let_global_variable() {
+        // LET assigns a global variable declared outside a DEF.
+        let mut interp = Interpreter::new();
+        let src = "VAR G\nDEF SETG(V)\n  LET G = V\nEND\nSETG 42\nPUTDEC G";
+        interp.exec_source(src).unwrap();
+        assert_eq!(interp.take_output(), "42");
+    }
+
+    #[test]
+    fn test_let_missing_eq_is_error() {
+        // LET without '=' should produce an error.
+        let mut interp = Interpreter::new();
+        let src = "DEF BAD\n  VAR I\n  LET I 10\nEND";
+        let result = interp.exec_source(src);
+        assert!(result.is_err(), "expected error for LET without '='");
+    }
+
+    #[test]
+    fn test_let_undefined_variable_is_error() {
+        // LET with an undefined variable name should produce an error.
+        let mut interp = Interpreter::new();
+        let src = "DEF BAD\n  LET NOSUCH = 10\nEND";
+        let result = interp.exec_source(src);
+        assert!(
+            result.is_err(),
+            "expected error for LET with undefined variable"
+        );
+    }
+
+    #[test]
+    fn test_let_parameter_assignment() {
+        // LET can assign to a function parameter (which is also a local StackAddr).
+        let mut interp = Interpreter::new();
+        let src = "DEF DOUBLE(X)\n  LET X = X * 2\n  PUTDEC X\nEND\nDOUBLE 7";
+        interp.exec_source(src).unwrap();
+        assert_eq!(interp.take_output(), "14");
+    }
 }

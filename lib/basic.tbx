@@ -124,3 +124,24 @@ DEF ELSE
   CS_OPEN_TAG "IF"
 END
 IMMEDIATE ELSE
+
+REM LET varname = expr — BASIC-style assignment
+REM
+REM  Syntactic sugar for SET &varname, expr.
+REM  Works for both local variables (StackAddr) and global variables (DictAddr).
+REM  COMPILE_LVALUE reads the variable name from the token stream and emits LIT addr.
+REM  SKIP_EQ validates and consumes the '=' token.
+REM  COMPILE_EXPR compiles the right-hand side expression.
+REM  APPEND ASSIGN_XT emits the SET instruction.
+REM
+REM  Usage (inside DEF body only):
+REM    LET I = 10
+REM    LET X = A + B * 2
+
+DEF LET
+  COMPILE_LVALUE
+  SKIP_EQ
+  COMPILE_EXPR
+  APPEND ASSIGN_XT
+END
+IMMEDIATE LET

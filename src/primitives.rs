@@ -1286,6 +1286,96 @@ fn compile_expr_prim(vm: &mut VM) -> Result<(), TbxError> {
     Ok(())
 }
 
+/// COMPILE_LVALUE — read a variable name from the token stream and emit `LIT addr` to the
+/// dictionary, where `addr` is the variable's stack or dictionary address.
+///
+/// This is the compile-time counterpart to the `&var` address-of operator in expressions.
+/// Locals (from `compile_state.local_table`) resolve to `StackAddr`; global variables
+/// (`EntryKind::Variable`) resolve to `DictAddr`.
+///
+/// Must be called in compile mode (inside an IMMEDIATE word invocation that runs during a
+/// DEF body compilation). Requires `token_stream` to be set.
+fn compile_lvalue_prim(vm: &mut VM) -> Result<(), TbxError> {
+    if !vm.is_compiling {
+        return Err(TbxError::InvalidExpression {
+            reason: "COMPILE_LVALUE outside compile mode",
+        });
+    }
+
+    let tok = vm.next_token()?;
+    let name = match tok.token {
+        Token::Ident(n) => n,
+        _ => {
+            return Err(TbxError::InvalidExpression {
+                reason: "COMPILE_LVALUE: expected variable name",
+            })
+        }
+    };
+
+    // Resolve address: local table first, then global dictionary.
+    let addr_cell = {
+        // Take local_table out to avoid borrow conflict with &mut vm below.
+        let local_table = vm
+            .compile_state
+            .as_mut()
+            .map(|s| std::mem::take(&mut s.local_table));
+
+        let result = if let Some(idx) = local_table.as_ref().and_then(|lt| lt.get(&name)).copied() {
+            Ok(Cell::StackAddr(idx))
+        } else {
+            let xt = vm
+                .lookup(&name)
+                .ok_or_else(|| TbxError::UndefinedSymbol { name: name.clone() })?;
+            match &vm.headers[xt.index()].kind {
+                EntryKind::Variable(addr) => Ok(Cell::DictAddr(*addr)),
+                _ => Err(TbxError::TypeError {
+                    expected: "variable",
+                    got: "non-variable",
+                }),
+            }
+        };
+
+        // Restore local_table unconditionally.
+        if let (Some(state), Some(lt)) = (vm.compile_state.as_mut(), local_table) {
+            state.local_table = lt;
+        }
+        result?
+    };
+
+    // Emit LIT <addr> to the dictionary.
+    let lit_xt =
+        vm.find_by_kind(|k| matches!(k, EntryKind::Lit))
+            .ok_or(TbxError::UndefinedSymbol {
+                name: "LIT".to_string(),
+            })?;
+    vm.dict_write(Cell::Xt(lit_xt))?;
+    vm.dict_write(addr_cell)?;
+    Ok(())
+}
+
+/// SKIP_EQ — read the next token from the token stream and validate it is `=`.
+///
+/// Used by the `LET` compile word to consume the `=` separator between the
+/// left-hand variable name and the right-hand expression.
+///
+/// Must be called in compile mode. Returns `InvalidExpression` if the token is
+/// not `Token::Op("=")`.
+fn skip_eq_prim(vm: &mut VM) -> Result<(), TbxError> {
+    if !vm.is_compiling {
+        return Err(TbxError::InvalidExpression {
+            reason: "SKIP_EQ outside compile mode",
+        });
+    }
+
+    let tok = vm.next_token()?;
+    match tok.token {
+        Token::Op(ref s) if s == "=" => Ok(()),
+        _ => Err(TbxError::InvalidExpression {
+            reason: "LET: expected '=' after variable name",
+        }),
+    }
+}
+
 /// USE — load and execute a TBX source file at compile time.
 ///
 /// Syntax: `USE "path/to/file.tbx"`
@@ -1529,6 +1619,23 @@ pub fn register_all(vm: &mut VM) {
     let mut use_entry = WordEntry::new_primitive("USE", use_prim);
     use_entry.flags = FLAG_IMMEDIATE;
     vm.register(use_entry);
+
+    // COMPILE_LVALUE / SKIP_EQ: compile-helper primitives for LET and similar
+    // compile words. No IMMEDIATE/SYSTEM — called as statements inside IMMEDIATE
+    // word bodies, exactly like COMPILE_EXPR, CS_PUSH, PATCH_ADDR, etc.
+    vm.register(WordEntry::new_primitive(
+        "COMPILE_LVALUE",
+        compile_lvalue_prim,
+    ));
+    vm.register(WordEntry::new_primitive("SKIP_EQ", skip_eq_prim));
+
+    // ASSIGN_XT: constant holding the Xt of the SET primitive.
+    // Allows TBX compile words to emit a SET instruction via `APPEND ASSIGN_XT`,
+    // analogous to JUMP_FALSE/JUMP_TRUE/JUMP_ALWAYS for branch instructions.
+    let set_xt = vm
+        .lookup("SET")
+        .expect("SET primitive must be registered before ASSIGN_XT");
+    vm.register(WordEntry::new_constant("ASSIGN_XT", Cell::Xt(set_xt)));
 }
 
 #[cfg(test)]
