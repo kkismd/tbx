@@ -1,6 +1,6 @@
 ---
 name: implement-issue
-description: TBXプロジェクトのissueを読み込み、Rustコードを実装してPull Requestを作成するエージェント。「issue #N を実装して」というプロンプトで起動する。
+description: TBXプロジェクトのissueを読み込み、Rustコードを実装してPull Requestを作成し、レビューループ（最大3回）で品質を担保するエージェント。「issue #N を実装して」というプロンプトで起動する。
 ---
 
 ## 役割
