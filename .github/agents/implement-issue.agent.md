@@ -175,9 +175,9 @@ INSERT OR REPLACE INTO session_state (key, value) VALUES ('review_before_review_
 1. **新しく追加されたコメント**（現在のループで review-implementation が投稿した 🟢）
 2. **SQL の `pending_info_comments`**（前ループで 🔴/🟡 と混在し保存された 🟢）
 
-登録後は SQL テーブルをクリアする：
+登録後は SQL テーブルをクリアする（テーブルが存在しない場合も安全に動作する）：
 ```sql
-DELETE FROM pending_info_comments;
+DROP TABLE IF EXISTS pending_info_comments;
 ```
 
 - **🟢 を含むコメントがある場合**（上記1または2）、各指摘について `gh issue create` で新しい GitHub issue を登録する。
