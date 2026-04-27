@@ -66,3 +66,19 @@ fn no_collision_for_distinct_names() {
     assert!(seen.insert(first));
     assert!(seen.insert(second));
 }
+
+#[test]
+#[should_panic(expected = "cannot form a valid Rust identifier")]
+fn validate_panics_on_digit_leading_stem() {
+    // A stem starting with a digit produces an invalid Rust identifier.
+    let fn_name = sanitize_fn_name("1test");
+    validate_stem(&fn_name, "1test");
+}
+
+#[test]
+#[should_panic(expected = "cannot form a valid Rust identifier")]
+fn validate_panics_on_empty_stem() {
+    // An empty stem cannot form any identifier.
+    let fn_name = sanitize_fn_name("");
+    validate_stem(&fn_name, "");
+}

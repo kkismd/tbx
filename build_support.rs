@@ -9,13 +9,19 @@ fn sanitize_fn_name(stem: &str) -> String {
     stem.replace('-', "_")
 }
 
-/// Validates that `fn_name` (the sanitized form of `stem`) consists only of
-/// ASCII alphanumerics and `_`.  Panics with an informative message otherwise.
+/// Validates that `fn_name` (the sanitized form of `stem`) is a valid Rust identifier:
+/// - non-empty
+/// - first character is an ASCII letter or `_` (digits are not valid at the start)
+/// - remaining characters are ASCII alphanumerics or `_`
+///
+/// Panics with an informative message if any condition is violated.
 fn validate_stem(fn_name: &str, stem: &str) {
-    if !fn_name
+    let first_ok = fn_name
         .chars()
-        .all(|c| c.is_ascii_alphanumeric() || c == '_')
-    {
+        .next()
+        .map(|c| c.is_ascii_alphabetic() || c == '_')
+        .unwrap_or(false); // empty fn_name is invalid
+    if !first_ok || !fn_name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
         panic!(
             "build.rs: file stem `{stem}` contains characters that cannot form \
              a valid Rust identifier; rename the file to use only ASCII alphanumerics and '-'/'_'"
