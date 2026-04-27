@@ -589,20 +589,23 @@ impl Interpreter {
     /// The directory of the including file is **not** considered; resolution
     /// always starts from the single `base_dir` set here.
     ///
-    /// # Relative `dir`
+    /// # Errors
     ///
-    /// `dir` should be an absolute path. If a relative path is supplied,
-    /// `std::fs::canonicalize` will still resolve it against the process CWD,
-    /// so the CWD dependency is not eliminated. Use
-    /// `std::fs::canonicalize(&dir)` or `std::env::current_dir()` to obtain
+    /// Returns `Err(TbxError::InvalidArgument)` if `dir` is a relative path.
+    /// Use `std::fs::canonicalize(&dir)` or `std::env::current_dir()` to obtain
     /// an absolute path before calling this method.
-    pub fn set_base_dir(&mut self, dir: PathBuf) {
-        debug_assert!(
-            dir.is_absolute(),
-            "set_base_dir requires an absolute path; got: {}",
-            dir.display()
-        );
-        self.base_dir = Some(dir);
+    pub fn set_base_dir(&mut self, dir: PathBuf) -> Result<(), TbxError> {
+        if dir.is_absolute() {
+            self.base_dir = Some(dir);
+            Ok(())
+        } else {
+            Err(TbxError::InvalidArgument {
+                message: format!(
+                    "set_base_dir requires an absolute path; got: {}",
+                    dir.display()
+                ),
+            })
+        }
     }
 
     /// Execute an IMMEDIATE word, regardless of compile/interpret mode.
@@ -3227,7 +3230,7 @@ PUTDEC 42";
         let mut interp = Interpreter::new();
         // Set base_dir to the temp directory so that the relative path "lib.tbx"
         // resolves to the file created above.
-        interp.set_base_dir(dir.path().to_path_buf());
+        interp.set_base_dir(dir.path().to_path_buf()).unwrap();
         // Use a relative path: only the file name, relative to base_dir.
         interp.exec_source("USE \"lib.tbx\"\nHELLO").unwrap();
         assert!(
@@ -3243,7 +3246,7 @@ PUTDEC 42";
         let dir = tempfile::tempdir().expect("tempdir");
 
         let mut interp = Interpreter::new();
-        interp.set_base_dir(dir.path().to_path_buf());
+        interp.set_base_dir(dir.path().to_path_buf()).unwrap();
         let result = interp.exec_source("USE \"no_such_file.tbx\"");
         assert!(result.is_err());
         let err = result.unwrap_err();
@@ -3276,7 +3279,7 @@ PUTDEC 42";
         std::fs::write(&path_a, "USE \"b.tbx\"\n").unwrap();
 
         let mut interp = Interpreter::new();
-        interp.set_base_dir(dir.path().to_path_buf());
+        interp.set_base_dir(dir.path().to_path_buf()).unwrap();
         // All USE paths are relative; base_dir must be applied throughout the chain.
         interp.exec_source("USE \"a.tbx\"\nNESTED").unwrap();
         assert!(
@@ -3306,7 +3309,7 @@ PUTDEC 42";
         std::fs::write(&path_a, "USE \"utils.tbx\"\n").unwrap();
 
         let mut interp = Interpreter::new();
-        interp.set_base_dir(dir.path().to_path_buf());
+        interp.set_base_dir(dir.path().to_path_buf()).unwrap();
         // a.tbx USEs "utils.tbx" which resolves to base_dir/utils.tbx — success.
         interp
             .exec_source("USE \"modules/a.tbx\"\nUTIL_WORD")
@@ -3314,6 +3317,18 @@ PUTDEC 42";
         assert!(
             interp.take_output().contains("util"),
             "USE in subdirectory file should succeed when path is relative to base_dir"
+        );
+    }
+
+    #[test]
+    fn test_set_base_dir_rejects_relative_path() {
+        // Passing a relative path must return Err(TbxError::InvalidArgument).
+        let mut interp = Interpreter::new();
+        let result = interp.set_base_dir(PathBuf::from("relative/path"));
+        assert!(result.is_err());
+        assert!(
+            matches!(result.unwrap_err(), TbxError::InvalidArgument { .. }),
+            "relative path should return InvalidArgument"
         );
     }
 
