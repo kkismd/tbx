@@ -71,6 +71,9 @@ PRの本文に `Closes #N` や `Fixes #N` などのissueリンクが含まれて
 
 #### テスト
 
+テストカバレッジの指摘は **PR で変更されたファイル**（ステップ1で取得した `get_files` のリスト）に含まれるファイルのみを対象とする。変更されていないファイルのカバレッジ不足は報告しない。
+スコープは**ファイル単位**であり、変更行単位ではない。PR変更ファイル内であれば、このPRで変更されていない既存の関数・型も対象に含める。
+
 - 正常系しかテストされていない（異常系・境界値が欠落）
 - テストなしで実装されている公開関数がある
 - テストが実装の詳細に依存しすぎている（壊れやすいテスト）
@@ -132,12 +135,20 @@ gh pr review <PR番号> --request-changes --body-file "$(git rev-parse --git-dir
 > gh pr comment <PR番号> --body-file "$(git rev-parse --git-dir)/REVIEW_BODY.md"
 > ```
 
-**② Info の個別投稿**（`gh pr comment`）
+**② Info の投稿**（`gh pr comment`）
 
-Info 指摘は `gh pr review` とは別に、**1指摘1コメント**でそれぞれ `gh pr comment` を呼び出して投稿する（`implement-issue` が後から個別に読み取って GitHub issue を登録するため、まとめて1件にしない）。
+Info 指摘は `gh pr review` とは別に `gh pr comment` で投稿する。**テストカバレッジに関する指摘は件数にかかわらず（1件でも複数でも）常に1件の Info にまとめて投稿する**（`implement-issue` が後から読み取って GitHub issue を登録するため、テストカバレッジ以外の Info は1指摘1コメントで個別投稿する）。
 
 ```bash
-# Info 指摘ごとに別ファイルで投稿（Info が複数あれば繰り返す）
+# テストカバレッジの Info は複数あっても1ファイルにまとめて1回投稿する
+cat > "$(git rev-parse --git-dir)/INFO_COMMENT_TEST.md" << 'EOF'
+🟢 **[Info] テストカバレッジ**
+（欠落しているテストケースをすべて列挙）
+**期待される状態**: （どう改善されるべきか）
+EOF
+gh pr comment <PR番号> --body-file "$(git rev-parse --git-dir)/INFO_COMMENT_TEST.md"
+
+# テストカバレッジ以外の Info 指摘は従来通り1指摘1コメントで投稿する
 cat > "$(git rev-parse --git-dir)/INFO_COMMENT_1.md" << 'EOF'
 🟢 **[Info]**
 （1件目の Info 指摘内容）
