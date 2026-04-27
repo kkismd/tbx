@@ -138,6 +138,12 @@ pub enum TbxError {
     AssertionFailedWithMessage {
         message: String,
     },
+    /// An argument passed to a function or method has an invalid value.
+    ///
+    /// `message` describes what was wrong with the argument.
+    InvalidArgument {
+        message: String,
+    },
 }
 
 impl std::fmt::Display for TbxError {
@@ -232,6 +238,9 @@ impl std::fmt::Display for TbxError {
             TbxError::AssertionFailedWithMessage { message } => {
                 write!(f, "assertion failed: {message}")
             }
+            TbxError::InvalidArgument { message } => {
+                write!(f, "invalid argument: {message}")
+            }
         }
     }
 }
@@ -324,5 +333,15 @@ mod tests {
         let msg = e.to_string();
         assert!(msg.contains("assertion failed"));
         assert!(msg.contains("SIGN(7) should be 1"));
+    }
+
+    #[test]
+    fn test_invalid_argument_display() {
+        let e = TbxError::InvalidArgument {
+            message: "some error".to_string(),
+        };
+        let msg = e.to_string();
+        assert!(msg.contains("invalid argument"));
+        assert!(msg.contains("some error"));
     }
 }

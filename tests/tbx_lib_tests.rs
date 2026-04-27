@@ -9,7 +9,9 @@ use tbx::interpreter::Interpreter;
 
 fn run_tbx_test(path: &PathBuf, base_dir: &Path) -> Result<(), String> {
     let mut interp = Interpreter::new();
-    interp.set_base_dir(base_dir.to_path_buf());
+    interp
+        .set_base_dir(base_dir.to_path_buf())
+        .expect("CARGO_MANIFEST_DIR is always absolute");
     let src = std::fs::read_to_string(path)
         .map_err(|e| format!("cannot read {}: {e}", path.display()))?;
     interp
