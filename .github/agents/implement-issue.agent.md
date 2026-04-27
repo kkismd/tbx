@@ -99,11 +99,14 @@ INSERT OR REPLACE INTO session_state (key, value) VALUES ('review_before_review_
 
 #### 各ループ内の手順
 
-0. **ループ先頭での上限チェック**：ループカウンターを確認し、上限に達していれば直ちに終了する。
+0. **ループ先頭での上限チェック**：ループカウンターを確認し、上限に達していれば最終レビューを実施して終了する。
    ```sql
    SELECT CAST(value AS INTEGER) AS loop_count FROM session_state WHERE key = 'review_loop_count';
    ```
-   `loop_count >= 3` の場合: **ステップ6後処理B**へ進む（以降の手順を実行しない）。
+   `loop_count >= 3` の場合: 修正は行わず、**最終レビューを1回だけ実施してから後処理Bへ進む**：
+   1. 現在の件数を SQL に保存する（手順1と同様）
+   2. `review-implementation` エージェントを起動する（手順2と同様）
+   3. レビュー完了後、**ステップ6後処理B**へ進む（修正・コミットは行わない）
 
 1. `review-implementation` エージェントを起動する前に、現在の件数を SQL に保存する：
    ```sql
