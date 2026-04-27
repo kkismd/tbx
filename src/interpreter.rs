@@ -3308,7 +3308,9 @@ PUTDEC 42";
         let mut interp = Interpreter::new();
         interp.set_base_dir(dir.path().to_path_buf());
         // a.tbx USEs "utils.tbx" which resolves to base_dir/utils.tbx — success.
-        interp.exec_source("USE \"modules/a.tbx\"\nUTIL_WORD").unwrap();
+        interp
+            .exec_source("USE \"modules/a.tbx\"\nUTIL_WORD")
+            .unwrap();
         assert!(
             interp.take_output().contains("util"),
             "USE in subdirectory file should succeed when path is relative to base_dir"
