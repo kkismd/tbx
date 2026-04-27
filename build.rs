@@ -14,6 +14,8 @@ include!("build_support.rs");
 fn main() {
     // Trigger a rebuild whenever any file inside lib/tests/ changes.
     println!("cargo:rerun-if-changed=lib/tests/");
+    // Also rebuild when the shared helper file changes.
+    println!("cargo:rerun-if-changed=build_support.rs");
 
     let manifest_dir = env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR not set");
     let tests_dir = PathBuf::from(&manifest_dir).join("lib/tests");
