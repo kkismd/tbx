@@ -1,6 +1,6 @@
 ---
 name: implement-issue
-description: TBXプロジェクトのissueを読み込み、Rustコードを実装してPull Requestを作成し、レビューループ（最大3回）で品質を担保するエージェント。「issue #N を実装して」というプロンプトで起動する。
+description: TBXプロジェクトのissueを読み込み、Rustコードを実装してPull Requestを作成し、修正サイクル（最大3回）と最終レビュー（常に1回）の2フェーズで品質を担保するエージェント。「issue #N を実装して」というプロンプトで起動する。
 ---
 
 ## 役割
@@ -81,11 +81,9 @@ cargo clippy --all-targets -- -D warnings
   Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>
   ```
 
-### ステップ6：レビュー＆修正ループ
+### ステップ6A：修正サイクル（最大3回）
 
-PR作成が完了したら、ユーザーへの報告より先に `review-implementation` エージェントを起動し、指摘がなくなるまで修正サイクルを繰り返す。
-
-**ループの上限は3回**とする（無限ループ防止）。状態はすべて `sql` ツールで永続化する。まずループ開始前に以下を実行してテーブルと初期値を準備する：
+PR作成が完了したら、ユーザーへの報告より先に修正サイクルを開始する。状態はすべて `sql` ツールで永続化する。まずサイクル開始前に以下を実行してテーブルと初期値を準備する：
 
 ```sql
 -- session_state テーブルを作成（なければ）
@@ -97,18 +95,15 @@ INSERT OR REPLACE INTO session_state (key, value) VALUES ('review_before_comment
 INSERT OR REPLACE INTO session_state (key, value) VALUES ('review_before_review_count', '0');
 ```
 
-#### 各ループ内の手順
+#### 各イテレーションの手順
 
-0. **ループ先頭での上限チェック**：ループカウンターを確認し、上限に達していれば最終レビューを実施して終了する。
+0. **イテレーション先頭での上限チェック**：ループカウンターを確認する。
    ```sql
    SELECT CAST(value AS INTEGER) AS loop_count FROM session_state WHERE key = 'review_loop_count';
    ```
-   `loop_count >= 3` の場合: 修正は行わず、**最終レビューを1回だけ実施してから後処理Bへ進む**：
-   1. 現在の件数を SQL に保存する（手順1と同様）
-   2. `review-implementation` エージェントを起動する（手順2と同様）
-   3. レビュー完了後、**ステップ6後処理B**へ進む（修正・コミットは行わない）
+   `loop_count >= 3` の場合: **このイテレーションでは review を実施せず、修正サイクルを終了してステップ6Bへ進む**。
 
-1. `review-implementation` エージェントを起動する前に、現在の件数を SQL に保存する：
+1. 現在のPRコメント件数・レビュー件数を取得し、SQL に保存する：
    ```sql
    -- <N_comments> と <N_reviews> は get_comments / get_reviews で取得した件数に置き換える
    INSERT OR REPLACE INTO session_state (key, value) VALUES ('review_before_comment_count', '<N_comments>');
@@ -121,53 +116,63 @@ INSERT OR REPLACE INTO session_state (key, value) VALUES ('review_before_review_
    ```
 
 3. レビュー完了後、`get_comments` と `get_reviews` の両方を再取得し、SQL に保存した件数と比較する。
-   > **注**: SQL に保存したベースライン件数は review 依頼のたびに更新されるため、前のループで既に検出した 🟢 コメントは「新しいコメント」として再検出されない。二重 issue 登録は発生しない。
+   > **注**: SQL に保存したベースライン件数はイテレーションのたびに更新されるため、前のイテレーションで既に検出した 🟢 コメントは「新しいコメント」として再検出されない。二重 issue 登録は発生しない。
 
-4. **新しいコメントもレビューも追加されていない**（どちらの件数も変化なし）→ 指摘なし。ループを終了してステップ7へ進む。
+4. **判定**：
 
-5. **新しいコメントまたはレビューが追加された場合**、追加された内容を確認する：
-   - **🔴/🟡/🟢 のいずれも含まれない**（Approveレビューのみ）→ ループを終了してステップ7へ進む。
-   - **🟢 Info のみ含まれる**（🔴/🟡 はない）→ ループを終了してステップ7へ進む。
-   - **🔴/🟡 が含まれる** 場合（手順0のガードを通過済みのため `loop_count < 3` が保証されている）：
-     - `loop_count` をインクリメントする：
-       ```sql
-       UPDATE session_state SET value = CAST(CAST(value AS INTEGER) + 1 AS TEXT) WHERE key = 'review_loop_count';
-       SELECT CAST(value AS INTEGER) AS loop_count FROM session_state WHERE key = 'review_loop_count';
-       ```
-     - 新しいコメント・レビューの **🔴/🟡 の指摘のみ**を修正対象とする（🟢 Info は修正しない）
-     - 修正後に必ず以下を実行し、エラー・警告がないことを確認する：
-       ```bash
-       cargo build
-       cargo test
-       cargo clippy --all-targets -- -D warnings
-       ```
-     - 以下の形式でコミットしてpushする（事前に SQL で `loop_count` の値を取得しておくこと）：
-       ```bash
-       git add -A
-       # LOOP_COUNT には SQL の SELECT 結果（整数）を代入する
-       # 例: loop_count が 1 の場合 → LOOP_COUNT=1
-       LOOP_COUNT=<SQLで取得した数値>
-       printf 'レビュー指摘の修正 (%d回目)\n\nCo-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>\n' "$LOOP_COUNT" \
-         > "$(git rev-parse --git-dir)/COMMIT_MSG"
-       git commit -F "$(git rev-parse --git-dir)/COMMIT_MSG"
-       git push
-       ```
-     - ループの先頭（手順0）へ戻る
+   - **新しいコメントもレビューも追加されていない**（どちらの件数も変化なし）→ **修正サイクルを終了してステップ6Bへ進む**。
+   - **新しいコメントまたはレビューが追加された場合**、追加された内容を確認する：
+     - **🔴/🟡/🟢 のいずれも含まれない**（Approveレビューのみ）→ **修正サイクルを終了してステップ6Bへ進む**。
+     - **🟢 Info のみ含まれる**（🔴/🟡 はない）→ **修正サイクルを終了してステップ6Bへ進む**。
+     - **🔴/🟡 が含まれる** 場合（手順0のガードを通過済みのため `loop_count < 3` が保証されている）：
+       - `loop_count` をインクリメントする：
+         ```sql
+         UPDATE session_state SET value = CAST(CAST(value AS INTEGER) + 1 AS TEXT) WHERE key = 'review_loop_count';
+         SELECT CAST(value AS INTEGER) AS loop_count FROM session_state WHERE key = 'review_loop_count';
+         ```
+       - 新しいコメント・レビューの **🔴/🟡 の指摘のみ**を修正対象とする（🟢 Info は修正しない）
+       - 修正後に必ず以下を実行し、エラー・警告がないことを確認する：
+         ```bash
+         cargo build
+         cargo test
+         cargo clippy --all-targets -- -D warnings
+         ```
+       - 以下の形式でコミットしてpushする（事前に SQL で `loop_count` の値を取得しておくこと）：
+         ```bash
+         git add -A
+         # LOOP_COUNT には SQL の SELECT 結果（整数）を代入する
+         # 例: loop_count が 1 の場合 → LOOP_COUNT=1
+         LOOP_COUNT=<SQLで取得した数値>
+         printf 'レビュー指摘の修正 (%d回目)\n\nCo-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>\n' "$LOOP_COUNT" \
+           > "$(git rev-parse --git-dir)/COMMIT_MSG"
+         git commit -F "$(git rev-parse --git-dir)/COMMIT_MSG"
+         git push
+         ```
+       - イテレーション先頭（手順0）へ戻る
 
-### ステップ6後処理B：ループ上限到達時の処理
+### ステップ6B：最終レビュー（常に1回実施）
 
-loop_count >= 3 でここに到達した場合、以下の2ブロックをそれぞれ実行する。
+ステップ6Aの終了原因（自然終了・上限到達）にかかわらず、**必ず1回実行する**。
 
-#### 🔴/🟡 が残っている場合のみ実行
+1. 現在のPRコメント件数・レビュー件数を取得し、SQL に保存する：
+   ```sql
+   INSERT OR REPLACE INTO session_state (key, value) VALUES ('review_before_comment_count', '<N_comments>');
+   INSERT OR REPLACE INTO session_state (key, value) VALUES ('review_before_review_count', '<N_reviews>');
+   ```
 
-1. 未解消の 🔴/🟡 指摘内容をすべて読み取る。
+2. `review-implementation` エージェントを起動する（**ユーザーへの確認は不要**）：
+   ```
+   review-implementation エージェントを起動: PR #<PR番号> をレビューしてください
+   ```
 
-2. `gh pr comment` で未解消一覧を PR にコメント追加する：
+3. レビュー完了後、`get_comments` と `get_reviews` の両方を再取得し、新しいコメント・レビューを確認する。
+
+4. **🔴/🟡 が含まれる場合のみ**、`gh pr comment` で未解消一覧をPRにコメント追加する：
    ```bash
    cat > "$(git rev-parse --git-dir)/UNRESOLVED_COMMENT.md" << 'EOF'
-   ## ⚠️ 未解消の指摘（レビュー修正ループ上限到達）
+   ## ⚠️ 未解消の指摘
 
-   レビュー修正を3回試みましたが、以下の指摘が未解消のまま残っています。
+   最終レビューで以下の指摘が確認されました。
    手動での対応をお願いします。
 
    （未解消の 🔴/🟡 指摘一覧）
@@ -176,20 +181,18 @@ loop_count >= 3 でここに到達した場合、以下の2ブロックをそれ
    gh pr comment <PR番号> --body-file "$(git rev-parse --git-dir)/UNRESOLVED_COMMENT.md"
    ```
 
-#### 🔴/🟡 の有無によらず常に実行
-
-3. ステップ7へ進む。
+5. ステップ7へ進む。
 
 ### ステップ7：ユーザーへの最終報告
 
-実装・PR作成・レビューループの結果をまとめてユーザーに報告する。報告内容に含めるもの：
+実装・PR作成・修正サイクル・最終レビューの結果をまとめてユーザーに報告する。報告内容に含めるもの：
 
 - 作成したPRのURL
-- 実行したループ回数（例：「レビュー指摘を2回修正しました」）
-- 最終レビューの結果（以下のいずれか）：
+- 修正サイクル（ステップ6A）の実行回数（例：「レビュー指摘を2回修正しました」）
+- 最終レビュー（ステップ6B）の結果（以下のいずれか）：
   - 指摘なし（クリーン）
-  - 🟢 Info のみ受信し、コード修正なしで完了（クリーン）
-  - 🔴/🟡 がループ上限で残存し、PRにコメントを記録した（未解消指摘の要約）
+  - 🟢 Info のみ（クリーン）
+  - 🔴/🟡 が残存し、PRにコメントを記録した（未解消指摘の要約）
 
 ## 動作確認・デバッグの方針
 
