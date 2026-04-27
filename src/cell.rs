@@ -1,19 +1,23 @@
-/// Identifies which kind of control structure opened a compile-time scope.
+/// An entry on the compile-time stack (`VM::compile_stack`).
 ///
-/// Pushed onto `VM::control_stack` by `CTRL_OPEN_IF` / `CTRL_OPEN_WHILE` and
-/// popped (with validation) by `CTRL_CLOSE_IF` / `CTRL_CLOSE_WHILE`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ControlKind {
-    If,
-    While,
+/// `Cell` holds a regular value (address, integer, Xt, …) used by CS_PUSH/CS_POP
+/// and related compile-time stack manipulation primitives.
+/// `Tag` holds a string label that identifies an open control-structure scope
+/// (e.g. `"IF"` or `"WHILE"`); it is pushed by CS_OPEN_TAG and validated/popped
+/// by CS_CLOSE_TAG.
+#[derive(Debug, Clone, PartialEq)]
+pub enum CompileEntry {
+    /// A regular runtime cell stored on the compile stack.
+    Cell(Cell),
+    /// A string tag that marks an open control-structure scope.
+    Tag(String),
 }
 
-impl ControlKind {
-    /// Returns a human-readable keyword name used in error messages.
-    pub fn keyword(&self) -> &'static str {
+impl std::fmt::Display for CompileEntry {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            ControlKind::If => "IF",
-            ControlKind::While => "WHILE",
+            CompileEntry::Cell(c) => write!(f, "Cell({})", c),
+            CompileEntry::Tag(s) => write!(f, "Tag({})", s),
         }
     }
 }
