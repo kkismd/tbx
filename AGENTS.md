@@ -35,6 +35,10 @@ cargo fmt --check
 | `review-implementation` | PRのコードをレビューし問題をコメント・issueに登録 |
 | `blueprint-updater` | `blueprint.md` / `blueprint-language.md` / `blueprint-compiler.md` に設計方針を記録しPRを作成 |
 
+## ユーザーへの確認ルール
+
+- `ask_user` でトレードオフを伴う選択を求めるときは、**先に選択肢の pros/cons を会話中または issue コメントとして提示**してから選択 UI を表示すること（理由: ユーザーが根拠なしに選択を迫られる）
+
 ## 言語ルール
 
 - コードのコメントは**英語**で記述する。
