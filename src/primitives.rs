@@ -3965,7 +3965,10 @@ mod tests {
         // data stack must be empty.
         assert_eq!(vm.pop(), Err(TbxError::StackUnderflow));
         // compile_stack must hold the value.
-        assert_eq!(vm.compile_stack.last(), Some(&CompileEntry::Cell(Cell::Int(7))));
+        assert_eq!(
+            vm.compile_stack.last(),
+            Some(&CompileEntry::Cell(Cell::Int(7)))
+        );
     }
 
     // --- cs_pop_prim ---
@@ -4006,8 +4009,7 @@ mod tests {
     fn test_cs_pop_prim_tag_on_top_type_error() {
         // CS_POP with a Tag on top must return TypeError and leave the tag intact.
         let mut vm = make_compiling_vm("TESTWORD");
-        vm.compile_stack
-            .push(CompileEntry::Tag("IF".to_string()));
+        vm.compile_stack.push(CompileEntry::Tag("IF".to_string()));
         let err = cs_pop_prim(&mut vm).unwrap_err();
         assert!(
             matches!(err, TbxError::TypeError { .. }),
@@ -4019,8 +4021,6 @@ mod tests {
             Some(&CompileEntry::Tag("IF".to_string()))
         );
     }
-
-
 
     #[test]
     fn test_cs_swap_outside_compile_mode_error() {
@@ -4052,8 +4052,14 @@ mod tests {
         vm.compile_stack.push(CompileEntry::Cell(Cell::Int(10)));
         vm.compile_stack.push(CompileEntry::Cell(Cell::Int(20)));
         cs_swap_prim(&mut vm).unwrap();
-        assert_eq!(vm.compile_stack.pop(), Some(CompileEntry::Cell(Cell::Int(10))));
-        assert_eq!(vm.compile_stack.pop(), Some(CompileEntry::Cell(Cell::Int(20))));
+        assert_eq!(
+            vm.compile_stack.pop(),
+            Some(CompileEntry::Cell(Cell::Int(10)))
+        );
+        assert_eq!(
+            vm.compile_stack.pop(),
+            Some(CompileEntry::Cell(Cell::Int(20)))
+        );
         assert!(vm.compile_stack.is_empty());
     }
 
@@ -4061,11 +4067,19 @@ mod tests {
     fn test_cs_swap_swaps_dict_addr_values() {
         // CS_SWAP must work with Cell::DictAddr values, as used in WHILE/ENDWH.
         let mut vm = make_compiling_vm("TESTWORD");
-        vm.compile_stack.push(CompileEntry::Cell(Cell::DictAddr(10)));
-        vm.compile_stack.push(CompileEntry::Cell(Cell::DictAddr(20)));
+        vm.compile_stack
+            .push(CompileEntry::Cell(Cell::DictAddr(10)));
+        vm.compile_stack
+            .push(CompileEntry::Cell(Cell::DictAddr(20)));
         cs_swap_prim(&mut vm).unwrap();
-        assert_eq!(vm.compile_stack.pop(), Some(CompileEntry::Cell(Cell::DictAddr(10))));
-        assert_eq!(vm.compile_stack.pop(), Some(CompileEntry::Cell(Cell::DictAddr(20))));
+        assert_eq!(
+            vm.compile_stack.pop(),
+            Some(CompileEntry::Cell(Cell::DictAddr(10)))
+        );
+        assert_eq!(
+            vm.compile_stack.pop(),
+            Some(CompileEntry::Cell(Cell::DictAddr(20)))
+        );
         assert!(vm.compile_stack.is_empty());
     }
 
@@ -4131,7 +4145,8 @@ mod tests {
     fn test_cs_dup_duplicates_dict_addr() {
         // CS_DUP must work with Cell::DictAddr values.
         let mut vm = make_compiling_vm("TESTWORD");
-        vm.compile_stack.push(CompileEntry::Cell(Cell::DictAddr(42)));
+        vm.compile_stack
+            .push(CompileEntry::Cell(Cell::DictAddr(42)));
         cs_dup_prim(&mut vm).unwrap();
         assert_eq!(vm.compile_stack.len(), 2);
         assert_eq!(vm.compile_stack[0], CompileEntry::Cell(Cell::DictAddr(42)));
@@ -4181,8 +4196,10 @@ mod tests {
     fn test_cs_over_copies_dict_addr() {
         // CS_OVER must work with Cell::DictAddr values.
         let mut vm = make_compiling_vm("TESTWORD");
-        vm.compile_stack.push(CompileEntry::Cell(Cell::DictAddr(10)));
-        vm.compile_stack.push(CompileEntry::Cell(Cell::DictAddr(20)));
+        vm.compile_stack
+            .push(CompileEntry::Cell(Cell::DictAddr(10)));
+        vm.compile_stack
+            .push(CompileEntry::Cell(Cell::DictAddr(20)));
         cs_over_prim(&mut vm).unwrap();
         assert_eq!(vm.compile_stack.len(), 3);
         assert_eq!(vm.compile_stack[2], CompileEntry::Cell(Cell::DictAddr(10)));
@@ -4285,8 +4302,7 @@ mod tests {
         // end_prim must return CompileStackNotEmpty and rollback when a Tag entry
         // is left on compile_stack (simulates an unclosed IF or WHILE).
         let mut vm = make_compiling_vm("MYWORD3");
-        vm.compile_stack
-            .push(CompileEntry::Tag("IF".to_string()));
+        vm.compile_stack.push(CompileEntry::Tag("IF".to_string()));
         let err = end_prim(&mut vm).unwrap_err();
         assert!(
             matches!(err, TbxError::CompileStackNotEmpty { count: 1 }),
@@ -4302,7 +4318,6 @@ mod tests {
             "compile_stack must be empty after rollback"
         );
     }
-
 
     #[test]
     fn test_compile_expr_prim_outside_compile_mode_error() {
@@ -4482,8 +4497,6 @@ mod tests {
         );
     }
 
-
-
     #[test]
     fn test_cs_close_tag_outside_compile_mode_error() {
         // CS_CLOSE_TAG outside compile mode must return InvalidExpression.
@@ -4556,8 +4569,7 @@ mod tests {
     fn test_cs_close_tag_cell_on_top_error() {
         // CS_CLOSE_TAG with a Cell (not Tag) on top of compile_stack must return NoOpenTag.
         let mut vm = make_compiling_vm("TESTWORD");
-        vm.compile_stack
-            .push(CompileEntry::Cell(Cell::Int(42)));
+        vm.compile_stack.push(CompileEntry::Cell(Cell::Int(42)));
         let idx = vm.intern_string("IF").unwrap();
         vm.push(Cell::StringDesc(idx)).unwrap();
         let err = cs_close_tag_prim(&mut vm).unwrap_err();
@@ -4599,4 +4611,3 @@ mod tests {
         assert!(vm.compile_stack.is_empty());
     }
 }
-
