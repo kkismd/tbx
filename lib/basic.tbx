@@ -3,23 +3,26 @@ REM basic.tbx — BASIC-style control structures standard library
 REM WHILE expr ... ENDWH
 REM
 REM  WHILE compiles the condition expression, saves the loop-start address on the
-REM  compile stack, emits JUMP_FALSE, saves the placeholder address, and emits a
-REM  0 placeholder. ENDWH uses CS_SWAP to reorder the two saved addresses,
-REM  emits JUMP_ALWAYS back to the loop start (as DictAddr), then patches the
-REM  JUMP_FALSE placeholder with the current HERE value (= ENDWH+1).
+REM  compile stack, emits JUMP_FALSE, saves the placeholder address, emits a
+REM  0 placeholder, then pushes a Tag("WHILE") marker last (tag-last layout).
+REM  Compile stack after WHILE: [loop-start, BIF-placeholder, Tag("WHILE")].
+REM
+REM  ENDWH validates the tag first (CS_CLOSE_TAG "WHILE"), then uses CS_SWAP to
+REM  reorder the two saved addresses, emits JUMP_ALWAYS back to the loop start,
+REM  and patches the JUMP_FALSE placeholder with HERE (= ENDWH+1).
 
 DEF WHILE
-  CTRL_OPEN_WHILE
   CS_PUSH HERE
   COMPILE_EXPR
   APPEND JUMP_FALSE
   CS_PUSH HERE
   APPEND 0
+  CS_OPEN_TAG "WHILE"
 END
 IMMEDIATE WHILE
 
 DEF ENDWH
-  CTRL_CLOSE_WHILE
+  CS_CLOSE_TAG "WHILE"
   CS_SWAP
   APPEND JUMP_ALWAYS
   APPEND CS_POP
@@ -31,34 +34,38 @@ REM IF expr ... ELSIF expr ... ELSE ... ENDIF
 REM
 REM  IF compiles the condition expression, emits a JUMP_FALSE instruction,
 REM  pushes an initial ELSIF count (0) and the placeholder address on the compile
-REM  stack, and emits a 0 placeholder.  The compile stack after IF is [0, A].
+REM  stack, emits a 0 placeholder, then pushes a Tag("IF") marker last (tag-last).
+REM  Compile stack after IF: [0, A, Tag("IF")].
 REM
-REM  ELSIF patches the current BIF placeholder (C), pops the count N, emits
-REM  JUMP_ALWAYS (saving its placeholder B), increments the count, compiles the
-REM  new condition, and emits a new BIF with its placeholder C_new.
-REM  Compile stack after ELSIF: [B1...BN, B, N+1, C_new].
+REM  ELSIF validates the tag (CS_CLOSE_TAG "IF"), patches the current BIF
+REM  placeholder (C), pops the count N, emits JUMP_ALWAYS (saving its placeholder
+REM  B), increments the count, compiles the new condition, emits a new BIF with
+REM  its placeholder C_new, then pushes Tag("IF") back.
+REM  Compile stack after ELSIF: [B1...BN, B, N+1, C_new, Tag("IF")].
 REM
-REM  ELSE patches the current BIF placeholder (C), emits JUMP_ALWAYS (saving its
-REM  placeholder B), and pushes B on top of the unchanged count N.
-REM  Compile stack after ELSE: [B1...BN, N, B].
+REM  ELSE validates the tag (CS_CLOSE_TAG "IF"), patches the current BIF
+REM  placeholder (C), emits JUMP_ALWAYS (saving its placeholder B), and pushes
+REM  B on top of the unchanged count N, then pushes Tag("IF") back.
+REM  Compile stack after ELSE: [B1...BN, N, B, Tag("IF")].
 REM
-REM  ENDIF patches the last placeholder (C or B from ELSE), then pops the count N
-REM  and patches each accumulated JUMP_ALWAYS placeholder B1...BN using WHILE/ENDWH.
+REM  ENDIF validates the tag (CS_CLOSE_TAG "IF"), patches the last placeholder
+REM  (C or B from ELSE), pops the count N, and patches each accumulated
+REM  JUMP_ALWAYS placeholder B1...BN using WHILE/ENDWH.
 REM  WHILE/ENDWH must be defined before ENDIF.
 
 DEF IF
-  CTRL_OPEN_IF
   COMPILE_EXPR
   APPEND JUMP_FALSE
   REM push initial ELSIF count (0), then BIF placeholder address (A)
   CS_PUSH 0
   CS_PUSH HERE
   APPEND 0
+  CS_OPEN_TAG "IF"
 END
 IMMEDIATE IF
 
 DEF ENDIF
-  CTRL_CLOSE_IF
+  CS_CLOSE_TAG "IF"
   REM patch last BIF/JUMP_ALWAYS placeholder (C)
   PATCH_ADDR CS_POP
   VAR N
@@ -75,6 +82,7 @@ END
 IMMEDIATE ENDIF
 
 DEF ELSIF
+  CS_CLOSE_TAG "IF"
   REM emit unconditional jump at end of current branch body
   APPEND JUMP_ALWAYS
   VAR B
@@ -96,10 +104,12 @@ DEF ELSIF
   APPEND JUMP_FALSE
   CS_PUSH HERE
   APPEND 0
+  CS_OPEN_TAG "IF"
 END
 IMMEDIATE ELSIF
 
 DEF ELSE
+  CS_CLOSE_TAG "IF"
   REM emit unconditional jump at end of if/elsif branch
   APPEND JUMP_ALWAYS
   VAR B
@@ -111,5 +121,6 @@ DEF ELSE
   PATCH_ADDR CS_POP
   REM count N remains on compile stack; push B on top
   CS_PUSH B
+  CS_OPEN_TAG "IF"
 END
 IMMEDIATE ELSE

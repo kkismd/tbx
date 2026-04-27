@@ -90,14 +90,14 @@ DEF 開始時に両構造体を生成し、END 完了後に破棄する。行番
 
 ## コンパイルスタックプリミティブ
 
-コンパイルワードの実装に使用するプリミティブ群。このうち `CS_PUSH` / `CS_POP` / `CS_SWAP` / `CS_DROP` / `CS_DUP` / `CS_OVER` / `CS_ROT` / `PATCH_ADDR` / `COMPILE_EXPR` / `CTRL_OPEN_IF` / `CTRL_OPEN_WHILE` / `CTRL_CLOSE_IF` / `CTRL_CLOSE_WHILE` は **コンパイルモード（`is_compiling = true`）専用** であり、実行モード中に呼ばれた場合はエラーとする。`APPEND` / `HERE` / `JUMP_FALSE` / `JUMP_TRUE` / `JUMP_ALWAYS` は汎用プリミティブであり、コンパイルモード以外でも使用できる。
+コンパイルワードの実装に使用するプリミティブ群。このうち `CS_PUSH` / `CS_POP` / `CS_SWAP` / `CS_DROP` / `CS_DUP` / `CS_OVER` / `CS_ROT` / `PATCH_ADDR` / `COMPILE_EXPR` / `CS_OPEN_TAG` / `CS_CLOSE_TAG` は **コンパイルモード（`is_compiling = true`）専用** であり、実行モード中に呼ばれた場合はエラーとする。`APPEND` / `HERE` / `JUMP_FALSE` / `JUMP_TRUE` / `JUMP_ALWAYS` は汎用プリミティブであり、コンパイルモード以外でも使用できる。
 
 | プリミティブ | スタック効果 | 説明 |
 | ------------ | ------------ | ---- |
 | `APPEND`     | `( cell -- )` | スタックトップの Cell を `dictionary[DP]` に書き込み DP を +1 進める |
 | `HERE`       | `( -- addr )` | 現在の辞書ポインタ（次の書き込み先の DictAddr）をデータスタックに積む |
 | `CS_PUSH`    | `( val -- )` | データスタックのトップを compile_stack に移動する |
-| `CS_POP`     | `( -- val )` | compile_stack のトップをデータスタックに移動する |
+| `CS_POP`     | `( -- val )` | compile_stack のトップ（`Cell` エントリ）をデータスタックに移動する。`Tag` エントリがトップにある場合は `TypeError` を返す |
 | `CS_SWAP`    | `( a b -- b a )` | compile_stack のトップ2要素を交換する |
 | `CS_DROP`    | `( a -- )` | compile_stack のトップを捨てる |
 | `CS_DUP`     | `( a -- a a )` | compile_stack のトップを複製する |
@@ -108,10 +108,10 @@ DEF 開始時に両構造体を生成し、END 完了後に破棄する。行番
 | `JUMP_FALSE` | `( -- xt )` | `BranchIfFalse`（BIF）のXt定数をデータスタックに積む |
 | `JUMP_TRUE`  | `( -- xt )` | `BranchIfTrue`（BIT）のXt定数をデータスタックに積む |
 | `JUMP_ALWAYS` | `( -- xt )` | `Goto` のXt定数をデータスタックに積む |
-| `CTRL_OPEN_IF`     | `( -- )` | `control_stack` に `ControlKind::If` を積む（IF の先頭で呼ぶ） |
-| `CTRL_OPEN_WHILE`  | `( -- )` | `control_stack` に `ControlKind::While` を積む（WHILE の先頭で呼ぶ） |
-| `CTRL_CLOSE_IF`    | `( -- )` | `control_stack` のトップが `If` か検証してポップする（ENDIF の先頭でフェイルファスト） |
-| `CTRL_CLOSE_WHILE` | `( -- )` | `control_stack` のトップが `While` か検証してポップする（ENDWH の先頭でフェイルファスト） |
+| `CS_OPEN_TAG` | `( str -- )` | データスタックから `StringDesc` をポップし、文字列を解決して `CompileEntry::Tag(string)` を compile_stack に積む。制御構造の開始を記録するために使用する |
+| `CS_CLOSE_TAG` | `( str -- )` | データスタックから `StringDesc` をポップし、compile_stack のトップが一致する `Tag` であることを検証してポップする。不一致なら `MismatchedTag`、タグがなければ `NoOpenTag` を返す |
+
+`CS_SWAP` / `CS_DROP` / `CS_DUP` / `CS_OVER` / `CS_ROT` は `CompileEntry` の種別（`Cell` / `Tag`）を問わず操作する。タグの整合性チェックは `CS_OPEN_TAG` / `CS_CLOSE_TAG` を通じて tbx 側のコードが責任を持つ。
 
 `PATCH_ADDR` はコンパイルスタックと組み合わせて分岐命令のアドレスを事後的に埋める用途で使用する。典型的なパターン:
 
@@ -133,17 +133,17 @@ ENDIF は WHILE ループで複数の JUMP_ALWAYS プレースホルダーをパ
 
 ```
 DEF IF
-  CTRL_OPEN_IF
   COMPILE_EXPR
   APPEND JUMP_FALSE
   CS_PUSH 0        REM initial count: number of ELSIF calls so far
   CS_PUSH HERE     REM BIF jump-target placeholder address (A)
   APPEND 0
+  CS_OPEN_TAG "IF" REM push Tag("IF") last (tag-last layout)
 END
 IMMEDIATE IF
 
 DEF ENDIF
-  CTRL_CLOSE_IF
+  CS_CLOSE_TAG "IF"     REM validate and pop Tag("IF") first (fail-fast)
   PATCH_ADDR CS_POP     REM patch last BIF/JUMP_ALWAYS placeholder (C)
   VAR N
   SET &N, CS_POP        REM retrieve ELSIF call count
@@ -182,36 +182,37 @@ ENDIF の拡張方針は issue #338 で**カウント方式**に決定した。
 
 ### コンパイルスタック構造（カウント方式）
 
-コンパイルスタックのフォーマットは `[B1...BN, N, C]`（C がトップ）。
+コンパイルスタックのフォーマットは `[B1...BN, N, C, Tag("IF")]`（`Tag("IF")` がトップ、タグラスト方式）。
 
 - `C` : 直前の条件分岐（BIF）のジャンプ先プレースホルダーアドレス
 - `N` : ELSIF の呼び出し回数（= 蓄積された JUMP_ALWAYS プレースホルダーの数）
 - `B1...BN` : 各 if/elsif ブロック末尾の JUMP_ALWAYS プレースホルダーアドレス
+- `Tag("IF")` : 制御構造の種別タグ（常にスタックの最上位に位置する）
 
-### IF（変更）
+### IF
 
-`CTRL_OPEN_IF`（初期カウント前）と `CS_PUSH 0`（初期カウント）を追加し、コンパイルスタックを `[0, A]` 形式に変更した。
+`CS_OPEN_TAG "IF"` を末尾に追加し、タグラスト方式でコンパイルスタックを `[0, A, Tag("IF")]` 形式にする。
 
 ```
 DEF IF
-  CTRL_OPEN_IF
   COMPILE_EXPR
   APPEND JUMP_FALSE
   CS_PUSH 0        REM initial count: number of ELSIF calls so far
   CS_PUSH HERE     REM BIF jump-target placeholder address (A)
   APPEND 0
+  CS_OPEN_TAG "IF" REM push Tag("IF") last (tag-last layout)
 END
 IMMEDIATE IF
 ```
 
-### ENDIF（変更）
+### ENDIF
 
-`CTRL_CLOSE_IF` を先頭に追加し、compile_stack を触る前にフェイルファストで制御スタックを検証する。`WHILE`/`ENDWH` ループで蓄積された `JUMP_ALWAYS` プレースホルダーを一括パッチする。
+`CS_CLOSE_TAG "IF"` を先頭に追加し、compile_stack を触る前にフェイルファストでタグを検証する。`WHILE`/`ENDWH` ループで蓄積された `JUMP_ALWAYS` プレースホルダーを一括パッチする。
 `WHILE`/`ENDWH` は `lib/basic.tbx` で ENDIF より前に定義されていること。
 
 ```
 DEF ENDIF
-  CTRL_CLOSE_IF
+  CS_CLOSE_TAG "IF"     REM validate and pop Tag("IF") first (fail-fast)
   PATCH_ADDR CS_POP     REM patch last BIF/JUMP_ALWAYS placeholder (C)
   VAR N
   SET &N, CS_POP        REM retrieve ELSIF call count
@@ -225,16 +226,17 @@ END
 IMMEDIATE ENDIF
 ```
 
-### ELSIF（新規）
+### ELSIF
 
-直前の BIF プレースホルダーをパッチし、JUMP_ALWAYS と新しい BIF をコンパイルスタックに積む。
+`CS_CLOSE_TAG "IF"` を先頭に、`CS_OPEN_TAG "IF"` を末尾に追加し、タグを取り外して操作後に積み直す。
 
 コンパイルスタックの遷移:
-- 入力: `CS = [..., N, C]`（C がトップ）
-- 出力: `CS = [..., B, N+1, C_new]`（C パッチ済み、B は JUMP_ALWAYS プレースホルダー）
+- 入力: `CS = [..., N, C, Tag("IF")]`（Tag がトップ）
+- 出力: `CS = [..., B, N+1, C_new, Tag("IF")]`（C パッチ済み、B は JUMP_ALWAYS プレースホルダー）
 
 ```
 DEF ELSIF
+  CS_CLOSE_TAG "IF"        REM pop Tag("IF") first
   APPEND JUMP_ALWAYS       REM emit unconditional jump at end of current branch body
   VAR B
   SET &B, HERE             REM save JUMP_ALWAYS placeholder address (B)
@@ -248,26 +250,29 @@ DEF ELSIF
   APPEND JUMP_FALSE        REM emit new BIF instruction
   CS_PUSH HERE             REM push new BIF placeholder address (C_new)
   APPEND 0
+  CS_OPEN_TAG "IF"         REM push Tag("IF") back
 END
 IMMEDIATE ELSIF
 ```
 
-### ELSE（新規）
+### ELSE
 
-直前の BIF プレースホルダーをパッチし、JUMP_ALWAYS プレースホルダーをカウントの上に積む。
+`CS_CLOSE_TAG "IF"` を先頭に、`CS_OPEN_TAG "IF"` を末尾に追加し、タグを取り外して操作後に積み直す。
 
 コンパイルスタックの遷移:
-- 入力: `CS = [..., N, C]`（C がトップ）
-- 出力: `CS = [..., N, B]`（C パッチ済み、B は JUMP_ALWAYS プレースホルダー、N は変化なし）
+- 入力: `CS = [..., N, C, Tag("IF")]`（Tag がトップ）
+- 出力: `CS = [..., N, B, Tag("IF")]`（C パッチ済み、B は JUMP_ALWAYS プレースホルダー、N は変化なし）
 
 ```
 DEF ELSE
+  CS_CLOSE_TAG "IF"        REM pop Tag("IF") first
   APPEND JUMP_ALWAYS       REM emit unconditional jump at end of if/elsif branch
   VAR B
   SET &B, HERE             REM save JUMP_ALWAYS placeholder address (B)
   APPEND 0                 REM emit placeholder
   PATCH_ADDR CS_POP        REM patch previous BIF placeholder (C); DP now = else body start
   CS_PUSH B                REM push B on top of N
+  CS_OPEN_TAG "IF"         REM push Tag("IF") back
 END
 IMMEDIATE ELSE
 ```
@@ -278,25 +283,25 @@ IMMEDIATE ELSE
 
 | 時点 | CS |
 |---|---|
-| IF 後 | `[0, A]` |
-| ELSE 後 | `[0, B]`（A パッチ済み）|
+| IF 後 | `[0, A, Tag("IF")]` |
+| ELSE 後 | `[0, B, Tag("IF")]`（A パッチ済み）|
 | ENDIF 後 | `[]`（B パッチ、N=0、ループ 0 回）|
 
 **IF...ELSIF...ENDIF**:
 
 | 時点 | CS |
 |---|---|
-| IF 後 | `[0, A]` |
-| ELSIF 後 | `[B1, 1, C]`（A パッチ済み）|
+| IF 後 | `[0, A, Tag("IF")]` |
+| ELSIF 後 | `[B1, 1, C, Tag("IF")]`（A パッチ済み）|
 | ENDIF 後 | `[]`（C パッチ、N=1、B1 パッチ）|
 
 **IF...ELSIF...ELSE...ENDIF**:
 
 | 時点 | CS |
 |---|---|
-| IF 後 | `[0, A]` |
-| ELSIF 後 | `[B1, 1, C]`（A パッチ済み）|
-| ELSE 後 | `[B1, 1, B_new]`（C パッチ済み）|
+| IF 後 | `[0, A, Tag("IF")]` |
+| ELSIF 後 | `[B1, 1, C, Tag("IF")]`（A パッチ済み）|
+| ELSE 後 | `[B1, 1, B_new, Tag("IF")]`（C パッチ済み）|
 | ENDIF 後 | `[]`（B_new パッチ、N=1、B1 パッチ）|
 
 ### 既知の制限事項
@@ -305,8 +310,8 @@ IMMEDIATE ELSE
   2番目の `ELSE` は最初の ELSE が積んだ JUMP_ALWAYS プレースホルダーを BIF プレースホルダーとして扱い、
   誤ったアドレスにパッチしてしまう。現時点では二重 ELSE の検出は行わず、未定義動作とする。
 
-- **ELSIF/ELSE を IF なしで使用**: コンパイルスタックが空の状態で `CS_POP` が呼ばれ、
-  `StackUnderflow` エラーとなる。実用上は問題ないが、エラーメッセージは汎用的なスタックアンダーフローとなる。
+- **ELSIF/ELSE を IF なしで使用**: `CS_CLOSE_TAG "IF"` が空スタックを検出し `NoOpenTag { expected: "IF" }` を返す。
+
 
 ---
 
@@ -317,17 +322,17 @@ WHILE と ENDWH は `lib/basic.tbx` に TBX コードとして実装されたコ
 ```
 REM WHILE expr ... ENDWH
 DEF WHILE
-  CTRL_OPEN_WHILE
   CS_PUSH HERE
   COMPILE_EXPR
   APPEND JUMP_FALSE
   CS_PUSH HERE
   APPEND 0
+  CS_OPEN_TAG "WHILE" REM push Tag("WHILE") last (tag-last layout)
 END
 IMMEDIATE WHILE
 
 DEF ENDWH
-  CTRL_CLOSE_WHILE
+  CS_CLOSE_TAG "WHILE" REM validate and pop Tag("WHILE") first (fail-fast)
   CS_SWAP
   APPEND JUMP_ALWAYS
   APPEND CS_POP
@@ -351,15 +356,16 @@ D:  ...（ENDWH 直後）
 | 時点 | コンパイルスタック |
 |---|---|
 | WHILE 実行直前 | `[]` |
-| WHILE 実行後 | `[A, Caddr]`（A が底、Caddr がトップ） |
+| WHILE 実行後 | `[A, Caddr, Tag("WHILE")]`（Tag がトップ、タグラスト方式） |
 | ENDWH 実行後 | `[]` |
 
 - `A` = ループ先頭の DictAddr（WHILE が `CS_PUSH HERE` で積む）
 - `Caddr` = BIF のジャンプ先プレースホルダーの DictAddr（WHILE が `APPEND 0` の直前に `CS_PUSH HERE` で積む）
+- `Tag("WHILE")` = 制御構造の種別タグ（`CS_OPEN_TAG "WHILE"` で最後に積む）
 
 ### ENDWH の動作トレース
 
-1. `CTRL_CLOSE_WHILE` — `control_stack` のトップが `While` か検証してポップする（フェイルファスト）
+1. `CS_CLOSE_TAG "WHILE"` — compile_stack のトップが `Tag("WHILE")` か検証してポップする（フェイルファスト）。空スタックなら `NoOpenTag { expected: "WHILE" }`、別タグなら `MismatchedTag` を返す
 2. `CS_SWAP` — CS を `[A, Caddr]` → `[Caddr, A]` に並び替える（A がトップ）
 3. `APPEND JUMP_ALWAYS` — 無条件ジャンプ命令の Xt を辞書に書き込む
 4. `APPEND CS_POP` — CS から A（DictAddr）をポップして辞書に書き込む（JUMP_ALWAYS のジャンプ先ターゲット）

@@ -93,13 +93,6 @@ pub enum TbxError {
     CompileStackNotEmpty {
         count: usize,
     },
-    /// control_stack has leftover items when END is executed.
-    ///
-    /// Word definition is incomplete — some control-structure open words (IF/WHILE)
-    /// were not closed by matching ENDIF/ENDWH.
-    ControlStackNotEmpty {
-        count: usize,
-    },
     /// A file requested via USE could not be found or read.
     FileNotFound {
         path: String,
@@ -120,22 +113,23 @@ pub enum TbxError {
         path: String,
     },
 
-    /// ENDIF/ENDWH was reached but the control stack top does not match.
+    /// CS_CLOSE_TAG found a tag that does not match the expected tag.
     ///
-    /// For example, `IF ... WHILE ... ENDIF` causes `CTRL_CLOSE_IF` to find
-    /// `While` on the top of the control stack instead of `If`.
-    MismatchedControlStructure {
-        /// The closing keyword that was encountered (e.g. "ENDIF")
-        close_word: &'static str,
-        /// The opening keyword at the top of the control stack (e.g. "WHILE")
-        open_word: &'static str,
+    /// For example, `IF ... WHILE ... ENDIF` causes CS_CLOSE_TAG to find
+    /// `"WHILE"` at the top of the compile stack instead of the expected `"IF"`.
+    MismatchedTag {
+        /// The tag that CS_CLOSE_TAG was looking for (e.g. `"IF"`)
+        expected: String,
+        /// The tag that was actually found on the compile stack (e.g. `"WHILE"`)
+        found: String,
     },
-    /// ENDIF/ENDWH was reached but the control stack is empty.
+    /// CS_CLOSE_TAG was called but the compile stack has no matching tag.
     ///
-    /// Indicates a closing keyword without a matching opening keyword.
-    UnopenedControlStructure {
-        /// The closing keyword that was encountered (e.g. "ENDWH")
-        keyword: &'static str,
+    /// Either the compile stack is empty or its top entry is a `Cell` rather
+    /// than a `Tag`, meaning no matching open control-structure tag exists.
+    NoOpenTag {
+        /// The tag that CS_CLOSE_TAG was looking for (e.g. `"WHILE"`)
+        expected: String,
     },
 
     /// Assertion explicitly failed via ASSERT_FAIL.
@@ -215,12 +209,6 @@ impl std::fmt::Display for TbxError {
                     "compile stack has {count} unpatched item(s) at END; word definition is incomplete"
                 )
             }
-            TbxError::ControlStackNotEmpty { count } => {
-                write!(
-                    f,
-                    "control stack has {count} unclosed structure(s) at END; missing ENDIF or ENDWH"
-                )
-            }
             TbxError::FileNotFound { path, reason } => {
                 write!(f, "USE: file not found: '{path}': {reason}")
             }
@@ -230,17 +218,15 @@ impl std::fmt::Display for TbxError {
             TbxError::CircularUse { path } => {
                 write!(f, "USE: circular USE detected: '{path}'")
             }
-            TbxError::MismatchedControlStructure {
-                close_word,
-                open_word,
-            } => {
+            TbxError::MismatchedTag { expected, found } => {
                 write!(
                     f,
-                    "mismatched control structure: '{close_word}' does not match '{open_word}'"
+                    "mismatched tag: expected '{}', found '{}'",
+                    expected, found
                 )
             }
-            TbxError::UnopenedControlStructure { keyword } => {
-                write!(f, "no matching open for '{keyword}'")
+            TbxError::NoOpenTag { expected } => {
+                write!(f, "no open tag for '{}'", expected)
             }
             TbxError::AssertionFailed => write!(f, "assertion failed"),
             TbxError::AssertionFailedWithMessage { message } => {

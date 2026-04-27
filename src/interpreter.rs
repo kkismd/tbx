@@ -3590,7 +3590,7 @@ TRYROT";
 
     #[test]
     fn test_if_while_endif_endwh_cross_nesting_error() {
-        // IF ... WHILE ... ENDIF  must fail with MismatchedControlStructure.
+        // IF ... WHILE ... ENDIF  must fail with MismatchedTag.
         let mut interp = Interpreter::new();
         let src =
             "DEF BAD(X)\n  IF X > 0\n    WHILE X > 0\n      SET &X, X - 1\n    ENDIF\n  ENDWH\nEND";
@@ -3599,18 +3599,18 @@ TRYROT";
             Err(e)
                 if matches!(
                     e.kind,
-                    crate::error::TbxError::MismatchedControlStructure {
-                        close_word: "ENDIF",
-                        open_word: "WHILE",
-                    }
+                    crate::error::TbxError::MismatchedTag {
+                        ref expected,
+                        ref found,
+                    } if expected == "IF" && found == "WHILE"
                 ) => {}
-            other => panic!("expected MismatchedControlStructure(ENDIF/WHILE), got {other:?}"),
+            other => panic!("expected MismatchedTag(IF/WHILE), got {other:?}"),
         }
     }
 
     #[test]
     fn test_if_endwh_cross_nesting_error() {
-        // IF ... ENDWH  must fail with MismatchedControlStructure.
+        // IF ... ENDWH  must fail with MismatchedTag.
         let mut interp = Interpreter::new();
         let src = "DEF BAD(X)\n  IF X > 0\n    PUTDEC X\n  ENDWH\nEND";
         let result = interp.exec_source(src);
@@ -3618,18 +3618,18 @@ TRYROT";
             Err(e)
                 if matches!(
                     e.kind,
-                    crate::error::TbxError::MismatchedControlStructure {
-                        close_word: "ENDWH",
-                        open_word: "IF",
-                    }
+                    crate::error::TbxError::MismatchedTag {
+                        ref expected,
+                        ref found,
+                    } if expected == "WHILE" && found == "IF"
                 ) => {}
-            other => panic!("expected MismatchedControlStructure(ENDWH/IF), got {other:?}"),
+            other => panic!("expected MismatchedTag(WHILE/IF), got {other:?}"),
         }
     }
 
     #[test]
     fn test_endwh_without_while_unopened_error() {
-        // ENDWH with no preceding WHILE must fail with UnopenedControlStructure.
+        // ENDWH with no preceding WHILE must fail with NoOpenTag.
         let mut interp = Interpreter::new();
         let src = "DEF BAD()\n  ENDWH\nEND";
         let result = interp.exec_source(src);
@@ -3637,15 +3637,15 @@ TRYROT";
             Err(e)
                 if matches!(
                     e.kind,
-                    crate::error::TbxError::UnopenedControlStructure { keyword: "ENDWH" }
+                    crate::error::TbxError::NoOpenTag { ref expected } if expected == "WHILE"
                 ) => {}
-            other => panic!("expected UnopenedControlStructure(ENDWH), got {other:?}"),
+            other => panic!("expected NoOpenTag(WHILE), got {other:?}"),
         }
     }
 
     #[test]
     fn test_endif_without_if_unopened_error() {
-        // ENDIF with no preceding IF must fail with UnopenedControlStructure.
+        // ENDIF with no preceding IF must fail with NoOpenTag.
         let mut interp = Interpreter::new();
         let src = "DEF BAD()\n  ENDIF\nEND";
         let result = interp.exec_source(src);
@@ -3653,9 +3653,9 @@ TRYROT";
             Err(e)
                 if matches!(
                     e.kind,
-                    crate::error::TbxError::UnopenedControlStructure { keyword: "ENDIF" }
+                    crate::error::TbxError::NoOpenTag { ref expected } if expected == "IF"
                 ) => {}
-            other => panic!("expected UnopenedControlStructure(ENDIF), got {other:?}"),
+            other => panic!("expected NoOpenTag(IF), got {other:?}"),
         }
     }
 
@@ -3698,8 +3698,8 @@ NOOP_LOOP(4)";
 
     #[test]
     fn test_if_else_endwh_cross_nesting_error() {
-        // IF ... ELSE ... ENDWH must fail with MismatchedControlStructure.
-        // ELSE does not push to control_stack, so ENDWH sees ControlKind::If on top.
+        // IF ... ELSE ... ENDWH must fail with MismatchedTag.
+        // ELSE keeps Tag("IF") on compile_stack, so ENDWH sees "IF" instead of "WHILE".
         let mut interp = Interpreter::new();
         let src = "DEF BAD(X)\n  IF X > 0\n    PUTDEC X\n  ELSE\n    PUTDEC 0\n  ENDWH\nEND";
         let result = interp.exec_source(src);
@@ -3707,19 +3707,19 @@ NOOP_LOOP(4)";
             Err(e)
                 if matches!(
                     e.kind,
-                    crate::error::TbxError::MismatchedControlStructure {
-                        close_word: "ENDWH",
-                        open_word: "IF",
-                    }
+                    crate::error::TbxError::MismatchedTag {
+                        ref expected,
+                        ref found,
+                    } if expected == "WHILE" && found == "IF"
                 ) => {}
-            other => panic!("expected MismatchedControlStructure(ENDWH/IF), got {other:?}"),
+            other => panic!("expected MismatchedTag(WHILE/IF), got {other:?}"),
         }
     }
 
     #[test]
     fn test_if_elsif_endwh_cross_nesting_error() {
-        // IF ... ELSIF ... ENDWH must fail with MismatchedControlStructure.
-        // ELSIF does not push to control_stack, so ENDWH sees ControlKind::If on top.
+        // IF ... ELSIF ... ENDWH must fail with MismatchedTag.
+        // ELSIF keeps Tag("IF") on compile_stack, so ENDWH sees "IF" instead of "WHILE".
         let mut interp = Interpreter::new();
         let src = "DEF BAD(X)\n  IF X > 2\n    PUTDEC X\n  ELSIF X > 0\n    PUTDEC 1\n  ENDWH\nEND";
         let result = interp.exec_source(src);
@@ -3727,12 +3727,12 @@ NOOP_LOOP(4)";
             Err(e)
                 if matches!(
                     e.kind,
-                    crate::error::TbxError::MismatchedControlStructure {
-                        close_word: "ENDWH",
-                        open_word: "IF",
-                    }
+                    crate::error::TbxError::MismatchedTag {
+                        ref expected,
+                        ref found,
+                    } if expected == "WHILE" && found == "IF"
                 ) => {}
-            other => panic!("expected MismatchedControlStructure(ENDWH/IF), got {other:?}"),
+            other => panic!("expected MismatchedTag(WHILE/IF), got {other:?}"),
         }
     }
 }

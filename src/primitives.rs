@@ -1,4 +1,4 @@
-use crate::cell::{Cell, ControlKind};
+use crate::cell::{Cell, CompileEntry};
 use crate::constants::MAX_DICTIONARY_CELLS;
 use crate::dict::{EntryKind, WordEntry, FLAG_IMMEDIATE, FLAG_SYSTEM};
 use crate::error::TbxError;
@@ -643,18 +643,6 @@ pub fn end_prim(vm: &mut VM) -> Result<(), TbxError> {
         return Err(TbxError::CompileStackNotEmpty { count });
     }
 
-    // Defensive check: control_stack must also be empty at END.
-    // Under normal operation this invariant is guaranteed because each CTRL_OPEN_*
-    // call is paired with a matching CTRL_CLOSE_* call, and CTRL_CLOSE_* also
-    // empties compile_stack items (so CompileStackNotEmpty fires first).
-    // The explicit check here guards against future code paths where CTRL_OPEN_*
-    // is called without a corresponding CS_PUSH.
-    if !vm.control_stack.is_empty() {
-        let count = vm.control_stack.len();
-        vm.rollback_def();
-        return Err(TbxError::ControlStackNotEmpty { count });
-    }
-
     // Write EXIT to terminate the word body.
     let exit_xt =
         vm.find_by_kind(|k| matches!(k, EntryKind::Exit))
@@ -1039,7 +1027,7 @@ pub fn dim_prim(vm: &mut VM) -> Result<(), TbxError> {
 
 /// CS_PUSH — move a value from the data stack to the compile stack.
 ///
-/// Must be called in compile mode (inside a IMMEDIATE word invocation).
+/// Must be called in compile mode (inside an IMMEDIATE word invocation).
 fn cs_push_prim(vm: &mut VM) -> Result<(), TbxError> {
     if !vm.is_compiling {
         return Err(TbxError::InvalidExpression {
@@ -1047,12 +1035,14 @@ fn cs_push_prim(vm: &mut VM) -> Result<(), TbxError> {
         });
     }
     let val = vm.pop()?;
-    vm.compile_stack.push(val);
+    vm.compile_stack.push(CompileEntry::Cell(val));
     Ok(())
 }
 
 /// CS_POP — move a value from the compile stack to the data stack.
 ///
+/// Only `CompileEntry::Cell` entries can be moved; a `CompileEntry::Tag` on top
+/// returns `TypeError` (the tag is left on the compile stack unchanged).
 /// Must be called in compile mode (inside a IMMEDIATE word invocation).
 fn cs_pop_prim(vm: &mut VM) -> Result<(), TbxError> {
     if !vm.is_compiling {
@@ -1060,9 +1050,21 @@ fn cs_pop_prim(vm: &mut VM) -> Result<(), TbxError> {
             reason: "CS_POP outside compile mode",
         });
     }
-    let val = vm.compile_stack.pop().ok_or(TbxError::StackUnderflow)?;
-    vm.push(val)?;
-    Ok(())
+    let entry = vm.compile_stack.pop().ok_or(TbxError::StackUnderflow)?;
+    match entry {
+        CompileEntry::Cell(val) => {
+            vm.push(val)?;
+            Ok(())
+        }
+        CompileEntry::Tag(s) => {
+            // Restore the tag and signal a type error: CS_POP cannot pop a tag.
+            vm.compile_stack.push(CompileEntry::Tag(s));
+            Err(TbxError::TypeError {
+                expected: "Cell",
+                got: "Tag",
+            })
+        }
+    }
 }
 
 /// CS_SWAP — swap the top two values on the compile stack: ( a b -- b a ).
@@ -1150,75 +1152,49 @@ fn cs_rot_prim(vm: &mut VM) -> Result<(), TbxError> {
     Ok(())
 }
 
-/// CTRL_OPEN_IF — push `ControlKind::If` onto the control stack.
+/// CS_OPEN_TAG — pop a StringDesc from the data stack and push a `CompileEntry::Tag`
+/// onto the compile stack.
 ///
-/// Called at the start of `DEF IF` to record that an IF-block is being opened.
+/// Used by IMMEDIATE words (e.g. WHILE, IF) to mark the start of a control-structure
+/// scope.  The string (e.g. `"WHILE"` or `"IF"`) is matched by a later CS_CLOSE_TAG
+/// call to validate correct nesting.
 /// Must be called in compile mode.
-fn ctrl_open_if_prim(vm: &mut VM) -> Result<(), TbxError> {
+fn cs_open_tag_prim(vm: &mut VM) -> Result<(), TbxError> {
     if !vm.is_compiling {
         return Err(TbxError::InvalidExpression {
-            reason: "CTRL_OPEN_IF outside compile mode",
+            reason: "CS_OPEN_TAG outside compile mode",
         });
     }
-    vm.control_stack.push(ControlKind::If);
+    let idx = vm.pop_string_desc()?;
+    let tag = vm.resolve_string(idx)?;
+    vm.compile_stack.push(CompileEntry::Tag(tag));
     Ok(())
 }
 
-/// CTRL_OPEN_WHILE — push `ControlKind::While` onto the control stack.
+/// CS_CLOSE_TAG — pop a StringDesc from the data stack, then validate and remove the
+/// matching `CompileEntry::Tag` from the top of the compile stack.
 ///
-/// Called at the start of `DEF WHILE` to record that a WHILE-loop is being opened.
+/// Returns `NoOpenTag` if the compile stack is empty or its top entry is a `Cell`
+/// (not a `Tag`).  Returns `MismatchedTag` if the top is a `Tag` but does not match
+/// the expected string.
 /// Must be called in compile mode.
-fn ctrl_open_while_prim(vm: &mut VM) -> Result<(), TbxError> {
+fn cs_close_tag_prim(vm: &mut VM) -> Result<(), TbxError> {
     if !vm.is_compiling {
         return Err(TbxError::InvalidExpression {
-            reason: "CTRL_OPEN_WHILE outside compile mode",
+            reason: "CS_CLOSE_TAG outside compile mode",
         });
     }
-    vm.control_stack.push(ControlKind::While);
-    Ok(())
-}
-
-/// CTRL_CLOSE_IF — validate and pop `ControlKind::If` from the control stack.
-///
-/// Called at the start of `DEF ENDIF` before touching `compile_stack` (fail-fast).
-/// Returns `UnopenedControlStructure` if the stack is empty, or
-/// `MismatchedControlStructure` if the top entry is not `If`.
-/// Must be called in compile mode.
-fn ctrl_close_if_prim(vm: &mut VM) -> Result<(), TbxError> {
-    if !vm.is_compiling {
-        return Err(TbxError::InvalidExpression {
-            reason: "CTRL_CLOSE_IF outside compile mode",
-        });
-    }
-    match vm.control_stack.pop() {
-        None => Err(TbxError::UnopenedControlStructure { keyword: "ENDIF" }),
-        Some(ControlKind::If) => Ok(()),
-        Some(got) => Err(TbxError::MismatchedControlStructure {
-            close_word: "ENDIF",
-            open_word: got.keyword(),
-        }),
-    }
-}
-
-/// CTRL_CLOSE_WHILE — validate and pop `ControlKind::While` from the control stack.
-///
-/// Called at the start of `DEF ENDWH` before touching `compile_stack` (fail-fast).
-/// Returns `UnopenedControlStructure` if the stack is empty, or
-/// `MismatchedControlStructure` if the top entry is not `While`.
-/// Must be called in compile mode.
-fn ctrl_close_while_prim(vm: &mut VM) -> Result<(), TbxError> {
-    if !vm.is_compiling {
-        return Err(TbxError::InvalidExpression {
-            reason: "CTRL_CLOSE_WHILE outside compile mode",
-        });
-    }
-    match vm.control_stack.pop() {
-        None => Err(TbxError::UnopenedControlStructure { keyword: "ENDWH" }),
-        Some(ControlKind::While) => Ok(()),
-        Some(got) => Err(TbxError::MismatchedControlStructure {
-            close_word: "ENDWH",
-            open_word: got.keyword(),
-        }),
+    let idx = vm.pop_string_desc()?;
+    let expected = vm.resolve_string(idx)?;
+    match vm.compile_stack.pop() {
+        None => Err(TbxError::NoOpenTag { expected }),
+        Some(CompileEntry::Tag(found)) if found == expected => Ok(()),
+        Some(CompileEntry::Tag(found)) => Err(TbxError::MismatchedTag { expected, found }),
+        Some(CompileEntry::Cell(c)) => {
+            // Restore the cell and report no matching open tag.
+            vm.compile_stack.push(CompileEntry::Cell(c));
+            Err(TbxError::NoOpenTag { expected })
+        }
     }
 }
 
@@ -1525,21 +1501,11 @@ pub fn register_all(vm: &mut VM) {
     vm.register(WordEntry::new_primitive("CS_ROT", cs_rot_prim));
     vm.register(WordEntry::new_primitive("PATCH_ADDR", patch_addr_prim));
     vm.register(WordEntry::new_primitive("COMPILE_EXPR", compile_expr_prim));
-    // Control-structure kind stack primitives.
-    // Used by IF/WHILE/ENDIF/ENDWH to detect cross-nesting at compile time.
-    vm.register(WordEntry::new_primitive("CTRL_OPEN_IF", ctrl_open_if_prim));
-    vm.register(WordEntry::new_primitive(
-        "CTRL_OPEN_WHILE",
-        ctrl_open_while_prim,
-    ));
-    vm.register(WordEntry::new_primitive(
-        "CTRL_CLOSE_IF",
-        ctrl_close_if_prim,
-    ));
-    vm.register(WordEntry::new_primitive(
-        "CTRL_CLOSE_WHILE",
-        ctrl_close_while_prim,
-    ));
+    // Tag-based control-structure scope primitives.
+    // CS_OPEN_TAG pushes a string tag onto the compile stack to mark the start of a
+    // control-structure scope; CS_CLOSE_TAG validates and pops the matching tag.
+    vm.register(WordEntry::new_primitive("CS_OPEN_TAG", cs_open_tag_prim));
+    vm.register(WordEntry::new_primitive("CS_CLOSE_TAG", cs_close_tag_prim));
 
     // Runtime branch/jump Xt constants — allows TBX code to write:
     //   APPEND JUMP_FALSE, APPEND JUMP_ALWAYS, etc.
@@ -1568,7 +1534,7 @@ pub fn register_all(vm: &mut VM) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::cell::{Cell, ControlKind};
+    use crate::cell::{Cell, CompileEntry};
     use crate::constants::MAX_DICTIONARY_CELLS;
 
     // --- drop_prim ---
@@ -3999,7 +3965,10 @@ mod tests {
         // data stack must be empty.
         assert_eq!(vm.pop(), Err(TbxError::StackUnderflow));
         // compile_stack must hold the value.
-        assert_eq!(vm.compile_stack.last(), Some(&Cell::Int(7)));
+        assert_eq!(
+            vm.compile_stack.last(),
+            Some(&CompileEntry::Cell(Cell::Int(7)))
+        );
     }
 
     // --- cs_pop_prim ---
@@ -4009,7 +3978,7 @@ mod tests {
         // CS_POP called when is_compiling == false must return InvalidExpression.
         let mut vm = VM::new();
         register_all(&mut vm);
-        vm.compile_stack.push(Cell::Int(1));
+        vm.compile_stack.push(CompileEntry::Cell(Cell::Int(1)));
         let err = cs_pop_prim(&mut vm).unwrap_err();
         assert!(
             matches!(err, TbxError::InvalidExpression { .. }),
@@ -4030,13 +3999,28 @@ mod tests {
     fn test_cs_pop_prim_moves_value_to_data_stack() {
         // CS_POP must pop the top of compile_stack and push it onto the data stack.
         let mut vm = make_compiling_vm("TESTWORD");
-        vm.compile_stack.push(Cell::Int(99));
+        vm.compile_stack.push(CompileEntry::Cell(Cell::Int(99)));
         cs_pop_prim(&mut vm).unwrap();
         assert!(vm.compile_stack.is_empty());
         assert_eq!(vm.pop(), Ok(Cell::Int(99)));
     }
 
-    // --- cs_swap_prim ---
+    #[test]
+    fn test_cs_pop_prim_tag_on_top_type_error() {
+        // CS_POP with a Tag on top must return TypeError and leave the tag intact.
+        let mut vm = make_compiling_vm("TESTWORD");
+        vm.compile_stack.push(CompileEntry::Tag("IF".to_string()));
+        let err = cs_pop_prim(&mut vm).unwrap_err();
+        assert!(
+            matches!(err, TbxError::TypeError { .. }),
+            "expected TypeError, got {err:?}"
+        );
+        // Tag must be preserved on the compile_stack.
+        assert_eq!(
+            vm.compile_stack.last(),
+            Some(&CompileEntry::Tag("IF".to_string()))
+        );
+    }
 
     #[test]
     fn test_cs_swap_outside_compile_mode_error() {
@@ -4052,7 +4036,7 @@ mod tests {
     #[test]
     fn test_cs_swap_underflow_one_element() {
         let mut vm = make_compiling_vm("TESTWORD");
-        vm.compile_stack.push(Cell::Int(1));
+        vm.compile_stack.push(CompileEntry::Cell(Cell::Int(1)));
         assert_eq!(cs_swap_prim(&mut vm), Err(TbxError::StackUnderflow));
     }
 
@@ -4065,11 +4049,17 @@ mod tests {
     #[test]
     fn test_cs_swap_swaps_top_two() {
         let mut vm = make_compiling_vm("TESTWORD");
-        vm.compile_stack.push(Cell::Int(10));
-        vm.compile_stack.push(Cell::Int(20));
+        vm.compile_stack.push(CompileEntry::Cell(Cell::Int(10)));
+        vm.compile_stack.push(CompileEntry::Cell(Cell::Int(20)));
         cs_swap_prim(&mut vm).unwrap();
-        assert_eq!(vm.compile_stack.pop(), Some(Cell::Int(10)));
-        assert_eq!(vm.compile_stack.pop(), Some(Cell::Int(20)));
+        assert_eq!(
+            vm.compile_stack.pop(),
+            Some(CompileEntry::Cell(Cell::Int(10)))
+        );
+        assert_eq!(
+            vm.compile_stack.pop(),
+            Some(CompileEntry::Cell(Cell::Int(20)))
+        );
         assert!(vm.compile_stack.is_empty());
     }
 
@@ -4077,11 +4067,19 @@ mod tests {
     fn test_cs_swap_swaps_dict_addr_values() {
         // CS_SWAP must work with Cell::DictAddr values, as used in WHILE/ENDWH.
         let mut vm = make_compiling_vm("TESTWORD");
-        vm.compile_stack.push(Cell::DictAddr(10));
-        vm.compile_stack.push(Cell::DictAddr(20));
+        vm.compile_stack
+            .push(CompileEntry::Cell(Cell::DictAddr(10)));
+        vm.compile_stack
+            .push(CompileEntry::Cell(Cell::DictAddr(20)));
         cs_swap_prim(&mut vm).unwrap();
-        assert_eq!(vm.compile_stack.pop(), Some(Cell::DictAddr(10)));
-        assert_eq!(vm.compile_stack.pop(), Some(Cell::DictAddr(20)));
+        assert_eq!(
+            vm.compile_stack.pop(),
+            Some(CompileEntry::Cell(Cell::DictAddr(10)))
+        );
+        assert_eq!(
+            vm.compile_stack.pop(),
+            Some(CompileEntry::Cell(Cell::DictAddr(20)))
+        );
         assert!(vm.compile_stack.is_empty());
     }
 
@@ -4107,11 +4105,11 @@ mod tests {
     #[test]
     fn test_cs_drop_removes_top() {
         let mut vm = make_compiling_vm("TESTWORD");
-        vm.compile_stack.push(Cell::Int(1));
-        vm.compile_stack.push(Cell::Int(2));
+        vm.compile_stack.push(CompileEntry::Cell(Cell::Int(1)));
+        vm.compile_stack.push(CompileEntry::Cell(Cell::Int(2)));
         cs_drop_prim(&mut vm).unwrap();
         assert_eq!(vm.compile_stack.len(), 1);
-        assert_eq!(vm.compile_stack[0], Cell::Int(1));
+        assert_eq!(vm.compile_stack[0], CompileEntry::Cell(Cell::Int(1)));
     }
 
     // --- cs_dup_prim ---
@@ -4136,22 +4134,23 @@ mod tests {
     #[test]
     fn test_cs_dup_duplicates_top() {
         let mut vm = make_compiling_vm("TESTWORD");
-        vm.compile_stack.push(Cell::Int(42));
+        vm.compile_stack.push(CompileEntry::Cell(Cell::Int(42)));
         cs_dup_prim(&mut vm).unwrap();
         assert_eq!(vm.compile_stack.len(), 2);
-        assert_eq!(vm.compile_stack[0], Cell::Int(42));
-        assert_eq!(vm.compile_stack[1], Cell::Int(42));
+        assert_eq!(vm.compile_stack[0], CompileEntry::Cell(Cell::Int(42)));
+        assert_eq!(vm.compile_stack[1], CompileEntry::Cell(Cell::Int(42)));
     }
 
     #[test]
     fn test_cs_dup_duplicates_dict_addr() {
         // CS_DUP must work with Cell::DictAddr values.
         let mut vm = make_compiling_vm("TESTWORD");
-        vm.compile_stack.push(Cell::DictAddr(42));
+        vm.compile_stack
+            .push(CompileEntry::Cell(Cell::DictAddr(42)));
         cs_dup_prim(&mut vm).unwrap();
         assert_eq!(vm.compile_stack.len(), 2);
-        assert_eq!(vm.compile_stack[0], Cell::DictAddr(42));
-        assert_eq!(vm.compile_stack[1], Cell::DictAddr(42));
+        assert_eq!(vm.compile_stack[0], CompileEntry::Cell(Cell::DictAddr(42)));
+        assert_eq!(vm.compile_stack[1], CompileEntry::Cell(Cell::DictAddr(42)));
     }
 
     // --- cs_over_prim ---
@@ -4176,34 +4175,36 @@ mod tests {
     #[test]
     fn test_cs_over_underflow_one_element() {
         let mut vm = make_compiling_vm("TESTWORD");
-        vm.compile_stack.push(Cell::Int(1));
+        vm.compile_stack.push(CompileEntry::Cell(Cell::Int(1)));
         assert_eq!(cs_over_prim(&mut vm), Err(TbxError::StackUnderflow));
     }
 
     #[test]
     fn test_cs_over_copies_second_to_top() {
         let mut vm = make_compiling_vm("TESTWORD");
-        vm.compile_stack.push(Cell::Int(10)); // bottom
-        vm.compile_stack.push(Cell::Int(20)); // top
+        vm.compile_stack.push(CompileEntry::Cell(Cell::Int(10))); // bottom
+        vm.compile_stack.push(CompileEntry::Cell(Cell::Int(20))); // top
         cs_over_prim(&mut vm).unwrap();
         // Stack should be [10, 20, 10] with 10 on top
         assert_eq!(vm.compile_stack.len(), 3);
-        assert_eq!(vm.compile_stack[2], Cell::Int(10));
-        assert_eq!(vm.compile_stack[1], Cell::Int(20));
-        assert_eq!(vm.compile_stack[0], Cell::Int(10));
+        assert_eq!(vm.compile_stack[2], CompileEntry::Cell(Cell::Int(10)));
+        assert_eq!(vm.compile_stack[1], CompileEntry::Cell(Cell::Int(20)));
+        assert_eq!(vm.compile_stack[0], CompileEntry::Cell(Cell::Int(10)));
     }
 
     #[test]
     fn test_cs_over_copies_dict_addr() {
         // CS_OVER must work with Cell::DictAddr values.
         let mut vm = make_compiling_vm("TESTWORD");
-        vm.compile_stack.push(Cell::DictAddr(10));
-        vm.compile_stack.push(Cell::DictAddr(20));
+        vm.compile_stack
+            .push(CompileEntry::Cell(Cell::DictAddr(10)));
+        vm.compile_stack
+            .push(CompileEntry::Cell(Cell::DictAddr(20)));
         cs_over_prim(&mut vm).unwrap();
         assert_eq!(vm.compile_stack.len(), 3);
-        assert_eq!(vm.compile_stack[2], Cell::DictAddr(10));
-        assert_eq!(vm.compile_stack[1], Cell::DictAddr(20));
-        assert_eq!(vm.compile_stack[0], Cell::DictAddr(10));
+        assert_eq!(vm.compile_stack[2], CompileEntry::Cell(Cell::DictAddr(10)));
+        assert_eq!(vm.compile_stack[1], CompileEntry::Cell(Cell::DictAddr(20)));
+        assert_eq!(vm.compile_stack[0], CompileEntry::Cell(Cell::DictAddr(10)));
     }
 
     // --- cs_rot_prim ---
@@ -4228,15 +4229,15 @@ mod tests {
     #[test]
     fn test_cs_rot_underflow_one_element() {
         let mut vm = make_compiling_vm("TESTWORD");
-        vm.compile_stack.push(Cell::Int(1));
+        vm.compile_stack.push(CompileEntry::Cell(Cell::Int(1)));
         assert_eq!(cs_rot_prim(&mut vm), Err(TbxError::StackUnderflow));
     }
 
     #[test]
     fn test_cs_rot_underflow_two_elements() {
         let mut vm = make_compiling_vm("TESTWORD");
-        vm.compile_stack.push(Cell::Int(1));
-        vm.compile_stack.push(Cell::Int(2));
+        vm.compile_stack.push(CompileEntry::Cell(Cell::Int(1)));
+        vm.compile_stack.push(CompileEntry::Cell(Cell::Int(2)));
         assert_eq!(cs_rot_prim(&mut vm), Err(TbxError::StackUnderflow));
     }
 
@@ -4244,15 +4245,15 @@ mod tests {
     fn test_cs_rot_rotates_top_three() {
         // ( a b c -- b c a )  where a=1 (bottom), b=2, c=3 (top)
         let mut vm = make_compiling_vm("TESTWORD");
-        vm.compile_stack.push(Cell::Int(1)); // a
-        vm.compile_stack.push(Cell::Int(2)); // b
-        vm.compile_stack.push(Cell::Int(3)); // c
+        vm.compile_stack.push(CompileEntry::Cell(Cell::Int(1))); // a
+        vm.compile_stack.push(CompileEntry::Cell(Cell::Int(2))); // b
+        vm.compile_stack.push(CompileEntry::Cell(Cell::Int(3))); // c
         cs_rot_prim(&mut vm).unwrap();
         // Result: [b=2, c=3, a=1] with a=1 on top
         assert_eq!(vm.compile_stack.len(), 3);
-        assert_eq!(vm.compile_stack[0], Cell::Int(2));
-        assert_eq!(vm.compile_stack[1], Cell::Int(3));
-        assert_eq!(vm.compile_stack[2], Cell::Int(1));
+        assert_eq!(vm.compile_stack[0], CompileEntry::Cell(Cell::Int(2)));
+        assert_eq!(vm.compile_stack[1], CompileEntry::Cell(Cell::Int(3)));
+        assert_eq!(vm.compile_stack[2], CompileEntry::Cell(Cell::Int(1)));
     }
 
     #[test]
@@ -4260,14 +4261,14 @@ mod tests {
         // CS_ROT must work with Cell::DictAddr values (as used in WHILE/ENDWH).
         // ( a b c -- b c a ) with DictAddr values
         let mut vm = make_compiling_vm("TESTWORD");
-        vm.compile_stack.push(Cell::DictAddr(1)); // a
-        vm.compile_stack.push(Cell::DictAddr(2)); // b
-        vm.compile_stack.push(Cell::DictAddr(3)); // c
+        vm.compile_stack.push(CompileEntry::Cell(Cell::DictAddr(1))); // a
+        vm.compile_stack.push(CompileEntry::Cell(Cell::DictAddr(2))); // b
+        vm.compile_stack.push(CompileEntry::Cell(Cell::DictAddr(3))); // c
         cs_rot_prim(&mut vm).unwrap();
         assert_eq!(vm.compile_stack.len(), 3);
-        assert_eq!(vm.compile_stack[0], Cell::DictAddr(2));
-        assert_eq!(vm.compile_stack[1], Cell::DictAddr(3));
-        assert_eq!(vm.compile_stack[2], Cell::DictAddr(1));
+        assert_eq!(vm.compile_stack[0], CompileEntry::Cell(Cell::DictAddr(2)));
+        assert_eq!(vm.compile_stack[1], CompileEntry::Cell(Cell::DictAddr(3)));
+        assert_eq!(vm.compile_stack[2], CompileEntry::Cell(Cell::DictAddr(1)));
     }
 
     // --- compile_expr_prim ---
@@ -4278,7 +4279,7 @@ mod tests {
         // has leftover items at the end of the word definition.
         let mut vm = make_compiling_vm("MYWORD");
         // Manually leave an item on compile_stack to simulate an incomplete definition.
-        vm.compile_stack.push(Cell::Int(1));
+        vm.compile_stack.push(CompileEntry::Cell(Cell::Int(1)));
         let err = end_prim(&mut vm).unwrap_err();
         assert!(
             matches!(err, TbxError::CompileStackNotEmpty { count: 1 }),
@@ -4290,6 +4291,28 @@ mod tests {
             "is_compiling must be false after rollback"
         );
         // compile_stack must be cleared after rollback to prevent state leakage.
+        assert!(
+            vm.compile_stack.is_empty(),
+            "compile_stack must be empty after rollback"
+        );
+    }
+
+    #[test]
+    fn test_end_prim_tag_on_compile_stack_error() {
+        // end_prim must return CompileStackNotEmpty and rollback when a Tag entry
+        // is left on compile_stack (simulates an unclosed IF or WHILE).
+        let mut vm = make_compiling_vm("MYWORD3");
+        vm.compile_stack.push(CompileEntry::Tag("IF".to_string()));
+        let err = end_prim(&mut vm).unwrap_err();
+        assert!(
+            matches!(err, TbxError::CompileStackNotEmpty { count: 1 }),
+            "expected CompileStackNotEmpty {{ count: 1 }}, got {err:?}"
+        );
+        // VM must have been rolled back.
+        assert!(
+            !vm.is_compiling,
+            "is_compiling must be false after rollback"
+        );
         assert!(
             vm.compile_stack.is_empty(),
             "compile_stack must be empty after rollback"
@@ -4419,173 +4442,172 @@ mod tests {
         assert_eq!(vm.pop(), Err(TbxError::StackUnderflow));
     }
 
-    // --- CTRL_OPEN_IF / CTRL_OPEN_WHILE / CTRL_CLOSE_IF / CTRL_CLOSE_WHILE ---
+    // --- cs_open_tag_prim ---
 
     #[test]
-    fn test_ctrl_open_if_outside_compile_mode_error() {
+    fn test_cs_open_tag_outside_compile_mode_error() {
+        // CS_OPEN_TAG outside compile mode must return InvalidExpression.
         let mut vm = VM::new();
-        assert_eq!(
-            ctrl_open_if_prim(&mut vm),
-            Err(TbxError::InvalidExpression {
-                reason: "CTRL_OPEN_IF outside compile mode"
-            })
-        );
-    }
-
-    #[test]
-    fn test_ctrl_open_while_outside_compile_mode_error() {
-        let mut vm = VM::new();
-        assert_eq!(
-            ctrl_open_while_prim(&mut vm),
-            Err(TbxError::InvalidExpression {
-                reason: "CTRL_OPEN_WHILE outside compile mode"
-            })
-        );
-    }
-
-    #[test]
-    fn test_ctrl_close_if_outside_compile_mode_error() {
-        let mut vm = VM::new();
-        assert_eq!(
-            ctrl_close_if_prim(&mut vm),
-            Err(TbxError::InvalidExpression {
-                reason: "CTRL_CLOSE_IF outside compile mode"
-            })
-        );
-    }
-
-    #[test]
-    fn test_ctrl_close_while_outside_compile_mode_error() {
-        let mut vm = VM::new();
-        assert_eq!(
-            ctrl_close_while_prim(&mut vm),
-            Err(TbxError::InvalidExpression {
-                reason: "CTRL_CLOSE_WHILE outside compile mode"
-            })
-        );
-    }
-
-    #[test]
-    fn test_ctrl_open_if_pushes_if_kind() {
-        let mut vm = VM::new();
-        vm.is_compiling = true;
-        ctrl_open_if_prim(&mut vm).unwrap();
-        assert_eq!(vm.control_stack, vec![ControlKind::If]);
-    }
-
-    #[test]
-    fn test_ctrl_open_while_pushes_while_kind() {
-        let mut vm = VM::new();
-        vm.is_compiling = true;
-        ctrl_open_while_prim(&mut vm).unwrap();
-        assert_eq!(vm.control_stack, vec![ControlKind::While]);
-    }
-
-    #[test]
-    fn test_ctrl_close_if_empty_stack_error() {
-        let mut vm = VM::new();
-        vm.is_compiling = true;
-        assert_eq!(
-            ctrl_close_if_prim(&mut vm),
-            Err(TbxError::UnopenedControlStructure { keyword: "ENDIF" })
-        );
-    }
-
-    #[test]
-    fn test_ctrl_close_while_empty_stack_error() {
-        let mut vm = VM::new();
-        vm.is_compiling = true;
-        assert_eq!(
-            ctrl_close_while_prim(&mut vm),
-            Err(TbxError::UnopenedControlStructure { keyword: "ENDWH" })
-        );
-    }
-
-    #[test]
-    fn test_ctrl_close_if_matching_pops_if() {
-        let mut vm = VM::new();
-        vm.is_compiling = true;
-        vm.control_stack.push(ControlKind::If);
-        ctrl_close_if_prim(&mut vm).unwrap();
-        assert!(vm.control_stack.is_empty());
-    }
-
-    #[test]
-    fn test_ctrl_close_while_matching_pops_while() {
-        let mut vm = VM::new();
-        vm.is_compiling = true;
-        vm.control_stack.push(ControlKind::While);
-        ctrl_close_while_prim(&mut vm).unwrap();
-        assert!(vm.control_stack.is_empty());
-    }
-
-    #[test]
-    fn test_ctrl_close_if_mismatched_while_error() {
-        // Simulates: WHILE ... ENDIF  (cross-nesting error)
-        let mut vm = VM::new();
-        vm.is_compiling = true;
-        vm.control_stack.push(ControlKind::While);
-        assert_eq!(
-            ctrl_close_if_prim(&mut vm),
-            Err(TbxError::MismatchedControlStructure {
-                close_word: "ENDIF",
-                open_word: "WHILE"
-            })
-        );
-    }
-
-    #[test]
-    fn test_ctrl_close_while_mismatched_if_error() {
-        // Simulates: IF ... ENDWH  (cross-nesting error)
-        let mut vm = VM::new();
-        vm.is_compiling = true;
-        vm.control_stack.push(ControlKind::If);
-        assert_eq!(
-            ctrl_close_while_prim(&mut vm),
-            Err(TbxError::MismatchedControlStructure {
-                close_word: "ENDWH",
-                open_word: "IF"
-            })
-        );
-    }
-
-    #[test]
-    fn test_ctrl_nested_if_while_correct_order() {
-        // Simulates: IF ... WHILE ... ENDWH ... ENDIF  (correct nesting)
-        let mut vm = VM::new();
-        vm.is_compiling = true;
-        ctrl_open_if_prim(&mut vm).unwrap();
-        ctrl_open_while_prim(&mut vm).unwrap();
-        ctrl_close_while_prim(&mut vm).unwrap();
-        ctrl_close_if_prim(&mut vm).unwrap();
-        assert!(vm.control_stack.is_empty());
-    }
-
-    #[test]
-    fn test_end_prim_control_stack_not_empty_error() {
-        // end_prim must return ControlStackNotEmpty and rollback when control_stack
-        // has leftover items (defensive check for future code paths).
-        let mut vm = make_compiling_vm("MYWORD2");
-        // Manually leave an item on control_stack without a matching compile_stack entry.
-        vm.control_stack.push(ControlKind::If);
-        let err = end_prim(&mut vm).unwrap_err();
+        register_all(&mut vm);
+        let idx = vm.intern_string("IF").unwrap();
+        vm.push(Cell::StringDesc(idx)).unwrap();
+        let err = cs_open_tag_prim(&mut vm).unwrap_err();
         assert!(
-            matches!(err, TbxError::ControlStackNotEmpty { count: 1 }),
-            "expected ControlStackNotEmpty {{ count: 1 }}, got {err:?}"
+            matches!(err, TbxError::InvalidExpression { .. }),
+            "expected InvalidExpression, got {err:?}"
         );
-        // VM must have been rolled back.
+    }
+
+    #[test]
+    fn test_cs_open_tag_pushes_tag_to_compile_stack() {
+        // CS_OPEN_TAG must pop a StringDesc, resolve it and push Tag to compile_stack.
+        let mut vm = make_compiling_vm("TESTWORD");
+        let idx = vm.intern_string("WHILE").unwrap();
+        vm.push(Cell::StringDesc(idx)).unwrap();
+        cs_open_tag_prim(&mut vm).unwrap();
+        // data stack must be empty.
+        assert_eq!(vm.pop(), Err(TbxError::StackUnderflow));
+        // compile_stack must hold Tag("WHILE").
+        assert_eq!(
+            vm.compile_stack.last(),
+            Some(&CompileEntry::Tag("WHILE".to_string()))
+        );
+    }
+
+    #[test]
+    fn test_cs_open_tag_type_error_non_string() {
+        // CS_OPEN_TAG with a non-StringDesc on the data stack must return TypeError.
+        let mut vm = make_compiling_vm("TESTWORD");
+        vm.push(Cell::Int(42)).unwrap();
+        let err = cs_open_tag_prim(&mut vm).unwrap_err();
         assert!(
-            !vm.is_compiling,
-            "is_compiling must be false after rollback"
+            matches!(err, TbxError::TypeError { .. }),
+            "expected TypeError, got {err:?}"
         );
-        // Both stacks must be cleared after rollback.
+    }
+
+    #[test]
+    fn test_cs_open_tag_empty_data_stack_error() {
+        // CS_OPEN_TAG with empty data stack must return StackUnderflow.
+        let mut vm = make_compiling_vm("TESTWORD");
+        let err = cs_open_tag_prim(&mut vm).unwrap_err();
+        assert!(
+            matches!(err, TbxError::StackUnderflow),
+            "expected StackUnderflow, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn test_cs_close_tag_outside_compile_mode_error() {
+        // CS_CLOSE_TAG outside compile mode must return InvalidExpression.
+        let mut vm = VM::new();
+        register_all(&mut vm);
+        let idx = vm.intern_string("IF").unwrap();
+        vm.push(Cell::StringDesc(idx)).unwrap();
+        let err = cs_close_tag_prim(&mut vm).unwrap_err();
+        assert!(
+            matches!(err, TbxError::InvalidExpression { .. }),
+            "expected InvalidExpression, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn test_cs_close_tag_matching_pops_tag() {
+        // CS_CLOSE_TAG with matching Tag must succeed and pop it from compile_stack.
+        let mut vm = make_compiling_vm("TESTWORD");
+        vm.compile_stack
+            .push(CompileEntry::Tag("WHILE".to_string()));
+        let idx = vm.intern_string("WHILE").unwrap();
+        vm.push(Cell::StringDesc(idx)).unwrap();
+        cs_close_tag_prim(&mut vm).unwrap();
+        assert!(vm.compile_stack.is_empty());
+    }
+
+    #[test]
+    fn test_cs_close_tag_mismatched_tag_error() {
+        // CS_CLOSE_TAG with a tag that does not match must return MismatchedTag.
+        // Unlike the Cell-on-top case, a mismatched Tag is consumed (not restored):
+        // the caller always encounters a compile error and rollback_def() clears
+        // compile_stack anyway.
+        let mut vm = make_compiling_vm("TESTWORD");
+        vm.compile_stack.push(CompileEntry::Tag("IF".to_string()));
+        let idx = vm.intern_string("WHILE").unwrap();
+        vm.push(Cell::StringDesc(idx)).unwrap();
+        let err = cs_close_tag_prim(&mut vm).unwrap_err();
+        assert!(
+            matches!(
+                err,
+                TbxError::MismatchedTag {
+                    ref expected,
+                    ref found
+                } if expected == "WHILE" && found == "IF"
+            ),
+            "expected MismatchedTag(WHILE/IF), got {err:?}"
+        );
+        // After MismatchedTag the tag is consumed (not restored), which is intentional:
+        // a compile error always triggers rollback_def() that clears compile_stack.
         assert!(
             vm.compile_stack.is_empty(),
-            "compile_stack must be empty after rollback"
+            "mismatched tag must be consumed, not restored"
         );
+    }
+
+    #[test]
+    fn test_cs_close_tag_empty_stack_error() {
+        // CS_CLOSE_TAG with an empty compile_stack must return NoOpenTag.
+        let mut vm = make_compiling_vm("TESTWORD");
+        let idx = vm.intern_string("WHILE").unwrap();
+        vm.push(Cell::StringDesc(idx)).unwrap();
+        let err = cs_close_tag_prim(&mut vm).unwrap_err();
         assert!(
-            vm.control_stack.is_empty(),
-            "control_stack must be empty after rollback"
+            matches!(err, TbxError::NoOpenTag { ref expected } if expected == "WHILE"),
+            "expected NoOpenTag(WHILE), got {err:?}"
         );
+    }
+
+    #[test]
+    fn test_cs_close_tag_cell_on_top_error() {
+        // CS_CLOSE_TAG with a Cell (not Tag) on top of compile_stack must return NoOpenTag.
+        let mut vm = make_compiling_vm("TESTWORD");
+        vm.compile_stack.push(CompileEntry::Cell(Cell::Int(42)));
+        let idx = vm.intern_string("IF").unwrap();
+        vm.push(Cell::StringDesc(idx)).unwrap();
+        let err = cs_close_tag_prim(&mut vm).unwrap_err();
+        assert!(
+            matches!(err, TbxError::NoOpenTag { ref expected } if expected == "IF"),
+            "expected NoOpenTag(IF), got {err:?}"
+        );
+        // The cell must be restored on the compile_stack.
+        assert_eq!(
+            vm.compile_stack.last(),
+            Some(&CompileEntry::Cell(Cell::Int(42)))
+        );
+    }
+
+    #[test]
+    fn test_cs_open_close_tag_correct_nesting() {
+        // CS_OPEN_TAG and CS_CLOSE_TAG must support correct IF/WHILE nesting.
+        let mut vm = make_compiling_vm("TESTWORD");
+        // Simulate: IF ... WHILE ... ENDWH ... ENDIF
+        let idx_if = vm.intern_string("IF").unwrap();
+        let idx_while = vm.intern_string("WHILE").unwrap();
+
+        vm.push(Cell::StringDesc(idx_if)).unwrap();
+        cs_open_tag_prim(&mut vm).unwrap(); // push Tag("IF")
+
+        vm.push(Cell::StringDesc(idx_while)).unwrap();
+        cs_open_tag_prim(&mut vm).unwrap(); // push Tag("WHILE")
+
+        // Close WHILE
+        let idx_while2 = vm.intern_string("WHILE").unwrap();
+        vm.push(Cell::StringDesc(idx_while2)).unwrap();
+        cs_close_tag_prim(&mut vm).unwrap(); // pop Tag("WHILE")
+
+        // Close IF
+        let idx_if2 = vm.intern_string("IF").unwrap();
+        vm.push(Cell::StringDesc(idx_if2)).unwrap();
+        cs_close_tag_prim(&mut vm).unwrap(); // pop Tag("IF")
+
+        assert!(vm.compile_stack.is_empty());
     }
 }
