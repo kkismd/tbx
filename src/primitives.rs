@@ -1313,6 +1313,8 @@ fn compile_lvalue_prim(vm: &mut VM) -> Result<(), TbxError> {
     };
 
     // Resolve address: local table first, then global dictionary.
+    // Follow the same take→use→restore→apply-? pattern as compile_expr_prim so that
+    // local_table is always restored before any early return propagates.
     let addr_cell = {
         // Take local_table out to avoid borrow conflict with &mut vm below.
         let local_table = vm
@@ -1320,22 +1322,24 @@ fn compile_lvalue_prim(vm: &mut VM) -> Result<(), TbxError> {
             .as_mut()
             .map(|s| std::mem::take(&mut s.local_table));
 
-        let result = if let Some(idx) = local_table.as_ref().and_then(|lt| lt.get(&name)).copied() {
-            Ok(Cell::StackAddr(idx))
-        } else {
-            let xt = vm
-                .lookup(&name)
-                .ok_or_else(|| TbxError::UndefinedSymbol { name: name.clone() })?;
-            match &vm.headers[xt.index()].kind {
-                EntryKind::Variable(addr) => Ok(Cell::DictAddr(*addr)),
-                _ => Err(TbxError::TypeError {
-                    expected: "variable",
-                    got: "non-variable",
-                }),
-            }
-        };
+        let result: Result<Cell, TbxError> =
+            if let Some(idx) = local_table.as_ref().and_then(|lt| lt.get(&name)).copied() {
+                Ok(Cell::StackAddr(idx))
+            } else {
+                // No `?` here — collect the result and restore local_table first.
+                match vm.lookup(&name) {
+                    None => Err(TbxError::UndefinedSymbol { name: name.clone() }),
+                    Some(xt) => match &vm.headers[xt.index()].kind {
+                        EntryKind::Variable(addr) => Ok(Cell::DictAddr(*addr)),
+                        _ => Err(TbxError::TypeError {
+                            expected: "variable",
+                            got: "non-variable",
+                        }),
+                    },
+                }
+            };
 
-        // Restore local_table unconditionally.
+        // Restore local_table unconditionally before propagating any error.
         if let (Some(state), Some(lt)) = (vm.compile_state.as_mut(), local_table) {
             state.local_table = lt;
         }
