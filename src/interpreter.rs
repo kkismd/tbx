@@ -3936,6 +3936,31 @@ NOOP_LOOP(4)";
         }
     }
 
+    // --- IF ... ELSIF ... ELSE ... ENDIF (N=1 + ELSE path, issue #359) ---
+
+    #[test]
+    fn test_if_elsif_one_else_endif_sign3() {
+        // IF ... ELSIF ... ELSE ... ENDIF with exactly one ELSIF exercises the
+        // ENDIF loop once and then patches the final ELSE JUMP_ALWAYS placeholder.
+        let mut interp = Interpreter::new();
+        let src = "\
+DEF SIGN3(X)
+  IF X > 0
+    PUTSTR \"+\"
+  ELSIF X < 0
+    PUTSTR \"-\"
+  ELSE
+    PUTSTR \"0\"
+  ENDIF
+END
+SIGN3 5
+SIGN3 -3
+SIGN3 0";
+        interp.exec_source(src).unwrap();
+        let out = interp.take_output();
+        assert_eq!(out, "+-0", "expected '+-0', got: {:?}", out);
+    }
+
     // --- LET compile word ---
 
     #[test]
