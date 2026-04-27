@@ -17,7 +17,7 @@ impl std::fmt::Display for CompileEntry {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             CompileEntry::Cell(c) => write!(f, "Cell({})", c),
-            CompileEntry::Tag(s) => write!(f, "Tag({})", s),
+            CompileEntry::Tag(s) => write!(f, "Tag(\"{}\")", s),
         }
     }
 }

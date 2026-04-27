@@ -4002,7 +4002,25 @@ mod tests {
         assert_eq!(vm.pop(), Ok(Cell::Int(99)));
     }
 
-    // --- cs_swap_prim ---
+    #[test]
+    fn test_cs_pop_prim_tag_on_top_type_error() {
+        // CS_POP with a Tag on top must return TypeError and leave the tag intact.
+        let mut vm = make_compiling_vm("TESTWORD");
+        vm.compile_stack
+            .push(CompileEntry::Tag("IF".to_string()));
+        let err = cs_pop_prim(&mut vm).unwrap_err();
+        assert!(
+            matches!(err, TbxError::TypeError { .. }),
+            "expected TypeError, got {err:?}"
+        );
+        // Tag must be preserved on the compile_stack.
+        assert_eq!(
+            vm.compile_stack.last(),
+            Some(&CompileEntry::Tag("IF".to_string()))
+        );
+    }
+
+
 
     #[test]
     fn test_cs_swap_outside_compile_mode_error() {
@@ -4453,7 +4471,18 @@ mod tests {
         );
     }
 
-    // --- cs_close_tag_prim ---
+    #[test]
+    fn test_cs_open_tag_empty_data_stack_error() {
+        // CS_OPEN_TAG with empty data stack must return StackUnderflow.
+        let mut vm = make_compiling_vm("TESTWORD");
+        let err = cs_open_tag_prim(&mut vm).unwrap_err();
+        assert!(
+            matches!(err, TbxError::StackUnderflow),
+            "expected StackUnderflow, got {err:?}"
+        );
+    }
+
+
 
     #[test]
     fn test_cs_close_tag_outside_compile_mode_error() {
