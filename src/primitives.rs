@@ -1286,6 +1286,100 @@ fn compile_expr_prim(vm: &mut VM) -> Result<(), TbxError> {
     Ok(())
 }
 
+/// COMPILE_LVALUE — read a variable name from the token stream and emit `LIT addr` to the
+/// dictionary, where `addr` is the variable's stack or dictionary address.
+///
+/// This is the compile-time counterpart to the `&var` address-of operator in expressions.
+/// Locals (from `compile_state.local_table`) resolve to `StackAddr`; global variables
+/// (`EntryKind::Variable`) resolve to `DictAddr`.
+///
+/// Must be called in compile mode (inside an IMMEDIATE word invocation that runs during a
+/// DEF body compilation). Requires `token_stream` to be set.
+fn compile_lvalue_prim(vm: &mut VM) -> Result<(), TbxError> {
+    if !vm.is_compiling {
+        return Err(TbxError::InvalidExpression {
+            reason: "COMPILE_LVALUE outside compile mode",
+        });
+    }
+
+    let tok = vm.next_token()?;
+    let name = match tok.token {
+        Token::Ident(n) => n,
+        _ => {
+            return Err(TbxError::InvalidExpression {
+                reason: "COMPILE_LVALUE: expected variable name",
+            })
+        }
+    };
+
+    // Resolve address: local table first, then global dictionary.
+    // Follow the same take→use→restore→apply-? pattern as compile_expr_prim so that
+    // local_table is always restored before any early return propagates.
+    let addr_cell = {
+        // Take local_table out to avoid borrow conflict with &mut vm below.
+        let local_table = vm
+            .compile_state
+            .as_mut()
+            .map(|s| std::mem::take(&mut s.local_table));
+
+        let result: Result<Cell, TbxError> =
+            if let Some(idx) = local_table.as_ref().and_then(|lt| lt.get(&name)).copied() {
+                Ok(Cell::StackAddr(idx))
+            } else {
+                // No `?` here — collect the result and restore local_table first.
+                match vm.lookup(&name) {
+                    None => Err(TbxError::UndefinedSymbol { name }),
+                    Some(xt) => match &vm.headers[xt.index()].kind {
+                        EntryKind::Variable(addr) => Ok(Cell::DictAddr(*addr)),
+                        _ => Err(TbxError::TypeError {
+                            expected: "variable",
+                            got: "non-variable",
+                        }),
+                    },
+                }
+            };
+
+        // Restore local_table unconditionally before propagating any error.
+        if let (Some(state), Some(lt)) = (vm.compile_state.as_mut(), local_table) {
+            state.local_table = lt;
+        }
+        result?
+    };
+
+    // Emit LIT <addr> to the dictionary.
+    let lit_xt =
+        vm.find_by_kind(|k| matches!(k, EntryKind::Lit))
+            .ok_or(TbxError::UndefinedSymbol {
+                name: "LIT".to_string(),
+            })?;
+    vm.dict_write(Cell::Xt(lit_xt))?;
+    vm.dict_write(addr_cell)?;
+    Ok(())
+}
+
+/// SKIP_EQ — read the next token from the token stream and validate it is `=`.
+///
+/// Used by the `LET` compile word to consume the `=` separator between the
+/// left-hand variable name and the right-hand expression.
+///
+/// Must be called in compile mode. Returns `InvalidExpression` if the token is
+/// not `Token::Op("=")`.
+fn skip_eq_prim(vm: &mut VM) -> Result<(), TbxError> {
+    if !vm.is_compiling {
+        return Err(TbxError::InvalidExpression {
+            reason: "SKIP_EQ outside compile mode",
+        });
+    }
+
+    let tok = vm.next_token()?;
+    match tok.token {
+        Token::Op(ref s) if s == "=" => Ok(()),
+        _ => Err(TbxError::InvalidExpression {
+            reason: "SKIP_EQ: expected '='",
+        }),
+    }
+}
+
 /// USE — load and execute a TBX source file at compile time.
 ///
 /// Syntax: `USE "path/to/file.tbx"`
@@ -1529,6 +1623,23 @@ pub fn register_all(vm: &mut VM) {
     let mut use_entry = WordEntry::new_primitive("USE", use_prim);
     use_entry.flags = FLAG_IMMEDIATE;
     vm.register(use_entry);
+
+    // COMPILE_LVALUE / SKIP_EQ: compile-helper primitives for LET and similar
+    // compile words. No IMMEDIATE/SYSTEM — called as statements inside IMMEDIATE
+    // word bodies, exactly like COMPILE_EXPR, CS_PUSH, PATCH_ADDR, etc.
+    vm.register(WordEntry::new_primitive(
+        "COMPILE_LVALUE",
+        compile_lvalue_prim,
+    ));
+    vm.register(WordEntry::new_primitive("SKIP_EQ", skip_eq_prim));
+
+    // ASSIGN_XT: constant holding the Xt of the SET primitive.
+    // Allows TBX compile words to emit a SET instruction via `APPEND ASSIGN_XT`,
+    // analogous to JUMP_FALSE/JUMP_TRUE/JUMP_ALWAYS for branch instructions.
+    let set_xt = vm
+        .lookup("SET")
+        .expect("SET primitive must be registered before ASSIGN_XT");
+    vm.register(WordEntry::new_constant("ASSIGN_XT", Cell::Xt(set_xt)));
 }
 
 #[cfg(test)]
@@ -4609,5 +4720,172 @@ mod tests {
         cs_close_tag_prim(&mut vm).unwrap(); // pop Tag("IF")
 
         assert!(vm.compile_stack.is_empty());
+    }
+
+    // --- compile_lvalue_prim ---
+
+    fn make_op_token(op: &str) -> crate::lexer::SpannedToken {
+        crate::lexer::SpannedToken {
+            token: crate::lexer::Token::Op(op.to_string()),
+            pos: crate::lexer::Position { line: 1, col: 1 },
+            source_offset: 0,
+            source_len: op.len(),
+        }
+    }
+
+    #[test]
+    fn test_compile_lvalue_outside_compile_mode_error() {
+        use std::collections::VecDeque;
+        let mut vm = VM::new();
+        register_all(&mut vm);
+        vm.token_stream = Some(VecDeque::from([make_ident_token("X")]));
+        let result = compile_lvalue_prim(&mut vm);
+        assert!(
+            matches!(result, Err(TbxError::InvalidExpression { .. })),
+            "expected InvalidExpression outside compile mode"
+        );
+    }
+
+    #[test]
+    fn test_compile_lvalue_local_variable_emits_stack_addr() {
+        // COMPILE_LVALUE with a known local variable should emit LIT StackAddr(idx).
+        use std::collections::VecDeque;
+        let mut vm = make_compiling_vm("TESTWORD");
+        // Declare a local variable X (index 0).
+        vm.token_stream = Some(VecDeque::from([make_ident_token("X")]));
+        var_prim(&mut vm).unwrap();
+
+        let dp_before = vm.dp;
+        vm.token_stream = Some(VecDeque::from([make_ident_token("X")]));
+        compile_lvalue_prim(&mut vm).unwrap();
+
+        // Two cells should have been written: Xt(LIT) and StackAddr(0).
+        assert_eq!(vm.dp, dp_before + 2);
+        let cell1 = vm.dict_read(dp_before).unwrap();
+        let cell2 = vm.dict_read(dp_before + 1).unwrap();
+        assert!(
+            matches!(cell1, crate::cell::Cell::Xt(_)),
+            "expected Xt(LIT)"
+        );
+        assert_eq!(cell2, crate::cell::Cell::StackAddr(0));
+    }
+
+    #[test]
+    fn test_compile_lvalue_global_variable_emits_dict_addr() {
+        // COMPILE_LVALUE with a global Variable entry should emit LIT DictAddr(addr).
+        use std::collections::VecDeque;
+        let mut vm = VM::new();
+        register_all(&mut vm);
+        // Register a global variable GVAR.
+        vm.token_stream = Some(VecDeque::from([make_ident_token("GVAR")]));
+        var_prim(&mut vm).unwrap();
+
+        // Switch to compile mode to call compile_lvalue_prim.
+        vm.token_stream = Some(VecDeque::from([make_ident_token("HELPER")]));
+        def_prim(&mut vm).unwrap();
+
+        let dp_before = vm.dp;
+        vm.token_stream = Some(VecDeque::from([make_ident_token("GVAR")]));
+        compile_lvalue_prim(&mut vm).unwrap();
+
+        assert_eq!(vm.dp, dp_before + 2);
+        let cell2 = vm.dict_read(dp_before + 1).unwrap();
+        assert!(
+            matches!(cell2, crate::cell::Cell::DictAddr(_)),
+            "expected DictAddr for global variable"
+        );
+    }
+
+    #[test]
+    fn test_compile_lvalue_undefined_variable_error() {
+        use std::collections::VecDeque;
+        let mut vm = make_compiling_vm("TESTWORD");
+        vm.token_stream = Some(VecDeque::from([make_ident_token("NOSUCH")]));
+        let result = compile_lvalue_prim(&mut vm);
+        assert!(
+            matches!(result, Err(TbxError::UndefinedSymbol { .. })),
+            "expected UndefinedSymbol for unknown variable"
+        );
+        // local_table must be restored even on error.
+        assert!(
+            vm.compile_state.is_some(),
+            "compile_state should still exist"
+        );
+    }
+
+    #[test]
+    fn test_compile_lvalue_non_variable_identifier_error() {
+        // Passing a non-variable identifier (e.g. a primitive word) should give TypeError.
+        use std::collections::VecDeque;
+        let mut vm = make_compiling_vm("TESTWORD");
+        // "DROP" is a known word but not a Variable.
+        vm.token_stream = Some(VecDeque::from([make_ident_token("DROP")]));
+        let result = compile_lvalue_prim(&mut vm);
+        assert!(
+            matches!(result, Err(TbxError::TypeError { .. })),
+            "expected TypeError for non-variable identifier"
+        );
+        // local_table must be restored even on error.
+        assert!(
+            vm.compile_state.is_some(),
+            "compile_state should still exist"
+        );
+    }
+
+    #[test]
+    fn test_compile_lvalue_non_ident_token_error() {
+        // Passing a non-identifier token (e.g. an integer literal) as lvalue should
+        // produce an InvalidExpression error (the `_ => ...` branch in compile_lvalue_prim).
+        use std::collections::VecDeque;
+        let mut vm = make_compiling_vm("TESTWORD");
+        let int_token = crate::lexer::SpannedToken {
+            token: crate::lexer::Token::IntLit(10),
+            pos: crate::lexer::Position { line: 1, col: 1 },
+            source_offset: 0,
+            source_len: 2,
+        };
+        vm.token_stream = Some(VecDeque::from([int_token]));
+        let result = compile_lvalue_prim(&mut vm);
+        assert!(
+            matches!(result, Err(TbxError::InvalidExpression { .. })),
+            "expected InvalidExpression for non-Ident lvalue token"
+        );
+    }
+
+    // --- skip_eq_prim ---
+
+    #[test]
+    fn test_skip_eq_outside_compile_mode_error() {
+        use std::collections::VecDeque;
+        let mut vm = VM::new();
+        register_all(&mut vm);
+        vm.token_stream = Some(VecDeque::from([make_op_token("=")]));
+        let result = skip_eq_prim(&mut vm);
+        assert!(
+            matches!(result, Err(TbxError::InvalidExpression { .. })),
+            "expected InvalidExpression outside compile mode"
+        );
+    }
+
+    #[test]
+    fn test_skip_eq_consumes_equals_token() {
+        use std::collections::VecDeque;
+        let mut vm = make_compiling_vm("TESTWORD");
+        vm.token_stream = Some(VecDeque::from([make_op_token("=")]));
+        skip_eq_prim(&mut vm).unwrap();
+        // Token stream should be empty after consuming '='.
+        assert!(vm.token_stream.as_ref().unwrap().is_empty());
+    }
+
+    #[test]
+    fn test_skip_eq_non_equals_token_error() {
+        use std::collections::VecDeque;
+        let mut vm = make_compiling_vm("TESTWORD");
+        vm.token_stream = Some(VecDeque::from([make_op_token("+")]));
+        let result = skip_eq_prim(&mut vm);
+        assert!(
+            matches!(result, Err(TbxError::InvalidExpression { .. })),
+            "expected InvalidExpression for non-'=' token"
+        );
     }
 }

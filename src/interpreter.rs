@@ -3935,4 +3935,76 @@ NOOP_LOOP(4)";
             other => panic!("expected MismatchedTag(WHILE/IF), got {other:?}"),
         }
     }
+
+    // --- LET compile word ---
+
+    #[test]
+    fn test_let_local_variable_basic() {
+        // LET I = 10 inside a DEF body assigns a local variable.
+        let mut interp = Interpreter::new();
+        let src = "DEF TESTLET\n  VAR I\n  LET I = 10\n  PUTDEC I\nEND\nTESTLET";
+        interp.exec_source(src).unwrap();
+        assert_eq!(interp.take_output(), "10");
+    }
+
+    #[test]
+    fn test_let_local_arithmetic_expr() {
+        // LET with an arithmetic RHS expression.
+        let mut interp = Interpreter::new();
+        let src = "DEF TESTLET(X)\n  VAR R\n  LET R = X * 2 + 1\n  PUTDEC R\nEND\nTESTLET 5";
+        interp.exec_source(src).unwrap();
+        assert_eq!(interp.take_output(), "11");
+    }
+
+    #[test]
+    fn test_let_global_variable() {
+        // LET assigns a global variable declared outside a DEF.
+        let mut interp = Interpreter::new();
+        let src = "VAR G\nDEF SETG(V)\n  LET G = V\nEND\nSETG 42\nPUTDEC G";
+        interp.exec_source(src).unwrap();
+        assert_eq!(interp.take_output(), "42");
+    }
+
+    #[test]
+    fn test_let_missing_eq_is_error() {
+        // LET without '=' should produce an InvalidExpression error.
+        let mut interp = Interpreter::new();
+        let src = "DEF BAD\n  VAR I\n  LET I 10\nEND";
+        let result = interp.exec_source(src);
+        assert!(result.is_err(), "expected error for LET without '='");
+    }
+
+    #[test]
+    fn test_let_undefined_variable_is_error() {
+        // LET with an undefined variable name should produce an UndefinedSymbol error.
+        let mut interp = Interpreter::new();
+        let src = "DEF BAD\n  LET NOSUCH = 10\nEND";
+        let result = interp.exec_source(src);
+        assert!(
+            matches!(
+                result,
+                Err(ref e) if matches!(e.kind, crate::error::TbxError::UndefinedSymbol { .. })
+            ),
+            "expected UndefinedSymbol, got {result:?}"
+        );
+    }
+
+    #[test]
+    fn test_let_parameter_assignment() {
+        // LET can assign to a function parameter (which is also a local StackAddr).
+        let mut interp = Interpreter::new();
+        let src = "DEF DOUBLE(X)\n  LET X = X * 2\n  PUTDEC X\nEND\nDOUBLE 7";
+        interp.exec_source(src).unwrap();
+        assert_eq!(interp.take_output(), "14");
+    }
+
+    #[test]
+    fn test_let_outside_def_is_error() {
+        // LET at top level (outside DEF) should fail because COMPILE_LVALUE
+        // requires compile mode (is_compiling = true).
+        let mut interp = Interpreter::new();
+        let src = "VAR G\nLET G = 10";
+        let result = interp.exec_source(src);
+        assert!(result.is_err(), "expected error for LET outside DEF");
+    }
 }
