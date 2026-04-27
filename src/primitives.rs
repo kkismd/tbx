@@ -1329,6 +1329,177 @@ fn use_prim(vm: &mut VM) -> Result<(), TbxError> {
     Ok(())
 }
 
+// ---------------------------------------------------------------------------
+// LET — BASIC-style assignment statement
+// ---------------------------------------------------------------------------
+
+/// LET — BASIC-style assignment statement: `LET varname = expr`.
+///
+/// Syntax: `LET <name> = <expr>`
+///
+/// In both interpret and compile mode this generates the bytecode sequence:
+///   `Xt(LIT_MARKER)  Xt(LIT)  addr_cell  [expr_cells]  Xt(SET)  Xt(DROP_TO_MARKER)`
+///
+/// In interpret mode the sequence is followed by `Xt(EXIT)`, executed
+/// immediately, then the temporary dictionary space is reclaimed.
+///
+/// Variable resolution order: local variables (`StackAddr`) take priority
+/// over global dictionary variables (`DictAddr`).
+pub fn let_prim(vm: &mut VM) -> Result<(), TbxError> {
+    // (1) Read the variable name.
+    let name_tok = vm.next_token()?;
+    let name = match name_tok.token {
+        Token::Ident(n) => n.to_ascii_uppercase(),
+        _ => {
+            return Err(TbxError::InvalidExpression {
+                reason: "LET expects a variable name",
+            })
+        }
+    };
+
+    // (2) Read and discard the '=' separator token.
+    let eq_tok = vm.next_token()?;
+    match &eq_tok.token {
+        Token::Op(s) if s == "=" => {}
+        _ => {
+            return Err(TbxError::InvalidExpression {
+                reason: "LET expects '=' after variable name",
+            })
+        }
+    }
+
+    // (3) Drain the remaining tokens as the right-hand side expression.
+    let expr_tokens: Vec<crate::lexer::SpannedToken> = {
+        let stream = vm.token_stream.as_mut().ok_or(TbxError::TokenStreamEmpty)?;
+        stream.drain(..).collect()
+    };
+    if expr_tokens.is_empty() {
+        return Err(TbxError::InvalidExpression {
+            reason: "LET expects an expression after '='",
+        });
+    }
+
+    // (4) Resolve the variable address cell.
+    let addr_cell = resolve_let_var(vm, &name)?;
+
+    // (5) Emit bytecode and execute (interpret mode) or defer (compile mode).
+    emit_let_assignment(vm, addr_cell, &expr_tokens)
+}
+
+/// Resolve a variable name to its address cell for use with `LET`.
+///
+/// Local variables (`StackAddr`) in the current compile state take priority
+/// over global dictionary variables (`DictAddr`).
+fn resolve_let_var(vm: &VM, name: &str) -> Result<Cell, TbxError> {
+    // Check the local variable table first (only populated in compile mode).
+    if let Some(idx) = vm
+        .compile_state
+        .as_ref()
+        .and_then(|s| s.local_table.get(name))
+        .copied()
+    {
+        return Ok(Cell::StackAddr(idx));
+    }
+
+    // Fall back to the global dictionary.
+    let xt = vm.lookup(name).ok_or_else(|| TbxError::UndefinedSymbol {
+        name: name.to_string(),
+    })?;
+    match &vm.headers[xt.index()].kind {
+        EntryKind::Variable(addr) => Ok(Cell::DictAddr(*addr)),
+        _ => Err(TbxError::TypeError {
+            expected: "variable name after LET",
+            got: "non-variable",
+        }),
+    }
+}
+
+/// Emit the bytecode for `LET varname = expr` into the dictionary.
+///
+/// Bytecode pattern:
+///   `Xt(LIT_MARKER)  Xt(LIT)  addr_cell  [expr_cells]  Xt(SET)  Xt(DROP_TO_MARKER)`
+///
+/// In interpret mode (`vm.is_compiling == false`), appends `Xt(EXIT)` and
+/// executes the temporary buffer immediately, then reclaims the dictionary space.
+fn emit_let_assignment(
+    vm: &mut VM,
+    addr_cell: Cell,
+    expr_tokens: &[crate::lexer::SpannedToken],
+) -> Result<(), TbxError> {
+    let buf_start = vm.dp;
+
+    // Look up required runtime Xts.
+    let lit_marker_xt = vm.lookup("LIT_MARKER").ok_or(TbxError::UndefinedSymbol {
+        name: "LIT_MARKER".to_string(),
+    })?;
+    let lit_xt =
+        vm.find_by_kind(|k| matches!(k, EntryKind::Lit))
+            .ok_or(TbxError::UndefinedSymbol {
+                name: "LIT".to_string(),
+            })?;
+    let set_xt = vm.lookup("SET").ok_or(TbxError::UndefinedSymbol {
+        name: "SET".to_string(),
+    })?;
+    let drop_to_marker_xt = vm
+        .find_by_kind(|k| matches!(k, EntryKind::DropToMarker))
+        .ok_or(TbxError::UndefinedSymbol {
+            name: "DROP_TO_MARKER".to_string(),
+        })?;
+
+    // Compile the right-hand side expression.
+    let (expr_cells, patch_offsets) = compile_expr_taking_local_table(vm, expr_tokens)?;
+
+    // Emit: Xt(LIT_MARKER) Xt(LIT) addr_cell [expr_cells] Xt(SET) Xt(DROP_TO_MARKER)
+    vm.dict_write(Cell::Xt(lit_marker_xt))?;
+    vm.dict_write(Cell::Xt(lit_xt))?;
+    vm.dict_write(addr_cell)?;
+    let base_dp = vm.dp;
+    for cell in &expr_cells {
+        vm.dict_write(cell.clone())?;
+    }
+
+    // Register self-recursive call patch positions in the compile state.
+    if let Some(state) = vm.compile_state.as_mut() {
+        for offset in patch_offsets {
+            state.call_patch_list.push(base_dp + offset);
+        }
+    }
+
+    vm.dict_write(Cell::Xt(set_xt))?;
+    vm.dict_write(Cell::Xt(drop_to_marker_xt))?;
+
+    if !vm.is_compiling {
+        // Interpret mode: append EXIT and execute the temporary buffer immediately.
+        let exit_xt =
+            vm.find_by_kind(|k| matches!(k, EntryKind::Exit))
+                .ok_or(TbxError::UndefinedSymbol {
+                    name: "EXIT".to_string(),
+                })?;
+        vm.dict_write(Cell::Xt(exit_xt))?;
+
+        // Snapshot VM state for rollback on error.
+        let saved_data_len = vm.data_stack.len();
+        let saved_ret_len = vm.return_stack.len();
+        let saved_bp = vm.bp;
+
+        let result = vm.run(buf_start);
+
+        // Reclaim the temporary dictionary space.
+        vm.dp = buf_start;
+        vm.dictionary.truncate(buf_start);
+
+        if result.is_err() {
+            vm.data_stack.truncate(saved_data_len);
+            vm.return_stack.truncate(saved_ret_len);
+            vm.bp = saved_bp;
+        }
+
+        result
+    } else {
+        Ok(())
+    }
+}
+
 /// Register all stack primitives into the VM's dictionary.
 pub fn register_all(vm: &mut VM) {
     vm.register(WordEntry::new_primitive("DROP", drop_prim));
@@ -1529,6 +1700,12 @@ pub fn register_all(vm: &mut VM) {
     let mut use_entry = WordEntry::new_primitive("USE", use_prim);
     use_entry.flags = FLAG_IMMEDIATE;
     vm.register(use_entry);
+
+    // LET: IMMEDIATE assignment statement `LET varname = expr`.
+    // No FLAG_SYSTEM: LET is user-redefinable.
+    let mut let_entry = WordEntry::new_primitive("LET", let_prim);
+    let_entry.flags = FLAG_IMMEDIATE;
+    vm.register(let_entry);
 }
 
 #[cfg(test)]
@@ -4609,5 +4786,184 @@ mod tests {
         cs_close_tag_prim(&mut vm).unwrap(); // pop Tag("IF")
 
         assert!(vm.compile_stack.is_empty());
+    }
+
+    // ---------------------------------------------------------------------------
+    // let_prim tests
+    // ---------------------------------------------------------------------------
+
+    /// Helper: create a SpannedToken from a Token value.
+    fn make_spanned(tok: crate::lexer::Token) -> crate::lexer::SpannedToken {
+        crate::lexer::SpannedToken {
+            token: tok,
+            pos: crate::lexer::Position { line: 1, col: 1 },
+            source_offset: 0,
+            source_len: 1,
+        }
+    }
+
+    #[test]
+    fn test_let_prim_no_token_stream() {
+        // let_prim with token_stream == None must return TokenStreamEmpty.
+        let mut vm = VM::new();
+        register_all(&mut vm);
+        vm.token_stream = None;
+        let err = let_prim(&mut vm).unwrap_err();
+        // next_token() propagates TokenStreamEmpty.
+        assert!(
+            matches!(err, TbxError::TokenStreamEmpty),
+            "expected TokenStreamEmpty, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn test_let_prim_missing_equals() {
+        // let_prim must return InvalidExpression when '=' is missing after the variable name.
+        use std::collections::VecDeque;
+        let mut vm = VM::new();
+        register_all(&mut vm);
+        // Register a global variable X.
+        let storage = vm.dp;
+        vm.dict_write(Cell::None).unwrap();
+        let entry = crate::dict::WordEntry::new_variable("X", storage);
+        vm.register(entry);
+        // Provide tokens: Ident("X"), Ident("bad") — missing '='.
+        vm.token_stream = Some(VecDeque::from([
+            make_ident_token("X"),
+            make_ident_token("bad"),
+        ]));
+        let err = let_prim(&mut vm).unwrap_err();
+        assert!(
+            matches!(err, TbxError::InvalidExpression { .. }),
+            "expected InvalidExpression, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn test_let_prim_empty_expr() {
+        // let_prim must return InvalidExpression when there are no tokens after '='.
+        use std::collections::VecDeque;
+        let mut vm = VM::new();
+        register_all(&mut vm);
+        // Register a global variable X.
+        let storage = vm.dp;
+        vm.dict_write(Cell::None).unwrap();
+        let entry = crate::dict::WordEntry::new_variable("X", storage);
+        vm.register(entry);
+        // Provide tokens: Ident("X"), Op("=") — empty expression.
+        vm.token_stream = Some(VecDeque::from([
+            make_ident_token("X"),
+            make_spanned(crate::lexer::Token::Op("=".to_string())),
+        ]));
+        let err = let_prim(&mut vm).unwrap_err();
+        assert!(
+            matches!(err, TbxError::InvalidExpression { .. }),
+            "expected InvalidExpression, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn test_let_prim_undefined_variable() {
+        // let_prim must return UndefinedSymbol for an undeclared name.
+        use std::collections::VecDeque;
+        let mut vm = VM::new();
+        register_all(&mut vm);
+        vm.token_stream = Some(VecDeque::from([
+            make_ident_token("NOSUCHVAR"),
+            make_spanned(crate::lexer::Token::Op("=".to_string())),
+            make_spanned(crate::lexer::Token::IntLit(1)),
+        ]));
+        let err = let_prim(&mut vm).unwrap_err();
+        assert!(
+            matches!(err, TbxError::UndefinedSymbol { ref name } if name == "NOSUCHVAR"),
+            "expected UndefinedSymbol(NOSUCHVAR), got {err:?}"
+        );
+    }
+
+    #[test]
+    fn test_let_prim_non_variable_target() {
+        // let_prim must return TypeError when the target name resolves to a non-variable.
+        use std::collections::VecDeque;
+        let mut vm = VM::new();
+        register_all(&mut vm);
+        // Register a constant (non-variable) named MYCONST.
+        let entry = crate::dict::WordEntry::new_constant("MYCONST", Cell::Int(99));
+        vm.register(entry);
+        vm.token_stream = Some(VecDeque::from([
+            make_ident_token("MYCONST"),
+            make_spanned(crate::lexer::Token::Op("=".to_string())),
+            make_spanned(crate::lexer::Token::IntLit(1)),
+        ]));
+        let err = let_prim(&mut vm).unwrap_err();
+        assert!(
+            matches!(err, TbxError::TypeError { .. }),
+            "expected TypeError, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn test_let_prim_interpret_mode_global() {
+        // In interpret mode, LET X = 42 must store 42 in the global variable X.
+        use std::collections::VecDeque;
+        let mut vm = VM::new();
+        register_all(&mut vm);
+        // Declare global variable X.
+        let storage_idx = vm.dp;
+        vm.dict_write(Cell::None).unwrap();
+        let entry = crate::dict::WordEntry::new_variable("X", storage_idx);
+        vm.register(entry);
+        // Provide tokens: Ident("X") Op("=") Int(42) Eof
+        vm.token_stream = Some(VecDeque::from([
+            make_ident_token("X"),
+            make_spanned(crate::lexer::Token::Op("=".to_string())),
+            make_spanned(crate::lexer::Token::IntLit(42)),
+            make_spanned(crate::lexer::Token::Eof),
+        ]));
+        let dp_before = vm.dp;
+        let result = let_prim(&mut vm);
+        assert!(result.is_ok(), "let_prim returned error: {result:?}");
+        // Dictionary pointer must be restored (temp buffer reclaimed).
+        assert_eq!(
+            vm.dp, dp_before,
+            "dp must be restored after interpret-mode LET"
+        );
+        // The variable must hold 42.
+        let stored = vm.dict_read(storage_idx).unwrap();
+        assert_eq!(stored, Cell::Int(42), "X must be 42 after LET X = 42");
+        // Data stack must be empty (marker and address are cleaned up by SET/DROP_TO_MARKER).
+        assert!(
+            vm.data_stack.is_empty(),
+            "data stack must be empty after LET"
+        );
+    }
+
+    #[test]
+    fn test_let_prim_compile_mode_local() {
+        // In compile mode, LET V = 10 for a local variable must emit bytecode into the dict.
+        use std::collections::VecDeque;
+        let mut vm = make_compiling_vm("MYWORD");
+        // Declare local variable V.
+        vm.token_stream = Some(VecDeque::from([make_ident_token("V")]));
+        var_prim(&mut vm).unwrap();
+        let dp_before = vm.dp;
+        // Provide LET tokens.
+        vm.token_stream = Some(VecDeque::from([
+            make_ident_token("V"),
+            make_spanned(crate::lexer::Token::Op("=".to_string())),
+            make_spanned(crate::lexer::Token::IntLit(10)),
+            make_spanned(crate::lexer::Token::Eof),
+        ]));
+        let result = let_prim(&mut vm);
+        assert!(
+            result.is_ok(),
+            "let_prim returned error in compile mode: {result:?}"
+        );
+        // Bytecode must have been emitted (dp must advance).
+        assert!(vm.dp > dp_before, "dp must advance after compile-mode LET");
+        // compile_state must still be intact (LET does not end compilation).
+        assert!(
+            vm.compile_state.is_some(),
+            "compile_state must be intact after compile-mode LET"
+        );
     }
 }

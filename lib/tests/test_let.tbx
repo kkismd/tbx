@@ -1,0 +1,40 @@
+REM lib/tests/test_let.tbx — TBX tests for LET assignment statement
+USE "lib/tests/helper.tbx"
+
+REM Interpret mode: assign an integer literal to a global variable.
+VAR X
+LET X = 42
+ASSERT X = 42
+
+REM Interpret mode: assign via an arithmetic expression.
+VAR Y
+LET Y = 10 + 5
+ASSERT Y = 15
+
+REM Interpret mode: reassign an already-initialised variable.
+LET X = 99
+ASSERT X = 99
+
+REM Compile mode: LET assigns a global variable inside a DEF body.
+VAR G
+DEF TEST_GLOBAL_LET
+  LET G = 7
+END
+TEST_GLOBAL_LET
+ASSERT G = 7
+
+REM Compile mode: LET assigns a local variable declared with VAR inside a DEF body.
+DEF TEST_LOCAL_LET
+  VAR V
+  LET V = 100
+  RETURN V
+END
+ASSERT TEST_LOCAL_LET() = 100
+
+REM Compile mode: LET with an expression involving a parameter.
+DEF DOUBLE_AND_STORE(N)
+  VAR R
+  LET R = N * 2
+  RETURN R
+END
+ASSERT DOUBLE_AND_STORE(6) = 12
