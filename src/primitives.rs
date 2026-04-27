@@ -1328,7 +1328,7 @@ fn compile_lvalue_prim(vm: &mut VM) -> Result<(), TbxError> {
             } else {
                 // No `?` here — collect the result and restore local_table first.
                 match vm.lookup(&name) {
-                    None => Err(TbxError::UndefinedSymbol { name: name.clone() }),
+                    None => Err(TbxError::UndefinedSymbol { name }),
                     Some(xt) => match &vm.headers[xt.index()].kind {
                         EntryKind::Variable(addr) => Ok(Cell::DictAddr(*addr)),
                         _ => Err(TbxError::TypeError {
@@ -4829,6 +4829,26 @@ mod tests {
         assert!(
             vm.compile_state.is_some(),
             "compile_state should still exist"
+        );
+    }
+
+    #[test]
+    fn test_compile_lvalue_non_ident_token_error() {
+        // Passing a non-identifier token (e.g. an integer literal) as lvalue should
+        // produce an InvalidExpression error (the `_ => ...` branch in compile_lvalue_prim).
+        use std::collections::VecDeque;
+        let mut vm = make_compiling_vm("TESTWORD");
+        let int_token = crate::lexer::SpannedToken {
+            token: crate::lexer::Token::IntLit(10),
+            pos: crate::lexer::Position { line: 1, col: 1 },
+            source_offset: 0,
+            source_len: 2,
+        };
+        vm.token_stream = Some(VecDeque::from([int_token]));
+        let result = compile_lvalue_prim(&mut vm);
+        assert!(
+            matches!(result, Err(TbxError::InvalidExpression { .. })),
+            "expected InvalidExpression for non-Ident lvalue token"
         );
     }
 
