@@ -30,6 +30,30 @@ DEF ENDWH
 END
 IMMEDIATE ENDWH
 
+REM DO ... UNTIL expr
+REM
+REM  DO saves the loop-start address on the compile stack and pushes Tag("DO").
+REM  Compile stack after DO: [A, Tag("DO")].
+REM
+REM  UNTIL validates the tag (CS_CLOSE_TAG "DO"), compiles the condition
+REM  expression, emits JUMP_FALSE back to the loop start (A), and pops A from
+REM  the compile stack as the branch target.
+REM  The loop body executes at least once; exits when expr is true.
+
+DEF DO
+  CS_PUSH HERE
+  CS_OPEN_TAG "DO"
+END
+IMMEDIATE DO
+
+DEF UNTIL
+  CS_CLOSE_TAG "DO"
+  COMPILE_EXPR
+  APPEND JUMP_FALSE
+  APPEND CS_POP
+END
+IMMEDIATE UNTIL
+
 REM IF expr ... ELSIF expr ... ELSE ... ENDIF
 REM
 REM  IF compiles the condition expression, emits a JUMP_FALSE instruction,

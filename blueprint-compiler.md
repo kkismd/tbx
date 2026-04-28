@@ -429,6 +429,59 @@ fn read_jump_target(&self, offset: usize) -> Result<usize, TbxError> {
 
 ---
 
+## DO...UNTIL の実装記録
+
+> Issue #381「DO ... UNTIL expr の実装」に基づく設計方針
+
+DO と UNTIL は `lib/basic.tbx` に TBX コードとして実装されたコンパイルワードである。
+`WHILE...ENDWH` が前判定ループであるのに対し、`DO...UNTIL` は後判定ループであり、
+ループ本体を少なくとも1回実行する。条件が**真**のときループを脱出し、**偽**のときに先頭へ戻る。
+
+```
+REM DO ... UNTIL expr
+DEF DO
+  CS_PUSH HERE
+  CS_OPEN_TAG "DO"
+END
+IMMEDIATE DO
+
+DEF UNTIL
+  CS_CLOSE_TAG "DO"
+  COMPILE_EXPR
+  APPEND JUMP_FALSE
+  APPEND CS_POP
+END
+IMMEDIATE UNTIL
+```
+
+### 生成される命令列（実行時）
+
+```
+A:  [ループ本体のコード]
+    [条件式のコード]
+    BIF  A            ← 条件が偽なら A に戻る（ループ継続）
+D:  ...（UNTIL 直後）
+```
+
+### コンパイルスタックの遷移
+
+| 時点 | コンパイルスタック |
+|---|---|
+| DO 実行直前 | `[]` |
+| DO 実行後 | `[A, Tag("DO")]`（Tag がトップ、タグラスト方式） |
+| UNTIL 実行後 | `[]` |
+
+- `A` = ループ先頭の DictAddr（DO が `CS_PUSH HERE` で積む）
+
+### UNTIL の動作トレース
+
+1. `CS_CLOSE_TAG "DO"` — compile_stack のトップが `Tag("DO")` か検証してポップする（フェイルファスト）
+2. `COMPILE_EXPR` — 条件式をコンパイルして命令列に書き込む
+3. `APPEND JUMP_FALSE` — BIF 命令の Xt を辞書に書き込む
+4. `APPEND CS_POP` — CS から A（DictAddr）をポップして辞書に書き込む（BIF のジャンプ先）
+
+---
+
 ## LET — BASIC スタイル代入文の実装記録
 
 > Issue #391「LET文の実装」に基づく設計方針
