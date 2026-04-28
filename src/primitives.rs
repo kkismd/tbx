@@ -1459,7 +1459,7 @@ pub fn getdec_prim(vm: &mut VM) -> Result<(), TbxError> {
     let n = s
         .trim()
         .parse::<i64>()
-        .map_err(|_| TbxError::ParseIntError { input: s.clone() })?;
+        .map_err(|_| TbxError::ParseIntError { input: s })?;
     vm.push(Cell::Int(n))
 }
 
