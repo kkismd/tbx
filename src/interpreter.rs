@@ -1,6 +1,7 @@
 //! Outer interpreter: tokenizes source text and executes statements via the inner interpreter.
 
 use std::collections::{HashSet, VecDeque};
+use std::io::BufRead;
 use std::path::PathBuf;
 
 use crate::cell::{Cell, ReturnFrame, Xt};
@@ -67,6 +68,25 @@ impl std::error::Error for InterpreterError {
         // error reporters like `anyhow` / `eyre` to print the same message twice.
         None
     }
+}
+
+/// Read one line from stdin, stripping the trailing newline.
+///
+/// Returns the line as a `String` on success, or an `io::Error` on failure.
+/// An empty line (bare newline) returns an empty `String`.
+/// EOF (no input) returns an empty `String`.
+fn read_line_from_stdin() -> Result<String, std::io::Error> {
+    let stdin = std::io::stdin();
+    let mut line = String::new();
+    stdin.lock().read_line(&mut line)?;
+    // Strip trailing newline characters (\r\n or \n).
+    if line.ends_with('\n') {
+        line.pop();
+        if line.ends_with('\r') {
+            line.pop();
+        }
+    }
+    Ok(line)
 }
 
 /// Token list and segment boundaries produced by `parse_line_into_segments`.
@@ -392,7 +412,26 @@ impl Interpreter {
             self.vm.bp = saved_bp;
         }
 
-        run_result.map_err(make_err)
+        run_result.map_err(make_err)?;
+
+        // If ACCEPT set the pending_input_request flag, read one line from stdin
+        // and store it in vm.input_buffer for the next GETDEC call.
+        if self.vm.pending_input_request {
+            self.vm.pending_input_request = false;
+            let line = read_line_from_stdin().map_err(|e| {
+                InterpreterError::new(
+                    stmt_pos_line,
+                    stmt_pos_col,
+                    source_line,
+                    TbxError::InvalidArgument {
+                        message: format!("ACCEPT: failed to read from stdin: {e}"),
+                    },
+                )
+            })?;
+            self.vm.input_buffer = Some(line);
+        }
+
+        Ok(())
     }
 
     /// Write a single statement and its arguments to the dictionary.

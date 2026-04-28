@@ -334,6 +334,36 @@ pub fn putdec_prim(vm: &mut VM) -> Result<(), TbxError> {
     Ok(())
 }
 
+/// ACCEPT — read one line of user input into the VM's input buffer.
+///
+/// Sets `vm.pending_input_request` to request that the outer interpreter read a line from
+/// stdin and store it in `vm.input_buffer`.  The primitive itself does not perform I/O;
+/// the actual read is done by the interpreter layer after `vm.run()` returns.
+///
+/// Stack effect: `( -- )`
+pub fn accept_prim(vm: &mut VM) -> Result<(), TbxError> {
+    vm.pending_input_request = true;
+    Ok(())
+}
+
+/// GETDEC — consume the input buffer and push the parsed integer onto the data stack.
+///
+/// Takes the string stored in `vm.input_buffer` by a prior ACCEPT call, parses it
+/// as a signed decimal integer, and pushes the result as `Cell::Int`.
+///
+/// Returns `TbxError::InputBufferEmpty` if no input has been buffered yet,
+/// or `TbxError::ParseIntError` if the buffered string is not a valid integer.
+///
+/// Stack effect: `( -- n )`
+pub fn getdec_prim(vm: &mut VM) -> Result<(), TbxError> {
+    let s = vm.input_buffer.take().ok_or(TbxError::InputBufferEmpty)?;
+    let n = s
+        .trim()
+        .parse::<i64>()
+        .map_err(|_| TbxError::ParseIntError { input: s.clone() })?;
+    vm.push(Cell::Int(n))
+}
+
 /// PUTHEX — output the integer value on the stack as $-prefixed uppercase hex (no newline).
 /// Negative values are output as two's complement 64-bit representation.
 pub fn puthex_prim(vm: &mut VM) -> Result<(), TbxError> {
@@ -1451,6 +1481,8 @@ pub fn register_all(vm: &mut VM) {
     vm.register(WordEntry::new_primitive("PUTCHR", putchr_prim));
     vm.register(WordEntry::new_primitive("PUTDEC", putdec_prim));
     vm.register(WordEntry::new_primitive("PUTHEX", puthex_prim));
+    vm.register(WordEntry::new_primitive("ACCEPT", accept_prim));
+    vm.register(WordEntry::new_primitive("GETDEC", getdec_prim));
     vm.register(WordEntry::new_primitive("APPEND", append_prim));
     vm.register(WordEntry::new_primitive("ALLOT", allot_prim));
     vm.register(WordEntry::new_primitive("HERE", here_prim));
@@ -4886,6 +4918,101 @@ mod tests {
         assert!(
             matches!(result, Err(TbxError::InvalidExpression { .. })),
             "expected InvalidExpression for non-'=' token"
+        );
+    }
+
+    // --- accept_prim ---
+
+    #[test]
+    fn test_accept_sets_pending_input_request() {
+        let mut vm = VM::new();
+        register_all(&mut vm);
+        assert!(!vm.pending_input_request);
+        accept_prim(&mut vm).unwrap();
+        assert!(
+            vm.pending_input_request,
+            "pending_input_request should be set after ACCEPT"
+        );
+    }
+
+    #[test]
+    fn test_accept_does_not_push_to_stack() {
+        let mut vm = VM::new();
+        register_all(&mut vm);
+        let before = vm.data_stack.len();
+        accept_prim(&mut vm).unwrap();
+        assert_eq!(
+            vm.data_stack.len(),
+            before,
+            "ACCEPT must not change the data stack"
+        );
+    }
+
+    // --- getdec_prim ---
+
+    #[test]
+    fn test_getdec_parses_positive_integer() {
+        let mut vm = VM::new();
+        register_all(&mut vm);
+        vm.input_buffer = Some("42".to_string());
+        getdec_prim(&mut vm).unwrap();
+        assert_eq!(vm.pop_int().unwrap(), 42);
+    }
+
+    #[test]
+    fn test_getdec_parses_negative_integer() {
+        let mut vm = VM::new();
+        register_all(&mut vm);
+        vm.input_buffer = Some("-7".to_string());
+        getdec_prim(&mut vm).unwrap();
+        assert_eq!(vm.pop_int().unwrap(), -7);
+    }
+
+    #[test]
+    fn test_getdec_parses_with_whitespace() {
+        let mut vm = VM::new();
+        register_all(&mut vm);
+        vm.input_buffer = Some("  100  ".to_string());
+        getdec_prim(&mut vm).unwrap();
+        assert_eq!(vm.pop_int().unwrap(), 100);
+    }
+
+    #[test]
+    fn test_getdec_empty_buffer_error() {
+        let mut vm = VM::new();
+        register_all(&mut vm);
+        // input_buffer is None — ACCEPT was not called
+        let result = getdec_prim(&mut vm);
+        assert!(
+            matches!(result, Err(TbxError::InputBufferEmpty)),
+            "expected InputBufferEmpty, got {:?}",
+            result
+        );
+    }
+
+    #[test]
+    fn test_getdec_parse_error() {
+        let mut vm = VM::new();
+        register_all(&mut vm);
+        vm.input_buffer = Some("abc".to_string());
+        let result = getdec_prim(&mut vm);
+        assert!(
+            matches!(result, Err(TbxError::ParseIntError { .. })),
+            "expected ParseIntError, got {:?}",
+            result
+        );
+    }
+
+    #[test]
+    fn test_getdec_consumes_input_buffer() {
+        let mut vm = VM::new();
+        register_all(&mut vm);
+        vm.input_buffer = Some("5".to_string());
+        getdec_prim(&mut vm).unwrap();
+        // Buffer should be consumed (None) after GETDEC
+        assert!(
+            vm.input_buffer.is_none(),
+            "input_buffer should be None after GETDEC"
         );
     }
 }

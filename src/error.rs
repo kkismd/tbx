@@ -144,6 +144,14 @@ pub enum TbxError {
     InvalidArgument {
         message: String,
     },
+    /// GETDEC was called but the input buffer is empty (ACCEPT was not called first).
+    InputBufferEmpty,
+    /// GETDEC could not parse the input buffer contents as an integer.
+    ///
+    /// `input` is the string that failed to parse.
+    ParseIntError {
+        input: String,
+    },
 }
 
 impl std::fmt::Display for TbxError {
@@ -240,6 +248,15 @@ impl std::fmt::Display for TbxError {
             }
             TbxError::InvalidArgument { message } => {
                 write!(f, "invalid argument: {message}")
+            }
+            TbxError::InputBufferEmpty => {
+                write!(
+                    f,
+                    "GETDEC: input buffer is empty (ACCEPT must be called first)"
+                )
+            }
+            TbxError::ParseIntError { input } => {
+                write!(f, "GETDEC: cannot parse {:?} as integer", input)
             }
         }
     }
