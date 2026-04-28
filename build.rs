@@ -8,9 +8,14 @@ use std::fmt::Write as FmtWrite;
 use std::fs;
 use std::path::PathBuf;
 
+// Shared helper functions (also included by tests/build_sanitize_tests.rs).
+include!("build_support.rs");
+
 fn main() {
     // Trigger a rebuild whenever any file inside lib/tests/ changes.
     println!("cargo:rerun-if-changed=lib/tests/");
+    // Also rebuild when the shared helper file changes.
+    println!("cargo:rerun-if-changed=build_support.rs");
 
     let manifest_dir = env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR not set");
     let tests_dir = PathBuf::from(&manifest_dir).join("lib/tests");
@@ -48,19 +53,11 @@ fn main() {
         let stem = file_name
             .strip_suffix(".tbx")
             .expect("file_name ends with .tbx");
-        let fn_name = stem.replace('-', "_");
+        let fn_name = sanitize_fn_name(stem);
 
         // Reject file names whose stems contain characters outside [A-Za-z0-9_].
         // Such names would produce invalid Rust identifiers after the '-' → '_' replacement.
-        if !fn_name
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || c == '_')
-        {
-            panic!(
-                "build.rs: file stem `{stem}` contains characters that cannot form \
-                 a valid Rust identifier; rename the file to use only ASCII alphanumerics and '-'/'_'"
-            );
-        }
+        validate_stem(&fn_name, stem);
 
         // Detect collisions caused by files that differ only in '-' vs '_'.
         if !seen.insert(fn_name.clone()) {
