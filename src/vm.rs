@@ -5,6 +5,7 @@ use crate::error::TbxError;
 use crate::lexer::SpannedToken;
 use std::collections::HashMap;
 use std::collections::VecDeque;
+use std::io::{BufRead, BufReader};
 
 /// State maintained during compilation of a new word definition (DEF..END).
 #[derive(Debug)]
@@ -89,7 +90,6 @@ impl CompileState {
 /// The dictionary is split into two layers:
 /// - `headers`: word name/flag/kind metadata, forming a linked list via `prev`
 /// - `dictionary`: flat `Vec<Cell>` array of compiled code; `pc` indexes into this
-#[derive(Debug)]
 pub struct VM {
     /// Word header table (linked list via `WordEntry::prev`)
     pub headers: Vec<WordEntry>,
@@ -153,10 +153,37 @@ pub struct VM {
     /// Drained by `exec_immediate_word` in the interpreter, which calls
     /// `exec_source` on the file content.
     pub(crate) pending_use_path: Option<String>,
+    /// Internal buffer holding the last line read by ACCEPT.
+    ///
+    /// ACCEPT reads one line from `input_reader` and stores it here (trimmed of
+    /// trailing newline characters).  GETDEC then consumes the buffer via `take()`
+    /// and parses the stored string as a signed decimal integer.
+    pub input_buffer: Option<String>,
+    /// Source of user input.
+    ///
+    /// Defaults to stdin (wrapped in a `BufReader`) when the VM is created via
+    /// `new()`.  Tests can replace this field directly with any `Box<dyn BufRead>`
+    /// implementation (e.g. `std::io::Cursor`) to mock user input without
+    /// touching stdin.
+    ///
+    /// The field is not included in the `Debug` output because `dyn BufRead` does
+    /// not implement `Debug`.
+    pub input_reader: Box<dyn BufRead>,
 }
 
 impl VM {
     /// Create a new VM with empty header table, dictionary, and stacks.
+    ///
+    /// User input is read from stdin by default.  To redirect input (e.g. in
+    /// tests), replace the `input_reader` field after construction:
+    ///
+    /// ```no_run
+    /// use std::io::Cursor;
+    /// use tbx::vm::VM;
+    ///
+    /// let mut vm = VM::new();
+    /// vm.input_reader = Box::new(Cursor::new("42\n"));
+    /// ```
     pub fn new() -> Self {
         Self {
             headers: Vec::new(),
@@ -180,6 +207,8 @@ impl VM {
             compile_state: None,
             compile_stack: Vec::new(),
             pending_use_path: None,
+            input_buffer: None,
+            input_reader: Box::new(BufReader::new(std::io::stdin())),
         }
     }
 
@@ -868,6 +897,36 @@ impl VM {
             .enumerate()
             .find(|(_, e)| pred(&e.kind))
             .map(|(i, _)| Xt(i))
+    }
+}
+
+impl std::fmt::Debug for VM {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("VM")
+            .field("headers", &self.headers)
+            .field("dictionary", &self.dictionary)
+            .field("string_pool", &self.string_pool)
+            .field("data_stack", &self.data_stack)
+            .field("return_stack", &self.return_stack)
+            .field("pc", &self.pc)
+            .field("bp", &self.bp)
+            .field("dp_sys", &self.dp_sys)
+            .field("dp_lib", &self.dp_lib)
+            .field("dp_user", &self.dp_user)
+            .field("hdr_sys", &self.hdr_sys)
+            .field("hdr_lib", &self.hdr_lib)
+            .field("hdr_user", &self.hdr_user)
+            .field("dp", &self.dp)
+            .field("latest", &self.latest)
+            .field("output_buffer", &self.output_buffer)
+            .field("is_compiling", &self.is_compiling)
+            .field("token_stream", &self.token_stream)
+            .field("compile_state", &self.compile_state)
+            .field("compile_stack", &self.compile_stack)
+            .field("pending_use_path", &self.pending_use_path)
+            .field("input_buffer", &self.input_buffer)
+            .field("input_reader", &"<dyn BufRead>")
+            .finish()
     }
 }
 
