@@ -25,13 +25,13 @@ case "$TOOL_NAME" in
   bash)
     COMMAND=$(echo "$TOOL_ARGS" | jq -r '.command // ""')
     if echo "$COMMAND" | grep -qE "$TMP_PATTERN"; then
-      deny "/tmp へのアクセスはセキュリティポリシーにより禁止されています。一時ファイルは .git/ 配下を使用してください。"
+      deny "/tmp へのアクセスはセキュリティポリシーにより禁止されています。一時ファイルは .tmp/ 配下を使用してください。"
     fi
     ;;
   create|edit)
     FILE_PATH=$(echo "$TOOL_ARGS" | jq -r '.path // ""')
     if echo "$FILE_PATH" | grep -qE "^$TMP_PATTERN"; then
-      deny "/tmp へのファイル書き込みはセキュリティポリシーにより禁止されています。一時ファイルは .git/ 配下を使用してください。"
+      deny "/tmp へのファイル書き込みはセキュリティポリシーにより禁止されています。一時ファイルは .tmp/ 配下を使用してください。"
     fi
     ;;
 esac
