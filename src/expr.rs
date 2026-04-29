@@ -150,6 +150,7 @@ impl<'a> ExprCompiler<'a> {
                 // Identifiers (variables, constants, function calls)
                 // -------------------------------------------------------
                 Token::Ident(name) => {
+                    let name = name.to_ascii_uppercase();
                     // Check local variable table first — locals shadow globals.
                     if let Some(idx) = self.local_table.and_then(|lt| lt.get(&name)).copied() {
                         emit_local_read(&mut output, idx, self.vm)?;
@@ -272,6 +273,7 @@ impl<'a> ExprCompiler<'a> {
                         let next_tok = tokens.get(i).map(|st| st.token.clone());
                         match next_tok {
                             Some(Token::Ident(name)) => {
+                                let name = name.to_ascii_uppercase();
                                 // Check local table first — locals shadow globals.
                                 if let Some(idx) =
                                     self.local_table.and_then(|lt| lt.get(&name)).copied()
