@@ -81,53 +81,28 @@ cargo clippy --all-targets -- -D warnings
 
 ### ステップ6A：修正サイクル（最大3回）
 
-PR作成が完了したら、ユーザーへの報告より先に修正サイクルを開始する。状態はすべて `sql` ツールで永続化する。まずサイクル開始前に以下を実行してテーブルと初期値を準備する：
-
-```sql
--- session_state テーブルを作成（なければ）
-CREATE TABLE IF NOT EXISTS session_state (key TEXT PRIMARY KEY, value TEXT);
-
--- ループカウンターと初回のコメント/レビュー件数を初期化
-INSERT OR REPLACE INTO session_state (key, value) VALUES ('review_loop_count', '0');
-INSERT OR REPLACE INTO session_state (key, value) VALUES ('review_before_comment_count', '0');
-INSERT OR REPLACE INTO session_state (key, value) VALUES ('review_before_review_count', '0');
-```
+PR作成が完了したら、ユーザーへの報告より先に修正サイクルを開始する。ループカウンター（初期値0）とベースラインのコメント/レビュー件数はコンテキスト内で記憶して管理する。
 
 #### 各イテレーションの手順
 
-0. **イテレーション先頭での上限チェック**：ループカウンターを確認する。
-   ```sql
-   SELECT CAST(value AS INTEGER) AS loop_count FROM session_state WHERE key = 'review_loop_count';
-   ```
-   `loop_count >= 3` の場合: **このイテレーションでは review を実施せず、修正サイクルを終了してステップ6Bへ進む**。
+0. **イテレーション先頭での上限チェック**：コンテキスト内のループカウンターを確認する。
+   `loop_count >= 3` の場合: **このイテレーションでは review を実施せず、修正サイクルを終了してステップ6Bへ進む**（手順1以降は実施しない）。
 
-1. 現在のPRコメント件数・レビュー件数を取得し、SQL に保存する：
-   ```sql
-   -- <N_comments> と <N_reviews> は get_comments / get_reviews で取得した件数に置き換える
-   INSERT OR REPLACE INTO session_state (key, value) VALUES ('review_before_comment_count', '<N_comments>');
-   INSERT OR REPLACE INTO session_state (key, value) VALUES ('review_before_review_count', '<N_reviews>');
-   ```
+1. 現在のPRコメント件数・レビュー件数を取得し、ベースライン値としてコンテキスト内に記憶する（前イテレーションの push 完了後の最新状態を反映する）。
 
 2. `review-implementation` エージェントを起動する（**ユーザーへの確認は不要**）：
    ```
    review-implementation エージェントを起動: PR #<PR番号> をレビューしてください
    ```
 
-3. レビュー完了後、`get_comments` と `get_reviews` の両方を再取得し、SQL に保存した件数と比較する。
-   > **注**: SQL に保存したベースライン件数はイテレーションのたびに更新されるため、前のイテレーションで既に検出した 🟢 コメントは「新しいコメント」として再検出されない。二重 issue 登録は発生しない。
+3. レビュー完了後、`get_comments` と `get_reviews` の両方を再取得し、コンテキスト内に記憶したベースライン件数と比較する。
+   > **注**: ベースライン件数はイテレーションのたびに更新されるため、前のイテレーションで既に検出した 🟢 コメントは「新しいコメント」として再検出されない。二重 issue 登録は発生しない。
 
 4. **判定**：
 
-   - **新しいコメントもレビューも追加されていない**（どちらの件数も変化なし）→ **修正サイクルを終了してステップ6Bへ進む**。
-   - **新しいコメントまたはレビューが追加された場合**、追加された内容を確認する：
-     - **🔴/🟡/🟢 のいずれも含まれない**（Approveレビューのみ）→ **修正サイクルを終了してステップ6Bへ進む**。
-     - **🟢 Info のみ含まれる**（🔴/🟡 はない）→ **修正サイクルを終了してステップ6Bへ進む**。
-     - **🔴/🟡 が含まれる** 場合（手順0のガードを通過済みのため `loop_count < 3` が保証されている）：
-       - `loop_count` をインクリメントする：
-         ```sql
-         UPDATE session_state SET value = CAST(CAST(value AS INTEGER) + 1 AS TEXT) WHERE key = 'review_loop_count';
-         SELECT CAST(value AS INTEGER) AS loop_count FROM session_state WHERE key = 'review_loop_count';
-         ```
+   - **🔴/🟡 が含まれない**（変化なし・Approveのみ・🟢 Info のみ・これらの組み合わせを問わず）→ **修正サイクルを終了してステップ6Bへ進む**。
+   - **🔴/🟡 が含まれる** 場合（手順0のガードを通過済みのため `loop_count < 3` が保証されている）：
+       - コンテキスト内の `loop_count` を1増やす。
        - 新しいコメント・レビューの **🔴/🟡 の指摘のみ**を修正対象とする（🟢 Info は修正しない）
        - 修正後に必ず以下を実行し、エラー・警告がないことを確認する：
          ```bash
@@ -135,12 +110,10 @@ INSERT OR REPLACE INTO session_state (key, value) VALUES ('review_before_review_
          cargo test
          cargo clippy --all-targets -- -D warnings
          ```
-       - 以下の形式でコミットしてpushする（事前に SQL で `loop_count` の値を取得しておくこと）：
+       - 以下の形式でコミットしてpushする（`LOOP_COUNT` にはコンテキスト内の `loop_count` の値を使う）：
          ```bash
          git add -A
-         # LOOP_COUNT には SQL の SELECT 結果（整数）を代入する
-         # 例: loop_count が 1 の場合 → LOOP_COUNT=1
-         LOOP_COUNT=<SQLで取得した数値>
+         LOOP_COUNT=<コンテキスト内のloop_count>
          printf 'レビュー指摘の修正 (%d回目)\n' "$LOOP_COUNT" \
            > "$(git rev-parse --git-dir)/COMMIT_MSG"
          git commit -F "$(git rev-parse --git-dir)/COMMIT_MSG"
@@ -152,11 +125,7 @@ INSERT OR REPLACE INTO session_state (key, value) VALUES ('review_before_review_
 
 ステップ6Aの終了原因（自然終了・上限到達）にかかわらず、**必ず1回実行する**。
 
-1. 現在のPRコメント件数・レビュー件数を取得し、SQL に保存する：
-   ```sql
-   INSERT OR REPLACE INTO session_state (key, value) VALUES ('review_before_comment_count', '<N_comments>');
-   INSERT OR REPLACE INTO session_state (key, value) VALUES ('review_before_review_count', '<N_reviews>');
-   ```
+1. 現在のPRコメント件数・レビュー件数を取得し、ベースライン値としてコンテキスト内に記憶する。
 
 2. `review-implementation` エージェントを起動する（**ユーザーへの確認は不要**）：
    ```
