@@ -449,7 +449,7 @@ pub fn literal_prim(vm: &mut VM) -> Result<(), TbxError> {
 pub fn header_prim(vm: &mut VM) -> Result<(), TbxError> {
     let tok = vm.next_token()?;
     let name = match tok.token {
-        Token::Ident(n) => n,
+        Token::Ident(n) => n.to_ascii_uppercase(),
         _ => {
             return Err(TbxError::InvalidExpression {
                 reason: "HEADER: expected identifier token",
@@ -472,7 +472,7 @@ pub fn header_prim(vm: &mut VM) -> Result<(), TbxError> {
 pub fn immediate_prim(vm: &mut VM) -> Result<(), TbxError> {
     let tok = vm.next_token()?;
     let name = match tok.token {
-        Token::Ident(n) => n,
+        Token::Ident(n) => n.to_ascii_uppercase(),
         _ => {
             return Err(TbxError::InvalidExpression {
                 reason: "IMMEDIATE: expected identifier token",
@@ -503,7 +503,7 @@ pub fn def_prim(vm: &mut VM) -> Result<(), TbxError> {
     // Read word name from token stream.
     let name_tok = vm.next_token()?;
     let name = match name_tok.token {
-        crate::lexer::Token::Ident(n) => n,
+        crate::lexer::Token::Ident(n) => n.to_ascii_uppercase(),
         _ => {
             return Err(TbxError::InvalidExpression {
                 reason: "expected word name after DEF",
@@ -547,7 +547,7 @@ pub fn def_prim(vm: &mut VM) -> Result<(), TbxError> {
                     break; // Empty parameter list: DEF WORD().
                 }
                 (DefParseState::FirstParamOrEnd, crate::lexer::Token::Ident(param)) => {
-                    local_table.insert(param, arity);
+                    local_table.insert(param.to_ascii_uppercase(), arity);
                     arity += 1;
                     state = DefParseState::CommaOrRParen;
                 }
@@ -572,6 +572,7 @@ pub fn def_prim(vm: &mut VM) -> Result<(), TbxError> {
 
                 // --- NextParam: after ',' ---
                 (DefParseState::NextParam, crate::lexer::Token::Ident(param)) => {
+                    let param = param.to_ascii_uppercase();
                     if local_table.contains_key(&param) {
                         return Err(TbxError::InvalidExpression {
                             reason: "duplicate parameter name in parameter list",
@@ -699,7 +700,7 @@ pub fn end_prim(vm: &mut VM) -> Result<(), TbxError> {
 pub fn var_prim(vm: &mut VM) -> Result<(), TbxError> {
     let name_tok = vm.next_token()?;
     let name = match name_tok.token {
-        crate::lexer::Token::Ident(n) => n,
+        crate::lexer::Token::Ident(n) => n.to_ascii_uppercase(),
         _ => {
             return Err(TbxError::InvalidExpression {
                 reason: "expected variable name after VAR",
@@ -966,7 +967,7 @@ pub fn dim_prim(vm: &mut VM) -> Result<(), TbxError> {
     // Read array name.
     let tok = vm.next_token()?;
     let name = match tok.token {
-        Token::Ident(n) => n,
+        Token::Ident(n) => n.to_ascii_uppercase(),
         _ => {
             return Err(TbxError::InvalidExpression {
                 reason: "expected array name after DIM",
@@ -1304,7 +1305,7 @@ fn compile_lvalue_prim(vm: &mut VM) -> Result<(), TbxError> {
 
     let tok = vm.next_token()?;
     let name = match tok.token {
-        Token::Ident(n) => n,
+        Token::Ident(n) => n.to_ascii_uppercase(),
         _ => {
             return Err(TbxError::InvalidExpression {
                 reason: "COMPILE_LVALUE: expected variable name",
