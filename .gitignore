@@ -1,6 +1,7 @@
 /target
 *.un~
 /.tmp
+/examples/scratch.tbx
 
 # APM dependencies
 apm_modules/
