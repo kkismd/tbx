@@ -593,6 +593,21 @@ impl<'a> Lexer<'a> {
                 }
             }
             '!' => self.op1_with_end("!", start_pos, start_off, end_off),
+            '#' => {
+                // Hash comment: skip the rest of the line, then emit Newline.
+                while !matches!(self.peek_char(), None | Some('\n') | Some('\r')) {
+                    self.advance();
+                }
+                // Consume the actual newline character(s) so the next token starts on the next line.
+                if self.peek_char() == Some('\r') {
+                    self.advance();
+                }
+                if self.peek_char() == Some('\n') {
+                    self.advance();
+                }
+                let end_off2 = self.peek_offset();
+                self.emit_newline(start_pos, start_off, end_off2 - start_off)
+            }
             c => {
                 let end_off2 = self.peek_offset();
                 SpannedToken {
@@ -1057,6 +1072,52 @@ mod tests {
             vec![
                 Token::LineNum(10),
                 Token::Ident("REM".to_string()),
+                Token::Newline,
+                Token::Eof,
+            ]
+        );
+    }
+
+    // --- # hash comment ---
+
+    #[test]
+    fn test_hash_comment_skips_to_newline() {
+        // A '#' comment line followed by code on the next line.
+        let toks = tokens("# this is a comment\nPUTDEC 1");
+        assert_eq!(
+            toks,
+            vec![
+                Token::Newline,
+                Token::Ident("PUTDEC".to_string()),
+                Token::IntLit(1),
+                Token::Eof,
+            ]
+        );
+    }
+
+    #[test]
+    fn test_hash_comment_at_end_of_input() {
+        // '#' comment with no trailing newline: emits Newline then Eof.
+        let toks = tokens("# no newline at end");
+        assert_eq!(toks, vec![Token::Newline, Token::Eof,]);
+    }
+
+    #[test]
+    fn test_hash_comment_after_linenum() {
+        // Line number followed by a '#' comment.
+        let toks = tokens("10 # comment after linenum");
+        assert_eq!(toks, vec![Token::LineNum(10), Token::Newline, Token::Eof,]);
+    }
+
+    #[test]
+    fn test_hash_comment_inline() {
+        // Code followed by a '#' inline comment.
+        let toks = tokens("PUTDEC 42 # inline comment");
+        assert_eq!(
+            toks,
+            vec![
+                Token::Ident("PUTDEC".to_string()),
+                Token::IntLit(42),
                 Token::Newline,
                 Token::Eof,
             ]
