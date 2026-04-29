@@ -167,8 +167,8 @@ USE "path/to/file.tbx"    ( -- )
 - **USE 先の HALT**: USE されたファイル内で `HALT` が実行された場合、そのファイルの処理は終了するが、呼び出し元のプログラムは継続する（`exec_source` が `TbxError::Halted` を `Ok(())` として処理するため）
 
 ```basic
-USE "stdlib.tbx"   ' stdlib.tbx を読み込み、定義されたワードを利用可能にする
-HELLO              ' stdlib.tbx 内で定義されたワードを呼ぶ
+USE "stdlib.tbx"   REM stdlib.tbx を読み込み、定義されたワードを利用可能にする
+HELLO              REM stdlib.tbx 内で定義されたワードを呼ぶ
 ```
 
 ##### DIM — グローバル配列の宣言
@@ -734,4 +734,3 @@ CALL命令はオペランドに `arity`（引数の数）と `local_count`（ロ
 
 この設計により、すべての命令が **1 Cell 固定長** となり、実行ループがシンプルに保たれる。
 静的な文字列のみを扱うため、GCは不要であり、プログラムのロード時に文字列プールを確定させる。
-
