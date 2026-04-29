@@ -1065,9 +1065,10 @@ fn cs_pop_prim(vm: &mut VM) -> Result<(), TbxError> {
                 got: "Tag",
             })
         }
-        CompileEntry::CompiledCells(cells) => {
+        CompileEntry::CompiledCells(cells, offsets) => {
             // Restore and signal a type error: CS_POP cannot pop CompiledCells.
-            vm.compile_stack.push(CompileEntry::CompiledCells(cells));
+            vm.compile_stack
+                .push(CompileEntry::CompiledCells(cells, offsets));
             Err(TbxError::TypeError {
                 expected: "Cell",
                 got: "CompiledCells",
@@ -1204,9 +1205,10 @@ fn cs_close_tag_prim(vm: &mut VM) -> Result<(), TbxError> {
             vm.compile_stack.push(CompileEntry::Cell(c));
             Err(TbxError::NoOpenTag { expected })
         }
-        Some(CompileEntry::CompiledCells(cells)) => {
+        Some(CompileEntry::CompiledCells(cells, offsets)) => {
             // Restore and report no matching open tag.
-            vm.compile_stack.push(CompileEntry::CompiledCells(cells));
+            vm.compile_stack
+                .push(CompileEntry::CompiledCells(cells, offsets));
             Err(TbxError::NoOpenTag { expected })
         }
     }
@@ -1446,18 +1448,22 @@ fn save_expr_until_comma_prim(vm: &mut VM) -> Result<(), TbxError> {
         .compile_state
         .as_mut()
         .map(|s| std::mem::take(&mut s.local_table));
-    let compile_result: Result<Vec<Cell>, TbxError> = {
+    let compile_result: Result<(Vec<Cell>, Vec<usize>), TbxError> = {
         let local_table_ref = local_table.as_ref();
         let mut compiler =
             crate::expr::ExprCompiler::with_context(vm, local_table_ref, self_word, self_hdr_idx);
-        compiler.compile_expr(&expr_tokens)
+        compiler.compile_expr(&expr_tokens).map(|cells| {
+            let offsets = std::mem::take(&mut compiler.patch_offsets);
+            (cells, offsets)
+        })
     };
     if let (Some(state), Some(lt)) = (vm.compile_state.as_mut(), local_table) {
         state.local_table = lt;
     }
-    let cells = compile_result?;
+    let (cells, patch_offsets) = compile_result?;
     // Save onto compile stack without writing to dictionary.
-    vm.compile_stack.push(CompileEntry::CompiledCells(cells));
+    vm.compile_stack
+        .push(CompileEntry::CompiledCells(cells, patch_offsets));
     Ok(())
 }
 
@@ -1490,18 +1496,22 @@ fn compile_expr_save_prim(vm: &mut VM) -> Result<(), TbxError> {
         .compile_state
         .as_mut()
         .map(|s| std::mem::take(&mut s.local_table));
-    let compile_result: Result<Vec<Cell>, TbxError> = {
+    let compile_result: Result<(Vec<Cell>, Vec<usize>), TbxError> = {
         let local_table_ref = local_table.as_ref();
         let mut compiler =
             crate::expr::ExprCompiler::with_context(vm, local_table_ref, self_word, self_hdr_idx);
-        compiler.compile_expr(&tokens)
+        compiler.compile_expr(&tokens).map(|cells| {
+            let offsets = std::mem::take(&mut compiler.patch_offsets);
+            (cells, offsets)
+        })
     };
     if let (Some(state), Some(lt)) = (vm.compile_state.as_mut(), local_table) {
         state.local_table = lt;
     }
-    let cells = compile_result?;
+    let (cells, patch_offsets) = compile_result?;
     // Push compiled cells onto the compile stack (not into the dictionary).
-    vm.compile_stack.push(CompileEntry::CompiledCells(cells));
+    vm.compile_stack
+        .push(CompileEntry::CompiledCells(cells, patch_offsets));
     Ok(())
 }
 
@@ -1516,8 +1526,8 @@ fn emit_compiled_cells_prim(vm: &mut VM) -> Result<(), TbxError> {
         });
     }
     let entry = vm.compile_stack.pop().ok_or(TbxError::StackUnderflow)?;
-    let cells = match entry {
-        CompileEntry::CompiledCells(c) => c,
+    let (cells, offsets) = match entry {
+        CompileEntry::CompiledCells(cells, offsets) => (cells, offsets),
         other => {
             // Restore to avoid losing the entry on error.
             vm.compile_stack.push(other);
@@ -1527,8 +1537,14 @@ fn emit_compiled_cells_prim(vm: &mut VM) -> Result<(), TbxError> {
             });
         }
     };
+    let base_bp = vm.dp;
     for cell in cells {
         vm.dict_write(cell)?;
+    }
+    if let Some(state) = &mut vm.compile_state {
+        for offset in offsets {
+            state.call_patch_list.push(base_bp + offset);
+        }
     }
     Ok(())
 }
