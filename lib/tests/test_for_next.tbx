@@ -1,0 +1,83 @@
+REM lib/tests/test_for_next.tbx — TBX tests for FOR/NEXT control structures
+USE "lib/tests/helper.tbx"
+
+REM --- Basic counting loop: sum 1..10 step 1 ---
+
+DEF SUM_1_TO_10
+  VAR I
+  VAR S
+  SET &S, 0
+  FOR &I, 1, 10, 1
+    SET &S, S + I
+  NEXT
+  RETURN S
+END
+ASSERT SUM_1_TO_10() = 55
+
+REM --- Step 2: sum of odd numbers 1, 3, 5, 7, 9 = 25 ---
+
+DEF SUM_ODD_1_TO_10
+  VAR I
+  VAR S
+  SET &S, 0
+  FOR &I, 1, 9, 2
+    SET &S, S + I
+  NEXT
+  RETURN S
+END
+ASSERT SUM_ODD_1_TO_10() = 25
+
+REM --- Loop that does not execute: start > end ---
+
+DEF ZERO_ITERATIONS
+  VAR I
+  VAR C
+  SET &C, 0
+  FOR &I, 5, 1, 1
+    SET &C, C + 1
+  NEXT
+  RETURN C
+END
+ASSERT ZERO_ITERATIONS() = 0
+
+REM --- Single iteration: start = end ---
+
+DEF ONE_ITERATION
+  VAR I
+  VAR C
+  SET &C, 0
+  FOR &I, 3, 3, 1
+    SET &C, C + 1
+  NEXT
+  RETURN C
+END
+ASSERT ONE_ITERATION() = 1
+
+REM --- Nested FOR loops: multiplication table entry 3 * 4 = 12 ---
+
+DEF NESTED_FOR
+  VAR I
+  VAR J
+  VAR S
+  SET &S, 0
+  FOR &I, 1, 3, 1
+    FOR &J, 1, 4, 1
+      SET &S, S + 1
+    NEXT
+  NEXT
+  RETURN S
+END
+ASSERT NESTED_FOR() = 12
+
+REM --- FOR with IF inside: count even numbers in 2..10 step 2 ---
+
+DEF COUNT_EVEN
+  VAR I
+  VAR C
+  SET &C, 0
+  FOR &I, 2, 10, 2
+    SET &C, C + 1
+  NEXT
+  RETURN C
+END
+ASSERT COUNT_EVEN() = 5

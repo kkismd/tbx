@@ -5,12 +5,17 @@
 /// `Tag` holds a string label that identifies an open control-structure scope
 /// (e.g. `"IF"` or `"WHILE"`); it is pushed by CS_OPEN_TAG and validated/popped
 /// by CS_CLOSE_TAG.
+/// `CompiledCells` holds a sequence of compiled cells that have been saved for later
+/// emission into the dictionary (e.g. the step expression compiled by FOR).
 #[derive(Debug, Clone, PartialEq)]
 pub enum CompileEntry {
     /// A regular runtime cell stored on the compile stack.
     Cell(Cell),
     /// A string tag that marks an open control-structure scope.
     Tag(String),
+    /// A saved sequence of compiled cells to be emitted later, with self-recursive
+    /// call-patch offsets relative to the start of the cell sequence.
+    CompiledCells(Vec<Cell>, Vec<usize>),
 }
 
 impl std::fmt::Display for CompileEntry {
@@ -18,6 +23,9 @@ impl std::fmt::Display for CompileEntry {
         match self {
             CompileEntry::Cell(c) => write!(f, "Cell({})", c),
             CompileEntry::Tag(s) => write!(f, "Tag(\"{}\")", s),
+            CompileEntry::CompiledCells(cells, _) => {
+                write!(f, "CompiledCells(len={})", cells.len())
+            }
         }
     }
 }
