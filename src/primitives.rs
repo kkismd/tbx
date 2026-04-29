@@ -1537,13 +1537,13 @@ fn emit_compiled_cells_prim(vm: &mut VM) -> Result<(), TbxError> {
             });
         }
     };
-    let base_bp = vm.dp;
+    let base_dp = vm.dp;
     for cell in cells {
         vm.dict_write(cell)?;
     }
     if let Some(state) = &mut vm.compile_state {
         for offset in offsets {
-            state.call_patch_list.push(base_bp + offset);
+            state.call_patch_list.push(base_dp + offset);
         }
     }
     Ok(())
