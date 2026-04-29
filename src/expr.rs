@@ -512,7 +512,16 @@ impl<'a> ExprCompiler<'a> {
                 // -------------------------------------------------------
                 Token::Newline | Token::Eof | Token::Semicolon => break,
 
-                // Ignore all other tokens (LineNum, Error, …).
+                // Propagate lexer errors rather than silently ignoring them.
+                // Silently skipping Token::Error would compile incomplete
+                // expressions and cause confusing runtime failures.
+                Token::Error(_) => {
+                    return Err(TbxError::InvalidExpression {
+                        reason: "lexer error in expression (e.g. unterminated string literal)",
+                    });
+                }
+
+                // Ignore all other tokens (LineNum, …).
                 _ => {}
             }
 
@@ -1572,6 +1581,38 @@ mod tests {
         assert!(
             matches!(err, TbxError::InvalidExpression { .. }),
             "&NUMS() with no index should produce InvalidExpression, got {err:?}"
+        );
+    }
+
+    // ------------------------------------------------------------------
+    // Test: Token::Error propagates as InvalidExpression
+    // ------------------------------------------------------------------
+
+    /// An unterminated string literal produces Token::Error from the lexer.
+    /// compile_expr must propagate that as TbxError::InvalidExpression rather
+    /// than silently ignoring it (which would leave the argument list empty and
+    /// cause confusing runtime type errors).
+    #[test]
+    fn test_token_error_propagates_as_invalid_expression() {
+        use crate::lexer::Position;
+        let mut vm = make_vm();
+
+        // Build a token slice that contains Token::Error directly, mimicking
+        // what the lexer emits for an unterminated string literal.
+        let error_token = SpannedToken {
+            token: Token::Error("unterminated string literal".to_string()),
+            pos: Position { line: 1, col: 1 },
+            source_offset: 0,
+            source_len: 1,
+        };
+        let tokens = vec![error_token];
+
+        let err = ExprCompiler::new(&mut vm)
+            .compile_expr(&tokens)
+            .unwrap_err();
+        assert!(
+            matches!(err, TbxError::InvalidExpression { .. }),
+            "Token::Error should produce InvalidExpression, got {err:?}"
         );
     }
 }
