@@ -1,0 +1,26 @@
+# lib/tests/test_hash_comment.tbx — TBX tests for '#' hash comment syntax
+USE "lib/tests/helper.tbx"
+
+# --- Hash comment at start of line does not affect execution ---
+
+DEF ADD_TWO(A, B)
+  # This is a comment inside a word definition
+  RETURN A + B
+END
+ASSERT ADD_TWO(3, 4) = 7
+
+# --- Inline hash comment after a statement ---
+
+DEF INLINE_COMMENT_TEST
+  VAR X
+  SET &X, 10 # set X to 10
+  RETURN X   # return it
+END
+ASSERT INLINE_COMMENT_TEST() = 10
+
+# --- Multiple consecutive comment lines ---
+
+# line one comment
+# line two comment
+# line three comment
+ASSERT ADD_TWO(1, 2) = 3
