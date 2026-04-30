@@ -1,6 +1,7 @@
 //! Outer interpreter: tokenizes source text and executes statements via the inner interpreter.
 
 use std::collections::{HashSet, VecDeque};
+use std::io::BufRead;
 use std::path::PathBuf;
 
 use crate::cell::{Cell, ReturnFrame, Xt};
@@ -563,6 +564,28 @@ impl Interpreter {
     /// Take the current output buffer contents, leaving it empty.
     pub fn take_output(&mut self) -> String {
         self.vm.take_output()
+    }
+
+    /// Read one line from the VM's input reader.
+    ///
+    /// Returns `Ok(Some(line))` with the line stripped of trailing newline
+    /// characters, `Ok(None)` on EOF, or an `Err` on I/O failure.
+    ///
+    /// This method is used by `main::run_stdin()` so that the outer read loop
+    /// draws from the same `BufReader` as `ACCEPT`, avoiding the deadlock that
+    /// would occur if two separate `StdinLock` acquisitions competed on the
+    /// same thread.
+    pub fn read_input_line(&mut self) -> std::io::Result<Option<String>> {
+        let mut line = String::new();
+        match self.vm.input_reader.read_line(&mut line) {
+            Ok(0) => Ok(None),
+            Ok(_) => Ok(Some(
+                line.trim_end_matches('\n')
+                    .trim_end_matches('\r')
+                    .to_string(),
+            )),
+            Err(e) => Err(e),
+        }
     }
 
     /// Override the maximum USE nesting depth (test-only).

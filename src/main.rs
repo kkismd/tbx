@@ -1,4 +1,4 @@
-use std::io::{self, BufRead, Write};
+use std::io::{self, Write};
 use tbx::error::TbxError;
 use tbx::interpreter::{Interpreter, InterpreterError};
 
@@ -54,31 +54,31 @@ fn run_file(path: &str) -> std::process::ExitCode {
 
 fn run_stdin() -> std::process::ExitCode {
     let mut interp = Interpreter::new();
-    let stdin = io::stdin();
-
-    for line_result in stdin.lock().lines() {
-        let line = match line_result {
-            Ok(l) => l,
+    // Read from the VM's own input_reader instead of acquiring a separate
+    // StdinLock.  This avoids the deadlock that occurs when ACCEPT tries to
+    // re-lock stdin while the outer loop already holds the lock.
+    loop {
+        match interp.read_input_line() {
+            Ok(None) => break,
+            Ok(Some(line)) => match interp.exec_line(&line) {
+                Ok(()) => {
+                    let out = interp.take_output();
+                    print!("{out}");
+                    let _ = io::stdout().flush();
+                }
+                Err(err) if matches!(err.kind, TbxError::Halted) => {
+                    let out = interp.take_output();
+                    print!("{out}");
+                    let _ = io::stdout().flush();
+                    return std::process::ExitCode::SUCCESS;
+                }
+                Err(err) => {
+                    print_error(&err);
+                    return std::process::ExitCode::FAILURE;
+                }
+            },
             Err(e) => {
                 eprintln!("Error: reading stdin: {}", e);
-                return std::process::ExitCode::FAILURE;
-            }
-        };
-
-        match interp.exec_line(&line) {
-            Ok(()) => {
-                let out = interp.take_output();
-                print!("{out}");
-                let _ = io::stdout().flush();
-            }
-            Err(err) if matches!(err.kind, TbxError::Halted) => {
-                let out = interp.take_output();
-                print!("{out}");
-                let _ = io::stdout().flush();
-                return std::process::ExitCode::SUCCESS;
-            }
-            Err(err) => {
-                print_error(&err);
                 return std::process::ExitCode::FAILURE;
             }
         }
