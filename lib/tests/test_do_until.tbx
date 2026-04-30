@@ -1,8 +1,8 @@
-REM lib/tests/test_do_until.tbx — TBX tests for DO/UNTIL control structures
+# lib/tests/test_do_until.tbx — TBX tests for DO/UNTIL control structures
 USE "lib/tests/helper.tbx"
 
-REM --- Single iteration: condition is true from the start ---
-REM The body must execute exactly once regardless of the condition.
+# --- Single iteration: condition is true from the start ---
+# The body must execute exactly once regardless of the condition.
 
 DEF RUN_ONCE
   VAR C
@@ -14,7 +14,7 @@ DEF RUN_ONCE
 END
 ASSERT RUN_ONCE() = 1
 
-REM --- Multi-iteration loop: sum 1..5 = 15 ---
+# --- Multi-iteration loop: sum 1..5 = 15 ---
 
 DEF SUMTO5
   VAR I
@@ -29,7 +29,7 @@ DEF SUMTO5
 END
 ASSERT SUMTO5() = 15
 
-REM --- Nested DO...UNTIL: outer i=1..3, inner j=1..2 => 6 iterations ---
+# --- Nested DO...UNTIL: outer i=1..3, inner j=1..2 => 6 iterations ---
 
 DEF NESTED_COUNT
   VAR I
@@ -49,8 +49,8 @@ DEF NESTED_COUNT
 END
 ASSERT NESTED_COUNT() = 6
 
-REM --- DO...UNTIL with IF/ENDIF inside (early RETURN) ---
-REM Returns the first I in 1..N such that I*I > N, or -1 if not found.
+# --- DO...UNTIL with IF/ENDIF inside (early RETURN) ---
+# Returns the first I in 1..N such that I*I > N, or -1 if not found.
 
 DEF FIND_EXCEEDER(N)
   VAR I

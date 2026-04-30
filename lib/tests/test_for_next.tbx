@@ -1,7 +1,7 @@
-REM lib/tests/test_for_next.tbx — TBX tests for FOR/NEXT control structures
+# lib/tests/test_for_next.tbx — TBX tests for FOR/NEXT control structures
 USE "lib/tests/helper.tbx"
 
-REM --- Basic counting loop: sum 1..10 (step 1 fixed) ---
+# --- Basic counting loop: sum 1..10 (step 1 fixed) ---
 
 DEF SUM_1_TO_10
   VAR I
@@ -14,7 +14,7 @@ DEF SUM_1_TO_10
 END
 ASSERT SUM_1_TO_10() = 55
 
-REM --- Loop that does not execute: end < 1 ---
+# --- Loop that does not execute: end < 1 ---
 
 DEF ZERO_ITERATIONS
   VAR I
@@ -27,7 +27,7 @@ DEF ZERO_ITERATIONS
 END
 ASSERT ZERO_ITERATIONS() = 0
 
-REM --- Single iteration: end = 1 ---
+# --- Single iteration: end = 1 ---
 
 DEF ONE_ITERATION
   VAR I
@@ -40,7 +40,7 @@ DEF ONE_ITERATION
 END
 ASSERT ONE_ITERATION() = 1
 
-REM --- Nested FOR loops: 3 x 4 = 12 iterations ---
+# --- Nested FOR loops: 3 x 4 = 12 iterations ---
 
 DEF NESTED_FOR
   VAR I
@@ -56,7 +56,7 @@ DEF NESTED_FOR
 END
 ASSERT NESTED_FOR() = 12
 
-REM --- Step-2 loop using WHILE: sum of odd numbers 1, 3, 5, 7, 9 = 25 ---
+# --- Step-2 loop using WHILE: sum of odd numbers 1, 3, 5, 7, 9 = 25 ---
 
 DEF SUM_ODD_1_TO_10
   VAR I
@@ -71,7 +71,7 @@ DEF SUM_ODD_1_TO_10
 END
 ASSERT SUM_ODD_1_TO_10() = 25
 
-REM --- Even-step loop using WHILE: count 2, 4, 6, 8, 10 = 5 iterations ---
+# --- Even-step loop using WHILE: count 2, 4, 6, 8, 10 = 5 iterations ---
 
 DEF COUNT_EVEN
   VAR I

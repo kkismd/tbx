@@ -1,15 +1,15 @@
-REM basic.tbx — BASIC-style control structures standard library
+# basic.tbx — BASIC-style control structures standard library
 
-REM WHILE expr ... ENDWH
-REM
-REM  WHILE compiles the condition expression, saves the loop-start address on the
-REM  compile stack, emits JUMP_FALSE, saves the placeholder address, emits a
-REM  0 placeholder, then pushes a Tag("WHILE") marker last (tag-last layout).
-REM  Compile stack after WHILE: [loop-start, BIF-placeholder, Tag("WHILE")].
-REM
-REM  ENDWH validates the tag first (CS_CLOSE_TAG "WHILE"), then uses CS_SWAP to
-REM  reorder the two saved addresses, emits JUMP_ALWAYS back to the loop start,
-REM  and patches the JUMP_FALSE placeholder with HERE (= ENDWH+1).
+# WHILE expr ... ENDWH
+#
+#  WHILE compiles the condition expression, saves the loop-start address on the
+#  compile stack, emits JUMP_FALSE, saves the placeholder address, emits a
+#  0 placeholder, then pushes a Tag("WHILE") marker last (tag-last layout).
+#  Compile stack after WHILE: [loop-start, BIF-placeholder, Tag("WHILE")].
+#
+#  ENDWH validates the tag first (CS_CLOSE_TAG "WHILE"), then uses CS_SWAP to
+#  reorder the two saved addresses, emits JUMP_ALWAYS back to the loop start,
+#  and patches the JUMP_FALSE placeholder with HERE (= ENDWH+1).
 
 DEF WHILE
   CS_PUSH HERE
@@ -30,15 +30,15 @@ DEF ENDWH
 END
 IMMEDIATE ENDWH
 
-REM DO ... UNTIL expr
-REM
-REM  DO saves the loop-start address on the compile stack and pushes Tag("DO").
-REM  Compile stack after DO: [A, Tag("DO")].
-REM
-REM  UNTIL validates the tag (CS_CLOSE_TAG "DO"), compiles the condition
-REM  expression, emits JUMP_FALSE back to the loop start (A), and pops A from
-REM  the compile stack as the branch target.
-REM  The loop body executes at least once; exits when expr is true.
+# DO ... UNTIL expr
+#
+#  DO saves the loop-start address on the compile stack and pushes Tag("DO").
+#  Compile stack after DO: [A, Tag("DO")].
+#
+#  UNTIL validates the tag (CS_CLOSE_TAG "DO"), compiles the condition
+#  expression, emits JUMP_FALSE back to the loop start (A), and pops A from
+#  the compile stack as the branch target.
+#  The loop body executes at least once; exits when expr is true.
 
 DEF DO
   CS_PUSH HERE
@@ -54,33 +54,33 @@ DEF UNTIL
 END
 IMMEDIATE UNTIL
 
-REM IF expr ... ELSIF expr ... ELSE ... ENDIF
-REM
-REM  IF compiles the condition expression, emits a JUMP_FALSE instruction,
-REM  pushes an initial ELSIF count (0) and the placeholder address on the compile
-REM  stack, emits a 0 placeholder, then pushes a Tag("IF") marker last (tag-last).
-REM  Compile stack after IF: [0, A, Tag("IF")].
-REM
-REM  ELSIF validates the tag (CS_CLOSE_TAG "IF"), patches the current BIF
-REM  placeholder (C), pops the count N, emits JUMP_ALWAYS (saving its placeholder
-REM  B), increments the count, compiles the new condition, emits a new BIF with
-REM  its placeholder C_new, then pushes Tag("IF") back.
-REM  Compile stack after ELSIF: [B1...BN, B, N+1, C_new, Tag("IF")].
-REM
-REM  ELSE validates the tag (CS_CLOSE_TAG "IF"), patches the current BIF
-REM  placeholder (C), emits JUMP_ALWAYS (saving its placeholder B), and pushes
-REM  B on top of the unchanged count N, then pushes Tag("IF") back.
-REM  Compile stack after ELSE: [B1...BN, N, B, Tag("IF")].
-REM
-REM  ENDIF validates the tag (CS_CLOSE_TAG "IF"), patches the last placeholder
-REM  (C or B from ELSE), pops the count N, and patches each accumulated
-REM  JUMP_ALWAYS placeholder B1...BN using WHILE/ENDWH.
-REM  WHILE/ENDWH must be defined before ENDIF.
+# IF expr ... ELSIF expr ... ELSE ... ENDIF
+#
+#  IF compiles the condition expression, emits a JUMP_FALSE instruction,
+#  pushes an initial ELSIF count (0) and the placeholder address on the compile
+#  stack, emits a 0 placeholder, then pushes a Tag("IF") marker last (tag-last).
+#  Compile stack after IF: [0, A, Tag("IF")].
+#
+#  ELSIF validates the tag (CS_CLOSE_TAG "IF"), patches the current BIF
+#  placeholder (C), pops the count N, emits JUMP_ALWAYS (saving its placeholder
+#  B), increments the count, compiles the new condition, emits a new BIF with
+#  its placeholder C_new, then pushes Tag("IF") back.
+#  Compile stack after ELSIF: [B1...BN, B, N+1, C_new, Tag("IF")].
+#
+#  ELSE validates the tag (CS_CLOSE_TAG "IF"), patches the current BIF
+#  placeholder (C), emits JUMP_ALWAYS (saving its placeholder B), and pushes
+#  B on top of the unchanged count N, then pushes Tag("IF") back.
+#  Compile stack after ELSE: [B1...BN, N, B, Tag("IF")].
+#
+#  ENDIF validates the tag (CS_CLOSE_TAG "IF"), patches the last placeholder
+#  (C or B from ELSE), pops the count N, and patches each accumulated
+#  JUMP_ALWAYS placeholder B1...BN using WHILE/ENDWH.
+#  WHILE/ENDWH must be defined before ENDIF.
 
 DEF IF
   COMPILE_EXPR
   APPEND JUMP_FALSE
-  REM push initial ELSIF count (0), then BIF placeholder address (A)
+  # push initial ELSIF count (0), then BIF placeholder address (A)
   CS_PUSH 0
   CS_PUSH HERE
   APPEND 0
@@ -90,15 +90,15 @@ IMMEDIATE IF
 
 DEF ENDIF
   CS_CLOSE_TAG "IF"
-  REM patch last BIF/JUMP_ALWAYS placeholder (C)
+  # patch last BIF/JUMP_ALWAYS placeholder (C)
   PATCH_ADDR CS_POP
   VAR N
-  REM retrieve ELSIF call count
+  # retrieve ELSIF call count
   SET &N, CS_POP
   VAR I
   SET &I, 0
   WHILE I < N
-    REM patch each accumulated JUMP_ALWAYS placeholder (Bi)
+    # patch each accumulated JUMP_ALWAYS placeholder (Bi)
     PATCH_ADDR CS_POP
     SET &I, I + 1
   ENDWH
@@ -107,24 +107,24 @@ IMMEDIATE ENDIF
 
 DEF ELSIF
   CS_CLOSE_TAG "IF"
-  REM emit unconditional jump at end of current branch body
+  # emit unconditional jump at end of current branch body
   APPEND JUMP_ALWAYS
   VAR B
-  REM save JUMP_ALWAYS placeholder address (B)
+  # save JUMP_ALWAYS placeholder address (B)
   SET &B, HERE
-  REM emit placeholder; dp is now elsif condition start
+  # emit placeholder; dp is now elsif condition start
   APPEND 0
-  REM patch previous BIF placeholder (C) with current dp (= elsif condition start)
+  # patch previous BIF placeholder (C) with current dp (= elsif condition start)
   PATCH_ADDR CS_POP
-  REM pop the ELSIF count
+  # pop the ELSIF count
   VAR N
   SET &N, CS_POP
-  REM push B (JUMP_ALWAYS placeholder) and incremented count onto compile stack
+  # push B (JUMP_ALWAYS placeholder) and incremented count onto compile stack
   CS_PUSH B
   CS_PUSH N + 1
-  REM compile the elsif condition expression
+  # compile the elsif condition expression
   COMPILE_EXPR
-  REM emit new BIF instruction and push new BIF placeholder address (C_new)
+  # emit new BIF instruction and push new BIF placeholder address (C_new)
   APPEND JUMP_FALSE
   CS_PUSH HERE
   APPEND 0
@@ -134,33 +134,33 @@ IMMEDIATE ELSIF
 
 DEF ELSE
   CS_CLOSE_TAG "IF"
-  REM emit unconditional jump at end of if/elsif branch
+  # emit unconditional jump at end of if/elsif branch
   APPEND JUMP_ALWAYS
   VAR B
-  REM save JUMP_ALWAYS placeholder address (B)
+  # save JUMP_ALWAYS placeholder address (B)
   SET &B, HERE
-  REM emit placeholder; dp is now else body start
+  # emit placeholder; dp is now else body start
   APPEND 0
-  REM patch previous BIF placeholder (C) with current dp (= else body start)
+  # patch previous BIF placeholder (C) with current dp (= else body start)
   PATCH_ADDR CS_POP
-  REM count N remains on compile stack; push B on top
+  # count N remains on compile stack; push B on top
   CS_PUSH B
   CS_OPEN_TAG "IF"
 END
 IMMEDIATE ELSE
 
-REM LET varname = expr — BASIC-style assignment
-REM
-REM  Syntactic sugar for SET &varname, expr.
-REM  Works for both local variables (StackAddr) and global variables (DictAddr).
-REM  COMPILE_LVALUE reads the variable name from the token stream and emits LIT addr.
-REM  SKIP_EQ validates and consumes the '=' token.
-REM  COMPILE_EXPR compiles the right-hand side expression.
-REM  APPEND LOOKUP("SET") emits the SET instruction.
-REM
-REM  Usage (inside DEF body only):
-REM    LET I = 10
-REM    LET X = A + B * 2
+# LET varname = expr — BASIC-style assignment
+#
+#  Syntactic sugar for SET &varname, expr.
+#  Works for both local variables (StackAddr) and global variables (DictAddr).
+#  COMPILE_LVALUE reads the variable name from the token stream and emits LIT addr.
+#  SKIP_EQ validates and consumes the '=' token.
+#  COMPILE_EXPR compiles the right-hand side expression.
+#  APPEND LOOKUP("SET") emits the SET instruction.
+#
+#  Usage (inside DEF body only):
+#    LET I = 10
+#    LET X = A + B * 2
 
 DEF LET
   COMPILE_LVALUE
@@ -170,86 +170,86 @@ DEF LET
 END
 IMMEDIATE LET
 
-REM FOR &varref, end ... NEXT
-REM
-REM  Implements a counted loop: the loop variable is initialised to 1, and the
-REM  body repeats while var <= end; after each iteration var is incremented by 1.
-REM  Start and step are fixed at 1.  Use WHILE for non-unit steps or 0-based ranges.
-REM
-REM  Compile stack after FOR (tag-last layout):
-REM    [Tag("FOR"), var_addr, BIF_placeholder, A_addr]
-REM    A_addr          = DictAddr of loop-condition start (back-jump target for NEXT)
-REM    var_addr        = address of the loop variable (for increment code in NEXT)
-REM    BIF_placeholder = DictAddr of the JUMP_FALSE operand cell (patched by NEXT)
-REM    Tag("FOR")      = scope tag (tag-last layout)
-REM
-REM  Generated instruction sequence (check-first):
-REM    LIT addr_of_var
-REM    LIT 1
-REM    SET                      -- var = 1 (fixed)
-REM  A:
-REM    LIT addr_of_var
-REM    FETCH                    -- push current var value
-REM    <end_expr>
-REM    LE                       -- var <= end ?
-REM    BIF D                    -- exit loop if false
-REM    <body>
-REM    LIT addr_of_var          -- SET destination (increment: var += 1)
-REM    LIT addr_of_var          -- FETCH source
-REM    FETCH
-REM    LIT 1
-REM    ADD
-REM    SET
-REM    JUMP_ALWAYS A
-REM  D:
+# FOR &varref, end ... NEXT
+#
+#  Implements a counted loop: the loop variable is initialised to 1, and the
+#  body repeats while var <= end; after each iteration var is incremented by 1.
+#  Start and step are fixed at 1.  Use WHILE for non-unit steps or 0-based ranges.
+#
+#  Compile stack after FOR (tag-last layout):
+#    [Tag("FOR"), var_addr, BIF_placeholder, A_addr]
+#    A_addr          = DictAddr of loop-condition start (back-jump target for NEXT)
+#    var_addr        = address of the loop variable (for increment code in NEXT)
+#    BIF_placeholder = DictAddr of the JUMP_FALSE operand cell (patched by NEXT)
+#    Tag("FOR")      = scope tag (tag-last layout)
+#
+#  Generated instruction sequence (check-first):
+#    LIT addr_of_var
+#    LIT 1
+#    SET                      -- var = 1 (fixed)
+#  A:
+#    LIT addr_of_var
+#    FETCH                    -- push current var value
+#    <end_expr>
+#    LE                       -- var <= end ?
+#    BIF D                    -- exit loop if false
+#    <body>
+#    LIT addr_of_var          -- SET destination (increment: var += 1)
+#    LIT addr_of_var          -- FETCH source
+#    FETCH
+#    LIT 1
+#    ADD
+#    SET
+#    JUMP_ALWAYS A
+#  D:
 
 DEF FOR
-  REM Read &var, emit LIT addr, and save var_addr for reuse in NEXT.
+  # Read &var, emit LIT addr, and save var_addr for reuse in NEXT.
   VAR VAR_ADDR
   COMPILE_LVALUE_SAVE
   SET &VAR_ADDR, CS_POP
-  REM Consume the comma between &var and the end expression.
+  # Consume the comma between &var and the end expression.
   SKIP_COMMA
-  REM Emit: LIT 1, SET  ->  var = 1 (fixed start)
+  # Emit: LIT 1, SET  ->  var = 1 (fixed start)
   LITERAL 1
   APPEND LOOKUP("SET")
-  REM Record loop-condition start address A on the compile stack.
+  # Record loop-condition start address A on the compile stack.
   CS_PUSH HERE
-  REM Emit condition: LIT addr, FETCH, <end_expr>, LE
+  # Emit condition: LIT addr, FETCH, <end_expr>, LE
   LITERAL VAR_ADDR
   APPEND LOOKUP("FETCH")
   COMPILE_EXPR
   APPEND LOOKUP("LE")
-  REM Emit JUMP_FALSE placeholder (patched by NEXT to D).
+  # Emit JUMP_FALSE placeholder (patched by NEXT to D).
   APPEND JUMP_FALSE
   CS_PUSH HERE
   APPEND 0
-  REM Save var_addr for NEXT (needed to emit increment code).
+  # Save var_addr for NEXT (needed to emit increment code).
   CS_PUSH VAR_ADDR
-  REM Push scope tag last (tag-last layout).
+  # Push scope tag last (tag-last layout).
   CS_OPEN_TAG "FOR"
 END
 IMMEDIATE FOR
 
 DEF NEXT
-  REM Validate and pop the "FOR" scope tag.
+  # Validate and pop the "FOR" scope tag.
   CS_CLOSE_TAG "FOR"
-  REM Restore saved values from the compile stack.
+  # Restore saved values from the compile stack.
   VAR VAR_ADDR
   SET &VAR_ADDR, CS_POP
   VAR BIF_ADDR
   SET &BIF_ADDR, CS_POP
-  REM Emit increment code: LIT addr, LIT addr, FETCH, LIT 1, ADD, SET  ->  var += 1
+  # Emit increment code: LIT addr, LIT addr, FETCH, LIT 1, ADD, SET  ->  var += 1
   LITERAL VAR_ADDR
   LITERAL VAR_ADDR
   APPEND LOOKUP("FETCH")
   LITERAL 1
   APPEND LOOKUP("ADD")
   APPEND LOOKUP("SET")
-  REM Emit JUMP_ALWAYS back to A (loop-condition start).
+  # Emit JUMP_ALWAYS back to A (loop-condition start).
   APPEND JUMP_ALWAYS
   APPEND CS_POP
-  REM Patch the JUMP_FALSE placeholder to here (= D, loop exit).
+  # Patch the JUMP_FALSE placeholder to here (= D, loop exit).
   PATCH_ADDR BIF_ADDR
 END
 IMMEDIATE NEXT

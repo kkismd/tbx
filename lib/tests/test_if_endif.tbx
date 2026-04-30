@@ -1,4 +1,4 @@
-REM lib/tests/test_if_endif.tbx — TBX tests for IF/ENDIF control structures
+# lib/tests/test_if_endif.tbx — TBX tests for IF/ENDIF control structures
 USE "lib/tests/helper.tbx"
 
 DEF CHECK_POS(X)
@@ -37,7 +37,7 @@ ASSERT NESTED(15) = 2
 ASSERT NESTED(5) = 1
 ASSERT NESTED(-1) = 0
 
-REM ASSERT_MSG integration tests
+# ASSERT_MSG integration tests
 ASSERT_MSG CHECK_POS(5) = 1, "CHECK_POS: positive"
 ASSERT_MSG CHECK_POS(0) = 0, "CHECK_POS: zero"
 ASSERT_MSG SIGN(7) = 1, "SIGN: positive"
