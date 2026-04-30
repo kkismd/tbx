@@ -153,6 +153,13 @@ pub struct VM {
     /// Drained by `exec_immediate_word` in the interpreter, which calls
     /// `exec_source` on the file content.
     pub(crate) pending_use_path: Option<String>,
+    /// Local array pool: indexed by `Cell::Array(usize)` values.
+    ///
+    /// Each entry is a `Vec<Cell>` created by the `ARRAY(N)` primitive.
+    /// On every word EXIT or RETURN_VAL, the pool is truncated back to the
+    /// length saved in `ReturnFrame::Call::saved_array_pool_len`, freeing all
+    /// local arrays allocated within that call.
+    pub arrays: Vec<Vec<Cell>>,
     /// Internal buffer holding the last line read by ACCEPT.
     ///
     /// ACCEPT reads one line from `input_reader` and stores it here (trimmed of
@@ -217,6 +224,7 @@ impl VM {
             compile_state: None,
             compile_stack: Vec::new(),
             pending_use_path: None,
+            arrays: Vec::new(),
             input_buffer: None,
             input_reader: Box::new(BufReader::new(std::io::stdin())),
             output_writer: Box::new(std::io::stdout()),
@@ -596,6 +604,7 @@ impl VM {
                     self.return_stack.push(ReturnFrame::Call {
                         return_pc,
                         saved_bp,
+                        saved_array_pool_len: self.arrays.len(),
                     });
                     self.bp = self.data_stack.len();
                     self.pc = offset;
@@ -660,6 +669,7 @@ impl VM {
                             self.return_stack.push(ReturnFrame::Call {
                                 return_pc,
                                 saved_bp,
+                                saved_array_pool_len: self.arrays.len(),
                             });
                             self.bp = self.data_stack.len() - arity;
                             for _ in 0..local_count {
@@ -682,8 +692,10 @@ impl VM {
                         ReturnFrame::Call {
                             return_pc,
                             saved_bp,
+                            saved_array_pool_len,
                         } => {
                             self.data_stack.truncate(self.bp);
+                            self.arrays.truncate(saved_array_pool_len);
                             self.pc = return_pc;
                             self.bp = saved_bp;
                         }
@@ -692,12 +704,18 @@ impl VM {
                 }
                 EntryKind::ReturnVal => {
                     let retval = self.pop()?;
+                    // Check for local array escape before truncating the pool.
+                    if matches!(retval, Cell::Array(_)) {
+                        return Err(TbxError::LocalArrayEscape);
+                    }
                     match self.return_stack.pop().ok_or(TbxError::StackUnderflow)? {
                         ReturnFrame::Call {
                             return_pc,
                             saved_bp,
+                            saved_array_pool_len,
                         } => {
                             self.data_stack.truncate(self.bp);
+                            self.arrays.truncate(saved_array_pool_len);
                             self.push(retval)?;
                             self.pc = return_pc;
                             self.bp = saved_bp;
@@ -1691,6 +1709,7 @@ mod tests {
             vm.return_stack.push(ReturnFrame::Call {
                 return_pc: 0,
                 saved_bp: 0,
+                saved_array_pool_len: 0,
             });
         }
 
@@ -1730,6 +1749,7 @@ mod tests {
             vm.return_stack.push(ReturnFrame::Call {
                 return_pc: 0,
                 saved_bp: 0,
+                saved_array_pool_len: 0,
             });
         }
 
@@ -2789,6 +2809,50 @@ mod tests {
             out.trim(),
             "20",
             "NUMS(1)*NUMS(2) should equal 20 after dynamic-index writes"
+        );
+    }
+
+    // --- Local array pool management ---
+
+    #[test]
+    fn test_arrays_pool_truncated_on_exit() {
+        // Verify that the array pool is empty after a word with a local array returns.
+        // run_source creates a fresh Interpreter (and therefore a fresh VM), so we
+        // check the absence of errors rather than the pool length directly.
+        let result = run_source(
+            "DEF HAS_ARRAY()\n  VAR A\n  LET A = ARRAY(3)\n  RETURN 1\nEND\n\
+             PUTDEC HAS_ARRAY()",
+        );
+        assert_eq!(
+            result.unwrap().trim(),
+            "1",
+            "word with local array should return 1"
+        );
+    }
+
+    #[test]
+    fn test_local_array_escape_via_return_val_is_error() {
+        // Verify that returning a Cell::Array value via RETURN_VAL produces LocalArrayEscape.
+        let result = run_source(
+            "DEF BAD_RETURN()\n  VAR A\n  LET A = ARRAY(3)\n  RETURN A\nEND\nBAD_RETURN()",
+        );
+        assert!(
+            matches!(result, Err(crate::error::TbxError::LocalArrayEscape)),
+            "expected LocalArrayEscape, got: {result:?}"
+        );
+    }
+
+    #[test]
+    fn test_local_array_escape_via_store_to_dict_is_error() {
+        // Verify that STORE of a Cell::Array into a global variable produces LocalArrayEscape.
+        let result = run_source(
+            "VAR G\n\
+             DEF BAD_STORE()\n  VAR A\n  LET A = ARRAY(2)\n  SET &G, A\nEND\n\
+             BAD_STORE()",
+        );
+        assert!(
+            matches!(result, Err(crate::error::TbxError::LocalArrayEscape)),
+            "expected LocalArrayEscape, got: {result:?}"
         );
     }
 }
