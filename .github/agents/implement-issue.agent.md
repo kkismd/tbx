@@ -145,9 +145,10 @@ INSERT OR REPLACE INTO session_state (key, value) VALUES ('review_before_review_
          # LOOP_COUNT には SQL の SELECT 結果（整数）を代入する
          # 例: loop_count が 1 の場合 → LOOP_COUNT=1
          LOOP_COUNT=<SQLで取得した数値>
+         mkdir -p .tmp
          printf 'レビュー指摘の修正 (%d回目)\n\nCo-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>\n' "$LOOP_COUNT" \
-           > "$(git rev-parse --git-dir)/COMMIT_MSG"
-         git commit -F "$(git rev-parse --git-dir)/COMMIT_MSG"
+           > ".tmp/COMMIT_MSG"
+         git commit -F ".tmp/COMMIT_MSG"
          git push
          ```
        - イテレーション先頭（手順0）へ戻る
@@ -171,7 +172,8 @@ INSERT OR REPLACE INTO session_state (key, value) VALUES ('review_before_review_
 
 4. **🔴/🟡 が含まれる場合のみ**、`gh pr comment` で未解消一覧をPRにコメント追加する：
    ```bash
-   cat > "$(git rev-parse --git-dir)/UNRESOLVED_COMMENT.md" << 'EOF'
+   mkdir -p .tmp
+   cat > ".tmp/UNRESOLVED_COMMENT.md" << 'EOF'
    ## ⚠️ 未解消の指摘
 
    最終レビューで以下の指摘が確認されました。
@@ -180,7 +182,7 @@ INSERT OR REPLACE INTO session_state (key, value) VALUES ('review_before_review_
    （未解消の 🔴/🟡 指摘一覧）
    EOF
 
-   gh pr comment <PR番号> --body-file "$(git rev-parse --git-dir)/UNRESOLVED_COMMENT.md"
+   gh pr comment <PR番号> --body-file ".tmp/UNRESOLVED_COMMENT.md"
    ```
 
 5. ステップ7へ進む。

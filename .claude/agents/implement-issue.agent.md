@@ -114,9 +114,10 @@ PR作成が完了したら、ユーザーへの報告より先に修正サイク
          ```bash
          git add -A
          LOOP_COUNT=<コンテキスト内のloop_count>
+         mkdir -p .tmp
          printf 'レビュー指摘の修正 (%d回目)\n' "$LOOP_COUNT" \
-           > "$(git rev-parse --git-dir)/COMMIT_MSG"
-         git commit -F "$(git rev-parse --git-dir)/COMMIT_MSG"
+           > ".tmp/COMMIT_MSG"
+         git commit -F ".tmp/COMMIT_MSG"
          git push
          ```
        - イテレーション先頭（手順0）へ戻る
@@ -136,7 +137,8 @@ PR作成が完了したら、ユーザーへの報告より先に修正サイク
 
 4. **🔴/🟡 が含まれる場合のみ**、`gh pr comment` で未解消一覧をPRにコメント追加する：
    ```bash
-   cat > "$(git rev-parse --git-dir)/UNRESOLVED_COMMENT.md" << 'EOF'
+   mkdir -p .tmp
+   cat > ".tmp/UNRESOLVED_COMMENT.md" << 'EOF'
    ## ⚠️ 未解消の指摘
 
    最終レビューで以下の指摘が確認されました。
@@ -145,7 +147,7 @@ PR作成が完了したら、ユーザーへの報告より先に修正サイク
    （未解消の 🔴/🟡 指摘一覧）
    EOF
 
-   gh pr comment <PR番号> --body-file "$(git rev-parse --git-dir)/UNRESOLVED_COMMENT.md"
+   gh pr comment <PR番号> --body-file ".tmp/UNRESOLVED_COMMENT.md"
    ```
 
 5. ステップ7へ進む。

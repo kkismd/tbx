@@ -38,19 +38,20 @@ git checkout -b improve/short-description
 
 ### 2. 変更をステージしてコミットする
 
-コミットメッセージは `$(git rev-parse --git-dir)/COMMIT_MSG` に書き出し、`-F` オプションで渡す。
-Gitが管理するパスのため、プロジェクト外の `/tmp` を使う必要はない。
+コミットメッセージは `.tmp/COMMIT_MSG` に書き出し、`-F` オプションで渡す。
+プロジェクトルートの `.tmp/` はバージョン管理対象外（`.gitignore` 済み）のため、安全に利用できる。
 
 ```bash
 git add <ファイル>
 
-cat > "$(git rev-parse --git-dir)/COMMIT_MSG" << 'EOF'
+mkdir -p .tmp
+cat > ".tmp/COMMIT_MSG" << 'EOF'
 コミットメッセージ本文（日本語）
 
 Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>
 EOF
 
-git commit -F "$(git rev-parse --git-dir)/COMMIT_MSG"
+git commit -F ".tmp/COMMIT_MSG"
 ```
 
 ### 3. ブランチをpushする
@@ -62,10 +63,11 @@ git push -u origin <ブランチ名>
 ### 4. Pull Requestを作成する
 
 PRのdescriptionは **必ず `--body-file` オプション** でファイルを渡す。
-PR bodyは `$(git rev-parse --git-dir)/PR_BODY.md` に書き出す（プロジェクト外の `/tmp` は使わない）。
+PR bodyは `.tmp/PR_BODY.md` に書き出す。
 
 ```bash
-cat > "$(git rev-parse --git-dir)/PR_BODY.md" << 'EOF'
+mkdir -p .tmp
+cat > ".tmp/PR_BODY.md" << 'EOF'
 ## 概要
 
 （変更の背景・目的）
@@ -82,12 +84,12 @@ EOF
 
 gh pr create \
   --title "改善内容のタイトル（日本語）" \
-  --body-file "$(git rev-parse --git-dir)/PR_BODY.md" \
+  --body-file ".tmp/PR_BODY.md" \
   --base main
 ```
 
 ### 注意点
 
 - `--body "..."` は使わない（`\n` がエスケープされず改行にならない）
-- 一時ファイルは `$(git rev-parse --git-dir)/` 配下に書く（`/tmp` などプロジェクト外は使わない）
+- 一時ファイルは `.tmp/` 配下に書く（事前作成が必要な場合は `mkdir -p .tmp` を行う）
 - issueと紐づかない場合は `Closes #N` は不要
