@@ -1065,15 +1065,6 @@ fn cs_pop_prim(vm: &mut VM) -> Result<(), TbxError> {
                 got: "Tag",
             })
         }
-        CompileEntry::CompiledCells(cells, offsets) => {
-            // Restore and signal a type error: CS_POP cannot pop CompiledCells.
-            vm.compile_stack
-                .push(CompileEntry::CompiledCells(cells, offsets));
-            Err(TbxError::TypeError {
-                expected: "Cell",
-                got: "CompiledCells",
-            })
-        }
     }
 }
 
@@ -1205,12 +1196,6 @@ fn cs_close_tag_prim(vm: &mut VM) -> Result<(), TbxError> {
             vm.compile_stack.push(CompileEntry::Cell(c));
             Err(TbxError::NoOpenTag { expected })
         }
-        Some(CompileEntry::CompiledCells(cells, offsets)) => {
-            // Restore and report no matching open tag.
-            vm.compile_stack
-                .push(CompileEntry::CompiledCells(cells, offsets));
-            Err(TbxError::NoOpenTag { expected })
-        }
     }
 }
 
@@ -1296,253 +1281,6 @@ fn compile_expr_prim(vm: &mut VM) -> Result<(), TbxError> {
     // Register patch offsets (adjust by base_dp to get absolute dictionary positions).
     if let Some(state) = vm.compile_state.as_mut() {
         for offset in patch_offsets {
-            state.call_patch_list.push(base_dp + offset);
-        }
-    }
-    Ok(())
-}
-
-/// COMPILE_EXPR_UNTIL_COMMA — compile a partial expression up to the first top-level comma.
-///
-/// Scans the token stream for the first comma that is not nested inside parentheses.
-/// Compiles the tokens before the comma as an expression and writes the result to the
-/// dictionary. The comma token itself is consumed. Remaining tokens (after the comma)
-/// stay in the token stream for subsequent compilation steps.
-///
-/// Returns `InvalidExpression` if:
-/// - called outside compile mode,
-/// - the token stream is absent or empty, or
-/// - no top-level comma is found.
-fn compile_expr_until_comma_prim(vm: &mut VM) -> Result<(), TbxError> {
-    if !vm.is_compiling {
-        return Err(TbxError::InvalidExpression {
-            reason: "COMPILE_EXPR_UNTIL_COMMA outside compile mode",
-        });
-    }
-
-    // Find the first top-level comma (depth == 0) in the token stream.
-    let split_pos = {
-        let stream = vm.token_stream.as_ref().ok_or(TbxError::TokenStreamEmpty)?;
-        if stream.is_empty() {
-            return Err(TbxError::TokenStreamEmpty);
-        }
-        let mut depth: usize = 0;
-        let mut found: Option<usize> = None;
-        for (i, st) in stream.iter().enumerate() {
-            match &st.token {
-                Token::LParen => depth += 1,
-                Token::RParen => depth = depth.saturating_sub(1),
-                Token::Comma if depth == 0 => {
-                    found = Some(i);
-                    break;
-                }
-                _ => {}
-            }
-        }
-        found.ok_or(TbxError::InvalidExpression {
-            reason: "COMPILE_EXPR_UNTIL_COMMA: no top-level comma found",
-        })?
-    };
-
-    // Drain the tokens before the comma.
-    let stream = vm.token_stream.as_mut().ok_or(TbxError::TokenStreamEmpty)?;
-    let expr_tokens: Vec<crate::lexer::SpannedToken> = stream.drain(..split_pos).collect();
-    // Consume the comma token itself.
-    stream.pop_front();
-
-    if expr_tokens.is_empty() {
-        return Err(TbxError::InvalidExpression {
-            reason: "COMPILE_EXPR_UNTIL_COMMA: empty expression before comma",
-        });
-    }
-
-    // Compile the extracted tokens using the current local variable table.
-    // Use the take-compile-restore pattern to satisfy the borrow checker.
-    let self_word = vm.compile_state.as_ref().map(|s| s.word_name.clone());
-    let self_hdr_idx = vm.compile_state.as_ref().map(|s| s.word_hdr_idx());
-    let local_table = vm
-        .compile_state
-        .as_mut()
-        .map(|s| std::mem::take(&mut s.local_table));
-    let compile_result: Result<(Vec<Cell>, Vec<usize>), TbxError> = {
-        let local_table_ref = local_table.as_ref();
-        let mut compiler =
-            crate::expr::ExprCompiler::with_context(vm, local_table_ref, self_word, self_hdr_idx);
-        compiler.compile_expr(&expr_tokens).map(|cells| {
-            let offsets = std::mem::take(&mut compiler.patch_offsets);
-            (cells, offsets)
-        })
-    };
-    // Restore local_table regardless of success or failure.
-    if let (Some(state), Some(lt)) = (vm.compile_state.as_mut(), local_table) {
-        state.local_table = lt;
-    }
-    let (cells, patch_offsets) = compile_result?;
-    // Write compiled cells to the dictionary.
-    let base_dp = vm.dp;
-    for cell in &cells {
-        vm.dict_write(cell.clone())?;
-    }
-    // Register patch offsets (adjust by base_dp to get absolute dictionary positions).
-    if let Some(state) = vm.compile_state.as_mut() {
-        for offset in patch_offsets {
-            state.call_patch_list.push(base_dp + offset);
-        }
-    }
-    Ok(())
-}
-
-/// SAVE_EXPR_UNTIL_COMMA — compile a partial expression up to the first top-level comma
-/// and push the resulting cell sequence onto the compile stack as `CompileEntry::CompiledCells`.
-///
-/// Behaves like `COMPILE_EXPR_UNTIL_COMMA` except that it does NOT write the compiled cells
-/// to the dictionary; instead it saves them for later emission via `EMIT_COMPILED_CELLS`.
-///
-/// Used by FOR to save the end expression before emitting the step code.
-fn save_expr_until_comma_prim(vm: &mut VM) -> Result<(), TbxError> {
-    if !vm.is_compiling {
-        return Err(TbxError::InvalidExpression {
-            reason: "SAVE_EXPR_UNTIL_COMMA outside compile mode",
-        });
-    }
-
-    // Find the first top-level comma.
-    let split_pos = {
-        let stream = vm.token_stream.as_ref().ok_or(TbxError::TokenStreamEmpty)?;
-        if stream.is_empty() {
-            return Err(TbxError::TokenStreamEmpty);
-        }
-        let mut depth: usize = 0;
-        let mut found: Option<usize> = None;
-        for (i, st) in stream.iter().enumerate() {
-            match &st.token {
-                Token::LParen => depth += 1,
-                Token::RParen => depth = depth.saturating_sub(1),
-                Token::Comma if depth == 0 => {
-                    found = Some(i);
-                    break;
-                }
-                _ => {}
-            }
-        }
-        found.ok_or(TbxError::InvalidExpression {
-            reason: "SAVE_EXPR_UNTIL_COMMA: no top-level comma found",
-        })?
-    };
-
-    // Drain the tokens before the comma and consume the comma itself.
-    let stream = vm.token_stream.as_mut().ok_or(TbxError::TokenStreamEmpty)?;
-    let expr_tokens: Vec<crate::lexer::SpannedToken> = stream.drain(..split_pos).collect();
-    stream.pop_front();
-
-    if expr_tokens.is_empty() {
-        return Err(TbxError::InvalidExpression {
-            reason: "SAVE_EXPR_UNTIL_COMMA: empty expression before comma",
-        });
-    }
-
-    // Compile the tokens.
-    let self_word = vm.compile_state.as_ref().map(|s| s.word_name.clone());
-    let self_hdr_idx = vm.compile_state.as_ref().map(|s| s.word_hdr_idx());
-    let local_table = vm
-        .compile_state
-        .as_mut()
-        .map(|s| std::mem::take(&mut s.local_table));
-    let compile_result: Result<(Vec<Cell>, Vec<usize>), TbxError> = {
-        let local_table_ref = local_table.as_ref();
-        let mut compiler =
-            crate::expr::ExprCompiler::with_context(vm, local_table_ref, self_word, self_hdr_idx);
-        compiler.compile_expr(&expr_tokens).map(|cells| {
-            let offsets = std::mem::take(&mut compiler.patch_offsets);
-            (cells, offsets)
-        })
-    };
-    if let (Some(state), Some(lt)) = (vm.compile_state.as_mut(), local_table) {
-        state.local_table = lt;
-    }
-    let (cells, patch_offsets) = compile_result?;
-    // Save onto compile stack without writing to dictionary.
-    vm.compile_stack
-        .push(CompileEntry::CompiledCells(cells, patch_offsets));
-    Ok(())
-}
-
-/// COMPILE_EXPR_SAVE — compile the remaining tokens in the token stream as an expression
-/// and push the resulting cell sequence onto the compile stack as `CompileEntry::CompiledCells`.
-///
-/// Unlike `COMPILE_EXPR`, this primitive does NOT write the compiled cells to the dictionary.
-/// The saved cells can be emitted later by `EMIT_COMPILED_CELLS`.
-///
-/// Used by FOR to save the step expression (which must be compiled while the token stream is
-/// still set) for deferred emission by NEXT.
-fn compile_expr_save_prim(vm: &mut VM) -> Result<(), TbxError> {
-    if !vm.is_compiling {
-        return Err(TbxError::InvalidExpression {
-            reason: "COMPILE_EXPR_SAVE outside compile mode",
-        });
-    }
-    // Drain all remaining tokens from the stream.
-    let tokens: Vec<crate::lexer::SpannedToken> = match vm.token_stream.as_mut() {
-        Some(stream) => stream.drain(..).collect(),
-        None => return Err(TbxError::TokenStreamEmpty),
-    };
-    if tokens.is_empty() {
-        return Err(TbxError::TokenStreamEmpty);
-    }
-    // Compile using take-compile-restore pattern.
-    let self_word = vm.compile_state.as_ref().map(|s| s.word_name.clone());
-    let self_hdr_idx = vm.compile_state.as_ref().map(|s| s.word_hdr_idx());
-    let local_table = vm
-        .compile_state
-        .as_mut()
-        .map(|s| std::mem::take(&mut s.local_table));
-    let compile_result: Result<(Vec<Cell>, Vec<usize>), TbxError> = {
-        let local_table_ref = local_table.as_ref();
-        let mut compiler =
-            crate::expr::ExprCompiler::with_context(vm, local_table_ref, self_word, self_hdr_idx);
-        compiler.compile_expr(&tokens).map(|cells| {
-            let offsets = std::mem::take(&mut compiler.patch_offsets);
-            (cells, offsets)
-        })
-    };
-    if let (Some(state), Some(lt)) = (vm.compile_state.as_mut(), local_table) {
-        state.local_table = lt;
-    }
-    let (cells, patch_offsets) = compile_result?;
-    // Push compiled cells onto the compile stack (not into the dictionary).
-    vm.compile_stack
-        .push(CompileEntry::CompiledCells(cells, patch_offsets));
-    Ok(())
-}
-
-/// EMIT_COMPILED_CELLS — pop a `CompileEntry::CompiledCells` from the compile stack
-/// and write all cells to the dictionary.
-///
-/// This is the deferred-emission counterpart to `COMPILE_EXPR_SAVE`.
-fn emit_compiled_cells_prim(vm: &mut VM) -> Result<(), TbxError> {
-    if !vm.is_compiling {
-        return Err(TbxError::InvalidExpression {
-            reason: "EMIT_COMPILED_CELLS outside compile mode",
-        });
-    }
-    let entry = vm.compile_stack.pop().ok_or(TbxError::StackUnderflow)?;
-    let (cells, offsets) = match entry {
-        CompileEntry::CompiledCells(cells, offsets) => (cells, offsets),
-        other => {
-            // Restore to avoid losing the entry on error.
-            vm.compile_stack.push(other);
-            return Err(TbxError::TypeError {
-                expected: "CompiledCells",
-                got: "non-CompiledCells compile stack entry",
-            });
-        }
-    };
-    let base_dp = vm.dp;
-    for cell in cells {
-        vm.dict_write(cell)?;
-    }
-    if let Some(state) = &mut vm.compile_state {
-        for offset in offsets {
             state.call_patch_list.push(base_dp + offset);
         }
     }
@@ -2047,26 +1785,10 @@ pub fn register_all(vm: &mut VM) {
 
     // FOR/NEXT compile-helper primitives.
     // These are used inside IMMEDIATE word bodies (FOR, NEXT) defined in basic.tbx.
-    vm.register(WordEntry::new_primitive(
-        "COMPILE_EXPR_UNTIL_COMMA",
-        compile_expr_until_comma_prim,
-    ));
     vm.register(WordEntry::new_primitive("SKIP_COMMA", skip_comma_prim));
     vm.register(WordEntry::new_primitive(
         "COMPILE_LVALUE_SAVE",
         compile_lvalue_save_prim,
-    ));
-    vm.register(WordEntry::new_primitive(
-        "COMPILE_EXPR_SAVE",
-        compile_expr_save_prim,
-    ));
-    vm.register(WordEntry::new_primitive(
-        "SAVE_EXPR_UNTIL_COMMA",
-        save_expr_until_comma_prim,
-    ));
-    vm.register(WordEntry::new_primitive(
-        "EMIT_COMPILED_CELLS",
-        emit_compiled_cells_prim,
     ));
 
     // Runtime Xt constants for arithmetic/comparison instructions used by FOR/NEXT.
