@@ -1,4 +1,4 @@
-REM lib/tests/helper.tbx — test support words for TBX library tests
+# lib/tests/helper.tbx — test support words for TBX library tests
 
 DEF ASSERT(COND)
   IF COND

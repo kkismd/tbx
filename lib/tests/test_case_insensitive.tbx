@@ -1,27 +1,27 @@
-REM lib/tests/test_case_insensitive.tbx — TBX tests for case-insensitive word/variable names
+# lib/tests/test_case_insensitive.tbx — TBX tests for case-insensitive word/variable names
 USE "lib/tests/helper.tbx"
 
-REM --- Scenario 1: define in lowercase, call in lowercase ---
-REM This was the primary bug: lowercase-defined words could not be called.
+# --- Scenario 1: define in lowercase, call in lowercase ---
+# This was the primary bug: lowercase-defined words could not be called.
 
 DEF hello
   RETURN 1
 END
 ASSERT hello() = 1
 
-REM --- Scenario 2: define in lowercase, call in UPPERCASE ---
+# --- Scenario 2: define in lowercase, call in UPPERCASE ---
 
 ASSERT HELLO() = 1
 
-REM --- Scenario 3: define in UPPERCASE, call in lowercase ---
-REM Regression guard: this worked before the fix and must continue to work.
+# --- Scenario 3: define in UPPERCASE, call in lowercase ---
+# Regression guard: this worked before the fix and must continue to work.
 
 DEF GREET
   RETURN 2
 END
 ASSERT greet() = 2
 
-REM --- Scenario 4: define in MixedCase, call with different mixed patterns ---
+# --- Scenario 4: define in MixedCase, call with different mixed patterns ---
 
 DEF MyWord
   RETURN 3
@@ -30,9 +30,9 @@ ASSERT MYWORD() = 3
 ASSERT myword() = 3
 ASSERT MyWoRd() = 3
 
-REM --- Scenario 5: parameter names are case-insensitive ---
-REM Parameters are registered in uppercase internally; the body must resolve
-REM them regardless of the case used in the DEF signature.
+# --- Scenario 5: parameter names are case-insensitive ---
+# Parameters are registered in uppercase internally; the body must resolve
+# them regardless of the case used in the DEF signature.
 
 DEF addone(x)
   RETURN x + 1
@@ -40,8 +40,8 @@ END
 ASSERT addone(9) = 10
 ASSERT ADDONE(9) = 10
 
-REM --- Scenario 6: VAR names are case-insensitive ---
-REM Define a VAR in lowercase, read and write it with UPPERCASE references.
+# --- Scenario 6: VAR names are case-insensitive ---
+# Define a VAR in lowercase, read and write it with UPPERCASE references.
 
 DEF count_up
   VAR n
@@ -53,7 +53,7 @@ END
 ASSERT count_up() = 2
 ASSERT COUNT_UP() = 2
 
-REM --- Scenario 7: mixed-case VAR name, accessed with all-uppercase ---
+# --- Scenario 7: mixed-case VAR name, accessed with all-uppercase ---
 
 DEF mixedvar
   VAR myCount
