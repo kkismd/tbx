@@ -51,11 +51,11 @@ issueに記載された課題について設計の選択肢を提示し、ユー
 コメントの投稿は以下の手順で行う：
 
 ```bash
-cat > "$(git rev-parse --git-dir)/SPEC_COMMENT.md" << 'EOF'
+cat > ".tmp/SPEC_COMMENT.md" << 'EOF'
 （作成したコメントのMarkdown）
 EOF
 
-gh issue comment <N> --body-file "$(git rev-parse --git-dir)/SPEC_COMMENT.md"
+gh issue comment <N> --body-file ".tmp/SPEC_COMMENT.md"
 ```
 
 **注意**: `--body "..."` は使わない（改行が失われるため）。必ず `--body-file` を使う。

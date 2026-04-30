@@ -63,11 +63,11 @@ issueやblueprint.mdに記載のない仕様・実装判断については「未
 
 ```bash
 # 計画をファイルに書き出す（git管理ディレクトリ配下を使う）
-cat > "$(git rev-parse --git-dir)/PLAN_COMMENT.md" << 'EOF'
+cat > ".tmp/PLAN_COMMENT.md" << 'EOF'
 （作成した計画のMarkdown）
 EOF
 
-gh issue comment <N> --body-file "$(git rev-parse --git-dir)/PLAN_COMMENT.md"
+gh issue comment <N> --body-file ".tmp/PLAN_COMMENT.md"
 ```
 
 **注意**: `--body "..."` は使わない（改行が失われるため）。必ず `--body-file` を使う。

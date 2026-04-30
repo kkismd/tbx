@@ -66,19 +66,19 @@ git checkout -b issue/N-short-description
 
 ### ステップ6：Pull Requestの作成
 
-コミットメッセージ・PR bodyの書き出しは `$(git rev-parse --git-dir)/` を使う。
+コミットメッセージ・PR bodyの書き出しは `.tmp/` を使う。
 
 ```bash
 git add blueprint.md blueprint-language.md blueprint-compiler.md
 
-cat > "$(git rev-parse --git-dir)/COMMIT_MSG" << 'EOF'
+cat > ".tmp/COMMIT_MSG" << 'EOF'
 コミットメッセージ本文（日本語）
 EOF
-git commit -F "$(git rev-parse --git-dir)/COMMIT_MSG"
+git commit -F ".tmp/COMMIT_MSG"
 
 git push -u origin issue/N-short-description
 
-cat > "$(git rev-parse --git-dir)/PR_BODY.md" << 'EOF'
+cat > ".tmp/PR_BODY.md" << 'EOF'
 ## 概要
 
 （変更の要約）
@@ -91,7 +91,7 @@ Closes #N
 EOF
 gh pr create \
   --title "docs: タイトル" \
-  --body-file "$(git rev-parse --git-dir)/PR_BODY.md" \
+  --body-file ".tmp/PR_BODY.md" \
   --base main
 ```
 
