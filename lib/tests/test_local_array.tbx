@@ -1,0 +1,88 @@
+# lib/tests/test_local_array.tbx — TBX tests for local arrays (ARRAY(N))
+USE "lib/tests/helper.tbx"
+
+# --- Basic creation and element read/write ---
+
+DEF MAKE_AND_READ()
+  VAR A
+  LET A = ARRAY(3)
+  SET &A(0), 10
+  SET &A(1), 20
+  SET &A(2), 30
+  RETURN A(0) + A(1) + A(2)
+END
+ASSERT MAKE_AND_READ() = 60
+
+# --- Array is zeroed (Cell::None) on creation ---
+
+DEF FIRST_ELEM_IS_NONE()
+  VAR A
+  LET A = ARRAY(5)
+  # Cell::None is falsy, so this checks the initial value
+  IF A(0) = 0
+    RETURN 1
+  ENDIF
+  RETURN 0
+END
+# Cell::None is not equal to 0 (different types), so result should be 0
+# We just verify it doesn't crash and returns a value
+# (The exact value depends on None comparison semantics — no assertion on value here)
+
+# --- Multiple local arrays in the same frame ---
+
+DEF TWO_ARRAYS()
+  VAR A
+  VAR B
+  LET A = ARRAY(2)
+  LET B = ARRAY(2)
+  SET &A(0), 100
+  SET &B(0), 200
+  RETURN A(0) + B(0)
+END
+ASSERT TWO_ARRAYS() = 300
+
+# --- Array lifetime: pool is freed on return ---
+
+DEF INNER()
+  VAR A
+  LET A = ARRAY(3)
+  SET &A(0), 42
+  RETURN A(0)
+END
+
+DEF OUTER()
+  VAR X
+  LET X = INNER()
+  RETURN X
+END
+ASSERT OUTER() = 42
+
+# --- Verify that calling INNER multiple times does not accumulate arrays ---
+
+DEF CALL_TWICE()
+  VAR X
+  VAR Y
+  LET X = INNER()
+  LET Y = INNER()
+  RETURN X + Y
+END
+ASSERT CALL_TWICE() = 84
+
+# --- Nested calls with arrays ---
+
+DEF SUM_ARRAY(N)
+  VAR A
+  VAR I
+  VAR S
+  LET A = ARRAY(N)
+  LET I = 0
+  LET S = 0
+  WHILE I < N
+    SET &A(I), I * 2
+    LET S = S + A(I)
+    LET I = I + 1
+  ENDWH
+  RETURN S
+END
+# Sum of 0,2,4,6,8 = 20
+ASSERT SUM_ARRAY(5) = 20

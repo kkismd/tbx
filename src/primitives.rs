@@ -50,6 +50,22 @@ pub fn fetch_prim(vm: &mut VM) -> Result<(), TbxError> {
             vm.push(value)?;
             Ok(())
         }
+        Cell::ArrayAddr { pool_idx, elem_idx } => {
+            let arr = vm.arrays.get(pool_idx).ok_or(TbxError::IndexOutOfBounds {
+                index: pool_idx,
+                size: vm.arrays.len(),
+            })?;
+            let size = arr.len();
+            if elem_idx >= size {
+                return Err(TbxError::ArrayIndexOutOfBounds {
+                    index: elem_idx as i64,
+                    size,
+                });
+            }
+            let value = arr[elem_idx].clone();
+            vm.push(value)?;
+            Ok(())
+        }
         _ => Err(TbxError::TypeError {
             expected: "address",
             got: "non-address",
@@ -65,12 +81,19 @@ pub fn store_prim(vm: &mut VM) -> Result<(), TbxError> {
     let value = vm.pop()?;
     match addr {
         Cell::DictAddr(a) => {
+            // Guard: local arrays must not escape into global (dictionary) storage.
+            if matches!(value, Cell::Array(_)) {
+                return Err(TbxError::LocalArrayEscape);
+            }
             vm.dict_write_at(a, value)?;
             Ok(())
         }
         Cell::StackAddr(a) => {
             vm.local_write(a, value)?;
             Ok(())
+        }
+        Cell::ArrayAddr { pool_idx, elem_idx } => {
+            write_array_element(vm, pool_idx, elem_idx, value)
         }
         _ => Err(TbxError::TypeError {
             expected: "address",
@@ -89,6 +112,10 @@ pub fn set_prim(vm: &mut VM) -> Result<(), TbxError> {
     let addr = vm.pop()?;
     match addr {
         Cell::DictAddr(a) => {
+            // Guard: local arrays must not escape into global (dictionary) storage.
+            if matches!(value, Cell::Array(_)) {
+                return Err(TbxError::LocalArrayEscape);
+            }
             vm.dict_write_at(a, value)?;
             Ok(())
         }
@@ -96,11 +123,40 @@ pub fn set_prim(vm: &mut VM) -> Result<(), TbxError> {
             vm.local_write(a, value)?;
             Ok(())
         }
+        Cell::ArrayAddr { pool_idx, elem_idx } => {
+            write_array_element(vm, pool_idx, elem_idx, value)
+        }
         _ => Err(TbxError::TypeError {
             expected: "address",
             got: "non-address",
         }),
     }
+}
+
+/// Write `value` to element `elem_idx` of the local array at `pool_idx`.
+fn write_array_element(
+    vm: &mut VM,
+    pool_idx: usize,
+    elem_idx: usize,
+    value: Cell,
+) -> Result<(), TbxError> {
+    let pool_size = vm.arrays.len();
+    let arr = vm
+        .arrays
+        .get_mut(pool_idx)
+        .ok_or(TbxError::IndexOutOfBounds {
+            index: pool_idx,
+            size: pool_size,
+        })?;
+    let size = arr.len();
+    if elem_idx >= size {
+        return Err(TbxError::ArrayIndexOutOfBounds {
+            index: elem_idx as i64,
+            size,
+        });
+    }
+    arr[elem_idx] = value;
+    Ok(())
 }
 
 pub fn add_prim(vm: &mut VM) -> Result<(), TbxError> {
@@ -1026,6 +1082,101 @@ pub fn dim_prim(vm: &mut VM) -> Result<(), TbxError> {
     Ok(())
 }
 
+/// ARRAY — create a local array of N elements and push its handle onto the stack.
+///
+/// Pops `Cell::Int(n)` from the stack (n > 0), pushes `n` `Cell::None` elements
+/// into `vm.arrays`, and pushes `Cell::Array(pool_idx)` as the handle.
+///
+/// The array is bound to the current stack frame: it is freed automatically when
+/// the owning word returns (EXIT/RETURN_VAL truncates the pool).
+pub fn array_prim(vm: &mut VM) -> Result<(), TbxError> {
+    let n = vm.pop_int()?;
+    if n <= 0 {
+        return Err(TbxError::InvalidArgument {
+            message: format!("ARRAY size must be positive, got {n}"),
+        });
+    }
+    let size = n as usize;
+    let idx = vm.arrays.len();
+    vm.arrays.push(vec![Cell::None; size]);
+    vm.push(Cell::Array(idx))?;
+    Ok(())
+}
+
+/// ARRAY_GET — read an element from a local array.
+///
+/// Stack: `[..., Cell::Array(pool_idx), Cell::Int(elem_idx)]` → `value`
+pub fn array_get_prim(vm: &mut VM) -> Result<(), TbxError> {
+    let elem_idx_raw = vm.pop_int()?;
+    let pool_idx = match vm.pop()? {
+        Cell::Array(idx) => idx,
+        other => {
+            return Err(TbxError::TypeError {
+                expected: "Array",
+                got: other.type_name(),
+            })
+        }
+    };
+    if elem_idx_raw < 0 {
+        return Err(TbxError::ArrayIndexOutOfBounds {
+            index: elem_idx_raw,
+            size: vm.arrays.get(pool_idx).map(|a| a.len()).unwrap_or(0),
+        });
+    }
+    let elem_idx = elem_idx_raw as usize;
+    let arr = vm.arrays.get(pool_idx).ok_or(TbxError::IndexOutOfBounds {
+        index: pool_idx,
+        size: vm.arrays.len(),
+    })?;
+    let size = arr.len();
+    if elem_idx >= size {
+        return Err(TbxError::ArrayIndexOutOfBounds {
+            index: elem_idx_raw,
+            size,
+        });
+    }
+    let value = arr[elem_idx].clone();
+    vm.push(value)?;
+    Ok(())
+}
+
+/// ARRAY_ADDR — compute the address of a local array element.
+///
+/// Stack: `[..., Cell::Array(pool_idx), Cell::Int(elem_idx)]` → `Cell::ArrayAddr { pool_idx, elem_idx }`
+pub fn array_addr_prim(vm: &mut VM) -> Result<(), TbxError> {
+    let elem_idx_raw = vm.pop_int()?;
+    let pool_idx = match vm.pop()? {
+        Cell::Array(idx) => idx,
+        other => {
+            return Err(TbxError::TypeError {
+                expected: "Array",
+                got: other.type_name(),
+            })
+        }
+    };
+    if elem_idx_raw < 0 {
+        return Err(TbxError::ArrayIndexOutOfBounds {
+            index: elem_idx_raw,
+            size: vm.arrays.get(pool_idx).map(|a| a.len()).unwrap_or(0),
+        });
+    }
+    let elem_idx = elem_idx_raw as usize;
+    // Validate bounds at address-computation time.
+    let arr = vm.arrays.get(pool_idx).ok_or(TbxError::IndexOutOfBounds {
+        index: pool_idx,
+        size: vm.arrays.len(),
+    })?;
+    let size = arr.len();
+    if elem_idx >= size {
+        return Err(TbxError::ArrayIndexOutOfBounds {
+            index: elem_idx_raw,
+            size,
+        });
+    }
+    vm.push(Cell::ArrayAddr { pool_idx, elem_idx })?;
+    Ok(())
+}
+
 /// CS_PUSH — move a value from the data stack to the compile stack.
 ///
 /// Must be called in compile mode (inside an IMMEDIATE word invocation).
@@ -1809,6 +1960,17 @@ pub fn register_all(vm: &mut VM) {
         "COMPILE_LVALUE_SAVE",
         compile_lvalue_save_prim,
     ));
+
+    // Local array primitives.
+    // ARRAY creates a local array; ARRAY_GET reads an element; ARRAY_ADDR computes
+    // an element address (used internally by the expression compiler for `A(I)` and `&A(I)`).
+    vm.register(WordEntry::new_primitive("ARRAY", array_prim));
+    let mut array_get_entry = WordEntry::new_primitive("ARRAY_GET", array_get_prim);
+    array_get_entry.flags = FLAG_SYSTEM;
+    vm.register(array_get_entry);
+    let mut array_addr_entry = WordEntry::new_primitive("ARRAY_ADDR", array_addr_prim);
+    array_addr_entry.flags = FLAG_SYSTEM;
+    vm.register(array_addr_entry);
 }
 
 #[cfg(test)]
@@ -5170,5 +5332,184 @@ mod tests {
         accept_prim(&mut vm).unwrap();
         getdec_prim(&mut vm).unwrap();
         assert_eq!(vm.pop(), Ok(Cell::Int(123)));
+    }
+
+    // --- array_prim ---
+
+    #[test]
+    fn test_array_prim_creates_array() {
+        let mut vm = VM::new();
+        vm.push(Cell::Int(3)).unwrap();
+        array_prim(&mut vm).unwrap();
+        // Stack should contain Cell::Array(0) — first pool slot.
+        assert_eq!(vm.pop(), Ok(Cell::Array(0)));
+        // The pool should have one entry of length 3.
+        assert_eq!(vm.arrays.len(), 1);
+        assert_eq!(vm.arrays[0].len(), 3);
+    }
+
+    #[test]
+    fn test_array_prim_initialises_to_none() {
+        let mut vm = VM::new();
+        vm.push(Cell::Int(2)).unwrap();
+        array_prim(&mut vm).unwrap();
+        vm.pop().unwrap(); // discard handle
+        assert_eq!(vm.arrays[0][0], Cell::None);
+        assert_eq!(vm.arrays[0][1], Cell::None);
+    }
+
+    #[test]
+    fn test_array_prim_size_zero_returns_error() {
+        let mut vm = VM::new();
+        vm.push(Cell::Int(0)).unwrap();
+        assert!(matches!(
+            array_prim(&mut vm),
+            Err(TbxError::InvalidArgument { .. })
+        ));
+    }
+
+    #[test]
+    fn test_array_prim_negative_size_returns_error() {
+        let mut vm = VM::new();
+        vm.push(Cell::Int(-1)).unwrap();
+        assert!(matches!(
+            array_prim(&mut vm),
+            Err(TbxError::InvalidArgument { .. })
+        ));
+    }
+
+    #[test]
+    fn test_array_prim_multiple_arrays_get_distinct_indices() {
+        let mut vm = VM::new();
+        vm.push(Cell::Int(2)).unwrap();
+        array_prim(&mut vm).unwrap();
+        vm.push(Cell::Int(4)).unwrap();
+        array_prim(&mut vm).unwrap();
+        let second = vm.pop().unwrap();
+        let first = vm.pop().unwrap();
+        assert_eq!(first, Cell::Array(0));
+        assert_eq!(second, Cell::Array(1));
+    }
+
+    // --- array_get_prim ---
+
+    #[test]
+    fn test_array_get_prim_reads_element() {
+        let mut vm = VM::new();
+        vm.arrays
+            .push(vec![Cell::Int(10), Cell::Int(20), Cell::Int(30)]);
+        vm.push(Cell::Array(0)).unwrap();
+        vm.push(Cell::Int(1)).unwrap();
+        array_get_prim(&mut vm).unwrap();
+        assert_eq!(vm.pop(), Ok(Cell::Int(20)));
+    }
+
+    #[test]
+    fn test_array_get_prim_out_of_bounds() {
+        let mut vm = VM::new();
+        vm.arrays.push(vec![Cell::Int(1)]);
+        vm.push(Cell::Array(0)).unwrap();
+        vm.push(Cell::Int(5)).unwrap();
+        assert!(matches!(
+            array_get_prim(&mut vm),
+            Err(TbxError::ArrayIndexOutOfBounds { index: 5, size: 1 })
+        ));
+    }
+
+    #[test]
+    fn test_array_get_prim_negative_index() {
+        let mut vm = VM::new();
+        vm.arrays.push(vec![Cell::Int(1)]);
+        vm.push(Cell::Array(0)).unwrap();
+        vm.push(Cell::Int(-1)).unwrap();
+        assert!(matches!(
+            array_get_prim(&mut vm),
+            Err(TbxError::ArrayIndexOutOfBounds { index: -1, .. })
+        ));
+    }
+
+    // --- array_addr_prim ---
+
+    #[test]
+    fn test_array_addr_prim_pushes_array_addr() {
+        let mut vm = VM::new();
+        vm.arrays.push(vec![Cell::Int(0), Cell::Int(0)]);
+        vm.push(Cell::Array(0)).unwrap();
+        vm.push(Cell::Int(1)).unwrap();
+        array_addr_prim(&mut vm).unwrap();
+        assert_eq!(
+            vm.pop(),
+            Ok(Cell::ArrayAddr {
+                pool_idx: 0,
+                elem_idx: 1
+            })
+        );
+    }
+
+    // --- store_prim with LocalArrayEscape guard ---
+
+    #[test]
+    fn test_store_local_array_to_dict_addr_is_escape_error() {
+        let mut vm = VM::new();
+        vm.dictionary.push(Cell::None); // dict[0] = placeholder
+                                        // Try to store Cell::Array(0) into a global variable slot.
+        vm.push(Cell::Array(0)).unwrap(); // value
+        vm.push(Cell::DictAddr(0)).unwrap(); // address
+        assert_eq!(store_prim(&mut vm), Err(TbxError::LocalArrayEscape));
+    }
+
+    #[test]
+    fn test_set_local_array_to_dict_addr_is_escape_error() {
+        let mut vm = VM::new();
+        vm.dictionary.push(Cell::None); // dict[0] = placeholder
+                                        // set_prim: stack is [..., addr, value]
+        vm.push(Cell::DictAddr(0)).unwrap(); // address
+        vm.push(Cell::Array(0)).unwrap(); // value
+        assert_eq!(set_prim(&mut vm), Err(TbxError::LocalArrayEscape));
+    }
+
+    // --- store/set to ArrayAddr ---
+
+    #[test]
+    fn test_store_to_array_addr() {
+        let mut vm = VM::new();
+        vm.arrays.push(vec![Cell::None, Cell::None]);
+        vm.push(Cell::Int(99)).unwrap();
+        vm.push(Cell::ArrayAddr {
+            pool_idx: 0,
+            elem_idx: 1,
+        })
+        .unwrap();
+        store_prim(&mut vm).unwrap();
+        assert_eq!(vm.arrays[0][1], Cell::Int(99));
+    }
+
+    #[test]
+    fn test_set_to_array_addr() {
+        let mut vm = VM::new();
+        vm.arrays.push(vec![Cell::None, Cell::None]);
+        vm.push(Cell::ArrayAddr {
+            pool_idx: 0,
+            elem_idx: 0,
+        })
+        .unwrap();
+        vm.push(Cell::Int(42)).unwrap();
+        set_prim(&mut vm).unwrap();
+        assert_eq!(vm.arrays[0][0], Cell::Int(42));
+    }
+
+    // --- fetch_prim with ArrayAddr ---
+
+    #[test]
+    fn test_fetch_array_addr() {
+        let mut vm = VM::new();
+        vm.arrays.push(vec![Cell::Int(77)]);
+        vm.push(Cell::ArrayAddr {
+            pool_idx: 0,
+            elem_idx: 0,
+        })
+        .unwrap();
+        fetch_prim(&mut vm).unwrap();
+        assert_eq!(vm.pop(), Ok(Cell::Int(77)));
     }
 }

@@ -161,6 +161,14 @@ pub enum TbxError {
         /// Human-readable description of the I/O error.
         reason: String,
     },
+    /// A local array value escaped its owning stack frame.
+    ///
+    /// Local arrays (created with `ARRAY(N)`) are bound to the stack frame in
+    /// which they were created.  Attempting to store a `Cell::Array` value into
+    /// a global variable (via `DictAddr`) or return it from a word (via
+    /// `RETURN`) is forbidden, because the array pool is truncated on EXIT and
+    /// the stored index would dangle.
+    LocalArrayEscape,
 }
 
 impl std::fmt::Display for TbxError {
@@ -269,6 +277,9 @@ impl std::fmt::Display for TbxError {
             }
             TbxError::OutputIoError { reason } => {
                 write!(f, "ACCEPT: I/O error flushing output: {reason}")
+            }
+            TbxError::LocalArrayEscape => {
+                write!(f, "local array cannot escape its owning stack frame")
             }
         }
     }

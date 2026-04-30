@@ -43,7 +43,14 @@ impl Xt {
 /// Return frame for the return stack, saving the program counter and base pointer
 #[derive(Debug, Clone)]
 pub enum ReturnFrame {
-    Call { return_pc: usize, saved_bp: usize },
+    Call {
+        return_pc: usize,
+        saved_bp: usize,
+        /// Snapshot of `VM::arrays.len()` taken at call time.
+        /// On EXIT or RETURN_VAL, the array pool is truncated back to this
+        /// length to free all local arrays created during the call.
+        saved_array_pool_len: usize,
+    },
     TopLevel, // Sentinel value for the bottom of the return stack
 }
 
@@ -67,8 +74,22 @@ pub enum Cell {
     Bool(bool),
     /// Index into the string pool (length-prefixed)
     StringDesc(usize),
-    /// Reserved for future array support
-    Array,
+    /// Local array — index into `VM::arrays` (the local array pool).
+    ///
+    /// Created by the `ARRAY(N)` primitive.  The pool entry at this index holds
+    /// a `Vec<Cell>` of length N.  The pool is truncated on EXIT/RETURN_VAL, so
+    /// `Cell::Array` values must never escape their owning stack frame.
+    Array(usize),
+    /// Address of an element in a local array.
+    ///
+    /// Produced by the `&A(I)` construct where `A` holds a `Cell::Array`.
+    /// Used by `FETCH`, `STORE`, and `SET` to read/write individual elements.
+    ArrayAddr {
+        /// Index into `VM::arrays` (the local array pool).
+        pool_idx: usize,
+        /// Zero-based element index within the array.
+        elem_idx: usize,
+    },
     None,
     /// Sentinel value placed on the data stack to mark a statement boundary.
     /// Consumed by DROP_TO_MARKER to restore the stack after a statement call.
@@ -99,7 +120,10 @@ impl std::fmt::Display for Cell {
             Cell::Xt(x) => write!(f, "xt:{}", x.0),
             Cell::Bool(b) => write!(f, "{}", b),
             Cell::StringDesc(i) => write!(f, "str:{}", i),
-            Cell::Array => write!(f, "<array>"),
+            Cell::Array(idx) => write!(f, "<array:{}>", idx),
+            Cell::ArrayAddr { pool_idx, elem_idx } => {
+                write!(f, "<arrayaddr:{}[{}]>", pool_idx, elem_idx)
+            }
             Cell::None => write!(f, "<none>"),
             Cell::Marker => write!(f, "<marker>"),
         }
@@ -170,6 +194,15 @@ impl Cell {
         }
     }
 
+    /// Returns the pool index if this cell is `Array`, otherwise `None`.
+    pub fn as_array_index(&self) -> Option<usize> {
+        if let Cell::Array(idx) = self {
+            Some(*idx)
+        } else {
+            None
+        }
+    }
+
     /// Returns a static string naming the variant. Useful for error messages and debugging.
     pub fn type_name(&self) -> &'static str {
         match self {
@@ -180,7 +213,8 @@ impl Cell {
             Cell::Xt(_) => "Xt",
             Cell::Bool(_) => "Bool",
             Cell::StringDesc(_) => "StringDesc",
-            Cell::Array => "Array",
+            Cell::Array(_) => "Array",
+            Cell::ArrayAddr { .. } => "ArrayAddr",
             Cell::None => "None",
             Cell::Marker => "Marker",
         }
@@ -216,7 +250,17 @@ impl PartialEq for Cell {
             (Cell::Xt(a), Cell::Xt(b)) => a == b,
             (Cell::Bool(a), Cell::Bool(b)) => a == b,
             (Cell::None, Cell::None) => true,
-            (Cell::Array, Cell::Array) => true,
+            (Cell::Array(a), Cell::Array(b)) => a == b,
+            (
+                Cell::ArrayAddr {
+                    pool_idx: pa,
+                    elem_idx: ea,
+                },
+                Cell::ArrayAddr {
+                    pool_idx: pb,
+                    elem_idx: eb,
+                },
+            ) => pa == pb && ea == eb,
             (Cell::StringDesc(a), Cell::StringDesc(b)) => a == b,
             _ => false,
         }
@@ -298,7 +342,16 @@ mod tests {
 
     #[test]
     fn test_display_array() {
-        assert_eq!(Cell::Array.to_string(), "<array>");
+        assert_eq!(Cell::Array(0).to_string(), "<array:0>");
+        assert_eq!(Cell::Array(42).to_string(), "<array:42>");
+        assert_eq!(
+            Cell::ArrayAddr {
+                pool_idx: 3,
+                elem_idx: 7
+            }
+            .to_string(),
+            "<arrayaddr:3[7]>"
+        );
     }
 
     #[test]
@@ -362,7 +415,7 @@ mod tests {
         assert_eq!(Cell::Xt(Xt(0)).type_name(), "Xt");
         assert_eq!(Cell::Bool(false).type_name(), "Bool");
         assert_eq!(Cell::None.type_name(), "None");
-        assert_eq!(Cell::Array.type_name(), "Array");
+        assert_eq!(Cell::Array(0).type_name(), "Array");
         assert_eq!(Cell::StringDesc(0).type_name(), "StringDesc");
     }
 
@@ -379,7 +432,7 @@ mod tests {
         assert!(!Cell::Float(0.0).is_truthy());
         // non-Int/Bool/Float variants are falsy
         assert!(!Cell::None.is_truthy());
-        assert!(!Cell::Array.is_truthy());
+        assert!(!Cell::Array(0).is_truthy());
         assert!(!Cell::DictAddr(1).is_truthy());
         assert!(!Cell::StackAddr(1).is_truthy());
     }
