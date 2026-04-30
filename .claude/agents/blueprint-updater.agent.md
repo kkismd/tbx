@@ -71,6 +71,7 @@ git checkout -b issue/N-short-description
 ```bash
 git add blueprint.md blueprint-language.md blueprint-compiler.md
 
+mkdir -p .tmp
 cat > ".tmp/COMMIT_MSG" << 'EOF'
 コミットメッセージ本文（日本語）
 EOF
@@ -78,6 +79,7 @@ git commit -F ".tmp/COMMIT_MSG"
 
 git push -u origin issue/N-short-description
 
+mkdir -p .tmp
 cat > ".tmp/PR_BODY.md" << 'EOF'
 ## 概要
 

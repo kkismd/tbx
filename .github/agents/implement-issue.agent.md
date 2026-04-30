@@ -145,6 +145,7 @@ INSERT OR REPLACE INTO session_state (key, value) VALUES ('review_before_review_
          # LOOP_COUNT には SQL の SELECT 結果（整数）を代入する
          # 例: loop_count が 1 の場合 → LOOP_COUNT=1
          LOOP_COUNT=<SQLで取得した数値>
+         mkdir -p .tmp
          printf 'レビュー指摘の修正 (%d回目)\n\nCo-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>\n' "$LOOP_COUNT" \
            > ".tmp/COMMIT_MSG"
          git commit -F ".tmp/COMMIT_MSG"
@@ -171,6 +172,7 @@ INSERT OR REPLACE INTO session_state (key, value) VALUES ('review_before_review_
 
 4. **🔴/🟡 が含まれる場合のみ**、`gh pr comment` で未解消一覧をPRにコメント追加する：
    ```bash
+   mkdir -p .tmp
    cat > ".tmp/UNRESOLVED_COMMENT.md" << 'EOF'
    ## ⚠️ 未解消の指摘
 

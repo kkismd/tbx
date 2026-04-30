@@ -51,6 +51,7 @@ issueに記載された課題について設計の選択肢を提示し、ユー
 コメントの投稿は以下の手順で行う：
 
 ```bash
+mkdir -p .tmp
 cat > ".tmp/SPEC_COMMENT.md" << 'EOF'
 （作成したコメントのMarkdown）
 EOF

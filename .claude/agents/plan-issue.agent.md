@@ -62,7 +62,8 @@ issueやblueprint.mdに記載のない仕様・実装判断については「未
 計画を以下の手順でissueコメントとして投稿する：
 
 ```bash
-# 計画をファイルに書き出す（git管理ディレクトリ配下を使う）
+# 計画をファイルに書き出す（プロジェクトルートの .tmp を使用）
+mkdir -p .tmp
 cat > ".tmp/PLAN_COMMENT.md" << 'EOF'
 （作成した計画のMarkdown）
 EOF

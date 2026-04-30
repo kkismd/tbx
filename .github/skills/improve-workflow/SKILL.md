@@ -39,11 +39,12 @@ git checkout -b improve/short-description
 ### 2. 変更をステージしてコミットする
 
 コミットメッセージは `.tmp/COMMIT_MSG` に書き出し、`-F` オプションで渡す。
-Gitが管理するパスのため、プロジェクト外の `/tmp` を使う必要はない。
+プロジェクトルートの `.tmp/` はバージョン管理対象外（`.gitignore` 済み）のため、安全に利用できる。
 
 ```bash
 git add <ファイル>
 
+mkdir -p .tmp
 cat > ".tmp/COMMIT_MSG" << 'EOF'
 コミットメッセージ本文（日本語）
 
@@ -62,9 +63,10 @@ git push -u origin <ブランチ名>
 ### 4. Pull Requestを作成する
 
 PRのdescriptionは **必ず `--body-file` オプション** でファイルを渡す。
-PR bodyは `.tmp/PR_BODY.md` に書き出す（プロジェクト外の `/tmp` は使わない）。
+PR bodyは `.tmp/PR_BODY.md` に書き出す。
 
 ```bash
+mkdir -p .tmp
 cat > ".tmp/PR_BODY.md" << 'EOF'
 ## 概要
 
@@ -89,5 +91,5 @@ gh pr create \
 ### 注意点
 
 - `--body "..."` は使わない（`\n` がエスケープされず改行にならない）
-- 一時ファイルは `.tmp/` 配下に書く（`/tmp` などプロジェクト外は使わない）
+- 一時ファイルは `.tmp/` 配下に書く（事前作成が必要な場合は `mkdir -p .tmp` を行う）
 - issueと紐づかない場合は `Closes #N` は不要

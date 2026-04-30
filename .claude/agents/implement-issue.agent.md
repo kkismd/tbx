@@ -114,6 +114,7 @@ PR作成が完了したら、ユーザーへの報告より先に修正サイク
          ```bash
          git add -A
          LOOP_COUNT=<コンテキスト内のloop_count>
+         mkdir -p .tmp
          printf 'レビュー指摘の修正 (%d回目)\n' "$LOOP_COUNT" \
            > ".tmp/COMMIT_MSG"
          git commit -F ".tmp/COMMIT_MSG"
@@ -136,6 +137,7 @@ PR作成が完了したら、ユーザーへの報告より先に修正サイク
 
 4. **🔴/🟡 が含まれる場合のみ**、`gh pr comment` で未解消一覧をPRにコメント追加する：
    ```bash
+   mkdir -p .tmp
    cat > ".tmp/UNRESOLVED_COMMENT.md" << 'EOF'
    ## ⚠️ 未解消の指摘
 
