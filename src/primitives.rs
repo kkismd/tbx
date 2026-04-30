@@ -1481,6 +1481,14 @@ fn skip_eq_prim(vm: &mut VM) -> Result<(), TbxError> {
     }
 }
 
+/// LOOKUP — pop a string from the stack, look up the named word, and push its Xt.
+fn lookup_prim(vm: &mut VM) -> Result<(), TbxError> {
+    let idx = vm.pop_string_desc()?;
+    let name = vm.resolve_string(idx)?;
+    let xt = vm.lookup(&name).ok_or(TbxError::UndefinedSymbol { name })?;
+    vm.push(Cell::Xt(xt))
+}
+
 /// USE — load and execute a TBX source file at compile time.
 ///
 /// Syntax: `USE "path/to/file.tbx"`
@@ -1775,13 +1783,9 @@ pub fn register_all(vm: &mut VM) {
     ));
     vm.register(WordEntry::new_primitive("SKIP_EQ", skip_eq_prim));
 
-    // ASSIGN_XT: constant holding the Xt of the SET primitive.
-    // Allows TBX compile words to emit a SET instruction via `APPEND ASSIGN_XT`,
-    // analogous to JUMP_FALSE/JUMP_TRUE/JUMP_ALWAYS for branch instructions.
-    let set_xt = vm
-        .lookup("SET")
-        .expect("SET primitive must be registered before ASSIGN_XT");
-    vm.register(WordEntry::new_constant("ASSIGN_XT", Cell::Xt(set_xt)));
+    // LOOKUP: look up a word by name string and push its Xt.
+    // Replaces the xxx_XT constant pattern: `APPEND LOOKUP("SET")` instead of `APPEND ASSIGN_XT`.
+    vm.register(WordEntry::new_primitive("LOOKUP", lookup_prim));
 
     // FOR/NEXT compile-helper primitives.
     // These are used inside IMMEDIATE word bodies (FOR, NEXT) defined in basic.tbx.
@@ -1790,23 +1794,6 @@ pub fn register_all(vm: &mut VM) {
         "COMPILE_LVALUE_SAVE",
         compile_lvalue_save_prim,
     ));
-
-    // Runtime Xt constants for arithmetic/comparison instructions used by FOR/NEXT.
-    // Analogous to ASSIGN_XT (SET) and JUMP_FALSE/JUMP_ALWAYS for control flow.
-    let fetch_xt = vm
-        .lookup("FETCH")
-        .expect("FETCH primitive must be registered before FETCH_XT");
-    vm.register(WordEntry::new_constant("FETCH_XT", Cell::Xt(fetch_xt)));
-
-    let add_xt = vm
-        .lookup("ADD")
-        .expect("ADD primitive must be registered before ADD_XT");
-    vm.register(WordEntry::new_constant("ADD_XT", Cell::Xt(add_xt)));
-
-    let le_xt = vm
-        .lookup("LE")
-        .expect("LE primitive must be registered before LE_XT");
-    vm.register(WordEntry::new_constant("LE_XT", Cell::Xt(le_xt)));
 }
 
 #[cfg(test)]
