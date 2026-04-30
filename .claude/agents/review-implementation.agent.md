@@ -115,25 +115,17 @@ Critical / Warning の問題および Info の気づきを以下の2段階で記
 
 **投稿は2種類に分けて行う**:
 
-**① Critical / Warning のまとめ投稿**（`gh pr review`）
+**① Critical / Warning のまとめ投稿**（`gh pr comment`）
 
-Critical / Warning の指摘をまとめて1件のレビューとして投稿する。
+Critical / Warning の指摘をまとめて1件のコメントとして投稿する。
 
 ```bash
 cat > "$(git rev-parse --git-dir)/REVIEW_BODY.md" << 'EOF'
 （Critical / Warning の指摘内容。各指摘を上記フォーマットで並べる）
 EOF
 
-gh pr review <PR番号> --request-changes --body-file "$(git rev-parse --git-dir)/REVIEW_BODY.md"
-# Critical がない場合は --request-changes の代わりに --comment を使う
+gh pr comment <PR番号> --body-file "$(git rev-parse --git-dir)/REVIEW_BODY.md"
 ```
-
-> **注意**: `implement-issue` エージェントと同じユーザートークンで動作している場合、GitHubの制約により「PRの作成者は自分のPRをレビューできない」エラー（`GraphQL: Can't request changes on your own pull request`）が発生する。その場合は **同じ REVIEW_BODY.md をそのまま使って** 以下にフォールバックする（フォールバック時は通常コメントになるため変更要求の強度は失われる）。
->
-> ```bash
-> # フォールバック: 通常コメントとして投稿（Critical/Warning まとめて1件、同じ REVIEW_BODY.md を再利用）
-> gh pr comment <PR番号> --body-file "$(git rev-parse --git-dir)/REVIEW_BODY.md"
-> ```
 
 **② Info の投稿**（`gh pr comment`）
 

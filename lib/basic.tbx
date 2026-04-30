@@ -177,7 +177,7 @@ REM  body repeats while var <= end; after each iteration var is incremented by 1
 REM  Start and step are fixed at 1.  Use WHILE for non-unit steps or 0-based ranges.
 REM
 REM  Compile stack after FOR (tag-last layout):
-REM    [Tag("FOR"), BIF_placeholder, var_addr, A_addr]
+REM    [Tag("FOR"), var_addr, BIF_placeholder, A_addr]
 REM    A_addr          = DictAddr of loop-condition start (back-jump target for NEXT)
 REM    var_addr        = address of the loop variable (for increment code in NEXT)
 REM    BIF_placeholder = DictAddr of the JUMP_FALSE operand cell (patched by NEXT)
@@ -194,8 +194,8 @@ REM    <end_expr>
 REM    LE                       -- var <= end ?
 REM    BIF D                    -- exit loop if false
 REM    <body>
-REM    LIT addr_of_var          -- increment: var += 1
-REM    LIT addr_of_var
+REM    LIT addr_of_var          -- SET destination (increment: var += 1)
+REM    LIT addr_of_var          -- FETCH source
 REM    FETCH
 REM    LIT 1
 REM    ADD
