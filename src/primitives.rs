@@ -1544,12 +1544,12 @@ pub fn accept_prim(vm: &mut VM) -> Result<(), TbxError> {
         let pending = std::mem::take(&mut vm.output_buffer);
         vm.output_writer
             .write_all(pending.as_bytes())
-            .map_err(|e| TbxError::InputIoError {
+            .map_err(|e| TbxError::OutputIoError {
                 reason: e.to_string(),
             })?;
         vm.output_writer
             .flush()
-            .map_err(|e| TbxError::InputIoError {
+            .map_err(|e| TbxError::OutputIoError {
                 reason: e.to_string(),
             })?;
     }
