@@ -170,35 +170,23 @@ DEF LET
 END
 IMMEDIATE LET
 
-REM FOR &varref, start, end, step ... NEXT
+REM FOR &varref, end ... NEXT
 REM
-REM  Implements a counted loop: the loop variable is initialised to start, and the
-REM  body repeats while var <= end; after each iteration var is incremented by step.
-REM  Only positive step values are supported (step > 0 is assumed).
+REM  Implements a counted loop: the loop variable is initialised to 1, and the
+REM  body repeats while var <= end; after each iteration var is incremented by 1.
+REM  Start and step are fixed at 1.  Use WHILE for non-unit steps or 0-based ranges.
 REM
-REM  The start, end, and step expressions are all compiled eagerly during FOR
-REM  processing.  end and step are saved as CompiledCells on the compile stack and
-REM  emitted in the correct order.  A forward JUMP_ALWAYS skips the step code on
-REM  the first iteration.
-REM
-REM  Compile stack after FOR:
-REM    [S, BIF_placeholder, Tag("FOR")]
-REM    S               = DictAddr of step-code start (back-jump target for NEXT)
+REM  Compile stack after FOR (tag-last layout):
+REM    [Tag("FOR"), var_addr, BIF_placeholder, A_addr]
+REM    A_addr          = DictAddr of loop-condition start (back-jump target for NEXT)
+REM    var_addr        = address of the loop variable (for increment code in NEXT)
 REM    BIF_placeholder = DictAddr of the JUMP_FALSE operand cell (patched by NEXT)
 REM    Tag("FOR")      = scope tag (tag-last layout)
 REM
-REM  Generated instruction sequence:
+REM  Generated instruction sequence (check-first):
 REM    LIT addr_of_var
-REM    <start_expr>
-REM    SET                      -- var = start
-REM    JUMP_ALWAYS A            -- skip step code on first entry
-REM  S:
-REM    LIT addr_of_var          -- step update code
-REM    FETCH
-REM    <step_expr>
-REM    ADD                      -- var + step
-REM    LIT addr_of_var
-REM    SET                      -- var = var + step
+REM    LIT 1
+REM    SET                      -- var = 1 (fixed)
 REM  A:
 REM    LIT addr_of_var
 REM    FETCH                    -- push current var value
@@ -206,63 +194,39 @@ REM    <end_expr>
 REM    LE                       -- var <= end ?
 REM    BIF D                    -- exit loop if false
 REM    <body>
-REM    JUMP_ALWAYS S            -- back-jump to step update
+REM    LIT addr_of_var          -- SET destination (increment: var += 1)
+REM    LIT addr_of_var          -- FETCH source
+REM    FETCH
+REM    LIT 1
+REM    ADD
+REM    SET
+REM    JUMP_ALWAYS A
 REM  D:
 
 DEF FOR
-  REM Step 1: Read &var, emit LIT addr, and save var_addr in a local variable.
-  REM  COMPILE_LVALUE_SAVE emits LIT addr_of_var and pushes addr onto compile stack.
-  REM  We pop it immediately into a local variable for easy reuse without CS juggling.
+  REM Read &var, emit LIT addr, and save var_addr for reuse in NEXT.
   VAR VAR_ADDR
   COMPILE_LVALUE_SAVE
   SET &VAR_ADDR, CS_POP
-  REM Step 2: Consume the comma after &var.
+  REM Consume the comma between &var and the end expression.
   SKIP_COMMA
-  REM Step 3: Compile start expression and emit SET (var = start).
-  COMPILE_EXPR_UNTIL_COMMA
+  REM Emit: LIT 1, SET  ->  var = 1 (fixed start)
+  LITERAL 1
   APPEND ASSIGN_XT
-  REM Step 4: Save end and step as CompiledCells (not emitted yet).
-  REM  SAVE_EXPR_UNTIL_COMMA compiles "end," and saves cells on compile stack.
-  SAVE_EXPR_UNTIL_COMMA
-  REM  COMPILE_EXPR_SAVE compiles the last argument "step" (no trailing comma).
-  COMPILE_EXPR_SAVE
-  REM  Compile stack: [end_cells, step_cells]
-  REM Step 5: Emit JUMP_ALWAYS to skip step code on the first iteration.
-  APPEND JUMP_ALWAYS
-  VAR SKIP_STEP_ADDR
-  SET &SKIP_STEP_ADDR, HERE
-  APPEND 0
-  REM Step 6: Record step-code start address S on the compile stack.
+  REM Record loop-condition start address A on the compile stack.
   CS_PUSH HERE
-  REM  Compile stack: [end_cells, step_cells, S]
-  REM Step 7: Emit step update code: LIT addr, LIT addr, FETCH, <step>, ADD, SET.
-  REM  Stack convention: SET expects (addr, value) — addr pushed first, then value.
-  REM  CS_SWAP brings step_cells just above S to become the new top.
-  CS_SWAP
-  REM  Compile stack: [end_cells, S, step_cells]
-  LITERAL VAR_ADDR
+  REM Emit condition: LIT addr, FETCH, <end_expr>, LE
   LITERAL VAR_ADDR
   APPEND FETCH_XT
-  EMIT_COMPILED_CELLS
-  REM  Compile stack: [end_cells, S]
-  APPEND ADD_XT
-  APPEND ASSIGN_XT
-  REM Step 8: Patch the JUMP_ALWAYS placeholder to here (= loop condition start A).
-  PATCH_ADDR SKIP_STEP_ADDR
-  REM Step 9: Emit condition code: LIT addr, FETCH, <end>, LE, BIF placeholder.
-  REM  CS_SWAP exposes end_cells at the top.
-  CS_SWAP
-  REM  Compile stack: [S, end_cells]
-  LITERAL VAR_ADDR
-  APPEND FETCH_XT
-  EMIT_COMPILED_CELLS
-  REM  Compile stack: [S]
+  COMPILE_EXPR
   APPEND LE_XT
+  REM Emit JUMP_FALSE placeholder (patched by NEXT to D).
   APPEND JUMP_FALSE
   CS_PUSH HERE
   APPEND 0
-  REM  Compile stack: [S, BIF_placeholder]
-  REM Step 10: Push scope tag last (tag-last layout).
+  REM Save var_addr for NEXT (needed to emit increment code).
+  CS_PUSH VAR_ADDR
+  REM Push scope tag last (tag-last layout).
   CS_OPEN_TAG "FOR"
 END
 IMMEDIATE FOR
@@ -270,14 +234,22 @@ IMMEDIATE FOR
 DEF NEXT
   REM Validate and pop the "FOR" scope tag.
   CS_CLOSE_TAG "FOR"
-  REM  Compile stack: [S, BIF_placeholder]
+  REM Restore saved values from the compile stack.
+  VAR VAR_ADDR
+  SET &VAR_ADDR, CS_POP
   VAR BIF_ADDR
   SET &BIF_ADDR, CS_POP
-  REM  Compile stack: [S]
-  REM Back-jump to step-update code at S.
+  REM Emit increment code: LIT addr, LIT addr, FETCH, LIT 1, ADD, SET  ->  var += 1
+  LITERAL VAR_ADDR
+  LITERAL VAR_ADDR
+  APPEND FETCH_XT
+  LITERAL 1
+  APPEND ADD_XT
+  APPEND ASSIGN_XT
+  REM Emit JUMP_ALWAYS back to A (loop-condition start).
   APPEND JUMP_ALWAYS
   APPEND CS_POP
-  REM Patch the BIF placeholder with the current dictionary pointer (= D, loop exit).
+  REM Patch the JUMP_FALSE placeholder to here (= D, loop exit).
   PATCH_ADDR BIF_ADDR
 END
 IMMEDIATE NEXT
