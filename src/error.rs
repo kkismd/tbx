@@ -156,6 +156,11 @@ pub enum TbxError {
         /// Human-readable description of the I/O error.
         reason: String,
     },
+    /// An I/O error occurred while writing to the output destination.
+    OutputIoError {
+        /// Human-readable description of the I/O error.
+        reason: String,
+    },
 }
 
 impl std::fmt::Display for TbxError {
@@ -261,6 +266,9 @@ impl std::fmt::Display for TbxError {
             }
             TbxError::InputIoError { reason } => {
                 write!(f, "ACCEPT: I/O error reading input: {reason}")
+            }
+            TbxError::OutputIoError { reason } => {
+                write!(f, "ACCEPT: I/O error flushing output: {reason}")
             }
         }
     }

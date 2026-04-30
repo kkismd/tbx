@@ -5,7 +5,7 @@ use crate::error::TbxError;
 use crate::lexer::SpannedToken;
 use std::collections::HashMap;
 use std::collections::VecDeque;
-use std::io::{BufRead, BufReader};
+use std::io::{BufRead, BufReader, Write};
 
 /// State maintained during compilation of a new word definition (DEF..END).
 #[derive(Debug)]
@@ -169,6 +169,16 @@ pub struct VM {
     /// The field is not included in the `Debug` output because `dyn BufRead` does
     /// not implement `Debug`.
     pub input_reader: Box<dyn BufRead>,
+    /// Destination for immediate output flushed by ACCEPT before blocking.
+    ///
+    /// Defaults to stdout when the VM is created via `new()`.  The ACCEPT
+    /// primitive flushes `output_buffer` through this writer before blocking
+    /// on user input, so that any prompt printed with PUTSTR is visible before
+    /// the interpreter waits for a line.
+    ///
+    /// The field is not included in the `Debug` output because `dyn Write` does
+    /// not implement `Debug`.
+    pub output_writer: Box<dyn Write + Send>,
 }
 
 impl VM {
@@ -209,6 +219,7 @@ impl VM {
             pending_use_path: None,
             input_buffer: None,
             input_reader: Box::new(BufReader::new(std::io::stdin())),
+            output_writer: Box::new(std::io::stdout()),
         }
     }
 
@@ -926,6 +937,7 @@ impl std::fmt::Debug for VM {
             .field("pending_use_path", &self.pending_use_path)
             .field("input_buffer", &self.input_buffer)
             .field("input_reader", &"<dyn BufRead>")
+            .field("output_writer", &"<dyn Write>")
             .finish()
     }
 }

@@ -1538,6 +1538,21 @@ fn use_prim(vm: &mut VM) -> Result<(), TbxError> {
 /// Each call overwrites any previously buffered input.
 /// Stack signature: `( -- )`
 pub fn accept_prim(vm: &mut VM) -> Result<(), TbxError> {
+    // Flush any pending output before blocking on user input, so that prompt
+    // strings written with PUTSTR are visible before the interpreter waits.
+    if !vm.output_buffer.is_empty() {
+        let pending = std::mem::take(&mut vm.output_buffer);
+        vm.output_writer
+            .write_all(pending.as_bytes())
+            .map_err(|e| TbxError::OutputIoError {
+                reason: e.to_string(),
+            })?;
+        vm.output_writer
+            .flush()
+            .map_err(|e| TbxError::OutputIoError {
+                reason: e.to_string(),
+            })?;
+    }
     let mut line = String::new();
     vm.input_reader
         .read_line(&mut line)
