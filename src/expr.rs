@@ -167,8 +167,8 @@ impl<'a> ExprCompiler<'a> {
                             // Local array element read: A(I)
                             // 1. Load the Cell::Array handle from the local slot.
                             emit_local_read(&mut output, local_idx, self.vm)?;
-                            // 2. Open an array-index paren frame using the sentinel value
-                            //    (usize::MAX, usize::MAX) to distinguish local array access.
+                            // 2. Open an array-index paren frame marked as LocalArray
+                            //    to distinguish it from a regular function call paren.
                             op_stack.push(OpItem::LParen {
                                 call: Some(LParenCall::LocalArray),
                             });
