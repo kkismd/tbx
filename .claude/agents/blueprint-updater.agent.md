@@ -66,21 +66,22 @@ git checkout -b issue/N-short-description
 
 ### ステップ6：Pull Requestの作成
 
-コミットメッセージ・PR bodyの書き出しは `.tmp/` を使う。
+コミットメッセージ・PR bodyの書き出しは Write ツールで `.tmp/` に直接行う（シェルの heredoc は使わない）。
 
 ```bash
 git add blueprint.md blueprint-language.md blueprint-compiler.md
+```
 
-mkdir -p .tmp
-cat > ".tmp/COMMIT_MSG" << 'EOF'
-コミットメッセージ本文（日本語）
-EOF
+Write ツールで `.tmp/COMMIT_MSG` を作成し、コミットメッセージ本文（日本語）を書き出す。
+
+```bash
 git commit -F ".tmp/COMMIT_MSG"
-
 git push -u origin issue/N-short-description
+```
 
-mkdir -p .tmp
-cat > ".tmp/PR_BODY.md" << 'EOF'
+Write ツールで `.tmp/PR_BODY.md` を以下のフォーマットで作成する：
+
+```markdown
 ## 概要
 
 （変更の要約）
@@ -90,7 +91,9 @@ cat > ".tmp/PR_BODY.md" << 'EOF'
 - 変更点
 
 Closes #N
-EOF
+```
+
+```bash
 gh pr create \
   --title "docs: タイトル" \
   --body-file ".tmp/PR_BODY.md" \

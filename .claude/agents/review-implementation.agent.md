@@ -119,12 +119,9 @@ Critical / Warning の問題および Info の気づきを以下の2段階で記
 
 Critical / Warning の指摘をまとめて1件のコメントとして投稿する。
 
-```bash
-mkdir -p .tmp
-cat > ".tmp/REVIEW_BODY.md" << 'EOF'
-（Critical / Warning の指摘内容。各指摘を上記フォーマットで並べる）
-EOF
+Write ツールで `.tmp/REVIEW_BODY.md` を作成し、Critical / Warning の指摘内容を上記フォーマットで書き出す。
 
+```bash
 gh pr comment <PR番号> --body-file ".tmp/REVIEW_BODY.md"
 ```
 
@@ -132,24 +129,32 @@ gh pr comment <PR番号> --body-file ".tmp/REVIEW_BODY.md"
 
 Info 指摘は `gh pr review` とは別に `gh pr comment` で投稿する。**テストカバレッジに関する指摘は件数にかかわらず（1件でも複数でも）常に1件の Info にまとめて投稿する**（テストカバレッジ以外の Info は1指摘1コメントで個別投稿する）。
 
+テストカバレッジの Info は、Write ツールで `.tmp/INFO_COMMENT_TEST.md` を以下のフォーマットで作成して投稿する：
+
 ```bash
-# テストカバレッジの Info は複数あっても1ファイルにまとめて1回投稿する
-mkdir -p .tmp
-cat > ".tmp/INFO_COMMENT_TEST.md" << 'EOF'
+# Write ツールで .tmp/INFO_COMMENT_TEST.md を作成してから実行する
+gh pr comment <PR番号> --body-file ".tmp/INFO_COMMENT_TEST.md"
+```
+
+ファイルの内容フォーマット：
+```
 🟢 **[Info] テストカバレッジ**
 （欠落しているテストケースをすべて列挙）
 **期待される状態**: （どう改善されるべきか）
-EOF
-gh pr comment <PR番号> --body-file ".tmp/INFO_COMMENT_TEST.md"
+```
 
-# テストカバレッジ以外の Info 指摘は従来通り1指摘1コメントで投稿する
-mkdir -p .tmp
-cat > ".tmp/INFO_COMMENT_1.md" << 'EOF'
+テストカバレッジ以外の Info は1指摘につき1ファイル（`.tmp/INFO_COMMENT_1.md` 等）をWrite ツールで作成して投稿する：
+
+```bash
+# Write ツールで .tmp/INFO_COMMENT_1.md を作成してから実行する
+gh pr comment <PR番号> --body-file ".tmp/INFO_COMMENT_1.md"
+```
+
+ファイルの内容フォーマット：
+```
 🟢 **[Info]**
 （1件目の Info 指摘内容）
 **期待される状態**: （どう改善されるべきか）
-EOF
-gh pr comment <PR番号> --body-file ".tmp/INFO_COMMENT_1.md"
 ```
 
 Critical / Warning がなく Info のみの場合も同様に `gh pr comment` で個別投稿する（`gh pr review` は使わない）。
@@ -202,13 +207,11 @@ Issueにはラベル `review-finding` を付与する（ラベルが存在しな
 
 ```bash
 gh label create "review-finding" --description "Review-detected finding" --color "e11d48" 2>/dev/null || true
+```
 
-# Issue本文をファイルに書き出してから登録する（本文が複数行になるため --body-file を使う）
-mkdir -p .tmp
-cat > ".tmp/ISSUE_BODY.md" << 'EOF'
-（上記フォーマットで本文を記述）
-EOF
+Write ツールで `.tmp/ISSUE_BODY.md` を上記フォーマットで作成する。
 
+```bash
 gh issue create --title "（問題の概要）" --label "review-finding" --body-file ".tmp/ISSUE_BODY.md"
 ```
 

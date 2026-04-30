@@ -136,17 +136,18 @@ PR作成が完了したら、ユーザーへの報告より先に修正サイク
 3. レビュー完了後、`get_comments` と `get_reviews` の両方を再取得し、新しいコメント・レビューを確認する。
 
 4. **🔴/🟡 が含まれる場合のみ**、`gh pr comment` で未解消一覧をPRにコメント追加する：
-   ```bash
-   mkdir -p .tmp
-   cat > ".tmp/UNRESOLVED_COMMENT.md" << 'EOF'
+   Write ツールで `.tmp/UNRESOLVED_COMMENT.md` を以下のフォーマットで作成する：
+
+   ```markdown
    ## ⚠️ 未解消の指摘
 
    最終レビューで以下の指摘が確認されました。
    手動での対応をお願いします。
 
    （未解消の 🔴/🟡 指摘一覧）
-   EOF
+   ```
 
+   ```bash
    gh pr comment <PR番号> --body-file ".tmp/UNRESOLVED_COMMENT.md"
    ```
 

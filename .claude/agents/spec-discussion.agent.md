@@ -50,12 +50,10 @@ issueに記載された課題について設計の選択肢を提示し、ユー
 仕様が決定したら、以下のフォーマットでissueにコメントを投稿する。
 コメントの投稿は以下の手順で行う：
 
-```bash
-mkdir -p .tmp
-cat > ".tmp/SPEC_COMMENT.md" << 'EOF'
-（作成したコメントのMarkdown）
-EOF
+1. Write ツールで `.tmp/SPEC_COMMENT.md` を作成し、作成したコメントのMarkdownを書き出す。
+2. 以下のコマンドで投稿する：
 
+```bash
 gh issue comment <N> --body-file ".tmp/SPEC_COMMENT.md"
 ```
 
