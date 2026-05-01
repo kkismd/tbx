@@ -497,6 +497,15 @@ impl VM {
         }
     }
 
+    /// Read a local variable from the data stack by its `StackAddr` index.
+    ///
+    /// Delegates address resolution to `resolve_local_idx`, which handles both
+    /// ordinary (non-variadic) and variadic-word local slots.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Err(TbxError::IndexOutOfBounds)` if the resolved index is out of range
+    /// or if the `bp + local_idx` addition would overflow.
     pub fn local_read(&self, local_idx: usize) -> Result<Cell, TbxError> {
         let resolved = self
             .resolve_local_idx(local_idx)
