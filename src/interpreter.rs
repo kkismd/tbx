@@ -259,13 +259,6 @@ impl Interpreter {
         Ok((tokens, boundaries))
     }
 
-    /// Execute a single source line.
-    ///
-    /// Tokenizes `line`, resolves the statement word, builds a temporary code buffer,
-    /// and runs it through the inner interpreter.
-    ///
-    /// Returns `Ok(())` on success, or an `InterpreterError` containing position
-    /// and error details on failure.
     /// Executes a single source line.
     ///
     /// `absolute_line` is the 1-based line number of this line in the full source being
