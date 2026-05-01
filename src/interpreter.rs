@@ -259,17 +259,15 @@ impl Interpreter {
         Ok((tokens, boundaries))
     }
 
-    /// Execute a single source line.
+    /// Executes a single source line.
     ///
-    /// Tokenizes `line`, resolves the statement word, builds a temporary code buffer,
-    /// and runs it through the inner interpreter.
-    ///
-    /// Returns `Ok(())` on success, or an `InterpreterError` containing position
-    /// and error details on failure.
-    pub fn exec_line(&mut self, line: &str) -> Result<(), InterpreterError> {
+    /// `absolute_line` is the 1-based line number of this line in the full source being
+    /// processed.  Pass `1` when executing a standalone line (e.g. from a REPL where
+    /// each `exec_line` call represents a fresh, unnumbered statement).
+    pub fn exec_line(&mut self, line: &str, absolute_line: usize) -> Result<(), InterpreterError> {
         let (tokens, boundaries) = self.parse_line_into_segments(line)?;
         for (seg_start, seg_end) in boundaries {
-            self.exec_segment(&tokens[seg_start..seg_end], line)?;
+            self.exec_segment(&tokens[seg_start..seg_end], line, absolute_line)?;
         }
         Ok(())
     }
@@ -278,10 +276,16 @@ impl Interpreter {
     ///
     /// `tokens` must be non-empty and must not contain `Token::LineNum` at index 0
     /// (the caller is responsible for stripping it on the first segment).
+    ///
+    /// `absolute_line` is the 1-based line number of this segment in the full source being
+    /// processed.  The token positions produced by `parse_line_into_segments` are always
+    /// relative to a single line (`.line` is always 1), so `absolute_line` must be supplied
+    /// by the caller to record accurate source positions in error messages.
     fn exec_segment(
         &mut self,
         tokens: &[SpannedToken],
         source_line: &str,
+        absolute_line: usize,
     ) -> Result<(), InterpreterError> {
         let mut idx = 0;
 
@@ -291,7 +295,6 @@ impl Interpreter {
             Token::Ident(name) => name.clone(),
             _ => return Ok(()), // not an identifier — skip
         };
-        let stmt_pos_line = stmt_tok.pos.line;
         let stmt_pos_col = stmt_tok.pos.col;
         idx += 1;
 
@@ -314,7 +317,7 @@ impl Interpreter {
                 return self.exec_immediate_word(
                     xt,
                     &tokens[idx..],
-                    stmt_pos_line,
+                    absolute_line,
                     stmt_pos_col,
                     source_line,
                 );
@@ -326,7 +329,7 @@ impl Interpreter {
             let result = self.write_stmt_to_dict(
                 &stmt_name,
                 &tokens[idx..],
-                stmt_pos_line,
+                absolute_line,
                 stmt_pos_col,
                 source_line,
             );
@@ -338,7 +341,7 @@ impl Interpreter {
 
         // Helper closure for wrapping TbxError into InterpreterError.
         let make_err =
-            |e: TbxError| InterpreterError::new(stmt_pos_line, stmt_pos_col, source_line, e);
+            |e: TbxError| InterpreterError::new(absolute_line, stmt_pos_col, source_line, e);
 
         // Save the current dictionary pointer to use as the buffer start.
         let buf_start = self.vm.dp;
@@ -348,7 +351,7 @@ impl Interpreter {
         if let Err(e) = self.write_stmt_to_dict(
             &stmt_name,
             &tokens[idx..],
-            stmt_pos_line,
+            absolute_line,
             stmt_pos_col,
             source_line,
         ) {
@@ -359,7 +362,7 @@ impl Interpreter {
 
         // Append EXIT to terminate the temporary code buffer.
         // On failure, reset dp before returning.
-        let exit_xt = match self.lookup_required("EXIT", stmt_pos_line, stmt_pos_col, source_line) {
+        let exit_xt = match self.lookup_required("EXIT", absolute_line, stmt_pos_col, source_line) {
             Ok(xt) => xt,
             Err(e) => {
                 self.vm.dp = buf_start;
@@ -551,8 +554,9 @@ impl Interpreter {
     /// Stops on the first error (including `TbxError::Halted`, which the inner
     /// interpreter returns for the `HALT` statement).
     pub fn exec_source(&mut self, src: &str) -> Result<(), InterpreterError> {
-        for line in src.lines() {
-            match self.exec_line(line) {
+        for (line_idx, line) in src.lines().enumerate() {
+            let line_num = line_idx + 1; // 1-based line number
+            match self.exec_line(line, line_num) {
                 Ok(()) => {}
                 Err(e) if matches!(e.kind, TbxError::Halted) => return Ok(()),
                 Err(e) => return Err(e),
@@ -1196,7 +1200,7 @@ mod tests {
     #[test]
     fn test_exec_putdec_42() {
         let mut interp = Interpreter::new();
-        interp.exec_line("PUTDEC 42").unwrap();
+        interp.exec_line("PUTDEC 42", 1).unwrap();
         let out = interp.take_output();
         assert!(
             out.contains("42"),
@@ -1208,7 +1212,7 @@ mod tests {
     #[test]
     fn test_exec_halt() {
         let mut interp = Interpreter::new();
-        let result = interp.exec_line("HALT");
+        let result = interp.exec_line("HALT", 1);
         // HALT causes TbxError::Halted wrapped in InterpreterError
         assert!(result.is_err(), "expected error from HALT");
         let err = result.unwrap_err();
@@ -1231,7 +1235,7 @@ mod tests {
     #[test]
     fn test_exec_undefined_symbol() {
         let mut interp = Interpreter::new();
-        let result = interp.exec_line("NOSUCHWORD 1");
+        let result = interp.exec_line("NOSUCHWORD 1", 1);
         assert!(result.is_err());
         let err = result.unwrap_err();
         assert!(matches!(err.kind, TbxError::UndefinedSymbol { .. }));
@@ -1241,7 +1245,7 @@ mod tests {
     fn test_exec_system_word_direct_call_rejected() {
         let mut interp = Interpreter::new();
         // Attempting to call a FLAG_SYSTEM word (LIT_MARKER) as a statement should fail.
-        let result = interp.exec_line("LIT_MARKER");
+        let result = interp.exec_line("LIT_MARKER", 1);
         assert!(result.is_err());
     }
 
@@ -1249,7 +1253,7 @@ mod tests {
     fn test_exec_rem_is_skipped() {
         let mut interp = Interpreter::new();
         // REM line should not produce any error or output.
-        interp.exec_line("REM this is a comment").unwrap();
+        interp.exec_line("REM this is a comment", 1).unwrap();
         let out = interp.take_output();
         assert!(out.is_empty());
     }
@@ -1257,8 +1261,8 @@ mod tests {
     #[test]
     fn test_exec_empty_line() {
         let mut interp = Interpreter::new();
-        interp.exec_line("").unwrap();
-        interp.exec_line("   ").unwrap();
+        interp.exec_line("", 1).unwrap();
+        interp.exec_line("   ", 1).unwrap();
     }
 
     #[test]
@@ -1271,9 +1275,9 @@ mod tests {
         // After a runtime error the data stack, return stack, and bp must be clean.
         let mut interp = Interpreter::new();
         // Force a runtime error by calling an undefined symbol at runtime.
-        let _ = interp.exec_line("NOSUCHWORD");
+        let _ = interp.exec_line("NOSUCHWORD", 1);
         // A subsequent valid call must still work.
-        interp.exec_line("PUTDEC 1").unwrap();
+        interp.exec_line("PUTDEC 1", 1).unwrap();
         let out = interp.take_output();
         assert!(out.contains('1'));
     }
@@ -1299,7 +1303,7 @@ GREET";
     #[test]
     fn test_def_missing_name_is_error() {
         let mut interp = Interpreter::new();
-        let result = interp.exec_line("DEF");
+        let result = interp.exec_line("DEF", 1);
         assert!(result.is_err());
     }
 
@@ -1308,7 +1312,7 @@ GREET";
         // END outside DEF is handled by end_prim (FLAG_IMMEDIATE), which checks
         // is_compiling and returns InvalidExpression when called in interpret mode.
         let mut interp = Interpreter::new();
-        assert!(interp.exec_line("END").is_err());
+        assert!(interp.exec_line("END", 1).is_err());
     }
 
     #[test]
@@ -1386,7 +1390,7 @@ GREET";
         // ADD(1, 2) compiles to: Xt(LIT), Int(1), Xt(LIT), Int(2), Xt(ADD) — ADD is dispatched
         // directly as a Primitive.
         let mut interp = Interpreter::new();
-        interp.exec_line("PUTDEC ADD(1, 2)").unwrap();
+        interp.exec_line("PUTDEC ADD(1, 2)", 1).unwrap();
         let out = interp.take_output();
         assert_eq!(out, "3", "expected '3', got: {:?}", out);
     }
@@ -1859,7 +1863,7 @@ PUTSTR "\n"
     fn test_semicolon_two_statements_interpret_mode() {
         // Two statements on one line separated by semicolon must both execute.
         let mut interp = Interpreter::new();
-        interp.exec_line("PUTSTR \"a\"; PUTDEC 42").unwrap();
+        interp.exec_line("PUTSTR \"a\"; PUTDEC 42", 1).unwrap();
         assert_eq!(interp.take_output(), "a42");
     }
 
@@ -1867,7 +1871,7 @@ PUTSTR "\n"
     fn test_semicolon_three_statements() {
         // Three semicolon-separated statements must all execute in order.
         let mut interp = Interpreter::new();
-        interp.exec_line("PUTDEC 1; PUTDEC 2; PUTDEC 3").unwrap();
+        interp.exec_line("PUTDEC 1; PUTDEC 2; PUTDEC 3", 1).unwrap();
         assert_eq!(interp.take_output(), "123");
     }
 
@@ -1875,7 +1879,7 @@ PUTSTR "\n"
     fn test_semicolon_trailing() {
         // A trailing semicolon (empty last segment) must be silently ignored.
         let mut interp = Interpreter::new();
-        interp.exec_line("PUTDEC 1;").unwrap();
+        interp.exec_line("PUTDEC 1;", 1).unwrap();
         assert_eq!(interp.take_output(), "1");
     }
 
@@ -1884,7 +1888,7 @@ PUTSTR "\n"
         // REM causes the lexer to consume the rest of the input, so statements
         // after a REM segment are never seen.
         let mut interp = Interpreter::new();
-        interp.exec_line("PUTDEC 1; REM x; PUTDEC 2").unwrap();
+        interp.exec_line("PUTDEC 1; REM x; PUTDEC 2", 1).unwrap();
         assert_eq!(interp.take_output(), "1");
     }
 
@@ -1892,7 +1896,7 @@ PUTSTR "\n"
     fn test_semicolon_with_paren_args() {
         // Parenthesised arguments must not be confused with segment boundaries.
         let mut interp = Interpreter::new();
-        interp.exec_line("PUTDEC ADD(1,2); PUTDEC 3").unwrap();
+        interp.exec_line("PUTDEC ADD(1,2); PUTDEC 3", 1).unwrap();
         assert_eq!(interp.take_output(), "33");
     }
 
@@ -1914,7 +1918,7 @@ GREET";
         // When a later segment errors, prior segments have already executed.
         // This documents the expected partial-execution semantics.
         let mut interp = Interpreter::new();
-        let result = interp.exec_line("PUTDEC 1; NOSUCHWORD");
+        let result = interp.exec_line("PUTDEC 1; NOSUCHWORD", 1);
         assert!(result.is_err(), "second segment should return an error");
         // First segment's output is already flushed.
         assert_eq!(interp.take_output(), "1");
@@ -1924,7 +1928,7 @@ GREET";
     fn test_semicolon_leading() {
         // A leading semicolon produces an empty first segment, which is skipped.
         let mut interp = Interpreter::new();
-        interp.exec_line("; PUTDEC 1").unwrap();
+        interp.exec_line("; PUTDEC 1", 1).unwrap();
         assert_eq!(interp.take_output(), "1");
     }
 
@@ -1932,7 +1936,7 @@ GREET";
     fn test_semicolon_consecutive() {
         // Consecutive semicolons produce empty segments that are silently skipped.
         let mut interp = Interpreter::new();
-        interp.exec_line("PUTDEC 1;; PUTDEC 2").unwrap();
+        interp.exec_line("PUTDEC 1;; PUTDEC 2", 1).unwrap();
         assert_eq!(interp.take_output(), "12");
     }
 
@@ -2653,9 +2657,9 @@ PUTDEC 99
         // A word defined via exec_line must be callable from a subsequent
         // compile_program on the same Interpreter instance.
         let mut interp = Interpreter::new();
-        interp.exec_line("DEF HELLO").unwrap();
-        interp.exec_line("PUTDEC 99").unwrap();
-        interp.exec_line("END").unwrap();
+        interp.exec_line("DEF HELLO", 1).unwrap();
+        interp.exec_line("PUTDEC 99", 1).unwrap();
+        interp.exec_line("END", 1).unwrap();
         interp.compile_program("HELLO").unwrap();
         assert_eq!(interp.take_output(), "99");
     }
@@ -2667,7 +2671,7 @@ PUTDEC 99
         // This verifies the spec documented in blueprint-language.md §"GOTO/BIF scope constraints".
         // The interpreter must remain usable (REPL can continue) after the error.
         let mut interp = Interpreter::new();
-        let result = interp.exec_line("GOTO 10");
+        let result = interp.exec_line("GOTO 10", 1);
         assert!(
             result.is_err(),
             "GOTO at ground level via exec_line should be an error"
@@ -2679,7 +2683,7 @@ PUTDEC 99
         );
         // Verify that the interpreter is still reusable after the error (REPL continuity).
         interp
-            .exec_line("PUTDEC 1")
+            .exec_line("PUTDEC 1", 1)
             .expect("exec_line should be reusable after GOTO-outside-DEF error");
         assert_eq!(interp.take_output(), "1");
     }
@@ -2692,7 +2696,7 @@ PUTDEC 99
         interp
             .compile_program("DEF ADD1(X)\nRETURN X + 1\nEND")
             .unwrap();
-        interp.exec_line("PUTDEC ADD1(41)").unwrap();
+        interp.exec_line("PUTDEC ADD1(41)", 1).unwrap();
         assert_eq!(interp.take_output(), "42");
     }
 
@@ -3441,7 +3445,7 @@ SIGN 0";
         // IF/ENDIF outside a DEF body requires compile mode; using them at top level
         // (interpret mode) must return an error because COMPILE_EXPR needs compile mode.
         let mut interp = Interpreter::new();
-        let result = interp.exec_line("IF 1 > 0");
+        let result = interp.exec_line("IF 1 > 0", 1);
         assert!(
             result.is_err(),
             "IF outside DEF should return an error (no compile mode)"
@@ -3477,7 +3481,7 @@ SIGN 0";
         // ENDIF at top level (interpret mode) must return an error because CS_POP
         // checks is_compiling before PATCH_ADDR is reached.
         let mut interp = Interpreter::new();
-        let result = interp.exec_line("ENDIF");
+        let result = interp.exec_line("ENDIF", 1);
         assert!(
             result.is_err(),
             "ENDIF at top level should return an error (no compile mode)"
@@ -3786,7 +3790,7 @@ TRYROT";
         // and returns InvalidExpression.  Note: the two APPEND calls write to the
         // dictionary before the error is raised.
         let mut interp = Interpreter::new();
-        let result = interp.exec_line("ELSIF 1 > 0");
+        let result = interp.exec_line("ELSIF 1 > 0", 1);
         assert!(
             result.is_err(),
             "ELSIF at top level should return an error (no compile mode)"
@@ -3801,7 +3805,7 @@ TRYROT";
         // and returns InvalidExpression.  Note: the two APPEND calls write to the
         // dictionary before the error is raised.
         let mut interp = Interpreter::new();
-        let result = interp.exec_line("ELSE");
+        let result = interp.exec_line("ELSE", 1);
         assert!(
             result.is_err(),
             "ELSE at top level should return an error (no compile mode)"
@@ -3826,6 +3830,32 @@ TRYROT";
         let mut interp = Interpreter::new();
         let src = "DEF TEST\n  UNKNOWN_WORD\nEND";
         let result = interp.compile_program(src);
+        match result {
+            Err(e) if e.line == 2 => {}
+            other => panic!("expected error at line 2, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_exec_source_error_line_number() {
+        // exec_source must report the absolute line number of a compile error, not always 1.
+        let mut interp = Interpreter::new();
+        // "UNKNOWN_WORD" is on line 2; the error should say line 2, not line 1.
+        let src = "VAR X\nUNKNOWN_WORD";
+        let result = interp.exec_source(src);
+        match result {
+            Err(e) if e.line == 2 => {}
+            other => panic!("expected error at line 2, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_exec_source_error_line_number_in_def() {
+        // exec_source must report the absolute line number even inside DEF bodies.
+        let mut interp = Interpreter::new();
+        // "UNKNOWN_WORD" is on line 2; the error should say line 2, not line 1.
+        let src = "DEF TEST\n  UNKNOWN_WORD\nEND";
+        let result = interp.exec_source(src);
         match result {
             Err(e) if e.line == 2 => {}
             other => panic!("expected error at line 2, got {other:?}"),

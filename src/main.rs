@@ -57,26 +57,30 @@ fn run_stdin() -> std::process::ExitCode {
     // Read from the VM's own input_reader instead of acquiring a separate
     // StdinLock.  This avoids the deadlock that occurs when ACCEPT tries to
     // re-lock stdin while the outer loop already holds the lock.
+    let mut line_num: usize = 0;
     loop {
         match interp.read_input_line() {
             Ok(None) => break,
-            Ok(Some(line)) => match interp.exec_line(&line) {
-                Ok(()) => {
-                    let out = interp.take_output();
-                    print!("{out}");
-                    let _ = io::stdout().flush();
+            Ok(Some(line)) => {
+                line_num += 1;
+                match interp.exec_line(&line, line_num) {
+                    Ok(()) => {
+                        let out = interp.take_output();
+                        print!("{out}");
+                        let _ = io::stdout().flush();
+                    }
+                    Err(err) if matches!(err.kind, TbxError::Halted) => {
+                        let out = interp.take_output();
+                        print!("{out}");
+                        let _ = io::stdout().flush();
+                        return std::process::ExitCode::SUCCESS;
+                    }
+                    Err(err) => {
+                        print_error(&err);
+                        return std::process::ExitCode::FAILURE;
+                    }
                 }
-                Err(err) if matches!(err.kind, TbxError::Halted) => {
-                    let out = interp.take_output();
-                    print!("{out}");
-                    let _ = io::stdout().flush();
-                    return std::process::ExitCode::SUCCESS;
-                }
-                Err(err) => {
-                    print_error(&err);
-                    return std::process::ExitCode::FAILURE;
-                }
-            },
+            }
             Err(e) => {
                 eprintln!("Error: reading stdin: {}", e);
                 return std::process::ExitCode::FAILURE;
