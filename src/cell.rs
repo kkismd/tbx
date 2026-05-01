@@ -58,13 +58,12 @@ pub enum ReturnFrame {
         /// variadic words.
         actual_arity: usize,
         /// The number of formal (fixed) parameters declared in the callee's DEF header.
-        /// Used together with `is_variadic` and `actual_arity` to correctly resolve
-        /// `StackAddr` indices for VAR-declared local variables in variadic words.
-        /// For non-variadic words this is equal to `actual_arity`.
+        /// Stored for informational purposes; not used by `resolve_local_idx` directly
+        /// (which relies on `VARIADIC_LOCAL_BASE` for disambiguation instead).
         formal_arity: usize,
         /// True if the callee is a variadic word (`DEF WORD(X, ...)`).
-        /// When true, local variables (with `StackAddr` index >= `formal_arity`) are
-        /// located at `bp + actual_arity + (idx - formal_arity)` rather than `bp + idx`.
+        /// Stored for informational purposes; `resolve_local_idx` identifies VAR-local
+        /// indices by checking `local_idx >= VARIADIC_LOCAL_BASE` rather than this flag.
         is_variadic: bool,
     },
     TopLevel, // Sentinel value for the bottom of the return stack

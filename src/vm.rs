@@ -465,11 +465,6 @@ impl VM {
         Ok(())
     }
 
-    /// Read a local variable from the data stack at `bp + local_idx`.
-    ///
-    /// # Errors
-    ///
-    /// Returns `Err(TbxError::IndexOutOfBounds)` if `bp + local_idx` is out of range.
     /// Translate a `StackAddr` index to an absolute `data_stack` index.
     ///
     /// Two index ranges are recognised:
