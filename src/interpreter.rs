@@ -3810,28 +3810,25 @@ TRYROT";
 
     #[test]
     fn test_compile_error_line_number() {
-        // Compile a program with an error on the second line.
-        // It should report line 2.
+        // compile_program must report the absolute line number of the error.
         let mut interp = Interpreter::new();
-        // Use a new line in the source to ensure absolute_line works.
         let src = "VAR X\nUNKNOWN_WORD";
-        let result = interp.exec_source(src);
+        let result = interp.compile_program(src);
         match result {
-            Err(e) if e.line == 1 => {} // FIXME: Should be 2
-            other => panic!("expected error at line 1 (current behavior), got {other:?}"),
+            Err(e) if e.line == 2 => {}
+            other => panic!("expected error at line 2, got {other:?}"),
         }
     }
 
     #[test]
     fn test_compile_error_line_number_in_def() {
-        // Compile a DEF with an error inside.
+        // compile_program must report the absolute line number even inside DEF bodies.
         let mut interp = Interpreter::new();
-        // The error is inside the DEF body.
         let src = "DEF TEST\n  UNKNOWN_WORD\nEND";
-        let result = interp.exec_source(src);
+        let result = interp.compile_program(src);
         match result {
-            Err(e) if e.line == 1 => {} // FIXME: Should be 2
-            other => panic!("expected error at line 1 (current behavior), got {other:?}"),
+            Err(e) if e.line == 2 => {}
+            other => panic!("expected error at line 2, got {other:?}"),
         }
     }
 
