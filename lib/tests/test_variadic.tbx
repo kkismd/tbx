@@ -1,0 +1,105 @@
+# lib/tests/test_variadic.tbx — TBX tests for variadic arguments (DEF WORD(...))
+USE "lib/tests/helper.tbx"
+
+# --- VA_COUNT: all-variadic word returns correct argument count ---
+
+DEF VA_ONLY(...)
+  RETURN VA_COUNT()
+END
+
+ASSERT VA_ONLY(10) = 1
+ASSERT VA_ONLY(10, 20) = 2
+ASSERT VA_ONLY(10, 20, 30) = 3
+
+# --- VA_COUNT with zero variadic arguments (only fixed params supplied) ---
+
+DEF FIXED_PLUS_VA(A, ...)
+  RETURN VA_COUNT()
+END
+
+ASSERT FIXED_PLUS_VA(1) = 1
+ASSERT FIXED_PLUS_VA(1, 2) = 2
+ASSERT FIXED_PLUS_VA(1, 2, 3) = 3
+
+# --- Fixed parameter is accessible by name ---
+
+DEF FIRST_PLUS_VA(A, ...)
+  RETURN A + VA_COUNT()
+END
+
+ASSERT FIRST_PLUS_VA(10) = 11
+ASSERT FIRST_PLUS_VA(10, 20) = 12
+
+# --- ARG_ADDR: access arguments by index ---
+
+DEF GET_ARG(INDEX, ...)
+  VAR ADDR
+  LET ADDR = ARG_ADDR(INDEX)
+  RETURN FETCH(ADDR)
+END
+
+ASSERT GET_ARG(0, 99) = 0
+ASSERT GET_ARG(1, 99) = 99
+ASSERT GET_ARG(1, 10, 20, 30) = 10
+
+# --- Sum of all variadic arguments using VA_COUNT + ARG_ADDR ---
+
+DEF SUM(...)
+  VAR I
+  VAR S
+  VAR N
+  LET I = 0
+  LET S = 0
+  LET N = VA_COUNT()
+  WHILE I < N
+    LET S = S + FETCH(ARG_ADDR(I))
+    LET I = I + 1
+  ENDWH
+  RETURN S
+END
+
+ASSERT SUM(1) = 1
+ASSERT SUM(1, 2) = 3
+ASSERT SUM(1, 2, 3) = 6
+ASSERT SUM(10, 20, 30, 40) = 100
+
+# --- Sum with one fixed parameter plus variadic ---
+# START is the initial accumulator; variadic args are added on top.
+# ARG_ADDR(0) = START, ARG_ADDR(1..N-1) = variadic args.
+# Loop from I=1 (first variadic arg) to N-1.
+
+DEF SUM_FROM(START, ...)
+  VAR I
+  VAR S
+  VAR N
+  LET I = 1
+  LET S = START
+  LET N = VA_COUNT()
+  WHILE I < N
+    LET S = S + FETCH(ARG_ADDR(I))
+    LET I = I + 1
+  ENDWH
+  RETURN S
+END
+
+ASSERT SUM_FROM(100, 1, 2, 3) = 106
+ASSERT SUM_FROM(0, 5, 10) = 15
+
+# --- DEF WORD() (no params, non-variadic) still works ---
+
+DEF NO_PARAMS()
+  RETURN 42
+END
+
+ASSERT NO_PARAMS() = 42
+
+# --- Variadic word called recursively ---
+
+DEF VA_RECURSE(N, ...)
+  IF N = 0
+    RETURN 0
+  ENDIF
+  RETURN N + VA_RECURSE(N - 1)
+END
+
+ASSERT VA_RECURSE(5) = 15

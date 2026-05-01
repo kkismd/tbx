@@ -111,6 +111,10 @@ pub struct WordEntry {
     /// Set to 0 at registration time and patched to the final count when END is compiled.
     /// Used by callers to emit the correct `local_count` operand in CALL instructions.
     pub local_count: usize,
+    /// True if this word was declared with a variadic parameter list (`DEF WORD(X, ...)`).
+    /// When true, `arity` holds the number of fixed (named) parameters before `...`.
+    /// Callers must pass at least `arity` arguments; extra arguments become variadic.
+    pub is_variadic: bool,
     /// Index of the previous entry in `VM::headers` (linked list for search).
     ///
     /// **Do not set this field directly.** It is automatically managed by
@@ -127,6 +131,7 @@ impl WordEntry {
             kind: EntryKind::Primitive(f),
             arity: 0,
             local_count: 0,
+            is_variadic: false,
             prev: None,
         }
     }
@@ -139,6 +144,7 @@ impl WordEntry {
             kind: EntryKind::Word(offset),
             arity: 0,
             local_count: 0,
+            is_variadic: false,
             prev: None,
         }
     }
@@ -151,6 +157,7 @@ impl WordEntry {
             kind: EntryKind::Variable(idx),
             arity: 0,
             local_count: 0,
+            is_variadic: false,
             prev: None,
         }
     }
@@ -163,6 +170,7 @@ impl WordEntry {
             kind: EntryKind::Constant(value),
             arity: 0,
             local_count: 0,
+            is_variadic: false,
             prev: None,
         }
     }
@@ -175,6 +183,7 @@ impl WordEntry {
             kind: EntryKind::Array { base, size },
             arity: 0,
             local_count: 0,
+            is_variadic: false,
             prev: None,
         }
     }
@@ -182,6 +191,21 @@ impl WordEntry {
     /// Returns true if the IMMEDIATE flag is set.
     pub fn is_immediate(&self) -> bool {
         self.flags & FLAG_IMMEDIATE != 0
+    }
+
+    /// Checks that `got` arguments satisfy the variadic arity requirement.
+    ///
+    /// For non-variadic words this is a no-op. For variadic words, `got` must be
+    /// at least `self.arity` (the fixed-parameter count before `...`).
+    pub fn check_variadic_arity(&self, got: usize) -> Result<(), crate::error::TbxError> {
+        if self.is_variadic && got < self.arity {
+            return Err(crate::error::TbxError::WrongNumberOfArguments {
+                name: self.name.clone(),
+                expected_min: self.arity,
+                got,
+            });
+        }
+        Ok(())
     }
 }
 

@@ -471,6 +471,10 @@ impl Interpreter {
         // Determine arity from top-level comma count.
         let arity = count_top_level_arity(arg_tokens).map_err(&make_err)?;
 
+        self.vm.headers[stmt_xt.index()]
+            .check_variadic_arity(arity)
+            .map_err(&make_err)?;
+
         // Check whether the statement is a compiled word (needs CALL with arity/locals)
         // or a primitive/other (called directly by placing Xt in the code stream).
         let stmt_is_word = matches!(

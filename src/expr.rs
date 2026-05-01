@@ -680,6 +680,8 @@ fn emit_call_by_kind(
     self_hdr_idx: Option<usize>,
     patch_offsets: &mut Vec<usize>,
 ) -> Result<(), TbxError> {
+    vm.headers[xt.index()].check_variadic_arity(arity)?;
+
     // Match by reference: `vm` is immutable here so no borrow conflict arises.
     match &vm.headers[xt.index()].kind {
         EntryKind::Word(_) => {
@@ -1455,6 +1457,7 @@ mod tests {
             kind: EntryKind::Lit,
             arity: 0,
             local_count: 0,
+            is_variadic: false,
             prev: None,
         });
 

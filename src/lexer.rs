@@ -26,6 +26,10 @@ pub enum Token {
     /// Operator string: `+` `-` `*` `/` `%` `=` `<>` `<` `>` `<=` `>=` `|` `||` `&&`.
     /// Maps to TOK_OP.
     Op(String),
+    /// Ellipsis `...`. Used in `DEF WORD(X, ...)` to mark a variadic parameter list.
+    /// Only valid inside a `DEF` parameter list; `kind_code()` returns `None`
+    /// because this token is never exposed through the `TOKEN` primitive.
+    Ellipsis,
     /// Comma `,`. Acts as a low-priority binary operator (argument separator).
     /// Maps to TOK_OP.
     Comma,
@@ -62,6 +66,8 @@ impl Token {
             }
             Token::Semicolon => Some(TOK_DELIM),
             Token::StringLit(_) => Some(TOK_STR),
+            // Ellipsis is a DEF-parsing-only token; never exposed via TOKEN primitive.
+            Token::Ellipsis => None,
             Token::LineNum(_) | Token::Newline | Token::Eof | Token::Error(_) => None,
         }
     }
@@ -593,6 +599,40 @@ impl<'a> Lexer<'a> {
                 }
             }
             '!' => self.op1_with_end("!", start_pos, start_off, end_off),
+            '.' => {
+                // Only `...` (three dots) is a valid token starting with '.'.
+                // Single '.' or '..' are not valid operators in TBX.
+                if self.peek_char() == Some('.') {
+                    self.advance(); // consume second '.'
+                    if self.peek_char() == Some('.') {
+                        self.advance(); // consume third '.'
+                        let end_off3 = self.peek_offset();
+                        SpannedToken {
+                            token: Token::Ellipsis,
+                            pos: start_pos,
+                            source_offset: start_off,
+                            source_len: end_off3 - start_off,
+                        }
+                    } else {
+                        // '..' is not a valid token.
+                        let end_off2 = self.peek_offset();
+                        SpannedToken {
+                            token: Token::Error("unexpected token: '..'".to_string()),
+                            pos: start_pos,
+                            source_offset: start_off,
+                            source_len: end_off2 - start_off,
+                        }
+                    }
+                } else {
+                    // Single '.' is not a valid operator.
+                    SpannedToken {
+                        token: Token::Error("unexpected character: '.'".to_string()),
+                        pos: start_pos,
+                        source_offset: start_off,
+                        source_len: end_off - start_off,
+                    }
+                }
+            }
             '#' => {
                 // Hash comment: skip the rest of the line, then emit Newline.
                 while !matches!(self.peek_char(), None | Some('\n') | Some('\r')) {

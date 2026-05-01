@@ -169,6 +169,16 @@ pub enum TbxError {
     /// `RETURN`) is forbidden, because the array pool is truncated on EXIT and
     /// the stored index would dangle.
     LocalArrayEscape,
+
+    /// A variadic word was called with fewer arguments than its fixed parameter count.
+    ///
+    /// `name` is the word name, `expected_min` is the number of fixed parameters
+    /// declared before `...`, and `got` is the actual number of arguments supplied.
+    WrongNumberOfArguments {
+        name: String,
+        expected_min: usize,
+        got: usize,
+    },
 }
 
 impl std::fmt::Display for TbxError {
@@ -280,6 +290,16 @@ impl std::fmt::Display for TbxError {
             }
             TbxError::LocalArrayEscape => {
                 write!(f, "local array cannot escape its owning stack frame")
+            }
+            TbxError::WrongNumberOfArguments {
+                name,
+                expected_min,
+                got,
+            } => {
+                write!(
+                    f,
+                    "wrong number of arguments: '{name}' expects at least {expected_min}, got {got}"
+                )
             }
         }
     }

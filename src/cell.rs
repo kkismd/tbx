@@ -50,6 +50,13 @@ pub enum ReturnFrame {
         /// On EXIT or RETURN_VAL, the array pool is truncated back to this
         /// length to free all local arrays created during the call.
         saved_array_pool_len: usize,
+        /// The actual number of arguments passed to this call.
+        /// Used by the `VA_COUNT` primitive to report how many arguments the
+        /// caller supplied (including both fixed and variadic arguments).
+        /// Set to 0 when a word is dispatched via `EntryKind::Word` (direct
+        /// dispatch without a CALL instruction), which should not occur for
+        /// variadic words.
+        actual_arity: usize,
     },
     TopLevel, // Sentinel value for the bottom of the return stack
 }

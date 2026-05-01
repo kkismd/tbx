@@ -567,22 +567,25 @@ pub fn def_prim(vm: &mut VM) -> Result<(), TbxError> {
         }
     };
 
-    // Parse optional parameter list: DEF WORD(X, Y, ...)
+    // Parse optional parameter list: DEF WORD(X, Y, ...) or DEF WORD(...)
     //
-    // DFA with 4 states:
+    // DFA with 5 states:
     //   LParenOrEnd      — after word name: expect '(' or EOL
-    //   FirstParamOrEnd  — right after '(': expect ident or ')'  (comma here = leading-comma error)
-    //   CommaOrRParen    — after registering a param: expect ',' or ')'  (ident here = missing-comma error)
-    //   NextParam        — after ',': next must be ident  (')' = trailing-comma error)
+    //   FirstParamOrEnd  — right after '(': expect ident, '...', or ')'
+    //   CommaOrRParen    — after registering a param: expect ',' or ')'
+    //   NextParam        — after ',': next must be ident or '...'  (')' = trailing-comma error)
+    //   AfterEllipsis    — after '...': only ')' is valid
     enum DefParseState {
         LParenOrEnd,
         FirstParamOrEnd,
         CommaOrRParen,
         NextParam,
+        AfterEllipsis,
     }
 
     let mut local_table: HashMap<String, usize> = HashMap::new();
     let mut arity: usize = 0;
+    let mut is_variadic: bool = false;
     let mut state = DefParseState::LParenOrEnd;
 
     loop {
@@ -607,9 +610,14 @@ pub fn def_prim(vm: &mut VM) -> Result<(), TbxError> {
                     arity += 1;
                     state = DefParseState::CommaOrRParen;
                 }
+                (DefParseState::FirstParamOrEnd, crate::lexer::Token::Ellipsis) => {
+                    // DEF WORD(...) — variadic with zero fixed parameters.
+                    is_variadic = true;
+                    state = DefParseState::AfterEllipsis;
+                }
                 (DefParseState::FirstParamOrEnd, _) => {
                     return Err(TbxError::InvalidExpression {
-                        reason: "expected identifier or ')' after '('",
+                        reason: "expected identifier, '...', or ')' after '('",
                     });
                 }
 
@@ -638,6 +646,11 @@ pub fn def_prim(vm: &mut VM) -> Result<(), TbxError> {
                     arity += 1;
                     state = DefParseState::CommaOrRParen;
                 }
+                (DefParseState::NextParam, crate::lexer::Token::Ellipsis) => {
+                    // DEF WORD(X, ...) — variadic with one or more fixed parameters.
+                    is_variadic = true;
+                    state = DefParseState::AfterEllipsis;
+                }
                 (DefParseState::NextParam, crate::lexer::Token::RParen) => {
                     return Err(TbxError::InvalidExpression {
                         reason: "trailing comma before ')' is not allowed",
@@ -645,7 +658,17 @@ pub fn def_prim(vm: &mut VM) -> Result<(), TbxError> {
                 }
                 (DefParseState::NextParam, _) => {
                     return Err(TbxError::InvalidExpression {
-                        reason: "expected identifier after ',' in parameter list",
+                        reason: "expected identifier or '...' after ',' in parameter list",
+                    });
+                }
+
+                // --- AfterEllipsis: after '...' — only ')' is valid ---
+                (DefParseState::AfterEllipsis, crate::lexer::Token::RParen) => {
+                    break; // '...' followed by ')': valid variadic end.
+                }
+                (DefParseState::AfterEllipsis, _) => {
+                    return Err(TbxError::InvalidExpression {
+                        reason: "expected ')' after '...' in parameter list",
                     });
                 }
             },
@@ -680,8 +703,58 @@ pub fn def_prim(vm: &mut VM) -> Result<(), TbxError> {
         saved_latest,
         local_table,
         arity,
+        is_variadic,
     ));
 
+    Ok(())
+}
+
+/// VA_COUNT ( -- n ) — return the total number of arguments passed to the current call.
+///
+/// Returns `actual_arity` from the innermost `ReturnFrame::Call` on the return stack.
+/// This includes both fixed (named) parameters and any variadic arguments.
+/// Useful in variadic words defined with `DEF WORD(X, ...)` to determine how many
+/// arguments were actually passed.
+pub fn va_count_prim(vm: &mut VM) -> Result<(), TbxError> {
+    use crate::cell::ReturnFrame;
+    let actual_arity = match vm.return_stack.last() {
+        Some(ReturnFrame::Call { actual_arity, .. }) => *actual_arity,
+        Some(ReturnFrame::TopLevel) | None => {
+            return Err(TbxError::InvalidReturn);
+        }
+    };
+    vm.push(Cell::Int(actual_arity as i64))?;
+    Ok(())
+}
+
+/// ARG_ADDR ( index -- addr ) — return the StackAddr for the argument at the given index.
+///
+/// Pops `index` (zero-based) from the stack, validates it against `actual_arity` from
+/// the current return frame, and pushes `Cell::StackAddr(index)`.  The caller can then
+/// use `FETCH` or `STORE` to read or write the argument value at `data_stack[bp + index]`.
+///
+/// Argument indices are always in `[0, actual_arity)` and are well below
+/// `VARIADIC_LOCAL_BASE`, so `resolve_local_idx` maps them directly to `bp + index`.
+///
+/// Returns `TbxError::IndexOutOfBounds` if `index >= actual_arity`.
+pub fn arg_addr_prim(vm: &mut VM) -> Result<(), TbxError> {
+    use crate::cell::ReturnFrame;
+    let actual_arity = match vm.return_stack.last() {
+        Some(ReturnFrame::Call { actual_arity, .. }) => *actual_arity,
+        Some(ReturnFrame::TopLevel) | None => {
+            return Err(TbxError::InvalidReturn);
+        }
+    };
+    let index_raw = vm.pop_int()?;
+    if index_raw < 0 || index_raw as usize >= actual_arity {
+        return Err(TbxError::IndexOutOfBounds {
+            index: index_raw.max(0) as usize,
+            size: actual_arity,
+        });
+    }
+    // Argument indices are in [0, actual_arity) which is always < VARIADIC_LOCAL_BASE,
+    // so resolve_local_idx maps StackAddr(index) directly to bp + index. No adjustment needed.
+    vm.push(Cell::StackAddr(index_raw as usize))?;
     Ok(())
 }
 
@@ -738,11 +811,12 @@ pub fn end_prim(vm: &mut VM) -> Result<(), TbxError> {
             return Err(e);
         }
     }
-    // Update word header: confirm arity, local_count, unsmudge.
+    // Update word header: confirm arity, local_count, is_variadic, unsmudge.
     let word_hdr_idx = state.word_hdr_idx();
     if word_hdr_idx < vm.headers.len() {
         vm.headers[word_hdr_idx].arity = state.arity;
         vm.headers[word_hdr_idx].local_count = state.local_count;
+        vm.headers[word_hdr_idx].is_variadic = state.is_variadic;
         vm.headers[word_hdr_idx].flags &= !crate::dict::FLAG_HIDDEN;
     }
 
@@ -772,7 +846,14 @@ pub fn var_prim(vm: &mut VM) -> Result<(), TbxError> {
             .ok_or(TbxError::InvalidExpression {
                 reason: "VAR in compile mode but no compile_state",
             })?;
-        let idx = state.arity + state.local_count;
+        // For variadic words, use the VARIADIC_LOCAL_BASE offset so that local-variable
+        // StackAddr indices are in a disjoint range from argument indices.
+        // This allows ARG_ADDR to return raw argument indices without ambiguity.
+        let idx = if state.is_variadic {
+            crate::constants::VARIADIC_LOCAL_BASE + state.local_count
+        } else {
+            state.arity + state.local_count
+        };
         state.local_table.insert(name, idx);
         state.local_count += 1;
     } else {
@@ -1784,6 +1865,7 @@ pub fn register_all(vm: &mut VM) {
         kind: EntryKind::Call,
         arity: 0,
         local_count: 0,
+        is_variadic: false,
         prev: None,
     });
     vm.register(WordEntry {
@@ -1792,6 +1874,7 @@ pub fn register_all(vm: &mut VM) {
         kind: EntryKind::Exit,
         arity: 0,
         local_count: 0,
+        is_variadic: false,
         prev: None,
     });
     vm.register(WordEntry {
@@ -1800,6 +1883,7 @@ pub fn register_all(vm: &mut VM) {
         kind: EntryKind::ReturnVal,
         arity: 0,
         local_count: 0,
+        is_variadic: false,
         prev: None,
     });
     vm.register(WordEntry {
@@ -1808,6 +1892,7 @@ pub fn register_all(vm: &mut VM) {
         kind: EntryKind::DropToMarker,
         arity: 0,
         local_count: 0,
+        is_variadic: false,
         prev: None,
     });
     vm.register(WordEntry {
@@ -1816,6 +1901,7 @@ pub fn register_all(vm: &mut VM) {
         kind: EntryKind::Goto,
         arity: 0,
         local_count: 0,
+        is_variadic: false,
         prev: None,
     });
     vm.register(WordEntry {
@@ -1824,6 +1910,7 @@ pub fn register_all(vm: &mut VM) {
         kind: EntryKind::BranchIfFalse,
         arity: 0,
         local_count: 0,
+        is_variadic: false,
         prev: None,
     });
     vm.register(WordEntry {
@@ -1832,6 +1919,7 @@ pub fn register_all(vm: &mut VM) {
         kind: EntryKind::BranchIfTrue,
         arity: 0,
         local_count: 0,
+        is_variadic: false,
         prev: None,
     });
     let mut lit_marker_entry = WordEntry::new_primitive("LIT_MARKER", lit_marker_prim);
@@ -1843,6 +1931,7 @@ pub fn register_all(vm: &mut VM) {
         kind: EntryKind::Lit,
         arity: 0,
         local_count: 0,
+        is_variadic: false,
         prev: None,
     });
     // LITERAL: compile-time primitive that emits `LIT <value>` to the dictionary.
@@ -1891,6 +1980,7 @@ pub fn register_all(vm: &mut VM) {
         kind: EntryKind::Offset,
         arity: 0,
         local_count: 0,
+        is_variadic: false,
         prev: None,
     });
     // DIM: IMMEDIATE so the outer interpreter feeds the token stream before calling it.
@@ -1971,6 +2061,12 @@ pub fn register_all(vm: &mut VM) {
     let mut array_addr_entry = WordEntry::new_primitive("ARRAY_ADDR", array_addr_prim);
     array_addr_entry.flags = FLAG_SYSTEM;
     vm.register(array_addr_entry);
+
+    // Variadic argument primitives.
+    // VA_COUNT returns the total argument count of the current call.
+    // ARG_ADDR converts an argument index to a StackAddr for FETCH/STORE.
+    vm.register(WordEntry::new_primitive("VA_COUNT", va_count_prim));
+    vm.register(WordEntry::new_primitive("ARG_ADDR", arg_addr_prim));
 }
 
 #[cfg(test)]

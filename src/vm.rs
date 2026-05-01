@@ -26,6 +26,9 @@ pub struct CompileState {
     pub(crate) arity: usize,
     /// Number of VAR-declared local variables encountered so far.
     pub(crate) local_count: usize,
+    /// True if the word being compiled has a variadic parameter list (`DEF WORD(X, ...)`).
+    /// Set during DEF parsing when `...` is encountered.
+    pub(crate) is_variadic: bool,
     /// Source line number (1-based) where this DEF block started.
     /// Set by `compile_program` after the DEF IMMEDIATE word executes.
     /// Used to report accurate positions in unclosed-DEF errors.
@@ -52,6 +55,7 @@ impl CompileState {
         saved_latest: Option<Xt>,
         local_table: HashMap<String, usize>,
         arity: usize,
+        is_variadic: bool,
     ) -> Self {
         Self {
             word_name,
@@ -61,6 +65,7 @@ impl CompileState {
             local_table,
             arity,
             local_count: 0,
+            is_variadic,
             start_line: 0,
             call_patch_list: Vec::new(),
             label_table: HashMap::new(),
@@ -460,35 +465,72 @@ impl VM {
         Ok(())
     }
 
-    /// Read a local variable from the data stack at `bp + local_idx`.
+    /// Translate a `StackAddr` index to an absolute `data_stack` index.
+    ///
+    /// Two index ranges are recognised:
+    ///
+    /// - `[0, VARIADIC_LOCAL_BASE)` — argument indices and, in non-variadic words,
+    ///   VAR-local indices.  All map directly to `bp + local_idx`.
+    ///
+    /// - `[VARIADIC_LOCAL_BASE, ..)` — VAR-declared local variables in variadic words.
+    ///   The actual stack slot is `bp + actual_arity + (local_idx - VARIADIC_LOCAL_BASE)`.
+    ///   `actual_arity` is read from the innermost `ReturnFrame::Call`.
+    ///
+    /// Using a high-base offset ensures that argument indices (from `ARG_ADDR`) and
+    /// VAR indices in variadic words occupy completely disjoint ranges.
+    ///
+    /// Returns `None` if the computed index would overflow `usize`.
+    fn resolve_local_idx(&self, local_idx: usize) -> Option<usize> {
+        use crate::constants::VARIADIC_LOCAL_BASE;
+        if local_idx >= VARIADIC_LOCAL_BASE {
+            // VAR-declared local in a variadic word.
+            let slot = local_idx - VARIADIC_LOCAL_BASE;
+            let actual_arity = match self.return_stack.last() {
+                Some(ReturnFrame::Call { actual_arity, .. }) => *actual_arity,
+                _ => 0,
+            };
+            self.bp
+                .checked_add(actual_arity)
+                .and_then(|x| x.checked_add(slot))
+        } else {
+            self.bp.checked_add(local_idx)
+        }
+    }
+
+    /// Read a local variable from the data stack by its `StackAddr` index.
+    ///
+    /// Delegates address resolution to `resolve_local_idx`, which handles both
+    /// ordinary (non-variadic) and variadic-word local slots.
     ///
     /// # Errors
     ///
-    /// Returns `Err(TbxError::IndexOutOfBounds)` if `bp + local_idx` is out of range.
+    /// Returns `Err(TbxError::IndexOutOfBounds)` if the resolved index is out of range
+    /// or if the `bp + local_idx` addition would overflow.
     pub fn local_read(&self, local_idx: usize) -> Result<Cell, TbxError> {
-        let idx = self
-            .bp
-            .checked_add(local_idx)
+        let resolved = self
+            .resolve_local_idx(local_idx)
             .ok_or(TbxError::IndexOutOfBounds {
                 index: usize::MAX,
                 size: self.data_stack.len(),
             })?;
         let size = self.data_stack.len();
         self.data_stack
-            .get(idx)
+            .get(resolved)
             .cloned()
-            .ok_or(TbxError::IndexOutOfBounds { index: idx, size })
+            .ok_or(TbxError::IndexOutOfBounds {
+                index: resolved,
+                size,
+            })
     }
 
-    /// Write a local variable to the data stack at `bp + local_idx`.
+    /// Write a local variable to the data stack at the resolved index for `local_idx`.
     ///
     /// # Errors
     ///
-    /// Returns `Err(TbxError::IndexOutOfBounds)` if `bp + local_idx` is out of range.
+    /// Returns `Err(TbxError::IndexOutOfBounds)` if the resolved index is out of range or overflows.
     pub fn local_write(&mut self, local_idx: usize, cell: Cell) -> Result<(), TbxError> {
-        let idx = self
-            .bp
-            .checked_add(local_idx)
+        let resolved = self
+            .resolve_local_idx(local_idx)
             .ok_or(TbxError::IndexOutOfBounds {
                 index: usize::MAX,
                 size: self.data_stack.len(),
@@ -496,8 +538,11 @@ impl VM {
         let size = self.data_stack.len();
         *self
             .data_stack
-            .get_mut(idx)
-            .ok_or(TbxError::IndexOutOfBounds { index: idx, size })? = cell;
+            .get_mut(resolved)
+            .ok_or(TbxError::IndexOutOfBounds {
+                index: resolved,
+                size,
+            })? = cell;
         Ok(())
     }
 
@@ -601,10 +646,13 @@ impl VM {
                             limit: MAX_RETURN_STACK_DEPTH,
                         });
                     }
+                    // Direct dispatch (no CALL instruction): actual_arity is unknown.
+                    // Variadic words should always be called via CALL, not this path.
                     self.return_stack.push(ReturnFrame::Call {
                         return_pc,
                         saved_bp,
                         saved_array_pool_len: self.arrays.len(),
+                        actual_arity: 0,
                     });
                     self.bp = self.data_stack.len();
                     self.pc = offset;
@@ -670,6 +718,7 @@ impl VM {
                                 return_pc,
                                 saved_bp,
                                 saved_array_pool_len: self.arrays.len(),
+                                actual_arity: arity,
                             });
                             self.bp = self.data_stack.len() - arity;
                             for _ in 0..local_count {
@@ -693,6 +742,7 @@ impl VM {
                             return_pc,
                             saved_bp,
                             saved_array_pool_len,
+                            actual_arity: _,
                         } => {
                             self.data_stack.truncate(self.bp);
                             self.arrays.truncate(saved_array_pool_len);
@@ -713,6 +763,7 @@ impl VM {
                             return_pc,
                             saved_bp,
                             saved_array_pool_len,
+                            actual_arity: _,
                         } => {
                             self.data_stack.truncate(self.bp);
                             self.arrays.truncate(saved_array_pool_len);
@@ -1710,6 +1761,7 @@ mod tests {
                 return_pc: 0,
                 saved_bp: 0,
                 saved_array_pool_len: 0,
+                actual_arity: 0,
             });
         }
 
@@ -1750,6 +1802,7 @@ mod tests {
                 return_pc: 0,
                 saved_bp: 0,
                 saved_array_pool_len: 0,
+                actual_arity: 0,
             });
         }
 
@@ -2090,6 +2143,7 @@ mod tests {
                 kind,
                 arity: 0,
                 local_count: 0,
+                is_variadic: false,
                 prev: None,
             });
             vm.dict_write(Cell::Xt(call_xt)).unwrap();
