@@ -653,8 +653,6 @@ impl VM {
                         saved_bp,
                         saved_array_pool_len: self.arrays.len(),
                         actual_arity: 0,
-                        formal_arity: 0,
-                        is_variadic: false,
                     });
                     self.bp = self.data_stack.len();
                     self.pc = offset;
@@ -716,22 +714,11 @@ impl VM {
                                     limit: MAX_RETURN_STACK_DEPTH,
                                 });
                             }
-                            let (formal_arity, callee_is_variadic) = {
-                                let h = self.headers.get(target_xt.index()).ok_or(
-                                    TbxError::IndexOutOfBounds {
-                                        index: target_xt.index(),
-                                        size: self.headers.len(),
-                                    },
-                                )?;
-                                (h.arity, h.is_variadic)
-                            };
                             self.return_stack.push(ReturnFrame::Call {
                                 return_pc,
                                 saved_bp,
                                 saved_array_pool_len: self.arrays.len(),
                                 actual_arity: arity,
-                                formal_arity,
-                                is_variadic: callee_is_variadic,
                             });
                             self.bp = self.data_stack.len() - arity;
                             for _ in 0..local_count {
@@ -756,8 +743,6 @@ impl VM {
                             saved_bp,
                             saved_array_pool_len,
                             actual_arity: _,
-                            formal_arity: _,
-                            is_variadic: _,
                         } => {
                             self.data_stack.truncate(self.bp);
                             self.arrays.truncate(saved_array_pool_len);
@@ -779,8 +764,6 @@ impl VM {
                             saved_bp,
                             saved_array_pool_len,
                             actual_arity: _,
-                            formal_arity: _,
-                            is_variadic: _,
                         } => {
                             self.data_stack.truncate(self.bp);
                             self.arrays.truncate(saved_array_pool_len);
@@ -1779,8 +1762,6 @@ mod tests {
                 saved_bp: 0,
                 saved_array_pool_len: 0,
                 actual_arity: 0,
-                formal_arity: 0,
-                is_variadic: false,
             });
         }
 
@@ -1822,8 +1803,6 @@ mod tests {
                 saved_bp: 0,
                 saved_array_pool_len: 0,
                 actual_arity: 0,
-                formal_arity: 0,
-                is_variadic: false,
             });
         }
 

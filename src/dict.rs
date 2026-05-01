@@ -192,6 +192,21 @@ impl WordEntry {
     pub fn is_immediate(&self) -> bool {
         self.flags & FLAG_IMMEDIATE != 0
     }
+
+    /// Checks that `got` arguments satisfy the variadic arity requirement.
+    ///
+    /// For non-variadic words this is a no-op. For variadic words, `got` must be
+    /// at least `self.arity` (the fixed-parameter count before `...`).
+    pub fn check_variadic_arity(&self, got: usize) -> Result<(), crate::error::TbxError> {
+        if self.is_variadic && got < self.arity {
+            return Err(crate::error::TbxError::WrongNumberOfArguments {
+                name: self.name.clone(),
+                expected_min: self.arity,
+                got,
+            });
+        }
+        Ok(())
+    }
 }
 
 #[cfg(test)]

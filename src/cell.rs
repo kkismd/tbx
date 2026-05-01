@@ -57,14 +57,6 @@ pub enum ReturnFrame {
         /// dispatch without a CALL instruction), which should not occur for
         /// variadic words.
         actual_arity: usize,
-        /// The number of formal (fixed) parameters declared in the callee's DEF header.
-        /// Stored for informational purposes; not used by `resolve_local_idx` directly
-        /// (which relies on `VARIADIC_LOCAL_BASE` for disambiguation instead).
-        formal_arity: usize,
-        /// True if the callee is a variadic word (`DEF WORD(X, ...)`).
-        /// Stored for informational purposes; `resolve_local_idx` identifies VAR-local
-        /// indices by checking `local_idx >= VARIADIC_LOCAL_BASE` rather than this flag.
-        is_variadic: bool,
     },
     TopLevel, // Sentinel value for the bottom of the return stack
 }
