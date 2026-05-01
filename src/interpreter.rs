@@ -468,6 +468,19 @@ impl Interpreter {
         // Determine arity from top-level comma count.
         let arity = count_top_level_arity(arg_tokens).map_err(&make_err)?;
 
+        // For variadic words, verify that at least the fixed parameter count is supplied.
+        // Non-variadic words are not checked here to avoid breaking existing behaviour.
+        {
+            let entry = &self.vm.headers[stmt_xt.index()];
+            if entry.is_variadic && arity < entry.arity {
+                return Err(make_err(TbxError::WrongNumberOfArguments {
+                    name: entry.name.clone(),
+                    expected_min: entry.arity,
+                    got: arity,
+                }));
+            }
+        }
+
         // Check whether the statement is a compiled word (needs CALL with arity/locals)
         // or a primitive/other (called directly by placing Xt in the code stream).
         let stmt_is_word = matches!(

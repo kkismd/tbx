@@ -111,6 +111,10 @@ pub struct WordEntry {
     /// Set to 0 at registration time and patched to the final count when END is compiled.
     /// Used by callers to emit the correct `local_count` operand in CALL instructions.
     pub local_count: usize,
+    /// True if this word was declared with a variadic parameter list (`DEF WORD(X, ...)`).
+    /// When true, `arity` holds the number of fixed (named) parameters before `...`.
+    /// Callers must pass at least `arity` arguments; extra arguments become variadic.
+    pub is_variadic: bool,
     /// Index of the previous entry in `VM::headers` (linked list for search).
     ///
     /// **Do not set this field directly.** It is automatically managed by
@@ -127,6 +131,7 @@ impl WordEntry {
             kind: EntryKind::Primitive(f),
             arity: 0,
             local_count: 0,
+            is_variadic: false,
             prev: None,
         }
     }
@@ -139,6 +144,7 @@ impl WordEntry {
             kind: EntryKind::Word(offset),
             arity: 0,
             local_count: 0,
+            is_variadic: false,
             prev: None,
         }
     }
@@ -151,6 +157,7 @@ impl WordEntry {
             kind: EntryKind::Variable(idx),
             arity: 0,
             local_count: 0,
+            is_variadic: false,
             prev: None,
         }
     }
@@ -163,6 +170,7 @@ impl WordEntry {
             kind: EntryKind::Constant(value),
             arity: 0,
             local_count: 0,
+            is_variadic: false,
             prev: None,
         }
     }
@@ -175,6 +183,7 @@ impl WordEntry {
             kind: EntryKind::Array { base, size },
             arity: 0,
             local_count: 0,
+            is_variadic: false,
             prev: None,
         }
     }

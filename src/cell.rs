@@ -50,6 +50,22 @@ pub enum ReturnFrame {
         /// On EXIT or RETURN_VAL, the array pool is truncated back to this
         /// length to free all local arrays created during the call.
         saved_array_pool_len: usize,
+        /// The actual number of arguments passed to this call.
+        /// Used by the `VA_COUNT` primitive to report how many arguments the
+        /// caller supplied (including both fixed and variadic arguments).
+        /// Set to 0 when a word is dispatched via `EntryKind::Word` (direct
+        /// dispatch without a CALL instruction), which should not occur for
+        /// variadic words.
+        actual_arity: usize,
+        /// The number of formal (fixed) parameters declared in the callee's DEF header.
+        /// Used together with `is_variadic` and `actual_arity` to correctly resolve
+        /// `StackAddr` indices for VAR-declared local variables in variadic words.
+        /// For non-variadic words this is equal to `actual_arity`.
+        formal_arity: usize,
+        /// True if the callee is a variadic word (`DEF WORD(X, ...)`).
+        /// When true, local variables (with `StackAddr` index >= `formal_arity`) are
+        /// located at `bp + actual_arity + (idx - formal_arity)` rather than `bp + idx`.
+        is_variadic: bool,
     },
     TopLevel, // Sentinel value for the bottom of the return stack
 }

@@ -680,6 +680,19 @@ fn emit_call_by_kind(
     self_hdr_idx: Option<usize>,
     patch_offsets: &mut Vec<usize>,
 ) -> Result<(), TbxError> {
+    // For variadic words, verify that at least the fixed parameter count is supplied.
+    // Non-variadic words are not checked to avoid breaking existing behaviour.
+    {
+        let entry = &vm.headers[xt.index()];
+        if entry.is_variadic && arity < entry.arity {
+            return Err(TbxError::WrongNumberOfArguments {
+                name: entry.name.clone(),
+                expected_min: entry.arity,
+                got: arity,
+            });
+        }
+    }
+
     // Match by reference: `vm` is immutable here so no borrow conflict arises.
     match &vm.headers[xt.index()].kind {
         EntryKind::Word(_) => {
@@ -1455,6 +1468,7 @@ mod tests {
             kind: EntryKind::Lit,
             arity: 0,
             local_count: 0,
+            is_variadic: false,
             prev: None,
         });
 
