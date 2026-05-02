@@ -670,7 +670,8 @@ fn emit_local_read(output: &mut Vec<Cell>, idx: usize, vm: &VM) -> Result<(), Tb
 /// - `EntryKind::Word`: emits `Xt(CALL)`, `Xt(xt)`, `Int(arity)`, `Int(local_count)`
 ///   - When `xt.index() == self_hdr_idx` (self-recursive call), emits `Int(0)` as a
 ///     placeholder and records the offset in `patch_offsets` for later back-patching.
-/// - `EntryKind::Primitive` / `Variable` / `Constant`: emits `Xt(xt)` directly
+/// - `EntryKind::Primitive` (variadic): emits `Xt(LIT)`, `Int(arity)`, `Xt(xt)`
+/// - `EntryKind::Primitive` (fixed) / `Variable` / `Constant`: emits `Xt(xt)` directly
 /// - Any internal kind (Lit, Call, Exit, ReturnVal, DropToMarker): returns `InvalidExpression`
 fn emit_call_by_kind(
     output: &mut Vec<Cell>,
@@ -698,6 +699,14 @@ fn emit_call_by_kind(
                 let local_count = vm.headers[xt.index()].local_count;
                 output.push(Cell::Int(local_count as i64));
             }
+        }
+        EntryKind::Primitive(_) if vm.headers[xt.index()].is_variadic => {
+            // Variadic primitive: push arity as Int before the Xt so the
+            // primitive can pop it and know how many arguments to consume.
+            let lit_xt = require_xt(vm, "LIT")?;
+            output.push(Cell::Xt(lit_xt));
+            output.push(Cell::Int(arity as i64));
+            output.push(Cell::Xt(xt));
         }
         EntryKind::Primitive(_) | EntryKind::Variable(_) | EntryKind::Constant(_) => {
             output.push(Cell::Xt(xt));

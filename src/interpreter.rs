@@ -543,6 +543,19 @@ impl Interpreter {
                     .map_err(&make_err)?;
             }
         } else {
+            // For a variadic primitive used as a statement, emit LIT + Int(arity)
+            // before the Xt so the primitive can pop the arity from the stack.
+            let is_variadic_prim = matches!(
+                self.vm.headers[stmt_xt.index()].kind,
+                crate::dict::EntryKind::Primitive(_)
+            ) && self.vm.headers[stmt_xt.index()].is_variadic;
+            if is_variadic_prim {
+                let lit_xt = self.lookup_required("LIT", err_line, err_col, source_line)?;
+                self.vm.dict_write(Cell::Xt(lit_xt)).map_err(&make_err)?;
+                self.vm
+                    .dict_write(Cell::Int(arity as i64))
+                    .map_err(&make_err)?;
+            }
             self.vm.dict_write(Cell::Xt(stmt_xt)).map_err(&make_err)?;
         }
         self.vm
