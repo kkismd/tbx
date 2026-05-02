@@ -383,10 +383,11 @@ pub fn putchr_prim(vm: &mut VM) -> Result<(), TbxError> {
     Ok(())
 }
 
-/// PUTDEC — output the integer value on the stack as a signed decimal number (no newline).
+/// PUTDEC — output the numeric value on the stack as a signed decimal number (no newline).
+/// Accepts both `Int` and `Float` values.
 pub fn putdec_prim(vm: &mut VM) -> Result<(), TbxError> {
-    let n = vm.pop_int()?;
-    vm.write_output(&n.to_string());
+    let cell = vm.pop_number()?;
+    vm.write_output(&cell.to_string());
     Ok(())
 }
 
@@ -3207,9 +3208,25 @@ mod tests {
     }
 
     #[test]
+    fn test_putdec_float() {
+        let mut vm = VM::new();
+        vm.push(Cell::Float(1.0)).unwrap();
+        putdec_prim(&mut vm).unwrap();
+        assert_eq!(vm.take_output(), "1.0");
+    }
+
+    #[test]
+    fn test_putdec_float_fractional() {
+        let mut vm = VM::new();
+        vm.push(Cell::Float(2.5)).unwrap();
+        putdec_prim(&mut vm).unwrap();
+        assert_eq!(vm.take_output(), "2.5");
+    }
+
+    #[test]
     fn test_putdec_type_error() {
         let mut vm = VM::new();
-        vm.push(Cell::Float(3.5)).unwrap();
+        vm.push(Cell::Bool(true)).unwrap();
         assert!(matches!(
             putdec_prim(&mut vm),
             Err(TbxError::TypeError { .. })
