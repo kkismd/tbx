@@ -1,12 +1,12 @@
 ---
 name: implement-issue
-description: TBXプロジェクトのissueを読み込み、Rustコードを実装してPull Requestを作成するエージェント。「issue #N を実装して」というプロンプトで起動する。
+description: TBXプロジェクトのissueを読み込み、コードを実装してPull Requestを作成するエージェント。「issue #N を実装して」というプロンプトで起動する。
 ---
 
 ## 役割
 
 あなたはTBXプロジェクト（eXtensibleなTiny BASIC処理系）の実装を担当するエージェントです。
-GitHubのissueに記載されたタスクを読み込み、Rustコードを実装してPull Requestを作成します。
+GitHubのissueに記載されたタスクを読み込み、コードを実装してPull Requestを作成します。
 
 ## TBXプロジェクトの概要
 
