@@ -16,6 +16,7 @@ DEF ワードの挙動
 * フラグ is_compiling を true にする。
 * 次のトークンを読み取り、それを「新しいワードの名前」として辞書に新規登録する。
 * 名前に続く `(X, Y)` 形式の仮引数リストがあればパースし、局所変数テーブルをリセットしたうえで各引数名を `StackAddr(0)`, `StackAddr(1)`, ... として登録する（`arity = 引数の数`）。括弧がなければ `arity = 0`。
+* 仮引数リストの最後のパラメータが `...` の場合は**可変引数ワード**として登録する（`is_variadic = true`）。`...` の前に固定引数があれば、それらは `StackAddr(0)`, ... として通常通り登録される。可変引数ワードでは、ローカル変数のインデックスが `VARIADIC_LOCAL_BASE` からのオフセット形式（`StackAddr(VARIADIC_LOCAL_BASE + n)`）で登録される。実行時の `VA_COUNT()` / `ARG_ADDR(I)` は `actual_arity`（リターンスタックフレームに保存）を参照する。
 * 命令列の書き込み先は `dictionary[DP..]`（`DP_USER` 以降の空き領域）であり、DEF専用の別バッファは確保しない。コンパイルモード中、アウター・インタプリタはステートメント行を1行ずつ処理し、各ステートメントに対してフェーズ1と同じ命令列パターンを `dictionary[DP..]` に書き込む（DP を進めながら）。ステートメントの `EntryKind` に応じて2種類のパターンを使い分ける:
 
   **`EntryKind::Word` の場合:**
@@ -123,7 +124,7 @@ pub enum CompileEntry {
 
 ---
 
-コンパイルワードの実装に使用するプリミティブ群。このうち `CS_PUSH` / `CS_POP` / `CS_SWAP` / `CS_DROP` / `CS_DUP` / `CS_OVER` / `CS_ROT` / `PATCH_ADDR` / `COMPILE_EXPR` / `COMPILE_LVALUE` / `SKIP_EQ` / `CS_OPEN_TAG` / `CS_CLOSE_TAG` は **コンパイルモード（`is_compiling = true`）専用** であり、実行モード中に呼ばれた場合はエラーとする。`APPEND` / `HERE` / `JUMP_FALSE` / `JUMP_TRUE` / `JUMP_ALWAYS` / `ASSIGN_XT` は汎用プリミティブであり、コンパイルモード以外でも使用できる。
+コンパイルワードの実装に使用するプリミティブ群。このうち `CS_PUSH` / `CS_POP` / `CS_SWAP` / `CS_DROP` / `CS_DUP` / `CS_OVER` / `CS_ROT` / `PATCH_ADDR` / `COMPILE_EXPR` / `COMPILE_LVALUE` / `COMPILE_LVALUE_SAVE` / `SKIP_EQ` / `SKIP_COMMA` / `CS_OPEN_TAG` / `CS_CLOSE_TAG` は **コンパイルモード（`is_compiling = true`）専用** であり、実行モード中に呼ばれた場合はエラーとする。`APPEND` / `HERE` / `JUMP_FALSE` / `JUMP_TRUE` / `JUMP_ALWAYS` / `LOOKUP` は汎用プリミティブであり、コンパイルモード以外でも使用できる。
 
 | プリミティブ | スタック効果 | 説明 |
 | ------------ | ------------ | ---- |
@@ -139,11 +140,13 @@ pub enum CompileEntry {
 | `PATCH_ADDR` | `( addr -- )` | `DictAddr(addr)` をポップし、`dictionary[addr] = Cell::DictAddr(DP)` を書き込む（前方参照のバックパッチ） |
 | `COMPILE_EXPR` | `( -- )` | ソースから式を1つ読み取ってコンパイルし、命令列を `dictionary[DP..]` に書き込む |
 | `COMPILE_LVALUE` | `( -- )` | トークンストリームから識別子を1つ読み、変数アドレスを `LIT addr` として `dictionary[DP..]` に書き込む。ローカル変数は `StackAddr`、グローバル変数は `DictAddr` に解決する |
+| `COMPILE_LVALUE_SAVE` | `( -- )` | `COMPILE_LVALUE` と同様にアドレスを辞書に書き込むが、さらに同じアドレスをコンパイルスタック（`compile_stack`）にも積む。FOR ループなど「辞書への emit と後での再利用の両方」が必要な場面で使用する |
 | `SKIP_EQ`    | `( -- )` | トークンストリームから次のトークンを読み、`=` であることを検証して破棄する。`=` 以外の場合は `InvalidExpression` |
+| `SKIP_COMMA` | `( -- )` | トークンストリームから次のトークンを読み、`,` であることを検証して破棄する。`,` 以外の場合は `InvalidExpression`。FOR ループの `&var, end` 構文のセパレータ消費に使用する |
 | `JUMP_FALSE` | `( -- xt )` | `BranchIfFalse`（BIF）のXt定数をデータスタックに積む |
 | `JUMP_TRUE`  | `( -- xt )` | `BranchIfTrue`（BIT）のXt定数をデータスタックに積む |
 | `JUMP_ALWAYS` | `( -- xt )` | `Goto` のXt定数をデータスタックに積む |
-| `ASSIGN_XT`  | `( -- xt )` | `SET` のXt定数をデータスタックに積む。`APPEND ASSIGN_XT` で SET 命令を辞書に書き込むために使用する |
+| `LOOKUP`     | `( str -- xt )` | 文字列で指定した名前のワードを辞書から検索し、その Xt をデータスタックに積む。`APPEND LOOKUP("SET")` で任意のワードの Xt を辞書に書き込むために使用する |
 | `CS_OPEN_TAG` | `( str -- )` | データスタックから `StringDesc` をポップし、文字列を解決して `CompileEntry::Tag(string)` を compile_stack に積む。制御構造の開始を記録するために使用する |
 | `CS_CLOSE_TAG` | `( str -- )` | データスタックから `StringDesc` をポップし、compile_stack のトップが一致する `Tag` であることを検証してポップする。不一致なら `MismatchedTag`、タグがなければ `NoOpenTag` を返す |
 
@@ -482,6 +485,100 @@ D:  ...（UNTIL 直後）
 
 ---
 
+## FOR...NEXT の実装記録
+
+> Issue #420「FOR/NEXT ループを簡略化する（start=1・step=1 固定）」に基づく設計方針
+
+FOR と NEXT は `lib/basic.tbx` に TBX コードとして実装されたコンパイルワードである。
+`FOR &var, end` の形式で、ループ変数を 1 に初期化し、`var <= end` の間ループ本体を繰り返す（start=1・step=1 固定）。
+
+```
+# FOR &varref, end ... NEXT
+DEF FOR
+  # Read &var, emit LIT addr, and save var_addr for reuse in NEXT.
+  VAR VAR_ADDR
+  COMPILE_LVALUE_SAVE
+  SET &VAR_ADDR, CS_POP
+  # Consume the comma between &var and the end expression.
+  SKIP_COMMA
+  # Emit: LIT 1, SET  ->  var = 1 (fixed start)
+  LITERAL 1
+  APPEND LOOKUP("SET")
+  # Record loop-condition start address A on the compile stack.
+  CS_PUSH HERE
+  # Emit condition: LIT addr, FETCH, <end_expr>, LE
+  LITERAL VAR_ADDR
+  APPEND LOOKUP("FETCH")
+  COMPILE_EXPR
+  APPEND LOOKUP("LE")
+  # Emit JUMP_FALSE placeholder (patched by NEXT to D).
+  APPEND JUMP_FALSE
+  CS_PUSH HERE
+  APPEND 0
+  # Save var_addr for NEXT (needed to emit increment code).
+  CS_PUSH VAR_ADDR
+  # Push scope tag last (tag-last layout).
+  CS_OPEN_TAG "FOR"
+END
+IMMEDIATE FOR
+
+DEF NEXT
+  # Validate and pop the "FOR" scope tag.
+  CS_CLOSE_TAG "FOR"
+  # Restore saved values from the compile stack.
+  VAR VAR_ADDR
+  SET &VAR_ADDR, CS_POP
+  VAR BIF_ADDR
+  SET &BIF_ADDR, CS_POP
+  # Emit increment code: LIT addr, LIT addr, FETCH, LIT 1, ADD, SET  ->  var += 1
+  LITERAL VAR_ADDR
+  LITERAL VAR_ADDR
+  APPEND LOOKUP("FETCH")
+  LITERAL 1
+  APPEND LOOKUP("ADD")
+  APPEND LOOKUP("SET")
+  # Emit JUMP_ALWAYS back to A (loop-condition start).
+  APPEND JUMP_ALWAYS
+  APPEND CS_POP
+  # Patch the JUMP_FALSE placeholder to here (= D, loop exit).
+  PATCH_ADDR BIF_ADDR
+END
+IMMEDIATE NEXT
+```
+
+### 生成される命令列（実行時）
+
+```
+    LIT addr_of_var
+    LIT 1
+    SET                      -- var = 1 (fixed start)
+A:
+    LIT addr_of_var
+    FETCH                    -- push current var value
+    [end expression]
+    LE                       -- var <= end ?
+    BIF D                    -- exit loop if false
+    [loop body]
+    LIT addr_of_var
+    LIT addr_of_var
+    FETCH
+    LIT 1
+    ADD
+    SET                      -- var += 1
+    JUMP_ALWAYS A
+D:  ...（NEXT 直後）
+```
+
+### コンパイルスタックの遷移（タグラスト方式）
+
+| 時点 | コンパイルスタック |
+|---|---|
+| FOR 実行直前 | `[]` |
+| FOR 実行後 | `[A, BIF_placeholder, VAR_ADDR, Tag("FOR")]`（Tag がトップ） |
+| NEXT 実行後 | `[]` |
+
+---
+
 ## LET — BASIC スタイル代入文の実装記録
 
 > Issue #391「LET文の実装」に基づく設計方針
@@ -491,16 +588,16 @@ D:  ...（UNTIL 直後）
 ### 必要な新プリミティブ
 
 `COMPILE_LVALUE` と `SKIP_EQ` を新たに追加する（上記プリミティブ一覧を参照）。
-`ASSIGN_XT` 定数も追加し、`APPEND ASSIGN_XT` で SET 命令を辞書に書き込めるようにする。
+ワードの Xt を辞書に書き込むには `APPEND LOOKUP("SET")` パターンを使用する（`LOOKUP` プリミティブ参照）。
 
 ### LET の実装（`lib/basic.tbx`）
 
 ```
 DEF LET
-  COMPILE_LVALUE    REM read variable name, emit LIT addr
-  SKIP_EQ           REM consume '='
-  COMPILE_EXPR      REM compile right-hand side expression
-  APPEND ASSIGN_XT  REM emit SET instruction
+  COMPILE_LVALUE        REM read variable name, emit LIT addr
+  SKIP_EQ               REM consume '='
+  COMPILE_EXPR          REM compile right-hand side expression
+  APPEND LOOKUP("SET")  REM emit SET instruction
 END
 IMMEDIATE LET
 ```
@@ -509,7 +606,7 @@ IMMEDIATE LET
 1. `COMPILE_LVALUE` — トークンストリームから識別子を読み、`LIT StackAddr(idx)` または `LIT DictAddr(addr)` を辞書に書き込む
 2. `SKIP_EQ` — `=` トークンを読み捨てる
 3. `COMPILE_EXPR` — 残りのトークンを式としてコンパイルし命令列に書き込む
-4. `APPEND ASSIGN_XT` — SET 命令の Xt を辞書に書き込む
+4. `APPEND LOOKUP("SET")` — SET 命令の Xt を辞書に書き込む
 
 生成されるコード（`LET I = X + 1` の場合、I はローカル変数）:
 
