@@ -484,6 +484,30 @@ pub fn negate_prim(vm: &mut VM) -> Result<(), TbxError> {
     Ok(())
 }
 
+/// INT — truncate a numeric value toward zero and return it as `Cell::Int`.
+///
+/// - `Cell::Float(v)` → `Cell::Int(v.trunc() as i64)` (truncation toward zero)
+/// - `Cell::Int(n)` → `Cell::Int(n)` (identity)
+/// - any other type → `TbxError::TypeError`
+pub fn int_prim(vm: &mut VM) -> Result<(), TbxError> {
+    let val = vm.pop()?;
+    match val {
+        Cell::Float(v) => {
+            vm.push(Cell::Int(v.trunc() as i64))?;
+        }
+        Cell::Int(n) => {
+            vm.push(Cell::Int(n))?;
+        }
+        other => {
+            return Err(TbxError::TypeError {
+                expected: "Int or Float",
+                got: other.type_name(),
+            });
+        }
+    }
+    Ok(())
+}
+
 /// LITERAL — compile a literal value into the dictionary as LIT + value (2 cells).
 pub fn literal_prim(vm: &mut VM) -> Result<(), TbxError> {
     let value = vm.pop()?;
@@ -1930,6 +1954,7 @@ pub fn register_all(vm: &mut VM) {
     vm.register(WordEntry::new_primitive("BAND", band_prim));
     vm.register(WordEntry::new_primitive("BOR", bor_prim));
     vm.register(WordEntry::new_primitive("NEGATE", negate_prim));
+    vm.register(WordEntry::new_primitive("INT", int_prim));
     vm.register(WordEntry::new_primitive("PUTSTR", putstr_prim));
     vm.register(WordEntry::new_primitive("PUTCHR", putchr_prim));
     vm.register(WordEntry::new_primitive("PUTDEC", putdec_prim));
@@ -5945,5 +5970,57 @@ mod tests {
         assert_eq!(vm.pop(), Ok(Cell::Int(300)));
         assert_eq!(vm.pop(), Ok(Cell::Int(200)));
         assert_eq!(vm.pop(), Ok(Cell::Int(100)));
+    }
+
+    // --- int_prim ---
+
+    #[test]
+    fn test_int_prim_positive_float_truncates() {
+        // INT(3.7) => 3 (truncation toward zero)
+        let mut vm = VM::new();
+        vm.push(Cell::Float(3.7)).unwrap();
+        int_prim(&mut vm).unwrap();
+        assert_eq!(vm.pop(), Ok(Cell::Int(3)));
+    }
+
+    #[test]
+    fn test_int_prim_negative_float_truncates_toward_zero() {
+        // INT(-3.7) => -3 (truncation toward zero, not floor)
+        let mut vm = VM::new();
+        vm.push(Cell::Float(-3.7)).unwrap();
+        int_prim(&mut vm).unwrap();
+        assert_eq!(vm.pop(), Ok(Cell::Int(-3)));
+    }
+
+    #[test]
+    fn test_int_prim_whole_float_returns_int() {
+        // INT(3.0) => 3
+        let mut vm = VM::new();
+        vm.push(Cell::Float(3.0)).unwrap();
+        int_prim(&mut vm).unwrap();
+        assert_eq!(vm.pop(), Ok(Cell::Int(3)));
+    }
+
+    #[test]
+    fn test_int_prim_int_identity() {
+        // INT(5) => 5 (identity for Cell::Int)
+        let mut vm = VM::new();
+        vm.push(Cell::Int(5)).unwrap();
+        int_prim(&mut vm).unwrap();
+        assert_eq!(vm.pop(), Ok(Cell::Int(5)));
+    }
+
+    #[test]
+    fn test_int_prim_type_error() {
+        // INT on a non-numeric type must return TypeError.
+        let mut vm = VM::new();
+        vm.push(Cell::Bool(true)).unwrap();
+        assert!(matches!(
+            int_prim(&mut vm),
+            Err(TbxError::TypeError {
+                expected: "Int or Float",
+                ..
+            })
+        ));
     }
 }

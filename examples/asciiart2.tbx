@@ -9,6 +9,13 @@ DEF charCode(i)
   ENDIF
 END
 
+# https://gist.github.com/eparadis/d4a242c8cc149f3583c303efa80532c4?permalink_comment_id=2861310#gistcomment-2861310
+# Add some ANSI color to your drawing, if you terminal supports it, with these changes to the original listing:
+# 130 PRINT CHR$(27);CHR$(91);CHR$(51);CHR$(N-INT(N/6)*6+49);CHR$(109);
+DEF setColor(N)
+  PUTCHR(27); PUTCHR(91); PUTCHR(51); PUTCHR(N-INT(N/6)*6+49); PUTCHR(109);
+END
+
 DEF PlotMandel(X, Y)
   VAR CA,CB,A,B,I,T, isInside, iterate
 
