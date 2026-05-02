@@ -1,0 +1,56 @@
+# lib/tests/test_var_multi.tbx — TBX tests for multi-variable VAR declarations
+USE "lib/tests/helper.tbx"
+
+# --- VAR A, B, C declares three independent local variables ---
+
+DEF THREE_VARS()
+  VAR A, B, C
+  LET A = 1
+  LET B = 2
+  LET C = 3
+  RETURN A + B + C
+END
+ASSERT THREE_VARS() = 6
+
+# --- Variables declared via multi-VAR are independent (no aliasing) ---
+
+DEF INDEPENDENT_VARS()
+  VAR X, Y
+  LET X = 10
+  LET Y = 20
+  LET X = X + 1
+  RETURN X + Y
+END
+ASSERT INDEPENDENT_VARS() = 31
+
+# --- Single-name VAR still works (backward compatibility) ---
+
+DEF SINGLE_VAR()
+  VAR N
+  LET N = 42
+  RETURN N
+END
+ASSERT SINGLE_VAR() = 42
+
+# --- Two-variable VAR in a loop ---
+
+DEF SUM_PAIR(A, B)
+  VAR I, S
+  LET I = 0
+  LET S = 0
+  WHILE I < A
+    LET S = S + B
+    LET I = I + 1
+  ENDWH
+  RETURN S
+END
+ASSERT SUM_PAIR(3, 4) = 12
+ASSERT SUM_PAIR(5, 2) = 10
+
+# --- Global multi-VAR declaration ---
+
+VAR GA, GB, GC
+SET &GA, 100
+SET &GB, 200
+SET &GC, 300
+ASSERT GA + GB + GC = 600

@@ -826,43 +826,68 @@ pub fn end_prim(vm: &mut VM) -> Result<(), TbxError> {
     Ok(())
 }
 
-/// VAR — declare a local variable (in compile mode) or global variable (in execute mode).
+/// VAR — declare one or more local variables (in compile mode) or global variables (in execute
+/// mode). Accepts a comma-separated list of identifiers: `VAR A`, `VAR A, B, C`.
 pub fn var_prim(vm: &mut VM) -> Result<(), TbxError> {
-    let name_tok = vm.next_token()?;
-    let name = match name_tok.token {
-        crate::lexer::Token::Ident(n) => n.to_ascii_uppercase(),
-        _ => {
-            return Err(TbxError::InvalidExpression {
-                reason: "expected variable name after VAR",
-            })
-        }
-    };
-
-    if vm.is_compiling {
-        // Local variable: add to compile state's local table.
-        let state = vm
-            .compile_state
-            .as_mut()
-            .ok_or(TbxError::InvalidExpression {
-                reason: "VAR in compile mode but no compile_state",
-            })?;
-        // For variadic words, use the VARIADIC_LOCAL_BASE offset so that local-variable
-        // StackAddr indices are in a disjoint range from argument indices.
-        // This allows ARG_ADDR to return raw argument indices without ambiguity.
-        let idx = if state.is_variadic {
-            crate::constants::VARIADIC_LOCAL_BASE + state.local_count
-        } else {
-            state.arity + state.local_count
+    loop {
+        // Read the next identifier.
+        let name_tok = vm.next_token()?;
+        let name = match name_tok.token {
+            crate::lexer::Token::Ident(n) => n.to_ascii_uppercase(),
+            _ => {
+                return Err(TbxError::InvalidExpression {
+                    reason: "expected variable name after VAR",
+                })
+            }
         };
-        state.local_table.insert(name, idx);
-        state.local_count += 1;
-    } else {
-        // Global variable: allocate storage in dictionary.
-        let storage_idx = vm.dp;
-        vm.dict_write(Cell::None)?;
-        let entry = crate::dict::WordEntry::new_variable(&name, storage_idx);
-        vm.register(entry);
-        vm.seal_user();
+
+        if vm.is_compiling {
+            // Local variable: add to compile state's local table.
+            let state = vm
+                .compile_state
+                .as_mut()
+                .ok_or(TbxError::InvalidExpression {
+                    reason: "VAR in compile mode but no compile_state",
+                })?;
+            // For variadic words, use the VARIADIC_LOCAL_BASE offset so that local-variable
+            // StackAddr indices are in a disjoint range from argument indices.
+            // This allows ARG_ADDR to return raw argument indices without ambiguity.
+            let idx = if state.is_variadic {
+                crate::constants::VARIADIC_LOCAL_BASE + state.local_count
+            } else {
+                state.arity + state.local_count
+            };
+            state.local_table.insert(name, idx);
+            state.local_count += 1;
+        } else {
+            // Global variable: allocate storage in dictionary.
+            let storage_idx = vm.dp;
+            vm.dict_write(Cell::None)?;
+            let entry = crate::dict::WordEntry::new_variable(&name, storage_idx);
+            vm.register(entry);
+            vm.seal_user();
+        }
+
+        // Peek at the next token to decide whether to continue.
+        // If it is a comma, consume it and read another identifier.
+        // Otherwise push it back and stop.
+        match vm.next_token() {
+            Ok(tok) if matches!(tok.token, crate::lexer::Token::Comma) => {
+                // Comma consumed; loop to read the next identifier.
+            }
+            Ok(tok) => {
+                // Not a comma: return the token to the front of the stream and stop.
+                if let Some(stream) = vm.token_stream.as_mut() {
+                    stream.push_front(tok);
+                }
+                break;
+            }
+            Err(TbxError::TokenStreamEmpty) => {
+                // End of stream: stop normally.
+                break;
+            }
+            Err(e) => return Err(e),
+        }
     }
 
     Ok(())
@@ -4084,6 +4109,117 @@ mod tests {
             ),
             "expected Variable entry, got {:?}",
             vm.headers[xt.index()].kind
+        );
+    }
+
+    #[test]
+    fn test_var_prim_multi_local_variables() {
+        // VAR A, B, C inside DEF should register three independent local-variable slots.
+        use std::collections::VecDeque;
+        let mut vm = make_compiling_vm("MULTIWORD");
+        vm.token_stream = Some(VecDeque::from([
+            make_ident_token("A"),
+            make_comma_token(),
+            make_ident_token("B"),
+            make_comma_token(),
+            make_ident_token("C"),
+        ]));
+        var_prim(&mut vm).unwrap();
+        let state = vm.compile_state.as_ref().unwrap();
+        assert_eq!(state.local_count, 3);
+        assert_eq!(state.local_table.get("A").copied(), Some(0));
+        assert_eq!(state.local_table.get("B").copied(), Some(1));
+        assert_eq!(state.local_table.get("C").copied(), Some(2));
+    }
+
+    #[test]
+    fn test_var_prim_multi_global_variables() {
+        // VAR X, Y outside DEF should register two independent global Variable entries.
+        use std::collections::VecDeque;
+        let mut vm = VM::new();
+        register_all(&mut vm);
+        vm.token_stream = Some(VecDeque::from([
+            make_ident_token("X"),
+            make_comma_token(),
+            make_ident_token("Y"),
+        ]));
+        var_prim(&mut vm).unwrap();
+        let xt_x = vm.lookup("X").expect("X should be registered");
+        let xt_y = vm.lookup("Y").expect("Y should be registered");
+        assert!(
+            matches!(
+                vm.headers[xt_x.index()].kind,
+                crate::dict::EntryKind::Variable(_)
+            ),
+            "expected Variable entry for X, got {:?}",
+            vm.headers[xt_x.index()].kind
+        );
+        assert!(
+            matches!(
+                vm.headers[xt_y.index()].kind,
+                crate::dict::EntryKind::Variable(_)
+            ),
+            "expected Variable entry for Y, got {:?}",
+            vm.headers[xt_y.index()].kind
+        );
+        // Each variable should occupy a distinct storage cell.
+        let addr_x = match vm.headers[xt_x.index()].kind {
+            crate::dict::EntryKind::Variable(a) => a,
+            _ => panic!("expected Variable"),
+        };
+        let addr_y = match vm.headers[xt_y.index()].kind {
+            crate::dict::EntryKind::Variable(a) => a,
+            _ => panic!("expected Variable"),
+        };
+        assert_ne!(addr_x, addr_y, "X and Y must use different storage cells");
+    }
+
+    #[test]
+    fn test_var_prim_comma_without_ident_returns_error() {
+        // VAR A, 1 (non-ident after comma) should return InvalidExpression.
+        use std::collections::VecDeque;
+        let mut vm = make_compiling_vm("BADWORD");
+        vm.token_stream = Some(VecDeque::from([
+            make_ident_token("A"),
+            make_comma_token(),
+            crate::lexer::SpannedToken {
+                token: crate::lexer::Token::IntLit(1),
+                pos: crate::lexer::Position { line: 1, col: 1 },
+                source_offset: 0,
+                source_len: 1,
+            },
+        ]));
+        let err = var_prim(&mut vm).unwrap_err();
+        assert!(
+            matches!(err, TbxError::InvalidExpression { .. }),
+            "expected InvalidExpression, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn test_var_prim_non_comma_token_returned_to_stream() {
+        // After VAR A followed by a non-comma token, the non-comma token must be
+        // pushed back so later consumers can still read it.
+        use std::collections::VecDeque;
+        let mut vm = make_compiling_vm("PUSHBACKWORD");
+        let newline_tok = crate::lexer::SpannedToken {
+            token: crate::lexer::Token::Newline,
+            pos: crate::lexer::Position { line: 1, col: 2 },
+            source_offset: 1,
+            source_len: 1,
+        };
+        vm.token_stream = Some(VecDeque::from([make_ident_token("A"), newline_tok.clone()]));
+        var_prim(&mut vm).unwrap();
+        // The Newline token must have been pushed back to the front.
+        let remaining = vm
+            .token_stream
+            .as_ref()
+            .expect("stream should still be Some");
+        assert_eq!(remaining.len(), 1);
+        assert!(
+            matches!(remaining[0].token, crate::lexer::Token::Newline),
+            "expected Newline to be pushed back, got {:?}",
+            remaining[0].token
         );
     }
 
