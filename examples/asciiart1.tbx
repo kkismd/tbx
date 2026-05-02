@@ -1,0 +1,25 @@
+# マンデルブロ ASCIIART ベンチマーク 非構造化版
+DEF ASCIIART
+      VAR Y,X,CA,CB,A,B,I,T
+   10 FOR &Y,25
+   20 FOR &X,80
+   30 LET CA = (X - 40) * 0.0458
+   40 LET CB = (Y - 13) * 0.08333
+   50 LET A = CA
+   60 LET B = CB
+   70 FOR &I, 16
+   80 LET T = A * A - B * B + CA
+   90 LET B = 2 * A * B + CB
+  100 LET A = T
+  110 BIT (A * A + B * B) > 4, 200
+  120 NEXT
+  130 PUTSTR " "
+  140 GOTO 210
+  200 IF I > 9; LET I = I + 7; ENDIF
+  205 PUTCHR 48 + I - 1; # TBXのFOR文は1オリジン
+  210 NEXT # X
+  220 PUTSTR "\n"
+  230 NEXT # Y
+END
+
+ASCIIART

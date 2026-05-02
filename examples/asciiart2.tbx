@@ -1,0 +1,57 @@
+## マンデルブロ ASCIIART ベンチマーク 構造化版
+
+# 計算回数に応じて文字を決定
+DEF charCode(i)
+  IF i > 9
+    RETURN i + 7 + 47
+  ELSE
+    RETURN i + 47
+  ENDIF
+END
+
+DEF PlotMandel(X, Y)
+  VAR CA,CB,A,B,I,T, isInside, iterate
+
+  LET CA = (X - 40) * 0.0458
+  LET CB = (Y - 13) * 0.08333
+  LET A = CA
+  LET B = CB
+  LET iterate = 0
+  LET isInside = 1
+
+  # 計算ループ
+  FOR &I, 16
+    LET T = A * A - B * B + CA
+    LET B = 2 * A * B + CB
+    LET A = T
+
+    # 発散判定
+    IF (A * A + B * B) > 4
+        LET isInside = 0
+        LET iterate = I
+        GOTO 999  # ループを脱出
+    ENDIF
+  NEXT
+  999 # 脱出ラベル
+
+  # 描画処理
+  IF isInside
+    PUTSTR " "
+  ELSE
+    PUTCHR charCode(iterate)
+  ENDIF
+END
+
+DEF ASCIIART
+  VAR Y,X
+
+  # 80x25の座標に描画
+  FOR &Y, 25
+    FOR &X, 80
+      PlotMandel X, Y
+    NEXT　# X
+    CR
+  NEXT # Y
+END
+
+ASCIIART

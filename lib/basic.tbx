@@ -254,4 +254,7 @@ DEF NEXT
 END
 IMMEDIATE NEXT
 
+# Utilities
+
+# Outputs a newline
 DEF CR; PUTCHR 10; END
