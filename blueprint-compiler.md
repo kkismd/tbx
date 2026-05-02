@@ -35,6 +35,30 @@ DEF ワードの挙動
   Xt(DROP_TO_MARKER)
   ```
 
+  **可変長プリミティブ（`is_variadic: true` かつ `EntryKind::Primitive`）の場合:**
+  ```
+  Xt(LIT_MARKER)
+  [引数式のコード]
+  Xt(LIT)  Int(arity)  Xt(stmt)
+  Xt(DROP_TO_MARKER)
+  ```
+
+> Issue #438「Cell::ARRAYとスタックのプリミティブ」に基づく設計方針
+
+**可変長プリミティブの呼び出し規約（arity push 方式）**
+
+`is_variadic: true` かつ `EntryKind::Primitive` のワードに対して、コンパイラ（`expr.rs` の `emit_call_by_kind` と `interpreter.rs` の `write_stmt_to_dict`）は以下の命令列を生成する：
+
+```
+Xt(LIT)  Int(arity)  Xt(primitive)
+```
+
+実行時には `Int(arity)` がスタックトップに積まれた状態でプリミティブが呼ばれるため、プリミティブ側は先頭で `Int(n)` を pop してアリティを得る。
+
+固定アリティのプリミティブは従来通り `Xt(primitive)` のみが生成される（上記「プリミティブ・変数・定数の場合」）。
+
+この呼び出し規約は式コンテキスト（`emit_call_by_kind`）とステートメントコンテキスト（`write_stmt_to_dict`）の両方に対称的に適用される。
+
 VAR宣言はコンパイル時のローカル変数テーブルへの登録のみを行い、命令列は生成しない。`local_count` は VAR 宣言ごとに1増やす。RETURN / GOTO / BIF / BIT はそれぞれ対応する命令のXtを生成する。これを終わらせるのが END ワードです。
 
 END ワードの挙動

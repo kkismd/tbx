@@ -311,8 +311,9 @@ COMPILE_EXPR    ( -- )
 | 二項演算子 `+` | `Xt(ADD)` | 1 |
 | ワード呼び出し `W(...)` | 引数列 + `Xt(CALL)`, `Xt(W)`, `Int(arity)`, `Int(local_count)` | 引数分 + 4 |
 | プリミティブ/変数/定数呼び出し `P(...)` | 引数列 + `Xt(P)` | 引数分 + 1 |
+| 可変長プリミティブ呼び出し `P(...)` (`is_variadic: true`) | 引数列 + `Xt(LIT)`, `Int(arity)`, `Xt(P)` | 引数分 + 3 |
 
-> `CALL` は `EntryKind::Word` 専用。プリミティブ・変数・定数は直接 `Xt` を出力する。
+> `CALL` は `EntryKind::Word` 専用。固定アリティのプリミティブ・変数・定数は直接 `Xt` を出力する。可変長プリミティブ（`is_variadic: true`）は `LIT Int(arity) Xt(P)` を出力する（arity push 方式）。詳細は `blueprint-compiler.md` の「可変長プリミティブの呼び出し規約」を参照。
 
 トークン・ディスクリプタ
 
@@ -652,6 +653,38 @@ END
 - `&A(I)` — 配列変数 A の I 番目要素のアドレス（`Cell::ArrayAddr { pool_idx, elem_idx }`）を返す。`STORE` / `SET` で書き込める
 - **スコープはワード内限定**: EXIT / RETURN_VAL 時に配列プールを `saved_array_pool_len` まで切り詰めて解放する。`Cell::Array` 値をスタックフレーム外に持ち出すとエラーになる
 - `DIM` によるグローバル配列（`EntryKind::Array`）とは別の仕組みであり、辞書領域は使用しない
+
+##### TO_ARRAY / FROM_ARRAY — スタックと配列の変換プリミティブ
+
+> Issue #438「Cell::ARRAYとスタックのプリミティブ」に基づく設計方針
+
+スタック上の複数の値を `Cell::Array` に変換する、あるいはその逆変換を行うプリミティブ。
+
+**TO_ARRAY**（`is_variadic: true`、arity = 0）
+
+- `TO_ARRAY(v1, v2, ..., vN)` — スタック上の N 個の値を集めて `Cell::Array` を生成し、スタックに積む
+- 呼び出し規約（arity push 方式）: コンパイラが `Int(N)` をスタックトップに積んだ状態でプリミティブを呼ぶ
+- 動作:
+  1. スタックトップから `Int(n)` を pop してアリティ n を取得
+  2. n 個の値を pop
+  3. 逆順に並べて `Vec<Cell>` を構築（元の順序を復元）
+  4. `vm.arrays.push(vec)` でローカル配列プールに追加
+  5. `Cell::Array(pool_idx)` をスタックに push
+- `TO_ARRAY()` は 0 引数として扱われ、空配列 `Cell::Array` を生成する
+- `Cell::Array` のライフサイクルは `ARRAY(N)` と同じ規則に従う（EXIT/RETURN_VAL 時に解放、`LocalArrayEscape` チェック有効）
+
+```basic
+DEF ARRAYTEST
+  VAR A
+  SET &A, TO_ARRAY(1,2,3,4,5) # A contains Cell::Array with elements { 1,2,3,4,5 }
+END
+```
+
+**FROM_ARRAY**（固定アリティ 1、`is_variadic: false`）
+
+- `FROM_ARRAY(arr)` — `Cell::Array` の全要素を順番にスタックに push し、配列ハンドルを消費する
+- 動作: `Cell::Array(pool_idx)` を pop → `vm.arrays[pool_idx]` の全要素を先頭から順に push
+- 複数の値をスタックに積むため、単一の値を期待する式コンテキスト（算術演算の引数など）での使用は意味論的に不適切。呼び出し側の責任とする
 
 #### アドレス空間の設計方針
 
