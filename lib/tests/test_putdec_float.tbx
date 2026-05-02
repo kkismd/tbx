@@ -1,0 +1,10 @@
+# lib/tests/test_putdec_float.tbx — TBX tests for PUTDEC with Float values
+#
+# PUTDEC must accept Float values without raising a type error.
+# These statements verify that PUTDEC does not abort execution when
+# given Float arguments (output correctness is covered by unit tests in
+# src/primitives.rs).
+
+PUTDEC 1.0
+PUTDEC 2.5
+PUTDEC -2.5
