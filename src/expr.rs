@@ -699,6 +699,14 @@ fn emit_call_by_kind(
                 output.push(Cell::Int(local_count as i64));
             }
         }
+        EntryKind::Primitive(_) if vm.headers[xt.index()].is_variadic => {
+            // Variadic primitive: push arity as Int before the Xt so the
+            // primitive can pop it and know how many arguments to consume.
+            let lit_xt = require_xt(vm, "LIT")?;
+            output.push(Cell::Xt(lit_xt));
+            output.push(Cell::Int(arity as i64));
+            output.push(Cell::Xt(xt));
+        }
         EntryKind::Primitive(_) | EntryKind::Variable(_) | EntryKind::Constant(_) => {
             output.push(Cell::Xt(xt));
         }

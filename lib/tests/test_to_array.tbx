@@ -1,0 +1,105 @@
+# lib/tests/test_to_array.tbx — TBX tests for TO_ARRAY and FROM_ARRAY primitives
+USE "lib/tests/helper.tbx"
+
+# --- TO_ARRAY: basic creation and element access ---
+
+DEF TO_ARRAY_SUM()
+  VAR A
+  LET A = TO_ARRAY(1, 2, 3)
+  RETURN A(0) + A(1) + A(2)
+END
+ASSERT TO_ARRAY_SUM() = 6
+
+# --- TO_ARRAY: element order is preserved (first arg -> index 0) ---
+
+DEF TO_ARRAY_ORDER()
+  VAR A
+  LET A = TO_ARRAY(10, 20, 30)
+  IF A(0) = 10
+    IF A(1) = 20
+      IF A(2) = 30
+        RETURN 1
+      ENDIF
+    ENDIF
+  ENDIF
+  RETURN 0
+END
+ASSERT TO_ARRAY_ORDER() = 1
+
+# --- TO_ARRAY: empty array (zero arguments) does not crash ---
+
+DEF TO_ARRAY_EMPTY()
+  VAR A
+  LET A = TO_ARRAY()
+  RETURN 99
+END
+ASSERT TO_ARRAY_EMPTY() = 99
+
+# --- TO_ARRAY: single element ---
+
+DEF TO_ARRAY_ONE()
+  VAR A
+  LET A = TO_ARRAY(42)
+  RETURN A(0)
+END
+ASSERT TO_ARRAY_ONE() = 42
+
+# --- TO_ARRAY: elements can be mutated via SET ---
+
+DEF TO_ARRAY_MUTATE()
+  VAR A
+  LET A = TO_ARRAY(1, 2, 3)
+  SET &A(1), 99
+  RETURN A(0) + A(1) + A(2)
+END
+ASSERT TO_ARRAY_MUTATE() = 103
+
+# --- FROM_ARRAY: single-element array (expression context) ---
+# With exactly one element, FROM_ARRAY pushes one value, which behaves
+# like a normal expression returning that single value.
+
+DEF FROM_ARRAY_ONE()
+  VAR ARR
+  VAR V
+  LET ARR = TO_ARRAY(42)
+  LET V = FROM_ARRAY(ARR)
+  RETURN V
+END
+ASSERT FROM_ARRAY_ONE() = 42
+
+# --- FROM_ARRAY: statement call does not crash (elements are discarded
+#     by DROP_TO_MARKER, which is the expected behaviour for statement use) ---
+
+DEF FROM_ARRAY_STMT_NO_CRASH()
+  VAR ARR
+  LET ARR = TO_ARRAY(5, 10, 15)
+  FROM_ARRAY ARR
+  RETURN 1
+END
+ASSERT FROM_ARRAY_STMT_NO_CRASH() = 1
+
+# --- FROM_ARRAY: empty array as statement does not crash ---
+
+DEF FROM_ARRAY_EMPTY_STMT()
+  VAR ARR
+  LET ARR = TO_ARRAY()
+  FROM_ARRAY ARR
+  RETURN 2
+END
+ASSERT FROM_ARRAY_EMPTY_STMT() = 2
+
+# --- Round-trip: TO_ARRAY -> element read -> matches original values ---
+
+DEF ROUNDTRIP()
+  VAR A
+  LET A = TO_ARRAY(100, 200, 300)
+  IF A(0) = 100
+    IF A(1) = 200
+      IF A(2) = 300
+        RETURN 1
+      ENDIF
+    ENDIF
+  ENDIF
+  RETURN 0
+END
+ASSERT ROUNDTRIP() = 1
