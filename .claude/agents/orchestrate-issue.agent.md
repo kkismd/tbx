@@ -13,13 +13,16 @@ issueを受け取り、`implement-issue` エージェントに実装を依頼し
 
 ## ワークフロー
 
-### 事前準備：`.tmp/` ディレクトリの作成
+### 事前準備：`.tmp/` ディレクトリの作成と前回ファイルの削除
 
-ステップ1を開始する前に、`.tmp/` ディレクトリが存在しない場合は作成する：
+ステップ1を開始する前に、`.tmp/` ディレクトリが存在しない場合は作成し、前回実行時の状態ファイルを削除する：
 
 ```bash
 mkdir -p .tmp
+rm -f .tmp/orchestrate_state.json
 ```
+
+`orchestrate_state.json` を事前に削除することで、ステップ1で早期終了した場合に前回の状態ファイルが残留しないことを保証する。
 
 ### ステップ1：issueの確認
 
@@ -47,7 +50,7 @@ implement-issue エージェントを起動: issue #<N> を実装してくださ
 gh pr list --state open --json number,url,headRefName | jq '.[] | select(.headRefName | startswith("issue/<N>-"))'
 ```
 
-取得したPR番号を `.tmp/orchestrate_state.json` に書き出して管理する：
+取得したPR番号を `.tmp/orchestrate_state.json` に書き出して管理する（ファイルが既に存在する場合は上書きする）：
 
 ```json
 { "issue": <N>, "pr": <PR番号>, "loop_count": 0 }
@@ -68,7 +71,7 @@ gh pr list --state open --json number,url,headRefName | jq '.[] | select(.headRe
    gh pr view <PR番号> --json comments,reviews
    ```
 
-   取得した件数を `baseline_comments` / `baseline_reviews` として `.tmp/orchestrate_state.json` に上書き保存する。
+   取得した `comments` 配列の長さ（整数）を `baseline_comments`、`reviews` 配列の長さ（整数）を `baseline_reviews` として `.tmp/orchestrate_state.json` に上書き保存する。
 
 2. `review-implementation` エージェントを起動する（**ユーザーへの確認は不要**）：
 
@@ -82,20 +85,27 @@ gh pr list --state open --json number,url,headRefName | jq '.[] | select(.headRe
    gh pr view <PR番号> --json comments,reviews
    ```
 
+   **比較ロジック**：再取得した `comments` 配列の長さが `baseline_comments` より大きければ新しいコメントがある。新しいコメントは「再取得した `comments` 配列の末尾から（現在の件数 − `baseline_comments`）件分」として読む。`reviews` についても同様に、`reviews` 配列の末尾から（現在の件数 − `baseline_reviews`）件分が新しいレビューである。
+
 4. **判定**：
 
    - **🔴/🟡 が含まれない**（変化なし・Approveのみ・🟢 Info のみ・これらの組み合わせを問わず）→ **修正サイクルを終了してステップ4へ進む**。
    - **🔴/🟡 が含まれる** 場合（手順0のガードを通過済みのため `loop_count < 3` が保証されている）：
        - `.tmp/orchestrate_state.json` の `loop_count` を1増やして上書き保存する。
-       - 新しいコメント・レビューの **🔴/🟡 の指摘内容（コメントURL・引用テキストの原文）**を `fix-pr` エージェントに伝えて修正を依頼する（要約ではなく原文を優先すること。🟢 Info は修正対象としない）：
+       - 新しいコメント・レビューの **🔴/🟡 の指摘内容（コメントURL・引用テキストの原文）**を `fix-pr` エージェントに伝えて修正を依頼する（要約ではなく原文を優先すること。🟢 Info は修正対象としない）。プロンプト例：
 
          ```
          fix-pr エージェントを起動: PR #<PR番号> に以下のレビュー指摘があります。修正してpushしてください。
 
-         （🔴/🟡 の指摘内容：コメントURL・引用テキストの原文）
+         指摘1: https://github.com/.../pull/<PR番号>#issuecomment-<ID>
+         > <引用テキスト原文>
+
+         指摘2: https://github.com/.../pull/<PR番号>#pullrequestreview-<ID>
+         > <引用テキスト原文>
          ```
 
        - 修正・pushが完了したことを確認する。
+       - **注意**：fix-pr が追加したコメントもベースラインに含まれる。次のイテレーションの手順1で件数を再取得するため、これらのコメントは自動的に新ベースラインに組み込まれる。
        - イテレーション先頭（手順0）へ戻る。
 
 ### ステップ4：最終レビュー（修正サイクルを1回以上実施した場合のみ）
@@ -113,21 +123,24 @@ gh pr list --state open --json number,url,headRefName | jq '.[] | select(.headRe
 
 3. レビュー完了後、コメント・レビューを再取得し、新しいコメントを確認する。
 
-4. **🔴/🟡 が含まれる場合のみ**、`gh pr comment` で未解消一覧をPRにコメント追加する：
-   Write ツールで `.tmp/UNRESOLVED_COMMENT.md` を以下のフォーマットで作成する：
+4. **🔴/🟡 が含まれる場合のみ**、以下をすべて実行する：
 
-   ```markdown
-   ## ⚠️ 未解消の指摘
+   - Write ツールで `.tmp/UNRESOLVED_COMMENT.md` を以下のフォーマットで作成する：
 
-   最終レビューで以下の指摘が確認されました。
-   手動での対応をお願いします。
+     ```markdown
+     ## ⚠️ 未解消の指摘
 
-   （未解消の 🔴/🟡 指摘一覧）
-   ```
+     最終レビューで以下の指摘が確認されました。
+     手動での対応をお願いします。
 
-   ```bash
-   gh pr comment <PR番号> --body-file ".tmp/UNRESOLVED_COMMENT.md"
-   ```
+     （未解消の 🔴/🟡 指摘一覧）
+     ```
+
+   - `gh pr comment` で未解消一覧をPRにコメント追加する：
+
+     ```bash
+     gh pr comment <PR番号> --body-file ".tmp/UNRESOLVED_COMMENT.md"
+     ```
 
 5. ステップ5へ進む。
 
