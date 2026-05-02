@@ -670,7 +670,8 @@ fn emit_local_read(output: &mut Vec<Cell>, idx: usize, vm: &VM) -> Result<(), Tb
 /// - `EntryKind::Word`: emits `Xt(CALL)`, `Xt(xt)`, `Int(arity)`, `Int(local_count)`
 ///   - When `xt.index() == self_hdr_idx` (self-recursive call), emits `Int(0)` as a
 ///     placeholder and records the offset in `patch_offsets` for later back-patching.
-/// - `EntryKind::Primitive` / `Variable` / `Constant`: emits `Xt(xt)` directly
+/// - `EntryKind::Primitive` (variadic): emits `Xt(LIT)`, `Int(arity)`, `Xt(xt)`
+/// - `EntryKind::Primitive` (fixed) / `Variable` / `Constant`: emits `Xt(xt)` directly
 /// - Any internal kind (Lit, Call, Exit, ReturnVal, DropToMarker): returns `InvalidExpression`
 fn emit_call_by_kind(
     output: &mut Vec<Cell>,
