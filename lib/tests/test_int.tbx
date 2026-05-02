@@ -1,0 +1,14 @@
+# lib/tests/test_int.tbx — TBX tests for INT primitive (Float-to-Int truncation)
+USE "lib/tests/helper.tbx"
+
+# --- Positive Float: INT(3.7) => 3 ---
+ASSERT INT(3.7) = 3
+
+# --- Negative Float: INT(-3.7) => -3 (truncation toward zero, not floor) ---
+ASSERT INT(-3.7) = -3
+
+# --- Whole Float: INT(3.0) => 3 ---
+ASSERT INT(3.0) = 3
+
+# --- Int identity: INT(5) => 5 ---
+ASSERT INT(5) = 5
