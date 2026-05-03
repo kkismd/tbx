@@ -1370,6 +1370,93 @@ pub fn array_addr_prim(vm: &mut VM) -> Result<(), TbxError> {
     Ok(())
 }
 
+/// ARRAY_LEN — return the length of a local array.
+///
+/// Pops `Cell::Array(pool_idx)` from the stack and pushes the number of elements
+/// as `Cell::Int`.
+///
+/// Stack: `[..., Cell::Array(pool_idx)]` → `Cell::Int(len)`
+pub fn array_len_prim(vm: &mut VM) -> Result<(), TbxError> {
+    let pool_idx = match vm.pop()? {
+        Cell::Array(idx) => idx,
+        other => {
+            return Err(TbxError::TypeError {
+                expected: "Array",
+                got: other.type_name(),
+            })
+        }
+    };
+    let arr = vm.arrays.get(pool_idx).ok_or(TbxError::IndexOutOfBounds {
+        index: pool_idx,
+        size: vm.arrays.len(),
+    })?;
+    let len = arr.len() as i64;
+    vm.push(Cell::Int(len))?;
+    Ok(())
+}
+
+/// XT_ARRAY_SIZE — return the declared size of a global array from its Xt.
+///
+/// Pops `Cell::Xt(xt)` from the stack. The referenced `WordEntry` must have
+/// `EntryKind::Array { size, .. }`; otherwise returns a `TypeError`.
+/// Pushes the size as `Cell::Int`.
+///
+/// Stack: `[..., Cell::Xt(xt)]` → `Cell::Int(size)`
+pub fn xt_array_size_prim(vm: &mut VM) -> Result<(), TbxError> {
+    let xt = match vm.pop()? {
+        Cell::Xt(xt) => xt,
+        other => {
+            return Err(TbxError::TypeError {
+                expected: "Xt",
+                got: other.type_name(),
+            })
+        }
+    };
+    let entry = vm.headers.get(xt.0).ok_or(TbxError::IndexOutOfBounds {
+        index: xt.0,
+        size: vm.headers.len(),
+    })?;
+    let size = match entry.kind {
+        crate::dict::EntryKind::Array { size, .. } => size,
+        _ => {
+            return Err(TbxError::TypeError {
+                expected: "Xt pointing to Array",
+                got: "Xt pointing to non-Array word",
+            })
+        }
+    };
+    vm.push(Cell::Int(size as i64))?;
+    Ok(())
+}
+
+/// DIM_SIZE — return the declared size of a global array by name.
+///
+/// Pops a `Cell::StringDesc` from the stack, resolves it to a name string,
+/// looks up the word in the dictionary, and returns its array size.
+/// Equivalent to `XT_ARRAY_SIZE(LOOKUP(name))` but as a single primitive.
+///
+/// Stack: `[..., Cell::StringDesc(idx)]` → `Cell::Int(size)`
+pub fn dim_size_prim(vm: &mut VM) -> Result<(), TbxError> {
+    let idx = vm.pop_string_desc()?;
+    let name = vm.resolve_string(idx)?;
+    let xt = vm.lookup(&name).ok_or(TbxError::UndefinedSymbol { name })?;
+    let entry = vm.headers.get(xt.0).ok_or(TbxError::IndexOutOfBounds {
+        index: xt.0,
+        size: vm.headers.len(),
+    })?;
+    let size = match entry.kind {
+        crate::dict::EntryKind::Array { size, .. } => size,
+        _ => {
+            return Err(TbxError::TypeError {
+                expected: "word of kind Array",
+                got: "word of non-Array kind",
+            })
+        }
+    };
+    vm.push(Cell::Int(size as i64))?;
+    Ok(())
+}
+
 /// CS_PUSH — move a value from the data stack to the compile stack.
 ///
 /// Must be called in compile mode (inside an IMMEDIATE word invocation).
@@ -2168,18 +2255,29 @@ pub fn register_all(vm: &mut VM) {
     // ARRAY creates a local array; ARRAY_GET reads an element; ARRAY_ADDR computes
     // an element address (used internally by the expression compiler for `A(I)` and `&A(I)`).
     // TO_ARRAY packs stack values into a new local array; FROM_ARRAY expands one onto the stack.
+    // ARRAY_LEN returns the length of a local array.
     let mut to_array_entry = WordEntry::new_primitive("TO_ARRAY", to_array_prim);
     to_array_entry.is_variadic = true;
     // arity stays 0: TO_ARRAY accepts zero or more arguments.
     vm.register(to_array_entry);
     vm.register(WordEntry::new_primitive("FROM_ARRAY", from_array_prim));
     vm.register(WordEntry::new_primitive("ARRAY", array_prim));
+    vm.register(WordEntry::new_primitive("ARRAY_LEN", array_len_prim));
     let mut array_get_entry = WordEntry::new_primitive("ARRAY_GET", array_get_prim);
     array_get_entry.flags = FLAG_SYSTEM;
     vm.register(array_get_entry);
     let mut array_addr_entry = WordEntry::new_primitive("ARRAY_ADDR", array_addr_prim);
     array_addr_entry.flags = FLAG_SYSTEM;
     vm.register(array_addr_entry);
+
+    // Global array size primitives.
+    // XT_ARRAY_SIZE returns the declared size of a global array from its Xt.
+    // DIM_SIZE is a convenience wrapper that accepts an array name as a string literal.
+    vm.register(WordEntry::new_primitive(
+        "XT_ARRAY_SIZE",
+        xt_array_size_prim,
+    ));
+    vm.register(WordEntry::new_primitive("DIM_SIZE", dim_size_prim));
 
     // Variadic argument primitives.
     // VA_COUNT returns the total argument count of the current call.
@@ -6038,6 +6136,120 @@ mod tests {
                 expected: "Int or Float",
                 ..
             })
+        ));
+    }
+
+    // --- array_len_prim ---
+
+    #[test]
+    fn test_array_len_prim_basic() {
+        // ARRAY_LEN on a 5-element array must return 5.
+        let mut vm = VM::new();
+        vm.arrays.push(vec![Cell::None; 5]);
+        vm.push(Cell::Array(0)).unwrap();
+        array_len_prim(&mut vm).unwrap();
+        assert_eq!(vm.pop(), Ok(Cell::Int(5)));
+    }
+
+    #[test]
+    fn test_array_len_prim_one_element() {
+        // ARRAY_LEN on a 1-element array must return 1.
+        let mut vm = VM::new();
+        vm.arrays.push(vec![Cell::None]);
+        vm.push(Cell::Array(0)).unwrap();
+        array_len_prim(&mut vm).unwrap();
+        assert_eq!(vm.pop(), Ok(Cell::Int(1)));
+    }
+
+    #[test]
+    fn test_array_len_prim_type_error() {
+        // ARRAY_LEN on a non-Array cell must return TypeError.
+        let mut vm = VM::new();
+        vm.push(Cell::Int(42)).unwrap();
+        assert!(matches!(
+            array_len_prim(&mut vm),
+            Err(TbxError::TypeError {
+                expected: "Array",
+                ..
+            })
+        ));
+    }
+
+    // --- xt_array_size_prim ---
+
+    #[test]
+    fn test_xt_array_size_prim_basic() {
+        // XT_ARRAY_SIZE on an Array Xt must return the declared size.
+        use crate::dict::WordEntry;
+        let mut vm = VM::new();
+        let base = vm.dp;
+        // Write 10 zero cells into the dictionary for the array storage.
+        for _ in 0..10 {
+            vm.dict_write(Cell::Int(0)).unwrap();
+        }
+        let xt = vm.register(WordEntry::new_array("MYARR", base, 10));
+        vm.push(Cell::Xt(xt)).unwrap();
+        xt_array_size_prim(&mut vm).unwrap();
+        assert_eq!(vm.pop(), Ok(Cell::Int(10)));
+    }
+
+    #[test]
+    fn test_xt_array_size_prim_non_array_xt_error() {
+        // XT_ARRAY_SIZE on an Xt that does not point to an Array must return TypeError.
+        use crate::dict::WordEntry;
+        let mut vm = VM::new();
+        let xt = vm.register(WordEntry::new_variable("MYVAR", 0));
+        vm.push(Cell::Xt(xt)).unwrap();
+        assert!(matches!(
+            xt_array_size_prim(&mut vm),
+            Err(TbxError::TypeError {
+                expected: "Xt pointing to Array",
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn test_xt_array_size_prim_type_error_non_xt() {
+        // XT_ARRAY_SIZE on a non-Xt cell must return TypeError.
+        let mut vm = VM::new();
+        vm.push(Cell::Int(0)).unwrap();
+        assert!(matches!(
+            xt_array_size_prim(&mut vm),
+            Err(TbxError::TypeError { expected: "Xt", .. })
+        ));
+    }
+
+    // --- dim_size_prim ---
+
+    #[test]
+    fn test_dim_size_prim_basic() {
+        // DIM_SIZE("NUMS") on a registered global array must return the declared size.
+        use crate::dict::WordEntry;
+        let mut vm = VM::new();
+        register_all(&mut vm);
+        let base = vm.dp;
+        // Write 7 zero cells into the dictionary for the array storage.
+        for _ in 0..7 {
+            vm.dict_write(Cell::Int(0)).unwrap();
+        }
+        vm.register(WordEntry::new_array("NUMS", base, 7));
+        let idx = vm.intern_string("NUMS").unwrap();
+        vm.push(Cell::StringDesc(idx)).unwrap();
+        dim_size_prim(&mut vm).unwrap();
+        assert_eq!(vm.pop(), Ok(Cell::Int(7)));
+    }
+
+    #[test]
+    fn test_dim_size_prim_undefined_symbol_error() {
+        // DIM_SIZE on an unknown name must return UndefinedSymbol.
+        let mut vm = VM::new();
+        register_all(&mut vm);
+        let idx = vm.intern_string("NOSUCHARRAY").unwrap();
+        vm.push(Cell::StringDesc(idx)).unwrap();
+        assert!(matches!(
+            dim_size_prim(&mut vm),
+            Err(TbxError::UndefinedSymbol { .. })
         ));
     }
 }
