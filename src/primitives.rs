@@ -1448,8 +1448,8 @@ pub fn dim_size_prim(vm: &mut VM) -> Result<(), TbxError> {
         crate::dict::EntryKind::Array { size, .. } => size,
         _ => {
             return Err(TbxError::TypeError {
-                expected: "Xt pointing to Array",
-                got: "Xt pointing to non-Array word",
+                expected: "word of kind Array",
+                got: "word of non-Array kind",
             })
         }
     };
@@ -6183,8 +6183,10 @@ mod tests {
         use crate::dict::WordEntry;
         let mut vm = VM::new();
         let base = vm.dp;
-        // Reserve 10 cells in the dictionary for the array storage.
-        vm.dp += 10;
+        // Write 10 zero cells into the dictionary for the array storage.
+        for _ in 0..10 {
+            vm.dict_write(Cell::Int(0)).unwrap();
+        }
         let xt = vm.register(WordEntry::new_array("MYARR", base, 10));
         vm.push(Cell::Xt(xt)).unwrap();
         xt_array_size_prim(&mut vm).unwrap();
@@ -6227,8 +6229,10 @@ mod tests {
         let mut vm = VM::new();
         register_all(&mut vm);
         let base = vm.dp;
-        // Reserve 7 cells in the dictionary for the array storage.
-        vm.dp += 7;
+        // Write 7 zero cells into the dictionary for the array storage.
+        for _ in 0..7 {
+            vm.dict_write(Cell::Int(0)).unwrap();
+        }
         vm.register(WordEntry::new_array("NUMS", base, 7));
         let idx = vm.intern_string("NUMS").unwrap();
         vm.push(Cell::StringDesc(idx)).unwrap();
