@@ -22,8 +22,6 @@ mkdir -p .tmp
 rm -f .tmp/orchestrate_state.json
 ```
 
-`orchestrate_state.json` を事前に削除することで、ステップ1で早期終了した場合に前回の状態ファイルが残留しないことを保証する。
-
 ### ステップ1：issueの確認
 
 issueの内容を以下のコマンドで取得し、issue番号を記憶する。
@@ -58,20 +56,20 @@ gh pr list --state open --json number,url,headRefName | jq '.[] | select(.headRe
 
 ### ステップ3：修正サイクル（最大3回）
 
-ループカウンター（初期値0）とベースラインのコメント/レビュー件数は `.tmp/orchestrate_state.json` に書き出して管理する。ファイルを読み書きすることで、コンテキスト圧縮・忘却のリスクを回避する。
+`loop_count`（初期値0）は `.tmp/orchestrate_state.json` で管理する。ベースラインのコメント/レビュー件数はコンテキスト内に保持する。
 
 #### 各イテレーションの手順
 
 0. **イテレーション先頭での上限チェック**：`.tmp/orchestrate_state.json` から `loop_count` を読み取る。
-   `loop_count >= 3` の場合: **このイテレーションでは review を実施せず、修正サイクルを終了してステップ4へ進む**（手順1以降は実施しない）。
+   `loop_count >= 3` の場合: **修正サイクルを終了してステップ4へ進む**。
 
-1. 現在のPRコメント件数・レビュー件数を取得し、ベースライン値として `.tmp/orchestrate_state.json` に記録する（**毎回新たに取得し直す。前のイテレーションの値は引き継がない**）：
+1. 現在のPRコメント件数・レビュー件数を取得し、ベースライン値としてコンテキスト内に記憶する：
 
    ```bash
    gh pr view <PR番号> --json comments,reviews
    ```
 
-   取得した `comments` 配列の長さ（整数）を `baseline_comments`、`reviews` 配列の長さ（整数）を `baseline_reviews` として `.tmp/orchestrate_state.json` に上書き保存する。
+   取得した `comments` 配列の長さ（整数）を `baseline_comments`、`reviews` 配列の長さ（整数）を `baseline_reviews` としてコンテキスト内に保持する。
 
 2. `review-implementation` エージェントを起動する（**ユーザーへの確認は不要**）：
 
@@ -79,7 +77,7 @@ gh pr list --state open --json number,url,headRefName | jq '.[] | select(.headRe
    review-implementation エージェントを起動: PR #<PR番号> をレビューしてください
    ```
 
-3. レビュー完了後、コメント・レビューを再取得し、`.tmp/orchestrate_state.json` の `baseline_comments` / `baseline_reviews` と比較して新しいコメントを特定する：
+3. レビュー完了後、コメント・レビューを再取得し、手順1で記憶した `baseline_comments` / `baseline_reviews` と比較して新しいコメントを特定する：
 
    ```bash
    gh pr view <PR番号> --json comments,reviews
@@ -89,10 +87,10 @@ gh pr list --state open --json number,url,headRefName | jq '.[] | select(.headRe
 
 4. **判定**：
 
-   - **🔴/🟡 が含まれない**（変化なし・Approveのみ・🟢 Info のみ・これらの組み合わせを問わず）→ **修正サイクルを終了してステップ4へ進む**。
-   - **🔴/🟡 が含まれる** 場合（手順0のガードを通過済みのため `loop_count < 3` が保証されている）：
+   - **🔴/🟡 が含まれない** → **修正サイクルを終了してステップ4へ進む**。
+   - **🔴/🟡 が含まれる** 場合：
        - `.tmp/orchestrate_state.json` の `loop_count` を1増やして上書き保存する。
-       - 新しいコメント・レビューの **🔴/🟡 の指摘内容（コメントURL・引用テキストの原文）**を `fix-pr` エージェントに伝えて修正を依頼する（要約ではなく原文を優先すること。🟢 Info は修正対象としない）。プロンプト例：
+       - 新しいコメント・レビューの **🔴/🟡 の指摘内容（コメントURL・引用テキストの原文）**を `fix-pr` エージェントに伝えて修正を依頼する（要約ではなく原文を優先すること）。プロンプト例：
 
          ```
          fix-pr エージェントを起動: PR #<PR番号> に以下のレビュー指摘があります。修正してpushしてください。
@@ -105,15 +103,13 @@ gh pr list --state open --json number,url,headRefName | jq '.[] | select(.headRe
          ```
 
        - 修正・pushが完了したことを確認する。
-       - **注意**：fix-pr が追加したコメントもベースラインに含まれる。次のイテレーションの手順1で件数を再取得するため、これらのコメントは自動的に新ベースラインに組み込まれる。
        - イテレーション先頭（手順0）へ戻る。
 
 ### ステップ4：最終レビュー（修正サイクルを1回以上実施した場合のみ）
 
-`.tmp/orchestrate_state.json` の `loop_count` を読み取り、**`loop_count >= 1` の場合のみ実行する**。
-`loop_count == 0`（初回レビューで🟢のみ、修正なしで自然終了）の場合はこのステップを省略してステップ5へ進む。
+`.tmp/orchestrate_state.json` の `loop_count` を読み取り、**`loop_count >= 1` の場合のみ実行する**。`loop_count == 0` の場合はステップ5へ進む。
 
-1. 現在のPRコメント件数・レビュー件数を取得し、ベースライン値として `.tmp/orchestrate_state.json` に記録する。
+1. 現在のPRコメント件数・レビュー件数を取得し、ベースライン値としてコンテキスト内に記憶する。
 
 2. `review-implementation` エージェントを起動する（**ユーザーへの確認は不要**）：
 
@@ -141,8 +137,6 @@ gh pr list --state open --json number,url,headRefName | jq '.[] | select(.headRe
      ```bash
      gh pr comment <PR番号> --body-file ".tmp/UNRESOLVED_COMMENT.md"
      ```
-
-5. ステップ5へ進む。
 
 ### ステップ5：ユーザーへの最終報告
 
