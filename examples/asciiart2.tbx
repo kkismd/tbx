@@ -45,6 +45,7 @@ DEF PlotMandel(X, Y)
   IF isInside
     PUTSTR " "
   ELSE
+    setColor iterate
     PUTCHR charCode(iterate)
   ENDIF
 END

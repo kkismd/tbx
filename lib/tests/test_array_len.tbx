@@ -1,0 +1,56 @@
+# lib/tests/test_array_len.tbx — TBX tests for ARRAY_LEN, XT_ARRAY_SIZE, DIM_SIZE
+USE "lib/tests/helper.tbx"
+
+# --- ARRAY_LEN: local array length ---
+
+DEF LEN_BASIC()
+  VAR A
+  LET A = ARRAY(5)
+  RETURN ARRAY_LEN(A)
+END
+ASSERT LEN_BASIC() = 5
+
+DEF LEN_ONE()
+  VAR A
+  LET A = ARRAY(1)
+  RETURN ARRAY_LEN(A)
+END
+ASSERT LEN_ONE() = 1
+
+# Use ARRAY_LEN in a WHILE loop condition
+DEF SUM_WITH_LEN(N)
+  VAR A
+  VAR I
+  VAR S
+  LET A = ARRAY(N)
+  LET I = 0
+  LET S = 0
+  WHILE I < N
+    SET &A(I), I + 1
+    LET I = I + 1
+  ENDWH
+  LET I = 0
+  WHILE I < ARRAY_LEN(A)
+    LET S = S + A(I)
+    LET I = I + 1
+  ENDWH
+  RETURN S
+END
+# 1+2+3+4 = 10
+ASSERT SUM_WITH_LEN(4) = 10
+
+# --- XT_ARRAY_SIZE: global array size via Xt ---
+
+DIM GLOBAL_A(10)
+ASSERT XT_ARRAY_SIZE(LOOKUP("GLOBAL_A")) = 10
+
+DIM SMALL(3)
+ASSERT XT_ARRAY_SIZE(LOOKUP("SMALL")) = 3
+
+# --- DIM_SIZE: global array size via name string ---
+
+DIM NUMS(7)
+ASSERT DIM_SIZE("NUMS") = 7
+
+DIM ONE_ELEM(1)
+ASSERT DIM_SIZE("ONE_ELEM") = 1
