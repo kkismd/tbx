@@ -1,7 +1,7 @@
 # lib/tests/test_array_len.tbx — TBX tests for ARRAY_LEN
 USE "lib/tests/helper.tbx"
 
-# --- ARRAY_LEN: local array length ---
+# --- ARRAY_LEN: array length ---
 
 DEF LEN_BASIC()
   VAR A
