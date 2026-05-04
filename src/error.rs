@@ -144,8 +144,6 @@ pub enum TbxError {
     InvalidArgument {
         message: String,
     },
-    /// GETDEC was called but the input buffer was empty (ACCEPT had not been called first).
-    InputBufferEmpty,
     /// GETDEC could not parse the input buffer as a signed decimal integer.
     ParseIntError {
         /// The string that failed to parse.
@@ -284,9 +282,6 @@ impl std::fmt::Display for TbxError {
             }
             TbxError::InvalidArgument { message } => {
                 write!(f, "invalid argument: {message}")
-            }
-            TbxError::InputBufferEmpty => {
-                write!(f, "GETDEC: input buffer is empty; call ACCEPT first")
             }
             TbxError::ParseIntError { input } => {
                 write!(f, "GETDEC: cannot parse {:?} as a decimal integer", input)
