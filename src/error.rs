@@ -170,6 +170,15 @@ pub enum TbxError {
     /// truncated on EXIT and the stored index would dangle.
     ArrayFrameEscape,
 
+    /// A runtime string value escaped its owning stack frame.
+    ///
+    /// Strings (created by `STR`, `STR_CONCAT`, etc.) that are created inside a
+    /// word are bound to the stack frame in which they were created.  Attempting
+    /// to store a `Cell::Str` value into a global variable (via `DictAddr`) or
+    /// return it from a word (via `RETURN`) is forbidden, because the string pool
+    /// is truncated on EXIT and the stored index would dangle.
+    StringFrameEscape,
+
     /// A variadic word was called with fewer arguments than its fixed parameter count.
     ///
     /// `name` is the word name, `expected_min` is the number of fixed parameters
@@ -290,6 +299,9 @@ impl std::fmt::Display for TbxError {
             }
             TbxError::ArrayFrameEscape => {
                 write!(f, "array cannot escape its owning stack frame")
+            }
+            TbxError::StringFrameEscape => {
+                write!(f, "string cannot escape its owning stack frame")
             }
             TbxError::WrongNumberOfArguments {
                 name,

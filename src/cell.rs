@@ -50,6 +50,10 @@ pub enum ReturnFrame {
         /// On EXIT or RETURN_VAL, the array pool is truncated back to this
         /// length to free all arrays created during the call.
         saved_array_pool_len: usize,
+        /// Snapshot of `VM::strings.len()` taken at call time.
+        /// On EXIT or RETURN_VAL, the string pool is truncated back to this
+        /// length to free all strings created during the call.
+        saved_string_pool_len: usize,
         /// The actual number of arguments passed to this call.
         /// Used by the `VA_COUNT` primitive to report how many arguments the
         /// caller supplied (including both fixed and variadic arguments).
@@ -94,6 +98,22 @@ pub enum Cell {
     ///   at the top level (outside any `DEF..END`) and are never freed.  They
     ///   may safely be stored in `VARIABLE` slots and shared across word calls.
     Array(usize),
+    /// Runtime string handle — index into `VM::strings` (the runtime string pool).
+    ///
+    /// Created by string primitives such as `STR`, `STR_CONCAT`, etc.
+    /// The pool entry at this index holds a `String`.
+    ///
+    /// Strings come in two flavours:
+    /// - **Frame-local strings** (`pool_idx >= saved_string_pool_len` of the current call
+    ///   frame) are freed when the owning frame exits via EXIT or RETURN_VAL.
+    ///   They must not escape their owning stack frame.
+    /// - **Global strings** (`pool_idx < vm.global_string_pool_len`) are created
+    ///   at the top level (outside any `DEF..END`) and are never freed.  They
+    ///   may safely be stored in `VARIABLE` slots and shared across word calls.
+    ///
+    /// Note: `Cell::Str(a) == Cell::Str(b)` uses index comparison (identity),
+    /// not content comparison.  Use the `STR_EQ` primitive for content equality.
+    Str(usize),
     /// Address of an element in an array.
     ///
     /// Produced by the `&A(I)` construct where `A` holds a `Cell::Array`.
@@ -135,6 +155,7 @@ impl std::fmt::Display for Cell {
             Cell::Bool(b) => write!(f, "{}", b),
             Cell::StringDesc(i) => write!(f, "str:{}", i),
             Cell::Array(idx) => write!(f, "<array:{}>", idx),
+            Cell::Str(idx) => write!(f, "<str:{}>", idx),
             Cell::ArrayAddr { pool_idx, elem_idx } => {
                 write!(f, "<arrayaddr:{}[{}]>", pool_idx, elem_idx)
             }
@@ -228,6 +249,7 @@ impl Cell {
             Cell::Bool(_) => "Bool",
             Cell::StringDesc(_) => "StringDesc",
             Cell::Array(_) => "Array",
+            Cell::Str(_) => "Str",
             Cell::ArrayAddr { .. } => "ArrayAddr",
             Cell::None => "None",
             Cell::Marker => "Marker",
@@ -265,6 +287,7 @@ impl PartialEq for Cell {
             (Cell::Bool(a), Cell::Bool(b)) => a == b,
             (Cell::None, Cell::None) => true,
             (Cell::Array(a), Cell::Array(b)) => a == b,
+            (Cell::Str(a), Cell::Str(b)) => a == b,
             (
                 Cell::ArrayAddr {
                     pool_idx: pa,

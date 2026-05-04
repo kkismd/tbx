@@ -89,6 +89,14 @@ pub fn store_prim(vm: &mut VM) -> Result<(), TbxError> {
                     return Err(TbxError::ArrayFrameEscape);
                 }
             }
+            // Guard: only top-level (global) strings may escape into dictionary
+            // storage.  Strings created inside a word call have a pool_idx >=
+            // global_string_pool_len and must not escape.
+            if let Cell::Str(pool_idx) = &value {
+                if *pool_idx >= vm.global_string_pool_len {
+                    return Err(TbxError::StringFrameEscape);
+                }
+            }
             vm.dict_write_at(a, value)?;
             Ok(())
         }
@@ -122,6 +130,14 @@ pub fn set_prim(vm: &mut VM) -> Result<(), TbxError> {
             if let Cell::Array(pool_idx) = &value {
                 if *pool_idx >= vm.global_array_pool_len {
                     return Err(TbxError::ArrayFrameEscape);
+                }
+            }
+            // Guard: only top-level (global) strings may escape into dictionary
+            // storage.  Strings created inside a word call have a pool_idx >=
+            // global_string_pool_len and must not escape.
+            if let Cell::Str(pool_idx) = &value {
+                if *pool_idx >= vm.global_string_pool_len {
+                    return Err(TbxError::StringFrameEscape);
                 }
             }
             vm.dict_write_at(a, value)?;
@@ -367,14 +383,119 @@ pub fn bor_prim(vm: &mut VM) -> Result<(), TbxError> {
     Ok(())
 }
 
-/// PUTSTR — output the string referenced by a StringDesc on the stack (no newline).
+/// PUTSTR — output the string referenced by a StringDesc or Str on the stack (no newline).
 /// Escape sequences (\n, \t, \\) in the stored string are output literally
 /// as they were already expanded at compile time (during intern).
+/// Also accepts `Cell::Str` (runtime string) in addition to `Cell::StringDesc` (literal).
 pub fn putstr_prim(vm: &mut VM) -> Result<(), TbxError> {
-    let idx = vm.pop_string_desc()?;
-    let s = vm.resolve_string(idx)?;
+    let top = vm.pop()?;
+    let s = match top {
+        Cell::StringDesc(idx) => vm.resolve_string(idx)?,
+        Cell::Str(idx) => vm
+            .strings
+            .get(idx)
+            .cloned()
+            .ok_or(TbxError::IndexOutOfBounds {
+                index: idx,
+                size: vm.strings.len(),
+            })?,
+        other => {
+            return Err(TbxError::TypeError {
+                expected: "StringDesc or Str",
+                got: other.type_name(),
+            })
+        }
+    };
     vm.write_output(&s);
     Ok(())
+}
+
+/// STR — convert a value to its string representation and push a `Cell::Str` handle.
+///
+/// Accepts any `Cell` value.  The result is a new entry in `vm.strings`.
+pub fn str_prim(vm: &mut VM) -> Result<(), TbxError> {
+    let cell = vm.pop()?;
+    let s = match &cell {
+        // For StringDesc, resolve to the actual string content.
+        Cell::StringDesc(idx) => vm.resolve_string(*idx)?,
+        // For Str, return the content directly (identity-like conversion).
+        Cell::Str(idx) => vm
+            .strings
+            .get(*idx)
+            .cloned()
+            .ok_or(TbxError::IndexOutOfBounds {
+                index: *idx,
+                size: vm.strings.len(),
+            })?,
+        // For everything else, use Display.
+        other => other.to_string(),
+    };
+    let idx = vm.strings.len();
+    vm.strings.push(s);
+    vm.push(Cell::Str(idx))?;
+    Ok(())
+}
+
+/// STR_CONCAT — concatenate two strings and push a new `Cell::Str` handle.
+///
+/// Stack: `[..., a: Str|StringDesc, b: Str|StringDesc]` → `Cell::Str(new)`
+pub fn str_concat_prim(vm: &mut VM) -> Result<(), TbxError> {
+    let b_cell = vm.pop()?;
+    let a_cell = vm.pop()?;
+    let b = resolve_str_cell(vm, &b_cell)?;
+    let a = resolve_str_cell(vm, &a_cell)?;
+    let result = a + &b;
+    let idx = vm.strings.len();
+    vm.strings.push(result);
+    vm.push(Cell::Str(idx))?;
+    Ok(())
+}
+
+/// STR_LEN — return the character count of a string.
+///
+/// Stack: `[..., s: Str|StringDesc]` → `Cell::Int(len)`
+///
+/// The length is the number of Unicode scalar values (chars), not UTF-8 bytes.
+pub fn str_len_prim(vm: &mut VM) -> Result<(), TbxError> {
+    let s_cell = vm.pop()?;
+    let s = resolve_str_cell(vm, &s_cell)?;
+    let len = s.chars().count() as i64;
+    vm.push(Cell::Int(len))?;
+    Ok(())
+}
+
+/// STR_EQ — compare two strings by content and push a `Cell::Bool`.
+///
+/// Stack: `[..., a: Str|StringDesc, b: Str|StringDesc]` → `Cell::Bool`
+///
+/// Unlike `Cell::Str(a) == Cell::Str(b)` (index comparison), this compares
+/// the actual string contents.
+pub fn str_eq_prim(vm: &mut VM) -> Result<(), TbxError> {
+    let b_cell = vm.pop()?;
+    let a_cell = vm.pop()?;
+    let b = resolve_str_cell(vm, &b_cell)?;
+    let a = resolve_str_cell(vm, &a_cell)?;
+    vm.push(Cell::Bool(a == b))?;
+    Ok(())
+}
+
+/// Helper: resolve a `Cell::Str` or `Cell::StringDesc` to a `String`.
+fn resolve_str_cell(vm: &VM, cell: &Cell) -> Result<String, TbxError> {
+    match cell {
+        Cell::Str(idx) => vm
+            .strings
+            .get(*idx)
+            .cloned()
+            .ok_or(TbxError::IndexOutOfBounds {
+                index: *idx,
+                size: vm.strings.len(),
+            }),
+        Cell::StringDesc(idx) => vm.resolve_string(*idx),
+        other => Err(TbxError::TypeError {
+            expected: "Str or StringDesc",
+            got: other.type_name(),
+        }),
+    }
 }
 
 /// PUTCHR — output the integer value on the stack as a single ASCII character (no newline).
@@ -1914,6 +2035,13 @@ pub fn register_all(vm: &mut VM) {
     vm.register(WordEntry::new_primitive("NEGATE", negate_prim));
     vm.register(WordEntry::new_primitive("INT", int_prim));
     vm.register(WordEntry::new_primitive("PUTSTR", putstr_prim));
+    // Runtime string primitives.
+    // STR converts any value to a string; STR_CONCAT concatenates two strings;
+    // STR_LEN returns the character count; STR_EQ compares by content.
+    vm.register(WordEntry::new_primitive("STR", str_prim));
+    vm.register(WordEntry::new_primitive("STR_CONCAT", str_concat_prim));
+    vm.register(WordEntry::new_primitive("STR_LEN", str_len_prim));
+    vm.register(WordEntry::new_primitive("STR_EQ", str_eq_prim));
     vm.register(WordEntry::new_primitive("PUTCHR", putchr_prim));
     vm.register(WordEntry::new_primitive("PUTDEC", putdec_prim));
     vm.register(WordEntry::new_primitive("PUTHEX", puthex_prim));
@@ -3072,6 +3200,234 @@ mod tests {
             putstr_prim(&mut vm),
             Err(TbxError::StackUnderflow)
         ));
+    }
+
+    // --- PUTSTR with Cell::Str tests ---
+
+    #[test]
+    fn test_putstr_accepts_cell_str() {
+        let mut vm = VM::new();
+        vm.strings.push("world".to_string());
+        vm.push(Cell::Str(0)).unwrap();
+        putstr_prim(&mut vm).unwrap();
+        assert_eq!(vm.take_output(), "world");
+    }
+
+    // --- str_prim tests ---
+
+    #[test]
+    fn test_str_prim_from_int() {
+        let mut vm = VM::new();
+        vm.push(Cell::Int(42)).unwrap();
+        str_prim(&mut vm).unwrap();
+        assert_eq!(vm.pop().unwrap(), Cell::Str(0));
+        assert_eq!(vm.strings[0], "42");
+    }
+
+    #[test]
+    fn test_str_prim_from_float() {
+        let mut vm = VM::new();
+        vm.push(Cell::Float(1.5)).unwrap();
+        str_prim(&mut vm).unwrap();
+        assert_eq!(vm.pop().unwrap(), Cell::Str(0));
+        assert_eq!(vm.strings[0], "1.5");
+    }
+
+    #[test]
+    fn test_str_prim_from_bool() {
+        let mut vm = VM::new();
+        vm.push(Cell::Bool(true)).unwrap();
+        str_prim(&mut vm).unwrap();
+        assert_eq!(vm.pop().unwrap(), Cell::Str(0));
+        assert_eq!(vm.strings[0], "true");
+    }
+
+    #[test]
+    fn test_str_prim_from_string_desc() {
+        let mut vm = VM::new();
+        let idx = vm.intern_string("hello").unwrap();
+        vm.push(Cell::StringDesc(idx)).unwrap();
+        str_prim(&mut vm).unwrap();
+        assert_eq!(vm.pop().unwrap(), Cell::Str(0));
+        assert_eq!(vm.strings[0], "hello");
+    }
+
+    #[test]
+    fn test_str_prim_from_cell_str() {
+        let mut vm = VM::new();
+        vm.strings.push("existing".to_string());
+        vm.push(Cell::Str(0)).unwrap();
+        str_prim(&mut vm).unwrap();
+        // A new Str entry is created (even if content duplicates the original).
+        assert_eq!(vm.pop().unwrap(), Cell::Str(1));
+        assert_eq!(vm.strings[1], "existing");
+    }
+
+    #[test]
+    fn test_str_prim_underflow() {
+        let mut vm = VM::new();
+        assert_eq!(str_prim(&mut vm), Err(TbxError::StackUnderflow));
+    }
+
+    // --- str_concat_prim tests ---
+
+    #[test]
+    fn test_str_concat_basic() {
+        let mut vm = VM::new();
+        vm.strings.push("foo".to_string());
+        vm.strings.push("bar".to_string());
+        vm.push(Cell::Str(0)).unwrap();
+        vm.push(Cell::Str(1)).unwrap();
+        str_concat_prim(&mut vm).unwrap();
+        assert_eq!(vm.pop().unwrap(), Cell::Str(2));
+        assert_eq!(vm.strings[2], "foobar");
+    }
+
+    #[test]
+    fn test_str_concat_with_string_desc() {
+        let mut vm = VM::new();
+        let idx = vm.intern_string("world").unwrap();
+        vm.strings.push("hello ".to_string());
+        vm.push(Cell::Str(0)).unwrap();
+        vm.push(Cell::StringDesc(idx)).unwrap();
+        str_concat_prim(&mut vm).unwrap();
+        assert_eq!(vm.pop().unwrap(), Cell::Str(1));
+        assert_eq!(vm.strings[1], "hello world");
+    }
+
+    #[test]
+    fn test_str_concat_type_error() {
+        let mut vm = VM::new();
+        vm.strings.push("foo".to_string());
+        vm.push(Cell::Str(0)).unwrap();
+        vm.push(Cell::Int(42)).unwrap();
+        assert!(matches!(
+            str_concat_prim(&mut vm),
+            Err(TbxError::TypeError { .. })
+        ));
+    }
+
+    // --- str_len_prim tests ---
+
+    #[test]
+    fn test_str_len_basic() {
+        let mut vm = VM::new();
+        vm.strings.push("hello".to_string());
+        vm.push(Cell::Str(0)).unwrap();
+        str_len_prim(&mut vm).unwrap();
+        assert_eq!(vm.pop().unwrap(), Cell::Int(5));
+    }
+
+    #[test]
+    fn test_str_len_empty() {
+        let mut vm = VM::new();
+        vm.strings.push(String::new());
+        vm.push(Cell::Str(0)).unwrap();
+        str_len_prim(&mut vm).unwrap();
+        assert_eq!(vm.pop().unwrap(), Cell::Int(0));
+    }
+
+    #[test]
+    fn test_str_len_with_string_desc() {
+        let mut vm = VM::new();
+        let idx = vm.intern_string("abc").unwrap();
+        vm.push(Cell::StringDesc(idx)).unwrap();
+        str_len_prim(&mut vm).unwrap();
+        assert_eq!(vm.pop().unwrap(), Cell::Int(3));
+    }
+
+    #[test]
+    fn test_str_len_type_error() {
+        let mut vm = VM::new();
+        vm.push(Cell::Int(10)).unwrap();
+        assert!(matches!(
+            str_len_prim(&mut vm),
+            Err(TbxError::TypeError { .. })
+        ));
+    }
+
+    // --- str_eq_prim tests ---
+
+    #[test]
+    fn test_str_eq_equal() {
+        let mut vm = VM::new();
+        vm.strings.push("hello".to_string());
+        vm.strings.push("hello".to_string());
+        vm.push(Cell::Str(0)).unwrap();
+        vm.push(Cell::Str(1)).unwrap();
+        str_eq_prim(&mut vm).unwrap();
+        assert_eq!(vm.pop().unwrap(), Cell::Bool(true));
+    }
+
+    #[test]
+    fn test_str_eq_not_equal() {
+        let mut vm = VM::new();
+        vm.strings.push("foo".to_string());
+        vm.strings.push("bar".to_string());
+        vm.push(Cell::Str(0)).unwrap();
+        vm.push(Cell::Str(1)).unwrap();
+        str_eq_prim(&mut vm).unwrap();
+        assert_eq!(vm.pop().unwrap(), Cell::Bool(false));
+    }
+
+    #[test]
+    fn test_str_eq_same_index_is_equal() {
+        // Even the same index via different cells should be equal.
+        let mut vm = VM::new();
+        vm.strings.push("x".to_string());
+        vm.push(Cell::Str(0)).unwrap();
+        vm.push(Cell::Str(0)).unwrap();
+        str_eq_prim(&mut vm).unwrap();
+        assert_eq!(vm.pop().unwrap(), Cell::Bool(true));
+    }
+
+    #[test]
+    fn test_str_eq_with_string_desc() {
+        let mut vm = VM::new();
+        let idx = vm.intern_string("match").unwrap();
+        vm.strings.push("match".to_string());
+        vm.push(Cell::Str(0)).unwrap();
+        vm.push(Cell::StringDesc(idx)).unwrap();
+        str_eq_prim(&mut vm).unwrap();
+        assert_eq!(vm.pop().unwrap(), Cell::Bool(true));
+    }
+
+    // --- StringFrameEscape tests ---
+
+    #[test]
+    fn test_string_frame_escape_via_store() {
+        // A Str created inside a word (pool_idx >= global_string_pool_len) must not
+        // be stored into a DictAddr.
+        let mut vm = VM::new();
+        // global_string_pool_len = 0, so any Str(idx) will be a frame-local string.
+        vm.strings.push("local".to_string());
+        vm.push(Cell::Str(0)).unwrap();
+        vm.dictionary.push(Cell::None);
+        vm.dp = 1;
+        vm.push(Cell::DictAddr(0)).unwrap();
+        // STORE pops addr then value, so push value first then addr.
+        // Re-push in the right order.
+        vm.data_stack.clear();
+        vm.push(Cell::Str(0)).unwrap();
+        vm.push(Cell::DictAddr(0)).unwrap();
+        // store_prim pops addr first then value.
+        let result = store_prim(&mut vm);
+        assert_eq!(result, Err(TbxError::StringFrameEscape));
+    }
+
+    #[test]
+    fn test_global_string_stored_via_store() {
+        // A Str created at top level (pool_idx < global_string_pool_len) may be stored.
+        let mut vm = VM::new();
+        vm.strings.push("global".to_string());
+        vm.global_string_pool_len = 1; // promote to global
+        vm.dictionary.push(Cell::None);
+        vm.dp = 1;
+        // store_prim: stack = [value, addr], pops addr first.
+        vm.push(Cell::Str(0)).unwrap(); // value
+        vm.push(Cell::DictAddr(0)).unwrap(); // addr (top)
+        store_prim(&mut vm).unwrap();
+        assert_eq!(vm.dictionary[0], Cell::Str(0));
     }
 
     // --- PUTCHR tests ---
