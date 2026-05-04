@@ -174,6 +174,23 @@ pub struct VM {
     /// Updated to `arrays.len()` whenever a `TopLevel` frame is popped in
     /// `Exit` (i.e. at the end of every top-level execution segment).
     pub global_array_pool_len: usize,
+    /// Runtime string pool: indexed by `Cell::Str(usize)` values.
+    ///
+    /// Each entry is a `String` created by string primitives such as `STR`,
+    /// `STR_CONCAT`, etc.  On every word EXIT or RETURN_VAL, the pool is
+    /// truncated back to the length saved in
+    /// `ReturnFrame::Call::saved_string_pool_len`, freeing all strings
+    /// allocated within that call.
+    pub strings: Vec<String>,
+    /// Length of the "global" (persistent) region of `strings`.
+    ///
+    /// Strings at indices `0..global_string_pool_len` were created at the top
+    /// level (outside any `DEF..END`) and are never freed.  They may safely be
+    /// stored in `VARIABLE` slots and shared across word calls.
+    ///
+    /// Updated to `strings.len()` whenever a `TopLevel` frame is popped in
+    /// `Exit` (i.e. at the end of every top-level execution segment).
+    pub global_string_pool_len: usize,
     /// Internal buffer holding the last line read by ACCEPT.
     ///
     /// ACCEPT reads one line from `input_reader` and stores it here (trimmed of
@@ -240,6 +257,8 @@ impl VM {
             pending_use_path: None,
             arrays: Vec::new(),
             global_array_pool_len: 0,
+            strings: Vec::new(),
+            global_string_pool_len: 0,
             input_buffer: None,
             input_reader: Box::new(BufReader::new(std::io::stdin())),
             output_writer: Box::new(std::io::stdout()),
@@ -662,6 +681,7 @@ impl VM {
                         return_pc,
                         saved_bp,
                         saved_array_pool_len: self.arrays.len(),
+                        saved_string_pool_len: self.strings.len(),
                         actual_arity: 0,
                     });
                     self.bp = self.data_stack.len();
@@ -728,6 +748,7 @@ impl VM {
                                 return_pc,
                                 saved_bp,
                                 saved_array_pool_len: self.arrays.len(),
+                                saved_string_pool_len: self.strings.len(),
                                 actual_arity: arity,
                             });
                             self.bp = self.data_stack.len() - arity;
@@ -752,10 +773,12 @@ impl VM {
                             return_pc,
                             saved_bp,
                             saved_array_pool_len,
+                            saved_string_pool_len,
                             actual_arity: _,
                         } => {
                             self.data_stack.truncate(self.bp);
                             self.arrays.truncate(saved_array_pool_len);
+                            self.strings.truncate(saved_string_pool_len);
                             self.pc = return_pc;
                             self.bp = saved_bp;
                         }
@@ -764,39 +787,51 @@ impl VM {
                             // the persistent region so they can be stored in
                             // VARIABLE slots and shared across word calls.
                             self.global_array_pool_len = self.arrays.len();
+                            // Promote all strings created at the top level to
+                            // the persistent region so they can be stored in
+                            // VARIABLE slots and shared across word calls.
+                            self.global_string_pool_len = self.strings.len();
                             break;
                         }
                     }
                 }
                 EntryKind::ReturnVal => {
-                    // Determine the frame boundary before popping the return value,
-                    // so we can detect whether the array belongs to the current frame.
+                    // Determine the frame boundaries before popping the return value,
+                    // so we can detect whether the array/string belongs to the current frame.
                     //
-                    // Note: ReturnVal intentionally uses `saved_array_pool_len` (the
-                    // call-frame boundary) rather than `global_array_pool_len` (the
-                    // VM-wide global boundary used by store/set).  This is correct
-                    // because ReturnVal only needs to distinguish "created in this
-                    // frame" from "created before this frame was pushed" — it does not
-                    // need to know whether the array is truly global.
-                    // `global_array_pool_len` is therefore not referenced here.
-                    let frame_boundary = match self.return_stack.last() {
-                        Some(ReturnFrame::Call {
-                            saved_array_pool_len,
-                            ..
-                        }) => *saved_array_pool_len,
-                        Some(ReturnFrame::TopLevel) => {
-                            return Err(TbxError::InvalidReturn);
-                        }
-                        None => return Err(TbxError::StackUnderflow),
-                    };
+                    // Note: ReturnVal intentionally uses `saved_array_pool_len` /
+                    // `saved_string_pool_len` (the call-frame boundary) rather than
+                    // `global_array_pool_len` / `global_string_pool_len` (the VM-wide
+                    // global boundary used by store/set).  This is correct because
+                    // ReturnVal only needs to distinguish "created in this frame" from
+                    // "created before this frame was pushed" — it does not need to know
+                    // whether the value is truly global.
+                    let (array_frame_boundary, string_frame_boundary) =
+                        match self.return_stack.last() {
+                            Some(ReturnFrame::Call {
+                                saved_array_pool_len,
+                                saved_string_pool_len,
+                                ..
+                            }) => (*saved_array_pool_len, *saved_string_pool_len),
+                            Some(ReturnFrame::TopLevel) => {
+                                return Err(TbxError::InvalidReturn);
+                            }
+                            None => return Err(TbxError::StackUnderflow),
+                        };
                     let retval = self.pop()?;
                     // Check for array escape before truncating the pool.
                     // Arrays whose pool_idx is below the frame boundary were
                     // created by the caller (or at the top level) and are safe to
                     // return; only arrays allocated within this frame escape.
                     if let Cell::Array(pool_idx) = &retval {
-                        if *pool_idx >= frame_boundary {
+                        if *pool_idx >= array_frame_boundary {
                             return Err(TbxError::ArrayFrameEscape);
+                        }
+                    }
+                    // Check for string escape in the same way.
+                    if let Cell::Str(pool_idx) = &retval {
+                        if *pool_idx >= string_frame_boundary {
+                            return Err(TbxError::StringFrameEscape);
                         }
                     }
                     match self.return_stack.pop().ok_or(TbxError::StackUnderflow)? {
@@ -804,10 +839,12 @@ impl VM {
                             return_pc,
                             saved_bp,
                             saved_array_pool_len,
+                            saved_string_pool_len,
                             actual_arity: _,
                         } => {
                             self.data_stack.truncate(self.bp);
                             self.arrays.truncate(saved_array_pool_len);
+                            self.strings.truncate(saved_string_pool_len);
                             self.push(retval)?;
                             self.pc = return_pc;
                             self.bp = saved_bp;
@@ -997,6 +1034,8 @@ impl std::fmt::Debug for VM {
             .field("compile_state", &self.compile_state)
             .field("compile_stack", &self.compile_stack)
             .field("pending_use_path", &self.pending_use_path)
+            .field("strings", &self.strings)
+            .field("global_string_pool_len", &self.global_string_pool_len)
             .field("input_buffer", &self.input_buffer)
             .field("input_reader", &"<dyn BufRead>")
             .field("output_writer", &"<dyn Write>")
@@ -1754,6 +1793,7 @@ mod tests {
                 return_pc: 0,
                 saved_bp: 0,
                 saved_array_pool_len: 0,
+                saved_string_pool_len: 0,
                 actual_arity: 0,
             });
         }
@@ -1795,6 +1835,7 @@ mod tests {
                 return_pc: 0,
                 saved_bp: 0,
                 saved_array_pool_len: 0,
+                saved_string_pool_len: 0,
                 actual_arity: 0,
             });
         }
@@ -2777,6 +2818,7 @@ mod tests {
             return_pc: 0,
             saved_bp: 0,
             saved_array_pool_len: 1,
+            saved_string_pool_len: 0,
             actual_arity: 0,
         });
 
