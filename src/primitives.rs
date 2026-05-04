@@ -1954,12 +1954,11 @@ fn use_prim(vm: &mut VM) -> Result<(), TbxError> {
     Ok(())
 }
 
-/// ACCEPT — read one line from the VM's input source and store it in the input buffer.
+/// Read one line from the VM's input source and return it as a `String`.
 ///
-/// Reads until a newline (or EOF) and strips the trailing newline characters.
-/// Each call overwrites any previously buffered input.
-/// Stack signature: `( -- )`
-pub fn accept_prim(vm: &mut VM) -> Result<(), TbxError> {
+/// Internal helper used by `getdec_prim`. Reads until a newline (or EOF) and
+/// strips the trailing newline characters.
+fn accept_prim(vm: &mut VM) -> Result<String, TbxError> {
     // Flush any pending output before blocking on user input, so that prompt
     // strings written with PUTSTR are visible before the interpreter waits.
     if !vm.output_buffer.is_empty() {
@@ -1986,22 +1985,21 @@ pub fn accept_prim(vm: &mut VM) -> Result<(), TbxError> {
         .trim_end_matches('\n')
         .trim_end_matches('\r')
         .to_string();
-    vm.input_buffer = Some(trimmed);
-    Ok(())
+    Ok(trimmed)
 }
 
-/// GETDEC — consume the input buffer and push its integer value onto the data stack.
+/// GETDEC — read one line from the input and push its integer value onto the data stack.
 ///
-/// Parses the string stored by the most recent ACCEPT call as a signed decimal integer
-/// (leading/trailing whitespace is ignored) and pushes the result as `Cell::Int`.
+/// Calls `accept_prim` internally to read a line, then parses the result as a signed
+/// decimal integer (leading/trailing whitespace is ignored) and pushes it as `Cell::Int`.
+/// No prior `ACCEPT` call is needed.
 ///
-/// Returns `TbxError::InputBufferEmpty` if ACCEPT has not been called since the last
-/// GETDEC (or since VM creation), and `TbxError::ParseIntError` if the string cannot
-/// be parsed as a signed decimal integer.
+/// Returns `TbxError::ParseIntError` if the input cannot be parsed as a signed decimal
+/// integer (including when the input is empty or EOF).
 ///
 /// Stack signature: `( -- n )`
 pub fn getdec_prim(vm: &mut VM) -> Result<(), TbxError> {
-    let s = vm.input_buffer.take().ok_or(TbxError::InputBufferEmpty)?;
+    let s = accept_prim(vm)?;
     let n = s
         .trim()
         .parse::<i64>()
@@ -2045,7 +2043,6 @@ pub fn register_all(vm: &mut VM) {
     vm.register(WordEntry::new_primitive("PUTCHR", putchr_prim));
     vm.register(WordEntry::new_primitive("PUTDEC", putdec_prim));
     vm.register(WordEntry::new_primitive("PUTHEX", puthex_prim));
-    vm.register(WordEntry::new_primitive("ACCEPT", accept_prim));
     vm.register(WordEntry::new_primitive("GETDEC", getdec_prim));
     vm.register(WordEntry::new_primitive("APPEND", append_prim));
     vm.register(WordEntry::new_primitive("ALLOT", allot_prim));
@@ -5693,12 +5690,12 @@ mod tests {
     // --- accept_prim ---
 
     #[test]
-    fn test_accept_stores_line_in_input_buffer() {
+    fn test_accept_reads_line() {
         use std::io::Cursor;
         let mut vm = VM::new();
         vm.input_reader = Box::new(Cursor::new("hello\n"));
-        accept_prim(&mut vm).unwrap();
-        assert_eq!(vm.input_buffer, Some("hello".to_string()));
+        let result = accept_prim(&mut vm).unwrap();
+        assert_eq!(result, "hello".to_string());
     }
 
     #[test]
@@ -5706,18 +5703,8 @@ mod tests {
         use std::io::Cursor;
         let mut vm = VM::new();
         vm.input_reader = Box::new(Cursor::new("world\r\n"));
-        accept_prim(&mut vm).unwrap();
-        assert_eq!(vm.input_buffer, Some("world".to_string()));
-    }
-
-    #[test]
-    fn test_accept_overwrites_previous_buffer() {
-        use std::io::Cursor;
-        let mut vm = VM::new();
-        vm.input_buffer = Some("old value".to_string());
-        vm.input_reader = Box::new(Cursor::new("new value\n"));
-        accept_prim(&mut vm).unwrap();
-        assert_eq!(vm.input_buffer, Some("new value".to_string()));
+        let result = accept_prim(&mut vm).unwrap();
+        assert_eq!(result, "world".to_string());
     }
 
     #[test]
@@ -5726,7 +5713,7 @@ mod tests {
         let mut vm = VM::new();
         vm.input_reader = Box::new(Cursor::new("42\n"));
         accept_prim(&mut vm).unwrap();
-        // Stack must remain empty — ACCEPT is ( -- ).
+        // Stack must remain empty — accept_prim only reads; it does not push.
         assert_eq!(vm.data_stack.len(), 0);
     }
 
@@ -5735,57 +5722,68 @@ mod tests {
         use std::io::Cursor;
         let mut vm = VM::new();
         vm.input_reader = Box::new(Cursor::new("\n"));
-        accept_prim(&mut vm).unwrap();
-        assert_eq!(vm.input_buffer, Some("".to_string()));
+        let result = accept_prim(&mut vm).unwrap();
+        assert_eq!(result, "".to_string());
     }
 
     // --- getdec_prim ---
 
     #[test]
     fn test_getdec_pushes_integer() {
+        use std::io::Cursor;
         let mut vm = VM::new();
-        vm.input_buffer = Some("42".to_string());
+        vm.input_reader = Box::new(Cursor::new("42\n"));
         getdec_prim(&mut vm).unwrap();
         assert_eq!(vm.pop(), Ok(Cell::Int(42)));
     }
 
     #[test]
     fn test_getdec_negative_integer() {
+        use std::io::Cursor;
         let mut vm = VM::new();
-        vm.input_buffer = Some("-7".to_string());
+        vm.input_reader = Box::new(Cursor::new("-7\n"));
         getdec_prim(&mut vm).unwrap();
         assert_eq!(vm.pop(), Ok(Cell::Int(-7)));
     }
 
     #[test]
     fn test_getdec_trims_whitespace() {
+        use std::io::Cursor;
         let mut vm = VM::new();
-        vm.input_buffer = Some("  100  ".to_string());
+        vm.input_reader = Box::new(Cursor::new("  100  \n"));
         getdec_prim(&mut vm).unwrap();
         assert_eq!(vm.pop(), Ok(Cell::Int(100)));
     }
 
     #[test]
-    fn test_getdec_consumes_buffer() {
+    fn test_getdec_does_not_use_input_buffer() {
+        use std::io::Cursor;
         let mut vm = VM::new();
-        vm.input_buffer = Some("10".to_string());
+        vm.input_reader = Box::new(Cursor::new("10\n"));
         getdec_prim(&mut vm).unwrap();
-        // input_buffer must be None after take().
+        // getdec_prim reads directly via accept_prim; input_buffer is not used.
         assert_eq!(vm.input_buffer, None);
     }
 
     #[test]
     fn test_getdec_empty_buffer_returns_error() {
+        use std::io::Cursor;
         let mut vm = VM::new();
-        // input_buffer is None by default.
+        // EOF (empty reader) yields an empty string, which fails to parse as integer.
+        vm.input_reader = Box::new(Cursor::new(""));
         let result = getdec_prim(&mut vm);
-        assert_eq!(result, Err(TbxError::InputBufferEmpty));
+        assert!(
+            matches!(result, Err(TbxError::ParseIntError { .. })),
+            "expected ParseIntError for empty input, got: {:?}",
+            result
+        );
     }
 
     #[test]
     fn test_getdec_non_integer_returns_error() {
+        use std::io::Cursor;
         let mut vm = VM::new();
-        vm.input_buffer = Some("abc".to_string());
+        vm.input_reader = Box::new(Cursor::new("abc\n"));
         let result = getdec_prim(&mut vm);
         assert!(
             matches!(result, Err(TbxError::ParseIntError { .. })),
@@ -5795,11 +5793,11 @@ mod tests {
     }
 
     #[test]
-    fn test_accept_then_getdec_sequence() {
+    fn test_getdec_reads_from_reader_directly() {
         use std::io::Cursor;
+        // Verify that getdec_prim works without a prior accept_prim call.
         let mut vm = VM::new();
         vm.input_reader = Box::new(Cursor::new("123\n"));
-        accept_prim(&mut vm).unwrap();
         getdec_prim(&mut vm).unwrap();
         assert_eq!(vm.pop(), Ok(Cell::Int(123)));
     }
