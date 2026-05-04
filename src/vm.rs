@@ -771,6 +771,14 @@ impl VM {
                 EntryKind::ReturnVal => {
                     // Determine the frame boundary before popping the return value,
                     // so we can detect whether the array belongs to the current frame.
+                    //
+                    // Note: ReturnVal intentionally uses `saved_array_pool_len` (the
+                    // call-frame boundary) rather than `global_array_pool_len` (the
+                    // VM-wide global boundary used by store/set).  This is correct
+                    // because ReturnVal only needs to distinguish "created in this
+                    // frame" from "created before this frame was pushed" — it does not
+                    // need to know whether the array is truly global.
+                    // `global_array_pool_len` is therefore not referenced here.
                     let frame_boundary = match self.return_stack.last() {
                         Some(ReturnFrame::Call {
                             saved_array_pool_len,

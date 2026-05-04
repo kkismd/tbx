@@ -618,7 +618,7 @@ END
 - `pool_idx >= saved_array_pool_len`（呼び出しフレームの境界）の配列
 - EXIT / RETURN_VAL 時に `vm.arrays` を `saved_array_pool_len` まで切り詰めて解放する
 - `Cell::Array` 値を `VARIABLE` スロット（`DictAddr`）に書き込もうとすると `LocalArrayEscape` エラーになる
-- `RETURN` で呼び出し元に返そうとしても `LocalArrayEscape` エラーになる
+- ワード内で**新規生成した**配列（`pool_idx >= saved_array_pool_len`）は `RETURN` で返せない（`LocalArrayEscape` エラー）。呼び出し元由来の配列（`pool_idx < saved_array_pool_len`）は `RETURN` で安全に返せる
 
 **グローバル配列**（トップレベル実行で生成した配列）:
 - `pool_idx < vm.global_array_pool_len` の配列
