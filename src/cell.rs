@@ -48,7 +48,7 @@ pub enum ReturnFrame {
         saved_bp: usize,
         /// Snapshot of `VM::arrays.len()` taken at call time.
         /// On EXIT or RETURN_VAL, the array pool is truncated back to this
-        /// length to free all local arrays created during the call.
+        /// length to free all arrays created during the call.
         saved_array_pool_len: usize,
         /// The actual number of arguments passed to this call.
         /// Used by the `VA_COUNT` primitive to report how many arguments the
@@ -87,19 +87,19 @@ pub enum Cell {
     /// a `Vec<Cell>` of length N.
     ///
     /// Arrays come in two flavours:
-    /// - **Local arrays** (`pool_idx >= saved_array_pool_len` of the current call
+    /// - **Frame-local arrays** (`pool_idx >= saved_array_pool_len` of the current call
     ///   frame) are freed when the owning frame exits via EXIT or RETURN_VAL.
     ///   They must not escape their owning stack frame.
     /// - **Global arrays** (`pool_idx < vm.global_array_pool_len`) are created
     ///   at the top level (outside any `DEF..END`) and are never freed.  They
     ///   may safely be stored in `VARIABLE` slots and shared across word calls.
     Array(usize),
-    /// Address of an element in a local array.
+    /// Address of an element in an array.
     ///
     /// Produced by the `&A(I)` construct where `A` holds a `Cell::Array`.
     /// Used by `FETCH`, `STORE`, and `SET` to read/write individual elements.
     ArrayAddr {
-        /// Index into `VM::arrays` (the local array pool).
+        /// Index into `VM::arrays` (the array pool).
         pool_idx: usize,
         /// Zero-based element index within the array.
         elem_idx: usize,

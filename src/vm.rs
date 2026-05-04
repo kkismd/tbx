@@ -158,12 +158,12 @@ pub struct VM {
     /// Drained by `exec_immediate_word` in the interpreter, which calls
     /// `exec_source` on the file content.
     pub(crate) pending_use_path: Option<String>,
-    /// Local array pool: indexed by `Cell::Array(usize)` values.
+    /// Array pool: indexed by `Cell::Array(usize)` values.
     ///
     /// Each entry is a `Vec<Cell>` created by the `ARRAY(N)` primitive.
     /// On every word EXIT or RETURN_VAL, the pool is truncated back to the
     /// length saved in `ReturnFrame::Call::saved_array_pool_len`, freeing all
-    /// local arrays allocated within that call.
+    /// arrays allocated within that call.
     pub arrays: Vec<Vec<Cell>>,
     /// Length of the "global" (persistent) region of `arrays`.
     ///
@@ -790,13 +790,13 @@ impl VM {
                         None => return Err(TbxError::StackUnderflow),
                     };
                     let retval = self.pop()?;
-                    // Check for local array escape before truncating the pool.
+                    // Check for array escape before truncating the pool.
                     // Arrays whose pool_idx is below the frame boundary were
                     // created by the caller (or at the top level) and are safe to
                     // return; only arrays allocated within this frame escape.
                     if let Cell::Array(pool_idx) = &retval {
                         if *pool_idx >= frame_boundary {
-                            return Err(TbxError::LocalArrayEscape);
+                            return Err(TbxError::ArrayEscape);
                         }
                     }
                     match self.return_stack.pop().ok_or(TbxError::StackUnderflow)? {
@@ -2619,7 +2619,7 @@ mod tests {
     }
 
     // ------------------------------------------------------------------
-    // End-to-end integration tests: local array pool management
+    // End-to-end integration tests: array pool management
     // ------------------------------------------------------------------
 
     /// Run a multi-line TBX source snippet through the full interpreter pipeline.
@@ -2630,11 +2630,11 @@ mod tests {
         Ok(interp.take_output())
     }
 
-    // --- Local array pool management ---
+    // --- Array pool management ---
 
     #[test]
     fn test_arrays_pool_truncated_on_exit() {
-        // Verify that the array pool is empty after a word with a local array returns.
+        // Verify that the array pool is empty after a word with an array returns.
         // run_source creates a fresh Interpreter (and therefore a fresh VM), so we
         // check the absence of errors rather than the pool length directly.
         let result = run_source(
@@ -2644,40 +2644,40 @@ mod tests {
         assert_eq!(
             result.unwrap().trim(),
             "1",
-            "word with local array should return 1"
+            "word with array should return 1"
         );
     }
 
     #[test]
-    fn test_local_array_escape_via_return_val_is_error() {
-        // Verify that returning a Cell::Array value via RETURN_VAL produces LocalArrayEscape.
+    fn test_array_escape_via_return_val_is_error() {
+        // Verify that returning a Cell::Array value via RETURN_VAL produces ArrayEscape.
         let result = run_source(
             "DEF BAD_RETURN()\n  VAR A\n  LET A = ARRAY(3)\n  RETURN A\nEND\nBAD_RETURN()",
         );
         assert!(
-            matches!(result, Err(crate::error::TbxError::LocalArrayEscape)),
-            "expected LocalArrayEscape, got: {result:?}"
+            matches!(result, Err(crate::error::TbxError::ArrayEscape)),
+            "expected ArrayEscape, got: {result:?}"
         );
     }
 
     #[test]
-    fn test_local_array_escape_via_store_to_dict_is_error() {
-        // Verify that STORE of a Cell::Array into a global variable produces LocalArrayEscape.
+    fn test_array_escape_via_store_to_dict_is_error() {
+        // Verify that STORE of a Cell::Array into a global variable produces ArrayEscape.
         let result = run_source(
             "VAR G\n\
              DEF BAD_STORE()\n  VAR A\n  LET A = ARRAY(2)\n  SET &G, A\nEND\n\
              BAD_STORE()",
         );
         assert!(
-            matches!(result, Err(crate::error::TbxError::LocalArrayEscape)),
-            "expected LocalArrayEscape, got: {result:?}"
+            matches!(result, Err(crate::error::TbxError::ArrayEscape)),
+            "expected ArrayEscape, got: {result:?}"
         );
     }
 
     #[test]
     fn test_global_array_stored_via_store_prim() {
         // A global array (pool_idx < global_array_pool_len) can be stored into a
-        // dictionary slot by store_prim without triggering LocalArrayEscape.
+        // dictionary slot by store_prim without triggering ArrayEscape.
         let mut vm = VM::new();
         vm.arrays.push(vec![Cell::Int(0); 5]);
         vm.global_array_pool_len = 1; // mark pool[0] as global
@@ -2721,17 +2721,17 @@ mod tests {
     }
 
     #[test]
-    fn test_word_local_array_store_to_global_var_is_still_error() {
+    fn test_word_array_store_to_global_var_is_still_error() {
         // Arrays created inside a word must still not escape via a global VAR.
-        // global_array_pool_len = 0 (default), so all arrays are local.
+        // global_array_pool_len = 0 (default), so all arrays created in words are frame-local.
         let result = run_source(
             "VAR gvar\n\
              DEF BAD()\n  VAR a\n  LET a = ARRAY(3)\n  SET &gvar, a\nEND\n\
              BAD()",
         );
         assert!(
-            matches!(result, Err(crate::error::TbxError::LocalArrayEscape)),
-            "expected LocalArrayEscape, got: {result:?}"
+            matches!(result, Err(crate::error::TbxError::ArrayEscape)),
+            "expected ArrayEscape, got: {result:?}"
         );
     }
 
@@ -2750,15 +2750,15 @@ mod tests {
         vm.push(Cell::DictAddr(slot)).unwrap();
         let result = crate::primitives::store_prim(&mut vm);
         assert!(
-            matches!(result, Err(TbxError::LocalArrayEscape)),
-            "expected LocalArrayEscape, got: {result:?}"
+            matches!(result, Err(TbxError::ArrayEscape)),
+            "expected ArrayEscape, got: {result:?}"
         );
     }
 
     #[test]
     fn test_global_array_returnable_from_word() {
         // A global array (pool_idx < saved_array_pool_len of the CALL frame) can
-        // be returned from a word without triggering LocalArrayEscape.
+        // be returned from a word without triggering ArrayEscape.
         //
         // The ReturnVal check uses `frame_boundary = saved_array_pool_len` of the
         // current CALL frame.  A global array created before the call has

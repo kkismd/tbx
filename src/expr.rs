@@ -26,7 +26,7 @@ enum OpItem {
     /// Left-parenthesis sentinel. Carries optional call metadata.
     ///
     /// `call` is `Some(LParenCall::Function(xt, arity))` for a function call,
-    /// `Some(LParenCall::LocalArray)` for a local array index expression,
+    /// `Some(LParenCall::Array)` for an array index expression,
     /// and `None` for a plain grouping parenthesis.
     LParen { call: Option<LParenCall> },
     /// Comma-as-binary-operator used outside of function calls (precedence 11).
@@ -39,9 +39,9 @@ enum OpItem {
 enum LParenCall {
     /// Function call: execution token and current argument arity count.
     Function(Xt, usize),
-    /// Local array index access: the Cell::Array handle is already on the output stack.
+    /// Array index access: the Cell::Array handle is already on the output stack.
     /// On closing `)`, emit ARRAY_GET (index is on top, handle is below).
-    LocalArray,
+    Array,
 }
 
 // ---------------------------------------------------------------------------
@@ -155,20 +155,20 @@ impl<'a> ExprCompiler<'a> {
                     // Check local variable table first — locals shadow globals.
                     if let Some(local_idx) = self.local_table.and_then(|lt| lt.get(&name)).copied()
                     {
-                        // Peek ahead: local variable followed by `(` means local array access.
+                        // Peek ahead: local variable followed by `(` means array element access.
                         let next_is_lparen = tokens
                             .get(i + 1)
                             .map(|st| matches!(st.token, Token::LParen))
                             .unwrap_or(false);
 
                         if next_is_lparen {
-                            // Local array element read: A(I)
+                            // Array element read: A(I)
                             // 1. Load the Cell::Array handle from the local slot.
                             emit_local_read(&mut output, local_idx, self.vm)?;
-                            // 2. Open an array-index paren frame marked as LocalArray
+                            // 2. Open an array-index paren frame marked as Array
                             //    to distinguish it from a regular function call paren.
                             op_stack.push(OpItem::LParen {
-                                call: Some(LParenCall::LocalArray),
+                                call: Some(LParenCall::Array),
                             });
                             i += 1; // consume '('
                             prev_was_operand = false;
@@ -275,20 +275,19 @@ impl<'a> ExprCompiler<'a> {
                                 if let Some(local_idx) =
                                     self.local_table.and_then(|lt| lt.get(&name)).copied()
                                 {
-                                    // Is this a local array element address: &A(I)?
+                                    // Is this an array element address: &A(I)?
                                     let lparen_pos = i + 1;
                                     if tokens
                                         .get(lparen_pos)
                                         .map(|st| matches!(st.token, Token::LParen))
                                         .unwrap_or(false)
                                     {
-                                        // Local array address-of: &A(I)
+                                        // Array address-of: &A(I)
                                         // Find the matching ')'.
                                         let idx_start = lparen_pos + 1;
                                         let close_pos = find_matching_rparen(tokens, idx_start)
                                             .ok_or(TbxError::InvalidExpression {
-                                                reason:
-                                                    "missing ')' in local array index expression",
+                                                reason: "missing ')' in array index expression",
                                             })?;
                                         let index_toks = &tokens[idx_start..close_pos];
                                         if index_toks.is_empty() {
@@ -421,7 +420,7 @@ impl<'a> ExprCompiler<'a> {
                             )?;
                         }
                         Some(OpItem::LParen {
-                            call: Some(LParenCall::LocalArray),
+                            call: Some(LParenCall::Array),
                         }) => {
                             // Emit ARRAY_GET: stack is [..., Cell::Array, index] → value.
                             let array_get_xt = require_xt(self.vm, "ARRAY_GET")?;
@@ -450,7 +449,7 @@ impl<'a> ExprCompiler<'a> {
                     if matches!(
                         nearest_lparen,
                         Some(OpItem::LParen {
-                            call: Some(LParenCall::LocalArray)
+                            call: Some(LParenCall::Array)
                         })
                     ) {
                         return Err(TbxError::InvalidExpression {

@@ -86,7 +86,7 @@ pub fn store_prim(vm: &mut VM) -> Result<(), TbxError> {
             // global_array_pool_len and must not escape.
             if let Cell::Array(pool_idx) = &value {
                 if *pool_idx >= vm.global_array_pool_len {
-                    return Err(TbxError::LocalArrayEscape);
+                    return Err(TbxError::ArrayEscape);
                 }
             }
             vm.dict_write_at(a, value)?;
@@ -121,7 +121,7 @@ pub fn set_prim(vm: &mut VM) -> Result<(), TbxError> {
             // global_array_pool_len and must not escape.
             if let Cell::Array(pool_idx) = &value {
                 if *pool_idx >= vm.global_array_pool_len {
-                    return Err(TbxError::LocalArrayEscape);
+                    return Err(TbxError::ArrayEscape);
                 }
             }
             vm.dict_write_at(a, value)?;
@@ -141,7 +141,7 @@ pub fn set_prim(vm: &mut VM) -> Result<(), TbxError> {
     }
 }
 
-/// Write `value` to element `elem_idx` of the local array at `pool_idx`.
+/// Write `value` to element `elem_idx` of the array at `pool_idx`.
 fn write_array_element(
     vm: &mut VM,
     pool_idx: usize,
@@ -1145,7 +1145,7 @@ fn emit_jump_target_to_dict(vm: &mut VM, label_n: i64) -> Result<(), TbxError> {
     Ok(())
 }
 
-/// TO_ARRAY — collect n values from the stack into a local array.
+/// TO_ARRAY — collect n values from the stack into an array.
 ///
 /// The compiler emits `LIT Int(n)` before the Xt for variadic primitives, so the
 /// arity is on top of the stack when this function runs.
@@ -1176,7 +1176,7 @@ pub fn to_array_prim(vm: &mut VM) -> Result<(), TbxError> {
     Ok(())
 }
 
-/// FROM_ARRAY — expand a local array onto the stack.
+/// FROM_ARRAY — expand an array onto the stack.
 ///
 /// Pops `Cell::Array(pool_idx)` from the stack and pushes every element of the
 /// array onto the stack in order (index 0 first).
@@ -1207,13 +1207,13 @@ pub fn from_array_prim(vm: &mut VM) -> Result<(), TbxError> {
     Ok(())
 }
 
-/// ARRAY — create a local array of N elements and push its handle onto the stack.
+/// ARRAY — create an array of N elements and push its handle onto the stack.
 ///
 /// Pops `Cell::Int(n)` from the stack (n > 0), pushes `n` `Cell::None` elements
 /// into `vm.arrays`, and pushes `Cell::Array(pool_idx)` as the handle.
 ///
-/// The array is bound to the current stack frame: it is freed automatically when
-/// the owning word returns (EXIT/RETURN_VAL truncates the pool).
+/// Arrays created inside a word are bound to that stack frame and freed automatically
+/// when the owning word returns (EXIT/RETURN_VAL truncates the pool).
 pub fn array_prim(vm: &mut VM) -> Result<(), TbxError> {
     let n = vm.pop_int()?;
     if n <= 0 {
@@ -1228,7 +1228,7 @@ pub fn array_prim(vm: &mut VM) -> Result<(), TbxError> {
     Ok(())
 }
 
-/// ARRAY_GET — read an element from a local array.
+/// ARRAY_GET — read an element from an array.
 ///
 /// Stack: `[..., Cell::Array(pool_idx), Cell::Int(elem_idx)]` → `value`
 pub fn array_get_prim(vm: &mut VM) -> Result<(), TbxError> {
@@ -1265,7 +1265,7 @@ pub fn array_get_prim(vm: &mut VM) -> Result<(), TbxError> {
     Ok(())
 }
 
-/// ARRAY_ADDR — compute the address of a local array element.
+/// ARRAY_ADDR — compute the address of an array element.
 ///
 /// Stack: `[..., Cell::Array(pool_idx), Cell::Int(elem_idx)]` → `Cell::ArrayAddr { pool_idx, elem_idx }`
 pub fn array_addr_prim(vm: &mut VM) -> Result<(), TbxError> {
@@ -1302,7 +1302,7 @@ pub fn array_addr_prim(vm: &mut VM) -> Result<(), TbxError> {
     Ok(())
 }
 
-/// ARRAY_LEN — return the length of a local array.
+/// ARRAY_LEN — return the length of an array.
 ///
 /// Pops `Cell::Array(pool_idx)` from the stack and pushes the number of elements
 /// as `Cell::Int`.
@@ -2103,11 +2103,11 @@ pub fn register_all(vm: &mut VM) {
         compile_lvalue_save_prim,
     ));
 
-    // Local array primitives.
-    // ARRAY creates a local array; ARRAY_GET reads an element; ARRAY_ADDR computes
+    // Array primitives.
+    // ARRAY creates an array; ARRAY_GET reads an element; ARRAY_ADDR computes
     // an element address (used internally by the expression compiler for `A(I)` and `&A(I)`).
-    // TO_ARRAY packs stack values into a new local array; FROM_ARRAY expands one onto the stack.
-    // ARRAY_LEN returns the length of a local array.
+    // TO_ARRAY packs stack values into a new array; FROM_ARRAY expands one onto the stack.
+    // ARRAY_LEN returns the length of an array.
     let mut to_array_entry = WordEntry::new_primitive("TO_ARRAY", to_array_prim);
     to_array_entry.is_variadic = true;
     // arity stays 0: TO_ARRAY accepts zero or more arguments.
@@ -5560,26 +5560,26 @@ mod tests {
         );
     }
 
-    // --- store_prim with LocalArrayEscape guard ---
+    // --- store_prim with ArrayEscape guard ---
 
     #[test]
-    fn test_store_local_array_to_dict_addr_is_escape_error() {
+    fn test_store_array_to_dict_addr_is_escape_error() {
         let mut vm = VM::new();
         vm.dictionary.push(Cell::None); // dict[0] = placeholder
                                         // Try to store Cell::Array(0) into a global variable slot.
         vm.push(Cell::Array(0)).unwrap(); // value
         vm.push(Cell::DictAddr(0)).unwrap(); // address
-        assert_eq!(store_prim(&mut vm), Err(TbxError::LocalArrayEscape));
+        assert_eq!(store_prim(&mut vm), Err(TbxError::ArrayEscape));
     }
 
     #[test]
-    fn test_set_local_array_to_dict_addr_is_escape_error() {
+    fn test_set_array_to_dict_addr_is_escape_error() {
         let mut vm = VM::new();
         vm.dictionary.push(Cell::None); // dict[0] = placeholder
                                         // set_prim: stack is [..., addr, value]
         vm.push(Cell::DictAddr(0)).unwrap(); // address
         vm.push(Cell::Array(0)).unwrap(); // value
-        assert_eq!(set_prim(&mut vm), Err(TbxError::LocalArrayEscape));
+        assert_eq!(set_prim(&mut vm), Err(TbxError::ArrayEscape));
     }
 
     // --- store/set to ArrayAddr ---

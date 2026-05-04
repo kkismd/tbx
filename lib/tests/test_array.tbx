@@ -1,4 +1,4 @@
-# lib/tests/test_local_array.tbx — TBX tests for local arrays (ARRAY(N))
+# lib/tests/test_array.tbx — TBX tests for arrays (ARRAY(N))
 USE "lib/tests/helper.tbx"
 
 # --- Basic creation and element read/write ---
@@ -28,7 +28,7 @@ END
 # We just verify it doesn't crash and returns a value
 # (The exact value depends on None comparison semantics — no assertion on value here)
 
-# --- Multiple local arrays in the same frame ---
+# --- Multiple arrays in the same frame ---
 
 DEF TWO_ARRAYS()
   VAR A
