@@ -13,10 +13,10 @@ description: issue番号を引数に取り、orchestrate-issueエージェント
 
 ## 動作
 
-以下のプロンプトで `orchestrate-issue` エージェントを起動する：
+Agent ツールで `subagent_type: "orchestrate-issue"` を指定し、以下のプロンプトでサブエージェントを起動する：
 
 ```
-orchestrate-issue エージェントを起動: issue #<N> を実装してください
+issue #<N> を実装してください
 ```
 
 `orchestrate-issue` エージェントが以下のフローを自動的に実行する：
