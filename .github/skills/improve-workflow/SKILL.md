@@ -47,8 +47,6 @@ git add <ファイル>
 mkdir -p .tmp
 cat > ".tmp/COMMIT_MSG" << 'EOF'
 コミットメッセージ本文（日本語）
-
-Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>
 EOF
 
 git commit -F ".tmp/COMMIT_MSG"

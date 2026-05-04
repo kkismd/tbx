@@ -35,8 +35,6 @@ git add <ファイル>
 mkdir -p .tmp
 cat > ".tmp/COMMIT_MSG" << 'EOF'
 〇〇を修正する
-
-Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>
 EOF
 
 git commit -F ".tmp/COMMIT_MSG"
@@ -46,11 +44,6 @@ git commit -F ".tmp/COMMIT_MSG"
 - 件名は日本語の動詞文にする（例：「〇〇を修正する」「〇〇を追加する」）
 - `fix:` / `feat:` などの conventional commits prefix は付けない
 - issue番号（`#N` や `issue #N:`）を件名に含めない（issue参照はPR bodyの `Closes #N` のみ）
-- 末尾に必ず以下のtrailerを含める:
-
-```
-Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>
-```
 
 ### 3. ブランチをpushする
 

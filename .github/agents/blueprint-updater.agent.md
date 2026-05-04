@@ -74,8 +74,6 @@ git add blueprint.md blueprint-language.md blueprint-compiler.md
 mkdir -p .tmp
 cat > ".tmp/COMMIT_MSG" << 'EOF'
 コミットメッセージ本文（日本語）
-
-Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>
 EOF
 git commit -F ".tmp/COMMIT_MSG"
 
@@ -103,7 +101,6 @@ gh pr create \
 - mainブランチへの直接コミットは禁止
 - PRのdescriptionは `--body-file` を使う（`--body` は改行が壊れるため使用禁止）
 - `Closes #N` をPR descriptionに含めてissueとリンクする
-- コミットメッセージ末尾に必ず Co-authored-by trailerを含める
 
 ## 言語・スタイルのルール
 

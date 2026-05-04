@@ -78,10 +78,6 @@ cargo clippy --all-targets -- -D warnings
 - コミットメッセージは日本語で記述する
 - PRのdescriptionは `--body-file` を使う（`--body` は改行が壊れるため使用禁止）
 - `Closes #N` をPR descriptionに含めてissueとリンクする
-- コミットメッセージ末尾に必ず以下を含める:
-  ```
-  Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>
-  ```
 
 ### ステップ6A：修正サイクル（最大3回）
 
@@ -146,7 +142,7 @@ INSERT OR REPLACE INTO session_state (key, value) VALUES ('review_before_review_
          # 例: loop_count が 1 の場合 → LOOP_COUNT=1
          LOOP_COUNT=<SQLで取得した数値>
          mkdir -p .tmp
-         printf 'レビュー指摘の修正 (%d回目)\n\nCo-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>\n' "$LOOP_COUNT" \
+         printf 'レビュー指摘の修正 (%d回目)\n' "$LOOP_COUNT" \
            > ".tmp/COMMIT_MSG"
          git commit -F ".tmp/COMMIT_MSG"
          git push
