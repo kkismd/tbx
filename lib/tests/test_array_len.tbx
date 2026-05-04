@@ -1,4 +1,4 @@
-# lib/tests/test_array_len.tbx — TBX tests for ARRAY_LEN, XT_ARRAY_SIZE, DIM_SIZE
+# lib/tests/test_array_len.tbx — TBX tests for ARRAY_LEN
 USE "lib/tests/helper.tbx"
 
 # --- ARRAY_LEN: local array length ---
@@ -38,19 +38,3 @@ DEF SUM_WITH_LEN(N)
 END
 # 1+2+3+4 = 10
 ASSERT SUM_WITH_LEN(4) = 10
-
-# --- XT_ARRAY_SIZE: global array size via Xt ---
-
-DIM GLOBAL_A(10)
-ASSERT XT_ARRAY_SIZE(LOOKUP("GLOBAL_A")) = 10
-
-DIM SMALL(3)
-ASSERT XT_ARRAY_SIZE(LOOKUP("SMALL")) = 3
-
-# --- DIM_SIZE: global array size via name string ---
-
-DIM NUMS(7)
-ASSERT DIM_SIZE("NUMS") = 7
-
-DIM ONE_ELEM(1)
-ASSERT DIM_SIZE("ONE_ELEM") = 1

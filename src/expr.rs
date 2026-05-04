@@ -26,7 +26,7 @@ enum OpItem {
     /// Left-parenthesis sentinel. Carries optional call metadata.
     ///
     /// `call` is `Some(LParenCall::Function(xt, arity))` for a function call,
-    /// `Some(LParenCall::Array(base, size))` for an array index expression,
+    /// `Some(LParenCall::LocalArray)` for a local array index expression,
     /// and `None` for a plain grouping parenthesis.
     LParen { call: Option<LParenCall> },
     /// Comma-as-binary-operator used outside of function calls (precedence 11).
@@ -39,8 +39,6 @@ enum OpItem {
 enum LParenCall {
     /// Function call: execution token and current argument arity count.
     Function(Xt, usize),
-    /// Global array index access: dictionary base index and declared array size.
-    Array(usize, usize),
     /// Local array index access: the Cell::Array handle is already on the output stack.
     /// On closing `)`, emit ARRAY_GET (index is on top, handle is below).
     LocalArray,
@@ -211,14 +209,6 @@ impl<'a> ExprCompiler<'a> {
                             .unwrap_or(false);
 
                         if next_is_rparen {
-                            // Arrays require exactly one index expression: NUMS(I).
-                            if matches!(&self.vm.headers[xt.index()].kind, EntryKind::Array { .. })
-                            {
-                                return Err(TbxError::InvalidExpression {
-                                    reason:
-                                        "array index expression must not be empty: use NAME(index)",
-                                });
-                            }
                             // Zero-argument call: emit based on entry kind.
                             emit_call_by_kind(
                                 &mut output,
@@ -231,23 +221,11 @@ impl<'a> ExprCompiler<'a> {
                             i += 2; // skip '(' and ')'
                             prev_was_operand = true;
                         } else {
-                            // Peek the entry kind to distinguish arrays from function calls.
-                            // Use a reference to avoid cloning (no VM methods are called in
-                            // either branch, only op_stack — a local Vec — is mutated).
-                            if let EntryKind::Array { base, size } =
-                                &self.vm.headers[xt.index()].kind
-                            {
-                                // Array index access: open an array-paren frame.
-                                op_stack.push(OpItem::LParen {
-                                    call: Some(LParenCall::Array(*base, *size)),
-                                });
-                            } else {
-                                // Function call with arguments: open a function-call
-                                // paren frame with initial arity = 1.
-                                op_stack.push(OpItem::LParen {
-                                    call: Some(LParenCall::Function(xt, 1)),
-                                });
-                            }
+                            // Function call with arguments: open a function-call
+                            // paren frame with initial arity = 1.
+                            op_stack.push(OpItem::LParen {
+                                call: Some(LParenCall::Function(xt, 1)),
+                            });
                             i += 1; // consume '('
                             prev_was_operand = false;
                         }
@@ -256,12 +234,6 @@ impl<'a> ExprCompiler<'a> {
                         match &self.vm.headers[xt.index()].kind {
                             EntryKind::Variable(addr) => {
                                 emit_var_read(&mut output, *addr, self.vm)?;
-                            }
-                            EntryKind::Array { .. } => {
-                                // Arrays must always be accessed with index syntax NAME(index).
-                                return Err(TbxError::InvalidExpression {
-                                    reason: "array must be accessed with index syntax NAME(index)",
-                                });
                             }
                             _ => {
                                 // Treat as a nullary call: emit based on entry kind.
@@ -353,49 +325,9 @@ impl<'a> ExprCompiler<'a> {
                                             output.push(Cell::Xt(xt_lit));
                                             output.push(Cell::DictAddr(*addr));
                                         }
-                                        EntryKind::Array { base, size } => {
-                                            let (base, size) = (*base, *size);
-                                            // Array address-of: &NUMS(I)
-                                            // Consume '(' and compile the index expression,
-                                            // then emit OFFSET without a trailing FETCH.
-                                            let lparen_pos = i + 1;
-                                            if !tokens
-                                                .get(lparen_pos)
-                                                .map(|st| matches!(st.token, Token::LParen))
-                                                .unwrap_or(false)
-                                            {
-                                                return Err(TbxError::InvalidExpression {
-                                                    reason:
-                                                        "expected '(' after array name in unary &",
-                                                });
-                                            }
-                                            // Find the matching ')' starting after '('.
-                                            let idx_start = lparen_pos + 1;
-                                            let close_pos = find_matching_rparen(tokens, idx_start)
-                                                .ok_or(TbxError::InvalidExpression {
-                                                    reason: "missing ')' in array index expression",
-                                                })?;
-                                            let index_toks = &tokens[idx_start..close_pos];
-                                            if index_toks.is_empty() {
-                                                return Err(TbxError::InvalidExpression {
-                                                    reason: "array index expression must not be empty: use &NAME(index)",
-                                                });
-                                            }
-                                            // Recursively compile the index expression.
-                                            let index_cells = self.compile_expr(index_toks)?;
-                                            output.extend(index_cells);
-                                            // Emit OFFSET with inline base and size.
-                                            let offset_xt = require_xt(self.vm, "OFFSET")?;
-                                            output.push(Cell::Xt(offset_xt));
-                                            output.push(Cell::Int(base as i64));
-                                            output.push(Cell::Int(size as i64));
-                                            // Advance i to the closing ')'.
-                                            i = close_pos;
-                                        }
                                         _ => {
                                             return Err(TbxError::TypeError {
-                                                expected:
-                                                    "variable or array identifier after unary &",
+                                                expected: "variable identifier after unary &",
                                                 got: "non-variable",
                                             });
                                         }
@@ -489,17 +421,6 @@ impl<'a> ExprCompiler<'a> {
                             )?;
                         }
                         Some(OpItem::LParen {
-                            call: Some(LParenCall::Array(base, size)),
-                        }) => {
-                            // Emit OFFSET (inline base + size), then FETCH to load the value.
-                            let offset_xt = require_xt(self.vm, "OFFSET")?;
-                            let fetch_xt = require_xt(self.vm, "FETCH")?;
-                            output.push(Cell::Xt(offset_xt));
-                            output.push(Cell::Int(base as i64));
-                            output.push(Cell::Int(size as i64));
-                            output.push(Cell::Xt(fetch_xt));
-                        }
-                        Some(OpItem::LParen {
                             call: Some(LParenCall::LocalArray),
                         }) => {
                             // Emit ARRAY_GET: stack is [..., Cell::Array, index] → value.
@@ -524,13 +445,11 @@ impl<'a> ExprCompiler<'a> {
                         .rev()
                         .find(|op| matches!(op, OpItem::LParen { .. }));
 
-                    // Array index expressions must be a single expression — commas are
-                    // not allowed inside array subscripts (global or local).
+                    // Local array index expressions must be a single expression — commas
+                    // are not allowed inside array subscripts.
                     if matches!(
                         nearest_lparen,
                         Some(OpItem::LParen {
-                            call: Some(LParenCall::Array(..))
-                        }) | Some(OpItem::LParen {
                             call: Some(LParenCall::LocalArray)
                         })
                     ) {
@@ -1273,7 +1192,7 @@ mod tests {
         assert!(
             matches!(
                 err,
-                TbxError::TypeError { expected, .. } if expected.contains("variable") && expected.contains("identifier after unary &")
+                TbxError::TypeError { expected, .. } if expected == "variable identifier after unary &"
             ),
             "expected TypeError for & applied to function, got: {err:?}"
         );
@@ -1478,187 +1397,6 @@ mod tests {
         assert!(
             matches!(err, TbxError::InvalidExpression { .. }),
             "expected InvalidExpression for internal kind call, got: {err:?}"
-        );
-    }
-
-    // ------------------------------------------------------------------
-    // Array access: NUMS(I) compiles to index + OFFSET + base + size + FETCH
-    // ------------------------------------------------------------------
-
-    #[test]
-    fn test_array_read_compiles_offset_fetch() {
-        let mut vm = make_vm();
-
-        // Register a global variable I at dict[0].
-        vm.dict_write(Cell::None).unwrap(); // storage for I
-        vm.register(WordEntry::new_variable("I", 0));
-
-        // Register a global array NUMS(3) starting at dict[1].
-        let array_base = vm.dp;
-        for _ in 0..3 {
-            vm.dict_write(Cell::None).unwrap();
-        }
-        vm.register(WordEntry::new_array("NUMS", array_base, 3));
-
-        // Compile "NUMS(I)".
-        let tokens = lex("NUMS(I)");
-        let result = ExprCompiler::new(&mut vm).compile_expr(&tokens).unwrap();
-
-        let lit_xt = vm.lookup("LIT").unwrap();
-        let fetch_xt = vm.lookup("FETCH").unwrap();
-        let offset_xt = vm.lookup("OFFSET").unwrap();
-
-        // Expected: read I (LIT DictAddr(0) FETCH), then OFFSET base size, then FETCH
-        assert_eq!(
-            result,
-            vec![
-                Cell::Xt(lit_xt),
-                Cell::DictAddr(0),   // address of I
-                Cell::Xt(fetch_xt),  // load I
-                Cell::Xt(offset_xt), // OFFSET instruction
-                Cell::Int(array_base as i64),
-                Cell::Int(3),
-                Cell::Xt(fetch_xt), // load array[I]
-            ],
-            "NUMS(I) should compile to index-read + OFFSET + base + size + FETCH"
-        );
-    }
-
-    // ------------------------------------------------------------------
-    // Array address-of: &NUMS(I) compiles to index + OFFSET + base + size (no FETCH)
-    // ------------------------------------------------------------------
-
-    #[test]
-    fn test_array_address_of_compiles_offset_no_fetch() {
-        let mut vm = make_vm();
-
-        // Register variable I at dict[0].
-        vm.dict_write(Cell::None).unwrap();
-        vm.register(WordEntry::new_variable("I", 0));
-
-        // Register array NUMS(5) starting at dict[1].
-        let array_base = vm.dp;
-        for _ in 0..5 {
-            vm.dict_write(Cell::None).unwrap();
-        }
-        vm.register(WordEntry::new_array("NUMS", array_base, 5));
-
-        // Compile "&NUMS(I)".
-        let tokens = lex("&NUMS(I)");
-        let result = ExprCompiler::new(&mut vm).compile_expr(&tokens).unwrap();
-
-        let lit_xt = vm.lookup("LIT").unwrap();
-        let fetch_xt = vm.lookup("FETCH").unwrap();
-        let offset_xt = vm.lookup("OFFSET").unwrap();
-
-        // Expected: read I, then OFFSET base size — no trailing FETCH.
-        assert_eq!(
-            result,
-            vec![
-                Cell::Xt(lit_xt),
-                Cell::DictAddr(0),
-                Cell::Xt(fetch_xt),
-                Cell::Xt(offset_xt),
-                Cell::Int(array_base as i64),
-                Cell::Int(5),
-            ],
-            "&NUMS(I) should compile to index-read + OFFSET + base + size (no FETCH)"
-        );
-    }
-
-    // ------------------------------------------------------------------
-    // Array without index syntax should produce an error.
-    // ------------------------------------------------------------------
-
-    #[test]
-    fn test_bare_array_name_is_error() {
-        let mut vm = make_vm();
-        let array_base = vm.dp;
-        for _ in 0..3 {
-            vm.dict_write(Cell::None).unwrap();
-        }
-        vm.register(WordEntry::new_array("ARR", array_base, 3));
-
-        let tokens = lex("ARR");
-        let err = ExprCompiler::new(&mut vm)
-            .compile_expr(&tokens)
-            .unwrap_err();
-        assert!(
-            matches!(err, TbxError::InvalidExpression { .. }),
-            "bare array name without () should produce InvalidExpression, got {err:?}"
-        );
-    }
-
-    // ------------------------------------------------------------------
-    // NUMS() with no index should produce a clear error.
-    // ------------------------------------------------------------------
-
-    #[test]
-    fn test_array_empty_index_is_error() {
-        let mut vm = make_vm();
-        let array_base = vm.dp;
-        for _ in 0..5 {
-            vm.dict_write(Cell::None).unwrap();
-        }
-        vm.register(WordEntry::new_array("NUMS", array_base, 5));
-
-        let tokens = lex("NUMS()");
-        let err = ExprCompiler::new(&mut vm)
-            .compile_expr(&tokens)
-            .unwrap_err();
-        assert!(
-            matches!(err, TbxError::InvalidExpression { .. }),
-            "NUMS() with no index should produce InvalidExpression, got {err:?}"
-        );
-    }
-
-    // ------------------------------------------------------------------
-    // NUMS(I, J) with multiple indices should produce a clear error.
-    // ------------------------------------------------------------------
-
-    #[test]
-    fn test_array_multi_index_is_error() {
-        let mut vm = make_vm();
-        let array_base = vm.dp;
-        for _ in 0..5 {
-            vm.dict_write(Cell::None).unwrap();
-        }
-        vm.register(WordEntry::new_array("NUMS", array_base, 5));
-        // Also register a variable I so the expression is otherwise valid.
-        let i_addr = vm.dp;
-        vm.dict_write(Cell::Int(0)).unwrap();
-        vm.register(WordEntry::new_variable("I", i_addr));
-
-        let tokens = lex("NUMS(I, I)");
-        let err = ExprCompiler::new(&mut vm)
-            .compile_expr(&tokens)
-            .unwrap_err();
-        assert!(
-            matches!(err, TbxError::InvalidExpression { .. }),
-            "NUMS(I, I) with multiple indices should produce InvalidExpression, got {err:?}"
-        );
-    }
-
-    // ------------------------------------------------------------------
-    // &NUMS() with no index should produce a clear error.
-    // ------------------------------------------------------------------
-
-    #[test]
-    fn test_array_address_of_empty_index_is_error() {
-        let mut vm = make_vm();
-        let array_base = vm.dp;
-        for _ in 0..5 {
-            vm.dict_write(Cell::None).unwrap();
-        }
-        vm.register(WordEntry::new_array("NUMS", array_base, 5));
-
-        let tokens = lex("&NUMS()");
-        let err = ExprCompiler::new(&mut vm)
-            .compile_expr(&tokens)
-            .unwrap_err();
-        assert!(
-            matches!(err, TbxError::InvalidExpression { .. }),
-            "&NUMS() with no index should produce InvalidExpression, got {err:?}"
         );
     }
 

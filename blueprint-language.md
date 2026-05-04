@@ -146,7 +146,6 @@ END
 | -------------- | -------------------------------- |
 | DEF            | ステートメントを定義             |
 | VAR            | 変数の宣言                       |
-| DIM            | グローバル配列の宣言（`DIM NAME(SIZE)` 形式）|
 | END            | 定義の完了                       |
 | USE            | 別ファイルを読み込み、即時実行する（`USE "path"` 形式）|
 | HEADER         | 次のトークンを名前として辞書エントリを作成する |
@@ -176,26 +175,6 @@ USE "path/to/file.tbx"    ( -- )
 ```basic
 USE "stdlib.tbx"   REM stdlib.tbx を読み込み、定義されたワードを利用可能にする
 HELLO              REM stdlib.tbx 内で定義されたワードを呼ぶ
-```
-
-##### DIM — グローバル配列の宣言
-
-`DIM NAME(SIZE)` 形式でグローバル配列を宣言する。辞書に `SIZE` セルの記憶領域を確保し、`NAME` を `EntryKind::Array { base, size }` として登録する。
-
-```
-DIM NAME(SIZE)    ( -- )
-```
-
-- トップレベル（実行モード）専用。`DEF..END` ブロック内での使用はエラー
-- `SIZE` は正の整数リテラルのみ（0 以下はエラー）
-- 辞書に `SIZE` 個の `Cell::None` を書き込み、先頭インデックスを `base` として記録
-- `NAME(I)` で要素値の読み出し、`&NAME(I)` でアドレス取得（`OFFSET` 命令経由）
-- 内部的に `OFFSET` 命令（`EntryKind::Offset`）が配列インデックスの境界チェックと DictAddr 計算を担う
-
-```basic
-DIM NUMS(5)       ' 5要素のグローバル配列を宣言
-SET &NUMS(0), 42  ' NUMS[0] = 42 を格納
-PUTDEC NUMS(0)    ' 42 を出力
 ```
 
 ##### HEADER — 辞書エントリの作成
@@ -255,26 +234,6 @@ LIT:
 
 インナ・インタプリタが `LIT` のXtに到達すると、次のセル（`pc+1`）を値としてデータスタックに積み、`pc` を2進める。ここで `pc` はLIT自身のXtが格納されたセルを指している。通常の1セル命令では `pc += 1` だが、LITはインライン・オペランドを伴うため `pc += 2` となる。
 
-##### OFFSET — 配列インデックス命令
-
-スタックトップのインデックスを消費し、配列要素のアドレス（`DictAddr`）をスタックに積む内部命令。インライン・オペランドとして配列先頭インデックス（`base`）と要素数（`size`）の2セルを持つ。
-
-```
-OFFSET:
-  idx = pop()
-  base = dictionary[pc + 1]  (Int)
-  size = dictionary[pc + 2]  (Int)
-  bounds_check(idx, size)    --> ArrayIndexOutOfBounds if out of range
-  push(DictAddr(base + idx))
-  pc += 3
-```
-
-- `dictionary[pc+1]`：`Int(base)` — 配列の先頭要素が格納されている辞書インデックス
-- `dictionary[pc+2]`：`Int(size)` — 配列の要素数。境界チェックに使用する
-- スタックからインデックス `idx` をポップし、`0 <= idx < size` を検証する。範囲外の場合は `ArrayIndexOutOfBounds` エラーを発生させる
-- 検証通過後、`DictAddr(base + idx)` をデータスタックに積む
-- LIT が `pc += 2`（インライン・オペランド1個）であるのに対し、OFFSET はインライン・オペランドを2個（`base` と `size`）持つため `pc += 3` となる
-
 パーサーと検索
 
 | ステートメント | 説明                                                                                       |
@@ -305,8 +264,6 @@ COMPILE_EXPR    ( -- )
 | ローカル変数 `X` | `Xt(LIT)`, `StackAddr(n)`, `Xt(FETCH)` | 3 |
 | リファレンス `&A`（グローバル） | `Xt(LIT)`, `DictAddr(n)` | 2 |
 | リファレンス `&X`（ローカル） | `Xt(LIT)`, `StackAddr(n)` | 2 |
-| 配列読み出し `NUMS(I)` | index式 + `Xt(OFFSET)`, `Int(base)`, `Int(size)`, `Xt(FETCH)` | index式 + 4 |
-| 配列リファレンス `&NUMS(I)` | index式 + `Xt(OFFSET)`, `Int(base)`, `Int(size)` | index式 + 3 |
 | 単項演算子 `-` | `Xt(NEGATE)` | 1 |
 | 二項演算子 `+` | `Xt(ADD)` | 1 |
 | ワード呼び出し `W(...)` | 引数列 + `Xt(CALL)`, `Xt(W)`, `Int(arity)`, `Int(local_count)` | 引数分 + 4 |
@@ -652,7 +609,7 @@ END
 - `A(I)` — 配列変数 A の I 番目要素を読み出す（`FETCH` 経由）
 - `&A(I)` — 配列変数 A の I 番目要素のアドレス（`Cell::ArrayAddr { pool_idx, elem_idx }`）を返す。`STORE` / `SET` で書き込める
 - **スコープはワード内限定**: EXIT / RETURN_VAL 時に配列プールを `saved_array_pool_len` まで切り詰めて解放する。`Cell::Array` 値をスタックフレーム外に持ち出すとエラーになる
-- `DIM` によるグローバル配列（`EntryKind::Array`）とは別の仕組みであり、辞書領域は使用しない
+- グローバル辞書領域は使用しない（辞書を消費するグローバル配列とは異なる）
 
 ##### TO_ARRAY / FROM_ARRAY — スタックと配列の変換プリミティブ
 
