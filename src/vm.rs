@@ -796,7 +796,7 @@ impl VM {
                     // return; only arrays allocated within this frame escape.
                     if let Cell::Array(pool_idx) = &retval {
                         if *pool_idx >= frame_boundary {
-                            return Err(TbxError::ArrayEscape);
+                            return Err(TbxError::ArrayFrameEscape);
                         }
                     }
                     match self.return_stack.pop().ok_or(TbxError::StackUnderflow)? {
@@ -2649,35 +2649,35 @@ mod tests {
     }
 
     #[test]
-    fn test_array_escape_via_return_val_is_error() {
-        // Verify that returning a Cell::Array value via RETURN_VAL produces ArrayEscape.
+    fn test_array_frame_escape_via_return_val_is_error() {
+        // Verify that returning a Cell::Array value via RETURN_VAL produces ArrayFrameEscape.
         let result = run_source(
             "DEF BAD_RETURN()\n  VAR A\n  LET A = ARRAY(3)\n  RETURN A\nEND\nBAD_RETURN()",
         );
         assert!(
-            matches!(result, Err(crate::error::TbxError::ArrayEscape)),
-            "expected ArrayEscape, got: {result:?}"
+            matches!(result, Err(crate::error::TbxError::ArrayFrameEscape)),
+            "expected ArrayFrameEscape, got: {result:?}"
         );
     }
 
     #[test]
-    fn test_array_escape_via_store_to_dict_is_error() {
-        // Verify that STORE of a Cell::Array into a global variable produces ArrayEscape.
+    fn test_array_frame_escape_via_store_to_dict_is_error() {
+        // Verify that STORE of a Cell::Array into a global variable produces ArrayFrameEscape.
         let result = run_source(
             "VAR G\n\
              DEF BAD_STORE()\n  VAR A\n  LET A = ARRAY(2)\n  SET &G, A\nEND\n\
              BAD_STORE()",
         );
         assert!(
-            matches!(result, Err(crate::error::TbxError::ArrayEscape)),
-            "expected ArrayEscape, got: {result:?}"
+            matches!(result, Err(crate::error::TbxError::ArrayFrameEscape)),
+            "expected ArrayFrameEscape, got: {result:?}"
         );
     }
 
     #[test]
     fn test_global_array_stored_via_store_prim() {
         // A global array (pool_idx < global_array_pool_len) can be stored into a
-        // dictionary slot by store_prim without triggering ArrayEscape.
+        // dictionary slot by store_prim without triggering ArrayFrameEscape.
         let mut vm = VM::new();
         vm.arrays.push(vec![Cell::Int(0); 5]);
         vm.global_array_pool_len = 1; // mark pool[0] as global
@@ -2730,8 +2730,8 @@ mod tests {
              BAD()",
         );
         assert!(
-            matches!(result, Err(crate::error::TbxError::ArrayEscape)),
-            "expected ArrayEscape, got: {result:?}"
+            matches!(result, Err(crate::error::TbxError::ArrayFrameEscape)),
+            "expected ArrayFrameEscape, got: {result:?}"
         );
     }
 
@@ -2750,15 +2750,15 @@ mod tests {
         vm.push(Cell::DictAddr(slot)).unwrap();
         let result = crate::primitives::store_prim(&mut vm);
         assert!(
-            matches!(result, Err(TbxError::ArrayEscape)),
-            "expected ArrayEscape, got: {result:?}"
+            matches!(result, Err(TbxError::ArrayFrameEscape)),
+            "expected ArrayFrameEscape, got: {result:?}"
         );
     }
 
     #[test]
     fn test_global_array_returnable_from_word() {
         // A global array (pool_idx < saved_array_pool_len of the CALL frame) can
-        // be returned from a word without triggering ArrayEscape.
+        // be returned from a word without triggering ArrayFrameEscape.
         //
         // The ReturnVal check uses `frame_boundary = saved_array_pool_len` of the
         // current CALL frame.  A global array created before the call has

@@ -168,7 +168,7 @@ pub enum TbxError {
     /// `Cell::Array` value into a global variable (via `DictAddr`) or return it
     /// from a word (via `RETURN`) is forbidden, because the array pool is
     /// truncated on EXIT and the stored index would dangle.
-    ArrayEscape,
+    ArrayFrameEscape,
 
     /// A variadic word was called with fewer arguments than its fixed parameter count.
     ///
@@ -288,7 +288,7 @@ impl std::fmt::Display for TbxError {
             TbxError::OutputIoError { reason } => {
                 write!(f, "ACCEPT: I/O error flushing output: {reason}")
             }
-            TbxError::ArrayEscape => {
+            TbxError::ArrayFrameEscape => {
                 write!(f, "array cannot escape its owning stack frame")
             }
             TbxError::WrongNumberOfArguments {

@@ -86,7 +86,7 @@ pub fn store_prim(vm: &mut VM) -> Result<(), TbxError> {
             // global_array_pool_len and must not escape.
             if let Cell::Array(pool_idx) = &value {
                 if *pool_idx >= vm.global_array_pool_len {
-                    return Err(TbxError::ArrayEscape);
+                    return Err(TbxError::ArrayFrameEscape);
                 }
             }
             vm.dict_write_at(a, value)?;
@@ -121,7 +121,7 @@ pub fn set_prim(vm: &mut VM) -> Result<(), TbxError> {
             // global_array_pool_len and must not escape.
             if let Cell::Array(pool_idx) = &value {
                 if *pool_idx >= vm.global_array_pool_len {
-                    return Err(TbxError::ArrayEscape);
+                    return Err(TbxError::ArrayFrameEscape);
                 }
             }
             vm.dict_write_at(a, value)?;
@@ -5560,7 +5560,7 @@ mod tests {
         );
     }
 
-    // --- store_prim with ArrayEscape guard ---
+    // --- store_prim with ArrayFrameEscape guard ---
 
     #[test]
     fn test_store_array_to_dict_addr_is_escape_error() {
@@ -5569,7 +5569,7 @@ mod tests {
                                         // Try to store Cell::Array(0) into a global variable slot.
         vm.push(Cell::Array(0)).unwrap(); // value
         vm.push(Cell::DictAddr(0)).unwrap(); // address
-        assert_eq!(store_prim(&mut vm), Err(TbxError::ArrayEscape));
+        assert_eq!(store_prim(&mut vm), Err(TbxError::ArrayFrameEscape));
     }
 
     #[test]
@@ -5579,7 +5579,7 @@ mod tests {
                                         // set_prim: stack is [..., addr, value]
         vm.push(Cell::DictAddr(0)).unwrap(); // address
         vm.push(Cell::Array(0)).unwrap(); // value
-        assert_eq!(set_prim(&mut vm), Err(TbxError::ArrayEscape));
+        assert_eq!(set_prim(&mut vm), Err(TbxError::ArrayFrameEscape));
     }
 
     // --- store/set to ArrayAddr ---
