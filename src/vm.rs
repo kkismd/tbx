@@ -165,6 +165,15 @@ pub struct VM {
     /// length saved in `ReturnFrame::Call::saved_array_pool_len`, freeing all
     /// local arrays allocated within that call.
     pub arrays: Vec<Vec<Cell>>,
+    /// Length of the "global" (persistent) region of `arrays`.
+    ///
+    /// Arrays at indices `0..global_array_pool_len` were created at the top
+    /// level (outside any `DEF..END`) and are never freed.  They may safely be
+    /// stored in `VARIABLE` slots and shared across word calls.
+    ///
+    /// Updated to `arrays.len()` whenever a `TopLevel` frame is popped in
+    /// `Exit` (i.e. at the end of every top-level execution segment).
+    pub global_array_pool_len: usize,
     /// Internal buffer holding the last line read by ACCEPT.
     ///
     /// ACCEPT reads one line from `input_reader` and stores it here (trimmed of
@@ -230,6 +239,7 @@ impl VM {
             compile_stack: Vec::new(),
             pending_use_path: None,
             arrays: Vec::new(),
+            global_array_pool_len: 0,
             input_buffer: None,
             input_reader: Box::new(BufReader::new(std::io::stdin())),
             output_writer: Box::new(std::io::stdout()),
@@ -749,14 +759,37 @@ impl VM {
                             self.pc = return_pc;
                             self.bp = saved_bp;
                         }
-                        ReturnFrame::TopLevel => break,
+                        ReturnFrame::TopLevel => {
+                            // Promote all arrays created at the top level to
+                            // the persistent region so they can be stored in
+                            // VARIABLE slots and shared across word calls.
+                            self.global_array_pool_len = self.arrays.len();
+                            break;
+                        }
                     }
                 }
                 EntryKind::ReturnVal => {
+                    // Determine the frame boundary before popping the return value,
+                    // so we can detect whether the array belongs to the current frame.
+                    let frame_boundary = match self.return_stack.last() {
+                        Some(ReturnFrame::Call {
+                            saved_array_pool_len,
+                            ..
+                        }) => *saved_array_pool_len,
+                        Some(ReturnFrame::TopLevel) => {
+                            return Err(TbxError::InvalidReturn);
+                        }
+                        None => return Err(TbxError::StackUnderflow),
+                    };
                     let retval = self.pop()?;
                     // Check for local array escape before truncating the pool.
-                    if matches!(retval, Cell::Array(_)) {
-                        return Err(TbxError::LocalArrayEscape);
+                    // Arrays whose pool_idx is below the frame boundary were
+                    // created by the caller (or at the top level) and are safe to
+                    // return; only arrays allocated within this frame escape.
+                    if let Cell::Array(pool_idx) = &retval {
+                        if *pool_idx >= frame_boundary {
+                            return Err(TbxError::LocalArrayEscape);
+                        }
                     }
                     match self.return_stack.pop().ok_or(TbxError::StackUnderflow)? {
                         ReturnFrame::Call {
@@ -2631,5 +2664,131 @@ mod tests {
             matches!(result, Err(crate::error::TbxError::LocalArrayEscape)),
             "expected LocalArrayEscape, got: {result:?}"
         );
+    }
+
+    #[test]
+    fn test_global_array_stored_via_store_prim() {
+        // A global array (pool_idx < global_array_pool_len) can be stored into a
+        // dictionary slot by store_prim without triggering LocalArrayEscape.
+        let mut vm = VM::new();
+        vm.arrays.push(vec![Cell::Int(0); 5]);
+        vm.global_array_pool_len = 1; // mark pool[0] as global
+
+        // Allocate a dictionary slot.
+        let slot = vm.dp;
+        vm.dict_write(Cell::None).unwrap();
+
+        let arr = Cell::Array(0);
+        // store_prim pops addr first, then value; so push value then addr.
+        vm.push(arr.clone()).unwrap();
+        vm.push(Cell::DictAddr(slot)).unwrap();
+        let result = crate::primitives::store_prim(&mut vm);
+        assert!(
+            result.is_ok(),
+            "store_prim should allow global array: {result:?}"
+        );
+        assert_eq!(vm.dict_read(slot).unwrap(), arr);
+    }
+
+    #[test]
+    fn test_global_array_stored_via_set_prim() {
+        // set_prim (SET &var, value) also accepts a global array.
+        let mut vm = VM::new();
+        vm.arrays.push(vec![Cell::Int(0); 3]);
+        vm.global_array_pool_len = 1;
+
+        let slot = vm.dp;
+        vm.dict_write(Cell::None).unwrap();
+
+        let arr = Cell::Array(0);
+        // set_prim pops value first, then addr (stack: [..., addr, value]).
+        vm.push(Cell::DictAddr(slot)).unwrap();
+        vm.push(arr.clone()).unwrap();
+        let result = crate::primitives::set_prim(&mut vm);
+        assert!(
+            result.is_ok(),
+            "set_prim should allow global array: {result:?}"
+        );
+        assert_eq!(vm.dict_read(slot).unwrap(), arr);
+    }
+
+    #[test]
+    fn test_word_local_array_store_to_global_var_is_still_error() {
+        // Arrays created inside a word must still not escape via a global VAR.
+        // global_array_pool_len = 0 (default), so all arrays are local.
+        let result = run_source(
+            "VAR gvar\n\
+             DEF BAD()\n  VAR a\n  LET a = ARRAY(3)\n  SET &gvar, a\nEND\n\
+             BAD()",
+        );
+        assert!(
+            matches!(result, Err(crate::error::TbxError::LocalArrayEscape)),
+            "expected LocalArrayEscape, got: {result:?}"
+        );
+    }
+
+    #[test]
+    fn test_non_global_array_store_rejected_by_store_prim() {
+        // An array with pool_idx >= global_array_pool_len must still be rejected.
+        let mut vm = VM::new();
+        vm.arrays.push(vec![Cell::Int(0); 5]);
+        // global_array_pool_len stays 0, so pool[0] is NOT global.
+
+        let slot = vm.dp;
+        vm.dict_write(Cell::None).unwrap();
+
+        // store_prim pops addr first, then value; so push value then addr.
+        vm.push(Cell::Array(0)).unwrap();
+        vm.push(Cell::DictAddr(slot)).unwrap();
+        let result = crate::primitives::store_prim(&mut vm);
+        assert!(
+            matches!(result, Err(TbxError::LocalArrayEscape)),
+            "expected LocalArrayEscape, got: {result:?}"
+        );
+    }
+
+    #[test]
+    fn test_global_array_returnable_from_word() {
+        // A global array (pool_idx < saved_array_pool_len of the CALL frame) can
+        // be returned from a word without triggering LocalArrayEscape.
+        //
+        // The ReturnVal check uses `frame_boundary = saved_array_pool_len` of the
+        // current CALL frame.  A global array created before the call has
+        // pool_idx < saved_array_pool_len, so it is safe to return.
+        let mut vm = VM::new();
+
+        // Insert a "global" array at pool slot 0.
+        vm.arrays.push(vec![Cell::Int(99); 3]);
+        // Simulate that TopLevel exit has already promoted it.
+        vm.global_array_pool_len = 1;
+
+        // Simulate a CALL frame where saved_array_pool_len = 1 (the array already
+        // existed when the word was called).
+        vm.return_stack.push(ReturnFrame::TopLevel);
+        vm.return_stack.push(ReturnFrame::Call {
+            return_pc: 0,
+            saved_bp: 0,
+            saved_array_pool_len: 1,
+            actual_arity: 0,
+        });
+
+        // Push the global array as the return value.
+        vm.push(Cell::Array(0)).unwrap();
+
+        // Mimic the ReturnVal boundary check: frame_boundary = 1, pool_idx = 0 < 1 → OK.
+        let frame_boundary = match vm.return_stack.last().unwrap() {
+            ReturnFrame::Call {
+                saved_array_pool_len,
+                ..
+            } => *saved_array_pool_len,
+            _ => panic!("unexpected frame"),
+        };
+        let retval = vm.pop().unwrap();
+        if let Cell::Array(pool_idx) = &retval {
+            assert!(
+                *pool_idx < frame_boundary,
+                "global array should pass ReturnVal check"
+            );
+        }
     }
 }

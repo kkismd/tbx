@@ -81,9 +81,13 @@ pub fn store_prim(vm: &mut VM) -> Result<(), TbxError> {
     let value = vm.pop()?;
     match addr {
         Cell::DictAddr(a) => {
-            // Guard: local arrays must not escape into global (dictionary) storage.
-            if matches!(value, Cell::Array(_)) {
-                return Err(TbxError::LocalArrayEscape);
+            // Guard: only top-level (global) arrays may escape into dictionary
+            // storage.  Arrays created inside a word call have a pool_idx >=
+            // global_array_pool_len and must not escape.
+            if let Cell::Array(pool_idx) = &value {
+                if *pool_idx >= vm.global_array_pool_len {
+                    return Err(TbxError::LocalArrayEscape);
+                }
             }
             vm.dict_write_at(a, value)?;
             Ok(())
@@ -112,9 +116,13 @@ pub fn set_prim(vm: &mut VM) -> Result<(), TbxError> {
     let addr = vm.pop()?;
     match addr {
         Cell::DictAddr(a) => {
-            // Guard: local arrays must not escape into global (dictionary) storage.
-            if matches!(value, Cell::Array(_)) {
-                return Err(TbxError::LocalArrayEscape);
+            // Guard: only top-level (global) arrays may escape into dictionary
+            // storage.  Arrays created inside a word call have a pool_idx >=
+            // global_array_pool_len and must not escape.
+            if let Cell::Array(pool_idx) = &value {
+                if *pool_idx >= vm.global_array_pool_len {
+                    return Err(TbxError::LocalArrayEscape);
+                }
             }
             vm.dict_write_at(a, value)?;
             Ok(())
