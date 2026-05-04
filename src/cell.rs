@@ -81,11 +81,18 @@ pub enum Cell {
     Bool(bool),
     /// Index into the string pool (length-prefixed)
     StringDesc(usize),
-    /// Local array — index into `VM::arrays` (the local array pool).
+    /// Array handle — index into `VM::arrays` (the array pool).
     ///
     /// Created by the `ARRAY(N)` primitive.  The pool entry at this index holds
-    /// a `Vec<Cell>` of length N.  The pool is truncated on EXIT/RETURN_VAL, so
-    /// `Cell::Array` values must never escape their owning stack frame.
+    /// a `Vec<Cell>` of length N.
+    ///
+    /// Arrays come in two flavours:
+    /// - **Local arrays** (`pool_idx >= saved_array_pool_len` of the current call
+    ///   frame) are freed when the owning frame exits via EXIT or RETURN_VAL.
+    ///   They must not escape their owning stack frame.
+    /// - **Global arrays** (`pool_idx < vm.global_array_pool_len`) are created
+    ///   at the top level (outside any `DEF..END`) and are never freed.  They
+    ///   may safely be stored in `VARIABLE` slots and shared across word calls.
     Array(usize),
     /// Address of an element in a local array.
     ///
