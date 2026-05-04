@@ -1,0 +1,30 @@
+# lib/tests/test_data_stmt.tbx — TBX tests for the DATA statement
+USE "lib/tests/helper.tbx"
+
+# DATA declares a global array with inline initial values.
+# The array size equals the number of values supplied.
+
+DATA PRIMES, 2, 3, 5, 7, 11
+ASSERT PRIMES(0) = 2
+ASSERT PRIMES(1) = 3
+ASSERT PRIMES(2) = 5
+ASSERT PRIMES(3) = 7
+ASSERT PRIMES(4) = 11
+
+# DIM_SIZE reports the number of elements (inferred from value count).
+ASSERT DIM_SIZE("PRIMES") = 5
+
+# SET can overwrite individual elements.
+SET &PRIMES(0), 100
+ASSERT PRIMES(0) = 100
+
+# Minimum case: a single-element array.
+DATA SINGLE, 42
+ASSERT SINGLE(0) = 42
+ASSERT DIM_SIZE("SINGLE") = 1
+
+# Negative integers are valid initial values.
+DATA NEGS, -1, -2, -3
+ASSERT NEGS(0) = -1
+ASSERT NEGS(1) = -2
+ASSERT NEGS(2) = -3

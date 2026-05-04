@@ -1213,6 +1213,133 @@ pub fn dim_prim(vm: &mut VM) -> Result<(), TbxError> {
     Ok(())
 }
 
+/// DATA — declare a global array with initial values. Syntax: `DATA NAME, v1, v2, ..., vN`.
+///
+/// Allocates `N` cells in the dictionary (one per value) and registers the array
+/// under `NAME` as an `EntryKind::Array` entry. Each cell is initialised with the
+/// corresponding `Cell::Int` value.
+///
+/// This word is IMMEDIATE and executes at read time (like DIM).
+/// Using DATA inside a DEF..END block is not allowed.
+pub fn data_prim(vm: &mut VM) -> Result<(), TbxError> {
+    if vm.is_compiling {
+        return Err(TbxError::InvalidExpression {
+            reason: "DATA is not allowed inside DEF",
+        });
+    }
+
+    // Read array name.
+    let tok = vm.next_token()?;
+    let name = match tok.token {
+        Token::Ident(n) => n.to_ascii_uppercase(),
+        _ => {
+            return Err(TbxError::InvalidExpression {
+                reason: "expected array name after DATA",
+            })
+        }
+    };
+
+    // Read the first comma separating the name from the value list.
+    let tok = vm.next_token()?;
+    if !matches!(tok.token, Token::Comma) {
+        return Err(TbxError::InvalidExpression {
+            reason: "expected ',' after DATA NAME",
+        });
+    }
+
+    // Read comma-separated integer (or float) literals until a non-value token.
+    let mut values: Vec<Cell> = Vec::new();
+    loop {
+        let tok = match vm.next_token() {
+            Ok(t) => t,
+            Err(TbxError::TokenStreamEmpty) => break,
+            Err(e) => return Err(e),
+        };
+
+        match tok.token {
+            Token::IntLit(n) => values.push(Cell::Int(n)),
+            Token::FloatLit(f) => values.push(Cell::Float(f)),
+            // Handle unary minus before a numeric literal (e.g. DATA A, -1, -2).
+            // The lexer emits '-' as Op("-"), not as part of IntLit/FloatLit.
+            Token::Op(ref op) if op == "-" => {
+                let next = match vm.next_token() {
+                    Ok(t) => t,
+                    Err(TbxError::TokenStreamEmpty) => {
+                        return Err(TbxError::InvalidExpression {
+                            reason: "expected number after '-' in DATA value list",
+                        })
+                    }
+                    Err(e) => return Err(e),
+                };
+                match next.token {
+                    Token::IntLit(n) => values.push(Cell::Int(-n)),
+                    Token::FloatLit(f) => values.push(Cell::Float(-f)),
+                    _ => {
+                        return Err(TbxError::InvalidExpression {
+                            reason: "expected number after '-' in DATA value list",
+                        })
+                    }
+                }
+            }
+            other => {
+                // Non-value token: push it back and stop.
+                if let Some(stream) = vm.token_stream.as_mut() {
+                    stream.push_front(crate::lexer::SpannedToken {
+                        token: other,
+                        pos: tok.pos,
+                        source_offset: tok.source_offset,
+                        source_len: tok.source_len,
+                    });
+                }
+                break;
+            }
+        }
+
+        // After a value, check for a comma. Consume it if present; otherwise stop.
+        match vm.next_token() {
+            Ok(t) if matches!(t.token, Token::Comma) => {
+                // Comma consumed; continue to next value.
+            }
+            Ok(t) => {
+                // Not a comma: push back and stop.
+                if let Some(stream) = vm.token_stream.as_mut() {
+                    stream.push_front(t);
+                }
+                break;
+            }
+            Err(TbxError::TokenStreamEmpty) => break,
+            Err(e) => return Err(e),
+        }
+    }
+
+    if values.is_empty() {
+        return Err(TbxError::InvalidExpression {
+            reason: "DATA requires at least one value",
+        });
+    }
+
+    let size = values.len();
+
+    // Check that the allocation fits within the dictionary limit.
+    let new_dp = vm.dp.saturating_add(size);
+    if new_dp > MAX_DICTIONARY_CELLS {
+        return Err(TbxError::DictionaryOverflow {
+            requested: new_dp,
+            limit: MAX_DICTIONARY_CELLS,
+        });
+    }
+
+    // Allocate storage and register the array entry.
+    let base = vm.dp;
+    for val in values {
+        vm.dict_write(val)?;
+    }
+    let entry = crate::dict::WordEntry::new_array(&name, base, size);
+    vm.register(entry);
+    vm.seal_user();
+    Ok(())
+}
+
 /// TO_ARRAY — collect n values from the stack into a local array.
 ///
 /// The compiler emits `LIT Int(n)` before the Xt for variadic primitives, so the
@@ -2188,6 +2315,12 @@ pub fn register_all(vm: &mut VM) {
     let mut dim_entry = WordEntry::new_primitive("DIM", dim_prim);
     dim_entry.flags = FLAG_IMMEDIATE | FLAG_SYSTEM;
     vm.register(dim_entry);
+
+    // DATA: IMMEDIATE; declares a global array with inline initial values.
+    // Syntax: DATA NAME, v1, v2, ..., vN
+    let mut data_entry = WordEntry::new_primitive("DATA", data_prim);
+    data_entry.flags = FLAG_IMMEDIATE | FLAG_SYSTEM;
+    vm.register(data_entry);
 
     // Compile-stack primitives for IMMEDIATE word authoring.
     // No FLAG_IMMEDIATE or FLAG_SYSTEM: these are compiled into DEF bodies as statements
@@ -4820,6 +4953,144 @@ mod tests {
         assert!(
             matches!(err, TbxError::DictionaryOverflow { .. }),
             "DIM with insufficient space should return DictionaryOverflow, got {err:?}"
+        );
+    }
+
+    // DATA primitive tests
+    // ------------------------------------------------------------------
+
+    /// Helper: build a SpannedToken with an IntLit value.
+    fn make_int_lit_token(n: i64) -> crate::lexer::SpannedToken {
+        crate::lexer::SpannedToken {
+            token: crate::lexer::Token::IntLit(n),
+            pos: crate::lexer::Position { line: 1, col: 1 },
+            source_offset: 0,
+            source_len: 1,
+        }
+    }
+
+    #[test]
+    fn test_data_allocates_storage_and_registers_array() {
+        // DATA NUMS, 10, 20, 30 — should allocate 3 Int cells and register an Array entry.
+        use std::collections::VecDeque;
+        let mut vm = make_exec_vm();
+
+        vm.token_stream = Some(VecDeque::from([
+            make_ident_token("NUMS"),
+            make_comma_token(),
+            make_int_lit_token(10),
+            make_comma_token(),
+            make_int_lit_token(20),
+            make_comma_token(),
+            make_int_lit_token(30),
+        ]));
+
+        let dp_before = vm.dp;
+        data_prim(&mut vm).unwrap();
+
+        // dp should have advanced by 3.
+        assert_eq!(vm.dp, dp_before + 3, "dp should advance by 3");
+
+        // Each allocated cell must hold the corresponding Int value.
+        assert_eq!(vm.dict_read(dp_before).unwrap(), Cell::Int(10));
+        assert_eq!(vm.dict_read(dp_before + 1).unwrap(), Cell::Int(20));
+        assert_eq!(vm.dict_read(dp_before + 2).unwrap(), Cell::Int(30));
+
+        // The word "NUMS" must be visible as an Array entry with the correct size.
+        let xt = vm.lookup("NUMS").expect("NUMS should be registered");
+        assert!(
+            matches!(
+                vm.headers[xt.index()].kind,
+                crate::dict::EntryKind::Array { base, size } if base == dp_before && size == 3
+            ),
+            "expected Array {{ base: {dp_before}, size: 3 }}, got {:?}",
+            vm.headers[xt.index()].kind
+        );
+    }
+
+    #[test]
+    fn test_data_inside_def_returns_error() {
+        // DATA is not allowed inside DEF..END.
+        let mut vm = make_compiling_vm("MYWORD");
+        use std::collections::VecDeque;
+        vm.token_stream = Some(VecDeque::new());
+        let err = data_prim(&mut vm).unwrap_err();
+        assert!(
+            matches!(err, TbxError::InvalidExpression { reason } if reason.contains("DATA")),
+            "expected InvalidExpression mentioning DATA, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn test_data_missing_name_returns_error() {
+        // When the first token is not an Ident, DATA should return InvalidExpression.
+        use std::collections::VecDeque;
+        let mut vm = make_exec_vm();
+        vm.token_stream = Some(VecDeque::from([make_int_lit_token(42)]));
+        let err = data_prim(&mut vm).unwrap_err();
+        assert!(
+            matches!(err, TbxError::InvalidExpression { reason } if reason.contains("expected array name")),
+            "expected InvalidExpression about array name, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn test_data_missing_comma_after_name_returns_error() {
+        // When no comma follows the name, DATA should return InvalidExpression.
+        use std::collections::VecDeque;
+        let mut vm = make_exec_vm();
+        vm.token_stream = Some(VecDeque::from([
+            make_ident_token("BUF"),
+            make_int_lit_token(1),
+        ]));
+        let err = data_prim(&mut vm).unwrap_err();
+        assert!(
+            matches!(err, TbxError::InvalidExpression { reason } if reason.contains("','")),
+            "expected InvalidExpression about comma, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn test_data_empty_value_list_returns_error() {
+        // DATA NAME, with no values should return InvalidExpression.
+        use std::collections::VecDeque;
+        let mut vm = make_exec_vm();
+        vm.token_stream = Some(VecDeque::from([
+            make_ident_token("BUF"),
+            make_comma_token(),
+            // No value tokens follow.
+        ]));
+        let err = data_prim(&mut vm).unwrap_err();
+        assert!(
+            matches!(err, TbxError::InvalidExpression { reason } if reason.contains("at least one value")),
+            "expected InvalidExpression about empty value list, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn test_data_dictionary_overflow() {
+        // Fill the dictionary so only 2 cells remain, then request DATA with 3 values.
+        use std::collections::VecDeque;
+        let mut vm = make_exec_vm();
+
+        while vm.dp + 2 < MAX_DICTIONARY_CELLS {
+            vm.dict_write(Cell::None).unwrap();
+        }
+
+        vm.token_stream = Some(VecDeque::from([
+            make_ident_token("BUF"),
+            make_comma_token(),
+            make_int_lit_token(1),
+            make_comma_token(),
+            make_int_lit_token(2),
+            make_comma_token(),
+            make_int_lit_token(3),
+        ]));
+
+        let err = data_prim(&mut vm).unwrap_err();
+        assert!(
+            matches!(err, TbxError::DictionaryOverflow { .. }),
+            "DATA with insufficient space should return DictionaryOverflow, got {err:?}"
         );
     }
 
