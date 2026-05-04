@@ -2007,6 +2007,24 @@ pub fn getdec_prim(vm: &mut VM) -> Result<(), TbxError> {
     vm.push(Cell::Int(n))
 }
 
+/// GETSTR — read one line from the input and push it as a `Cell::Str` onto the data stack.
+///
+/// Calls `accept_prim` internally to read a line, then stores the result in `vm.strings`
+/// (the runtime string pool) and pushes `Cell::Str(idx)` where `idx` is the new entry's
+/// index.  The trailing newline is stripped by `accept_prim`.
+///
+/// This is the string counterpart of `GETDEC`.  The resulting `Cell::Str` is compatible
+/// with all existing string primitives (`PUTSTR`, `STR`, `STR_CONCAT`, `STR_LEN`,
+/// `STR_EQ`, etc.) without any additional conversion.
+///
+/// Stack signature: `( -- s )`
+pub fn getstr_prim(vm: &mut VM) -> Result<(), TbxError> {
+    let s = accept_prim(vm)?;
+    let idx = vm.strings.len();
+    vm.strings.push(s);
+    vm.push(Cell::Str(idx))
+}
+
 /// Register all stack primitives into the VM's dictionary.
 pub fn register_all(vm: &mut VM) {
     vm.register(WordEntry::new_primitive("DROP", drop_prim));
@@ -2044,6 +2062,7 @@ pub fn register_all(vm: &mut VM) {
     vm.register(WordEntry::new_primitive("PUTDEC", putdec_prim));
     vm.register(WordEntry::new_primitive("PUTHEX", puthex_prim));
     vm.register(WordEntry::new_primitive("GETDEC", getdec_prim));
+    vm.register(WordEntry::new_primitive("GETSTR", getstr_prim));
     vm.register(WordEntry::new_primitive("APPEND", append_prim));
     vm.register(WordEntry::new_primitive("ALLOT", allot_prim));
     vm.register(WordEntry::new_primitive("HERE", here_prim));
@@ -5800,6 +5819,61 @@ mod tests {
         vm.input_reader = Box::new(Cursor::new("123\n"));
         getdec_prim(&mut vm).unwrap();
         assert_eq!(vm.pop(), Ok(Cell::Int(123)));
+    }
+
+    // --- getstr_prim ---
+
+    #[test]
+    fn test_getstr_pushes_str() {
+        use std::io::Cursor;
+        let mut vm = VM::new();
+        vm.input_reader = Box::new(Cursor::new("hello\n"));
+        getstr_prim(&mut vm).unwrap();
+        assert_eq!(vm.pop(), Ok(Cell::Str(0)));
+    }
+
+    #[test]
+    fn test_getstr_empty_line() {
+        use std::io::Cursor;
+        let mut vm = VM::new();
+        vm.input_reader = Box::new(Cursor::new("\n"));
+        getstr_prim(&mut vm).unwrap();
+        assert_eq!(vm.pop(), Ok(Cell::Str(0)));
+        assert_eq!(vm.strings[0], "");
+    }
+
+    #[test]
+    fn test_getstr_strips_newline() {
+        use std::io::Cursor;
+        let mut vm = VM::new();
+        vm.input_reader = Box::new(Cursor::new("world\r\n"));
+        getstr_prim(&mut vm).unwrap();
+        assert_eq!(vm.strings[0], "world");
+    }
+
+    #[test]
+    fn test_getstr_content_matches_input() {
+        use std::io::Cursor;
+        let mut vm = VM::new();
+        vm.input_reader = Box::new(Cursor::new("foo bar\n"));
+        getstr_prim(&mut vm).unwrap();
+        let cell = vm.pop().unwrap();
+        if let Cell::Str(idx) = cell {
+            assert_eq!(vm.strings[idx], "foo bar");
+        } else {
+            panic!("expected Cell::Str, got {:?}", cell);
+        }
+    }
+
+    #[test]
+    fn test_getstr_flushes_output_before_read() {
+        use std::io::Cursor;
+        let mut vm = VM::new();
+        vm.output_buffer = "prompt: ".to_string();
+        vm.input_reader = Box::new(Cursor::new("answer\n"));
+        getstr_prim(&mut vm).unwrap();
+        // After reading, the output buffer should have been flushed (empty).
+        assert!(vm.output_buffer.is_empty());
     }
 
     // --- array_prim ---
