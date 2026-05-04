@@ -37,13 +37,13 @@ eXtensibleなTiny BASICという意味で TBX という名前をつける。
   * リターンスタック: 手続きからの戻り先アドレスと呼び出し元のBPを退避する。リターンスタックはシステム専用であり、ユーザーコードからの直接アクセス手段（Forthにおける `>R` / `R>` / `R@` 相当）は提供しない。TBXはワード定義に引数リストを持ち、CALL時にスタックフレームを構成するアーキテクチャのため、ローカル変数によりリターンスタックの一時退避用途が不要となる。
     * EXIT: void returnプリミティブ。`data_stack.truncate(bp)` で引数・ローカル変数を解放し、リターンスタックから戻り先アドレスと元のBPを復元して呼び出し元に制御を戻す
     * RETURN_VAL: 値returnプリミティブ（新設）。スタックトップを退避 → `data_stack.truncate(bp)` → 戻り値を再pushし、リターンスタックから戻り先アドレスと元のBPを復元して呼び出し元に制御を戻す
-    * `ReturnFrame` 列挙型: リターンスタックに積まれるフレームの種別を表す型。`Call`（戻り先PC・保存BP・配列プールの長さスナップショット `saved_array_pool_len`・実引数個数 `actual_arity`）と `TopLevel`（番哨フレーム）の2バリアントを持つ（実装: `src/cell.rs`）。`saved_array_pool_len` は EXIT/RETURN_VAL 時に配列プールを巻き戻すために使用する。`actual_arity` は可変引数ワード内で `VA_COUNT` が参照する。
+    * `ReturnFrame` 列挙型: リターンスタックに積まれるフレームの種別を表す型。`Call`（戻り先PC・保存BP・配列プールの長さスナップショット `saved_array_pool_len`・文字列プールの長さスナップショット `saved_string_pool_len`・実引数個数 `actual_arity`）と `TopLevel`（番哨フレーム）の2バリアントを持つ（実装: `src/cell.rs`）。`saved_array_pool_len` は EXIT/RETURN_VAL 時に配列プールを巻き戻すために使用する。`saved_string_pool_len` は EXIT/RETURN_VAL 時に文字列プール（`VM::strings`）を巻き戻すために使用する。`actual_arity` は可変引数ワード内で `VA_COUNT` が参照する。
 
 > Issue #116「ワード本体の終端判定機構（EXIT規約）が仕様に明記されていない」に基づく設計方針
 
 **番哨フレーム方式（Sentinel Frame）**：トップレベル（「地の文」）のXt列実行開始前に `ReturnFrame::TopLevel` をリターンスタックに積む。インナ・インタプリタは `EXIT` 実行時に常にリターンスタックをpopし、取り出したフレームの種別で処理を分岐する。
-* `ReturnFrame::Call` の場合: 保存された `return_pc` と `saved_bp` を復元して通常のリターンを行う。
-* `ReturnFrame::TopLevel` の場合: 実行を正常終了する（これがトップレベル終端の唯一のメカニズムである）。
+* `ReturnFrame::Call` の場合: 保存された `return_pc` と `saved_bp` を復元して通常のリターンを行う。`vm.arrays` を `saved_array_pool_len` まで切り詰め、`vm.strings` を `saved_string_pool_len` まで切り詰めてフレームローカルなリソースを解放する。
+* `ReturnFrame::TopLevel` の場合: 実行を正常終了する（これがトップレベル終端の唯一のメカニズムである）。このとき `vm.global_array_pool_len = vm.arrays.len()` および `vm.global_string_pool_len = vm.strings.len()` を更新し、トップレベルで生成されたリソースをグローバル扱いに昇格させる。
 * リターンスタックが空の状態で `EXIT` が呼ばれた場合: 実装バグとして `StackUnderflow` エラーを返す。
 
 > Issue #124「スタック深度制限（データスタック・リターンスタック）の仕様が未明記」に基づく設計方針
