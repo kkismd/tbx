@@ -544,7 +544,21 @@ pub fn putval_prim(vm: &mut VM) -> Result<(), TbxError> {
     let cell = vm.pop()?;
     match cell {
         Cell::Int(n) => vm.write_output(&n.to_string()),
-        Cell::Float(v) => vm.write_output(&Cell::Float(v).to_string()),
+        Cell::Float(v) => {
+            // Mirror Cell::Float Display: finite values always include a decimal
+            // point (e.g. 1.0 → "1.0"), non-finite values are printed as-is.
+            let s = if v.is_finite() {
+                let raw = format!("{v}");
+                if raw.contains('.') || raw.contains('e') {
+                    raw
+                } else {
+                    format!("{v}.0")
+                }
+            } else {
+                format!("{v}")
+            };
+            vm.write_output(&s);
+        }
         Cell::Bool(b) => vm.write_output(if b { "TRUE" } else { "FALSE" }),
         Cell::StringDesc(idx) => {
             let s = vm.resolve_string(idx)?;
