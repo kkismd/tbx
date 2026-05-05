@@ -1,0 +1,105 @@
+# lib/tests/test_return_array.tbx — ownership transfer of frame-local arrays via RETURN
+USE "lib/tests/helper.tbx"
+
+# --- Basic: return a frame-local ARRAY ---
+
+DEF MAKE_TRIPLE()
+  VAR A
+  LET A = ARRAY(3)
+  SET &A(1), 10
+  SET &A(2), 20
+  SET &A(3), 30
+  RETURN A
+END
+
+DEF TEST_BASIC_RETURN()
+  VAR R
+  LET R = MAKE_TRIPLE()
+  RETURN R(1) + R(2) + R(3)
+END
+ASSERT TEST_BASIC_RETURN() = 60
+
+DEF TEST_BASIC_ELEM1()
+  VAR R
+  LET R = MAKE_TRIPLE()
+  RETURN R(1)
+END
+ASSERT TEST_BASIC_ELEM1() = 10
+
+DEF TEST_BASIC_ELEM3()
+  VAR R
+  LET R = MAKE_TRIPLE()
+  RETURN R(3)
+END
+ASSERT TEST_BASIC_ELEM3() = 30
+
+# --- Basic: return a frame-local TO_ARRAY ---
+
+DEF MAKE_TO_ARRAY()
+  RETURN TO_ARRAY(4, 5, 6)
+END
+
+DEF TEST_TO_ARRAY_RETURN()
+  VAR R
+  LET R = MAKE_TO_ARRAY()
+  RETURN R(1) + R(2) + R(3)
+END
+ASSERT TEST_TO_ARRAY_RETURN() = 15
+
+# --- Only the returned array survives; other frame-local arrays are freed ---
+
+DEF RETURN_MIDDLE()
+  VAR A
+  VAR B
+  VAR C
+  LET A = TO_ARRAY(1, 2)
+  LET B = TO_ARRAY(7, 8)
+  LET C = TO_ARRAY(3, 4)
+  RETURN B
+END
+
+DEF TEST_MIDDLE_ELEM1()
+  VAR R
+  LET R = RETURN_MIDDLE()
+  RETURN R(1)
+END
+ASSERT TEST_MIDDLE_ELEM1() = 7
+
+DEF TEST_MIDDLE_ELEM2()
+  VAR R
+  LET R = RETURN_MIDDLE()
+  RETURN R(2)
+END
+ASSERT TEST_MIDDLE_ELEM2() = 8
+
+# --- Multi-level: array propagates through nested RETURN ---
+
+DEF INNER_FUNC()
+  RETURN TO_ARRAY(100, 200, 300)
+END
+
+DEF OUTER_FUNC()
+  VAR B
+  LET B = INNER_FUNC()
+  RETURN B
+END
+
+DEF TEST_MULTI_LEVEL()
+  VAR R
+  LET R = OUTER_FUNC()
+  RETURN R(1) + R(2) + R(3)
+END
+ASSERT TEST_MULTI_LEVEL() = 600
+
+# --- HMS-style: decompose a value into an array and return it ---
+
+DEF TRIPLE(N)
+  RETURN TO_ARRAY(N, N * 2, N * 3)
+END
+
+DEF TEST_TRIPLE()
+  VAR R
+  LET R = TRIPLE(5)
+  RETURN R(1) + R(2) + R(3)
+END
+ASSERT TEST_TRIPLE() = 30
