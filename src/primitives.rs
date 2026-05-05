@@ -263,12 +263,20 @@ pub fn mod_prim(vm: &mut VM) -> Result<(), TbxError> {
     Ok(())
 }
 
+/// SQRT — compute the square root of a number. Pushes a Float result.
+/// Accepts Int or Float. Negative values and NaN/Infinity produce an error.
+/// Negative zero (-0.0) is normalized to positive zero (0.0).
 pub fn sqrt_prim(vm: &mut VM) -> Result<(), TbxError> {
     let num = vm.pop_number()?;
     match num {
         Cell::Int(i) if i < 0 => {
             return Err(TbxError::InvalidArgument {
                 message: format!("sqrt of negative number: {i}"),
+            });
+        }
+        Cell::Float(f) if f.is_nan() || !f.is_finite() => {
+            return Err(TbxError::InvalidArgument {
+                message: format!("sqrt of invalid number: {f}"),
             });
         }
         Cell::Float(f) if f < 0.0 => {
@@ -281,6 +289,8 @@ pub fn sqrt_prim(vm: &mut VM) -> Result<(), TbxError> {
             vm.push(Cell::Float(result))?;
         }
         Cell::Float(f) => {
+            // Normalize -0.0 to 0.0 for consistency with zero handling elsewhere.
+            let f = if f == 0.0 { 0.0 } else { f };
             let result = f.sqrt();
             vm.push(Cell::Float(result))?;
         }
@@ -2934,13 +2944,8 @@ mod tests {
         let mut vm = VM::new();
         vm.push(Cell::Int(7)).unwrap();
         sqrt_prim(&mut vm).unwrap();
-        let result = match vm.pop().unwrap() {
-            Cell::Float(f) => f,
-            _ => 0.0,
-        };
         let expected = (7.0f64).sqrt();
-        let diff = (result - expected).abs();
-        assert!(diff < f64::EPSILON);
+        assert_eq!(vm.pop(), Ok(Cell::Float(expected)));
     }
 
     #[test]
@@ -2949,13 +2954,8 @@ mod tests {
         let mut vm = VM::new();
         vm.push(Cell::Float(float_num)).unwrap();
         sqrt_prim(&mut vm).unwrap();
-        let result = match vm.pop().unwrap() {
-            Cell::Float(f) => f,
-            _ => 0.0,
-        };
-        let expected = (float_num).sqrt();
-        let diff = (result - expected).abs();
-        assert!(diff < f64::EPSILON);
+        let expected = float_num.sqrt();
+        assert_eq!(vm.pop(), Ok(Cell::Float(expected)));
     }
 
     #[test]
@@ -2976,6 +2976,43 @@ mod tests {
             sqrt_prim(&mut vm),
             Err(TbxError::InvalidArgument { .. })
         ));
+    }
+
+    #[test]
+    fn test_sqrt_nan() {
+        let mut vm = VM::new();
+        vm.push(Cell::Float(f64::NAN)).unwrap();
+        assert!(matches!(
+            sqrt_prim(&mut vm),
+            Err(TbxError::InvalidArgument { .. })
+        ));
+    }
+
+    #[test]
+    fn test_sqrt_infinity() {
+        let mut vm = VM::new();
+        vm.push(Cell::Float(f64::INFINITY)).unwrap();
+        assert!(matches!(
+            sqrt_prim(&mut vm),
+            Err(TbxError::InvalidArgument { .. })
+        ));
+    }
+
+    #[test]
+    fn test_sqrt_negative_zero() {
+        // -0.0 should be normalized to +0.0, yielding 0.0
+        let mut vm = VM::new();
+        vm.push(Cell::Float(-0.0f64)).unwrap();
+        sqrt_prim(&mut vm).unwrap();
+        assert_eq!(vm.pop(), Ok(Cell::Float(0.0)));
+    }
+
+    #[test]
+    fn test_sqrt_type_error() {
+        // Non-numeric type should produce a type error
+        let mut vm = VM::new();
+        vm.push(Cell::Bool(true)).unwrap();
+        assert!(sqrt_prim(&mut vm).is_err());
     }
 
     // --- EQ / NEQ tests ---
