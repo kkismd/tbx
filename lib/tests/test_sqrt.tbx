@@ -1,0 +1,7 @@
+# lib/tests/test_sqrt.tbx — TBX integration tests for SQRT
+USE "lib/tests/helper.tbx"
+
+ASSERT SQRT(0) = 0.0
+ASSERT SQRT(0.0) = 0.0
+ASSERT SQRT(2) = 1.4142135623730951
+ASSERT SQRT(1.23) = 1.1090536506409416

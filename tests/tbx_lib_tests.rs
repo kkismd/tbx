@@ -46,3 +46,21 @@ fn test_unterminated_string_in_def_is_compile_error() {
         "expected 'invalid expression' in error message, got: {msg}"
     );
 }
+
+#[test]
+fn test_sqrt_negative_float_is_error() {
+    let mut interp = Interpreter::new();
+    let err = interp
+        .exec_source("SQRT -1.0\n")
+        .expect_err("sqrt of negative should fail");
+    assert!(err.to_string().contains("sqrt of negative"), "{err}");
+}
+
+#[test]
+fn test_sqrt_negative_int_is_error() {
+    let mut interp = Interpreter::new();
+    let err = interp
+        .exec_source("SQRT -1\n")
+        .expect_err("sqrt of negative should fail");
+    assert!(err.to_string().contains("sqrt of negative"), "{err}");
+}

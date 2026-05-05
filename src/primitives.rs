@@ -263,6 +263,32 @@ pub fn mod_prim(vm: &mut VM) -> Result<(), TbxError> {
     Ok(())
 }
 
+pub fn sqrt_prim(vm: &mut VM) -> Result<(), TbxError> {
+    let num = vm.pop_number()?;
+    match num {
+        Cell::Int(i) if i < 0 => {
+            return Err(TbxError::InvalidArgument {
+                message: format!("sqrt of negative number: {i}"),
+            });
+        }
+        Cell::Float(f) if f < 0.0 => {
+            return Err(TbxError::InvalidArgument {
+                message: format!("sqrt of negative number: {f}"),
+            });
+        }
+        Cell::Int(i) => {
+            let result = (i as f64).sqrt();
+            vm.push(Cell::Float(result))?;
+        }
+        Cell::Float(f) => {
+            let result = f.sqrt();
+            vm.push(Cell::Float(result))?;
+        }
+        _ => unreachable!("pop_number guarantees Int or Float"),
+    }
+    Ok(())
+}
+
 /// EQ — equality comparison. Pushes Bool(true) if the two top values are equal.
 /// Int/Float mixed pairs are compared by promoting Int to Float.
 pub fn eq_prim(vm: &mut VM) -> Result<(), TbxError> {
@@ -2149,6 +2175,7 @@ pub fn register_all(vm: &mut VM) {
     vm.register(WordEntry::new_primitive("MUL", mul_prim));
     vm.register(WordEntry::new_primitive("DIV", div_prim));
     vm.register(WordEntry::new_primitive("MOD", mod_prim));
+    vm.register(WordEntry::new_primitive("SQRT", sqrt_prim));
     vm.register(WordEntry::new_primitive("EQ", eq_prim));
     vm.register(WordEntry::new_primitive("NEQ", neq_prim));
     vm.register(WordEntry::new_primitive("LT", lt_prim));
@@ -2898,6 +2925,57 @@ mod tests {
         vm.push(Cell::Int(i64::MIN)).unwrap();
         vm.push(Cell::Int(-1)).unwrap();
         assert_eq!(mod_prim(&mut vm), Err(TbxError::IntegerOverflow));
+    }
+
+    // --- SQRT tests ---
+
+    #[test]
+    fn test_sqrt_int() {
+        let mut vm = VM::new();
+        vm.push(Cell::Int(7)).unwrap();
+        sqrt_prim(&mut vm).unwrap();
+        let result = match vm.pop().unwrap() {
+            Cell::Float(f) => f,
+            _ => 0.0,
+        };
+        let expected = (7.0f64).sqrt();
+        let diff = (result - expected).abs();
+        assert!(diff < f64::EPSILON);
+    }
+
+    #[test]
+    fn test_sqrt_float() {
+        let float_num = 1.23f64;
+        let mut vm = VM::new();
+        vm.push(Cell::Float(float_num)).unwrap();
+        sqrt_prim(&mut vm).unwrap();
+        let result = match vm.pop().unwrap() {
+            Cell::Float(f) => f,
+            _ => 0.0,
+        };
+        let expected = (float_num).sqrt();
+        let diff = (result - expected).abs();
+        assert!(diff < f64::EPSILON);
+    }
+
+    #[test]
+    fn test_sqrt_negative_int() {
+        let mut vm = VM::new();
+        vm.push(Cell::Int(-7)).unwrap();
+        assert!(matches!(
+            sqrt_prim(&mut vm),
+            Err(TbxError::InvalidArgument { .. })
+        ));
+    }
+
+    #[test]
+    fn test_sqrt_negative_float() {
+        let mut vm = VM::new();
+        vm.push(Cell::Float(-7.0)).unwrap();
+        assert!(matches!(
+            sqrt_prim(&mut vm),
+            Err(TbxError::InvalidArgument { .. })
+        ));
     }
 
     // --- EQ / NEQ tests ---
