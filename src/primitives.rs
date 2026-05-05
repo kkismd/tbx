@@ -3687,6 +3687,87 @@ mod tests {
         ));
     }
 
+    // --- PUTVAL tests ---
+
+    #[test]
+    fn test_putval_int() {
+        let mut vm = VM::new();
+        vm.push(Cell::Int(42)).unwrap();
+        putval_prim(&mut vm).unwrap();
+        assert_eq!(vm.take_output(), "42");
+    }
+
+    #[test]
+    fn test_putval_float() {
+        let mut vm = VM::new();
+        vm.push(Cell::Float(1.0)).unwrap();
+        putval_prim(&mut vm).unwrap();
+        assert_eq!(vm.take_output(), "1.0");
+    }
+
+    #[test]
+    fn test_putval_float_fractional() {
+        let mut vm = VM::new();
+        vm.push(Cell::Float(2.5)).unwrap();
+        putval_prim(&mut vm).unwrap();
+        assert_eq!(vm.take_output(), "2.5");
+    }
+
+    #[test]
+    fn test_putval_bool_true() {
+        let mut vm = VM::new();
+        vm.push(Cell::Bool(true)).unwrap();
+        putval_prim(&mut vm).unwrap();
+        assert_eq!(vm.take_output(), "TRUE");
+    }
+
+    #[test]
+    fn test_putval_bool_false() {
+        let mut vm = VM::new();
+        vm.push(Cell::Bool(false)).unwrap();
+        putval_prim(&mut vm).unwrap();
+        assert_eq!(vm.take_output(), "FALSE");
+    }
+
+    #[test]
+    fn test_putval_strdesc() {
+        let mut vm = VM::new();
+        let idx = vm.intern_string("hello").unwrap();
+        vm.push(Cell::StringDesc(idx)).unwrap();
+        putval_prim(&mut vm).unwrap();
+        assert_eq!(vm.take_output(), "hello");
+    }
+
+    #[test]
+    fn test_putval_str() {
+        let mut vm = VM::new();
+        vm.strings.push("world".to_string());
+        vm.push(Cell::Str(0)).unwrap();
+        putval_prim(&mut vm).unwrap();
+        assert_eq!(vm.take_output(), "world");
+    }
+
+    #[test]
+    fn test_putval_none_error() {
+        let mut vm = VM::new();
+        vm.push(Cell::None).unwrap();
+        assert!(matches!(
+            putval_prim(&mut vm),
+            Err(TbxError::TypeError { .. })
+        ));
+    }
+
+    #[test]
+    fn test_putval_array_error() {
+        let mut vm = VM::new();
+        vm.push(Cell::Int(3)).unwrap();
+        array_prim(&mut vm).unwrap();
+        assert!(matches!(
+            putval_prim(&mut vm),
+            Err(TbxError::TypeError { .. })
+        ));
+    }
+
     // --- append_prim ---
 
     #[test]
