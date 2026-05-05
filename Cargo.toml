@@ -13,5 +13,8 @@ path = "src/lib.rs"
 name = "tbx"
 path = "src/main.rs"
 
+[dependencies]
+rand = { version = "0.8", features = ["small_rng"] }
+
 [dev-dependencies]
 tempfile = "3"
