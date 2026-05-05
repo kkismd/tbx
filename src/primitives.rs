@@ -532,6 +532,45 @@ pub fn puthex_prim(vm: &mut VM) -> Result<(), TbxError> {
     Ok(())
 }
 
+/// PUTVAL — output any user-facing Cell value to the output buffer.
+///
+/// Dispatches on Cell type:
+///   Int    → decimal string
+///   Float  → floating-point string (same as Cell::Float Display)
+///   Bool   → "TRUE" or "FALSE"
+///   StringDesc / Str → resolved string content
+///   other  → TypeError
+pub fn putval_prim(vm: &mut VM) -> Result<(), TbxError> {
+    let cell = vm.pop()?;
+    match cell {
+        Cell::Int(n) => vm.write_output(&n.to_string()),
+        Cell::Float(v) => vm.write_output(&Cell::Float(v).to_string()),
+        Cell::Bool(b) => vm.write_output(if b { "TRUE" } else { "FALSE" }),
+        Cell::StringDesc(idx) => {
+            let s = vm.resolve_string(idx)?;
+            vm.write_output(&s);
+        }
+        Cell::Str(idx) => {
+            let s = vm
+                .strings
+                .get(idx)
+                .cloned()
+                .ok_or(TbxError::IndexOutOfBounds {
+                    index: idx,
+                    size: vm.strings.len(),
+                })?;
+            vm.write_output(&s);
+        }
+        other => {
+            return Err(TbxError::TypeError {
+                expected: "Int, Float, Bool, or Str",
+                got: other.type_name(),
+            })
+        }
+    }
+    Ok(())
+}
+
 /// APPEND — pop a Cell and write it to dictionary[dp], advancing dp by 1.
 pub fn append_prim(vm: &mut VM) -> Result<(), TbxError> {
     let cell = vm.pop()?;
@@ -2119,6 +2158,7 @@ pub fn register_all(vm: &mut VM) {
     vm.register(WordEntry::new_primitive("PUTCHR", putchr_prim));
     vm.register(WordEntry::new_primitive("PUTDEC", putdec_prim));
     vm.register(WordEntry::new_primitive("PUTHEX", puthex_prim));
+    vm.register(WordEntry::new_primitive("PUTVAL", putval_prim));
     vm.register(WordEntry::new_primitive("GETDEC", getdec_prim));
     vm.register(WordEntry::new_primitive("GETSTR", getstr_prim));
     vm.register(WordEntry::new_primitive("APPEND", append_prim));
