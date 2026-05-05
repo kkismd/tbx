@@ -3871,10 +3871,8 @@ TRYROT";
     #[test]
     fn test_elsif_outside_def_is_error() {
         // ELSIF at top level (interpret mode) must return an error.
-        // The ELSIF body executes APPEND JUMP_ALWAYS and APPEND 0 first (APPEND does
-        // not check is_compiling), then fails at CS_POP which detects is_compiling=false
-        // and returns InvalidExpression.  Note: the two APPEND calls write to the
-        // dictionary before the error is raised.
+        // ELSIF starts with CS_CLOSE_TAG "IF", which checks is_compiling and returns
+        // InvalidExpression immediately — no APPEND calls are made.
         let mut interp = Interpreter::new();
         let result = interp.exec_line("ELSIF 1 > 0", 1);
         assert!(
@@ -3886,10 +3884,8 @@ TRYROT";
     #[test]
     fn test_else_outside_def_is_error() {
         // ELSE at top level (interpret mode) must return an error.
-        // The ELSE body executes APPEND JUMP_ALWAYS and APPEND 0 first (APPEND does
-        // not check is_compiling), then fails at CS_POP which detects is_compiling=false
-        // and returns InvalidExpression.  Note: the two APPEND calls write to the
-        // dictionary before the error is raised.
+        // ELSE starts with CS_CLOSE_TAG "IF", which checks is_compiling and returns
+        // InvalidExpression immediately — no APPEND calls are made.
         let mut interp = Interpreter::new();
         let result = interp.exec_line("ELSE", 1);
         assert!(
