@@ -3421,7 +3421,7 @@ PUTDEC 42";
 
         let mut interp = Interpreter::new();
         // Load math.tbx via its absolute path; no base_dir set.
-        let use_stmt = format!("USE {:?}", path_math.display().to_string());
+        let use_stmt = format!("USE \"{}\"", path_math.display());
         // Loading math.tbx triggers USE "helper.tbx" which must resolve relative
         // to math.tbx's own directory (utils/), not the process CWD.
         interp.exec_source(&use_stmt).unwrap();
