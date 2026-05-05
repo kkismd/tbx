@@ -258,3 +258,15 @@ IMMEDIATE NEXT
 
 # Outputs a newline
 DEF CR; PUTCHR 10; END
+
+# Outputs multiple values trailing newline
+DEF PRINT(...)
+  VAR I, N
+  SET &I, 0
+  SET &N, VA_COUNT()
+  WHILE I < N
+    PUTVAL FETCH(ARG_ADDR(I))
+    SET &I, I + 1
+  ENDWH
+  CR
+END
