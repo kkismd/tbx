@@ -118,7 +118,23 @@ pub struct Interpreter {
     ///
     /// Absolute paths are not affected. When `None` (the default), relative
     /// paths are resolved against the CWD as before.
+    ///
+    /// This acts as the fallback when no file is currently being loaded (i.e.
+    /// when a USE appears at the top-level entry point rather than inside a
+    /// file loaded by a previous USE).
     base_dir: Option<PathBuf>,
+    /// Directory of the file that is currently being executed via USE.
+    ///
+    /// When a USE statement loads a file, this is set to that file's parent
+    /// directory before `exec_source` is called recursively, so that nested
+    /// USE statements within the file resolve paths relative to the file's own
+    /// location rather than relative to `base_dir`.
+    ///
+    /// Specifically, for the resolution of a relative path `p` inside a file:
+    ///   1. Use `current_dir` (the directory of the including file) if set.
+    ///   2. Fall back to `base_dir` if set.
+    ///   3. Fall back to the process CWD.
+    current_dir: Option<PathBuf>,
 }
 
 impl Default for Interpreter {
@@ -155,6 +171,7 @@ impl Interpreter {
             max_use_depth: MAX_USE_DEPTH,
             loading_files: HashSet::new(),
             base_dir: None,
+            current_dir: None,
         };
         const STDLIB: &str = include_str!("../lib/basic.tbx");
         interp.exec_source(STDLIB)?;
@@ -628,10 +645,13 @@ impl Interpreter {
     ///
     /// # Nested USE
     ///
-    /// All relative paths in nested `USE` statements (including those inside
-    /// files loaded via `USE`) are also resolved against this `base_dir`.
-    /// The directory of the including file is **not** considered; resolution
-    /// always starts from the single `base_dir` set here.
+    /// For nested `USE` statements inside a file loaded via `USE`, relative
+    /// paths are resolved against the directory of the including file rather
+    /// than this `base_dir`. This allows files to reference their own siblings
+    /// without knowing where they were loaded from.
+    ///
+    /// `base_dir` serves as the fallback when a USE appears at the top level
+    /// (i.e. not inside a file that was itself loaded via USE).
     ///
     /// # Errors
     ///
@@ -775,12 +795,22 @@ impl Interpreter {
             // canonicalize() fails if the file does not exist, so we report
             // FileNotFound in that case rather than the generic IO error.
             //
-            // If a base_dir is set and the path is relative, resolve it
-            // against base_dir rather than the process CWD. This makes the
-            // interpreter independent of the CWD, which is important for
-            // tests and embedded use cases.
+            // Resolve the path for the USE statement.
+            //
+            // Priority for relative paths:
+            //   1. `current_dir` — directory of the file currently being loaded
+            //      via USE (set when we are inside a nested USE).  This allows
+            //      files to reference siblings without knowing their absolute
+            //      location.
+            //   2. `base_dir`    — the application-level root set by
+            //      `set_base_dir`.  Used for top-level USE statements.
+            //   3. Process CWD   — fallback when neither is set.
+            //
+            // Absolute paths bypass all of the above.
             let resolved_path = if std::path::Path::new(&path).is_relative() {
-                if let Some(base) = &self.base_dir {
+                if let Some(cur) = &self.current_dir {
+                    cur.join(&path)
+                } else if let Some(base) = &self.base_dir {
                     base.join(&path)
                 } else {
                     PathBuf::from(&path)
@@ -812,11 +842,18 @@ impl Interpreter {
                     reason: format!("read failed: {e}"),
                 })
             })?;
+            // Set current_dir to the directory of the file being loaded so
+            // that nested USE statements inside it resolve paths relative to
+            // that file's own directory rather than the top-level base_dir.
+            let file_dir = canonical.parent().map(|p| p.to_path_buf());
+            let prev_current_dir = self.current_dir.take();
+            self.current_dir = file_dir;
             self.loading_files.insert(canonical.clone());
             self.use_depth += 1;
             let result = self.exec_source(&source);
             self.use_depth -= 1;
             self.loading_files.remove(&canonical);
+            self.current_dir = prev_current_dir;
             result?;
         }
 
@@ -3332,34 +3369,66 @@ PUTDEC 42";
     }
 
     #[test]
-    fn test_set_base_dir_nested_use_from_subdirectory_requires_base_relative_paths() {
-        // Known limitation: relative paths in nested USE files are always resolved
-        // against base_dir, NOT against the including file's directory.
+    fn test_set_base_dir_nested_use_from_subdirectory_resolves_relative_to_including_file() {
+        // Relative paths in nested USE files are resolved against the directory
+        // of the including file, NOT against base_dir.
         //
         // Given: base_dir = /tmp/dir, modules/a.tbx USEs "utils.tbx"
-        //   => looks for /tmp/dir/utils.tbx (not /tmp/dir/modules/utils.tbx)
+        //   => looks for /tmp/dir/modules/utils.tbx (sibling of a.tbx)
         //
-        // This test documents the expected behavior. If files in subdirectories
-        // need to USE siblings, they must use paths relative to base_dir.
+        // This allows subdirectory files to reference their own siblings without
+        // knowing the base_dir root.
         let dir = tempfile::tempdir().expect("tempdir");
         let modules_dir = dir.path().join("modules");
         std::fs::create_dir(&modules_dir).unwrap();
         let path_a = modules_dir.join("a.tbx");
-        // utils.tbx is placed at base_dir root (not under modules/)
-        let path_utils = dir.path().join("utils.tbx");
+        // utils.tbx is placed next to a.tbx inside modules/
+        let path_utils = modules_dir.join("utils.tbx");
         std::fs::write(&path_utils, "DEF UTIL_WORD\nPUTSTR \"util\"\nEND\n").unwrap();
-        // a.tbx references utils.tbx with the base_dir-relative path "utils.tbx"
+        // a.tbx references utils.tbx with a path relative to its own directory
         std::fs::write(&path_a, "USE \"utils.tbx\"\n").unwrap();
 
         let mut interp = Interpreter::new();
         interp.set_base_dir(dir.path().to_path_buf()).unwrap();
-        // a.tbx USEs "utils.tbx" which resolves to base_dir/utils.tbx — success.
+        // a.tbx USEs "utils.tbx" which resolves to modules/utils.tbx (sibling) — success.
         interp
             .exec_source("USE \"modules/a.tbx\"\nUTIL_WORD")
             .unwrap();
         assert!(
             interp.take_output().contains("util"),
-            "USE in subdirectory file should succeed when path is relative to base_dir"
+            "USE in subdirectory file should resolve paths relative to the including file's directory"
+        );
+    }
+
+    #[test]
+    fn test_nested_use_sibling_file_in_subdir_no_base_dir() {
+        // Without base_dir: a file loaded via USE resolves its own USE paths
+        // relative to its own directory (not the process CWD).
+        //
+        //   utils/
+        //     math.tbx  -- USEs "helper.tbx"
+        //     helper.tbx
+        //
+        // Loading math.tbx via an absolute path and then calling HELPER_WORD
+        // should succeed.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let utils_dir = dir.path().join("utils");
+        std::fs::create_dir(&utils_dir).unwrap();
+        let path_helper = utils_dir.join("helper.tbx");
+        let path_math = utils_dir.join("math.tbx");
+        std::fs::write(&path_helper, "DEF HELPER_WORD\nPUTSTR \"helper\"\nEND\n").unwrap();
+        std::fs::write(&path_math, "USE \"helper.tbx\"\n").unwrap();
+
+        let mut interp = Interpreter::new();
+        // Load math.tbx via its absolute path; no base_dir set.
+        let use_stmt = format!("USE {:?}", path_math.display().to_string());
+        // Loading math.tbx triggers USE "helper.tbx" which must resolve relative
+        // to math.tbx's own directory (utils/), not the process CWD.
+        interp.exec_source(&use_stmt).unwrap();
+        interp.exec_source("HELPER_WORD").unwrap();
+        assert!(
+            interp.take_output().contains("helper"),
+            "HELPER_WORD defined via nested sibling USE should be callable"
         );
     }
 
