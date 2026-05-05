@@ -1,12 +1,12 @@
 ---
-name: impl
-description: issue番号を引数に取り、orchestrate-issueエージェントを起動して実装・レビューループを実行するスキル。`/impl #N` の形式で使用する。
+name: start-issue
+description: issue番号を引数に取り、orchestrate-issueエージェントを起動して実装・レビューループを実行するスキル。`/start-issue #N` の形式で使用する。
 ---
 
 ## 使用方法
 
 ```
-/impl #N
+/start-issue #N
 ```
 
 `N` には実装対象のissue番号を指定する。
