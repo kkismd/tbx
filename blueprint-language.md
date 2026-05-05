@@ -790,6 +790,7 @@ CALL命令はオペランドに `arity`（引数の数）と `local_count`（ロ
 | -------------- | ---------- | ---- |
 | PUTSTR         | `Cell::StringDesc` または `Cell::Str` | 文字列を出力する |
 | PUTCHR         | 数値式 | ASCIIコードに対応する1文字を出力する |
+| PUTVAL         | 数値式 または　`Cell::StringDesc` または `Cell::Str` | データ型に応じて出力する |
 | PUTDEC         | 数値式 | 符号付き10進数で出力する |
 | PUTHEX         | 数値式 | `$` プレフィックス付き大文字16進数で出力する |
 
@@ -816,8 +817,9 @@ CALL命令はオペランドに `arity`（引数の数）と `local_count`（ロ
 
 | ステートメント | 説明 |
 | -------------- | ---- |
-| PRINTLN str    | PUTSTR str の後に改行を出力する |
-| NEWLINE        | 改行のみを出力する（`PUTCHR 10` 相当） |
+| PRINT val1, val2, ... | 引数の値を順に出力する |
+| PRINTLN val1, val2, ... | PRINTの後に改行を出力する |
+| CR        | 改行のみを出力する（`PUTCHR 10` 相当） |
 
 インタプリタ内部の文字列表現は以下の方針で実装する。
 
