@@ -837,8 +837,21 @@ impl VM {
                     // array pool.
                     let array_transferred = if let Cell::Array(pool_idx) = &retval {
                         if *pool_idx >= array_frame_boundary {
+                            // Before promoting, verify that none of the array's elements
+                            // are frame-local strings.  A frame-local Cell::Str has
+                            // pool_idx >= string_frame_boundary; promoting the array
+                            // would leave those strings dangling after truncation.
                             let idx = *pool_idx;
+                            for elem in &self.arrays[idx] {
+                                if let Cell::Str(s_idx) = elem {
+                                    if *s_idx >= string_frame_boundary {
+                                        return Err(TbxError::StringFrameEscape);
+                                    }
+                                }
+                            }
                             self.arrays.swap(idx, array_frame_boundary);
+                            // Truncate once here; the truncate inside the ReturnFrame::Call
+                            // branch is intentionally omitted for the transferred case.
                             self.arrays.truncate(array_frame_boundary + 1);
                             retval = Cell::Array(array_frame_boundary);
                             true
@@ -863,12 +876,11 @@ impl VM {
                             actual_arity: _,
                         } => {
                             self.data_stack.truncate(self.bp);
-                            // When an array was transferred to the caller's frame,
-                            // keep it at saved_array_pool_len (the boundary slot);
-                            // otherwise restore the pool to its pre-call length.
-                            if array_transferred {
-                                self.arrays.truncate(saved_array_pool_len + 1);
-                            } else {
+                            // When an array was transferred, truncation was already
+                            // performed above (array pool ends at saved_array_pool_len + 1).
+                            // For non-transferred cases, restore the pool to its pre-call
+                            // length.
+                            if !array_transferred {
                                 self.arrays.truncate(saved_array_pool_len);
                             }
                             self.strings.truncate(saved_string_pool_len);
@@ -2942,6 +2954,53 @@ mod tests {
             result.unwrap().trim(),
             "6",
             "array must propagate correctly through multi-level returns"
+        );
+    }
+
+    #[test]
+    fn test_array_with_frame_local_str_escape_is_error() {
+        // An array that contains a frame-local Cell::Str element must not be
+        // promoted via RETURN_VAL; doing so would leave the string dangling after
+        // the frame's string pool is truncated.  Expect StringFrameEscape.
+        let result = run_source(
+            "DEF BAD_RETURN()\n\
+             VAR A\n\
+             VAR S\n\
+             LET A = ARRAY(1)\n\
+             LET S = STR(42)\n\
+             SET &A(1), S\n\
+             RETURN A\n\
+             END\n\
+             BAD_RETURN()",
+        );
+        assert!(
+            matches!(result, Err(crate::error::TbxError::StringFrameEscape)),
+            "expected StringFrameEscape when returning array with frame-local str, got: {result:?}"
+        );
+    }
+
+    #[test]
+    fn test_caller_owned_array_returnable_from_word() {
+        // A caller-owned array (pool_idx < saved_array_pool_len of the callee) is
+        // safe to return via RETURN_VAL without ownership transfer.
+        // OUTER creates an array, passes it into INNER, and INNER returns it back.
+        let result = run_source(
+            "DEF INNER(ARR)\n\
+             RETURN ARR\n\
+             END\n\
+             DEF OUTER()\n\
+             VAR A\n\
+             VAR R\n\
+             LET A = TO_ARRAY(5, 6, 7)\n\
+             LET R = INNER(A)\n\
+             RETURN R(1) + R(2) + R(3)\n\
+             END\n\
+             PUTVAL OUTER()",
+        );
+        assert_eq!(
+            result.unwrap().trim(),
+            "18",
+            "caller-owned array should pass through RETURN_VAL unchanged"
         );
     }
 }
