@@ -6,18 +6,18 @@ USE "lib/tests/helper.tbx"
 DEF TO_ARRAY_SUM()
   VAR A
   LET A = TO_ARRAY(1, 2, 3)
-  RETURN A(0) + A(1) + A(2)
+  RETURN A(1) + A(2) + A(3)
 END
 ASSERT TO_ARRAY_SUM() = 6
 
-# --- TO_ARRAY: element order is preserved (first arg -> index 0) ---
+# --- TO_ARRAY: element order is preserved (first arg -> index 1) ---
 
 DEF TO_ARRAY_ORDER()
   VAR A
   LET A = TO_ARRAY(10, 20, 30)
-  IF A(0) = 10
-    IF A(1) = 20
-      IF A(2) = 30
+  IF A(1) = 10
+    IF A(2) = 20
+      IF A(3) = 30
         RETURN 1
       ENDIF
     ENDIF
@@ -40,7 +40,7 @@ ASSERT TO_ARRAY_EMPTY() = 99
 DEF TO_ARRAY_ONE()
   VAR A
   LET A = TO_ARRAY(42)
-  RETURN A(0)
+  RETURN A(1)
 END
 ASSERT TO_ARRAY_ONE() = 42
 
@@ -49,8 +49,8 @@ ASSERT TO_ARRAY_ONE() = 42
 DEF TO_ARRAY_MUTATE()
   VAR A
   LET A = TO_ARRAY(1, 2, 3)
-  SET &A(1), 99
-  RETURN A(0) + A(1) + A(2)
+  SET &A(2), 99
+  RETURN A(1) + A(2) + A(3)
 END
 ASSERT TO_ARRAY_MUTATE() = 103
 
@@ -93,9 +93,9 @@ ASSERT FROM_ARRAY_EMPTY_STMT() = 2
 DEF ROUNDTRIP()
   VAR A
   LET A = TO_ARRAY(100, 200, 300)
-  IF A(0) = 100
-    IF A(1) = 200
-      IF A(2) = 300
+  IF A(1) = 100
+    IF A(2) = 200
+      IF A(3) = 300
         RETURN 1
       ENDIF
     ENDIF

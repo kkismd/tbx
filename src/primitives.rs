@@ -1441,6 +1441,9 @@ pub fn array_prim(vm: &mut VM) -> Result<(), TbxError> {
 /// ARRAY_GET — read an element from an array.
 ///
 /// Stack: `[..., Cell::Array(pool_idx), Cell::Int(elem_idx)]` → `value`
+///
+/// Array indices are 1-based from the user's perspective: valid range is `1..=N`.
+/// The index is translated to 0-based internally before accessing the Vec.
 pub fn array_get_prim(vm: &mut VM) -> Result<(), TbxError> {
     let elem_idx_raw = vm.pop_int()?;
     let pool_idx = match vm.pop()? {
@@ -1452,18 +1455,20 @@ pub fn array_get_prim(vm: &mut VM) -> Result<(), TbxError> {
             })
         }
     };
-    if elem_idx_raw < 0 {
-        return Err(TbxError::ArrayIndexOutOfBounds {
-            index: elem_idx_raw,
-            size: vm.arrays.get(pool_idx).map(|a| a.len()).unwrap_or(0),
-        });
-    }
-    let elem_idx = elem_idx_raw as usize;
     let arr = vm.arrays.get(pool_idx).ok_or(TbxError::IndexOutOfBounds {
         index: pool_idx,
         size: vm.arrays.len(),
     })?;
     let size = arr.len();
+    // Translate 1-based user index to 0-based internal index.
+    // Index 0 or negative is out of bounds.
+    if elem_idx_raw < 1 {
+        return Err(TbxError::ArrayIndexOutOfBounds {
+            index: elem_idx_raw,
+            size,
+        });
+    }
+    let elem_idx = (elem_idx_raw - 1) as usize;
     if elem_idx >= size {
         return Err(TbxError::ArrayIndexOutOfBounds {
             index: elem_idx_raw,
@@ -1478,6 +1483,9 @@ pub fn array_get_prim(vm: &mut VM) -> Result<(), TbxError> {
 /// ARRAY_ADDR — compute the address of an array element.
 ///
 /// Stack: `[..., Cell::Array(pool_idx), Cell::Int(elem_idx)]` → `Cell::ArrayAddr { pool_idx, elem_idx }`
+///
+/// Array indices are 1-based from the user's perspective: valid range is `1..=N`.
+/// The index is translated to 0-based internally before storing in `Cell::ArrayAddr`.
 pub fn array_addr_prim(vm: &mut VM) -> Result<(), TbxError> {
     let elem_idx_raw = vm.pop_int()?;
     let pool_idx = match vm.pop()? {
@@ -1489,19 +1497,21 @@ pub fn array_addr_prim(vm: &mut VM) -> Result<(), TbxError> {
             })
         }
     };
-    if elem_idx_raw < 0 {
-        return Err(TbxError::ArrayIndexOutOfBounds {
-            index: elem_idx_raw,
-            size: vm.arrays.get(pool_idx).map(|a| a.len()).unwrap_or(0),
-        });
-    }
-    let elem_idx = elem_idx_raw as usize;
     // Validate bounds at address-computation time.
     let arr = vm.arrays.get(pool_idx).ok_or(TbxError::IndexOutOfBounds {
         index: pool_idx,
         size: vm.arrays.len(),
     })?;
     let size = arr.len();
+    // Translate 1-based user index to 0-based internal index.
+    // Index 0 or negative is out of bounds.
+    if elem_idx_raw < 1 {
+        return Err(TbxError::ArrayIndexOutOfBounds {
+            index: elem_idx_raw,
+            size,
+        });
+    }
+    let elem_idx = (elem_idx_raw - 1) as usize;
     if elem_idx >= size {
         return Err(TbxError::ArrayIndexOutOfBounds {
             index: elem_idx_raw,
@@ -6252,11 +6262,24 @@ mod tests {
 
     #[test]
     fn test_array_get_prim_reads_element() {
+        // User index 1 maps to internal index 0.
         let mut vm = VM::new();
         vm.arrays
             .push(vec![Cell::Int(10), Cell::Int(20), Cell::Int(30)]);
         vm.push(Cell::Array(0)).unwrap();
         vm.push(Cell::Int(1)).unwrap();
+        array_get_prim(&mut vm).unwrap();
+        assert_eq!(vm.pop(), Ok(Cell::Int(10)));
+    }
+
+    #[test]
+    fn test_array_get_prim_reads_second_element() {
+        // User index 2 maps to internal index 1.
+        let mut vm = VM::new();
+        vm.arrays
+            .push(vec![Cell::Int(10), Cell::Int(20), Cell::Int(30)]);
+        vm.push(Cell::Array(0)).unwrap();
+        vm.push(Cell::Int(2)).unwrap();
         array_get_prim(&mut vm).unwrap();
         assert_eq!(vm.pop(), Ok(Cell::Int(20)));
     }
@@ -6270,6 +6293,19 @@ mod tests {
         assert!(matches!(
             array_get_prim(&mut vm),
             Err(TbxError::ArrayIndexOutOfBounds { index: 5, size: 1 })
+        ));
+    }
+
+    #[test]
+    fn test_array_get_prim_zero_index_is_out_of_bounds() {
+        // Index 0 is invalid in 1-based indexing.
+        let mut vm = VM::new();
+        vm.arrays.push(vec![Cell::Int(1)]);
+        vm.push(Cell::Array(0)).unwrap();
+        vm.push(Cell::Int(0)).unwrap();
+        assert!(matches!(
+            array_get_prim(&mut vm),
+            Err(TbxError::ArrayIndexOutOfBounds { index: 0, .. })
         ));
     }
 
@@ -6289,6 +6325,7 @@ mod tests {
 
     #[test]
     fn test_array_addr_prim_pushes_array_addr() {
+        // User index 1 maps to internal elem_idx 0.
         let mut vm = VM::new();
         vm.arrays.push(vec![Cell::Int(0), Cell::Int(0)]);
         vm.push(Cell::Array(0)).unwrap();
@@ -6298,9 +6335,22 @@ mod tests {
             vm.pop(),
             Ok(Cell::ArrayAddr {
                 pool_idx: 0,
-                elem_idx: 1
+                elem_idx: 0
             })
         );
+    }
+
+    #[test]
+    fn test_array_addr_prim_zero_index_is_out_of_bounds() {
+        // Index 0 is invalid in 1-based indexing.
+        let mut vm = VM::new();
+        vm.arrays.push(vec![Cell::Int(0), Cell::Int(0)]);
+        vm.push(Cell::Array(0)).unwrap();
+        vm.push(Cell::Int(0)).unwrap();
+        assert!(matches!(
+            array_addr_prim(&mut vm),
+            Err(TbxError::ArrayIndexOutOfBounds { index: 0, .. })
+        ));
     }
 
     // --- store_prim with ArrayFrameEscape guard ---

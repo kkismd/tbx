@@ -6,10 +6,10 @@ USE "lib/tests/helper.tbx"
 DEF MAKE_AND_READ()
   VAR A
   LET A = ARRAY(3)
-  SET &A(0), 10
-  SET &A(1), 20
-  SET &A(2), 30
-  RETURN A(0) + A(1) + A(2)
+  SET &A(1), 10
+  SET &A(2), 20
+  SET &A(3), 30
+  RETURN A(1) + A(2) + A(3)
 END
 ASSERT MAKE_AND_READ() = 60
 
@@ -19,7 +19,7 @@ DEF FIRST_ELEM_IS_NONE()
   VAR A
   LET A = ARRAY(5)
   # Cell::None is falsy, so this checks the initial value
-  IF A(0) = 0
+  IF A(1) = 0
     RETURN 1
   ENDIF
   RETURN 0
@@ -35,9 +35,9 @@ DEF TWO_ARRAYS()
   VAR B
   LET A = ARRAY(2)
   LET B = ARRAY(2)
-  SET &A(0), 100
-  SET &B(0), 200
-  RETURN A(0) + B(0)
+  SET &A(1), 100
+  SET &B(1), 200
+  RETURN A(1) + B(1)
 END
 ASSERT TWO_ARRAYS() = 300
 
@@ -46,8 +46,8 @@ ASSERT TWO_ARRAYS() = 300
 DEF INNER()
   VAR A
   LET A = ARRAY(3)
-  SET &A(0), 42
-  RETURN A(0)
+  SET &A(1), 42
+  RETURN A(1)
 END
 
 DEF OUTER()
@@ -75,10 +75,10 @@ DEF SUM_ARRAY(N)
   VAR I
   VAR S
   LET A = ARRAY(N)
-  LET I = 0
+  LET I = 1
   LET S = 0
-  WHILE I < N
-    SET &A(I), I * 2
+  WHILE I <= N
+    SET &A(I), (I - 1) * 2
     LET S = S + A(I)
     LET I = I + 1
   ENDWH

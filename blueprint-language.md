@@ -596,15 +596,16 @@ CALL実行時にコンパイル時確定のローカル変数スロット数を 
 DEF MYWORD
   VAR A
   LET A = ARRAY(5)    ' create an array of 5 elements
-  SET &A(0), 42       ' write to element 0
-  PUTDEC A(1)         ' read element 1
-  PUTDEC &A(2)        ' get address of element 2
+  SET &A(1), 42       ' write to element 1 (1-based index)
+  PUTDEC A(2)         ' read element 2
+  PUTDEC &A(3)        ' get address of element 3
 END
 ```
 
 - `ARRAY(N)` — N 要素の配列を VM の配列プール（`VM::arrays`）に確保し、`Cell::Array(pool_idx)` をスタックに積む。N は正の整数でなければならない
-- `A(I)` — 配列変数 A の I 番目要素を読み出す（`FETCH` 経由）
-- `&A(I)` — 配列変数 A の I 番目要素のアドレス（`Cell::ArrayAddr { pool_idx, elem_idx }`）を返す。`STORE` / `SET` で書き込める
+- `A(I)` — 配列変数 A の I 番目要素を読み出す（`FETCH` 経由）。インデックスは **1 オリジン**（有効範囲: `1..=N`）。インデックス 0 以下は `ArrayIndexOutOfBounds` エラー
+- `&A(I)` — 配列変数 A の I 番目要素のアドレス（`Cell::ArrayAddr { pool_idx, elem_idx }`）を返す。`STORE` / `SET` で書き込める。インデックスは 1 オリジン
+- 内部実装では Rust の `Vec`（`vm.arrays`）を 0 オリジンで管理し、ユーザーインデックス `I` を `I - 1` に変換してアクセスする
 - **スコープとライフタイム**: 配列には「フレームローカル配列」と「グローバル配列」の2種類がある（Issue #454）
 
 ##### 配列のスコープ・ライフタイム
