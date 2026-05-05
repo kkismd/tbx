@@ -532,6 +532,59 @@ pub fn puthex_prim(vm: &mut VM) -> Result<(), TbxError> {
     Ok(())
 }
 
+/// PUTVAL — output any user-facing Cell value to the output buffer.
+///
+/// Dispatches on Cell type:
+///   Int    → decimal string
+///   Float  → floating-point string (same as Cell::Float Display)
+///   Bool   → "TRUE" or "FALSE"
+///   StringDesc / Str → resolved string content
+///   other  → TypeError
+pub fn putval_prim(vm: &mut VM) -> Result<(), TbxError> {
+    let cell = vm.pop()?;
+    match cell {
+        Cell::Int(n) => vm.write_output(&n.to_string()),
+        Cell::Float(v) => {
+            // Mirror Cell::Float Display: finite values always include a decimal
+            // point (e.g. 1.0 → "1.0"), non-finite values are printed as-is.
+            let s = if v.is_finite() {
+                let raw = format!("{v}");
+                if raw.contains('.') || raw.contains('e') {
+                    raw
+                } else {
+                    format!("{v}.0")
+                }
+            } else {
+                format!("{v}")
+            };
+            vm.write_output(&s);
+        }
+        Cell::Bool(b) => vm.write_output(if b { "TRUE" } else { "FALSE" }),
+        Cell::StringDesc(idx) => {
+            let s = vm.resolve_string(idx)?;
+            vm.write_output(&s);
+        }
+        Cell::Str(idx) => {
+            let s = vm
+                .strings
+                .get(idx)
+                .cloned()
+                .ok_or(TbxError::IndexOutOfBounds {
+                    index: idx,
+                    size: vm.strings.len(),
+                })?;
+            vm.write_output(&s);
+        }
+        other => {
+            return Err(TbxError::TypeError {
+                expected: "Int, Float, Bool, or Str",
+                got: other.type_name(),
+            })
+        }
+    }
+    Ok(())
+}
+
 /// APPEND — pop a Cell and write it to dictionary[dp], advancing dp by 1.
 pub fn append_prim(vm: &mut VM) -> Result<(), TbxError> {
     let cell = vm.pop()?;
@@ -2119,6 +2172,7 @@ pub fn register_all(vm: &mut VM) {
     vm.register(WordEntry::new_primitive("PUTCHR", putchr_prim));
     vm.register(WordEntry::new_primitive("PUTDEC", putdec_prim));
     vm.register(WordEntry::new_primitive("PUTHEX", puthex_prim));
+    vm.register(WordEntry::new_primitive("PUTVAL", putval_prim));
     vm.register(WordEntry::new_primitive("GETDEC", getdec_prim));
     vm.register(WordEntry::new_primitive("GETSTR", getstr_prim));
     vm.register(WordEntry::new_primitive("APPEND", append_prim));
@@ -3643,6 +3697,87 @@ mod tests {
         vm.push(Cell::Bool(true)).unwrap();
         assert!(matches!(
             puthex_prim(&mut vm),
+            Err(TbxError::TypeError { .. })
+        ));
+    }
+
+    // --- PUTVAL tests ---
+
+    #[test]
+    fn test_putval_int() {
+        let mut vm = VM::new();
+        vm.push(Cell::Int(42)).unwrap();
+        putval_prim(&mut vm).unwrap();
+        assert_eq!(vm.take_output(), "42");
+    }
+
+    #[test]
+    fn test_putval_float() {
+        let mut vm = VM::new();
+        vm.push(Cell::Float(1.0)).unwrap();
+        putval_prim(&mut vm).unwrap();
+        assert_eq!(vm.take_output(), "1.0");
+    }
+
+    #[test]
+    fn test_putval_float_fractional() {
+        let mut vm = VM::new();
+        vm.push(Cell::Float(2.5)).unwrap();
+        putval_prim(&mut vm).unwrap();
+        assert_eq!(vm.take_output(), "2.5");
+    }
+
+    #[test]
+    fn test_putval_bool_true() {
+        let mut vm = VM::new();
+        vm.push(Cell::Bool(true)).unwrap();
+        putval_prim(&mut vm).unwrap();
+        assert_eq!(vm.take_output(), "TRUE");
+    }
+
+    #[test]
+    fn test_putval_bool_false() {
+        let mut vm = VM::new();
+        vm.push(Cell::Bool(false)).unwrap();
+        putval_prim(&mut vm).unwrap();
+        assert_eq!(vm.take_output(), "FALSE");
+    }
+
+    #[test]
+    fn test_putval_strdesc() {
+        let mut vm = VM::new();
+        let idx = vm.intern_string("hello").unwrap();
+        vm.push(Cell::StringDesc(idx)).unwrap();
+        putval_prim(&mut vm).unwrap();
+        assert_eq!(vm.take_output(), "hello");
+    }
+
+    #[test]
+    fn test_putval_str() {
+        let mut vm = VM::new();
+        vm.strings.push("world".to_string());
+        vm.push(Cell::Str(0)).unwrap();
+        putval_prim(&mut vm).unwrap();
+        assert_eq!(vm.take_output(), "world");
+    }
+
+    #[test]
+    fn test_putval_none_error() {
+        let mut vm = VM::new();
+        vm.push(Cell::None).unwrap();
+        assert!(matches!(
+            putval_prim(&mut vm),
+            Err(TbxError::TypeError { .. })
+        ));
+    }
+
+    #[test]
+    fn test_putval_array_error() {
+        let mut vm = VM::new();
+        vm.push(Cell::Int(3)).unwrap();
+        array_prim(&mut vm).unwrap();
+        assert!(matches!(
+            putval_prim(&mut vm),
             Err(TbxError::TypeError { .. })
         ));
     }
