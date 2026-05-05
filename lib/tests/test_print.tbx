@@ -1,0 +1,27 @@
+# lib/tests/test_print.tbx — TBX tests for PRINT, PRINTLN
+
+## PRINT test
+# no args
+PRINT
+# single number
+PRINT 10
+PRINT 12.34
+# string literal
+PRINT "STR"
+# runtime string
+PRINT STR(10)
+# multiple values
+PRINT 10, 12.34, STR(10)
+
+## PRINTLN test
+# no args
+PRINTLN
+# single number
+PRINTLN 10
+PRINTLN 12.34
+# string literal
+PRINTLN "STR"
+# runtime string
+PRINTLN STR(10)
+# multiple values
+PRINTLN 10, 12.34, STR(10)
