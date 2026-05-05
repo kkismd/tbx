@@ -3,6 +3,7 @@ use crate::constants::{MAX_DATA_STACK_DEPTH, MAX_DICTIONARY_CELLS, MAX_RETURN_ST
 use crate::dict::{EntryKind, WordEntry};
 use crate::error::TbxError;
 use crate::lexer::SpannedToken;
+use rand::SeedableRng;
 use std::collections::HashMap;
 use std::collections::VecDeque;
 use std::io::{BufRead, BufReader, Write};
@@ -217,6 +218,13 @@ pub struct VM {
     /// The field is not included in the `Debug` output because `dyn Write` does
     /// not implement `Debug`.
     pub output_writer: Box<dyn Write + Send>,
+    /// Random number generator state.
+    ///
+    /// Uses `SmallRng` (non-cryptographic, fast) for game and simulation use cases.
+    /// Initialized from OS entropy in `new()`.  Can be reseeded with a fixed seed
+    /// for deterministic testing via `SmallRng::seed_from_u64(seed)`.
+    /// Re-seeded from OS entropy by the RANDOMIZE primitive.
+    pub rng: rand::rngs::SmallRng,
 }
 
 impl VM {
@@ -262,6 +270,7 @@ impl VM {
             input_buffer: None,
             input_reader: Box::new(BufReader::new(std::io::stdin())),
             output_writer: Box::new(std::io::stdout()),
+            rng: rand::rngs::SmallRng::from_entropy(),
         }
     }
 

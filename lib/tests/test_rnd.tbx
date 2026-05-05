@@ -1,0 +1,37 @@
+# lib/tests/test_rnd.tbx — TBX integration tests for RND / RANDOMIZE / SHUFFLE
+USE "lib/tests/helper.tbx"
+
+# --- RND(1) must always return 1 ---
+
+ASSERT RND(1) = 1
+
+# --- RND(6) result must be in [1, 6] ---
+
+VAR X
+SET &X, RND(6)
+ASSERT X >= 1
+ASSERT X <= 6
+
+# --- RANDOMIZE must complete without error ---
+
+RANDOMIZE
+
+# --- SHUFFLE must preserve the number of elements ---
+
+DEF SHUFFLE_PRESERVES_LEN()
+  VAR A
+  LET A = TO_ARRAY(1, 2, 3, 4, 5)
+  SHUFFLE A
+  RETURN ARRAY_LEN(A)
+END
+ASSERT SHUFFLE_PRESERVES_LEN() = 5
+
+# --- SHUFFLE used as a function expression returns the same array handle ---
+
+DEF SHUFFLE_RETURNS_ARRAY()
+  VAR A
+  LET A = TO_ARRAY(10, 20, 30)
+  LET A = SHUFFLE(A)
+  RETURN ARRAY_LEN(A)
+END
+ASSERT SHUFFLE_RETURNS_ARRAY() = 3
