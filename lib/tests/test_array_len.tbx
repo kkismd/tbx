@@ -17,20 +17,20 @@ DEF LEN_ONE()
 END
 ASSERT LEN_ONE() = 1
 
-# Use ARRAY_LEN in a WHILE loop condition
+# Use ARRAY_LEN in a WHILE loop condition (1-based indices)
 DEF SUM_WITH_LEN(N)
   VAR A
   VAR I
   VAR S
   LET A = ARRAY(N)
-  LET I = 0
+  LET I = 1
   LET S = 0
-  WHILE I < N
-    SET &A(I), I + 1
+  WHILE I <= N
+    SET &A(I), I
     LET I = I + 1
   ENDWH
-  LET I = 0
-  WHILE I < ARRAY_LEN(A)
+  LET I = 1
+  WHILE I <= ARRAY_LEN(A)
     LET S = S + A(I)
     LET I = I + 1
   ENDWH

@@ -64,3 +64,22 @@ fn test_sqrt_negative_int_is_error() {
         .expect_err("sqrt of negative should fail");
     assert!(err.to_string().contains("sqrt of negative"), "{err}");
 }
+
+#[test]
+fn test_array_index_zero_is_out_of_bounds() {
+    use std::path::PathBuf;
+    let base = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let mut interp = Interpreter::new();
+    interp
+        .set_base_dir(base)
+        .expect("CARGO_MANIFEST_DIR is always absolute");
+    // Array indices are 1-based; index 0 must return ArrayIndexOutOfBounds.
+    let src = "DEF T()\n  VAR A\n  LET A = ARRAY(3)\n  RETURN A(0)\nEND\nT()\n";
+    let err = interp
+        .exec_source(src)
+        .expect_err("index 0 should be out of bounds");
+    assert!(
+        err.to_string().contains("array index out of bounds"),
+        "expected 'array index out of bounds', got: {err}"
+    );
+}
