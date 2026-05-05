@@ -11,7 +11,7 @@ PRINT "STR"
 # runtime string
 PRINT STR(10)
 # multiple values
-PRINT 10, 12,34, STR(10)
+PRINT 10, 12.34, STR(10)
 
 ## PRINTLN test
 # no args
