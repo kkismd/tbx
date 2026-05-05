@@ -2201,6 +2201,7 @@ pub fn unixtime_prim(vm: &mut VM) -> Result<(), TbxError> {
 /// HOUR — extract the UTC hour (0–23) from a Unix timestamp.
 ///
 /// Accepts both `Float` and `Int`; promotes `Int` to `f64` for the computation.
+/// Returns `InvalidArgument` if `t` is negative.
 ///
 /// Stack signature: `( t:Float -- h:Int )`
 pub fn hour_prim(vm: &mut VM) -> Result<(), TbxError> {
@@ -2209,6 +2210,11 @@ pub fn hour_prim(vm: &mut VM) -> Result<(), TbxError> {
         Cell::Int(i) => i as f64,
         _ => unreachable!("pop_number guarantees Int or Float"),
     };
+    if t < 0.0 {
+        return Err(TbxError::InvalidArgument {
+            message: "HOUR requires a non-negative timestamp".to_string(),
+        });
+    }
     let h = (t as i64 / 3600) % 24;
     vm.push(Cell::Int(h))
 }
@@ -2216,6 +2222,7 @@ pub fn hour_prim(vm: &mut VM) -> Result<(), TbxError> {
 /// MIN — extract the UTC minute (0–59) from a Unix timestamp.
 ///
 /// Accepts both `Float` and `Int`; promotes `Int` to `f64` for the computation.
+/// Returns `InvalidArgument` if `t` is negative.
 ///
 /// Stack signature: `( t:Float -- m:Int )`
 pub fn min_prim(vm: &mut VM) -> Result<(), TbxError> {
@@ -2224,6 +2231,11 @@ pub fn min_prim(vm: &mut VM) -> Result<(), TbxError> {
         Cell::Int(i) => i as f64,
         _ => unreachable!("pop_number guarantees Int or Float"),
     };
+    if t < 0.0 {
+        return Err(TbxError::InvalidArgument {
+            message: "MIN requires a non-negative timestamp".to_string(),
+        });
+    }
     let m = (t as i64 / 60) % 60;
     vm.push(Cell::Int(m))
 }
@@ -2232,6 +2244,7 @@ pub fn min_prim(vm: &mut VM) -> Result<(), TbxError> {
 ///
 /// Returns a `Float` that preserves the sub-second fractional part of `t`.
 /// Accepts both `Float` and `Int`; promotes `Int` to `f64` for the computation.
+/// Returns `InvalidArgument` if `t` is negative.
 ///
 /// Stack signature: `( t:Float -- s:Float )`
 pub fn sec_prim(vm: &mut VM) -> Result<(), TbxError> {
@@ -2240,6 +2253,11 @@ pub fn sec_prim(vm: &mut VM) -> Result<(), TbxError> {
         Cell::Int(i) => i as f64,
         _ => unreachable!("pop_number guarantees Int or Float"),
     };
+    if t < 0.0 {
+        return Err(TbxError::InvalidArgument {
+            message: "SEC requires a non-negative timestamp".to_string(),
+        });
+    }
     let s = (t as i64 % 60) as f64 + t.fract();
     vm.push(Cell::Float(s))
 }
