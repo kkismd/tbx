@@ -1,6 +1,6 @@
 ---
 name: orchestrate-issue
-description: TBXプロジェクトのissueに対して「実装→レビュー→修正」のループを管理するオーケストレーターエージェント。`implement-issue` でPRを作成し、`review-implementation` でレビューし、指摘があれば修正依頼→再レビューを最大3回繰り返す。修正サイクルを1回以上実施した場合は最終レビューを実施してユーザーに報告する。
+description: TBXプロジェクトのissueに対して「実装→レビュー→修正」のループを管理するオーケストレーターエージェント。サブエージェントの`implement-issue` にPR作成を依頼し、サブエージェントの`review-implementation` にレビューを依頼し、指摘があればサブエージェントのfix-prに修正を依頼し→再レビュー依頼を最大3回繰り返す。修正サイクルを1回以上実施した場合は最終レビューを実施してユーザーに報告する。
 ---
 
 ## 役割
@@ -29,8 +29,6 @@ gh issue view <N> --json title,body,state
 issueが `open` 状態であることを確認する。`closed` の場合はユーザーに通知して終了する。
 
 ### ステップ2：implement-issue エージェントの起動
-
-※Skillツールは使用禁止。必ず Agent ツールで subagent_type を指定すること
 
 Agent ツールで `subagent_type: "implement-issue"` を指定し、以下のプロンプトでサブエージェントを起動してPRを作成させる：
 
@@ -76,8 +74,6 @@ echo "<PR番号>" > .tmp/orchestrate_pr.txt
    ```
    PR #<PR番号> をレビューしてください
    ```
-※Skillツールは使用禁止。必ず Agent ツールで subagent_type を指定すること
-
 
 3. レビュー完了後、コメント・レビューを再取得し、新しいコメントを特定する：
 

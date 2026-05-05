@@ -6,6 +6,7 @@ use crate::expr::ExprCompiler;
 use crate::lexer::Token;
 use crate::vm::{CompileState, VM};
 use std::collections::HashMap;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 /// DROP — discard the top element of the data stack.
 pub fn drop_prim(vm: &mut VM) -> Result<(), TbxError> {
@@ -2182,6 +2183,85 @@ pub fn shuffle_prim(vm: &mut VM) -> Result<(), TbxError> {
     vm.push(Cell::Array(pool_idx))
 }
 
+/// UNIXTIME — return the current time as seconds since the Unix epoch.
+///
+/// Uses `std::time::SystemTime` to obtain the current UTC time and returns
+/// the elapsed seconds as `f64`, preserving sub-second precision in the
+/// fractional part.
+///
+/// Stack signature: `( -- t:Float )`
+pub fn unixtime_prim(vm: &mut VM) -> Result<(), TbxError> {
+    let secs = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs_f64();
+    vm.push(Cell::Float(secs))
+}
+
+/// HOUR — extract the UTC hour (0–23) from a Unix timestamp.
+///
+/// Accepts both `Float` and `Int`; promotes `Int` to `f64` for the computation.
+/// Returns `InvalidArgument` if `t` is negative.
+///
+/// Stack signature: `( t:Float -- h:Int )`
+pub fn hour_prim(vm: &mut VM) -> Result<(), TbxError> {
+    let t = match vm.pop_number()? {
+        Cell::Float(f) => f,
+        Cell::Int(i) => i as f64,
+        _ => unreachable!("pop_number guarantees Int or Float"),
+    };
+    if t < 0.0 {
+        return Err(TbxError::InvalidArgument {
+            message: "HOUR requires a non-negative timestamp".to_string(),
+        });
+    }
+    let h = (t as i64 / 3600) % 24;
+    vm.push(Cell::Int(h))
+}
+
+/// MIN — extract the UTC minute (0–59) from a Unix timestamp.
+///
+/// Accepts both `Float` and `Int`; promotes `Int` to `f64` for the computation.
+/// Returns `InvalidArgument` if `t` is negative.
+///
+/// Stack signature: `( t:Float -- m:Int )`
+pub fn min_prim(vm: &mut VM) -> Result<(), TbxError> {
+    let t = match vm.pop_number()? {
+        Cell::Float(f) => f,
+        Cell::Int(i) => i as f64,
+        _ => unreachable!("pop_number guarantees Int or Float"),
+    };
+    if t < 0.0 {
+        return Err(TbxError::InvalidArgument {
+            message: "MIN requires a non-negative timestamp".to_string(),
+        });
+    }
+    let m = (t as i64 / 60) % 60;
+    vm.push(Cell::Int(m))
+}
+
+/// SEC — extract the UTC second (0.000–59.999) from a Unix timestamp.
+///
+/// Returns a `Float` that preserves the sub-second fractional part of `t`.
+/// Accepts both `Float` and `Int`; promotes `Int` to `f64` for the computation.
+/// Returns `InvalidArgument` if `t` is negative.
+///
+/// Stack signature: `( t:Float -- s:Float )`
+pub fn sec_prim(vm: &mut VM) -> Result<(), TbxError> {
+    let t = match vm.pop_number()? {
+        Cell::Float(f) => f,
+        Cell::Int(i) => i as f64,
+        _ => unreachable!("pop_number guarantees Int or Float"),
+    };
+    if t < 0.0 {
+        return Err(TbxError::InvalidArgument {
+            message: "SEC requires a non-negative timestamp".to_string(),
+        });
+    }
+    let s = (t as i64 % 60) as f64 + t.fract();
+    vm.push(Cell::Float(s))
+}
+
 /// Register all stack primitives into the VM's dictionary.
 pub fn register_all(vm: &mut VM) {
     vm.register(WordEntry::new_primitive("DROP", drop_prim));
@@ -2437,6 +2517,14 @@ pub fn register_all(vm: &mut VM) {
     vm.register(WordEntry::new_primitive("RND", rnd_prim));
     vm.register(WordEntry::new_primitive("RANDOMIZE", randomize_prim));
     vm.register(WordEntry::new_primitive("SHUFFLE", shuffle_prim));
+
+    // Time primitives.
+    // UNIXTIME returns the current Unix timestamp as a Float (seconds since epoch).
+    // HOUR / MIN / SEC extract UTC hour, minute, and second from a timestamp.
+    vm.register(WordEntry::new_primitive("UNIXTIME", unixtime_prim));
+    vm.register(WordEntry::new_primitive("HOUR", hour_prim));
+    vm.register(WordEntry::new_primitive("MIN", min_prim));
+    vm.register(WordEntry::new_primitive("SEC", sec_prim));
 }
 
 #[cfg(test)]
@@ -6795,5 +6883,115 @@ mod tests {
                 ..
             })
         ));
+    }
+
+    // --- unixtime_prim ---
+
+    #[test]
+    fn test_unixtime_returns_positive_float() {
+        // UNIXTIME must push a positive Float (seconds since Unix epoch).
+        let mut vm = VM::new();
+        unixtime_prim(&mut vm).unwrap();
+        match vm.pop().unwrap() {
+            Cell::Float(f) => assert!(f > 0.0, "UNIXTIME must be positive, got {f}"),
+            other => panic!("expected Float, got {other:?}"),
+        }
+    }
+
+    // --- hour_prim ---
+
+    // Unix timestamp 1_700_000_000 is 2023-11-14 22:13:20 UTC.
+    // (1_700_000_000 / 3600) % 24 = 22
+    #[test]
+    fn test_hour_known_timestamp() {
+        let mut vm = VM::new();
+        vm.push(Cell::Float(1_700_000_000.0)).unwrap();
+        hour_prim(&mut vm).unwrap();
+        assert_eq!(vm.pop(), Ok(Cell::Int(22)));
+    }
+
+    #[test]
+    fn test_hour_accepts_int() {
+        // INT input must be promoted and yield the same result as Float.
+        let mut vm = VM::new();
+        vm.push(Cell::Int(1_700_000_000)).unwrap();
+        hour_prim(&mut vm).unwrap();
+        assert_eq!(vm.pop(), Ok(Cell::Int(22)));
+    }
+
+    #[test]
+    fn test_hour_type_error() {
+        let mut vm = VM::new();
+        vm.push(Cell::Bool(true)).unwrap();
+        assert!(matches!(
+            hour_prim(&mut vm),
+            Err(TbxError::TypeError { .. })
+        ));
+    }
+
+    // --- min_prim ---
+
+    // 1_700_000_000 = 28333333 minutes + 20 s  →  (28333333) % 60 = 13
+    #[test]
+    fn test_min_known_timestamp() {
+        let mut vm = VM::new();
+        vm.push(Cell::Float(1_700_000_000.0)).unwrap();
+        min_prim(&mut vm).unwrap();
+        assert_eq!(vm.pop(), Ok(Cell::Int(13)));
+    }
+
+    #[test]
+    fn test_min_accepts_int() {
+        let mut vm = VM::new();
+        vm.push(Cell::Int(1_700_000_000)).unwrap();
+        min_prim(&mut vm).unwrap();
+        assert_eq!(vm.pop(), Ok(Cell::Int(13)));
+    }
+
+    #[test]
+    fn test_min_type_error() {
+        let mut vm = VM::new();
+        vm.push(Cell::Bool(false)).unwrap();
+        assert!(matches!(min_prim(&mut vm), Err(TbxError::TypeError { .. })));
+    }
+
+    // --- sec_prim ---
+
+    // 1_700_000_000 % 60 = 20, fract = 0.0  →  20.0
+    #[test]
+    fn test_sec_known_timestamp() {
+        let mut vm = VM::new();
+        vm.push(Cell::Float(1_700_000_000.0)).unwrap();
+        sec_prim(&mut vm).unwrap();
+        assert_eq!(vm.pop(), Ok(Cell::Float(20.0)));
+    }
+
+    #[test]
+    fn test_sec_preserves_fractional_part() {
+        // 1_700_000_000.75 → integer part 1_700_000_000 → seconds = 20, fract = 0.75
+        let mut vm = VM::new();
+        vm.push(Cell::Float(1_700_000_000.75)).unwrap();
+        sec_prim(&mut vm).unwrap();
+        match vm.pop().unwrap() {
+            Cell::Float(f) => {
+                assert!((f - 20.75).abs() < 1e-9, "expected ≈20.75, got {f}");
+            }
+            other => panic!("expected Float, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_sec_accepts_int() {
+        let mut vm = VM::new();
+        vm.push(Cell::Int(1_700_000_000)).unwrap();
+        sec_prim(&mut vm).unwrap();
+        assert_eq!(vm.pop(), Ok(Cell::Float(20.0)));
+    }
+
+    #[test]
+    fn test_sec_type_error() {
+        let mut vm = VM::new();
+        vm.push(Cell::Str(0)).unwrap();
+        assert!(matches!(sec_prim(&mut vm), Err(TbxError::TypeError { .. })));
     }
 }

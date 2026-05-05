@@ -66,6 +66,42 @@ fn test_sqrt_negative_int_is_error() {
 }
 
 #[test]
+fn test_hour_negative_timestamp_is_error() {
+    let mut interp = Interpreter::new();
+    let err = interp
+        .exec_source("HOUR -1.0\n")
+        .expect_err("HOUR with negative timestamp should fail");
+    assert!(
+        err.to_string().contains("non-negative"),
+        "expected 'non-negative' in error message, got: {err}"
+    );
+}
+
+#[test]
+fn test_min_negative_timestamp_is_error() {
+    let mut interp = Interpreter::new();
+    let err = interp
+        .exec_source("MIN -1.0\n")
+        .expect_err("MIN with negative timestamp should fail");
+    assert!(
+        err.to_string().contains("non-negative"),
+        "expected 'non-negative' in error message, got: {err}"
+    );
+}
+
+#[test]
+fn test_sec_negative_timestamp_is_error() {
+    let mut interp = Interpreter::new();
+    let err = interp
+        .exec_source("SEC -1.0\n")
+        .expect_err("SEC with negative timestamp should fail");
+    assert!(
+        err.to_string().contains("non-negative"),
+        "expected 'non-negative' in error message, got: {err}"
+    );
+}
+
+#[test]
 fn test_array_index_zero_is_out_of_bounds() {
     use std::path::PathBuf;
     let base = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
