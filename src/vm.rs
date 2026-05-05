@@ -848,7 +848,17 @@ impl VM {
                                         return Err(TbxError::StringFrameEscape);
                                     }
                                 }
+                                if let Cell::Array(inner_idx) = elem {
+                                    if *inner_idx >= array_frame_boundary {
+                                        return Err(TbxError::ArrayFrameEscape);
+                                    }
+                                }
                             }
+                            // Safety: idx >= array_frame_boundary (checked above) and
+                            // array_frame_boundary < self.arrays.len() (it was saved when the
+                            // frame was pushed, so at least one entry — the array being
+                            // promoted — exists at or beyond that index), so both indices are
+                            // valid and in-bounds.
                             self.arrays.swap(idx, array_frame_boundary);
                             // Truncate once here; the truncate inside the ReturnFrame::Call
                             // branch is intentionally omitted for the transferred case.
@@ -2976,6 +2986,29 @@ mod tests {
         assert!(
             matches!(result, Err(crate::error::TbxError::StringFrameEscape)),
             "expected StringFrameEscape when returning array with frame-local str, got: {result:?}"
+        );
+    }
+
+    #[test]
+    fn test_array_with_frame_local_array_element_escape_is_error() {
+        // An array that contains a frame-local Cell::Array element must not be
+        // promoted via RETURN_VAL; the inner array would be freed when the frame's
+        // array pool is truncated, leaving a dangling reference.
+        // Expect ArrayFrameEscape.
+        let result = run_source(
+            "DEF BAD_RETURN()\n\
+             VAR OUTER_A\n\
+             VAR INNER_A\n\
+             LET INNER_A = ARRAY(1)\n\
+             LET OUTER_A = ARRAY(1)\n\
+             SET &OUTER_A(1), INNER_A\n\
+             RETURN OUTER_A\n\
+             END\n\
+             BAD_RETURN()",
+        );
+        assert!(
+            matches!(result, Err(crate::error::TbxError::ArrayFrameEscape)),
+            "expected ArrayFrameEscape when returning array with frame-local array element, got: {result:?}"
         );
     }
 
