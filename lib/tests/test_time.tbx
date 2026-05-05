@@ -1,0 +1,33 @@
+# lib/tests/test_time.tbx — TBX integration tests for UNIXTIME / HOUR / MIN / SEC / HMS
+USE "lib/tests/helper.tbx"
+
+# --- UNIXTIME ---
+
+# UNIXTIME() must return a positive number (well past the Unix epoch).
+VAR T
+SET &T, UNIXTIME()
+ASSERT T > 0
+
+# --- HOUR / MIN / SEC with a known fixed timestamp ---
+#
+# Unix timestamp 1_700_000_000 is 2023-11-14 22:13:20 UTC.
+#   HOUR  = (1700000000 / 3600) % 24 = 22
+#   MIN   = (1700000000 / 60)   % 60 = 13
+#   SEC   = (1700000000 % 60)        = 20.0
+
+VAR TS
+SET &TS, 1700000000.0
+
+ASSERT HOUR(TS) = 22
+ASSERT MIN(TS) = 13
+ASSERT SEC(TS) = 20.0
+
+# SEC must preserve the fractional part.
+# 1700000000.75 -> seconds = 20 + 0.75 = 20.75
+ASSERT SEC(1700000000.75) = 20.75
+
+# INT arguments must be accepted (promoted to Float internally).
+ASSERT HOUR(1700000000) = 22
+ASSERT MIN(1700000000) = 13
+ASSERT SEC(1700000000) = 20.0
+
