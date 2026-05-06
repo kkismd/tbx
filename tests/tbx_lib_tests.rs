@@ -119,3 +119,52 @@ fn test_array_index_zero_is_out_of_bounds() {
         "expected 'array index out of bounds', got: {err}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Array element type restriction tests (issue #487)
+// ---------------------------------------------------------------------------
+
+/// SET &A(i), STR("...") must fail with InvalidArrayElement.
+#[test]
+fn test_set_str_into_array_is_invalid_element_type() {
+    let mut interp = Interpreter::new();
+    // Attempt to store a Str cell into an array element via SET.
+    let src = "DEF T()\n  VAR A\n  LET A = ARRAY(3)\n  SET &A(1), STR(\"hello\")\nEND\nT()\n";
+    let err = interp
+        .exec_source(src)
+        .expect_err("storing Str in array should fail");
+    assert!(
+        err.to_string().contains("invalid array element type"),
+        "expected 'invalid array element type', got: {err}"
+    );
+}
+
+/// TO_ARRAY(STR("a"), STR("b")) must fail with InvalidArrayElement.
+#[test]
+fn test_to_array_with_str_elements_is_error() {
+    let mut interp = Interpreter::new();
+    let src = "TO_ARRAY(STR(\"a\"), STR(\"b\"))\n";
+    let err = interp
+        .exec_source(src)
+        .expect_err("TO_ARRAY with Str elements should fail");
+    assert!(
+        err.to_string().contains("invalid array element type"),
+        "expected 'invalid array element type', got: {err}"
+    );
+}
+
+/// Storing a nested array (Cell::Array) as an element must fail.
+#[test]
+fn test_set_array_into_array_is_invalid_element_type() {
+    let mut interp = Interpreter::new();
+    // Create an outer array and a nested array, then try to store the inner in outer.
+    let src =
+        "DEF T()\n  VAR A, B\n  LET A = ARRAY(3)\n  LET B = ARRAY(2)\n  SET &A(1), B\nEND\nT()\n";
+    let err = interp
+        .exec_source(src)
+        .expect_err("storing Array in array element should fail");
+    assert!(
+        err.to_string().contains("invalid array element type"),
+        "expected 'invalid array element type', got: {err}"
+    );
+}

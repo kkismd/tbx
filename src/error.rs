@@ -186,6 +186,17 @@ pub enum TbxError {
         expected_min: usize,
         got: usize,
     },
+
+    /// A value of a type that is not permitted as an array element was stored.
+    ///
+    /// Array elements are restricted to scalar types (`Int`, `Float`, `Bool`, `None`).
+    /// Attempting to store a `Cell::Array` or `Cell::Str` value as an array element
+    /// is forbidden because it would introduce nested reference types that could
+    /// escape their owning stack frame.
+    InvalidArrayElement {
+        /// The type name of the value that was rejected (e.g. `"Array"`, `"Str"`).
+        got: &'static str,
+    },
 }
 
 impl std::fmt::Display for TbxError {
@@ -306,6 +317,12 @@ impl std::fmt::Display for TbxError {
                 write!(
                     f,
                     "wrong number of arguments: '{name}' expects at least {expected_min}, got {got}"
+                )
+            }
+            TbxError::InvalidArrayElement { got } => {
+                write!(
+                    f,
+                    "invalid array element type: {got} is not allowed; only Int, Float, Bool, and None are permitted"
                 )
             }
         }
