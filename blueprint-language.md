@@ -616,7 +616,7 @@ END
 - `pool_idx >= saved_array_pool_len`（呼び出しフレームの境界）の配列
 - EXIT / RETURN_VAL 時に `vm.arrays` を `saved_array_pool_len` まで切り詰めて解放する
 - `Cell::Array` 値を `VARIABLE` スロット（`DictAddr`）に書き込もうとすると `ArrayFrameEscape` エラーになる
-- ワード内で**新規生成した**配列（`pool_idx >= saved_array_pool_len`）は `RETURN` で返せない（`ArrayFrameEscape` エラー）。呼び出し元由来の配列（`pool_idx < saved_array_pool_len`）は `RETURN` で安全に返せる
+- ワード内で**新規生成した**配列（`pool_idx >= saved_array_pool_len`）は `RETURN` で所有権移譲して返せる（`Vec::swap` により配列スロットを `saved_array_pool_len` 位置に移動し、pool を切り詰めて返す）。呼び出し元由来の配列（`pool_idx < saved_array_pool_len`）も同様に返せる
 
 **グローバル配列**（トップレベル実行で生成した配列）:
 - `pool_idx < vm.global_array_pool_len` の配列
@@ -662,7 +662,7 @@ END
   4. `vm.arrays.push(vec)` で配列プールに追加
   5. `Cell::Array(pool_idx)` をスタックに push
 - `TO_ARRAY()` は 0 引数として扱われ、空配列 `Cell::Array` を生成する
-- `Cell::Array` のライフサイクルは `ARRAY(N)` と同じ規則に従う（EXIT/RETURN_VAL 時に解放、`ArrayFrameEscape` チェック有効）
+- `Cell::Array` のライフサイクルは `ARRAY(N)` と同じ規則に従う（EXIT 時に pool を切り詰めて解放、`STORE`/`SET` 経由のグローバル変数書き込みには `ArrayFrameEscape` チェック有効、`RETURN` による所有権移譲は許可）
 
 ```basic
 DEF ARRAYTEST
@@ -714,7 +714,7 @@ END
 - `pool_idx >= saved_string_pool_len`（呼び出しフレームの境界）の文字列
 - EXIT / RETURN_VAL 時に `vm.strings` を `saved_string_pool_len` まで切り詰めて解放する
 - `Cell::Str` 値を `VARIABLE` スロット（`DictAddr`）に書き込もうとすると `StringFrameEscape` エラーになる
-- ワード内で**新規生成した**文字列（`pool_idx >= saved_string_pool_len`）は `RETURN` で返せない（`StringFrameEscape` エラー）。呼び出し元由来の文字列（`pool_idx < saved_string_pool_len`）は `RETURN` で安全に返せる
+- ワード内で**新規生成した**文字列（`pool_idx >= saved_string_pool_len`）は `RETURN` で所有権移譲して返せる（`Vec::swap` により文字列スロットを `saved_string_pool_len` 位置に移動し、pool を切り詰めて返す）。呼び出し元由来の文字列（`pool_idx < saved_string_pool_len`）も同様に返せる
 
 **グローバル文字列**（トップレベル実行で生成した文字列）:
 - `pool_idx < vm.global_string_pool_len` の文字列
