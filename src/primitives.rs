@@ -74,20 +74,26 @@ pub fn fetch_prim(vm: &mut VM) -> Result<(), TbxError> {
     }
 }
 
-fn check_dict_reference_write(vm: &VM, value: &Cell) -> Result<(), TbxError> {
+fn check_dict_reference_write(vm: &mut VM, value: &Cell) -> Result<(), TbxError> {
     match value {
         Cell::Array(pool_idx) => {
-            if *pool_idx >= vm.global_array_pool_len && !vm.is_executing_top_level() {
-                Err(TbxError::ArrayFrameEscape)
-            } else {
+            if *pool_idx < vm.global_array_pool_len {
                 Ok(())
+            } else if vm.is_executing_top_level() {
+                vm.global_array_pool_len = *pool_idx + 1;
+                Ok(())
+            } else {
+                Err(TbxError::ArrayFrameEscape)
             }
         }
         Cell::Str(pool_idx) => {
-            if *pool_idx >= vm.global_string_pool_len && !vm.is_executing_top_level() {
-                Err(TbxError::StringFrameEscape)
-            } else {
+            if *pool_idx < vm.global_string_pool_len {
                 Ok(())
+            } else if vm.is_executing_top_level() {
+                vm.global_string_pool_len = *pool_idx + 1;
+                Ok(())
+            } else {
+                Err(TbxError::StringFrameEscape)
             }
         }
         _ => Ok(()),

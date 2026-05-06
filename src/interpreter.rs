@@ -2556,6 +2556,36 @@ PUTSTR S"#;
     }
 
     #[test]
+    fn test_compile_program_word_can_copy_top_level_array_global() {
+        let mut interp = Interpreter::new();
+        let src = r#"VAR A
+VAR B
+DEF COPY_ARRAY()
+  SET &B, A
+END
+SET &A, ARRAY(1)
+COPY_ARRAY
+PUTDEC ARRAY_LEN(B)"#;
+        interp.compile_program(src).unwrap();
+        assert_eq!(interp.take_output(), "1");
+    }
+
+    #[test]
+    fn test_compile_program_word_can_copy_top_level_str_global() {
+        let mut interp = Interpreter::new();
+        let src = r#"VAR S
+VAR T
+DEF COPY_STR()
+  SET &T, S
+END
+SET &S, STR_CONCAT("foo", "bar")
+COPY_STR
+PUTSTR T"#;
+        interp.compile_program(src).unwrap();
+        assert_eq!(interp.take_output(), "foobar");
+    }
+
+    #[test]
     fn test_compile_program_unclosed_def_is_error() {
         // A DEF without a matching END must return an error and leave the VM in a
         // clean state (compile_state = None) so that subsequent calls work correctly.
