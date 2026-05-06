@@ -159,22 +159,30 @@ pub enum TbxError {
         /// Human-readable description of the I/O error.
         reason: String,
     },
-    /// An array value escaped its owning stack frame.
+    /// An array value escaped its owning stack frame via a global variable write.
     ///
     /// Arrays (created with `ARRAY(N)`) that are created inside a word are bound
     /// to the stack frame in which they were created.  Attempting to store a
-    /// `Cell::Array` value into a global variable (via `DictAddr`) or return it
-    /// from a word (via `RETURN`) is forbidden, because the array pool is
+    /// frame-local `Cell::Array` value into a global variable (via `STORE` or
+    /// `SET` targeting a `DictAddr`) is forbidden, because the array pool is
     /// truncated on EXIT and the stored index would dangle.
+    ///
+    /// Note: returning a frame-local array via `RETURN` is allowed (ownership
+    /// transfer) — the array slot is moved to the caller's pool boundary instead
+    /// of being truncated.
     ArrayFrameEscape,
 
-    /// A runtime string value escaped its owning stack frame.
+    /// A runtime string value escaped its owning stack frame via a global variable write.
     ///
     /// Strings (created by `STR`, `STR_CONCAT`, etc.) that are created inside a
     /// word are bound to the stack frame in which they were created.  Attempting
-    /// to store a `Cell::Str` value into a global variable (via `DictAddr`) or
-    /// return it from a word (via `RETURN`) is forbidden, because the string pool
-    /// is truncated on EXIT and the stored index would dangle.
+    /// to store a frame-local `Cell::Str` value into a global variable (via
+    /// `STORE` or `SET` targeting a `DictAddr`) is forbidden, because the string
+    /// pool is truncated on EXIT and the stored index would dangle.
+    ///
+    /// Note: returning a frame-local string via `RETURN` is allowed (ownership
+    /// transfer) — the string slot is moved to the caller's pool boundary instead
+    /// of being truncated.
     StringFrameEscape,
 
     /// A variadic word was called with fewer arguments than its fixed parameter count.
