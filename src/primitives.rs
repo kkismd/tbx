@@ -158,6 +158,19 @@ pub fn set_prim(vm: &mut VM) -> Result<(), TbxError> {
     }
 }
 
+/// Check that `value` is a permitted array element type.
+///
+/// Array elements are restricted to scalar types: `Int`, `Float`, `Bool`, and
+/// `None`.  Nested reference types (`Array` and `Str`) are forbidden because
+/// they can introduce dangling references when the owning frame is cleaned up.
+fn check_array_element_type(value: &Cell) -> Result<(), TbxError> {
+    match value {
+        Cell::Array(_) => Err(TbxError::InvalidArrayElement { got: "Array" }),
+        Cell::Str(_) => Err(TbxError::InvalidArrayElement { got: "Str" }),
+        _ => Ok(()),
+    }
+}
+
 /// Write `value` to element `elem_idx` of the array at `pool_idx`.
 fn write_array_element(
     vm: &mut VM,
@@ -165,6 +178,8 @@ fn write_array_element(
     elem_idx: usize,
     value: Cell,
 ) -> Result<(), TbxError> {
+    // Reject reference types that could dangle when the owning frame is freed.
+    check_array_element_type(&value)?;
     let pool_size = vm.arrays.len();
     let arr = vm
         .arrays
@@ -1378,7 +1393,10 @@ pub fn to_array_prim(vm: &mut VM) -> Result<(), TbxError> {
     // Pop `count` values in reverse order, then reverse to restore original order.
     let mut elems: Vec<Cell> = Vec::with_capacity(count);
     for _ in 0..count {
-        elems.push(vm.pop()?);
+        let elem = vm.pop()?;
+        // Reject reference types that could dangle when the owning frame is freed.
+        check_array_element_type(&elem)?;
+        elems.push(elem);
     }
     elems.reverse();
     let pool_idx = vm.arrays.len();
