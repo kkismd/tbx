@@ -827,22 +827,39 @@ impl VM {
                             }
                             None => return Err(TbxError::StackUnderflow),
                         };
-                    let retval = self.pop()?;
-                    // Check for array escape before truncating the pool.
-                    // Arrays whose pool_idx is below the frame boundary were
-                    // created by the caller (or at the top level) and are safe to
-                    // return; only arrays allocated within this frame escape.
-                    if let Cell::Array(pool_idx) = &retval {
+                    let mut retval = self.pop()?;
+                    // Ownership transfer for frame-local Cell::Array:
+                    // If the returned array was created in this frame
+                    // (pool_idx >= array_frame_boundary), swap it to the
+                    // boundary slot and mark it for preservation.
+                    // Array elements are guaranteed to be Int/Float/Bool/None
+                    // (no nested references), so no recursive check is needed.
+                    let array_transferred = if let Cell::Array(pool_idx) = &retval {
                         if *pool_idx >= array_frame_boundary {
-                            return Err(TbxError::ArrayFrameEscape);
+                            self.arrays.swap(*pool_idx, array_frame_boundary);
+                            retval = Cell::Array(array_frame_boundary);
+                            true
+                        } else {
+                            false
                         }
-                    }
-                    // Check for string escape in the same way.
-                    if let Cell::Str(pool_idx) = &retval {
+                    } else {
+                        false
+                    };
+                    // Ownership transfer for frame-local Cell::Str:
+                    // If the returned string was created in this frame
+                    // (pool_idx >= string_frame_boundary), swap it to the
+                    // boundary slot and mark it for preservation.
+                    let string_transferred = if let Cell::Str(pool_idx) = &retval {
                         if *pool_idx >= string_frame_boundary {
-                            return Err(TbxError::StringFrameEscape);
+                            self.strings.swap(*pool_idx, string_frame_boundary);
+                            retval = Cell::Str(string_frame_boundary);
+                            true
+                        } else {
+                            false
                         }
-                    }
+                    } else {
+                        false
+                    };
                     match self.return_stack.pop().ok_or(TbxError::StackUnderflow)? {
                         ReturnFrame::Call {
                             return_pc,
@@ -852,8 +869,15 @@ impl VM {
                             actual_arity: _,
                         } => {
                             self.data_stack.truncate(self.bp);
-                            self.arrays.truncate(saved_array_pool_len);
-                            self.strings.truncate(saved_string_pool_len);
+                            // Truncate pools back to the saved boundary.
+                            // If ownership was transferred, the returned value now sits
+                            // at `saved_*_pool_len` (the boundary slot), so we keep
+                            // exactly one extra entry beyond the boundary.
+                            let array_keep = saved_array_pool_len + usize::from(array_transferred);
+                            let string_keep =
+                                saved_string_pool_len + usize::from(string_transferred);
+                            self.arrays.truncate(array_keep);
+                            self.strings.truncate(string_keep);
                             self.push(retval)?;
                             self.pc = return_pc;
                             self.bp = saved_bp;
@@ -2699,15 +2723,68 @@ mod tests {
     }
 
     #[test]
-    fn test_array_frame_escape_via_return_val_is_error() {
-        // Verify that returning a Cell::Array value via RETURN_VAL produces ArrayFrameEscape.
+    fn test_array_ownership_transfer_via_return_val() {
+        // Verify that returning a frame-local Cell::Array via RETURN_VAL succeeds
+        // (ownership transfer instead of escape error).
         let result = run_source(
-            "DEF BAD_RETURN()\n  VAR A\n  LET A = ARRAY(3)\n  RETURN A\nEND\nBAD_RETURN()",
+            "DEF MAKE_ARRAY()\n  VAR A\n  LET A = ARRAY(3)\n  RETURN A\nEND\n\
+             PUTDEC ARRAY_LEN(MAKE_ARRAY())",
         );
-        assert!(
-            matches!(result, Err(crate::error::TbxError::ArrayFrameEscape)),
-            "expected ArrayFrameEscape, got: {result:?}"
+        assert!(result.is_ok(), "expected success, got: {result:?}");
+        assert_eq!(result.unwrap().trim(), "3");
+    }
+
+    #[test]
+    fn test_str_ownership_transfer_via_return_val() {
+        // Verify that returning a frame-local Cell::Str via RETURN_VAL succeeds
+        // (ownership transfer instead of escape error).
+        let result = run_source(
+            "DEF MAKE_STR()\n  RETURN STR_CONCAT(\"Hello\", \", World\")\nEND\n\
+             PUTSTR MAKE_STR()",
         );
+        assert!(result.is_ok(), "expected success, got: {result:?}");
+        assert_eq!(result.unwrap().trim(), "Hello, World");
+    }
+
+    #[test]
+    fn test_array_chained_ownership_transfer() {
+        // Verify that ownership transfer works across multiple call levels:
+        // OUTER calls INNER which returns an array, then OUTER returns it.
+        let result = run_source(
+            "DEF INNER()\n  VAR A\n  LET A = TO_ARRAY(10, 20, 30)\n  RETURN A\nEND\n\
+             DEF OUTER()\n  VAR B\n  LET B = INNER()\n  RETURN B\nEND\n\
+             PUTDEC ARRAY_LEN(OUTER())",
+        );
+        assert!(result.is_ok(), "expected success, got: {result:?}");
+        assert_eq!(result.unwrap().trim(), "3");
+    }
+
+    #[test]
+    fn test_str_chained_ownership_transfer() {
+        // Verify that string ownership transfer works across multiple call levels.
+        let result = run_source(
+            "DEF INNER()\n  RETURN STR_CONCAT(\"foo\", \"bar\")\nEND\n\
+             DEF OUTER()\n  RETURN STR_CONCAT(INNER(), \"!\")\nEND\n\
+             PUTSTR OUTER()",
+        );
+        assert!(result.is_ok(), "expected success, got: {result:?}");
+        assert_eq!(result.unwrap().trim(), "foobar!");
+    }
+
+    #[test]
+    fn test_caller_array_returnable_after_transfer() {
+        // Arrays created by the caller (pool_idx < frame boundary) are returned
+        // unchanged; ownership transfer only applies to frame-local arrays.
+        // Here the caller creates a local array, passes it to PASS_THROUGH which
+        // returns it; since pool_idx < boundary (array was created before the call),
+        // no swap occurs and the result is valid.
+        let result = run_source(
+            "DEF PASS_THROUGH(A)\n  RETURN A\nEND\n\
+             DEF CALLER()\n  VAR B\n  LET B = TO_ARRAY(1, 2, 3)\n  RETURN PASS_THROUGH(B)\nEND\n\
+             PUTDEC ARRAY_LEN(CALLER())",
+        );
+        assert!(result.is_ok(), "expected success, got: {result:?}");
+        assert_eq!(result.unwrap().trim(), "3");
     }
 
     #[test]

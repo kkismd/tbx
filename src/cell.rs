@@ -90,26 +90,38 @@ pub enum Cell {
     /// Created by the `ARRAY(N)` primitive.  The pool entry at this index holds
     /// a `Vec<Cell>` of length N.
     ///
-    /// Arrays come in two flavours:
+    /// Arrays come in three flavours:
     /// - **Frame-local arrays** (`pool_idx >= saved_array_pool_len` of the current call
-    ///   frame) are freed when the owning frame exits via EXIT or RETURN_VAL.
-    ///   They must not escape their owning stack frame.
+    ///   frame) are owned by that frame.  On EXIT they are freed; on RETURN_VAL the
+    ///   returned array is moved to the frame-boundary slot via ownership transfer
+    ///   (swap + truncate) so it survives the pool cleanup.
     /// - **Global arrays** (`pool_idx < vm.global_array_pool_len`) are created
     ///   at the top level (outside any `DEF..END`) and are never freed.  They
     ///   may safely be stored in `VARIABLE` slots and shared across word calls.
+    /// - **Caller-owned arrays** (`pool_idx < saved_array_pool_len` of the current
+    ///   call frame but not globally permanent) were created before the call; they
+    ///   can be returned without modification.
+    ///
+    /// Array elements are restricted to `Int`, `Float`, `Bool`, and `None` (no
+    /// nested `Array` or `Str` references), so ownership transfer does not
+    /// require recursive inspection of element types.
     Array(usize),
     /// Runtime string handle — index into `VM::strings` (the runtime string pool).
     ///
     /// Created by string primitives such as `STR`, `STR_CONCAT`, etc.
     /// The pool entry at this index holds a `String`.
     ///
-    /// Strings come in two flavours:
-    /// - **Frame-local strings** (`pool_idx >= saved_string_pool_len` of the current call
-    ///   frame) are freed when the owning frame exits via EXIT or RETURN_VAL.
-    ///   They must not escape their owning stack frame.
+    /// Strings come in three flavours:
+    /// - **Frame-local strings** (`pool_idx >= saved_string_pool_len` of the current
+    ///   call frame) are owned by that frame.  On EXIT they are freed; on RETURN_VAL
+    ///   the returned string is moved to the frame-boundary slot via ownership
+    ///   transfer (swap + truncate) so it survives the pool cleanup.
     /// - **Global strings** (`pool_idx < vm.global_string_pool_len`) are created
     ///   at the top level (outside any `DEF..END`) and are never freed.  They
     ///   may safely be stored in `VARIABLE` slots and shared across word calls.
+    /// - **Caller-owned strings** (`pool_idx < saved_string_pool_len` of the current
+    ///   call frame but not globally permanent) were created before the call; they
+    ///   can be returned without modification.
     ///
     /// Note: `Cell::Str(a) == Cell::Str(b)` uses index comparison (identity),
     /// not content comparison.  Use the `STR_EQ` primitive for content equality.
