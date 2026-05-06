@@ -2824,6 +2824,21 @@ mod tests {
     }
 
     #[test]
+    fn test_str_frame_escape_via_store_to_dict_is_error() {
+        // Verify that SET of a frame-local Cell::Str into a global variable produces
+        // StringFrameEscape.  This is symmetric to test_array_frame_escape_via_store_to_dict_is_error.
+        let result = run_source(
+            "VAR G\n\
+             DEF BAD_STORE()\n  VAR S\n  LET S = STR_CONCAT(\"foo\", \"bar\")\n  SET &G, S\nEND\n\
+             BAD_STORE()",
+        );
+        assert!(
+            matches!(result, Err(crate::error::TbxError::StringFrameEscape)),
+            "expected StringFrameEscape, got: {result:?}"
+        );
+    }
+
+    #[test]
     fn test_global_array_stored_via_store_prim() {
         // A global array (pool_idx < global_array_pool_len) can be stored into a
         // dictionary slot by store_prim without triggering ArrayFrameEscape.
