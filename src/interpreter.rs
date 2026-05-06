@@ -2538,6 +2538,24 @@ PUTDEC 99
     }
 
     #[test]
+    fn test_compile_program_top_level_array_store_to_global_var() {
+        let mut interp = Interpreter::new();
+        let src = "VAR A\nSET &A, ARRAY(1)\nPUTDEC ARRAY_LEN(A)";
+        interp.compile_program(src).unwrap();
+        assert_eq!(interp.take_output(), "1");
+    }
+
+    #[test]
+    fn test_compile_program_top_level_str_store_to_global_var() {
+        let mut interp = Interpreter::new();
+        let src = r#"VAR S
+SET &S, STR_CONCAT("foo", "bar")
+PUTSTR S"#;
+        interp.compile_program(src).unwrap();
+        assert_eq!(interp.take_output(), "foobar");
+    }
+
+    #[test]
     fn test_compile_program_unclosed_def_is_error() {
         // A DEF without a matching END must return an error and leave the VM in a
         // clean state (compile_state = None) so that subsequent calls work correctly.

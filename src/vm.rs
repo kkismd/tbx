@@ -274,6 +274,16 @@ impl VM {
         }
     }
 
+    /// Returns true while `vm.run()` is executing top-level code, outside any
+    /// word call frame.
+    pub(crate) fn is_executing_top_level(&self) -> bool {
+        matches!(self.return_stack.last(), Some(ReturnFrame::TopLevel))
+            && !self
+                .return_stack
+                .iter()
+                .any(|frame| matches!(frame, ReturnFrame::Call { .. }))
+    }
+
     /// Consume the next token from the token stream.
     ///
     /// Returns `TbxError::TokenStreamEmpty` if `token_stream` is `None` or empty.

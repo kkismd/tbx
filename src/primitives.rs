@@ -74,6 +74,26 @@ pub fn fetch_prim(vm: &mut VM) -> Result<(), TbxError> {
     }
 }
 
+fn check_dict_reference_write(vm: &VM, value: &Cell) -> Result<(), TbxError> {
+    match value {
+        Cell::Array(pool_idx) => {
+            if *pool_idx >= vm.global_array_pool_len && !vm.is_executing_top_level() {
+                Err(TbxError::ArrayFrameEscape)
+            } else {
+                Ok(())
+            }
+        }
+        Cell::Str(pool_idx) => {
+            if *pool_idx >= vm.global_string_pool_len && !vm.is_executing_top_level() {
+                Err(TbxError::StringFrameEscape)
+            } else {
+                Ok(())
+            }
+        }
+        _ => Ok(()),
+    }
+}
+
 /// STORE — pop addr (top) then value (below), and store value at addr.
 ///
 /// Stack convention: `[..., value, addr]` → STORE → `[...]`
@@ -82,22 +102,7 @@ pub fn store_prim(vm: &mut VM) -> Result<(), TbxError> {
     let value = vm.pop()?;
     match addr {
         Cell::DictAddr(a) => {
-            // Guard: only top-level (global) arrays may escape into dictionary
-            // storage.  Arrays created inside a word call have a pool_idx >=
-            // global_array_pool_len and must not escape.
-            if let Cell::Array(pool_idx) = &value {
-                if *pool_idx >= vm.global_array_pool_len {
-                    return Err(TbxError::ArrayFrameEscape);
-                }
-            }
-            // Guard: only top-level (global) strings may escape into dictionary
-            // storage.  Strings created inside a word call have a pool_idx >=
-            // global_string_pool_len and must not escape.
-            if let Cell::Str(pool_idx) = &value {
-                if *pool_idx >= vm.global_string_pool_len {
-                    return Err(TbxError::StringFrameEscape);
-                }
-            }
+            check_dict_reference_write(vm, &value)?;
             vm.dict_write_at(a, value)?;
             Ok(())
         }
@@ -125,22 +130,7 @@ pub fn set_prim(vm: &mut VM) -> Result<(), TbxError> {
     let addr = vm.pop()?;
     match addr {
         Cell::DictAddr(a) => {
-            // Guard: only top-level (global) arrays may escape into dictionary
-            // storage.  Arrays created inside a word call have a pool_idx >=
-            // global_array_pool_len and must not escape.
-            if let Cell::Array(pool_idx) = &value {
-                if *pool_idx >= vm.global_array_pool_len {
-                    return Err(TbxError::ArrayFrameEscape);
-                }
-            }
-            // Guard: only top-level (global) strings may escape into dictionary
-            // storage.  Strings created inside a word call have a pool_idx >=
-            // global_string_pool_len and must not escape.
-            if let Cell::Str(pool_idx) = &value {
-                if *pool_idx >= vm.global_string_pool_len {
-                    return Err(TbxError::StringFrameEscape);
-                }
-            }
+            check_dict_reference_write(vm, &value)?;
             vm.dict_write_at(a, value)?;
             Ok(())
         }

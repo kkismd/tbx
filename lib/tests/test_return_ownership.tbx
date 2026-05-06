@@ -20,6 +20,11 @@ DEF OUTER_STR()
 END
 ASSERT STR_EQ(OUTER_STR(), "foobar!")
 
+# A runtime string created at top level can be stored in a global variable.
+VAR TOP_LEVEL_STR
+SET &TOP_LEVEL_STR, STR_CONCAT("foo", "bar")
+ASSERT STR_EQ(TOP_LEVEL_STR, "foobar")
+
 # --- Cell::Array ownership transfer ---
 
 # A word that creates an array locally and returns it;
