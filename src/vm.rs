@@ -834,8 +834,21 @@ impl VM {
                     // boundary slot and mark it for preservation.
                     // Array elements are guaranteed to be Int/Float/Bool/None
                     // (no nested references), so no recursive check is needed.
+                    // Note: `array_transferred` and `string_transferred` are mutually
+                    // exclusive. `retval` is a single Cell, so it can be either
+                    // Cell::Array or Cell::Str, never both simultaneously.
                     let array_transferred = if let Cell::Array(pool_idx) = &retval {
                         if *pool_idx >= array_frame_boundary {
+                            // Bounds check before swap: both indices must be valid.
+                            // pool_idx >= array_frame_boundary is already confirmed;
+                            // checking pool_idx < arrays.len() implies array_frame_boundary
+                            // is also in range.
+                            if *pool_idx >= self.arrays.len() {
+                                return Err(TbxError::IndexOutOfBounds {
+                                    index: *pool_idx,
+                                    size: self.arrays.len(),
+                                });
+                            }
                             self.arrays.swap(*pool_idx, array_frame_boundary);
                             retval = Cell::Array(array_frame_boundary);
                             true
@@ -851,6 +864,15 @@ impl VM {
                     // boundary slot and mark it for preservation.
                     let string_transferred = if let Cell::Str(pool_idx) = &retval {
                         if *pool_idx >= string_frame_boundary {
+                            // Bounds check before swap: pool_idx must be a valid index.
+                            // Since pool_idx >= string_frame_boundary is already confirmed,
+                            // checking pool_idx < strings.len() also covers string_frame_boundary.
+                            if *pool_idx >= self.strings.len() {
+                                return Err(TbxError::IndexOutOfBounds {
+                                    index: *pool_idx,
+                                    size: self.strings.len(),
+                                });
+                            }
                             self.strings.swap(*pool_idx, string_frame_boundary);
                             retval = Cell::Str(string_frame_boundary);
                             true
@@ -2926,5 +2948,74 @@ mod tests {
                 "global array should pass ReturnVal check"
             );
         }
+    }
+
+    // --- Pool truncation on return (direct vm.arrays / vm.strings length checks) ---
+
+    #[test]
+    fn test_array_pool_len_truncated_when_not_returned() {
+        // After a word that creates a local array but returns a non-array value,
+        // vm.arrays should be truncated back to its length before the call.
+        let mut interp = crate::interpreter::Interpreter::new();
+        interp
+            .exec_source(
+                "DEF MAKE_AND_DROP()\n  VAR A\n  LET A = ARRAY(5)\n  RETURN 42\nEND\n\
+                 PUTDEC MAKE_AND_DROP()",
+            )
+            .expect("exec_source failed");
+        // The word created one array but did not return it; the pool must be
+        // back to the pre-call length (0 frame-local arrays remain).
+        assert_eq!(
+            interp.vm().arrays.len(),
+            0,
+            "array pool should be empty after word that discards its local array"
+        );
+    }
+
+    #[test]
+    fn test_string_pool_len_truncated_when_not_returned() {
+        // After a word that creates a local string but returns a non-string value,
+        // vm.strings should be truncated back to its length before the call.
+        let mut interp = crate::interpreter::Interpreter::new();
+        interp
+            .exec_source(
+                "DEF STR_THEN_INT()\n  VAR S\n  LET S = STR_CONCAT(\"foo\", \"bar\")\n  RETURN 1\nEND\n\
+                 PUTDEC STR_THEN_INT()",
+            )
+            .expect("exec_source failed");
+        // The word created one string but did not return it; the pool must be
+        // back to the pre-call length (0 frame-local strings remain).
+        assert_eq!(
+            interp.vm().strings.len(),
+            0,
+            "string pool should be empty after word that discards its local string"
+        );
+    }
+
+    #[test]
+    fn test_array_pool_len_after_ownership_transfer() {
+        // After a word returns its local array, the transferred array occupies the
+        // boundary slot in the caller's pool.  At the top level, when the TopLevel
+        // frame is popped, all remaining pool entries are promoted to the global
+        // region (global_array_pool_len is advanced to arrays.len()), so the pool
+        // is NOT empty — it contains exactly the one promoted array.
+        let mut interp = crate::interpreter::Interpreter::new();
+        interp
+            .exec_source(
+                "DEF GIVE_ARRAY()\n  VAR A\n  LET A = TO_ARRAY(1,2,3)\n  RETURN A\nEND\n\
+                 PUTDEC ARRAY_LEN(GIVE_ARRAY())",
+            )
+            .expect("exec_source failed");
+        // The returned array is now promoted to global; pool has exactly 1 entry.
+        assert_eq!(
+            interp.vm().arrays.len(),
+            1,
+            "array pool should contain exactly the one promoted (returned) array"
+        );
+        assert_eq!(
+            interp.vm().global_array_pool_len,
+            1,
+            "global_array_pool_len should reflect the promoted array"
+        );
     }
 }

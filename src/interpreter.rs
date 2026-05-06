@@ -635,6 +635,12 @@ impl Interpreter {
         self.max_use_depth = max;
     }
 
+    /// Expose the inner VM for direct inspection in unit tests.
+    #[cfg(test)]
+    pub fn vm(&self) -> &VM {
+        &self.vm
+    }
+
     /// Set the base directory used to resolve relative USE paths.
     ///
     /// When set, relative paths in USE statements are resolved against `dir`
