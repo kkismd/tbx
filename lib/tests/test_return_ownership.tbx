@@ -1,0 +1,101 @@
+# lib/tests/test_return_ownership.tbx
+# TBX tests for ownership transfer of Cell::Str and Cell::Array via RETURN.
+USE "lib/tests/helper.tbx"
+
+# --- Cell::Str ownership transfer ---
+
+# A word that creates a string locally and returns it.
+DEF GREETING(NAME)
+  RETURN STR_CONCAT("Hello, ", NAME)
+END
+ASSERT STR_EQ(GREETING("World"), "Hello, World")
+
+# Chained string return: INNER creates a string, OUTER appends to it and returns.
+DEF INNER_STR()
+  RETURN STR_CONCAT("foo", "bar")
+END
+
+DEF OUTER_STR()
+  RETURN STR_CONCAT(INNER_STR(), "!")
+END
+ASSERT STR_EQ(OUTER_STR(), "foobar!")
+
+# --- Cell::Array ownership transfer ---
+
+# A word that creates an array locally and returns it;
+# verify length and specific elements via helper words.
+DEF HMS(T)
+  RETURN TO_ARRAY(T / 3600, (T / 60) % 60, T % 60)
+END
+
+DEF HMS_HOUR(T)
+  VAR A
+  LET A = HMS(T)
+  RETURN A(1)
+END
+DEF HMS_MIN(T)
+  VAR A
+  LET A = HMS(T)
+  RETURN A(2)
+END
+DEF HMS_SEC(T)
+  VAR A
+  LET A = HMS(T)
+  RETURN A(3)
+END
+ASSERT HMS_HOUR(3661) = 1
+ASSERT HMS_MIN(3661) = 1
+ASSERT HMS_SEC(3661) = 1
+
+# Chained array RETURN (OUTER calls INNER and returns the result directly).
+DEF MAKE_ARRAY_INNER()
+  RETURN TO_ARRAY(10, 20, 30)
+END
+
+DEF MAKE_ARRAY_OUTER()
+  VAR B
+  LET B = MAKE_ARRAY_INNER()
+  RETURN B
+END
+
+DEF CHECK_CHAINED_ARRAY()
+  VAR R
+  LET R = MAKE_ARRAY_OUTER()
+  IF R(1) = 10
+    IF R(2) = 20
+      IF R(3) = 30
+        RETURN 1
+      ENDIF
+    ENDIF
+  ENDIF
+  RETURN 0
+END
+ASSERT CHECK_CHAINED_ARRAY() = 1
+
+# ARRAY_LEN on a returned frame-local array.
+DEF MAKE_THREE()
+  RETURN TO_ARRAY(1, 2, 3)
+END
+ASSERT ARRAY_LEN(MAKE_THREE()) = 3
+
+# A word that creates multiple local arrays but returns only one;
+# the non-returned array is freed and the returned one is valid.
+DEF RETURN_SECOND()
+  VAR A
+  VAR B
+  LET A = TO_ARRAY(1, 2)
+  LET B = TO_ARRAY(3, 4)
+  RETURN B
+END
+
+DEF CHECK_RETURN_SECOND()
+  VAR R
+  LET R = RETURN_SECOND()
+  IF R(1) = 3
+    IF R(2) = 4
+      RETURN 1
+    ENDIF
+  ENDIF
+  RETURN 0
+END
+ASSERT CHECK_RETURN_SECOND() = 1
