@@ -614,9 +614,10 @@ END
 
 **フレームローカル配列**（ワード内で生成した配列）:
 - `pool_idx >= saved_array_pool_len`（呼び出しフレームの境界）の配列
-- EXIT / RETURN_VAL 時に `vm.arrays` を `saved_array_pool_len` まで切り詰めて解放する
+- EXIT 時（所有権移譲なし）は `vm.arrays` を `saved_array_pool_len` まで切り詰めて解放する
+- RETURN_VAL 時（所有権移譲あり）は `Vec::swap` で返す配列スロットを `saved_array_pool_len` 位置に移動してから `saved_array_pool_len + 1` まで切り詰め、呼び出し元に1スロット分を返す
 - `Cell::Array` 値を `VARIABLE` スロット（`DictAddr`）に書き込もうとすると `ArrayFrameEscape` エラーになる
-- ワード内で**新規生成した**配列（`pool_idx >= saved_array_pool_len`）は `RETURN` で所有権移譲して返せる（`Vec::swap` により配列スロットを `saved_array_pool_len` 位置に移動し、pool を切り詰めて返す）。呼び出し元由来の配列（`pool_idx < saved_array_pool_len`）も同様に返せる
+- ワード内で**新規生成した**配列（`pool_idx >= saved_array_pool_len`）は `RETURN` で所有権移譲して返せる。呼び出し元由来の配列（`pool_idx < saved_array_pool_len`）も同様に返せる
 
 **グローバル配列**（トップレベル実行で生成した配列）:
 - `pool_idx < vm.global_array_pool_len` の配列
@@ -712,9 +713,10 @@ END
 
 **フレームローカル文字列**（ワード内で生成した文字列）:
 - `pool_idx >= saved_string_pool_len`（呼び出しフレームの境界）の文字列
-- EXIT / RETURN_VAL 時に `vm.strings` を `saved_string_pool_len` まで切り詰めて解放する
+- EXIT 時（所有権移譲なし）は `vm.strings` を `saved_string_pool_len` まで切り詰めて解放する
+- RETURN_VAL 時（所有権移譲あり）は `Vec::swap` で返す文字列スロットを `saved_string_pool_len` 位置に移動してから `saved_string_pool_len + 1` まで切り詰め、呼び出し元に1スロット分を返す
 - `Cell::Str` 値を `VARIABLE` スロット（`DictAddr`）に書き込もうとすると `StringFrameEscape` エラーになる
-- ワード内で**新規生成した**文字列（`pool_idx >= saved_string_pool_len`）は `RETURN` で所有権移譲して返せる（`Vec::swap` により文字列スロットを `saved_string_pool_len` 位置に移動し、pool を切り詰めて返す）。呼び出し元由来の文字列（`pool_idx < saved_string_pool_len`）も同様に返せる
+- ワード内で**新規生成した**文字列（`pool_idx >= saved_string_pool_len`）は `RETURN` で所有権移譲して返せる。呼び出し元由来の文字列（`pool_idx < saved_string_pool_len`）も同様に返せる
 
 **グローバル文字列**（トップレベル実行で生成した文字列）:
 - `pool_idx < vm.global_string_pool_len` の文字列
