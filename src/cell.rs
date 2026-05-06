@@ -92,11 +92,8 @@ pub enum Cell {
     ///
     /// Arrays come in two flavours:
     /// - **Frame-local arrays** (`pool_idx >= saved_array_pool_len` of the current call
-    ///   frame) are normally freed when the owning frame exits via EXIT.  They may
-    ///   escape via RETURN_VAL: if the returned value is a frame-local array whose
-    ///   elements contain no frame-local strings, ownership is transferred to the
-    ///   caller's frame (the array is moved to the boundary slot and all other
-    ///   frame-local arrays are freed).
+    ///   frame) are freed when the owning frame exits via EXIT or RETURN_VAL.
+    ///   They must not escape their owning stack frame.
     /// - **Global arrays** (`pool_idx < vm.global_array_pool_len`) are created
     ///   at the top level (outside any `DEF..END`) and are never freed.  They
     ///   may safely be stored in `VARIABLE` slots and shared across word calls.
