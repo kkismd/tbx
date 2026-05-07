@@ -54,6 +54,14 @@ DEF TO_ARRAY_MUTATE()
 END
 ASSERT TO_ARRAY_MUTATE() = 103
 
+# --- Top-level global array variable supports A(I) / &A(I) ---
+
+VAR TOP_ARR
+SET &TOP_ARR, TO_ARRAY(10, 20)
+ASSERT TOP_ARR(2) = 20
+SET &TOP_ARR(2), 123
+ASSERT TOP_ARR(2) = 123
+
 # --- FROM_ARRAY: single-element array (expression context) ---
 # With exactly one element, FROM_ARRAY pushes one value, which behaves
 # like a normal expression returning that single value.

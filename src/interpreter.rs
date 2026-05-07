@@ -1293,6 +1293,29 @@ mod tests {
     }
 
     #[test]
+    fn test_exec_source_top_level_global_array_element_set() {
+        let mut interp = Interpreter::new();
+        let src = "\
+VAR A
+SET &A, TO_ARRAY(10, 20)
+SET &A(2), 123
+PUTDEC A(2)";
+        interp.exec_source(src).unwrap();
+        assert_eq!(interp.take_output(), "123");
+    }
+
+    #[test]
+    fn test_exec_source_top_level_global_array_element_read() {
+        let mut interp = Interpreter::new();
+        let src = "\
+VAR A
+SET &A, TO_ARRAY(10, 20)
+PUTDEC A(2)";
+        interp.exec_source(src).unwrap();
+        assert_eq!(interp.take_output(), "20");
+    }
+
+    #[test]
     fn test_exec_undefined_symbol() {
         let mut interp = Interpreter::new();
         let result = interp.exec_line("NOSUCHWORD 1", 1);
