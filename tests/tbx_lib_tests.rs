@@ -78,11 +78,11 @@ fn test_hour_negative_timestamp_is_error() {
 }
 
 #[test]
-fn test_min_negative_timestamp_is_error() {
+fn test_minute_negative_timestamp_is_error() {
     let mut interp = Interpreter::new();
     let err = interp
-        .exec_source("MIN -1.0\n")
-        .expect_err("MIN with negative timestamp should fail");
+        .exec_source("MINUTE -1.0\n")
+        .expect_err("MINUTE with negative timestamp should fail");
     assert!(
         err.to_string().contains("non-negative"),
         "expected 'non-negative' in error message, got: {err}"
@@ -90,11 +90,11 @@ fn test_min_negative_timestamp_is_error() {
 }
 
 #[test]
-fn test_sec_negative_timestamp_is_error() {
+fn test_second_negative_timestamp_is_error() {
     let mut interp = Interpreter::new();
     let err = interp
-        .exec_source("SEC -1.0\n")
-        .expect_err("SEC with negative timestamp should fail");
+        .exec_source("SECOND -1.0\n")
+        .expect_err("SECOND with negative timestamp should fail");
     assert!(
         err.to_string().contains("non-negative"),
         "expected 'non-negative' in error message, got: {err}"

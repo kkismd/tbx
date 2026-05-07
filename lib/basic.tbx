@@ -284,5 +284,5 @@ END
 
 # return Time array (Hour, Minute, Second) in JST
 DEF HMS(T)
-  RETURN TO_ARRAY((HOUR(T) + 9) % 24, MIN(T), INT(SEC(T)))
+  RETURN TO_ARRAY((HOUR(T) + 9) % 24, MINUTE(T), INT(SECOND(T)))
 END
