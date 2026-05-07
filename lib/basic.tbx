@@ -281,3 +281,8 @@ DEF PRINT(...)
     SET &I, I + 1
   ENDWH
 END
+
+# return Time array (Hour, Minute, Second) in JST
+DEF HMS(T)
+  RETURN TO_ARRAY((HOUR(T) + 9) % 24, MIN(T), INT(SEC(T)))
+END
