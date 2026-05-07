@@ -1,4 +1,9 @@
 # Copilot Instructions
+
+See AGENTS.md for all project instructions.
+
+This file for github-copilot agents.
+
 ## ワークフロー
 
 - PRを作成する際は `create-pull-request` スキルの手順に従うこと。
