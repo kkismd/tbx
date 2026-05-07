@@ -1,0 +1,61 @@
+#! ./target/debug/tbx
+# SUPER STAR TREK
+
+USE "trek/init.tbx"     # SETUP, INIT_GALAXY, INIT_QUADRANT
+USE "trek/display.tbx"  # PRINT_SRS, PRINT_LRS, PRINT_MAP, PRINT_STATUS
+USE "trek/commands.tbx" # CMD_NAV, CMD_PHA, CMD_TOR, CMD_SHE, CMD_DAM, CMD_COM
+USE "trek/combat.tbx"   # KLINGON_ATTACK, HIT_ENTERPRISE, HIT_KLINGON
+USE "trek/util.tbx"     # QUAD_IDX, DISTANCE_SQ, EMPTY_SECTOR, PUT_SPACES
+
+### グローバル変数宣言
+
+# 8x8 銀河マップ（64セル）: 各セル = クリンゴン数×100 + 基地数×10 + 星数
+VAR GALAXY
+SET &GALAXY, ARRAY(64)
+
+# プレイヤーが探索済みの銀河マップ（未探索 = -1）
+VAR CHART
+SET &CHART, ARRAY(64)
+
+# 現在の宙域（64セル）: 0=空, 1=エンタープライズ, 2=クリンゴン, 3=基地, 4=星
+VAR QUADRANT
+SET &QUADRANT, ARRAY(64)
+
+# クリンゴン並列配列（最大15体）
+VAR KLING_R, KLING_C   # 宙域内の行・列
+VAR KLING_E            # シールドエネルギー
+SET &KLING_R, ARRAY(15)
+SET &KLING_C, ARRAY(15)
+SET &KLING_E, ARRAY(15)
+
+# ダメージ配列（8システム）
+VAR DAMAGE
+SET &DAMAGE, ARRAY(8)
+
+# エンタープライズの状態
+VAR ENT_QR, ENT_QC   # 象限（行・列）
+VAR ENT_SR, ENT_SC   # 宙域内位置（行・列）
+VAR ENERGY, SHIELDS, TORPEDOES
+
+# ゲーム状態
+VAR STARDATE, MISSION_END
+VAR KLINGONS_LEFT, BASES_LEFT
+VAR KLINGONS_TOTAL, DOCKED
+
+# 現在の象限内クリンゴン数
+VAR KLINGONS_HERE
+
+DEF MAIN
+  VAR GAME_OVER, CMD
+  LET GAME_OVER = 0
+  WHILE GAME_OVER = 0
+    PRINT_SRS
+    PUTSTR "COMMAND? "
+    LET CMD = GETSTR
+    IF STR_EQ(CMD, "NAV")
+      CMD_NAV
+    ENDIF
+  ENDWH
+END
+
+MAIN
