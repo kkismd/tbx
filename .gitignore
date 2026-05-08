@@ -2,6 +2,7 @@
 *.un~
 /.tmp
 /examples/scratch.tbx
+/memo.md
 
 # APM dependencies
 apm_modules/
