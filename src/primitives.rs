@@ -586,6 +586,19 @@ pub fn str_slice_prim(vm: &mut VM) -> Result<(), TbxError> {
     Ok(())
 }
 
+/// STR_TRIM — remove leading and trailing Unicode whitespace from a string.
+///
+/// Stack: `[..., s: Str|StringDesc]` → `Cell::Str(new)`
+pub fn str_trim_prim(vm: &mut VM) -> Result<(), TbxError> {
+    let s_cell = vm.pop()?;
+    let s = resolve_str_cell(vm, &s_cell)?;
+    let trimmed = s.trim_matches(char::is_whitespace).to_string();
+    let idx = vm.strings.len();
+    vm.strings.push(trimmed);
+    vm.push(Cell::Str(idx))?;
+    Ok(())
+}
+
 /// Helper: resolve a `Cell::Str` or `Cell::StringDesc` to a `String`.
 fn resolve_str_cell(vm: &VM, cell: &Cell) -> Result<String, TbxError> {
     match cell {
@@ -2365,13 +2378,14 @@ pub fn register_all(vm: &mut VM) {
     // Runtime string primitives.
     // STR converts any value to a string; STR_CONCAT concatenates two strings;
     // STR_LEN returns the character count; STR_EQ compares by content;
-    // STR_INDEXOF and STR_SLICE provide search and substring operations.
+    // STR_INDEXOF, STR_SLICE, and STR_TRIM provide core string manipulation.
     vm.register(WordEntry::new_primitive("STR", str_prim));
     vm.register(WordEntry::new_primitive("STR_CONCAT", str_concat_prim));
     vm.register(WordEntry::new_primitive("STR_LEN", str_len_prim));
     vm.register(WordEntry::new_primitive("STR_EQ", str_eq_prim));
     vm.register(WordEntry::new_primitive("STR_INDEXOF", str_indexof_prim));
     vm.register(WordEntry::new_primitive("STR_SLICE", str_slice_prim));
+    vm.register(WordEntry::new_primitive("STR_TRIM", str_trim_prim));
     vm.register(WordEntry::new_primitive("PUTCHR", putchr_prim));
     vm.register(WordEntry::new_primitive("PUTDEC", putdec_prim));
     vm.register(WordEntry::new_primitive("PUTHEX", puthex_prim));
@@ -3972,6 +3986,58 @@ mod tests {
             str_slice_prim(&mut vm),
             Err(TbxError::InvalidArgument { .. })
         ));
+    }
+
+    // --- str_trim_prim tests ---
+
+    #[test]
+    fn test_str_trim_removes_ascii_spaces() {
+        let mut vm = VM::new();
+        let source_idx = vm.intern_string("  hello  ").unwrap();
+        vm.push(Cell::StringDesc(source_idx)).unwrap();
+        str_trim_prim(&mut vm).unwrap();
+        assert_eq!(vm.pop().unwrap(), Cell::Str(0));
+        assert_eq!(vm.strings[0], "hello");
+    }
+
+    #[test]
+    fn test_str_trim_removes_unicode_whitespace() {
+        let mut vm = VM::new();
+        let source_idx = vm.intern_string("\u{3000}abc\u{3000}").unwrap();
+        vm.push(Cell::StringDesc(source_idx)).unwrap();
+        str_trim_prim(&mut vm).unwrap();
+        assert_eq!(vm.pop().unwrap(), Cell::Str(0));
+        assert_eq!(vm.strings[0], "abc");
+    }
+
+    #[test]
+    fn test_str_trim_keeps_inner_whitespace() {
+        let mut vm = VM::new();
+        let source_idx = vm.intern_string("  hello world  ").unwrap();
+        vm.push(Cell::StringDesc(source_idx)).unwrap();
+        str_trim_prim(&mut vm).unwrap();
+        assert_eq!(vm.pop().unwrap(), Cell::Str(0));
+        assert_eq!(vm.strings[0], "hello world");
+    }
+
+    #[test]
+    fn test_str_trim_all_whitespace_becomes_empty() {
+        let mut vm = VM::new();
+        let source_idx = vm.intern_string("\n\t\u{3000}").unwrap();
+        vm.push(Cell::StringDesc(source_idx)).unwrap();
+        str_trim_prim(&mut vm).unwrap();
+        assert_eq!(vm.pop().unwrap(), Cell::Str(0));
+        assert_eq!(vm.strings[0], "");
+    }
+
+    #[test]
+    fn test_str_trim_accepts_runtime_string() {
+        let mut vm = VM::new();
+        vm.strings.push("  runtime  ".to_string());
+        vm.push(Cell::Str(0)).unwrap();
+        str_trim_prim(&mut vm).unwrap();
+        assert_eq!(vm.pop().unwrap(), Cell::Str(1));
+        assert_eq!(vm.strings[1], "runtime");
     }
 
     // --- StringFrameEscape tests ---
