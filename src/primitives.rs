@@ -527,6 +527,65 @@ pub fn str_eq_prim(vm: &mut VM) -> Result<(), TbxError> {
     Ok(())
 }
 
+/// STR_INDEXOF — find the first occurrence of a substring and return a 1-based position.
+///
+/// Stack: `[..., haystack: Str|StringDesc, needle: Str|StringDesc]` → `Cell::Int(pos)`
+///
+/// Returns 0 when the substring is not found. Positions are counted in Unicode
+/// scalar values (chars), matching `STR_LEN`.
+pub fn str_indexof_prim(vm: &mut VM) -> Result<(), TbxError> {
+    let needle_cell = vm.pop()?;
+    let haystack_cell = vm.pop()?;
+    let needle = resolve_str_cell(vm, &needle_cell)?;
+    let haystack = resolve_str_cell(vm, &haystack_cell)?;
+    let pos = haystack
+        .find(&needle)
+        .map(|byte_idx| haystack[..byte_idx].chars().count() as i64 + 1)
+        .unwrap_or(0);
+    vm.push(Cell::Int(pos))?;
+    Ok(())
+}
+
+/// STR_SLICE — extract a substring by 1-based start position and length.
+///
+/// Stack: `[..., s: Str|StringDesc, start: Int, len: Int]` → `Cell::Str(new)`
+///
+/// Positive `start` counts from the beginning (`1` is the first character).
+/// Negative `start` counts from the end (`-1` is the last character). A `start`
+/// of `0` is invalid. The result is clipped to the string boundaries.
+pub fn str_slice_prim(vm: &mut VM) -> Result<(), TbxError> {
+    let len = vm.pop_int()?;
+    let start = vm.pop_int()?;
+    let s_cell = vm.pop()?;
+    if start == 0 {
+        return Err(TbxError::InvalidArgument {
+            message: "STR_SLICE start must not be 0".to_string(),
+        });
+    }
+    if len < 0 {
+        return Err(TbxError::InvalidArgument {
+            message: format!("STR_SLICE length must be non-negative, got {len}"),
+        });
+    }
+
+    let s = resolve_str_cell(vm, &s_cell)?;
+    let chars: Vec<char> = s.chars().collect();
+    let char_len = chars.len() as i64;
+    let raw_start = if start > 0 {
+        start - 1
+    } else {
+        char_len + start
+    };
+    let start_idx = raw_start.clamp(0, char_len) as usize;
+    let end_idx = start_idx.saturating_add(len as usize).min(chars.len());
+    let result: String = chars[start_idx..end_idx].iter().collect();
+
+    let idx = vm.strings.len();
+    vm.strings.push(result);
+    vm.push(Cell::Str(idx))?;
+    Ok(())
+}
+
 /// Helper: resolve a `Cell::Str` or `Cell::StringDesc` to a `String`.
 fn resolve_str_cell(vm: &VM, cell: &Cell) -> Result<String, TbxError> {
     match cell {
@@ -2305,11 +2364,14 @@ pub fn register_all(vm: &mut VM) {
     vm.register(WordEntry::new_primitive("PUTSTR", putstr_prim));
     // Runtime string primitives.
     // STR converts any value to a string; STR_CONCAT concatenates two strings;
-    // STR_LEN returns the character count; STR_EQ compares by content.
+    // STR_LEN returns the character count; STR_EQ compares by content;
+    // STR_INDEXOF and STR_SLICE provide search and substring operations.
     vm.register(WordEntry::new_primitive("STR", str_prim));
     vm.register(WordEntry::new_primitive("STR_CONCAT", str_concat_prim));
     vm.register(WordEntry::new_primitive("STR_LEN", str_len_prim));
     vm.register(WordEntry::new_primitive("STR_EQ", str_eq_prim));
+    vm.register(WordEntry::new_primitive("STR_INDEXOF", str_indexof_prim));
+    vm.register(WordEntry::new_primitive("STR_SLICE", str_slice_prim));
     vm.register(WordEntry::new_primitive("PUTCHR", putchr_prim));
     vm.register(WordEntry::new_primitive("PUTDEC", putdec_prim));
     vm.register(WordEntry::new_primitive("PUTHEX", puthex_prim));
@@ -3752,6 +3814,164 @@ mod tests {
         vm.push(Cell::StringDesc(idx)).unwrap();
         str_eq_prim(&mut vm).unwrap();
         assert_eq!(vm.pop().unwrap(), Cell::Bool(true));
+    }
+
+    // --- str_indexof_prim tests ---
+
+    #[test]
+    fn test_str_indexof_found_returns_1_based_position() {
+        let mut vm = VM::new();
+        vm.strings.push("hello world".to_string());
+        let needle_idx = vm.intern_string("world").unwrap();
+        vm.push(Cell::Str(0)).unwrap();
+        vm.push(Cell::StringDesc(needle_idx)).unwrap();
+        str_indexof_prim(&mut vm).unwrap();
+        assert_eq!(vm.pop().unwrap(), Cell::Int(7));
+    }
+
+    #[test]
+    fn test_str_indexof_not_found_returns_zero() {
+        let mut vm = VM::new();
+        vm.strings.push("abc".to_string());
+        let needle_idx = vm.intern_string("z").unwrap();
+        vm.push(Cell::Str(0)).unwrap();
+        vm.push(Cell::StringDesc(needle_idx)).unwrap();
+        str_indexof_prim(&mut vm).unwrap();
+        assert_eq!(vm.pop().unwrap(), Cell::Int(0));
+    }
+
+    #[test]
+    fn test_str_indexof_counts_unicode_chars() {
+        let mut vm = VM::new();
+        vm.strings.push("あいうえお".to_string());
+        let needle_idx = vm.intern_string("うえ").unwrap();
+        vm.push(Cell::Str(0)).unwrap();
+        vm.push(Cell::StringDesc(needle_idx)).unwrap();
+        str_indexof_prim(&mut vm).unwrap();
+        assert_eq!(vm.pop().unwrap(), Cell::Int(3));
+    }
+
+    #[test]
+    fn test_str_indexof_empty_needle_returns_one() {
+        let mut vm = VM::new();
+        vm.strings.push("abc".to_string());
+        let needle_idx = vm.intern_string("").unwrap();
+        vm.push(Cell::Str(0)).unwrap();
+        vm.push(Cell::StringDesc(needle_idx)).unwrap();
+        str_indexof_prim(&mut vm).unwrap();
+        assert_eq!(vm.pop().unwrap(), Cell::Int(1));
+    }
+
+    #[test]
+    fn test_str_indexof_type_error() {
+        let mut vm = VM::new();
+        vm.strings.push("abc".to_string());
+        vm.push(Cell::Str(0)).unwrap();
+        vm.push(Cell::Int(1)).unwrap();
+        assert!(matches!(
+            str_indexof_prim(&mut vm),
+            Err(TbxError::TypeError { .. })
+        ));
+    }
+
+    // --- str_slice_prim tests ---
+
+    #[test]
+    fn test_str_slice_basic() {
+        let mut vm = VM::new();
+        let source_idx = vm.intern_string("abcdef").unwrap();
+        vm.push(Cell::StringDesc(source_idx)).unwrap();
+        vm.push(Cell::Int(2)).unwrap();
+        vm.push(Cell::Int(3)).unwrap();
+        str_slice_prim(&mut vm).unwrap();
+        assert_eq!(vm.pop().unwrap(), Cell::Str(0));
+        assert_eq!(vm.strings[0], "bcd");
+    }
+
+    #[test]
+    fn test_str_slice_negative_start_counts_from_end() {
+        let mut vm = VM::new();
+        let source_idx = vm.intern_string("abcdef").unwrap();
+        vm.push(Cell::StringDesc(source_idx)).unwrap();
+        vm.push(Cell::Int(-3)).unwrap();
+        vm.push(Cell::Int(2)).unwrap();
+        str_slice_prim(&mut vm).unwrap();
+        assert_eq!(vm.pop().unwrap(), Cell::Str(0));
+        assert_eq!(vm.strings[0], "de");
+    }
+
+    #[test]
+    fn test_str_slice_clips_past_end() {
+        let mut vm = VM::new();
+        let source_idx = vm.intern_string("abc").unwrap();
+        vm.push(Cell::StringDesc(source_idx)).unwrap();
+        vm.push(Cell::Int(2)).unwrap();
+        vm.push(Cell::Int(10)).unwrap();
+        str_slice_prim(&mut vm).unwrap();
+        assert_eq!(vm.pop().unwrap(), Cell::Str(0));
+        assert_eq!(vm.strings[0], "bc");
+    }
+
+    #[test]
+    fn test_str_slice_too_negative_start_clips_to_beginning() {
+        let mut vm = VM::new();
+        let source_idx = vm.intern_string("abc").unwrap();
+        vm.push(Cell::StringDesc(source_idx)).unwrap();
+        vm.push(Cell::Int(-10)).unwrap();
+        vm.push(Cell::Int(2)).unwrap();
+        str_slice_prim(&mut vm).unwrap();
+        assert_eq!(vm.pop().unwrap(), Cell::Str(0));
+        assert_eq!(vm.strings[0], "ab");
+    }
+
+    #[test]
+    fn test_str_slice_counts_unicode_chars() {
+        let mut vm = VM::new();
+        let source_idx = vm.intern_string("あいうえお").unwrap();
+        vm.push(Cell::StringDesc(source_idx)).unwrap();
+        vm.push(Cell::Int(2)).unwrap();
+        vm.push(Cell::Int(2)).unwrap();
+        str_slice_prim(&mut vm).unwrap();
+        assert_eq!(vm.pop().unwrap(), Cell::Str(0));
+        assert_eq!(vm.strings[0], "いう");
+    }
+
+    #[test]
+    fn test_str_slice_zero_length_returns_empty_string() {
+        let mut vm = VM::new();
+        let source_idx = vm.intern_string("abc").unwrap();
+        vm.push(Cell::StringDesc(source_idx)).unwrap();
+        vm.push(Cell::Int(2)).unwrap();
+        vm.push(Cell::Int(0)).unwrap();
+        str_slice_prim(&mut vm).unwrap();
+        assert_eq!(vm.pop().unwrap(), Cell::Str(0));
+        assert_eq!(vm.strings[0], "");
+    }
+
+    #[test]
+    fn test_str_slice_start_zero_is_invalid_argument() {
+        let mut vm = VM::new();
+        let source_idx = vm.intern_string("abc").unwrap();
+        vm.push(Cell::StringDesc(source_idx)).unwrap();
+        vm.push(Cell::Int(0)).unwrap();
+        vm.push(Cell::Int(1)).unwrap();
+        assert!(matches!(
+            str_slice_prim(&mut vm),
+            Err(TbxError::InvalidArgument { .. })
+        ));
+    }
+
+    #[test]
+    fn test_str_slice_negative_length_is_invalid_argument() {
+        let mut vm = VM::new();
+        let source_idx = vm.intern_string("abc").unwrap();
+        vm.push(Cell::StringDesc(source_idx)).unwrap();
+        vm.push(Cell::Int(1)).unwrap();
+        vm.push(Cell::Int(-1)).unwrap();
+        assert!(matches!(
+            str_slice_prim(&mut vm),
+            Err(TbxError::InvalidArgument { .. })
+        ));
     }
 
     // --- StringFrameEscape tests ---
