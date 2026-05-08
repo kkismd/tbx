@@ -1,0 +1,15 @@
+# lib/tests/test_string_ops.tbx
+# TBX tests for STR_INDEXOF and STR_SLICE.
+USE "lib/tests/helper.tbx"
+
+ASSERT STR_INDEXOF("hello world", "world") = 7
+ASSERT STR_INDEXOF("hello", "z") = 0
+ASSERT STR_INDEXOF("あいうえお", "うえ") = 3
+ASSERT STR_INDEXOF("abc", "") = 1
+
+ASSERT STR_EQ(STR_SLICE("abcdef", 2, 3), "bcd")
+ASSERT STR_EQ(STR_SLICE("abcdef", -3, 2), "de")
+ASSERT STR_EQ(STR_SLICE("abc", 2, 10), "bc")
+ASSERT STR_EQ(STR_SLICE("abc", -10, 2), "ab")
+ASSERT STR_EQ(STR_SLICE("あいうえお", 2, 2), "いう")
+ASSERT STR_EQ(STR_SLICE("abc", 2, 0), "")
