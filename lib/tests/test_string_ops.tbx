@@ -1,5 +1,5 @@
 # lib/tests/test_string_ops.tbx
-# TBX tests for STR_INDEXOF, STR_SLICE, and STR_TRIM.
+# TBX tests for STR_INDEXOF, STR_SLICE, STR_TRIM, STR_UPPER, and STR_LOWER.
 USE "lib/tests/helper.tbx"
 
 ASSERT STR_INDEXOF("hello world", "world") = 7
@@ -18,3 +18,8 @@ ASSERT STR_EQ(STR_TRIM("  hello  "), "hello")
 ASSERT STR_EQ(STR_TRIM("abc"), "abc")
 ASSERT STR_EQ(STR_TRIM("   "), "")
 ASSERT STR_EQ(STR_TRIM("　abc　"), "abc")
+
+ASSERT STR_EQ(STR_UPPER("abc"), "ABC")
+ASSERT STR_EQ(STR_UPPER("straße"), "STRASSE")
+ASSERT STR_EQ(STR_LOWER("ABC"), "abc")
+ASSERT STR_EQ(STR_LOWER("ÄÖÜ"), "äöü")

@@ -599,6 +599,32 @@ pub fn str_trim_prim(vm: &mut VM) -> Result<(), TbxError> {
     Ok(())
 }
 
+/// STR_UPPER — convert a string to locale-independent Unicode uppercase.
+///
+/// Stack: `[..., s: Str|StringDesc]` → `Cell::Str(new)`
+pub fn str_upper_prim(vm: &mut VM) -> Result<(), TbxError> {
+    let s_cell = vm.pop()?;
+    let s = resolve_str_cell(vm, &s_cell)?;
+    let upper = s.to_uppercase();
+    let idx = vm.strings.len();
+    vm.strings.push(upper);
+    vm.push(Cell::Str(idx))?;
+    Ok(())
+}
+
+/// STR_LOWER — convert a string to locale-independent Unicode lowercase.
+///
+/// Stack: `[..., s: Str|StringDesc]` → `Cell::Str(new)`
+pub fn str_lower_prim(vm: &mut VM) -> Result<(), TbxError> {
+    let s_cell = vm.pop()?;
+    let s = resolve_str_cell(vm, &s_cell)?;
+    let lower = s.to_lowercase();
+    let idx = vm.strings.len();
+    vm.strings.push(lower);
+    vm.push(Cell::Str(idx))?;
+    Ok(())
+}
+
 /// Helper: resolve a `Cell::Str` or `Cell::StringDesc` to a `String`.
 fn resolve_str_cell(vm: &VM, cell: &Cell) -> Result<String, TbxError> {
     match cell {
@@ -2378,7 +2404,8 @@ pub fn register_all(vm: &mut VM) {
     // Runtime string primitives.
     // STR converts any value to a string; STR_CONCAT concatenates two strings;
     // STR_LEN returns the character count; STR_EQ compares by content;
-    // STR_INDEXOF, STR_SLICE, and STR_TRIM provide core string manipulation.
+    // STR_INDEXOF, STR_SLICE, STR_TRIM, STR_UPPER, and STR_LOWER provide
+    // core string manipulation.
     vm.register(WordEntry::new_primitive("STR", str_prim));
     vm.register(WordEntry::new_primitive("STR_CONCAT", str_concat_prim));
     vm.register(WordEntry::new_primitive("STR_LEN", str_len_prim));
@@ -2386,6 +2413,8 @@ pub fn register_all(vm: &mut VM) {
     vm.register(WordEntry::new_primitive("STR_INDEXOF", str_indexof_prim));
     vm.register(WordEntry::new_primitive("STR_SLICE", str_slice_prim));
     vm.register(WordEntry::new_primitive("STR_TRIM", str_trim_prim));
+    vm.register(WordEntry::new_primitive("STR_UPPER", str_upper_prim));
+    vm.register(WordEntry::new_primitive("STR_LOWER", str_lower_prim));
     vm.register(WordEntry::new_primitive("PUTCHR", putchr_prim));
     vm.register(WordEntry::new_primitive("PUTDEC", putdec_prim));
     vm.register(WordEntry::new_primitive("PUTHEX", puthex_prim));
@@ -4038,6 +4067,70 @@ mod tests {
         str_trim_prim(&mut vm).unwrap();
         assert_eq!(vm.pop().unwrap(), Cell::Str(1));
         assert_eq!(vm.strings[1], "runtime");
+    }
+
+    // --- str_upper_prim tests ---
+
+    #[test]
+    fn test_str_upper_ascii() {
+        let mut vm = VM::new();
+        let source_idx = vm.intern_string("Abc123").unwrap();
+        vm.push(Cell::StringDesc(source_idx)).unwrap();
+        str_upper_prim(&mut vm).unwrap();
+        assert_eq!(vm.pop().unwrap(), Cell::Str(0));
+        assert_eq!(vm.strings[0], "ABC123");
+    }
+
+    #[test]
+    fn test_str_upper_unicode_can_change_length() {
+        let mut vm = VM::new();
+        let source_idx = vm.intern_string("straße").unwrap();
+        vm.push(Cell::StringDesc(source_idx)).unwrap();
+        str_upper_prim(&mut vm).unwrap();
+        assert_eq!(vm.pop().unwrap(), Cell::Str(0));
+        assert_eq!(vm.strings[0], "STRASSE");
+    }
+
+    #[test]
+    fn test_str_upper_accepts_runtime_string() {
+        let mut vm = VM::new();
+        vm.strings.push("mix".to_string());
+        vm.push(Cell::Str(0)).unwrap();
+        str_upper_prim(&mut vm).unwrap();
+        assert_eq!(vm.pop().unwrap(), Cell::Str(1));
+        assert_eq!(vm.strings[1], "MIX");
+    }
+
+    // --- str_lower_prim tests ---
+
+    #[test]
+    fn test_str_lower_ascii() {
+        let mut vm = VM::new();
+        let source_idx = vm.intern_string("AbC123").unwrap();
+        vm.push(Cell::StringDesc(source_idx)).unwrap();
+        str_lower_prim(&mut vm).unwrap();
+        assert_eq!(vm.pop().unwrap(), Cell::Str(0));
+        assert_eq!(vm.strings[0], "abc123");
+    }
+
+    #[test]
+    fn test_str_lower_unicode() {
+        let mut vm = VM::new();
+        let source_idx = vm.intern_string("ÄÖÜ").unwrap();
+        vm.push(Cell::StringDesc(source_idx)).unwrap();
+        str_lower_prim(&mut vm).unwrap();
+        assert_eq!(vm.pop().unwrap(), Cell::Str(0));
+        assert_eq!(vm.strings[0], "äöü");
+    }
+
+    #[test]
+    fn test_str_lower_accepts_runtime_string() {
+        let mut vm = VM::new();
+        vm.strings.push("MIX".to_string());
+        vm.push(Cell::Str(0)).unwrap();
+        str_lower_prim(&mut vm).unwrap();
+        assert_eq!(vm.pop().unwrap(), Cell::Str(1));
+        assert_eq!(vm.strings[1], "mix");
     }
 
     // --- StringFrameEscape tests ---
