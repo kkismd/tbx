@@ -6,6 +6,7 @@ pub mod expr;
 pub mod interpreter;
 pub mod lexer;
 pub mod primitives;
+pub mod statement_reader;
 pub mod vm;
 
 /// Create a VM with all system primitives registered and sealed.
