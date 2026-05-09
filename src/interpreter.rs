@@ -10,6 +10,7 @@ use crate::error::TbxError;
 use crate::expr::ExprCompiler;
 use crate::init_vm;
 use crate::lexer::{Lexer, SpannedToken, Token};
+use crate::statement_reader::{LogicalStatement, StatementReader};
 use crate::vm::VM;
 
 /// Maximum allowed nesting depth for USE statements.
@@ -416,6 +417,34 @@ impl Interpreter {
         run_result.map_err(make_err)
     }
 
+    /// Executes one logical statement produced by `StatementReader`.
+    fn exec_logical_statement(
+        &mut self,
+        mut stmt: LogicalStatement,
+    ) -> Result<(), InterpreterError> {
+        if stmt.tokens.is_empty() {
+            return Ok(());
+        }
+
+        if let Token::LineNum(n) = stmt.tokens[0].token {
+            if self.vm.compile_state.is_some() {
+                let ln_line = stmt.tokens[0].pos.line;
+                let ln_col = stmt.tokens[0].pos.col;
+                self.register_label(n, &stmt.source_excerpt, ln_line, ln_col)
+                    .inspect_err(|_e| {
+                        self.vm.rollback_def();
+                    })?;
+            }
+            stmt.tokens.remove(0);
+        }
+
+        if stmt.tokens.is_empty() {
+            return Ok(());
+        }
+
+        self.exec_segment(&stmt.tokens, &stmt.source_excerpt, stmt.start_line)
+    }
+
     /// Write a single statement and its arguments to the dictionary.
     ///
     /// Emits: `LIT_MARKER [arg_cells] (CALL stmt arity local_count | stmt) DROP_TO_MARKER`
@@ -584,13 +613,28 @@ impl Interpreter {
 
     /// Execute a multi-line source string.
     ///
-    /// Splits `src` by newlines and calls `exec_line` for each.
+    /// Reads logical statements from the source and executes each one.
     /// Stops on the first error (including `TbxError::Halted`, which the inner
     /// interpreter returns for the `HALT` statement).
     pub fn exec_source(&mut self, src: &str) -> Result<(), InterpreterError> {
-        for (line_idx, line) in src.lines().enumerate() {
-            let line_num = line_idx + 1; // 1-based line number
-            match self.exec_line(line, line_num) {
+        let mut reader = StatementReader::new(src);
+        loop {
+            let stmt = match reader.next_statement() {
+                Ok(Some(stmt)) => stmt,
+                Ok(None) => break,
+                Err(e) => {
+                    if self.vm.compile_state.is_some() {
+                        self.vm.rollback_def();
+                    }
+                    return Err(InterpreterError::new(
+                        e.line,
+                        e.col,
+                        &e.source_excerpt,
+                        e.kind,
+                    ));
+                }
+            };
+            match self.exec_logical_statement(stmt) {
                 Ok(()) => {}
                 Err(e) if matches!(e.kind, TbxError::Halted) => return Ok(()),
                 Err(e) => return Err(e),
@@ -1313,6 +1357,124 @@ SET &A, TO_ARRAY(10, 20)
 PUTDEC A(2)";
         interp.exec_source(src).unwrap();
         assert_eq!(interp.take_output(), "20");
+    }
+
+    #[test]
+    fn test_exec_source_multiline_to_array() {
+        let mut interp = Interpreter::new();
+        let src = "\
+VAR A
+SET &A, TO_ARRAY(
+  10, 20,
+  30, 40
+)
+PUTDEC ARRAY_LEN(A)
+PUTSTR \":\"
+PUTDEC A(3)";
+        interp.exec_source(src).unwrap();
+        assert_eq!(interp.take_output(), "4:30");
+    }
+
+    #[test]
+    fn test_exec_source_multiline_str_concat() {
+        let mut interp = Interpreter::new();
+        let src = "\
+VAR S
+SET &S, STR_CONCAT(
+  \"foo\",
+  \"bar\"
+)
+PUTSTR S";
+        interp.exec_source(src).unwrap();
+        assert_eq!(interp.take_output(), "foobar");
+    }
+
+    #[test]
+    fn test_exec_source_multiline_nested_call() {
+        let mut interp = Interpreter::new();
+        let src = "\
+PUTDEC ADD(
+  1,
+  MUL(
+    2,
+    3
+  )
+)";
+        interp.exec_source(src).unwrap();
+        assert_eq!(interp.take_output(), "7");
+    }
+
+    #[test]
+    fn test_exec_source_multiline_expr_inside_def() {
+        let mut interp = Interpreter::new();
+        let src = "\
+DEF SHOW
+  PUTDEC ADD(
+    1,
+    2
+  )
+END
+SHOW";
+        interp.exec_source(src).unwrap();
+        assert_eq!(interp.take_output(), "3");
+    }
+
+    #[test]
+    fn test_exec_source_line_number_label_inside_def() {
+        let mut interp = Interpreter::new();
+        let src = "\
+DEF SHOW(X)
+  BIT X = 0, 10
+  PUTDEC 1
+  10 PUTDEC 2
+END
+SHOW 0";
+        interp.exec_source(src).unwrap();
+        assert_eq!(interp.take_output(), "2");
+    }
+
+    #[test]
+    fn test_exec_source_semicolon_and_rem_compatibility() {
+        let mut interp = Interpreter::new();
+        interp
+            .exec_source("PUTDEC 1; REM x; PUTDEC 2\nPUTDEC 3")
+            .unwrap();
+        assert_eq!(interp.take_output(), "13");
+    }
+
+    #[test]
+    fn test_exec_line_unclosed_paren_still_errors() {
+        let mut interp = Interpreter::new();
+        let result = interp.exec_line("PUTDEC ADD(", 1);
+        assert!(result.is_err(), "exec_line must remain single-line");
+    }
+
+    #[test]
+    fn test_exec_source_unclosed_paren_reports_open_paren_position() {
+        let mut interp = Interpreter::new();
+        let err = interp
+            .exec_source("PUTDEC ADD(\n  1\n")
+            .expect_err("unclosed paren should be an error");
+        assert_eq!(err.line, 1);
+        assert_eq!(err.col, 11);
+        assert!(matches!(
+            err.kind,
+            TbxError::InvalidExpression {
+                reason: "unmatched '(' in statement"
+            }
+        ));
+    }
+
+    #[test]
+    fn test_exec_source_reader_error_inside_def_rolls_back() {
+        let mut interp = Interpreter::new();
+        let result = interp.exec_source("DEF BAD\n  PUTDEC ADD(\n");
+        assert!(result.is_err(), "unclosed paren inside DEF should fail");
+
+        interp
+            .exec_source("PUTDEC 7")
+            .expect("interpreter should be reusable after reader error rollback");
+        assert_eq!(interp.take_output(), "7");
     }
 
     #[test]
