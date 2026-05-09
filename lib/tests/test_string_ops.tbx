@@ -1,5 +1,5 @@
 # lib/tests/test_string_ops.tbx
-# TBX tests for STR_INDEXOF, STR_SLICE, STR_TRIM, STR_UPPER, STR_LOWER, and STR_REPLACE_FIRST.
+# TBX tests for STR_INDEXOF, STR_SLICE, STR_TRIM, STR_UPPER, STR_LOWER, STR_REPLACE_FIRST, and STR_REPLACE_ALL.
 USE "lib/tests/helper.tbx"
 
 ASSERT STR_INDEXOF("hello world", "world") = 7
@@ -27,3 +27,7 @@ ASSERT STR_EQ(STR_LOWER("ÄÖÜ"), "äöü")
 ASSERT STR_EQ(STR_REPLACE_FIRST("abcabc", "ab", "X"), "Xcabc")
 ASSERT STR_EQ(STR_REPLACE_FIRST("abc", "z", "X"), "abc")
 ASSERT STR_EQ(STR_REPLACE_FIRST("あいうあい", "あい", "x"), "xうあい")
+
+ASSERT STR_EQ(STR_REPLACE_ALL("abcabc", "ab", "X"), "XcXc")
+ASSERT STR_EQ(STR_REPLACE_ALL("aaaa", "aa", "b"), "bb")
+ASSERT STR_EQ(STR_REPLACE_ALL("あいうあい", "あい", "x"), "xうx")
