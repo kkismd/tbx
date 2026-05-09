@@ -7,6 +7,12 @@ ASSERT STR_INDEXOF("hello", "z") = 0
 ASSERT STR_INDEXOF("あいうえお", "うえ") = 3
 ASSERT STR_INDEXOF("abc", "") = 1
 
+ASSERT STR("abc") = "abc"
+ASSERT STR_CONCAT("a", "b") = "ab"
+ASSERT "same" = "same"
+ASSERT "abc" <> "abd"
+ASSERT STR("abc") <> "abd"
+
 ASSERT STR_EQ(STR_SLICE("abcdef", 2, 3), "bcd")
 ASSERT STR_EQ(STR_SLICE("abcdef", -3, 2), "de")
 ASSERT STR_EQ(STR_SLICE("abc", 2, 10), "bc")
