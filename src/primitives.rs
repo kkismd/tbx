@@ -657,6 +657,31 @@ pub fn str_replace_first_prim(vm: &mut VM) -> Result<(), TbxError> {
     Ok(())
 }
 
+/// STR_REPLACE_ALL — replace all non-overlapping occurrences of a substring.
+///
+/// Stack: `[..., s: Str|StringDesc, needle: Str|StringDesc, replacement: Str|StringDesc]`
+///   → `Cell::Str(new)`
+pub fn str_replace_all_prim(vm: &mut VM) -> Result<(), TbxError> {
+    let replacement_cell = vm.pop()?;
+    let needle_cell = vm.pop()?;
+    let s_cell = vm.pop()?;
+    let replacement = resolve_str_cell(vm, &replacement_cell)?;
+    let needle = resolve_str_cell(vm, &needle_cell)?;
+    let s = resolve_str_cell(vm, &s_cell)?;
+
+    if needle.is_empty() {
+        return Err(TbxError::InvalidArgument {
+            message: "STR_REPLACE_ALL needle must not be empty".to_string(),
+        });
+    }
+
+    let result = s.replace(&needle, &replacement);
+    let idx = vm.strings.len();
+    vm.strings.push(result);
+    vm.push(Cell::Str(idx))?;
+    Ok(())
+}
+
 /// Helper: resolve a `Cell::Str` or `Cell::StringDesc` to a `String`.
 fn resolve_str_cell(vm: &VM, cell: &Cell) -> Result<String, TbxError> {
     match cell {
@@ -2436,8 +2461,8 @@ pub fn register_all(vm: &mut VM) {
     // Runtime string primitives.
     // STR converts any value to a string; STR_CONCAT concatenates two strings;
     // STR_LEN returns the character count; STR_EQ compares by content;
-    // STR_INDEXOF, STR_SLICE, STR_TRIM, STR_UPPER, STR_LOWER, and
-    // STR_REPLACE_FIRST provide core string manipulation.
+    // STR_INDEXOF, STR_SLICE, STR_TRIM, STR_UPPER, STR_LOWER,
+    // STR_REPLACE_FIRST, and STR_REPLACE_ALL provide core string manipulation.
     vm.register(WordEntry::new_primitive("STR", str_prim));
     vm.register(WordEntry::new_primitive("STR_CONCAT", str_concat_prim));
     vm.register(WordEntry::new_primitive("STR_LEN", str_len_prim));
@@ -2450,6 +2475,10 @@ pub fn register_all(vm: &mut VM) {
     vm.register(WordEntry::new_primitive(
         "STR_REPLACE_FIRST",
         str_replace_first_prim,
+    ));
+    vm.register(WordEntry::new_primitive(
+        "STR_REPLACE_ALL",
+        str_replace_all_prim,
     ));
     vm.register(WordEntry::new_primitive("PUTCHR", putchr_prim));
     vm.register(WordEntry::new_primitive("PUTDEC", putdec_prim));
@@ -4238,6 +4267,93 @@ mod tests {
         vm.push(Cell::StringDesc(replacement_idx)).unwrap();
         assert!(matches!(
             str_replace_first_prim(&mut vm),
+            Err(TbxError::InvalidArgument { .. })
+        ));
+    }
+
+    // --- str_replace_all_prim tests ---
+
+    #[test]
+    fn test_str_replace_all_replaces_all_matches() {
+        let mut vm = VM::new();
+        let source_idx = vm.intern_string("abcabc").unwrap();
+        let needle_idx = vm.intern_string("ab").unwrap();
+        let replacement_idx = vm.intern_string("X").unwrap();
+        vm.push(Cell::StringDesc(source_idx)).unwrap();
+        vm.push(Cell::StringDesc(needle_idx)).unwrap();
+        vm.push(Cell::StringDesc(replacement_idx)).unwrap();
+        str_replace_all_prim(&mut vm).unwrap();
+        assert_eq!(vm.pop().unwrap(), Cell::Str(0));
+        assert_eq!(vm.strings[0], "XcXc");
+    }
+
+    #[test]
+    fn test_str_replace_all_returns_copy_when_not_found() {
+        let mut vm = VM::new();
+        let source_idx = vm.intern_string("abc").unwrap();
+        let needle_idx = vm.intern_string("z").unwrap();
+        let replacement_idx = vm.intern_string("X").unwrap();
+        vm.push(Cell::StringDesc(source_idx)).unwrap();
+        vm.push(Cell::StringDesc(needle_idx)).unwrap();
+        vm.push(Cell::StringDesc(replacement_idx)).unwrap();
+        str_replace_all_prim(&mut vm).unwrap();
+        assert_eq!(vm.pop().unwrap(), Cell::Str(0));
+        assert_eq!(vm.strings[0], "abc");
+    }
+
+    #[test]
+    fn test_str_replace_all_accepts_runtime_string() {
+        let mut vm = VM::new();
+        let needle_idx = vm.intern_string("ab").unwrap();
+        let replacement_idx = vm.intern_string("X").unwrap();
+        vm.strings.push("abcabc".to_string());
+        vm.push(Cell::Str(0)).unwrap();
+        vm.push(Cell::StringDesc(needle_idx)).unwrap();
+        vm.push(Cell::StringDesc(replacement_idx)).unwrap();
+        str_replace_all_prim(&mut vm).unwrap();
+        assert_eq!(vm.pop().unwrap(), Cell::Str(1));
+        assert_eq!(vm.strings[1], "XcXc");
+    }
+
+    #[test]
+    fn test_str_replace_all_handles_unicode() {
+        let mut vm = VM::new();
+        let source_idx = vm.intern_string("あいうあい").unwrap();
+        let needle_idx = vm.intern_string("あい").unwrap();
+        let replacement_idx = vm.intern_string("x").unwrap();
+        vm.push(Cell::StringDesc(source_idx)).unwrap();
+        vm.push(Cell::StringDesc(needle_idx)).unwrap();
+        vm.push(Cell::StringDesc(replacement_idx)).unwrap();
+        str_replace_all_prim(&mut vm).unwrap();
+        assert_eq!(vm.pop().unwrap(), Cell::Str(0));
+        assert_eq!(vm.strings[0], "xうx");
+    }
+
+    #[test]
+    fn test_str_replace_all_uses_non_overlapping_matches() {
+        let mut vm = VM::new();
+        let source_idx = vm.intern_string("aaaa").unwrap();
+        let needle_idx = vm.intern_string("aa").unwrap();
+        let replacement_idx = vm.intern_string("b").unwrap();
+        vm.push(Cell::StringDesc(source_idx)).unwrap();
+        vm.push(Cell::StringDesc(needle_idx)).unwrap();
+        vm.push(Cell::StringDesc(replacement_idx)).unwrap();
+        str_replace_all_prim(&mut vm).unwrap();
+        assert_eq!(vm.pop().unwrap(), Cell::Str(0));
+        assert_eq!(vm.strings[0], "bb");
+    }
+
+    #[test]
+    fn test_str_replace_all_empty_needle_is_invalid_argument() {
+        let mut vm = VM::new();
+        let source_idx = vm.intern_string("abc").unwrap();
+        let needle_idx = vm.intern_string("").unwrap();
+        let replacement_idx = vm.intern_string("X").unwrap();
+        vm.push(Cell::StringDesc(source_idx)).unwrap();
+        vm.push(Cell::StringDesc(needle_idx)).unwrap();
+        vm.push(Cell::StringDesc(replacement_idx)).unwrap();
+        assert!(matches!(
+            str_replace_all_prim(&mut vm),
             Err(TbxError::InvalidArgument { .. })
         ));
     }
