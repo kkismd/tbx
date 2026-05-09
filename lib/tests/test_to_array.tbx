@@ -111,3 +111,51 @@ DEF ROUNDTRIP()
   RETURN 0
 END
 ASSERT ROUNDTRIP() = 1
+
+# --- ARRAY_CONCAT: concatenate arrays without mutating inputs ---
+
+DEF ARRAY_CONCAT_BASIC()
+  VAR A
+  VAR B
+  VAR C
+  LET A = TO_ARRAY(1, 2)
+  LET B = TO_ARRAY(3, 4)
+  LET C = ARRAY_CONCAT(A, B)
+  IF ARRAY_LEN(C) = 4
+    IF C(1) = 1
+      IF C(2) = 2
+        IF C(3) = 3
+          IF C(4) = 4
+            IF ARRAY_LEN(A) = 2
+              IF ARRAY_LEN(B) = 2
+                RETURN 1
+              ENDIF
+            ENDIF
+          ENDIF
+        ENDIF
+      ENDIF
+    ENDIF
+  ENDIF
+  RETURN 0
+END
+ASSERT ARRAY_CONCAT_BASIC() = 1
+
+# --- ARRAY_CONCAT: empty arrays are supported ---
+
+DEF ARRAY_CONCAT_EMPTY_LEFT()
+  VAR A
+  VAR B
+  VAR C
+  LET A = TO_ARRAY()
+  LET B = TO_ARRAY(9, 8)
+  LET C = ARRAY_CONCAT(A, B)
+  IF ARRAY_LEN(C) = 2
+    IF C(1) = 9
+      IF C(2) = 8
+        RETURN 1
+      ENDIF
+    ENDIF
+  ENDIF
+  RETURN 0
+END
+ASSERT ARRAY_CONCAT_EMPTY_LEFT() = 1
