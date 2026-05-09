@@ -4237,6 +4237,22 @@ PUTDEC ONLY_ONE(3)";
     }
 
     #[test]
+    fn test_select_case_no_else_match_can_continue_after_endsel() {
+        let mut interp = Interpreter::new();
+        let src = "\
+DEF F(X)
+  SELECT X
+  CASE 1
+    PUTSTR \"hit\"
+  ENDSEL
+  PUTDEC X
+END
+F(1)";
+        interp.exec_source(src).unwrap();
+        assert_eq!(interp.take_output(), "hit1");
+    }
+
+    #[test]
     fn test_select_outside_def_is_error() {
         let mut interp = Interpreter::new();
         let result = interp.exec_line("SELECT 1", 1);
