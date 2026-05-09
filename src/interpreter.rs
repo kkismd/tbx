@@ -4253,6 +4253,25 @@ F(1)";
     }
 
     #[test]
+    fn test_compile_program_select_case() {
+        let mut interp = Interpreter::new();
+        let src = r#"
+DEF PICK(X)
+  SELECT X
+  CASE 1
+    PUTSTR "one"
+  CASE_ELSE
+    PUTSTR "other"
+  ENDSEL
+END
+PICK 1
+PICK 9
+"#;
+        interp.compile_program(src).unwrap();
+        assert_eq!(interp.take_output(), "oneother");
+    }
+
+    #[test]
     fn test_select_outside_def_is_error() {
         let mut interp = Interpreter::new();
         let result = interp.exec_line("SELECT 1", 1);
