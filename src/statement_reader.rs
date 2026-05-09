@@ -48,11 +48,22 @@ impl<'a> StatementReader<'a> {
         loop {
             let mut st = self.lexer.next_token();
 
-            match &st.token {
-                Token::Error(_) => {
+            match st.token.clone() {
+                Token::Error(message) => {
+                    if paren_depth > 0 && recover_continuation_number(self.lexer.source(), &mut st)
+                    {
+                        end_line = st.pos.line;
+                        if tokens.is_empty() {
+                            start_line = st.pos.line;
+                            start_col = st.pos.col;
+                            source_excerpt =
+                                line_text_for_offset(self.lexer.source(), st.source_offset);
+                        }
+                        tokens.push(st);
+                        continue;
+                    }
                     return Err(TbxError::InvalidExpression {
-                        reason:
-                            "lexer error in statement reader (e.g. unterminated string literal)",
+                        reason: lexer_error_reason(&message),
                     });
                 }
                 Token::Newline => {
@@ -91,7 +102,6 @@ impl<'a> StatementReader<'a> {
                 }
                 Token::Eof => {
                     if paren_depth > 0 {
-                        let _open_pos = open_parens.last();
                         return Err(TbxError::InvalidExpression {
                             reason: "unmatched '(' in statement",
                         });
@@ -122,7 +132,7 @@ impl<'a> StatementReader<'a> {
                     open_parens.push(st.pos.clone());
                 }
                 Token::LineNum(n) if paren_depth > 0 => {
-                    st.token = Token::IntLit(*n);
+                    st.token = Token::IntLit(n);
                 }
                 _ => {}
             }
@@ -144,6 +154,39 @@ fn line_text_for_offset(source: &str, offset: usize) -> String {
         .find('\n')
         .map_or(source.len(), |idx| offset + idx);
     source[start..end].trim_end_matches('\r').to_string()
+}
+
+fn recover_continuation_number(source: &str, st: &mut SpannedToken) -> bool {
+    let Token::Error(message) = &st.token else {
+        return false;
+    };
+    if !message.starts_with("invalid line number: ") {
+        return false;
+    }
+
+    let raw = &source[st.source_offset..st.source_offset + st.source_len];
+    match raw.parse::<f64>() {
+        Ok(value) => {
+            st.token = Token::FloatLit(value);
+            true
+        }
+        Err(_) => false,
+    }
+}
+
+fn lexer_error_reason(message: &str) -> &'static str {
+    match message {
+        "unterminated string literal" => "unterminated string literal",
+        "unterminated string literal after escape" => "unterminated string literal after escape",
+        "unexpected token: '..'" => "unexpected token: '..'",
+        _ if message.starts_with("invalid line number: ") => "invalid line number",
+        _ if message.starts_with("integer literal out of range: ") => {
+            "integer literal out of range"
+        }
+        _ if message.starts_with("float literal out of range: ") => "float literal out of range",
+        _ if message.starts_with("unexpected character: ") => "unexpected character",
+        _ => "lexer error in statement reader",
+    }
 }
 
 #[cfg(test)]
@@ -235,6 +278,18 @@ mod tests {
     }
 
     #[test]
+    fn test_float_at_start_of_continuation_line_is_recovered() {
+        let statements = collect_statements("SET &A, TO_ARRAY(\n1.5, 2.5,\n3.5, 4.5\n)\n").unwrap();
+        assert!(
+            statements[0]
+                .tokens
+                .iter()
+                .any(|st| matches!(st.token, Token::FloatLit(value) if value == 1.5)),
+            "expected continuation-line float token to be recovered as FloatLit"
+        );
+    }
+
+    #[test]
     fn test_semicolon_inside_parens_is_error() {
         let err = collect_statements("SET &A, TO_ARRAY(1; 2)").unwrap_err();
         assert!(matches!(err, TbxError::InvalidExpression { .. }));
@@ -279,5 +334,16 @@ mod tests {
             Some(Token::Ident(name)) if name == "REM"
         ));
         assert_eq!(statements[0].terminator, StatementTerminator::Newline);
+    }
+
+    #[test]
+    fn test_lexer_error_reason_is_preserved_for_unterminated_string() {
+        let err = collect_statements("PUTSTR \"unterminated\n").unwrap_err();
+        assert!(matches!(
+            err,
+            TbxError::InvalidExpression {
+                reason: "unterminated string literal"
+            }
+        ));
     }
 }
