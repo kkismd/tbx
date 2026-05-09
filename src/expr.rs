@@ -434,6 +434,11 @@ impl<'a> ExprCompiler<'a> {
                         Some(OpItem::LParen {
                             call: Some(LParenCall::Function(xt, arity)),
                         }) => {
+                            if !prev_was_operand && arity > 0 {
+                                return Err(TbxError::InvalidExpression {
+                                    reason: "trailing comma in function call argument list",
+                                });
+                            }
                             emit_call_by_kind(
                                 &mut output,
                                 xt,
@@ -1502,6 +1507,20 @@ mod tests {
     /// compile_expr must propagate that as TbxError::InvalidExpression rather
     /// than silently ignoring it (which would leave the argument list empty and
     /// cause confusing runtime type errors).
+    #[test]
+    fn test_trailing_comma_in_function_call_is_error() {
+        let mut vm = make_vm();
+        vm.register(WordEntry::new_word("ADD", 2));
+        let tokens = lex("ADD(1, 2,)");
+        let err = ExprCompiler::new(&mut vm)
+            .compile_expr(&tokens)
+            .unwrap_err();
+        assert!(
+            matches!(err, TbxError::InvalidExpression { reason } if reason.contains("trailing comma")),
+            "trailing comma should produce InvalidExpression, got {err:?}"
+        );
+    }
+
     #[test]
     fn test_token_error_propagates_as_invalid_expression() {
         use crate::lexer::Position;
