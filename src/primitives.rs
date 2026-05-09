@@ -313,12 +313,19 @@ pub fn sqrt_prim(vm: &mut VM) -> Result<(), TbxError> {
 
 /// EQ — equality comparison. Pushes Bool(true) if the two top values are equal.
 /// Int/Float mixed pairs are compared by promoting Int to Float.
+/// Str/StringDesc pairs are compared by string content.
 pub fn eq_prim(vm: &mut VM) -> Result<(), TbxError> {
     let b = vm.pop()?;
     let a = vm.pop()?;
     let result = match (&a, &b) {
         (Cell::Int(x), Cell::Float(y)) => (*x as f64) == *y,
         (Cell::Float(x), Cell::Int(y)) => *x == (*y as f64),
+        (Cell::Str(_), Cell::Str(_))
+        | (Cell::Str(_), Cell::StringDesc(_))
+        | (Cell::StringDesc(_), Cell::Str(_))
+        | (Cell::StringDesc(_), Cell::StringDesc(_)) => {
+            resolve_str_cell(vm, &a)? == resolve_str_cell(vm, &b)?
+        }
         _ => a == b,
     };
     vm.push(Cell::Bool(result))?;
@@ -327,12 +334,19 @@ pub fn eq_prim(vm: &mut VM) -> Result<(), TbxError> {
 
 /// NEQ — inequality comparison. Pushes Bool(true) if the two top values are not equal.
 /// Int/Float mixed pairs are compared by promoting Int to Float.
+/// Str/StringDesc pairs are compared by string content.
 pub fn neq_prim(vm: &mut VM) -> Result<(), TbxError> {
     let b = vm.pop()?;
     let a = vm.pop()?;
     let result = match (&a, &b) {
         (Cell::Int(x), Cell::Float(y)) => (*x as f64) != *y,
         (Cell::Float(x), Cell::Int(y)) => *x != (*y as f64),
+        (Cell::Str(_), Cell::Str(_))
+        | (Cell::Str(_), Cell::StringDesc(_))
+        | (Cell::StringDesc(_), Cell::Str(_))
+        | (Cell::StringDesc(_), Cell::StringDesc(_)) => {
+            resolve_str_cell(vm, &a)? != resolve_str_cell(vm, &b)?
+        }
         _ => a != b,
     };
     vm.push(Cell::Bool(result))?;
@@ -3354,6 +3368,39 @@ mod tests {
     }
 
     #[test]
+    fn test_eq_str_compares_content() {
+        let mut vm = VM::new();
+        vm.strings.push("hello".to_string());
+        vm.strings.push("hello".to_string());
+        vm.push(Cell::Str(0)).unwrap();
+        vm.push(Cell::Str(1)).unwrap();
+        eq_prim(&mut vm).unwrap();
+        assert_eq!(vm.pop(), Ok(Cell::Bool(true)));
+    }
+
+    #[test]
+    fn test_eq_str_and_string_desc_compares_content() {
+        let mut vm = VM::new();
+        let idx = vm.intern_string("hello").unwrap();
+        vm.strings.push("hello".to_string());
+        vm.push(Cell::Str(0)).unwrap();
+        vm.push(Cell::StringDesc(idx)).unwrap();
+        eq_prim(&mut vm).unwrap();
+        assert_eq!(vm.pop(), Ok(Cell::Bool(true)));
+    }
+
+    #[test]
+    fn test_eq_string_desc_compares_content() {
+        let mut vm = VM::new();
+        let idx_a = vm.intern_string("hello").unwrap();
+        let idx_b = vm.intern_string("hello").unwrap();
+        vm.push(Cell::StringDesc(idx_a)).unwrap();
+        vm.push(Cell::StringDesc(idx_b)).unwrap();
+        eq_prim(&mut vm).unwrap();
+        assert_eq!(vm.pop(), Ok(Cell::Bool(true)));
+    }
+
+    #[test]
     fn test_neq_int_float_promotion() {
         let mut vm = VM::new();
         vm.push(Cell::Int(1)).unwrap();
@@ -3378,6 +3425,28 @@ mod tests {
         vm.push(Cell::Int(5)).unwrap();
         neq_prim(&mut vm).unwrap();
         assert_eq!(vm.pop(), Ok(Cell::Bool(false)));
+    }
+
+    #[test]
+    fn test_neq_str_compares_content() {
+        let mut vm = VM::new();
+        vm.strings.push("foo".to_string());
+        vm.strings.push("bar".to_string());
+        vm.push(Cell::Str(0)).unwrap();
+        vm.push(Cell::Str(1)).unwrap();
+        neq_prim(&mut vm).unwrap();
+        assert_eq!(vm.pop(), Ok(Cell::Bool(true)));
+    }
+
+    #[test]
+    fn test_neq_str_and_string_desc_compares_content() {
+        let mut vm = VM::new();
+        let idx = vm.intern_string("hello").unwrap();
+        vm.strings.push("world".to_string());
+        vm.push(Cell::Str(0)).unwrap();
+        vm.push(Cell::StringDesc(idx)).unwrap();
+        neq_prim(&mut vm).unwrap();
+        assert_eq!(vm.pop(), Ok(Cell::Bool(true)));
     }
 
     // --- LT / GT / LE / GE tests ---
