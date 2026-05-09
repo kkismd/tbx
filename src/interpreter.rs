@@ -417,13 +417,18 @@ impl Interpreter {
         run_result.map_err(make_err)
     }
 
-    /// Executes one logical statement produced by `StatementReader`.
-    fn exec_logical_statement(
+    /// Strip a leading `LineNum` token and, if inside a DEF body, register it as a label.
+    ///
+    /// Returns `Ok(Some(stmt))` when the statement still has tokens after the line-number
+    /// is consumed, `Ok(None)` when the statement was a bare line-number (nothing left to
+    /// execute), or `Err` when label registration fails (compile state is rolled back by
+    /// `register_label`'s caller before returning).
+    fn prepare_logical_statement(
         &mut self,
         mut stmt: LogicalStatement,
-    ) -> Result<(), InterpreterError> {
+    ) -> Result<Option<LogicalStatement>, InterpreterError> {
         if stmt.tokens.is_empty() {
-            return Ok(());
+            return Ok(None);
         }
 
         if let Token::LineNum(n) = stmt.tokens[0].token {
@@ -439,9 +444,18 @@ impl Interpreter {
         }
 
         if stmt.tokens.is_empty() {
-            return Ok(());
+            return Ok(None);
         }
 
+        Ok(Some(stmt))
+    }
+
+    /// Executes one logical statement produced by `StatementReader`.
+    fn exec_logical_statement(&mut self, stmt: LogicalStatement) -> Result<(), InterpreterError> {
+        let stmt = match self.prepare_logical_statement(stmt)? {
+            Some(s) => s,
+            None => return Ok(()),
+        };
         self.exec_segment(&stmt.tokens, &stmt.source_excerpt, stmt.start_line)
     }
 
@@ -965,23 +979,42 @@ impl Interpreter {
         let mut main_cells: Vec<Cell> = Vec::new();
         let mut stmt_positions: Vec<StmtPosition> = Vec::new();
 
-        for (line_idx, line) in source.lines().enumerate() {
-            let line_num = line_idx + 1; // 1-based line number
-            let (tokens, boundaries) = self.parse_line_into_segments(line)?;
-            for (seg_start, seg_end) in boundaries {
-                let was_compiling = self.vm.compile_state.is_some();
-                self.compile_program_segment(
-                    &tokens[seg_start..seg_end],
-                    line,
-                    &mut main_cells,
-                    &mut stmt_positions,
-                    line_num,
-                )?;
-                // If DEF just started on this segment, record the source line number.
-                if !was_compiling {
-                    if let Some(state) = &mut self.vm.compile_state {
-                        state.start_line = line_num;
+        let mut reader = StatementReader::new(source);
+        loop {
+            let stmt = match reader.next_statement() {
+                Ok(Some(s)) => s,
+                Ok(None) => break,
+                Err(e) => {
+                    if self.vm.compile_state.is_some() {
+                        self.vm.rollback_def();
                     }
+                    return Err(InterpreterError::new(
+                        e.line,
+                        e.col,
+                        &e.source_excerpt,
+                        e.kind,
+                    ));
+                }
+            };
+
+            let stmt_start_line = stmt.start_line;
+            let stmt = match self.prepare_logical_statement(stmt)? {
+                Some(s) => s,
+                None => continue,
+            };
+
+            let was_compiling = self.vm.compile_state.is_some();
+            self.compile_program_segment(
+                &stmt.tokens,
+                &stmt.source_excerpt,
+                &mut main_cells,
+                &mut stmt_positions,
+                stmt_start_line,
+            )?;
+            // If DEF just started on this segment, record the logical statement start line.
+            if !was_compiling {
+                if let Some(state) = &mut self.vm.compile_state {
+                    state.start_line = stmt_start_line;
                 }
             }
         }
@@ -1100,9 +1133,9 @@ impl Interpreter {
     /// `stmt_positions` receives one entry per ground-level statement compiled:
     /// `(start_offset_in_main_cells, line, col, source_line_text)`.
     ///
-    /// `absolute_line` is the 1-based line number of this segment in the full source file
-    /// (the token positions produced by `parse_line_into_segments` are relative to a single
-    /// line and cannot be used for source-level position recording).
+    /// `absolute_line` is the 1-based line number of the logical statement's first line in the
+    /// full source file, as supplied by `StatementReader`.  Token positions within a segment are
+    /// relative to that segment and must not be used alone for source-level position recording.
     fn compile_program_segment(
         &mut self,
         tokens: &[SpannedToken],
@@ -4574,5 +4607,163 @@ END";
         let src = "VAR G\nLET G = 10";
         let result = interp.exec_source(src);
         assert!(result.is_err(), "expected error for LET outside DEF");
+    }
+
+    // --- compile_program: StatementReader-based multi-line expression support (issue #520) ---
+
+    #[test]
+    fn test_compile_program_multiline_to_array() {
+        // compile_program must handle multi-line TO_ARRAY(...) at ground level.
+        let mut interp = Interpreter::new();
+        let src = "\
+VAR A
+SET &A, TO_ARRAY(
+  10, 20,
+  30, 40
+)
+PUTDEC ARRAY_LEN(A)
+PUTSTR \":\"
+PUTDEC A(3)";
+        interp.compile_program(src).unwrap();
+        assert_eq!(interp.take_output(), "4:30");
+    }
+
+    #[test]
+    fn test_compile_program_multiline_str_concat() {
+        // compile_program must handle multi-line STR_CONCAT(...) at ground level.
+        let mut interp = Interpreter::new();
+        let src = "\
+VAR S
+SET &S, STR_CONCAT(
+  \"foo\",
+  \"bar\"
+)
+PUTSTR S";
+        interp.compile_program(src).unwrap();
+        assert_eq!(interp.take_output(), "foobar");
+    }
+
+    #[test]
+    fn test_compile_program_multiline_nested_call() {
+        // compile_program must handle a nested multi-line call at ground level.
+        let mut interp = Interpreter::new();
+        let src = "\
+PUTDEC ADD(
+  1,
+  MUL(
+    2,
+    3
+  )
+)";
+        interp.compile_program(src).unwrap();
+        assert_eq!(interp.take_output(), "7");
+    }
+
+    #[test]
+    fn test_compile_program_multiline_expr_inside_def() {
+        // compile_program must handle a multi-line expression inside a DEF body.
+        let mut interp = Interpreter::new();
+        let src = "\
+DEF SHOW
+  PUTDEC ADD(
+    1,
+    2
+  )
+END
+SHOW";
+        interp.compile_program(src).unwrap();
+        assert_eq!(interp.take_output(), "3");
+    }
+
+    #[test]
+    fn test_compile_program_line_number_label_inside_def_multiline_body() {
+        // Line-number labels inside a DEF body must still work when body uses
+        // multi-line expressions (StatementReader path).
+        let mut interp = Interpreter::new();
+        let src = "\
+DEF SHOW(X)
+  BIT X = 0, 10
+  PUTDEC 1
+  10 PUTDEC 2
+END
+SHOW 0";
+        interp.compile_program(src).unwrap();
+        assert_eq!(interp.take_output(), "2");
+    }
+
+    #[test]
+    fn test_compile_program_reader_error_inside_def_rolls_back() {
+        // A StatementReader error (unclosed paren) inside a DEF body during
+        // compile_program must roll back compile state so the interpreter is reusable.
+        let mut interp = Interpreter::new();
+        let result = interp.compile_program("DEF BAD\n  PUTDEC ADD(\n");
+        assert!(result.is_err(), "unclosed paren inside DEF should fail");
+
+        interp
+            .compile_program("PUTDEC 7")
+            .expect("interpreter should be reusable after reader error rollback");
+        assert_eq!(interp.take_output(), "7");
+    }
+
+    #[test]
+    fn test_compile_program_and_exec_source_same_multiline_boundary() {
+        // exec_source and compile_program must produce identical results for the
+        // same multi-line expression.  This verifies that the StatementReader-based
+        // migration has not introduced a boundary difference.
+        let src = "\
+VAR A
+SET &A, TO_ARRAY(
+  1, 2,
+  3
+)
+PUTDEC ARRAY_LEN(A)
+PUTDEC A(2)";
+
+        let mut interp1 = Interpreter::new();
+        interp1.exec_source(src).unwrap();
+        let out1 = interp1.take_output();
+
+        let mut interp2 = Interpreter::new();
+        interp2.compile_program(src).unwrap();
+        let out2 = interp2.take_output();
+
+        assert_eq!(
+            out1, out2,
+            "exec_source and compile_program must produce the same output for multi-line expressions"
+        );
+        assert_eq!(out1, "32");
+    }
+
+    #[test]
+    fn test_compile_program_runtime_error_multiline_stmt_points_to_start_line() {
+        // A runtime error in a multi-line ground-level statement must point to the
+        // logical statement's start line, not to an interior continuation line.
+        let mut interp = Interpreter::new();
+        let src = "\
+PUTDEC 1
+PUTDEC ADD(
+  1,
+  1 / 0
+)";
+        let result = interp.compile_program(src);
+        let err = result.expect_err("expected runtime error from division by zero");
+        // The multi-line statement starts on line 2; the error must point there.
+        assert_eq!(
+            err.line, 2,
+            "runtime error must point to line 2 (statement start), got {}",
+            err.line
+        );
+        // Column must point to the start of the PUTDEC keyword on line 2.
+        assert_eq!(
+            err.col, 1,
+            "column should point to the start of the PUTDEC keyword (col 1), got {}",
+            err.col
+        );
+        // source_line must reflect the first physical line of the multi-line statement.
+        assert!(
+            err.source_line.contains("PUTDEC ADD("),
+            "source_line should contain the statement's first line, got: {:?}",
+            err.source_line
+        );
     }
 }
