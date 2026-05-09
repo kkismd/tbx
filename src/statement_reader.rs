@@ -14,6 +14,15 @@ pub struct LogicalStatement {
     pub terminator: StatementTerminator,
 }
 
+/// Error produced while reading logical statements.
+#[derive(Debug, Clone, PartialEq)]
+pub struct StatementReaderError {
+    pub line: usize,
+    pub col: usize,
+    pub source_excerpt: String,
+    pub kind: TbxError,
+}
+
 /// The delimiter that ended a logical statement.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StatementTerminator {
@@ -36,7 +45,7 @@ impl<'a> StatementReader<'a> {
     }
 
     /// Return the next non-empty logical statement, or `None` at EOF.
-    pub fn next_statement(&mut self) -> Result<Option<LogicalStatement>, TbxError> {
+    pub fn next_statement(&mut self) -> Result<Option<LogicalStatement>, StatementReaderError> {
         let mut tokens = Vec::new();
         let mut paren_depth = 0usize;
         let mut open_parens: Vec<Position> = Vec::new();
@@ -64,7 +73,8 @@ impl<'a> StatementReader<'a> {
                     }
                     return Err(TbxError::InvalidExpression {
                         reason: lexer_error_reason(&message),
-                    });
+                    }
+                    .into_reader_error(&st, self.lexer.source()));
                 }
                 Token::Newline => {
                     if paren_depth == 0 {
@@ -86,7 +96,8 @@ impl<'a> StatementReader<'a> {
                     if paren_depth > 0 {
                         return Err(TbxError::InvalidExpression {
                             reason: "semicolon is not allowed inside parentheses",
-                        });
+                        }
+                        .into_reader_error(&st, self.lexer.source()));
                     }
                     if tokens.is_empty() {
                         continue;
@@ -102,9 +113,11 @@ impl<'a> StatementReader<'a> {
                 }
                 Token::Eof => {
                     if paren_depth > 0 {
+                        let error_pos = open_parens.last().unwrap_or(&st.pos);
                         return Err(TbxError::InvalidExpression {
                             reason: "unmatched '(' in statement",
-                        });
+                        }
+                        .into_reader_error_at(error_pos, self.lexer.source()));
                     }
                     if tokens.is_empty() {
                         return Ok(None);
@@ -122,7 +135,8 @@ impl<'a> StatementReader<'a> {
                     if paren_depth == 0 {
                         return Err(TbxError::InvalidExpression {
                             reason: "unmatched ')' in statement",
-                        });
+                        }
+                        .into_reader_error(&st, self.lexer.source()));
                     }
                     paren_depth -= 1;
                     open_parens.pop();
@@ -148,12 +162,46 @@ impl<'a> StatementReader<'a> {
     }
 }
 
+trait IntoStatementReaderError {
+    fn into_reader_error(self, st: &SpannedToken, source: &str) -> StatementReaderError;
+    fn into_reader_error_at(self, pos: &Position, source: &str) -> StatementReaderError;
+}
+
+impl IntoStatementReaderError for TbxError {
+    fn into_reader_error(self, st: &SpannedToken, source: &str) -> StatementReaderError {
+        StatementReaderError {
+            line: st.pos.line,
+            col: st.pos.col,
+            source_excerpt: line_text_for_offset(source, st.source_offset),
+            kind: self,
+        }
+    }
+
+    fn into_reader_error_at(self, pos: &Position, source: &str) -> StatementReaderError {
+        StatementReaderError {
+            line: pos.line,
+            col: pos.col,
+            source_excerpt: line_text_for_line(source, pos.line),
+            kind: self,
+        }
+    }
+}
+
 fn line_text_for_offset(source: &str, offset: usize) -> String {
     let start = source[..offset].rfind('\n').map_or(0, |idx| idx + 1);
     let end = source[offset..]
         .find('\n')
         .map_or(source.len(), |idx| offset + idx);
     source[start..end].trim_end_matches('\r').to_string()
+}
+
+fn line_text_for_line(source: &str, line: usize) -> String {
+    source
+        .lines()
+        .nth(line.saturating_sub(1))
+        .unwrap_or("")
+        .trim_end_matches('\r')
+        .to_string()
 }
 
 fn recover_continuation_number(source: &str, st: &mut SpannedToken) -> bool {
@@ -193,7 +241,7 @@ fn lexer_error_reason(message: &str) -> &'static str {
 mod tests {
     use super::*;
 
-    fn collect_statements(src: &str) -> Result<Vec<LogicalStatement>, TbxError> {
+    fn collect_statements(src: &str) -> Result<Vec<LogicalStatement>, StatementReaderError> {
         let mut reader = StatementReader::new(src);
         let mut statements = Vec::new();
         while let Some(stmt) = reader.next_statement()? {
@@ -292,25 +340,27 @@ mod tests {
     #[test]
     fn test_semicolon_inside_parens_is_error() {
         let err = collect_statements("SET &A, TO_ARRAY(1; 2)").unwrap_err();
-        assert!(matches!(err, TbxError::InvalidExpression { .. }));
+        assert!(matches!(err.kind, TbxError::InvalidExpression { .. }));
     }
 
     #[test]
     fn test_unmatched_open_paren_is_error() {
         let err = collect_statements("SET &A, TO_ARRAY(1, 2").unwrap_err();
         assert!(matches!(
-            err,
+            err.kind,
             TbxError::InvalidExpression {
                 reason: "unmatched '(' in statement"
             }
         ));
+        assert_eq!(err.line, 1);
+        assert_eq!(err.col, 17);
     }
 
     #[test]
     fn test_unmatched_close_paren_is_error() {
         let err = collect_statements("PUTDEC 1)").unwrap_err();
         assert!(matches!(
-            err,
+            err.kind,
             TbxError::InvalidExpression {
                 reason: "unmatched ')' in statement"
             }
@@ -340,7 +390,7 @@ mod tests {
     fn test_lexer_error_reason_is_preserved_for_unterminated_string() {
         let err = collect_statements("PUTSTR \"unterminated\n").unwrap_err();
         assert!(matches!(
-            err,
+            err.kind,
             TbxError::InvalidExpression {
                 reason: "unterminated string literal"
             }
