@@ -149,6 +149,134 @@ DEF ELSE
 END
 IMMEDIATE ELSE
 
+# SELECT expr ... CASE expr ... [CASE expr ...]* [CASE_ELSE ...]? ENDSEL
+#
+#  SELECT compiles the selector expression once and leaves its runtime value on
+#  the data stack until a matching CASE or CASE_ELSE consumes it with DROP.
+#  Compile stack after SELECT (tag-last layout):
+#    [N, phase, P, Tag("SELECT")]
+#    N     = number of accumulated JUMP_ALWAYS placeholders from completed CASE bodies
+#    phase = 0 before the first CASE, 1 after a CASE, 2 after CASE_ELSE
+#    P     = dummy -1 when phase=0,
+#            current JUMP_FALSE placeholder C when phase=1,
+#            final JUMP_ALWAYS placeholder B when phase=2
+#
+#  CASE emits:
+#    JUMP_ALWAYS B      -- only when closing a previous CASE body
+#    <patch previous C to here>
+#    DUP
+#    <case_expr>
+#    EQ
+#    BIF C_new
+#    DROP              -- consume selector before matched body
+#
+#  CASE_ELSE emits:
+#    JUMP_ALWAYS B
+#    <patch previous C to here>
+#    DROP              -- consume selector before else body
+#
+#  ENDSEL patches the final placeholder. If there is no CASE_ELSE, it also
+#  emits a DROP on the no-match path to discard the selector.
+
+DEF SELECT
+  COMPILE_EXPR
+  CS_PUSH 0
+  CS_PUSH 0
+  CS_PUSH -1
+  CS_OPEN_TAG "SELECT"
+END
+IMMEDIATE SELECT
+
+DEF CASE
+  CS_CLOSE_TAG "SELECT"
+  VAR P, PHASE, N, B
+  SET &P, CS_POP
+  SET &PHASE, CS_POP
+  SET &N, CS_POP
+
+  IF PHASE = 2
+    ASSERT_FAIL_MSG "CASE after CASE_ELSE is not allowed"
+  ENDIF
+
+  IF PHASE = 1
+    APPEND JUMP_ALWAYS
+    SET &B, HERE
+    APPEND 0
+    PATCH_ADDR P
+    CS_PUSH B
+    SET &N, N + 1
+  ENDIF
+
+  APPEND LOOKUP("DUP")
+  COMPILE_EXPR
+  APPEND LOOKUP("EQ")
+  APPEND JUMP_FALSE
+  CS_PUSH N
+  CS_PUSH 1
+  CS_PUSH HERE
+  APPEND 0
+  CS_OPEN_TAG "SELECT"
+  APPEND LOOKUP("DROP")
+END
+IMMEDIATE CASE
+
+DEF CASE_ELSE
+  CS_CLOSE_TAG "SELECT"
+  VAR P, PHASE, N, B
+  SET &P, CS_POP
+  SET &PHASE, CS_POP
+  SET &N, CS_POP
+
+  IF PHASE = 0
+    ASSERT_FAIL_MSG "CASE_ELSE requires a preceding CASE"
+  ENDIF
+
+  IF PHASE = 2
+    ASSERT_FAIL_MSG "CASE_ELSE cannot appear more than once"
+  ENDIF
+
+  APPEND JUMP_ALWAYS
+  SET &B, HERE
+  APPEND 0
+  PATCH_ADDR P
+  CS_PUSH N
+  CS_PUSH 2
+  CS_PUSH B
+  CS_OPEN_TAG "SELECT"
+  APPEND LOOKUP("DROP")
+END
+IMMEDIATE CASE_ELSE
+
+DEF ENDSEL
+  CS_CLOSE_TAG "SELECT"
+  VAR P, PHASE, N, I, B
+  SET &P, CS_POP
+  SET &PHASE, CS_POP
+  SET &N, CS_POP
+
+  IF PHASE = 0
+    ASSERT_FAIL_MSG "ENDSEL requires at least one CASE"
+  ENDIF
+
+  IF PHASE = 1
+    APPEND JUMP_ALWAYS
+    SET &B, HERE
+    APPEND 0
+    PATCH_ADDR P
+    APPEND LOOKUP("DROP")
+    PATCH_ADDR B
+  ELSE
+    PATCH_ADDR P
+  ENDIF
+
+  SET &I, 0
+  WHILE I < N
+    PATCH_ADDR CS_POP
+    SET &I, I + 1
+  ENDWH
+END
+IMMEDIATE ENDSEL
+
 # LET varname = expr — BASIC-style assignment
 #
 #  Syntactic sugar for SET &varname, expr.

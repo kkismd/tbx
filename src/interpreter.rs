@@ -4196,6 +4196,152 @@ SIGN3 0";
         assert_eq!(out, "+-0", "expected '+-0', got: {:?}", out);
     }
 
+    // --- SELECT / CASE / CASE_ELSE / ENDSEL (lib/basic.tbx) ---
+
+    #[test]
+    fn test_select_case_matches_and_else_path() {
+        let mut interp = Interpreter::new();
+        let src = "\
+DEF PICK(X)
+  SELECT X
+  CASE 1
+    PUTSTR \"one\"
+  CASE 2
+    PUTSTR \"two\"
+  CASE_ELSE
+    PUTSTR \"other\"
+  ENDSEL
+END
+PICK 1
+PICK 2
+PICK 9";
+        interp.exec_source(src).unwrap();
+        assert_eq!(interp.take_output(), "onetwoother");
+    }
+
+    #[test]
+    fn test_select_case_no_else_falls_through_cleanly() {
+        let mut interp = Interpreter::new();
+        let src = "\
+DEF ONLY_ONE(X)
+  SELECT X
+  CASE 1
+    RETURN 10
+  ENDSEL
+  RETURN 0
+END
+PUTDEC ONLY_ONE(1)
+PUTDEC ONLY_ONE(3)";
+        interp.exec_source(src).unwrap();
+        assert_eq!(interp.take_output(), "100");
+    }
+
+    #[test]
+    fn test_select_case_no_else_match_can_continue_after_endsel() {
+        let mut interp = Interpreter::new();
+        let src = "\
+DEF F(X)
+  SELECT X
+  CASE 1
+    PUTSTR \"hit\"
+  ENDSEL
+  PUTDEC X
+END
+F(1)";
+        interp.exec_source(src).unwrap();
+        assert_eq!(interp.take_output(), "hit1");
+    }
+
+    #[test]
+    fn test_compile_program_select_case() {
+        let mut interp = Interpreter::new();
+        let src = r#"
+DEF PICK(X)
+  SELECT X
+  CASE 1
+    PUTSTR "one"
+  CASE_ELSE
+    PUTSTR "other"
+  ENDSEL
+END
+PICK 1
+PICK 9
+"#;
+        interp.compile_program(src).unwrap();
+        assert_eq!(interp.take_output(), "oneother");
+    }
+
+    #[test]
+    fn test_select_outside_def_is_error() {
+        let mut interp = Interpreter::new();
+        let result = interp.exec_line("SELECT 1", 1);
+        assert!(result.is_err(), "SELECT outside DEF should be an error");
+    }
+
+    #[test]
+    fn test_case_without_select_unopened_error() {
+        let mut interp = Interpreter::new();
+        let result = interp.exec_source("DEF BAD(X)\n  CASE X\nEND");
+        match result {
+            Err(e)
+                if matches!(
+                    e.kind,
+                    crate::error::TbxError::NoOpenTag { ref expected } if expected == "SELECT"
+                ) => {}
+            other => panic!("expected NoOpenTag(SELECT), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_endsel_without_select_unopened_error() {
+        let mut interp = Interpreter::new();
+        let result = interp.exec_source("DEF BAD()\n  ENDSEL\nEND");
+        match result {
+            Err(e)
+                if matches!(
+                    e.kind,
+                    crate::error::TbxError::NoOpenTag { ref expected } if expected == "SELECT"
+                ) => {}
+            other => panic!("expected NoOpenTag(SELECT), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_select_without_endsel_is_error() {
+        let mut interp = Interpreter::new();
+        let result = interp.exec_source("DEF BAD(X)\n  SELECT X\n  CASE 1\n    PUTDEC 1\nEND");
+        assert!(
+            result.is_err(),
+            "SELECT without ENDSEL should be an error at END"
+        );
+    }
+
+    #[test]
+    fn test_case_else_without_case_is_error() {
+        let mut interp = Interpreter::new();
+        let result =
+            interp.exec_source("DEF BAD(X)\n  SELECT X\n  CASE_ELSE\n    PUTDEC 1\n  ENDSEL\nEND");
+        assert!(result.is_err(), "CASE_ELSE without CASE should be an error");
+    }
+
+    #[test]
+    fn test_case_after_case_else_is_error() {
+        let mut interp = Interpreter::new();
+        let src = "\
+DEF BAD(X)
+  SELECT X
+  CASE 1
+    PUTDEC 1
+  CASE_ELSE
+    PUTDEC 0
+  CASE 2
+    PUTDEC 2
+  ENDSEL
+END";
+        let result = interp.exec_source(src);
+        assert!(result.is_err(), "CASE after CASE_ELSE should be an error");
+    }
+
     // --- LET compile word ---
 
     #[test]
