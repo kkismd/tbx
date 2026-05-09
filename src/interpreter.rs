@@ -623,6 +623,9 @@ impl Interpreter {
                 Ok(Some(stmt)) => stmt,
                 Ok(None) => break,
                 Err(e) => {
+                    if self.vm.compile_state.is_some() {
+                        self.vm.rollback_def();
+                    }
                     return Err(InterpreterError::new(
                         e.line,
                         e.col,
@@ -1460,6 +1463,18 @@ SHOW 0";
                 reason: "unmatched '(' in statement"
             }
         ));
+    }
+
+    #[test]
+    fn test_exec_source_reader_error_inside_def_rolls_back() {
+        let mut interp = Interpreter::new();
+        let result = interp.exec_source("DEF BAD\n  PUTDEC ADD(\n");
+        assert!(result.is_err(), "unclosed paren inside DEF should fail");
+
+        interp
+            .exec_source("PUTDEC 7")
+            .expect("interpreter should be reusable after reader error rollback");
+        assert_eq!(interp.take_output(), "7");
     }
 
     #[test]
