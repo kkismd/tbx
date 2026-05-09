@@ -1133,9 +1133,9 @@ impl Interpreter {
     /// `stmt_positions` receives one entry per ground-level statement compiled:
     /// `(start_offset_in_main_cells, line, col, source_line_text)`.
     ///
-    /// `absolute_line` is the 1-based line number of this segment in the full source file
-    /// (the token positions produced by `parse_line_into_segments` are relative to a single
-    /// line and cannot be used for source-level position recording).
+    /// `absolute_line` is the 1-based line number of the logical statement's first line in the
+    /// full source file, as supplied by `StatementReader`.  Token positions within a segment are
+    /// relative to that segment and must not be used alone for source-level position recording.
     fn compile_program_segment(
         &mut self,
         tokens: &[SpannedToken],
@@ -4752,6 +4752,18 @@ PUTDEC ADD(
             err.line, 2,
             "runtime error must point to line 2 (statement start), got {}",
             err.line
+        );
+        // Column must point to the start of the PUTDEC keyword on line 2.
+        assert_eq!(
+            err.col, 1,
+            "column should point to the start of the PUTDEC keyword (col 1), got {}",
+            err.col
+        );
+        // source_line must reflect the first physical line of the multi-line statement.
+        assert!(
+            err.source_line.contains("PUTDEC ADD("),
+            "source_line should contain the statement's first line, got: {:?}",
+            err.source_line
         );
     }
 }
