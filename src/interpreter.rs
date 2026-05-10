@@ -9,9 +9,12 @@ use crate::dict::FLAG_SYSTEM;
 use crate::error::TbxError;
 use crate::expr::ExprCompiler;
 use crate::init_vm;
-use crate::lexer::{Lexer, SpannedToken, Token};
+use crate::lexer::{SpannedToken, Token};
 use crate::statement_reader::{LogicalStatement, StatementReader};
 use crate::vm::VM;
+
+#[cfg(test)]
+use crate::lexer::Lexer;
 
 /// Maximum allowed nesting depth for USE statements.
 ///
@@ -70,11 +73,6 @@ impl std::error::Error for InterpreterError {
         None
     }
 }
-
-/// Token list and segment boundaries produced by `parse_line_into_segments`.
-///
-/// The `Vec<(usize, usize)>` contains `(start, end)` index pairs into the token list.
-type ParsedSegments = (Vec<SpannedToken>, Vec<(usize, usize)>);
 
 /// The TBX outer interpreter.
 ///
@@ -200,111 +198,47 @@ impl Interpreter {
         })
     }
 
-    /// Tokenizes `source_line` and splits it into non-empty statement segments.
-    ///
-    /// Segments are delimited by semicolons.  A leading integer literal on the
-    /// first segment is treated as a line-number label: if the interpreter is
-    /// currently inside a DEF body, it is registered as a branch-target label,
-    /// then stripped from the segment.  Outside a DEF body, the leading integer
-    /// is silently discarded.  Empty segments (e.g. a trailing semicolon) are
-    /// omitted from the result.
-    ///
-    /// Returns a tuple of `(tokens, boundaries)` where each boundary `(start, end)`
-    /// is a half-open index range into `tokens`.
-    fn parse_line_into_segments(
-        &mut self,
-        source_line: &str,
-    ) -> Result<ParsedSegments, InterpreterError> {
-        let mut lex = Lexer::new(source_line);
-        let mut tokens: Vec<SpannedToken> = Vec::new();
-        loop {
-            let st = lex.next_token();
-            match &st.token {
-                Token::Newline | Token::Eof => break,
-                _ => tokens.push(st),
-            }
-        }
-
-        if tokens.is_empty() {
-            return Ok((tokens, Vec::new()));
-        }
-
-        // Split token list into segments at each Semicolon.
-        // Semicolons cannot appear inside expressions, so a flat split is correct.
-        let semi_positions: Vec<usize> = tokens
-            .iter()
-            .enumerate()
-            .filter_map(|(i, st)| matches!(st.token, Token::Semicolon).then_some(i))
-            .collect();
-
-        let mut raw_boundaries: Vec<(usize, usize)> = Vec::with_capacity(semi_positions.len() + 1);
-        let mut start = 0;
-        for &pos in &semi_positions {
-            raw_boundaries.push((start, pos));
-            start = pos + 1;
-        }
-        raw_boundaries.push((start, tokens.len()));
-
-        let mut boundaries: Vec<(usize, usize)> = Vec::with_capacity(raw_boundaries.len());
-        let mut first_segment = true;
-        for (seg_start_orig, seg_end) in raw_boundaries {
-            let mut seg_start = seg_start_orig;
-
-            // Only the first segment may begin with a line-number label.
-            // The lexer is context-free (issue #534), so the leading integer
-            // arrives here as `Token::IntLit`; recognising it as a label is
-            // the interpreter's job.
-            if first_segment {
-                first_segment = false;
-                if seg_start < seg_end {
-                    if let Token::IntLit(n) = tokens[seg_start].token {
-                        if self.vm.compile_state.is_some() {
-                            // Inside a DEF body: register as a branch-target label.
-                            let ln_line = tokens[seg_start].pos.line;
-                            let ln_col = tokens[seg_start].pos.col;
-                            self.register_label(n, source_line, ln_line, ln_col)
-                                .inspect_err(|_e| {
-                                    self.vm.rollback_def();
-                                })?;
-                        }
-                        // Line numbers outside DEF are silently discarded.
-                        seg_start += 1;
-                    }
-                }
-            }
-
-            // Omit empty segments (e.g. trailing semicolon or bare line number).
-            if seg_start < seg_end {
-                boundaries.push((seg_start, seg_end));
-            }
-        }
-
-        Ok((tokens, boundaries))
-    }
-
     /// Executes a single source line.
     ///
     /// `absolute_line` is the 1-based line number of this line in the full source being
     /// processed.  Pass `1` when executing a standalone line (e.g. from a REPL where
     /// each `exec_line` call represents a fresh, unnumbered statement).
     pub fn exec_line(&mut self, line: &str, absolute_line: usize) -> Result<(), InterpreterError> {
-        let (tokens, boundaries) = self.parse_line_into_segments(line)?;
-        for (seg_start, seg_end) in boundaries {
-            self.exec_segment(&tokens[seg_start..seg_end], line, absolute_line)?;
+        let mut reader = StatementReader::new(line);
+        loop {
+            let stmt = match reader.next_statement() {
+                Ok(Some(stmt)) => stmt,
+                Ok(None) => break,
+                Err(e) => {
+                    if self.vm.compile_state.is_some() {
+                        self.vm.rollback_def();
+                    }
+                    return Err(InterpreterError::new(
+                        absolute_line,
+                        e.col,
+                        &e.source_excerpt,
+                        e.kind,
+                    ));
+                }
+            };
+
+            let stmt = LogicalStatement {
+                start_line: absolute_line,
+                end_line: absolute_line,
+                ..stmt
+            };
+            self.exec_logical_statement(stmt)?;
         }
         Ok(())
     }
 
     /// Executes a single statement segment (a slice of tokens with no Semicolons).
     ///
-    /// `tokens` must be non-empty.  Any leading line-number label has already
-    /// been stripped by the caller (`parse_line_into_segments` or
-    /// `prepare_logical_statement`).
+    /// `tokens` must be non-empty. Any leading line-number label has already
+    /// been stripped by the caller.
     ///
     /// `absolute_line` is the 1-based line number of this segment in the full source being
-    /// processed.  The token positions produced by `parse_line_into_segments` are always
-    /// relative to a single line (`.line` is always 1), so `absolute_line` must be supplied
-    /// by the caller to record accurate source positions in error messages.
+    /// processed.
     fn exec_segment(
         &mut self,
         tokens: &[SpannedToken],
