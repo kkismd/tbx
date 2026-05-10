@@ -8,6 +8,15 @@ use std::collections::HashMap;
 use std::collections::VecDeque;
 use std::io::{BufRead, BufReader, Write};
 
+/// Human-readable snapshot of one runtime call frame.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StackTraceFrame {
+    /// Name of the compiled word executing in this frame.
+    pub word_name: String,
+    /// Number of arguments supplied by the caller.
+    pub actual_arity: usize,
+}
+
 /// State maintained during compilation of a new word definition (DEF..END).
 #[derive(Debug)]
 pub struct CompileState {
@@ -272,6 +281,40 @@ impl VM {
             output_writer: Box::new(std::io::stdout()),
             rng: rand::rngs::SmallRng::from_entropy(),
         }
+    }
+
+    /// Return the current call stack as human-readable frames, innermost first.
+    ///
+    /// When top-level execution is active, a trailing `<top-level>` frame is
+    /// appended so callers can render a consistent stack dump.
+    pub fn stack_trace_frames(&self) -> Vec<StackTraceFrame> {
+        let mut frames = Vec::new();
+
+        for frame in self.return_stack.iter().rev() {
+            match frame {
+                ReturnFrame::Call {
+                    callee_xt,
+                    actual_arity,
+                    ..
+                } => {
+                    let word_name = self
+                        .headers
+                        .get(callee_xt.index())
+                        .map(|entry| entry.name.clone())
+                        .unwrap_or_else(|| format!("<invalid-xt:{}>", callee_xt.index()));
+                    frames.push(StackTraceFrame {
+                        word_name,
+                        actual_arity: *actual_arity,
+                    });
+                }
+                ReturnFrame::TopLevel => frames.push(StackTraceFrame {
+                    word_name: "<top-level>".to_string(),
+                    actual_arity: 0,
+                }),
+            }
+        }
+
+        frames
     }
 
     /// Returns true while `vm.run()` is executing top-level code, outside any
@@ -697,6 +740,7 @@ impl VM {
                     // Direct dispatch (no CALL instruction): actual_arity is unknown.
                     // Variadic words should always be called via CALL, not this path.
                     self.return_stack.push(ReturnFrame::Call {
+                        callee_xt: xt,
                         return_pc,
                         saved_bp,
                         saved_array_pool_len: self.arrays.len(),
@@ -764,6 +808,7 @@ impl VM {
                                 });
                             }
                             self.return_stack.push(ReturnFrame::Call {
+                                callee_xt: target_xt,
                                 return_pc,
                                 saved_bp,
                                 saved_array_pool_len: self.arrays.len(),
@@ -789,6 +834,7 @@ impl VM {
                 EntryKind::Exit => {
                     match self.return_stack.pop().ok_or(TbxError::StackUnderflow)? {
                         ReturnFrame::Call {
+                            callee_xt: _,
                             return_pc,
                             saved_bp,
                             saved_array_pool_len,
@@ -894,6 +940,7 @@ impl VM {
                     };
                     match self.return_stack.pop().ok_or(TbxError::StackUnderflow)? {
                         ReturnFrame::Call {
+                            callee_xt: _,
                             return_pc,
                             saved_bp,
                             saved_array_pool_len,
@@ -1855,6 +1902,7 @@ mod tests {
         // Pre-fill the return stack to its limit with dummy frames
         for _ in 0..MAX_RETURN_STACK_DEPTH {
             vm.return_stack.push(ReturnFrame::Call {
+                callee_xt: word_xt,
                 return_pc: 0,
                 saved_bp: 0,
                 saved_array_pool_len: 0,
@@ -1897,6 +1945,7 @@ mod tests {
         // Pre-fill the return stack to its limit
         for _ in 0..MAX_RETURN_STACK_DEPTH {
             vm.return_stack.push(ReturnFrame::Call {
+                callee_xt: word_xt,
                 return_pc: 0,
                 saved_bp: 0,
                 saved_array_pool_len: 0,
@@ -2948,6 +2997,7 @@ mod tests {
         // existed when the word was called).
         vm.return_stack.push(ReturnFrame::TopLevel);
         vm.return_stack.push(ReturnFrame::Call {
+            callee_xt: Xt(0),
             return_pc: 0,
             saved_bp: 0,
             saved_array_pool_len: 1,
@@ -2973,6 +3023,41 @@ mod tests {
                 "global array should pass ReturnVal check"
             );
         }
+    }
+
+    #[test]
+    fn test_stack_trace_frames_innermost_first() {
+        let mut vm = VM::new();
+
+        let outer_xt = vm.register(crate::dict::WordEntry::new_word("OUTER", 0));
+        let inner_xt = vm.register(crate::dict::WordEntry::new_word("INNER", 0));
+
+        vm.return_stack.push(ReturnFrame::TopLevel);
+        vm.return_stack.push(ReturnFrame::Call {
+            callee_xt: outer_xt,
+            return_pc: 10,
+            saved_bp: 0,
+            saved_array_pool_len: 0,
+            saved_string_pool_len: 0,
+            actual_arity: 1,
+        });
+        vm.return_stack.push(ReturnFrame::Call {
+            callee_xt: inner_xt,
+            return_pc: 20,
+            saved_bp: 1,
+            saved_array_pool_len: 0,
+            saved_string_pool_len: 0,
+            actual_arity: 2,
+        });
+
+        let frames = vm.stack_trace_frames();
+        assert_eq!(frames.len(), 3);
+        assert_eq!(frames[0].word_name, "INNER");
+        assert_eq!(frames[0].actual_arity, 2);
+        assert_eq!(frames[1].word_name, "OUTER");
+        assert_eq!(frames[1].actual_arity, 1);
+        assert_eq!(frames[2].word_name, "<top-level>");
+        assert_eq!(frames[2].actual_arity, 0);
     }
 
     // --- Pool truncation on return (direct vm.arrays / vm.strings length checks) ---

@@ -7,6 +7,16 @@ fn print_error(err: &InterpreterError) {
     for line in err.source_excerpt.lines() {
         eprintln!("  {line}");
     }
+    if !err.call_stack.is_empty() {
+        eprintln!("Call stack:");
+        for (idx, frame) in err.call_stack.iter().enumerate() {
+            if frame.word_name == "<top-level>" {
+                eprintln!("  {idx}: <top-level>");
+            } else {
+                eprintln!("  {idx}: {}(argc={})", frame.word_name, frame.actual_arity);
+            }
+        }
+    }
 }
 
 fn run_file(path: &str) -> std::process::ExitCode {

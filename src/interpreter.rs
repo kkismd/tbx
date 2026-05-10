@@ -11,7 +11,7 @@ use crate::expr::ExprCompiler;
 use crate::init_vm;
 use crate::lexer::{Position, SpannedToken, Token};
 use crate::statement_reader::{LogicalStatement, StatementReader};
-use crate::vm::VM;
+use crate::vm::{StackTraceFrame, VM};
 
 #[cfg(test)]
 use crate::lexer::Lexer;
@@ -35,6 +35,7 @@ pub struct InterpreterError {
     pub col: usize,
     pub source_excerpt: String,
     pub kind: TbxError,
+    pub call_stack: Vec<StackTraceFrame>,
 }
 
 impl InterpreterError {
@@ -45,6 +46,24 @@ impl InterpreterError {
             col,
             source_excerpt: source_excerpt.to_string(),
             kind,
+            call_stack: Vec::new(),
+        }
+    }
+
+    /// Construct a new `InterpreterError` with a captured runtime call stack.
+    fn with_call_stack(
+        line: usize,
+        col: usize,
+        source_excerpt: &str,
+        kind: TbxError,
+        call_stack: Vec<StackTraceFrame>,
+    ) -> Self {
+        InterpreterError {
+            line,
+            col,
+            source_excerpt: source_excerpt.to_string(),
+            kind,
+            call_stack,
         }
     }
 }
@@ -357,13 +376,28 @@ impl Interpreter {
 
         // On error, restore stacks and bp to their pre-run state so that
         // subsequent exec_line calls start from a clean VM state.
+        let call_stack = if run_result.is_err() {
+            Some(self.vm.stack_trace_frames())
+        } else {
+            None
+        };
+
         if run_result.is_err() {
             self.vm.data_stack.truncate(saved_data_stack_len);
             self.vm.return_stack.truncate(saved_return_stack_len);
             self.vm.bp = saved_bp;
         }
 
-        run_result.map_err(make_err)
+        match run_result {
+            Ok(()) => Ok(()),
+            Err(e) => Err(InterpreterError::with_call_stack(
+                absolute_line,
+                stmt_pos_col,
+                source_excerpt,
+                e,
+                call_stack.unwrap_or_default(),
+            )),
+        }
     }
 
     /// Register the statement's line-number label (if any) inside a DEF body
@@ -785,6 +819,12 @@ impl Interpreter {
         self.vm.token_stream = None;
 
         // On error, rollback compile state and stacks.
+        let call_stack = if run_result.is_err() {
+            Some(self.vm.stack_trace_frames())
+        } else {
+            None
+        };
+
         if run_result.is_err() {
             self.vm.rollback_def();
             self.vm.data_stack.truncate(saved_data_stack_len);
@@ -794,7 +834,18 @@ impl Interpreter {
             self.vm.pending_use_path = None;
         }
 
-        run_result.map_err(make_err)?;
+        match run_result {
+            Ok(()) => {}
+            Err(e) => {
+                return Err(InterpreterError::with_call_stack(
+                    stmt_pos_line,
+                    stmt_pos_col,
+                    source_excerpt,
+                    e,
+                    call_stack.unwrap_or_default(),
+                ));
+            }
+        }
 
         // If use_prim stored a path, read the file and execute it now.
         if let Some(path) = self.vm.pending_use_path.take() {
@@ -1066,10 +1117,13 @@ impl Interpreter {
                     main_len,
                     &stmt_positions,
                 );
+                let call_stack = self.vm.stack_trace_frames();
                 self.vm.data_stack.truncate(saved_data_stack_len);
                 self.vm.return_stack.truncate(saved_return_stack_len);
                 self.vm.bp = saved_bp;
-                Err(InterpreterError::new(line, col, &source, e))
+                Err(InterpreterError::with_call_stack(
+                    line, col, &source, e, call_stack,
+                ))
             }
         }
     }
@@ -2916,6 +2970,9 @@ PUTSTR T"#;
             "source_excerpt should contain the failing expression, got: {:?}",
             err.source_excerpt
         );
+        assert_eq!(err.call_stack.len(), 1);
+        assert_eq!(err.call_stack[0].word_name, "<top-level>");
+        assert_eq!(err.call_stack[0].actual_arity, 0);
     }
 
     #[test]
@@ -2947,6 +3004,10 @@ PUTSTR T"#;
             "source_excerpt should contain the call site identifier, got: {:?}",
             err.source_excerpt
         );
+        assert_eq!(err.call_stack.len(), 2);
+        assert_eq!(err.call_stack[0].word_name, "BAD_WORD");
+        assert_eq!(err.call_stack[0].actual_arity, 0);
+        assert_eq!(err.call_stack[1].word_name, "<top-level>");
     }
 
     // --- compile_program integration tests (issue #266) ---
@@ -3892,6 +3953,10 @@ NESTED -1";
             "error must point to OUTER call site at line 7, got {}",
             err.line
         );
+        assert_eq!(err.call_stack.len(), 3);
+        assert_eq!(err.call_stack[0].word_name, "INNER");
+        assert_eq!(err.call_stack[1].word_name, "OUTER");
+        assert_eq!(err.call_stack[2].word_name, "<top-level>");
     }
 
     // --- WHILE / ENDWH ---
