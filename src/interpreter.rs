@@ -395,7 +395,7 @@ impl Interpreter {
                 stmt_pos_col,
                 source_excerpt,
                 e,
-                call_stack.unwrap_or_default(),
+                call_stack.expect("call_stack must be Some when run_result is Err"),
             )),
         }
     }
@@ -760,11 +760,21 @@ impl Interpreter {
         let saved_return_stack_len = self.vm.return_stack.len();
         let saved_bp = self.vm.bp;
 
-        let mut active_immediate_word_frame: Option<StackTraceFrame> = None;
+        // Frame to inject into the call stack if a runtime error occurs during
+        // dispatch.  Only set after we have committed to executing the word —
+        // pre-execution rejections (e.g. arity > 0) leave this None so the
+        // resulting error reports an empty call stack.
+        let mut pending_synthetic_frame: Option<StackTraceFrame> = None;
         let run_result = match kind {
             // Native primitive: call the function pointer directly (avoids
             // temporary-buffer issues when the primitive writes to the dictionary).
-            crate::dict::EntryKind::Primitive(f) => f(&mut self.vm),
+            crate::dict::EntryKind::Primitive(f) => {
+                pending_synthetic_frame = Some(StackTraceFrame {
+                    word_name: immediate_word_name.clone(),
+                    actual_arity: 0,
+                });
+                f(&mut self.vm)
+            }
             // User-defined word: run via vm.run(), passing the body start address.
             // Guard: words with formal parameters (arity > 0) still require a
             // CALL frame and are rejected.  Words with only VAR locals
@@ -799,7 +809,7 @@ impl Interpreter {
                     if let Some(e) = push_err {
                         Err(e)
                     } else {
-                        active_immediate_word_frame = Some(StackTraceFrame {
+                        pending_synthetic_frame = Some(StackTraceFrame {
                             word_name: immediate_word_name,
                             actual_arity: 0,
                         });
@@ -827,7 +837,7 @@ impl Interpreter {
         // On error, rollback compile state and stacks.
         let call_stack = if run_result.is_err() {
             let mut frames = self.vm.stack_trace_frames();
-            if let Some(frame) = active_immediate_word_frame {
+            if let Some(frame) = pending_synthetic_frame {
                 let insert_pos = frames
                     .iter()
                     .position(|existing| existing.word_name == "<top-level>")
@@ -856,7 +866,7 @@ impl Interpreter {
                     stmt_pos_col,
                     source_excerpt,
                     e,
-                    call_stack.unwrap_or_default(),
+                    call_stack.expect("call_stack must be Some when run_result is Err"),
                 ));
             }
         }
@@ -2677,6 +2687,21 @@ IPARAM 42";
         assert_eq!(err.call_stack[0].word_name, "BAD");
         assert_eq!(err.call_stack[0].actual_arity, 0);
         assert_eq!(err.call_stack[1].word_name, "<top-level>");
+    }
+
+    #[test]
+    fn test_immediate_primitive_runtime_error_captures_primitive_frame() {
+        // END is an IMMEDIATE primitive; calling it outside of DEF returns a
+        // runtime error from end_prim.  The primitive's name must appear in the
+        // call stack so the error message points at the offending word.
+        // (IMMEDIATE primitives are dispatched without entering vm.run(), so
+        // the captured stack contains only the synthetic primitive frame.)
+        let mut interp = Interpreter::new();
+        let result = interp.exec_source("END");
+        let err = result.expect_err("expected runtime error from IMMEDIATE primitive");
+        assert_eq!(err.call_stack.len(), 1);
+        assert_eq!(err.call_stack[0].word_name, "END");
+        assert_eq!(err.call_stack[0].actual_arity, 0);
     }
 
     #[test]
