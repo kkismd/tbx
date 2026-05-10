@@ -11,7 +11,7 @@ use crate::expr::ExprCompiler;
 use crate::init_vm;
 use crate::lexer::{Position, SpannedToken, Token};
 use crate::statement_reader::{LogicalStatement, StatementReader};
-use crate::vm::VM;
+use crate::vm::{StackTraceFrame, VM};
 
 #[cfg(test)]
 use crate::lexer::Lexer;
@@ -35,6 +35,7 @@ pub struct InterpreterError {
     pub col: usize,
     pub source_excerpt: String,
     pub kind: TbxError,
+    pub call_stack: Vec<StackTraceFrame>,
 }
 
 impl InterpreterError {
@@ -45,6 +46,24 @@ impl InterpreterError {
             col,
             source_excerpt: source_excerpt.to_string(),
             kind,
+            call_stack: Vec::new(),
+        }
+    }
+
+    /// Construct a new `InterpreterError` with a captured runtime call stack.
+    fn with_call_stack(
+        line: usize,
+        col: usize,
+        source_excerpt: &str,
+        kind: TbxError,
+        call_stack: Vec<StackTraceFrame>,
+    ) -> Self {
+        InterpreterError {
+            line,
+            col,
+            source_excerpt: source_excerpt.to_string(),
+            kind,
+            call_stack,
         }
     }
 }
@@ -357,13 +376,28 @@ impl Interpreter {
 
         // On error, restore stacks and bp to their pre-run state so that
         // subsequent exec_line calls start from a clean VM state.
+        let call_stack = if run_result.is_err() {
+            Some(self.vm.stack_trace_frames())
+        } else {
+            None
+        };
+
         if run_result.is_err() {
             self.vm.data_stack.truncate(saved_data_stack_len);
             self.vm.return_stack.truncate(saved_return_stack_len);
             self.vm.bp = saved_bp;
         }
 
-        run_result.map_err(make_err)
+        match run_result {
+            Ok(()) => Ok(()),
+            Err(e) => Err(InterpreterError::with_call_stack(
+                absolute_line,
+                stmt_pos_col,
+                source_excerpt,
+                e,
+                call_stack.expect("call_stack must be Some when run_result is Err"),
+            )),
+        }
     }
 
     /// Register the statement's line-number label (if any) inside a DEF body
@@ -714,6 +748,7 @@ impl Interpreter {
         let kind = self.vm.headers[xt.index()].kind.clone();
         let arity = self.vm.headers[xt.index()].arity;
         let local_count = self.vm.headers[xt.index()].local_count;
+        let immediate_word_name = self.vm.headers[xt.index()].name.clone();
 
         // Feed remaining tokens into vm.token_stream so the IMMEDIATE word can
         // consume them via vm.next_token().
@@ -725,10 +760,21 @@ impl Interpreter {
         let saved_return_stack_len = self.vm.return_stack.len();
         let saved_bp = self.vm.bp;
 
+        // Frame to inject into the call stack if a runtime error occurs during
+        // dispatch.  Only set after we have committed to executing the word —
+        // pre-execution rejections (e.g. arity > 0) leave this None so the
+        // resulting error reports an empty call stack.
+        let mut pending_synthetic_frame: Option<StackTraceFrame> = None;
         let run_result = match kind {
             // Native primitive: call the function pointer directly (avoids
             // temporary-buffer issues when the primitive writes to the dictionary).
-            crate::dict::EntryKind::Primitive(f) => f(&mut self.vm),
+            crate::dict::EntryKind::Primitive(f) => {
+                pending_synthetic_frame = Some(StackTraceFrame {
+                    word_name: immediate_word_name.clone(),
+                    actual_arity: 0,
+                });
+                f(&mut self.vm)
+            }
             // User-defined word: run via vm.run(), passing the body start address.
             // Guard: words with formal parameters (arity > 0) still require a
             // CALL frame and are rejected.  Words with only VAR locals
@@ -763,6 +809,10 @@ impl Interpreter {
                     if let Some(e) = push_err {
                         Err(e)
                     } else {
+                        pending_synthetic_frame = Some(StackTraceFrame {
+                            word_name: immediate_word_name,
+                            actual_arity: 0,
+                        });
                         let result = self.vm.run(body_addr);
                         // On success, tear down all local slots.  truncate()
                         // removes both the zero-initialised local slots and any
@@ -785,6 +835,20 @@ impl Interpreter {
         self.vm.token_stream = None;
 
         // On error, rollback compile state and stacks.
+        let call_stack = if run_result.is_err() {
+            let mut frames = self.vm.stack_trace_frames();
+            if let Some(frame) = pending_synthetic_frame {
+                let insert_pos = frames
+                    .iter()
+                    .position(|existing| existing.word_name == "<top-level>")
+                    .unwrap_or(frames.len());
+                frames.insert(insert_pos, frame);
+            }
+            Some(frames)
+        } else {
+            None
+        };
+
         if run_result.is_err() {
             self.vm.rollback_def();
             self.vm.data_stack.truncate(saved_data_stack_len);
@@ -794,7 +858,18 @@ impl Interpreter {
             self.vm.pending_use_path = None;
         }
 
-        run_result.map_err(make_err)?;
+        match run_result {
+            Ok(()) => {}
+            Err(e) => {
+                return Err(InterpreterError::with_call_stack(
+                    stmt_pos_line,
+                    stmt_pos_col,
+                    source_excerpt,
+                    e,
+                    call_stack.expect("call_stack must be Some when run_result is Err"),
+                ));
+            }
+        }
 
         // If use_prim stored a path, read the file and execute it now.
         if let Some(path) = self.vm.pending_use_path.take() {
@@ -1066,10 +1141,13 @@ impl Interpreter {
                     main_len,
                     &stmt_positions,
                 );
+                let call_stack = self.vm.stack_trace_frames();
                 self.vm.data_stack.truncate(saved_data_stack_len);
                 self.vm.return_stack.truncate(saved_return_stack_len);
                 self.vm.bp = saved_bp;
-                Err(InterpreterError::new(line, col, &source, e))
+                Err(InterpreterError::with_call_stack(
+                    line, col, &source, e, call_stack,
+                ))
             }
         }
     }
@@ -2592,6 +2670,38 @@ IPARAM 42";
             result.is_err(),
             "expected error when IMMEDIATE word has formal parameters"
         );
+        let err = result.unwrap_err();
+        assert!(
+            err.call_stack.is_empty(),
+            "pre-execution IMMEDIATE dispatch error should not synthesize a runtime frame"
+        );
+    }
+
+    #[test]
+    fn test_immediate_word_runtime_error_captures_word_frame() {
+        let mut interp = Interpreter::new();
+        let src = "DEF BAD\n  PUTDEC 1 / 0\nEND\nIMMEDIATE BAD\nBAD";
+        let result = interp.exec_source(src);
+        let err = result.expect_err("expected runtime error from IMMEDIATE word");
+        assert_eq!(err.call_stack.len(), 2);
+        assert_eq!(err.call_stack[0].word_name, "BAD");
+        assert_eq!(err.call_stack[0].actual_arity, 0);
+        assert_eq!(err.call_stack[1].word_name, "<top-level>");
+    }
+
+    #[test]
+    fn test_immediate_primitive_runtime_error_captures_primitive_frame() {
+        // END is an IMMEDIATE primitive; calling it outside of DEF returns a
+        // runtime error from end_prim.  The primitive's name must appear in the
+        // call stack so the error message points at the offending word.
+        // (IMMEDIATE primitives are dispatched without entering vm.run(), so
+        // the captured stack contains only the synthetic primitive frame.)
+        let mut interp = Interpreter::new();
+        let result = interp.exec_source("END");
+        let err = result.expect_err("expected runtime error from IMMEDIATE primitive");
+        assert_eq!(err.call_stack.len(), 1);
+        assert_eq!(err.call_stack[0].word_name, "END");
+        assert_eq!(err.call_stack[0].actual_arity, 0);
     }
 
     #[test]
@@ -2916,6 +3026,9 @@ PUTSTR T"#;
             "source_excerpt should contain the failing expression, got: {:?}",
             err.source_excerpt
         );
+        assert_eq!(err.call_stack.len(), 1);
+        assert_eq!(err.call_stack[0].word_name, "<top-level>");
+        assert_eq!(err.call_stack[0].actual_arity, 0);
     }
 
     #[test]
@@ -2947,6 +3060,10 @@ PUTSTR T"#;
             "source_excerpt should contain the call site identifier, got: {:?}",
             err.source_excerpt
         );
+        assert_eq!(err.call_stack.len(), 2);
+        assert_eq!(err.call_stack[0].word_name, "BAD_WORD");
+        assert_eq!(err.call_stack[0].actual_arity, 0);
+        assert_eq!(err.call_stack[1].word_name, "<top-level>");
     }
 
     // --- compile_program integration tests (issue #266) ---
@@ -3892,6 +4009,10 @@ NESTED -1";
             "error must point to OUTER call site at line 7, got {}",
             err.line
         );
+        assert_eq!(err.call_stack.len(), 3);
+        assert_eq!(err.call_stack[0].word_name, "INNER");
+        assert_eq!(err.call_stack[1].word_name, "OUTER");
+        assert_eq!(err.call_stack[2].word_name, "<top-level>");
     }
 
     // --- WHILE / ENDWH ---

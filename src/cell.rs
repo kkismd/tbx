@@ -44,6 +44,9 @@ impl Xt {
 #[derive(Debug, Clone)]
 pub enum ReturnFrame {
     Call {
+        /// Execution token of the compiled word currently running in this frame.
+        /// Used for stack trace display on runtime errors.
+        callee_xt: Xt,
         return_pc: usize,
         saved_bp: usize,
         /// Snapshot of `VM::arrays.len()` taken at call time.
