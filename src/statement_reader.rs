@@ -12,6 +12,12 @@ pub struct LogicalStatement {
     pub end_line: usize,
     pub source_excerpt: String,
     pub terminator: StatementTerminator,
+    /// Line-number label parsed off the head of this statement, if any.
+    ///
+    /// `StatementReader` strips a leading `Token::IntLit` at `paren_depth == 0`
+    /// from `tokens` and stores its value here. The interpreter uses this for
+    /// GOTO/BIF/BIT label registration during DEF compilation.
+    pub label: Option<i64>,
 }
 
 /// Error produced while reading logical statements.
@@ -53,24 +59,14 @@ impl<'a> StatementReader<'a> {
         let mut start_col = 0usize;
         let mut end_line = 0usize;
         let mut source_excerpt = String::new();
+        let mut label: Option<i64> = None;
+        let mut label_seen = false;
 
         loop {
-            let mut st = self.lexer.next_token();
+            let st = self.lexer.next_token();
 
             match st.token.clone() {
                 Token::Error(message) => {
-                    if paren_depth > 0 && recover_continuation_number(self.lexer.source(), &mut st)
-                    {
-                        end_line = st.pos.line;
-                        if tokens.is_empty() {
-                            start_line = st.pos.line;
-                            start_col = st.pos.col;
-                            source_excerpt =
-                                line_text_for_offset(self.lexer.source(), st.source_offset);
-                        }
-                        tokens.push(st);
-                        continue;
-                    }
                     return Err(TbxError::InvalidExpression {
                         reason: lexer_error_reason(&message),
                     }
@@ -78,7 +74,7 @@ impl<'a> StatementReader<'a> {
                 }
                 Token::Newline => {
                     if paren_depth == 0 {
-                        if tokens.is_empty() {
+                        if tokens.is_empty() && label.is_none() {
                             continue;
                         }
                         return Ok(Some(LogicalStatement {
@@ -88,6 +84,7 @@ impl<'a> StatementReader<'a> {
                             end_line,
                             source_excerpt,
                             terminator: StatementTerminator::Newline,
+                            label,
                         }));
                     }
                     continue;
@@ -99,7 +96,7 @@ impl<'a> StatementReader<'a> {
                         }
                         .into_reader_error(&st, self.lexer.source()));
                     }
-                    if tokens.is_empty() {
+                    if tokens.is_empty() && label.is_none() {
                         continue;
                     }
                     return Ok(Some(LogicalStatement {
@@ -109,6 +106,7 @@ impl<'a> StatementReader<'a> {
                         end_line,
                         source_excerpt,
                         terminator: StatementTerminator::Semicolon,
+                        label,
                     }));
                 }
                 Token::Eof => {
@@ -119,7 +117,7 @@ impl<'a> StatementReader<'a> {
                         }
                         .into_reader_error_at(error_pos, self.lexer.source()));
                     }
-                    if tokens.is_empty() {
+                    if tokens.is_empty() && label.is_none() {
                         return Ok(None);
                     }
                     return Ok(Some(LogicalStatement {
@@ -129,6 +127,7 @@ impl<'a> StatementReader<'a> {
                         end_line,
                         source_excerpt,
                         terminator: StatementTerminator::Eof,
+                        label,
                     }));
                 }
                 Token::RParen => {
@@ -145,13 +144,25 @@ impl<'a> StatementReader<'a> {
                     paren_depth += 1;
                     open_parens.push(st.pos.clone());
                 }
-                Token::LineNum(n) if paren_depth > 0 => {
-                    st.token = Token::IntLit(n);
-                }
                 _ => {}
             }
 
-            if tokens.is_empty() {
+            // At paren_depth == 0, the very first meaningful token of a logical
+            // statement is treated as a line-number label if it is an integer.
+            // The label is stripped from `tokens` and stored on the statement.
+            if !label_seen && paren_depth == 0 && tokens.is_empty() {
+                label_seen = true;
+                if let Token::IntLit(n) = st.token {
+                    label = Some(n);
+                    start_line = st.pos.line;
+                    start_col = st.pos.col;
+                    source_excerpt = line_text_for_offset(self.lexer.source(), st.source_offset);
+                    end_line = st.pos.line;
+                    continue;
+                }
+            }
+
+            if tokens.is_empty() && label.is_none() {
                 start_line = st.pos.line;
                 start_col = st.pos.col;
                 source_excerpt = line_text_for_offset(self.lexer.source(), st.source_offset);
@@ -204,30 +215,11 @@ fn line_text_for_line(source: &str, line: usize) -> String {
         .to_string()
 }
 
-fn recover_continuation_number(source: &str, st: &mut SpannedToken) -> bool {
-    let Token::Error(message) = &st.token else {
-        return false;
-    };
-    if !message.starts_with("invalid line number: ") {
-        return false;
-    }
-
-    let raw = &source[st.source_offset..st.source_offset + st.source_len];
-    match raw.parse::<f64>() {
-        Ok(value) => {
-            st.token = Token::FloatLit(value);
-            true
-        }
-        Err(_) => false,
-    }
-}
-
 fn lexer_error_reason(message: &str) -> &'static str {
     match message {
         "unterminated string literal" => "unterminated string literal",
         "unterminated string literal after escape" => "unterminated string literal after escape",
         "unexpected token: '..'" => "unexpected token: '..'",
-        _ if message.starts_with("invalid line number: ") => "invalid line number",
         _ if message.starts_with("integer literal out of range: ") => {
             "integer literal out of range"
         }
@@ -307,21 +299,14 @@ mod tests {
     }
 
     #[test]
-    fn test_line_num_inside_parens_is_normalized_to_int_lit() {
+    fn test_int_inside_parens_stays_int_lit() {
         let statements = collect_statements("SET &A, TO_ARRAY(\n10, 20,\n30, 40\n)\n").unwrap();
         assert!(
             statements[0]
                 .tokens
                 .iter()
                 .any(|st| matches!(st.token, Token::IntLit(30))),
-            "expected continuation-line number token to be normalized to IntLit"
-        );
-        assert!(
-            statements[0]
-                .tokens
-                .iter()
-                .all(|st| !matches!(st.token, Token::LineNum(30))),
-            "continuation-line number token must not remain LineNum"
+            "expected continuation-line integer token to be IntLit"
         );
     }
 
@@ -395,5 +380,83 @@ mod tests {
                 reason: "unterminated string literal"
             }
         ));
+    }
+
+    #[test]
+    fn test_leading_int_at_paren_depth_zero_is_extracted_as_label() {
+        // A leading integer at the start of a logical statement is recognized
+        // as a line-number label and stripped from `tokens`.
+        let statements = collect_statements("10 PUTDEC 42").unwrap();
+        assert_eq!(statements.len(), 1);
+        assert_eq!(statements[0].label, Some(10));
+        // The leading `10` must NOT remain in the token list.
+        assert!(matches!(
+            statements[0].tokens.first().map(|st| &st.token),
+            Some(Token::Ident(name)) if name == "PUTDEC"
+        ));
+    }
+
+    #[test]
+    fn test_no_leading_int_means_label_is_none() {
+        let statements = collect_statements("PUTDEC 42").unwrap();
+        assert_eq!(statements.len(), 1);
+        assert_eq!(statements[0].label, None);
+    }
+
+    #[test]
+    fn test_bare_label_line_yields_statement_with_no_tokens() {
+        // `10` alone on a line still produces a statement so that the
+        // interpreter can register the label inside a DEF body.
+        let statements = collect_statements("10\n").unwrap();
+        assert_eq!(statements.len(), 1);
+        assert_eq!(statements[0].label, Some(10));
+        assert!(statements[0].tokens.is_empty());
+    }
+
+    #[test]
+    fn test_int_after_first_token_is_not_a_label() {
+        // The integer 99 here is the second meaningful token of the statement
+        // and must remain a regular IntLit (no label).
+        let statements = collect_statements("PUTDEC 99").unwrap();
+        assert_eq!(statements.len(), 1);
+        assert_eq!(statements[0].label, None);
+        assert!(matches!(
+            statements[0].tokens.last().map(|st| &st.token),
+            Some(Token::IntLit(99))
+        ));
+    }
+
+    #[test]
+    fn test_continuation_line_integer_is_not_a_label() {
+        // A multi-line parenthesized statement: the `30` on the second
+        // continuation line must stay a plain IntLit, not a label.
+        let statements = collect_statements("SET &A, TO_ARRAY(\n10, 20,\n30, 40\n)\n").unwrap();
+        assert_eq!(statements.len(), 1);
+        assert_eq!(statements[0].label, None);
+    }
+
+    #[test]
+    fn test_continuation_line_float_is_floatlit() {
+        // After issue #534, floats at the start of a continuation line are
+        // emitted by the lexer as plain FloatLit tokens (no recovery needed).
+        let statements = collect_statements("SET &A, TO_ARRAY(\n1.5, 2.5,\n3.5, 4.5\n)\n").unwrap();
+        assert!(
+            statements[0]
+                .tokens
+                .iter()
+                .any(|st| matches!(st.token, Token::FloatLit(value) if value == 1.5)),
+            "expected continuation-line float to be FloatLit"
+        );
+    }
+
+    #[test]
+    fn test_label_with_trailing_semicolon() {
+        // `10; PUTDEC 1` → first statement has label 10 with empty tokens,
+        // second statement has no label and `PUTDEC 1` tokens.
+        let statements = collect_statements("10; PUTDEC 1").unwrap();
+        assert_eq!(statements.len(), 2);
+        assert_eq!(statements[0].label, Some(10));
+        assert!(statements[0].tokens.is_empty());
+        assert_eq!(statements[1].label, None);
     }
 }

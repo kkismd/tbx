@@ -42,9 +42,6 @@ pub enum Token {
     LParen,
     /// Right parenthesis `)`. Maps to TOK_OP.
     RParen,
-    /// Integer label at the start of a line (before any identifier).
-    /// Used by GOTO/BIF/BIT as jump targets. Outer-interpreter-only.
-    LineNum(i64),
     /// Line terminator (newline or end of statement). Outer-interpreter-only.
     Newline,
     /// End of input. Outer-interpreter-only.
@@ -56,7 +53,7 @@ pub enum Token {
 impl Token {
     /// Returns the TOKEN kind code for use by the TBX `TOKEN` primitive.
     ///
-    /// Returns `None` for outer-interpreter-only tokens (`Newline`, `Eof`, `Error`, `LineNum`).
+    /// Returns `None` for outer-interpreter-only tokens (`Newline`, `Eof`, `Error`).
     pub fn kind_code(&self) -> Option<i64> {
         match self {
             Token::Ident(_) => Some(TOK_ID),
@@ -68,7 +65,7 @@ impl Token {
             Token::StringLit(_) => Some(TOK_STR),
             // Ellipsis is a DEF-parsing-only token; never exposed via TOKEN primitive.
             Token::Ellipsis => None,
-            Token::LineNum(_) | Token::Newline | Token::Eof | Token::Error(_) => None,
+            Token::Newline | Token::Eof | Token::Error(_) => None,
         }
     }
 }
@@ -120,9 +117,6 @@ pub struct Lexer<'a> {
     line: usize,
     /// Current column number (1-based, character index).
     col: usize,
-    /// True at the start of each line (before any non-whitespace token on that line).
-    /// When true, an integer token is classified as `LineNum` rather than `IntLit`.
-    at_line_start: bool,
     /// Set to true after emitting `Ident("REM")`.
     /// The next call to `next_token_inner()` will skip to end-of-line and return `Newline`.
     rem_pending: bool,
@@ -138,7 +132,6 @@ impl<'a> Lexer<'a> {
             chars: source.char_indices().peekable(),
             line: 1,
             col: 1,
-            at_line_start: true,
             rem_pending: false,
             peeked: None,
         }
@@ -272,9 +265,8 @@ impl<'a> Lexer<'a> {
         self.emit_newline(start_pos, start_off, raw_len)
     }
 
-    /// Build a `Newline` token and reset `at_line_start`.
+    /// Build a `Newline` token.
     fn emit_newline(&mut self, pos: Position, offset: usize, len: usize) -> SpannedToken {
-        self.at_line_start = true;
         SpannedToken {
             token: Token::Newline,
             pos,
@@ -283,11 +275,13 @@ impl<'a> Lexer<'a> {
         }
     }
 
-    /// Scan an integer or float literal, or a line-number label.
+    /// Scan an integer or float literal.
+    ///
+    /// The lexer is context-free: integers are always emitted as `Token::IntLit`,
+    /// regardless of whether they appear at the start of a line. The decision to
+    /// treat a leading integer as a line-number label is made by `StatementReader`
+    /// (which knows logical-statement boundaries and parenthesis depth).
     fn scan_number(&mut self, start_pos: Position, start_off: usize) -> SpannedToken {
-        let is_line_num = self.at_line_start;
-        self.at_line_start = false;
-
         // Consume digit sequence.
         while matches!(self.peek_char(), Some(c) if c.is_ascii_digit()) {
             self.advance();
@@ -322,37 +316,6 @@ impl<'a> Lexer<'a> {
         let end_off = self.peek_offset();
         let raw = &self.source[start_off..end_off];
         let raw_len = end_off - start_off;
-
-        // A float at line-start is not a valid line number label.
-        if is_line_num && is_float {
-            return SpannedToken {
-                token: Token::Error(format!("invalid line number: {raw}")),
-                pos: start_pos,
-                source_offset: start_off,
-                source_len: raw_len,
-            };
-        }
-
-        if is_line_num {
-            match raw.parse::<i64>() {
-                Ok(n) => {
-                    return SpannedToken {
-                        token: Token::LineNum(n),
-                        pos: start_pos,
-                        source_offset: start_off,
-                        source_len: raw_len,
-                    }
-                }
-                Err(_) => {
-                    return SpannedToken {
-                        token: Token::Error(format!("integer literal out of range: {raw}")),
-                        pos: start_pos,
-                        source_offset: start_off,
-                        source_len: raw_len,
-                    }
-                }
-            }
-        }
 
         if is_float {
             match raw.parse::<f64>() {
@@ -389,7 +352,6 @@ impl<'a> Lexer<'a> {
 
     /// Scan an identifier.  If the identifier is `REM`, set `rem_pending`.
     fn scan_ident(&mut self, start_pos: Position, start_off: usize) -> SpannedToken {
-        self.at_line_start = false;
         while matches!(self.peek_char(), Some(c) if c.is_alphanumeric() || c == '_') {
             self.advance();
         }
@@ -414,7 +376,6 @@ impl<'a> Lexer<'a> {
     /// The opening `"` must already be the next character.
     /// Returns `Token::Error` if the string is unterminated.
     fn scan_string(&mut self, start_pos: Position, start_off: usize) -> SpannedToken {
-        self.at_line_start = false;
         self.advance(); // consume opening '"'
 
         let mut value = String::new();
@@ -489,8 +450,6 @@ impl<'a> Lexer<'a> {
 
     /// Scan an operator or punctuation character.
     fn scan_operator(&mut self, start_pos: Position, start_off: usize) -> SpannedToken {
-        self.at_line_start = false;
-
         // Helper macro to build SpannedToken after consuming n chars.
         // (Not a real macro — we build inline.)
 
@@ -715,14 +674,13 @@ pub(crate) fn last_top_level_comma(
 /// Parse a label number from a token slice.
 ///
 /// Skips leading `Newline`/`Eof` tokens and returns the integer value of the
-/// first meaningful token if it is an `IntLit` or `LineNum`.
+/// first meaningful token if it is an `IntLit`.
 pub(crate) fn parse_label_number(tokens: &[SpannedToken]) -> Option<i64> {
     let tok = tokens
         .iter()
         .find(|st| !matches!(st.token, Token::Newline | Token::Eof))?;
     match &tok.token {
         Token::IntLit(n) => Some(*n),
-        Token::LineNum(n) => Some(*n),
         _ => None,
     }
 }
@@ -820,7 +778,6 @@ mod tests {
         assert_eq!(Token::Newline.kind_code(), None);
         assert_eq!(Token::Eof.kind_code(), None);
         assert_eq!(Token::Error("x".to_string()).kind_code(), None);
-        assert_eq!(Token::LineNum(10).kind_code(), None);
     }
 
     // --- identifier ---
@@ -1017,14 +974,16 @@ mod tests {
         assert_eq!(tokens("()"), vec![Token::LParen, Token::RParen, Token::Eof]);
     }
 
-    // --- LineNum vs IntLit ---
+    // --- integer literal: lexer is context-free ---
 
     #[test]
-    fn test_linenum_at_line_start() {
+    fn test_intlit_at_line_start() {
+        // Integer at the start of a line is still emitted as IntLit;
+        // StatementReader is responsible for promoting it to a line-number label.
         assert_eq!(
             tokens("10 PUTDEC 42"),
             vec![
-                Token::LineNum(10),
+                Token::IntLit(10),
                 Token::Ident("PUTDEC".to_string()),
                 Token::IntLit(42),
                 Token::Eof,
@@ -1034,7 +993,7 @@ mod tests {
 
     #[test]
     fn test_intlit_not_at_line_start() {
-        // The first token on the line is an identifier, so the number after it is IntLit.
+        // Non-leading integer is unchanged: still IntLit.
         assert_eq!(
             tokens("PUTDEC 42"),
             vec![
@@ -1046,8 +1005,8 @@ mod tests {
     }
 
     #[test]
-    fn test_linenum_at_second_line() {
-        // After a Newline, at_line_start resets, so `99` on the second line is also LineNum.
+    fn test_intlit_at_second_line() {
+        // The first integer on a second physical line is also a plain IntLit.
         let toks = tokens("PUTDEC 1\n99 PUTDEC 2");
         assert_eq!(
             toks,
@@ -1055,7 +1014,7 @@ mod tests {
                 Token::Ident("PUTDEC".to_string()),
                 Token::IntLit(1),
                 Token::Newline,
-                Token::LineNum(99),
+                Token::IntLit(99),
                 Token::Ident("PUTDEC".to_string()),
                 Token::IntLit(2),
                 Token::Eof,
@@ -1064,13 +1023,13 @@ mod tests {
     }
 
     #[test]
-    fn test_linenum_with_leading_spaces() {
-        // Leading spaces do not break at_line_start.
+    fn test_intlit_with_leading_spaces() {
+        // Leading spaces do not change tokenization.
         let toks = tokens("  10  PUTDEC");
         assert_eq!(
             toks,
             vec![
-                Token::LineNum(10),
+                Token::IntLit(10),
                 Token::Ident("PUTDEC".to_string()),
                 Token::Eof,
             ]
@@ -1110,7 +1069,7 @@ mod tests {
         assert_eq!(
             toks,
             vec![
-                Token::LineNum(10),
+                Token::IntLit(10),
                 Token::Ident("REM".to_string()),
                 Token::Newline,
                 Token::Eof,
@@ -1146,7 +1105,7 @@ mod tests {
     fn test_hash_comment_after_linenum() {
         // Line number followed by a '#' comment.
         let toks = tokens("10 # comment after linenum");
-        assert_eq!(toks, vec![Token::LineNum(10), Token::Newline, Token::Eof,]);
+        assert_eq!(toks, vec![Token::IntLit(10), Token::Newline, Token::Eof,]);
     }
 
     #[test]
@@ -1342,7 +1301,8 @@ mod tests {
     }
 
     #[test]
-    fn test_linenum_overflow_yields_error() {
+    fn test_intlit_overflow_at_line_start_yields_error() {
+        // Even at the start of a line an oversized integer yields a lexer error.
         let toks = tokens("99999999999999999999 PRINT");
         assert!(
             matches!(toks[0], Token::Error(_)),
@@ -1351,15 +1311,20 @@ mod tests {
         );
     }
 
-    // --- float at line-start → Error ---
+    // --- float at line-start: emitted as a plain FloatLit ---
 
     #[test]
-    fn test_float_at_line_start_yields_error() {
+    fn test_float_at_line_start_is_floatlit() {
+        // The lexer is context-free: a float at the start of a line is still
+        // a FloatLit. Treating it as a label is the StatementReader's job.
         let toks = tokens("1.25 X");
-        assert!(
-            matches!(toks[0], Token::Error(_)),
-            "expected Error, got {:?}",
-            toks[0]
+        assert_eq!(
+            toks,
+            vec![
+                Token::FloatLit(1.25),
+                Token::Ident("X".to_string()),
+                Token::Eof,
+            ]
         );
     }
 
