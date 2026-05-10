@@ -748,6 +748,7 @@ impl Interpreter {
         let kind = self.vm.headers[xt.index()].kind.clone();
         let arity = self.vm.headers[xt.index()].arity;
         let local_count = self.vm.headers[xt.index()].local_count;
+        let immediate_word_name = self.vm.headers[xt.index()].name.clone();
 
         // Feed remaining tokens into vm.token_stream so the IMMEDIATE word can
         // consume them via vm.next_token().
@@ -759,6 +760,7 @@ impl Interpreter {
         let saved_return_stack_len = self.vm.return_stack.len();
         let saved_bp = self.vm.bp;
 
+        let mut active_immediate_word_frame: Option<StackTraceFrame> = None;
         let run_result = match kind {
             // Native primitive: call the function pointer directly (avoids
             // temporary-buffer issues when the primitive writes to the dictionary).
@@ -797,6 +799,10 @@ impl Interpreter {
                     if let Some(e) = push_err {
                         Err(e)
                     } else {
+                        active_immediate_word_frame = Some(StackTraceFrame {
+                            word_name: immediate_word_name,
+                            actual_arity: 0,
+                        });
                         let result = self.vm.run(body_addr);
                         // On success, tear down all local slots.  truncate()
                         // removes both the zero-initialised local slots and any
@@ -820,7 +826,15 @@ impl Interpreter {
 
         // On error, rollback compile state and stacks.
         let call_stack = if run_result.is_err() {
-            Some(self.vm.stack_trace_frames())
+            let mut frames = self.vm.stack_trace_frames();
+            if let Some(frame) = active_immediate_word_frame {
+                let insert_pos = frames
+                    .iter()
+                    .position(|existing| existing.word_name == "<top-level>")
+                    .unwrap_or(frames.len());
+                frames.insert(insert_pos, frame);
+            }
+            Some(frames)
         } else {
             None
         };
@@ -2646,6 +2660,23 @@ IPARAM 42";
             result.is_err(),
             "expected error when IMMEDIATE word has formal parameters"
         );
+        let err = result.unwrap_err();
+        assert!(
+            err.call_stack.is_empty(),
+            "pre-execution IMMEDIATE dispatch error should not synthesize a runtime frame"
+        );
+    }
+
+    #[test]
+    fn test_immediate_word_runtime_error_captures_word_frame() {
+        let mut interp = Interpreter::new();
+        let src = "DEF BAD\n  PUTDEC 1 / 0\nEND\nIMMEDIATE BAD\nBAD";
+        let result = interp.exec_source(src);
+        let err = result.expect_err("expected runtime error from IMMEDIATE word");
+        assert_eq!(err.call_stack.len(), 2);
+        assert_eq!(err.call_stack[0].word_name, "BAD");
+        assert_eq!(err.call_stack[0].actual_arity, 0);
+        assert_eq!(err.call_stack[1].word_name, "<top-level>");
     }
 
     #[test]
