@@ -308,8 +308,8 @@ mod tests {
     fn test_empty_segments_from_semicolons_are_skipped() {
         let statements = collect_statements("; PUTDEC 1;; PUTDEC 2;").unwrap();
         assert_eq!(statements.len(), 2);
-        assert_eq!(statements[0].source_excerpt, "; PUTDEC 1;; PUTDEC 2;");
-        assert_eq!(statements[1].source_excerpt, "; PUTDEC 1;; PUTDEC 2;");
+        assert_eq!(statements[0].source_excerpt, "PUTDEC 1;; PUTDEC 2;");
+        assert_eq!(statements[1].source_excerpt, "PUTDEC 2;");
     }
 
     #[test]
