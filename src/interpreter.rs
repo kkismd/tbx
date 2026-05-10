@@ -202,10 +202,12 @@ impl Interpreter {
 
     /// Tokenizes `source_line` and splits it into non-empty statement segments.
     ///
-    /// Segments are delimited by semicolons.  A leading `LineNum` token on the
-    /// first segment is stripped; if the interpreter is currently inside a DEF
-    /// body, it is also registered as a branch-target label.  Empty segments
-    /// (e.g. a trailing semicolon) are omitted from the result.
+    /// Segments are delimited by semicolons.  A leading integer literal on the
+    /// first segment is treated as a line-number label: if the interpreter is
+    /// currently inside a DEF body, it is registered as a branch-target label,
+    /// then stripped from the segment.  Outside a DEF body, the leading integer
+    /// is silently discarded.  Empty segments (e.g. a trailing semicolon) are
+    /// omitted from the result.
     ///
     /// Returns a tuple of `(tokens, boundaries)` where each boundary `(start, end)`
     /// is a half-open index range into `tokens`.
@@ -248,11 +250,14 @@ impl Interpreter {
         for (seg_start_orig, seg_end) in raw_boundaries {
             let mut seg_start = seg_start_orig;
 
-            // Only the first segment may begin with a line number.
+            // Only the first segment may begin with a line-number label.
+            // The lexer is context-free (issue #534), so the leading integer
+            // arrives here as `Token::IntLit`; recognising it as a label is
+            // the interpreter's job.
             if first_segment {
                 first_segment = false;
                 if seg_start < seg_end {
-                    if let Token::LineNum(n) = tokens[seg_start].token {
+                    if let Token::IntLit(n) = tokens[seg_start].token {
                         if self.vm.compile_state.is_some() {
                             // Inside a DEF body: register as a branch-target label.
                             let ln_line = tokens[seg_start].pos.line;
@@ -292,8 +297,9 @@ impl Interpreter {
 
     /// Executes a single statement segment (a slice of tokens with no Semicolons).
     ///
-    /// `tokens` must be non-empty and must not contain `Token::LineNum` at index 0
-    /// (the caller is responsible for stripping it on the first segment).
+    /// `tokens` must be non-empty.  Any leading line-number label has already
+    /// been stripped by the caller (`parse_line_into_segments` or
+    /// `prepare_logical_statement`).
     ///
     /// `absolute_line` is the 1-based line number of this segment in the full source being
     /// processed.  The token positions produced by `parse_line_into_segments` are always
@@ -417,30 +423,30 @@ impl Interpreter {
         run_result.map_err(make_err)
     }
 
-    /// Strip a leading `LineNum` token and, if inside a DEF body, register it as a label.
+    /// Register the statement's line-number label (if any) inside a DEF body
+    /// and return the statement when there are still tokens to execute.
     ///
-    /// Returns `Ok(Some(stmt))` when the statement still has tokens after the line-number
-    /// is consumed, `Ok(None)` when the statement was a bare line-number (nothing left to
-    /// execute), or `Err` when label registration fails (compile state is rolled back by
-    /// `register_label`'s caller before returning).
+    /// `StatementReader` already strips a leading line-number label from the
+    /// token list and stores it in `stmt.label`. This method only needs to
+    /// register that label as a branch target when compiling a word.
+    ///
+    /// Returns `Ok(Some(stmt))` when the statement has tokens to execute,
+    /// `Ok(None)` when the statement was a bare line-number label (nothing
+    /// left to execute), or `Err` when label registration fails (compile
+    /// state is rolled back before returning).
     fn prepare_logical_statement(
         &mut self,
-        mut stmt: LogicalStatement,
+        stmt: LogicalStatement,
     ) -> Result<Option<LogicalStatement>, InterpreterError> {
-        if stmt.tokens.is_empty() {
-            return Ok(None);
-        }
-
-        if let Token::LineNum(n) = stmt.tokens[0].token {
+        if let Some(n) = stmt.label {
             if self.vm.compile_state.is_some() {
-                let ln_line = stmt.tokens[0].pos.line;
-                let ln_col = stmt.tokens[0].pos.col;
+                let ln_line = stmt.start_line;
+                let ln_col = stmt.start_col;
                 self.register_label(n, &stmt.source_excerpt, ln_line, ln_col)
                     .inspect_err(|_e| {
                         self.vm.rollback_def();
                     })?;
             }
-            stmt.tokens.remove(0);
         }
 
         if stmt.tokens.is_empty() {

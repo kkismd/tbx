@@ -111,6 +111,20 @@ DEF 開始時に両構造体を生成し、END 完了後に破棄する。行番
 2. ラベル `N` が出現したとき、現在の `DP` を `label_table[N]` として登録し、`patch_list` 内の `N` に対応するすべてのオフセットに正しいアドレスを書き戻す（バックパッチ）。
 3. END 完了後に `patch_list` に未解決エントリが残っていた場合はコンパイルエラーとする。
 
+**Lexer と StatementReader の責務分離（行番号ラベル判定）**
+
+> Issue #534「Lexerから文脈依存な行番号判定を撤廃し、LineNum判定をStatementReaderへ移管する」に基づく設計方針
+
+行頭の整数を「行番号ラベル」として扱うかどうかの判断は、Lexer ではなく `StatementReader` が行う。
+
+* **Lexer は文脈フリー**: 整数リテラルは出現位置によらず常に `Token::IntLit(n)` を生成する。Lexer が「いま行頭か」「いま括弧の中か」を意識する必要はなく、`Token::LineNum` バリアントは存在しない。同様に、行頭にフロート（`1.5` 等）が現れても通常の `Token::FloatLit` を返す。
+* **StatementReader が論理ステートメントの先頭を知る**: `StatementReader` は `paren_depth` と論理ステートメント境界を管理しているので、`paren_depth == 0` の論理ステートメントの先頭にある `Token::IntLit(n)` を行番号ラベルと解釈し、`LogicalStatement.label: Option<i64>` に格納したうえでその整数を `tokens` から除く。
+* **括弧内の継続行は通常の整数/フロート**: `SET &A, TO_ARRAY(\n10, 20,\n30, 40\n)` のように複数行にまたがる論理ステートメントの継続行先頭の数値は、`paren_depth > 0` のため StatementReader はラベル化しない。Lexer が出した `IntLit` / `FloatLit` がそのまま式コンパイラに渡される。
+* **Interpreter 側の扱い**: `Interpreter::prepare_logical_statement` は `stmt.label` を見て、DEF コンパイル中（`compile_state.is_some()`）の場合のみ `register_label` を呼んでブランチターゲットとして登録する。DEF の外では label は黙って捨てられる（実行時には無効ではない、単に何もしない）。
+* **REPL/`exec_line` 経路**: `parse_line_into_segments` も同じルールに従う。先頭セグメントの先頭トークンが `Token::IntLit(n)` なら行番号ラベルとして扱い、DEF コンパイル中であれば `register_label` を呼んでから `IntLit` トークンを除く。
+
+この分離により、Lexer は単純なトークナイザに保たれ、行番号判定の責務は論理ステートメントを構築する層に集中する。
+
 ---
 
 ## コンパイルスタックプリミティブ

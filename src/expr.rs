@@ -534,7 +534,7 @@ impl<'a> ExprCompiler<'a> {
                     });
                 }
 
-                // Ignore all other tokens (LineNum, …).
+                // Ignore all other tokens.
                 _ => {}
             }
 
@@ -792,17 +792,8 @@ mod tests {
     use crate::lexer::Lexer;
 
     /// Tokenise `src`, stopping before `Newline` / `Eof`.
-    ///
-    /// A dummy identifier prefix is prepended so that the lexer's
-    /// `at_line_start` flag is cleared before the first real token.
-    /// This prevents leading integer literals from being classified as
-    /// `LineNum` tokens.
     fn lex(src: &str) -> Vec<SpannedToken> {
-        // The `_S ` prefix forces `at_line_start` to false before any token in
-        // `src` is scanned. The leading identifier token is discarded.
-        let prefixed = format!("_S {src}");
-        let mut lx = Lexer::new(&prefixed);
-        lx.next_token(); // discard the dummy "_S" identifier
+        let mut lx = Lexer::new(src);
         let mut out = Vec::new();
         loop {
             let st = lx.next_token();
