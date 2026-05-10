@@ -58,7 +58,6 @@ impl<'a> StatementReader<'a> {
         let mut start_line = 0usize;
         let mut start_col = 0usize;
         let mut end_line = 0usize;
-        let mut source_excerpt = String::new();
         let mut label: Option<i64> = None;
         let mut label_seen = false;
 
@@ -82,7 +81,12 @@ impl<'a> StatementReader<'a> {
                             start_line,
                             start_col,
                             end_line,
-                            source_excerpt,
+                            source_excerpt: source_excerpt_for_lines(
+                                self.lexer.source(),
+                                start_line,
+                                start_col,
+                                end_line,
+                            ),
                             terminator: StatementTerminator::Newline,
                             label,
                         }));
@@ -104,7 +108,12 @@ impl<'a> StatementReader<'a> {
                         start_line,
                         start_col,
                         end_line,
-                        source_excerpt,
+                        source_excerpt: source_excerpt_for_lines(
+                            self.lexer.source(),
+                            start_line,
+                            start_col,
+                            end_line,
+                        ),
                         terminator: StatementTerminator::Semicolon,
                         label,
                     }));
@@ -125,7 +134,12 @@ impl<'a> StatementReader<'a> {
                         start_line,
                         start_col,
                         end_line,
-                        source_excerpt,
+                        source_excerpt: source_excerpt_for_lines(
+                            self.lexer.source(),
+                            start_line,
+                            start_col,
+                            end_line,
+                        ),
                         terminator: StatementTerminator::Eof,
                         label,
                     }));
@@ -156,7 +170,6 @@ impl<'a> StatementReader<'a> {
                     label = Some(n);
                     start_line = st.pos.line;
                     start_col = st.pos.col;
-                    source_excerpt = line_text_for_offset(self.lexer.source(), st.source_offset);
                     end_line = st.pos.line;
                     continue;
                 }
@@ -165,7 +178,6 @@ impl<'a> StatementReader<'a> {
             if tokens.is_empty() && label.is_none() {
                 start_line = st.pos.line;
                 start_col = st.pos.col;
-                source_excerpt = line_text_for_offset(self.lexer.source(), st.source_offset);
             }
             end_line = st.pos.line;
             tokens.push(st);
@@ -213,6 +225,29 @@ fn line_text_for_line(source: &str, line: usize) -> String {
         .unwrap_or("")
         .trim_end_matches('\r')
         .to_string()
+}
+
+fn source_excerpt_for_lines(
+    source: &str,
+    start_line: usize,
+    start_col: usize,
+    end_line: usize,
+) -> String {
+    if start_line == 0 || start_col == 0 || end_line == 0 || end_line < start_line {
+        return String::new();
+    }
+
+    (start_line..=end_line)
+        .map(|line| {
+            let text = line_text_for_line(source, line);
+            if line == start_line {
+                text.chars().skip(start_col.saturating_sub(1)).collect()
+            } else {
+                text
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 fn lexer_error_reason(message: &str) -> &'static str {
@@ -273,8 +308,8 @@ mod tests {
     fn test_empty_segments_from_semicolons_are_skipped() {
         let statements = collect_statements("; PUTDEC 1;; PUTDEC 2;").unwrap();
         assert_eq!(statements.len(), 2);
-        assert_eq!(statements[0].source_excerpt, "; PUTDEC 1;; PUTDEC 2;");
-        assert_eq!(statements[1].source_excerpt, "; PUTDEC 1;; PUTDEC 2;");
+        assert_eq!(statements[0].source_excerpt, "PUTDEC 1;; PUTDEC 2;");
+        assert_eq!(statements[1].source_excerpt, "PUTDEC 2;");
     }
 
     #[test]
@@ -284,6 +319,20 @@ mod tests {
         assert_eq!(statements[0].start_line, 1);
         assert_eq!(statements[0].end_line, 4);
         assert_eq!(statements[0].terminator, StatementTerminator::Newline);
+        assert_eq!(
+            statements[0].source_excerpt,
+            "SET &A, TO_ARRAY(\n  1, 2,\n  3, 4\n)"
+        );
+    }
+
+    #[test]
+    fn test_multiline_statement_after_semicolon_uses_statement_start_column() {
+        let statements = collect_statements("PUTDEC 1; PUTDEC ADD(\n  1,\n  1 / 0\n)").unwrap();
+        assert_eq!(statements.len(), 2);
+        assert_eq!(
+            statements[1].source_excerpt,
+            "PUTDEC ADD(\n  1,\n  1 / 0\n)"
+        );
     }
 
     #[test]

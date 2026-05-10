@@ -33,17 +33,17 @@ const MAX_USE_DEPTH: usize = 64;
 pub struct InterpreterError {
     pub line: usize,
     pub col: usize,
-    pub source_line: String,
+    pub source_excerpt: String,
     pub kind: TbxError,
 }
 
 impl InterpreterError {
     /// Construct a new `InterpreterError` with the given location and error kind.
-    fn new(line: usize, col: usize, source_line: &str, kind: TbxError) -> Self {
+    fn new(line: usize, col: usize, source_excerpt: &str, kind: TbxError) -> Self {
         InterpreterError {
             line,
             col,
-            source_line: source_line.to_string(),
+            source_excerpt: source_excerpt.to_string(),
             kind,
         }
     }
@@ -51,10 +51,11 @@ impl InterpreterError {
 
 impl std::fmt::Debug for InterpreterError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let excerpt = self.source_excerpt.replace('\n', "\n  ");
         write!(
             f,
             "line {}:{}: {:?}\n  {}",
-            self.line, self.col, self.kind, self.source_line
+            self.line, self.col, self.kind, excerpt
         )
     }
 }
@@ -184,13 +185,13 @@ impl Interpreter {
         name: &str,
         line: usize,
         col: usize,
-        source_line: &str,
+        source_excerpt: &str,
     ) -> Result<Xt, InterpreterError> {
         self.vm.lookup(name).ok_or_else(|| {
             InterpreterError::new(
                 line,
                 col,
-                source_line,
+                source_excerpt,
                 TbxError::UndefinedSymbol {
                     name: name.to_string(),
                 },
@@ -249,7 +250,7 @@ impl Interpreter {
     fn exec_segment(
         &mut self,
         tokens: &[SpannedToken],
-        source_line: &str,
+        source_excerpt: &str,
         absolute_line: usize,
     ) -> Result<(), InterpreterError> {
         let mut idx = 0;
@@ -284,7 +285,7 @@ impl Interpreter {
                     &tokens[idx..],
                     absolute_line,
                     stmt_pos_col,
-                    source_line,
+                    source_excerpt,
                 );
             }
         }
@@ -296,7 +297,7 @@ impl Interpreter {
                 &tokens[idx..],
                 absolute_line,
                 stmt_pos_col,
-                source_line,
+                source_excerpt,
             );
             if result.is_err() {
                 self.vm.rollback_def();
@@ -306,7 +307,7 @@ impl Interpreter {
 
         // Helper closure for wrapping TbxError into InterpreterError.
         let make_err =
-            |e: TbxError| InterpreterError::new(absolute_line, stmt_pos_col, source_line, e);
+            |e: TbxError| InterpreterError::new(absolute_line, stmt_pos_col, source_excerpt, e);
 
         // Save the current dictionary pointer to use as the buffer start.
         let buf_start = self.vm.dp;
@@ -318,7 +319,7 @@ impl Interpreter {
             &tokens[idx..],
             absolute_line,
             stmt_pos_col,
-            source_line,
+            source_excerpt,
         ) {
             self.vm.dp = buf_start;
             self.vm.dictionary.truncate(buf_start);
@@ -327,14 +328,15 @@ impl Interpreter {
 
         // Append EXIT to terminate the temporary code buffer.
         // On failure, reset dp before returning.
-        let exit_xt = match self.lookup_required("EXIT", absolute_line, stmt_pos_col, source_line) {
-            Ok(xt) => xt,
-            Err(e) => {
-                self.vm.dp = buf_start;
-                self.vm.dictionary.truncate(buf_start);
-                return Err(e);
-            }
-        };
+        let exit_xt =
+            match self.lookup_required("EXIT", absolute_line, stmt_pos_col, source_excerpt) {
+                Ok(xt) => xt,
+                Err(e) => {
+                    self.vm.dp = buf_start;
+                    self.vm.dictionary.truncate(buf_start);
+                    return Err(e);
+                }
+            };
         if let Err(e) = self.vm.dict_write(Cell::Xt(exit_xt)) {
             self.vm.dp = buf_start;
             self.vm.dictionary.truncate(buf_start);
@@ -418,9 +420,9 @@ impl Interpreter {
         arg_tokens: &[SpannedToken],
         err_line: usize,
         err_col: usize,
-        source_line: &str,
+        source_excerpt: &str,
     ) -> Result<(), InterpreterError> {
-        let make_err = |e: TbxError| InterpreterError::new(err_line, err_col, source_line, e);
+        let make_err = |e: TbxError| InterpreterError::new(err_line, err_col, source_excerpt, e);
 
         // Look up the statement word.
         // Allow resolving the currently-compiled word (FLAG_HIDDEN) so that self-recursive
@@ -491,10 +493,11 @@ impl Interpreter {
 
         // Look up required system words for building the code buffer.
         // These must always be present after init_vm(); return a proper error if missing.
-        let lit_marker_xt = self.lookup_required("LIT_MARKER", err_line, err_col, source_line)?;
-        let call_xt = self.lookup_required("CALL", err_line, err_col, source_line)?;
+        let lit_marker_xt =
+            self.lookup_required("LIT_MARKER", err_line, err_col, source_excerpt)?;
+        let call_xt = self.lookup_required("CALL", err_line, err_col, source_excerpt)?;
         let drop_to_marker_xt =
-            self.lookup_required("DROP_TO_MARKER", err_line, err_col, source_line)?;
+            self.lookup_required("DROP_TO_MARKER", err_line, err_col, source_excerpt)?;
 
         // Build code sequence:
         //   Xt(LIT_MARKER)
@@ -557,7 +560,7 @@ impl Interpreter {
                 crate::dict::EntryKind::Primitive(_)
             ) && self.vm.headers[stmt_xt.index()].is_variadic;
             if is_variadic_prim {
-                let lit_xt = self.lookup_required("LIT", err_line, err_col, source_line)?;
+                let lit_xt = self.lookup_required("LIT", err_line, err_col, source_excerpt)?;
                 self.vm.dict_write(Cell::Xt(lit_xt)).map_err(&make_err)?;
                 self.vm
                     .dict_write(Cell::Int(arity as i64))
@@ -702,10 +705,10 @@ impl Interpreter {
         tokens_after_stmt: &[SpannedToken],
         stmt_pos_line: usize,
         stmt_pos_col: usize,
-        source_line: &str,
+        source_excerpt: &str,
     ) -> Result<(), InterpreterError> {
         let make_err =
-            |e: TbxError| InterpreterError::new(stmt_pos_line, stmt_pos_col, source_line, e);
+            |e: TbxError| InterpreterError::new(stmt_pos_line, stmt_pos_col, source_excerpt, e);
 
         // Clone fields needed for dispatch before the mutable borrow below.
         let kind = self.vm.headers[xt.index()].kind.clone();
@@ -878,11 +881,11 @@ impl Interpreter {
     fn register_label(
         &mut self,
         n: i64,
-        source_line: &str,
+        source_excerpt: &str,
         line: usize,
         col: usize,
     ) -> Result<(), InterpreterError> {
-        let make_err = |e: TbxError| InterpreterError::new(line, col, source_line, e);
+        let make_err = |e: TbxError| InterpreterError::new(line, col, source_excerpt, e);
         let dp = self.vm.dp;
         let state = self.vm.compile_state.as_mut().ok_or_else(|| {
             make_err(TbxError::InvalidExpression {
@@ -1078,7 +1081,7 @@ impl Interpreter {
     /// from the dictionary into `main_cells` for deferred execution.
     ///
     /// `stmt_positions` receives one entry per ground-level statement compiled:
-    /// `(start_offset_in_main_cells, line, col, source_line_text)`.
+    /// `(start_offset_in_main_cells, line, col, source_excerpt)`.
     ///
     /// `absolute_line` is the 1-based line number of the logical statement's first line in the
     /// full source file, as supplied by `StatementReader`.  Token positions within a segment are
@@ -1086,7 +1089,7 @@ impl Interpreter {
     fn compile_program_segment(
         &mut self,
         tokens: &[SpannedToken],
-        source_line: &str,
+        source_excerpt: &str,
         main_cells: &mut Vec<Cell>,
         stmt_positions: &mut Vec<StmtPosition>,
         absolute_line: usize,
@@ -1120,7 +1123,7 @@ impl Interpreter {
                     &tokens[idx..],
                     absolute_line,
                     stmt_pos_col,
-                    source_line,
+                    source_excerpt,
                 );
             }
         }
@@ -1132,7 +1135,7 @@ impl Interpreter {
                 &tokens[idx..],
                 absolute_line,
                 stmt_pos_col,
-                source_line,
+                source_excerpt,
             );
             if result.is_err() {
                 self.vm.rollback_def();
@@ -1147,7 +1150,7 @@ impl Interpreter {
             &tokens[idx..],
             absolute_line,
             stmt_pos_col,
-            source_line,
+            source_excerpt,
         ) {
             self.vm.dp = buf_start;
             self.vm.dictionary.truncate(buf_start);
@@ -1169,7 +1172,7 @@ impl Interpreter {
                 offset: stmt_offset,
                 line: absolute_line,
                 col: stmt_pos_col,
-                source: source_line.to_string(),
+                source_excerpt: source_excerpt.to_string(),
             });
         }
 
@@ -1186,8 +1189,8 @@ struct StmtPosition {
     line: usize,
     /// 1-based column number of the statement keyword.
     col: usize,
-    /// Full text of the source line containing the statement.
-    source: String,
+    /// Source excerpt for the logical statement containing the statement.
+    source_excerpt: String,
 }
 
 /// Resolve the source position for a runtime error that occurred during `compile_program`.
@@ -1219,7 +1222,7 @@ fn resolve_source_pos(
             .iter()
             .rev()
             .find(|sp| sp.offset <= offset)
-            .map(|sp| (sp.line, sp.col, sp.source.clone()))
+            .map(|sp| (sp.line, sp.col, sp.source_excerpt.clone()))
     };
 
     // Strategy 1: error_pc is inside the main routine.
@@ -2909,9 +2912,9 @@ PUTSTR T"#;
             err.col
         );
         assert!(
-            err.source_line.contains("1 / 0"),
-            "source_line should contain the failing expression, got: {:?}",
-            err.source_line
+            err.source_excerpt.contains("1 / 0"),
+            "source_excerpt should contain the failing expression, got: {:?}",
+            err.source_excerpt
         );
     }
 
@@ -2940,9 +2943,9 @@ PUTSTR T"#;
             err.col
         );
         assert!(
-            err.source_line.contains("BAD_WORD"),
-            "source_line should contain the call site identifier, got: {:?}",
-            err.source_line
+            err.source_excerpt.contains("BAD_WORD"),
+            "source_excerpt should contain the call site identifier, got: {:?}",
+            err.source_excerpt
         );
     }
 
@@ -4750,11 +4753,63 @@ PUTDEC ADD(
             "column should point to the start of the PUTDEC keyword (col 1), got {}",
             err.col
         );
-        // source_line must reflect the first physical line of the multi-line statement.
+        // source_excerpt must preserve the full multi-line logical statement.
         assert!(
-            err.source_line.contains("PUTDEC ADD("),
-            "source_line should contain the statement's first line, got: {:?}",
-            err.source_line
+            err.source_excerpt.contains("PUTDEC ADD(\n  1,\n  1 / 0\n)"),
+            "source_excerpt should contain the full statement, got: {:?}",
+            err.source_excerpt
         );
+    }
+
+    #[test]
+    fn test_exec_source_runtime_error_multiline_stmt_uses_full_excerpt() {
+        // exec_source should preserve the full logical statement excerpt too.
+        let mut interp = Interpreter::new();
+        let src = "\
+PUTDEC 1
+PUTDEC ADD(
+  1,
+  1 / 0
+)";
+        let result = interp.exec_source(src);
+        let err = result.expect_err("expected runtime error from division by zero");
+        assert_eq!(
+            err.line, 2,
+            "runtime error must point to line 2, got {}",
+            err.line
+        );
+        assert_eq!(
+            err.col, 1,
+            "column should point to the start of PUTDEC, got {}",
+            err.col
+        );
+        assert!(
+            err.source_excerpt.contains("PUTDEC ADD(\n  1,\n  1 / 0\n)"),
+            "source_excerpt should contain the full statement, got: {:?}",
+            err.source_excerpt
+        );
+    }
+
+    #[test]
+    fn test_exec_source_runtime_error_multiline_stmt_after_semicolon_uses_statement_excerpt() {
+        let mut interp = Interpreter::new();
+        let src = "\
+PUTDEC 1; PUTDEC ADD(
+  1,
+  1 / 0
+)";
+        let result = interp.exec_source(src);
+        let err = result.expect_err("expected runtime error from division by zero");
+        assert_eq!(
+            err.line, 1,
+            "runtime error must point to line 1, got {}",
+            err.line
+        );
+        assert_eq!(
+            err.col, 11,
+            "column should point to the second PUTDEC, got {}",
+            err.col
+        );
+        assert_eq!(err.source_excerpt, "PUTDEC ADD(\n  1,\n  1 / 0\n)");
     }
 }
