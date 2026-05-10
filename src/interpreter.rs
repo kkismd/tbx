@@ -9,7 +9,7 @@ use crate::dict::FLAG_SYSTEM;
 use crate::error::TbxError;
 use crate::expr::ExprCompiler;
 use crate::init_vm;
-use crate::lexer::{SpannedToken, Token};
+use crate::lexer::{Position, SpannedToken, Token};
 use crate::statement_reader::{LogicalStatement, StatementReader};
 use crate::vm::VM;
 
@@ -205,6 +205,7 @@ impl Interpreter {
     /// each `exec_line` call represents a fresh, unnumbered statement).
     pub fn exec_line(&mut self, line: &str, absolute_line: usize) -> Result<(), InterpreterError> {
         let mut reader = StatementReader::new(line);
+        let mut first_statement = true;
         loop {
             let stmt = match reader.next_statement() {
                 Ok(Some(stmt)) => stmt,
@@ -226,6 +227,12 @@ impl Interpreter {
                 start_line: absolute_line,
                 end_line: absolute_line,
                 ..stmt
+            };
+            let stmt = if first_statement {
+                first_statement = false;
+                stmt
+            } else {
+                restore_nonleading_exec_line_label(stmt, absolute_line)
             };
             self.exec_logical_statement(stmt)?;
         }
@@ -1249,6 +1256,27 @@ fn resolve_source_pos(
 /// Returns `Ok(0)` for an empty slice, otherwise `Ok(top_level_commas + 1)`.
 ///
 /// Returns `Err(TbxError::InvalidExpression)` if an unmatched `)` is found.
+fn restore_nonleading_exec_line_label(
+    mut stmt: LogicalStatement,
+    absolute_line: usize,
+) -> LogicalStatement {
+    if let Some(label) = stmt.label.take() {
+        stmt.tokens.insert(
+            0,
+            SpannedToken {
+                token: Token::IntLit(label),
+                pos: Position {
+                    line: absolute_line,
+                    col: stmt.start_col,
+                },
+                source_offset: 0,
+                source_len: label.to_string().len(),
+            },
+        );
+    }
+    stmt
+}
+
 fn count_top_level_arity(tokens: &[SpannedToken]) -> Result<usize, TbxError> {
     if tokens.is_empty() {
         return Ok(0);
@@ -2156,6 +2184,29 @@ GREET";
         let mut interp = Interpreter::new();
         interp.exec_line("PUTDEC 1;; PUTDEC 2", 1).unwrap();
         assert_eq!(interp.take_output(), "12");
+    }
+
+    #[test]
+    fn test_exec_line_only_first_segment_can_use_line_number_label() {
+        // exec_line historically treated a leading integer as a label only on
+        // the first segment of the physical line. Later semicolon-separated
+        // segments starting with an integer are not statements and must be
+        // skipped rather than reinterpreted as label-prefixed statements.
+        let mut interp = Interpreter::new();
+        interp.exec_line("PUTDEC 1; 10 PUTDEC 2", 1).unwrap();
+        assert_eq!(interp.take_output(), "1");
+    }
+
+    #[test]
+    fn test_exec_line_nonleading_int_segment_inside_def_is_not_label() {
+        // The same rule must hold while compiling a DEF body: only the first
+        // physical-line segment may act as a line-number label.
+        let mut interp = Interpreter::new();
+        interp.exec_line("DEF SHOW", 1).unwrap();
+        interp.exec_line("PUTDEC 1; 20 PUTDEC 2", 2).unwrap();
+        interp.exec_line("END", 3).unwrap();
+        interp.exec_line("SHOW", 4).unwrap();
+        assert_eq!(interp.take_output(), "1");
     }
 
     #[test]
