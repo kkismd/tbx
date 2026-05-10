@@ -4,7 +4,9 @@ use tbx::interpreter::{Interpreter, InterpreterError};
 
 fn print_error(err: &InterpreterError) {
     eprintln!("Error: {err}");
-    eprintln!("  {}", err.source_line);
+    for line in err.source_excerpt.lines() {
+        eprintln!("  {line}");
+    }
 }
 
 fn run_file(path: &str) -> std::process::ExitCode {
