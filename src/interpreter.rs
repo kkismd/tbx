@@ -4789,4 +4789,27 @@ PUTDEC ADD(
             err.source_excerpt
         );
     }
+
+    #[test]
+    fn test_exec_source_runtime_error_multiline_stmt_after_semicolon_uses_statement_excerpt() {
+        let mut interp = Interpreter::new();
+        let src = "\
+PUTDEC 1; PUTDEC ADD(
+  1,
+  1 / 0
+)";
+        let result = interp.exec_source(src);
+        let err = result.expect_err("expected runtime error from division by zero");
+        assert_eq!(
+            err.line, 1,
+            "runtime error must point to line 1, got {}",
+            err.line
+        );
+        assert_eq!(
+            err.col, 11,
+            "column should point to the second PUTDEC, got {}",
+            err.col
+        );
+        assert_eq!(err.source_excerpt, "PUTDEC ADD(\n  1,\n  1 / 0\n)");
+    }
 }

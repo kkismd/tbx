@@ -84,6 +84,7 @@ impl<'a> StatementReader<'a> {
                             source_excerpt: source_excerpt_for_lines(
                                 self.lexer.source(),
                                 start_line,
+                                start_col,
                                 end_line,
                             ),
                             terminator: StatementTerminator::Newline,
@@ -110,6 +111,7 @@ impl<'a> StatementReader<'a> {
                         source_excerpt: source_excerpt_for_lines(
                             self.lexer.source(),
                             start_line,
+                            start_col,
                             end_line,
                         ),
                         terminator: StatementTerminator::Semicolon,
@@ -135,6 +137,7 @@ impl<'a> StatementReader<'a> {
                         source_excerpt: source_excerpt_for_lines(
                             self.lexer.source(),
                             start_line,
+                            start_col,
                             end_line,
                         ),
                         terminator: StatementTerminator::Eof,
@@ -224,13 +227,25 @@ fn line_text_for_line(source: &str, line: usize) -> String {
         .to_string()
 }
 
-fn source_excerpt_for_lines(source: &str, start_line: usize, end_line: usize) -> String {
-    if start_line == 0 || end_line == 0 || end_line < start_line {
+fn source_excerpt_for_lines(
+    source: &str,
+    start_line: usize,
+    start_col: usize,
+    end_line: usize,
+) -> String {
+    if start_line == 0 || start_col == 0 || end_line == 0 || end_line < start_line {
         return String::new();
     }
 
     (start_line..=end_line)
-        .map(|line| line_text_for_line(source, line))
+        .map(|line| {
+            let text = line_text_for_line(source, line);
+            if line == start_line {
+                text.chars().skip(start_col.saturating_sub(1)).collect()
+            } else {
+                text
+            }
+        })
         .collect::<Vec<_>>()
         .join("\n")
 }
@@ -307,6 +322,16 @@ mod tests {
         assert_eq!(
             statements[0].source_excerpt,
             "SET &A, TO_ARRAY(\n  1, 2,\n  3, 4\n)"
+        );
+    }
+
+    #[test]
+    fn test_multiline_statement_after_semicolon_uses_statement_start_column() {
+        let statements = collect_statements("PUTDEC 1; PUTDEC ADD(\n  1,\n  1 / 0\n)").unwrap();
+        assert_eq!(statements.len(), 2);
+        assert_eq!(
+            statements[1].source_excerpt,
+            "PUTDEC ADD(\n  1,\n  1 / 0\n)"
         );
     }
 
