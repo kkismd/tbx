@@ -13,4 +13,3 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 | `implement-issue` | Implements from issue, creates PR (no review cycle) |
 | `review-implementation` | Reviews PR, posts review comments / opens issues |
 | `blueprint-updater` | Updates `blueprint*.md` files and creates PR |
-| `orchestrate-issue` | Orchestrates implement/review loop for an issue |
