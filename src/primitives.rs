@@ -1,4 +1,4 @@
-use crate::cell::{Cell, CompileEntry};
+use crate::cell::{Cell, CompileEntry, ReturnFrame};
 use crate::constants::MAX_DICTIONARY_CELLS;
 use crate::dict::{EntryKind, WordEntry, FLAG_IMMEDIATE, FLAG_SYSTEM};
 use crate::error::TbxError;
@@ -86,12 +86,42 @@ enum PoolRef {
     String(usize),
 }
 
+#[cfg_attr(not(test), allow(dead_code))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PoolRefLifetime {
+    Global,
+    CallerOwned,
+    FrameLocal,
+}
+
+#[cfg_attr(not(test), allow(dead_code))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct PoolBounds {
+    array_len: usize,
+    string_len: usize,
+}
+
 fn pool_ref_from_cell(cell: &Cell) -> Option<PoolRef> {
     match cell {
         Cell::Array(idx) => Some(PoolRef::Array(*idx)),
         Cell::Str(idx) => Some(PoolRef::String(*idx)),
         _ => None,
     }
+}
+
+#[cfg_attr(not(test), allow(dead_code))]
+fn current_call_pool_bounds(vm: &VM) -> Option<PoolBounds> {
+    vm.return_stack.iter().rev().find_map(|frame| match frame {
+        ReturnFrame::Call {
+            saved_array_pool_len,
+            saved_string_pool_len,
+            ..
+        } => Some(PoolBounds {
+            array_len: *saved_array_pool_len,
+            string_len: *saved_string_pool_len,
+        }),
+        ReturnFrame::TopLevel => None,
+    })
 }
 
 impl PoolRef {
@@ -131,6 +161,33 @@ fn frame_escape_error_for_ref(pool_ref: PoolRef) -> TbxError {
     match pool_ref.kind() {
         PoolKind::Array => TbxError::ArrayFrameEscape,
         PoolKind::String => TbxError::StringFrameEscape,
+    }
+}
+
+#[cfg_attr(not(test), allow(dead_code))]
+fn saved_bound_for_ref(bounds: PoolBounds, pool_ref: PoolRef) -> usize {
+    match pool_ref.kind() {
+        PoolKind::Array => bounds.array_len,
+        PoolKind::String => bounds.string_len,
+    }
+}
+
+#[cfg_attr(not(test), allow(dead_code))]
+fn classify_pool_ref(vm: &VM, pool_ref: PoolRef) -> PoolRefLifetime {
+    if is_global_pool_ref(vm, pool_ref) {
+        return PoolRefLifetime::Global;
+    }
+
+    let Some(bounds) = current_call_pool_bounds(vm) else {
+        // A non-global top-level handle is not yet promoted, so classify it as
+        // frame-local/top-level-local until dict-write promotion or top-level exit.
+        return PoolRefLifetime::FrameLocal;
+    };
+
+    if pool_ref.index() >= saved_bound_for_ref(bounds, pool_ref) {
+        PoolRefLifetime::FrameLocal
+    } else {
+        PoolRefLifetime::CallerOwned
     }
 }
 
@@ -4444,6 +4501,113 @@ mod tests {
         assert_eq!(vm.global_string_pool_len, 4);
         promote_pool_ref_to_global(&mut vm, PoolRef::String(6));
         assert_eq!(vm.global_string_pool_len, 7);
+    }
+
+    #[test]
+    fn test_current_call_pool_bounds_uses_innermost_call() {
+        let mut vm = VM::new();
+        vm.return_stack.push(ReturnFrame::TopLevel);
+        vm.return_stack.push(ReturnFrame::Call {
+            callee_xt: crate::cell::Xt(0),
+            return_pc: 0,
+            saved_bp: 0,
+            saved_array_pool_len: 3,
+            saved_string_pool_len: 4,
+            actual_arity: 0,
+        });
+        vm.return_stack.push(ReturnFrame::Call {
+            callee_xt: crate::cell::Xt(1),
+            return_pc: 0,
+            saved_bp: 0,
+            saved_array_pool_len: 7,
+            saved_string_pool_len: 8,
+            actual_arity: 0,
+        });
+
+        assert_eq!(
+            current_call_pool_bounds(&vm),
+            Some(PoolBounds {
+                array_len: 7,
+                string_len: 8,
+            })
+        );
+    }
+
+    #[test]
+    fn test_classify_pool_ref_global() {
+        let mut vm = VM::new();
+        vm.global_array_pool_len = 1;
+        vm.global_string_pool_len = 1;
+
+        assert_eq!(
+            classify_pool_ref(&vm, PoolRef::Array(0)),
+            PoolRefLifetime::Global
+        );
+        assert_eq!(
+            classify_pool_ref(&vm, PoolRef::String(0)),
+            PoolRefLifetime::Global
+        );
+    }
+
+    #[test]
+    fn test_classify_pool_ref_caller_owned() {
+        let mut vm = VM::new();
+        vm.return_stack.push(ReturnFrame::TopLevel);
+        vm.return_stack.push(ReturnFrame::Call {
+            callee_xt: crate::cell::Xt(0),
+            return_pc: 0,
+            saved_bp: 0,
+            saved_array_pool_len: 5,
+            saved_string_pool_len: 6,
+            actual_arity: 0,
+        });
+
+        assert_eq!(
+            classify_pool_ref(&vm, PoolRef::Array(4)),
+            PoolRefLifetime::CallerOwned
+        );
+        assert_eq!(
+            classify_pool_ref(&vm, PoolRef::String(5)),
+            PoolRefLifetime::CallerOwned
+        );
+    }
+
+    #[test]
+    fn test_classify_pool_ref_frame_local_in_call_frame() {
+        let mut vm = VM::new();
+        vm.return_stack.push(ReturnFrame::TopLevel);
+        vm.return_stack.push(ReturnFrame::Call {
+            callee_xt: crate::cell::Xt(0),
+            return_pc: 0,
+            saved_bp: 0,
+            saved_array_pool_len: 5,
+            saved_string_pool_len: 6,
+            actual_arity: 0,
+        });
+
+        assert_eq!(
+            classify_pool_ref(&vm, PoolRef::Array(5)),
+            PoolRefLifetime::FrameLocal
+        );
+        assert_eq!(
+            classify_pool_ref(&vm, PoolRef::String(6)),
+            PoolRefLifetime::FrameLocal
+        );
+    }
+
+    #[test]
+    fn test_classify_pool_ref_top_level_non_global_is_frame_local() {
+        let mut vm = VM::new();
+        vm.return_stack.push(ReturnFrame::TopLevel);
+
+        assert_eq!(
+            classify_pool_ref(&vm, PoolRef::Array(0)),
+            PoolRefLifetime::FrameLocal
+        );
+        assert_eq!(
+            classify_pool_ref(&vm, PoolRef::String(0)),
+            PoolRefLifetime::FrameLocal
+        );
     }
 
     // --- PUTCHR tests ---
