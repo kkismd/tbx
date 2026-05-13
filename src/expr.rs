@@ -151,20 +151,40 @@ impl<'a> ExprCompiler<'a> {
                     // gain access to strings larger than what the legacy
                     // pool could hold.
                     //
+                    // String literals are compile-time constants embedded in
+                    // the compiled code.  Store them in `VM::strings` and
+                    // immediately include them in the global string region
+                    // so they behave like the legacy `StringDesc` literals
+                    // did: they survive word calls and may be stored into
+                    // global variables from compiled words (see PR #543
+                    // review feedback).  Without this promotion, a literal
+                    // compiled inside a `DEF ... END` body would have
+                    // `pool_idx >= global_string_pool_len` at call time,
+                    // and `SET &G, "..."` from inside the word would be
+                    // rejected with `StringFrameEscape` even though the
+                    // value is a compile-time constant rather than a
+                    // frame-local string.
+                    //
                     // Note: the entry pushed here is NOT rolled back when a
                     // surrounding `DEF ... END` compilation fails.  The
                     // dictionary / header rollback for failed compilation
                     // does not extend to `VM::strings`, so any literal
                     // pushed here becomes a session-lived orphan entry on
-                    // compile failure.  This is intentional under the
-                    // post-#540 policy of not reclaiming fine-grained unused
-                    // regions within a session; the only way to recover the
-                    // slot is a full recompaction from source or a VM reset.
+                    // compile failure.  Advancing `global_string_pool_len`
+                    // here makes that orphan entry also occupy a slot in
+                    // the global region.  This is acceptable under the
+                    // post-#540 policy of not reclaiming fine-grained
+                    // unused regions within a session; the only way to
+                    // recover the slot is a full recompaction from source
+                    // or a VM reset.
                     if s.len() > u16::MAX as usize {
                         return Err(TbxError::StringTooLong { len: s.len() });
                     }
                     let idx = self.vm.strings.len();
                     self.vm.strings.push(s);
+                    if idx >= self.vm.global_string_pool_len {
+                        self.vm.global_string_pool_len = idx + 1;
+                    }
                     emit_lit(&mut output, Cell::Str(idx), self.vm)?;
                     prev_was_operand = true;
                 }
