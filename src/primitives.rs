@@ -109,32 +109,46 @@ impl PoolRef {
     }
 }
 
-fn check_dict_reference_write(vm: &mut VM, value: &Cell) -> Result<(), TbxError> {
-    match pool_ref_from_cell(value) {
-        Some(pool_ref) => match pool_ref.kind() {
-            PoolKind::Array => {
-                if pool_ref.index() < vm.global_array_pool_len {
-                    Ok(())
-                } else if vm.is_executing_top_level() {
-                    vm.global_array_pool_len = pool_ref.index() + 1;
-                    Ok(())
-                } else {
-                    Err(TbxError::ArrayFrameEscape)
-                }
-            }
-            PoolKind::String => {
-                if pool_ref.index() < vm.global_string_pool_len {
-                    Ok(())
-                } else if vm.is_executing_top_level() {
-                    vm.global_string_pool_len = pool_ref.index() + 1;
-                    Ok(())
-                } else {
-                    Err(TbxError::StringFrameEscape)
-                }
-            }
-        },
-        None => Ok(()),
+fn is_global_pool_ref(vm: &VM, pool_ref: PoolRef) -> bool {
+    match pool_ref.kind() {
+        PoolKind::Array => pool_ref.index() < vm.global_array_pool_len,
+        PoolKind::String => pool_ref.index() < vm.global_string_pool_len,
     }
+}
+
+fn promote_pool_ref_to_global(vm: &mut VM, pool_ref: PoolRef) {
+    match pool_ref.kind() {
+        PoolKind::Array => {
+            vm.global_array_pool_len = vm.global_array_pool_len.max(pool_ref.index() + 1);
+        }
+        PoolKind::String => {
+            vm.global_string_pool_len = vm.global_string_pool_len.max(pool_ref.index() + 1);
+        }
+    }
+}
+
+fn frame_escape_error_for_ref(pool_ref: PoolRef) -> TbxError {
+    match pool_ref.kind() {
+        PoolKind::Array => TbxError::ArrayFrameEscape,
+        PoolKind::String => TbxError::StringFrameEscape,
+    }
+}
+
+fn check_dict_reference_write(vm: &mut VM, value: &Cell) -> Result<(), TbxError> {
+    let Some(pool_ref) = pool_ref_from_cell(value) else {
+        return Ok(());
+    };
+
+    if is_global_pool_ref(vm, pool_ref) {
+        return Ok(());
+    }
+
+    if vm.is_executing_top_level() {
+        promote_pool_ref_to_global(vm, pool_ref);
+        return Ok(());
+    }
+
+    Err(frame_escape_error_for_ref(pool_ref))
 }
 
 /// STORE — pop addr (top) then value (below), and store value at addr.
@@ -4413,6 +4427,23 @@ mod tests {
         );
         assert_eq!(pool_ref_from_cell(&Cell::DictAddr(0)), None);
         assert_eq!(pool_ref_from_cell(&Cell::StackAddr(0)), None);
+    }
+
+    #[test]
+    fn test_promote_pool_ref_to_global_never_moves_boundary_backward() {
+        let mut vm = VM::new();
+
+        vm.global_array_pool_len = 5;
+        promote_pool_ref_to_global(&mut vm, PoolRef::Array(1));
+        assert_eq!(vm.global_array_pool_len, 5);
+        promote_pool_ref_to_global(&mut vm, PoolRef::Array(7));
+        assert_eq!(vm.global_array_pool_len, 8);
+
+        vm.global_string_pool_len = 4;
+        promote_pool_ref_to_global(&mut vm, PoolRef::String(2));
+        assert_eq!(vm.global_string_pool_len, 4);
+        promote_pool_ref_to_global(&mut vm, PoolRef::String(6));
+        assert_eq!(vm.global_string_pool_len, 7);
     }
 
     // --- PUTCHR tests ---
