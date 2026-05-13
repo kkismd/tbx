@@ -284,18 +284,20 @@ fn check_array_element_type(value: &Cell) -> Result<(), TbxError> {
 /// | array lifetime | string lifetime | result |
 /// |----------------|-----------------|--------|
 /// | any            | `FrameLocal`    | deny   |
-/// | `Global`       | `CallerOwned`   | deny   |
 /// | any            | `Global`        | allow  |
-/// | non-`Global`   | `CallerOwned`   | allow  |
+/// | `FrameLocal`   | `CallerOwned`   | allow  |
+/// | `Global` / `CallerOwned` | `CallerOwned` | deny |
 ///
 /// Rationale:
 /// - `FrameLocal` strings are freed when the current call frame returns, so
-///   they must never be placed in an array that outlives the frame.
-/// - `Global` arrays persist for the lifetime of the VM session, so storing a
-///   `CallerOwned` string there could leave a dangling reference.
-/// - `CallerOwned` strings are safe in non-global (`CallerOwned` or
-///   `FrameLocal`) arrays because the array and string share the same or a
-///   shorter lifetime.
+///   they must never be placed in any array.
+/// - `Global` strings are safe in any array.
+/// - `CallerOwned` strings are safe only in `FrameLocal` arrays: the array
+///   is bound to the current frame and will die before the string's owning
+///   frame returns.  `CallerOwned` arrays and `Global` arrays may outlive the
+///   string's owning frame because `CallerOwned` does not track which outer
+///   frame owns the resource — two `CallerOwned` values can belong to
+///   different frames with unrelated lifetimes.
 ///
 /// # Errors
 ///
@@ -309,13 +311,19 @@ fn check_string_array_element_write(
     let str_lifetime = classify_pool_ref(vm, PoolRef::String(str_idx));
 
     match (array_lifetime, str_lifetime) {
-        // FrameLocal strings are always unsafe regardless of the target array.
+        // FrameLocal strings are always unsafe without clone/promote.
         (_, PoolRefLifetime::FrameLocal) => Err(TbxError::StringFrameEscape),
-        // Global arrays cannot hold caller-owned strings (dangling risk).
-        (PoolRefLifetime::Global, PoolRefLifetime::CallerOwned) => Err(TbxError::StringFrameEscape),
         // Global strings are safe in any array.
-        // CallerOwned strings are safe in non-global (CallerOwned or FrameLocal) arrays.
-        (_, PoolRefLifetime::Global | PoolRefLifetime::CallerOwned) => Ok(()),
+        (_, PoolRefLifetime::Global) => Ok(()),
+        // CallerOwned strings are safe only in FrameLocal arrays.
+        // The array will die before or with the current frame, while the string
+        // is owned by an outer frame.
+        (PoolRefLifetime::FrameLocal, PoolRefLifetime::CallerOwned) => Ok(()),
+        // Global arrays and CallerOwned arrays may outlive the CallerOwned string.
+        // Without owner-generation tracking or clone/promote, reject them.
+        (PoolRefLifetime::Global | PoolRefLifetime::CallerOwned, PoolRefLifetime::CallerOwned) => {
+            Err(TbxError::StringFrameEscape)
+        }
     }
 }
 
@@ -7487,9 +7495,10 @@ mod tests {
     }
 
     #[test]
-    fn test_set_caller_owned_str_to_non_global_array_element_is_allowed() {
-        // A CallerOwned Str may be stored in a non-global (CallerOwned or
-        // FrameLocal) array because the array cannot outlive the caller's frame.
+    fn test_set_caller_owned_str_to_frame_local_array_element_is_allowed() {
+        // A CallerOwned Str may be stored in a FrameLocal array because the
+        // array is bound to the current frame and will die before the string's
+        // owning frame returns.
         use crate::cell::ReturnFrame;
         let mut vm = VM::new();
         // Str(0) will be caller-owned.
@@ -7513,7 +7522,7 @@ mod tests {
             saved_string_pool_len: 1, // inner boundary; Str(0) is caller-owned
             actual_arity: 0,
         });
-        // Array(0) is frame-local (not global).
+        // Array(0) is frame-local (idx 0 >= saved_array_pool_len=0 of the innermost frame).
         vm.arrays.push(vec![Cell::None]);
         // Str(0): idx=0, innermost saved_string_pool_len=1 → idx < 1 → CallerOwned
         vm.push(Cell::ArrayAddr {
@@ -7524,6 +7533,46 @@ mod tests {
         vm.push(Cell::Str(0)).unwrap();
         assert_eq!(set_prim(&mut vm), Ok(()));
         assert_eq!(vm.arrays[0][0], Cell::Str(0));
+    }
+
+    #[test]
+    fn test_set_caller_owned_str_to_caller_owned_array_element_is_string_frame_escape() {
+        // A CallerOwned Str must be rejected when the target array is CallerOwned.
+        // Both resources belong to "some outer frame", but PoolRefLifetime does not
+        // track which frame — they can belong to different frames with unrelated
+        // lifetimes, so this combination is unsafe.
+        use crate::cell::ReturnFrame;
+        let mut vm = VM::new();
+        // Str(0) will be caller-owned.
+        vm.strings.push("caller".to_string());
+        // global_string_pool_len = 0, so nothing is global.
+        vm.return_stack.push(ReturnFrame::TopLevel);
+        vm.return_stack.push(ReturnFrame::Call {
+            callee_xt: crate::cell::Xt(0),
+            return_pc: 0,
+            saved_bp: 0,
+            saved_array_pool_len: 0,
+            saved_string_pool_len: 0, // outer boundary
+            actual_arity: 0,
+        });
+        vm.return_stack.push(ReturnFrame::Call {
+            callee_xt: crate::cell::Xt(0),
+            return_pc: 0,
+            saved_bp: 0,
+            saved_array_pool_len: 1, // inner boundary; Array(0) is caller-owned
+            saved_string_pool_len: 1, // inner boundary; Str(0) is caller-owned
+            actual_arity: 0,
+        });
+        // Array(0) is caller-owned (idx 0 < innermost saved_array_pool_len=1).
+        vm.arrays.push(vec![Cell::None]);
+        // Str(0): idx=0, innermost saved_string_pool_len=1 → idx < 1 → CallerOwned
+        vm.push(Cell::ArrayAddr {
+            pool_idx: 0,
+            elem_idx: 0,
+        })
+        .unwrap();
+        vm.push(Cell::Str(0)).unwrap();
+        assert_eq!(set_prim(&mut vm), Err(TbxError::StringFrameEscape));
     }
 
     #[test]
