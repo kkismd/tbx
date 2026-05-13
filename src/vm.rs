@@ -476,23 +476,15 @@ impl VM {
         }
     }
 
-    /// Pop a string value from the data stack and return its resolved contents.
-    ///
-    /// Accepts both `Cell::Str` (runtime string pool) and `Cell::StringDesc`
-    /// (legacy length-prefixed pool).  This is the migration path used by
-    /// primitives that previously called `pop_string_desc` + `resolve_string`,
-    /// allowing them to receive string literals now compiled as `Cell::Str`
-    /// (issue #542 / #539 Phase 2) while still tolerating legacy
-    /// `StringDesc` values.
+    /// Pop a `Cell::Str` value from the data stack and return its resolved
+    /// contents from the runtime string pool (`VM::strings`).
     ///
     /// # Errors
     ///
     /// Returns `Err(TbxError::StackUnderflow)` if the stack is empty.
-    /// Returns `Err(TbxError::TypeError)` if the top value is neither
-    /// `Cell::Str` nor `Cell::StringDesc`.
-    /// Returns `Err(TbxError::IndexOutOfBounds)` if a `Cell::Str` index is
-    /// out of range for `VM::strings`, or the corresponding error from
-    /// `resolve_string` for a malformed `StringDesc`.
+    /// Returns `Err(TbxError::TypeError)` if the top value is not `Cell::Str`.
+    /// Returns `Err(TbxError::IndexOutOfBounds)` if the `Cell::Str` index is
+    /// out of range for `VM::strings`.
     pub fn pop_string_value(&mut self) -> Result<String, TbxError> {
         match self.pop()? {
             Cell::Str(idx) => self
@@ -503,9 +495,8 @@ impl VM {
                     index: idx,
                     size: self.strings.len(),
                 }),
-            Cell::StringDesc(idx) => self.resolve_string(idx),
             other => Err(TbxError::TypeError {
-                expected: "Str or StringDesc",
+                expected: "Str",
                 got: other.type_name(),
             }),
         }

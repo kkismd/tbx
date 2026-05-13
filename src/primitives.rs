@@ -313,19 +313,14 @@ pub fn sqrt_prim(vm: &mut VM) -> Result<(), TbxError> {
 
 /// EQ — equality comparison. Pushes Bool(true) if the two top values are equal.
 /// Int/Float mixed pairs are compared by promoting Int to Float.
-/// Str/StringDesc pairs are compared by string content.
+/// Two `Cell::Str` values are compared by string content.
 pub fn eq_prim(vm: &mut VM) -> Result<(), TbxError> {
     let b = vm.pop()?;
     let a = vm.pop()?;
     let result = match (&a, &b) {
         (Cell::Int(x), Cell::Float(y)) => (*x as f64) == *y,
         (Cell::Float(x), Cell::Int(y)) => *x == (*y as f64),
-        (Cell::Str(_), Cell::Str(_))
-        | (Cell::Str(_), Cell::StringDesc(_))
-        | (Cell::StringDesc(_), Cell::Str(_))
-        | (Cell::StringDesc(_), Cell::StringDesc(_)) => {
-            resolve_str_cell(vm, &a)? == resolve_str_cell(vm, &b)?
-        }
+        (Cell::Str(_), Cell::Str(_)) => resolve_str_cell(vm, &a)? == resolve_str_cell(vm, &b)?,
         _ => a == b,
     };
     vm.push(Cell::Bool(result))?;
@@ -334,19 +329,14 @@ pub fn eq_prim(vm: &mut VM) -> Result<(), TbxError> {
 
 /// NEQ — inequality comparison. Pushes Bool(true) if the two top values are not equal.
 /// Int/Float mixed pairs are compared by promoting Int to Float.
-/// Str/StringDesc pairs are compared by string content.
+/// Two `Cell::Str` values are compared by string content.
 pub fn neq_prim(vm: &mut VM) -> Result<(), TbxError> {
     let b = vm.pop()?;
     let a = vm.pop()?;
     let result = match (&a, &b) {
         (Cell::Int(x), Cell::Float(y)) => (*x as f64) != *y,
         (Cell::Float(x), Cell::Int(y)) => *x != (*y as f64),
-        (Cell::Str(_), Cell::Str(_))
-        | (Cell::Str(_), Cell::StringDesc(_))
-        | (Cell::StringDesc(_), Cell::Str(_))
-        | (Cell::StringDesc(_), Cell::StringDesc(_)) => {
-            resolve_str_cell(vm, &a)? != resolve_str_cell(vm, &b)?
-        }
+        (Cell::Str(_), Cell::Str(_)) => resolve_str_cell(vm, &a)? != resolve_str_cell(vm, &b)?,
         _ => a != b,
     };
     vm.push(Cell::Bool(result))?;
@@ -445,29 +435,12 @@ pub fn bor_prim(vm: &mut VM) -> Result<(), TbxError> {
     Ok(())
 }
 
-/// PUTSTR — output the string referenced by a StringDesc or Str on the stack (no newline).
+/// PUTSTR — output the string referenced by a `Cell::Str` on the stack
+/// (no newline).
 /// Escape sequences (\n, \t, \\) in the stored string are output literally
-/// as they were already expanded at compile time (during intern).
-/// Also accepts `Cell::Str` (runtime string) in addition to `Cell::StringDesc` (literal).
+/// as they were already expanded at compile time.
 pub fn putstr_prim(vm: &mut VM) -> Result<(), TbxError> {
-    let top = vm.pop()?;
-    let s = match top {
-        Cell::StringDesc(idx) => vm.resolve_string(idx)?,
-        Cell::Str(idx) => vm
-            .strings
-            .get(idx)
-            .cloned()
-            .ok_or(TbxError::IndexOutOfBounds {
-                index: idx,
-                size: vm.strings.len(),
-            })?,
-        other => {
-            return Err(TbxError::TypeError {
-                expected: "StringDesc or Str",
-                got: other.type_name(),
-            })
-        }
-    };
+    let s = vm.pop_string_value()?;
     vm.write_output(&s);
     Ok(())
 }
@@ -478,8 +451,6 @@ pub fn putstr_prim(vm: &mut VM) -> Result<(), TbxError> {
 pub fn str_prim(vm: &mut VM) -> Result<(), TbxError> {
     let cell = vm.pop()?;
     let s = match &cell {
-        // For StringDesc, resolve to the actual string content.
-        Cell::StringDesc(idx) => vm.resolve_string(*idx)?,
         // For Str, return the content directly (identity-like conversion).
         Cell::Str(idx) => vm
             .strings
@@ -500,7 +471,7 @@ pub fn str_prim(vm: &mut VM) -> Result<(), TbxError> {
 
 /// STR_CONCAT — concatenate two strings and push a new `Cell::Str` handle.
 ///
-/// Stack: `[..., a: Str|StringDesc, b: Str|StringDesc]` → `Cell::Str(new)`
+/// Stack: `[..., a: Str, b: Str]` → `Cell::Str(new)`
 pub fn str_concat_prim(vm: &mut VM) -> Result<(), TbxError> {
     let b_cell = vm.pop()?;
     let a_cell = vm.pop()?;
@@ -515,7 +486,7 @@ pub fn str_concat_prim(vm: &mut VM) -> Result<(), TbxError> {
 
 /// STR_LEN — return the character count of a string.
 ///
-/// Stack: `[..., s: Str|StringDesc]` → `Cell::Int(len)`
+/// Stack: `[..., s: Str]` → `Cell::Int(len)`
 ///
 /// The length is the number of Unicode scalar values (chars), not UTF-8 bytes.
 pub fn str_len_prim(vm: &mut VM) -> Result<(), TbxError> {
@@ -528,7 +499,7 @@ pub fn str_len_prim(vm: &mut VM) -> Result<(), TbxError> {
 
 /// STR_EQ — compare two strings by content and push a `Cell::Bool`.
 ///
-/// Stack: `[..., a: Str|StringDesc, b: Str|StringDesc]` → `Cell::Bool`
+/// Stack: `[..., a: Str, b: Str]` → `Cell::Bool`
 ///
 /// Unlike `Cell::Str(a) == Cell::Str(b)` (index comparison), this compares
 /// the actual string contents.
@@ -543,7 +514,7 @@ pub fn str_eq_prim(vm: &mut VM) -> Result<(), TbxError> {
 
 /// STR_INDEXOF — find the first occurrence of a substring and return a 1-based position.
 ///
-/// Stack: `[..., haystack: Str|StringDesc, needle: Str|StringDesc]` → `Cell::Int(pos)`
+/// Stack: `[..., haystack: Str, needle: Str]` → `Cell::Int(pos)`
 ///
 /// Returns 0 when the substring is not found. Positions are counted in Unicode
 /// scalar values (chars), matching `STR_LEN`.
@@ -562,7 +533,7 @@ pub fn str_indexof_prim(vm: &mut VM) -> Result<(), TbxError> {
 
 /// STR_SLICE — extract a substring by 1-based start position and length.
 ///
-/// Stack: `[..., s: Str|StringDesc, start: Int, len: Int]` → `Cell::Str(new)`
+/// Stack: `[..., s: Str, start: Int, len: Int]` → `Cell::Str(new)`
 ///
 /// Positive `start` counts from the beginning (`1` is the first character).
 /// Negative `start` counts from the end (`-1` is the last character). A `start`
@@ -602,7 +573,7 @@ pub fn str_slice_prim(vm: &mut VM) -> Result<(), TbxError> {
 
 /// STR_TRIM — remove leading and trailing Unicode whitespace from a string.
 ///
-/// Stack: `[..., s: Str|StringDesc]` → `Cell::Str(new)`
+/// Stack: `[..., s: Str]` → `Cell::Str(new)`
 pub fn str_trim_prim(vm: &mut VM) -> Result<(), TbxError> {
     let s_cell = vm.pop()?;
     let s = resolve_str_cell(vm, &s_cell)?;
@@ -615,7 +586,7 @@ pub fn str_trim_prim(vm: &mut VM) -> Result<(), TbxError> {
 
 /// STR_UPPER — convert a string to locale-independent Unicode uppercase.
 ///
-/// Stack: `[..., s: Str|StringDesc]` → `Cell::Str(new)`
+/// Stack: `[..., s: Str]` → `Cell::Str(new)`
 pub fn str_upper_prim(vm: &mut VM) -> Result<(), TbxError> {
     let s_cell = vm.pop()?;
     let s = resolve_str_cell(vm, &s_cell)?;
@@ -628,7 +599,7 @@ pub fn str_upper_prim(vm: &mut VM) -> Result<(), TbxError> {
 
 /// STR_LOWER — convert a string to locale-independent Unicode lowercase.
 ///
-/// Stack: `[..., s: Str|StringDesc]` → `Cell::Str(new)`
+/// Stack: `[..., s: Str]` → `Cell::Str(new)`
 pub fn str_lower_prim(vm: &mut VM) -> Result<(), TbxError> {
     let s_cell = vm.pop()?;
     let s = resolve_str_cell(vm, &s_cell)?;
@@ -641,8 +612,7 @@ pub fn str_lower_prim(vm: &mut VM) -> Result<(), TbxError> {
 
 /// STR_REPLACE_FIRST — replace the first occurrence of a substring.
 ///
-/// Stack: `[..., s: Str|StringDesc, needle: Str|StringDesc, replacement: Str|StringDesc]`
-///   → `Cell::Str(new)`
+/// Stack: `[..., s: Str, needle: Str, replacement: Str]` → `Cell::Str(new)`
 pub fn str_replace_first_prim(vm: &mut VM) -> Result<(), TbxError> {
     let replacement_cell = vm.pop()?;
     let needle_cell = vm.pop()?;
@@ -673,8 +643,7 @@ pub fn str_replace_first_prim(vm: &mut VM) -> Result<(), TbxError> {
 
 /// STR_REPLACE_ALL — replace all non-overlapping occurrences of a substring.
 ///
-/// Stack: `[..., s: Str|StringDesc, needle: Str|StringDesc, replacement: Str|StringDesc]`
-///   → `Cell::Str(new)`
+/// Stack: `[..., s: Str, needle: Str, replacement: Str]` → `Cell::Str(new)`
 pub fn str_replace_all_prim(vm: &mut VM) -> Result<(), TbxError> {
     let replacement_cell = vm.pop()?;
     let needle_cell = vm.pop()?;
@@ -696,7 +665,7 @@ pub fn str_replace_all_prim(vm: &mut VM) -> Result<(), TbxError> {
     Ok(())
 }
 
-/// Helper: resolve a `Cell::Str` or `Cell::StringDesc` to a `String`.
+/// Helper: resolve a `Cell::Str` to a `String` via the runtime string pool.
 fn resolve_str_cell(vm: &VM, cell: &Cell) -> Result<String, TbxError> {
     match cell {
         Cell::Str(idx) => vm
@@ -707,9 +676,8 @@ fn resolve_str_cell(vm: &VM, cell: &Cell) -> Result<String, TbxError> {
                 index: *idx,
                 size: vm.strings.len(),
             }),
-        Cell::StringDesc(idx) => vm.resolve_string(*idx),
         other => Err(TbxError::TypeError {
-            expected: "Str or StringDesc",
+            expected: "Str",
             got: other.type_name(),
         }),
     }
@@ -854,8 +822,7 @@ pub fn assert_fail_prim(_vm: &mut VM) -> Result<(), TbxError> {
 
 /// ASSERT_FAIL_MSG — pop a string message from the stack and raise AssertionFailedWithMessage.
 ///
-/// Accepts both `Cell::Str` (the format new string literals now use, see
-/// issue #542) and the legacy `Cell::StringDesc`.
+/// Expects a `Cell::Str` on top of the data stack.
 pub fn assert_fail_msg_prim(vm: &mut VM) -> Result<(), TbxError> {
     let message = vm.pop_string_value()?;
     Err(TbxError::AssertionFailedWithMessage { message })
@@ -1918,8 +1885,7 @@ fn cs_rot_prim(vm: &mut VM) -> Result<(), TbxError> {
 /// scope.  The string (e.g. `"WHILE"` or `"IF"`) is matched by a later CS_CLOSE_TAG
 /// call to validate correct nesting.
 /// Must be called in compile mode.
-/// Accepts both `Cell::Str` (the format new string literals now use, see
-/// issue #542) and the legacy `Cell::StringDesc`.
+/// Expects a `Cell::Str` on top of the data stack.
 fn cs_open_tag_prim(vm: &mut VM) -> Result<(), TbxError> {
     if !vm.is_compiling {
         return Err(TbxError::InvalidExpression {
@@ -1938,8 +1904,7 @@ fn cs_open_tag_prim(vm: &mut VM) -> Result<(), TbxError> {
 /// (not a `Tag`).  Returns `MismatchedTag` if the top is a `Tag` but does not match
 /// the expected string.
 /// Must be called in compile mode.
-/// Accepts both `Cell::Str` (the format new string literals now use, see
-/// issue #542) and the legacy `Cell::StringDesc`.
+/// Expects a `Cell::Str` on top of the data stack.
 fn cs_close_tag_prim(vm: &mut VM) -> Result<(), TbxError> {
     if !vm.is_compiling {
         return Err(TbxError::InvalidExpression {
@@ -2243,8 +2208,7 @@ fn skip_eq_prim(vm: &mut VM) -> Result<(), TbxError> {
 
 /// LOOKUP — pop a string from the stack, look up the named word, and push its Xt.
 ///
-/// Accepts both `Cell::Str` (the format new string literals now use, see
-/// issue #542) and the legacy `Cell::StringDesc`.
+/// Expects a `Cell::Str` on top of the data stack.
 fn lookup_prim(vm: &mut VM) -> Result<(), TbxError> {
     let name = vm.pop_string_value()?;
     let xt = vm.lookup(&name).ok_or(TbxError::UndefinedSymbol { name })?;
@@ -3437,23 +3401,13 @@ mod tests {
     }
 
     #[test]
-    fn test_eq_str_and_string_desc_compares_content() {
+    fn test_eq_str_different_indices_same_content_is_true() {
+        // Two distinct Cell::Str entries pointing at identical content compare equal.
         let mut vm = VM::new();
-        let idx = vm.intern_string("hello").unwrap();
+        vm.strings.push("hello".to_string());
         vm.strings.push("hello".to_string());
         vm.push(Cell::Str(0)).unwrap();
-        vm.push(Cell::StringDesc(idx)).unwrap();
-        eq_prim(&mut vm).unwrap();
-        assert_eq!(vm.pop(), Ok(Cell::Bool(true)));
-    }
-
-    #[test]
-    fn test_eq_string_desc_compares_content() {
-        let mut vm = VM::new();
-        let idx_a = vm.intern_string("hello").unwrap();
-        let idx_b = vm.intern_string("hello").unwrap();
-        vm.push(Cell::StringDesc(idx_a)).unwrap();
-        vm.push(Cell::StringDesc(idx_b)).unwrap();
+        vm.push(Cell::Str(1)).unwrap();
         eq_prim(&mut vm).unwrap();
         assert_eq!(vm.pop(), Ok(Cell::Bool(true)));
     }
@@ -3497,12 +3451,13 @@ mod tests {
     }
 
     #[test]
-    fn test_neq_str_and_string_desc_compares_content() {
+    fn test_neq_str_different_indices_different_content_is_true() {
+        // Two distinct Cell::Str entries with different content compare not-equal.
         let mut vm = VM::new();
-        let idx = vm.intern_string("hello").unwrap();
+        vm.strings.push("hello".to_string());
         vm.strings.push("world".to_string());
         vm.push(Cell::Str(0)).unwrap();
-        vm.push(Cell::StringDesc(idx)).unwrap();
+        vm.push(Cell::Str(1)).unwrap();
         neq_prim(&mut vm).unwrap();
         assert_eq!(vm.pop(), Ok(Cell::Bool(true)));
     }
@@ -3827,8 +3782,8 @@ mod tests {
     #[test]
     fn test_putstr_basic() {
         let mut vm = VM::new();
-        let idx = vm.intern_string("hello").unwrap();
-        vm.push(Cell::StringDesc(idx)).unwrap();
+        vm.strings.push("hello".to_string());
+        vm.push(Cell::Str(0)).unwrap();
         putstr_prim(&mut vm).unwrap();
         assert_eq!(vm.take_output(), "hello");
     }
@@ -3836,8 +3791,8 @@ mod tests {
     #[test]
     fn test_putstr_empty() {
         let mut vm = VM::new();
-        let idx = vm.intern_string("").unwrap();
-        vm.push(Cell::StringDesc(idx)).unwrap();
+        vm.strings.push(String::new());
+        vm.push(Cell::Str(0)).unwrap();
         putstr_prim(&mut vm).unwrap();
         assert_eq!(vm.take_output(), "");
     }
@@ -3859,17 +3814,6 @@ mod tests {
             putstr_prim(&mut vm),
             Err(TbxError::StackUnderflow)
         ));
-    }
-
-    // --- PUTSTR with Cell::Str tests ---
-
-    #[test]
-    fn test_putstr_accepts_cell_str() {
-        let mut vm = VM::new();
-        vm.strings.push("world".to_string());
-        vm.push(Cell::Str(0)).unwrap();
-        putstr_prim(&mut vm).unwrap();
-        assert_eq!(vm.take_output(), "world");
     }
 
     // --- str_prim tests ---
@@ -3899,16 +3843,6 @@ mod tests {
         str_prim(&mut vm).unwrap();
         assert_eq!(vm.pop().unwrap(), Cell::Str(0));
         assert_eq!(vm.strings[0], "true");
-    }
-
-    #[test]
-    fn test_str_prim_from_string_desc() {
-        let mut vm = VM::new();
-        let idx = vm.intern_string("hello").unwrap();
-        vm.push(Cell::StringDesc(idx)).unwrap();
-        str_prim(&mut vm).unwrap();
-        assert_eq!(vm.pop().unwrap(), Cell::Str(0));
-        assert_eq!(vm.strings[0], "hello");
     }
 
     #[test]
@@ -3943,15 +3877,17 @@ mod tests {
     }
 
     #[test]
-    fn test_str_concat_with_string_desc() {
+    fn test_str_concat_type_error_on_string_desc() {
+        // After Phase 3, STR_CONCAT must reject Cell::StringDesc with a TypeError.
         let mut vm = VM::new();
         let idx = vm.intern_string("world").unwrap();
         vm.strings.push("hello ".to_string());
         vm.push(Cell::Str(0)).unwrap();
         vm.push(Cell::StringDesc(idx)).unwrap();
-        str_concat_prim(&mut vm).unwrap();
-        assert_eq!(vm.pop().unwrap(), Cell::Str(1));
-        assert_eq!(vm.strings[1], "hello world");
+        assert!(matches!(
+            str_concat_prim(&mut vm),
+            Err(TbxError::TypeError { .. })
+        ));
     }
 
     #[test]
@@ -3987,12 +3923,15 @@ mod tests {
     }
 
     #[test]
-    fn test_str_len_with_string_desc() {
+    fn test_str_len_type_error_on_string_desc() {
+        // After Phase 3, STR_LEN must reject Cell::StringDesc with a TypeError.
         let mut vm = VM::new();
         let idx = vm.intern_string("abc").unwrap();
         vm.push(Cell::StringDesc(idx)).unwrap();
-        str_len_prim(&mut vm).unwrap();
-        assert_eq!(vm.pop().unwrap(), Cell::Int(3));
+        assert!(matches!(
+            str_len_prim(&mut vm),
+            Err(TbxError::TypeError { .. })
+        ));
     }
 
     #[test]
@@ -4041,14 +3980,17 @@ mod tests {
     }
 
     #[test]
-    fn test_str_eq_with_string_desc() {
+    fn test_str_eq_type_error_on_string_desc() {
+        // After Phase 3, STR_EQ must reject Cell::StringDesc with a TypeError.
         let mut vm = VM::new();
         let idx = vm.intern_string("match").unwrap();
         vm.strings.push("match".to_string());
         vm.push(Cell::Str(0)).unwrap();
         vm.push(Cell::StringDesc(idx)).unwrap();
-        str_eq_prim(&mut vm).unwrap();
-        assert_eq!(vm.pop().unwrap(), Cell::Bool(true));
+        assert!(matches!(
+            str_eq_prim(&mut vm),
+            Err(TbxError::TypeError { .. })
+        ));
     }
 
     // --- str_indexof_prim tests ---
@@ -4057,9 +3999,9 @@ mod tests {
     fn test_str_indexof_found_returns_1_based_position() {
         let mut vm = VM::new();
         vm.strings.push("hello world".to_string());
-        let needle_idx = vm.intern_string("world").unwrap();
+        vm.strings.push("world".to_string());
         vm.push(Cell::Str(0)).unwrap();
-        vm.push(Cell::StringDesc(needle_idx)).unwrap();
+        vm.push(Cell::Str(1)).unwrap();
         str_indexof_prim(&mut vm).unwrap();
         assert_eq!(vm.pop().unwrap(), Cell::Int(7));
     }
@@ -4068,9 +4010,9 @@ mod tests {
     fn test_str_indexof_not_found_returns_zero() {
         let mut vm = VM::new();
         vm.strings.push("abc".to_string());
-        let needle_idx = vm.intern_string("z").unwrap();
+        vm.strings.push("z".to_string());
         vm.push(Cell::Str(0)).unwrap();
-        vm.push(Cell::StringDesc(needle_idx)).unwrap();
+        vm.push(Cell::Str(1)).unwrap();
         str_indexof_prim(&mut vm).unwrap();
         assert_eq!(vm.pop().unwrap(), Cell::Int(0));
     }
@@ -4079,9 +4021,9 @@ mod tests {
     fn test_str_indexof_counts_unicode_chars() {
         let mut vm = VM::new();
         vm.strings.push("あいうえお".to_string());
-        let needle_idx = vm.intern_string("うえ").unwrap();
+        vm.strings.push("うえ".to_string());
         vm.push(Cell::Str(0)).unwrap();
-        vm.push(Cell::StringDesc(needle_idx)).unwrap();
+        vm.push(Cell::Str(1)).unwrap();
         str_indexof_prim(&mut vm).unwrap();
         assert_eq!(vm.pop().unwrap(), Cell::Int(3));
     }
@@ -4090,9 +4032,9 @@ mod tests {
     fn test_str_indexof_empty_needle_returns_one() {
         let mut vm = VM::new();
         vm.strings.push("abc".to_string());
-        let needle_idx = vm.intern_string("").unwrap();
+        vm.strings.push(String::new());
         vm.push(Cell::Str(0)).unwrap();
-        vm.push(Cell::StringDesc(needle_idx)).unwrap();
+        vm.push(Cell::Str(1)).unwrap();
         str_indexof_prim(&mut vm).unwrap();
         assert_eq!(vm.pop().unwrap(), Cell::Int(1));
     }
@@ -4114,80 +4056,80 @@ mod tests {
     #[test]
     fn test_str_slice_basic() {
         let mut vm = VM::new();
-        let source_idx = vm.intern_string("abcdef").unwrap();
-        vm.push(Cell::StringDesc(source_idx)).unwrap();
+        vm.strings.push("abcdef".to_string());
+        vm.push(Cell::Str(0)).unwrap();
         vm.push(Cell::Int(2)).unwrap();
         vm.push(Cell::Int(3)).unwrap();
         str_slice_prim(&mut vm).unwrap();
-        assert_eq!(vm.pop().unwrap(), Cell::Str(0));
-        assert_eq!(vm.strings[0], "bcd");
+        assert_eq!(vm.pop().unwrap(), Cell::Str(1));
+        assert_eq!(vm.strings[1], "bcd");
     }
 
     #[test]
     fn test_str_slice_negative_start_counts_from_end() {
         let mut vm = VM::new();
-        let source_idx = vm.intern_string("abcdef").unwrap();
-        vm.push(Cell::StringDesc(source_idx)).unwrap();
+        vm.strings.push("abcdef".to_string());
+        vm.push(Cell::Str(0)).unwrap();
         vm.push(Cell::Int(-3)).unwrap();
         vm.push(Cell::Int(2)).unwrap();
         str_slice_prim(&mut vm).unwrap();
-        assert_eq!(vm.pop().unwrap(), Cell::Str(0));
-        assert_eq!(vm.strings[0], "de");
+        assert_eq!(vm.pop().unwrap(), Cell::Str(1));
+        assert_eq!(vm.strings[1], "de");
     }
 
     #[test]
     fn test_str_slice_clips_past_end() {
         let mut vm = VM::new();
-        let source_idx = vm.intern_string("abc").unwrap();
-        vm.push(Cell::StringDesc(source_idx)).unwrap();
+        vm.strings.push("abc".to_string());
+        vm.push(Cell::Str(0)).unwrap();
         vm.push(Cell::Int(2)).unwrap();
         vm.push(Cell::Int(10)).unwrap();
         str_slice_prim(&mut vm).unwrap();
-        assert_eq!(vm.pop().unwrap(), Cell::Str(0));
-        assert_eq!(vm.strings[0], "bc");
+        assert_eq!(vm.pop().unwrap(), Cell::Str(1));
+        assert_eq!(vm.strings[1], "bc");
     }
 
     #[test]
     fn test_str_slice_too_negative_start_clips_to_beginning() {
         let mut vm = VM::new();
-        let source_idx = vm.intern_string("abc").unwrap();
-        vm.push(Cell::StringDesc(source_idx)).unwrap();
+        vm.strings.push("abc".to_string());
+        vm.push(Cell::Str(0)).unwrap();
         vm.push(Cell::Int(-10)).unwrap();
         vm.push(Cell::Int(2)).unwrap();
         str_slice_prim(&mut vm).unwrap();
-        assert_eq!(vm.pop().unwrap(), Cell::Str(0));
-        assert_eq!(vm.strings[0], "ab");
+        assert_eq!(vm.pop().unwrap(), Cell::Str(1));
+        assert_eq!(vm.strings[1], "ab");
     }
 
     #[test]
     fn test_str_slice_counts_unicode_chars() {
         let mut vm = VM::new();
-        let source_idx = vm.intern_string("あいうえお").unwrap();
-        vm.push(Cell::StringDesc(source_idx)).unwrap();
+        vm.strings.push("あいうえお".to_string());
+        vm.push(Cell::Str(0)).unwrap();
         vm.push(Cell::Int(2)).unwrap();
         vm.push(Cell::Int(2)).unwrap();
         str_slice_prim(&mut vm).unwrap();
-        assert_eq!(vm.pop().unwrap(), Cell::Str(0));
-        assert_eq!(vm.strings[0], "いう");
+        assert_eq!(vm.pop().unwrap(), Cell::Str(1));
+        assert_eq!(vm.strings[1], "いう");
     }
 
     #[test]
     fn test_str_slice_zero_length_returns_empty_string() {
         let mut vm = VM::new();
-        let source_idx = vm.intern_string("abc").unwrap();
-        vm.push(Cell::StringDesc(source_idx)).unwrap();
+        vm.strings.push("abc".to_string());
+        vm.push(Cell::Str(0)).unwrap();
         vm.push(Cell::Int(2)).unwrap();
         vm.push(Cell::Int(0)).unwrap();
         str_slice_prim(&mut vm).unwrap();
-        assert_eq!(vm.pop().unwrap(), Cell::Str(0));
-        assert_eq!(vm.strings[0], "");
+        assert_eq!(vm.pop().unwrap(), Cell::Str(1));
+        assert_eq!(vm.strings[1], "");
     }
 
     #[test]
     fn test_str_slice_start_zero_is_invalid_argument() {
         let mut vm = VM::new();
-        let source_idx = vm.intern_string("abc").unwrap();
-        vm.push(Cell::StringDesc(source_idx)).unwrap();
+        vm.strings.push("abc".to_string());
+        vm.push(Cell::Str(0)).unwrap();
         vm.push(Cell::Int(0)).unwrap();
         vm.push(Cell::Int(1)).unwrap();
         assert!(matches!(
@@ -4199,8 +4141,8 @@ mod tests {
     #[test]
     fn test_str_slice_negative_length_is_invalid_argument() {
         let mut vm = VM::new();
-        let source_idx = vm.intern_string("abc").unwrap();
-        vm.push(Cell::StringDesc(source_idx)).unwrap();
+        vm.strings.push("abc".to_string());
+        vm.push(Cell::Str(0)).unwrap();
         vm.push(Cell::Int(1)).unwrap();
         vm.push(Cell::Int(-1)).unwrap();
         assert!(matches!(
@@ -4214,51 +4156,41 @@ mod tests {
     #[test]
     fn test_str_trim_removes_ascii_spaces() {
         let mut vm = VM::new();
-        let source_idx = vm.intern_string("  hello  ").unwrap();
-        vm.push(Cell::StringDesc(source_idx)).unwrap();
+        vm.strings.push("  hello  ".to_string());
+        vm.push(Cell::Str(0)).unwrap();
         str_trim_prim(&mut vm).unwrap();
-        assert_eq!(vm.pop().unwrap(), Cell::Str(0));
-        assert_eq!(vm.strings[0], "hello");
+        assert_eq!(vm.pop().unwrap(), Cell::Str(1));
+        assert_eq!(vm.strings[1], "hello");
     }
 
     #[test]
     fn test_str_trim_removes_unicode_whitespace() {
         let mut vm = VM::new();
-        let source_idx = vm.intern_string("\u{3000}abc\u{3000}").unwrap();
-        vm.push(Cell::StringDesc(source_idx)).unwrap();
+        vm.strings.push("\u{3000}abc\u{3000}".to_string());
+        vm.push(Cell::Str(0)).unwrap();
         str_trim_prim(&mut vm).unwrap();
-        assert_eq!(vm.pop().unwrap(), Cell::Str(0));
-        assert_eq!(vm.strings[0], "abc");
+        assert_eq!(vm.pop().unwrap(), Cell::Str(1));
+        assert_eq!(vm.strings[1], "abc");
     }
 
     #[test]
     fn test_str_trim_keeps_inner_whitespace() {
         let mut vm = VM::new();
-        let source_idx = vm.intern_string("  hello world  ").unwrap();
-        vm.push(Cell::StringDesc(source_idx)).unwrap();
+        vm.strings.push("  hello world  ".to_string());
+        vm.push(Cell::Str(0)).unwrap();
         str_trim_prim(&mut vm).unwrap();
-        assert_eq!(vm.pop().unwrap(), Cell::Str(0));
-        assert_eq!(vm.strings[0], "hello world");
+        assert_eq!(vm.pop().unwrap(), Cell::Str(1));
+        assert_eq!(vm.strings[1], "hello world");
     }
 
     #[test]
     fn test_str_trim_all_whitespace_becomes_empty() {
         let mut vm = VM::new();
-        let source_idx = vm.intern_string("\n\t\u{3000}").unwrap();
-        vm.push(Cell::StringDesc(source_idx)).unwrap();
-        str_trim_prim(&mut vm).unwrap();
-        assert_eq!(vm.pop().unwrap(), Cell::Str(0));
-        assert_eq!(vm.strings[0], "");
-    }
-
-    #[test]
-    fn test_str_trim_accepts_runtime_string() {
-        let mut vm = VM::new();
-        vm.strings.push("  runtime  ".to_string());
+        vm.strings.push("\n\t\u{3000}".to_string());
         vm.push(Cell::Str(0)).unwrap();
         str_trim_prim(&mut vm).unwrap();
         assert_eq!(vm.pop().unwrap(), Cell::Str(1));
-        assert_eq!(vm.strings[1], "runtime");
+        assert_eq!(vm.strings[1], "");
     }
 
     // --- str_upper_prim tests ---
@@ -4266,31 +4198,21 @@ mod tests {
     #[test]
     fn test_str_upper_ascii() {
         let mut vm = VM::new();
-        let source_idx = vm.intern_string("Abc123").unwrap();
-        vm.push(Cell::StringDesc(source_idx)).unwrap();
+        vm.strings.push("Abc123".to_string());
+        vm.push(Cell::Str(0)).unwrap();
         str_upper_prim(&mut vm).unwrap();
-        assert_eq!(vm.pop().unwrap(), Cell::Str(0));
-        assert_eq!(vm.strings[0], "ABC123");
+        assert_eq!(vm.pop().unwrap(), Cell::Str(1));
+        assert_eq!(vm.strings[1], "ABC123");
     }
 
     #[test]
     fn test_str_upper_unicode_can_change_length() {
         let mut vm = VM::new();
-        let source_idx = vm.intern_string("straße").unwrap();
-        vm.push(Cell::StringDesc(source_idx)).unwrap();
-        str_upper_prim(&mut vm).unwrap();
-        assert_eq!(vm.pop().unwrap(), Cell::Str(0));
-        assert_eq!(vm.strings[0], "STRASSE");
-    }
-
-    #[test]
-    fn test_str_upper_accepts_runtime_string() {
-        let mut vm = VM::new();
-        vm.strings.push("mix".to_string());
+        vm.strings.push("straße".to_string());
         vm.push(Cell::Str(0)).unwrap();
         str_upper_prim(&mut vm).unwrap();
         assert_eq!(vm.pop().unwrap(), Cell::Str(1));
-        assert_eq!(vm.strings[1], "MIX");
+        assert_eq!(vm.strings[1], "STRASSE");
     }
 
     // --- str_lower_prim tests ---
@@ -4298,31 +4220,21 @@ mod tests {
     #[test]
     fn test_str_lower_ascii() {
         let mut vm = VM::new();
-        let source_idx = vm.intern_string("AbC123").unwrap();
-        vm.push(Cell::StringDesc(source_idx)).unwrap();
+        vm.strings.push("AbC123".to_string());
+        vm.push(Cell::Str(0)).unwrap();
         str_lower_prim(&mut vm).unwrap();
-        assert_eq!(vm.pop().unwrap(), Cell::Str(0));
-        assert_eq!(vm.strings[0], "abc123");
+        assert_eq!(vm.pop().unwrap(), Cell::Str(1));
+        assert_eq!(vm.strings[1], "abc123");
     }
 
     #[test]
     fn test_str_lower_unicode() {
         let mut vm = VM::new();
-        let source_idx = vm.intern_string("ÄÖÜ").unwrap();
-        vm.push(Cell::StringDesc(source_idx)).unwrap();
-        str_lower_prim(&mut vm).unwrap();
-        assert_eq!(vm.pop().unwrap(), Cell::Str(0));
-        assert_eq!(vm.strings[0], "äöü");
-    }
-
-    #[test]
-    fn test_str_lower_accepts_runtime_string() {
-        let mut vm = VM::new();
-        vm.strings.push("MIX".to_string());
+        vm.strings.push("ÄÖÜ".to_string());
         vm.push(Cell::Str(0)).unwrap();
         str_lower_prim(&mut vm).unwrap();
         assert_eq!(vm.pop().unwrap(), Cell::Str(1));
-        assert_eq!(vm.strings[1], "mix");
+        assert_eq!(vm.strings[1], "äöü");
     }
 
     // --- str_replace_first_prim tests ---
@@ -4330,68 +4242,54 @@ mod tests {
     #[test]
     fn test_str_replace_first_replaces_only_first_match() {
         let mut vm = VM::new();
-        let source_idx = vm.intern_string("abcabc").unwrap();
-        let needle_idx = vm.intern_string("ab").unwrap();
-        let replacement_idx = vm.intern_string("X").unwrap();
-        vm.push(Cell::StringDesc(source_idx)).unwrap();
-        vm.push(Cell::StringDesc(needle_idx)).unwrap();
-        vm.push(Cell::StringDesc(replacement_idx)).unwrap();
+        vm.strings.push("abcabc".to_string());
+        vm.strings.push("ab".to_string());
+        vm.strings.push("X".to_string());
+        vm.push(Cell::Str(0)).unwrap();
+        vm.push(Cell::Str(1)).unwrap();
+        vm.push(Cell::Str(2)).unwrap();
         str_replace_first_prim(&mut vm).unwrap();
-        assert_eq!(vm.pop().unwrap(), Cell::Str(0));
-        assert_eq!(vm.strings[0], "Xcabc");
+        assert_eq!(vm.pop().unwrap(), Cell::Str(3));
+        assert_eq!(vm.strings[3], "Xcabc");
     }
 
     #[test]
     fn test_str_replace_first_returns_copy_when_not_found() {
         let mut vm = VM::new();
-        let source_idx = vm.intern_string("abc").unwrap();
-        let needle_idx = vm.intern_string("z").unwrap();
-        let replacement_idx = vm.intern_string("X").unwrap();
-        vm.push(Cell::StringDesc(source_idx)).unwrap();
-        vm.push(Cell::StringDesc(needle_idx)).unwrap();
-        vm.push(Cell::StringDesc(replacement_idx)).unwrap();
-        str_replace_first_prim(&mut vm).unwrap();
-        assert_eq!(vm.pop().unwrap(), Cell::Str(0));
-        assert_eq!(vm.strings[0], "abc");
-    }
-
-    #[test]
-    fn test_str_replace_first_accepts_runtime_string() {
-        let mut vm = VM::new();
-        let needle_idx = vm.intern_string("ab").unwrap();
-        let replacement_idx = vm.intern_string("X").unwrap();
-        vm.strings.push("abcabc".to_string());
+        vm.strings.push("abc".to_string());
+        vm.strings.push("z".to_string());
+        vm.strings.push("X".to_string());
         vm.push(Cell::Str(0)).unwrap();
-        vm.push(Cell::StringDesc(needle_idx)).unwrap();
-        vm.push(Cell::StringDesc(replacement_idx)).unwrap();
+        vm.push(Cell::Str(1)).unwrap();
+        vm.push(Cell::Str(2)).unwrap();
         str_replace_first_prim(&mut vm).unwrap();
-        assert_eq!(vm.pop().unwrap(), Cell::Str(1));
-        assert_eq!(vm.strings[1], "Xcabc");
+        assert_eq!(vm.pop().unwrap(), Cell::Str(3));
+        assert_eq!(vm.strings[3], "abc");
     }
 
     #[test]
     fn test_str_replace_first_handles_unicode() {
         let mut vm = VM::new();
-        let source_idx = vm.intern_string("あいうあい").unwrap();
-        let needle_idx = vm.intern_string("あい").unwrap();
-        let replacement_idx = vm.intern_string("x").unwrap();
-        vm.push(Cell::StringDesc(source_idx)).unwrap();
-        vm.push(Cell::StringDesc(needle_idx)).unwrap();
-        vm.push(Cell::StringDesc(replacement_idx)).unwrap();
+        vm.strings.push("あいうあい".to_string());
+        vm.strings.push("あい".to_string());
+        vm.strings.push("x".to_string());
+        vm.push(Cell::Str(0)).unwrap();
+        vm.push(Cell::Str(1)).unwrap();
+        vm.push(Cell::Str(2)).unwrap();
         str_replace_first_prim(&mut vm).unwrap();
-        assert_eq!(vm.pop().unwrap(), Cell::Str(0));
-        assert_eq!(vm.strings[0], "xうあい");
+        assert_eq!(vm.pop().unwrap(), Cell::Str(3));
+        assert_eq!(vm.strings[3], "xうあい");
     }
 
     #[test]
     fn test_str_replace_first_empty_needle_is_invalid_argument() {
         let mut vm = VM::new();
-        let source_idx = vm.intern_string("abc").unwrap();
-        let needle_idx = vm.intern_string("").unwrap();
-        let replacement_idx = vm.intern_string("X").unwrap();
-        vm.push(Cell::StringDesc(source_idx)).unwrap();
-        vm.push(Cell::StringDesc(needle_idx)).unwrap();
-        vm.push(Cell::StringDesc(replacement_idx)).unwrap();
+        vm.strings.push("abc".to_string());
+        vm.strings.push(String::new());
+        vm.strings.push("X".to_string());
+        vm.push(Cell::Str(0)).unwrap();
+        vm.push(Cell::Str(1)).unwrap();
+        vm.push(Cell::Str(2)).unwrap();
         assert!(matches!(
             str_replace_first_prim(&mut vm),
             Err(TbxError::InvalidArgument { .. })
@@ -4403,82 +4301,68 @@ mod tests {
     #[test]
     fn test_str_replace_all_replaces_all_matches() {
         let mut vm = VM::new();
-        let source_idx = vm.intern_string("abcabc").unwrap();
-        let needle_idx = vm.intern_string("ab").unwrap();
-        let replacement_idx = vm.intern_string("X").unwrap();
-        vm.push(Cell::StringDesc(source_idx)).unwrap();
-        vm.push(Cell::StringDesc(needle_idx)).unwrap();
-        vm.push(Cell::StringDesc(replacement_idx)).unwrap();
+        vm.strings.push("abcabc".to_string());
+        vm.strings.push("ab".to_string());
+        vm.strings.push("X".to_string());
+        vm.push(Cell::Str(0)).unwrap();
+        vm.push(Cell::Str(1)).unwrap();
+        vm.push(Cell::Str(2)).unwrap();
         str_replace_all_prim(&mut vm).unwrap();
-        assert_eq!(vm.pop().unwrap(), Cell::Str(0));
-        assert_eq!(vm.strings[0], "XcXc");
+        assert_eq!(vm.pop().unwrap(), Cell::Str(3));
+        assert_eq!(vm.strings[3], "XcXc");
     }
 
     #[test]
     fn test_str_replace_all_returns_copy_when_not_found() {
         let mut vm = VM::new();
-        let source_idx = vm.intern_string("abc").unwrap();
-        let needle_idx = vm.intern_string("z").unwrap();
-        let replacement_idx = vm.intern_string("X").unwrap();
-        vm.push(Cell::StringDesc(source_idx)).unwrap();
-        vm.push(Cell::StringDesc(needle_idx)).unwrap();
-        vm.push(Cell::StringDesc(replacement_idx)).unwrap();
-        str_replace_all_prim(&mut vm).unwrap();
-        assert_eq!(vm.pop().unwrap(), Cell::Str(0));
-        assert_eq!(vm.strings[0], "abc");
-    }
-
-    #[test]
-    fn test_str_replace_all_accepts_runtime_string() {
-        let mut vm = VM::new();
-        let needle_idx = vm.intern_string("ab").unwrap();
-        let replacement_idx = vm.intern_string("X").unwrap();
-        vm.strings.push("abcabc".to_string());
+        vm.strings.push("abc".to_string());
+        vm.strings.push("z".to_string());
+        vm.strings.push("X".to_string());
         vm.push(Cell::Str(0)).unwrap();
-        vm.push(Cell::StringDesc(needle_idx)).unwrap();
-        vm.push(Cell::StringDesc(replacement_idx)).unwrap();
+        vm.push(Cell::Str(1)).unwrap();
+        vm.push(Cell::Str(2)).unwrap();
         str_replace_all_prim(&mut vm).unwrap();
-        assert_eq!(vm.pop().unwrap(), Cell::Str(1));
-        assert_eq!(vm.strings[1], "XcXc");
+        assert_eq!(vm.pop().unwrap(), Cell::Str(3));
+        assert_eq!(vm.strings[3], "abc");
     }
 
     #[test]
     fn test_str_replace_all_handles_unicode() {
         let mut vm = VM::new();
-        let source_idx = vm.intern_string("あいうあい").unwrap();
-        let needle_idx = vm.intern_string("あい").unwrap();
-        let replacement_idx = vm.intern_string("x").unwrap();
-        vm.push(Cell::StringDesc(source_idx)).unwrap();
-        vm.push(Cell::StringDesc(needle_idx)).unwrap();
-        vm.push(Cell::StringDesc(replacement_idx)).unwrap();
+        vm.strings.push("あいうあい".to_string());
+        vm.strings.push("あい".to_string());
+        vm.strings.push("x".to_string());
+        vm.push(Cell::Str(0)).unwrap();
+        vm.push(Cell::Str(1)).unwrap();
+        vm.push(Cell::Str(2)).unwrap();
         str_replace_all_prim(&mut vm).unwrap();
-        assert_eq!(vm.pop().unwrap(), Cell::Str(0));
-        assert_eq!(vm.strings[0], "xうx");
+        assert_eq!(vm.pop().unwrap(), Cell::Str(3));
+        assert_eq!(vm.strings[3], "xうx");
     }
 
     #[test]
     fn test_str_replace_all_uses_non_overlapping_matches() {
         let mut vm = VM::new();
-        let source_idx = vm.intern_string("aaaa").unwrap();
-        let needle_idx = vm.intern_string("aa").unwrap();
-        let replacement_idx = vm.intern_string("b").unwrap();
-        vm.push(Cell::StringDesc(source_idx)).unwrap();
-        vm.push(Cell::StringDesc(needle_idx)).unwrap();
-        vm.push(Cell::StringDesc(replacement_idx)).unwrap();
+        vm.strings.push("aaaa".to_string());
+        vm.strings.push("aa".to_string());
+        vm.strings.push("b".to_string());
+        vm.push(Cell::Str(0)).unwrap();
+        vm.push(Cell::Str(1)).unwrap();
+        vm.push(Cell::Str(2)).unwrap();
         str_replace_all_prim(&mut vm).unwrap();
-        assert_eq!(vm.pop().unwrap(), Cell::Str(0));
-        assert_eq!(vm.strings[0], "bb");
+        assert_eq!(vm.pop().unwrap(), Cell::Str(3));
+        assert_eq!(vm.strings[3], "bb");
     }
 
     #[test]
     fn test_str_replace_all_empty_needle_is_invalid_argument() {
         let mut vm = VM::new();
-        let source_idx = vm.intern_string("abc").unwrap();
-        let needle_idx = vm.intern_string("").unwrap();
-        let replacement_idx = vm.intern_string("X").unwrap();
-        vm.push(Cell::StringDesc(source_idx)).unwrap();
-        vm.push(Cell::StringDesc(needle_idx)).unwrap();
-        vm.push(Cell::StringDesc(replacement_idx)).unwrap();
+        vm.strings.push("abc".to_string());
+        vm.strings.push(String::new());
+        vm.strings.push("X".to_string());
+        vm.push(Cell::Str(0)).unwrap();
+        vm.push(Cell::Str(1)).unwrap();
+        vm.push(Cell::Str(2)).unwrap();
         assert!(matches!(
             str_replace_all_prim(&mut vm),
             Err(TbxError::InvalidArgument { .. })
@@ -4943,8 +4827,8 @@ mod tests {
     #[test]
     fn test_assert_fail_msg_returns_assertion_failed_with_message() {
         let mut vm = VM::new();
-        let idx = vm.intern_string("SIGN(7) should be 1").unwrap();
-        vm.push(Cell::StringDesc(idx)).unwrap();
+        vm.strings.push("SIGN(7) should be 1".to_string());
+        vm.push(Cell::Str(0)).unwrap();
         let result = assert_fail_msg_prim(&mut vm);
         assert!(matches!(
             result,
@@ -4958,8 +4842,8 @@ mod tests {
     #[test]
     fn test_assert_fail_msg_pops_message_from_stack() {
         let mut vm = VM::new();
-        let idx = vm.intern_string("msg").unwrap();
-        vm.push(Cell::StringDesc(idx)).unwrap();
+        vm.strings.push("msg".to_string());
+        vm.push(Cell::Str(0)).unwrap();
         let _ = assert_fail_msg_prim(&mut vm);
         assert_eq!(vm.data_stack.len(), 0);
     }
@@ -6535,8 +6419,8 @@ mod tests {
         // CS_OPEN_TAG outside compile mode must return InvalidExpression.
         let mut vm = VM::new();
         register_all(&mut vm);
-        let idx = vm.intern_string("IF").unwrap();
-        vm.push(Cell::StringDesc(idx)).unwrap();
+        vm.strings.push("IF".to_string());
+        vm.push(Cell::Str(0)).unwrap();
         let err = cs_open_tag_prim(&mut vm).unwrap_err();
         assert!(
             matches!(err, TbxError::InvalidExpression { .. }),
@@ -6546,10 +6430,10 @@ mod tests {
 
     #[test]
     fn test_cs_open_tag_pushes_tag_to_compile_stack() {
-        // CS_OPEN_TAG must pop a StringDesc, resolve it and push Tag to compile_stack.
+        // CS_OPEN_TAG must pop a Cell::Str, resolve it and push Tag to compile_stack.
         let mut vm = make_compiling_vm("TESTWORD");
-        let idx = vm.intern_string("WHILE").unwrap();
-        vm.push(Cell::StringDesc(idx)).unwrap();
+        vm.strings.push("WHILE".to_string());
+        vm.push(Cell::Str(0)).unwrap();
         cs_open_tag_prim(&mut vm).unwrap();
         // data stack must be empty.
         assert_eq!(vm.pop(), Err(TbxError::StackUnderflow));
@@ -6562,7 +6446,7 @@ mod tests {
 
     #[test]
     fn test_cs_open_tag_type_error_non_string() {
-        // CS_OPEN_TAG with a non-StringDesc on the data stack must return TypeError.
+        // CS_OPEN_TAG with a non-Str on the data stack must return TypeError.
         let mut vm = make_compiling_vm("TESTWORD");
         vm.push(Cell::Int(42)).unwrap();
         let err = cs_open_tag_prim(&mut vm).unwrap_err();
@@ -6588,8 +6472,8 @@ mod tests {
         // CS_CLOSE_TAG outside compile mode must return InvalidExpression.
         let mut vm = VM::new();
         register_all(&mut vm);
-        let idx = vm.intern_string("IF").unwrap();
-        vm.push(Cell::StringDesc(idx)).unwrap();
+        vm.strings.push("IF".to_string());
+        vm.push(Cell::Str(0)).unwrap();
         let err = cs_close_tag_prim(&mut vm).unwrap_err();
         assert!(
             matches!(err, TbxError::InvalidExpression { .. }),
@@ -6603,8 +6487,9 @@ mod tests {
         let mut vm = make_compiling_vm("TESTWORD");
         vm.compile_stack
             .push(CompileEntry::Tag("WHILE".to_string()));
-        let idx = vm.intern_string("WHILE").unwrap();
-        vm.push(Cell::StringDesc(idx)).unwrap();
+        let str_idx = vm.strings.len();
+        vm.strings.push("WHILE".to_string());
+        vm.push(Cell::Str(str_idx)).unwrap();
         cs_close_tag_prim(&mut vm).unwrap();
         assert!(vm.compile_stack.is_empty());
     }
@@ -6617,8 +6502,9 @@ mod tests {
         // compile_stack anyway.
         let mut vm = make_compiling_vm("TESTWORD");
         vm.compile_stack.push(CompileEntry::Tag("IF".to_string()));
-        let idx = vm.intern_string("WHILE").unwrap();
-        vm.push(Cell::StringDesc(idx)).unwrap();
+        let str_idx = vm.strings.len();
+        vm.strings.push("WHILE".to_string());
+        vm.push(Cell::Str(str_idx)).unwrap();
         let err = cs_close_tag_prim(&mut vm).unwrap_err();
         assert!(
             matches!(
@@ -6642,8 +6528,9 @@ mod tests {
     fn test_cs_close_tag_empty_stack_error() {
         // CS_CLOSE_TAG with an empty compile_stack must return NoOpenTag.
         let mut vm = make_compiling_vm("TESTWORD");
-        let idx = vm.intern_string("WHILE").unwrap();
-        vm.push(Cell::StringDesc(idx)).unwrap();
+        let str_idx = vm.strings.len();
+        vm.strings.push("WHILE".to_string());
+        vm.push(Cell::Str(str_idx)).unwrap();
         let err = cs_close_tag_prim(&mut vm).unwrap_err();
         assert!(
             matches!(err, TbxError::NoOpenTag { ref expected } if expected == "WHILE"),
@@ -6656,8 +6543,9 @@ mod tests {
         // CS_CLOSE_TAG with a Cell (not Tag) on top of compile_stack must return NoOpenTag.
         let mut vm = make_compiling_vm("TESTWORD");
         vm.compile_stack.push(CompileEntry::Cell(Cell::Int(42)));
-        let idx = vm.intern_string("IF").unwrap();
-        vm.push(Cell::StringDesc(idx)).unwrap();
+        let str_idx = vm.strings.len();
+        vm.strings.push("IF".to_string());
+        vm.push(Cell::Str(str_idx)).unwrap();
         let err = cs_close_tag_prim(&mut vm).unwrap_err();
         assert!(
             matches!(err, TbxError::NoOpenTag { ref expected } if expected == "IF"),
@@ -6675,23 +6563,26 @@ mod tests {
         // CS_OPEN_TAG and CS_CLOSE_TAG must support correct IF/WHILE nesting.
         let mut vm = make_compiling_vm("TESTWORD");
         // Simulate: IF ... WHILE ... ENDWH ... ENDIF
-        let idx_if = vm.intern_string("IF").unwrap();
-        let idx_while = vm.intern_string("WHILE").unwrap();
-
-        vm.push(Cell::StringDesc(idx_if)).unwrap();
+        let if_idx_1 = vm.strings.len();
+        vm.strings.push("IF".to_string());
+        vm.push(Cell::Str(if_idx_1)).unwrap();
         cs_open_tag_prim(&mut vm).unwrap(); // push Tag("IF")
 
-        vm.push(Cell::StringDesc(idx_while)).unwrap();
+        let while_idx_1 = vm.strings.len();
+        vm.strings.push("WHILE".to_string());
+        vm.push(Cell::Str(while_idx_1)).unwrap();
         cs_open_tag_prim(&mut vm).unwrap(); // push Tag("WHILE")
 
         // Close WHILE
-        let idx_while2 = vm.intern_string("WHILE").unwrap();
-        vm.push(Cell::StringDesc(idx_while2)).unwrap();
+        let while_idx_2 = vm.strings.len();
+        vm.strings.push("WHILE".to_string());
+        vm.push(Cell::Str(while_idx_2)).unwrap();
         cs_close_tag_prim(&mut vm).unwrap(); // pop Tag("WHILE")
 
         // Close IF
-        let idx_if2 = vm.intern_string("IF").unwrap();
-        vm.push(Cell::StringDesc(idx_if2)).unwrap();
+        let if_idx_2 = vm.strings.len();
+        vm.strings.push("IF".to_string());
+        vm.push(Cell::Str(if_idx_2)).unwrap();
         cs_close_tag_prim(&mut vm).unwrap(); // pop Tag("IF")
 
         assert!(vm.compile_stack.is_empty());
