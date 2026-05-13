@@ -199,3 +199,45 @@ fn test_set_array_into_array_is_invalid_element_type() {
         "expected 'invalid array element type', got: {err}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Caller-owned string in array element (issue #567)
+// ---------------------------------------------------------------------------
+
+/// A caller-owned string parameter may be stored in a frame-local array element.
+///
+/// DEF USE(S)
+///   VAR A
+///   SET &A, ARRAY(1)
+///   SET &A(1), S
+///   PUTSTR A(1)
+/// END
+/// USE("arg")
+///
+/// S is caller-owned from the perspective of USE's call frame, and A is
+/// frame-local, so this is safe and must succeed.
+#[test]
+fn test_set_caller_owned_str_param_into_frame_local_array_is_allowed() {
+    let mut interp = Interpreter::new();
+    let src = "DEF USE(S)\n  VAR A\n  SET &A, ARRAY(1)\n  SET &A(1), S\n  PUTSTR A(1)\nEND\nUSE(\"arg\")\n";
+    interp
+        .exec_source(src)
+        .expect("storing caller-owned Str param in frame-local array should succeed");
+    assert_eq!(interp.take_output(), "arg");
+}
+
+/// A frame-local runtime string (produced by STR()) must still be rejected
+/// even when the target array is frame-local.  This prevents dangling
+/// references when the inner call frame returns.
+#[test]
+fn test_set_frame_local_runtime_str_into_frame_local_array_is_string_frame_escape() {
+    let mut interp = Interpreter::new();
+    let src = "DEF T()\n  VAR A\n  SET &A, ARRAY(1)\n  SET &A(1), STR(\"hello\")\nEND\nT()\n";
+    let err = interp
+        .exec_source(src)
+        .expect_err("storing frame-local runtime Str in array should fail");
+    assert!(
+        err.to_string().contains("string cannot escape"),
+        "expected 'string cannot escape', got: {err}"
+    );
+}
