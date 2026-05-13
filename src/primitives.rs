@@ -276,6 +276,37 @@ fn check_array_element_type(value: &Cell) -> Result<(), TbxError> {
     }
 }
 
+/// Check that a `Cell::Str` at `str_idx` may be written to the array at
+/// `array_pool_idx`.
+///
+/// Both the target array lifetime and the value string lifetime are classified
+/// so that future issues can extend the allow-rule to caller-owned strings in
+/// non-global arrays.  For now the rule is the same as before: only
+/// `PoolRefLifetime::Global` strings are accepted, regardless of the target
+/// array lifetime.
+///
+/// # Errors
+///
+/// Returns `TbxError::StringFrameEscape` when the string is not global
+/// (frame-local or caller-owned).
+fn check_string_array_element_write(
+    vm: &VM,
+    array_pool_idx: usize,
+    str_idx: usize,
+) -> Result<(), TbxError> {
+    // Classify both sides; array_lifetime is scaffolding for the next issue
+    // that will permit caller-owned Str in non-global arrays.
+    let _array_lifetime = classify_pool_ref(vm, PoolRef::Array(array_pool_idx));
+    let str_lifetime = classify_pool_ref(vm, PoolRef::String(str_idx));
+
+    match str_lifetime {
+        PoolRefLifetime::Global => Ok(()),
+        PoolRefLifetime::CallerOwned | PoolRefLifetime::FrameLocal => {
+            Err(TbxError::StringFrameEscape)
+        }
+    }
+}
+
 /// Check that `value` may be written to the array at `array_pool_idx`.
 ///
 /// This is the lifetime-aware counterpart to `check_array_element_type` and
@@ -287,28 +318,15 @@ fn check_array_element_type(value: &Cell) -> Result<(), TbxError> {
 ///   (`PoolRefLifetime::Global`).  Frame-local and caller-owned strings are
 ///   rejected with `TbxError::StringFrameEscape` to prevent dangling
 ///   references after the owning frame is cleaned up.
-///
-/// The `array_pool_idx` parameter is reserved for future use (target-array
-/// lifetime checks) and is not examined in this implementation.
-fn check_array_element_write(
-    vm: &VM,
-    _array_pool_idx: usize,
-    value: &Cell,
-) -> Result<(), TbxError> {
+fn check_array_element_write(vm: &VM, array_pool_idx: usize, value: &Cell) -> Result<(), TbxError> {
     match value {
         // Nested arrays are unconditionally rejected.
-        Cell::Array(_) => return Err(TbxError::InvalidArrayElement { got: "Array" }),
-        // String lifetime check: only global strings are allowed.
-        Cell::Str(idx) => match classify_pool_ref(vm, PoolRef::String(*idx)) {
-            PoolRefLifetime::Global => {}
-            PoolRefLifetime::CallerOwned | PoolRefLifetime::FrameLocal => {
-                return Err(TbxError::StringFrameEscape);
-            }
-        },
+        Cell::Array(_) => Err(TbxError::InvalidArrayElement { got: "Array" }),
+        // Delegate to the dedicated helper that classifies both lifetimes.
+        Cell::Str(str_idx) => check_string_array_element_write(vm, array_pool_idx, *str_idx),
         // All other scalar types are accepted.
-        _ => {}
+        _ => Ok(()),
     }
-    Ok(())
 }
 
 /// Write `value` to element `elem_idx` of the array at `pool_idx`.
