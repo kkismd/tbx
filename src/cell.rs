@@ -86,9 +86,6 @@ pub enum Cell {
     Xt(Xt),
     /// Boolean value for logical/comparison operations
     Bool(bool),
-    /// Legacy string descriptor variant scheduled for removal in #548.
-    /// It no longer has a backing string pool or runtime resolution path.
-    StringDesc(usize),
     /// Array handle — index into `VM::arrays` (the array pool).
     ///
     /// Created by the `ARRAY(N)` primitive.  The pool entry at this index holds
@@ -169,7 +166,6 @@ impl std::fmt::Display for Cell {
             Cell::StackAddr(a) => write!(f, "stack:{}", a),
             Cell::Xt(x) => write!(f, "xt:{}", x.0),
             Cell::Bool(b) => write!(f, "{}", b),
-            Cell::StringDesc(i) => write!(f, "str:{}", i),
             Cell::Array(idx) => write!(f, "<array:{}>", idx),
             Cell::Str(idx) => write!(f, "<str:{}>", idx),
             Cell::ArrayAddr { pool_idx, elem_idx } => {
@@ -236,15 +232,6 @@ impl Cell {
         }
     }
 
-    /// Returns the string pool index if this cell is `StringDesc`, otherwise `None`.
-    pub fn as_string_desc(&self) -> Option<usize> {
-        if let Cell::StringDesc(i) = self {
-            Some(*i)
-        } else {
-            None
-        }
-    }
-
     /// Returns the pool index if this cell is `Array`, otherwise `None`.
     pub fn as_array_index(&self) -> Option<usize> {
         if let Cell::Array(idx) = self {
@@ -263,7 +250,6 @@ impl Cell {
             Cell::StackAddr(_) => "StackAddr",
             Cell::Xt(_) => "Xt",
             Cell::Bool(_) => "Bool",
-            Cell::StringDesc(_) => "StringDesc",
             Cell::Array(_) => "Array",
             Cell::Str(_) => "Str",
             Cell::ArrayAddr { .. } => "ArrayAddr",
@@ -314,7 +300,6 @@ impl PartialEq for Cell {
                     elem_idx: eb,
                 },
             ) => pa == pb && ea == eb,
-            (Cell::StringDesc(a), Cell::StringDesc(b)) => a == b,
             _ => false,
         }
     }
@@ -407,11 +392,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn test_display_string_desc() {
-        assert_eq!(Cell::StringDesc(0).to_string(), "str:0");
-    }
-
     // --- Type conversion methods ---
 
     #[test]
@@ -454,12 +434,6 @@ mod tests {
     }
 
     #[test]
-    fn test_as_string_desc() {
-        assert_eq!(Cell::StringDesc(2).as_string_desc(), Some(2));
-        assert_eq!(Cell::Int(2).as_string_desc(), None);
-    }
-
-    #[test]
     fn test_type_name() {
         assert_eq!(Cell::Int(0).type_name(), "Int");
         assert_eq!(Cell::Float(0.0).type_name(), "Float");
@@ -469,7 +443,7 @@ mod tests {
         assert_eq!(Cell::Bool(false).type_name(), "Bool");
         assert_eq!(Cell::None.type_name(), "None");
         assert_eq!(Cell::Array(0).type_name(), "Array");
-        assert_eq!(Cell::StringDesc(0).type_name(), "StringDesc");
+        assert_eq!(Cell::Str(0).type_name(), "Str");
     }
 
     #[test]

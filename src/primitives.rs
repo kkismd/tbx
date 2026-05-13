@@ -3873,19 +3873,6 @@ mod tests {
     }
 
     #[test]
-    fn test_str_concat_type_error_on_string_desc() {
-        // After #546/#547, STR_CONCAT must reject Cell::StringDesc with a TypeError.
-        let mut vm = VM::new();
-        vm.strings.push("hello ".to_string());
-        vm.push(Cell::Str(0)).unwrap();
-        vm.push(Cell::StringDesc(0)).unwrap();
-        assert!(matches!(
-            str_concat_prim(&mut vm),
-            Err(TbxError::TypeError { .. })
-        ));
-    }
-
-    #[test]
     fn test_str_concat_type_error() {
         let mut vm = VM::new();
         vm.strings.push("foo".to_string());
@@ -3915,17 +3902,6 @@ mod tests {
         vm.push(Cell::Str(0)).unwrap();
         str_len_prim(&mut vm).unwrap();
         assert_eq!(vm.pop().unwrap(), Cell::Int(0));
-    }
-
-    #[test]
-    fn test_str_len_type_error_on_string_desc() {
-        // After #546/#547, STR_LEN must reject Cell::StringDesc with a TypeError.
-        let mut vm = VM::new();
-        vm.push(Cell::StringDesc(0)).unwrap();
-        assert!(matches!(
-            str_len_prim(&mut vm),
-            Err(TbxError::TypeError { .. })
-        ));
     }
 
     #[test]
@@ -3971,19 +3947,6 @@ mod tests {
         vm.push(Cell::Str(0)).unwrap();
         str_eq_prim(&mut vm).unwrap();
         assert_eq!(vm.pop().unwrap(), Cell::Bool(true));
-    }
-
-    #[test]
-    fn test_str_eq_type_error_on_string_desc() {
-        // After #546/#547, STR_EQ must reject Cell::StringDesc with a TypeError.
-        let mut vm = VM::new();
-        vm.strings.push("match".to_string());
-        vm.push(Cell::Str(0)).unwrap();
-        vm.push(Cell::StringDesc(0)).unwrap();
-        assert!(matches!(
-            str_eq_prim(&mut vm),
-            Err(TbxError::TypeError { .. })
-        ));
     }
 
     // --- str_indexof_prim tests ---
@@ -4576,16 +4539,6 @@ mod tests {
         vm.push(Cell::Bool(false)).unwrap();
         putval_prim(&mut vm).unwrap();
         assert_eq!(vm.take_output(), "FALSE");
-    }
-
-    #[test]
-    fn test_putval_string_desc_type_error() {
-        let mut vm = VM::new();
-        vm.push(Cell::StringDesc(0)).unwrap();
-        assert!(matches!(
-            putval_prim(&mut vm),
-            Err(TbxError::TypeError { .. })
-        ));
     }
 
     #[test]

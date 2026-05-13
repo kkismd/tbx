@@ -2751,7 +2751,6 @@ mod tests {
         // compile-time constant: `compile_expr` pushes it onto
         // `vm.strings` and immediately advances `global_string_pool_len`
         // so the literal lives in the global string region.  This makes
-        // the literal behave like the legacy `StringDesc` literals did,
         // and lets compiled words assign string literals into global
         // variables via `SET &G, "..."` without triggering
         // `StringFrameEscape`.
@@ -3085,8 +3084,8 @@ mod tests {
     }
 
     /// Phase 2 of issue #539: a string literal stored in a `VARIABLE` slot
-    /// must be represented as `Cell::Str` (not `Cell::StringDesc`).  This
-    /// confirms that the new compile path flows all the way through LET.
+    /// must be represented as `Cell::Str`. This confirms that the
+    /// compile path flows all the way through LET.
     /// See issue #542.
     #[test]
     fn test_string_literal_stored_in_variable_is_str() {
