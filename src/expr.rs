@@ -1043,9 +1043,12 @@ mod tests {
         let mut vm = make_vm();
         let tokens = lex(r#""world""#);
         let result = ExprCompiler::new(&mut vm).compile_expr(&tokens).unwrap();
+        let lit_xt = vm.lookup("LIT").unwrap();
+        assert_eq!(result.len(), 2);
+        assert_eq!(result[0], Cell::Xt(lit_xt));
         assert!(
-            result.iter().any(|cell| matches!(cell, Cell::Str(_))),
-            "string literal compilation must emit Cell::Str, got {result:?}"
+            matches!(result[1], Cell::Str(_)),
+            "string literal compilation must emit Cell::Str as the literal payload, got {result:?}"
         );
     }
 
