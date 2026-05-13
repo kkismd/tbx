@@ -142,8 +142,20 @@ impl<'a> ExprCompiler<'a> {
                 }
 
                 Token::StringLit(s) => {
-                    let idx = self.vm.intern_string(&s)?;
-                    emit_lit(&mut output, Cell::StringDesc(idx), self.vm)?;
+                    // String literals now flow through `VM::strings` and are
+                    // emitted as `Cell::Str`.  The legacy `StringDesc` path
+                    // (intern into `VM::string_pool`) is retained only for
+                    // backwards-compatible reads (see issue #542 / #539
+                    // Phase 2).  Enforce the same length cap that
+                    // `intern_string` previously imposed so callers do not
+                    // gain access to strings larger than what the legacy
+                    // pool could hold.
+                    if s.len() > u16::MAX as usize {
+                        return Err(TbxError::StringTooLong { len: s.len() });
+                    }
+                    let idx = self.vm.strings.len();
+                    self.vm.strings.push(s);
+                    emit_lit(&mut output, Cell::Str(idx), self.vm)?;
                     prev_was_operand = true;
                 }
 
@@ -982,6 +994,7 @@ mod tests {
     #[test]
     fn test_string_literal() {
         let mut vm = make_vm();
+        let strings_before = vm.strings.len();
         let tokens = lex(r#""hello""#);
         let result = ExprCompiler::new(&mut vm).compile_expr(&tokens).unwrap();
 
@@ -989,8 +1002,36 @@ mod tests {
 
         assert_eq!(result.len(), 2);
         assert_eq!(result[0], Cell::Xt(lit_xt));
-        // The string "hello" should be interned at index 0 in an empty pool.
-        assert_eq!(result[1], Cell::StringDesc(0));
+        // The string literal is now stored in `VM::strings` and the
+        // compiler emits `Cell::Str(idx)` (Phase 2 of issue #539).
+        assert_eq!(result[1], Cell::Str(strings_before));
+        assert_eq!(
+            vm.strings.get(strings_before).map(String::as_str),
+            Some("hello")
+        );
+    }
+
+    /// Phase 2 of issue #539: ensure that a string literal does NOT produce
+    /// a `Cell::StringDesc` in the compiled output and does NOT extend the
+    /// legacy `string_pool` (apart from anything the stdlib already added).
+    #[test]
+    fn test_string_literal_does_not_emit_string_desc() {
+        let mut vm = make_vm();
+        let pool_before = vm.string_pool.len();
+        let tokens = lex(r#""world""#);
+        let result = ExprCompiler::new(&mut vm).compile_expr(&tokens).unwrap();
+        for cell in &result {
+            assert!(
+                !matches!(cell, Cell::StringDesc(_)),
+                "string literal compilation must not emit Cell::StringDesc, got {:?}",
+                cell
+            );
+        }
+        assert_eq!(
+            vm.string_pool.len(),
+            pool_before,
+            "legacy string_pool must not grow when compiling a new string literal"
+        );
     }
 
     // ------------------------------------------------------------------
