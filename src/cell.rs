@@ -86,7 +86,7 @@ pub enum Cell {
     Xt(Xt),
     /// Boolean value for logical/comparison operations
     Bool(bool),
-    /// Index into the string pool (length-prefixed)
+    /// Legacy string descriptor handle retained for compatibility paths.
     StringDesc(usize),
     /// Array handle — index into `VM::arrays` (the array pool).
     ///

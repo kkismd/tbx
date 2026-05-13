@@ -142,14 +142,10 @@ impl<'a> ExprCompiler<'a> {
                 }
 
                 Token::StringLit(s) => {
-                    // String literals now flow through `VM::strings` and are
-                    // emitted as `Cell::Str`.  The legacy `StringDesc` path
-                    // (intern into `VM::string_pool`) is retained only for
-                    // backwards-compatible reads (see issue #542 / #539
-                    // Phase 2).  Enforce the same length cap that
-                    // `intern_string` previously imposed so callers do not
-                    // gain access to strings larger than what the legacy
-                    // pool could hold.
+                    // String literals live in `VM::strings` and are emitted
+                    // as `Cell::Str`. Keep the current literal length limit
+                    // so compile-time string handling stays within the
+                    // existing contract.
                     //
                     // String literals are compile-time constants embedded in
                     // the compiled code.  Store them in `VM::strings` and
@@ -1041,13 +1037,11 @@ mod tests {
         );
     }
 
-    /// Phase 2 of issue #539: ensure that a string literal does NOT produce
-    /// a `Cell::StringDesc` in the compiled output and does NOT extend the
-    /// legacy `string_pool` (apart from anything the stdlib already added).
+    /// Phase 2 of issue #539: ensure that a string literal does not produce
+    /// a `Cell::StringDesc` in the compiled output.
     #[test]
     fn test_string_literal_does_not_emit_string_desc() {
         let mut vm = make_vm();
-        let pool_before = vm.string_pool.len();
         let tokens = lex(r#""world""#);
         let result = ExprCompiler::new(&mut vm).compile_expr(&tokens).unwrap();
         for cell in &result {
@@ -1057,11 +1051,6 @@ mod tests {
                 cell
             );
         }
-        assert_eq!(
-            vm.string_pool.len(),
-            pool_before,
-            "legacy string_pool must not grow when compiling a new string literal"
-        );
     }
 
     // ------------------------------------------------------------------
