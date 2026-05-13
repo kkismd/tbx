@@ -262,17 +262,53 @@ pub fn set_prim(vm: &mut VM) -> Result<(), TbxError> {
     }
 }
 
-/// Check that `value` is a permitted array element type.
+/// Check that `value` is a permitted array element type (static shape check,
+/// no VM context required).
 ///
-/// Array elements are restricted to scalar types: `Int`, `Float`, `Bool`, and
-/// `None`.  Nested reference types (`Array` and `Str`) are forbidden because
-/// they can introduce dangling references when the owning frame is cleaned up.
+/// `Cell::Array` is always rejected (nested arrays are not supported).
+/// `Cell::Str` is also rejected here; callers that need lifetime-aware string
+/// checks should use `check_array_element_write` instead.
 fn check_array_element_type(value: &Cell) -> Result<(), TbxError> {
     match value {
         Cell::Array(_) => Err(TbxError::InvalidArrayElement { got: "Array" }),
         Cell::Str(_) => Err(TbxError::InvalidArrayElement { got: "Str" }),
         _ => Ok(()),
     }
+}
+
+/// Check that `value` may be written to the array at `array_pool_idx`.
+///
+/// This is the lifetime-aware counterpart to `check_array_element_type` and
+/// is used by `write_array_element` (the `SET`/`STORE` path).
+///
+/// * `Cell::Array` is always rejected (nested arrays are not supported).
+/// * All non-reference scalars are accepted unconditionally.
+/// * `Cell::Str` is accepted only when its pool index is in the global region
+///   (`PoolRefLifetime::Global`).  Frame-local and caller-owned strings are
+///   rejected with `TbxError::StringFrameEscape` to prevent dangling
+///   references after the owning frame is cleaned up.
+///
+/// The `array_pool_idx` parameter is reserved for future use (target-array
+/// lifetime checks) and is not examined in this implementation.
+fn check_array_element_write(
+    vm: &VM,
+    _array_pool_idx: usize,
+    value: &Cell,
+) -> Result<(), TbxError> {
+    match value {
+        // Nested arrays are unconditionally rejected.
+        Cell::Array(_) => return Err(TbxError::InvalidArrayElement { got: "Array" }),
+        // String lifetime check: only global strings are allowed.
+        Cell::Str(idx) => match classify_pool_ref(vm, PoolRef::String(*idx)) {
+            PoolRefLifetime::Global => {}
+            PoolRefLifetime::CallerOwned | PoolRefLifetime::FrameLocal => {
+                return Err(TbxError::StringFrameEscape);
+            }
+        },
+        // All other scalar types are accepted.
+        _ => {}
+    }
+    Ok(())
 }
 
 /// Write `value` to element `elem_idx` of the array at `pool_idx`.
@@ -282,8 +318,9 @@ fn write_array_element(
     elem_idx: usize,
     value: Cell,
 ) -> Result<(), TbxError> {
-    // Reject reference types that could dangle when the owning frame is freed.
-    check_array_element_type(&value)?;
+    // Reject types that could dangle when the owning frame is freed.
+    // The helper must be called before get_mut() to avoid borrow conflicts.
+    check_array_element_write(vm, pool_idx, &value)?;
     let pool_size = vm.arrays.len();
     let arr = vm
         .arrays
@@ -7321,6 +7358,119 @@ mod tests {
         vm.push(Cell::Int(42)).unwrap();
         set_prim(&mut vm).unwrap();
         assert_eq!(vm.arrays[0][0], Cell::Int(42));
+    }
+
+    // --- array element write: Cell::Str lifetime checks ---
+
+    #[test]
+    fn test_set_global_str_to_array_element_is_allowed() {
+        // A Str with pool_idx < global_string_pool_len is global and may be stored.
+        let mut vm = VM::new();
+        vm.strings.push("hello".to_string());
+        vm.global_string_pool_len = 1; // promote to global
+        vm.arrays.push(vec![Cell::None]);
+        // set_prim: stack = [..., addr, value]
+        vm.push(Cell::ArrayAddr {
+            pool_idx: 0,
+            elem_idx: 0,
+        })
+        .unwrap();
+        vm.push(Cell::Str(0)).unwrap();
+        set_prim(&mut vm).unwrap();
+        assert_eq!(vm.arrays[0][0], Cell::Str(0));
+    }
+
+    #[test]
+    fn test_store_global_str_to_array_element_is_allowed() {
+        // Same as above but using store_prim (stack = [value, addr]).
+        let mut vm = VM::new();
+        vm.strings.push("world".to_string());
+        vm.global_string_pool_len = 1;
+        vm.arrays.push(vec![Cell::None]);
+        // store_prim: stack = [value, addr], pops addr first.
+        vm.push(Cell::Str(0)).unwrap();
+        vm.push(Cell::ArrayAddr {
+            pool_idx: 0,
+            elem_idx: 0,
+        })
+        .unwrap();
+        store_prim(&mut vm).unwrap();
+        assert_eq!(vm.arrays[0][0], Cell::Str(0));
+    }
+
+    #[test]
+    fn test_set_frame_local_str_to_array_element_is_string_frame_escape() {
+        // A Str with pool_idx >= global_string_pool_len is frame-local and must be rejected.
+        let mut vm = VM::new();
+        vm.strings.push("local".to_string());
+        // global_string_pool_len = 0, so Str(0) is frame-local.
+        vm.arrays.push(vec![Cell::None]);
+        vm.push(Cell::ArrayAddr {
+            pool_idx: 0,
+            elem_idx: 0,
+        })
+        .unwrap();
+        vm.push(Cell::Str(0)).unwrap();
+        assert_eq!(set_prim(&mut vm), Err(TbxError::StringFrameEscape));
+    }
+
+    #[test]
+    fn test_set_caller_owned_str_to_array_element_is_string_frame_escape() {
+        // A Str in the caller-owned region (between caller's boundary and current frame's
+        // boundary) must also be rejected.
+        use crate::cell::ReturnFrame;
+        let mut vm = VM::new();
+        // Two strings: one "caller-owned" at idx 0, one global at idx... none here.
+        vm.strings.push("caller".to_string());
+        vm.strings.push("local".to_string());
+        // global_string_pool_len = 0, so nothing is global.
+        // Push a call frame: the caller saw string_pool_len = 0 before the call,
+        // and a nested call sees string_pool_len = 1.
+        vm.return_stack.push(ReturnFrame::TopLevel);
+        vm.return_stack.push(ReturnFrame::Call {
+            callee_xt: crate::cell::Xt(0),
+            return_pc: 0,
+            saved_bp: 0,
+            saved_array_pool_len: 0,
+            saved_string_pool_len: 0, // outer boundary
+            actual_arity: 0,
+        });
+        vm.return_stack.push(ReturnFrame::Call {
+            callee_xt: crate::cell::Xt(0),
+            return_pc: 0,
+            saved_bp: 0,
+            saved_array_pool_len: 0,
+            saved_string_pool_len: 1, // inner boundary; Str(0) is caller-owned
+            actual_arity: 0,
+        });
+        vm.arrays.push(vec![Cell::None]);
+        // Str(0): idx=0, innermost saved_string_pool_len=1 → idx < 1 → CallerOwned
+        vm.push(Cell::ArrayAddr {
+            pool_idx: 0,
+            elem_idx: 0,
+        })
+        .unwrap();
+        vm.push(Cell::Str(0)).unwrap();
+        assert_eq!(set_prim(&mut vm), Err(TbxError::StringFrameEscape));
+    }
+
+    #[test]
+    fn test_set_nested_array_to_array_element_is_invalid_array_element() {
+        // Cell::Array must always be rejected as an array element.
+        let mut vm = VM::new();
+        vm.arrays.push(vec![Cell::None]); // pool_idx = 0: target array
+        vm.arrays.push(vec![Cell::None]); // pool_idx = 1: value to store
+        vm.global_array_pool_len = 2; // both are global
+        vm.push(Cell::ArrayAddr {
+            pool_idx: 0,
+            elem_idx: 0,
+        })
+        .unwrap();
+        vm.push(Cell::Array(1)).unwrap();
+        assert_eq!(
+            set_prim(&mut vm),
+            Err(TbxError::InvalidArrayElement { got: "Array" })
+        );
     }
 
     // --- fetch_prim with ArrayAddr ---

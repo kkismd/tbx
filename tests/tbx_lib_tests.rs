@@ -124,19 +124,50 @@ fn test_array_index_zero_is_out_of_bounds() {
 // Array element type restriction tests (issue #487)
 // ---------------------------------------------------------------------------
 
-/// SET &A(i), STR("...") must fail with InvalidArrayElement.
+/// SET &A(i), STR("...") must fail with StringFrameEscape because STR()
+/// produces a frame-local runtime string that must not escape to an array.
+/// (Global / compile-time literal strings are allowed; see
+/// test_set_literal_str_into_array_is_allowed.)
 #[test]
-fn test_set_str_into_array_is_invalid_element_type() {
+fn test_set_runtime_str_into_array_is_string_frame_escape() {
     let mut interp = Interpreter::new();
-    // Attempt to store a Str cell into an array element via SET.
+    // STR("hello") allocates a frame-local string; storing it in the array
+    // must be rejected.
     let src = "DEF T()\n  VAR A\n  LET A = ARRAY(3)\n  SET &A(1), STR(\"hello\")\nEND\nT()\n";
     let err = interp
         .exec_source(src)
-        .expect_err("storing Str in array should fail");
+        .expect_err("storing frame-local Str in array should fail");
     assert!(
-        err.to_string().contains("invalid array element type"),
-        "expected 'invalid array element type', got: {err}"
+        err.to_string().contains("string cannot escape"),
+        "expected 'string cannot escape', got: {err}"
     );
+}
+
+/// SET &A(1), "hello" (compile-time literal) must succeed.
+/// String literals are stored into VM::strings as global compile-time literals
+/// at compile time, so they satisfy the Global lifetime requirement.
+/// Array indices are 1-based in TBX.
+#[test]
+fn test_set_literal_str_into_array_is_allowed() {
+    let mut interp = Interpreter::new();
+    let src = "VAR A\nSET &A, ARRAY(1)\nSET &A(1), \"hello\"\nPUTSTR A(1)\n";
+    interp
+        .exec_source(src)
+        .expect("storing string literal in array should succeed");
+    assert_eq!(interp.take_output(), "hello");
+}
+
+/// Same as above but inside a compiled word to verify frame-local arrays also
+/// accept global string literals.
+#[test]
+fn test_set_literal_str_into_array_inside_def_is_allowed() {
+    let mut interp = Interpreter::new();
+    let src =
+        "DEF MAKE()\n  VAR A\n  SET &A, ARRAY(1)\n  SET &A(1), \"inside\"\n  PUTSTR A(1)\nEND\nMAKE\n";
+    interp
+        .exec_source(src)
+        .expect("storing string literal in array inside DEF should succeed");
+    assert_eq!(interp.take_output(), "inside");
 }
 
 /// TO_ARRAY(STR("a"), STR("b")) must fail with InvalidArrayElement.
