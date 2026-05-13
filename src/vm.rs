@@ -2943,6 +2943,75 @@ mod tests {
     }
 
     #[test]
+    fn test_str_literal_inside_word_assigned_to_global_var_is_currently_rejected() {
+        // Regression test for the review feedback on PR #543.
+        //
+        // A string literal that appears inside a DEF ... END body is pushed
+        // onto `vm.strings` at compile time by `compile_expr`.  However the
+        // current implementation does not promote those literals to the
+        // global region of the string pool: `global_string_pool_len` is
+        // only advanced when a `ReturnFrame::TopLevel` is popped inside
+        // `VM::run`, and the IMMEDIATE word `END` is dispatched via a
+        // direct primitive call that bypasses `VM::run`.  As a result, a
+        // literal compiled inside a DEF body keeps `pool_idx >=
+        // global_string_pool_len`, so when the word is later invoked and
+        // tries to `SET &G, "..."` the value is rejected as a frame-local
+        // string and `StringFrameEscape` is raised.
+        //
+        // This test pins the current behaviour so that any future change
+        // (either intentionally relaxing the rule or fixing the IMMEDIATE
+        // `END` promotion path) shows up as a deliberate test update.  The
+        // language-level rationale is documented in `blueprint-language.md`
+        // under "Storing string literals into global variables from inside
+        // a word".
+        let result = run_source(
+            "VAR G\n\
+             DEF SETG()\n  SET &G, \"inside\"\nEND\n\
+             SETG()\n\
+             PUTSTR G",
+        );
+        assert!(
+            matches!(result, Err(crate::error::TbxError::StringFrameEscape)),
+            "expected StringFrameEscape under the current pool-promotion \
+             rules, got: {result:?}"
+        );
+    }
+
+    #[test]
+    fn test_str_literal_assigned_to_global_var_at_top_level_succeeds() {
+        // Counterpart to the test above: the same SET &G, "..." pattern
+        // executed at the top level (not inside a DEF body) succeeds,
+        // because the literal is promoted to the global region as soon as
+        // the enclosing top-level statement finishes.  This pins down the
+        // boundary of the current restriction documented in
+        // `blueprint-language.md`.
+        let result = run_source(
+            "VAR G\n\
+             SET &G, \"outside\"\n\
+             PUTSTR G",
+        );
+        assert!(result.is_ok(), "expected success, got: {result:?}");
+        assert_eq!(result.unwrap().trim(), "outside");
+    }
+
+    #[test]
+    fn test_str_literal_inside_word_via_local_then_return_succeeds() {
+        // Workaround documented in `blueprint-language.md`: assign the
+        // literal to a local VAR first and RETURN it.  Ownership transfer
+        // on RETURN promotes the value out of the frame, so the caller can
+        // assign the returned string to a global VAR without triggering
+        // `StringFrameEscape`.
+        let result = run_source(
+            "VAR G\n\
+             DEF MAKE_STR()\n  VAR S\n  LET S = \"inside\"\n  RETURN S\nEND\n\
+             SET &G, MAKE_STR()\n\
+             PUTSTR G",
+        );
+        assert!(result.is_ok(), "expected success, got: {result:?}");
+        assert_eq!(result.unwrap().trim(), "inside");
+    }
+
+    #[test]
     fn test_global_array_stored_via_store_prim() {
         // A global array (pool_idx < global_array_pool_len) can be stored into a
         // dictionary slot by store_prim without triggering ArrayFrameEscape.
