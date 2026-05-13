@@ -74,29 +74,66 @@ pub fn fetch_prim(vm: &mut VM) -> Result<(), TbxError> {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PoolKind {
+    Array,
+    String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PoolRef {
+    Array(usize),
+    String(usize),
+}
+
+fn pool_ref_from_cell(cell: &Cell) -> Option<PoolRef> {
+    match cell {
+        Cell::Array(idx) => Some(PoolRef::Array(*idx)),
+        Cell::Str(idx) => Some(PoolRef::String(*idx)),
+        _ => None,
+    }
+}
+
+impl PoolRef {
+    fn kind(self) -> PoolKind {
+        match self {
+            PoolRef::Array(_) => PoolKind::Array,
+            PoolRef::String(_) => PoolKind::String,
+        }
+    }
+
+    fn index(self) -> usize {
+        match self {
+            PoolRef::Array(idx) | PoolRef::String(idx) => idx,
+        }
+    }
+}
+
 fn check_dict_reference_write(vm: &mut VM, value: &Cell) -> Result<(), TbxError> {
-    match value {
-        Cell::Array(pool_idx) => {
-            if *pool_idx < vm.global_array_pool_len {
-                Ok(())
-            } else if vm.is_executing_top_level() {
-                vm.global_array_pool_len = *pool_idx + 1;
-                Ok(())
-            } else {
-                Err(TbxError::ArrayFrameEscape)
+    match pool_ref_from_cell(value) {
+        Some(pool_ref) => match pool_ref.kind() {
+            PoolKind::Array => {
+                if pool_ref.index() < vm.global_array_pool_len {
+                    Ok(())
+                } else if vm.is_executing_top_level() {
+                    vm.global_array_pool_len = pool_ref.index() + 1;
+                    Ok(())
+                } else {
+                    Err(TbxError::ArrayFrameEscape)
+                }
             }
-        }
-        Cell::Str(pool_idx) => {
-            if *pool_idx < vm.global_string_pool_len {
-                Ok(())
-            } else if vm.is_executing_top_level() {
-                vm.global_string_pool_len = *pool_idx + 1;
-                Ok(())
-            } else {
-                Err(TbxError::StringFrameEscape)
+            PoolKind::String => {
+                if pool_ref.index() < vm.global_string_pool_len {
+                    Ok(())
+                } else if vm.is_executing_top_level() {
+                    vm.global_string_pool_len = pool_ref.index() + 1;
+                    Ok(())
+                } else {
+                    Err(TbxError::StringFrameEscape)
+                }
             }
-        }
-        _ => Ok(()),
+        },
+        None => Ok(()),
     }
 }
 
@@ -4361,6 +4398,21 @@ mod tests {
         vm.push(Cell::DictAddr(0)).unwrap(); // addr (top)
         store_prim(&mut vm).unwrap();
         assert_eq!(vm.dictionary[0], Cell::Str(0));
+    }
+
+    #[test]
+    fn test_pool_ref_from_cell_array_and_str_only() {
+        assert_eq!(pool_ref_from_cell(&Cell::Array(3)), Some(PoolRef::Array(3)));
+        assert_eq!(pool_ref_from_cell(&Cell::Str(4)), Some(PoolRef::String(4)));
+        assert_eq!(
+            pool_ref_from_cell(&Cell::ArrayAddr {
+                pool_idx: 1,
+                elem_idx: 2,
+            }),
+            None
+        );
+        assert_eq!(pool_ref_from_cell(&Cell::DictAddr(0)), None);
+        assert_eq!(pool_ref_from_cell(&Cell::StackAddr(0)), None);
     }
 
     // --- PUTCHR tests ---
