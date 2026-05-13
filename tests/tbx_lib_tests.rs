@@ -144,8 +144,8 @@ fn test_set_runtime_str_into_array_is_string_frame_escape() {
 }
 
 /// SET &A(1), "hello" (compile-time literal) must succeed.
-/// String literals are interned into the global string pool at compile time,
-/// so they satisfy the Global lifetime requirement.
+/// String literals are stored into VM::strings as global compile-time literals
+/// at compile time, so they satisfy the Global lifetime requirement.
 /// Array indices are 1-based in TBX.
 #[test]
 fn test_set_literal_str_into_array_is_allowed() {
@@ -154,6 +154,7 @@ fn test_set_literal_str_into_array_is_allowed() {
     interp
         .exec_source(src)
         .expect("storing string literal in array should succeed");
+    assert_eq!(interp.take_output(), "hello");
 }
 
 /// Same as above but inside a compiled word to verify frame-local arrays also
@@ -166,6 +167,7 @@ fn test_set_literal_str_into_array_inside_def_is_allowed() {
     interp
         .exec_source(src)
         .expect("storing string literal in array inside DEF should succeed");
+    assert_eq!(interp.take_output(), "inside");
 }
 
 /// TO_ARRAY(STR("a"), STR("b")) must fail with InvalidArrayElement.
