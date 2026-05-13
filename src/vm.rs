@@ -110,12 +110,6 @@ pub struct VM {
     pub headers: Vec<WordEntry>,
     /// Flat code/data storage; `pc` is an index into this array
     pub dictionary: Vec<Cell>,
-    /// Legacy string pool used by `Cell::StringDesc(idx)`: all string data packed as
-    /// length-prefixed byte sequences.  Kept for backwards-compatible reads only.
-    /// New string literals are stored in `VM::strings` and referenced via
-    /// `Cell::Str(idx)` (see issue #539 / #542 Phase 2).  Scheduled for removal
-    /// in #539 Phase 3 together with `Cell::StringDesc`.
-    pub string_pool: Vec<u8>,
     /// Data stack: operand stack for arithmetic and parameter passing
     pub data_stack: Vec<Cell>,
     /// Return stack: saves (pc, bp) pairs on word calls
@@ -257,7 +251,6 @@ impl VM {
         Self {
             headers: Vec::new(),
             dictionary: Vec::new(),
-            string_pool: Vec::new(),
             data_stack: Vec::new(),
             return_stack: Vec::new(),
             pc: 0,
@@ -455,22 +448,6 @@ impl VM {
             Cell::Bool(b) => Ok(b),
             other => Err(TbxError::TypeError {
                 expected: "Bool",
-                got: other.type_name(),
-            }),
-        }
-    }
-
-    /// Pop a `StringDesc` value from the data stack, returning its pool index.
-    ///
-    /// # Errors
-    ///
-    /// Returns `Err(TbxError::StackUnderflow)` if the stack is empty.
-    /// Returns `Err(TbxError::TypeError)` if the top value is not `Cell::StringDesc`.
-    pub fn pop_string_desc(&mut self) -> Result<usize, TbxError> {
-        match self.pop()? {
-            Cell::StringDesc(idx) => Ok(idx),
-            other => Err(TbxError::TypeError {
-                expected: "StringDesc",
                 got: other.type_name(),
             }),
         }
@@ -1051,60 +1028,6 @@ impl VM {
         Ok(())
     }
 
-    /// Resolve a StringDesc index to the string stored in the string pool.
-    ///
-    /// Returns `Err(TbxError::TypeError)` if the index is out of bounds or
-    /// the stored data is not valid UTF-8.
-    pub fn resolve_string(&self, idx: usize) -> Result<String, TbxError> {
-        if idx + 2 > self.string_pool.len() {
-            return Err(TbxError::IndexOutOfBounds {
-                index: idx,
-                size: self.string_pool.len(),
-            });
-        }
-        let len = u16::from_le_bytes([self.string_pool[idx], self.string_pool[idx + 1]]) as usize;
-        let start = idx + 2;
-        let end = start + len;
-        if end > self.string_pool.len() {
-            return Err(TbxError::IndexOutOfBounds {
-                index: end,
-                size: self.string_pool.len(),
-            });
-        }
-        String::from_utf8(self.string_pool[start..end].to_vec()).map_err(|_| TbxError::TypeError {
-            expected: "valid UTF-8",
-            got: "invalid bytes",
-        })
-    }
-
-    /// Intern a string into the legacy `string_pool` using the length-prefix
-    /// format and return the index of its length byte.
-    ///
-    /// Appends the string as: two bytes (little-endian `u16`) for the UTF-8
-    /// byte length, followed by the raw bytes. Returns the index of the first
-    /// length byte in `string_pool`.
-    ///
-    /// **Status:** legacy.  New string values flow through `VM::strings` /
-    /// `Cell::Str` (issue #539 / #542 Phase 2).  This function is retained
-    /// only to support existing tests and compatibility paths until
-    /// `Cell::StringDesc` is removed in Phase 3.
-    ///
-    /// # Errors
-    ///
-    /// Returns `Err(TbxError::StringTooLong)` if `s` is longer than 65535
-    /// bytes, since the length prefix is a `u16` (max value 65535).
-    /// The parser must enforce this limit before calling this function.
-    pub fn intern_string(&mut self, s: &str) -> Result<usize, TbxError> {
-        let bytes = s.as_bytes();
-        if bytes.len() > u16::MAX as usize {
-            return Err(TbxError::StringTooLong { len: bytes.len() });
-        }
-        let idx = self.string_pool.len();
-        self.string_pool
-            .extend_from_slice(&(bytes.len() as u16).to_le_bytes());
-        self.string_pool.extend_from_slice(bytes);
-        Ok(idx)
-    }
     /// Roll back a partially-compiled word definition on error.
     ///
     /// Restores `dp`, `headers`, and `latest` to the state captured at DEF time.
@@ -1163,7 +1086,6 @@ impl std::fmt::Debug for VM {
         f.debug_struct("VM")
             .field("headers", &self.headers)
             .field("dictionary", &self.dictionary)
-            .field("string_pool", &self.string_pool)
             .field("data_stack", &self.data_stack)
             .field("return_stack", &self.return_stack)
             .field("pc", &self.pc)
@@ -1327,90 +1249,6 @@ mod tests {
         assert_eq!(vm.hdr_lib, 2);
         assert_eq!(vm.dp_user, 30);
         assert_eq!(vm.hdr_user, 3);
-    }
-
-    #[test]
-    fn test_intern_string_basic() {
-        let mut vm = VM::new();
-        let idx = vm.intern_string("hello").unwrap();
-        assert_eq!(idx, 0);
-        // length prefix: u16 little-endian, so [5, 0]
-        assert_eq!(
-            u16::from_le_bytes([vm.string_pool[0], vm.string_pool[1]]),
-            5
-        );
-        assert_eq!(&vm.string_pool[2..7], b"hello");
-    }
-
-    #[test]
-    fn test_intern_string_multiple() {
-        let mut vm = VM::new();
-        let idx1 = vm.intern_string("hi").unwrap();
-        let idx2 = vm.intern_string("world").unwrap();
-        // "hi" occupies bytes 0..=3 (2 length bytes + 2 data bytes)
-        assert_eq!(idx1, 0);
-        assert_eq!(idx2, 4); // 2 (len) + 2 (data) = 4
-        assert_eq!(
-            u16::from_le_bytes([vm.string_pool[idx1], vm.string_pool[idx1 + 1]]),
-            2
-        );
-        assert_eq!(&vm.string_pool[idx1 + 2..idx1 + 4], b"hi");
-        assert_eq!(
-            u16::from_le_bytes([vm.string_pool[idx2], vm.string_pool[idx2 + 1]]),
-            5
-        );
-        assert_eq!(&vm.string_pool[idx2 + 2..idx2 + 7], b"world");
-    }
-
-    #[test]
-    fn test_intern_string_empty() {
-        let mut vm = VM::new();
-        let idx = vm.intern_string("").unwrap();
-        assert_eq!(idx, 0);
-        // zero-length string: 2 length bytes (both 0) + 0 data bytes
-        assert_eq!(
-            u16::from_le_bytes([vm.string_pool[0], vm.string_pool[1]]),
-            0
-        );
-        assert_eq!(vm.string_pool.len(), 2);
-    }
-
-    #[test]
-    fn test_intern_string_too_long() {
-        let mut vm = VM::new();
-        let long_str = "x".repeat(65536);
-        let result = vm.intern_string(&long_str);
-        assert!(matches!(
-            result,
-            Err(crate::error::TbxError::StringTooLong { len: 65536 })
-        ));
-    }
-
-    #[test]
-    fn test_intern_string_max_length() {
-        let mut vm = VM::new();
-        let max_str = "x".repeat(65535);
-        let result = vm.intern_string(&max_str);
-        assert!(result.is_ok());
-        // length prefix: u16 little-endian 65535 = [0xFF, 0xFF]
-        assert_eq!(
-            u16::from_le_bytes([vm.string_pool[0], vm.string_pool[1]]),
-            65535
-        );
-        assert_eq!(vm.string_pool.len(), 65537); // 2 length bytes + 65535 data bytes
-        assert_eq!(&vm.string_pool[2..], max_str.as_bytes());
-    }
-
-    #[test]
-    fn test_intern_string_multibyte_utf8() {
-        let mut vm = VM::new();
-        // "あ" is 3 bytes in UTF-8; the length prefix must record byte length, not char count
-        let idx = vm.intern_string("あ").unwrap();
-        assert_eq!(
-            u16::from_le_bytes([vm.string_pool[idx], vm.string_pool[idx + 1]]),
-            3
-        );
-        assert_eq!(&vm.string_pool[idx + 2..idx + 5], "あ".as_bytes());
     }
 
     #[test]
@@ -2173,34 +2011,6 @@ mod tests {
         let mut vm = VM::new();
         assert!(matches!(
             vm.pop_bool(),
-            Err(crate::error::TbxError::StackUnderflow)
-        ));
-    }
-
-    // --- pop_string_desc tests ---
-
-    #[test]
-    fn test_pop_string_desc_ok() {
-        let mut vm = VM::new();
-        vm.push(Cell::StringDesc(7)).unwrap();
-        assert_eq!(vm.pop_string_desc(), Ok(7));
-    }
-
-    #[test]
-    fn test_pop_string_desc_type_error() {
-        let mut vm = VM::new();
-        vm.push(Cell::Int(0)).unwrap();
-        assert!(matches!(
-            vm.pop_string_desc(),
-            Err(crate::error::TbxError::TypeError { .. })
-        ));
-    }
-
-    #[test]
-    fn test_pop_string_desc_underflow() {
-        let mut vm = VM::new();
-        assert!(matches!(
-            vm.pop_string_desc(),
             Err(crate::error::TbxError::StackUnderflow)
         ));
     }
@@ -3224,7 +3034,7 @@ mod tests {
     }
 
     #[test]
-    fn test_string_pool_len_truncated_when_not_returned() {
+    fn test_runtime_strings_len_truncated_when_not_returned() {
         // After a word that creates a local string but returns a non-string value,
         // vm.strings should be truncated back to its length before the call.
         //
@@ -3252,13 +3062,11 @@ mod tests {
     }
 
     /// Phase 2 of issue #539: a top-level string literal must be stored in
-    /// `vm.strings` (as a `Cell::Str` reference), not in the legacy
-    /// `string_pool`.  See issue #542.
+    /// `vm.strings` as a `Cell::Str` reference. See issue #542.
     #[test]
-    fn test_string_literal_uses_strings_pool_not_string_pool() {
+    fn test_string_literal_uses_strings_pool() {
         let mut interp = crate::interpreter::Interpreter::new();
         let strings_before = interp.vm().strings.len();
-        let legacy_pool_before = interp.vm().string_pool.len();
 
         interp
             .exec_source("PUTSTR \"phase2-test\"\n")
@@ -3273,12 +3081,6 @@ mod tests {
                 .skip(strings_before)
                 .any(|s| s == "phase2-test"),
             "string literal must be stored in vm.strings"
-        );
-        // The legacy length-prefixed pool must NOT have grown.
-        assert_eq!(
-            interp.vm().string_pool.len(),
-            legacy_pool_before,
-            "legacy string_pool must not grow for new string literals"
         );
     }
 
