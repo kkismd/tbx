@@ -150,8 +150,7 @@ impl<'a> ExprCompiler<'a> {
                     // String literals are compile-time constants embedded in
                     // the compiled code.  Store them in `VM::strings` and
                     // immediately include them in the global string region
-                    // so they behave like the legacy `StringDesc` literals
-                    // did: they survive word calls and may be stored into
+                    // so they survive word calls and may be stored into
                     // global variables from compiled words (see PR #543
                     // review feedback).  Without this promotion, a literal
                     // compiled inside a `DEF ... END` body would have
@@ -1037,20 +1036,17 @@ mod tests {
         );
     }
 
-    /// Phase 2 of issue #539: ensure that a string literal does not produce
-    /// a `Cell::StringDesc` in the compiled output.
+    /// Phase 2 of issue #539: ensure that string literal compilation emits
+    /// a `Cell::Str` handle in the compiled output.
     #[test]
-    fn test_string_literal_does_not_emit_string_desc() {
+    fn test_string_literal_emits_str() {
         let mut vm = make_vm();
         let tokens = lex(r#""world""#);
         let result = ExprCompiler::new(&mut vm).compile_expr(&tokens).unwrap();
-        for cell in &result {
-            assert!(
-                !matches!(cell, Cell::StringDesc(_)),
-                "string literal compilation must not emit Cell::StringDesc, got {:?}",
-                cell
-            );
-        }
+        assert!(
+            result.iter().any(|cell| matches!(cell, Cell::Str(_))),
+            "string literal compilation must emit Cell::Str, got {result:?}"
+        );
     }
 
     // ------------------------------------------------------------------

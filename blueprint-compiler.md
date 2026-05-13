@@ -185,8 +185,8 @@ pub enum CompileEntry {
 | `JUMP_TRUE`  | `( -- xt )` | `BranchIfTrue`（BIT）のXt定数をデータスタックに積む |
 | `JUMP_ALWAYS` | `( -- xt )` | `Goto` のXt定数をデータスタックに積む |
 | `LOOKUP`     | `( str -- xt )` | 文字列で指定した名前のワードを辞書から検索し、その Xt をデータスタックに積む。`APPEND LOOKUP("SET")` で任意のワードの Xt を辞書に書き込むために使用する |
-| `CS_OPEN_TAG` | `( str -- )` | データスタックから文字列値（`Cell::Str` / 互換のため `Cell::StringDesc` も受け付ける）をポップし、内容を解決して `CompileEntry::Tag(string)` を compile_stack に積む。制御構造の開始を記録するために使用する |
-| `CS_CLOSE_TAG` | `( str -- )` | データスタックから文字列値（`Cell::Str` / 互換のため `Cell::StringDesc` も受け付ける）をポップし、compile_stack のトップが一致する `Tag` であることを検証してポップする。不一致なら `MismatchedTag`、タグがなければ `NoOpenTag` を返す |
+| `CS_OPEN_TAG` | `( str -- )` | データスタックから文字列値（`Cell::Str`）をポップし、内容を解決して `CompileEntry::Tag(string)` を compile_stack に積む。制御構造の開始を記録するために使用する |
+| `CS_CLOSE_TAG` | `( str -- )` | データスタックから文字列値（`Cell::Str`）をポップし、compile_stack のトップが一致する `Tag` であることを検証してポップする。不一致なら `MismatchedTag`、タグがなければ `NoOpenTag` を返す |
 
 `CS_SWAP` / `CS_DROP` / `CS_DUP` / `CS_OVER` / `CS_ROT` は `CompileEntry` の種別（`Cell` / `Tag`）を問わず操作する。タグの整合性チェックは `CS_OPEN_TAG` / `CS_CLOSE_TAG` を通じて tbx 側のコードが責任を持つ。
 
