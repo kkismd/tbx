@@ -41,7 +41,7 @@ Three logical layers share one flat `Vec<Cell>`:
 - **Library dictionary** — standard library loaded via `USE`; boundary at `DP_LIB`
 - **User dictionary** — user-defined words; boundary at `DP_USER`, with `DP` pointing to the next free cell
 
-Headers use a linked-list (`prev: Option<usize>`) for shadowing and `FORGET`-based rollback. The string pool is append-only; `FORGET` rolls back `headers` and `dictionary` but never shrinks the string pool.
+Headers use a linked-list (`prev: Option<usize>`) for shadowing and lookup order. Within a session, `headers`, `dictionary`, and the string pool grow monotonically; the only rollback path is the internal one that undoes a partially-compiled definition when `DEF ... END` fails. A full reset is achieved by re-creating the VM or by recompacting from source.
 
 ### Compilation
 

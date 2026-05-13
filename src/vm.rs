@@ -131,7 +131,7 @@ pub struct VM {
     pub dp_user: usize,
     /// Boundary index in `headers` after all system primitives are registered.
     /// Mirrors `dp_sys` for the header layer. Updated alongside `dp_sys`.
-    /// Used by FORGET to determine the lower bound for header rollback.
+    /// Marks the lower bound of the system/library/user header partitioning.
     pub hdr_sys: usize,
     /// Boundary index in `headers` after the standard library is loaded.
     /// Mirrors `dp_lib` for the header layer. Updated alongside `dp_lib`.
