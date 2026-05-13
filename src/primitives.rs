@@ -3874,7 +3874,7 @@ mod tests {
 
     #[test]
     fn test_str_concat_type_error_on_string_desc() {
-        // After Phase 3, STR_CONCAT must reject Cell::StringDesc with a TypeError.
+        // After #546/#547, STR_CONCAT must reject Cell::StringDesc with a TypeError.
         let mut vm = VM::new();
         vm.strings.push("hello ".to_string());
         vm.push(Cell::Str(0)).unwrap();
@@ -3919,7 +3919,7 @@ mod tests {
 
     #[test]
     fn test_str_len_type_error_on_string_desc() {
-        // After Phase 3, STR_LEN must reject Cell::StringDesc with a TypeError.
+        // After #546/#547, STR_LEN must reject Cell::StringDesc with a TypeError.
         let mut vm = VM::new();
         vm.push(Cell::StringDesc(0)).unwrap();
         assert!(matches!(
@@ -3975,7 +3975,7 @@ mod tests {
 
     #[test]
     fn test_str_eq_type_error_on_string_desc() {
-        // After Phase 3, STR_EQ must reject Cell::StringDesc with a TypeError.
+        // After #546/#547, STR_EQ must reject Cell::StringDesc with a TypeError.
         let mut vm = VM::new();
         vm.strings.push("match".to_string());
         vm.push(Cell::Str(0)).unwrap();
