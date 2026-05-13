@@ -110,7 +110,11 @@ pub struct VM {
     pub headers: Vec<WordEntry>,
     /// Flat code/data storage; `pc` is an index into this array
     pub dictionary: Vec<Cell>,
-    /// String pool: all string data packed as length-prefixed byte sequences
+    /// Legacy string pool used by `Cell::StringDesc(idx)`: all string data packed as
+    /// length-prefixed byte sequences.  Kept for backwards-compatible reads only.
+    /// New string literals are stored in `VM::strings` and referenced via
+    /// `Cell::Str(idx)` (see issue #539 / #542 Phase 2).  Scheduled for removal
+    /// in #539 Phase 3 together with `Cell::StringDesc`.
     pub string_pool: Vec<u8>,
     /// Data stack: operand stack for arithmetic and parameter passing
     pub data_stack: Vec<Cell>,
@@ -467,6 +471,41 @@ impl VM {
             Cell::StringDesc(idx) => Ok(idx),
             other => Err(TbxError::TypeError {
                 expected: "StringDesc",
+                got: other.type_name(),
+            }),
+        }
+    }
+
+    /// Pop a string value from the data stack and return its resolved contents.
+    ///
+    /// Accepts both `Cell::Str` (runtime string pool) and `Cell::StringDesc`
+    /// (legacy length-prefixed pool).  This is the migration path used by
+    /// primitives that previously called `pop_string_desc` + `resolve_string`,
+    /// allowing them to receive string literals now compiled as `Cell::Str`
+    /// (issue #542 / #539 Phase 2) while still tolerating legacy
+    /// `StringDesc` values.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Err(TbxError::StackUnderflow)` if the stack is empty.
+    /// Returns `Err(TbxError::TypeError)` if the top value is neither
+    /// `Cell::Str` nor `Cell::StringDesc`.
+    /// Returns `Err(TbxError::IndexOutOfBounds)` if a `Cell::Str` index is
+    /// out of range for `VM::strings`, or the corresponding error from
+    /// `resolve_string` for a malformed `StringDesc`.
+    pub fn pop_string_value(&mut self) -> Result<String, TbxError> {
+        match self.pop()? {
+            Cell::Str(idx) => self
+                .strings
+                .get(idx)
+                .cloned()
+                .ok_or(TbxError::IndexOutOfBounds {
+                    index: idx,
+                    size: self.strings.len(),
+                }),
+            Cell::StringDesc(idx) => self.resolve_string(idx),
+            other => Err(TbxError::TypeError {
+                expected: "Str or StringDesc",
                 got: other.type_name(),
             }),
         }
@@ -1047,11 +1086,17 @@ impl VM {
         })
     }
 
-    /// Intern a string into the string pool using the length-prefix format.
+    /// Intern a string into the legacy `string_pool` using the length-prefix
+    /// format and return the index of its length byte.
     ///
     /// Appends the string as: two bytes (little-endian `u16`) for the UTF-8
     /// byte length, followed by the raw bytes. Returns the index of the first
     /// length byte in `string_pool`.
+    ///
+    /// **Status:** legacy.  New string values flow through `VM::strings` /
+    /// `Cell::Str` (issue #539 / #542 Phase 2).  This function is retained
+    /// only to support existing tests and compatibility paths until
+    /// `Cell::StringDesc` is removed in Phase 3.
     ///
     /// # Errors
     ///
@@ -2898,6 +2943,111 @@ mod tests {
     }
 
     #[test]
+    fn test_str_literal_inside_word_can_be_assigned_to_global_var() {
+        // Regression test for the review feedback on PR #543.
+        //
+        // A string literal that appears inside a DEF ... END body is a
+        // compile-time constant: `compile_expr` pushes it onto
+        // `vm.strings` and immediately advances `global_string_pool_len`
+        // so the literal lives in the global string region.  This makes
+        // the literal behave like the legacy `StringDesc` literals did,
+        // and lets compiled words assign string literals into global
+        // variables via `SET &G, "..."` without triggering
+        // `StringFrameEscape`.
+        //
+        // Run-time generated strings (e.g. via `STR_CONCAT`) remain
+        // frame-local and still need to escape the frame via `RETURN`
+        // before they can be stored into a global; see
+        // `test_str_frame_escape_via_store_to_dict_is_error`.
+        let result = run_source(
+            "VAR G\n\
+             DEF SETG()\n  SET &G, \"inside\"\nEND\n\
+             SETG\n\
+             PUTSTR G",
+        );
+        assert!(result.is_ok(), "expected success, got: {result:?}");
+        assert_eq!(result.unwrap().trim(), "inside");
+    }
+
+    #[test]
+    fn test_str_literal_inside_word_lives_in_global_region() {
+        // Companion to `test_str_literal_inside_word_can_be_assigned_to_global_var`:
+        // exercise the VM API directly to confirm that the literal is
+        // stored in the global region of the string pool (i.e. its index
+        // satisfies `idx < global_string_pool_len`) and that the slot of
+        // the global VAR ends up referring to that string.
+        let mut interp = crate::interpreter::Interpreter::new();
+        interp
+            .exec_source(
+                "VAR G\n\
+                 DEF SETG()\n  SET &G, \"inside\"\nEND\n\
+                 SETG\n\
+                 PUTSTR G\n",
+            )
+            .expect("exec_source failed");
+
+        assert_eq!(interp.take_output(), "inside");
+
+        let xt = interp
+            .vm()
+            .lookup("G")
+            .expect("global variable G not found");
+        let entry = &interp.vm().headers[xt.index()];
+        let cell = match entry.kind {
+            EntryKind::Variable(slot) => interp.vm().dict_read(slot).expect("dict_read failed"),
+            ref other => panic!("expected Variable kind, got {other:?}"),
+        };
+
+        match cell {
+            Cell::Str(idx) => {
+                assert_eq!(
+                    interp.vm().strings.get(idx).map(String::as_str),
+                    Some("inside")
+                );
+                assert!(
+                    idx < interp.vm().global_string_pool_len,
+                    "compiled string literal stored in global variable must be in the global string region"
+                );
+            }
+            other => panic!("expected Cell::Str, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_str_literal_assigned_to_global_var_at_top_level_succeeds() {
+        // Boundary check: the same SET &G, "..." pattern executed at the
+        // top level (not inside a DEF body) also succeeds, since the
+        // literal lives in the global string region from the moment it
+        // is compiled.
+        let result = run_source(
+            "VAR G\n\
+             SET &G, \"outside\"\n\
+             PUTSTR G",
+        );
+        assert!(result.is_ok(), "expected success, got: {result:?}");
+        assert_eq!(result.unwrap().trim(), "outside");
+    }
+
+    #[test]
+    fn test_str_literal_inside_word_via_local_then_return_succeeds() {
+        // Historical workaround for the pre-fix behaviour: assign the
+        // literal to a local VAR first and RETURN it.  This is no longer
+        // the only way to get a string literal out of a `DEF ... END`
+        // body (see `test_str_literal_inside_word_can_be_assigned_to_global_var`),
+        // but it still works because ownership transfer on RETURN
+        // promotes the value out of the frame.  Kept as a regression
+        // test for the ownership-transfer path itself.
+        let result = run_source(
+            "VAR G\n\
+             DEF MAKE_STR()\n  VAR S\n  LET S = \"inside\"\n  RETURN S\nEND\n\
+             SET &G, MAKE_STR()\n\
+             PUTSTR G",
+        );
+        assert!(result.is_ok(), "expected success, got: {result:?}");
+        assert_eq!(result.unwrap().trim(), "inside");
+    }
+
+    #[test]
     fn test_global_array_stored_via_store_prim() {
         // A global array (pool_idx < global_array_pool_len) can be stored into a
         // dictionary slot by store_prim without triggering ArrayFrameEscape.
@@ -3086,20 +3236,92 @@ mod tests {
     fn test_string_pool_len_truncated_when_not_returned() {
         // After a word that creates a local string but returns a non-string value,
         // vm.strings should be truncated back to its length before the call.
+        //
+        // Compile time pushes the string literals "foo" and "bar" into
+        // `vm.strings` (since #542 / #539 Phase 2), so the pool length before
+        // the user word runs is non-zero.  The runtime concatenation result
+        // produced inside `STR_THEN_INT` must still be discarded on EXIT,
+        // so the length after `PUTDEC` finishes must equal the length
+        // just before the user word was called.
         let mut interp = crate::interpreter::Interpreter::new();
         interp
             .exec_source(
-                "DEF STR_THEN_INT()\n  VAR S\n  LET S = STR_CONCAT(\"foo\", \"bar\")\n  RETURN 1\nEND\n\
-                 PUTDEC STR_THEN_INT()",
+                "DEF STR_THEN_INT()\n  VAR S\n  LET S = STR_CONCAT(\"foo\", \"bar\")\n  RETURN 1\nEND\n",
             )
+            .expect("compiling DEF failed");
+        let len_before_call = interp.vm().strings.len();
+        interp
+            .exec_source("PUTDEC STR_THEN_INT()")
             .expect("exec_source failed");
-        // The word created one string but did not return it; the pool must be
-        // back to the pre-call length (0 frame-local strings remain).
         assert_eq!(
             interp.vm().strings.len(),
-            0,
-            "string pool should be empty after word that discards its local string"
+            len_before_call,
+            "frame-local strings created inside the word must be truncated on EXIT"
         );
+    }
+
+    /// Phase 2 of issue #539: a top-level string literal must be stored in
+    /// `vm.strings` (as a `Cell::Str` reference), not in the legacy
+    /// `string_pool`.  See issue #542.
+    #[test]
+    fn test_string_literal_uses_strings_pool_not_string_pool() {
+        let mut interp = crate::interpreter::Interpreter::new();
+        let strings_before = interp.vm().strings.len();
+        let legacy_pool_before = interp.vm().string_pool.len();
+
+        interp
+            .exec_source("PUTSTR \"phase2-test\"\n")
+            .expect("exec_source failed");
+
+        // The literal must have been pushed into `vm.strings`.
+        assert!(
+            interp
+                .vm()
+                .strings
+                .iter()
+                .skip(strings_before)
+                .any(|s| s == "phase2-test"),
+            "string literal must be stored in vm.strings"
+        );
+        // The legacy length-prefixed pool must NOT have grown.
+        assert_eq!(
+            interp.vm().string_pool.len(),
+            legacy_pool_before,
+            "legacy string_pool must not grow for new string literals"
+        );
+    }
+
+    /// Phase 2 of issue #539: a string literal stored in a `VARIABLE` slot
+    /// must be represented as `Cell::Str` (not `Cell::StringDesc`).  This
+    /// confirms that the new compile path flows all the way through LET.
+    /// See issue #542.
+    #[test]
+    fn test_string_literal_stored_in_variable_is_str() {
+        let mut interp = crate::interpreter::Interpreter::new();
+        interp
+            .exec_source("VAR GREETING\nSET &GREETING, \"hi\"\n")
+            .expect("exec_source failed");
+
+        // Locate the GREETING header and read its variable slot.
+        let xt = interp.vm().lookup("GREETING").expect("GREETING not found");
+        let entry = &interp.vm().headers[xt.0];
+        let cell = match entry.kind {
+            crate::dict::EntryKind::Variable(slot) => interp.vm().dictionary[slot].clone(),
+            ref other => panic!("expected Variable kind, got {:?}", other),
+        };
+        match cell {
+            Cell::Str(idx) => {
+                assert_eq!(
+                    interp.vm().strings.get(idx).map(String::as_str),
+                    Some("hi"),
+                    "stored string must resolve to its literal value"
+                );
+            }
+            other => panic!(
+                "string literal stored in VARIABLE should be Cell::Str, got {:?}",
+                other
+            ),
+        }
     }
 
     #[test]

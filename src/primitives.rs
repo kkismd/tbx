@@ -853,9 +853,11 @@ pub fn assert_fail_prim(_vm: &mut VM) -> Result<(), TbxError> {
 }
 
 /// ASSERT_FAIL_MSG — pop a string message from the stack and raise AssertionFailedWithMessage.
+///
+/// Accepts both `Cell::Str` (the format new string literals now use, see
+/// issue #542) and the legacy `Cell::StringDesc`.
 pub fn assert_fail_msg_prim(vm: &mut VM) -> Result<(), TbxError> {
-    let idx = vm.pop_string_desc()?;
-    let message = vm.resolve_string(idx)?;
+    let message = vm.pop_string_value()?;
     Err(TbxError::AssertionFailedWithMessage { message })
 }
 
@@ -1909,40 +1911,42 @@ fn cs_rot_prim(vm: &mut VM) -> Result<(), TbxError> {
     Ok(())
 }
 
-/// CS_OPEN_TAG — pop a StringDesc from the data stack and push a `CompileEntry::Tag`
+/// CS_OPEN_TAG — pop a string value from the data stack and push a `CompileEntry::Tag`
 /// onto the compile stack.
 ///
 /// Used by IMMEDIATE words (e.g. WHILE, IF) to mark the start of a control-structure
 /// scope.  The string (e.g. `"WHILE"` or `"IF"`) is matched by a later CS_CLOSE_TAG
 /// call to validate correct nesting.
 /// Must be called in compile mode.
+/// Accepts both `Cell::Str` (the format new string literals now use, see
+/// issue #542) and the legacy `Cell::StringDesc`.
 fn cs_open_tag_prim(vm: &mut VM) -> Result<(), TbxError> {
     if !vm.is_compiling {
         return Err(TbxError::InvalidExpression {
             reason: "CS_OPEN_TAG outside compile mode",
         });
     }
-    let idx = vm.pop_string_desc()?;
-    let tag = vm.resolve_string(idx)?;
+    let tag = vm.pop_string_value()?;
     vm.compile_stack.push(CompileEntry::Tag(tag));
     Ok(())
 }
 
-/// CS_CLOSE_TAG — pop a StringDesc from the data stack, then validate and remove the
+/// CS_CLOSE_TAG — pop a string value from the data stack, then validate and remove the
 /// matching `CompileEntry::Tag` from the top of the compile stack.
 ///
 /// Returns `NoOpenTag` if the compile stack is empty or its top entry is a `Cell`
 /// (not a `Tag`).  Returns `MismatchedTag` if the top is a `Tag` but does not match
 /// the expected string.
 /// Must be called in compile mode.
+/// Accepts both `Cell::Str` (the format new string literals now use, see
+/// issue #542) and the legacy `Cell::StringDesc`.
 fn cs_close_tag_prim(vm: &mut VM) -> Result<(), TbxError> {
     if !vm.is_compiling {
         return Err(TbxError::InvalidExpression {
             reason: "CS_CLOSE_TAG outside compile mode",
         });
     }
-    let idx = vm.pop_string_desc()?;
-    let expected = vm.resolve_string(idx)?;
+    let expected = vm.pop_string_value()?;
     match vm.compile_stack.pop() {
         None => Err(TbxError::NoOpenTag { expected }),
         Some(CompileEntry::Tag(found)) if found == expected => Ok(()),
@@ -2238,9 +2242,11 @@ fn skip_eq_prim(vm: &mut VM) -> Result<(), TbxError> {
 }
 
 /// LOOKUP — pop a string from the stack, look up the named word, and push its Xt.
+///
+/// Accepts both `Cell::Str` (the format new string literals now use, see
+/// issue #542) and the legacy `Cell::StringDesc`.
 fn lookup_prim(vm: &mut VM) -> Result<(), TbxError> {
-    let idx = vm.pop_string_desc()?;
-    let name = vm.resolve_string(idx)?;
+    let name = vm.pop_string_value()?;
     let xt = vm.lookup(&name).ok_or(TbxError::UndefinedSymbol { name })?;
     vm.push(Cell::Xt(xt))
 }
