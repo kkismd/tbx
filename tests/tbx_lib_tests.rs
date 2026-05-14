@@ -124,23 +124,16 @@ fn test_array_index_zero_is_out_of_bounds() {
 // Array element type restriction tests (issue #487)
 // ---------------------------------------------------------------------------
 
-/// SET &A(i), STR("...") must fail with StringFrameEscape because STR()
-/// produces a frame-local runtime string that must not escape to an array.
-/// (Global / compile-time literal strings are allowed; see
-/// test_set_literal_str_into_array_is_allowed.)
+/// SET &A(i), "..." must now succeed because Cell::Str is Rc<str>-backed.
+/// (Phase 5B: string lifetime is managed by reference counting.)
 #[test]
-fn test_set_runtime_str_into_array_is_string_frame_escape() {
+fn test_set_runtime_str_into_array_is_allowed() {
     let mut interp = Interpreter::new();
-    // STR("hello") allocates a frame-local string; storing it in the array
-    // must be rejected.
-    let src = "DEF T()\n  VAR A\n  LET A = ARRAY(3)\n  SET &A(1), STR(\"hello\")\nEND\nT()\n";
-    let err = interp
+    // String literals are now Rc<str>-backed handles that can be stored in any array.
+    let src = "VAR A\nSET &A, ARRAY(3)\nSET &A(1), \"hello\"\n";
+    interp
         .exec_source(src)
-        .expect_err("storing frame-local Str in array should fail");
-    assert!(
-        err.to_string().contains("string cannot escape"),
-        "expected 'string cannot escape', got: {err}"
-    );
+        .expect("storing Rc<str>-backed Cell::Str in array should succeed");
 }
 
 /// SET &A(1), "hello" (compile-time literal) must succeed.
@@ -170,18 +163,15 @@ fn test_set_literal_str_into_array_inside_def_is_allowed() {
     assert_eq!(interp.take_output(), "inside");
 }
 
-/// TO_ARRAY(STR("a"), STR("b")) must fail with InvalidArrayElement.
+/// TO_ARRAY(STR("a"), STR("b")) must now succeed because Cell::Str is Rc<str>-backed.
+/// (Phase 5B: Str is no longer excluded from array elements.)
 #[test]
-fn test_to_array_with_str_elements_is_error() {
+fn test_to_array_with_str_elements_is_allowed() {
     let mut interp = Interpreter::new();
     let src = "TO_ARRAY(STR(\"a\"), STR(\"b\"))\n";
-    let err = interp
+    interp
         .exec_source(src)
-        .expect_err("TO_ARRAY with Str elements should fail");
-    assert!(
-        err.to_string().contains("invalid array element type"),
-        "expected 'invalid array element type', got: {err}"
-    );
+        .expect("TO_ARRAY with Rc<str>-backed Str elements should succeed");
 }
 
 /// Storing a nested array (Cell::Array) as an element must fail.
@@ -226,20 +216,17 @@ fn test_set_caller_owned_str_param_into_frame_local_array_is_allowed() {
     assert_eq!(interp.take_output(), "arg");
 }
 
-/// A frame-local runtime string (produced by STR()) must still be rejected
-/// even when the target array is frame-local.  This prevents dangling
-/// references when the inner call frame returns.
+/// A string literal can now be stored in a frame-local array.
+/// Cell::Str is Rc<str>-backed; reference counting replaces pool-based lifetimes.
+/// (Phase 5B)
 #[test]
-fn test_set_frame_local_runtime_str_into_frame_local_array_is_string_frame_escape() {
+fn test_set_runtime_str_into_frame_local_array_is_allowed() {
     let mut interp = Interpreter::new();
-    let src = "DEF T()\n  VAR A\n  SET &A, ARRAY(1)\n  SET &A(1), STR(\"hello\")\nEND\nT()\n";
-    let err = interp
+    let src = "DEF T\n  VAR A\n  SET &A, ARRAY(1)\n  SET &A(1), \"hello\"\n  PUTSTR A(1)\nEND\nT\n";
+    interp
         .exec_source(src)
-        .expect_err("storing frame-local runtime Str in array should fail");
-    assert!(
-        err.to_string().contains("string cannot escape"),
-        "expected 'string cannot escape', got: {err}"
-    );
+        .expect("storing Rc<str>-backed Str in frame-local array should succeed");
+    assert_eq!(interp.take_output(), "hello");
 }
 
 // ---------------------------------------------------------------------------
