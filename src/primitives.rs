@@ -297,11 +297,26 @@ fn clone_string_ref(vm: &mut VM, str_idx: usize) -> Result<usize, TbxError> {
 }
 
 /// Clone the string at `str_idx`, append the clone to `vm.strings`, and
-/// include the clone in the global string region by advancing
-/// `global_string_pool_len`.
+/// extend the global string region so that the clone (and every string
+/// preceding it) is treated as global.
 ///
 /// This makes the clone safe to store in any array regardless of the array's
 /// lifetime: global strings never dangle.
+///
+/// # Side effect (prefix-promotion)
+///
+/// `global_string_pool_len` is a prefix boundary: every index `< boundary` is
+/// considered global. Because the clone is appended at the tail of
+/// `vm.strings`, advancing the boundary to cover the clone also promotes
+/// every unrelated non-global string that happens to sit between the previous
+/// boundary and the clone.
+///
+/// Callers must therefore treat this as "promote the prefix up to and
+/// including the clone", not "promote only the clone". This is acceptable for
+/// Phase 5B-2 because the goal is safety: over-promotion may keep strings
+/// alive longer than strictly necessary, but never causes a dangling
+/// reference. Reducing the over-promotion is left for a later phase that
+/// reworks the underlying region representation.
 ///
 /// # Errors
 ///
@@ -7761,17 +7776,57 @@ mod tests {
 
     #[test]
     fn test_clone_string_ref_to_global_never_moves_boundary_backward() {
-        // If global_string_pool_len is already ahead, it must not shrink.
+        // If the existing global region already covers the slot where the
+        // clone will land, the boundary must not shrink.
+        //
+        // Invariant: global_string_pool_len <= vm.strings.len(), so the
+        // boundary cannot legitimately exceed the current pool length.
         let mut vm = VM::new();
         vm.strings.push("a".to_string());
         vm.strings.push("b".to_string());
         vm.strings.push("c".to_string());
-        vm.global_string_pool_len = 10; // already large
+        // All three existing strings are already global, and there is room
+        // for one more global slot (the clone target).
+        vm.global_string_pool_len = vm.strings.len();
+        let len_before = vm.global_string_pool_len;
         let clone_idx = clone_string_ref_to_global(&mut vm, 0).unwrap();
         // The new clone is appended at index 3.
         assert_eq!(clone_idx, 3);
-        // global_string_pool_len must not shrink (max semantics).
-        assert_eq!(vm.global_string_pool_len, 10);
+        // The boundary advances by exactly one to include the clone; it
+        // never moves backward (max semantics).
+        assert_eq!(vm.global_string_pool_len, len_before + 1);
+        assert!(clone_idx < vm.global_string_pool_len);
+    }
+
+    #[test]
+    fn test_clone_string_ref_to_global_prefix_promotes_unrelated_strings() {
+        // Documented side effect of clone_string_ref_to_global: because
+        // `global_string_pool_len` is a prefix boundary, advancing it to
+        // cover the clone also promotes every unrelated non-global string
+        // that lies between the previous boundary and the clone.
+        //
+        // This test pins that behavior so a future regression that "fixes"
+        // the over-promotion is forced to update the documented contract
+        // (and the call sites that rely on it) explicitly.
+        let mut vm = VM::new();
+        vm.strings.push("target".to_string()); // idx 0: will be cloned
+        vm.strings.push("unrelated_caller".to_string()); // idx 1: unrelated non-global
+        vm.strings.push("unrelated_local".to_string()); // idx 2: unrelated non-global
+                                                        // global_string_pool_len = 0: indices 0, 1, 2 are all non-global.
+        assert_eq!(vm.global_string_pool_len, 0);
+
+        let clone_idx = clone_string_ref_to_global(&mut vm, 0).unwrap();
+
+        // Clone is appended at index 3 and is global.
+        assert_eq!(clone_idx, 3);
+        assert!(clone_idx < vm.global_string_pool_len);
+        // Side effect: the original (idx 0) and the unrelated strings at
+        // idx 1 and 2 are now reported as global as well.
+        assert!(is_global_pool_ref(&vm, PoolRef::String(0)));
+        assert!(is_global_pool_ref(&vm, PoolRef::String(1)));
+        assert!(is_global_pool_ref(&vm, PoolRef::String(2)));
+        // The boundary covers the entire prefix up to and including the clone.
+        assert_eq!(vm.global_string_pool_len, 4);
     }
 
     #[test]
