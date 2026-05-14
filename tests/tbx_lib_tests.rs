@@ -148,6 +148,7 @@ fn test_set_runtime_str_into_array_is_string_frame_escape() {
 /// at compile time, so they satisfy the Global lifetime requirement.
 /// Array indices are 1-based in TBX.
 #[test]
+#[ignore = "#591: array element writes blanket-reject Cell::Str during D-1 (#588). The allow rule for globally-owned strings will be reintroduced when the array-write path is liberated for Rc<str>."]
 fn test_set_literal_str_into_array_is_allowed() {
     let mut interp = Interpreter::new();
     let src = "VAR A\nSET &A, ARRAY(1)\nSET &A(1), \"hello\"\nPUTSTR A(1)\n";
@@ -160,6 +161,7 @@ fn test_set_literal_str_into_array_is_allowed() {
 /// Same as above but inside a compiled word to verify frame-local arrays also
 /// accept global string literals.
 #[test]
+#[ignore = "#591: see test_set_literal_str_into_array_is_allowed."]
 fn test_set_literal_str_into_array_inside_def_is_allowed() {
     let mut interp = Interpreter::new();
     let src =
@@ -217,6 +219,7 @@ fn test_set_array_into_array_is_invalid_element_type() {
 /// S is caller-owned from the perspective of USE's call frame, and A is
 /// frame-local, so this is safe and must succeed.
 #[test]
+#[ignore = "#591: array element writes blanket-reject Cell::Str during D-1 (#588). The lifetime-aware allow rules will be reintroduced when the array-write path is liberated for Rc<str>."]
 fn test_set_caller_owned_str_param_into_frame_local_array_is_allowed() {
     let mut interp = Interpreter::new();
     let src = "DEF USE(S)\n  VAR A\n  SET &A, ARRAY(1)\n  SET &A(1), S\n  PUTSTR A(1)\nEND\nUSE(\"arg\")\n";

@@ -107,26 +107,26 @@ pub enum Cell {
     /// nested `Array` or `Str` references), so ownership transfer does not
     /// require recursive inspection of element types.
     Array(usize),
-    /// Runtime string handle — index into `VM::strings` (the runtime string pool).
+    /// Immutable reference-counted string handle (`Rc<str>`).
     ///
-    /// Created by string primitives such as `STR`, `STR_CONCAT`, etc.
-    /// The pool entry at this index holds a `String`.
+    /// Created by string primitives such as `STR`, `STR_CONCAT`, etc., and by
+    /// string literals embedded in compiled code.
     ///
-    /// Strings come in three flavours:
-    /// - **Frame-local strings** (`pool_idx >= saved_string_pool_len` of the current
-    ///   call frame) are owned by that frame.  On EXIT they are freed; on RETURN_VAL
-    ///   the returned string is moved to the frame-boundary slot via ownership
-    ///   transfer (swap + truncate) so it survives the pool cleanup.
-    /// - **Global strings** (`pool_idx < vm.global_string_pool_len`) are created
-    ///   at the top level (outside any `DEF..END`) and are never freed.  They
-    ///   may safely be stored in `VARIABLE` slots and shared across word calls.
-    /// - **Caller-owned strings** (`pool_idx < saved_string_pool_len` of the current
-    ///   call frame but not globally permanent) were created before the call; they
-    ///   can be returned without modification.
+    /// Cloning a `Cell::Str` is cheap (it only bumps the `Rc` reference count).
+    /// The lifetime of the underlying string is managed by reference counting,
+    /// so a `Cell::Str` may be freely passed around the data stack, returned
+    /// from words, and stored in dictionary slots without lifetime tracking.
     ///
-    /// Note: `Cell::Str(a) == Cell::Str(b)` uses index comparison (identity),
-    /// not content comparison.  Use the `STR_EQ` primitive for content equality.
-    Str(usize),
+    /// Equality (`PartialEq`) compares string content (see the `PartialEq` impl
+    /// below).
+    ///
+    /// Note: `VM::strings` (the legacy index-based string pool) and the
+    /// associated `saved_string_pool_len` / `global_string_pool_len` fields
+    /// are retained for the transition period.  `Cell::Str` itself no longer
+    /// indexes into them.  Full removal of the pool and pool-length fields is
+    /// tracked by follow-up issue #590, and array-write-path liberation is
+    /// tracked by #591.
+    Str(std::rc::Rc<str>),
     /// Address of an element in an array.
     ///
     /// Produced by the `&A(I)` construct where `A` holds a `Cell::Array`.
@@ -167,7 +167,7 @@ impl std::fmt::Display for Cell {
             Cell::Xt(x) => write!(f, "xt:{}", x.0),
             Cell::Bool(b) => write!(f, "{}", b),
             Cell::Array(idx) => write!(f, "<array:{}>", idx),
-            Cell::Str(idx) => write!(f, "<str:{}>", idx),
+            Cell::Str(s) => write!(f, "{}", s),
             Cell::ArrayAddr { pool_idx, elem_idx } => {
                 write!(f, "<arrayaddr:{}[{}]>", pool_idx, elem_idx)
             }
@@ -241,6 +241,23 @@ impl Cell {
         }
     }
 
+    /// Construct a `Cell::Str` from any value that can be converted into `Rc<str>`.
+    ///
+    /// Accepts `&str`, `String`, `Rc<str>`, and `Box<str>`.  Cloning the
+    /// resulting cell is cheap (`Rc` reference-count bump).
+    pub fn string<S: Into<std::rc::Rc<str>>>(s: S) -> Self {
+        Cell::Str(s.into())
+    }
+
+    /// Returns a reference to the inner `Rc<str>` if this cell is `Str`, otherwise `None`.
+    pub fn as_str(&self) -> Option<&std::rc::Rc<str>> {
+        if let Cell::Str(s) = self {
+            Some(s)
+        } else {
+            None
+        }
+    }
+
     /// Returns a static string naming the variant. Useful for error messages and debugging.
     pub fn type_name(&self) -> &'static str {
         match self {
@@ -289,6 +306,10 @@ impl PartialEq for Cell {
             (Cell::Bool(a), Cell::Bool(b)) => a == b,
             (Cell::None, Cell::None) => true,
             (Cell::Array(a), Cell::Array(b)) => a == b,
+            // Content equality: two Str cells are equal when their underlying
+            // string contents match.  (Previously this was an index comparison
+            // when `Cell::Str` was `usize`; `Rc<str>` derives `PartialEq` from
+            // the wrapped `str`, so the comparison now reflects content.)
             (Cell::Str(a), Cell::Str(b)) => a == b,
             (
                 Cell::ArrayAddr {
@@ -443,7 +464,38 @@ mod tests {
         assert_eq!(Cell::Bool(false).type_name(), "Bool");
         assert_eq!(Cell::None.type_name(), "None");
         assert_eq!(Cell::Array(0).type_name(), "Array");
-        assert_eq!(Cell::Str(0).type_name(), "Str");
+        assert_eq!(Cell::string("hello").type_name(), "Str");
+    }
+
+    #[test]
+    fn test_str_equality_by_content() {
+        // Two Str cells with identical content must be equal regardless of
+        // which Rc instance they reference.
+        assert_eq!(Cell::string("hello"), Cell::string("hello"));
+        // Two Str cells with different content must not be equal.
+        assert_ne!(Cell::string("hello"), Cell::string("world"));
+    }
+
+    #[test]
+    fn test_str_display() {
+        // Display now prints the underlying content directly.
+        assert_eq!(Cell::string("hello").to_string(), "hello");
+        assert_eq!(Cell::string("").to_string(), "");
+    }
+
+    #[test]
+    fn test_string_helper() {
+        // Cell::string() should produce Cell::Str.
+        let c = Cell::string("foo");
+        assert_eq!(c.type_name(), "Str");
+        assert_eq!(c.as_str().map(|s| s.as_ref()), Some("foo"));
+    }
+
+    #[test]
+    fn test_as_str() {
+        let c = Cell::string("bar");
+        assert_eq!(c.as_str().map(|s| s.as_ref()), Some("bar"));
+        assert_eq!(Cell::Int(1).as_str(), None);
     }
 
     #[test]
