@@ -348,6 +348,39 @@ fn check_array_element_write(vm: &VM, array_pool_idx: usize, value: &Cell) -> Re
     }
 }
 
+/// Validate and (in future phases) transform `value` before it is stored in
+/// the array at `array_pool_idx`.
+///
+/// This is the Phase 5B entry-point for array element writes.  In the current
+/// phase (5B-1) the behaviour is identical to `check_array_element_write`:
+/// validation only, no clone/promote.  Subsequent phases will intercept
+/// specific lifetime combinations here and return a modified `Cell` (e.g. a
+/// global clone of a `CallerOwned` string).
+///
+/// # Allow/deny matrix (Phase 5A — unchanged in 5B-1)
+///
+/// | array lifetime           | string lifetime  | result |
+/// |--------------------------|------------------|--------|
+/// | any                      | `FrameLocal`     | deny   |
+/// | any                      | `Global`         | allow  |
+/// | `FrameLocal`             | `CallerOwned`    | allow  |
+/// | `Global` / `CallerOwned` | `CallerOwned`    | deny   |
+///
+/// # Errors
+///
+/// Returns an error when the combination is unsafe or unsupported (e.g.
+/// `Cell::Array` is always rejected as a nested array).
+fn stabilize_array_element_write(
+    vm: &mut VM,
+    array_pool_idx: usize,
+    value: Cell,
+) -> Result<Cell, TbxError> {
+    // Phase 5B-1: validate only; clone/promote will be added in later phases.
+    // The immutable borrow of `vm` ends before any future mutable operations.
+    check_array_element_write(vm, array_pool_idx, &value)?;
+    Ok(value)
+}
+
 /// Write `value` to element `elem_idx` of the array at `pool_idx`.
 fn write_array_element(
     vm: &mut VM,
@@ -355,9 +388,9 @@ fn write_array_element(
     elem_idx: usize,
     value: Cell,
 ) -> Result<(), TbxError> {
-    // Reject types that could dangle when the owning frame is freed.
-    // The helper must be called before get_mut() to avoid borrow conflicts.
-    check_array_element_write(vm, pool_idx, &value)?;
+    // Validate (and in later phases, transform) the value before storing it.
+    // Must be called before get_mut() to avoid borrow conflicts.
+    let value = stabilize_array_element_write(vm, pool_idx, value)?;
     let pool_size = vm.arrays.len();
     let arr = vm
         .arrays
