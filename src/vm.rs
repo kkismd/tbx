@@ -453,25 +453,21 @@ impl VM {
         }
     }
 
-    /// Pop a `Cell::Str` value from the data stack and return its resolved
-    /// contents from the runtime string pool (`VM::strings`).
+    /// Pop a `Cell::Str` value from the data stack and return a fresh `String`
+    /// copy of its contents.
+    ///
+    /// `Cell::Str` now wraps an `Rc<str>` (issue #588); this helper still
+    /// returns an owned `String` for API compatibility with existing string
+    /// primitives.  A future cleanup (#589) may switch the return type to
+    /// `Rc<str>` to avoid the copy.
     ///
     /// # Errors
     ///
     /// Returns `Err(TbxError::StackUnderflow)` if the stack is empty.
     /// Returns `Err(TbxError::TypeError)` if the top value is not `Cell::Str`.
-    /// Returns `Err(TbxError::IndexOutOfBounds)` if the `Cell::Str` index is
-    /// out of range for `VM::strings`.
     pub fn pop_string_value(&mut self) -> Result<String, TbxError> {
         match self.pop()? {
-            Cell::Str(idx) => self
-                .strings
-                .get(idx)
-                .cloned()
-                .ok_or(TbxError::IndexOutOfBounds {
-                    index: idx,
-                    size: self.strings.len(),
-                }),
+            Cell::Str(s) => Ok(s.to_string()),
             other => Err(TbxError::TypeError {
                 expected: "Str",
                 got: other.type_name(),
@@ -921,30 +917,23 @@ impl VM {
                     } else {
                         false
                     };
-                    // Ownership transfer for frame-local Cell::Str:
-                    // If the returned string was created in this frame
-                    // (pool_idx >= string_frame_boundary), swap it to the
-                    // boundary slot and mark it for preservation.
-                    let string_transferred = if let Cell::Str(pool_idx) = &retval {
-                        if *pool_idx >= string_frame_boundary {
-                            // Bounds check before swap: pool_idx must be a valid index.
-                            // Since pool_idx >= string_frame_boundary is already confirmed,
-                            // checking pool_idx < strings.len() also covers string_frame_boundary.
-                            if *pool_idx >= self.strings.len() {
-                                return Err(TbxError::IndexOutOfBounds {
-                                    index: *pool_idx,
-                                    size: self.strings.len(),
-                                });
-                            }
-                            self.strings.swap(*pool_idx, string_frame_boundary);
-                            retval = Cell::Str(string_frame_boundary);
-                            true
-                        } else {
-                            false
-                        }
-                    } else {
-                        false
-                    };
+                    // Ownership transfer for `Cell::Str`:
+                    //
+                    // Pre-#588, frame-local `Cell::Str(pool_idx)` values were
+                    // swapped to the frame-boundary slot in `VM::strings` so
+                    // they could survive the pool truncation below.  With
+                    // `Cell::Str(Rc<str>)`, the value carries its own
+                    // ownership via the Rc reference count, so no swap is
+                    // needed: the returned `retval` already owns its string.
+                    //
+                    // We still maintain `string_transferred` (always false now)
+                    // to keep the surrounding control flow stable.  The legacy
+                    // `VM::strings` pool truncation below also remains active;
+                    // it no longer affects `Cell::Str` cells, but is kept for
+                    // backward compatibility until #590 removes the pool
+                    // entirely.
+                    let _ = string_frame_boundary; // pool_idx no longer used
+                    let string_transferred = false;
                     match self.return_stack.pop().ok_or(TbxError::StackUnderflow)? {
                         ReturnFrame::Call {
                             callee_xt: _,
@@ -2729,18 +2718,12 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "#590: frame-local strings no longer need StringFrameEscape on dict store. With Rc<str>-backed Cell::Str, ownership is managed by the reference count, so the value can safely be stored in a global variable. The test will be replaced with a positive equivalent once the legacy string pool / lifetime tracking is removed."]
     fn test_str_frame_escape_via_store_to_dict_is_error() {
-        // Verify that SET of a frame-local Cell::Str into a global variable produces
-        // StringFrameEscape.  This is symmetric to test_array_frame_escape_via_store_to_dict_is_error.
-        let result = run_source(
-            "VAR G\n\
-             DEF BAD_STORE()\n  VAR S\n  LET S = STR_CONCAT(\"foo\", \"bar\")\n  SET &G, S\nEND\n\
-             BAD_STORE()",
-        );
-        assert!(
-            matches!(result, Err(crate::error::TbxError::StringFrameEscape)),
-            "expected StringFrameEscape, got: {result:?}"
-        );
+        // Pre-#588: STR_CONCAT inside a word produced a frame-local string
+        // whose dict store had to be rejected with StringFrameEscape.
+        // Rc<str>-backed Cell::Str carries its own ownership, so the value
+        // is always safe to store in a dict slot.
     }
 
     #[test]
@@ -2770,47 +2753,12 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "#590: depends on Cell::Str carrying a `global_string_pool_len`-based pool index. Rc<str>-backed Cell::Str has no such index, and the legacy pool will be retired with #590."]
     fn test_str_literal_inside_word_lives_in_global_region() {
-        // Companion to `test_str_literal_inside_word_can_be_assigned_to_global_var`:
-        // exercise the VM API directly to confirm that the literal is
-        // stored in the global region of the string pool (i.e. its index
-        // satisfies `idx < global_string_pool_len`) and that the slot of
-        // the global VAR ends up referring to that string.
-        let mut interp = crate::interpreter::Interpreter::new();
-        interp
-            .exec_source(
-                "VAR G\n\
-                 DEF SETG()\n  SET &G, \"inside\"\nEND\n\
-                 SETG\n\
-                 PUTSTR G\n",
-            )
-            .expect("exec_source failed");
-
-        assert_eq!(interp.take_output(), "inside");
-
-        let xt = interp
-            .vm()
-            .lookup("G")
-            .expect("global variable G not found");
-        let entry = &interp.vm().headers[xt.index()];
-        let cell = match entry.kind {
-            EntryKind::Variable(slot) => interp.vm().dict_read(slot).expect("dict_read failed"),
-            ref other => panic!("expected Variable kind, got {other:?}"),
-        };
-
-        match cell {
-            Cell::Str(idx) => {
-                assert_eq!(
-                    interp.vm().strings.get(idx).map(String::as_str),
-                    Some("inside")
-                );
-                assert!(
-                    idx < interp.vm().global_string_pool_len,
-                    "compiled string literal stored in global variable must be in the global string region"
-                );
-            }
-            other => panic!("expected Cell::Str, got {other:?}"),
-        }
+        // Pre-#588 this test confirmed that a literal compiled inside a
+        // `DEF ... END` body satisfied `idx < global_string_pool_len`.
+        // `Cell::Str` no longer carries an index after #588, so the
+        // assertion is no longer meaningful.
     }
 
     #[test]
@@ -3085,8 +3033,9 @@ mod tests {
 
     /// Phase 2 of issue #539: a string literal stored in a `VARIABLE` slot
     /// must be represented as `Cell::Str`. This confirms that the
-    /// compile path flows all the way through LET.
-    /// See issue #542.
+    /// compile path flows all the way through LET.  After #588 the payload
+    /// is `Cell::Str(Rc<str>)`, so we assert against `Cell::string("hi")`
+    /// directly instead of dereferencing a pool index.
     #[test]
     fn test_string_literal_stored_in_variable_is_str() {
         let mut interp = crate::interpreter::Interpreter::new();
@@ -3101,19 +3050,11 @@ mod tests {
             crate::dict::EntryKind::Variable(slot) => interp.vm().dictionary[slot].clone(),
             ref other => panic!("expected Variable kind, got {:?}", other),
         };
-        match cell {
-            Cell::Str(idx) => {
-                assert_eq!(
-                    interp.vm().strings.get(idx).map(String::as_str),
-                    Some("hi"),
-                    "stored string must resolve to its literal value"
-                );
-            }
-            other => panic!(
-                "string literal stored in VARIABLE should be Cell::Str, got {:?}",
-                other
-            ),
-        }
+        assert_eq!(
+            cell,
+            Cell::string("hi"),
+            "string literal stored in VARIABLE should be Cell::string(\"hi\"), got {cell:?}"
+        );
     }
 
     #[test]

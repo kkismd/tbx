@@ -87,7 +87,11 @@ struct PoolBounds {
 fn pool_ref_from_cell(cell: &Cell) -> Option<PoolRef> {
     match cell {
         Cell::Array(idx) => Some(PoolRef::Array(*idx)),
-        Cell::Str(idx) => Some(PoolRef::String(*idx)),
+        // `Cell::Str` is now `Rc<str>`-backed and does not carry a pool index.
+        // The Rc reference count manages its lifetime, so there is no PoolRef
+        // to return.  See follow-up issue #590 for the full retirement of
+        // `VM::strings` / `PoolRef::String`.
+        Cell::Str(_) => None,
         _ => None,
     }
 }
@@ -249,8 +253,11 @@ pub fn set_prim(vm: &mut VM) -> Result<(), TbxError> {
 /// no VM context required).
 ///
 /// `Cell::Array` is always rejected (nested arrays are not supported).
-/// `Cell::Str` is also rejected here; callers that need lifetime-aware string
-/// checks should use `check_array_element_write` instead.
+/// `Cell::Str` is also rejected here: storing strings inside arrays is
+/// liberation-tracked separately by #591.  Per-string lifetime classification
+/// is no longer expressible at this layer because `Cell::Str` is now
+/// `Rc<str>`-backed (it has no pool index), so `check_array_element_write`
+/// likewise rejects all `Cell::Str` values.
 fn check_array_element_type(value: &Cell) -> Result<(), TbxError> {
     match value {
         Cell::Array(_) => Err(TbxError::InvalidArrayElement { got: "Array" }),
@@ -262,7 +269,13 @@ fn check_array_element_type(value: &Cell) -> Result<(), TbxError> {
 /// Check that a `Cell::Str` at `str_idx` may be written to the array at
 /// `array_pool_idx`.
 ///
-/// The allow/deny matrix (Phase 5A):
+/// **Dead code as of #588 (D-1).** Now that `Cell::Str` is `Rc<str>`-backed
+/// and no longer carries a pool index, `check_array_element_write` rejects
+/// all `Cell::Str` values up front, so this helper is unreachable.  It is
+/// kept (with `#[allow(dead_code)]`) for reference until #590 / #591 retire
+/// the legacy string pool and decide the final array-write policy.
+///
+/// Historical allow/deny matrix (Phase 5A):
 ///
 /// | array lifetime | string lifetime | result |
 /// |----------------|-----------------|--------|
@@ -271,20 +284,12 @@ fn check_array_element_type(value: &Cell) -> Result<(), TbxError> {
 /// | `FrameLocal`   | `CallerOwned`   | allow  |
 /// | `Global` / `CallerOwned` | `CallerOwned` | deny |
 ///
-/// Rationale:
-/// - `FrameLocal` strings are freed when the current call frame returns, so
-///   they must never be placed in any array.
-/// - `Global` strings are safe in any array.
-/// - `CallerOwned` strings are safe only in `FrameLocal` arrays: the array
-///   is bound to the current frame and will die before the string's owning
-///   frame returns.  `CallerOwned` arrays and `Global` arrays may outlive the
-///   string's owning frame because `CallerOwned` does not track which outer
-///   frame owns the resource — two `CallerOwned` values can belong to
-///   different frames with unrelated lifetimes.
-///
 /// # Errors
 ///
 /// Returns `TbxError::StringFrameEscape` when the combination is unsafe.
+// TODO(#590/#591): remove once VM::strings is retired and the new array-write
+// policy is locked in.
+#[allow(dead_code)]
 fn check_string_array_element_write(
     vm: &VM,
     array_pool_idx: usize,
@@ -312,20 +317,31 @@ fn check_string_array_element_write(
 
 /// Check that `value` may be written to the array at `array_pool_idx`.
 ///
-/// This is the lifetime-aware counterpart to `check_array_element_type` and
-/// is used by `write_array_element` (the `SET`/`STORE` path).
+/// This is the validation counterpart to `check_array_element_type` and is
+/// used by `write_array_element` (the `SET`/`STORE` path).
 ///
 /// * `Cell::Array` is always rejected (nested arrays are not supported).
+/// * `Cell::Str` is blanket-rejected with `StringFrameEscape` during the
+///   transition to `Rc<str>`-backed strings.  Now that `Cell::Str` no longer
+///   carries a pool index, the per-string lifetime classification used by
+///   the previous Phase 5A matrix is impossible to express here.  Allowing
+///   strings into arrays will be done in #591 (which can use Rc-based
+///   ownership without lifetime tracking); until then this remains a
+///   conservative reject to preserve the pre-Phase-5B "no strings in arrays"
+///   contract.
 /// * All non-reference scalars are accepted unconditionally.
-/// * `Cell::Str` lifetime rules are delegated to
-///   `check_string_array_element_write`; see that function for the full
-///   allow/deny matrix (Phase 5A).
-fn check_array_element_write(vm: &VM, array_pool_idx: usize, value: &Cell) -> Result<(), TbxError> {
+fn check_array_element_write(
+    _vm: &VM,
+    _array_pool_idx: usize,
+    value: &Cell,
+) -> Result<(), TbxError> {
     match value {
         // Nested arrays are unconditionally rejected.
         Cell::Array(_) => Err(TbxError::InvalidArrayElement { got: "Array" }),
-        // Delegate to the dedicated helper that classifies both lifetimes.
-        Cell::Str(str_idx) => check_string_array_element_write(vm, array_pool_idx, *str_idx),
+        // Blanket reject Cell::Str: lifetime classification is no longer
+        // possible with Rc<str>-backed strings, and array-write liberation
+        // is tracked separately in #591.
+        Cell::Str(_) => Err(TbxError::StringFrameEscape),
         // All other scalar types are accepted.
         _ => Ok(()),
     }
@@ -334,25 +350,26 @@ fn check_array_element_write(vm: &VM, array_pool_idx: usize, value: &Cell) -> Re
 /// Validate and (in future phases) transform `value` before it is stored in
 /// the array at `array_pool_idx`.
 ///
-/// This is the Phase 5B entry-point for array element writes.  In the current
-/// phase (5B-1) the behaviour is identical to `check_array_element_write`:
-/// validation only, no clone/promote.  Subsequent phases will intercept
-/// specific lifetime combinations here and return a modified `Cell` (e.g. a
-/// global clone of a `CallerOwned` string).
+/// This is the Phase 5B entry-point for array element writes.
 ///
-/// # Allow/deny matrix (Phase 5A — unchanged in 5B-1)
+/// Current policy (#588 D-1):
 ///
-/// | array lifetime           | string lifetime  | result |
-/// |--------------------------|------------------|--------|
-/// | any                      | `FrameLocal`     | deny   |
-/// | any                      | `Global`         | allow  |
-/// | `FrameLocal`             | `CallerOwned`    | allow  |
-/// | `Global` / `CallerOwned` | `CallerOwned`    | deny   |
+/// * Nested `Cell::Array` is rejected with `InvalidArrayElement`.
+/// * `Cell::Str` is rejected with `StringFrameEscape`.  Now that `Cell::Str`
+///   is `Rc<str>`-backed it no longer carries a pool index, so the previous
+///   Phase 5A lifetime matrix (FrameLocal/Global/CallerOwned) is no longer
+///   expressible at this layer.  Liberation of the array write path for
+///   strings is tracked separately by #591, which will allow Rc<str> elements
+///   without further lifetime tracking.
+/// * All other types are accepted.
+///
+/// Future phases may intercept specific cases here and return a modified
+/// `Cell` (e.g. a wrapped or specialised representation), but the D-1 phase
+/// performs validation only — no clone/promote.
 ///
 /// # Errors
 ///
-/// Returns an error when the combination is unsafe or unsupported (e.g.
-/// `Cell::Array` is always rejected as a nested array).
+/// Returns an error when the combination is unsafe or unsupported.
 fn stabilize_array_element_write(
     vm: &mut VM,
     array_pool_idx: usize,
@@ -497,25 +514,16 @@ pub fn putstr_prim(vm: &mut VM) -> Result<(), TbxError> {
 
 /// STR — convert a value to its string representation and push a `Cell::Str` handle.
 ///
-/// Accepts any `Cell` value.  The result is a new entry in `vm.strings`.
+/// Accepts any `Cell` value.
 pub fn str_prim(vm: &mut VM) -> Result<(), TbxError> {
     let cell = vm.pop()?;
-    let s = match &cell {
-        // For Str, return the content directly (identity-like conversion).
-        Cell::Str(idx) => vm
-            .strings
-            .get(*idx)
-            .cloned()
-            .ok_or(TbxError::IndexOutOfBounds {
-                index: *idx,
-                size: vm.strings.len(),
-            })?,
+    let s: std::rc::Rc<str> = match &cell {
+        // For Str, reuse the underlying Rc (identity-like conversion).
+        Cell::Str(rc) => rc.clone(),
         // For everything else, use Display.
-        other => other.to_string(),
+        other => other.to_string().into(),
     };
-    let idx = vm.strings.len();
-    vm.strings.push(s);
-    vm.push(Cell::Str(idx))?;
+    vm.push(Cell::Str(s))?;
     Ok(())
 }
 
@@ -528,9 +536,7 @@ pub fn str_concat_prim(vm: &mut VM) -> Result<(), TbxError> {
     let b = resolve_str_cell(vm, &b_cell)?;
     let a = resolve_str_cell(vm, &a_cell)?;
     let result = a + &b;
-    let idx = vm.strings.len();
-    vm.strings.push(result);
-    vm.push(Cell::Str(idx))?;
+    vm.push(Cell::string(result))?;
     Ok(())
 }
 
@@ -551,8 +557,10 @@ pub fn str_len_prim(vm: &mut VM) -> Result<(), TbxError> {
 ///
 /// Stack: `[..., a: Str, b: Str]` → `Cell::Bool`
 ///
-/// Unlike `Cell::Str(a) == Cell::Str(b)` (index comparison), this compares
-/// the actual string contents.
+/// With `Cell::Str` now `Rc<str>`-backed, the `PartialEq` impl on `Cell`
+/// already compares string content, so this primitive is effectively
+/// equivalent to `EQ` for two `Cell::Str` operands.  It is retained because
+/// the language exposes `STR_EQ` as part of the string-manipulation surface.
 pub fn str_eq_prim(vm: &mut VM) -> Result<(), TbxError> {
     let b_cell = vm.pop()?;
     let a_cell = vm.pop()?;
@@ -615,9 +623,7 @@ pub fn str_slice_prim(vm: &mut VM) -> Result<(), TbxError> {
     let end_idx = start_idx.saturating_add(len as usize).min(chars.len());
     let result: String = chars[start_idx..end_idx].iter().collect();
 
-    let idx = vm.strings.len();
-    vm.strings.push(result);
-    vm.push(Cell::Str(idx))?;
+    vm.push(Cell::string(result))?;
     Ok(())
 }
 
@@ -628,9 +634,7 @@ pub fn str_trim_prim(vm: &mut VM) -> Result<(), TbxError> {
     let s_cell = vm.pop()?;
     let s = resolve_str_cell(vm, &s_cell)?;
     let trimmed = s.trim_matches(char::is_whitespace).to_string();
-    let idx = vm.strings.len();
-    vm.strings.push(trimmed);
-    vm.push(Cell::Str(idx))?;
+    vm.push(Cell::string(trimmed))?;
     Ok(())
 }
 
@@ -641,9 +645,7 @@ pub fn str_upper_prim(vm: &mut VM) -> Result<(), TbxError> {
     let s_cell = vm.pop()?;
     let s = resolve_str_cell(vm, &s_cell)?;
     let upper = s.to_uppercase();
-    let idx = vm.strings.len();
-    vm.strings.push(upper);
-    vm.push(Cell::Str(idx))?;
+    vm.push(Cell::string(upper))?;
     Ok(())
 }
 
@@ -654,9 +656,7 @@ pub fn str_lower_prim(vm: &mut VM) -> Result<(), TbxError> {
     let s_cell = vm.pop()?;
     let s = resolve_str_cell(vm, &s_cell)?;
     let lower = s.to_lowercase();
-    let idx = vm.strings.len();
-    vm.strings.push(lower);
-    vm.push(Cell::Str(idx))?;
+    vm.push(Cell::string(lower))?;
     Ok(())
 }
 
@@ -685,9 +685,7 @@ pub fn str_replace_first_prim(vm: &mut VM) -> Result<(), TbxError> {
         s
     };
 
-    let idx = vm.strings.len();
-    vm.strings.push(result);
-    vm.push(Cell::Str(idx))?;
+    vm.push(Cell::string(result))?;
     Ok(())
 }
 
@@ -709,23 +707,18 @@ pub fn str_replace_all_prim(vm: &mut VM) -> Result<(), TbxError> {
     }
 
     let result = s.replace(&needle, &replacement);
-    let idx = vm.strings.len();
-    vm.strings.push(result);
-    vm.push(Cell::Str(idx))?;
+    vm.push(Cell::string(result))?;
     Ok(())
 }
 
-/// Helper: resolve a `Cell::Str` to a `String` via the runtime string pool.
-fn resolve_str_cell(vm: &VM, cell: &Cell) -> Result<String, TbxError> {
+/// Helper: resolve a `Cell::Str` to an owned `String`.
+///
+/// `Cell::Str` is `Rc<str>`-backed (#588), so this is just an `Rc -> String`
+/// copy.  The `vm` parameter is retained for now to minimise call-site
+/// churn; it can be dropped together with the legacy string pool in #590.
+fn resolve_str_cell(_vm: &VM, cell: &Cell) -> Result<String, TbxError> {
     match cell {
-        Cell::Str(idx) => vm
-            .strings
-            .get(*idx)
-            .cloned()
-            .ok_or(TbxError::IndexOutOfBounds {
-                index: *idx,
-                size: vm.strings.len(),
-            }),
+        Cell::Str(rc) => Ok(rc.to_string()),
         other => Err(TbxError::TypeError {
             expected: "Str",
             got: other.type_name(),
@@ -795,16 +788,8 @@ pub fn putval_prim(vm: &mut VM) -> Result<(), TbxError> {
             vm.write_output(&s);
         }
         Cell::Bool(b) => vm.write_output(if b { "TRUE" } else { "FALSE" }),
-        Cell::Str(idx) => {
-            let s = vm
-                .strings
-                .get(idx)
-                .cloned()
-                .ok_or(TbxError::IndexOutOfBounds {
-                    index: idx,
-                    size: vm.strings.len(),
-                })?;
-            vm.write_output(&s);
+        Cell::Str(rc) => {
+            vm.write_output(rc.as_ref());
         }
         other => {
             return Err(TbxError::TypeError {
@@ -2334,9 +2319,9 @@ pub fn getdec_prim(vm: &mut VM) -> Result<(), TbxError> {
 
 /// GETSTR — read one line from the input and push it as a `Cell::Str` onto the data stack.
 ///
-/// Calls `accept_prim` internally to read a line, then stores the result in `vm.strings`
-/// (the runtime string pool) and pushes `Cell::Str(idx)` where `idx` is the new entry's
-/// index.  The trailing newline is stripped by `accept_prim`.
+/// Calls `accept_prim` internally to read a line, then wraps the result in
+/// an `Rc<str>` and pushes it as `Cell::Str`.  The trailing newline is
+/// stripped by `accept_prim`.
 ///
 /// This is the string counterpart of `GETDEC`.  The resulting `Cell::Str` is compatible
 /// with all existing string primitives (`PUTSTR`, `STR`, `STR_CONCAT`, `STR_LEN`,
@@ -2345,9 +2330,7 @@ pub fn getdec_prim(vm: &mut VM) -> Result<(), TbxError> {
 /// Stack signature: `( -- s )`
 pub fn getstr_prim(vm: &mut VM) -> Result<(), TbxError> {
     let s = accept_prim(vm)?;
-    let idx = vm.strings.len();
-    vm.strings.push(s);
-    vm.push(Cell::Str(idx))
+    vm.push(Cell::string(s))
 }
 
 /// RND — generate a random integer in the range [1, n].
@@ -3413,22 +3396,18 @@ mod tests {
     #[test]
     fn test_eq_str_compares_content() {
         let mut vm = VM::new();
-        vm.strings.push("hello".to_string());
-        vm.strings.push("hello".to_string());
-        vm.push(Cell::Str(0)).unwrap();
-        vm.push(Cell::Str(1)).unwrap();
+        vm.push(Cell::string("hello")).unwrap();
+        vm.push(Cell::string("hello")).unwrap();
         eq_prim(&mut vm).unwrap();
         assert_eq!(vm.pop(), Ok(Cell::Bool(true)));
     }
 
     #[test]
-    fn test_eq_str_different_indices_same_content_is_true() {
-        // Two distinct Cell::Str entries pointing at identical content compare equal.
+    fn test_eq_str_different_handles_same_content_is_true() {
+        // Two distinct Cell::Str handles holding identical content compare equal.
         let mut vm = VM::new();
-        vm.strings.push("hello".to_string());
-        vm.strings.push("hello".to_string());
-        vm.push(Cell::Str(0)).unwrap();
-        vm.push(Cell::Str(1)).unwrap();
+        vm.push(Cell::string("hello")).unwrap();
+        vm.push(Cell::string("hello")).unwrap();
         eq_prim(&mut vm).unwrap();
         assert_eq!(vm.pop(), Ok(Cell::Bool(true)));
     }
@@ -3463,22 +3442,18 @@ mod tests {
     #[test]
     fn test_neq_str_compares_content() {
         let mut vm = VM::new();
-        vm.strings.push("foo".to_string());
-        vm.strings.push("bar".to_string());
-        vm.push(Cell::Str(0)).unwrap();
-        vm.push(Cell::Str(1)).unwrap();
+        vm.push(Cell::string("foo")).unwrap();
+        vm.push(Cell::string("bar")).unwrap();
         neq_prim(&mut vm).unwrap();
         assert_eq!(vm.pop(), Ok(Cell::Bool(true)));
     }
 
     #[test]
-    fn test_neq_str_different_indices_different_content_is_true() {
-        // Two distinct Cell::Str entries with different content compare not-equal.
+    fn test_neq_str_different_handles_different_content_is_true() {
+        // Two distinct Cell::Str handles with different content compare not-equal.
         let mut vm = VM::new();
-        vm.strings.push("hello".to_string());
-        vm.strings.push("world".to_string());
-        vm.push(Cell::Str(0)).unwrap();
-        vm.push(Cell::Str(1)).unwrap();
+        vm.push(Cell::string("hello")).unwrap();
+        vm.push(Cell::string("world")).unwrap();
         neq_prim(&mut vm).unwrap();
         assert_eq!(vm.pop(), Ok(Cell::Bool(true)));
     }
@@ -3803,8 +3778,7 @@ mod tests {
     #[test]
     fn test_putstr_basic() {
         let mut vm = VM::new();
-        vm.strings.push("hello".to_string());
-        vm.push(Cell::Str(0)).unwrap();
+        vm.push(Cell::string("hello")).unwrap();
         putstr_prim(&mut vm).unwrap();
         assert_eq!(vm.take_output(), "hello");
     }
@@ -3812,8 +3786,7 @@ mod tests {
     #[test]
     fn test_putstr_empty() {
         let mut vm = VM::new();
-        vm.strings.push(String::new());
-        vm.push(Cell::Str(0)).unwrap();
+        vm.push(Cell::string("")).unwrap();
         putstr_prim(&mut vm).unwrap();
         assert_eq!(vm.take_output(), "");
     }
@@ -3844,8 +3817,7 @@ mod tests {
         let mut vm = VM::new();
         vm.push(Cell::Int(42)).unwrap();
         str_prim(&mut vm).unwrap();
-        assert_eq!(vm.pop().unwrap(), Cell::Str(0));
-        assert_eq!(vm.strings[0], "42");
+        assert_eq!(vm.pop().unwrap(), Cell::string("42"));
     }
 
     #[test]
@@ -3853,8 +3825,7 @@ mod tests {
         let mut vm = VM::new();
         vm.push(Cell::Float(1.5)).unwrap();
         str_prim(&mut vm).unwrap();
-        assert_eq!(vm.pop().unwrap(), Cell::Str(0));
-        assert_eq!(vm.strings[0], "1.5");
+        assert_eq!(vm.pop().unwrap(), Cell::string("1.5"));
     }
 
     #[test]
@@ -3862,19 +3833,16 @@ mod tests {
         let mut vm = VM::new();
         vm.push(Cell::Bool(true)).unwrap();
         str_prim(&mut vm).unwrap();
-        assert_eq!(vm.pop().unwrap(), Cell::Str(0));
-        assert_eq!(vm.strings[0], "true");
+        assert_eq!(vm.pop().unwrap(), Cell::string("true"));
     }
 
     #[test]
     fn test_str_prim_from_cell_str() {
         let mut vm = VM::new();
-        vm.strings.push("existing".to_string());
-        vm.push(Cell::Str(0)).unwrap();
+        vm.push(Cell::string("existing")).unwrap();
         str_prim(&mut vm).unwrap();
-        // A new Str entry is created (even if content duplicates the original).
-        assert_eq!(vm.pop().unwrap(), Cell::Str(1));
-        assert_eq!(vm.strings[1], "existing");
+        // STR on a Str returns the same content (Rc clone, no copy).
+        assert_eq!(vm.pop().unwrap(), Cell::string("existing"));
     }
 
     #[test]
@@ -3888,20 +3856,16 @@ mod tests {
     #[test]
     fn test_str_concat_basic() {
         let mut vm = VM::new();
-        vm.strings.push("foo".to_string());
-        vm.strings.push("bar".to_string());
-        vm.push(Cell::Str(0)).unwrap();
-        vm.push(Cell::Str(1)).unwrap();
+        vm.push(Cell::string("foo")).unwrap();
+        vm.push(Cell::string("bar")).unwrap();
         str_concat_prim(&mut vm).unwrap();
-        assert_eq!(vm.pop().unwrap(), Cell::Str(2));
-        assert_eq!(vm.strings[2], "foobar");
+        assert_eq!(vm.pop().unwrap(), Cell::string("foobar"));
     }
 
     #[test]
     fn test_str_concat_type_error() {
         let mut vm = VM::new();
-        vm.strings.push("foo".to_string());
-        vm.push(Cell::Str(0)).unwrap();
+        vm.push(Cell::string("foo")).unwrap();
         vm.push(Cell::Int(42)).unwrap();
         assert!(matches!(
             str_concat_prim(&mut vm),
@@ -3914,8 +3878,7 @@ mod tests {
     #[test]
     fn test_str_len_basic() {
         let mut vm = VM::new();
-        vm.strings.push("hello".to_string());
-        vm.push(Cell::Str(0)).unwrap();
+        vm.push(Cell::string("hello")).unwrap();
         str_len_prim(&mut vm).unwrap();
         assert_eq!(vm.pop().unwrap(), Cell::Int(5));
     }
@@ -3923,8 +3886,7 @@ mod tests {
     #[test]
     fn test_str_len_empty() {
         let mut vm = VM::new();
-        vm.strings.push(String::new());
-        vm.push(Cell::Str(0)).unwrap();
+        vm.push(Cell::string("")).unwrap();
         str_len_prim(&mut vm).unwrap();
         assert_eq!(vm.pop().unwrap(), Cell::Int(0));
     }
@@ -3944,10 +3906,8 @@ mod tests {
     #[test]
     fn test_str_eq_equal() {
         let mut vm = VM::new();
-        vm.strings.push("hello".to_string());
-        vm.strings.push("hello".to_string());
-        vm.push(Cell::Str(0)).unwrap();
-        vm.push(Cell::Str(1)).unwrap();
+        vm.push(Cell::string("hello")).unwrap();
+        vm.push(Cell::string("hello")).unwrap();
         str_eq_prim(&mut vm).unwrap();
         assert_eq!(vm.pop().unwrap(), Cell::Bool(true));
     }
@@ -3955,21 +3915,19 @@ mod tests {
     #[test]
     fn test_str_eq_not_equal() {
         let mut vm = VM::new();
-        vm.strings.push("foo".to_string());
-        vm.strings.push("bar".to_string());
-        vm.push(Cell::Str(0)).unwrap();
-        vm.push(Cell::Str(1)).unwrap();
+        vm.push(Cell::string("foo")).unwrap();
+        vm.push(Cell::string("bar")).unwrap();
         str_eq_prim(&mut vm).unwrap();
         assert_eq!(vm.pop().unwrap(), Cell::Bool(false));
     }
 
     #[test]
-    fn test_str_eq_same_index_is_equal() {
-        // Even the same index via different cells should be equal.
+    fn test_str_eq_same_rc_is_equal() {
+        // Two Cell::Str that share the same Rc compare equal.
         let mut vm = VM::new();
-        vm.strings.push("x".to_string());
-        vm.push(Cell::Str(0)).unwrap();
-        vm.push(Cell::Str(0)).unwrap();
+        let s: std::rc::Rc<str> = "x".into();
+        vm.push(Cell::Str(s.clone())).unwrap();
+        vm.push(Cell::Str(s)).unwrap();
         str_eq_prim(&mut vm).unwrap();
         assert_eq!(vm.pop().unwrap(), Cell::Bool(true));
     }
@@ -3979,10 +3937,8 @@ mod tests {
     #[test]
     fn test_str_indexof_found_returns_1_based_position() {
         let mut vm = VM::new();
-        vm.strings.push("hello world".to_string());
-        vm.strings.push("world".to_string());
-        vm.push(Cell::Str(0)).unwrap();
-        vm.push(Cell::Str(1)).unwrap();
+        vm.push(Cell::string("hello world")).unwrap();
+        vm.push(Cell::string("world")).unwrap();
         str_indexof_prim(&mut vm).unwrap();
         assert_eq!(vm.pop().unwrap(), Cell::Int(7));
     }
@@ -3990,10 +3946,8 @@ mod tests {
     #[test]
     fn test_str_indexof_not_found_returns_zero() {
         let mut vm = VM::new();
-        vm.strings.push("abc".to_string());
-        vm.strings.push("z".to_string());
-        vm.push(Cell::Str(0)).unwrap();
-        vm.push(Cell::Str(1)).unwrap();
+        vm.push(Cell::string("abc")).unwrap();
+        vm.push(Cell::string("z")).unwrap();
         str_indexof_prim(&mut vm).unwrap();
         assert_eq!(vm.pop().unwrap(), Cell::Int(0));
     }
@@ -4001,10 +3955,8 @@ mod tests {
     #[test]
     fn test_str_indexof_counts_unicode_chars() {
         let mut vm = VM::new();
-        vm.strings.push("あいうえお".to_string());
-        vm.strings.push("うえ".to_string());
-        vm.push(Cell::Str(0)).unwrap();
-        vm.push(Cell::Str(1)).unwrap();
+        vm.push(Cell::string("あいうえお")).unwrap();
+        vm.push(Cell::string("うえ")).unwrap();
         str_indexof_prim(&mut vm).unwrap();
         assert_eq!(vm.pop().unwrap(), Cell::Int(3));
     }
@@ -4012,10 +3964,8 @@ mod tests {
     #[test]
     fn test_str_indexof_empty_needle_returns_one() {
         let mut vm = VM::new();
-        vm.strings.push("abc".to_string());
-        vm.strings.push(String::new());
-        vm.push(Cell::Str(0)).unwrap();
-        vm.push(Cell::Str(1)).unwrap();
+        vm.push(Cell::string("abc")).unwrap();
+        vm.push(Cell::string("")).unwrap();
         str_indexof_prim(&mut vm).unwrap();
         assert_eq!(vm.pop().unwrap(), Cell::Int(1));
     }
@@ -4023,8 +3973,7 @@ mod tests {
     #[test]
     fn test_str_indexof_type_error() {
         let mut vm = VM::new();
-        vm.strings.push("abc".to_string());
-        vm.push(Cell::Str(0)).unwrap();
+        vm.push(Cell::string("abc")).unwrap();
         vm.push(Cell::Int(1)).unwrap();
         assert!(matches!(
             str_indexof_prim(&mut vm),
@@ -4037,80 +3986,67 @@ mod tests {
     #[test]
     fn test_str_slice_basic() {
         let mut vm = VM::new();
-        vm.strings.push("abcdef".to_string());
-        vm.push(Cell::Str(0)).unwrap();
+        vm.push(Cell::string("abcdef")).unwrap();
         vm.push(Cell::Int(2)).unwrap();
         vm.push(Cell::Int(3)).unwrap();
         str_slice_prim(&mut vm).unwrap();
-        assert_eq!(vm.pop().unwrap(), Cell::Str(1));
-        assert_eq!(vm.strings[1], "bcd");
+        assert_eq!(vm.pop().unwrap(), Cell::string("bcd"));
     }
 
     #[test]
     fn test_str_slice_negative_start_counts_from_end() {
         let mut vm = VM::new();
-        vm.strings.push("abcdef".to_string());
-        vm.push(Cell::Str(0)).unwrap();
+        vm.push(Cell::string("abcdef")).unwrap();
         vm.push(Cell::Int(-3)).unwrap();
         vm.push(Cell::Int(2)).unwrap();
         str_slice_prim(&mut vm).unwrap();
-        assert_eq!(vm.pop().unwrap(), Cell::Str(1));
-        assert_eq!(vm.strings[1], "de");
+        assert_eq!(vm.pop().unwrap(), Cell::string("de"));
     }
 
     #[test]
     fn test_str_slice_clips_past_end() {
         let mut vm = VM::new();
-        vm.strings.push("abc".to_string());
-        vm.push(Cell::Str(0)).unwrap();
+        vm.push(Cell::string("abc")).unwrap();
         vm.push(Cell::Int(2)).unwrap();
         vm.push(Cell::Int(10)).unwrap();
         str_slice_prim(&mut vm).unwrap();
-        assert_eq!(vm.pop().unwrap(), Cell::Str(1));
-        assert_eq!(vm.strings[1], "bc");
+        assert_eq!(vm.pop().unwrap(), Cell::string("bc"));
     }
 
     #[test]
     fn test_str_slice_too_negative_start_clips_to_beginning() {
         let mut vm = VM::new();
-        vm.strings.push("abc".to_string());
-        vm.push(Cell::Str(0)).unwrap();
+        vm.push(Cell::string("abc")).unwrap();
         vm.push(Cell::Int(-10)).unwrap();
         vm.push(Cell::Int(2)).unwrap();
         str_slice_prim(&mut vm).unwrap();
-        assert_eq!(vm.pop().unwrap(), Cell::Str(1));
-        assert_eq!(vm.strings[1], "ab");
+        assert_eq!(vm.pop().unwrap(), Cell::string("ab"));
     }
 
     #[test]
     fn test_str_slice_counts_unicode_chars() {
         let mut vm = VM::new();
-        vm.strings.push("あいうえお".to_string());
-        vm.push(Cell::Str(0)).unwrap();
+        vm.push(Cell::string("あいうえお")).unwrap();
         vm.push(Cell::Int(2)).unwrap();
         vm.push(Cell::Int(2)).unwrap();
         str_slice_prim(&mut vm).unwrap();
-        assert_eq!(vm.pop().unwrap(), Cell::Str(1));
-        assert_eq!(vm.strings[1], "いう");
+        assert_eq!(vm.pop().unwrap(), Cell::string("いう"));
     }
 
     #[test]
     fn test_str_slice_zero_length_returns_empty_string() {
         let mut vm = VM::new();
-        vm.strings.push("abc".to_string());
-        vm.push(Cell::Str(0)).unwrap();
+        vm.push(Cell::string("abc")).unwrap();
         vm.push(Cell::Int(2)).unwrap();
         vm.push(Cell::Int(0)).unwrap();
         str_slice_prim(&mut vm).unwrap();
-        assert_eq!(vm.pop().unwrap(), Cell::Str(1));
-        assert_eq!(vm.strings[1], "");
+        assert_eq!(vm.pop().unwrap(), Cell::string(""));
     }
 
     #[test]
     fn test_str_slice_start_zero_is_invalid_argument() {
         let mut vm = VM::new();
-        vm.strings.push("abc".to_string());
-        vm.push(Cell::Str(0)).unwrap();
+        vm.push(Cell::string("abc")).unwrap();
         vm.push(Cell::Int(0)).unwrap();
         vm.push(Cell::Int(1)).unwrap();
         assert!(matches!(
@@ -4122,8 +4058,7 @@ mod tests {
     #[test]
     fn test_str_slice_negative_length_is_invalid_argument() {
         let mut vm = VM::new();
-        vm.strings.push("abc".to_string());
-        vm.push(Cell::Str(0)).unwrap();
+        vm.push(Cell::string("abc")).unwrap();
         vm.push(Cell::Int(1)).unwrap();
         vm.push(Cell::Int(-1)).unwrap();
         assert!(matches!(
@@ -4137,41 +4072,33 @@ mod tests {
     #[test]
     fn test_str_trim_removes_ascii_spaces() {
         let mut vm = VM::new();
-        vm.strings.push("  hello  ".to_string());
-        vm.push(Cell::Str(0)).unwrap();
+        vm.push(Cell::string("  hello  ")).unwrap();
         str_trim_prim(&mut vm).unwrap();
-        assert_eq!(vm.pop().unwrap(), Cell::Str(1));
-        assert_eq!(vm.strings[1], "hello");
+        assert_eq!(vm.pop().unwrap(), Cell::string("hello"));
     }
 
     #[test]
     fn test_str_trim_removes_unicode_whitespace() {
         let mut vm = VM::new();
-        vm.strings.push("\u{3000}abc\u{3000}".to_string());
-        vm.push(Cell::Str(0)).unwrap();
+        vm.push(Cell::string("\u{3000}abc\u{3000}")).unwrap();
         str_trim_prim(&mut vm).unwrap();
-        assert_eq!(vm.pop().unwrap(), Cell::Str(1));
-        assert_eq!(vm.strings[1], "abc");
+        assert_eq!(vm.pop().unwrap(), Cell::string("abc"));
     }
 
     #[test]
     fn test_str_trim_keeps_inner_whitespace() {
         let mut vm = VM::new();
-        vm.strings.push("  hello world  ".to_string());
-        vm.push(Cell::Str(0)).unwrap();
+        vm.push(Cell::string("  hello world  ")).unwrap();
         str_trim_prim(&mut vm).unwrap();
-        assert_eq!(vm.pop().unwrap(), Cell::Str(1));
-        assert_eq!(vm.strings[1], "hello world");
+        assert_eq!(vm.pop().unwrap(), Cell::string("hello world"));
     }
 
     #[test]
     fn test_str_trim_all_whitespace_becomes_empty() {
         let mut vm = VM::new();
-        vm.strings.push("\n\t\u{3000}".to_string());
-        vm.push(Cell::Str(0)).unwrap();
+        vm.push(Cell::string("\n\t\u{3000}")).unwrap();
         str_trim_prim(&mut vm).unwrap();
-        assert_eq!(vm.pop().unwrap(), Cell::Str(1));
-        assert_eq!(vm.strings[1], "");
+        assert_eq!(vm.pop().unwrap(), Cell::string(""));
     }
 
     // --- str_upper_prim tests ---
@@ -4179,21 +4106,17 @@ mod tests {
     #[test]
     fn test_str_upper_ascii() {
         let mut vm = VM::new();
-        vm.strings.push("Abc123".to_string());
-        vm.push(Cell::Str(0)).unwrap();
+        vm.push(Cell::string("Abc123")).unwrap();
         str_upper_prim(&mut vm).unwrap();
-        assert_eq!(vm.pop().unwrap(), Cell::Str(1));
-        assert_eq!(vm.strings[1], "ABC123");
+        assert_eq!(vm.pop().unwrap(), Cell::string("ABC123"));
     }
 
     #[test]
     fn test_str_upper_unicode_can_change_length() {
         let mut vm = VM::new();
-        vm.strings.push("straße".to_string());
-        vm.push(Cell::Str(0)).unwrap();
+        vm.push(Cell::string("straße")).unwrap();
         str_upper_prim(&mut vm).unwrap();
-        assert_eq!(vm.pop().unwrap(), Cell::Str(1));
-        assert_eq!(vm.strings[1], "STRASSE");
+        assert_eq!(vm.pop().unwrap(), Cell::string("STRASSE"));
     }
 
     // --- str_lower_prim tests ---
@@ -4201,21 +4124,17 @@ mod tests {
     #[test]
     fn test_str_lower_ascii() {
         let mut vm = VM::new();
-        vm.strings.push("AbC123".to_string());
-        vm.push(Cell::Str(0)).unwrap();
+        vm.push(Cell::string("AbC123")).unwrap();
         str_lower_prim(&mut vm).unwrap();
-        assert_eq!(vm.pop().unwrap(), Cell::Str(1));
-        assert_eq!(vm.strings[1], "abc123");
+        assert_eq!(vm.pop().unwrap(), Cell::string("abc123"));
     }
 
     #[test]
     fn test_str_lower_unicode() {
         let mut vm = VM::new();
-        vm.strings.push("ÄÖÜ".to_string());
-        vm.push(Cell::Str(0)).unwrap();
+        vm.push(Cell::string("ÄÖÜ")).unwrap();
         str_lower_prim(&mut vm).unwrap();
-        assert_eq!(vm.pop().unwrap(), Cell::Str(1));
-        assert_eq!(vm.strings[1], "äöü");
+        assert_eq!(vm.pop().unwrap(), Cell::string("äöü"));
     }
 
     // --- str_replace_first_prim tests ---
@@ -4223,54 +4142,39 @@ mod tests {
     #[test]
     fn test_str_replace_first_replaces_only_first_match() {
         let mut vm = VM::new();
-        vm.strings.push("abcabc".to_string());
-        vm.strings.push("ab".to_string());
-        vm.strings.push("X".to_string());
-        vm.push(Cell::Str(0)).unwrap();
-        vm.push(Cell::Str(1)).unwrap();
-        vm.push(Cell::Str(2)).unwrap();
+        vm.push(Cell::string("abcabc")).unwrap();
+        vm.push(Cell::string("ab")).unwrap();
+        vm.push(Cell::string("X")).unwrap();
         str_replace_first_prim(&mut vm).unwrap();
-        assert_eq!(vm.pop().unwrap(), Cell::Str(3));
-        assert_eq!(vm.strings[3], "Xcabc");
+        assert_eq!(vm.pop().unwrap(), Cell::string("Xcabc"));
     }
 
     #[test]
     fn test_str_replace_first_returns_copy_when_not_found() {
         let mut vm = VM::new();
-        vm.strings.push("abc".to_string());
-        vm.strings.push("z".to_string());
-        vm.strings.push("X".to_string());
-        vm.push(Cell::Str(0)).unwrap();
-        vm.push(Cell::Str(1)).unwrap();
-        vm.push(Cell::Str(2)).unwrap();
+        vm.push(Cell::string("abc")).unwrap();
+        vm.push(Cell::string("z")).unwrap();
+        vm.push(Cell::string("X")).unwrap();
         str_replace_first_prim(&mut vm).unwrap();
-        assert_eq!(vm.pop().unwrap(), Cell::Str(3));
-        assert_eq!(vm.strings[3], "abc");
+        assert_eq!(vm.pop().unwrap(), Cell::string("abc"));
     }
 
     #[test]
     fn test_str_replace_first_handles_unicode() {
         let mut vm = VM::new();
-        vm.strings.push("あいうあい".to_string());
-        vm.strings.push("あい".to_string());
-        vm.strings.push("x".to_string());
-        vm.push(Cell::Str(0)).unwrap();
-        vm.push(Cell::Str(1)).unwrap();
-        vm.push(Cell::Str(2)).unwrap();
+        vm.push(Cell::string("あいうあい")).unwrap();
+        vm.push(Cell::string("あい")).unwrap();
+        vm.push(Cell::string("x")).unwrap();
         str_replace_first_prim(&mut vm).unwrap();
-        assert_eq!(vm.pop().unwrap(), Cell::Str(3));
-        assert_eq!(vm.strings[3], "xうあい");
+        assert_eq!(vm.pop().unwrap(), Cell::string("xうあい"));
     }
 
     #[test]
     fn test_str_replace_first_empty_needle_is_invalid_argument() {
         let mut vm = VM::new();
-        vm.strings.push("abc".to_string());
-        vm.strings.push(String::new());
-        vm.strings.push("X".to_string());
-        vm.push(Cell::Str(0)).unwrap();
-        vm.push(Cell::Str(1)).unwrap();
-        vm.push(Cell::Str(2)).unwrap();
+        vm.push(Cell::string("abc")).unwrap();
+        vm.push(Cell::string("")).unwrap();
+        vm.push(Cell::string("X")).unwrap();
         assert!(matches!(
             str_replace_first_prim(&mut vm),
             Err(TbxError::InvalidArgument { .. })
@@ -4282,68 +4186,49 @@ mod tests {
     #[test]
     fn test_str_replace_all_replaces_all_matches() {
         let mut vm = VM::new();
-        vm.strings.push("abcabc".to_string());
-        vm.strings.push("ab".to_string());
-        vm.strings.push("X".to_string());
-        vm.push(Cell::Str(0)).unwrap();
-        vm.push(Cell::Str(1)).unwrap();
-        vm.push(Cell::Str(2)).unwrap();
+        vm.push(Cell::string("abcabc")).unwrap();
+        vm.push(Cell::string("ab")).unwrap();
+        vm.push(Cell::string("X")).unwrap();
         str_replace_all_prim(&mut vm).unwrap();
-        assert_eq!(vm.pop().unwrap(), Cell::Str(3));
-        assert_eq!(vm.strings[3], "XcXc");
+        assert_eq!(vm.pop().unwrap(), Cell::string("XcXc"));
     }
 
     #[test]
     fn test_str_replace_all_returns_copy_when_not_found() {
         let mut vm = VM::new();
-        vm.strings.push("abc".to_string());
-        vm.strings.push("z".to_string());
-        vm.strings.push("X".to_string());
-        vm.push(Cell::Str(0)).unwrap();
-        vm.push(Cell::Str(1)).unwrap();
-        vm.push(Cell::Str(2)).unwrap();
+        vm.push(Cell::string("abc")).unwrap();
+        vm.push(Cell::string("z")).unwrap();
+        vm.push(Cell::string("X")).unwrap();
         str_replace_all_prim(&mut vm).unwrap();
-        assert_eq!(vm.pop().unwrap(), Cell::Str(3));
-        assert_eq!(vm.strings[3], "abc");
+        assert_eq!(vm.pop().unwrap(), Cell::string("abc"));
     }
 
     #[test]
     fn test_str_replace_all_handles_unicode() {
         let mut vm = VM::new();
-        vm.strings.push("あいうあい".to_string());
-        vm.strings.push("あい".to_string());
-        vm.strings.push("x".to_string());
-        vm.push(Cell::Str(0)).unwrap();
-        vm.push(Cell::Str(1)).unwrap();
-        vm.push(Cell::Str(2)).unwrap();
+        vm.push(Cell::string("あいうあい")).unwrap();
+        vm.push(Cell::string("あい")).unwrap();
+        vm.push(Cell::string("x")).unwrap();
         str_replace_all_prim(&mut vm).unwrap();
-        assert_eq!(vm.pop().unwrap(), Cell::Str(3));
-        assert_eq!(vm.strings[3], "xうx");
+        assert_eq!(vm.pop().unwrap(), Cell::string("xうx"));
     }
 
     #[test]
     fn test_str_replace_all_uses_non_overlapping_matches() {
         let mut vm = VM::new();
-        vm.strings.push("aaaa".to_string());
-        vm.strings.push("aa".to_string());
-        vm.strings.push("b".to_string());
-        vm.push(Cell::Str(0)).unwrap();
-        vm.push(Cell::Str(1)).unwrap();
-        vm.push(Cell::Str(2)).unwrap();
+        vm.push(Cell::string("aaaa")).unwrap();
+        vm.push(Cell::string("aa")).unwrap();
+        vm.push(Cell::string("b")).unwrap();
         str_replace_all_prim(&mut vm).unwrap();
-        assert_eq!(vm.pop().unwrap(), Cell::Str(3));
-        assert_eq!(vm.strings[3], "bb");
+        assert_eq!(vm.pop().unwrap(), Cell::string("bb"));
     }
 
     #[test]
     fn test_str_replace_all_empty_needle_is_invalid_argument() {
         let mut vm = VM::new();
-        vm.strings.push("abc".to_string());
-        vm.strings.push(String::new());
-        vm.strings.push("X".to_string());
-        vm.push(Cell::Str(0)).unwrap();
-        vm.push(Cell::Str(1)).unwrap();
-        vm.push(Cell::Str(2)).unwrap();
+        vm.push(Cell::string("abc")).unwrap();
+        vm.push(Cell::string("")).unwrap();
+        vm.push(Cell::string("X")).unwrap();
         assert!(matches!(
             str_replace_all_prim(&mut vm),
             Err(TbxError::InvalidArgument { .. })
@@ -4353,45 +4238,28 @@ mod tests {
     // --- StringFrameEscape tests ---
 
     #[test]
+    #[ignore = "#590: relies on the pool-index distinction between frame-local and global strings, which Rc<str> removes. To be replaced once VM::strings is retired."]
     fn test_string_frame_escape_via_store() {
-        // A Str created inside a word (pool_idx >= global_string_pool_len) must not
-        // be stored into a DictAddr.
-        let mut vm = VM::new();
-        // global_string_pool_len = 0, so any Str(idx) will be a frame-local string.
-        vm.strings.push("local".to_string());
-        vm.push(Cell::Str(0)).unwrap();
-        vm.dictionary.push(Cell::None);
-        vm.dp = 1;
-        vm.push(Cell::DictAddr(0)).unwrap();
-        // STORE pops addr then value, so push value first then addr.
-        // Re-push in the right order.
-        vm.data_stack.clear();
-        vm.push(Cell::Str(0)).unwrap();
-        vm.push(Cell::DictAddr(0)).unwrap();
-        // store_prim pops addr first then value.
-        let result = store_prim(&mut vm);
-        assert_eq!(result, Err(TbxError::StringFrameEscape));
+        // Pre-#588: A Str created inside a word (pool_idx >= global_string_pool_len)
+        // must not be stored into a DictAddr.  Rc<str>-backed Cell::Str has no
+        // pool index, so this scenario is no longer expressible at this layer.
     }
 
     #[test]
+    #[ignore = "#590: depends on the pool-index distinction between global and non-global strings. Rc<str>-backed Cell::Str carries no index. The successor test will simply assert that Cell::string(...) can be stored in a dict slot."]
     fn test_global_string_stored_via_store() {
-        // A Str created at top level (pool_idx < global_string_pool_len) may be stored.
-        let mut vm = VM::new();
-        vm.strings.push("global".to_string());
-        vm.global_string_pool_len = 1; // promote to global
-        vm.dictionary.push(Cell::None);
-        vm.dp = 1;
-        // store_prim: stack = [value, addr], pops addr first.
-        vm.push(Cell::Str(0)).unwrap(); // value
-        vm.push(Cell::DictAddr(0)).unwrap(); // addr (top)
-        store_prim(&mut vm).unwrap();
-        assert_eq!(vm.dictionary[0], Cell::Str(0));
+        // Pre-#588: A Str created at top level (pool_idx < global_string_pool_len)
+        // could be stored without StringFrameEscape.  With Rc<str>, all
+        // Cell::Str values are now safe in dict slots, so the test loses its
+        // discriminating power.
     }
 
     #[test]
-    fn test_pool_ref_from_cell_array_and_str_only() {
+    fn test_pool_ref_from_cell_array_only() {
+        // Cell::Array still produces a PoolRef; Cell::Str is now Rc<str>-backed
+        // and returns None.
         assert_eq!(pool_ref_from_cell(&Cell::Array(3)), Some(PoolRef::Array(3)));
-        assert_eq!(pool_ref_from_cell(&Cell::Str(4)), Some(PoolRef::String(4)));
+        assert_eq!(pool_ref_from_cell(&Cell::string("hello")), None);
         assert_eq!(
             pool_ref_from_cell(&Cell::ArrayAddr {
                 pool_idx: 1,
@@ -4708,8 +4576,7 @@ mod tests {
     #[test]
     fn test_putval_str() {
         let mut vm = VM::new();
-        vm.strings.push("world".to_string());
-        vm.push(Cell::Str(0)).unwrap();
+        vm.push(Cell::string("world")).unwrap();
         putval_prim(&mut vm).unwrap();
         assert_eq!(vm.take_output(), "world");
     }
@@ -4938,8 +4805,7 @@ mod tests {
     #[test]
     fn test_assert_fail_msg_returns_assertion_failed_with_message() {
         let mut vm = VM::new();
-        vm.strings.push("SIGN(7) should be 1".to_string());
-        vm.push(Cell::Str(0)).unwrap();
+        vm.push(Cell::string("SIGN(7) should be 1")).unwrap();
         let result = assert_fail_msg_prim(&mut vm);
         assert!(matches!(
             result,
@@ -4953,8 +4819,7 @@ mod tests {
     #[test]
     fn test_assert_fail_msg_pops_message_from_stack() {
         let mut vm = VM::new();
-        vm.strings.push("msg".to_string());
-        vm.push(Cell::Str(0)).unwrap();
+        vm.push(Cell::string("msg")).unwrap();
         let _ = assert_fail_msg_prim(&mut vm);
         assert_eq!(vm.data_stack.len(), 0);
     }
@@ -6530,8 +6395,7 @@ mod tests {
         // CS_OPEN_TAG outside compile mode must return InvalidExpression.
         let mut vm = VM::new();
         register_all(&mut vm);
-        vm.strings.push("IF".to_string());
-        vm.push(Cell::Str(0)).unwrap();
+        vm.push(Cell::string("IF")).unwrap();
         let err = cs_open_tag_prim(&mut vm).unwrap_err();
         assert!(
             matches!(err, TbxError::InvalidExpression { .. }),
@@ -6541,10 +6405,10 @@ mod tests {
 
     #[test]
     fn test_cs_open_tag_pushes_tag_to_compile_stack() {
-        // CS_OPEN_TAG must pop a Cell::Str, resolve it and push Tag to compile_stack.
+        // CS_OPEN_TAG must pop a Cell::Str and push the corresponding Tag onto
+        // the compile_stack.
         let mut vm = make_compiling_vm("TESTWORD");
-        vm.strings.push("WHILE".to_string());
-        vm.push(Cell::Str(0)).unwrap();
+        vm.push(Cell::string("WHILE")).unwrap();
         cs_open_tag_prim(&mut vm).unwrap();
         // data stack must be empty.
         assert_eq!(vm.pop(), Err(TbxError::StackUnderflow));
@@ -6583,8 +6447,7 @@ mod tests {
         // CS_CLOSE_TAG outside compile mode must return InvalidExpression.
         let mut vm = VM::new();
         register_all(&mut vm);
-        vm.strings.push("IF".to_string());
-        vm.push(Cell::Str(0)).unwrap();
+        vm.push(Cell::string("IF")).unwrap();
         let err = cs_close_tag_prim(&mut vm).unwrap_err();
         assert!(
             matches!(err, TbxError::InvalidExpression { .. }),
@@ -6598,9 +6461,7 @@ mod tests {
         let mut vm = make_compiling_vm("TESTWORD");
         vm.compile_stack
             .push(CompileEntry::Tag("WHILE".to_string()));
-        let str_idx = vm.strings.len();
-        vm.strings.push("WHILE".to_string());
-        vm.push(Cell::Str(str_idx)).unwrap();
+        vm.push(Cell::string("WHILE")).unwrap();
         cs_close_tag_prim(&mut vm).unwrap();
         assert!(vm.compile_stack.is_empty());
     }
@@ -6613,9 +6474,7 @@ mod tests {
         // compile_stack anyway.
         let mut vm = make_compiling_vm("TESTWORD");
         vm.compile_stack.push(CompileEntry::Tag("IF".to_string()));
-        let str_idx = vm.strings.len();
-        vm.strings.push("WHILE".to_string());
-        vm.push(Cell::Str(str_idx)).unwrap();
+        vm.push(Cell::string("WHILE")).unwrap();
         let err = cs_close_tag_prim(&mut vm).unwrap_err();
         assert!(
             matches!(
@@ -6639,9 +6498,7 @@ mod tests {
     fn test_cs_close_tag_empty_stack_error() {
         // CS_CLOSE_TAG with an empty compile_stack must return NoOpenTag.
         let mut vm = make_compiling_vm("TESTWORD");
-        let str_idx = vm.strings.len();
-        vm.strings.push("WHILE".to_string());
-        vm.push(Cell::Str(str_idx)).unwrap();
+        vm.push(Cell::string("WHILE")).unwrap();
         let err = cs_close_tag_prim(&mut vm).unwrap_err();
         assert!(
             matches!(err, TbxError::NoOpenTag { ref expected } if expected == "WHILE"),
@@ -6654,9 +6511,7 @@ mod tests {
         // CS_CLOSE_TAG with a Cell (not Tag) on top of compile_stack must return NoOpenTag.
         let mut vm = make_compiling_vm("TESTWORD");
         vm.compile_stack.push(CompileEntry::Cell(Cell::Int(42)));
-        let str_idx = vm.strings.len();
-        vm.strings.push("IF".to_string());
-        vm.push(Cell::Str(str_idx)).unwrap();
+        vm.push(Cell::string("IF")).unwrap();
         let err = cs_close_tag_prim(&mut vm).unwrap_err();
         assert!(
             matches!(err, TbxError::NoOpenTag { ref expected } if expected == "IF"),
@@ -6674,26 +6529,18 @@ mod tests {
         // CS_OPEN_TAG and CS_CLOSE_TAG must support correct IF/WHILE nesting.
         let mut vm = make_compiling_vm("TESTWORD");
         // Simulate: IF ... WHILE ... ENDWH ... ENDIF
-        let if_idx_1 = vm.strings.len();
-        vm.strings.push("IF".to_string());
-        vm.push(Cell::Str(if_idx_1)).unwrap();
+        vm.push(Cell::string("IF")).unwrap();
         cs_open_tag_prim(&mut vm).unwrap(); // push Tag("IF")
 
-        let while_idx_1 = vm.strings.len();
-        vm.strings.push("WHILE".to_string());
-        vm.push(Cell::Str(while_idx_1)).unwrap();
+        vm.push(Cell::string("WHILE")).unwrap();
         cs_open_tag_prim(&mut vm).unwrap(); // push Tag("WHILE")
 
         // Close WHILE
-        let while_idx_2 = vm.strings.len();
-        vm.strings.push("WHILE".to_string());
-        vm.push(Cell::Str(while_idx_2)).unwrap();
+        vm.push(Cell::string("WHILE")).unwrap();
         cs_close_tag_prim(&mut vm).unwrap(); // pop Tag("WHILE")
 
         // Close IF
-        let if_idx_2 = vm.strings.len();
-        vm.strings.push("IF".to_string());
-        vm.push(Cell::Str(if_idx_2)).unwrap();
+        vm.push(Cell::string("IF")).unwrap();
         cs_close_tag_prim(&mut vm).unwrap(); // pop Tag("IF")
 
         assert!(vm.compile_stack.is_empty());
@@ -6989,7 +6836,7 @@ mod tests {
         let mut vm = VM::new();
         vm.input_reader = Box::new(Cursor::new("hello\n"));
         getstr_prim(&mut vm).unwrap();
-        assert_eq!(vm.pop(), Ok(Cell::Str(0)));
+        assert_eq!(vm.pop(), Ok(Cell::string("hello")));
     }
 
     #[test]
@@ -6998,8 +6845,7 @@ mod tests {
         let mut vm = VM::new();
         vm.input_reader = Box::new(Cursor::new("\n"));
         getstr_prim(&mut vm).unwrap();
-        assert_eq!(vm.pop(), Ok(Cell::Str(0)));
-        assert_eq!(vm.strings[0], "");
+        assert_eq!(vm.pop(), Ok(Cell::string("")));
     }
 
     #[test]
@@ -7008,7 +6854,7 @@ mod tests {
         let mut vm = VM::new();
         vm.input_reader = Box::new(Cursor::new("world\r\n"));
         getstr_prim(&mut vm).unwrap();
-        assert_eq!(vm.strings[0], "world");
+        assert_eq!(vm.pop().unwrap(), Cell::string("world"));
     }
 
     #[test]
@@ -7018,8 +6864,8 @@ mod tests {
         vm.input_reader = Box::new(Cursor::new("foo bar\n"));
         getstr_prim(&mut vm).unwrap();
         let cell = vm.pop().unwrap();
-        if let Cell::Str(idx) = cell {
-            assert_eq!(vm.strings[idx], "foo bar");
+        if let Cell::Str(s) = cell {
+            assert_eq!(s.as_ref(), "foo bar");
         } else {
             panic!("expected Cell::Str, got {:?}", cell);
         }
@@ -7240,183 +7086,71 @@ mod tests {
         assert_eq!(vm.arrays[0][0], Cell::Int(42));
     }
 
-    // --- array element write: Cell::Str lifetime checks ---
+    // --- array element write: Cell::Str ---
+    //
+    // After #588 (D-1), `Cell::Str` is `Rc<str>`-backed and `check_array_element_write`
+    // blanket-rejects any string with `StringFrameEscape` (see the
+    // function-level comment).  The lifetime-distinction tests below were
+    // structured around the pool-index model and are deferred until #591
+    // (which can use Rc-based ownership without lifetime tracking) revisits
+    // the array-write policy.
 
     #[test]
+    #[ignore = "#591: blanket reject in D-1; per-lifetime allow rules will be reintroduced when the array-write path is liberated."]
     fn test_set_global_str_to_array_element_is_allowed() {
-        // A Str with pool_idx < global_string_pool_len is global and may be stored.
-        let mut vm = VM::new();
-        vm.strings.push("hello".to_string());
-        vm.global_string_pool_len = 1; // promote to global
-        vm.arrays.push(vec![Cell::None]);
-        // set_prim: stack = [..., addr, value]
-        vm.push(Cell::ArrayAddr {
-            pool_idx: 0,
-            elem_idx: 0,
-        })
-        .unwrap();
-        vm.push(Cell::Str(0)).unwrap();
-        set_prim(&mut vm).unwrap();
-        assert_eq!(vm.arrays[0][0], Cell::Str(0));
+        // Pre-#588: a globally-promoted string could be stored into any array.
+        // Now `check_array_element_write` rejects all `Cell::Str` values; the
+        // successor test will simply assert that `Cell::string(...)` can be
+        // stored into a frame-local array via Rc-based ownership (#591).
     }
 
     #[test]
-    fn test_store_global_str_to_array_element_is_allowed() {
-        // Same as above but using store_prim (stack = [value, addr]).
-        let mut vm = VM::new();
-        vm.strings.push("world".to_string());
-        vm.global_string_pool_len = 1;
-        vm.arrays.push(vec![Cell::None]);
-        // store_prim: stack = [value, addr], pops addr first.
-        vm.push(Cell::Str(0)).unwrap();
-        vm.push(Cell::ArrayAddr {
-            pool_idx: 0,
-            elem_idx: 0,
-        })
-        .unwrap();
-        store_prim(&mut vm).unwrap();
-        assert_eq!(vm.arrays[0][0], Cell::Str(0));
-    }
+    #[ignore = "#591: blanket reject in D-1; see test_set_global_str_to_array_element_is_allowed."]
+    fn test_store_global_str_to_array_element_is_allowed() {}
 
     #[test]
-    fn test_set_frame_local_str_to_array_element_is_string_frame_escape() {
-        // A Str with pool_idx >= global_string_pool_len is frame-local and must be rejected.
+    fn test_set_str_to_array_element_is_string_frame_escape() {
+        // D-1 blanket reject: any `Cell::Str` written through `SET` to an
+        // array element fails with `StringFrameEscape`, regardless of the
+        // string's origin (frame-local, caller-owned, or globally-promoted).
+        // This conservatively preserves the pre-Phase-5B "no strings in
+        // arrays" contract until #591 liberates the path.
         let mut vm = VM::new();
-        vm.strings.push("local".to_string());
-        // global_string_pool_len = 0, so Str(0) is frame-local.
         vm.arrays.push(vec![Cell::None]);
         vm.push(Cell::ArrayAddr {
             pool_idx: 0,
             elem_idx: 0,
         })
         .unwrap();
-        vm.push(Cell::Str(0)).unwrap();
+        vm.push(Cell::string("local")).unwrap();
         assert_eq!(set_prim(&mut vm), Err(TbxError::StringFrameEscape));
     }
 
     #[test]
-    fn test_set_caller_owned_str_to_global_array_element_is_string_frame_escape() {
-        // A CallerOwned Str must be rejected when the target array is Global.
-        // Global arrays outlive the caller's frame, so storing a caller-owned
-        // string there risks a dangling reference.
-        use crate::cell::ReturnFrame;
+    fn test_store_str_to_array_element_is_string_frame_escape() {
+        // Same as the SET path above, exercised through STORE.
         let mut vm = VM::new();
-        // Str(0) will be caller-owned (not global).
-        vm.strings.push("caller".to_string());
-        vm.strings.push("local".to_string());
-        // global_string_pool_len = 0, so nothing is global.
-        // Push a call frame: the caller saw string_pool_len = 0 before the call,
-        // and a nested call sees string_pool_len = 1.
-        vm.return_stack.push(ReturnFrame::TopLevel);
-        vm.return_stack.push(ReturnFrame::Call {
-            callee_xt: crate::cell::Xt(0),
-            return_pc: 0,
-            saved_bp: 0,
-            saved_array_pool_len: 0,
-            saved_string_pool_len: 0, // outer boundary
-            actual_arity: 0,
-        });
-        vm.return_stack.push(ReturnFrame::Call {
-            callee_xt: crate::cell::Xt(0),
-            return_pc: 0,
-            saved_bp: 0,
-            saved_array_pool_len: 1, // inner boundary; Array(0) is caller-owned in array space
-            saved_string_pool_len: 1, // inner boundary; Str(0) is caller-owned
-            actual_arity: 0,
-        });
-        // Array(0) is global (idx 0 < global_array_pool_len = 1).
         vm.arrays.push(vec![Cell::None]);
-        vm.global_array_pool_len = 1; // promote Array(0) to global
-                                      // Str(0): idx=0, innermost saved_string_pool_len=1 → idx < 1 → CallerOwned
+        vm.push(Cell::string("local")).unwrap();
         vm.push(Cell::ArrayAddr {
             pool_idx: 0,
             elem_idx: 0,
         })
         .unwrap();
-        vm.push(Cell::Str(0)).unwrap();
-        assert_eq!(set_prim(&mut vm), Err(TbxError::StringFrameEscape));
+        assert_eq!(store_prim(&mut vm), Err(TbxError::StringFrameEscape));
     }
 
     #[test]
-    fn test_set_caller_owned_str_to_frame_local_array_element_is_allowed() {
-        // A CallerOwned Str may be stored in a FrameLocal array because the
-        // array is bound to the current frame and will die before the string's
-        // owning frame returns.
-        use crate::cell::ReturnFrame;
-        let mut vm = VM::new();
-        // Str(0) will be caller-owned.
-        vm.strings.push("caller".to_string());
-        vm.strings.push("local".to_string());
-        // global_string_pool_len = 0, so nothing is global.
-        vm.return_stack.push(ReturnFrame::TopLevel);
-        vm.return_stack.push(ReturnFrame::Call {
-            callee_xt: crate::cell::Xt(0),
-            return_pc: 0,
-            saved_bp: 0,
-            saved_array_pool_len: 0,
-            saved_string_pool_len: 0, // outer boundary
-            actual_arity: 0,
-        });
-        vm.return_stack.push(ReturnFrame::Call {
-            callee_xt: crate::cell::Xt(0),
-            return_pc: 0,
-            saved_bp: 0,
-            saved_array_pool_len: 0, // inner boundary; Array(0) is frame-local
-            saved_string_pool_len: 1, // inner boundary; Str(0) is caller-owned
-            actual_arity: 0,
-        });
-        // Array(0) is frame-local (idx 0 >= saved_array_pool_len=0 of the innermost frame).
-        vm.arrays.push(vec![Cell::None]);
-        // Str(0): idx=0, innermost saved_string_pool_len=1 → idx < 1 → CallerOwned
-        vm.push(Cell::ArrayAddr {
-            pool_idx: 0,
-            elem_idx: 0,
-        })
-        .unwrap();
-        vm.push(Cell::Str(0)).unwrap();
-        assert_eq!(set_prim(&mut vm), Ok(()));
-        assert_eq!(vm.arrays[0][0], Cell::Str(0));
-    }
+    #[ignore = "#591: requires lifetime-aware allow rules that depend on per-string pool indices, which Rc<str> removes."]
+    fn test_set_caller_owned_str_to_global_array_element_is_string_frame_escape() {}
 
     #[test]
-    fn test_set_caller_owned_str_to_caller_owned_array_element_is_string_frame_escape() {
-        // A CallerOwned Str must be rejected when the target array is CallerOwned.
-        // Both resources belong to "some outer frame", but PoolRefLifetime does not
-        // track which frame — they can belong to different frames with unrelated
-        // lifetimes, so this combination is unsafe.
-        use crate::cell::ReturnFrame;
-        let mut vm = VM::new();
-        // Str(0) will be caller-owned.
-        vm.strings.push("caller".to_string());
-        // global_string_pool_len = 0, so nothing is global.
-        vm.return_stack.push(ReturnFrame::TopLevel);
-        vm.return_stack.push(ReturnFrame::Call {
-            callee_xt: crate::cell::Xt(0),
-            return_pc: 0,
-            saved_bp: 0,
-            saved_array_pool_len: 0,
-            saved_string_pool_len: 0, // outer boundary
-            actual_arity: 0,
-        });
-        vm.return_stack.push(ReturnFrame::Call {
-            callee_xt: crate::cell::Xt(0),
-            return_pc: 0,
-            saved_bp: 0,
-            saved_array_pool_len: 1, // inner boundary; Array(0) is caller-owned
-            saved_string_pool_len: 1, // inner boundary; Str(0) is caller-owned
-            actual_arity: 0,
-        });
-        // Array(0) is caller-owned (idx 0 < innermost saved_array_pool_len=1).
-        vm.arrays.push(vec![Cell::None]);
-        // Str(0): idx=0, innermost saved_string_pool_len=1 → idx < 1 → CallerOwned
-        vm.push(Cell::ArrayAddr {
-            pool_idx: 0,
-            elem_idx: 0,
-        })
-        .unwrap();
-        vm.push(Cell::Str(0)).unwrap();
-        assert_eq!(set_prim(&mut vm), Err(TbxError::StringFrameEscape));
-    }
+    #[ignore = "#591: requires lifetime-aware allow rules that depend on per-string pool indices, which Rc<str> removes."]
+    fn test_set_caller_owned_str_to_frame_local_array_element_is_allowed() {}
+
+    #[test]
+    #[ignore = "#591: requires lifetime-aware allow rules that depend on per-string pool indices, which Rc<str> removes."]
+    fn test_set_caller_owned_str_to_caller_owned_array_element_is_string_frame_escape() {}
 
     #[test]
     fn test_set_nested_array_to_array_element_is_invalid_array_element() {
@@ -7994,7 +7728,7 @@ mod tests {
     #[test]
     fn test_second_type_error() {
         let mut vm = VM::new();
-        vm.push(Cell::Str(0)).unwrap();
+        vm.push(Cell::string("not a number")).unwrap();
         assert!(matches!(
             second_prim(&mut vm),
             Err(TbxError::TypeError { .. })
