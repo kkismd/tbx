@@ -81,7 +81,6 @@ enum PoolRefLifetime {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct PoolBounds {
     array_len: usize,
-    string_len: usize,
 }
 
 fn pool_ref_from_cell(cell: &Cell) -> Option<PoolRef> {
@@ -101,11 +100,9 @@ fn current_call_pool_bounds(vm: &VM) -> Option<PoolBounds> {
     vm.return_stack.iter().rev().find_map(|frame| match frame {
         ReturnFrame::Call {
             saved_array_pool_len,
-            saved_string_pool_len,
             ..
         } => Some(PoolBounds {
             array_len: *saved_array_pool_len,
-            string_len: *saved_string_pool_len,
         }),
         ReturnFrame::TopLevel => None,
     })
@@ -129,7 +126,9 @@ impl PoolRef {
 fn is_global_pool_ref(vm: &VM, pool_ref: PoolRef) -> bool {
     match pool_ref.kind() {
         PoolKind::Array => pool_ref.index() < vm.global_array_pool_len,
-        PoolKind::String => pool_ref.index() < vm.global_string_pool_len,
+        // `Cell::Str` is now `Rc<str>`-backed, so string references no longer
+        // depend on VM-managed pool boundaries.
+        PoolKind::String => true,
     }
 }
 
@@ -138,9 +137,7 @@ fn promote_pool_ref_to_global(vm: &mut VM, pool_ref: PoolRef) {
         PoolKind::Array => {
             vm.global_array_pool_len = vm.global_array_pool_len.max(pool_ref.index() + 1);
         }
-        PoolKind::String => {
-            vm.global_string_pool_len = vm.global_string_pool_len.max(pool_ref.index() + 1);
-        }
+        PoolKind::String => {}
     }
 }
 
@@ -155,7 +152,7 @@ fn frame_escape_error_for_ref(pool_ref: PoolRef) -> TbxError {
 fn saved_bound_for_ref(bounds: PoolBounds, pool_ref: PoolRef) -> usize {
     match pool_ref.kind() {
         PoolKind::Array => bounds.array_len,
-        PoolKind::String => bounds.string_len,
+        PoolKind::String => 0,
     }
 }
 
@@ -3964,49 +3961,6 @@ mod tests {
     }
 
     #[test]
-    fn test_d2_str_primitives_do_not_touch_vm_strings_pool() {
-        // None of the read-only / generative string primitives should push
-        // into `VM::strings` after D-2 (#589).  The full retirement of the
-        // pool is tracked by #590; this test pins down that, even with the
-        // pool field still present, no string primitive interacts with it.
-        let mut vm = VM::new();
-        let pool_len_before = vm.strings.len();
-
-        // STR_LEN on a literal Rc-backed Cell::Str.
-        vm.push(Cell::string("hello")).unwrap();
-        str_len_prim(&mut vm).unwrap();
-        let _ = vm.pop().unwrap();
-
-        // STR_EQ on two literal Rc-backed Cell::Str.
-        vm.push(Cell::string("aa")).unwrap();
-        vm.push(Cell::string("aa")).unwrap();
-        str_eq_prim(&mut vm).unwrap();
-        let _ = vm.pop().unwrap();
-
-        // STR_CONCAT on two literal Rc-backed Cell::Str.
-        vm.push(Cell::string("x")).unwrap();
-        vm.push(Cell::string("y")).unwrap();
-        str_concat_prim(&mut vm).unwrap();
-        let _ = vm.pop().unwrap();
-
-        // STR on a non-Str input.
-        vm.push(Cell::Int(7)).unwrap();
-        str_prim(&mut vm).unwrap();
-        let _ = vm.pop().unwrap();
-
-        // PUTSTR consumes a literal Cell::Str.
-        vm.push(Cell::string("out")).unwrap();
-        putstr_prim(&mut vm).unwrap();
-        assert_eq!(vm.take_output(), "out");
-
-        assert_eq!(
-            vm.strings.len(),
-            pool_len_before,
-            "string primitives must not push into `VM::strings` after D-2 (#589)"
-        );
-    }
-
-    #[test]
     fn test_d2_pop_string_value_returns_underlying_rc() {
         // `pop_string_value` returns the inner `Rc<str>`; the handle must
         // be the very Rc that was pushed on the stack (no copy).
@@ -4397,18 +4351,17 @@ mod tests {
     #[test]
     #[ignore = "#590: relies on the pool-index distinction between frame-local and global strings, which Rc<str> removes. To be replaced once VM::strings is retired."]
     fn test_string_frame_escape_via_store() {
-        // Pre-#588: A Str created inside a word (pool_idx >= global_string_pool_len)
-        // must not be stored into a DictAddr.  Rc<str>-backed Cell::Str has no
-        // pool index, so this scenario is no longer expressible at this layer.
+        // Pre-#588: A Str created inside a word could not be stored into a
+        // DictAddr. Rc<str>-backed Cell::Str has no pool index, so this
+        // scenario is no longer expressible at this layer.
     }
 
     #[test]
     #[ignore = "#590: depends on the pool-index distinction between global and non-global strings. Rc<str>-backed Cell::Str carries no index. The successor test will simply assert that Cell::string(...) can be stored in a dict slot."]
     fn test_global_string_stored_via_store() {
-        // Pre-#588: A Str created at top level (pool_idx < global_string_pool_len)
-        // could be stored without StringFrameEscape.  With Rc<str>, all
-        // Cell::Str values are now safe in dict slots, so the test loses its
-        // discriminating power.
+        // Pre-#588: A top-level Str could be stored without StringFrameEscape.
+        // With Rc<str>, all Cell::Str values are now safe in dict slots, so
+        // the test loses its discriminating power.
     }
 
     #[test]
@@ -4437,12 +4390,6 @@ mod tests {
         assert_eq!(vm.global_array_pool_len, 5);
         promote_pool_ref_to_global(&mut vm, PoolRef::Array(7));
         assert_eq!(vm.global_array_pool_len, 8);
-
-        vm.global_string_pool_len = 4;
-        promote_pool_ref_to_global(&mut vm, PoolRef::String(2));
-        assert_eq!(vm.global_string_pool_len, 4);
-        promote_pool_ref_to_global(&mut vm, PoolRef::String(6));
-        assert_eq!(vm.global_string_pool_len, 7);
     }
 
     #[test]
@@ -4454,7 +4401,6 @@ mod tests {
             return_pc: 0,
             saved_bp: 0,
             saved_array_pool_len: 3,
-            saved_string_pool_len: 4,
             actual_arity: 0,
         });
         vm.return_stack.push(ReturnFrame::Call {
@@ -4462,16 +4408,12 @@ mod tests {
             return_pc: 0,
             saved_bp: 0,
             saved_array_pool_len: 7,
-            saved_string_pool_len: 8,
             actual_arity: 0,
         });
 
         assert_eq!(
             current_call_pool_bounds(&vm),
-            Some(PoolBounds {
-                array_len: 7,
-                string_len: 8,
-            })
+            Some(PoolBounds { array_len: 7 })
         );
     }
 
@@ -4479,14 +4421,9 @@ mod tests {
     fn test_classify_pool_ref_global() {
         let mut vm = VM::new();
         vm.global_array_pool_len = 1;
-        vm.global_string_pool_len = 1;
 
         assert_eq!(
             classify_pool_ref(&vm, PoolRef::Array(0)),
-            PoolRefLifetime::Global
-        );
-        assert_eq!(
-            classify_pool_ref(&vm, PoolRef::String(0)),
             PoolRefLifetime::Global
         );
     }
@@ -4500,16 +4437,11 @@ mod tests {
             return_pc: 0,
             saved_bp: 0,
             saved_array_pool_len: 5,
-            saved_string_pool_len: 6,
             actual_arity: 0,
         });
 
         assert_eq!(
             classify_pool_ref(&vm, PoolRef::Array(4)),
-            PoolRefLifetime::CallerOwned
-        );
-        assert_eq!(
-            classify_pool_ref(&vm, PoolRef::String(5)),
             PoolRefLifetime::CallerOwned
         );
     }
@@ -4523,16 +4455,11 @@ mod tests {
             return_pc: 0,
             saved_bp: 0,
             saved_array_pool_len: 5,
-            saved_string_pool_len: 6,
             actual_arity: 0,
         });
 
         assert_eq!(
             classify_pool_ref(&vm, PoolRef::Array(5)),
-            PoolRefLifetime::FrameLocal
-        );
-        assert_eq!(
-            classify_pool_ref(&vm, PoolRef::String(6)),
             PoolRefLifetime::FrameLocal
         );
     }
@@ -4544,10 +4471,6 @@ mod tests {
 
         assert_eq!(
             classify_pool_ref(&vm, PoolRef::Array(0)),
-            PoolRefLifetime::FrameLocal
-        );
-        assert_eq!(
-            classify_pool_ref(&vm, PoolRef::String(0)),
             PoolRefLifetime::FrameLocal
         );
     }

@@ -144,19 +144,6 @@ impl<'a> ExprCompiler<'a> {
                 Token::StringLit(s) => {
                     // String literals are compile-time constants embedded in
                     // the compiled code as `Cell::Str(Rc<str>)` payloads.
-                    //
-                    // Pre-#588 the literal was indexed into `VM::strings` and
-                    // promoted into the global string region so `SET &G,
-                    // "..."` from inside a word would not trip the
-                    // `StringFrameEscape` check.  D-1 (#588) kept the pool
-                    // push for a minimal transition; D-2 (#589) removes it
-                    // because no runtime path consumes the pushed entry —
-                    // the `Rc<str>` embedded directly in the compiled cell
-                    // owns its own content via the Rc reference count.
-                    //
-                    // The `VM::strings` field, `saved_string_pool_len`, and
-                    // `global_string_pool_len` themselves remain in place;
-                    // their full retirement is tracked by #590.
                     if s.len() > u16::MAX as usize {
                         return Err(TbxError::StringTooLong { len: s.len() });
                     }

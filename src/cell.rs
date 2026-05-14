@@ -53,10 +53,6 @@ pub enum ReturnFrame {
         /// On EXIT or RETURN_VAL, the array pool is truncated back to this
         /// length to free all arrays created during the call.
         saved_array_pool_len: usize,
-        /// Snapshot of `VM::strings.len()` taken at call time.
-        /// On EXIT or RETURN_VAL, the string pool is truncated back to this
-        /// length to free all strings created during the call.
-        saved_string_pool_len: usize,
         /// The actual number of arguments passed to this call.
         /// Used by the `VA_COUNT` primitive to report how many arguments the
         /// caller supplied (including both fixed and variadic arguments).
@@ -120,13 +116,6 @@ pub enum Cell {
     /// Equality (`PartialEq`) compares string content (see the `PartialEq` impl
     /// below).
     ///
-    /// Note: `VM::strings` (the legacy index-based string pool) and the
-    /// associated `saved_string_pool_len` / `global_string_pool_len` fields
-    /// are retained for the transition period, but as of D-2 (#589) no
-    /// runtime path touches them — string primitives and literal
-    /// compilation operate directly on `Rc<str>`.  Full removal of the
-    /// pool and pool-length fields is tracked by follow-up issue #590,
-    /// and array-write-path liberation is tracked by #591.
     Str(std::rc::Rc<str>),
     /// Address of an element in an array.
     ///

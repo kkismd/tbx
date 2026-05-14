@@ -182,25 +182,6 @@ pub struct VM {
     /// Updated to `arrays.len()` whenever a `TopLevel` frame is popped in
     /// `Exit` (i.e. at the end of every top-level execution segment).
     pub global_array_pool_len: usize,
-    /// Legacy runtime string pool — once indexed by `Cell::Str(usize)`.
-    ///
-    /// Pre-#588 each entry was a `String` created by string primitives
-    /// (`STR`, `STR_CONCAT`, etc.) and looked up by index from `Cell::Str`.
-    /// After D-1 (#588) `Cell::Str` wraps `Rc<str>` directly, and after
-    /// D-2 (#589) no compile-time or runtime path pushes or reads this
-    /// pool any more.  The field, together with `global_string_pool_len`
-    /// and `saved_string_pool_len`, is kept solely so the surrounding
-    /// EXIT / RETURN_VAL truncation code (and a few legacy tests) keeps
-    /// building until the pool is removed wholesale by #590.
-    pub strings: Vec<String>,
-    /// Length of the "global" (persistent) region of `strings`.
-    ///
-    /// Pre-D-2 this distinguished compile-time literals (global) from
-    /// runtime-allocated strings (frame-local).  Now that `Cell::Str` no
-    /// longer indexes into `strings`, the distinction is purely
-    /// historical and the value will be retired with the pool itself
-    /// (#590).
-    pub global_string_pool_len: usize,
     /// Internal buffer holding the last line read by ACCEPT.
     ///
     /// ACCEPT reads one line from `input_reader` and stores it here (trimmed of
@@ -273,8 +254,6 @@ impl VM {
             pending_use_path: None,
             arrays: Vec::new(),
             global_array_pool_len: 0,
-            strings: Vec::new(),
-            global_string_pool_len: 0,
             input_buffer: None,
             input_reader: Box::new(BufReader::new(std::io::stdin())),
             output_writer: Box::new(std::io::stdout()),
@@ -748,7 +727,6 @@ impl VM {
                         return_pc,
                         saved_bp,
                         saved_array_pool_len: self.arrays.len(),
-                        saved_string_pool_len: self.strings.len(),
                         actual_arity: 0,
                     });
                     self.bp = self.data_stack.len();
@@ -816,7 +794,6 @@ impl VM {
                                 return_pc,
                                 saved_bp,
                                 saved_array_pool_len: self.arrays.len(),
-                                saved_string_pool_len: self.strings.len(),
                                 actual_arity: arity,
                             });
                             self.bp = self.data_stack.len() - arity;
@@ -842,12 +819,10 @@ impl VM {
                             return_pc,
                             saved_bp,
                             saved_array_pool_len,
-                            saved_string_pool_len,
                             actual_arity: _,
                         } => {
                             self.data_stack.truncate(self.bp);
                             self.arrays.truncate(saved_array_pool_len);
-                            self.strings.truncate(saved_string_pool_len);
                             self.pc = return_pc;
                             self.bp = saved_bp;
                         }
@@ -856,37 +831,24 @@ impl VM {
                             // the persistent region so they can be stored in
                             // VARIABLE slots and shared across word calls.
                             self.global_array_pool_len = self.arrays.len();
-                            // Promote all strings created at the top level to
-                            // the persistent region so they can be stored in
-                            // VARIABLE slots and shared across word calls.
-                            self.global_string_pool_len = self.strings.len();
                             break;
                         }
                     }
                 }
                 EntryKind::ReturnVal => {
-                    // Determine the frame boundaries before popping the return value,
-                    // so we can detect whether the array/string belongs to the current frame.
-                    //
-                    // Note: ReturnVal intentionally uses `saved_array_pool_len` /
-                    // `saved_string_pool_len` (the call-frame boundary) rather than
-                    // `global_array_pool_len` / `global_string_pool_len` (the VM-wide
-                    // global boundary used by store/set).  This is correct because
-                    // ReturnVal only needs to distinguish "created in this frame" from
-                    // "created before this frame was pushed" — it does not need to know
-                    // whether the value is truly global.
-                    let (array_frame_boundary, string_frame_boundary) =
-                        match self.return_stack.last() {
-                            Some(ReturnFrame::Call {
-                                saved_array_pool_len,
-                                saved_string_pool_len,
-                                ..
-                            }) => (*saved_array_pool_len, *saved_string_pool_len),
-                            Some(ReturnFrame::TopLevel) => {
-                                return Err(TbxError::InvalidReturn);
-                            }
-                            None => return Err(TbxError::StackUnderflow),
-                        };
+                    // Determine the array frame boundary before popping the return
+                    // value, so we can detect whether the array belongs to the
+                    // current frame.
+                    let array_frame_boundary = match self.return_stack.last() {
+                        Some(ReturnFrame::Call {
+                            saved_array_pool_len,
+                            ..
+                        }) => *saved_array_pool_len,
+                        Some(ReturnFrame::TopLevel) => {
+                            return Err(TbxError::InvalidReturn);
+                        }
+                        None => return Err(TbxError::StackUnderflow),
+                    };
                     let mut retval = self.pop()?;
                     // Ownership transfer for frame-local Cell::Array:
                     // If the returned array was created in this frame
@@ -918,42 +880,21 @@ impl VM {
                     } else {
                         false
                     };
-                    // Ownership transfer for `Cell::Str`:
-                    //
-                    // Pre-#588, frame-local `Cell::Str(pool_idx)` values were
-                    // swapped to the frame-boundary slot in `VM::strings` so
-                    // they could survive the pool truncation below.  With
-                    // `Cell::Str(Rc<str>)`, the value carries its own
-                    // ownership via the Rc reference count, so no swap is
-                    // needed: the returned `retval` already owns its string.
-                    //
-                    // We still maintain `string_transferred` (always false now)
-                    // to keep the surrounding control flow stable.  The legacy
-                    // `VM::strings` pool truncation below also remains active;
-                    // it no longer affects `Cell::Str` cells, but is kept for
-                    // backward compatibility until #590 removes the pool
-                    // entirely.
-                    let _ = string_frame_boundary; // pool_idx no longer used
-                    let string_transferred = false;
                     match self.return_stack.pop().ok_or(TbxError::StackUnderflow)? {
                         ReturnFrame::Call {
                             callee_xt: _,
                             return_pc,
                             saved_bp,
                             saved_array_pool_len,
-                            saved_string_pool_len,
                             actual_arity: _,
                         } => {
                             self.data_stack.truncate(self.bp);
-                            // Truncate pools back to the saved boundary.
+                            // Truncate the array pool back to the saved boundary.
                             // If ownership was transferred, the returned value now sits
-                            // at `saved_*_pool_len` (the boundary slot), so we keep
+                            // at `saved_array_pool_len` (the boundary slot), so we keep
                             // exactly one extra entry beyond the boundary.
                             let array_keep = saved_array_pool_len + usize::from(array_transferred);
-                            let string_keep =
-                                saved_string_pool_len + usize::from(string_transferred);
                             self.arrays.truncate(array_keep);
-                            self.strings.truncate(string_keep);
                             self.push(retval)?;
                             self.pc = return_pc;
                             self.bp = saved_bp;
@@ -1094,8 +1035,6 @@ impl std::fmt::Debug for VM {
             .field("compile_state", &self.compile_state)
             .field("compile_stack", &self.compile_stack)
             .field("pending_use_path", &self.pending_use_path)
-            .field("strings", &self.strings)
-            .field("global_string_pool_len", &self.global_string_pool_len)
             .field("input_buffer", &self.input_buffer)
             .field("input_reader", &"<dyn BufRead>")
             .field("output_writer", &"<dyn Write>")
@@ -1770,7 +1709,6 @@ mod tests {
                 return_pc: 0,
                 saved_bp: 0,
                 saved_array_pool_len: 0,
-                saved_string_pool_len: 0,
                 actual_arity: 0,
             });
         }
@@ -1813,7 +1751,6 @@ mod tests {
                 return_pc: 0,
                 saved_bp: 0,
                 saved_array_pool_len: 0,
-                saved_string_pool_len: 0,
                 actual_arity: 0,
             });
         }
@@ -2732,13 +2669,10 @@ mod tests {
         // Regression test for the review feedback on PR #543.
         //
         // A string literal that appears inside a DEF ... END body is a
-        // compile-time constant.  Before D-2 (#589) the compile path
-        // pushed it into `vm.strings` and advanced `global_string_pool_len`
-        // so the global-string check in `check_dict_reference_write`
-        // succeeded.  After D-2 the literal is embedded directly as a
+        // compile-time constant. The literal is embedded directly as a
         // `Cell::Str(Rc<str>)`; since `pool_ref_from_cell` returns `None`
-        // for `Cell::Str`, the dict-store path now bypasses the lifetime
-        // check entirely, which keeps the same observable outcome.
+        // for `Cell::Str`, the dict-store path bypasses array-style pool
+        // lifetime checks and keeps the expected observable outcome.
         //
         // Run-time generated strings (e.g. via `STR_CONCAT`) are also
         // `Rc<str>`-backed and likewise carry no pool index, so they too
@@ -2755,20 +2689,10 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "#590: depends on Cell::Str carrying a `global_string_pool_len`-based pool index. Rc<str>-backed Cell::Str has no such index, and the legacy pool will be retired with #590."]
-    fn test_str_literal_inside_word_lives_in_global_region() {
-        // Pre-#588 this test confirmed that a literal compiled inside a
-        // `DEF ... END` body satisfied `idx < global_string_pool_len`.
-        // `Cell::Str` no longer carries an index after #588, so the
-        // assertion is no longer meaningful.
-    }
-
-    #[test]
     fn test_str_literal_assigned_to_global_var_at_top_level_succeeds() {
         // Boundary check: the same SET &G, "..." pattern executed at the
-        // top level (not inside a DEF body) also succeeds, since the
-        // literal lives in the global string region from the moment it
-        // is compiled.
+        // top level (not inside a DEF body) also succeeds because the
+        // literal is embedded directly in the compiled cell.
         let result = run_source(
             "VAR G\n\
              SET &G, \"outside\"\n\
@@ -2901,7 +2825,6 @@ mod tests {
             return_pc: 0,
             saved_bp: 0,
             saved_array_pool_len: 1,
-            saved_string_pool_len: 0,
             actual_arity: 0,
         });
 
@@ -2938,7 +2861,6 @@ mod tests {
             return_pc: 10,
             saved_bp: 0,
             saved_array_pool_len: 0,
-            saved_string_pool_len: 0,
             actual_arity: 1,
         });
         vm.return_stack.push(ReturnFrame::Call {
@@ -2946,7 +2868,6 @@ mod tests {
             return_pc: 20,
             saved_bp: 1,
             saved_array_pool_len: 0,
-            saved_string_pool_len: 0,
             actual_arity: 2,
         });
 
@@ -2960,7 +2881,7 @@ mod tests {
         assert_eq!(frames[2].actual_arity, 0);
     }
 
-    // --- Pool truncation on return (direct vm.arrays / vm.strings length checks) ---
+    // --- Pool truncation on return (direct vm.arrays length checks) ---
 
     #[test]
     fn test_array_pool_len_truncated_when_not_returned() {
@@ -2982,54 +2903,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn test_runtime_strings_len_truncated_when_not_returned() {
-        // After a word that creates a local string but returns a non-string value,
-        // vm.strings should be truncated back to its length before the call.
-        //
-        // Before D-2 (#589), the compile path pushed string literals into
-        // `vm.strings` so the pool length was non-zero by the time the
-        // user word ran.  D-2 stopped pushing literals into the pool, so
-        // the length is now 0 both before and after the call.  String
-        // primitives (`STR_CONCAT`, etc.) no longer touch the pool
-        // either, so the EXIT-time truncation has nothing to do for
-        // strings; the assertion still holds because we compare pool
-        // length to its pre-call value.  Full retirement of the pool is
-        // tracked by #590.
-        let mut interp = crate::interpreter::Interpreter::new();
-        interp
-            .exec_source(
-                "DEF STR_THEN_INT()\n  VAR S\n  LET S = STR_CONCAT(\"foo\", \"bar\")\n  RETURN 1\nEND\n",
-            )
-            .expect("compiling DEF failed");
-        let len_before_call = interp.vm().strings.len();
-        interp
-            .exec_source("PUTDEC STR_THEN_INT()")
-            .expect("exec_source failed");
-        assert_eq!(
-            interp.vm().strings.len(),
-            len_before_call,
-            "frame-local strings created inside the word must be truncated on EXIT"
-        );
-    }
-
-    /// Phase 2 of issue #539: a top-level string literal must be stored in
-    /// `vm.strings` as a `Cell::Str` reference. See issue #542.
-    #[test]
-    #[ignore = "#590: string literals no longer back into `VM::strings` after D-2 (#589); `Cell::Str(Rc<str>)` embeds the literal directly. The successor test `test_string_literal_putstr_outputs_content` exercises the user-visible behaviour without inspecting the pool."]
-    fn test_string_literal_uses_strings_pool() {
-        // Pre-D-2: the literal was pushed into `vm.strings` at compile time
-        // so a `Cell::Str(usize)` index could resolve it.  With `Cell::Str`
-        // now `Rc<str>`-backed (#588) and literal compilation no longer
-        // touching the pool (#589), this assertion has no remaining
-        // meaning at this layer; full retirement of the pool is tracked
-        // by #590.
-    }
-
-    /// D-2 (#589) successor for `test_string_literal_uses_strings_pool`:
-    /// confirm that compiling and executing a `PUTSTR "..."` literal
-    /// produces the expected output without relying on any string pool
-    /// inspection.
     #[test]
     fn test_string_literal_putstr_outputs_content() {
         let mut interp = crate::interpreter::Interpreter::new();
