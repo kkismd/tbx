@@ -128,6 +128,7 @@ fn is_global_pool_ref(vm: &VM, pool_ref: PoolRef) -> bool {
         PoolKind::Array => pool_ref.index() < vm.global_array_pool_len,
         // `Cell::Str` is now `Rc<str>`-backed, so string references no longer
         // depend on VM-managed pool boundaries.
+        // TODO(#590 D3b): remove this compatibility branch with `PoolRef::String`.
         PoolKind::String => true,
     }
 }
@@ -137,6 +138,7 @@ fn promote_pool_ref_to_global(vm: &mut VM, pool_ref: PoolRef) {
         PoolKind::Array => {
             vm.global_array_pool_len = vm.global_array_pool_len.max(pool_ref.index() + 1);
         }
+        // TODO(#590 D3b): remove this compatibility branch with `PoolRef::String`.
         PoolKind::String => {}
     }
 }
@@ -152,6 +154,7 @@ fn frame_escape_error_for_ref(pool_ref: PoolRef) -> TbxError {
 fn saved_bound_for_ref(bounds: PoolBounds, pool_ref: PoolRef) -> usize {
     match pool_ref.kind() {
         PoolKind::Array => bounds.array_len,
+        // TODO(#590 D3b): remove this compatibility branch with `PoolRef::String`.
         PoolKind::String => 0,
     }
 }
