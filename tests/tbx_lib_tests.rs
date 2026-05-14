@@ -143,10 +143,8 @@ fn test_set_runtime_str_into_array_is_string_frame_escape() {
     );
 }
 
-/// SET &A(1), "hello" (compile-time literal) must succeed.
-/// String literals are stored into VM::strings as global compile-time literals
-/// at compile time, so they satisfy the Global lifetime requirement.
-/// Array indices are 1-based in TBX.
+/// SET &A(1), "hello" (compile-time literal) must succeed once array element
+/// writes accept `Cell::Str(Rc<str>)` again. Array indices are 1-based in TBX.
 #[test]
 #[ignore = "#591: array element writes blanket-reject Cell::Str during D-1 (#588). The allow rule for globally-owned strings will be reintroduced when the array-write path is liberated for Rc<str>."]
 fn test_set_literal_str_into_array_is_allowed() {
