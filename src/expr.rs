@@ -148,25 +148,17 @@ impl<'a> ExprCompiler<'a> {
                     // Pre-#588 the literal was indexed into `VM::strings` and
                     // promoted into the global string region so `SET &G,
                     // "..."` from inside a word would not trip the
-                    // `StringFrameEscape` check.  With `Cell::Str` now
-                    // `Rc<str>`-backed, no pool index is needed: the literal
-                    // owns its own string via the Rc reference count.
+                    // `StringFrameEscape` check.  D-1 (#588) kept the pool
+                    // push for a minimal transition; D-2 (#589) removes it
+                    // because no runtime path consumes the pushed entry —
+                    // the `Rc<str>` embedded directly in the compiled cell
+                    // owns its own content via the Rc reference count.
                     //
-                    // We still push the literal into `VM::strings` and bump
-                    // `global_string_pool_len` for the duration of #588's
-                    // minimal transition.  No code path now consumes the
-                    // pushed entry, but keeping the push minimises diff
-                    // churn and lets a couple of legacy regression tests
-                    // (e.g. `test_string_literal_uses_strings_pool`) keep
-                    // observing the pool.  Both will be retired with the
-                    // string pool itself in #590.
+                    // The `VM::strings` field, `saved_string_pool_len`, and
+                    // `global_string_pool_len` themselves remain in place;
+                    // their full retirement is tracked by #590.
                     if s.len() > u16::MAX as usize {
                         return Err(TbxError::StringTooLong { len: s.len() });
-                    }
-                    let idx = self.vm.strings.len();
-                    self.vm.strings.push(s.clone());
-                    if idx >= self.vm.global_string_pool_len {
-                        self.vm.global_string_pool_len = idx + 1;
                     }
                     emit_lit(&mut output, Cell::string(s), self.vm)?;
                     prev_was_operand = true;

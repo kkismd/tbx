@@ -419,7 +419,9 @@ pub fn eq_prim(vm: &mut VM) -> Result<(), TbxError> {
     let result = match (&a, &b) {
         (Cell::Int(x), Cell::Float(y)) => (*x as f64) == *y,
         (Cell::Float(x), Cell::Int(y)) => *x == (*y as f64),
-        (Cell::Str(_), Cell::Str(_)) => resolve_str_cell(vm, &a)? == resolve_str_cell(vm, &b)?,
+        // Content equality on `Rc<str>` is delegated to its `PartialEq`
+        // (which dereferences to `str`); same as `a == b` for the Str pair.
+        (Cell::Str(_), Cell::Str(_)) => resolve_str_cell(&a)? == resolve_str_cell(&b)?,
         _ => a == b,
     };
     vm.push(Cell::Bool(result))?;
@@ -435,7 +437,7 @@ pub fn neq_prim(vm: &mut VM) -> Result<(), TbxError> {
     let result = match (&a, &b) {
         (Cell::Int(x), Cell::Float(y)) => (*x as f64) != *y,
         (Cell::Float(x), Cell::Int(y)) => *x != (*y as f64),
-        (Cell::Str(_), Cell::Str(_)) => resolve_str_cell(vm, &a)? != resolve_str_cell(vm, &b)?,
+        (Cell::Str(_), Cell::Str(_)) => resolve_str_cell(&a)? != resolve_str_cell(&b)?,
         _ => a != b,
     };
     vm.push(Cell::Bool(result))?;
@@ -507,8 +509,10 @@ pub fn ge_prim(vm: &mut VM) -> Result<(), TbxError> {
 /// Escape sequences (\n, \t, \\) in the stored string are output literally
 /// as they were already expanded at compile time.
 pub fn putstr_prim(vm: &mut VM) -> Result<(), TbxError> {
+    // `pop_string_value` returns the inner `Rc<str>` directly; we only need
+    // a `&str` view to write into the output buffer.
     let s = vm.pop_string_value()?;
-    vm.write_output(&s);
+    vm.write_output(s.as_ref());
     Ok(())
 }
 
@@ -533,9 +537,14 @@ pub fn str_prim(vm: &mut VM) -> Result<(), TbxError> {
 pub fn str_concat_prim(vm: &mut VM) -> Result<(), TbxError> {
     let b_cell = vm.pop()?;
     let a_cell = vm.pop()?;
-    let b = resolve_str_cell(vm, &b_cell)?;
-    let a = resolve_str_cell(vm, &a_cell)?;
-    let result = a + &b;
+    let b = resolve_str_cell(&b_cell)?;
+    let a = resolve_str_cell(&a_cell)?;
+    // Concatenation always produces a fresh string; allocate a `String`
+    // first to amortise the join, then convert into a new `Rc<str>` for
+    // the resulting `Cell::Str`.
+    let mut result = String::with_capacity(a.len() + b.len());
+    result.push_str(a.as_ref());
+    result.push_str(b.as_ref());
     vm.push(Cell::string(result))?;
     Ok(())
 }
@@ -547,7 +556,7 @@ pub fn str_concat_prim(vm: &mut VM) -> Result<(), TbxError> {
 /// The length is the number of Unicode scalar values (chars), not UTF-8 bytes.
 pub fn str_len_prim(vm: &mut VM) -> Result<(), TbxError> {
     let s_cell = vm.pop()?;
-    let s = resolve_str_cell(vm, &s_cell)?;
+    let s = resolve_str_cell(&s_cell)?;
     let len = s.chars().count() as i64;
     vm.push(Cell::Int(len))?;
     Ok(())
@@ -564,8 +573,9 @@ pub fn str_len_prim(vm: &mut VM) -> Result<(), TbxError> {
 pub fn str_eq_prim(vm: &mut VM) -> Result<(), TbxError> {
     let b_cell = vm.pop()?;
     let a_cell = vm.pop()?;
-    let b = resolve_str_cell(vm, &b_cell)?;
-    let a = resolve_str_cell(vm, &a_cell)?;
+    let b = resolve_str_cell(&b_cell)?;
+    let a = resolve_str_cell(&a_cell)?;
+    // `Rc<str>` derefs to `str`, so `==` compares string content directly.
     vm.push(Cell::Bool(a == b))?;
     Ok(())
 }
@@ -579,10 +589,12 @@ pub fn str_eq_prim(vm: &mut VM) -> Result<(), TbxError> {
 pub fn str_indexof_prim(vm: &mut VM) -> Result<(), TbxError> {
     let needle_cell = vm.pop()?;
     let haystack_cell = vm.pop()?;
-    let needle = resolve_str_cell(vm, &needle_cell)?;
-    let haystack = resolve_str_cell(vm, &haystack_cell)?;
+    let needle = resolve_str_cell(&needle_cell)?;
+    let haystack = resolve_str_cell(&haystack_cell)?;
+    // `Rc<str>` derefs to `&str`, so `find` / slicing work directly without
+    // an intermediate `String` allocation.
     let pos = haystack
-        .find(&needle)
+        .find(needle.as_ref())
         .map(|byte_idx| haystack[..byte_idx].chars().count() as i64 + 1)
         .unwrap_or(0);
     vm.push(Cell::Int(pos))?;
@@ -611,7 +623,7 @@ pub fn str_slice_prim(vm: &mut VM) -> Result<(), TbxError> {
         });
     }
 
-    let s = resolve_str_cell(vm, &s_cell)?;
+    let s = resolve_str_cell(&s_cell)?;
     let chars: Vec<char> = s.chars().collect();
     let char_len = chars.len() as i64;
     let raw_start = if start > 0 {
@@ -632,7 +644,9 @@ pub fn str_slice_prim(vm: &mut VM) -> Result<(), TbxError> {
 /// Stack: `[..., s: Str]` → `Cell::Str(new)`
 pub fn str_trim_prim(vm: &mut VM) -> Result<(), TbxError> {
     let s_cell = vm.pop()?;
-    let s = resolve_str_cell(vm, &s_cell)?;
+    let s = resolve_str_cell(&s_cell)?;
+    // `s.trim_matches(...)` borrows from the `Rc<str>` and yields `&str`;
+    // `Cell::string` allocates a fresh owned string.
     let trimmed = s.trim_matches(char::is_whitespace).to_string();
     vm.push(Cell::string(trimmed))?;
     Ok(())
@@ -643,7 +657,7 @@ pub fn str_trim_prim(vm: &mut VM) -> Result<(), TbxError> {
 /// Stack: `[..., s: Str]` → `Cell::Str(new)`
 pub fn str_upper_prim(vm: &mut VM) -> Result<(), TbxError> {
     let s_cell = vm.pop()?;
-    let s = resolve_str_cell(vm, &s_cell)?;
+    let s = resolve_str_cell(&s_cell)?;
     let upper = s.to_uppercase();
     vm.push(Cell::string(upper))?;
     Ok(())
@@ -654,7 +668,7 @@ pub fn str_upper_prim(vm: &mut VM) -> Result<(), TbxError> {
 /// Stack: `[..., s: Str]` → `Cell::Str(new)`
 pub fn str_lower_prim(vm: &mut VM) -> Result<(), TbxError> {
     let s_cell = vm.pop()?;
-    let s = resolve_str_cell(vm, &s_cell)?;
+    let s = resolve_str_cell(&s_cell)?;
     let lower = s.to_lowercase();
     vm.push(Cell::string(lower))?;
     Ok(())
@@ -667,9 +681,9 @@ pub fn str_replace_first_prim(vm: &mut VM) -> Result<(), TbxError> {
     let replacement_cell = vm.pop()?;
     let needle_cell = vm.pop()?;
     let s_cell = vm.pop()?;
-    let replacement = resolve_str_cell(vm, &replacement_cell)?;
-    let needle = resolve_str_cell(vm, &needle_cell)?;
-    let s = resolve_str_cell(vm, &s_cell)?;
+    let replacement = resolve_str_cell(&replacement_cell)?;
+    let needle = resolve_str_cell(&needle_cell)?;
+    let s = resolve_str_cell(&s_cell)?;
 
     if needle.is_empty() {
         return Err(TbxError::InvalidArgument {
@@ -677,15 +691,20 @@ pub fn str_replace_first_prim(vm: &mut VM) -> Result<(), TbxError> {
         });
     }
 
-    let result = if let Some(idx) = s.find(&needle) {
+    // When no occurrence is found we can return the same `Rc<str>` by
+    // cloning it cheaply (Rc reference-count bump) without allocating a
+    // new buffer.
+    if let Some(idx) = s.find(needle.as_ref()) {
         let (prefix, rest) = s.split_at(idx);
         let suffix = &rest[needle.len()..];
-        prefix.to_string() + &replacement + suffix
+        let mut result = String::with_capacity(prefix.len() + replacement.len() + suffix.len());
+        result.push_str(prefix);
+        result.push_str(replacement.as_ref());
+        result.push_str(suffix);
+        vm.push(Cell::string(result))?;
     } else {
-        s
-    };
-
-    vm.push(Cell::string(result))?;
+        vm.push(Cell::Str(s))?;
+    }
     Ok(())
 }
 
@@ -696,9 +715,9 @@ pub fn str_replace_all_prim(vm: &mut VM) -> Result<(), TbxError> {
     let replacement_cell = vm.pop()?;
     let needle_cell = vm.pop()?;
     let s_cell = vm.pop()?;
-    let replacement = resolve_str_cell(vm, &replacement_cell)?;
-    let needle = resolve_str_cell(vm, &needle_cell)?;
-    let s = resolve_str_cell(vm, &s_cell)?;
+    let replacement = resolve_str_cell(&replacement_cell)?;
+    let needle = resolve_str_cell(&needle_cell)?;
+    let s = resolve_str_cell(&s_cell)?;
 
     if needle.is_empty() {
         return Err(TbxError::InvalidArgument {
@@ -706,19 +725,21 @@ pub fn str_replace_all_prim(vm: &mut VM) -> Result<(), TbxError> {
         });
     }
 
-    let result = s.replace(&needle, &replacement);
+    // `str::replace` always allocates a fresh `String`, even when the needle
+    // is absent.  We keep that simple behaviour here.
+    let result = s.replace(needle.as_ref(), replacement.as_ref());
     vm.push(Cell::string(result))?;
     Ok(())
 }
 
-/// Helper: resolve a `Cell::Str` to an owned `String`.
+/// Helper: resolve a `Cell::Str` to its inner `Rc<str>` handle.
 ///
-/// `Cell::Str` is `Rc<str>`-backed (#588), so this is just an `Rc -> String`
-/// copy.  The `vm` parameter is retained for now to minimise call-site
-/// churn; it can be dropped together with the legacy string pool in #590.
-fn resolve_str_cell(_vm: &VM, cell: &Cell) -> Result<String, TbxError> {
+/// `Cell::Str` is `Rc<str>`-backed (#588), so this is a cheap `Rc::clone`
+/// rather than a content copy.  Callers that need to mutate or own a
+/// `String` should call `.to_string()` on the result.
+fn resolve_str_cell(cell: &Cell) -> Result<std::rc::Rc<str>, TbxError> {
     match cell {
-        Cell::Str(rc) => Ok(rc.to_string()),
+        Cell::Str(rc) => Ok(rc.clone()),
         other => Err(TbxError::TypeError {
             expected: "Str",
             got: other.type_name(),
@@ -855,7 +876,7 @@ pub fn assert_fail_prim(_vm: &mut VM) -> Result<(), TbxError> {
 ///
 /// Expects a `Cell::Str` on top of the data stack.
 pub fn assert_fail_msg_prim(vm: &mut VM) -> Result<(), TbxError> {
-    let message = vm.pop_string_value()?;
+    let message = vm.pop_string_value()?.to_string();
     Err(TbxError::AssertionFailedWithMessage { message })
 }
 
@@ -1898,7 +1919,9 @@ fn cs_open_tag_prim(vm: &mut VM) -> Result<(), TbxError> {
             reason: "CS_OPEN_TAG outside compile mode",
         });
     }
-    let tag = vm.pop_string_value()?;
+    // `CompileEntry::Tag` holds an owned `String`, so materialise one from
+    // the `Rc<str>` returned by `pop_string_value`.
+    let tag = vm.pop_string_value()?.to_string();
     vm.compile_stack.push(CompileEntry::Tag(tag));
     Ok(())
 }
@@ -1917,7 +1940,9 @@ fn cs_close_tag_prim(vm: &mut VM) -> Result<(), TbxError> {
             reason: "CS_CLOSE_TAG outside compile mode",
         });
     }
-    let expected = vm.pop_string_value()?;
+    // `TbxError::NoOpenTag` / `MismatchedTag` carry owned `String` values,
+    // so we materialise an owned copy from the popped `Rc<str>`.
+    let expected = vm.pop_string_value()?.to_string();
     match vm.compile_stack.pop() {
         None => Err(TbxError::NoOpenTag { expected }),
         Some(CompileEntry::Tag(found)) if found == expected => Ok(()),
@@ -2216,8 +2241,14 @@ fn skip_eq_prim(vm: &mut VM) -> Result<(), TbxError> {
 ///
 /// Expects a `Cell::Str` on top of the data stack.
 fn lookup_prim(vm: &mut VM) -> Result<(), TbxError> {
-    let name = vm.pop_string_value()?;
-    let xt = vm.lookup(&name).ok_or(TbxError::UndefinedSymbol { name })?;
+    let name_rc = vm.pop_string_value()?;
+    let xt = vm.lookup(name_rc.as_ref()).ok_or_else(|| {
+        // Materialise an owned `String` for the error payload only on the
+        // failure path.
+        TbxError::UndefinedSymbol {
+            name: name_rc.to_string(),
+        }
+    })?;
     vm.push(Cell::Xt(xt))
 }
 
@@ -3871,6 +3902,132 @@ mod tests {
             str_concat_prim(&mut vm),
             Err(TbxError::TypeError { .. })
         ));
+    }
+
+    // ----------------------------------------------------------------
+    // D-2 (#589) regression tests: confirm string primitives operate on
+    // `Cell::Str(Rc<str>)` without going through `VM::strings`.
+    // ----------------------------------------------------------------
+
+    #[test]
+    fn test_d2_str_prim_pushes_cell_str_with_rc() {
+        // `STR` on an Int produces a `Cell::Str` carrying an `Rc<str>` that
+        // matches the decimal rendering of the input.
+        let mut vm = VM::new();
+        vm.push(Cell::Int(123)).unwrap();
+        str_prim(&mut vm).unwrap();
+        let cell = vm.pop().unwrap();
+        match &cell {
+            Cell::Str(rc) => assert_eq!(rc.as_ref(), "123"),
+            other => panic!("expected Cell::Str, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_d2_str_prim_on_str_reuses_underlying_rc() {
+        // `STR` on a `Cell::Str` should reuse the underlying `Rc<str>` (an
+        // identity-like conversion) rather than allocating a new buffer.
+        let mut vm = VM::new();
+        let original: std::rc::Rc<str> = "shared".into();
+        vm.push(Cell::Str(original.clone())).unwrap();
+        str_prim(&mut vm).unwrap();
+        match vm.pop().unwrap() {
+            Cell::Str(rc) => {
+                assert!(
+                    std::rc::Rc::ptr_eq(&rc, &original),
+                    "STR on Cell::Str should reuse the inner Rc, not allocate"
+                );
+            }
+            other => panic!("expected Cell::Str, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_d2_str_concat_produces_fresh_rc_with_combined_content() {
+        // `STR_CONCAT` produces a new `Cell::Str` whose content is the
+        // concatenation of the two operands.  The resulting Rc must own
+        // its own buffer (it cannot alias either input by `Rc::ptr_eq`).
+        let mut vm = VM::new();
+        let left: std::rc::Rc<str> = "foo".into();
+        let right: std::rc::Rc<str> = "bar".into();
+        vm.push(Cell::Str(left.clone())).unwrap();
+        vm.push(Cell::Str(right.clone())).unwrap();
+        str_concat_prim(&mut vm).unwrap();
+        match vm.pop().unwrap() {
+            Cell::Str(rc) => {
+                assert_eq!(rc.as_ref(), "foobar");
+                assert!(!std::rc::Rc::ptr_eq(&rc, &left));
+                assert!(!std::rc::Rc::ptr_eq(&rc, &right));
+            }
+            other => panic!("expected Cell::Str, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_d2_str_primitives_do_not_touch_vm_strings_pool() {
+        // None of the read-only / generative string primitives should push
+        // into `VM::strings` after D-2 (#589).  The full retirement of the
+        // pool is tracked by #590; this test pins down that, even with the
+        // pool field still present, no string primitive interacts with it.
+        let mut vm = VM::new();
+        let pool_len_before = vm.strings.len();
+
+        // STR_LEN on a literal Rc-backed Cell::Str.
+        vm.push(Cell::string("hello")).unwrap();
+        str_len_prim(&mut vm).unwrap();
+        let _ = vm.pop().unwrap();
+
+        // STR_EQ on two literal Rc-backed Cell::Str.
+        vm.push(Cell::string("aa")).unwrap();
+        vm.push(Cell::string("aa")).unwrap();
+        str_eq_prim(&mut vm).unwrap();
+        let _ = vm.pop().unwrap();
+
+        // STR_CONCAT on two literal Rc-backed Cell::Str.
+        vm.push(Cell::string("x")).unwrap();
+        vm.push(Cell::string("y")).unwrap();
+        str_concat_prim(&mut vm).unwrap();
+        let _ = vm.pop().unwrap();
+
+        // STR on a non-Str input.
+        vm.push(Cell::Int(7)).unwrap();
+        str_prim(&mut vm).unwrap();
+        let _ = vm.pop().unwrap();
+
+        // PUTSTR consumes a literal Cell::Str.
+        vm.push(Cell::string("out")).unwrap();
+        putstr_prim(&mut vm).unwrap();
+        assert_eq!(vm.take_output(), "out");
+
+        assert_eq!(
+            vm.strings.len(),
+            pool_len_before,
+            "string primitives must not push into `VM::strings` after D-2 (#589)"
+        );
+    }
+
+    #[test]
+    fn test_d2_pop_string_value_returns_underlying_rc() {
+        // `pop_string_value` returns the inner `Rc<str>`; the handle must
+        // be the very Rc that was pushed on the stack (no copy).
+        let mut vm = VM::new();
+        let original: std::rc::Rc<str> = "abc".into();
+        vm.push(Cell::Str(original.clone())).unwrap();
+        let popped = vm.pop_string_value().expect("expected Cell::Str on stack");
+        assert!(
+            std::rc::Rc::ptr_eq(&popped, &original),
+            "pop_string_value should return the same Rc that was pushed"
+        );
+    }
+
+    #[test]
+    fn test_d2_putstr_emits_rc_backed_literal_content() {
+        // End-to-end check: a Cell::Str carrying an Rc<str> with literal
+        // content is correctly emitted by PUTSTR through the output buffer.
+        let mut vm = VM::new();
+        vm.push(Cell::string("rc-literal")).unwrap();
+        putstr_prim(&mut vm).unwrap();
+        assert_eq!(vm.take_output(), "rc-literal");
     }
 
     // --- str_len_prim tests ---
