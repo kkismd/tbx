@@ -267,7 +267,7 @@ pub fn set_prim(vm: &mut VM) -> Result<(), TbxError> {
 ///
 /// `Cell::Array` is always rejected (nested arrays are not supported).
 /// `Cell::Str` is also rejected here; callers that need lifetime-aware string
-/// checks should use `check_array_element_write` instead.
+/// checks should use `stabilize_array_element_write` instead.
 fn check_array_element_type(value: &Cell) -> Result<(), TbxError> {
     match value {
         Cell::Array(_) => Err(TbxError::InvalidArrayElement { got: "Array" }),
@@ -276,109 +276,109 @@ fn check_array_element_type(value: &Cell) -> Result<(), TbxError> {
     }
 }
 
-/// Check that a `Cell::Str` at `str_idx` may be written to the array at
+/// Clone the string at `str_idx` and append the clone to `vm.strings`.
+///
+/// Returns the index of the newly created clone.
+///
+/// # Errors
+///
+/// Returns `TbxError::IndexOutOfBounds` if `str_idx` is out of range.
+fn clone_string_ref(vm: &mut VM, str_idx: usize) -> Result<usize, TbxError> {
+    let s = vm
+        .strings
+        .get(str_idx)
+        .ok_or(TbxError::IndexOutOfBounds {
+            index: str_idx,
+            size: vm.strings.len(),
+        })?
+        .clone();
+    vm.strings.push(s);
+    Ok(vm.strings.len() - 1)
+}
+
+/// Clone the string at `str_idx`, append the clone to `vm.strings`, and
+/// include the clone in the global string region by advancing
+/// `global_string_pool_len`.
+///
+/// This makes the clone safe to store in any array regardless of the array's
+/// lifetime: global strings never dangle.
+///
+/// # Errors
+///
+/// Returns `TbxError::IndexOutOfBounds` if `str_idx` is out of range.
+fn clone_string_ref_to_global(vm: &mut VM, str_idx: usize) -> Result<usize, TbxError> {
+    let new_idx = clone_string_ref(vm, str_idx)?;
+    vm.global_string_pool_len = vm.global_string_pool_len.max(new_idx + 1);
+    Ok(new_idx)
+}
+
+/// Validate and transform `value` before it is stored in the array at
 /// `array_pool_idx`.
 ///
-/// The allow/deny matrix (Phase 5A):
+/// This is the Phase 5B-2 entry-point for array element writes.
 ///
-/// | array lifetime | string lifetime | result |
-/// |----------------|-----------------|--------|
-/// | any            | `FrameLocal`    | deny   |
-/// | any            | `Global`        | allow  |
-/// | `FrameLocal`   | `CallerOwned`   | allow  |
-/// | `Global` / `CallerOwned` | `CallerOwned` | deny |
+/// # Allow/deny/clone matrix (Phase 5B-2)
 ///
-/// Rationale:
-/// - `FrameLocal` strings are freed when the current call frame returns, so
-///   they must never be placed in any array.
-/// - `Global` strings are safe in any array.
-/// - `CallerOwned` strings are safe only in `FrameLocal` arrays: the array
-///   is bound to the current frame and will die before the string's owning
-///   frame returns.  `CallerOwned` arrays and `Global` arrays may outlive the
-///   string's owning frame because `CallerOwned` does not track which outer
-///   frame owns the resource — two `CallerOwned` values can belong to
-///   different frames with unrelated lifetimes.
+/// | array lifetime           | string lifetime  | action                   |
+/// |--------------------------|------------------|--------------------------|
+/// | `Global`                 | `Global`         | store as-is              |
+/// | `Global`                 | `CallerOwned`    | clone to global, store   |
+/// | `Global`                 | `FrameLocal`     | clone to global, store   |
+/// | `CallerOwned`            | `Global`         | store as-is              |
+/// | `CallerOwned`            | `CallerOwned`    | clone to global, store   |
+/// | `CallerOwned`            | `FrameLocal`     | clone to global, store   |
+/// | `FrameLocal`             | `Global`         | store as-is              |
+/// | `FrameLocal`             | `CallerOwned`    | store as-is              |
+/// | `FrameLocal`             | `FrameLocal`     | deny (`StringFrameEscape`)|
+///
+/// `Cell::Array` is always rejected as a nested array.
 ///
 /// # Errors
 ///
-/// Returns `TbxError::StringFrameEscape` when the combination is unsafe.
-fn check_string_array_element_write(
-    vm: &VM,
-    array_pool_idx: usize,
-    str_idx: usize,
-) -> Result<(), TbxError> {
-    let array_lifetime = classify_pool_ref(vm, PoolRef::Array(array_pool_idx));
-    let str_lifetime = classify_pool_ref(vm, PoolRef::String(str_idx));
-
-    match (array_lifetime, str_lifetime) {
-        // FrameLocal strings are always unsafe without clone/promote.
-        (_, PoolRefLifetime::FrameLocal) => Err(TbxError::StringFrameEscape),
-        // Global strings are safe in any array.
-        (_, PoolRefLifetime::Global) => Ok(()),
-        // CallerOwned strings are safe only in FrameLocal arrays.
-        // The array will die before or with the current frame, while the string
-        // is owned by an outer frame.
-        (PoolRefLifetime::FrameLocal, PoolRefLifetime::CallerOwned) => Ok(()),
-        // Global arrays and CallerOwned arrays may outlive the CallerOwned string.
-        // Without owner-generation tracking or clone/promote, reject them.
-        (PoolRefLifetime::Global | PoolRefLifetime::CallerOwned, PoolRefLifetime::CallerOwned) => {
-            Err(TbxError::StringFrameEscape)
-        }
-    }
-}
-
-/// Check that `value` may be written to the array at `array_pool_idx`.
-///
-/// This is the lifetime-aware counterpart to `check_array_element_type` and
-/// is used by `write_array_element` (the `SET`/`STORE` path).
-///
-/// * `Cell::Array` is always rejected (nested arrays are not supported).
-/// * All non-reference scalars are accepted unconditionally.
-/// * `Cell::Str` lifetime rules are delegated to
-///   `check_string_array_element_write`; see that function for the full
-///   allow/deny matrix (Phase 5A).
-fn check_array_element_write(vm: &VM, array_pool_idx: usize, value: &Cell) -> Result<(), TbxError> {
-    match value {
-        // Nested arrays are unconditionally rejected.
-        Cell::Array(_) => Err(TbxError::InvalidArrayElement { got: "Array" }),
-        // Delegate to the dedicated helper that classifies both lifetimes.
-        Cell::Str(str_idx) => check_string_array_element_write(vm, array_pool_idx, *str_idx),
-        // All other scalar types are accepted.
-        _ => Ok(()),
-    }
-}
-
-/// Validate and (in future phases) transform `value` before it is stored in
-/// the array at `array_pool_idx`.
-///
-/// This is the Phase 5B entry-point for array element writes.  In the current
-/// phase (5B-1) the behaviour is identical to `check_array_element_write`:
-/// validation only, no clone/promote.  Subsequent phases will intercept
-/// specific lifetime combinations here and return a modified `Cell` (e.g. a
-/// global clone of a `CallerOwned` string).
-///
-/// # Allow/deny matrix (Phase 5A — unchanged in 5B-1)
-///
-/// | array lifetime           | string lifetime  | result |
-/// |--------------------------|------------------|--------|
-/// | any                      | `FrameLocal`     | deny   |
-/// | any                      | `Global`         | allow  |
-/// | `FrameLocal`             | `CallerOwned`    | allow  |
-/// | `Global` / `CallerOwned` | `CallerOwned`    | deny   |
-///
-/// # Errors
-///
-/// Returns an error when the combination is unsafe or unsupported (e.g.
-/// `Cell::Array` is always rejected as a nested array).
+/// Returns an error when the combination is unsafe or unsupported.
 fn stabilize_array_element_write(
     vm: &mut VM,
     array_pool_idx: usize,
     value: Cell,
 ) -> Result<Cell, TbxError> {
-    // Phase 5B-1: validate only; clone/promote will be added in later phases.
-    // The immutable borrow of `vm` ends before any future mutable operations.
-    check_array_element_write(vm, array_pool_idx, &value)?;
-    Ok(value)
+    match value {
+        // Nested arrays are unconditionally rejected.
+        Cell::Array(_) => Err(TbxError::InvalidArrayElement { got: "Array" }),
+        Cell::Str(str_idx) => {
+            let array_lifetime = classify_pool_ref(vm, PoolRef::Array(array_pool_idx));
+            let str_lifetime = classify_pool_ref(vm, PoolRef::String(str_idx));
+
+            match (array_lifetime, str_lifetime) {
+                // Global strings are always safe in any array: store as-is.
+                (_, PoolRefLifetime::Global) => Ok(Cell::Str(str_idx)),
+
+                // FrameLocal arrays with CallerOwned strings: the array dies
+                // before or with the current frame, so the string outlives it.
+                (PoolRefLifetime::FrameLocal, PoolRefLifetime::CallerOwned) => {
+                    Ok(Cell::Str(str_idx))
+                }
+
+                // FrameLocal arrays with FrameLocal strings are still denied in
+                // this phase (return-stabilization is handled in a later issue).
+                (PoolRefLifetime::FrameLocal, PoolRefLifetime::FrameLocal) => {
+                    Err(TbxError::StringFrameEscape)
+                }
+
+                // Global or CallerOwned arrays with non-global strings:
+                // clone the string into the global region so it is safe to
+                // store in a potentially long-lived array.
+                (
+                    PoolRefLifetime::Global | PoolRefLifetime::CallerOwned,
+                    PoolRefLifetime::CallerOwned | PoolRefLifetime::FrameLocal,
+                ) => {
+                    let new_idx = clone_string_ref_to_global(vm, str_idx)?;
+                    Ok(Cell::Str(new_idx))
+                }
+            }
+        }
+        // All other scalar types are accepted unconditionally.
+        other => Ok(other),
+    }
 }
 
 /// Write `value` to element `elem_idx` of the array at `pool_idx`.
@@ -7485,18 +7485,18 @@ mod tests {
     }
 
     #[test]
-    fn test_set_caller_owned_str_to_global_array_element_is_string_frame_escape() {
-        // A CallerOwned Str must be rejected when the target array is Global.
-        // Global arrays outlive the caller's frame, so storing a caller-owned
-        // string there risks a dangling reference.
+    fn test_set_caller_owned_str_to_global_array_element_clones_to_global() {
+        // Phase 5B-2: A CallerOwned Str stored in a Global array is cloned into
+        // the global string region; the original string is NOT stored as-is.
         use crate::cell::ReturnFrame;
         let mut vm = VM::new();
-        // Str(0) will be caller-owned (not global).
+        // Str(0) will be caller-owned (not global): global_string_pool_len = 0.
         vm.strings.push("caller".to_string());
-        vm.strings.push("local".to_string());
-        // global_string_pool_len = 0, so nothing is global.
-        // Push a call frame: the caller saw string_pool_len = 0 before the call,
-        // and a nested call sees string_pool_len = 1.
+        vm.strings.push("inner".to_string());
+        // Build nested call frames so Str(0) is CallerOwned:
+        //   outer call frame saw string_pool_len = 0
+        //   inner call frame (current) saw string_pool_len = 1
+        // → Str(0): idx=0 < innermost saved_string_pool_len=1 → CallerOwned
         vm.return_stack.push(ReturnFrame::TopLevel);
         vm.return_stack.push(ReturnFrame::Call {
             callee_xt: crate::cell::Xt(0),
@@ -7510,21 +7510,38 @@ mod tests {
             callee_xt: crate::cell::Xt(0),
             return_pc: 0,
             saved_bp: 0,
-            saved_array_pool_len: 1, // inner boundary; Array(0) is caller-owned in array space
+            saved_array_pool_len: 1, // inner boundary; Array(0) is caller-owned
             saved_string_pool_len: 1, // inner boundary; Str(0) is caller-owned
             actual_arity: 0,
         });
-        // Array(0) is global (idx 0 < global_array_pool_len = 1).
+        // Array(0) is global.
         vm.arrays.push(vec![Cell::None]);
-        vm.global_array_pool_len = 1; // promote Array(0) to global
-                                      // Str(0): idx=0, innermost saved_string_pool_len=1 → idx < 1 → CallerOwned
+        vm.global_array_pool_len = 1;
+        // set_prim: stack = [..., addr, value]
         vm.push(Cell::ArrayAddr {
             pool_idx: 0,
             elem_idx: 0,
         })
         .unwrap();
         vm.push(Cell::Str(0)).unwrap();
-        assert_eq!(set_prim(&mut vm), Err(TbxError::StringFrameEscape));
+        // Write must succeed.
+        assert_eq!(set_prim(&mut vm), Ok(()));
+        // The element must NOT be the original Str(0); it must be a clone.
+        let stored = &vm.arrays[0][0];
+        assert!(
+            matches!(stored, Cell::Str(idx) if *idx != 0),
+            "expected a cloned Str at an index != 0, got: {stored:?}"
+        );
+        // The clone must reside within the global string region.
+        if let Cell::Str(clone_idx) = stored {
+            assert!(
+                *clone_idx < vm.global_string_pool_len,
+                "clone index {clone_idx} must be < global_string_pool_len {}",
+                vm.global_string_pool_len
+            );
+            // The clone must have the same content as the original.
+            assert_eq!(vm.strings[*clone_idx], "caller");
+        }
     }
 
     #[test]
@@ -7569,16 +7586,16 @@ mod tests {
     }
 
     #[test]
-    fn test_set_caller_owned_str_to_caller_owned_array_element_is_string_frame_escape() {
-        // A CallerOwned Str must be rejected when the target array is CallerOwned.
-        // Both resources belong to "some outer frame", but PoolRefLifetime does not
-        // track which frame — they can belong to different frames with unrelated
-        // lifetimes, so this combination is unsafe.
+    fn test_set_caller_owned_str_to_caller_owned_array_element_clones_to_global() {
+        // Phase 5B-2: A CallerOwned Str stored in a CallerOwned array is cloned
+        // into the global string region so it cannot dangle.
         use crate::cell::ReturnFrame;
         let mut vm = VM::new();
-        // Str(0) will be caller-owned.
+        // Str(0) will be caller-owned: global_string_pool_len = 0.
         vm.strings.push("caller".to_string());
-        // global_string_pool_len = 0, so nothing is global.
+        // Build nested call frames so both Array(0) and Str(0) are CallerOwned:
+        //   innermost saved_array_pool_len = 1 → Array(0) is CallerOwned
+        //   innermost saved_string_pool_len = 1 → Str(0) is CallerOwned
         vm.return_stack.push(ReturnFrame::TopLevel);
         vm.return_stack.push(ReturnFrame::Call {
             callee_xt: crate::cell::Xt(0),
@@ -7592,20 +7609,169 @@ mod tests {
             callee_xt: crate::cell::Xt(0),
             return_pc: 0,
             saved_bp: 0,
-            saved_array_pool_len: 1, // inner boundary; Array(0) is caller-owned
-            saved_string_pool_len: 1, // inner boundary; Str(0) is caller-owned
+            saved_array_pool_len: 1,  // Array(0) is caller-owned
+            saved_string_pool_len: 1, // Str(0) is caller-owned
             actual_arity: 0,
         });
         // Array(0) is caller-owned (idx 0 < innermost saved_array_pool_len=1).
         vm.arrays.push(vec![Cell::None]);
-        // Str(0): idx=0, innermost saved_string_pool_len=1 → idx < 1 → CallerOwned
+        // Str(0): idx=0 < innermost saved_string_pool_len=1 → CallerOwned
         vm.push(Cell::ArrayAddr {
             pool_idx: 0,
             elem_idx: 0,
         })
         .unwrap();
         vm.push(Cell::Str(0)).unwrap();
-        assert_eq!(set_prim(&mut vm), Err(TbxError::StringFrameEscape));
+        // Write must succeed.
+        assert_eq!(set_prim(&mut vm), Ok(()));
+        // The original Str(0) must NOT have been stored directly.
+        let stored = &vm.arrays[0][0];
+        assert!(
+            matches!(stored, Cell::Str(idx) if *idx != 0),
+            "expected a cloned Str at an index != 0, got: {stored:?}"
+        );
+        // The clone must be in the global region.
+        if let Cell::Str(clone_idx) = stored {
+            assert!(
+                *clone_idx < vm.global_string_pool_len,
+                "clone index {clone_idx} must be < global_string_pool_len {}",
+                vm.global_string_pool_len
+            );
+            assert_eq!(vm.strings[*clone_idx], "caller");
+        }
+    }
+
+    #[test]
+    fn test_set_frame_local_str_to_global_array_element_clones_to_global() {
+        // Phase 5B-2: A FrameLocal Str stored in a Global array is cloned into
+        // the global string region.
+        let mut vm = VM::new();
+        // Str(0) is frame-local: global_string_pool_len = 0.
+        vm.strings.push("frame-local".to_string());
+        // Array(0) is global.
+        vm.arrays.push(vec![Cell::None]);
+        vm.global_array_pool_len = 1;
+        // set_prim: stack = [..., addr, value]
+        vm.push(Cell::ArrayAddr {
+            pool_idx: 0,
+            elem_idx: 0,
+        })
+        .unwrap();
+        vm.push(Cell::Str(0)).unwrap();
+        // Write must succeed (clone to global).
+        assert_eq!(set_prim(&mut vm), Ok(()));
+        // The stored element must be a clone, not the original Str(0).
+        let stored = &vm.arrays[0][0];
+        assert!(
+            matches!(stored, Cell::Str(idx) if *idx != 0),
+            "expected a cloned Str at an index != 0, got: {stored:?}"
+        );
+        if let Cell::Str(clone_idx) = stored {
+            assert!(
+                *clone_idx < vm.global_string_pool_len,
+                "clone index {clone_idx} must be < global_string_pool_len {}",
+                vm.global_string_pool_len
+            );
+            assert_eq!(vm.strings[*clone_idx], "frame-local");
+        }
+    }
+
+    #[test]
+    fn test_set_frame_local_str_to_caller_owned_array_element_clones_to_global() {
+        // Phase 5B-2: A FrameLocal Str stored in a CallerOwned array is cloned
+        // into the global string region.
+        use crate::cell::ReturnFrame;
+        let mut vm = VM::new();
+        // Str(0) is frame-local: global_string_pool_len = 0.
+        vm.strings.push("frame-local".to_string());
+        // Build call frames so Array(0) is CallerOwned.
+        vm.return_stack.push(ReturnFrame::TopLevel);
+        vm.return_stack.push(ReturnFrame::Call {
+            callee_xt: crate::cell::Xt(0),
+            return_pc: 0,
+            saved_bp: 0,
+            saved_array_pool_len: 1, // Array(0) is caller-owned
+            saved_string_pool_len: 0,
+            actual_arity: 0,
+        });
+        vm.arrays.push(vec![Cell::None]);
+        // set_prim: stack = [..., addr, value]
+        vm.push(Cell::ArrayAddr {
+            pool_idx: 0,
+            elem_idx: 0,
+        })
+        .unwrap();
+        vm.push(Cell::Str(0)).unwrap();
+        assert_eq!(set_prim(&mut vm), Ok(()));
+        // The stored element must be a clone in the global region.
+        let stored = &vm.arrays[0][0];
+        assert!(
+            matches!(stored, Cell::Str(idx) if *idx != 0),
+            "expected a cloned Str at an index != 0, got: {stored:?}"
+        );
+        if let Cell::Str(clone_idx) = stored {
+            assert!(
+                *clone_idx < vm.global_string_pool_len,
+                "clone index {clone_idx} must be < global_string_pool_len {}",
+                vm.global_string_pool_len
+            );
+            assert_eq!(vm.strings[*clone_idx], "frame-local");
+        }
+    }
+
+    #[test]
+    fn test_clone_string_ref_basic() {
+        // clone_string_ref copies the content and returns a new index.
+        let mut vm = VM::new();
+        vm.strings.push("hello".to_string());
+        let new_idx = clone_string_ref(&mut vm, 0).unwrap();
+        assert_eq!(new_idx, 1);
+        assert_eq!(vm.strings[new_idx], "hello");
+        // Original and clone are independent slots.
+        assert_ne!(new_idx, 0);
+    }
+
+    #[test]
+    fn test_clone_string_ref_out_of_bounds() {
+        let mut vm = VM::new();
+        let result = clone_string_ref(&mut vm, 99);
+        assert!(matches!(
+            result,
+            Err(TbxError::IndexOutOfBounds { index: 99, .. })
+        ));
+    }
+
+    #[test]
+    fn test_clone_string_ref_to_global_advances_pool_len() {
+        // clone_string_ref_to_global must include the clone in the global region.
+        let mut vm = VM::new();
+        vm.strings.push("original".to_string());
+        // global_string_pool_len = 0: Str(0) is frame-local.
+        assert_eq!(vm.global_string_pool_len, 0);
+        let clone_idx = clone_string_ref_to_global(&mut vm, 0).unwrap();
+        assert_eq!(clone_idx, 1);
+        // The clone is now in the global region.
+        assert!(
+            clone_idx < vm.global_string_pool_len,
+            "clone_idx {clone_idx} must be < global_string_pool_len {}",
+            vm.global_string_pool_len
+        );
+        assert_eq!(vm.strings[clone_idx], "original");
+    }
+
+    #[test]
+    fn test_clone_string_ref_to_global_never_moves_boundary_backward() {
+        // If global_string_pool_len is already ahead, it must not shrink.
+        let mut vm = VM::new();
+        vm.strings.push("a".to_string());
+        vm.strings.push("b".to_string());
+        vm.strings.push("c".to_string());
+        vm.global_string_pool_len = 10; // already large
+        let clone_idx = clone_string_ref_to_global(&mut vm, 0).unwrap();
+        // The new clone is appended at index 3.
+        assert_eq!(clone_idx, 3);
+        // global_string_pool_len must not shrink (max semantics).
+        assert_eq!(vm.global_string_pool_len, 10);
     }
 
     #[test]
