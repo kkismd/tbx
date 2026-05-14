@@ -122,10 +122,11 @@ pub enum Cell {
     ///
     /// Note: `VM::strings` (the legacy index-based string pool) and the
     /// associated `saved_string_pool_len` / `global_string_pool_len` fields
-    /// are retained for the transition period.  `Cell::Str` itself no longer
-    /// indexes into them.  Full removal of the pool and pool-length fields is
-    /// tracked by follow-up issue #590, and array-write-path liberation is
-    /// tracked by #591.
+    /// are retained for the transition period, but as of D-2 (#589) no
+    /// runtime path touches them — string primitives and literal
+    /// compilation operate directly on `Rc<str>`.  Full removal of the
+    /// pool and pool-length fields is tracked by follow-up issue #590,
+    /// and array-write-path liberation is tracked by #591.
     Str(std::rc::Rc<str>),
     /// Address of an element in an array.
     ///

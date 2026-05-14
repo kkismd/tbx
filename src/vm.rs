@@ -182,22 +182,24 @@ pub struct VM {
     /// Updated to `arrays.len()` whenever a `TopLevel` frame is popped in
     /// `Exit` (i.e. at the end of every top-level execution segment).
     pub global_array_pool_len: usize,
-    /// Runtime string pool: indexed by `Cell::Str(usize)` values.
+    /// Legacy runtime string pool — once indexed by `Cell::Str(usize)`.
     ///
-    /// Each entry is a `String` created by string primitives such as `STR`,
-    /// `STR_CONCAT`, etc.  On every word EXIT or RETURN_VAL, the pool is
-    /// truncated back to the length saved in
-    /// `ReturnFrame::Call::saved_string_pool_len`, freeing all strings
-    /// allocated within that call.
+    /// Pre-#588 each entry was a `String` created by string primitives
+    /// (`STR`, `STR_CONCAT`, etc.) and looked up by index from `Cell::Str`.
+    /// After D-1 (#588) `Cell::Str` wraps `Rc<str>` directly, and after
+    /// D-2 (#589) no compile-time or runtime path pushes or reads this
+    /// pool any more.  The field, together with `global_string_pool_len`
+    /// and `saved_string_pool_len`, is kept solely so the surrounding
+    /// EXIT / RETURN_VAL truncation code (and a few legacy tests) keeps
+    /// building until the pool is removed wholesale by #590.
     pub strings: Vec<String>,
     /// Length of the "global" (persistent) region of `strings`.
     ///
-    /// Strings at indices `0..global_string_pool_len` were created at the top
-    /// level (outside any `DEF..END`) and are never freed.  They may safely be
-    /// stored in `VARIABLE` slots and shared across word calls.
-    ///
-    /// Updated to `strings.len()` whenever a `TopLevel` frame is popped in
-    /// `Exit` (i.e. at the end of every top-level execution segment).
+    /// Pre-D-2 this distinguished compile-time literals (global) from
+    /// runtime-allocated strings (frame-local).  Now that `Cell::Str` no
+    /// longer indexes into `strings`, the distinction is purely
+    /// historical and the value will be retired with the pool itself
+    /// (#590).
     pub global_string_pool_len: usize,
     /// Internal buffer holding the last line read by ACCEPT.
     ///
@@ -453,21 +455,20 @@ impl VM {
         }
     }
 
-    /// Pop a `Cell::Str` value from the data stack and return a fresh `String`
-    /// copy of its contents.
+    /// Pop a `Cell::Str` value from the data stack and return its inner
+    /// `Rc<str>` handle.
     ///
-    /// `Cell::Str` now wraps an `Rc<str>` (issue #588); this helper still
-    /// returns an owned `String` for API compatibility with existing string
-    /// primitives.  A future cleanup (#589) may switch the return type to
-    /// `Rc<str>` to avoid the copy.
+    /// Returning the underlying `Rc<str>` avoids copying the string content;
+    /// callers that need an owned `String` can call `.to_string()` on the
+    /// result, while read-only callers can use `.as_ref()` for a `&str`.
     ///
     /// # Errors
     ///
     /// Returns `Err(TbxError::StackUnderflow)` if the stack is empty.
     /// Returns `Err(TbxError::TypeError)` if the top value is not `Cell::Str`.
-    pub fn pop_string_value(&mut self) -> Result<String, TbxError> {
+    pub fn pop_string_value(&mut self) -> Result<std::rc::Rc<str>, TbxError> {
         match self.pop()? {
-            Cell::Str(s) => Ok(s.to_string()),
+            Cell::Str(s) => Ok(s),
             other => Err(TbxError::TypeError {
                 expected: "Str",
                 got: other.type_name(),
@@ -2731,17 +2732,18 @@ mod tests {
         // Regression test for the review feedback on PR #543.
         //
         // A string literal that appears inside a DEF ... END body is a
-        // compile-time constant: `compile_expr` pushes it onto
-        // `vm.strings` and immediately advances `global_string_pool_len`
-        // so the literal lives in the global string region.  This makes
-        // and lets compiled words assign string literals into global
-        // variables via `SET &G, "..."` without triggering
-        // `StringFrameEscape`.
+        // compile-time constant.  Before D-2 (#589) the compile path
+        // pushed it into `vm.strings` and advanced `global_string_pool_len`
+        // so the global-string check in `check_dict_reference_write`
+        // succeeded.  After D-2 the literal is embedded directly as a
+        // `Cell::Str(Rc<str>)`; since `pool_ref_from_cell` returns `None`
+        // for `Cell::Str`, the dict-store path now bypasses the lifetime
+        // check entirely, which keeps the same observable outcome.
         //
-        // Run-time generated strings (e.g. via `STR_CONCAT`) remain
-        // frame-local and still need to escape the frame via `RETURN`
-        // before they can be stored into a global; see
-        // `test_str_frame_escape_via_store_to_dict_is_error`.
+        // Run-time generated strings (e.g. via `STR_CONCAT`) are also
+        // `Rc<str>`-backed and likewise carry no pool index, so they too
+        // can now be stored into a global directly.  Full retirement of
+        // the legacy pool fields is tracked by #590.
         let result = run_source(
             "VAR G\n\
              DEF SETG()\n  SET &G, \"inside\"\nEND\n\
@@ -2985,12 +2987,15 @@ mod tests {
         // After a word that creates a local string but returns a non-string value,
         // vm.strings should be truncated back to its length before the call.
         //
-        // Compile time pushes the string literals "foo" and "bar" into
-        // `vm.strings` (since #542 / #539 Phase 2), so the pool length before
-        // the user word runs is non-zero.  The runtime concatenation result
-        // produced inside `STR_THEN_INT` must still be discarded on EXIT,
-        // so the length after `PUTDEC` finishes must equal the length
-        // just before the user word was called.
+        // Before D-2 (#589), the compile path pushed string literals into
+        // `vm.strings` so the pool length was non-zero by the time the
+        // user word ran.  D-2 stopped pushing literals into the pool, so
+        // the length is now 0 both before and after the call.  String
+        // primitives (`STR_CONCAT`, etc.) no longer touch the pool
+        // either, so the EXIT-time truncation has nothing to do for
+        // strings; the assertion still holds because we compare pool
+        // length to its pre-call value.  Full retirement of the pool is
+        // tracked by #590.
         let mut interp = crate::interpreter::Interpreter::new();
         interp
             .exec_source(
@@ -3011,24 +3016,63 @@ mod tests {
     /// Phase 2 of issue #539: a top-level string literal must be stored in
     /// `vm.strings` as a `Cell::Str` reference. See issue #542.
     #[test]
+    #[ignore = "#590: string literals no longer back into `VM::strings` after D-2 (#589); `Cell::Str(Rc<str>)` embeds the literal directly. The successor test `test_string_literal_putstr_outputs_content` exercises the user-visible behaviour without inspecting the pool."]
     fn test_string_literal_uses_strings_pool() {
-        let mut interp = crate::interpreter::Interpreter::new();
-        let strings_before = interp.vm().strings.len();
+        // Pre-D-2: the literal was pushed into `vm.strings` at compile time
+        // so a `Cell::Str(usize)` index could resolve it.  With `Cell::Str`
+        // now `Rc<str>`-backed (#588) and literal compilation no longer
+        // touching the pool (#589), this assertion has no remaining
+        // meaning at this layer; full retirement of the pool is tracked
+        // by #590.
+    }
 
+    /// D-2 (#589) successor for `test_string_literal_uses_strings_pool`:
+    /// confirm that compiling and executing a `PUTSTR "..."` literal
+    /// produces the expected output without relying on any string pool
+    /// inspection.
+    #[test]
+    fn test_string_literal_putstr_outputs_content() {
+        let mut interp = crate::interpreter::Interpreter::new();
         interp
             .exec_source("PUTSTR \"phase2-test\"\n")
             .expect("exec_source failed");
+        assert_eq!(interp.take_output(), "phase2-test");
+    }
 
-        // The literal must have been pushed into `vm.strings`.
-        assert!(
-            interp
-                .vm()
-                .strings
-                .iter()
-                .skip(strings_before)
-                .any(|s| s == "phase2-test"),
-            "string literal must be stored in vm.strings"
+    /// D-2 (#589): a compiled string literal used multiple times — and
+    /// from inside a loop — must continue to produce the same content on
+    /// every iteration.  This guards against any accidental ownership
+    /// move that would consume the embedded `Rc<str>` on first use.
+    #[test]
+    fn test_string_literal_reused_multiple_times() {
+        let mut interp = crate::interpreter::Interpreter::new();
+        interp
+            .exec_source(
+                "DEF SHOUT()\n  PUTSTR \"hi\"\nEND\n\
+                 SHOUT\nSHOUT\nSHOUT\n",
+            )
+            .expect("exec_source failed");
+        assert_eq!(interp.take_output(), "hihihi");
+    }
+
+    /// D-2 (#589): a compiled string literal compared with `STR_EQ` must
+    /// honour content equality (`Rc<str>` derefs to `str` so the
+    /// derived `PartialEq` already compares content).
+    #[test]
+    fn test_string_literal_str_eq_compares_content() {
+        let mut interp = crate::interpreter::Interpreter::new();
+        let src = concat!(
+            "DEF CHECK()\n",
+            "  IF STR_EQ(\"hello\", \"hello\")\n",
+            "    PUTSTR \"yes\"\n",
+            "  ELSE\n",
+            "    PUTSTR \"no\"\n",
+            "  ENDIF\n",
+            "END\n",
+            "CHECK\n",
         );
+        interp.exec_source(src).expect("exec_source failed");
+        assert_eq!(interp.take_output(), "yes");
     }
 
     /// Phase 2 of issue #539: a string literal stored in a `VARIABLE` slot
