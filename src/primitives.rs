@@ -8,34 +8,17 @@ use crate::vm::{CompileState, VM};
 use std::collections::HashMap;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-/// DROP — discard the top element of the data stack.
-pub fn drop_prim(vm: &mut VM) -> Result<(), TbxError> {
-    vm.pop()?;
-    Ok(())
-}
+// Low-dependency primitives split out into category modules.
+// `primitives.rs` remains the façade and registration entry point; the
+// `pub use` re-exports keep `crate::primitives::<name>` paths working for
+// existing callers and tests.
+mod logic;
+mod numeric;
+mod stack;
 
-/// LIT_MARKER — push a Cell::Marker sentinel onto the data stack.
-pub fn lit_marker_prim(vm: &mut VM) -> Result<(), TbxError> {
-    vm.push(Cell::Marker)?;
-    Ok(())
-}
-
-/// DUP — duplicate the top element of the data stack.
-pub fn dup_prim(vm: &mut VM) -> Result<(), TbxError> {
-    let top = vm.pop()?;
-    vm.push(top.clone())?;
-    vm.push(top)?;
-    Ok(())
-}
-
-/// SWAP — exchange the top two elements of the data stack.
-pub fn swap_prim(vm: &mut VM) -> Result<(), TbxError> {
-    let a = vm.pop()?;
-    let b = vm.pop()?;
-    vm.push(a)?;
-    vm.push(b)?;
-    Ok(())
-}
+pub use logic::*;
+pub use numeric::*;
+pub use stack::*;
 
 /// FETCH — fetch a value from an address and push it onto the stack.
 pub fn fetch_prim(vm: &mut VM) -> Result<(), TbxError> {
@@ -410,122 +393,6 @@ fn write_array_element(
     Ok(())
 }
 
-pub fn add_prim(vm: &mut VM) -> Result<(), TbxError> {
-    let b = vm.pop_number()?;
-    let a = vm.pop_number()?;
-    match (a, b) {
-        (Cell::Int(x), Cell::Int(y)) => {
-            let result = x.checked_add(y).ok_or(TbxError::IntegerOverflow)?;
-            vm.push(Cell::Int(result))?;
-        }
-        (Cell::Float(x), Cell::Float(y)) => vm.push(Cell::Float(x + y))?,
-        (Cell::Int(x), Cell::Float(y)) => vm.push(Cell::Float(x as f64 + y))?,
-        (Cell::Float(x), Cell::Int(y)) => vm.push(Cell::Float(x + y as f64))?,
-        _ => unreachable!("pop_number guarantees Int or Float"),
-    }
-    Ok(())
-}
-
-pub fn sub_prim(vm: &mut VM) -> Result<(), TbxError> {
-    let b = vm.pop_number()?;
-    let a = vm.pop_number()?;
-    match (a, b) {
-        (Cell::Int(x), Cell::Int(y)) => {
-            let result = x.checked_sub(y).ok_or(TbxError::IntegerOverflow)?;
-            vm.push(Cell::Int(result))?;
-        }
-        (Cell::Float(x), Cell::Float(y)) => vm.push(Cell::Float(x - y))?,
-        (Cell::Int(x), Cell::Float(y)) => vm.push(Cell::Float(x as f64 - y))?,
-        (Cell::Float(x), Cell::Int(y)) => vm.push(Cell::Float(x - y as f64))?,
-        _ => unreachable!("pop_number guarantees Int or Float"),
-    }
-    Ok(())
-}
-
-pub fn mul_prim(vm: &mut VM) -> Result<(), TbxError> {
-    let b = vm.pop_number()?;
-    let a = vm.pop_number()?;
-    match (a, b) {
-        (Cell::Int(x), Cell::Int(y)) => {
-            let result = x.checked_mul(y).ok_or(TbxError::IntegerOverflow)?;
-            vm.push(Cell::Int(result))?;
-        }
-        (Cell::Float(x), Cell::Float(y)) => vm.push(Cell::Float(x * y))?,
-        (Cell::Int(x), Cell::Float(y)) => vm.push(Cell::Float(x as f64 * y))?,
-        (Cell::Float(x), Cell::Int(y)) => vm.push(Cell::Float(x * y as f64))?,
-        _ => unreachable!("pop_number guarantees Int or Float"),
-    }
-    Ok(())
-}
-
-#[allow(clippy::redundant_guards)] // Float(0.0) pattern also matches -0.0; use guard for clarity
-pub fn div_prim(vm: &mut VM) -> Result<(), TbxError> {
-    let b = vm.pop_number()?;
-    let a = vm.pop_number()?;
-    match (a, b) {
-        (Cell::Int(_), Cell::Int(0)) => return Err(TbxError::DivisionByZero),
-        (Cell::Int(x), Cell::Int(y)) => {
-            let result = x.checked_div(y).ok_or(TbxError::IntegerOverflow)?;
-            vm.push(Cell::Int(result))?;
-        }
-        (Cell::Float(_), Cell::Float(y)) if y == 0.0 => return Err(TbxError::DivisionByZero),
-        (Cell::Float(x), Cell::Float(y)) => vm.push(Cell::Float(x / y))?,
-        (Cell::Int(_), Cell::Float(y)) if y == 0.0 => return Err(TbxError::DivisionByZero),
-        (Cell::Int(x), Cell::Float(y)) => vm.push(Cell::Float(x as f64 / y))?,
-        (Cell::Float(_), Cell::Int(0)) => return Err(TbxError::DivisionByZero),
-        (Cell::Float(x), Cell::Int(y)) => vm.push(Cell::Float(x / y as f64))?,
-        _ => unreachable!("pop_number guarantees Int or Float"),
-    }
-    Ok(())
-}
-
-pub fn mod_prim(vm: &mut VM) -> Result<(), TbxError> {
-    let b = vm.pop_int()?;
-    let a = vm.pop_int()?;
-    if b == 0 {
-        return Err(TbxError::DivisionByZero);
-    }
-    let result = a.checked_rem(b).ok_or(TbxError::IntegerOverflow)?;
-    vm.push(Cell::Int(result))?;
-    Ok(())
-}
-
-/// SQRT — compute the square root of a number. Pushes a Float result.
-/// Accepts Int or Float. Negative values and NaN/Infinity produce an error.
-/// Negative zero (-0.0) is normalized to positive zero (0.0).
-pub fn sqrt_prim(vm: &mut VM) -> Result<(), TbxError> {
-    let num = vm.pop_number()?;
-    match num {
-        Cell::Int(i) if i < 0 => {
-            return Err(TbxError::InvalidArgument {
-                message: format!("sqrt of negative number: {i}"),
-            });
-        }
-        Cell::Float(f) if f.is_nan() || !f.is_finite() => {
-            return Err(TbxError::InvalidArgument {
-                message: format!("sqrt of invalid number: {f}"),
-            });
-        }
-        Cell::Float(f) if f < 0.0 => {
-            return Err(TbxError::InvalidArgument {
-                message: format!("sqrt of negative number: {f}"),
-            });
-        }
-        Cell::Int(i) => {
-            let result = (i as f64).sqrt();
-            vm.push(Cell::Float(result))?;
-        }
-        Cell::Float(f) => {
-            // Normalize -0.0 to 0.0 for consistency with zero handling elsewhere.
-            let f = if f == 0.0 { 0.0 } else { f };
-            let result = f.sqrt();
-            vm.push(Cell::Float(result))?;
-        }
-        _ => unreachable!("pop_number guarantees Int or Float"),
-    }
-    Ok(())
-}
-
 /// EQ — equality comparison. Pushes Bool(true) if the two top values are equal.
 /// Int/Float mixed pairs are compared by promoting Int to Float.
 /// Two `Cell::Str` values are compared by string content.
@@ -615,38 +482,6 @@ pub fn ge_prim(vm: &mut VM) -> Result<(), TbxError> {
         _ => unreachable!("pop_number guarantees Int or Float"),
     };
     vm.push(Cell::Bool(result))?;
-    Ok(())
-}
-
-/// AND — logical AND. Evaluates both operands with is_truthy() and pushes the result as Bool.
-pub fn and_prim(vm: &mut VM) -> Result<(), TbxError> {
-    let b = vm.pop()?;
-    let a = vm.pop()?;
-    vm.push(Cell::Bool(a.is_truthy() && b.is_truthy()))?;
-    Ok(())
-}
-
-/// OR — logical OR. Evaluates both operands with is_truthy() and pushes the result as Bool.
-pub fn or_prim(vm: &mut VM) -> Result<(), TbxError> {
-    let b = vm.pop()?;
-    let a = vm.pop()?;
-    vm.push(Cell::Bool(a.is_truthy() || b.is_truthy()))?;
-    Ok(())
-}
-
-/// BAND — bitwise AND. Both operands must be Int.
-pub fn band_prim(vm: &mut VM) -> Result<(), TbxError> {
-    let b = vm.pop_int()?;
-    let a = vm.pop_int()?;
-    vm.push(Cell::Int(a & b))?;
-    Ok(())
-}
-
-/// BOR — bitwise OR. Both operands must be Int.
-pub fn bor_prim(vm: &mut VM) -> Result<(), TbxError> {
-    let b = vm.pop_int()?;
-    let a = vm.pop_int()?;
-    vm.push(Cell::Int(a | b))?;
     Ok(())
 }
 
@@ -1037,31 +872,6 @@ pub fn assert_fail_prim(_vm: &mut VM) -> Result<(), TbxError> {
 pub fn assert_fail_msg_prim(vm: &mut VM) -> Result<(), TbxError> {
     let message = vm.pop_string_value()?;
     Err(TbxError::AssertionFailedWithMessage { message })
-}
-
-/// NEGATE — negate the numeric value on top of the data stack.
-///
-/// - `Cell::Int(n)` → `Cell::Int(-n)` (returns `IntegerOverflow` for `i64::MIN`)
-/// - `Cell::Float(v)` → `Cell::Float(-v)`
-/// - any other type → `TbxError::TypeError`
-pub fn negate_prim(vm: &mut VM) -> Result<(), TbxError> {
-    let val = vm.pop()?;
-    match val {
-        Cell::Int(n) => {
-            let result = n.checked_neg().ok_or(TbxError::IntegerOverflow)?;
-            vm.push(Cell::Int(result))?;
-        }
-        Cell::Float(v) => {
-            vm.push(Cell::Float(-v))?;
-        }
-        other => {
-            return Err(TbxError::TypeError {
-                expected: "Int or Float",
-                got: other.type_name(),
-            });
-        }
-    }
-    Ok(())
 }
 
 /// INT — truncate a numeric value toward zero and return it as `Cell::Int`.

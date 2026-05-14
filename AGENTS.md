@@ -31,7 +31,7 @@ The inner interpreter (`VM::exec_xt`) reads a sequence of `Xt` values, dispatche
 5. **`src/lexer.rs`** — tokenizer; produces `Token` / `SpannedToken`
 6. **`src/expr.rs`** — expression compiler using the Shunting-Yard Algorithm; converts infix expressions to RPN `Vec<Cell>`
 7. **`src/vm.rs`** — `VM` struct, `CompileState` (active DEF..END state), inner interpreter
-8. **`src/primitives.rs`** — all built-in `PrimFn` implementations (`register_all`)
+8. **`src/primitives.rs` / `src/primitives/`** — built-in `PrimFn` implementations. `src/primitives.rs` remains the façade and registration entry point (`register_all`); low-dependency category modules may live under `src/primitives/` (e.g. `stack.rs`, `numeric.rs`, `logic.rs`).
 9. **`src/interpreter.rs`** — outer interpreter (`Interpreter`); tokenizes source, drives `compile_program` / `exec_source` / `exec_line`
 
 ### Dictionary structure
