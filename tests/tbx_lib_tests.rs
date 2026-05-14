@@ -241,3 +241,29 @@ fn test_set_frame_local_runtime_str_into_frame_local_array_is_string_frame_escap
         "expected 'string cannot escape', got: {err}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Phase 5A deny-cases not directly expressible at TBX integration level
+// ---------------------------------------------------------------------------
+//
+// The following Phase 5A combinations are denied by the runtime but cannot
+// be exercised through integration tests due to current TBX limitations:
+//
+// 1. CallerOwned Str → Global Array:
+//    String literals are always promoted to the global string pool at compile
+//    time, so they are never CallerOwned.  A dynamically-generated (frame-local)
+//    string returned from a word becomes CallerOwned in the caller, but there
+//    is currently no way to pass that returned value as a parameter to another
+//    word via a DEF-body statement call (DEF-inside-DEF statement calls trigger
+//    a DROP_TO_MARKER mismatch due to a known limitation in the statement
+//    compilation path).
+//
+// 2. CallerOwned Str → CallerOwned Array:
+//    For the same reason as above, building a scenario where both the array
+//    and the string are CallerOwned (i.e., created in distinct outer frames)
+//    is not achievable through the integration-test harness in its current form.
+//
+// Both cases are covered at the unit-test level:
+//   - `test_set_caller_owned_str_to_global_array_element_is_string_frame_escape`
+//   - `test_set_caller_owned_str_to_caller_owned_array_element_is_string_frame_escape`
+// in `src/primitives.rs`.
