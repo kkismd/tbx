@@ -25,7 +25,7 @@ TOPIC_BRANCH=$(git branch --show-current)
 ```bash
 if [ -z "$TOPIC_BRANCH" ]; then
   echo "カレントがブランチ上ではありません（detached HEAD）。処理を停止します。"
-  # stop here
+  exit 1
 fi
 ```
 
@@ -41,7 +41,7 @@ fi
      --json baseRefName --limit 1 --jq '.[0].baseRefName // ""')
    ```
    - `jq` フィルタに `// ""` を付けて `null` を空文字列に変換する。
-   - 取得結果が空または `null` 文字列の場合はステップ 3 へ進む。
+   - 取得結果が空または `null` 文字列の場合は、次項の `main` フォールバックを行う。
 3. **どちらでも決まらない場合は `main` にフォールバックする**
    - フォールバックを使ったことをユーザーに必ず一言伝える（誤爆防止）。
    ```bash
