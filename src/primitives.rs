@@ -57,17 +57,11 @@ pub fn fetch_prim(vm: &mut VM) -> Result<(), TbxError> {
     }
 }
 
+/// Reference to a pool-managed value.  After #590 D3b the only pool with VM-
+/// managed lifetime is the array pool (`Cell::Str` is `Rc<str>`-backed), so a
+/// `PoolRef` is simply an array pool index.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum PoolKind {
-    Array,
-    String,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum PoolRef {
-    Array(usize),
-    String(usize),
-}
+struct PoolRef(usize);
 
 #[cfg_attr(not(test), allow(dead_code))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -85,12 +79,7 @@ struct PoolBounds {
 
 fn pool_ref_from_cell(cell: &Cell) -> Option<PoolRef> {
     match cell {
-        Cell::Array(idx) => Some(PoolRef::Array(*idx)),
-        // `Cell::Str` is now `Rc<str>`-backed and does not carry a pool index.
-        // The Rc reference count manages its lifetime, so there is no PoolRef
-        // to return.  See follow-up issue #590 for the full retirement of
-        // `VM::strings` / `PoolRef::String`.
-        Cell::Str(_) => None,
+        Cell::Array(idx) => Some(PoolRef(*idx)),
         _ => None,
     }
 }
@@ -109,54 +98,17 @@ fn current_call_pool_bounds(vm: &VM) -> Option<PoolBounds> {
 }
 
 impl PoolRef {
-    fn kind(self) -> PoolKind {
-        match self {
-            PoolRef::Array(_) => PoolKind::Array,
-            PoolRef::String(_) => PoolKind::String,
-        }
-    }
-
     fn index(self) -> usize {
-        match self {
-            PoolRef::Array(idx) | PoolRef::String(idx) => idx,
-        }
+        self.0
     }
 }
 
 fn is_global_pool_ref(vm: &VM, pool_ref: PoolRef) -> bool {
-    match pool_ref.kind() {
-        PoolKind::Array => pool_ref.index() < vm.global_array_pool_len,
-        // `Cell::Str` is now `Rc<str>`-backed, so string references no longer
-        // depend on VM-managed pool boundaries.
-        // TODO(#590 D3b): remove this compatibility branch with `PoolRef::String`.
-        PoolKind::String => true,
-    }
+    pool_ref.index() < vm.global_array_pool_len
 }
 
 fn promote_pool_ref_to_global(vm: &mut VM, pool_ref: PoolRef) {
-    match pool_ref.kind() {
-        PoolKind::Array => {
-            vm.global_array_pool_len = vm.global_array_pool_len.max(pool_ref.index() + 1);
-        }
-        // TODO(#590 D3b): remove this compatibility branch with `PoolRef::String`.
-        PoolKind::String => {}
-    }
-}
-
-fn frame_escape_error_for_ref(pool_ref: PoolRef) -> TbxError {
-    match pool_ref.kind() {
-        PoolKind::Array => TbxError::ArrayFrameEscape,
-        PoolKind::String => TbxError::StringFrameEscape,
-    }
-}
-
-#[cfg_attr(not(test), allow(dead_code))]
-fn saved_bound_for_ref(bounds: PoolBounds, pool_ref: PoolRef) -> usize {
-    match pool_ref.kind() {
-        PoolKind::Array => bounds.array_len,
-        // TODO(#590 D3b): remove this compatibility branch with `PoolRef::String`.
-        PoolKind::String => 0,
-    }
+    vm.global_array_pool_len = vm.global_array_pool_len.max(pool_ref.index() + 1);
 }
 
 #[cfg_attr(not(test), allow(dead_code))]
@@ -171,7 +123,7 @@ fn classify_pool_ref(vm: &VM, pool_ref: PoolRef) -> PoolRefLifetime {
         return PoolRefLifetime::FrameLocal;
     };
 
-    if pool_ref.index() >= saved_bound_for_ref(bounds, pool_ref) {
+    if pool_ref.index() >= bounds.array_len {
         PoolRefLifetime::FrameLocal
     } else {
         PoolRefLifetime::CallerOwned
@@ -192,7 +144,7 @@ fn check_dict_reference_write(vm: &mut VM, value: &Cell) -> Result<(), TbxError>
         return Ok(());
     }
 
-    Err(frame_escape_error_for_ref(pool_ref))
+    Err(TbxError::ArrayFrameEscape)
 }
 
 /// STORE — pop addr (top) then value (below), and store value at addr.
@@ -263,55 +215,6 @@ fn check_array_element_type(value: &Cell) -> Result<(), TbxError> {
         Cell::Array(_) => Err(TbxError::InvalidArrayElement { got: "Array" }),
         Cell::Str(_) => Err(TbxError::InvalidArrayElement { got: "Str" }),
         _ => Ok(()),
-    }
-}
-
-/// Check that a `Cell::Str` at `str_idx` may be written to the array at
-/// `array_pool_idx`.
-///
-/// **Dead code as of #588 (D-1).** Now that `Cell::Str` is `Rc<str>`-backed
-/// and no longer carries a pool index, `check_array_element_write` rejects
-/// all `Cell::Str` values up front, so this helper is unreachable.  It is
-/// kept (with `#[allow(dead_code)]`) for reference until #590 / #591 retire
-/// the legacy string pool and decide the final array-write policy.
-///
-/// Historical allow/deny matrix (Phase 5A):
-///
-/// | array lifetime | string lifetime | result |
-/// |----------------|-----------------|--------|
-/// | any            | `FrameLocal`    | deny   |
-/// | any            | `Global`        | allow  |
-/// | `FrameLocal`   | `CallerOwned`   | allow  |
-/// | `Global` / `CallerOwned` | `CallerOwned` | deny |
-///
-/// # Errors
-///
-/// Returns `TbxError::StringFrameEscape` when the combination is unsafe.
-// TODO(#590/#591): remove once VM::strings is retired and the new array-write
-// policy is locked in.
-#[allow(dead_code)]
-fn check_string_array_element_write(
-    vm: &VM,
-    array_pool_idx: usize,
-    str_idx: usize,
-) -> Result<(), TbxError> {
-    let array_lifetime = classify_pool_ref(vm, PoolRef::Array(array_pool_idx));
-    let str_lifetime = classify_pool_ref(vm, PoolRef::String(str_idx));
-
-    match (array_lifetime, str_lifetime) {
-        // FrameLocal strings are always unsafe without clone/promote.
-        (_, PoolRefLifetime::FrameLocal) => Err(TbxError::StringFrameEscape),
-        // Global strings are safe in any array.
-        (_, PoolRefLifetime::Global) => Ok(()),
-        // CallerOwned strings are safe only in FrameLocal arrays.
-        // The array will die before or with the current frame, while the string
-        // is owned by an outer frame.
-        (PoolRefLifetime::FrameLocal, PoolRefLifetime::CallerOwned) => Ok(()),
-        // Global arrays and CallerOwned arrays may outlive the CallerOwned string.
-        // Without owner-generation tracking or clone/promote, reject them.
-        (PoolRefLifetime::Global | PoolRefLifetime::CallerOwned, PoolRefLifetime::CallerOwned) => {
-            Err(TbxError::StringFrameEscape)
-        }
     }
 }
 
@@ -4349,29 +4252,27 @@ mod tests {
         ));
     }
 
-    // --- StringFrameEscape tests ---
+    // --- positive Cell::Str dict store (replaces legacy StringFrameEscape tests) ---
 
     #[test]
-    #[ignore = "#590: relies on the pool-index distinction between frame-local and global strings, which Rc<str> removes. To be replaced once VM::strings is retired."]
-    fn test_string_frame_escape_via_store() {
-        // Pre-#588: A Str created inside a word could not be stored into a
-        // DictAddr. Rc<str>-backed Cell::Str has no pool index, so this
-        // scenario is no longer expressible at this layer.
-    }
-
-    #[test]
-    #[ignore = "#590: depends on the pool-index distinction between global and non-global strings. Rc<str>-backed Cell::Str carries no index. The successor test will simply assert that Cell::string(...) can be stored in a dict slot."]
-    fn test_global_string_stored_via_store() {
-        // Pre-#588: A top-level Str could be stored without StringFrameEscape.
-        // With Rc<str>, all Cell::Str values are now safe in dict slots, so
-        // the test loses its discriminating power.
+    fn test_str_stored_via_store_to_dict_succeeds() {
+        // With `Cell::Str(Rc<str>)`, dict store no longer depends on the legacy
+        // string-pool lifetime classification.  Both frame-local- and top-level-
+        // originated strings are safe to store in a dict slot, so the previous
+        // `StringFrameEscape` distinction is gone.
+        let mut vm = VM::new();
+        vm.dictionary.push(Cell::None);
+        vm.push(Cell::string("hello")).unwrap();
+        vm.push(Cell::DictAddr(0)).unwrap();
+        store_prim(&mut vm).unwrap();
+        assert_eq!(vm.dict_read(0).unwrap(), Cell::string("hello"));
     }
 
     #[test]
     fn test_pool_ref_from_cell_array_only() {
-        // Cell::Array still produces a PoolRef; Cell::Str is now Rc<str>-backed
-        // and returns None.
-        assert_eq!(pool_ref_from_cell(&Cell::Array(3)), Some(PoolRef::Array(3)));
+        // PoolRef tracks array pool entries only; `Cell::Str` is `Rc<str>`-backed
+        // and produces no PoolRef.
+        assert_eq!(pool_ref_from_cell(&Cell::Array(3)), Some(PoolRef(3)));
         assert_eq!(pool_ref_from_cell(&Cell::string("hello")), None);
         assert_eq!(
             pool_ref_from_cell(&Cell::ArrayAddr {
@@ -4389,9 +4290,9 @@ mod tests {
         let mut vm = VM::new();
 
         vm.global_array_pool_len = 5;
-        promote_pool_ref_to_global(&mut vm, PoolRef::Array(1));
+        promote_pool_ref_to_global(&mut vm, PoolRef(1));
         assert_eq!(vm.global_array_pool_len, 5);
-        promote_pool_ref_to_global(&mut vm, PoolRef::Array(7));
+        promote_pool_ref_to_global(&mut vm, PoolRef(7));
         assert_eq!(vm.global_array_pool_len, 8);
     }
 
@@ -4425,10 +4326,7 @@ mod tests {
         let mut vm = VM::new();
         vm.global_array_pool_len = 1;
 
-        assert_eq!(
-            classify_pool_ref(&vm, PoolRef::Array(0)),
-            PoolRefLifetime::Global
-        );
+        assert_eq!(classify_pool_ref(&vm, PoolRef(0)), PoolRefLifetime::Global);
     }
 
     #[test]
@@ -4444,7 +4342,7 @@ mod tests {
         });
 
         assert_eq!(
-            classify_pool_ref(&vm, PoolRef::Array(4)),
+            classify_pool_ref(&vm, PoolRef(4)),
             PoolRefLifetime::CallerOwned
         );
     }
@@ -4462,7 +4360,7 @@ mod tests {
         });
 
         assert_eq!(
-            classify_pool_ref(&vm, PoolRef::Array(5)),
+            classify_pool_ref(&vm, PoolRef(5)),
             PoolRefLifetime::FrameLocal
         );
     }
@@ -4473,7 +4371,7 @@ mod tests {
         vm.return_stack.push(ReturnFrame::TopLevel);
 
         assert_eq!(
-            classify_pool_ref(&vm, PoolRef::Array(0)),
+            classify_pool_ref(&vm, PoolRef(0)),
             PoolRefLifetime::FrameLocal
         );
     }

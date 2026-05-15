@@ -856,9 +856,7 @@ impl VM {
                     // boundary slot and mark it for preservation.
                     // Array elements are guaranteed to be Int/Float/Bool/None
                     // (no nested references), so no recursive check is needed.
-                    // Note: `array_transferred` and `string_transferred` are mutually
-                    // exclusive. `retval` is a single Cell, so it can be either
-                    // Cell::Array or Cell::Str, never both simultaneously.
+                    // `Cell::Str` is `Rc<str>`-backed and needs no swap.
                     let array_transferred = if let Cell::Array(pool_idx) = &retval {
                         if *pool_idx >= array_frame_boundary {
                             // Bounds check before swap: both indices must be valid.
@@ -2653,15 +2651,6 @@ mod tests {
             matches!(result, Err(crate::error::TbxError::ArrayFrameEscape)),
             "expected ArrayFrameEscape, got: {result:?}"
         );
-    }
-
-    #[test]
-    #[ignore = "#590: frame-local strings no longer need StringFrameEscape on dict store. With Rc<str>-backed Cell::Str, ownership is managed by the reference count, so the value can safely be stored in a global variable. The test will be replaced with a positive equivalent once the legacy string pool / lifetime tracking is removed."]
-    fn test_str_frame_escape_via_store_to_dict_is_error() {
-        // Pre-#588: STR_CONCAT inside a word produced a frame-local string
-        // whose dict store had to be rejected with StringFrameEscape.
-        // Rc<str>-backed Cell::Str carries its own ownership, so the value
-        // is always safe to store in a dict slot.
     }
 
     #[test]
