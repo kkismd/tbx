@@ -480,6 +480,20 @@ impl Interpreter {
             }));
         }
 
+        // Reject empty-parens function-call syntax at statement level: NAME().
+        // arg_tokens == [LParen, RParen] means the user wrote `NAME()` as a statement,
+        // which is not the formal call form. The bare `NAME` form is correct.
+        // Non-empty parens like `NAME(arg)` are indistinguishable at the token level from
+        // the grouped-expression form `NAME (arg)` and are therefore left to pass through.
+        if matches!(
+            arg_tokens,
+            [a, b] if a.token == Token::LParen && b.token == Token::RParen
+        ) {
+            return Err(make_err(TbxError::InvalidStatementCallSyntax {
+                name: stmt_name.to_string(),
+            }));
+        }
+
         // Compile the argument expression to a cell sequence.
         // Local variables in the current compile scope shadow globals (local_table checked first).
         // Uses the same take-compile-restore pattern as `compile_expr_taking_local_table` in
@@ -4932,5 +4946,91 @@ PUTDEC 1; PUTDEC ADD(
             err.col
         );
         assert_eq!(err.source_excerpt, "PUTDEC ADD(\n  1,\n  1 / 0\n)");
+    }
+
+    // ── issue #631: InvalidStatementCallSyntax ────────────────────────────
+
+    const SETG_DEF: &str = "VAR G\nDEF SETG()\n  SET &G, 1\nEND\n";
+    const GETG_DEF: &str = "VAR G\nSET &G, 42\nDEF GETG()\n  RETURN G\nEND\n";
+
+    #[test]
+    fn test_stmt_call_with_parens_exec_source_gives_proper_error() {
+        // exec_source path: SETG() as a statement must produce InvalidStatementCallSyntax.
+        let mut interp = Interpreter::new();
+        let result = interp.exec_source(&format!("{SETG_DEF}SETG()\nPUTDEC G"));
+        let err = result.expect_err("expected error");
+        assert!(
+            matches!(err.kind, TbxError::InvalidStatementCallSyntax { .. }),
+            "expected InvalidStatementCallSyntax, got: {:?}",
+            err.kind
+        );
+        let msg = err.to_string();
+        assert!(
+            !msg.contains("DROP_TO_MARKER"),
+            "message must not expose DROP_TO_MARKER: {msg}"
+        );
+        assert!(
+            !msg.contains("marker"),
+            "message must not expose 'marker': {msg}"
+        );
+        assert!(
+            msg.contains("SETG"),
+            "message should mention the word name: {msg}"
+        );
+    }
+
+    #[test]
+    fn test_stmt_call_with_parens_exec_line_gives_proper_error() {
+        // exec_line path: SETG() as a statement must produce InvalidStatementCallSyntax.
+        let mut interp = Interpreter::new();
+        interp.exec_source(SETG_DEF).unwrap();
+        let result = interp.exec_line("SETG()", 5);
+        let err = result.expect_err("expected error");
+        assert!(
+            matches!(err.kind, TbxError::InvalidStatementCallSyntax { .. }),
+            "expected InvalidStatementCallSyntax, got: {:?}",
+            err.kind
+        );
+        let msg = err.to_string();
+        assert!(
+            !msg.contains("DROP_TO_MARKER"),
+            "message must not expose DROP_TO_MARKER: {msg}"
+        );
+        assert!(
+            !msg.contains("marker"),
+            "message must not expose 'marker': {msg}"
+        );
+    }
+
+    #[test]
+    fn test_stmt_call_with_nonempty_parens_is_currently_accepted() {
+        // NAME(args...) at statement level is indistinguishable from the grouped-expression
+        // form `NAME (args...)` at the token level, so it is currently accepted.
+        // Only the zero-argument form NAME() is rejected (see blueprint-language.md §544).
+        let mut interp = Interpreter::new();
+        interp
+            .exec_source("DEF FOO(X)\n  PUTDEC X\nEND\nFOO(1)")
+            .expect("NAME(arg) as statement should currently succeed");
+        assert_eq!(interp.take_output().trim(), "1");
+    }
+
+    #[test]
+    fn test_stmt_call_without_parens_still_works() {
+        // Formal statement call NAME (no parens) must continue to work.
+        let mut interp = Interpreter::new();
+        interp
+            .exec_source(&format!("{SETG_DEF}SETG\nPUTDEC G"))
+            .unwrap();
+        assert_eq!(interp.take_output().trim(), "1");
+    }
+
+    #[test]
+    fn test_expression_call_with_parens_still_works() {
+        // NAME() inside an operand expression must continue to work.
+        let mut interp = Interpreter::new();
+        interp
+            .exec_source(&format!("{GETG_DEF}PUTDEC GETG()"))
+            .unwrap();
+        assert_eq!(interp.take_output().trim(), "42");
     }
 }

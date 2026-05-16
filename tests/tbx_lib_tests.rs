@@ -110,7 +110,7 @@ fn test_array_index_zero_is_out_of_bounds() {
         .set_base_dir(base)
         .expect("CARGO_MANIFEST_DIR is always absolute");
     // Array indices are 1-based; index 0 must return ArrayIndexOutOfBounds.
-    let src = "DEF T()\n  VAR A\n  LET A = ARRAY(3)\n  RETURN A(0)\nEND\nT()\n";
+    let src = "DEF T()\n  VAR A\n  LET A = ARRAY(3)\n  RETURN A(0)\nEND\nT\n";
     let err = interp
         .exec_source(src)
         .expect_err("index 0 should be out of bounds");
@@ -238,7 +238,7 @@ fn test_set_array_into_array_is_invalid_element_type() {
     let mut interp = Interpreter::new();
     // Create an outer array and a nested array, then try to store the inner in outer.
     let src =
-        "DEF T()\n  VAR A, B\n  LET A = ARRAY(3)\n  LET B = ARRAY(2)\n  SET &A(1), B\nEND\nT()\n";
+        "DEF T()\n  VAR A, B\n  LET A = ARRAY(3)\n  LET B = ARRAY(2)\n  SET &A(1), B\nEND\nT\n";
     let err = interp
         .exec_source(src)
         .expect_err("storing Array in array element should fail");

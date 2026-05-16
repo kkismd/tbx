@@ -2645,7 +2645,7 @@ mod tests {
         let result = run_source(
             "VAR G\n\
              DEF BAD_STORE()\n  VAR A\n  LET A = ARRAY(2)\n  SET &G, A\nEND\n\
-             BAD_STORE()",
+             BAD_STORE",
         );
         assert!(
             matches!(result, Err(crate::error::TbxError::ArrayFrameEscape)),
@@ -2762,7 +2762,7 @@ mod tests {
         let result = run_source(
             "VAR gvar\n\
              DEF BAD()\n  VAR a\n  LET a = ARRAY(3)\n  SET &gvar, a\nEND\n\
-             BAD()",
+             BAD",
         );
         assert!(
             matches!(result, Err(crate::error::TbxError::ArrayFrameEscape)),
