@@ -6,12 +6,77 @@ usage() {
 Usage: tbx-task <command> [args...]
 
 Commands:
+  current                    Show current task status and next action
   prompt implement <issue>   Output prompt for implement-issue agent
   prompt review <pr>         Output ChatGPT review request prompt
   prompt fix <pr>            Output prompt template for fix-pr agent
   prompt after-merge         Output prompt for after-merge skill
 EOF
     exit 1
+}
+
+cmd_current() {
+    if ! git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+        echo "Error: not inside a git repository" >&2
+        exit 1
+    fi
+
+    if ! command -v gh >/dev/null 2>&1; then
+        echo "Error: gh command not found" >&2
+        exit 1
+    fi
+
+    local branch
+    branch=$(git branch --show-current)
+
+    local issue_num="unknown"
+    if [[ "$branch" =~ ^issue/([0-9]+)- ]]; then
+        issue_num="${BASH_REMATCH[1]}"
+    else
+        echo "Warning:"
+        echo "- branch name does not match issue/N-short-description: ${branch}"
+        echo ""
+    fi
+
+    local pr_json
+    if ! pr_json=$(gh pr list --head "$branch" \
+        --json number,state,isDraft,mergedAt,baseRefName,headRefName,title,url \
+        --limit 1 2>&1); then
+        echo "Error: gh pr list failed: ${pr_json}" >&2
+        exit 1
+    fi
+
+    local pr_number pr_state pr_merged_at
+    pr_number=$(echo "$pr_json" | jq -r '.[0].number // empty')
+    pr_state=$(echo "$pr_json" | jq -r '.[0].state // empty')
+    pr_merged_at=$(echo "$pr_json" | jq -r '.[0].mergedAt // empty')
+
+    local status next_action pr_display
+
+    if [[ -z "$pr_number" ]]; then
+        pr_display="none"
+        status="implementing-or-pr-not-created"
+        next_action="実装を継続するか、完了している場合は create-pull-request skill に従って PR を作成してください。"
+    elif [[ -n "$pr_merged_at" ]]; then
+        pr_display="#${pr_number}"
+        status="cleanup-needed"
+        next_action="PR がマージ済みです。現在の topic branch で /after-merge を実行してください。"
+    else
+        pr_display="#${pr_number}"
+        status="review-or-fix-needed"
+        next_action="PR #${pr_number} の状態を確認し、ChatGPT にレビュー依頼するか、既存レビュー指摘を CLI エージェントに渡してください。"
+    fi
+
+    cat <<EOF
+Current task:
+- issue: #${issue_num}
+- branch: ${branch}
+- pr: ${pr_display}
+- status: ${status}
+
+Next action:
+${next_action}
+EOF
 }
 
 cmd_prompt_implement() {
@@ -57,6 +122,7 @@ command="$1"
 shift
 
 case "$command" in
+    current)    cmd_current ;;
     prompt)
         if [[ $# -eq 0 ]]; then
             usage

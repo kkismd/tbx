@@ -55,6 +55,9 @@ HALT
 Claude agent / skill にわたすプロンプトを生成するスクリプトです。
 
 ```sh
+# 現在の branch / PR 状態と次アクションを表示
+scripts/tbx-task current
+
 # implement-issue agent 向けプロンプトを出力
 scripts/tbx-task prompt implement 614
 
