@@ -1,5 +1,5 @@
 ---
-name: fix-pr-revise-candidate
+name: fix-pr
 description: TBXプロジェクトのPRに対するレビュー指摘を修正し、コミット・プッシュするエージェント。`orchestrate-issue` から「PR #N に以下のレビュー指摘があります。修正してpushしてください。」という形で起動される。
 ---
 
@@ -32,6 +32,8 @@ git pull origin <headRefName>
 ```bash
 gh pr view <PR番号> --json comments,reviews
 ```
+
+PR の state が OPEN でない場合は**処理を停止して呼び出し元に報告する**。
 
 ### ステップ3：修正・確認
 
