@@ -11,7 +11,7 @@ ASSERT_OUTPUT "hello"
 PUTSTR STR(123)
 ASSERT_OUTPUT "123"
 
-# --- PUTSTR with an escape sequence: \n is a literal backslash-n in TBX strings ---
+# --- PUTSTR with a newline escape sequence ---
 
 PUTSTR "a\nb"
 ASSERT_OUTPUT "a\nb"
