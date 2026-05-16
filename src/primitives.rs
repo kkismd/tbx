@@ -399,6 +399,17 @@ pub fn putstr_prim(vm: &mut VM) -> Result<(), TbxError> {
     Ok(())
 }
 
+/// GET_OUTPUT — take the current output buffer and return it as a `Cell::Str`.
+/// The output buffer is cleared after this call.
+///
+/// This primitive is intended for testing: it lets TBX programs inspect what
+/// was written to the output so far, without requiring a host-side test runner.
+pub fn get_output_prim(vm: &mut VM) -> Result<(), TbxError> {
+    let output = vm.take_output();
+    vm.push(Cell::string(output))?;
+    Ok(())
+}
+
 /// STR — convert a value to its string representation and push a `Cell::Str` handle.
 ///
 /// Accepts any `Cell` value.
@@ -2411,6 +2422,7 @@ pub fn register_all(vm: &mut VM) {
     vm.register(WordEntry::new_primitive("NEGATE", negate_prim));
     vm.register(WordEntry::new_primitive("INT", int_prim));
     vm.register(WordEntry::new_primitive("PUTSTR", putstr_prim));
+    vm.register(WordEntry::new_primitive("GET_OUTPUT", get_output_prim));
     // Runtime string primitives.
     // STR converts any value to a string; STR_CONCAT concatenates two strings;
     // STR_LEN returns the character count; STR_EQ compares by content;
@@ -7697,5 +7709,39 @@ mod tests {
             second_prim(&mut vm),
             Err(TbxError::TypeError { .. })
         ));
+    }
+
+    #[test]
+    fn test_get_output_takes_and_clears_output_buffer() {
+        let mut vm = VM::new();
+        vm.write_output("hello");
+
+        get_output_prim(&mut vm).unwrap();
+
+        let cell = vm.pop().unwrap();
+        assert_eq!(cell.as_str().map(|s| s.as_ref()), Some("hello"));
+        // Buffer should be empty after GET_OUTPUT consumes it.
+        assert_eq!(vm.take_output(), "");
+    }
+
+    #[test]
+    fn test_get_output_empty_buffer_returns_empty_string() {
+        let mut vm = VM::new();
+
+        get_output_prim(&mut vm).unwrap();
+
+        let cell = vm.pop().unwrap();
+        assert_eq!(cell.as_str().map(|s| s.as_ref()), Some(""));
+    }
+
+    #[test]
+    fn test_get_output_returns_str_cell() {
+        let mut vm = VM::new();
+        vm.write_output("test");
+
+        get_output_prim(&mut vm).unwrap();
+
+        let cell = vm.pop().unwrap();
+        assert!(matches!(cell, Cell::Str(_)));
     }
 }
