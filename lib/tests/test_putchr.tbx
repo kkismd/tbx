@@ -1,0 +1,17 @@
+# lib/tests/test_putchr.tbx — TBX integration tests for PUTCHR primitive
+USE "lib/tests/helper.tbx"
+
+# --- PUTCHR with ASCII code 65 outputs 'A' ---
+
+PUTCHR 65
+ASSERT_OUTPUT "A"
+
+# --- PUTCHR with ASCII code 97 outputs 'a' ---
+
+PUTCHR 97
+ASSERT_OUTPUT "a"
+
+# --- PUTCHR with ASCII code 10 outputs a newline ---
+
+PUTCHR 10
+ASSERT_OUTPUT "\n"

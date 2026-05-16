@@ -1,27 +1,54 @@
 # lib/tests/test_print.tbx — TBX tests for PRINT, PRINTLN
+USE "lib/tests/helper.tbx"
 
 ## PRINT test
-# no args
+
+# no args: PRINT with no arguments outputs nothing
 PRINT
-# single number
+ASSERT_OUTPUT ""
+
+# single integer
 PRINT 10
+ASSERT_OUTPUT "10"
+
+# single float
 PRINT 12.34
+ASSERT_OUTPUT "12.34"
+
 # string literal
 PRINT "STR"
-# runtime string
+ASSERT_OUTPUT "STR"
+
+# runtime string via STR()
 PRINT STR(10)
-# multiple values
+ASSERT_OUTPUT "10"
+
+# multiple values: concatenated without separator, no trailing newline
 PRINT 10, 12.34, STR(10)
+ASSERT_OUTPUT "1012.3410"
 
 ## PRINTLN test
-# no args
+
+# no args: PRINTLN with no arguments outputs only a newline
 PRINTLN
-# single number
+ASSERT_OUTPUT "\n"
+
+# single integer with trailing newline
 PRINTLN 10
+ASSERT_OUTPUT "10\n"
+
+# single float with trailing newline
 PRINTLN 12.34
-# string literal
+ASSERT_OUTPUT "12.34\n"
+
+# string literal with trailing newline
 PRINTLN "STR"
-# runtime string
+ASSERT_OUTPUT "STR\n"
+
+# runtime string with trailing newline
 PRINTLN STR(10)
-# multiple values
+ASSERT_OUTPUT "10\n"
+
+# multiple values concatenated with trailing newline
 PRINTLN 10, 12.34, STR(10)
+ASSERT_OUTPUT "1012.3410\n"

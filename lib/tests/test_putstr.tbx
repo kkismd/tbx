@@ -1,0 +1,17 @@
+# lib/tests/test_putstr.tbx — TBX integration tests for PUTSTR primitive
+USE "lib/tests/helper.tbx"
+
+# --- PUTSTR with a simple string literal ---
+
+PUTSTR "hello"
+ASSERT_OUTPUT "hello"
+
+# --- PUTSTR with a runtime string produced by STR() ---
+
+PUTSTR STR(123)
+ASSERT_OUTPUT "123"
+
+# --- PUTSTR with an escape sequence: \n is a literal backslash-n in TBX strings ---
+
+PUTSTR "a\nb"
+ASSERT_OUTPUT "a\nb"
