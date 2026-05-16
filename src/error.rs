@@ -192,8 +192,12 @@ pub enum TbxError {
         got: &'static str,
     },
 
-    /// A word was called with function-call syntax (`NAME()` / `NAME(args...)`) at
+    /// A word was called with empty-parens function-call syntax (`NAME()`) at
     /// statement level, where only the bare `NAME` form is valid.
+    ///
+    /// Currently detects only the zero-argument form `NAME()` (arg_tokens == `[LParen, RParen]`).
+    /// Non-empty parens `NAME(args...)` are indistinguishable at the token level from the
+    /// grouped-expression form `NAME (args...)` and are therefore not rejected here.
     InvalidStatementCallSyntax {
         name: String,
     },
