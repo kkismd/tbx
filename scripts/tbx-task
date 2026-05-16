@@ -82,7 +82,7 @@ EOF
 cmd_prompt_implement() {
     if [[ $# -eq 0 ]]; then echo "Error: issue number required" >&2; usage; fi
     local issue="$1"
-    echo "issue #${issue} を実装して"
+    echo "issue #${issue} を実装してください。"
 }
 
 cmd_prompt_review() {
