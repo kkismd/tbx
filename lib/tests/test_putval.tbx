@@ -1,27 +1,33 @@
 # lib/tests/test_putval.tbx — TBX integration tests for PUTVAL primitive
 USE "lib/tests/helper.tbx"
 
-# --- PUTVAL with Int must complete without error ---
+# --- PUTVAL with Int ---
 
 PUTVAL 42
+ASSERT_OUTPUT "42"
 
-# --- PUTVAL with Float must complete without error ---
+# --- PUTVAL with Float ---
 
 PUTVAL 3.14
+ASSERT_OUTPUT "3.14"
 
-# --- PUTVAL with whole Float must complete without error ---
+# --- PUTVAL with whole Float must include decimal point ---
 
 PUTVAL 1.0
+ASSERT_OUTPUT "1.0"
 
-# --- PUTVAL with Bool TRUE must complete without error ---
+# --- PUTVAL with Bool TRUE ---
 # Use a comparison expression to produce a Bool value.
 
 PUTVAL 1 = 1
+ASSERT_OUTPUT "TRUE"
 
-# --- PUTVAL with Bool FALSE must complete without error ---
+# --- PUTVAL with Bool FALSE ---
 
 PUTVAL 1 = 2
+ASSERT_OUTPUT "FALSE"
 
-# --- PUTVAL with Str must complete without error ---
+# --- PUTVAL with Str ---
 
 PUTVAL "hello"
+ASSERT_OUTPUT "hello"
