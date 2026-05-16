@@ -1,0 +1,81 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+usage() {
+    cat >&2 <<'EOF'
+Usage: tbx-task <command> [args...]
+
+Commands:
+  prompt implement <issue>   Output prompt for implement-issue agent
+  prompt review <pr>         Output ChatGPT review request prompt
+  prompt fix <pr>            Output prompt template for fix-pr agent
+  prompt after-merge         Output prompt for after-merge skill
+EOF
+    exit 1
+}
+
+cmd_prompt_implement() {
+    if [[ $# -eq 0 ]]; then echo "Error: issue number required" >&2; usage; fi
+    local issue="$1"
+    echo "issue #${issue} を実装して"
+}
+
+cmd_prompt_review() {
+    if [[ $# -eq 0 ]]; then echo "Error: PR number required" >&2; usage; fi
+    local pr="$1"
+    cat <<EOF
+PR #${pr} をレビューしてください。
+
+制約:
+- approve / request changes は使わず、通常コメントとして投稿してください。
+- レビュー結果には「ブロッカーの有無」「修正依頼」「参考コメント」を含めてください。
+- 修正依頼は CLI の fix-pr agent に渡せるよう、対象箇所、理由、修正方針が分かる粒度で書いてください。
+- 指摘が多すぎる場合は、PR 分割または issue からのやり直しを提案してください。
+EOF
+}
+
+cmd_prompt_fix() {
+    if [[ $# -eq 0 ]]; then echo "Error: PR number required" >&2; usage; fi
+    local pr="$1"
+    cat <<EOF
+PR #${pr} に以下のレビュー指摘があります。修正してpushしてください。
+
+修正依頼:
+- （ここに ChatGPT のレビューコメントから修正依頼を貼り付ける）
+EOF
+}
+
+cmd_prompt_after_merge() {
+    echo "PR がマージ済みです。現在の topic branch で /after-merge を実行して、ローカルワークスペースを片付けてください。"
+}
+
+if [[ $# -eq 0 ]]; then
+    usage
+fi
+
+command="$1"
+shift
+
+case "$command" in
+    prompt)
+        if [[ $# -eq 0 ]]; then
+            usage
+        fi
+        subcommand="$1"
+        shift
+        case "$subcommand" in
+            implement)  cmd_prompt_implement "$@" ;;
+            review)     cmd_prompt_review "$@" ;;
+            fix)        cmd_prompt_fix "$@" ;;
+            after-merge) cmd_prompt_after_merge ;;
+            *)
+                echo "Error: unknown prompt subcommand: ${subcommand}" >&2
+                usage
+                ;;
+        esac
+        ;;
+    *)
+        echo "Error: unknown command: ${command}" >&2
+        usage
+        ;;
+esac
