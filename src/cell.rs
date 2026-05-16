@@ -99,9 +99,11 @@ pub enum Cell {
     ///   call frame but not globally permanent) were created before the call; they
     ///   can be returned without modification.
     ///
-    /// Array elements are restricted to `Int`, `Float`, `Bool`, and `None` (no
-    /// nested `Array` or `Str` references), so ownership transfer does not
-    /// require recursive inspection of element types.
+    /// Array elements may be any scalar type (`Int`, `Float`, `Bool`, `None`,
+    /// or `Str`).  Nested `Array` handles are rejected at write time.
+    /// Because `Cell::Str` is `Rc<str>`-backed (#588 / #591), storing a string
+    /// in an array element simply clones the `Rc` handle; no pool-index
+    /// lifetime tracking is needed.
     Array(usize),
     /// Immutable reference-counted string handle (`Rc<str>`).
     ///
