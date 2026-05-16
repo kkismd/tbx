@@ -1,4 +1,4 @@
-use crate::cell::{Cell, CompileEntry, ReturnFrame};
+use crate::cell::{Cell, CompileEntry};
 use crate::constants::MAX_DICTIONARY_CELLS;
 use crate::dict::{EntryKind, WordEntry, FLAG_IMMEDIATE, FLAG_SYSTEM};
 use crate::error::TbxError;
@@ -61,90 +61,36 @@ pub fn fetch_prim(vm: &mut VM) -> Result<(), TbxError> {
     }
 }
 
-/// Reference to a pool-managed value.  After #590 D3b the only pool with VM-
-/// managed lifetime is the array pool (`Cell::Str` is `Rc<str>`-backed), so a
-/// `PoolRef` is simply an array pool index.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct PoolRef(usize);
-
-#[cfg_attr(not(test), allow(dead_code))]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum PoolRefLifetime {
-    Global,
-    CallerOwned,
-    FrameLocal,
-}
-
-#[cfg_attr(not(test), allow(dead_code))]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct PoolBounds {
-    array_len: usize,
-}
-
-fn pool_ref_from_cell(cell: &Cell) -> Option<PoolRef> {
+/// Extract the array pool index from a `Cell::Array`.
+///
+/// Returns `None` for any cell that is not `Cell::Array`.  `Cell::Str` is
+/// `Rc<str>`-backed and has no VM-managed pool index.
+fn array_pool_idx_from_cell(cell: &Cell) -> Option<usize> {
     match cell {
-        Cell::Array(idx) => Some(PoolRef(*idx)),
+        Cell::Array(idx) => Some(*idx),
         _ => None,
     }
 }
 
-#[cfg_attr(not(test), allow(dead_code))]
-fn current_call_pool_bounds(vm: &VM) -> Option<PoolBounds> {
-    vm.return_stack.iter().rev().find_map(|frame| match frame {
-        ReturnFrame::Call {
-            saved_array_pool_len,
-            ..
-        } => Some(PoolBounds {
-            array_len: *saved_array_pool_len,
-        }),
-        ReturnFrame::TopLevel => None,
-    })
+fn is_global_array_pool_idx(vm: &VM, pool_idx: usize) -> bool {
+    pool_idx < vm.global_array_pool_len
 }
 
-impl PoolRef {
-    fn index(self) -> usize {
-        self.0
-    }
-}
-
-fn is_global_pool_ref(vm: &VM, pool_ref: PoolRef) -> bool {
-    pool_ref.index() < vm.global_array_pool_len
-}
-
-fn promote_pool_ref_to_global(vm: &mut VM, pool_ref: PoolRef) {
-    vm.global_array_pool_len = vm.global_array_pool_len.max(pool_ref.index() + 1);
-}
-
-#[cfg_attr(not(test), allow(dead_code))]
-fn classify_pool_ref(vm: &VM, pool_ref: PoolRef) -> PoolRefLifetime {
-    if is_global_pool_ref(vm, pool_ref) {
-        return PoolRefLifetime::Global;
-    }
-
-    let Some(bounds) = current_call_pool_bounds(vm) else {
-        // A non-global top-level handle is not yet promoted, so classify it as
-        // frame-local/top-level-local until dict-write promotion or top-level exit.
-        return PoolRefLifetime::FrameLocal;
-    };
-
-    if pool_ref.index() >= bounds.array_len {
-        PoolRefLifetime::FrameLocal
-    } else {
-        PoolRefLifetime::CallerOwned
-    }
+fn promote_array_pool_idx_to_global(vm: &mut VM, pool_idx: usize) {
+    vm.global_array_pool_len = vm.global_array_pool_len.max(pool_idx + 1);
 }
 
 fn check_dict_reference_write(vm: &mut VM, value: &Cell) -> Result<(), TbxError> {
-    let Some(pool_ref) = pool_ref_from_cell(value) else {
+    let Some(pool_idx) = array_pool_idx_from_cell(value) else {
         return Ok(());
     };
 
-    if is_global_pool_ref(vm, pool_ref) {
+    if is_global_array_pool_idx(vm, pool_idx) {
         return Ok(());
     }
 
     if vm.is_executing_top_level() {
-        promote_pool_ref_to_global(vm, pool_ref);
+        promote_array_pool_idx_to_global(vm, pool_idx);
         return Ok(());
     }
 
@@ -205,67 +151,17 @@ pub fn set_prim(vm: &mut VM) -> Result<(), TbxError> {
     }
 }
 
-/// Check that `value` is a permitted array element type (static shape check,
-/// no VM context required).
+/// Check that `value` is a permitted array element value.
 ///
 /// `Cell::Array` is always rejected (nested arrays are not supported).
 /// `Cell::Str(Rc<str>)` is allowed: the `Rc` handle keeps the string alive
 /// independently of any stack frame, so there is no dangling risk (#591).
-fn check_array_element_type(value: &Cell) -> Result<(), TbxError> {
+/// All other scalar types are accepted unconditionally.
+fn check_array_element_value(value: &Cell) -> Result<(), TbxError> {
     match value {
         Cell::Array(_) => Err(TbxError::InvalidArrayElement { got: "Array" }),
         _ => Ok(()),
     }
-}
-
-/// Check that `value` may be written to the array at `array_pool_idx`.
-///
-/// This is the validation counterpart to `check_array_element_type` and is
-/// used by `write_array_element` (the `SET`/`STORE` path).
-///
-/// * `Cell::Array` is always rejected (nested arrays are not supported).
-/// * `Cell::Str(Rc<str>)` is accepted: because `Cell::Str` is now backed by
-///   `Rc<str>`, the element holds an independent reference-count; the string
-///   lives as long as any `Rc` handle points to it, regardless of stack-frame
-///   lifetime.  No per-lifetime classification is needed (#591).
-/// * All other scalar types are accepted unconditionally.
-fn check_array_element_write(
-    _vm: &VM,
-    _array_pool_idx: usize,
-    value: &Cell,
-) -> Result<(), TbxError> {
-    match value {
-        // Nested arrays are unconditionally rejected.
-        Cell::Array(_) => Err(TbxError::InvalidArrayElement { got: "Array" }),
-        // All other types (including Cell::Str(Rc<str>)) are accepted.
-        _ => Ok(()),
-    }
-}
-
-/// Validate and transform `value` before it is stored in the array at
-/// `array_pool_idx`.
-///
-/// This is the Phase 5B entry-point for array element writes.
-///
-/// Current policy (#591 D-4):
-///
-/// * Nested `Cell::Array` is rejected with `InvalidArrayElement`.
-/// * `Cell::Str(Rc<str>)` is accepted.  The element stores the `Rc` handle,
-///   so the string's lifetime is tied to the reference count rather than to
-///   any stack frame.
-/// * All other types are accepted.
-///
-/// # Errors
-///
-/// Returns an error when the combination is unsafe or unsupported.
-fn stabilize_array_element_write(
-    vm: &mut VM,
-    array_pool_idx: usize,
-    value: Cell,
-) -> Result<Cell, TbxError> {
-    // Validate the element type before any mutable borrow of `vm`.
-    check_array_element_write(vm, array_pool_idx, &value)?;
-    Ok(value)
 }
 
 /// Write `value` to element `elem_idx` of the array at `pool_idx`.
@@ -275,9 +171,8 @@ fn write_array_element(
     elem_idx: usize,
     value: Cell,
 ) -> Result<(), TbxError> {
-    // Validate (and in later phases, transform) the value before storing it.
-    // Must be called before get_mut() to avoid borrow conflicts.
-    let value = stabilize_array_element_write(vm, pool_idx, value)?;
+    // Validate before get_mut() to avoid borrow conflicts.
+    check_array_element_value(&value)?;
     let pool_size = vm.arrays.len();
     let arr = vm
         .arrays
@@ -1117,7 +1012,7 @@ pub fn to_array_prim(vm: &mut VM) -> Result<(), TbxError> {
     for _ in 0..count {
         let elem = vm.pop()?;
         // Reject nested arrays; Cell::Str(Rc<str>) is now allowed (#591).
-        check_array_element_type(&elem)?;
+        check_array_element_value(&elem)?;
         elems.push(elem);
     }
     elems.reverse();
@@ -3382,111 +3277,31 @@ mod tests {
     }
 
     #[test]
-    fn test_pool_ref_from_cell_array_only() {
-        // PoolRef tracks array pool entries only; `Cell::Str` is `Rc<str>`-backed
-        // and produces no PoolRef.
-        assert_eq!(pool_ref_from_cell(&Cell::Array(3)), Some(PoolRef(3)));
-        assert_eq!(pool_ref_from_cell(&Cell::string("hello")), None);
+    fn test_array_pool_idx_from_cell_array_only() {
+        // array_pool_idx_from_cell returns Some only for Cell::Array;
+        // Cell::Str is Rc<str>-backed and has no array pool index.
+        assert_eq!(array_pool_idx_from_cell(&Cell::Array(3)), Some(3));
+        assert_eq!(array_pool_idx_from_cell(&Cell::string("hello")), None);
         assert_eq!(
-            pool_ref_from_cell(&Cell::ArrayAddr {
+            array_pool_idx_from_cell(&Cell::ArrayAddr {
                 pool_idx: 1,
                 elem_idx: 2,
             }),
             None
         );
-        assert_eq!(pool_ref_from_cell(&Cell::DictAddr(0)), None);
-        assert_eq!(pool_ref_from_cell(&Cell::StackAddr(0)), None);
+        assert_eq!(array_pool_idx_from_cell(&Cell::DictAddr(0)), None);
+        assert_eq!(array_pool_idx_from_cell(&Cell::StackAddr(0)), None);
     }
 
     #[test]
-    fn test_promote_pool_ref_to_global_never_moves_boundary_backward() {
+    fn test_promote_array_pool_idx_to_global_never_moves_boundary_backward() {
         let mut vm = VM::new();
 
         vm.global_array_pool_len = 5;
-        promote_pool_ref_to_global(&mut vm, PoolRef(1));
+        promote_array_pool_idx_to_global(&mut vm, 1);
         assert_eq!(vm.global_array_pool_len, 5);
-        promote_pool_ref_to_global(&mut vm, PoolRef(7));
+        promote_array_pool_idx_to_global(&mut vm, 7);
         assert_eq!(vm.global_array_pool_len, 8);
-    }
-
-    #[test]
-    fn test_current_call_pool_bounds_uses_innermost_call() {
-        let mut vm = VM::new();
-        vm.return_stack.push(ReturnFrame::TopLevel);
-        vm.return_stack.push(ReturnFrame::Call {
-            callee_xt: crate::cell::Xt(0),
-            return_pc: 0,
-            saved_bp: 0,
-            saved_array_pool_len: 3,
-            actual_arity: 0,
-        });
-        vm.return_stack.push(ReturnFrame::Call {
-            callee_xt: crate::cell::Xt(1),
-            return_pc: 0,
-            saved_bp: 0,
-            saved_array_pool_len: 7,
-            actual_arity: 0,
-        });
-
-        assert_eq!(
-            current_call_pool_bounds(&vm),
-            Some(PoolBounds { array_len: 7 })
-        );
-    }
-
-    #[test]
-    fn test_classify_pool_ref_global() {
-        let mut vm = VM::new();
-        vm.global_array_pool_len = 1;
-
-        assert_eq!(classify_pool_ref(&vm, PoolRef(0)), PoolRefLifetime::Global);
-    }
-
-    #[test]
-    fn test_classify_pool_ref_caller_owned() {
-        let mut vm = VM::new();
-        vm.return_stack.push(ReturnFrame::TopLevel);
-        vm.return_stack.push(ReturnFrame::Call {
-            callee_xt: crate::cell::Xt(0),
-            return_pc: 0,
-            saved_bp: 0,
-            saved_array_pool_len: 5,
-            actual_arity: 0,
-        });
-
-        assert_eq!(
-            classify_pool_ref(&vm, PoolRef(4)),
-            PoolRefLifetime::CallerOwned
-        );
-    }
-
-    #[test]
-    fn test_classify_pool_ref_frame_local_in_call_frame() {
-        let mut vm = VM::new();
-        vm.return_stack.push(ReturnFrame::TopLevel);
-        vm.return_stack.push(ReturnFrame::Call {
-            callee_xt: crate::cell::Xt(0),
-            return_pc: 0,
-            saved_bp: 0,
-            saved_array_pool_len: 5,
-            actual_arity: 0,
-        });
-
-        assert_eq!(
-            classify_pool_ref(&vm, PoolRef(5)),
-            PoolRefLifetime::FrameLocal
-        );
-    }
-
-    #[test]
-    fn test_classify_pool_ref_top_level_non_global_is_frame_local() {
-        let mut vm = VM::new();
-        vm.return_stack.push(ReturnFrame::TopLevel);
-
-        assert_eq!(
-            classify_pool_ref(&vm, PoolRef(0)),
-            PoolRefLifetime::FrameLocal
-        );
     }
 
     // --- PUTCHR tests ---
