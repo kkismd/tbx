@@ -3002,4 +3002,37 @@ mod tests {
             "pop_string_value should return the same Rc that was pushed"
         );
     }
+
+    #[test]
+    fn test_statement_call_without_parens_is_accepted() {
+        // Formal statement call: NAME without parentheses.
+        let result = run_source(
+            "VAR G\n\
+             DEF SETG()\n  SET &G, 1\nEND\n\
+             SETG\n\
+             PUTDEC G",
+        );
+        assert!(result.is_ok(), "expected success, got: {result:?}");
+        assert_eq!(result.unwrap().trim(), "1");
+    }
+
+    #[test]
+    fn test_statement_call_with_parens_is_rejected() {
+        // Non-formal statement call: NAME() with empty parentheses.
+        // The current parser rejects this with an error (MarkerNotFound).
+        // This is consistent with the spec in blueprint-language.md
+        // §ステートメント呼び出しと式内呼び出しの構文: statement calls must
+        // use the no-parentheses form.  This test documents the rejection so
+        // that an accidental regression (silently accepting NAME()) is caught.
+        let result = run_source(
+            "VAR G\n\
+             DEF SETG()\n  SET &G, 1\nEND\n\
+             SETG()\n\
+             PUTDEC G",
+        );
+        assert!(
+            result.is_err(),
+            "SETG() as statement should be rejected, but got: {result:?}"
+        );
+    }
 }
