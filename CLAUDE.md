@@ -11,7 +11,6 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 | `plan-issue` | Reads issue, records implementation plan as issue comment |
 | `spec-discussion` | Discusses spec options, records decisions to issue |
 | `implement-issue` | Implements from issue, creates PR (no review cycle) |
-| `review-implementation` | Reviews PR, posts review comments / opens issues |
 | `blueprint-updater` | Updates `blueprint*.md` files and creates PR |
 
 ## Agent spawning rules
