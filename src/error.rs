@@ -191,6 +191,16 @@ pub enum TbxError {
         /// The type name of the value that was rejected (e.g. `"Array"`).
         got: &'static str,
     },
+
+    /// A word was called with empty-parens function-call syntax (`NAME()`) at
+    /// statement level, where only the bare `NAME` form is valid.
+    ///
+    /// Currently detects only the zero-argument form `NAME()` (arg_tokens == `[LParen, RParen]`).
+    /// Non-empty parens `NAME(args...)` are indistinguishable at the token level from the
+    /// grouped-expression form `NAME (args...)` and are therefore not rejected here.
+    InvalidStatementCallSyntax {
+        name: String,
+    },
 }
 
 impl std::fmt::Display for TbxError {
@@ -314,6 +324,12 @@ impl std::fmt::Display for TbxError {
                 write!(
                     f,
                     "invalid array element type: {got} is not allowed; nested arrays are not permitted"
+                )
+            }
+            TbxError::InvalidStatementCallSyntax { name } => {
+                write!(
+                    f,
+                    "invalid statement call syntax: '{name}()' is not allowed as a statement; use '{name}' without parentheses"
                 )
             }
         }
