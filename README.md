@@ -77,7 +77,7 @@ scripts/tbx-task prompt after-merge
 
 ```bash
 source /path/to/tbx/scripts/completions/tbx-task.bash
-alias tt='scripts/tbx-task'
+alias tt='/path/to/tbx/scripts/tbx-task'
 complete -F _tbx_task_completion tt
 ```
 
