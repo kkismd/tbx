@@ -2988,4 +2988,18 @@ mod tests {
             "global_array_pool_len should reflect the promoted array"
         );
     }
+
+    #[test]
+    fn test_d2_pop_string_value_returns_underlying_rc() {
+        // `pop_string_value` returns the inner `Rc<str>`; the handle must
+        // be the very Rc that was pushed on the stack (no copy).
+        let mut vm = VM::new();
+        let original: std::rc::Rc<str> = "abc".into();
+        vm.push(Cell::Str(original.clone())).unwrap();
+        let popped = vm.pop_string_value().expect("expected Cell::Str on stack");
+        assert!(
+            std::rc::Rc::ptr_eq(&popped, &original),
+            "pop_string_value should return the same Rc that was pushed"
+        );
+    }
 }
