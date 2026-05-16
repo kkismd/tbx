@@ -246,9 +246,9 @@ fn check_array_element_write(
 /// Current policy (#591 D-4):
 ///
 /// * Nested `Cell::Array` is rejected with `InvalidArrayElement`.
-/// * `Cell::Str(Rc<str>)` is accepted.  The element stores a clone of the
-///   `Rc` handle, so the string's lifetime is tied to the reference count
-///   rather than to any stack frame.
+/// * `Cell::Str(Rc<str>)` is accepted.  The element stores the `Rc` handle,
+///   so the string's lifetime is tied to the reference count rather than to
+///   any stack frame.
 /// * All other types are accepted.
 ///
 /// # Errors
