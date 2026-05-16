@@ -38,18 +38,18 @@ cmd_current() {
         echo ""
     fi
 
-    local pr_json
-    if ! pr_json=$(gh pr list --head "$branch" \
-        --json number,state,isDraft,mergedAt,baseRefName,headRefName,title,url \
-        --limit 1 2>&1); then
-        echo "Error: gh pr list failed: ${pr_json}" >&2
+    local pr_info
+    if ! pr_info=$(gh pr list --head "$branch" --state all \
+        --json number,mergedAt \
+        --limit 1 \
+        --jq '.[0] | "\(.number // "")|\(.mergedAt // "")"' 2>&1); then
+        echo "Error: gh pr list failed: ${pr_info}" >&2
         exit 1
     fi
 
-    local pr_number pr_state pr_merged_at
-    pr_number=$(echo "$pr_json" | jq -r '.[0].number // empty')
-    pr_state=$(echo "$pr_json" | jq -r '.[0].state // empty')
-    pr_merged_at=$(echo "$pr_json" | jq -r '.[0].mergedAt // empty')
+    local pr_number pr_merged_at
+    pr_number="${pr_info%%|*}"
+    pr_merged_at="${pr_info##*|}"
 
     local status next_action pr_display
 
