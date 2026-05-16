@@ -160,7 +160,7 @@ pub fn set_prim(vm: &mut VM) -> Result<(), TbxError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::cell::Cell;
+    use crate::cell::{Cell, ReturnFrame, Xt};
 
     #[test]
     fn test_array_pool_idx_from_cell_array_only() {
@@ -188,5 +188,190 @@ mod tests {
         assert_eq!(vm.global_array_pool_len, 5);
         promote_array_pool_idx_to_global(&mut vm, 7);
         assert_eq!(vm.global_array_pool_len, 8);
+    }
+
+    // --- ARRAY_ADDR / STORE / FETCH boundary tests ---
+
+    /// Verify the full ARRAY_ADDR → STORE → FETCH roundtrip for an array element.
+    ///
+    /// ARRAY_ADDR computes a Cell::ArrayAddr; STORE writes through it; FETCH reads
+    /// the value back.  After the roundtrip the stored value must equal what was
+    /// pushed before STORE.
+    #[test]
+    fn test_array_addr_store_fetch_roundtrip() {
+        use crate::primitives::arrays::array_addr_prim;
+
+        let mut vm = VM::new();
+
+        // Create a one-element array with initial value Cell::None.
+        let pool_idx = vm.arrays.len();
+        vm.arrays.push(vec![Cell::None]);
+
+        // Push array handle and 1-based index, then call ARRAY_ADDR.
+        vm.push(Cell::Array(pool_idx)).unwrap();
+        vm.push(Cell::Int(1)).unwrap();
+        array_addr_prim(&mut vm).unwrap();
+
+        // Stack now has the Cell::ArrayAddr on top.
+        // Push value to store, then addr — STORE convention: [value, addr].
+        let new_value = Cell::Int(42);
+        vm.push(new_value.clone()).unwrap();
+        // Move the addr below the value (swap).
+        let addr = vm.pop().unwrap(); // pop new_value temporarily
+        let arr_addr = vm.pop().unwrap(); // pop the ArrayAddr
+        vm.push(addr).unwrap(); // push new_value back
+        vm.push(arr_addr).unwrap(); // push ArrayAddr on top
+
+        store_prim(&mut vm).unwrap();
+
+        // Verify the array element was updated.
+        assert_eq!(vm.arrays[pool_idx][0], new_value);
+
+        // Now FETCH: push the ArrayAddr again and call fetch_prim.
+        vm.push(Cell::ArrayAddr {
+            pool_idx,
+            elem_idx: 0,
+        })
+        .unwrap();
+        fetch_prim(&mut vm).unwrap();
+
+        assert_eq!(vm.pop().unwrap(), new_value);
+    }
+
+    /// Verify that STORE rejects a nested Cell::Array written to an array element
+    /// (i.e., when the destination address is a Cell::ArrayAddr).
+    #[test]
+    fn test_store_array_element_rejects_nested_array() {
+        let mut vm = VM::new();
+
+        // Outer array — the target element.
+        let outer_idx = vm.arrays.len();
+        vm.arrays.push(vec![Cell::None]);
+
+        // Inner array — the value to be (illegally) stored.
+        let inner_idx = vm.arrays.len();
+        vm.arrays.push(vec![Cell::Int(1)]);
+
+        // STORE convention: push value then addr.
+        vm.push(Cell::Array(inner_idx)).unwrap();
+        vm.push(Cell::ArrayAddr {
+            pool_idx: outer_idx,
+            elem_idx: 0,
+        })
+        .unwrap();
+
+        let result = store_prim(&mut vm);
+        assert!(
+            matches!(result, Err(TbxError::InvalidArrayElement { .. })),
+            "expected InvalidArrayElement, got {:?}",
+            result
+        );
+    }
+
+    /// Verify that SET rejects a nested Cell::Array written to an array element.
+    #[test]
+    fn test_set_array_element_rejects_nested_array() {
+        let mut vm = VM::new();
+
+        // Target array.
+        let outer_idx = vm.arrays.len();
+        vm.arrays.push(vec![Cell::None]);
+
+        // Value array (nested).
+        let inner_idx = vm.arrays.len();
+        vm.arrays.push(vec![Cell::Int(1)]);
+
+        // SET convention: push addr then value.
+        vm.push(Cell::ArrayAddr {
+            pool_idx: outer_idx,
+            elem_idx: 0,
+        })
+        .unwrap();
+        vm.push(Cell::Array(inner_idx)).unwrap();
+
+        let result = set_prim(&mut vm);
+        assert!(
+            matches!(result, Err(TbxError::InvalidArrayElement { .. })),
+            "expected InvalidArrayElement, got {:?}",
+            result
+        );
+    }
+
+    /// Verify that storing a frame-local Cell::Array into a dictionary slot raises
+    /// ArrayFrameEscape.
+    ///
+    /// A frame-local array is one whose pool index is >= global_array_pool_len and
+    /// the VM is currently executing inside a Call frame (not top-level).
+    #[test]
+    fn test_store_frame_local_array_to_dict_errors() {
+        let mut vm = VM::new();
+
+        // Allocate a dictionary slot for the target variable.
+        vm.dictionary.push(Cell::None);
+        vm.dp = 1;
+
+        // Create the frame-local array; global_array_pool_len stays at 0.
+        let frame_local_idx = vm.arrays.len();
+        vm.arrays.push(vec![Cell::Int(7)]);
+        // global_array_pool_len = 0 means pool_idx 0 is not global.
+
+        // Simulate a Call frame so is_executing_top_level() returns false.
+        vm.return_stack.push(ReturnFrame::TopLevel);
+        vm.return_stack.push(ReturnFrame::Call {
+            callee_xt: Xt(0),
+            return_pc: 0,
+            saved_bp: 0,
+            saved_array_pool_len: 0,
+            actual_arity: 0,
+        });
+
+        // STORE convention: push value then addr.
+        vm.push(Cell::Array(frame_local_idx)).unwrap();
+        vm.push(Cell::DictAddr(0)).unwrap();
+
+        let result = store_prim(&mut vm);
+        assert!(
+            matches!(result, Err(TbxError::ArrayFrameEscape)),
+            "expected ArrayFrameEscape, got {:?}",
+            result
+        );
+    }
+
+    /// Verify that storing a top-level Cell::Array into a dictionary slot promotes
+    /// global_array_pool_len to cover the stored array.
+    ///
+    /// When execution is at the top level (only a TopLevel sentinel on the return
+    /// stack), STORE must promote the array to the global region instead of
+    /// returning an error.
+    #[test]
+    fn test_store_top_level_array_to_dict_promotes_global_boundary() {
+        let mut vm = VM::new();
+
+        // Allocate a dictionary slot for the target variable.
+        vm.dictionary.push(Cell::None);
+        vm.dp = 1;
+
+        // Create the array at top level; global_array_pool_len starts at 0.
+        let top_level_idx = vm.arrays.len();
+        vm.arrays.push(vec![Cell::Int(99)]);
+
+        // Simulate top-level execution: only a TopLevel sentinel on the return stack.
+        vm.return_stack.push(ReturnFrame::TopLevel);
+
+        // STORE convention: push value then addr.
+        vm.push(Cell::Array(top_level_idx)).unwrap();
+        vm.push(Cell::DictAddr(0)).unwrap();
+
+        store_prim(&mut vm).unwrap();
+
+        // The global boundary must have been promoted to cover top_level_idx.
+        assert!(
+            vm.global_array_pool_len > top_level_idx,
+            "expected global_array_pool_len > {}, got {}",
+            top_level_idx,
+            vm.global_array_pool_len
+        );
+        // The dictionary slot must now hold the array handle.
+        assert_eq!(vm.dictionary[0], Cell::Array(top_level_idx));
     }
 }

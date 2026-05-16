@@ -254,3 +254,40 @@ pub fn array_concat_prim(vm: &mut VM) -> Result<(), TbxError> {
     vm.push(Cell::Array(pool_idx))?;
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::cell::Cell;
+
+    /// Verify that TO_ARRAY accepts Cell::Str(Rc<str>) as an array element.
+    ///
+    /// Cell::Str is Rc<str>-backed (#591); storing a string in an array element
+    /// is allowed because the Rc handle keeps the string alive independently of
+    /// any stack frame.  This test confirms that to_array_prim does not reject
+    /// Cell::Str values with InvalidArrayElement.
+    #[test]
+    fn test_to_array_accepts_str_elements() {
+        let mut vm = VM::new();
+
+        // Push two string elements followed by the arity.
+        vm.push(Cell::string("hello")).unwrap();
+        vm.push(Cell::string("world")).unwrap();
+        vm.push(Cell::Int(2)).unwrap();
+
+        to_array_prim(&mut vm).unwrap();
+
+        // The resulting Cell::Array handle should be on the stack.
+        let result = vm.pop().unwrap();
+        let pool_idx = match result {
+            Cell::Array(idx) => idx,
+            other => panic!("expected Cell::Array, got {:?}", other),
+        };
+
+        // The array pool entry must contain the two string elements in order.
+        let arr = &vm.arrays[pool_idx];
+        assert_eq!(arr.len(), 2);
+        assert_eq!(arr[0], Cell::string("hello"));
+        assert_eq!(arr[1], Cell::string("world"));
+    }
+}
