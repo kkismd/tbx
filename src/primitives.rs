@@ -12,10 +12,12 @@ use std::time::{SystemTime, UNIX_EPOCH};
 // `primitives.rs` remains the façade and registration entry point; the
 // `pub use` re-exports keep `crate::primitives::<name>` paths working for
 // existing callers and tests.
+mod compare;
 mod logic;
 mod numeric;
 mod stack;
 
+pub use compare::*;
 pub use logic::*;
 pub use numeric::*;
 pub use stack::*;
@@ -290,100 +292,6 @@ fn write_array_element(
         });
     }
     arr[elem_idx] = value;
-    Ok(())
-}
-
-/// EQ — equality comparison. Pushes Bool(true) if the two top values are equal.
-/// Int/Float mixed pairs are compared by promoting Int to Float.
-/// Two `Cell::Str` values are compared by string content.
-pub fn eq_prim(vm: &mut VM) -> Result<(), TbxError> {
-    let b = vm.pop()?;
-    let a = vm.pop()?;
-    let result = match (&a, &b) {
-        (Cell::Int(x), Cell::Float(y)) => (*x as f64) == *y,
-        (Cell::Float(x), Cell::Int(y)) => *x == (*y as f64),
-        // Content equality on `Rc<str>` is delegated to its `PartialEq`
-        // (which dereferences to `str`); same as `a == b` for the Str pair.
-        (Cell::Str(_), Cell::Str(_)) => resolve_str_cell(&a)? == resolve_str_cell(&b)?,
-        _ => a == b,
-    };
-    vm.push(Cell::Bool(result))?;
-    Ok(())
-}
-
-/// NEQ — inequality comparison. Pushes Bool(true) if the two top values are not equal.
-/// Int/Float mixed pairs are compared by promoting Int to Float.
-/// Two `Cell::Str` values are compared by string content.
-pub fn neq_prim(vm: &mut VM) -> Result<(), TbxError> {
-    let b = vm.pop()?;
-    let a = vm.pop()?;
-    let result = match (&a, &b) {
-        (Cell::Int(x), Cell::Float(y)) => (*x as f64) != *y,
-        (Cell::Float(x), Cell::Int(y)) => *x != (*y as f64),
-        (Cell::Str(_), Cell::Str(_)) => resolve_str_cell(&a)? != resolve_str_cell(&b)?,
-        _ => a != b,
-    };
-    vm.push(Cell::Bool(result))?;
-    Ok(())
-}
-
-/// LT — less than. Pushes Bool(true) if a < b (numeric only, with Int/Float promotion).
-pub fn lt_prim(vm: &mut VM) -> Result<(), TbxError> {
-    let b = vm.pop_number()?;
-    let a = vm.pop_number()?;
-    let result = match (&a, &b) {
-        (Cell::Int(x), Cell::Int(y)) => x < y,
-        (Cell::Float(x), Cell::Float(y)) => x < y,
-        (Cell::Int(x), Cell::Float(y)) => (*x as f64) < *y,
-        (Cell::Float(x), Cell::Int(y)) => *x < (*y as f64),
-        _ => unreachable!("pop_number guarantees Int or Float"),
-    };
-    vm.push(Cell::Bool(result))?;
-    Ok(())
-}
-
-/// GT — greater than. Pushes Bool(true) if a > b (numeric only, with Int/Float promotion).
-pub fn gt_prim(vm: &mut VM) -> Result<(), TbxError> {
-    let b = vm.pop_number()?;
-    let a = vm.pop_number()?;
-    let result = match (&a, &b) {
-        (Cell::Int(x), Cell::Int(y)) => x > y,
-        (Cell::Float(x), Cell::Float(y)) => x > y,
-        (Cell::Int(x), Cell::Float(y)) => (*x as f64) > *y,
-        (Cell::Float(x), Cell::Int(y)) => *x > (*y as f64),
-        _ => unreachable!("pop_number guarantees Int or Float"),
-    };
-    vm.push(Cell::Bool(result))?;
-    Ok(())
-}
-
-/// LE — less than or equal. Pushes Bool(true) if a <= b (numeric only, with Int/Float promotion).
-pub fn le_prim(vm: &mut VM) -> Result<(), TbxError> {
-    let b = vm.pop_number()?;
-    let a = vm.pop_number()?;
-    let result = match (&a, &b) {
-        (Cell::Int(x), Cell::Int(y)) => x <= y,
-        (Cell::Float(x), Cell::Float(y)) => x <= y,
-        (Cell::Int(x), Cell::Float(y)) => (*x as f64) <= *y,
-        (Cell::Float(x), Cell::Int(y)) => *x <= (*y as f64),
-        _ => unreachable!("pop_number guarantees Int or Float"),
-    };
-    vm.push(Cell::Bool(result))?;
-    Ok(())
-}
-
-/// GE — greater than or equal. Pushes Bool(true) if a >= b (numeric only, with Int/Float promotion).
-pub fn ge_prim(vm: &mut VM) -> Result<(), TbxError> {
-    let b = vm.pop_number()?;
-    let a = vm.pop_number()?;
-    let result = match (&a, &b) {
-        (Cell::Int(x), Cell::Int(y)) => x >= y,
-        (Cell::Float(x), Cell::Float(y)) => x >= y,
-        (Cell::Int(x), Cell::Float(y)) => (*x as f64) >= *y,
-        (Cell::Float(x), Cell::Int(y)) => *x >= (*y as f64),
-        _ => unreachable!("pop_number guarantees Int or Float"),
-    };
-    vm.push(Cell::Bool(result))?;
     Ok(())
 }
 
