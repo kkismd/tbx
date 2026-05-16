@@ -205,15 +205,11 @@ pub fn set_prim(vm: &mut VM) -> Result<(), TbxError> {
 /// no VM context required).
 ///
 /// `Cell::Array` is always rejected (nested arrays are not supported).
-/// `Cell::Str` is also rejected here: storing strings inside arrays is
-/// liberation-tracked separately by #591.  Per-string lifetime classification
-/// is no longer expressible at this layer because `Cell::Str` is now
-/// `Rc<str>`-backed (it has no pool index), so `check_array_element_write`
-/// likewise rejects all `Cell::Str` values.
+/// `Cell::Str(Rc<str>)` is allowed: the `Rc` handle keeps the string alive
+/// independently of any stack frame, so there is no dangling risk (#591).
 fn check_array_element_type(value: &Cell) -> Result<(), TbxError> {
     match value {
         Cell::Array(_) => Err(TbxError::InvalidArrayElement { got: "Array" }),
-        Cell::Str(_) => Err(TbxError::InvalidArrayElement { got: "Str" }),
         _ => Ok(()),
     }
 }
@@ -224,15 +220,11 @@ fn check_array_element_type(value: &Cell) -> Result<(), TbxError> {
 /// used by `write_array_element` (the `SET`/`STORE` path).
 ///
 /// * `Cell::Array` is always rejected (nested arrays are not supported).
-/// * `Cell::Str` is blanket-rejected with `StringFrameEscape` during the
-///   transition to `Rc<str>`-backed strings.  Now that `Cell::Str` no longer
-///   carries a pool index, the per-string lifetime classification used by
-///   the previous Phase 5A matrix is impossible to express here.  Allowing
-///   strings into arrays will be done in #591 (which can use Rc-based
-///   ownership without lifetime tracking); until then this remains a
-///   conservative reject to preserve the pre-Phase-5B "no strings in arrays"
-///   contract.
-/// * All non-reference scalars are accepted unconditionally.
+/// * `Cell::Str(Rc<str>)` is accepted: because `Cell::Str` is now backed by
+///   `Rc<str>`, the element holds an independent reference-count; the string
+///   lives as long as any `Rc` handle points to it, regardless of stack-frame
+///   lifetime.  No per-lifetime classification is needed (#591).
+/// * All other scalar types are accepted unconditionally.
 fn check_array_element_write(
     _vm: &VM,
     _array_pool_idx: usize,
@@ -241,34 +233,23 @@ fn check_array_element_write(
     match value {
         // Nested arrays are unconditionally rejected.
         Cell::Array(_) => Err(TbxError::InvalidArrayElement { got: "Array" }),
-        // Blanket reject Cell::Str: lifetime classification is no longer
-        // possible with Rc<str>-backed strings, and array-write liberation
-        // is tracked separately in #591.
-        Cell::Str(_) => Err(TbxError::StringFrameEscape),
-        // All other scalar types are accepted.
+        // All other types (including Cell::Str(Rc<str>)) are accepted.
         _ => Ok(()),
     }
 }
 
-/// Validate and (in future phases) transform `value` before it is stored in
-/// the array at `array_pool_idx`.
+/// Validate and transform `value` before it is stored in the array at
+/// `array_pool_idx`.
 ///
 /// This is the Phase 5B entry-point for array element writes.
 ///
-/// Current policy (#588 D-1):
+/// Current policy (#591 D-4):
 ///
 /// * Nested `Cell::Array` is rejected with `InvalidArrayElement`.
-/// * `Cell::Str` is rejected with `StringFrameEscape`.  Now that `Cell::Str`
-///   is `Rc<str>`-backed it no longer carries a pool index, so the previous
-///   Phase 5A lifetime matrix (FrameLocal/Global/CallerOwned) is no longer
-///   expressible at this layer.  Liberation of the array write path for
-///   strings is tracked separately by #591, which will allow Rc<str> elements
-///   without further lifetime tracking.
+/// * `Cell::Str(Rc<str>)` is accepted.  The element stores a clone of the
+///   `Rc` handle, so the string's lifetime is tied to the reference count
+///   rather than to any stack frame.
 /// * All other types are accepted.
-///
-/// Future phases may intercept specific cases here and return a modified
-/// `Cell` (e.g. a wrapped or specialised representation), but the D-1 phase
-/// performs validation only — no clone/promote.
 ///
 /// # Errors
 ///
@@ -278,8 +259,7 @@ fn stabilize_array_element_write(
     array_pool_idx: usize,
     value: Cell,
 ) -> Result<Cell, TbxError> {
-    // Phase 5B-1: validate only; clone/promote will be added in later phases.
-    // The immutable borrow of `vm` ends before any future mutable operations.
+    // Validate the element type before any mutable borrow of `vm`.
     check_array_element_write(vm, array_pool_idx, &value)?;
     Ok(value)
 }
@@ -1458,7 +1438,7 @@ pub fn to_array_prim(vm: &mut VM) -> Result<(), TbxError> {
     let mut elems: Vec<Cell> = Vec::with_capacity(count);
     for _ in 0..count {
         let elem = vm.pop()?;
-        // Reject reference types that could dangle when the owning frame is freed.
+        // Reject nested arrays; Cell::Str(Rc<str>) is now allowed (#591).
         check_array_element_type(&elem)?;
         elems.push(elem);
     }
@@ -7067,35 +7047,16 @@ mod tests {
         assert_eq!(vm.arrays[0][0], Cell::Int(42));
     }
 
-    // --- array element write: Cell::Str ---
+    // --- array element write: Cell::Str (D-4: Rc<str> liberation, #591) ---
     //
-    // After #588 (D-1), `Cell::Str` is `Rc<str>`-backed and `check_array_element_write`
-    // blanket-rejects any string with `StringFrameEscape` (see the
-    // function-level comment).  The lifetime-distinction tests below were
-    // structured around the pool-index model and are deferred until #591
-    // (which can use Rc-based ownership without lifetime tracking) revisits
-    // the array-write policy.
+    // Since #591 (D-4), `Cell::Str` is `Rc<str>`-backed and array element
+    // writes accept `Cell::Str` for all array lifetimes (global, caller-owned,
+    // frame-local).  No per-source-lifetime classification is needed because
+    // the `Rc` handle keeps the string alive independently of any stack frame.
 
     #[test]
-    #[ignore = "#591: blanket reject in D-1; per-lifetime allow rules will be reintroduced when the array-write path is liberated."]
-    fn test_set_global_str_to_array_element_is_allowed() {
-        // Pre-#588: a globally-promoted string could be stored into any array.
-        // Now `check_array_element_write` rejects all `Cell::Str` values; the
-        // successor test will simply assert that `Cell::string(...)` can be
-        // stored into a frame-local array via Rc-based ownership (#591).
-    }
-
-    #[test]
-    #[ignore = "#591: blanket reject in D-1; see test_set_global_str_to_array_element_is_allowed."]
-    fn test_store_global_str_to_array_element_is_allowed() {}
-
-    #[test]
-    fn test_set_str_to_array_element_is_string_frame_escape() {
-        // D-1 blanket reject: any `Cell::Str` written through `SET` to an
-        // array element fails with `StringFrameEscape`, regardless of the
-        // string's origin (frame-local, caller-owned, or globally-promoted).
-        // This conservatively preserves the pre-Phase-5B "no strings in
-        // arrays" contract until #591 liberates the path.
+    fn test_set_str_to_array_element_is_allowed() {
+        // Cell::Str(Rc<str>) written through SET must succeed (#591).
         let mut vm = VM::new();
         vm.arrays.push(vec![Cell::None]);
         vm.push(Cell::ArrayAddr {
@@ -7103,35 +7064,57 @@ mod tests {
             elem_idx: 0,
         })
         .unwrap();
-        vm.push(Cell::string("local")).unwrap();
-        assert_eq!(set_prim(&mut vm), Err(TbxError::StringFrameEscape));
+        vm.push(Cell::string("hello")).unwrap();
+        set_prim(&mut vm).unwrap();
+        assert_eq!(vm.arrays[0][0], Cell::string("hello"));
     }
 
     #[test]
-    fn test_store_str_to_array_element_is_string_frame_escape() {
-        // Same as the SET path above, exercised through STORE.
+    fn test_store_str_to_array_element_is_allowed() {
+        // Same as the SET path above, exercised through STORE (#591).
         let mut vm = VM::new();
         vm.arrays.push(vec![Cell::None]);
-        vm.push(Cell::string("local")).unwrap();
+        vm.push(Cell::string("world")).unwrap();
         vm.push(Cell::ArrayAddr {
             pool_idx: 0,
             elem_idx: 0,
         })
         .unwrap();
-        assert_eq!(store_prim(&mut vm), Err(TbxError::StringFrameEscape));
+        store_prim(&mut vm).unwrap();
+        assert_eq!(vm.arrays[0][0], Cell::string("world"));
     }
 
     #[test]
-    #[ignore = "#591: requires lifetime-aware allow rules that depend on per-string pool indices, which Rc<str> removes."]
-    fn test_set_caller_owned_str_to_global_array_element_is_string_frame_escape() {}
+    fn test_set_str_to_global_array_element_is_allowed() {
+        // Storing a Str into a global array (global_array_pool_len covers it) must succeed.
+        let mut vm = VM::new();
+        vm.arrays.push(vec![Cell::None]);
+        vm.global_array_pool_len = 1; // mark as global
+        vm.push(Cell::ArrayAddr {
+            pool_idx: 0,
+            elem_idx: 0,
+        })
+        .unwrap();
+        vm.push(Cell::string("global")).unwrap();
+        set_prim(&mut vm).unwrap();
+        assert_eq!(vm.arrays[0][0], Cell::string("global"));
+    }
 
     #[test]
-    #[ignore = "#591: requires lifetime-aware allow rules that depend on per-string pool indices, which Rc<str> removes."]
-    fn test_set_caller_owned_str_to_frame_local_array_element_is_allowed() {}
-
-    #[test]
-    #[ignore = "#591: requires lifetime-aware allow rules that depend on per-string pool indices, which Rc<str> removes."]
-    fn test_set_caller_owned_str_to_caller_owned_array_element_is_string_frame_escape() {}
+    fn test_set_str_to_frame_local_array_element_is_allowed() {
+        // Storing a Str into a frame-local array must succeed (#591).
+        let mut vm = VM::new();
+        vm.arrays.push(vec![Cell::None]);
+        // global_array_pool_len = 0 (default) → array is frame-local
+        vm.push(Cell::ArrayAddr {
+            pool_idx: 0,
+            elem_idx: 0,
+        })
+        .unwrap();
+        vm.push(Cell::string("frame-local")).unwrap();
+        set_prim(&mut vm).unwrap();
+        assert_eq!(vm.arrays[0][0], Cell::string("frame-local"));
+    }
 
     #[test]
     fn test_set_nested_array_to_array_element_is_invalid_array_element() {
