@@ -102,7 +102,7 @@ pub enum Cell {
     /// Array elements may be any scalar type (`Int`, `Float`, `Bool`, `None`,
     /// or `Str`).  Nested `Array` handles are rejected at write time.
     /// Because `Cell::Str` is `Rc<str>`-backed (#588 / #591), storing a string
-    /// in an array element simply clones the `Rc` handle; no pool-index
+    /// in an array element stores/shares the `Rc` handle; no pool-index
     /// lifetime tracking is needed.
     Array(usize),
     /// Immutable reference-counted string handle (`Rc<str>`).
