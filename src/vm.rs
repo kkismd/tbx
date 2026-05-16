@@ -2659,14 +2659,13 @@ mod tests {
         //
         // A string literal that appears inside a DEF ... END body is a
         // compile-time constant. The literal is embedded directly as a
-        // `Cell::Str(Rc<str>)`; since `pool_ref_from_cell` returns `None`
-        // for `Cell::Str`, the dict-store path bypasses array-style pool
-        // lifetime checks and keeps the expected observable outcome.
+        // `Cell::Str(Rc<str>)` in the dictionary.  Because `Cell::Str` is
+        // `Rc<str>`-backed (#588), dict-store carries no pool-index lifetime
+        // check for strings; the `Rc` handle is simply copied.
         //
         // Run-time generated strings (e.g. via `STR_CONCAT`) are also
-        // `Rc<str>`-backed and likewise carry no pool index, so they too
-        // can now be stored into a global directly.  Full retirement of
-        // the legacy pool fields is tracked by #590.
+        // `Rc<str>`-backed, so they too can be stored into a global variable
+        // directly without any pool-index lifetime checks (#590 / #591).
         let result = run_source(
             "VAR G\n\
              DEF SETG()\n  SET &G, \"inside\"\nEND\n\
