@@ -145,6 +145,7 @@ INSERT OR REPLACE INTO session_state (key, value) VALUES ('review_before_review_
          printf 'レビュー指摘の修正 (%d回目)\n' "$LOOP_COUNT" \
            > ".tmp/COMMIT_MSG"
          git commit -F ".tmp/COMMIT_MSG"
+         rm ".tmp/COMMIT_MSG"
          git push
          ```
        - イテレーション先頭（手順0）へ戻る
@@ -179,6 +180,7 @@ INSERT OR REPLACE INTO session_state (key, value) VALUES ('review_before_review_
    EOF
 
    gh pr comment <PR番号> --body-file ".tmp/UNRESOLVED_COMMENT.md"
+   rm ".tmp/UNRESOLVED_COMMENT.md"
    ```
 
 5. ステップ7へ進む。
