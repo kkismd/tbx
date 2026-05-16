@@ -182,23 +182,6 @@ pub struct VM {
     /// Updated to `arrays.len()` whenever a `TopLevel` frame is popped in
     /// `Exit` (i.e. at the end of every top-level execution segment).
     pub global_array_pool_len: usize,
-    /// Runtime string pool: indexed by `Cell::Str(usize)` values.
-    ///
-    /// Each entry is a `String` created by string primitives such as `STR`,
-    /// `STR_CONCAT`, etc.  On every word EXIT or RETURN_VAL, the pool is
-    /// truncated back to the length saved in
-    /// `ReturnFrame::Call::saved_string_pool_len`, freeing all strings
-    /// allocated within that call.
-    pub strings: Vec<String>,
-    /// Length of the "global" (persistent) region of `strings`.
-    ///
-    /// Strings at indices `0..global_string_pool_len` were created at the top
-    /// level (outside any `DEF..END`) and are never freed.  They may safely be
-    /// stored in `VARIABLE` slots and shared across word calls.
-    ///
-    /// Updated to `strings.len()` whenever a `TopLevel` frame is popped in
-    /// `Exit` (i.e. at the end of every top-level execution segment).
-    pub global_string_pool_len: usize,
     /// Internal buffer holding the last line read by ACCEPT.
     ///
     /// ACCEPT reads one line from `input_reader` and stores it here (trimmed of
@@ -271,8 +254,6 @@ impl VM {
             pending_use_path: None,
             arrays: Vec::new(),
             global_array_pool_len: 0,
-            strings: Vec::new(),
-            global_string_pool_len: 0,
             input_buffer: None,
             input_reader: Box::new(BufReader::new(std::io::stdin())),
             output_writer: Box::new(std::io::stdout()),
@@ -453,25 +434,20 @@ impl VM {
         }
     }
 
-    /// Pop a `Cell::Str` value from the data stack and return its resolved
-    /// contents from the runtime string pool (`VM::strings`).
+    /// Pop a `Cell::Str` value from the data stack and return its inner
+    /// `Rc<str>` handle.
+    ///
+    /// Returning the underlying `Rc<str>` avoids copying the string content;
+    /// callers that need an owned `String` can call `.to_string()` on the
+    /// result, while read-only callers can use `.as_ref()` for a `&str`.
     ///
     /// # Errors
     ///
     /// Returns `Err(TbxError::StackUnderflow)` if the stack is empty.
     /// Returns `Err(TbxError::TypeError)` if the top value is not `Cell::Str`.
-    /// Returns `Err(TbxError::IndexOutOfBounds)` if the `Cell::Str` index is
-    /// out of range for `VM::strings`.
-    pub fn pop_string_value(&mut self) -> Result<String, TbxError> {
+    pub fn pop_string_value(&mut self) -> Result<std::rc::Rc<str>, TbxError> {
         match self.pop()? {
-            Cell::Str(idx) => self
-                .strings
-                .get(idx)
-                .cloned()
-                .ok_or(TbxError::IndexOutOfBounds {
-                    index: idx,
-                    size: self.strings.len(),
-                }),
+            Cell::Str(s) => Ok(s),
             other => Err(TbxError::TypeError {
                 expected: "Str",
                 got: other.type_name(),
@@ -751,7 +727,6 @@ impl VM {
                         return_pc,
                         saved_bp,
                         saved_array_pool_len: self.arrays.len(),
-                        saved_string_pool_len: self.strings.len(),
                         actual_arity: 0,
                     });
                     self.bp = self.data_stack.len();
@@ -819,7 +794,6 @@ impl VM {
                                 return_pc,
                                 saved_bp,
                                 saved_array_pool_len: self.arrays.len(),
-                                saved_string_pool_len: self.strings.len(),
                                 actual_arity: arity,
                             });
                             self.bp = self.data_stack.len() - arity;
@@ -845,12 +819,10 @@ impl VM {
                             return_pc,
                             saved_bp,
                             saved_array_pool_len,
-                            saved_string_pool_len,
                             actual_arity: _,
                         } => {
                             self.data_stack.truncate(self.bp);
                             self.arrays.truncate(saved_array_pool_len);
-                            self.strings.truncate(saved_string_pool_len);
                             self.pc = return_pc;
                             self.bp = saved_bp;
                         }
@@ -859,37 +831,24 @@ impl VM {
                             // the persistent region so they can be stored in
                             // VARIABLE slots and shared across word calls.
                             self.global_array_pool_len = self.arrays.len();
-                            // Promote all strings created at the top level to
-                            // the persistent region so they can be stored in
-                            // VARIABLE slots and shared across word calls.
-                            self.global_string_pool_len = self.strings.len();
                             break;
                         }
                     }
                 }
                 EntryKind::ReturnVal => {
-                    // Determine the frame boundaries before popping the return value,
-                    // so we can detect whether the array/string belongs to the current frame.
-                    //
-                    // Note: ReturnVal intentionally uses `saved_array_pool_len` /
-                    // `saved_string_pool_len` (the call-frame boundary) rather than
-                    // `global_array_pool_len` / `global_string_pool_len` (the VM-wide
-                    // global boundary used by store/set).  This is correct because
-                    // ReturnVal only needs to distinguish "created in this frame" from
-                    // "created before this frame was pushed" — it does not need to know
-                    // whether the value is truly global.
-                    let (array_frame_boundary, string_frame_boundary) =
-                        match self.return_stack.last() {
-                            Some(ReturnFrame::Call {
-                                saved_array_pool_len,
-                                saved_string_pool_len,
-                                ..
-                            }) => (*saved_array_pool_len, *saved_string_pool_len),
-                            Some(ReturnFrame::TopLevel) => {
-                                return Err(TbxError::InvalidReturn);
-                            }
-                            None => return Err(TbxError::StackUnderflow),
-                        };
+                    // Determine the array frame boundary before popping the return
+                    // value, so we can detect whether the array belongs to the
+                    // current frame.
+                    let array_frame_boundary = match self.return_stack.last() {
+                        Some(ReturnFrame::Call {
+                            saved_array_pool_len,
+                            ..
+                        }) => *saved_array_pool_len,
+                        Some(ReturnFrame::TopLevel) => {
+                            return Err(TbxError::InvalidReturn);
+                        }
+                        None => return Err(TbxError::StackUnderflow),
+                    };
                     let mut retval = self.pop()?;
                     // Ownership transfer for frame-local Cell::Array:
                     // If the returned array was created in this frame
@@ -897,9 +856,7 @@ impl VM {
                     // boundary slot and mark it for preservation.
                     // Array elements are guaranteed to be Int/Float/Bool/None
                     // (no nested references), so no recursive check is needed.
-                    // Note: `array_transferred` and `string_transferred` are mutually
-                    // exclusive. `retval` is a single Cell, so it can be either
-                    // Cell::Array or Cell::Str, never both simultaneously.
+                    // `Cell::Str` is `Rc<str>`-backed and needs no swap.
                     let array_transferred = if let Cell::Array(pool_idx) = &retval {
                         if *pool_idx >= array_frame_boundary {
                             // Bounds check before swap: both indices must be valid.
@@ -921,49 +878,21 @@ impl VM {
                     } else {
                         false
                     };
-                    // Ownership transfer for frame-local Cell::Str:
-                    // If the returned string was created in this frame
-                    // (pool_idx >= string_frame_boundary), swap it to the
-                    // boundary slot and mark it for preservation.
-                    let string_transferred = if let Cell::Str(pool_idx) = &retval {
-                        if *pool_idx >= string_frame_boundary {
-                            // Bounds check before swap: pool_idx must be a valid index.
-                            // Since pool_idx >= string_frame_boundary is already confirmed,
-                            // checking pool_idx < strings.len() also covers string_frame_boundary.
-                            if *pool_idx >= self.strings.len() {
-                                return Err(TbxError::IndexOutOfBounds {
-                                    index: *pool_idx,
-                                    size: self.strings.len(),
-                                });
-                            }
-                            self.strings.swap(*pool_idx, string_frame_boundary);
-                            retval = Cell::Str(string_frame_boundary);
-                            true
-                        } else {
-                            false
-                        }
-                    } else {
-                        false
-                    };
                     match self.return_stack.pop().ok_or(TbxError::StackUnderflow)? {
                         ReturnFrame::Call {
                             callee_xt: _,
                             return_pc,
                             saved_bp,
                             saved_array_pool_len,
-                            saved_string_pool_len,
                             actual_arity: _,
                         } => {
                             self.data_stack.truncate(self.bp);
-                            // Truncate pools back to the saved boundary.
+                            // Truncate the array pool back to the saved boundary.
                             // If ownership was transferred, the returned value now sits
-                            // at `saved_*_pool_len` (the boundary slot), so we keep
+                            // at `saved_array_pool_len` (the boundary slot), so we keep
                             // exactly one extra entry beyond the boundary.
                             let array_keep = saved_array_pool_len + usize::from(array_transferred);
-                            let string_keep =
-                                saved_string_pool_len + usize::from(string_transferred);
                             self.arrays.truncate(array_keep);
-                            self.strings.truncate(string_keep);
                             self.push(retval)?;
                             self.pc = return_pc;
                             self.bp = saved_bp;
@@ -1104,8 +1033,6 @@ impl std::fmt::Debug for VM {
             .field("compile_state", &self.compile_state)
             .field("compile_stack", &self.compile_stack)
             .field("pending_use_path", &self.pending_use_path)
-            .field("strings", &self.strings)
-            .field("global_string_pool_len", &self.global_string_pool_len)
             .field("input_buffer", &self.input_buffer)
             .field("input_reader", &"<dyn BufRead>")
             .field("output_writer", &"<dyn Write>")
@@ -1780,7 +1707,6 @@ mod tests {
                 return_pc: 0,
                 saved_bp: 0,
                 saved_array_pool_len: 0,
-                saved_string_pool_len: 0,
                 actual_arity: 0,
             });
         }
@@ -1823,7 +1749,6 @@ mod tests {
                 return_pc: 0,
                 saved_bp: 0,
                 saved_array_pool_len: 0,
-                saved_string_pool_len: 0,
                 actual_arity: 0,
             });
         }
@@ -2729,36 +2654,18 @@ mod tests {
     }
 
     #[test]
-    fn test_str_frame_escape_via_store_to_dict_is_error() {
-        // Verify that SET of a frame-local Cell::Str into a global variable produces
-        // StringFrameEscape.  This is symmetric to test_array_frame_escape_via_store_to_dict_is_error.
-        let result = run_source(
-            "VAR G\n\
-             DEF BAD_STORE()\n  VAR S\n  LET S = STR_CONCAT(\"foo\", \"bar\")\n  SET &G, S\nEND\n\
-             BAD_STORE()",
-        );
-        assert!(
-            matches!(result, Err(crate::error::TbxError::StringFrameEscape)),
-            "expected StringFrameEscape, got: {result:?}"
-        );
-    }
-
-    #[test]
     fn test_str_literal_inside_word_can_be_assigned_to_global_var() {
         // Regression test for the review feedback on PR #543.
         //
         // A string literal that appears inside a DEF ... END body is a
-        // compile-time constant: `compile_expr` pushes it onto
-        // `vm.strings` and immediately advances `global_string_pool_len`
-        // so the literal lives in the global string region.  This makes
-        // and lets compiled words assign string literals into global
-        // variables via `SET &G, "..."` without triggering
-        // `StringFrameEscape`.
+        // compile-time constant. The literal is embedded directly as a
+        // `Cell::Str(Rc<str>)` in the dictionary.  Because `Cell::Str` is
+        // `Rc<str>`-backed (#588), dict-store carries no pool-index lifetime
+        // check for strings; the `Rc` handle is simply copied.
         //
-        // Run-time generated strings (e.g. via `STR_CONCAT`) remain
-        // frame-local and still need to escape the frame via `RETURN`
-        // before they can be stored into a global; see
-        // `test_str_frame_escape_via_store_to_dict_is_error`.
+        // Run-time generated strings (e.g. via `STR_CONCAT`) are also
+        // `Rc<str>`-backed, so they too can be stored into a global variable
+        // directly without any pool-index lifetime checks (#590 / #591).
         let result = run_source(
             "VAR G\n\
              DEF SETG()\n  SET &G, \"inside\"\nEND\n\
@@ -2770,55 +2677,10 @@ mod tests {
     }
 
     #[test]
-    fn test_str_literal_inside_word_lives_in_global_region() {
-        // Companion to `test_str_literal_inside_word_can_be_assigned_to_global_var`:
-        // exercise the VM API directly to confirm that the literal is
-        // stored in the global region of the string pool (i.e. its index
-        // satisfies `idx < global_string_pool_len`) and that the slot of
-        // the global VAR ends up referring to that string.
-        let mut interp = crate::interpreter::Interpreter::new();
-        interp
-            .exec_source(
-                "VAR G\n\
-                 DEF SETG()\n  SET &G, \"inside\"\nEND\n\
-                 SETG\n\
-                 PUTSTR G\n",
-            )
-            .expect("exec_source failed");
-
-        assert_eq!(interp.take_output(), "inside");
-
-        let xt = interp
-            .vm()
-            .lookup("G")
-            .expect("global variable G not found");
-        let entry = &interp.vm().headers[xt.index()];
-        let cell = match entry.kind {
-            EntryKind::Variable(slot) => interp.vm().dict_read(slot).expect("dict_read failed"),
-            ref other => panic!("expected Variable kind, got {other:?}"),
-        };
-
-        match cell {
-            Cell::Str(idx) => {
-                assert_eq!(
-                    interp.vm().strings.get(idx).map(String::as_str),
-                    Some("inside")
-                );
-                assert!(
-                    idx < interp.vm().global_string_pool_len,
-                    "compiled string literal stored in global variable must be in the global string region"
-                );
-            }
-            other => panic!("expected Cell::Str, got {other:?}"),
-        }
-    }
-
-    #[test]
     fn test_str_literal_assigned_to_global_var_at_top_level_succeeds() {
         // Boundary check: the same SET &G, "..." pattern executed at the
-        // top level (not inside a DEF body) also succeeds, since the
-        // literal lives in the global string region from the moment it
-        // is compiled.
+        // top level (not inside a DEF body) also succeeds because the
+        // literal is embedded directly in the compiled cell.
         let result = run_source(
             "VAR G\n\
              SET &G, \"outside\"\n\
@@ -2951,7 +2813,6 @@ mod tests {
             return_pc: 0,
             saved_bp: 0,
             saved_array_pool_len: 1,
-            saved_string_pool_len: 0,
             actual_arity: 0,
         });
 
@@ -2988,7 +2849,6 @@ mod tests {
             return_pc: 10,
             saved_bp: 0,
             saved_array_pool_len: 0,
-            saved_string_pool_len: 0,
             actual_arity: 1,
         });
         vm.return_stack.push(ReturnFrame::Call {
@@ -2996,7 +2856,6 @@ mod tests {
             return_pc: 20,
             saved_bp: 1,
             saved_array_pool_len: 0,
-            saved_string_pool_len: 0,
             actual_arity: 2,
         });
 
@@ -3010,7 +2869,7 @@ mod tests {
         assert_eq!(frames[2].actual_arity, 0);
     }
 
-    // --- Pool truncation on return (direct vm.arrays / vm.strings length checks) ---
+    // --- Pool truncation on return (direct vm.arrays length checks) ---
 
     #[test]
     fn test_array_pool_len_truncated_when_not_returned() {
@@ -3033,60 +2892,55 @@ mod tests {
     }
 
     #[test]
-    fn test_runtime_strings_len_truncated_when_not_returned() {
-        // After a word that creates a local string but returns a non-string value,
-        // vm.strings should be truncated back to its length before the call.
-        //
-        // Compile time pushes the string literals "foo" and "bar" into
-        // `vm.strings` (since #542 / #539 Phase 2), so the pool length before
-        // the user word runs is non-zero.  The runtime concatenation result
-        // produced inside `STR_THEN_INT` must still be discarded on EXIT,
-        // so the length after `PUTDEC` finishes must equal the length
-        // just before the user word was called.
+    fn test_string_literal_putstr_outputs_content() {
         let mut interp = crate::interpreter::Interpreter::new();
-        interp
-            .exec_source(
-                "DEF STR_THEN_INT()\n  VAR S\n  LET S = STR_CONCAT(\"foo\", \"bar\")\n  RETURN 1\nEND\n",
-            )
-            .expect("compiling DEF failed");
-        let len_before_call = interp.vm().strings.len();
-        interp
-            .exec_source("PUTDEC STR_THEN_INT()")
-            .expect("exec_source failed");
-        assert_eq!(
-            interp.vm().strings.len(),
-            len_before_call,
-            "frame-local strings created inside the word must be truncated on EXIT"
-        );
-    }
-
-    /// Phase 2 of issue #539: a top-level string literal must be stored in
-    /// `vm.strings` as a `Cell::Str` reference. See issue #542.
-    #[test]
-    fn test_string_literal_uses_strings_pool() {
-        let mut interp = crate::interpreter::Interpreter::new();
-        let strings_before = interp.vm().strings.len();
-
         interp
             .exec_source("PUTSTR \"phase2-test\"\n")
             .expect("exec_source failed");
+        assert_eq!(interp.take_output(), "phase2-test");
+    }
 
-        // The literal must have been pushed into `vm.strings`.
-        assert!(
-            interp
-                .vm()
-                .strings
-                .iter()
-                .skip(strings_before)
-                .any(|s| s == "phase2-test"),
-            "string literal must be stored in vm.strings"
+    /// D-2 (#589): a compiled string literal used multiple times — and
+    /// from inside a loop — must continue to produce the same content on
+    /// every iteration.  This guards against any accidental ownership
+    /// move that would consume the embedded `Rc<str>` on first use.
+    #[test]
+    fn test_string_literal_reused_multiple_times() {
+        let mut interp = crate::interpreter::Interpreter::new();
+        interp
+            .exec_source(
+                "DEF SHOUT()\n  PUTSTR \"hi\"\nEND\n\
+                 SHOUT\nSHOUT\nSHOUT\n",
+            )
+            .expect("exec_source failed");
+        assert_eq!(interp.take_output(), "hihihi");
+    }
+
+    /// D-2 (#589): a compiled string literal compared with `STR_EQ` must
+    /// honour content equality (`Rc<str>` derefs to `str` so the
+    /// derived `PartialEq` already compares content).
+    #[test]
+    fn test_string_literal_str_eq_compares_content() {
+        let mut interp = crate::interpreter::Interpreter::new();
+        let src = concat!(
+            "DEF CHECK()\n",
+            "  IF STR_EQ(\"hello\", \"hello\")\n",
+            "    PUTSTR \"yes\"\n",
+            "  ELSE\n",
+            "    PUTSTR \"no\"\n",
+            "  ENDIF\n",
+            "END\n",
+            "CHECK\n",
         );
+        interp.exec_source(src).expect("exec_source failed");
+        assert_eq!(interp.take_output(), "yes");
     }
 
     /// Phase 2 of issue #539: a string literal stored in a `VARIABLE` slot
     /// must be represented as `Cell::Str`. This confirms that the
-    /// compile path flows all the way through LET.
-    /// See issue #542.
+    /// compile path flows all the way through LET.  After #588 the payload
+    /// is `Cell::Str(Rc<str>)`, so we assert against `Cell::string("hi")`
+    /// directly instead of dereferencing a pool index.
     #[test]
     fn test_string_literal_stored_in_variable_is_str() {
         let mut interp = crate::interpreter::Interpreter::new();
@@ -3101,19 +2955,11 @@ mod tests {
             crate::dict::EntryKind::Variable(slot) => interp.vm().dictionary[slot].clone(),
             ref other => panic!("expected Variable kind, got {:?}", other),
         };
-        match cell {
-            Cell::Str(idx) => {
-                assert_eq!(
-                    interp.vm().strings.get(idx).map(String::as_str),
-                    Some("hi"),
-                    "stored string must resolve to its literal value"
-                );
-            }
-            other => panic!(
-                "string literal stored in VARIABLE should be Cell::Str, got {:?}",
-                other
-            ),
-        }
+        assert_eq!(
+            cell,
+            Cell::string("hi"),
+            "string literal stored in VARIABLE should be Cell::string(\"hi\"), got {cell:?}"
+        );
     }
 
     #[test]

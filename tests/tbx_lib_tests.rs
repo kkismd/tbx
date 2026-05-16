@@ -121,31 +121,29 @@ fn test_array_index_zero_is_out_of_bounds() {
 }
 
 // ---------------------------------------------------------------------------
-// Array element type restriction tests (issue #487)
+// Array element string tests (issue #591, D-4: Rc<str> liberation)
 // ---------------------------------------------------------------------------
+//
+// Since #591, `Cell::Str(Rc<str>)` is permitted as an array element for all
+// array lifetimes (global, caller-owned, frame-local).  The `Rc` handle keeps
+// the string alive independently of any stack frame, so no per-source-lifetime
+// classification is needed.  Nested `Cell::Array` is still rejected.
 
-/// SET &A(i), STR("...") must fail with StringFrameEscape because STR()
-/// produces a frame-local runtime string that must not escape to an array.
-/// (Global / compile-time literal strings are allowed; see
-/// test_set_literal_str_into_array_is_allowed.)
+/// SET &A(1), STR("hello") inside a word must succeed (#591).
+/// STR() produces a runtime Rc<str>-backed string, which is now allowed as
+/// an array element.  The word is called without parentheses (statement form)
+/// because it has no return value.
 #[test]
-fn test_set_runtime_str_into_array_is_string_frame_escape() {
+fn test_set_runtime_str_into_array_is_allowed() {
     let mut interp = Interpreter::new();
-    // STR("hello") allocates a frame-local string; storing it in the array
-    // must be rejected.
-    let src = "DEF T()\n  VAR A\n  LET A = ARRAY(3)\n  SET &A(1), STR(\"hello\")\nEND\nT()\n";
-    let err = interp
+    // Note: void DEF is called without parentheses (statement form).
+    let src = "DEF T()\n  VAR A\n  LET A = ARRAY(1)\n  SET &A(1), STR(\"hello\")\nEND\nT\n";
+    interp
         .exec_source(src)
-        .expect_err("storing frame-local Str in array should fail");
-    assert!(
-        err.to_string().contains("string cannot escape"),
-        "expected 'string cannot escape', got: {err}"
-    );
+        .expect("storing runtime Str in array should succeed");
 }
 
-/// SET &A(1), "hello" (compile-time literal) must succeed.
-/// String literals are stored into VM::strings as global compile-time literals
-/// at compile time, so they satisfy the Global lifetime requirement.
+/// SET &A(1), "hello" (compile-time literal) must succeed (#591).
 /// Array indices are 1-based in TBX.
 #[test]
 fn test_set_literal_str_into_array_is_allowed() {
@@ -158,7 +156,7 @@ fn test_set_literal_str_into_array_is_allowed() {
 }
 
 /// Same as above but inside a compiled word to verify frame-local arrays also
-/// accept global string literals.
+/// accept string literals.
 #[test]
 fn test_set_literal_str_into_array_inside_def_is_allowed() {
     let mut interp = Interpreter::new();
@@ -170,21 +168,71 @@ fn test_set_literal_str_into_array_inside_def_is_allowed() {
     assert_eq!(interp.take_output(), "inside");
 }
 
-/// TO_ARRAY(STR("a"), STR("b")) must fail with InvalidArrayElement.
+/// STR_CONCAT result stored in global array, read back after word return (#591).
+/// Exercises the runtime-string safety: the Rc handle outlives the call frame.
+/// The void DEF is called without parentheses (statement form).
 #[test]
-fn test_to_array_with_str_elements_is_error() {
+fn test_set_runtime_str_into_global_array_survives_word_return() {
     let mut interp = Interpreter::new();
-    let src = "TO_ARRAY(STR(\"a\"), STR(\"b\"))\n";
-    let err = interp
+    // F is a void word; call it without parentheses to avoid DROP_TO_MARKER mismatch.
+    let src = "VAR A\nSET &A, ARRAY(1)\nDEF F()\n  SET &A(1), STR_CONCAT(\"foo\", \"bar\")\nEND\nF\nPUTSTR A(1)\n";
+    interp
         .exec_source(src)
-        .expect_err("TO_ARRAY with Str elements should fail");
-    assert!(
-        err.to_string().contains("invalid array element type"),
-        "expected 'invalid array element type', got: {err}"
-    );
+        .expect("storing runtime Str in global array should succeed");
+    assert_eq!(interp.take_output(), "foobar");
 }
 
-/// Storing a nested array (Cell::Array) as an element must fail.
+/// frame-local array can store and immediately read back a runtime string (#591).
+/// The void DEF is called without parentheses (statement form).
+#[test]
+fn test_set_runtime_str_into_frame_local_array_is_allowed() {
+    let mut interp = Interpreter::new();
+    // F is a void word; call it without parentheses to avoid DROP_TO_MARKER mismatch.
+    let src = "DEF F()\n  VAR A\n  SET &A, ARRAY(1)\n  SET &A(1), STR(\"hello\")\n  PUTSTR A(1)\nEND\nF\n";
+    interp
+        .exec_source(src)
+        .expect("storing runtime Str in frame-local array should succeed");
+    assert_eq!(interp.take_output(), "hello");
+}
+
+/// Caller-owned string parameter stored in a frame-local array must succeed (#591).
+#[test]
+fn test_set_caller_owned_str_param_into_frame_local_array_is_allowed() {
+    let mut interp = Interpreter::new();
+    let src = "DEF USE(S)\n  VAR A\n  SET &A, ARRAY(1)\n  SET &A(1), S\n  PUTSTR A(1)\nEND\nUSE(\"arg\")\n";
+    interp
+        .exec_source(src)
+        .expect("storing caller-owned Str param in frame-local array should succeed");
+    assert_eq!(interp.take_output(), "arg");
+}
+
+/// TO_ARRAY(STR("a"), STR("b")) must now succeed (#591); the results can be
+/// read back via array indexing.
+#[test]
+fn test_to_array_with_str_elements_is_allowed() {
+    let mut interp = Interpreter::new();
+    // Store TO_ARRAY result, read element 1 and 2 back via PUTSTR.
+    let src = "VAR A\nSET &A, TO_ARRAY(STR(\"alpha\"), STR(\"beta\"))\nPUTSTR A(1)\nPUTSTR A(2)\n";
+    interp
+        .exec_source(src)
+        .expect("TO_ARRAY with Str elements should succeed");
+    assert_eq!(interp.take_output(), "alphabeta");
+}
+
+/// STR_LEN / STR_EQ / STR_CONCAT can operate on a Cell::Str read from an array element.
+#[test]
+fn test_str_ops_on_array_element_str() {
+    let mut interp = Interpreter::new();
+    // Use PUTSTR to exercise reading the element and passing it to string primitives.
+    // STR_CONCAT output confirms the element was successfully read as Str.
+    let src = "VAR A\nSET &A, ARRAY(1)\nSET &A(1), \"hello\"\nPUTSTR STR_CONCAT(A(1), \"!\")\n";
+    interp
+        .exec_source(src)
+        .expect("string ops on array element should succeed");
+    assert_eq!(interp.take_output(), "hello!");
+}
+
+/// Storing a nested array (Cell::Array) as an element must still fail.
 #[test]
 fn test_set_array_into_array_is_invalid_element_type() {
     let mut interp = Interpreter::new();
@@ -199,71 +247,3 @@ fn test_set_array_into_array_is_invalid_element_type() {
         "expected 'invalid array element type', got: {err}"
     );
 }
-
-// ---------------------------------------------------------------------------
-// Caller-owned string in array element (issue #567)
-// ---------------------------------------------------------------------------
-
-/// A caller-owned string parameter may be stored in a frame-local array element.
-///
-/// DEF USE(S)
-///   VAR A
-///   SET &A, ARRAY(1)
-///   SET &A(1), S
-///   PUTSTR A(1)
-/// END
-/// USE("arg")
-///
-/// S is caller-owned from the perspective of USE's call frame, and A is
-/// frame-local, so this is safe and must succeed.
-#[test]
-fn test_set_caller_owned_str_param_into_frame_local_array_is_allowed() {
-    let mut interp = Interpreter::new();
-    let src = "DEF USE(S)\n  VAR A\n  SET &A, ARRAY(1)\n  SET &A(1), S\n  PUTSTR A(1)\nEND\nUSE(\"arg\")\n";
-    interp
-        .exec_source(src)
-        .expect("storing caller-owned Str param in frame-local array should succeed");
-    assert_eq!(interp.take_output(), "arg");
-}
-
-/// A frame-local runtime string (produced by STR()) must still be rejected
-/// even when the target array is frame-local.  This prevents dangling
-/// references when the inner call frame returns.
-#[test]
-fn test_set_frame_local_runtime_str_into_frame_local_array_is_string_frame_escape() {
-    let mut interp = Interpreter::new();
-    let src = "DEF T()\n  VAR A\n  SET &A, ARRAY(1)\n  SET &A(1), STR(\"hello\")\nEND\nT()\n";
-    let err = interp
-        .exec_source(src)
-        .expect_err("storing frame-local runtime Str in array should fail");
-    assert!(
-        err.to_string().contains("string cannot escape"),
-        "expected 'string cannot escape', got: {err}"
-    );
-}
-
-// ---------------------------------------------------------------------------
-// Phase 5A deny-cases not directly expressible at TBX integration level
-// ---------------------------------------------------------------------------
-//
-// The following Phase 5A combinations are denied by the runtime but cannot
-// be exercised through integration tests due to current TBX limitations:
-//
-// 1. CallerOwned Str → Global Array:
-//    String literals are always promoted to the global string pool at compile
-//    time, so they are never CallerOwned.  A dynamically-generated (frame-local)
-//    string returned from a word becomes CallerOwned in the caller, but there
-//    is currently no way to pass that returned value as a parameter to another
-//    word via a DEF-body statement call (DEF-inside-DEF statement calls trigger
-//    a DROP_TO_MARKER mismatch due to a known limitation in the statement
-//    compilation path).
-//
-// 2. CallerOwned Str → CallerOwned Array:
-//    For the same reason as above, building a scenario where both the array
-//    and the string are CallerOwned (i.e., created in distinct outer frames)
-//    is not achievable through the integration-test harness in its current form.
-//
-// Both cases are covered at the unit-test level:
-//   - `test_set_caller_owned_str_to_global_array_element_is_string_frame_escape`
-//   - `test_set_caller_owned_str_to_caller_owned_array_element_is_string_frame_escape`
-// in `src/primitives.rs`.

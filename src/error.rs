@@ -172,19 +172,6 @@ pub enum TbxError {
     /// of being truncated.
     ArrayFrameEscape,
 
-    /// A runtime string value escaped its owning stack frame via a global variable write.
-    ///
-    /// Strings (created by `STR`, `STR_CONCAT`, etc.) that are created inside a
-    /// word are bound to the stack frame in which they were created.  Attempting
-    /// to store a frame-local `Cell::Str` value into a global variable (via
-    /// `STORE` or `SET` targeting a `DictAddr`) is forbidden, because the string
-    /// pool is truncated on EXIT and the stored index would dangle.
-    ///
-    /// Note: returning a frame-local string via `RETURN` is allowed (ownership
-    /// transfer) — the string slot is moved to the caller's pool boundary instead
-    /// of being truncated.
-    StringFrameEscape,
-
     /// A variadic word was called with fewer arguments than its fixed parameter count.
     ///
     /// `name` is the word name, `expected_min` is the number of fixed parameters
@@ -197,12 +184,11 @@ pub enum TbxError {
 
     /// A value of a type that is not permitted as an array element was stored.
     ///
-    /// Array elements are restricted to scalar types (`Int`, `Float`, `Bool`, `None`).
-    /// Attempting to store a `Cell::Array` or `Cell::Str` value as an array element
-    /// is forbidden because it would introduce nested reference types that could
-    /// escape their owning stack frame.
+    /// Array elements may be scalars (`Int`, `Float`, `Bool`, `None`) or
+    /// `Cell::Str(Rc<str>)` string handles.  Attempting to store a nested
+    /// `Cell::Array` value is forbidden because nested arrays are not supported.
     InvalidArrayElement {
-        /// The type name of the value that was rejected (e.g. `"Array"`, `"Str"`).
+        /// The type name of the value that was rejected (e.g. `"Array"`).
         got: &'static str,
     },
 }
@@ -314,9 +300,6 @@ impl std::fmt::Display for TbxError {
             TbxError::ArrayFrameEscape => {
                 write!(f, "array cannot escape its owning stack frame")
             }
-            TbxError::StringFrameEscape => {
-                write!(f, "string cannot escape its owning stack frame")
-            }
             TbxError::WrongNumberOfArguments {
                 name,
                 expected_min,
@@ -330,7 +313,7 @@ impl std::fmt::Display for TbxError {
             TbxError::InvalidArrayElement { got } => {
                 write!(
                     f,
-                    "invalid array element type: {got} is not allowed; only Int, Float, Bool, and None are permitted"
+                    "invalid array element type: {got} is not allowed; nested arrays are not permitted"
                 )
             }
         }

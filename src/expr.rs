@@ -142,45 +142,12 @@ impl<'a> ExprCompiler<'a> {
                 }
 
                 Token::StringLit(s) => {
-                    // String literals live in `VM::strings` and are emitted
-                    // as `Cell::Str`. Keep the current literal length limit
-                    // so compile-time string handling stays within the
-                    // existing contract.
-                    //
                     // String literals are compile-time constants embedded in
-                    // the compiled code.  Store them in `VM::strings` and
-                    // immediately include them in the global string region
-                    // so they survive word calls and may be stored into
-                    // global variables from compiled words (see PR #543
-                    // review feedback).  Without this promotion, a literal
-                    // compiled inside a `DEF ... END` body would have
-                    // `pool_idx >= global_string_pool_len` at call time,
-                    // and `SET &G, "..."` from inside the word would be
-                    // rejected with `StringFrameEscape` even though the
-                    // value is a compile-time constant rather than a
-                    // frame-local string.
-                    //
-                    // Note: the entry pushed here is NOT rolled back when a
-                    // surrounding `DEF ... END` compilation fails.  The
-                    // dictionary / header rollback for failed compilation
-                    // does not extend to `VM::strings`, so any literal
-                    // pushed here becomes a session-lived orphan entry on
-                    // compile failure.  Advancing `global_string_pool_len`
-                    // here makes that orphan entry also occupy a slot in
-                    // the global region.  This is acceptable under the
-                    // post-#540 policy of not reclaiming fine-grained
-                    // unused regions within a session; the only way to
-                    // recover the slot is a full recompaction from source
-                    // or a VM reset.
+                    // the compiled code as `Cell::Str(Rc<str>)` payloads.
                     if s.len() > u16::MAX as usize {
                         return Err(TbxError::StringTooLong { len: s.len() });
                     }
-                    let idx = self.vm.strings.len();
-                    self.vm.strings.push(s);
-                    if idx >= self.vm.global_string_pool_len {
-                        self.vm.global_string_pool_len = idx + 1;
-                    }
-                    emit_lit(&mut output, Cell::Str(idx), self.vm)?;
+                    emit_lit(&mut output, Cell::string(s), self.vm)?;
                     prev_was_operand = true;
                 }
 
@@ -1019,7 +986,6 @@ mod tests {
     #[test]
     fn test_string_literal() {
         let mut vm = make_vm();
-        let strings_before = vm.strings.len();
         let tokens = lex(r#""hello""#);
         let result = ExprCompiler::new(&mut vm).compile_expr(&tokens).unwrap();
 
@@ -1027,17 +993,14 @@ mod tests {
 
         assert_eq!(result.len(), 2);
         assert_eq!(result[0], Cell::Xt(lit_xt));
-        // The string literal is now stored in `VM::strings` and the
-        // compiler emits `Cell::Str(idx)` (Phase 2 of issue #539).
-        assert_eq!(result[1], Cell::Str(strings_before));
-        assert_eq!(
-            vm.strings.get(strings_before).map(String::as_str),
-            Some("hello")
-        );
+        // After #588, the literal is emitted as `Cell::Str(Rc<str>)` carrying
+        // the literal content directly.
+        assert_eq!(result[1], Cell::string("hello"));
     }
 
-    /// Phase 2 of issue #539: ensure that string literal compilation emits
-    /// a `Cell::Str` handle in the compiled output.
+    /// Ensure that string literal compilation emits a `Cell::Str` handle in
+    /// the compiled output (#539 Phase 2; payload changed to `Rc<str>` in
+    /// #588).
     #[test]
     fn test_string_literal_emits_str() {
         let mut vm = make_vm();
