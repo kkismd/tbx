@@ -48,6 +48,26 @@ HELLO
 HALT
 ```
 
+## 開発ツール
+
+### tbx-task
+
+Claude agent / skill にわたすプロンプトを生成するスクリプトです。
+
+```sh
+# implement-issue agent 向けプロンプトを出力
+scripts/tbx-task prompt implement 614
+
+# ChatGPT レビュー依頼プロンプトを出力
+scripts/tbx-task prompt review 615
+
+# fix-pr agent 向けプロンプト雛形を出力
+scripts/tbx-task prompt fix 615
+
+# after-merge skill 向けプロンプトを出力
+scripts/tbx-task prompt after-merge
+```
+
 ## ドキュメント
 
 - [`blueprint.md`](./blueprint.md) — VM・辞書のアーキテクチャ設計
