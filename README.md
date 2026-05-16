@@ -71,6 +71,23 @@ scripts/tbx-task prompt fix 615
 scripts/tbx-task prompt after-merge
 ```
 
+#### alias と bash 補完
+
+`~/.bashrc` に以下を追記すると `tt` で呼び出せ、Tab 補完も使えます。
+
+```bash
+source /path/to/tbx/scripts/completions/tbx-task.bash
+alias tt='scripts/tbx-task'
+complete -F _tbx_task_completion tt
+```
+
+補完例:
+
+```console
+tt <Tab>          # current prompt
+tt prompt <Tab>   # implement review fix after-merge
+```
+
 ## ドキュメント
 
 - [`blueprint.md`](./blueprint.md) — VM・辞書のアーキテクチャ設計
