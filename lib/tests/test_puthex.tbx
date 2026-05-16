@@ -1,0 +1,17 @@
+# lib/tests/test_puthex.tbx — TBX integration tests for PUTHEX primitive
+USE "lib/tests/helper.tbx"
+
+# --- PUTHEX with 255 outputs "$FF" ---
+
+PUTHEX 255
+ASSERT_OUTPUT "$FF"
+
+# --- PUTHEX with 0 outputs "$0" ---
+
+PUTHEX 0
+ASSERT_OUTPUT "$0"
+
+# --- PUTHEX with -1 outputs two's-complement 64-bit representation ---
+
+PUTHEX -1
+ASSERT_OUTPUT "$FFFFFFFFFFFFFFFF"
