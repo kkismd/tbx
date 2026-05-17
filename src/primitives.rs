@@ -534,8 +534,7 @@ pub fn var_prim(vm: &mut VM) -> Result<(), TbxError> {
                     reason: "VAR in compile mode but no compile_state",
                 })?;
 
-            // Reject duplicate local variable names when an initializer is present.
-            // (Duplicate-free declaration without `=` preserves the existing behaviour.)
+            // Reject duplicate local variable names regardless of whether an initializer is present.
             if state.local_table.contains_key(&name) {
                 return Err(TbxError::InvalidExpression {
                     reason: "duplicate local variable name in VAR declaration",
