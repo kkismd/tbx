@@ -286,6 +286,10 @@ VAR A = expr   # Declare and initialize (inside DEF only)
 
 この制約は、グローバル変数の初期化を明示的な `SET &G, expr` として書かせるためである。初期化タイミングが曖昧になる構文をコア言語へ取り込まない、という設計方針と対応している。
 
+#### DEF 内の重複宣言
+
+DEF 本体内で同じ名前のローカル変数を複数回宣言することはエラーとする。`VAR X` の後に再度 `VAR X` または `VAR X = expr` を書くと `InvalidExpression` を返す。
+
 ## 配列
 
 > Issue #427「ローカル配列（ARRAY プリミティブ）の実装」に基づく設計方針
