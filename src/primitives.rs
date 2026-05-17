@@ -515,6 +515,11 @@ pub fn end_prim(vm: &mut VM) -> Result<(), TbxError> {
 
 /// VAR — declare one or more local variables (in compile mode) or global variables (in execute
 /// mode). Accepts a comma-separated list of identifiers: `VAR A`, `VAR A, B, C`.
+///
+/// In compile mode, the optional `= expr` initializer syntax is supported for a single
+/// variable: `VAR X = expr`.  This emits `LIT StackAddr(X) <expr> SET` immediately
+/// after the declaration, equivalent to `VAR X` followed by `SET &X, expr`.
+/// Initializers are not supported in global (execute-mode) declarations.
 pub fn var_prim(vm: &mut VM) -> Result<(), TbxError> {
     loop {
         // Read the next identifier.
@@ -528,6 +533,15 @@ pub fn var_prim(vm: &mut VM) -> Result<(), TbxError> {
                 .ok_or(TbxError::InvalidExpression {
                     reason: "VAR in compile mode but no compile_state",
                 })?;
+
+            // Reject duplicate local variable names when an initializer is present.
+            // (Duplicate-free declaration without `=` preserves the existing behaviour.)
+            if state.local_table.contains_key(&name) {
+                return Err(TbxError::InvalidExpression {
+                    reason: "duplicate local variable name in VAR declaration",
+                });
+            }
+
             // For variadic words, use the VARIADIC_LOCAL_BASE offset so that local-variable
             // StackAddr indices are in a disjoint range from argument indices.
             // This allows ARG_ADDR to return raw argument indices without ambiguity.
@@ -536,8 +550,70 @@ pub fn var_prim(vm: &mut VM) -> Result<(), TbxError> {
             } else {
                 state.arity + state.local_count
             };
-            state.local_table.insert(name, idx);
+            state.local_table.insert(name.clone(), idx);
             state.local_count += 1;
+
+            // Check for optional `= expr` initializer.
+            match vm.next_token() {
+                Ok(tok) if matches!(tok.token, crate::lexer::Token::Op(ref s) if s == "=") => {
+                    // Initializer present: drain remaining tokens as the RHS expression.
+                    let expr_tokens: Vec<crate::lexer::SpannedToken> = {
+                        let stream = vm.token_stream.as_mut().ok_or(TbxError::TokenStreamEmpty)?;
+                        stream.drain(..).collect()
+                    };
+                    if expr_tokens.is_empty() {
+                        return Err(TbxError::InvalidExpression {
+                            reason: "VAR initializer: expected expression after '='",
+                        });
+                    }
+
+                    // Emit: LIT StackAddr(idx)
+                    let lit_xt = vm.find_by_kind(|k| matches!(k, EntryKind::Lit)).ok_or(
+                        TbxError::UndefinedSymbol {
+                            name: "LIT".to_string(),
+                        },
+                    )?;
+                    vm.dict_write(Cell::Xt(lit_xt))?;
+                    vm.dict_write(Cell::StackAddr(idx))?;
+
+                    // Compile and emit the RHS expression.
+                    let (expr_cells, patch_offsets) =
+                        compile_expr_taking_local_table(vm, &expr_tokens)?;
+                    let base_dp = vm.dp;
+                    for cell in expr_cells {
+                        vm.dict_write(cell)?;
+                    }
+                    if let Some(state) = vm.compile_state.as_mut() {
+                        for offset in patch_offsets {
+                            state.call_patch_list.push(base_dp + offset);
+                        }
+                    }
+
+                    // Emit: SET
+                    let set_xt = vm.lookup("SET").ok_or(TbxError::UndefinedSymbol {
+                        name: "SET".to_string(),
+                    })?;
+                    vm.dict_write(Cell::Xt(set_xt))?;
+
+                    // `VAR X = expr` covers the rest of the token stream; stop the loop.
+                    break;
+                }
+                Ok(tok) if matches!(tok.token, crate::lexer::Token::Comma) => {
+                    // Comma: continue to the next identifier (no initializer on this var).
+                }
+                Ok(tok) => {
+                    // Not `=` and not `,`: return the token to the front of the stream and stop.
+                    if let Some(stream) = vm.token_stream.as_mut() {
+                        stream.push_front(tok);
+                    }
+                    break;
+                }
+                Err(TbxError::TokenStreamEmpty) => {
+                    // End of stream: stop normally.
+                    break;
+                }
+                Err(e) => return Err(e),
+            }
         } else {
             // Global variable: allocate storage in dictionary.
             let storage_idx = vm.dp;
@@ -545,27 +621,27 @@ pub fn var_prim(vm: &mut VM) -> Result<(), TbxError> {
             let entry = crate::dict::WordEntry::new_variable(&name, storage_idx);
             vm.register(entry);
             vm.seal_user();
-        }
 
-        // Peek at the next token to decide whether to continue.
-        // If it is a comma, consume it and read another identifier.
-        // Otherwise push it back and stop.
-        match vm.next_token() {
-            Ok(tok) if matches!(tok.token, crate::lexer::Token::Comma) => {
-                // Comma consumed; loop to read the next identifier.
-            }
-            Ok(tok) => {
-                // Not a comma: return the token to the front of the stream and stop.
-                if let Some(stream) = vm.token_stream.as_mut() {
-                    stream.push_front(tok);
+            // Peek at the next token to decide whether to continue.
+            // If it is a comma, consume it and read another identifier.
+            // Otherwise push it back and stop.
+            match vm.next_token() {
+                Ok(tok) if matches!(tok.token, crate::lexer::Token::Comma) => {
+                    // Comma consumed; loop to read the next identifier.
                 }
-                break;
+                Ok(tok) => {
+                    // Not a comma: return the token to the front of the stream and stop.
+                    if let Some(stream) = vm.token_stream.as_mut() {
+                        stream.push_front(tok);
+                    }
+                    break;
+                }
+                Err(TbxError::TokenStreamEmpty) => {
+                    // End of stream: stop normally.
+                    break;
+                }
+                Err(e) => return Err(e),
             }
-            Err(TbxError::TokenStreamEmpty) => {
-                // End of stream: stop normally.
-                break;
-            }
-            Err(e) => return Err(e),
         }
     }
 
@@ -4059,6 +4135,102 @@ mod tests {
             matches!(remaining[0].token, crate::lexer::Token::Newline),
             "expected Newline to be pushed back, got {:?}",
             remaining[0].token
+        );
+    }
+
+    // --- var_prim with initializer ---
+
+    #[test]
+    fn test_var_prim_init_registers_local_and_emits_set() {
+        // VAR X = 42 inside DEF should register X in local_table and emit
+        // [Xt(LIT), StackAddr(0), Xt(LIT), Int(42), Xt(SET)] to the dictionary.
+        use std::collections::VecDeque;
+        let mut vm = make_compiling_vm("INITWORD");
+        let dp_before = vm.dp;
+        vm.token_stream = Some(VecDeque::from([
+            make_ident_token("X"),
+            make_op_token("="),
+            crate::lexer::SpannedToken {
+                token: crate::lexer::Token::IntLit(42),
+                pos: crate::lexer::Position { line: 1, col: 1 },
+                source_offset: 0,
+                source_len: 2,
+            },
+        ]));
+        var_prim(&mut vm).unwrap();
+
+        // X should be in local_table with index 0.
+        let state = vm.compile_state.as_ref().unwrap();
+        assert_eq!(state.local_table.get("X").copied(), Some(0));
+        assert_eq!(state.local_count, 1);
+
+        // Dictionary should have grown by at least 4 cells:
+        // [Xt(LIT), StackAddr(0), Xt(LIT), Int(42), Xt(SET)]
+        assert!(
+            vm.dp >= dp_before + 5,
+            "expected at least 5 cells emitted, dp_before={dp_before} dp={}",
+            vm.dp
+        );
+
+        // Cell 0: Xt(LIT)
+        assert!(
+            matches!(vm.dict_read(dp_before).unwrap(), Cell::Xt(_)),
+            "expected Xt(LIT) at dp_before"
+        );
+        // Cell 1: StackAddr(0) — the address of local variable X
+        assert_eq!(
+            vm.dict_read(dp_before + 1).unwrap(),
+            Cell::StackAddr(0),
+            "expected StackAddr(0) for local X"
+        );
+        // Cell 4: Xt(SET)
+        assert!(
+            matches!(vm.dict_read(dp_before + 4).unwrap(), Cell::Xt(_)),
+            "expected Xt(SET) at dp_before+4"
+        );
+    }
+
+    #[test]
+    fn test_var_prim_init_empty_expr_is_error() {
+        // VAR X = (nothing) should return InvalidExpression.
+        use std::collections::VecDeque;
+        let mut vm = make_compiling_vm("EMPTYINIT");
+        vm.token_stream = Some(VecDeque::from([
+            make_ident_token("X"),
+            make_op_token("="),
+            // no expression tokens after '='
+        ]));
+        let err = var_prim(&mut vm).unwrap_err();
+        assert!(
+            matches!(err, TbxError::InvalidExpression { .. }),
+            "expected InvalidExpression for empty initializer, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn test_var_prim_init_duplicate_name_is_error() {
+        // VAR X followed by VAR X = expr should return InvalidExpression for duplicate name.
+        use std::collections::VecDeque;
+        let mut vm = make_compiling_vm("DUPWORD");
+        // First: declare X without initializer.
+        vm.token_stream = Some(VecDeque::from([make_ident_token("X")]));
+        var_prim(&mut vm).unwrap();
+
+        // Second: attempt VAR X = 1 — X already in local_table.
+        vm.token_stream = Some(VecDeque::from([
+            make_ident_token("X"),
+            make_op_token("="),
+            crate::lexer::SpannedToken {
+                token: crate::lexer::Token::IntLit(1),
+                pos: crate::lexer::Position { line: 1, col: 1 },
+                source_offset: 0,
+                source_len: 1,
+            },
+        ]));
+        let err = var_prim(&mut vm).unwrap_err();
+        assert!(
+            matches!(err, TbxError::InvalidExpression { reason } if reason.contains("duplicate")),
+            "expected InvalidExpression for duplicate local variable, got {err:?}"
         );
     }
 
