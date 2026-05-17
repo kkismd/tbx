@@ -2762,6 +2762,50 @@ mod tests {
         );
     }
 
+    #[test]
+    fn test_expect_op_empty_stream() {
+        // expect_op propagates TokenStreamEmpty when the stream is exhausted.
+        let mut vm = VM::new();
+        vm.token_stream = Some(VecDeque::new());
+        assert_eq!(
+            vm.expect_op("=", "test: expected '='"),
+            Err(crate::error::TbxError::TokenStreamEmpty)
+        );
+    }
+
+    #[test]
+    fn test_expect_comma_empty_stream() {
+        // expect_comma propagates TokenStreamEmpty when the stream is exhausted.
+        let mut vm = VM::new();
+        vm.token_stream = Some(VecDeque::new());
+        assert_eq!(
+            vm.expect_comma("test: expected ','"),
+            Err(crate::error::TbxError::TokenStreamEmpty)
+        );
+    }
+
+    #[test]
+    fn test_expect_ampersand_empty_stream() {
+        // expect_ampersand propagates TokenStreamEmpty when the stream is exhausted.
+        let mut vm = VM::new();
+        vm.token_stream = Some(VecDeque::new());
+        assert_eq!(
+            vm.expect_ampersand("test: expected '&'"),
+            Err(crate::error::TbxError::TokenStreamEmpty)
+        );
+    }
+
+    #[test]
+    fn test_expect_string_lit_empty_stream() {
+        // expect_string_lit propagates TokenStreamEmpty when the stream is exhausted.
+        let mut vm = VM::new();
+        vm.token_stream = Some(VecDeque::new());
+        assert_eq!(
+            vm.expect_string_lit("test: expected string literal"),
+            Err(crate::error::TbxError::TokenStreamEmpty)
+        );
+    }
+
     // ------------------------------------------------------------------
     // End-to-end integration tests: array pool management
     // ------------------------------------------------------------------
