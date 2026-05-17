@@ -1,0 +1,79 @@
+# lib/tests/test_var_init.tbx — TBX tests for VAR X = expr initializer syntax
+USE "lib/tests/helper.tbx"
+
+# --- VAR X = literal initializes local to the given value ---
+
+DEF CONST_INIT()
+  VAR I = 42
+  RETURN I
+END
+ASSERT CONST_INIT() = 42
+
+# --- VAR X = expr using a parameter ---
+
+DEF PARAM_INIT(N)
+  VAR I = N + 1
+  RETURN I
+END
+ASSERT PARAM_INIT(9) = 10
+
+# --- VAR X = VA_COUNT() in a variadic word ---
+
+DEF VA_INIT(...)
+  VAR N = VA_COUNT()
+  RETURN N
+END
+ASSERT VA_INIT(1, 2, 3) = 3
+
+# --- Existing VAR A, B, C (declaration-only) still works ---
+
+DEF MULTI_DECL()
+  VAR A, B, C
+  SET &A, 1
+  SET &B, 2
+  SET &C, A + B
+  RETURN C
+END
+ASSERT MULTI_DECL() = 3
+
+# --- VAR X = expr followed by other statements ---
+
+DEF INIT_AND_LOOP()
+  VAR S = 0
+  VAR I
+  LET I = 1
+  WHILE I <= 5
+    LET S = S + I
+    LET I = I + 1
+  ENDWH
+  RETURN S
+END
+ASSERT INIT_AND_LOOP() = 15
+
+# --- VAR with string initializer ---
+
+DEF STR_INIT()
+  VAR S = "hello"
+  RETURN STR_LEN(S)
+END
+ASSERT STR_INIT() = 5
+
+# --- VAR with ARRAY initializer ---
+
+DEF ARRAY_INIT()
+  VAR A = ARRAY(3)
+  SET &A(1), 10
+  SET &A(2), 20
+  SET &A(3), 30
+  RETURN A(1) + A(2) + A(3)
+END
+ASSERT ARRAY_INIT() = 60
+
+# --- Multiple VAR X = expr declarations in one word ---
+
+DEF MULTI_INIT()
+  VAR X = 10
+  VAR Y = X + 5
+  RETURN X + Y
+END
+ASSERT MULTI_INIT() = 25

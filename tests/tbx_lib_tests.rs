@@ -247,3 +247,66 @@ fn test_set_array_into_array_is_invalid_element_type() {
         "expected 'invalid array element type', got: {err}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Duplicate local variable name tests (issue #634)
+//
+// Declaring the same local name twice in the same DEF is always an error,
+// regardless of whether an initializer (`= expr`) is present.
+// ---------------------------------------------------------------------------
+
+/// `VAR A, A` — two identical names in the same VAR declaration must fail.
+#[test]
+fn test_duplicate_local_var_in_single_declaration_is_error() {
+    let mut interp = Interpreter::new();
+    let src = "DEF T()\n  VAR A, A\nEND\n";
+    let err = interp
+        .exec_source(src)
+        .expect_err("VAR A, A should fail with duplicate local variable error");
+    assert!(
+        err.to_string().contains("duplicate"),
+        "expected 'duplicate' in error message, got: {err}"
+    );
+}
+
+/// `VAR A` followed by a second `VAR A` (no initializer either time) must fail.
+#[test]
+fn test_duplicate_local_var_without_initializer_is_error() {
+    let mut interp = Interpreter::new();
+    let src = "DEF T()\n  VAR A\n  VAR A\nEND\n";
+    let err = interp.exec_source(src).expect_err(
+        "second VAR A (no initializer) should fail with duplicate local variable error",
+    );
+    assert!(
+        err.to_string().contains("duplicate"),
+        "expected 'duplicate' in error message, got: {err}"
+    );
+}
+
+/// `VAR A` (no initializer) followed by `VAR A = 1` must fail.
+#[test]
+fn test_duplicate_local_var_no_init_then_with_init_is_error() {
+    let mut interp = Interpreter::new();
+    let src = "DEF T()\n  VAR A\n  VAR A = 1\nEND\n";
+    let err = interp
+        .exec_source(src)
+        .expect_err("VAR A then VAR A = 1 should fail with duplicate local variable error");
+    assert!(
+        err.to_string().contains("duplicate"),
+        "expected 'duplicate' in error message, got: {err}"
+    );
+}
+
+/// `VAR A = 1` followed by a plain `VAR A` (no initializer) must fail.
+#[test]
+fn test_duplicate_local_var_with_init_then_no_init_is_error() {
+    let mut interp = Interpreter::new();
+    let src = "DEF T()\n  VAR A = 1\n  VAR A\nEND\n";
+    let err = interp
+        .exec_source(src)
+        .expect_err("VAR A = 1 then VAR A should fail with duplicate local variable error");
+    assert!(
+        err.to_string().contains("duplicate"),
+        "expected 'duplicate' in error message, got: {err}"
+    );
+}
