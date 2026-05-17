@@ -173,7 +173,7 @@ cargo run
 - **Never close issues yourself** — leave that to the user.
 - Commit messages must be in **Japanese**.
 - Code comments must be in **English**.
-- **After a PR is merged** — run the `after-merge` skill to update the local main branch and delete the topic branch.
+- **After a PR is merged** — switch back to the PR base branch, update it, and safely delete the merged topic branch with `git branch -d`.
 
 ## 動作確認・デバッグの方針
 
