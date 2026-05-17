@@ -3,7 +3,6 @@ use crate::constants::MAX_DICTIONARY_CELLS;
 use crate::dict::{EntryKind, WordEntry, FLAG_IMMEDIATE, FLAG_SYSTEM};
 use crate::error::TbxError;
 use crate::expr::ExprCompiler;
-use crate::lexer::Token;
 use crate::vm::{CompileState, VM};
 use std::collections::HashMap;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -215,15 +214,7 @@ pub fn literal_prim(vm: &mut VM) -> Result<(), TbxError> {
 ///
 /// This is the TBX equivalent of Forth's `CREATE`.
 pub fn header_prim(vm: &mut VM) -> Result<(), TbxError> {
-    let tok = vm.next_token()?;
-    let name = match tok.token {
-        Token::Ident(n) => n.to_ascii_uppercase(),
-        _ => {
-            return Err(TbxError::InvalidExpression {
-                reason: "HEADER: expected identifier token",
-            })
-        }
-    };
+    let name = vm.expect_ident("HEADER: expected identifier token")?;
     let entry = WordEntry::new_word(&name, vm.dp);
     vm.register(entry);
     Ok(())
@@ -238,15 +229,7 @@ pub fn header_prim(vm: &mut VM) -> Result<(), TbxError> {
 /// Unlike Forth's `IMMEDIATE` (which implicitly operates on the most recently defined word),
 /// TBX requires the target word name to be specified explicitly.
 pub fn immediate_prim(vm: &mut VM) -> Result<(), TbxError> {
-    let tok = vm.next_token()?;
-    let name = match tok.token {
-        Token::Ident(n) => n.to_ascii_uppercase(),
-        _ => {
-            return Err(TbxError::InvalidExpression {
-                reason: "IMMEDIATE: expected identifier token",
-            })
-        }
-    };
+    let name = vm.expect_ident("IMMEDIATE: expected identifier token")?;
     let xt = vm
         .lookup(&name)
         .ok_or_else(|| TbxError::UndefinedSymbol { name: name.clone() })?;
@@ -269,15 +252,7 @@ pub fn def_prim(vm: &mut VM) -> Result<(), TbxError> {
     }
 
     // Read word name from token stream.
-    let name_tok = vm.next_token()?;
-    let name = match name_tok.token {
-        crate::lexer::Token::Ident(n) => n.to_ascii_uppercase(),
-        _ => {
-            return Err(TbxError::InvalidExpression {
-                reason: "expected word name after DEF",
-            })
-        }
-    };
+    let name = vm.expect_ident("expected word name after DEF")?;
 
     // Parse optional parameter list: DEF WORD(X, Y, ...) or DEF WORD(...)
     //
@@ -543,15 +518,7 @@ pub fn end_prim(vm: &mut VM) -> Result<(), TbxError> {
 pub fn var_prim(vm: &mut VM) -> Result<(), TbxError> {
     loop {
         // Read the next identifier.
-        let name_tok = vm.next_token()?;
-        let name = match name_tok.token {
-            crate::lexer::Token::Ident(n) => n.to_ascii_uppercase(),
-            _ => {
-                return Err(TbxError::InvalidExpression {
-                    reason: "expected variable name after VAR",
-                })
-            }
-        };
+        let name = vm.expect_ident("expected variable name after VAR")?;
 
         if vm.is_compiling {
             // Local variable: add to compile state's local table.
@@ -1103,13 +1070,7 @@ fn skip_comma_prim(vm: &mut VM) -> Result<(), TbxError> {
         });
     }
 
-    let tok = vm.next_token()?;
-    match tok.token {
-        Token::Comma => Ok(()),
-        _ => Err(TbxError::InvalidExpression {
-            reason: "SKIP_COMMA: expected ','",
-        }),
-    }
+    vm.expect_comma("SKIP_COMMA: expected ','")
 }
 
 /// COMPILE_LVALUE_SAVE — emit `LIT addr` to the dictionary and push addr onto the compile stack.
@@ -1128,22 +1089,9 @@ fn compile_lvalue_save_prim(vm: &mut VM) -> Result<(), TbxError> {
     }
 
     // Consume the leading `&` (address-of operator) before the variable name.
-    let amp_tok = vm.next_token()?;
-    if !matches!(amp_tok.token, Token::Ampersand) {
-        return Err(TbxError::InvalidExpression {
-            reason: "COMPILE_LVALUE_SAVE: expected '&' before variable name",
-        });
-    }
+    vm.expect_ampersand("COMPILE_LVALUE_SAVE: expected '&' before variable name")?;
 
-    let tok = vm.next_token()?;
-    let name = match tok.token {
-        Token::Ident(n) => n.to_ascii_uppercase(),
-        _ => {
-            return Err(TbxError::InvalidExpression {
-                reason: "COMPILE_LVALUE_SAVE: expected variable name",
-            })
-        }
-    };
+    let name = vm.expect_ident("COMPILE_LVALUE_SAVE: expected variable name")?;
 
     // Resolve address: local table first, then global dictionary.
     // Use the take→use→restore pattern to satisfy the borrow checker.
@@ -1205,15 +1153,7 @@ fn compile_lvalue_prim(vm: &mut VM) -> Result<(), TbxError> {
         });
     }
 
-    let tok = vm.next_token()?;
-    let name = match tok.token {
-        Token::Ident(n) => n.to_ascii_uppercase(),
-        _ => {
-            return Err(TbxError::InvalidExpression {
-                reason: "COMPILE_LVALUE: expected variable name",
-            })
-        }
-    };
+    let name = vm.expect_ident("COMPILE_LVALUE: expected variable name")?;
 
     // Resolve address: local table first, then global dictionary.
     // Follow the same take→use→restore→apply-? pattern as compile_expr_prim so that
@@ -1274,13 +1214,8 @@ fn skip_eq_prim(vm: &mut VM) -> Result<(), TbxError> {
         });
     }
 
-    let tok = vm.next_token()?;
-    match tok.token {
-        Token::Op(ref s) if s == "=" => Ok(()),
-        _ => Err(TbxError::InvalidExpression {
-            reason: "SKIP_EQ: expected '='",
-        }),
-    }
+    vm.expect_op("=", "SKIP_EQ: expected '='")?;
+    Ok(())
 }
 
 /// LOOKUP — pop a string from the stack, look up the named word, and push its Xt.
@@ -1318,15 +1253,7 @@ fn use_prim(vm: &mut VM) -> Result<(), TbxError> {
         });
     }
 
-    let tok = vm.next_token()?;
-    let path = match tok.token {
-        crate::lexer::Token::StringLit(p) => p,
-        _ => {
-            return Err(TbxError::InvalidExpression {
-                reason: "USE expects a string literal as its argument",
-            })
-        }
-    };
+    let path = vm.expect_string_lit("USE expects a string literal as its argument")?;
 
     // Reject any extra tokens on the same statement (e.g. USE "f.tbx" EXTRA).
     if let Some(stream) = &vm.token_stream {

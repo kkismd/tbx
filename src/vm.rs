@@ -321,6 +321,70 @@ impl VM {
         }
     }
 
+    /// Consume the next token and return its identifier string (uppercased).
+    ///
+    /// Returns `InvalidExpression { reason }` if the next token is not an
+    /// `Ident`. Returns `TokenStreamEmpty` if the stream is empty.
+    ///
+    /// `reason` is used as the error `reason` field when the token is not an
+    /// identifier; it should describe what the caller expected, e.g.
+    /// `"HEADER: expected identifier token"`.
+    pub fn expect_ident(&mut self, reason: &'static str) -> Result<String, TbxError> {
+        let tok = self.next_token()?;
+        match tok.token {
+            crate::lexer::Token::Ident(n) => Ok(n.to_ascii_uppercase()),
+            _ => Err(TbxError::InvalidExpression { reason }),
+        }
+    }
+
+    /// Consume the next token and verify it is `Token::Op(op)`.
+    ///
+    /// Returns `Ok(())` if the token matches; `InvalidExpression { reason }`
+    /// otherwise. Returns `TokenStreamEmpty` if the stream is empty.
+    pub fn expect_op(&mut self, op: &'static str, reason: &'static str) -> Result<(), TbxError> {
+        let tok = self.next_token()?;
+        match tok.token {
+            crate::lexer::Token::Op(ref s) if s == op => Ok(()),
+            _ => Err(TbxError::InvalidExpression { reason }),
+        }
+    }
+
+    /// Consume the next token and verify it is `Token::Comma`.
+    ///
+    /// Returns `Ok(())` if the token is a comma; `InvalidExpression { reason }`
+    /// otherwise. Returns `TokenStreamEmpty` if the stream is empty.
+    pub fn expect_comma(&mut self, reason: &'static str) -> Result<(), TbxError> {
+        let tok = self.next_token()?;
+        match tok.token {
+            crate::lexer::Token::Comma => Ok(()),
+            _ => Err(TbxError::InvalidExpression { reason }),
+        }
+    }
+
+    /// Consume the next token and verify it is `Token::Ampersand`.
+    ///
+    /// Returns `Ok(())` if the token is `&`; `InvalidExpression { reason }`
+    /// otherwise. Returns `TokenStreamEmpty` if the stream is empty.
+    pub fn expect_ampersand(&mut self, reason: &'static str) -> Result<(), TbxError> {
+        let tok = self.next_token()?;
+        match tok.token {
+            crate::lexer::Token::Ampersand => Ok(()),
+            _ => Err(TbxError::InvalidExpression { reason }),
+        }
+    }
+
+    /// Consume the next token and return its string literal value.
+    ///
+    /// Returns `InvalidExpression { reason }` if the next token is not a
+    /// `StringLit`. Returns `TokenStreamEmpty` if the stream is empty.
+    pub fn expect_string_lit(&mut self, reason: &'static str) -> Result<String, TbxError> {
+        let tok = self.next_token()?;
+        match tok.token {
+            crate::lexer::Token::StringLit(s) => Ok(s),
+            _ => Err(TbxError::InvalidExpression { reason }),
+        }
+    }
+
     /// Register a word entry in the header table, linking it into the search list.
     /// Returns the `Xt` (execution token) of the newly added entry.
     pub fn register(&mut self, mut entry: WordEntry) -> Xt {
@@ -2542,6 +2606,160 @@ mod tests {
         vm.token_stream = Some(VecDeque::from([tok1.clone(), tok2.clone()]));
         assert_eq!(vm.next_token(), Ok(tok1));
         assert_eq!(vm.next_token(), Ok(tok2));
+    }
+
+    // ── token expectation helper tests ───────────────────────────────────────
+
+    #[test]
+    fn test_expect_ident_ok() {
+        // expect_ident returns the uppercased name when the next token is Ident.
+        let mut vm = VM::new();
+        vm.token_stream = Some(VecDeque::from([make_spanned(crate::lexer::Token::Ident(
+            "hello".to_string(),
+        ))]));
+        assert_eq!(vm.expect_ident("test reason"), Ok("HELLO".to_string()));
+    }
+
+    #[test]
+    fn test_expect_ident_wrong_token() {
+        // expect_ident returns InvalidExpression when the token is not Ident.
+        let mut vm = VM::new();
+        vm.token_stream = Some(VecDeque::from([make_spanned(crate::lexer::Token::IntLit(
+            42,
+        ))]));
+        assert_eq!(
+            vm.expect_ident("test: expected ident"),
+            Err(crate::error::TbxError::InvalidExpression {
+                reason: "test: expected ident"
+            })
+        );
+    }
+
+    #[test]
+    fn test_expect_ident_empty_stream() {
+        // expect_ident propagates TokenStreamEmpty when the stream is exhausted.
+        let mut vm = VM::new();
+        vm.token_stream = Some(VecDeque::new());
+        assert_eq!(
+            vm.expect_ident("test reason"),
+            Err(crate::error::TbxError::TokenStreamEmpty)
+        );
+    }
+
+    #[test]
+    fn test_expect_op_ok() {
+        // expect_op returns Ok(()) when the next token matches the operator.
+        let mut vm = VM::new();
+        vm.token_stream = Some(VecDeque::from([make_spanned(crate::lexer::Token::Op(
+            "=".to_string(),
+        ))]));
+        assert_eq!(vm.expect_op("=", "test: expected '='"), Ok(()));
+    }
+
+    #[test]
+    fn test_expect_op_wrong_op() {
+        // expect_op returns InvalidExpression when the operator does not match.
+        let mut vm = VM::new();
+        vm.token_stream = Some(VecDeque::from([make_spanned(crate::lexer::Token::Op(
+            "+".to_string(),
+        ))]));
+        assert_eq!(
+            vm.expect_op("=", "test: expected '='"),
+            Err(crate::error::TbxError::InvalidExpression {
+                reason: "test: expected '='"
+            })
+        );
+    }
+
+    #[test]
+    fn test_expect_op_wrong_token_kind() {
+        // expect_op returns InvalidExpression when the token is not Op at all.
+        let mut vm = VM::new();
+        vm.token_stream = Some(VecDeque::from([make_spanned(crate::lexer::Token::Ident(
+            "X".to_string(),
+        ))]));
+        assert_eq!(
+            vm.expect_op("=", "test: expected '='"),
+            Err(crate::error::TbxError::InvalidExpression {
+                reason: "test: expected '='"
+            })
+        );
+    }
+
+    #[test]
+    fn test_expect_comma_ok() {
+        // expect_comma returns Ok(()) when the next token is Comma.
+        let mut vm = VM::new();
+        vm.token_stream = Some(VecDeque::from([make_spanned(crate::lexer::Token::Comma)]));
+        assert_eq!(vm.expect_comma("test: expected ','"), Ok(()));
+    }
+
+    #[test]
+    fn test_expect_comma_wrong_token() {
+        // expect_comma returns InvalidExpression when the token is not Comma.
+        let mut vm = VM::new();
+        vm.token_stream = Some(VecDeque::from([make_spanned(crate::lexer::Token::Ident(
+            "X".to_string(),
+        ))]));
+        assert_eq!(
+            vm.expect_comma("test: expected ','"),
+            Err(crate::error::TbxError::InvalidExpression {
+                reason: "test: expected ','"
+            })
+        );
+    }
+
+    #[test]
+    fn test_expect_ampersand_ok() {
+        // expect_ampersand returns Ok(()) when the next token is Ampersand.
+        let mut vm = VM::new();
+        vm.token_stream = Some(VecDeque::from([make_spanned(
+            crate::lexer::Token::Ampersand,
+        )]));
+        assert_eq!(vm.expect_ampersand("test: expected '&'"), Ok(()));
+    }
+
+    #[test]
+    fn test_expect_ampersand_wrong_token() {
+        // expect_ampersand returns InvalidExpression when the token is not Ampersand.
+        let mut vm = VM::new();
+        vm.token_stream = Some(VecDeque::from([make_spanned(crate::lexer::Token::IntLit(
+            1,
+        ))]));
+        assert_eq!(
+            vm.expect_ampersand("test: expected '&'"),
+            Err(crate::error::TbxError::InvalidExpression {
+                reason: "test: expected '&'"
+            })
+        );
+    }
+
+    #[test]
+    fn test_expect_string_lit_ok() {
+        // expect_string_lit returns the string content when the token is StringLit.
+        let mut vm = VM::new();
+        vm.token_stream = Some(VecDeque::from([make_spanned(
+            crate::lexer::Token::StringLit("hello.tbx".to_string()),
+        )]));
+        assert_eq!(
+            vm.expect_string_lit("test: expected string literal"),
+            Ok("hello.tbx".to_string())
+        );
+    }
+
+    #[test]
+    fn test_expect_string_lit_wrong_token() {
+        // expect_string_lit returns InvalidExpression when the token is not StringLit.
+        let mut vm = VM::new();
+        vm.token_stream = Some(VecDeque::from([make_spanned(crate::lexer::Token::Ident(
+            "X".to_string(),
+        ))]));
+        assert_eq!(
+            vm.expect_string_lit("test: expected string literal"),
+            Err(crate::error::TbxError::InvalidExpression {
+                reason: "test: expected string literal"
+            })
+        );
     }
 
     // ------------------------------------------------------------------
