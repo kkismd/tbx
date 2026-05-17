@@ -14,12 +14,18 @@ eXtensibleなTiny BASICという意味で TBX という名前をつける。
 
 ## アーキテクチャ (System Architecture)
 
-システムの構造と開発段階はいくつかのレイヤーに分かれる
-1. ホスト言語で記述されたVMとプリミティブ（ホスト言語で実装された最も基本的な操作。システム辞書にワードとして登録され、TBXコードから呼び出せる）、インナ・インタプリタ。
-1. プリミティブを組み合わせて動作するコア言語
-  1. Tiny BASIC相当の基本的なプログラム実行能力
-  1. 自己拡張機能（基本的なワード定義機能とその部品であるコンパイルワード）
-1. TBX自身で書かれた制御構造やステートメント
+TBX は、Tiny BASIC 風の表面構文を、Forth 的な辞書・Xt・スタックモデルの上に段階的に載せる処理系である。物理的な Rust モジュール分割とは別に、設計上は次の論理レイヤーに分けて考える。
+
+| レイヤー | 役割 | 主な責務 |
+| --- | --- | --- |
+| VM 実行コア | コンパイル済み Cell 列を実行する最小機械 | `Cell`、data stack、return stack、dictionary、`Xt`、`CALL` / `EXIT` / `LIT`、primitive dispatch |
+| コンパイル・外側インタプリタ層 | ソースを読み、トークン列・コンパイル状態・辞書生成・ファイル取り込みを管理する | token stream、compile stack、式コンパイル、backpatching、local table / compile state、source loading |
+| コア言語層 | ユーザーに見える基本構文と compile-time 語彙を提供する | `DEF` / `END`、`IF` / `ENDIF`、`WHILE` / `ENDWH`、`FOR` / `NEXT`、`LET`、`PRINT`、`INPUT`、`USE "path"` |
+| ランタイム標準ライブラリ層 | 実行時に使える便利機能を提供する | string、array、random、time、testing helpers、通常の実行時 file I/O |
+
+依存方向は原則として上位レイヤーから下位レイヤーへ向かう。VM 実行コアは、ソーステキスト、トークン列、BASIC 風構文、`USE` の存在を知らない。コンパイル・外側インタプリタ層は、VM コアの辞書・Xt・Cell 列を用いてコードを生成・実行する。コア言語層は、その上にユーザー向けの構文と compile-time 語彙を与える。ランタイム標準ライブラリ層は、言語機能ではなく実行時の便利語彙を追加する。
+
+`USE` は import ではなく include 型の compile-time directive として扱う。構文としてはコア言語層に属するが、パス解決・ファイル読み込み・循環検出・ネスト深度制限はコンパイル・外側インタプリタ層の責務である。通常の実行時 file I/O とは責務が異なるため、ランタイム標準ライブラリ層には含めない。詳細は [`blueprint-compiler.md`](./blueprint-compiler.md) の USE 節を参照する。
 
 ## 処理系の中核となるVM
 
