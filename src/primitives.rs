@@ -623,10 +623,17 @@ pub fn var_prim(vm: &mut VM) -> Result<(), TbxError> {
 
             // Peek at the next token to decide whether to continue.
             // If it is a comma, consume it and read another identifier.
+            // If it is `=`, reject it: initializers are not allowed at top level.
             // Otherwise push it back and stop.
             match vm.next_token() {
                 Ok(tok) if matches!(tok.token, crate::lexer::Token::Comma) => {
                     // Comma consumed; loop to read the next identifier.
+                }
+                Ok(tok) if matches!(tok.token, crate::lexer::Token::Op(ref s) if s == "=") => {
+                    // `=` found at top level: VAR initializers are only allowed inside DEF.
+                    return Err(TbxError::InvalidExpression {
+                        reason: "VAR initializer '= expr' is not allowed outside DEF",
+                    });
                 }
                 Ok(tok) => {
                     // Not a comma: return the token to the front of the stream and stop.
@@ -4230,6 +4237,53 @@ mod tests {
         assert!(
             matches!(err, TbxError::InvalidExpression { reason } if reason.contains("duplicate")),
             "expected InvalidExpression for duplicate local variable, got {err:?}"
+        );
+    }
+
+    // --- var_prim top-level initializer error ---
+
+    #[test]
+    fn test_var_prim_global_with_initializer_is_error() {
+        // VAR X = 1 outside DEF must return InvalidExpression.
+        use std::collections::VecDeque;
+        let mut vm = VM::new();
+        register_all(&mut vm);
+        // is_compiling is false by default (top-level / execute mode).
+        vm.token_stream = Some(VecDeque::from([
+            make_ident_token("X"),
+            make_op_token("="),
+            crate::lexer::SpannedToken {
+                token: crate::lexer::Token::IntLit(1),
+                pos: crate::lexer::Position { line: 1, col: 1 },
+                source_offset: 0,
+                source_len: 1,
+            },
+        ]));
+        let err = var_prim(&mut vm).unwrap_err();
+        assert!(
+            matches!(err, TbxError::InvalidExpression { reason } if reason.contains("outside DEF")),
+            "expected InvalidExpression mentioning 'outside DEF', got {err:?}"
+        );
+    }
+
+    #[test]
+    fn test_var_prim_global_without_initializer_still_works() {
+        // VAR X outside DEF (without initializer) must still register a global variable.
+        use std::collections::VecDeque;
+        let mut vm = VM::new();
+        register_all(&mut vm);
+        vm.token_stream = Some(VecDeque::from([make_ident_token("X")]));
+        var_prim(&mut vm).unwrap();
+        let xt = vm
+            .lookup("X")
+            .expect("X should be registered as a global variable");
+        assert!(
+            matches!(
+                vm.headers[xt.index()].kind,
+                crate::dict::EntryKind::Variable(_)
+            ),
+            "expected Variable entry for X, got {:?}",
+            vm.headers[xt.index()].kind
         );
     }
 
