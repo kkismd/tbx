@@ -221,6 +221,7 @@ PUTDEC STR_LEN("hello")
 > Issue #117「ローカル変数のメモリレイアウトと仮引数構文が未定義」に基づく設計方針
 > Issue #120「LET &A, expr 構文がBASIC慣習から乖離している」に基づく設計方針
 > Issue #434「VAR 文でカンマ区切り複数変数の一括宣言を可能にする」に基づく設計方針
+> Issue #636「VAR 宣言仕様を docs に反映する」に基づく設計方針
 
 ### グローバルとローカル
 
@@ -258,6 +259,32 @@ PUTDEC STR_LEN("hello")
 - 固定長ワードとの呼び出し規約の近さ
 - 実装の単純さ
 - 可変部分を特別な値型にしないこと
+
+### `VAR` 宣言
+
+`VAR` はローカル変数またはグローバル変数を宣言するためのステートメントである。
+
+#### 有効な形式
+
+```tbx
+VAR A          # Declare a single variable (top-level or inside DEF)
+VAR A, B, C   # Declare multiple variables (top-level or inside DEF)
+VAR A = expr   # Declare and initialize (inside DEF only)
+```
+
+#### 文脈による制約
+
+**DEF 内（ローカル宣言）**では次の 2 形式が使える。
+
+- `VAR name` / `VAR name, name, ...` — 宣言のみ。命令列を生成しない。
+- `VAR name = expr` — 宣言と初期化。`LIT StackAddr(name) <expr> SET` に相当する命令列を emit する。
+
+**トップレベル（グローバル宣言）**では宣言のみの形式だけが使える。
+
+- `VAR name` / `VAR name, name, ...` — グローバル変数を登録する。
+- `VAR name = expr` — **エラー**（`InvalidExpression`）。トップレベルでの初期化構文は許可しない。
+
+この制約は、グローバル変数の初期化を明示的な `SET &G, expr` として書かせるためである。初期化タイミングが曖昧になる構文をコア言語へ取り込まない、という設計方針と対応している。
 
 ## 配列
 
