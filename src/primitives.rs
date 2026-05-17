@@ -614,39 +614,45 @@ pub fn var_prim(vm: &mut VM) -> Result<(), TbxError> {
                 Err(e) => return Err(e),
             }
         } else {
-            // Global variable: allocate storage in dictionary.
-            let storage_idx = vm.dp;
-            vm.dict_write(Cell::None)?;
-            let entry = crate::dict::WordEntry::new_variable(&name, storage_idx);
-            vm.register(entry);
-            vm.seal_user();
-
-            // Peek at the next token to decide whether to continue.
-            // If it is a comma, consume it and read another identifier.
-            // If it is `=`, reject it: initializers are not allowed at top level.
-            // Otherwise push it back and stop.
+            // Peek at the next token before registering the global variable.
+            // If it is `=`, reject it immediately without touching the dictionary.
+            // If it is a comma, consume it and register the variable, then continue.
+            // Otherwise push the token back and register the variable, then stop.
             match vm.next_token() {
-                Ok(tok) if matches!(tok.token, crate::lexer::Token::Comma) => {
-                    // Comma consumed; loop to read the next identifier.
-                }
                 Ok(tok) if matches!(tok.token, crate::lexer::Token::Op(ref s) if s == "=") => {
                     // `=` found at top level: VAR initializers are only allowed inside DEF.
+                    // Return the error *before* registering the variable so that the
+                    // dictionary is not modified on failure.
                     return Err(TbxError::InvalidExpression {
                         reason: "VAR initializer '= expr' is not allowed outside DEF",
                     });
                 }
-                Ok(tok) => {
-                    // Not a comma: return the token to the front of the stream and stop.
-                    if let Some(stream) = vm.token_stream.as_mut() {
-                        stream.push_front(tok);
+                peek => {
+                    // No `=`: register the global variable now that we know it is safe.
+                    let storage_idx = vm.dp;
+                    vm.dict_write(Cell::None)?;
+                    let entry = crate::dict::WordEntry::new_variable(&name, storage_idx);
+                    vm.register(entry);
+                    vm.seal_user();
+
+                    match peek {
+                        Ok(tok) if matches!(tok.token, crate::lexer::Token::Comma) => {
+                            // Comma consumed; loop to read the next identifier.
+                        }
+                        Ok(tok) => {
+                            // Not a comma: return the token to the front of the stream and stop.
+                            if let Some(stream) = vm.token_stream.as_mut() {
+                                stream.push_front(tok);
+                            }
+                            break;
+                        }
+                        Err(TbxError::TokenStreamEmpty) => {
+                            // End of stream: stop normally.
+                            break;
+                        }
+                        Err(e) => return Err(e),
                     }
-                    break;
                 }
-                Err(TbxError::TokenStreamEmpty) => {
-                    // End of stream: stop normally.
-                    break;
-                }
-                Err(e) => return Err(e),
             }
         }
     }
@@ -4263,6 +4269,11 @@ mod tests {
         assert!(
             matches!(err, TbxError::InvalidExpression { reason } if reason.contains("outside DEF")),
             "expected InvalidExpression mentioning 'outside DEF', got {err:?}"
+        );
+        // The variable must NOT have been registered: the dictionary must remain unchanged.
+        assert!(
+            vm.lookup("X").is_none(),
+            "variable 'X' must not be registered when VAR initializer is rejected at top level"
         );
     }
 
