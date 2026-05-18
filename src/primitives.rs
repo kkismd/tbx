@@ -1826,6 +1826,9 @@ pub fn register_all(vm: &mut VM) {
     let mut array_addr_entry = WordEntry::new_primitive("ARRAY_ADDR", array_addr_prim);
     array_addr_entry.flags = FLAG_SYSTEM;
     vm.register(array_addr_entry);
+    let mut tuple_get_entry = WordEntry::new_primitive("TUPLE_GET", tuple_get_prim);
+    tuple_get_entry.flags = FLAG_SYSTEM;
+    vm.register(tuple_get_entry);
 
     // Variadic argument primitives.
     // VA_COUNT returns the total argument count of the current call.

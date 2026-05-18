@@ -501,10 +501,10 @@ impl<'a> ExprCompiler<'a> {
                     }
                     // Pop the LBracket.
                     op_stack.pop();
-                    // Index/projection is not yet implemented (Phase 4).
-                    return Err(TbxError::InvalidExpression {
-                        reason: "index/projection with [] is not yet implemented",
-                    });
+                    // Emit TUPLE_GET: stack is [..., <tuple>, <index>] → element value.
+                    let tuple_get_xt = require_xt(self.vm, "TUPLE_GET")?;
+                    output.push(Cell::Xt(tuple_get_xt));
+                    prev_was_operand = true;
                 }
 
                 // -------------------------------------------------------
@@ -1583,25 +1583,32 @@ mod tests {
     }
 
     // ------------------------------------------------------------------
-    // Bracket tokens: index/projection not yet implemented
+    // Bracket tokens: tuple projection T[i]
     // ------------------------------------------------------------------
 
     #[test]
-    fn test_bracket_index_not_yet_implemented() {
-        // `T[1]` must produce InvalidExpression with the "not yet implemented" reason.
+    fn test_bracket_index_emits_tuple_get() {
+        // `T[1]` must compile successfully and emit TUPLE_GET as the last instruction.
         let mut vm = make_vm();
         vm.register(WordEntry::new_word("T", 0));
         let tokens = lex("T[1]");
-        let err = ExprCompiler::new(&mut vm)
+        let output = ExprCompiler::new(&mut vm)
             .compile_expr(&tokens)
-            .unwrap_err();
-        assert!(
-            matches!(
-                err,
-                TbxError::InvalidExpression { reason }
-                    if reason.contains("not yet implemented")
-            ),
-            "expected 'not yet implemented' error for T[1], got: {err:?}"
+            .expect("T[1] should compile without error");
+        // The output must end with a Cell::Xt that resolves to "TUPLE_GET".
+        let last = output.last().expect("output must be non-empty");
+        let xt = match last {
+            Cell::Xt(x) => *x,
+            other => panic!("expected Cell::Xt at end of output, got: {other:?}"),
+        };
+        let entry = vm
+            .headers
+            .get(xt.0)
+            .expect("xt must resolve to a dictionary entry");
+        assert_eq!(
+            entry.name, "TUPLE_GET",
+            "last emitted word must be TUPLE_GET, got: {}",
+            entry.name
         );
     }
 

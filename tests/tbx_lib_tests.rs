@@ -368,3 +368,107 @@ fn test_str_tuple_regression_issue_657() {
         .expect("STR(TUPLE(1, 2)) should still work after [] token introduction");
     assert_eq!(interp.take_output(), "(1, 2)");
 }
+
+// ---------------------------------------------------------------------------
+// Tuple projection T[i] tests (issue #659)
+// ---------------------------------------------------------------------------
+
+/// T[i] basic projection: each element can be accessed by 1-based index.
+#[test]
+fn test_tuple_projection_basic() {
+    let mut interp = Interpreter::new();
+    let src = "DEF CHECK()\n  VAR T\n  LET T = TUPLE(2026, 5, 18)\n  PRINTLN T[1]\n  PRINTLN T[2]\n  PRINTLN T[3]\nEND\nCHECK\n";
+    interp
+        .exec_source(src)
+        .expect("tuple projection T[i] should work");
+    assert_eq!(interp.take_output(), "2026\n5\n18\n");
+}
+
+/// T[I] with a variable index must evaluate the variable at runtime.
+#[test]
+fn test_tuple_projection_with_variable_index() {
+    let mut interp = Interpreter::new();
+    let src = "DEF CHECK()\n  VAR I\n  VAR T\n  LET I = 2\n  LET T = TUPLE(10, 20, 30)\n  PRINTLN T[I]\nEND\nCHECK\n";
+    interp
+        .exec_source(src)
+        .expect("tuple projection T[I] with variable index should work");
+    assert_eq!(interp.take_output(), "20\n");
+}
+
+/// T[1 + 1] with an arithmetic expression as index must work.
+#[test]
+fn test_tuple_projection_with_expr_index() {
+    let mut interp = Interpreter::new();
+    let src = "DEF CHECK()\n  VAR T\n  LET T = TUPLE(10, 20, 30)\n  PRINTLN T[1 + 1]\nEND\nCHECK\n";
+    interp
+        .exec_source(src)
+        .expect("tuple projection T[1+1] with expression index should work");
+    assert_eq!(interp.take_output(), "20\n");
+}
+
+/// Mixed-type tuples: string, integer, and boolean elements.
+#[test]
+fn test_tuple_projection_mixed_types() {
+    let mut interp = Interpreter::new();
+    // Use `1 = 1` to produce a Bool(true) value, since TRUE is not a registered symbol.
+    let src = concat!(
+        "DEF CHECK()\n",
+        "  VAR T\n",
+        "  LET T = TUPLE(\"tbx\", 1, 1 = 1)\n",
+        "  PUTSTR T[1]\n",
+        "  PUTSTR \" \"\n",
+        "  PUTDEC T[2]\n",
+        "  PUTSTR \" \"\n",
+        "  PUTVAL T[3]\n",
+        "END\n",
+        "CHECK\n"
+    );
+    interp
+        .exec_source(src)
+        .expect("tuple projection on mixed-type tuple should work");
+    assert_eq!(interp.take_output(), "tbx 1 TRUE");
+}
+
+/// T[0] and T[N+1] must produce an out-of-bounds error.
+#[test]
+fn test_tuple_projection_index_out_of_bounds() {
+    let mut interp = Interpreter::new();
+    let src = "DEF CHECK()\n  VAR T\n  LET T = TUPLE(1, 2, 3)\n  PRINTLN T[0]\nEND\nCHECK\n";
+    interp
+        .exec_source(src)
+        .expect_err("T[0] should fail with out-of-bounds error");
+
+    let mut interp2 = Interpreter::new();
+    let src2 = "DEF CHECK()\n  VAR T\n  LET T = TUPLE(1, 2, 3)\n  PRINTLN T[4]\nEND\nCHECK\n";
+    interp2
+        .exec_source(src2)
+        .expect_err("T[4] should fail with out-of-bounds error for a 3-element tuple");
+}
+
+/// T[1.5] with a non-integer index must produce a TypeError.
+#[test]
+fn test_tuple_projection_wrong_index_type() {
+    let mut interp = Interpreter::new();
+    let src = "DEF CHECK()\n  VAR T\n  LET T = TUPLE(1, 2, 3)\n  PRINTLN T[1.5]\nEND\nCHECK\n";
+    let err = interp
+        .exec_source(src)
+        .expect_err("T[1.5] should fail with a type error");
+    assert!(
+        err.to_string().contains("type error"),
+        "expected 'type error', got: {err}"
+    );
+}
+
+/// X[1] on a non-tuple value must produce a TypeError.
+#[test]
+fn test_tuple_projection_non_tuple_target() {
+    let mut interp = Interpreter::new();
+    let src = "DEF CHECK()\n  VAR X\n  LET X = 42\n  PRINTLN X[1]\nEND\nCHECK\n";
+    let err = interp
+        .exec_source(src)
+        .expect_err("X[1] on non-tuple should fail with a type error");
+    assert!(
+        err.to_string().contains("type error"),
+        "expected 'type error', got: {err}"
+    );
+}
