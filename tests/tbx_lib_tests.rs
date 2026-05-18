@@ -121,6 +121,33 @@ fn test_array_index_zero_is_out_of_bounds() {
 }
 
 // ---------------------------------------------------------------------------
+// Negative test: legacy A(i) array value access syntax must not work (#676)
+// ---------------------------------------------------------------------------
+
+/// `A(i)` must no longer be usable as an array value access expression.
+///
+/// The `A(i)` syntax for reading array elements has been removed in favour of
+/// the `@A[i]` sigil syntax.  A global variable `A` followed by `(index)` no
+/// longer compiles as an array element read; it is interpreted as a function
+/// call on a variable, which fails at runtime with a type error.
+#[test]
+fn test_legacy_global_array_paren_syntax_is_not_array_access() {
+    let mut interp = Interpreter::new();
+    // Set up a global array and attempt to read element 2 using the old syntax.
+    let src = "VAR A\nSET &A, TO_ARRAY(10, 20)\nPUTDEC A(2)\n";
+    let err = interp
+        .exec_source(src)
+        .expect_err("A(i) must not work as array value access");
+    // The error occurs because the variable handle (DictAddr) ends up where a
+    // number is expected — it is NOT silently returning 20.
+    let msg = err.to_string();
+    assert!(
+        !msg.is_empty(),
+        "A(i) must produce an error, not succeed silently"
+    );
+}
+
+// ---------------------------------------------------------------------------
 // Array element string tests (issue #591, D-4: Rc<str> liberation)
 // ---------------------------------------------------------------------------
 //

@@ -26,7 +26,6 @@ enum OpItem {
     /// Left-parenthesis sentinel. Carries optional call metadata.
     ///
     /// `call` is `Some(LParenCall::Function(xt, arity))` for a function call,
-    /// `Some(LParenCall::Array)` for an array index expression,
     /// and `None` for a plain grouping parenthesis.
     LParen { call: Option<LParenCall> },
     /// Comma-as-binary-operator used outside of function calls (precedence 11).
@@ -41,9 +40,6 @@ enum OpItem {
 enum LParenCall {
     /// Function call: execution token and current argument arity count.
     Function(Xt, usize),
-    /// Array index access: the Cell::Array handle is already on the output stack.
-    /// On closing `)`, emit ARRAY_GET (index is on top, handle is below).
-    Array,
 }
 
 // ---------------------------------------------------------------------------
@@ -161,29 +157,8 @@ impl<'a> ExprCompiler<'a> {
                     // Check local variable table first — locals shadow globals.
                     if let Some(local_idx) = self.local_table.and_then(|lt| lt.get(&name)).copied()
                     {
-                        // Peek ahead: local variable followed by `(` means array element access.
-                        let next_is_lparen = tokens
-                            .get(i + 1)
-                            .map(|st| matches!(st.token, Token::LParen))
-                            .unwrap_or(false);
-
-                        if next_is_lparen {
-                            // Array element read: A(I)
-                            // 1. Load the Cell::Array handle from the local slot.
-                            emit_local_read(&mut output, local_idx, self.vm)?;
-                            // 2. Open an array-index paren frame marked as Array
-                            //    to distinguish it from a regular function call paren.
-                            op_stack.push(OpItem::LParen {
-                                call: Some(LParenCall::Array),
-                            });
-                            i += 1; // consume '('
-                            prev_was_operand = false;
-                        } else {
-                            emit_local_read(&mut output, local_idx, self.vm)?;
-                            prev_was_operand = true;
-                            i += 1;
-                            continue;
-                        }
+                        emit_local_read(&mut output, local_idx, self.vm)?;
+                        prev_was_operand = true;
                         i += 1;
                         continue;
                     }
@@ -213,23 +188,6 @@ impl<'a> ExprCompiler<'a> {
                             .get(i + 2)
                             .map(|st| matches!(st.token, Token::RParen))
                             .unwrap_or(false);
-
-                        if !next_is_rparen {
-                            if let EntryKind::Variable(addr) = &self.vm.headers[xt.index()].kind {
-                                let lparen_pos = i + 1;
-                                let (index_toks, close_pos) =
-                                    parse_array_index_tokens(tokens, lparen_pos)?;
-                                emit_var_read(&mut output, *addr, self.vm)?;
-                                let index_cells = self.compile_expr(index_toks)?;
-                                output.extend(index_cells);
-                                let array_get_xt = require_xt(self.vm, "ARRAY_GET")?;
-                                output.push(Cell::Xt(array_get_xt));
-                                i = close_pos;
-                                prev_was_operand = true;
-                                i += 1;
-                                continue;
-                            }
-                        }
 
                         if next_is_rparen {
                             // Zero-argument call: emit based on entry kind.
@@ -524,13 +482,6 @@ impl<'a> ExprCompiler<'a> {
                                 &mut self.patch_offsets,
                             )?;
                         }
-                        Some(OpItem::LParen {
-                            call: Some(LParenCall::Array),
-                        }) => {
-                            // Emit ARRAY_GET: stack is [..., Cell::Array, index] → value.
-                            let array_get_xt = require_xt(self.vm, "ARRAY_GET")?;
-                            output.push(Cell::Xt(array_get_xt));
-                        }
                         _ => {
                             // Plain grouping paren — nothing extra to emit.
                         }
@@ -588,24 +539,11 @@ impl<'a> ExprCompiler<'a> {
                 // -------------------------------------------------------
                 Token::Comma => {
                     // A comma is an argument separator when the nearest enclosing
-                    // parenthesis belongs to a function call (not an array index).
+                    // parenthesis belongs to a function call.
                     let nearest_lparen = op_stack
                         .iter()
                         .rev()
                         .find(|op| matches!(op, OpItem::LParen { .. }));
-
-                    // Local array index expressions must be a single expression — commas
-                    // are not allowed inside array subscripts.
-                    if matches!(
-                        nearest_lparen,
-                        Some(OpItem::LParen {
-                            call: Some(LParenCall::Array)
-                        })
-                    ) {
-                        return Err(TbxError::InvalidExpression {
-                            reason: "array index must be a single expression: use NAME(index)",
-                        });
-                    }
 
                     let in_func_call = matches!(
                         nearest_lparen,
@@ -1167,32 +1105,6 @@ mod tests {
         assert_eq!(result.len(), 2);
         assert_eq!(result[0], Cell::Xt(lit_xt));
         assert_eq!(result[1], Cell::DictAddr(0));
-    }
-
-    #[test]
-    fn test_global_array_element_read() {
-        let mut vm = make_vm();
-        vm.dict_write(Cell::Int(0)).unwrap();
-        vm.register(WordEntry::new_variable("A", 0));
-
-        let tokens = lex("A(2)");
-        let result = ExprCompiler::new(&mut vm).compile_expr(&tokens).unwrap();
-
-        let lit_xt = vm.lookup("LIT").unwrap();
-        let fetch_xt = vm.lookup("FETCH").unwrap();
-        let array_get_xt = vm.lookup("ARRAY_GET").unwrap();
-
-        assert_eq!(
-            result,
-            vec![
-                Cell::Xt(lit_xt),
-                Cell::DictAddr(0),
-                Cell::Xt(fetch_xt),
-                Cell::Xt(lit_xt),
-                Cell::Int(2),
-                Cell::Xt(array_get_xt),
-            ]
-        );
     }
 
     #[test]

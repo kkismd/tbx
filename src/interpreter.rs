@@ -1438,8 +1438,8 @@ mod tests {
         let src = "\
 VAR A
 SET &A, TO_ARRAY(10, 20)
-SET &A(2), 123
-PUTDEC A(2)";
+SET &@A[2], 123
+PUTDEC @A[2]";
         interp.exec_source(src).unwrap();
         assert_eq!(interp.take_output(), "123");
     }
@@ -1450,7 +1450,7 @@ PUTDEC A(2)";
         let src = "\
 VAR A
 SET &A, TO_ARRAY(10, 20)
-PUTDEC A(2)";
+PUTDEC @A[2]";
         interp.exec_source(src).unwrap();
         assert_eq!(interp.take_output(), "20");
     }
@@ -1466,7 +1466,7 @@ SET &A, TO_ARRAY(
 )
 PUTDEC ARRAY_LEN(A)
 PUTSTR \":\"
-PUTDEC A(3)";
+PUTDEC @A[3]";
         interp.exec_source(src).unwrap();
         assert_eq!(interp.take_output(), "4:30");
     }
@@ -4752,7 +4752,7 @@ SET &A, TO_ARRAY(
 )
 PUTDEC ARRAY_LEN(A)
 PUTSTR \":\"
-PUTDEC A(3)";
+PUTDEC @A[3]";
         interp.compile_program(src).unwrap();
         assert_eq!(interp.take_output(), "4:30");
     }
@@ -4846,7 +4846,7 @@ SET &A, TO_ARRAY(
   3
 )
 PUTDEC ARRAY_LEN(A)
-PUTDEC A(2)";
+PUTDEC @A[2]";
 
         let mut interp1 = Interpreter::new();
         interp1.exec_source(src).unwrap();
