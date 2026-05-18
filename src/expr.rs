@@ -572,6 +572,29 @@ impl<'a> ExprCompiler<'a> {
                 }
 
                 // -------------------------------------------------------
+                // Array binding sigil `@` — not yet implemented
+                // -------------------------------------------------------
+                Token::At => {
+                    // `@` must be followed by an identifier to form `@A` or `@A[i]`.
+                    // Bare `@`, `@[...]`, or `@ <non-ident>` are malformed.
+                    // The full array-binding feature is not yet implemented; reject
+                    // all uses with a clear error rather than panicking.
+                    let next_is_ident = tokens
+                        .get(i + 1)
+                        .map(|st| matches!(st.token, Token::Ident(_)))
+                        .unwrap_or(false);
+                    if next_is_ident {
+                        return Err(TbxError::InvalidExpression {
+                            reason: "array sigil @ is not yet implemented",
+                        });
+                    } else {
+                        return Err(TbxError::InvalidExpression {
+                            reason: "@ must be followed by an identifier",
+                        });
+                    }
+                }
+
+                // -------------------------------------------------------
                 // Expression terminators
                 // -------------------------------------------------------
                 Token::Newline | Token::Eof | Token::Semicolon => break,
@@ -1713,6 +1736,134 @@ mod tests {
                     if reason.contains("missing index expression in []")
             ),
             "expected missing index expression error for T[], got: {err:?}"
+        );
+    }
+
+    // ------------------------------------------------------------------
+    // Token::At — array sigil @ (not yet implemented)
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn test_at_before_ident_is_unimplemented_error() {
+        // `@A[1]` must produce the "not yet implemented" error without panicking.
+        // Register A as a global variable so the identifier would otherwise resolve.
+        let mut vm = make_vm();
+        vm.dict_write(Cell::Int(0)).unwrap();
+        vm.register(crate::dict::WordEntry::new_variable("A", 0));
+
+        let tokens = lex("@A[1]");
+        let err = ExprCompiler::new(&mut vm)
+            .compile_expr(&tokens)
+            .unwrap_err();
+        assert!(
+            matches!(
+                err,
+                TbxError::InvalidExpression { reason }
+                    if reason.contains("not yet implemented")
+            ),
+            "expected not-yet-implemented error for @A[1], got: {err:?}"
+        );
+    }
+
+    #[test]
+    fn test_bare_at_is_syntax_error() {
+        // A bare `@` (not followed by an identifier) must be a clear syntax error.
+        let mut vm = make_vm();
+        let tokens = lex("@");
+        let err = ExprCompiler::new(&mut vm)
+            .compile_expr(&tokens)
+            .unwrap_err();
+        assert!(
+            matches!(err, TbxError::InvalidExpression { .. }),
+            "expected InvalidExpression for bare @, got: {err:?}"
+        );
+    }
+
+    #[test]
+    fn test_at_bracket_is_syntax_error() {
+        // `@[1]` (@ not followed by an identifier) must be a clear syntax error.
+        let mut vm = make_vm();
+        let tokens = lex("@[1]");
+        let err = ExprCompiler::new(&mut vm)
+            .compile_expr(&tokens)
+            .unwrap_err();
+        assert!(
+            matches!(err, TbxError::InvalidExpression { .. }),
+            "expected InvalidExpression for @[1], got: {err:?}"
+        );
+    }
+
+    #[test]
+    fn test_at_space_int_is_syntax_error() {
+        // `@ 1` (@ followed by an integer, not an identifier) must be a clear syntax error.
+        let mut vm = make_vm();
+        let tokens = lex("@ 1");
+        let err = ExprCompiler::new(&mut vm)
+            .compile_expr(&tokens)
+            .unwrap_err();
+        assert!(
+            matches!(err, TbxError::InvalidExpression { .. }),
+            "expected InvalidExpression for `@ 1`, got: {err:?}"
+        );
+    }
+
+    // ------------------------------------------------------------------
+    // Regression: existing syntax must still work after @ token addition
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn test_regression_ampersand_variable_read() {
+        // `VAR A; SET &A, 42` — &A must still compile as an address-of.
+        let mut vm = make_vm();
+        vm.dict_write(Cell::Int(0)).unwrap();
+        vm.register(crate::dict::WordEntry::new_variable("A", 0));
+
+        let tokens = lex("&A");
+        let result = ExprCompiler::new(&mut vm).compile_expr(&tokens).unwrap();
+
+        let lit_xt = vm.lookup("LIT").unwrap();
+        assert_eq!(result.len(), 2);
+        assert_eq!(result[0], Cell::Xt(lit_xt));
+        assert_eq!(result[1], Cell::DictAddr(0));
+    }
+
+    #[test]
+    fn test_regression_tuple_projection() {
+        // `T[1]` must still compile to TUPLE_GET (regression for T[i] support).
+        let mut vm = make_vm();
+        vm.register(crate::dict::WordEntry::new_word("T", 0));
+        let tokens = lex("T[1]");
+        let output = ExprCompiler::new(&mut vm)
+            .compile_expr(&tokens)
+            .expect("T[1] should compile without error");
+        let last = output.last().expect("output must be non-empty");
+        let xt = match last {
+            Cell::Xt(x) => *x,
+            other => panic!("expected Cell::Xt at end of output, got: {other:?}"),
+        };
+        assert_eq!(vm.headers[xt.0].name, "TUPLE_GET");
+    }
+
+    #[test]
+    fn test_regression_function_call() {
+        // `F(9)` — function call must still work after @ token addition.
+        let mut vm = make_vm();
+        let f_xt = vm.register(crate::dict::WordEntry::new_word("F", 0));
+        let tokens = lex("F(9)");
+        let result = ExprCompiler::new(&mut vm).compile_expr(&tokens).unwrap();
+
+        let lit_xt = vm.lookup("LIT").unwrap();
+        let call_xt = vm.lookup("CALL").unwrap();
+        assert_eq!(
+            result,
+            vec![
+                Cell::Xt(lit_xt),
+                Cell::Int(9),
+                Cell::Xt(call_xt),
+                Cell::Xt(f_xt),
+                Cell::Int(1),
+                Cell::Int(0),
+            ]
         );
     }
 }
