@@ -32,6 +32,8 @@ enum OpItem {
     /// Comma-as-binary-operator used outside of function calls (precedence 11).
     /// Both sides are evaluated in order; this marker produces no VM instruction.
     CommaSep,
+    /// Left-bracket sentinel for index/projection expressions.
+    LBracket,
 }
 
 /// Metadata attached to a `LParen` operator-stack item to distinguish call types.
@@ -467,6 +469,45 @@ impl<'a> ExprCompiler<'a> {
                 }
 
                 // -------------------------------------------------------
+                // Bracket tokens (index / projection — Phase 4 placeholder)
+                // -------------------------------------------------------
+                Token::LBracket => {
+                    if prev_was_operand {
+                        // Postfix index/projection: `expr[...]`
+                        op_stack.push(OpItem::LBracket);
+                        prev_was_operand = false;
+                    } else {
+                        return Err(TbxError::InvalidExpression {
+                            reason: "'[' without a preceding expression is not supported",
+                        });
+                    }
+                }
+
+                Token::RBracket => {
+                    // Pop operators until LBracket.
+                    loop {
+                        match op_stack.last() {
+                            Some(OpItem::LBracket) => break,
+                            None => {
+                                return Err(TbxError::InvalidExpression {
+                                    reason: "unmatched ']' in expression",
+                                });
+                            }
+                            _ => {
+                                let op = op_stack.pop().unwrap();
+                                emit_op_item(&op, &mut output, self.vm)?;
+                            }
+                        }
+                    }
+                    // Pop the LBracket.
+                    op_stack.pop();
+                    // Index/projection is not yet implemented (Phase 4).
+                    return Err(TbxError::InvalidExpression {
+                        reason: "index/projection with [] is not yet implemented",
+                    });
+                }
+
+                // -------------------------------------------------------
                 // Comma (argument separator or low-priority binary op)
                 // -------------------------------------------------------
                 Token::Comma => {
@@ -704,8 +745,8 @@ fn pop_ops_while(
 ) -> Result<(), TbxError> {
     loop {
         match op_stack.last() {
-            // LParen is never popped by precedence rules.
-            Some(OpItem::LParen { .. }) | None => break,
+            // LParen and LBracket are never popped by precedence rules.
+            Some(OpItem::LParen { .. }) | Some(OpItem::LBracket) | None => break,
             Some(op) => {
                 let top_prec = op_prec(op);
                 // Standard SYA rule (our numbering: lower = higher priority):
@@ -735,6 +776,7 @@ fn op_prec(op: &OpItem) -> u8 {
         OpItem::UnaryNeg => 1,
         OpItem::CommaSep => 11,
         OpItem::LParen { .. } => u8::MAX, // sentinel; never compared in practice
+        OpItem::LBracket => u8::MAX,      // sentinel; never compared in practice
     }
 }
 
@@ -757,6 +799,12 @@ fn emit_op_item(op: &OpItem, output: &mut Vec<Cell>, vm: &VM) -> Result<(), TbxE
             // A stray LParen surviving to drain means an unmatched '(' — error.
             return Err(TbxError::InvalidExpression {
                 reason: "unmatched '(' in expression",
+            });
+        }
+        OpItem::LBracket => {
+            // A stray LBracket surviving to drain means an unmatched '[' — error.
+            return Err(TbxError::InvalidExpression {
+                reason: "unmatched '[' in expression",
             });
         }
     }
@@ -1534,6 +1582,65 @@ mod tests {
         );
     }
 
+    // ------------------------------------------------------------------
+    // Bracket tokens: index/projection not yet implemented
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn test_bracket_index_not_yet_implemented() {
+        // `T[1]` must produce InvalidExpression with the "not yet implemented" reason.
+        let mut vm = make_vm();
+        vm.register(WordEntry::new_word("T", 0));
+        let tokens = lex("T[1]");
+        let err = ExprCompiler::new(&mut vm)
+            .compile_expr(&tokens)
+            .unwrap_err();
+        assert!(
+            matches!(
+                err,
+                TbxError::InvalidExpression { reason }
+                    if reason.contains("not yet implemented")
+            ),
+            "expected 'not yet implemented' error for T[1], got: {err:?}"
+        );
+    }
+
+    #[test]
+    fn test_isolated_rbracket_error() {
+        // A lone `]` with no matching `[` must produce an unmatched ']' error.
+        let mut vm = make_vm();
+        let tokens = lex("1 ]");
+        let err = ExprCompiler::new(&mut vm)
+            .compile_expr(&tokens)
+            .unwrap_err();
+        assert!(
+            matches!(
+                err,
+                TbxError::InvalidExpression { reason }
+                    if reason.contains("unmatched ']'")
+            ),
+            "expected unmatched ']' error, got: {err:?}"
+        );
+    }
+
+    #[test]
+    fn test_lbracket_without_preceding_operand_error() {
+        // `[1]` (no preceding expression) must be rejected.
+        let mut vm = make_vm();
+        let tokens = lex("[1]");
+        let err = ExprCompiler::new(&mut vm)
+            .compile_expr(&tokens)
+            .unwrap_err();
+        assert!(
+            matches!(
+                err,
+                TbxError::InvalidExpression { reason }
+                    if reason.contains("'[' without a preceding expression")
+            ),
+            "expected '[' without preceding expression error, got: {err:?}"
+        );
+    }
+
     #[test]
     fn test_token_error_propagates_as_invalid_expression() {
         use crate::lexer::Position;
@@ -1555,6 +1662,25 @@ mod tests {
         assert!(
             matches!(err, TbxError::InvalidExpression { .. }),
             "Token::Error should produce InvalidExpression, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn test_unmatched_lbracket_error() {
+        // `T[1` (no closing ']') must produce an unmatched '[' error.
+        let mut vm = make_vm();
+        vm.register(WordEntry::new_word("T", 0));
+        let tokens = lex("T[1");
+        let err = ExprCompiler::new(&mut vm)
+            .compile_expr(&tokens)
+            .unwrap_err();
+        assert!(
+            matches!(
+                err,
+                TbxError::InvalidExpression { reason }
+                    if reason.contains("unmatched '['")
+            ),
+            "expected unmatched '[' error for T[1, got: {err:?}"
         );
     }
 }

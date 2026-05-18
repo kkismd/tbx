@@ -329,3 +329,42 @@ fn test_tuple_with_array_element_is_invalid() {
         "expected 'tuple element type not allowed', got: {err}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Regression tests for issue #657: [] token introduction
+// ---------------------------------------------------------------------------
+
+/// TUPLE(1, 2, 3) must still compile and produce the correct STR output.
+/// Ensures that introducing LBracket/RBracket did not break tuple parsing.
+#[test]
+fn test_tuple_regression_issue_657() {
+    let mut interp = Interpreter::new();
+    // Use PUTSTR + take_output instead of ASSERT (which requires helper.tbx).
+    let src = "DEF CHECK()\n  VAR T\n  LET T = TUPLE(1, 2, 3)\n  PUTSTR STR(T)\nEND\nCHECK\n";
+    interp
+        .exec_source(src)
+        .expect("TUPLE(1, 2, 3) should still work after [] token introduction");
+    assert_eq!(interp.take_output(), "(1, 2, 3)");
+}
+
+/// F(1) function call syntax must still work after [] token introduction.
+#[test]
+fn test_function_call_regression_issue_657() {
+    let mut interp = Interpreter::new();
+    let src = "DEF DOUBLE(X)\n  RETURN X * 2\nEND\nPUTDEC DOUBLE(3)\n";
+    interp
+        .exec_source(src)
+        .expect("function call F(1) should still work after [] token introduction");
+    assert_eq!(interp.take_output(), "6");
+}
+
+/// STR(TUPLE(1, 2)) must still produce the correct output.
+#[test]
+fn test_str_tuple_regression_issue_657() {
+    let mut interp = Interpreter::new();
+    let src = "DEF CHECK()\n  PUTSTR STR(TUPLE(1, 2))\nEND\nCHECK\n";
+    interp
+        .exec_source(src)
+        .expect("STR(TUPLE(1, 2)) should still work after [] token introduction");
+    assert_eq!(interp.take_output(), "(1, 2)");
+}
