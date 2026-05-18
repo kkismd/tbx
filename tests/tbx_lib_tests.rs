@@ -914,3 +914,219 @@ fn test_at_array_address_undefined_binding_is_error() {
         .exec_source(src)
         .expect_err("&@A[1] on undefined binding should fail");
 }
+
+// ───────────────────────────────────────────────────────────────────────────
+// LET @A[i] = expr — array element assignment sugar (issue #669)
+// ───────────────────────────────────────────────────────────────────────────
+
+/// `LET @A[i] = expr` on a local array binding must write the value and
+/// `@A[i]` must read it back.
+#[test]
+fn test_let_at_array_local_element_assignment() {
+    let mut interp = Interpreter::new();
+    let src = concat!(
+        "DEF F()\n",
+        "  DIM @A[3]\n",
+        "  LET @A[1] = 10\n",
+        "  RETURN @A[1]\n",
+        "END\n",
+        "PUTDEC F()\n",
+    );
+    interp
+        .exec_source(src)
+        .expect("LET @A[1] = 10 should write 10 to element 1 of local array");
+    assert_eq!(interp.take_output(), "10");
+}
+
+/// `LET @A[I + 1] = expr` with an arithmetic index expression must write to
+/// the correct element.
+#[test]
+fn test_let_at_array_index_expression() {
+    let mut interp = Interpreter::new();
+    let src = concat!(
+        "DEF F()\n",
+        "  DIM @A[3]\n",
+        "  VAR I = 1\n",
+        "  LET @A[I + 1] = 20\n",
+        "  RETURN @A[2]\n",
+        "END\n",
+        "PUTDEC F()\n",
+    );
+    interp
+        .exec_source(src)
+        .expect("LET @A[I + 1] = 20 should write 20 to element 2");
+    assert_eq!(interp.take_output(), "20");
+}
+
+/// `LET @A[i] = <arithmetic expr>` must evaluate the RHS before storing.
+#[test]
+fn test_let_at_array_rhs_expression() {
+    let mut interp = Interpreter::new();
+    let src = concat!(
+        "DEF F()\n",
+        "  DIM @A[3]\n",
+        "  LET @A[1] = 10 + 20\n",
+        "  RETURN @A[1]\n",
+        "END\n",
+        "PUTDEC F()\n",
+    );
+    interp
+        .exec_source(src)
+        .expect("LET @A[1] = 10 + 20 should store 30");
+    assert_eq!(interp.take_output(), "30");
+}
+
+/// `LET @G[i] = expr` on a global array binding declared with `DIM @G[n]`
+/// at the top level must write the value when called from inside a DEF body.
+///
+/// Note: `LET` uses `COMPILE_LVALUE` which requires compile mode; top-level
+/// (execute-mode) `LET @G[i] = expr` is intentionally unsupported, matching
+/// the same constraint as top-level `LET V = expr` for scalar variables.
+#[test]
+fn test_let_at_array_global_element_assignment() {
+    let mut interp = Interpreter::new();
+    // DIM @G at top level; LET @G[i] inside DEF to stay in compile mode.
+    let src = concat!(
+        "DIM @G[3]\n",
+        "DEF F()\n",
+        "  LET @G[1] = 30\n",
+        "END\n",
+        "F\n",
+        "PUTDEC @G[1]\n",
+    );
+    interp
+        .exec_source(src)
+        .expect("LET @G[1] = 30 inside DEF should write 30 to element 1 of global array");
+    assert_eq!(interp.take_output(), "30");
+}
+
+/// `LET @A[i] = expr` must produce the same result as `SET &@A[i], expr`.
+#[test]
+fn test_let_at_array_equivalent_to_set_address() {
+    let mut interp = Interpreter::new();
+    let src = concat!(
+        "DEF F()\n",
+        "  DIM @A[3]\n",
+        "  LET @A[2] = 99\n",
+        "  RETURN @A[2]\n",
+        "END\n",
+        "PUTDEC F()\n",
+    );
+    interp
+        .exec_source(src)
+        .expect("LET @A[2] = 99 should be equivalent to SET &@A[2], 99");
+    assert_eq!(interp.take_output(), "99");
+}
+
+/// `LET A = expr` scalar assignment must still work after adding array sugar.
+#[test]
+fn test_let_scalar_assignment_regression() {
+    let mut interp = Interpreter::new();
+    let src = concat!(
+        "DEF F()\n",
+        "  VAR A\n",
+        "  LET A = 42\n",
+        "  RETURN A\n",
+        "END\n",
+        "PUTDEC F()\n",
+    );
+    interp
+        .exec_source(src)
+        .expect("LET A = 42 scalar assignment should still work");
+    assert_eq!(interp.take_output(), "42");
+}
+
+/// `SET &@A[i], expr` must continue to work after introducing `LET @A[i]`.
+#[test]
+fn test_set_at_array_address_regression() {
+    let mut interp = Interpreter::new();
+    let src = concat!(
+        "DEF F()\n",
+        "  DIM @A[3]\n",
+        "  SET &@A[2], 99\n",
+        "  RETURN @A[2]\n",
+        "END\n",
+        "PUTDEC F()\n",
+    );
+    interp
+        .exec_source(src)
+        .expect("SET &@A[2], 99 should still work");
+    assert_eq!(interp.take_output(), "99");
+}
+
+/// `LET @A = expr` (missing brackets) must produce a compile-time error.
+#[test]
+fn test_let_at_array_missing_bracket_is_error() {
+    let mut interp = Interpreter::new();
+    let src = concat!(
+        "DEF F()\n",
+        "  DIM @A[3]\n",
+        "  LET @A = 10\n",
+        "  RETURN 0\n",
+        "END\n",
+        "F\n",
+    );
+    interp
+        .exec_source(src)
+        .expect_err("LET @A = 10 without brackets should fail");
+}
+
+/// `LET @[1] = expr` (missing identifier after `@`) must produce a compile-time error.
+#[test]
+fn test_let_at_array_missing_ident_is_error() {
+    let mut interp = Interpreter::new();
+    let src = concat!(
+        "DEF F()\n",
+        "  LET @[1] = 10\n",
+        "  RETURN 0\n",
+        "END\n",
+        "F\n",
+    );
+    interp
+        .exec_source(src)
+        .expect_err("LET @[1] = 10 without identifier should fail");
+}
+
+/// `LET @A[] = expr` (empty index) must produce a compile-time error.
+#[test]
+fn test_let_at_array_empty_index_is_error() {
+    let mut interp = Interpreter::new();
+    let src = concat!(
+        "DEF F()\n",
+        "  DIM @A[3]\n",
+        "  LET @A[] = 10\n",
+        "  RETURN 0\n",
+        "END\n",
+        "F\n",
+    );
+    interp
+        .exec_source(src)
+        .expect_err("LET @A[] = 10 with empty index should fail");
+}
+
+/// `LET @A[1] = expr` on an undefined array binding must produce an error.
+#[test]
+fn test_let_at_array_undefined_binding_is_error() {
+    let mut interp = Interpreter::new();
+    let src = "LET @A[1] = 10\n";
+    interp
+        .exec_source(src)
+        .expect_err("LET @A[1] on undefined binding should fail");
+}
+
+/// `LET T[i] = expr` (tuple projection assignment) must remain unsupported.
+#[test]
+fn test_let_tuple_projection_assignment_is_error() {
+    let mut interp = Interpreter::new();
+    let src = concat!(
+        "DEF F()\n",
+        "  VAR T = TUPLE(1, 2, 3)\n",
+        "  LET T[1] = 10\n",
+        "  RETURN 0\n",
+        "END\n",
+        "F\n",
+    );
+    interp
+        .exec_source(src)
+        .expect_err("LET T[1] = 10 tuple projection assignment should fail");
+}
