@@ -42,6 +42,10 @@ pub enum Token {
     LParen,
     /// Right parenthesis `)`. Maps to TOK_OP.
     RParen,
+    /// Left bracket `[`. Used for index / projection expressions.
+    LBracket,
+    /// Right bracket `]`. Used for index / projection expressions.
+    RBracket,
     /// Line terminator (newline or end of statement). Outer-interpreter-only.
     Newline,
     /// End of input. Outer-interpreter-only.
@@ -58,9 +62,13 @@ impl Token {
         match self {
             Token::Ident(_) => Some(TOK_ID),
             Token::IntLit(_) | Token::FloatLit(_) => Some(TOK_NUM),
-            Token::Op(_) | Token::Comma | Token::Ampersand | Token::LParen | Token::RParen => {
-                Some(TOK_OP)
-            }
+            Token::Op(_)
+            | Token::Comma
+            | Token::Ampersand
+            | Token::LParen
+            | Token::RParen
+            | Token::LBracket
+            | Token::RBracket => Some(TOK_OP),
             Token::Semicolon => Some(TOK_DELIM),
             Token::StringLit(_) => Some(TOK_STR),
             // Ellipsis is a DEF-parsing-only token; never exposed via TOKEN primitive.
@@ -477,6 +485,18 @@ impl<'a> Lexer<'a> {
             },
             ')' => SpannedToken {
                 token: Token::RParen,
+                pos: start_pos,
+                source_offset: start_off,
+                source_len: end_off - start_off,
+            },
+            '[' => SpannedToken {
+                token: Token::LBracket,
+                pos: start_pos,
+                source_offset: start_off,
+                source_len: end_off - start_off,
+            },
+            ']' => SpannedToken {
+                token: Token::RBracket,
                 pos: start_pos,
                 source_offset: start_off,
                 source_len: end_off - start_off,
@@ -1286,6 +1306,43 @@ mod tests {
                 Token::Eof,
             ]
         );
+    }
+
+    // --- brackets ---
+
+    #[test]
+    fn test_lbracket() {
+        assert_eq!(tokens("["), vec![Token::LBracket, Token::Eof]);
+    }
+
+    #[test]
+    fn test_rbracket() {
+        assert_eq!(tokens("]"), vec![Token::RBracket, Token::Eof]);
+    }
+
+    #[test]
+    fn test_bracket_index_sequence() {
+        // T[1] should tokenize as [Ident("T"), LBracket, IntLit(1), RBracket, Eof].
+        assert_eq!(
+            tokens("T[1]"),
+            vec![
+                Token::Ident("T".to_string()),
+                Token::LBracket,
+                Token::IntLit(1),
+                Token::RBracket,
+                Token::Eof,
+            ]
+        );
+    }
+
+    #[test]
+    fn test_kind_code_lbracket() {
+        assert_eq!(Token::LBracket.kind_code(), Some(TOK_OP));
+    }
+
+    #[test]
+    fn test_kind_code_rbracket() {
+        assert_eq!(Token::RBracket.kind_code(), Some(TOK_OP));
     }
 
     // --- integer overflow → Error ---
