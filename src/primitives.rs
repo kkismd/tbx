@@ -1480,66 +1480,234 @@ fn compile_lvalue_save_prim(vm: &mut VM) -> Result<(), TbxError> {
     Ok(())
 }
 
-/// COMPILE_LVALUE — read a variable name from the token stream and emit `LIT addr` to the
-/// dictionary, where `addr` is the variable's stack or dictionary address.
+/// COMPILE_LVALUE — read a variable name (or `@A[i]` array element form) from the token
+/// stream and emit the corresponding lvalue address sequence to the dictionary.
 ///
-/// This is the compile-time counterpart to the `&var` address-of operator in expressions.
-/// Locals (from `compile_state.local_table`) resolve to `StackAddr`; global variables
-/// (`EntryKind::Variable`) resolve to `DictAddr`.
+/// Two forms are supported:
+///
+/// 1. Scalar: `LET A = expr`
+///    Emits `LIT addr`, where `addr` is the variable's stack or dictionary address.
+///    This is the compile-time counterpart to the `&var` address-of operator in expressions.
+///    Locals (from `compile_state.local_table`) resolve to `StackAddr`; global variables
+///    (`EntryKind::Variable`) resolve to `DictAddr`.
+///
+/// 2. Array element: `LET @A[i] = expr`
+///    Emits `<array handle read>  <index expr>  ARRAY_ADDR`, which leaves the element
+///    address on the stack, ready for the subsequent `SET` instruction emitted by the
+///    caller (`LET` in `basic.tbx`).  This sequence is equivalent to `SET &@A[i], expr`.
 ///
 /// Must be called in compile mode (inside an IMMEDIATE word invocation that runs during a
 /// DEF body compilation). Requires `token_stream` to be set.
 fn compile_lvalue_prim(vm: &mut VM) -> Result<(), TbxError> {
+    use crate::lexer::Token;
+
     if !vm.is_compiling {
         return Err(TbxError::InvalidExpression {
             reason: "COMPILE_LVALUE outside compile mode",
         });
     }
 
-    let name = vm.expect_ident("COMPILE_LVALUE: expected variable name")?;
+    // Peek at the next token to choose the scalar or array-element path.
+    let first_tok = vm.next_token()?;
 
-    // Resolve address: local table first, then global dictionary.
-    // Follow the same take→use→restore→apply-? pattern as compile_expr_prim so that
-    // local_table is always restored before any early return propagates.
-    let addr_cell = {
-        // Take local_table out to avoid borrow conflict with &mut vm below.
-        let local_table = vm
-            .compile_state
-            .as_mut()
-            .map(|s| std::mem::take(&mut s.local_table));
+    match first_tok.token {
+        Token::At => {
+            // Array element lvalue: `LET @A[i] = expr`
+            compile_at_array_lvalue(vm)
+        }
+        Token::Ident(raw_name) => {
+            let name = raw_name.to_ascii_uppercase();
+            // Scalar lvalue: resolve address and emit LIT <addr>.
+            let addr_cell = {
+                // Take local_table out to avoid borrow conflict with &mut vm below.
+                let local_table = vm
+                    .compile_state
+                    .as_mut()
+                    .map(|s| std::mem::take(&mut s.local_table));
 
-        let result: Result<Cell, TbxError> =
-            if let Some(idx) = local_table.as_ref().and_then(|lt| lt.get(&name)).copied() {
-                Ok(Cell::StackAddr(idx))
-            } else {
-                // No `?` here — collect the result and restore local_table first.
-                match vm.lookup(&name) {
-                    None => Err(TbxError::UndefinedSymbol { name }),
-                    Some(xt) => match &vm.headers[xt.index()].kind {
-                        EntryKind::Variable(addr) => Ok(Cell::DictAddr(*addr)),
-                        _ => Err(TbxError::TypeError {
-                            expected: "variable",
-                            got: "non-variable",
-                        }),
-                    },
+                let result: Result<Cell, TbxError> =
+                    if let Some(idx) = local_table.as_ref().and_then(|lt| lt.get(&name)).copied() {
+                        Ok(Cell::StackAddr(idx))
+                    } else {
+                        // No `?` here — collect the result and restore local_table first.
+                        match vm.lookup(&name) {
+                            None => Err(TbxError::UndefinedSymbol { name }),
+                            Some(xt) => match &vm.headers[xt.index()].kind {
+                                EntryKind::Variable(addr) => Ok(Cell::DictAddr(*addr)),
+                                _ => Err(TbxError::TypeError {
+                                    expected: "variable",
+                                    got: "non-variable",
+                                }),
+                            },
+                        }
+                    };
+
+                // Restore local_table unconditionally before propagating any error.
+                if let (Some(state), Some(lt)) = (vm.compile_state.as_mut(), local_table) {
+                    state.local_table = lt;
                 }
+                result?
             };
 
-        // Restore local_table unconditionally before propagating any error.
-        if let (Some(state), Some(lt)) = (vm.compile_state.as_mut(), local_table) {
-            state.local_table = lt;
+            // Emit LIT <addr> to the dictionary.
+            let lit_xt = vm.find_by_kind(|k| matches!(k, EntryKind::Lit)).ok_or(
+                TbxError::UndefinedSymbol {
+                    name: "LIT".to_string(),
+                },
+            )?;
+            vm.dict_write(Cell::Xt(lit_xt))?;
+            vm.dict_write(addr_cell)?;
+            Ok(())
         }
-        result?
+        _ => Err(TbxError::InvalidExpression {
+            reason: "COMPILE_LVALUE: expected variable name or '@' for array element assignment",
+        }),
+    }
+}
+
+/// Compile the lvalue sequence for `LET @A[i] = expr`.
+///
+/// Called after `@` has already been consumed from the token stream.
+///
+/// Parses `Ident [ index_expr ]` and emits:
+///   `<array handle read>  <compiled index_expr>  ARRAY_ADDR`
+///
+/// This leaves a `Cell::DictAddr` (element address) on the runtime stack, ready
+/// for the subsequent `SET` instruction that the `LET` word in `basic.tbx` appends.
+///
+/// Error cases — all produce compile-time errors (no panics):
+///   - No identifier after `@`        → `InvalidExpression`
+///   - No `[` after identifier        → `InvalidExpression` (`LET @A = expr`)
+///   - Empty index expression `@A[]`  → `InvalidExpression`
+///   - Unterminated `[`               → `InvalidExpression`
+///   - Undefined array name           → `UndefinedSymbol`
+///   - Name is not an array variable  → `TypeError`
+fn compile_at_array_lvalue(vm: &mut VM) -> Result<(), TbxError> {
+    use crate::lexer::Token;
+
+    // Expect the array binding identifier (bare name, e.g. `A` for `@A`).
+    let array_name_tok = vm.next_token()?;
+    let array_name = match array_name_tok.token {
+        Token::Ident(n) => n.to_ascii_uppercase(),
+        _ => {
+            return Err(TbxError::InvalidExpression {
+                reason: "LET @: expected array binding identifier (e.g. LET @A[i] = expr)",
+            });
+        }
     };
 
-    // Emit LIT <addr> to the dictionary.
+    // Expect `[`.
+    let lb_tok = vm.next_token().map_err(|_| TbxError::InvalidExpression {
+        reason: "LET @A: expected '[' after array name (e.g. LET @A[i] = expr)",
+    })?;
+    if lb_tok.token != Token::LBracket {
+        return Err(TbxError::InvalidExpression {
+            reason: "LET @A: expected '[' — bare '@A' is not a valid lvalue (use LET @A[i] = expr)",
+        });
+    }
+
+    // Collect tokens up to the matching `]`, depth-aware.
+    let index_tokens: Vec<crate::lexer::SpannedToken> = {
+        let stream = vm.token_stream.as_mut().ok_or(TbxError::TokenStreamEmpty)?;
+        let mut depth: usize = 1;
+        let mut collected: Vec<crate::lexer::SpannedToken> = Vec::new();
+        loop {
+            let tok = stream.pop_front().ok_or(TbxError::InvalidExpression {
+                reason: "LET @A[: unterminated '[' — expected ']'",
+            })?;
+            match &tok.token {
+                Token::LBracket => {
+                    depth += 1;
+                    collected.push(tok);
+                }
+                Token::RBracket => {
+                    depth -= 1;
+                    if depth == 0 {
+                        break;
+                    }
+                    collected.push(tok);
+                }
+                Token::Newline | Token::Eof => {
+                    return Err(TbxError::InvalidExpression {
+                        reason: "LET @A[: unterminated '[' — unexpected end of line",
+                    });
+                }
+                _ => {
+                    collected.push(tok);
+                }
+            }
+        }
+        collected
+    };
+
+    // Reject empty index: `LET @A[] = expr`.
+    if index_tokens.is_empty() {
+        return Err(TbxError::InvalidExpression {
+            reason: "LET @A[]: array index expression must not be empty (use LET @A[i] = expr)",
+        });
+    }
+
+    // Compile the index expression using the current local table.
+    let (index_cells, index_patch_offsets) = compile_expr_taking_local_table(vm, &index_tokens)?;
+
+    // Resolve the array handle: local binding takes priority over global.
+    let local_idx: Option<usize> = vm
+        .compile_state
+        .as_ref()
+        .and_then(|s| s.local_table.get(&array_name).copied());
+
     let lit_xt =
         vm.find_by_kind(|k| matches!(k, EntryKind::Lit))
             .ok_or(TbxError::UndefinedSymbol {
                 name: "LIT".to_string(),
             })?;
-    vm.dict_write(Cell::Xt(lit_xt))?;
-    vm.dict_write(addr_cell)?;
+    let fetch_xt = vm.lookup("FETCH").ok_or(TbxError::UndefinedSymbol {
+        name: "FETCH".to_string(),
+    })?;
+    let array_addr_xt = vm.lookup("ARRAY_ADDR").ok_or(TbxError::UndefinedSymbol {
+        name: "ARRAY_ADDR".to_string(),
+    })?;
+
+    if let Some(idx) = local_idx {
+        // Emit: LIT StackAddr(idx)  FETCH  — load the local array handle.
+        vm.dict_write(Cell::Xt(lit_xt))?;
+        vm.dict_write(Cell::StackAddr(idx))?;
+        vm.dict_write(Cell::Xt(fetch_xt))?;
+    } else {
+        // Look up in the global dictionary.
+        let xt = vm.lookup(&array_name).ok_or(TbxError::UndefinedSymbol {
+            name: array_name.clone(),
+        })?;
+        let addr = match &vm.headers[xt.index()].kind {
+            EntryKind::Variable(addr) => *addr,
+            _ => {
+                return Err(TbxError::TypeError {
+                    expected: "array variable for LET @-sigil lvalue",
+                    got: "non-variable",
+                });
+            }
+        };
+        // Emit: LIT DictAddr(addr)  FETCH  — load the global array handle.
+        vm.dict_write(Cell::Xt(lit_xt))?;
+        vm.dict_write(Cell::DictAddr(addr))?;
+        vm.dict_write(Cell::Xt(fetch_xt))?;
+    }
+
+    // Emit the compiled index expression.
+    let base_dp = vm.dp;
+    for cell in index_cells {
+        vm.dict_write(cell)?;
+    }
+    // Register any self-recursive call patch positions from the index expression.
+    if let Some(state) = vm.compile_state.as_mut() {
+        for offset in index_patch_offsets {
+            state.call_patch_list.push(base_dp + offset);
+        }
+    }
+
+    // Emit ARRAY_ADDR — pops (Array, index) and pushes the element address.
+    vm.dict_write(Cell::Xt(array_addr_xt))?;
+
     Ok(())
 }
 
