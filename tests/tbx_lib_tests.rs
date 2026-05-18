@@ -310,3 +310,22 @@ fn test_duplicate_local_var_with_init_then_no_init_is_error() {
         "expected 'duplicate' in error message, got: {err}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// TUPLE primitive error-path tests (issue #655)
+// ---------------------------------------------------------------------------
+
+/// TUPLE(ARRAY(3)) must fail at runtime with an invalid-element-type error
+/// because Cell::Array is a forbidden tuple element type.
+#[test]
+fn test_tuple_with_array_element_is_invalid() {
+    let mut interp = Interpreter::new();
+    let src = "DEF T()\n  VAR A\n  LET A = ARRAY(3)\n  RETURN TUPLE(A)\nEND\nT\n";
+    let err = interp
+        .exec_source(src)
+        .expect_err("TUPLE(Array) should fail with invalid tuple element error");
+    assert!(
+        err.to_string().contains("tuple element type not allowed"),
+        "expected 'tuple element type not allowed', got: {err}"
+    );
+}

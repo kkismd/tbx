@@ -1807,10 +1807,15 @@ pub fn register_all(vm: &mut VM) {
     // an element address (used internally by the expression compiler for `A(I)` and `&A(I)`).
     // TO_ARRAY packs stack values into a new array; FROM_ARRAY expands one onto the stack.
     // ARRAY_LEN returns the length of an array; ARRAY_CONCAT concatenates two arrays.
+    // TUPLE packs stack values into a new immutable Cell::Tuple.
     let mut to_array_entry = WordEntry::new_primitive("TO_ARRAY", to_array_prim);
     to_array_entry.is_variadic = true;
     // arity stays 0: TO_ARRAY accepts zero or more arguments.
     vm.register(to_array_entry);
+    let mut tuple_entry = WordEntry::new_primitive("TUPLE", to_tuple_prim);
+    tuple_entry.is_variadic = true;
+    // arity stays 0: TUPLE accepts zero or more arguments (empty tuple is allowed).
+    vm.register(tuple_entry);
     vm.register(WordEntry::new_primitive("FROM_ARRAY", from_array_prim));
     vm.register(WordEntry::new_primitive("ARRAY", array_prim));
     vm.register(WordEntry::new_primitive("ARRAY_LEN", array_len_prim));
@@ -5899,6 +5904,104 @@ mod tests {
         let first = vm.pop().unwrap();
         assert_eq!(first, Cell::Array(0));
         assert_eq!(second, Cell::Array(1));
+    }
+
+    // --- to_tuple_prim ---
+
+    #[test]
+    fn test_to_tuple_prim_basic() {
+        // Stack: [1, 2, 3, Int(3)] → Cell::Tuple([Int(1), Int(2), Int(3)])
+        let mut vm = VM::new();
+        vm.push(Cell::Int(1)).unwrap();
+        vm.push(Cell::Int(2)).unwrap();
+        vm.push(Cell::Int(3)).unwrap();
+        vm.push(Cell::Int(3)).unwrap(); // arity
+        to_tuple_prim(&mut vm).unwrap();
+        assert_eq!(
+            vm.pop(),
+            Ok(Cell::Tuple(vec![Cell::Int(1), Cell::Int(2), Cell::Int(3)]))
+        );
+    }
+
+    #[test]
+    fn test_to_tuple_prim_preserves_order() {
+        // First argument becomes index 0 (lowest position in the tuple).
+        let mut vm = VM::new();
+        vm.push(Cell::Int(10)).unwrap();
+        vm.push(Cell::Int(20)).unwrap();
+        vm.push(Cell::Int(30)).unwrap();
+        vm.push(Cell::Int(3)).unwrap(); // arity
+        to_tuple_prim(&mut vm).unwrap();
+        let result = vm.pop().unwrap();
+        let Cell::Tuple(elems) = result else {
+            panic!("expected Cell::Tuple");
+        };
+        assert_eq!(elems[0], Cell::Int(10));
+        assert_eq!(elems[1], Cell::Int(20));
+        assert_eq!(elems[2], Cell::Int(30));
+    }
+
+    #[test]
+    fn test_to_tuple_prim_single_element() {
+        // Stack: [Int(42), Int(1)] → Cell::Tuple([Int(42)])
+        let mut vm = VM::new();
+        vm.push(Cell::Int(42)).unwrap();
+        vm.push(Cell::Int(1)).unwrap(); // arity
+        to_tuple_prim(&mut vm).unwrap();
+        assert_eq!(vm.pop(), Ok(Cell::Tuple(vec![Cell::Int(42)])));
+    }
+
+    #[test]
+    fn test_to_tuple_prim_mixed_types() {
+        // Mix of Int, Float, Bool, and Str.
+        let mut vm = VM::new();
+        vm.push(Cell::Int(1)).unwrap();
+        vm.push(Cell::Float(2.5)).unwrap();
+        vm.push(Cell::Bool(true)).unwrap();
+        vm.push(Cell::string("hello")).unwrap();
+        vm.push(Cell::Int(4)).unwrap(); // arity
+        to_tuple_prim(&mut vm).unwrap();
+        assert_eq!(
+            vm.pop(),
+            Ok(Cell::Tuple(vec![
+                Cell::Int(1),
+                Cell::Float(2.5),
+                Cell::Bool(true),
+                Cell::string("hello"),
+            ]))
+        );
+    }
+
+    #[test]
+    fn test_to_tuple_prim_rejects_array() {
+        // Cell::Array is a forbidden tuple element type.
+        let mut vm = VM::new();
+        vm.arrays.push(vec![Cell::Int(1)]);
+        vm.push(Cell::Array(0)).unwrap();
+        vm.push(Cell::Int(1)).unwrap(); // arity
+        assert!(matches!(
+            to_tuple_prim(&mut vm),
+            Err(TbxError::InvalidTupleElement { .. })
+        ));
+    }
+
+    #[test]
+    fn test_to_tuple_prim_negative_arity_returns_error() {
+        let mut vm = VM::new();
+        vm.push(Cell::Int(-1)).unwrap(); // negative arity
+        assert!(matches!(
+            to_tuple_prim(&mut vm),
+            Err(TbxError::InvalidArgument { .. })
+        ));
+    }
+
+    #[test]
+    fn test_to_tuple_prim_empty() {
+        // Stack: [Int(0)] → Cell::Tuple([]) (empty tuple)
+        let mut vm = VM::new();
+        vm.push(Cell::Int(0)).unwrap(); // arity = 0
+        to_tuple_prim(&mut vm).unwrap();
+        assert_eq!(vm.pop(), Ok(Cell::Tuple(vec![])));
     }
 
     // --- from_array_prim ---

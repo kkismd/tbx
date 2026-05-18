@@ -43,6 +43,35 @@ pub fn to_array_prim(vm: &mut VM) -> Result<(), TbxError> {
     Ok(())
 }
 
+/// TUPLE — collect N values from the stack into a new immutable tuple.
+///
+/// Pops the arity `n` from the stack, then pops `n` values and assembles them
+/// into a `Cell::Tuple`.  Elements are validated by `Cell::new_tuple`; nested
+/// `Tuple`, `Array`, `ArrayAddr`, `Xt`, `None`, and `Marker` are rejected.
+///
+/// `TUPLE()` with zero arguments produces an empty tuple `()`.
+pub fn to_tuple_prim(vm: &mut VM) -> Result<(), TbxError> {
+    // Pop the arity pushed by the compiler.
+    let n = vm.pop_int()?;
+    if n < 0 {
+        return Err(TbxError::InvalidArgument {
+            message: format!("TUPLE arity must be non-negative, got {n}"),
+        });
+    }
+    let count = n as usize;
+    // Pop `count` values in reverse order, then reverse to restore original order.
+    let mut elems: Vec<Cell> = Vec::with_capacity(count);
+    for _ in 0..count {
+        let elem = vm.pop()?;
+        elems.push(elem);
+    }
+    elems.reverse();
+    // Cell::new_tuple validates element types and returns an error for forbidden types.
+    let tuple = Cell::new_tuple(elems)?;
+    vm.push(tuple)?;
+    Ok(())
+}
+
 /// FROM_ARRAY — expand an array onto the stack.
 ///
 /// Pops `Cell::Array(pool_idx)` from the stack and pushes every element of the
