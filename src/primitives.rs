@@ -2230,7 +2230,7 @@ pub fn register_all(vm: &mut VM) {
 
     // Array primitives.
     // ARRAY creates an array; ARRAY_GET reads an element; ARRAY_ADDR computes
-    // an element address (used internally by the expression compiler for `A(I)` and `&A(I)`).
+    // an element address (used internally by the expression compiler for `&@A[i]`).
     // TO_ARRAY packs stack values into a new array; FROM_ARRAY expands one onto the stack.
     // ARRAY_LEN returns the length of an array; ARRAY_CONCAT concatenates two arrays.
     // TUPLE packs stack values into a new immutable Cell::Tuple.
