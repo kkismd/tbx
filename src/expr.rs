@@ -363,6 +363,76 @@ impl<'a> ExprCompiler<'a> {
                                     }
                                 }
                             }
+                            Some(Token::At) => {
+                                // `&@A[i]` — array element address access.
+                                // Consume `@` and then expect: Ident `[` index_expr `]`.
+                                i += 1;
+                                let at_next = tokens.get(i).map(|st| st.token.clone());
+                                match at_next {
+                                    Some(Token::Ident(array_name)) => {
+                                        let array_name = array_name.to_ascii_uppercase();
+                                        let lbracket_pos = i + 1;
+                                        let has_lbracket = tokens
+                                            .get(lbracket_pos)
+                                            .map(|st| matches!(st.token, Token::LBracket))
+                                            .unwrap_or(false);
+                                        if !has_lbracket {
+                                            return Err(TbxError::InvalidExpression {
+                                                reason: "&@Ident must be followed by '[': use &@A[i] syntax",
+                                            });
+                                        }
+                                        // Parse the bracket-enclosed index expression.
+                                        let (index_toks, close_pos) =
+                                            parse_at_index_tokens(tokens, lbracket_pos)?;
+
+                                        // Load the array handle (local or global).
+                                        if let Some(local_idx) = self
+                                            .local_table
+                                            .and_then(|lt| lt.get(&array_name))
+                                            .copied()
+                                        {
+                                            emit_local_read(&mut output, local_idx, self.vm)?;
+                                        } else {
+                                            let xt = self
+                                                .vm
+                                                .lookup_including_self(
+                                                    &array_name,
+                                                    self.self_word.as_deref(),
+                                                )
+                                                .ok_or_else(|| TbxError::UndefinedSymbol {
+                                                    name: array_name.clone(),
+                                                })?;
+                                            match &self.vm.headers[xt.index()].kind {
+                                                EntryKind::Variable(addr) => {
+                                                    emit_var_read(&mut output, *addr, self.vm)?;
+                                                }
+                                                _ => {
+                                                    return Err(TbxError::TypeError {
+                                                        expected:
+                                                            "array variable for &@-sigil address",
+                                                        got: "non-variable",
+                                                    });
+                                                }
+                                            }
+                                        }
+
+                                        // Compile the index expression.
+                                        let index_cells = self.compile_expr(index_toks)?;
+                                        output.extend(index_cells);
+
+                                        // Emit ARRAY_ADDR.
+                                        let array_addr_xt = require_xt(self.vm, "ARRAY_ADDR")?;
+                                        output.push(Cell::Xt(array_addr_xt));
+
+                                        i = close_pos;
+                                    }
+                                    _ => {
+                                        return Err(TbxError::InvalidExpression {
+                                            reason: "&@ must be followed by an identifier: use &@A[i] syntax",
+                                        });
+                                    }
+                                }
+                            }
                             _ => {
                                 return Err(TbxError::TypeError {
                                     expected: "identifier after unary &",
@@ -2051,6 +2121,137 @@ mod tests {
                 Cell::Int(1),
                 Cell::Int(0),
             ]
+        );
+    }
+
+    // ------------------------------------------------------------------
+    // &@A[i] — array element address access (issue #667)
+    // ------------------------------------------------------------------
+
+    /// `&@A[2]` against a global variable A must compile to:
+    /// LIT DictAddr(0) FETCH LIT 2 ARRAY_ADDR.
+    #[test]
+    fn test_ampersand_at_global_array_element_address() {
+        let mut vm = make_vm();
+        vm.dict_write(Cell::Int(0)).unwrap();
+        vm.register(crate::dict::WordEntry::new_variable("A", 0));
+
+        let tokens = lex("&@A[2]");
+        let result = ExprCompiler::new(&mut vm).compile_expr(&tokens).unwrap();
+
+        let lit_xt = vm.lookup("LIT").unwrap();
+        let fetch_xt = vm.lookup("FETCH").unwrap();
+        let array_addr_xt = vm.lookup("ARRAY_ADDR").unwrap();
+
+        assert_eq!(
+            result,
+            vec![
+                Cell::Xt(lit_xt),
+                Cell::DictAddr(0),
+                Cell::Xt(fetch_xt),
+                Cell::Xt(lit_xt),
+                Cell::Int(2),
+                Cell::Xt(array_addr_xt),
+            ]
+        );
+    }
+
+    /// `&@A[3]` against a local variable A at slot 0 must compile to:
+    /// LIT StackAddr(0) FETCH LIT 3 ARRAY_ADDR.
+    #[test]
+    fn test_ampersand_at_local_array_element_address() {
+        let mut vm = make_vm();
+
+        let mut local_table = HashMap::new();
+        local_table.insert("A".to_string(), 0usize);
+
+        let tokens = lex("&@A[3]");
+        let result = ExprCompiler::with_context(&mut vm, Some(&local_table), None, None)
+            .compile_expr(&tokens)
+            .unwrap();
+
+        let lit_xt = vm.lookup("LIT").unwrap();
+        let fetch_xt = vm.lookup("FETCH").unwrap();
+        let array_addr_xt = vm.lookup("ARRAY_ADDR").unwrap();
+
+        assert_eq!(
+            result,
+            vec![
+                Cell::Xt(lit_xt),
+                Cell::StackAddr(0),
+                Cell::Xt(fetch_xt),
+                Cell::Xt(lit_xt),
+                Cell::Int(3),
+                Cell::Xt(array_addr_xt),
+            ]
+        );
+    }
+
+    /// `&@A` (missing `[`) must produce a clear syntax error.
+    #[test]
+    fn test_ampersand_at_missing_bracket_is_error() {
+        let mut vm = make_vm();
+        vm.dict_write(Cell::Int(0)).unwrap();
+        vm.register(crate::dict::WordEntry::new_variable("A", 0));
+
+        let tokens = lex("&@A");
+        let err = ExprCompiler::new(&mut vm)
+            .compile_expr(&tokens)
+            .unwrap_err();
+        assert!(
+            matches!(
+                err,
+                TbxError::InvalidExpression { reason }
+                    if reason.contains("must be followed by '['")
+            ),
+            "expected error about missing '[' for &@A, got: {err:?}"
+        );
+    }
+
+    /// `&@` (missing identifier) must produce a clear syntax error.
+    #[test]
+    fn test_ampersand_at_missing_ident_is_error() {
+        let mut vm = make_vm();
+
+        let tokens = lex("&@[1]");
+        let err = ExprCompiler::new(&mut vm)
+            .compile_expr(&tokens)
+            .unwrap_err();
+        assert!(
+            matches!(err, TbxError::InvalidExpression { .. }),
+            "expected InvalidExpression for &@[1], got: {err:?}"
+        );
+    }
+
+    /// `&@NOEXIST[1]` (undefined identifier) must produce UndefinedSymbol.
+    #[test]
+    fn test_ampersand_at_undefined_symbol_is_error() {
+        let mut vm = make_vm();
+
+        let tokens = lex("&@NOEXIST[1]");
+        let err = ExprCompiler::new(&mut vm)
+            .compile_expr(&tokens)
+            .unwrap_err();
+        assert!(
+            matches!(err, TbxError::UndefinedSymbol { ref name } if name == "NOEXIST"),
+            "expected UndefinedSymbol for &@NOEXIST[1], got: {err:?}"
+        );
+    }
+
+    /// `&@A[]` (empty index) must produce a syntax error.
+    #[test]
+    fn test_ampersand_at_empty_bracket_index_is_error() {
+        let mut vm = make_vm();
+        vm.dict_write(Cell::Int(0)).unwrap();
+        vm.register(crate::dict::WordEntry::new_variable("A", 0));
+
+        let tokens = lex("&@A[]");
+        let err = ExprCompiler::new(&mut vm)
+            .compile_expr(&tokens)
+            .unwrap_err();
+        assert!(
+            matches!(err, TbxError::InvalidExpression { .. }),
+            "expected InvalidExpression for &@A[], got: {err:?}"
         );
     }
 }

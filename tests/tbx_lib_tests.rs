@@ -780,3 +780,137 @@ fn test_at_array_global_index_read() {
         .expect("@G[1] should read back the value written by SET &G(1), 30");
     assert_eq!(interp.take_output(), "30");
 }
+
+// ---------------------------------------------------------------------------
+// &@A[i] — array element address access (issue #667)
+// ---------------------------------------------------------------------------
+
+/// `SET &@A[i], v` on a local array binding must write the value and
+/// `@A[i]` must read it back.
+#[test]
+fn test_set_at_array_local_element_address() {
+    let mut interp = Interpreter::new();
+    let src = concat!(
+        "DEF F()\n",
+        "  DIM @A[3]\n",
+        "  SET &@A[1], 10\n",
+        "  RETURN @A[1]\n",
+        "END\n",
+        "PUTDEC F()\n",
+    );
+    interp
+        .exec_source(src)
+        .expect("SET &@A[1], 10 should write 10 to element 1 of local array");
+    assert_eq!(interp.take_output(), "10");
+}
+
+/// `SET &@A[I + 1], v` with an arithmetic index expression must write to the
+/// correct element.
+#[test]
+fn test_set_at_array_local_expr_index() {
+    let mut interp = Interpreter::new();
+    let src = concat!(
+        "DEF F()\n",
+        "  DIM @A[3]\n",
+        "  VAR I = 1\n",
+        "  SET &@A[I + 1], 20\n",
+        "  RETURN @A[2]\n",
+        "END\n",
+        "PUTDEC F()\n",
+    );
+    interp
+        .exec_source(src)
+        .expect("SET &@A[I + 1], 20 should write 20 to element 2");
+    assert_eq!(interp.take_output(), "20");
+}
+
+/// `SET &@G[i], v` on a global array binding declared at the top level must
+/// write the value and `@G[i]` must read it back.
+#[test]
+fn test_set_at_array_global_element_address() {
+    let mut interp = Interpreter::new();
+    let src = concat!("DIM @G[3]\n", "SET &@G[1], 30\n", "PUTDEC @G[1]\n",);
+    interp
+        .exec_source(src)
+        .expect("SET &@G[1], 30 should write 30 to element 1 of global array");
+    assert_eq!(interp.take_output(), "30");
+}
+
+/// `SET &@A[2], 99` then `@A[2]` must return 99.
+#[test]
+fn test_set_at_array_second_element() {
+    let mut interp = Interpreter::new();
+    let src = concat!(
+        "DEF F()\n",
+        "  DIM @A[3]\n",
+        "  SET &@A[2], 99\n",
+        "  RETURN @A[2]\n",
+        "END\n",
+        "PUTDEC F()\n",
+    );
+    interp
+        .exec_source(src)
+        .expect("SET &@A[2], 99 should write 99 to element 2");
+    assert_eq!(interp.take_output(), "99");
+}
+
+/// Existing `SET &A(i), v` syntax must still work after introducing `&@A[i]`.
+#[test]
+fn test_set_legacy_array_syntax_still_works() {
+    let mut interp = Interpreter::new();
+    let src = concat!(
+        "DEF F()\n",
+        "  DIM @A[3]\n",
+        "  SET &A(1), 10\n",
+        "  RETURN @A[1]\n",
+        "END\n",
+        "PUTDEC F()\n",
+    );
+    interp
+        .exec_source(src)
+        .expect("legacy SET &A(1) syntax should still work");
+    assert_eq!(interp.take_output(), "10");
+}
+
+/// `&@A` without brackets must produce a compile-time error.
+#[test]
+fn test_at_array_address_missing_bracket_is_error() {
+    let mut interp = Interpreter::new();
+    let src = concat!(
+        "DEF F()\n",
+        "  DIM @A[3]\n",
+        "  SET &@A, 10\n",
+        "  RETURN 0\n",
+        "END\n",
+        "F\n",
+    );
+    interp
+        .exec_source(src)
+        .expect_err("&@A without brackets should fail");
+}
+
+/// `&@` without an identifier must produce a compile-time error.
+#[test]
+fn test_at_array_address_missing_ident_is_error() {
+    let mut interp = Interpreter::new();
+    let src = concat!(
+        "DEF F()\n",
+        "  SET &@[1], 10\n",
+        "  RETURN 0\n",
+        "END\n",
+        "F\n",
+    );
+    interp
+        .exec_source(src)
+        .expect_err("&@[1] without identifier should fail");
+}
+
+/// `&@A[i]` on an undefined binding must produce an UndefinedSymbol error.
+#[test]
+fn test_at_array_address_undefined_binding_is_error() {
+    let mut interp = Interpreter::new();
+    let src = "SET &@A[1], 10\n";
+    interp
+        .exec_source(src)
+        .expect_err("&@A[1] on undefined binding should fail");
+}
