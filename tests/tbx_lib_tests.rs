@@ -720,3 +720,63 @@ fn test_dim_global_size_expr_error_restores_vm_state() {
         "PUTDEC 1 should produce '1' after recovery"
     );
 }
+
+// ---------------------------------------------------------------------------
+// @A[i] — array binding element read (issue #665)
+// ---------------------------------------------------------------------------
+
+/// `@A[i]` on a local array binding declared with `DIM @A[n]` must return
+/// the value previously written with `SET &A(i), v`.
+#[test]
+fn test_at_array_local_index_read() {
+    let mut interp = Interpreter::new();
+    // DIM @A[3] creates a local array of 3 elements.
+    // SET &A(1), 10 writes 10 to element 1.
+    // RETURN @A[1] reads it back via the new @A[i] syntax.
+    let src = concat!(
+        "DEF F()\n",
+        "  DIM @A[3]\n",
+        "  SET &A(1), 10\n",
+        "  RETURN @A[1]\n",
+        "END\n",
+        "PUTDEC F()\n",
+    );
+    interp
+        .exec_source(src)
+        .expect("@A[1] should read back the value written by SET &A(1), 10");
+    assert_eq!(interp.take_output(), "10");
+}
+
+/// `@A[I + 1]` with an arithmetic expression as the index must evaluate the
+/// expression at runtime and return the correct element.
+#[test]
+fn test_at_array_local_expr_index_read() {
+    let mut interp = Interpreter::new();
+    // DIM @A[3] + SET &A(2), 20 + VAR I = 1 + RETURN @A[I + 1] == 20.
+    let src = concat!(
+        "DEF F()\n",
+        "  DIM @A[3]\n",
+        "  SET &A(2), 20\n",
+        "  VAR I = 1\n",
+        "  RETURN @A[I + 1]\n",
+        "END\n",
+        "PUTDEC F()\n",
+    );
+    interp
+        .exec_source(src)
+        .expect("@A[I + 1] should read element 2 written by SET &A(2), 20");
+    assert_eq!(interp.take_output(), "20");
+}
+
+/// `@G[i]` on a global array binding declared with `DIM @G[n]` at the top
+/// level must return the value previously written with `SET &G(i), v`.
+#[test]
+fn test_at_array_global_index_read() {
+    let mut interp = Interpreter::new();
+    // DIM @G[3] at top level + SET &G(1), 30 + PUTDEC @G[1] == 30.
+    let src = concat!("DIM @G[3]\n", "SET &G(1), 30\n", "PUTDEC @G[1]\n",);
+    interp
+        .exec_source(src)
+        .expect("@G[1] should read back the value written by SET &G(1), 30");
+    assert_eq!(interp.take_output(), "30");
+}
