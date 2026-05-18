@@ -110,7 +110,7 @@ fn test_array_index_zero_is_out_of_bounds() {
         .set_base_dir(base)
         .expect("CARGO_MANIFEST_DIR is always absolute");
     // Array indices are 1-based; index 0 must return ArrayIndexOutOfBounds.
-    let src = "DEF T()\n  VAR A\n  LET A = ARRAY(3)\n  RETURN A(0)\nEND\nT\n";
+    let src = "DEF T()\n  VAR A\n  LET A = ARRAY(3)\n  RETURN @A[0]\nEND\nT\n";
     let err = interp
         .exec_source(src)
         .expect_err("index 0 should be out of bounds");
@@ -129,7 +129,7 @@ fn test_array_index_zero_is_out_of_bounds() {
 // the string alive independently of any stack frame, so no per-source-lifetime
 // classification is needed.  Nested `Cell::Array` is still rejected.
 
-/// SET &A(1), STR("hello") inside a word must succeed (#591).
+/// SET &@A[1], STR("hello") inside a word must succeed (#591).
 /// STR() produces a runtime Rc<str>-backed string, which is now allowed as
 /// an array element.  The word is called without parentheses (statement form)
 /// because it has no return value.
@@ -137,18 +137,18 @@ fn test_array_index_zero_is_out_of_bounds() {
 fn test_set_runtime_str_into_array_is_allowed() {
     let mut interp = Interpreter::new();
     // Note: void DEF is called without parentheses (statement form).
-    let src = "DEF T()\n  VAR A\n  LET A = ARRAY(1)\n  SET &A(1), STR(\"hello\")\nEND\nT\n";
+    let src = "DEF T()\n  VAR A\n  LET A = ARRAY(1)\n  SET &@A[1], STR(\"hello\")\nEND\nT\n";
     interp
         .exec_source(src)
         .expect("storing runtime Str in array should succeed");
 }
 
-/// SET &A(1), "hello" (compile-time literal) must succeed (#591).
+/// SET &@A[1], "hello" (compile-time literal) must succeed (#591).
 /// Array indices are 1-based in TBX.
 #[test]
 fn test_set_literal_str_into_array_is_allowed() {
     let mut interp = Interpreter::new();
-    let src = "VAR A\nSET &A, ARRAY(1)\nSET &A(1), \"hello\"\nPUTSTR A(1)\n";
+    let src = "VAR A\nSET &A, ARRAY(1)\nSET &@A[1], \"hello\"\nPUTSTR @A[1]\n";
     interp
         .exec_source(src)
         .expect("storing string literal in array should succeed");
@@ -161,7 +161,7 @@ fn test_set_literal_str_into_array_is_allowed() {
 fn test_set_literal_str_into_array_inside_def_is_allowed() {
     let mut interp = Interpreter::new();
     let src =
-        "DEF MAKE()\n  VAR A\n  SET &A, ARRAY(1)\n  SET &A(1), \"inside\"\n  PUTSTR A(1)\nEND\nMAKE\n";
+        "DEF MAKE()\n  VAR A\n  SET &A, ARRAY(1)\n  SET &@A[1], \"inside\"\n  PUTSTR @A[1]\nEND\nMAKE\n";
     interp
         .exec_source(src)
         .expect("storing string literal in array inside DEF should succeed");
@@ -175,7 +175,7 @@ fn test_set_literal_str_into_array_inside_def_is_allowed() {
 fn test_set_runtime_str_into_global_array_survives_word_return() {
     let mut interp = Interpreter::new();
     // F is a void word; call it without parentheses to avoid DROP_TO_MARKER mismatch.
-    let src = "VAR A\nSET &A, ARRAY(1)\nDEF F()\n  SET &A(1), STR_CONCAT(\"foo\", \"bar\")\nEND\nF\nPUTSTR A(1)\n";
+    let src = "VAR A\nSET &A, ARRAY(1)\nDEF F()\n  SET &@A[1], STR_CONCAT(\"foo\", \"bar\")\nEND\nF\nPUTSTR @A[1]\n";
     interp
         .exec_source(src)
         .expect("storing runtime Str in global array should succeed");
@@ -188,7 +188,7 @@ fn test_set_runtime_str_into_global_array_survives_word_return() {
 fn test_set_runtime_str_into_frame_local_array_is_allowed() {
     let mut interp = Interpreter::new();
     // F is a void word; call it without parentheses to avoid DROP_TO_MARKER mismatch.
-    let src = "DEF F()\n  VAR A\n  SET &A, ARRAY(1)\n  SET &A(1), STR(\"hello\")\n  PUTSTR A(1)\nEND\nF\n";
+    let src = "DEF F()\n  VAR A\n  SET &A, ARRAY(1)\n  SET &@A[1], STR(\"hello\")\n  PUTSTR @A[1]\nEND\nF\n";
     interp
         .exec_source(src)
         .expect("storing runtime Str in frame-local array should succeed");
@@ -199,7 +199,7 @@ fn test_set_runtime_str_into_frame_local_array_is_allowed() {
 #[test]
 fn test_set_caller_owned_str_param_into_frame_local_array_is_allowed() {
     let mut interp = Interpreter::new();
-    let src = "DEF USE(S)\n  VAR A\n  SET &A, ARRAY(1)\n  SET &A(1), S\n  PUTSTR A(1)\nEND\nUSE(\"arg\")\n";
+    let src = "DEF USE(S)\n  VAR A\n  SET &A, ARRAY(1)\n  SET &@A[1], S\n  PUTSTR @A[1]\nEND\nUSE(\"arg\")\n";
     interp
         .exec_source(src)
         .expect("storing caller-owned Str param in frame-local array should succeed");
@@ -212,7 +212,8 @@ fn test_set_caller_owned_str_param_into_frame_local_array_is_allowed() {
 fn test_to_array_with_str_elements_is_allowed() {
     let mut interp = Interpreter::new();
     // Store TO_ARRAY result, read element 1 and 2 back via PUTSTR.
-    let src = "VAR A\nSET &A, TO_ARRAY(STR(\"alpha\"), STR(\"beta\"))\nPUTSTR A(1)\nPUTSTR A(2)\n";
+    let src =
+        "VAR A\nSET &A, TO_ARRAY(STR(\"alpha\"), STR(\"beta\"))\nPUTSTR @A[1]\nPUTSTR @A[2]\n";
     interp
         .exec_source(src)
         .expect("TO_ARRAY with Str elements should succeed");
@@ -225,7 +226,7 @@ fn test_str_ops_on_array_element_str() {
     let mut interp = Interpreter::new();
     // Use PUTSTR to exercise reading the element and passing it to string primitives.
     // STR_CONCAT output confirms the element was successfully read as Str.
-    let src = "VAR A\nSET &A, ARRAY(1)\nSET &A(1), \"hello\"\nPUTSTR STR_CONCAT(A(1), \"!\")\n";
+    let src = "VAR A\nSET &A, ARRAY(1)\nSET &@A[1], \"hello\"\nPUTSTR STR_CONCAT(@A[1], \"!\")\n";
     interp
         .exec_source(src)
         .expect("string ops on array element should succeed");
@@ -238,7 +239,7 @@ fn test_set_array_into_array_is_invalid_element_type() {
     let mut interp = Interpreter::new();
     // Create an outer array and a nested array, then try to store the inner in outer.
     let src =
-        "DEF T()\n  VAR A, B\n  LET A = ARRAY(3)\n  LET B = ARRAY(2)\n  SET &A(1), B\nEND\nT\n";
+        "DEF T()\n  VAR A, B\n  LET A = ARRAY(3)\n  LET B = ARRAY(2)\n  SET &@A[1], B\nEND\nT\n";
     let err = interp
         .exec_source(src)
         .expect_err("storing Array in array element should fail");
@@ -726,24 +727,24 @@ fn test_dim_global_size_expr_error_restores_vm_state() {
 // ---------------------------------------------------------------------------
 
 /// `@A[i]` on a local array binding declared with `DIM @A[n]` must return
-/// the value previously written with `SET &A(i), v`.
+/// the value previously written with `SET &@A[i], v`.
 #[test]
 fn test_at_array_local_index_read() {
     let mut interp = Interpreter::new();
     // DIM @A[3] creates a local array of 3 elements.
-    // SET &A(1), 10 writes 10 to element 1.
+    // SET &@A[1], 10 writes 10 to element 1.
     // RETURN @A[1] reads it back via the new @A[i] syntax.
     let src = concat!(
         "DEF F()\n",
         "  DIM @A[3]\n",
-        "  SET &A(1), 10\n",
+        "  SET &@A[1], 10\n",
         "  RETURN @A[1]\n",
         "END\n",
         "PUTDEC F()\n",
     );
     interp
         .exec_source(src)
-        .expect("@A[1] should read back the value written by SET &A(1), 10");
+        .expect("@A[1] should read back the value written by SET &@A[1], 10");
     assert_eq!(interp.take_output(), "10");
 }
 
@@ -752,11 +753,11 @@ fn test_at_array_local_index_read() {
 #[test]
 fn test_at_array_local_expr_index_read() {
     let mut interp = Interpreter::new();
-    // DIM @A[3] + SET &A(2), 20 + VAR I = 1 + RETURN @A[I + 1] == 20.
+    // DIM @A[3] + SET &@A[2], 20 + VAR I = 1 + RETURN @A[I + 1] == 20.
     let src = concat!(
         "DEF F()\n",
         "  DIM @A[3]\n",
-        "  SET &A(2), 20\n",
+        "  SET &@A[2], 20\n",
         "  VAR I = 1\n",
         "  RETURN @A[I + 1]\n",
         "END\n",
@@ -764,20 +765,20 @@ fn test_at_array_local_expr_index_read() {
     );
     interp
         .exec_source(src)
-        .expect("@A[I + 1] should read element 2 written by SET &A(2), 20");
+        .expect("@A[I + 1] should read element 2 written by SET &@A[2], 20");
     assert_eq!(interp.take_output(), "20");
 }
 
 /// `@G[i]` on a global array binding declared with `DIM @G[n]` at the top
-/// level must return the value previously written with `SET &G(i), v`.
+/// level must return the value previously written with `SET &@G[i], v`.
 #[test]
 fn test_at_array_global_index_read() {
     let mut interp = Interpreter::new();
-    // DIM @G[3] at top level + SET &G(1), 30 + PUTDEC @G[1] == 30.
-    let src = concat!("DIM @G[3]\n", "SET &G(1), 30\n", "PUTDEC @G[1]\n",);
+    // DIM @G[3] at top level + SET &@G[1], 30 + PUTDEC @G[1] == 30.
+    let src = concat!("DIM @G[3]\n", "SET &@G[1], 30\n", "PUTDEC @G[1]\n",);
     interp
         .exec_source(src)
-        .expect("@G[1] should read back the value written by SET &G(1), 30");
+        .expect("@G[1] should read back the value written by SET &@G[1], 30");
     assert_eq!(interp.take_output(), "30");
 }
 
@@ -852,24 +853,6 @@ fn test_set_at_array_second_element() {
         .exec_source(src)
         .expect("SET &@A[2], 99 should write 99 to element 2");
     assert_eq!(interp.take_output(), "99");
-}
-
-/// Existing `SET &A(i), v` syntax must still work after introducing `&@A[i]`.
-#[test]
-fn test_set_legacy_array_syntax_still_works() {
-    let mut interp = Interpreter::new();
-    let src = concat!(
-        "DEF F()\n",
-        "  DIM @A[3]\n",
-        "  SET &A(1), 10\n",
-        "  RETURN @A[1]\n",
-        "END\n",
-        "PUTDEC F()\n",
-    );
-    interp
-        .exec_source(src)
-        .expect("legacy SET &A(1) syntax should still work");
-    assert_eq!(interp.take_output(), "10");
 }
 
 /// `&@A` without brackets must produce a compile-time error.

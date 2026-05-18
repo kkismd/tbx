@@ -26,12 +26,12 @@ DEF SUM_WITH_LEN(N)
   LET I = 1
   LET S = 0
   WHILE I <= N
-    SET &A(I), I
+    LET @A[I] = I
     LET I = I + 1
   ENDWH
   LET I = 1
   WHILE I <= ARRAY_LEN(A)
-    LET S = S + A(I)
+    LET S = S + @A[I]
     LET I = I + 1
   ENDWH
   RETURN S
