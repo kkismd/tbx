@@ -660,6 +660,250 @@ pub fn var_prim(vm: &mut VM) -> Result<(), TbxError> {
     Ok(())
 }
 
+/// DIM — declare an array binding `DIM @A[n]`.
+///
+/// Syntax: `DIM @ Ident [ size_expr ]`
+///
+/// In compile mode (inside DEF..END):
+///   - Registers the bare identifier in `local_table` as a new local slot.
+///   - Emits code that creates an array of `size_expr` elements at runtime and
+///     stores it in the local slot: `LIT StackAddr(idx) [size_expr] ARRAY SET`.
+///
+/// In execute mode (top level):
+///   - Creates a global variable entry (`EntryKind::Variable`) backed by a
+///     `Cell::Array` in the array pool.
+///   - The size expression is evaluated immediately via a temporary code buffer.
+///
+/// Collision rules (bare name used as the key in both modes):
+///   - A name already present in `local_table` is rejected (duplicate local).
+///   - A name already present in the global dictionary (`vm.lookup`) is rejected.
+pub fn dim_prim(vm: &mut VM) -> Result<(), TbxError> {
+    use crate::lexer::Token;
+
+    // Consume `@`.
+    let at_tok = vm.next_token()?;
+    if at_tok.token != Token::At {
+        return Err(TbxError::InvalidExpression {
+            reason: "DIM: expected '@' after DIM",
+        });
+    }
+
+    // Consume the binding identifier.
+    let name = vm.expect_ident("DIM: expected identifier after '@'")?;
+
+    // Consume `[`.
+    let lb_tok = match vm.next_token() {
+        Ok(tok) => tok,
+        Err(TbxError::TokenStreamEmpty) => {
+            return Err(TbxError::InvalidExpression {
+                reason: "DIM: expected '[' after identifier (use DIM @A[n] syntax)",
+            });
+        }
+        Err(e) => return Err(e),
+    };
+    if lb_tok.token != Token::LBracket {
+        return Err(TbxError::InvalidExpression {
+            reason: "DIM: expected '[' after identifier (use DIM @A[n] syntax)",
+        });
+    }
+
+    // Collect tokens up to the matching `]` (depth-aware in case size_expr
+    // contains nested brackets, e.g. tuple projection in a future phase).
+    let size_tokens: Vec<crate::lexer::SpannedToken> = {
+        let stream = vm.token_stream.as_mut().ok_or(TbxError::TokenStreamEmpty)?;
+        let mut depth: usize = 1;
+        let mut collected: Vec<crate::lexer::SpannedToken> = Vec::new();
+        loop {
+            let tok = stream.pop_front().ok_or(TbxError::InvalidExpression {
+                reason: "DIM: unterminated '[' — expected ']'",
+            })?;
+            match &tok.token {
+                Token::LBracket => {
+                    depth += 1;
+                    collected.push(tok);
+                }
+                Token::RBracket => {
+                    depth -= 1;
+                    if depth == 0 {
+                        break;
+                    }
+                    collected.push(tok);
+                }
+                Token::Newline | Token::Eof => {
+                    return Err(TbxError::InvalidExpression {
+                        reason: "DIM: unterminated '[' — unexpected end of line",
+                    });
+                }
+                _ => {
+                    collected.push(tok);
+                }
+            }
+        }
+        collected
+    };
+
+    // Reject empty size expression: `DIM @A[]`.
+    if size_tokens.is_empty() {
+        return Err(TbxError::InvalidExpression {
+            reason: "DIM: array size expression must not be empty",
+        });
+    }
+
+    if vm.is_compiling {
+        // --- Compile mode (inside DEF) ---
+
+        // Check for name collision in local_table.
+        let has_local = vm
+            .compile_state
+            .as_ref()
+            .map(|s| s.local_table.contains_key(&name))
+            .unwrap_or(false);
+        if has_local {
+            return Err(TbxError::InvalidExpression {
+                reason: "DIM: array binding name already declared as a local",
+            });
+        }
+
+        // Check for name collision in the global dictionary.
+        if vm.lookup(&name).is_some() {
+            return Err(TbxError::InvalidExpression {
+                reason: "DIM: array binding name already declared as a global",
+            });
+        }
+
+        // Allocate a new local slot for the array handle.
+        let state = vm
+            .compile_state
+            .as_mut()
+            .ok_or(TbxError::InvalidExpression {
+                reason: "DIM: compile mode but no compile_state",
+            })?;
+        let idx = if state.is_variadic {
+            crate::constants::VARIADIC_LOCAL_BASE + state.local_count
+        } else {
+            state.arity + state.local_count
+        };
+        state.local_table.insert(name.clone(), idx);
+        state.local_count += 1;
+
+        // Compile the size expression.
+        let (size_cells, patch_offsets) = compile_expr_taking_local_table(vm, &size_tokens)?;
+
+        // Look up primitives needed for code generation.
+        let lit_xt =
+            vm.find_by_kind(|k| matches!(k, EntryKind::Lit))
+                .ok_or(TbxError::UndefinedSymbol {
+                    name: "LIT".to_string(),
+                })?;
+        let array_xt = vm.lookup("ARRAY").ok_or(TbxError::UndefinedSymbol {
+            name: "ARRAY".to_string(),
+        })?;
+        let set_xt = vm.lookup("SET").ok_or(TbxError::UndefinedSymbol {
+            name: "SET".to_string(),
+        })?;
+
+        // Emit: LIT StackAddr(idx)  — push the address of the local slot.
+        vm.dict_write(Cell::Xt(lit_xt))?;
+        vm.dict_write(Cell::StackAddr(idx))?;
+
+        // Emit: [size_cells]  — evaluate the size at runtime.
+        let base_dp = vm.dp;
+        for cell in size_cells {
+            vm.dict_write(cell)?;
+        }
+        // Register self-recursive call patch positions.
+        if let Some(state) = vm.compile_state.as_mut() {
+            for offset in patch_offsets {
+                state.call_patch_list.push(base_dp + offset);
+            }
+        }
+
+        // Emit: ARRAY  — create the array and push its handle.
+        vm.dict_write(Cell::Xt(array_xt))?;
+
+        // Emit: SET  — store the array handle into the local slot.
+        vm.dict_write(Cell::Xt(set_xt))?;
+    } else {
+        // --- Execute mode (top level) ---
+
+        // Check for name collision in the global dictionary.
+        if vm.lookup(&name).is_some() {
+            return Err(TbxError::InvalidExpression {
+                reason: "DIM: array binding name already declared as a global",
+            });
+        }
+
+        // Evaluate the size expression by compiling it to a temporary code
+        // buffer and running it.  The result (Cell::Int) is left on the stack.
+        let (size_cells, _patch_offsets) = compile_expr_taking_local_table(vm, &size_tokens)?;
+
+        // Build temporary code buffer: [size_cells, EXIT].
+        let buf_start = vm.dp;
+        for cell in &size_cells {
+            vm.dict_write(cell.clone())?;
+        }
+        let exit_xt =
+            vm.find_by_kind(|k| matches!(k, EntryKind::Exit))
+                .ok_or(TbxError::UndefinedSymbol {
+                    name: "EXIT".to_string(),
+                })?;
+        vm.dict_write(Cell::Xt(exit_xt))?;
+
+        // Run the temporary buffer to evaluate the size expression.
+        let saved_stack_len = vm.data_stack.len();
+        let run_result = vm.run(buf_start);
+
+        // Clean up the temporary code buffer regardless of outcome.
+        vm.dp = buf_start;
+        vm.dictionary.truncate(buf_start);
+
+        if let Err(e) = run_result {
+            vm.data_stack.truncate(saved_stack_len);
+            return Err(e);
+        }
+
+        // Pop the evaluated size from the stack.
+        let size_val = vm.pop()?;
+        let size = match size_val {
+            Cell::Int(n) => {
+                if n <= 0 {
+                    return Err(TbxError::InvalidArgument {
+                        message: format!("DIM: array size must be positive, got {n}"),
+                    });
+                }
+                n as usize
+            }
+            other => {
+                return Err(TbxError::TypeError {
+                    expected: "Int",
+                    got: other.type_name(),
+                });
+            }
+        };
+
+        // Allocate the global variable slot in the dictionary.
+        let storage_idx = vm.dp;
+        vm.dict_write(Cell::None)?;
+
+        // Create the array in the array pool.
+        let pool_idx = vm.arrays.len();
+        vm.arrays.push(vec![Cell::None; size]);
+
+        // Promote to the global array region so it persists across word calls.
+        vm.global_array_pool_len = vm.global_array_pool_len.max(pool_idx + 1);
+
+        // Store the array handle in the variable slot.
+        vm.dict_write_at(storage_idx, Cell::Array(pool_idx))?;
+
+        // Register the variable in the dictionary.
+        let entry = crate::dict::WordEntry::new_variable(&name, storage_idx);
+        vm.register(entry);
+        vm.seal_user();
+    }
+
+    Ok(())
+}
+
 /// GOTO — compile GOTO N into the dictionary (compile mode only).
 pub fn goto_prim(vm: &mut VM) -> Result<(), TbxError> {
     if !vm.is_compiling {
@@ -1728,6 +1972,9 @@ pub fn register_all(vm: &mut VM) {
     let mut var_entry = WordEntry::new_primitive("VAR", var_prim);
     var_entry.flags = FLAG_IMMEDIATE | FLAG_SYSTEM;
     vm.register(var_entry);
+    let mut dim_entry = WordEntry::new_primitive("DIM", dim_prim);
+    dim_entry.flags = FLAG_IMMEDIATE | FLAG_SYSTEM;
+    vm.register(dim_entry);
     let mut goto_entry = WordEntry::new_primitive("GOTO", goto_prim);
     goto_entry.flags = FLAG_IMMEDIATE | FLAG_SYSTEM;
     vm.register(goto_entry);
