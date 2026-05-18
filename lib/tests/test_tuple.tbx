@@ -1,0 +1,79 @@
+# lib/tests/test_tuple.tbx — TBX tests for the TUPLE primitive
+USE "lib/tests/helper.tbx"
+
+# --- TUPLE: basic creation and STR conversion ---
+
+DEF TUPLE_BASIC()
+  VAR T
+  LET T = TUPLE(1, 2, 3)
+  PUTSTR STR(T)
+  RETURN 1
+END
+ASSERT TUPLE_BASIC() = 1
+ASSERT_OUTPUT "(1, 2, 3)"
+
+# --- TUPLE: element order is preserved (first arg is leftmost) ---
+
+DEF TUPLE_ORDER()
+  VAR T
+  LET T = TUPLE(10, 20, 30)
+  PUTSTR STR(T)
+  RETURN 1
+END
+ASSERT TUPLE_ORDER() = 1
+ASSERT_OUTPUT "(10, 20, 30)"
+
+# --- TUPLE: single element ---
+
+DEF TUPLE_SINGLE()
+  VAR T
+  LET T = TUPLE(42)
+  PUTSTR STR(T)
+  RETURN 1
+END
+ASSERT TUPLE_SINGLE() = 1
+ASSERT_OUTPUT "(42)"
+
+# --- TUPLE: mixed types (Str, Int, Bool) ---
+# Use a comparison expression (1 = 1) to produce a Bool(true) value.
+
+DEF TUPLE_MIXED()
+  VAR T
+  LET T = TUPLE("tbx", 1, 1 = 1)
+  PUTSTR STR(T)
+  RETURN 1
+END
+ASSERT TUPLE_MIXED() = 1
+ASSERT_OUTPUT "(tbx, 1, true)"
+
+# --- TUPLE: empty tuple TUPLE() is allowed ---
+
+DEF TUPLE_EMPTY()
+  VAR T
+  LET T = TUPLE()
+  PUTSTR STR(T)
+  RETURN 1
+END
+ASSERT TUPLE_EMPTY() = 1
+ASSERT_OUTPUT "()"
+
+# --- TUPLE: can be used as a function return value ---
+
+DEF MAKE_TUPLE()
+  RETURN TUPLE(7, 8, 9)
+END
+DEF TUPLE_RETURN()
+  VAR T
+  LET T = MAKE_TUPLE()
+  PUTSTR STR(T)
+  RETURN 1
+END
+ASSERT TUPLE_RETURN() = 1
+ASSERT_OUTPUT "(7, 8, 9)"
+
+# --- TUPLE: can be stored in a top-level variable ---
+
+VAR GLOBAL_TUPLE
+SET &GLOBAL_TUPLE, TUPLE(100, 200)
+PUTSTR STR(GLOBAL_TUPLE)
+ASSERT_OUTPUT "(100, 200)"
