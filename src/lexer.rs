@@ -46,6 +46,9 @@ pub enum Token {
     LBracket,
     /// Right bracket `]`. Used for index / projection expressions.
     RBracket,
+    /// At-sign `@`. Used as the array binding sigil prefix.
+    /// Maps to TOK_OP.
+    At,
     /// Line terminator (newline or end of statement). Outer-interpreter-only.
     Newline,
     /// End of input. Outer-interpreter-only.
@@ -65,6 +68,7 @@ impl Token {
             Token::Op(_)
             | Token::Comma
             | Token::Ampersand
+            | Token::At
             | Token::LParen
             | Token::RParen
             | Token::LBracket
@@ -507,6 +511,12 @@ impl<'a> Lexer<'a> {
             '%' => self.op1("%", start_pos, start_off),
             '=' => self.op1("=", start_pos, start_off),
             '-' => self.op1("-", start_pos, start_off),
+            '@' => SpannedToken {
+                token: Token::At,
+                pos: start_pos,
+                source_offset: start_off,
+                source_len: end_off - start_off,
+            },
             '&' => {
                 if self.peek_char() == Some('&') {
                     self.advance();
@@ -1343,6 +1353,61 @@ mod tests {
     #[test]
     fn test_kind_code_rbracket() {
         assert_eq!(Token::RBracket.kind_code(), Some(TOK_OP));
+    }
+
+    // --- @ (At) ---
+
+    #[test]
+    fn test_at_single() {
+        // A lone `@` must be tokenised as Token::At.
+        assert_eq!(tokens("@"), vec![Token::At, Token::Eof]);
+    }
+
+    #[test]
+    fn test_at_before_ident() {
+        // `@A` must produce At followed by Ident("A").
+        assert_eq!(
+            tokens("@A"),
+            vec![Token::At, Token::Ident("A".to_string()), Token::Eof]
+        );
+    }
+
+    #[test]
+    fn test_at_ident_bracket_sequence() {
+        // `@A[1]` must tokenise as At, Ident("A"), LBracket, IntLit(1), RBracket, Eof.
+        assert_eq!(
+            tokens("@A[1]"),
+            vec![
+                Token::At,
+                Token::Ident("A".to_string()),
+                Token::LBracket,
+                Token::IntLit(1),
+                Token::RBracket,
+                Token::Eof,
+            ]
+        );
+    }
+
+    #[test]
+    fn test_ampersand_at_ident_bracket_sequence() {
+        // `&@A[1]` must tokenise as Ampersand, At, Ident("A"), LBracket, IntLit(1), RBracket, Eof.
+        assert_eq!(
+            tokens("&@A[1]"),
+            vec![
+                Token::Ampersand,
+                Token::At,
+                Token::Ident("A".to_string()),
+                Token::LBracket,
+                Token::IntLit(1),
+                Token::RBracket,
+                Token::Eof,
+            ]
+        );
+    }
+
+    #[test]
+    fn test_kind_code_at() {
+        assert_eq!(Token::At.kind_code(), Some(TOK_OP));
     }
 
     // --- integer overflow → Error ---
