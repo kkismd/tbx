@@ -208,6 +208,52 @@ pub fn array_addr_prim(vm: &mut VM) -> Result<(), TbxError> {
     Ok(())
 }
 
+/// TUPLE_GET — read an element from a tuple (1-based index).
+///
+/// Stack: `[..., Cell::Tuple(elements), Cell::Int(elem_idx)]` → `value`
+///
+/// Tuple indices are 1-based from the user's perspective: valid range is `1..=N`.
+pub fn tuple_get_prim(vm: &mut VM) -> Result<(), TbxError> {
+    // Pop index.
+    let idx_raw = vm.pop()?;
+    let elem_idx_raw = match idx_raw {
+        Cell::Int(n) => n,
+        other => {
+            return Err(TbxError::TypeError {
+                expected: "Int",
+                got: other.type_name(),
+            })
+        }
+    };
+    // Pop tuple.
+    let elements = match vm.pop()? {
+        Cell::Tuple(elems) => elems,
+        other => {
+            return Err(TbxError::TypeError {
+                expected: "Tuple",
+                got: other.type_name(),
+            })
+        }
+    };
+    let size = elements.len();
+    if elem_idx_raw < 1 {
+        return Err(TbxError::ArrayIndexOutOfBounds {
+            index: elem_idx_raw,
+            size,
+        });
+    }
+    let elem_idx = (elem_idx_raw - 1) as usize;
+    if elem_idx >= size {
+        return Err(TbxError::ArrayIndexOutOfBounds {
+            index: elem_idx_raw,
+            size,
+        });
+    }
+    let value = elements[elem_idx].clone();
+    vm.push(value)?;
+    Ok(())
+}
+
 /// ARRAY_LEN — return the length of an array.
 ///
 /// Pops `Cell::Array(pool_idx)` from the stack and pushes the number of elements
@@ -288,6 +334,78 @@ pub fn array_concat_prim(vm: &mut VM) -> Result<(), TbxError> {
 mod tests {
     use super::*;
     use crate::cell::Cell;
+
+    // --- tuple_get_prim ---
+
+    #[test]
+    fn test_tuple_get_prim_basic() {
+        // User index 2 maps to internal index 1.
+        let mut vm = VM::new();
+        let tuple = Cell::new_tuple(vec![Cell::Int(10), Cell::Int(20), Cell::Int(30)]).unwrap();
+        vm.push(tuple).unwrap();
+        vm.push(Cell::Int(2)).unwrap();
+        tuple_get_prim(&mut vm).unwrap();
+        assert_eq!(vm.pop(), Ok(Cell::Int(20)));
+    }
+
+    #[test]
+    fn test_tuple_get_prim_index_out_of_bounds_zero() {
+        // Index 0 is invalid in 1-based indexing.
+        let mut vm = VM::new();
+        let tuple = Cell::new_tuple(vec![Cell::Int(1), Cell::Int(2)]).unwrap();
+        vm.push(tuple).unwrap();
+        vm.push(Cell::Int(0)).unwrap();
+        assert!(matches!(
+            tuple_get_prim(&mut vm),
+            Err(TbxError::ArrayIndexOutOfBounds { index: 0, .. })
+        ));
+    }
+
+    #[test]
+    fn test_tuple_get_prim_index_out_of_bounds_high() {
+        // Index 4 is out of range for a 3-element tuple.
+        let mut vm = VM::new();
+        let tuple = Cell::new_tuple(vec![Cell::Int(1), Cell::Int(2), Cell::Int(3)]).unwrap();
+        vm.push(tuple).unwrap();
+        vm.push(Cell::Int(4)).unwrap();
+        assert!(matches!(
+            tuple_get_prim(&mut vm),
+            Err(TbxError::ArrayIndexOutOfBounds { index: 4, size: 3 })
+        ));
+    }
+
+    #[test]
+    fn test_tuple_get_prim_wrong_index_type() {
+        // Float index must produce a TypeError.
+        let mut vm = VM::new();
+        let tuple = Cell::new_tuple(vec![Cell::Int(1)]).unwrap();
+        vm.push(tuple).unwrap();
+        vm.push(Cell::Float(1.0)).unwrap();
+        assert!(matches!(
+            tuple_get_prim(&mut vm),
+            Err(TbxError::TypeError {
+                expected: "Int",
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn test_tuple_get_prim_wrong_target_type() {
+        // Using a non-tuple value as the target must produce a TypeError.
+        let mut vm = VM::new();
+        vm.push(Cell::Int(99)).unwrap();
+        vm.push(Cell::Int(1)).unwrap();
+        assert!(matches!(
+            tuple_get_prim(&mut vm),
+            Err(TbxError::TypeError {
+                expected: "Tuple",
+                ..
+            })
+        ));
+    }
+
+    // --- to_array_prim ---
 
     /// Verify that TO_ARRAY accepts Cell::Str(Rc<str>) as an array element.
     ///
