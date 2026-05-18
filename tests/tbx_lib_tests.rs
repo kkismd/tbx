@@ -472,3 +472,251 @@ fn test_tuple_projection_non_tuple_target() {
         "expected 'type error', got: {err}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// DIM @A[n] — array binding declaration (issue #663)
+// ---------------------------------------------------------------------------
+
+/// `DIM @A[n]` inside a DEF must succeed and not interfere with RETURN.
+#[test]
+fn test_dim_local_array_declaration_succeeds() {
+    let mut interp = Interpreter::new();
+    // F() declares a local array and returns 1; PUTDEC prints it.
+    let src = "DEF F()\n  DIM @A[8]\n  RETURN 1\nEND\nPUTDEC F()\n";
+    interp
+        .exec_source(src)
+        .expect("DIM @A[8] inside DEF should succeed");
+    assert_eq!(interp.take_output(), "1");
+}
+
+/// `DIM @A[N]` with a variable-size expression inside DEF must succeed.
+#[test]
+fn test_dim_local_array_with_var_size_succeeds() {
+    let mut interp = Interpreter::new();
+    let src = "DEF F()\n  VAR N = 8\n  DIM @A[N]\n  RETURN 1\nEND\nPUTDEC F()\n";
+    interp
+        .exec_source(src)
+        .expect("DIM @A[N] with variable size inside DEF should succeed");
+    assert_eq!(interp.take_output(), "1");
+}
+
+/// `DIM @A[4 + 4]` with an arithmetic expression inside DEF must succeed.
+#[test]
+fn test_dim_local_array_with_expr_size_succeeds() {
+    let mut interp = Interpreter::new();
+    let src = "DEF F()\n  DIM @A[4 + 4]\n  RETURN 1\nEND\nPUTDEC F()\n";
+    interp
+        .exec_source(src)
+        .expect("DIM @A[4 + 4] inside DEF should succeed");
+    assert_eq!(interp.take_output(), "1");
+}
+
+/// `DIM @G[4]` at the top level (global) must succeed.
+#[test]
+fn test_dim_global_array_declaration_succeeds() {
+    let mut interp = Interpreter::new();
+    let src = "DIM @G[4]\n";
+    interp
+        .exec_source(src)
+        .expect("DIM @G[4] at top level should succeed");
+}
+
+/// Duplicate `DIM @A[n]` inside a DEF must produce an error.
+#[test]
+fn test_dim_duplicate_local_array_is_error() {
+    let mut interp = Interpreter::new();
+    let src = "DEF F()\n  DIM @A[8]\n  DIM @A[8]\n  RETURN 0\nEND\n";
+    let err = interp
+        .exec_source(src)
+        .expect_err("duplicate DIM @A inside DEF should fail");
+    let msg = err.to_string();
+    assert!(
+        msg.contains("invalid expression"),
+        "expected 'invalid expression' in error message, got: {msg}"
+    );
+}
+
+/// `VAR A` followed by `DIM @A[n]` inside a DEF must produce a name collision error.
+#[test]
+fn test_dim_collides_with_var_local_is_error() {
+    let mut interp = Interpreter::new();
+    let src = "DEF F()\n  VAR A\n  DIM @A[8]\n  RETURN 0\nEND\n";
+    let err = interp
+        .exec_source(src)
+        .expect_err("DIM @A after VAR A inside DEF should fail");
+    let msg = err.to_string();
+    assert!(
+        msg.contains("invalid expression"),
+        "expected 'invalid expression' in error message, got: {msg}"
+    );
+}
+
+/// `DIM @A[n]` followed by `VAR A` inside a DEF must produce a name collision error.
+#[test]
+fn test_var_collides_with_dim_local_is_error() {
+    let mut interp = Interpreter::new();
+    let src = "DEF F()\n  DIM @A[8]\n  VAR A\n  RETURN 0\nEND\n";
+    let err = interp
+        .exec_source(src)
+        .expect_err("VAR A after DIM @A inside DEF should fail");
+    let msg = err.to_string();
+    assert!(
+        msg.contains("invalid expression"),
+        "expected 'invalid expression' in error message, got: {msg}"
+    );
+}
+
+/// `DIM @A` without `[n]` must produce a parse error.
+#[test]
+fn test_dim_missing_brackets_is_error() {
+    let mut interp = Interpreter::new();
+    let src = "DEF F()\n  DIM @A\n  RETURN 0\nEND\n";
+    let err = interp
+        .exec_source(src)
+        .expect_err("DIM @A without [n] should fail");
+    let msg = err.to_string();
+    assert!(
+        msg.contains("invalid expression"),
+        "expected 'invalid expression' in error message, got: {msg}"
+    );
+}
+
+/// `DIM @A[]` with an empty size must produce a parse error.
+#[test]
+fn test_dim_empty_brackets_is_error() {
+    let mut interp = Interpreter::new();
+    let src = "DEF F()\n  DIM @A[]\n  RETURN 0\nEND\n";
+    let err = interp.exec_source(src).expect_err("DIM @A[] should fail");
+    let msg = err.to_string();
+    assert!(
+        msg.contains("invalid expression"),
+        "expected 'invalid expression' in error message, got: {msg}"
+    );
+}
+
+/// `DIM @[8]` without an identifier must produce a parse error.
+#[test]
+fn test_dim_missing_ident_is_error() {
+    let mut interp = Interpreter::new();
+    let src = "DEF F()\n  DIM @[8]\n  RETURN 0\nEND\n";
+    let err = interp
+        .exec_source(src)
+        .expect_err("DIM @[8] without identifier should fail");
+    let msg = err.to_string();
+    assert!(
+        msg.contains("invalid expression"),
+        "expected 'invalid expression' in error message, got: {msg}"
+    );
+}
+
+/// `DIM @A(8)` using parentheses instead of brackets must produce a parse error.
+#[test]
+fn test_dim_parens_instead_of_brackets_is_error() {
+    let mut interp = Interpreter::new();
+    let src = "DEF F()\n  DIM @A(8)\n  RETURN 0\nEND\n";
+    let err = interp
+        .exec_source(src)
+        .expect_err("DIM @A(8) should fail — new syntax requires brackets");
+    let msg = err.to_string();
+    assert!(
+        msg.contains("invalid expression"),
+        "expected 'invalid expression' in error message, got: {msg}"
+    );
+}
+
+/// `DIM @A[0]` with size zero must produce an error.
+#[test]
+fn test_dim_zero_size_is_error() {
+    let mut interp = Interpreter::new();
+    let src = "DEF F()\n  DIM @A[0]\n  RETURN 0\nEND\nF\n";
+    let err = interp
+        .exec_source(src)
+        .expect_err("DIM @A[0] should fail with invalid size");
+    let msg = err.to_string();
+    assert!(
+        msg.contains("positive") || msg.contains("invalid"),
+        "expected size error in message, got: {msg}"
+    );
+}
+
+/// `DIM @A[-1]` with negative size must produce an error.
+#[test]
+fn test_dim_negative_size_is_error() {
+    let mut interp = Interpreter::new();
+    let src = "DEF F()\n  DIM @A[-1]\n  RETURN 0\nEND\nF\n";
+    let err = interp
+        .exec_source(src)
+        .expect_err("DIM @A[-1] should fail with invalid size");
+    let msg = err.to_string();
+    assert!(
+        msg.contains("positive") || msg.contains("invalid"),
+        "expected size error in message, got: {msg}"
+    );
+}
+
+/// `DIM @G[4]` at global scope followed by a duplicate `DIM @G[4]` must error.
+#[test]
+fn test_dim_duplicate_global_array_is_error() {
+    let mut interp = Interpreter::new();
+    let src = "DIM @G[4]\nDIM @G[4]\n";
+    let err = interp
+        .exec_source(src)
+        .expect_err("duplicate DIM @G at top level should fail");
+    let msg = err.to_string();
+    assert!(
+        msg.contains("invalid expression"),
+        "expected 'invalid expression' in error message, got: {msg}"
+    );
+}
+
+/// `VAR G` at global scope followed by `DIM @G[4]` must produce a name collision error.
+#[test]
+fn test_dim_collides_with_global_var_is_error() {
+    let mut interp = Interpreter::new();
+    let src = "VAR G\nDIM @G[4]\n";
+    let err = interp
+        .exec_source(src)
+        .expect_err("DIM @G after global VAR G should fail");
+    let msg = err.to_string();
+    assert!(
+        msg.contains("invalid expression"),
+        "expected 'invalid expression' in error message, got: {msg}"
+    );
+}
+
+/// `DIM @G[expr]` where the size expression evaluation fails at runtime
+/// must not leave the VM's return stack, pc, or bp in a corrupted state.
+/// After the error, a subsequent valid operation must succeed, proving
+/// that the VM state was fully restored.
+///
+/// The `1 / 0` size expression is evaluated in a temporary code buffer via
+/// `vm.run()`.  Before entering `vm.run()`, it pushes `ReturnFrame::TopLevel`
+/// onto the return stack; a division-by-zero mid-run leaves that frame (and
+/// any deeper frames that had been pushed) without ever popping them.
+/// The fix snapshots and restores `return_stack`, `pc`, and `bp` on error.
+#[test]
+fn test_dim_global_size_expr_error_restores_vm_state() {
+    let mut interp = Interpreter::new();
+
+    // A division-by-zero inside the size expression causes vm.run() to abort
+    // partway through, leaving ReturnFrame::TopLevel on the return stack if
+    // the state is not properly restored.
+    let err = interp
+        .exec_source("DIM @G[1 / 0]\n")
+        .expect_err("DIM @G[1/0] should fail with division by zero");
+    assert!(
+        err.to_string().contains("division by zero"),
+        "expected 'division by zero' in error message, got: {err}"
+    );
+
+    // The VM must still be usable: a normal statement must succeed, showing
+    // that return_stack / pc / bp were cleanly restored after the failure.
+    interp
+        .exec_source("PUTDEC 1\n")
+        .expect("VM should be usable after DIM size-expression error");
+    assert_eq!(
+        interp.take_output(),
+        "1",
+        "PUTDEC 1 should produce '1' after recovery"
+    );
+}
