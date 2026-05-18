@@ -572,25 +572,76 @@ impl<'a> ExprCompiler<'a> {
                 }
 
                 // -------------------------------------------------------
-                // Array binding sigil `@` — not yet implemented
+                // Array binding sigil `@` — array element read `@A[i]`
                 // -------------------------------------------------------
                 Token::At => {
-                    // `@` must be followed by an identifier to form `@A` or `@A[i]`.
+                    // `@` must be followed by an identifier to form `@A[i]`.
                     // Bare `@`, `@[...]`, or `@ <non-ident>` are malformed.
-                    // The full array-binding feature is not yet implemented; reject
-                    // all uses with a clear error rather than panicking.
-                    let next_is_ident = tokens
-                        .get(i + 1)
-                        .map(|st| matches!(st.token, Token::Ident(_)))
-                        .unwrap_or(false);
-                    if next_is_ident {
-                        return Err(TbxError::InvalidExpression {
-                            reason: "array sigil @ is not yet implemented",
-                        });
-                    } else {
-                        return Err(TbxError::InvalidExpression {
-                            reason: "@ must be followed by an identifier",
-                        });
+                    // `@A` without a following `[` is also an error (bare array
+                    // handle read is not supported in this phase).
+                    let next_tok = tokens.get(i + 1).map(|st| st.token.clone());
+                    match next_tok {
+                        Some(Token::Ident(name)) => {
+                            let name = name.to_ascii_uppercase();
+                            let lbracket_pos = i + 2;
+                            let has_lbracket = tokens
+                                .get(lbracket_pos)
+                                .map(|st| matches!(st.token, Token::LBracket))
+                                .unwrap_or(false);
+                            if !has_lbracket {
+                                return Err(TbxError::InvalidExpression {
+                                    reason: "@Ident must be followed by '[': use @A[i] syntax",
+                                });
+                            }
+                            // Parse the bracket-enclosed index expression.
+                            let (index_toks, close_pos) =
+                                parse_at_index_tokens(tokens, lbracket_pos)?;
+
+                            // Emit: load the array handle (local or global).
+                            if let Some(local_idx) =
+                                self.local_table.and_then(|lt| lt.get(&name)).copied()
+                            {
+                                // Local array binding: load the Cell::Array handle from
+                                // the local slot via LIT StackAddr(idx) FETCH.
+                                emit_local_read(&mut output, local_idx, self.vm)?;
+                            } else {
+                                // Global array binding: look up by bare name `A`.
+                                let xt = self
+                                    .vm
+                                    .lookup_including_self(&name, self.self_word.as_deref())
+                                    .ok_or_else(|| TbxError::UndefinedSymbol {
+                                        name: name.clone(),
+                                    })?;
+                                match &self.vm.headers[xt.index()].kind {
+                                    EntryKind::Variable(addr) => {
+                                        emit_var_read(&mut output, *addr, self.vm)?;
+                                    }
+                                    _ => {
+                                        return Err(TbxError::TypeError {
+                                            expected: "array variable for @-sigil access",
+                                            got: "non-variable",
+                                        });
+                                    }
+                                }
+                            }
+
+                            // Emit: compile the index expression.
+                            let index_cells = self.compile_expr(index_toks)?;
+                            output.extend(index_cells);
+
+                            // Emit: ARRAY_GET — pops (Array, index) and pushes element.
+                            let array_get_xt = require_xt(self.vm, "ARRAY_GET")?;
+                            output.push(Cell::Xt(array_get_xt));
+
+                            // Advance past `@`, Ident, `[`, <index_toks>, `]`.
+                            i = close_pos;
+                            prev_was_operand = true;
+                        }
+                        _ => {
+                            return Err(TbxError::InvalidExpression {
+                                reason: "@ must be followed by an identifier",
+                            });
+                        }
                     }
                 }
 
@@ -634,6 +685,50 @@ fn require_xt(vm: &VM, name: &'static str) -> Result<Xt, TbxError> {
         expected: "system word to be registered",
         got: "not found",
     })
+}
+
+/// Find the index of the matching closing `]` for an already-consumed `[`.
+///
+/// `tokens[start..]` is the content after the opening `[`.  Returns the index
+/// in `tokens` of the first `]` at depth 0 (accounting for nested brackets),
+/// or `None` if no such `]` exists.
+fn find_matching_rbracket(tokens: &[SpannedToken], start: usize) -> Option<usize> {
+    let mut depth = 0usize;
+    for (j, st) in tokens.iter().enumerate().skip(start) {
+        match &st.token {
+            Token::LBracket => depth += 1,
+            Token::RBracket => {
+                if depth == 0 {
+                    return Some(j);
+                }
+                depth -= 1;
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+/// Return the tokens inside `[` `]` of an `@A[...]` index expression and the
+/// position of the matching closing bracket.
+///
+/// `lbracket_pos` is the index of the `[` token in `tokens`.
+fn parse_at_index_tokens(
+    tokens: &[SpannedToken],
+    lbracket_pos: usize,
+) -> Result<(&[SpannedToken], usize), TbxError> {
+    let idx_start = lbracket_pos + 1;
+    let close_pos =
+        find_matching_rbracket(tokens, idx_start).ok_or(TbxError::InvalidExpression {
+            reason: "missing ']' in @A[...] index expression",
+        })?;
+    let index_toks = &tokens[idx_start..close_pos];
+    if index_toks.is_empty() {
+        return Err(TbxError::InvalidExpression {
+            reason: "array index expression must not be empty: use @A[index]",
+        });
+    }
+    Ok((index_toks, close_pos))
 }
 
 /// Find the index of the matching closing `)` for an already-consumed `(`.
@@ -1740,18 +1835,78 @@ mod tests {
     }
 
     // ------------------------------------------------------------------
-    // Token::At — array sigil @ (not yet implemented)
+    // Token::At — array binding sigil `@A[i]` element read
     // ------------------------------------------------------------------
 
+    /// `@A[2]` against a global variable A holding a Cell::Array handle must
+    /// compile to: LIT DictAddr(0) FETCH LIT 2 ARRAY_GET.
     #[test]
-    fn test_at_before_ident_is_unimplemented_error() {
-        // `@A[1]` must produce the "not yet implemented" error without panicking.
-        // Register A as a global variable so the identifier would otherwise resolve.
+    fn test_at_global_array_element_read() {
+        let mut vm = make_vm();
+        // Allocate a dictionary slot for the global variable.
+        vm.dict_write(Cell::Int(0)).unwrap();
+        vm.register(crate::dict::WordEntry::new_variable("A", 0));
+
+        let tokens = lex("@A[2]");
+        let result = ExprCompiler::new(&mut vm).compile_expr(&tokens).unwrap();
+
+        let lit_xt = vm.lookup("LIT").unwrap();
+        let fetch_xt = vm.lookup("FETCH").unwrap();
+        let array_get_xt = vm.lookup("ARRAY_GET").unwrap();
+
+        assert_eq!(
+            result,
+            vec![
+                Cell::Xt(lit_xt),
+                Cell::DictAddr(0),
+                Cell::Xt(fetch_xt),
+                Cell::Xt(lit_xt),
+                Cell::Int(2),
+                Cell::Xt(array_get_xt),
+            ]
+        );
+    }
+
+    /// `@A[i]` against a local variable A must compile to:
+    /// LIT StackAddr(idx) FETCH LIT <i> ARRAY_GET.
+    #[test]
+    fn test_at_local_array_element_read() {
+        let mut vm = make_vm();
+
+        // Build a local variable table with "A" at slot 0.
+        let mut local_table = HashMap::new();
+        local_table.insert("A".to_string(), 0usize);
+
+        let tokens = lex("@A[3]");
+        let result = ExprCompiler::with_context(&mut vm, Some(&local_table), None, None)
+            .compile_expr(&tokens)
+            .unwrap();
+
+        let lit_xt = vm.lookup("LIT").unwrap();
+        let fetch_xt = vm.lookup("FETCH").unwrap();
+        let array_get_xt = vm.lookup("ARRAY_GET").unwrap();
+
+        assert_eq!(
+            result,
+            vec![
+                Cell::Xt(lit_xt),
+                Cell::StackAddr(0),
+                Cell::Xt(fetch_xt),
+                Cell::Xt(lit_xt),
+                Cell::Int(3),
+                Cell::Xt(array_get_xt),
+            ]
+        );
+    }
+
+    /// `@A` without a following `[` must produce a clear syntax error.
+    #[test]
+    fn test_at_without_bracket_is_error() {
         let mut vm = make_vm();
         vm.dict_write(Cell::Int(0)).unwrap();
         vm.register(crate::dict::WordEntry::new_variable("A", 0));
 
-        let tokens = lex("@A[1]");
+        let tokens = lex("@A");
         let err = ExprCompiler::new(&mut vm)
             .compile_expr(&tokens)
             .unwrap_err();
@@ -1759,9 +1914,41 @@ mod tests {
             matches!(
                 err,
                 TbxError::InvalidExpression { reason }
-                    if reason.contains("not yet implemented")
+                    if reason.contains("must be followed by '['")
             ),
-            "expected not-yet-implemented error for @A[1], got: {err:?}"
+            "expected error about missing '[' for @A, got: {err:?}"
+        );
+    }
+
+    /// `@A[]` (empty bracket index) must produce a syntax error.
+    #[test]
+    fn test_at_empty_bracket_index_is_error() {
+        let mut vm = make_vm();
+        vm.dict_write(Cell::Int(0)).unwrap();
+        vm.register(crate::dict::WordEntry::new_variable("A", 0));
+
+        let tokens = lex("@A[]");
+        let err = ExprCompiler::new(&mut vm)
+            .compile_expr(&tokens)
+            .unwrap_err();
+        assert!(
+            matches!(err, TbxError::InvalidExpression { .. }),
+            "expected InvalidExpression for @A[], got: {err:?}"
+        );
+    }
+
+    /// `@NOEXIST[1]` (undefined identifier) must produce UndefinedSymbol.
+    #[test]
+    fn test_at_undefined_symbol_is_error() {
+        let mut vm = make_vm();
+
+        let tokens = lex("@NOEXIST[1]");
+        let err = ExprCompiler::new(&mut vm)
+            .compile_expr(&tokens)
+            .unwrap_err();
+        assert!(
+            matches!(err, TbxError::UndefinedSymbol { ref name } if name == "NOEXIST"),
+            "expected UndefinedSymbol for @NOEXIST[1], got: {err:?}"
         );
     }
 
