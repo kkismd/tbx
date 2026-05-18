@@ -201,6 +201,16 @@ pub enum TbxError {
     InvalidStatementCallSyntax {
         name: String,
     },
+
+    /// A value of a type that is not permitted as a tuple element was provided.
+    ///
+    /// Tuple elements may be scalars (`Int`, `Float`, `Bool`, `Str`) or addresses
+    /// (`DictAddr`, `StackAddr`).  Nested `Tuple`, `Array`, `ArrayAddr`, `Xt`,
+    /// `None`, and `Marker` are forbidden.
+    InvalidTupleElement {
+        /// The type name of the value that was rejected (e.g. `"Array"`).
+        got: &'static str,
+    },
 }
 
 impl std::fmt::Display for TbxError {
@@ -331,6 +341,9 @@ impl std::fmt::Display for TbxError {
                     f,
                     "invalid statement call syntax: '{name}()' is not allowed as a statement; use '{name}' without parentheses"
                 )
+            }
+            TbxError::InvalidTupleElement { got } => {
+                write!(f, "tuple element type not allowed: {got}")
             }
         }
     }

@@ -1,3 +1,5 @@
+use crate::error::TbxError;
+
 /// An entry on the compile-time stack (`VM::compile_stack`).
 ///
 /// `Cell` holds a regular value (address, integer, Xt, …) used by CS_PUSH/CS_POP
@@ -133,6 +135,15 @@ pub enum Cell {
     /// Sentinel value placed on the data stack to mark a statement boundary.
     /// Consumed by DROP_TO_MARKER to restore the stack after a statement call.
     Marker,
+    /// An immutable ordered tuple of scalar values.
+    ///
+    /// Tuple elements are restricted to the following types:
+    /// `Int`, `Float`, `Bool`, `Str`, `DictAddr`, and `StackAddr`.
+    /// Nested `Tuple`, `Array`, `ArrayAddr`, `Xt`, `None`, and `Marker` are
+    /// forbidden (enforced by `Cell::new_tuple`).
+    ///
+    /// An empty tuple (`elements.is_empty()`) is allowed and displays as `()`.
+    Tuple(Vec<Cell>),
 }
 
 impl std::fmt::Display for Cell {
@@ -165,6 +176,16 @@ impl std::fmt::Display for Cell {
             }
             Cell::None => write!(f, "<none>"),
             Cell::Marker => write!(f, "<marker>"),
+            Cell::Tuple(elems) => {
+                write!(f, "(")?;
+                for (i, elem) in elems.iter().enumerate() {
+                    if i > 0 {
+                        write!(f, ", ")?;
+                    }
+                    write!(f, "{}", elem)?;
+                }
+                write!(f, ")")
+            }
         }
     }
 }
@@ -250,6 +271,33 @@ impl Cell {
         }
     }
 
+    /// Constructs a `Cell::Tuple` after validating that all elements are of
+    /// permitted types.
+    ///
+    /// Allowed element types: `Int`, `Float`, `Bool`, `Str`, `DictAddr`, `StackAddr`.
+    /// Forbidden element types: `Tuple`, `Array`, `ArrayAddr`, `Xt`, `None`, `Marker`.
+    ///
+    /// Returns `Err(TbxError::InvalidTupleElement)` if any element has a
+    /// forbidden type.
+    pub fn new_tuple(elements: Vec<Cell>) -> Result<Cell, TbxError> {
+        for elem in &elements {
+            match elem {
+                Cell::Int(_)
+                | Cell::Float(_)
+                | Cell::Bool(_)
+                | Cell::Str(_)
+                | Cell::DictAddr(_)
+                | Cell::StackAddr(_) => {}
+                _ => {
+                    return Err(TbxError::InvalidTupleElement {
+                        got: elem.type_name(),
+                    });
+                }
+            }
+        }
+        Ok(Cell::Tuple(elements))
+    }
+
     /// Returns a static string naming the variant. Useful for error messages and debugging.
     pub fn type_name(&self) -> &'static str {
         match self {
@@ -264,6 +312,7 @@ impl Cell {
             Cell::ArrayAddr { .. } => "ArrayAddr",
             Cell::None => "None",
             Cell::Marker => "Marker",
+            Cell::Tuple(_) => "Tuple",
         }
     }
 
@@ -313,6 +362,7 @@ impl PartialEq for Cell {
                     elem_idx: eb,
                 },
             ) => pa == pb && ea == eb,
+            (Cell::Tuple(a), Cell::Tuple(b)) => a == b,
             _ => false,
         }
     }
@@ -488,6 +538,83 @@ mod tests {
         let c = Cell::string("bar");
         assert_eq!(c.as_str().map(|s| s.as_ref()), Some("bar"));
         assert_eq!(Cell::Int(1).as_str(), None);
+    }
+
+    // --- Tuple ---
+
+    #[test]
+    fn tuple_cell_construct() {
+        let result = Cell::new_tuple(vec![Cell::Int(1), Cell::Int(2)]);
+        assert!(result.is_ok());
+        assert!(matches!(result.unwrap(), Cell::Tuple(_)));
+    }
+
+    #[test]
+    fn tuple_cell_clone() {
+        let original = Cell::new_tuple(vec![Cell::Int(10), Cell::Bool(true)]).unwrap();
+        let cloned = original.clone();
+        assert_eq!(original, cloned);
+    }
+
+    #[test]
+    fn tuple_cell_equality() {
+        let a = Cell::new_tuple(vec![Cell::Int(1), Cell::Int(2)]).unwrap();
+        let b = Cell::new_tuple(vec![Cell::Int(1), Cell::Int(2)]).unwrap();
+        let c = Cell::new_tuple(vec![Cell::Int(1), Cell::Int(3)]).unwrap();
+        let d = Cell::new_tuple(vec![Cell::Int(1)]).unwrap();
+        assert_eq!(a, b);
+        assert_ne!(a, c);
+        assert_ne!(a, d);
+    }
+
+    #[test]
+    fn tuple_cell_display() {
+        let t = Cell::new_tuple(vec![Cell::Int(1), Cell::Int(2)]).unwrap();
+        assert_eq!(format!("{}", t), "(1, 2)");
+    }
+
+    #[test]
+    fn tuple_cell_debug() {
+        let t = Cell::new_tuple(vec![Cell::Int(1), Cell::Int(2)]).unwrap();
+        // Must not panic
+        let s = format!("{:?}", t);
+        assert!(!s.is_empty());
+    }
+
+    #[test]
+    fn tuple_cell_type_name() {
+        let t = Cell::new_tuple(vec![Cell::Int(1)]).unwrap();
+        assert_eq!(t.type_name(), "Tuple");
+    }
+
+    #[test]
+    fn tuple_cell_on_stack() {
+        use crate::vm::VM;
+        let mut vm = VM::new();
+        let tuple = Cell::new_tuple(vec![Cell::Int(42), Cell::Bool(false)]).unwrap();
+        vm.push(tuple.clone()).unwrap();
+        let popped = vm.pop().unwrap();
+        assert_eq!(popped, tuple);
+    }
+
+    #[test]
+    fn tuple_cell_empty() {
+        let t = Cell::new_tuple(vec![]).unwrap();
+        assert_eq!(format!("{}", t), "()");
+    }
+
+    #[test]
+    fn tuple_element_type_rejection() {
+        // Cell::Array is a forbidden element type
+        let result = Cell::new_tuple(vec![Cell::Array(0)]);
+        assert!(result.is_err());
+        // Cell::Tuple (nested) is forbidden
+        let inner = Cell::new_tuple(vec![Cell::Int(1)]).unwrap();
+        let result2 = Cell::new_tuple(vec![inner]);
+        assert!(result2.is_err());
+        // Cell::None is forbidden
+        let result3 = Cell::new_tuple(vec![Cell::None]);
+        assert!(result3.is_err());
     }
 
     #[test]
