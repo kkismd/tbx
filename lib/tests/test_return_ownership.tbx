@@ -36,17 +36,17 @@ END
 DEF HMS_HOUR(T)
   VAR A
   LET A = HMS(T)
-  RETURN A(1)
+  RETURN @A[1]
 END
 DEF HMS_MIN(T)
   VAR A
   LET A = HMS(T)
-  RETURN A(2)
+  RETURN @A[2]
 END
 DEF HMS_SEC(T)
   VAR A
   LET A = HMS(T)
-  RETURN A(3)
+  RETURN @A[3]
 END
 ASSERT HMS_HOUR(3661) = 1
 ASSERT HMS_MIN(3661) = 1
@@ -66,9 +66,9 @@ END
 DEF CHECK_CHAINED_ARRAY()
   VAR R
   LET R = MAKE_ARRAY_OUTER()
-  IF R(1) = 10
-    IF R(2) = 20
-      IF R(3) = 30
+  IF @R[1] = 10
+    IF @R[2] = 20
+      IF @R[3] = 30
         RETURN 1
       ENDIF
     ENDIF
@@ -96,8 +96,8 @@ END
 DEF CHECK_RETURN_SECOND()
   VAR R
   LET R = RETURN_SECOND()
-  IF R(1) = 3
-    IF R(2) = 4
+  IF @R[1] = 3
+    IF @R[2] = 4
       RETURN 1
     ENDIF
   ENDIF

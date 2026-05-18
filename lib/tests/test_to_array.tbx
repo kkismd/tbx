@@ -6,7 +6,7 @@ USE "lib/tests/helper.tbx"
 DEF TO_ARRAY_SUM()
   VAR A
   LET A = TO_ARRAY(1, 2, 3)
-  RETURN A(1) + A(2) + A(3)
+  RETURN @A[1] + @A[2] + @A[3]
 END
 ASSERT TO_ARRAY_SUM() = 6
 
@@ -15,9 +15,9 @@ ASSERT TO_ARRAY_SUM() = 6
 DEF TO_ARRAY_ORDER()
   VAR A
   LET A = TO_ARRAY(10, 20, 30)
-  IF A(1) = 10
-    IF A(2) = 20
-      IF A(3) = 30
+  IF @A[1] = 10
+    IF @A[2] = 20
+      IF @A[3] = 30
         RETURN 1
       ENDIF
     ENDIF
@@ -40,7 +40,7 @@ ASSERT TO_ARRAY_EMPTY() = 99
 DEF TO_ARRAY_ONE()
   VAR A
   LET A = TO_ARRAY(42)
-  RETURN A(1)
+  RETURN @A[1]
 END
 ASSERT TO_ARRAY_ONE() = 42
 
@@ -49,18 +49,18 @@ ASSERT TO_ARRAY_ONE() = 42
 DEF TO_ARRAY_MUTATE()
   VAR A
   LET A = TO_ARRAY(1, 2, 3)
-  SET &A(2), 99
-  RETURN A(1) + A(2) + A(3)
+  SET &@A[2], 99
+  RETURN @A[1] + @A[2] + @A[3]
 END
 ASSERT TO_ARRAY_MUTATE() = 103
 
-# --- Top-level global array variable supports A(I) / &A(I) ---
+# --- Top-level global array variable supports @A[I] / &@A[I] ---
 
 VAR TOP_ARR
 SET &TOP_ARR, TO_ARRAY(10, 20)
-ASSERT TOP_ARR(2) = 20
-SET &TOP_ARR(2), 123
-ASSERT TOP_ARR(2) = 123
+ASSERT @TOP_ARR[2] = 20
+SET &@TOP_ARR[2], 123
+ASSERT @TOP_ARR[2] = 123
 
 # --- FROM_ARRAY: single-element array (expression context) ---
 # With exactly one element, FROM_ARRAY pushes one value, which behaves
@@ -101,9 +101,9 @@ ASSERT FROM_ARRAY_EMPTY_STMT() = 2
 DEF ROUNDTRIP()
   VAR A
   LET A = TO_ARRAY(100, 200, 300)
-  IF A(1) = 100
-    IF A(2) = 200
-      IF A(3) = 300
+  IF @A[1] = 100
+    IF @A[2] = 200
+      IF @A[3] = 300
         RETURN 1
       ENDIF
     ENDIF
@@ -122,10 +122,10 @@ DEF ARRAY_CONCAT_BASIC()
   LET B = TO_ARRAY(3, 4)
   LET C = ARRAY_CONCAT(A, B)
   IF ARRAY_LEN(C) = 4
-    IF C(1) = 1
-      IF C(2) = 2
-        IF C(3) = 3
-          IF C(4) = 4
+    IF @C[1] = 1
+      IF @C[2] = 2
+        IF @C[3] = 3
+          IF @C[4] = 4
             IF ARRAY_LEN(A) = 2
               IF ARRAY_LEN(B) = 2
                 RETURN 1
@@ -150,8 +150,8 @@ DEF ARRAY_CONCAT_EMPTY_LEFT()
   LET B = TO_ARRAY(9, 8)
   LET C = ARRAY_CONCAT(A, B)
   IF ARRAY_LEN(C) = 2
-    IF C(1) = 9
-      IF C(2) = 8
+    IF @C[1] = 9
+      IF @C[2] = 8
         RETURN 1
       ENDIF
     ENDIF

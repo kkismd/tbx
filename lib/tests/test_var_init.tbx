@@ -62,10 +62,10 @@ ASSERT STR_INIT() = 5
 
 DEF ARRAY_INIT()
   VAR A = ARRAY(3)
-  SET &A(1), 10
-  SET &A(2), 20
-  SET &A(3), 30
-  RETURN A(1) + A(2) + A(3)
+  LET @A[1] = 10
+  LET @A[2] = 20
+  LET @A[3] = 30
+  RETURN @A[1] + @A[2] + @A[3]
 END
 ASSERT ARRAY_INIT() = 60
 
