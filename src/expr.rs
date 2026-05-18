@@ -501,6 +501,12 @@ impl<'a> ExprCompiler<'a> {
                     }
                     // Pop the LBracket.
                     op_stack.pop();
+                    // Reject `T[]`: the index expression is missing.
+                    if !prev_was_operand {
+                        return Err(TbxError::InvalidExpression {
+                            reason: "missing index expression in []",
+                        });
+                    }
                     // Emit TUPLE_GET: stack is [..., <tuple>, <index>] → element value.
                     let tuple_get_xt = require_xt(self.vm, "TUPLE_GET")?;
                     output.push(Cell::Xt(tuple_get_xt));
@@ -1688,6 +1694,25 @@ mod tests {
                     if reason.contains("unmatched '['")
             ),
             "expected unmatched '[' error for T[1, got: {err:?}"
+        );
+    }
+
+    #[test]
+    fn test_empty_bracket_index_error() {
+        // `T[]` must be rejected as a syntax error: index expression is missing.
+        let mut vm = make_vm();
+        vm.register(WordEntry::new_word("T", 0));
+        let tokens = lex("T[]");
+        let err = ExprCompiler::new(&mut vm)
+            .compile_expr(&tokens)
+            .unwrap_err();
+        assert!(
+            matches!(
+                err,
+                TbxError::InvalidExpression { reason }
+                    if reason.contains("missing index expression in []")
+            ),
+            "expected missing index expression error for T[], got: {err:?}"
         );
     }
 }
