@@ -173,62 +173,36 @@ fn test_legacy_local_array_paren_syntax_is_not_array_access() {
 // Negative test: legacy &A(i) array element address syntax must not work (#671)
 // ---------------------------------------------------------------------------
 
-/// `&A(i)` must no longer be usable as an array element address expression.
+/// `SET &A(i), value` for a global variable must be rejected.
 ///
 /// The `&A(i)` syntax for writing array elements via SET has been removed in
-/// favour of `&@A[i]`.  When `SET &A(i), value` is compiled, `&A` is treated
-/// as a plain variable address and the `(i)` part is parsed separately, so the
-/// resulting code either fails to compile, fails at runtime, or does not write
-/// to the expected array element.
-///
-/// This test verifies that the value 99 does not end up in element index 1 of
-/// the array after the old-syntax write attempt.  We confirm this by
-/// subsequently reading back the element with the new `@A[1]` syntax.
+/// favour of `&@A[i]`.  This test confirms that the legacy syntax now results
+/// in a compile-time or runtime error.
 #[test]
 fn test_legacy_global_array_paren_addr_syntax_is_not_array_addr_access() {
     let mut interp = Interpreter::new();
-    // Prepare the array in a separate step so we know it is set up correctly.
+    let src = "VAR A\nSET &A, TO_ARRAY(10, 20)\nSET &A(1), 99\n";
     interp
-        .exec_source("VAR A\nSET &A, TO_ARRAY(10, 20)\n")
-        .expect("array setup must succeed");
-
-    // Now attempt the legacy write.  Either it errors (expected), or succeeds
-    // without actually writing to the correct element (also acceptable).
-    let write_result = interp.exec_source("SET &A(1), 99\n");
-
-    if write_result.is_ok() {
-        // If the write "succeeded", the element must still hold 20 (unchanged).
-        let mut interp2 = Interpreter::new();
-        // Re-run the full setup + read in a fresh interpreter to avoid
-        // interference from the failed write attempt above.
-        interp2
-            .exec_source("VAR A\nSET &A, TO_ARRAY(10, 20)\nSET &A(1), 99\n")
-            .ok(); // ignore errors
-                   // We cannot capture PUTDEC output here, so this branch is informational.
-    } else {
-        // Compile-time or runtime error is the expected (and preferred) outcome.
-    }
+        .exec_source(src)
+        .expect_err("SET &A(i) for global variable must fail");
 }
 
-/// `SET &A(i), value` using a local variable must not write to the array element.
+/// `SET &A(i), value` using a local variable must be rejected.
 ///
-/// When `A` is a local variable holding an array, `SET &A(i), value` used to
-/// write to element `i`.  That path has been removed; the statement either
-/// errors or does not affect the array element at the expected index.
+/// The `&A(i)` syntax for writing array elements via SET has been removed in
+/// favour of `&@A[i]`.  This test confirms that the legacy syntax now results
+/// in a compile-time or runtime error.
 #[test]
 fn test_legacy_local_array_paren_addr_syntax_is_not_array_addr_access() {
     let mut interp = Interpreter::new();
     // Define a function that sets up a local array and attempts to write
-    // element 0 using the old `SET &A(i), value` syntax.
-    let src =
-        "DEF F()\n  VAR A\n  LET A = ARRAY(3)\n  LET @A[0] = 10\n  SET &A(0), 99\n  RETURN @A[0]\nEND\nF()\n";
+    // element 1 using the old `SET &A(i), value` syntax.
+    let src = "DEF F()\n  VAR A\n  LET A = ARRAY(3)\n  SET &A(1), 99\n  RETURN @A[1]\nEND\nF()\n";
     // Either compilation or runtime must fail — &A(i) no longer writes to
-    // an array element.  Silent success returning 99 is not acceptable.
-    let result = interp.exec_source(src);
-    assert!(
-        result.is_err(),
-        "SET &A(i) for local variable must fail; it must not silently write to the array element"
-    );
+    // an array element.
+    interp
+        .exec_source(src)
+        .expect_err("SET &A(i) for local variable must fail");
 }
 
 // ---------------------------------------------------------------------------
