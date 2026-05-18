@@ -849,8 +849,13 @@ pub fn dim_prim(vm: &mut VM) -> Result<(), TbxError> {
                 })?;
         vm.dict_write(Cell::Xt(exit_xt))?;
 
-        // Run the temporary buffer to evaluate the size expression.
+        // Snapshot VM state before running the temporary buffer so we can
+        // fully restore it if the size expression evaluation fails.
         let saved_stack_len = vm.data_stack.len();
+        let saved_return_stack_len = vm.return_stack.len();
+        let saved_pc = vm.pc;
+        let saved_bp = vm.bp;
+
         let run_result = vm.run(buf_start);
 
         // Clean up the temporary code buffer regardless of outcome.
@@ -858,7 +863,13 @@ pub fn dim_prim(vm: &mut VM) -> Result<(), TbxError> {
         vm.dictionary.truncate(buf_start);
 
         if let Err(e) = run_result {
+            // Restore all VM state that vm.run() may have mutated before
+            // the error, including return_stack frames pushed by user words
+            // called inside the size expression.
             vm.data_stack.truncate(saved_stack_len);
+            vm.return_stack.truncate(saved_return_stack_len);
+            vm.pc = saved_pc;
+            vm.bp = saved_bp;
             return Err(e);
         }
 

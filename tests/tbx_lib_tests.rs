@@ -683,3 +683,40 @@ fn test_dim_collides_with_global_var_is_error() {
         "expected 'invalid expression' in error message, got: {msg}"
     );
 }
+
+/// `DIM @G[expr]` where the size expression evaluation fails at runtime
+/// must not leave the VM's return stack, pc, or bp in a corrupted state.
+/// After the error, a subsequent valid operation must succeed, proving
+/// that the VM state was fully restored.
+///
+/// The `1 / 0` size expression is evaluated in a temporary code buffer via
+/// `vm.run()`.  Before entering `vm.run()`, it pushes `ReturnFrame::TopLevel`
+/// onto the return stack; a division-by-zero mid-run leaves that frame (and
+/// any deeper frames that had been pushed) without ever popping them.
+/// The fix snapshots and restores `return_stack`, `pc`, and `bp` on error.
+#[test]
+fn test_dim_global_size_expr_error_restores_vm_state() {
+    let mut interp = Interpreter::new();
+
+    // A division-by-zero inside the size expression causes vm.run() to abort
+    // partway through, leaving ReturnFrame::TopLevel on the return stack if
+    // the state is not properly restored.
+    let err = interp
+        .exec_source("DIM @G[1 / 0]\n")
+        .expect_err("DIM @G[1/0] should fail with division by zero");
+    assert!(
+        err.to_string().contains("division by zero"),
+        "expected 'division by zero' in error message, got: {err}"
+    );
+
+    // The VM must still be usable: a normal statement must succeed, showing
+    // that return_stack / pc / bp were cleanly restored after the failure.
+    interp
+        .exec_source("PUTDEC 1\n")
+        .expect("VM should be usable after DIM size-expression error");
+    assert_eq!(
+        interp.take_output(),
+        "1",
+        "PUTDEC 1 should produce '1' after recovery"
+    );
+}
