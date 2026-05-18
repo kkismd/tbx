@@ -802,8 +802,10 @@ fn emit_op_item(op: &OpItem, output: &mut Vec<Cell>, vm: &VM) -> Result<(), TbxE
             });
         }
         OpItem::LBracket => {
-            // Should not reach here; LBracket is always popped at Token::RBracket.
-            unreachable!("LBracket should have been consumed by Token::RBracket handler")
+            // A stray LBracket surviving to drain means an unmatched '[' — error.
+            return Err(TbxError::InvalidExpression {
+                reason: "unmatched '[' in expression",
+            });
         }
     }
     Ok(())
@@ -1660,6 +1662,25 @@ mod tests {
         assert!(
             matches!(err, TbxError::InvalidExpression { .. }),
             "Token::Error should produce InvalidExpression, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn test_unmatched_lbracket_error() {
+        // `T[1` (no closing ']') must produce an unmatched '[' error.
+        let mut vm = make_vm();
+        vm.register(WordEntry::new_word("T", 0));
+        let tokens = lex("T[1");
+        let err = ExprCompiler::new(&mut vm)
+            .compile_expr(&tokens)
+            .unwrap_err();
+        assert!(
+            matches!(
+                err,
+                TbxError::InvalidExpression { reason }
+                    if reason.contains("unmatched '['")
+            ),
+            "expected unmatched '[' error for T[1, got: {err:?}"
         );
     }
 }
