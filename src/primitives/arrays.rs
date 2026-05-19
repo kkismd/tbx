@@ -128,6 +128,9 @@ pub fn array_prim(vm: &mut VM) -> Result<(), TbxError> {
 ///
 /// Stack: `[..., Cell::Array(pool_idx), Cell::Int(elem_idx)]` → `value`
 ///
+/// This is the VM-level primitive that `@A[i]` compiles to.  The expression
+/// compiler lowers `@A[i]` to: `<array handle read>  <index expr>  ARRAY_GET`.
+///
 /// Array indices are 1-based from the user's perspective: valid range is `1..=N`.
 /// The index is translated to 0-based internally before accessing the Vec.
 pub fn array_get_prim(vm: &mut VM) -> Result<(), TbxError> {
@@ -169,6 +172,11 @@ pub fn array_get_prim(vm: &mut VM) -> Result<(), TbxError> {
 /// ARRAY_ADDR — compute the address of an array element.
 ///
 /// Stack: `[..., Cell::Array(pool_idx), Cell::Int(elem_idx)]` → `Cell::ArrayAddr { pool_idx, elem_idx }`
+///
+/// This is the VM-level primitive that `&@A[i]` compiles to.  The expression
+/// compiler lowers `&@A[i]` to: `<array handle read>  <index expr>  ARRAY_ADDR`.
+/// The resulting `Cell::ArrayAddr` is used by `SET` (via `STORE`) to write a value
+/// to the addressed element.
 ///
 /// Array indices are 1-based from the user's perspective: valid range is `1..=N`.
 /// The index is translated to 0-based internally before storing in `Cell::ArrayAddr`.
