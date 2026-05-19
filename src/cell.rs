@@ -123,7 +123,7 @@ pub enum Cell {
     Str(std::rc::Rc<str>),
     /// Address of an element in an array.
     ///
-    /// Produced by the `&A(I)` construct where `A` holds a `Cell::Array`.
+    /// Produced by the `&@A[i]` construct where `A` holds a `Cell::Array`.
     /// Used by `FETCH`, `STORE`, and `SET` to read/write individual elements.
     ArrayAddr {
         /// Index into `VM::arrays` (the array pool).

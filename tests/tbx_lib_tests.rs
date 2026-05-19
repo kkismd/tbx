@@ -170,6 +170,42 @@ fn test_legacy_local_array_paren_syntax_is_not_array_access() {
 }
 
 // ---------------------------------------------------------------------------
+// Negative test: legacy &A(i) array element address syntax must not work (#671)
+// ---------------------------------------------------------------------------
+
+/// `SET &A(i), value` for a global variable must be rejected.
+///
+/// The `&A(i)` syntax for writing array elements via SET has been removed in
+/// favour of `&@A[i]`.  This test confirms that the legacy syntax now results
+/// in a compile-time or runtime error.
+#[test]
+fn test_legacy_global_array_paren_addr_syntax_is_not_array_addr_access() {
+    let mut interp = Interpreter::new();
+    let src = "VAR A\nSET &A, TO_ARRAY(10, 20)\nSET &A(1), 99\n";
+    interp
+        .exec_source(src)
+        .expect_err("SET &A(i) for global variable must fail");
+}
+
+/// `SET &A(i), value` using a local variable must be rejected.
+///
+/// The `&A(i)` syntax for writing array elements via SET has been removed in
+/// favour of `&@A[i]`.  This test confirms that the legacy syntax now results
+/// in a compile-time or runtime error.
+#[test]
+fn test_legacy_local_array_paren_addr_syntax_is_not_array_addr_access() {
+    let mut interp = Interpreter::new();
+    // Define a function that sets up a local array and attempts to write
+    // element 1 using the old `SET &A(i), value` syntax.
+    let src = "DEF F()\n  VAR A\n  LET A = ARRAY(3)\n  SET &A(1), 99\n  RETURN @A[1]\nEND\nF()\n";
+    // Either compilation or runtime must fail — &A(i) no longer writes to
+    // an array element.
+    interp
+        .exec_source(src)
+        .expect_err("SET &A(i) for local variable must fail");
+}
+
+// ---------------------------------------------------------------------------
 // Array element string tests (issue #591, D-4: Rc<str> liberation)
 // ---------------------------------------------------------------------------
 //

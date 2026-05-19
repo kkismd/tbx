@@ -256,31 +256,10 @@ impl<'a> ExprCompiler<'a> {
                                 if let Some(local_idx) =
                                     self.local_table.and_then(|lt| lt.get(&name)).copied()
                                 {
-                                    // Is this an array element address: &A(I)?
-                                    let lparen_pos = i + 1;
-                                    if tokens
-                                        .get(lparen_pos)
-                                        .map(|st| matches!(st.token, Token::LParen))
-                                        .unwrap_or(false)
-                                    {
-                                        // Array address-of: &A(I)
-                                        let (index_toks, close_pos) =
-                                            parse_array_index_tokens(tokens, lparen_pos)?;
-                                        // 1. Load the Cell::Array handle.
-                                        emit_local_read(&mut output, local_idx, self.vm)?;
-                                        // 2. Compile the index expression.
-                                        let index_cells = self.compile_expr(index_toks)?;
-                                        output.extend(index_cells);
-                                        // 3. Emit ARRAY_ADDR.
-                                        let array_addr_xt = require_xt(self.vm, "ARRAY_ADDR")?;
-                                        output.push(Cell::Xt(array_addr_xt));
-                                        i = close_pos;
-                                    } else {
-                                        // Simple local variable address: &A (StackAddr).
-                                        let xt_lit = require_xt(self.vm, "LIT")?;
-                                        output.push(Cell::Xt(xt_lit));
-                                        output.push(Cell::StackAddr(local_idx));
-                                    }
+                                    // Simple local variable address: &A (StackAddr).
+                                    let xt_lit = require_xt(self.vm, "LIT")?;
+                                    output.push(Cell::Xt(xt_lit));
+                                    output.push(Cell::StackAddr(local_idx));
                                 } else {
                                     let xt = self
                                         .vm
@@ -290,27 +269,10 @@ impl<'a> ExprCompiler<'a> {
                                         })?;
                                     match &self.vm.headers[xt.index()].kind {
                                         EntryKind::Variable(addr) => {
-                                            let lparen_pos = i + 1;
-                                            if tokens
-                                                .get(lparen_pos)
-                                                .map(|st| matches!(st.token, Token::LParen))
-                                                .unwrap_or(false)
-                                            {
-                                                let (index_toks, close_pos) =
-                                                    parse_array_index_tokens(tokens, lparen_pos)?;
-                                                emit_var_read(&mut output, *addr, self.vm)?;
-                                                let index_cells = self.compile_expr(index_toks)?;
-                                                output.extend(index_cells);
-                                                let array_addr_xt =
-                                                    require_xt(self.vm, "ARRAY_ADDR")?;
-                                                output.push(Cell::Xt(array_addr_xt));
-                                                i = close_pos;
-                                            } else {
-                                                // Emit address only — no FETCH.
-                                                let xt_lit = require_xt(self.vm, "LIT")?;
-                                                output.push(Cell::Xt(xt_lit));
-                                                output.push(Cell::DictAddr(*addr));
-                                            }
+                                            // Emit address only — no FETCH.
+                                            let xt_lit = require_xt(self.vm, "LIT")?;
+                                            output.push(Cell::Xt(xt_lit));
+                                            output.push(Cell::DictAddr(*addr));
                                         }
                                         _ => {
                                             return Err(TbxError::TypeError {
@@ -739,47 +701,6 @@ fn parse_at_index_tokens(
     Ok((index_toks, close_pos))
 }
 
-/// Find the index of the matching closing `)` for an already-consumed `(`.
-///
-/// `tokens[start..]` is the content after the opening `(`.  Returns the index
-/// in `tokens` of the first `)` at depth 0 (accounting for nested parentheses),
-/// or `None` if no such `)` exists.
-fn find_matching_rparen(tokens: &[SpannedToken], start: usize) -> Option<usize> {
-    let mut depth = 0usize;
-    for (j, st) in tokens.iter().enumerate().skip(start) {
-        match &st.token {
-            Token::LParen => depth += 1,
-            Token::RParen => {
-                if depth == 0 {
-                    return Some(j);
-                }
-                depth -= 1;
-            }
-            _ => {}
-        }
-    }
-    None
-}
-
-/// Return the tokens inside `(` `)` of an array index expression and the
-/// position of the matching closing parenthesis.
-fn parse_array_index_tokens(
-    tokens: &[SpannedToken],
-    lparen_pos: usize,
-) -> Result<(&[SpannedToken], usize), TbxError> {
-    let idx_start = lparen_pos + 1;
-    let close_pos = find_matching_rparen(tokens, idx_start).ok_or(TbxError::InvalidExpression {
-        reason: "missing ')' in array index expression",
-    })?;
-    let index_toks = &tokens[idx_start..close_pos];
-    if index_toks.is_empty() {
-        return Err(TbxError::InvalidExpression {
-            reason: "array index expression must not be empty: use NAME(index)",
-        });
-    }
-    Ok((index_toks, close_pos))
-}
-
 /// Emit `Xt(LIT)` followed by `value` onto `output`.
 fn emit_lit(output: &mut Vec<Cell>, value: Cell, vm: &VM) -> Result<(), TbxError> {
     let xt = require_xt(vm, "LIT")?;
@@ -1107,30 +1028,36 @@ mod tests {
         assert_eq!(result[1], Cell::DictAddr(0));
     }
 
+    /// `&A(i)` must no longer compile as an array element address (#671).
+    ///
+    /// The `&A(i)` syntax for array element addresses has been removed in
+    /// favour of `&@A[i]`.  After `&A` is handled as a plain variable address,
+    /// the compiler no longer emits `FETCH` + index + `ARRAY_ADDR`.  This test
+    /// verifies that the old six-cell sequence is no longer produced.
     #[test]
-    fn test_address_of_global_array_element() {
+    fn test_legacy_address_of_global_array_element_not_emitted() {
         let mut vm = make_vm();
         vm.dict_write(Cell::Int(0)).unwrap();
         vm.register(WordEntry::new_variable("A", 0));
 
-        let tokens = lex("&A(2)");
-        let result = ExprCompiler::new(&mut vm).compile_expr(&tokens).unwrap();
-
-        let lit_xt = vm.lookup("LIT").unwrap();
         let fetch_xt = vm.lookup("FETCH").unwrap();
         let array_addr_xt = vm.lookup("ARRAY_ADDR").unwrap();
 
-        assert_eq!(
-            result,
-            vec![
-                Cell::Xt(lit_xt),
-                Cell::DictAddr(0),
-                Cell::Xt(fetch_xt),
-                Cell::Xt(lit_xt),
-                Cell::Int(2),
-                Cell::Xt(array_addr_xt),
-            ]
-        );
+        let tokens = lex("&A(2)");
+        // `&A(i)` no longer produces the old FETCH + index + ARRAY_ADDR sequence.
+        // Whatever the compiler produces, it must not contain ARRAY_ADDR.
+        let result = ExprCompiler::new(&mut vm).compile_expr(&tokens);
+        if let Ok(cells) = result {
+            assert!(
+                !cells.contains(&Cell::Xt(array_addr_xt)),
+                "&A(i) must not emit ARRAY_ADDR: {cells:?}"
+            );
+            assert!(
+                !cells.contains(&Cell::Xt(fetch_xt)),
+                "&A(i) must not emit FETCH after &A: {cells:?}"
+            );
+        }
+        // Compilation failure is also acceptable.
     }
 
     // ------------------------------------------------------------------
