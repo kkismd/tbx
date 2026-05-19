@@ -344,7 +344,7 @@ TBX では以下の記号を次の目的に割り当てる。
 | 記号 | 役割 |
 | --- | --- |
 | `()` | grouping / function call |
-| `[]` | index / projection |
+| `[]` | element selection / projection |
 | `@` | array binding / array storage sigil |
 | `&` | address / lvalue |
 
@@ -363,7 +363,7 @@ LET @A[1] = 10
 #### 設計意図
 
 - `()` は grouping と function call に寄せる。
-- `[]` は tuple projection / array indexing など、要素選択に寄せる。
+- `[]` は tuple projection / array indexing など、要素選択に寄せる。`[]` 自体は value / address を決めない。`@A[i]` は配列要素の value selection、`&@A[i]` は同じ selection に `&` を付けた address / lvalue access である。
 - `@` は array binding / array storage を表す surface sigil とする。`@` なしの変数名はスカラーバインディングを表し、`@` 付きは配列バインディングを表す。
 - `&` は address / lvalue を表す。`&A` はスカラー変数 `A` のアドレス、`&@A[i]` は配列要素のアドレスを表す。
 
