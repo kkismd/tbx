@@ -1,11 +1,10 @@
-# lib/tests/test_array.tbx — TBX tests for arrays (ARRAY(N))
+# lib/tests/test_array.tbx — TBX tests for arrays (DIM @A[n])
 USE "lib/tests/helper.tbx"
 
 # --- Basic creation and element read/write ---
 
 DEF MAKE_AND_READ()
-  VAR A
-  LET A = ARRAY(3)
+  DIM @A[3]
   LET @A[1] = 10
   LET @A[2] = 20
   LET @A[3] = 30
@@ -16,8 +15,7 @@ ASSERT MAKE_AND_READ() = 60
 # --- Array is zeroed (Cell::None) on creation ---
 
 DEF FIRST_ELEM_IS_NONE()
-  VAR A
-  LET A = ARRAY(5)
+  DIM @A[5]
   # Cell::None is falsy, so this checks the initial value
   IF @A[1] = 0
     RETURN 1
@@ -31,10 +29,8 @@ END
 # --- Multiple arrays in the same frame ---
 
 DEF TWO_ARRAYS()
-  VAR A
-  VAR B
-  LET A = ARRAY(2)
-  LET B = ARRAY(2)
+  DIM @A[2]
+  DIM @B[2]
   LET @A[1] = 100
   LET @B[1] = 200
   RETURN @A[1] + @B[1]
@@ -44,8 +40,7 @@ ASSERT TWO_ARRAYS() = 300
 # --- Array lifetime: pool is freed on return ---
 
 DEF INNER()
-  VAR A
-  LET A = ARRAY(3)
+  DIM @A[3]
   LET @A[1] = 42
   RETURN @A[1]
 END
@@ -71,10 +66,9 @@ ASSERT CALL_TWICE() = 84
 # --- Nested calls with arrays ---
 
 DEF SUM_ARRAY(N)
-  VAR A
+  DIM @A[N]
   VAR I
   VAR S
-  LET A = ARRAY(N)
   LET I = 1
   LET S = 0
   WHILE I <= N
@@ -87,6 +81,5 @@ END
 # Sum of 0,2,4,6,8 = 20
 ASSERT SUM_ARRAY(5) = 20
 
-VAR A
-SET &A, ARRAY(1)
+DIM @A[1]
 ASSERT ARRAY_LEN(A) = 1
