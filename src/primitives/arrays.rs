@@ -287,57 +287,6 @@ pub fn array_len_prim(vm: &mut VM) -> Result<(), TbxError> {
     Ok(())
 }
 
-/// ARRAY_CONCAT — concatenate two arrays and return a new array.
-///
-/// Pops two `Cell::Array` handles from the stack and pushes a new array whose
-/// contents are all elements of `a` followed by all elements of `b`.
-///
-/// Stack: `[..., a: Array, b: Array]` → `Cell::Array(new_idx)`
-pub fn array_concat_prim(vm: &mut VM) -> Result<(), TbxError> {
-    let b_pool_idx = match vm.pop()? {
-        Cell::Array(idx) => idx,
-        other => {
-            return Err(TbxError::TypeError {
-                expected: "Array",
-                got: other.type_name(),
-            })
-        }
-    };
-    let a_pool_idx = match vm.pop()? {
-        Cell::Array(idx) => idx,
-        other => {
-            return Err(TbxError::TypeError {
-                expected: "Array",
-                got: other.type_name(),
-            })
-        }
-    };
-
-    let a = vm
-        .arrays
-        .get(a_pool_idx)
-        .ok_or(TbxError::IndexOutOfBounds {
-            index: a_pool_idx,
-            size: vm.arrays.len(),
-        })?;
-    let b = vm
-        .arrays
-        .get(b_pool_idx)
-        .ok_or(TbxError::IndexOutOfBounds {
-            index: b_pool_idx,
-            size: vm.arrays.len(),
-        })?;
-
-    let mut result: Vec<Cell> = Vec::with_capacity(a.len() + b.len());
-    result.extend_from_slice(a);
-    result.extend_from_slice(b);
-
-    let pool_idx = vm.arrays.len();
-    vm.arrays.push(result);
-    vm.push(Cell::Array(pool_idx))?;
-    Ok(())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
