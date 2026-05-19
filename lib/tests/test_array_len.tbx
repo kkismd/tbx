@@ -4,25 +4,22 @@ USE "lib/tests/helper.tbx"
 # --- ARRAY_LEN: array length ---
 
 DEF LEN_BASIC()
-  VAR A
-  LET A = ARRAY(5)
+  DIM @A[5]
   RETURN ARRAY_LEN(A)
 END
 ASSERT LEN_BASIC() = 5
 
 DEF LEN_ONE()
-  VAR A
-  LET A = ARRAY(1)
+  DIM @A[1]
   RETURN ARRAY_LEN(A)
 END
 ASSERT LEN_ONE() = 1
 
 # Use ARRAY_LEN in a WHILE loop condition (1-based indices)
 DEF SUM_WITH_LEN(N)
-  VAR A
+  DIM @A[N]
   VAR I
   VAR S
-  LET A = ARRAY(N)
   LET I = 1
   LET S = 0
   WHILE I <= N
