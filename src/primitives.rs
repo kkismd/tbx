@@ -2233,7 +2233,7 @@ pub fn register_all(vm: &mut VM) {
     // `<array handle read> <index expr> ARRAY_GET`); ARRAY_ADDR computes an element
     // address (`&@A[i]` compiles to `<array handle read> <index expr> ARRAY_ADDR`).
     // TO_ARRAY packs stack values into a new array; FROM_ARRAY expands one onto the stack.
-    // ARRAY_LEN returns the length of an array; ARRAY_CONCAT concatenates two arrays.
+    // ARRAY_LEN returns the length of an array.
     // TUPLE packs stack values into a new immutable Cell::Tuple.
     let mut to_array_entry = WordEntry::new_primitive("TO_ARRAY", to_array_prim);
     to_array_entry.is_variadic = true;
@@ -2246,7 +2246,6 @@ pub fn register_all(vm: &mut VM) {
     vm.register(WordEntry::new_primitive("FROM_ARRAY", from_array_prim));
     vm.register(WordEntry::new_primitive("ARRAY", array_prim));
     vm.register(WordEntry::new_primitive("ARRAY_LEN", array_len_prim));
-    vm.register(WordEntry::new_primitive("ARRAY_CONCAT", array_concat_prim));
     let mut array_get_entry = WordEntry::new_primitive("ARRAY_GET", array_get_prim);
     array_get_entry.flags = FLAG_SYSTEM;
     vm.register(array_get_entry);
@@ -6571,62 +6570,6 @@ mod tests {
         vm.push(Cell::Int(42)).unwrap();
         assert!(matches!(
             array_len_prim(&mut vm),
-            Err(TbxError::TypeError {
-                expected: "Array",
-                ..
-            })
-        ));
-    }
-
-    // --- array_concat_prim ---
-
-    #[test]
-    fn test_array_concat_prim_concatenates_in_order() {
-        let mut vm = VM::new();
-        vm.arrays.push(vec![Cell::Int(1), Cell::Int(2)]);
-        vm.arrays.push(vec![Cell::Int(3), Cell::Int(4)]);
-        vm.push(Cell::Array(0)).unwrap();
-        vm.push(Cell::Array(1)).unwrap();
-        array_concat_prim(&mut vm).unwrap();
-        assert_eq!(vm.pop(), Ok(Cell::Array(2)));
-        assert_eq!(
-            vm.arrays[2],
-            vec![Cell::Int(1), Cell::Int(2), Cell::Int(3), Cell::Int(4)]
-        );
-    }
-
-    #[test]
-    fn test_array_concat_prim_allows_empty_arrays() {
-        let mut vm = VM::new();
-        vm.arrays.push(Vec::new());
-        vm.arrays.push(vec![Cell::Int(7)]);
-        vm.push(Cell::Array(0)).unwrap();
-        vm.push(Cell::Array(1)).unwrap();
-        array_concat_prim(&mut vm).unwrap();
-        assert_eq!(vm.pop(), Ok(Cell::Array(2)));
-        assert_eq!(vm.arrays[2], vec![Cell::Int(7)]);
-    }
-
-    #[test]
-    fn test_array_concat_prim_does_not_mutate_inputs() {
-        let mut vm = VM::new();
-        vm.arrays.push(vec![Cell::Int(10)]);
-        vm.arrays.push(vec![Cell::Int(20)]);
-        vm.push(Cell::Array(0)).unwrap();
-        vm.push(Cell::Array(1)).unwrap();
-        array_concat_prim(&mut vm).unwrap();
-        assert_eq!(vm.arrays[0], vec![Cell::Int(10)]);
-        assert_eq!(vm.arrays[1], vec![Cell::Int(20)]);
-    }
-
-    #[test]
-    fn test_array_concat_prim_type_error_on_non_array_rhs() {
-        let mut vm = VM::new();
-        vm.arrays.push(vec![Cell::Int(1)]);
-        vm.push(Cell::Array(0)).unwrap();
-        vm.push(Cell::Int(2)).unwrap();
-        assert!(matches!(
-            array_concat_prim(&mut vm),
             Err(TbxError::TypeError {
                 expected: "Array",
                 ..
