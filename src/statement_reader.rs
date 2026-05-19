@@ -314,14 +314,14 @@ mod tests {
 
     #[test]
     fn test_multiline_parenthesized_statement_is_single_statement() {
-        let statements = collect_statements("SET &A, TO_ARRAY(\n  1, 2,\n  3, 4\n)\n").unwrap();
+        let statements = collect_statements("SET &A, CALL(\n  1, 2,\n  3, 4\n)\n").unwrap();
         assert_eq!(statements.len(), 1);
         assert_eq!(statements[0].start_line, 1);
         assert_eq!(statements[0].end_line, 4);
         assert_eq!(statements[0].terminator, StatementTerminator::Newline);
         assert_eq!(
             statements[0].source_excerpt,
-            "SET &A, TO_ARRAY(\n  1, 2,\n  3, 4\n)"
+            "SET &A, CALL(\n  1, 2,\n  3, 4\n)"
         );
     }
 
@@ -337,7 +337,7 @@ mod tests {
 
     #[test]
     fn test_newline_inside_parens_is_not_emitted() {
-        let statements = collect_statements("SET &A, TO_ARRAY(\n  1, 2\n)\n").unwrap();
+        let statements = collect_statements("SET &A, CALL(\n  1, 2\n)\n").unwrap();
         assert!(
             statements[0]
                 .tokens
@@ -349,7 +349,7 @@ mod tests {
 
     #[test]
     fn test_int_inside_parens_stays_int_lit() {
-        let statements = collect_statements("SET &A, TO_ARRAY(\n10, 20,\n30, 40\n)\n").unwrap();
+        let statements = collect_statements("SET &A, CALL(\n10, 20,\n30, 40\n)\n").unwrap();
         assert!(
             statements[0]
                 .tokens
@@ -361,7 +361,7 @@ mod tests {
 
     #[test]
     fn test_float_at_start_of_continuation_line_is_recovered() {
-        let statements = collect_statements("SET &A, TO_ARRAY(\n1.5, 2.5,\n3.5, 4.5\n)\n").unwrap();
+        let statements = collect_statements("SET &A, CALL(\n1.5, 2.5,\n3.5, 4.5\n)\n").unwrap();
         assert!(
             statements[0]
                 .tokens
@@ -373,13 +373,13 @@ mod tests {
 
     #[test]
     fn test_semicolon_inside_parens_is_error() {
-        let err = collect_statements("SET &A, TO_ARRAY(1; 2)").unwrap_err();
+        let err = collect_statements("SET &A, CALL(1; 2)").unwrap_err();
         assert!(matches!(err.kind, TbxError::InvalidExpression { .. }));
     }
 
     #[test]
     fn test_unmatched_open_paren_is_error() {
-        let err = collect_statements("SET &A, TO_ARRAY(1, 2").unwrap_err();
+        let err = collect_statements("SET &A, CALL(1, 2").unwrap_err();
         assert!(matches!(
             err.kind,
             TbxError::InvalidExpression {
@@ -387,7 +387,7 @@ mod tests {
             }
         ));
         assert_eq!(err.line, 1);
-        assert_eq!(err.col, 17);
+        assert_eq!(err.col, 13);
     }
 
     #[test]
@@ -404,7 +404,7 @@ mod tests {
     #[test]
     fn test_hash_comment_inside_parens_can_continue() {
         let statements =
-            collect_statements("SET &A, TO_ARRAY(\n  1, 2, # first row\n  3, 4\n)\n").unwrap();
+            collect_statements("SET &A, CALL(\n  1, 2, # first row\n  3, 4\n)\n").unwrap();
         assert_eq!(statements.len(), 1);
         assert_eq!(statements[0].end_line, 4);
     }
@@ -479,7 +479,7 @@ mod tests {
     fn test_continuation_line_integer_is_not_a_label() {
         // A multi-line parenthesized statement: the `30` on the second
         // continuation line must stay a plain IntLit, not a label.
-        let statements = collect_statements("SET &A, TO_ARRAY(\n10, 20,\n30, 40\n)\n").unwrap();
+        let statements = collect_statements("SET &A, CALL(\n10, 20,\n30, 40\n)\n").unwrap();
         assert_eq!(statements.len(), 1);
         assert_eq!(statements[0].label, None);
     }
@@ -488,7 +488,7 @@ mod tests {
     fn test_continuation_line_float_is_floatlit() {
         // After issue #534, floats at the start of a continuation line are
         // emitted by the lexer as plain FloatLit tokens (no recovery needed).
-        let statements = collect_statements("SET &A, TO_ARRAY(\n1.5, 2.5,\n3.5, 4.5\n)\n").unwrap();
+        let statements = collect_statements("SET &A, CALL(\n1.5, 2.5,\n3.5, 4.5\n)\n").unwrap();
         assert!(
             statements[0]
                 .tokens
