@@ -1,4 +1,4 @@
-# lib/tests/test_to_array.tbx — TBX tests for TO_ARRAY and FROM_ARRAY primitives
+# lib/tests/test_to_array.tbx — TBX tests for TO_ARRAY, TUPLE, and ARRAY_CONCAT primitives
 USE "lib/tests/helper.tbx"
 
 # --- TUPLE: basic creation and element sum (value aggregate) ---
@@ -62,39 +62,15 @@ ASSERT @TOP_ARR[2] = 20
 SET &@TOP_ARR[2], 123
 ASSERT @TOP_ARR[2] = 123
 
-# --- FROM_ARRAY: single-element array (expression context) ---
-# With exactly one element, FROM_ARRAY pushes one value, which behaves
-# like a normal expression returning that single value.
+# --- TUPLE single-element projection (replaces FROM_ARRAY single-value use) ---
+# Issue #693: FROM_ARRAY_ONE は projection T[1] で置換。
 
-DEF FROM_ARRAY_ONE()
-  VAR ARR
-  VAR V
-  LET ARR = TO_ARRAY(42)
-  LET V = FROM_ARRAY(ARR)
-  RETURN V
+DEF TUPLE_SINGLE_PROJ()
+  VAR T
+  LET T = TUPLE(42)
+  RETURN T[1]
 END
-ASSERT FROM_ARRAY_ONE() = 42
-
-# --- FROM_ARRAY: statement call does not crash (elements are discarded
-#     by DROP_TO_MARKER, which is the expected behaviour for statement use) ---
-
-DEF FROM_ARRAY_STMT_NO_CRASH()
-  VAR ARR
-  LET ARR = TO_ARRAY(5, 10, 15)
-  FROM_ARRAY ARR
-  RETURN 1
-END
-ASSERT FROM_ARRAY_STMT_NO_CRASH() = 1
-
-# --- FROM_ARRAY: empty array as statement does not crash ---
-
-DEF FROM_ARRAY_EMPTY_STMT()
-  VAR ARR
-  LET ARR = TO_ARRAY()
-  FROM_ARRAY ARR
-  RETURN 2
-END
-ASSERT FROM_ARRAY_EMPTY_STMT() = 2
+ASSERT TUPLE_SINGLE_PROJ() = 42
 
 # --- TUPLE round-trip: element read matches original values ---
 
