@@ -440,6 +440,25 @@ impl VM {
         None
     }
 
+    /// Like `lookup`, but also finds entries with `FLAG_HIDDEN` set.
+    ///
+    /// This is used by compiler primitives (e.g. `dim_prim`) that need to resolve
+    /// internal system words that are hidden from user-level name lookup.
+    pub(crate) fn lookup_including_hidden(&self, name: &str) -> Option<Xt> {
+        let mut current = self.latest;
+        while let Some(xt) = current {
+            if xt.index() >= self.headers.len() {
+                break;
+            }
+            let entry = &self.headers[xt.index()];
+            if entry.name == name {
+                return Some(xt);
+            }
+            current = entry.prev;
+        }
+        None
+    }
+
     /// Push a value onto the data stack.
     ///
     /// # Errors
@@ -2826,7 +2845,7 @@ mod tests {
         // run_source creates a fresh Interpreter (and therefore a fresh VM), so we
         // check the absence of errors rather than the pool length directly.
         let result = run_source(
-            "DEF HAS_ARRAY()\n  VAR A\n  LET A = ARRAY(3)\n  RETURN 1\nEND\n\
+            "DEF HAS_ARRAY()\n  DIM @A[3]\n  RETURN 1\nEND\n\
              PUTDEC HAS_ARRAY()",
         );
         assert_eq!(
@@ -2841,7 +2860,7 @@ mod tests {
         // Verify that returning a frame-local Cell::Array via RETURN_VAL succeeds
         // (ownership transfer instead of escape error).
         let result = run_source(
-            "DEF MAKE_ARRAY()\n  VAR A\n  LET A = ARRAY(3)\n  RETURN A\nEND\n\
+            "DEF MAKE_ARRAY()\n  DIM @A[3]\n  RETURN A\nEND\n\
              PUTDEC ARRAY_LEN(MAKE_ARRAY())",
         );
         assert!(result.is_ok(), "expected success, got: {result:?}");
@@ -2865,7 +2884,7 @@ mod tests {
         // Verify that ownership transfer works across multiple call levels:
         // OUTER calls INNER which returns an array, then OUTER returns it.
         let result = run_source(
-            "DEF INNER()\n  VAR A\n  LET A = TO_ARRAY(10, 20, 30)\n  RETURN A\nEND\n\
+            "DEF INNER()\n  DIM @A[3]\n  RETURN A\nEND\n\
              DEF OUTER()\n  VAR B\n  LET B = INNER()\n  RETURN B\nEND\n\
              PUTDEC ARRAY_LEN(OUTER())",
         );
@@ -2894,7 +2913,7 @@ mod tests {
         // no swap occurs and the result is valid.
         let result = run_source(
             "DEF PASS_THROUGH(A)\n  RETURN A\nEND\n\
-             DEF CALLER()\n  VAR B\n  LET B = TO_ARRAY(1, 2, 3)\n  RETURN PASS_THROUGH(B)\nEND\n\
+             DEF CALLER()\n  DIM @B[3]\n  RETURN PASS_THROUGH(B)\nEND\n\
              PUTDEC ARRAY_LEN(CALLER())",
         );
         assert!(result.is_ok(), "expected success, got: {result:?}");
@@ -2906,7 +2925,7 @@ mod tests {
         // Verify that STORE of a Cell::Array into a global variable produces ArrayFrameEscape.
         let result = run_source(
             "VAR G\n\
-             DEF BAD_STORE()\n  VAR A\n  LET A = ARRAY(2)\n  SET &G, A\nEND\n\
+             DEF BAD_STORE()\n  DIM @A[2]\n  SET &G, A\nEND\n\
              BAD_STORE",
         );
         assert!(
@@ -3023,7 +3042,7 @@ mod tests {
         // global_array_pool_len = 0 (default), so all arrays created in words are frame-local.
         let result = run_source(
             "VAR gvar\n\
-             DEF BAD()\n  VAR a\n  LET a = ARRAY(3)\n  SET &gvar, a\nEND\n\
+             DEF BAD()\n  DIM @a[3]\n  SET &gvar, a\nEND\n\
              BAD",
         );
         assert!(
@@ -3140,7 +3159,7 @@ mod tests {
         let mut interp = crate::interpreter::Interpreter::new();
         interp
             .exec_source(
-                "DEF MAKE_AND_DROP()\n  VAR A\n  LET A = ARRAY(5)\n  RETURN 42\nEND\n\
+                "DEF MAKE_AND_DROP()\n  DIM @A[5]\n  RETURN 42\nEND\n\
                  PUTDEC MAKE_AND_DROP()",
             )
             .expect("exec_source failed");
@@ -3234,7 +3253,7 @@ mod tests {
         let mut interp = crate::interpreter::Interpreter::new();
         interp
             .exec_source(
-                "DEF GIVE_ARRAY()\n  VAR A\n  LET A = TO_ARRAY(1,2,3)\n  RETURN A\nEND\n\
+                "DEF GIVE_ARRAY()\n  DIM @A[3]\n  RETURN A\nEND\n\
                  PUTDEC ARRAY_LEN(GIVE_ARRAY())",
             )
             .expect("exec_source failed");

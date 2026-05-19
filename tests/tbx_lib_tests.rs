@@ -110,7 +110,7 @@ fn test_array_index_zero_is_out_of_bounds() {
         .set_base_dir(base)
         .expect("CARGO_MANIFEST_DIR is always absolute");
     // Array indices are 1-based; index 0 must return ArrayIndexOutOfBounds.
-    let src = "DEF T()\n  VAR A\n  LET A = ARRAY(3)\n  RETURN @A[0]\nEND\nT\n";
+    let src = "DEF T()\n  DIM @A[3]\n  RETURN @A[0]\nEND\nT\n";
     let err = interp
         .exec_source(src)
         .expect_err("index 0 should be out of bounds");
@@ -134,7 +134,7 @@ fn test_array_index_zero_is_out_of_bounds() {
 fn test_legacy_global_array_paren_syntax_is_not_array_access() {
     let mut interp = Interpreter::new();
     // Set up a global array and attempt to read element 2 using the old syntax.
-    let src = "VAR A\nSET &A, TO_ARRAY(10, 20)\nPUTDEC A(2)\n";
+    let src = "DIM @A[2]\nLET @A[1] = 10\nLET @A[2] = 20\nPUTDEC A(2)\n";
     let err = interp
         .exec_source(src)
         .expect_err("A(i) must not work as array value access");
@@ -158,7 +158,7 @@ fn test_legacy_local_array_paren_syntax_is_not_array_access() {
     let mut interp = Interpreter::new();
     // Define a function that sets up a local array and attempts to read
     // element 1 using the old A(i) syntax.
-    let src = "DEF F()\n  VAR A\n  LET A = ARRAY(3)\n  LET @A[1] = 10\n  RETURN A(1)\nEND\nF()\n";
+    let src = "DEF F()\n  DIM @A[3]\n  LET @A[1] = 10\n  RETURN A(1)\nEND\nF()\n";
     let err = interp
         .exec_source(src)
         .expect_err("A(i) must not work as local array value access");
@@ -181,7 +181,7 @@ fn test_legacy_local_array_paren_syntax_is_not_array_access() {
 #[test]
 fn test_legacy_global_array_paren_addr_syntax_is_not_array_addr_access() {
     let mut interp = Interpreter::new();
-    let src = "VAR A\nSET &A, TO_ARRAY(10, 20)\nSET &A(1), 99\n";
+    let src = "DIM @A[2]\nLET @A[1] = 10\nLET @A[2] = 20\nSET &A(1), 99\n";
     interp
         .exec_source(src)
         .expect_err("SET &A(i) for global variable must fail");
@@ -197,7 +197,7 @@ fn test_legacy_local_array_paren_addr_syntax_is_not_array_addr_access() {
     let mut interp = Interpreter::new();
     // Define a function that sets up a local array and attempts to write
     // element 1 using the old `SET &A(i), value` syntax.
-    let src = "DEF F()\n  VAR A\n  LET A = ARRAY(3)\n  SET &A(1), 99\n  RETURN @A[1]\nEND\nF()\n";
+    let src = "DEF F()\n  DIM @A[3]\n  SET &A(1), 99\n  RETURN @A[1]\nEND\nF()\n";
     // Either compilation or runtime must fail — &A(i) no longer writes to
     // an array element.
     interp
@@ -222,7 +222,7 @@ fn test_legacy_local_array_paren_addr_syntax_is_not_array_addr_access() {
 fn test_set_runtime_str_into_array_is_allowed() {
     let mut interp = Interpreter::new();
     // Note: void DEF is called without parentheses (statement form).
-    let src = "DEF T()\n  VAR A\n  LET A = ARRAY(1)\n  SET &@A[1], STR(\"hello\")\nEND\nT\n";
+    let src = "DEF T()\n  DIM @A[1]\n  SET &@A[1], STR(\"hello\")\nEND\nT\n";
     interp
         .exec_source(src)
         .expect("storing runtime Str in array should succeed");
@@ -233,7 +233,7 @@ fn test_set_runtime_str_into_array_is_allowed() {
 #[test]
 fn test_set_literal_str_into_array_is_allowed() {
     let mut interp = Interpreter::new();
-    let src = "VAR A\nSET &A, ARRAY(1)\nSET &@A[1], \"hello\"\nPUTSTR @A[1]\n";
+    let src = "DIM @A[1]\nSET &@A[1], \"hello\"\nPUTSTR @A[1]\n";
     interp
         .exec_source(src)
         .expect("storing string literal in array should succeed");
@@ -245,8 +245,7 @@ fn test_set_literal_str_into_array_is_allowed() {
 #[test]
 fn test_set_literal_str_into_array_inside_def_is_allowed() {
     let mut interp = Interpreter::new();
-    let src =
-        "DEF MAKE()\n  VAR A\n  SET &A, ARRAY(1)\n  SET &@A[1], \"inside\"\n  PUTSTR @A[1]\nEND\nMAKE\n";
+    let src = "DEF MAKE()\n  DIM @A[1]\n  SET &@A[1], \"inside\"\n  PUTSTR @A[1]\nEND\nMAKE\n";
     interp
         .exec_source(src)
         .expect("storing string literal in array inside DEF should succeed");
@@ -260,7 +259,8 @@ fn test_set_literal_str_into_array_inside_def_is_allowed() {
 fn test_set_runtime_str_into_global_array_survives_word_return() {
     let mut interp = Interpreter::new();
     // F is a void word; call it without parentheses to avoid DROP_TO_MARKER mismatch.
-    let src = "VAR A\nSET &A, ARRAY(1)\nDEF F()\n  SET &@A[1], STR_CONCAT(\"foo\", \"bar\")\nEND\nF\nPUTSTR @A[1]\n";
+    let src =
+        "DIM @A[1]\nDEF F()\n  SET &@A[1], STR_CONCAT(\"foo\", \"bar\")\nEND\nF\nPUTSTR @A[1]\n";
     interp
         .exec_source(src)
         .expect("storing runtime Str in global array should succeed");
@@ -273,7 +273,7 @@ fn test_set_runtime_str_into_global_array_survives_word_return() {
 fn test_set_runtime_str_into_frame_local_array_is_allowed() {
     let mut interp = Interpreter::new();
     // F is a void word; call it without parentheses to avoid DROP_TO_MARKER mismatch.
-    let src = "DEF F()\n  VAR A\n  SET &A, ARRAY(1)\n  SET &@A[1], STR(\"hello\")\n  PUTSTR @A[1]\nEND\nF\n";
+    let src = "DEF F()\n  DIM @A[1]\n  SET &@A[1], STR(\"hello\")\n  PUTSTR @A[1]\nEND\nF\n";
     interp
         .exec_source(src)
         .expect("storing runtime Str in frame-local array should succeed");
@@ -284,24 +284,22 @@ fn test_set_runtime_str_into_frame_local_array_is_allowed() {
 #[test]
 fn test_set_caller_owned_str_param_into_frame_local_array_is_allowed() {
     let mut interp = Interpreter::new();
-    let src = "DEF USE(S)\n  VAR A\n  SET &A, ARRAY(1)\n  SET &@A[1], S\n  PUTSTR @A[1]\nEND\nUSE(\"arg\")\n";
+    let src = "DEF USE(S)\n  DIM @A[1]\n  SET &@A[1], S\n  PUTSTR @A[1]\nEND\nUSE(\"arg\")\n";
     interp
         .exec_source(src)
         .expect("storing caller-owned Str param in frame-local array should succeed");
     assert_eq!(interp.take_output(), "arg");
 }
 
-/// TO_ARRAY(STR("a"), STR("b")) must now succeed (#591); the results can be
-/// read back via array indexing.
+/// Str values can be stored in array elements and read back (#591).
 #[test]
 fn test_to_array_with_str_elements_is_allowed() {
     let mut interp = Interpreter::new();
-    // Store TO_ARRAY result, read element 1 and 2 back via PUTSTR.
-    let src =
-        "VAR A\nSET &A, TO_ARRAY(STR(\"alpha\"), STR(\"beta\"))\nPUTSTR @A[1]\nPUTSTR @A[2]\n";
+    // Create an array and store string elements; read back via PUTSTR.
+    let src = "DIM @A[2]\nSET &@A[1], STR(\"alpha\")\nSET &@A[2], STR(\"beta\")\nPUTSTR @A[1]\nPUTSTR @A[2]\n";
     interp
         .exec_source(src)
-        .expect("TO_ARRAY with Str elements should succeed");
+        .expect("storing Str elements in array should succeed");
     assert_eq!(interp.take_output(), "alphabeta");
 }
 
@@ -311,7 +309,7 @@ fn test_str_ops_on_array_element_str() {
     let mut interp = Interpreter::new();
     // Use PUTSTR to exercise reading the element and passing it to string primitives.
     // STR_CONCAT output confirms the element was successfully read as Str.
-    let src = "VAR A\nSET &A, ARRAY(1)\nSET &@A[1], \"hello\"\nPUTSTR STR_CONCAT(@A[1], \"!\")\n";
+    let src = "DIM @A[1]\nSET &@A[1], \"hello\"\nPUTSTR STR_CONCAT(@A[1], \"!\")\n";
     interp
         .exec_source(src)
         .expect("string ops on array element should succeed");
@@ -323,8 +321,7 @@ fn test_str_ops_on_array_element_str() {
 fn test_set_array_into_array_is_invalid_element_type() {
     let mut interp = Interpreter::new();
     // Create an outer array and a nested array, then try to store the inner in outer.
-    let src =
-        "DEF T()\n  VAR A, B\n  LET A = ARRAY(3)\n  LET B = ARRAY(2)\n  SET &@A[1], B\nEND\nT\n";
+    let src = "DEF T()\n  DIM @A[3]\n  DIM @B[2]\n  SET &@A[1], B\nEND\nT\n";
     let err = interp
         .exec_source(src)
         .expect_err("storing Array in array element should fail");
@@ -406,7 +403,7 @@ fn test_duplicate_local_var_with_init_then_no_init_is_error() {
 #[test]
 fn test_tuple_with_array_element_is_invalid() {
     let mut interp = Interpreter::new();
-    let src = "DEF T()\n  VAR A\n  LET A = ARRAY(3)\n  RETURN TUPLE(A)\nEND\nT\n";
+    let src = "DEF T()\n  DIM @A[3]\n  RETURN TUPLE(A)\nEND\nT\n";
     let err = interp
         .exec_source(src)
         .expect_err("TUPLE(Array) should fail with invalid tuple element error");

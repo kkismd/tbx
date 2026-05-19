@@ -410,7 +410,7 @@ DEF PRINT(...)
   ENDWH
 END
 
-# return Time array (Hour, Minute, Second) in JST
+# return Time tuple (Hour, Minute, Second) in JST
 DEF HMS(T)
-  RETURN TO_ARRAY((HOUR(T) + 9) % 24, MINUTE(T), INT(SECOND(T)))
+  RETURN TUPLE((HOUR(T) + 9) % 24, MINUTE(T), INT(SECOND(T)))
 END
