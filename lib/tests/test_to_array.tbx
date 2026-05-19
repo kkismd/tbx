@@ -1,48 +1,48 @@
 # lib/tests/test_to_array.tbx — TBX tests for TO_ARRAY and FROM_ARRAY primitives
 USE "lib/tests/helper.tbx"
 
-# --- TO_ARRAY: basic creation and element access ---
+# --- TUPLE: basic creation and element sum (value aggregate) ---
 
-DEF TO_ARRAY_SUM()
-  VAR A
-  LET A = TO_ARRAY(1, 2, 3)
-  RETURN @A[1] + @A[2] + @A[3]
+DEF TUPLE_SUM()
+  VAR T
+  LET T = TUPLE(1, 2, 3)
+  RETURN T[1] + T[2] + T[3]
 END
-ASSERT TO_ARRAY_SUM() = 6
+ASSERT TUPLE_SUM() = 6
 
-# --- TO_ARRAY: element order is preserved (first arg -> index 1) ---
+# --- TUPLE: element order is preserved (first arg -> index 1) ---
 
-DEF TO_ARRAY_ORDER()
-  VAR A
-  LET A = TO_ARRAY(10, 20, 30)
-  IF @A[1] = 10
-    IF @A[2] = 20
-      IF @A[3] = 30
+DEF TUPLE_ORDER()
+  VAR T
+  LET T = TUPLE(10, 20, 30)
+  IF T[1] = 10
+    IF T[2] = 20
+      IF T[3] = 30
         RETURN 1
       ENDIF
     ENDIF
   ENDIF
   RETURN 0
 END
-ASSERT TO_ARRAY_ORDER() = 1
+ASSERT TUPLE_ORDER() = 1
 
-# --- TO_ARRAY: empty array (zero arguments) does not crash ---
+# --- TUPLE: empty tuple (zero arguments) does not crash ---
 
-DEF TO_ARRAY_EMPTY()
-  VAR A
-  LET A = TO_ARRAY()
+DEF TUPLE_EMPTY_AGG()
+  VAR T
+  LET T = TUPLE()
   RETURN 99
 END
-ASSERT TO_ARRAY_EMPTY() = 99
+ASSERT TUPLE_EMPTY_AGG() = 99
 
-# --- TO_ARRAY: single element ---
+# --- TUPLE: single element ---
 
-DEF TO_ARRAY_ONE()
-  VAR A
-  LET A = TO_ARRAY(42)
-  RETURN @A[1]
+DEF TUPLE_ONE()
+  VAR T
+  LET T = TUPLE(42)
+  RETURN T[1]
 END
-ASSERT TO_ARRAY_ONE() = 42
+ASSERT TUPLE_ONE() = 42
 
 # --- TO_ARRAY: elements can be mutated via SET ---
 
@@ -96,21 +96,21 @@ DEF FROM_ARRAY_EMPTY_STMT()
 END
 ASSERT FROM_ARRAY_EMPTY_STMT() = 2
 
-# --- Round-trip: TO_ARRAY -> element read -> matches original values ---
+# --- TUPLE round-trip: element read matches original values ---
 
-DEF ROUNDTRIP()
-  VAR A
-  LET A = TO_ARRAY(100, 200, 300)
-  IF @A[1] = 100
-    IF @A[2] = 200
-      IF @A[3] = 300
+DEF TUPLE_ROUNDTRIP()
+  VAR T
+  LET T = TUPLE(100, 200, 300)
+  IF T[1] = 100
+    IF T[2] = 200
+      IF T[3] = 300
         RETURN 1
       ENDIF
     ENDIF
   ENDIF
   RETURN 0
 END
-ASSERT ROUNDTRIP() = 1
+ASSERT TUPLE_ROUNDTRIP() = 1
 
 # --- ARRAY_CONCAT: concatenate arrays without mutating inputs ---
 

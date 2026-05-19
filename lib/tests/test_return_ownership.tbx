@@ -1,5 +1,5 @@
 # lib/tests/test_return_ownership.tbx
-# TBX tests for ownership transfer of Cell::Str and Cell::Array via RETURN.
+# TBX tests for ownership transfer of Cell::Str and Cell::Array/Tuple via RETURN.
 USE "lib/tests/helper.tbx"
 
 # --- Cell::Str ownership transfer ---
@@ -25,79 +25,91 @@ VAR TOP_LEVEL_STR
 SET &TOP_LEVEL_STR, STR_CONCAT("foo", "bar")
 ASSERT STR_EQ(TOP_LEVEL_STR, "foobar")
 
-# --- Cell::Array ownership transfer ---
+# --- Cell::Tuple ownership transfer ---
 
-# A word that creates an array locally and returns it;
-# verify length and specific elements via helper words.
+# A word that creates a tuple locally and returns it;
+# verify specific elements via helper words.
 DEF HMS(T)
-  RETURN TO_ARRAY(T / 3600, (T / 60) % 60, T % 60)
+  RETURN TUPLE(T / 3600, (T / 60) % 60, T % 60)
 END
 
 DEF HMS_HOUR(T)
-  VAR A
-  LET A = HMS(T)
-  RETURN @A[1]
+  VAR H
+  LET H = HMS(T)
+  RETURN H[1]
 END
 DEF HMS_MIN(T)
-  VAR A
-  LET A = HMS(T)
-  RETURN @A[2]
+  VAR H
+  LET H = HMS(T)
+  RETURN H[2]
 END
 DEF HMS_SEC(T)
-  VAR A
-  LET A = HMS(T)
-  RETURN @A[3]
+  VAR H
+  LET H = HMS(T)
+  RETURN H[3]
 END
 ASSERT HMS_HOUR(3661) = 1
 ASSERT HMS_MIN(3661) = 1
 ASSERT HMS_SEC(3661) = 1
 
-# Chained array RETURN (OUTER calls INNER and returns the result directly).
-DEF MAKE_ARRAY_INNER()
-  RETURN TO_ARRAY(10, 20, 30)
+# Chained tuple RETURN (OUTER calls INNER and returns the result directly).
+DEF MAKE_TUPLE_INNER()
+  RETURN TUPLE(10, 20, 30)
 END
 
-DEF MAKE_ARRAY_OUTER()
-  VAR B
-  LET B = MAKE_ARRAY_INNER()
-  RETURN B
+DEF MAKE_TUPLE_OUTER()
+  VAR T
+  LET T = MAKE_TUPLE_INNER()
+  RETURN T
 END
 
-DEF CHECK_CHAINED_ARRAY()
+DEF CHECK_CHAINED_TUPLE()
   VAR R
-  LET R = MAKE_ARRAY_OUTER()
-  IF @R[1] = 10
-    IF @R[2] = 20
-      IF @R[3] = 30
+  LET R = MAKE_TUPLE_OUTER()
+  IF R[1] = 10
+    IF R[2] = 20
+      IF R[3] = 30
         RETURN 1
       ENDIF
     ENDIF
   ENDIF
   RETURN 0
 END
-ASSERT CHECK_CHAINED_ARRAY() = 1
+ASSERT CHECK_CHAINED_TUPLE() = 1
 
-# ARRAY_LEN on a returned frame-local array.
+# A word that returns a 3-element tuple; verify all elements.
 DEF MAKE_THREE()
-  RETURN TO_ARRAY(1, 2, 3)
+  RETURN TUPLE(1, 2, 3)
 END
-ASSERT ARRAY_LEN(MAKE_THREE()) = 3
+DEF CHECK_MAKE_THREE()
+  VAR T
+  LET T = MAKE_THREE()
+  IF T[1] = 1
+    IF T[2] = 2
+      IF T[3] = 3
+        RETURN 1
+      ENDIF
+    ENDIF
+  ENDIF
+  RETURN 0
+END
+ASSERT CHECK_MAKE_THREE() = 1
 
-# A word that creates multiple local arrays but returns only one;
-# the non-returned array is freed and the returned one is valid.
+# A word that creates multiple local tuples but returns only one;
+# the non-returned tuple is freed and the returned one is valid.
 DEF RETURN_SECOND()
   VAR A
   VAR B
-  LET A = TO_ARRAY(1, 2)
-  LET B = TO_ARRAY(3, 4)
+  LET A = TUPLE(1, 2)
+  LET B = TUPLE(3, 4)
   RETURN B
 END
 
 DEF CHECK_RETURN_SECOND()
   VAR R
   LET R = RETURN_SECOND()
-  IF @R[1] = 3
-    IF @R[2] = 4
+  IF R[1] = 3
+    IF R[2] = 4
       RETURN 1
     ENDIF
   ENDIF
