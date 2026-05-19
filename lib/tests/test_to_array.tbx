@@ -1,4 +1,4 @@
-# lib/tests/test_to_array.tbx — TBX tests for TO_ARRAY and TUPLE primitives
+# lib/tests/test_to_array.tbx — TBX tests for TUPLE primitive
 USE "lib/tests/helper.tbx"
 
 # --- TUPLE: basic creation and element sum (value aggregate) ---
@@ -43,24 +43,6 @@ DEF TUPLE_ONE()
   RETURN T[1]
 END
 ASSERT TUPLE_ONE() = 42
-
-# --- TO_ARRAY: elements can be mutated via SET ---
-
-DEF TO_ARRAY_MUTATE()
-  VAR A
-  LET A = TO_ARRAY(1, 2, 3)
-  SET &@A[2], 99
-  RETURN @A[1] + @A[2] + @A[3]
-END
-ASSERT TO_ARRAY_MUTATE() = 103
-
-# --- Top-level global array variable supports @A[I] / &@A[I] ---
-
-VAR TOP_ARR
-SET &TOP_ARR, TO_ARRAY(10, 20)
-ASSERT @TOP_ARR[2] = 20
-SET &@TOP_ARR[2], 123
-ASSERT @TOP_ARR[2] = 123
 
 # --- TUPLE single-element projection (replaces FROM_ARRAY single-value use) ---
 # Issue #693: FROM_ARRAY_ONE は projection T[1] で置換。
