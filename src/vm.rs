@@ -440,18 +440,22 @@ impl VM {
         None
     }
 
-    /// Like `lookup`, but also finds entries with `FLAG_HIDDEN` set.
+    /// Returns the first entry that is **both** `FLAG_HIDDEN` and `FLAG_SYSTEM`
+    /// and has the given name.
     ///
     /// This is used by compiler primitives (e.g. `dim_prim`) that need to resolve
-    /// internal system words that are hidden from user-level name lookup.
-    pub(crate) fn lookup_including_hidden(&self, name: &str) -> Option<Xt> {
+    /// internal system words that are hidden from user-level name lookup, without
+    /// accidentally matching a user-defined word of the same name.
+    pub(crate) fn lookup_hidden_system(&self, name: &str) -> Option<Xt> {
         let mut current = self.latest;
         while let Some(xt) = current {
             if xt.index() >= self.headers.len() {
                 break;
             }
             let entry = &self.headers[xt.index()];
-            if entry.name == name {
+            let is_hidden = entry.flags & crate::dict::FLAG_HIDDEN != 0;
+            let is_system = entry.flags & crate::dict::FLAG_SYSTEM != 0;
+            if entry.name == name && is_hidden && is_system {
                 return Some(xt);
             }
             current = entry.prev;
@@ -1333,6 +1337,40 @@ mod tests {
         // With self_word=None, finds neither.
         assert_eq!(vm.lookup_including_self("FACT", None), None);
         assert_eq!(vm.lookup_including_self("HELPER", None), None);
+    }
+
+    #[test]
+    fn test_lookup_hidden_system_returns_only_hidden_system_entry() {
+        // lookup_hidden_system must return an entry only when both FLAG_HIDDEN and
+        // FLAG_SYSTEM are set.  A user-visible word with the same name must not be
+        // returned, even if it is more recently registered.
+        use crate::dict::{FLAG_HIDDEN, FLAG_SYSTEM};
+        let mut vm = VM::new();
+        crate::primitives::register_all(&mut vm);
+
+        // Locate the built-in hidden+system ARRAY entry registered by register_all.
+        let system_xt = vm.lookup_hidden_system("ARRAY").unwrap();
+
+        // Register a plain (visible, non-system) user word named "ARRAY".
+        vm.register(WordEntry::new_word("ARRAY", 999));
+        let user_xt = vm.lookup("ARRAY").unwrap();
+        assert_ne!(user_xt, system_xt);
+
+        // lookup_hidden_system must still return the hidden system entry, not the user word.
+        assert_eq!(vm.lookup_hidden_system("ARRAY"), Some(system_xt));
+
+        // Register a hidden-only (non-system) word — must not be returned.
+        vm.register(WordEntry::new_word("ARRAY", 888));
+        vm.headers.last_mut().unwrap().flags |= FLAG_HIDDEN;
+        assert_eq!(vm.lookup_hidden_system("ARRAY"), Some(system_xt));
+
+        // Register a system-only (non-hidden) word — must not be returned.
+        vm.register(WordEntry::new_word("ARRAY", 777));
+        vm.headers.last_mut().unwrap().flags |= FLAG_SYSTEM;
+        assert_eq!(vm.lookup_hidden_system("ARRAY"), Some(system_xt));
+
+        // A name that does not exist must return None.
+        assert_eq!(vm.lookup_hidden_system("NO_SUCH_WORD"), None);
     }
 
     #[test]

@@ -796,7 +796,7 @@ pub fn dim_prim(vm: &mut VM) -> Result<(), TbxError> {
                     name: "LIT".to_string(),
                 })?;
         let array_xt = vm
-            .lookup_including_hidden("ARRAY")
+            .lookup_hidden_system("ARRAY")
             .ok_or(TbxError::UndefinedSymbol {
                 name: "ARRAY".to_string(),
             })?;
@@ -2233,7 +2233,7 @@ pub fn register_all(vm: &mut VM) {
     // Array primitives.
     // ARRAY is a hidden system entry used internally by the DIM @A[n] compiler.
     // It is NOT a user-facing surface primitive; user code uses DIM @A[n] instead.
-    // dim_prim looks this up via vm.lookup_including_hidden("ARRAY") to emit its Xt
+    // dim_prim looks this up via vm.lookup_hidden_system("ARRAY") to emit its Xt
     // into the compiled word body.
     let mut array_entry = WordEntry::new_primitive("ARRAY", array_prim);
     array_entry.flags = FLAG_SYSTEM | FLAG_HIDDEN;
