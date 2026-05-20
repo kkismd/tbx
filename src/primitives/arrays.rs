@@ -15,31 +15,25 @@ pub(super) fn check_array_element_value(value: &Cell) -> Result<(), TbxError> {
     }
 }
 
-/// TO_ARRAY — collect N values from the stack into a new array.
+/// Internal primitive used by the `DIM @A[n]` compiler to allocate an array.
 ///
-/// The returned `Cell::Array` is bound to the current frame and must not escape.
-/// TO_ARRAY with zero arguments (`TO_ARRAY()`) produces an empty array.
-pub fn to_array_prim(vm: &mut VM) -> Result<(), TbxError> {
-    // Pop the arity pushed by the compiler.
+/// Pops `Cell::Int(n)` (n > 0) from the stack, allocates `n` `Cell::None` slots
+/// in `vm.arrays`, and pushes `Cell::Array(pool_idx)` as the handle.
+///
+/// This function is NOT registered as a user-facing surface primitive.
+/// It is registered under a hidden system entry so that `dim_prim` can emit its
+/// Xt into the compiled word body at compile time.
+pub(super) fn array_prim(vm: &mut VM) -> Result<(), TbxError> {
     let n = vm.pop_int()?;
-    if n < 0 {
+    if n <= 0 {
         return Err(TbxError::InvalidArgument {
-            message: format!("TO_ARRAY arity must be non-negative, got {n}"),
+            message: format!("ARRAY size must be positive, got {n}"),
         });
     }
-    let count = n as usize;
-    // Pop `count` values in reverse order, then reverse to restore original order.
-    let mut elems: Vec<Cell> = Vec::with_capacity(count);
-    for _ in 0..count {
-        let elem = vm.pop()?;
-        // Reject nested arrays; Cell::Str(Rc<str>) is now allowed (#591).
-        check_array_element_value(&elem)?;
-        elems.push(elem);
-    }
-    elems.reverse();
-    let pool_idx = vm.arrays.len();
-    vm.arrays.push(elems);
-    vm.push(Cell::Array(pool_idx))?;
+    let size = n as usize;
+    let idx = vm.arrays.len();
+    vm.arrays.push(vec![Cell::None; size]);
+    vm.push(Cell::Array(idx))?;
     Ok(())
 }
 
@@ -69,58 +63,6 @@ pub fn to_tuple_prim(vm: &mut VM) -> Result<(), TbxError> {
     // Cell::new_tuple validates element types and returns an error for forbidden types.
     let tuple = Cell::new_tuple(elems)?;
     vm.push(tuple)?;
-    Ok(())
-}
-
-/// FROM_ARRAY — expand an array onto the stack.
-///
-/// Pops `Cell::Array(pool_idx)` from the stack and pushes every element of the
-/// array onto the stack in order (index 0 first).
-///
-/// Stack before call: `[Cell::Array(pool_idx)]`
-/// Stack after call:  `[elem0, elem1, ..., elem(n-1)]`
-pub fn from_array_prim(vm: &mut VM) -> Result<(), TbxError> {
-    let pool_idx = match vm.pop()? {
-        Cell::Array(idx) => idx,
-        other => {
-            return Err(TbxError::TypeError {
-                expected: "Array",
-                got: other.type_name(),
-            })
-        }
-    };
-    let elems = vm
-        .arrays
-        .get(pool_idx)
-        .ok_or(TbxError::IndexOutOfBounds {
-            index: pool_idx,
-            size: vm.arrays.len(),
-        })?
-        .clone();
-    for elem in elems {
-        vm.push(elem)?;
-    }
-    Ok(())
-}
-
-/// ARRAY — create an array of N elements and push its handle onto the stack.
-///
-/// Pops `Cell::Int(n)` from the stack (n > 0), pushes `n` `Cell::None` elements
-/// into `vm.arrays`, and pushes `Cell::Array(pool_idx)` as the handle.
-///
-/// Arrays created inside a word are bound to that stack frame and freed automatically
-/// when the owning word returns (EXIT/RETURN_VAL truncates the pool).
-pub fn array_prim(vm: &mut VM) -> Result<(), TbxError> {
-    let n = vm.pop_int()?;
-    if n <= 0 {
-        return Err(TbxError::InvalidArgument {
-            message: format!("ARRAY size must be positive, got {n}"),
-        });
-    }
-    let size = n as usize;
-    let idx = vm.arrays.len();
-    vm.arrays.push(vec![Cell::None; size]);
-    vm.push(Cell::Array(idx))?;
     Ok(())
 }
 
@@ -290,7 +232,6 @@ pub fn array_len_prim(vm: &mut VM) -> Result<(), TbxError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::cell::Cell;
 
     // --- tuple_get_prim ---
 
@@ -360,38 +301,5 @@ mod tests {
                 ..
             })
         ));
-    }
-
-    // --- to_array_prim ---
-
-    /// Verify that TO_ARRAY accepts Cell::Str(Rc<str>) as an array element.
-    ///
-    /// Cell::Str is Rc<str>-backed (#591); storing a string in an array element
-    /// is allowed because the Rc handle keeps the string alive independently of
-    /// any stack frame.  This test confirms that to_array_prim does not reject
-    /// Cell::Str values with InvalidArrayElement.
-    #[test]
-    fn test_to_array_accepts_str_elements() {
-        let mut vm = VM::new();
-
-        // Push two string elements followed by the arity.
-        vm.push(Cell::string("hello")).unwrap();
-        vm.push(Cell::string("world")).unwrap();
-        vm.push(Cell::Int(2)).unwrap();
-
-        to_array_prim(&mut vm).unwrap();
-
-        // The resulting Cell::Array handle should be on the stack.
-        let result = vm.pop().unwrap();
-        let pool_idx = match result {
-            Cell::Array(idx) => idx,
-            other => panic!("expected Cell::Array, got {:?}", other),
-        };
-
-        // The array pool entry must contain the two string elements in order.
-        let arr = &vm.arrays[pool_idx];
-        assert_eq!(arr.len(), 2);
-        assert_eq!(arr[0], Cell::string("hello"));
-        assert_eq!(arr[1], Cell::string("world"));
     }
 }

@@ -1433,45 +1433,6 @@ mod tests {
     }
 
     #[test]
-    fn test_exec_source_top_level_global_array_element_set() {
-        let mut interp = Interpreter::new();
-        let src = "\
-VAR A
-SET &A, TO_ARRAY(10, 20)
-SET &@A[2], 123
-PUTDEC @A[2]";
-        interp.exec_source(src).unwrap();
-        assert_eq!(interp.take_output(), "123");
-    }
-
-    #[test]
-    fn test_exec_source_top_level_global_array_element_read() {
-        let mut interp = Interpreter::new();
-        let src = "\
-VAR A
-SET &A, TO_ARRAY(10, 20)
-PUTDEC @A[2]";
-        interp.exec_source(src).unwrap();
-        assert_eq!(interp.take_output(), "20");
-    }
-
-    #[test]
-    fn test_exec_source_multiline_to_array() {
-        let mut interp = Interpreter::new();
-        let src = "\
-VAR A
-SET &A, TO_ARRAY(
-  10, 20,
-  30, 40
-)
-PUTDEC ARRAY_LEN(A)
-PUTSTR \":\"
-PUTDEC @A[3]";
-        interp.exec_source(src).unwrap();
-        assert_eq!(interp.take_output(), "4:30");
-    }
-
-    #[test]
     fn test_exec_source_multiline_str_concat() {
         let mut interp = Interpreter::new();
         let src = "\
@@ -2876,7 +2837,7 @@ PUTDEC 99
     #[test]
     fn test_compile_program_top_level_array_store_to_global_var() {
         let mut interp = Interpreter::new();
-        let src = "VAR A\nSET &A, ARRAY(1)\nPUTDEC ARRAY_LEN(A)";
+        let src = "DIM @A[1]\nPUTDEC ARRAY_LEN(A)";
         interp.compile_program(src).unwrap();
         assert_eq!(interp.take_output(), "1");
     }
@@ -2894,14 +2855,8 @@ PUTSTR S"#;
     #[test]
     fn test_compile_program_word_can_copy_top_level_array_global() {
         let mut interp = Interpreter::new();
-        let src = r#"VAR A
-VAR B
-DEF COPY_ARRAY()
-  SET &B, A
-END
-SET &A, ARRAY(1)
-COPY_ARRAY
-PUTDEC ARRAY_LEN(B)"#;
+        let src =
+            "DIM @A[1]\nVAR B\nDEF COPY_ARRAY()\n  SET &B, A\nEND\nCOPY_ARRAY\nPUTDEC ARRAY_LEN(B)";
         interp.compile_program(src).unwrap();
         assert_eq!(interp.take_output(), "1");
     }
@@ -4741,23 +4696,6 @@ END";
     // --- compile_program: StatementReader-based multi-line expression support (issue #520) ---
 
     #[test]
-    fn test_compile_program_multiline_to_array() {
-        // compile_program must handle multi-line TO_ARRAY(...) at ground level.
-        let mut interp = Interpreter::new();
-        let src = "\
-VAR A
-SET &A, TO_ARRAY(
-  10, 20,
-  30, 40
-)
-PUTDEC ARRAY_LEN(A)
-PUTSTR \":\"
-PUTDEC @A[3]";
-        interp.compile_program(src).unwrap();
-        assert_eq!(interp.take_output(), "4:30");
-    }
-
-    #[test]
     fn test_compile_program_multiline_str_concat() {
         // compile_program must handle multi-line STR_CONCAT(...) at ground level.
         let mut interp = Interpreter::new();
@@ -4832,35 +4770,6 @@ SHOW 0";
             .compile_program("PUTDEC 7")
             .expect("interpreter should be reusable after reader error rollback");
         assert_eq!(interp.take_output(), "7");
-    }
-
-    #[test]
-    fn test_compile_program_and_exec_source_same_multiline_boundary() {
-        // exec_source and compile_program must produce identical results for the
-        // same multi-line expression.  This verifies that the StatementReader-based
-        // migration has not introduced a boundary difference.
-        let src = "\
-VAR A
-SET &A, TO_ARRAY(
-  1, 2,
-  3
-)
-PUTDEC ARRAY_LEN(A)
-PUTDEC @A[2]";
-
-        let mut interp1 = Interpreter::new();
-        interp1.exec_source(src).unwrap();
-        let out1 = interp1.take_output();
-
-        let mut interp2 = Interpreter::new();
-        interp2.compile_program(src).unwrap();
-        let out2 = interp2.take_output();
-
-        assert_eq!(
-            out1, out2,
-            "exec_source and compile_program must produce the same output for multi-line expressions"
-        );
-        assert_eq!(out1, "32");
     }
 
     #[test]

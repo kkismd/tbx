@@ -1,6 +1,6 @@
 use crate::cell::{Cell, CompileEntry};
 use crate::constants::MAX_DICTIONARY_CELLS;
-use crate::dict::{EntryKind, WordEntry, FLAG_IMMEDIATE, FLAG_SYSTEM};
+use crate::dict::{EntryKind, WordEntry, FLAG_HIDDEN, FLAG_IMMEDIATE, FLAG_SYSTEM};
 use crate::error::TbxError;
 use crate::expr::ExprCompiler;
 use crate::vm::{CompileState, VM};
@@ -795,9 +795,11 @@ pub fn dim_prim(vm: &mut VM) -> Result<(), TbxError> {
                 .ok_or(TbxError::UndefinedSymbol {
                     name: "LIT".to_string(),
                 })?;
-        let array_xt = vm.lookup("ARRAY").ok_or(TbxError::UndefinedSymbol {
-            name: "ARRAY".to_string(),
-        })?;
+        let array_xt = vm
+            .lookup_hidden_system("ARRAY")
+            .ok_or(TbxError::UndefinedSymbol {
+                name: "ARRAY".to_string(),
+            })?;
         let set_xt = vm.lookup("SET").ok_or(TbxError::UndefinedSymbol {
             name: "SET".to_string(),
         })?;
@@ -2229,22 +2231,22 @@ pub fn register_all(vm: &mut VM) {
     ));
 
     // Array primitives.
-    // ARRAY creates an array; ARRAY_GET reads an element (`@A[i]` compiles to
+    // ARRAY is a hidden system entry used internally by the DIM @A[n] compiler.
+    // It is NOT a user-facing surface primitive; user code uses DIM @A[n] instead.
+    // dim_prim looks this up via vm.lookup_hidden_system("ARRAY") to emit its Xt
+    // into the compiled word body.
+    let mut array_entry = WordEntry::new_primitive("ARRAY", array_prim);
+    array_entry.flags = FLAG_SYSTEM | FLAG_HIDDEN;
+    vm.register(array_entry);
+    // ARRAY_GET reads an element (`@A[i]` compiles to
     // `<array handle read> <index expr> ARRAY_GET`); ARRAY_ADDR computes an element
     // address (`&@A[i]` compiles to `<array handle read> <index expr> ARRAY_ADDR`).
-    // TO_ARRAY packs stack values into a new array; FROM_ARRAY expands one onto the stack.
     // ARRAY_LEN returns the length of an array.
     // TUPLE packs stack values into a new immutable Cell::Tuple.
-    let mut to_array_entry = WordEntry::new_primitive("TO_ARRAY", to_array_prim);
-    to_array_entry.is_variadic = true;
-    // arity stays 0: TO_ARRAY accepts zero or more arguments.
-    vm.register(to_array_entry);
     let mut tuple_entry = WordEntry::new_primitive("TUPLE", to_tuple_prim);
     tuple_entry.is_variadic = true;
     // arity stays 0: TUPLE accepts zero or more arguments (empty tuple is allowed).
     vm.register(tuple_entry);
-    vm.register(WordEntry::new_primitive("FROM_ARRAY", from_array_prim));
-    vm.register(WordEntry::new_primitive("ARRAY", array_prim));
     vm.register(WordEntry::new_primitive("ARRAY_LEN", array_len_prim));
     let mut array_get_entry = WordEntry::new_primitive("ARRAY_GET", array_get_prim);
     array_get_entry.flags = FLAG_SYSTEM;
@@ -3514,8 +3516,8 @@ mod tests {
     #[test]
     fn test_putval_array_error() {
         let mut vm = VM::new();
-        vm.push(Cell::Int(3)).unwrap();
-        array_prim(&mut vm).unwrap();
+        vm.arrays.push(vec![Cell::None; 3]);
+        vm.push(Cell::Array(0)).unwrap();
         assert!(matches!(
             putval_prim(&mut vm),
             Err(TbxError::TypeError { .. })
@@ -5950,63 +5952,6 @@ mod tests {
         assert!(vm.output_buffer.is_empty());
     }
 
-    // --- array_prim ---
-
-    #[test]
-    fn test_array_prim_creates_array() {
-        let mut vm = VM::new();
-        vm.push(Cell::Int(3)).unwrap();
-        array_prim(&mut vm).unwrap();
-        // Stack should contain Cell::Array(0) — first pool slot.
-        assert_eq!(vm.pop(), Ok(Cell::Array(0)));
-        // The pool should have one entry of length 3.
-        assert_eq!(vm.arrays.len(), 1);
-        assert_eq!(vm.arrays[0].len(), 3);
-    }
-
-    #[test]
-    fn test_array_prim_initialises_to_none() {
-        let mut vm = VM::new();
-        vm.push(Cell::Int(2)).unwrap();
-        array_prim(&mut vm).unwrap();
-        vm.pop().unwrap(); // discard handle
-        assert_eq!(vm.arrays[0][0], Cell::None);
-        assert_eq!(vm.arrays[0][1], Cell::None);
-    }
-
-    #[test]
-    fn test_array_prim_size_zero_returns_error() {
-        let mut vm = VM::new();
-        vm.push(Cell::Int(0)).unwrap();
-        assert!(matches!(
-            array_prim(&mut vm),
-            Err(TbxError::InvalidArgument { .. })
-        ));
-    }
-
-    #[test]
-    fn test_array_prim_negative_size_returns_error() {
-        let mut vm = VM::new();
-        vm.push(Cell::Int(-1)).unwrap();
-        assert!(matches!(
-            array_prim(&mut vm),
-            Err(TbxError::InvalidArgument { .. })
-        ));
-    }
-
-    #[test]
-    fn test_array_prim_multiple_arrays_get_distinct_indices() {
-        let mut vm = VM::new();
-        vm.push(Cell::Int(2)).unwrap();
-        array_prim(&mut vm).unwrap();
-        vm.push(Cell::Int(4)).unwrap();
-        array_prim(&mut vm).unwrap();
-        let second = vm.pop().unwrap();
-        let first = vm.pop().unwrap();
-        assert_eq!(first, Cell::Array(0));
-        assert_eq!(second, Cell::Array(1));
-    }
-
     // --- array_get_prim ---
 
     #[test]
@@ -6257,84 +6202,6 @@ mod tests {
         assert_eq!(vm.pop(), Ok(Cell::Int(77)));
     }
 
-    // --- to_array_prim ---
-
-    #[test]
-    fn test_to_array_prim_basic() {
-        // Stack: [1, 2, 3, Int(3)] → Cell::Array(0) with elems [1, 2, 3]
-        let mut vm = VM::new();
-        vm.push(Cell::Int(1)).unwrap();
-        vm.push(Cell::Int(2)).unwrap();
-        vm.push(Cell::Int(3)).unwrap();
-        vm.push(Cell::Int(3)).unwrap(); // arity
-        to_array_prim(&mut vm).unwrap();
-        assert_eq!(vm.pop(), Ok(Cell::Array(0)));
-        assert_eq!(vm.arrays[0], vec![Cell::Int(1), Cell::Int(2), Cell::Int(3)]);
-    }
-
-    #[test]
-    fn test_to_array_prim_empty() {
-        // Stack: [Int(0)] → Cell::Array(0) with empty vec
-        let mut vm = VM::new();
-        vm.push(Cell::Int(0)).unwrap(); // arity = 0
-        to_array_prim(&mut vm).unwrap();
-        assert_eq!(vm.pop(), Ok(Cell::Array(0)));
-        assert!(vm.arrays[0].is_empty());
-    }
-
-    #[test]
-    fn test_to_array_prim_single_element() {
-        // Stack: [Int(42), Int(1)] → Cell::Array(0) with elems [42]
-        let mut vm = VM::new();
-        vm.push(Cell::Int(42)).unwrap();
-        vm.push(Cell::Int(1)).unwrap(); // arity
-        to_array_prim(&mut vm).unwrap();
-        assert_eq!(vm.pop(), Ok(Cell::Array(0)));
-        assert_eq!(vm.arrays[0], vec![Cell::Int(42)]);
-    }
-
-    #[test]
-    fn test_to_array_prim_preserves_order() {
-        // Ensure push order: first arg (10) → index 0, last arg (30) → index 2.
-        let mut vm = VM::new();
-        vm.push(Cell::Int(10)).unwrap();
-        vm.push(Cell::Int(20)).unwrap();
-        vm.push(Cell::Int(30)).unwrap();
-        vm.push(Cell::Int(3)).unwrap(); // arity
-        to_array_prim(&mut vm).unwrap();
-        let _ = vm.pop().unwrap(); // discard Cell::Array handle
-        assert_eq!(vm.arrays[0][0], Cell::Int(10));
-        assert_eq!(vm.arrays[0][1], Cell::Int(20));
-        assert_eq!(vm.arrays[0][2], Cell::Int(30));
-    }
-
-    #[test]
-    fn test_to_array_prim_negative_arity_returns_error() {
-        let mut vm = VM::new();
-        vm.push(Cell::Int(-1)).unwrap(); // negative arity
-        assert!(matches!(
-            to_array_prim(&mut vm),
-            Err(TbxError::InvalidArgument { .. })
-        ));
-    }
-
-    #[test]
-    fn test_to_array_prim_multiple_calls_get_distinct_pool_indices() {
-        let mut vm = VM::new();
-        // First call: TO_ARRAY(1) → Array(0)
-        vm.push(Cell::Int(1)).unwrap();
-        vm.push(Cell::Int(1)).unwrap();
-        to_array_prim(&mut vm).unwrap();
-        // Second call: TO_ARRAY(2) → Array(1)
-        vm.push(Cell::Int(2)).unwrap();
-        vm.push(Cell::Int(1)).unwrap();
-        to_array_prim(&mut vm).unwrap();
-        let second = vm.pop().unwrap();
-        let first = vm.pop().unwrap();
-        assert_eq!(first, Cell::Array(0));
-        assert_eq!(second, Cell::Array(1));
-    }
-
     // --- to_tuple_prim ---
 
     #[test]
@@ -6431,62 +6298,6 @@ mod tests {
         vm.push(Cell::Int(0)).unwrap(); // arity = 0
         to_tuple_prim(&mut vm).unwrap();
         assert_eq!(vm.pop(), Ok(Cell::Tuple(vec![])));
-    }
-
-    // --- from_array_prim ---
-
-    #[test]
-    fn test_from_array_prim_pushes_elements_in_order() {
-        // Array [7, 8, 9]: FROM_ARRAY should push 7, 8, 9 (7 first, 9 last/top).
-        let mut vm = VM::new();
-        vm.arrays
-            .push(vec![Cell::Int(7), Cell::Int(8), Cell::Int(9)]);
-        vm.push(Cell::Array(0)).unwrap();
-        from_array_prim(&mut vm).unwrap();
-        // Stack should now be [7, 8, 9] (top = 9).
-        assert_eq!(vm.pop(), Ok(Cell::Int(9)));
-        assert_eq!(vm.pop(), Ok(Cell::Int(8)));
-        assert_eq!(vm.pop(), Ok(Cell::Int(7)));
-    }
-
-    #[test]
-    fn test_from_array_prim_empty_array_pushes_nothing() {
-        let mut vm = VM::new();
-        vm.arrays.push(vec![]);
-        let stack_depth_before = vm.data_stack.len();
-        vm.push(Cell::Array(0)).unwrap();
-        from_array_prim(&mut vm).unwrap();
-        // Stack depth must be equal to before (the handle was consumed, nothing added).
-        assert_eq!(vm.data_stack.len(), stack_depth_before);
-    }
-
-    #[test]
-    fn test_from_array_prim_type_error_on_non_array() {
-        // Passing an Int where Array is expected must return TypeError.
-        let mut vm = VM::new();
-        vm.push(Cell::Int(42)).unwrap();
-        assert!(matches!(
-            from_array_prim(&mut vm),
-            Err(TbxError::TypeError {
-                expected: "Array",
-                ..
-            })
-        ));
-    }
-
-    #[test]
-    fn test_from_array_prim_to_array_roundtrip() {
-        // TO_ARRAY then FROM_ARRAY must restore the original elements.
-        let mut vm = VM::new();
-        vm.push(Cell::Int(100)).unwrap();
-        vm.push(Cell::Int(200)).unwrap();
-        vm.push(Cell::Int(300)).unwrap();
-        vm.push(Cell::Int(3)).unwrap(); // arity
-        to_array_prim(&mut vm).unwrap(); // → Cell::Array(0) on stack
-        from_array_prim(&mut vm).unwrap(); // consume Array, push 100, 200, 300
-        assert_eq!(vm.pop(), Ok(Cell::Int(300)));
-        assert_eq!(vm.pop(), Ok(Cell::Int(200)));
-        assert_eq!(vm.pop(), Ok(Cell::Int(100)));
     }
 
     // --- int_prim ---

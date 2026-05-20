@@ -58,10 +58,10 @@ DEF STR_INIT()
 END
 ASSERT STR_INIT() = 5
 
-# --- VAR with ARRAY initializer ---
+# --- DIM @A[n] array creation and element access ---
 
 DEF ARRAY_INIT()
-  VAR A = ARRAY(3)
+  DIM @A[3]
   LET @A[1] = 10
   LET @A[2] = 20
   LET @A[3] = 30
