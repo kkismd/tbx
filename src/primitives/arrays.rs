@@ -223,6 +223,33 @@ pub fn tuple_len_prim(vm: &mut VM) -> Result<(), TbxError> {
     }
 }
 
+/// ARRAY_STORE_LOCAL — store an array handle into a local (StackAddr) variable slot.
+///
+/// This is an internal system primitive used exclusively by the `DIM @A[n]` compiler
+/// to initialise a local array binding.  It is intentionally hidden from user code.
+///
+/// Stack convention: `[..., StackAddr(idx), Cell::Array(pool_idx)]` → ARRAY_STORE_LOCAL → `[...]`
+///
+/// Unlike `SET`, this primitive bypasses the surface-language prohibition on
+/// assigning whole-array handles to scalar variables.  Only the `DIM` compiler
+/// may emit its Xt.
+pub(super) fn array_store_local_prim(vm: &mut VM) -> Result<(), TbxError> {
+    let value = vm.pop()?;
+    let addr = vm.pop()?;
+    match addr {
+        Cell::StackAddr(idx) => {
+            vm.local_write(idx, value)?;
+        }
+        _ => {
+            return Err(TbxError::TypeError {
+                expected: "StackAddr for ARRAY_STORE_LOCAL",
+                got: "non-StackAddr",
+            });
+        }
+    }
+    Ok(())
+}
+
 /// ARRAY_LEN — return the length of an array.
 ///
 /// Pops `Cell::Array(pool_idx)` from the stack and pushes the number of elements

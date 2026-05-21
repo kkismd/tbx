@@ -103,19 +103,39 @@ pub fn fetch_prim(vm: &mut VM) -> Result<(), TbxError> {
     }
 }
 
+/// Check that `value` is not a whole-array handle being written to a scalar variable.
+///
+/// `Cell::Array` is forbidden as a value in scalar variable writes (`DictAddr` or
+/// `StackAddr` destinations).  Arrays are not first-class values on the surface
+/// language; only element-level access via `Cell::ArrayAddr` is permitted.
+fn check_scalar_write_value(value: &Cell) -> Result<(), TbxError> {
+    if matches!(value, Cell::Array(_)) {
+        return Err(TbxError::TypeError {
+            expected: "non-array value for scalar variable write",
+            got: "Array",
+        });
+    }
+    Ok(())
+}
+
 /// STORE — pop addr (top) then value (below), and store value at addr.
 ///
 /// Stack convention: `[..., value, addr]` → STORE → `[...]`
+///
+/// Storing a whole `Cell::Array` into a scalar variable (`DictAddr` or `StackAddr`)
+/// is rejected with a TypeError; element-level writes via `Cell::ArrayAddr` are allowed.
 pub fn store_prim(vm: &mut VM) -> Result<(), TbxError> {
     let addr = vm.pop()?;
     let value = vm.pop()?;
     match addr {
         Cell::DictAddr(a) => {
+            check_scalar_write_value(&value)?;
             check_dict_reference_write(vm, &value)?;
             vm.dict_write_at(a, value)?;
             Ok(())
         }
         Cell::StackAddr(a) => {
+            check_scalar_write_value(&value)?;
             vm.local_write(a, value)?;
             Ok(())
         }
@@ -134,16 +154,21 @@ pub fn store_prim(vm: &mut VM) -> Result<(), TbxError> {
 /// Designed for the `SET &var, value` statement pattern where `&var` is
 /// pushed before `value` (left-to-right argument evaluation via comma).
 /// Stack convention: `[..., addr, value]` → SET → `[...]`
+///
+/// Storing a whole `Cell::Array` into a scalar variable (`DictAddr` or `StackAddr`)
+/// is rejected with a TypeError; element-level writes via `Cell::ArrayAddr` are allowed.
 pub fn set_prim(vm: &mut VM) -> Result<(), TbxError> {
     let value = vm.pop()?;
     let addr = vm.pop()?;
     match addr {
         Cell::DictAddr(a) => {
+            check_scalar_write_value(&value)?;
             check_dict_reference_write(vm, &value)?;
             vm.dict_write_at(a, value)?;
             Ok(())
         }
         Cell::StackAddr(a) => {
+            check_scalar_write_value(&value)?;
             vm.local_write(a, value)?;
             Ok(())
         }
@@ -304,16 +329,18 @@ mod tests {
     /// the VM is currently executing inside a Call frame (not top-level).
     #[test]
     fn test_store_frame_local_array_to_dict_errors() {
+        // Storing a whole Cell::Array into a DictAddr slot is now always rejected
+        // with TypeError, regardless of frame context.  (Previously it was
+        // ArrayFrameEscape for frame-local arrays; the earlier check was
+        // superseded by the surface-level prohibition on whole-array writes.)
         let mut vm = VM::new();
 
         // Allocate a dictionary slot for the target variable.
         vm.dictionary.push(Cell::None);
         vm.dp = 1;
 
-        // Create the frame-local array; global_array_pool_len stays at 0.
         let frame_local_idx = vm.arrays.len();
         vm.arrays.push(vec![Cell::Int(7)]);
-        // global_array_pool_len = 0 means pool_idx 0 is not global.
 
         // Simulate a Call frame so is_executing_top_level() returns false.
         vm.return_stack.push(ReturnFrame::TopLevel);
@@ -331,18 +358,17 @@ mod tests {
 
         let result = store_prim(&mut vm);
         assert!(
-            matches!(result, Err(TbxError::ArrayFrameEscape)),
-            "expected ArrayFrameEscape, got {:?}",
+            matches!(result, Err(TbxError::TypeError { .. })),
+            "expected TypeError for whole-array write, got {:?}",
             result
         );
     }
 
-    /// Verify that storing a top-level Cell::Array into a dictionary slot promotes
-    /// global_array_pool_len to cover the stored array.
+    /// Verify that storing a top-level Cell::Array into a dictionary slot is now
+    /// rejected with TypeError.
     ///
-    /// When execution is at the top level (only a TopLevel sentinel on the return
-    /// stack), STORE must promote the array to the global region instead of
-    /// returning an error.
+    /// Arrays are not first-class surface values; storing a whole array handle
+    /// into a scalar variable is forbidden regardless of the execution context.
     #[test]
     fn test_store_top_level_array_to_dict_promotes_global_boundary() {
         let mut vm = VM::new();
@@ -351,7 +377,6 @@ mod tests {
         vm.dictionary.push(Cell::None);
         vm.dp = 1;
 
-        // Create the array at top level; global_array_pool_len starts at 0.
         let top_level_idx = vm.arrays.len();
         vm.arrays.push(vec![Cell::Int(99)]);
 
@@ -362,16 +387,11 @@ mod tests {
         vm.push(Cell::Array(top_level_idx)).unwrap();
         vm.push(Cell::DictAddr(0)).unwrap();
 
-        store_prim(&mut vm).unwrap();
-
-        // The global boundary must have been promoted to cover top_level_idx.
+        let result = store_prim(&mut vm);
         assert!(
-            vm.global_array_pool_len > top_level_idx,
-            "expected global_array_pool_len > {}, got {}",
-            top_level_idx,
-            vm.global_array_pool_len
+            matches!(result, Err(TbxError::TypeError { .. })),
+            "expected TypeError for whole-array write at top level, got {:?}",
+            result
         );
-        // The dictionary slot must now hold the array handle.
-        assert_eq!(vm.dictionary[0], Cell::Array(top_level_idx));
     }
 }

@@ -4933,4 +4933,180 @@ PUTDEC 1; PUTDEC ADD(
             .unwrap();
         assert_eq!(interp.take_output().trim(), "42");
     }
+
+    // ===========================================================
+    // Whole-array surface-language prohibition (issue #718)
+    // ===========================================================
+    //
+    // Arrays are not first-class values on the surface language.
+    // The following operations must fail at runtime with TypeError.
+
+    /// Helper: build a program that uses a global array `A` of size 3.
+    fn with_global_dim(body: &str) -> String {
+        format!("DIM @A[3]\n{body}")
+    }
+
+    #[test]
+    fn test_whole_array_let_assignment_is_error() {
+        // `LET B = A` where A is an array variable must fail with TypeError.
+        let mut interp = Interpreter::new();
+        let src = "DEF BAD_LET()\n  DIM @A[2]\n  VAR B\n  LET B = A\nEND\nBAD_LET";
+        let result = interp.exec_source(src);
+        assert!(
+            matches!(result, Err(ref e) if matches!(e.kind, TbxError::TypeError { .. })),
+            "expected TypeError for `LET B = A`, got: {result:?}"
+        );
+    }
+
+    #[test]
+    fn test_whole_array_set_assignment_is_error() {
+        // `SET &B, A` where A is an array variable must fail with TypeError.
+        let mut interp = Interpreter::new();
+        let src = "DEF BAD_SET()\n  DIM @A[2]\n  VAR B\n  SET &B, A\nEND\nBAD_SET";
+        let result = interp.exec_source(src);
+        assert!(
+            matches!(result, Err(ref e) if matches!(e.kind, TbxError::TypeError { .. })),
+            "expected TypeError for `SET &B, A`, got: {result:?}"
+        );
+    }
+
+    #[test]
+    fn test_whole_array_set_global_assignment_is_error() {
+        // `SET &G, A` where A is an array variable and G is a global scalar must fail.
+        let mut interp = Interpreter::new();
+        let src = "VAR G\nDEF BAD()\n  DIM @A[2]\n  SET &G, A\nEND\nBAD";
+        let result = interp.exec_source(src);
+        assert!(
+            matches!(result, Err(ref e) if matches!(e.kind, TbxError::TypeError { .. })),
+            "expected TypeError for `SET &G, A`, got: {result:?}"
+        );
+    }
+
+    #[test]
+    fn test_whole_array_return_is_error() {
+        // `RETURN A` where A is an array variable must fail with TypeError.
+        let mut interp = Interpreter::new();
+        let src = "DEF BAD_RETURN()\n  DIM @A[2]\n  RETURN A\nEND\nPUTDEC BAD_RETURN()";
+        let result = interp.exec_source(src);
+        assert!(
+            matches!(result, Err(ref e) if matches!(e.kind, TbxError::TypeError { .. })),
+            "expected TypeError for `RETURN A`, got: {result:?}"
+        );
+    }
+
+    #[test]
+    fn test_whole_array_in_tuple_is_error() {
+        // `TUPLE(A)` or `TUPLE(A, 1)` where A is an array variable must fail with TypeError.
+        // TUPLE rejects Cell::Array elements via Cell::new_tuple.
+        let mut interp = Interpreter::new();
+        let src = "DEF BAD_TUPLE()\n  DIM @A[2]\n  PUTVAL TUPLE(A)\nEND\nBAD_TUPLE";
+        let result = interp.exec_source(src);
+        assert!(
+            result.is_err(),
+            "expected error for `TUPLE(A)`, but it succeeded"
+        );
+    }
+
+    #[test]
+    fn test_putval_array_is_error() {
+        // `PUTVAL A` where A is an array variable must fail with TypeError.
+        let mut interp = Interpreter::new();
+        let src = with_global_dim("PUTVAL A");
+        let result = interp.exec_source(&src);
+        assert!(
+            matches!(result, Err(ref e) if matches!(e.kind, TbxError::TypeError { .. })),
+            "expected TypeError for `PUTVAL A`, got: {result:?}"
+        );
+    }
+
+    #[test]
+    fn test_array_equality_is_error() {
+        // `A = B` where A and B are array variables must fail with TypeError.
+        let mut interp = Interpreter::new();
+        let src = "DEF BAD_EQ()\n  DIM @A[2]\n  DIM @B[2]\n  PUTDEC A = B\nEND\nBAD_EQ";
+        let result = interp.exec_source(src);
+        assert!(
+            matches!(result, Err(ref e) if matches!(e.kind, TbxError::TypeError { .. })),
+            "expected TypeError for `A = B` (array equality), got: {result:?}"
+        );
+    }
+
+    #[test]
+    fn test_array_eq_function_is_error() {
+        // `EQ(A, B)` where A and B are array variables must fail with TypeError.
+        let mut interp = Interpreter::new();
+        let src = "DEF BAD_EQ2()\n  DIM @A[2]\n  DIM @B[2]\n  PUTDEC EQ(A, B)\nEND\nBAD_EQ2";
+        let result = interp.exec_source(src);
+        assert!(
+            matches!(result, Err(ref e) if matches!(e.kind, TbxError::TypeError { .. })),
+            "expected TypeError for `EQ(A, B)` (array equality), got: {result:?}"
+        );
+    }
+
+    // --- Permitted array operations must remain intact ---
+
+    #[test]
+    fn test_dim_global_array_is_still_valid() {
+        // `DIM @A[n]` at top level must succeed and allow element access.
+        let mut interp = Interpreter::new();
+        let src = "DIM @A[3]\nSET &@A[1], 42\nPUTDEC @A[1]";
+        interp
+            .exec_source(src)
+            .expect("DIM and element access must succeed");
+        assert_eq!(interp.take_output().trim(), "42");
+    }
+
+    #[test]
+    fn test_dim_local_array_is_still_valid() {
+        // `DIM @A[n]` inside a DEF body must succeed and allow element access.
+        let mut interp = Interpreter::new();
+        let src = "DEF USE_LOCAL_DIM()\n  DIM @A[2]\n  LET @A[1] = 77\n  PUTDEC @A[1]\nEND\nUSE_LOCAL_DIM";
+        interp
+            .exec_source(src)
+            .expect("local DIM and element access must succeed");
+        assert_eq!(interp.take_output().trim(), "77");
+    }
+
+    #[test]
+    fn test_array_element_read_is_still_valid() {
+        // `@A[i]` element read must still work.
+        let mut interp = Interpreter::new();
+        let src = "DIM @A[3]\nSET &@A[2], 99\nPUTDEC @A[2]";
+        interp
+            .exec_source(src)
+            .expect("array element read must succeed");
+        assert_eq!(interp.take_output().trim(), "99");
+    }
+
+    #[test]
+    fn test_array_element_addr_is_still_valid() {
+        // `&@A[i]` element address (for SET) must still work.
+        let mut interp = Interpreter::new();
+        let src = "DIM @A[3]\nSET &@A[3], 55\nPUTDEC @A[3]";
+        interp
+            .exec_source(src)
+            .expect("&@A[i] element write must succeed");
+        assert_eq!(interp.take_output().trim(), "55");
+    }
+
+    #[test]
+    fn test_let_array_element_write_is_still_valid() {
+        // `LET @A[i] = expr` element write must still work.
+        let mut interp = Interpreter::new();
+        let src =
+            "DEF WRITE_ELEM()\n  DIM @A[3]\n  LET @A[1] = 33\n  PUTDEC @A[1]\nEND\nWRITE_ELEM";
+        interp
+            .exec_source(src)
+            .expect("LET @A[i] = expr must succeed");
+        assert_eq!(interp.take_output().trim(), "33");
+    }
+
+    #[test]
+    fn test_array_len_is_still_valid() {
+        // `ARRAY_LEN(@A)` must still work after the surface-ban changes.
+        let mut interp = Interpreter::new();
+        let src = "DIM @A[5]\nPUTDEC ARRAY_LEN(@A)";
+        interp.exec_source(src).expect("ARRAY_LEN(@A) must succeed");
+        assert_eq!(interp.take_output().trim(), "5");
+    }
 }

@@ -15,9 +15,18 @@ use crate::vm::VM;
 /// EQ — equality comparison. Pushes Bool(true) if the two top values are equal.
 /// Int/Float mixed pairs are compared by promoting Int to Float.
 /// All other pairs, including two Cell::Str values, use Cell's PartialEq.
+///
+/// `Cell::Array` operands are rejected with a TypeError: arrays are not
+/// first-class values on the surface language and may not be compared.
 pub fn eq_prim(vm: &mut VM) -> Result<(), TbxError> {
     let b = vm.pop()?;
     let a = vm.pop()?;
+    if matches!(a, Cell::Array(_)) || matches!(b, Cell::Array(_)) {
+        return Err(TbxError::TypeError {
+            expected: "non-array value",
+            got: "Array",
+        });
+    }
     let result = match (&a, &b) {
         (Cell::Int(x), Cell::Float(y)) => (*x as f64) == *y,
         (Cell::Float(x), Cell::Int(y)) => *x == (*y as f64),
@@ -30,9 +39,18 @@ pub fn eq_prim(vm: &mut VM) -> Result<(), TbxError> {
 /// NEQ — inequality comparison. Pushes Bool(true) if the two top values are not equal.
 /// Int/Float mixed pairs are compared by promoting Int to Float.
 /// All other pairs, including two Cell::Str values, use Cell's PartialEq.
+///
+/// `Cell::Array` operands are rejected with a TypeError: arrays are not
+/// first-class values on the surface language and may not be compared.
 pub fn neq_prim(vm: &mut VM) -> Result<(), TbxError> {
     let b = vm.pop()?;
     let a = vm.pop()?;
+    if matches!(a, Cell::Array(_)) || matches!(b, Cell::Array(_)) {
+        return Err(TbxError::TypeError {
+            expected: "non-array value",
+            got: "Array",
+        });
+    }
     let result = match (&a, &b) {
         (Cell::Int(x), Cell::Float(y)) => (*x as f64) != *y,
         (Cell::Float(x), Cell::Int(y)) => *x != (*y as f64),

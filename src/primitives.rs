@@ -800,9 +800,11 @@ pub fn dim_prim(vm: &mut VM) -> Result<(), TbxError> {
             .ok_or(TbxError::UndefinedSymbol {
                 name: "ARRAY".to_string(),
             })?;
-        let set_xt = vm.lookup("SET").ok_or(TbxError::UndefinedSymbol {
-            name: "SET".to_string(),
-        })?;
+        let array_store_local_xt =
+            vm.lookup_hidden_system("ARRAY_STORE_LOCAL")
+                .ok_or(TbxError::UndefinedSymbol {
+                    name: "ARRAY_STORE_LOCAL".to_string(),
+                })?;
 
         // Emit: LIT StackAddr(idx)  — push the address of the local slot.
         vm.dict_write(Cell::Xt(lit_xt))?;
@@ -823,8 +825,10 @@ pub fn dim_prim(vm: &mut VM) -> Result<(), TbxError> {
         // Emit: ARRAY  — create the array and push its handle.
         vm.dict_write(Cell::Xt(array_xt))?;
 
-        // Emit: SET  — store the array handle into the local slot.
-        vm.dict_write(Cell::Xt(set_xt))?;
+        // Emit: ARRAY_STORE_LOCAL  — store the array handle into the local slot.
+        // Using a dedicated internal primitive avoids triggering the surface-language
+        // prohibition that SET/STORE enforce against whole-array writes.
+        vm.dict_write(Cell::Xt(array_store_local_xt))?;
     } else {
         // --- Execute mode (top level) ---
 
@@ -2238,6 +2242,14 @@ pub fn register_all(vm: &mut VM) {
     let mut array_entry = WordEntry::new_primitive("ARRAY", array_prim);
     array_entry.flags = FLAG_SYSTEM | FLAG_HIDDEN;
     vm.register(array_entry);
+    // ARRAY_STORE_LOCAL is a hidden system entry used exclusively by the DIM @A[n]
+    // compiler to store the freshly-created array handle into the local variable slot.
+    // Unlike SET/STORE, it bypasses the surface-language prohibition on writing a
+    // whole-array handle into a scalar variable.
+    let mut array_store_local_entry =
+        WordEntry::new_primitive("ARRAY_STORE_LOCAL", arrays::array_store_local_prim);
+    array_store_local_entry.flags = FLAG_SYSTEM | FLAG_HIDDEN;
+    vm.register(array_store_local_entry);
     // ARRAY_GET reads an element (`@A[i]` compiles to
     // `<array handle read> <index expr> ARRAY_GET`); ARRAY_ADDR computes an element
     // address (`&@A[i]` compiles to `<array handle read> <index expr> ARRAY_ADDR`).
@@ -6048,26 +6060,38 @@ mod tests {
         ));
     }
 
-    // --- store_prim with ArrayFrameEscape guard ---
+    // --- store_prim / set_prim: whole-array write to scalar variable is TypeError ---
 
     #[test]
     fn test_store_array_to_dict_addr_is_escape_error() {
+        // Storing a whole Cell::Array into a DictAddr slot is now rejected with
+        // TypeError (surface-language prohibition), superseding the earlier
+        // ArrayFrameEscape check.
         let mut vm = VM::new();
         vm.dictionary.push(Cell::None); // dict[0] = placeholder
                                         // Try to store Cell::Array(0) into a global variable slot.
         vm.push(Cell::Array(0)).unwrap(); // value
         vm.push(Cell::DictAddr(0)).unwrap(); // address
-        assert_eq!(store_prim(&mut vm), Err(TbxError::ArrayFrameEscape));
+        assert!(
+            matches!(store_prim(&mut vm), Err(TbxError::TypeError { .. })),
+            "expected TypeError for whole-array write to DictAddr"
+        );
     }
 
     #[test]
     fn test_set_array_to_dict_addr_is_escape_error() {
+        // Storing a whole Cell::Array into a DictAddr slot is now rejected with
+        // TypeError (surface-language prohibition), superseding the earlier
+        // ArrayFrameEscape check.
         let mut vm = VM::new();
         vm.dictionary.push(Cell::None); // dict[0] = placeholder
                                         // set_prim: stack is [..., addr, value]
         vm.push(Cell::DictAddr(0)).unwrap(); // address
         vm.push(Cell::Array(0)).unwrap(); // value
-        assert_eq!(set_prim(&mut vm), Err(TbxError::ArrayFrameEscape));
+        assert!(
+            matches!(set_prim(&mut vm), Err(TbxError::TypeError { .. })),
+            "expected TypeError for whole-array write to DictAddr"
+        );
     }
 
     // --- store/set to ArrayAddr ---
