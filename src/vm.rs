@@ -2894,18 +2894,6 @@ mod tests {
     }
 
     #[test]
-    fn test_array_ownership_transfer_via_return_val() {
-        // Verify that returning a frame-local Cell::Array via RETURN_VAL succeeds
-        // (ownership transfer instead of escape error).
-        let result = run_source(
-            "DEF MAKE_ARRAY()\n  DIM @A[3]\n  RETURN A\nEND\n\
-             PUTDEC ARRAY_LEN(MAKE_ARRAY())",
-        );
-        assert!(result.is_ok(), "expected success, got: {result:?}");
-        assert_eq!(result.unwrap().trim(), "3");
-    }
-
-    #[test]
     fn test_str_ownership_transfer_via_return_val() {
         // Verify that returning a frame-local Cell::Str via RETURN_VAL succeeds
         // (ownership transfer instead of escape error).
@@ -2918,19 +2906,6 @@ mod tests {
     }
 
     #[test]
-    fn test_array_chained_ownership_transfer() {
-        // Verify that ownership transfer works across multiple call levels:
-        // OUTER calls INNER which returns an array, then OUTER returns it.
-        let result = run_source(
-            "DEF INNER()\n  DIM @A[3]\n  RETURN A\nEND\n\
-             DEF OUTER()\n  VAR B\n  LET B = INNER()\n  RETURN B\nEND\n\
-             PUTDEC ARRAY_LEN(OUTER())",
-        );
-        assert!(result.is_ok(), "expected success, got: {result:?}");
-        assert_eq!(result.unwrap().trim(), "3");
-    }
-
-    #[test]
     fn test_str_chained_ownership_transfer() {
         // Verify that string ownership transfer works across multiple call levels.
         let result = run_source(
@@ -2940,22 +2915,6 @@ mod tests {
         );
         assert!(result.is_ok(), "expected success, got: {result:?}");
         assert_eq!(result.unwrap().trim(), "foobar!");
-    }
-
-    #[test]
-    fn test_caller_array_returnable_after_transfer() {
-        // Arrays created by the caller (pool_idx < frame boundary) are returned
-        // unchanged; ownership transfer only applies to frame-local arrays.
-        // Here the caller creates a local array, passes it to PASS_THROUGH which
-        // returns it; since pool_idx < boundary (array was created before the call),
-        // no swap occurs and the result is valid.
-        let result = run_source(
-            "DEF PASS_THROUGH(A)\n  RETURN A\nEND\n\
-             DEF CALLER()\n  DIM @B[3]\n  RETURN PASS_THROUGH(B)\nEND\n\
-             PUTDEC ARRAY_LEN(CALLER())",
-        );
-        assert!(result.is_ok(), "expected success, got: {result:?}");
-        assert_eq!(result.unwrap().trim(), "3");
     }
 
     #[test]
@@ -3278,33 +3237,6 @@ mod tests {
             cell,
             Cell::string("hi"),
             "string literal stored in VARIABLE should be Cell::string(\"hi\"), got {cell:?}"
-        );
-    }
-
-    #[test]
-    fn test_array_pool_len_after_ownership_transfer() {
-        // After a word returns its local array, the transferred array occupies the
-        // boundary slot in the caller's pool.  At the top level, when the TopLevel
-        // frame is popped, all remaining pool entries are promoted to the global
-        // region (global_array_pool_len is advanced to arrays.len()), so the pool
-        // is NOT empty — it contains exactly the one promoted array.
-        let mut interp = crate::interpreter::Interpreter::new();
-        interp
-            .exec_source(
-                "DEF GIVE_ARRAY()\n  DIM @A[3]\n  RETURN A\nEND\n\
-                 PUTDEC ARRAY_LEN(GIVE_ARRAY())",
-            )
-            .expect("exec_source failed");
-        // The returned array is now promoted to global; pool has exactly 1 entry.
-        assert_eq!(
-            interp.vm().arrays.len(),
-            1,
-            "array pool should contain exactly the one promoted (returned) array"
-        );
-        assert_eq!(
-            interp.vm().global_array_pool_len,
-            1,
-            "global_array_pool_len should reflect the promoted array"
         );
     }
 

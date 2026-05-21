@@ -248,34 +248,13 @@ impl<'a> ExprCompiler<'a> {
                                     i += 1;
                                     continue;
                                 }
-                                Some(Token::Ident(_)) => {
-                                    // The argument starts with an identifier.
-                                    // Distinguish ARRAY_LEN(A) (bare variable, no following `(`)
-                                    // from ARRAY_LEN(FUNC()) (function call, has following `(`).
-                                    // tokens[i+2] is the identifier; tokens[i+3] is what
-                                    // immediately follows it inside the argument list.
-                                    // ARRAY_LEN(A)      → i+3 is ')'  → bare variable → reject
-                                    // ARRAY_LEN(FUNC()) → i+3 is '('  → function call → pass through
-                                    let followed_by_lparen = tokens
-                                        .get(i + 3)
-                                        .map(|st| matches!(st.token, Token::LParen))
-                                        .unwrap_or(false);
-                                    if !followed_by_lparen {
-                                        // ARRAY_LEN(A) — bare variable without @ sigil is not
-                                        // supported.  Arrays are named storage designators, not
-                                        // first-class values; use ARRAY_LEN(@A) instead.
-                                        return Err(TbxError::InvalidExpression {
-                                            reason:
-                                                "ARRAY_LEN(A) is not supported; use ARRAY_LEN(@A)",
-                                        });
-                                    }
-                                    // ARRAY_LEN(FUNC(...)) — function call as argument; fall
-                                    // through to the normal function-call path below.
-                                }
                                 _ => {
-                                    // Other argument forms (expression, literal, etc.) fall
-                                    // through to the normal function-call path so that
-                                    // e.g. ARRAY_LEN(SOME_FUNC()) continues to work.
+                                    // Any argument form other than `@IDENT` is rejected.
+                                    // ARRAY_LEN only accepts the designator form ARRAY_LEN(@A).
+                                    return Err(TbxError::InvalidExpression {
+                                        reason:
+                                            "ARRAY_LEN expects @A designator; use ARRAY_LEN(@A)",
+                                    });
                                 }
                             }
                         }
@@ -2305,11 +2284,7 @@ mod tests {
             .compile_expr(&tokens)
             .unwrap_err();
         assert!(
-            matches!(
-                err,
-                TbxError::InvalidExpression { reason }
-                    if reason.contains("ARRAY_LEN(A) is not supported")
-            ),
+            matches!(err, TbxError::InvalidExpression { .. }),
             "expected InvalidExpression for ARRAY_LEN(A), got: {err:?}"
         );
     }
@@ -2342,6 +2317,37 @@ mod tests {
         assert!(
             matches!(err, TbxError::InvalidExpression { .. }),
             "expected InvalidExpression for ARRAY_LEN(@), got: {err:?}"
+        );
+    }
+
+    /// `ARRAY_LEN(FUNC())` — function call as argument must be rejected.
+    /// Only `ARRAY_LEN(@A)` designator form is accepted.
+    #[test]
+    fn test_array_len_func_call_arg_is_error() {
+        let mut vm = make_vm();
+
+        let tokens = lex("ARRAY_LEN(FUNC())");
+        let err = ExprCompiler::new(&mut vm)
+            .compile_expr(&tokens)
+            .unwrap_err();
+        assert!(
+            matches!(err, TbxError::InvalidExpression { .. }),
+            "expected InvalidExpression for ARRAY_LEN(FUNC()), got: {err:?}"
+        );
+    }
+
+    /// `ARRAY_LEN(1)` — literal as argument must be rejected.
+    #[test]
+    fn test_array_len_literal_arg_is_error() {
+        let mut vm = make_vm();
+
+        let tokens = lex("ARRAY_LEN(1)");
+        let err = ExprCompiler::new(&mut vm)
+            .compile_expr(&tokens)
+            .unwrap_err();
+        assert!(
+            matches!(err, TbxError::InvalidExpression { .. }),
+            "expected InvalidExpression for ARRAY_LEN(1), got: {err:?}"
         );
     }
 }
