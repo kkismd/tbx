@@ -83,20 +83,14 @@ impl ArrayRef {
 
 // --- Trait impls ---
 
+/// Developer diagnostics only.
+///
+/// This `Debug` impl shows current element contents for use in test output and
+/// error messages.  It does NOT define the final display format or `PUTVAL`
+/// semantics for arrays, which are out of scope for this issue.
 impl std::fmt::Debug for ArrayRef {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "ArrayRef({:?})", &*self.inner.borrow())
-    }
-}
-
-/// Provisional content equality: two `ArrayRef` values are equal when their
-/// element vectors are equal.
-///
-/// This is intentionally shallow (element-wise `PartialEq`).  A future issue
-/// may change the semantics (e.g. identity equality for mutable containers).
-impl PartialEq for ArrayRef {
-    fn eq(&self, other: &Self) -> bool {
-        *self.inner.borrow() == *other.inner.borrow()
     }
 }
 
@@ -160,20 +154,6 @@ mod tests {
         ar1.set(0, Cell::Int(7)).unwrap();
         // ar2 must see the mutation because it shares the Rc
         assert_eq!(ar2.get_cloned(0), Some(Cell::Int(7)));
-    }
-
-    #[test]
-    fn partial_eq_same_content() {
-        let a = ArrayRef::new(vec![Cell::Int(1), Cell::Int(2)]);
-        let b = ArrayRef::new(vec![Cell::Int(1), Cell::Int(2)]);
-        assert_eq!(a, b);
-    }
-
-    #[test]
-    fn partial_eq_different_content() {
-        let a = ArrayRef::new(vec![Cell::Int(1)]);
-        let b = ArrayRef::new(vec![Cell::Int(2)]);
-        assert_ne!(a, b);
     }
 
     #[test]
