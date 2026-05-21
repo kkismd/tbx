@@ -1,14 +1,15 @@
+use crate::array_ref::ArrayRef;
 use crate::cell::Cell;
 use crate::error::TbxError;
 use crate::vm::VM;
 
-/// Extract the array pool index from a `Cell::Array`.
+/// Return the `ArrayRef` if `cell` is `Cell::Array`, otherwise `None`.
 ///
-/// Returns `None` for any cell that is not `Cell::Array`.  `Cell::Str` is
-/// `Rc<str>`-backed and has no VM-managed pool index.
-fn array_pool_idx_from_cell(cell: &Cell) -> Option<usize> {
+/// This helper is used by STORE / SET to detect when an array handle is being
+/// written to a dictionary slot, so the frame-escape check can be applied.
+fn array_ref_from_cell(cell: &Cell) -> Option<&ArrayRef> {
     match cell {
-        Cell::Array(idx) => Some(*idx),
+        Cell::Array(ar) => Some(ar),
         _ => None,
     }
 }
@@ -22,16 +23,26 @@ fn promote_array_pool_idx_to_global(vm: &mut VM, pool_idx: usize) {
 }
 
 fn check_dict_reference_write(vm: &mut VM, value: &Cell) -> Result<(), TbxError> {
-    let Some(pool_idx) = array_pool_idx_from_cell(value) else {
+    let Some(ar) = array_ref_from_cell(value) else {
         return Ok(());
     };
 
-    if is_global_array_pool_idx(vm, pool_idx) {
-        return Ok(());
+    // Find the pool_idx for this ArrayRef.  If it is not registered in the
+    // pool at all, treat it as non-global (conservative: will return Err below
+    // if inside a call frame).
+    let pool_idx = vm.arrays.iter().position(|entry| entry.ptr_eq(ar));
+
+    if let Some(idx) = pool_idx {
+        if is_global_array_pool_idx(vm, idx) {
+            return Ok(());
+        }
     }
 
     if vm.is_executing_top_level() {
-        promote_array_pool_idx_to_global(vm, pool_idx);
+        // Promote to global if possible.
+        if let Some(idx) = pool_idx {
+            promote_array_pool_idx_to_global(vm, idx);
+        }
         return Ok(());
     }
 
@@ -45,24 +56,18 @@ fn write_array_element(
     elem_idx: usize,
     value: Cell,
 ) -> Result<(), TbxError> {
-    // Validate before get_mut() to avoid borrow conflicts.
+    // Validate before borrowing to avoid borrow conflicts.
     super::arrays::check_array_element_value(&value)?;
     let pool_size = vm.arrays.len();
-    let arr = vm
+    let ar = vm
         .arrays
-        .get_mut(pool_idx)
+        .get(pool_idx)
         .ok_or(TbxError::IndexOutOfBounds {
             index: pool_idx,
             size: pool_size,
-        })?;
-    let size = arr.len();
-    if elem_idx >= size {
-        return Err(TbxError::ArrayIndexOutOfBounds {
-            index: elem_idx as i64,
-            size,
-        });
-    }
-    arr[elem_idx] = value;
+        })?
+        .clone();
+    ar.set(elem_idx, value)?;
     Ok(())
 }
 
@@ -81,18 +86,28 @@ pub fn fetch_prim(vm: &mut VM) -> Result<(), TbxError> {
             Ok(())
         }
         Cell::ArrayAddr { pool_idx, elem_idx } => {
-            let arr = vm.arrays.get(pool_idx).ok_or(TbxError::IndexOutOfBounds {
-                index: pool_idx,
-                size: vm.arrays.len(),
-            })?;
-            let size = arr.len();
+            let pool_size = vm.arrays.len();
+            let ar = vm
+                .arrays
+                .get(pool_idx)
+                .ok_or(TbxError::IndexOutOfBounds {
+                    index: pool_idx,
+                    size: pool_size,
+                })?
+                .clone();
+            let size = ar.len();
             if elem_idx >= size {
                 return Err(TbxError::ArrayIndexOutOfBounds {
                     index: elem_idx as i64,
                     size,
                 });
             }
-            let value = arr[elem_idx].clone();
+            let value = ar
+                .get_cloned(elem_idx)
+                .ok_or(TbxError::ArrayIndexOutOfBounds {
+                    index: elem_idx as i64,
+                    size,
+                })?;
             vm.push(value)?;
             Ok(())
         }
@@ -160,23 +175,32 @@ pub fn set_prim(vm: &mut VM) -> Result<(), TbxError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::array_ref::ArrayRef;
     use crate::cell::{Cell, ReturnFrame, Xt};
 
+    /// Helper to create a one-element pool entry and push Cell::Array for tests
+    /// that still exercise the pool-index path (ARRAY_ADDR / STORE / FETCH).
+    fn push_pooled_array(vm: &mut VM, elems: Vec<Cell>) -> usize {
+        let pool_idx = vm.arrays.len();
+        let ar = ArrayRef::new(elems);
+        vm.arrays.push(ar.clone());
+        vm.push(Cell::Array(ar)).unwrap();
+        pool_idx
+    }
+
     #[test]
-    fn test_array_pool_idx_from_cell_array_only() {
-        // array_pool_idx_from_cell returns Some only for Cell::Array;
-        // Cell::Str is Rc<str>-backed and has no array pool index.
-        assert_eq!(array_pool_idx_from_cell(&Cell::Array(3)), Some(3));
-        assert_eq!(array_pool_idx_from_cell(&Cell::string("hello")), None);
-        assert_eq!(
-            array_pool_idx_from_cell(&Cell::ArrayAddr {
-                pool_idx: 1,
-                elem_idx: 2,
-            }),
-            None
-        );
-        assert_eq!(array_pool_idx_from_cell(&Cell::DictAddr(0)), None);
-        assert_eq!(array_pool_idx_from_cell(&Cell::StackAddr(0)), None);
+    fn test_array_ref_from_cell_array_only() {
+        // array_ref_from_cell returns Some only for Cell::Array.
+        let ar = ArrayRef::new(vec![Cell::Int(3)]);
+        assert!(array_ref_from_cell(&Cell::Array(ar)).is_some());
+        assert!(array_ref_from_cell(&Cell::string("hello")).is_none());
+        assert!(array_ref_from_cell(&Cell::DictAddr(0)).is_none());
+        assert!(array_ref_from_cell(&Cell::StackAddr(0)).is_none());
+        assert!(array_ref_from_cell(&Cell::ArrayAddr {
+            pool_idx: 1,
+            elem_idx: 2
+        })
+        .is_none());
     }
 
     #[test]
@@ -204,11 +228,10 @@ mod tests {
         let mut vm = VM::new();
 
         // Create a one-element array with initial value Cell::None.
-        let pool_idx = vm.arrays.len();
-        vm.arrays.push(vec![Cell::None]);
+        let pool_idx = push_pooled_array(&mut vm, vec![Cell::None]);
 
-        // Push array handle and 1-based index, then call ARRAY_ADDR.
-        vm.push(Cell::Array(pool_idx)).unwrap();
+        // Push 1-based index, then call ARRAY_ADDR.
+        // Note: push_pooled_array already pushed Cell::Array on the stack.
         vm.push(Cell::Int(1)).unwrap();
         array_addr_prim(&mut vm).unwrap();
 
@@ -224,8 +247,8 @@ mod tests {
 
         store_prim(&mut vm).unwrap();
 
-        // Verify the array element was updated.
-        assert_eq!(vm.arrays[pool_idx][0], new_value);
+        // Verify the array element was updated via the pool entry.
+        assert_eq!(vm.arrays[pool_idx].get_cloned(0), Some(new_value.clone()));
 
         // Now FETCH: push the ArrayAddr again and call fetch_prim.
         vm.push(Cell::ArrayAddr {
@@ -246,14 +269,15 @@ mod tests {
 
         // Outer array — the target element.
         let outer_idx = vm.arrays.len();
-        vm.arrays.push(vec![Cell::None]);
+        let outer_ar = ArrayRef::new(vec![Cell::None]);
+        vm.arrays.push(outer_ar);
 
         // Inner array — the value to be (illegally) stored.
-        let inner_idx = vm.arrays.len();
-        vm.arrays.push(vec![Cell::Int(1)]);
+        let inner_ar = ArrayRef::new(vec![Cell::Int(1)]);
+        let inner_cell = Cell::Array(inner_ar);
 
         // STORE convention: push value then addr.
-        vm.push(Cell::Array(inner_idx)).unwrap();
+        vm.push(inner_cell).unwrap();
         vm.push(Cell::ArrayAddr {
             pool_idx: outer_idx,
             elem_idx: 0,
@@ -275,11 +299,12 @@ mod tests {
 
         // Target array.
         let outer_idx = vm.arrays.len();
-        vm.arrays.push(vec![Cell::None]);
+        let outer_ar = ArrayRef::new(vec![Cell::None]);
+        vm.arrays.push(outer_ar);
 
         // Value array (nested).
-        let inner_idx = vm.arrays.len();
-        vm.arrays.push(vec![Cell::Int(1)]);
+        let inner_ar = ArrayRef::new(vec![Cell::Int(1)]);
+        let inner_cell = Cell::Array(inner_ar);
 
         // SET convention: push addr then value.
         vm.push(Cell::ArrayAddr {
@@ -287,7 +312,7 @@ mod tests {
             elem_idx: 0,
         })
         .unwrap();
-        vm.push(Cell::Array(inner_idx)).unwrap();
+        vm.push(inner_cell).unwrap();
 
         let result = set_prim(&mut vm);
         assert!(
@@ -311,8 +336,8 @@ mod tests {
         vm.dp = 1;
 
         // Create the frame-local array; global_array_pool_len stays at 0.
-        let frame_local_idx = vm.arrays.len();
-        vm.arrays.push(vec![Cell::Int(7)]);
+        let ar = ArrayRef::new(vec![Cell::Int(7)]);
+        vm.arrays.push(ar.clone());
         // global_array_pool_len = 0 means pool_idx 0 is not global.
 
         // Simulate a Call frame so is_executing_top_level() returns false.
@@ -326,7 +351,7 @@ mod tests {
         });
 
         // STORE convention: push value then addr.
-        vm.push(Cell::Array(frame_local_idx)).unwrap();
+        vm.push(Cell::Array(ar)).unwrap();
         vm.push(Cell::DictAddr(0)).unwrap();
 
         let result = store_prim(&mut vm);
@@ -352,14 +377,16 @@ mod tests {
         vm.dp = 1;
 
         // Create the array at top level; global_array_pool_len starts at 0.
+        let top_level_ar = ArrayRef::new(vec![Cell::Int(99)]);
         let top_level_idx = vm.arrays.len();
-        vm.arrays.push(vec![Cell::Int(99)]);
+        vm.arrays.push(top_level_ar.clone());
 
         // Simulate top-level execution: only a TopLevel sentinel on the return stack.
         vm.return_stack.push(ReturnFrame::TopLevel);
 
         // STORE convention: push value then addr.
-        vm.push(Cell::Array(top_level_idx)).unwrap();
+        let arr_cell = Cell::Array(top_level_ar);
+        vm.push(arr_cell.clone()).unwrap();
         vm.push(Cell::DictAddr(0)).unwrap();
 
         store_prim(&mut vm).unwrap();
@@ -372,6 +399,15 @@ mod tests {
             vm.global_array_pool_len
         );
         // The dictionary slot must now hold the array handle.
-        assert_eq!(vm.dictionary[0], Cell::Array(top_level_idx));
+        // Use ptr_eq to compare since ArrayRef equality is pointer-based.
+        let stored = vm.dict_read(0).unwrap();
+        if let (Cell::Array(stored_ar), Cell::Array(orig_ar)) = (&stored, &arr_cell) {
+            assert!(
+                stored_ar.ptr_eq(orig_ar),
+                "stored ArrayRef must be the same Rc"
+            );
+        } else {
+            panic!("expected Cell::Array in dictionary slot, got {:?}", stored);
+        }
     }
 }

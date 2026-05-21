@@ -1,3 +1,4 @@
+use crate::array_ref::ArrayRef;
 use crate::cell::Cell;
 use crate::error::TbxError;
 use crate::vm::VM;
@@ -17,8 +18,9 @@ pub(super) fn check_array_element_value(value: &Cell) -> Result<(), TbxError> {
 
 /// Internal primitive used by the `DIM @A[n]` compiler to allocate an array.
 ///
-/// Pops `Cell::Int(n)` (n > 0) from the stack, allocates `n` `Cell::None` slots
-/// in `vm.arrays`, and pushes `Cell::Array(pool_idx)` as the handle.
+/// Pops `Cell::Int(n)` (n > 0) from the stack, creates an `ArrayRef` with `n`
+/// `Cell::None` slots, registers it in `vm.arrays` for `ArrayAddr` compatibility,
+/// and pushes `Cell::Array(ArrayRef)` as the handle.
 ///
 /// This function is NOT registered as a user-facing surface primitive.
 /// It is registered under a hidden system entry so that `dim_prim` can emit its
@@ -31,9 +33,12 @@ pub(super) fn array_prim(vm: &mut VM) -> Result<(), TbxError> {
         });
     }
     let size = n as usize;
-    let idx = vm.arrays.len();
-    vm.arrays.push(vec![Cell::None; size]);
-    vm.push(Cell::Array(idx))?;
+    let ar = ArrayRef::new(vec![Cell::None; size]);
+    // Register in vm.arrays so that Cell::ArrayAddr can locate this array by
+    // pool_idx.  This will be removed when ArrayAddr is migrated to
+    // (ArrayRef, elem_idx) in a follow-up issue.
+    vm.arrays.push(ar.clone());
+    vm.push(Cell::Array(ar))?;
     Ok(())
 }
 
@@ -68,17 +73,17 @@ pub fn to_tuple_prim(vm: &mut VM) -> Result<(), TbxError> {
 
 /// ARRAY_GET — read an element from an array.
 ///
-/// Stack: `[..., Cell::Array(pool_idx), Cell::Int(elem_idx)]` → `value`
+/// Stack: `[..., Cell::Array(ArrayRef), Cell::Int(elem_idx)]` → `value`
 ///
 /// This is the VM-level primitive that `@A[i]` compiles to.  The expression
 /// compiler lowers `@A[i]` to: `<array handle read>  <index expr>  ARRAY_GET`.
 ///
 /// Array indices are 1-based from the user's perspective: valid range is `1..=N`.
-/// The index is translated to 0-based internally before accessing the Vec.
+/// The index is translated to 0-based internally before accessing the storage.
 pub fn array_get_prim(vm: &mut VM) -> Result<(), TbxError> {
     let elem_idx_raw = vm.pop_int()?;
-    let pool_idx = match vm.pop()? {
-        Cell::Array(idx) => idx,
+    let ar = match vm.pop()? {
+        Cell::Array(ar) => ar,
         other => {
             return Err(TbxError::TypeError {
                 expected: "Array",
@@ -86,11 +91,7 @@ pub fn array_get_prim(vm: &mut VM) -> Result<(), TbxError> {
             })
         }
     };
-    let arr = vm.arrays.get(pool_idx).ok_or(TbxError::IndexOutOfBounds {
-        index: pool_idx,
-        size: vm.arrays.len(),
-    })?;
-    let size = arr.len();
+    let size = ar.len();
     // Translate 1-based user index to 0-based internal index.
     // Index 0 or negative is out of bounds.
     if elem_idx_raw < 1 {
@@ -106,14 +107,19 @@ pub fn array_get_prim(vm: &mut VM) -> Result<(), TbxError> {
             size,
         });
     }
-    let value = arr[elem_idx].clone();
+    let value = ar
+        .get_cloned(elem_idx)
+        .ok_or(TbxError::ArrayIndexOutOfBounds {
+            index: elem_idx_raw,
+            size,
+        })?;
     vm.push(value)?;
     Ok(())
 }
 
 /// ARRAY_ADDR — compute the address of an array element.
 ///
-/// Stack: `[..., Cell::Array(pool_idx), Cell::Int(elem_idx)]` → `Cell::ArrayAddr { pool_idx, elem_idx }`
+/// Stack: `[..., Cell::Array(ArrayRef), Cell::Int(elem_idx)]` → `Cell::ArrayAddr { pool_idx, elem_idx }`
 ///
 /// This is the VM-level primitive that `&@A[i]` compiles to.  The expression
 /// compiler lowers `&@A[i]` to: `<array handle read>  <index expr>  ARRAY_ADDR`.
@@ -122,10 +128,15 @@ pub fn array_get_prim(vm: &mut VM) -> Result<(), TbxError> {
 ///
 /// Array indices are 1-based from the user's perspective: valid range is `1..=N`.
 /// The index is translated to 0-based internally before storing in `Cell::ArrayAddr`.
+///
+/// NOTE: `Cell::ArrayAddr` still uses `pool_idx` to locate the array in
+/// `VM::arrays`.  The `ArrayRef` is used only for bounds checking here.
+/// When `ArrayAddr` is migrated to `(ArrayRef, elem_idx)` in a follow-up issue,
+/// the `pool_idx` lookup will be removed.
 pub fn array_addr_prim(vm: &mut VM) -> Result<(), TbxError> {
     let elem_idx_raw = vm.pop_int()?;
-    let pool_idx = match vm.pop()? {
-        Cell::Array(idx) => idx,
+    let ar = match vm.pop()? {
+        Cell::Array(ar) => ar,
         other => {
             return Err(TbxError::TypeError {
                 expected: "Array",
@@ -133,12 +144,7 @@ pub fn array_addr_prim(vm: &mut VM) -> Result<(), TbxError> {
             })
         }
     };
-    // Validate bounds at address-computation time.
-    let arr = vm.arrays.get(pool_idx).ok_or(TbxError::IndexOutOfBounds {
-        index: pool_idx,
-        size: vm.arrays.len(),
-    })?;
-    let size = arr.len();
+    let size = ar.len();
     // Translate 1-based user index to 0-based internal index.
     // Index 0 or negative is out of bounds.
     if elem_idx_raw < 1 {
@@ -154,6 +160,18 @@ pub fn array_addr_prim(vm: &mut VM) -> Result<(), TbxError> {
             size,
         });
     }
+    // Locate the pool_idx by finding the matching ArrayRef in vm.arrays.
+    // This lookup is O(n) but arrays are small and this path is only used for
+    // &@A[i] address-of operations.  The pool_idx lookup will be eliminated
+    // when ArrayAddr is migrated to (ArrayRef, elem_idx).
+    let pool_idx =
+        vm.arrays
+            .iter()
+            .position(|entry| entry.ptr_eq(&ar))
+            .ok_or(TbxError::InvalidArgument {
+                message: "ARRAY_ADDR: array not found in pool (possible use-after-free)"
+                    .to_string(),
+            })?;
     vm.push(Cell::ArrayAddr { pool_idx, elem_idx })?;
     Ok(())
 }
@@ -225,13 +243,13 @@ pub fn tuple_len_prim(vm: &mut VM) -> Result<(), TbxError> {
 
 /// ARRAY_LEN — return the length of an array.
 ///
-/// Pops `Cell::Array(pool_idx)` from the stack and pushes the number of elements
+/// Pops `Cell::Array(ArrayRef)` from the stack and pushes the number of elements
 /// as `Cell::Int`.
 ///
-/// Stack: `[..., Cell::Array(pool_idx)]` → `Cell::Int(len)`
+/// Stack: `[..., Cell::Array(ArrayRef)]` → `Cell::Int(len)`
 pub fn array_len_prim(vm: &mut VM) -> Result<(), TbxError> {
-    let pool_idx = match vm.pop()? {
-        Cell::Array(idx) => idx,
+    let ar = match vm.pop()? {
+        Cell::Array(ar) => ar,
         other => {
             return Err(TbxError::TypeError {
                 expected: "Array",
@@ -239,11 +257,7 @@ pub fn array_len_prim(vm: &mut VM) -> Result<(), TbxError> {
             })
         }
     };
-    let arr = vm.arrays.get(pool_idx).ok_or(TbxError::IndexOutOfBounds {
-        index: pool_idx,
-        size: vm.arrays.len(),
-    })?;
-    let len = arr.len() as i64;
+    let len = ar.len() as i64;
     vm.push(Cell::Int(len))?;
     Ok(())
 }

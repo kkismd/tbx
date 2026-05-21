@@ -1,3 +1,4 @@
+use crate::array_ref::ArrayRef;
 use crate::error::TbxError;
 
 /// An entry on the compile-time stack (`VM::compile_stack`).
@@ -84,29 +85,22 @@ pub enum Cell {
     Xt(Xt),
     /// Boolean value for logical/comparison operations
     Bool(bool),
-    /// Array handle — index into `VM::arrays` (the array pool).
+    /// Array handle — an Rc-backed shared mutable container.
     ///
-    /// Created by the `ARRAY(N)` primitive.  The pool entry at this index holds
-    /// a `Vec<Cell>` of length N.
+    /// Created by the `ARRAY(N)` / `DIM @A[N]` construct.  The `ArrayRef`
+    /// wraps `Rc<RefCell<Vec<Cell>>>`, so cloning a `Cell::Array` is cheap
+    /// (reference-count bump) and all clones share the same underlying storage.
     ///
-    /// Arrays come in three flavours:
-    /// - **Frame-local arrays** (`pool_idx >= saved_array_pool_len` of the current call
-    ///   frame) are owned by that frame.  On EXIT they are freed; on RETURN_VAL the
-    ///   returned array is moved to the frame-boundary slot via ownership transfer
-    ///   (swap + truncate) so it survives the pool cleanup.
-    /// - **Global arrays** (`pool_idx < vm.global_array_pool_len`) are created
-    ///   at the top level (outside any `DEF..END`) and are never freed.  They
-    ///   may safely be stored in `VARIABLE` slots and shared across word calls.
-    /// - **Caller-owned arrays** (`pool_idx < saved_array_pool_len` of the current
-    ///   call frame but not globally permanent) were created before the call; they
-    ///   can be returned without modification.
+    /// Arrays also maintain a parallel entry in `VM::arrays` (the pool) so that
+    /// `Cell::ArrayAddr { pool_idx, elem_idx }` can still locate the storage
+    /// by index.  When `ArrayAddr` is migrated to `(ArrayRef, elem_idx)` in a
+    /// follow-up issue, the pool entries and the associated lifetime logic
+    /// (`saved_array_pool_len`, `global_array_pool_len`, `ArrayFrameEscape`)
+    /// will be removed.
     ///
     /// Array elements may be any scalar type (`Int`, `Float`, `Bool`, `None`,
     /// or `Str`).  Nested `Array` handles are rejected at write time.
-    /// Because `Cell::Str` is `Rc<str>`-backed (#588 / #591), storing a string
-    /// in an array element stores/shares the `Rc` handle; no pool-index
-    /// lifetime tracking is needed.
-    Array(usize),
+    Array(ArrayRef),
     /// Immutable reference-counted string handle (`Rc<str>`).
     ///
     /// Created by string primitives such as `STR`, `STR_CONCAT`, etc., and by
@@ -169,7 +163,7 @@ impl std::fmt::Display for Cell {
             Cell::StackAddr(a) => write!(f, "stack:{}", a),
             Cell::Xt(x) => write!(f, "xt:{}", x.0),
             Cell::Bool(b) => write!(f, "{}", b),
-            Cell::Array(idx) => write!(f, "<array:{}>", idx),
+            Cell::Array(_) => write!(f, "<array>"),
             Cell::Str(s) => write!(f, "{}", s),
             Cell::ArrayAddr { pool_idx, elem_idx } => {
                 write!(f, "<arrayaddr:{}[{}]>", pool_idx, elem_idx)
@@ -245,10 +239,10 @@ impl Cell {
         }
     }
 
-    /// Returns the pool index if this cell is `Array`, otherwise `None`.
-    pub fn as_array_index(&self) -> Option<usize> {
-        if let Cell::Array(idx) = self {
-            Some(*idx)
+    /// Returns a reference to the `ArrayRef` if this cell is `Array`, otherwise `None`.
+    pub fn as_array_ref(&self) -> Option<&ArrayRef> {
+        if let Cell::Array(ar) = self {
+            Some(ar)
         } else {
             None
         }
@@ -346,7 +340,9 @@ impl PartialEq for Cell {
             (Cell::Xt(a), Cell::Xt(b)) => a == b,
             (Cell::Bool(a), Cell::Bool(b)) => a == b,
             (Cell::None, Cell::None) => true,
-            (Cell::Array(a), Cell::Array(b)) => a == b,
+            // Array equality: Rc pointer identity only.
+            // Content equality semantics are deferred to a follow-up issue.
+            (Cell::Array(a), Cell::Array(b)) => a.ptr_eq(b),
             // Content equality: two Str cells are equal when their underlying
             // string contents match.  (Previously this was an index comparison
             // when `Cell::Str` was `usize`; `Rc<str>` derives `PartialEq` from
@@ -443,8 +439,8 @@ mod tests {
 
     #[test]
     fn test_display_array() {
-        assert_eq!(Cell::Array(0).to_string(), "<array:0>");
-        assert_eq!(Cell::Array(42).to_string(), "<array:42>");
+        let ar = ArrayRef::new(vec![]);
+        assert_eq!(Cell::Array(ar).to_string(), "<array>");
         assert_eq!(
             Cell::ArrayAddr {
                 pool_idx: 3,
@@ -505,7 +501,7 @@ mod tests {
         assert_eq!(Cell::Xt(Xt(0)).type_name(), "Xt");
         assert_eq!(Cell::Bool(false).type_name(), "Bool");
         assert_eq!(Cell::None.type_name(), "None");
-        assert_eq!(Cell::Array(0).type_name(), "Array");
+        assert_eq!(Cell::Array(ArrayRef::new(vec![])).type_name(), "Array");
         assert_eq!(Cell::string("hello").type_name(), "Str");
     }
 
@@ -606,7 +602,7 @@ mod tests {
     #[test]
     fn tuple_element_type_rejection() {
         // Cell::Array is a forbidden element type
-        let result = Cell::new_tuple(vec![Cell::Array(0)]);
+        let result = Cell::new_tuple(vec![Cell::Array(ArrayRef::new(vec![]))]);
         assert!(result.is_err());
         // Cell::Tuple (nested) is forbidden
         let inner = Cell::new_tuple(vec![Cell::Int(1)]).unwrap();
@@ -630,7 +626,7 @@ mod tests {
         assert!(!Cell::Float(0.0).is_truthy());
         // non-Int/Bool/Float variants are falsy
         assert!(!Cell::None.is_truthy());
-        assert!(!Cell::Array(0).is_truthy());
+        assert!(!Cell::Array(ArrayRef::new(vec![])).is_truthy());
         assert!(!Cell::DictAddr(1).is_truthy());
         assert!(!Cell::StackAddr(1).is_truthy());
     }

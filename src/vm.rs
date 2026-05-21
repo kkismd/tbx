@@ -1,3 +1,4 @@
+use crate::array_ref::ArrayRef;
 use crate::cell::{Cell, CompileEntry, ReturnFrame, Xt};
 use crate::constants::{MAX_DATA_STACK_DEPTH, MAX_DICTIONARY_CELLS, MAX_RETURN_STACK_DEPTH};
 use crate::dict::{EntryKind, WordEntry};
@@ -166,13 +167,22 @@ pub struct VM {
     /// Drained by `exec_immediate_word` in the interpreter, which calls
     /// `exec_source` on the file content.
     pub(crate) pending_use_path: Option<String>,
-    /// Array pool: indexed by `Cell::Array(usize)` values.
+    /// Array pool: indexed by `Cell::ArrayAddr::pool_idx` values.
     ///
-    /// Each entry is a `Vec<Cell>` created by the `ARRAY(N)` primitive.
+    /// Each entry is an `ArrayRef` (Rc-backed shared mutable container).
+    /// `Cell::Array(ArrayRef)` holds an `Rc::clone` of the same `ArrayRef`,
+    /// so mutation through either path is reflected in both.
+    ///
     /// On every word EXIT or RETURN_VAL, the pool is truncated back to the
     /// length saved in `ReturnFrame::Call::saved_array_pool_len`, freeing all
-    /// arrays allocated within that call.
-    pub arrays: Vec<Vec<Cell>>,
+    /// pool entries allocated within that call.
+    ///
+    /// NOTE: `VM::arrays` is kept for `Cell::ArrayAddr` compatibility while
+    /// `ArrayAddr` still holds a `pool_idx`.  When `ArrayAddr` is migrated to
+    /// `(ArrayRef, elem_idx)` in a follow-up issue, this pool and the
+    /// associated lifetime logic (`saved_array_pool_len`,
+    /// `global_array_pool_len`, `ArrayFrameEscape`) can be removed.
+    pub arrays: Vec<ArrayRef>,
     /// Length of the "global" (persistent) region of `arrays`.
     ///
     /// Arrays at indices `0..global_array_pool_len` were created at the top
@@ -923,48 +933,27 @@ impl VM {
                     }
                 }
                 EntryKind::ReturnVal => {
-                    // Determine the array frame boundary before popping the return
-                    // value, so we can detect whether the array belongs to the
-                    // current frame.
-                    let array_frame_boundary = match self.return_stack.last() {
-                        Some(ReturnFrame::Call {
-                            saved_array_pool_len,
-                            ..
-                        }) => *saved_array_pool_len,
+                    // Validate the return stack before popping the return value.
+                    match self.return_stack.last() {
+                        Some(ReturnFrame::Call { .. }) => {}
                         Some(ReturnFrame::TopLevel) => {
                             return Err(TbxError::InvalidReturn);
                         }
                         None => return Err(TbxError::StackUnderflow),
                     };
-                    let mut retval = self.pop()?;
-                    // Ownership transfer for frame-local Cell::Array:
-                    // If the returned array was created in this frame
-                    // (pool_idx >= array_frame_boundary), swap it to the
-                    // boundary slot and mark it for preservation.
-                    // Array elements are guaranteed to be Int/Float/Bool/None
-                    // (no nested references), so no recursive check is needed.
-                    // `Cell::Str` is `Rc<str>`-backed and needs no swap.
-                    let array_transferred = if let Cell::Array(pool_idx) = &retval {
-                        if *pool_idx >= array_frame_boundary {
-                            // Bounds check before swap: both indices must be valid.
-                            // pool_idx >= array_frame_boundary is already confirmed;
-                            // checking pool_idx < arrays.len() implies array_frame_boundary
-                            // is also in range.
-                            if *pool_idx >= self.arrays.len() {
-                                return Err(TbxError::IndexOutOfBounds {
-                                    index: *pool_idx,
-                                    size: self.arrays.len(),
-                                });
-                            }
-                            self.arrays.swap(*pool_idx, array_frame_boundary);
-                            retval = Cell::Array(array_frame_boundary);
-                            true
-                        } else {
-                            false
-                        }
-                    } else {
-                        false
-                    };
+                    let retval = self.pop()?;
+                    // `Cell::Array(ArrayRef)` is Rc-backed: the storage survives
+                    // pool truncation because the Rc reference count stays > 0 as
+                    // long as the Cell::Array handle exists on the stack or in a
+                    // variable.  No swap-and-preserve is needed.
+                    //
+                    // NOTE: vm.arrays is still truncated to free pool entries that
+                    // are no longer reachable via any Cell::Array.  This matters for
+                    // Cell::ArrayAddr compatibility: pool entries that belong to the
+                    // current frame should not be accessible by pool_idx after the
+                    // call returns.  Full removal of the pool and the lifetime checks
+                    // (ArrayFrameEscape / saved_array_pool_len / global_array_pool_len)
+                    // is deferred to the follow-up issue that migrates ArrayAddr.
                     match self.return_stack.pop().ok_or(TbxError::StackUnderflow)? {
                         ReturnFrame::Call {
                             callee_xt: _,
@@ -975,11 +964,9 @@ impl VM {
                         } => {
                             self.data_stack.truncate(self.bp);
                             // Truncate the array pool back to the saved boundary.
-                            // If ownership was transferred, the returned value now sits
-                            // at `saved_array_pool_len` (the boundary slot), so we keep
-                            // exactly one extra entry beyond the boundary.
-                            let array_keep = saved_array_pool_len + usize::from(array_transferred);
-                            self.arrays.truncate(array_keep);
+                            // The returned Cell::Array (if any) holds an Rc clone and
+                            // remains valid even after the pool entry is dropped.
+                            self.arrays.truncate(saved_array_pool_len);
                             self.push(retval)?;
                             self.pc = return_pc;
                             self.bp = saved_bp;
@@ -3033,14 +3020,15 @@ mod tests {
         // A global array (pool_idx < global_array_pool_len) can be stored into a
         // dictionary slot by store_prim without triggering ArrayFrameEscape.
         let mut vm = VM::new();
-        vm.arrays.push(vec![Cell::Int(0); 5]);
+        let ar = crate::array_ref::ArrayRef::new(vec![Cell::Int(0); 5]);
+        vm.arrays.push(ar.clone());
         vm.global_array_pool_len = 1; // mark pool[0] as global
 
         // Allocate a dictionary slot.
         let slot = vm.dp;
         vm.dict_write(Cell::None).unwrap();
 
-        let arr = Cell::Array(0);
+        let arr = Cell::Array(ar.clone());
         // store_prim pops addr first, then value; so push value then addr.
         vm.push(arr.clone()).unwrap();
         vm.push(Cell::DictAddr(slot)).unwrap();
@@ -3049,20 +3037,26 @@ mod tests {
             result.is_ok(),
             "store_prim should allow global array: {result:?}"
         );
-        assert_eq!(vm.dict_read(slot).unwrap(), arr);
+        // Verify the stored cell is a Cell::Array sharing the same Rc.
+        let stored = vm.dict_read(slot).unwrap();
+        assert!(
+            matches!(&stored, Cell::Array(stored_ar) if stored_ar.ptr_eq(&ar)),
+            "stored array must share Rc with original"
+        );
     }
 
     #[test]
     fn test_global_array_stored_via_set_prim() {
         // set_prim (SET &var, value) also accepts a global array.
         let mut vm = VM::new();
-        vm.arrays.push(vec![Cell::Int(0); 3]);
+        let ar = crate::array_ref::ArrayRef::new(vec![Cell::Int(0); 3]);
+        vm.arrays.push(ar.clone());
         vm.global_array_pool_len = 1;
 
         let slot = vm.dp;
         vm.dict_write(Cell::None).unwrap();
 
-        let arr = Cell::Array(0);
+        let arr = Cell::Array(ar.clone());
         // set_prim pops value first, then addr (stack: [..., addr, value]).
         vm.push(Cell::DictAddr(slot)).unwrap();
         vm.push(arr.clone()).unwrap();
@@ -3071,7 +3065,11 @@ mod tests {
             result.is_ok(),
             "set_prim should allow global array: {result:?}"
         );
-        assert_eq!(vm.dict_read(slot).unwrap(), arr);
+        let stored = vm.dict_read(slot).unwrap();
+        assert!(
+            matches!(&stored, Cell::Array(stored_ar) if stored_ar.ptr_eq(&ar)),
+            "stored array must share Rc with original"
+        );
     }
 
     #[test]
@@ -3093,14 +3091,25 @@ mod tests {
     fn test_non_global_array_store_rejected_by_store_prim() {
         // An array with pool_idx >= global_array_pool_len must still be rejected.
         let mut vm = VM::new();
-        vm.arrays.push(vec![Cell::Int(0); 5]);
+        let ar = crate::array_ref::ArrayRef::new(vec![Cell::Int(0); 5]);
+        vm.arrays.push(ar.clone());
         // global_array_pool_len stays 0, so pool[0] is NOT global.
 
         let slot = vm.dp;
         vm.dict_write(Cell::None).unwrap();
 
+        // Simulate a Call frame so is_executing_top_level() returns false.
+        vm.return_stack.push(ReturnFrame::TopLevel);
+        vm.return_stack.push(ReturnFrame::Call {
+            callee_xt: Xt(0),
+            return_pc: 0,
+            saved_bp: 0,
+            saved_array_pool_len: 0,
+            actual_arity: 0,
+        });
+
         // store_prim pops addr first, then value; so push value then addr.
-        vm.push(Cell::Array(0)).unwrap();
+        vm.push(Cell::Array(ar)).unwrap();
         vm.push(Cell::DictAddr(slot)).unwrap();
         let result = crate::primitives::store_prim(&mut vm);
         assert!(
@@ -3111,48 +3120,17 @@ mod tests {
 
     #[test]
     fn test_global_array_returnable_from_word() {
-        // A global array (pool_idx < saved_array_pool_len of the CALL frame) can
-        // be returned from a word without triggering ArrayFrameEscape.
-        //
-        // The ReturnVal check uses `frame_boundary = saved_array_pool_len` of the
-        // current CALL frame.  A global array created before the call has
-        // pool_idx < saved_array_pool_len, so it is safe to return.
-        let mut vm = VM::new();
-
-        // Insert a "global" array at pool slot 0.
-        vm.arrays.push(vec![Cell::Int(99); 3]);
-        // Simulate that TopLevel exit has already promoted it.
-        vm.global_array_pool_len = 1;
-
-        // Simulate a CALL frame where saved_array_pool_len = 1 (the array already
-        // existed when the word was called).
-        vm.return_stack.push(ReturnFrame::TopLevel);
-        vm.return_stack.push(ReturnFrame::Call {
-            callee_xt: Xt(0),
-            return_pc: 0,
-            saved_bp: 0,
-            saved_array_pool_len: 1,
-            actual_arity: 0,
-        });
-
-        // Push the global array as the return value.
-        vm.push(Cell::Array(0)).unwrap();
-
-        // Mimic the ReturnVal boundary check: frame_boundary = 1, pool_idx = 0 < 1 → OK.
-        let frame_boundary = match vm.return_stack.last().unwrap() {
-            ReturnFrame::Call {
-                saved_array_pool_len,
-                ..
-            } => *saved_array_pool_len,
-            _ => panic!("unexpected frame"),
-        };
-        let retval = vm.pop().unwrap();
-        if let Cell::Array(pool_idx) = &retval {
-            assert!(
-                *pool_idx < frame_boundary,
-                "global array should pass ReturnVal check"
-            );
-        }
+        // A global array can be returned from a word.
+        // Since Cell::Array(ArrayRef) is Rc-backed, the array stays alive after
+        // the pool is truncated. This test verifies the high-level behavior via
+        // run_source rather than testing pool_idx arithmetic directly.
+        let result = run_source(
+            "DIM @G[3]\n\
+             DEF GET_GLOBAL()\n  RETURN G\nEND\n\
+             PUTDEC ARRAY_LEN(GET_GLOBAL())",
+        );
+        assert!(result.is_ok(), "expected success, got: {result:?}");
+        assert_eq!(result.unwrap().trim(), "3");
     }
 
     #[test]
@@ -3283,11 +3261,11 @@ mod tests {
 
     #[test]
     fn test_array_pool_len_after_ownership_transfer() {
-        // After a word returns its local array, the transferred array occupies the
-        // boundary slot in the caller's pool.  At the top level, when the TopLevel
-        // frame is popped, all remaining pool entries are promoted to the global
-        // region (global_array_pool_len is advanced to arrays.len()), so the pool
-        // is NOT empty — it contains exactly the one promoted array.
+        // Since Cell::Array is now Rc-backed (ArrayRef), returning a frame-local
+        // array no longer requires swapping pool entries.  The pool is truncated
+        // back to the frame boundary on return, so vm.arrays.len() == 0 after the
+        // top-level call completes.  The returned Cell::Array keeps the storage
+        // alive via its Rc — verified by the PUTDEC ARRAY_LEN assertion.
         let mut interp = crate::interpreter::Interpreter::new();
         interp
             .exec_source(
@@ -3295,16 +3273,12 @@ mod tests {
                  PUTDEC ARRAY_LEN(GIVE_ARRAY())",
             )
             .expect("exec_source failed");
-        // The returned array is now promoted to global; pool has exactly 1 entry.
+        // The top-level DROP_TO_MARKER discards the returned Cell::Array, so the
+        // pool is empty after the statement completes.
         assert_eq!(
             interp.vm().arrays.len(),
-            1,
-            "array pool should contain exactly the one promoted (returned) array"
-        );
-        assert_eq!(
-            interp.vm().global_array_pool_len,
-            1,
-            "global_array_pool_len should reflect the promoted array"
+            0,
+            "array pool should be empty after the Rc-backed returned array is discarded"
         );
     }
 

@@ -58,6 +58,28 @@ impl ArrayRef {
         self.inner.borrow().get(idx).cloned()
     }
 
+    /// Return `true` if `self` and `other` share the same underlying `Rc` allocation.
+    ///
+    /// This is pointer identity, not content equality.  Content equality semantics
+    /// for arrays are deferred to a follow-up issue.
+    pub fn ptr_eq(&self, other: &Self) -> bool {
+        Rc::ptr_eq(&self.inner, &other.inner)
+    }
+
+    /// Apply a mutable closure to the underlying `Vec<Cell>`.
+    ///
+    /// The `borrow_mut()` guard is held only for the duration of the closure and
+    /// is dropped before this function returns.  No `RefMut` escapes the call.
+    ///
+    /// Use this for in-place mutations (e.g. shuffle) where the element-level
+    /// `set()` API is insufficient.
+    pub fn with_mut<F, R>(&self, f: F) -> R
+    where
+        F: FnOnce(&mut Vec<Cell>) -> R,
+    {
+        f(&mut self.inner.borrow_mut())
+    }
+
     /// Write `value` into position `idx`.
     ///
     /// Returns `Err(TbxError::ArrayIndexOutOfBounds)` if `idx >= len`.
