@@ -2837,7 +2837,7 @@ PUTDEC 99
     #[test]
     fn test_compile_program_top_level_array_store_to_global_var() {
         let mut interp = Interpreter::new();
-        let src = "DIM @A[1]\nPUTDEC ARRAY_LEN(A)";
+        let src = "DIM @A[1]\nPUTDEC ARRAY_LEN(@A)";
         interp.compile_program(src).unwrap();
         assert_eq!(interp.take_output(), "1");
     }
@@ -2856,7 +2856,7 @@ PUTSTR S"#;
     fn test_compile_program_word_can_copy_top_level_array_global() {
         let mut interp = Interpreter::new();
         let src =
-            "DIM @A[1]\nVAR B\nDEF COPY_ARRAY()\n  SET &B, A\nEND\nCOPY_ARRAY\nPUTDEC ARRAY_LEN(B)";
+            "DIM @A[1]\nVAR B\nDEF COPY_ARRAY()\n  SET &B, A\nEND\nCOPY_ARRAY\nPUTDEC ARRAY_LEN(@B)";
         interp.compile_program(src).unwrap();
         assert_eq!(interp.take_output(), "1");
     }
