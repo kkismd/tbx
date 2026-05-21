@@ -1,0 +1,26 @@
+# lib/tests/test_tuple_len.tbx — TBX tests for TUPLE_LEN
+USE "lib/tests/helper.tbx"
+
+# --- TUPLE_LEN: empty tuple returns 0 ---
+
+ASSERT TUPLE_LEN(TUPLE()) = 0
+
+# --- TUPLE_LEN: multi-element tuple returns length ---
+
+ASSERT TUPLE_LEN(TUPLE(1, 2, 3)) = 3
+
+# --- TUPLE_LEN: tuple stored in a variable ---
+
+DEF LEN_FROM_VAR()
+  VAR T
+  LET T = TUPLE(10, 20, 30, 40)
+  RETURN TUPLE_LEN(T)
+END
+ASSERT LEN_FROM_VAR() = 4
+
+# --- TUPLE_LEN: tuple returned from a function ---
+
+DEF MAKE_PAIR()
+  RETURN TUPLE(7, 8)
+END
+ASSERT TUPLE_LEN(MAKE_PAIR()) = 2

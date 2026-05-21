@@ -2248,6 +2248,7 @@ pub fn register_all(vm: &mut VM) {
     // arity stays 0: TUPLE accepts zero or more arguments (empty tuple is allowed).
     vm.register(tuple_entry);
     vm.register(WordEntry::new_primitive("ARRAY_LEN", array_len_prim));
+    vm.register(WordEntry::new_primitive("TUPLE_LEN", tuple_len_prim));
     let mut array_get_entry = WordEntry::new_primitive("ARRAY_GET", array_get_prim);
     array_get_entry.flags = FLAG_SYSTEM;
     vm.register(array_get_entry);
