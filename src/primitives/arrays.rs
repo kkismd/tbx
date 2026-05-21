@@ -204,6 +204,25 @@ pub fn tuple_get_prim(vm: &mut VM) -> Result<(), TbxError> {
     Ok(())
 }
 
+/// TUPLE_LEN — return the number of elements in a tuple.
+///
+/// Pops `Cell::Tuple(elems)` from the stack and pushes the element count as `Cell::Int`.
+/// Returns `TbxError::TypeError` if the top of the stack is not a `Cell::Tuple`.
+///
+/// Stack: `[..., Cell::Tuple(elems)]` → `Cell::Int(len)`
+pub fn tuple_len_prim(vm: &mut VM) -> Result<(), TbxError> {
+    match vm.pop()? {
+        Cell::Tuple(elems) => {
+            vm.push(Cell::Int(elems.len() as i64))?;
+            Ok(())
+        }
+        other => Err(TbxError::TypeError {
+            expected: "Tuple",
+            got: other.type_name(),
+        }),
+    }
+}
+
 /// ARRAY_LEN — return the length of an array.
 ///
 /// Pops `Cell::Array(pool_idx)` from the stack and pushes the number of elements
@@ -232,6 +251,52 @@ pub fn array_len_prim(vm: &mut VM) -> Result<(), TbxError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // --- tuple_len_prim ---
+
+    #[test]
+    fn test_tuple_len_prim_empty() {
+        // An empty tuple must return 0.
+        let mut vm = VM::new();
+        let tuple = Cell::new_tuple(vec![]).unwrap();
+        vm.push(tuple).unwrap();
+        tuple_len_prim(&mut vm).unwrap();
+        assert_eq!(vm.pop(), Ok(Cell::Int(0)));
+    }
+
+    #[test]
+    fn test_tuple_len_prim_one_element() {
+        // A one-element tuple must return 1.
+        let mut vm = VM::new();
+        let tuple = Cell::new_tuple(vec![Cell::Int(42)]).unwrap();
+        vm.push(tuple).unwrap();
+        tuple_len_prim(&mut vm).unwrap();
+        assert_eq!(vm.pop(), Ok(Cell::Int(1)));
+    }
+
+    #[test]
+    fn test_tuple_len_prim_multi_element() {
+        // A three-element tuple must return 3.
+        let mut vm = VM::new();
+        let tuple = Cell::new_tuple(vec![Cell::Int(1), Cell::Int(2), Cell::Int(3)]).unwrap();
+        vm.push(tuple).unwrap();
+        tuple_len_prim(&mut vm).unwrap();
+        assert_eq!(vm.pop(), Ok(Cell::Int(3)));
+    }
+
+    #[test]
+    fn test_tuple_len_prim_non_tuple_returns_type_error() {
+        // A non-Tuple value must produce a TypeError.
+        let mut vm = VM::new();
+        vm.push(Cell::Int(99)).unwrap();
+        assert!(matches!(
+            tuple_len_prim(&mut vm),
+            Err(TbxError::TypeError {
+                expected: "Tuple",
+                ..
+            })
+        ));
+    }
 
     // --- tuple_get_prim ---
 
