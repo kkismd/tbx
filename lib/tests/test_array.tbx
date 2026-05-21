@@ -82,7 +82,7 @@ END
 ASSERT SUM_ARRAY(5) = 20
 
 DIM @A[1]
-ASSERT ARRAY_LEN(A) = 1
+ASSERT ARRAY_LEN(@A) = 1
 
 # --- User-defined word named ARRAY must not shadow the hidden system ARRAY ---
 # DIM @A[n] must continue to use the hidden system ARRAY entry even when a
@@ -94,7 +94,7 @@ END
 
 DEF DIM_WITH_USER_ARRAY_DEFINED()
   DIM @B[2]
-  RETURN ARRAY_LEN(B)
+  RETURN ARRAY_LEN(@B)
 END
 
 ASSERT DIM_WITH_USER_ARRAY_DEFINED() = 2

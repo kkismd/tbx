@@ -1,21 +1,26 @@
 # lib/tests/test_array_len.tbx — TBX tests for ARRAY_LEN
 USE "lib/tests/helper.tbx"
 
-# --- ARRAY_LEN: array length ---
+# --- ARRAY_LEN(@A): dedicated syntax for array length (issue #717) ---
 
+# Local array: ARRAY_LEN(@A) inside a DEF must return the declared size.
 DEF LEN_BASIC()
   DIM @A[5]
-  RETURN ARRAY_LEN(A)
+  RETURN ARRAY_LEN(@A)
 END
 ASSERT LEN_BASIC() = 5
 
 DEF LEN_ONE()
   DIM @A[1]
-  RETURN ARRAY_LEN(A)
+  RETURN ARRAY_LEN(@A)
 END
 ASSERT LEN_ONE() = 1
 
-# Use ARRAY_LEN in a WHILE loop condition (1-based indices)
+# Global array: ARRAY_LEN(@A) at top level must return the declared size.
+DIM @G[7]
+ASSERT ARRAY_LEN(@G) = 7
+
+# Use ARRAY_LEN(@A) in a WHILE loop condition (1-based indices)
 DEF SUM_WITH_LEN(N)
   DIM @A[N]
   VAR I
@@ -27,7 +32,7 @@ DEF SUM_WITH_LEN(N)
     LET I = I + 1
   ENDWH
   LET I = 1
-  WHILE I <= ARRAY_LEN(A)
+  WHILE I <= ARRAY_LEN(@A)
     LET S = S + @A[I]
     LET I = I + 1
   ENDWH

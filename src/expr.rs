@@ -163,6 +163,105 @@ impl<'a> ExprCompiler<'a> {
                         continue;
                     }
 
+                    // -------------------------------------------------------
+                    // Dedicated syntax: ARRAY_LEN(@A)
+                    //
+                    // `ARRAY_LEN(@A)` is handled here as a special form rather than
+                    // as a general function call, because `@A` alone (without a
+                    // following `[`) is not a valid expression.  The compiler
+                    // recognises the exact token pattern
+                    //   ARRAY_LEN `(` `@` Ident `)`
+                    // and emits: <array handle read> ARRAY_LEN.
+                    //
+                    // `ARRAY_LEN(A)` (bare identifier without `@`) is explicitly
+                    // rejected to avoid silently treating a non-array as an array.
+                    // -------------------------------------------------------
+                    if name == "ARRAY_LEN" {
+                        // Peek ahead for `(`.
+                        let next_is_lparen = tokens
+                            .get(i + 1)
+                            .map(|st| matches!(st.token, Token::LParen))
+                            .unwrap_or(false);
+                        if next_is_lparen {
+                            // tokens[i]   = ARRAY_LEN
+                            // tokens[i+1] = (
+                            // tokens[i+2] = ?
+                            match tokens.get(i + 2).map(|st| st.token.clone()) {
+                                Some(Token::At) => {
+                                    // Pattern: ARRAY_LEN ( @ Ident )
+                                    // tokens[i+3] must be Ident, tokens[i+4] must be `)`.
+                                    let array_name =
+                                        match tokens.get(i + 3).map(|st| st.token.clone()) {
+                                            Some(Token::Ident(n)) => n.to_ascii_uppercase(),
+                                            _ => {
+                                                return Err(TbxError::InvalidExpression {
+                                                reason:
+                                                    "ARRAY_LEN(@A): expected array name after '@'",
+                                            });
+                                            }
+                                        };
+                                    match tokens.get(i + 4).map(|st| st.token.clone()) {
+                                        Some(Token::RParen) => {}
+                                        _ => {
+                                            return Err(TbxError::InvalidExpression {
+                                                reason:
+                                                    "ARRAY_LEN(@A): expected ')' after array name",
+                                            });
+                                        }
+                                    }
+
+                                    // Emit the array handle read (local or global).
+                                    if let Some(local_idx) =
+                                        self.local_table.and_then(|lt| lt.get(&array_name)).copied()
+                                    {
+                                        emit_local_read(&mut output, local_idx, self.vm)?;
+                                    } else {
+                                        let arr_xt = self
+                                            .vm
+                                            .lookup_including_self(
+                                                &array_name,
+                                                self.self_word.as_deref(),
+                                            )
+                                            .ok_or_else(|| TbxError::UndefinedSymbol {
+                                                name: array_name.clone(),
+                                            })?;
+                                        match &self.vm.headers[arr_xt.index()].kind {
+                                            EntryKind::Variable(addr) => {
+                                                emit_var_read(&mut output, *addr, self.vm)?;
+                                            }
+                                            _ => {
+                                                return Err(TbxError::TypeError {
+                                                    expected: "array variable for ARRAY_LEN(@A)",
+                                                    got: "non-variable",
+                                                });
+                                            }
+                                        }
+                                    }
+
+                                    // Emit ARRAY_LEN.
+                                    let array_len_xt = require_xt(self.vm, "ARRAY_LEN")?;
+                                    output.push(Cell::Xt(array_len_xt));
+
+                                    // Advance past `(`, `@`, Ident, `)` (4 tokens beyond i).
+                                    i += 4;
+                                    prev_was_operand = true;
+                                    i += 1;
+                                    continue;
+                                }
+                                _ => {
+                                    // Any argument form other than `@IDENT` is rejected.
+                                    // ARRAY_LEN only accepts the designator form ARRAY_LEN(@A).
+                                    return Err(TbxError::InvalidExpression {
+                                        reason:
+                                            "ARRAY_LEN expects @A designator; use ARRAY_LEN(@A)",
+                                    });
+                                }
+                            }
+                        }
+                        // ARRAY_LEN without parentheses falls through to the normal
+                        // identifier resolution path below (emitting it as a bare Xt).
+                    }
+
                     let xt = self
                         .vm
                         .lookup_including_self(&name, self.self_word.as_deref())
@@ -2111,6 +2210,144 @@ mod tests {
         assert!(
             matches!(err, TbxError::InvalidExpression { .. }),
             "expected InvalidExpression for &@A[], got: {err:?}"
+        );
+    }
+
+    // ------------------------------------------------------------------
+    // ARRAY_LEN(@A) — dedicated syntax (issue #717)
+    // ------------------------------------------------------------------
+
+    /// `ARRAY_LEN(@A)` against a global variable A must emit:
+    /// LIT DictAddr(0) FETCH ARRAY_LEN.
+    #[test]
+    fn test_array_len_at_global_compiles() {
+        let mut vm = make_vm();
+        vm.dict_write(Cell::Int(0)).unwrap();
+        vm.register(crate::dict::WordEntry::new_variable("A", 0));
+
+        let tokens = lex("ARRAY_LEN(@A)");
+        let result = ExprCompiler::new(&mut vm).compile_expr(&tokens).unwrap();
+
+        let lit_xt = vm.lookup("LIT").unwrap();
+        let fetch_xt = vm.lookup("FETCH").unwrap();
+        let array_len_xt = vm.lookup("ARRAY_LEN").unwrap();
+
+        assert_eq!(
+            result,
+            vec![
+                Cell::Xt(lit_xt),
+                Cell::DictAddr(0),
+                Cell::Xt(fetch_xt),
+                Cell::Xt(array_len_xt),
+            ]
+        );
+    }
+
+    /// `ARRAY_LEN(@A)` against a local variable A at slot 0 must emit:
+    /// LIT StackAddr(0) FETCH ARRAY_LEN.
+    #[test]
+    fn test_array_len_at_local_compiles() {
+        let mut vm = make_vm();
+
+        let mut local_table = HashMap::new();
+        local_table.insert("A".to_string(), 0usize);
+
+        let tokens = lex("ARRAY_LEN(@A)");
+        let result = ExprCompiler::with_context(&mut vm, Some(&local_table), None, None)
+            .compile_expr(&tokens)
+            .unwrap();
+
+        let lit_xt = vm.lookup("LIT").unwrap();
+        let fetch_xt = vm.lookup("FETCH").unwrap();
+        let array_len_xt = vm.lookup("ARRAY_LEN").unwrap();
+
+        assert_eq!(
+            result,
+            vec![
+                Cell::Xt(lit_xt),
+                Cell::StackAddr(0),
+                Cell::Xt(fetch_xt),
+                Cell::Xt(array_len_xt),
+            ]
+        );
+    }
+
+    /// `ARRAY_LEN(A)` — bare variable without `@` must be rejected.
+    #[test]
+    fn test_array_len_bare_ident_is_error() {
+        let mut vm = make_vm();
+        vm.dict_write(Cell::Int(0)).unwrap();
+        vm.register(crate::dict::WordEntry::new_variable("A", 0));
+
+        let tokens = lex("ARRAY_LEN(A)");
+        let err = ExprCompiler::new(&mut vm)
+            .compile_expr(&tokens)
+            .unwrap_err();
+        assert!(
+            matches!(err, TbxError::InvalidExpression { .. }),
+            "expected InvalidExpression for ARRAY_LEN(A), got: {err:?}"
+        );
+    }
+
+    /// `ARRAY_LEN(@NOEXIST)` (undefined identifier) must produce UndefinedSymbol.
+    #[test]
+    fn test_array_len_at_undefined_symbol_is_error() {
+        let mut vm = make_vm();
+
+        let tokens = lex("ARRAY_LEN(@NOEXIST)");
+        let err = ExprCompiler::new(&mut vm)
+            .compile_expr(&tokens)
+            .unwrap_err();
+        assert!(
+            matches!(err, TbxError::UndefinedSymbol { ref name } if name == "NOEXIST"),
+            "expected UndefinedSymbol for ARRAY_LEN(@NOEXIST), got: {err:?}"
+        );
+    }
+
+    /// `ARRAY_LEN(@)` (missing identifier after `@`) must produce a syntax error.
+    #[test]
+    fn test_array_len_at_missing_ident_is_error() {
+        let mut vm = make_vm();
+
+        // ARRAY_LEN(@) — the `@` is not followed by an identifier.
+        let tokens = lex("ARRAY_LEN(@)");
+        let err = ExprCompiler::new(&mut vm)
+            .compile_expr(&tokens)
+            .unwrap_err();
+        assert!(
+            matches!(err, TbxError::InvalidExpression { .. }),
+            "expected InvalidExpression for ARRAY_LEN(@), got: {err:?}"
+        );
+    }
+
+    /// `ARRAY_LEN(FUNC())` — function call as argument must be rejected.
+    /// Only `ARRAY_LEN(@A)` designator form is accepted.
+    #[test]
+    fn test_array_len_func_call_arg_is_error() {
+        let mut vm = make_vm();
+
+        let tokens = lex("ARRAY_LEN(FUNC())");
+        let err = ExprCompiler::new(&mut vm)
+            .compile_expr(&tokens)
+            .unwrap_err();
+        assert!(
+            matches!(err, TbxError::InvalidExpression { .. }),
+            "expected InvalidExpression for ARRAY_LEN(FUNC()), got: {err:?}"
+        );
+    }
+
+    /// `ARRAY_LEN(1)` — literal as argument must be rejected.
+    #[test]
+    fn test_array_len_literal_arg_is_error() {
+        let mut vm = make_vm();
+
+        let tokens = lex("ARRAY_LEN(1)");
+        let err = ExprCompiler::new(&mut vm)
+            .compile_expr(&tokens)
+            .unwrap_err();
+        assert!(
+            matches!(err, TbxError::InvalidExpression { .. }),
+            "expected InvalidExpression for ARRAY_LEN(1), got: {err:?}"
         );
     }
 }
