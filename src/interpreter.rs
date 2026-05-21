@@ -5109,4 +5109,51 @@ PUTDEC 1; PUTDEC ADD(
         interp.exec_source(src).expect("ARRAY_LEN(@A) must succeed");
         assert_eq!(interp.take_output().trim(), "5");
     }
+
+    #[test]
+    fn test_shuffle_bare_array_handle_is_error() {
+        // `SHUFFLE A` (bare array handle without @-sigil) must fail.
+        // SHUFFLE only accepts the `SHUFFLE @A` designator form.
+        let mut interp = Interpreter::new();
+        let src = "DIM @A[1]\nSHUFFLE A";
+        let result = interp.exec_source(src);
+        assert!(
+            result.is_err(),
+            "expected error for `SHUFFLE A` (bare array handle), but it succeeded"
+        );
+    }
+
+    #[test]
+    fn test_shuffle_at_designator_is_valid() {
+        // `SHUFFLE @A` must succeed and preserve the element count.
+        let mut interp = Interpreter::new();
+        let src =
+            "DIM @A[3]\nSET &@A[1], 10\nSET &@A[2], 20\nSET &@A[3], 30\nSHUFFLE @A\nPUTDEC ARRAY_LEN(@A)";
+        interp.exec_source(src).expect("SHUFFLE @A must succeed");
+        assert_eq!(interp.take_output().trim(), "3");
+    }
+
+    #[test]
+    fn test_shuffle_at_designator_local_array_is_valid() {
+        // `SHUFFLE @A` inside a DEF body with a local array must succeed.
+        let mut interp = Interpreter::new();
+        let src =
+            "DEF DO_SHUFFLE()\n  DIM @A[3]\n  LET @A[1] = 1\n  LET @A[2] = 2\n  LET @A[3] = 3\n  SHUFFLE @A\n  RETURN ARRAY_LEN(@A)\nEND\nPUTDEC DO_SHUFFLE()";
+        interp
+            .exec_source(src)
+            .expect("SHUFFLE @A on local array must succeed");
+        assert_eq!(interp.take_output().trim(), "3");
+    }
+
+    #[test]
+    fn test_user_defined_word_with_array_argument_is_error() {
+        // Passing a whole-array handle as an argument to a user-defined word must fail with TypeError.
+        let mut interp = Interpreter::new();
+        let src = "DEF USE_ARRAY(X)\n  PUTDEC 1\nEND\nDIM @A[1]\nUSE_ARRAY(A)";
+        let result = interp.exec_source(src);
+        assert!(
+            matches!(result, Err(ref e) if matches!(e.kind, TbxError::TypeError { .. })),
+            "expected TypeError for `USE_ARRAY(A)` (array as argument), got: {result:?}"
+        );
+    }
 }

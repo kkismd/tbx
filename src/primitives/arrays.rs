@@ -233,8 +233,18 @@ pub fn tuple_len_prim(vm: &mut VM) -> Result<(), TbxError> {
 /// Unlike `SET`, this primitive bypasses the surface-language prohibition on
 /// assigning whole-array handles to scalar variables.  Only the `DIM` compiler
 /// may emit its Xt.
+///
+/// Invariant: `value` must be `Cell::Array`.  Any other cell type is rejected
+/// with `TypeError` to catch internal misuse early.
 pub(super) fn array_store_local_prim(vm: &mut VM) -> Result<(), TbxError> {
     let value = vm.pop()?;
+    // Enforce the invariant: only Cell::Array may be stored via this path.
+    if !matches!(value, Cell::Array(_)) {
+        return Err(TbxError::TypeError {
+            expected: "Array (ARRAY_STORE_LOCAL invariant: value must be Cell::Array)",
+            got: value.type_name(),
+        });
+    }
     let addr = vm.pop()?;
     match addr {
         Cell::StackAddr(idx) => {

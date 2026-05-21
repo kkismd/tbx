@@ -25,12 +25,7 @@ DEF SHUFFLE_PRESERVES_LEN()
   LET @A[3] = 3
   LET @A[4] = 4
   LET @A[5] = 5
-  SHUFFLE A
+  SHUFFLE @A
   RETURN ARRAY_LEN(@A)
 END
 ASSERT SHUFFLE_PRESERVES_LEN() = 5
-
-# --- SHUFFLE used as a function expression returns the same array handle ---
-# NOTE: SHUFFLE_RETURNS_ARRAY relied on assigning an array handle to a plain
-# variable (LET A = SHUFFLE(A)), which is being migrated to a separate issue.
-# Covered by SHUFFLE_PRESERVES_LEN above.

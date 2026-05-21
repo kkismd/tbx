@@ -1883,13 +1883,16 @@ pub fn randomize_prim(vm: &mut VM) -> Result<(), TbxError> {
     Ok(())
 }
 
-/// SHUFFLE — randomly permute the elements of an array in place.
+/// SHUFFLE_INTERNAL — internal primitive that shuffles an array in place.
 ///
-/// Pops `Cell::Array(pool_idx)` from the stack, shuffles the array's elements
-/// using the VM's RNG, and pushes the same `Cell::Array(pool_idx)` back.
+/// Pops `Cell::Array(pool_idx)` from the stack and shuffles the array's elements
+/// using the VM's RNG.  Does not push any value; the array handle is consumed.
 ///
-/// Stack signature: `( arr:Array -- arr:Array )`
-pub fn shuffle_prim(vm: &mut VM) -> Result<(), TbxError> {
+/// This is a hidden system primitive.  User code accesses SHUFFLE via the
+/// IMMEDIATE `shuffle_stmt_prim`, which enforces the `SHUFFLE @A` syntax.
+///
+/// Stack signature: `( arr:Array -- )`
+pub fn shuffle_inner_prim(vm: &mut VM) -> Result<(), TbxError> {
     use rand::seq::SliceRandom;
     let pool_idx = match vm.pop()? {
         Cell::Array(idx) => idx,
@@ -1909,7 +1912,154 @@ pub fn shuffle_prim(vm: &mut VM) -> Result<(), TbxError> {
             size: arrays_len,
         })?;
     arr.shuffle(&mut vm.rng);
-    vm.push(Cell::Array(pool_idx))
+    Ok(())
+}
+
+/// SHUFFLE — IMMEDIATE primitive that shuffles an array in place.
+///
+/// Surface syntax: `SHUFFLE @A`
+///
+/// In compile mode (inside DEF..END):
+///   - Consumes `@` and the array name from the token stream.
+///   - Emits code that loads the array handle and calls SHUFFLE_INTERNAL.
+///
+/// In execute mode (top level):
+///   - Consumes `@` and the array name from the token stream.
+///   - Resolves the array handle and shuffles directly.
+///
+/// Only the `@A` designator form is accepted.  Bare `SHUFFLE A` is rejected
+/// with `InvalidExpression` to enforce the surface-language prohibition on
+/// whole-array handles as primitive arguments (issue #718).
+pub fn shuffle_stmt_prim(vm: &mut VM) -> Result<(), TbxError> {
+    use crate::lexer::Token;
+
+    // Consume `@`.
+    let at_tok = vm.next_token()?;
+    if at_tok.token != Token::At {
+        return Err(TbxError::InvalidExpression {
+            reason: "SHUFFLE: expected '@A' designator (e.g. SHUFFLE @A); bare 'SHUFFLE A' is not allowed",
+        });
+    }
+
+    // Consume the array binding identifier.
+    let array_name = vm.expect_ident("SHUFFLE: expected array name after '@' (e.g. SHUFFLE @A)")?;
+
+    if vm.is_compiling {
+        // Compile mode: emit code to load the array handle and call SHUFFLE_INTERNAL.
+
+        // Resolve the array: local binding takes priority over global.
+        let local_idx: Option<usize> = vm
+            .compile_state
+            .as_ref()
+            .and_then(|s| s.local_table.get(&array_name).copied());
+
+        let lit_xt =
+            vm.find_by_kind(|k| matches!(k, EntryKind::Lit))
+                .ok_or(TbxError::UndefinedSymbol {
+                    name: "LIT".to_string(),
+                })?;
+        let fetch_xt = vm.lookup("FETCH").ok_or(TbxError::UndefinedSymbol {
+            name: "FETCH".to_string(),
+        })?;
+        let shuffle_internal_xt =
+            vm.lookup_hidden_system("SHUFFLE_INTERNAL")
+                .ok_or(TbxError::UndefinedSymbol {
+                    name: "SHUFFLE_INTERNAL".to_string(),
+                })?;
+
+        if let Some(idx) = local_idx {
+            // Emit: LIT StackAddr(idx)  FETCH  — load the local array handle.
+            vm.dict_write(Cell::Xt(lit_xt))?;
+            vm.dict_write(Cell::StackAddr(idx))?;
+            vm.dict_write(Cell::Xt(fetch_xt))?;
+        } else {
+            // Look up in the global dictionary.
+            let xt = vm.lookup(&array_name).ok_or(TbxError::UndefinedSymbol {
+                name: array_name.clone(),
+            })?;
+            let addr = match &vm.headers[xt.index()].kind {
+                EntryKind::Variable(addr) => *addr,
+                _ => {
+                    return Err(TbxError::TypeError {
+                        expected: "array variable for SHUFFLE @-sigil",
+                        got: "non-variable",
+                    });
+                }
+            };
+            // Emit: LIT DictAddr(addr)  FETCH  — load the global array handle.
+            vm.dict_write(Cell::Xt(lit_xt))?;
+            vm.dict_write(Cell::DictAddr(addr))?;
+            vm.dict_write(Cell::Xt(fetch_xt))?;
+        }
+
+        // Emit: SHUFFLE_INTERNAL  — shuffle in place (consumes the array handle).
+        vm.dict_write(Cell::Xt(shuffle_internal_xt))?;
+    } else {
+        // Execute mode: resolve the array handle and shuffle directly.
+
+        // Check compile_state local table first (should be empty at top level, but be safe).
+        let local_idx: Option<usize> = vm
+            .compile_state
+            .as_ref()
+            .and_then(|s| s.local_table.get(&array_name).copied());
+
+        let pool_idx = if let Some(local_stack_idx) = local_idx {
+            // Read the array handle from the local slot.
+            let cell = vm.local_read(local_stack_idx)?;
+            match cell {
+                Cell::Array(idx) => idx,
+                other => {
+                    return Err(TbxError::TypeError {
+                        expected: "Array",
+                        got: other.type_name(),
+                    });
+                }
+            }
+        } else {
+            // Look up in the global dictionary.
+            let xt = vm.lookup(&array_name).ok_or(TbxError::UndefinedSymbol {
+                name: array_name.clone(),
+            })?;
+            let addr = match &vm.headers[xt.index()].kind {
+                EntryKind::Variable(addr) => *addr,
+                _ => {
+                    return Err(TbxError::TypeError {
+                        expected: "array variable for SHUFFLE @-sigil",
+                        got: "non-variable",
+                    });
+                }
+            };
+            match vm
+                .dictionary
+                .get(addr)
+                .cloned()
+                .ok_or(TbxError::IndexOutOfBounds {
+                    index: addr,
+                    size: vm.dictionary.len(),
+                })? {
+                Cell::Array(idx) => idx,
+                other => {
+                    return Err(TbxError::TypeError {
+                        expected: "Array",
+                        got: other.type_name(),
+                    });
+                }
+            }
+        };
+
+        use rand::seq::SliceRandom;
+        let arrays_len = vm.arrays.len();
+        let arr = vm
+            .arrays
+            .get_mut(pool_idx)
+            .ok_or(TbxError::IndexOutOfBounds {
+                index: pool_idx,
+                size: arrays_len,
+            })?;
+        arr.shuffle(&mut vm.rng);
+    }
+
+    Ok(())
 }
 
 /// UNIXTIME — return the current time as seconds since the Unix epoch.
@@ -2279,10 +2429,17 @@ pub fn register_all(vm: &mut VM) {
 
     // Random number primitives.
     // RND(n) returns a random integer in [1, n]; RANDOMIZE re-seeds the RNG from OS entropy;
-    // SHUFFLE permutes an array in place and returns the same array handle.
+    // SHUFFLE_INTERNAL is the hidden primitive that performs in-place array shuffling;
+    // SHUFFLE is the IMMEDIATE surface primitive enforcing the `SHUFFLE @A` syntax.
     vm.register(WordEntry::new_primitive("RND", rnd_prim));
     vm.register(WordEntry::new_primitive("RANDOMIZE", randomize_prim));
-    vm.register(WordEntry::new_primitive("SHUFFLE", shuffle_prim));
+    let mut shuffle_internal_entry =
+        WordEntry::new_primitive("SHUFFLE_INTERNAL", shuffle_inner_prim);
+    shuffle_internal_entry.flags = FLAG_SYSTEM | FLAG_HIDDEN;
+    vm.register(shuffle_internal_entry);
+    let mut shuffle_entry = WordEntry::new_primitive("SHUFFLE", shuffle_stmt_prim);
+    shuffle_entry.flags = FLAG_IMMEDIATE | FLAG_SYSTEM;
+    vm.register(shuffle_entry);
 
     // Time primitives.
     // UNIXTIME returns the current Unix timestamp as a Float (seconds since epoch).
@@ -6474,11 +6631,11 @@ mod tests {
         assert_eq!(vm.data_stack.len(), 0);
     }
 
-    // --- shuffle_prim ---
+    // --- shuffle_inner_prim ---
 
     #[test]
-    fn test_shuffle_prim_preserves_elements() {
-        // SHUFFLE must not add or remove elements from the array.
+    fn test_shuffle_inner_prim_preserves_elements() {
+        // SHUFFLE_INTERNAL must not add or remove elements from the array.
         use rand::SeedableRng;
         let mut vm = VM::new();
         vm.rng = rand::rngs::SmallRng::seed_from_u64(123);
@@ -6490,9 +6647,9 @@ mod tests {
             Cell::Int(5),
         ]);
         vm.push(Cell::Array(0)).unwrap();
-        shuffle_prim(&mut vm).unwrap();
-        // The returned value must be Cell::Array(0).
-        assert_eq!(vm.pop(), Ok(Cell::Array(0)));
+        shuffle_inner_prim(&mut vm).unwrap();
+        // shuffle_inner_prim consumes the array handle; stack must be empty.
+        assert_eq!(vm.data_stack.len(), 0);
         // All original elements must still be present (order may differ).
         let mut values: Vec<i64> = vm.arrays[0]
             .iter()
@@ -6506,16 +6663,15 @@ mod tests {
     }
 
     #[test]
-    fn test_shuffle_prim_deterministic() {
-        // With a fixed seed, SHUFFLE must produce the same permutation every time.
+    fn test_shuffle_inner_prim_deterministic() {
+        // With a fixed seed, SHUFFLE_INTERNAL must produce the same permutation every time.
         use rand::SeedableRng;
         let mut vm = VM::new();
         vm.rng = rand::rngs::SmallRng::seed_from_u64(42);
         vm.arrays
             .push(vec![Cell::Int(1), Cell::Int(2), Cell::Int(3)]);
         vm.push(Cell::Array(0)).unwrap();
-        shuffle_prim(&mut vm).unwrap();
-        vm.pop().unwrap();
+        shuffle_inner_prim(&mut vm).unwrap();
         let first_run: Vec<i64> = vm.arrays[0]
             .iter()
             .map(|c| match c {
@@ -6530,8 +6686,7 @@ mod tests {
         vm2.arrays
             .push(vec![Cell::Int(1), Cell::Int(2), Cell::Int(3)]);
         vm2.push(Cell::Array(0)).unwrap();
-        shuffle_prim(&mut vm2).unwrap();
-        vm2.pop().unwrap();
+        shuffle_inner_prim(&mut vm2).unwrap();
         let second_run: Vec<i64> = vm2.arrays[0]
             .iter()
             .map(|c| match c {
@@ -6544,23 +6699,24 @@ mod tests {
     }
 
     #[test]
-    fn test_shuffle_prim_empty_array() {
-        // SHUFFLE on an empty array must not error.
+    fn test_shuffle_inner_prim_empty_array() {
+        // SHUFFLE_INTERNAL on an empty array must not error.
         let mut vm = VM::new();
         vm.arrays.push(vec![]);
         vm.push(Cell::Array(0)).unwrap();
-        shuffle_prim(&mut vm).unwrap();
-        assert_eq!(vm.pop(), Ok(Cell::Array(0)));
+        shuffle_inner_prim(&mut vm).unwrap();
+        // Stack must be empty: shuffle_inner_prim consumes the handle.
+        assert_eq!(vm.data_stack.len(), 0);
         assert_eq!(vm.arrays[0].len(), 0);
     }
 
     #[test]
-    fn test_shuffle_prim_type_error() {
-        // SHUFFLE on a non-Array cell must return TypeError.
+    fn test_shuffle_inner_prim_type_error() {
+        // SHUFFLE_INTERNAL on a non-Array cell must return TypeError.
         let mut vm = VM::new();
         vm.push(Cell::Int(42)).unwrap();
         assert!(matches!(
-            shuffle_prim(&mut vm),
+            shuffle_inner_prim(&mut vm),
             Err(TbxError::TypeError {
                 expected: "Array",
                 ..

@@ -870,6 +870,18 @@ impl VM {
                             if self.data_stack.len() < arity {
                                 return Err(TbxError::StackUnderflow);
                             }
+                            // Arrays are not first-class surface values; passing a
+                            // whole-array handle as an argument to a user-defined word
+                            // is not supported (issue #718).
+                            let arg_start = self.data_stack.len() - arity;
+                            for cell in &self.data_stack[arg_start..] {
+                                if matches!(cell, Cell::Array(_)) {
+                                    return Err(TbxError::TypeError {
+                                        expected: "non-array argument to user-defined word",
+                                        got: "Array",
+                                    });
+                                }
+                            }
                             if self.return_stack.len() >= MAX_RETURN_STACK_DEPTH {
                                 return Err(TbxError::ReturnStackOverflow {
                                     depth: self.return_stack.len(),
