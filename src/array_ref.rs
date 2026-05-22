@@ -69,6 +69,28 @@ impl ArrayRef {
         self.inner.borrow().get(idx).cloned()
     }
 
+    /// Return `true` if `self` and `other` point to the same Rc allocation.
+    ///
+    /// This is **pointer identity**, not content equality.  Two `ArrayRef`
+    /// values that hold identical element sequences but were created
+    /// independently will return `false`.  Only clones that share the same
+    /// underlying `Rc` allocation return `true`.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// # use tbx::array_ref::ArrayRef;
+    /// # use tbx::cell::Cell;
+    /// let a = ArrayRef::new(vec![Cell::Int(1)]);
+    /// let b = a.clone();                         // same allocation
+    /// let c = ArrayRef::new(vec![Cell::Int(1)]); // different allocation
+    /// assert!(a.ptr_eq(&b));
+    /// assert!(!a.ptr_eq(&c));
+    /// ```
+    pub fn ptr_eq(&self, other: &Self) -> bool {
+        Rc::ptr_eq(&self.inner, &other.inner)
+    }
+
     /// Write `value` into position `idx`.
     ///
     /// Returns `Err(TbxError::ArrayIndexOutOfBounds)` if `idx >= len`.
@@ -172,5 +194,19 @@ mod tests {
         let ar = ArrayRef::new(vec![Cell::Int(1), Cell::Int(2)]);
         let s = format!("{:?}", ar);
         assert!(s.starts_with("ArrayRef("));
+    }
+
+    #[test]
+    fn ptr_eq_clone_is_true() {
+        let a = ArrayRef::new(vec![Cell::Int(1), Cell::Int(2)]);
+        let b = a.clone();
+        assert!(a.ptr_eq(&b));
+    }
+
+    #[test]
+    fn ptr_eq_independent_same_content_is_false() {
+        let a = ArrayRef::new(vec![Cell::Int(1), Cell::Int(2)]);
+        let b = ArrayRef::new(vec![Cell::Int(1), Cell::Int(2)]);
+        assert!(!a.ptr_eq(&b));
     }
 }
