@@ -180,7 +180,7 @@ impl std::fmt::Display for Cell {
             Cell::Array(_) => write!(f, "<array>"),
             Cell::Str(s) => write!(f, "{}", s),
             Cell::ArrayAddr { array: _, elem_idx } => {
-                write!(f, "<arrayaddr:[{}]>", elem_idx)
+                write!(f, "<arrayaddr[{}]>", elem_idx)
             }
             Cell::None => write!(f, "<none>"),
             Cell::Marker => write!(f, "<marker>"),
@@ -463,7 +463,7 @@ mod tests {
                 elem_idx: 7,
             }
             .to_string(),
-            "<arrayaddr:[7]>"
+            "<arrayaddr[7]>"
         );
     }
 
