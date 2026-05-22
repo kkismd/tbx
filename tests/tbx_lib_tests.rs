@@ -1195,3 +1195,117 @@ fn test_let_tuple_projection_assignment_is_error() {
         .exec_source(src)
         .expect_err("LET T[1] = 10 tuple projection assignment should fail");
 }
+
+// ---------------------------------------------------------------------------
+// Whole-array surface ban tests (issue #718)
+//
+// SET / STORE must never write a Cell::Array handle to a scalar variable slot.
+// DIM @A[n] local initialisation is the only allowed path and uses the hidden
+// ARRAY_STORE_LOCAL primitive internally.
+// ---------------------------------------------------------------------------
+
+/// `SET &B, A` inside a word (StackAddr destination) must fail with TypeError.
+#[test]
+fn test_set_array_handle_to_local_var_is_type_error() {
+    let mut interp = Interpreter::new();
+    let src = concat!(
+        "DEF BAD_LOCAL()\n",
+        "  DIM @A[2]\n",
+        "  VAR B\n",
+        "  SET &B, A\n",
+        "END\n",
+        "BAD_LOCAL\n",
+    );
+    let err = interp
+        .exec_source(src)
+        .expect_err("SET &B, A (StackAddr write of array handle) must fail");
+    assert!(
+        err.to_string().contains("type error"),
+        "expected type error, got: {err}"
+    );
+}
+
+/// `SET &G, A` at the top level (DictAddr destination) must fail with TypeError.
+#[test]
+fn test_set_array_handle_to_global_var_is_type_error() {
+    let mut interp = Interpreter::new();
+    let src = concat!("DIM @A[2]\n", "VAR G\n", "SET &G, A\n",);
+    let err = interp
+        .exec_source(src)
+        .expect_err("SET &G, A (DictAddr write of array handle) must fail");
+    assert!(
+        err.to_string().contains("type error"),
+        "expected type error, got: {err}"
+    );
+}
+
+/// `LET B = A` inside a word must fail with TypeError (same array-handle ban).
+#[test]
+fn test_let_array_handle_to_local_var_is_type_error() {
+    let mut interp = Interpreter::new();
+    let src = concat!(
+        "DEF BAD_LET()\n",
+        "  DIM @A[2]\n",
+        "  VAR B\n",
+        "  LET B = A\n",
+        "END\n",
+        "BAD_LET\n",
+    );
+    let err = interp
+        .exec_source(src)
+        .expect_err("LET B = A (array handle assignment) must fail");
+    assert!(
+        err.to_string().contains("type error"),
+        "expected type error, got: {err}"
+    );
+}
+
+/// `ARRAY_GET(A, 1)` must not be callable from surface because ARRAY_GET is a
+/// hidden system helper.
+#[test]
+fn test_array_get_is_hidden_from_surface() {
+    let mut interp = Interpreter::new();
+    let src = concat!("DIM @A[2]\n", "LET @A[1] = 10\n", "ARRAY_GET(A, 1)\n",);
+    // ARRAY_GET is a hidden system helper; any compile/runtime error is acceptable.
+    interp
+        .exec_source(src)
+        .expect_err("ARRAY_GET must not be callable from surface");
+}
+
+/// `ARRAY_ADDR(A, 1)` must not be callable from surface because ARRAY_ADDR is a
+/// hidden system helper.
+#[test]
+fn test_array_addr_is_hidden_from_surface() {
+    let mut interp = Interpreter::new();
+    let src = concat!("DIM @A[2]\n", "ARRAY_ADDR(A, 1)\n",);
+    let err = interp
+        .exec_source(src)
+        .expect_err("ARRAY_ADDR must not be callable from surface");
+    assert!(
+        err.to_string().contains("undefined symbol"),
+        "expected undefined symbol, got: {err}"
+    );
+}
+
+/// DIM @A[n] inside a DEF must still work correctly after the ban is in effect.
+///
+/// This regression test ensures that the hidden ARRAY_STORE_LOCAL path used by
+/// the DIM compiler continues to initialise the local slot properly.
+#[test]
+fn test_dim_local_array_still_works_after_surface_ban() {
+    let mut interp = Interpreter::new();
+    let src = concat!(
+        "DEF F()\n",
+        "  DIM @A[3]\n",
+        "  SET &@A[1], 10\n",
+        "  SET &@A[2], 20\n",
+        "  SET &@A[3], 30\n",
+        "  RETURN @A[2]\n",
+        "END\n",
+        "PUTDEC F()\n",
+    );
+    interp
+        .exec_source(src)
+        .expect("DIM local array must still work after surface ban");
+    assert_eq!(interp.take_output(), "20");
+}

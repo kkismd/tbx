@@ -238,8 +238,9 @@ impl<'a> ExprCompiler<'a> {
                                         }
                                     }
 
-                                    // Emit ARRAY_LEN.
-                                    let array_len_xt = require_xt(self.vm, "ARRAY_LEN")?;
+                                    // Emit ARRAY_LEN (hidden system helper).
+                                    let array_len_xt =
+                                        require_hidden_system_xt(self.vm, "ARRAY_LEN")?;
                                     output.push(Cell::Xt(array_len_xt));
 
                                     // Advance past `(`, `@`, Ident, `)` (4 tokens beyond i).
@@ -439,8 +440,9 @@ impl<'a> ExprCompiler<'a> {
                                         let index_cells = self.compile_expr(index_toks)?;
                                         output.extend(index_cells);
 
-                                        // Emit ARRAY_ADDR.
-                                        let array_addr_xt = require_xt(self.vm, "ARRAY_ADDR")?;
+                                        // Emit ARRAY_ADDR (hidden system helper).
+                                        let array_addr_xt =
+                                            require_hidden_system_xt(self.vm, "ARRAY_ADDR")?;
                                         output.push(Cell::Xt(array_addr_xt));
 
                                         i = close_pos;
@@ -698,8 +700,8 @@ impl<'a> ExprCompiler<'a> {
                             let index_cells = self.compile_expr(index_toks)?;
                             output.extend(index_cells);
 
-                            // Emit: ARRAY_GET — pops (Array, index) and pushes element.
-                            let array_get_xt = require_xt(self.vm, "ARRAY_GET")?;
+                            // Emit: ARRAY_GET (hidden system helper) — pops (Array, index) and pushes element.
+                            let array_get_xt = require_hidden_system_xt(self.vm, "ARRAY_GET")?;
                             output.push(Cell::Xt(array_get_xt));
 
                             // Advance past `@`, Ident, `[`, <index_toks>, `]`.
@@ -752,6 +754,17 @@ impl<'a> ExprCompiler<'a> {
 fn require_xt(vm: &VM, name: &'static str) -> Result<Xt, TbxError> {
     vm.lookup(name).ok_or(TbxError::TypeError {
         expected: "system word to be registered",
+        got: "not found",
+    })
+}
+
+/// Look up a hidden system helper by name and return its `Xt`, or a `TypeError` if absent.
+///
+/// Hidden system helpers (FLAG_SYSTEM | FLAG_HIDDEN) are not visible via `lookup()`.
+/// This function uses `lookup_hidden_system()` to resolve them.
+fn require_hidden_system_xt(vm: &VM, name: &'static str) -> Result<Xt, TbxError> {
+    vm.lookup_hidden_system(name).ok_or(TbxError::TypeError {
+        expected: "hidden system helper to be registered",
         got: "not found",
     })
 }
@@ -1112,7 +1125,7 @@ mod tests {
         vm.dict_write(Cell::Int(0)).unwrap();
         vm.register(WordEntry::new_variable("A", 0));
 
-        let array_get_xt = vm.lookup("ARRAY_GET").unwrap();
+        let array_get_xt = vm.lookup_hidden_system("ARRAY_GET").unwrap();
 
         let tokens = lex("A(2)");
         let result = ExprCompiler::new(&mut vm).compile_expr(&tokens);
@@ -1160,7 +1173,7 @@ mod tests {
         vm.register(WordEntry::new_variable("A", 0));
 
         let fetch_xt = vm.lookup("FETCH").unwrap();
-        let array_addr_xt = vm.lookup("ARRAY_ADDR").unwrap();
+        let array_addr_xt = vm.lookup_hidden_system("ARRAY_ADDR").unwrap();
 
         let tokens = lex("&A(2)");
         // `&A(i)` no longer produces the old FETCH + index + ARRAY_ADDR sequence.
@@ -1880,7 +1893,7 @@ mod tests {
 
         let lit_xt = vm.lookup("LIT").unwrap();
         let fetch_xt = vm.lookup("FETCH").unwrap();
-        let array_get_xt = vm.lookup("ARRAY_GET").unwrap();
+        let array_get_xt = vm.lookup_hidden_system("ARRAY_GET").unwrap();
 
         assert_eq!(
             result,
@@ -1912,7 +1925,7 @@ mod tests {
 
         let lit_xt = vm.lookup("LIT").unwrap();
         let fetch_xt = vm.lookup("FETCH").unwrap();
-        let array_get_xt = vm.lookup("ARRAY_GET").unwrap();
+        let array_get_xt = vm.lookup_hidden_system("ARRAY_GET").unwrap();
 
         assert_eq!(
             result,
@@ -2099,7 +2112,7 @@ mod tests {
 
         let lit_xt = vm.lookup("LIT").unwrap();
         let fetch_xt = vm.lookup("FETCH").unwrap();
-        let array_addr_xt = vm.lookup("ARRAY_ADDR").unwrap();
+        let array_addr_xt = vm.lookup_hidden_system("ARRAY_ADDR").unwrap();
 
         assert_eq!(
             result,
@@ -2130,7 +2143,7 @@ mod tests {
 
         let lit_xt = vm.lookup("LIT").unwrap();
         let fetch_xt = vm.lookup("FETCH").unwrap();
-        let array_addr_xt = vm.lookup("ARRAY_ADDR").unwrap();
+        let array_addr_xt = vm.lookup_hidden_system("ARRAY_ADDR").unwrap();
 
         assert_eq!(
             result,
@@ -2230,7 +2243,7 @@ mod tests {
 
         let lit_xt = vm.lookup("LIT").unwrap();
         let fetch_xt = vm.lookup("FETCH").unwrap();
-        let array_len_xt = vm.lookup("ARRAY_LEN").unwrap();
+        let array_len_xt = vm.lookup_hidden_system("ARRAY_LEN").unwrap();
 
         assert_eq!(
             result,
@@ -2259,7 +2272,7 @@ mod tests {
 
         let lit_xt = vm.lookup("LIT").unwrap();
         let fetch_xt = vm.lookup("FETCH").unwrap();
-        let array_len_xt = vm.lookup("ARRAY_LEN").unwrap();
+        let array_len_xt = vm.lookup_hidden_system("ARRAY_LEN").unwrap();
 
         assert_eq!(
             result,
