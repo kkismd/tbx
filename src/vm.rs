@@ -932,20 +932,7 @@ impl VM {
                     }
                 }
                 EntryKind::ReturnVal => {
-                    // Determine the array frame boundary before popping the return
-                    // value, so we can detect whether the array belongs to the
-                    // current frame.
-                    let array_frame_boundary = match self.return_stack.last() {
-                        Some(ReturnFrame::Call {
-                            saved_array_pool_len,
-                            ..
-                        }) => *saved_array_pool_len,
-                        Some(ReturnFrame::TopLevel) => {
-                            return Err(TbxError::InvalidReturn);
-                        }
-                        None => return Err(TbxError::StackUnderflow),
-                    };
-                    let mut retval = self.pop()?;
+                    let retval = self.pop()?;
                     // Reject whole-array handle as a return value.
                     // Only scalar types are permitted to flow out of a word via RETURN.
                     if matches!(retval, Cell::Array(_)) {
@@ -954,28 +941,8 @@ impl VM {
                             got: "Array",
                         });
                     }
-                    // Ownership transfer for frame-local Cell::Array:
-                    // `Cell::Array` is rejected above by the surface ban, so this
-                    // branch is unreachable in practice.  The `array_transferred`
-                    // flag is kept for symmetry with pool lifetime logic; it will
-                    // always be `false` here because `retval` is never `Cell::Array`.
-                    // `Cell::Str` is `Rc<str>`-backed and needs no swap.
-                    let array_transferred = if let Cell::Array(ar) = &retval {
-                        // Locate the array's pool slot by pointer identity.
-                        if let Some(pool_idx) = self.arrays.iter().position(|e| e.ptr_eq(ar)) {
-                            if pool_idx >= array_frame_boundary {
-                                self.arrays.swap(pool_idx, array_frame_boundary);
-                                retval = Cell::Array(self.arrays[array_frame_boundary].clone());
-                                true
-                            } else {
-                                false
-                            }
-                        } else {
-                            false
-                        }
-                    } else {
-                        false
-                    };
+                    // `Cell::Str` is `Rc<str>`-backed and needs no ownership transfer.
+                    // `Cell::Array` is already rejected above; the pool simply truncates.
                     match self.return_stack.pop().ok_or(TbxError::StackUnderflow)? {
                         ReturnFrame::Call {
                             callee_xt: _,
@@ -986,11 +953,7 @@ impl VM {
                         } => {
                             self.data_stack.truncate(self.bp);
                             // Truncate the array pool back to the saved boundary.
-                            // If ownership was transferred, the returned value now sits
-                            // at `saved_array_pool_len` (the boundary slot), so we keep
-                            // exactly one extra entry beyond the boundary.
-                            let array_keep = saved_array_pool_len + usize::from(array_transferred);
-                            self.arrays.truncate(array_keep);
+                            self.arrays.truncate(saved_array_pool_len);
                             self.push(retval)?;
                             self.pc = return_pc;
                             self.bp = saved_bp;
@@ -3088,59 +3051,6 @@ mod tests {
     }
 
     #[test]
-    fn test_global_array_returnable_from_word() {
-        // A global array (registered in pool before the CALL frame) can be
-        // returned from a word without triggering ArrayFrameEscape.
-        //
-        // The ReturnVal check resolves pool_idx via ptr_eq and verifies that
-        // pool_idx < frame_boundary.  A global array created before the call has
-        // pool_idx < saved_array_pool_len, so it is safe to return.
-        let mut vm = VM::new();
-
-        // Insert a "global" array at pool slot 0.
-        let global_ar = crate::array_ref::ArrayRef::new(vec![Cell::Int(99); 3]);
-        vm.arrays.push(global_ar.clone());
-        // Simulate that TopLevel exit has already promoted it.
-        vm.global_array_pool_len = 1;
-
-        // Simulate a CALL frame where saved_array_pool_len = 1 (the array already
-        // existed when the word was called).
-        vm.return_stack.push(ReturnFrame::TopLevel);
-        vm.return_stack.push(ReturnFrame::Call {
-            callee_xt: Xt(0),
-            return_pc: 0,
-            saved_bp: 0,
-            saved_array_pool_len: 1,
-            actual_arity: 0,
-        });
-
-        // Push the global array as the return value.
-        vm.push(Cell::Array(global_ar.clone())).unwrap();
-
-        // Mimic the ReturnVal boundary check: locate pool_idx by ptr_eq,
-        // then verify pool_idx < frame_boundary (0 < 1 → OK).
-        let frame_boundary = match vm.return_stack.last().unwrap() {
-            ReturnFrame::Call {
-                saved_array_pool_len,
-                ..
-            } => *saved_array_pool_len,
-            _ => panic!("unexpected frame"),
-        };
-        let retval = vm.pop().unwrap();
-        if let Cell::Array(ar) = &retval {
-            let pool_idx = vm
-                .arrays
-                .iter()
-                .position(|e| e.ptr_eq(ar))
-                .expect("array must be in pool");
-            assert!(
-                pool_idx < frame_boundary,
-                "global array should pass ReturnVal check"
-            );
-        }
-    }
-
-    #[test]
     fn test_stack_trace_frames_innermost_first() {
         let mut vm = VM::new();
 
@@ -3350,6 +3260,22 @@ mod tests {
         assert!(
             matches!(result, Err(crate::error::TbxError::TypeError { .. })),
             "expected TypeError when returning array handle, got: {result:?}"
+        );
+    }
+
+    #[test]
+    fn test_global_array_return_errors() {
+        // `RETURN A` where A is a *global* array (DIM at top-level) must also
+        // produce TypeError — global arrays are not exempt from the whole-array
+        // return ban introduced in #718.
+        let result = run_source(
+            "DIM @A[2]\n\
+             DEF BAD()\n  RETURN A\nEND\n\
+             BAD",
+        );
+        assert!(
+            matches!(result, Err(crate::error::TbxError::TypeError { .. })),
+            "expected TypeError when returning global array handle, got: {result:?}"
         );
     }
 
