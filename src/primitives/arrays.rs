@@ -271,6 +271,13 @@ pub fn tuple_len_prim(vm: &mut VM) -> Result<(), TbxError> {
 /// as `Cell::Int`.
 ///
 /// Stack: `[..., Cell::Array(pool_idx)]` → `Cell::Int(len)`
+///
+/// # Surface language policy
+///
+/// The canonical surface call form is `ARRAY_LEN(@A)`, where `@A` is an array
+/// storage designator.  The form `ARRAY_LEN(A)` (without `@`) passes a scalar
+/// variable instead of an array handle and is unsupported; it will produce a
+/// `TypeError` at runtime if `A` does not hold a `Cell::Array`.
 pub fn array_len_prim(vm: &mut VM) -> Result<(), TbxError> {
     let pool_idx = match vm.pop()? {
         Cell::Array(idx) => idx,

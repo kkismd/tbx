@@ -86,6 +86,16 @@ pub enum Cell {
     Bool(bool),
     /// Array handle — index into `VM::arrays` (the array pool).
     ///
+    /// **Internal representation only.**  `Cell::Array` is NOT a surface
+    /// first-class array value.  It is an implementation artefact that moves
+    /// through the VM internally to support `DIM @A[n]` / `@A[i]` / `&@A[i]`
+    /// / `LET @A[i] = expr` / `ARRAY_LEN(@A)` surface operations.
+    ///
+    /// Surface operations that would expose `Cell::Array` as a value are
+    /// unsupported: `LET B = A`, `SET &B, A`, `RETURN A`, `TUPLE(A)`,
+    /// `PUTVAL A`, `A = B`, `EQ(A, B)`.  See `blueprint-language.md` §配列の
+    /// surface policy for the complete list.
+    ///
     /// Created by the `ARRAY(N)` primitive.  The pool entry at this index holds
     /// a `Vec<Cell>` of length N.
     ///
