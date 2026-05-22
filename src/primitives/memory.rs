@@ -24,25 +24,18 @@ fn write_array_element(
     elem_idx: usize,
     value: Cell,
 ) -> Result<(), TbxError> {
-    // Validate before get_mut() to avoid borrow conflicts.
+    // Validate element type before touching the array.
     super::arrays::check_array_element_value(&value)?;
     let pool_size = vm.arrays.len();
-    let arr = vm
+    let ar = vm
         .arrays
-        .get_mut(pool_idx)
+        .get(pool_idx)
         .ok_or(TbxError::IndexOutOfBounds {
             index: pool_idx,
             size: pool_size,
-        })?;
-    let size = arr.len();
-    if elem_idx >= size {
-        return Err(TbxError::ArrayIndexOutOfBounds {
-            index: elem_idx as i64,
-            size,
-        });
-    }
-    arr[elem_idx] = value;
-    Ok(())
+        })?
+        .clone();
+    ar.set(elem_idx, value)
 }
 
 /// FETCH — fetch a value from an address and push it onto the stack.
@@ -60,18 +53,21 @@ pub fn fetch_prim(vm: &mut VM) -> Result<(), TbxError> {
             Ok(())
         }
         Cell::ArrayAddr { pool_idx, elem_idx } => {
-            let arr = vm.arrays.get(pool_idx).ok_or(TbxError::IndexOutOfBounds {
-                index: pool_idx,
-                size: vm.arrays.len(),
-            })?;
-            let size = arr.len();
-            if elem_idx >= size {
-                return Err(TbxError::ArrayIndexOutOfBounds {
+            let ar = vm
+                .arrays
+                .get(pool_idx)
+                .ok_or(TbxError::IndexOutOfBounds {
+                    index: pool_idx,
+                    size: vm.arrays.len(),
+                })?
+                .clone();
+            let size = ar.len();
+            let value = ar
+                .get_cloned(elem_idx)
+                .ok_or(TbxError::ArrayIndexOutOfBounds {
                     index: elem_idx as i64,
                     size,
-                });
-            }
-            let value = arr[elem_idx].clone();
+                })?;
             vm.push(value)?;
             Ok(())
         }
@@ -164,7 +160,8 @@ mod tests {
 
         // Create a one-element array with initial value Cell::None.
         let pool_idx = vm.arrays.len();
-        vm.arrays.push(vec![Cell::None]);
+        vm.arrays
+            .push(crate::array_ref::ArrayRef::new(vec![Cell::None]));
 
         // Push array handle and 1-based index, then call ARRAY_ADDR.
         vm.push(Cell::Array(pool_idx)).unwrap();
@@ -184,7 +181,7 @@ mod tests {
         store_prim(&mut vm).unwrap();
 
         // Verify the array element was updated.
-        assert_eq!(vm.arrays[pool_idx][0], new_value);
+        assert_eq!(vm.arrays[pool_idx].get_cloned(0), Some(new_value.clone()));
 
         // Now FETCH: push the ArrayAddr again and call fetch_prim.
         vm.push(Cell::ArrayAddr {
@@ -205,11 +202,13 @@ mod tests {
 
         // Outer array — the target element.
         let outer_idx = vm.arrays.len();
-        vm.arrays.push(vec![Cell::None]);
+        vm.arrays
+            .push(crate::array_ref::ArrayRef::new(vec![Cell::None]));
 
         // Inner array — the value to be (illegally) stored.
         let inner_idx = vm.arrays.len();
-        vm.arrays.push(vec![Cell::Int(1)]);
+        vm.arrays
+            .push(crate::array_ref::ArrayRef::new(vec![Cell::Int(1)]));
 
         // STORE convention: push value then addr.
         vm.push(Cell::Array(inner_idx)).unwrap();
@@ -234,11 +233,13 @@ mod tests {
 
         // Target array.
         let outer_idx = vm.arrays.len();
-        vm.arrays.push(vec![Cell::None]);
+        vm.arrays
+            .push(crate::array_ref::ArrayRef::new(vec![Cell::None]));
 
         // Value array (nested).
         let inner_idx = vm.arrays.len();
-        vm.arrays.push(vec![Cell::Int(1)]);
+        vm.arrays
+            .push(crate::array_ref::ArrayRef::new(vec![Cell::Int(1)]));
 
         // SET convention: push addr then value.
         vm.push(Cell::ArrayAddr {
@@ -267,7 +268,8 @@ mod tests {
         vm.dp = 1;
 
         let pool_idx = vm.arrays.len();
-        vm.arrays.push(vec![Cell::Int(7)]);
+        vm.arrays
+            .push(crate::array_ref::ArrayRef::new(vec![Cell::Int(7)]));
 
         // STORE convention: push value then addr.
         vm.push(Cell::Array(pool_idx)).unwrap();
@@ -293,7 +295,8 @@ mod tests {
         vm.bp = 0;
 
         let pool_idx = vm.arrays.len();
-        vm.arrays.push(vec![Cell::Int(3)]);
+        vm.arrays
+            .push(crate::array_ref::ArrayRef::new(vec![Cell::Int(3)]));
 
         // STORE convention: push value then addr.
         vm.push(Cell::Array(pool_idx)).unwrap();
@@ -316,7 +319,8 @@ mod tests {
         vm.dp = 1;
 
         let pool_idx = vm.arrays.len();
-        vm.arrays.push(vec![Cell::Int(5)]);
+        vm.arrays
+            .push(crate::array_ref::ArrayRef::new(vec![Cell::Int(5)]));
 
         // SET convention: push addr then value.
         vm.push(Cell::DictAddr(0)).unwrap();
@@ -339,7 +343,8 @@ mod tests {
         vm.bp = 0;
 
         let pool_idx = vm.arrays.len();
-        vm.arrays.push(vec![Cell::Int(2)]);
+        vm.arrays
+            .push(crate::array_ref::ArrayRef::new(vec![Cell::Int(2)]));
 
         // SET convention: push addr then value.
         vm.push(Cell::StackAddr(0)).unwrap();

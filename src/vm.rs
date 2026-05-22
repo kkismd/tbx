@@ -1,3 +1,4 @@
+use crate::array_ref::ArrayRef;
 use crate::cell::{Cell, CompileEntry, ReturnFrame, Xt};
 use crate::constants::{MAX_DATA_STACK_DEPTH, MAX_DICTIONARY_CELLS, MAX_RETURN_STACK_DEPTH};
 use crate::dict::{EntryKind, WordEntry};
@@ -168,11 +169,18 @@ pub struct VM {
     pub(crate) pending_use_path: Option<String>,
     /// Array pool: indexed by `Cell::Array(usize)` values.
     ///
-    /// Each entry is a `Vec<Cell>` created by the `ARRAY(N)` primitive.
+    /// Each entry is an `ArrayRef` handle created by the `ARRAY(N)` primitive.
     /// On every word EXIT or RETURN_VAL, the pool is truncated back to the
     /// length saved in `ReturnFrame::Call::saved_array_pool_len`, freeing all
     /// arrays allocated within that call.
-    pub arrays: Vec<Vec<Cell>>,
+    ///
+    /// # Ownership note
+    ///
+    /// `VM::arrays` is the **compatibility registry** for pool-index-to-`ArrayRef`
+    /// mapping.  It is not the final owner of array data in the long term: once
+    /// `Cell::Array` is evolved to hold an `ArrayRef` directly, this registry will
+    /// become redundant and may be removed.
+    pub arrays: Vec<ArrayRef>,
     /// Length of the "global" (persistent) region of `arrays`.
     ///
     /// Arrays at indices `0..global_array_pool_len` were created at the top
@@ -3007,7 +3015,8 @@ mod tests {
         // regardless of whether the array is in the global pool region.
         // (Surface-level SET / STORE never allow whole-array handle writes.)
         let mut vm = VM::new();
-        vm.arrays.push(vec![Cell::Int(0); 5]);
+        vm.arrays
+            .push(crate::array_ref::ArrayRef::new(vec![Cell::Int(0); 5]));
         vm.global_array_pool_len = 1; // mark pool[0] as global
 
         let slot = vm.dp;
@@ -3028,7 +3037,8 @@ mod tests {
     fn test_global_array_stored_via_set_prim() {
         // set_prim must also reject Cell::Array written to a DictAddr slot.
         let mut vm = VM::new();
-        vm.arrays.push(vec![Cell::Int(0); 3]);
+        vm.arrays
+            .push(crate::array_ref::ArrayRef::new(vec![Cell::Int(0); 3]));
         vm.global_array_pool_len = 1;
 
         let slot = vm.dp;
@@ -3066,7 +3076,8 @@ mod tests {
     fn test_non_global_array_store_rejected_by_store_prim() {
         // An array handle written to a DictAddr must always be rejected by store_prim.
         let mut vm = VM::new();
-        vm.arrays.push(vec![Cell::Int(0); 5]);
+        vm.arrays
+            .push(crate::array_ref::ArrayRef::new(vec![Cell::Int(0); 5]));
         // global_array_pool_len stays 0, so pool[0] is NOT global.
 
         let slot = vm.dp;
@@ -3093,7 +3104,8 @@ mod tests {
         let mut vm = VM::new();
 
         // Insert a "global" array at pool slot 0.
-        vm.arrays.push(vec![Cell::Int(99); 3]);
+        vm.arrays
+            .push(crate::array_ref::ArrayRef::new(vec![Cell::Int(99); 3]));
         // Simulate that TopLevel exit has already promoted it.
         vm.global_array_pool_len = 1;
 
