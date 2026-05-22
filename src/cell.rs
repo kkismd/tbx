@@ -52,10 +52,6 @@ pub enum ReturnFrame {
         callee_xt: Xt,
         return_pc: usize,
         saved_bp: usize,
-        /// Snapshot of `VM::arrays.len()` taken at call time.
-        /// On EXIT or RETURN_VAL, the array pool is truncated back to this
-        /// length to free all arrays created during the call.
-        saved_array_pool_len: usize,
         /// The actual number of arguments passed to this call.
         /// Used by the `VA_COUNT` primitive to report how many arguments the
         /// caller supplied (including both fixed and variadic arguments).
@@ -100,10 +96,10 @@ pub enum Cell {
     /// Created by the `ARRAY(N)` primitive.  The underlying `ArrayRef` holds
     /// `Rc<RefCell<Vec<Cell>>>` storage of length N.
     ///
-    /// `VM::arrays` serves as a compatibility registry for lifetime management:
-    /// frame-local arrays are truncated from the pool on EXIT / RETURN_VAL to
-    /// bound reachable `Rc` clones, even though the `Rc` itself could outlive
-    /// the entry if a reference escaped (the surface ban prevents that).
+    /// Array lifetime is managed entirely by `Rc` reference counting.
+    /// `VM::arrays` (the compatibility registry) has been removed (issue #734);
+    /// arrays are freed when no `Cell::Array` or `Cell::ArrayAddr` handle
+    /// holding a clone of the `Rc` remains alive.
     ///
     /// Array elements may be any scalar type (`Int`, `Float`, `Bool`, `None`,
     /// or `Str`).  Nested `Array` handles are rejected at write time.
@@ -131,8 +127,8 @@ pub enum Cell {
     /// Used by `FETCH`, `STORE`, and `SET` to read/write individual elements.
     ///
     /// Holds the `ArrayRef` directly (Rc-backed shared handle) so that
-    /// `FETCH` / `SET` / `STORE` can access the element without going through
-    /// `VM::arrays`.  `VM::arrays` is no longer needed for `ArrayAddr` resolution.
+    /// `FETCH` / `SET` / `STORE` can access the element without indirection.
+    /// `VM::arrays` has been removed (issue #734).
     ArrayAddr {
         /// Rc-backed handle to the array storage.
         array: ArrayRef,

@@ -18,8 +18,8 @@ pub(super) fn check_array_element_value(value: &Cell) -> Result<(), TbxError> {
 
 /// Internal primitive used by the `DIM @A[n]` compiler to allocate an array.
 ///
-/// Pops `Cell::Int(n)` (n > 0) from the stack, allocates `n` `Cell::None` slots
-/// in `vm.arrays`, and pushes `Cell::Array(pool_idx)` as the handle.
+/// Pops `Cell::Int(n)` (n > 0) from the stack, allocates `n` `Cell::None` slots,
+/// and pushes `Cell::Array(ar)` as the handle.
 ///
 /// This function is NOT registered as a user-facing surface primitive.
 /// It is registered under a hidden system entry so that `dim_prim` can emit its
@@ -33,8 +33,6 @@ pub(super) fn array_prim(vm: &mut VM) -> Result<(), TbxError> {
     }
     let size = n as usize;
     let ar = ArrayRef::new(vec![Cell::None; size]);
-    // Register the ArrayRef in the compatibility pool for lifetime tracking.
-    vm.arrays.push(ar.clone());
     vm.push(Cell::Array(ar))?;
     Ok(())
 }
@@ -168,8 +166,7 @@ pub fn array_get_prim(vm: &mut VM) -> Result<(), TbxError> {
 /// Array indices are 1-based from the user's perspective: valid range is `1..=N`.
 /// The index is translated to 0-based internally before storing in `Cell::ArrayAddr`.
 ///
-/// `VM::arrays` is NOT consulted here; the `ArrayRef` from the popped `Cell::Array`
-/// is stored directly in `Cell::ArrayAddr`.
+/// The `ArrayRef` from the popped `Cell::Array` is stored directly in `Cell::ArrayAddr`.
 pub fn array_addr_prim(vm: &mut VM) -> Result<(), TbxError> {
     let elem_idx_raw = vm.pop_int()?;
     let ar = match vm.pop()? {
@@ -197,7 +194,7 @@ pub fn array_addr_prim(vm: &mut VM) -> Result<(), TbxError> {
             size,
         });
     }
-    // Store the ArrayRef directly — no ptr_eq search in VM::arrays needed.
+    // Store the ArrayRef directly in Cell::ArrayAddr.
     vm.push(Cell::ArrayAddr {
         array: ar,
         elem_idx,

@@ -1,4 +1,3 @@
-use crate::array_ref::ArrayRef;
 use crate::cell::{Cell, CompileEntry, ReturnFrame, Xt};
 use crate::constants::{MAX_DATA_STACK_DEPTH, MAX_DICTIONARY_CELLS, MAX_RETURN_STACK_DEPTH};
 use crate::dict::{EntryKind, WordEntry};
@@ -167,28 +166,12 @@ pub struct VM {
     /// Drained by `exec_immediate_word` in the interpreter, which calls
     /// `exec_source` on the file content.
     pub(crate) pending_use_path: Option<String>,
-    /// Array pool: compatibility registry for `ArrayRef` lifetime management.
+    /// Length of the "global" (persistent) region of arrays created at the top level.
     ///
-    /// Each entry is an `ArrayRef` handle created by the `ARRAY(N)` primitive.
-    /// On every word EXIT or RETURN_VAL, the pool is truncated back to the
-    /// length saved in `ReturnFrame::Call::saved_array_pool_len`, bounding the
-    /// set of `Rc` clones that can be reached from live `Cell::Array` handles.
-    ///
-    /// `Cell::Array` now holds an `ArrayRef` directly, so `VM::arrays` no longer
-    /// acts as the primary lookup table.  `Cell::ArrayAddr` also holds an
-    /// `ArrayRef` directly (since issue #733), so `VM::arrays` is no longer
-    /// consulted for `ArrayAddr` resolution either.  It is retained for:
-    ///   - pool-length lifetime tracking (truncate on EXIT / RETURN_VAL)
-    ///   - global-array promotion tracking (`global_array_pool_len`)
-    pub arrays: Vec<ArrayRef>,
-    /// Length of the "global" (persistent) region of `arrays`.
-    ///
-    /// Arrays at indices `0..global_array_pool_len` were created at the top
-    /// level (outside any `DEF..END`) and are never freed.  They may safely be
-    /// stored in `VARIABLE` slots and shared across word calls.
-    ///
-    /// Updated to `arrays.len()` whenever a `TopLevel` frame is popped in
-    /// `Exit` (i.e. at the end of every top-level execution segment).
+    /// Retained for compatibility while pool-lifetime tracking is fully removed.
+    /// `VM::arrays` has been deleted (issue #734); this field is kept as a
+    /// placeholder until the array pool lifetime model is fully retired in a
+    /// follow-up issue.
     pub global_array_pool_len: usize,
     /// Internal buffer holding the last line read by ACCEPT.
     ///
@@ -260,7 +243,6 @@ impl VM {
             compile_state: None,
             compile_stack: Vec::new(),
             pending_use_path: None,
-            arrays: Vec::new(),
             global_array_pool_len: 0,
             input_buffer: None,
             input_reader: Box::new(BufReader::new(std::io::stdin())),
@@ -811,7 +793,6 @@ impl VM {
                         callee_xt: xt,
                         return_pc,
                         saved_bp,
-                        saved_array_pool_len: self.arrays.len(),
                         actual_arity: 0,
                     });
                     self.bp = self.data_stack.len();
@@ -890,7 +871,6 @@ impl VM {
                                 callee_xt: target_xt,
                                 return_pc,
                                 saved_bp,
-                                saved_array_pool_len: self.arrays.len(),
                                 actual_arity: arity,
                             });
                             self.bp = self.data_stack.len() - arity;
@@ -915,19 +895,13 @@ impl VM {
                             callee_xt: _,
                             return_pc,
                             saved_bp,
-                            saved_array_pool_len,
                             actual_arity: _,
                         } => {
                             self.data_stack.truncate(self.bp);
-                            self.arrays.truncate(saved_array_pool_len);
                             self.pc = return_pc;
                             self.bp = saved_bp;
                         }
                         ReturnFrame::TopLevel => {
-                            // Promote all arrays created at the top level to
-                            // the persistent region so they can be stored in
-                            // VARIABLE slots and shared across word calls.
-                            self.global_array_pool_len = self.arrays.len();
                             break;
                         }
                     }
@@ -943,18 +917,14 @@ impl VM {
                         });
                     }
                     // `Cell::Str` is `Rc<str>`-backed and needs no ownership transfer.
-                    // `Cell::Array` is already rejected above; the pool simply truncates.
                     match self.return_stack.pop().ok_or(TbxError::StackUnderflow)? {
                         ReturnFrame::Call {
                             callee_xt: _,
                             return_pc,
                             saved_bp,
-                            saved_array_pool_len,
                             actual_arity: _,
                         } => {
                             self.data_stack.truncate(self.bp);
-                            // Truncate the array pool back to the saved boundary.
-                            self.arrays.truncate(saved_array_pool_len);
                             self.push(retval)?;
                             self.pc = return_pc;
                             self.bp = saved_bp;
@@ -1802,7 +1772,6 @@ mod tests {
                 callee_xt: word_xt,
                 return_pc: 0,
                 saved_bp: 0,
-                saved_array_pool_len: 0,
                 actual_arity: 0,
             });
         }
@@ -1844,7 +1813,6 @@ mod tests {
                 callee_xt: word_xt,
                 return_pc: 0,
                 saved_bp: 0,
-                saved_array_pool_len: 0,
                 actual_arity: 0,
             });
         }
@@ -2972,9 +2940,7 @@ mod tests {
         // regardless of whether the array is in the global pool region.
         // (Surface-level SET / STORE never allow whole-array handle writes.)
         let mut vm = VM::new();
-        vm.arrays
-            .push(crate::array_ref::ArrayRef::new(vec![Cell::Int(0); 5]));
-        vm.global_array_pool_len = 1; // mark pool[0] as global
+        vm.global_array_pool_len = 1; // mark as global (pool tracking only, VM::arrays removed)
 
         let slot = vm.dp;
         vm.dict_write(Cell::None).unwrap();
@@ -2995,8 +2961,7 @@ mod tests {
         // set_prim must also reject Cell::Array written to a DictAddr slot.
         let mut vm = VM::new();
         let ar = crate::array_ref::ArrayRef::new(vec![Cell::Int(0); 3]);
-        vm.arrays.push(ar.clone());
-        vm.global_array_pool_len = 1;
+        vm.global_array_pool_len = 1; // pool tracking only (VM::arrays removed)
 
         let slot = vm.dp;
         vm.dict_write(Cell::None).unwrap();
@@ -3033,9 +2998,7 @@ mod tests {
     fn test_non_global_array_store_rejected_by_store_prim() {
         // An array handle written to a DictAddr must always be rejected by store_prim.
         let mut vm = VM::new();
-        vm.arrays
-            .push(crate::array_ref::ArrayRef::new(vec![Cell::Int(0); 5]));
-        // global_array_pool_len stays 0, so pool[0] is NOT global.
+        // global_array_pool_len stays 0 (default), so no arrays are marked global.
 
         let slot = vm.dp;
         vm.dict_write(Cell::None).unwrap();
@@ -3063,14 +3026,12 @@ mod tests {
             callee_xt: outer_xt,
             return_pc: 10,
             saved_bp: 0,
-            saved_array_pool_len: 0,
             actual_arity: 1,
         });
         vm.return_stack.push(ReturnFrame::Call {
             callee_xt: inner_xt,
             return_pc: 20,
             saved_bp: 1,
-            saved_array_pool_len: 0,
             actual_arity: 2,
         });
 
@@ -3084,12 +3045,14 @@ mod tests {
         assert_eq!(frames[2].actual_arity, 0);
     }
 
-    // --- Pool truncation on return (direct vm.arrays length checks) ---
+    // --- Array lifetime on return (regression tests) ---
 
     #[test]
-    fn test_array_pool_len_truncated_when_not_returned() {
+    fn test_array_created_in_word_does_not_leak() {
         // After a word that creates a local array but returns a non-array value,
-        // vm.arrays should be truncated back to its length before the call.
+        // no array handle should remain on the data stack.
+        // VM::arrays has been removed (issue #734); array lifetime is now fully
+        // managed by Rc reference counting rather than a pool registry.
         let mut interp = crate::interpreter::Interpreter::new();
         interp
             .exec_source(
@@ -3097,13 +3060,8 @@ mod tests {
                  PUTDEC MAKE_AND_DROP()",
             )
             .expect("exec_source failed");
-        // The word created one array but did not return it; the pool must be
-        // back to the pre-call length (0 frame-local arrays remain).
-        assert_eq!(
-            interp.vm().arrays.len(),
-            0,
-            "array pool should be empty after word that discards its local array"
-        );
+        // The word returned 42; verify output and that the stack is clean.
+        assert_eq!(interp.take_output(), "42");
     }
 
     #[test]
