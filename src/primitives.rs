@@ -904,15 +904,16 @@ pub fn dim_prim(vm: &mut VM) -> Result<(), TbxError> {
         let storage_idx = vm.dp;
         vm.dict_write(Cell::None)?;
 
-        // Create the array in the array pool.
+        // Create the array and register it in the compatibility pool.
         let pool_idx = vm.arrays.len();
-        vm.arrays.push(ArrayRef::new(vec![Cell::None; size]));
+        let ar = ArrayRef::new(vec![Cell::None; size]);
+        vm.arrays.push(ar.clone());
 
         // Promote to the global array region so it persists across word calls.
         vm.global_array_pool_len = vm.global_array_pool_len.max(pool_idx + 1);
 
         // Store the array handle in the variable slot.
-        vm.dict_write_at(storage_idx, Cell::Array(pool_idx))?;
+        vm.dict_write_at(storage_idx, Cell::Array(ar))?;
 
         // Register the variable in the dictionary.
         let entry = crate::dict::WordEntry::new_variable(&name, storage_idx);
@@ -3507,8 +3508,9 @@ mod tests {
     #[test]
     fn test_putval_array_error() {
         let mut vm = VM::new();
-        vm.arrays.push(ArrayRef::new(vec![Cell::None; 3]));
-        vm.push(Cell::Array(0)).unwrap();
+        let ar = ArrayRef::new(vec![Cell::None; 3]);
+        vm.arrays.push(ar.clone());
+        vm.push(Cell::Array(ar)).unwrap();
         assert!(matches!(
             putval_prim(&mut vm),
             Err(TbxError::TypeError { .. })
@@ -5949,12 +5951,9 @@ mod tests {
     fn test_array_get_prim_reads_element() {
         // User index 1 maps to internal index 0.
         let mut vm = VM::new();
-        vm.arrays.push(ArrayRef::new(vec![
-            Cell::Int(10),
-            Cell::Int(20),
-            Cell::Int(30),
-        ]));
-        vm.push(Cell::Array(0)).unwrap();
+        let ar = ArrayRef::new(vec![Cell::Int(10), Cell::Int(20), Cell::Int(30)]);
+        vm.arrays.push(ar.clone());
+        vm.push(Cell::Array(ar)).unwrap();
         vm.push(Cell::Int(1)).unwrap();
         array_get_prim(&mut vm).unwrap();
         assert_eq!(vm.pop(), Ok(Cell::Int(10)));
@@ -5964,12 +5963,9 @@ mod tests {
     fn test_array_get_prim_reads_second_element() {
         // User index 2 maps to internal index 1.
         let mut vm = VM::new();
-        vm.arrays.push(ArrayRef::new(vec![
-            Cell::Int(10),
-            Cell::Int(20),
-            Cell::Int(30),
-        ]));
-        vm.push(Cell::Array(0)).unwrap();
+        let ar = ArrayRef::new(vec![Cell::Int(10), Cell::Int(20), Cell::Int(30)]);
+        vm.arrays.push(ar.clone());
+        vm.push(Cell::Array(ar)).unwrap();
         vm.push(Cell::Int(2)).unwrap();
         array_get_prim(&mut vm).unwrap();
         assert_eq!(vm.pop(), Ok(Cell::Int(20)));
@@ -5978,8 +5974,9 @@ mod tests {
     #[test]
     fn test_array_get_prim_out_of_bounds() {
         let mut vm = VM::new();
-        vm.arrays.push(ArrayRef::new(vec![Cell::Int(1)]));
-        vm.push(Cell::Array(0)).unwrap();
+        let ar = ArrayRef::new(vec![Cell::Int(1)]);
+        vm.arrays.push(ar.clone());
+        vm.push(Cell::Array(ar)).unwrap();
         vm.push(Cell::Int(5)).unwrap();
         assert!(matches!(
             array_get_prim(&mut vm),
@@ -5991,8 +5988,9 @@ mod tests {
     fn test_array_get_prim_zero_index_is_out_of_bounds() {
         // Index 0 is invalid in 1-based indexing.
         let mut vm = VM::new();
-        vm.arrays.push(ArrayRef::new(vec![Cell::Int(1)]));
-        vm.push(Cell::Array(0)).unwrap();
+        let ar = ArrayRef::new(vec![Cell::Int(1)]);
+        vm.arrays.push(ar.clone());
+        vm.push(Cell::Array(ar)).unwrap();
         vm.push(Cell::Int(0)).unwrap();
         assert!(matches!(
             array_get_prim(&mut vm),
@@ -6003,8 +6001,9 @@ mod tests {
     #[test]
     fn test_array_get_prim_negative_index() {
         let mut vm = VM::new();
-        vm.arrays.push(ArrayRef::new(vec![Cell::Int(1)]));
-        vm.push(Cell::Array(0)).unwrap();
+        let ar = ArrayRef::new(vec![Cell::Int(1)]);
+        vm.arrays.push(ar.clone());
+        vm.push(Cell::Array(ar)).unwrap();
         vm.push(Cell::Int(-1)).unwrap();
         assert!(matches!(
             array_get_prim(&mut vm),
@@ -6018,9 +6017,9 @@ mod tests {
     fn test_array_addr_prim_pushes_array_addr() {
         // User index 1 maps to internal elem_idx 0.
         let mut vm = VM::new();
-        vm.arrays
-            .push(ArrayRef::new(vec![Cell::Int(0), Cell::Int(0)]));
-        vm.push(Cell::Array(0)).unwrap();
+        let ar = ArrayRef::new(vec![Cell::Int(0), Cell::Int(0)]);
+        vm.arrays.push(ar.clone());
+        vm.push(Cell::Array(ar)).unwrap();
         vm.push(Cell::Int(1)).unwrap();
         array_addr_prim(&mut vm).unwrap();
         assert_eq!(
@@ -6036,9 +6035,9 @@ mod tests {
     fn test_array_addr_prim_zero_index_is_out_of_bounds() {
         // Index 0 is invalid in 1-based indexing.
         let mut vm = VM::new();
-        vm.arrays
-            .push(ArrayRef::new(vec![Cell::Int(0), Cell::Int(0)]));
-        vm.push(Cell::Array(0)).unwrap();
+        let ar = ArrayRef::new(vec![Cell::Int(0), Cell::Int(0)]);
+        vm.arrays.push(ar.clone());
+        vm.push(Cell::Array(ar)).unwrap();
         vm.push(Cell::Int(0)).unwrap();
         assert!(matches!(
             array_addr_prim(&mut vm),
@@ -6053,7 +6052,7 @@ mod tests {
         // STORE must reject Cell::Array written to a DictAddr (scalar variable) slot.
         let mut vm = VM::new();
         vm.dictionary.push(Cell::None); // dict[0] = placeholder
-        vm.push(Cell::Array(0)).unwrap(); // value
+        vm.push(Cell::Array(ArrayRef::new(vec![]))).unwrap(); // value
         vm.push(Cell::DictAddr(0)).unwrap(); // address
         assert!(
             matches!(
@@ -6071,7 +6070,7 @@ mod tests {
         vm.dictionary.push(Cell::None); // dict[0] = placeholder
                                         // set_prim: stack is [..., addr, value]
         vm.push(Cell::DictAddr(0)).unwrap(); // address
-        vm.push(Cell::Array(0)).unwrap(); // value
+        vm.push(Cell::Array(ArrayRef::new(vec![]))).unwrap(); // value
         assert!(
             matches!(
                 set_prim(&mut vm),
@@ -6188,14 +6187,15 @@ mod tests {
         // Cell::Array must always be rejected as an array element.
         let mut vm = VM::new();
         vm.arrays.push(ArrayRef::new(vec![Cell::None])); // pool_idx = 0: target array
-        vm.arrays.push(ArrayRef::new(vec![Cell::None])); // pool_idx = 1: value to store
+        let inner_ar = ArrayRef::new(vec![Cell::None]); // value to store
+        vm.arrays.push(inner_ar.clone()); // pool_idx = 1
         vm.global_array_pool_len = 2; // both are global
         vm.push(Cell::ArrayAddr {
             pool_idx: 0,
             elem_idx: 0,
         })
         .unwrap();
-        vm.push(Cell::Array(1)).unwrap();
+        vm.push(Cell::Array(inner_ar)).unwrap();
         assert_eq!(
             set_prim(&mut vm),
             Err(TbxError::InvalidArrayElement { got: "Array" })
@@ -6287,8 +6287,9 @@ mod tests {
     fn test_to_tuple_prim_rejects_array() {
         // Cell::Array is a forbidden tuple element type.
         let mut vm = VM::new();
-        vm.arrays.push(ArrayRef::new(vec![Cell::Int(1)]));
-        vm.push(Cell::Array(0)).unwrap();
+        let ar = ArrayRef::new(vec![Cell::Int(1)]);
+        vm.arrays.push(ar.clone());
+        vm.push(Cell::Array(ar)).unwrap();
         vm.push(Cell::Int(1)).unwrap(); // arity
         assert!(matches!(
             to_tuple_prim(&mut vm),
@@ -6373,8 +6374,9 @@ mod tests {
     fn test_array_len_prim_basic() {
         // ARRAY_LEN on a 5-element array must return 5.
         let mut vm = VM::new();
-        vm.arrays.push(ArrayRef::new(vec![Cell::None; 5]));
-        vm.push(Cell::Array(0)).unwrap();
+        let ar = ArrayRef::new(vec![Cell::None; 5]);
+        vm.arrays.push(ar.clone());
+        vm.push(Cell::Array(ar)).unwrap();
         array_len_prim(&mut vm).unwrap();
         assert_eq!(vm.pop(), Ok(Cell::Int(5)));
     }
@@ -6383,8 +6385,9 @@ mod tests {
     fn test_array_len_prim_one_element() {
         // ARRAY_LEN on a 1-element array must return 1.
         let mut vm = VM::new();
-        vm.arrays.push(ArrayRef::new(vec![Cell::None]));
-        vm.push(Cell::Array(0)).unwrap();
+        let ar = ArrayRef::new(vec![Cell::None]);
+        vm.arrays.push(ar.clone());
+        vm.push(Cell::Array(ar)).unwrap();
         array_len_prim(&mut vm).unwrap();
         assert_eq!(vm.pop(), Ok(Cell::Int(1)));
     }
