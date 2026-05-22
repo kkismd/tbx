@@ -341,9 +341,14 @@ TUPLE(A)      # Unsupported: array as tuple element
 PUTVAL A      # Unsupported: array display
 A = B         # Unsupported: array equality as expression
 EQ(A, B)      # Unsupported: array equality comparison
+NEQ(A, B)     # Unsupported: array inequality comparison
+SHUFFLE A     # Unsupported: aggregate-value transformation on array storage
+SHUFFLE @A    # Unsupported: aggregate-value transformation on array storage
 ```
 
 これらを許容すると `Array = first-class shared mutable reference value` の意味論に寄ってしまうため、明示的に禁止する。
+
+`SHUFFLE` のような aggregate-value transformation は array storage operation ではないため、array surface API からは外す。必要なら tuple operation として別途設計する。
 
 #### `Cell::Array` は内部表現である
 
