@@ -3291,8 +3291,9 @@ mod tests {
     #[test]
     fn test_str_stored_via_store_to_dict_succeeds() {
         // With `Cell::Str(Rc<str>)`, dict store no longer depends on the legacy
-        // string-pool lifetime classification.  Both frame-local- and top-level-
-        // originated strings are safe to store in a dict slot, so the previous
+        // frame-escape classification used before #588.  Both frame-local- and
+        // top-level-originated strings are safe to store in a dict slot because
+        // the `Rc` keeps the backing str alive, so the previous
         // `StringFrameEscape` distinction is gone.
         let mut vm = VM::new();
         vm.dictionary.push(Cell::None);

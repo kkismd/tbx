@@ -3096,7 +3096,7 @@ mod tests {
     /// must be represented as `Cell::Str`. This confirms that the
     /// compile path flows all the way through LET.  After #588 the payload
     /// is `Cell::Str(Rc<str>)`, so we assert against `Cell::string("hi")`
-    /// directly instead of dereferencing a pool index.
+    /// directly rather than indirecting through the legacy string-pool model.
     #[test]
     fn test_string_literal_stored_in_variable_is_str() {
         let mut interp = crate::interpreter::Interpreter::new();
