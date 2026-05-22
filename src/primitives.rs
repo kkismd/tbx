@@ -800,9 +800,13 @@ pub fn dim_prim(vm: &mut VM) -> Result<(), TbxError> {
             .ok_or(TbxError::UndefinedSymbol {
                 name: "ARRAY".to_string(),
             })?;
-        let set_xt = vm.lookup("SET").ok_or(TbxError::UndefinedSymbol {
-            name: "SET".to_string(),
-        })?;
+        // Use ARRAY_STORE_LOCAL instead of SET so that the array handle bypasses
+        // the Cell::Array rejection guard in set_prim.
+        let array_store_local_xt =
+            vm.lookup_hidden_system("ARRAY_STORE_LOCAL")
+                .ok_or(TbxError::UndefinedSymbol {
+                    name: "ARRAY_STORE_LOCAL".to_string(),
+                })?;
 
         // Emit: LIT StackAddr(idx)  — push the address of the local slot.
         vm.dict_write(Cell::Xt(lit_xt))?;
@@ -823,8 +827,9 @@ pub fn dim_prim(vm: &mut VM) -> Result<(), TbxError> {
         // Emit: ARRAY  — create the array and push its handle.
         vm.dict_write(Cell::Xt(array_xt))?;
 
-        // Emit: SET  — store the array handle into the local slot.
-        vm.dict_write(Cell::Xt(set_xt))?;
+        // Emit: ARRAY_STORE_LOCAL  — store the array handle into the local slot.
+        // This hidden primitive accepts Cell::Array; surface SET / STORE do not.
+        vm.dict_write(Cell::Xt(array_store_local_xt))?;
     } else {
         // --- Execute mode (top level) ---
 
@@ -2211,6 +2216,14 @@ pub fn register_all(vm: &mut VM) {
     let mut array_entry = WordEntry::new_primitive("ARRAY", array_prim);
     array_entry.flags = FLAG_SYSTEM | FLAG_HIDDEN;
     vm.register(array_entry);
+    // ARRAY_STORE_LOCAL is a hidden system entry used exclusively by the DIM @A[n]
+    // compiler to write a Cell::Array handle into a local stack-frame slot.
+    // It bypasses the Cell::Array rejection guard in SET / STORE, which is intentional:
+    // only compiler-generated DIM code may write array handles to local slots.
+    let mut array_store_local_entry =
+        WordEntry::new_primitive("ARRAY_STORE_LOCAL", arrays::array_store_local_prim);
+    array_store_local_entry.flags = FLAG_SYSTEM | FLAG_HIDDEN;
+    vm.register(array_store_local_entry);
     // ARRAY_GET reads an element (`@A[i]` compiles to
     // `<array handle read> <index expr> ARRAY_GET`); ARRAY_ADDR computes an element
     // address (`&@A[i]` compiles to `<array handle read> <index expr> ARRAY_ADDR`);
@@ -6024,26 +6037,39 @@ mod tests {
         ));
     }
 
-    // --- store_prim with ArrayFrameEscape guard ---
+    // --- store_prim / set_prim: Cell::Array to DictAddr must be rejected ---
 
     #[test]
-    fn test_store_array_to_dict_addr_is_escape_error() {
+    fn test_store_array_to_dict_addr_is_type_error() {
+        // STORE must reject Cell::Array written to a DictAddr (scalar variable) slot.
         let mut vm = VM::new();
         vm.dictionary.push(Cell::None); // dict[0] = placeholder
-                                        // Try to store Cell::Array(0) into a global variable slot.
         vm.push(Cell::Array(0)).unwrap(); // value
         vm.push(Cell::DictAddr(0)).unwrap(); // address
-        assert_eq!(store_prim(&mut vm), Err(TbxError::ArrayFrameEscape));
+        assert!(
+            matches!(
+                store_prim(&mut vm),
+                Err(TbxError::TypeError { got: "Array", .. })
+            ),
+            "expected TypeError(Array) from STORE to DictAddr"
+        );
     }
 
     #[test]
-    fn test_set_array_to_dict_addr_is_escape_error() {
+    fn test_set_array_to_dict_addr_is_type_error() {
+        // SET must reject Cell::Array written to a DictAddr (scalar variable) slot.
         let mut vm = VM::new();
         vm.dictionary.push(Cell::None); // dict[0] = placeholder
                                         // set_prim: stack is [..., addr, value]
         vm.push(Cell::DictAddr(0)).unwrap(); // address
         vm.push(Cell::Array(0)).unwrap(); // value
-        assert_eq!(set_prim(&mut vm), Err(TbxError::ArrayFrameEscape));
+        assert!(
+            matches!(
+                set_prim(&mut vm),
+                Err(TbxError::TypeError { got: "Array", .. })
+            ),
+            "expected TypeError(Array) from SET to DictAddr"
+        );
     }
 
     // --- store/set to ArrayAddr ---

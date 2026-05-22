@@ -2,40 +2,19 @@ use crate::cell::Cell;
 use crate::error::TbxError;
 use crate::vm::VM;
 
-/// Extract the array pool index from a `Cell::Array`.
+/// Reject `Cell::Array` writes to user-facing `DictAddr` / `StackAddr` destinations.
 ///
-/// Returns `None` for any cell that is not `Cell::Array`.  `Cell::Str` is
-/// `Rc<str>`-backed and has no VM-managed pool index.
-fn array_pool_idx_from_cell(cell: &Cell) -> Option<usize> {
-    match cell {
-        Cell::Array(idx) => Some(*idx),
-        _ => None,
+/// Surface-level `SET` and `STORE` must never write a whole-array handle to a
+/// scalar variable slot.  DIM local array initialisation bypasses this guard via
+/// the hidden `ARRAY_STORE_LOCAL` primitive.
+fn reject_array_value(value: &Cell) -> Result<(), TbxError> {
+    if matches!(value, Cell::Array(_)) {
+        return Err(TbxError::TypeError {
+            expected: "scalar value (Int, Float, Bool, Str, or Tuple)",
+            got: "Array",
+        });
     }
-}
-
-fn is_global_array_pool_idx(vm: &VM, pool_idx: usize) -> bool {
-    pool_idx < vm.global_array_pool_len
-}
-
-fn promote_array_pool_idx_to_global(vm: &mut VM, pool_idx: usize) {
-    vm.global_array_pool_len = vm.global_array_pool_len.max(pool_idx + 1);
-}
-
-fn check_dict_reference_write(vm: &mut VM, value: &Cell) -> Result<(), TbxError> {
-    let Some(pool_idx) = array_pool_idx_from_cell(value) else {
-        return Ok(());
-    };
-
-    if is_global_array_pool_idx(vm, pool_idx) {
-        return Ok(());
-    }
-
-    if vm.is_executing_top_level() {
-        promote_array_pool_idx_to_global(vm, pool_idx);
-        return Ok(());
-    }
-
-    Err(TbxError::ArrayFrameEscape)
+    Ok(())
 }
 
 /// Write `value` to element `elem_idx` of the array at `pool_idx`.
@@ -106,21 +85,20 @@ pub fn fetch_prim(vm: &mut VM) -> Result<(), TbxError> {
 /// STORE — pop addr (top) then value (below), and store value at addr.
 ///
 /// Stack convention: `[..., value, addr]` → STORE → `[...]`
+///
+/// `Cell::Array` values are rejected for both `DictAddr` and `StackAddr` destinations.
+/// DIM local array initialisation uses the hidden `ARRAY_STORE_LOCAL` primitive instead.
 pub fn store_prim(vm: &mut VM) -> Result<(), TbxError> {
     let addr = vm.pop()?;
     let value = vm.pop()?;
     match addr {
         Cell::DictAddr(a) => {
-            // Cell::Array written to a DictAddr is handled by check_dict_reference_write:
-            // it will either promote the array to the global region (top-level execution)
-            // or return ArrayFrameEscape (frame-local array escaping into a global slot).
-            check_dict_reference_write(vm, &value)?;
+            reject_array_value(&value)?;
             vm.dict_write_at(a, value)?;
             Ok(())
         }
         Cell::StackAddr(a) => {
-            // Array handles are allowed in StackAddr writes to support DIM @A[n]
-            // local array initialization (DIM emits: LIT StackAddr(idx) [size] ARRAY SET).
+            reject_array_value(&value)?;
             vm.local_write(a, value)?;
             Ok(())
         }
@@ -139,21 +117,20 @@ pub fn store_prim(vm: &mut VM) -> Result<(), TbxError> {
 /// Designed for the `SET &var, value` statement pattern where `&var` is
 /// pushed before `value` (left-to-right argument evaluation via comma).
 /// Stack convention: `[..., addr, value]` → SET → `[...]`
+///
+/// `Cell::Array` values are rejected for both `DictAddr` and `StackAddr` destinations.
+/// DIM local array initialisation uses the hidden `ARRAY_STORE_LOCAL` primitive instead.
 pub fn set_prim(vm: &mut VM) -> Result<(), TbxError> {
     let value = vm.pop()?;
     let addr = vm.pop()?;
     match addr {
         Cell::DictAddr(a) => {
-            // Cell::Array written to a DictAddr is handled by check_dict_reference_write:
-            // it will either promote the array to the global region (top-level execution)
-            // or return ArrayFrameEscape (frame-local array escaping into a global slot).
-            check_dict_reference_write(vm, &value)?;
+            reject_array_value(&value)?;
             vm.dict_write_at(a, value)?;
             Ok(())
         }
         Cell::StackAddr(a) => {
-            // Array handles are allowed in StackAddr writes to support DIM @A[n]
-            // local array initialization (DIM emits: LIT StackAddr(idx) [size] ARRAY SET).
+            reject_array_value(&value)?;
             vm.local_write(a, value)?;
             Ok(())
         }
@@ -170,35 +147,7 @@ pub fn set_prim(vm: &mut VM) -> Result<(), TbxError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::cell::{Cell, ReturnFrame, Xt};
-
-    #[test]
-    fn test_array_pool_idx_from_cell_array_only() {
-        // array_pool_idx_from_cell returns Some only for Cell::Array;
-        // Cell::Str is Rc<str>-backed and has no array pool index.
-        assert_eq!(array_pool_idx_from_cell(&Cell::Array(3)), Some(3));
-        assert_eq!(array_pool_idx_from_cell(&Cell::string("hello")), None);
-        assert_eq!(
-            array_pool_idx_from_cell(&Cell::ArrayAddr {
-                pool_idx: 1,
-                elem_idx: 2,
-            }),
-            None
-        );
-        assert_eq!(array_pool_idx_from_cell(&Cell::DictAddr(0)), None);
-        assert_eq!(array_pool_idx_from_cell(&Cell::StackAddr(0)), None);
-    }
-
-    #[test]
-    fn test_promote_array_pool_idx_to_global_never_moves_boundary_backward() {
-        let mut vm = VM::new();
-
-        vm.global_array_pool_len = 5;
-        promote_array_pool_idx_to_global(&mut vm, 1);
-        assert_eq!(vm.global_array_pool_len, 5);
-        promote_array_pool_idx_to_global(&mut vm, 7);
-        assert_eq!(vm.global_array_pool_len, 8);
-    }
+    use crate::cell::Cell;
 
     // --- ARRAY_ADDR / STORE / FETCH boundary tests ---
 
@@ -307,81 +256,100 @@ mod tests {
         );
     }
 
-    /// Verify that storing a frame-local Cell::Array into a dictionary slot raises
-    /// ArrayFrameEscape.
+    /// Verify that STORE rejects a Cell::Array written to a DictAddr slot.
     ///
-    /// A frame-local array is one whose pool index is >= global_array_pool_len and
-    /// the VM is currently executing inside a Call frame (not top-level).
+    /// Surface-level STORE must never accept a whole-array handle for a scalar slot.
     #[test]
-    fn test_store_frame_local_array_to_dict_errors() {
+    fn test_store_array_to_dict_addr_is_type_error() {
         let mut vm = VM::new();
 
-        // Allocate a dictionary slot for the target variable.
         vm.dictionary.push(Cell::None);
         vm.dp = 1;
 
-        // Create the frame-local array; global_array_pool_len stays at 0.
-        let frame_local_idx = vm.arrays.len();
+        let pool_idx = vm.arrays.len();
         vm.arrays.push(vec![Cell::Int(7)]);
-        // global_array_pool_len = 0 means pool_idx 0 is not global.
-
-        // Simulate a Call frame so is_executing_top_level() returns false.
-        vm.return_stack.push(ReturnFrame::TopLevel);
-        vm.return_stack.push(ReturnFrame::Call {
-            callee_xt: Xt(0),
-            return_pc: 0,
-            saved_bp: 0,
-            saved_array_pool_len: 0,
-            actual_arity: 0,
-        });
 
         // STORE convention: push value then addr.
-        vm.push(Cell::Array(frame_local_idx)).unwrap();
+        vm.push(Cell::Array(pool_idx)).unwrap();
         vm.push(Cell::DictAddr(0)).unwrap();
 
         let result = store_prim(&mut vm);
         assert!(
-            matches!(result, Err(TbxError::ArrayFrameEscape)),
-            "expected ArrayFrameEscape, got {:?}",
+            matches!(result, Err(TbxError::TypeError { got: "Array", .. })),
+            "expected TypeError(Array), got {:?}",
             result
         );
     }
 
-    /// Verify that storing a top-level Cell::Array into a dictionary slot promotes
-    /// global_array_pool_len to cover the stored array.
+    /// Verify that STORE rejects a Cell::Array written to a StackAddr slot.
     ///
-    /// When execution is at the top level (only a TopLevel sentinel on the return
-    /// stack), STORE must promote the array to the global region instead of
-    /// returning an error.
+    /// Surface-level STORE must never accept a whole-array handle for a local slot.
     #[test]
-    fn test_store_top_level_array_to_dict_promotes_global_boundary() {
+    fn test_store_array_to_stack_addr_is_type_error() {
         let mut vm = VM::new();
 
-        // Allocate a dictionary slot for the target variable.
+        // Allocate a local slot via the data stack.
+        vm.data_stack.push(Cell::None);
+        vm.bp = 0;
+
+        let pool_idx = vm.arrays.len();
+        vm.arrays.push(vec![Cell::Int(3)]);
+
+        // STORE convention: push value then addr.
+        vm.push(Cell::Array(pool_idx)).unwrap();
+        vm.push(Cell::StackAddr(0)).unwrap();
+
+        let result = store_prim(&mut vm);
+        assert!(
+            matches!(result, Err(TbxError::TypeError { got: "Array", .. })),
+            "expected TypeError(Array), got {:?}",
+            result
+        );
+    }
+
+    /// Verify that SET rejects a Cell::Array written to a DictAddr slot.
+    #[test]
+    fn test_set_array_to_dict_addr_is_type_error() {
+        let mut vm = VM::new();
+
         vm.dictionary.push(Cell::None);
         vm.dp = 1;
 
-        // Create the array at top level; global_array_pool_len starts at 0.
-        let top_level_idx = vm.arrays.len();
-        vm.arrays.push(vec![Cell::Int(99)]);
+        let pool_idx = vm.arrays.len();
+        vm.arrays.push(vec![Cell::Int(5)]);
 
-        // Simulate top-level execution: only a TopLevel sentinel on the return stack.
-        vm.return_stack.push(ReturnFrame::TopLevel);
-
-        // STORE convention: push value then addr.
-        vm.push(Cell::Array(top_level_idx)).unwrap();
+        // SET convention: push addr then value.
         vm.push(Cell::DictAddr(0)).unwrap();
+        vm.push(Cell::Array(pool_idx)).unwrap();
 
-        store_prim(&mut vm).unwrap();
-
-        // The global boundary must have been promoted to cover top_level_idx.
+        let result = set_prim(&mut vm);
         assert!(
-            vm.global_array_pool_len > top_level_idx,
-            "expected global_array_pool_len > {}, got {}",
-            top_level_idx,
-            vm.global_array_pool_len
+            matches!(result, Err(TbxError::TypeError { got: "Array", .. })),
+            "expected TypeError(Array), got {:?}",
+            result
         );
-        // The dictionary slot must now hold the array handle.
-        assert_eq!(vm.dictionary[0], Cell::Array(top_level_idx));
+    }
+
+    /// Verify that SET rejects a Cell::Array written to a StackAddr slot.
+    #[test]
+    fn test_set_array_to_stack_addr_is_type_error() {
+        let mut vm = VM::new();
+
+        vm.data_stack.push(Cell::None);
+        vm.bp = 0;
+
+        let pool_idx = vm.arrays.len();
+        vm.arrays.push(vec![Cell::Int(2)]);
+
+        // SET convention: push addr then value.
+        vm.push(Cell::StackAddr(0)).unwrap();
+        vm.push(Cell::Array(pool_idx)).unwrap();
+
+        let result = set_prim(&mut vm);
+        assert!(
+            matches!(result, Err(TbxError::TypeError { got: "Array", .. })),
+            "expected TypeError(Array), got {:?}",
+            result
+        );
     }
 }

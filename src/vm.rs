@@ -295,16 +295,6 @@ impl VM {
         frames
     }
 
-    /// Returns true while `vm.run()` is executing top-level code, outside any
-    /// word call frame.
-    pub(crate) fn is_executing_top_level(&self) -> bool {
-        matches!(self.return_stack.last(), Some(ReturnFrame::TopLevel))
-            && !self
-                .return_stack
-                .iter()
-                .any(|frame| matches!(frame, ReturnFrame::Call { .. }))
-    }
-
     /// Consume the next token from the token stream.
     ///
     /// Returns `TbxError::TokenStreamEmpty` if `token_stream` is `None` or empty.
@@ -2939,15 +2929,19 @@ mod tests {
 
     #[test]
     fn test_array_frame_escape_via_store_to_dict_is_error() {
-        // Verify that STORE of a Cell::Array into a global variable produces ArrayFrameEscape.
+        // Verify that STORE of a Cell::Array into a global variable produces TypeError.
+        // (Previously ArrayFrameEscape; now uniformly TypeError for all array-handle writes.)
         let result = run_source(
             "VAR G\n\
              DEF BAD_STORE()\n  DIM @A[2]\n  SET &G, A\nEND\n\
              BAD_STORE",
         );
         assert!(
-            matches!(result, Err(crate::error::TbxError::ArrayFrameEscape)),
-            "expected ArrayFrameEscape, got: {result:?}"
+            matches!(
+                result,
+                Err(crate::error::TbxError::TypeError { got: "Array", .. })
+            ),
+            "expected TypeError(Array), got: {result:?}"
         );
     }
 
@@ -3009,31 +3003,30 @@ mod tests {
 
     #[test]
     fn test_global_array_stored_via_store_prim() {
-        // A global array (pool_idx < global_array_pool_len) can be stored into a
-        // dictionary slot by store_prim without triggering ArrayFrameEscape.
+        // store_prim must reject Cell::Array written to a DictAddr slot,
+        // regardless of whether the array is in the global pool region.
+        // (Surface-level SET / STORE never allow whole-array handle writes.)
         let mut vm = VM::new();
         vm.arrays.push(vec![Cell::Int(0); 5]);
         vm.global_array_pool_len = 1; // mark pool[0] as global
 
-        // Allocate a dictionary slot.
         let slot = vm.dp;
         vm.dict_write(Cell::None).unwrap();
 
         let arr = Cell::Array(0);
         // store_prim pops addr first, then value; so push value then addr.
-        vm.push(arr.clone()).unwrap();
+        vm.push(arr).unwrap();
         vm.push(Cell::DictAddr(slot)).unwrap();
         let result = crate::primitives::store_prim(&mut vm);
         assert!(
-            result.is_ok(),
-            "store_prim should allow global array: {result:?}"
+            matches!(result, Err(TbxError::TypeError { got: "Array", .. })),
+            "expected TypeError(Array) from store_prim: {result:?}"
         );
-        assert_eq!(vm.dict_read(slot).unwrap(), arr);
     }
 
     #[test]
     fn test_global_array_stored_via_set_prim() {
-        // set_prim (SET &var, value) also accepts a global array.
+        // set_prim must also reject Cell::Array written to a DictAddr slot.
         let mut vm = VM::new();
         vm.arrays.push(vec![Cell::Int(0); 3]);
         vm.global_array_pool_len = 1;
@@ -3041,36 +3034,37 @@ mod tests {
         let slot = vm.dp;
         vm.dict_write(Cell::None).unwrap();
 
-        let arr = Cell::Array(0);
         // set_prim pops value first, then addr (stack: [..., addr, value]).
         vm.push(Cell::DictAddr(slot)).unwrap();
-        vm.push(arr.clone()).unwrap();
+        vm.push(Cell::Array(0)).unwrap();
         let result = crate::primitives::set_prim(&mut vm);
         assert!(
-            result.is_ok(),
-            "set_prim should allow global array: {result:?}"
+            matches!(result, Err(TbxError::TypeError { got: "Array", .. })),
+            "expected TypeError(Array) from set_prim: {result:?}"
         );
-        assert_eq!(vm.dict_read(slot).unwrap(), arr);
     }
 
     #[test]
     fn test_word_array_store_to_global_var_is_still_error() {
-        // Arrays created inside a word must still not escape via a global VAR.
-        // global_array_pool_len = 0 (default), so all arrays created in words are frame-local.
+        // Storing a local array handle into a global VAR must fail with TypeError.
+        // (Previously ArrayFrameEscape; now TypeError for all array-handle writes.)
         let result = run_source(
             "VAR gvar\n\
              DEF BAD()\n  DIM @a[3]\n  SET &gvar, a\nEND\n\
              BAD",
         );
         assert!(
-            matches!(result, Err(crate::error::TbxError::ArrayFrameEscape)),
-            "expected ArrayFrameEscape, got: {result:?}"
+            matches!(
+                result,
+                Err(crate::error::TbxError::TypeError { got: "Array", .. })
+            ),
+            "expected TypeError(Array), got: {result:?}"
         );
     }
 
     #[test]
     fn test_non_global_array_store_rejected_by_store_prim() {
-        // An array with pool_idx >= global_array_pool_len must still be rejected.
+        // An array handle written to a DictAddr must always be rejected by store_prim.
         let mut vm = VM::new();
         vm.arrays.push(vec![Cell::Int(0); 5]);
         // global_array_pool_len stays 0, so pool[0] is NOT global.
@@ -3083,8 +3077,8 @@ mod tests {
         vm.push(Cell::DictAddr(slot)).unwrap();
         let result = crate::primitives::store_prim(&mut vm);
         assert!(
-            matches!(result, Err(TbxError::ArrayFrameEscape)),
-            "expected ArrayFrameEscape, got: {result:?}"
+            matches!(result, Err(TbxError::TypeError { got: "Array", .. })),
+            "expected TypeError(Array), got: {result:?}"
         );
     }
 

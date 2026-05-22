@@ -37,6 +37,48 @@ pub(super) fn array_prim(vm: &mut VM) -> Result<(), TbxError> {
     Ok(())
 }
 
+/// ARRAY_STORE_LOCAL — hidden system primitive used by the `DIM @A[n]` compiler
+/// to write a `Cell::Array` handle into a local (stack-frame) variable slot.
+///
+/// Stack convention (same as SET): `[..., StackAddr(idx), Cell::Array(pool_idx)]`
+///   → pops both → writes the handle → leaves stack unchanged below them.
+///
+/// Invariant: the value on top of the stack MUST be `Cell::Array`.  Any other type
+/// is rejected with `TypeError` as a programming error (this primitive is only emitted
+/// by the compiler, never by user code).
+///
+/// This primitive is registered with `FLAG_SYSTEM | FLAG_HIDDEN` and is not
+/// callable from surface TBX code.
+pub(super) fn array_store_local_prim(vm: &mut VM) -> Result<(), TbxError> {
+    let value = vm.pop()?;
+    let addr = vm.pop()?;
+
+    // Invariant: value must be a Cell::Array (compiler-generated call only).
+    let pool_idx = match value {
+        Cell::Array(idx) => idx,
+        other => {
+            return Err(TbxError::TypeError {
+                expected: "Array (internal: ARRAY_STORE_LOCAL invariant violated)",
+                got: other.type_name(),
+            });
+        }
+    };
+
+    // Destination must be a StackAddr.
+    let local_idx = match addr {
+        Cell::StackAddr(idx) => idx,
+        other => {
+            return Err(TbxError::TypeError {
+                expected: "StackAddr (internal: ARRAY_STORE_LOCAL invariant violated)",
+                got: other.type_name(),
+            });
+        }
+    };
+
+    vm.local_write(local_idx, Cell::Array(pool_idx))?;
+    Ok(())
+}
+
 /// TUPLE — collect N values from the stack into a new immutable tuple.
 ///
 /// Pops the arity `n` from the stack, then pops `n` values and assembles them
