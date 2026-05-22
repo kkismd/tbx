@@ -1260,6 +1260,33 @@ fn test_let_array_handle_to_local_var_is_type_error() {
     );
 }
 
+/// `ARRAY_GET(A, 1)` must not be callable from surface because ARRAY_GET is a
+/// hidden system helper.
+#[test]
+fn test_array_get_is_hidden_from_surface() {
+    let mut interp = Interpreter::new();
+    let src = concat!("DIM @A[2]\n", "LET @A[1] = 10\n", "ARRAY_GET(A, 1)\n",);
+    // ARRAY_GET is a hidden system helper; any compile/runtime error is acceptable.
+    interp
+        .exec_source(src)
+        .expect_err("ARRAY_GET must not be callable from surface");
+}
+
+/// `ARRAY_ADDR(A, 1)` must not be callable from surface because ARRAY_ADDR is a
+/// hidden system helper.
+#[test]
+fn test_array_addr_is_hidden_from_surface() {
+    let mut interp = Interpreter::new();
+    let src = concat!("DIM @A[2]\n", "ARRAY_ADDR(A, 1)\n",);
+    let err = interp
+        .exec_source(src)
+        .expect_err("ARRAY_ADDR must not be callable from surface");
+    assert!(
+        err.to_string().contains("undefined symbol"),
+        "expected undefined symbol, got: {err}"
+    );
+}
+
 /// DIM @A[n] inside a DEF must still work correctly after the ban is in effect.
 ///
 /// This regression test ensures that the hidden ARRAY_STORE_LOCAL path used by
