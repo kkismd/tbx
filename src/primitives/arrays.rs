@@ -274,10 +274,11 @@ pub fn tuple_len_prim(vm: &mut VM) -> Result<(), TbxError> {
 ///
 /// # Surface language policy
 ///
-/// The canonical surface call form is `ARRAY_LEN(@A)`, where `@A` is an array
-/// storage designator.  The form `ARRAY_LEN(A)` (without `@`) passes a scalar
-/// variable instead of an array handle and is unsupported; it will produce a
-/// `TypeError` at runtime if `A` does not hold a `Cell::Array`.
+/// The canonical surface form is `ARRAY_LEN(@A)`, where `@A` is an array
+/// storage designator. `ARRAY_LEN` itself is a hidden system helper used by
+/// compiler lowering; it is not directly callable from surface TBX code.
+/// `ARRAY_LEN(A)` is unsupported and rejected by the expression compiler / lookup
+/// path before it should reach this primitive.
 pub fn array_len_prim(vm: &mut VM) -> Result<(), TbxError> {
     let pool_idx = match vm.pop()? {
         Cell::Array(idx) => idx,
