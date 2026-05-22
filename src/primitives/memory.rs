@@ -164,7 +164,7 @@ mod tests {
             .push(crate::array_ref::ArrayRef::new(vec![Cell::None]));
 
         // Push array handle and 1-based index, then call ARRAY_ADDR.
-        vm.push(Cell::Array(pool_idx)).unwrap();
+        vm.push(Cell::Array(vm.arrays[pool_idx].clone())).unwrap();
         vm.push(Cell::Int(1)).unwrap();
         array_addr_prim(&mut vm).unwrap();
 
@@ -206,12 +206,11 @@ mod tests {
             .push(crate::array_ref::ArrayRef::new(vec![Cell::None]));
 
         // Inner array — the value to be (illegally) stored.
-        let inner_idx = vm.arrays.len();
-        vm.arrays
-            .push(crate::array_ref::ArrayRef::new(vec![Cell::Int(1)]));
+        let inner_ar = crate::array_ref::ArrayRef::new(vec![Cell::Int(1)]);
+        vm.arrays.push(inner_ar.clone());
 
         // STORE convention: push value then addr.
-        vm.push(Cell::Array(inner_idx)).unwrap();
+        vm.push(Cell::Array(inner_ar)).unwrap();
         vm.push(Cell::ArrayAddr {
             pool_idx: outer_idx,
             elem_idx: 0,
@@ -237,9 +236,8 @@ mod tests {
             .push(crate::array_ref::ArrayRef::new(vec![Cell::None]));
 
         // Value array (nested).
-        let inner_idx = vm.arrays.len();
-        vm.arrays
-            .push(crate::array_ref::ArrayRef::new(vec![Cell::Int(1)]));
+        let inner_ar = crate::array_ref::ArrayRef::new(vec![Cell::Int(1)]);
+        vm.arrays.push(inner_ar.clone());
 
         // SET convention: push addr then value.
         vm.push(Cell::ArrayAddr {
@@ -247,7 +245,7 @@ mod tests {
             elem_idx: 0,
         })
         .unwrap();
-        vm.push(Cell::Array(inner_idx)).unwrap();
+        vm.push(Cell::Array(inner_ar)).unwrap();
 
         let result = set_prim(&mut vm);
         assert!(
@@ -267,12 +265,11 @@ mod tests {
         vm.dictionary.push(Cell::None);
         vm.dp = 1;
 
-        let pool_idx = vm.arrays.len();
-        vm.arrays
-            .push(crate::array_ref::ArrayRef::new(vec![Cell::Int(7)]));
+        let ar = crate::array_ref::ArrayRef::new(vec![Cell::Int(7)]);
+        vm.arrays.push(ar.clone());
 
         // STORE convention: push value then addr.
-        vm.push(Cell::Array(pool_idx)).unwrap();
+        vm.push(Cell::Array(ar)).unwrap();
         vm.push(Cell::DictAddr(0)).unwrap();
 
         let result = store_prim(&mut vm);
@@ -294,12 +291,11 @@ mod tests {
         vm.data_stack.push(Cell::None);
         vm.bp = 0;
 
-        let pool_idx = vm.arrays.len();
-        vm.arrays
-            .push(crate::array_ref::ArrayRef::new(vec![Cell::Int(3)]));
+        let ar = crate::array_ref::ArrayRef::new(vec![Cell::Int(3)]);
+        vm.arrays.push(ar.clone());
 
         // STORE convention: push value then addr.
-        vm.push(Cell::Array(pool_idx)).unwrap();
+        vm.push(Cell::Array(ar)).unwrap();
         vm.push(Cell::StackAddr(0)).unwrap();
 
         let result = store_prim(&mut vm);
@@ -318,13 +314,12 @@ mod tests {
         vm.dictionary.push(Cell::None);
         vm.dp = 1;
 
-        let pool_idx = vm.arrays.len();
-        vm.arrays
-            .push(crate::array_ref::ArrayRef::new(vec![Cell::Int(5)]));
+        let ar = crate::array_ref::ArrayRef::new(vec![Cell::Int(5)]);
+        vm.arrays.push(ar.clone());
 
         // SET convention: push addr then value.
         vm.push(Cell::DictAddr(0)).unwrap();
-        vm.push(Cell::Array(pool_idx)).unwrap();
+        vm.push(Cell::Array(ar)).unwrap();
 
         let result = set_prim(&mut vm);
         assert!(
@@ -342,13 +337,12 @@ mod tests {
         vm.data_stack.push(Cell::None);
         vm.bp = 0;
 
-        let pool_idx = vm.arrays.len();
-        vm.arrays
-            .push(crate::array_ref::ArrayRef::new(vec![Cell::Int(2)]));
+        let ar = crate::array_ref::ArrayRef::new(vec![Cell::Int(2)]);
+        vm.arrays.push(ar.clone());
 
         // SET convention: push addr then value.
         vm.push(Cell::StackAddr(0)).unwrap();
-        vm.push(Cell::Array(pool_idx)).unwrap();
+        vm.push(Cell::Array(ar)).unwrap();
 
         let result = set_prim(&mut vm);
         assert!(

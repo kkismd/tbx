@@ -32,10 +32,10 @@ pub(super) fn array_prim(vm: &mut VM) -> Result<(), TbxError> {
         });
     }
     let size = n as usize;
-    let idx = vm.arrays.len();
     let ar = ArrayRef::new(vec![Cell::None; size]);
-    vm.arrays.push(ar);
-    vm.push(Cell::Array(idx))?;
+    // Register the ArrayRef in the compatibility pool for lifetime tracking.
+    vm.arrays.push(ar.clone());
+    vm.push(Cell::Array(ar))?;
     Ok(())
 }
 
@@ -56,8 +56,8 @@ pub(super) fn array_store_local_prim(vm: &mut VM) -> Result<(), TbxError> {
     let addr = vm.pop()?;
 
     // Invariant: value must be a Cell::Array (compiler-generated call only).
-    let pool_idx = match value {
-        Cell::Array(idx) => idx,
+    let ar = match value {
+        Cell::Array(ar) => ar,
         other => {
             return Err(TbxError::TypeError {
                 expected: "Array (internal: ARRAY_STORE_LOCAL invariant violated)",
@@ -77,7 +77,7 @@ pub(super) fn array_store_local_prim(vm: &mut VM) -> Result<(), TbxError> {
         }
     };
 
-    vm.local_write(local_idx, Cell::Array(pool_idx))?;
+    vm.local_write(local_idx, Cell::Array(ar))?;
     Ok(())
 }
 
@@ -121,8 +121,8 @@ pub fn to_tuple_prim(vm: &mut VM) -> Result<(), TbxError> {
 /// The index is translated to 0-based internally before accessing the Vec.
 pub fn array_get_prim(vm: &mut VM) -> Result<(), TbxError> {
     let elem_idx_raw = vm.pop_int()?;
-    let pool_idx = match vm.pop()? {
-        Cell::Array(idx) => idx,
+    let ar = match vm.pop()? {
+        Cell::Array(ar) => ar,
         other => {
             return Err(TbxError::TypeError {
                 expected: "Array",
@@ -130,10 +130,6 @@ pub fn array_get_prim(vm: &mut VM) -> Result<(), TbxError> {
             })
         }
     };
-    let ar = vm.arrays.get(pool_idx).ok_or(TbxError::IndexOutOfBounds {
-        index: pool_idx,
-        size: vm.arrays.len(),
-    })?;
     let size = ar.len();
     // Translate 1-based user index to 0-based internal index.
     // Index 0 or negative is out of bounds.
@@ -173,8 +169,8 @@ pub fn array_get_prim(vm: &mut VM) -> Result<(), TbxError> {
 /// The index is translated to 0-based internally before storing in `Cell::ArrayAddr`.
 pub fn array_addr_prim(vm: &mut VM) -> Result<(), TbxError> {
     let elem_idx_raw = vm.pop_int()?;
-    let pool_idx = match vm.pop()? {
-        Cell::Array(idx) => idx,
+    let ar = match vm.pop()? {
+        Cell::Array(ar) => ar,
         other => {
             return Err(TbxError::TypeError {
                 expected: "Array",
@@ -182,11 +178,6 @@ pub fn array_addr_prim(vm: &mut VM) -> Result<(), TbxError> {
             })
         }
     };
-    // Validate bounds at address-computation time.
-    let ar = vm.arrays.get(pool_idx).ok_or(TbxError::IndexOutOfBounds {
-        index: pool_idx,
-        size: vm.arrays.len(),
-    })?;
     let size = ar.len();
     // Translate 1-based user index to 0-based internal index.
     // Index 0 or negative is out of bounds.
@@ -203,6 +194,15 @@ pub fn array_addr_prim(vm: &mut VM) -> Result<(), TbxError> {
             size,
         });
     }
+    // Resolve pool_idx by pointer-identity search in vm.arrays.
+    // Cell::ArrayAddr still carries pool_idx for compatibility with FETCH/STORE.
+    let pool_idx =
+        vm.arrays
+            .iter()
+            .position(|entry| entry.ptr_eq(&ar))
+            .ok_or(TbxError::InvalidArgument {
+                message: "ARRAY_ADDR: array handle not found in pool".to_string(),
+            })?;
     vm.push(Cell::ArrayAddr { pool_idx, elem_idx })?;
     Ok(())
 }
@@ -287,8 +287,8 @@ pub fn tuple_len_prim(vm: &mut VM) -> Result<(), TbxError> {
 /// `ARRAY_LEN(A)` is unsupported and rejected by the expression compiler / lookup
 /// path before it should reach this primitive.
 pub fn array_len_prim(vm: &mut VM) -> Result<(), TbxError> {
-    let pool_idx = match vm.pop()? {
-        Cell::Array(idx) => idx,
+    let ar = match vm.pop()? {
+        Cell::Array(ar) => ar,
         other => {
             return Err(TbxError::TypeError {
                 expected: "Array",
@@ -296,10 +296,6 @@ pub fn array_len_prim(vm: &mut VM) -> Result<(), TbxError> {
             })
         }
     };
-    let ar = vm.arrays.get(pool_idx).ok_or(TbxError::IndexOutOfBounds {
-        index: pool_idx,
-        size: vm.arrays.len(),
-    })?;
     let len = ar.len() as i64;
     vm.push(Cell::Int(len))?;
     Ok(())
