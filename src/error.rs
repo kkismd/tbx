@@ -159,19 +159,6 @@ pub enum TbxError {
         /// Human-readable description of the I/O error.
         reason: String,
     },
-    /// An array value escaped its owning stack frame via a global variable write.
-    ///
-    /// Arrays (created with `ARRAY(N)`) that are created inside a word are bound
-    /// to the stack frame in which they were created.  Attempting to store a
-    /// frame-local `Cell::Array` value into a global variable (via `STORE` or
-    /// `SET` targeting a `DictAddr`) is forbidden, because the array pool is
-    /// truncated on EXIT and the stored index would dangle.
-    ///
-    /// Note: returning a frame-local array via `RETURN` is allowed (ownership
-    /// transfer) — the array slot is moved to the caller's pool boundary instead
-    /// of being truncated.
-    ArrayFrameEscape,
-
     /// A variadic word was called with fewer arguments than its fixed parameter count.
     ///
     /// `name` is the word name, `expected_min` is the number of fixed parameters
@@ -316,9 +303,6 @@ impl std::fmt::Display for TbxError {
             }
             TbxError::OutputIoError { reason } => {
                 write!(f, "ACCEPT: I/O error flushing output: {reason}")
-            }
-            TbxError::ArrayFrameEscape => {
-                write!(f, "array cannot escape its owning stack frame")
             }
             TbxError::WrongNumberOfArguments {
                 name,

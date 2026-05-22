@@ -166,13 +166,6 @@ pub struct VM {
     /// Drained by `exec_immediate_word` in the interpreter, which calls
     /// `exec_source` on the file content.
     pub(crate) pending_use_path: Option<String>,
-    /// Length of the "global" (persistent) region of arrays created at the top level.
-    ///
-    /// Retained for compatibility while pool-lifetime tracking is fully removed.
-    /// `VM::arrays` has been deleted (issue #734); this field is kept as a
-    /// placeholder until the array pool lifetime model is fully retired in a
-    /// follow-up issue.
-    pub global_array_pool_len: usize,
     /// Internal buffer holding the last line read by ACCEPT.
     ///
     /// ACCEPT reads one line from `input_reader` and stores it here (trimmed of
@@ -243,7 +236,6 @@ impl VM {
             compile_state: None,
             compile_stack: Vec::new(),
             pending_use_path: None,
-            global_array_pool_len: 0,
             input_buffer: None,
             input_reader: Box::new(BufReader::new(std::io::stdin())),
             output_writer: Box::new(std::io::stdout()),
@@ -2807,7 +2799,7 @@ mod tests {
     }
 
     // ------------------------------------------------------------------
-    // End-to-end integration tests: array pool management
+    // End-to-end integration tests: array lifetime management
     // ------------------------------------------------------------------
 
     /// Run a multi-line TBX source snippet through the full interpreter pipeline.
@@ -2818,13 +2810,13 @@ mod tests {
         Ok(interp.take_output())
     }
 
-    // --- Array pool management ---
+    // --- Array lifetime management ---
 
     #[test]
     fn test_arrays_pool_truncated_on_exit() {
-        // Verify that the array pool is empty after a word with an array returns.
+        // Verify that no array handle leaks after a word with an array returns.
         // run_source creates a fresh Interpreter (and therefore a fresh VM), so we
-        // check the absence of errors rather than the pool length directly.
+        // check the absence of errors rather than any internal length field.
         let result = run_source(
             "DEF HAS_ARRAY()\n  DIM @A[3]\n  RETURN 1\nEND\n\
              PUTDEC HAS_ARRAY()",
@@ -2863,7 +2855,6 @@ mod tests {
     #[test]
     fn test_array_frame_escape_via_store_to_dict_is_error() {
         // Verify that STORE of a Cell::Array into a global variable produces TypeError.
-        // (Previously ArrayFrameEscape; now uniformly TypeError for all array-handle writes.)
         let result = run_source(
             "VAR G\n\
              DEF BAD_STORE()\n  DIM @A[2]\n  SET &G, A\nEND\n\
@@ -2940,8 +2931,6 @@ mod tests {
         // regardless of whether the array is in the global pool region.
         // (Surface-level SET / STORE never allow whole-array handle writes.)
         let mut vm = VM::new();
-        vm.global_array_pool_len = 1; // mark as global (pool tracking only, VM::arrays removed)
-
         let slot = vm.dp;
         vm.dict_write(Cell::None).unwrap();
 
@@ -2961,8 +2950,6 @@ mod tests {
         // set_prim must also reject Cell::Array written to a DictAddr slot.
         let mut vm = VM::new();
         let ar = crate::array_ref::ArrayRef::new(vec![Cell::Int(0); 3]);
-        vm.global_array_pool_len = 1; // pool tracking only (VM::arrays removed)
-
         let slot = vm.dp;
         vm.dict_write(Cell::None).unwrap();
 
@@ -2979,7 +2966,6 @@ mod tests {
     #[test]
     fn test_word_array_store_to_global_var_is_still_error() {
         // Storing a local array handle into a global VAR must fail with TypeError.
-        // (Previously ArrayFrameEscape; now TypeError for all array-handle writes.)
         let result = run_source(
             "VAR gvar\n\
              DEF BAD()\n  DIM @a[3]\n  SET &gvar, a\nEND\n\
@@ -2998,8 +2984,6 @@ mod tests {
     fn test_non_global_array_store_rejected_by_store_prim() {
         // An array handle written to a DictAddr must always be rejected by store_prim.
         let mut vm = VM::new();
-        // global_array_pool_len stays 0 (default), so no arrays are marked global.
-
         let slot = vm.dp;
         vm.dict_write(Cell::None).unwrap();
 
@@ -3051,8 +3035,7 @@ mod tests {
     fn test_array_created_in_word_does_not_leak() {
         // After a word that creates a local array but returns a non-array value,
         // no array handle should remain on the data stack.
-        // VM::arrays has been removed (issue #734); array lifetime is now fully
-        // managed by Rc reference counting rather than a pool registry.
+        // Array lifetime is managed by Rc reference counting.
         let mut interp = crate::interpreter::Interpreter::new();
         interp
             .exec_source(
@@ -3187,8 +3170,8 @@ mod tests {
     // A Cell::Array (whole-array handle) must not appear at the user-visible
     // surface: it cannot be assigned to a variable, returned from a word,
     // compared with EQ/NEQ, used as a word argument, or stored into a dict
-    // slot from inside a called frame.  All such attempts must produce either
-    // a TypeError or an ArrayFrameEscape error at runtime.
+    // slot from inside a called frame.  All such attempts must produce a
+    // TypeError at runtime.
     //
     // Valid uses of arrays: DIM @A[n] (allocation), @A[i] (element read),
     // &@A[i] (element address for SET), LET @A[i] = expr (element write),
@@ -3196,7 +3179,7 @@ mod tests {
 
     #[test]
     fn test_whole_array_assignment_to_global_var_errors() {
-        // `SET &G, A` inside a DEF body must produce ArrayFrameEscape
+        // `SET &G, A` inside a DEF body must produce TypeError
         // (Cell::Array written into a DictAddr from a called frame).
         let result = run_source(
             "VAR G\n\

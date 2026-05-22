@@ -672,7 +672,7 @@ pub fn var_prim(vm: &mut VM) -> Result<(), TbxError> {
 ///
 /// In execute mode (top level):
 ///   - Creates a global variable entry (`EntryKind::Variable`) backed by a
-///     `Cell::Array` in the array pool.
+///     `Cell::Array`.
 ///   - The size expression is evaluated immediately via a temporary code buffer.
 ///
 /// Collision rules (bare name used as the key in both modes):
@@ -6074,7 +6074,7 @@ mod tests {
 
     #[test]
     fn test_store_to_array_addr() {
-        // Cell::ArrayAddr now holds the ArrayRef directly; VM::arrays is not consulted.
+        // Cell::ArrayAddr holds the ArrayRef directly.
         let mut vm = VM::new();
         let ar = ArrayRef::new(vec![Cell::None, Cell::None]);
         vm.push(Cell::Int(99)).unwrap();
@@ -6089,7 +6089,7 @@ mod tests {
 
     #[test]
     fn test_set_to_array_addr() {
-        // Cell::ArrayAddr now holds the ArrayRef directly; VM::arrays is not consulted.
+        // Cell::ArrayAddr holds the ArrayRef directly.
         let mut vm = VM::new();
         let ar = ArrayRef::new(vec![Cell::None, Cell::None]);
         vm.push(Cell::ArrayAddr {
@@ -6112,7 +6112,7 @@ mod tests {
     #[test]
     fn test_set_str_to_array_element_is_allowed() {
         // Cell::Str(Rc<str>) written through SET must succeed (#591).
-        // Cell::ArrayAddr now holds the ArrayRef directly; VM::arrays is not consulted.
+        // Cell::ArrayAddr holds the ArrayRef directly.
         let mut vm = VM::new();
         let ar = ArrayRef::new(vec![Cell::None]);
         vm.push(Cell::ArrayAddr {
@@ -6128,7 +6128,7 @@ mod tests {
     #[test]
     fn test_store_str_to_array_element_is_allowed() {
         // Same as the SET path above, exercised through STORE (#591).
-        // Cell::ArrayAddr now holds the ArrayRef directly; VM::arrays is not consulted.
+        // Cell::ArrayAddr holds the ArrayRef directly.
         let mut vm = VM::new();
         let ar = ArrayRef::new(vec![Cell::None]);
         vm.push(Cell::string("world")).unwrap();
@@ -6144,10 +6144,8 @@ mod tests {
     #[test]
     fn test_set_str_to_global_array_element_is_allowed() {
         // Storing a Str into a global array element must succeed.
-        // (global_array_pool_len is irrelevant for ArrayAddr resolution now.)
         let mut vm = VM::new();
         let ar = ArrayRef::new(vec![Cell::None]);
-        vm.global_array_pool_len = 1; // retained for pool tracking (VM::arrays removed)
         vm.push(Cell::ArrayAddr {
             array: ar.clone(),
             elem_idx: 0,
@@ -6161,10 +6159,9 @@ mod tests {
     #[test]
     fn test_set_str_to_frame_local_array_element_is_allowed() {
         // Storing a Str into a frame-local array must succeed (#591).
-        // Cell::ArrayAddr now holds the ArrayRef directly; VM::arrays is not consulted.
+        // Cell::ArrayAddr holds the ArrayRef directly.
         let mut vm = VM::new();
         let ar = ArrayRef::new(vec![Cell::None]);
-        // global_array_pool_len = 0 (default) → array is frame-local
         vm.push(Cell::ArrayAddr {
             array: ar.clone(),
             elem_idx: 0,
@@ -6178,7 +6175,7 @@ mod tests {
     #[test]
     fn test_set_nested_array_to_array_element_is_invalid_array_element() {
         // Cell::Array must always be rejected as an array element.
-        // Cell::ArrayAddr now holds the ArrayRef directly; VM::arrays is not consulted.
+        // Cell::ArrayAddr holds the ArrayRef directly.
         let mut vm = VM::new();
         let outer_ar = ArrayRef::new(vec![Cell::None]); // target array
         let inner_ar = ArrayRef::new(vec![Cell::None]); // value to store (nested, forbidden)
@@ -6198,7 +6195,7 @@ mod tests {
 
     #[test]
     fn test_fetch_array_addr() {
-        // Cell::ArrayAddr now holds the ArrayRef directly; VM::arrays is not consulted.
+        // Cell::ArrayAddr holds the ArrayRef directly.
         let mut vm = VM::new();
         let ar = ArrayRef::new(vec![Cell::Int(77)]);
         vm.push(Cell::ArrayAddr {
