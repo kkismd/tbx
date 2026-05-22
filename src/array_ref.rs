@@ -1,5 +1,16 @@
 //! `ArrayRef` — Rc-backed shared mutable container for array elements.
 //!
+//! # Surface language policy
+//!
+//! `ArrayRef` (and its wrapper `Cell::Array`) is an **internal VM representation**
+//! for array storage.  It is NOT a surface first-class array value.  The only
+//! surface operations that involve arrays are `DIM @A[n]`, `@A[i]`, `&@A[i]`,
+//! `LET @A[i] = expr`, `SET &@A[i], expr`, and `ARRAY_LEN(@A)`.
+//!
+//! Whole-array surface operations (`LET B = A`, `RETURN A`, `TUPLE(A)`,
+//! `PUTVAL A`, `A = B`, `EQ(A, B)`) are unsupported.  See
+//! `blueprint-language.md` §配列の surface policy for details.
+//!
 //! # Design discipline
 //!
 //! * `ArrayRef` is an `Rc<RefCell<Vec<Cell>>>` handle; cloning it shares
