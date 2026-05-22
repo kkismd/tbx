@@ -6016,19 +6016,23 @@ mod tests {
     #[test]
     fn test_array_addr_prim_pushes_array_addr() {
         // User index 1 maps to internal elem_idx 0.
+        // Cell::ArrayAddr now holds the ArrayRef directly (no pool_idx search).
         let mut vm = VM::new();
         let ar = ArrayRef::new(vec![Cell::Int(0), Cell::Int(0)]);
-        vm.arrays.push(ar.clone());
-        vm.push(Cell::Array(ar)).unwrap();
+        vm.push(Cell::Array(ar.clone())).unwrap();
         vm.push(Cell::Int(1)).unwrap();
         array_addr_prim(&mut vm).unwrap();
-        assert_eq!(
-            vm.pop(),
-            Ok(Cell::ArrayAddr {
-                pool_idx: 0,
-                elem_idx: 0
-            })
-        );
+        // Verify that the result is an ArrayAddr pointing to the same array.
+        match vm.pop().unwrap() {
+            Cell::ArrayAddr { array, elem_idx } => {
+                assert!(
+                    array.ptr_eq(&ar),
+                    "ArrayAddr must reference the same ArrayRef"
+                );
+                assert_eq!(elem_idx, 0);
+            }
+            other => panic!("expected ArrayAddr, got {:?}", other),
+        }
     }
 
     #[test]
@@ -6084,30 +6088,32 @@ mod tests {
 
     #[test]
     fn test_store_to_array_addr() {
+        // Cell::ArrayAddr now holds the ArrayRef directly; VM::arrays is not consulted.
         let mut vm = VM::new();
-        vm.arrays.push(ArrayRef::new(vec![Cell::None, Cell::None]));
+        let ar = ArrayRef::new(vec![Cell::None, Cell::None]);
         vm.push(Cell::Int(99)).unwrap();
         vm.push(Cell::ArrayAddr {
-            pool_idx: 0,
+            array: ar.clone(),
             elem_idx: 1,
         })
         .unwrap();
         store_prim(&mut vm).unwrap();
-        assert_eq!(vm.arrays[0].get_cloned(1), Some(Cell::Int(99)));
+        assert_eq!(ar.get_cloned(1), Some(Cell::Int(99)));
     }
 
     #[test]
     fn test_set_to_array_addr() {
+        // Cell::ArrayAddr now holds the ArrayRef directly; VM::arrays is not consulted.
         let mut vm = VM::new();
-        vm.arrays.push(ArrayRef::new(vec![Cell::None, Cell::None]));
+        let ar = ArrayRef::new(vec![Cell::None, Cell::None]);
         vm.push(Cell::ArrayAddr {
-            pool_idx: 0,
+            array: ar.clone(),
             elem_idx: 0,
         })
         .unwrap();
         vm.push(Cell::Int(42)).unwrap();
         set_prim(&mut vm).unwrap();
-        assert_eq!(vm.arrays[0].get_cloned(0), Some(Cell::Int(42)));
+        assert_eq!(ar.get_cloned(0), Some(Cell::Int(42)));
     }
 
     // --- array element write: Cell::Str (D-4: Rc<str> liberation, #591) ---
@@ -6120,78 +6126,79 @@ mod tests {
     #[test]
     fn test_set_str_to_array_element_is_allowed() {
         // Cell::Str(Rc<str>) written through SET must succeed (#591).
+        // Cell::ArrayAddr now holds the ArrayRef directly; VM::arrays is not consulted.
         let mut vm = VM::new();
-        vm.arrays.push(ArrayRef::new(vec![Cell::None]));
+        let ar = ArrayRef::new(vec![Cell::None]);
         vm.push(Cell::ArrayAddr {
-            pool_idx: 0,
+            array: ar.clone(),
             elem_idx: 0,
         })
         .unwrap();
         vm.push(Cell::string("hello")).unwrap();
         set_prim(&mut vm).unwrap();
-        assert_eq!(vm.arrays[0].get_cloned(0), Some(Cell::string("hello")));
+        assert_eq!(ar.get_cloned(0), Some(Cell::string("hello")));
     }
 
     #[test]
     fn test_store_str_to_array_element_is_allowed() {
         // Same as the SET path above, exercised through STORE (#591).
+        // Cell::ArrayAddr now holds the ArrayRef directly; VM::arrays is not consulted.
         let mut vm = VM::new();
-        vm.arrays.push(ArrayRef::new(vec![Cell::None]));
+        let ar = ArrayRef::new(vec![Cell::None]);
         vm.push(Cell::string("world")).unwrap();
         vm.push(Cell::ArrayAddr {
-            pool_idx: 0,
+            array: ar.clone(),
             elem_idx: 0,
         })
         .unwrap();
         store_prim(&mut vm).unwrap();
-        assert_eq!(vm.arrays[0].get_cloned(0), Some(Cell::string("world")));
+        assert_eq!(ar.get_cloned(0), Some(Cell::string("world")));
     }
 
     #[test]
     fn test_set_str_to_global_array_element_is_allowed() {
-        // Storing a Str into a global array (global_array_pool_len covers it) must succeed.
+        // Storing a Str into a global array element must succeed.
+        // (global_array_pool_len is irrelevant for ArrayAddr resolution now.)
         let mut vm = VM::new();
-        vm.arrays.push(ArrayRef::new(vec![Cell::None]));
-        vm.global_array_pool_len = 1; // mark as global
+        let ar = ArrayRef::new(vec![Cell::None]);
+        vm.arrays.push(ar.clone());
+        vm.global_array_pool_len = 1; // mark as global (pool tracking only)
         vm.push(Cell::ArrayAddr {
-            pool_idx: 0,
+            array: ar.clone(),
             elem_idx: 0,
         })
         .unwrap();
         vm.push(Cell::string("global")).unwrap();
         set_prim(&mut vm).unwrap();
-        assert_eq!(vm.arrays[0].get_cloned(0), Some(Cell::string("global")));
+        assert_eq!(ar.get_cloned(0), Some(Cell::string("global")));
     }
 
     #[test]
     fn test_set_str_to_frame_local_array_element_is_allowed() {
         // Storing a Str into a frame-local array must succeed (#591).
+        // Cell::ArrayAddr now holds the ArrayRef directly; VM::arrays is not consulted.
         let mut vm = VM::new();
-        vm.arrays.push(ArrayRef::new(vec![Cell::None]));
+        let ar = ArrayRef::new(vec![Cell::None]);
         // global_array_pool_len = 0 (default) → array is frame-local
         vm.push(Cell::ArrayAddr {
-            pool_idx: 0,
+            array: ar.clone(),
             elem_idx: 0,
         })
         .unwrap();
         vm.push(Cell::string("frame-local")).unwrap();
         set_prim(&mut vm).unwrap();
-        assert_eq!(
-            vm.arrays[0].get_cloned(0),
-            Some(Cell::string("frame-local"))
-        );
+        assert_eq!(ar.get_cloned(0), Some(Cell::string("frame-local")));
     }
 
     #[test]
     fn test_set_nested_array_to_array_element_is_invalid_array_element() {
         // Cell::Array must always be rejected as an array element.
+        // Cell::ArrayAddr now holds the ArrayRef directly; VM::arrays is not consulted.
         let mut vm = VM::new();
-        vm.arrays.push(ArrayRef::new(vec![Cell::None])); // pool_idx = 0: target array
-        let inner_ar = ArrayRef::new(vec![Cell::None]); // value to store
-        vm.arrays.push(inner_ar.clone()); // pool_idx = 1
-        vm.global_array_pool_len = 2; // both are global
+        let outer_ar = ArrayRef::new(vec![Cell::None]); // target array
+        let inner_ar = ArrayRef::new(vec![Cell::None]); // value to store (nested, forbidden)
         vm.push(Cell::ArrayAddr {
-            pool_idx: 0,
+            array: outer_ar,
             elem_idx: 0,
         })
         .unwrap();
@@ -6206,10 +6213,11 @@ mod tests {
 
     #[test]
     fn test_fetch_array_addr() {
+        // Cell::ArrayAddr now holds the ArrayRef directly; VM::arrays is not consulted.
         let mut vm = VM::new();
-        vm.arrays.push(ArrayRef::new(vec![Cell::Int(77)]));
+        let ar = ArrayRef::new(vec![Cell::Int(77)]);
         vm.push(Cell::ArrayAddr {
-            pool_idx: 0,
+            array: ar,
             elem_idx: 0,
         })
         .unwrap();
