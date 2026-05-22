@@ -19,8 +19,7 @@ fn reject_array_value(value: &Cell) -> Result<(), TbxError> {
 
 /// Write `value` to element `elem_idx` of the array referenced by `ar`.
 ///
-/// `VM::arrays` is NOT consulted; `ar` is the direct `ArrayRef` handle held
-/// inside a `Cell::ArrayAddr`.
+/// `ar` is the direct `ArrayRef` handle held inside a `Cell::ArrayAddr`.
 fn write_array_element(
     ar: &crate::array_ref::ArrayRef,
     elem_idx: usize,
@@ -134,7 +133,7 @@ mod tests {
     /// the value back.  After the roundtrip the stored value must equal what was
     /// pushed before STORE.
     ///
-    /// Cell::ArrayAddr now holds an ArrayRef directly; VM::arrays is not consulted.
+    /// Cell::ArrayAddr holds an ArrayRef directly.
     #[test]
     fn test_array_addr_store_fetch_roundtrip() {
         use crate::array_ref::ArrayRef;
@@ -179,7 +178,7 @@ mod tests {
     /// Verify that STORE rejects a nested Cell::Array written to an array element
     /// (i.e., when the destination address is a Cell::ArrayAddr).
     ///
-    /// Cell::ArrayAddr now holds an ArrayRef directly; VM::arrays is not consulted.
+    /// Cell::ArrayAddr holds an ArrayRef directly.
     #[test]
     fn test_store_array_element_rejects_nested_array() {
         use crate::array_ref::ArrayRef;
@@ -210,7 +209,7 @@ mod tests {
 
     /// Verify that SET rejects a nested Cell::Array written to an array element.
     ///
-    /// Cell::ArrayAddr now holds an ArrayRef directly; VM::arrays is not consulted.
+    /// Cell::ArrayAddr holds an ArrayRef directly.
     #[test]
     fn test_set_array_element_rejects_nested_array() {
         use crate::array_ref::ArrayRef;

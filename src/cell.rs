@@ -97,8 +97,7 @@ pub enum Cell {
     /// `Rc<RefCell<Vec<Cell>>>` storage of length N.
     ///
     /// Array lifetime is managed entirely by `Rc` reference counting.
-    /// `VM::arrays` (the compatibility registry) has been removed (issue #734);
-    /// arrays are freed when no `Cell::Array` or `Cell::ArrayAddr` handle
+    /// Arrays are freed when no `Cell::Array` or `Cell::ArrayAddr` handle
     /// holding a clone of the `Rc` remains alive.
     ///
     /// Array elements may be any scalar type (`Int`, `Float`, `Bool`, `None`,
@@ -128,7 +127,6 @@ pub enum Cell {
     ///
     /// Holds the `ArrayRef` directly (Rc-backed shared handle) so that
     /// `FETCH` / `SET` / `STORE` can access the element without indirection.
-    /// `VM::arrays` has been removed (issue #734).
     ArrayAddr {
         /// Rc-backed handle to the array storage.
         array: ArrayRef,
