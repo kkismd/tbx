@@ -129,9 +129,13 @@ pub enum Cell {
     ///
     /// Produced by the `&@A[i]` construct where `A` holds a `Cell::Array`.
     /// Used by `FETCH`, `STORE`, and `SET` to read/write individual elements.
+    ///
+    /// Holds the `ArrayRef` directly (Rc-backed shared handle) so that
+    /// `FETCH` / `SET` / `STORE` can access the element without going through
+    /// `VM::arrays`.  `VM::arrays` is no longer needed for `ArrayAddr` resolution.
     ArrayAddr {
-        /// Index into `VM::arrays` (the array pool).
-        pool_idx: usize,
+        /// Rc-backed handle to the array storage.
+        array: ArrayRef,
         /// Zero-based element index within the array.
         elem_idx: usize,
     },
@@ -175,8 +179,8 @@ impl std::fmt::Display for Cell {
             Cell::Bool(b) => write!(f, "{}", b),
             Cell::Array(_) => write!(f, "<array>"),
             Cell::Str(s) => write!(f, "{}", s),
-            Cell::ArrayAddr { pool_idx, elem_idx } => {
-                write!(f, "<arrayaddr:{}[{}]>", pool_idx, elem_idx)
+            Cell::ArrayAddr { array: _, elem_idx } => {
+                write!(f, "<arrayaddr:[{}]>", elem_idx)
             }
             Cell::None => write!(f, "<none>"),
             Cell::Marker => write!(f, "<marker>"),
@@ -362,14 +366,14 @@ impl PartialEq for Cell {
             (Cell::Str(a), Cell::Str(b)) => a == b,
             (
                 Cell::ArrayAddr {
-                    pool_idx: pa,
+                    array: aa,
                     elem_idx: ea,
                 },
                 Cell::ArrayAddr {
-                    pool_idx: pb,
+                    array: ab,
                     elem_idx: eb,
                 },
-            ) => pa == pb && ea == eb,
+            ) => aa.ptr_eq(ab) && ea == eb,
             (Cell::Tuple(a), Cell::Tuple(b)) => a == b,
             _ => false,
         }
@@ -452,14 +456,14 @@ mod tests {
     #[test]
     fn test_display_array() {
         let ar = ArrayRef::new(vec![]);
-        assert_eq!(Cell::Array(ar).to_string(), "<array>");
+        assert_eq!(Cell::Array(ar.clone()).to_string(), "<array>");
         assert_eq!(
             Cell::ArrayAddr {
-                pool_idx: 3,
-                elem_idx: 7
+                array: ar,
+                elem_idx: 7,
             }
             .to_string(),
-            "<arrayaddr:3[7]>"
+            "<arrayaddr:[7]>"
         );
     }
 

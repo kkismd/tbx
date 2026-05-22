@@ -175,9 +175,10 @@ pub struct VM {
     /// set of `Rc` clones that can be reached from live `Cell::Array` handles.
     ///
     /// `Cell::Array` now holds an `ArrayRef` directly, so `VM::arrays` no longer
-    /// acts as the primary lookup table.  It is retained for:
+    /// acts as the primary lookup table.  `Cell::ArrayAddr` also holds an
+    /// `ArrayRef` directly (since issue #733), so `VM::arrays` is no longer
+    /// consulted for `ArrayAddr` resolution either.  It is retained for:
     ///   - pool-length lifetime tracking (truncate on EXIT / RETURN_VAL)
-    ///   - pool_idx resolution needed by `Cell::ArrayAddr` (via ptr_eq search)
     ///   - global-array promotion tracking (`global_array_pool_len`)
     pub arrays: Vec<ArrayRef>,
     /// Length of the "global" (persistent) region of `arrays`.

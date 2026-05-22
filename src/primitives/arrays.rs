@@ -158,7 +158,7 @@ pub fn array_get_prim(vm: &mut VM) -> Result<(), TbxError> {
 
 /// ARRAY_ADDR — compute the address of an array element.
 ///
-/// Stack: `[..., Cell::Array(pool_idx), Cell::Int(elem_idx)]` → `Cell::ArrayAddr { pool_idx, elem_idx }`
+/// Stack: `[..., Cell::Array(ar), Cell::Int(elem_idx)]` → `Cell::ArrayAddr { array: ar, elem_idx }`
 ///
 /// This is the VM-level primitive that `&@A[i]` compiles to.  The expression
 /// compiler lowers `&@A[i]` to: `<array handle read>  <index expr>  ARRAY_ADDR`.
@@ -167,6 +167,9 @@ pub fn array_get_prim(vm: &mut VM) -> Result<(), TbxError> {
 ///
 /// Array indices are 1-based from the user's perspective: valid range is `1..=N`.
 /// The index is translated to 0-based internally before storing in `Cell::ArrayAddr`.
+///
+/// `VM::arrays` is NOT consulted here; the `ArrayRef` from the popped `Cell::Array`
+/// is stored directly in `Cell::ArrayAddr`.
 pub fn array_addr_prim(vm: &mut VM) -> Result<(), TbxError> {
     let elem_idx_raw = vm.pop_int()?;
     let ar = match vm.pop()? {
@@ -194,16 +197,11 @@ pub fn array_addr_prim(vm: &mut VM) -> Result<(), TbxError> {
             size,
         });
     }
-    // Resolve pool_idx by pointer-identity search in vm.arrays.
-    // Cell::ArrayAddr still carries pool_idx for compatibility with FETCH/STORE.
-    let pool_idx =
-        vm.arrays
-            .iter()
-            .position(|entry| entry.ptr_eq(&ar))
-            .ok_or(TbxError::InvalidArgument {
-                message: "ARRAY_ADDR: array handle not found in pool".to_string(),
-            })?;
-    vm.push(Cell::ArrayAddr { pool_idx, elem_idx })?;
+    // Store the ArrayRef directly — no ptr_eq search in VM::arrays needed.
+    vm.push(Cell::ArrayAddr {
+        array: ar,
+        elem_idx,
+    })?;
     Ok(())
 }
 

@@ -17,24 +17,17 @@ fn reject_array_value(value: &Cell) -> Result<(), TbxError> {
     Ok(())
 }
 
-/// Write `value` to element `elem_idx` of the array at `pool_idx`.
+/// Write `value` to element `elem_idx` of the array referenced by `ar`.
+///
+/// `VM::arrays` is NOT consulted; `ar` is the direct `ArrayRef` handle held
+/// inside a `Cell::ArrayAddr`.
 fn write_array_element(
-    vm: &mut VM,
-    pool_idx: usize,
+    ar: &crate::array_ref::ArrayRef,
     elem_idx: usize,
     value: Cell,
 ) -> Result<(), TbxError> {
     // Validate element type before touching the array.
     super::arrays::check_array_element_value(&value)?;
-    let pool_size = vm.arrays.len();
-    let ar = vm
-        .arrays
-        .get(pool_idx)
-        .ok_or(TbxError::IndexOutOfBounds {
-            index: pool_idx,
-            size: pool_size,
-        })?
-        .clone();
     ar.set(elem_idx, value)
 }
 
@@ -52,17 +45,9 @@ pub fn fetch_prim(vm: &mut VM) -> Result<(), TbxError> {
             vm.push(value)?;
             Ok(())
         }
-        Cell::ArrayAddr { pool_idx, elem_idx } => {
-            let ar = vm
-                .arrays
-                .get(pool_idx)
-                .ok_or(TbxError::IndexOutOfBounds {
-                    index: pool_idx,
-                    size: vm.arrays.len(),
-                })?
-                .clone();
-            let size = ar.len();
-            let value = ar
+        Cell::ArrayAddr { array, elem_idx } => {
+            let size = array.len();
+            let value = array
                 .get_cloned(elem_idx)
                 .ok_or(TbxError::ArrayIndexOutOfBounds {
                     index: elem_idx as i64,
@@ -98,9 +83,7 @@ pub fn store_prim(vm: &mut VM) -> Result<(), TbxError> {
             vm.local_write(a, value)?;
             Ok(())
         }
-        Cell::ArrayAddr { pool_idx, elem_idx } => {
-            write_array_element(vm, pool_idx, elem_idx, value)
-        }
+        Cell::ArrayAddr { array, elem_idx } => write_array_element(&array, elem_idx, value),
         _ => Err(TbxError::TypeError {
             expected: "address",
             got: "non-address",
@@ -130,9 +113,7 @@ pub fn set_prim(vm: &mut VM) -> Result<(), TbxError> {
             vm.local_write(a, value)?;
             Ok(())
         }
-        Cell::ArrayAddr { pool_idx, elem_idx } => {
-            write_array_element(vm, pool_idx, elem_idx, value)
-        }
+        Cell::ArrayAddr { array, elem_idx } => write_array_element(&array, elem_idx, value),
         _ => Err(TbxError::TypeError {
             expected: "address",
             got: "non-address",
@@ -152,19 +133,20 @@ mod tests {
     /// ARRAY_ADDR computes a Cell::ArrayAddr; STORE writes through it; FETCH reads
     /// the value back.  After the roundtrip the stored value must equal what was
     /// pushed before STORE.
+    ///
+    /// Cell::ArrayAddr now holds an ArrayRef directly; VM::arrays is not consulted.
     #[test]
     fn test_array_addr_store_fetch_roundtrip() {
+        use crate::array_ref::ArrayRef;
         use crate::primitives::arrays::array_addr_prim;
 
         let mut vm = VM::new();
 
         // Create a one-element array with initial value Cell::None.
-        let pool_idx = vm.arrays.len();
-        vm.arrays
-            .push(crate::array_ref::ArrayRef::new(vec![Cell::None]));
+        let ar = ArrayRef::new(vec![Cell::None]);
 
         // Push array handle and 1-based index, then call ARRAY_ADDR.
-        vm.push(Cell::Array(vm.arrays[pool_idx].clone())).unwrap();
+        vm.push(Cell::Array(ar.clone())).unwrap();
         vm.push(Cell::Int(1)).unwrap();
         array_addr_prim(&mut vm).unwrap();
 
@@ -180,12 +162,12 @@ mod tests {
 
         store_prim(&mut vm).unwrap();
 
-        // Verify the array element was updated.
-        assert_eq!(vm.arrays[pool_idx].get_cloned(0), Some(new_value.clone()));
+        // Verify the array element was updated via the shared ArrayRef.
+        assert_eq!(ar.get_cloned(0), Some(new_value.clone()));
 
-        // Now FETCH: push the ArrayAddr again and call fetch_prim.
+        // Now FETCH: push a new Cell::ArrayAddr with the same ArrayRef and call fetch_prim.
         vm.push(Cell::ArrayAddr {
-            pool_idx,
+            array: ar,
             elem_idx: 0,
         })
         .unwrap();
@@ -196,23 +178,24 @@ mod tests {
 
     /// Verify that STORE rejects a nested Cell::Array written to an array element
     /// (i.e., when the destination address is a Cell::ArrayAddr).
+    ///
+    /// Cell::ArrayAddr now holds an ArrayRef directly; VM::arrays is not consulted.
     #[test]
     fn test_store_array_element_rejects_nested_array() {
+        use crate::array_ref::ArrayRef;
+
         let mut vm = VM::new();
 
         // Outer array — the target element.
-        let outer_idx = vm.arrays.len();
-        vm.arrays
-            .push(crate::array_ref::ArrayRef::new(vec![Cell::None]));
+        let outer_ar = ArrayRef::new(vec![Cell::None]);
 
         // Inner array — the value to be (illegally) stored.
-        let inner_ar = crate::array_ref::ArrayRef::new(vec![Cell::Int(1)]);
-        vm.arrays.push(inner_ar.clone());
+        let inner_ar = ArrayRef::new(vec![Cell::Int(1)]);
 
         // STORE convention: push value then addr.
         vm.push(Cell::Array(inner_ar)).unwrap();
         vm.push(Cell::ArrayAddr {
-            pool_idx: outer_idx,
+            array: outer_ar,
             elem_idx: 0,
         })
         .unwrap();
@@ -226,22 +209,23 @@ mod tests {
     }
 
     /// Verify that SET rejects a nested Cell::Array written to an array element.
+    ///
+    /// Cell::ArrayAddr now holds an ArrayRef directly; VM::arrays is not consulted.
     #[test]
     fn test_set_array_element_rejects_nested_array() {
+        use crate::array_ref::ArrayRef;
+
         let mut vm = VM::new();
 
-        // Target array.
-        let outer_idx = vm.arrays.len();
-        vm.arrays
-            .push(crate::array_ref::ArrayRef::new(vec![Cell::None]));
+        // Outer array — the target element.
+        let outer_ar = ArrayRef::new(vec![Cell::None]);
 
         // Value array (nested).
-        let inner_ar = crate::array_ref::ArrayRef::new(vec![Cell::Int(1)]);
-        vm.arrays.push(inner_ar.clone());
+        let inner_ar = ArrayRef::new(vec![Cell::Int(1)]);
 
         // SET convention: push addr then value.
         vm.push(Cell::ArrayAddr {
-            pool_idx: outer_idx,
+            array: outer_ar,
             elem_idx: 0,
         })
         .unwrap();
@@ -260,13 +244,14 @@ mod tests {
     /// Surface-level STORE must never accept a whole-array handle for a scalar slot.
     #[test]
     fn test_store_array_to_dict_addr_is_type_error() {
+        use crate::array_ref::ArrayRef;
+
         let mut vm = VM::new();
 
         vm.dictionary.push(Cell::None);
         vm.dp = 1;
 
-        let ar = crate::array_ref::ArrayRef::new(vec![Cell::Int(7)]);
-        vm.arrays.push(ar.clone());
+        let ar = ArrayRef::new(vec![Cell::Int(7)]);
 
         // STORE convention: push value then addr.
         vm.push(Cell::Array(ar)).unwrap();
@@ -285,14 +270,15 @@ mod tests {
     /// Surface-level STORE must never accept a whole-array handle for a local slot.
     #[test]
     fn test_store_array_to_stack_addr_is_type_error() {
+        use crate::array_ref::ArrayRef;
+
         let mut vm = VM::new();
 
         // Allocate a local slot via the data stack.
         vm.data_stack.push(Cell::None);
         vm.bp = 0;
 
-        let ar = crate::array_ref::ArrayRef::new(vec![Cell::Int(3)]);
-        vm.arrays.push(ar.clone());
+        let ar = ArrayRef::new(vec![Cell::Int(3)]);
 
         // STORE convention: push value then addr.
         vm.push(Cell::Array(ar)).unwrap();
@@ -309,13 +295,14 @@ mod tests {
     /// Verify that SET rejects a Cell::Array written to a DictAddr slot.
     #[test]
     fn test_set_array_to_dict_addr_is_type_error() {
+        use crate::array_ref::ArrayRef;
+
         let mut vm = VM::new();
 
         vm.dictionary.push(Cell::None);
         vm.dp = 1;
 
-        let ar = crate::array_ref::ArrayRef::new(vec![Cell::Int(5)]);
-        vm.arrays.push(ar.clone());
+        let ar = ArrayRef::new(vec![Cell::Int(5)]);
 
         // SET convention: push addr then value.
         vm.push(Cell::DictAddr(0)).unwrap();
@@ -332,13 +319,14 @@ mod tests {
     /// Verify that SET rejects a Cell::Array written to a StackAddr slot.
     #[test]
     fn test_set_array_to_stack_addr_is_type_error() {
+        use crate::array_ref::ArrayRef;
+
         let mut vm = VM::new();
 
         vm.data_stack.push(Cell::None);
         vm.bp = 0;
 
-        let ar = crate::array_ref::ArrayRef::new(vec![Cell::Int(2)]);
-        vm.arrays.push(ar.clone());
+        let ar = ArrayRef::new(vec![Cell::Int(2)]);
 
         // SET convention: push addr then value.
         vm.push(Cell::StackAddr(0)).unwrap();
