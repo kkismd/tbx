@@ -1,3 +1,4 @@
+use crate::array_ref::ArrayRef;
 use crate::cell::Cell;
 use crate::error::TbxError;
 use crate::vm::VM;
@@ -32,7 +33,8 @@ pub(super) fn array_prim(vm: &mut VM) -> Result<(), TbxError> {
     }
     let size = n as usize;
     let idx = vm.arrays.len();
-    vm.arrays.push(vec![Cell::None; size]);
+    let ar = ArrayRef::new(vec![Cell::None; size]);
+    vm.arrays.push(ar);
     vm.push(Cell::Array(idx))?;
     Ok(())
 }
@@ -128,11 +130,11 @@ pub fn array_get_prim(vm: &mut VM) -> Result<(), TbxError> {
             })
         }
     };
-    let arr = vm.arrays.get(pool_idx).ok_or(TbxError::IndexOutOfBounds {
+    let ar = vm.arrays.get(pool_idx).ok_or(TbxError::IndexOutOfBounds {
         index: pool_idx,
         size: vm.arrays.len(),
     })?;
-    let size = arr.len();
+    let size = ar.len();
     // Translate 1-based user index to 0-based internal index.
     // Index 0 or negative is out of bounds.
     if elem_idx_raw < 1 {
@@ -148,7 +150,12 @@ pub fn array_get_prim(vm: &mut VM) -> Result<(), TbxError> {
             size,
         });
     }
-    let value = arr[elem_idx].clone();
+    let value = ar
+        .get_cloned(elem_idx)
+        .ok_or(TbxError::ArrayIndexOutOfBounds {
+            index: elem_idx_raw,
+            size,
+        })?;
     vm.push(value)?;
     Ok(())
 }
@@ -176,11 +183,11 @@ pub fn array_addr_prim(vm: &mut VM) -> Result<(), TbxError> {
         }
     };
     // Validate bounds at address-computation time.
-    let arr = vm.arrays.get(pool_idx).ok_or(TbxError::IndexOutOfBounds {
+    let ar = vm.arrays.get(pool_idx).ok_or(TbxError::IndexOutOfBounds {
         index: pool_idx,
         size: vm.arrays.len(),
     })?;
-    let size = arr.len();
+    let size = ar.len();
     // Translate 1-based user index to 0-based internal index.
     // Index 0 or negative is out of bounds.
     if elem_idx_raw < 1 {
@@ -289,11 +296,11 @@ pub fn array_len_prim(vm: &mut VM) -> Result<(), TbxError> {
             })
         }
     };
-    let arr = vm.arrays.get(pool_idx).ok_or(TbxError::IndexOutOfBounds {
+    let ar = vm.arrays.get(pool_idx).ok_or(TbxError::IndexOutOfBounds {
         index: pool_idx,
         size: vm.arrays.len(),
     })?;
-    let len = arr.len() as i64;
+    let len = ar.len() as i64;
     vm.push(Cell::Int(len))?;
     Ok(())
 }
