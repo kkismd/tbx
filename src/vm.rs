@@ -870,6 +870,18 @@ impl VM {
                             if self.data_stack.len() < arity {
                                 return Err(TbxError::StackUnderflow);
                             }
+                            // Reject whole-array handles as word call arguments.
+                            // Array handles must not be passed as scalar arguments to words.
+                            let arg_start = self.data_stack.len() - arity;
+                            for arg in &self.data_stack[arg_start..] {
+                                if matches!(arg, Cell::Array(_)) {
+                                    return Err(TbxError::TypeError {
+                                        expected:
+                                            "scalar argument (Array handle cannot be passed to a word)",
+                                        got: "Array",
+                                    });
+                                }
+                            }
                             if self.return_stack.len() >= MAX_RETURN_STACK_DEPTH {
                                 return Err(TbxError::ReturnStackOverflow {
                                     depth: self.return_stack.len(),
@@ -937,6 +949,14 @@ impl VM {
                         None => return Err(TbxError::StackUnderflow),
                     };
                     let mut retval = self.pop()?;
+                    // Reject whole-array handle as a return value.
+                    // Only scalar types are permitted to flow out of a word via RETURN.
+                    if matches!(retval, Cell::Array(_)) {
+                        return Err(TbxError::TypeError {
+                            expected: "scalar return value (Array handle cannot be returned)",
+                            got: "Array",
+                        });
+                    }
                     // Ownership transfer for frame-local Cell::Array:
                     // If the returned array was created in this frame
                     // (pool_idx >= array_frame_boundary), swap it to the
@@ -3285,5 +3305,104 @@ mod tests {
             result.is_err(),
             "SETG() as statement should be rejected, but got: {result:?}"
         );
+    }
+
+    // --- Whole-array handle surface ban (#718) ---
+    //
+    // A Cell::Array (whole-array handle) must not appear at the user-visible
+    // surface: it cannot be assigned to a variable, returned from a word,
+    // compared with EQ/NEQ, used as a word argument, or stored into a dict
+    // slot from inside a called frame.  All such attempts must produce either
+    // a TypeError or an ArrayFrameEscape error at runtime.
+    //
+    // Valid uses of arrays: DIM @A[n] (allocation), @A[i] (element read),
+    // &@A[i] (element address for SET), LET @A[i] = expr (element write),
+    // and ARRAY_LEN(@A) (length query).
+
+    #[test]
+    fn test_whole_array_assignment_to_global_var_errors() {
+        // `SET &G, A` inside a DEF body must produce ArrayFrameEscape
+        // (Cell::Array written into a DictAddr from a called frame).
+        let result = run_source(
+            "VAR G\n\
+             DEF BAD()\n  DIM @A[2]\n  SET &G, A\nEND\n\
+             BAD",
+        );
+        assert!(
+            result.is_err(),
+            "expected error when assigning array handle to global var, got: {result:?}"
+        );
+    }
+
+    #[test]
+    fn test_whole_array_return_errors() {
+        // `RETURN A` (returning a whole-array handle) must produce TypeError.
+        let result = run_source(
+            "DEF BAD()\n  DIM @A[2]\n  RETURN A\nEND\n\
+             PUTDEC BAD()",
+        );
+        assert!(
+            matches!(result, Err(crate::error::TbxError::TypeError { .. })),
+            "expected TypeError when returning array handle, got: {result:?}"
+        );
+    }
+
+    #[test]
+    fn test_whole_array_equality_errors() {
+        // `A = B` (comparing two array handles with EQ) must produce TypeError.
+        let result = run_source(
+            "DEF BAD()\n  DIM @A[2]\n  DIM @B[2]\n  RETURN (A = B)\nEND\n\
+             PUTDEC BAD()",
+        );
+        assert!(
+            matches!(result, Err(crate::error::TbxError::TypeError { .. })),
+            "expected TypeError when comparing array handles with EQ, got: {result:?}"
+        );
+    }
+
+    #[test]
+    fn test_whole_array_as_word_argument_errors() {
+        // Passing a whole-array handle as a word argument must produce TypeError.
+        let result = run_source(
+            "DEF CONSUME(X)\n  PUTDEC X\nEND\n\
+             DEF BAD()\n  DIM @A[2]\n  CONSUME(A)\nEND\n\
+             BAD",
+        );
+        assert!(
+            matches!(result, Err(crate::error::TbxError::TypeError { .. })),
+            "expected TypeError when passing array handle as word argument, got: {result:?}"
+        );
+    }
+
+    #[test]
+    fn test_dim_local_array_and_element_access_succeeds() {
+        // Positive test: DIM, element read (@A[i]), element write (LET @A[i] = expr),
+        // and ARRAY_LEN(@A) must all succeed normally.
+        let result = run_source(
+            "DEF SUM()\n\
+               DIM @A[3]\n\
+               LET @A[1] = 10\n\
+               LET @A[2] = 20\n\
+               LET @A[3] = 30\n\
+               RETURN @A[1] + @A[2] + @A[3]\n\
+             END\n\
+             PUTDEC SUM()",
+        );
+        assert!(result.is_ok(), "expected success, got: {result:?}");
+        assert_eq!(result.unwrap().trim(), "60");
+    }
+
+    #[test]
+    fn test_array_len_of_local_array_succeeds() {
+        // ARRAY_LEN(@A) must return the declared size without error.
+        let result = run_source(
+            "DEF LEN_TEST()\n\
+               DIM @A[5]\n\
+               RETURN ARRAY_LEN(@A)\n\
+             END\n\
+             PUTDEC LEN_TEST()",
+        );
+        assert!(result.is_ok(), "expected success, got: {result:?}");
+        assert_eq!(result.unwrap().trim(), "5");
     }
 }

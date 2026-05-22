@@ -12,12 +12,29 @@ use crate::cell::Cell;
 use crate::error::TbxError;
 use crate::vm::VM;
 
+/// Reject a whole-array handle from appearing as an equality operand.
+///
+/// Array handles must not be compared with EQ or NEQ at the surface level.
+/// Only DIM / @A[i] / &@A[i] / ARRAY_LEN(@A) are valid array operations.
+fn reject_array_operand(cell: &Cell) -> Result<(), TbxError> {
+    if matches!(cell, Cell::Array(_)) {
+        return Err(TbxError::TypeError {
+            expected: "scalar value (Array handle cannot be used in equality comparison)",
+            got: "Array",
+        });
+    }
+    Ok(())
+}
+
 /// EQ — equality comparison. Pushes Bool(true) if the two top values are equal.
 /// Int/Float mixed pairs are compared by promoting Int to Float.
 /// All other pairs, including two Cell::Str values, use Cell's PartialEq.
+/// Array handles are rejected with TypeError.
 pub fn eq_prim(vm: &mut VM) -> Result<(), TbxError> {
     let b = vm.pop()?;
     let a = vm.pop()?;
+    reject_array_operand(&a)?;
+    reject_array_operand(&b)?;
     let result = match (&a, &b) {
         (Cell::Int(x), Cell::Float(y)) => (*x as f64) == *y,
         (Cell::Float(x), Cell::Int(y)) => *x == (*y as f64),
@@ -30,9 +47,12 @@ pub fn eq_prim(vm: &mut VM) -> Result<(), TbxError> {
 /// NEQ — inequality comparison. Pushes Bool(true) if the two top values are not equal.
 /// Int/Float mixed pairs are compared by promoting Int to Float.
 /// All other pairs, including two Cell::Str values, use Cell's PartialEq.
+/// Array handles are rejected with TypeError.
 pub fn neq_prim(vm: &mut VM) -> Result<(), TbxError> {
     let b = vm.pop()?;
     let a = vm.pop()?;
+    reject_array_operand(&a)?;
+    reject_array_operand(&b)?;
     let result = match (&a, &b) {
         (Cell::Int(x), Cell::Float(y)) => (*x as f64) != *y,
         (Cell::Float(x), Cell::Int(y)) => *x != (*y as f64),

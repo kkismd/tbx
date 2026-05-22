@@ -111,11 +111,16 @@ pub fn store_prim(vm: &mut VM) -> Result<(), TbxError> {
     let value = vm.pop()?;
     match addr {
         Cell::DictAddr(a) => {
+            // Cell::Array written to a DictAddr is handled by check_dict_reference_write:
+            // it will either promote the array to the global region (top-level execution)
+            // or return ArrayFrameEscape (frame-local array escaping into a global slot).
             check_dict_reference_write(vm, &value)?;
             vm.dict_write_at(a, value)?;
             Ok(())
         }
         Cell::StackAddr(a) => {
+            // Array handles are allowed in StackAddr writes to support DIM @A[n]
+            // local array initialization (DIM emits: LIT StackAddr(idx) [size] ARRAY SET).
             vm.local_write(a, value)?;
             Ok(())
         }
@@ -139,11 +144,16 @@ pub fn set_prim(vm: &mut VM) -> Result<(), TbxError> {
     let addr = vm.pop()?;
     match addr {
         Cell::DictAddr(a) => {
+            // Cell::Array written to a DictAddr is handled by check_dict_reference_write:
+            // it will either promote the array to the global region (top-level execution)
+            // or return ArrayFrameEscape (frame-local array escaping into a global slot).
             check_dict_reference_write(vm, &value)?;
             vm.dict_write_at(a, value)?;
             Ok(())
         }
         Cell::StackAddr(a) => {
+            // Array handles are allowed in StackAddr writes to support DIM @A[n]
+            // local array initialization (DIM emits: LIT StackAddr(idx) [size] ARRAY SET).
             vm.local_write(a, value)?;
             Ok(())
         }

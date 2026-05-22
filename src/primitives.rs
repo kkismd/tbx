@@ -1666,9 +1666,11 @@ fn compile_at_array_lvalue(vm: &mut VM) -> Result<(), TbxError> {
     let fetch_xt = vm.lookup("FETCH").ok_or(TbxError::UndefinedSymbol {
         name: "FETCH".to_string(),
     })?;
-    let array_addr_xt = vm.lookup("ARRAY_ADDR").ok_or(TbxError::UndefinedSymbol {
-        name: "ARRAY_ADDR".to_string(),
-    })?;
+    let array_addr_xt = vm
+        .lookup_hidden_system("ARRAY_ADDR")
+        .ok_or(TbxError::UndefinedSymbol {
+            name: "ARRAY_ADDR".to_string(),
+        })?;
 
     if let Some(idx) = local_idx {
         // Emit: LIT StackAddr(idx)  FETCH  — load the local array handle.
@@ -1877,35 +1879,6 @@ pub fn randomize_prim(vm: &mut VM) -> Result<(), TbxError> {
     use rand::SeedableRng;
     vm.rng = rand::rngs::SmallRng::from_entropy();
     Ok(())
-}
-
-/// SHUFFLE — randomly permute the elements of an array in place.
-///
-/// Pops `Cell::Array(pool_idx)` from the stack, shuffles the array's elements
-/// using the VM's RNG, and pushes the same `Cell::Array(pool_idx)` back.
-///
-/// Stack signature: `( arr:Array -- arr:Array )`
-pub fn shuffle_prim(vm: &mut VM) -> Result<(), TbxError> {
-    use rand::seq::SliceRandom;
-    let pool_idx = match vm.pop()? {
-        Cell::Array(idx) => idx,
-        other => {
-            return Err(TbxError::TypeError {
-                expected: "Array",
-                got: other.type_name(),
-            })
-        }
-    };
-    let arrays_len = vm.arrays.len();
-    let arr = vm
-        .arrays
-        .get_mut(pool_idx)
-        .ok_or(TbxError::IndexOutOfBounds {
-            index: pool_idx,
-            size: arrays_len,
-        })?;
-    arr.shuffle(&mut vm.rng);
-    vm.push(Cell::Array(pool_idx))
 }
 
 /// UNIXTIME — return the current time as seconds since the Unix epoch.
@@ -2240,20 +2213,25 @@ pub fn register_all(vm: &mut VM) {
     vm.register(array_entry);
     // ARRAY_GET reads an element (`@A[i]` compiles to
     // `<array handle read> <index expr> ARRAY_GET`); ARRAY_ADDR computes an element
-    // address (`&@A[i]` compiles to `<array handle read> <index expr> ARRAY_ADDR`).
-    // ARRAY_LEN returns the length of an array.
+    // address (`&@A[i]` compiles to `<array handle read> <index expr> ARRAY_ADDR`);
+    // ARRAY_LEN returns the length of an array (`ARRAY_LEN(@A)` compiles to
+    // `<array handle read> ARRAY_LEN`).
+    // All three are hidden system helpers: they cannot be called from user code
+    // directly; the compiler accesses them via lookup_hidden_system().
     // TUPLE packs stack values into a new immutable Cell::Tuple.
     let mut tuple_entry = WordEntry::new_primitive("TUPLE", to_tuple_prim);
     tuple_entry.is_variadic = true;
     // arity stays 0: TUPLE accepts zero or more arguments (empty tuple is allowed).
     vm.register(tuple_entry);
-    vm.register(WordEntry::new_primitive("ARRAY_LEN", array_len_prim));
+    let mut array_len_entry = WordEntry::new_primitive("ARRAY_LEN", array_len_prim);
+    array_len_entry.flags = FLAG_SYSTEM | FLAG_HIDDEN;
+    vm.register(array_len_entry);
     vm.register(WordEntry::new_primitive("TUPLE_LEN", tuple_len_prim));
     let mut array_get_entry = WordEntry::new_primitive("ARRAY_GET", array_get_prim);
-    array_get_entry.flags = FLAG_SYSTEM;
+    array_get_entry.flags = FLAG_SYSTEM | FLAG_HIDDEN;
     vm.register(array_get_entry);
     let mut array_addr_entry = WordEntry::new_primitive("ARRAY_ADDR", array_addr_prim);
-    array_addr_entry.flags = FLAG_SYSTEM;
+    array_addr_entry.flags = FLAG_SYSTEM | FLAG_HIDDEN;
     vm.register(array_addr_entry);
     let mut tuple_get_entry = WordEntry::new_primitive("TUPLE_GET", tuple_get_prim);
     tuple_get_entry.flags = FLAG_SYSTEM;
@@ -2266,11 +2244,9 @@ pub fn register_all(vm: &mut VM) {
     vm.register(WordEntry::new_primitive("ARG_ADDR", arg_addr_prim));
 
     // Random number primitives.
-    // RND(n) returns a random integer in [1, n]; RANDOMIZE re-seeds the RNG from OS entropy;
-    // SHUFFLE permutes an array in place and returns the same array handle.
+    // RND(n) returns a random integer in [1, n]; RANDOMIZE re-seeds the RNG from OS entropy.
     vm.register(WordEntry::new_primitive("RND", rnd_prim));
     vm.register(WordEntry::new_primitive("RANDOMIZE", randomize_prim));
-    vm.register(WordEntry::new_primitive("SHUFFLE", shuffle_prim));
 
     // Time primitives.
     // UNIXTIME returns the current Unix timestamp as a Float (seconds since epoch).
@@ -6448,100 +6424,6 @@ mod tests {
         let mut vm = VM::new();
         randomize_prim(&mut vm).unwrap();
         assert_eq!(vm.data_stack.len(), 0);
-    }
-
-    // --- shuffle_prim ---
-
-    #[test]
-    fn test_shuffle_prim_preserves_elements() {
-        // SHUFFLE must not add or remove elements from the array.
-        use rand::SeedableRng;
-        let mut vm = VM::new();
-        vm.rng = rand::rngs::SmallRng::seed_from_u64(123);
-        vm.arrays.push(vec![
-            Cell::Int(1),
-            Cell::Int(2),
-            Cell::Int(3),
-            Cell::Int(4),
-            Cell::Int(5),
-        ]);
-        vm.push(Cell::Array(0)).unwrap();
-        shuffle_prim(&mut vm).unwrap();
-        // The returned value must be Cell::Array(0).
-        assert_eq!(vm.pop(), Ok(Cell::Array(0)));
-        // All original elements must still be present (order may differ).
-        let mut values: Vec<i64> = vm.arrays[0]
-            .iter()
-            .map(|c| match c {
-                Cell::Int(n) => *n,
-                _ => panic!("unexpected cell type"),
-            })
-            .collect();
-        values.sort_unstable();
-        assert_eq!(values, vec![1, 2, 3, 4, 5]);
-    }
-
-    #[test]
-    fn test_shuffle_prim_deterministic() {
-        // With a fixed seed, SHUFFLE must produce the same permutation every time.
-        use rand::SeedableRng;
-        let mut vm = VM::new();
-        vm.rng = rand::rngs::SmallRng::seed_from_u64(42);
-        vm.arrays
-            .push(vec![Cell::Int(1), Cell::Int(2), Cell::Int(3)]);
-        vm.push(Cell::Array(0)).unwrap();
-        shuffle_prim(&mut vm).unwrap();
-        vm.pop().unwrap();
-        let first_run: Vec<i64> = vm.arrays[0]
-            .iter()
-            .map(|c| match c {
-                Cell::Int(n) => *n,
-                _ => panic!("unexpected cell type"),
-            })
-            .collect();
-
-        // Reset and run again with the same seed.
-        let mut vm2 = VM::new();
-        vm2.rng = rand::rngs::SmallRng::seed_from_u64(42);
-        vm2.arrays
-            .push(vec![Cell::Int(1), Cell::Int(2), Cell::Int(3)]);
-        vm2.push(Cell::Array(0)).unwrap();
-        shuffle_prim(&mut vm2).unwrap();
-        vm2.pop().unwrap();
-        let second_run: Vec<i64> = vm2.arrays[0]
-            .iter()
-            .map(|c| match c {
-                Cell::Int(n) => *n,
-                _ => panic!("unexpected cell type"),
-            })
-            .collect();
-
-        assert_eq!(first_run, second_run);
-    }
-
-    #[test]
-    fn test_shuffle_prim_empty_array() {
-        // SHUFFLE on an empty array must not error.
-        let mut vm = VM::new();
-        vm.arrays.push(vec![]);
-        vm.push(Cell::Array(0)).unwrap();
-        shuffle_prim(&mut vm).unwrap();
-        assert_eq!(vm.pop(), Ok(Cell::Array(0)));
-        assert_eq!(vm.arrays[0].len(), 0);
-    }
-
-    #[test]
-    fn test_shuffle_prim_type_error() {
-        // SHUFFLE on a non-Array cell must return TypeError.
-        let mut vm = VM::new();
-        vm.push(Cell::Int(42)).unwrap();
-        assert!(matches!(
-            shuffle_prim(&mut vm),
-            Err(TbxError::TypeError {
-                expected: "Array",
-                ..
-            })
-        ));
     }
 
     // --- unixtime_prim ---
