@@ -1452,6 +1452,79 @@ fn test_let_at_array_2d_equivalent_to_set_address() {
     assert_eq!(interp.take_output(), "99");
 }
 
+// ---------------------------------------------------------------------------
+// 2D array end-to-end: four-corner convention test (issue #751)
+// ---------------------------------------------------------------------------
+//
+// These two tests implement the canonical example from issue #751.  They write
+// to the four corners of a 3×2 array and read them back, verifying both the
+// write path (LET vs. SET) and the [x, y] index convention.
+//
+// DIM @A[3, 2]:  width=3, height=2
+//   A[1,1] → flat 0   A[3,1] → flat 2
+//   A[1,2] → flat 3   A[3,2] → flat 5
+//
+// Detection value: accessing A[3, 1] (x=3) succeeds only when the first
+// dimension is treated as width (3), not height (2).  If width and height
+// were swapped, x=3 would exceed width=2 and trigger a bounds error.
+
+/// Canonical 2D convention test via `LET @A[x, y]`.
+///
+/// Global `DIM @A[3, 2]`; writes the four corners inside a DEF (LET requires
+/// compile mode), then reads them back.
+///
+/// Expected output: `10304060`
+#[test]
+fn test_2d_array_four_corners_via_let() {
+    let mut interp = Interpreter::new();
+    let src = concat!(
+        "DIM @A[3, 2]\n",
+        "DEF F()\n",
+        "  LET @A[1, 1] = 10\n",
+        "  LET @A[3, 1] = 30\n",
+        "  LET @A[1, 2] = 40\n",
+        "  LET @A[3, 2] = 60\n",
+        "  PUTDEC @A[1, 1]\n",
+        "  PUTDEC @A[3, 1]\n",
+        "  PUTDEC @A[1, 2]\n",
+        "  PUTDEC @A[3, 2]\n",
+        "END\n",
+        "F\n",
+    );
+    interp
+        .exec_source(src)
+        .expect("LET @A[x, y] four-corner writes must succeed and read back correctly");
+    assert_eq!(interp.take_output(), "10304060");
+}
+
+/// Canonical 2D convention test via `SET &@A[x, y], expr`.
+///
+/// Global `DIM @A[3, 2]`; writes the four corners at top level via SET
+/// (no DEF needed for SET), then reads them back.
+///
+/// Expected output: `10304060`
+#[test]
+fn test_2d_array_four_corners_via_set() {
+    let mut interp = Interpreter::new();
+    let src = concat!(
+        "DIM @A[3, 2]\n",
+        "SET &@A[1, 1], 10\n",
+        "SET &@A[3, 1], 30\n",
+        "SET &@A[1, 2], 40\n",
+        "SET &@A[3, 2], 60\n",
+        "PUTDEC @A[1, 1]\n",
+        "PUTDEC @A[3, 1]\n",
+        "PUTDEC @A[1, 2]\n",
+        "PUTDEC @A[3, 2]\n",
+    );
+    interp
+        .exec_source(src)
+        .expect("SET &@A[x, y] four-corner writes must succeed and read back correctly");
+    assert_eq!(interp.take_output(), "10304060");
+}
+
+// ---------------------------------------------------------------------------
+
 /// `LET @A[i] = expr` (1D syntax) must still work after introducing 2D support.
 #[test]
 fn test_let_at_array_1d_regression_after_2d() {
