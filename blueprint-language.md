@@ -483,6 +483,68 @@ LET @A[1] = 10
 
 `SET &@A[i], expr` は、`&@A[i]` が返す `Cell::ArrayAddr` を左辺に使い、`STORE` によって要素を上書きする。通常の配列要素代入には、糖衣構文 `LET @A[i] = expr` も使える。
 
+### 2次元配列
+
+> Issue #743「2D arrays: document surface syntax and storage semantics in blueprint-language.md」に基づく設計方針
+
+#### 概要
+
+2次元配列は、1次元配列の要素選択を2軸へ拡張する構文として位置付ける。
+
+**この拡張は既存の配列モデルを変えない。**
+
+```text
+Tuple = immutable aggregate value
+Array = named mutable storage
+```
+
+2次元配列は array storage の要素選択方式の拡張であり、value aggregation の仕組みではない。
+
+#### surface 操作
+
+以下の操作をサポートする。
+
+```tbx
+DIM @A[width, height]    # Declare 2D array binding of size width × height
+@A[x, y]                 # Read element at (x, y) (1-based)
+&@A[x, y]                # Address of element (x, y) (for SET)
+LET @A[x, y] = expr      # Element assignment (sugar for SET &@A[x, y], expr)
+SET &@A[x, y], expr      # Element write via address
+```
+
+#### 座標規約
+
+座標は `[x, y]` 形式とする。`[row, column]` 形式は採らない。
+
+- `x`：水平座標。`1` が左端。
+- `y`：垂直座標。`1` が上端。
+
+両軸とも 1-origin とする。
+
+画面表示などのループを書く場合は、通常 `y` を外側のループ、`x` を内側のループとする。
+
+#### 内部ストレージ
+
+内部ストレージは1次元配列のままである。コンパイラ・VMが線形インデックスの計算を担うため、ユーザーがヘルパーコードで計算する必要はない。
+
+```text
+linear_index = (y - 1) * width + x
+```
+
+#### サポートしない操作
+
+以下の操作は導入しない。
+
+```tbx
+RETURN @A       # Unsupported: whole-array as return value
+LET @B = @A     # Unsupported: whole-array copy
+TUPLE(@A)       # Unsupported: array as tuple element
+@A[1][2]        # Unsupported: chained indexing
+DIM @A[8][8]    # Unsupported: use DIM @A[width, height] instead
+```
+
+配列は surface language 上で first-class value ではない。これらの操作は1次元・2次元を問わず配列全体には許可しない。
+
 ### `TO_ARRAY` / `FROM_ARRAY` — 廃止方向（historical note）
 
 `TO_ARRAY` / `FROM_ARRAY` は surface language spec から外す。これらは廃止方向であり、新規コードには使わない。
