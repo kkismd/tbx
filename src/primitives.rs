@@ -1783,8 +1783,44 @@ fn compile_at_array_lvalue(vm: &mut VM) -> Result<(), TbxError> {
         });
     }
 
-    // Compile the index expression using the current local table.
-    let (index_cells, index_patch_offsets) = compile_expr_taking_local_table(vm, &index_tokens)?;
+    // Determine whether this is a 1D or 2D access by looking for a top-level comma.
+    // This mirrors split_at_top_level_comma() in expr.rs but works on owned Vec.
+    enum IndexKind {
+        OneD,
+        TwoD { comma_pos: usize },
+    }
+
+    let index_kind = {
+        use crate::lexer::Token as Tok;
+        let mut depth = 0usize;
+        let mut first_comma: Option<usize> = None;
+        let mut second_comma = false;
+        for (j, st) in index_tokens.iter().enumerate() {
+            match &st.token {
+                Tok::LParen | Tok::LBracket => depth += 1,
+                Tok::RParen | Tok::RBracket => {
+                    depth = depth.saturating_sub(1);
+                }
+                Tok::Comma if depth == 0 => {
+                    if first_comma.is_some() {
+                        second_comma = true;
+                        break;
+                    }
+                    first_comma = Some(j);
+                }
+                _ => {}
+            }
+        }
+        if second_comma {
+            return Err(TbxError::InvalidExpression {
+                reason: "LET @A[...]: at most 2 indices allowed: use LET @A[i] or LET @A[x, y]",
+            });
+        }
+        match first_comma {
+            None => IndexKind::OneD,
+            Some(pos) => IndexKind::TwoD { comma_pos: pos },
+        }
+    };
 
     // Resolve the array handle: local binding takes priority over global.
     let local_idx: Option<usize> = vm
@@ -1800,11 +1836,6 @@ fn compile_at_array_lvalue(vm: &mut VM) -> Result<(), TbxError> {
     let fetch_xt = vm.lookup("FETCH").ok_or(TbxError::UndefinedSymbol {
         name: "FETCH".to_string(),
     })?;
-    let array_addr_xt = vm
-        .lookup_hidden_system("ARRAY_ADDR")
-        .ok_or(TbxError::UndefinedSymbol {
-            name: "ARRAY_ADDR".to_string(),
-        })?;
 
     if let Some(idx) = local_idx {
         // Emit: LIT StackAddr(idx)  FETCH  — load the local array handle.
@@ -1831,20 +1862,80 @@ fn compile_at_array_lvalue(vm: &mut VM) -> Result<(), TbxError> {
         vm.dict_write(Cell::Xt(fetch_xt))?;
     }
 
-    // Emit the compiled index expression.
-    let base_dp = vm.dp;
-    for cell in index_cells {
-        vm.dict_write(cell)?;
-    }
-    // Register any self-recursive call patch positions from the index expression.
-    if let Some(state) = vm.compile_state.as_mut() {
-        for offset in index_patch_offsets {
-            state.call_patch_list.push(base_dp + offset);
+    match index_kind {
+        IndexKind::OneD => {
+            // 1D path: compile single index expression, emit ARRAY_ADDR.
+            let (index_cells, index_patch_offsets) =
+                compile_expr_taking_local_table(vm, &index_tokens)?;
+
+            let array_addr_xt =
+                vm.lookup_hidden_system("ARRAY_ADDR")
+                    .ok_or(TbxError::UndefinedSymbol {
+                        name: "ARRAY_ADDR".to_string(),
+                    })?;
+
+            // Emit the compiled index expression.
+            let base_dp = vm.dp;
+            for cell in index_cells {
+                vm.dict_write(cell)?;
+            }
+            if let Some(state) = vm.compile_state.as_mut() {
+                for offset in index_patch_offsets {
+                    state.call_patch_list.push(base_dp + offset);
+                }
+            }
+            // Emit ARRAY_ADDR — pops (Array, index) and pushes the element address.
+            vm.dict_write(Cell::Xt(array_addr_xt))?;
+        }
+        IndexKind::TwoD { comma_pos } => {
+            // 2D path: split at comma, compile x and y separately, emit ARRAY_ADDR_2D.
+            let x_tokens = index_tokens[..comma_pos].to_vec();
+            let y_tokens = index_tokens[comma_pos + 1..].to_vec();
+
+            if x_tokens.is_empty() {
+                return Err(TbxError::InvalidExpression {
+                    reason: "missing x expression in LET @A[x, y]",
+                });
+            }
+            if y_tokens.is_empty() {
+                return Err(TbxError::InvalidExpression {
+                    reason: "missing y expression in LET @A[x, y]",
+                });
+            }
+
+            let (x_cells, x_patch_offsets) = compile_expr_taking_local_table(vm, &x_tokens)?;
+            let (y_cells, y_patch_offsets) = compile_expr_taking_local_table(vm, &y_tokens)?;
+
+            let array_addr_2d_xt =
+                vm.lookup_hidden_system("ARRAY_ADDR_2D")
+                    .ok_or(TbxError::UndefinedSymbol {
+                        name: "ARRAY_ADDR_2D".to_string(),
+                    })?;
+
+            // Emit x expression.
+            let base_dp_x = vm.dp;
+            for cell in x_cells {
+                vm.dict_write(cell)?;
+            }
+            if let Some(state) = vm.compile_state.as_mut() {
+                for offset in x_patch_offsets {
+                    state.call_patch_list.push(base_dp_x + offset);
+                }
+            }
+            // Emit y expression.
+            let base_dp_y = vm.dp;
+            for cell in y_cells {
+                vm.dict_write(cell)?;
+            }
+            if let Some(state) = vm.compile_state.as_mut() {
+                for offset in y_patch_offsets {
+                    state.call_patch_list.push(base_dp_y + offset);
+                }
+            }
+            // Emit ARRAY_ADDR_2D — pops (Array, x, y) and pushes the element address.
+            vm.dict_write(Cell::Xt(array_addr_2d_xt))?;
         }
     }
-
-    // Emit ARRAY_ADDR — pops (Array, index) and pushes the element address.
-    vm.dict_write(Cell::Xt(array_addr_xt))?;
 
     Ok(())
 }
@@ -2389,6 +2480,14 @@ pub fn register_all(vm: &mut VM) {
     let mut array_addr_entry = WordEntry::new_primitive("ARRAY_ADDR", array_addr_prim);
     array_addr_entry.flags = FLAG_SYSTEM | FLAG_HIDDEN;
     vm.register(array_addr_entry);
+    // ARRAY_ADDR_2D computes the address of a 2D array element (`&@A[x, y]` compiles to
+    // `<array handle read> <x expr> <y expr> ARRAY_ADDR_2D`).
+    // It validates that the array was declared with DIM @A[w, h] and computes
+    // the flat index as (y-1)*width + (x-1).
+    let mut array_addr_2d_entry =
+        WordEntry::new_primitive("ARRAY_ADDR_2D", arrays::array_addr_2d_prim);
+    array_addr_2d_entry.flags = FLAG_SYSTEM | FLAG_HIDDEN;
+    vm.register(array_addr_2d_entry);
     let mut tuple_get_entry = WordEntry::new_primitive("TUPLE_GET", tuple_get_prim);
     tuple_get_entry.flags = FLAG_SYSTEM;
     vm.register(tuple_get_entry);
