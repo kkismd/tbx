@@ -1351,3 +1351,135 @@ fn test_set_at_array_2d_local_element_address() {
         .expect("SET &@A[2, 1], 99 should write 99 to 2D element (2, 1) of local array");
     assert_eq!(interp.take_output(), "99");
 }
+
+// LET @A[x, y] = expr — 2D array element assignment sugar (issue #749)
+// ---------------------------------------------------------------------------
+
+/// `LET @A[x, y] = expr` on a global 2D array binding must write the value
+/// and `@A[x, y]` must read it back.
+///
+/// TBX code under test:
+///   DIM @A[3, 2]
+///   LET @A[2, 1] = 99
+///   PUTDEC @A[2, 1]
+///
+/// Expected output: `99`
+#[test]
+fn test_let_at_array_2d_global_element_assignment() {
+    let mut interp = Interpreter::new();
+    let src = concat!(
+        "DEF F()\n",
+        "  DIM @A[3, 2]\n",
+        "  LET @A[2, 1] = 99\n",
+        "  PUTDEC @A[2, 1]\n",
+        "END\n",
+        "F\n",
+    );
+    interp
+        .exec_source(src)
+        .expect("LET @A[2, 1] = 99 should write 99 to 2D element (2, 1)");
+    assert_eq!(interp.take_output(), "99");
+}
+
+/// `LET @A[x, y] = expr` on a local 2D array binding inside a DEF must write
+/// the value and `@A[x, y]` must read it back.
+#[test]
+fn test_let_at_array_2d_local_element_assignment() {
+    let mut interp = Interpreter::new();
+    let src = concat!(
+        "DEF F()\n",
+        "  DIM @A[3, 2]\n",
+        "  LET @A[2, 1] = 99\n",
+        "  RETURN @A[2, 1]\n",
+        "END\n",
+        "PUTDEC F()\n",
+    );
+    interp
+        .exec_source(src)
+        .expect("LET @A[2, 1] = 99 should write 99 to local 2D element (2, 1)");
+    assert_eq!(interp.take_output(), "99");
+}
+
+/// `LET @A[x, y] = expr` must map to the same flat index as `SET &@A[x, y], expr`.
+///
+/// 3×2 array, fill all 6 elements via `LET @A[x, y]`, then read back with
+/// `@A[x, y]` to verify the index formula `(y-1)*width + (x-1)`.
+#[test]
+fn test_let_at_array_2d_index_formula() {
+    let mut interp = Interpreter::new();
+    let src = concat!(
+        "DEF F()\n",
+        "  DIM @A[3, 2]\n",
+        "  LET @A[1, 1] = 11\n",
+        "  LET @A[2, 1] = 21\n",
+        "  LET @A[3, 1] = 31\n",
+        "  LET @A[1, 2] = 12\n",
+        "  LET @A[2, 2] = 22\n",
+        "  LET @A[3, 2] = 32\n",
+        "  PUTDEC @A[1, 1]\n",
+        "  PUTDEC @A[3, 1]\n",
+        "  PUTDEC @A[1, 2]\n",
+        "  PUTDEC @A[3, 2]\n",
+        "END\n",
+        "F\n",
+    );
+    interp
+        .exec_source(src)
+        .expect("LET @A[x, y] should write to the correct flat index");
+    // (1,1)→11, (3,1)→31, (1,2)→12, (3,2)→32
+    assert_eq!(interp.take_output(), "11311232");
+}
+
+/// `LET @A[x, y] = expr` must produce the same element as `SET &@A[x, y], expr`.
+#[test]
+fn test_let_at_array_2d_equivalent_to_set_address() {
+    let mut interp = Interpreter::new();
+    let src = concat!(
+        "DEF F()\n",
+        "  DIM @A[3, 2]\n",
+        "  SET &@A[2, 1], 42\n",
+        "  LET @A[2, 1] = 99\n",
+        "  RETURN @A[2, 1]\n",
+        "END\n",
+        "PUTDEC F()\n",
+    );
+    interp
+        .exec_source(src)
+        .expect("LET @A[x, y] should overwrite the same element as SET &@A[x, y]");
+    assert_eq!(interp.take_output(), "99");
+}
+
+/// `LET @A[i] = expr` (1D syntax) must still work after introducing 2D support.
+#[test]
+fn test_let_at_array_1d_regression_after_2d() {
+    let mut interp = Interpreter::new();
+    let src = concat!(
+        "DEF F()\n",
+        "  DIM @A[4]\n",
+        "  LET @A[3] = 77\n",
+        "  RETURN @A[3]\n",
+        "END\n",
+        "PUTDEC F()\n",
+    );
+    interp
+        .exec_source(src)
+        .expect("LET @A[i] 1D assignment must still work after 2D changes");
+    assert_eq!(interp.take_output(), "77");
+}
+
+/// `LET @A[x, y, z] = expr` (arity ≥ 3) must be rejected at compile time.
+#[test]
+fn test_let_at_array_2d_arity_3_is_compile_error() {
+    let mut interp = Interpreter::new();
+    let src = concat!(
+        "DEF F()\n",
+        "  DIM @A[3, 2]\n",
+        "  LET @A[1, 1, 1] = 0\n",
+        "END\n",
+        "F\n",
+    );
+    assert!(
+        interp.exec_source(src).is_err(),
+        "LET @A[x, y, z] with arity >= 3 must be a compile error"
+    );
+}

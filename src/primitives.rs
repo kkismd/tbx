@@ -1823,27 +1823,70 @@ fn compile_at_array_lvalue(vm: &mut VM) -> Result<(), TbxError> {
         vm.dict_write(Cell::Xt(fetch_xt))?;
     }
 
-    // Compile the index expression and emit ARRAY_ADDR.
-    let (index_cells, index_patch_offsets) = compile_expr_taking_local_table(vm, &index_tokens)?;
-
-    let array_addr_xt = vm
-        .lookup_hidden_system("ARRAY_ADDR")
-        .ok_or(TbxError::UndefinedSymbol {
-            name: "ARRAY_ADDR".to_string(),
-        })?;
-
-    // Emit the compiled index expression.
-    let base_dp = vm.dp;
-    for cell in index_cells {
-        vm.dict_write(cell)?;
-    }
-    if let Some(state) = vm.compile_state.as_mut() {
-        for offset in index_patch_offsets {
-            state.call_patch_list.push(base_dp + offset);
+    // Dispatch on 1D vs 2D based on whether the index contains a top-level comma.
+    if let Some((x_toks, y_toks)) = crate::expr::split_at_top_level_comma(&index_tokens)? {
+        // 2D path: LET @A[x, y] = expr
+        if x_toks.is_empty() {
+            return Err(TbxError::InvalidExpression {
+                reason: "LET @A[x, y]: missing x expression",
+            });
         }
+        if y_toks.is_empty() {
+            return Err(TbxError::InvalidExpression {
+                reason: "LET @A[x, y]: missing y expression",
+            });
+        }
+
+        let (x_cells, x_patch_offsets) = compile_expr_taking_local_table(vm, x_toks)?;
+        let (y_cells, y_patch_offsets) = compile_expr_taking_local_table(vm, y_toks)?;
+
+        let array_addr_2d_xt =
+            vm.lookup_hidden_system("ARRAY_ADDR_2D")
+                .ok_or(TbxError::UndefinedSymbol {
+                    name: "ARRAY_ADDR_2D".to_string(),
+                })?;
+
+        let base_dp = vm.dp;
+        for cell in x_cells {
+            vm.dict_write(cell)?;
+        }
+        if let Some(state) = vm.compile_state.as_mut() {
+            for offset in x_patch_offsets {
+                state.call_patch_list.push(base_dp + offset);
+            }
+        }
+        let base_dp = vm.dp;
+        for cell in y_cells {
+            vm.dict_write(cell)?;
+        }
+        if let Some(state) = vm.compile_state.as_mut() {
+            for offset in y_patch_offsets {
+                state.call_patch_list.push(base_dp + offset);
+            }
+        }
+        vm.dict_write(Cell::Xt(array_addr_2d_xt))?;
+    } else {
+        // 1D path: LET @A[i] = expr
+        let (index_cells, index_patch_offsets) =
+            compile_expr_taking_local_table(vm, &index_tokens)?;
+
+        let array_addr_xt =
+            vm.lookup_hidden_system("ARRAY_ADDR")
+                .ok_or(TbxError::UndefinedSymbol {
+                    name: "ARRAY_ADDR".to_string(),
+                })?;
+
+        let base_dp = vm.dp;
+        for cell in index_cells {
+            vm.dict_write(cell)?;
+        }
+        if let Some(state) = vm.compile_state.as_mut() {
+            for offset in index_patch_offsets {
+                state.call_patch_list.push(base_dp + offset);
+            }
+        }
+        vm.dict_write(Cell::Xt(array_addr_xt))?;
     }
-    // Emit ARRAY_ADDR — pops (Array, index) and pushes the element address.
-    vm.dict_write(Cell::Xt(array_addr_xt))?;
 
     Ok(())
 }

@@ -871,7 +871,7 @@ fn parse_at_index_tokens(
 ///
 /// "Top-level" means the comma is not nested inside `(...)` or `[...]`.
 #[allow(clippy::type_complexity)]
-fn split_at_top_level_comma(
+pub(crate) fn split_at_top_level_comma(
     toks: &[SpannedToken],
 ) -> Result<Option<(&[SpannedToken], &[SpannedToken])>, TbxError> {
     let mut depth = 0usize;
