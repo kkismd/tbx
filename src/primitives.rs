@@ -744,8 +744,8 @@ pub fn dim_prim(vm: &mut VM) -> Result<(), TbxError> {
     };
 
     // Split collected tokens into dimension expressions by top-level commas.
-    // Depth tracks parentheses only (brackets cannot appear here; `[` was already
-    // consumed as the dimension-list opener).
+    // Track both parenthesis and nested bracket depth so only top-level commas
+    // split the DIM dimension list.
     let dim_list: Vec<Vec<crate::lexer::SpannedToken>> = {
         let mut dims: Vec<Vec<crate::lexer::SpannedToken>> = Vec::new();
         let mut current: Vec<crate::lexer::SpannedToken> = Vec::new();
