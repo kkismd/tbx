@@ -750,6 +750,7 @@ pub fn dim_prim(vm: &mut VM) -> Result<(), TbxError> {
         let mut dims: Vec<Vec<crate::lexer::SpannedToken>> = Vec::new();
         let mut current: Vec<crate::lexer::SpannedToken> = Vec::new();
         let mut depth: usize = 0;
+        let mut bracket_depth: usize = 0;
         for tok in size_tokens {
             match &tok.token {
                 Token::LParen => {
@@ -760,7 +761,15 @@ pub fn dim_prim(vm: &mut VM) -> Result<(), TbxError> {
                     depth = depth.saturating_sub(1);
                     current.push(tok);
                 }
-                Token::Comma if depth == 0 => {
+                Token::LBracket => {
+                    bracket_depth += 1;
+                    current.push(tok);
+                }
+                Token::RBracket => {
+                    bracket_depth = bracket_depth.saturating_sub(1);
+                    current.push(tok);
+                }
+                Token::Comma if depth == 0 && bracket_depth == 0 => {
                     dims.push(current);
                     current = Vec::new();
                 }
