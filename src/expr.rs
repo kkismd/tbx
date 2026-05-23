@@ -698,7 +698,7 @@ impl<'a> ExprCompiler<'a> {
 
                             // Dispatch on 1D vs 2D based on whether the bracket content
                             // contains a top-level comma.
-                            if let Some((x_toks, y_toks)) = split_at_top_level_comma(index_toks) {
+                            if let Some((x_toks, y_toks)) = split_at_top_level_comma(index_toks)? {
                                 // 2D access: @A[x, y]
                                 // Compile x and y expressions separately.
                                 if x_toks.is_empty() {
@@ -837,14 +837,18 @@ fn parse_at_index_tokens(
     Ok((index_toks, close_pos))
 }
 
-/// Split a bracket-content token slice at the first top-level comma.
+/// Split a bracket-content token slice at top-level commas for `@A[x, y]`.
 ///
-/// Returns `Some((x_toks, y_toks))` if a top-level comma is found; `None`
-/// for a 1D index expression with no top-level comma.
+/// - Returns `None` if there are no top-level commas (1D access: `@A[i]`).
+/// - Returns `Some((x_toks, y_toks))` if there is exactly one top-level comma (2D access).
+/// - Returns `Err(InvalidExpression)` if there are two or more top-level commas (arity ≥ 3).
 ///
 /// "Top-level" means the comma is not nested inside `(...)` or `[...]`.
-fn split_at_top_level_comma(toks: &[SpannedToken]) -> Option<(&[SpannedToken], &[SpannedToken])> {
+fn split_at_top_level_comma(
+    toks: &[SpannedToken],
+) -> Result<Option<(&[SpannedToken], &[SpannedToken])>, TbxError> {
     let mut depth = 0usize;
+    let mut first_comma: Option<usize> = None;
     for (i, st) in toks.iter().enumerate() {
         match &st.token {
             Token::LParen | Token::LBracket => depth += 1,
@@ -852,12 +856,17 @@ fn split_at_top_level_comma(toks: &[SpannedToken]) -> Option<(&[SpannedToken], &
                 depth = depth.saturating_sub(1);
             }
             Token::Comma if depth == 0 => {
-                return Some((&toks[..i], &toks[i + 1..]));
+                if first_comma.is_some() {
+                    return Err(TbxError::InvalidExpression {
+                        reason: "@A[...] accepts at most 2 indices: use @A[i] or @A[x, y]",
+                    });
+                }
+                first_comma = Some(i);
             }
             _ => {}
         }
     }
-    None
+    Ok(first_comma.map(|i| (&toks[..i], &toks[i + 1..])))
 }
 
 /// Emit `Xt(LIT)` followed by `value` onto `output`.
@@ -2198,6 +2207,27 @@ mod tests {
         assert!(
             matches!(err, TbxError::InvalidExpression { .. }),
             "expected InvalidExpression for @A[1,], got: {err:?}"
+        );
+    }
+
+    /// `@A[1, 2, 3]` (arity 3) must be rejected at compile time.
+    #[test]
+    fn test_at_arity_3_is_error() {
+        let mut vm = make_vm();
+        vm.dict_write(Cell::Int(0)).unwrap();
+        vm.register(crate::dict::WordEntry::new_variable("A", 0));
+
+        let tokens = lex("@A[1, 2, 3]");
+        let err = ExprCompiler::new(&mut vm)
+            .compile_expr(&tokens)
+            .unwrap_err();
+        assert!(
+            matches!(
+                err,
+                TbxError::InvalidExpression { reason }
+                    if reason.contains("at most 2 indices")
+            ),
+            "expected InvalidExpression for @A[1, 2, 3], got: {err:?}"
         );
     }
 
