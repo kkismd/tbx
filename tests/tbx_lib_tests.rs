@@ -1359,17 +1359,20 @@ fn test_set_at_array_2d_local_element_address() {
 /// and `@A[x, y]` must read it back.
 ///
 /// TBX code under test:
-///   DIM @A[3, 2]
-///   LET @A[2, 1] = 99
-///   PUTDEC @A[2, 1]
+///   DIM @A[3, 2]          ← global (top-level)
+///   DEF F()
+///     LET @A[2, 1] = 99   ← LET inside DEF, writing to global array
+///     PUTDEC @A[2, 1]
+///   END
+///   F
 ///
 /// Expected output: `99`
 #[test]
 fn test_let_at_array_2d_global_element_assignment() {
     let mut interp = Interpreter::new();
     let src = concat!(
+        "DIM @A[3, 2]\n",
         "DEF F()\n",
-        "  DIM @A[3, 2]\n",
         "  LET @A[2, 1] = 99\n",
         "  PUTDEC @A[2, 1]\n",
         "END\n",
@@ -1377,7 +1380,7 @@ fn test_let_at_array_2d_global_element_assignment() {
     );
     interp
         .exec_source(src)
-        .expect("LET @A[2, 1] = 99 should write 99 to 2D element (2, 1)");
+        .expect("LET @A[2, 1] = 99 should write 99 to 2D element (2, 1) of global array");
     assert_eq!(interp.take_output(), "99");
 }
 
