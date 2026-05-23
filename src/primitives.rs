@@ -1783,9 +1783,6 @@ fn compile_at_array_lvalue(vm: &mut VM) -> Result<(), TbxError> {
         });
     }
 
-    // Compile the index expression using the current local table.
-    let (index_cells, index_patch_offsets) = compile_expr_taking_local_table(vm, &index_tokens)?;
-
     // Resolve the array handle: local binding takes priority over global.
     let local_idx: Option<usize> = vm
         .compile_state
@@ -1800,11 +1797,6 @@ fn compile_at_array_lvalue(vm: &mut VM) -> Result<(), TbxError> {
     let fetch_xt = vm.lookup("FETCH").ok_or(TbxError::UndefinedSymbol {
         name: "FETCH".to_string(),
     })?;
-    let array_addr_xt = vm
-        .lookup_hidden_system("ARRAY_ADDR")
-        .ok_or(TbxError::UndefinedSymbol {
-            name: "ARRAY_ADDR".to_string(),
-        })?;
 
     if let Some(idx) = local_idx {
         // Emit: LIT StackAddr(idx)  FETCH  — load the local array handle.
@@ -1831,18 +1823,25 @@ fn compile_at_array_lvalue(vm: &mut VM) -> Result<(), TbxError> {
         vm.dict_write(Cell::Xt(fetch_xt))?;
     }
 
+    // Compile the index expression and emit ARRAY_ADDR.
+    let (index_cells, index_patch_offsets) = compile_expr_taking_local_table(vm, &index_tokens)?;
+
+    let array_addr_xt = vm
+        .lookup_hidden_system("ARRAY_ADDR")
+        .ok_or(TbxError::UndefinedSymbol {
+            name: "ARRAY_ADDR".to_string(),
+        })?;
+
     // Emit the compiled index expression.
     let base_dp = vm.dp;
     for cell in index_cells {
         vm.dict_write(cell)?;
     }
-    // Register any self-recursive call patch positions from the index expression.
     if let Some(state) = vm.compile_state.as_mut() {
         for offset in index_patch_offsets {
             state.call_patch_list.push(base_dp + offset);
         }
     }
-
     // Emit ARRAY_ADDR — pops (Array, index) and pushes the element address.
     vm.dict_write(Cell::Xt(array_addr_xt))?;
 
@@ -2389,6 +2388,14 @@ pub fn register_all(vm: &mut VM) {
     let mut array_addr_entry = WordEntry::new_primitive("ARRAY_ADDR", array_addr_prim);
     array_addr_entry.flags = FLAG_SYSTEM | FLAG_HIDDEN;
     vm.register(array_addr_entry);
+    // ARRAY_ADDR_2D computes the address of a 2D array element (`&@A[x, y]` compiles to
+    // `<array handle read> <x expr> <y expr> ARRAY_ADDR_2D`).
+    // It validates that the array was declared with DIM @A[w, h] and computes
+    // the flat index as (y-1)*width + (x-1).
+    let mut array_addr_2d_entry =
+        WordEntry::new_primitive("ARRAY_ADDR_2D", arrays::array_addr_2d_prim);
+    array_addr_2d_entry.flags = FLAG_SYSTEM | FLAG_HIDDEN;
+    vm.register(array_addr_2d_entry);
     let mut tuple_get_entry = WordEntry::new_primitive("TUPLE_GET", tuple_get_prim);
     tuple_get_entry.flags = FLAG_SYSTEM;
     vm.register(tuple_get_entry);

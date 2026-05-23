@@ -1309,3 +1309,45 @@ fn test_dim_local_array_still_works_after_surface_ban() {
         .expect("DIM local array must still work after surface ban");
     assert_eq!(interp.take_output(), "20");
 }
+
+// ---------------------------------------------------------------------------
+// &@A[x, y] — 2D array element address access (issue #748)
+// ---------------------------------------------------------------------------
+
+/// `SET &@A[x, y], v` on a global 2D array binding must write the value and
+/// `@A[x, y]` must read it back via PUTDEC.
+///
+/// TBX code under test:
+///   DIM @A[3, 2]
+///   SET &@A[2, 1], 99
+///   PUTDEC @A[2, 1]
+///
+/// Expected output: `99`
+#[test]
+fn test_set_at_array_2d_global_element_address() {
+    let mut interp = Interpreter::new();
+    let src = concat!("DIM @A[3, 2]\n", "SET &@A[2, 1], 99\n", "PUTDEC @A[2, 1]\n",);
+    interp
+        .exec_source(src)
+        .expect("SET &@A[2, 1], 99 should write 99 to 2D element (2, 1) of global array");
+    assert_eq!(interp.take_output(), "99");
+}
+
+/// `SET &@A[x, y], v` on a local 2D array binding inside a DEF must write the
+/// value and `@A[x, y]` must read it back.
+#[test]
+fn test_set_at_array_2d_local_element_address() {
+    let mut interp = Interpreter::new();
+    let src = concat!(
+        "DEF F()\n",
+        "  DIM @A[3, 2]\n",
+        "  SET &@A[2, 1], 99\n",
+        "  RETURN @A[2, 1]\n",
+        "END\n",
+        "PUTDEC F()\n",
+    );
+    interp
+        .exec_source(src)
+        .expect("SET &@A[2, 1], 99 should write 99 to 2D element (2, 1) of local array");
+    assert_eq!(interp.take_output(), "99");
+}
