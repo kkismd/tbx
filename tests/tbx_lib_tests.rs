@@ -1486,3 +1486,359 @@ fn test_let_at_array_2d_arity_3_is_compile_error() {
         "LET @A[x, y, z] with arity >= 3 must be a compile error"
     );
 }
+
+// ---------------------------------------------------------------------------
+// 2D array bounds and rank mismatch errors (issue #750)
+// ---------------------------------------------------------------------------
+
+// --- @A[x, y] bounds errors (ARRAY_GET_2D) ---
+
+/// `@A[0, 1]` must be rejected: x=0 is invalid in 1-based indexing.
+#[test]
+fn test_2d_array_get_x_zero_is_out_of_bounds() {
+    let mut interp = Interpreter::new();
+    let src = concat!(
+        "DEF F()\n",
+        "  DIM @A[3, 2]\n",
+        "  RETURN @A[0, 1]\n",
+        "END\n",
+        "F\n",
+    );
+    interp
+        .exec_source(src)
+        .expect_err("@A[0, 1] must fail: x=0 is out of bounds (1-based)");
+}
+
+/// `@A[1, 0]` must be rejected: y=0 is invalid in 1-based indexing.
+#[test]
+fn test_2d_array_get_y_zero_is_out_of_bounds() {
+    let mut interp = Interpreter::new();
+    let src = concat!(
+        "DEF F()\n",
+        "  DIM @A[3, 2]\n",
+        "  RETURN @A[1, 0]\n",
+        "END\n",
+        "F\n",
+    );
+    interp
+        .exec_source(src)
+        .expect_err("@A[1, 0] must fail: y=0 is out of bounds (1-based)");
+}
+
+/// `@A[width + 1, 1]` must be rejected: x exceeds declared width.
+#[test]
+fn test_2d_array_get_x_exceeds_width_is_out_of_bounds() {
+    let mut interp = Interpreter::new();
+    // DIM @A[3, 2] → width=3; @A[4, 1] is out of bounds.
+    let src = concat!(
+        "DEF F()\n",
+        "  DIM @A[3, 2]\n",
+        "  RETURN @A[4, 1]\n",
+        "END\n",
+        "F\n",
+    );
+    interp
+        .exec_source(src)
+        .expect_err("@A[4, 1] must fail: x exceeds width=3");
+}
+
+/// `@A[1, height + 1]` must be rejected: y exceeds declared height.
+#[test]
+fn test_2d_array_get_y_exceeds_height_is_out_of_bounds() {
+    let mut interp = Interpreter::new();
+    // DIM @A[3, 2] → height=2; @A[1, 3] is out of bounds.
+    let src = concat!(
+        "DEF F()\n",
+        "  DIM @A[3, 2]\n",
+        "  RETURN @A[1, 3]\n",
+        "END\n",
+        "F\n",
+    );
+    interp
+        .exec_source(src)
+        .expect_err("@A[1, 3] must fail: y exceeds height=2");
+}
+
+// --- &@A[x, y] bounds errors (ARRAY_ADDR_2D) ---
+
+/// `&@A[0, 1]` via `SET` must be rejected: x=0 is out of bounds.
+#[test]
+fn test_2d_array_addr_x_zero_is_out_of_bounds() {
+    let mut interp = Interpreter::new();
+    let src = concat!(
+        "DEF F()\n",
+        "  DIM @A[3, 2]\n",
+        "  SET &@A[0, 1], 10\n",
+        "END\n",
+        "F\n",
+    );
+    interp
+        .exec_source(src)
+        .expect_err("SET &@A[0, 1], 10 must fail: x=0 is out of bounds (1-based)");
+}
+
+/// `&@A[1, 0]` via `SET` must be rejected: y=0 is out of bounds.
+#[test]
+fn test_2d_array_addr_y_zero_is_out_of_bounds() {
+    let mut interp = Interpreter::new();
+    let src = concat!(
+        "DEF F()\n",
+        "  DIM @A[3, 2]\n",
+        "  SET &@A[1, 0], 10\n",
+        "END\n",
+        "F\n",
+    );
+    interp
+        .exec_source(src)
+        .expect_err("SET &@A[1, 0], 10 must fail: y=0 is out of bounds (1-based)");
+}
+
+/// `&@A[width + 1, 1]` via `SET` must be rejected: x exceeds declared width.
+#[test]
+fn test_2d_array_addr_x_exceeds_width_is_out_of_bounds() {
+    let mut interp = Interpreter::new();
+    let src = concat!(
+        "DEF F()\n",
+        "  DIM @A[3, 2]\n",
+        "  SET &@A[4, 1], 10\n",
+        "END\n",
+        "F\n",
+    );
+    interp
+        .exec_source(src)
+        .expect_err("SET &@A[4, 1], 10 must fail: x exceeds width=3");
+}
+
+/// `&@A[1, height + 1]` via `SET` must be rejected: y exceeds declared height.
+#[test]
+fn test_2d_array_addr_y_exceeds_height_is_out_of_bounds() {
+    let mut interp = Interpreter::new();
+    let src = concat!(
+        "DEF F()\n",
+        "  DIM @A[3, 2]\n",
+        "  SET &@A[1, 3], 10\n",
+        "END\n",
+        "F\n",
+    );
+    interp
+        .exec_source(src)
+        .expect_err("SET &@A[1, 3], 10 must fail: y exceeds height=2");
+}
+
+// --- LET @A[x, y] = expr bounds errors (same checks via ARRAY_ADDR_2D) ---
+
+/// `LET @A[0, 1] = expr` must be rejected: x=0 is out of bounds.
+#[test]
+fn test_2d_let_x_zero_is_out_of_bounds() {
+    let mut interp = Interpreter::new();
+    let src = concat!(
+        "DEF F()\n",
+        "  DIM @A[3, 2]\n",
+        "  LET @A[0, 1] = 10\n",
+        "END\n",
+        "F\n",
+    );
+    interp
+        .exec_source(src)
+        .expect_err("LET @A[0, 1] = 10 must fail: x=0 is out of bounds (1-based)");
+}
+
+/// `LET @A[1, 0] = expr` must be rejected: y=0 is out of bounds.
+#[test]
+fn test_2d_let_y_zero_is_out_of_bounds() {
+    let mut interp = Interpreter::new();
+    let src = concat!(
+        "DEF F()\n",
+        "  DIM @A[3, 2]\n",
+        "  LET @A[1, 0] = 10\n",
+        "END\n",
+        "F\n",
+    );
+    interp
+        .exec_source(src)
+        .expect_err("LET @A[1, 0] = 10 must fail: y=0 is out of bounds (1-based)");
+}
+
+/// `LET @A[width + 1, 1] = expr` must be rejected: x exceeds declared width.
+#[test]
+fn test_2d_let_x_exceeds_width_is_out_of_bounds() {
+    let mut interp = Interpreter::new();
+    let src = concat!(
+        "DEF F()\n",
+        "  DIM @A[3, 2]\n",
+        "  LET @A[4, 1] = 10\n",
+        "END\n",
+        "F\n",
+    );
+    interp
+        .exec_source(src)
+        .expect_err("LET @A[4, 1] = 10 must fail: x exceeds width=3");
+}
+
+/// `LET @A[1, height + 1] = expr` must be rejected: y exceeds declared height.
+#[test]
+fn test_2d_let_y_exceeds_height_is_out_of_bounds() {
+    let mut interp = Interpreter::new();
+    let src = concat!(
+        "DEF F()\n",
+        "  DIM @A[3, 2]\n",
+        "  LET @A[1, 3] = 10\n",
+        "END\n",
+        "F\n",
+    );
+    interp
+        .exec_source(src)
+        .expect_err("LET @A[1, 3] = 10 must fail: y exceeds height=2");
+}
+
+// --- Rank mismatch: 1D array binding + 2D accessor ---
+
+/// `@A[x, y]` on a 1D array binding must be rejected with a type error.
+#[test]
+fn test_2d_get_on_1d_array_is_rank_mismatch() {
+    let mut interp = Interpreter::new();
+    let src = concat!(
+        "DEF F()\n",
+        "  DIM @A[6]\n",
+        "  RETURN @A[1, 1]\n",
+        "END\n",
+        "F\n",
+    );
+    interp
+        .exec_source(src)
+        .expect_err("@A[1, 1] on a 1D array must fail with rank mismatch");
+}
+
+/// `&@A[x, y]` on a 1D array binding must be rejected with a type error.
+#[test]
+fn test_2d_addr_on_1d_array_is_rank_mismatch() {
+    let mut interp = Interpreter::new();
+    let src = concat!(
+        "DEF F()\n",
+        "  DIM @A[6]\n",
+        "  SET &@A[1, 1], 10\n",
+        "END\n",
+        "F\n",
+    );
+    interp
+        .exec_source(src)
+        .expect_err("&@A[1, 1] on a 1D array must fail with rank mismatch");
+}
+
+/// `LET @A[x, y] = expr` on a 1D array binding must be rejected with a type error.
+#[test]
+fn test_2d_let_on_1d_array_is_rank_mismatch() {
+    let mut interp = Interpreter::new();
+    let src = concat!(
+        "DEF F()\n",
+        "  DIM @A[6]\n",
+        "  LET @A[1, 1] = 10\n",
+        "END\n",
+        "F\n",
+    );
+    interp
+        .exec_source(src)
+        .expect_err("LET @A[1, 1] on a 1D array must fail with rank mismatch");
+}
+
+// --- Rank mismatch: 2D array binding + 1D accessor ---
+
+/// `@A[i]` on a 2D array binding must be rejected with a rank mismatch error.
+#[test]
+fn test_1d_get_on_2d_array_is_rank_mismatch() {
+    let mut interp = Interpreter::new();
+    let src = concat!(
+        "DEF F()\n",
+        "  DIM @A[3, 2]\n",
+        "  RETURN @A[1]\n",
+        "END\n",
+        "F\n",
+    );
+    interp
+        .exec_source(src)
+        .expect_err("@A[1] on a 2D array must fail with rank mismatch");
+}
+
+/// `&@A[i]` on a 2D array binding must be rejected with a rank mismatch error.
+#[test]
+fn test_1d_addr_on_2d_array_is_rank_mismatch() {
+    let mut interp = Interpreter::new();
+    let src = concat!(
+        "DEF F()\n",
+        "  DIM @A[3, 2]\n",
+        "  SET &@A[1], 10\n",
+        "END\n",
+        "F\n",
+    );
+    interp
+        .exec_source(src)
+        .expect_err("&@A[1] on a 2D array must fail with rank mismatch");
+}
+
+/// `LET @A[i] = expr` on a 2D array binding must be rejected with a rank mismatch error.
+#[test]
+fn test_1d_let_on_2d_array_is_rank_mismatch() {
+    let mut interp = Interpreter::new();
+    let src = concat!(
+        "DEF F()\n",
+        "  DIM @A[3, 2]\n",
+        "  LET @A[1] = 10\n",
+        "END\n",
+        "F\n",
+    );
+    interp
+        .exec_source(src)
+        .expect_err("LET @A[1] on a 2D array must fail with rank mismatch");
+}
+
+// --- Regression: 1D array bounds behavior must be unchanged ---
+
+/// 1D array: index 0 must still be rejected.
+#[test]
+fn test_1d_array_index_zero_is_still_out_of_bounds() {
+    let mut interp = Interpreter::new();
+    let src = concat!(
+        "DEF F()\n",
+        "  DIM @A[3]\n",
+        "  RETURN @A[0]\n",
+        "END\n",
+        "F\n",
+    );
+    interp
+        .exec_source(src)
+        .expect_err("@A[0] on a 1D array must still fail after 2D changes");
+}
+
+/// 1D array: index exceeding size must still be rejected.
+#[test]
+fn test_1d_array_index_exceeding_size_is_still_out_of_bounds() {
+    let mut interp = Interpreter::new();
+    let src = concat!(
+        "DEF F()\n",
+        "  DIM @A[3]\n",
+        "  RETURN @A[4]\n",
+        "END\n",
+        "F\n",
+    );
+    interp
+        .exec_source(src)
+        .expect_err("@A[4] on a 3-element 1D array must still fail after 2D changes");
+}
+
+/// 1D array: valid access must still work.
+#[test]
+fn test_1d_array_valid_access_regression() {
+    let mut interp = Interpreter::new();
+    let src = concat!(
+        "DEF F()\n",
+        "  DIM @A[3]\n",
+        "  LET @A[2] = 42\n",
+        "  RETURN @A[2]\n",
+        "END\n",
+        "PUTDEC F()\n",
+    );
+    interp
+        .exec_source(src)
+        .expect("1D array valid access must still work after 2D changes");
+    assert_eq!(interp.take_output(), "42");
+}

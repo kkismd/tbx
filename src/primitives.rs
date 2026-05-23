@@ -6606,7 +6606,7 @@ mod tests {
         let src = concat!(
             "DEF TEST()\n",
             "  DIM @A[3, 2]\n",
-            "  LET @A[1] = 10\n",
+            "  LET @A[1, 1] = 10\n",
             "  PUTDEC @A[1, 1]\n",
             "END\n",
             "TEST",
@@ -6617,16 +6617,16 @@ mod tests {
     #[test]
     fn test_2d_array_read_index_formula() {
         // @A[x, y] maps to flat index (y-1)*width + (x-1).
-        // 3x2 array, elements 1..6 in row-major order via 1D LET.
+        // 3x2 array, elements 1..6 in row-major order via 2D LET.
         let src = concat!(
             "DEF TEST()\n",
             "  DIM @A[3, 2]\n",
-            "  LET @A[1] = 1\n",
-            "  LET @A[2] = 2\n",
-            "  LET @A[3] = 3\n",
-            "  LET @A[4] = 4\n",
-            "  LET @A[5] = 5\n",
-            "  LET @A[6] = 6\n",
+            "  LET @A[1, 1] = 1\n",
+            "  LET @A[2, 1] = 2\n",
+            "  LET @A[3, 1] = 3\n",
+            "  LET @A[1, 2] = 4\n",
+            "  LET @A[2, 2] = 5\n",
+            "  LET @A[3, 2] = 6\n",
             "  PUTDEC @A[1, 1]\n", // flat 0 → 1
             "  PUTDEC @A[3, 1]\n", // flat 2 → 3
             "  PUTDEC @A[1, 2]\n", // flat 3 → 4
