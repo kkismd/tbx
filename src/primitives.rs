@@ -2378,6 +2378,14 @@ pub fn register_all(vm: &mut VM) {
     let mut array_get_entry = WordEntry::new_primitive("ARRAY_GET", array_get_prim);
     array_get_entry.flags = FLAG_SYSTEM | FLAG_HIDDEN;
     vm.register(array_get_entry);
+    // ARRAY_GET_2D reads an element from a 2D array (`@A[x, y]` compiles to
+    // `<array handle read> <x expr> <y expr> ARRAY_GET_2D`).
+    // It validates that the array was declared with DIM @A[w, h] and computes
+    // the flat index as (y-1)*width + (x-1).
+    let mut array_get_2d_entry =
+        WordEntry::new_primitive("ARRAY_GET_2D", arrays::array_get_2d_prim);
+    array_get_2d_entry.flags = FLAG_SYSTEM | FLAG_HIDDEN;
+    vm.register(array_get_2d_entry);
     let mut array_addr_entry = WordEntry::new_primitive("ARRAY_ADDR", array_addr_prim);
     array_addr_entry.flags = FLAG_SYSTEM | FLAG_HIDDEN;
     vm.register(array_addr_entry);
@@ -6532,6 +6540,120 @@ mod tests {
                 ..
             })
         ));
+    }
+
+    // --- 2D array element read: DIM @A[w, h] + @A[x, y] integration ---
+
+    fn run_src_2d(src: &str) -> Result<String, crate::error::TbxError> {
+        let mut interp = crate::interpreter::Interpreter::new();
+        interp.exec_source(src).map_err(|e| e.kind)?;
+        Ok(interp.take_output())
+    }
+
+    #[test]
+    fn test_2d_array_read_top_left() {
+        // @A[1, 1] reads flat index 0.
+        let src = concat!(
+            "DEF TEST()\n",
+            "  DIM @A[3, 2]\n",
+            "  LET @A[1] = 10\n",
+            "  PUTDEC @A[1, 1]\n",
+            "END\n",
+            "TEST",
+        );
+        assert_eq!(run_src_2d(src).unwrap(), "10");
+    }
+
+    #[test]
+    fn test_2d_array_read_index_formula() {
+        // @A[x, y] maps to flat index (y-1)*width + (x-1).
+        // 3x2 array, elements 1..6 in row-major order via 1D LET.
+        let src = concat!(
+            "DEF TEST()\n",
+            "  DIM @A[3, 2]\n",
+            "  LET @A[1] = 1\n",
+            "  LET @A[2] = 2\n",
+            "  LET @A[3] = 3\n",
+            "  LET @A[4] = 4\n",
+            "  LET @A[5] = 5\n",
+            "  LET @A[6] = 6\n",
+            "  PUTDEC @A[1, 1]\n", // flat 0 → 1
+            "  PUTDEC @A[3, 1]\n", // flat 2 → 3
+            "  PUTDEC @A[1, 2]\n", // flat 3 → 4
+            "  PUTDEC @A[3, 2]\n", // flat 5 → 6
+            "END\n",
+            "TEST",
+        );
+        assert_eq!(run_src_2d(src).unwrap(), "1346");
+    }
+
+    #[test]
+    fn test_2d_array_read_out_of_bounds_x() {
+        let src = concat!(
+            "DEF TEST()\n",
+            "  DIM @A[3, 2]\n",
+            "  PUTDEC @A[4, 1]\n",
+            "END\n",
+            "TEST",
+        );
+        let err = run_src_2d(src).unwrap_err();
+        assert!(
+            matches!(
+                err,
+                crate::error::TbxError::ArrayIndexOutOfBounds { index: 4, .. }
+            ),
+            "expected out-of-bounds for x=4, got: {err:?}"
+        );
+    }
+
+    #[test]
+    fn test_2d_array_read_out_of_bounds_y() {
+        let src = concat!(
+            "DEF TEST()\n",
+            "  DIM @A[3, 2]\n",
+            "  PUTDEC @A[1, 3]\n",
+            "END\n",
+            "TEST",
+        );
+        let err = run_src_2d(src).unwrap_err();
+        assert!(
+            matches!(
+                err,
+                crate::error::TbxError::ArrayIndexOutOfBounds { index: 3, .. }
+            ),
+            "expected out-of-bounds for y=3, got: {err:?}"
+        );
+    }
+
+    #[test]
+    fn test_2d_array_read_on_1d_array_is_type_error() {
+        // @A[x, y] on a 1D array must produce a TypeError at runtime.
+        let src = concat!(
+            "DEF TEST()\n",
+            "  DIM @A[6]\n",
+            "  PUTDEC @A[1, 1]\n",
+            "END\n",
+            "TEST",
+        );
+        let err = run_src_2d(src).unwrap_err();
+        assert!(
+            matches!(err, crate::error::TbxError::TypeError { .. }),
+            "expected TypeError for 2D access on 1D array, got: {err:?}"
+        );
+    }
+
+    #[test]
+    fn test_1d_array_read_still_works_after_2d_changes() {
+        // Regression: existing @A[i] 1D syntax must still work.
+        let src = concat!(
+            "DEF TEST()\n",
+            "  DIM @A[4]\n",
+            "  LET @A[2] = 99\n",
+            "  PUTDEC @A[2]\n",
+            "END\n",
+            "TEST",
+        );
+        assert_eq!(run_src_2d(src).unwrap(), "99");
     }
 
     // --- rnd_prim ---
