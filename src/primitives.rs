@@ -1,6 +1,6 @@
 use crate::array_ref::ArrayRef;
 use crate::cell::{Cell, CompileEntry};
-use crate::constants::MAX_DICTIONARY_CELLS;
+use crate::constants::{MAX_ARRAY_ELEMENTS, MAX_DICTIONARY_CELLS};
 use crate::dict::{EntryKind, WordEntry, FLAG_HIDDEN, FLAG_IMMEDIATE, FLAG_SYSTEM};
 use crate::error::TbxError;
 use crate::expr::ExprCompiler;
@@ -1019,7 +1019,19 @@ pub fn dim_prim(vm: &mut VM) -> Result<(), TbxError> {
             DimKind::TwoD(d0_tokens, d1_tokens) => {
                 let width = eval_dim_expr(vm, &d0_tokens)?;
                 let height = eval_dim_expr(vm, &d1_tokens)?;
-                ArrayRef::new_2d(vec![Cell::None; width * height], width, height)
+                let total = width
+                    .checked_mul(height)
+                    .ok_or_else(|| TbxError::InvalidArgument {
+                        message: format!("DIM: {width} * {height} overflows"),
+                    })?;
+                if total > MAX_ARRAY_ELEMENTS {
+                    return Err(TbxError::InvalidArgument {
+                        message: format!(
+                            "DIM: total size {total} exceeds maximum {MAX_ARRAY_ELEMENTS}"
+                        ),
+                    });
+                }
+                ArrayRef::new_2d(vec![Cell::None; total], width, height)
             }
         };
 

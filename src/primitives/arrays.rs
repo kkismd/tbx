@@ -1,5 +1,6 @@
 use crate::array_ref::ArrayRef;
 use crate::cell::Cell;
+use crate::constants::MAX_ARRAY_ELEMENTS;
 use crate::error::TbxError;
 use crate::vm::VM;
 
@@ -59,7 +60,17 @@ pub(super) fn array_2d_prim(vm: &mut VM) -> Result<(), TbxError> {
     }
     let width = width_val as usize;
     let height = height_val as usize;
-    let ar = ArrayRef::new_2d(vec![Cell::None; width * height], width, height);
+    let total = width
+        .checked_mul(height)
+        .ok_or_else(|| TbxError::InvalidArgument {
+            message: format!("ARRAY_2D: {width} * {height} overflows"),
+        })?;
+    if total > MAX_ARRAY_ELEMENTS {
+        return Err(TbxError::InvalidArgument {
+            message: format!("ARRAY_2D: total size {total} exceeds maximum {MAX_ARRAY_ELEMENTS}"),
+        });
+    }
+    let ar = ArrayRef::new_2d(vec![Cell::None; total], width, height);
     vm.push(Cell::Array(ar))?;
     Ok(())
 }
