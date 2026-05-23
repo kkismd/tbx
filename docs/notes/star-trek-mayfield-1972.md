@@ -56,6 +56,22 @@ Mike Mayfield が 1972 年に HP 2000C / HP Time-Shared BASIC 向けに書き直
 - HP BASIC の `RND(1)` は 0 以上 1 未満相当の浮動乱数として使われている。現行 TBX の `RND(n)` は整数乱数なので、Mayfield 版の確率分布を再現する helper が必要。
 - HP BASIC の `SQR` は TBX の `SQRT` に対応させる。
 
+### 座標 convention: row/column → [x, y]
+
+Mayfield HP BASIC では `G[Q1, Q2]` の `Q1` が row（縦）、`Q2` が col（横）。
+TBX 実装ではすべての座標を `[x, y]` convention（x = col 方向、y = row 方向）に正規化する。
+
+| Mayfield HP BASIC | TBX 変数名 | 意味 |
+| --- | --- | --- |
+| `Q1` (quadrant row) | `ENT_QY` | Enterprise quadrant の y 座標 |
+| `Q2` (quadrant col) | `ENT_QX` | Enterprise quadrant の x 座標 |
+| `S1` (sector row) | `ENT_SY` | Enterprise sector の y 座標 |
+| `S2` (sector col) | `ENT_SX` | Enterprise sector の x 座標 |
+| `K[I,1]` (Klingon row) | `@K_Y[I]` | Klingon の y 座標 |
+| `K[I,2]` (Klingon col) | `@K_X[I]` | Klingon の x 座標 |
+
+配列アクセスも同様に正規化する: `G[Q1,Q2]` → `@GALAXY[QX, QY]`、`K[I,3]` は energy なので変更なし。
+
 ## データ構造
 
 ### HP BASIC 原典
@@ -70,40 +86,61 @@ Mike Mayfield が 1972 年に HP 2000C / HP Time-Shared BASIC 向けに書き直
 
 | HP BASIC | 役割 | TBX 方針 |
 | --- | --- | --- |
-| `G[8,8]` | galaxy summary。各 quadrant を `K*100 + B*10 + S` で保持 | `DIM @GALAXY[64]` |
-| `Z[8,8]` | cumulative galactic record / computer memory | `DIM @CHART[64]` |
-| `C[9,2]` | course vector table | `DIM @COURSE_R[9]`, `DIM @COURSE_C[9]` または計算 helper |
-| `K[3,3]` | 現 quadrant 内 Klingon: row, col, energy | `@K_R[3]`, `@K_C[3]`, `@K_E[3]` |
+| `G[8,8]` | galaxy summary。各 quadrant を `K*100 + B*10 + S` で保持 | `DIM @GALAXY[8, 8]` |
+| `Z[8,8]` | cumulative galactic record / computer memory | `DIM @CHART[8, 8]` |
+| `C[9,2]` | course vector table | `DIM @COURSE_DX[9]`, `DIM @COURSE_DY[9]` |
+| `K[3,3]` | 現 quadrant 内 Klingon: row, col, energy | `@K_X[3]`, `@K_Y[3]`, `@K_E[3]` |
 | `N[3]` | long-range scan 1行ぶんの一時配列 | local scalar 3個 or `DIM @SCAN_ROW[3]` |
 | `D[8]` | device damage state。負数が damaged | `DIM @DAMAGE[8]` |
-| `Q$`, `R$`, `S$` | short-range sector display strings | 数値 `@SECTOR[64]` + display helper へ置換 |
+| `Q$`, `R$`, `S$` | short-range sector display strings | 数値 `@SECTOR[8, 8]` + display helper へ置換 |
 
 ### TBX 配列方針
 
-現行 TBX では旧 `ARRAY(64)` / `A(i)` ではなく、`DIM @A[n]` と `@A[i]` / `LET @A[i] = expr` を使う。
+現行 TBX の 2D 配列機能（`DIM @A[w, h]`）を使い、8×8 の quadrant/sector マップを直接 2D で保持する。
 
 ```tbx
-DIM @GALAXY[64]
-DIM @CHART[64]
-DIM @SECTOR[64]
-DIM @K_R[3]
-DIM @K_C[3]
+DIM @GALAXY[8, 8]
+DIM @CHART[8, 8]
+DIM @SECTOR[8, 8]
+DIM @K_X[3]
+DIM @K_Y[3]
 DIM @K_E[3]
 DIM @DAMAGE[8]
-DIM @COURSE_R[9]
-DIM @COURSE_C[9]
+DIM @COURSE_DX[9]
+DIM @COURSE_DY[9]
 ```
 
-### 座標変換
+アクセスは `[x, y]` インデックスで直接行う。
 
 ```tbx
-DEF QUAD_IDX(QR, QC)
-  RETURN (QR - 1) * 8 + QC
-END
+# quadrant (QX, QY) の galaxy summary を読む
+@GALAXY[QX, QY]
 
-DEF SECTOR_IDX(SR, SC)
-  RETURN (SR - 1) * 8 + SC
-END
+# quadrant (QX, QY) の chart を更新する
+LET @CHART[QX, QY] = @GALAXY[QX, QY]
+
+# sector (SX, SY) のシンボルを読む
+@SECTOR[SX, SY]
+
+# sector (SX, SY) に Enterprise を置く
+LET @SECTOR[SX, SY] = 1
+```
+
+### 座標変換 helper（historical / 不要）
+
+> **Note**: 2D 配列が実装される以前の設計では、下記のような 1D index 変換 helper が必要だった。
+> 現在の TBX では `@GALAXY[QX, QY]` と直接 2D アクセスできるため、これらは不要。
+> 移植実装では使用しない。
+
+```tbx
+# 旧設計（参考のみ、使用不可）
+# DEF QUAD_IDX(QR, QC)
+#   RETURN (QR - 1) * 8 + QC
+# END
+#
+# DEF SECTOR_IDX(SR, SC)
+#   RETURN (SR - 1) * 8 + SC
+# END
 ```
 
 ## 初期化
@@ -331,9 +368,9 @@ If `T > T0 + T9`, lose by timeout.
 行 2330-2500。
 
 - Disabled if `D[3] < 0`.
-- Prints 3 x 3 surrounding quadrants centered on `(Q1,Q2)`.
+- Prints 3 x 3 surrounding quadrants centered on `(Q1,Q2)` = `(ENT_QX, ENT_QY)`.
 - Out-of-bounds entries remain 0.
-- If computer is operational (`D[7] >= 0`), updates `Z[I,J]=G[I,J]` for scanned quadrants.
+- If computer is operational (`D[7] >= 0`), updates `Z[I,J]=G[I,J]` for scanned quadrants. TBX: `LET @CHART[IX, IY] = @GALAXY[IX, IY]`。
 
 ## Phaser control
 
@@ -360,12 +397,14 @@ where:
 360 DEF FND(D)=SQR((K[I,1]-S1)^2+(K[I,2]-S2)^2)
 ```
 
+TBX: `SQRT((@K_Y[I] - ENT_SY)^2 + (@K_X[I] - ENT_SX)^2)`（Mayfield `K[I,1]`=row→`@K_Y`, `K[I,2]`=col→`@K_X`、`S1`=sector row→`ENT_SY`、`S2`=sector col→`ENT_SX`）。
+
 Notes:
 
 - `K3` is current number of Klingons in quadrant.
 - Damage is inversely proportional to distance.
 - Random multiplier is `2*RND(1)`.
-- Destroyed Klingons call line 3690 helper, decrementing `K3` and `K9` and updating `G[Q1,Q2]`.
+- Destroyed Klingons call line 3690 helper, decrementing `K3` and `K9` and updating `G[Q1,Q2]`. TBX: `LET @GALAXY[ENT_QX, ENT_QY] = ...`。
 
 ## Photon torpedo control
 
@@ -542,8 +581,10 @@ Line 4040 onward:
 
 | HP BASIC variable | 意味 | TBX name | 状態 |
 | --- | --- | --- | --- |
-| `Q1`, `Q2` | Enterprise quadrant row/col | `ENT_QR`, `ENT_QC` | 確認済み |
-| `S1`, `S2` | Enterprise sector row/col | `ENT_SR`, `ENT_SC` | 確認済み |
+| `Q1` (row) | Enterprise quadrant の y 座標 | `ENT_QY` | 確認済み |
+| `Q2` (col) | Enterprise quadrant の x 座標 | `ENT_QX` | 確認済み |
+| `S1` (row) | Enterprise sector の y 座標 | `ENT_SY` | 確認済み |
+| `S2` (col) | Enterprise sector の x 座標 | `ENT_SX` | 確認済み |
 | `T0` | Initial stardate | `START_STARDATE` | 確認済み |
 | `T` | Current stardate | `STARDATE` | 確認済み |
 | `T9` | Mission duration | `MISSION_DAYS` | 確認済み |
@@ -576,7 +617,7 @@ Gameplay formulas が `RND(1)>.98` や `2*RND(1)` に依存するため、単純
 
 ### Sector representation
 
-原典は `Q$`, `R$`, `S$` という 3 本の固定長文字列で 8 x 8 sector display を保持する。TBX ではロジック用に `@SECTOR[64]` を使い、表示時に symbol へ変換するのがよい。
+原典は `Q$`, `R$`, `S$` という 3 本の固定長文字列で 8 x 8 sector display を保持する。TBX ではロジック用に `@SECTOR[8, 8]` を使い、表示時に symbol へ変換するのがよい。
 
 ```text
 0 = empty
@@ -588,7 +629,7 @@ Gameplay formulas が `RND(1)>.98` や `2*RND(1)` に依存するため、単純
 
 ### Library computer
 
-`CMD_COM` は Mayfield `STTR1` の正規機能なので実装対象。とくに option 0 の cumulative galactic record は `@CHART[64]` と連動する。
+`CMD_COM` は Mayfield `STTR1` の正規機能なので実装対象。とくに option 0 の cumulative galactic record は `@CHART[8, 8]` と連動する。
 
 ## 実装前チェックリスト
 
@@ -596,6 +637,6 @@ Gameplay formulas が `RND(1)>.98` や `2*RND(1)` に依存するため、単純
 - [x] このメモに原典行番号との対応が入っている
 - [x] 主要 gameplay formula に原典由来の line reference がある
 - [ ] `RND(1)` compatibility 方針を決める
-- [ ] `Q$`/`R$`/`S$` string-map を `@SECTOR[64]` に置き換える詳細設計を決める
+- [ ] `Q$`/`R$`/`S$` string-map を `@SECTOR[8, 8]` に置き換える詳細設計を決める
 - [ ] 表示幅・空白をどこまで原典に合わせるか決める
 - [ ] `docs/notes/sttr1.bas` の扱い（原典保存として残す / ライセンス・出典注記を追加する）を確認する
