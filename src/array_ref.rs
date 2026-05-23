@@ -29,6 +29,21 @@ use std::rc::Rc;
 use crate::cell::Cell;
 use crate::error::TbxError;
 
+/// Shape metadata for an array binding.
+///
+/// Internal storage is always linear; this enum records the declared
+/// dimensionality so that future 2D element access can compute the correct
+/// flat index.
+#[derive(Debug, Clone, PartialEq)]
+pub enum ArrayShape {
+    /// One-dimensional array: `DIM @A[n]`
+    OneD,
+    /// Two-dimensional array: `DIM @A[w, h]`
+    ///
+    /// The flat storage length is `width * height`.
+    TwoD { width: usize, height: usize },
+}
+
 /// A reference-counted, interior-mutable handle to an array of `Cell` values.
 ///
 /// Multiple `ArrayRef` clones point to the same storage.  All mutation goes
@@ -39,14 +54,34 @@ use crate::error::TbxError;
 #[derive(Clone)]
 pub struct ArrayRef {
     inner: Rc<RefCell<Vec<Cell>>>,
+    shape: ArrayShape,
 }
 
 impl ArrayRef {
     /// Create a new `ArrayRef` wrapping the given element vector.
+    ///
+    /// The shape is set to `ArrayShape::OneD` for backward compatibility.
     pub fn new(elems: Vec<Cell>) -> Self {
         ArrayRef {
             inner: Rc::new(RefCell::new(elems)),
+            shape: ArrayShape::OneD,
         }
+    }
+
+    /// Create a new 2D `ArrayRef` with the given element vector and dimensions.
+    ///
+    /// The caller is responsible for ensuring `elems.len() == width * height`.
+    /// The shape is set to `ArrayShape::TwoD { width, height }`.
+    pub fn new_2d(elems: Vec<Cell>, width: usize, height: usize) -> Self {
+        ArrayRef {
+            inner: Rc::new(RefCell::new(elems)),
+            shape: ArrayShape::TwoD { width, height },
+        }
+    }
+
+    /// Return the shape of this array.
+    pub fn shape(&self) -> &ArrayShape {
+        &self.shape
     }
 
     /// Return the number of elements in the array.
@@ -123,7 +158,7 @@ impl ArrayRef {
 /// semantics for arrays, which are out of scope for this issue.
 impl std::fmt::Debug for ArrayRef {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "ArrayRef({:?})", &*self.inner.borrow())
+        write!(f, "ArrayRef({:?}, {:?})", self.shape, &*self.inner.borrow())
     }
 }
 
@@ -194,6 +229,36 @@ mod tests {
         let ar = ArrayRef::new(vec![Cell::Int(1), Cell::Int(2)]);
         let s = format!("{:?}", ar);
         assert!(s.starts_with("ArrayRef("));
+    }
+
+    // --- ArrayShape / new_2d tests ---
+
+    #[test]
+    fn new_has_oned_shape() {
+        let ar = ArrayRef::new(vec![Cell::Int(1), Cell::Int(2)]);
+        assert_eq!(ar.shape(), &ArrayShape::OneD);
+    }
+
+    #[test]
+    fn new_2d_has_twod_shape() {
+        let elems = vec![Cell::None; 12];
+        let ar = ArrayRef::new_2d(elems, 4, 3);
+        assert_eq!(
+            ar.shape(),
+            &ArrayShape::TwoD {
+                width: 4,
+                height: 3
+            }
+        );
+    }
+
+    #[test]
+    fn new_2d_len_equals_width_times_height() {
+        let width = 4;
+        let height = 3;
+        let elems = vec![Cell::None; width * height];
+        let ar = ArrayRef::new_2d(elems, width, height);
+        assert_eq!(ar.len(), width * height);
     }
 
     #[test]
