@@ -368,9 +368,9 @@ If `T > T0 + T9`, lose by timeout.
 行 2330-2500。
 
 - Disabled if `D[3] < 0`.
-- Prints 3 x 3 surrounding quadrants centered on `(Q1,Q2)` = `(ENT_QX, ENT_QY)`.
+- Prints 3 x 3 surrounding quadrants centered on Mayfield `(Q1,Q2)`. TBX uses `[x, y]`, so the center is `(ENT_QX, ENT_QY)` where `Q1 -> ENT_QY` and `Q2 -> ENT_QX`.
 - Out-of-bounds entries remain 0.
-- If computer is operational (`D[7] >= 0`), updates `Z[I,J]=G[I,J]` for scanned quadrants. TBX: `LET @CHART[IX, IY] = @GALAXY[IX, IY]`。
+- If computer is operational (`D[7] >= 0`), updates `Z[I,J]=G[I,J]` for scanned quadrants. TBX: `LET @CHART[IX, IY] = @GALAXY[IX, IY]`（`I`=row なので `IY = I`、`J`=col なので `IX = J`）。
 
 ## Phaser control
 
