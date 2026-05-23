@@ -3360,4 +3360,31 @@ mod tests {
             "expected compile error for DIM @A[1, 2, 3], got success"
         );
     }
+
+    // --- 2D array shape metadata (issue #745) ---
+
+    #[test]
+    fn test_dim_2d_execute_mode_array_len_is_width_times_height() {
+        // `DIM @A[4, 3]` in execute (top-level) mode must allocate 4 * 3 = 12 elements.
+        let result = run_source(
+            "DIM @A[4, 3]\n\
+             PUTDEC ARRAY_LEN(@A)",
+        );
+        assert!(result.is_ok(), "expected success, got: {result:?}");
+        assert_eq!(result.unwrap().trim(), "12");
+    }
+
+    #[test]
+    fn test_dim_2d_compile_mode_array_len_is_width_times_height() {
+        // `DIM @A[4, 3]` inside a DEF body must allocate 4 * 3 = 12 elements.
+        let result = run_source(
+            "DEF F()\n\
+               DIM @A[4, 3]\n\
+               RETURN ARRAY_LEN(@A)\n\
+             END\n\
+             PUTDEC F()",
+        );
+        assert!(result.is_ok(), "expected success, got: {result:?}");
+        assert_eq!(result.unwrap().trim(), "12");
+    }
 }

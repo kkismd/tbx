@@ -37,6 +37,33 @@ pub(super) fn array_prim(vm: &mut VM) -> Result<(), TbxError> {
     Ok(())
 }
 
+/// Internal primitive used by the `DIM @A[w, h]` compiler to allocate a 2D array.
+///
+/// Pops `Cell::Int(height)` then `Cell::Int(width)` from the stack,
+/// allocates `width * height` `Cell::None` slots with TwoD shape metadata,
+/// and pushes `Cell::Array(ar)` as the handle.
+///
+/// Stack convention: `... width height` → pop height → pop width → push handle.
+pub(super) fn array_2d_prim(vm: &mut VM) -> Result<(), TbxError> {
+    let height_val = vm.pop_int()?;
+    let width_val = vm.pop_int()?;
+    if width_val <= 0 {
+        return Err(TbxError::InvalidArgument {
+            message: format!("ARRAY_2D width must be positive, got {width_val}"),
+        });
+    }
+    if height_val <= 0 {
+        return Err(TbxError::InvalidArgument {
+            message: format!("ARRAY_2D height must be positive, got {height_val}"),
+        });
+    }
+    let width = width_val as usize;
+    let height = height_val as usize;
+    let ar = ArrayRef::new_2d(vec![Cell::None; width * height], width, height);
+    vm.push(Cell::Array(ar))?;
+    Ok(())
+}
+
 /// ARRAY_STORE_LOCAL — hidden system primitive used by the `DIM @A[n]` compiler
 /// to write a `Cell::Array` handle into a local (stack-frame) variable slot.
 ///
