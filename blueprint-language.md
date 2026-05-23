@@ -523,15 +523,6 @@ SET &@A[x, y], expr      # Element write via address
 
 画面表示などのループを書く場合は、通常 `y` を外側のループ、`x` を内側のループとする。
 
-```tbx
-DIM @Screen[80, 25]
-FOR Y = 1 TO 25
-  FOR X = 1 TO 80
-    LET @Screen[X, Y] = 0
-  NEXT X
-NEXT Y
-```
-
 #### 内部ストレージ
 
 内部ストレージは1次元配列のままである。コンパイラ・VMが線形インデックスの計算を担うため、ユーザーがヘルパーコードで計算する必要はない。
