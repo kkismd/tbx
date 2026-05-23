@@ -743,12 +743,95 @@ pub fn dim_prim(vm: &mut VM) -> Result<(), TbxError> {
         collected
     };
 
-    // Reject empty size expression: `DIM @A[]`.
-    if size_tokens.is_empty() {
+    // Split collected tokens into dimension expressions by top-level commas.
+    // Track both parenthesis and nested bracket depth so only top-level commas
+    // split the DIM dimension list.
+    let dim_list: Vec<Vec<crate::lexer::SpannedToken>> = {
+        let mut dims: Vec<Vec<crate::lexer::SpannedToken>> = Vec::new();
+        let mut current: Vec<crate::lexer::SpannedToken> = Vec::new();
+        let mut depth: usize = 0;
+        let mut bracket_depth: usize = 0;
+        for tok in size_tokens {
+            match &tok.token {
+                Token::LParen => {
+                    depth += 1;
+                    current.push(tok);
+                }
+                Token::RParen => {
+                    depth = depth.saturating_sub(1);
+                    current.push(tok);
+                }
+                Token::LBracket => {
+                    bracket_depth += 1;
+                    current.push(tok);
+                }
+                Token::RBracket => {
+                    bracket_depth = bracket_depth.saturating_sub(1);
+                    current.push(tok);
+                }
+                Token::Comma if depth == 0 && bracket_depth == 0 => {
+                    dims.push(current);
+                    current = Vec::new();
+                }
+                _ => {
+                    current.push(tok);
+                }
+            }
+        }
+        dims.push(current);
+        dims
+    };
+
+    // Reject arity 0: `DIM @A[]`.
+    if dim_list.len() == 1 && dim_list[0].is_empty() {
         return Err(TbxError::InvalidExpression {
             reason: "DIM: array size expression must not be empty",
         });
     }
+
+    // Reject arity 3+: `DIM @A[1, 2, 3]`.
+    if dim_list.len() > 2 {
+        return Err(TbxError::InvalidExpression {
+            reason: "DIM: array dimension list must have 1 or 2 elements",
+        });
+    }
+
+    // For a 1D declaration, use the single dimension token list directly.
+    // For a 2D declaration, combine both dimensions: the flat storage size is
+    // width * height.  Element-level 2D access (`@A[x,y]`) is not yet
+    // implemented; this handles only the declaration / allocation step.
+    let size_tokens: Vec<crate::lexer::SpannedToken> = if dim_list.len() == 1 {
+        dim_list.into_iter().next().unwrap()
+    } else {
+        // Build a synthetic token sequence: `dim0 * dim1`.
+        let (d0, d1) = {
+            let mut it = dim_list.into_iter();
+            (it.next().unwrap(), it.next().unwrap())
+        };
+        if d0.is_empty() || d1.is_empty() {
+            return Err(TbxError::InvalidExpression {
+                reason: "DIM: 2D array dimension expression must not be empty",
+            });
+        }
+        // Synthesise a `*` token so the size expression becomes `(d0) * (d1)`.
+        use crate::lexer::{Position, SpannedToken};
+        let dummy_pos = Position { line: 0, col: 0 };
+        let mk = |token: Token| SpannedToken {
+            token,
+            pos: dummy_pos.clone(),
+            source_offset: 0,
+            source_len: 0,
+        };
+        let mut combined: Vec<SpannedToken> = Vec::new();
+        combined.push(mk(Token::LParen));
+        combined.extend(d0);
+        combined.push(mk(Token::RParen));
+        combined.push(mk(Token::Op("*".to_string())));
+        combined.push(mk(Token::LParen));
+        combined.extend(d1);
+        combined.push(mk(Token::RParen));
+        combined
+    };
 
     if vm.is_compiling {
         // --- Compile mode (inside DEF) ---

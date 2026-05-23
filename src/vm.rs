@@ -3279,4 +3279,85 @@ mod tests {
         assert!(result.is_ok(), "expected success, got: {result:?}");
         assert_eq!(result.unwrap().trim(), "5");
     }
+
+    // --- 2D DIM parsing (issue #744) ---
+
+    #[test]
+    fn test_dim_2d_integer_literals_succeeds() {
+        // `DIM @A[8, 8]` must parse without error.
+        // The provisional implementation allocates 8 * 8 = 64 elements as a flat
+        // 1D array; element-level 2D access is not yet implemented.
+        let result = run_source(
+            "DEF F()\n\
+               DIM @A[8, 8]\n\
+               RETURN ARRAY_LEN(@A)\n\
+             END\n\
+             PUTDEC F()",
+        );
+        assert!(result.is_ok(), "expected success, got: {result:?}");
+        assert_eq!(result.unwrap().trim(), "64");
+    }
+
+    #[test]
+    fn test_dim_2d_variable_dimensions_succeeds() {
+        // `DIM @A[W, H]` must parse and compile without error when W and H are
+        // in scope as local parameters.
+        let result = run_source(
+            "DEF MAKE(W, H)\n\
+               DIM @A[W, H]\n\
+               RETURN ARRAY_LEN(@A)\n\
+             END\n\
+             PUTDEC MAKE(4, 3)",
+        );
+        assert!(result.is_ok(), "expected success, got: {result:?}");
+        assert_eq!(result.unwrap().trim(), "12");
+    }
+
+    #[test]
+    fn test_dim_2d_expression_dimensions_succeeds() {
+        // `DIM @A[WIDTH + 1, HEIGHT + 1]` must parse and compile without error.
+        let result = run_source(
+            "DEF MAKE(WIDTH, HEIGHT)\n\
+               DIM @A[WIDTH + 1, HEIGHT + 1]\n\
+               RETURN ARRAY_LEN(@A)\n\
+             END\n\
+             PUTDEC MAKE(7, 7)",
+        );
+        assert!(result.is_ok(), "expected success, got: {result:?}");
+        assert_eq!(result.unwrap().trim(), "64");
+    }
+
+    #[test]
+    fn test_dim_1d_still_works_after_2d_change() {
+        // 1D `DIM @A[10]` must continue to work unchanged.
+        let result = run_source(
+            "DEF F()\n\
+               DIM @A[10]\n\
+               RETURN ARRAY_LEN(@A)\n\
+             END\n\
+             PUTDEC F()",
+        );
+        assert!(result.is_ok(), "expected success, got: {result:?}");
+        assert_eq!(result.unwrap().trim(), "10");
+    }
+
+    #[test]
+    fn test_dim_empty_brackets_is_error() {
+        // `DIM @A[]` must produce a compile error, not a crash.
+        let result = run_source("DIM @A[]");
+        assert!(
+            result.is_err(),
+            "expected compile error for DIM @A[], got success"
+        );
+    }
+
+    #[test]
+    fn test_dim_three_dimensions_is_error() {
+        // `DIM @A[1, 2, 3]` (arity 3) must produce a compile error, not a crash.
+        let result = run_source("DIM @A[1, 2, 3]");
+        assert!(
+            result.is_err(),
+            "expected compile error for DIM @A[1, 2, 3], got success"
+        );
+    }
 }
