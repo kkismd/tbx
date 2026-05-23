@@ -10,11 +10,11 @@ pub const MAX_DATA_STACK_DEPTH: usize = 65_536;
 /// Exceeding this limit raises `TbxError::ReturnStackOverflow`.
 pub const MAX_RETURN_STACK_DEPTH: usize = 4_096;
 
-/// Maximum number of elements a single array may hold.
+/// Maximum number of elements a 2D array allocation may hold.
 ///
-/// Applies to both 1D and 2D allocations.  For 2D arrays, `width * height`
-/// must not exceed this value.  The limit guards against accidental allocation
-/// of multi-gigabyte arrays due to programmer error.
+/// For `DIM @A[width, height]`, `width * height` must not exceed this value.
+/// 1D array allocation currently preserves the existing behavior and does not
+/// apply this limit.
 pub const MAX_ARRAY_ELEMENTS: usize = 16_777_216;
 
 /// Base index offset for VAR-declared local variables in variadic words.
