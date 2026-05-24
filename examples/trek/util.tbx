@@ -1,0 +1,30 @@
+# trek/util.tbx — 座標・乱数・表示補助 helper
+
+# ゲームタイトルとクレジットを表示する
+DEF PRINT_INTRO()
+  # TODO: Mayfield STTR1 instructions / title screen (STTR1.BAS lines 5820-6410)
+END
+
+# プロンプトを表示して数値入力を受け取る
+DEF PROMPT_NUM(PROMPT)
+  PUTSTR PROMPT
+  RETURN GETDEC
+END
+
+# 0 以上 2 未満の乱数 (整数 0..199 を 100.0 で割った値に相当)
+# Mayfield RND(1) * 2 の近似
+# TODO: issue #763 で RND 互換方針が確定したら更新する
+DEF RAND_FACTOR_0_TO_2_100()
+  RETURN RND(200) - 1
+END
+
+# コンディション文字列を更新する
+# GREEN / YELLOW / RED / DOCKED
+DEF UPDATE_CONDITION()
+  # TODO: Mayfield STTR1 condition logic
+END
+
+# デバイス番号に対応する名称を表示する
+DEF PRINT_DEVICE_NAME(D)
+  # TODO: Mayfield STTR1 device names (STTR1.BAS lines 5610-5670)
+END

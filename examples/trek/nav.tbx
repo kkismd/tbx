@@ -1,0 +1,18 @@
+# trek/nav.tbx — 航法・コース・ワープ手続き
+
+# コース・ワープエンジン制御コマンド (STTR1.BAS lines 1410-2320)
+DEF NAVIGATE()
+  # TODO: Mayfield STTR1 navigation (cmd 0)
+END
+
+# コース番号 (1..9) に対応する X 方向移動量を返す
+# 実装時は @COURSE_DX[COURSE] を参照する
+DEF COURSE_DX(COURSE)
+  # TODO: return @COURSE_DX[COURSE]
+END
+
+# コース番号 (1..9) に対応する Y 方向移動量を返す
+# 実装時は @COURSE_DY[COURSE] を参照する
+DEF COURSE_DY(COURSE)
+  # TODO: return @COURSE_DY[COURSE]
+END

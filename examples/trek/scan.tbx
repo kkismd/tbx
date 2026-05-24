@@ -1,0 +1,24 @@
+# trek/scan.tbx — 短距離スキャン・長距離スキャン手続き
+
+# 短距離センサースキャン (STTR1.BAS lines 4120-4530)
+# @SECTOR[8, 8] の内容を 8x8 グリッドで表示する
+DEF SHORT_RANGE_SCAN()
+  # TODO: Mayfield STTR1 short range sensor scan
+END
+
+# 長距離センサースキャン (STTR1.BAS lines 2330-2500)
+# 周囲 3x3 クアドラントの @GALAXY サマリーを表示し @CHART を更新する
+DEF LONG_RANGE_SCAN()
+  # TODO: Mayfield STTR1 long range sensor scan
+END
+
+# ステータス行を表示する (短距離スキャン右列)
+# LINE_NO: 1..8 の行番号
+DEF PRINT_STATUS_LINE(LINE_NO)
+  # TODO: Mayfield STTR1 status line display
+END
+
+# ミッションブリーフィングを表示する (STTR1.BAS line 780)
+DEF PRINT_MISSION_BRIEFING()
+  # TODO: mission orders
+END
