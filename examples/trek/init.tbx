@@ -1,0 +1,42 @@
+# trek/init.tbx — ゲーム初期化手続き
+
+# ゲーム全体の初期化 (STTR1.BAS lines 240-490)
+DEF INIT_GAME()
+  # TODO: Mayfield STTR1 initialization
+END
+
+# 8x8 ギャラクシーサマリーを生成する (STTR1.BAS lines 500-770)
+# 各クアドラントに K*100 + B*10 + S を格納する
+DEF INIT_GALAXY()
+  # TODO: generate 8x8 galaxy summary
+END
+
+# Enterprise の初期クアドラント・セクター位置を決める
+DEF INIT_ENTERPRISE_POSITION()
+  # TODO: random starting position
+END
+
+# コーステーブルを初期化する (STTR1.BAS C[9,2] 相当)
+# @COURSE_DX[1..9], @COURSE_DY[1..9] を設定する
+DEF INIT_COURSE_TABLE()
+  # TODO: Mayfield STTR1 course vector table
+END
+
+# @SECTOR[8, 8] を 0 でクリアする
+DEF CLEAR_SECTOR()
+  VAR Y = 1
+  WHILE Y <= 8
+    VAR X = 1
+    WHILE X <= 8
+      LET @SECTOR[X, Y] = 0
+      LET X = X + 1
+    ENDWH
+    LET Y = Y + 1
+  ENDWH
+END
+
+# 現在のクアドラントをセットアップする (STTR1.BAS lines 810-1260)
+DEF INIT_QUADRANT()
+  CLEAR_SECTOR
+  # TODO: place Enterprise, Klingons, starbases, stars in @SECTOR
+END

@@ -1,0 +1,29 @@
+# trek/combat.tbx — フェイザー・魚雷・クリンゴン攻撃手続き
+
+# フェイザー攻撃コマンド (STTR1.BAS lines 2530-2790)
+DEF PHASER_CONTROL()
+  # TODO: Mayfield STTR1 phaser control (cmd 3)
+END
+
+# 光子魚雷発射コマンド (STTR1.BAS lines 2800-3450)
+DEF TORPEDO_CONTROL()
+  # TODO: Mayfield STTR1 photon torpedo control (cmd 4)
+END
+
+# クリンゴンによる攻撃 (STTR1.BAS lines 3790-3910)
+DEF KLINGON_ATTACK()
+  # TODO: Mayfield STTR1 Klingon attack
+END
+
+# Enterprise から Klingon I までのセクター内距離を返す
+# Klingon 座標は @K_X[I], @K_Y[I]
+DEF DIST_TO_KLINGON(I)
+  VAR DX = @K_X[I] - ENT_SX
+  VAR DY = @K_Y[I] - ENT_SY
+  RETURN SQRT(DX * DX + DY * DY)
+END
+
+# クリンゴンを撃破する (STTR1.BAS lines 3670-3780)
+DEF DESTROY_KLINGON(I)
+  # TODO: remove Klingon I from sector and galaxy summary
+END
