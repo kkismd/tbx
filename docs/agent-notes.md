@@ -175,19 +175,23 @@ Markdown の code fence は backtick 3つ（` ``` `）で統一する。backtick
 
 ## テスト記述上の注意
 
-### `ASSERT` に変数比較を渡すときは括弧が必要
+### `ASSERT` に 2D 配列アクセスを渡すときは括弧が必要
 
-`ASSERT VAR1 = VAR2` のように bare な変数名が両辺に来ると、TBX は `=` を区切りとして 2 引数呼び出し（`argc=2`）と解釈しアサーション失敗になる。括弧でひとつの式にまとめること。
+`ASSERT @ARRAY[X, Y] = VALUE` のように 2D 配列インデックスのカンマが引数トークン列に含まれると、TBX は `argc=2` の 2 引数呼び出しと解釈してアサーションが失敗する。
+
+**根本原因**: TBX の `count_top_level_arity`（`interpreter.rs`）は `(` / `)` でのみネスト深度を追跡し、`[` / `]` は追跡しない。そのため `@SECTOR[ENT_SX, ENT_SY]` 内のカンマを深度0のトップレベル区切りとみなし、arity を 2 と算定する。
 
 ```tbx
-# NG: 2引数として解釈され assertion failed
-ASSERT KLINGONS_HERE = EXP_K
+# NG: [ENT_SX, ENT_SY] 内のカンマが argc=2 を引き起こし assertion failed
+ASSERT @SECTOR[ENT_SX, ENT_SY] = 1
 
-# OK: 括弧でひとつの比較式にする
-ASSERT (KLINGONS_HERE = EXP_K)
+# OK: 外側の () でカンマを depth=1 に押し込み argc=1 にする
+ASSERT (@SECTOR[ENT_SX, ENT_SY] = 1)
 ```
 
-関数呼び出し結果との比較（`ASSERT FOO() = 1`）は `()` があるため問題なく動く。変数同士・変数と配列要素の比較は必ず括弧を付ける（PR #775 の事例）。
+変数同士の比較（`ASSERT VAR1 = VAR2`）はカンマを含まないため argc=1 となり問題ない。
+関数呼び出し結果との比較（`ASSERT FOO() = 1`）も `()` でカンマが囲まれるため問題ない。
+**2D 配列アクセスを含む比較は必ず外側を `()` で包む**（PR #775 の事例）。
 
 ### `VAR x = expr` はトップレベルでは使えない
 
