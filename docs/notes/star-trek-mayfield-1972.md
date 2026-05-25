@@ -200,8 +200,8 @@ TBX における展開後の値:
 | 8 | 1 | 1 | 南東 |
 | 9 | 0 | 1 | コース補間センチネル |
 
-後続の navigation 実装では配列を直接参照する方針:
-`LET DX = @COURSE_DX[COURSE]`、`LET DY = @COURSE_DY[COURSE]`。
+後続の navigation 実装では accessor を通して参照する方針:
+`LET DX = GET_COURSE_DX(COURSE)`、`LET DY = GET_COURSE_DY(COURSE)`。
 
 ## ギャラクシー生成
 
