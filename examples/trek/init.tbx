@@ -24,16 +24,52 @@ DEF INIT_COURSE_TABLE()
   LET @COURSE_DX[9] = 1
 END
 
-# ゲーム全体の初期化 (STTR1.BAS lines 240-490)
-DEF INIT_GAME()
-  INIT_COURSE_TABLE
-  # TODO: Mayfield STTR1 initialization
-END
-
 # 8x8 ギャラクシーサマリーを生成する (STTR1.BAS lines 500-770)
-# 各クアドラントに K*100 + B*10 + S を格納する
+# 各クアドラントに K3*100 + B3*10 + S3 を格納する
+# Klingon 数または Starbase 数が 0 なら galaxy generation をやり直す
 DEF INIT_GALAXY()
-  # TODO: generate 8x8 galaxy summary
+  VAR DONE = 0
+  WHILE DONE = 0
+    LET KLINGONS_LEFT = 0
+    LET BASES_LEFT = 0
+    VAR QY = 1
+    WHILE QY <= 8
+      VAR QX = 1
+      WHILE QX <= 8
+        # Klingon 数: RND(100) を1回引いて区間分岐 (STTR1.BAS lines 520-640)
+        # >98 -> 3体(2%), >95 -> 2体(3%), >80 -> 1体(15%), otherwise -> 0体(80%)
+        VAR R1 = RND(100)
+        VAR K3 = 0
+        IF R1 > 98
+          LET K3 = 3
+        ELSIF R1 > 95
+          LET K3 = 2
+        ELSIF R1 > 80
+          LET K3 = 1
+        ENDIF
+        # Starbase 数: RND(100) > 96 -> 1基(4%), otherwise -> 0基(96%) (STTR1.BAS lines 660-700)
+        VAR B3 = 0
+        IF RND(100) > 96
+          LET B3 = 1
+        ENDIF
+        # Star 数: 1..8 の一様分布 (STTR1.BAS line 720)
+        VAR S3 = RND(8)
+        # クアドラントサマリーを格納 (STTR1.BAS line 730)
+        LET @GALAXY[QX, QY] = K3 * 100 + B3 * 10 + S3
+        LET KLINGONS_LEFT = KLINGONS_LEFT + K3
+        LET BASES_LEFT = BASES_LEFT + B3
+        LET QX = QX + 1
+      ENDWH
+      LET QY = QY + 1
+    ENDWH
+    LET KLINGONS_INITIAL = KLINGONS_LEFT
+    # B9 <= 0 OR K9 <= 0 のとき galaxy generation をやり直す (STTR1.BAS line 775)
+    IF KLINGONS_LEFT > 0
+      IF BASES_LEFT > 0
+        LET DONE = 1
+      ENDIF
+    ENDIF
+  ENDWH
 END
 
 # Enterprise の初期クアドラント・セクター位置を決める
@@ -58,4 +94,12 @@ END
 DEF INIT_QUADRANT()
   CLEAR_SECTOR
   # TODO: place Enterprise, Klingons, starbases, stars in @SECTOR
+END
+
+# ゲーム全体の初期化 (STTR1.BAS lines 240-490)
+# 前方参照を避けるため、呼び出す DEF より後に定義する
+DEF INIT_GAME()
+  INIT_COURSE_TABLE
+  INIT_GALAXY
+  # TODO: remaining Mayfield STTR1 initialization
 END
