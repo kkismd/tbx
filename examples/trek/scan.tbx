@@ -1,21 +1,71 @@
 # trek/scan.tbx — 短距離スキャン・長距離スキャン手続き
 
+# セクター値を表示記号に変換する (STTR1.BAS lines 5820-5860)
+# 0=空, 1=Enterprise, 2=Klingon, 3=Starbase, 4=Star
+DEF SECTOR_SYMBOL(VAL)
+  IF VAL = 1
+    RETURN "<*>"
+  ELSIF VAL = 2
+    RETURN "+++"
+  ELSIF VAL = 3
+    RETURN ">!<"
+  ELSIF VAL = 4
+    RETURN " * "
+  ELSE
+    RETURN "   "
+  ENDIF
+END
+
+# ステータス行を表示する (短距離スキャン右列)
+# LINE_NO: 1..8 の行番号
+# 各行に STARDATE / CONDITION / QUADRANT / SECTOR / ENERGY / TORPEDOES / SHIELDS / KLINGONS LEFT を表示する
+DEF PRINT_STATUS_LINE(LINE_NO)
+  IF LINE_NO = 1
+    PRINTLN "   STARDATE        ", STARDATE
+  ELSIF LINE_NO = 2
+    PRINTLN "   CONDITION       ", CONDITION
+  ELSIF LINE_NO = 3
+    PRINTLN "   QUADRANT        ", ENT_QX, ",", ENT_QY
+  ELSIF LINE_NO = 4
+    PRINTLN "   SECTOR          ", ENT_SX, ",", ENT_SY
+  ELSIF LINE_NO = 5
+    PRINTLN "   ENERGY          ", ENERGY
+  ELSIF LINE_NO = 6
+    PRINTLN "   TORPEDOES       ", TORPEDOES
+  ELSIF LINE_NO = 7
+    PRINTLN "   SHIELDS         ", SHIELDS
+  ELSIF LINE_NO = 8
+    PRINTLN "   KLINGONS LEFT   ", KLINGONS_LEFT
+  ELSE
+    PRINTLN
+  ENDIF
+END
+
 # 短距離センサースキャン (STTR1.BAS lines 4120-4530)
-# @SECTOR[8, 8] の内容を 8x8 グリッドで表示する
+# @SECTOR[SX, SY] の内容を 8x8 グリッドで表示する
+# 外側ループ SY=1..8 (行), 内側ループ SX=1..8 (列)
+# 各行の右にステータス情報を表示する
 DEF SHORT_RANGE_SCAN()
-  # TODO: Mayfield STTR1 short range sensor scan
+  UPDATE_CONDITION
+  PRINTLN "---------------------------------"
+  VAR SY = 1
+  WHILE SY <= 8
+    VAR SX = 1
+    WHILE SX <= 8
+      PUTSTR " "
+      PUTSTR SECTOR_SYMBOL(@SECTOR[SX, SY])
+      LET SX = SX + 1
+    ENDWH
+    PRINT_STATUS_LINE SY
+    LET SY = SY + 1
+  ENDWH
+  PRINTLN "---------------------------------"
 END
 
 # 長距離センサースキャン (STTR1.BAS lines 2330-2500)
 # 周囲 3x3 クアドラントの @GALAXY サマリーを表示し @CHART を更新する
 DEF LONG_RANGE_SCAN()
   # TODO: Mayfield STTR1 long range sensor scan
-END
-
-# ステータス行を表示する (短距離スキャン右列)
-# LINE_NO: 1..8 の行番号
-DEF PRINT_STATUS_LINE(LINE_NO)
-  # TODO: Mayfield STTR1 status line display
 END
 
 # ミッションブリーフィングを表示する (STTR1.BAS line 780)

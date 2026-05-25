@@ -1,0 +1,36 @@
+# trek/test_scan.tbx — SHORT_RANGE_SCAN() smoke test
+# SECTOR_SYMBOL の変換と INIT_GAME 後の初期状態を検証する
+
+USE "state.tbx"
+USE "util.tbx"
+USE "init.tbx"
+USE "scan.tbx"
+USE "../../lib/tests/helper.tbx"
+
+DEF RUN_SMOKE_TEST()
+  INIT_GAME
+
+  # SECTOR_SYMBOL の変換が正しいか検証する
+  ASSERT (SECTOR_SYMBOL(0) = "   ")
+  ASSERT (SECTOR_SYMBOL(1) = "<*>")
+  ASSERT (SECTOR_SYMBOL(2) = "+++")
+  ASSERT (SECTOR_SYMBOL(3) = ">!<")
+  ASSERT (SECTOR_SYMBOL(4) = " * ")
+
+  # INIT_GAME 後にエネルギー・武装・スターデートが初期化されているか検証する
+  ASSERT (ENERGY = 3000)
+  ASSERT (MAX_ENERGY = 3000)
+  ASSERT (TORPEDOES = 10)
+  ASSERT (MAX_TORPEDOES = 10)
+  ASSERT (SHIELDS = 0)
+  ASSERT (STARDATE > 0)
+  ASSERT (STARDATE = START_STARDATE)
+
+  # Enterprise セルが @SECTOR[ENT_SX, ENT_SY] に配置されている
+  ASSERT (@SECTOR[ENT_SX, ENT_SY] = 1)
+
+  # SHORT_RANGE_SCAN を呼び出してもクラッシュしないこと
+  SHORT_RANGE_SCAN
+END
+
+RUN_SMOKE_TEST

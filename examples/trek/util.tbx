@@ -26,10 +26,18 @@ DEF CHANCE(true_percent)
   RETURN RND(100) <= true_percent
 END
 
-# コンディション文字列を更新する
-# GREEN / YELLOW / RED / DOCKED
+# コンディション文字列を更新する (STTR1.BAS lines 4310-4380)
+# KLINGONS_HERE > 0 -> "RED"
+# ENERGY < MAX_ENERGY / 10 -> "YELLOW"
+# otherwise -> "GREEN"
 DEF UPDATE_CONDITION()
-  # TODO: Mayfield STTR1 condition logic
+  IF KLINGONS_HERE > 0
+    LET CONDITION = "RED"
+  ELSIF ENERGY < MAX_ENERGY / 10
+    LET CONDITION = "YELLOW"
+  ELSE
+    LET CONDITION = "GREEN"
+  ENDIF
 END
 
 # デバイス番号に対応する名称を表示する
