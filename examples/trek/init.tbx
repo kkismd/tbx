@@ -72,9 +72,13 @@ DEF INIT_GALAXY()
   ENDWH
 END
 
-# Enterprise の初期クアドラント・セクター位置を決める
+# Enterprise の初期クアドラント・セクター位置を決める (STTR1.BAS lines 370-400)
+# Q1,Q2,S1,S2 = INT(RND(1)*8+1) に相当
 DEF INIT_ENTERPRISE_POSITION()
-  # TODO: random starting position
+  LET ENT_QX = RND(8)
+  LET ENT_QY = RND(8)
+  LET ENT_SX = RND(8)
+  LET ENT_SY = RND(8)
 END
 
 # @SECTOR[8, 8] を 0 でクリアする
@@ -90,16 +94,62 @@ DEF CLEAR_SECTOR()
   ENDWH
 END
 
+# ランダムな空 sector を探し、FOUND_SX / FOUND_SY に書き込む (STTR1.BAS lines 5380-5450)
+# @SECTOR[SX, SY] = 0 (空) になる座標が見つかるまで引き直す
+DEF PICK_RANDOM_EMPTY_SECTOR()
+  LET FOUND_SX = RND(8)
+  LET FOUND_SY = RND(8)
+  WHILE @SECTOR[FOUND_SX, FOUND_SY] <> 0
+    LET FOUND_SX = RND(8)
+    LET FOUND_SY = RND(8)
+  ENDWH
+END
+
 # 現在のクアドラントをセットアップする (STTR1.BAS lines 810-1260)
+# @GALAXY[ENT_QX, ENT_QY] の summary を decode し、
+# Enterprise / Klingon / Starbase / Star を @SECTOR に配置する
 DEF INIT_QUADRANT()
   CLEAR_SECTOR
-  # TODO: place Enterprise, Klingons, starbases, stars in @SECTOR
+  # @GALAXY[ENT_QX, ENT_QY] から K3/B3/S3 を decode する (STTR1.BAS lines 830-860)
+  VAR SUMMARY = @GALAXY[ENT_QX, ENT_QY]
+  LET KLINGONS_HERE = SUMMARY / 100
+  LET BASES_HERE = (SUMMARY / 10) - (KLINGONS_HERE * 10)
+  LET STARS_HERE = SUMMARY - ((SUMMARY / 10) * 10)
+  # Enterprise を配置する (STTR1.BAS lines 990-1010)
+  LET @SECTOR[ENT_SX, ENT_SY] = 1
+  # Klingon を配置する (STTR1.BAS lines 1020-1110)
+  VAR I = 1
+  WHILE I <= KLINGONS_HERE
+    PICK_RANDOM_EMPTY_SECTOR
+    LET @K_X[I] = FOUND_SX
+    LET @K_Y[I] = FOUND_SY
+    LET @K_E[I] = KLINGON_INIT_ENERGY
+    LET @SECTOR[FOUND_SX, FOUND_SY] = 2
+    LET I = I + 1
+  ENDWH
+  # Starbase を配置する (STTR1.BAS lines 1120-1180)
+  VAR J = 1
+  WHILE J <= BASES_HERE
+    PICK_RANDOM_EMPTY_SECTOR
+    LET @SECTOR[FOUND_SX, FOUND_SY] = 3
+    LET J = J + 1
+  ENDWH
+  # Star を配置する (STTR1.BAS lines 1190-1250)
+  VAR K = 1
+  WHILE K <= STARS_HERE
+    PICK_RANDOM_EMPTY_SECTOR
+    LET @SECTOR[FOUND_SX, FOUND_SY] = 4
+    LET K = K + 1
+  ENDWH
 END
 
 # ゲーム全体の初期化 (STTR1.BAS lines 240-490)
 # 前方参照を避けるため、呼び出す DEF より後に定義する
 DEF INIT_GAME()
+  # Klingon 初期エネルギー (STTR1.BAS line 340: S9=200)
+  LET KLINGON_INIT_ENERGY = 200
   INIT_COURSE_TABLE
   INIT_GALAXY
-  # TODO: remaining Mayfield STTR1 initialization
+  INIT_ENTERPRISE_POSITION
+  INIT_QUADRANT
 END
