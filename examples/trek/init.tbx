@@ -1,7 +1,32 @@
 # trek/init.tbx — ゲーム初期化手続き
 
+# コーステーブルを初期化する (STTR1.BAS lines 420-440 C[9,2] 相当)
+# Mayfield C[I,1] = row delta -> TBX @COURSE_DY[I]
+# Mayfield C[I,2] = col delta -> TBX @COURSE_DX[I]
+DEF INIT_COURSE_TABLE()
+  LET @COURSE_DY[1] = 0   # 東
+  LET @COURSE_DX[1] = 1
+  LET @COURSE_DY[2] = -1  # 北東
+  LET @COURSE_DX[2] = 1
+  LET @COURSE_DY[3] = -1  # 北
+  LET @COURSE_DX[3] = 0
+  LET @COURSE_DY[4] = -1  # 北西
+  LET @COURSE_DX[4] = -1
+  LET @COURSE_DY[5] = 0   # 西
+  LET @COURSE_DX[5] = -1
+  LET @COURSE_DY[6] = 1   # 南西
+  LET @COURSE_DX[6] = -1
+  LET @COURSE_DY[7] = 1   # 南
+  LET @COURSE_DX[7] = 0
+  LET @COURSE_DY[8] = 1   # 南東
+  LET @COURSE_DX[8] = 1
+  LET @COURSE_DY[9] = 0   # コース補間センチネル (course 1 と同値)
+  LET @COURSE_DX[9] = 1
+END
+
 # ゲーム全体の初期化 (STTR1.BAS lines 240-490)
 DEF INIT_GAME()
+  INIT_COURSE_TABLE
   # TODO: Mayfield STTR1 initialization
 END
 
@@ -14,12 +39,6 @@ END
 # Enterprise の初期クアドラント・セクター位置を決める
 DEF INIT_ENTERPRISE_POSITION()
   # TODO: random starting position
-END
-
-# コーステーブルを初期化する (STTR1.BAS C[9,2] 相当)
-# @COURSE_DX[1..9], @COURSE_DY[1..9] を設定する
-DEF INIT_COURSE_TABLE()
-  # TODO: Mayfield STTR1 course vector table
 END
 
 # @SECTOR[8, 8] を 0 でクリアする

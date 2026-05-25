@@ -176,6 +176,33 @@ LET @SECTOR[SX, SY] = 1
 
 コースは 1 以上 9 未満。実数値が許可され、`C2=INT(C1)` のあと `C[C2]` と `C[C2+1]` の線形補間で vector を作る。
 
+### TBX `@COURSE_DX` / `@COURSE_DY` への読み替え
+
+Mayfield では `C[course, 1]` が row delta（縦方向）、`C[course, 2]` が col delta（横方向）。
+TBX は `[x, y]` convention なので次のように読み替える。
+
+| Mayfield | 意味 | TBX |
+| --- | --- | --- |
+| `C[course, 1]` | row delta | `@COURSE_DY[course]` |
+| `C[course, 2]` | col delta | `@COURSE_DX[course]` |
+
+TBX における展開後の値:
+
+| course | `@COURSE_DY` | `@COURSE_DX` | 方角 |
+| ---: | ---: | ---: | --- |
+| 1 | 0 | 1 | 東 |
+| 2 | -1 | 1 | 北東 |
+| 3 | -1 | 0 | 北 |
+| 4 | -1 | -1 | 北西 |
+| 5 | 0 | -1 | 西 |
+| 6 | 1 | -1 | 南西 |
+| 7 | 1 | 0 | 南 |
+| 8 | 1 | 1 | 南東 |
+| 9 | 0 | 1 | コース補間センチネル |
+
+後続の navigation 実装では配列を直接参照する方針:
+`LET DX = @COURSE_DX[COURSE]`、`LET DY = @COURSE_DY[COURSE]`。
+
 ## ギャラクシー生成
 
 行 490-770 で、Klingon 数・starbase 数・star 数を生成する。

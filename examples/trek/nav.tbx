@@ -6,13 +6,13 @@ DEF NAVIGATE()
 END
 
 # コース番号 (1..9) に対応する X 方向移動量を返す
-# 実装時は @COURSE_DX[COURSE] を参照する
-DEF COURSE_DX(COURSE)
-  # TODO: return @COURSE_DX[COURSE]
+# 配列 @COURSE_DX との混同を避けるため GET_COURSE_DX と命名する
+DEF GET_COURSE_DX(COURSE)
+  RETURN @COURSE_DX[COURSE]
 END
 
 # コース番号 (1..9) に対応する Y 方向移動量を返す
-# 実装時は @COURSE_DY[COURSE] を参照する
-DEF COURSE_DY(COURSE)
-  # TODO: return @COURSE_DY[COURSE]
+# 配列 @COURSE_DY との混同を避けるため GET_COURSE_DY と命名する
+DEF GET_COURSE_DY(COURSE)
+  RETURN @COURSE_DY[COURSE]
 END
