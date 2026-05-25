@@ -1,5 +1,22 @@
 # trek/scan.tbx — 短距離スキャン・長距離スキャン手続き
 
+# 座標が sector 境界内 (1..8 × 1..8) か判定する
+DEF IS_IN_SECTOR_BOUNDS(X, Y)
+  IF X < 1
+    RETURN 0
+  ENDIF
+  IF X > 8
+    RETURN 0
+  ENDIF
+  IF Y < 1
+    RETURN 0
+  ENDIF
+  IF Y > 8
+    RETURN 0
+  ENDIF
+  RETURN 1
+END
+
 # セクター値を表示記号に変換する (STTR1.BAS lines 5820-5860)
 # 0=空, 1=Enterprise, 2=Klingon, 3=Starbase, 4=Star
 DEF SECTOR_SYMBOL(VAL)
@@ -14,6 +31,34 @@ DEF SECTOR_SYMBOL(VAL)
   ELSE
     RETURN "   "
   ENDIF
+END
+
+# docking 判定 (STTR1.BAS lines 4120-4300)
+# Enterprise 周辺 3x3 sector を調べ Starbase (3) が隣接していれば dock する
+# dock 時: DOCKED=1, CONDITION="DOCKED", energy/torpedoes を最大値に補給, SHIELDS=0
+# dock なし時: DOCKED=0
+DEF CHECK_DOCKING()
+  LET DOCKED = 0
+  VAR DSY = ENT_SY - 1
+  WHILE DSY <= ENT_SY + 1
+    VAR DSX = ENT_SX - 1
+    WHILE DSX <= ENT_SX + 1
+      IF DOCKED = 0
+        IF IS_IN_SECTOR_BOUNDS(DSX, DSY)
+          IF @SECTOR[DSX, DSY] = 3
+            LET DOCKED = 1
+            LET CONDITION = "DOCKED"
+            LET ENERGY = MAX_ENERGY
+            LET TORPEDOES = MAX_TORPEDOES
+            LET SHIELDS = 0
+            PRINTLN "SHIELDS DROPPED FOR DOCKING PURPOSES"
+          ENDIF
+        ENDIF
+      ENDIF
+      LET DSX = DSX + 1
+    ENDWH
+    LET DSY = DSY + 1
+  ENDWH
 END
 
 # ステータス行を表示する (短距離スキャン右列)
@@ -46,7 +91,11 @@ END
 # 外側ループ SY=1..8 (行), 内側ループ SX=1..8 (列)
 # 各行の右にステータス情報を表示する
 DEF SHORT_RANGE_SCAN()
-  UPDATE_CONDITION
+  # TODO: @DAMAGE[2] < 0 の場合は "*** SHORT RANGE SENSORS ARE OUT ***" を表示してスキップ (damage check, 本 issue 非目標)
+  CHECK_DOCKING
+  IF DOCKED = 0
+    UPDATE_CONDITION
+  ENDIF
   PRINTLN "---------------------------------"
   VAR SY = 1
   WHILE SY <= 8

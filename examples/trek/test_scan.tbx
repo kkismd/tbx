@@ -17,7 +17,7 @@ DEF RUN_SMOKE_TEST()
   ASSERT (SECTOR_SYMBOL(3) = ">!<")
   ASSERT (SECTOR_SYMBOL(4) = " * ")
 
-  # INIT_GAME 後にエネルギー・武装・スターデートが初期化されているか検証する
+  # INIT_GAME 後にエネルギー・武装・スターデート・フラグが初期化されているか検証する
   ASSERT (ENERGY = 3000)
   ASSERT (MAX_ENERGY = 3000)
   ASSERT (TORPEDOES = 10)
@@ -25,6 +25,8 @@ DEF RUN_SMOKE_TEST()
   ASSERT (SHIELDS = 0)
   ASSERT (STARDATE > 0)
   ASSERT (STARDATE = START_STARDATE)
+  ASSERT (DOCKED = 0)
+  ASSERT (GAME_OVER = 0)
 
   # Enterprise セルが @SECTOR[ENT_SX, ENT_SY] に配置されている
   ASSERT (@SECTOR[ENT_SX, ENT_SY] = 1)
@@ -33,4 +35,26 @@ DEF RUN_SMOKE_TEST()
   SHORT_RANGE_SCAN
 END
 
+# docking 判定のテスト: Enterprise 隣接セルに Starbase を置いて DOCKED になるか確認する
+DEF TEST_DOCKING()
+  INIT_GAME
+  # Enterprise 周辺のセルに Starbase (3) を配置する
+  # ENT_SX + 1 が境界内なら使う、そうでなければ ENT_SX - 1 を使う
+  VAR SB_SX = ENT_SX + 1
+  VAR SB_SY = ENT_SY
+  IF SB_SX > 8
+    LET SB_SX = ENT_SX - 1
+  ENDIF
+  LET @SECTOR[SB_SX, SB_SY] = 3
+  # ENERGY を少し減らして補給を確認する
+  LET ENERGY = ENERGY - 100
+  CHECK_DOCKING
+  ASSERT (CONDITION = "DOCKED")
+  ASSERT (DOCKED = 1)
+  ASSERT (ENERGY = MAX_ENERGY)
+  ASSERT (TORPEDOES = MAX_TORPEDOES)
+  ASSERT (SHIELDS = 0)
+END
+
 RUN_SMOKE_TEST
+TEST_DOCKING
