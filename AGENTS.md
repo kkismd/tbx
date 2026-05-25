@@ -2,6 +2,11 @@
 
 このファイルはすべてのAIエージェント（サブエージェント含む）に適用される共通ルールを定義します。
 
+## 実装前に読むべきドキュメント
+
+- **[`docs/agent-notes.md`](docs/agent-notes.md)** — 実装上の注意・落とし穴・レビュー由来の知見をまとめた日本語の共有ノート。構文の落とし穴・配列 convention・ブランチ運用など、実装前に確認すること。
+- **[`docs/notes/star-trek-mayfield-1972.md`](docs/notes/star-trek-mayfield-1972.md)** — STTR1 実装時に参照する Mayfield 原典のルール抽出メモ。
+
 ## TBX Core Design Principles (最優先)
 
 TBX は、実用的な言語機能を拡充しながらも、コアを小さく、直交的で、拡張可能に保つことを目指す。
