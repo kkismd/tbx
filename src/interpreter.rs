@@ -1380,10 +1380,10 @@ fn count_top_level_arity(tokens: &[SpannedToken]) -> Result<usize, TbxError> {
     let mut commas: usize = 0;
     for st in tokens {
         match &st.token {
-            Token::LParen => depth += 1,
-            Token::RParen => {
+            Token::LParen | Token::LBracket => depth += 1,
+            Token::RParen | Token::RBracket => {
                 depth = depth.checked_sub(1).ok_or(TbxError::InvalidExpression {
-                    reason: "unmatched ')' in argument list",
+                    reason: "unmatched ')' or ']' in argument list",
                 })?;
             }
             Token::Comma if depth == 0 => commas += 1,
@@ -1683,6 +1683,22 @@ GREET";
             count_top_level_arity(&tokens),
             Err(TbxError::InvalidExpression { .. })
         ));
+    }
+
+    #[test]
+    fn test_count_top_level_arity_nested_brackets() {
+        // Commas inside brackets must not be counted as top-level separators.
+        // Regression test for issue #776: @A[1, 2] inside a call argument must
+        // not be misinterpreted as two separate arguments.
+        let tokens = tokenize_args("@A[1 , 2]");
+        assert_eq!(count_top_level_arity(&tokens), Ok(1));
+    }
+
+    #[test]
+    fn test_count_top_level_arity_mixed_brackets_and_parens() {
+        // f(@A[1, 2], @B[3, 4]) must count as 2 top-level arguments.
+        let tokens = tokenize_args("f(@A[1 , 2]) , g(@B[3 , 4])");
+        assert_eq!(count_top_level_arity(&tokens), Ok(2));
     }
 
     #[test]
