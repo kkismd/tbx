@@ -625,10 +625,17 @@ Examples:
 
 # R1=RND(1); IF R1>.98; IF R1>.95; IF R1>.8
 VAR R1 = RND(100)
-IF R1 > 98 ; ...
-IF R1 > 95 ; ...
-IF R1 > 80 ; ...
-````
+IF R1 > 98
+  # line 580 相当
+ELSIF R1 > 95
+  # line 610 相当
+ELSIF R1 > 80
+  # line 640 相当
+ELSE
+  # fallthrough
+ENDIF
+```
+
 
 `2*RND(1)` は phaser / Klingon attack の damage multiplier として使われる。整数除算の早すぎる丸めを避けるため、可能な限り先に乱数係数を掛けてから割る。
 
