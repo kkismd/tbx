@@ -11,11 +11,19 @@ DEF PROMPT_NUM(PROMPT)
   RETURN GETDEC
 END
 
-# 0 以上 2 未満の乱数 (整数 0..199 を 100.0 で割った値に相当)
-# Mayfield RND(1) * 2 の近似
-# TODO: issue #763 で RND 互換方針が確定したら更新する
+# 0..99 の整数 percent roll
+DEF ROLL_PERCENT()
+  RETURN RND(100)
+END
+
+# 0..199 2*RND(1) を scale=100 で表現する係数
 DEF RAND_FACTOR_0_TO_2_100()
   RETURN RND(200) - 1
+END
+
+# true_percent は 0..100
+DEF CHANCE(true_percent)
+  RETURN RND(100) <= true_percent
 END
 
 # コンディション文字列を更新する

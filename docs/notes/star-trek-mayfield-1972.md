@@ -608,12 +608,31 @@ Enterprise に隣接するすべてのセクター（斜め含む）にスター
 
 ### `RND(1)` 互換性
 
-原典は floating `RND(1)` を多用する。現行 TBX の `RND(n)` は整数 `[1,n]` なので、Mayfield 版を自然に移植するには以下のどちらかが必要。
+Mayfield HP BASIC の `RND(1)` は `0 <= r < 1` の浮動小数乱数として使われている。TBX の `RND(n)` は `1..n` の整数乱数なので、STTR1 移植では次の方針で読み替える。
 
-1. `RND_FLOAT()` primitive を追加する
-2. 高解像度整数乱数から `0 <= x < 1` を作る helper を用意する
+| Mayfield pattern | TBX policy |
+| --- | --- |
+| `INT(RND(1)*N + A)` | `RND(N) + A - 1` |
+| `RND(1) > p` | `RND(100)` による percent check |
+| `R1=RND(1)` 後に複数 `IF` | TBX でも乱数を1回だけ引き、同じ値で区間分岐する |
+| `2*RND(1)` | `RND(200)-1` を scale 100 の `0..199` 係数として扱う |
 
-ゲームプレイの計算式が `RND(1)>.98` や `2*RND(1)` に依存するため、単純に `RND(100)` へ置き換える場合も helper 名を分けて意図を残す。
+Examples:
+
+```tbx
+# INT(RND(1)*20+20)*100
+(RND(20) + 19) * 100
+
+# R1=RND(1); IF R1>.98; IF R1>.95; IF R1>.8
+VAR R1 = RND(100)
+IF R1 > 98 ; ...
+IF R1 > 95 ; ...
+IF R1 > 80 ; ...
+````
+
+`2*RND(1)` は phaser / Klingon attack の damage multiplier として使われる。整数除算の早すぎる丸めを避けるため、可能な限り先に乱数係数を掛けてから割る。
+
+`FND(0)` は Enterprise と Klingon `I` の距離であり、TBX では `DIST_TO_KLINGON(I)` helper に寄せる。
 
 ### セクター表現
 
