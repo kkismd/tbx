@@ -17,6 +17,34 @@ DEF IS_IN_SECTOR_BOUNDS(X, Y)
   RETURN 1
 END
 
+# 座標が quadrant 境界内 (1..8 × 1..8) か判定する
+DEF IS_IN_QUAD_BOUNDS(QX, QY)
+  IF QX < 1
+    RETURN 0
+  ENDIF
+  IF QX > 8
+    RETURN 0
+  ENDIF
+  IF QY < 1
+    RETURN 0
+  ENDIF
+  IF QY > 8
+    RETURN 0
+  ENDIF
+  RETURN 1
+END
+
+# 整数 N を 3 桁ゼロ埋め形式で出力する (改行なし)
+# 原典 Mayfield STTR1 IMAGE 2510 の "3D" に対応する
+DEF PRINT_3D(N)
+  IF N < 10
+    PUTSTR "00"
+  ELSIF N < 100
+    PUTSTR "0"
+  ENDIF
+  PUTDEC N
+END
+
 # セクター値を表示記号に変換する (STTR1.BAS lines 5820-5860)
 # 0=空, 1=Enterprise, 2=Klingon, 3=Starbase, 4=Star
 DEF SECTOR_SYMBOL(VAL)
@@ -113,8 +141,63 @@ END
 
 # 長距離センサースキャン (STTR1.BAS lines 2330-2500)
 # 周囲 3x3 クアドラントの @GALAXY サマリーを表示し @CHART を更新する
+#
+# 座標読み替え:
+#   Mayfield Q1 (row) -> ENT_QY,  Mayfield Q2 (col) -> ENT_QX
+#   Mayfield I (row ループ) -> LQY,  Mayfield J (col ループ) -> LQX
+#   Mayfield G[I,J] -> @GALAXY[LQX, LQY]  (TBX は [x, y] = [col, row] 順)
+#   Mayfield Z[I,J] -> @CHART[LQX, LQY]
+#
+# 表示ヘッダーは原典に寄せて QY,QX 順 (Mayfield の Q1,Q2 = row,col に対応)
+# 内部アクセスは TBX convention の @GALAXY[QX, QY] に統一する
 DEF LONG_RANGE_SCAN()
-  # TODO: Mayfield STTR1 long range sensor scan
+  # TODO: @DAMAGE[3] < 0 の場合は "LONG RANGE SENSORS ARE INOPERABLE" を表示してスキップ (Mayfield 2330-2360, damage check は後続 issue で実装)
+  # 原典 2370: PRINT USING 2350;Q1,Q2 → ヘッダーは原典に寄せて QY,QX 順
+  PUTSTR "LONG RANGE SENSOR SCAN FOR QUADRANT "
+  PUTDEC ENT_QY
+  PUTSTR ","
+  PUTDEC ENT_QX
+  PRINTLN
+  PRINTLN "-----------------"
+  # 外側ループ: LQY=ENT_QY-1..ENT_QY+1 (Mayfield I=Q1-1..Q1+1, row方向)
+  VAR LQY = ENT_QY - 1
+  WHILE LQY <= ENT_QY + 1
+    VAR N1 = 0
+    VAR N2 = 0
+    VAR N3 = 0
+    VAR GVAL = 0
+    # 内側ループ: LQX=ENT_QX-1..ENT_QX+1 (Mayfield J=Q2-1..Q2+1, col方向)
+    VAR LQX = ENT_QX - 1
+    WHILE LQX <= ENT_QX + 1
+      LET GVAL = 0
+      # 範囲外は 0 として扱う (Mayfield 2420: IF I<1 OR I>8 OR J<1 OR J>8 THEN 2460)
+      IF IS_IN_QUAD_BOUNDS(LQX, LQY)
+        LET GVAL = @GALAXY[LQX, LQY]
+        # TODO: @DAMAGE[7] < 0 の場合は @CHART 更新をスキップ (Mayfield 2440, damage check は後続 issue で実装)
+        LET @CHART[LQX, LQY] = GVAL
+      ENDIF
+      # Mayfield N[J-Q2+2] への格納 (Mayfield 2430): LQX=ENT_QX-1->N1, ENT_QX->N2, ENT_QX+1->N3
+      IF LQX = ENT_QX - 1
+        LET N1 = GVAL
+      ELSIF LQX = ENT_QX
+        LET N2 = GVAL
+      ELSE
+        LET N3 = GVAL
+      ENDIF
+      LET LQX = LQX + 1
+    ENDWH
+    # 原典 2470: PRINT USING 2510;N[1],N[2],N[3] → ": NNN : NNN : NNN :"
+    PUTSTR ": "
+    PRINT_3D N1
+    PUTSTR " : "
+    PRINT_3D N2
+    PUTSTR " : "
+    PRINT_3D N3
+    PRINTLN " :"
+    # 原典 2480: PRINT USING 2520 → "-----------------"
+    PRINTLN "-----------------"
+    LET LQY = LQY + 1
+  ENDWH
 END
 
 # ミッションブリーフィングを表示する (STTR1.BAS line 780)

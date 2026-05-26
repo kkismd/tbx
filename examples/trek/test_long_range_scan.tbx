@@ -1,0 +1,99 @@
+# trek/test_long_range_scan.tbx — LONG_RANGE_SCAN() smoke test
+
+USE "state.tbx"
+USE "util.tbx"
+USE "init.tbx"
+USE "scan.tbx"
+USE "../../lib/tests/helper.tbx"
+
+# 中央付近の quadrant で LONG_RANGE_SCAN を呼び出し、クラッシュしないこと・@CHART が更新されることを検証する
+DEF TEST_LONG_RANGE_SCAN_CENTER()
+  INIT_GAME
+  # Enterprise を中央付近のクアドラント (4, 4) に固定して境界を外す
+  LET ENT_QX = 4
+  LET ENT_QY = 4
+  # @GALAXY の値を既知値に設定する (周囲 3x3 = QX:3..5, QY:3..5)
+  LET @GALAXY[3, 3] = 101
+  LET @GALAXY[4, 3] = 010
+  LET @GALAXY[5, 3] = 205
+  LET @GALAXY[3, 4] = 300
+  LET @GALAXY[4, 4] = 007
+  LET @GALAXY[5, 4] = 100
+  LET @GALAXY[3, 5] = 050
+  LET @GALAXY[4, 5] = 002
+  LET @GALAXY[5, 5] = 103
+  # @CHART をクリアしておく
+  LET @CHART[3, 3] = 0
+  LET @CHART[4, 3] = 0
+  LET @CHART[5, 3] = 0
+  LET @CHART[3, 4] = 0
+  LET @CHART[4, 4] = 0
+  LET @CHART[5, 4] = 0
+  LET @CHART[3, 5] = 0
+  LET @CHART[4, 5] = 0
+  LET @CHART[5, 5] = 0
+  # LONG_RANGE_SCAN を呼び出してもクラッシュしないこと
+  LONG_RANGE_SCAN
+  # @CHART が @GALAXY の値で更新されていること
+  ASSERT @CHART[3, 3] = @GALAXY[3, 3]
+  ASSERT @CHART[4, 3] = @GALAXY[4, 3]
+  ASSERT @CHART[5, 3] = @GALAXY[5, 3]
+  ASSERT @CHART[3, 4] = @GALAXY[3, 4]
+  ASSERT @CHART[4, 4] = @GALAXY[4, 4]
+  ASSERT @CHART[5, 4] = @GALAXY[5, 4]
+  ASSERT @CHART[3, 5] = @GALAXY[3, 5]
+  ASSERT @CHART[4, 5] = @GALAXY[4, 5]
+  ASSERT @CHART[5, 5] = @GALAXY[5, 5]
+END
+
+# 角 (1, 1) の quadrant で LONG_RANGE_SCAN を呼び出し、境界外でエラーにならないこと・範囲内 @CHART が更新されることを検証する
+DEF TEST_LONG_RANGE_SCAN_CORNER()
+  INIT_GAME
+  # Enterprise を左上角 (1, 1) に固定する
+  LET ENT_QX = 1
+  LET ENT_QY = 1
+  # 範囲内クアドラントを既知値に設定する (QX:1..2, QY:1..2)
+  LET @GALAXY[1, 1] = 111
+  LET @GALAXY[2, 1] = 022
+  LET @GALAXY[1, 2] = 033
+  LET @GALAXY[2, 2] = 044
+  LET @CHART[1, 1] = 0
+  LET @CHART[2, 1] = 0
+  LET @CHART[1, 2] = 0
+  LET @CHART[2, 2] = 0
+  # LONG_RANGE_SCAN を呼び出してもクラッシュしないこと (境界外は 0 として扱う)
+  LONG_RANGE_SCAN
+  # 範囲内クアドラントの @CHART が更新されていること
+  ASSERT @CHART[1, 1] = @GALAXY[1, 1]
+  ASSERT @CHART[2, 1] = @GALAXY[2, 1]
+  ASSERT @CHART[1, 2] = @GALAXY[1, 2]
+  ASSERT @CHART[2, 2] = @GALAXY[2, 2]
+END
+
+# 辺 (8, 8) の quadrant で LONG_RANGE_SCAN を呼び出し、境界外でエラーにならないことを検証する
+DEF TEST_LONG_RANGE_SCAN_EDGE()
+  INIT_GAME
+  # Enterprise を右下角 (8, 8) に固定する
+  LET ENT_QX = 8
+  LET ENT_QY = 8
+  # 範囲内クアドラントを既知値に設定する (QX:7..8, QY:7..8)
+  LET @GALAXY[7, 7] = 200
+  LET @GALAXY[8, 7] = 110
+  LET @GALAXY[7, 8] = 301
+  LET @GALAXY[8, 8] = 005
+  LET @CHART[7, 7] = 0
+  LET @CHART[8, 7] = 0
+  LET @CHART[7, 8] = 0
+  LET @CHART[8, 8] = 0
+  # LONG_RANGE_SCAN を呼び出してもクラッシュしないこと
+  LONG_RANGE_SCAN
+  # 範囲内クアドラントの @CHART が更新されていること
+  ASSERT @CHART[7, 7] = @GALAXY[7, 7]
+  ASSERT @CHART[8, 7] = @GALAXY[8, 7]
+  ASSERT @CHART[7, 8] = @GALAXY[7, 8]
+  ASSERT @CHART[8, 8] = @GALAXY[8, 8]
+END
+
+TEST_LONG_RANGE_SCAN_CENTER
+TEST_LONG_RANGE_SCAN_CORNER
+TEST_LONG_RANGE_SCAN_EDGE
