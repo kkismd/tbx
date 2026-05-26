@@ -8,11 +8,12 @@ USE "trek/init.tbx"
 USE "trek/scan.tbx"
 USE "trek/nav.tbx"
 USE "trek/combat.tbx"
+USE "trek/command.tbx"
 
 DEF MAIN()
   INIT_GAME
   PRINT_INTRO
-  SHORT_RANGE_SCAN
+  RUN_COMMAND_LOOP
 END
 
 MAIN
