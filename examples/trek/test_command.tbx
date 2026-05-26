@@ -1,0 +1,81 @@
+# trek/test_command.tbx — DISPATCH_COMMAND() smoke tests
+
+USE "state.tbx"
+USE "util.tbx"
+USE "init.tbx"
+USE "scan.tbx"
+USE "nav.tbx"
+USE "combat.tbx"
+USE "command.tbx"
+USE "../../lib/tests/helper.tbx"
+
+# Verify that DISPATCH_COMMAND(1) calls SHORT_RANGE_SCAN without crashing
+DEF TEST_DISPATCH_CMD1_SHORT_RANGE_SCAN()
+  INIT_GAME
+  # cmd 1 should call SHORT_RANGE_SCAN and produce output
+  DISPATCH_COMMAND 1
+END
+
+# Verify that DISPATCH_COMMAND(2) calls LONG_RANGE_SCAN without crashing
+DEF TEST_DISPATCH_CMD2_LONG_RANGE_SCAN()
+  INIT_GAME
+  # cmd 2 should call LONG_RANGE_SCAN and produce output
+  DISPATCH_COMMAND 2
+END
+
+# Verify that DISPATCH_COMMAND(0) prints placeholder and does not crash
+DEF TEST_DISPATCH_CMD0_NOT_IMPLEMENTED()
+  INIT_GAME
+  DISPATCH_COMMAND 0
+END
+
+# Verify that DISPATCH_COMMAND(3) prints placeholder and does not crash
+DEF TEST_DISPATCH_CMD3_NOT_IMPLEMENTED()
+  INIT_GAME
+  DISPATCH_COMMAND 3
+END
+
+# Verify that DISPATCH_COMMAND(4) prints placeholder and does not crash
+DEF TEST_DISPATCH_CMD4_NOT_IMPLEMENTED()
+  INIT_GAME
+  DISPATCH_COMMAND 4
+END
+
+# Verify that DISPATCH_COMMAND(5) prints placeholder and does not crash
+DEF TEST_DISPATCH_CMD5_NOT_IMPLEMENTED()
+  INIT_GAME
+  DISPATCH_COMMAND 5
+END
+
+# Verify that DISPATCH_COMMAND(6) prints placeholder and does not crash
+DEF TEST_DISPATCH_CMD6_NOT_IMPLEMENTED()
+  INIT_GAME
+  DISPATCH_COMMAND 6
+END
+
+# Verify that DISPATCH_COMMAND(7) prints placeholder and does not crash
+DEF TEST_DISPATCH_CMD7_NOT_IMPLEMENTED()
+  INIT_GAME
+  DISPATCH_COMMAND 7
+END
+
+# Verify that an invalid command number prints the command menu and does not crash
+DEF TEST_DISPATCH_INVALID_CMD()
+  INIT_GAME
+  # cmd -1 is invalid, should show command menu
+  DISPATCH_COMMAND -1
+  # cmd 8 is also invalid
+  DISPATCH_COMMAND 8
+  # cmd 99 is also invalid
+  DISPATCH_COMMAND 99
+END
+
+TEST_DISPATCH_CMD1_SHORT_RANGE_SCAN
+TEST_DISPATCH_CMD2_LONG_RANGE_SCAN
+TEST_DISPATCH_CMD0_NOT_IMPLEMENTED
+TEST_DISPATCH_CMD3_NOT_IMPLEMENTED
+TEST_DISPATCH_CMD4_NOT_IMPLEMENTED
+TEST_DISPATCH_CMD5_NOT_IMPLEMENTED
+TEST_DISPATCH_CMD6_NOT_IMPLEMENTED
+TEST_DISPATCH_CMD7_NOT_IMPLEMENTED
+TEST_DISPATCH_INVALID_CMD

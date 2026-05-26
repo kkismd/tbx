@@ -1,0 +1,56 @@
+# trek/command.tbx — command loop and dispatch (STTR1.BAS lines 1260-1400)
+
+# Print the list of available commands (STTR1.BAS lines 1300-1400)
+# Displayed when an invalid command number is entered
+DEF PRINT_COMMAND_MENU()
+  PRINTLN
+  PRINTLN "   0 = SET COURSE"
+  PRINTLN "   1 = SHORT RANGE SENSOR SCAN"
+  PRINTLN "   2 = LONG RANGE SENSOR SCAN"
+  PRINTLN "   3 = FIRE PHASERS"
+  PRINTLN "   4 = FIRE PHOTON TORPEDOES"
+  PRINTLN "   5 = SHIELD CONTROL"
+  PRINTLN "   6 = DAMAGE CONTROL REPORT"
+  PRINTLN "   7 = CALL ON LIBRARY COMPUTER"
+  PRINTLN
+END
+
+# Dispatch a command by number (STTR1.BAS line 1290)
+# CMD 0: set course (not yet implemented)
+# CMD 1: short range sensor scan
+# CMD 2: long range sensor scan
+# CMD 3..7: not yet implemented
+# Invalid CMD: print command menu
+DEF DISPATCH_COMMAND(CMD)
+  IF CMD = 0
+    PRINTLN "SET COURSE is not implemented yet"
+  ELSIF CMD = 1
+    SHORT_RANGE_SCAN
+  ELSIF CMD = 2
+    LONG_RANGE_SCAN
+  ELSIF CMD = 3
+    PRINTLN "PHASER CONTROL is not implemented yet"
+  ELSIF CMD = 4
+    PRINTLN "PHOTON TORPEDO CONTROL is not implemented yet"
+  ELSIF CMD = 5
+    PRINTLN "SHIELD CONTROL is not implemented yet"
+  ELSIF CMD = 6
+    PRINTLN "DAMAGE CONTROL REPORT is not implemented yet"
+  ELSIF CMD = 7
+    PRINTLN "LIBRARY COMPUTER is not implemented yet"
+  ELSE
+    PRINT_COMMAND_MENU
+  ENDIF
+END
+
+# Command input and dispatch loop (STTR1.BAS lines 1260-1400)
+# Loops while GAME_OVER = 0, prompting for a command number each iteration
+# Calls SHORT_RANGE_SCAN before prompting, matching Mayfield line 1260 GOSUB 4120
+DEF RUN_COMMAND_LOOP()
+  WHILE GAME_OVER = 0
+    SHORT_RANGE_SCAN
+    PUTSTR "COMMAND:"
+    VAR CMD = GETDEC
+    DISPATCH_COMMAND CMD
+  ENDWH
+END
