@@ -22,33 +22,39 @@ END
 # CMD 3..7: not yet implemented
 # Invalid CMD: print command menu
 DEF DISPATCH_COMMAND(CMD)
-  IF CMD = 0
+  SELECT CMD
+  CASE 0
     PRINTLN "SET COURSE is not implemented yet"
-  ELSIF CMD = 1
+  CASE 1
     SHORT_RANGE_SCAN
-  ELSIF CMD = 2
+  CASE 2
     LONG_RANGE_SCAN
-  ELSIF CMD = 3
+  CASE 3
     PRINTLN "PHASER CONTROL is not implemented yet"
-  ELSIF CMD = 4
+  CASE 4
     PRINTLN "PHOTON TORPEDO CONTROL is not implemented yet"
-  ELSIF CMD = 5
+  CASE 5
     PRINTLN "SHIELD CONTROL is not implemented yet"
-  ELSIF CMD = 6
+  CASE 6
     PRINTLN "DAMAGE CONTROL REPORT is not implemented yet"
-  ELSIF CMD = 7
+  CASE 7
     PRINTLN "LIBRARY COMPUTER is not implemented yet"
-  ELSE
+  CASE_ELSE
     PRINT_COMMAND_MENU
-  ENDIF
+  ENDSEL
 END
 
 # Command input and dispatch loop (STTR1.BAS lines 1260-1400)
-# Loops while GAME_OVER = 0, prompting for a command number each iteration
-# Calls SHORT_RANGE_SCAN before prompting, matching Mayfield line 1260 GOSUB 4120
+# Mayfield 原典の flow:
+#   line 1260: short-range scan を表示 (GOSUB 4120)
+#   line 1270: COMMAND: prompt を表示して入力を受け付ける
+#   command 1 は line 1260 へ戻り short-range scan を再表示する
+#   その他の command は処理後に line 1270 へ戻る
+# → ループ冒頭で毎回 SHORT_RANGE_SCAN を呼ぶと command 1 で二重表示になるため、
+#   初回のみ SHORT_RANGE_SCAN を呼び、以降は DISPATCH_COMMAND 内の CASE 1 で呼ぶ
 DEF RUN_COMMAND_LOOP()
+  SHORT_RANGE_SCAN
   WHILE GAME_OVER = 0
-    SHORT_RANGE_SCAN
     PUTSTR "COMMAND:"
     VAR CMD = GETDEC
     DISPATCH_COMMAND CMD
