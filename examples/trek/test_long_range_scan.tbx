@@ -35,15 +35,15 @@ DEF TEST_LONG_RANGE_SCAN_CENTER()
   # LONG_RANGE_SCAN を呼び出してもクラッシュしないこと
   LONG_RANGE_SCAN
   # @CHART が @GALAXY の値で更新されていること
-  ASSERT (@CHART[3, 3] = @GALAXY[3, 3])
-  ASSERT (@CHART[4, 3] = @GALAXY[4, 3])
-  ASSERT (@CHART[5, 3] = @GALAXY[5, 3])
-  ASSERT (@CHART[3, 4] = @GALAXY[3, 4])
-  ASSERT (@CHART[4, 4] = @GALAXY[4, 4])
-  ASSERT (@CHART[5, 4] = @GALAXY[5, 4])
-  ASSERT (@CHART[3, 5] = @GALAXY[3, 5])
-  ASSERT (@CHART[4, 5] = @GALAXY[4, 5])
-  ASSERT (@CHART[5, 5] = @GALAXY[5, 5])
+  ASSERT @CHART[3, 3] = @GALAXY[3, 3]
+  ASSERT @CHART[4, 3] = @GALAXY[4, 3]
+  ASSERT @CHART[5, 3] = @GALAXY[5, 3]
+  ASSERT @CHART[3, 4] = @GALAXY[3, 4]
+  ASSERT @CHART[4, 4] = @GALAXY[4, 4]
+  ASSERT @CHART[5, 4] = @GALAXY[5, 4]
+  ASSERT @CHART[3, 5] = @GALAXY[3, 5]
+  ASSERT @CHART[4, 5] = @GALAXY[4, 5]
+  ASSERT @CHART[5, 5] = @GALAXY[5, 5]
 END
 
 # 角 (1, 1) の quadrant で LONG_RANGE_SCAN を呼び出し、境界外でエラーにならないこと・範囲内 @CHART が更新されることを検証する
@@ -64,10 +64,10 @@ DEF TEST_LONG_RANGE_SCAN_CORNER()
   # LONG_RANGE_SCAN を呼び出してもクラッシュしないこと (境界外は 0 として扱う)
   LONG_RANGE_SCAN
   # 範囲内クアドラントの @CHART が更新されていること
-  ASSERT (@CHART[1, 1] = @GALAXY[1, 1])
-  ASSERT (@CHART[2, 1] = @GALAXY[2, 1])
-  ASSERT (@CHART[1, 2] = @GALAXY[1, 2])
-  ASSERT (@CHART[2, 2] = @GALAXY[2, 2])
+  ASSERT @CHART[1, 1] = @GALAXY[1, 1]
+  ASSERT @CHART[2, 1] = @GALAXY[2, 1]
+  ASSERT @CHART[1, 2] = @GALAXY[1, 2]
+  ASSERT @CHART[2, 2] = @GALAXY[2, 2]
 END
 
 # 辺 (8, 8) の quadrant で LONG_RANGE_SCAN を呼び出し、境界外でエラーにならないことを検証する
@@ -88,10 +88,10 @@ DEF TEST_LONG_RANGE_SCAN_EDGE()
   # LONG_RANGE_SCAN を呼び出してもクラッシュしないこと
   LONG_RANGE_SCAN
   # 範囲内クアドラントの @CHART が更新されていること
-  ASSERT (@CHART[7, 7] = @GALAXY[7, 7])
-  ASSERT (@CHART[8, 7] = @GALAXY[8, 7])
-  ASSERT (@CHART[7, 8] = @GALAXY[7, 8])
-  ASSERT (@CHART[8, 8] = @GALAXY[8, 8])
+  ASSERT @CHART[7, 7] = @GALAXY[7, 7]
+  ASSERT @CHART[8, 7] = @GALAXY[8, 7]
+  ASSERT @CHART[7, 8] = @GALAXY[7, 8]
+  ASSERT @CHART[8, 8] = @GALAXY[8, 8]
 END
 
 TEST_LONG_RANGE_SCAN_CENTER
