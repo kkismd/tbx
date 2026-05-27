@@ -697,6 +697,18 @@ impl Interpreter {
         &self.vm
     }
 
+    /// Expose the inner VM mutably for direct manipulation in tests.
+    ///
+    /// Allows tests to replace `vm.input_reader` with a mock (e.g. `Cursor<&[u8]>`)
+    /// to drive primitives like `GETDEC?` without requiring real stdin interaction.
+    ///
+    /// This method is intentionally excluded from the public API documentation.
+    /// It is intended for use in both unit tests and integration tests (`tests/`).
+    #[doc(hidden)]
+    pub fn vm_mut(&mut self) -> &mut VM {
+        &mut self.vm
+    }
+
     /// Set the base directory used to resolve relative USE paths.
     ///
     /// When set, relative paths in USE statements are resolved against `dir`
