@@ -1,0 +1,41 @@
+# result.tbx — helper functions for TUPLE(value, ok) result values
+
+# RESULT_VAL(R) — extract the value from a result tuple (R[1])
+DEF RESULT_VAL(R)
+  RETURN R[1]
+END
+
+# RESULT_OK(R) — extract the ok flag from a result tuple (R[2])
+DEF RESULT_OK(R)
+  RETURN R[2]
+END
+
+# RESULT_OR(R, DEFAULT) — return R[1] if ok, otherwise DEFAULT
+DEF RESULT_OR(R, DEFAULT)
+  IF R[2]
+    RETURN R[1]
+  ELSE
+    RETURN DEFAULT
+  ENDIF
+END
+
+# RESULT_EXPECT(R, MSG) — return R[1] if ok, otherwise abort with MSG
+DEF RESULT_EXPECT(R, MSG)
+  IF R[2]
+    RETURN R[1]
+  ELSE
+    ASSERT_FAIL_MSG MSG
+  ENDIF
+END
+
+# RESULT_OK_OF(V) — wrap V as a successful result: TUPLE(V, Bool(true))
+# Bool(true) is produced by the tautology (1 = 1).
+DEF RESULT_OK_OF(V)
+  RETURN TUPLE(V, 1 = 1)
+END
+
+# RESULT_ERR_OF(V) — wrap V as a failed result: TUPLE(V, Bool(false))
+# Bool(false) is produced by the contradiction (1 = 0).
+DEF RESULT_ERR_OF(V)
+  RETURN TUPLE(V, 1 = 0)
+END
