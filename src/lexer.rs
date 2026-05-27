@@ -372,8 +372,34 @@ impl<'a> Lexer<'a> {
             self.advance();
         }
         // Consume a single trailing '?' if present (e.g. GETDEC?, EMPTY?).
+        // If '?' is followed immediately by an alphanumeric character or '_',
+        // it is a lexer error (e.g. GET?DEC): '?' must be the true end of the identifier.
         if self.peek_char() == Some('?') {
             self.advance();
+            let end_off = self.peek_offset();
+            let raw_len = end_off - start_off;
+            if matches!(self.peek_char(), Some(c) if c.is_alphanumeric() || c == '_') {
+                // Consume the offending character to include it in the error span.
+                self.advance();
+                let err_end_off = self.peek_offset();
+                let err_len = err_end_off - start_off;
+                let raw = &self.source[start_off..err_end_off];
+                return SpannedToken {
+                    token: Token::Error(format!(
+                        "invalid identifier: '?' must be the last character (got {raw:?})"
+                    )),
+                    pos: start_pos,
+                    source_offset: start_off,
+                    source_len: err_len,
+                };
+            }
+            let name = self.source[start_off..end_off].to_string();
+            return SpannedToken {
+                token: Token::Ident(name),
+                pos: start_pos,
+                source_offset: start_off,
+                source_len: raw_len,
+            };
         }
         let end_off = self.peek_offset();
         let name = self.source[start_off..end_off].to_string();
@@ -1504,12 +1530,15 @@ mod tests {
     }
 
     #[test]
-    fn test_question_mid_ident_not_consumed() {
-        // GET?DEC: the '?' is consumed as the suffix of GET, making Ident("GET?"),
-        // then DEC starts a new identifier. This is intentionally NOT a single token.
+    fn test_question_mid_ident_is_error() {
+        // GET?DEC: '?' followed immediately by an alphanumeric character is a lexer
+        // error. This guards against typos being silently accepted as two tokens.
         let toks = tokens("GET?DEC");
-        assert_eq!(toks[0], Token::Ident("GET?".to_string()));
-        assert_eq!(toks[1], Token::Ident("DEC".to_string()));
+        assert!(
+            matches!(toks[0], Token::Error(_)),
+            "expected Error for '?' not at identifier end, got {:?}",
+            toks[0]
+        );
     }
 
     #[test]
