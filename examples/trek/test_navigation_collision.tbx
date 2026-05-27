@@ -98,8 +98,72 @@ DEF TEST_CLEAR_PATH_MOVES_TO_DESTINATION()
   ASSERT (@SECTOR[4, 4] = 0)
 END
 
+# starbase collision: Enterprise は直前 sector に残り、starbase cell は上書きされない
+# (4,4) から east 1 step、(5,4) に starbase -> Enterprise は (4,4) に残る
+DEF TEST_BLOCKED_BY_STARBASE()
+  INIT_GAME
+  SET_ENTERPRISE 4, 4
+  LET @SECTOR[5, 4] = 3
+  MOVE_WITHIN_QUADRANT 1, 1
+  # Enterprise は元の位置に残る
+  ASSERT (ENT_SX = 4)
+  ASSERT (ENT_SY = 4)
+  ASSERT (@SECTOR[4, 4] = 1)
+  # starbase は上書きされていない
+  ASSERT (@SECTOR[5, 4] = 3)
+END
+
+# starbase collision: path 途中で停止する
+# (4,4) から east 3 steps、(6,4) に starbase -> Enterprise は (5,4) に停止
+DEF TEST_BLOCKED_MID_PATH_BY_STARBASE()
+  INIT_GAME
+  SET_ENTERPRISE 4, 4
+  LET @SECTOR[6, 4] = 3
+  MOVE_WITHIN_QUADRANT 1, 3
+  ASSERT (ENT_SX = 5)
+  ASSERT (ENT_SY = 4)
+  ASSERT (@SECTOR[5, 4] = 1)
+  ASSERT (@SECTOR[4, 4] = 0)
+  # starbase は上書きされていない
+  ASSERT (@SECTOR[6, 4] = 3)
+END
+
+# Klingon collision: Enterprise は直前 sector に残り、Klingon cell は上書きされない
+# (4,4) から east 1 step、(5,4) に Klingon -> Enterprise は (4,4) に残る
+DEF TEST_BLOCKED_BY_KLINGON()
+  INIT_GAME
+  SET_ENTERPRISE 4, 4
+  LET @SECTOR[5, 4] = 2
+  MOVE_WITHIN_QUADRANT 1, 1
+  # Enterprise は元の位置に残る
+  ASSERT (ENT_SX = 4)
+  ASSERT (ENT_SY = 4)
+  ASSERT (@SECTOR[4, 4] = 1)
+  # Klingon は上書きされていない
+  ASSERT (@SECTOR[5, 4] = 2)
+END
+
+# Klingon collision: path 途中で停止する
+# (4,4) から east 3 steps、(6,4) に Klingon -> Enterprise は (5,4) に停止
+DEF TEST_BLOCKED_MID_PATH_BY_KLINGON()
+  INIT_GAME
+  SET_ENTERPRISE 4, 4
+  LET @SECTOR[6, 4] = 2
+  MOVE_WITHIN_QUADRANT 1, 3
+  ASSERT (ENT_SX = 5)
+  ASSERT (ENT_SY = 4)
+  ASSERT (@SECTOR[5, 4] = 1)
+  ASSERT (@SECTOR[4, 4] = 0)
+  # Klingon は上書きされていない
+  ASSERT (@SECTOR[6, 4] = 2)
+END
+
 TEST_BLOCKED_MID_PATH_STOPS_BEFORE_STAR
 TEST_NO_DUPLICATE_ENTERPRISE_AFTER_COLLISION
 TEST_BLOCKED_AT_FINAL_STEP
 TEST_OBSTACLE_NOT_OVERWRITTEN_ON_IMMEDIATE_COLLISION
 TEST_CLEAR_PATH_MOVES_TO_DESTINATION
+TEST_BLOCKED_BY_STARBASE
+TEST_BLOCKED_MID_PATH_BY_STARBASE
+TEST_BLOCKED_BY_KLINGON
+TEST_BLOCKED_MID_PATH_BY_KLINGON
