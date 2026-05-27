@@ -22,9 +22,46 @@ DEF IS_VALID_WARP(WARP)
   RETURN 0
 END
 
+# コース番号 (1..9) に対応する X 方向移動量を返す
+# 配列 @COURSE_DX との混同を避けるため GET_COURSE_DX と命名する
+DEF GET_COURSE_DX(COURSE)
+  RETURN @COURSE_DX[COURSE]
+END
+
+# コース番号 (1..9) に対応する Y 方向移動量を返す
+# 配列 @COURSE_DY との混同を避けるため GET_COURSE_DY と命名する
+DEF GET_COURSE_DY(COURSE)
+  RETURN @COURSE_DY[COURSE]
+END
+
+# Move Enterprise within the current quadrant (STTR1.BAS lines 1500-2320, partial)
+# COURSE: validated integer course (1..8)
+# STEPS:  validated integer step count (>= 1)
+# Uses GET_COURSE_DX / GET_COURSE_DY to obtain the direction vector.
+# Destination is computed as ENT_SX + DX*STEPS, ENT_SY + DY*STEPS.
+# If destination is outside sector bounds (1..8), movement is aborted without crashing.
+# On success: updates @SECTOR (old cell -> 0=empty, new cell -> 1=Enterprise)
+#             and updates ENT_SX / ENT_SY.
+DEF MOVE_WITHIN_QUADRANT(COURSE, STEPS)
+  VAR DX = GET_COURSE_DX(COURSE)
+  VAR DY = GET_COURSE_DY(COURSE)
+  # Compute destination after all steps
+  VAR NEW_SX = ENT_SX + DX * STEPS
+  VAR NEW_SY = ENT_SY + DY * STEPS
+  # Abort if destination is outside quadrant bounds
+  IF IS_IN_SECTOR_BOUNDS(NEW_SX, NEW_SY) = 0
+    PRINTLN "COURSE OUT OF QUADRANT BOUNDS -- MOVEMENT ABORTED (TODO: quadrant crossing)"
+    RETURN
+  ENDIF
+  # Clear old sector and place Enterprise at new sector
+  LET @SECTOR[ENT_SX, ENT_SY] = 0
+  LET ENT_SX = NEW_SX
+  LET ENT_SY = NEW_SY
+  LET @SECTOR[ENT_SX, ENT_SY] = 1
+END
+
 # コース・ワープエンジン制御コマンド (STTR1.BAS lines 1410-2320)
 # course と warp を入力・検証する
-# TODO: Enterprise の実移動は後続 issue で実装する (#801 非目標)
 DEF NAVIGATE()
   PUTSTR "COURSE (1-9):"
   VAR COURSE = RESULT_OR(GETDEC?(), -1)
@@ -38,18 +75,11 @@ DEF NAVIGATE()
     PRINTLN "INVALID WARP FACTOR. MUST BE 0..8."
     RETURN
   ENDIF
-  # TODO: Enterprise の実移動は後続 issue で実装する
-  PRINTLN "SET COURSE movement is not implemented yet"
-END
-
-# コース番号 (1..9) に対応する X 方向移動量を返す
-# 配列 @COURSE_DX との混同を避けるため GET_COURSE_DX と命名する
-DEF GET_COURSE_DX(COURSE)
-  RETURN @COURSE_DX[COURSE]
-END
-
-# コース番号 (1..9) に対応する Y 方向移動量を返す
-# 配列 @COURSE_DY との混同を避けるため GET_COURSE_DY と命名する
-DEF GET_COURSE_DY(COURSE)
-  RETURN @COURSE_DY[COURSE]
+  # WARP gives the number of sectors to travel (integer steps only in this issue)
+  VAR STEPS = WARP
+  IF STEPS < 1
+    PRINTLN "WARP 0 -- ENTERPRISE REMAINS AT CURRENT POSITION."
+    RETURN
+  ENDIF
+  MOVE_WITHIN_QUADRANT COURSE, STEPS
 END

@@ -1,0 +1,89 @@
+# trek/test_navigation_move.tbx — MOVE_WITHIN_QUADRANT() smoke tests
+
+USE "state.tbx"
+USE "util.tbx"
+USE "init.tbx"
+USE "scan.tbx"
+USE "nav.tbx"
+USE "../../lib/tests/helper.tbx"
+
+# Helper: set Enterprise position and mark the sector
+DEF SET_ENTERPRISE(SX, SY)
+  LET @SECTOR[ENT_SX, ENT_SY] = 0
+  LET ENT_SX = SX
+  LET ENT_SY = SY
+  LET @SECTOR[ENT_SX, ENT_SY] = 1
+END
+
+# Course 1 (East, DX=+1 DY=0): move 1 step from (4,4) -> (5,4)
+DEF TEST_MOVE_EAST_1_STEP()
+  INIT_GAME
+  SET_ENTERPRISE 4, 4
+  MOVE_WITHIN_QUADRANT 1, 1
+  ASSERT (ENT_SX = 5)
+  ASSERT (ENT_SY = 4)
+  ASSERT (@SECTOR[5, 4] = 1)
+  ASSERT (@SECTOR[4, 4] = 0)
+END
+
+# Course 3 (North, DX=0 DY=-1): move 2 steps from (4,4) -> (4,2)
+DEF TEST_MOVE_NORTH_2_STEPS()
+  INIT_GAME
+  SET_ENTERPRISE 4, 4
+  MOVE_WITHIN_QUADRANT 3, 2
+  ASSERT (ENT_SX = 4)
+  ASSERT (ENT_SY = 2)
+  ASSERT (@SECTOR[4, 2] = 1)
+  ASSERT (@SECTOR[4, 4] = 0)
+END
+
+# Course 5 (West, DX=-1 DY=0): move 3 steps from (5,5) -> (2,5)
+DEF TEST_MOVE_WEST_3_STEPS()
+  INIT_GAME
+  SET_ENTERPRISE 5, 5
+  MOVE_WITHIN_QUADRANT 5, 3
+  ASSERT (ENT_SX = 2)
+  ASSERT (ENT_SY = 5)
+  ASSERT (@SECTOR[2, 5] = 1)
+  ASSERT (@SECTOR[5, 5] = 0)
+END
+
+# Course 7 (South, DX=0 DY=+1): move 1 step from (4,4) -> (4,5)
+DEF TEST_MOVE_SOUTH_1_STEP()
+  INIT_GAME
+  SET_ENTERPRISE 4, 4
+  MOVE_WITHIN_QUADRANT 7, 1
+  ASSERT (ENT_SX = 4)
+  ASSERT (ENT_SY = 5)
+  ASSERT (@SECTOR[4, 5] = 1)
+  ASSERT (@SECTOR[4, 4] = 0)
+END
+
+# Out-of-bounds: course 1 (East) 10 steps from (4,4) should abort without crashing
+DEF TEST_MOVE_OUT_OF_BOUNDS_NO_CRASH()
+  INIT_GAME
+  SET_ENTERPRISE 4, 4
+  # 4 + 10 = 14, which is outside 1..8 -> should print TODO and not move
+  MOVE_WITHIN_QUADRANT 1, 10
+  # Enterprise must remain at original position
+  ASSERT (ENT_SX = 4)
+  ASSERT (ENT_SY = 4)
+  ASSERT (@SECTOR[4, 4] = 1)
+END
+
+# Out-of-bounds: course 3 (North) 5 steps from (4,4) -> Y=4-5=-1, abort
+DEF TEST_MOVE_NORTH_OUT_OF_BOUNDS()
+  INIT_GAME
+  SET_ENTERPRISE 4, 4
+  MOVE_WITHIN_QUADRANT 3, 5
+  ASSERT (ENT_SX = 4)
+  ASSERT (ENT_SY = 4)
+  ASSERT (@SECTOR[4, 4] = 1)
+END
+
+TEST_MOVE_EAST_1_STEP
+TEST_MOVE_NORTH_2_STEPS
+TEST_MOVE_WEST_3_STEPS
+TEST_MOVE_SOUTH_1_STEP
+TEST_MOVE_OUT_OF_BOUNDS_NO_CRASH
+TEST_MOVE_NORTH_OUT_OF_BOUNDS
