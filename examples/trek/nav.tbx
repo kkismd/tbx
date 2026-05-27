@@ -34,6 +34,26 @@ DEF GET_COURSE_DY(COURSE)
   RETURN @COURSE_DY[COURSE]
 END
 
+# cell 種別に応じた衝突メッセージを表示する (STTR1.BAS lines 2120-2175, partial)
+# CELL: 障害物の cell 値
+#   2 = Klingon, 3 = Starbase, 4 = Star
+#   その他 = generic
+DEF PRINT_NAV_BLOCKED_MESSAGE(CELL)
+  IF CELL = 4
+    PRINTLN "COURSE BLOCKED BY STAR -- MOVEMENT ABORTED"
+  ELSE
+    IF CELL = 3
+      PRINTLN "COURSE BLOCKED BY STARBASE -- MOVEMENT ABORTED"
+    ELSE
+      IF CELL = 2
+        PRINTLN "COURSE BLOCKED BY KLINGON -- MOVEMENT ABORTED"
+      ELSE
+        PRINTLN "COURSE BLOCKED -- MOVEMENT ABORTED"
+      ENDIF
+    ENDIF
+  ENDIF
+END
+
 # Move Enterprise within the current quadrant (STTR1.BAS lines 1500-2320, partial)
 # COURSE: validated integer course (1..8)
 # STEPS:  validated integer step count (>= 1)
@@ -66,7 +86,7 @@ DEF MOVE_WITHIN_QUADRANT(COURSE, STEPS)
       ENDIF
       # 非空 cell: Enterprise は CURR 位置に残り、障害物は上書きしない
       IF @SECTOR[NEXT_SX, NEXT_SY] <> 0
-        PRINTLN "COURSE BLOCKED -- MOVEMENT ABORTED (TODO: collision)"
+        PRINT_NAV_BLOCKED_MESSAGE @SECTOR[NEXT_SX, NEXT_SY]
         LET DONE = 1
       ELSE
         LET CURR_SX = NEXT_SX
