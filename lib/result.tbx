@@ -1,4 +1,7 @@
 # result.tbx — helper functions for TUPLE(value, ok) result values
+#
+# NOTE: このファイルは Interpreter::new() によって自動的にロードされます。
+# USE "lib/result.tbx" を .tbx ファイルに書く必要はありません。
 
 # RESULT_VAL(R) — extract the value from a result tuple (R[1])
 DEF RESULT_VAL(R)

@@ -1,7 +1,5 @@
 # trek/util.tbx — 座標・乱数・表示補助 helper
 
-USE "../../lib/result.tbx"
-
 # ゲームタイトルとクレジットを表示する
 DEF PRINT_INTRO()
   # TODO: Mayfield STTR1 instructions / title screen (STTR1.BAS lines 5820-6410)
