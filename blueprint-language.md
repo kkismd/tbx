@@ -592,6 +592,61 @@ PUTSTR G   \ "inside" を出力する
 
 文字列ハンドルの同一性と、文字列内容の等しさは別概念として扱う。これは、実装上の共有最適化と、言語レベルの意味論を分離するためである。`Cell::Str` の `PartialEq` は `Rc<str>` を `str` に deref して内容比較を行う。
 
+## 回復可能な失敗と命名規約
+
+> Issue #789「`GETDEC?` と `?` suffix 命名規約を blueprint に反映する」に基づく設計方針
+
+### Recoverable failure policy
+
+TBX は通常のユーザーコードから実行時エラーを捕捉して回復する機構を持たない。`TbxError` はシステム層のエラーであり、ユーザーコードが catch して継続することは想定しない。
+
+一方、外部入力の parse failure のように「通常の実行フローの中で起こりうる失敗」は、エラーではなく**値として返す**。この区別が重要である。
+
+- **システム層の失敗**（型不整合・スタック操作違反・辞書境界違反など）: `TbxError` を返す。ユーザーコードからは回復不能。
+- **通常起こりうる失敗**（外部入力の validation failure など）: `TbxError` ではなく値として返す。呼び出し側がその値を検査して分岐する。
+
+### Tuple result convention
+
+現行仕様では裸の多値返却は採用していない（多値返却の設計は別 issue で扱う）。
+
+回復可能な結果は `TUPLE(value, ok)` のような immutable aggregate value として返す。
+
+- `ok` は `TRUE` / `FALSE` のいずれかで、操作の成否を表す
+- 呼び出し側は `T[2]`（ok フラグ）を検査して分岐する
+- 失敗時は `TUPLE(dummy_value, FALSE)` のように ok フラグが `FALSE` のタプルを返す（例: `GETDEC?` は `TUPLE(0, FALSE)` を返す）
+
+`TUPLE` の要素型は通常の `Cell` 値に限る。`None` 相当のセンチネルを新設したり、`Option` / `Result` 型をコア言語に導入したりはしない。
+
+### `?` suffix 命名規約
+
+識別子末尾の `?` は、次のいずれかの意味を持つ命名規約として使う。
+
+- **Recoverable API**: 失敗を `TbxError` ではなく値（主に `TUPLE(value, ok)` 形式）として返すワード
+- **Predicate**: 真偽値を返す述語的なワード
+
+`?` suffix の直後に英数字が続く形式は lexer error とする（Issue #787 にて実装済み）。
+
+### `GETDEC` / `GETDEC?` の役割分担
+
+`GETDEC` と `GETDEC?` は用途に応じて使い分ける。
+
+| ワード | 用途 | parse failure の扱い |
+| --- | --- | --- |
+| `GETDEC` | trusted input 用の convenience primitive | runtime error（`TbxError`） |
+| `GETDEC?` | recoverable input 用 primitive | `TUPLE(0, FALSE)` として返す |
+
+`GETDEC` は「入力が正しい数値であることが保証されている」文脈で使う。`GETDEC?` は「ユーザー入力など、失敗が通常の実行フローの一部となりうる」文脈で使い、呼び出し側で ok フラグを検査して分岐する。
+
+```tbx
+# GETDEC? usage example
+LET R = GETDEC?()
+IF R[2] = FALSE
+  PUTSTR "invalid input"
+ELSE
+  PUTDEC R[1]
+ENDIF
+```
+
 ## 出力とテキスト
 
 > Issue #2「コア言語における文字列の扱い」・Issue #4「数値を表示する基本命令」に基づく設計方針

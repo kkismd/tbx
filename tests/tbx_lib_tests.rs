@@ -1915,3 +1915,147 @@ fn test_1d_array_valid_access_regression() {
         .expect("1D array valid access must still work after 2D changes");
     assert_eq!(interp.take_output(), "42");
 }
+
+// GETDEC? integration tests (issue #790)
+//
+// GETDEC? reads one line from stdin, parses it as a signed decimal integer,
+// and returns TUPLE(n, TRUE) on success or TUPLE(0, FALSE) on failure.
+// These tests inject mock input via vm_mut().input_reader to avoid real stdin.
+// ---------------------------------------------------------------------------
+
+/// Helper: run TBX source with a given mock input string, return output.
+fn run_with_input(tbx_src: &str, mock_input: &str) -> String {
+    use std::io::Cursor;
+
+    let mut interp = Interpreter::new();
+    interp.vm_mut().input_reader = Box::new(Cursor::new(mock_input.to_string()));
+    interp
+        .exec_source(tbx_src)
+        .unwrap_or_else(|e| panic!("exec_source failed: {e}"));
+    interp.take_output()
+}
+
+/// `123\n` → TUPLE(123, TRUE): valid integer input succeeds.
+/// R[1] should be 123, R[2] should be TRUE.
+#[test]
+fn test_getdec_safe_valid_integer_tuple_projection() {
+    let src = concat!(
+        "DEF CHECK()\n",
+        "  VAR R\n",
+        "  LET R = GETDEC?()\n",
+        "  PUTDEC R[1]\n",
+        "  PUTSTR \" \"\n",
+        "  PUTVAL R[2]\n",
+        "END\n",
+        "CHECK\n",
+    );
+    let out = run_with_input(src, "123\n");
+    assert_eq!(
+        out, "123 TRUE",
+        "valid integer should produce TUPLE(123, TRUE)"
+    );
+}
+
+/// `abc\n` → TUPLE(0, FALSE): non-numeric input fails gracefully.
+/// R[1] should be 0, R[2] should be FALSE.
+#[test]
+fn test_getdec_safe_non_numeric_tuple_projection() {
+    let src = concat!(
+        "DEF CHECK()\n",
+        "  VAR R\n",
+        "  LET R = GETDEC?()\n",
+        "  PUTDEC R[1]\n",
+        "  PUTSTR \" \"\n",
+        "  PUTVAL R[2]\n",
+        "END\n",
+        "CHECK\n",
+    );
+    let out = run_with_input(src, "abc\n");
+    assert_eq!(
+        out, "0 FALSE",
+        "non-numeric input should produce TUPLE(0, FALSE)"
+    );
+}
+
+/// `12abc\n` → TUPLE(0, FALSE): partial numeric input fails gracefully.
+/// Even though the string starts with digits, it must not parse as a valid integer.
+#[test]
+fn test_getdec_safe_partial_numeric_tuple_projection() {
+    let src = concat!(
+        "DEF CHECK()\n",
+        "  VAR R\n",
+        "  LET R = GETDEC?()\n",
+        "  PUTDEC R[1]\n",
+        "  PUTSTR \" \"\n",
+        "  PUTVAL R[2]\n",
+        "END\n",
+        "CHECK\n",
+    );
+    let out = run_with_input(src, "12abc\n");
+    assert_eq!(
+        out, "0 FALSE",
+        "partial numeric input should produce TUPLE(0, FALSE)"
+    );
+}
+
+/// Empty line `\n` → TUPLE(0, FALSE): empty input fails gracefully.
+#[test]
+fn test_getdec_safe_empty_line_tuple_projection() {
+    let src = concat!(
+        "DEF CHECK()\n",
+        "  VAR R\n",
+        "  LET R = GETDEC?()\n",
+        "  PUTDEC R[1]\n",
+        "  PUTSTR \" \"\n",
+        "  PUTVAL R[2]\n",
+        "END\n",
+        "CHECK\n",
+    );
+    let out = run_with_input(src, "\n");
+    assert_eq!(out, "0 FALSE", "empty line should produce TUPLE(0, FALSE)");
+}
+
+/// `123\n` with `IF R[2] ... ELSE ... ENDIF` — success branch is taken.
+/// Verifies the typical usage pattern: branch on ok flag, use value on success.
+#[test]
+fn test_getdec_safe_if_branch_pattern() {
+    let src = concat!(
+        "DEF CHECK()\n",
+        "  VAR R\n",
+        "  LET R = GETDEC?()\n",
+        "  IF R[2]\n",
+        "    PUTSTR \"ok:\"\n",
+        "    PUTDEC R[1]\n",
+        "  ELSE\n",
+        "    PUTSTR \"err\"\n",
+        "  ENDIF\n",
+        "END\n",
+        "CHECK\n",
+    );
+    let out = run_with_input(src, "123\n");
+    assert_eq!(out, "ok:123", "valid input should take the success branch");
+}
+
+/// `abc\n` with `IF R[2] ... ELSE ... ENDIF` — failure branch is taken.
+/// Verifies the typical usage pattern: branch on ok flag, report error on failure.
+#[test]
+fn test_getdec_safe_if_branch_failure_pattern() {
+    let src = concat!(
+        "DEF CHECK()\n",
+        "  VAR R\n",
+        "  LET R = GETDEC?()\n",
+        "  IF R[2]\n",
+        "    PUTSTR \"ok:\"\n",
+        "    PUTDEC R[1]\n",
+        "  ELSE\n",
+        "    PUTSTR \"err\"\n",
+        "  ENDIF\n",
+        "END\n",
+        "CHECK\n",
+    );
+    let out = run_with_input(src, "abc\n");
+    assert_eq!(
+        out, "err",
+        "non-numeric input should take the failure branch"
+    );
+}

@@ -2012,6 +2012,31 @@ pub fn getdec_prim(vm: &mut VM) -> Result<(), TbxError> {
     vm.push(Cell::Int(n))
 }
 
+/// GETDEC? — read one line from the input and push `TUPLE(n, ok)` onto the data stack.
+///
+/// Calls `accept_prim` internally to read a line, trims leading/trailing whitespace,
+/// and attempts to parse the result as a signed decimal integer (`i64`).
+///
+/// On success pushes `TUPLE(n, TRUE)`.
+/// On parse failure (empty input, non-numeric, partial numeric, out-of-range, or EOF)
+/// pushes `TUPLE(0, FALSE)`.
+///
+/// I/O errors are returned as `TbxError::InputIoError` / `TbxError::OutputIoError`
+/// without pushing anything onto the stack.
+///
+/// This is the recoverable counterpart of `GETDEC`.  Use it when the program must
+/// handle invalid user input gracefully instead of terminating.
+///
+/// Stack signature: `( -- TUPLE(n:Int, ok:Bool) )`
+pub fn getdec_safe_prim(vm: &mut VM) -> Result<(), TbxError> {
+    let s = accept_prim(vm)?;
+    let result = match s.trim().parse::<i64>() {
+        Ok(n) => Cell::new_tuple(vec![Cell::Int(n), Cell::Bool(true)])?,
+        Err(_) => Cell::new_tuple(vec![Cell::Int(0), Cell::Bool(false)])?,
+    };
+    vm.push(result)
+}
+
 /// GETSTR — read one line from the input and push it as a `Cell::Str` onto the data stack.
 ///
 /// Calls `accept_prim` internally to read a line, then wraps the result in
@@ -2191,6 +2216,7 @@ pub fn register_all(vm: &mut VM) {
     vm.register(WordEntry::new_primitive("PUTHEX", puthex_prim));
     vm.register(WordEntry::new_primitive("PUTVAL", putval_prim));
     vm.register(WordEntry::new_primitive("GETDEC", getdec_prim));
+    vm.register(WordEntry::new_primitive("GETDEC?", getdec_safe_prim));
     vm.register(WordEntry::new_primitive("GETSTR", getstr_prim));
     vm.register(WordEntry::new_primitive("APPEND", append_prim));
     vm.register(WordEntry::new_primitive("ALLOT", allot_prim));
@@ -6080,6 +6106,113 @@ mod tests {
         vm.input_reader = Box::new(Cursor::new("123\n"));
         getdec_prim(&mut vm).unwrap();
         assert_eq!(vm.pop(), Ok(Cell::Int(123)));
+    }
+
+    // --- getdec_safe_prim ---
+
+    #[test]
+    fn test_getdec_safe_valid_integer_returns_tuple_ok() {
+        use std::io::Cursor;
+        let mut vm = VM::new();
+        vm.input_reader = Box::new(Cursor::new("123\n"));
+        getdec_safe_prim(&mut vm).unwrap();
+        let result = vm.pop().unwrap();
+        assert_eq!(
+            result,
+            Cell::new_tuple(vec![Cell::Int(123), Cell::Bool(true)]).unwrap()
+        );
+    }
+
+    #[test]
+    fn test_getdec_safe_trims_whitespace_and_succeeds() {
+        use std::io::Cursor;
+        let mut vm = VM::new();
+        vm.input_reader = Box::new(Cursor::new("  123  \n"));
+        getdec_safe_prim(&mut vm).unwrap();
+        let result = vm.pop().unwrap();
+        assert_eq!(
+            result,
+            Cell::new_tuple(vec![Cell::Int(123), Cell::Bool(true)]).unwrap()
+        );
+    }
+
+    #[test]
+    fn test_getdec_safe_non_numeric_returns_tuple_fail() {
+        use std::io::Cursor;
+        let mut vm = VM::new();
+        vm.input_reader = Box::new(Cursor::new("abc\n"));
+        getdec_safe_prim(&mut vm).unwrap();
+        let result = vm.pop().unwrap();
+        assert_eq!(
+            result,
+            Cell::new_tuple(vec![Cell::Int(0), Cell::Bool(false)]).unwrap()
+        );
+    }
+
+    #[test]
+    fn test_getdec_safe_partial_numeric_returns_tuple_fail() {
+        use std::io::Cursor;
+        let mut vm = VM::new();
+        vm.input_reader = Box::new(Cursor::new("12abc\n"));
+        getdec_safe_prim(&mut vm).unwrap();
+        let result = vm.pop().unwrap();
+        assert_eq!(
+            result,
+            Cell::new_tuple(vec![Cell::Int(0), Cell::Bool(false)]).unwrap()
+        );
+    }
+
+    #[test]
+    fn test_getdec_safe_empty_line_returns_tuple_fail() {
+        use std::io::Cursor;
+        let mut vm = VM::new();
+        vm.input_reader = Box::new(Cursor::new("\n"));
+        getdec_safe_prim(&mut vm).unwrap();
+        let result = vm.pop().unwrap();
+        assert_eq!(
+            result,
+            Cell::new_tuple(vec![Cell::Int(0), Cell::Bool(false)]).unwrap()
+        );
+    }
+
+    #[test]
+    fn test_getdec_safe_eof_returns_tuple_fail() {
+        use std::io::Cursor;
+        let mut vm = VM::new();
+        // Empty reader produces EOF (empty string), which fails to parse as i64.
+        vm.input_reader = Box::new(Cursor::new(""));
+        getdec_safe_prim(&mut vm).unwrap();
+        let result = vm.pop().unwrap();
+        assert_eq!(
+            result,
+            Cell::new_tuple(vec![Cell::Int(0), Cell::Bool(false)]).unwrap()
+        );
+    }
+
+    #[test]
+    fn test_getdec_safe_negative_integer_succeeds() {
+        use std::io::Cursor;
+        let mut vm = VM::new();
+        vm.input_reader = Box::new(Cursor::new("-99\n"));
+        getdec_safe_prim(&mut vm).unwrap();
+        let result = vm.pop().unwrap();
+        assert_eq!(
+            result,
+            Cell::new_tuple(vec![Cell::Int(-99), Cell::Bool(true)]).unwrap()
+        );
+    }
+
+    #[test]
+    fn test_getdec_safe_i64_overflow_returns_tuple_fail() {
+        use std::io::Cursor;
+        let mut vm = VM::new();
+        vm.input_reader = Box::new(Cursor::new("99999999999999999999\n"));
+        getdec_safe_prim(&mut vm).unwrap();
+        let result = vm.pop().unwrap();
+        assert_eq!(
+            result,
+            Cell::new_tuple(vec![Cell::Int(0), Cell::Bool(false)]).unwrap()
+        );
     }
 
     // --- getstr_prim ---

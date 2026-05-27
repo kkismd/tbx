@@ -4,7 +4,7 @@ on:
     push:
         branches: [main]
     pull_request:
-        branches: [main, issue/470-sttr1-porting]
+        branches: [main, issue/470-sttr1-porting, integration/**]
 
 env:
     CARGO_TERM_COLOR: always
