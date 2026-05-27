@@ -1,14 +1,24 @@
 # trek/util.tbx — 座標・乱数・表示補助 helper
 
+USE "../../lib/result.tbx"
+
 # ゲームタイトルとクレジットを表示する
 DEF PRINT_INTRO()
   # TODO: Mayfield STTR1 instructions / title screen (STTR1.BAS lines 5820-6410)
 END
 
-# プロンプトを表示して数値入力を受け取る
+# プロンプトを表示して数値入力を受け取る（無効入力の場合は再入力を促す）
 DEF PROMPT_NUM(PROMPT)
-  PUTSTR PROMPT
-  RETURN GETDEC
+  VAR R
+  WHILE 1 = 1
+    PUTSTR PROMPT
+    LET R = GETDEC?()
+    IF RESULT_OK(R)
+      RETURN RESULT_VAL(R)
+    ELSE
+      PRINTLN "Please enter a number."
+    ENDIF
+  ENDWH
 END
 
 # 0..99 の整数 percent roll
