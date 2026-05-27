@@ -1,20 +1,20 @@
 # trek/nav.tbx — 航法・コース・ワープ手続き
 
-# コース入力の有効性チェック (STTR1.BAS lines 1500-1530)
-# 有効値: 1..8 (9 はコーステーブルの sentinel だが入力としては拒否する)
+# コース入力の有効性チェック (STTR1.BAS line 1440: IF C1<1 OR C1>=9)
+# 有効値: 1 <= COURSE < 9 (小数可。9 はコーステーブルの sentinel だが入力としては拒否する)
 DEF IS_VALID_COURSE(COURSE)
   IF COURSE >= 1
-    IF COURSE <= 8
+    IF COURSE < 9
       RETURN 1
     ENDIF
   ENDIF
   RETURN 0
 END
 
-# ワープ係数の有効性チェック
-# 有効値: 1..8 (Mayfield 原典は小数 warp も許容するが、この段階では整数のみ扱う)
+# ワープ係数の有効性チェック (STTR1.BAS line 1470: IF W1<0 OR W1>8)
+# 有効値: 0 <= WARP <= 8 (小数可。Mayfield 原典どおり)
 DEF IS_VALID_WARP(WARP)
-  IF WARP >= 1
+  IF WARP >= 0
     IF WARP <= 8
       RETURN 1
     ENDIF
@@ -26,16 +26,16 @@ END
 # course と warp を入力・検証する
 # TODO: Enterprise の実移動は後続 issue で実装する (#801 非目標)
 DEF NAVIGATE()
-  PUTSTR "COURSE (1-8):"
+  PUTSTR "COURSE (1-9):"
   VAR COURSE = RESULT_OR(GETDEC?(), -1)
   IF IS_VALID_COURSE(COURSE) = 0
-    PRINTLN "INVALID COURSE. MUST BE 1..8."
+    PRINTLN "INVALID COURSE. MUST BE 1 <= COURSE < 9."
     RETURN
   ENDIF
-  PUTSTR "WARP FACTOR:"
+  PUTSTR "WARP FACTOR (0-8):"
   VAR WARP = RESULT_OR(GETDEC?(), -1)
   IF IS_VALID_WARP(WARP) = 0
-    PRINTLN "INVALID WARP FACTOR. MUST BE 1..8."
+    PRINTLN "INVALID WARP FACTOR. MUST BE 0..8."
     RETURN
   ENDIF
   # TODO: Enterprise の実移動は後続 issue で実装する
