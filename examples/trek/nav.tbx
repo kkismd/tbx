@@ -3,23 +3,13 @@
 # コース入力の有効性チェック (STTR1.BAS line 1440: IF C1<1 OR C1>=9)
 # 有効値: 1 <= COURSE < 9 (小数可。9 はコーステーブルの sentinel だが入力としては拒否する)
 DEF IS_VALID_COURSE(COURSE)
-  IF COURSE >= 1
-    IF COURSE < 9
-      RETURN 1
-    ENDIF
-  ENDIF
-  RETURN 0
+  RETURN (COURSE >= 1) && (COURSE < 9)
 END
 
 # ワープ係数の有効性チェック (STTR1.BAS line 1470: IF W1<0 OR W1>8)
 # 有効値: 0 <= WARP <= 8 (小数可。Mayfield 原典どおり)
 DEF IS_VALID_WARP(WARP)
-  IF WARP >= 0
-    IF WARP <= 8
-      RETURN 1
-    ENDIF
-  ENDIF
-  RETURN 0
+  RETURN (WARP >= 0) && (WARP <= 8)
 END
 
 # コース番号 (1..9) に対応する X 方向移動量を返す
@@ -104,7 +94,8 @@ END
 DEF NAVIGATE()
   PUTSTR "COURSE (1-9):"
   VAR COURSE = RESULT_OR(GETDEC?(), -1)
-  IF IS_VALID_COURSE(COURSE) = 0
+  IF IS_VALID_COURSE(COURSE)
+  ELSE
     PRINTLN "INVALID COURSE. MUST BE 1 <= COURSE < 9."
     RETURN
   ENDIF
@@ -115,7 +106,8 @@ DEF NAVIGATE()
   ENDIF
   PUTSTR "WARP FACTOR (0-8):"
   VAR WARP = RESULT_OR(GETDEC?(), -1)
-  IF IS_VALID_WARP(WARP) = 0
+  IF IS_VALID_WARP(WARP)
+  ELSE
     PRINTLN "INVALID WARP FACTOR. MUST BE 0..8."
     RETURN
   ENDIF

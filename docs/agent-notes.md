@@ -74,6 +74,46 @@ ENDIF
 
 `IF condition THEN ...` の形は TBX 構文ではない。docs に擬似コードを書くときも `IF ... THEN` や `IF ... ;` は使わず、ブロック形式か `text` フェンスで擬似コードと明示する（PR #767 の事例）。
 
+### `&&` / `||` は `Bool` を返す — `Int(1)` / `Int(0)` ではない
+
+`&&` と `||` の評価結果は `Bool(true)` / `Bool(false)` であり、`Int(1)` / `Int(0)` ではない。
+
+```tbx
+DEF IS_VALID_COURSE(COURSE)
+  RETURN (COURSE >= 1) && (COURSE < 9)
+END
+```
+
+このとき、戻り値は `Bool` である。
+
+**NG: Bool を Int と比較する**
+
+```tbx
+IF IS_VALID_COURSE(COURSE) = 0   # Bool(false) != Int(0) -> 常に false -> ガードが機能しない
+  PRINTLN "INVALID"
+  RETURN
+ENDIF
+```
+
+**OK: Bool の truthy/falsy を IF で直接判定する**
+
+```tbx
+IF IS_VALID_COURSE(COURSE)
+ELSE
+  PRINTLN "INVALID"
+  RETURN
+ENDIF
+```
+
+**テストでの使い方**
+
+`lib/tests/helper.tbx` に `ASSERT` (truthy を期待) と `ASSERT_FALSE` (falsy を期待) がある。
+
+```tbx
+ASSERT IS_VALID_COURSE(1)        # 有効 course → truthy であることを確認
+ASSERT_FALSE IS_VALID_COURSE(0)  # 無効 course → falsy であることを確認
+```
+
 ### `ELSIF` で if-else-if チェーンを書く
 
 ネストした `IF ... ELSE ... IF` ではなく `ELSIF` を使う。
