@@ -16,7 +16,7 @@ DEF PRINT_COMMAND_MENU()
 END
 
 # Dispatch a command by number (STTR1.BAS line 1290)
-# CMD 0: set course (not yet implemented)
+# CMD 0: set course (NAVIGATE)
 # CMD 1: short range sensor scan
 # CMD 2: long range sensor scan
 # CMD 3..7: not yet implemented
@@ -24,7 +24,7 @@ END
 DEF DISPATCH_COMMAND(CMD)
   SELECT CMD
   CASE 0
-    PRINTLN "SET COURSE is not implemented yet"
+    NAVIGATE
   CASE 1
     SHORT_RANGE_SCAN
   CASE 2

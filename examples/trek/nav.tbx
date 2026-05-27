@@ -1,8 +1,45 @@
 # trek/nav.tbx — 航法・コース・ワープ手続き
 
+# コース入力の有効性チェック (STTR1.BAS lines 1500-1530)
+# 有効値: 1..8 (9 はコーステーブルの sentinel だが入力としては拒否する)
+DEF IS_VALID_COURSE(COURSE)
+  IF COURSE >= 1
+    IF COURSE <= 8
+      RETURN 1
+    ENDIF
+  ENDIF
+  RETURN 0
+END
+
+# ワープ係数の有効性チェック
+# 有効値: 1..8 (Mayfield 原典は小数 warp も許容するが、この段階では整数のみ扱う)
+DEF IS_VALID_WARP(WARP)
+  IF WARP >= 1
+    IF WARP <= 8
+      RETURN 1
+    ENDIF
+  ENDIF
+  RETURN 0
+END
+
 # コース・ワープエンジン制御コマンド (STTR1.BAS lines 1410-2320)
+# course と warp を入力・検証する
+# TODO: Enterprise の実移動は後続 issue で実装する (#801 非目標)
 DEF NAVIGATE()
-  # TODO: Mayfield STTR1 navigation (cmd 0)
+  PUTSTR "COURSE (1-8):"
+  VAR COURSE = RESULT_OR(GETDEC?(), -1)
+  IF IS_VALID_COURSE(COURSE) = 0
+    PRINTLN "INVALID COURSE. MUST BE 1..8."
+    RETURN
+  ENDIF
+  PUTSTR "WARP FACTOR:"
+  VAR WARP = RESULT_OR(GETDEC?(), -1)
+  IF IS_VALID_WARP(WARP) = 0
+    PRINTLN "INVALID WARP FACTOR. MUST BE 1..8."
+    RETURN
+  ENDIF
+  # TODO: Enterprise の実移動は後続 issue で実装する
+  PRINTLN "SET COURSE movement is not implemented yet"
 END
 
 # コース番号 (1..9) に対応する X 方向移動量を返す
