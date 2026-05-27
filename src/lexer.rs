@@ -363,8 +363,16 @@ impl<'a> Lexer<'a> {
     }
 
     /// Scan an identifier.  If the identifier is `REM`, set `rem_pending`.
+    ///
+    /// Identifiers follow the pattern `[A-Za-z_][A-Za-z0-9_]*\??`:
+    /// a standard alphanumeric body followed by at most one trailing `?`.
+    /// The `?` suffix is used for recoverable-API / predicate words (e.g. `GETDEC?`).
     fn scan_ident(&mut self, start_pos: Position, start_off: usize) -> SpannedToken {
         while matches!(self.peek_char(), Some(c) if c.is_alphanumeric() || c == '_') {
+            self.advance();
+        }
+        // Consume a single trailing '?' if present (e.g. GETDEC?, EMPTY?).
+        if self.peek_char() == Some('?') {
             self.advance();
         }
         let end_off = self.peek_offset();
@@ -1430,6 +1438,91 @@ mod tests {
             matches!(toks[0], Token::Error(_)),
             "expected Error, got {:?}",
             toks[0]
+        );
+    }
+
+    // --- ? suffix identifiers ---
+
+    #[test]
+    fn test_ident_question_suffix_getdec() {
+        // GETDEC? must be tokenised as a single Ident token.
+        assert_eq!(
+            tokens("GETDEC?"),
+            vec![Token::Ident("GETDEC?".to_string()), Token::Eof]
+        );
+    }
+
+    #[test]
+    fn test_ident_question_suffix_empty() {
+        // EMPTY? must be tokenised as a single Ident token.
+        assert_eq!(
+            tokens("EMPTY?"),
+            vec![Token::Ident("EMPTY?".to_string()), Token::Eof]
+        );
+    }
+
+    #[test]
+    fn test_ident_question_suffix_is_num() {
+        // IS_NUM? must be tokenised as a single Ident token.
+        assert_eq!(
+            tokens("IS_NUM?"),
+            vec![Token::Ident("IS_NUM?".to_string()), Token::Eof]
+        );
+    }
+
+    #[test]
+    fn test_ident_plain_unchanged() {
+        // Existing plain identifiers must not be affected.
+        assert_eq!(
+            tokens("GETDEC"),
+            vec![Token::Ident("GETDEC".to_string()), Token::Eof]
+        );
+    }
+
+    #[test]
+    fn test_ident_question_suffix_only_one_question_mark() {
+        // A?? must yield Ident("A?") followed by an Error token for the second '?'.
+        let toks = tokens("A??");
+        assert_eq!(toks[0], Token::Ident("A?".to_string()));
+        assert!(
+            matches!(toks[1], Token::Error(_)),
+            "expected Error for second '?', got {:?}",
+            toks[1]
+        );
+    }
+
+    #[test]
+    fn test_question_prefix_not_ident() {
+        // ?GETDEC: leading '?' is not an identifier start; must produce Error then Ident.
+        let toks = tokens("?GETDEC");
+        assert!(
+            matches!(toks[0], Token::Error(_)),
+            "expected Error for leading '?', got {:?}",
+            toks[0]
+        );
+        assert_eq!(toks[1], Token::Ident("GETDEC".to_string()));
+    }
+
+    #[test]
+    fn test_question_mid_ident_not_consumed() {
+        // GET?DEC: the '?' is consumed as the suffix of GET, making Ident("GET?"),
+        // then DEC starts a new identifier. This is intentionally NOT a single token.
+        let toks = tokens("GET?DEC");
+        assert_eq!(toks[0], Token::Ident("GET?".to_string()));
+        assert_eq!(toks[1], Token::Ident("DEC".to_string()));
+    }
+
+    #[test]
+    fn test_ident_question_suffix_in_call_context() {
+        // GETDEC?() must tokenise as Ident("GETDEC?"), LParen, RParen.
+        assert_eq!(
+            tokens("GETDEC?()"),
+            vec![
+                Token::Ident("GETDEC?".to_string()),
+                Token::LParen,
+                Token::RParen,
+                Token::Eof,
+            ]
         );
     }
 
