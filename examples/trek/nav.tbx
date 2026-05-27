@@ -53,6 +53,11 @@ DEF MOVE_WITHIN_QUADRANT(COURSE, STEPS)
     PRINTLN "COURSE OUT OF QUADRANT BOUNDS -- MOVEMENT ABORTED (TODO: quadrant crossing)"
     RETURN
   ENDIF
+  # Abort if destination cell is already occupied (star, starbase, Klingon, etc.)
+  IF @SECTOR[NEW_SX, NEW_SY] <> 0
+    PRINTLN "COURSE BLOCKED -- MOVEMENT ABORTED (TODO: collision)"
+    RETURN
+  ENDIF
   # Clear old sector and place Enterprise at new sector
   LET @SECTOR[ENT_SX, ENT_SY] = 0
   LET ENT_SX = NEW_SX
@@ -69,16 +74,21 @@ DEF NAVIGATE()
     PRINTLN "INVALID COURSE. MUST BE 1 <= COURSE < 9."
     RETURN
   ENDIF
+  # Decimal course interpolation is not yet implemented; require integer course.
+  IF COURSE <> INT(COURSE)
+    PRINTLN "TODO: decimal course interpolation not implemented."
+    RETURN
+  ENDIF
   PUTSTR "WARP FACTOR (0-8):"
   VAR WARP = RESULT_OR(GETDEC?(), -1)
   IF IS_VALID_WARP(WARP) = 0
     PRINTLN "INVALID WARP FACTOR. MUST BE 0..8."
     RETURN
   ENDIF
-  # WARP gives the number of sectors to travel (integer steps only in this issue)
-  VAR STEPS = WARP
+  # Compute step count per Mayfield original: N = INT(W1 * 8) (STTR1.BAS line 1500)
+  VAR STEPS = INT(WARP * 8)
   IF STEPS < 1
-    PRINTLN "WARP 0 -- ENTERPRISE REMAINS AT CURRENT POSITION."
+    PRINTLN "WARP TOO LOW -- ENTERPRISE REMAINS AT CURRENT POSITION."
     RETURN
   ENDIF
   MOVE_WITHIN_QUADRANT COURSE, STEPS

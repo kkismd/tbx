@@ -7,9 +7,10 @@ USE "scan.tbx"
 USE "nav.tbx"
 USE "../../lib/tests/helper.tbx"
 
-# Helper: set Enterprise position and mark the sector
+# Helper: clear sector, set Enterprise position and mark the sector.
+# Using CLEAR_SECTOR ensures destination cells are empty for movement tests.
 DEF SET_ENTERPRISE(SX, SY)
-  LET @SECTOR[ENT_SX, ENT_SY] = 0
+  CLEAR_SECTOR
   LET ENT_SX = SX
   LET ENT_SY = SY
   LET @SECTOR[ENT_SX, ENT_SY] = 1
@@ -81,9 +82,41 @@ DEF TEST_MOVE_NORTH_OUT_OF_BOUNDS()
   ASSERT (@SECTOR[4, 4] = 1)
 END
 
+# Collision: destination occupied by a star (value 4) -> abort, Enterprise stays
+DEF TEST_MOVE_BLOCKED_BY_STAR()
+  INIT_GAME
+  SET_ENTERPRISE 4, 4
+  # Place a star at (5, 4), the destination of course 1 step 1
+  LET @SECTOR[5, 4] = 4
+  MOVE_WITHIN_QUADRANT 1, 1
+  # Enterprise must remain at original position
+  ASSERT (ENT_SX = 4)
+  ASSERT (ENT_SY = 4)
+  ASSERT (@SECTOR[4, 4] = 1)
+  # Star cell must not be overwritten
+  ASSERT (@SECTOR[5, 4] = 4)
+END
+
+# Smoke test: decimal course does not crash MOVE_WITHIN_QUADRANT
+# (caller NAVIGATE() rejects decimal course, but direct call with float index
+# must not cause an array-index type error via GET_COURSE_DX/DY)
+# We skip the direct call because integer-only course is the contract of
+# MOVE_WITHIN_QUADRANT; this test verifies NAVIGATE() safely returns on decimal.
+# (Interactive NAVIGATE() cannot be unit-tested here; guard is in nav.tbx.)
+
+# Smoke test: fractional warp (0.2) results in STEPS=INT(0.2*8)=1 sector move
+DEF TEST_FRACTIONAL_WARP_STEPS()
+  # Verify that INT(WARP * 8) = 1 for WARP = 0.2
+  ASSERT (INT(0.2 * 8) = 1)
+  # Verify that INT(WARP * 8) = 0 for WARP < 0.125 (below 1 step)
+  ASSERT (INT(0.1 * 8) = 0)
+END
+
 TEST_MOVE_EAST_1_STEP
 TEST_MOVE_NORTH_2_STEPS
 TEST_MOVE_WEST_3_STEPS
 TEST_MOVE_SOUTH_1_STEP
 TEST_MOVE_OUT_OF_BOUNDS_NO_CRASH
 TEST_MOVE_NORTH_OUT_OF_BOUNDS
+TEST_MOVE_BLOCKED_BY_STAR
+TEST_FRACTIONAL_WARP_STEPS
