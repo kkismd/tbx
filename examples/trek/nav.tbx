@@ -38,30 +38,47 @@ END
 # COURSE: validated integer course (1..8)
 # STEPS:  validated integer step count (>= 1)
 # Uses GET_COURSE_DX / GET_COURSE_DY to obtain the direction vector.
-# Destination is computed as ENT_SX + DX*STEPS, ENT_SY + DY*STEPS.
-# If destination is outside sector bounds (1..8), movement is aborted without crashing.
-# On success: updates @SECTOR (old cell -> 0=empty, new cell -> 1=Enterprise)
-#             and updates ENT_SX / ENT_SY.
+# Advances 1 step at a time (Mayfield 原典 FOR I=1 TO N 方式).
+# If a next sector is outside sector bounds (1..8): prints TODO and returns
+#   without moving (quadrant crossing は未実装のため abort).
+# If a next sector is occupied (star / starbase / Klingon 等): stops at the
+#   previous (last valid) sector; obstacle cell は上書きしない.
+# On completion: updates @SECTOR (old cell -> 0=empty, new cell -> 1=Enterprise)
+#                and updates ENT_SX / ENT_SY to the final position.
 DEF MOVE_WITHIN_QUADRANT(COURSE, STEPS)
   VAR DX = GET_COURSE_DX(COURSE)
   VAR DY = GET_COURSE_DY(COURSE)
-  # Compute destination after all steps
-  VAR NEW_SX = ENT_SX + DX * STEPS
-  VAR NEW_SY = ENT_SY + DY * STEPS
-  # Abort if destination is outside quadrant bounds
-  IF IS_IN_SECTOR_BOUNDS(NEW_SX, NEW_SY) = 0
-    PRINTLN "COURSE OUT OF QUADRANT BOUNDS -- MOVEMENT ABORTED (TODO: quadrant crossing)"
-    RETURN
-  ENDIF
-  # Abort if destination cell is already occupied (star, starbase, Klingon, etc.)
-  IF @SECTOR[NEW_SX, NEW_SY] <> 0
-    PRINTLN "COURSE BLOCKED -- MOVEMENT ABORTED (TODO: collision)"
-    RETURN
-  ENDIF
-  # Clear old sector and place Enterprise at new sector
+  # CURR_SX / CURR_SY は各 step 後の有効位置を追跡する
+  VAR CURR_SX = ENT_SX
+  VAR CURR_SY = ENT_SY
+  VAR NEXT_SX = CURR_SX
+  VAR NEXT_SY = CURR_SY
+  VAR I = 1
+  VAR DONE = 0
+  WHILE I <= STEPS
+    IF DONE = 0
+      LET NEXT_SX = CURR_SX + DX
+      LET NEXT_SY = CURR_SY + DY
+      # bounds 外: quadrant crossing は未実装のため全体を abort して元の位置に残す
+      IF IS_IN_SECTOR_BOUNDS(NEXT_SX, NEXT_SY) = 0
+        PRINTLN "COURSE OUT OF QUADRANT BOUNDS -- MOVEMENT ABORTED (TODO: quadrant crossing)"
+        RETURN
+      ENDIF
+      # 非空 cell: Enterprise は CURR 位置に残り、障害物は上書きしない
+      IF @SECTOR[NEXT_SX, NEXT_SY] <> 0
+        PRINTLN "COURSE BLOCKED -- MOVEMENT ABORTED (TODO: collision)"
+        LET DONE = 1
+      ELSE
+        LET CURR_SX = NEXT_SX
+        LET CURR_SY = NEXT_SY
+      ENDIF
+    ENDIF
+    LET I = I + 1
+  ENDWH
+  # Enterprise を元の sector から最終 sector へ移動する
   LET @SECTOR[ENT_SX, ENT_SY] = 0
-  LET ENT_SX = NEW_SX
-  LET ENT_SY = NEW_SY
+  LET ENT_SX = CURR_SX
+  LET ENT_SY = CURR_SY
   LET @SECTOR[ENT_SX, ENT_SY] = 1
 END
 
