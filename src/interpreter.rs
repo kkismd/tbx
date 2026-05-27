@@ -165,17 +165,18 @@ impl Default for Interpreter {
 impl Interpreter {
     /// Create a new `Interpreter` backed by a fully initialized VM.
     ///
-    /// Loads the standard library (`lib/basic.tbx`) embedded at compile time.
-    /// Panics if the standard library fails to load, which indicates a bug in
-    /// the library source rather than a runtime failure.
+    /// Loads the standard library (`lib/basic.tbx` and `lib/result.tbx`) embedded at
+    /// compile time. Panics if the standard library fails to load, which indicates a bug
+    /// in the library source rather than a runtime failure.
     ///
     /// For a fallible variant that returns an error instead of panicking,
     /// use [`Interpreter::try_new`].
     pub fn new() -> Self {
-        // lib/basic.tbx is embedded at compile time and is always syntactically valid TBX.
-        // A panic here indicates a bug in the standard library source, not a runtime failure.
+        // lib/basic.tbx and lib/result.tbx are embedded at compile time and are always
+        // syntactically valid TBX. A panic here indicates a bug in the standard library
+        // source, not a runtime failure.
         Self::try_new().unwrap_or_else(|e| {
-            panic!("internal error: failed to load lib/basic.tbx: {e}");
+            panic!("internal error: failed to load standard library: {e}");
         })
     }
 
@@ -194,6 +195,8 @@ impl Interpreter {
         };
         const STDLIB: &str = include_str!("../lib/basic.tbx");
         interp.exec_source(STDLIB)?;
+        const RESULT_LIB: &str = include_str!("../lib/result.tbx");
+        interp.exec_source(RESULT_LIB)?;
         interp.vm.seal_lib();
         Ok(interp)
     }
@@ -695,6 +698,18 @@ impl Interpreter {
     #[cfg(test)]
     pub fn vm(&self) -> &VM {
         &self.vm
+    }
+
+    /// Expose the inner VM mutably for direct manipulation in tests.
+    ///
+    /// Allows tests to replace `vm.input_reader` with a mock (e.g. `Cursor<&[u8]>`)
+    /// to drive primitives like `GETDEC?` without requiring real stdin interaction.
+    ///
+    /// This method is intentionally excluded from the public API documentation.
+    /// It is intended for use in both unit tests and integration tests (`tests/`).
+    #[doc(hidden)]
+    pub fn vm_mut(&mut self) -> &mut VM {
+        &mut self.vm
     }
 
     /// Set the base directory used to resolve relative USE paths.

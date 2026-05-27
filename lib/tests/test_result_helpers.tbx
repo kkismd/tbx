@@ -1,0 +1,105 @@
+# lib/tests/test_result_helpers.tbx — TBX tests for the RESULT_* helper library
+USE "lib/tests/helper.tbx"
+
+# --- RESULT_VAL: extract value from a result tuple ---
+
+ASSERT RESULT_VAL(TUPLE(123, 1 = 1)) = 123
+ASSERT RESULT_VAL(TUPLE(0, 1 = 0)) = 0
+
+# --- RESULT_OK: extract ok flag from a result tuple ---
+
+DEF CHECK_RESULT_OK_TRUE()
+  # Bool(true) is obtained via comparison (1 = 1)
+  VAR R
+  LET R = TUPLE(123, 1 = 1)
+  RETURN RESULT_OK(R) = (1 = 1)
+END
+ASSERT CHECK_RESULT_OK_TRUE()
+
+DEF CHECK_RESULT_OK_FALSE()
+  # Bool(false) is obtained via comparison (1 = 0)
+  VAR R
+  LET R = TUPLE(0, 1 = 0)
+  RETURN RESULT_OK(R) = (1 = 0)
+END
+ASSERT CHECK_RESULT_OK_FALSE()
+
+# --- RESULT_OR: return value on success, default on failure ---
+
+ASSERT RESULT_OR(TUPLE(123, 1 = 1), 0) = 123
+ASSERT RESULT_OR(TUPLE(0, 1 = 0), 9) = 9
+
+# --- RESULT_EXPECT: return value on success ---
+
+DEF CHECK_RESULT_EXPECT()
+  VAR V
+  LET V = RESULT_EXPECT(TUPLE(123, 1 = 1), "msg")
+  RETURN V = 123
+END
+ASSERT CHECK_RESULT_EXPECT()
+
+# --- RESULT_OK_OF: wrap value as successful result ---
+
+DEF CHECK_RESULT_OK_OF_VAL()
+  VAR R
+  LET R = RESULT_OK_OF(42)
+  RETURN R[1] = 42
+END
+ASSERT CHECK_RESULT_OK_OF_VAL()
+
+DEF CHECK_RESULT_OK_OF_FLAG()
+  VAR R
+  LET R = RESULT_OK_OF(42)
+  RETURN R[2] = (1 = 1)
+END
+ASSERT CHECK_RESULT_OK_OF_FLAG()
+
+# --- RESULT_ERR_OF: wrap value as failed result ---
+
+DEF CHECK_RESULT_ERR_OF_VAL()
+  VAR R
+  LET R = RESULT_ERR_OF(0)
+  RETURN R[1] = 0
+END
+ASSERT CHECK_RESULT_ERR_OF_VAL()
+
+DEF CHECK_RESULT_ERR_OF_FLAG()
+  VAR R
+  LET R = RESULT_ERR_OF(0)
+  RETURN R[2] = (1 = 0)
+END
+ASSERT CHECK_RESULT_ERR_OF_FLAG()
+
+# --- Round-trip: RESULT_OK_OF then RESULT_VAL / RESULT_OK ---
+
+DEF CHECK_OK_OF_ROUND_TRIP_VAL()
+  VAR R
+  LET R = RESULT_OK_OF(99)
+  RETURN RESULT_VAL(R) = 99
+END
+ASSERT CHECK_OK_OF_ROUND_TRIP_VAL()
+
+DEF CHECK_OK_OF_ROUND_TRIP_OK()
+  VAR R
+  LET R = RESULT_OK_OF(99)
+  RETURN RESULT_OK(R) = (1 = 1)
+END
+ASSERT CHECK_OK_OF_ROUND_TRIP_OK()
+
+# --- Round-trip: RESULT_ERR_OF then RESULT_OR uses default ---
+
+DEF CHECK_ERR_OF_ROUND_TRIP()
+  VAR R
+  LET R = RESULT_ERR_OF(0)
+  RETURN RESULT_OR(R, 7) = 7
+END
+ASSERT CHECK_ERR_OF_ROUND_TRIP()
+
+# --- RESULT_OR with success result returns value not default ---
+
+DEF CHECK_RESULT_OR_SUCCESS()
+  VAR R
+  LET R = TUPLE(42, 1 = 1)
+  RETURN RESULT_OR(R, 0) = 42
+END
+ASSERT CHECK_RESULT_OR_SUCCESS()
