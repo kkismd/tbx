@@ -74,6 +74,53 @@ ENDIF
 
 `IF condition THEN ...` の形は TBX 構文ではない。docs に擬似コードを書くときも `IF ... THEN` や `IF ... ;` は使わず、ブロック形式か `text` フェンスで擬似コードと明示する（PR #767 の事例）。
 
+### `ELSIF` で if-else-if チェーンを書く
+
+ネストした `IF ... ELSE ... IF` ではなく `ELSIF` を使う。
+
+```tbx
+# NG: ELSE の中に IF をネストするとインデントが深くなる
+IF X = 1
+  ...
+ELSE
+  IF X = 2
+    ...
+  ELSE
+    ...
+  ENDIF
+ENDIF
+
+# OK: ELSIF でフラットに書く
+IF X = 1
+  ...
+ELSIF X = 2
+  ...
+ELSE
+  ...
+ENDIF
+```
+
+### 単一値の分岐には `SELECT / CASE` を使う
+
+1 つの変数・式の値によって処理を切り替えるときは `SELECT expr` を使う。`IF ELSIF ELSIF ...` より意図が明確になる。
+
+```tbx
+SELECT CELL
+CASE 4
+  PRINTLN "STAR"
+CASE 3
+  PRINTLN "STARBASE"
+CASE 2
+  PRINTLN "KLINGON"
+CASE_ELSE
+  PRINTLN "UNKNOWN"
+ENDSEL
+```
+
+- `CASE` は値の完全一致のみ（範囲・複数値は不可）
+- デフォルト節は `CASE_ELSE`
+- ブロックの終端は `ENDSEL`
+
 ---
 
 ## 配列とストレージの注意
