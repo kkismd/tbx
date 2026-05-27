@@ -112,6 +112,21 @@ DEF TEST_FRACTIONAL_WARP_STEPS()
   ASSERT (INT(0.1 * 8) = 0)
 END
 
+# Smoke test: Float(1.0) course (as returned by GETDEC?) must not crash.
+# NAVIGATE() applies INT() before calling MOVE_WITHIN_QUADRANT, so the
+# array index inside GET_COURSE_DX/DY must receive an integer.
+# This test simulates that conversion and verifies the move succeeds.
+DEF TEST_FLOAT_INTEGER_COURSE_NO_CRASH()
+  INIT_GAME
+  SET_ENTERPRISE 4, 4
+  # Simulate NAVIGATE() converting Float(1.0) to Int via INT()
+  VAR COURSE_I = INT(1.0)
+  MOVE_WITHIN_QUADRANT COURSE_I, 1
+  # Course 1 is East (DX=+1 DY=0): (4,4) -> (5,4)
+  ASSERT (ENT_SX = 5)
+  ASSERT (ENT_SY = 4)
+END
+
 TEST_MOVE_EAST_1_STEP
 TEST_MOVE_NORTH_2_STEPS
 TEST_MOVE_WEST_3_STEPS
@@ -120,3 +135,4 @@ TEST_MOVE_OUT_OF_BOUNDS_NO_CRASH
 TEST_MOVE_NORTH_OUT_OF_BOUNDS
 TEST_MOVE_BLOCKED_BY_STAR
 TEST_FRACTIONAL_WARP_STEPS
+TEST_FLOAT_INTEGER_COURSE_NO_CRASH

@@ -91,5 +91,9 @@ DEF NAVIGATE()
     PRINTLN "WARP TOO LOW -- ENTERPRISE REMAINS AT CURRENT POSITION."
     RETURN
   ENDIF
-  MOVE_WITHIN_QUADRANT COURSE, STEPS
+  # Ensure course is an integer before passing to MOVE_WITHIN_QUADRANT.
+  # GETDEC? may return Float(1.0) for inputs like "1.0", which would cause
+  # an array-index type error inside GET_COURSE_DX/DY.
+  VAR COURSE_I = INT(COURSE)
+  MOVE_WITHIN_QUADRANT COURSE_I, STEPS
 END
