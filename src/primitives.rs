@@ -1817,33 +1817,74 @@ fn accept_prim(vm: &mut VM) -> Result<String, TbxError> {
     Ok(trimmed)
 }
 
-/// GETDEC — read one line from the input and push its integer value onto the data stack.
+/// Returns `true` if the trimmed input string looks like a floating-point literal.
 ///
-/// Calls `accept_prim` internally to read a line, then parses the result as a signed
-/// decimal integer (leading/trailing whitespace is ignored) and pushes it as `Cell::Int`.
+/// A string is considered float-like if it contains `.`, `e`, or `E`.  This is
+/// used by `parse_decimal_cell` to decide whether to attempt `f64` or `i64`
+/// parsing.  The check is intentionally simple: correctness of the value is
+/// validated by the subsequent `parse` call.
+fn looks_like_float(s: &str) -> bool {
+    s.contains('.') || s.contains('e') || s.contains('E')
+}
+
+/// Parse a trimmed decimal input string into a `Cell`.
+///
+/// - If the string looks like a floating-point literal (contains `.`, `e`, or
+///   `E`), it is parsed as `f64` and returned as `Cell::Float`.
+/// - Otherwise it is parsed as `i64` and returned as `Cell::Int`.
+///
+/// `input` is the **original** (un-trimmed) string; it is used only in the
+/// error payload so that callers see the full original input in error messages.
+/// `trimmed` must be `input.trim()`.
+///
+/// Returns `TbxError::ParseIntError` on parse failure.
+fn parse_decimal_cell(input: &str, trimmed: &str) -> Result<Cell, TbxError> {
+    if looks_like_float(trimmed) {
+        trimmed
+            .parse::<f64>()
+            .map(Cell::Float)
+            .map_err(|_| TbxError::ParseIntError {
+                input: input.to_string(),
+            })
+    } else {
+        trimmed
+            .parse::<i64>()
+            .map(Cell::Int)
+            .map_err(|_| TbxError::ParseIntError {
+                input: input.to_string(),
+            })
+    }
+}
+
+/// GETDEC — read one line from the input and push its decimal value onto the data stack.
+///
+/// Calls `accept_prim` internally to read a line, then parses the result as a decimal
+/// number (leading/trailing whitespace is ignored).
+///
+/// - Integer-looking input (e.g. `1`, `-7`) is pushed as `Cell::Int`.
+/// - Float-looking input (e.g. `1.5`, `8.0`, `-0.5`) is pushed as `Cell::Float`.
+///
 /// No prior `ACCEPT` call is needed.
 ///
-/// Returns `TbxError::ParseIntError` if the input cannot be parsed as a signed decimal
-/// integer (including when the input is empty or EOF).
+/// Returns `TbxError::ParseIntError` if the input cannot be parsed as a decimal number
+/// (including when the input is empty or EOF).
 ///
-/// Stack signature: `( -- n )`
+/// Stack signature: `( -- n:Int|Float )`
 pub fn getdec_prim(vm: &mut VM) -> Result<(), TbxError> {
     let s = accept_prim(vm)?;
-    let n = s
-        .trim()
-        .parse::<i64>()
-        .map_err(|_| TbxError::ParseIntError { input: s })?;
-    vm.push(Cell::Int(n))
+    let cell = parse_decimal_cell(&s, s.trim())?;
+    vm.push(cell)
 }
 
 /// GETDEC? — read one line from the input and push `TUPLE(n, ok)` onto the data stack.
 ///
 /// Calls `accept_prim` internally to read a line, trims leading/trailing whitespace,
-/// and attempts to parse the result as a signed decimal integer (`i64`).
+/// and attempts to parse the result as a decimal number (`i64` or `f64`).
 ///
-/// On success pushes `TUPLE(n, TRUE)`.
+/// On success pushes `TUPLE(n, TRUE)` where `n` is `Cell::Int` for integer-looking
+/// input and `Cell::Float` for float-looking input.
 /// On parse failure (empty input, non-numeric, partial numeric, out-of-range, or EOF)
-/// pushes `TUPLE(0, FALSE)`.
+/// pushes `TUPLE(0, FALSE)` where `0` is `Cell::Int(0)` for backward compatibility.
 ///
 /// I/O errors are returned as `TbxError::InputIoError` / `TbxError::OutputIoError`
 /// without pushing anything onto the stack.
@@ -1851,11 +1892,11 @@ pub fn getdec_prim(vm: &mut VM) -> Result<(), TbxError> {
 /// This is the recoverable counterpart of `GETDEC`.  Use it when the program must
 /// handle invalid user input gracefully instead of terminating.
 ///
-/// Stack signature: `( -- TUPLE(n:Int, ok:Bool) )`
+/// Stack signature: `( -- TUPLE(n:Int|Float, ok:Bool) )`
 pub fn getdec_safe_prim(vm: &mut VM) -> Result<(), TbxError> {
     let s = accept_prim(vm)?;
-    let result = match s.trim().parse::<i64>() {
-        Ok(n) => Cell::new_tuple(vec![Cell::Int(n), Cell::Bool(true)])?,
+    let result = match parse_decimal_cell(&s, s.trim()) {
+        Ok(cell) => Cell::new_tuple(vec![cell, Cell::Bool(true)])?,
         Err(_) => Cell::new_tuple(vec![Cell::Int(0), Cell::Bool(false)])?,
     };
     vm.push(result)
@@ -5910,6 +5951,66 @@ mod tests {
         assert_eq!(vm.pop(), Ok(Cell::Int(123)));
     }
 
+    #[test]
+    fn test_getdec_float_1_5() {
+        use std::io::Cursor;
+        let mut vm = VM::new();
+        vm.input_reader = Box::new(Cursor::new("1.5\n"));
+        getdec_prim(&mut vm).unwrap();
+        assert_eq!(vm.pop(), Ok(Cell::Float(1.5)));
+    }
+
+    #[test]
+    fn test_getdec_float_0_2() {
+        use std::io::Cursor;
+        let mut vm = VM::new();
+        vm.input_reader = Box::new(Cursor::new("0.2\n"));
+        getdec_prim(&mut vm).unwrap();
+        assert_eq!(vm.pop(), Ok(Cell::Float(0.2)));
+    }
+
+    #[test]
+    fn test_getdec_float_8_0() {
+        use std::io::Cursor;
+        let mut vm = VM::new();
+        vm.input_reader = Box::new(Cursor::new("8.0\n"));
+        getdec_prim(&mut vm).unwrap();
+        assert_eq!(vm.pop(), Ok(Cell::Float(8.0)));
+    }
+
+    #[test]
+    fn test_getdec_float_negative() {
+        use std::io::Cursor;
+        let mut vm = VM::new();
+        vm.input_reader = Box::new(Cursor::new("-0.5\n"));
+        getdec_prim(&mut vm).unwrap();
+        assert_eq!(vm.pop(), Ok(Cell::Float(-0.5)));
+    }
+
+    #[test]
+    fn test_getdec_integer_is_not_float() {
+        use std::io::Cursor;
+        // Integer-looking input must remain Cell::Int, not Cell::Float.
+        let mut vm = VM::new();
+        vm.input_reader = Box::new(Cursor::new("1\n"));
+        getdec_prim(&mut vm).unwrap();
+        assert_eq!(vm.pop(), Ok(Cell::Int(1)));
+    }
+
+    #[test]
+    fn test_getdec_float_invalid_returns_error() {
+        use std::io::Cursor;
+        // A dot-containing string that is not a valid f64 must return ParseIntError.
+        let mut vm = VM::new();
+        vm.input_reader = Box::new(Cursor::new("1.2.3\n"));
+        let result = getdec_prim(&mut vm);
+        assert!(
+            matches!(result, Err(TbxError::ParseIntError { .. })),
+            "expected ParseIntError for '1.2.3', got: {:?}",
+            result
+        );
+    }
+
     // --- getdec_safe_prim ---
 
     #[test]
@@ -6009,6 +6110,60 @@ mod tests {
         use std::io::Cursor;
         let mut vm = VM::new();
         vm.input_reader = Box::new(Cursor::new("99999999999999999999\n"));
+        getdec_safe_prim(&mut vm).unwrap();
+        let result = vm.pop().unwrap();
+        assert_eq!(
+            result,
+            Cell::new_tuple(vec![Cell::Int(0), Cell::Bool(false)]).unwrap()
+        );
+    }
+
+    #[test]
+    fn test_getdec_safe_float_1_5_returns_tuple_ok() {
+        use std::io::Cursor;
+        let mut vm = VM::new();
+        vm.input_reader = Box::new(Cursor::new("1.5\n"));
+        getdec_safe_prim(&mut vm).unwrap();
+        let result = vm.pop().unwrap();
+        assert_eq!(
+            result,
+            Cell::new_tuple(vec![Cell::Float(1.5), Cell::Bool(true)]).unwrap()
+        );
+    }
+
+    #[test]
+    fn test_getdec_safe_float_0_2_returns_tuple_ok() {
+        use std::io::Cursor;
+        let mut vm = VM::new();
+        vm.input_reader = Box::new(Cursor::new("0.2\n"));
+        getdec_safe_prim(&mut vm).unwrap();
+        let result = vm.pop().unwrap();
+        assert_eq!(
+            result,
+            Cell::new_tuple(vec![Cell::Float(0.2), Cell::Bool(true)]).unwrap()
+        );
+    }
+
+    #[test]
+    fn test_getdec_safe_integer_1_returns_tuple_ok() {
+        use std::io::Cursor;
+        // Integer-looking input must be Cell::Int in the success tuple.
+        let mut vm = VM::new();
+        vm.input_reader = Box::new(Cursor::new("1\n"));
+        getdec_safe_prim(&mut vm).unwrap();
+        let result = vm.pop().unwrap();
+        assert_eq!(
+            result,
+            Cell::new_tuple(vec![Cell::Int(1), Cell::Bool(true)]).unwrap()
+        );
+    }
+
+    #[test]
+    fn test_getdec_safe_invalid_float_returns_tuple_fail() {
+        use std::io::Cursor;
+        // A dot-containing string that is not a valid f64 must return the failure tuple.
+        let mut vm = VM::new();
+        vm.input_reader = Box::new(Cursor::new("1.2.3\n"));
         getdec_safe_prim(&mut vm).unwrap();
         let result = vm.pop().unwrap();
         assert_eq!(

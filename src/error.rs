@@ -144,7 +144,7 @@ pub enum TbxError {
     InvalidArgument {
         message: String,
     },
-    /// GETDEC could not parse the input buffer as a signed decimal integer.
+    /// GETDEC could not parse the input buffer as a decimal number (integer or float).
     ParseIntError {
         /// The string that failed to parse.
         input: String,
@@ -296,7 +296,7 @@ impl std::fmt::Display for TbxError {
                 write!(f, "invalid argument: {message}")
             }
             TbxError::ParseIntError { input } => {
-                write!(f, "GETDEC: cannot parse {:?} as a decimal integer", input)
+                write!(f, "GETDEC: cannot parse {:?} as a decimal number", input)
             }
             TbxError::InputIoError { reason } => {
                 write!(f, "ACCEPT: I/O error reading input: {reason}")
