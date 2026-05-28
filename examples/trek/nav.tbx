@@ -102,6 +102,39 @@ DEF APPLY_NAV_ENERGY_COST(STEPS)
   LET ENERGY = ENERGY - STEPS + 5
 END
 
+DEF APPLY_NAV_STARDATE_COST(WARP)
+  IF NAV_MOVE_RESULT = NAV_RESULT_QUADRANT_CROSSING()
+    LET STARDATE = STARDATE + 1
+    RETURN
+  ENDIF
+  IF NAV_MOVE_RESULT = NAV_RESULT_SAME_QUADRANT()
+    IF WARP >= 1
+      LET STARDATE = STARDATE + 1
+    ENDIF
+    RETURN
+  ENDIF
+  # Blocked and galaxy-edge aborts stay in the same quadrant path.
+  # Mayfield charges time for that path only when WARP >= 1.
+  IF NAV_MOVE_RESULT = NAV_RESULT_BLOCKED()
+    IF WARP >= 1
+      LET STARDATE = STARDATE + 1
+    ENDIF
+    RETURN
+  ENDIF
+  IF NAV_MOVE_RESULT = NAV_RESULT_GALAXY_EDGE()
+    IF WARP >= 1
+      LET STARDATE = STARDATE + 1
+    ENDIF
+    RETURN
+  ENDIF
+END
+
+DEF CHECK_MISSION_DEADLINE()
+  IF STARDATE > START_STARDATE + MISSION_DAYS
+    PRINTLN "TODO: mission deadline exceeded endgame not implemented."
+  ENDIF
+END
+
 # Move Enterprise within the current quadrant (STTR1.BAS lines 1500-2320, partial)
 # COURSE: validated integer course (1..8)
 # STEPS:  validated integer step count (>= 1)
@@ -183,7 +216,9 @@ DEF RUN_NAVIGATION(COURSE, WARP)
     RETURN
   ENDIF
   MOVE_WITHIN_QUADRANT COURSE, STEPS
+  APPLY_NAV_STARDATE_COST WARP
   APPLY_NAV_ENERGY_COST NAV_STEPS_REQUESTED
+  CHECK_MISSION_DEADLINE
 END
 
 # コース・ワープエンジン制御コマンド (STTR1.BAS lines 1410-2320)
