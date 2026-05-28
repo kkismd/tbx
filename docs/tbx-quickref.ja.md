@@ -265,62 +265,72 @@ PRINT_ALL "a", "b", "c"
 
 ## 制御構造
 
-制御構造の多くは `lib/basic.tbx` の標準ライブラリで定義されている。
+制御構造の多くは `lib/basic.tbx` の IMMEDIATE ワードとして定義されている。`IF`, `WHILE`, `DO`, `SELECT`, `FOR` はいずれも `DEF ... END` の内部で使う。
 
 ### IF / ELSIF / ELSE / ENDIF
 
 ```tbx
-IF X < 0
-  PRINTLN "negative"
-ELSIF X = 0
-  PRINTLN "zero"
-ELSE
-  PRINTLN "positive"
-ENDIF
+DEF SIGN(X)
+  IF X < 0
+    PRINTLN "negative"
+  ELSIF X = 0
+    PRINTLN "zero"
+  ELSE
+    PRINTLN "positive"
+  ENDIF
+END
 ```
 
 ### WHILE / ENDWH
 
 ```tbx
-VAR I
-SET &I, 1
-WHILE I <= 10
-  PRINTLN I
-  SET &I, I + 1
-ENDWH
+DEF COUNT_TO(N)
+  VAR I
+  SET &I, 1
+  WHILE I <= N
+    PRINTLN I
+    SET &I, I + 1
+  ENDWH
+END
 ```
 
 ### DO / UNTIL
 
 ```tbx
-VAR I
-SET &I, 0
-DO
-  SET &I, I + 1
-  PRINTLN I
-UNTIL I >= 3
+DEF COUNT_THREE()
+  VAR I
+  SET &I, 0
+  DO
+    SET &I, I + 1
+    PRINTLN I
+  UNTIL I >= 3
+END
 ```
 
 ### SELECT / CASE / CASE_ELSE / ENDSEL
 
 ```tbx
-SELECT X
-CASE 1
-  PRINTLN "one"
-CASE 2
-  PRINTLN "two"
-CASE_ELSE
-  PRINTLN "other"
-ENDSEL
+DEF DESCRIBE(X)
+  SELECT X
+  CASE 1
+    PRINTLN "one"
+  CASE 2
+    PRINTLN "two"
+  CASE_ELSE
+    PRINTLN "other"
+  ENDSEL
+END
 ```
 
 ### FOR / NEXT
 
 ```tbx
-VAR I
-FOR &I, 5
-  PRINTLN I
-NEXT
+DEF PRINT_FIVE()
+  VAR I
+  FOR &I, 5
+    PRINTLN I
+  NEXT
+END
 ```
 
 現在の `FOR` は開始値 1、ステップ 1 固定である。0-based range、任意の開始値、任意ステップが必要な場合は `WHILE` を使う。
@@ -409,13 +419,15 @@ PRINTLN TUPLE_LEN(P)
 `GETDEC?` は recoverable な入力 API として `TUPLE(n, ok)` を返す。
 
 ```tbx
-VAR R
-SET &R, GETDEC?()
-IF RESULT_OK(R)
-  PRINTLN RESULT_VAL(R)
-ELSE
-  PRINTLN "invalid input"
-ENDIF
+DEF READ_NUMBER()
+  VAR R
+  SET &R, GETDEC?()
+  IF RESULT_OK(R)
+    PRINTLN RESULT_VAL(R)
+  ELSE
+    PRINTLN "invalid input"
+  ENDIF
+END
 ```
 
 ## 入出力
@@ -447,14 +459,16 @@ PUTCHR 10
 - `GETSTR()` — 1行読んで文字列として返す
 
 ```tbx
-PRINT "number? "
-VAR R
-SET &R, GETDEC?()
-IF RESULT_OK(R)
-  PRINTLN "got ", RESULT_VAL(R)
-ELSE
-  PRINTLN "not a number"
-ENDIF
+DEF READ_INPUT()
+  PRINT "number? "
+  VAR R
+  SET &R, GETDEC?()
+  IF RESULT_OK(R)
+    PRINTLN "got ", RESULT_VAL(R)
+  ELSE
+    PRINTLN "not a number"
+  ENDIF
+END
 ```
 
 ## 文字列
@@ -609,6 +623,8 @@ USE "lib/foo.tbx"
 - 値を返すワードを式内で使うときだけ `NAME(args...)` と書く。
 - トップレベルでは `VAR X = expr` を使わず、`VAR X` の後に `SET &X, expr` を使う。
 - 代入は `SET &X, expr` を使う。`LET X = expr` は `DEF ... END` の内部でのみ使える。
+- `IF`, `WHILE`, `DO`, `SELECT`, `FOR` などの制御構造は IMMEDIATE ワードであり、`DEF ... END` の内部でのみ使える。トップレベルでは動かない。
+- `FOR` の変数参照には `&` が必要: `FOR &I, 5`。
 - 配列要素の添字は 1-based。`@A[0]` は通常使わない。
 - `FOR` は 1 始まり・ステップ 1 固定。必要なら `WHILE` を使う。
 - 文字列、タプル、Result 風ヘルパ、配列、乱数、時刻関数がある。自前で再実装する前にこの文書と `src/primitives.rs` / `lib/*.tbx` を確認する。
