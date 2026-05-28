@@ -72,3 +72,14 @@ VAR NORM_SX
 VAR NORM_SY
 VAR NORM_CROSSED
 VAR NORM_IN_GALAXY
+
+# --- Navigation movement result ---
+# NAV_MOVE_RESULT:
+#   0 = none / not moved
+#   1 = same quadrant completed
+#   2 = blocked by obstacle
+#   3 = quadrant crossing
+#   4 = galaxy edge
+VAR NAV_MOVE_RESULT
+VAR NAV_STEPS_REQUESTED
+VAR NAV_STEPS_COMPLETED

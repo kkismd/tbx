@@ -41,6 +41,26 @@ DEF PRINT_NAV_BLOCKED_MESSAGE(CELL)
   ENDSEL
 END
 
+DEF NAV_RESULT_NONE()
+  RETURN 0
+END
+
+DEF NAV_RESULT_SAME_QUADRANT()
+  RETURN 1
+END
+
+DEF NAV_RESULT_BLOCKED()
+  RETURN 2
+END
+
+DEF NAV_RESULT_QUADRANT_CROSSING()
+  RETURN 3
+END
+
+DEF NAV_RESULT_GALAXY_EDGE()
+  RETURN 4
+END
+
 # sector 座標が 1..8 の外に出たとき、隣接 quadrant と wrap 後 sector 座標に変換する
 # 結果は NORM_QX / NORM_QY / NORM_SX / NORM_SY / NORM_CROSSED / NORM_IN_GALAXY に書き込む
 # galaxy bounds 判定は IS_IN_QUAD_BOUNDS を再利用する (quadrant と galaxy は同じ 1..8 x 1..8)
@@ -91,6 +111,9 @@ END
 # On completion: updates @SECTOR (old cell -> 0=empty, new cell -> 1=Enterprise)
 #                and updates ENT_SX / ENT_SY to the final position.
 DEF MOVE_WITHIN_QUADRANT(COURSE, STEPS)
+  LET NAV_MOVE_RESULT = NAV_RESULT_NONE()
+  LET NAV_STEPS_REQUESTED = STEPS
+  LET NAV_STEPS_COMPLETED = 0
   VAR DX = GET_COURSE_DX(COURSE)
   VAR DY = GET_COURSE_DY(COURSE)
   # CURR_SX / CURR_SY は各 step 後の有効位置を追跡する
@@ -112,9 +135,12 @@ DEF MOVE_WITHIN_QUADRANT(COURSE, STEPS)
           LET ENT_QY = NORM_QY
           LET ENT_SX = NORM_SX
           LET ENT_SY = NORM_SY
+          LET NAV_MOVE_RESULT = NAV_RESULT_QUADRANT_CROSSING()
+          LET NAV_STEPS_COMPLETED = I
           INIT_QUADRANT
         ELSE
           PRINTLN "COURSE OUT OF GALAXY -- MOVEMENT ABORTED"
+          LET NAV_MOVE_RESULT = NAV_RESULT_GALAXY_EDGE()
           LET @SECTOR[ENT_SX, ENT_SY] = 0
           LET ENT_SX = CURR_SX
           LET ENT_SY = CURR_SY
@@ -125,14 +151,19 @@ DEF MOVE_WITHIN_QUADRANT(COURSE, STEPS)
       # 非空 cell: Enterprise は CURR 位置に残り、障害物は上書きしない
       IF @SECTOR[NEXT_SX, NEXT_SY] <> 0
         PRINT_NAV_BLOCKED_MESSAGE @SECTOR[NEXT_SX, NEXT_SY]
+        LET NAV_MOVE_RESULT = NAV_RESULT_BLOCKED()
         LET DONE = 1
       ELSE
         LET CURR_SX = NEXT_SX
         LET CURR_SY = NEXT_SY
+        LET NAV_STEPS_COMPLETED = NAV_STEPS_COMPLETED + 1
       ENDIF
     ENDIF
     LET I = I + 1
   ENDWH
+  IF NAV_MOVE_RESULT = NAV_RESULT_NONE()
+    LET NAV_MOVE_RESULT = NAV_RESULT_SAME_QUADRANT()
+  ENDIF
   # Enterprise を元の sector から最終 sector へ移動する
   LET @SECTOR[ENT_SX, ENT_SY] = 0
   LET ENT_SX = CURR_SX
