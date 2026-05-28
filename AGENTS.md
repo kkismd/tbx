@@ -88,8 +88,11 @@ Word definitions use `DEF WORD(params) ... END`. `CompileState` in `src/vm.rs` t
 - `blueprint.md` — VM architecture, dictionary structure, memory layout
 - `blueprint-language.md` — language syntax, statements, expressions, types
 - `blueprint-compiler.md` — `DEF`/`END`, control structures, compile-time stack primitives
+- `docs/tbx-quickref.ja.md` — TBX プログラムを書く人間およびエージェント向けの実用クイックリファレンス
 
 `blueprint.md` records design decisions and specifications only; stable implementation details live in `src/`, not in blueprint docs.
+
+When writing or modifying TBX programs, consult `docs/tbx-quickref.ja.md` first for common syntax, standard vocabulary, and agent-facing pitfalls. The implementation remains the source of truth; check `src/`, `lib/`, and tests for details, edge cases, and current behavior.
 
 
 ## Core Principles (必ず遵守)
