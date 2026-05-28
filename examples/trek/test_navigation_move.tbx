@@ -60,29 +60,32 @@ DEF TEST_MOVE_SOUTH_1_STEP()
   ASSERT (@SECTOR[4, 4] = 0)
 END
 
-# Galaxy edge: course 1 (East) from QX=8 -> crossing leads to QX=9 (galaxy 外) -> abort
+# Galaxy edge: course 1 (East) from QX=8 SX=4 -> 4 steps 進んで SX=8 で止まる
+# SX=4 から east 10 steps: step5 で NEXT_SX=9 (edge) -> CURR_SX=8 が最終有効 sector
 DEF TEST_MOVE_OUT_OF_BOUNDS_NO_CRASH()
   INIT_GAME
   LET ENT_QX = 8
   SET_ENTERPRISE 4, 4
-  # SX=4 から east: NEXT_SX が 9 になると NORMALIZE -> QX=9 (galaxy 外) -> abort
   MOVE_WITHIN_QUADRANT 1, 10
-  # Enterprise must remain at original position
-  ASSERT (ENT_SX = 4)
+  # Enterprise は galaxy edge 手前の最終有効 sector (8,4) に留まる
+  ASSERT (ENT_SX = 8)
   ASSERT (ENT_SY = 4)
-  ASSERT (@SECTOR[4, 4] = 1)
+  ASSERT (@SECTOR[8, 4] = 1)
+  ASSERT (@SECTOR[4, 4] = 0)
 END
 
-# Galaxy edge: course 3 (North) from QY=1 -> crossing leads to QY=0 (galaxy 外) -> abort
+# Galaxy edge: course 3 (North) from QY=1 SY=4 -> 3 steps 進んで SY=1 で止まる
+# SY=4 から north 5 steps (DY=-1): step4 で NEXT_SY=0 (edge) -> CURR_SY=1 が最終有効 sector
 DEF TEST_MOVE_NORTH_OUT_OF_BOUNDS()
   INIT_GAME
   LET ENT_QY = 1
   SET_ENTERPRISE 4, 4
-  # SY=4 から north (DY=-1): NEXT_SY が 0 になると NORMALIZE -> QY=0 (galaxy 外) -> abort
   MOVE_WITHIN_QUADRANT 3, 5
+  # Enterprise は galaxy edge 手前の最終有効 sector (4,1) に留まる
   ASSERT (ENT_SX = 4)
-  ASSERT (ENT_SY = 4)
-  ASSERT (@SECTOR[4, 4] = 1)
+  ASSERT (ENT_SY = 1)
+  ASSERT (@SECTOR[4, 1] = 1)
+  ASSERT (@SECTOR[4, 4] = 0)
 END
 
 # Collision: destination occupied by a star (value 4) -> abort, Enterprise stays
