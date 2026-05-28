@@ -18,6 +18,16 @@ USE "scan.tbx"
 USE "nav.tbx"
 USE "../../lib/tests/helper.tbx"
 
+# Helper: quadrant と sector を指定して Enterprise を配置する
+DEF SET_POS(QX, QY, SX, SY)
+  LET ENT_QX = QX
+  LET ENT_QY = QY
+  CLEAR_SECTOR
+  LET ENT_SX = SX
+  LET ENT_SY = SY
+  LET @SECTOR[ENT_SX, ENT_SY] = 1
+END
+
 # X+ 越境: QX=4, SX=9 -> QX=5, SX=1
 DEF TEST_WRAP_X_PLUS()
   NORMALIZE_SECTOR_CROSSING 4, 4, 9, 4
@@ -120,3 +130,68 @@ TEST_WRAP_XY_MINUS
 TEST_OUT_OF_GALAXY
 TEST_OUT_OF_GALAXY_Y
 TEST_NO_CROSSING
+
+# ---- MOVE_WITHIN_QUADRANT quadrant crossing 接続テスト ----
+
+# East crossing: QX=4, SX=8 から east 1 step -> QX=5, SX=1
+DEF TEST_CROSS_EAST()
+  INIT_GAME
+  SET_POS 4, 4, 8, 4
+  MOVE_WITHIN_QUADRANT 1, 1
+  ASSERT (ENT_QX = 5)
+  ASSERT (ENT_SX = 1)
+  ASSERT (ENT_QY = 4)
+  ASSERT (ENT_SY = 4)
+  ASSERT (@SECTOR[ENT_SX, ENT_SY] = 1)
+END
+
+# West crossing: QX=4, SX=1 から west 1 step -> QX=3, SX=8
+DEF TEST_CROSS_WEST()
+  INIT_GAME
+  SET_POS 4, 4, 1, 4
+  MOVE_WITHIN_QUADRANT 5, 1
+  ASSERT (ENT_QX = 3)
+  ASSERT (ENT_SX = 8)
+  ASSERT (ENT_QY = 4)
+  ASSERT (ENT_SY = 4)
+  ASSERT (@SECTOR[ENT_SX, ENT_SY] = 1)
+END
+
+# South crossing: QY=4, SY=8 から south 1 step -> QY=5, SY=1
+DEF TEST_CROSS_SOUTH()
+  INIT_GAME
+  SET_POS 4, 4, 4, 8
+  MOVE_WITHIN_QUADRANT 7, 1
+  ASSERT (ENT_QX = 4)
+  ASSERT (ENT_SX = 4)
+  ASSERT (ENT_QY = 5)
+  ASSERT (ENT_SY = 1)
+  ASSERT (@SECTOR[ENT_SX, ENT_SY] = 1)
+END
+
+# North crossing: QY=4, SY=1 から north 1 step -> QY=3, SY=8
+DEF TEST_CROSS_NORTH()
+  INIT_GAME
+  SET_POS 4, 4, 4, 1
+  MOVE_WITHIN_QUADRANT 3, 1
+  ASSERT (ENT_QX = 4)
+  ASSERT (ENT_SX = 4)
+  ASSERT (ENT_QY = 3)
+  ASSERT (ENT_SY = 8)
+  ASSERT (@SECTOR[ENT_SX, ENT_SY] = 1)
+END
+
+# crossing 後 INIT_QUADRANT が呼ばれて @SECTOR が再構築される (scan が crash しない)
+DEF TEST_CROSS_SCAN_NO_CRASH()
+  INIT_GAME
+  SET_POS 4, 4, 8, 4
+  MOVE_WITHIN_QUADRANT 1, 1
+  # crossing 後に短距離スキャンが crash しないことを確認する
+  SHORT_RANGE_SCAN
+END
+
+TEST_CROSS_EAST
+TEST_CROSS_WEST
+TEST_CROSS_SOUTH
+TEST_CROSS_NORTH
+TEST_CROSS_SCAN_NO_CRASH

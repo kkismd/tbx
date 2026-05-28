@@ -41,54 +41,6 @@ DEF PRINT_NAV_BLOCKED_MESSAGE(CELL)
   ENDSEL
 END
 
-# Move Enterprise within the current quadrant (STTR1.BAS lines 1500-2320, partial)
-# COURSE: validated integer course (1..8)
-# STEPS:  validated integer step count (>= 1)
-# Uses GET_COURSE_DX / GET_COURSE_DY to obtain the direction vector.
-# Advances 1 step at a time (Mayfield 原典 FOR I=1 TO N 方式).
-# If a next sector is outside sector bounds (1..8): prints TODO and returns
-#   without moving (quadrant crossing は未実装のため abort).
-# If a next sector is occupied (star / starbase / Klingon 等): stops at the
-#   previous (last valid) sector; obstacle cell は上書きしない.
-# On completion: updates @SECTOR (old cell -> 0=empty, new cell -> 1=Enterprise)
-#                and updates ENT_SX / ENT_SY to the final position.
-DEF MOVE_WITHIN_QUADRANT(COURSE, STEPS)
-  VAR DX = GET_COURSE_DX(COURSE)
-  VAR DY = GET_COURSE_DY(COURSE)
-  # CURR_SX / CURR_SY は各 step 後の有効位置を追跡する
-  VAR CURR_SX = ENT_SX
-  VAR CURR_SY = ENT_SY
-  VAR NEXT_SX = CURR_SX
-  VAR NEXT_SY = CURR_SY
-  VAR I = 1
-  VAR DONE = 0
-  WHILE I <= STEPS
-    IF DONE = 0
-      LET NEXT_SX = CURR_SX + DX
-      LET NEXT_SY = CURR_SY + DY
-      # bounds 外: quadrant crossing は未実装のため全体を abort して元の位置に残す
-      IF IS_IN_SECTOR_BOUNDS(NEXT_SX, NEXT_SY) = 0
-        PRINTLN "COURSE OUT OF QUADRANT BOUNDS -- MOVEMENT ABORTED (TODO: quadrant crossing)"
-        RETURN
-      ENDIF
-      # 非空 cell: Enterprise は CURR 位置に残り、障害物は上書きしない
-      IF @SECTOR[NEXT_SX, NEXT_SY] <> 0
-        PRINT_NAV_BLOCKED_MESSAGE @SECTOR[NEXT_SX, NEXT_SY]
-        LET DONE = 1
-      ELSE
-        LET CURR_SX = NEXT_SX
-        LET CURR_SY = NEXT_SY
-      ENDIF
-    ENDIF
-    LET I = I + 1
-  ENDWH
-  # Enterprise を元の sector から最終 sector へ移動する
-  LET @SECTOR[ENT_SX, ENT_SY] = 0
-  LET ENT_SX = CURR_SX
-  LET ENT_SY = CURR_SY
-  LET @SECTOR[ENT_SX, ENT_SY] = 1
-END
-
 # sector 座標が 1..8 の外に出たとき、隣接 quadrant と wrap 後 sector 座標に変換する
 # 結果は NORM_QX / NORM_QY / NORM_SX / NORM_SY / NORM_CROSSED / NORM_IN_GALAXY に書き込む
 # galaxy bounds 判定は IS_IN_QUAD_BOUNDS を再利用する (quadrant と galaxy は同じ 1..8 x 1..8)
@@ -124,6 +76,64 @@ DEF NORMALIZE_SECTOR_CROSSING(QX, QY, SX, SY)
   LET NORM_SY = NSY
   LET NORM_CROSSED = CROSSED
   LET NORM_IN_GALAXY = IS_IN_QUAD_BOUNDS(NQX, NQY)
+END
+
+# Move Enterprise within the current quadrant (STTR1.BAS lines 1500-2320, partial)
+# COURSE: validated integer course (1..8)
+# STEPS:  validated integer step count (>= 1)
+# Uses GET_COURSE_DX / GET_COURSE_DY to obtain the direction vector.
+# Advances 1 step at a time (Mayfield 原典 FOR I=1 TO N 方式).
+# If a next sector is outside sector bounds (1..8): uses NORMALIZE_SECTOR_CROSSING to
+#   attempt quadrant crossing. On success, updates ENT_QX/QY/SX/SY and calls
+#   INIT_QUADRANT. On galaxy edge, prints a message. Movement ends at the crossing point.
+# If a next sector is occupied (star / starbase / Klingon 等): stops at the
+#   previous (last valid) sector; obstacle cell は上書きしない.
+# On completion: updates @SECTOR (old cell -> 0=empty, new cell -> 1=Enterprise)
+#                and updates ENT_SX / ENT_SY to the final position.
+DEF MOVE_WITHIN_QUADRANT(COURSE, STEPS)
+  VAR DX = GET_COURSE_DX(COURSE)
+  VAR DY = GET_COURSE_DY(COURSE)
+  # CURR_SX / CURR_SY は各 step 後の有効位置を追跡する
+  VAR CURR_SX = ENT_SX
+  VAR CURR_SY = ENT_SY
+  VAR NEXT_SX = CURR_SX
+  VAR NEXT_SY = CURR_SY
+  VAR I = 1
+  VAR DONE = 0
+  WHILE I <= STEPS
+    IF DONE = 0
+      LET NEXT_SX = CURR_SX + DX
+      LET NEXT_SY = CURR_SY + DY
+      # bounds 外: sector 越境正規化 helper で隣接 quadrant へ crossing する
+      IF IS_IN_SECTOR_BOUNDS(NEXT_SX, NEXT_SY) = 0
+        NORMALIZE_SECTOR_CROSSING ENT_QX, ENT_QY, NEXT_SX, NEXT_SY
+        IF NORM_IN_GALAXY
+          LET ENT_QX = NORM_QX
+          LET ENT_QY = NORM_QY
+          LET ENT_SX = NORM_SX
+          LET ENT_SY = NORM_SY
+          INIT_QUADRANT
+        ELSE
+          PRINTLN "NAVIGATION BLOCKED: GALAXY EDGE"
+        ENDIF
+        RETURN
+      ENDIF
+      # 非空 cell: Enterprise は CURR 位置に残り、障害物は上書きしない
+      IF @SECTOR[NEXT_SX, NEXT_SY] <> 0
+        PRINT_NAV_BLOCKED_MESSAGE @SECTOR[NEXT_SX, NEXT_SY]
+        LET DONE = 1
+      ELSE
+        LET CURR_SX = NEXT_SX
+        LET CURR_SY = NEXT_SY
+      ENDIF
+    ENDIF
+    LET I = I + 1
+  ENDWH
+  # Enterprise を元の sector から最終 sector へ移動する
+  LET @SECTOR[ENT_SX, ENT_SY] = 0
+  LET ENT_SX = CURR_SX
+  LET ENT_SY = CURR_SY
+  LET @SECTOR[ENT_SX, ENT_SY] = 1
 END
 
 # コース・ワープエンジン制御コマンド (STTR1.BAS lines 1410-2320)
