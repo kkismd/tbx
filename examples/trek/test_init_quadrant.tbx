@@ -41,18 +41,16 @@ DEF RUN_SMOKE_TEST()
   WHILE CY <= 8
     VAR CX = 1
     WHILE CX <= 8
-      IF @SECTOR[CX, CY] = 1
+      SELECT @SECTOR[CX, CY]
+      CASE 1
         LET COUNT_ENT = COUNT_ENT + 1
-      ENDIF
-      IF @SECTOR[CX, CY] = 2
+      CASE 2
         LET COUNT_KLI = COUNT_KLI + 1
-      ENDIF
-      IF @SECTOR[CX, CY] = 3
+      CASE 3
         LET COUNT_BASE = COUNT_BASE + 1
-      ENDIF
-      IF @SECTOR[CX, CY] = 4
+      CASE 4
         LET COUNT_STAR = COUNT_STAR + 1
-      ENDIF
+      ENDSEL
       LET CX = CX + 1
     ENDWH
     LET CY = CY + 1

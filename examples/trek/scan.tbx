@@ -2,36 +2,12 @@
 
 # 座標が sector 境界内 (1..8 × 1..8) か判定する
 DEF IS_IN_SECTOR_BOUNDS(X, Y)
-  IF X < 1
-    RETURN 0
-  ENDIF
-  IF X > 8
-    RETURN 0
-  ENDIF
-  IF Y < 1
-    RETURN 0
-  ENDIF
-  IF Y > 8
-    RETURN 0
-  ENDIF
-  RETURN 1
+  RETURN (X >= 1) && (X <= 8) && (Y >= 1) && (Y <= 8)
 END
 
 # 座標が quadrant 境界内 (1..8 × 1..8) か判定する
 DEF IS_IN_QUAD_BOUNDS(QX, QY)
-  IF QX < 1
-    RETURN 0
-  ENDIF
-  IF QX > 8
-    RETURN 0
-  ENDIF
-  IF QY < 1
-    RETURN 0
-  ENDIF
-  IF QY > 8
-    RETURN 0
-  ENDIF
-  RETURN 1
+  RETURN (QX >= 1) && (QX <= 8) && (QY >= 1) && (QY <= 8)
 END
 
 # 整数 N を 3 桁ゼロ埋め形式で出力する (改行なし)
@@ -48,17 +24,18 @@ END
 # セクター値を表示記号に変換する (STTR1.BAS lines 5820-5860)
 # 0=空, 1=Enterprise, 2=Klingon, 3=Starbase, 4=Star
 DEF SECTOR_SYMBOL(VAL)
-  IF VAL = 1
+  SELECT VAL
+  CASE 1
     RETURN "<*>"
-  ELSIF VAL = 2
+  CASE 2
     RETURN "+++"
-  ELSIF VAL = 3
+  CASE 3
     RETURN ">!<"
-  ELSIF VAL = 4
+  CASE 4
     RETURN " * "
-  ELSE
+  CASE_ELSE
     RETURN "   "
-  ENDIF
+  ENDSEL
 END
 
 # docking 判定 (STTR1.BAS lines 4120-4300)
@@ -93,25 +70,26 @@ END
 # LINE_NO: 1..8 の行番号
 # 各行に STARDATE / CONDITION / QUADRANT / SECTOR / ENERGY / TORPEDOES / SHIELDS / KLINGONS LEFT を表示する
 DEF PRINT_STATUS_LINE(LINE_NO)
-  IF LINE_NO = 1
+  SELECT LINE_NO
+  CASE 1
     PRINTLN "   STARDATE        ", STARDATE
-  ELSIF LINE_NO = 2
+  CASE 2
     PRINTLN "   CONDITION       ", CONDITION
-  ELSIF LINE_NO = 3
+  CASE 3
     PRINTLN "   QUADRANT        ", ENT_QX, ",", ENT_QY
-  ELSIF LINE_NO = 4
+  CASE 4
     PRINTLN "   SECTOR          ", ENT_SX, ",", ENT_SY
-  ELSIF LINE_NO = 5
+  CASE 5
     PRINTLN "   ENERGY          ", ENERGY
-  ELSIF LINE_NO = 6
+  CASE 6
     PRINTLN "   TORPEDOES       ", TORPEDOES
-  ELSIF LINE_NO = 7
+  CASE 7
     PRINTLN "   SHIELDS         ", SHIELDS
-  ELSIF LINE_NO = 8
+  CASE 8
     PRINTLN "   KLINGONS LEFT   ", KLINGONS_LEFT
-  ELSE
+  CASE_ELSE
     PRINTLN
-  ENDIF
+  ENDSEL
 END
 
 # 短距離センサースキャン (STTR1.BAS lines 4120-4530)
@@ -125,17 +103,15 @@ DEF SHORT_RANGE_SCAN()
     UPDATE_CONDITION
   ENDIF
   PRINTLN "---------------------------------"
-  VAR SY = 1
-  WHILE SY <= 8
-    VAR SX = 1
-    WHILE SX <= 8
+  VAR SY
+  FOR &SY, 8
+    VAR SX
+    FOR &SX, 8
       PUTSTR " "
       PUTSTR SECTOR_SYMBOL(@SECTOR[SX, SY])
-      LET SX = SX + 1
-    ENDWH
+    NEXT
     PRINT_STATUS_LINE SY
-    LET SY = SY + 1
-  ENDWH
+  NEXT
   PRINTLN "---------------------------------"
 END
 
@@ -177,13 +153,14 @@ DEF LONG_RANGE_SCAN()
         LET @CHART[LQX, LQY] = GVAL
       ENDIF
       # Mayfield N[J-Q2+2] への格納 (Mayfield 2430): LQX=ENT_QX-1->N1, ENT_QX->N2, ENT_QX+1->N3
-      IF LQX = ENT_QX - 1
+      SELECT LQX
+      CASE ENT_QX - 1
         LET N1 = GVAL
-      ELSIF LQX = ENT_QX
+      CASE ENT_QX
         LET N2 = GVAL
-      ELSE
+      CASE_ELSE
         LET N3 = GVAL
-      ENDIF
+      ENDSEL
       LET LQX = LQX + 1
     ENDWH
     # 原典 2470: PRINT USING 2510;N[1],N[2],N[3] → ": NNN : NNN : NNN :"
