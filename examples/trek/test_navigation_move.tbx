@@ -60,11 +60,12 @@ DEF TEST_MOVE_SOUTH_1_STEP()
   ASSERT (@SECTOR[4, 4] = 0)
 END
 
-# Out-of-bounds: course 1 (East) 10 steps from (4,4) should abort without crashing
+# Galaxy edge: course 1 (East) from QX=8 -> crossing leads to QX=9 (galaxy 外) -> abort
 DEF TEST_MOVE_OUT_OF_BOUNDS_NO_CRASH()
   INIT_GAME
+  LET ENT_QX = 8
   SET_ENTERPRISE 4, 4
-  # 4 + 10 = 14, which is outside 1..8 -> should print TODO and not move
+  # SX=4 から east: NEXT_SX が 9 になると NORMALIZE -> QX=9 (galaxy 外) -> abort
   MOVE_WITHIN_QUADRANT 1, 10
   # Enterprise must remain at original position
   ASSERT (ENT_SX = 4)
@@ -72,10 +73,12 @@ DEF TEST_MOVE_OUT_OF_BOUNDS_NO_CRASH()
   ASSERT (@SECTOR[4, 4] = 1)
 END
 
-# Out-of-bounds: course 3 (North) 5 steps from (4,4) -> Y=4-5=-1, abort
+# Galaxy edge: course 3 (North) from QY=1 -> crossing leads to QY=0 (galaxy 外) -> abort
 DEF TEST_MOVE_NORTH_OUT_OF_BOUNDS()
   INIT_GAME
+  LET ENT_QY = 1
   SET_ENTERPRISE 4, 4
+  # SY=4 から north (DY=-1): NEXT_SY が 0 になると NORMALIZE -> QY=0 (galaxy 外) -> abort
   MOVE_WITHIN_QUADRANT 3, 5
   ASSERT (ENT_SX = 4)
   ASSERT (ENT_SY = 4)
