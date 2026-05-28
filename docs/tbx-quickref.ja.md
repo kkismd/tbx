@@ -174,7 +174,7 @@ SET &X, X + 1
 
 `SET` は「変数専用代入」ではなく、「アドレスへ値を書き込む」操作である。そのため左辺には `&X` のようにアドレスを明示する。
 
-標準ライブラリには糖衣構文として `LET` がある。
+標準ライブラリには糖衣構文として `LET` がある。`LET` は IMMEDIATE ワードであり、`DEF ... END` の内部でのみ使える。
 
 ```tbx
 DEF COUNT_UP(N)
@@ -186,11 +186,21 @@ DEF COUNT_UP(N)
 END
 ```
 
-`LET X = expr` は `SET &X, expr` に近い書き方である。配列要素にも使える。
+`LET X = expr` は `SET &X, expr` に近い書き方である。配列要素にも使える（DEF 内のみ）。
+
+```tbx
+DEF FILL_ARRAY()
+  DIM @A[3]
+  LET @A[1] = 10
+  PRINTLN @A[1]
+END
+```
+
+トップレベルで配列要素に書き込む場合は `SET &@A[i], expr` を使う。
 
 ```tbx
 DIM @A[3]
-LET @A[1] = 10
+SET &@A[1], 10
 PRINTLN @A[1]
 ```
 
@@ -276,7 +286,7 @@ VAR I
 SET &I, 1
 WHILE I <= 10
   PRINTLN I
-  LET I = I + 1
+  SET &I, I + 1
 ENDWH
 ```
 
@@ -286,7 +296,7 @@ ENDWH
 VAR I
 SET &I, 0
 DO
-  LET I = I + 1
+  SET &I, I + 1
   PRINTLN I
 UNTIL I >= 3
 ```
@@ -308,7 +318,7 @@ ENDSEL
 
 ```tbx
 VAR I
-FOR I, 5
+FOR &I, 5
   PRINTLN I
 NEXT
 ```
@@ -340,9 +350,9 @@ END
 
 ```tbx
 DIM @A[3]
-LET @A[1] = 10
-LET @A[2] = 20
-LET @A[3] = @A[1] + @A[2]
+SET &@A[1], 10
+SET &@A[2], 20
+SET &@A[3], @A[1] + @A[2]
 PRINTLN @A[3]
 ```
 
@@ -364,7 +374,7 @@ SET &@A[1], 42
 
 ```tbx
 # 避ける: 配列ハンドルそのものを値として扱おうとしている
-LET B = A
+SET &B, A
 RETURN A
 PRINTLN A
 ```
@@ -598,7 +608,7 @@ USE "lib/foo.tbx"
 - ステートメント呼び出しでは `NAME()` と書かず、`NAME` と書く。
 - 値を返すワードを式内で使うときだけ `NAME(args...)` と書く。
 - トップレベルでは `VAR X = expr` を使わず、`VAR X` の後に `SET &X, expr` を使う。
-- 代入は `SET &X, expr` または `LET X = expr` を使う。
+- 代入は `SET &X, expr` を使う。`LET X = expr` は `DEF ... END` の内部でのみ使える。
 - 配列要素の添字は 1-based。`@A[0]` は通常使わない。
 - `FOR` は 1 始まり・ステップ 1 固定。必要なら `WHILE` を使う。
 - 文字列、タプル、Result 風ヘルパ、配列、乱数、時刻関数がある。自前で再実装する前にこの文書と `src/primitives.rs` / `lib/*.tbx` を確認する。
