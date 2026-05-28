@@ -98,6 +98,10 @@ DEF NORMALIZE_SECTOR_CROSSING(QX, QY, SX, SY)
   LET NORM_IN_GALAXY = IS_IN_QUAD_BOUNDS(NQX, NQY)
 END
 
+DEF APPLY_NAV_ENERGY_COST(STEPS)
+  LET ENERGY = ENERGY - STEPS + 5
+END
+
 # Move Enterprise within the current quadrant (STTR1.BAS lines 1500-2320, partial)
 # COURSE: validated integer course (1..8)
 # STEPS:  validated integer step count (>= 1)
@@ -171,6 +175,17 @@ DEF MOVE_WITHIN_QUADRANT(COURSE, STEPS)
   LET @SECTOR[ENT_SX, ENT_SY] = 1
 END
 
+DEF RUN_NAVIGATION(COURSE, WARP)
+  # Compute step count per Mayfield original: N = INT(W1 * 8) (STTR1.BAS line 1500)
+  VAR STEPS = INT(WARP * 8)
+  IF STEPS < 1
+    PRINTLN "WARP TOO LOW -- ENTERPRISE REMAINS AT CURRENT POSITION."
+    RETURN
+  ENDIF
+  MOVE_WITHIN_QUADRANT COURSE, STEPS
+  APPLY_NAV_ENERGY_COST NAV_STEPS_REQUESTED
+END
+
 # コース・ワープエンジン制御コマンド (STTR1.BAS lines 1410-2320)
 # course と warp を入力・検証する
 DEF NAVIGATE()
@@ -193,15 +208,9 @@ DEF NAVIGATE()
     PRINTLN "INVALID WARP FACTOR. MUST BE 0..8."
     RETURN
   ENDIF
-  # Compute step count per Mayfield original: N = INT(W1 * 8) (STTR1.BAS line 1500)
-  VAR STEPS = INT(WARP * 8)
-  IF STEPS < 1
-    PRINTLN "WARP TOO LOW -- ENTERPRISE REMAINS AT CURRENT POSITION."
-    RETURN
-  ENDIF
   # Ensure course is an integer before passing to MOVE_WITHIN_QUADRANT.
   # GETDEC? may return Float(1.0) for inputs like "1.0", which would cause
   # an array-index type error inside GET_COURSE_DX/DY.
   VAR COURSE_I = INT(COURSE)
-  MOVE_WITHIN_QUADRANT COURSE_I, STEPS
+  RUN_NAVIGATION COURSE_I, WARP
 END
