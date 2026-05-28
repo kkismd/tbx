@@ -89,6 +89,43 @@ DEF MOVE_WITHIN_QUADRANT(COURSE, STEPS)
   LET @SECTOR[ENT_SX, ENT_SY] = 1
 END
 
+# sector 座標が 1..8 の外に出たとき、隣接 quadrant と wrap 後 sector 座標に変換する
+# 結果は NORM_QX / NORM_QY / NORM_SX / NORM_SY / NORM_CROSSED / NORM_IN_GALAXY に書き込む
+# galaxy bounds 判定は IS_IN_QUAD_BOUNDS を再利用する (quadrant と galaxy は同じ 1..8 x 1..8)
+DEF NORMALIZE_SECTOR_CROSSING(QX, QY, SX, SY)
+  VAR NQX = QX
+  VAR NQY = QY
+  VAR NSX = SX
+  VAR NSY = SY
+  VAR CROSSED = 0
+  IF NSX < 1
+    LET NQX = NQX - 1
+    LET NSX = 8
+    LET CROSSED = 1
+  ENDIF
+  IF NSX > 8
+    LET NQX = NQX + 1
+    LET NSX = 1
+    LET CROSSED = 1
+  ENDIF
+  IF NSY < 1
+    LET NQY = NQY - 1
+    LET NSY = 8
+    LET CROSSED = 1
+  ENDIF
+  IF NSY > 8
+    LET NQY = NQY + 1
+    LET NSY = 1
+    LET CROSSED = 1
+  ENDIF
+  LET NORM_QX = NQX
+  LET NORM_QY = NQY
+  LET NORM_SX = NSX
+  LET NORM_SY = NSY
+  LET NORM_CROSSED = CROSSED
+  LET NORM_IN_GALAXY = IS_IN_QUAD_BOUNDS(NQX, NQY)
+END
+
 # コース・ワープエンジン制御コマンド (STTR1.BAS lines 1410-2320)
 # course と warp を入力・検証する
 DEF NAVIGATE()
