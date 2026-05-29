@@ -1,0 +1,45 @@
+# エイトクイーン問題
+# @BOARD[col] = そのcolに置いたクイーンのrow（1-based）
+
+DIM @BOARD[8]
+VAR SOLUTIONS
+SET &SOLUTIONS, 0
+
+DEF IS_SAFE(COL, ROW)
+  VAR I
+  FOR &I, COL - 1
+    VAR R = @BOARD[I]
+    IF (R = ROW ||
+        R - I = ROW - COL ||
+        R + I = ROW + COL)
+      RETURN 0
+    ENDIF
+  NEXT
+  RETURN 1
+END
+
+DEF PRINT_BOARD()
+  VAR I
+  FOR &I, 8
+    PRINT @BOARD[I], " "
+  NEXT
+  CR
+END
+
+DEF SOLVE(COL)
+  IF COL > 8
+    PRINT_BOARD
+    SET &SOLUTIONS, SOLUTIONS + 1
+    RETURN
+  ENDIF
+  VAR ROW
+  FOR &ROW, 8
+    IF IS_SAFE(COL, ROW)
+      SET &@BOARD[COL], ROW
+      SOLVE COL + 1
+    ENDIF
+  NEXT
+END
+
+SOLVE 1
+PRINTLN "total: ", SOLUTIONS
