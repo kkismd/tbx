@@ -12,6 +12,91 @@ use crate::error::TbxError;
 use crate::lexer::{SpannedToken, Token};
 use crate::vm::VM;
 
+#[allow(dead_code)]
+mod ast {
+    use crate::cell::{Cell, Xt};
+
+    #[derive(Debug, Clone)]
+    pub(super) enum ExprAst {
+        Literal(Cell),
+        LocalRead {
+            index: usize,
+        },
+        GlobalRead {
+            addr: usize,
+        },
+        AddressOfLocal {
+            index: usize,
+        },
+        AddressOfGlobal {
+            addr: usize,
+        },
+        Call {
+            xt: Xt,
+            arity: usize,
+            args: Vec<ExprAst>,
+        },
+        Unary {
+            op: UnaryOp,
+            expr: Box<ExprAst>,
+        },
+        Binary {
+            op: BinaryOp,
+            lhs: Box<ExprAst>,
+            rhs: Box<ExprAst>,
+        },
+        Comma {
+            lhs: Box<ExprAst>,
+            rhs: Box<ExprAst>,
+        },
+        TupleGet {
+            base: Box<ExprAst>,
+            index: Box<ExprAst>,
+        },
+        ArrayGet {
+            array: ArrayDesignator,
+            index: Box<ExprAst>,
+        },
+        ArrayAddr {
+            array: ArrayDesignator,
+            index: Box<ExprAst>,
+        },
+        ArrayLen {
+            array: ArrayDesignator,
+        },
+    }
+
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub(super) enum BinaryOp {
+        Add,
+        Sub,
+        Mul,
+        Div,
+        Mod,
+        Lt,
+        Gt,
+        Le,
+        Ge,
+        Eq,
+        Neq,
+        BitAnd,
+        BitOr,
+        And,
+        Or,
+    }
+
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub(super) enum UnaryOp {
+        Neg,
+    }
+
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub(super) enum ArrayDesignator {
+        Local { index: usize },
+        Global { addr: usize },
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Operator stack item
 // ---------------------------------------------------------------------------
