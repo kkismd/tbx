@@ -24,6 +24,45 @@ DEF GET_COURSE_DY(COURSE)
   RETURN @COURSE_DY[COURSE]
 END
 
+DEF GET_COURSE_VECTOR_X(COURSE)
+  VAR COURSE_I = INT(COURSE)
+  VAR FRAC = COURSE - COURSE_I
+  VAR DX0 = GET_COURSE_DX(COURSE_I)
+  VAR DX1 = GET_COURSE_DX(COURSE_I + 1)
+  RETURN DX0 + (DX1 - DX0) * FRAC
+END
+
+DEF GET_COURSE_VECTOR_Y(COURSE)
+  VAR COURSE_I = INT(COURSE)
+  VAR FRAC = COURSE - COURSE_I
+  VAR DY0 = GET_COURSE_DY(COURSE_I)
+  VAR DY1 = GET_COURSE_DY(COURSE_I + 1)
+  RETURN DY0 + (DY1 - DY0) * FRAC
+END
+
+DEF ROUND_SECTOR_POS(POS)
+  RETURN INT(POS + 0.5)
+END
+
+DEF NORMALIZE_FULL_COURSE_CROSSING(QX, QY, SX, SY, DX, DY, STEPS)
+  VAR ABS_X = QX * 8 + SX + DX * STEPS
+  VAR ABS_Y = QY * 8 + SY + DY * STEPS
+  LET NORM_QX = INT(ABS_X / 8)
+  LET NORM_QY = INT(ABS_Y / 8)
+  LET NORM_SX = ROUND_SECTOR_POS(ABS_X - NORM_QX * 8)
+  LET NORM_SY = ROUND_SECTOR_POS(ABS_Y - NORM_QY * 8)
+  IF NORM_SX = 0
+    LET NORM_QX = NORM_QX - 1
+    LET NORM_SX = 8
+  ENDIF
+  IF NORM_SY = 0
+    LET NORM_QY = NORM_QY - 1
+    LET NORM_SY = 8
+  ENDIF
+  LET NORM_CROSSED = 1
+  LET NORM_IN_GALAXY = IS_IN_QUAD_BOUNDS(NORM_QX, NORM_QY)
+END
+
 # cell 種別に応じた衝突メッセージを表示する (STTR1.BAS lines 2120-2175, partial)
 # CELL: 障害物の cell 値
 #   2 = Klingon, 3 = Starbase, 4 = Star
@@ -148,49 +187,57 @@ DEF ABORT_NAVIGATION_IF_ENERGY_DEPLETED()
   RETURN 0
 END
 
-# Move Enterprise within the current quadrant (STTR1.BAS lines 1500-2320, partial)
-# COURSE: validated integer course (1..8)
-# STEPS:  validated integer step count (>= 1)
-# Uses GET_COURSE_DX / GET_COURSE_DY to obtain the direction vector.
-# Advances 1 step at a time (Mayfield 原典 FOR I=1 TO N 方式).
-# If a next sector is outside sector bounds (1..8): uses NORMALIZE_SECTOR_CROSSING to
-#   attempt quadrant crossing. On success, updates ENT_QX/QY/SX/SY and calls
-#   INIT_QUADRANT. On galaxy edge, prints a message. Movement ends at the crossing point.
-# If a next sector is occupied (star / starbase / Klingon 等): stops at the
-#   previous (last valid) sector; obstacle cell は上書きしない.
-# On completion: updates @SECTOR (old cell -> 0=empty, new cell -> 1=Enterprise)
-#                and updates ENT_SX / ENT_SY to the final position.
-DEF MOVE_WITHIN_QUADRANT(COURSE, STEPS)
+# Move Enterprise within the current quadrant with an already-resolved course vector.
+# DX / DY may be fractional. The exact position is advanced step-wise and each step
+# is mapped back to a sector using the Mayfield-style INT(pos + 0.5) rounding rule.
+DEF MOVE_WITHIN_QUADRANT_VECTOR(DX, DY, STEPS, USE_FULL_CROSSING)
   LET NAV_MOVE_RESULT = NAV_RESULT_NONE()
   LET NAV_STEPS_REQUESTED = STEPS
   LET NAV_STEPS_COMPLETED = 0
-  VAR DX = GET_COURSE_DX(COURSE)
-  VAR DY = GET_COURSE_DY(COURSE)
-  # CURR_SX / CURR_SY は各 step 後の有効位置を追跡する
+  VAR START_QX = ENT_QX
+  VAR START_QY = ENT_QY
+  VAR START_X = ENT_SX
+  VAR START_Y = ENT_SY
+  VAR CURR_X = ENT_SX
+  VAR CURR_Y = ENT_SY
   VAR CURR_SX = ENT_SX
   VAR CURR_SY = ENT_SY
+  VAR NEXT_X = CURR_X
+  VAR NEXT_Y = CURR_Y
   VAR NEXT_SX = CURR_SX
   VAR NEXT_SY = CURR_SY
   VAR I = 1
   VAR DONE = 0
   WHILE I <= STEPS
     IF DONE = 0
-      LET NEXT_SX = CURR_SX + DX
-      LET NEXT_SY = CURR_SY + DY
-      # bounds 外: sector 越境正規化 helper で隣接 quadrant へ crossing する
-      IF IS_IN_SECTOR_BOUNDS(NEXT_SX, NEXT_SY)
-        # 非空 cell: Enterprise は CURR 位置に残り、障害物は上書きしない
-        IF @SECTOR[NEXT_SX, NEXT_SY] <> 0
+      LET NEXT_X = CURR_X + DX
+      LET NEXT_Y = CURR_Y + DY
+      IF (NEXT_X >= 0.5) && (NEXT_X < 8.5) && (NEXT_Y >= 0.5) && (NEXT_Y < 8.5)
+        LET NEXT_SX = ROUND_SECTOR_POS(NEXT_X)
+        LET NEXT_SY = ROUND_SECTOR_POS(NEXT_Y)
+        IF (NEXT_SX = CURR_SX) && (NEXT_SY = CURR_SY)
+          LET CURR_X = NEXT_X
+          LET CURR_Y = NEXT_Y
+          LET NAV_STEPS_COMPLETED = NAV_STEPS_COMPLETED + 1
+        ELSIF @SECTOR[NEXT_SX, NEXT_SY] <> 0
           PRINT_NAV_BLOCKED_MESSAGE @SECTOR[NEXT_SX, NEXT_SY]
           LET NAV_MOVE_RESULT = NAV_RESULT_BLOCKED()
           LET DONE = 1
         ELSE
+          LET CURR_X = NEXT_X
+          LET CURR_Y = NEXT_Y
           LET CURR_SX = NEXT_SX
           LET CURR_SY = NEXT_SY
           LET NAV_STEPS_COMPLETED = NAV_STEPS_COMPLETED + 1
         ENDIF
       ELSE
-        NORMALIZE_SECTOR_CROSSING ENT_QX, ENT_QY, NEXT_SX, NEXT_SY
+        IF USE_FULL_CROSSING
+          NORMALIZE_FULL_COURSE_CROSSING START_QX, START_QY, START_X, START_Y, DX, DY, STEPS
+        ELSE
+          LET NEXT_SX = ROUND_SECTOR_POS(NEXT_X)
+          LET NEXT_SY = ROUND_SECTOR_POS(NEXT_Y)
+          NORMALIZE_SECTOR_CROSSING ENT_QX, ENT_QY, NEXT_SX, NEXT_SY
+        ENDIF
         IF NORM_IN_GALAXY
           LET ENT_QX = NORM_QX
           LET ENT_QY = NORM_QY
@@ -220,6 +267,10 @@ DEF MOVE_WITHIN_QUADRANT(COURSE, STEPS)
   LET ENT_SX = CURR_SX
   LET ENT_SY = CURR_SY
   LET @SECTOR[ENT_SX, ENT_SY] = 1
+END
+
+DEF MOVE_WITHIN_QUADRANT(COURSE, STEPS)
+  MOVE_WITHIN_QUADRANT_VECTOR GET_COURSE_VECTOR_X(COURSE), GET_COURSE_VECTOR_Y(COURSE), STEPS, COURSE <> INT(COURSE)
 END
 
 DEF RUN_NAVIGATION(COURSE, WARP)
@@ -254,11 +305,6 @@ DEF NAVIGATE()
     PRINTLN "INVALID COURSE. MUST BE 1 <= COURSE < 9."
     RETURN
   ENDIF
-  # Decimal course interpolation is not yet implemented; require integer course.
-  IF COURSE <> INT(COURSE)
-    PRINTLN "TODO: decimal course interpolation not implemented."
-    RETURN
-  ENDIF
   PUTSTR "WARP FACTOR (0-8):"
   VAR WARP = RESULT_OR(GETDEC?(), -1)
   IF IS_VALID_WARP(WARP)
@@ -266,9 +312,5 @@ DEF NAVIGATE()
     PRINTLN "INVALID WARP FACTOR. MUST BE 0..8."
     RETURN
   ENDIF
-  # Ensure course is an integer before passing to MOVE_WITHIN_QUADRANT.
-  # GETDEC? may return Float(1.0) for inputs like "1.0", which would cause
-  # an array-index type error inside GET_COURSE_DX/DY.
-  VAR COURSE_I = INT(COURSE)
-  RUN_NAVIGATION COURSE_I, WARP
+  RUN_NAVIGATION COURSE, WARP
 END
