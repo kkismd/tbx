@@ -788,7 +788,8 @@ pub fn dim_prim(vm: &mut VM) -> Result<(), TbxError> {
         state.local_count += 1;
 
         // Compile the size expression.
-        let (size_cells, patch_offsets) = compile_expr_taking_local_table(vm, &size_tokens)?;
+        let (size_cells, patch_offsets) =
+            compile_expr_taking_local_table_at(vm, &size_tokens, vm.dp + 2)?;
 
         // Look up primitives needed for code generation.
         let lit_xt =
@@ -1079,6 +1080,14 @@ fn compile_expr_taking_local_table(
     vm: &mut VM,
     tokens: &[crate::lexer::SpannedToken],
 ) -> Result<(Vec<Cell>, Vec<usize>), TbxError> {
+    compile_expr_taking_local_table_at(vm, tokens, vm.dp)
+}
+
+fn compile_expr_taking_local_table_at(
+    vm: &mut VM,
+    tokens: &[crate::lexer::SpannedToken],
+    output_base_dp: usize,
+) -> Result<(Vec<Cell>, Vec<usize>), TbxError> {
     let self_word = vm.compile_state.as_ref().map(|s| s.word_name.clone());
     let self_hdr_idx = vm.compile_state.as_ref().map(|s| s.word_hdr_idx());
     let local_table = vm
@@ -1087,7 +1096,8 @@ fn compile_expr_taking_local_table(
         .map(|s| std::mem::take(&mut s.local_table));
     let result: Result<(Vec<Cell>, Vec<usize>), TbxError> = {
         let local_table_ref = local_table.as_ref();
-        let mut compiler = ExprCompiler::with_context(vm, local_table_ref, self_word, self_hdr_idx);
+        let mut compiler = ExprCompiler::with_context(vm, local_table_ref, self_word, self_hdr_idx)
+            .with_output_base_dp(output_base_dp);
         compiler.compile_expr(tokens).map(|cells| {
             let offsets = std::mem::take(&mut compiler.patch_offsets);
             (cells, offsets)
@@ -1650,7 +1660,8 @@ fn compile_at_array_lvalue(vm: &mut VM) -> Result<(), TbxError> {
     }
 
     // Compile the index expression using the current local table.
-    let (index_cells, index_patch_offsets) = compile_expr_taking_local_table(vm, &index_tokens)?;
+    let (index_cells, index_patch_offsets) =
+        compile_expr_taking_local_table_at(vm, &index_tokens, vm.dp + 3)?;
 
     // Resolve the array handle: local binding takes priority over global.
     let local_idx: Option<usize> = vm
