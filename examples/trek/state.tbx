@@ -1,0 +1,85 @@
+# trek/state.tbx — STTR1 グローバル状態・定数・配列宣言
+
+# --- 8x8 盤面データ (2D 配列) ---
+# galaxy summary: K*100 + B*10 + S で各クアドラントの内容を保持
+DIM @GALAXY[8, 8]
+
+# cumulative galactic record (library computer memory)
+DIM @CHART[8, 8]
+
+# 現在クアドラント内のセクターマップ
+# 0=空, 1=Enterprise, 2=Klingon, 3=Starbase, 4=Star
+DIM @SECTOR[8, 8]
+
+# --- Klingon 座標・エネルギー (最大 3 体) ---
+DIM @K_X[3]
+DIM @K_Y[3]
+DIM @K_E[3]
+
+# --- デバイス損傷状態 (1..8) ---
+DIM @DAMAGE[8]
+
+# --- コース方向テーブル (1..9) ---
+DIM @COURSE_DX[9]
+DIM @COURSE_DY[9]
+
+# --- Enterprise 位置 ---
+VAR ENT_QX
+VAR ENT_QY
+VAR ENT_SX
+VAR ENT_SY
+
+# --- 時間管理 ---
+VAR STARDATE
+VAR START_STARDATE
+VAR MISSION_DAYS
+
+# --- エネルギー・武装 ---
+VAR ENERGY
+VAR MAX_ENERGY
+VAR SHIELDS
+VAR TORPEDOES
+VAR MAX_TORPEDOES
+
+# --- Klingon 統計 ---
+VAR KLINGONS_LEFT
+VAR KLINGONS_INITIAL
+VAR KLINGON_INIT_ENERGY
+
+# --- スターベース統計 ---
+VAR BASES_LEFT
+
+# --- 現クアドラント内カウント ---
+VAR KLINGONS_HERE
+VAR BASES_HERE
+VAR STARS_HERE
+
+# --- ゲーム状態 ---
+VAR DOCKED
+VAR GAME_OVER
+VAR CONDITION
+
+# --- PICK_RANDOM_EMPTY_SECTOR 用一時変数 ---
+# PICK_RANDOM_EMPTY_SECTOR() が結果を書き込む sector 座標
+VAR FOUND_SX
+VAR FOUND_SY
+
+# --- NORMALIZE_SECTOR_CROSSING 用出力変数 ---
+# NORMALIZE_SECTOR_CROSSING() が結果を書き込む
+VAR NORM_QX
+VAR NORM_QY
+VAR NORM_SX
+VAR NORM_SY
+VAR NORM_CROSSED
+VAR NORM_IN_GALAXY
+
+# --- Navigation movement result ---
+# NAV_MOVE_RESULT:
+#   0 = none / not moved
+#   1 = same quadrant completed
+#   2 = blocked by obstacle
+#   3 = quadrant crossing
+#   4 = galaxy edge
+VAR NAV_MOVE_RESULT
+VAR NAV_STEPS_REQUESTED
+VAR NAV_STEPS_COMPLETED

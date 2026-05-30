@@ -1,0 +1,19 @@
+# star_trek.tbx — STTR1 エントリポイント
+# Mike Mayfield 1972 HP BASIC 版 Star Trek の TBX 移植
+# 参照: docs/notes/star-trek-mayfield-1972.md
+
+USE "trek/state.tbx"
+USE "trek/util.tbx"
+USE "trek/init.tbx"
+USE "trek/scan.tbx"
+USE "trek/nav.tbx"
+USE "trek/combat.tbx"
+USE "trek/command.tbx"
+
+DEF MAIN()
+  INIT_GAME
+  PRINT_INTRO
+  RUN_COMMAND_LOOP
+END
+
+MAIN

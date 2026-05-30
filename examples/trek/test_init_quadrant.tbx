@@ -1,0 +1,75 @@
+# trek/test_init_quadrant.tbx — INIT_QUADRANT() smoke test
+# INIT_GALAXY と INIT_QUADRANT を呼び出し、配置結果を検証する
+
+USE "state.tbx"
+USE "util.tbx"
+USE "init.tbx"
+USE "../../lib/tests/helper.tbx"
+
+DEF RUN_SMOKE_TEST()
+  # INIT_GAME を呼び出してゲーム状態を初期化する
+  INIT_GAME
+
+  # @GALAXY[ENT_QX, ENT_QY] の summary と KLINGONS_HERE / BASES_HERE / STARS_HERE が一致する
+  VAR SUMMARY = @GALAXY[ENT_QX, ENT_QY]
+  VAR EXP_K = SUMMARY / 100
+  VAR EXP_B = (SUMMARY / 10) - (EXP_K * 10)
+  VAR EXP_S = SUMMARY - ((SUMMARY / 10) * 10)
+  ASSERT (KLINGONS_HERE = EXP_K)
+  ASSERT (BASES_HERE = EXP_B)
+  ASSERT (STARS_HERE = EXP_S)
+
+  # @SECTOR[ENT_SX, ENT_SY] が Enterprise セル (1) になっている
+  ASSERT (@SECTOR[ENT_SX, ENT_SY] = 1)
+
+  # ENT_QX / ENT_QY / ENT_SX / ENT_SY が 1..8 の範囲内
+  ASSERT (ENT_QX >= 1)
+  ASSERT (ENT_QX <= 8)
+  ASSERT (ENT_QY >= 1)
+  ASSERT (ENT_QY <= 8)
+  ASSERT (ENT_SX >= 1)
+  ASSERT (ENT_SX <= 8)
+  ASSERT (ENT_SY >= 1)
+  ASSERT (ENT_SY <= 8)
+
+  # @SECTOR 上の各セル種別カウントが decode 結果と一致する
+  VAR COUNT_ENT = 0
+  VAR COUNT_KLI = 0
+  VAR COUNT_BASE = 0
+  VAR COUNT_STAR = 0
+  VAR CY = 1
+  WHILE CY <= 8
+    VAR CX = 1
+    WHILE CX <= 8
+      SELECT @SECTOR[CX, CY]
+      CASE 1
+        LET COUNT_ENT = COUNT_ENT + 1
+      CASE 2
+        LET COUNT_KLI = COUNT_KLI + 1
+      CASE 3
+        LET COUNT_BASE = COUNT_BASE + 1
+      CASE 4
+        LET COUNT_STAR = COUNT_STAR + 1
+      ENDSEL
+      LET CX = CX + 1
+    ENDWH
+    LET CY = CY + 1
+  ENDWH
+  ASSERT (COUNT_ENT = 1)
+  ASSERT (COUNT_KLI = KLINGONS_HERE)
+  ASSERT (COUNT_BASE = BASES_HERE)
+  ASSERT (COUNT_STAR = STARS_HERE)
+
+  # Klingon がいる場合、@K_X / @K_Y / @K_E が設定されており 1..8 の範囲内
+  VAR KI = 1
+  WHILE KI <= KLINGONS_HERE
+    ASSERT (@K_X[KI] >= 1)
+    ASSERT (@K_X[KI] <= 8)
+    ASSERT (@K_Y[KI] >= 1)
+    ASSERT (@K_Y[KI] <= 8)
+    ASSERT (@K_E[KI] = 200)
+    LET KI = KI + 1
+  ENDWH
+END
+
+RUN_SMOKE_TEST

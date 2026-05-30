@@ -1310,6 +1310,611 @@ fn test_dim_local_array_still_works_after_surface_ban() {
 }
 
 // ---------------------------------------------------------------------------
+// &@A[x, y] — 2D array element address access (issue #748)
+// ---------------------------------------------------------------------------
+
+/// `SET &@A[x, y], v` on a global 2D array binding must write the value and
+/// `@A[x, y]` must read it back via PUTDEC.
+///
+/// TBX code under test:
+///   DIM @A[3, 2]
+///   SET &@A[2, 1], 99
+///   PUTDEC @A[2, 1]
+///
+/// Expected output: `99`
+#[test]
+fn test_set_at_array_2d_global_element_address() {
+    let mut interp = Interpreter::new();
+    let src = concat!("DIM @A[3, 2]\n", "SET &@A[2, 1], 99\n", "PUTDEC @A[2, 1]\n",);
+    interp
+        .exec_source(src)
+        .expect("SET &@A[2, 1], 99 should write 99 to 2D element (2, 1) of global array");
+    assert_eq!(interp.take_output(), "99");
+}
+
+/// `SET &@A[x, y], v` on a local 2D array binding inside a DEF must write the
+/// value and `@A[x, y]` must read it back.
+#[test]
+fn test_set_at_array_2d_local_element_address() {
+    let mut interp = Interpreter::new();
+    let src = concat!(
+        "DEF F()\n",
+        "  DIM @A[3, 2]\n",
+        "  SET &@A[2, 1], 99\n",
+        "  RETURN @A[2, 1]\n",
+        "END\n",
+        "PUTDEC F()\n",
+    );
+    interp
+        .exec_source(src)
+        .expect("SET &@A[2, 1], 99 should write 99 to 2D element (2, 1) of local array");
+    assert_eq!(interp.take_output(), "99");
+}
+
+// LET @A[x, y] = expr — 2D array element assignment sugar (issue #749)
+// ---------------------------------------------------------------------------
+
+/// `LET @A[x, y] = expr` on a global 2D array binding must write the value
+/// and `@A[x, y]` must read it back.
+///
+/// TBX code under test:
+///   DIM @A[3, 2]          ← global (top-level)
+///   DEF F()
+///     LET @A[2, 1] = 99   ← LET inside DEF, writing to global array
+///     PUTDEC @A[2, 1]
+///   END
+///   F
+///
+/// Expected output: `99`
+#[test]
+fn test_let_at_array_2d_global_element_assignment() {
+    let mut interp = Interpreter::new();
+    let src = concat!(
+        "DIM @A[3, 2]\n",
+        "DEF F()\n",
+        "  LET @A[2, 1] = 99\n",
+        "  PUTDEC @A[2, 1]\n",
+        "END\n",
+        "F\n",
+    );
+    interp
+        .exec_source(src)
+        .expect("LET @A[2, 1] = 99 should write 99 to 2D element (2, 1) of global array");
+    assert_eq!(interp.take_output(), "99");
+}
+
+/// `LET @A[x, y] = expr` on a local 2D array binding inside a DEF must write
+/// the value and `@A[x, y]` must read it back.
+#[test]
+fn test_let_at_array_2d_local_element_assignment() {
+    let mut interp = Interpreter::new();
+    let src = concat!(
+        "DEF F()\n",
+        "  DIM @A[3, 2]\n",
+        "  LET @A[2, 1] = 99\n",
+        "  RETURN @A[2, 1]\n",
+        "END\n",
+        "PUTDEC F()\n",
+    );
+    interp
+        .exec_source(src)
+        .expect("LET @A[2, 1] = 99 should write 99 to local 2D element (2, 1)");
+    assert_eq!(interp.take_output(), "99");
+}
+
+/// `LET @A[x, y] = expr` must map to the same flat index as `SET &@A[x, y], expr`.
+///
+/// 3×2 array, fill all 6 elements via `LET @A[x, y]`, then read back with
+/// `@A[x, y]` to verify the index formula `(y-1)*width + (x-1)`.
+#[test]
+fn test_let_at_array_2d_index_formula() {
+    let mut interp = Interpreter::new();
+    let src = concat!(
+        "DEF F()\n",
+        "  DIM @A[3, 2]\n",
+        "  LET @A[1, 1] = 11\n",
+        "  LET @A[2, 1] = 21\n",
+        "  LET @A[3, 1] = 31\n",
+        "  LET @A[1, 2] = 12\n",
+        "  LET @A[2, 2] = 22\n",
+        "  LET @A[3, 2] = 32\n",
+        "  PUTDEC @A[1, 1]\n",
+        "  PUTDEC @A[3, 1]\n",
+        "  PUTDEC @A[1, 2]\n",
+        "  PUTDEC @A[3, 2]\n",
+        "END\n",
+        "F\n",
+    );
+    interp
+        .exec_source(src)
+        .expect("LET @A[x, y] should write to the correct flat index");
+    // (1,1)→11, (3,1)→31, (1,2)→12, (3,2)→32
+    assert_eq!(interp.take_output(), "11311232");
+}
+
+/// `LET @A[x, y] = expr` must produce the same element as `SET &@A[x, y], expr`.
+#[test]
+fn test_let_at_array_2d_equivalent_to_set_address() {
+    let mut interp = Interpreter::new();
+    let src = concat!(
+        "DEF F()\n",
+        "  DIM @A[3, 2]\n",
+        "  SET &@A[2, 1], 42\n",
+        "  LET @A[2, 1] = 99\n",
+        "  RETURN @A[2, 1]\n",
+        "END\n",
+        "PUTDEC F()\n",
+    );
+    interp
+        .exec_source(src)
+        .expect("LET @A[x, y] should overwrite the same element as SET &@A[x, y]");
+    assert_eq!(interp.take_output(), "99");
+}
+
+// ---------------------------------------------------------------------------
+// 2D array end-to-end: four-corner convention test (issue #751)
+// ---------------------------------------------------------------------------
+//
+// These two tests implement the canonical example from issue #751.  They write
+// to the four corners of a 3×2 array and read them back, verifying both the
+// write path (LET vs. SET) and the [x, y] index convention.
+//
+// DIM @A[3, 2]:  width=3, height=2
+//   A[1,1] → flat 0   A[3,1] → flat 2
+//   A[1,2] → flat 3   A[3,2] → flat 5
+//
+// Detection value: accessing A[3, 1] (x=3) succeeds only when the first
+// dimension is treated as width (3), not height (2).  If width and height
+// were swapped, x=3 would exceed width=2 and trigger a bounds error.
+
+/// Canonical 2D convention test via `LET @A[x, y]`.
+///
+/// Global `DIM @A[3, 2]`; writes the four corners inside a DEF (LET requires
+/// compile mode), then reads them back.
+///
+/// Expected output: `10304060`
+#[test]
+fn test_2d_array_four_corners_via_let() {
+    let mut interp = Interpreter::new();
+    let src = concat!(
+        "DIM @A[3, 2]\n",
+        "DEF F()\n",
+        "  LET @A[1, 1] = 10\n",
+        "  LET @A[3, 1] = 30\n",
+        "  LET @A[1, 2] = 40\n",
+        "  LET @A[3, 2] = 60\n",
+        "  PUTDEC @A[1, 1]\n",
+        "  PUTDEC @A[3, 1]\n",
+        "  PUTDEC @A[1, 2]\n",
+        "  PUTDEC @A[3, 2]\n",
+        "END\n",
+        "F\n",
+    );
+    interp
+        .exec_source(src)
+        .expect("LET @A[x, y] four-corner writes must succeed and read back correctly");
+    assert_eq!(interp.take_output(), "10304060");
+}
+
+/// Canonical 2D convention test via `SET &@A[x, y], expr`.
+///
+/// Global `DIM @A[3, 2]`; writes the four corners at top level via SET
+/// (no DEF needed for SET), then reads them back.
+///
+/// Expected output: `10304060`
+#[test]
+fn test_2d_array_four_corners_via_set() {
+    let mut interp = Interpreter::new();
+    let src = concat!(
+        "DIM @A[3, 2]\n",
+        "SET &@A[1, 1], 10\n",
+        "SET &@A[3, 1], 30\n",
+        "SET &@A[1, 2], 40\n",
+        "SET &@A[3, 2], 60\n",
+        "PUTDEC @A[1, 1]\n",
+        "PUTDEC @A[3, 1]\n",
+        "PUTDEC @A[1, 2]\n",
+        "PUTDEC @A[3, 2]\n",
+    );
+    interp
+        .exec_source(src)
+        .expect("SET &@A[x, y] four-corner writes must succeed and read back correctly");
+    assert_eq!(interp.take_output(), "10304060");
+}
+
+// ---------------------------------------------------------------------------
+
+/// `LET @A[i] = expr` (1D syntax) must still work after introducing 2D support.
+#[test]
+fn test_let_at_array_1d_regression_after_2d() {
+    let mut interp = Interpreter::new();
+    let src = concat!(
+        "DEF F()\n",
+        "  DIM @A[4]\n",
+        "  LET @A[3] = 77\n",
+        "  RETURN @A[3]\n",
+        "END\n",
+        "PUTDEC F()\n",
+    );
+    interp
+        .exec_source(src)
+        .expect("LET @A[i] 1D assignment must still work after 2D changes");
+    assert_eq!(interp.take_output(), "77");
+}
+
+/// `LET @A[x, y, z] = expr` (arity ≥ 3) must be rejected at compile time.
+#[test]
+fn test_let_at_array_2d_arity_3_is_compile_error() {
+    let mut interp = Interpreter::new();
+    let src = concat!(
+        "DEF F()\n",
+        "  DIM @A[3, 2]\n",
+        "  LET @A[1, 1, 1] = 0\n",
+        "END\n",
+        "F\n",
+    );
+    assert!(
+        interp.exec_source(src).is_err(),
+        "LET @A[x, y, z] with arity >= 3 must be a compile error"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// 2D array bounds and rank mismatch errors (issue #750)
+// ---------------------------------------------------------------------------
+
+// --- @A[x, y] bounds errors (ARRAY_GET_2D) ---
+
+/// `@A[0, 1]` must be rejected: x=0 is invalid in 1-based indexing.
+#[test]
+fn test_2d_array_get_x_zero_is_out_of_bounds() {
+    let mut interp = Interpreter::new();
+    let src = concat!(
+        "DEF F()\n",
+        "  DIM @A[3, 2]\n",
+        "  RETURN @A[0, 1]\n",
+        "END\n",
+        "F\n",
+    );
+    interp
+        .exec_source(src)
+        .expect_err("@A[0, 1] must fail: x=0 is out of bounds (1-based)");
+}
+
+/// `@A[1, 0]` must be rejected: y=0 is invalid in 1-based indexing.
+#[test]
+fn test_2d_array_get_y_zero_is_out_of_bounds() {
+    let mut interp = Interpreter::new();
+    let src = concat!(
+        "DEF F()\n",
+        "  DIM @A[3, 2]\n",
+        "  RETURN @A[1, 0]\n",
+        "END\n",
+        "F\n",
+    );
+    interp
+        .exec_source(src)
+        .expect_err("@A[1, 0] must fail: y=0 is out of bounds (1-based)");
+}
+
+/// `@A[width + 1, 1]` must be rejected: x exceeds declared width.
+#[test]
+fn test_2d_array_get_x_exceeds_width_is_out_of_bounds() {
+    let mut interp = Interpreter::new();
+    // DIM @A[3, 2] → width=3; @A[4, 1] is out of bounds.
+    let src = concat!(
+        "DEF F()\n",
+        "  DIM @A[3, 2]\n",
+        "  RETURN @A[4, 1]\n",
+        "END\n",
+        "F\n",
+    );
+    interp
+        .exec_source(src)
+        .expect_err("@A[4, 1] must fail: x exceeds width=3");
+}
+
+/// `@A[1, height + 1]` must be rejected: y exceeds declared height.
+#[test]
+fn test_2d_array_get_y_exceeds_height_is_out_of_bounds() {
+    let mut interp = Interpreter::new();
+    // DIM @A[3, 2] → height=2; @A[1, 3] is out of bounds.
+    let src = concat!(
+        "DEF F()\n",
+        "  DIM @A[3, 2]\n",
+        "  RETURN @A[1, 3]\n",
+        "END\n",
+        "F\n",
+    );
+    interp
+        .exec_source(src)
+        .expect_err("@A[1, 3] must fail: y exceeds height=2");
+}
+
+// --- &@A[x, y] bounds errors (ARRAY_ADDR_2D) ---
+
+/// `&@A[0, 1]` via `SET` must be rejected: x=0 is out of bounds.
+#[test]
+fn test_2d_array_addr_x_zero_is_out_of_bounds() {
+    let mut interp = Interpreter::new();
+    let src = concat!(
+        "DEF F()\n",
+        "  DIM @A[3, 2]\n",
+        "  SET &@A[0, 1], 10\n",
+        "END\n",
+        "F\n",
+    );
+    interp
+        .exec_source(src)
+        .expect_err("SET &@A[0, 1], 10 must fail: x=0 is out of bounds (1-based)");
+}
+
+/// `&@A[1, 0]` via `SET` must be rejected: y=0 is out of bounds.
+#[test]
+fn test_2d_array_addr_y_zero_is_out_of_bounds() {
+    let mut interp = Interpreter::new();
+    let src = concat!(
+        "DEF F()\n",
+        "  DIM @A[3, 2]\n",
+        "  SET &@A[1, 0], 10\n",
+        "END\n",
+        "F\n",
+    );
+    interp
+        .exec_source(src)
+        .expect_err("SET &@A[1, 0], 10 must fail: y=0 is out of bounds (1-based)");
+}
+
+/// `&@A[width + 1, 1]` via `SET` must be rejected: x exceeds declared width.
+#[test]
+fn test_2d_array_addr_x_exceeds_width_is_out_of_bounds() {
+    let mut interp = Interpreter::new();
+    let src = concat!(
+        "DEF F()\n",
+        "  DIM @A[3, 2]\n",
+        "  SET &@A[4, 1], 10\n",
+        "END\n",
+        "F\n",
+    );
+    interp
+        .exec_source(src)
+        .expect_err("SET &@A[4, 1], 10 must fail: x exceeds width=3");
+}
+
+/// `&@A[1, height + 1]` via `SET` must be rejected: y exceeds declared height.
+#[test]
+fn test_2d_array_addr_y_exceeds_height_is_out_of_bounds() {
+    let mut interp = Interpreter::new();
+    let src = concat!(
+        "DEF F()\n",
+        "  DIM @A[3, 2]\n",
+        "  SET &@A[1, 3], 10\n",
+        "END\n",
+        "F\n",
+    );
+    interp
+        .exec_source(src)
+        .expect_err("SET &@A[1, 3], 10 must fail: y exceeds height=2");
+}
+
+// --- LET @A[x, y] = expr bounds errors (same checks via ARRAY_ADDR_2D) ---
+
+/// `LET @A[0, 1] = expr` must be rejected: x=0 is out of bounds.
+#[test]
+fn test_2d_let_x_zero_is_out_of_bounds() {
+    let mut interp = Interpreter::new();
+    let src = concat!(
+        "DEF F()\n",
+        "  DIM @A[3, 2]\n",
+        "  LET @A[0, 1] = 10\n",
+        "END\n",
+        "F\n",
+    );
+    interp
+        .exec_source(src)
+        .expect_err("LET @A[0, 1] = 10 must fail: x=0 is out of bounds (1-based)");
+}
+
+/// `LET @A[1, 0] = expr` must be rejected: y=0 is out of bounds.
+#[test]
+fn test_2d_let_y_zero_is_out_of_bounds() {
+    let mut interp = Interpreter::new();
+    let src = concat!(
+        "DEF F()\n",
+        "  DIM @A[3, 2]\n",
+        "  LET @A[1, 0] = 10\n",
+        "END\n",
+        "F\n",
+    );
+    interp
+        .exec_source(src)
+        .expect_err("LET @A[1, 0] = 10 must fail: y=0 is out of bounds (1-based)");
+}
+
+/// `LET @A[width + 1, 1] = expr` must be rejected: x exceeds declared width.
+#[test]
+fn test_2d_let_x_exceeds_width_is_out_of_bounds() {
+    let mut interp = Interpreter::new();
+    let src = concat!(
+        "DEF F()\n",
+        "  DIM @A[3, 2]\n",
+        "  LET @A[4, 1] = 10\n",
+        "END\n",
+        "F\n",
+    );
+    interp
+        .exec_source(src)
+        .expect_err("LET @A[4, 1] = 10 must fail: x exceeds width=3");
+}
+
+/// `LET @A[1, height + 1] = expr` must be rejected: y exceeds declared height.
+#[test]
+fn test_2d_let_y_exceeds_height_is_out_of_bounds() {
+    let mut interp = Interpreter::new();
+    let src = concat!(
+        "DEF F()\n",
+        "  DIM @A[3, 2]\n",
+        "  LET @A[1, 3] = 10\n",
+        "END\n",
+        "F\n",
+    );
+    interp
+        .exec_source(src)
+        .expect_err("LET @A[1, 3] = 10 must fail: y exceeds height=2");
+}
+
+// --- Rank mismatch: 1D array binding + 2D accessor ---
+
+/// `@A[x, y]` on a 1D array binding must be rejected with a type error.
+#[test]
+fn test_2d_get_on_1d_array_is_rank_mismatch() {
+    let mut interp = Interpreter::new();
+    let src = concat!(
+        "DEF F()\n",
+        "  DIM @A[6]\n",
+        "  RETURN @A[1, 1]\n",
+        "END\n",
+        "F\n",
+    );
+    interp
+        .exec_source(src)
+        .expect_err("@A[1, 1] on a 1D array must fail with rank mismatch");
+}
+
+/// `&@A[x, y]` on a 1D array binding must be rejected with a type error.
+#[test]
+fn test_2d_addr_on_1d_array_is_rank_mismatch() {
+    let mut interp = Interpreter::new();
+    let src = concat!(
+        "DEF F()\n",
+        "  DIM @A[6]\n",
+        "  SET &@A[1, 1], 10\n",
+        "END\n",
+        "F\n",
+    );
+    interp
+        .exec_source(src)
+        .expect_err("&@A[1, 1] on a 1D array must fail with rank mismatch");
+}
+
+/// `LET @A[x, y] = expr` on a 1D array binding must be rejected with a type error.
+#[test]
+fn test_2d_let_on_1d_array_is_rank_mismatch() {
+    let mut interp = Interpreter::new();
+    let src = concat!(
+        "DEF F()\n",
+        "  DIM @A[6]\n",
+        "  LET @A[1, 1] = 10\n",
+        "END\n",
+        "F\n",
+    );
+    interp
+        .exec_source(src)
+        .expect_err("LET @A[1, 1] on a 1D array must fail with rank mismatch");
+}
+
+// --- Rank mismatch: 2D array binding + 1D accessor ---
+
+/// `@A[i]` on a 2D array binding must be rejected with a rank mismatch error.
+#[test]
+fn test_1d_get_on_2d_array_is_rank_mismatch() {
+    let mut interp = Interpreter::new();
+    let src = concat!(
+        "DEF F()\n",
+        "  DIM @A[3, 2]\n",
+        "  RETURN @A[1]\n",
+        "END\n",
+        "F\n",
+    );
+    interp
+        .exec_source(src)
+        .expect_err("@A[1] on a 2D array must fail with rank mismatch");
+}
+
+/// `&@A[i]` on a 2D array binding must be rejected with a rank mismatch error.
+#[test]
+fn test_1d_addr_on_2d_array_is_rank_mismatch() {
+    let mut interp = Interpreter::new();
+    let src = concat!(
+        "DEF F()\n",
+        "  DIM @A[3, 2]\n",
+        "  SET &@A[1], 10\n",
+        "END\n",
+        "F\n",
+    );
+    interp
+        .exec_source(src)
+        .expect_err("&@A[1] on a 2D array must fail with rank mismatch");
+}
+
+/// `LET @A[i] = expr` on a 2D array binding must be rejected with a rank mismatch error.
+#[test]
+fn test_1d_let_on_2d_array_is_rank_mismatch() {
+    let mut interp = Interpreter::new();
+    let src = concat!(
+        "DEF F()\n",
+        "  DIM @A[3, 2]\n",
+        "  LET @A[1] = 10\n",
+        "END\n",
+        "F\n",
+    );
+    interp
+        .exec_source(src)
+        .expect_err("LET @A[1] on a 2D array must fail with rank mismatch");
+}
+
+// --- Regression: 1D array bounds behavior must be unchanged ---
+
+/// 1D array: index 0 must still be rejected.
+#[test]
+fn test_1d_array_index_zero_is_still_out_of_bounds() {
+    let mut interp = Interpreter::new();
+    let src = concat!(
+        "DEF F()\n",
+        "  DIM @A[3]\n",
+        "  RETURN @A[0]\n",
+        "END\n",
+        "F\n",
+    );
+    interp
+        .exec_source(src)
+        .expect_err("@A[0] on a 1D array must still fail after 2D changes");
+}
+
+/// 1D array: index exceeding size must still be rejected.
+#[test]
+fn test_1d_array_index_exceeding_size_is_still_out_of_bounds() {
+    let mut interp = Interpreter::new();
+    let src = concat!(
+        "DEF F()\n",
+        "  DIM @A[3]\n",
+        "  RETURN @A[4]\n",
+        "END\n",
+        "F\n",
+    );
+    interp
+        .exec_source(src)
+        .expect_err("@A[4] on a 3-element 1D array must still fail after 2D changes");
+}
+
+/// 1D array: valid access must still work.
+#[test]
+fn test_1d_array_valid_access_regression() {
+    let mut interp = Interpreter::new();
+    let src = concat!(
+        "DEF F()\n",
+        "  DIM @A[3]\n",
+        "  LET @A[2] = 42\n",
+        "  RETURN @A[2]\n",
+        "END\n",
+        "PUTDEC F()\n",
+    );
+    interp
+        .exec_source(src)
+        .expect("1D array valid access must still work after 2D changes");
+    assert_eq!(interp.take_output(), "42");
+}
+
 // GETDEC? integration tests (issue #790)
 //
 // GETDEC? reads one line from stdin, parses it as a signed decimal integer,

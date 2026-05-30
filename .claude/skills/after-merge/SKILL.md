@@ -80,7 +80,7 @@ git status --short --branch
 
 ```bash
 git switch "$BASE_BRANCH"
-git pull
+git pull origin "$BASE_BRANCH"
 ```
 
 ### 5. トピックブランチを削除する

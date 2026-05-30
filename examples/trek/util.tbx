@@ -1,0 +1,54 @@
+# trek/util.tbx — 座標・乱数・表示補助 helper
+
+# ゲームタイトルとクレジットを表示する
+DEF PRINT_INTRO()
+  # TODO: Mayfield STTR1 instructions / title screen (STTR1.BAS lines 5820-6410)
+END
+
+# プロンプトを表示して数値入力を受け取る（無効入力の場合は再入力を促す）
+DEF PROMPT_NUM(PROMPT)
+  VAR R
+  WHILE 1 = 1
+    PUTSTR PROMPT
+    LET R = GETDEC?()
+    IF RESULT_OK(R)
+      RETURN RESULT_VAL(R)
+    ELSE
+      PRINTLN "Please enter a number."
+    ENDIF
+  ENDWH
+END
+
+# 0..99 の整数 percent roll
+DEF ROLL_PERCENT()
+  RETURN RND(100)
+END
+
+# 0..199 2*RND(1) を scale=100 で表現する係数
+DEF RAND_FACTOR_0_TO_2_100()
+  RETURN RND(200) - 1
+END
+
+# true_percent は 0..100
+DEF CHANCE(true_percent)
+  RETURN RND(100) <= true_percent
+END
+
+# コンディション文字列を更新する (STTR1.BAS lines 4310-4380)
+# KLINGONS_HERE > 0 -> "RED"
+# ENERGY < MAX_ENERGY / 10 -> "YELLOW"
+# otherwise -> "GREEN"
+DEF UPDATE_CONDITION()
+  IF KLINGONS_HERE > 0
+    LET CONDITION = "RED"
+  ELSIF ENERGY < MAX_ENERGY / 10
+    LET CONDITION = "YELLOW"
+  ELSE
+    LET CONDITION = "GREEN"
+  ENDIF
+END
+
+# デバイス番号に対応する名称を表示する
+DEF PRINT_DEVICE_NAME(D)
+  # TODO: Mayfield STTR1 device names (STTR1.BAS lines 5610-5670)
+END

@@ -1,0 +1,152 @@
+# trek/test_navigation_move.tbx — MOVE_WITHIN_QUADRANT() smoke tests
+
+USE "state.tbx"
+USE "util.tbx"
+USE "init.tbx"
+USE "scan.tbx"
+USE "nav.tbx"
+USE "../../lib/tests/helper.tbx"
+
+# Helper: clear sector, set Enterprise position and mark the sector.
+# Using CLEAR_SECTOR ensures destination cells are empty for movement tests.
+DEF SET_ENTERPRISE(SX, SY)
+  CLEAR_SECTOR
+  LET ENT_SX = SX
+  LET ENT_SY = SY
+  LET @SECTOR[ENT_SX, ENT_SY] = 1
+END
+
+# Course 1 (East, DX=+1 DY=0): move 1 step from (4,4) -> (5,4)
+DEF TEST_MOVE_EAST_1_STEP()
+  INIT_GAME
+  SET_ENTERPRISE 4, 4
+  MOVE_WITHIN_QUADRANT 1, 1
+  ASSERT (ENT_SX = 5)
+  ASSERT (ENT_SY = 4)
+  ASSERT (@SECTOR[5, 4] = 1)
+  ASSERT (@SECTOR[4, 4] = 0)
+END
+
+# Course 3 (North, DX=0 DY=-1): move 2 steps from (4,4) -> (4,2)
+DEF TEST_MOVE_NORTH_2_STEPS()
+  INIT_GAME
+  SET_ENTERPRISE 4, 4
+  MOVE_WITHIN_QUADRANT 3, 2
+  ASSERT (ENT_SX = 4)
+  ASSERT (ENT_SY = 2)
+  ASSERT (@SECTOR[4, 2] = 1)
+  ASSERT (@SECTOR[4, 4] = 0)
+END
+
+# Course 5 (West, DX=-1 DY=0): move 3 steps from (5,5) -> (2,5)
+DEF TEST_MOVE_WEST_3_STEPS()
+  INIT_GAME
+  SET_ENTERPRISE 5, 5
+  MOVE_WITHIN_QUADRANT 5, 3
+  ASSERT (ENT_SX = 2)
+  ASSERT (ENT_SY = 5)
+  ASSERT (@SECTOR[2, 5] = 1)
+  ASSERT (@SECTOR[5, 5] = 0)
+END
+
+# Course 7 (South, DX=0 DY=+1): move 1 step from (4,4) -> (4,5)
+DEF TEST_MOVE_SOUTH_1_STEP()
+  INIT_GAME
+  SET_ENTERPRISE 4, 4
+  MOVE_WITHIN_QUADRANT 7, 1
+  ASSERT (ENT_SX = 4)
+  ASSERT (ENT_SY = 5)
+  ASSERT (@SECTOR[4, 5] = 1)
+  ASSERT (@SECTOR[4, 4] = 0)
+END
+
+DEF TEST_COURSE_VECTOR_INTERPOLATION()
+  INIT_GAME
+  ASSERT (GET_COURSE_VECTOR_X(1.5) = 1)
+  ASSERT (GET_COURSE_VECTOR_Y(1.5) = -0.5)
+  ASSERT (GET_COURSE_VECTOR_X(8.5) = 1)
+  ASSERT (GET_COURSE_VECTOR_Y(8.5) = 0.5)
+END
+
+DEF TEST_MOVE_DECIMAL_COURSE_SAME_QUADRANT()
+  INIT_GAME
+  SET_ENTERPRISE 4, 4
+  MOVE_WITHIN_QUADRANT 1.5, 2
+  ASSERT (ENT_SX = 6)
+  ASSERT (ENT_SY = 3)
+  ASSERT (@SECTOR[6, 3] = 1)
+  ASSERT (@SECTOR[4, 4] = 0)
+END
+
+# Galaxy edge: course 1 (East) from QX=8 SX=4 -> 4 steps 進んで SX=8 で止まる
+# SX=4 から east 10 steps: step5 で NEXT_SX=9 (edge) -> CURR_SX=8 が最終有効 sector
+DEF TEST_MOVE_OUT_OF_BOUNDS_NO_CRASH()
+  INIT_GAME
+  LET ENT_QX = 8
+  SET_ENTERPRISE 4, 4
+  MOVE_WITHIN_QUADRANT 1, 10
+  # Enterprise は galaxy edge 手前の最終有効 sector (8,4) に留まる
+  ASSERT (ENT_SX = 8)
+  ASSERT (ENT_SY = 4)
+  ASSERT (@SECTOR[8, 4] = 1)
+  ASSERT (@SECTOR[4, 4] = 0)
+END
+
+# Galaxy edge: course 3 (North) from QY=1 SY=4 -> 3 steps 進んで SY=1 で止まる
+# SY=4 から north 5 steps (DY=-1): step4 で NEXT_SY=0 (edge) -> CURR_SY=1 が最終有効 sector
+DEF TEST_MOVE_NORTH_OUT_OF_BOUNDS()
+  INIT_GAME
+  LET ENT_QY = 1
+  SET_ENTERPRISE 4, 4
+  MOVE_WITHIN_QUADRANT 3, 5
+  # Enterprise は galaxy edge 手前の最終有効 sector (4,1) に留まる
+  ASSERT (ENT_SX = 4)
+  ASSERT (ENT_SY = 1)
+  ASSERT (@SECTOR[4, 1] = 1)
+  ASSERT (@SECTOR[4, 4] = 0)
+END
+
+# Collision: destination occupied by a star (value 4) -> abort, Enterprise stays
+DEF TEST_MOVE_BLOCKED_BY_STAR()
+  INIT_GAME
+  SET_ENTERPRISE 4, 4
+  # Place a star at (5, 4), the destination of course 1 step 1
+  LET @SECTOR[5, 4] = 4
+  MOVE_WITHIN_QUADRANT 1, 1
+  # Enterprise must remain at original position
+  ASSERT (ENT_SX = 4)
+  ASSERT (ENT_SY = 4)
+  ASSERT (@SECTOR[4, 4] = 1)
+  # Star cell must not be overwritten
+  ASSERT (@SECTOR[5, 4] = 4)
+END
+
+# Smoke test: fractional warp (0.2) results in STEPS=INT(0.2*8)=1 sector move
+DEF TEST_FRACTIONAL_WARP_STEPS()
+  # Verify that INT(WARP * 8) = 1 for WARP = 0.2
+  ASSERT (INT(0.2 * 8) = 1)
+  # Verify that INT(WARP * 8) = 0 for WARP < 0.125 (below 1 step)
+  ASSERT (INT(0.1 * 8) = 0)
+END
+
+# Smoke test: Float(1.0) course (as returned by GETDEC?) must not crash.
+DEF TEST_FLOAT_INTEGER_COURSE_NO_CRASH()
+  INIT_GAME
+  SET_ENTERPRISE 4, 4
+  MOVE_WITHIN_QUADRANT 1.0, 1
+  # Course 1 is East (DX=+1 DY=0): (4,4) -> (5,4)
+  ASSERT (ENT_SX = 5)
+  ASSERT (ENT_SY = 4)
+END
+
+TEST_COURSE_VECTOR_INTERPOLATION
+TEST_MOVE_EAST_1_STEP
+TEST_MOVE_NORTH_2_STEPS
+TEST_MOVE_WEST_3_STEPS
+TEST_MOVE_SOUTH_1_STEP
+TEST_MOVE_DECIMAL_COURSE_SAME_QUADRANT
+TEST_MOVE_OUT_OF_BOUNDS_NO_CRASH
+TEST_MOVE_NORTH_OUT_OF_BOUNDS
+TEST_MOVE_BLOCKED_BY_STAR
+TEST_FRACTIONAL_WARP_STEPS
+TEST_FLOAT_INTEGER_COURSE_NO_CRASH

@@ -1,6 +1,6 @@
 use crate::array_ref::ArrayRef;
 use crate::cell::{Cell, CompileEntry};
-use crate::constants::MAX_DICTIONARY_CELLS;
+use crate::constants::{MAX_ARRAY_ELEMENTS, MAX_DICTIONARY_CELLS};
 use crate::dict::{EntryKind, WordEntry, FLAG_HIDDEN, FLAG_IMMEDIATE, FLAG_SYSTEM};
 use crate::error::TbxError;
 use crate::expr::ExprCompiler;
@@ -743,12 +743,85 @@ pub fn dim_prim(vm: &mut VM) -> Result<(), TbxError> {
         collected
     };
 
-    // Reject empty size expression: `DIM @A[]`.
-    if size_tokens.is_empty() {
+    // Split collected tokens into dimension expressions by top-level commas.
+    // Track both parenthesis and nested bracket depth so only top-level commas
+    // split the DIM dimension list.
+    let dim_list: Vec<Vec<crate::lexer::SpannedToken>> = {
+        let mut dims: Vec<Vec<crate::lexer::SpannedToken>> = Vec::new();
+        let mut current: Vec<crate::lexer::SpannedToken> = Vec::new();
+        let mut depth: usize = 0;
+        let mut bracket_depth: usize = 0;
+        for tok in size_tokens {
+            match &tok.token {
+                Token::LParen => {
+                    depth += 1;
+                    current.push(tok);
+                }
+                Token::RParen => {
+                    depth = depth.saturating_sub(1);
+                    current.push(tok);
+                }
+                Token::LBracket => {
+                    bracket_depth += 1;
+                    current.push(tok);
+                }
+                Token::RBracket => {
+                    bracket_depth = bracket_depth.saturating_sub(1);
+                    current.push(tok);
+                }
+                Token::Comma if depth == 0 && bracket_depth == 0 => {
+                    dims.push(current);
+                    current = Vec::new();
+                }
+                _ => {
+                    current.push(tok);
+                }
+            }
+        }
+        dims.push(current);
+        dims
+    };
+
+    // Reject arity 0: `DIM @A[]`.
+    if dim_list.len() == 1 && dim_list[0].is_empty() {
         return Err(TbxError::InvalidExpression {
             reason: "DIM: array size expression must not be empty",
         });
     }
+
+    // Reject arity 3+: `DIM @A[1, 2, 3]`.
+    if dim_list.len() > 2 {
+        return Err(TbxError::InvalidExpression {
+            reason: "DIM: array dimension list must have 1 or 2 elements",
+        });
+    }
+
+    // Classify the dimension list as 1D or 2D and validate.
+    // 1D: use the single token list as the size expression.
+    // 2D: keep d0 and d1 as separate token lists so each can be compiled/evaluated
+    //     independently, producing (width, height) for ArrayRef::new_2d / ARRAY_2D.
+    enum DimKind {
+        OneD(Vec<crate::lexer::SpannedToken>),
+        TwoD(
+            Vec<crate::lexer::SpannedToken>,
+            Vec<crate::lexer::SpannedToken>,
+        ),
+    }
+
+    let dim_kind: DimKind = if dim_list.len() == 1 {
+        DimKind::OneD(dim_list.into_iter().next().unwrap())
+    } else {
+        let (d0, d1) = {
+            let mut it = dim_list.into_iter();
+            (it.next().unwrap(), it.next().unwrap())
+        };
+        if d0.is_empty() || d1.is_empty() {
+            return Err(TbxError::InvalidExpression {
+                reason: "DIM: 2D array dimension expression must not be empty",
+            });
+        }
+        DimKind::TwoD(d0, d1)
+    };
 
     if vm.is_compiling {
         // --- Compile mode (inside DEF) ---
@@ -787,21 +860,12 @@ pub fn dim_prim(vm: &mut VM) -> Result<(), TbxError> {
         state.local_table.insert(name.clone(), idx);
         state.local_count += 1;
 
-        // Compile the size expression.
-        let (size_cells, patch_offsets) =
-            compile_expr_taking_local_table_at(vm, &size_tokens, vm.dp + 2)?;
-
         // Look up primitives needed for code generation.
         let lit_xt =
             vm.find_by_kind(|k| matches!(k, EntryKind::Lit))
                 .ok_or(TbxError::UndefinedSymbol {
                     name: "LIT".to_string(),
                 })?;
-        let array_xt = vm
-            .lookup_hidden_system("ARRAY")
-            .ok_or(TbxError::UndefinedSymbol {
-                name: "ARRAY".to_string(),
-            })?;
         // Use ARRAY_STORE_LOCAL instead of SET so that the array handle bypasses
         // the Cell::Array rejection guard in set_prim.
         let array_store_local_xt =
@@ -814,20 +878,71 @@ pub fn dim_prim(vm: &mut VM) -> Result<(), TbxError> {
         vm.dict_write(Cell::Xt(lit_xt))?;
         vm.dict_write(Cell::StackAddr(idx))?;
 
-        // Emit: [size_cells]  — evaluate the size at runtime.
-        let base_dp = vm.dp;
-        for cell in size_cells {
-            vm.dict_write(cell)?;
-        }
-        // Register self-recursive call patch positions.
-        if let Some(state) = vm.compile_state.as_mut() {
-            for offset in patch_offsets {
-                state.call_patch_list.push(base_dp + offset);
+        match dim_kind {
+            DimKind::OneD(size_tokens) => {
+                // 1D path: compile size expression, emit ARRAY.
+                let (size_cells, patch_offsets) =
+                    compile_expr_taking_local_table(vm, &size_tokens)?;
+                let array_xt =
+                    vm.lookup_hidden_system("ARRAY")
+                        .ok_or(TbxError::UndefinedSymbol {
+                            name: "ARRAY".to_string(),
+                        })?;
+
+                // Emit: [size_cells]  — evaluate the size at runtime.
+                let base_dp = vm.dp;
+                for cell in size_cells {
+                    vm.dict_write(cell)?;
+                }
+                // Register self-recursive call patch positions.
+                if let Some(state) = vm.compile_state.as_mut() {
+                    for offset in patch_offsets {
+                        state.call_patch_list.push(base_dp + offset);
+                    }
+                }
+
+                // Emit: ARRAY  — create the 1D array and push its handle.
+                vm.dict_write(Cell::Xt(array_xt))?;
+            }
+            DimKind::TwoD(d0_tokens, d1_tokens) => {
+                // 2D path: compile width and height expressions separately, emit ARRAY_2D.
+                // Stack at runtime: LIT StackAddr(idx) [width] [height] ARRAY_2D ARRAY_STORE_LOCAL
+                let (d0_cells, d0_patch_offsets) = compile_expr_taking_local_table(vm, &d0_tokens)?;
+                let d1_base_dp = vm.dp + d0_cells.len();
+                let (d1_cells, d1_patch_offsets) =
+                    compile_expr_taking_local_table_at(vm, &d1_tokens, d1_base_dp)?;
+                let array_2d_xt =
+                    vm.lookup_hidden_system("ARRAY_2D")
+                        .ok_or(TbxError::UndefinedSymbol {
+                            name: "ARRAY_2D".to_string(),
+                        })?;
+
+                // Emit: [d0_cells]  — push width at runtime.
+                let base_dp_d0 = vm.dp;
+                for cell in d0_cells {
+                    vm.dict_write(cell)?;
+                }
+                if let Some(state) = vm.compile_state.as_mut() {
+                    for offset in d0_patch_offsets {
+                        state.call_patch_list.push(base_dp_d0 + offset);
+                    }
+                }
+
+                // Emit: [d1_cells]  — push height at runtime.
+                let base_dp_d1 = vm.dp;
+                for cell in d1_cells {
+                    vm.dict_write(cell)?;
+                }
+                if let Some(state) = vm.compile_state.as_mut() {
+                    for offset in d1_patch_offsets {
+                        state.call_patch_list.push(base_dp_d1 + offset);
+                    }
+                }
+
+                // Emit: ARRAY_2D  — create the 2D array and push its handle.
+                vm.dict_write(Cell::Xt(array_2d_xt))?;
             }
         }
-
-        // Emit: ARRAY  — create the array and push its handle.
-        vm.dict_write(Cell::Xt(array_xt))?;
 
         // Emit: ARRAY_STORE_LOCAL  — store the array handle into the local slot.
         // This hidden primitive accepts Cell::Array; surface SET / STORE do not.
@@ -842,62 +957,83 @@ pub fn dim_prim(vm: &mut VM) -> Result<(), TbxError> {
             });
         }
 
-        // Evaluate the size expression by compiling it to a temporary code
-        // buffer and running it.  The result (Cell::Int) is left on the stack.
-        let (size_cells, _patch_offsets) = compile_expr_taking_local_table(vm, &size_tokens)?;
+        // Helper closure: evaluate a token list in a temporary code buffer and pop
+        // the resulting Cell::Int value.
+        let eval_dim_expr =
+            |vm: &mut VM, tokens: &[crate::lexer::SpannedToken]| -> Result<usize, TbxError> {
+                let (cells, _patch_offsets) = compile_expr_taking_local_table(vm, tokens)?;
 
-        // Build temporary code buffer: [size_cells, EXIT].
-        let buf_start = vm.dp;
-        for cell in &size_cells {
-            vm.dict_write(cell.clone())?;
-        }
-        let exit_xt =
-            vm.find_by_kind(|k| matches!(k, EntryKind::Exit))
-                .ok_or(TbxError::UndefinedSymbol {
-                    name: "EXIT".to_string(),
-                })?;
-        vm.dict_write(Cell::Xt(exit_xt))?;
+                // Build temporary code buffer: [cells, EXIT].
+                let buf_start = vm.dp;
+                for cell in &cells {
+                    vm.dict_write(cell.clone())?;
+                }
+                let exit_xt = vm.find_by_kind(|k| matches!(k, EntryKind::Exit)).ok_or(
+                    TbxError::UndefinedSymbol {
+                        name: "EXIT".to_string(),
+                    },
+                )?;
+                vm.dict_write(Cell::Xt(exit_xt))?;
 
-        // Snapshot VM state before running the temporary buffer so we can
-        // fully restore it if the size expression evaluation fails.
-        let saved_stack_len = vm.data_stack.len();
-        let saved_return_stack_len = vm.return_stack.len();
-        let saved_pc = vm.pc;
-        let saved_bp = vm.bp;
+                // Snapshot VM state before running.
+                let saved_stack_len = vm.data_stack.len();
+                let saved_return_stack_len = vm.return_stack.len();
+                let saved_pc = vm.pc;
+                let saved_bp = vm.bp;
 
-        let run_result = vm.run(buf_start);
+                let run_result = vm.run(buf_start);
 
-        // Clean up the temporary code buffer regardless of outcome.
-        vm.dp = buf_start;
-        vm.dictionary.truncate(buf_start);
+                // Clean up the temporary code buffer regardless of outcome.
+                vm.dp = buf_start;
+                vm.dictionary.truncate(buf_start);
 
-        if let Err(e) = run_result {
-            // Restore all VM state that vm.run() may have mutated before
-            // the error, including return_stack frames pushed by user words
-            // called inside the size expression.
-            vm.data_stack.truncate(saved_stack_len);
-            vm.return_stack.truncate(saved_return_stack_len);
-            vm.pc = saved_pc;
-            vm.bp = saved_bp;
-            return Err(e);
-        }
+                if let Err(e) = run_result {
+                    vm.data_stack.truncate(saved_stack_len);
+                    vm.return_stack.truncate(saved_return_stack_len);
+                    vm.pc = saved_pc;
+                    vm.bp = saved_bp;
+                    return Err(e);
+                }
 
-        // Pop the evaluated size from the stack.
-        let size_val = vm.pop()?;
-        let size = match size_val {
-            Cell::Int(n) => {
-                if n <= 0 {
+                let val = vm.pop()?;
+                match val {
+                    Cell::Int(n) => {
+                        if n <= 0 {
+                            return Err(TbxError::InvalidArgument {
+                                message: format!("DIM: array dimension must be positive, got {n}"),
+                            });
+                        }
+                        Ok(n as usize)
+                    }
+                    other => Err(TbxError::TypeError {
+                        expected: "Int",
+                        got: other.type_name(),
+                    }),
+                }
+            };
+
+        // Allocate the array based on 1D or 2D shape.
+        let ar: ArrayRef = match dim_kind {
+            DimKind::OneD(size_tokens) => {
+                let size = eval_dim_expr(vm, &size_tokens)?;
+                ArrayRef::new(vec![Cell::None; size])
+            }
+            DimKind::TwoD(d0_tokens, d1_tokens) => {
+                let width = eval_dim_expr(vm, &d0_tokens)?;
+                let height = eval_dim_expr(vm, &d1_tokens)?;
+                let total = width
+                    .checked_mul(height)
+                    .ok_or_else(|| TbxError::InvalidArgument {
+                        message: format!("DIM: {width} * {height} overflows"),
+                    })?;
+                if total > MAX_ARRAY_ELEMENTS {
                     return Err(TbxError::InvalidArgument {
-                        message: format!("DIM: array size must be positive, got {n}"),
+                        message: format!(
+                            "DIM: total size {total} exceeds maximum {MAX_ARRAY_ELEMENTS}"
+                        ),
                     });
                 }
-                n as usize
-            }
-            other => {
-                return Err(TbxError::TypeError {
-                    expected: "Int",
-                    got: other.type_name(),
-                });
+                ArrayRef::new_2d(vec![Cell::None; total], width, height)
             }
         };
 
@@ -905,8 +1041,7 @@ pub fn dim_prim(vm: &mut VM) -> Result<(), TbxError> {
         let storage_idx = vm.dp;
         vm.dict_write(Cell::None)?;
 
-        // Create the array and store the handle directly in the variable slot.
-        let ar = ArrayRef::new(vec![Cell::None; size]);
+        // Store the array handle directly in the variable slot.
         vm.dict_write_at(storage_idx, Cell::Array(ar))?;
 
         // Register the variable in the dictionary.
@@ -1659,10 +1794,6 @@ fn compile_at_array_lvalue(vm: &mut VM) -> Result<(), TbxError> {
         });
     }
 
-    // Compile the index expression using the current local table.
-    let (index_cells, index_patch_offsets) =
-        compile_expr_taking_local_table_at(vm, &index_tokens, vm.dp + 3)?;
-
     // Resolve the array handle: local binding takes priority over global.
     let local_idx: Option<usize> = vm
         .compile_state
@@ -1677,11 +1808,6 @@ fn compile_at_array_lvalue(vm: &mut VM) -> Result<(), TbxError> {
     let fetch_xt = vm.lookup("FETCH").ok_or(TbxError::UndefinedSymbol {
         name: "FETCH".to_string(),
     })?;
-    let array_addr_xt = vm
-        .lookup_hidden_system("ARRAY_ADDR")
-        .ok_or(TbxError::UndefinedSymbol {
-            name: "ARRAY_ADDR".to_string(),
-        })?;
 
     if let Some(idx) = local_idx {
         // Emit: LIT StackAddr(idx)  FETCH  — load the local array handle.
@@ -1708,20 +1834,71 @@ fn compile_at_array_lvalue(vm: &mut VM) -> Result<(), TbxError> {
         vm.dict_write(Cell::Xt(fetch_xt))?;
     }
 
-    // Emit the compiled index expression.
-    let base_dp = vm.dp;
-    for cell in index_cells {
-        vm.dict_write(cell)?;
-    }
-    // Register any self-recursive call patch positions from the index expression.
-    if let Some(state) = vm.compile_state.as_mut() {
-        for offset in index_patch_offsets {
-            state.call_patch_list.push(base_dp + offset);
+    // Dispatch on 1D vs 2D based on whether the index contains a top-level comma.
+    if let Some((x_toks, y_toks)) = crate::expr::split_at_top_level_comma(&index_tokens)? {
+        // 2D path: LET @A[x, y] = expr
+        if x_toks.is_empty() {
+            return Err(TbxError::InvalidExpression {
+                reason: "LET @A[x, y]: missing x expression",
+            });
         }
-    }
+        if y_toks.is_empty() {
+            return Err(TbxError::InvalidExpression {
+                reason: "LET @A[x, y]: missing y expression",
+            });
+        }
 
-    // Emit ARRAY_ADDR — pops (Array, index) and pushes the element address.
-    vm.dict_write(Cell::Xt(array_addr_xt))?;
+        let (x_cells, x_patch_offsets) = compile_expr_taking_local_table(vm, x_toks)?;
+        let y_base_dp = vm.dp + x_cells.len();
+        let (y_cells, y_patch_offsets) = compile_expr_taking_local_table_at(vm, y_toks, y_base_dp)?;
+
+        let array_addr_2d_xt =
+            vm.lookup_hidden_system("ARRAY_ADDR_2D")
+                .ok_or(TbxError::UndefinedSymbol {
+                    name: "ARRAY_ADDR_2D".to_string(),
+                })?;
+
+        let base_dp = vm.dp;
+        for cell in x_cells {
+            vm.dict_write(cell)?;
+        }
+        if let Some(state) = vm.compile_state.as_mut() {
+            for offset in x_patch_offsets {
+                state.call_patch_list.push(base_dp + offset);
+            }
+        }
+        let base_dp = vm.dp;
+        for cell in y_cells {
+            vm.dict_write(cell)?;
+        }
+        if let Some(state) = vm.compile_state.as_mut() {
+            for offset in y_patch_offsets {
+                state.call_patch_list.push(base_dp + offset);
+            }
+        }
+        vm.dict_write(Cell::Xt(array_addr_2d_xt))?;
+    } else {
+        // 1D path: LET @A[i] = expr
+        let (index_cells, index_patch_offsets) =
+            compile_expr_taking_local_table(vm, &index_tokens)?;
+
+        let array_addr_xt =
+            vm.lookup_hidden_system("ARRAY_ADDR")
+                .ok_or(TbxError::UndefinedSymbol {
+                    name: "ARRAY_ADDR".to_string(),
+                })?;
+
+        let base_dp = vm.dp;
+        for cell in index_cells {
+            vm.dict_write(cell)?;
+        }
+        if let Some(state) = vm.compile_state.as_mut() {
+            for offset in index_patch_offsets {
+                state.call_patch_list.push(base_dp + offset);
+            }
+        }
+        vm.dict_write(Cell::Xt(array_addr_xt))?;
+    }
 
     Ok(())
 }
@@ -2294,6 +2471,12 @@ pub fn register_all(vm: &mut VM) {
     let mut array_entry = WordEntry::new_primitive("ARRAY", array_prim);
     array_entry.flags = FLAG_SYSTEM | FLAG_HIDDEN;
     vm.register(array_entry);
+    // ARRAY_2D is a hidden system entry used internally by the DIM @A[w, h] compiler.
+    // It pops (width, height) from the stack and allocates width*height Cell::None slots
+    // with TwoD shape metadata, then pushes the Cell::Array handle.
+    let mut array_2d_entry = WordEntry::new_primitive("ARRAY_2D", arrays::array_2d_prim);
+    array_2d_entry.flags = FLAG_SYSTEM | FLAG_HIDDEN;
+    vm.register(array_2d_entry);
     // ARRAY_STORE_LOCAL is a hidden system entry used exclusively by the DIM @A[n]
     // compiler to write a Cell::Array handle into a local stack-frame slot.
     // It bypasses the Cell::Array rejection guard in SET / STORE, which is intentional:
@@ -2321,9 +2504,25 @@ pub fn register_all(vm: &mut VM) {
     let mut array_get_entry = WordEntry::new_primitive("ARRAY_GET", array_get_prim);
     array_get_entry.flags = FLAG_SYSTEM | FLAG_HIDDEN;
     vm.register(array_get_entry);
+    // ARRAY_GET_2D reads an element from a 2D array (`@A[x, y]` compiles to
+    // `<array handle read> <x expr> <y expr> ARRAY_GET_2D`).
+    // It validates that the array was declared with DIM @A[w, h] and computes
+    // the flat index as (y-1)*width + (x-1).
+    let mut array_get_2d_entry =
+        WordEntry::new_primitive("ARRAY_GET_2D", arrays::array_get_2d_prim);
+    array_get_2d_entry.flags = FLAG_SYSTEM | FLAG_HIDDEN;
+    vm.register(array_get_2d_entry);
     let mut array_addr_entry = WordEntry::new_primitive("ARRAY_ADDR", array_addr_prim);
     array_addr_entry.flags = FLAG_SYSTEM | FLAG_HIDDEN;
     vm.register(array_addr_entry);
+    // ARRAY_ADDR_2D computes the address of a 2D array element (`&@A[x, y]` compiles to
+    // `<array handle read> <x expr> <y expr> ARRAY_ADDR_2D`).
+    // It validates that the array was declared with DIM @A[w, h] and computes
+    // the flat index as (y-1)*width + (x-1).
+    let mut array_addr_2d_entry =
+        WordEntry::new_primitive("ARRAY_ADDR_2D", arrays::array_addr_2d_prim);
+    array_addr_2d_entry.flags = FLAG_SYSTEM | FLAG_HIDDEN;
+    vm.register(array_addr_2d_entry);
     let mut tuple_get_entry = WordEntry::new_primitive("TUPLE_GET", tuple_get_prim);
     tuple_get_entry.flags = FLAG_SYSTEM;
     vm.register(tuple_get_entry);
@@ -6708,6 +6907,120 @@ mod tests {
                 ..
             })
         ));
+    }
+
+    // --- 2D array element read: DIM @A[w, h] + @A[x, y] integration ---
+
+    fn run_src_2d(src: &str) -> Result<String, crate::error::TbxError> {
+        let mut interp = crate::interpreter::Interpreter::new();
+        interp.exec_source(src).map_err(|e| e.kind)?;
+        Ok(interp.take_output())
+    }
+
+    #[test]
+    fn test_2d_array_read_top_left() {
+        // @A[1, 1] reads flat index 0.
+        let src = concat!(
+            "DEF TEST()\n",
+            "  DIM @A[3, 2]\n",
+            "  LET @A[1, 1] = 10\n",
+            "  PUTDEC @A[1, 1]\n",
+            "END\n",
+            "TEST",
+        );
+        assert_eq!(run_src_2d(src).unwrap(), "10");
+    }
+
+    #[test]
+    fn test_2d_array_read_index_formula() {
+        // @A[x, y] maps to flat index (y-1)*width + (x-1).
+        // 3x2 array, elements 1..6 in row-major order via 2D LET.
+        let src = concat!(
+            "DEF TEST()\n",
+            "  DIM @A[3, 2]\n",
+            "  LET @A[1, 1] = 1\n",
+            "  LET @A[2, 1] = 2\n",
+            "  LET @A[3, 1] = 3\n",
+            "  LET @A[1, 2] = 4\n",
+            "  LET @A[2, 2] = 5\n",
+            "  LET @A[3, 2] = 6\n",
+            "  PUTDEC @A[1, 1]\n", // flat 0 → 1
+            "  PUTDEC @A[3, 1]\n", // flat 2 → 3
+            "  PUTDEC @A[1, 2]\n", // flat 3 → 4
+            "  PUTDEC @A[3, 2]\n", // flat 5 → 6
+            "END\n",
+            "TEST",
+        );
+        assert_eq!(run_src_2d(src).unwrap(), "1346");
+    }
+
+    #[test]
+    fn test_2d_array_read_out_of_bounds_x() {
+        let src = concat!(
+            "DEF TEST()\n",
+            "  DIM @A[3, 2]\n",
+            "  PUTDEC @A[4, 1]\n",
+            "END\n",
+            "TEST",
+        );
+        let err = run_src_2d(src).unwrap_err();
+        assert!(
+            matches!(
+                err,
+                crate::error::TbxError::ArrayIndexOutOfBounds { index: 4, .. }
+            ),
+            "expected out-of-bounds for x=4, got: {err:?}"
+        );
+    }
+
+    #[test]
+    fn test_2d_array_read_out_of_bounds_y() {
+        let src = concat!(
+            "DEF TEST()\n",
+            "  DIM @A[3, 2]\n",
+            "  PUTDEC @A[1, 3]\n",
+            "END\n",
+            "TEST",
+        );
+        let err = run_src_2d(src).unwrap_err();
+        assert!(
+            matches!(
+                err,
+                crate::error::TbxError::ArrayIndexOutOfBounds { index: 3, .. }
+            ),
+            "expected out-of-bounds for y=3, got: {err:?}"
+        );
+    }
+
+    #[test]
+    fn test_2d_array_read_on_1d_array_is_type_error() {
+        // @A[x, y] on a 1D array must produce a TypeError at runtime.
+        let src = concat!(
+            "DEF TEST()\n",
+            "  DIM @A[6]\n",
+            "  PUTDEC @A[1, 1]\n",
+            "END\n",
+            "TEST",
+        );
+        let err = run_src_2d(src).unwrap_err();
+        assert!(
+            matches!(err, crate::error::TbxError::TypeError { .. }),
+            "expected TypeError for 2D access on 1D array, got: {err:?}"
+        );
+    }
+
+    #[test]
+    fn test_1d_array_read_still_works_after_2d_changes() {
+        // Regression: existing @A[i] 1D syntax must still work.
+        let src = concat!(
+            "DEF TEST()\n",
+            "  DIM @A[4]\n",
+            "  LET @A[2] = 99\n",
+            "  PUTDEC @A[2]\n",
+            "END\n",
+            "TEST",
+        );
+        assert_eq!(run_src_2d(src).unwrap(), "99");
     }
 
     // --- rnd_prim ---

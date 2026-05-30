@@ -1,0 +1,165 @@
+# trek/init.tbx — ゲーム初期化手続き
+
+# コーステーブルを初期化する (STTR1.BAS lines 420-440 C[9,2] 相当)
+# Mayfield C[I,1] = row delta -> TBX @COURSE_DY[I]
+# Mayfield C[I,2] = col delta -> TBX @COURSE_DX[I]
+DEF INIT_COURSE_TABLE()
+  LET @COURSE_DY[1] = 0   # 東
+  LET @COURSE_DX[1] = 1
+  LET @COURSE_DY[2] = -1  # 北東
+  LET @COURSE_DX[2] = 1
+  LET @COURSE_DY[3] = -1  # 北
+  LET @COURSE_DX[3] = 0
+  LET @COURSE_DY[4] = -1  # 北西
+  LET @COURSE_DX[4] = -1
+  LET @COURSE_DY[5] = 0   # 西
+  LET @COURSE_DX[5] = -1
+  LET @COURSE_DY[6] = 1   # 南西
+  LET @COURSE_DX[6] = -1
+  LET @COURSE_DY[7] = 1   # 南
+  LET @COURSE_DX[7] = 0
+  LET @COURSE_DY[8] = 1   # 南東
+  LET @COURSE_DX[8] = 1
+  LET @COURSE_DY[9] = 0   # コース補間センチネル (course 1 と同値)
+  LET @COURSE_DX[9] = 1
+END
+
+# 8x8 ギャラクシーサマリーを生成する (STTR1.BAS lines 500-770)
+# 各クアドラントに K3*100 + B3*10 + S3 を格納する
+# Klingon 数または Starbase 数が 0 なら galaxy generation をやり直す
+DEF INIT_GALAXY()
+  VAR DONE = 0
+  WHILE DONE = 0
+    LET KLINGONS_LEFT = 0
+    LET BASES_LEFT = 0
+    VAR QY
+    FOR &QY, 8
+      VAR QX
+      FOR &QX, 8
+        # Klingon 数: RND(100) を1回引いて区間分岐 (STTR1.BAS lines 520-640)
+        # >98 -> 3体(2%), >95 -> 2体(3%), >80 -> 1体(15%), otherwise -> 0体(80%)
+        VAR R1 = RND(100)
+        VAR K3 = 0
+        IF R1 > 98
+          LET K3 = 3
+        ELSIF R1 > 95
+          LET K3 = 2
+        ELSIF R1 > 80
+          LET K3 = 1
+        ENDIF
+        # Starbase 数: RND(100) > 96 -> 1基(4%), otherwise -> 0基(96%) (STTR1.BAS lines 660-700)
+        VAR B3 = 0
+        IF RND(100) > 96
+          LET B3 = 1
+        ENDIF
+        # Star 数: 1..8 の一様分布 (STTR1.BAS line 720)
+        VAR S3 = RND(8)
+        # クアドラントサマリーを格納 (STTR1.BAS line 730)
+        LET @GALAXY[QX, QY] = K3 * 100 + B3 * 10 + S3
+        LET KLINGONS_LEFT = KLINGONS_LEFT + K3
+        LET BASES_LEFT = BASES_LEFT + B3
+      NEXT
+    NEXT
+    LET KLINGONS_INITIAL = KLINGONS_LEFT
+    # B9 <= 0 OR K9 <= 0 のとき galaxy generation をやり直す (STTR1.BAS line 775)
+    IF (KLINGONS_LEFT > 0) && (BASES_LEFT > 0)
+      LET DONE = 1
+    ENDIF
+  ENDWH
+END
+
+# Enterprise の初期クアドラント・セクター位置を決める (STTR1.BAS lines 370-400)
+# Q1,Q2,S1,S2 = INT(RND(1)*8+1) に相当
+DEF INIT_ENTERPRISE_POSITION()
+  LET ENT_QX = RND(8)
+  LET ENT_QY = RND(8)
+  LET ENT_SX = RND(8)
+  LET ENT_SY = RND(8)
+END
+
+# @SECTOR[8, 8] を 0 でクリアする
+DEF CLEAR_SECTOR()
+  VAR Y
+  FOR &Y, 8
+    VAR X
+    FOR &X, 8
+      LET @SECTOR[X, Y] = 0
+    NEXT
+  NEXT
+END
+
+# ランダムな空 sector を探し、FOUND_SX / FOUND_SY に書き込む (STTR1.BAS lines 5380-5450)
+# @SECTOR[SX, SY] = 0 (空) になる座標が見つかるまで引き直す
+DEF PICK_RANDOM_EMPTY_SECTOR()
+  LET FOUND_SX = RND(8)
+  LET FOUND_SY = RND(8)
+  WHILE @SECTOR[FOUND_SX, FOUND_SY] <> 0
+    LET FOUND_SX = RND(8)
+    LET FOUND_SY = RND(8)
+  ENDWH
+END
+
+# 現在のクアドラントをセットアップする (STTR1.BAS lines 810-1260)
+# @GALAXY[ENT_QX, ENT_QY] の summary を decode し、
+# Enterprise / Klingon / Starbase / Star を @SECTOR に配置する
+DEF INIT_QUADRANT()
+  CLEAR_SECTOR
+  # @GALAXY[ENT_QX, ENT_QY] から K3/B3/S3 を decode する (STTR1.BAS lines 830-860)
+  VAR SUMMARY = @GALAXY[ENT_QX, ENT_QY]
+  LET KLINGONS_HERE = SUMMARY / 100
+  LET BASES_HERE = (SUMMARY / 10) - (KLINGONS_HERE * 10)
+  LET STARS_HERE = SUMMARY - ((SUMMARY / 10) * 10)
+  # Enterprise を配置する (STTR1.BAS lines 990-1010)
+  LET @SECTOR[ENT_SX, ENT_SY] = 1
+  # Klingon を配置する (STTR1.BAS lines 1020-1110)
+  VAR I
+  FOR &I, KLINGONS_HERE
+    PICK_RANDOM_EMPTY_SECTOR
+    LET @K_X[I] = FOUND_SX
+    LET @K_Y[I] = FOUND_SY
+    LET @K_E[I] = KLINGON_INIT_ENERGY
+    LET @SECTOR[FOUND_SX, FOUND_SY] = 2
+  NEXT
+  # Starbase を配置する (STTR1.BAS lines 1120-1180)
+  VAR J
+  FOR &J, BASES_HERE
+    PICK_RANDOM_EMPTY_SECTOR
+    LET @SECTOR[FOUND_SX, FOUND_SY] = 3
+  NEXT
+  # Star を配置する (STTR1.BAS lines 1190-1250)
+  VAR K
+  FOR &K, STARS_HERE
+    PICK_RANDOM_EMPTY_SECTOR
+    LET @SECTOR[FOUND_SX, FOUND_SY] = 4
+  NEXT
+END
+
+# ゲーム全体の初期化 (STTR1.BAS lines 240-490)
+# 前方参照を避けるため、呼び出す DEF より後に定義する
+DEF INIT_GAME()
+  # Klingon 初期エネルギー (STTR1.BAS line 340: S9=200)
+  LET KLINGON_INIT_ENERGY = 200
+  # 初期 stardate: INT(RND(1)*20+20)*100 -> (RND(20)+19)*100 (STTR1.BAS line 290)
+  LET STARDATE = (RND(20) + 19) * 100
+  LET START_STARDATE = STARDATE
+  # ミッション期間 (STTR1.BAS line 300: T9=30)
+  LET MISSION_DAYS = 30
+  # エネルギー初期値 / 最大値 (STTR1.BAS line 320: E0=E=3000)
+  LET MAX_ENERGY = 3000
+  LET ENERGY = MAX_ENERGY
+  # 魚雷初期値 / 最大値 (STTR1.BAS line 330: P0=P=10)
+  LET MAX_TORPEDOES = 10
+  LET TORPEDOES = MAX_TORPEDOES
+  # シールド初期値 (STTR1.BAS line 350: S=0)
+  LET SHIELDS = 0
+  # ゲーム状態フラグ初期化
+  LET DOCKED = 0
+  LET GAME_OVER = 0
+  LET NAV_MOVE_RESULT = 0
+  LET NAV_STEPS_REQUESTED = 0
+  LET NAV_STEPS_COMPLETED = 0
+  INIT_COURSE_TABLE
+  INIT_GALAXY
+  INIT_ENTERPRISE_POSITION
+  INIT_QUADRANT
+END

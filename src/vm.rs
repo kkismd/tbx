@@ -3279,4 +3279,272 @@ mod tests {
         assert!(result.is_ok(), "expected success, got: {result:?}");
         assert_eq!(result.unwrap().trim(), "5");
     }
+
+    // --- 2D DIM parsing (issue #744) ---
+
+    #[test]
+    fn test_dim_2d_integer_literals_succeeds() {
+        // `DIM @A[8, 8]` must parse without error.
+        // The provisional implementation allocates 8 * 8 = 64 elements as a flat
+        // 1D array; element-level 2D access is not yet implemented.
+        let result = run_source(
+            "DEF F()\n\
+               DIM @A[8, 8]\n\
+               RETURN ARRAY_LEN(@A)\n\
+             END\n\
+             PUTDEC F()",
+        );
+        assert!(result.is_ok(), "expected success, got: {result:?}");
+        assert_eq!(result.unwrap().trim(), "64");
+    }
+
+    #[test]
+    fn test_dim_2d_variable_dimensions_succeeds() {
+        // `DIM @A[W, H]` must parse and compile without error when W and H are
+        // in scope as local parameters.
+        let result = run_source(
+            "DEF MAKE(W, H)\n\
+               DIM @A[W, H]\n\
+               RETURN ARRAY_LEN(@A)\n\
+             END\n\
+             PUTDEC MAKE(4, 3)",
+        );
+        assert!(result.is_ok(), "expected success, got: {result:?}");
+        assert_eq!(result.unwrap().trim(), "12");
+    }
+
+    #[test]
+    fn test_dim_2d_expression_dimensions_succeeds() {
+        // `DIM @A[WIDTH + 1, HEIGHT + 1]` must parse and compile without error.
+        let result = run_source(
+            "DEF MAKE(WIDTH, HEIGHT)\n\
+               DIM @A[WIDTH + 1, HEIGHT + 1]\n\
+               RETURN ARRAY_LEN(@A)\n\
+             END\n\
+             PUTDEC MAKE(7, 7)",
+        );
+        assert!(result.is_ok(), "expected success, got: {result:?}");
+        assert_eq!(result.unwrap().trim(), "64");
+    }
+
+    #[test]
+    fn test_dim_1d_still_works_after_2d_change() {
+        // 1D `DIM @A[10]` must continue to work unchanged.
+        let result = run_source(
+            "DEF F()\n\
+               DIM @A[10]\n\
+               RETURN ARRAY_LEN(@A)\n\
+             END\n\
+             PUTDEC F()",
+        );
+        assert!(result.is_ok(), "expected success, got: {result:?}");
+        assert_eq!(result.unwrap().trim(), "10");
+    }
+
+    #[test]
+    fn test_dim_empty_brackets_is_error() {
+        // `DIM @A[]` must produce a compile error, not a crash.
+        let result = run_source("DIM @A[]");
+        assert!(
+            result.is_err(),
+            "expected compile error for DIM @A[], got success"
+        );
+    }
+
+    #[test]
+    fn test_dim_three_dimensions_is_error() {
+        // `DIM @A[1, 2, 3]` (arity 3) must produce a compile error, not a crash.
+        let result = run_source("DIM @A[1, 2, 3]");
+        assert!(
+            result.is_err(),
+            "expected compile error for DIM @A[1, 2, 3], got success"
+        );
+    }
+
+    // --- 2D array shape metadata (issue #745) ---
+
+    #[test]
+    fn test_dim_2d_execute_mode_array_len_is_width_times_height() {
+        // `DIM @A[4, 3]` in execute (top-level) mode must allocate 4 * 3 = 12 elements.
+        let result = run_source(
+            "DIM @A[4, 3]\n\
+             PUTDEC ARRAY_LEN(@A)",
+        );
+        assert!(result.is_ok(), "expected success, got: {result:?}");
+        assert_eq!(result.unwrap().trim(), "12");
+    }
+
+    #[test]
+    fn test_dim_2d_compile_mode_array_len_is_width_times_height() {
+        // `DIM @A[4, 3]` inside a DEF body must allocate 4 * 3 = 12 elements.
+        let result = run_source(
+            "DEF F()\n\
+               DIM @A[4, 3]\n\
+               RETURN ARRAY_LEN(@A)\n\
+             END\n\
+             PUTDEC F()",
+        );
+        assert!(result.is_ok(), "expected success, got: {result:?}");
+        assert_eq!(result.unwrap().trim(), "12");
+    }
+
+    // --- 2D array allocation validation (issue #746) ---
+
+    #[test]
+    fn test_dim_2d_3x2_allocates_6_elements() {
+        // `DIM @A[3, 2]` must allocate exactly 6 elements.
+        let result = run_source(
+            "DIM @A[3, 2]\n\
+             PUTDEC ARRAY_LEN(@A)",
+        );
+        assert!(result.is_ok(), "expected success, got: {result:?}");
+        assert_eq!(result.unwrap().trim(), "6");
+    }
+
+    #[test]
+    fn test_dim_2d_1x1_allocates_1_element() {
+        // `DIM @A[1, 1]` must allocate exactly 1 element.
+        let result = run_source(
+            "DIM @A[1, 1]\n\
+             PUTDEC ARRAY_LEN(@A)",
+        );
+        assert!(result.is_ok(), "expected success, got: {result:?}");
+        assert_eq!(result.unwrap().trim(), "1");
+    }
+
+    #[test]
+    fn test_dim_2d_zero_width_is_error() {
+        // width = 0 must be rejected.
+        let result = run_source("DIM @A[0, 5]");
+        assert!(
+            result.is_err(),
+            "expected error for DIM @A[0, 5], got success"
+        );
+    }
+
+    #[test]
+    fn test_dim_2d_zero_height_is_error() {
+        // height = 0 must be rejected.
+        let result = run_source("DIM @A[5, 0]");
+        assert!(
+            result.is_err(),
+            "expected error for DIM @A[5, 0], got success"
+        );
+    }
+
+    #[test]
+    fn test_dim_2d_negative_width_is_error() {
+        // Negative width must be rejected.
+        let result = run_source("DIM @A[0 - 1, 5]");
+        assert!(
+            result.is_err(),
+            "expected error for negative width, got success"
+        );
+    }
+
+    #[test]
+    fn test_dim_2d_negative_height_is_error() {
+        // Negative height must be rejected.
+        let result = run_source("DIM @A[5, 0 - 1]");
+        assert!(
+            result.is_err(),
+            "expected error for negative height, got success"
+        );
+    }
+
+    #[test]
+    fn test_dim_2d_overflow_is_error() {
+        // width * height that overflows usize must be rejected.
+        // 100_000_000_000_000 * 100_000_000_000_000 = 10^28 > usize::MAX.
+        let result = run_source("DIM @A[100000000000000, 100000000000000]");
+        assert!(
+            result.is_err(),
+            "expected error for overflowing 2D size, got success"
+        );
+    }
+
+    #[test]
+    fn test_dim_2d_over_large_is_error() {
+        // width * height that exceeds MAX_ARRAY_ELEMENTS must be rejected.
+        // 5000 * 5000 = 25_000_000 > MAX_ARRAY_ELEMENTS (16_777_216).
+        let result = run_source("DIM @A[5000, 5000]");
+        assert!(
+            result.is_err(),
+            "expected error for over-large 2D size, got success"
+        );
+    }
+
+    #[test]
+    fn test_dim_2d_compile_mode_3x2_allocates_6_elements() {
+        // Inside a DEF, `DIM @A[3, 2]` must allocate 3 * 2 = 6 elements.
+        let result = run_source(
+            "DEF F()\n\
+               DIM @A[3, 2]\n\
+               RETURN ARRAY_LEN(@A)\n\
+             END\n\
+             PUTDEC F()",
+        );
+        assert!(result.is_ok(), "expected success, got: {result:?}");
+        assert_eq!(result.unwrap().trim(), "6");
+    }
+
+    #[test]
+    fn test_dim_2d_compile_mode_1x1_allocates_1_element() {
+        // Inside a DEF, `DIM @A[1, 1]` must allocate exactly 1 element.
+        let result = run_source(
+            "DEF F()\n\
+               DIM @A[1, 1]\n\
+               RETURN ARRAY_LEN(@A)\n\
+             END\n\
+             PUTDEC F()",
+        );
+        assert!(result.is_ok(), "expected success, got: {result:?}");
+        assert_eq!(result.unwrap().trim(), "1");
+    }
+
+    #[test]
+    fn test_dim_2d_compile_mode_zero_width_is_error() {
+        // In compile mode, width = 0 must be rejected at runtime.
+        let result = run_source(
+            "DEF MAKE(W, H)\n\
+               DIM @A[W, H]\n\
+               RETURN ARRAY_LEN(@A)\n\
+             END\n\
+             PUTDEC MAKE(0, 5)",
+        );
+        assert!(
+            result.is_err(),
+            "expected error for zero width in compile mode, got success"
+        );
+    }
+
+    #[test]
+    fn test_dim_2d_compile_mode_overflow_is_error() {
+        // In compile mode, overflow of width * height must be rejected at runtime.
+        let result = run_source(
+            "DEF MAKE(W, H)\n\
+               DIM @A[W, H]\n\
+               RETURN ARRAY_LEN(@A)\n\
+             END\n\
+             PUTDEC MAKE(100000000000000, 100000000000000)",
+        );
+        assert!(
+            result.is_err(),
+            "expected error for overflowing 2D size in compile mode, got success"
+        );
+    }
+
+    #[test]
+    fn test_dim_1d_unaffected_by_2d_limits() {
+        // 1D `DIM @A[n]` must continue to work; its validation is independent of 2D limits.
+        let result = run_source(
+            "DEF F()\n\
+               DIM @A[10]\n\
+               RETURN ARRAY_LEN(@A)\n\
+             END\n\
+             PUTDEC F()",
+        );
+        assert!(result.is_ok(), "expected success, got: {result:?}");
+        assert_eq!(result.unwrap().trim(), "10");
+    }
 }

@@ -57,9 +57,19 @@ mod ast {
             array: ArrayDesignator,
             index: Box<ExprAst>,
         },
+        ArrayGet2D {
+            array: ArrayDesignator,
+            x: Box<ExprAst>,
+            y: Box<ExprAst>,
+        },
         ArrayAddr {
             array: ArrayDesignator,
             index: Box<ExprAst>,
+        },
+        ArrayAddr2D {
+            array: ArrayDesignator,
+            x: Box<ExprAst>,
+            y: Box<ExprAst>,
         },
         ArrayLen {
             array: ArrayDesignator,
@@ -493,11 +503,33 @@ impl<'a> ExprCompiler<'a> {
                                             &array_name,
                                             "array variable for &@-sigil address",
                                         )?;
-                                        let index = self.parse_expr_ast(index_toks)?;
-                                        output.push(ExprAst::ArrayAddr {
-                                            array,
-                                            index: Box::new(index),
-                                        });
+                                        if let Some((x_toks, y_toks)) =
+                                            split_at_top_level_comma(index_toks)?
+                                        {
+                                            if x_toks.is_empty() {
+                                                return Err(TbxError::InvalidExpression {
+                                                    reason: "missing x expression in &@A[x, y]",
+                                                });
+                                            }
+                                            if y_toks.is_empty() {
+                                                return Err(TbxError::InvalidExpression {
+                                                    reason: "missing y expression in &@A[x, y]",
+                                                });
+                                            }
+                                            let x = self.parse_expr_ast(x_toks)?;
+                                            let y = self.parse_expr_ast(y_toks)?;
+                                            output.push(ExprAst::ArrayAddr2D {
+                                                array,
+                                                x: Box::new(x),
+                                                y: Box::new(y),
+                                            });
+                                        } else {
+                                            let index = self.parse_expr_ast(index_toks)?;
+                                            output.push(ExprAst::ArrayAddr {
+                                                array,
+                                                index: Box::new(index),
+                                            });
+                                        }
 
                                         i = close_pos;
                                     }
@@ -717,11 +749,31 @@ impl<'a> ExprCompiler<'a> {
                                 &name,
                                 "array variable for @-sigil access",
                             )?;
-                            let index = self.parse_expr_ast(index_toks)?;
-                            output.push(ExprAst::ArrayGet {
-                                array,
-                                index: Box::new(index),
-                            });
+                            if let Some((x_toks, y_toks)) = split_at_top_level_comma(index_toks)? {
+                                if x_toks.is_empty() {
+                                    return Err(TbxError::InvalidExpression {
+                                        reason: "missing x expression in @A[x, y]",
+                                    });
+                                }
+                                if y_toks.is_empty() {
+                                    return Err(TbxError::InvalidExpression {
+                                        reason: "missing y expression in @A[x, y]",
+                                    });
+                                }
+                                let x = self.parse_expr_ast(x_toks)?;
+                                let y = self.parse_expr_ast(y_toks)?;
+                                output.push(ExprAst::ArrayGet2D {
+                                    array,
+                                    x: Box::new(x),
+                                    y: Box::new(y),
+                                });
+                            } else {
+                                let index = self.parse_expr_ast(index_toks)?;
+                                output.push(ExprAst::ArrayGet {
+                                    array,
+                                    index: Box::new(index),
+                                });
+                            }
 
                             // Advance past `@`, Ident, `[`, <index_toks>, `]`.
                             i = close_pos;
@@ -867,6 +919,39 @@ fn parse_at_index_tokens(
         });
     }
     Ok((index_toks, close_pos))
+}
+
+/// Split a bracket-content token slice at top-level commas for `@A[x, y]`.
+///
+/// - Returns `None` if there are no top-level commas (1D access: `@A[i]`).
+/// - Returns `Some((x_toks, y_toks))` if there is exactly one top-level comma (2D access).
+/// - Returns `Err(InvalidExpression)` if there are two or more top-level commas (arity ≥ 3).
+///
+/// "Top-level" means the comma is not nested inside `(...)` or `[...]`.
+#[allow(clippy::type_complexity)]
+pub(crate) fn split_at_top_level_comma(
+    toks: &[SpannedToken],
+) -> Result<Option<(&[SpannedToken], &[SpannedToken])>, TbxError> {
+    let mut depth = 0usize;
+    let mut first_comma: Option<usize> = None;
+    for (i, st) in toks.iter().enumerate() {
+        match &st.token {
+            Token::LParen | Token::LBracket => depth += 1,
+            Token::RParen | Token::RBracket => {
+                depth = depth.saturating_sub(1);
+            }
+            Token::Comma if depth == 0 => {
+                if first_comma.is_some() {
+                    return Err(TbxError::InvalidExpression {
+                        reason: "@A[...] accepts at most 2 indices: use @A[i] or @A[x, y]",
+                    });
+                }
+                first_comma = Some(i);
+            }
+            _ => {}
+        }
+    }
+    Ok(first_comma.map(|i| (&toks[..i], &toks[i + 1..])))
 }
 
 /// Emit `Xt(LIT)` followed by `value` onto `output`.
@@ -1235,10 +1320,24 @@ fn append_expr_ast_cells(
             output.push(Cell::Xt(require_hidden_system_xt(vm, "ARRAY_GET")?));
             Ok(())
         }
+        ExprAst::ArrayGet2D { array, x, y } => {
+            emit_array_designator_read(array, output, vm)?;
+            append_expr_ast_cells(x, output, patch_offsets, jump_patches, vm, self_hdr_idx)?;
+            append_expr_ast_cells(y, output, patch_offsets, jump_patches, vm, self_hdr_idx)?;
+            output.push(Cell::Xt(require_hidden_system_xt(vm, "ARRAY_GET_2D")?));
+            Ok(())
+        }
         ExprAst::ArrayAddr { array, index } => {
             emit_array_designator_read(array, output, vm)?;
             append_expr_ast_cells(index, output, patch_offsets, jump_patches, vm, self_hdr_idx)?;
             output.push(Cell::Xt(require_hidden_system_xt(vm, "ARRAY_ADDR")?));
+            Ok(())
+        }
+        ExprAst::ArrayAddr2D { array, x, y } => {
+            emit_array_designator_read(array, output, vm)?;
+            append_expr_ast_cells(x, output, patch_offsets, jump_patches, vm, self_hdr_idx)?;
+            append_expr_ast_cells(y, output, patch_offsets, jump_patches, vm, self_hdr_idx)?;
+            output.push(Cell::Xt(require_hidden_system_xt(vm, "ARRAY_ADDR_2D")?));
             Ok(())
         }
         ExprAst::ArrayLen { array } => {
@@ -2455,6 +2554,174 @@ mod tests {
         );
     }
 
+    // ------------------------------------------------------------------
+    // Token::At 2D — @A[x, y] element read for 2D arrays (issue #747)
+    // ------------------------------------------------------------------
+
+    /// `@A[1, 2]` against a global variable A must compile to:
+    /// LIT DictAddr(0) FETCH LIT 1 LIT 2 ARRAY_GET_2D.
+    #[test]
+    fn test_at_global_2d_array_element_read() {
+        let mut vm = make_vm();
+        vm.dict_write(Cell::Int(0)).unwrap();
+        vm.register(crate::dict::WordEntry::new_variable("A", 0));
+
+        let tokens = lex("@A[1, 2]");
+        let result = ExprCompiler::new(&mut vm).compile_expr(&tokens).unwrap();
+
+        let lit_xt = vm.lookup("LIT").unwrap();
+        let fetch_xt = vm.lookup("FETCH").unwrap();
+        let array_get_2d_xt = vm.lookup_hidden_system("ARRAY_GET_2D").unwrap();
+
+        assert_eq!(
+            result,
+            vec![
+                Cell::Xt(lit_xt),
+                Cell::DictAddr(0),
+                Cell::Xt(fetch_xt),
+                Cell::Xt(lit_xt),
+                Cell::Int(1),
+                Cell::Xt(lit_xt),
+                Cell::Int(2),
+                Cell::Xt(array_get_2d_xt),
+            ]
+        );
+    }
+
+    /// `@A[x, y]` against a local variable A at slot 0 must compile to:
+    /// LIT StackAddr(0) FETCH <x> <y> ARRAY_GET_2D.
+    #[test]
+    fn test_at_local_2d_array_element_read() {
+        let mut vm = make_vm();
+
+        let mut local_table = HashMap::new();
+        local_table.insert("A".to_string(), 0usize);
+
+        let tokens = lex("@A[3, 1]");
+        let result = ExprCompiler::with_context(&mut vm, Some(&local_table), None, None)
+            .compile_expr(&tokens)
+            .unwrap();
+
+        let lit_xt = vm.lookup("LIT").unwrap();
+        let fetch_xt = vm.lookup("FETCH").unwrap();
+        let array_get_2d_xt = vm.lookup_hidden_system("ARRAY_GET_2D").unwrap();
+
+        assert_eq!(
+            result,
+            vec![
+                Cell::Xt(lit_xt),
+                Cell::StackAddr(0),
+                Cell::Xt(fetch_xt),
+                Cell::Xt(lit_xt),
+                Cell::Int(3),
+                Cell::Xt(lit_xt),
+                Cell::Int(1),
+                Cell::Xt(array_get_2d_xt),
+            ]
+        );
+    }
+
+    /// `@A[x, y]` must emit ARRAY_GET_2D, not ARRAY_GET.
+    #[test]
+    fn test_at_2d_emits_array_get_2d_not_array_get() {
+        let mut vm = make_vm();
+        vm.dict_write(Cell::Int(0)).unwrap();
+        vm.register(crate::dict::WordEntry::new_variable("A", 0));
+
+        let array_get_xt = vm.lookup_hidden_system("ARRAY_GET").unwrap();
+        let array_get_2d_xt = vm.lookup_hidden_system("ARRAY_GET_2D").unwrap();
+
+        let tokens = lex("@A[2, 1]");
+        let result = ExprCompiler::new(&mut vm).compile_expr(&tokens).unwrap();
+
+        assert!(
+            result.contains(&Cell::Xt(array_get_2d_xt)),
+            "@A[x, y] must emit ARRAY_GET_2D"
+        );
+        assert!(
+            !result.contains(&Cell::Xt(array_get_xt)),
+            "@A[x, y] must not emit 1D ARRAY_GET"
+        );
+    }
+
+    /// `@A[i]` (1D syntax) must still emit ARRAY_GET, not ARRAY_GET_2D.
+    #[test]
+    fn test_at_1d_still_emits_array_get() {
+        let mut vm = make_vm();
+        vm.dict_write(Cell::Int(0)).unwrap();
+        vm.register(crate::dict::WordEntry::new_variable("A", 0));
+
+        let array_get_xt = vm.lookup_hidden_system("ARRAY_GET").unwrap();
+        let array_get_2d_xt = vm.lookup_hidden_system("ARRAY_GET_2D").unwrap();
+
+        let tokens = lex("@A[2]");
+        let result = ExprCompiler::new(&mut vm).compile_expr(&tokens).unwrap();
+
+        assert!(
+            result.contains(&Cell::Xt(array_get_xt)),
+            "@A[i] must emit ARRAY_GET"
+        );
+        assert!(
+            !result.contains(&Cell::Xt(array_get_2d_xt)),
+            "@A[i] must not emit ARRAY_GET_2D"
+        );
+    }
+
+    /// `@A[, 1]` (missing x) must produce a syntax error.
+    #[test]
+    fn test_at_2d_missing_x_is_error() {
+        let mut vm = make_vm();
+        vm.dict_write(Cell::Int(0)).unwrap();
+        vm.register(crate::dict::WordEntry::new_variable("A", 0));
+
+        let tokens = lex("@A[, 1]");
+        let err = ExprCompiler::new(&mut vm)
+            .compile_expr(&tokens)
+            .unwrap_err();
+        assert!(
+            matches!(err, TbxError::InvalidExpression { .. }),
+            "expected InvalidExpression for @A[, 1], got: {err:?}"
+        );
+    }
+
+    /// `@A[1,]` (missing y) must produce a syntax error.
+    #[test]
+    fn test_at_2d_missing_y_is_error() {
+        let mut vm = make_vm();
+        vm.dict_write(Cell::Int(0)).unwrap();
+        vm.register(crate::dict::WordEntry::new_variable("A", 0));
+
+        let tokens = lex("@A[1,]");
+        let err = ExprCompiler::new(&mut vm)
+            .compile_expr(&tokens)
+            .unwrap_err();
+        assert!(
+            matches!(err, TbxError::InvalidExpression { .. }),
+            "expected InvalidExpression for @A[1,], got: {err:?}"
+        );
+    }
+
+    /// `@A[1, 2, 3]` (arity 3) must be rejected at compile time.
+    #[test]
+    fn test_at_arity_3_is_error() {
+        let mut vm = make_vm();
+        vm.dict_write(Cell::Int(0)).unwrap();
+        vm.register(crate::dict::WordEntry::new_variable("A", 0));
+
+        let tokens = lex("@A[1, 2, 3]");
+        let err = ExprCompiler::new(&mut vm)
+            .compile_expr(&tokens)
+            .unwrap_err();
+        assert!(
+            matches!(
+                err,
+                TbxError::InvalidExpression { reason }
+                    if reason.contains("at most 2 indices")
+            ),
+            "expected InvalidExpression for @A[1, 2, 3], got: {err:?}"
+        );
+    }
+
     #[test]
     fn test_at_bracket_is_syntax_error() {
         // `@[1]` (@ not followed by an identifier) must be a clear syntax error.
@@ -2847,6 +3114,174 @@ mod tests {
         assert!(
             matches!(err, TbxError::InvalidExpression { .. }),
             "expected InvalidExpression for ARRAY_LEN(1), got: {err:?}"
+        );
+    }
+
+    // ------------------------------------------------------------------
+    // &@A[x, y] — 2D array element address access (issue #748)
+    // ------------------------------------------------------------------
+
+    /// `&@A[1, 2]` against a global variable A must compile to:
+    /// LIT DictAddr(0) FETCH LIT 1 LIT 2 ARRAY_ADDR_2D.
+    #[test]
+    fn test_ampersand_at_global_2d_array_element_address() {
+        let mut vm = make_vm();
+        vm.dict_write(Cell::Int(0)).unwrap();
+        vm.register(crate::dict::WordEntry::new_variable("A", 0));
+
+        let tokens = lex("&@A[1, 2]");
+        let result = ExprCompiler::new(&mut vm).compile_expr(&tokens).unwrap();
+
+        let lit_xt = vm.lookup("LIT").unwrap();
+        let fetch_xt = vm.lookup("FETCH").unwrap();
+        let array_addr_2d_xt = vm.lookup_hidden_system("ARRAY_ADDR_2D").unwrap();
+
+        assert_eq!(
+            result,
+            vec![
+                Cell::Xt(lit_xt),
+                Cell::DictAddr(0),
+                Cell::Xt(fetch_xt),
+                Cell::Xt(lit_xt),
+                Cell::Int(1),
+                Cell::Xt(lit_xt),
+                Cell::Int(2),
+                Cell::Xt(array_addr_2d_xt),
+            ]
+        );
+    }
+
+    /// `&@A[x, y]` against a local variable A at slot 0 must compile to:
+    /// LIT StackAddr(0) FETCH <x> <y> ARRAY_ADDR_2D.
+    #[test]
+    fn test_ampersand_at_local_2d_array_element_address() {
+        let mut vm = make_vm();
+
+        let mut local_table = HashMap::new();
+        local_table.insert("A".to_string(), 0usize);
+
+        let tokens = lex("&@A[3, 1]");
+        let result = ExprCompiler::with_context(&mut vm, Some(&local_table), None, None)
+            .compile_expr(&tokens)
+            .unwrap();
+
+        let lit_xt = vm.lookup("LIT").unwrap();
+        let fetch_xt = vm.lookup("FETCH").unwrap();
+        let array_addr_2d_xt = vm.lookup_hidden_system("ARRAY_ADDR_2D").unwrap();
+
+        assert_eq!(
+            result,
+            vec![
+                Cell::Xt(lit_xt),
+                Cell::StackAddr(0),
+                Cell::Xt(fetch_xt),
+                Cell::Xt(lit_xt),
+                Cell::Int(3),
+                Cell::Xt(lit_xt),
+                Cell::Int(1),
+                Cell::Xt(array_addr_2d_xt),
+            ]
+        );
+    }
+
+    /// `&@A[x, y]` must emit ARRAY_ADDR_2D, not ARRAY_ADDR.
+    #[test]
+    fn test_ampersand_at_2d_emits_array_addr_2d_not_array_addr() {
+        let mut vm = make_vm();
+        vm.dict_write(Cell::Int(0)).unwrap();
+        vm.register(crate::dict::WordEntry::new_variable("A", 0));
+
+        let array_addr_xt = vm.lookup_hidden_system("ARRAY_ADDR").unwrap();
+        let array_addr_2d_xt = vm.lookup_hidden_system("ARRAY_ADDR_2D").unwrap();
+
+        let tokens = lex("&@A[2, 1]");
+        let result = ExprCompiler::new(&mut vm).compile_expr(&tokens).unwrap();
+
+        assert!(
+            result.contains(&Cell::Xt(array_addr_2d_xt)),
+            "&@A[x, y] must emit ARRAY_ADDR_2D"
+        );
+        assert!(
+            !result.contains(&Cell::Xt(array_addr_xt)),
+            "&@A[x, y] must not emit 1D ARRAY_ADDR"
+        );
+    }
+
+    /// `&@A[i]` (1D syntax) must still emit ARRAY_ADDR, not ARRAY_ADDR_2D.
+    #[test]
+    fn test_ampersand_at_1d_still_emits_array_addr() {
+        let mut vm = make_vm();
+        vm.dict_write(Cell::Int(0)).unwrap();
+        vm.register(crate::dict::WordEntry::new_variable("A", 0));
+
+        let array_addr_xt = vm.lookup_hidden_system("ARRAY_ADDR").unwrap();
+        let array_addr_2d_xt = vm.lookup_hidden_system("ARRAY_ADDR_2D").unwrap();
+
+        let tokens = lex("&@A[2]");
+        let result = ExprCompiler::new(&mut vm).compile_expr(&tokens).unwrap();
+
+        assert!(
+            result.contains(&Cell::Xt(array_addr_xt)),
+            "&@A[i] must emit ARRAY_ADDR"
+        );
+        assert!(
+            !result.contains(&Cell::Xt(array_addr_2d_xt)),
+            "&@A[i] must not emit ARRAY_ADDR_2D"
+        );
+    }
+
+    /// `&@A[, 1]` (missing x) must produce a syntax error.
+    #[test]
+    fn test_ampersand_at_2d_missing_x_is_error() {
+        let mut vm = make_vm();
+        vm.dict_write(Cell::Int(0)).unwrap();
+        vm.register(crate::dict::WordEntry::new_variable("A", 0));
+
+        let tokens = lex("&@A[, 1]");
+        let err = ExprCompiler::new(&mut vm)
+            .compile_expr(&tokens)
+            .unwrap_err();
+        assert!(
+            matches!(err, TbxError::InvalidExpression { .. }),
+            "expected InvalidExpression for &@A[, 1], got: {err:?}"
+        );
+    }
+
+    /// `&@A[1,]` (missing y) must produce a syntax error.
+    #[test]
+    fn test_ampersand_at_2d_missing_y_is_error() {
+        let mut vm = make_vm();
+        vm.dict_write(Cell::Int(0)).unwrap();
+        vm.register(crate::dict::WordEntry::new_variable("A", 0));
+
+        let tokens = lex("&@A[1,]");
+        let err = ExprCompiler::new(&mut vm)
+            .compile_expr(&tokens)
+            .unwrap_err();
+        assert!(
+            matches!(err, TbxError::InvalidExpression { .. }),
+            "expected InvalidExpression for &@A[1,], got: {err:?}"
+        );
+    }
+
+    /// `&@A[1, 2, 3]` (arity 3) must be rejected at compile time.
+    #[test]
+    fn test_ampersand_at_arity_3_is_error() {
+        let mut vm = make_vm();
+        vm.dict_write(Cell::Int(0)).unwrap();
+        vm.register(crate::dict::WordEntry::new_variable("A", 0));
+
+        let tokens = lex("&@A[1, 2, 3]");
+        let err = ExprCompiler::new(&mut vm)
+            .compile_expr(&tokens)
+            .unwrap_err();
+        assert!(
+            matches!(
+                err,
+                TbxError::InvalidExpression { reason }
+                    if reason.contains("at most 2 indices")
+            ),
+            "expected InvalidExpression for &@A[1, 2, 3], got: {err:?}"
         );
     }
 }

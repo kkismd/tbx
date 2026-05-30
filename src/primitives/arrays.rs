@@ -1,5 +1,6 @@
-use crate::array_ref::ArrayRef;
+use crate::array_ref::{ArrayRef, ArrayShape};
 use crate::cell::Cell;
+use crate::constants::MAX_ARRAY_ELEMENTS;
 use crate::error::TbxError;
 use crate::vm::VM;
 
@@ -33,6 +34,43 @@ pub(super) fn array_prim(vm: &mut VM) -> Result<(), TbxError> {
     }
     let size = n as usize;
     let ar = ArrayRef::new(vec![Cell::None; size]);
+    vm.push(Cell::Array(ar))?;
+    Ok(())
+}
+
+/// Internal primitive used by the `DIM @A[w, h]` compiler to allocate a 2D array.
+///
+/// Pops `Cell::Int(height)` then `Cell::Int(width)` from the stack,
+/// allocates `width * height` `Cell::None` slots with TwoD shape metadata,
+/// and pushes `Cell::Array(ar)` as the handle.
+///
+/// Stack convention: `... width height` → pop height → pop width → push handle.
+pub(super) fn array_2d_prim(vm: &mut VM) -> Result<(), TbxError> {
+    let height_val = vm.pop_int()?;
+    let width_val = vm.pop_int()?;
+    if width_val <= 0 {
+        return Err(TbxError::InvalidArgument {
+            message: format!("ARRAY_2D width must be positive, got {width_val}"),
+        });
+    }
+    if height_val <= 0 {
+        return Err(TbxError::InvalidArgument {
+            message: format!("ARRAY_2D height must be positive, got {height_val}"),
+        });
+    }
+    let width = width_val as usize;
+    let height = height_val as usize;
+    let total = width
+        .checked_mul(height)
+        .ok_or_else(|| TbxError::InvalidArgument {
+            message: format!("ARRAY_2D: {width} * {height} overflows"),
+        })?;
+    if total > MAX_ARRAY_ELEMENTS {
+        return Err(TbxError::InvalidArgument {
+            message: format!("ARRAY_2D: total size {total} exceeds maximum {MAX_ARRAY_ELEMENTS}"),
+        });
+    }
+    let ar = ArrayRef::new_2d(vec![Cell::None; total], width, height);
     vm.push(Cell::Array(ar))?;
     Ok(())
 }
@@ -79,6 +117,115 @@ pub(super) fn array_store_local_prim(vm: &mut VM) -> Result<(), TbxError> {
     Ok(())
 }
 
+/// ARRAY_GET_2D — read an element from a 2D array using (x, y) coordinates.
+///
+/// Stack: `[..., Cell::Array(ar), Cell::Int(x), Cell::Int(y)]` → `value`
+///
+/// This is the VM-level primitive that `@A[x, y]` compiles to.  The expression
+/// compiler lowers `@A[x, y]` to:
+///   `<array handle read>  <x expr>  <y expr>  ARRAY_GET_2D`.
+///
+/// Coordinates are 1-based: x is the column (1 = leftmost), y is the row (1 = top).
+/// The flat index is computed as `(y - 1) * width + (x - 1)` (0-based).
+///
+/// The array must have `ArrayShape::TwoD` shape; a 1D array is rejected.
+pub(super) fn array_get_2d_prim(vm: &mut VM) -> Result<(), TbxError> {
+    let y_raw = vm.pop_int()?;
+    let x_raw = vm.pop_int()?;
+    let ar = match vm.pop()? {
+        Cell::Array(ar) => ar,
+        other => {
+            return Err(TbxError::TypeError {
+                expected: "Array",
+                got: other.type_name(),
+            })
+        }
+    };
+    let (width, height) = match ar.shape() {
+        ArrayShape::TwoD { width, height } => (*width, *height),
+        ArrayShape::OneD => {
+            return Err(TbxError::TypeError {
+                expected: "2D Array (declared with DIM @A[w, h])",
+                got: "1D Array",
+            })
+        }
+    };
+    if x_raw < 1 || x_raw > width as i64 {
+        return Err(TbxError::ArrayIndexOutOfBounds {
+            index: x_raw,
+            size: width,
+        });
+    }
+    if y_raw < 1 || y_raw > height as i64 {
+        return Err(TbxError::ArrayIndexOutOfBounds {
+            index: y_raw,
+            size: height,
+        });
+    }
+    let flat_idx = (y_raw as usize - 1) * width + (x_raw as usize - 1);
+    let value = ar
+        .get_cloned(flat_idx)
+        .ok_or(TbxError::ArrayIndexOutOfBounds {
+            index: flat_idx as i64 + 1,
+            size: ar.len(),
+        })?;
+    vm.push(value)?;
+    Ok(())
+}
+
+/// ARRAY_ADDR_2D — compute the address of a 2D array element using (x, y) coordinates.
+///
+/// Stack: `[..., Cell::Array(ar), Cell::Int(x), Cell::Int(y)]` → `Cell::ArrayAddr { array: ar, elem_idx }`
+///
+/// This is the VM-level primitive that `&@A[x, y]` compiles to.  The expression
+/// compiler lowers `&@A[x, y]` to:
+///   `<array handle read>  <x expr>  <y expr>  ARRAY_ADDR_2D`.
+///
+/// Coordinates are 1-based: x is the column (1 = leftmost), y is the row (1 = top).
+/// The flat index is computed as `(y - 1) * width + (x - 1)` (0-based).
+///
+/// The array must have `ArrayShape::TwoD` shape; a 1D array is rejected.
+pub(super) fn array_addr_2d_prim(vm: &mut VM) -> Result<(), TbxError> {
+    let y_raw = vm.pop_int()?;
+    let x_raw = vm.pop_int()?;
+    let ar = match vm.pop()? {
+        Cell::Array(ar) => ar,
+        other => {
+            return Err(TbxError::TypeError {
+                expected: "Array",
+                got: other.type_name(),
+            })
+        }
+    };
+    let (width, height) = match ar.shape() {
+        ArrayShape::TwoD { width, height } => (*width, *height),
+        ArrayShape::OneD => {
+            return Err(TbxError::TypeError {
+                expected: "2D Array (declared with DIM @A[w, h])",
+                got: "1D Array",
+            })
+        }
+    };
+    if x_raw < 1 || x_raw > width as i64 {
+        return Err(TbxError::ArrayIndexOutOfBounds {
+            index: x_raw,
+            size: width,
+        });
+    }
+    if y_raw < 1 || y_raw > height as i64 {
+        return Err(TbxError::ArrayIndexOutOfBounds {
+            index: y_raw,
+            size: height,
+        });
+    }
+    let flat_idx = (y_raw as usize - 1) * width + (x_raw as usize - 1);
+    vm.push(Cell::ArrayAddr {
+        array: ar,
+        elem_idx: flat_idx,
+    })?;
+    Ok(())
+}
+
 /// TUPLE — collect N values from the stack into a new immutable tuple.
 ///
 /// Pops the arity `n` from the stack, then pops `n` values and assembles them
@@ -108,7 +255,7 @@ pub fn to_tuple_prim(vm: &mut VM) -> Result<(), TbxError> {
     Ok(())
 }
 
-/// ARRAY_GET — read an element from an array.
+/// ARRAY_GET — read an element from a 1D array.
 ///
 /// Stack: `[..., Cell::Array(pool_idx), Cell::Int(elem_idx)]` → `value`
 ///
@@ -117,6 +264,9 @@ pub fn to_tuple_prim(vm: &mut VM) -> Result<(), TbxError> {
 ///
 /// Array indices are 1-based from the user's perspective: valid range is `1..=N`.
 /// The index is translated to 0-based internally before accessing the Vec.
+///
+/// A 2D array (declared with `DIM @A[w, h]`) is rejected with a rank mismatch
+/// error; use `@A[x, y]` (ARRAY_GET_2D) for 2D arrays.
 pub fn array_get_prim(vm: &mut VM) -> Result<(), TbxError> {
     let elem_idx_raw = vm.pop_int()?;
     let ar = match vm.pop()? {
@@ -128,6 +278,13 @@ pub fn array_get_prim(vm: &mut VM) -> Result<(), TbxError> {
             })
         }
     };
+    // Reject 2D arrays: use @A[x, y] instead.
+    if matches!(ar.shape(), ArrayShape::TwoD { .. }) {
+        return Err(TbxError::TypeError {
+            expected: "1D Array (declared with DIM @A[n]); use @A[x, y] for 2D arrays",
+            got: "2D Array",
+        });
+    }
     let size = ar.len();
     // Translate 1-based user index to 0-based internal index.
     // Index 0 or negative is out of bounds.
@@ -154,7 +311,7 @@ pub fn array_get_prim(vm: &mut VM) -> Result<(), TbxError> {
     Ok(())
 }
 
-/// ARRAY_ADDR — compute the address of an array element.
+/// ARRAY_ADDR — compute the address of a 1D array element.
 ///
 /// Stack: `[..., Cell::Array(ar), Cell::Int(elem_idx)]` → `Cell::ArrayAddr { array: ar, elem_idx }`
 ///
@@ -167,6 +324,9 @@ pub fn array_get_prim(vm: &mut VM) -> Result<(), TbxError> {
 /// The index is translated to 0-based internally before storing in `Cell::ArrayAddr`.
 ///
 /// The `ArrayRef` from the popped `Cell::Array` is stored directly in `Cell::ArrayAddr`.
+///
+/// A 2D array (declared with `DIM @A[w, h]`) is rejected with a rank mismatch
+/// error; use `&@A[x, y]` (ARRAY_ADDR_2D) for 2D arrays.
 pub fn array_addr_prim(vm: &mut VM) -> Result<(), TbxError> {
     let elem_idx_raw = vm.pop_int()?;
     let ar = match vm.pop()? {
@@ -178,6 +338,13 @@ pub fn array_addr_prim(vm: &mut VM) -> Result<(), TbxError> {
             })
         }
     };
+    // Reject 2D arrays: use &@A[x, y] instead.
+    if matches!(ar.shape(), ArrayShape::TwoD { .. }) {
+        return Err(TbxError::TypeError {
+            expected: "1D Array (declared with DIM @A[n]); use &@A[x, y] for 2D arrays",
+            got: "2D Array",
+        });
+    }
     let size = ar.len();
     // Translate 1-based user index to 0-based internal index.
     // Index 0 or negative is out of bounds.
@@ -412,6 +579,342 @@ mod tests {
             Err(TbxError::TypeError {
                 expected: "Tuple",
                 ..
+            })
+        ));
+    }
+
+    // --- array_get_2d_prim ---
+
+    fn make_3x2_array() -> ArrayRef {
+        // 3 columns × 2 rows; elements 1..=6 in row-major order.
+        // [1,2,3] row 0 (y=1)
+        // [4,5,6] row 1 (y=2)
+        ArrayRef::new_2d(
+            vec![
+                Cell::Int(1),
+                Cell::Int(2),
+                Cell::Int(3),
+                Cell::Int(4),
+                Cell::Int(5),
+                Cell::Int(6),
+            ],
+            3,
+            2,
+        )
+    }
+
+    #[test]
+    fn test_array_get_2d_top_left() {
+        // @A[1, 1] → flat index 0 → value 1.
+        let mut vm = VM::new();
+        vm.push(Cell::Array(make_3x2_array())).unwrap();
+        vm.push(Cell::Int(1)).unwrap(); // x
+        vm.push(Cell::Int(1)).unwrap(); // y
+        array_get_2d_prim(&mut vm).unwrap();
+        assert_eq!(vm.pop(), Ok(Cell::Int(1)));
+    }
+
+    #[test]
+    fn test_array_get_2d_top_right() {
+        // @A[3, 1] → flat index 2 → value 3.
+        let mut vm = VM::new();
+        vm.push(Cell::Array(make_3x2_array())).unwrap();
+        vm.push(Cell::Int(3)).unwrap(); // x
+        vm.push(Cell::Int(1)).unwrap(); // y
+        array_get_2d_prim(&mut vm).unwrap();
+        assert_eq!(vm.pop(), Ok(Cell::Int(3)));
+    }
+
+    #[test]
+    fn test_array_get_2d_second_row_first_col() {
+        // @A[1, 2] → flat index 3 → value 4.
+        let mut vm = VM::new();
+        vm.push(Cell::Array(make_3x2_array())).unwrap();
+        vm.push(Cell::Int(1)).unwrap(); // x
+        vm.push(Cell::Int(2)).unwrap(); // y
+        array_get_2d_prim(&mut vm).unwrap();
+        assert_eq!(vm.pop(), Ok(Cell::Int(4)));
+    }
+
+    #[test]
+    fn test_array_get_2d_bottom_right() {
+        // @A[3, 2] → flat index 5 → value 6.
+        let mut vm = VM::new();
+        vm.push(Cell::Array(make_3x2_array())).unwrap();
+        vm.push(Cell::Int(3)).unwrap(); // x
+        vm.push(Cell::Int(2)).unwrap(); // y
+        array_get_2d_prim(&mut vm).unwrap();
+        assert_eq!(vm.pop(), Ok(Cell::Int(6)));
+    }
+
+    #[test]
+    fn test_array_get_2d_x_out_of_bounds() {
+        let mut vm = VM::new();
+        vm.push(Cell::Array(make_3x2_array())).unwrap();
+        vm.push(Cell::Int(4)).unwrap(); // x > width
+        vm.push(Cell::Int(1)).unwrap();
+        assert!(matches!(
+            array_get_2d_prim(&mut vm),
+            Err(TbxError::ArrayIndexOutOfBounds { index: 4, .. })
+        ));
+    }
+
+    #[test]
+    fn test_array_get_2d_y_out_of_bounds() {
+        let mut vm = VM::new();
+        vm.push(Cell::Array(make_3x2_array())).unwrap();
+        vm.push(Cell::Int(1)).unwrap();
+        vm.push(Cell::Int(3)).unwrap(); // y > height
+        assert!(matches!(
+            array_get_2d_prim(&mut vm),
+            Err(TbxError::ArrayIndexOutOfBounds { index: 3, .. })
+        ));
+    }
+
+    #[test]
+    fn test_array_get_2d_x_zero_is_out_of_bounds() {
+        let mut vm = VM::new();
+        vm.push(Cell::Array(make_3x2_array())).unwrap();
+        vm.push(Cell::Int(0)).unwrap(); // x = 0 invalid (1-based)
+        vm.push(Cell::Int(1)).unwrap();
+        assert!(matches!(
+            array_get_2d_prim(&mut vm),
+            Err(TbxError::ArrayIndexOutOfBounds { index: 0, .. })
+        ));
+    }
+
+    #[test]
+    fn test_array_get_2d_on_1d_array_returns_type_error() {
+        let mut vm = VM::new();
+        let ar = ArrayRef::new(vec![Cell::Int(1), Cell::Int(2), Cell::Int(3)]);
+        vm.push(Cell::Array(ar)).unwrap();
+        vm.push(Cell::Int(1)).unwrap();
+        vm.push(Cell::Int(1)).unwrap();
+        assert!(matches!(
+            array_get_2d_prim(&mut vm),
+            Err(TbxError::TypeError {
+                expected: "2D Array (declared with DIM @A[w, h])",
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn test_array_get_2d_non_array_returns_type_error() {
+        let mut vm = VM::new();
+        vm.push(Cell::Int(42)).unwrap(); // not an array
+        vm.push(Cell::Int(1)).unwrap();
+        vm.push(Cell::Int(1)).unwrap();
+        assert!(matches!(
+            array_get_2d_prim(&mut vm),
+            Err(TbxError::TypeError {
+                expected: "Array",
+                ..
+            })
+        ));
+    }
+
+    // --- array_addr_2d_prim ---
+
+    #[test]
+    fn test_array_addr_2d_top_left() {
+        // &@A[1, 1] → flat index 0 → ArrayAddr { elem_idx: 0 }
+        let mut vm = VM::new();
+        vm.push(Cell::Array(make_3x2_array())).unwrap();
+        vm.push(Cell::Int(1)).unwrap(); // x
+        vm.push(Cell::Int(1)).unwrap(); // y
+        array_addr_2d_prim(&mut vm).unwrap();
+        let result = vm.pop().unwrap();
+        assert!(matches!(result, Cell::ArrayAddr { elem_idx: 0, .. }));
+    }
+
+    #[test]
+    fn test_array_addr_2d_second_row_first_col() {
+        // &@A[1, 2] → flat index 3 → ArrayAddr { elem_idx: 3 }
+        let mut vm = VM::new();
+        vm.push(Cell::Array(make_3x2_array())).unwrap();
+        vm.push(Cell::Int(1)).unwrap(); // x
+        vm.push(Cell::Int(2)).unwrap(); // y
+        array_addr_2d_prim(&mut vm).unwrap();
+        let result = vm.pop().unwrap();
+        assert!(matches!(result, Cell::ArrayAddr { elem_idx: 3, .. }));
+    }
+
+    #[test]
+    fn test_array_addr_2d_bottom_right() {
+        // &@A[3, 2] → flat index 5 → ArrayAddr { elem_idx: 5 }
+        let mut vm = VM::new();
+        vm.push(Cell::Array(make_3x2_array())).unwrap();
+        vm.push(Cell::Int(3)).unwrap(); // x
+        vm.push(Cell::Int(2)).unwrap(); // y
+        array_addr_2d_prim(&mut vm).unwrap();
+        let result = vm.pop().unwrap();
+        assert!(matches!(result, Cell::ArrayAddr { elem_idx: 5, .. }));
+    }
+
+    #[test]
+    fn test_array_addr_2d_x_out_of_bounds() {
+        let mut vm = VM::new();
+        vm.push(Cell::Array(make_3x2_array())).unwrap();
+        vm.push(Cell::Int(4)).unwrap(); // x > width
+        vm.push(Cell::Int(1)).unwrap();
+        assert!(matches!(
+            array_addr_2d_prim(&mut vm),
+            Err(TbxError::ArrayIndexOutOfBounds { index: 4, .. })
+        ));
+    }
+
+    #[test]
+    fn test_array_addr_2d_y_out_of_bounds() {
+        let mut vm = VM::new();
+        vm.push(Cell::Array(make_3x2_array())).unwrap();
+        vm.push(Cell::Int(1)).unwrap();
+        vm.push(Cell::Int(3)).unwrap(); // y > height
+        assert!(matches!(
+            array_addr_2d_prim(&mut vm),
+            Err(TbxError::ArrayIndexOutOfBounds { index: 3, .. })
+        ));
+    }
+
+    #[test]
+    fn test_array_addr_2d_on_1d_array_returns_type_error() {
+        let mut vm = VM::new();
+        let ar = ArrayRef::new(vec![Cell::Int(1), Cell::Int(2), Cell::Int(3)]);
+        vm.push(Cell::Array(ar)).unwrap();
+        vm.push(Cell::Int(1)).unwrap();
+        vm.push(Cell::Int(1)).unwrap();
+        assert!(matches!(
+            array_addr_2d_prim(&mut vm),
+            Err(TbxError::TypeError {
+                expected: "2D Array (declared with DIM @A[w, h])",
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn test_array_addr_2d_write_and_read_back() {
+        // Write via ArrayAddr, read back via ARRAY_GET_2D to confirm roundtrip.
+        let mut vm = VM::new();
+        let ar = make_3x2_array();
+        // Get address of (2, 1) → flat index 1.
+        vm.push(Cell::Array(ar.clone())).unwrap();
+        vm.push(Cell::Int(2)).unwrap(); // x
+        vm.push(Cell::Int(1)).unwrap(); // y
+        array_addr_2d_prim(&mut vm).unwrap();
+        let addr = vm.pop().unwrap();
+        // Write 99 to that address.
+        match addr {
+            Cell::ArrayAddr { array, elem_idx } => {
+                array.set(elem_idx, Cell::Int(99)).unwrap();
+            }
+            other => panic!("expected ArrayAddr, got {other:?}"),
+        }
+        // Read it back via @A[2, 1].
+        vm.push(Cell::Array(ar)).unwrap();
+        vm.push(Cell::Int(2)).unwrap(); // x
+        vm.push(Cell::Int(1)).unwrap(); // y
+        array_get_2d_prim(&mut vm).unwrap();
+        assert_eq!(vm.pop(), Ok(Cell::Int(99)));
+    }
+
+    // --- array_get_2d_prim: additional bounds tests ---
+
+    #[test]
+    fn test_array_get_2d_y_zero_is_out_of_bounds() {
+        // y = 0 is invalid in 1-based indexing.
+        let mut vm = VM::new();
+        vm.push(Cell::Array(make_3x2_array())).unwrap();
+        vm.push(Cell::Int(1)).unwrap();
+        vm.push(Cell::Int(0)).unwrap(); // y = 0 invalid
+        assert!(matches!(
+            array_get_2d_prim(&mut vm),
+            Err(TbxError::ArrayIndexOutOfBounds { index: 0, .. })
+        ));
+    }
+
+    #[test]
+    fn test_array_get_2d_x_negative_is_out_of_bounds() {
+        let mut vm = VM::new();
+        vm.push(Cell::Array(make_3x2_array())).unwrap();
+        vm.push(Cell::Int(-1)).unwrap(); // x < 1
+        vm.push(Cell::Int(1)).unwrap();
+        assert!(matches!(
+            array_get_2d_prim(&mut vm),
+            Err(TbxError::ArrayIndexOutOfBounds { index: -1, .. })
+        ));
+    }
+
+    #[test]
+    fn test_array_get_2d_y_negative_is_out_of_bounds() {
+        let mut vm = VM::new();
+        vm.push(Cell::Array(make_3x2_array())).unwrap();
+        vm.push(Cell::Int(1)).unwrap();
+        vm.push(Cell::Int(-1)).unwrap(); // y < 1
+        assert!(matches!(
+            array_get_2d_prim(&mut vm),
+            Err(TbxError::ArrayIndexOutOfBounds { index: -1, .. })
+        ));
+    }
+
+    // --- array_addr_2d_prim: additional bounds tests ---
+
+    #[test]
+    fn test_array_addr_2d_x_zero_is_out_of_bounds() {
+        // x = 0 is invalid in 1-based indexing.
+        let mut vm = VM::new();
+        vm.push(Cell::Array(make_3x2_array())).unwrap();
+        vm.push(Cell::Int(0)).unwrap(); // x = 0 invalid
+        vm.push(Cell::Int(1)).unwrap();
+        assert!(matches!(
+            array_addr_2d_prim(&mut vm),
+            Err(TbxError::ArrayIndexOutOfBounds { index: 0, .. })
+        ));
+    }
+
+    #[test]
+    fn test_array_addr_2d_y_zero_is_out_of_bounds() {
+        // y = 0 is invalid in 1-based indexing.
+        let mut vm = VM::new();
+        vm.push(Cell::Array(make_3x2_array())).unwrap();
+        vm.push(Cell::Int(1)).unwrap();
+        vm.push(Cell::Int(0)).unwrap(); // y = 0 invalid
+        assert!(matches!(
+            array_addr_2d_prim(&mut vm),
+            Err(TbxError::ArrayIndexOutOfBounds { index: 0, .. })
+        ));
+    }
+
+    // --- array_get_prim: rank mismatch (2D array via 1D accessor) ---
+
+    #[test]
+    fn test_array_get_1d_accessor_on_2d_array_returns_type_error() {
+        // @A[i] on a 2D array must be rejected with TypeError (rank mismatch).
+        let mut vm = VM::new();
+        vm.push(Cell::Array(make_3x2_array())).unwrap();
+        vm.push(Cell::Int(1)).unwrap();
+        assert!(matches!(
+            array_get_prim(&mut vm),
+            Err(TbxError::TypeError {
+                expected: "1D Array (declared with DIM @A[n]); use @A[x, y] for 2D arrays",
+                got: "2D Array",
+            })
+        ));
+    }
+
+    // --- array_addr_prim: rank mismatch (2D array via 1D accessor) ---
+
+    #[test]
+    fn test_array_addr_1d_accessor_on_2d_array_returns_type_error() {
+        // &@A[i] on a 2D array must be rejected with TypeError (rank mismatch).
+        let mut vm = VM::new();
+        vm.push(Cell::Array(make_3x2_array())).unwrap();
+        vm.push(Cell::Int(1)).unwrap();
+        assert!(matches!(
+            array_addr_prim(&mut vm),
+            Err(TbxError::TypeError {
+                expected: "1D Array (declared with DIM @A[n]); use &@A[x, y] for 2D arrays",
+                got: "2D Array",
             })
         ));
     }
