@@ -203,28 +203,26 @@ impl<'a> ExprCompiler<'a> {
     /// Returns `TbxError::UndefinedSymbol` if an identifier cannot be resolved.
     /// Returns `TbxError::TypeError` for operand/operator type mismatches.
     pub fn compile_expr(&mut self, tokens: &[SpannedToken]) -> Result<Vec<Cell>, TbxError> {
-        let (cells, patch_offsets) = self.compile_expr_internal(tokens)?;
-        self.patch_offsets = patch_offsets;
-        Ok(cells)
+        if tokens.is_empty() {
+            self.patch_offsets.clear();
+            return Ok(Vec::new());
+        }
+        let ast = self.parse_expr_ast(tokens)?;
+        self.emit_expr_ast(&ast)
     }
 
-    fn compile_expr_internal(
-        &mut self,
-        tokens: &[SpannedToken],
-    ) -> Result<(Vec<Cell>, Vec<usize>), TbxError> {
-        let output = self.parse_expr_output(tokens)?;
+    fn emit_expr_ast(&mut self, ast: &ExprAst) -> Result<Vec<Cell>, TbxError> {
         let mut cells = Vec::new();
         let mut patch_offsets = Vec::new();
-        for expr in &output {
-            emit_expr_ast(
-                expr,
-                &mut cells,
-                &mut patch_offsets,
-                self.vm,
-                self.self_hdr_idx,
-            )?;
-        }
-        Ok((cells, patch_offsets))
+        append_expr_ast_cells(
+            ast,
+            &mut cells,
+            &mut patch_offsets,
+            self.vm,
+            self.self_hdr_idx,
+        )?;
+        self.patch_offsets = patch_offsets;
+        Ok(cells)
     }
 
     fn parse_expr_output(&mut self, tokens: &[SpannedToken]) -> Result<Vec<ExprAst>, TbxError> {
@@ -475,7 +473,7 @@ impl<'a> ExprCompiler<'a> {
                                             &array_name,
                                             "array variable for &@-sigil address",
                                         )?;
-                                        let index = self.compile_expr_ast(index_toks)?;
+                                        let index = self.parse_expr_ast(index_toks)?;
                                         output.push(ExprAst::ArrayAddr {
                                             array,
                                             index: Box::new(index),
@@ -699,7 +697,7 @@ impl<'a> ExprCompiler<'a> {
                                 &name,
                                 "array variable for @-sigil access",
                             )?;
-                            let index = self.compile_expr_ast(index_toks)?;
+                            let index = self.parse_expr_ast(index_toks)?;
                             output.push(ExprAst::ArrayGet {
                                 array,
                                 index: Box::new(index),
@@ -746,7 +744,7 @@ impl<'a> ExprCompiler<'a> {
         Ok(output)
     }
 
-    fn compile_expr_ast(&mut self, tokens: &[SpannedToken]) -> Result<ExprAst, TbxError> {
+    fn parse_expr_ast(&mut self, tokens: &[SpannedToken]) -> Result<ExprAst, TbxError> {
         let mut output = self.parse_expr_output(tokens)?;
         let ast = output.pop().ok_or(TbxError::InvalidExpression {
             reason: "missing operand in expression",
@@ -1101,7 +1099,7 @@ fn eager_binary_prim(op: BinaryOp) -> &'static str {
     }
 }
 
-fn emit_expr_ast(
+fn append_expr_ast_cells(
     expr: &ExprAst,
     output: &mut Vec<Cell>,
     patch_offsets: &mut Vec<usize>,
@@ -1125,45 +1123,45 @@ fn emit_expr_ast(
             Ok(())
         }
         ExprAst::Unary { op, expr } => {
-            emit_expr_ast(expr, output, patch_offsets, vm, self_hdr_idx)?;
+            append_expr_ast_cells(expr, output, patch_offsets, vm, self_hdr_idx)?;
             match op {
                 UnaryOp::Neg => output.push(Cell::Xt(require_xt(vm, "NEGATE")?)),
             }
             Ok(())
         }
         ExprAst::Binary { op, lhs, rhs } => {
-            emit_expr_ast(lhs, output, patch_offsets, vm, self_hdr_idx)?;
-            emit_expr_ast(rhs, output, patch_offsets, vm, self_hdr_idx)?;
+            append_expr_ast_cells(lhs, output, patch_offsets, vm, self_hdr_idx)?;
+            append_expr_ast_cells(rhs, output, patch_offsets, vm, self_hdr_idx)?;
             output.push(Cell::Xt(require_xt(vm, eager_binary_prim(*op))?));
             Ok(())
         }
         ExprAst::Comma { lhs, rhs } => {
-            emit_expr_ast(lhs, output, patch_offsets, vm, self_hdr_idx)?;
-            emit_expr_ast(rhs, output, patch_offsets, vm, self_hdr_idx)?;
+            append_expr_ast_cells(lhs, output, patch_offsets, vm, self_hdr_idx)?;
+            append_expr_ast_cells(rhs, output, patch_offsets, vm, self_hdr_idx)?;
             Ok(())
         }
         ExprAst::Invoke { xt, args } => {
             for arg in args {
-                emit_expr_ast(arg, output, patch_offsets, vm, self_hdr_idx)?;
+                append_expr_ast_cells(arg, output, patch_offsets, vm, self_hdr_idx)?;
             }
             emit_call_by_kind(output, *xt, args.len(), vm, self_hdr_idx, patch_offsets)?;
             Ok(())
         }
         ExprAst::TupleGet { base, index } => {
-            emit_expr_ast(base, output, patch_offsets, vm, self_hdr_idx)?;
-            emit_expr_ast(index, output, patch_offsets, vm, self_hdr_idx)?;
+            append_expr_ast_cells(base, output, patch_offsets, vm, self_hdr_idx)?;
+            append_expr_ast_cells(index, output, patch_offsets, vm, self_hdr_idx)?;
             output.push(Cell::Xt(require_xt(vm, "TUPLE_GET")?));
             Ok(())
         }
         ExprAst::ArrayGet { array, index } => {
             emit_array_designator_read(array, output, vm)?;
-            emit_expr_ast(index, output, patch_offsets, vm, self_hdr_idx)?;
+            append_expr_ast_cells(index, output, patch_offsets, vm, self_hdr_idx)?;
             output.push(Cell::Xt(require_hidden_system_xt(vm, "ARRAY_GET")?));
             Ok(())
         }
         ExprAst::ArrayAddr { array, index } => {
             emit_array_designator_read(array, output, vm)?;
-            emit_expr_ast(index, output, patch_offsets, vm, self_hdr_idx)?;
+            append_expr_ast_cells(index, output, patch_offsets, vm, self_hdr_idx)?;
             output.push(Cell::Xt(require_hidden_system_xt(vm, "ARRAY_ADDR")?));
             Ok(())
         }
@@ -1257,6 +1255,27 @@ mod tests {
         let lit_xt = vm.lookup("LIT").unwrap();
         assert_eq!(result[0], Cell::Xt(lit_xt));
         assert_eq!(result[1], Cell::Int(42));
+    }
+
+    #[test]
+    fn test_compile_expr_facade_matches_parse_then_emit() {
+        let mut vm = make_vm();
+        let tokens = lex("1 + 2 * 3");
+
+        let facade_cells = ExprCompiler::new(&mut vm).compile_expr(&tokens).unwrap();
+        let manual_ast = ExprCompiler::new(&mut vm).parse_expr_ast(&tokens).unwrap();
+        let manual_cells = ExprCompiler::new(&mut vm)
+            .emit_expr_ast(&manual_ast)
+            .unwrap();
+
+        assert_eq!(facade_cells, manual_cells);
+    }
+
+    #[test]
+    fn test_compile_expr_empty_tokens_returns_empty_cells() {
+        let mut vm = make_vm();
+        let compiler = ExprCompiler::new(&mut vm).compile_expr(&[]);
+        assert_eq!(compiler.unwrap(), Vec::<Cell>::new());
     }
 
     // ------------------------------------------------------------------
@@ -2028,9 +2047,7 @@ mod tests {
         vm.register(WordEntry::new_word("T", 0));
 
         let tokens = lex("T[1 + 2]");
-        let ast = ExprCompiler::new(&mut vm)
-            .compile_expr_ast(&tokens)
-            .unwrap();
+        let ast = ExprCompiler::new(&mut vm).parse_expr_ast(&tokens).unwrap();
 
         match ast {
             ExprAst::TupleGet { base, index } => {
@@ -2220,9 +2237,7 @@ mod tests {
         vm.dict_write(Cell::Int(0)).unwrap();
         vm.register(crate::dict::WordEntry::new_variable("I", 1));
 
-        let ast = ExprCompiler::new(&mut vm)
-            .compile_expr_ast(&tokens)
-            .unwrap();
+        let ast = ExprCompiler::new(&mut vm).parse_expr_ast(&tokens).unwrap();
 
         match ast {
             ExprAst::ArrayGet { array, index } => {
@@ -2466,7 +2481,7 @@ mod tests {
 
         let tokens = lex("&@A[I]");
         let ast = ExprCompiler::with_context(&mut vm, Some(&local_table), None, None)
-            .compile_expr_ast(&tokens)
+            .parse_expr_ast(&tokens)
             .unwrap();
 
         match ast {
@@ -2612,9 +2627,7 @@ mod tests {
         vm.register(crate::dict::WordEntry::new_variable("A", 0));
 
         let tokens = lex("ARRAY_LEN(@A)");
-        let ast = ExprCompiler::new(&mut vm)
-            .compile_expr_ast(&tokens)
-            .unwrap();
+        let ast = ExprCompiler::new(&mut vm).parse_expr_ast(&tokens).unwrap();
 
         match ast {
             ExprAst::ArrayLen { array } => {
