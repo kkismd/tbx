@@ -3,6 +3,21 @@
 //! Converts a slice of `SpannedToken`s representing an infix expression into a
 //! flat RPN instruction sequence (`Vec<Cell>`) that can be appended to the VM
 //! dictionary or executed directly.
+//!
+//! Current layering is intentionally:
+//!
+//! `tokens -> ExprResolver-assisted ExprAst -> Vec<Cell)`
+//!
+//! `ExprAst` is therefore not a purely raw parse tree. Identifier class,
+//! local/global storage selection, callable `Xt`, and array designators are
+//! resolved while building the AST so that expression codegen can stay focused
+//! on lowering already-classified nodes.
+//!
+//! As of issue #864, TBX intentionally does not split this into
+//! `RawExprAst -> ResolvedExprAst` yet. A two-stage AST would only pay off once
+//! source-span-carrying diagnostics or other consumers need to preserve
+//! unresolved syntax independently from codegen. Until then, keeping one
+//! resolved-leaning `ExprAst` avoids a large migration for limited benefit.
 
 use std::collections::HashMap;
 
@@ -17,6 +32,11 @@ use ast::{BinaryOp, ExprAst, UnaryOp};
 mod ast {
     use crate::cell::{Cell, Xt};
 
+    /// Expression AST used between parsing/resolution and codegen.
+    ///
+    /// This enum intentionally carries resolved information such as local/global
+    /// storage class, callable `Xt`, and array designators. It is not a raw
+    /// syntax tree; `ExprResolver` folds name resolution into AST construction.
     #[derive(Debug, Clone)]
     pub(super) enum ExprAst {
         Literal(Cell),
@@ -172,6 +192,8 @@ impl<'a> ExprResolver<'a> {
         name: &str,
         next_is_lparen: bool,
     ) -> Result<ResolvedIdentExpr, TbxError> {
+        // Resolution stays intentionally narrow here: classify the identifier for
+        // the current `ExprAst` shape, but leave call lowering details in codegen.
         if let Some(local_read) = self.resolve_local_read(name) {
             return Ok(local_read);
         }
