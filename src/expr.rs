@@ -172,8 +172,8 @@ impl<'a> ExprResolver<'a> {
         name: &str,
         next_is_lparen: bool,
     ) -> Result<ResolvedIdentExpr, TbxError> {
-        if let Some(local_idx) = self.local_table.and_then(|lt| lt.get(name)).copied() {
-            return Ok(ResolvedIdentExpr::LocalRead { index: local_idx });
+        if let Some(local_read) = self.resolve_local_read(name) {
+            return Ok(local_read);
         }
 
         let xt = self.lookup_non_immediate(name)?;
@@ -185,6 +185,13 @@ impl<'a> ExprResolver<'a> {
             EntryKind::Variable(addr) => Ok(ResolvedIdentExpr::GlobalRead { addr: *addr }),
             _ => Ok(ResolvedIdentExpr::Callable { xt }),
         }
+    }
+
+    fn resolve_local_read(&self, name: &str) -> Option<ResolvedIdentExpr> {
+        self.local_table
+            .and_then(|lt| lt.get(name))
+            .copied()
+            .map(|index| ResolvedIdentExpr::LocalRead { index })
     }
 
     fn resolve_address_of_ident(&self, name: &str) -> Result<ExprAst, TbxError> {
@@ -400,6 +407,19 @@ impl<'a> ExprCompiler<'a> {
                 Token::Ident(name) => {
                     let name = name.to_ascii_uppercase();
                     let resolver = self.resolver();
+                    let next_is_lparen = tokens
+                        .get(i + 1)
+                        .map(|st| matches!(st.token, Token::LParen))
+                        .unwrap_or(false);
+
+                    if let Some(ResolvedIdentExpr::LocalRead { index }) =
+                        resolver.resolve_local_read(&name)
+                    {
+                        output.push(ExprAst::LocalRead { index });
+                        prev_was_operand = true;
+                        i += 1;
+                        continue;
+                    }
 
                     // -------------------------------------------------------
                     // Dedicated syntax: ARRAY_LEN(@A)
@@ -473,11 +493,6 @@ impl<'a> ExprCompiler<'a> {
                         // ARRAY_LEN without parentheses falls through to the normal
                         // identifier resolution path below (emitting it as a bare Xt).
                     }
-
-                    let next_is_lparen = tokens
-                        .get(i + 1)
-                        .map(|st| matches!(st.token, Token::LParen))
-                        .unwrap_or(false);
 
                     match resolver.resolve_ident_expr(&name, next_is_lparen)? {
                         ResolvedIdentExpr::LocalRead { index } => {
@@ -1595,6 +1610,40 @@ mod tests {
         assert!(
             matches!(err, TbxError::InvalidExpression { reason } if reason == "IMMEDIATE word cannot appear inside an expression"),
             "expected IMMEDIATE rejection, got: {err:?}"
+        );
+    }
+
+    #[test]
+    fn test_local_array_len_identifier_shadows_special_form() {
+        let mut vm = make_vm();
+
+        let mut local_table = HashMap::new();
+        local_table.insert("ARRAY_LEN".to_string(), 2usize);
+
+        let tokens = lex("ARRAY_LEN");
+        let ast = ExprCompiler::with_context(&mut vm, Some(&local_table), None, None)
+            .parse_expr_ast(&tokens)
+            .unwrap();
+
+        assert!(matches!(ast, ExprAst::LocalRead { index: 2 }));
+    }
+
+    #[test]
+    fn test_local_array_len_identifier_prevents_special_form_parse() {
+        let mut vm = make_vm();
+
+        let mut local_table = HashMap::new();
+        local_table.insert("ARRAY_LEN".to_string(), 2usize);
+        local_table.insert("A".to_string(), 0usize);
+
+        let tokens = lex("ARRAY_LEN(@A)");
+        let err = ExprCompiler::with_context(&mut vm, Some(&local_table), None, None)
+            .compile_expr(&tokens)
+            .unwrap_err();
+
+        assert!(
+            matches!(err, TbxError::InvalidExpression { reason } if reason == "@Ident must be followed by '[': use @A[i] syntax"),
+            "expected local ARRAY_LEN to block the special form, got: {err:?}"
         );
     }
 
