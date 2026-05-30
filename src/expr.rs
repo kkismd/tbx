@@ -32,9 +32,8 @@ mod ast {
         AddressOfGlobal {
             addr: usize,
         },
-        Call {
+        Invoke {
             xt: Xt,
-            arity: usize,
             args: Vec<ExprAst>,
         },
         Unary {
@@ -119,7 +118,7 @@ enum OpItem {
     UnaryNeg,
     /// Left-parenthesis sentinel. Carries optional call metadata.
     ///
-    /// `call` is `Some(LParenCall::Function(xt, arity))` for a function call,
+    /// `call` is `Some(LParenCall::Function(xt, arity))` for an invoke form,
     /// and `None` for a plain grouping parenthesis.
     LParen { call: Option<LParenCall> },
     /// Comma-as-binary-operator used outside of function calls (precedence 11).
@@ -129,10 +128,10 @@ enum OpItem {
     LBracket,
 }
 
-/// Metadata attached to a `LParen` operator-stack item to distinguish call types.
+/// Metadata attached to a `LParen` operator-stack item to distinguish invoke forms.
 #[derive(Debug)]
 enum LParenCall {
-    /// Function call: execution token and current argument arity count.
+    /// Invoke form: execution token and current argument arity count.
     Function(Xt, usize),
 }
 
@@ -384,7 +383,7 @@ impl<'a> ExprCompiler<'a> {
                         });
                     }
 
-                    // Peek ahead: is this a function call (`F(`)?
+                    // Peek ahead: is this an invoke form (`F(`)?
                     let next_is_lparen = tokens
                         .get(i + 1)
                         .map(|st| matches!(st.token, Token::LParen))
@@ -398,25 +397,14 @@ impl<'a> ExprCompiler<'a> {
                             .unwrap_or(false);
 
                         if next_is_rparen {
-                            // Zero-argument call: emit based on entry kind.
-                            let mut legacy = Vec::new();
-                            let mut patch_offsets = Vec::new();
-                            emit_call_by_kind(
-                                &mut legacy,
+                            output.push(ExprAst::Invoke {
                                 xt,
-                                0,
-                                self.vm,
-                                self.self_hdr_idx,
-                                &mut patch_offsets,
-                            )?;
-                            output.push(ExprAst::LegacyCode {
-                                cells: legacy,
-                                patch_offsets,
+                                args: Vec::new(),
                             });
                             i += 2; // skip '(' and ')'
                             prev_was_operand = true;
                         } else {
-                            // Function call with arguments: open a function-call
+                            // Invoke form with arguments: open a function-call
                             // paren frame with initial arity = 1.
                             op_stack.push(OpItem::LParen {
                                 call: Some(LParenCall::Function(xt, 1)),
@@ -425,26 +413,15 @@ impl<'a> ExprCompiler<'a> {
                             prev_was_operand = false;
                         }
                     } else {
-                        // Variable read or nullary call (no parentheses).
+                        // Variable read or nullary invoke (no parentheses).
                         match &self.vm.headers[xt.index()].kind {
                             EntryKind::Variable(addr) => {
                                 output.push(ExprAst::GlobalRead { addr: *addr });
                             }
                             _ => {
-                                // Treat as a nullary call: emit based on entry kind.
-                                let mut legacy = Vec::new();
-                                let mut patch_offsets = Vec::new();
-                                emit_call_by_kind(
-                                    &mut legacy,
+                                output.push(ExprAst::Invoke {
                                     xt,
-                                    0,
-                                    self.vm,
-                                    self.self_hdr_idx,
-                                    &mut patch_offsets,
-                                )?;
-                                output.push(ExprAst::LegacyCode {
-                                    cells: legacy,
-                                    patch_offsets,
+                                    args: Vec::new(),
                                 });
                             }
                         }
@@ -650,20 +627,8 @@ impl<'a> ExprCompiler<'a> {
                                     reason: "trailing comma in function call argument list",
                                 });
                             }
-                            let mut legacy = Vec::new();
-                            let mut patch_offsets = Vec::new();
-                            emit_call_by_kind(
-                                &mut legacy,
-                                xt,
-                                arity,
-                                self.vm,
-                                self.self_hdr_idx,
-                                &mut patch_offsets,
-                            )?;
-                            output.push(ExprAst::LegacyCode {
-                                cells: legacy,
-                                patch_offsets,
-                            });
+                            let args = pop_invoke_args(&mut output, arity)?;
+                            output.push(ExprAst::Invoke { xt, args });
                         }
                         _ => {
                             // Plain grouping paren — nothing extra to emit.
@@ -878,7 +843,13 @@ impl<'a> ExprCompiler<'a> {
         let mut cells = Vec::new();
         let mut patch_offsets = Vec::new();
         for expr in &output {
-            emit_expr_ast(expr, &mut cells, &mut patch_offsets, self.vm)?;
+            emit_expr_ast(
+                expr,
+                &mut cells,
+                &mut patch_offsets,
+                self.vm,
+                self.self_hdr_idx,
+            )?;
         }
 
         Ok((cells, patch_offsets))
@@ -1172,6 +1143,15 @@ fn pop_ast_operand(output: &mut Vec<ExprAst>) -> Result<ExprAst, TbxError> {
     })
 }
 
+fn pop_invoke_args(output: &mut Vec<ExprAst>, arity: usize) -> Result<Vec<ExprAst>, TbxError> {
+    let mut args = Vec::with_capacity(arity);
+    for _ in 0..arity {
+        args.push(pop_ast_operand(output)?);
+    }
+    args.reverse();
+    Ok(args)
+}
+
 /// Map a `BinaryOp` to the eager primitive used by the legacy RPN backend.
 fn eager_binary_prim(op: BinaryOp) -> &'static str {
     match op {
@@ -1198,6 +1178,7 @@ fn emit_expr_ast(
     output: &mut Vec<Cell>,
     patch_offsets: &mut Vec<usize>,
     vm: &VM,
+    self_hdr_idx: Option<usize>,
 ) -> Result<(), TbxError> {
     match expr {
         ExprAst::Literal(value) => emit_lit(output, value.clone(), vm),
@@ -1216,21 +1197,28 @@ fn emit_expr_ast(
             Ok(())
         }
         ExprAst::Unary { op, expr } => {
-            emit_expr_ast(expr, output, patch_offsets, vm)?;
+            emit_expr_ast(expr, output, patch_offsets, vm, self_hdr_idx)?;
             match op {
                 UnaryOp::Neg => output.push(Cell::Xt(require_xt(vm, "NEGATE")?)),
             }
             Ok(())
         }
         ExprAst::Binary { op, lhs, rhs } => {
-            emit_expr_ast(lhs, output, patch_offsets, vm)?;
-            emit_expr_ast(rhs, output, patch_offsets, vm)?;
+            emit_expr_ast(lhs, output, patch_offsets, vm, self_hdr_idx)?;
+            emit_expr_ast(rhs, output, patch_offsets, vm, self_hdr_idx)?;
             output.push(Cell::Xt(require_xt(vm, eager_binary_prim(*op))?));
             Ok(())
         }
         ExprAst::Comma { lhs, rhs } => {
-            emit_expr_ast(lhs, output, patch_offsets, vm)?;
-            emit_expr_ast(rhs, output, patch_offsets, vm)?;
+            emit_expr_ast(lhs, output, patch_offsets, vm, self_hdr_idx)?;
+            emit_expr_ast(rhs, output, patch_offsets, vm, self_hdr_idx)?;
+            Ok(())
+        }
+        ExprAst::Invoke { xt, args } => {
+            for arg in args {
+                emit_expr_ast(arg, output, patch_offsets, vm, self_hdr_idx)?;
+            }
+            emit_call_by_kind(output, *xt, args.len(), vm, self_hdr_idx, patch_offsets)?;
             Ok(())
         }
         ExprAst::LegacyCode {
