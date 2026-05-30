@@ -352,12 +352,14 @@ impl<'a> ExprCompiler<'a> {
         let mut cells = Vec::new();
         let mut patch_offsets = Vec::new();
         let mut jump_patches = Vec::new();
+        let codegen = ExprCodegenContext::new(self.vm)?;
         append_expr_ast_cells(
             ast,
             &mut cells,
             &mut patch_offsets,
             &mut jump_patches,
             self.vm,
+            &codegen,
             self.self_hdr_idx,
         )?;
         self.patch_offsets = patch_offsets;
@@ -931,6 +933,84 @@ fn require_hidden_system_xt(vm: &VM, name: &'static str) -> Result<Xt, TbxError>
     })
 }
 
+/// Xt set used by expression codegen after identifier resolution has finished.
+///
+/// Lookup policy is part of the contract:
+/// - User-visible system helpers are resolved by name with `require_xt()`.
+/// - Hidden system helpers are resolved with `lookup_hidden_system()` so user words
+///   cannot shadow internal compiler-only helpers.
+/// - Runtime control-flow instructions are resolved by `EntryKind`, not by name,
+///   because the user-facing compile-time words (`GOTO`, `BIF`, `BIT`) are distinct
+///   entries that may share spelling with the runtime instructions.
+struct ExprCodegenContext {
+    lit_xt: Xt,
+    fetch_xt: Xt,
+    call_xt: Xt,
+    negate_xt: Xt,
+    tuple_get_xt: Xt,
+    to_bool_xt: Xt,
+    array_get_xt: Xt,
+    array_get_2d_xt: Xt,
+    array_addr_xt: Xt,
+    array_addr_2d_xt: Xt,
+    array_len_xt: Xt,
+    goto_xt: Xt,
+    branch_if_false_xt: Xt,
+    branch_if_true_xt: Xt,
+}
+
+impl ExprCodegenContext {
+    fn new(vm: &VM) -> Result<Self, TbxError> {
+        Ok(Self {
+            lit_xt: require_xt(vm, "LIT")?,
+            fetch_xt: require_xt(vm, "FETCH")?,
+            call_xt: require_xt(vm, "CALL")?,
+            negate_xt: require_xt(vm, "NEGATE")?,
+            tuple_get_xt: require_xt(vm, "TUPLE_GET")?,
+            to_bool_xt: require_hidden_system_xt(vm, "TO_BOOL")?,
+            array_get_xt: require_hidden_system_xt(vm, "ARRAY_GET")?,
+            array_get_2d_xt: require_hidden_system_xt(vm, "ARRAY_GET_2D")?,
+            array_addr_xt: require_hidden_system_xt(vm, "ARRAY_ADDR")?,
+            array_addr_2d_xt: require_hidden_system_xt(vm, "ARRAY_ADDR_2D")?,
+            array_len_xt: require_hidden_system_xt(vm, "ARRAY_LEN")?,
+            goto_xt: Self::require_runtime_xt(
+                vm,
+                "runtime goto instruction to be registered",
+                |kind| matches!(kind, EntryKind::Goto),
+            )?,
+            branch_if_false_xt: Self::require_runtime_xt(
+                vm,
+                "runtime branch-if-false instruction to be registered",
+                |kind| matches!(kind, EntryKind::BranchIfFalse),
+            )?,
+            branch_if_true_xt: Self::require_runtime_xt(
+                vm,
+                "runtime branch-if-true instruction to be registered",
+                |kind| matches!(kind, EntryKind::BranchIfTrue),
+            )?,
+        })
+    }
+
+    fn branch_xt(&self, branch_on_truthy: bool) -> Xt {
+        if branch_on_truthy {
+            self.branch_if_true_xt
+        } else {
+            self.branch_if_false_xt
+        }
+    }
+
+    fn require_runtime_xt(
+        vm: &VM,
+        expected: &'static str,
+        pred: impl Fn(&EntryKind) -> bool,
+    ) -> Result<Xt, TbxError> {
+        vm.find_by_kind(pred).ok_or(TbxError::TypeError {
+            expected,
+            got: "not found",
+        })
+    }
+}
+
 /// Find the index of the matching closing `]` for an already-consumed `[`.
 ///
 /// `tokens[start..]` is the content after the opening `[`.  Returns the index
@@ -1009,30 +1089,37 @@ pub(crate) fn split_at_top_level_comma(
 }
 
 /// Emit `Xt(LIT)` followed by `value` onto `output`.
-fn emit_lit(output: &mut Vec<Cell>, value: Cell, vm: &VM) -> Result<(), TbxError> {
-    let xt = require_xt(vm, "LIT")?;
-    output.push(Cell::Xt(xt));
+fn emit_lit(
+    output: &mut Vec<Cell>,
+    value: Cell,
+    codegen: &ExprCodegenContext,
+) -> Result<(), TbxError> {
+    output.push(Cell::Xt(codegen.lit_xt));
     output.push(value);
     Ok(())
 }
 
 /// Emit the variable-read sequence: `Xt(LIT)`, `DictAddr(addr)`, `Xt(FETCH)`.
-fn emit_var_read(output: &mut Vec<Cell>, addr: usize, vm: &VM) -> Result<(), TbxError> {
-    let lit_xt = require_xt(vm, "LIT")?;
-    let fetch_xt = require_xt(vm, "FETCH")?;
-    output.push(Cell::Xt(lit_xt));
+fn emit_var_read(
+    output: &mut Vec<Cell>,
+    addr: usize,
+    codegen: &ExprCodegenContext,
+) -> Result<(), TbxError> {
+    output.push(Cell::Xt(codegen.lit_xt));
     output.push(Cell::DictAddr(addr));
-    output.push(Cell::Xt(fetch_xt));
+    output.push(Cell::Xt(codegen.fetch_xt));
     Ok(())
 }
 
 /// Emit the local-variable-read sequence: `Xt(LIT)`, `StackAddr(idx)`, `Xt(FETCH)`.
-fn emit_local_read(output: &mut Vec<Cell>, idx: usize, vm: &VM) -> Result<(), TbxError> {
-    let lit_xt = require_xt(vm, "LIT")?;
-    let fetch_xt = require_xt(vm, "FETCH")?;
-    output.push(Cell::Xt(lit_xt));
+fn emit_local_read(
+    output: &mut Vec<Cell>,
+    idx: usize,
+    codegen: &ExprCodegenContext,
+) -> Result<(), TbxError> {
+    output.push(Cell::Xt(codegen.lit_xt));
     output.push(Cell::StackAddr(idx));
-    output.push(Cell::Xt(fetch_xt));
+    output.push(Cell::Xt(codegen.fetch_xt));
     Ok(())
 }
 
@@ -1049,6 +1136,7 @@ fn emit_call_by_kind(
     xt: Xt,
     arity: usize,
     vm: &VM,
+    codegen: &ExprCodegenContext,
     self_hdr_idx: Option<usize>,
     patch_offsets: &mut Vec<usize>,
 ) -> Result<(), TbxError> {
@@ -1057,8 +1145,7 @@ fn emit_call_by_kind(
     // Match by reference: `vm` is immutable here so no borrow conflict arises.
     match &vm.headers[xt.index()].kind {
         EntryKind::Word(_) => {
-            let call_xt = require_xt(vm, "CALL")?;
-            output.push(Cell::Xt(call_xt));
+            output.push(Cell::Xt(codegen.call_xt));
             output.push(Cell::Xt(xt));
             output.push(Cell::Int(arity as i64));
             // For a self-recursive call the local_count is not yet finalized — emit
@@ -1074,8 +1161,7 @@ fn emit_call_by_kind(
         EntryKind::Primitive(_) if vm.headers[xt.index()].is_variadic => {
             // Variadic primitive: push arity as Int before the Xt so the
             // primitive can pop it and know how many arguments to consume.
-            let lit_xt = require_xt(vm, "LIT")?;
-            output.push(Cell::Xt(lit_xt));
+            output.push(Cell::Xt(codegen.lit_xt));
             output.push(Cell::Int(arity as i64));
             output.push(Cell::Xt(xt));
         }
@@ -1286,117 +1372,227 @@ fn append_expr_ast_cells(
     patch_offsets: &mut Vec<usize>,
     jump_patches: &mut Vec<ExprJumpPatch>,
     vm: &VM,
+    codegen: &ExprCodegenContext,
     self_hdr_idx: Option<usize>,
 ) -> Result<(), TbxError> {
     match expr {
-        ExprAst::Literal(value) => emit_lit(output, value.clone(), vm),
-        ExprAst::LocalRead { index } => emit_local_read(output, *index, vm),
-        ExprAst::GlobalRead { addr } => emit_var_read(output, *addr, vm),
+        ExprAst::Literal(value) => emit_lit(output, value.clone(), codegen),
+        ExprAst::LocalRead { index } => emit_local_read(output, *index, codegen),
+        ExprAst::GlobalRead { addr } => emit_var_read(output, *addr, codegen),
         ExprAst::AddressOfLocal { index } => {
-            let xt = require_xt(vm, "LIT")?;
-            output.push(Cell::Xt(xt));
+            output.push(Cell::Xt(codegen.lit_xt));
             output.push(Cell::StackAddr(*index));
             Ok(())
         }
         ExprAst::AddressOfGlobal { addr } => {
-            let xt = require_xt(vm, "LIT")?;
-            output.push(Cell::Xt(xt));
+            output.push(Cell::Xt(codegen.lit_xt));
             output.push(Cell::DictAddr(*addr));
             Ok(())
         }
         ExprAst::Unary { op, expr } => {
-            append_expr_ast_cells(expr, output, patch_offsets, jump_patches, vm, self_hdr_idx)?;
+            append_expr_ast_cells(
+                expr,
+                output,
+                patch_offsets,
+                jump_patches,
+                vm,
+                codegen,
+                self_hdr_idx,
+            )?;
             match op {
-                UnaryOp::Neg => output.push(Cell::Xt(require_xt(vm, "NEGATE")?)),
+                UnaryOp::Neg => output.push(Cell::Xt(codegen.negate_xt)),
             }
             Ok(())
         }
         ExprAst::Binary { op, lhs, rhs } => {
-            append_expr_ast_cells(lhs, output, patch_offsets, jump_patches, vm, self_hdr_idx)?;
+            append_expr_ast_cells(
+                lhs,
+                output,
+                patch_offsets,
+                jump_patches,
+                vm,
+                codegen,
+                self_hdr_idx,
+            )?;
             let branch_kind = match op {
                 BinaryOp::And => Some((false, Cell::Bool(false))),
                 BinaryOp::Or => Some((true, Cell::Bool(true))),
                 _ => None,
             };
             if let Some((branch_on_truthy, short_circuit_value)) = branch_kind {
-                let branch_xt = vm
-                    .find_by_kind(|kind| {
-                        if branch_on_truthy {
-                            matches!(kind, EntryKind::BranchIfTrue)
-                        } else {
-                            matches!(kind, EntryKind::BranchIfFalse)
-                        }
-                    })
-                    .ok_or(TbxError::TypeError {
-                        expected: "runtime branch instruction to be registered",
-                        got: "not found",
-                    })?;
+                let branch_xt = codegen.branch_xt(branch_on_truthy);
                 let short_circuit_patch = append_jump(output, jump_patches, branch_xt);
-                append_expr_ast_cells(rhs, output, patch_offsets, jump_patches, vm, self_hdr_idx)?;
-                output.push(Cell::Xt(require_hidden_system_xt(vm, "TO_BOOL")?));
-                let goto_xt = vm
-                    .find_by_kind(|kind| matches!(kind, EntryKind::Goto))
-                    .ok_or(TbxError::TypeError {
-                        expected: "runtime goto instruction to be registered",
-                        got: "not found",
-                    })?;
-                let end_patch = append_jump(output, jump_patches, goto_xt);
+                append_expr_ast_cells(
+                    rhs,
+                    output,
+                    patch_offsets,
+                    jump_patches,
+                    vm,
+                    codegen,
+                    self_hdr_idx,
+                )?;
+                output.push(Cell::Xt(codegen.to_bool_xt));
+                let end_patch = append_jump(output, jump_patches, codegen.goto_xt);
                 patch_jump(jump_patches, short_circuit_patch, output.len());
-                emit_lit(output, short_circuit_value, vm)?;
+                emit_lit(output, short_circuit_value, codegen)?;
                 patch_jump(jump_patches, end_patch, output.len());
             } else {
-                append_expr_ast_cells(rhs, output, patch_offsets, jump_patches, vm, self_hdr_idx)?;
+                append_expr_ast_cells(
+                    rhs,
+                    output,
+                    patch_offsets,
+                    jump_patches,
+                    vm,
+                    codegen,
+                    self_hdr_idx,
+                )?;
                 output.push(Cell::Xt(require_xt(vm, eager_binary_prim(*op))?));
             }
             Ok(())
         }
         ExprAst::Comma { lhs, rhs } => {
-            append_expr_ast_cells(lhs, output, patch_offsets, jump_patches, vm, self_hdr_idx)?;
-            append_expr_ast_cells(rhs, output, patch_offsets, jump_patches, vm, self_hdr_idx)?;
+            append_expr_ast_cells(
+                lhs,
+                output,
+                patch_offsets,
+                jump_patches,
+                vm,
+                codegen,
+                self_hdr_idx,
+            )?;
+            append_expr_ast_cells(
+                rhs,
+                output,
+                patch_offsets,
+                jump_patches,
+                vm,
+                codegen,
+                self_hdr_idx,
+            )?;
             Ok(())
         }
         ExprAst::Invoke { xt, args } => {
             for arg in args {
-                append_expr_ast_cells(arg, output, patch_offsets, jump_patches, vm, self_hdr_idx)?;
+                append_expr_ast_cells(
+                    arg,
+                    output,
+                    patch_offsets,
+                    jump_patches,
+                    vm,
+                    codegen,
+                    self_hdr_idx,
+                )?;
             }
-            emit_call_by_kind(output, *xt, args.len(), vm, self_hdr_idx, patch_offsets)?;
+            emit_call_by_kind(
+                output,
+                *xt,
+                args.len(),
+                vm,
+                codegen,
+                self_hdr_idx,
+                patch_offsets,
+            )?;
             Ok(())
         }
         ExprAst::TupleGet { base, index } => {
-            append_expr_ast_cells(base, output, patch_offsets, jump_patches, vm, self_hdr_idx)?;
-            append_expr_ast_cells(index, output, patch_offsets, jump_patches, vm, self_hdr_idx)?;
-            output.push(Cell::Xt(require_xt(vm, "TUPLE_GET")?));
+            append_expr_ast_cells(
+                base,
+                output,
+                patch_offsets,
+                jump_patches,
+                vm,
+                codegen,
+                self_hdr_idx,
+            )?;
+            append_expr_ast_cells(
+                index,
+                output,
+                patch_offsets,
+                jump_patches,
+                vm,
+                codegen,
+                self_hdr_idx,
+            )?;
+            output.push(Cell::Xt(codegen.tuple_get_xt));
             Ok(())
         }
         ExprAst::ArrayGet { array, index } => {
-            emit_array_designator_read(array, output, vm)?;
-            append_expr_ast_cells(index, output, patch_offsets, jump_patches, vm, self_hdr_idx)?;
-            output.push(Cell::Xt(require_hidden_system_xt(vm, "ARRAY_GET")?));
+            emit_array_designator_read(array, output, codegen)?;
+            append_expr_ast_cells(
+                index,
+                output,
+                patch_offsets,
+                jump_patches,
+                vm,
+                codegen,
+                self_hdr_idx,
+            )?;
+            output.push(Cell::Xt(codegen.array_get_xt));
             Ok(())
         }
         ExprAst::ArrayGet2D { array, x, y } => {
-            emit_array_designator_read(array, output, vm)?;
-            append_expr_ast_cells(x, output, patch_offsets, jump_patches, vm, self_hdr_idx)?;
-            append_expr_ast_cells(y, output, patch_offsets, jump_patches, vm, self_hdr_idx)?;
-            output.push(Cell::Xt(require_hidden_system_xt(vm, "ARRAY_GET_2D")?));
+            emit_array_designator_read(array, output, codegen)?;
+            append_expr_ast_cells(
+                x,
+                output,
+                patch_offsets,
+                jump_patches,
+                vm,
+                codegen,
+                self_hdr_idx,
+            )?;
+            append_expr_ast_cells(
+                y,
+                output,
+                patch_offsets,
+                jump_patches,
+                vm,
+                codegen,
+                self_hdr_idx,
+            )?;
+            output.push(Cell::Xt(codegen.array_get_2d_xt));
             Ok(())
         }
         ExprAst::ArrayAddr { array, index } => {
-            emit_array_designator_read(array, output, vm)?;
-            append_expr_ast_cells(index, output, patch_offsets, jump_patches, vm, self_hdr_idx)?;
-            output.push(Cell::Xt(require_hidden_system_xt(vm, "ARRAY_ADDR")?));
+            emit_array_designator_read(array, output, codegen)?;
+            append_expr_ast_cells(
+                index,
+                output,
+                patch_offsets,
+                jump_patches,
+                vm,
+                codegen,
+                self_hdr_idx,
+            )?;
+            output.push(Cell::Xt(codegen.array_addr_xt));
             Ok(())
         }
         ExprAst::ArrayAddr2D { array, x, y } => {
-            emit_array_designator_read(array, output, vm)?;
-            append_expr_ast_cells(x, output, patch_offsets, jump_patches, vm, self_hdr_idx)?;
-            append_expr_ast_cells(y, output, patch_offsets, jump_patches, vm, self_hdr_idx)?;
-            output.push(Cell::Xt(require_hidden_system_xt(vm, "ARRAY_ADDR_2D")?));
+            emit_array_designator_read(array, output, codegen)?;
+            append_expr_ast_cells(
+                x,
+                output,
+                patch_offsets,
+                jump_patches,
+                vm,
+                codegen,
+                self_hdr_idx,
+            )?;
+            append_expr_ast_cells(
+                y,
+                output,
+                patch_offsets,
+                jump_patches,
+                vm,
+                codegen,
+                self_hdr_idx,
+            )?;
+            output.push(Cell::Xt(codegen.array_addr_2d_xt));
             Ok(())
         }
         ExprAst::ArrayLen { array } => {
-            emit_array_designator_read(array, output, vm)?;
-            output.push(Cell::Xt(require_hidden_system_xt(vm, "ARRAY_LEN")?));
+            emit_array_designator_read(array, output, codegen)?;
+            output.push(Cell::Xt(codegen.array_len_xt));
             Ok(())
         }
     }
@@ -1405,11 +1601,11 @@ fn append_expr_ast_cells(
 fn emit_array_designator_read(
     array: &ast::ArrayDesignator,
     output: &mut Vec<Cell>,
-    vm: &VM,
+    codegen: &ExprCodegenContext,
 ) -> Result<(), TbxError> {
     match array {
-        ast::ArrayDesignator::Local { index } => emit_local_read(output, *index, vm),
-        ast::ArrayDesignator::Global { addr } => emit_var_read(output, *addr, vm),
+        ast::ArrayDesignator::Local { index } => emit_local_read(output, *index, codegen),
+        ast::ArrayDesignator::Global { addr } => emit_var_read(output, *addr, codegen),
     }
 }
 
@@ -2134,6 +2330,44 @@ mod tests {
                 ]
             );
         }
+    }
+
+    #[test]
+    fn test_codegen_lookup_ignores_user_shadowing_for_hidden_and_runtime_helpers() {
+        let mut vm = make_vm();
+        vm.dict_write(Cell::Int(0)).unwrap();
+        vm.register(WordEntry::new_variable("A", 0));
+
+        let hidden_array_get_xt = vm.lookup_hidden_system("ARRAY_GET").unwrap();
+        let hidden_to_bool_xt = vm.lookup_hidden_system("TO_BOOL").unwrap();
+        let runtime_goto_xt = vm
+            .find_by_kind(|kind| matches!(kind, EntryKind::Goto))
+            .unwrap();
+        let runtime_bit_xt = vm
+            .find_by_kind(|kind| matches!(kind, EntryKind::BranchIfTrue))
+            .unwrap();
+
+        vm.register(WordEntry::new_word("ARRAY_GET", 0));
+        vm.register(WordEntry::new_word("TO_BOOL", 0));
+        vm.register(WordEntry::new_word("GOTO", 0));
+        vm.register(WordEntry::new_word("BIT", 0));
+
+        let array_result = ExprCompiler::new(&mut vm)
+            .compile_expr(&lex("@A[2]"))
+            .unwrap();
+        assert_eq!(
+            array_result.last(),
+            Some(&Cell::Xt(hidden_array_get_xt)),
+            "array element read must keep using hidden ARRAY_GET"
+        );
+
+        let short_circuit_result = ExprCompiler::new(&mut vm)
+            .with_output_base_dp(100)
+            .compile_expr(&lex("FALSE || TRUE"))
+            .unwrap();
+        assert_eq!(short_circuit_result[1], Cell::Xt(runtime_bit_xt));
+        assert_eq!(short_circuit_result[4], Cell::Xt(hidden_to_bool_xt));
+        assert_eq!(short_circuit_result[5], Cell::Xt(runtime_goto_xt));
     }
 
     // ------------------------------------------------------------------
