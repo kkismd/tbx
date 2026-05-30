@@ -2093,6 +2093,9 @@ pub fn register_all(vm: &mut VM) {
         "ASSERT_FAIL_MSG",
         assert_fail_msg_prim,
     ));
+    let mut to_bool_entry = WordEntry::new_primitive("TO_BOOL", to_bool_prim);
+    to_bool_entry.flags = FLAG_SYSTEM | FLAG_HIDDEN;
+    vm.register(to_bool_entry);
     vm.register(WordEntry {
         name: "CALL".to_string(),
         flags: FLAG_SYSTEM,
@@ -3262,6 +3265,18 @@ mod tests {
         vm.push(Cell::Int(5)).unwrap();
         or_prim(&mut vm).unwrap();
         assert_eq!(vm.pop(), Ok(Cell::Bool(true)));
+    }
+
+    #[test]
+    fn test_to_bool_normalizes_truthiness() {
+        let mut vm = VM::new();
+        vm.push(Cell::Int(123)).unwrap();
+        to_bool_prim(&mut vm).unwrap();
+        assert_eq!(vm.pop(), Ok(Cell::Bool(true)));
+
+        vm.push(Cell::Int(0)).unwrap();
+        to_bool_prim(&mut vm).unwrap();
+        assert_eq!(vm.pop(), Ok(Cell::Bool(false)));
     }
 
     // --- BAND / BOR tests ---

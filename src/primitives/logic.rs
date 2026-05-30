@@ -1,7 +1,7 @@
 //! Low-dependency logical and bitwise primitives.
 //!
-//! These primitives implement boolean (`AND`, `OR`) and bitwise (`BAND`,
-//! `BOR`) operations over the data stack. They only depend on [`Cell`],
+//! These primitives implement boolean (`AND`, `OR`, `TO_BOOL`) and bitwise
+//! (`BAND`, `BOR`) operations over the data stack. They only depend on [`Cell`],
 //! [`VM`], and [`TbxError`], and preserve the existing
 //! [`Cell::is_truthy`] semantics.
 
@@ -22,6 +22,13 @@ pub fn or_prim(vm: &mut VM) -> Result<(), TbxError> {
     let b = vm.pop()?;
     let a = vm.pop()?;
     vm.push(Cell::Bool(a.is_truthy() || b.is_truthy()))?;
+    Ok(())
+}
+
+/// TO_BOOL — normalize one value to Bool using is_truthy().
+pub fn to_bool_prim(vm: &mut VM) -> Result<(), TbxError> {
+    let value = vm.pop()?;
+    vm.push(Cell::Bool(value.is_truthy()))?;
     Ok(())
 }
 

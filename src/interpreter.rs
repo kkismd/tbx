@@ -510,10 +510,12 @@ impl Interpreter {
             .compile_state
             .as_mut()
             .map(|s| std::mem::take(&mut s.local_table));
+        let output_base_dp = self.vm.dp + 1;
         let compile_result: Result<(Vec<Cell>, Vec<usize>), InterpreterError> = {
             let local_table_ref = local_table.as_ref();
             let mut compiler =
-                ExprCompiler::with_context(&mut self.vm, local_table_ref, self_word, self_hdr_idx);
+                ExprCompiler::with_context(&mut self.vm, local_table_ref, self_word, self_hdr_idx)
+                    .with_output_base_dp(output_base_dp);
             compiler
                 .compile_expr(arg_tokens)
                 .map_err(&make_err)
