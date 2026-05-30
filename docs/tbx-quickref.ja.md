@@ -70,7 +70,7 @@ PRINTLN STR_CONCAT(
 
 - 整数: `1`, `42`, `-3`
 - 浮動小数点数: `1.5`, `8.0`, `1.0e3`
-- 真偽値: 比較や論理演算が返す `Bool`
+- 真偽値: `TRUE`, `FALSE`。比較や論理演算も `Bool` を返す
 - 文字列: `"hello"`
 - タプル: `TUPLE(...)` が返す immutable な値
 - 配列: `DIM @A[n]` で作る名前付き mutable storage

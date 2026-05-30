@@ -1840,12 +1840,30 @@ mod tests {
 
     #[test]
     fn test_logical_operators_compile_to_short_circuit_branches() {
-        for (expr, branch_kind, short_circuit_value) in [
-            ("1 && 2", EntryKind::BranchIfFalse, Cell::Bool(false)),
-            ("1 || 2", EntryKind::BranchIfTrue, Cell::Bool(true)),
+        for (expr, branch_kind, rhs_name, short_circuit_value) in [
+            (
+                "TRUE && FALSE",
+                EntryKind::BranchIfFalse,
+                "FALSE",
+                Cell::Bool(false),
+            ),
+            (
+                "FALSE || TRUE",
+                EntryKind::BranchIfTrue,
+                "TRUE",
+                Cell::Bool(true),
+            ),
         ] {
             let mut vm = make_vm();
             let lit_xt = vm.lookup("LIT").unwrap();
+            let lhs_xt = vm
+                .lookup(if matches!(&branch_kind, EntryKind::BranchIfFalse) {
+                    "TRUE"
+                } else {
+                    "FALSE"
+                })
+                .unwrap();
+            let rhs_xt = vm.lookup(rhs_name).unwrap();
             let branch_xt = vm
                 .find_by_kind(|kind| {
                     std::mem::discriminant(kind) == std::mem::discriminant(&branch_kind)
@@ -1866,15 +1884,13 @@ mod tests {
             assert_eq!(
                 result,
                 vec![
-                    Cell::Xt(lit_xt),
-                    Cell::Int(1),
+                    Cell::Xt(lhs_xt),
                     Cell::Xt(branch_xt),
-                    Cell::DictAddr(109),
-                    Cell::Xt(lit_xt),
-                    Cell::Int(2),
+                    Cell::DictAddr(107),
+                    Cell::Xt(rhs_xt),
                     Cell::Xt(to_bool_xt),
                     Cell::Xt(goto_xt),
-                    Cell::DictAddr(111),
+                    Cell::DictAddr(109),
                     Cell::Xt(lit_xt),
                     short_circuit_value,
                 ]

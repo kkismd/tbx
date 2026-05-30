@@ -493,11 +493,10 @@ fn test_tuple_projection_with_expr_index() {
 #[test]
 fn test_tuple_projection_mixed_types() {
     let mut interp = Interpreter::new();
-    // Use `1 = 1` to produce a Bool(true) value, since TRUE is not a registered symbol.
     let src = concat!(
         "DEF CHECK()\n",
         "  VAR T\n",
-        "  LET T = TUPLE(\"tbx\", 1, 1 = 1)\n",
+        "  LET T = TUPLE(\"tbx\", 1, TRUE)\n",
         "  PUTSTR T[1]\n",
         "  PUTSTR \" \"\n",
         "  PUTDEC T[2]\n",
