@@ -11,6 +11,7 @@ use crate::dict::{EntryKind, FLAG_IMMEDIATE};
 use crate::error::TbxError;
 use crate::lexer::{SpannedToken, Token};
 use crate::vm::VM;
+use ast::BinaryOp;
 
 #[allow(dead_code)]
 mod ast {
@@ -104,8 +105,12 @@ mod ast {
 /// An item held on the operator stack during Shunting-Yard processing.
 #[derive(Debug)]
 enum OpItem {
-    /// Binary operator with its primitive name and precedence (1=highest, 11=lowest).
-    BinOp { prim: &'static str, prec: u8 },
+    /// Binary operator with its semantic kind and precedence (1=highest, 11=lowest).
+    BinOp {
+        op: BinaryOp,
+        prec: u8,
+        left_assoc: bool,
+    },
     /// Unary prefix negation (`-`). Right-associative with precedence 1 (highest).
     UnaryNeg,
     /// Left-parenthesis sentinel. Carries optional call metadata.
@@ -422,12 +427,7 @@ impl<'a> ExprCompiler<'a> {
                 // -------------------------------------------------------
                 Token::Ampersand => {
                     if prev_was_operand {
-                        // Binary bitwise-AND (precedence 6, left-associative).
-                        pop_ops_while(&mut op_stack, &mut output, self.vm, 6, true)?;
-                        op_stack.push(OpItem::BinOp {
-                            prim: "BAND",
-                            prec: 6,
-                        });
+                        push_binary_op("&", &mut op_stack, &mut output, self.vm)?;
                         prev_was_operand = false;
                     } else {
                         // Unary address-of operator: eagerly consume the next identifier
@@ -557,12 +557,7 @@ impl<'a> ExprCompiler<'a> {
                     match s.as_str() {
                         "-" => {
                             if prev_was_operand {
-                                // Binary subtraction (precedence 3, left-associative).
-                                pop_ops_while(&mut op_stack, &mut output, self.vm, 3, true)?;
-                                op_stack.push(OpItem::BinOp {
-                                    prim: "SUB",
-                                    prec: 3,
-                                });
+                                push_binary_op("-", &mut op_stack, &mut output, self.vm)?;
                                 prev_was_operand = false;
                             } else {
                                 // Unary negation (precedence 1, right-associative).
@@ -572,9 +567,8 @@ impl<'a> ExprCompiler<'a> {
                             }
                         }
                         other => {
-                            if let Some((prim, prec, left)) = binary_op_info(other) {
-                                pop_ops_while(&mut op_stack, &mut output, self.vm, prec, left)?;
-                                op_stack.push(OpItem::BinOp { prim, prec });
+                            if binary_op_info(other).is_some() {
+                                push_binary_op(other, &mut op_stack, &mut output, self.vm)?;
                                 prev_was_operand = false;
                             } else {
                                 return Err(TbxError::InvalidExpression {
@@ -1022,7 +1016,12 @@ fn pop_ops_while(
 /// Return the precedence of an operator stack item (1 = highest, 11 = lowest).
 fn op_prec(op: &OpItem) -> u8 {
     match op {
-        OpItem::BinOp { prec, .. } => *prec,
+        OpItem::BinOp {
+            prec, left_assoc, ..
+        } => {
+            let _ = left_assoc;
+            *prec
+        }
         OpItem::UnaryNeg => 1,
         OpItem::CommaSep => 11,
         OpItem::LParen { .. } => u8::MAX, // sentinel; never compared in practice
@@ -1030,11 +1029,29 @@ fn op_prec(op: &OpItem) -> u8 {
     }
 }
 
+fn push_binary_op(
+    op: &str,
+    op_stack: &mut Vec<OpItem>,
+    output: &mut Vec<Cell>,
+    vm: &VM,
+) -> Result<(), TbxError> {
+    let (op, prec, left_assoc) = binary_op_info(op).ok_or(TbxError::InvalidExpression {
+        reason: "unknown operator in expression",
+    })?;
+    pop_ops_while(op_stack, output, vm, prec, left_assoc)?;
+    op_stack.push(OpItem::BinOp {
+        op,
+        prec,
+        left_assoc,
+    });
+    Ok(())
+}
+
 /// Emit the VM instruction(s) for a single operator stack item.
 fn emit_op_item(op: &OpItem, output: &mut Vec<Cell>, vm: &VM) -> Result<(), TbxError> {
     match op {
-        OpItem::BinOp { prim, .. } => {
-            let xt = require_xt(vm, prim)?;
+        OpItem::BinOp { op, .. } => {
+            let xt = require_xt(vm, eager_binary_prim(*op))?;
             output.push(Cell::Xt(xt));
         }
         OpItem::UnaryNeg => {
@@ -1061,24 +1078,47 @@ fn emit_op_item(op: &OpItem, output: &mut Vec<Cell>, vm: &VM) -> Result<(), TbxE
     Ok(())
 }
 
-/// Map a binary operator string to `(primitive_name, precedence, left_assoc)`.
+/// Map a `BinaryOp` to the eager primitive used by the legacy RPN backend.
+fn eager_binary_prim(op: BinaryOp) -> &'static str {
+    match op {
+        BinaryOp::Add => "ADD",
+        BinaryOp::Sub => "SUB",
+        BinaryOp::Mul => "MUL",
+        BinaryOp::Div => "DIV",
+        BinaryOp::Mod => "MOD",
+        BinaryOp::Lt => "LT",
+        BinaryOp::Gt => "GT",
+        BinaryOp::Le => "LE",
+        BinaryOp::Ge => "GE",
+        BinaryOp::Eq => "EQ",
+        BinaryOp::Neq => "NEQ",
+        BinaryOp::BitAnd => "BAND",
+        BinaryOp::BitOr => "BOR",
+        BinaryOp::And => "AND",
+        BinaryOp::Or => "OR",
+    }
+}
+
+/// Map a binary operator string to `(BinaryOp, precedence, left_assoc)`.
 ///
 /// Returns `None` for unrecognised operator strings.
-fn binary_op_info(op: &str) -> Option<(&'static str, u8, bool)> {
+fn binary_op_info(op: &str) -> Option<(BinaryOp, u8, bool)> {
     match op {
-        "+" => Some(("ADD", 3, true)),
-        "*" => Some(("MUL", 2, true)),
-        "/" => Some(("DIV", 2, true)),
-        "%" => Some(("MOD", 2, true)),
-        "<" => Some(("LT", 4, true)),
-        ">" => Some(("GT", 4, true)),
-        "<=" => Some(("LE", 4, true)),
-        ">=" => Some(("GE", 4, true)),
-        "=" => Some(("EQ", 5, true)),
-        "<>" => Some(("NEQ", 5, true)),
-        "|" => Some(("BOR", 7, true)),
-        "&&" => Some(("AND", 8, true)),
-        "||" => Some(("OR", 9, true)),
+        "+" => Some((BinaryOp::Add, 3, true)),
+        "-" => Some((BinaryOp::Sub, 3, true)),
+        "*" => Some((BinaryOp::Mul, 2, true)),
+        "/" => Some((BinaryOp::Div, 2, true)),
+        "%" => Some((BinaryOp::Mod, 2, true)),
+        "<" => Some((BinaryOp::Lt, 4, true)),
+        ">" => Some((BinaryOp::Gt, 4, true)),
+        "<=" => Some((BinaryOp::Le, 4, true)),
+        ">=" => Some((BinaryOp::Ge, 4, true)),
+        "=" => Some((BinaryOp::Eq, 5, true)),
+        "<>" => Some((BinaryOp::Neq, 5, true)),
+        "&" => Some((BinaryOp::BitAnd, 6, true)),
+        "|" => Some((BinaryOp::BitOr, 7, true)),
+        "&&" => Some((BinaryOp::And, 8, true)),
+        "||" => Some((BinaryOp::Or, 9, true)),
         _ => None,
     }
 }
@@ -1583,6 +1623,39 @@ mod tests {
                 Cell::Xt(bor_xt),
             ]
         );
+    }
+
+    #[test]
+    fn test_binary_operators_preserve_eager_lowering() {
+        let cases = [
+            ("1 + 2", "ADD"),
+            ("1 - 2", "SUB"),
+            ("1 * 2", "MUL"),
+            ("1 / 2", "DIV"),
+            ("1 % 2", "MOD"),
+            ("1 < 2", "LT"),
+            ("1 > 2", "GT"),
+            ("1 <= 2", "LE"),
+            ("1 >= 2", "GE"),
+            ("1 = 2", "EQ"),
+            ("1 <> 2", "NEQ"),
+            ("1 & 2", "BAND"),
+            ("1 | 2", "BOR"),
+            ("1 && 2", "AND"),
+            ("1 || 2", "OR"),
+        ];
+
+        for (expr, prim_name) in cases {
+            let mut vm = make_vm();
+            let tokens = lex(expr);
+            let result = ExprCompiler::new(&mut vm).compile_expr(&tokens).unwrap();
+            let expected_xt = vm.lookup(prim_name).unwrap();
+            assert_eq!(
+                result.last(),
+                Some(&Cell::Xt(expected_xt)),
+                "expected {expr} to lower to {prim_name}, got {result:?}"
+            );
+        }
     }
 
     // ------------------------------------------------------------------
