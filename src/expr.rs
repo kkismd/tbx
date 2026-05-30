@@ -141,6 +141,105 @@ enum LParenCall {
     Invoke(Xt, usize),
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ResolvedIdentExpr {
+    LocalRead { index: usize },
+    GlobalRead { addr: usize },
+    Callable { xt: Xt },
+}
+
+struct ExprResolver<'a> {
+    vm: &'a VM,
+    local_table: Option<&'a HashMap<String, usize>>,
+    self_word: Option<&'a str>,
+}
+
+impl<'a> ExprResolver<'a> {
+    fn new(
+        vm: &'a VM,
+        local_table: Option<&'a HashMap<String, usize>>,
+        self_word: Option<&'a str>,
+    ) -> Self {
+        Self {
+            vm,
+            local_table,
+            self_word,
+        }
+    }
+
+    fn resolve_ident_expr(
+        &self,
+        name: &str,
+        next_is_lparen: bool,
+    ) -> Result<ResolvedIdentExpr, TbxError> {
+        if let Some(local_idx) = self.local_table.and_then(|lt| lt.get(name)).copied() {
+            return Ok(ResolvedIdentExpr::LocalRead { index: local_idx });
+        }
+
+        let xt = self.lookup_non_immediate(name)?;
+        if next_is_lparen {
+            return Ok(ResolvedIdentExpr::Callable { xt });
+        }
+
+        match &self.vm.headers[xt.index()].kind {
+            EntryKind::Variable(addr) => Ok(ResolvedIdentExpr::GlobalRead { addr: *addr }),
+            _ => Ok(ResolvedIdentExpr::Callable { xt }),
+        }
+    }
+
+    fn resolve_address_of_ident(&self, name: &str) -> Result<ExprAst, TbxError> {
+        if let Some(local_idx) = self.local_table.and_then(|lt| lt.get(name)).copied() {
+            return Ok(ExprAst::AddressOfLocal { index: local_idx });
+        }
+
+        let xt = self.lookup(name)?;
+        match &self.vm.headers[xt.index()].kind {
+            EntryKind::Variable(addr) => Ok(ExprAst::AddressOfGlobal { addr: *addr }),
+            _ => Err(TbxError::TypeError {
+                expected: "variable identifier after unary &",
+                got: "non-variable",
+            }),
+        }
+    }
+
+    fn resolve_array_designator(
+        &self,
+        name: &str,
+        expected: &'static str,
+    ) -> Result<ast::ArrayDesignator, TbxError> {
+        if let Some(local_idx) = self.local_table.and_then(|lt| lt.get(name)).copied() {
+            return Ok(ast::ArrayDesignator::Local { index: local_idx });
+        }
+
+        let xt = self.lookup(name)?;
+        match &self.vm.headers[xt.index()].kind {
+            EntryKind::Variable(addr) => Ok(ast::ArrayDesignator::Global { addr: *addr }),
+            _ => Err(TbxError::TypeError {
+                expected,
+                got: "non-variable",
+            }),
+        }
+    }
+
+    fn lookup_non_immediate(&self, name: &str) -> Result<Xt, TbxError> {
+        let xt = self.lookup(name)?;
+        if self.vm.headers[xt.index()].flags & FLAG_IMMEDIATE != 0 {
+            return Err(TbxError::InvalidExpression {
+                reason: "IMMEDIATE word cannot appear inside an expression",
+            });
+        }
+        Ok(xt)
+    }
+
+    fn lookup(&self, name: &str) -> Result<Xt, TbxError> {
+        self.vm
+            .lookup_including_self(name, self.self_word)
+            .ok_or_else(|| TbxError::UndefinedSymbol {
+                name: name.to_string(),
+            })
+    }
+}
+
 // ---------------------------------------------------------------------------
 // ExprCompiler
 // ---------------------------------------------------------------------------
@@ -220,6 +319,10 @@ impl<'a> ExprCompiler<'a> {
         self
     }
 
+    fn resolver(&self) -> ExprResolver<'_> {
+        ExprResolver::new(self.vm, self.local_table, self.self_word.as_deref())
+    }
+
     /// Parse `tokens` and return the corresponding RPN instruction sequence.
     ///
     /// No cells are written to the VM dictionary; the caller owns the returned
@@ -296,14 +399,7 @@ impl<'a> ExprCompiler<'a> {
                 // -------------------------------------------------------
                 Token::Ident(name) => {
                     let name = name.to_ascii_uppercase();
-                    // Check local variable table first — locals shadow globals.
-                    if let Some(local_idx) = self.local_table.and_then(|lt| lt.get(&name)).copied()
-                    {
-                        output.push(ExprAst::LocalRead { index: local_idx });
-                        prev_was_operand = true;
-                        i += 1;
-                        continue;
-                    }
+                    let resolver = self.resolver();
 
                     // -------------------------------------------------------
                     // Dedicated syntax: ARRAY_LEN(@A)
@@ -352,7 +448,7 @@ impl<'a> ExprCompiler<'a> {
                                         }
                                     }
 
-                                    let array = self.resolve_array_designator(
+                                    let array = resolver.resolve_array_designator(
                                         &array_name,
                                         "array variable for ARRAY_LEN(@A)",
                                     )?;
@@ -378,62 +474,52 @@ impl<'a> ExprCompiler<'a> {
                         // identifier resolution path below (emitting it as a bare Xt).
                     }
 
-                    let xt = self
-                        .vm
-                        .lookup_including_self(&name, self.self_word.as_deref())
-                        .ok_or_else(|| TbxError::UndefinedSymbol { name: name.clone() })?;
-
-                    // Reject IMMEDIATE words inside expressions.
-                    // Per spec, IMMEDIATE words are only allowed at statement level.
-                    if self.vm.headers[xt.index()].flags & FLAG_IMMEDIATE != 0 {
-                        return Err(TbxError::InvalidExpression {
-                            reason: "IMMEDIATE word cannot appear inside an expression",
-                        });
-                    }
-
-                    // Peek ahead: is this an invoke form (`F(`)?
                     let next_is_lparen = tokens
                         .get(i + 1)
                         .map(|st| matches!(st.token, Token::LParen))
                         .unwrap_or(false);
 
-                    if next_is_lparen {
-                        // Is it a zero-argument call `F()`?
-                        let next_is_rparen = tokens
-                            .get(i + 2)
-                            .map(|st| matches!(st.token, Token::RParen))
-                            .unwrap_or(false);
-
-                        if next_is_rparen {
-                            output.push(ExprAst::Invoke {
-                                xt,
-                                args: Vec::new(),
-                            });
-                            i += 2; // skip '(' and ')'
+                    match resolver.resolve_ident_expr(&name, next_is_lparen)? {
+                        ResolvedIdentExpr::LocalRead { index } => {
+                            output.push(ExprAst::LocalRead { index });
                             prev_was_operand = true;
-                        } else {
-                            // Invoke form with arguments: open a function-call
-                            // paren frame with initial arity = 1.
-                            op_stack.push(OpItem::LParen {
-                                call: Some(LParenCall::Invoke(xt, 1)),
-                            });
-                            i += 1; // consume '('
-                            prev_was_operand = false;
                         }
-                    } else {
-                        // Variable read or nullary invoke (no parentheses).
-                        match &self.vm.headers[xt.index()].kind {
-                            EntryKind::Variable(addr) => {
-                                output.push(ExprAst::GlobalRead { addr: *addr });
-                            }
-                            _ => {
+                        ResolvedIdentExpr::GlobalRead { addr } => {
+                            output.push(ExprAst::GlobalRead { addr });
+                            prev_was_operand = true;
+                        }
+                        ResolvedIdentExpr::Callable { xt } => {
+                            if next_is_lparen {
+                                // Is it a zero-argument call `F()`?
+                                let next_is_rparen = tokens
+                                    .get(i + 2)
+                                    .map(|st| matches!(st.token, Token::RParen))
+                                    .unwrap_or(false);
+
+                                if next_is_rparen {
+                                    output.push(ExprAst::Invoke {
+                                        xt,
+                                        args: Vec::new(),
+                                    });
+                                    i += 2; // skip '(' and ')'
+                                    prev_was_operand = true;
+                                } else {
+                                    // Invoke form with arguments: open a function-call
+                                    // paren frame with initial arity = 1.
+                                    op_stack.push(OpItem::LParen {
+                                        call: Some(LParenCall::Invoke(xt, 1)),
+                                    });
+                                    i += 1; // consume '('
+                                    prev_was_operand = false;
+                                }
+                            } else {
                                 output.push(ExprAst::Invoke {
                                     xt,
                                     args: Vec::new(),
                                 });
+                                prev_was_operand = true;
                             }
                         }
-                        prev_was_operand = true;
                     }
                 }
 
@@ -452,30 +538,7 @@ impl<'a> ExprCompiler<'a> {
                         match next_tok {
                             Some(Token::Ident(name)) => {
                                 let name = name.to_ascii_uppercase();
-                                // Check local table first — locals shadow globals.
-                                if let Some(local_idx) =
-                                    self.local_table.and_then(|lt| lt.get(&name)).copied()
-                                {
-                                    output.push(ExprAst::AddressOfLocal { index: local_idx });
-                                } else {
-                                    let xt = self
-                                        .vm
-                                        .lookup_including_self(&name, self.self_word.as_deref())
-                                        .ok_or_else(|| TbxError::UndefinedSymbol {
-                                            name: name.clone(),
-                                        })?;
-                                    match &self.vm.headers[xt.index()].kind {
-                                        EntryKind::Variable(addr) => {
-                                            output.push(ExprAst::AddressOfGlobal { addr: *addr });
-                                        }
-                                        _ => {
-                                            return Err(TbxError::TypeError {
-                                                expected: "variable identifier after unary &",
-                                                got: "non-variable",
-                                            });
-                                        }
-                                    }
-                                }
+                                output.push(self.resolver().resolve_address_of_ident(&name)?);
                             }
                             Some(Token::At) => {
                                 // `&@A[i]` — array element address access.
@@ -499,7 +562,7 @@ impl<'a> ExprCompiler<'a> {
                                         let (index_toks, close_pos) =
                                             parse_at_index_tokens(tokens, lbracket_pos)?;
 
-                                        let array = self.resolve_array_designator(
+                                        let array = self.resolver().resolve_array_designator(
                                             &array_name,
                                             "array variable for &@-sigil address",
                                         )?;
@@ -745,7 +808,7 @@ impl<'a> ExprCompiler<'a> {
                             let (index_toks, close_pos) =
                                 parse_at_index_tokens(tokens, lbracket_pos)?;
 
-                            let array = self.resolve_array_designator(
+                            let array = self.resolver().resolve_array_designator(
                                 &name,
                                 "array variable for @-sigil access",
                             )?;
@@ -827,30 +890,6 @@ impl<'a> ExprCompiler<'a> {
             });
         }
         Ok(ast)
-    }
-
-    fn resolve_array_designator(
-        &self,
-        name: &str,
-        expected: &'static str,
-    ) -> Result<ast::ArrayDesignator, TbxError> {
-        if let Some(local_idx) = self.local_table.and_then(|lt| lt.get(name)).copied() {
-            return Ok(ast::ArrayDesignator::Local { index: local_idx });
-        }
-
-        let xt = self
-            .vm
-            .lookup_including_self(name, self.self_word.as_deref())
-            .ok_or_else(|| TbxError::UndefinedSymbol {
-                name: name.to_string(),
-            })?;
-        match &self.vm.headers[xt.index()].kind {
-            EntryKind::Variable(addr) => Ok(ast::ArrayDesignator::Global { addr: *addr }),
-            _ => Err(TbxError::TypeError {
-                expected,
-                got: "non-variable",
-            }),
-        }
     }
 }
 
@@ -1526,6 +1565,40 @@ mod tests {
     }
 
     #[test]
+    fn test_local_read_shadows_global_variable_read() {
+        let mut vm = make_vm();
+        vm.dict_write(Cell::Int(0)).unwrap();
+        vm.register(WordEntry::new_variable("A", 0));
+
+        let mut local_table = HashMap::new();
+        local_table.insert("A".to_string(), 2usize);
+
+        let tokens = lex("A");
+        let ast = ExprCompiler::with_context(&mut vm, Some(&local_table), None, None)
+            .parse_expr_ast(&tokens)
+            .unwrap();
+
+        assert!(matches!(ast, ExprAst::LocalRead { index: 2 }));
+    }
+
+    #[test]
+    fn test_immediate_word_is_rejected_in_expression() {
+        let mut vm = make_vm();
+        let immediate_xt = vm.register(WordEntry::new_word("NOW", 0));
+        vm.headers[immediate_xt.index()].flags |= FLAG_IMMEDIATE;
+
+        let tokens = lex("NOW");
+        let err = ExprCompiler::new(&mut vm)
+            .compile_expr(&tokens)
+            .unwrap_err();
+
+        assert!(
+            matches!(err, TbxError::InvalidExpression { reason } if reason == "IMMEDIATE word cannot appear inside an expression"),
+            "expected IMMEDIATE rejection, got: {err:?}"
+        );
+    }
+
+    #[test]
     fn test_legacy_global_array_element_read_not_emitted() {
         let mut vm = make_vm();
         vm.dict_write(Cell::Int(0)).unwrap();
@@ -1564,6 +1637,23 @@ mod tests {
         assert_eq!(result.len(), 2);
         assert_eq!(result[0], Cell::Xt(lit_xt));
         assert_eq!(result[1], Cell::DictAddr(0));
+    }
+
+    #[test]
+    fn test_address_of_local_shadows_global_variable() {
+        let mut vm = make_vm();
+        vm.dict_write(Cell::Int(0)).unwrap();
+        vm.register(WordEntry::new_variable("A", 0));
+
+        let mut local_table = HashMap::new();
+        local_table.insert("A".to_string(), 3usize);
+
+        let tokens = lex("&A");
+        let ast = ExprCompiler::with_context(&mut vm, Some(&local_table), None, None)
+            .parse_expr_ast(&tokens)
+            .unwrap();
+
+        assert!(matches!(ast, ExprAst::AddressOfLocal { index: 3 }));
     }
 
     /// `&A(i)` must no longer compile as an array element address (#671).
