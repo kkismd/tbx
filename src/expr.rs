@@ -1123,7 +1123,13 @@ fn emit_local_read(
     Ok(())
 }
 
-/// Emit the function-call sequence based on the `EntryKind` of `xt`.
+/// Emit the expression-invoke suffix based on the `EntryKind` of `xt`.
+///
+/// `output` is expected to already contain the lowered argument cells for the invoke.
+/// This helper appends only the callee-dispatch portion used in expression position.
+/// Statement-only stack-shape management such as `LIT_MARKER` / `DROP_TO_MARKER`
+/// belongs to `Interpreter::write_stmt_to_dict()` and is intentionally kept out of
+/// this expression lowerer.
 ///
 /// - `EntryKind::Word`: emits `Xt(CALL)`, `Xt(xt)`, `Int(arity)`, `Int(local_count)`
 ///   - When `xt.index() == self_hdr_idx` (self-recursive call), emits `Int(0)` as a
