@@ -216,6 +216,26 @@ impl<'a> ExprCompiler<'a> {
         &mut self,
         tokens: &[SpannedToken],
     ) -> Result<(Vec<Cell>, Vec<usize>), TbxError> {
+        let (output, output_patch_offsets) = self.parse_expr_output(tokens)?;
+        let mut cells = Vec::new();
+        let mut patch_offsets = Vec::new();
+        for expr in &output {
+            emit_expr_ast(
+                expr,
+                &mut cells,
+                &mut patch_offsets,
+                self.vm,
+                self.self_hdr_idx,
+            )?;
+        }
+        patch_offsets.extend(output_patch_offsets);
+        Ok((cells, patch_offsets))
+    }
+
+    fn parse_expr_output(
+        &mut self,
+        tokens: &[SpannedToken],
+    ) -> Result<(Vec<ExprAst>, Vec<usize>), TbxError> {
         let mut output: Vec<ExprAst> = Vec::new();
         let mut op_stack: Vec<OpItem> = Vec::new();
         // True when the previous significant token produced a value on the
@@ -312,43 +332,11 @@ impl<'a> ExprCompiler<'a> {
                                         }
                                     }
 
-                                    // Emit the array handle read (local or global).
-                                    let mut legacy = Vec::new();
-                                    if let Some(local_idx) =
-                                        self.local_table.and_then(|lt| lt.get(&array_name)).copied()
-                                    {
-                                        emit_local_read(&mut legacy, local_idx, self.vm)?;
-                                    } else {
-                                        let arr_xt = self
-                                            .vm
-                                            .lookup_including_self(
-                                                &array_name,
-                                                self.self_word.as_deref(),
-                                            )
-                                            .ok_or_else(|| TbxError::UndefinedSymbol {
-                                                name: array_name.clone(),
-                                            })?;
-                                        match &self.vm.headers[arr_xt.index()].kind {
-                                            EntryKind::Variable(addr) => {
-                                                emit_var_read(&mut legacy, *addr, self.vm)?;
-                                            }
-                                            _ => {
-                                                return Err(TbxError::TypeError {
-                                                    expected: "array variable for ARRAY_LEN(@A)",
-                                                    got: "non-variable",
-                                                });
-                                            }
-                                        }
-                                    }
-
-                                    // Emit ARRAY_LEN (hidden system helper).
-                                    let array_len_xt =
-                                        require_hidden_system_xt(self.vm, "ARRAY_LEN")?;
-                                    legacy.push(Cell::Xt(array_len_xt));
-                                    output.push(ExprAst::LegacyCode {
-                                        cells: legacy,
-                                        patch_offsets: Vec::new(),
-                                    });
+                                    let array = self.resolve_array_designator(
+                                        &array_name,
+                                        "array variable for ARRAY_LEN(@A)",
+                                    )?;
+                                    output.push(ExprAst::ArrayLen { array });
 
                                     // Advance past `(`, `@`, Ident, `)` (4 tokens beyond i).
                                     i += 4;
@@ -491,55 +479,21 @@ impl<'a> ExprCompiler<'a> {
                                         let (index_toks, close_pos) =
                                             parse_at_index_tokens(tokens, lbracket_pos)?;
 
-                                        // Load the array handle (local or global).
-                                        let mut legacy = Vec::new();
-                                        if let Some(local_idx) = self
-                                            .local_table
-                                            .and_then(|lt| lt.get(&array_name))
-                                            .copied()
-                                        {
-                                            emit_local_read(&mut legacy, local_idx, self.vm)?;
-                                        } else {
-                                            let xt = self
-                                                .vm
-                                                .lookup_including_self(
-                                                    &array_name,
-                                                    self.self_word.as_deref(),
-                                                )
-                                                .ok_or_else(|| TbxError::UndefinedSymbol {
-                                                    name: array_name.clone(),
-                                                })?;
-                                            match &self.vm.headers[xt.index()].kind {
-                                                EntryKind::Variable(addr) => {
-                                                    emit_var_read(&mut legacy, *addr, self.vm)?;
-                                                }
-                                                _ => {
-                                                    return Err(TbxError::TypeError {
-                                                        expected:
-                                                            "array variable for &@-sigil address",
-                                                        got: "non-variable",
-                                                    });
-                                                }
-                                            }
+                                        let array = self.resolve_array_designator(
+                                            &array_name,
+                                            "array variable for &@-sigil address",
+                                        )?;
+                                        let (index, index_patch_offsets) =
+                                            self.compile_expr_ast(index_toks)?;
+                                        if !index_patch_offsets.is_empty() {
+                                            return Err(TbxError::InvalidExpression {
+                                                reason:
+                                                    "unexpected patch offsets in array index AST",
+                                            });
                                         }
-
-                                        // Compile the index expression.
-                                        let (index_cells, index_patch_offsets) =
-                                            self.compile_expr_internal(index_toks)?;
-                                        let base = legacy.len();
-                                        legacy.extend(index_cells);
-                                        let patch_offsets = index_patch_offsets
-                                            .into_iter()
-                                            .map(|offset| base + offset)
-                                            .collect();
-
-                                        // Emit ARRAY_ADDR (hidden system helper).
-                                        let array_addr_xt =
-                                            require_hidden_system_xt(self.vm, "ARRAY_ADDR")?;
-                                        legacy.push(Cell::Xt(array_addr_xt));
-                                        output.push(ExprAst::LegacyCode {
-                                            cells: legacy,
-                                            patch_offsets,
+                                        output.push(ExprAst::ArrayAddr {
+                                            array,
+                                            index: Box::new(index),
                                         });
 
                                         i = close_pos;
@@ -676,10 +630,11 @@ impl<'a> ExprCompiler<'a> {
                             reason: "missing index expression in []",
                         });
                     }
-                    // Emit TUPLE_GET: stack is [..., <tuple>, <index>] → element value.
-                    output.push(ExprAst::LegacyCode {
-                        cells: vec![Cell::Xt(require_xt(self.vm, "TUPLE_GET")?)],
-                        patch_offsets: Vec::new(),
+                    let index = pop_ast_operand(&mut output)?;
+                    let base = pop_ast_operand(&mut output)?;
+                    output.push(ExprAst::TupleGet {
+                        base: Box::new(base),
+                        index: Box::new(index),
                     });
                     prev_was_operand = true;
                 }
@@ -755,51 +710,19 @@ impl<'a> ExprCompiler<'a> {
                             let (index_toks, close_pos) =
                                 parse_at_index_tokens(tokens, lbracket_pos)?;
 
-                            // Emit: load the array handle (local or global).
-                            let mut legacy = Vec::new();
-                            if let Some(local_idx) =
-                                self.local_table.and_then(|lt| lt.get(&name)).copied()
-                            {
-                                // Local array binding: load the Cell::Array handle from
-                                // the local slot via LIT StackAddr(idx) FETCH.
-                                emit_local_read(&mut legacy, local_idx, self.vm)?;
-                            } else {
-                                // Global array binding: look up by bare name `A`.
-                                let xt = self
-                                    .vm
-                                    .lookup_including_self(&name, self.self_word.as_deref())
-                                    .ok_or_else(|| TbxError::UndefinedSymbol {
-                                        name: name.clone(),
-                                    })?;
-                                match &self.vm.headers[xt.index()].kind {
-                                    EntryKind::Variable(addr) => {
-                                        emit_var_read(&mut legacy, *addr, self.vm)?;
-                                    }
-                                    _ => {
-                                        return Err(TbxError::TypeError {
-                                            expected: "array variable for @-sigil access",
-                                            got: "non-variable",
-                                        });
-                                    }
-                                }
+                            let array = self.resolve_array_designator(
+                                &name,
+                                "array variable for @-sigil access",
+                            )?;
+                            let (index, index_patch_offsets) = self.compile_expr_ast(index_toks)?;
+                            if !index_patch_offsets.is_empty() {
+                                return Err(TbxError::InvalidExpression {
+                                    reason: "unexpected patch offsets in array index AST",
+                                });
                             }
-
-                            // Emit: compile the index expression.
-                            let (index_cells, index_patch_offsets) =
-                                self.compile_expr_internal(index_toks)?;
-                            let base = legacy.len();
-                            legacy.extend(index_cells);
-                            let patch_offsets = index_patch_offsets
-                                .into_iter()
-                                .map(|offset| base + offset)
-                                .collect();
-
-                            // Emit: ARRAY_GET (hidden system helper) — pops (Array, index) and pushes element.
-                            let array_get_xt = require_hidden_system_xt(self.vm, "ARRAY_GET")?;
-                            legacy.push(Cell::Xt(array_get_xt));
-                            output.push(ExprAst::LegacyCode {
-                                cells: legacy,
-                                patch_offsets,
+                            output.push(ExprAst::ArrayGet {
+                                array,
+                                index: Box::new(index),
                             });
 
                             // Advance past `@`, Ident, `[`, <index_toks>, `]`.
@@ -840,19 +763,47 @@ impl<'a> ExprCompiler<'a> {
             emit_op_item(&op, &mut output, self.vm)?;
         }
 
-        let mut cells = Vec::new();
-        let mut patch_offsets = Vec::new();
-        for expr in &output {
-            emit_expr_ast(
-                expr,
-                &mut cells,
-                &mut patch_offsets,
-                self.vm,
-                self.self_hdr_idx,
-            )?;
+        Ok((output, Vec::new()))
+    }
+
+    fn compile_expr_ast(
+        &mut self,
+        tokens: &[SpannedToken],
+    ) -> Result<(ExprAst, Vec<usize>), TbxError> {
+        let (mut output, patch_offsets) = self.parse_expr_output(tokens)?;
+        let ast = output.pop().ok_or(TbxError::InvalidExpression {
+            reason: "missing operand in expression",
+        })?;
+        if !output.is_empty() {
+            return Err(TbxError::InvalidExpression {
+                reason: "expression did not reduce to a single AST node",
+            });
+        }
+        Ok((ast, patch_offsets))
+    }
+
+    fn resolve_array_designator(
+        &self,
+        name: &str,
+        expected: &'static str,
+    ) -> Result<ast::ArrayDesignator, TbxError> {
+        if let Some(local_idx) = self.local_table.and_then(|lt| lt.get(name)).copied() {
+            return Ok(ast::ArrayDesignator::Local { index: local_idx });
         }
 
-        Ok((cells, patch_offsets))
+        let xt = self
+            .vm
+            .lookup_including_self(name, self.self_word.as_deref())
+            .ok_or_else(|| TbxError::UndefinedSymbol {
+                name: name.to_string(),
+            })?;
+        match &self.vm.headers[xt.index()].kind {
+            EntryKind::Variable(addr) => Ok(ast::ArrayDesignator::Global { addr: *addr }),
+            _ => Err(TbxError::TypeError {
+                expected,
+                got: "non-variable",
+            }),
+        }
     }
 }
 
@@ -1221,6 +1172,29 @@ fn emit_expr_ast(
             emit_call_by_kind(output, *xt, args.len(), vm, self_hdr_idx, patch_offsets)?;
             Ok(())
         }
+        ExprAst::TupleGet { base, index } => {
+            emit_expr_ast(base, output, patch_offsets, vm, self_hdr_idx)?;
+            emit_expr_ast(index, output, patch_offsets, vm, self_hdr_idx)?;
+            output.push(Cell::Xt(require_xt(vm, "TUPLE_GET")?));
+            Ok(())
+        }
+        ExprAst::ArrayGet { array, index } => {
+            emit_array_designator_read(array, output, vm)?;
+            emit_expr_ast(index, output, patch_offsets, vm, self_hdr_idx)?;
+            output.push(Cell::Xt(require_hidden_system_xt(vm, "ARRAY_GET")?));
+            Ok(())
+        }
+        ExprAst::ArrayAddr { array, index } => {
+            emit_array_designator_read(array, output, vm)?;
+            emit_expr_ast(index, output, patch_offsets, vm, self_hdr_idx)?;
+            output.push(Cell::Xt(require_hidden_system_xt(vm, "ARRAY_ADDR")?));
+            Ok(())
+        }
+        ExprAst::ArrayLen { array } => {
+            emit_array_designator_read(array, output, vm)?;
+            output.push(Cell::Xt(require_hidden_system_xt(vm, "ARRAY_LEN")?));
+            Ok(())
+        }
         ExprAst::LegacyCode {
             cells,
             patch_offsets: local_patch_offsets,
@@ -1230,9 +1204,17 @@ fn emit_expr_ast(
             patch_offsets.extend(local_patch_offsets.iter().map(|offset| base + offset));
             Ok(())
         }
-        _ => Err(TbxError::InvalidExpression {
-            reason: "unsupported AST node in expression codegen",
-        }),
+    }
+}
+
+fn emit_array_designator_read(
+    array: &ast::ArrayDesignator,
+    output: &mut Vec<Cell>,
+    vm: &VM,
+) -> Result<(), TbxError> {
+    match array {
+        ast::ArrayDesignator::Local { index } => emit_local_read(output, *index, vm),
+        ast::ArrayDesignator::Global { addr } => emit_var_read(output, *addr, vm),
     }
 }
 
@@ -2073,6 +2055,32 @@ mod tests {
     }
 
     #[test]
+    fn test_bracket_index_builds_tuple_get_ast() {
+        let mut vm = make_vm();
+        vm.register(WordEntry::new_word("T", 0));
+
+        let tokens = lex("T[1 + 2]");
+        let (ast, patch_offsets) = ExprCompiler::new(&mut vm)
+            .compile_expr_ast(&tokens)
+            .unwrap();
+        assert!(patch_offsets.is_empty());
+
+        match ast {
+            ExprAst::TupleGet { base, index } => {
+                assert!(matches!(*base, ExprAst::Invoke { .. }));
+                assert!(matches!(
+                    *index,
+                    ExprAst::Binary {
+                        op: BinaryOp::Add,
+                        ..
+                    }
+                ));
+            }
+            other => panic!("expected TupleGet AST, got: {other:?}"),
+        }
+    }
+
+    #[test]
     fn test_isolated_rbracket_error() {
         // A lone `]` with no matching `[` must produce an unmatched ']' error.
         let mut vm = make_vm();
@@ -2233,6 +2241,36 @@ mod tests {
                 Cell::Xt(array_get_xt),
             ]
         );
+    }
+
+    #[test]
+    fn test_at_array_element_read_builds_array_get_ast() {
+        let mut vm = make_vm();
+        vm.dict_write(Cell::Int(0)).unwrap();
+        vm.register(crate::dict::WordEntry::new_variable("A", 0));
+
+        let tokens = lex("@A[I + 1]");
+        vm.dict_write(Cell::Int(0)).unwrap();
+        vm.register(crate::dict::WordEntry::new_variable("I", 1));
+
+        let (ast, patch_offsets) = ExprCompiler::new(&mut vm)
+            .compile_expr_ast(&tokens)
+            .unwrap();
+        assert!(patch_offsets.is_empty());
+
+        match ast {
+            ExprAst::ArrayGet { array, index } => {
+                assert_eq!(array, ast::ArrayDesignator::Global { addr: 0 });
+                assert!(matches!(
+                    *index,
+                    ExprAst::Binary {
+                        op: BinaryOp::Add,
+                        ..
+                    }
+                ));
+            }
+            other => panic!("expected ArrayGet AST, got: {other:?}"),
+        }
     }
 
     /// `@A` without a following `[` must produce a clear syntax error.
@@ -2453,6 +2491,29 @@ mod tests {
         );
     }
 
+    #[test]
+    fn test_ampersand_at_builds_array_addr_ast() {
+        let mut vm = make_vm();
+        let mut local_table = HashMap::new();
+        local_table.insert("A".to_string(), 0usize);
+        local_table.insert("I".to_string(), 1usize);
+
+        let tokens = lex("&@A[I]");
+        let (ast, patch_offsets) =
+            ExprCompiler::with_context(&mut vm, Some(&local_table), None, None)
+                .compile_expr_ast(&tokens)
+                .unwrap();
+        assert!(patch_offsets.is_empty());
+
+        match ast {
+            ExprAst::ArrayAddr { array, index } => {
+                assert_eq!(array, ast::ArrayDesignator::Local { index: 0 });
+                assert!(matches!(*index, ExprAst::LocalRead { index: 1 }));
+            }
+            other => panic!("expected ArrayAddr AST, got: {other:?}"),
+        }
+    }
+
     /// `&@A` (missing `[`) must produce a clear syntax error.
     #[test]
     fn test_ampersand_at_missing_bracket_is_error() {
@@ -2578,6 +2639,26 @@ mod tests {
                 Cell::Xt(array_len_xt),
             ]
         );
+    }
+
+    #[test]
+    fn test_array_len_builds_array_len_ast() {
+        let mut vm = make_vm();
+        vm.dict_write(Cell::Int(0)).unwrap();
+        vm.register(crate::dict::WordEntry::new_variable("A", 0));
+
+        let tokens = lex("ARRAY_LEN(@A)");
+        let (ast, patch_offsets) = ExprCompiler::new(&mut vm)
+            .compile_expr_ast(&tokens)
+            .unwrap();
+        assert!(patch_offsets.is_empty());
+
+        match ast {
+            ExprAst::ArrayLen { array } => {
+                assert_eq!(array, ast::ArrayDesignator::Global { addr: 0 });
+            }
+            other => panic!("expected ArrayLen AST, got: {other:?}"),
+        }
     }
 
     /// `ARRAY_LEN(A)` — bare variable without `@` must be rejected.
