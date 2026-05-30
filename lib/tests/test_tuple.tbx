@@ -35,11 +35,10 @@ ASSERT TUPLE_SINGLE() = 1
 ASSERT_OUTPUT "(42)"
 
 # --- TUPLE: mixed types (Str, Int, Bool) ---
-# Use a comparison expression (1 = 1) to produce a Bool(true) value.
 
 DEF TUPLE_MIXED()
   VAR T
-  LET T = TUPLE("tbx", 1, 1 = 1)
+  LET T = TUPLE("tbx", 1, TRUE)
   PUTSTR STR(T)
   RETURN 1
 END

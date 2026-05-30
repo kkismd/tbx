@@ -2037,8 +2037,10 @@ pub fn second_prim(vm: &mut VM) -> Result<(), TbxError> {
     vm.push(Cell::Float(s))
 }
 
-/// Register all stack primitives into the VM's dictionary.
+/// Register all built-in words into the VM's dictionary.
 pub fn register_all(vm: &mut VM) {
+    vm.register(WordEntry::new_constant("TRUE", Cell::Bool(true)));
+    vm.register(WordEntry::new_constant("FALSE", Cell::Bool(false)));
     vm.register(WordEntry::new_primitive("DROP", drop_prim));
     vm.register(WordEntry::new_primitive("DUP", dup_prim));
     vm.register(WordEntry::new_primitive("SWAP", swap_prim));

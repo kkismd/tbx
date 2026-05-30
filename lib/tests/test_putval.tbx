@@ -17,14 +17,13 @@ PUTVAL 1.0
 ASSERT_OUTPUT "1.0"
 
 # --- PUTVAL with Bool TRUE ---
-# Use a comparison expression to produce a Bool value.
 
-PUTVAL 1 = 1
+PUTVAL TRUE
 ASSERT_OUTPUT "TRUE"
 
 # --- PUTVAL with Bool FALSE ---
 
-PUTVAL 1 = 2
+PUTVAL FALSE
 ASSERT_OUTPUT "FALSE"
 
 # --- PUTVAL with Str ---
