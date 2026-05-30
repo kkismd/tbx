@@ -11,6 +11,101 @@ use crate::dict::{EntryKind, FLAG_IMMEDIATE};
 use crate::error::TbxError;
 use crate::lexer::{SpannedToken, Token};
 use crate::vm::VM;
+use ast::{BinaryOp, ExprAst, UnaryOp};
+
+#[allow(dead_code)]
+mod ast {
+    use crate::cell::{Cell, Xt};
+
+    #[derive(Debug, Clone)]
+    pub(super) enum ExprAst {
+        Literal(Cell),
+        LocalRead {
+            index: usize,
+        },
+        GlobalRead {
+            addr: usize,
+        },
+        AddressOfLocal {
+            index: usize,
+        },
+        AddressOfGlobal {
+            addr: usize,
+        },
+        Invoke {
+            xt: Xt,
+            args: Vec<ExprAst>,
+        },
+        Unary {
+            op: UnaryOp,
+            expr: Box<ExprAst>,
+        },
+        Binary {
+            op: BinaryOp,
+            lhs: Box<ExprAst>,
+            rhs: Box<ExprAst>,
+        },
+        Comma {
+            lhs: Box<ExprAst>,
+            rhs: Box<ExprAst>,
+        },
+        TupleGet {
+            base: Box<ExprAst>,
+            index: Box<ExprAst>,
+        },
+        ArrayGet {
+            array: ArrayDesignator,
+            index: Box<ExprAst>,
+        },
+        ArrayGet2D {
+            array: ArrayDesignator,
+            x: Box<ExprAst>,
+            y: Box<ExprAst>,
+        },
+        ArrayAddr {
+            array: ArrayDesignator,
+            index: Box<ExprAst>,
+        },
+        ArrayAddr2D {
+            array: ArrayDesignator,
+            x: Box<ExprAst>,
+            y: Box<ExprAst>,
+        },
+        ArrayLen {
+            array: ArrayDesignator,
+        },
+    }
+
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub(super) enum BinaryOp {
+        Add,
+        Sub,
+        Mul,
+        Div,
+        Mod,
+        Lt,
+        Gt,
+        Le,
+        Ge,
+        Eq,
+        Neq,
+        BitAnd,
+        BitOr,
+        And,
+        Or,
+    }
+
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub(super) enum UnaryOp {
+        Neg,
+    }
+
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub(super) enum ArrayDesignator {
+        Local { index: usize },
+        Global { addr: usize },
+    }
+}
 
 // ---------------------------------------------------------------------------
 // Operator stack item
@@ -19,13 +114,17 @@ use crate::vm::VM;
 /// An item held on the operator stack during Shunting-Yard processing.
 #[derive(Debug)]
 enum OpItem {
-    /// Binary operator with its primitive name and precedence (1=highest, 11=lowest).
-    BinOp { prim: &'static str, prec: u8 },
+    /// Binary operator with its semantic kind and precedence (1=highest, 11=lowest).
+    BinOp {
+        op: BinaryOp,
+        prec: u8,
+        left_assoc: bool,
+    },
     /// Unary prefix negation (`-`). Right-associative with precedence 1 (highest).
     UnaryNeg,
     /// Left-parenthesis sentinel. Carries optional call metadata.
     ///
-    /// `call` is `Some(LParenCall::Function(xt, arity))` for a function call,
+    /// `call` is `Some(LParenCall::Invoke(xt, arity))` for an invoke form,
     /// and `None` for a plain grouping parenthesis.
     LParen { call: Option<LParenCall> },
     /// Comma-as-binary-operator used outside of function calls (precedence 11).
@@ -35,11 +134,11 @@ enum OpItem {
     LBracket,
 }
 
-/// Metadata attached to a `LParen` operator-stack item to distinguish call types.
+/// Metadata attached to a `LParen` operator-stack item to distinguish invoke forms.
 #[derive(Debug)]
 enum LParenCall {
-    /// Function call: execution token and current argument arity count.
-    Function(Xt, usize),
+    /// Invoke form: execution token and current argument arity count.
+    Invoke(Xt, usize),
 }
 
 // ---------------------------------------------------------------------------
@@ -68,17 +167,27 @@ pub struct ExprCompiler<'a> {
     /// The caller must translate these to absolute dictionary positions and add them to
     /// `CompileState::call_patch_list` after writing the cells to the dictionary.
     pub(crate) patch_offsets: Vec<usize>,
+    /// Dictionary position where the returned cell sequence will be placed.
+    output_base_dp: usize,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct ExprJumpPatch {
+    operand_offset: usize,
+    target_offset: usize,
 }
 
 impl<'a> ExprCompiler<'a> {
     /// Create an `ExprCompiler` backed by the given VM (no local variable table).
     pub fn new(vm: &'a mut VM) -> Self {
+        let output_base_dp = vm.dp;
         Self {
             vm,
             local_table: None,
             self_word: None,
             self_hdr_idx: None,
             patch_offsets: Vec::new(),
+            output_base_dp,
         }
     }
 
@@ -95,13 +204,20 @@ impl<'a> ExprCompiler<'a> {
         self_word: Option<String>,
         self_hdr_idx: Option<usize>,
     ) -> Self {
+        let output_base_dp = vm.dp;
         Self {
             vm,
             local_table,
             self_word,
             self_hdr_idx,
             patch_offsets: Vec::new(),
+            output_base_dp,
         }
+    }
+
+    pub(crate) fn with_output_base_dp(mut self, output_base_dp: usize) -> Self {
+        self.output_base_dp = output_base_dp;
+        self
     }
 
     /// Parse `tokens` and return the corresponding RPN instruction sequence.
@@ -114,7 +230,33 @@ impl<'a> ExprCompiler<'a> {
     /// Returns `TbxError::UndefinedSymbol` if an identifier cannot be resolved.
     /// Returns `TbxError::TypeError` for operand/operator type mismatches.
     pub fn compile_expr(&mut self, tokens: &[SpannedToken]) -> Result<Vec<Cell>, TbxError> {
-        let mut output: Vec<Cell> = Vec::new();
+        if tokens.is_empty() {
+            self.patch_offsets.clear();
+            return Ok(Vec::new());
+        }
+        let ast = self.parse_expr_ast(tokens)?;
+        self.emit_expr_ast(&ast)
+    }
+
+    fn emit_expr_ast(&mut self, ast: &ExprAst) -> Result<Vec<Cell>, TbxError> {
+        let mut cells = Vec::new();
+        let mut patch_offsets = Vec::new();
+        let mut jump_patches = Vec::new();
+        append_expr_ast_cells(
+            ast,
+            &mut cells,
+            &mut patch_offsets,
+            &mut jump_patches,
+            self.vm,
+            self.self_hdr_idx,
+        )?;
+        self.patch_offsets = patch_offsets;
+        relocate_expr_jumps(&mut cells, &jump_patches, self.output_base_dp);
+        Ok(cells)
+    }
+
+    fn parse_expr_output(&mut self, tokens: &[SpannedToken]) -> Result<Vec<ExprAst>, TbxError> {
+        let mut output: Vec<ExprAst> = Vec::new();
         let mut op_stack: Vec<OpItem> = Vec::new();
         // True when the previous significant token produced a value on the
         // conceptual stack (literal, closing paren, resolved identifier).
@@ -130,12 +272,12 @@ impl<'a> ExprCompiler<'a> {
                 // Literals
                 // -------------------------------------------------------
                 Token::IntLit(n) => {
-                    emit_lit(&mut output, Cell::Int(n), self.vm)?;
+                    output.push(ExprAst::Literal(Cell::Int(n)));
                     prev_was_operand = true;
                 }
 
                 Token::FloatLit(f) => {
-                    emit_lit(&mut output, Cell::Float(f), self.vm)?;
+                    output.push(ExprAst::Literal(Cell::Float(f)));
                     prev_was_operand = true;
                 }
 
@@ -145,7 +287,7 @@ impl<'a> ExprCompiler<'a> {
                     if s.len() > u16::MAX as usize {
                         return Err(TbxError::StringTooLong { len: s.len() });
                     }
-                    emit_lit(&mut output, Cell::string(s), self.vm)?;
+                    output.push(ExprAst::Literal(Cell::string(s)));
                     prev_was_operand = true;
                 }
 
@@ -157,7 +299,7 @@ impl<'a> ExprCompiler<'a> {
                     // Check local variable table first — locals shadow globals.
                     if let Some(local_idx) = self.local_table.and_then(|lt| lt.get(&name)).copied()
                     {
-                        emit_local_read(&mut output, local_idx, self.vm)?;
+                        output.push(ExprAst::LocalRead { index: local_idx });
                         prev_was_operand = true;
                         i += 1;
                         continue;
@@ -210,38 +352,11 @@ impl<'a> ExprCompiler<'a> {
                                         }
                                     }
 
-                                    // Emit the array handle read (local or global).
-                                    if let Some(local_idx) =
-                                        self.local_table.and_then(|lt| lt.get(&array_name)).copied()
-                                    {
-                                        emit_local_read(&mut output, local_idx, self.vm)?;
-                                    } else {
-                                        let arr_xt = self
-                                            .vm
-                                            .lookup_including_self(
-                                                &array_name,
-                                                self.self_word.as_deref(),
-                                            )
-                                            .ok_or_else(|| TbxError::UndefinedSymbol {
-                                                name: array_name.clone(),
-                                            })?;
-                                        match &self.vm.headers[arr_xt.index()].kind {
-                                            EntryKind::Variable(addr) => {
-                                                emit_var_read(&mut output, *addr, self.vm)?;
-                                            }
-                                            _ => {
-                                                return Err(TbxError::TypeError {
-                                                    expected: "array variable for ARRAY_LEN(@A)",
-                                                    got: "non-variable",
-                                                });
-                                            }
-                                        }
-                                    }
-
-                                    // Emit ARRAY_LEN (hidden system helper).
-                                    let array_len_xt =
-                                        require_hidden_system_xt(self.vm, "ARRAY_LEN")?;
-                                    output.push(Cell::Xt(array_len_xt));
+                                    let array = self.resolve_array_designator(
+                                        &array_name,
+                                        "array variable for ARRAY_LEN(@A)",
+                                    )?;
+                                    output.push(ExprAst::ArrayLen { array });
 
                                     // Advance past `(`, `@`, Ident, `)` (4 tokens beyond i).
                                     i += 4;
@@ -276,7 +391,7 @@ impl<'a> ExprCompiler<'a> {
                         });
                     }
 
-                    // Peek ahead: is this a function call (`F(`)?
+                    // Peek ahead: is this an invoke form (`F(`)?
                     let next_is_lparen = tokens
                         .get(i + 1)
                         .map(|st| matches!(st.token, Token::LParen))
@@ -290,42 +405,32 @@ impl<'a> ExprCompiler<'a> {
                             .unwrap_or(false);
 
                         if next_is_rparen {
-                            // Zero-argument call: emit based on entry kind.
-                            emit_call_by_kind(
-                                &mut output,
+                            output.push(ExprAst::Invoke {
                                 xt,
-                                0,
-                                self.vm,
-                                self.self_hdr_idx,
-                                &mut self.patch_offsets,
-                            )?;
+                                args: Vec::new(),
+                            });
                             i += 2; // skip '(' and ')'
                             prev_was_operand = true;
                         } else {
-                            // Function call with arguments: open a function-call
+                            // Invoke form with arguments: open a function-call
                             // paren frame with initial arity = 1.
                             op_stack.push(OpItem::LParen {
-                                call: Some(LParenCall::Function(xt, 1)),
+                                call: Some(LParenCall::Invoke(xt, 1)),
                             });
                             i += 1; // consume '('
                             prev_was_operand = false;
                         }
                     } else {
-                        // Variable read or nullary call (no parentheses).
+                        // Variable read or nullary invoke (no parentheses).
                         match &self.vm.headers[xt.index()].kind {
                             EntryKind::Variable(addr) => {
-                                emit_var_read(&mut output, *addr, self.vm)?;
+                                output.push(ExprAst::GlobalRead { addr: *addr });
                             }
                             _ => {
-                                // Treat as a nullary call: emit based on entry kind.
-                                emit_call_by_kind(
-                                    &mut output,
+                                output.push(ExprAst::Invoke {
                                     xt,
-                                    0,
-                                    self.vm,
-                                    self.self_hdr_idx,
-                                    &mut self.patch_offsets,
-                                )?;
+                                    args: Vec::new(),
+                                });
                             }
                         }
                         prev_was_operand = true;
@@ -337,12 +442,7 @@ impl<'a> ExprCompiler<'a> {
                 // -------------------------------------------------------
                 Token::Ampersand => {
                     if prev_was_operand {
-                        // Binary bitwise-AND (precedence 6, left-associative).
-                        pop_ops_while(&mut op_stack, &mut output, self.vm, 6, true)?;
-                        op_stack.push(OpItem::BinOp {
-                            prim: "BAND",
-                            prec: 6,
-                        });
+                        push_binary_op("&", &mut op_stack, &mut output, self.vm)?;
                         prev_was_operand = false;
                     } else {
                         // Unary address-of operator: eagerly consume the next identifier
@@ -356,10 +456,7 @@ impl<'a> ExprCompiler<'a> {
                                 if let Some(local_idx) =
                                     self.local_table.and_then(|lt| lt.get(&name)).copied()
                                 {
-                                    // Simple local variable address: &A (StackAddr).
-                                    let xt_lit = require_xt(self.vm, "LIT")?;
-                                    output.push(Cell::Xt(xt_lit));
-                                    output.push(Cell::StackAddr(local_idx));
+                                    output.push(ExprAst::AddressOfLocal { index: local_idx });
                                 } else {
                                     let xt = self
                                         .vm
@@ -369,10 +466,7 @@ impl<'a> ExprCompiler<'a> {
                                         })?;
                                     match &self.vm.headers[xt.index()].kind {
                                         EntryKind::Variable(addr) => {
-                                            // Emit address only — no FETCH.
-                                            let xt_lit = require_xt(self.vm, "LIT")?;
-                                            output.push(Cell::Xt(xt_lit));
-                                            output.push(Cell::DictAddr(*addr));
+                                            output.push(ExprAst::AddressOfGlobal { addr: *addr });
                                         }
                                         _ => {
                                             return Err(TbxError::TypeError {
@@ -405,43 +499,13 @@ impl<'a> ExprCompiler<'a> {
                                         let (index_toks, close_pos) =
                                             parse_at_index_tokens(tokens, lbracket_pos)?;
 
-                                        // Load the array handle (local or global).
-                                        if let Some(local_idx) = self
-                                            .local_table
-                                            .and_then(|lt| lt.get(&array_name))
-                                            .copied()
-                                        {
-                                            emit_local_read(&mut output, local_idx, self.vm)?;
-                                        } else {
-                                            let xt = self
-                                                .vm
-                                                .lookup_including_self(
-                                                    &array_name,
-                                                    self.self_word.as_deref(),
-                                                )
-                                                .ok_or_else(|| TbxError::UndefinedSymbol {
-                                                    name: array_name.clone(),
-                                                })?;
-                                            match &self.vm.headers[xt.index()].kind {
-                                                EntryKind::Variable(addr) => {
-                                                    emit_var_read(&mut output, *addr, self.vm)?;
-                                                }
-                                                _ => {
-                                                    return Err(TbxError::TypeError {
-                                                        expected:
-                                                            "array variable for &@-sigil address",
-                                                        got: "non-variable",
-                                                    });
-                                                }
-                                            }
-                                        }
-
-                                        // Dispatch on 1D vs 2D based on whether
-                                        // the bracket content contains a top-level comma.
+                                        let array = self.resolve_array_designator(
+                                            &array_name,
+                                            "array variable for &@-sigil address",
+                                        )?;
                                         if let Some((x_toks, y_toks)) =
                                             split_at_top_level_comma(index_toks)?
                                         {
-                                            // 2D address access: &@A[x, y]
                                             if x_toks.is_empty() {
                                                 return Err(TbxError::InvalidExpression {
                                                     reason: "missing x expression in &@A[x, y]",
@@ -452,23 +516,19 @@ impl<'a> ExprCompiler<'a> {
                                                     reason: "missing y expression in &@A[x, y]",
                                                 });
                                             }
-                                            let x_cells = self.compile_expr(x_toks)?;
-                                            output.extend(x_cells);
-                                            let y_cells = self.compile_expr(y_toks)?;
-                                            output.extend(y_cells);
-                                            // Emit ARRAY_ADDR_2D (hidden system helper).
-                                            let array_addr_2d_xt =
-                                                require_hidden_system_xt(self.vm, "ARRAY_ADDR_2D")?;
-                                            output.push(Cell::Xt(array_addr_2d_xt));
+                                            let x = self.parse_expr_ast(x_toks)?;
+                                            let y = self.parse_expr_ast(y_toks)?;
+                                            output.push(ExprAst::ArrayAddr2D {
+                                                array,
+                                                x: Box::new(x),
+                                                y: Box::new(y),
+                                            });
                                         } else {
-                                            // 1D address access: &@A[i]
-                                            // Compile the index expression.
-                                            let index_cells = self.compile_expr(index_toks)?;
-                                            output.extend(index_cells);
-                                            // Emit ARRAY_ADDR (hidden system helper).
-                                            let array_addr_xt =
-                                                require_hidden_system_xt(self.vm, "ARRAY_ADDR")?;
-                                            output.push(Cell::Xt(array_addr_xt));
+                                            let index = self.parse_expr_ast(index_toks)?;
+                                            output.push(ExprAst::ArrayAddr {
+                                                array,
+                                                index: Box::new(index),
+                                            });
                                         }
 
                                         i = close_pos;
@@ -498,12 +558,7 @@ impl<'a> ExprCompiler<'a> {
                     match s.as_str() {
                         "-" => {
                             if prev_was_operand {
-                                // Binary subtraction (precedence 3, left-associative).
-                                pop_ops_while(&mut op_stack, &mut output, self.vm, 3, true)?;
-                                op_stack.push(OpItem::BinOp {
-                                    prim: "SUB",
-                                    prec: 3,
-                                });
+                                push_binary_op("-", &mut op_stack, &mut output, self.vm)?;
                                 prev_was_operand = false;
                             } else {
                                 // Unary negation (precedence 1, right-associative).
@@ -513,9 +568,8 @@ impl<'a> ExprCompiler<'a> {
                             }
                         }
                         other => {
-                            if let Some((prim, prec, left)) = binary_op_info(other) {
-                                pop_ops_while(&mut op_stack, &mut output, self.vm, prec, left)?;
-                                op_stack.push(OpItem::BinOp { prim, prec });
+                            if binary_op_info(other).is_some() {
+                                push_binary_op(other, &mut op_stack, &mut output, self.vm)?;
                                 prev_was_operand = false;
                             } else {
                                 return Err(TbxError::InvalidExpression {
@@ -555,21 +609,15 @@ impl<'a> ExprCompiler<'a> {
                     // Pop the LParen and dispatch based on the call kind.
                     match op_stack.pop() {
                         Some(OpItem::LParen {
-                            call: Some(LParenCall::Function(xt, arity)),
+                            call: Some(LParenCall::Invoke(xt, arity)),
                         }) => {
                             if !prev_was_operand && arity > 0 {
                                 return Err(TbxError::InvalidExpression {
                                     reason: "trailing comma in function call argument list",
                                 });
                             }
-                            emit_call_by_kind(
-                                &mut output,
-                                xt,
-                                arity,
-                                self.vm,
-                                self.self_hdr_idx,
-                                &mut self.patch_offsets,
-                            )?;
+                            let args = pop_invoke_args(&mut output, arity)?;
+                            output.push(ExprAst::Invoke { xt, args });
                         }
                         _ => {
                             // Plain grouping paren — nothing extra to emit.
@@ -617,9 +665,12 @@ impl<'a> ExprCompiler<'a> {
                             reason: "missing index expression in []",
                         });
                     }
-                    // Emit TUPLE_GET: stack is [..., <tuple>, <index>] → element value.
-                    let tuple_get_xt = require_xt(self.vm, "TUPLE_GET")?;
-                    output.push(Cell::Xt(tuple_get_xt));
+                    let index = pop_ast_operand(&mut output)?;
+                    let base = pop_ast_operand(&mut output)?;
+                    output.push(ExprAst::TupleGet {
+                        base: Box::new(base),
+                        index: Box::new(index),
+                    });
                     prev_was_operand = true;
                 }
 
@@ -637,7 +688,7 @@ impl<'a> ExprCompiler<'a> {
                     let in_func_call = matches!(
                         nearest_lparen,
                         Some(OpItem::LParen {
-                            call: Some(LParenCall::Function(..))
+                            call: Some(LParenCall::Invoke(..))
                         })
                     );
 
@@ -654,7 +705,7 @@ impl<'a> ExprCompiler<'a> {
                         }
                         // Increment the arity counter in the enclosing LParen frame.
                         if let Some(OpItem::LParen {
-                            call: Some(LParenCall::Function(_, arity)),
+                            call: Some(LParenCall::Invoke(_, arity)),
                         }) = op_stack.last_mut()
                         {
                             *arity += 1;
@@ -694,39 +745,11 @@ impl<'a> ExprCompiler<'a> {
                             let (index_toks, close_pos) =
                                 parse_at_index_tokens(tokens, lbracket_pos)?;
 
-                            // Emit: load the array handle (local or global).
-                            if let Some(local_idx) =
-                                self.local_table.and_then(|lt| lt.get(&name)).copied()
-                            {
-                                // Local array binding: load the Cell::Array handle from
-                                // the local slot via LIT StackAddr(idx) FETCH.
-                                emit_local_read(&mut output, local_idx, self.vm)?;
-                            } else {
-                                // Global array binding: look up by bare name `A`.
-                                let xt = self
-                                    .vm
-                                    .lookup_including_self(&name, self.self_word.as_deref())
-                                    .ok_or_else(|| TbxError::UndefinedSymbol {
-                                        name: name.clone(),
-                                    })?;
-                                match &self.vm.headers[xt.index()].kind {
-                                    EntryKind::Variable(addr) => {
-                                        emit_var_read(&mut output, *addr, self.vm)?;
-                                    }
-                                    _ => {
-                                        return Err(TbxError::TypeError {
-                                            expected: "array variable for @-sigil access",
-                                            got: "non-variable",
-                                        });
-                                    }
-                                }
-                            }
-
-                            // Dispatch on 1D vs 2D based on whether the bracket content
-                            // contains a top-level comma.
+                            let array = self.resolve_array_designator(
+                                &name,
+                                "array variable for @-sigil access",
+                            )?;
                             if let Some((x_toks, y_toks)) = split_at_top_level_comma(index_toks)? {
-                                // 2D access: @A[x, y]
-                                // Compile x and y expressions separately.
                                 if x_toks.is_empty() {
                                     return Err(TbxError::InvalidExpression {
                                         reason: "missing x expression in @A[x, y]",
@@ -737,21 +760,19 @@ impl<'a> ExprCompiler<'a> {
                                         reason: "missing y expression in @A[x, y]",
                                     });
                                 }
-                                let x_cells = self.compile_expr(x_toks)?;
-                                output.extend(x_cells);
-                                let y_cells = self.compile_expr(y_toks)?;
-                                output.extend(y_cells);
-                                // Emit: ARRAY_GET_2D (hidden system helper).
-                                let array_get_2d_xt =
-                                    require_hidden_system_xt(self.vm, "ARRAY_GET_2D")?;
-                                output.push(Cell::Xt(array_get_2d_xt));
+                                let x = self.parse_expr_ast(x_toks)?;
+                                let y = self.parse_expr_ast(y_toks)?;
+                                output.push(ExprAst::ArrayGet2D {
+                                    array,
+                                    x: Box::new(x),
+                                    y: Box::new(y),
+                                });
                             } else {
-                                // 1D access: @A[i]
-                                let index_cells = self.compile_expr(index_toks)?;
-                                output.extend(index_cells);
-                                // Emit: ARRAY_GET (hidden system helper).
-                                let array_get_xt = require_hidden_system_xt(self.vm, "ARRAY_GET")?;
-                                output.push(Cell::Xt(array_get_xt));
+                                let index = self.parse_expr_ast(index_toks)?;
+                                output.push(ExprAst::ArrayGet {
+                                    array,
+                                    index: Box::new(index),
+                                });
                             }
 
                             // Advance past `@`, Ident, `[`, <index_toks>, `]`.
@@ -793,6 +814,43 @@ impl<'a> ExprCompiler<'a> {
         }
 
         Ok(output)
+    }
+
+    fn parse_expr_ast(&mut self, tokens: &[SpannedToken]) -> Result<ExprAst, TbxError> {
+        let mut output = self.parse_expr_output(tokens)?;
+        let ast = output.pop().ok_or(TbxError::InvalidExpression {
+            reason: "missing operand in expression",
+        })?;
+        if !output.is_empty() {
+            return Err(TbxError::InvalidExpression {
+                reason: "expression did not reduce to a single AST node",
+            });
+        }
+        Ok(ast)
+    }
+
+    fn resolve_array_designator(
+        &self,
+        name: &str,
+        expected: &'static str,
+    ) -> Result<ast::ArrayDesignator, TbxError> {
+        if let Some(local_idx) = self.local_table.and_then(|lt| lt.get(name)).copied() {
+            return Ok(ast::ArrayDesignator::Local { index: local_idx });
+        }
+
+        let xt = self
+            .vm
+            .lookup_including_self(name, self.self_word.as_deref())
+            .ok_or_else(|| TbxError::UndefinedSymbol {
+                name: name.to_string(),
+            })?;
+        match &self.vm.headers[xt.index()].kind {
+            EntryKind::Variable(addr) => Ok(ast::ArrayDesignator::Global { addr: *addr }),
+            _ => Err(TbxError::TypeError {
+                expected,
+                got: "non-variable",
+            }),
+        }
     }
 }
 
@@ -986,7 +1044,7 @@ fn emit_call_by_kind(
 /// Precedence uses the spec's convention: 1 = highest priority, 11 = lowest.
 fn pop_ops_while(
     op_stack: &mut Vec<OpItem>,
-    output: &mut Vec<Cell>,
+    output: &mut Vec<ExprAst>,
     vm: &VM,
     cur_prec: u8,
     cur_left: bool,
@@ -1020,7 +1078,12 @@ fn pop_ops_while(
 /// Return the precedence of an operator stack item (1 = highest, 11 = lowest).
 fn op_prec(op: &OpItem) -> u8 {
     match op {
-        OpItem::BinOp { prec, .. } => *prec,
+        OpItem::BinOp {
+            prec, left_assoc, ..
+        } => {
+            let _ = left_assoc;
+            *prec
+        }
         OpItem::UnaryNeg => 1,
         OpItem::CommaSep => 11,
         OpItem::LParen { .. } => u8::MAX, // sentinel; never compared in practice
@@ -1028,29 +1091,56 @@ fn op_prec(op: &OpItem) -> u8 {
     }
 }
 
-/// Emit the VM instruction(s) for a single operator stack item.
-fn emit_op_item(op: &OpItem, output: &mut Vec<Cell>, vm: &VM) -> Result<(), TbxError> {
+fn push_binary_op(
+    op: &str,
+    op_stack: &mut Vec<OpItem>,
+    output: &mut Vec<ExprAst>,
+    vm: &VM,
+) -> Result<(), TbxError> {
+    let (op, prec, left_assoc) = binary_op_info(op).ok_or(TbxError::InvalidExpression {
+        reason: "unknown operator in expression",
+    })?;
+    pop_ops_while(op_stack, output, vm, prec, left_assoc)?;
+    op_stack.push(OpItem::BinOp {
+        op,
+        prec,
+        left_assoc,
+    });
+    Ok(())
+}
+
+fn reduce_expr_ast(output: &mut Vec<ExprAst>, op: &OpItem) -> Result<(), TbxError> {
     match op {
-        OpItem::BinOp { prim, .. } => {
-            let xt = require_xt(vm, prim)?;
-            output.push(Cell::Xt(xt));
+        OpItem::BinOp { op, .. } => {
+            let rhs = pop_ast_operand(output)?;
+            let lhs = pop_ast_operand(output)?;
+            output.push(ExprAst::Binary {
+                op: *op,
+                lhs: Box::new(lhs),
+                rhs: Box::new(rhs),
+            });
         }
         OpItem::UnaryNeg => {
-            let xt = require_xt(vm, "NEGATE")?;
-            output.push(Cell::Xt(xt));
+            let expr = pop_ast_operand(output)?;
+            output.push(ExprAst::Unary {
+                op: UnaryOp::Neg,
+                expr: Box::new(expr),
+            });
         }
         OpItem::CommaSep => {
-            // Binary comma separator: both sides are already in the output buffer;
-            // no VM instruction is emitted.
+            let rhs = pop_ast_operand(output)?;
+            let lhs = pop_ast_operand(output)?;
+            output.push(ExprAst::Comma {
+                lhs: Box::new(lhs),
+                rhs: Box::new(rhs),
+            });
         }
         OpItem::LParen { .. } => {
-            // A stray LParen surviving to drain means an unmatched '(' — error.
             return Err(TbxError::InvalidExpression {
                 reason: "unmatched '(' in expression",
             });
         }
         OpItem::LBracket => {
-            // A stray LBracket surviving to drain means an unmatched '[' — error.
             return Err(TbxError::InvalidExpression {
                 reason: "unmatched '[' in expression",
             });
@@ -1059,24 +1149,236 @@ fn emit_op_item(op: &OpItem, output: &mut Vec<Cell>, vm: &VM) -> Result<(), TbxE
     Ok(())
 }
 
-/// Map a binary operator string to `(primitive_name, precedence, left_assoc)`.
+/// Build the AST node for a single operator stack item.
+fn emit_op_item(op: &OpItem, output: &mut Vec<ExprAst>, _vm: &VM) -> Result<(), TbxError> {
+    match op {
+        OpItem::BinOp { .. } | OpItem::UnaryNeg | OpItem::CommaSep => reduce_expr_ast(output, op),
+        OpItem::LParen { .. } => {
+            // A stray LParen surviving to drain means an unmatched '(' — error.
+            Err(TbxError::InvalidExpression {
+                reason: "unmatched '(' in expression",
+            })
+        }
+        OpItem::LBracket => {
+            // A stray LBracket surviving to drain means an unmatched '[' — error.
+            Err(TbxError::InvalidExpression {
+                reason: "unmatched '[' in expression",
+            })
+        }
+    }
+}
+
+fn pop_ast_operand(output: &mut Vec<ExprAst>) -> Result<ExprAst, TbxError> {
+    output.pop().ok_or(TbxError::InvalidExpression {
+        reason: "missing operand in expression",
+    })
+}
+
+fn pop_invoke_args(output: &mut Vec<ExprAst>, arity: usize) -> Result<Vec<ExprAst>, TbxError> {
+    let mut args = Vec::with_capacity(arity);
+    for _ in 0..arity {
+        args.push(pop_ast_operand(output)?);
+    }
+    args.reverse();
+    Ok(args)
+}
+
+/// Map a non-short-circuit `BinaryOp` to its eager primitive.
+fn eager_binary_prim(op: BinaryOp) -> &'static str {
+    match op {
+        BinaryOp::Add => "ADD",
+        BinaryOp::Sub => "SUB",
+        BinaryOp::Mul => "MUL",
+        BinaryOp::Div => "DIV",
+        BinaryOp::Mod => "MOD",
+        BinaryOp::Lt => "LT",
+        BinaryOp::Gt => "GT",
+        BinaryOp::Le => "LE",
+        BinaryOp::Ge => "GE",
+        BinaryOp::Eq => "EQ",
+        BinaryOp::Neq => "NEQ",
+        BinaryOp::BitAnd => "BAND",
+        BinaryOp::BitOr => "BOR",
+        BinaryOp::And | BinaryOp::Or => {
+            unreachable!("logical operators use short-circuit codegen")
+        }
+    }
+}
+
+fn append_jump(output: &mut Vec<Cell>, jump_patches: &mut Vec<ExprJumpPatch>, xt: Xt) -> usize {
+    output.push(Cell::Xt(xt));
+    let operand_offset = output.len();
+    output.push(Cell::DictAddr(usize::MAX));
+    jump_patches.push(ExprJumpPatch {
+        operand_offset,
+        target_offset: usize::MAX,
+    });
+    jump_patches.len() - 1
+}
+
+fn patch_jump(jump_patches: &mut [ExprJumpPatch], patch_index: usize, target_offset: usize) {
+    jump_patches[patch_index].target_offset = target_offset;
+}
+
+fn relocate_expr_jumps(cells: &mut [Cell], jump_patches: &[ExprJumpPatch], base_dp: usize) {
+    for patch in jump_patches {
+        cells[patch.operand_offset] = Cell::DictAddr(base_dp + patch.target_offset);
+    }
+}
+
+fn append_expr_ast_cells(
+    expr: &ExprAst,
+    output: &mut Vec<Cell>,
+    patch_offsets: &mut Vec<usize>,
+    jump_patches: &mut Vec<ExprJumpPatch>,
+    vm: &VM,
+    self_hdr_idx: Option<usize>,
+) -> Result<(), TbxError> {
+    match expr {
+        ExprAst::Literal(value) => emit_lit(output, value.clone(), vm),
+        ExprAst::LocalRead { index } => emit_local_read(output, *index, vm),
+        ExprAst::GlobalRead { addr } => emit_var_read(output, *addr, vm),
+        ExprAst::AddressOfLocal { index } => {
+            let xt = require_xt(vm, "LIT")?;
+            output.push(Cell::Xt(xt));
+            output.push(Cell::StackAddr(*index));
+            Ok(())
+        }
+        ExprAst::AddressOfGlobal { addr } => {
+            let xt = require_xt(vm, "LIT")?;
+            output.push(Cell::Xt(xt));
+            output.push(Cell::DictAddr(*addr));
+            Ok(())
+        }
+        ExprAst::Unary { op, expr } => {
+            append_expr_ast_cells(expr, output, patch_offsets, jump_patches, vm, self_hdr_idx)?;
+            match op {
+                UnaryOp::Neg => output.push(Cell::Xt(require_xt(vm, "NEGATE")?)),
+            }
+            Ok(())
+        }
+        ExprAst::Binary { op, lhs, rhs } => {
+            append_expr_ast_cells(lhs, output, patch_offsets, jump_patches, vm, self_hdr_idx)?;
+            let branch_kind = match op {
+                BinaryOp::And => Some((false, Cell::Bool(false))),
+                BinaryOp::Or => Some((true, Cell::Bool(true))),
+                _ => None,
+            };
+            if let Some((branch_on_truthy, short_circuit_value)) = branch_kind {
+                let branch_xt = vm
+                    .find_by_kind(|kind| {
+                        if branch_on_truthy {
+                            matches!(kind, EntryKind::BranchIfTrue)
+                        } else {
+                            matches!(kind, EntryKind::BranchIfFalse)
+                        }
+                    })
+                    .ok_or(TbxError::TypeError {
+                        expected: "runtime branch instruction to be registered",
+                        got: "not found",
+                    })?;
+                let short_circuit_patch = append_jump(output, jump_patches, branch_xt);
+                append_expr_ast_cells(rhs, output, patch_offsets, jump_patches, vm, self_hdr_idx)?;
+                output.push(Cell::Xt(require_hidden_system_xt(vm, "TO_BOOL")?));
+                let goto_xt = vm
+                    .find_by_kind(|kind| matches!(kind, EntryKind::Goto))
+                    .ok_or(TbxError::TypeError {
+                        expected: "runtime goto instruction to be registered",
+                        got: "not found",
+                    })?;
+                let end_patch = append_jump(output, jump_patches, goto_xt);
+                patch_jump(jump_patches, short_circuit_patch, output.len());
+                emit_lit(output, short_circuit_value, vm)?;
+                patch_jump(jump_patches, end_patch, output.len());
+            } else {
+                append_expr_ast_cells(rhs, output, patch_offsets, jump_patches, vm, self_hdr_idx)?;
+                output.push(Cell::Xt(require_xt(vm, eager_binary_prim(*op))?));
+            }
+            Ok(())
+        }
+        ExprAst::Comma { lhs, rhs } => {
+            append_expr_ast_cells(lhs, output, patch_offsets, jump_patches, vm, self_hdr_idx)?;
+            append_expr_ast_cells(rhs, output, patch_offsets, jump_patches, vm, self_hdr_idx)?;
+            Ok(())
+        }
+        ExprAst::Invoke { xt, args } => {
+            for arg in args {
+                append_expr_ast_cells(arg, output, patch_offsets, jump_patches, vm, self_hdr_idx)?;
+            }
+            emit_call_by_kind(output, *xt, args.len(), vm, self_hdr_idx, patch_offsets)?;
+            Ok(())
+        }
+        ExprAst::TupleGet { base, index } => {
+            append_expr_ast_cells(base, output, patch_offsets, jump_patches, vm, self_hdr_idx)?;
+            append_expr_ast_cells(index, output, patch_offsets, jump_patches, vm, self_hdr_idx)?;
+            output.push(Cell::Xt(require_xt(vm, "TUPLE_GET")?));
+            Ok(())
+        }
+        ExprAst::ArrayGet { array, index } => {
+            emit_array_designator_read(array, output, vm)?;
+            append_expr_ast_cells(index, output, patch_offsets, jump_patches, vm, self_hdr_idx)?;
+            output.push(Cell::Xt(require_hidden_system_xt(vm, "ARRAY_GET")?));
+            Ok(())
+        }
+        ExprAst::ArrayGet2D { array, x, y } => {
+            emit_array_designator_read(array, output, vm)?;
+            append_expr_ast_cells(x, output, patch_offsets, jump_patches, vm, self_hdr_idx)?;
+            append_expr_ast_cells(y, output, patch_offsets, jump_patches, vm, self_hdr_idx)?;
+            output.push(Cell::Xt(require_hidden_system_xt(vm, "ARRAY_GET_2D")?));
+            Ok(())
+        }
+        ExprAst::ArrayAddr { array, index } => {
+            emit_array_designator_read(array, output, vm)?;
+            append_expr_ast_cells(index, output, patch_offsets, jump_patches, vm, self_hdr_idx)?;
+            output.push(Cell::Xt(require_hidden_system_xt(vm, "ARRAY_ADDR")?));
+            Ok(())
+        }
+        ExprAst::ArrayAddr2D { array, x, y } => {
+            emit_array_designator_read(array, output, vm)?;
+            append_expr_ast_cells(x, output, patch_offsets, jump_patches, vm, self_hdr_idx)?;
+            append_expr_ast_cells(y, output, patch_offsets, jump_patches, vm, self_hdr_idx)?;
+            output.push(Cell::Xt(require_hidden_system_xt(vm, "ARRAY_ADDR_2D")?));
+            Ok(())
+        }
+        ExprAst::ArrayLen { array } => {
+            emit_array_designator_read(array, output, vm)?;
+            output.push(Cell::Xt(require_hidden_system_xt(vm, "ARRAY_LEN")?));
+            Ok(())
+        }
+    }
+}
+
+fn emit_array_designator_read(
+    array: &ast::ArrayDesignator,
+    output: &mut Vec<Cell>,
+    vm: &VM,
+) -> Result<(), TbxError> {
+    match array {
+        ast::ArrayDesignator::Local { index } => emit_local_read(output, *index, vm),
+        ast::ArrayDesignator::Global { addr } => emit_var_read(output, *addr, vm),
+    }
+}
+
+/// Map a binary operator string to `(BinaryOp, precedence, left_assoc)`.
 ///
 /// Returns `None` for unrecognised operator strings.
-fn binary_op_info(op: &str) -> Option<(&'static str, u8, bool)> {
+fn binary_op_info(op: &str) -> Option<(BinaryOp, u8, bool)> {
     match op {
-        "+" => Some(("ADD", 3, true)),
-        "*" => Some(("MUL", 2, true)),
-        "/" => Some(("DIV", 2, true)),
-        "%" => Some(("MOD", 2, true)),
-        "<" => Some(("LT", 4, true)),
-        ">" => Some(("GT", 4, true)),
-        "<=" => Some(("LE", 4, true)),
-        ">=" => Some(("GE", 4, true)),
-        "=" => Some(("EQ", 5, true)),
-        "<>" => Some(("NEQ", 5, true)),
-        "|" => Some(("BOR", 7, true)),
-        "&&" => Some(("AND", 8, true)),
-        "||" => Some(("OR", 9, true)),
+        "+" => Some((BinaryOp::Add, 3, true)),
+        "-" => Some((BinaryOp::Sub, 3, true)),
+        "*" => Some((BinaryOp::Mul, 2, true)),
+        "/" => Some((BinaryOp::Div, 2, true)),
+        "%" => Some((BinaryOp::Mod, 2, true)),
+        "<" => Some((BinaryOp::Lt, 4, true)),
+        ">" => Some((BinaryOp::Gt, 4, true)),
+        "<=" => Some((BinaryOp::Le, 4, true)),
+        ">=" => Some((BinaryOp::Ge, 4, true)),
+        "=" => Some((BinaryOp::Eq, 5, true)),
+        "<>" => Some((BinaryOp::Neq, 5, true)),
+        "&" => Some((BinaryOp::BitAnd, 6, true)),
+        "|" => Some((BinaryOp::BitOr, 7, true)),
+        "&&" => Some((BinaryOp::And, 8, true)),
+        "||" => Some((BinaryOp::Or, 9, true)),
         _ => None,
     }
 }
@@ -1128,6 +1430,27 @@ mod tests {
         let lit_xt = vm.lookup("LIT").unwrap();
         assert_eq!(result[0], Cell::Xt(lit_xt));
         assert_eq!(result[1], Cell::Int(42));
+    }
+
+    #[test]
+    fn test_compile_expr_facade_matches_parse_then_emit() {
+        let mut vm = make_vm();
+        let tokens = lex("1 + 2 * 3");
+
+        let facade_cells = ExprCompiler::new(&mut vm).compile_expr(&tokens).unwrap();
+        let manual_ast = ExprCompiler::new(&mut vm).parse_expr_ast(&tokens).unwrap();
+        let manual_cells = ExprCompiler::new(&mut vm)
+            .emit_expr_ast(&manual_ast)
+            .unwrap();
+
+        assert_eq!(facade_cells, manual_cells);
+    }
+
+    #[test]
+    fn test_compile_expr_empty_tokens_returns_empty_cells() {
+        let mut vm = make_vm();
+        let compiler = ExprCompiler::new(&mut vm).compile_expr(&[]);
+        assert_eq!(compiler.unwrap(), Vec::<Cell>::new());
     }
 
     // ------------------------------------------------------------------
@@ -1583,6 +1906,97 @@ mod tests {
         );
     }
 
+    #[test]
+    fn test_binary_operators_preserve_eager_lowering() {
+        let cases = [
+            ("1 + 2", "ADD"),
+            ("1 - 2", "SUB"),
+            ("1 * 2", "MUL"),
+            ("1 / 2", "DIV"),
+            ("1 % 2", "MOD"),
+            ("1 < 2", "LT"),
+            ("1 > 2", "GT"),
+            ("1 <= 2", "LE"),
+            ("1 >= 2", "GE"),
+            ("1 = 2", "EQ"),
+            ("1 <> 2", "NEQ"),
+            ("1 & 2", "BAND"),
+            ("1 | 2", "BOR"),
+        ];
+
+        for (expr, prim_name) in cases {
+            let mut vm = make_vm();
+            let tokens = lex(expr);
+            let result = ExprCompiler::new(&mut vm).compile_expr(&tokens).unwrap();
+            let expected_xt = vm.lookup(prim_name).unwrap();
+            assert_eq!(
+                result.last(),
+                Some(&Cell::Xt(expected_xt)),
+                "expected {expr} to lower to {prim_name}, got {result:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_logical_operators_compile_to_short_circuit_branches() {
+        for (expr, branch_kind, rhs_name, short_circuit_value) in [
+            (
+                "TRUE && FALSE",
+                EntryKind::BranchIfFalse,
+                "FALSE",
+                Cell::Bool(false),
+            ),
+            (
+                "FALSE || TRUE",
+                EntryKind::BranchIfTrue,
+                "TRUE",
+                Cell::Bool(true),
+            ),
+        ] {
+            let mut vm = make_vm();
+            let lit_xt = vm.lookup("LIT").unwrap();
+            let lhs_xt = vm
+                .lookup(if matches!(&branch_kind, EntryKind::BranchIfFalse) {
+                    "TRUE"
+                } else {
+                    "FALSE"
+                })
+                .unwrap();
+            let rhs_xt = vm.lookup(rhs_name).unwrap();
+            let branch_xt = vm
+                .find_by_kind(|kind| {
+                    std::mem::discriminant(kind) == std::mem::discriminant(&branch_kind)
+                })
+                .unwrap();
+            let goto_xt = vm
+                .find_by_kind(|kind| matches!(kind, EntryKind::Goto))
+                .unwrap();
+            let to_bool_xt = vm.lookup_hidden_system("TO_BOOL").unwrap();
+            assert_eq!(vm.lookup("TO_BOOL"), None);
+
+            let tokens = lex(expr);
+            let result = ExprCompiler::new(&mut vm)
+                .with_output_base_dp(100)
+                .compile_expr(&tokens)
+                .unwrap();
+
+            assert_eq!(
+                result,
+                vec![
+                    Cell::Xt(lhs_xt),
+                    Cell::Xt(branch_xt),
+                    Cell::DictAddr(107),
+                    Cell::Xt(rhs_xt),
+                    Cell::Xt(to_bool_xt),
+                    Cell::Xt(goto_xt),
+                    Cell::DictAddr(109),
+                    Cell::Xt(lit_xt),
+                    short_circuit_value,
+                ]
+            );
+        }
+    }
+
     // ------------------------------------------------------------------
     // Error: & applied to a function name (non-variable) → TypeError
     // ------------------------------------------------------------------
@@ -1861,6 +2275,29 @@ mod tests {
     }
 
     #[test]
+    fn test_bracket_index_builds_tuple_get_ast() {
+        let mut vm = make_vm();
+        vm.register(WordEntry::new_word("T", 0));
+
+        let tokens = lex("T[1 + 2]");
+        let ast = ExprCompiler::new(&mut vm).parse_expr_ast(&tokens).unwrap();
+
+        match ast {
+            ExprAst::TupleGet { base, index } => {
+                assert!(matches!(*base, ExprAst::Invoke { .. }));
+                assert!(matches!(
+                    *index,
+                    ExprAst::Binary {
+                        op: BinaryOp::Add,
+                        ..
+                    }
+                ));
+            }
+            other => panic!("expected TupleGet AST, got: {other:?}"),
+        }
+    }
+
+    #[test]
     fn test_isolated_rbracket_error() {
         // A lone `]` with no matching `[` must produce an unmatched ']' error.
         let mut vm = make_vm();
@@ -2021,6 +2458,33 @@ mod tests {
                 Cell::Xt(array_get_xt),
             ]
         );
+    }
+
+    #[test]
+    fn test_at_array_element_read_builds_array_get_ast() {
+        let mut vm = make_vm();
+        vm.dict_write(Cell::Int(0)).unwrap();
+        vm.register(crate::dict::WordEntry::new_variable("A", 0));
+
+        let tokens = lex("@A[I + 1]");
+        vm.dict_write(Cell::Int(0)).unwrap();
+        vm.register(crate::dict::WordEntry::new_variable("I", 1));
+
+        let ast = ExprCompiler::new(&mut vm).parse_expr_ast(&tokens).unwrap();
+
+        match ast {
+            ExprAst::ArrayGet { array, index } => {
+                assert_eq!(array, ast::ArrayDesignator::Global { addr: 0 });
+                assert!(matches!(
+                    *index,
+                    ExprAst::Binary {
+                        op: BinaryOp::Add,
+                        ..
+                    }
+                ));
+            }
+            other => panic!("expected ArrayGet AST, got: {other:?}"),
+        }
     }
 
     /// `@A` without a following `[` must produce a clear syntax error.
@@ -2409,6 +2873,27 @@ mod tests {
         );
     }
 
+    #[test]
+    fn test_ampersand_at_builds_array_addr_ast() {
+        let mut vm = make_vm();
+        let mut local_table = HashMap::new();
+        local_table.insert("A".to_string(), 0usize);
+        local_table.insert("I".to_string(), 1usize);
+
+        let tokens = lex("&@A[I]");
+        let ast = ExprCompiler::with_context(&mut vm, Some(&local_table), None, None)
+            .parse_expr_ast(&tokens)
+            .unwrap();
+
+        match ast {
+            ExprAst::ArrayAddr { array, index } => {
+                assert_eq!(array, ast::ArrayDesignator::Local { index: 0 });
+                assert!(matches!(*index, ExprAst::LocalRead { index: 1 }));
+            }
+            other => panic!("expected ArrayAddr AST, got: {other:?}"),
+        }
+    }
+
     /// `&@A` (missing `[`) must produce a clear syntax error.
     #[test]
     fn test_ampersand_at_missing_bracket_is_error() {
@@ -2534,6 +3019,23 @@ mod tests {
                 Cell::Xt(array_len_xt),
             ]
         );
+    }
+
+    #[test]
+    fn test_array_len_builds_array_len_ast() {
+        let mut vm = make_vm();
+        vm.dict_write(Cell::Int(0)).unwrap();
+        vm.register(crate::dict::WordEntry::new_variable("A", 0));
+
+        let tokens = lex("ARRAY_LEN(@A)");
+        let ast = ExprCompiler::new(&mut vm).parse_expr_ast(&tokens).unwrap();
+
+        match ast {
+            ExprAst::ArrayLen { array } => {
+                assert_eq!(array, ast::ArrayDesignator::Global { addr: 0 });
+            }
+            other => panic!("expected ArrayLen AST, got: {other:?}"),
+        }
     }
 
     /// `ARRAY_LEN(A)` — bare variable without `@` must be rejected.

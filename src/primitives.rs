@@ -908,7 +908,9 @@ pub fn dim_prim(vm: &mut VM) -> Result<(), TbxError> {
                 // 2D path: compile width and height expressions separately, emit ARRAY_2D.
                 // Stack at runtime: LIT StackAddr(idx) [width] [height] ARRAY_2D ARRAY_STORE_LOCAL
                 let (d0_cells, d0_patch_offsets) = compile_expr_taking_local_table(vm, &d0_tokens)?;
-                let (d1_cells, d1_patch_offsets) = compile_expr_taking_local_table(vm, &d1_tokens)?;
+                let d1_base_dp = vm.dp + d0_cells.len();
+                let (d1_cells, d1_patch_offsets) =
+                    compile_expr_taking_local_table_at(vm, &d1_tokens, d1_base_dp)?;
                 let array_2d_xt =
                     vm.lookup_hidden_system("ARRAY_2D")
                         .ok_or(TbxError::UndefinedSymbol {
@@ -1213,6 +1215,14 @@ fn compile_expr_taking_local_table(
     vm: &mut VM,
     tokens: &[crate::lexer::SpannedToken],
 ) -> Result<(Vec<Cell>, Vec<usize>), TbxError> {
+    compile_expr_taking_local_table_at(vm, tokens, vm.dp)
+}
+
+fn compile_expr_taking_local_table_at(
+    vm: &mut VM,
+    tokens: &[crate::lexer::SpannedToken],
+    output_base_dp: usize,
+) -> Result<(Vec<Cell>, Vec<usize>), TbxError> {
     let self_word = vm.compile_state.as_ref().map(|s| s.word_name.clone());
     let self_hdr_idx = vm.compile_state.as_ref().map(|s| s.word_hdr_idx());
     let local_table = vm
@@ -1221,7 +1231,8 @@ fn compile_expr_taking_local_table(
         .map(|s| std::mem::take(&mut s.local_table));
     let result: Result<(Vec<Cell>, Vec<usize>), TbxError> = {
         let local_table_ref = local_table.as_ref();
-        let mut compiler = ExprCompiler::with_context(vm, local_table_ref, self_word, self_hdr_idx);
+        let mut compiler = ExprCompiler::with_context(vm, local_table_ref, self_word, self_hdr_idx)
+            .with_output_base_dp(output_base_dp);
         compiler.compile_expr(tokens).map(|cells| {
             let offsets = std::mem::take(&mut compiler.patch_offsets);
             (cells, offsets)
@@ -1838,7 +1849,8 @@ fn compile_at_array_lvalue(vm: &mut VM) -> Result<(), TbxError> {
         }
 
         let (x_cells, x_patch_offsets) = compile_expr_taking_local_table(vm, x_toks)?;
-        let (y_cells, y_patch_offsets) = compile_expr_taking_local_table(vm, y_toks)?;
+        let y_base_dp = vm.dp + x_cells.len();
+        let (y_cells, y_patch_offsets) = compile_expr_taking_local_table_at(vm, y_toks, y_base_dp)?;
 
         let array_addr_2d_xt =
             vm.lookup_hidden_system("ARRAY_ADDR_2D")
@@ -2202,8 +2214,10 @@ pub fn second_prim(vm: &mut VM) -> Result<(), TbxError> {
     vm.push(Cell::Float(s))
 }
 
-/// Register all stack primitives into the VM's dictionary.
+/// Register all built-in words into the VM's dictionary.
 pub fn register_all(vm: &mut VM) {
+    vm.register(WordEntry::new_constant("TRUE", Cell::Bool(true)));
+    vm.register(WordEntry::new_constant("FALSE", Cell::Bool(false)));
     vm.register(WordEntry::new_primitive("DROP", drop_prim));
     vm.register(WordEntry::new_primitive("DUP", dup_prim));
     vm.register(WordEntry::new_primitive("SWAP", swap_prim));
@@ -2269,6 +2283,9 @@ pub fn register_all(vm: &mut VM) {
         "ASSERT_FAIL_MSG",
         assert_fail_msg_prim,
     ));
+    let mut to_bool_entry = WordEntry::new_primitive("TO_BOOL", to_bool_prim);
+    to_bool_entry.flags = FLAG_SYSTEM | FLAG_HIDDEN;
+    vm.register(to_bool_entry);
     vm.register(WordEntry {
         name: "CALL".to_string(),
         flags: FLAG_SYSTEM,
@@ -3460,6 +3477,18 @@ mod tests {
         vm.push(Cell::Int(5)).unwrap();
         or_prim(&mut vm).unwrap();
         assert_eq!(vm.pop(), Ok(Cell::Bool(true)));
+    }
+
+    #[test]
+    fn test_to_bool_normalizes_truthiness() {
+        let mut vm = VM::new();
+        vm.push(Cell::Int(123)).unwrap();
+        to_bool_prim(&mut vm).unwrap();
+        assert_eq!(vm.pop(), Ok(Cell::Bool(true)));
+
+        vm.push(Cell::Int(0)).unwrap();
+        to_bool_prim(&mut vm).unwrap();
+        assert_eq!(vm.pop(), Ok(Cell::Bool(false)));
     }
 
     // --- BAND / BOR tests ---

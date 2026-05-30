@@ -31,14 +31,12 @@ DEF RESULT_EXPECT(R, MSG)
   ENDIF
 END
 
-# RESULT_OK_OF(V) — wrap V as a successful result: TUPLE(V, Bool(true))
-# Bool(true) is produced by the tautology (1 = 1).
+# RESULT_OK_OF(V) — wrap V as a successful result: TUPLE(V, TRUE)
 DEF RESULT_OK_OF(V)
-  RETURN TUPLE(V, 1 = 1)
+  RETURN TUPLE(V, TRUE)
 END
 
-# RESULT_ERR_OF(V) — wrap V as a failed result: TUPLE(V, Bool(false))
-# Bool(false) is produced by the contradiction (1 = 0).
+# RESULT_ERR_OF(V) — wrap V as a failed result: TUPLE(V, FALSE)
 DEF RESULT_ERR_OF(V)
-  RETURN TUPLE(V, 1 = 0)
+  RETURN TUPLE(V, FALSE)
 END

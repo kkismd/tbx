@@ -57,7 +57,7 @@ DEF ASCIIART
   FOR &Y, 25
     FOR &X, 80
       PlotMandel X, Y
-    NEXT　# X
+    NEXT # X
     CR
   NEXT # Y
 END
