@@ -157,17 +157,27 @@ pub struct ExprCompiler<'a> {
     /// The caller must translate these to absolute dictionary positions and add them to
     /// `CompileState::call_patch_list` after writing the cells to the dictionary.
     pub(crate) patch_offsets: Vec<usize>,
+    /// Dictionary position where the returned cell sequence will be placed.
+    output_base_dp: usize,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct ExprJumpPatch {
+    operand_offset: usize,
+    target_offset: usize,
 }
 
 impl<'a> ExprCompiler<'a> {
     /// Create an `ExprCompiler` backed by the given VM (no local variable table).
     pub fn new(vm: &'a mut VM) -> Self {
+        let output_base_dp = vm.dp;
         Self {
             vm,
             local_table: None,
             self_word: None,
             self_hdr_idx: None,
             patch_offsets: Vec::new(),
+            output_base_dp,
         }
     }
 
@@ -184,13 +194,20 @@ impl<'a> ExprCompiler<'a> {
         self_word: Option<String>,
         self_hdr_idx: Option<usize>,
     ) -> Self {
+        let output_base_dp = vm.dp;
         Self {
             vm,
             local_table,
             self_word,
             self_hdr_idx,
             patch_offsets: Vec::new(),
+            output_base_dp,
         }
+    }
+
+    pub(crate) fn with_output_base_dp(mut self, output_base_dp: usize) -> Self {
+        self.output_base_dp = output_base_dp;
+        self
     }
 
     /// Parse `tokens` and return the corresponding RPN instruction sequence.
@@ -214,14 +231,17 @@ impl<'a> ExprCompiler<'a> {
     fn emit_expr_ast(&mut self, ast: &ExprAst) -> Result<Vec<Cell>, TbxError> {
         let mut cells = Vec::new();
         let mut patch_offsets = Vec::new();
+        let mut jump_patches = Vec::new();
         append_expr_ast_cells(
             ast,
             &mut cells,
             &mut patch_offsets,
+            &mut jump_patches,
             self.vm,
             self.self_hdr_idx,
         )?;
         self.patch_offsets = patch_offsets;
+        relocate_expr_jumps(&mut cells, &jump_patches, self.output_base_dp);
         Ok(cells)
     }
 
@@ -1078,7 +1098,7 @@ fn pop_invoke_args(output: &mut Vec<ExprAst>, arity: usize) -> Result<Vec<ExprAs
     Ok(args)
 }
 
-/// Map a `BinaryOp` to the eager primitive used by the legacy RPN backend.
+/// Map a non-short-circuit `BinaryOp` to its eager primitive.
 fn eager_binary_prim(op: BinaryOp) -> &'static str {
     match op {
         BinaryOp::Add => "ADD",
@@ -1094,8 +1114,30 @@ fn eager_binary_prim(op: BinaryOp) -> &'static str {
         BinaryOp::Neq => "NEQ",
         BinaryOp::BitAnd => "BAND",
         BinaryOp::BitOr => "BOR",
-        BinaryOp::And => "AND",
-        BinaryOp::Or => "OR",
+        BinaryOp::And | BinaryOp::Or => {
+            unreachable!("logical operators use short-circuit codegen")
+        }
+    }
+}
+
+fn append_jump(output: &mut Vec<Cell>, jump_patches: &mut Vec<ExprJumpPatch>, xt: Xt) -> usize {
+    output.push(Cell::Xt(xt));
+    let operand_offset = output.len();
+    output.push(Cell::DictAddr(usize::MAX));
+    jump_patches.push(ExprJumpPatch {
+        operand_offset,
+        target_offset: usize::MAX,
+    });
+    jump_patches.len() - 1
+}
+
+fn patch_jump(jump_patches: &mut [ExprJumpPatch], patch_index: usize, target_offset: usize) {
+    jump_patches[patch_index].target_offset = target_offset;
+}
+
+fn relocate_expr_jumps(cells: &mut [Cell], jump_patches: &[ExprJumpPatch], base_dp: usize) {
+    for patch in jump_patches {
+        cells[patch.operand_offset] = Cell::DictAddr(base_dp + patch.target_offset);
     }
 }
 
@@ -1103,6 +1145,7 @@ fn append_expr_ast_cells(
     expr: &ExprAst,
     output: &mut Vec<Cell>,
     patch_offsets: &mut Vec<usize>,
+    jump_patches: &mut Vec<ExprJumpPatch>,
     vm: &VM,
     self_hdr_idx: Option<usize>,
 ) -> Result<(), TbxError> {
@@ -1123,45 +1166,78 @@ fn append_expr_ast_cells(
             Ok(())
         }
         ExprAst::Unary { op, expr } => {
-            append_expr_ast_cells(expr, output, patch_offsets, vm, self_hdr_idx)?;
+            append_expr_ast_cells(expr, output, patch_offsets, jump_patches, vm, self_hdr_idx)?;
             match op {
                 UnaryOp::Neg => output.push(Cell::Xt(require_xt(vm, "NEGATE")?)),
             }
             Ok(())
         }
         ExprAst::Binary { op, lhs, rhs } => {
-            append_expr_ast_cells(lhs, output, patch_offsets, vm, self_hdr_idx)?;
-            append_expr_ast_cells(rhs, output, patch_offsets, vm, self_hdr_idx)?;
-            output.push(Cell::Xt(require_xt(vm, eager_binary_prim(*op))?));
+            append_expr_ast_cells(lhs, output, patch_offsets, jump_patches, vm, self_hdr_idx)?;
+            let branch_kind = match op {
+                BinaryOp::And => Some((false, Cell::Bool(false))),
+                BinaryOp::Or => Some((true, Cell::Bool(true))),
+                _ => None,
+            };
+            if let Some((branch_on_truthy, short_circuit_value)) = branch_kind {
+                let branch_xt = vm
+                    .find_by_kind(|kind| {
+                        if branch_on_truthy {
+                            matches!(kind, EntryKind::BranchIfTrue)
+                        } else {
+                            matches!(kind, EntryKind::BranchIfFalse)
+                        }
+                    })
+                    .ok_or(TbxError::TypeError {
+                        expected: "runtime branch instruction to be registered",
+                        got: "not found",
+                    })?;
+                let short_circuit_patch = append_jump(output, jump_patches, branch_xt);
+                append_expr_ast_cells(rhs, output, patch_offsets, jump_patches, vm, self_hdr_idx)?;
+                output.push(Cell::Xt(require_hidden_system_xt(vm, "TO_BOOL")?));
+                let goto_xt = vm
+                    .find_by_kind(|kind| matches!(kind, EntryKind::Goto))
+                    .ok_or(TbxError::TypeError {
+                        expected: "runtime goto instruction to be registered",
+                        got: "not found",
+                    })?;
+                let end_patch = append_jump(output, jump_patches, goto_xt);
+                patch_jump(jump_patches, short_circuit_patch, output.len());
+                emit_lit(output, short_circuit_value, vm)?;
+                patch_jump(jump_patches, end_patch, output.len());
+            } else {
+                append_expr_ast_cells(rhs, output, patch_offsets, jump_patches, vm, self_hdr_idx)?;
+                output.push(Cell::Xt(require_xt(vm, eager_binary_prim(*op))?));
+            }
             Ok(())
         }
         ExprAst::Comma { lhs, rhs } => {
-            append_expr_ast_cells(lhs, output, patch_offsets, vm, self_hdr_idx)?;
-            append_expr_ast_cells(rhs, output, patch_offsets, vm, self_hdr_idx)?;
+            append_expr_ast_cells(lhs, output, patch_offsets, jump_patches, vm, self_hdr_idx)?;
+            append_expr_ast_cells(rhs, output, patch_offsets, jump_patches, vm, self_hdr_idx)?;
             Ok(())
         }
         ExprAst::Invoke { xt, args } => {
             for arg in args {
-                append_expr_ast_cells(arg, output, patch_offsets, vm, self_hdr_idx)?;
+                append_expr_ast_cells(arg, output, patch_offsets, jump_patches, vm, self_hdr_idx)?;
             }
             emit_call_by_kind(output, *xt, args.len(), vm, self_hdr_idx, patch_offsets)?;
             Ok(())
         }
         ExprAst::TupleGet { base, index } => {
-            append_expr_ast_cells(base, output, patch_offsets, vm, self_hdr_idx)?;
-            append_expr_ast_cells(index, output, patch_offsets, vm, self_hdr_idx)?;
+            append_expr_ast_cells(base, output, patch_offsets, jump_patches, vm, self_hdr_idx)?;
+            append_expr_ast_cells(index, output, patch_offsets, jump_patches, vm, self_hdr_idx)?;
             output.push(Cell::Xt(require_xt(vm, "TUPLE_GET")?));
             Ok(())
         }
         ExprAst::ArrayGet { array, index } => {
             emit_array_designator_read(array, output, vm)?;
-            append_expr_ast_cells(index, output, patch_offsets, vm, self_hdr_idx)?;
+            append_expr_ast_cells(index, output, patch_offsets, jump_patches, vm, self_hdr_idx)?;
             output.push(Cell::Xt(require_hidden_system_xt(vm, "ARRAY_GET")?));
             Ok(())
         }
         ExprAst::ArrayAddr { array, index } => {
             emit_array_designator_read(array, output, vm)?;
-            append_expr_ast_cells(index, output, patch_offsets, vm, self_hdr_idx)?;
+            append_expr_ast_cells(index, output, patch_offsets, jump_patches, vm, self_hdr_idx)?;
             output.push(Cell::Xt(require_hidden_system_xt(vm, "ARRAY_ADDR")?));
             Ok(())
         }
@@ -1747,8 +1823,6 @@ mod tests {
             ("1 <> 2", "NEQ"),
             ("1 & 2", "BAND"),
             ("1 | 2", "BOR"),
-            ("1 && 2", "AND"),
-            ("1 || 2", "OR"),
         ];
 
         for (expr, prim_name) in cases {
@@ -1760,6 +1834,50 @@ mod tests {
                 result.last(),
                 Some(&Cell::Xt(expected_xt)),
                 "expected {expr} to lower to {prim_name}, got {result:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_logical_operators_compile_to_short_circuit_branches() {
+        for (expr, branch_kind, short_circuit_value) in [
+            ("1 && 2", EntryKind::BranchIfFalse, Cell::Bool(false)),
+            ("1 || 2", EntryKind::BranchIfTrue, Cell::Bool(true)),
+        ] {
+            let mut vm = make_vm();
+            let lit_xt = vm.lookup("LIT").unwrap();
+            let branch_xt = vm
+                .find_by_kind(|kind| {
+                    std::mem::discriminant(kind) == std::mem::discriminant(&branch_kind)
+                })
+                .unwrap();
+            let goto_xt = vm
+                .find_by_kind(|kind| matches!(kind, EntryKind::Goto))
+                .unwrap();
+            let to_bool_xt = vm.lookup_hidden_system("TO_BOOL").unwrap();
+            assert_eq!(vm.lookup("TO_BOOL"), None);
+
+            let tokens = lex(expr);
+            let result = ExprCompiler::new(&mut vm)
+                .with_output_base_dp(100)
+                .compile_expr(&tokens)
+                .unwrap();
+
+            assert_eq!(
+                result,
+                vec![
+                    Cell::Xt(lit_xt),
+                    Cell::Int(1),
+                    Cell::Xt(branch_xt),
+                    Cell::DictAddr(109),
+                    Cell::Xt(lit_xt),
+                    Cell::Int(2),
+                    Cell::Xt(to_bool_xt),
+                    Cell::Xt(goto_xt),
+                    Cell::DictAddr(111),
+                    Cell::Xt(lit_xt),
+                    short_circuit_value,
+                ]
             );
         }
     }
