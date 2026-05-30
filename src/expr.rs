@@ -64,10 +64,6 @@ mod ast {
         ArrayLen {
             array: ArrayDesignator,
         },
-        LegacyCode {
-            cells: Vec<Cell>,
-            patch_offsets: Vec<usize>,
-        },
     }
 
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -118,7 +114,7 @@ enum OpItem {
     UnaryNeg,
     /// Left-parenthesis sentinel. Carries optional call metadata.
     ///
-    /// `call` is `Some(LParenCall::Function(xt, arity))` for an invoke form,
+    /// `call` is `Some(LParenCall::Invoke(xt, arity))` for an invoke form,
     /// and `None` for a plain grouping parenthesis.
     LParen { call: Option<LParenCall> },
     /// Comma-as-binary-operator used outside of function calls (precedence 11).
@@ -132,7 +128,7 @@ enum OpItem {
 #[derive(Debug)]
 enum LParenCall {
     /// Invoke form: execution token and current argument arity count.
-    Function(Xt, usize),
+    Invoke(Xt, usize),
 }
 
 // ---------------------------------------------------------------------------
@@ -216,7 +212,7 @@ impl<'a> ExprCompiler<'a> {
         &mut self,
         tokens: &[SpannedToken],
     ) -> Result<(Vec<Cell>, Vec<usize>), TbxError> {
-        let (output, output_patch_offsets) = self.parse_expr_output(tokens)?;
+        let output = self.parse_expr_output(tokens)?;
         let mut cells = Vec::new();
         let mut patch_offsets = Vec::new();
         for expr in &output {
@@ -228,14 +224,10 @@ impl<'a> ExprCompiler<'a> {
                 self.self_hdr_idx,
             )?;
         }
-        patch_offsets.extend(output_patch_offsets);
         Ok((cells, patch_offsets))
     }
 
-    fn parse_expr_output(
-        &mut self,
-        tokens: &[SpannedToken],
-    ) -> Result<(Vec<ExprAst>, Vec<usize>), TbxError> {
+    fn parse_expr_output(&mut self, tokens: &[SpannedToken]) -> Result<Vec<ExprAst>, TbxError> {
         let mut output: Vec<ExprAst> = Vec::new();
         let mut op_stack: Vec<OpItem> = Vec::new();
         // True when the previous significant token produced a value on the
@@ -395,7 +387,7 @@ impl<'a> ExprCompiler<'a> {
                             // Invoke form with arguments: open a function-call
                             // paren frame with initial arity = 1.
                             op_stack.push(OpItem::LParen {
-                                call: Some(LParenCall::Function(xt, 1)),
+                                call: Some(LParenCall::Invoke(xt, 1)),
                             });
                             i += 1; // consume '('
                             prev_was_operand = false;
@@ -483,14 +475,7 @@ impl<'a> ExprCompiler<'a> {
                                             &array_name,
                                             "array variable for &@-sigil address",
                                         )?;
-                                        let (index, index_patch_offsets) =
-                                            self.compile_expr_ast(index_toks)?;
-                                        if !index_patch_offsets.is_empty() {
-                                            return Err(TbxError::InvalidExpression {
-                                                reason:
-                                                    "unexpected patch offsets in array index AST",
-                                            });
-                                        }
+                                        let index = self.compile_expr_ast(index_toks)?;
                                         output.push(ExprAst::ArrayAddr {
                                             array,
                                             index: Box::new(index),
@@ -574,7 +559,7 @@ impl<'a> ExprCompiler<'a> {
                     // Pop the LParen and dispatch based on the call kind.
                     match op_stack.pop() {
                         Some(OpItem::LParen {
-                            call: Some(LParenCall::Function(xt, arity)),
+                            call: Some(LParenCall::Invoke(xt, arity)),
                         }) => {
                             if !prev_was_operand && arity > 0 {
                                 return Err(TbxError::InvalidExpression {
@@ -653,7 +638,7 @@ impl<'a> ExprCompiler<'a> {
                     let in_func_call = matches!(
                         nearest_lparen,
                         Some(OpItem::LParen {
-                            call: Some(LParenCall::Function(..))
+                            call: Some(LParenCall::Invoke(..))
                         })
                     );
 
@@ -670,7 +655,7 @@ impl<'a> ExprCompiler<'a> {
                         }
                         // Increment the arity counter in the enclosing LParen frame.
                         if let Some(OpItem::LParen {
-                            call: Some(LParenCall::Function(_, arity)),
+                            call: Some(LParenCall::Invoke(_, arity)),
                         }) = op_stack.last_mut()
                         {
                             *arity += 1;
@@ -714,12 +699,7 @@ impl<'a> ExprCompiler<'a> {
                                 &name,
                                 "array variable for @-sigil access",
                             )?;
-                            let (index, index_patch_offsets) = self.compile_expr_ast(index_toks)?;
-                            if !index_patch_offsets.is_empty() {
-                                return Err(TbxError::InvalidExpression {
-                                    reason: "unexpected patch offsets in array index AST",
-                                });
-                            }
+                            let index = self.compile_expr_ast(index_toks)?;
                             output.push(ExprAst::ArrayGet {
                                 array,
                                 index: Box::new(index),
@@ -763,14 +743,11 @@ impl<'a> ExprCompiler<'a> {
             emit_op_item(&op, &mut output, self.vm)?;
         }
 
-        Ok((output, Vec::new()))
+        Ok(output)
     }
 
-    fn compile_expr_ast(
-        &mut self,
-        tokens: &[SpannedToken],
-    ) -> Result<(ExprAst, Vec<usize>), TbxError> {
-        let (mut output, patch_offsets) = self.parse_expr_output(tokens)?;
+    fn compile_expr_ast(&mut self, tokens: &[SpannedToken]) -> Result<ExprAst, TbxError> {
+        let mut output = self.parse_expr_output(tokens)?;
         let ast = output.pop().ok_or(TbxError::InvalidExpression {
             reason: "missing operand in expression",
         })?;
@@ -779,7 +756,7 @@ impl<'a> ExprCompiler<'a> {
                 reason: "expression did not reduce to a single AST node",
             });
         }
-        Ok((ast, patch_offsets))
+        Ok(ast)
     }
 
     fn resolve_array_designator(
@@ -1193,15 +1170,6 @@ fn emit_expr_ast(
         ExprAst::ArrayLen { array } => {
             emit_array_designator_read(array, output, vm)?;
             output.push(Cell::Xt(require_hidden_system_xt(vm, "ARRAY_LEN")?));
-            Ok(())
-        }
-        ExprAst::LegacyCode {
-            cells,
-            patch_offsets: local_patch_offsets,
-        } => {
-            let base = output.len();
-            output.extend(cells.iter().cloned());
-            patch_offsets.extend(local_patch_offsets.iter().map(|offset| base + offset));
             Ok(())
         }
     }
@@ -2060,10 +2028,9 @@ mod tests {
         vm.register(WordEntry::new_word("T", 0));
 
         let tokens = lex("T[1 + 2]");
-        let (ast, patch_offsets) = ExprCompiler::new(&mut vm)
+        let ast = ExprCompiler::new(&mut vm)
             .compile_expr_ast(&tokens)
             .unwrap();
-        assert!(patch_offsets.is_empty());
 
         match ast {
             ExprAst::TupleGet { base, index } => {
@@ -2253,10 +2220,9 @@ mod tests {
         vm.dict_write(Cell::Int(0)).unwrap();
         vm.register(crate::dict::WordEntry::new_variable("I", 1));
 
-        let (ast, patch_offsets) = ExprCompiler::new(&mut vm)
+        let ast = ExprCompiler::new(&mut vm)
             .compile_expr_ast(&tokens)
             .unwrap();
-        assert!(patch_offsets.is_empty());
 
         match ast {
             ExprAst::ArrayGet { array, index } => {
@@ -2499,11 +2465,9 @@ mod tests {
         local_table.insert("I".to_string(), 1usize);
 
         let tokens = lex("&@A[I]");
-        let (ast, patch_offsets) =
-            ExprCompiler::with_context(&mut vm, Some(&local_table), None, None)
-                .compile_expr_ast(&tokens)
-                .unwrap();
-        assert!(patch_offsets.is_empty());
+        let ast = ExprCompiler::with_context(&mut vm, Some(&local_table), None, None)
+            .compile_expr_ast(&tokens)
+            .unwrap();
 
         match ast {
             ExprAst::ArrayAddr { array, index } => {
@@ -2648,10 +2612,9 @@ mod tests {
         vm.register(crate::dict::WordEntry::new_variable("A", 0));
 
         let tokens = lex("ARRAY_LEN(@A)");
-        let (ast, patch_offsets) = ExprCompiler::new(&mut vm)
+        let ast = ExprCompiler::new(&mut vm)
             .compile_expr_ast(&tokens)
             .unwrap();
-        assert!(patch_offsets.is_empty());
 
         match ast {
             ExprAst::ArrayLen { array } => {
