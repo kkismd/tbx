@@ -14,6 +14,34 @@
 
 ---
 
+## 式コンパイラの責務メモ
+
+### `ExprAst` は当面「解決済み寄り」の単一 AST として扱う
+
+`src/expr.rs` の現行パイプラインは `tokens -> ExprResolver-assisted ExprAst -> Vec<Cell)` であり、`ExprAst` は純粋な raw parse tree ではない。
+
+- `LocalRead` / `GlobalRead` による local-global 解決
+- `Invoke { xt, ... }` による callable `Xt` の確定
+- `ArrayDesignator::{Local, Global}` による配列参照先の確定
+
+これらは AST 構築時にすでに解決される。
+
+issue #864 の時点では、`RawExprAst -> ResolvedExprAst` の二段階化は **保留** とする。
+
+- 現状の codegen は解決済みノードを前提に責務分離できている
+- raw AST を別導入しても、現時点では利用者が codegen 以外にほぼ存在しない
+- `Xt` / local-global / array designator を二重管理すると差分が大きい割に利益が小さい
+
+再評価の条件は次のようなもの。
+
+- source span を各 AST node に保持して、resolve 前後で診断を比較したくなったとき
+- unresolved syntax を別の consumer が読む必要が出たとき
+- `EntryKind` 依存情報を codegen からさらに切り離す価値が明確になったとき
+
+後続の小粒タスクでは、まず resolver と codegen の責務境界を整え、Raw/Resolved 二段階化は必要性が具体化してから着手すること。
+
+---
+
 ## TBX 構文上の落とし穴
 
 ### 文終端と1行1文の運用
