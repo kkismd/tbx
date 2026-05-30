@@ -11,7 +11,7 @@ use crate::dict::{EntryKind, FLAG_IMMEDIATE};
 use crate::error::TbxError;
 use crate::lexer::{SpannedToken, Token};
 use crate::vm::VM;
-use ast::BinaryOp;
+use ast::{BinaryOp, ExprAst, UnaryOp};
 
 #[allow(dead_code)]
 mod ast {
@@ -64,6 +64,10 @@ mod ast {
         },
         ArrayLen {
             array: ArrayDesignator,
+        },
+        LegacyCode {
+            cells: Vec<Cell>,
+            patch_offsets: Vec<usize>,
         },
     }
 
@@ -204,7 +208,16 @@ impl<'a> ExprCompiler<'a> {
     /// Returns `TbxError::UndefinedSymbol` if an identifier cannot be resolved.
     /// Returns `TbxError::TypeError` for operand/operator type mismatches.
     pub fn compile_expr(&mut self, tokens: &[SpannedToken]) -> Result<Vec<Cell>, TbxError> {
-        let mut output: Vec<Cell> = Vec::new();
+        let (cells, patch_offsets) = self.compile_expr_internal(tokens)?;
+        self.patch_offsets = patch_offsets;
+        Ok(cells)
+    }
+
+    fn compile_expr_internal(
+        &mut self,
+        tokens: &[SpannedToken],
+    ) -> Result<(Vec<Cell>, Vec<usize>), TbxError> {
+        let mut output: Vec<ExprAst> = Vec::new();
         let mut op_stack: Vec<OpItem> = Vec::new();
         // True when the previous significant token produced a value on the
         // conceptual stack (literal, closing paren, resolved identifier).
@@ -220,12 +233,12 @@ impl<'a> ExprCompiler<'a> {
                 // Literals
                 // -------------------------------------------------------
                 Token::IntLit(n) => {
-                    emit_lit(&mut output, Cell::Int(n), self.vm)?;
+                    output.push(ExprAst::Literal(Cell::Int(n)));
                     prev_was_operand = true;
                 }
 
                 Token::FloatLit(f) => {
-                    emit_lit(&mut output, Cell::Float(f), self.vm)?;
+                    output.push(ExprAst::Literal(Cell::Float(f)));
                     prev_was_operand = true;
                 }
 
@@ -235,7 +248,7 @@ impl<'a> ExprCompiler<'a> {
                     if s.len() > u16::MAX as usize {
                         return Err(TbxError::StringTooLong { len: s.len() });
                     }
-                    emit_lit(&mut output, Cell::string(s), self.vm)?;
+                    output.push(ExprAst::Literal(Cell::string(s)));
                     prev_was_operand = true;
                 }
 
@@ -247,7 +260,7 @@ impl<'a> ExprCompiler<'a> {
                     // Check local variable table first — locals shadow globals.
                     if let Some(local_idx) = self.local_table.and_then(|lt| lt.get(&name)).copied()
                     {
-                        emit_local_read(&mut output, local_idx, self.vm)?;
+                        output.push(ExprAst::LocalRead { index: local_idx });
                         prev_was_operand = true;
                         i += 1;
                         continue;
@@ -301,10 +314,11 @@ impl<'a> ExprCompiler<'a> {
                                     }
 
                                     // Emit the array handle read (local or global).
+                                    let mut legacy = Vec::new();
                                     if let Some(local_idx) =
                                         self.local_table.and_then(|lt| lt.get(&array_name)).copied()
                                     {
-                                        emit_local_read(&mut output, local_idx, self.vm)?;
+                                        emit_local_read(&mut legacy, local_idx, self.vm)?;
                                     } else {
                                         let arr_xt = self
                                             .vm
@@ -317,7 +331,7 @@ impl<'a> ExprCompiler<'a> {
                                             })?;
                                         match &self.vm.headers[arr_xt.index()].kind {
                                             EntryKind::Variable(addr) => {
-                                                emit_var_read(&mut output, *addr, self.vm)?;
+                                                emit_var_read(&mut legacy, *addr, self.vm)?;
                                             }
                                             _ => {
                                                 return Err(TbxError::TypeError {
@@ -331,7 +345,11 @@ impl<'a> ExprCompiler<'a> {
                                     // Emit ARRAY_LEN (hidden system helper).
                                     let array_len_xt =
                                         require_hidden_system_xt(self.vm, "ARRAY_LEN")?;
-                                    output.push(Cell::Xt(array_len_xt));
+                                    legacy.push(Cell::Xt(array_len_xt));
+                                    output.push(ExprAst::LegacyCode {
+                                        cells: legacy,
+                                        patch_offsets: Vec::new(),
+                                    });
 
                                     // Advance past `(`, `@`, Ident, `)` (4 tokens beyond i).
                                     i += 4;
@@ -381,14 +399,20 @@ impl<'a> ExprCompiler<'a> {
 
                         if next_is_rparen {
                             // Zero-argument call: emit based on entry kind.
+                            let mut legacy = Vec::new();
+                            let mut patch_offsets = Vec::new();
                             emit_call_by_kind(
-                                &mut output,
+                                &mut legacy,
                                 xt,
                                 0,
                                 self.vm,
                                 self.self_hdr_idx,
-                                &mut self.patch_offsets,
+                                &mut patch_offsets,
                             )?;
+                            output.push(ExprAst::LegacyCode {
+                                cells: legacy,
+                                patch_offsets,
+                            });
                             i += 2; // skip '(' and ')'
                             prev_was_operand = true;
                         } else {
@@ -404,18 +428,24 @@ impl<'a> ExprCompiler<'a> {
                         // Variable read or nullary call (no parentheses).
                         match &self.vm.headers[xt.index()].kind {
                             EntryKind::Variable(addr) => {
-                                emit_var_read(&mut output, *addr, self.vm)?;
+                                output.push(ExprAst::GlobalRead { addr: *addr });
                             }
                             _ => {
                                 // Treat as a nullary call: emit based on entry kind.
+                                let mut legacy = Vec::new();
+                                let mut patch_offsets = Vec::new();
                                 emit_call_by_kind(
-                                    &mut output,
+                                    &mut legacy,
                                     xt,
                                     0,
                                     self.vm,
                                     self.self_hdr_idx,
-                                    &mut self.patch_offsets,
+                                    &mut patch_offsets,
                                 )?;
+                                output.push(ExprAst::LegacyCode {
+                                    cells: legacy,
+                                    patch_offsets,
+                                });
                             }
                         }
                         prev_was_operand = true;
@@ -441,10 +471,7 @@ impl<'a> ExprCompiler<'a> {
                                 if let Some(local_idx) =
                                     self.local_table.and_then(|lt| lt.get(&name)).copied()
                                 {
-                                    // Simple local variable address: &A (StackAddr).
-                                    let xt_lit = require_xt(self.vm, "LIT")?;
-                                    output.push(Cell::Xt(xt_lit));
-                                    output.push(Cell::StackAddr(local_idx));
+                                    output.push(ExprAst::AddressOfLocal { index: local_idx });
                                 } else {
                                     let xt = self
                                         .vm
@@ -454,10 +481,7 @@ impl<'a> ExprCompiler<'a> {
                                         })?;
                                     match &self.vm.headers[xt.index()].kind {
                                         EntryKind::Variable(addr) => {
-                                            // Emit address only — no FETCH.
-                                            let xt_lit = require_xt(self.vm, "LIT")?;
-                                            output.push(Cell::Xt(xt_lit));
-                                            output.push(Cell::DictAddr(*addr));
+                                            output.push(ExprAst::AddressOfGlobal { addr: *addr });
                                         }
                                         _ => {
                                             return Err(TbxError::TypeError {
@@ -491,12 +515,13 @@ impl<'a> ExprCompiler<'a> {
                                             parse_at_index_tokens(tokens, lbracket_pos)?;
 
                                         // Load the array handle (local or global).
+                                        let mut legacy = Vec::new();
                                         if let Some(local_idx) = self
                                             .local_table
                                             .and_then(|lt| lt.get(&array_name))
                                             .copied()
                                         {
-                                            emit_local_read(&mut output, local_idx, self.vm)?;
+                                            emit_local_read(&mut legacy, local_idx, self.vm)?;
                                         } else {
                                             let xt = self
                                                 .vm
@@ -509,7 +534,7 @@ impl<'a> ExprCompiler<'a> {
                                                 })?;
                                             match &self.vm.headers[xt.index()].kind {
                                                 EntryKind::Variable(addr) => {
-                                                    emit_var_read(&mut output, *addr, self.vm)?;
+                                                    emit_var_read(&mut legacy, *addr, self.vm)?;
                                                 }
                                                 _ => {
                                                     return Err(TbxError::TypeError {
@@ -522,13 +547,23 @@ impl<'a> ExprCompiler<'a> {
                                         }
 
                                         // Compile the index expression.
-                                        let index_cells = self.compile_expr(index_toks)?;
-                                        output.extend(index_cells);
+                                        let (index_cells, index_patch_offsets) =
+                                            self.compile_expr_internal(index_toks)?;
+                                        let base = legacy.len();
+                                        legacy.extend(index_cells);
+                                        let patch_offsets = index_patch_offsets
+                                            .into_iter()
+                                            .map(|offset| base + offset)
+                                            .collect();
 
                                         // Emit ARRAY_ADDR (hidden system helper).
                                         let array_addr_xt =
                                             require_hidden_system_xt(self.vm, "ARRAY_ADDR")?;
-                                        output.push(Cell::Xt(array_addr_xt));
+                                        legacy.push(Cell::Xt(array_addr_xt));
+                                        output.push(ExprAst::LegacyCode {
+                                            cells: legacy,
+                                            patch_offsets,
+                                        });
 
                                         i = close_pos;
                                     }
@@ -615,14 +650,20 @@ impl<'a> ExprCompiler<'a> {
                                     reason: "trailing comma in function call argument list",
                                 });
                             }
+                            let mut legacy = Vec::new();
+                            let mut patch_offsets = Vec::new();
                             emit_call_by_kind(
-                                &mut output,
+                                &mut legacy,
                                 xt,
                                 arity,
                                 self.vm,
                                 self.self_hdr_idx,
-                                &mut self.patch_offsets,
+                                &mut patch_offsets,
                             )?;
+                            output.push(ExprAst::LegacyCode {
+                                cells: legacy,
+                                patch_offsets,
+                            });
                         }
                         _ => {
                             // Plain grouping paren — nothing extra to emit.
@@ -671,8 +712,10 @@ impl<'a> ExprCompiler<'a> {
                         });
                     }
                     // Emit TUPLE_GET: stack is [..., <tuple>, <index>] → element value.
-                    let tuple_get_xt = require_xt(self.vm, "TUPLE_GET")?;
-                    output.push(Cell::Xt(tuple_get_xt));
+                    output.push(ExprAst::LegacyCode {
+                        cells: vec![Cell::Xt(require_xt(self.vm, "TUPLE_GET")?)],
+                        patch_offsets: Vec::new(),
+                    });
                     prev_was_operand = true;
                 }
 
@@ -748,12 +791,13 @@ impl<'a> ExprCompiler<'a> {
                                 parse_at_index_tokens(tokens, lbracket_pos)?;
 
                             // Emit: load the array handle (local or global).
+                            let mut legacy = Vec::new();
                             if let Some(local_idx) =
                                 self.local_table.and_then(|lt| lt.get(&name)).copied()
                             {
                                 // Local array binding: load the Cell::Array handle from
                                 // the local slot via LIT StackAddr(idx) FETCH.
-                                emit_local_read(&mut output, local_idx, self.vm)?;
+                                emit_local_read(&mut legacy, local_idx, self.vm)?;
                             } else {
                                 // Global array binding: look up by bare name `A`.
                                 let xt = self
@@ -764,7 +808,7 @@ impl<'a> ExprCompiler<'a> {
                                     })?;
                                 match &self.vm.headers[xt.index()].kind {
                                     EntryKind::Variable(addr) => {
-                                        emit_var_read(&mut output, *addr, self.vm)?;
+                                        emit_var_read(&mut legacy, *addr, self.vm)?;
                                     }
                                     _ => {
                                         return Err(TbxError::TypeError {
@@ -776,12 +820,22 @@ impl<'a> ExprCompiler<'a> {
                             }
 
                             // Emit: compile the index expression.
-                            let index_cells = self.compile_expr(index_toks)?;
-                            output.extend(index_cells);
+                            let (index_cells, index_patch_offsets) =
+                                self.compile_expr_internal(index_toks)?;
+                            let base = legacy.len();
+                            legacy.extend(index_cells);
+                            let patch_offsets = index_patch_offsets
+                                .into_iter()
+                                .map(|offset| base + offset)
+                                .collect();
 
                             // Emit: ARRAY_GET (hidden system helper) — pops (Array, index) and pushes element.
                             let array_get_xt = require_hidden_system_xt(self.vm, "ARRAY_GET")?;
-                            output.push(Cell::Xt(array_get_xt));
+                            legacy.push(Cell::Xt(array_get_xt));
+                            output.push(ExprAst::LegacyCode {
+                                cells: legacy,
+                                patch_offsets,
+                            });
 
                             // Advance past `@`, Ident, `[`, <index_toks>, `]`.
                             i = close_pos;
@@ -821,7 +875,13 @@ impl<'a> ExprCompiler<'a> {
             emit_op_item(&op, &mut output, self.vm)?;
         }
 
-        Ok(output)
+        let mut cells = Vec::new();
+        let mut patch_offsets = Vec::new();
+        for expr in &output {
+            emit_expr_ast(expr, &mut cells, &mut patch_offsets, self.vm)?;
+        }
+
+        Ok((cells, patch_offsets))
     }
 }
 
@@ -982,7 +1042,7 @@ fn emit_call_by_kind(
 /// Precedence uses the spec's convention: 1 = highest priority, 11 = lowest.
 fn pop_ops_while(
     op_stack: &mut Vec<OpItem>,
-    output: &mut Vec<Cell>,
+    output: &mut Vec<ExprAst>,
     vm: &VM,
     cur_prec: u8,
     cur_left: bool,
@@ -1032,7 +1092,7 @@ fn op_prec(op: &OpItem) -> u8 {
 fn push_binary_op(
     op: &str,
     op_stack: &mut Vec<OpItem>,
-    output: &mut Vec<Cell>,
+    output: &mut Vec<ExprAst>,
     vm: &VM,
 ) -> Result<(), TbxError> {
     let (op, prec, left_assoc) = binary_op_info(op).ok_or(TbxError::InvalidExpression {
@@ -1047,35 +1107,69 @@ fn push_binary_op(
     Ok(())
 }
 
-/// Emit the VM instruction(s) for a single operator stack item.
-fn emit_op_item(op: &OpItem, output: &mut Vec<Cell>, vm: &VM) -> Result<(), TbxError> {
+fn reduce_expr_ast(output: &mut Vec<ExprAst>, op: &OpItem) -> Result<(), TbxError> {
     match op {
         OpItem::BinOp { op, .. } => {
-            let xt = require_xt(vm, eager_binary_prim(*op))?;
-            output.push(Cell::Xt(xt));
+            let rhs = pop_ast_operand(output)?;
+            let lhs = pop_ast_operand(output)?;
+            output.push(ExprAst::Binary {
+                op: *op,
+                lhs: Box::new(lhs),
+                rhs: Box::new(rhs),
+            });
         }
         OpItem::UnaryNeg => {
-            let xt = require_xt(vm, "NEGATE")?;
-            output.push(Cell::Xt(xt));
+            let expr = pop_ast_operand(output)?;
+            output.push(ExprAst::Unary {
+                op: UnaryOp::Neg,
+                expr: Box::new(expr),
+            });
         }
         OpItem::CommaSep => {
-            // Binary comma separator: both sides are already in the output buffer;
-            // no VM instruction is emitted.
+            let rhs = pop_ast_operand(output)?;
+            let lhs = pop_ast_operand(output)?;
+            output.push(ExprAst::Comma {
+                lhs: Box::new(lhs),
+                rhs: Box::new(rhs),
+            });
         }
         OpItem::LParen { .. } => {
-            // A stray LParen surviving to drain means an unmatched '(' — error.
             return Err(TbxError::InvalidExpression {
                 reason: "unmatched '(' in expression",
             });
         }
         OpItem::LBracket => {
-            // A stray LBracket surviving to drain means an unmatched '[' — error.
             return Err(TbxError::InvalidExpression {
                 reason: "unmatched '[' in expression",
             });
         }
     }
     Ok(())
+}
+
+/// Build the AST node for a single operator stack item.
+fn emit_op_item(op: &OpItem, output: &mut Vec<ExprAst>, _vm: &VM) -> Result<(), TbxError> {
+    match op {
+        OpItem::BinOp { .. } | OpItem::UnaryNeg | OpItem::CommaSep => reduce_expr_ast(output, op),
+        OpItem::LParen { .. } => {
+            // A stray LParen surviving to drain means an unmatched '(' — error.
+            Err(TbxError::InvalidExpression {
+                reason: "unmatched '(' in expression",
+            })
+        }
+        OpItem::LBracket => {
+            // A stray LBracket surviving to drain means an unmatched '[' — error.
+            Err(TbxError::InvalidExpression {
+                reason: "unmatched '[' in expression",
+            })
+        }
+    }
+}
+
+fn pop_ast_operand(output: &mut Vec<ExprAst>) -> Result<ExprAst, TbxError> {
+    output.pop().ok_or(TbxError::InvalidExpression {
+        reason: "missing operand in expression",
+    })
 }
 
 /// Map a `BinaryOp` to the eager primitive used by the legacy RPN backend.
@@ -1096,6 +1190,61 @@ fn eager_binary_prim(op: BinaryOp) -> &'static str {
         BinaryOp::BitOr => "BOR",
         BinaryOp::And => "AND",
         BinaryOp::Or => "OR",
+    }
+}
+
+fn emit_expr_ast(
+    expr: &ExprAst,
+    output: &mut Vec<Cell>,
+    patch_offsets: &mut Vec<usize>,
+    vm: &VM,
+) -> Result<(), TbxError> {
+    match expr {
+        ExprAst::Literal(value) => emit_lit(output, value.clone(), vm),
+        ExprAst::LocalRead { index } => emit_local_read(output, *index, vm),
+        ExprAst::GlobalRead { addr } => emit_var_read(output, *addr, vm),
+        ExprAst::AddressOfLocal { index } => {
+            let xt = require_xt(vm, "LIT")?;
+            output.push(Cell::Xt(xt));
+            output.push(Cell::StackAddr(*index));
+            Ok(())
+        }
+        ExprAst::AddressOfGlobal { addr } => {
+            let xt = require_xt(vm, "LIT")?;
+            output.push(Cell::Xt(xt));
+            output.push(Cell::DictAddr(*addr));
+            Ok(())
+        }
+        ExprAst::Unary { op, expr } => {
+            emit_expr_ast(expr, output, patch_offsets, vm)?;
+            match op {
+                UnaryOp::Neg => output.push(Cell::Xt(require_xt(vm, "NEGATE")?)),
+            }
+            Ok(())
+        }
+        ExprAst::Binary { op, lhs, rhs } => {
+            emit_expr_ast(lhs, output, patch_offsets, vm)?;
+            emit_expr_ast(rhs, output, patch_offsets, vm)?;
+            output.push(Cell::Xt(require_xt(vm, eager_binary_prim(*op))?));
+            Ok(())
+        }
+        ExprAst::Comma { lhs, rhs } => {
+            emit_expr_ast(lhs, output, patch_offsets, vm)?;
+            emit_expr_ast(rhs, output, patch_offsets, vm)?;
+            Ok(())
+        }
+        ExprAst::LegacyCode {
+            cells,
+            patch_offsets: local_patch_offsets,
+        } => {
+            let base = output.len();
+            output.extend(cells.iter().cloned());
+            patch_offsets.extend(local_patch_offsets.iter().map(|offset| base + offset));
+            Ok(())
+        }
+        _ => Err(TbxError::InvalidExpression {
+            reason: "unsupported AST node in expression codegen",
+        }),
     }
 }
 
