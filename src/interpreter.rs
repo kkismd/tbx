@@ -451,6 +451,14 @@ impl Interpreter {
     ///
     /// This is used both during interpretation (followed by `EXIT` + run) and during
     /// compilation (within a DEF body; `EXIT` is written by the END primitive).
+    ///
+    /// Responsibility boundary:
+    /// - argument expressions are lowered via `ExprCompiler`
+    /// - the statement-only `LIT_MARKER` / `DROP_TO_MARKER` envelope is built here
+    /// - the callee-dispatch suffix is emitted by `write_stmt_callee_suffix_to_dict()`
+    ///
+    /// This keeps expression invoke lowering (`expr.rs`) independent from the
+    /// statement-call stack cleanup protocol.
     fn write_stmt_to_dict(
         &mut self,
         stmt_name: &str,
@@ -537,18 +545,10 @@ impl Interpreter {
             .check_variadic_arity(arity)
             .map_err(&make_err)?;
 
-        // Check whether the statement is a compiled word (needs CALL with arity/locals)
-        // or a primitive/other (called directly by placing Xt in the code stream).
-        let stmt_is_word = matches!(
-            self.vm.headers[stmt_xt.index()].kind,
-            crate::dict::EntryKind::Word(_)
-        );
-
         // Look up required system words for building the code buffer.
         // These must always be present after init_vm(); return a proper error if missing.
         let lit_marker_xt =
             self.lookup_required("LIT_MARKER", err_line, err_col, source_excerpt)?;
-        let call_xt = self.lookup_required("CALL", err_line, err_col, source_excerpt)?;
         let drop_to_marker_xt =
             self.lookup_required("DROP_TO_MARKER", err_line, err_col, source_excerpt)?;
 
@@ -574,11 +574,43 @@ impl Interpreter {
                 state.call_patch_list.push(base_dp + offset);
             }
         }
+        self.write_stmt_callee_suffix_to_dict(stmt_xt, arity, err_line, err_col, source_excerpt)?;
+        self.vm
+            .dict_write(Cell::Xt(drop_to_marker_xt))
+            .map_err(&make_err)?;
+
+        Ok(())
+    }
+
+    /// Emit the callee-dispatch suffix inside a statement call envelope.
+    ///
+    /// Unlike `expr.rs::emit_call_by_kind()`, this writes directly to the dictionary and
+    /// assumes `write_stmt_to_dict()` already emitted `LIT_MARKER` plus the argument cells.
+    /// The trailing `DROP_TO_MARKER` is also owned by `write_stmt_to_dict()`.
+    ///
+    /// Self-recursive word calls use the same `local_count = 0` placeholder strategy as
+    /// expression invoke lowering, but statement calls register the absolute dictionary
+    /// position immediately because they are written in place instead of returning a
+    /// temporary `Vec<Cell>`.
+    fn write_stmt_callee_suffix_to_dict(
+        &mut self,
+        stmt_xt: Xt,
+        arity: usize,
+        err_line: usize,
+        err_col: usize,
+        source_excerpt: &str,
+    ) -> Result<(), InterpreterError> {
+        let make_err = |e: TbxError| InterpreterError::new(err_line, err_col, source_excerpt, e);
+
+        let stmt_is_word = matches!(
+            self.vm.headers[stmt_xt.index()].kind,
+            crate::dict::EntryKind::Word(_)
+        );
         if stmt_is_word {
-            // Determine local_count for the CALL instruction.
+            let call_xt = self.lookup_required("CALL", err_line, err_col, source_excerpt)?;
             // For self-recursive calls (word currently being compiled), local_count is not yet
-            // known — write 0 as placeholder and add the position to the patch list.
-            // For all other calls, use the callee's confirmed local_count from the header.
+            // known. Emit 0 as a placeholder and register the absolute dictionary position for
+            // END-time patching. Non-recursive calls can use the callee header's confirmed value.
             // Compare by header index (not name) to handle shadowed/redefined words correctly.
             let is_self_recursive = self
                 .vm
@@ -605,26 +637,24 @@ impl Interpreter {
                     .dict_write(Cell::Int(callee_local_count as i64))
                     .map_err(&make_err)?;
             }
-        } else {
-            // For a variadic primitive used as a statement, emit LIT + Int(arity)
-            // before the Xt so the primitive can pop the arity from the stack.
-            let is_variadic_prim = matches!(
-                self.vm.headers[stmt_xt.index()].kind,
-                crate::dict::EntryKind::Primitive(_)
-            ) && self.vm.headers[stmt_xt.index()].is_variadic;
-            if is_variadic_prim {
-                let lit_xt = self.lookup_required("LIT", err_line, err_col, source_excerpt)?;
-                self.vm.dict_write(Cell::Xt(lit_xt)).map_err(&make_err)?;
-                self.vm
-                    .dict_write(Cell::Int(arity as i64))
-                    .map_err(&make_err)?;
-            }
-            self.vm.dict_write(Cell::Xt(stmt_xt)).map_err(&make_err)?;
-        }
-        self.vm
-            .dict_write(Cell::Xt(drop_to_marker_xt))
-            .map_err(&make_err)?;
 
+            return Ok(());
+        }
+
+        // For a variadic primitive used as a statement, emit LIT + Int(arity)
+        // before the Xt so the primitive can pop the arity from the stack.
+        let is_variadic_prim = matches!(
+            self.vm.headers[stmt_xt.index()].kind,
+            crate::dict::EntryKind::Primitive(_)
+        ) && self.vm.headers[stmt_xt.index()].is_variadic;
+        if is_variadic_prim {
+            let lit_xt = self.lookup_required("LIT", err_line, err_col, source_excerpt)?;
+            self.vm.dict_write(Cell::Xt(lit_xt)).map_err(&make_err)?;
+            self.vm
+                .dict_write(Cell::Int(arity as i64))
+                .map_err(&make_err)?;
+        }
+        self.vm.dict_write(Cell::Xt(stmt_xt)).map_err(&make_err)?;
         Ok(())
     }
 
