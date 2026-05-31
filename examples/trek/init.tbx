@@ -29,7 +29,7 @@ END
 # Klingon 数または Starbase 数が 0 なら galaxy generation をやり直す
 DEF INIT_GALAXY()
   VAR DONE = FALSE
-  WHILE DONE = FALSE
+  WHILE !DONE
     LET KLINGONS_LEFT = 0
     LET BASES_LEFT = 0
     VAR QY
