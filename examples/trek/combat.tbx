@@ -1,4 +1,4 @@
-# trek/combat.tbx — フェイザー・魚雷・クリンゴン攻撃手続き
+# trek/combat.tbx — phaser, torpedo, and Klingon combat procedures
 
 # Damage slot 4 is phaser control per Mayfield D[4].
 DEF PHASER_CONTROL_DISABLED()
@@ -10,14 +10,14 @@ DEF PHASER_COMPUTER_FAILURE_ACTIVE()
   RETURN @DAMAGE[7] < 0
 END
 
-# 光子魚雷発射コマンド (STTR1.BAS lines 2800-3450)
+# Photon torpedo firing command (STTR1.BAS lines 2800-3450)
 DEF TORPEDO_CONTROL()
   # Placeholder stays here so #849 can fill in combat behavior without touching dispatch.
   # TODO: Mayfield STTR1 photon torpedo control (cmd 4)
   PRINTLN "PHOTON TORPEDO CONTROL is not implemented yet"
 END
 
-# クリンゴンによる攻撃 (STTR1.BAS lines 3790-3910)
+# Klingon attack procedure (STTR1.BAS lines 3790-3910)
 DEF KLINGON_ATTACK()
   # TODO: Mayfield STTR1 Klingon attack
 END
@@ -33,8 +33,8 @@ DEF KLINGON_ALIVE(I)
   RETURN @K_E[I] > 0
 END
 
-# Enterprise から Klingon I までのセクター内距離を返す
-# Klingon 座標は @K_X[I], @K_Y[I]
+# Return the sector distance from the Enterprise to Klingon I.
+# Klingon coordinates are stored in @K_X[I] and @K_Y[I].
 DEF DIST_TO_KLINGON(I)
   IF I < 1
     RETURN 0
@@ -82,7 +82,7 @@ DEF MAYBE_VICTORY_AFTER_KLINGON_DESTROYED()
   ENDIF
 END
 
-# クリンゴンを撃破する (STTR1.BAS lines 3670-3780)
+# Destroy a Klingon target (STTR1.BAS lines 3670-3780)
 DEF DESTROY_KLINGON(I)
   IF !KLINGON_ALIVE(I)
     RETURN
@@ -179,7 +179,7 @@ DEF TRY_FIRE_PHASERS_UNITS(UNITS)
   RETURN TRUE
 END
 
-# フェイザー攻撃コマンド (STTR1.BAS lines 2530-2790)
+# Phaser firing command (STTR1.BAS lines 2530-2790)
 DEF PHASER_CONTROL()
   IF KLINGONS_HERE <= 0
     RETURN
