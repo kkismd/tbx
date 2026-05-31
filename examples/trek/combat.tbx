@@ -1,10 +1,13 @@
 # trek/combat.tbx — フェイザー・魚雷・クリンゴン攻撃手続き
 
-# フェイザー攻撃コマンド (STTR1.BAS lines 2530-2790)
-DEF PHASER_CONTROL()
-  # Placeholder stays here so command dispatch already targets the combat boundary.
-  # TODO: Mayfield STTR1 phaser control (cmd 3)
-  PRINTLN "PHASER CONTROL is not implemented yet"
+# Damage slot 4 is phaser control per Mayfield D[4].
+DEF PHASER_CONTROL_DISABLED()
+  RETURN @DAMAGE[4] < 0
+END
+
+# Damage slot 7 is the onboard computer per Mayfield D[7].
+DEF PHASER_COMPUTER_FAILURE_ACTIVE()
+  RETURN @DAMAGE[7] < 0
 END
 
 # 光子魚雷発射コマンド (STTR1.BAS lines 2800-3450)
@@ -161,4 +164,35 @@ END
 # Non-deterministic wrapper for the phaser core.
 DEF FIRE_PHASERS_WITH_UNITS(UNITS)
   FIRE_PHASERS_WITH_UNITS_AND_ROLL UNITS, RAND_FACTOR_0_TO_2_100()
+END
+
+# Validate the requested phaser units before dispatching to the combat core.
+DEF TRY_FIRE_PHASERS_UNITS(UNITS)
+  IF UNITS <= 0
+    RETURN FALSE
+  ENDIF
+  IF UNITS > ENERGY
+    PRINTLN "INSUFFICIENT ENERGY AVAILABLE"
+    RETURN FALSE
+  ENDIF
+  FIRE_PHASERS_WITH_UNITS UNITS
+  RETURN TRUE
+END
+
+# フェイザー攻撃コマンド (STTR1.BAS lines 2530-2790)
+DEF PHASER_CONTROL()
+  IF KLINGONS_HERE <= 0
+    RETURN
+  ENDIF
+  IF PHASER_CONTROL_DISABLED()
+    PRINTLN "PHASER CONTROL IS DISABLED"
+    RETURN
+  ENDIF
+  IF PHASER_COMPUTER_FAILURE_ACTIVE()
+    PRINTLN "COMPUTER FAILURE HAMPERS ACCURACY"
+  ENDIF
+  PRINTLN "PHASERS LOCKED ON TARGET.  ENERGY AVAILABLE=", ENERGY
+  PUTSTR "NUMBER OF UNITS TO FIRE:"
+  VAR UNITS = READ_NUMBER_OR(0)
+  TRY_FIRE_PHASERS_UNITS UNITS
 END
