@@ -40,16 +40,16 @@ END
 
 # docking 判定 (STTR1.BAS lines 4120-4300)
 # Enterprise 周辺 3x3 sector を調べ Starbase (3) が隣接していれば dock する
-# dock 時: DOCKED=1, CONDITION="DOCKED", energy/torpedoes を最大値に補給, SHIELDS=0
-# dock なし時: DOCKED=0
+# dock 時: DOCKED=TRUE, CONDITION="DOCKED", energy/torpedoes を最大値に補給, SHIELDS=0
+# dock なし時: DOCKED=FALSE
 DEF CHECK_DOCKING()
-  LET DOCKED = 0
+  LET DOCKED = FALSE
   VAR DSY = ENT_SY - 1
   WHILE DSY <= ENT_SY + 1
     VAR DSX = ENT_SX - 1
     WHILE DSX <= ENT_SX + 1
-      IF (DOCKED = 0) && IS_IN_SECTOR_BOUNDS(DSX, DSY) && (@SECTOR[DSX, DSY] = 3)
-        LET DOCKED = 1
+      IF (DOCKED = FALSE) && IS_IN_SECTOR_BOUNDS(DSX, DSY) && (@SECTOR[DSX, DSY] = 3)
+        LET DOCKED = TRUE
         LET CONDITION = "DOCKED"
         LET ENERGY = MAX_ENERGY
         LET TORPEDOES = MAX_TORPEDOES
@@ -95,7 +95,7 @@ END
 DEF SHORT_RANGE_SCAN()
   # TODO: @DAMAGE[2] < 0 の場合は "*** SHORT RANGE SENSORS ARE OUT ***" を表示してスキップ (damage check, 本 issue 非目標)
   CHECK_DOCKING
-  IF DOCKED = 0
+  IF DOCKED = FALSE
     UPDATE_CONDITION
   ENDIF
   PRINTLN "---------------------------------"

@@ -28,8 +28,8 @@ END
 # 各クアドラントに K3*100 + B3*10 + S3 を格納する
 # Klingon 数または Starbase 数が 0 なら galaxy generation をやり直す
 DEF INIT_GALAXY()
-  VAR DONE = 0
-  WHILE DONE = 0
+  VAR DONE = FALSE
+  WHILE DONE = FALSE
     LET KLINGONS_LEFT = 0
     LET BASES_LEFT = 0
     VAR QY
@@ -63,7 +63,7 @@ DEF INIT_GALAXY()
     LET KLINGONS_INITIAL = KLINGONS_LEFT
     # B9 <= 0 OR K9 <= 0 のとき galaxy generation をやり直す (STTR1.BAS line 775)
     IF (KLINGONS_LEFT > 0) && (BASES_LEFT > 0)
-      LET DONE = 1
+      LET DONE = TRUE
     ENDIF
   ENDWH
 END
@@ -153,8 +153,8 @@ DEF INIT_GAME()
   # シールド初期値 (STTR1.BAS line 350: S=0)
   LET SHIELDS = 0
   # ゲーム状態フラグ初期化
-  LET DOCKED = 0
-  LET GAME_OVER = 0
+  LET DOCKED = FALSE
+  LET GAME_OVER = FALSE
   LET NAV_MOVE_RESULT = 0
   LET NAV_STEPS_REQUESTED = 0
   LET NAV_STEPS_COMPLETED = 0
