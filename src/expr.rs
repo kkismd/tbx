@@ -118,6 +118,7 @@ mod ast {
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
     pub(super) enum UnaryOp {
         Neg,
+        Not,
     }
 
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -140,8 +141,8 @@ enum OpItem {
         prec: u8,
         left_assoc: bool,
     },
-    /// Unary prefix negation (`-`). Right-associative with precedence 1 (highest).
-    UnaryNeg,
+    /// Unary prefix operator (`-` / `!`). Right-associative with precedence 1 (highest).
+    UnaryOp(UnaryOp),
     /// Left-parenthesis sentinel. Carries optional call metadata.
     ///
     /// `call` is `Some(LParenCall::Invoke(xt, arity))` for an invoke form,
@@ -665,7 +666,19 @@ impl<'a> ExprCompiler<'a> {
                             } else {
                                 // Unary negation (precedence 1, right-associative).
                                 // No operators are popped (right-assoc, highest prec).
-                                op_stack.push(OpItem::UnaryNeg);
+                                op_stack.push(OpItem::UnaryOp(UnaryOp::Neg));
+                                prev_was_operand = false;
+                            }
+                        }
+                        "!" => {
+                            if prev_was_operand {
+                                return Err(TbxError::InvalidExpression {
+                                    reason: "unknown operator in expression",
+                                });
+                            } else {
+                                // Unary logical negation (precedence 1, right-associative).
+                                // No operators are popped (right-assoc, highest prec).
+                                op_stack.push(OpItem::UnaryOp(UnaryOp::Not));
                                 prev_was_operand = false;
                             }
                         }
@@ -969,6 +982,7 @@ struct ExprCodegenContext {
     fetch_xt: Xt,
     call_xt: Xt,
     negate_xt: Xt,
+    not_xt: Xt,
     tuple_get_xt: Xt,
     to_bool_xt: Xt,
     array_get_xt: Xt,
@@ -988,6 +1002,7 @@ impl ExprCodegenContext {
             fetch_xt: require_xt(vm, "FETCH")?,
             call_xt: require_xt(vm, "CALL")?,
             negate_xt: require_xt(vm, "NEGATE")?,
+            not_xt: require_xt(vm, "NOT")?,
             tuple_get_xt: require_xt(vm, "TUPLE_GET")?,
             to_bool_xt: require_hidden_system_xt(vm, "TO_BOOL")?,
             array_get_xt: require_hidden_system_xt(vm, "ARRAY_GET")?,
@@ -1252,7 +1267,7 @@ fn op_prec(op: &OpItem) -> u8 {
             let _ = left_assoc;
             *prec
         }
-        OpItem::UnaryNeg => 1,
+        OpItem::UnaryOp(_) => 1,
         OpItem::CommaSep => 11,
         OpItem::LParen { .. } => u8::MAX, // sentinel; never compared in practice
         OpItem::LBracket => u8::MAX,      // sentinel; never compared in practice
@@ -1288,10 +1303,10 @@ fn reduce_expr_ast(output: &mut Vec<ExprAst>, op: &OpItem) -> Result<(), TbxErro
                 rhs: Box::new(rhs),
             });
         }
-        OpItem::UnaryNeg => {
+        OpItem::UnaryOp(unary_op) => {
             let expr = pop_ast_operand(output)?;
             output.push(ExprAst::Unary {
-                op: UnaryOp::Neg,
+                op: *unary_op,
                 expr: Box::new(expr),
             });
         }
@@ -1320,7 +1335,7 @@ fn reduce_expr_ast(output: &mut Vec<ExprAst>, op: &OpItem) -> Result<(), TbxErro
 /// Build the AST node for a single operator stack item.
 fn emit_op_item(op: &OpItem, output: &mut Vec<ExprAst>, _vm: &VM) -> Result<(), TbxError> {
     match op {
-        OpItem::BinOp { .. } | OpItem::UnaryNeg | OpItem::CommaSep => reduce_expr_ast(output, op),
+        OpItem::BinOp { .. } | OpItem::UnaryOp(_) | OpItem::CommaSep => reduce_expr_ast(output, op),
         OpItem::LParen { .. } => {
             // A stray LParen surviving to drain means an unmatched '(' — error.
             Err(TbxError::InvalidExpression {
@@ -1429,6 +1444,7 @@ fn append_expr_ast_cells(
             )?;
             match op {
                 UnaryOp::Neg => output.push(Cell::Xt(codegen.negate_xt)),
+                UnaryOp::Not => output.push(Cell::Xt(codegen.not_xt)),
             }
             Ok(())
         }
@@ -2130,6 +2146,96 @@ mod tests {
         );
     }
 
+    #[test]
+    fn test_double_unary_not() {
+        let mut vm = make_vm();
+        let tokens = lex("!!TRUE");
+        let result = ExprCompiler::new(&mut vm).compile_expr(&tokens).unwrap();
+
+        let true_xt = vm.lookup("TRUE").unwrap();
+        let not_xt = vm.lookup("NOT").unwrap();
+
+        assert_eq!(
+            result,
+            vec![Cell::Xt(true_xt), Cell::Xt(not_xt), Cell::Xt(not_xt),]
+        );
+    }
+
+    #[test]
+    fn test_unary_not_precedence_with_grouping_and_short_circuit() {
+        let mut vm = make_vm();
+        let tokens = lex("!(TRUE && FALSE)");
+        let result = ExprCompiler::new(&mut vm)
+            .with_output_base_dp(100)
+            .compile_expr(&tokens)
+            .unwrap();
+
+        let true_xt = vm.lookup("TRUE").unwrap();
+        let false_xt = vm.lookup("FALSE").unwrap();
+        let not_xt = vm.lookup("NOT").unwrap();
+        let branch_false_xt = vm
+            .find_by_kind(|kind| matches!(kind, EntryKind::BranchIfFalse))
+            .unwrap();
+        let goto_xt = vm
+            .find_by_kind(|kind| matches!(kind, EntryKind::Goto))
+            .unwrap();
+        let lit_xt = vm.lookup("LIT").unwrap();
+        let to_bool_xt = vm.lookup_hidden_system("TO_BOOL").unwrap();
+
+        assert_eq!(
+            result,
+            vec![
+                Cell::Xt(true_xt),
+                Cell::Xt(branch_false_xt),
+                Cell::DictAddr(107),
+                Cell::Xt(false_xt),
+                Cell::Xt(to_bool_xt),
+                Cell::Xt(goto_xt),
+                Cell::DictAddr(109),
+                Cell::Xt(lit_xt),
+                Cell::Bool(false),
+                Cell::Xt(not_xt),
+            ]
+        );
+    }
+
+    #[test]
+    fn test_unary_not_precedence_over_logical_or() {
+        let mut vm = make_vm();
+        let tokens = lex("!TRUE || TRUE");
+        let result = ExprCompiler::new(&mut vm)
+            .with_output_base_dp(100)
+            .compile_expr(&tokens)
+            .unwrap();
+
+        let true_xt = vm.lookup("TRUE").unwrap();
+        let not_xt = vm.lookup("NOT").unwrap();
+        let branch_true_xt = vm
+            .find_by_kind(|kind| matches!(kind, EntryKind::BranchIfTrue))
+            .unwrap();
+        let goto_xt = vm
+            .find_by_kind(|kind| matches!(kind, EntryKind::Goto))
+            .unwrap();
+        let lit_xt = vm.lookup("LIT").unwrap();
+        let to_bool_xt = vm.lookup_hidden_system("TO_BOOL").unwrap();
+
+        assert_eq!(
+            result,
+            vec![
+                Cell::Xt(true_xt),
+                Cell::Xt(not_xt),
+                Cell::Xt(branch_true_xt),
+                Cell::DictAddr(108),
+                Cell::Xt(true_xt),
+                Cell::Xt(to_bool_xt),
+                Cell::Xt(goto_xt),
+                Cell::DictAddr(110),
+                Cell::Xt(lit_xt),
+                Cell::Bool(true),
+            ]
+        );
+    }
+
     // ------------------------------------------------------------------
     // Additional: comparison operator
     // ------------------------------------------------------------------
@@ -2209,7 +2315,6 @@ mod tests {
 
     #[test]
     fn test_unknown_operator_error() {
-        // "!" is lexed as Op("!") but is not in binary_op_info.
         let mut vm = make_vm();
         let tokens = lex("1 ! 2");
         let err = ExprCompiler::new(&mut vm)
@@ -2218,6 +2323,30 @@ mod tests {
         assert!(
             matches!(err, TbxError::InvalidExpression { .. }),
             "expected InvalidExpression for unknown operator, got: {err:?}"
+        );
+    }
+
+    #[test]
+    fn test_unary_not_without_operand_errors() {
+        let mut vm = make_vm();
+        let err = ExprCompiler::new(&mut vm)
+            .compile_expr(&lex("!"))
+            .unwrap_err();
+        assert!(
+            matches!(err, TbxError::InvalidExpression { reason } if reason.contains("missing operand")),
+            "expected InvalidExpression for missing operand, got: {err:?}"
+        );
+    }
+
+    #[test]
+    fn test_unary_not_before_rparen_errors() {
+        let mut vm = make_vm();
+        let err = ExprCompiler::new(&mut vm)
+            .compile_expr(&lex("(!)"))
+            .unwrap_err();
+        assert!(
+            matches!(err, TbxError::InvalidExpression { reason } if reason.contains("missing operand")),
+            "expected InvalidExpression for missing operand before ')', got: {err:?}"
         );
     }
 
@@ -2283,6 +2412,7 @@ mod tests {
             ("1 >= 2", "GE"),
             ("1 = 2", "EQ"),
             ("1 <> 2", "NEQ"),
+            ("!TRUE", "NOT"),
             ("1 & 2", "BAND"),
             ("1 | 2", "BOR"),
         ];

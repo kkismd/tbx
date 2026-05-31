@@ -521,20 +521,23 @@ PRINTLN (A = B) || (A = C)
 
 ### 論理・ビット演算
 
-- `AND`, `OR`
+- `AND`, `OR`, `NOT`
 - `BAND`, `BOR`
 
 主な演算子:
 
 - 算術: `+`, `-`, `*`, `/`, `%`
 - 比較: `=`, `<>`, `<`, `>`, `<=`, `>=`
-- 論理: `&&`, `||`
+- 論理: `!`, `&&`, `||`
 - ビット演算: `&`, `|`
 
 `&&` / `||` は short-circuit 評価する。`A && B` は `A` が falsy なら
 `B` を評価せず、`A || B` は `A` が truthy なら `B` を評価しない。
 どちらも operand 自体ではなく `Bool` を返す。範囲チェック後の配列アクセスなど、
 右辺を条件付きでのみ安全に評価できる場合の guard として使える。
+
+`NOT(V)` は `V` の truthy / falsy を反転して `Bool` を返す。`!expr` は
+`NOT(expr)` 相当の単項演算子で、unary `-` と同じ高い優先順位で評価される。
 
 ## 乱数・時刻
 
@@ -585,7 +588,7 @@ USE "lib/foo.tbx"
 
 - `ADD`, `SUB`, `MUL`, `DIV`, `MOD`, `SQRT`, `NEGATE`, `INT`
 - `EQ`, `NEQ`, `LT`, `GT`, `LE`, `GE`
-- `AND`, `OR`, `BAND`, `BOR`
+- `AND`, `OR`, `NOT`, `BAND`, `BOR`
 
 ### 文字列
 
