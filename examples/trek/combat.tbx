@@ -19,12 +19,47 @@ DEF KLINGON_ATTACK()
   # TODO: Mayfield STTR1 Klingon attack
 END
 
+# Return truthy when Klingon I is alive.
+DEF KLINGON_ALIVE(I)
+  IF I < 1
+    RETURN FALSE
+  ENDIF
+  IF I > 3
+    RETURN FALSE
+  ENDIF
+  RETURN @K_E[I] > 0
+END
+
 # Enterprise から Klingon I までのセクター内距離を返す
 # Klingon 座標は @K_X[I], @K_Y[I]
 DEF DIST_TO_KLINGON(I)
+  IF I < 1
+    RETURN 0
+  ENDIF
+  IF I > 3
+    RETURN 0
+  ENDIF
   VAR DX = @K_X[I] - ENT_SX
   VAR DY = @K_Y[I] - ENT_SY
   RETURN SQRT(DX * DX + DY * DY)
+END
+
+# deterministic phaser hit helper
+# ROLL is a fixed-point multiplier in 0..199 where 100 means 1.0x.
+DEF PHASER_HIT_AMOUNT(ENERGY_TO_FIRE, TARGET_COUNT, DISTANCE, ROLL)
+  IF ENERGY_TO_FIRE <= 0
+    RETURN 0
+  ENDIF
+  IF TARGET_COUNT <= 0
+    RETURN 0
+  ENDIF
+  IF DISTANCE <= 0
+    RETURN 0
+  ENDIF
+  IF ROLL <= 0
+    RETURN 0
+  ENDIF
+  RETURN (ENERGY_TO_FIRE * (ROLL / 100.0)) / TARGET_COUNT / DISTANCE
 END
 
 # クリンゴンを撃破する (STTR1.BAS lines 3670-3780)
