@@ -91,3 +91,74 @@ DEF DESTROY_KLINGON(I)
   UPDATE_CURRENT_QUADRANT_KLINGON_SUMMARY KLINGONS_HERE
   MAYBE_VICTORY_AFTER_KLINGON_DESTROYED
 END
+
+# Count currently alive Klingons in the active quadrant.
+DEF COUNT_LIVING_KLINGONS()
+  VAR COUNT = 0
+  VAR I
+  FOR &I, 3
+    IF KLINGON_ALIVE(I)
+      LET COUNT = COUNT + 1
+    ENDIF
+  NEXT
+  RETURN COUNT
+END
+
+# Placeholder hook for future computer damage accuracy penalties.
+DEF APPLY_PHASER_COMPUTER_PENALTY(UNITS)
+  # TODO: apply deterministic accuracy penalty when phaser control damage is wired in
+  RETURN UNITS
+END
+
+# Placeholder hook for post-action Klingon retaliation.
+DEF MAYBE_KLINGON_ATTACK_AFTER_PLAYER_ACTION()
+  # TODO: wire Klingon retaliation after player combat actions
+END
+
+# Print a stable phaser hit line for interactive use and deterministic logs.
+DEF PRINT_PHASER_HIT(HIT, KX, KY, LEFT)
+  PRINTLN "PHASER HIT ", INT(HIT), " AT ", KX, ",", KY, " LEFT ", INT(LEFT)
+END
+
+# Deterministic non-interactive phaser core.
+DEF FIRE_PHASERS_WITH_UNITS_AND_ROLL(UNITS, ROLL)
+  IF UNITS <= 0
+    RETURN
+  ENDIF
+  IF UNITS > ENERGY
+    RETURN
+  ENDIF
+
+  LET ENERGY = ENERGY - UNITS
+  MAYBE_KLINGON_ATTACK_AFTER_PLAYER_ACTION
+
+  IF KLINGONS_HERE <= 0
+    RETURN
+  ENDIF
+
+  VAR EFFECTIVE_UNITS = APPLY_PHASER_COMPUTER_PENALTY(UNITS)
+  VAR TARGET_COUNT = COUNT_LIVING_KLINGONS()
+  IF TARGET_COUNT <= 0
+    RETURN
+  ENDIF
+
+  VAR I
+  FOR &I, 3
+    IF KLINGON_ALIVE(I)
+      VAR HIT = PHASER_HIT_AMOUNT(EFFECTIVE_UNITS, TARGET_COUNT, DIST_TO_KLINGON(I), ROLL)
+      VAR LEFT = @K_E[I] - HIT
+      IF LEFT <= 0
+        PRINT_PHASER_HIT HIT, @K_X[I], @K_Y[I], 0
+        DESTROY_KLINGON I
+      ELSE
+        LET @K_E[I] = LEFT
+        PRINT_PHASER_HIT HIT, @K_X[I], @K_Y[I], LEFT
+      ENDIF
+    ENDIF
+  NEXT
+END
+
+# Non-deterministic wrapper for the phaser core.
+DEF FIRE_PHASERS_WITH_UNITS(UNITS)
+  FIRE_PHASERS_WITH_UNITS_AND_ROLL UNITS, RAND_FACTOR_0_TO_2_100()
+END
