@@ -17,7 +17,6 @@ END
 # クリンゴンによる攻撃 (STTR1.BAS lines 3790-3910)
 DEF KLINGON_ATTACK()
   # TODO: Mayfield STTR1 Klingon attack
-  PRINTLN "KLINGON ATTACK is not implemented yet"
 END
 
 # Enterprise から Klingon I までのセクター内距離を返す
