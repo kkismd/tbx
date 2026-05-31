@@ -2,12 +2,16 @@
 
 # フェイザー攻撃コマンド (STTR1.BAS lines 2530-2790)
 DEF PHASER_CONTROL()
+  # Placeholder stays here so command dispatch already targets the combat boundary.
   # TODO: Mayfield STTR1 phaser control (cmd 3)
+  PRINTLN "PHASER CONTROL is not implemented yet"
 END
 
 # 光子魚雷発射コマンド (STTR1.BAS lines 2800-3450)
 DEF TORPEDO_CONTROL()
+  # Placeholder stays here so #849 can fill in combat behavior without touching dispatch.
   # TODO: Mayfield STTR1 photon torpedo control (cmd 4)
+  PRINTLN "PHOTON TORPEDO CONTROL is not implemented yet"
 END
 
 # クリンゴンによる攻撃 (STTR1.BAS lines 3790-3910)
