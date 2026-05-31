@@ -1,0 +1,30 @@
+# lib/tests/test_not.tbx — TBX integration tests for NOT and unary !
+USE "lib/tests/helper.tbx"
+
+ASSERT (!FALSE)
+ASSERT_FALSE (!TRUE)
+ASSERT (NOT(FALSE) = TRUE)
+ASSERT (NOT(TRUE) = FALSE)
+ASSERT (NOT(1) = FALSE)
+ASSERT (NOT(0) = TRUE)
+ASSERT (NOT("") = TRUE)
+ASSERT (!!TRUE)
+ASSERT (!(TRUE && FALSE))
+ASSERT (!TRUE || TRUE)
+ASSERT_FALSE (!(TRUE || FALSE))
+
+DEF LOOP_UNTIL_DONE()
+  VAR DONE
+  VAR COUNT
+  LET DONE = FALSE
+  LET COUNT = 0
+  WHILE !DONE
+    LET COUNT = COUNT + 1
+    IF COUNT >= 3
+      LET DONE = TRUE
+    ENDIF
+  ENDWH
+  RETURN COUNT
+END
+
+ASSERT LOOP_UNTIL_DONE() = 3
