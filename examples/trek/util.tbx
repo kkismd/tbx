@@ -5,6 +5,11 @@ DEF PRINT_INTRO()
   # TODO: Mayfield STTR1 instructions / title screen (STTR1.BAS lines 5820-6410)
 END
 
+# 1行入力を数値として読み取り、失敗時は DEFAULT を返す
+DEF READ_NUMBER_OR(DEFAULT)
+  RETURN RESULT_OR(GETDEC?(), DEFAULT)
+END
+
 # プロンプトを表示して数値入力を受け取る（無効入力の場合は再入力を促す）
 DEF PROMPT_NUM(PROMPT)
   VAR R
