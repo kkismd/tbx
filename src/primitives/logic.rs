@@ -1,6 +1,6 @@
 //! Low-dependency logical and bitwise primitives.
 //!
-//! These primitives implement boolean (`AND`, `OR`, `TO_BOOL`) and bitwise
+//! These primitives implement boolean (`AND`, `OR`, `NOT`, `TO_BOOL`) and bitwise
 //! (`BAND`, `BOR`) operations over the data stack. They only depend on [`Cell`],
 //! [`VM`], and [`TbxError`], and preserve the existing
 //! [`Cell::is_truthy`] semantics.
@@ -22,6 +22,13 @@ pub fn or_prim(vm: &mut VM) -> Result<(), TbxError> {
     let b = vm.pop()?;
     let a = vm.pop()?;
     vm.push(Cell::Bool(a.is_truthy() || b.is_truthy()))?;
+    Ok(())
+}
+
+/// NOT — logical negation. Evaluates one operand with is_truthy() and pushes the inverted Bool.
+pub fn not_prim(vm: &mut VM) -> Result<(), TbxError> {
+    let value = vm.pop()?;
+    vm.push(Cell::Bool(!value.is_truthy()))?;
     Ok(())
 }
 

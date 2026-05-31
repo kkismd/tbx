@@ -2238,6 +2238,7 @@ pub fn register_all(vm: &mut VM) {
     vm.register(WordEntry::new_primitive("GE", ge_prim));
     vm.register(WordEntry::new_primitive("AND", and_prim));
     vm.register(WordEntry::new_primitive("OR", or_prim));
+    vm.register(WordEntry::new_primitive("NOT", not_prim));
     vm.register(WordEntry::new_primitive("BAND", band_prim));
     vm.register(WordEntry::new_primitive("BOR", bor_prim));
     vm.register(WordEntry::new_primitive("NEGATE", negate_prim));
@@ -3476,6 +3477,38 @@ mod tests {
         vm.push(Cell::Int(0)).unwrap();
         vm.push(Cell::Int(5)).unwrap();
         or_prim(&mut vm).unwrap();
+        assert_eq!(vm.pop(), Ok(Cell::Bool(true)));
+    }
+
+    #[test]
+    fn test_not_true_false() {
+        let mut vm = VM::new();
+        vm.push(Cell::Bool(true)).unwrap();
+        not_prim(&mut vm).unwrap();
+        assert_eq!(vm.pop(), Ok(Cell::Bool(false)));
+    }
+
+    #[test]
+    fn test_not_false_true() {
+        let mut vm = VM::new();
+        vm.push(Cell::Bool(false)).unwrap();
+        not_prim(&mut vm).unwrap();
+        assert_eq!(vm.pop(), Ok(Cell::Bool(true)));
+    }
+
+    #[test]
+    fn test_not_truthy_and_falsy_values() {
+        let mut vm = VM::new();
+        vm.push(Cell::Int(1)).unwrap();
+        not_prim(&mut vm).unwrap();
+        assert_eq!(vm.pop(), Ok(Cell::Bool(false)));
+
+        vm.push(Cell::Int(0)).unwrap();
+        not_prim(&mut vm).unwrap();
+        assert_eq!(vm.pop(), Ok(Cell::Bool(true)));
+
+        vm.push(Cell::string("")).unwrap();
+        not_prim(&mut vm).unwrap();
         assert_eq!(vm.pop(), Ok(Cell::Bool(true)));
     }
 
