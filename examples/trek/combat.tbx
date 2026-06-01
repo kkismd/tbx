@@ -1,8 +1,8 @@
 # trek/combat.tbx — フェイザー・魚雷・クリンゴン攻撃手続き
 #
-# #849 phaser integration scope:
-# - command 3 dispatch, energy input/validation, hit calculation, and kill handling are implemented
-# - Klingon retaliation, full device damage behavior, and victory/defeat endgame stay behind explicit TODO hooks
+# Current STTR1 combat scope after #893/#917 tracker cleanup:
+# - command 3 fire path, Klingon retaliation, and shield-underflow defeat hook are implemented
+# - damage system, shield control expansion, and full endgame/score remain in follow-up issues
 
 # Damage slot 4 is phaser control per Mayfield D[4].
 DEF PHASER_CONTROL_DISABLED()
@@ -85,7 +85,8 @@ DEF KLINGON_ATTACK_AMOUNT_FOR_INDEX(I)
   RETURN KLINGON_ATTACK_AMOUNT_FOR_INDEX_AND_ROLL(I, RAND_FACTOR_0_TO_2_100())
 END
 
-# Placeholder hook for the later full defeat / endgame flow.
+# Minimal defeat hook for the current retaliation scope.
+# Follow-up issues still need defeat report / score / quit flow.
 DEF MAYBE_DEFEAT_AFTER_KLINGON_ATTACK()
   IF SHIELDS >= 0
     RETURN
@@ -187,6 +188,7 @@ DEF UPDATE_CURRENT_QUADRANT_KLINGON_SUMMARY(KLINGON_COUNT)
 END
 
 # Placeholder hook for the later full victory flow.
+# Final victory report / score stay outside the current tracker scope.
 DEF MAYBE_VICTORY_AFTER_KLINGON_DESTROYED()
   IF KLINGONS_LEFT <= 0
     # TODO: full victory / score / endgame

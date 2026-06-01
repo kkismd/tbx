@@ -30,8 +30,9 @@ DEF TEST_DISPATCH_CMD0_NAVIGATE()
   DISPATCH_COMMAND 0
 END
 
-# Verify that DISPATCH_COMMAND(3) calls PHASER_CONTROL and does not crash.
-# stdin がない環境では READ_NUMBER_OR(0) が 0 を返し、safe return する。
+# Verify that DISPATCH_COMMAND(3) reaches the normal command-3 entrypoint.
+# stdin がない環境では READ_NUMBER_OR(0) が 0 を返し、ここでは dispatch smoke のみを見る。
+# actual fire / retaliation / shield defeat behavior is covered in test_phaser.tbx.
 DEF TEST_DISPATCH_CMD3_PHASER_CONTROL()
   INIT_GAME
   DISPATCH_COMMAND 3

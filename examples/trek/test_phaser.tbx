@@ -402,7 +402,7 @@ DEF TEST_FIRE_PHASERS_DOES_NOT_TRIGGER_RETALIATION_AFTER_LAST_KLINGON_DIES()
   ASSERT (KLINGONS_LEFT = 0)
 END
 
-# damage gate and command boundary behavior
+# command 3 valid-fire path, retaliation, and damage-gate behavior
 DEF TEST_INIT_GAME_INITIALIZES_DAMAGE_SLOTS()
   INIT_GAME
   ASSERT_FALSE PHASER_CONTROL_DISABLED()
