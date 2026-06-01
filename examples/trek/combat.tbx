@@ -1,4 +1,8 @@
 # trek/combat.tbx — フェイザー・魚雷・クリンゴン攻撃手続き
+#
+# #849 phaser integration scope:
+# - command 3 dispatch, energy input/validation, hit calculation, and kill handling are implemented
+# - Klingon retaliation, full device damage behavior, and victory/defeat endgame stay behind explicit TODO hooks
 
 # Damage slot 4 is phaser control per Mayfield D[4].
 DEF PHASER_CONTROL_DISABLED()
@@ -19,7 +23,7 @@ END
 
 # クリンゴンによる攻撃 (STTR1.BAS lines 3790-3910)
 DEF KLINGON_ATTACK()
-  # TODO: Mayfield STTR1 Klingon attack
+  # TODO: Mayfield STTR1 Klingon retaliation / attack flow
 END
 
 # Return truthy when Klingon I is alive.
@@ -109,13 +113,14 @@ END
 
 # Placeholder hook for future computer damage accuracy penalties.
 DEF APPLY_PHASER_COMPUTER_PENALTY(UNITS)
-  # TODO: apply deterministic accuracy penalty when phaser control damage is wired in
+  # TODO: apply the Mayfield D[7] accuracy penalty when the damage system is implemented
+  # Keep this boundary so PHASER_CONTROL can warn now and later wire in the actual penalty.
   RETURN UNITS
 END
 
 # Placeholder hook for post-action Klingon retaliation.
 DEF MAYBE_KLINGON_ATTACK_AFTER_PLAYER_ACTION()
-  # TODO: wire Klingon retaliation after player combat actions
+  # TODO: wire Klingon retaliation after successful player combat actions
 END
 
 # Print a stable phaser hit line for interactive use and deterministic logs.
@@ -125,6 +130,9 @@ END
 
 # Deterministic non-interactive phaser core.
 DEF FIRE_PHASERS_WITH_UNITS_AND_ROLL(UNITS, ROLL)
+  IF KLINGONS_HERE <= 0
+    RETURN
+  ENDIF
   IF UNITS <= 0
     RETURN
   ENDIF
@@ -134,10 +142,6 @@ DEF FIRE_PHASERS_WITH_UNITS_AND_ROLL(UNITS, ROLL)
 
   LET ENERGY = ENERGY - UNITS
   MAYBE_KLINGON_ATTACK_AFTER_PLAYER_ACTION
-
-  IF KLINGONS_HERE <= 0
-    RETURN
-  ENDIF
 
   VAR EFFECTIVE_UNITS = APPLY_PHASER_COMPUTER_PENALTY(UNITS)
   VAR TARGET_COUNT = COUNT_LIVING_KLINGONS()
