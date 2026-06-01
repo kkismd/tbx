@@ -88,6 +88,16 @@ DEF CLEAR_SECTOR()
   NEXT
 END
 
+# Unused Klingon slots must stay numeric so combat scans can treat them as dead enemies.
+DEF CLEAR_KLINGON_SLOTS()
+  VAR I
+  FOR &I, 3
+    LET @K_X[I] = 0
+    LET @K_Y[I] = 0
+    LET @K_E[I] = 0
+  NEXT
+END
+
 # Damage slots use 1-based indexing and must be numeric before combat checks read them.
 DEF INIT_DAMAGE_TABLE()
   VAR I
@@ -112,6 +122,7 @@ END
 # Enterprise / Klingon / Starbase / Star を @SECTOR に配置する
 DEF INIT_QUADRANT()
   CLEAR_SECTOR
+  CLEAR_KLINGON_SLOTS
   # @GALAXY[ENT_QX, ENT_QY] から K3/B3/S3 を decode する (STTR1.BAS lines 830-860)
   VAR SUMMARY = @GALAXY[ENT_QX, ENT_QY]
   LET KLINGONS_HERE = SUMMARY / 100
