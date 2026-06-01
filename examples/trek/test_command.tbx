@@ -24,16 +24,14 @@ DEF TEST_DISPATCH_CMD2_LONG_RANGE_SCAN()
 END
 
 # Verify that DISPATCH_COMMAND(0) calls NAVIGATE and does not crash
-# In environments without stdin, GETDEC? fails and the command returns
-# immediately after treating the input as an invalid course.
+# stdin がない環境では GETDEC? が失敗し、無効コース扱いで即 return する
 DEF TEST_DISPATCH_CMD0_NAVIGATE()
   INIT_GAME
   DISPATCH_COMMAND 0
 END
 
 # Verify that DISPATCH_COMMAND(3) calls PHASER_CONTROL and does not crash.
-# In environments without stdin, READ_NUMBER_OR(0) returns 0 and the command
-# takes the safe-return path.
+# stdin がない環境では READ_NUMBER_OR(0) が 0 を返し、safe return する。
 DEF TEST_DISPATCH_CMD3_PHASER_CONTROL()
   INIT_GAME
   DISPATCH_COMMAND 3
