@@ -21,11 +21,6 @@ DEF TORPEDO_CONTROL()
   PRINTLN "PHOTON TORPEDO CONTROL is not implemented yet"
 END
 
-# クリンゴンによる攻撃 (STTR1.BAS lines 3790-3910)
-DEF KLINGON_ATTACK()
-  # TODO: Mayfield STTR1 Klingon retaliation / attack flow
-END
-
 # Return truthy when Klingon I is alive.
 DEF KLINGON_ALIVE(I)
   IF I < 1
@@ -88,6 +83,66 @@ END
 # Non-deterministic wrapper for the later Klingon retaliation flow.
 DEF KLINGON_ATTACK_AMOUNT_FOR_INDEX(I)
   RETURN KLINGON_ATTACK_AMOUNT_FOR_INDEX_AND_ROLL(I, RAND_FACTOR_0_TO_2_100())
+END
+
+# Placeholder hook for the later full defeat / endgame flow.
+DEF MAYBE_DEFEAT_AFTER_KLINGON_ATTACK()
+  # TODO: full defeat / game over / score handling when shields collapse
+END
+
+# Print a stable Klingon attack line for interactive use and deterministic logs.
+DEF PRINT_KLINGON_ATTACK(HIT, KX, KY, LEFT)
+  PRINTLN INT(HIT), " UNIT HIT ON ENTERPRISE FROM SECTOR ", KX, ",", KY, " SHIELDS LEFT ", INT(LEFT)
+END
+
+# Apply one deterministic Klingon attack if the indexed enemy is alive.
+DEF APPLY_KLINGON_ATTACK_FOR_INDEX_AND_ROLL(I, ROLL)
+  IF !KLINGON_ALIVE(I)
+    RETURN
+  ENDIF
+
+  VAR HIT = KLINGON_ATTACK_AMOUNT_FOR_INDEX_AND_ROLL(I, ROLL)
+  IF HIT <= 0
+    RETURN
+  ENDIF
+
+  LET SHIELDS = SHIELDS - HIT
+  PRINT_KLINGON_ATTACK HIT, @K_X[I], @K_Y[I], SHIELDS
+  IF SHIELDS < 0
+    MAYBE_DEFEAT_AFTER_KLINGON_ATTACK
+  ENDIF
+END
+
+# Deterministic Klingon attack core with a shared roll.
+DEF KLINGON_ATTACK_WITH_ROLL(ROLL)
+  IF DOCKED
+    PRINTLN "STAR BASE SHIELDS PROTECT THE ENTERPRISE"
+    RETURN
+  ENDIF
+  IF KLINGONS_HERE <= 0
+    RETURN
+  ENDIF
+
+  VAR I
+  FOR &I, 3
+    APPLY_KLINGON_ATTACK_FOR_INDEX_AND_ROLL I, ROLL
+  NEXT
+END
+
+# クリンゴンによる攻撃 (STTR1.BAS lines 3790-3910)
+DEF KLINGON_ATTACK()
+  IF DOCKED
+    PRINTLN "STAR BASE SHIELDS PROTECT THE ENTERPRISE"
+    RETURN
+  ENDIF
+  IF KLINGONS_HERE <= 0
+    RETURN
+  ENDIF
+
+  VAR I
+  FOR &I, 3
+    APPLY_KLINGON_ATTACK_FOR_INDEX_AND_ROLL I, RAND_FACTOR_0_TO_2_100()
+  NEXT
 END
 
 # deterministic phaser hit helper
