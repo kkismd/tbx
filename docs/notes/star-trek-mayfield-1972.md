@@ -94,6 +94,19 @@ TBX 実装ではすべての座標を `[x, y]` convention（x = col 方向、y =
 | `D[8]` | device damage state。負数が damaged | `DIM @DAMAGE[8]` |
 | `Q$`, `R$`, `S$` | short-range sector display strings | 数値 `@SECTOR[8, 8]` + display helper へ置換 |
 
+現在の TBX 側では、`@DAMAGE[1..8]` の registry を次で固定する。
+
+1. `WARP ENGINES`
+2. `SHORT RANGE SENSORS`
+3. `LONG RANGE SENSORS`
+4. `PHASER CONTROL`
+5. `PHOTON TUBES`
+6. `DAMAGE CONTROL`
+7. `SHIELD CONTROL`
+8. `LIBRARY COMPUTER`
+
+phaser の warning / penalty hook は当面 slot `7` を参照する。shield control command 本体や full computer behavior は後続 issue で整理する。
+
 ### TBX 配列方針
 
 現行 TBX の 2D 配列機能（`DIM @A[w, h]`）を使い、8×8 の quadrant/sector マップを直接 2D で保持する。
