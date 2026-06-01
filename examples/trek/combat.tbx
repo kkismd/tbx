@@ -34,7 +34,11 @@ DEF KLINGON_ALIVE(I)
   IF I > 3
     RETURN FALSE
   ENDIF
-  RETURN @K_E[I] > 0
+  VAR KLINGON_ENERGY = @K_E[I]
+  IF !KLINGON_ENERGY
+    RETURN FALSE
+  ENDIF
+  RETURN KLINGON_ENERGY > 0
 END
 
 # Enterprise から Klingon I までのセクター内距離を返す
@@ -46,9 +50,44 @@ DEF DIST_TO_KLINGON(I)
   IF I > 3
     RETURN 0
   ENDIF
+  IF !KLINGON_ALIVE(I)
+    RETURN 0
+  ENDIF
   VAR DX = @K_X[I] - ENT_SX
   VAR DY = @K_Y[I] - ENT_SY
   RETURN SQRT(DX * DX + DY * DY)
+END
+
+# deterministic Klingon attack helper
+# ROLL is a fixed-point multiplier in 0..199 where 100 means 1.0x.
+DEF KLINGON_ATTACK_AMOUNT(KLINGON_ENERGY, DISTANCE, ROLL)
+  IF KLINGON_ENERGY <= 0
+    RETURN 0
+  ENDIF
+  IF DISTANCE <= 0
+    RETURN 0
+  ENDIF
+  IF ROLL <= 0
+    RETURN 0
+  ENDIF
+  RETURN (KLINGON_ENERGY * (ROLL / 100.0)) / DISTANCE
+END
+
+# deterministic index-based Klingon attack helper.
+DEF KLINGON_ATTACK_AMOUNT_FOR_INDEX_AND_ROLL(I, ROLL)
+  IF !KLINGON_ALIVE(I)
+    RETURN 0
+  ENDIF
+  VAR DISTANCE = DIST_TO_KLINGON(I)
+  IF DISTANCE <= 0
+    RETURN 0
+  ENDIF
+  RETURN KLINGON_ATTACK_AMOUNT(@K_E[I], DISTANCE, ROLL)
+END
+
+# Non-deterministic wrapper for the later Klingon retaliation flow.
+DEF KLINGON_ATTACK_AMOUNT_FOR_INDEX(I)
+  RETURN KLINGON_ATTACK_AMOUNT_FOR_INDEX_AND_ROLL(I, RAND_FACTOR_0_TO_2_100())
 END
 
 # deterministic phaser hit helper
