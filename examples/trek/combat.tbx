@@ -87,7 +87,14 @@ END
 
 # Placeholder hook for the later full defeat / endgame flow.
 DEF MAYBE_DEFEAT_AFTER_KLINGON_ATTACK()
-  # TODO: full defeat / game over / score handling when shields collapse
+  IF SHIELDS >= 0
+    RETURN
+  ENDIF
+  IF GAME_OVER
+    RETURN
+  ENDIF
+  LET GAME_OVER = TRUE
+  PRINTLN "THE ENTERPRISE HAS BEEN DESTROYED"
 END
 
 # Print a stable Klingon attack line for interactive use and deterministic logs.
@@ -126,6 +133,9 @@ DEF KLINGON_ATTACK_WITH_ROLL(ROLL)
   VAR I
   FOR &I, 3
     APPLY_KLINGON_ATTACK_FOR_INDEX_AND_ROLL I, ROLL
+    IF GAME_OVER
+      RETURN
+    ENDIF
   NEXT
 END
 
@@ -142,6 +152,9 @@ DEF KLINGON_ATTACK()
   VAR I
   FOR &I, 3
     APPLY_KLINGON_ATTACK_FOR_INDEX_AND_ROLL I, RAND_FACTOR_0_TO_2_100()
+    IF GAME_OVER
+      RETURN
+    ENDIF
   NEXT
 END
 
