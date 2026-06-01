@@ -88,6 +88,14 @@ DEF CLEAR_SECTOR()
   NEXT
 END
 
+# Damage slots use 1-based indexing and must be numeric before combat checks read them.
+DEF INIT_DAMAGE_TABLE()
+  VAR I
+  FOR &I, 8
+    LET @DAMAGE[I] = 0
+  NEXT
+END
+
 # ランダムな空 sector を探し、FOUND_SX / FOUND_SY に書き込む (STTR1.BAS lines 5380-5450)
 # @SECTOR[SX, SY] = 0 (空) になる座標が見つかるまで引き直す
 DEF PICK_RANDOM_EMPTY_SECTOR()
@@ -158,6 +166,7 @@ DEF INIT_GAME()
   LET NAV_MOVE_RESULT = 0
   LET NAV_STEPS_REQUESTED = 0
   LET NAV_STEPS_COMPLETED = 0
+  INIT_DAMAGE_TABLE
   INIT_COURSE_TABLE
   INIT_GALAXY
   INIT_ENTERPRISE_POSITION
