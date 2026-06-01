@@ -212,9 +212,26 @@ DEF APPLY_PHASER_COMPUTER_PENALTY(UNITS)
   RETURN UNITS
 END
 
-# Placeholder hook for post-action Klingon retaliation.
+# Deterministic post-action Klingon retaliation hook.
+DEF MAYBE_KLINGON_ATTACK_AFTER_PLAYER_ACTION_WITH_ROLL(ROLL)
+  IF GAME_OVER
+    RETURN
+  ENDIF
+  IF KLINGONS_HERE <= 0
+    RETURN
+  ENDIF
+  KLINGON_ATTACK_WITH_ROLL ROLL
+END
+
+# Post-action Klingon retaliation hook.
 DEF MAYBE_KLINGON_ATTACK_AFTER_PLAYER_ACTION()
-  # TODO: wire Klingon retaliation after successful player combat actions
+  IF GAME_OVER
+    RETURN
+  ENDIF
+  IF KLINGONS_HERE <= 0
+    RETURN
+  ENDIF
+  KLINGON_ATTACK
 END
 
 # Print a stable phaser hit line for interactive use and deterministic logs.
@@ -235,7 +252,6 @@ DEF FIRE_PHASERS_WITH_UNITS_AND_ROLL(UNITS, ROLL)
   ENDIF
 
   LET ENERGY = ENERGY - UNITS
-  MAYBE_KLINGON_ATTACK_AFTER_PLAYER_ACTION
 
   VAR EFFECTIVE_UNITS = APPLY_PHASER_COMPUTER_PENALTY(UNITS)
   VAR TARGET_COUNT = COUNT_LIVING_KLINGONS()
@@ -257,6 +273,8 @@ DEF FIRE_PHASERS_WITH_UNITS_AND_ROLL(UNITS, ROLL)
       ENDIF
     ENDIF
   NEXT
+
+  MAYBE_KLINGON_ATTACK_AFTER_PLAYER_ACTION_WITH_ROLL ROLL
 END
 
 # Non-deterministic wrapper for the phaser core.
