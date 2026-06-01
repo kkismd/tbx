@@ -19,7 +19,8 @@ END
 # CMD 0: set course (NAVIGATE)
 # CMD 1: short range sensor scan
 # CMD 2: long range sensor scan
-# CMD 3..7: not yet implemented
+# CMD 3: fire phasers
+# CMD 4..7: deferred to later STTR1 issues
 # Invalid CMD: print command menu
 DEF DISPATCH_COMMAND(CMD)
   SELECT CMD
