@@ -1,8 +1,10 @@
 /target
 *.un~
 /.tmp
+/.worktrees
 /examples/scratch.tbx
 /memo.md
 
 # APM dependencies
 apm_modules/
+
