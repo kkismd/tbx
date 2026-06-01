@@ -1,1 +1,1 @@
-STTR1のdevice damage helperを追加
+一時コミットメッセージファイルを削除
