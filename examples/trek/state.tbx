@@ -17,6 +17,15 @@ DIM @K_Y[3]
 DIM @K_E[3]
 
 # --- デバイス損傷状態 (1..8) ---
+# Registry:
+#   1 = WARP ENGINES
+#   2 = SHORT RANGE SENSORS
+#   3 = LONG RANGE SENSORS
+#   4 = PHASER CONTROL
+#   5 = PHOTON TUBES
+#   6 = DAMAGE CONTROL
+#   7 = SHIELD CONTROL
+#   8 = LIBRARY COMPUTER
 DIM @DAMAGE[8]
 
 # --- コース方向テーブル (1..9) ---

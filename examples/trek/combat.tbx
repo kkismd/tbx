@@ -4,14 +4,15 @@
 # - command 3 fire path, Klingon retaliation, and shield-underflow defeat hook are implemented
 # - damage system, shield control expansion, and full endgame/score remain in follow-up issues
 
-# Damage slot 4 is phaser control per Mayfield D[4].
+# Damage slot 4 is phaser control per the shared damage registry.
 DEF PHASER_CONTROL_DISABLED()
-  RETURN @DAMAGE[4] < 0
+  RETURN @DAMAGE[DAMAGE_SLOT_PHASER_CONTROL()] < 0
 END
 
-# Damage slot 7 is the onboard computer per Mayfield D[7].
+# STTR1 checks slot 7 for both shield-control damage and the current phaser
+# accuracy warning path. Keep the shared registry as the single source of truth.
 DEF PHASER_COMPUTER_FAILURE_ACTIVE()
-  RETURN @DAMAGE[7] < 0
+  RETURN @DAMAGE[DAMAGE_SLOT_SHIELD_CONTROL()] < 0
 END
 
 # 光子魚雷発射コマンド (STTR1.BAS lines 2800-3450)
@@ -222,7 +223,7 @@ END
 
 # Placeholder hook for future computer damage accuracy penalties.
 DEF APPLY_PHASER_COMPUTER_PENALTY(UNITS)
-  # TODO: apply the Mayfield D[7] accuracy penalty when the damage system is implemented
+  # TODO: apply the slot-7 accuracy penalty when the damage system is implemented
   # Keep this boundary so PHASER_CONTROL can warn now and later wire in the actual penalty.
   RETURN UNITS
 END
