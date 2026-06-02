@@ -20,7 +20,8 @@ END
 # CMD 1: short range sensor scan
 # CMD 2: long range sensor scan
 # CMD 3: fire phasers
-# CMD 4,5,7: deferred to later STTR1 issues
+# CMD 4,7: deferred to later STTR1 issues
+# CMD 5: minimal shield control
 # CMD 6: minimal damage control report
 # Invalid CMD: print command menu
 DEF DISPATCH_COMMAND(CMD)
@@ -36,7 +37,7 @@ DEF DISPATCH_COMMAND(CMD)
   CASE 4
     TORPEDO_CONTROL
   CASE 5
-    PRINTLN "SHIELD CONTROL is not implemented yet"
+    SHIELD_CONTROL
   CASE 6
     PRINT_DAMAGE_REPORT
   CASE 7
