@@ -1,5 +1,6 @@
 # trek/test_scan.tbx — SHORT_RANGE_SCAN() smoke test
 # SECTOR_SYMBOL の変換と INIT_GAME 後の初期状態を検証する
+# empty sector は原典の空白ではなく readability 改善のため " . " を使う
 
 USE "state.tbx"
 USE "util.tbx"
@@ -10,8 +11,8 @@ USE "../../lib/tests/helper.tbx"
 DEF RUN_SMOKE_TEST()
   INIT_GAME
 
-  # SECTOR_SYMBOL の変換が正しいか検証する
-  ASSERT (SECTOR_SYMBOL(0) = "   ")
+  # Intentional deviation from Mayfield STTR1: empty sector uses " . ".
+  ASSERT (SECTOR_SYMBOL(0) = " . ")
   ASSERT (SECTOR_SYMBOL(1) = "<*>")
   ASSERT (SECTOR_SYMBOL(2) = "+++")
   ASSERT (SECTOR_SYMBOL(3) = ">!<")
