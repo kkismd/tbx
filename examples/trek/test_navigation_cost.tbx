@@ -4,6 +4,7 @@ USE "state.tbx"
 USE "util.tbx"
 USE "init.tbx"
 USE "scan.tbx"
+USE "combat.tbx"
 USE "nav.tbx"
 USE "../../lib/tests/helper.tbx"
 
@@ -201,6 +202,10 @@ END
 DEF TEST_NAVIGATION_ENERGY_DEPLETED_AFTER_COST_DOES_NOT_END_GAME()
   INIT_GAME
   SET_POS 4, 4, 4, 4
+  LET @GALAXY[4, 4] = 0
+  LET @GALAXY[5, 4] = 0
+  LET KLINGONS_HERE = 0
+  LET KLINGONS_LEFT = 0
   LET ENERGY = 2
   LET SHIELDS = 50
   RUN_NAVIGATION 1, 1.0
