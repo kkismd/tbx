@@ -8,6 +8,7 @@ USE "trek/init.tbx"
 USE "trek/scan.tbx"
 USE "trek/combat.tbx"
 USE "trek/nav.tbx"
+USE "trek/library.tbx"
 USE "trek/command.tbx"
 
 DEF MAIN()

@@ -4,6 +4,7 @@ USE "init.tbx"
 USE "scan.tbx"
 USE "combat.tbx"
 USE "nav.tbx"
+USE "library.tbx"
 USE "command.tbx"
 USE "../../lib/tests/helper.tbx"
 

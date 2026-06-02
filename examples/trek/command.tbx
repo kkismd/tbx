@@ -20,7 +20,8 @@ END
 # CMD 1: short range sensor scan
 # CMD 2: long range sensor scan
 # CMD 3: fire phasers
-# CMD 4,7: deferred to later STTR1 issues
+# CMD 4: torpedo control
+# CMD 7: library computer skeleton
 # CMD 5: minimal shield control
 # CMD 6: minimal damage control report
 # Invalid CMD: print command menu
@@ -41,7 +42,7 @@ DEF DISPATCH_COMMAND(CMD)
   CASE 6
     PRINT_DAMAGE_REPORT
   CASE 7
-    PRINTLN "LIBRARY COMPUTER is not implemented yet"
+    LIBRARY_COMPUTER
   CASE_ELSE
     PRINT_COMMAND_MENU
   ENDSEL
