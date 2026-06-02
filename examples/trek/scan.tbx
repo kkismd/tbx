@@ -34,7 +34,9 @@ DEF SECTOR_SYMBOL(VAL)
   CASE 4
     RETURN " * "
   CASE_ELSE
-    RETURN "   "
+    # Intentional deviation from Mayfield STTR1: use dots for empty sectors
+    # so the short range scan grid remains readable.
+    RETURN " . "
   ENDSEL
 END
 
