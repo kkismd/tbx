@@ -88,6 +88,17 @@ DEF CLEAR_SECTOR()
   NEXT
 END
 
+# Cumulative galactic record must be numeric before library computer option 0 reads it.
+DEF CLEAR_CHART()
+  VAR QY
+  FOR &QY, 8
+    VAR QX
+    FOR &QX, 8
+      LET @CHART[QX, QY] = 0
+    NEXT
+  NEXT
+END
+
 # Unused Klingon slots must stay numeric so combat scans can treat them as dead enemies.
 DEF CLEAR_KLINGON_SLOTS()
   VAR I
@@ -178,6 +189,7 @@ DEF INIT_GAME()
   LET NAV_MOVE_RESULT = 0
   LET NAV_STEPS_REQUESTED = 0
   LET NAV_STEPS_COMPLETED = 0
+  CLEAR_CHART
   INIT_DAMAGE_TABLE
   INIT_COURSE_TABLE
   INIT_GALAXY
