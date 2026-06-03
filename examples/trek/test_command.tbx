@@ -6,6 +6,7 @@ USE "init.tbx"
 USE "scan.tbx"
 USE "combat.tbx"
 USE "nav.tbx"
+USE "library.tbx"
 USE "command.tbx"
 USE "../../lib/tests/helper.tbx"
 
@@ -65,8 +66,9 @@ DEF TEST_DISPATCH_CMD6_DAMAGE_REPORT()
   DISPATCH_COMMAND 6
 END
 
-# Verify that DISPATCH_COMMAND(7) prints placeholder and does not crash
-DEF TEST_DISPATCH_CMD7_NOT_IMPLEMENTED()
+# Verify that DISPATCH_COMMAND(7) reaches the library computer entrypoint.
+# In non-interactive runs, READ_NUMBER_OR(-1) returns -1 so the command shows the menu.
+DEF TEST_DISPATCH_CMD7_LIBRARY_COMPUTER()
   INIT_GAME
   DISPATCH_COMMAND 7
 END
@@ -89,5 +91,5 @@ TEST_DISPATCH_CMD3_PHASER_CONTROL
 TEST_DISPATCH_CMD4_TORPEDO_CONTROL
 TEST_DISPATCH_CMD5_SHIELD_CONTROL
 TEST_DISPATCH_CMD6_DAMAGE_REPORT
-TEST_DISPATCH_CMD7_NOT_IMPLEMENTED
+TEST_DISPATCH_CMD7_LIBRARY_COMPUTER
 TEST_DISPATCH_INVALID_CMD

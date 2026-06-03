@@ -19,6 +19,30 @@ fn run_tbx_test(path: &PathBuf, base_dir: &Path) -> Result<(), String> {
         .map_err(|e| format!("{}: {e}", path.display()))
 }
 
+#[derive(Clone, Default)]
+struct SharedOutput(std::sync::Arc<std::sync::Mutex<Vec<u8>>>);
+
+impl SharedOutput {
+    fn into_string(self) -> String {
+        let bytes = self.0.lock().expect("shared output lock poisoned").clone();
+        String::from_utf8(bytes).expect("shared output must be valid UTF-8")
+    }
+}
+
+impl std::io::Write for SharedOutput {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        self.0
+            .lock()
+            .expect("shared output lock poisoned")
+            .extend_from_slice(buf);
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
 // Individual #[test] functions for each lib/tests/test_*.tbx file are generated
 // by build.rs and included here.
 include!(concat!(env!("OUT_DIR"), "/tbx_lib_tests_generated.rs"));
@@ -1994,6 +2018,83 @@ fn test_getdec_safe_partial_numeric_tuple_projection() {
     assert_eq!(
         out, "0 FALSE",
         "partial numeric input should produce TUPLE(0, FALSE)"
+    );
+}
+
+fn run_trek_src_with_input_and_flushed_output(tbx_src: &str, mock_input: &str) -> (String, String) {
+    use std::io::Cursor;
+
+    let mut interp = Interpreter::new();
+    interp
+        .set_base_dir(PathBuf::from(env!("CARGO_MANIFEST_DIR")))
+        .expect("manifest dir is absolute");
+    interp.vm_mut().input_reader = Box::new(Cursor::new(mock_input.to_string()));
+    let flushed = SharedOutput::default();
+    interp.vm_mut().output_writer = Box::new(flushed.clone());
+    interp
+        .exec_source(tbx_src)
+        .unwrap_or_else(|e| panic!("exec_source failed: {e}"));
+    (interp.take_output(), flushed.into_string())
+}
+
+#[test]
+fn test_library_computer_eof_flushes_prompt_and_buffers_menu() {
+    let src = concat!(
+        "USE \"examples/trek/state.tbx\"\n",
+        "USE \"examples/trek/util.tbx\"\n",
+        "USE \"examples/trek/init.tbx\"\n",
+        "USE \"examples/trek/scan.tbx\"\n",
+        "USE \"examples/trek/combat.tbx\"\n",
+        "USE \"examples/trek/nav.tbx\"\n",
+        "USE \"examples/trek/library.tbx\"\n",
+        "DEF RUN()\n",
+        "  INIT_GAME\n",
+        "  VAR DISCARDED = GET_OUTPUT()\n",
+        "  LIBRARY_COMPUTER\n",
+        "END\n",
+        "RUN\n",
+    );
+    let (buffered, flushed) = run_trek_src_with_input_and_flushed_output(src, "");
+    assert_eq!(flushed, "COMPUTER ACTIVE AND AWAITING COMMAND");
+    assert_eq!(
+        buffered,
+        concat!(
+            "FUNCTIONS AVAILABLE FROM COMPUTER\n",
+            "   0 = CUMULATIVE GALACTIC RECORD\n",
+            "   1 = STATUS REPORT\n",
+            "   2 = PHOTON TORPEDO DATA\n",
+        )
+    );
+}
+
+#[test]
+fn test_dispatch_command_7_eof_flushes_prompt_and_buffers_menu() {
+    let src = concat!(
+        "USE \"examples/trek/state.tbx\"\n",
+        "USE \"examples/trek/util.tbx\"\n",
+        "USE \"examples/trek/init.tbx\"\n",
+        "USE \"examples/trek/scan.tbx\"\n",
+        "USE \"examples/trek/combat.tbx\"\n",
+        "USE \"examples/trek/nav.tbx\"\n",
+        "USE \"examples/trek/library.tbx\"\n",
+        "USE \"examples/trek/command.tbx\"\n",
+        "DEF RUN()\n",
+        "  INIT_GAME\n",
+        "  VAR DISCARDED = GET_OUTPUT()\n",
+        "  DISPATCH_COMMAND 7\n",
+        "END\n",
+        "RUN\n",
+    );
+    let (buffered, flushed) = run_trek_src_with_input_and_flushed_output(src, "");
+    assert_eq!(flushed, "COMPUTER ACTIVE AND AWAITING COMMAND");
+    assert_eq!(
+        buffered,
+        concat!(
+            "FUNCTIONS AVAILABLE FROM COMPUTER\n",
+            "   0 = CUMULATIVE GALACTIC RECORD\n",
+            "   1 = STATUS REPORT\n",
+            "   2 = PHOTON TORPEDO DATA\n",
+        )
     );
 }
 
