@@ -4,7 +4,7 @@ use crate::constants::{MAX_ARRAY_ELEMENTS, MAX_DICTIONARY_CELLS};
 use crate::dict::{EntryKind, WordEntry, FLAG_HIDDEN, FLAG_IMMEDIATE, FLAG_SYSTEM};
 use crate::error::TbxError;
 use crate::expr::ExprCompiler;
-use crate::vm::{CompileState, VM};
+use crate::vm::{CompileState, InputFlushMode, VM};
 use std::collections::HashMap;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -1975,22 +1975,29 @@ fn use_prim(vm: &mut VM) -> Result<(), TbxError> {
 ///
 /// Internal helper used by `getdec_prim`. Reads until a newline (or EOF) and
 /// strips the trailing newline characters.
-fn accept_prim(vm: &mut VM) -> Result<String, TbxError> {
+fn flush_output_before_input_if_needed(vm: &mut VM) -> Result<(), TbxError> {
+    if vm.input_flush_mode == InputFlushMode::KeepBufferedForTest || vm.output_buffer.is_empty() {
+        return Ok(());
+    }
+
     // Flush any pending output before blocking on user input, so that prompt
     // strings written with PUTSTR are visible before the interpreter waits.
-    if !vm.output_buffer.is_empty() {
-        let pending = std::mem::take(&mut vm.output_buffer);
-        vm.output_writer
-            .write_all(pending.as_bytes())
-            .map_err(|e| TbxError::OutputIoError {
-                reason: e.to_string(),
-            })?;
-        vm.output_writer
-            .flush()
-            .map_err(|e| TbxError::OutputIoError {
-                reason: e.to_string(),
-            })?;
-    }
+    let pending = std::mem::take(&mut vm.output_buffer);
+    vm.output_writer
+        .write_all(pending.as_bytes())
+        .map_err(|e| TbxError::OutputIoError {
+            reason: e.to_string(),
+        })?;
+    vm.output_writer
+        .flush()
+        .map_err(|e| TbxError::OutputIoError {
+            reason: e.to_string(),
+        })?;
+    Ok(())
+}
+
+fn accept_prim(vm: &mut VM) -> Result<String, TbxError> {
+    flush_output_before_input_if_needed(vm)?;
     let mut line = String::new();
     vm.input_reader
         .read_line(&mut line)
@@ -2553,6 +2560,32 @@ mod tests {
     use super::*;
     use crate::cell::{Cell, CompileEntry};
     use crate::constants::MAX_DICTIONARY_CELLS;
+    use std::io::Cursor;
+    use std::sync::{Arc, Mutex};
+
+    #[derive(Clone, Default)]
+    struct SharedOutput(Arc<Mutex<Vec<u8>>>);
+
+    impl SharedOutput {
+        fn into_string(self) -> String {
+            let bytes = self.0.lock().expect("shared output lock poisoned").clone();
+            String::from_utf8(bytes).expect("shared output must be valid UTF-8")
+        }
+    }
+
+    impl std::io::Write for SharedOutput {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            self.0
+                .lock()
+                .expect("shared output lock poisoned")
+                .extend_from_slice(buf);
+            Ok(buf.len())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
 
     // --- drop_prim ---
 
@@ -6477,13 +6510,28 @@ mod tests {
 
     #[test]
     fn test_getstr_flushes_output_before_read() {
-        use std::io::Cursor;
         let mut vm = VM::new();
+        let flushed = SharedOutput::default();
         vm.output_buffer = "prompt: ".to_string();
         vm.input_reader = Box::new(Cursor::new("answer\n"));
+        vm.output_writer = Box::new(flushed.clone());
         getstr_prim(&mut vm).unwrap();
         // After reading, the output buffer should have been flushed (empty).
         assert!(vm.output_buffer.is_empty());
+        assert_eq!(flushed.into_string(), "prompt: ");
+    }
+
+    #[test]
+    fn test_getstr_keeps_output_buffered_in_test_mode() {
+        let mut vm = VM::new();
+        let flushed = SharedOutput::default();
+        vm.set_input_flush_mode(InputFlushMode::KeepBufferedForTest);
+        vm.output_buffer = "prompt: ".to_string();
+        vm.input_reader = Box::new(Cursor::new("answer\n"));
+        vm.output_writer = Box::new(flushed.clone());
+        getstr_prim(&mut vm).unwrap();
+        assert_eq!(vm.output_buffer, "prompt: ");
+        assert_eq!(flushed.into_string(), "");
     }
 
     // --- array_get_prim ---

@@ -100,6 +100,14 @@ impl CompileState {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InputFlushMode {
+    /// Flush buffered output before blocking on input.
+    FlushBeforeRead,
+    /// Keep prompt/menu output buffered so tests can inspect it with GET_OUTPUT().
+    KeepBufferedForTest,
+}
+
 /// The TBX virtual machine.
 ///
 /// The dictionary is split into two layers:
@@ -192,6 +200,8 @@ pub struct VM {
     /// The field is not included in the `Debug` output because `dyn Write` does
     /// not implement `Debug`.
     pub output_writer: Box<dyn Write + Send>,
+    /// Policy controlling whether input primitives flush pending output before reading.
+    pub input_flush_mode: InputFlushMode,
     /// Random number generator state.
     ///
     /// Uses `SmallRng` (non-cryptographic, fast) for game and simulation use cases.
@@ -239,8 +249,14 @@ impl VM {
             input_buffer: None,
             input_reader: Box::new(BufReader::new(std::io::stdin())),
             output_writer: Box::new(std::io::stdout()),
+            input_flush_mode: InputFlushMode::FlushBeforeRead,
             rng: rand::rngs::SmallRng::from_entropy(),
         }
+    }
+
+    /// Configure whether input primitives flush pending output before reading.
+    pub fn set_input_flush_mode(&mut self, mode: InputFlushMode) {
+        self.input_flush_mode = mode;
     }
 
     /// Return the current call stack as human-readable frames, innermost first.
