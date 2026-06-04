@@ -213,3 +213,49 @@ fn test_trek_command_loop_does_not_refresh_after_non_navigation_command() {
         "shield control value should survive until loop exit without post-command reset"
     );
 }
+
+#[test]
+fn test_navigate_invalid_course_does_not_repair_damage() {
+    let src = concat!(
+        "USE \"state.tbx\"\n",
+        "USE \"util.tbx\"\n",
+        "USE \"init.tbx\"\n",
+        "USE \"scan.tbx\"\n",
+        "USE \"combat.tbx\"\n",
+        "USE \"nav.tbx\"\n",
+        "USE \"../../lib/tests/helper.tbx\"\n",
+        "DEF RUN()\n",
+        "  INIT_GAME\n",
+        "  SET_DEVICE_DAMAGE DAMAGE_SLOT_PHASER_CONTROL(), -3\n",
+        "  VAR DISCARDED = GET_OUTPUT()\n",
+        "  NAVIGATE\n",
+        "  ASSERT (@DAMAGE[DAMAGE_SLOT_PHASER_CONTROL()] = -3)\n",
+        "END\n",
+        "RUN\n",
+    );
+
+    let _out = run_trek_interaction(src, "0\n");
+}
+
+#[test]
+fn test_navigate_invalid_warp_does_not_repair_damage() {
+    let src = concat!(
+        "USE \"state.tbx\"\n",
+        "USE \"util.tbx\"\n",
+        "USE \"init.tbx\"\n",
+        "USE \"scan.tbx\"\n",
+        "USE \"combat.tbx\"\n",
+        "USE \"nav.tbx\"\n",
+        "USE \"../../lib/tests/helper.tbx\"\n",
+        "DEF RUN()\n",
+        "  INIT_GAME\n",
+        "  SET_DEVICE_DAMAGE DAMAGE_SLOT_PHASER_CONTROL(), -3\n",
+        "  VAR DISCARDED = GET_OUTPUT()\n",
+        "  NAVIGATE\n",
+        "  ASSERT (@DAMAGE[DAMAGE_SLOT_PHASER_CONTROL()] = -3)\n",
+        "END\n",
+        "RUN\n",
+    );
+
+    let _out = run_trek_interaction(src, "1\n9\n");
+}
