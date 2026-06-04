@@ -259,3 +259,29 @@ fn test_navigate_invalid_warp_does_not_repair_damage() {
 
     let _out = run_trek_interaction(src, "1\n9\n");
 }
+
+#[test]
+fn test_navigate_warp_damage_gate_prints_stable_message_and_skips_repairs() {
+    let src = concat!(
+        "USE \"state.tbx\"\n",
+        "USE \"util.tbx\"\n",
+        "USE \"init.tbx\"\n",
+        "USE \"scan.tbx\"\n",
+        "USE \"combat.tbx\"\n",
+        "USE \"nav.tbx\"\n",
+        "USE \"../../lib/tests/helper.tbx\"\n",
+        "DEF RUN()\n",
+        "  INIT_GAME\n",
+        "  SET_DEVICE_DAMAGE DAMAGE_SLOT_WARP_ENGINES(), -2\n",
+        "  SET_DEVICE_DAMAGE DAMAGE_SLOT_PHASER_CONTROL(), -3\n",
+        "  VAR DISCARDED = GET_OUTPUT()\n",
+        "  NAVIGATE\n",
+        "  ASSERT (@DAMAGE[DAMAGE_SLOT_WARP_ENGINES()] = -2)\n",
+        "  ASSERT (@DAMAGE[DAMAGE_SLOT_PHASER_CONTROL()] = -3)\n",
+        "  ASSERT_OUTPUT \"COURSE (1-9):WARP FACTOR (0-8):WARP ENGINES ARE DAMAGED, MAXIMUM SPEED = WARP .2\\n\"\n",
+        "END\n",
+        "RUN\n",
+    );
+
+    let _out = run_trek_interaction(src, "1\n0.3\n");
+}
