@@ -1,0 +1,1 @@
+STTR1のcommand loopへdocking/condition refreshを接続

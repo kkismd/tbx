@@ -64,6 +64,14 @@ DEF CHECK_DOCKING()
   ENDWH
 END
 
+# 共通 refresh: docking 判定と non-docked 時の condition 更新をまとめる
+DEF REFRESH_DOCKING_AND_CONDITION()
+  CHECK_DOCKING
+  IF !DOCKED
+    UPDATE_CONDITION
+  ENDIF
+END
+
 # status display の整数フィールドを既存 UI と同じく整数で揃える
 # 内部値は float のまま保持し、表示時だけ INT() で整形する
 DEF PRINT_STATUS_INT_FIELD(LABEL, VALUE)
@@ -102,10 +110,7 @@ END
 # 各行の右にステータス情報を表示する
 DEF SHORT_RANGE_SCAN()
   # TODO: @DAMAGE[2] < 0 の場合は "*** SHORT RANGE SENSORS ARE OUT ***" を表示してスキップ (damage check, 本 issue 非目標)
-  CHECK_DOCKING
-  IF !DOCKED
-    UPDATE_CONDITION
-  ENDIF
+  REFRESH_DOCKING_AND_CONDITION
   PRINTLN "---------------------------------"
   VAR SY
   FOR &SY, 8

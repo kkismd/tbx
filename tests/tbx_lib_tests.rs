@@ -2068,6 +2068,93 @@ fn test_library_computer_eof_flushes_prompt_and_buffers_menu() {
 }
 
 #[test]
+fn test_trek_command_loop_refreshes_docking_after_navigation_before_next_prompt() {
+    let src = concat!(
+        "USE \"examples/trek/state.tbx\"\n",
+        "USE \"examples/trek/util.tbx\"\n",
+        "USE \"examples/trek/init.tbx\"\n",
+        "USE \"examples/trek/scan.tbx\"\n",
+        "USE \"examples/trek/combat.tbx\"\n",
+        "USE \"examples/trek/nav.tbx\"\n",
+        "USE \"examples/trek/library.tbx\"\n",
+        "USE \"examples/trek/command.tbx\"\n",
+        "DEF RUN()\n",
+        "  INIT_GAME\n",
+        "  CLEAR_SECTOR\n",
+        "  LET ENT_SX = 4\n",
+        "  LET ENT_SY = 4\n",
+        "  LET @SECTOR[ENT_SX, ENT_SY] = 1\n",
+        "  LET @SECTOR[6, 4] = 3\n",
+        "  LET DOCKED = FALSE\n",
+        "  LET CONDITION = \"GREEN\"\n",
+        "  LET ENERGY = MAX_ENERGY - 100\n",
+        "  LET TORPEDOES = MAX_TORPEDOES - 2\n",
+        "  LET SHIELDS = 250\n",
+        "  LET KLINGONS_HERE = 0\n",
+        "  LET START_STARDATE = 2000\n",
+        "  LET STARDATE = 2000\n",
+        "  LET MISSION_DAYS = 0\n",
+        "  VAR DISCARDED = GET_OUTPUT()\n",
+        "  RUN_COMMAND_LOOP\n",
+        "END\n",
+        "RUN\n",
+    );
+    let (buffered, flushed) =
+        run_trek_src_with_input_and_flushed_output(src, "0\n1\n0.2\n0\n1\n1.0\n");
+    let combined = format!("{flushed}{buffered}");
+    assert_eq!(
+        combined
+            .matches("SHIELDS DROPPED FOR DOCKING PURPOSES\n")
+            .count(),
+        1,
+        "navigation should trigger exactly one docking refresh before the next prompt"
+    );
+}
+
+#[test]
+fn test_trek_command_loop_does_not_double_refresh_after_command_one_scan() {
+    let src = concat!(
+        "USE \"examples/trek/state.tbx\"\n",
+        "USE \"examples/trek/util.tbx\"\n",
+        "USE \"examples/trek/init.tbx\"\n",
+        "USE \"examples/trek/scan.tbx\"\n",
+        "USE \"examples/trek/combat.tbx\"\n",
+        "USE \"examples/trek/nav.tbx\"\n",
+        "USE \"examples/trek/library.tbx\"\n",
+        "USE \"examples/trek/command.tbx\"\n",
+        "DEF RUN()\n",
+        "  INIT_GAME\n",
+        "  CLEAR_SECTOR\n",
+        "  LET ENT_SX = 4\n",
+        "  LET ENT_SY = 4\n",
+        "  LET @SECTOR[ENT_SX, ENT_SY] = 1\n",
+        "  LET @SECTOR[5, 4] = 3\n",
+        "  LET DOCKED = FALSE\n",
+        "  LET CONDITION = \"GREEN\"\n",
+        "  LET ENERGY = MAX_ENERGY - 100\n",
+        "  LET TORPEDOES = MAX_TORPEDOES - 2\n",
+        "  LET SHIELDS = 250\n",
+        "  LET KLINGONS_HERE = 0\n",
+        "  LET START_STARDATE = 2000\n",
+        "  LET STARDATE = 2000\n",
+        "  LET MISSION_DAYS = 0\n",
+        "  VAR DISCARDED = GET_OUTPUT()\n",
+        "  RUN_COMMAND_LOOP\n",
+        "END\n",
+        "RUN\n",
+    );
+    let (buffered, flushed) = run_trek_src_with_input_and_flushed_output(src, "1\n0\n1\n1.0\n");
+    let combined = format!("{flushed}{buffered}");
+    assert_eq!(
+        combined
+            .matches("SHIELDS DROPPED FOR DOCKING PURPOSES\n")
+            .count(),
+        2,
+        "initial scan and command 1 scan should dock once each without an extra post-command refresh"
+    );
+}
+
+#[test]
 fn test_dispatch_command_7_eof_flushes_prompt_and_buffers_menu() {
     let src = concat!(
         "USE \"examples/trek/state.tbx\"\n",
