@@ -6,6 +6,7 @@
 // process CWD.
 use std::path::{Path, PathBuf};
 use tbx::interpreter::Interpreter;
+use tbx::vm::InputFlushMode;
 
 fn run_tbx_test(path: &PathBuf, base_dir: &Path) -> Result<(), String> {
     let mut interp = Interpreter::new();
@@ -1948,10 +1949,19 @@ fn test_1d_array_valid_access_regression() {
 
 /// Helper: run TBX source with a given mock input string, return output.
 fn run_with_input(tbx_src: &str, mock_input: &str) -> String {
+    run_with_input_and_flush_mode(tbx_src, mock_input, InputFlushMode::FlushBeforeRead)
+}
+
+fn run_with_input_and_flush_mode(
+    tbx_src: &str,
+    mock_input: &str,
+    input_flush_mode: InputFlushMode,
+) -> String {
     use std::io::Cursor;
 
     let mut interp = Interpreter::new();
     interp.vm_mut().input_reader = Box::new(Cursor::new(mock_input.to_string()));
+    interp.vm_mut().set_input_flush_mode(input_flush_mode);
     interp
         .exec_source(tbx_src)
         .unwrap_or_else(|e| panic!("exec_source failed: {e}"));
@@ -2035,6 +2045,22 @@ fn run_trek_src_with_input_and_flushed_output(tbx_src: &str, mock_input: &str) -
         .exec_source(tbx_src)
         .unwrap_or_else(|e| panic!("exec_source failed: {e}"));
     (interp.take_output(), flushed.into_string())
+}
+
+#[test]
+fn test_getdec_safe_test_mode_keeps_prompt_in_output_buffer() {
+    let src = concat!(
+        "DEF CHECK()\n",
+        "  PUTSTR \"COMMAND:\"\n",
+        "  VAR CMD = GETDEC?()\n",
+        "  PUTSTR GET_OUTPUT()\n",
+        "  PUTSTR \" \"\n",
+        "  PUTVAL CMD[2]\n",
+        "END\n",
+        "CHECK\n",
+    );
+    let out = run_with_input_and_flush_mode(src, "123\n", InputFlushMode::KeepBufferedForTest);
+    assert_eq!(out, "COMMAND: TRUE");
 }
 
 #[test]
