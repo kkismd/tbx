@@ -80,6 +80,35 @@ fn memory_starts_fully_zeroed() {
 }
 
 #[test]
+fn memory_load_bytes_allows_single_byte_at_ffff() {
+    let mut vm = Tbx16Vm::default();
+    vm.memory_mut()
+        .load_bytes(Address::new(0xffff), &[0xaa])
+        .unwrap();
+    assert_eq!(vm.memory().read_byte(Address::new(0xffff)).unwrap(), 0xaa);
+}
+
+#[test]
+fn memory_zero_range_allows_single_byte_at_ffff() {
+    let mut vm = Tbx16Vm::default();
+    vm.memory_mut()
+        .write_byte(Address::new(0xffff), 0xaa)
+        .unwrap();
+    vm.memory_mut().zero_range(Address::new(0xffff), 1).unwrap();
+    assert_eq!(vm.memory().read_byte(Address::new(0xffff)).unwrap(), 0x00);
+}
+
+#[test]
+fn memory_load_bytes_allows_full_64k_image() {
+    let mut vm = Tbx16Vm::default();
+    let image = vec![0x5a; MEMORY_SIZE];
+    vm.memory_mut()
+        .load_bytes(Address::new(0x0000), &image)
+        .unwrap();
+    assert!(vm.memory().as_bytes().iter().all(|byte| *byte == 0x5a));
+}
+
+#[test]
 fn data_stack_starts_at_0080() {
     let vm = Tbx16Vm::default();
     assert_eq!(vm.registers().dsp, DATA_STACK_START);
@@ -207,7 +236,7 @@ fn return_frame_round_trips_return_ip_and_caller_bp() {
 
 #[test]
 fn return_stack_reports_overflow_and_underflow() {
-    let region = StackRegion::new(Address::new(0x0200), Address::new(0x0204)).unwrap();
+    let region = StackRegion::new(Address::new(0x0200), 0x0204).unwrap();
     let mut vm = Tbx16Vm::new(region).unwrap();
 
     vm.push_return_cell(Cell::new(1)).unwrap();
@@ -230,13 +259,20 @@ fn return_stack_reports_overflow_and_underflow() {
 
 #[test]
 fn invalid_return_stack_regions_are_rejected() {
-    let page_one_overlap = StackRegion::new(Address::new(0x0180), Address::new(0x0280)).unwrap();
+    let page_one_overlap = StackRegion::new(Address::new(0x0180), 0x0280).unwrap();
     let err = Tbx16Vm::new(page_one_overlap).unwrap_err();
     assert!(matches!(err, Tbx16Error::InvalidStackRegion { .. }));
 
-    let data_stack_overlap = StackRegion::new(Address::new(0x00f0), Address::new(0x0120)).unwrap();
+    let data_stack_overlap = StackRegion::new(Address::new(0x00f0), 0x0120).unwrap();
     let err = Tbx16Vm::new(data_stack_overlap).unwrap_err();
     assert!(matches!(err, Tbx16Error::InvalidStackRegion { .. }));
+}
+
+#[test]
+fn return_stack_region_can_extend_to_10000_exclusive() {
+    let region = StackRegion::new(Address::new(0xff00), MEMORY_SIZE).unwrap();
+    let vm = Tbx16Vm::new(region).unwrap();
+    assert_eq!(vm.return_stack_region(), region);
 }
 
 #[test]

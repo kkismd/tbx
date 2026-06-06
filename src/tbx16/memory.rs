@@ -56,14 +56,14 @@ impl Memory {
     /// Loads raw bytes into memory without wrapping.
     pub fn load_bytes(&mut self, start: Address, bytes: &[u8]) -> Result<(), Tbx16Error> {
         let end = checked_range_end(start, bytes.len(), "byte load")?;
-        self.bytes[usize::from(start.get())..usize::from(end.get())].copy_from_slice(bytes);
+        self.bytes[usize::from(start.get())..end].copy_from_slice(bytes);
         Ok(())
     }
 
     /// Zeroes the half-open range `[start, start + len)`.
     pub fn zero_range(&mut self, start: Address, len: usize) -> Result<(), Tbx16Error> {
         let end = checked_range_end(start, len, "zero fill")?;
-        self.bytes[usize::from(start.get())..usize::from(end.get())].fill(0);
+        self.bytes[usize::from(start.get())..end].fill(0);
         Ok(())
     }
 
@@ -82,11 +82,14 @@ fn checked_range_end(
     start: Address,
     len: usize,
     operation: &'static str,
-) -> Result<Address, Tbx16Error> {
-    start
-        .checked_add_usize(len)
+) -> Result<usize, Tbx16Error> {
+    let start_index = usize::from(start.get());
+    let end = start_index
+        .checked_add(len)
+        .filter(|end| *end <= MEMORY_SIZE)
         .ok_or(Tbx16Error::InvalidMemoryAccess {
             addr: start,
             operation,
-        })
+        })?;
+    Ok(end)
 }

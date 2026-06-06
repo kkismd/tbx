@@ -22,8 +22,8 @@ use stack::{ensure_pointer_in_region, peek_cell, pop_cell, push_cell, ReturnFram
 pub const DATA_STACK_START: Address = Address::new(0x0080);
 pub const DATA_STACK_END: Address = Address::new(0x0100);
 pub const DEFAULT_RETURN_STACK_START: Address = Address::new(0x0200);
-pub const DEFAULT_RETURN_STACK_END: Address = Address::new(0x0300);
-const PAGE_ONE_END: Address = Address::new(0x0200);
+pub const DEFAULT_RETURN_STACK_END: usize = 0x0300;
+const PAGE_ONE_END_EXCLUSIVE: usize = 0x0200;
 
 /// tbx16 VM substrate with unified memory and byte-addressed registers.
 #[derive(Debug)]
@@ -51,12 +51,13 @@ impl Tbx16Vm {
     /// the target rule `BP + slot_index * 2` from the beginning of execution.
     pub fn new(return_stack_region: StackRegion) -> Result<Self, Tbx16Error> {
         validate_return_stack_region(return_stack_region)?;
-        let data_stack_region = StackRegion::new(DATA_STACK_START, DATA_STACK_END)
-            .expect("fixed data stack region is valid");
+        let data_stack_region =
+            StackRegion::new(DATA_STACK_START, usize::from(DATA_STACK_END.get()))
+                .expect("fixed data stack region is valid");
         if data_stack_region.overlaps(return_stack_region) {
             return Err(Tbx16Error::InvalidStackRegion {
                 start: return_stack_region.start(),
-                end: return_stack_region.end(),
+                end: return_stack_region.end_exclusive(),
                 reason: "return stack region overlaps the fixed data stack region",
             });
         }
@@ -237,7 +238,7 @@ impl Tbx16Vm {
         if !self.data_stack_region.contains_pointer(self.registers.bp) {
             return Err(Tbx16Error::InvalidStackRegion {
                 start: self.data_stack_region.start(),
-                end: self.data_stack_region.end(),
+                end: self.data_stack_region.end_exclusive(),
                 reason: "base pointer must stay within the data stack region",
             });
         }
@@ -251,7 +252,7 @@ impl Tbx16Vm {
         if self.data_stack_region.overlaps(self.return_stack_region) {
             return Err(Tbx16Error::InvalidStackRegion {
                 start: self.return_stack_region.start(),
-                end: self.return_stack_region.end(),
+                end: self.return_stack_region.end_exclusive(),
                 reason: "return stack region overlaps the fixed data stack region",
             });
         }
@@ -260,17 +261,17 @@ impl Tbx16Vm {
 }
 
 fn validate_return_stack_region(region: StackRegion) -> Result<(), Tbx16Error> {
-    if region.start() < PAGE_ONE_END {
+    if usize::from(region.start().get()) < PAGE_ONE_END_EXCLUSIVE {
         return Err(Tbx16Error::InvalidStackRegion {
             start: region.start(),
-            end: region.end(),
+            end: region.end_exclusive(),
             reason: "return stack region must not overlap zero page or page 1",
         });
     }
     if region.len_bytes() % 2 != 0 {
         return Err(Tbx16Error::InvalidStackRegion {
             start: region.start(),
-            end: region.end(),
+            end: region.end_exclusive(),
             reason: "return stack region length must be an even number of bytes",
         });
     }

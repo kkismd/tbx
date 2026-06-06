@@ -7,51 +7,58 @@ use crate::tbx16::memory::Memory;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct StackRegion {
     start: Address,
-    end: Address,
+    end_exclusive: usize,
 }
 
 impl StackRegion {
     /// Creates a stack region with aligned endpoints and an even byte length.
-    pub fn new(start: Address, end: Address) -> Result<Self, Tbx16Error> {
-        if start >= end {
+    pub fn new(start: Address, end_exclusive: usize) -> Result<Self, Tbx16Error> {
+        let start_index = usize::from(start.get());
+        if start_index >= end_exclusive {
             return Err(Tbx16Error::InvalidStackRegion {
                 start,
-                end,
+                end: end_exclusive,
                 reason: "start must be lower than end",
             });
         }
-        if !start.is_even() || !end.is_even() {
+        if !start.is_even() || (end_exclusive % 2) != 0 {
             return Err(Tbx16Error::InvalidStackRegion {
                 start,
-                end,
+                end: end_exclusive,
                 reason: "stack region endpoints must be 2-byte aligned",
             });
         }
-        Ok(Self { start, end })
+        Ok(Self {
+            start,
+            end_exclusive,
+        })
     }
 
     pub const fn start(self) -> Address {
         self.start
     }
 
-    pub const fn end(self) -> Address {
-        self.end
+    pub const fn end_exclusive(self) -> usize {
+        self.end_exclusive
     }
 
-    pub fn len_bytes(self) -> u16 {
-        self.end.get() - self.start.get()
+    pub fn len_bytes(self) -> usize {
+        self.end_exclusive - usize::from(self.start.get())
     }
 
     pub fn contains(self, addr: Address) -> bool {
-        self.start <= addr && addr < self.end
+        let index = usize::from(addr.get());
+        usize::from(self.start.get()) <= index && index < self.end_exclusive
     }
 
     pub fn contains_pointer(self, addr: Address) -> bool {
-        self.start <= addr && addr <= self.end
+        let index = usize::from(addr.get());
+        usize::from(self.start.get()) <= index && index <= self.end_exclusive
     }
 
     pub fn overlaps(self, other: Self) -> bool {
-        self.start < other.end && other.start < self.end
+        usize::from(self.start.get()) < other.end_exclusive
+            && usize::from(other.start.get()) < self.end_exclusive
     }
 }
 
@@ -70,7 +77,7 @@ pub(crate) fn ensure_pointer_in_region(
     if !region.contains_pointer(pointer) {
         return Err(Tbx16Error::InvalidStackRegion {
             start: region.start(),
-            end: region.end(),
+            end: region.end_exclusive(),
             reason: match stack_name {
                 "data" => "data stack pointer escaped its fixed region",
                 _ => "stack pointer escaped its configured region",
