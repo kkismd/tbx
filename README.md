@@ -93,4 +93,4 @@ tt prompt <Tab>   # implement review fix after-merge
 - [`blueprint.md`](./blueprint.md) — VM・辞書のアーキテクチャ設計
 - [`blueprint-language.md`](./blueprint-language.md) — コア言語仕様
 - [`blueprint-compiler.md`](./blueprint-compiler.md) — コンパイラ設計
-
+- [`docs/tbx-6502-profile.md`](./docs/tbx-6502-profile.md) — 初期 `tbx-6502` ターゲットの対応範囲・実行規約
