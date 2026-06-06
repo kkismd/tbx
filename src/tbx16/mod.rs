@@ -25,8 +25,10 @@ pub const DEFAULT_RETURN_STACK_START: Address = Address::new(0x0200);
 pub const DEFAULT_RETURN_STACK_END: Address = Address::new(0x0300);
 const PAGE_ONE_END: Address = Address::new(0x0200);
 const NO_IP: Address = Address::new(0xffff);
+const RETURN_FRAME_BYTES: u16 = 4;
 
 pub const CODE_TOKEN_PRIMITIVE: Cell = Cell::new(0x0001);
+pub const CODE_TOKEN_DOCOL: Cell = Cell::new(0x0002);
 
 /// Result of one `tbx16` execution entry.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -70,6 +72,11 @@ impl TryFrom<Cell> for PrimitiveId {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ResolvedWord {
     Primitive(PrimitiveId),
+    Colon {
+        arity: u16,
+        local_count: u16,
+        parameter_ip: Address,
+    },
 }
 
 /// tbx16 VM substrate with unified memory and byte-addressed registers.
@@ -81,6 +88,7 @@ pub struct Tbx16Vm {
     return_stack_region: StackRegion,
     step_limit: Option<usize>,
     step_counter: usize,
+    call_depth: u16,
 }
 
 impl Default for Tbx16Vm {
@@ -123,6 +131,7 @@ impl Tbx16Vm {
             return_stack_region,
             step_limit: None,
             step_counter: 0,
+            call_depth: 0,
         };
         vm.validate_invariants()?;
         Ok(vm)
@@ -162,27 +171,64 @@ impl Tbx16Vm {
         self.step_counter
     }
 
+    pub fn call_depth(&self) -> u16 {
+        self.call_depth
+    }
+
     pub fn resolve_xt(&self, xt: Cell) -> Result<ResolvedWord, Tbx16Error> {
+        self.resolve_word(xt)
+    }
+
+    fn resolve_word(&self, xt: Cell) -> Result<ResolvedWord, Tbx16Error> {
         let xt_addr = validate_execution_token_address(xt)?;
         let code_token = self
             .memory
             .read_cell(xt_addr)
             .map_err(|_| invalid_execution_token(xt))?;
 
-        if code_token != CODE_TOKEN_PRIMITIVE {
-            return Err(invalid_execution_token(xt));
+        if code_token == CODE_TOKEN_PRIMITIVE {
+            let primitive_id_addr = xt_addr
+                .checked_add(2)
+                .ok_or_else(|| invalid_execution_token(xt))?;
+            let primitive_id = self
+                .memory
+                .read_cell(primitive_id_addr)
+                .map_err(|_| invalid_execution_token(xt))?;
+            let primitive =
+                PrimitiveId::try_from(primitive_id).map_err(|_| invalid_execution_token(xt))?;
+            return Ok(ResolvedWord::Primitive(primitive));
         }
 
-        let primitive_id_addr = xt_addr
-            .checked_add(2)
-            .ok_or_else(|| invalid_execution_token(xt))?;
-        let primitive_id = self
-            .memory
-            .read_cell(primitive_id_addr)
-            .map_err(|_| invalid_execution_token(xt))?;
-        let primitive =
-            PrimitiveId::try_from(primitive_id).map_err(|_| invalid_execution_token(xt))?;
-        Ok(ResolvedWord::Primitive(primitive))
+        if code_token == CODE_TOKEN_DOCOL {
+            let arity_addr = xt_addr
+                .checked_add(2)
+                .ok_or_else(|| invalid_execution_token(xt))?;
+            let local_count_addr = xt_addr
+                .checked_add(4)
+                .ok_or_else(|| invalid_execution_token(xt))?;
+            let parameter_ip = xt_addr
+                .checked_add(6)
+                .ok_or_else(|| invalid_execution_token(xt))
+                .and_then(validate_instruction_pointer_target)
+                .map_err(|_| invalid_execution_token(xt))?;
+            let arity = self
+                .memory
+                .read_cell(arity_addr)
+                .map_err(|_| invalid_execution_token(xt))?
+                .raw();
+            let local_count = self
+                .memory
+                .read_cell(local_count_addr)
+                .map_err(|_| invalid_execution_token(xt))?
+                .raw();
+            return Ok(ResolvedWord::Colon {
+                arity,
+                local_count,
+                parameter_ip,
+            });
+        }
+
+        Err(invalid_execution_token(xt))
     }
 
     pub fn data_slot_address(&self, slot_index: u16) -> Result<Address, Tbx16Error> {
@@ -289,36 +335,28 @@ impl Tbx16Vm {
     }
 
     pub fn pop_return_frame(&mut self) -> Result<ReturnFrame, Tbx16Error> {
-        ensure_pointer_in_region(self.registers.rsp, self.return_stack_region, "return")?;
-        let frame_start = self
+        let frame = self.peek_return_frame()?;
+        self.registers.rsp = self
             .registers
             .rsp
-            .checked_sub(4)
+            .checked_sub(RETURN_FRAME_BYTES)
             .ok_or(Tbx16Error::ReturnStackUnderflow)?;
-        if frame_start < self.return_stack_region.start() {
-            return Err(Tbx16Error::ReturnStackUnderflow);
-        }
-        let return_ip = self.memory.read_cell(frame_start)?;
-        let caller_bp = self.memory.read_cell(
-            frame_start
-                .checked_add(2)
-                .expect("aligned frame start always has space for caller_bp"),
-        )?;
-        self.registers.rsp = frame_start;
-        Ok(ReturnFrame {
-            return_ip: Address::new(return_ip.raw()),
-            caller_bp: Address::new(caller_bp.raw()),
-        })
+        Ok(frame)
     }
 
     pub fn run(&mut self, entry_xt: Cell) -> ExecutionOutcome {
         self.step_counter = 0;
+        self.call_depth = 0;
 
         let outcome = (|| -> Result<ExecutionOutcome, Tbx16Error> {
-            self.begin_step()?;
-            let ResolvedWord::Primitive(primitive) = self.resolve_xt(entry_xt)?;
-            self.step_counter += 1;
-            self.execute_entry_primitive(primitive)
+            match self.start_entry(entry_xt)? {
+                ExecutionState::Finished(outcome) => Ok(outcome),
+                ExecutionState::Running => loop {
+                    if let Some(outcome) = self.dispatch_step()? {
+                        return Ok(outcome);
+                    }
+                },
+            }
         })();
 
         match outcome {
@@ -369,6 +407,21 @@ impl Tbx16Vm {
                 reason: "base pointer must not exceed the data stack pointer",
             });
         }
+        let used_return_bytes = self.registers.rsp.get() - self.return_stack_region.start().get();
+        let expected_return_bytes = self.call_depth.checked_mul(RETURN_FRAME_BYTES).ok_or(
+            Tbx16Error::InvalidStackRegion {
+                start: self.return_stack_region.start(),
+                end: self.return_stack_region.end(),
+                reason: "call depth overflowed return stack accounting",
+            },
+        )?;
+        if used_return_bytes != expected_return_bytes {
+            return Err(Tbx16Error::InvalidStackRegion {
+                start: self.return_stack_region.start(),
+                end: self.return_stack_region.end(),
+                reason: "return stack usage does not match call depth",
+            });
+        }
         validate_return_stack_region(self.return_stack_region)?;
         if self.data_stack_region.overlaps(self.return_stack_region) {
             return Err(Tbx16Error::InvalidStackRegion {
@@ -393,6 +446,39 @@ impl Tbx16Vm {
         }
     }
 
+    fn start_entry(&mut self, entry_xt: Cell) -> Result<ExecutionState, Tbx16Error> {
+        self.begin_step()?;
+        let resolved = self.resolve_word(entry_xt)?;
+        self.step_counter += 1;
+
+        match resolved {
+            ResolvedWord::Primitive(primitive) => {
+                let outcome = self.execute_entry_primitive(primitive)?;
+                self.debug_validate_state();
+                Ok(ExecutionState::Finished(outcome))
+            }
+            ResolvedWord::Colon {
+                arity,
+                local_count,
+                parameter_ip,
+            } => {
+                let frame_base = self.compute_frame_base(arity)?;
+                let locals_start = self.registers.dsp;
+                let new_dsp = self.checked_extend_data_stack(locals_start, local_count)?;
+
+                if local_count != 0 {
+                    self.memory
+                        .zero_range(locals_start, usize::from(local_count) * 2)?;
+                }
+                self.registers.bp = frame_base;
+                self.registers.dsp = new_dsp;
+                self.registers.ip = Some(parameter_ip);
+                self.debug_validate_state();
+                Ok(ExecutionState::Running)
+            }
+        }
+    }
+
     fn dispatch_step(&mut self) -> Result<Option<ExecutionOutcome>, Tbx16Error> {
         self.begin_step()?;
 
@@ -401,9 +487,25 @@ impl Tbx16Vm {
         let continuation_ip = validated_successor_ip(ip)?;
         self.step_counter += 1;
 
-        let ResolvedWord::Primitive(primitive) = self.resolve_xt(xt)?;
-        self.registers.ip = Some(ip);
-        self.execute_primitive_from_dispatch(primitive, continuation_ip)
+        match self.resolve_word(xt)? {
+            ResolvedWord::Primitive(primitive) => {
+                self.registers.ip = Some(ip);
+                let outcome = self.execute_primitive_from_dispatch(primitive, continuation_ip)?;
+                if outcome.is_none() {
+                    self.debug_validate_state();
+                }
+                Ok(outcome)
+            }
+            ResolvedWord::Colon {
+                arity,
+                local_count,
+                parameter_ip,
+            } => {
+                self.execute_colon_call(arity, local_count, parameter_ip, continuation_ip)?;
+                self.debug_validate_state();
+                Ok(None)
+            }
+        }
     }
 
     fn execute_primitive_from_dispatch(
@@ -493,6 +595,37 @@ impl Tbx16Vm {
         self.memory.read_cell(ip)
     }
 
+    fn compute_frame_base(&self, arity: u16) -> Result<Address, Tbx16Error> {
+        let arg_bytes = arity.checked_mul(2).ok_or(Tbx16Error::DataStackUnderflow)?;
+        let frame_base = self
+            .registers
+            .dsp
+            .checked_sub(arg_bytes)
+            .ok_or(Tbx16Error::DataStackUnderflow)?;
+        if frame_base < self.data_stack_region.start() {
+            return Err(Tbx16Error::DataStackUnderflow);
+        }
+        Ok(frame_base)
+    }
+
+    fn checked_extend_data_stack(
+        &self,
+        base: Address,
+        cell_count: u16,
+    ) -> Result<Address, Tbx16Error> {
+        let byte_len = cell_count
+            .checked_mul(2)
+            .ok_or(Tbx16Error::DataStackOverflow)?;
+        let new_dsp = base
+            .checked_add(byte_len)
+            .ok_or(Tbx16Error::DataStackOverflow)?;
+        ensure_pointer_in_region(base, self.data_stack_region, "data")?;
+        if !self.data_stack_region.contains_pointer(new_dsp) {
+            return Err(Tbx16Error::DataStackOverflow);
+        }
+        Ok(new_dsp)
+    }
+
     fn ensure_data_stack_pushable(&self, pointer: Address) -> Result<(), Tbx16Error> {
         let next = pointer
             .checked_add(2)
@@ -503,6 +636,85 @@ impl Tbx16Vm {
         }
         Ok(())
     }
+
+    fn execute_colon_call(
+        &mut self,
+        arity: u16,
+        local_count: u16,
+        parameter_ip: Address,
+        return_ip: Address,
+    ) -> Result<(), Tbx16Error> {
+        let new_bp = self.compute_frame_base(arity)?;
+        let locals_start = self.registers.dsp;
+        let new_dsp = self.checked_extend_data_stack(locals_start, local_count)?;
+        let new_rsp = self
+            .registers
+            .rsp
+            .checked_add(RETURN_FRAME_BYTES)
+            .ok_or(Tbx16Error::ReturnStackOverflow)?;
+        ensure_pointer_in_region(self.registers.rsp, self.return_stack_region, "return")?;
+        if !self.return_stack_region.contains_pointer(new_rsp) {
+            return Err(Tbx16Error::ReturnStackOverflow);
+        }
+
+        let caller_bp = self.registers.bp;
+        self.memory
+            .write_cell(self.registers.rsp, Cell::new(return_ip.get()))?;
+        self.memory.write_cell(
+            self.registers
+                .rsp
+                .checked_add(2)
+                .expect("validated return frame has room for caller bp"),
+            Cell::new(caller_bp.get()),
+        )?;
+        if local_count != 0 {
+            self.memory
+                .zero_range(locals_start, usize::from(local_count) * 2)?;
+        }
+
+        self.registers.rsp = new_rsp;
+        self.registers.bp = new_bp;
+        self.registers.dsp = new_dsp;
+        self.registers.ip = Some(parameter_ip);
+        self.call_depth = self
+            .call_depth
+            .checked_add(1)
+            .expect("call depth fits in configured return stack space");
+        Ok(())
+    }
+
+    fn peek_return_frame(&self) -> Result<ReturnFrame, Tbx16Error> {
+        ensure_pointer_in_region(self.registers.rsp, self.return_stack_region, "return")?;
+        let frame_start = self
+            .registers
+            .rsp
+            .checked_sub(RETURN_FRAME_BYTES)
+            .ok_or(Tbx16Error::ReturnStackUnderflow)?;
+        if frame_start < self.return_stack_region.start() {
+            return Err(Tbx16Error::ReturnStackUnderflow);
+        }
+        let return_ip = self.memory.read_cell(frame_start)?;
+        let caller_bp = self.memory.read_cell(
+            frame_start
+                .checked_add(2)
+                .expect("validated frame start has room for caller bp"),
+        )?;
+        Ok(ReturnFrame {
+            return_ip: Address::new(return_ip.raw()),
+            caller_bp: Address::new(caller_bp.raw()),
+        })
+    }
+
+    fn debug_validate_state(&self) {
+        #[cfg(debug_assertions)]
+        self.validate_invariants()
+            .expect("tbx16 invariants must hold after successful state transitions");
+    }
+}
+
+enum ExecutionState {
+    Running,
+    Finished(ExecutionOutcome),
 }
 
 fn validate_return_stack_region(region: StackRegion) -> Result<(), Tbx16Error> {
