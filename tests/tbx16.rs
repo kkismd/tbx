@@ -1,11 +1,100 @@
+use std::collections::HashMap;
+
 use tbx::tbx16::address::Address;
 use tbx::tbx16::cell::Cell;
 use tbx::tbx16::error::Tbx16Error;
 use tbx::tbx16::memory::MEMORY_SIZE;
 use tbx::tbx16::stack::{ReturnFrame, StackRegion};
 use tbx::tbx16::{
-    Tbx16Vm, DATA_STACK_END, DATA_STACK_START, DEFAULT_RETURN_STACK_END, DEFAULT_RETURN_STACK_START,
+    ExecutionOutcome, PrimitiveId, ResolvedWord, Tbx16Vm, CODE_TOKEN_PRIMITIVE, DATA_STACK_END,
+    DATA_STACK_START, DEFAULT_RETURN_STACK_END, DEFAULT_RETURN_STACK_START,
 };
+
+const CODE_START: u16 = 0x0400;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct VmSnapshot {
+    ip: Option<Address>,
+    dsp: Address,
+    step_counter: usize,
+    memory: Vec<u8>,
+}
+
+fn snapshot(vm: &Tbx16Vm) -> VmSnapshot {
+    VmSnapshot {
+        ip: vm.registers().ip,
+        dsp: vm.registers().dsp,
+        step_counter: vm.step_counter(),
+        memory: vm.memory().as_bytes().to_vec(),
+    }
+}
+
+enum PendingCell {
+    Raw(Cell),
+    Label(&'static str),
+}
+
+struct ImageBuilder {
+    cursor: Address,
+    cells: Vec<(Address, PendingCell)>,
+    labels: HashMap<&'static str, Address>,
+}
+
+impl ImageBuilder {
+    fn new(start: u16) -> Self {
+        Self {
+            cursor: Address::new(start),
+            cells: Vec::new(),
+            labels: HashMap::new(),
+        }
+    }
+
+    fn primitive(&mut self, primitive: PrimitiveId) -> Cell {
+        let xt = Cell::new(self.cursor.get());
+        self.emit_cell(CODE_TOKEN_PRIMITIVE);
+        self.emit_cell(primitive.as_cell());
+        xt
+    }
+
+    fn emit_xt(&mut self, xt: Cell) {
+        self.emit_cell(xt);
+    }
+
+    fn emit_cell(&mut self, cell: Cell) {
+        let addr = self.cursor;
+        self.cells.push((addr, PendingCell::Raw(cell)));
+        self.cursor = self
+            .cursor
+            .checked_add(2)
+            .expect("test image stays within 64 KiB");
+    }
+
+    fn emit_label_ref(&mut self, label: &'static str) {
+        let addr = self.cursor;
+        self.cells.push((addr, PendingCell::Label(label)));
+        self.cursor = self
+            .cursor
+            .checked_add(2)
+            .expect("test image stays within 64 KiB");
+    }
+
+    fn mark_label(&mut self, label: &'static str) {
+        self.labels.insert(label, self.cursor);
+    }
+
+    fn load_into(self, vm: &mut Tbx16Vm) {
+        for (addr, pending) in self.cells {
+            let cell = match pending {
+                PendingCell::Raw(cell) => cell,
+                PendingCell::Label(label) => {
+                    let target = self.labels.get(label).expect("label must be defined");
+                    Cell::new(target.get())
+                }
+            };
+            vm.memory_mut().write_cell(addr, cell).unwrap();
+        }
+    }
+}
 
 #[test]
 fn cell_reinterprets_u16_and_i16_bits() {
@@ -309,4 +398,428 @@ fn bp_slot_addresses_use_two_byte_steps() {
     assert_eq!(vm.data_slot_address(0).unwrap(), Address::new(0x0080));
     assert_eq!(vm.data_slot_address(1).unwrap(), Address::new(0x0082));
     assert_eq!(vm.data_slot_address(5).unwrap(), Address::new(0x008a));
+}
+
+#[test]
+fn primitive_xt_resolve_returns_registered_primitive_metadata() {
+    let mut vm = Tbx16Vm::default();
+    let mut image = ImageBuilder::new(CODE_START);
+    let halt_xt = image.primitive(PrimitiveId::Halt);
+    image.load_into(&mut vm);
+
+    assert_eq!(
+        vm.resolve_xt(halt_xt).unwrap(),
+        ResolvedWord::Primitive(PrimitiveId::Halt)
+    );
+}
+
+#[test]
+fn invalid_xts_and_malformed_primitive_words_trap() {
+    let mut vm = Tbx16Vm::default();
+    vm.memory_mut()
+        .write_cell(Address::new(CODE_START), Cell::new(0x9999))
+        .unwrap();
+    vm.memory_mut()
+        .write_cell(Address::new(0xfffe), CODE_TOKEN_PRIMITIVE)
+        .unwrap();
+    vm.memory_mut()
+        .write_cell(Address::new(CODE_START + 4), CODE_TOKEN_PRIMITIVE)
+        .unwrap();
+    vm.memory_mut()
+        .write_cell(Address::new(CODE_START + 6), Cell::new(0x9999))
+        .unwrap();
+
+    assert_eq!(
+        vm.resolve_xt(Cell::new(CODE_START)).unwrap_err(),
+        Tbx16Error::InvalidExecutionToken {
+            xt: Cell::new(CODE_START),
+        }
+    );
+    assert_eq!(
+        vm.resolve_xt(Cell::new(CODE_START + 1)).unwrap_err(),
+        Tbx16Error::InvalidExecutionToken {
+            xt: Cell::new(CODE_START + 1),
+        }
+    );
+    assert_eq!(
+        vm.resolve_xt(Cell::new(0xffff)).unwrap_err(),
+        Tbx16Error::InvalidExecutionToken {
+            xt: Cell::new(0xffff),
+        }
+    );
+    assert_eq!(
+        vm.resolve_xt(Cell::new(0xfffe)).unwrap_err(),
+        Tbx16Error::InvalidExecutionToken {
+            xt: Cell::new(0xfffe),
+        }
+    );
+    assert_eq!(
+        vm.resolve_xt(Cell::new(CODE_START + 4)).unwrap_err(),
+        Tbx16Error::InvalidExecutionToken {
+            xt: Cell::new(CODE_START + 4),
+        }
+    );
+}
+
+#[test]
+fn threaded_lit_branch_and_zbranch_execute_handwritten_code() {
+    let mut forward_vm = Tbx16Vm::default();
+    let mut forward = ImageBuilder::new(CODE_START);
+    let lit_xt = forward.primitive(PrimitiveId::Lit);
+    let branch_xt = forward.primitive(PrimitiveId::Branch);
+    let halt_xt = forward.primitive(PrimitiveId::Halt);
+    forward.mark_label("start");
+    forward.emit_xt(branch_xt);
+    forward.emit_label_ref("target");
+    forward.emit_xt(lit_xt);
+    forward.emit_cell(Cell::new(0xdead));
+    forward.mark_label("target");
+    forward.emit_xt(lit_xt);
+    forward.emit_cell(Cell::new(0x1234));
+    forward.emit_xt(halt_xt);
+    forward.load_into(&mut forward_vm);
+    assert_eq!(
+        forward_vm.run_threaded(Address::new(CODE_START + 12)),
+        ExecutionOutcome::Halted
+    );
+    assert_eq!(forward_vm.peek_data_cell(0).unwrap(), Cell::new(0x1234));
+
+    let mut backward_vm = Tbx16Vm::default();
+    let mut backward = ImageBuilder::new(CODE_START);
+    let lit_xt = backward.primitive(PrimitiveId::Lit);
+    let branch_xt = backward.primitive(PrimitiveId::Branch);
+    let halt_xt = backward.primitive(PrimitiveId::Halt);
+    backward.mark_label("target");
+    backward.emit_xt(lit_xt);
+    backward.emit_cell(Cell::new(0x5678));
+    backward.emit_xt(halt_xt);
+    backward.mark_label("start");
+    backward.emit_xt(branch_xt);
+    backward.emit_label_ref("target");
+    backward.load_into(&mut backward_vm);
+    assert_eq!(
+        backward_vm.run_threaded(Address::new(CODE_START + 18)),
+        ExecutionOutcome::Halted
+    );
+    assert_eq!(backward_vm.peek_data_cell(0).unwrap(), Cell::new(0x5678));
+
+    let mut zero_vm = Tbx16Vm::default();
+    let mut zero = ImageBuilder::new(CODE_START);
+    let lit_xt = zero.primitive(PrimitiveId::Lit);
+    let zbranch_xt = zero.primitive(PrimitiveId::ZBranch);
+    let halt_xt = zero.primitive(PrimitiveId::Halt);
+    zero.mark_label("start");
+    zero.emit_xt(lit_xt);
+    zero.emit_cell(Cell::new(0));
+    zero.emit_xt(zbranch_xt);
+    zero.emit_label_ref("target");
+    zero.emit_xt(lit_xt);
+    zero.emit_cell(Cell::new(0x9999));
+    zero.mark_label("target");
+    zero.emit_xt(lit_xt);
+    zero.emit_cell(Cell::new(0x2222));
+    zero.emit_xt(halt_xt);
+    zero.load_into(&mut zero_vm);
+    assert_eq!(
+        zero_vm.run_threaded(Address::new(CODE_START + 12)),
+        ExecutionOutcome::Halted
+    );
+    assert_eq!(zero_vm.peek_data_cell(0).unwrap(), Cell::new(0x2222));
+
+    let mut nonzero_vm = Tbx16Vm::default();
+    let mut nonzero = ImageBuilder::new(CODE_START);
+    let lit_xt = nonzero.primitive(PrimitiveId::Lit);
+    let zbranch_xt = nonzero.primitive(PrimitiveId::ZBranch);
+    let halt_xt = nonzero.primitive(PrimitiveId::Halt);
+    nonzero.mark_label("start");
+    nonzero.emit_xt(lit_xt);
+    nonzero.emit_cell(Cell::new(1));
+    nonzero.emit_xt(zbranch_xt);
+    nonzero.emit_label_ref("target");
+    nonzero.emit_xt(lit_xt);
+    nonzero.emit_cell(Cell::new(0x3333));
+    nonzero.emit_xt(halt_xt);
+    nonzero.mark_label("target");
+    nonzero.emit_xt(lit_xt);
+    nonzero.emit_cell(Cell::new(0x4444));
+    nonzero.emit_xt(halt_xt);
+    nonzero.load_into(&mut nonzero_vm);
+    assert_eq!(
+        nonzero_vm.run_threaded(Address::new(CODE_START + 12)),
+        ExecutionOutcome::Halted
+    );
+    assert_eq!(nonzero_vm.peek_data_cell(0).unwrap(), Cell::new(0x3333));
+}
+
+#[test]
+fn entry_primitives_execute_with_normal_primitive_semantics_once() {
+    let mut lit_vm = Tbx16Vm::default();
+    let mut lit_image = ImageBuilder::new(CODE_START);
+    let lit_xt = lit_image.primitive(PrimitiveId::Lit);
+    lit_image.emit_cell(Cell::new(0x4321));
+    lit_image.load_into(&mut lit_vm);
+    lit_vm
+        .set_instruction_pointer(Address::new(CODE_START + 4))
+        .unwrap();
+    assert_eq!(lit_vm.run(lit_xt), ExecutionOutcome::Returned);
+    assert_eq!(lit_vm.peek_data_cell(0).unwrap(), Cell::new(0x4321));
+
+    let mut branch_vm = Tbx16Vm::default();
+    let mut branch_image = ImageBuilder::new(CODE_START);
+    let branch_xt = branch_image.primitive(PrimitiveId::Branch);
+    branch_image.emit_cell(Cell::new(0x0410));
+    branch_image.load_into(&mut branch_vm);
+    branch_vm
+        .set_instruction_pointer(Address::new(CODE_START + 4))
+        .unwrap();
+    assert_eq!(branch_vm.run(branch_xt), ExecutionOutcome::Returned);
+    assert_eq!(branch_vm.registers().ip, Some(Address::new(0x0410)));
+
+    let mut zbranch_vm = Tbx16Vm::default();
+    let mut zbranch_image = ImageBuilder::new(CODE_START);
+    let zbranch_xt = zbranch_image.primitive(PrimitiveId::ZBranch);
+    zbranch_image.emit_cell(Cell::new(0x0412));
+    zbranch_image.load_into(&mut zbranch_vm);
+    zbranch_vm
+        .set_instruction_pointer(Address::new(CODE_START + 4))
+        .unwrap();
+    zbranch_vm.push_data_cell(Cell::new(0)).unwrap();
+    assert_eq!(zbranch_vm.run(zbranch_xt), ExecutionOutcome::Returned);
+    assert_eq!(zbranch_vm.registers().ip, Some(Address::new(0x0412)));
+
+    let mut halt_vm = Tbx16Vm::default();
+    let mut halt_image = ImageBuilder::new(CODE_START);
+    let halt_xt = halt_image.primitive(PrimitiveId::Halt);
+    halt_image.load_into(&mut halt_vm);
+    assert_eq!(halt_vm.run(halt_xt), ExecutionOutcome::Halted);
+}
+
+#[test]
+fn entry_primitives_trap_when_required_context_is_missing() {
+    let mut lit_vm = Tbx16Vm::default();
+    let mut lit_image = ImageBuilder::new(CODE_START);
+    let lit_xt = lit_image.primitive(PrimitiveId::Lit);
+    lit_image.load_into(&mut lit_vm);
+    assert_eq!(
+        lit_vm.run(lit_xt),
+        ExecutionOutcome::Trapped(Tbx16Error::InstructionPointerOutOfRange {
+            ip: Address::new(0xffff),
+        })
+    );
+
+    let mut zbranch_vm = Tbx16Vm::default();
+    let mut zbranch_image = ImageBuilder::new(CODE_START);
+    let zbranch_xt = zbranch_image.primitive(PrimitiveId::ZBranch);
+    zbranch_image.emit_cell(Cell::new(0x0410));
+    zbranch_image.load_into(&mut zbranch_vm);
+    zbranch_vm
+        .set_instruction_pointer(Address::new(CODE_START + 4))
+        .unwrap();
+    assert_eq!(
+        zbranch_vm.run(zbranch_xt),
+        ExecutionOutcome::Trapped(Tbx16Error::DataStackUnderflow)
+    );
+}
+
+#[test]
+fn invalid_branch_targets_trap_for_threaded_and_entry_execution() {
+    let mut odd_vm = Tbx16Vm::default();
+    let mut odd_image = ImageBuilder::new(CODE_START);
+    let branch_xt = odd_image.primitive(PrimitiveId::Branch);
+    odd_image.mark_label("start");
+    odd_image.emit_xt(branch_xt);
+    odd_image.emit_cell(Cell::new(0x0401));
+    odd_image.load_into(&mut odd_vm);
+    assert_eq!(
+        odd_vm.run_threaded(Address::new(CODE_START + 4)),
+        ExecutionOutcome::Trapped(Tbx16Error::InstructionPointerOutOfRange {
+            ip: Address::new(0x0401),
+        })
+    );
+
+    let mut ffff_vm = Tbx16Vm::default();
+    let mut ffff_image = ImageBuilder::new(CODE_START);
+    let branch_xt = ffff_image.primitive(PrimitiveId::Branch);
+    ffff_image.emit_cell(Cell::new(0xffff));
+    ffff_image.load_into(&mut ffff_vm);
+    ffff_vm
+        .set_instruction_pointer(Address::new(CODE_START + 4))
+        .unwrap();
+    assert_eq!(
+        ffff_vm.run(branch_xt),
+        ExecutionOutcome::Trapped(Tbx16Error::InstructionPointerOutOfRange {
+            ip: Address::new(0xffff),
+        })
+    );
+}
+
+#[test]
+fn step_limit_stops_before_the_next_threaded_dispatch() {
+    let mut limited_vm = Tbx16Vm::default();
+    let mut image = ImageBuilder::new(CODE_START);
+    let lit_xt = image.primitive(PrimitiveId::Lit);
+    let halt_xt = image.primitive(PrimitiveId::Halt);
+    image.mark_label("start");
+    image.emit_xt(lit_xt);
+    image.emit_cell(Cell::new(0x1111));
+    image.emit_xt(halt_xt);
+    image.load_into(&mut limited_vm);
+
+    limited_vm.set_step_limit(Some(1));
+    assert_eq!(
+        limited_vm.run_threaded(Address::new(CODE_START + 8)),
+        ExecutionOutcome::Trapped(Tbx16Error::StepLimitExceeded)
+    );
+    assert_eq!(limited_vm.step_counter(), 1);
+    assert_eq!(
+        limited_vm.registers().ip,
+        Some(Address::new(CODE_START + 12))
+    );
+
+    let mut ok_vm = Tbx16Vm::default();
+    let mut ok_image = ImageBuilder::new(CODE_START);
+    let lit_xt = ok_image.primitive(PrimitiveId::Lit);
+    let halt_xt = ok_image.primitive(PrimitiveId::Halt);
+    ok_image.emit_xt(lit_xt);
+    ok_image.emit_cell(Cell::new(0x1111));
+    ok_image.emit_xt(halt_xt);
+    ok_image.load_into(&mut ok_vm);
+    ok_vm.set_step_limit(Some(2));
+    assert_eq!(
+        ok_vm.run_threaded(Address::new(CODE_START + 8)),
+        ExecutionOutcome::Halted
+    );
+    assert_eq!(ok_vm.step_counter(), 2);
+}
+
+#[test]
+fn threaded_failures_after_fetch_still_increment_step_counter() {
+    let mut invalid_xt_vm = Tbx16Vm::default();
+    invalid_xt_vm
+        .memory_mut()
+        .write_cell(Address::new(CODE_START), Cell::new(0x9999))
+        .unwrap();
+    assert_eq!(
+        invalid_xt_vm.run_threaded(Address::new(CODE_START)),
+        ExecutionOutcome::Trapped(Tbx16Error::InvalidExecutionToken {
+            xt: Cell::new(0x9999),
+        })
+    );
+    assert_eq!(invalid_xt_vm.step_counter(), 1);
+
+    let mut lit_vm = Tbx16Vm::default();
+    let mut lit_image = ImageBuilder::new(CODE_START);
+    let lit_xt = lit_image.primitive(PrimitiveId::Lit);
+    lit_image.emit_xt(lit_xt);
+    lit_image.emit_cell(Cell::new(0x1111));
+    lit_image.load_into(&mut lit_vm);
+    for i in 0..64u16 {
+        lit_vm.push_data_cell(Cell::new(i)).unwrap();
+    }
+    assert_eq!(
+        lit_vm.run_threaded(Address::new(CODE_START + 4)),
+        ExecutionOutcome::Trapped(Tbx16Error::DataStackOverflow)
+    );
+    assert_eq!(lit_vm.step_counter(), 1);
+
+    let mut zbranch_vm = Tbx16Vm::default();
+    let mut zbranch_image = ImageBuilder::new(CODE_START);
+    let zbranch_xt = zbranch_image.primitive(PrimitiveId::ZBranch);
+    zbranch_image.emit_xt(zbranch_xt);
+    zbranch_image.emit_cell(Cell::new(0x0410));
+    zbranch_image.load_into(&mut zbranch_vm);
+    assert_eq!(
+        zbranch_vm.run_threaded(Address::new(CODE_START + 4)),
+        ExecutionOutcome::Trapped(Tbx16Error::DataStackUnderflow)
+    );
+    assert_eq!(zbranch_vm.step_counter(), 1);
+}
+
+#[test]
+fn threaded_atomic_failures_preserve_ip_stack_and_memory() {
+    let mut invalid_xt_vm = Tbx16Vm::default();
+    invalid_xt_vm
+        .memory_mut()
+        .write_cell(Address::new(CODE_START), Cell::new(0x9999))
+        .unwrap();
+    invalid_xt_vm
+        .set_instruction_pointer(Address::new(CODE_START))
+        .unwrap();
+    let before = snapshot(&invalid_xt_vm);
+    assert_eq!(
+        invalid_xt_vm.run_threaded(Address::new(CODE_START)),
+        ExecutionOutcome::Trapped(Tbx16Error::InvalidExecutionToken {
+            xt: Cell::new(0x9999),
+        })
+    );
+    let after = snapshot(&invalid_xt_vm);
+    assert_eq!(after.ip, before.ip);
+    assert_eq!(after.dsp, before.dsp);
+    assert_eq!(after.memory, before.memory);
+    assert_eq!(after.step_counter, 1);
+
+    let mut lit_vm = Tbx16Vm::default();
+    let mut lit_image = ImageBuilder::new(CODE_START);
+    let lit_xt = lit_image.primitive(PrimitiveId::Lit);
+    lit_image.emit_xt(lit_xt);
+    lit_image.emit_cell(Cell::new(0x5555));
+    lit_image.load_into(&mut lit_vm);
+    for i in 0..64u16 {
+        lit_vm.push_data_cell(Cell::new(i)).unwrap();
+    }
+    lit_vm
+        .set_instruction_pointer(Address::new(CODE_START + 4))
+        .unwrap();
+    let before = snapshot(&lit_vm);
+    assert_eq!(
+        lit_vm.run_threaded(Address::new(CODE_START + 4)),
+        ExecutionOutcome::Trapped(Tbx16Error::DataStackOverflow)
+    );
+    let after = snapshot(&lit_vm);
+    assert_eq!(after.ip, before.ip);
+    assert_eq!(after.dsp, before.dsp);
+    assert_eq!(after.memory, before.memory);
+    assert_eq!(after.step_counter, 1);
+
+    let mut branch_vm = Tbx16Vm::default();
+    let mut branch_image = ImageBuilder::new(CODE_START);
+    let branch_xt = branch_image.primitive(PrimitiveId::Branch);
+    branch_image.emit_xt(branch_xt);
+    branch_image.emit_cell(Cell::new(0xffff));
+    branch_image.load_into(&mut branch_vm);
+    branch_vm
+        .set_instruction_pointer(Address::new(CODE_START + 4))
+        .unwrap();
+    let before = snapshot(&branch_vm);
+    assert_eq!(
+        branch_vm.run_threaded(Address::new(CODE_START + 4)),
+        ExecutionOutcome::Trapped(Tbx16Error::InstructionPointerOutOfRange {
+            ip: Address::new(0xffff),
+        })
+    );
+    let after = snapshot(&branch_vm);
+    assert_eq!(after.ip, before.ip);
+    assert_eq!(after.dsp, before.dsp);
+    assert_eq!(after.memory, before.memory);
+    assert_eq!(after.step_counter, 1);
+
+    let mut zbranch_vm = Tbx16Vm::default();
+    let mut zbranch_image = ImageBuilder::new(CODE_START);
+    let zbranch_xt = zbranch_image.primitive(PrimitiveId::ZBranch);
+    zbranch_image.emit_xt(zbranch_xt);
+    zbranch_image.emit_cell(Cell::new(0x0410));
+    zbranch_image.load_into(&mut zbranch_vm);
+    zbranch_vm
+        .set_instruction_pointer(Address::new(CODE_START + 4))
+        .unwrap();
+    let before = snapshot(&zbranch_vm);
+    assert_eq!(
+        zbranch_vm.run_threaded(Address::new(CODE_START + 4)),
+        ExecutionOutcome::Trapped(Tbx16Error::DataStackUnderflow)
+    );
+    let after = snapshot(&zbranch_vm);
+    assert_eq!(after.ip, before.ip);
+    assert_eq!(after.dsp, before.dsp);
+    assert_eq!(after.memory, before.memory);
+    assert_eq!(after.step_counter, 1);
 }
