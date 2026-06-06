@@ -12,8 +12,19 @@ pub enum Trap {
     InvalidEntryWord(WordId),
     InvalidWord(WordId),
     InvalidString(StringId),
-    InvalidBranchTarget { word: WordId, target: usize },
-    InvalidLocalSlot { word: WordId, slot: u8 },
+    InvalidBranchTarget {
+        word: WordId,
+        target: usize,
+    },
+    InvalidFrameLayout {
+        word: WordId,
+        arity: u8,
+        frame_slots: u8,
+    },
+    InvalidLocalSlot {
+        word: WordId,
+        slot: u8,
+    },
     StackUnderflow,
     StackOverflow,
     ReturnStackOverflow,
@@ -26,14 +37,14 @@ pub enum Trap {
 pub struct CallFrame {
     pub word: WordId,
     pub pc: usize,
-    pub locals: Vec<Cell>,
+    pub frame_base: usize,
     pub return_mode: ReturnMode,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct RunningWord {
     id: WordId,
-    locals: Vec<Cell>,
+    frame_base: usize,
     return_mode: ReturnMode,
     pc: usize,
 }
@@ -94,10 +105,12 @@ impl Vm {
             Word::User(word) => word,
             Word::Primitive(_) => return Err(Trap::InvalidEntryWord(entry)),
         };
+        self.validate_frame_layout(entry, entry_user)?;
+        self.reserve_frame(usize::from(entry_user.frame_slots))?;
 
         let mut current = RunningWord {
             id: entry,
-            locals: vec![0; usize::from(entry_user.frame_slots)],
+            frame_base: 0,
             return_mode: ReturnMode::Void,
             pc: 0,
         };
@@ -142,43 +155,36 @@ impl Vm {
                     }
                 }
                 Instr::LoadLocal(slot) => {
-                    let value =
-                        *current
-                            .locals
-                            .get(usize::from(slot))
-                            .ok_or(Trap::InvalidLocalSlot {
-                                word: current.id,
-                                slot,
-                            })?;
+                    let value = self.read_local(&current, slot)?;
                     self.push(value)?;
                 }
                 Instr::StoreLocal(slot) => {
                     let value = self.pop()?;
-                    let local = current.locals.get_mut(usize::from(slot)).ok_or(
-                        Trap::InvalidLocalSlot {
-                            word: current.id,
-                            slot,
-                        },
-                    )?;
-                    *local = value;
+                    self.write_local(&current, slot, value)?;
                 }
                 Instr::Exit => {
+                    let return_value = match current.return_mode {
+                        ReturnMode::Void => None,
+                        ReturnMode::Value => Some(self.pop()?),
+                    };
+                    self.data_stack.truncate(current.frame_base);
+
                     if let Some(frame) = self.return_stack.pop() {
-                        let return_value = match current.return_mode {
-                            ReturnMode::Void => None,
-                            ReturnMode::Value => Some(self.pop()?),
-                        };
                         current = RunningWord {
                             id: frame.word,
-                            locals: frame.locals,
+                            frame_base: frame.frame_base,
                             return_mode: frame.return_mode,
                             pc: frame.pc,
                         };
+                    } else {
                         if let Some(value) = return_value {
                             self.push(value)?;
                         }
-                    } else {
                         return Ok(());
+                    }
+
+                    if let Some(value) = return_value {
+                        self.push(value)?;
                     }
                 }
                 Instr::Halt => return Ok(()),
@@ -223,6 +229,7 @@ impl Vm {
         if self.return_stack.len() >= self.return_stack_limit {
             return Err(Trap::ReturnStackOverflow);
         }
+        self.validate_frame_layout(word_id, user_word)?;
 
         let arity = usize::from(user_word.arity);
         if self.data_stack.len() < arity {
@@ -231,20 +238,18 @@ impl Vm {
 
         let frame_len = usize::from(user_word.frame_slots);
         let base = self.data_stack.len() - arity;
-        let args = self.data_stack.split_off(base);
-        let mut locals = vec![0; frame_len];
-        locals[..arity].copy_from_slice(&args);
+        self.reserve_frame(frame_len - arity)?;
 
         self.return_stack.push(CallFrame {
             word: current.id,
             pc: current.pc,
-            locals: std::mem::take(&mut current.locals),
+            frame_base: current.frame_base,
             return_mode: current.return_mode,
         });
 
         *current = RunningWord {
             id: word_id,
-            locals,
+            frame_base: base,
             return_mode: user_word.return_mode,
             pc: 0,
         };
@@ -263,6 +268,52 @@ impl Vm {
                 target,
             });
         }
+        Ok(())
+    }
+
+    fn validate_frame_layout(&self, word_id: WordId, user_word: &UserWord) -> Result<(), Trap> {
+        if user_word.frame_slots < user_word.arity {
+            return Err(Trap::InvalidFrameLayout {
+                word: word_id,
+                arity: user_word.arity,
+                frame_slots: user_word.frame_slots,
+            });
+        }
+        Ok(())
+    }
+
+    fn reserve_frame(&mut self, slots: usize) -> Result<(), Trap> {
+        let Some(new_len) = self.data_stack.len().checked_add(slots) else {
+            return Err(Trap::StackOverflow);
+        };
+        if new_len > self.data_stack_limit {
+            return Err(Trap::StackOverflow);
+        }
+        self.data_stack.resize(new_len, 0);
+        Ok(())
+    }
+
+    fn read_local(&self, current: &RunningWord, slot: u8) -> Result<Cell, Trap> {
+        let index = current.frame_base + usize::from(slot);
+        self.data_stack
+            .get(index)
+            .copied()
+            .ok_or(Trap::InvalidLocalSlot {
+                word: current.id,
+                slot,
+            })
+    }
+
+    fn write_local(&mut self, current: &RunningWord, slot: u8, value: Cell) -> Result<(), Trap> {
+        let index = current.frame_base + usize::from(slot);
+        let local = self
+            .data_stack
+            .get_mut(index)
+            .ok_or(Trap::InvalidLocalSlot {
+                word: current.id,
+                slot,
+            })?;
+        *local = value;
         Ok(())
     }
 
@@ -630,6 +681,89 @@ mod tests {
     }
 
     #[test]
+    fn exit_discards_temporary_values_for_value_words() {
+        let (mut program, _core) = install_program().expect("core words");
+        let producer = program
+            .add_word(Word::User(UserWord::new(
+                0,
+                0,
+                ReturnMode::Value,
+                vec![Instr::Lit(1), Instr::Lit(2), Instr::Exit],
+            )))
+            .expect("producer word");
+        let entry = program
+            .add_word(Word::User(UserWord::new(
+                0,
+                0,
+                ReturnMode::Void,
+                vec![Instr::Call(producer), Instr::Halt],
+            )))
+            .expect("entry word");
+
+        let mut vm = Vm::new();
+        vm.run(&program, entry).expect("program should run");
+
+        assert_eq!(vm.data_stack(), &[2]);
+    }
+
+    #[test]
+    fn exit_discards_temporary_values_for_void_words() {
+        let (mut program, _core) = install_program().expect("core words");
+        let worker = program
+            .add_word(Word::User(UserWord::new(
+                0,
+                1,
+                ReturnMode::Void,
+                vec![
+                    Instr::Lit(10),
+                    Instr::StoreLocal(0),
+                    Instr::Lit(99),
+                    Instr::Exit,
+                ],
+            )))
+            .expect("worker word");
+        let entry = program
+            .add_word(Word::User(UserWord::new(
+                0,
+                0,
+                ReturnMode::Void,
+                vec![Instr::Call(worker), Instr::Halt],
+            )))
+            .expect("entry word");
+
+        let mut vm = Vm::new();
+        vm.run(&program, entry).expect("program should run");
+
+        assert!(vm.data_stack().is_empty());
+    }
+
+    #[test]
+    fn locals_and_arguments_count_toward_data_stack_limit() {
+        let (mut program, _core) = install_program().expect("core words");
+        let large_frame = program
+            .add_word(Word::User(UserWord::new(
+                1,
+                64,
+                ReturnMode::Void,
+                vec![Instr::Exit],
+            )))
+            .expect("large frame word");
+        let entry = program
+            .add_word(Word::User(UserWord::new(
+                0,
+                1,
+                ReturnMode::Void,
+                vec![Instr::Lit(1), Instr::Call(large_frame), Instr::Halt],
+            )))
+            .expect("entry word");
+
+        let mut vm = Vm::new();
+        let err = vm.run(&program, entry).expect_err("frame should overflow");
+
+        assert_eq!(err, Trap::StackOverflow);
+    }
+
+    #[test]
     fn output_words_emit_decimal_char_and_static_string_bytes() {
         let (mut program, core) = install_program().expect("core words");
         let hello = program.add_string(b"HI".to_vec()).expect("string");
@@ -677,5 +811,40 @@ mod tests {
         let err = vm.run(&program, entry).expect_err("division should trap");
 
         assert_eq!(err, Trap::DivisionByZero);
+    }
+
+    #[test]
+    fn invalid_frame_layout_traps_instead_of_panicking() {
+        let (mut program, _core) = install_program().expect("core words");
+        let invalid = program
+            .add_word(Word::User(UserWord {
+                arity: 1,
+                frame_slots: 0,
+                return_mode: ReturnMode::Void,
+                code: vec![Instr::Exit],
+            }))
+            .expect("invalid word");
+        let entry = program
+            .add_word(Word::User(UserWord::new(
+                0,
+                0,
+                ReturnMode::Void,
+                vec![Instr::Lit(7), Instr::Call(invalid), Instr::Halt],
+            )))
+            .expect("entry word");
+
+        let mut vm = Vm::new();
+        let err = vm
+            .run(&program, entry)
+            .expect_err("invalid frame should trap");
+
+        assert_eq!(
+            err,
+            Trap::InvalidFrameLayout {
+                word: invalid,
+                arity: 1,
+                frame_slots: 0,
+            }
+        );
     }
 }
