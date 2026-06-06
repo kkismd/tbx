@@ -236,7 +236,7 @@ fn return_frame_round_trips_return_ip_and_caller_bp() {
 
 #[test]
 fn return_stack_reports_overflow_and_underflow() {
-    let region = StackRegion::new(Address::new(0x0200), 0x0204).unwrap();
+    let region = StackRegion::new(Address::new(0x0200), Address::new(0x0204)).unwrap();
     let mut vm = Tbx16Vm::new(region).unwrap();
 
     vm.push_return_cell(Cell::new(1)).unwrap();
@@ -259,20 +259,37 @@ fn return_stack_reports_overflow_and_underflow() {
 
 #[test]
 fn invalid_return_stack_regions_are_rejected() {
-    let page_one_overlap = StackRegion::new(Address::new(0x0180), 0x0280).unwrap();
+    let page_one_overlap = StackRegion::new(Address::new(0x0180), Address::new(0x0280)).unwrap();
     let err = Tbx16Vm::new(page_one_overlap).unwrap_err();
     assert!(matches!(err, Tbx16Error::InvalidStackRegion { .. }));
 
-    let data_stack_overlap = StackRegion::new(Address::new(0x00f0), 0x0120).unwrap();
+    let data_stack_overlap = StackRegion::new(Address::new(0x00f0), Address::new(0x0120)).unwrap();
     let err = Tbx16Vm::new(data_stack_overlap).unwrap_err();
     assert!(matches!(err, Tbx16Error::InvalidStackRegion { .. }));
 }
 
 #[test]
-fn return_stack_region_can_extend_to_10000_exclusive() {
-    let region = StackRegion::new(Address::new(0xff00), MEMORY_SIZE).unwrap();
+fn return_stack_capacity_matches_pushable_cell_count() {
+    let region = StackRegion::new(Address::new(0x0200), Address::new(0x0208)).unwrap();
     let vm = Tbx16Vm::new(region).unwrap();
+    assert_eq!(usize::from(region.len_bytes()) / 2, 4);
     assert_eq!(vm.return_stack_region(), region);
+}
+
+#[test]
+fn return_stack_full_region_ends_with_rsp_at_region_end() {
+    let region = StackRegion::new(Address::new(0x0200), Address::new(0x0208)).unwrap();
+    let mut vm = Tbx16Vm::new(region).unwrap();
+
+    for i in 0..(usize::from(region.len_bytes()) / 2) {
+        vm.push_return_cell(Cell::new(i as u16)).unwrap();
+    }
+
+    assert_eq!(vm.registers().rsp, region.end());
+    assert_eq!(
+        vm.push_return_cell(Cell::new(0xffff)).unwrap_err(),
+        Tbx16Error::ReturnStackOverflow
+    );
 }
 
 #[test]

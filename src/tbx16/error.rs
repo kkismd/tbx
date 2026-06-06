@@ -16,7 +16,7 @@ pub enum Tbx16Error {
     },
     InvalidStackRegion {
         start: Address,
-        end: usize,
+        end: Address,
         reason: &'static str,
     },
     MisalignedStackPointer {
@@ -46,7 +46,7 @@ impl fmt::Display for Tbx16Error {
                 write!(f, "invalid memory access during {operation} at {addr}")
             }
             Tbx16Error::InvalidStackRegion { start, end, reason } => {
-                write!(f, "invalid stack region {start}..${end:04x}: {reason}")
+                write!(f, "invalid stack region {start}..{end}: {reason}")
             }
             Tbx16Error::MisalignedStackPointer { stack, addr } => {
                 write!(f, "misaligned {stack} stack pointer at {addr}")
