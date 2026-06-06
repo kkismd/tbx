@@ -10,6 +10,7 @@ pub enum Tbx16Error {
     DataStackOverflow,
     ReturnStackUnderflow,
     ReturnStackOverflow,
+    StepLimitExceeded,
     InvalidMemoryAccess {
         addr: Address,
         operation: &'static str,
@@ -42,6 +43,7 @@ impl fmt::Display for Tbx16Error {
             Tbx16Error::DataStackOverflow => write!(f, "data stack overflow"),
             Tbx16Error::ReturnStackUnderflow => write!(f, "return stack underflow"),
             Tbx16Error::ReturnStackOverflow => write!(f, "return stack overflow"),
+            Tbx16Error::StepLimitExceeded => write!(f, "step limit exceeded"),
             Tbx16Error::InvalidMemoryAccess { addr, operation } => {
                 write!(f, "invalid memory access during {operation} at {addr}")
             }

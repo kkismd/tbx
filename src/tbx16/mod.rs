@@ -1,9 +1,9 @@
 //! Low-level execution substrate for the future 16-bit tbx16 VM.
 //!
 //! This module models the target exactly as a single 64 KiB memory image plus
-//! byte-addressed registers. Data stack cells, return stack cells, and future
-//! threaded code all live in the same `Memory`; stack operations are expressed
-//! strictly as reads and writes against that memory.
+//! byte-addressed registers. Data stack cells, return stack cells, and threaded
+//! code all live in the same `Memory`; stack operations and threaded dispatch
+//! are expressed strictly as reads and writes against that memory.
 
 pub mod address;
 pub mod cell;
@@ -24,6 +24,53 @@ pub const DATA_STACK_END: Address = Address::new(0x0100);
 pub const DEFAULT_RETURN_STACK_START: Address = Address::new(0x0200);
 pub const DEFAULT_RETURN_STACK_END: Address = Address::new(0x0300);
 const PAGE_ONE_END: Address = Address::new(0x0200);
+const NO_IP: Address = Address::new(0xffff);
+
+pub const CODE_TOKEN_PRIMITIVE: Cell = Cell::new(0x0001);
+
+/// Result of one `tbx16` execution entry.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ExecutionOutcome {
+    Halted,
+    Returned,
+    Trapped(Tbx16Error),
+}
+
+/// Primitive registry for the M2.2a threaded kernel.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u16)]
+pub enum PrimitiveId {
+    Lit = 1,
+    Branch = 2,
+    ZBranch = 3,
+    Halt = 4,
+}
+
+impl PrimitiveId {
+    pub const fn as_cell(self) -> Cell {
+        Cell::new(self as u16)
+    }
+}
+
+impl TryFrom<Cell> for PrimitiveId {
+    type Error = ();
+
+    fn try_from(value: Cell) -> Result<Self, Self::Error> {
+        match value.raw() {
+            1 => Ok(Self::Lit),
+            2 => Ok(Self::Branch),
+            3 => Ok(Self::ZBranch),
+            4 => Ok(Self::Halt),
+            _ => Err(()),
+        }
+    }
+}
+
+/// Resolved word metadata for the shared XT namespace.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ResolvedWord {
+    Primitive(PrimitiveId),
+}
 
 /// tbx16 VM substrate with unified memory and byte-addressed registers.
 #[derive(Debug)]
@@ -32,6 +79,8 @@ pub struct Tbx16Vm {
     registers: Registers,
     data_stack_region: StackRegion,
     return_stack_region: StackRegion,
+    step_limit: Option<usize>,
+    step_counter: usize,
 }
 
 impl Default for Tbx16Vm {
@@ -72,6 +121,8 @@ impl Tbx16Vm {
             registers,
             data_stack_region,
             return_stack_region,
+            step_limit: None,
+            step_counter: 0,
         };
         vm.validate_invariants()?;
         Ok(vm)
@@ -90,9 +141,7 @@ impl Tbx16Vm {
     }
 
     pub fn set_instruction_pointer(&mut self, ip: Address) -> Result<(), Tbx16Error> {
-        if usize::from(ip.get()) >= memory::MEMORY_SIZE {
-            return Err(Tbx16Error::InstructionPointerOutOfRange { ip });
-        }
+        validate_instruction_pointer_target(ip)?;
         self.registers.ip = Some(ip);
         Ok(())
     }
@@ -103,6 +152,37 @@ impl Tbx16Vm {
 
     pub fn return_stack_region(&self) -> StackRegion {
         self.return_stack_region
+    }
+
+    pub fn set_step_limit(&mut self, step_limit: Option<usize>) {
+        self.step_limit = step_limit;
+    }
+
+    pub fn step_counter(&self) -> usize {
+        self.step_counter
+    }
+
+    pub fn resolve_xt(&self, xt: Cell) -> Result<ResolvedWord, Tbx16Error> {
+        let xt_addr = validate_execution_token_address(xt)?;
+        let code_token = self
+            .memory
+            .read_cell(xt_addr)
+            .map_err(|_| invalid_execution_token(xt))?;
+
+        if code_token != CODE_TOKEN_PRIMITIVE {
+            return Err(invalid_execution_token(xt));
+        }
+
+        let primitive_id_addr = xt_addr
+            .checked_add(2)
+            .ok_or_else(|| invalid_execution_token(xt))?;
+        let primitive_id = self
+            .memory
+            .read_cell(primitive_id_addr)
+            .map_err(|_| invalid_execution_token(xt))?;
+        let primitive =
+            PrimitiveId::try_from(primitive_id).map_err(|_| invalid_execution_token(xt))?;
+        Ok(ResolvedWord::Primitive(primitive))
     }
 
     pub fn data_slot_address(&self, slot_index: u16) -> Result<Address, Tbx16Error> {
@@ -231,9 +311,44 @@ impl Tbx16Vm {
         })
     }
 
+    pub fn run(&mut self, entry_xt: Cell) -> ExecutionOutcome {
+        self.step_counter = 0;
+
+        let outcome = (|| -> Result<ExecutionOutcome, Tbx16Error> {
+            self.begin_step()?;
+            let ResolvedWord::Primitive(primitive) = self.resolve_xt(entry_xt)?;
+            self.step_counter += 1;
+            self.execute_entry_primitive(primitive)
+        })();
+
+        match outcome {
+            Ok(outcome) => outcome,
+            Err(err) => ExecutionOutcome::Trapped(err),
+        }
+    }
+
+    pub fn run_threaded(&mut self, start_ip: Address) -> ExecutionOutcome {
+        self.step_counter = 0;
+        if let Err(err) = self.set_instruction_pointer(start_ip) {
+            return ExecutionOutcome::Trapped(err);
+        }
+
+        loop {
+            let step = self.dispatch_step();
+            match step {
+                Ok(Some(outcome)) => return outcome,
+                Ok(None) => {}
+                Err(err) => return ExecutionOutcome::Trapped(err),
+            }
+        }
+    }
+
     pub fn validate_invariants(&self) -> Result<(), Tbx16Error> {
         ensure_pointer_in_region(self.registers.dsp, self.data_stack_region, "data")?;
         ensure_pointer_in_region(self.registers.rsp, self.return_stack_region, "return")?;
+        if let Some(ip) = self.registers.ip {
+            validate_instruction_pointer_target(ip)?;
+        }
         if !self.data_stack_region.contains_pointer(self.registers.bp) {
             return Err(Tbx16Error::InvalidStackRegion {
                 start: self.data_stack_region.start(),
@@ -247,6 +362,13 @@ impl Tbx16Vm {
                 addr: self.registers.bp,
             });
         }
+        if self.registers.bp > self.registers.dsp {
+            return Err(Tbx16Error::InvalidStackRegion {
+                start: self.data_stack_region.start(),
+                end: self.data_stack_region.end(),
+                reason: "base pointer must not exceed the data stack pointer",
+            });
+        }
         validate_return_stack_region(self.return_stack_region)?;
         if self.data_stack_region.overlaps(self.return_stack_region) {
             return Err(Tbx16Error::InvalidStackRegion {
@@ -254,6 +376,130 @@ impl Tbx16Vm {
                 end: self.return_stack_region.end(),
                 reason: "return stack region overlaps the fixed data stack region",
             });
+        }
+        Ok(())
+    }
+
+    fn execute_entry_primitive(
+        &mut self,
+        primitive: PrimitiveId,
+    ) -> Result<ExecutionOutcome, Tbx16Error> {
+        match primitive {
+            PrimitiveId::Halt => Ok(ExecutionOutcome::Halted),
+            PrimitiveId::Lit | PrimitiveId::Branch | PrimitiveId::ZBranch => {
+                self.execute_primitive(primitive)?;
+                Ok(ExecutionOutcome::Returned)
+            }
+        }
+    }
+
+    fn dispatch_step(&mut self) -> Result<Option<ExecutionOutcome>, Tbx16Error> {
+        self.begin_step()?;
+
+        let ip = self.current_ip()?;
+        let xt = self.read_ip_cell(ip)?;
+        let continuation_ip = validated_successor_ip(ip)?;
+        self.step_counter += 1;
+
+        let ResolvedWord::Primitive(primitive) = self.resolve_xt(xt)?;
+        self.registers.ip = Some(ip);
+        self.execute_primitive_from_dispatch(primitive, continuation_ip)
+    }
+
+    fn execute_primitive_from_dispatch(
+        &mut self,
+        primitive: PrimitiveId,
+        continuation_ip: Address,
+    ) -> Result<Option<ExecutionOutcome>, Tbx16Error> {
+        match primitive {
+            PrimitiveId::Halt => {
+                self.registers.ip = Some(continuation_ip);
+                Ok(Some(ExecutionOutcome::Halted))
+            }
+            PrimitiveId::Lit => {
+                self.execute_lit_from_operand(continuation_ip)?;
+                Ok(None)
+            }
+            PrimitiveId::Branch => {
+                self.execute_branch_from_operand(continuation_ip)?;
+                Ok(None)
+            }
+            PrimitiveId::ZBranch => {
+                self.execute_zbranch_from_operand(continuation_ip)?;
+                Ok(None)
+            }
+        }
+    }
+
+    fn execute_primitive(&mut self, primitive: PrimitiveId) -> Result<(), Tbx16Error> {
+        match primitive {
+            PrimitiveId::Lit => self.execute_lit_from_operand(self.current_ip()?),
+            PrimitiveId::Branch => self.execute_branch_from_operand(self.current_ip()?),
+            PrimitiveId::ZBranch => self.execute_zbranch_from_operand(self.current_ip()?),
+            PrimitiveId::Halt => Ok(()),
+        }
+    }
+
+    fn execute_lit_from_operand(&mut self, operand_ip: Address) -> Result<(), Tbx16Error> {
+        let literal = self.read_ip_cell(operand_ip)?;
+        let next_ip = validated_successor_ip(operand_ip)?;
+        self.ensure_data_stack_pushable(self.registers.dsp)?;
+        self.push_data_cell(literal)?;
+        self.registers.ip = Some(next_ip);
+        Ok(())
+    }
+
+    fn execute_branch_from_operand(&mut self, operand_ip: Address) -> Result<(), Tbx16Error> {
+        let target = self.read_ip_cell(operand_ip)?;
+        let target_ip = validate_instruction_pointer_target(Address::new(target.raw()))?;
+        self.registers.ip = Some(target_ip);
+        Ok(())
+    }
+
+    fn execute_zbranch_from_operand(&mut self, operand_ip: Address) -> Result<(), Tbx16Error> {
+        let target = self.read_ip_cell(operand_ip)?;
+        let target_ip = validate_instruction_pointer_target(Address::new(target.raw()))?;
+        let condition = self.peek_data_cell(0)?;
+        let fallthrough_ip = validated_successor_ip(operand_ip)?;
+        self.pop_data_cell()?;
+        self.registers.ip = Some(if condition.raw() == 0 {
+            target_ip
+        } else {
+            fallthrough_ip
+        });
+        Ok(())
+    }
+
+    fn begin_step(&self) -> Result<(), Tbx16Error> {
+        if self
+            .step_limit
+            .is_some_and(|limit| self.step_counter >= limit)
+        {
+            return Err(Tbx16Error::StepLimitExceeded);
+        }
+        Ok(())
+    }
+
+    fn current_ip(&self) -> Result<Address, Tbx16Error> {
+        let ip = self
+            .registers
+            .ip
+            .ok_or(Tbx16Error::InstructionPointerOutOfRange { ip: NO_IP })?;
+        validate_instruction_pointer_target(ip)
+    }
+
+    fn read_ip_cell(&self, ip: Address) -> Result<Cell, Tbx16Error> {
+        validate_instruction_pointer_target(ip)?;
+        self.memory.read_cell(ip)
+    }
+
+    fn ensure_data_stack_pushable(&self, pointer: Address) -> Result<(), Tbx16Error> {
+        let next = pointer
+            .checked_add(2)
+            .ok_or(Tbx16Error::DataStackOverflow)?;
+        ensure_pointer_in_region(pointer, self.data_stack_region, "data")?;
+        if !self.data_stack_region.contains_pointer(next) {
+            return Err(Tbx16Error::DataStackOverflow);
         }
         Ok(())
     }
@@ -275,4 +521,30 @@ fn validate_return_stack_region(region: StackRegion) -> Result<(), Tbx16Error> {
         });
     }
     Ok(())
+}
+
+fn validate_execution_token_address(xt: Cell) -> Result<Address, Tbx16Error> {
+    let xt_addr = Address::new(xt.raw());
+    if xt_addr.get() == NO_IP.get() || !xt_addr.is_even() {
+        return Err(invalid_execution_token(xt));
+    }
+    Ok(xt_addr)
+}
+
+fn validate_instruction_pointer_target(ip: Address) -> Result<Address, Tbx16Error> {
+    if ip.get() == NO_IP.get() || !ip.is_even() {
+        return Err(Tbx16Error::InstructionPointerOutOfRange { ip });
+    }
+    Ok(ip)
+}
+
+fn validated_successor_ip(ip: Address) -> Result<Address, Tbx16Error> {
+    let next_ip = ip
+        .checked_add(2)
+        .ok_or(Tbx16Error::InstructionPointerOutOfRange { ip })?;
+    validate_instruction_pointer_target(next_ip)
+}
+
+fn invalid_execution_token(xt: Cell) -> Tbx16Error {
+    Tbx16Error::InvalidExecutionToken { xt }
 }
