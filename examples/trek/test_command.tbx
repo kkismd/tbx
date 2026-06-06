@@ -4,8 +4,9 @@ USE "state.tbx"
 USE "util.tbx"
 USE "init.tbx"
 USE "scan.tbx"
-USE "nav.tbx"
 USE "combat.tbx"
+USE "nav.tbx"
+USE "library.tbx"
 USE "command.tbx"
 USE "../../lib/tests/helper.tbx"
 
@@ -30,32 +31,44 @@ DEF TEST_DISPATCH_CMD0_NAVIGATE()
   DISPATCH_COMMAND 0
 END
 
-# Verify that DISPATCH_COMMAND(3) prints placeholder and does not crash
-DEF TEST_DISPATCH_CMD3_NOT_IMPLEMENTED()
+# Verify that DISPATCH_COMMAND(3) reaches the normal command-3 entrypoint.
+# stdin がない環境では READ_NUMBER_OR(0) が 0 を返し、ここでは dispatch smoke のみを見る。
+# actual fire / retaliation / shield defeat behavior is covered in test_phaser.tbx.
+DEF TEST_DISPATCH_CMD3_PHASER_CONTROL()
   INIT_GAME
   DISPATCH_COMMAND 3
 END
 
-# Verify that DISPATCH_COMMAND(4) prints placeholder and does not crash
-DEF TEST_DISPATCH_CMD4_NOT_IMPLEMENTED()
+# Verify that DISPATCH_COMMAND(4) reaches the torpedo entrypoint and safely no-ops
+# when stdin is unavailable.
+DEF TEST_DISPATCH_CMD4_TORPEDO_CONTROL()
   INIT_GAME
+  LET TORPEDOES = 7
   DISPATCH_COMMAND 4
+  ASSERT (TORPEDOES = 7)
 END
 
-# Verify that DISPATCH_COMMAND(5) prints placeholder and does not crash
-DEF TEST_DISPATCH_CMD5_NOT_IMPLEMENTED()
+# Verify that DISPATCH_COMMAND(5) reaches the shield control entrypoint.
+# In non-interactive runs, READ_NUMBER_OR(-1) returns -1 so the command safely no-ops.
+DEF TEST_DISPATCH_CMD5_SHIELD_CONTROL()
   INIT_GAME
+  LET ENERGY = 2500
+  LET SHIELDS = 500
   DISPATCH_COMMAND 5
+  ASSERT (ENERGY = 2500)
+  ASSERT (SHIELDS = 500)
 END
 
 # Verify that DISPATCH_COMMAND(6) prints placeholder and does not crash
-DEF TEST_DISPATCH_CMD6_NOT_IMPLEMENTED()
+# Verify that DISPATCH_COMMAND(6) reaches the damage report entrypoint.
+DEF TEST_DISPATCH_CMD6_DAMAGE_REPORT()
   INIT_GAME
   DISPATCH_COMMAND 6
 END
 
-# Verify that DISPATCH_COMMAND(7) prints placeholder and does not crash
-DEF TEST_DISPATCH_CMD7_NOT_IMPLEMENTED()
+# Verify that DISPATCH_COMMAND(7) reaches the library computer entrypoint.
+# In non-interactive runs, READ_NUMBER_OR(-1) returns -1 so the command shows the menu.
+DEF TEST_DISPATCH_CMD7_LIBRARY_COMPUTER()
   INIT_GAME
   DISPATCH_COMMAND 7
 END
@@ -74,9 +87,9 @@ END
 TEST_DISPATCH_CMD1_SHORT_RANGE_SCAN
 TEST_DISPATCH_CMD2_LONG_RANGE_SCAN
 TEST_DISPATCH_CMD0_NAVIGATE
-TEST_DISPATCH_CMD3_NOT_IMPLEMENTED
-TEST_DISPATCH_CMD4_NOT_IMPLEMENTED
-TEST_DISPATCH_CMD5_NOT_IMPLEMENTED
-TEST_DISPATCH_CMD6_NOT_IMPLEMENTED
-TEST_DISPATCH_CMD7_NOT_IMPLEMENTED
+TEST_DISPATCH_CMD3_PHASER_CONTROL
+TEST_DISPATCH_CMD4_TORPEDO_CONTROL
+TEST_DISPATCH_CMD5_SHIELD_CONTROL
+TEST_DISPATCH_CMD6_DAMAGE_REPORT
+TEST_DISPATCH_CMD7_LIBRARY_COMPUTER
 TEST_DISPATCH_INVALID_CMD

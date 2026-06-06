@@ -34,36 +34,48 @@ DEF SECTOR_SYMBOL(VAL)
   CASE 4
     RETURN " * "
   CASE_ELSE
-    RETURN "   "
+    # Intentional deviation from Mayfield STTR1: use dots for empty sectors
+    # so the short range scan grid remains readable.
+    RETURN " . "
   ENDSEL
 END
 
 # docking 判定 (STTR1.BAS lines 4120-4300)
 # Enterprise 周辺 3x3 sector を調べ Starbase (3) が隣接していれば dock する
-# dock 時: DOCKED=1, CONDITION="DOCKED", energy/torpedoes を最大値に補給, SHIELDS=0
-# dock なし時: DOCKED=0
+# dock 時: DOCKED=TRUE, CONDITION="DOCKED", energy/torpedoes を最大値に補給, SHIELDS=0
+# dock なし時: DOCKED=FALSE
 DEF CHECK_DOCKING()
-  LET DOCKED = 0
+  LET DOCKED = FALSE
   VAR DSY = ENT_SY - 1
   WHILE DSY <= ENT_SY + 1
     VAR DSX = ENT_SX - 1
     WHILE DSX <= ENT_SX + 1
-      IF DOCKED = 0
-        IF IS_IN_SECTOR_BOUNDS(DSX, DSY)
-          IF @SECTOR[DSX, DSY] = 3
-            LET DOCKED = 1
-            LET CONDITION = "DOCKED"
-            LET ENERGY = MAX_ENERGY
-            LET TORPEDOES = MAX_TORPEDOES
-            LET SHIELDS = 0
-            PRINTLN "SHIELDS DROPPED FOR DOCKING PURPOSES"
-          ENDIF
-        ENDIF
+      IF !DOCKED && IS_IN_SECTOR_BOUNDS(DSX, DSY) && (@SECTOR[DSX, DSY] = 3)
+        LET DOCKED = TRUE
+        LET CONDITION = "DOCKED"
+        LET ENERGY = MAX_ENERGY
+        LET TORPEDOES = MAX_TORPEDOES
+        LET SHIELDS = 0
+        PRINTLN "SHIELDS DROPPED FOR DOCKING PURPOSES"
       ENDIF
       LET DSX = DSX + 1
     ENDWH
     LET DSY = DSY + 1
   ENDWH
+END
+
+# 共通 refresh: docking 判定と non-docked 時の condition 更新をまとめる
+DEF REFRESH_DOCKING_AND_CONDITION()
+  CHECK_DOCKING
+  IF !DOCKED
+    UPDATE_CONDITION
+  ENDIF
+END
+
+# status display の整数フィールドを既存 UI と同じく整数で揃える
+# 内部値は float のまま保持し、表示時だけ INT() で整形する
+DEF PRINT_STATUS_INT_FIELD(LABEL, VALUE)
+  PRINTLN LABEL, INT(VALUE)
 END
 
 # ステータス行を表示する (短距離スキャン右列)
@@ -72,7 +84,7 @@ END
 DEF PRINT_STATUS_LINE(LINE_NO)
   SELECT LINE_NO
   CASE 1
-    PRINTLN "   STARDATE        ", STARDATE
+    PRINT_STATUS_INT_FIELD "   STARDATE        ", STARDATE
   CASE 2
     PRINTLN "   CONDITION       ", CONDITION
   CASE 3
@@ -80,13 +92,13 @@ DEF PRINT_STATUS_LINE(LINE_NO)
   CASE 4
     PRINTLN "   SECTOR          ", ENT_SX, ",", ENT_SY
   CASE 5
-    PRINTLN "   ENERGY          ", ENERGY
+    PRINT_STATUS_INT_FIELD "   ENERGY          ", ENERGY
   CASE 6
-    PRINTLN "   TORPEDOES       ", TORPEDOES
+    PRINT_STATUS_INT_FIELD "   TORPEDOES       ", TORPEDOES
   CASE 7
-    PRINTLN "   SHIELDS         ", SHIELDS
+    PRINT_STATUS_INT_FIELD "   SHIELDS         ", SHIELDS
   CASE 8
-    PRINTLN "   KLINGONS LEFT   ", KLINGONS_LEFT
+    PRINT_STATUS_INT_FIELD "   KLINGONS LEFT   ", KLINGONS_LEFT
   CASE_ELSE
     PRINTLN
   ENDSEL
@@ -98,10 +110,7 @@ END
 # 各行の右にステータス情報を表示する
 DEF SHORT_RANGE_SCAN()
   # TODO: @DAMAGE[2] < 0 の場合は "*** SHORT RANGE SENSORS ARE OUT ***" を表示してスキップ (damage check, 本 issue 非目標)
-  CHECK_DOCKING
-  IF DOCKED = 0
-    UPDATE_CONDITION
-  ENDIF
+  REFRESH_DOCKING_AND_CONDITION
   PRINTLN "---------------------------------"
   VAR SY
   FOR &SY, 8

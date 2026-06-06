@@ -28,8 +28,8 @@ END
 # 各クアドラントに K3*100 + B3*10 + S3 を格納する
 # Klingon 数または Starbase 数が 0 なら galaxy generation をやり直す
 DEF INIT_GALAXY()
-  VAR DONE = 0
-  WHILE DONE = 0
+  VAR DONE = FALSE
+  WHILE !DONE
     LET KLINGONS_LEFT = 0
     LET BASES_LEFT = 0
     VAR QY
@@ -63,7 +63,7 @@ DEF INIT_GALAXY()
     LET KLINGONS_INITIAL = KLINGONS_LEFT
     # B9 <= 0 OR K9 <= 0 のとき galaxy generation をやり直す (STTR1.BAS line 775)
     IF (KLINGONS_LEFT > 0) && (BASES_LEFT > 0)
-      LET DONE = 1
+      LET DONE = TRUE
     ENDIF
   ENDWH
 END
@@ -88,6 +88,35 @@ DEF CLEAR_SECTOR()
   NEXT
 END
 
+# Cumulative galactic record must be numeric before library computer option 0 reads it.
+DEF CLEAR_CHART()
+  VAR QY
+  FOR &QY, 8
+    VAR QX
+    FOR &QX, 8
+      LET @CHART[QX, QY] = 0
+    NEXT
+  NEXT
+END
+
+# Unused Klingon slots must stay numeric so combat scans can treat them as dead enemies.
+DEF CLEAR_KLINGON_SLOTS()
+  VAR I
+  FOR &I, 3
+    LET @K_X[I] = 0
+    LET @K_Y[I] = 0
+    LET @K_E[I] = 0
+  NEXT
+END
+
+# Damage slots use 1-based indexing and must be numeric before combat checks read them.
+DEF INIT_DAMAGE_TABLE()
+  VAR I
+  FOR &I, 8
+    LET @DAMAGE[I] = 0
+  NEXT
+END
+
 # ランダムな空 sector を探し、FOUND_SX / FOUND_SY に書き込む (STTR1.BAS lines 5380-5450)
 # @SECTOR[SX, SY] = 0 (空) になる座標が見つかるまで引き直す
 DEF PICK_RANDOM_EMPTY_SECTOR()
@@ -104,6 +133,7 @@ END
 # Enterprise / Klingon / Starbase / Star を @SECTOR に配置する
 DEF INIT_QUADRANT()
   CLEAR_SECTOR
+  CLEAR_KLINGON_SLOTS
   # @GALAXY[ENT_QX, ENT_QY] から K3/B3/S3 を decode する (STTR1.BAS lines 830-860)
   VAR SUMMARY = @GALAXY[ENT_QX, ENT_QY]
   LET KLINGONS_HERE = SUMMARY / 100
@@ -153,11 +183,14 @@ DEF INIT_GAME()
   # シールド初期値 (STTR1.BAS line 350: S=0)
   LET SHIELDS = 0
   # ゲーム状態フラグ初期化
-  LET DOCKED = 0
-  LET GAME_OVER = 0
+  LET DOCKED = FALSE
+  LET GAME_OVER = FALSE
+  LET MISSION_OUTCOME = MISSION_OUTCOME_ONGOING()
   LET NAV_MOVE_RESULT = 0
   LET NAV_STEPS_REQUESTED = 0
   LET NAV_STEPS_COMPLETED = 0
+  CLEAR_CHART
+  INIT_DAMAGE_TABLE
   INIT_COURSE_TABLE
   INIT_GALAXY
   INIT_ENTERPRISE_POSITION

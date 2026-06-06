@@ -6,6 +6,7 @@
 // process CWD.
 use std::path::{Path, PathBuf};
 use tbx::interpreter::Interpreter;
+use tbx::vm::InputFlushMode;
 
 fn run_tbx_test(path: &PathBuf, base_dir: &Path) -> Result<(), String> {
     let mut interp = Interpreter::new();
@@ -1924,10 +1925,19 @@ fn test_1d_array_valid_access_regression() {
 
 /// Helper: run TBX source with a given mock input string, return output.
 fn run_with_input(tbx_src: &str, mock_input: &str) -> String {
+    run_with_input_and_flush_mode(tbx_src, mock_input, InputFlushMode::FlushBeforeRead)
+}
+
+fn run_with_input_and_flush_mode(
+    tbx_src: &str,
+    mock_input: &str,
+    input_flush_mode: InputFlushMode,
+) -> String {
     use std::io::Cursor;
 
     let mut interp = Interpreter::new();
     interp.vm_mut().input_reader = Box::new(Cursor::new(mock_input.to_string()));
+    interp.vm_mut().set_input_flush_mode(input_flush_mode);
     interp
         .exec_source(tbx_src)
         .unwrap_or_else(|e| panic!("exec_source failed: {e}"));

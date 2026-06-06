@@ -384,6 +384,50 @@ IMMEDIATE NEXT
 
 # Utilities
 
+# Basic numeric helpers shared by user programs and examples.
+
+DEF ABS(X)
+  IF X < 0
+    RETURN -X
+  ENDIF
+  RETURN X
+END
+
+DEF MIN(A, B)
+  IF A <= B
+    RETURN A
+  ENDIF
+  RETURN B
+END
+
+DEF MAX(A, B)
+  IF A >= B
+    RETURN A
+  ENDIF
+  RETURN B
+END
+
+DEF CLAMP(X, LO, HI)
+  RETURN MIN(MAX(X, LO), HI)
+END
+
+# ROUND returns the nearest integer value.
+# .5 ties round away from zero, so ROUND(1.5)=2 and ROUND(-1.5)=-2.
+DEF ROUND(X)
+  IF X < 0
+    RETURN INT(X - 0.5)
+  ENDIF
+  RETURN INT(X + 0.5)
+END
+
+DEF LERP(A, B, T)
+  RETURN A + (B - A) * T
+END
+
+DEF IN_RANGE(X, LO, HI)
+  RETURN (X >= LO) && (X <= HI)
+END
+
 # Outputs a newline
 DEF CR; PUTCHR 10; END
 
