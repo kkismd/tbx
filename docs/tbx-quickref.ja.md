@@ -513,6 +513,10 @@ PRINTLN (A = B) || (A = C)
 - `SQRT`
 - `NEGATE`
 - `INT`
+- `ABS(X)`, `MIN(A, B)`, `MAX(A, B)`, `CLAMP(X, LO, HI)`
+- `ROUND(X)` — 最も近い整数へ丸める。`.5` は 0 から遠ざかる方向
+- `LERP(A, B, T)` — `A + (B - A) * T`
+- `IN_RANGE(X, LO, HI)` — 両端含む範囲判定
 
 ### 比較
 
