@@ -10,6 +10,9 @@ pub enum Tbx16Error {
     DataStackOverflow,
     ReturnStackUnderflow,
     ReturnStackOverflow,
+    InvalidReturnCount {
+        count: Cell,
+    },
     StepLimitExceeded,
     InvalidMemoryAccess {
         addr: Address,
@@ -28,6 +31,8 @@ pub enum Tbx16Error {
     InvalidExecutionToken {
         xt: Cell,
     },
+    InvalidExecutionState,
+    DirtyExecutionState,
     InstructionPointerOutOfRange {
         ip: Address,
     },
@@ -43,6 +48,9 @@ impl fmt::Display for Tbx16Error {
             Tbx16Error::DataStackOverflow => write!(f, "data stack overflow"),
             Tbx16Error::ReturnStackUnderflow => write!(f, "return stack underflow"),
             Tbx16Error::ReturnStackOverflow => write!(f, "return stack overflow"),
+            Tbx16Error::InvalidReturnCount { count } => {
+                write!(f, "invalid return count ${:04x}", count.raw())
+            }
             Tbx16Error::StepLimitExceeded => write!(f, "step limit exceeded"),
             Tbx16Error::InvalidMemoryAccess { addr, operation } => {
                 write!(f, "invalid memory access during {operation} at {addr}")
@@ -57,6 +65,8 @@ impl fmt::Display for Tbx16Error {
             Tbx16Error::InvalidExecutionToken { xt } => {
                 write!(f, "invalid execution token ${:04x}", xt.raw())
             }
+            Tbx16Error::InvalidExecutionState => write!(f, "invalid execution state"),
+            Tbx16Error::DirtyExecutionState => write!(f, "dirty execution state"),
             Tbx16Error::InstructionPointerOutOfRange { ip } => {
                 write!(f, "instruction pointer out of range at {ip}")
             }

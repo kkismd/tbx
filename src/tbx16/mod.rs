@@ -46,6 +46,7 @@ pub enum PrimitiveId {
     Branch = 2,
     ZBranch = 3,
     Halt = 4,
+    Exit = 5,
 }
 
 impl PrimitiveId {
@@ -63,6 +64,7 @@ impl TryFrom<Cell> for PrimitiveId {
             2 => Ok(Self::Branch),
             3 => Ok(Self::ZBranch),
             4 => Ok(Self::Halt),
+            5 => Ok(Self::Exit),
             _ => Err(()),
         }
     }
@@ -89,6 +91,13 @@ pub struct Tbx16Vm {
     step_limit: Option<usize>,
     step_counter: usize,
     call_depth: u16,
+    entry_context: Option<EntryContext>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct EntryContext {
+    initial_bp: Address,
+    frame_base: Address,
 }
 
 impl Default for Tbx16Vm {
@@ -132,6 +141,7 @@ impl Tbx16Vm {
             step_limit: None,
             step_counter: 0,
             call_depth: 0,
+            entry_context: None,
         };
         vm.validate_invariants()?;
         Ok(vm)
@@ -173,6 +183,22 @@ impl Tbx16Vm {
 
     pub fn call_depth(&self) -> u16 {
         self.call_depth
+    }
+
+    pub fn is_dirty_execution_state(&self) -> bool {
+        self.entry_context.is_some()
+            || self.call_depth != 0
+            || self.registers.rsp != self.return_stack_region.start()
+    }
+
+    pub fn reset_execution_state(&mut self) {
+        self.registers.ip = None;
+        self.registers.bp = DATA_STACK_START;
+        self.registers.rsp = self.return_stack_region.start();
+        self.call_depth = 0;
+        self.entry_context = None;
+        self.step_counter = 0;
+        self.debug_validate_state();
     }
 
     pub fn resolve_xt(&self, xt: Cell) -> Result<ResolvedWord, Tbx16Error> {
@@ -345,8 +371,11 @@ impl Tbx16Vm {
     }
 
     pub fn run(&mut self, entry_xt: Cell) -> ExecutionOutcome {
+        if self.is_dirty_execution_state() {
+            return ExecutionOutcome::Trapped(Tbx16Error::DirtyExecutionState);
+        }
+
         self.step_counter = 0;
-        self.call_depth = 0;
 
         let outcome = (|| -> Result<ExecutionOutcome, Tbx16Error> {
             match self.start_entry(entry_xt)? {
@@ -443,6 +472,7 @@ impl Tbx16Vm {
                 self.execute_primitive(primitive)?;
                 Ok(ExecutionOutcome::Returned)
             }
+            PrimitiveId::Exit => Err(Tbx16Error::InvalidExecutionState),
         }
     }
 
@@ -462,6 +492,7 @@ impl Tbx16Vm {
                 local_count,
                 parameter_ip,
             } => {
+                let initial_bp = self.registers.bp;
                 let frame_base = self.compute_frame_base(arity)?;
                 let locals_start = self.registers.dsp;
                 let new_dsp = self.checked_extend_data_stack(locals_start, local_count)?;
@@ -470,6 +501,10 @@ impl Tbx16Vm {
                     self.memory
                         .zero_range(locals_start, usize::from(local_count) * 2)?;
                 }
+                self.entry_context = Some(EntryContext {
+                    initial_bp,
+                    frame_base,
+                });
                 self.registers.bp = frame_base;
                 self.registers.dsp = new_dsp;
                 self.registers.ip = Some(parameter_ip);
@@ -530,6 +565,7 @@ impl Tbx16Vm {
                 self.execute_zbranch_from_operand(continuation_ip)?;
                 Ok(None)
             }
+            PrimitiveId::Exit => self.execute_exit_from_operand(continuation_ip),
         }
     }
 
@@ -539,6 +575,7 @@ impl Tbx16Vm {
             PrimitiveId::Branch => self.execute_branch_from_operand(self.current_ip()?),
             PrimitiveId::ZBranch => self.execute_zbranch_from_operand(self.current_ip()?),
             PrimitiveId::Halt => Ok(()),
+            PrimitiveId::Exit => Err(Tbx16Error::InvalidExecutionState),
         }
     }
 
@@ -680,6 +717,114 @@ impl Tbx16Vm {
             .call_depth
             .checked_add(1)
             .expect("call depth fits in configured return stack space");
+        Ok(())
+    }
+
+    fn execute_exit_from_operand(
+        &mut self,
+        operand_ip: Address,
+    ) -> Result<Option<ExecutionOutcome>, Tbx16Error> {
+        let return_count = self.read_return_count(operand_ip)?;
+        if self.call_depth > 0 {
+            self.commit_nested_exit(return_count)?;
+            return Ok(None);
+        }
+
+        let outcome = self.commit_top_level_exit(return_count)?;
+        Ok(Some(outcome))
+    }
+
+    fn read_return_count(&self, operand_ip: Address) -> Result<u16, Tbx16Error> {
+        let count = self.read_ip_cell(operand_ip)?;
+        match count.raw() {
+            0 | 1 => Ok(count.raw()),
+            _ => Err(Tbx16Error::InvalidReturnCount { count }),
+        }
+    }
+
+    fn read_exit_return_value(&self) -> Result<Cell, Tbx16Error> {
+        if self.registers.dsp <= self.registers.bp {
+            return Err(Tbx16Error::DataStackUnderflow);
+        }
+        self.peek_data_cell(0)
+    }
+
+    fn commit_nested_exit(&mut self, return_count: u16) -> Result<(), Tbx16Error> {
+        let return_value = if return_count == 1 {
+            Some(self.read_exit_return_value()?)
+        } else {
+            None
+        };
+        let frame = self.peek_return_frame()?;
+        let return_ip = validate_instruction_pointer_target(frame.return_ip)?;
+        self.validate_base_pointer(frame.caller_bp)?;
+
+        let new_dsp = if return_count == 0 {
+            self.registers.bp
+        } else {
+            self.checked_extend_data_stack(self.registers.bp, 1)?
+        };
+        if frame.caller_bp > new_dsp {
+            return Err(Tbx16Error::InvalidExecutionState);
+        }
+
+        if let Some(value) = return_value {
+            self.memory.write_cell(self.registers.bp, value)?;
+        }
+        self.registers.rsp = self
+            .registers
+            .rsp
+            .checked_sub(RETURN_FRAME_BYTES)
+            .ok_or(Tbx16Error::ReturnStackUnderflow)?;
+        self.registers.bp = frame.caller_bp;
+        self.registers.dsp = new_dsp;
+        self.registers.ip = Some(return_ip);
+        self.call_depth = self
+            .call_depth
+            .checked_sub(1)
+            .expect("call depth is positive for nested exit");
+        Ok(())
+    }
+
+    fn commit_top_level_exit(&mut self, return_count: u16) -> Result<ExecutionOutcome, Tbx16Error> {
+        let return_value = if return_count == 1 {
+            Some(self.read_exit_return_value()?)
+        } else {
+            None
+        };
+        let context = self
+            .entry_context
+            .ok_or(Tbx16Error::InvalidExecutionState)?;
+        if self.registers.bp != context.frame_base {
+            return Err(Tbx16Error::InvalidExecutionState);
+        }
+        if self.registers.rsp != self.return_stack_region.start() {
+            return Err(Tbx16Error::InvalidExecutionState);
+        }
+
+        let new_dsp = if return_count == 0 {
+            context.frame_base
+        } else {
+            self.checked_extend_data_stack(context.frame_base, 1)?
+        };
+
+        if let Some(value) = return_value {
+            self.memory.write_cell(context.frame_base, value)?;
+        }
+        self.registers.dsp = new_dsp;
+        self.registers.bp = context.initial_bp;
+        self.registers.ip = None;
+        self.call_depth = 0;
+        self.entry_context = None;
+        Ok(ExecutionOutcome::Returned)
+    }
+
+    fn validate_base_pointer(&self, bp: Address) -> Result<(), Tbx16Error> {
+        if !self.data_stack_region.contains_pointer(bp)
+            || ((bp.get() - self.data_stack_region.start().get()) % 2) != 0
+        {
+            return Err(Tbx16Error::InvalidExecutionState);
+        }
         Ok(())
     }
 
