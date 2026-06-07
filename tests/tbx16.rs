@@ -97,6 +97,11 @@ impl ImageBuilder {
         self.labels.insert(label, self.cursor);
     }
 
+    fn emit_slot_operand(&mut self, slot_index: u16, slot_count: u16) {
+        self.emit_cell(Cell::new(slot_index));
+        self.emit_cell(Cell::new(slot_count));
+    }
+
     fn load_into(self, vm: &mut Tbx16Vm) {
         for (addr, pending) in self.cells {
             let cell = match pending {
@@ -1938,11 +1943,11 @@ fn frame_slot_primitives_read_and_write_arguments_and_locals() {
     let exit_xt = local_image.primitive(PrimitiveId::Exit);
     let entry_xt = local_image.colon_word(1, 1);
     local_image.emit_xt(load_slot_xt);
-    local_image.emit_cell(Cell::new(0));
+    local_image.emit_slot_operand(0, 2);
     local_image.emit_xt(store_slot_xt);
-    local_image.emit_cell(Cell::new(1));
+    local_image.emit_slot_operand(1, 2);
     local_image.emit_xt(load_slot_xt);
-    local_image.emit_cell(Cell::new(1));
+    local_image.emit_slot_operand(1, 2);
     local_image.emit_xt(exit_xt);
     local_image.emit_cell(Cell::new(1));
     local_image.load_into(&mut local_vm);
@@ -1960,9 +1965,9 @@ fn frame_slot_primitives_read_and_write_arguments_and_locals() {
     arg_image.emit_xt(lit_xt);
     arg_image.emit_cell(Cell::new(0x4321));
     arg_image.emit_xt(store_slot_xt);
-    arg_image.emit_cell(Cell::new(0));
+    arg_image.emit_slot_operand(0, 1);
     arg_image.emit_xt(load_slot_xt);
-    arg_image.emit_cell(Cell::new(0));
+    arg_image.emit_slot_operand(0, 1);
     arg_image.emit_xt(exit_xt);
     arg_image.emit_cell(Cell::new(1));
     arg_image.load_into(&mut arg_vm);
@@ -1978,7 +1983,7 @@ fn frame_slot_primitives_trap_on_out_of_range_indices() {
     let load_slot_xt = load_image.primitive(PrimitiveId::LoadSlot);
     let entry_xt = load_image.colon_word(1, 1);
     load_image.emit_xt(load_slot_xt);
-    load_image.emit_cell(Cell::new(2));
+    load_image.emit_slot_operand(2, 2);
     load_image.load_into(&mut load_vm);
     load_vm.push_data_cell(Cell::new(0x1111)).unwrap();
     assert_eq!(
@@ -1997,7 +2002,7 @@ fn frame_slot_primitives_trap_on_out_of_range_indices() {
     store_image.emit_xt(lit_xt);
     store_image.emit_cell(Cell::new(0x9999));
     store_image.emit_xt(store_slot_xt);
-    store_image.emit_cell(Cell::new(0));
+    store_image.emit_slot_operand(0, 0);
     store_image.load_into(&mut store_vm);
     assert_eq!(
         store_vm.run(entry_xt),
@@ -2006,6 +2011,92 @@ fn frame_slot_primitives_trap_on_out_of_range_indices() {
             slot_count: 0,
         })
     );
+}
+
+#[test]
+fn frame_slot_primitives_are_atomic_when_successor_ip_is_invalid() {
+    let mut load_vm = Tbx16Vm::default();
+    let mut primitive_image = ImageBuilder::new(CODE_START);
+    let load_slot_xt = primitive_image.primitive(PrimitiveId::LoadSlot);
+    primitive_image.load_into(&mut load_vm);
+    let entry_xt = Cell::new(0xfff4);
+    load_vm
+        .memory_mut()
+        .write_cell(Address::new(0xfff4), CODE_TOKEN_DOCOL)
+        .unwrap();
+    load_vm
+        .memory_mut()
+        .write_cell(Address::new(0xfff6), Cell::new(0))
+        .unwrap();
+    load_vm
+        .memory_mut()
+        .write_cell(Address::new(0xfff8), Cell::new(1))
+        .unwrap();
+    load_vm
+        .memory_mut()
+        .write_cell(Address::new(0xfffa), load_slot_xt)
+        .unwrap();
+    load_vm
+        .memory_mut()
+        .write_cell(Address::new(0xfffc), Cell::new(0))
+        .unwrap();
+    load_vm
+        .memory_mut()
+        .write_cell(Address::new(0xfffe), Cell::new(1))
+        .unwrap();
+    let before = snapshot(&load_vm);
+    assert_eq!(
+        load_vm.run(entry_xt),
+        ExecutionOutcome::Trapped(Tbx16Error::InstructionPointerOutOfRange {
+            ip: Address::new(0xfffc),
+        })
+    );
+    let after = snapshot(&load_vm);
+    assert_eq!(after.ip, Some(Address::new(0xfffa)));
+    assert_eq!(after.dsp, Address::new(0x0082));
+    assert_eq!(after.memory, before.memory);
+
+    let mut store_vm = Tbx16Vm::default();
+    let mut primitive_image = ImageBuilder::new(CODE_START);
+    let store_slot_xt = primitive_image.primitive(PrimitiveId::StoreSlot);
+    primitive_image.load_into(&mut store_vm);
+    let entry_xt = Cell::new(0xfff4);
+    store_vm
+        .memory_mut()
+        .write_cell(Address::new(0xfff4), CODE_TOKEN_DOCOL)
+        .unwrap();
+    store_vm
+        .memory_mut()
+        .write_cell(Address::new(0xfff6), Cell::new(0))
+        .unwrap();
+    store_vm
+        .memory_mut()
+        .write_cell(Address::new(0xfff8), Cell::new(1))
+        .unwrap();
+    store_vm
+        .memory_mut()
+        .write_cell(Address::new(0xfffa), store_slot_xt)
+        .unwrap();
+    store_vm
+        .memory_mut()
+        .write_cell(Address::new(0xfffc), Cell::new(0))
+        .unwrap();
+    store_vm
+        .memory_mut()
+        .write_cell(Address::new(0xfffe), Cell::new(1))
+        .unwrap();
+    store_vm.push_data_cell(Cell::new(0x9999)).unwrap();
+    let before = snapshot(&store_vm);
+    assert_eq!(
+        store_vm.run(entry_xt),
+        ExecutionOutcome::Trapped(Tbx16Error::InstructionPointerOutOfRange {
+            ip: Address::new(0xfffc),
+        })
+    );
+    let after = snapshot(&store_vm);
+    assert_eq!(after.ip, Some(Address::new(0xfffa)));
+    assert_eq!(after.dsp, Address::new(0x0084));
+    assert_eq!(after.memory, before.memory);
 }
 
 #[test]

@@ -346,15 +346,12 @@ pub struct Tbx16Vm {
     step_counter: usize,
     call_depth: u16,
     entry_context: Option<EntryContext>,
-    current_frame_slot_count: Option<u16>,
-    caller_frame_slot_counts: Vec<Option<u16>>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct EntryContext {
     initial_bp: Address,
     frame_base: Address,
-    frame_slot_count: u16,
 }
 
 impl Default for Tbx16Vm {
@@ -400,8 +397,6 @@ impl Tbx16Vm {
             step_counter: 0,
             call_depth: 0,
             entry_context: None,
-            current_frame_slot_count: None,
-            caller_frame_slot_counts: Vec::new(),
         };
         vm.validate_invariants()?;
         Ok(vm)
@@ -461,8 +456,6 @@ impl Tbx16Vm {
         self.entry_context.is_some()
             || self.call_depth != 0
             || self.registers.rsp != self.return_stack_region.start()
-            || self.current_frame_slot_count.is_some()
-            || !self.caller_frame_slot_counts.is_empty()
     }
 
     pub fn reset_execution_state(&mut self) {
@@ -471,8 +464,6 @@ impl Tbx16Vm {
         self.registers.rsp = self.return_stack_region.start();
         self.call_depth = 0;
         self.entry_context = None;
-        self.current_frame_slot_count = None;
-        self.caller_frame_slot_counts.clear();
         self.step_counter = 0;
         self.debug_validate_state();
     }
@@ -727,12 +718,6 @@ impl Tbx16Vm {
                 reason: "return stack usage does not match call depth",
             });
         }
-        if self.caller_frame_slot_counts.len() != usize::from(self.call_depth) {
-            return Err(Tbx16Error::InvalidExecutionState);
-        }
-        if self.entry_context.is_none() && self.current_frame_slot_count.is_some() {
-            return Err(Tbx16Error::InvalidExecutionState);
-        }
         validate_return_stack_region(self.return_stack_region)?;
         if self.data_stack_region.overlaps(self.return_stack_region) {
             return Err(Tbx16Error::InvalidStackRegion {
@@ -784,9 +769,6 @@ impl Tbx16Vm {
             } => {
                 let initial_bp = self.registers.bp;
                 let frame_base = self.compute_frame_base(arity)?;
-                let frame_slot_count = arity
-                    .checked_add(local_count)
-                    .ok_or(Tbx16Error::InvalidExecutionState)?;
                 let locals_start = self.registers.dsp;
                 let new_dsp = self.checked_extend_data_stack(locals_start, local_count)?;
 
@@ -797,9 +779,7 @@ impl Tbx16Vm {
                 self.entry_context = Some(EntryContext {
                     initial_bp,
                     frame_base,
-                    frame_slot_count,
                 });
-                self.current_frame_slot_count = Some(frame_slot_count);
                 self.registers.bp = frame_base;
                 self.registers.dsp = new_dsp;
                 self.registers.ip = Some(parameter_ip);
@@ -1079,13 +1059,6 @@ impl Tbx16Vm {
             .call_depth
             .checked_add(1)
             .expect("call depth fits in configured return stack space");
-        self.caller_frame_slot_counts
-            .push(self.current_frame_slot_count);
-        self.current_frame_slot_count = Some(
-            arity
-                .checked_add(local_count)
-                .ok_or(Tbx16Error::InvalidExecutionState)?,
-        );
         Ok(())
     }
 
@@ -1152,10 +1125,6 @@ impl Tbx16Vm {
             .call_depth
             .checked_sub(1)
             .expect("call depth is positive for nested exit");
-        self.current_frame_slot_count = self
-            .caller_frame_slot_counts
-            .pop()
-            .ok_or(Tbx16Error::InvalidExecutionState)?;
         Ok(())
     }
 
@@ -1189,7 +1158,6 @@ impl Tbx16Vm {
         self.registers.ip = None;
         self.call_depth = 0;
         self.entry_context = None;
-        self.current_frame_slot_count = None;
         Ok(ExecutionOutcome::Returned)
     }
 
@@ -1366,22 +1334,22 @@ impl Tbx16Vm {
     }
 
     fn execute_load_slot_from_operand(&mut self, operand_ip: Address) -> Result<(), Tbx16Error> {
-        let slot_index = self.read_ip_cell(operand_ip)?.raw();
-        let addr = self.frame_slot_address(slot_index)?;
+        let slot_operand = self.read_slot_operand(operand_ip)?;
+        let addr = self.frame_slot_address(slot_operand)?;
         self.ensure_data_stack_pushable(self.registers.dsp)?;
         let value = self.memory.read_cell(addr)?;
         self.push_data_cell(value)?;
-        self.registers.ip = Some(validated_successor_ip(operand_ip)?);
+        self.registers.ip = Some(slot_operand.successor_ip);
         Ok(())
     }
 
     fn execute_store_slot_from_operand(&mut self, operand_ip: Address) -> Result<(), Tbx16Error> {
-        let slot_index = self.read_ip_cell(operand_ip)?.raw();
-        let addr = self.frame_slot_address(slot_index)?;
+        let slot_operand = self.read_slot_operand(operand_ip)?;
         let value = self.peek_data_cell(0)?;
+        let addr = self.frame_slot_address(slot_operand)?;
         self.memory.write_cell(addr, value)?;
         self.pop_data_cell()?;
-        self.registers.ip = Some(validated_successor_ip(operand_ip)?);
+        self.registers.ip = Some(slot_operand.successor_ip);
         Ok(())
     }
 
@@ -1508,17 +1476,29 @@ impl Tbx16Vm {
         ))
     }
 
-    fn frame_slot_address(&self, slot_index: u16) -> Result<Address, Tbx16Error> {
-        let slot_count = self
-            .current_frame_slot_count
-            .ok_or(Tbx16Error::InvalidExecutionState)?;
-        if slot_index >= slot_count {
+    fn frame_slot_address(&self, slot_operand: SlotOperand) -> Result<Address, Tbx16Error> {
+        if self.entry_context.is_none() {
+            return Err(Tbx16Error::InvalidExecutionState);
+        }
+        if slot_operand.slot_index >= slot_operand.slot_count {
             return Err(Tbx16Error::InvalidFrameSlot {
-                slot_index,
-                slot_count,
+                slot_index: slot_operand.slot_index,
+                slot_count: slot_operand.slot_count,
             });
         }
-        self.data_slot_address(slot_index)
+        self.data_slot_address(slot_operand.slot_index)
+    }
+
+    fn read_slot_operand(&self, operand_ip: Address) -> Result<SlotOperand, Tbx16Error> {
+        let slot_count_ip = validated_successor_ip(operand_ip)?;
+        let successor_ip = validated_ip_offset(operand_ip, 4)?;
+        let slot_index = self.read_ip_cell(operand_ip)?.raw();
+        let slot_count = self.read_ip_cell(slot_count_ip)?.raw();
+        Ok(SlotOperand {
+            slot_index,
+            slot_count,
+            successor_ip,
+        })
     }
 
     fn read_length_prefixed_bytes(&self, addr: Address) -> Result<Vec<u8>, Tbx16Error> {
@@ -1545,6 +1525,13 @@ impl Tbx16Vm {
 enum ExecutionState {
     Running,
     Finished(ExecutionOutcome),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct SlotOperand {
+    slot_index: u16,
+    slot_count: u16,
+    successor_ip: Address,
 }
 
 fn validate_return_stack_region(region: StackRegion) -> Result<(), Tbx16Error> {
@@ -1581,8 +1568,12 @@ fn validate_instruction_pointer_target(ip: Address) -> Result<Address, Tbx16Erro
 }
 
 fn validated_successor_ip(ip: Address) -> Result<Address, Tbx16Error> {
+    validated_ip_offset(ip, 2)
+}
+
+fn validated_ip_offset(ip: Address, byte_offset: u16) -> Result<Address, Tbx16Error> {
     let next_ip = ip
-        .checked_add(2)
+        .checked_add(byte_offset)
         .ok_or(Tbx16Error::InstructionPointerOutOfRange { ip })?;
     validate_instruction_pointer_target(next_ip)
 }
