@@ -1210,6 +1210,52 @@ fn nested_exit_zero_and_one_restore_caller_frame() {
 }
 
 #[test]
+fn three_nested_exit_one_returns_restore_full_state() {
+    let mut vm = Tbx16Vm::default();
+    let mut image = ImageBuilder::new(CODE_START);
+    let lit_xt = image.primitive(PrimitiveId::Lit);
+    let exit_xt = image.primitive(PrimitiveId::Exit);
+
+    let level3_xt = image.colon_word(0, 0);
+    image.emit_xt(lit_xt);
+    image.emit_cell(Cell::new(0x3333));
+    image.emit_xt(exit_xt);
+    image.emit_cell(Cell::new(1));
+
+    let level2_xt = image.colon_word(0, 0);
+    image.emit_xt(level3_xt);
+    image.emit_xt(exit_xt);
+    image.emit_cell(Cell::new(1));
+
+    let level1_xt = image.colon_word(0, 0);
+    image.emit_xt(level2_xt);
+    image.emit_xt(exit_xt);
+    image.emit_cell(Cell::new(1));
+
+    let entry_xt = image.colon_word(1, 0);
+    image.emit_xt(level1_xt);
+    image.emit_xt(exit_xt);
+    image.emit_cell(Cell::new(1));
+    image.load_into(&mut vm);
+
+    vm.push_data_cell(Cell::new(0x1111)).unwrap();
+    vm.push_data_cell(Cell::new(0x2222)).unwrap();
+
+    assert_eq!(vm.run(entry_xt), ExecutionOutcome::Returned);
+    assert_eq!(vm.registers().ip, None);
+    assert_eq!(vm.registers().bp, DATA_STACK_START);
+    assert_eq!(vm.registers().dsp, Address::new(0x0084));
+    assert_eq!(vm.registers().rsp, DEFAULT_RETURN_STACK_START);
+    assert_eq!(vm.call_depth(), 0);
+    assert_eq!(
+        vm.memory().read_cell(Address::new(0x0080)).unwrap(),
+        Cell::new(0x1111)
+    );
+    assert_eq!(vm.peek_data_cell(0).unwrap(), Cell::new(0x3333));
+    assert!(!vm.is_dirty_execution_state());
+}
+
+#[test]
 fn exit_one_rejects_missing_callee_return_value_without_stealing_caller_value() {
     let mut vm = Tbx16Vm::default();
     let mut image = ImageBuilder::new(CODE_START);
@@ -1388,6 +1434,29 @@ fn halt_and_trap_leave_dirty_state_until_reset() {
     );
     assert_eq!(snapshot(&trap_vm), trap_snapshot);
 
+    let mut nested_halt_vm = Tbx16Vm::default();
+    let mut nested_halt_image = ImageBuilder::new(CODE_START);
+    let halt_xt = nested_halt_image.primitive(PrimitiveId::Halt);
+    let callee_xt = nested_halt_image.colon_word(0, 0);
+    nested_halt_image.emit_xt(halt_xt);
+    let nested_entry_xt = nested_halt_image.colon_word(0, 0);
+    nested_halt_image.emit_xt(callee_xt);
+    nested_halt_image.load_into(&mut nested_halt_vm);
+
+    assert_eq!(
+        nested_halt_vm.run(nested_entry_xt),
+        ExecutionOutcome::Halted
+    );
+    assert_eq!(nested_halt_vm.call_depth(), 1);
+    assert_eq!(nested_halt_vm.registers().rsp, Address::new(0x0204));
+    assert!(nested_halt_vm.is_dirty_execution_state());
+    let nested_halt_snapshot = snapshot(&nested_halt_vm);
+    assert_eq!(
+        nested_halt_vm.run(nested_entry_xt),
+        ExecutionOutcome::Trapped(Tbx16Error::DirtyExecutionState)
+    );
+    assert_eq!(snapshot(&nested_halt_vm), nested_halt_snapshot);
+
     halt_vm.push_data_cell(Cell::new(0x9999)).unwrap();
     halt_vm.set_step_limit(Some(7));
     halt_vm.reset_execution_state();
@@ -1400,6 +1469,31 @@ fn halt_and_trap_leave_dirty_state_until_reset() {
     assert_eq!(halt_vm.peek_data_cell(0).unwrap(), Cell::new(0x9999));
     assert!(!halt_vm.is_dirty_execution_state());
     assert_eq!(halt_vm.run(entry_xt), ExecutionOutcome::Halted);
+}
+
+#[test]
+fn reset_execution_state_preserves_step_limit() {
+    let mut vm = Tbx16Vm::default();
+    let mut image = ImageBuilder::new(CODE_START);
+    let lit_xt = image.primitive(PrimitiveId::Lit);
+    let halt_xt = image.primitive(PrimitiveId::Halt);
+    let entry_xt = image.colon_word(0, 0);
+    image.emit_xt(lit_xt);
+    image.emit_cell(Cell::new(0x1111));
+    image.emit_xt(halt_xt);
+    image.load_into(&mut vm);
+
+    vm.set_step_limit(Some(1));
+    vm.push_data_cell(Cell::new(0x9999)).unwrap();
+    vm.reset_execution_state();
+
+    assert_eq!(
+        vm.run(entry_xt),
+        ExecutionOutcome::Trapped(Tbx16Error::StepLimitExceeded)
+    );
+    assert_eq!(vm.step_counter(), 1);
+    assert_eq!(vm.registers().ip, Some(Address::new(CODE_START + 14)));
+    assert_eq!(vm.peek_data_cell(0).unwrap(), Cell::new(0x9999));
 }
 
 #[test]
