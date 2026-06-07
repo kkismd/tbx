@@ -8,6 +8,7 @@ use tbx::tbx16::stack::{ReturnFrame, StackRegion};
 use tbx::tbx16::{
     ExecutionOutcome, PrimitiveId, ResolvedWord, Tbx16Vm, CODE_TOKEN_DOCOL, CODE_TOKEN_PRIMITIVE,
     DATA_STACK_END, DATA_STACK_START, DEFAULT_RETURN_STACK_END, DEFAULT_RETURN_STACK_START,
+    PRIMITIVE_REGISTRY,
 };
 
 const CODE_START: u16 = 0x0400;
@@ -108,6 +109,27 @@ impl ImageBuilder {
             vm.memory_mut().write_cell(addr, cell).unwrap();
         }
     }
+}
+
+fn write_length_prefixed_bytes(vm: &mut Tbx16Vm, addr: u16, bytes: &[u8]) {
+    let addr = Address::new(addr);
+    vm.memory_mut()
+        .write_cell(addr, Cell::new(bytes.len() as u16))
+        .unwrap();
+    for (offset, byte) in bytes.iter().copied().enumerate() {
+        vm.memory_mut()
+            .write_byte(
+                addr.checked_add(2)
+                    .and_then(|start| start.checked_add_usize(offset))
+                    .unwrap(),
+                byte,
+            )
+            .unwrap();
+    }
+}
+
+fn output_bytes(vm: &mut Tbx16Vm) -> Vec<u8> {
+    vm.take_output()
 }
 
 #[test]
@@ -1507,4 +1529,511 @@ fn primitive_entry_halt_remains_rerunnable_without_reset() {
     assert!(!vm.is_dirty_execution_state());
     assert_eq!(vm.run(halt_xt), ExecutionOutcome::Halted);
     assert_eq!(vm.step_counter(), 1);
+}
+
+#[test]
+fn primitive_registry_round_trips_names_and_ids() {
+    assert_eq!(PrimitiveId::from_name("ADD"), Some(PrimitiveId::Add));
+    assert_eq!(PrimitiveId::Add.name(), "ADD");
+    assert_eq!(PrimitiveId::LoadSlot.name(), "LOAD_SLOT");
+    assert!(PrimitiveId::LoadSlot.has_operand());
+    assert!(!PrimitiveId::PutDec.has_operand());
+
+    for descriptor in PRIMITIVE_REGISTRY {
+        assert_eq!(PrimitiveId::from_name(descriptor.name), Some(descriptor.id));
+        assert_eq!(descriptor.id.name(), descriptor.name);
+    }
+}
+
+#[test]
+fn stack_primitives_apply_expected_stack_effects() {
+    let mut vm = Tbx16Vm::default();
+    let mut image = ImageBuilder::new(CODE_START);
+    let lit_xt = image.primitive(PrimitiveId::Lit);
+    let dup_xt = image.primitive(PrimitiveId::Dup);
+    let over_xt = image.primitive(PrimitiveId::Over);
+    let swap_xt = image.primitive(PrimitiveId::Swap);
+    let drop_xt = image.primitive(PrimitiveId::Drop);
+    let halt_xt = image.primitive(PrimitiveId::Halt);
+
+    image.mark_label("start");
+    image.emit_xt(lit_xt);
+    image.emit_cell(Cell::new(0x1111));
+    image.emit_xt(lit_xt);
+    image.emit_cell(Cell::new(0x2222));
+    image.emit_xt(dup_xt);
+    image.emit_xt(over_xt);
+    image.emit_xt(swap_xt);
+    image.emit_xt(drop_xt);
+    image.emit_xt(halt_xt);
+    let start_ip = image.labels["start"];
+    image.load_into(&mut vm);
+
+    assert_eq!(vm.run_threaded(start_ip), ExecutionOutcome::Halted);
+    assert_eq!(vm.registers().dsp, Address::new(0x0086));
+    assert_eq!(vm.peek_data_cell(0).unwrap(), Cell::new(0x2222));
+    assert_eq!(vm.peek_data_cell(1).unwrap(), Cell::new(0x2222));
+    assert_eq!(vm.peek_data_cell(2).unwrap(), Cell::new(0x1111));
+}
+
+#[test]
+fn stack_primitives_report_underflow_and_overflow_traps() {
+    let mut empty_vm = Tbx16Vm::default();
+    let mut image = ImageBuilder::new(CODE_START);
+    let dup_xt = image.primitive(PrimitiveId::Dup);
+    let drop_xt = image.primitive(PrimitiveId::Drop);
+    let swap_xt = image.primitive(PrimitiveId::Swap);
+    let over_xt = image.primitive(PrimitiveId::Over);
+    image.load_into(&mut empty_vm);
+
+    assert_eq!(
+        empty_vm.run(dup_xt),
+        ExecutionOutcome::Trapped(Tbx16Error::DataStackUnderflow)
+    );
+    assert_eq!(
+        empty_vm.run(drop_xt),
+        ExecutionOutcome::Trapped(Tbx16Error::DataStackUnderflow)
+    );
+    assert_eq!(
+        empty_vm.run(swap_xt),
+        ExecutionOutcome::Trapped(Tbx16Error::DataStackUnderflow)
+    );
+    assert_eq!(
+        empty_vm.run(over_xt),
+        ExecutionOutcome::Trapped(Tbx16Error::DataStackUnderflow)
+    );
+
+    let mut single_vm = Tbx16Vm::default();
+    let mut single_image = ImageBuilder::new(CODE_START);
+    single_image.primitive(PrimitiveId::Dup);
+    single_image.primitive(PrimitiveId::Drop);
+    let swap_xt = single_image.primitive(PrimitiveId::Swap);
+    let over_xt = single_image.primitive(PrimitiveId::Over);
+    single_image.load_into(&mut single_vm);
+    single_vm.push_data_cell(Cell::new(1)).unwrap();
+    assert_eq!(
+        single_vm.run(swap_xt),
+        ExecutionOutcome::Trapped(Tbx16Error::DataStackUnderflow)
+    );
+    assert_eq!(
+        single_vm.run(over_xt),
+        ExecutionOutcome::Trapped(Tbx16Error::DataStackUnderflow)
+    );
+
+    let mut full_vm = Tbx16Vm::default();
+    let mut full_image = ImageBuilder::new(CODE_START);
+    let dup_xt = full_image.primitive(PrimitiveId::Dup);
+    full_image.primitive(PrimitiveId::Drop);
+    full_image.primitive(PrimitiveId::Swap);
+    let over_xt = full_image.primitive(PrimitiveId::Over);
+    full_image.load_into(&mut full_vm);
+    for i in 0..64u16 {
+        full_vm.push_data_cell(Cell::new(i)).unwrap();
+    }
+    assert_eq!(
+        full_vm.run(dup_xt),
+        ExecutionOutcome::Trapped(Tbx16Error::DataStackOverflow)
+    );
+    assert_eq!(
+        full_vm.run(over_xt),
+        ExecutionOutcome::Trapped(Tbx16Error::DataStackOverflow)
+    );
+}
+
+#[test]
+fn arithmetic_primitives_wrap_and_divide_with_signed_i16_rules() {
+    let cases = [
+        (
+            PrimitiveId::Add,
+            Cell::from_i16(32767),
+            Cell::from_i16(1),
+            Cell::from_i16(-32768),
+        ),
+        (
+            PrimitiveId::Sub,
+            Cell::from_i16(-32768),
+            Cell::from_i16(1),
+            Cell::from_i16(32767),
+        ),
+        (
+            PrimitiveId::Mul,
+            Cell::from_i16(300),
+            Cell::from_i16(300),
+            Cell::new(0x5f90),
+        ),
+        (
+            PrimitiveId::Div,
+            Cell::from_i16(7),
+            Cell::from_i16(3),
+            Cell::from_i16(2),
+        ),
+        (
+            PrimitiveId::Div,
+            Cell::from_i16(-7),
+            Cell::from_i16(3),
+            Cell::from_i16(-2),
+        ),
+        (
+            PrimitiveId::Div,
+            Cell::from_i16(7),
+            Cell::from_i16(-3),
+            Cell::from_i16(-2),
+        ),
+        (
+            PrimitiveId::Div,
+            Cell::from_i16(-7),
+            Cell::from_i16(-3),
+            Cell::from_i16(2),
+        ),
+        (
+            PrimitiveId::Mod,
+            Cell::from_i16(7),
+            Cell::from_i16(3),
+            Cell::from_i16(1),
+        ),
+        (
+            PrimitiveId::Mod,
+            Cell::from_i16(-7),
+            Cell::from_i16(3),
+            Cell::from_i16(-1),
+        ),
+        (
+            PrimitiveId::Mod,
+            Cell::from_i16(7),
+            Cell::from_i16(-3),
+            Cell::from_i16(1),
+        ),
+        (
+            PrimitiveId::Mod,
+            Cell::from_i16(-7),
+            Cell::from_i16(-3),
+            Cell::from_i16(-1),
+        ),
+    ];
+
+    for (primitive, lhs, rhs, expected) in cases {
+        let mut vm = Tbx16Vm::default();
+        let mut image = ImageBuilder::new(CODE_START);
+        let primitive_xt = image.primitive(primitive);
+        image.load_into(&mut vm);
+        vm.push_data_cell(lhs).unwrap();
+        vm.push_data_cell(rhs).unwrap();
+        assert_eq!(vm.run(primitive_xt), ExecutionOutcome::Returned);
+        assert_eq!(vm.peek_data_cell(0).unwrap(), expected, "{primitive:?}");
+    }
+
+    let mut negate_vm = Tbx16Vm::default();
+    let mut negate_image = ImageBuilder::new(CODE_START);
+    let negate_xt = negate_image.primitive(PrimitiveId::Negate);
+    negate_image.load_into(&mut negate_vm);
+    negate_vm.push_data_cell(Cell::from_i16(-32768)).unwrap();
+    assert_eq!(negate_vm.run(negate_xt), ExecutionOutcome::Returned);
+    assert_eq!(negate_vm.peek_data_cell(0).unwrap(), Cell::from_i16(-32768));
+
+    let mut zero_div_vm = Tbx16Vm::default();
+    let mut zero_div_image = ImageBuilder::new(CODE_START);
+    let div_xt = zero_div_image.primitive(PrimitiveId::Div);
+    zero_div_image.load_into(&mut zero_div_vm);
+    zero_div_vm.push_data_cell(Cell::from_i16(1)).unwrap();
+    zero_div_vm.push_data_cell(Cell::from_i16(0)).unwrap();
+    assert_eq!(
+        zero_div_vm.run(div_xt),
+        ExecutionOutcome::Trapped(Tbx16Error::DivisionByZero)
+    );
+
+    let mut min_overflow_vm = Tbx16Vm::default();
+    let mut min_overflow_image = ImageBuilder::new(CODE_START);
+    let div_xt = min_overflow_image.primitive(PrimitiveId::Div);
+    let mod_xt = min_overflow_image.primitive(PrimitiveId::Mod);
+    min_overflow_image.load_into(&mut min_overflow_vm);
+    min_overflow_vm
+        .push_data_cell(Cell::from_i16(-32768))
+        .unwrap();
+    min_overflow_vm.push_data_cell(Cell::from_i16(-1)).unwrap();
+    assert_eq!(min_overflow_vm.run(div_xt), ExecutionOutcome::Returned);
+    assert_eq!(
+        min_overflow_vm.peek_data_cell(0).unwrap(),
+        Cell::from_i16(-32768)
+    );
+    min_overflow_vm.push_data_cell(Cell::from_i16(-1)).unwrap();
+    assert_eq!(min_overflow_vm.run(mod_xt), ExecutionOutcome::Returned);
+    assert_eq!(
+        min_overflow_vm.peek_data_cell(0).unwrap(),
+        Cell::from_i16(0)
+    );
+}
+
+#[test]
+fn comparison_and_boolean_primitives_produce_canonical_results() {
+    let compare_cases = [
+        (
+            PrimitiveId::Eq,
+            Cell::new(0x8000),
+            Cell::new(0x8000),
+            Cell::TRUE,
+        ),
+        (
+            PrimitiveId::Ne,
+            Cell::new(0x8000),
+            Cell::new(0x7fff),
+            Cell::TRUE,
+        ),
+        (
+            PrimitiveId::Lt,
+            Cell::from_i16(-1),
+            Cell::from_i16(1),
+            Cell::TRUE,
+        ),
+        (
+            PrimitiveId::Le,
+            Cell::from_i16(-1),
+            Cell::from_i16(-1),
+            Cell::TRUE,
+        ),
+        (
+            PrimitiveId::Gt,
+            Cell::from_i16(1),
+            Cell::from_i16(-1),
+            Cell::TRUE,
+        ),
+        (
+            PrimitiveId::Ge,
+            Cell::from_i16(-1),
+            Cell::from_i16(-1),
+            Cell::TRUE,
+        ),
+    ];
+
+    for (primitive, lhs, rhs, expected) in compare_cases {
+        let mut vm = Tbx16Vm::default();
+        let mut image = ImageBuilder::new(CODE_START);
+        let primitive_xt = image.primitive(primitive);
+        image.load_into(&mut vm);
+        vm.push_data_cell(lhs).unwrap();
+        vm.push_data_cell(rhs).unwrap();
+        assert_eq!(vm.run(primitive_xt), ExecutionOutcome::Returned);
+        assert_eq!(vm.peek_data_cell(0).unwrap(), expected, "{primitive:?}");
+    }
+
+    let truthy_values = [
+        (Cell::new(0x0000), Cell::FALSE, Cell::TRUE),
+        (Cell::new(0x0001), Cell::TRUE, Cell::FALSE),
+        (Cell::new(0x8000), Cell::TRUE, Cell::FALSE),
+        (Cell::new(0xffff), Cell::TRUE, Cell::FALSE),
+    ];
+
+    for (value, to_bool_expected, not_expected) in truthy_values {
+        let mut to_bool_vm = Tbx16Vm::default();
+        let mut image = ImageBuilder::new(CODE_START);
+        let to_bool_xt = image.primitive(PrimitiveId::ToBool);
+        image.load_into(&mut to_bool_vm);
+        to_bool_vm.push_data_cell(value).unwrap();
+        assert_eq!(to_bool_vm.run(to_bool_xt), ExecutionOutcome::Returned);
+        assert_eq!(to_bool_vm.peek_data_cell(0).unwrap(), to_bool_expected);
+
+        let mut not_vm = Tbx16Vm::default();
+        let mut image = ImageBuilder::new(CODE_START);
+        let not_xt = image.primitive(PrimitiveId::Not);
+        image.load_into(&mut not_vm);
+        not_vm.push_data_cell(value).unwrap();
+        assert_eq!(not_vm.run(not_xt), ExecutionOutcome::Returned);
+        assert_eq!(not_vm.peek_data_cell(0).unwrap(), not_expected);
+    }
+}
+
+#[test]
+fn logical_and_bitwise_primitives_differ_as_profiled() {
+    let mut and_vm = Tbx16Vm::default();
+    let mut and_image = ImageBuilder::new(CODE_START);
+    let and_xt = and_image.primitive(PrimitiveId::And);
+    and_image.load_into(&mut and_vm);
+    and_vm.push_data_cell(Cell::new(0x8000)).unwrap();
+    and_vm.push_data_cell(Cell::new(0x0001)).unwrap();
+    assert_eq!(and_vm.run(and_xt), ExecutionOutcome::Returned);
+    assert_eq!(and_vm.peek_data_cell(0).unwrap(), Cell::TRUE);
+
+    let mut or_vm = Tbx16Vm::default();
+    let mut or_image = ImageBuilder::new(CODE_START);
+    let or_xt = or_image.primitive(PrimitiveId::Or);
+    or_image.load_into(&mut or_vm);
+    or_vm.push_data_cell(Cell::new(0x0000)).unwrap();
+    or_vm.push_data_cell(Cell::new(0x8000)).unwrap();
+    assert_eq!(or_vm.run(or_xt), ExecutionOutcome::Returned);
+    assert_eq!(or_vm.peek_data_cell(0).unwrap(), Cell::TRUE);
+
+    let mut band_vm = Tbx16Vm::default();
+    let mut band_image = ImageBuilder::new(CODE_START);
+    let band_xt = band_image.primitive(PrimitiveId::Band);
+    band_image.load_into(&mut band_vm);
+    band_vm.push_data_cell(Cell::new(0x8000)).unwrap();
+    band_vm.push_data_cell(Cell::new(0x0001)).unwrap();
+    assert_eq!(band_vm.run(band_xt), ExecutionOutcome::Returned);
+    assert_eq!(band_vm.peek_data_cell(0).unwrap(), Cell::FALSE);
+
+    let mut bor_vm = Tbx16Vm::default();
+    let mut bor_image = ImageBuilder::new(CODE_START);
+    let bor_xt = bor_image.primitive(PrimitiveId::Bor);
+    bor_image.load_into(&mut bor_vm);
+    bor_vm.push_data_cell(Cell::new(0x8000)).unwrap();
+    bor_vm.push_data_cell(Cell::new(0x0001)).unwrap();
+    assert_eq!(bor_vm.run(bor_xt), ExecutionOutcome::Returned);
+    assert_eq!(bor_vm.peek_data_cell(0).unwrap(), Cell::new(0x8001));
+}
+
+#[test]
+fn fetch_and_store_use_byte_addresses_and_little_endian_cells() {
+    let mut vm = Tbx16Vm::default();
+    let mut image = ImageBuilder::new(CODE_START);
+    let store_xt = image.primitive(PrimitiveId::Store);
+    let fetch_xt = image.primitive(PrimitiveId::Fetch);
+    image.load_into(&mut vm);
+
+    vm.push_data_cell(Cell::new(0x3001)).unwrap();
+    vm.push_data_cell(Cell::new(0xabcd)).unwrap();
+    assert_eq!(vm.run(store_xt), ExecutionOutcome::Returned);
+    assert_eq!(vm.memory().read_byte(Address::new(0x3001)).unwrap(), 0xcd);
+    assert_eq!(vm.memory().read_byte(Address::new(0x3002)).unwrap(), 0xab);
+
+    vm.push_data_cell(Cell::new(0x3001)).unwrap();
+    assert_eq!(vm.run(fetch_xt), ExecutionOutcome::Returned);
+    assert_eq!(vm.peek_data_cell(0).unwrap(), Cell::new(0xabcd));
+}
+
+#[test]
+fn fetch_and_store_trap_on_end_crossing() {
+    let mut fetch_vm = Tbx16Vm::default();
+    let mut fetch_image = ImageBuilder::new(CODE_START);
+    let fetch_xt = fetch_image.primitive(PrimitiveId::Fetch);
+    fetch_image.load_into(&mut fetch_vm);
+    fetch_vm.push_data_cell(Cell::new(0xffff)).unwrap();
+    assert_eq!(
+        fetch_vm.run(fetch_xt),
+        ExecutionOutcome::Trapped(Tbx16Error::InvalidMemoryAccess {
+            addr: Address::new(0xffff),
+            operation: "cell read",
+        })
+    );
+
+    let mut store_vm = Tbx16Vm::default();
+    let mut store_image = ImageBuilder::new(CODE_START);
+    let store_xt = store_image.primitive(PrimitiveId::Store);
+    store_image.load_into(&mut store_vm);
+    store_vm.push_data_cell(Cell::new(0xffff)).unwrap();
+    store_vm.push_data_cell(Cell::new(0x1234)).unwrap();
+    assert_eq!(
+        store_vm.run(store_xt),
+        ExecutionOutcome::Trapped(Tbx16Error::InvalidMemoryAccess {
+            addr: Address::new(0xffff),
+            operation: "cell write",
+        })
+    );
+}
+
+#[test]
+fn frame_slot_primitives_read_and_write_arguments_and_locals() {
+    let mut local_vm = Tbx16Vm::default();
+    let mut local_image = ImageBuilder::new(CODE_START);
+    let load_slot_xt = local_image.primitive(PrimitiveId::LoadSlot);
+    let store_slot_xt = local_image.primitive(PrimitiveId::StoreSlot);
+    let exit_xt = local_image.primitive(PrimitiveId::Exit);
+    let entry_xt = local_image.colon_word(1, 1);
+    local_image.emit_xt(load_slot_xt);
+    local_image.emit_cell(Cell::new(0));
+    local_image.emit_xt(store_slot_xt);
+    local_image.emit_cell(Cell::new(1));
+    local_image.emit_xt(load_slot_xt);
+    local_image.emit_cell(Cell::new(1));
+    local_image.emit_xt(exit_xt);
+    local_image.emit_cell(Cell::new(1));
+    local_image.load_into(&mut local_vm);
+    local_vm.push_data_cell(Cell::new(0x1234)).unwrap();
+    assert_eq!(local_vm.run(entry_xt), ExecutionOutcome::Returned);
+    assert_eq!(local_vm.peek_data_cell(0).unwrap(), Cell::new(0x1234));
+
+    let mut arg_vm = Tbx16Vm::default();
+    let mut arg_image = ImageBuilder::new(CODE_START);
+    let lit_xt = arg_image.primitive(PrimitiveId::Lit);
+    let store_slot_xt = arg_image.primitive(PrimitiveId::StoreSlot);
+    let load_slot_xt = arg_image.primitive(PrimitiveId::LoadSlot);
+    let exit_xt = arg_image.primitive(PrimitiveId::Exit);
+    let entry_xt = arg_image.colon_word(1, 0);
+    arg_image.emit_xt(lit_xt);
+    arg_image.emit_cell(Cell::new(0x4321));
+    arg_image.emit_xt(store_slot_xt);
+    arg_image.emit_cell(Cell::new(0));
+    arg_image.emit_xt(load_slot_xt);
+    arg_image.emit_cell(Cell::new(0));
+    arg_image.emit_xt(exit_xt);
+    arg_image.emit_cell(Cell::new(1));
+    arg_image.load_into(&mut arg_vm);
+    arg_vm.push_data_cell(Cell::new(0x1111)).unwrap();
+    assert_eq!(arg_vm.run(entry_xt), ExecutionOutcome::Returned);
+    assert_eq!(arg_vm.peek_data_cell(0).unwrap(), Cell::new(0x4321));
+}
+
+#[test]
+fn frame_slot_primitives_trap_on_out_of_range_indices() {
+    let mut load_vm = Tbx16Vm::default();
+    let mut load_image = ImageBuilder::new(CODE_START);
+    let load_slot_xt = load_image.primitive(PrimitiveId::LoadSlot);
+    let entry_xt = load_image.colon_word(1, 1);
+    load_image.emit_xt(load_slot_xt);
+    load_image.emit_cell(Cell::new(2));
+    load_image.load_into(&mut load_vm);
+    load_vm.push_data_cell(Cell::new(0x1111)).unwrap();
+    assert_eq!(
+        load_vm.run(entry_xt),
+        ExecutionOutcome::Trapped(Tbx16Error::InvalidFrameSlot {
+            slot_index: 2,
+            slot_count: 2,
+        })
+    );
+
+    let mut store_vm = Tbx16Vm::default();
+    let mut store_image = ImageBuilder::new(CODE_START);
+    let lit_xt = store_image.primitive(PrimitiveId::Lit);
+    let store_slot_xt = store_image.primitive(PrimitiveId::StoreSlot);
+    let entry_xt = store_image.colon_word(0, 0);
+    store_image.emit_xt(lit_xt);
+    store_image.emit_cell(Cell::new(0x9999));
+    store_image.emit_xt(store_slot_xt);
+    store_image.emit_cell(Cell::new(0));
+    store_image.load_into(&mut store_vm);
+    assert_eq!(
+        store_vm.run(entry_xt),
+        ExecutionOutcome::Trapped(Tbx16Error::InvalidFrameSlot {
+            slot_index: 0,
+            slot_count: 0,
+        })
+    );
+}
+
+#[test]
+fn output_primitives_write_to_the_vm_sink() {
+    let mut chr_vm = Tbx16Vm::default();
+    let mut chr_image = ImageBuilder::new(CODE_START);
+    let putchr_xt = chr_image.primitive(PrimitiveId::PutChr);
+    chr_image.load_into(&mut chr_vm);
+    chr_vm.push_data_cell(Cell::new(0x0141)).unwrap();
+    assert_eq!(chr_vm.run(putchr_xt), ExecutionOutcome::Returned);
+    assert_eq!(output_bytes(&mut chr_vm), b"A");
+
+    let mut dec_vm = Tbx16Vm::default();
+    let mut dec_image = ImageBuilder::new(CODE_START);
+    let putdec_xt = dec_image.primitive(PrimitiveId::PutDec);
+    dec_image.load_into(&mut dec_vm);
+    for value in [0, 1234, -45, -32768] {
+        dec_vm.push_data_cell(Cell::from_i16(value)).unwrap();
+        assert_eq!(dec_vm.run(putdec_xt), ExecutionOutcome::Returned);
+    }
+    assert_eq!(output_bytes(&mut dec_vm), b"01234-45-32768");
+
+    let mut str_vm = Tbx16Vm::default();
+    let mut str_image = ImageBuilder::new(CODE_START);
+    let putstr_xt = str_image.primitive(PrimitiveId::PutStr);
+    str_image.load_into(&mut str_vm);
+    write_length_prefixed_bytes(&mut str_vm, 0x3000, b"hi\0there");
+    str_vm.push_data_cell(Cell::new(0x3000)).unwrap();
+    assert_eq!(str_vm.run(putstr_xt), ExecutionOutcome::Returned);
+    assert_eq!(output_bytes(&mut str_vm), b"hi\0there");
 }

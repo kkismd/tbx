@@ -28,6 +28,10 @@ pub enum Tbx16Error {
         addr: Address,
     },
     DivisionByZero,
+    InvalidFrameSlot {
+        slot_index: u16,
+        slot_count: u16,
+    },
     InvalidExecutionToken {
         xt: Cell,
     },
@@ -62,6 +66,15 @@ impl fmt::Display for Tbx16Error {
                 write!(f, "misaligned {stack} stack pointer at {addr}")
             }
             Tbx16Error::DivisionByZero => write!(f, "division by zero"),
+            Tbx16Error::InvalidFrameSlot {
+                slot_index,
+                slot_count,
+            } => {
+                write!(
+                    f,
+                    "invalid frame slot {slot_index} for frame with {slot_count} slots"
+                )
+            }
             Tbx16Error::InvalidExecutionToken { xt } => {
                 write!(f, "invalid execution token ${:04x}", xt.raw())
             }

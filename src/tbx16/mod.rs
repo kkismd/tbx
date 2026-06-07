@@ -30,6 +30,13 @@ const RETURN_FRAME_BYTES: u16 = 4;
 pub const CODE_TOKEN_PRIMITIVE: Cell = Cell::new(0x0001);
 pub const CODE_TOKEN_DOCOL: Cell = Cell::new(0x0002);
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PrimitiveDescriptor {
+    pub id: PrimitiveId,
+    pub name: &'static str,
+    pub has_operand: bool,
+}
+
 /// Result of one `tbx16` execution entry.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ExecutionOutcome {
@@ -47,11 +54,55 @@ pub enum PrimitiveId {
     ZBranch = 3,
     Halt = 4,
     Exit = 5,
+    Dup = 6,
+    Drop = 7,
+    Swap = 8,
+    Over = 9,
+    Add = 10,
+    Sub = 11,
+    Mul = 12,
+    Div = 13,
+    Mod = 14,
+    Negate = 15,
+    Eq = 16,
+    Ne = 17,
+    Lt = 18,
+    Le = 19,
+    Gt = 20,
+    Ge = 21,
+    ToBool = 22,
+    Not = 23,
+    And = 24,
+    Or = 25,
+    Band = 26,
+    Bor = 27,
+    Fetch = 28,
+    Store = 29,
+    LoadSlot = 30,
+    StoreSlot = 31,
+    PutChr = 32,
+    PutDec = 33,
+    PutStr = 34,
 }
 
 impl PrimitiveId {
     pub const fn as_cell(self) -> Cell {
         Cell::new(self as u16)
+    }
+
+    pub const fn name(self) -> &'static str {
+        descriptor_for(self).name
+    }
+
+    pub const fn has_operand(self) -> bool {
+        descriptor_for(self).has_operand
+    }
+
+    pub fn from_name(name: &str) -> Option<Self> {
+        PRIMITIVE_REGISTRY
+            .iter()
+            .find(|descriptor| descriptor.name == name)
+            .map(|descriptor| descriptor.id)
     }
 }
 
@@ -65,10 +116,212 @@ impl TryFrom<Cell> for PrimitiveId {
             3 => Ok(Self::ZBranch),
             4 => Ok(Self::Halt),
             5 => Ok(Self::Exit),
+            6 => Ok(Self::Dup),
+            7 => Ok(Self::Drop),
+            8 => Ok(Self::Swap),
+            9 => Ok(Self::Over),
+            10 => Ok(Self::Add),
+            11 => Ok(Self::Sub),
+            12 => Ok(Self::Mul),
+            13 => Ok(Self::Div),
+            14 => Ok(Self::Mod),
+            15 => Ok(Self::Negate),
+            16 => Ok(Self::Eq),
+            17 => Ok(Self::Ne),
+            18 => Ok(Self::Lt),
+            19 => Ok(Self::Le),
+            20 => Ok(Self::Gt),
+            21 => Ok(Self::Ge),
+            22 => Ok(Self::ToBool),
+            23 => Ok(Self::Not),
+            24 => Ok(Self::And),
+            25 => Ok(Self::Or),
+            26 => Ok(Self::Band),
+            27 => Ok(Self::Bor),
+            28 => Ok(Self::Fetch),
+            29 => Ok(Self::Store),
+            30 => Ok(Self::LoadSlot),
+            31 => Ok(Self::StoreSlot),
+            32 => Ok(Self::PutChr),
+            33 => Ok(Self::PutDec),
+            34 => Ok(Self::PutStr),
             _ => Err(()),
         }
     }
 }
+
+pub const PRIMITIVE_REGISTRY: &[PrimitiveDescriptor] = &[
+    PrimitiveDescriptor {
+        id: PrimitiveId::Lit,
+        name: "LIT",
+        has_operand: true,
+    },
+    PrimitiveDescriptor {
+        id: PrimitiveId::Branch,
+        name: "BRANCH",
+        has_operand: true,
+    },
+    PrimitiveDescriptor {
+        id: PrimitiveId::ZBranch,
+        name: "ZBRANCH",
+        has_operand: true,
+    },
+    PrimitiveDescriptor {
+        id: PrimitiveId::Halt,
+        name: "HALT",
+        has_operand: false,
+    },
+    PrimitiveDescriptor {
+        id: PrimitiveId::Exit,
+        name: "EXIT",
+        has_operand: true,
+    },
+    PrimitiveDescriptor {
+        id: PrimitiveId::Dup,
+        name: "DUP",
+        has_operand: false,
+    },
+    PrimitiveDescriptor {
+        id: PrimitiveId::Drop,
+        name: "DROP",
+        has_operand: false,
+    },
+    PrimitiveDescriptor {
+        id: PrimitiveId::Swap,
+        name: "SWAP",
+        has_operand: false,
+    },
+    PrimitiveDescriptor {
+        id: PrimitiveId::Over,
+        name: "OVER",
+        has_operand: false,
+    },
+    PrimitiveDescriptor {
+        id: PrimitiveId::Add,
+        name: "ADD",
+        has_operand: false,
+    },
+    PrimitiveDescriptor {
+        id: PrimitiveId::Sub,
+        name: "SUB",
+        has_operand: false,
+    },
+    PrimitiveDescriptor {
+        id: PrimitiveId::Mul,
+        name: "MUL",
+        has_operand: false,
+    },
+    PrimitiveDescriptor {
+        id: PrimitiveId::Div,
+        name: "DIV",
+        has_operand: false,
+    },
+    PrimitiveDescriptor {
+        id: PrimitiveId::Mod,
+        name: "MOD",
+        has_operand: false,
+    },
+    PrimitiveDescriptor {
+        id: PrimitiveId::Negate,
+        name: "NEGATE",
+        has_operand: false,
+    },
+    PrimitiveDescriptor {
+        id: PrimitiveId::Eq,
+        name: "EQ",
+        has_operand: false,
+    },
+    PrimitiveDescriptor {
+        id: PrimitiveId::Ne,
+        name: "NE",
+        has_operand: false,
+    },
+    PrimitiveDescriptor {
+        id: PrimitiveId::Lt,
+        name: "LT",
+        has_operand: false,
+    },
+    PrimitiveDescriptor {
+        id: PrimitiveId::Le,
+        name: "LE",
+        has_operand: false,
+    },
+    PrimitiveDescriptor {
+        id: PrimitiveId::Gt,
+        name: "GT",
+        has_operand: false,
+    },
+    PrimitiveDescriptor {
+        id: PrimitiveId::Ge,
+        name: "GE",
+        has_operand: false,
+    },
+    PrimitiveDescriptor {
+        id: PrimitiveId::ToBool,
+        name: "TO_BOOL",
+        has_operand: false,
+    },
+    PrimitiveDescriptor {
+        id: PrimitiveId::Not,
+        name: "NOT",
+        has_operand: false,
+    },
+    PrimitiveDescriptor {
+        id: PrimitiveId::And,
+        name: "AND",
+        has_operand: false,
+    },
+    PrimitiveDescriptor {
+        id: PrimitiveId::Or,
+        name: "OR",
+        has_operand: false,
+    },
+    PrimitiveDescriptor {
+        id: PrimitiveId::Band,
+        name: "BAND",
+        has_operand: false,
+    },
+    PrimitiveDescriptor {
+        id: PrimitiveId::Bor,
+        name: "BOR",
+        has_operand: false,
+    },
+    PrimitiveDescriptor {
+        id: PrimitiveId::Fetch,
+        name: "FETCH",
+        has_operand: false,
+    },
+    PrimitiveDescriptor {
+        id: PrimitiveId::Store,
+        name: "STORE",
+        has_operand: false,
+    },
+    PrimitiveDescriptor {
+        id: PrimitiveId::LoadSlot,
+        name: "LOAD_SLOT",
+        has_operand: true,
+    },
+    PrimitiveDescriptor {
+        id: PrimitiveId::StoreSlot,
+        name: "STORE_SLOT",
+        has_operand: true,
+    },
+    PrimitiveDescriptor {
+        id: PrimitiveId::PutChr,
+        name: "PUTCHR",
+        has_operand: false,
+    },
+    PrimitiveDescriptor {
+        id: PrimitiveId::PutDec,
+        name: "PUTDEC",
+        has_operand: false,
+    },
+    PrimitiveDescriptor {
+        id: PrimitiveId::PutStr,
+        name: "PUTSTR",
+        has_operand: false,
+    },
+];
 
 /// Resolved word metadata for the shared XT namespace.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -88,16 +341,20 @@ pub struct Tbx16Vm {
     registers: Registers,
     data_stack_region: StackRegion,
     return_stack_region: StackRegion,
+    output: Vec<u8>,
     step_limit: Option<usize>,
     step_counter: usize,
     call_depth: u16,
     entry_context: Option<EntryContext>,
+    current_frame_slot_count: Option<u16>,
+    caller_frame_slot_counts: Vec<Option<u16>>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct EntryContext {
     initial_bp: Address,
     frame_base: Address,
+    frame_slot_count: u16,
 }
 
 impl Default for Tbx16Vm {
@@ -138,10 +395,13 @@ impl Tbx16Vm {
             registers,
             data_stack_region,
             return_stack_region,
+            output: Vec::new(),
             step_limit: None,
             step_counter: 0,
             call_depth: 0,
             entry_context: None,
+            current_frame_slot_count: None,
+            caller_frame_slot_counts: Vec::new(),
         };
         vm.validate_invariants()?;
         Ok(vm)
@@ -177,6 +437,18 @@ impl Tbx16Vm {
         self.step_limit = step_limit;
     }
 
+    pub fn output(&self) -> &[u8] {
+        &self.output
+    }
+
+    pub fn take_output(&mut self) -> Vec<u8> {
+        std::mem::take(&mut self.output)
+    }
+
+    pub fn clear_output(&mut self) {
+        self.output.clear();
+    }
+
     pub fn step_counter(&self) -> usize {
         self.step_counter
     }
@@ -189,6 +461,8 @@ impl Tbx16Vm {
         self.entry_context.is_some()
             || self.call_depth != 0
             || self.registers.rsp != self.return_stack_region.start()
+            || self.current_frame_slot_count.is_some()
+            || !self.caller_frame_slot_counts.is_empty()
     }
 
     pub fn reset_execution_state(&mut self) {
@@ -197,6 +471,8 @@ impl Tbx16Vm {
         self.registers.rsp = self.return_stack_region.start();
         self.call_depth = 0;
         self.entry_context = None;
+        self.current_frame_slot_count = None;
+        self.caller_frame_slot_counts.clear();
         self.step_counter = 0;
         self.debug_validate_state();
     }
@@ -451,6 +727,12 @@ impl Tbx16Vm {
                 reason: "return stack usage does not match call depth",
             });
         }
+        if self.caller_frame_slot_counts.len() != usize::from(self.call_depth) {
+            return Err(Tbx16Error::InvalidExecutionState);
+        }
+        if self.entry_context.is_none() && self.current_frame_slot_count.is_some() {
+            return Err(Tbx16Error::InvalidExecutionState);
+        }
         validate_return_stack_region(self.return_stack_region)?;
         if self.data_stack_region.overlaps(self.return_stack_region) {
             return Err(Tbx16Error::InvalidStackRegion {
@@ -468,11 +750,19 @@ impl Tbx16Vm {
     ) -> Result<ExecutionOutcome, Tbx16Error> {
         match primitive {
             PrimitiveId::Halt => Ok(ExecutionOutcome::Halted),
-            PrimitiveId::Lit | PrimitiveId::Branch | PrimitiveId::ZBranch => {
+            PrimitiveId::Lit
+            | PrimitiveId::Branch
+            | PrimitiveId::ZBranch
+            | PrimitiveId::Exit
+            | PrimitiveId::LoadSlot
+            | PrimitiveId::StoreSlot => {
                 self.execute_primitive(primitive)?;
                 Ok(ExecutionOutcome::Returned)
             }
-            PrimitiveId::Exit => Err(Tbx16Error::InvalidExecutionState),
+            _ => {
+                self.execute_primitive_no_operand(primitive)?;
+                Ok(ExecutionOutcome::Returned)
+            }
         }
     }
 
@@ -494,6 +784,9 @@ impl Tbx16Vm {
             } => {
                 let initial_bp = self.registers.bp;
                 let frame_base = self.compute_frame_base(arity)?;
+                let frame_slot_count = arity
+                    .checked_add(local_count)
+                    .ok_or(Tbx16Error::InvalidExecutionState)?;
                 let locals_start = self.registers.dsp;
                 let new_dsp = self.checked_extend_data_stack(locals_start, local_count)?;
 
@@ -504,7 +797,9 @@ impl Tbx16Vm {
                 self.entry_context = Some(EntryContext {
                     initial_bp,
                     frame_base,
+                    frame_slot_count,
                 });
+                self.current_frame_slot_count = Some(frame_slot_count);
                 self.registers.bp = frame_base;
                 self.registers.dsp = new_dsp;
                 self.registers.ip = Some(parameter_ip);
@@ -566,6 +861,29 @@ impl Tbx16Vm {
                 Ok(None)
             }
             PrimitiveId::Exit => self.execute_exit_from_operand(continuation_ip),
+            PrimitiveId::LoadSlot => {
+                self.execute_load_slot_from_operand(continuation_ip)?;
+                Ok(None)
+            }
+            PrimitiveId::StoreSlot => {
+                self.execute_store_slot_from_operand(continuation_ip)?;
+                Ok(None)
+            }
+            _ => {
+                self.execute_primitive_no_operand(primitive)?;
+                let next_ip = if primitive.has_operand() {
+                    continuation_ip
+                        .checked_add(2)
+                        .ok_or(Tbx16Error::InstructionPointerOutOfRange {
+                            ip: continuation_ip,
+                        })
+                        .and_then(validate_instruction_pointer_target)?
+                } else {
+                    continuation_ip
+                };
+                self.registers.ip = Some(next_ip);
+                Ok(None)
+            }
         }
     }
 
@@ -574,8 +892,52 @@ impl Tbx16Vm {
             PrimitiveId::Lit => self.execute_lit_from_operand(self.current_ip()?),
             PrimitiveId::Branch => self.execute_branch_from_operand(self.current_ip()?),
             PrimitiveId::ZBranch => self.execute_zbranch_from_operand(self.current_ip()?),
+            PrimitiveId::Exit => {
+                self.execute_exit_from_operand(self.current_ip()?)?;
+                Ok(())
+            }
+            PrimitiveId::LoadSlot => self.execute_load_slot_from_operand(self.current_ip()?),
+            PrimitiveId::StoreSlot => self.execute_store_slot_from_operand(self.current_ip()?),
+            _ => self.execute_primitive_no_operand(primitive),
+        }
+    }
+
+    fn execute_primitive_no_operand(&mut self, primitive: PrimitiveId) -> Result<(), Tbx16Error> {
+        match primitive {
             PrimitiveId::Halt => Ok(()),
-            PrimitiveId::Exit => Err(Tbx16Error::InvalidExecutionState),
+            PrimitiveId::Dup => self.execute_dup(),
+            PrimitiveId::Drop => self.execute_drop(),
+            PrimitiveId::Swap => self.execute_swap(),
+            PrimitiveId::Over => self.execute_over(),
+            PrimitiveId::Add => self.execute_add(),
+            PrimitiveId::Sub => self.execute_sub(),
+            PrimitiveId::Mul => self.execute_mul(),
+            PrimitiveId::Div => self.execute_div(),
+            PrimitiveId::Mod => self.execute_mod(),
+            PrimitiveId::Negate => self.execute_negate(),
+            PrimitiveId::Eq => self.execute_eq(),
+            PrimitiveId::Ne => self.execute_ne(),
+            PrimitiveId::Lt => self.execute_lt(),
+            PrimitiveId::Le => self.execute_le(),
+            PrimitiveId::Gt => self.execute_gt(),
+            PrimitiveId::Ge => self.execute_ge(),
+            PrimitiveId::ToBool => self.execute_to_bool(),
+            PrimitiveId::Not => self.execute_not(),
+            PrimitiveId::And => self.execute_and(),
+            PrimitiveId::Or => self.execute_or(),
+            PrimitiveId::Band => self.execute_band(),
+            PrimitiveId::Bor => self.execute_bor(),
+            PrimitiveId::Fetch => self.execute_fetch(),
+            PrimitiveId::Store => self.execute_store(),
+            PrimitiveId::PutChr => self.execute_putchr(),
+            PrimitiveId::PutDec => self.execute_putdec(),
+            PrimitiveId::PutStr => self.execute_putstr(),
+            PrimitiveId::Lit
+            | PrimitiveId::Branch
+            | PrimitiveId::ZBranch
+            | PrimitiveId::Exit
+            | PrimitiveId::LoadSlot
+            | PrimitiveId::StoreSlot => Err(Tbx16Error::InvalidExecutionState),
         }
     }
 
@@ -717,6 +1079,13 @@ impl Tbx16Vm {
             .call_depth
             .checked_add(1)
             .expect("call depth fits in configured return stack space");
+        self.caller_frame_slot_counts
+            .push(self.current_frame_slot_count);
+        self.current_frame_slot_count = Some(
+            arity
+                .checked_add(local_count)
+                .ok_or(Tbx16Error::InvalidExecutionState)?,
+        );
         Ok(())
     }
 
@@ -783,6 +1152,10 @@ impl Tbx16Vm {
             .call_depth
             .checked_sub(1)
             .expect("call depth is positive for nested exit");
+        self.current_frame_slot_count = self
+            .caller_frame_slot_counts
+            .pop()
+            .ok_or(Tbx16Error::InvalidExecutionState)?;
         Ok(())
     }
 
@@ -816,6 +1189,7 @@ impl Tbx16Vm {
         self.registers.ip = None;
         self.call_depth = 0;
         self.entry_context = None;
+        self.current_frame_slot_count = None;
         Ok(ExecutionOutcome::Returned)
     }
 
@@ -854,6 +1228,317 @@ impl Tbx16Vm {
         #[cfg(debug_assertions)]
         self.validate_invariants()
             .expect("tbx16 invariants must hold after successful state transitions");
+    }
+
+    fn execute_dup(&mut self) -> Result<(), Tbx16Error> {
+        self.ensure_data_stack_pushable(self.registers.dsp)?;
+        let value = self.peek_data_cell(0)?;
+        self.push_data_cell(value)
+    }
+
+    fn execute_drop(&mut self) -> Result<(), Tbx16Error> {
+        self.pop_data_cell()?;
+        Ok(())
+    }
+
+    fn execute_swap(&mut self) -> Result<(), Tbx16Error> {
+        let top = self.peek_data_cell(0)?;
+        let below = self.peek_data_cell(1)?;
+        let top_addr = self
+            .registers
+            .dsp
+            .checked_sub(2)
+            .ok_or(Tbx16Error::DataStackUnderflow)?;
+        let below_addr = self
+            .registers
+            .dsp
+            .checked_sub(4)
+            .ok_or(Tbx16Error::DataStackUnderflow)?;
+        self.memory.write_cell(top_addr, below)?;
+        self.memory.write_cell(below_addr, top)?;
+        Ok(())
+    }
+
+    fn execute_over(&mut self) -> Result<(), Tbx16Error> {
+        self.ensure_data_stack_pushable(self.registers.dsp)?;
+        let value = self.peek_data_cell(1)?;
+        self.push_data_cell(value)
+    }
+
+    fn execute_add(&mut self) -> Result<(), Tbx16Error> {
+        self.execute_binary_arithmetic(|lhs, rhs| lhs.wrapping_add(rhs))
+    }
+
+    fn execute_sub(&mut self) -> Result<(), Tbx16Error> {
+        self.execute_binary_arithmetic(|lhs, rhs| lhs.wrapping_sub(rhs))
+    }
+
+    fn execute_mul(&mut self) -> Result<(), Tbx16Error> {
+        self.execute_binary_arithmetic(|lhs, rhs| lhs.wrapping_mul(rhs))
+    }
+
+    fn execute_div(&mut self) -> Result<(), Tbx16Error> {
+        self.execute_binary_result(Self::checked_div)
+    }
+
+    fn execute_mod(&mut self) -> Result<(), Tbx16Error> {
+        self.execute_binary_result(Self::checked_mod)
+    }
+
+    fn execute_negate(&mut self) -> Result<(), Tbx16Error> {
+        self.execute_unary_transform(|value| Cell::from_i16(value.as_i16().wrapping_neg()))
+    }
+
+    fn execute_eq(&mut self) -> Result<(), Tbx16Error> {
+        self.execute_binary_compare(|lhs, rhs| lhs.raw() == rhs.raw())
+    }
+
+    fn execute_ne(&mut self) -> Result<(), Tbx16Error> {
+        self.execute_binary_compare(|lhs, rhs| lhs.raw() != rhs.raw())
+    }
+
+    fn execute_lt(&mut self) -> Result<(), Tbx16Error> {
+        self.execute_binary_compare(|lhs, rhs| lhs.as_i16() < rhs.as_i16())
+    }
+
+    fn execute_le(&mut self) -> Result<(), Tbx16Error> {
+        self.execute_binary_compare(|lhs, rhs| lhs.as_i16() <= rhs.as_i16())
+    }
+
+    fn execute_gt(&mut self) -> Result<(), Tbx16Error> {
+        self.execute_binary_compare(|lhs, rhs| lhs.as_i16() > rhs.as_i16())
+    }
+
+    fn execute_ge(&mut self) -> Result<(), Tbx16Error> {
+        self.execute_binary_compare(|lhs, rhs| lhs.as_i16() >= rhs.as_i16())
+    }
+
+    fn execute_to_bool(&mut self) -> Result<(), Tbx16Error> {
+        self.execute_unary_transform(Cell::to_canonical_bool)
+    }
+
+    fn execute_not(&mut self) -> Result<(), Tbx16Error> {
+        self.execute_unary_transform(|value| Cell::from_bool(!value.is_truthy()))
+    }
+
+    fn execute_and(&mut self) -> Result<(), Tbx16Error> {
+        self.execute_binary_transform(|lhs, rhs| {
+            Cell::from_bool(lhs.is_truthy() && rhs.is_truthy())
+        })
+    }
+
+    fn execute_or(&mut self) -> Result<(), Tbx16Error> {
+        self.execute_binary_transform(|lhs, rhs| {
+            Cell::from_bool(lhs.is_truthy() || rhs.is_truthy())
+        })
+    }
+
+    fn execute_band(&mut self) -> Result<(), Tbx16Error> {
+        self.execute_binary_transform(|lhs, rhs| Cell::new(lhs.raw() & rhs.raw()))
+    }
+
+    fn execute_bor(&mut self) -> Result<(), Tbx16Error> {
+        self.execute_binary_transform(|lhs, rhs| Cell::new(lhs.raw() | rhs.raw()))
+    }
+
+    fn execute_fetch(&mut self) -> Result<(), Tbx16Error> {
+        let addr = Address::new(self.peek_data_cell(0)?.raw());
+        let value = self.memory.read_cell(addr)?;
+        let stack_addr = self
+            .registers
+            .dsp
+            .checked_sub(2)
+            .ok_or(Tbx16Error::DataStackUnderflow)?;
+        self.memory.write_cell(stack_addr, value)?;
+        Ok(())
+    }
+
+    fn execute_store(&mut self) -> Result<(), Tbx16Error> {
+        let value = self.peek_data_cell(0)?;
+        let addr = self.peek_data_cell(1)?;
+        self.memory.write_cell(Address::new(addr.raw()), value)?;
+        self.registers.dsp = self
+            .registers
+            .dsp
+            .checked_sub(4)
+            .ok_or(Tbx16Error::DataStackUnderflow)?;
+        Ok(())
+    }
+
+    fn execute_load_slot_from_operand(&mut self, operand_ip: Address) -> Result<(), Tbx16Error> {
+        let slot_index = self.read_ip_cell(operand_ip)?.raw();
+        let addr = self.frame_slot_address(slot_index)?;
+        self.ensure_data_stack_pushable(self.registers.dsp)?;
+        let value = self.memory.read_cell(addr)?;
+        self.push_data_cell(value)?;
+        self.registers.ip = Some(validated_successor_ip(operand_ip)?);
+        Ok(())
+    }
+
+    fn execute_store_slot_from_operand(&mut self, operand_ip: Address) -> Result<(), Tbx16Error> {
+        let slot_index = self.read_ip_cell(operand_ip)?.raw();
+        let addr = self.frame_slot_address(slot_index)?;
+        let value = self.peek_data_cell(0)?;
+        self.memory.write_cell(addr, value)?;
+        self.pop_data_cell()?;
+        self.registers.ip = Some(validated_successor_ip(operand_ip)?);
+        Ok(())
+    }
+
+    fn execute_putchr(&mut self) -> Result<(), Tbx16Error> {
+        let value = self.peek_data_cell(0)?;
+        self.output.push(value.raw() as u8);
+        self.pop_data_cell()?;
+        Ok(())
+    }
+
+    fn execute_putdec(&mut self) -> Result<(), Tbx16Error> {
+        let value = self.peek_data_cell(0)?;
+        let rendered = value.as_i16().to_string();
+        self.output.extend_from_slice(rendered.as_bytes());
+        self.pop_data_cell()?;
+        Ok(())
+    }
+
+    fn execute_putstr(&mut self) -> Result<(), Tbx16Error> {
+        let addr = Address::new(self.peek_data_cell(0)?.raw());
+        let bytes = self.read_length_prefixed_bytes(addr)?;
+        self.output.extend_from_slice(&bytes);
+        self.pop_data_cell()?;
+        Ok(())
+    }
+
+    fn execute_unary_transform(
+        &mut self,
+        transform: impl FnOnce(Cell) -> Cell,
+    ) -> Result<(), Tbx16Error> {
+        let value = self.peek_data_cell(0)?;
+        let addr = self
+            .registers
+            .dsp
+            .checked_sub(2)
+            .ok_or(Tbx16Error::DataStackUnderflow)?;
+        self.memory.write_cell(addr, transform(value))?;
+        Ok(())
+    }
+
+    fn execute_binary_transform(
+        &mut self,
+        transform: impl FnOnce(Cell, Cell) -> Cell,
+    ) -> Result<(), Tbx16Error> {
+        let rhs = self.peek_data_cell(0)?;
+        let lhs = self.peek_data_cell(1)?;
+        let result = transform(lhs, rhs);
+        let addr = self
+            .registers
+            .dsp
+            .checked_sub(4)
+            .ok_or(Tbx16Error::DataStackUnderflow)?;
+        self.memory.write_cell(addr, result)?;
+        self.registers.dsp = self
+            .registers
+            .dsp
+            .checked_sub(2)
+            .ok_or(Tbx16Error::DataStackUnderflow)?;
+        Ok(())
+    }
+
+    fn execute_binary_result(
+        &mut self,
+        transform: impl FnOnce(Cell, Cell) -> Result<Cell, Tbx16Error>,
+    ) -> Result<(), Tbx16Error> {
+        let rhs = self.peek_data_cell(0)?;
+        let lhs = self.peek_data_cell(1)?;
+        let result = transform(lhs, rhs)?;
+        let addr = self
+            .registers
+            .dsp
+            .checked_sub(4)
+            .ok_or(Tbx16Error::DataStackUnderflow)?;
+        self.memory.write_cell(addr, result)?;
+        self.registers.dsp = self
+            .registers
+            .dsp
+            .checked_sub(2)
+            .ok_or(Tbx16Error::DataStackUnderflow)?;
+        Ok(())
+    }
+
+    fn execute_binary_arithmetic(
+        &mut self,
+        transform: impl FnOnce(i16, i16) -> i16,
+    ) -> Result<(), Tbx16Error> {
+        self.execute_binary_transform(|lhs, rhs| {
+            Cell::from_i16(transform(lhs.as_i16(), rhs.as_i16()))
+        })
+    }
+
+    fn execute_binary_compare(
+        &mut self,
+        compare: impl FnOnce(Cell, Cell) -> bool,
+    ) -> Result<(), Tbx16Error> {
+        self.execute_binary_transform(|lhs, rhs| Cell::from_bool(compare(lhs, rhs)))
+    }
+
+    fn checked_div(lhs: Cell, rhs: Cell) -> Result<Cell, Tbx16Error> {
+        let divisor = rhs.as_i16();
+        if divisor == 0 {
+            return Err(Tbx16Error::DivisionByZero);
+        }
+        let dividend = lhs.as_i16();
+        if dividend == i16::MIN && divisor == -1 {
+            return Ok(Cell::from_i16(i16::MIN));
+        }
+        Ok(Cell::from_i16(
+            (i32::from(dividend) / i32::from(divisor)) as i16,
+        ))
+    }
+
+    fn checked_mod(lhs: Cell, rhs: Cell) -> Result<Cell, Tbx16Error> {
+        let divisor = rhs.as_i16();
+        if divisor == 0 {
+            return Err(Tbx16Error::DivisionByZero);
+        }
+        let dividend = lhs.as_i16();
+        if dividend == i16::MIN && divisor == -1 {
+            return Ok(Cell::from_i16(0));
+        }
+        Ok(Cell::from_i16(
+            (i32::from(dividend) % i32::from(divisor)) as i16,
+        ))
+    }
+
+    fn frame_slot_address(&self, slot_index: u16) -> Result<Address, Tbx16Error> {
+        let slot_count = self
+            .current_frame_slot_count
+            .ok_or(Tbx16Error::InvalidExecutionState)?;
+        if slot_index >= slot_count {
+            return Err(Tbx16Error::InvalidFrameSlot {
+                slot_index,
+                slot_count,
+            });
+        }
+        self.data_slot_address(slot_index)
+    }
+
+    fn read_length_prefixed_bytes(&self, addr: Address) -> Result<Vec<u8>, Tbx16Error> {
+        let len = usize::from(self.memory.read_cell(addr)?.raw());
+        let bytes_start = addr.checked_add(2).ok_or(Tbx16Error::InvalidMemoryAccess {
+            addr,
+            operation: "string read",
+        })?;
+        let mut bytes = Vec::with_capacity(len);
+        for offset in 0..len {
+            let byte_addr =
+                bytes_start
+                    .checked_add_usize(offset)
+                    .ok_or(Tbx16Error::InvalidMemoryAccess {
+                        addr,
+                        operation: "string read",
+                    })?;
+            bytes.push(self.memory.read_byte(byte_addr)?);
+        }
+        Ok(bytes)
     }
 }
 
@@ -904,4 +1589,43 @@ fn validated_successor_ip(ip: Address) -> Result<Address, Tbx16Error> {
 
 fn invalid_execution_token(xt: Cell) -> Tbx16Error {
     Tbx16Error::InvalidExecutionToken { xt }
+}
+
+const fn descriptor_for(id: PrimitiveId) -> PrimitiveDescriptor {
+    match id {
+        PrimitiveId::Lit => PRIMITIVE_REGISTRY[0],
+        PrimitiveId::Branch => PRIMITIVE_REGISTRY[1],
+        PrimitiveId::ZBranch => PRIMITIVE_REGISTRY[2],
+        PrimitiveId::Halt => PRIMITIVE_REGISTRY[3],
+        PrimitiveId::Exit => PRIMITIVE_REGISTRY[4],
+        PrimitiveId::Dup => PRIMITIVE_REGISTRY[5],
+        PrimitiveId::Drop => PRIMITIVE_REGISTRY[6],
+        PrimitiveId::Swap => PRIMITIVE_REGISTRY[7],
+        PrimitiveId::Over => PRIMITIVE_REGISTRY[8],
+        PrimitiveId::Add => PRIMITIVE_REGISTRY[9],
+        PrimitiveId::Sub => PRIMITIVE_REGISTRY[10],
+        PrimitiveId::Mul => PRIMITIVE_REGISTRY[11],
+        PrimitiveId::Div => PRIMITIVE_REGISTRY[12],
+        PrimitiveId::Mod => PRIMITIVE_REGISTRY[13],
+        PrimitiveId::Negate => PRIMITIVE_REGISTRY[14],
+        PrimitiveId::Eq => PRIMITIVE_REGISTRY[15],
+        PrimitiveId::Ne => PRIMITIVE_REGISTRY[16],
+        PrimitiveId::Lt => PRIMITIVE_REGISTRY[17],
+        PrimitiveId::Le => PRIMITIVE_REGISTRY[18],
+        PrimitiveId::Gt => PRIMITIVE_REGISTRY[19],
+        PrimitiveId::Ge => PRIMITIVE_REGISTRY[20],
+        PrimitiveId::ToBool => PRIMITIVE_REGISTRY[21],
+        PrimitiveId::Not => PRIMITIVE_REGISTRY[22],
+        PrimitiveId::And => PRIMITIVE_REGISTRY[23],
+        PrimitiveId::Or => PRIMITIVE_REGISTRY[24],
+        PrimitiveId::Band => PRIMITIVE_REGISTRY[25],
+        PrimitiveId::Bor => PRIMITIVE_REGISTRY[26],
+        PrimitiveId::Fetch => PRIMITIVE_REGISTRY[27],
+        PrimitiveId::Store => PRIMITIVE_REGISTRY[28],
+        PrimitiveId::LoadSlot => PRIMITIVE_REGISTRY[29],
+        PrimitiveId::StoreSlot => PRIMITIVE_REGISTRY[30],
+        PrimitiveId::PutChr => PRIMITIVE_REGISTRY[31],
+        PrimitiveId::PutDec => PRIMITIVE_REGISTRY[32],
+        PrimitiveId::PutStr => PRIMITIVE_REGISTRY[33],
+    }
 }
