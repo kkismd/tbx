@@ -19,8 +19,8 @@ Each move adds the cost of the destination cell. The starting cell does not add 
 | --- | --- | --- |
 | `.` | normal sector | 1 |
 | `N` | nebula | 2 |
-| `A` | anomaly | 3 |
-| `@` | asteroid field | 2 |
+| `A` | asteroid field | 3 |
+| `@` | gravity well / gravity anomaly | 2 |
 | `B` | base | 1 |
 | `R` | resource | 1 |
 | `S` | start | 0 |
