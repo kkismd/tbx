@@ -1776,6 +1776,67 @@ fn nested_exit_traps_when_caller_w_is_corrupted() {
 }
 
 #[test]
+fn corrupting_current_w_metadata_via_store_defers_failure_until_metadata_is_needed() {
+    let mut slot_vm = Tbx16Vm::default();
+    let mut slot_image = ImageBuilder::new(CODE_START);
+    let lit_xt = slot_image.primitive(PrimitiveId::Lit);
+    let store_xt = slot_image.primitive(PrimitiveId::Store);
+    let load_slot_xt = slot_image.primitive(PrimitiveId::LoadSlot);
+    let entry_xt = slot_image.colon_word(0, 0);
+    slot_image.emit_xt(lit_xt);
+    slot_image.emit_cell(entry_xt);
+    slot_image.emit_xt(lit_xt);
+    slot_image.emit_cell(Cell::new(0x9999));
+    slot_image.emit_xt(store_xt);
+    slot_image.emit_xt(load_slot_xt);
+    slot_image.emit_cell(Cell::new(0));
+    slot_image.load_into(&mut slot_vm);
+
+    assert_eq!(
+        slot_vm.run(entry_xt),
+        ExecutionOutcome::Trapped(Tbx16Error::InvalidExecutionState)
+    );
+    assert_eq!(slot_vm.step_counter(), 5);
+    assert_eq!(slot_vm.registers().w, Some(Address::new(CODE_START + 12)));
+    assert_eq!(
+        slot_vm
+            .memory()
+            .read_cell(Address::new(CODE_START + 12))
+            .unwrap(),
+        Cell::new(0x9999)
+    );
+
+    let mut exit_vm = Tbx16Vm::default();
+    let mut exit_image = ImageBuilder::new(CODE_START);
+    let lit_xt = exit_image.primitive(PrimitiveId::Lit);
+    let store_xt = exit_image.primitive(PrimitiveId::Store);
+    let exit_xt = exit_image.primitive(PrimitiveId::Exit);
+    let entry_xt = exit_image.colon_word(0, 0);
+    exit_image.emit_xt(lit_xt);
+    exit_image.emit_cell(entry_xt);
+    exit_image.emit_xt(lit_xt);
+    exit_image.emit_cell(Cell::new(0x9999));
+    exit_image.emit_xt(store_xt);
+    exit_image.emit_xt(exit_xt);
+    exit_image.emit_cell(Cell::new(0));
+    exit_image.load_into(&mut exit_vm);
+
+    assert_eq!(
+        exit_vm.run(entry_xt),
+        ExecutionOutcome::Trapped(Tbx16Error::InvalidExecutionState)
+    );
+    assert_eq!(exit_vm.step_counter(), 5);
+    assert_eq!(exit_vm.registers().w, Some(Address::new(CODE_START + 12)));
+    assert_eq!(
+        exit_vm
+            .memory()
+            .read_cell(Address::new(CODE_START + 12))
+            .unwrap(),
+        Cell::new(0x9999)
+    );
+}
+
+#[test]
 fn threaded_program_executes_m2_3a_primitives() {
     let mut vm = Tbx16Vm::default();
     let mut image = ImageBuilder::new(CODE_START);

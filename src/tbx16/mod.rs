@@ -745,7 +745,9 @@ impl Tbx16Vm {
             });
         }
         if self.is_active_colon_context() {
-            self.validate_active_colon_frame()?;
+            if self.registers.w.is_none() {
+                return Err(Tbx16Error::InvalidExecutionState);
+            }
         } else if self.registers.w.is_some() {
             return Err(Tbx16Error::InvalidExecutionState);
         }
@@ -1060,10 +1062,7 @@ impl Tbx16Vm {
         return_ip: Address,
     ) -> Result<(), Tbx16Error> {
         let caller_w = self.registers.w.ok_or(Tbx16Error::InvalidExecutionState)?;
-        match self.resolve_word(Cell::new(caller_w.get()))? {
-            ResolvedWord::Colon { .. } => {}
-            ResolvedWord::Primitive(_) => return Err(Tbx16Error::InvalidExecutionState),
-        }
+        self.resolve_active_colon_word(caller_w)?;
         let new_bp = self.compute_frame_base(arity)?;
         let locals_start = self.registers.dsp;
         let new_dsp = self.checked_extend_data_stack(locals_start, local_count)?;
@@ -1072,7 +1071,8 @@ impl Tbx16Vm {
                 .checked_sub(2)
                 .expect("continuation ip always follows a callee XT cell"),
         )?;
-        let callee_w = validate_execution_token_address(callee_w)?;
+        let callee_w = validate_execution_token_address(callee_w)
+            .map_err(|_| Tbx16Error::InvalidExecutionState)?;
         let new_rsp = self
             .registers
             .rsp
@@ -1155,10 +1155,7 @@ impl Tbx16Vm {
         let frame = self.peek_return_frame()?;
         let return_ip = validate_instruction_pointer_target(frame.return_ip)?;
         self.validate_base_pointer(frame.caller_bp)?;
-        match self.resolve_word(Cell::new(frame.caller_w.get()))? {
-            ResolvedWord::Colon { .. } => {}
-            ResolvedWord::Primitive(_) => return Err(Tbx16Error::InvalidExecutionState),
-        }
+        self.resolve_active_colon_word(frame.caller_w)?;
 
         let new_dsp = if return_count == 0 {
             self.registers.bp
@@ -1203,6 +1200,7 @@ impl Tbx16Vm {
         if self.registers.w != Some(context.entry_w) {
             return Err(Tbx16Error::InvalidExecutionState);
         }
+        self.resolve_active_colon_word(context.entry_w)?;
         if self.registers.rsp != self.return_stack_region.start() {
             return Err(Tbx16Error::InvalidExecutionState);
         }
@@ -1268,7 +1266,7 @@ impl Tbx16Vm {
 
     fn validate_active_colon_frame(&self) -> Result<ActiveColonFrame, Tbx16Error> {
         let w = self.registers.w.ok_or(Tbx16Error::InvalidExecutionState)?;
-        let (arity, local_count) = match self.resolve_word(Cell::new(w.get()))? {
+        let (arity, local_count) = match self.resolve_active_colon_word(w)? {
             ResolvedWord::Colon {
                 arity, local_count, ..
             } => (arity, local_count),
@@ -1283,6 +1281,24 @@ impl Tbx16Vm {
             return Err(Tbx16Error::InvalidExecutionState);
         }
         Ok(ActiveColonFrame { slot_count })
+    }
+
+    fn resolve_active_colon_word(&self, w: Address) -> Result<ResolvedWord, Tbx16Error> {
+        match self.resolve_word(Cell::new(w.get())) {
+            Ok(ResolvedWord::Colon {
+                arity,
+                local_count,
+                parameter_ip,
+            }) => Ok(ResolvedWord::Colon {
+                arity,
+                local_count,
+                parameter_ip,
+            }),
+            Ok(ResolvedWord::Primitive(_)) | Err(Tbx16Error::InvalidExecutionToken { .. }) => {
+                Err(Tbx16Error::InvalidExecutionState)
+            }
+            Err(err) => Err(err),
+        }
     }
 
     fn validated_frame_slot_address(
