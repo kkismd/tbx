@@ -25,7 +25,7 @@ pub const DEFAULT_RETURN_STACK_START: Address = Address::new(0x0200);
 pub const DEFAULT_RETURN_STACK_END: Address = Address::new(0x0300);
 const PAGE_ONE_END: Address = Address::new(0x0200);
 const NO_IP: Address = Address::new(0xffff);
-const RETURN_FRAME_BYTES: u16 = 4;
+const RETURN_FRAME_BYTES: u16 = 6;
 
 pub const CODE_TOKEN_PRIMITIVE: Cell = Cell::new(0x0001);
 pub const CODE_TOKEN_DOCOL: Cell = Cell::new(0x0002);
@@ -87,6 +87,8 @@ pub enum PrimitiveId {
     PutChr = 96,
     PutDec = 97,
     PutStr = 98,
+    LoadSlot = 112,
+    StoreSlot = 113,
 }
 
 impl PrimitiveId {
@@ -148,6 +150,8 @@ impl TryFrom<Cell> for PrimitiveId {
             96 => Ok(Self::PutChr),
             97 => Ok(Self::PutDec),
             98 => Ok(Self::PutStr),
+            112 => Ok(Self::LoadSlot),
+            113 => Ok(Self::StoreSlot),
             _ => Err(()),
         }
     }
@@ -314,6 +318,16 @@ pub const PRIMITIVE_REGISTRY: &[PrimitiveDescriptor] = &[
         name: "PUTSTR",
         operand: PrimitiveOperand::None,
     },
+    PrimitiveDescriptor {
+        id: PrimitiveId::LoadSlot,
+        name: "LOAD_SLOT",
+        operand: PrimitiveOperand::Cell,
+    },
+    PrimitiveDescriptor {
+        id: PrimitiveId::StoreSlot,
+        name: "STORE_SLOT",
+        operand: PrimitiveOperand::Cell,
+    },
 ];
 
 pub const fn primitive_descriptor_by_id(id: PrimitiveId) -> &'static PrimitiveDescriptor {
@@ -362,7 +376,14 @@ pub struct Tbx16Vm {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct EntryContext {
     initial_bp: Address,
+    initial_w: Option<Address>,
+    entry_w: Address,
     frame_base: Address,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct ActiveColonFrame {
+    slot_count: u16,
 }
 
 impl Default for Tbx16Vm {
@@ -397,6 +418,7 @@ impl Tbx16Vm {
             dsp: DATA_STACK_START,
             rsp: return_stack_region.start(),
             bp: DATA_STACK_START,
+            w: None,
         };
         let vm = Self {
             memory: Memory::default(),
@@ -473,6 +495,7 @@ impl Tbx16Vm {
         self.registers.ip = None;
         self.registers.bp = DATA_STACK_START;
         self.registers.rsp = self.return_stack_region.start();
+        self.registers.w = None;
         self.call_depth = 0;
         self.entry_context = None;
         self.step_counter = 0;
@@ -619,7 +642,7 @@ impl Tbx16Vm {
         let next = self
             .registers
             .rsp
-            .checked_add(4)
+            .checked_add(RETURN_FRAME_BYTES)
             .ok_or(Tbx16Error::ReturnStackOverflow)?;
         ensure_pointer_in_region(self.registers.rsp, self.return_stack_region, "return")?;
         if !self.return_stack_region.contains_pointer(next) {
@@ -633,6 +656,13 @@ impl Tbx16Vm {
                 .checked_add(2)
                 .expect("aligned stack pointer has room for second frame cell"),
             Cell::new(frame.caller_bp.get()),
+        )?;
+        self.memory.write_cell(
+            self.registers
+                .rsp
+                .checked_add(4)
+                .expect("aligned stack pointer has room for third frame cell"),
+            Cell::new(frame.caller_w.get()),
         )?;
         self.registers.rsp = next;
         Ok(())
@@ -714,6 +744,11 @@ impl Tbx16Vm {
                 reason: "base pointer must not exceed the data stack pointer",
             });
         }
+        if self.is_active_colon_context() {
+            self.validate_active_colon_frame()?;
+        } else if self.registers.w.is_some() {
+            return Err(Tbx16Error::InvalidExecutionState);
+        }
         let used_return_bytes = self.registers.rsp.get() - self.return_stack_region.start().get();
         let expected_return_bytes = self.call_depth.checked_mul(RETURN_FRAME_BYTES).ok_or(
             Tbx16Error::InvalidStackRegion {
@@ -750,7 +785,9 @@ impl Tbx16Vm {
                 self.execute_primitive(primitive)?;
                 Ok(ExecutionOutcome::Returned)
             }
-            PrimitiveId::Exit => Err(Tbx16Error::InvalidExecutionState),
+            PrimitiveId::LoadSlot | PrimitiveId::StoreSlot | PrimitiveId::Exit => {
+                Err(Tbx16Error::InvalidExecutionState)
+            }
             _ => {
                 self.execute_primitive_no_operand(primitive)?;
                 Ok(ExecutionOutcome::Returned)
@@ -783,13 +820,17 @@ impl Tbx16Vm {
                     self.memory
                         .zero_range(locals_start, usize::from(local_count) * 2)?;
                 }
+                let entry_w = validate_execution_token_address(entry_xt)?;
                 self.entry_context = Some(EntryContext {
                     initial_bp,
+                    initial_w: self.registers.w,
+                    entry_w,
                     frame_base,
                 });
                 self.registers.bp = frame_base;
                 self.registers.dsp = new_dsp;
                 self.registers.ip = Some(parameter_ip);
+                self.registers.w = Some(entry_w);
                 self.debug_validate_state();
                 Ok(ExecutionState::Running)
             }
@@ -848,6 +889,14 @@ impl Tbx16Vm {
                 Ok(None)
             }
             PrimitiveId::Exit => self.execute_exit_from_operand(continuation_ip),
+            PrimitiveId::LoadSlot => {
+                self.execute_load_slot_from_operand(continuation_ip)?;
+                Ok(None)
+            }
+            PrimitiveId::StoreSlot => {
+                self.execute_store_slot_from_operand(continuation_ip)?;
+                Ok(None)
+            }
             _ => {
                 self.execute_primitive_no_operand(primitive)?;
                 self.registers.ip = Some(continuation_ip);
@@ -862,7 +911,9 @@ impl Tbx16Vm {
             PrimitiveId::Branch => self.execute_branch_from_operand(self.current_ip()?),
             PrimitiveId::ZBranch => self.execute_zbranch_from_operand(self.current_ip()?),
             PrimitiveId::Halt => Ok(()),
-            PrimitiveId::Exit => Err(Tbx16Error::InvalidExecutionState),
+            PrimitiveId::Exit | PrimitiveId::LoadSlot | PrimitiveId::StoreSlot => {
+                Err(Tbx16Error::InvalidExecutionState)
+            }
             _ => self.execute_primitive_no_operand(primitive),
         }
     }
@@ -897,9 +948,12 @@ impl Tbx16Vm {
             PrimitiveId::PutChr => self.execute_putchr(),
             PrimitiveId::PutDec => self.execute_putdec(),
             PrimitiveId::PutStr => self.execute_putstr(),
-            PrimitiveId::Lit | PrimitiveId::Branch | PrimitiveId::ZBranch | PrimitiveId::Exit => {
-                Err(Tbx16Error::InvalidExecutionState)
-            }
+            PrimitiveId::Lit
+            | PrimitiveId::Branch
+            | PrimitiveId::ZBranch
+            | PrimitiveId::Exit
+            | PrimitiveId::LoadSlot
+            | PrimitiveId::StoreSlot => Err(Tbx16Error::InvalidExecutionState),
         }
     }
 
@@ -1005,9 +1059,20 @@ impl Tbx16Vm {
         parameter_ip: Address,
         return_ip: Address,
     ) -> Result<(), Tbx16Error> {
+        let caller_w = self.registers.w.ok_or(Tbx16Error::InvalidExecutionState)?;
+        match self.resolve_word(Cell::new(caller_w.get()))? {
+            ResolvedWord::Colon { .. } => {}
+            ResolvedWord::Primitive(_) => return Err(Tbx16Error::InvalidExecutionState),
+        }
         let new_bp = self.compute_frame_base(arity)?;
         let locals_start = self.registers.dsp;
         let new_dsp = self.checked_extend_data_stack(locals_start, local_count)?;
+        let callee_w = self.read_ip_cell(
+            return_ip
+                .checked_sub(2)
+                .expect("continuation ip always follows a callee XT cell"),
+        )?;
+        let callee_w = validate_execution_token_address(callee_w)?;
         let new_rsp = self
             .registers
             .rsp
@@ -1019,6 +1084,10 @@ impl Tbx16Vm {
         }
 
         let caller_bp = self.registers.bp;
+        if local_count != 0 {
+            self.memory
+                .zero_range(locals_start, usize::from(local_count) * 2)?;
+        }
         self.memory
             .write_cell(self.registers.rsp, Cell::new(return_ip.get()))?;
         self.memory.write_cell(
@@ -1028,15 +1097,19 @@ impl Tbx16Vm {
                 .expect("validated return frame has room for caller bp"),
             Cell::new(caller_bp.get()),
         )?;
-        if local_count != 0 {
-            self.memory
-                .zero_range(locals_start, usize::from(local_count) * 2)?;
-        }
+        self.memory.write_cell(
+            self.registers
+                .rsp
+                .checked_add(4)
+                .expect("validated return frame has room for caller w"),
+            Cell::new(caller_w.get()),
+        )?;
 
         self.registers.rsp = new_rsp;
         self.registers.bp = new_bp;
         self.registers.dsp = new_dsp;
         self.registers.ip = Some(parameter_ip);
+        self.registers.w = Some(callee_w);
         self.call_depth = self
             .call_depth
             .checked_add(1)
@@ -1082,6 +1155,10 @@ impl Tbx16Vm {
         let frame = self.peek_return_frame()?;
         let return_ip = validate_instruction_pointer_target(frame.return_ip)?;
         self.validate_base_pointer(frame.caller_bp)?;
+        match self.resolve_word(Cell::new(frame.caller_w.get()))? {
+            ResolvedWord::Colon { .. } => {}
+            ResolvedWord::Primitive(_) => return Err(Tbx16Error::InvalidExecutionState),
+        }
 
         let new_dsp = if return_count == 0 {
             self.registers.bp
@@ -1103,6 +1180,7 @@ impl Tbx16Vm {
         self.registers.bp = frame.caller_bp;
         self.registers.dsp = new_dsp;
         self.registers.ip = Some(return_ip);
+        self.registers.w = Some(frame.caller_w);
         self.call_depth = self
             .call_depth
             .checked_sub(1)
@@ -1122,6 +1200,9 @@ impl Tbx16Vm {
         if self.registers.bp != context.frame_base {
             return Err(Tbx16Error::InvalidExecutionState);
         }
+        if self.registers.w != Some(context.entry_w) {
+            return Err(Tbx16Error::InvalidExecutionState);
+        }
         if self.registers.rsp != self.return_stack_region.start() {
             return Err(Tbx16Error::InvalidExecutionState);
         }
@@ -1138,6 +1219,7 @@ impl Tbx16Vm {
         self.registers.dsp = new_dsp;
         self.registers.bp = context.initial_bp;
         self.registers.ip = None;
+        self.registers.w = context.initial_w;
         self.call_depth = 0;
         self.entry_context = None;
         Ok(ExecutionOutcome::Returned)
@@ -1168,10 +1250,103 @@ impl Tbx16Vm {
                 .checked_add(2)
                 .expect("validated frame start has room for caller bp"),
         )?;
+        let caller_w = self.memory.read_cell(
+            frame_start
+                .checked_add(4)
+                .expect("validated frame start has room for caller w"),
+        )?;
         Ok(ReturnFrame {
             return_ip: Address::new(return_ip.raw()),
             caller_bp: Address::new(caller_bp.raw()),
+            caller_w: Address::new(caller_w.raw()),
         })
+    }
+
+    fn is_active_colon_context(&self) -> bool {
+        self.entry_context.is_some() || self.call_depth != 0
+    }
+
+    fn validate_active_colon_frame(&self) -> Result<ActiveColonFrame, Tbx16Error> {
+        let w = self.registers.w.ok_or(Tbx16Error::InvalidExecutionState)?;
+        let (arity, local_count) = match self.resolve_word(Cell::new(w.get()))? {
+            ResolvedWord::Colon {
+                arity, local_count, ..
+            } => (arity, local_count),
+            ResolvedWord::Primitive(_) => return Err(Tbx16Error::InvalidExecutionState),
+        };
+        self.validate_base_pointer(self.registers.bp)?;
+        let slot_count = arity
+            .checked_add(local_count)
+            .ok_or(Tbx16Error::InvalidExecutionState)?;
+        let frame_end = self.checked_extend_data_stack(self.registers.bp, slot_count)?;
+        if frame_end > self.registers.dsp {
+            return Err(Tbx16Error::InvalidExecutionState);
+        }
+        Ok(ActiveColonFrame { slot_count })
+    }
+
+    fn validated_frame_slot_address(
+        &self,
+        slot_index: u16,
+    ) -> Result<(ActiveColonFrame, Address), Tbx16Error> {
+        let frame = self.validate_active_colon_frame()?;
+        if slot_index >= frame.slot_count {
+            return Err(Tbx16Error::InvalidFrameSlot {
+                slot_index,
+                slot_count: frame.slot_count,
+            });
+        }
+        let addr = self
+            .registers
+            .bp
+            .checked_add(
+                slot_index
+                    .checked_mul(2)
+                    .ok_or(Tbx16Error::InvalidExecutionState)?,
+            )
+            .ok_or(Tbx16Error::InvalidExecutionState)?;
+        let next_addr = addr
+            .checked_add(2)
+            .ok_or(Tbx16Error::InvalidExecutionState)?;
+        if !self.data_stack_region.contains(addr)
+            || !self.data_stack_region.contains_pointer(next_addr)
+        {
+            return Err(Tbx16Error::InvalidExecutionState);
+        }
+        Ok((frame, addr))
+    }
+
+    fn execute_load_slot_from_operand(&mut self, operand_ip: Address) -> Result<(), Tbx16Error> {
+        let slot_index = self.read_ip_cell(operand_ip)?.raw();
+        let next_ip = validated_successor_ip(operand_ip)?;
+        let _ = self.validated_frame_slot_address(slot_index)?;
+        let slot_addr = self.data_slot_address(slot_index)?;
+        let value = self.memory.read_cell(slot_addr)?;
+        self.ensure_data_stack_pushable(self.registers.dsp)?;
+        self.memory.write_cell(self.registers.dsp, value)?;
+        self.registers.dsp = self
+            .registers
+            .dsp
+            .checked_add(2)
+            .ok_or(Tbx16Error::DataStackOverflow)?;
+        self.registers.ip = Some(next_ip);
+        Ok(())
+    }
+
+    fn execute_store_slot_from_operand(&mut self, operand_ip: Address) -> Result<(), Tbx16Error> {
+        let slot_index = self.read_ip_cell(operand_ip)?.raw();
+        let next_ip = validated_successor_ip(operand_ip)?;
+        let (_, slot_addr) = self.validated_frame_slot_address(slot_index)?;
+        let value = self.peek_data_cell(0)?;
+        let new_dsp = self
+            .registers
+            .dsp
+            .checked_sub(2)
+            .ok_or(Tbx16Error::DataStackUnderflow)?;
+        self.memory.write_cell(slot_addr, value)?;
+        self.registers.dsp = new_dsp;
+        self.registers.ip = Some(next_ip);
+        Ok(())
     }
 
     fn debug_validate_state(&self) {
