@@ -7,7 +7,7 @@ from collections import Counter
 from dataclasses import dataclass
 import heapq
 import random
-from typing import TypeAlias
+from typing import Callable, TypeAlias
 
 
 WIDTH = 8
@@ -36,6 +36,7 @@ TERRAIN_COSTS = {
 Position: TypeAlias = tuple[int, int]
 Cells: TypeAlias = dict[Position, str]
 Edge: TypeAlias = tuple[Position, Position]
+CostFunction: TypeAlias = Callable[[str], int]
 
 
 @dataclass(frozen=True)
@@ -66,6 +67,15 @@ class PathAnalysis:
     best_cost_without_base: int | None
     base_route_advantage_raw: int | None
     base_is_mandatory: bool
+
+
+@dataclass(frozen=True)
+class CostContributionAnalysis:
+    plain_cost: int | None
+    terrain_only_cost: int | None
+    full_cost: int | None
+    terrain_extra_cost: int | None
+    rift_detour_cost: int | None
 
 
 VERDICT_REJECT_TOO_HARD = "REJECT_TOO_HARD"
@@ -167,6 +177,11 @@ def terrain_cost(symbol: str) -> int:
         raise ValueError(f"unknown terrain symbol: {symbol!r}") from exc
 
 
+def plain_movement_cost(symbol: str) -> int:
+    terrain_cost(symbol)
+    return 1
+
+
 def neighbors(position: Position) -> list[Position]:
     x, y = position
     adjacent: list[Position] = []
@@ -210,6 +225,7 @@ def shortest_path(
     goal: Position,
     blocked_edges: set[Edge] | None = None,
     forbidden_nodes: set[Position] | None = None,
+    cost_function: CostFunction = terrain_cost,
 ) -> PathResult | None:
     if start not in cells:
         raise ValueError(f"start position is outside map cells: {start}")
@@ -235,7 +251,7 @@ def shortest_path(
                 continue
             if normalize_edge(position, neighbor) in blocked:
                 continue
-            candidate = (cost + terrain_cost(cells[neighbor]), steps + 1)
+            candidate = (cost + cost_function(cells[neighbor]), steps + 1)
             previous = best.get(neighbor)
             if previous is None or candidate < previous:
                 best[neighbor] = candidate
@@ -274,6 +290,42 @@ def analyze_paths(galactic_map: GalacticMap) -> PathAnalysis:
         best_cost_without_base=None if without_base is None else without_base.cost,
         base_route_advantage_raw=advantage,
         base_is_mandatory=base_is_mandatory,
+    )
+
+
+def analyze_cost_contributions(galactic_map: GalacticMap) -> CostContributionAnalysis:
+    plain_route = shortest_path(
+        galactic_map.cells,
+        SPECIAL_S,
+        SPECIAL_H,
+        cost_function=plain_movement_cost,
+    )
+    terrain_only_route = shortest_path(galactic_map.cells, SPECIAL_S, SPECIAL_H)
+    full_route = shortest_path(
+        galactic_map.cells,
+        SPECIAL_S,
+        SPECIAL_H,
+        blocked_edges=set(galactic_map.rift_edges),
+    )
+
+    plain_cost = None if plain_route is None else plain_route.cost
+    terrain_only_cost = None if terrain_only_route is None else terrain_only_route.cost
+    full_cost = None if full_route is None else full_route.cost
+
+    terrain_extra_cost = None
+    if plain_cost is not None and terrain_only_cost is not None:
+        terrain_extra_cost = terrain_only_cost - plain_cost
+
+    rift_detour_cost = None
+    if terrain_only_cost is not None and full_cost is not None:
+        rift_detour_cost = full_cost - terrain_only_cost
+
+    return CostContributionAnalysis(
+        plain_cost=plain_cost,
+        terrain_only_cost=terrain_only_cost,
+        full_cost=full_cost,
+        terrain_extra_cost=terrain_extra_cost,
+        rift_detour_cost=rift_detour_cost,
     )
 
 
@@ -321,6 +373,7 @@ def classify_verdict(analysis: PathAnalysis) -> str:
 
 def format_output(galactic_map: GalacticMap) -> str:
     analysis = analyze_paths(galactic_map)
+    cost_contributions = analyze_cost_contributions(galactic_map)
     verdict = classify_verdict(analysis)
     resource_positions = ", ".join(format_position(position) for position in galactic_map.r_positions) or "(none)"
     lines = [
@@ -353,6 +406,13 @@ def format_output(galactic_map: GalacticMap) -> str:
         f"  S_to_H_without_B_cost: {format_optional_metric(analysis.best_cost_without_base)}",
         f"  base_route_advantage_raw: {format_optional_metric(analysis.base_route_advantage_raw)}",
         f"  base_is_mandatory: {format_yes_no(analysis.base_is_mandatory)}",
+        "",
+        "COST CONTRIBUTIONS",
+        f"  plain_cost: {format_optional_metric(cost_contributions.plain_cost)}",
+        f"  terrain_only_cost: {format_optional_metric(cost_contributions.terrain_only_cost)}",
+        f"  full_cost: {format_optional_metric(cost_contributions.full_cost)}",
+        f"  terrain_extra_cost: {format_optional_metric(cost_contributions.terrain_extra_cost)}",
+        f"  rift_detour_cost: {format_optional_metric(cost_contributions.rift_detour_cost)}",
         "",
         "VERDICT",
         f"  verdict: {verdict}",
