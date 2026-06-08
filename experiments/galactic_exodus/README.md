@@ -10,6 +10,12 @@ It is not the formal TBX application implementation. The future TBX-side impleme
 python experiments/galactic_exodus/simulate.py --seed 42 --rift-density 0.10
 ```
 
+Run the multi-seed Phase 0 metrics report with:
+
+```bash
+python experiments/galactic_exodus/metrics.py --seed-start 1 --seed-count 1000 --rift-density 0.10 --resource-count 3
+```
+
 ## Terrain Costs
 
 The baseline path analysis treats movement as four-directional (`N/E/S/W`) on the 8x8 grid.
@@ -85,10 +91,41 @@ Classification rules:
 
 `ACCEPT` is only a minimal candidate verdict. It does not mean the map is already proven fun, balanced, or final-quality.
 
+## Batch Metrics
+
+`metrics.py` evaluates a contiguous seed range under fixed `rift_density` and `resource_count`.
+The output is deterministic for the same inputs because each map and rift set is derived from the numeric seed.
+
+Required inputs:
+
+- `--seed-start`: first seed in the contiguous range
+- `--seed-count`: number of seeds to execute
+- `--rift-density`: shared fault-line density for the whole batch
+- `--resource-count`: shared resource count for the whole batch
+
+The text report includes:
+
+- verdict counts and ratios
+- `S_to_H_cost` min / median / p90 / max
+- `S_to_H_steps` min / median / p90 / max
+- `base_is_mandatory` counts and ratios
+- `base_route_advantage_raw` negative / zero / positive / unavailable counts and ratios
+
+`S_to_H_cost` and `S_to_H_steps` exclude unreachable runs from the distribution statistics and show those runs as `excluded_unreachable`.
+
+`base_route_advantage_raw` means:
+
+- negative: the best route through `B` is worse than the best route that avoids `B`
+- zero: routing through `B` and avoiding `B` tie on total cost
+- positive: routing through `B` is cheaper than avoiding `B`
+- unavailable: either the route via `B` or the route without `B` does not exist
+
+`p90` uses the nearest-rank rule on the sorted reachable samples.
+
 ## Tests
 
 Run the Python experiment tests with the standard library `unittest` runner:
 
 ```bash
-python -m unittest experiments.galactic_exodus.test_simulate
+python -m unittest experiments.galactic_exodus.test_simulate experiments.galactic_exodus.test_metrics
 ```
