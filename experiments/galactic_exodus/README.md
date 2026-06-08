@@ -75,6 +75,37 @@ rift_count = round(112 * rift_density)
 
 利用できない指標は `N/A` と表示されます。
 
+続いて `COST CONTRIBUTIONS` セクションで、同じ `GalacticMap` に対する全情報あり基準分析を出力します。ここでは地形配置と `S/H/B/R` 配置を固定したまま、経路計算条件だけを切り替えます。
+
+- A: `plain`
+  - 断層なし
+  - 移動先記号に関係なく、1 移動ごとにコスト 1
+- B: `terrain_only`
+  - 断層なし
+  - 現行の地形コスト表を使用
+- C: `full`
+  - 生成済み断層あり
+  - 現行の地形コスト表を使用
+
+開始地点 `S` のコストは、A/B/C のどれでも加算しません。
+
+`COST CONTRIBUTIONS` セクションには次の 5 指標が含まれます。
+
+- `plain_cost`
+  - A の `S -> H` 最小コスト
+- `terrain_only_cost`
+  - B の `S -> H` 最小コスト
+- `full_cost`
+  - C の `S -> H` 最小コスト
+- `terrain_extra_cost`
+  - `terrain_only_cost - plain_cost`
+  - 地形コスト差だけで基準経路にどれだけ追加消費が生じるか
+- `rift_detour_cost`
+  - `full_cost - terrain_only_cost`
+  - 現行地形上で断層を加えたことでどれだけ追加消費が生じるか
+
+`full` 条件だけは断層により到達不能になり得ます。その場合は `full_cost` と `rift_detour_cost` を内部では `None` とし、レポートでは `N/A` と表示します。`plain_cost`、`terrain_only_cost`、`terrain_extra_cost` は、その場合でも数値のまま保持されます。
+
 ## verdict の判定規則
 
 verdict の優先順位は次のとおりです。

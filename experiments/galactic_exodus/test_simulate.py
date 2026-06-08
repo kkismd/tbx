@@ -11,6 +11,27 @@ def filled_cells(symbol: str = ".") -> simulate.Cells:
     }
 
 
+def make_map(
+    *,
+    cells: simulate.Cells,
+    b_position: simulate.Position = (4, 4),
+    rift_edges: tuple[simulate.Edge, ...] = (),
+) -> simulate.GalacticMap:
+    map_cells = dict(cells)
+    map_cells[simulate.SPECIAL_S] = "S"
+    map_cells[simulate.SPECIAL_H] = "H"
+    map_cells[b_position] = "B"
+    return simulate.GalacticMap(
+        seed=0,
+        resource_count=0,
+        rift_density=0.0,
+        b_position=b_position,
+        r_positions=[],
+        rift_edges=rift_edges,
+        cells=map_cells,
+    )
+
+
 class TerrainCostTests(unittest.TestCase):
     def test_terrain_cost_table_and_unknown_symbol(self) -> None:
         self.assertEqual(simulate.terrain_cost("."), 1)
@@ -24,6 +45,19 @@ class TerrainCostTests(unittest.TestCase):
 
         with self.assertRaisesRegex(ValueError, "unknown terrain symbol"):
             simulate.terrain_cost("?")
+
+    def test_plain_movement_cost_is_one_for_all_known_symbols_and_rejects_unknown(self) -> None:
+        self.assertEqual(simulate.plain_movement_cost("."), 1)
+        self.assertEqual(simulate.plain_movement_cost("N"), 1)
+        self.assertEqual(simulate.plain_movement_cost("A"), 1)
+        self.assertEqual(simulate.plain_movement_cost("@"), 1)
+        self.assertEqual(simulate.plain_movement_cost("B"), 1)
+        self.assertEqual(simulate.plain_movement_cost("R"), 1)
+        self.assertEqual(simulate.plain_movement_cost("S"), 1)
+        self.assertEqual(simulate.plain_movement_cost("H"), 1)
+
+        with self.assertRaisesRegex(ValueError, "unknown terrain symbol"):
+            simulate.plain_movement_cost("?")
 
 
 class NeighborTests(unittest.TestCase):
@@ -117,6 +151,21 @@ class ShortestPathTests(unittest.TestCase):
 
         self.assertEqual(result, simulate.PathResult(cost=4, steps=4))
 
+    def test_shortest_path_can_use_plain_cost_function(self) -> None:
+        cells = filled_cells(".")
+        cells[(2, 1)] = "A"
+        cells[(3, 1)] = "A"
+        cells[(4, 1)] = "H"
+
+        result = simulate.shortest_path(
+            cells,
+            (1, 1),
+            (4, 1),
+            cost_function=simulate.plain_movement_cost,
+        )
+
+        self.assertEqual(result, simulate.PathResult(cost=3, steps=3))
+
 
 class RiftGenerationTests(unittest.TestCase):
     def test_rift_count_uses_total_undirected_edges(self) -> None:
@@ -180,6 +229,100 @@ class AnalysisAndOutputTests(unittest.TestCase):
         self.assertEqual(analysis.base_route_advantage_raw, 0)
         self.assertFalse(analysis.base_is_mandatory)
         self.assertEqual(simulate.classify_verdict(analysis), "ACCEPT")
+
+    def test_cost_contributions_are_zero_on_plain_map_without_rifts(self) -> None:
+        galactic_map = make_map(cells=filled_cells("."))
+
+        analysis = simulate.analyze_cost_contributions(galactic_map)
+
+        self.assertEqual(
+            analysis,
+            simulate.CostContributionAnalysis(
+                plain_cost=14,
+                terrain_only_cost=14,
+                full_cost=14,
+                terrain_extra_cost=0,
+                rift_detour_cost=0,
+            ),
+        )
+
+    def test_cost_contributions_report_positive_terrain_extra_cost(self) -> None:
+        cells = filled_cells(".")
+        for y in range(1, simulate.HEIGHT + 1):
+            cells[(4, y)] = "A"
+        galactic_map = make_map(cells=cells, b_position=(5, 4))
+
+        analysis = simulate.analyze_cost_contributions(galactic_map)
+
+        self.assertEqual(analysis.plain_cost, 14)
+        self.assertEqual(analysis.terrain_only_cost, 16)
+        self.assertEqual(analysis.full_cost, 16)
+        self.assertEqual(analysis.terrain_extra_cost, 2)
+        self.assertEqual(analysis.rift_detour_cost, 0)
+
+    def test_cost_contributions_report_positive_rift_detour_cost(self) -> None:
+        blocked_edges = (
+            simulate.normalize_edge((1, 4), (2, 4)),
+            simulate.normalize_edge((3, 4), (4, 4)),
+            simulate.normalize_edge((3, 6), (3, 7)),
+            simulate.normalize_edge((6, 6), (7, 6)),
+            simulate.normalize_edge((6, 7), (7, 7)),
+            simulate.normalize_edge((7, 1), (7, 2)),
+            simulate.normalize_edge((7, 6), (7, 7)),
+            simulate.normalize_edge((7, 8), (8, 8)),
+            simulate.normalize_edge((8, 6), (8, 7)),
+        )
+        galactic_map = make_map(cells=filled_cells("."), rift_edges=blocked_edges)
+
+        analysis = simulate.analyze_cost_contributions(galactic_map)
+
+        self.assertEqual(analysis.plain_cost, 14)
+        self.assertEqual(analysis.terrain_only_cost, 14)
+        self.assertEqual(analysis.full_cost, 16)
+        self.assertEqual(analysis.terrain_extra_cost, 0)
+        self.assertEqual(analysis.rift_detour_cost, 2)
+
+    def test_cost_contributions_report_zero_rift_detour_when_rifts_do_not_change_best_cost(self) -> None:
+        blocked_edges = (
+            simulate.normalize_edge((8, 1), (8, 2)),
+        )
+        galactic_map = make_map(cells=filled_cells("."), rift_edges=blocked_edges)
+
+        analysis = simulate.analyze_cost_contributions(galactic_map)
+
+        self.assertEqual(analysis.full_cost, 14)
+        self.assertEqual(analysis.rift_detour_cost, 0)
+
+    def test_cost_contributions_keep_plain_and_terrain_costs_when_full_route_is_unreachable(self) -> None:
+        blocked_edges = (
+            simulate.normalize_edge(simulate.SPECIAL_S, (2, 1)),
+            simulate.normalize_edge(simulate.SPECIAL_S, (1, 2)),
+        )
+        galactic_map = make_map(cells=filled_cells("."), rift_edges=blocked_edges)
+
+        analysis = simulate.analyze_cost_contributions(galactic_map)
+
+        self.assertEqual(analysis.plain_cost, 14)
+        self.assertEqual(analysis.terrain_only_cost, 14)
+        self.assertIsNone(analysis.full_cost)
+        self.assertEqual(analysis.terrain_extra_cost, 0)
+        self.assertIsNone(analysis.rift_detour_cost)
+
+    def test_seed_42_cost_contributions_are_stable(self) -> None:
+        galactic_map = simulate.generate_map(42, 3)
+
+        analysis = simulate.analyze_cost_contributions(galactic_map)
+
+        self.assertEqual(
+            analysis,
+            simulate.CostContributionAnalysis(
+                plain_cost=14,
+                terrain_only_cost=15,
+                full_cost=17,
+                terrain_extra_cost=1,
+                rift_detour_cost=2,
+            ),
+        )
 
     def test_analyze_paths_marks_base_as_mandatory_when_home_is_only_reachable_via_base(self) -> None:
         cells = filled_cells(".")
@@ -246,6 +389,7 @@ class AnalysisAndOutputTests(unittest.TestCase):
         self.assertIn("\nPARAMETERS\n", output)
         self.assertIn("\nMAP\n", output)
         self.assertIn("\nCOSTS\n", output)
+        self.assertIn("\nCOST CONTRIBUTIONS\n", output)
         self.assertIn("\nVERDICT\n", output)
         self.assertIn("  map_id: seed-42-rift-0.10-res-3", output)
         self.assertIn("  B: (4,4)", output)
@@ -257,6 +401,11 @@ class AnalysisAndOutputTests(unittest.TestCase):
         self.assertIn("  S_to_H_via_B_cost: 17", output)
         self.assertIn("  S_to_H_without_B_cost: 17", output)
         self.assertIn("  base_is_mandatory: no", output)
+        self.assertIn("  plain_cost: 14", output)
+        self.assertIn("  terrain_only_cost: 15", output)
+        self.assertIn("  full_cost: 17", output)
+        self.assertIn("  terrain_extra_cost: 1", output)
+        self.assertIn("  rift_detour_cost: 2", output)
         self.assertIn("  verdict: ACCEPT", output)
         self.assertIn("  priority_1: REJECT_TOO_HARD", output)
         self.assertIn("  priority_2: REJECT_BASE_MANDATORY", output)
@@ -319,6 +468,11 @@ class AnalysisAndOutputTests(unittest.TestCase):
         self.assertIn("  S_to_H_without_B_cost: N/A", output)
         self.assertIn("  base_route_advantage_raw: N/A", output)
         self.assertIn("  base_is_mandatory: no", output)
+        self.assertIn("  plain_cost: 14", output)
+        self.assertIn("  terrain_only_cost: 14", output)
+        self.assertIn("  full_cost: N/A", output)
+        self.assertIn("  terrain_extra_cost: 0", output)
+        self.assertIn("  rift_detour_cost: N/A", output)
         self.assertIn("  verdict: REJECT_TOO_HARD", output)
 
 
