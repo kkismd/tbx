@@ -256,11 +256,38 @@ class AnalysisAndOutputTests(unittest.TestCase):
         self.assertIn("  B_to_H_cost: 9", output)
         self.assertIn("  S_to_H_via_B_cost: 17", output)
         self.assertIn("  S_to_H_without_B_cost: 17", output)
+        self.assertIn("  base_is_mandatory: no", output)
         self.assertIn("  verdict: ACCEPT", output)
         self.assertIn("  priority_1: REJECT_TOO_HARD", output)
         self.assertIn("  priority_2: REJECT_BASE_MANDATORY", output)
         self.assertIn("  priority_3: ACCEPT", output)
         self.assertIn("  note: ACCEPT is a minimal candidate verdict, not a final fun/balance judgment.", output)
+
+    def test_format_output_marks_mandatory_base_with_yes(self) -> None:
+        cells = filled_cells(".")
+        b_position = (2, 1)
+        blocked_edges = (
+            simulate.normalize_edge(simulate.SPECIAL_S, (1, 2)),
+            simulate.normalize_edge((2, 2), (3, 2)),
+            simulate.normalize_edge((3, 1), (3, 2)),
+        )
+        cells[simulate.SPECIAL_S] = "S"
+        cells[simulate.SPECIAL_H] = "H"
+        cells[b_position] = "B"
+        galactic_map = simulate.GalacticMap(
+            seed=9,
+            resource_count=0,
+            rift_density=0.03,
+            b_position=b_position,
+            r_positions=[],
+            rift_edges=blocked_edges,
+            cells=cells,
+        )
+
+        output = simulate.format_output(galactic_map)
+
+        self.assertIn("  base_is_mandatory: yes", output)
+        self.assertIn("  verdict: REJECT_BASE_MANDATORY", output)
 
     def test_format_output_uses_na_for_unreachable_segments(self) -> None:
         cells = filled_cells(".")
@@ -291,6 +318,7 @@ class AnalysisAndOutputTests(unittest.TestCase):
         self.assertIn("  S_to_H_via_B_cost: N/A", output)
         self.assertIn("  S_to_H_without_B_cost: N/A", output)
         self.assertIn("  base_route_advantage_raw: N/A", output)
+        self.assertIn("  base_is_mandatory: no", output)
         self.assertIn("  verdict: REJECT_TOO_HARD", output)
 
 
