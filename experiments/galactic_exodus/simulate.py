@@ -14,6 +14,8 @@ WIDTH = 8
 HEIGHT = 8
 DEFAULT_SEED = 42
 DEFAULT_RESOURCE_COUNT = 3
+DEFAULT_RIFT_DENSITY = 0.10
+TOTAL_UNDIRECTED_EDGES = WIDTH * (HEIGHT - 1) + HEIGHT * (WIDTH - 1)
 
 SPECIAL_S = (1, 1)
 SPECIAL_H = (8, 8)
@@ -33,14 +35,17 @@ TERRAIN_COSTS = {
 
 Position: TypeAlias = tuple[int, int]
 Cells: TypeAlias = dict[Position, str]
+Edge: TypeAlias = tuple[Position, Position]
 
 
 @dataclass(frozen=True)
 class GalacticMap:
     seed: int
     resource_count: int
+    rift_density: float
     b_position: Position
     r_positions: list[Position]
+    rift_edges: tuple[Edge, ...]
     cells: Cells
 
 
@@ -69,6 +74,12 @@ def parse_args() -> argparse.Namespace:
         default=DEFAULT_RESOURCE_COUNT,
         help="Number of resource objects to place (default: 3).",
     )
+    parser.add_argument(
+        "--rift-density",
+        type=float,
+        default=DEFAULT_RIFT_DENSITY,
+        help="Density of impassable fault-line edges (default: 0.10).",
+    )
     return parser.parse_args()
 
 
@@ -80,8 +91,14 @@ def validate_resource_count(resource_count: int) -> None:
         raise ValueError(f"resource-count must be at most {available_cells}")
 
 
-def generate_map(seed: int, resource_count: int) -> GalacticMap:
+def validate_rift_density(rift_density: float) -> None:
+    if not 0.0 <= rift_density <= 1.0:
+        raise ValueError("rift-density must be between 0.0 and 1.0")
+
+
+def generate_map(seed: int, resource_count: int, rift_density: float = DEFAULT_RIFT_DENSITY) -> GalacticMap:
     validate_resource_count(resource_count)
+    validate_rift_density(rift_density)
 
     rng = random.Random(seed)
     b_position = rng.choice(CENTRAL_B_CANDIDATES)
@@ -106,11 +123,15 @@ def generate_map(seed: int, resource_count: int) -> GalacticMap:
     for position in r_positions:
         cells[position] = "R"
 
+    rift_edges = sample_rift_edges(seed, rift_density)
+
     return GalacticMap(
         seed=seed,
         resource_count=resource_count,
+        rift_density=rift_density,
         b_position=b_position,
         r_positions=sorted(r_positions, key=lambda pos: (-pos[1], pos[0])),
+        rift_edges=rift_edges,
         cells=cells,
     )
 
@@ -141,11 +162,45 @@ def neighbors(position: Position) -> list[Position]:
     return adjacent
 
 
-def shortest_path(cells: Cells, start: Position, goal: Position) -> PathResult | None:
+def normalize_edge(start: Position, goal: Position) -> Edge:
+    return (start, goal) if start <= goal else (goal, start)
+
+
+def undirected_adjacent_edges() -> list[Edge]:
+    edges: list[Edge] = []
+    for y in range(1, HEIGHT + 1):
+        for x in range(1, WIDTH + 1):
+            position = (x, y)
+            for neighbor in ((x + 1, y), (x, y + 1)):
+                if 1 <= neighbor[0] <= WIDTH and 1 <= neighbor[1] <= HEIGHT:
+                    edges.append((position, neighbor))
+    return edges
+
+
+def rift_count_for_density(rift_density: float) -> int:
+    validate_rift_density(rift_density)
+    return round(TOTAL_UNDIRECTED_EDGES * rift_density)
+
+
+def sample_rift_edges(seed: int, rift_density: float) -> tuple[Edge, ...]:
+    rift_count = rift_count_for_density(rift_density)
+    edges = undirected_adjacent_edges()
+    rng = random.Random(f"{seed}:rift")
+    selected = rng.sample(edges, rift_count)
+    return tuple(sorted(selected))
+
+
+def shortest_path(
+    cells: Cells,
+    start: Position,
+    goal: Position,
+    blocked_edges: set[Edge] | None = None,
+) -> PathResult | None:
     if start not in cells:
         raise ValueError(f"start position is outside map cells: {start}")
     if goal not in cells:
         raise ValueError(f"goal position is outside map cells: {goal}")
+    blocked = blocked_edges or set()
 
     queue: list[tuple[int, int, Position]] = [(0, 0, start)]
     best: dict[Position, tuple[int, int]] = {start: (0, 0)}
@@ -158,6 +213,8 @@ def shortest_path(cells: Cells, start: Position, goal: Position) -> PathResult |
             return PathResult(cost=cost, steps=steps)
 
         for neighbor in neighbors(position):
+            if normalize_edge(position, neighbor) in blocked:
+                continue
             candidate = (cost + terrain_cost(cells[neighbor]), steps + 1)
             previous = best.get(neighbor)
             if previous is None or candidate < previous:
@@ -168,9 +225,10 @@ def shortest_path(cells: Cells, start: Position, goal: Position) -> PathResult |
 
 
 def analyze_paths(galactic_map: GalacticMap) -> PathAnalysis:
-    best_route = shortest_path(galactic_map.cells, SPECIAL_S, SPECIAL_H)
-    to_base = shortest_path(galactic_map.cells, SPECIAL_S, galactic_map.b_position)
-    base_to_goal = shortest_path(galactic_map.cells, galactic_map.b_position, SPECIAL_H)
+    blocked_edges = set(galactic_map.rift_edges)
+    best_route = shortest_path(galactic_map.cells, SPECIAL_S, SPECIAL_H, blocked_edges)
+    to_base = shortest_path(galactic_map.cells, SPECIAL_S, galactic_map.b_position, blocked_edges)
+    base_to_goal = shortest_path(galactic_map.cells, galactic_map.b_position, SPECIAL_H, blocked_edges)
     via_base = None
     if to_base is not None and base_to_goal is not None:
         via_base = to_base.cost + base_to_goal.cost
@@ -222,6 +280,8 @@ def format_output(galactic_map: GalacticMap) -> str:
         render_map(galactic_map.cells),
         "",
         "COSTS:",
+        f"  rift_density: {galactic_map.rift_density:.2f}",
+        f"  rift_count: {len(galactic_map.rift_edges)}",
         f"  reachable: {'yes' if analysis.reachable else 'no'}",
         f"  best_cost: {format_optional_metric(analysis.best_cost)}",
         f"  best_path_length: {format_optional_metric(analysis.best_path_length)}",
@@ -235,7 +295,7 @@ def format_output(galactic_map: GalacticMap) -> str:
 def main() -> int:
     args = parse_args()
     try:
-        galactic_map = generate_map(args.seed, args.resource_count)
+        galactic_map = generate_map(args.seed, args.resource_count, args.rift_density)
     except ValueError as exc:
         raise SystemExit(f"error: {exc}") from exc
     print(format_output(galactic_map))
