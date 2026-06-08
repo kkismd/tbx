@@ -63,6 +63,9 @@ class PathAnalysis:
     cost_to_base: int | None
     cost_base_to_goal: int | None
     best_cost_via_base: int | None
+    best_cost_without_base: int | None
+    base_route_advantage_raw: int | None
+    base_is_mandatory: bool
 
 
 def parse_args() -> argparse.Namespace:
@@ -195,12 +198,16 @@ def shortest_path(
     start: Position,
     goal: Position,
     blocked_edges: set[Edge] | None = None,
+    forbidden_nodes: set[Position] | None = None,
 ) -> PathResult | None:
     if start not in cells:
         raise ValueError(f"start position is outside map cells: {start}")
     if goal not in cells:
         raise ValueError(f"goal position is outside map cells: {goal}")
     blocked = blocked_edges or set()
+    forbidden = forbidden_nodes or set()
+    if start in forbidden or goal in forbidden:
+        return None
 
     queue: list[tuple[int, int, Position]] = [(0, 0, start)]
     best: dict[Position, tuple[int, int]] = {start: (0, 0)}
@@ -213,6 +220,8 @@ def shortest_path(
             return PathResult(cost=cost, steps=steps)
 
         for neighbor in neighbors(position):
+            if neighbor in forbidden:
+                continue
             if normalize_edge(position, neighbor) in blocked:
                 continue
             candidate = (cost + terrain_cost(cells[neighbor]), steps + 1)
@@ -229,9 +238,20 @@ def analyze_paths(galactic_map: GalacticMap) -> PathAnalysis:
     best_route = shortest_path(galactic_map.cells, SPECIAL_S, SPECIAL_H, blocked_edges)
     to_base = shortest_path(galactic_map.cells, SPECIAL_S, galactic_map.b_position, blocked_edges)
     base_to_goal = shortest_path(galactic_map.cells, galactic_map.b_position, SPECIAL_H, blocked_edges)
+    without_base = shortest_path(
+        galactic_map.cells,
+        SPECIAL_S,
+        SPECIAL_H,
+        blocked_edges,
+        forbidden_nodes={galactic_map.b_position},
+    )
     via_base = None
     if to_base is not None and base_to_goal is not None:
         via_base = to_base.cost + base_to_goal.cost
+    advantage = None
+    if via_base is not None and without_base is not None:
+        advantage = without_base.cost - via_base
+    base_is_mandatory = without_base is None and via_base is not None
 
     return PathAnalysis(
         reachable=best_route is not None,
@@ -240,6 +260,9 @@ def analyze_paths(galactic_map: GalacticMap) -> PathAnalysis:
         cost_to_base=None if to_base is None else to_base.cost,
         cost_base_to_goal=None if base_to_goal is None else base_to_goal.cost,
         best_cost_via_base=via_base,
+        best_cost_without_base=None if without_base is None else without_base.cost,
+        base_route_advantage_raw=advantage,
+        base_is_mandatory=base_is_mandatory,
     )
 
 
@@ -288,6 +311,9 @@ def format_output(galactic_map: GalacticMap) -> str:
         f"  cost_to_base: {format_optional_metric(analysis.cost_to_base)}",
         f"  cost_base_to_goal: {format_optional_metric(analysis.cost_base_to_goal)}",
         f"  best_cost_via_base: {format_optional_metric(analysis.best_cost_via_base)}",
+        f"  best_cost_without_base: {format_optional_metric(analysis.best_cost_without_base)}",
+        f"  base_route_advantage_raw: {format_optional_metric(analysis.base_route_advantage_raw)}",
+        f"  base_is_mandatory: {'yes' if analysis.base_is_mandatory else 'no'}",
     ]
     return "\n".join(lines)
 

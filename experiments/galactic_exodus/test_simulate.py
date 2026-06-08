@@ -108,6 +108,15 @@ class ShortestPathTests(unittest.TestCase):
 
         self.assertIsNone(result)
 
+    def test_shortest_path_can_forbid_intermediate_nodes(self) -> None:
+        cells = filled_cells(".")
+        cells[(2, 1)] = "B"
+        cells[(3, 1)] = "H"
+
+        result = simulate.shortest_path(cells, (1, 1), (3, 1), forbidden_nodes={(2, 1)})
+
+        self.assertEqual(result, simulate.PathResult(cost=4, steps=4))
+
 
 class RiftGenerationTests(unittest.TestCase):
     def test_rift_count_uses_total_undirected_edges(self) -> None:
@@ -167,6 +176,38 @@ class AnalysisAndOutputTests(unittest.TestCase):
         self.assertEqual(analysis.cost_base_to_goal, 9)
         self.assertEqual(analysis.best_cost_via_base, 17)
         self.assertEqual(analysis.best_cost_via_base, analysis.cost_to_base + analysis.cost_base_to_goal)
+        self.assertEqual(analysis.best_cost_without_base, 17)
+        self.assertEqual(analysis.base_route_advantage_raw, 0)
+        self.assertFalse(analysis.base_is_mandatory)
+
+    def test_analyze_paths_marks_base_as_mandatory_when_home_is_only_reachable_via_base(self) -> None:
+        cells = filled_cells(".")
+        b_position = (2, 1)
+        blocked_edges = (
+            simulate.normalize_edge(simulate.SPECIAL_S, (1, 2)),
+            simulate.normalize_edge((2, 2), (3, 2)),
+            simulate.normalize_edge((3, 1), (3, 2)),
+        )
+        cells[simulate.SPECIAL_S] = "S"
+        cells[simulate.SPECIAL_H] = "H"
+        cells[b_position] = "B"
+        galactic_map = simulate.GalacticMap(
+            seed=9,
+            resource_count=0,
+            rift_density=0.03,
+            b_position=b_position,
+            r_positions=[],
+            rift_edges=blocked_edges,
+            cells=cells,
+        )
+
+        analysis = simulate.analyze_paths(galactic_map)
+
+        self.assertTrue(analysis.reachable)
+        self.assertEqual(analysis.best_cost_via_base, analysis.cost_to_base + analysis.cost_base_to_goal)
+        self.assertIsNone(analysis.best_cost_without_base)
+        self.assertIsNone(analysis.base_route_advantage_raw)
+        self.assertTrue(analysis.base_is_mandatory)
 
     def test_format_output_includes_costs_section(self) -> None:
         output = simulate.format_output(simulate.generate_map(42, 3))
@@ -180,6 +221,9 @@ class AnalysisAndOutputTests(unittest.TestCase):
         self.assertIn("  cost_to_base: 8", output)
         self.assertIn("  cost_base_to_goal: 9", output)
         self.assertIn("  best_cost_via_base: 17", output)
+        self.assertIn("  best_cost_without_base: 17", output)
+        self.assertIn("  base_route_advantage_raw: 0", output)
+        self.assertIn("  base_is_mandatory: no", output)
 
     def test_format_output_uses_na_for_unreachable_segments(self) -> None:
         cells = filled_cells(".")
@@ -205,6 +249,9 @@ class AnalysisAndOutputTests(unittest.TestCase):
         self.assertIn("  cost_to_base: N/A", output)
         self.assertIn("  cost_base_to_goal: N/A", output)
         self.assertIn("  best_cost_via_base: N/A", output)
+        self.assertIn("  best_cost_without_base: N/A", output)
+        self.assertIn("  base_route_advantage_raw: N/A", output)
+        self.assertIn("  base_is_mandatory: no", output)
 
 
 if __name__ == "__main__":
