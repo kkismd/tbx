@@ -10,6 +10,12 @@
 python experiments/galactic_exodus/simulate.py --seed 42 --rift-density 0.10
 ```
 
+複数 seed の Phase 0 統計をまとめて出す場合は、次を実行します。
+
+```bash
+python experiments/galactic_exodus/metrics.py --seed-start 1 --seed-count 1000 --rift-density 0.10 --resource-count 3
+```
+
 ## 地形コスト
 
 基準となる経路分析では、8x8 グリッド上を4方向（`N/E/S/W`）に移動します。
@@ -85,10 +91,41 @@ verdict の優先順位は次のとおりです。
 
 `ACCEPT` は最低限の候補判定にすぎません。そのマップがすでに面白い、バランスが取れている、最終品質に達していることを意味しません。
 
+## Batch Metrics
+
+`metrics.py` は、`rift_density` と `resource_count` を固定したまま、連続した seed 範囲をまとめて評価します。
+各マップと断層辺の選択は数値 seed から決定的に導出されるため、同じ入力なら出力は再現可能です。
+
+必須入力:
+
+- `--seed-start`: 連続範囲の開始 seed
+- `--seed-count`: 実行する seed 数
+- `--rift-density`: バッチ全体で共有する断層密度
+- `--resource-count`: バッチ全体で共有する資源天体数
+
+テキストレポートには次が含まれます。
+
+- verdict 件数・割合
+- `S_to_H_cost` min / median / p90 / max
+- `S_to_H_steps` min / median / p90 / max
+- `base_is_mandatory` 件数・割合
+- `base_route_advantage_raw` の negative / zero / positive / unavailable 件数・割合
+
+`S_to_H_cost` と `S_to_H_steps` は、到達不能ケースを分布統計から除外し、その件数を `excluded_unreachable` として併記します。
+
+`base_route_advantage_raw` の意味:
+
+- negative: `B` 経由の最良経路が `B` 回避の最良経路より悪い
+- zero: `B` 経由と `B` 回避の総コストが同じ
+- positive: `B` 経由のほうが `B` 回避より安い
+- unavailable: `B` 経由または `B` 回避のどちらかの経路が存在しない
+
+`p90` は、到達可能サンプルを昇順に並べたうえで nearest-rank 方式で求めます。
+
 ## テスト
 
 Python 実験環境のテストは、標準ライブラリの `unittest` で実行します。
 
 ```bash
-python -m unittest experiments.galactic_exodus.test_simulate
+python -m unittest experiments.galactic_exodus.test_simulate experiments.galactic_exodus.test_metrics
 ```
