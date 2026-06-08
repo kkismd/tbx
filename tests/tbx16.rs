@@ -20,6 +20,7 @@ struct VmSnapshot {
     dsp: Address,
     rsp: Address,
     bp: Address,
+    w: Option<Address>,
     step_counter: usize,
     call_depth: u16,
     output: Vec<u8>,
@@ -32,6 +33,7 @@ fn snapshot(vm: &Tbx16Vm) -> VmSnapshot {
         dsp: vm.registers().dsp,
         rsp: vm.registers().rsp,
         bp: vm.registers().bp,
+        w: vm.registers().w,
         step_counter: vm.step_counter(),
         call_depth: vm.call_depth(),
         output: vm.output().to_vec(),
@@ -325,15 +327,16 @@ fn return_stack_push_and_pop_moves_rsp_by_two_bytes() {
 }
 
 #[test]
-fn return_frame_is_stored_as_two_cells_in_memory() {
+fn return_frame_is_stored_as_three_cells_in_memory() {
     let mut vm = Tbx16Vm::default();
     let frame = ReturnFrame {
         return_ip: Address::new(0x3456),
         caller_bp: Address::new(0x00a0),
+        caller_w: Address::new(0x0444),
     };
 
     vm.push_return_frame(frame).unwrap();
-    assert_eq!(vm.registers().rsp, Address::new(0x0204));
+    assert_eq!(vm.registers().rsp, Address::new(0x0206));
     assert_eq!(
         vm.memory().read_cell(Address::new(0x0200)).unwrap(),
         Cell::new(0x3456)
@@ -342,15 +345,20 @@ fn return_frame_is_stored_as_two_cells_in_memory() {
         vm.memory().read_cell(Address::new(0x0202)).unwrap(),
         Cell::new(0x00a0)
     );
-    assert_eq!(vm.peek_return_cell(0).unwrap(), Cell::new(0x00a0));
+    assert_eq!(
+        vm.memory().read_cell(Address::new(0x0204)).unwrap(),
+        Cell::new(0x0444)
+    );
+    assert_eq!(vm.peek_return_cell(0).unwrap(), Cell::new(0x0444));
 }
 
 #[test]
-fn return_frame_round_trips_return_ip_and_caller_bp() {
+fn return_frame_round_trips_return_ip_caller_bp_and_caller_w() {
     let mut vm = Tbx16Vm::default();
     let frame = ReturnFrame {
         return_ip: Address::new(0x4567),
         caller_bp: Address::new(0x00c0),
+        caller_w: Address::new(0x0554),
     };
 
     vm.push_return_frame(frame).unwrap();
@@ -360,13 +368,14 @@ fn return_frame_round_trips_return_ip_and_caller_bp() {
 
 #[test]
 fn return_stack_reports_overflow_and_underflow() {
-    let region = StackRegion::new(Address::new(0x0200), Address::new(0x0204)).unwrap();
+    let region = StackRegion::new(Address::new(0x0200), Address::new(0x0206)).unwrap();
     let mut vm = Tbx16Vm::new(region).unwrap();
 
     vm.push_return_cell(Cell::new(1)).unwrap();
     vm.push_return_cell(Cell::new(2)).unwrap();
+    vm.push_return_cell(Cell::new(3)).unwrap();
     assert_eq!(
-        vm.push_return_cell(Cell::new(3)).unwrap_err(),
+        vm.push_return_cell(Cell::new(4)).unwrap_err(),
         Tbx16Error::ReturnStackOverflow
     );
 
@@ -394,15 +403,15 @@ fn invalid_return_stack_regions_are_rejected() {
 
 #[test]
 fn return_stack_capacity_matches_pushable_cell_count() {
-    let region = StackRegion::new(Address::new(0x0200), Address::new(0x0208)).unwrap();
+    let region = StackRegion::new(Address::new(0x0200), Address::new(0x020c)).unwrap();
     let vm = Tbx16Vm::new(region).unwrap();
-    assert_eq!(usize::from(region.len_bytes()) / 2, 4);
+    assert_eq!(usize::from(region.len_bytes()) / 2, 6);
     assert_eq!(vm.return_stack_region(), region);
 }
 
 #[test]
 fn return_stack_full_region_ends_with_rsp_at_region_end() {
-    let region = StackRegion::new(Address::new(0x0200), Address::new(0x0208)).unwrap();
+    let region = StackRegion::new(Address::new(0x0200), Address::new(0x020c)).unwrap();
     let mut vm = Tbx16Vm::new(region).unwrap();
 
     for i in 0..(usize::from(region.len_bytes()) / 2) {
@@ -471,10 +480,13 @@ fn primitive_registry_matches_the_m2_3b_abi_contract() {
     assert_eq!(PrimitiveId::PutChr as u16, 96);
     assert_eq!(PrimitiveId::PutDec as u16, 97);
     assert_eq!(PrimitiveId::PutStr as u16, 98);
+    assert_eq!(PrimitiveId::LoadSlot as u16, 112);
+    assert_eq!(PrimitiveId::StoreSlot as u16, 113);
 
     assert_eq!(PrimitiveId::Exit.operand(), PrimitiveOperand::Cell);
     assert_eq!(PrimitiveId::Dup.operand(), PrimitiveOperand::None);
     assert_eq!(PrimitiveId::PutDec.operand(), PrimitiveOperand::None);
+    assert_eq!(PrimitiveId::LoadSlot.operand(), PrimitiveOperand::Cell);
     assert_eq!(PrimitiveId::from_name("add"), None);
     assert_eq!(primitive_descriptor_by_name("add"), None);
     assert_eq!(PrimitiveId::try_from(Cell::new(0xffff)), Err(()));
@@ -578,6 +590,7 @@ fn entry_colon_initializes_frames_for_multiple_arities_and_locals() {
     assert_eq!(zero_vm.registers().bp, DATA_STACK_START);
     assert_eq!(zero_vm.registers().dsp, DATA_STACK_START);
     assert_eq!(zero_vm.call_depth(), 0);
+    assert_eq!(zero_vm.registers().w, Some(Address::new(CODE_START + 4)));
 
     let mut one_vm = Tbx16Vm::default();
     let mut one_image = ImageBuilder::new(CODE_START);
@@ -589,6 +602,7 @@ fn entry_colon_initializes_frames_for_multiple_arities_and_locals() {
     assert_eq!(one_vm.run(entry_xt), ExecutionOutcome::Halted);
     assert_eq!(one_vm.registers().bp, DATA_STACK_START);
     assert_eq!(one_vm.registers().dsp, Address::new(0x0082));
+    assert_eq!(one_vm.registers().w, Some(Address::new(CODE_START + 4)));
 
     let mut multi_vm = Tbx16Vm::default();
     let mut multi_image = ImageBuilder::new(CODE_START);
@@ -601,6 +615,7 @@ fn entry_colon_initializes_frames_for_multiple_arities_and_locals() {
     assert_eq!(multi_vm.run(entry_xt), ExecutionOutcome::Halted);
     assert_eq!(multi_vm.registers().bp, Address::new(0x0080));
     assert_eq!(multi_vm.registers().dsp, Address::new(0x0088));
+    assert_eq!(multi_vm.registers().w, Some(Address::new(CODE_START + 4)));
     assert_eq!(
         multi_vm.memory().read_cell(Address::new(0x0084)).unwrap(),
         Cell::new(0)
@@ -662,7 +677,8 @@ fn nested_colon_calls_build_frames_and_return_stack_layouts() {
     zero_image.load_into(&mut zero_vm);
     assert_eq!(zero_vm.run(entry_xt), ExecutionOutcome::Halted);
     assert_eq!(zero_vm.call_depth(), 1);
-    assert_eq!(zero_vm.registers().rsp, Address::new(0x0204));
+    assert_eq!(zero_vm.registers().rsp, Address::new(0x0206));
+    assert_eq!(zero_vm.registers().w, Some(Address::new(CODE_START + 4)));
     assert_eq!(
         zero_vm.memory().read_cell(Address::new(0x0200)).unwrap(),
         Cell::new(CODE_START + 20)
@@ -670,6 +686,10 @@ fn nested_colon_calls_build_frames_and_return_stack_layouts() {
     assert_eq!(
         zero_vm.memory().read_cell(Address::new(0x0202)).unwrap(),
         Cell::new(DATA_STACK_START.get())
+    );
+    assert_eq!(
+        zero_vm.memory().read_cell(Address::new(0x0204)).unwrap(),
+        Cell::new(entry_xt.raw())
     );
 
     let mut one_vm = Tbx16Vm::default();
@@ -685,6 +705,7 @@ fn nested_colon_calls_build_frames_and_return_stack_layouts() {
     assert_eq!(one_vm.call_depth(), 1);
     assert_eq!(one_vm.registers().bp, DATA_STACK_START);
     assert_eq!(one_vm.registers().dsp, Address::new(0x0086));
+    assert_eq!(one_vm.registers().w, Some(Address::new(CODE_START + 4)));
     assert_eq!(
         one_vm.memory().read_cell(Address::new(0x0082)).unwrap(),
         Cell::new(0)
@@ -708,6 +729,7 @@ fn nested_colon_calls_build_frames_and_return_stack_layouts() {
     assert_eq!(multi_vm.call_depth(), 1);
     assert_eq!(multi_vm.registers().bp, DATA_STACK_START);
     assert_eq!(multi_vm.registers().dsp, Address::new(0x0086));
+    assert_eq!(multi_vm.registers().w, Some(Address::new(CODE_START + 4)));
     assert_eq!(
         multi_vm.memory().read_cell(Address::new(0x0084)).unwrap(),
         Cell::new(0)
@@ -716,7 +738,7 @@ fn nested_colon_calls_build_frames_and_return_stack_layouts() {
 
 #[test]
 fn nested_calls_account_for_return_stack_capacity_and_depth() {
-    let region = StackRegion::new(Address::new(0x0200), Address::new(0x0204)).unwrap();
+    let region = StackRegion::new(Address::new(0x0200), Address::new(0x0206)).unwrap();
     let mut exact_vm = Tbx16Vm::new(region).unwrap();
     let mut exact_image = ImageBuilder::new(CODE_START);
     let halt_xt = exact_image.primitive(PrimitiveId::Halt);
@@ -751,6 +773,10 @@ fn nested_calls_account_for_return_stack_capacity_and_depth() {
     assert_eq!(overflow_vm.registers().bp, DATA_STACK_START);
     assert_eq!(overflow_vm.registers().dsp, DATA_STACK_START);
     assert_eq!(overflow_vm.registers().rsp, region.end());
+    assert_eq!(
+        overflow_vm.registers().w,
+        Some(Address::new(CODE_START + 12))
+    );
     assert_eq!(overflow_vm.call_depth(), 1);
     assert_eq!(
         overflow_vm
@@ -765,6 +791,13 @@ fn nested_calls_account_for_return_stack_capacity_and_depth() {
             .read_cell(Address::new(0x0202))
             .unwrap(),
         Cell::new(DATA_STACK_START.get())
+    );
+    assert_eq!(
+        overflow_vm
+            .memory()
+            .read_cell(Address::new(0x0204))
+            .unwrap(),
+        Cell::new(entry_xt.raw())
     );
     assert_eq!(before.step_counter, 0);
 }
@@ -824,10 +857,10 @@ fn three_nested_calls_match_return_stack_usage_and_call_depth() {
 
     assert_eq!(vm.run(entry_xt), ExecutionOutcome::Halted);
     assert_eq!(vm.call_depth(), 3);
-    assert_eq!(vm.registers().rsp, Address::new(0x020c));
+    assert_eq!(vm.registers().rsp, Address::new(0x0212));
     assert_eq!(
         vm.registers().rsp.get() - DEFAULT_RETURN_STACK_START.get(),
-        vm.call_depth() * 4
+        vm.call_depth() * 6
     );
 }
 
@@ -1575,6 +1608,235 @@ fn putstr_rejects_end_crossing_without_mutation() {
 }
 
 #[test]
+fn load_and_store_slot_access_argument_and_local_cells() {
+    let mut vm = Tbx16Vm::default();
+    let mut image = ImageBuilder::new(CODE_START);
+    let load_slot_xt = image.primitive(PrimitiveId::LoadSlot);
+    let store_slot_xt = image.primitive(PrimitiveId::StoreSlot);
+    let exit_xt = image.primitive(PrimitiveId::Exit);
+    let entry_xt = image.colon_word(1, 2);
+    image.emit_xt(load_slot_xt);
+    image.emit_cell(Cell::new(0));
+    image.emit_xt(store_slot_xt);
+    image.emit_cell(Cell::new(2));
+    image.emit_xt(load_slot_xt);
+    image.emit_cell(Cell::new(2));
+    image.emit_xt(exit_xt);
+    image.emit_cell(Cell::new(1));
+    image.load_into(&mut vm);
+    vm.push_data_cell(Cell::new(0x3344)).unwrap();
+
+    assert_eq!(vm.run(entry_xt), ExecutionOutcome::Returned);
+    assert_eq!(vm.peek_data_cell(0).unwrap(), Cell::new(0x3344));
+    assert_eq!(
+        vm.memory().read_cell(Address::new(0x0084)).unwrap(),
+        Cell::new(0x3344)
+    );
+}
+
+#[test]
+fn load_slot_validates_slot_bounds_from_current_w_metadata() {
+    let mut vm = Tbx16Vm::default();
+    let mut image = ImageBuilder::new(CODE_START);
+    let load_slot_xt = image.primitive(PrimitiveId::LoadSlot);
+    let entry_xt = image.colon_word(1, 0);
+    image.emit_xt(load_slot_xt);
+    image.emit_cell(Cell::new(1));
+    image.load_into(&mut vm);
+    vm.push_data_cell(Cell::new(0x1111)).unwrap();
+
+    assert_eq!(
+        vm.run(entry_xt),
+        ExecutionOutcome::Trapped(Tbx16Error::InvalidFrameSlot {
+            slot_index: 1,
+            slot_count: 1,
+        })
+    );
+    assert_eq!(vm.registers().w, Some(Address::new(CODE_START + 4)));
+    assert_eq!(vm.registers().ip, Some(Address::new(CODE_START + 10)));
+}
+
+#[test]
+fn load_and_store_slot_require_an_active_colon_frame() {
+    for primitive in [PrimitiveId::LoadSlot, PrimitiveId::StoreSlot] {
+        let mut vm = Tbx16Vm::default();
+        let mut image = ImageBuilder::new(CODE_START);
+        let xt = image.primitive(primitive);
+        image.emit_cell(Cell::new(0));
+        image.load_into(&mut vm);
+        vm.set_instruction_pointer(Address::new(CODE_START + 4))
+            .unwrap();
+        let before = snapshot(&vm);
+
+        assert_eq!(
+            vm.run(xt),
+            ExecutionOutcome::Trapped(Tbx16Error::InvalidExecutionState)
+        );
+        let after = snapshot(&vm);
+        assert_eq!(after.ip, before.ip);
+        assert_eq!(after.dsp, before.dsp);
+        assert_eq!(after.rsp, before.rsp);
+        assert_eq!(after.bp, before.bp);
+        assert_eq!(after.w, before.w);
+        assert_eq!(after.call_depth, before.call_depth);
+        assert_eq!(after.memory, before.memory);
+        assert_eq!(after.step_counter, 1);
+    }
+
+    let mut threaded_vm = Tbx16Vm::default();
+    let mut image = ImageBuilder::new(CODE_START);
+    let load_slot_xt = image.primitive(PrimitiveId::LoadSlot);
+    image.emit_xt(load_slot_xt);
+    image.emit_cell(Cell::new(0));
+    image.load_into(&mut threaded_vm);
+    let before = snapshot(&threaded_vm);
+    assert_eq!(
+        threaded_vm.run_threaded(Address::new(CODE_START + 4)),
+        ExecutionOutcome::Trapped(Tbx16Error::InvalidExecutionState)
+    );
+    let after = snapshot(&threaded_vm);
+    assert_eq!(after.dsp, before.dsp);
+    assert_eq!(after.rsp, before.rsp);
+    assert_eq!(after.bp, before.bp);
+    assert_eq!(after.w, before.w);
+    assert_eq!(after.memory, before.memory);
+    assert_eq!(after.step_counter, 1);
+}
+
+#[test]
+fn w_tracks_entry_callee_and_caller_colon_contexts() {
+    let mut callee_halt_vm = Tbx16Vm::default();
+    let mut callee_halt = ImageBuilder::new(CODE_START);
+    let halt_xt = callee_halt.primitive(PrimitiveId::Halt);
+    let callee_xt = callee_halt.colon_word(0, 0);
+    callee_halt.emit_xt(halt_xt);
+    let entry_xt = callee_halt.colon_word(0, 0);
+    callee_halt.emit_xt(callee_xt);
+    callee_halt.load_into(&mut callee_halt_vm);
+
+    assert_eq!(callee_halt_vm.run(entry_xt), ExecutionOutcome::Halted);
+    assert_eq!(
+        callee_halt_vm.registers().w,
+        Some(Address::new(CODE_START + 4))
+    );
+
+    let mut caller_restore_vm = Tbx16Vm::default();
+    let mut caller_restore = ImageBuilder::new(CODE_START);
+    let halt_xt = caller_restore.primitive(PrimitiveId::Halt);
+    let exit_xt = caller_restore.primitive(PrimitiveId::Exit);
+    let callee_xt = caller_restore.colon_word(0, 0);
+    caller_restore.emit_xt(exit_xt);
+    caller_restore.emit_cell(Cell::new(0));
+    let entry_xt = caller_restore.colon_word(0, 0);
+    caller_restore.emit_xt(callee_xt);
+    caller_restore.emit_xt(halt_xt);
+    caller_restore.load_into(&mut caller_restore_vm);
+
+    assert_eq!(caller_restore_vm.run(entry_xt), ExecutionOutcome::Halted);
+    assert_eq!(
+        caller_restore_vm.registers().w,
+        Some(Address::new(CODE_START + 18))
+    );
+}
+
+#[test]
+fn nested_exit_traps_when_caller_w_is_corrupted() {
+    let mut vm = Tbx16Vm::default();
+    let mut image = ImageBuilder::new(CODE_START);
+    let halt_xt = image.primitive(PrimitiveId::Halt);
+    let exit_xt = image.primitive(PrimitiveId::Exit);
+    let callee_xt = image.colon_word(0, 0);
+    image.emit_xt(halt_xt);
+    image.emit_xt(exit_xt);
+    image.emit_cell(Cell::new(0));
+    let entry_xt = image.colon_word(0, 0);
+    image.emit_xt(callee_xt);
+    image.emit_xt(exit_xt);
+    image.emit_cell(Cell::new(0));
+    image.load_into(&mut vm);
+    assert_eq!(vm.run(entry_xt), ExecutionOutcome::Halted);
+    vm.memory_mut()
+        .write_cell(Address::new(0x0204), Cell::new(CODE_START))
+        .unwrap();
+    let before = snapshot(&vm);
+
+    assert_eq!(
+        vm.run_threaded(Address::new(CODE_START + 16)),
+        ExecutionOutcome::Trapped(Tbx16Error::InvalidExecutionState)
+    );
+    let after = snapshot(&vm);
+    assert_eq!(after.ip, before.ip);
+    assert_eq!(after.dsp, before.dsp);
+    assert_eq!(after.rsp, before.rsp);
+    assert_eq!(after.bp, before.bp);
+    assert_eq!(after.w, before.w);
+    assert_eq!(after.call_depth, before.call_depth);
+    assert_eq!(after.memory, before.memory);
+    assert_eq!(after.step_counter, 1);
+}
+
+#[test]
+fn corrupting_current_w_metadata_via_store_defers_failure_until_metadata_is_needed() {
+    let mut slot_vm = Tbx16Vm::default();
+    let mut slot_image = ImageBuilder::new(CODE_START);
+    let lit_xt = slot_image.primitive(PrimitiveId::Lit);
+    let store_xt = slot_image.primitive(PrimitiveId::Store);
+    let load_slot_xt = slot_image.primitive(PrimitiveId::LoadSlot);
+    let entry_xt = slot_image.colon_word(0, 0);
+    slot_image.emit_xt(lit_xt);
+    slot_image.emit_cell(entry_xt);
+    slot_image.emit_xt(lit_xt);
+    slot_image.emit_cell(Cell::new(0x9999));
+    slot_image.emit_xt(store_xt);
+    slot_image.emit_xt(load_slot_xt);
+    slot_image.emit_cell(Cell::new(0));
+    slot_image.load_into(&mut slot_vm);
+
+    assert_eq!(
+        slot_vm.run(entry_xt),
+        ExecutionOutcome::Trapped(Tbx16Error::InvalidExecutionState)
+    );
+    assert_eq!(slot_vm.step_counter(), 5);
+    assert_eq!(slot_vm.registers().w, Some(Address::new(CODE_START + 12)));
+    assert_eq!(
+        slot_vm
+            .memory()
+            .read_cell(Address::new(CODE_START + 12))
+            .unwrap(),
+        Cell::new(0x9999)
+    );
+
+    let mut exit_vm = Tbx16Vm::default();
+    let mut exit_image = ImageBuilder::new(CODE_START);
+    let lit_xt = exit_image.primitive(PrimitiveId::Lit);
+    let store_xt = exit_image.primitive(PrimitiveId::Store);
+    let exit_xt = exit_image.primitive(PrimitiveId::Exit);
+    let entry_xt = exit_image.colon_word(0, 0);
+    exit_image.emit_xt(lit_xt);
+    exit_image.emit_cell(entry_xt);
+    exit_image.emit_xt(lit_xt);
+    exit_image.emit_cell(Cell::new(0x9999));
+    exit_image.emit_xt(store_xt);
+    exit_image.emit_xt(exit_xt);
+    exit_image.emit_cell(Cell::new(0));
+    exit_image.load_into(&mut exit_vm);
+
+    assert_eq!(
+        exit_vm.run(entry_xt),
+        ExecutionOutcome::Trapped(Tbx16Error::InvalidExecutionState)
+    );
+    assert_eq!(exit_vm.step_counter(), 5);
+    assert_eq!(exit_vm.registers().w, Some(Address::new(CODE_START + 12)));
+    assert_eq!(
+        exit_vm
+            .memory()
+            .read_cell(Address::new(CODE_START + 12))
+            .unwrap(),
+        Cell::new(0x9999)
+    );
+}
+
+#[test]
 fn threaded_program_executes_m2_3a_primitives() {
     let mut vm = Tbx16Vm::default();
     let mut image = ImageBuilder::new(CODE_START);
@@ -1969,7 +2231,7 @@ fn exit_one_rejects_missing_callee_return_value_without_stealing_caller_value() 
     let after = snapshot(&vm);
     assert_eq!(after.ip, Some(Address::new(CODE_START + 10)));
     assert_eq!(after.dsp, Address::new(0x0082));
-    assert_eq!(after.rsp, Address::new(0x0204));
+    assert_eq!(after.rsp, Address::new(0x0206));
     assert_eq!(after.bp, Address::new(0x0082));
     assert_eq!(
         vm.memory().read_cell(Address::new(0x0080)).unwrap(),
@@ -2139,7 +2401,7 @@ fn halt_and_trap_leave_dirty_state_until_reset() {
         ExecutionOutcome::Halted
     );
     assert_eq!(nested_halt_vm.call_depth(), 1);
-    assert_eq!(nested_halt_vm.registers().rsp, Address::new(0x0204));
+    assert_eq!(nested_halt_vm.registers().rsp, Address::new(0x0206));
     assert!(nested_halt_vm.is_dirty_execution_state());
     let nested_halt_snapshot = snapshot(&nested_halt_vm);
     assert_eq!(
@@ -2154,6 +2416,7 @@ fn halt_and_trap_leave_dirty_state_until_reset() {
     assert_eq!(halt_vm.registers().ip, None);
     assert_eq!(halt_vm.registers().bp, DATA_STACK_START);
     assert_eq!(halt_vm.registers().rsp, DEFAULT_RETURN_STACK_START);
+    assert_eq!(halt_vm.registers().w, None);
     assert_eq!(halt_vm.call_depth(), 0);
     assert_eq!(halt_vm.step_counter(), 0);
     assert_eq!(halt_vm.registers().dsp, Address::new(0x0082));
@@ -2202,6 +2465,7 @@ fn reset_execution_state_preserves_output_sink() {
 
     assert_eq!(vm.output(), b"Q");
     assert_eq!(vm.peek_data_cell(0).unwrap(), Cell::new(0x9999));
+    assert_eq!(vm.registers().w, None);
 }
 
 #[test]

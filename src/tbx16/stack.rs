@@ -55,11 +55,12 @@ impl StackRegion {
     }
 }
 
-/// A return-stack frame stored as two cells in unified memory.
+/// A return-stack frame stored as three cells in unified memory.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ReturnFrame {
     pub return_ip: Address,
     pub caller_bp: Address,
+    pub caller_w: Address,
 }
 
 pub(crate) fn ensure_pointer_in_region(

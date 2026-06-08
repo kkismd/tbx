@@ -31,6 +31,10 @@ pub enum Tbx16Error {
     InvalidExecutionToken {
         xt: Cell,
     },
+    InvalidFrameSlot {
+        slot_index: u16,
+        slot_count: u16,
+    },
     InvalidExecutionState,
     DirtyExecutionState,
     InstructionPointerOutOfRange {
@@ -65,6 +69,14 @@ impl fmt::Display for Tbx16Error {
             Tbx16Error::InvalidExecutionToken { xt } => {
                 write!(f, "invalid execution token ${:04x}", xt.raw())
             }
+            Tbx16Error::InvalidFrameSlot {
+                slot_index,
+                slot_count,
+            } => write!(
+                f,
+                "invalid frame slot {} for slot count {}",
+                slot_index, slot_count
+            ),
             Tbx16Error::InvalidExecutionState => write!(f, "invalid execution state"),
             Tbx16Error::DirtyExecutionState => write!(f, "dirty execution state"),
             Tbx16Error::InstructionPointerOutOfRange { ip } => {

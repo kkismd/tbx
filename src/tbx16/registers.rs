@@ -7,4 +7,5 @@ pub struct Registers {
     pub dsp: Address,
     pub rsp: Address,
     pub bp: Address,
+    pub w: Option<Address>,
 }
