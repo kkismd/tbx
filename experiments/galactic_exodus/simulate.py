@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import argparse
-from dataclasses import dataclass
-import random
 from collections import Counter
+from dataclasses import dataclass
+import heapq
+import random
+from typing import TypeAlias
 
 
 WIDTH = 8
@@ -18,15 +20,44 @@ SPECIAL_H = (8, 8)
 CENTRAL_B_CANDIDATES = [(4, 4), (5, 4), (4, 5), (5, 5)]
 TERRAIN_SYMBOLS = [".", "N", "A", "@"]
 TERRAIN_WEIGHTS = [0.60, 0.20, 0.12, 0.08]
+TERRAIN_COSTS = {
+    ".": 1,
+    "N": 2,
+    "A": 3,
+    "@": 2,
+    "B": 1,
+    "R": 1,
+    "S": 0,
+    "H": 1,
+}
+
+Position: TypeAlias = tuple[int, int]
+Cells: TypeAlias = dict[Position, str]
 
 
 @dataclass(frozen=True)
 class GalacticMap:
     seed: int
     resource_count: int
-    b_position: tuple[int, int]
-    r_positions: list[tuple[int, int]]
-    cells: dict[tuple[int, int], str]
+    b_position: Position
+    r_positions: list[Position]
+    cells: Cells
+
+
+@dataclass(frozen=True)
+class PathResult:
+    cost: int
+    steps: int
+
+
+@dataclass(frozen=True)
+class PathAnalysis:
+    reachable: bool
+    best_cost: int | None
+    best_path_length: int | None
+    cost_to_base: int | None
+    cost_base_to_goal: int | None
+    best_cost_via_base: int | None
 
 
 def parse_args() -> argparse.Namespace:
@@ -94,11 +125,71 @@ def weighted_terrain(rng: random.Random) -> str:
     return TERRAIN_SYMBOLS[-1]
 
 
-def format_position(position: tuple[int, int]) -> str:
+def terrain_cost(symbol: str) -> int:
+    try:
+        return TERRAIN_COSTS[symbol]
+    except KeyError as exc:
+        raise ValueError(f"unknown terrain symbol: {symbol!r}") from exc
+
+
+def neighbors(position: Position) -> list[Position]:
+    x, y = position
+    adjacent: list[Position] = []
+    for next_x, next_y in ((x, y + 1), (x + 1, y), (x, y - 1), (x - 1, y)):
+        if 1 <= next_x <= WIDTH and 1 <= next_y <= HEIGHT:
+            adjacent.append((next_x, next_y))
+    return adjacent
+
+
+def shortest_path(cells: Cells, start: Position, goal: Position) -> PathResult | None:
+    if start not in cells:
+        raise ValueError(f"start position is outside map cells: {start}")
+    if goal not in cells:
+        raise ValueError(f"goal position is outside map cells: {goal}")
+
+    queue: list[tuple[int, int, Position]] = [(0, 0, start)]
+    best: dict[Position, tuple[int, int]] = {start: (0, 0)}
+
+    while queue:
+        cost, steps, position = heapq.heappop(queue)
+        if (cost, steps) != best.get(position):
+            continue
+        if position == goal:
+            return PathResult(cost=cost, steps=steps)
+
+        for neighbor in neighbors(position):
+            candidate = (cost + terrain_cost(cells[neighbor]), steps + 1)
+            previous = best.get(neighbor)
+            if previous is None or candidate < previous:
+                best[neighbor] = candidate
+                heapq.heappush(queue, (candidate[0], candidate[1], neighbor))
+
+    return None
+
+
+def analyze_paths(galactic_map: GalacticMap) -> PathAnalysis:
+    best_route = shortest_path(galactic_map.cells, SPECIAL_S, SPECIAL_H)
+    to_base = shortest_path(galactic_map.cells, SPECIAL_S, galactic_map.b_position)
+    base_to_goal = shortest_path(galactic_map.cells, galactic_map.b_position, SPECIAL_H)
+    via_base = None
+    if to_base is not None and base_to_goal is not None:
+        via_base = to_base.cost + base_to_goal.cost
+
+    return PathAnalysis(
+        reachable=best_route is not None,
+        best_cost=None if best_route is None else best_route.cost,
+        best_path_length=None if best_route is None else best_route.steps,
+        cost_to_base=None if to_base is None else to_base.cost,
+        cost_base_to_goal=None if base_to_goal is None else base_to_goal.cost,
+        best_cost_via_base=via_base,
+    )
+
+
+def format_position(position: Position) -> str:
     return f"({position[0]},{position[1]})"
 
 
-def render_map(cells: dict[tuple[int, int], str]) -> str:
+def render_map(cells: Cells) -> str:
     rows: list[str] = []
     for y in range(HEIGHT, 0, -1):
         row = " ".join(cells[(x, y)] for x in range(1, WIDTH + 1))
@@ -106,13 +197,18 @@ def render_map(cells: dict[tuple[int, int], str]) -> str:
     return "\n".join(rows)
 
 
-def terrain_distribution(cells: dict[tuple[int, int], str]) -> str:
+def terrain_distribution(cells: Cells) -> str:
     counts = Counter(value for value in cells.values() if value in TERRAIN_SYMBOLS)
     ordered = [f"{symbol}:{counts.get(symbol, 0)}" for symbol in TERRAIN_SYMBOLS]
     return ", ".join(ordered)
 
 
+def format_optional_metric(value: int | None) -> str:
+    return "N/A" if value is None else str(value)
+
+
 def format_output(galactic_map: GalacticMap) -> str:
+    analysis = analyze_paths(galactic_map)
     lines = [
         f"SEED: {galactic_map.seed}",
         f"SIZE: {WIDTH}x{HEIGHT}",
@@ -124,6 +220,14 @@ def format_output(galactic_map: GalacticMap) -> str:
         "",
         "MAP:",
         render_map(galactic_map.cells),
+        "",
+        "COSTS:",
+        f"  reachable: {'yes' if analysis.reachable else 'no'}",
+        f"  best_cost: {format_optional_metric(analysis.best_cost)}",
+        f"  best_path_length: {format_optional_metric(analysis.best_path_length)}",
+        f"  cost_to_base: {format_optional_metric(analysis.cost_to_base)}",
+        f"  cost_base_to_goal: {format_optional_metric(analysis.cost_base_to_goal)}",
+        f"  best_cost_via_base: {format_optional_metric(analysis.best_cost_via_base)}",
     ]
     return "\n".join(lines)
 
