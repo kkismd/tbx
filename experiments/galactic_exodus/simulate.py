@@ -68,6 +68,17 @@ class PathAnalysis:
     base_is_mandatory: bool
 
 
+VERDICT_REJECT_TOO_HARD = "REJECT_TOO_HARD"
+VERDICT_REJECT_BASE_MANDATORY = "REJECT_BASE_MANDATORY"
+VERDICT_ACCEPT = "ACCEPT"
+VERDICT_PRIORITY_ORDER = (
+    VERDICT_REJECT_TOO_HARD,
+    VERDICT_REJECT_BASE_MANDATORY,
+    VERDICT_ACCEPT,
+)
+ACCEPT_NOTE = "ACCEPT is a minimal candidate verdict, not a final fun/balance judgment."
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Generate a deterministic 8x8 Galactic Exodus map.")
     parser.add_argument("--seed", type=int, default=DEFAULT_SEED, help="Random seed (default: 42).")
@@ -288,32 +299,62 @@ def format_optional_metric(value: int | None) -> str:
     return "N/A" if value is None else str(value)
 
 
+def build_map_id(galactic_map: GalacticMap) -> str:
+    return (
+        f"seed-{galactic_map.seed}"
+        f"-rift-{galactic_map.rift_density:.2f}"
+        f"-res-{galactic_map.resource_count}"
+    )
+
+
+def classify_verdict(analysis: PathAnalysis) -> str:
+    if analysis.best_cost is None or analysis.cost_to_base is None or analysis.cost_base_to_goal is None:
+        return VERDICT_REJECT_TOO_HARD
+    if analysis.base_is_mandatory:
+        return VERDICT_REJECT_BASE_MANDATORY
+    return VERDICT_ACCEPT
+
+
 def format_output(galactic_map: GalacticMap) -> str:
     analysis = analyze_paths(galactic_map)
+    verdict = classify_verdict(analysis)
+    resource_positions = ", ".join(format_position(position) for position in galactic_map.r_positions) or "(none)"
     lines = [
-        f"SEED: {galactic_map.seed}",
-        f"SIZE: {WIDTH}x{HEIGHT}",
-        f"S POSITION: {format_position(SPECIAL_S)}",
-        f"H POSITION: {format_position(SPECIAL_H)}",
-        f"B POSITION: {format_position(galactic_map.b_position)}",
-        "R POSITIONS: " + ", ".join(format_position(position) for position in galactic_map.r_positions),
-        f"TERRAIN DISTRIBUTION: {terrain_distribution(galactic_map.cells)}",
+        "MAP ID",
+        f"  map_id: {build_map_id(galactic_map)}",
         "",
-        "MAP:",
-        render_map(galactic_map.cells),
+        "OBJECTS",
+        f"  S: {format_position(SPECIAL_S)}",
+        f"  H: {format_position(SPECIAL_H)}",
+        f"  B: {format_position(galactic_map.b_position)}",
+        f"  R: {resource_positions}",
         "",
-        "COSTS:",
+        "PARAMETERS",
+        f"  seed: {galactic_map.seed}",
+        f"  size: {WIDTH}x{HEIGHT}",
+        f"  resource_count: {galactic_map.resource_count}",
         f"  rift_density: {galactic_map.rift_density:.2f}",
         f"  rift_count: {len(galactic_map.rift_edges)}",
-        f"  reachable: {'yes' if analysis.reachable else 'no'}",
-        f"  best_cost: {format_optional_metric(analysis.best_cost)}",
-        f"  best_path_length: {format_optional_metric(analysis.best_path_length)}",
-        f"  cost_to_base: {format_optional_metric(analysis.cost_to_base)}",
-        f"  cost_base_to_goal: {format_optional_metric(analysis.cost_base_to_goal)}",
-        f"  best_cost_via_base: {format_optional_metric(analysis.best_cost_via_base)}",
-        f"  best_cost_without_base: {format_optional_metric(analysis.best_cost_without_base)}",
+        f"  terrain_distribution: {terrain_distribution(galactic_map.cells)}",
+        "",
+        "MAP",
+        render_map(galactic_map.cells),
+        "",
+        "COSTS",
+        f"  S_to_H_cost: {format_optional_metric(analysis.best_cost)}",
+        f"  S_to_H_steps: {format_optional_metric(analysis.best_path_length)}",
+        f"  S_to_B_cost: {format_optional_metric(analysis.cost_to_base)}",
+        f"  B_to_H_cost: {format_optional_metric(analysis.cost_base_to_goal)}",
+        f"  S_to_H_via_B_cost: {format_optional_metric(analysis.best_cost_via_base)}",
+        f"  S_to_H_without_B_cost: {format_optional_metric(analysis.best_cost_without_base)}",
         f"  base_route_advantage_raw: {format_optional_metric(analysis.base_route_advantage_raw)}",
-        f"  base_is_mandatory: {'yes' if analysis.base_is_mandatory else 'no'}",
+        "",
+        "VERDICT",
+        f"  verdict: {verdict}",
+        f"  priority_1: {VERDICT_PRIORITY_ORDER[0]}",
+        f"  priority_2: {VERDICT_PRIORITY_ORDER[1]}",
+        f"  priority_3: {VERDICT_PRIORITY_ORDER[2]}",
+        f"  note: {ACCEPT_NOTE}",
     ]
     return "\n".join(lines)
 
