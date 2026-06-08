@@ -299,6 +299,10 @@ def format_optional_metric(value: int | None) -> str:
     return "N/A" if value is None else str(value)
 
 
+def format_yes_no(value: bool) -> str:
+    return "yes" if value else "no"
+
+
 def build_map_id(galactic_map: GalacticMap) -> str:
     return (
         f"seed-{galactic_map.seed}"
@@ -348,6 +352,7 @@ def format_output(galactic_map: GalacticMap) -> str:
         f"  S_to_H_via_B_cost: {format_optional_metric(analysis.best_cost_via_base)}",
         f"  S_to_H_without_B_cost: {format_optional_metric(analysis.best_cost_without_base)}",
         f"  base_route_advantage_raw: {format_optional_metric(analysis.base_route_advantage_raw)}",
+        f"  base_is_mandatory: {format_yes_no(analysis.base_is_mandatory)}",
         "",
         "VERDICT",
         f"  verdict: {verdict}",

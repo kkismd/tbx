@@ -65,6 +65,7 @@ The `COSTS` section includes the shortest-path metrics used by the verdict class
 - `S_to_H_via_B_cost`
 - `S_to_H_without_B_cost`
 - `base_route_advantage_raw`
+- `base_is_mandatory` (`yes` / `no`)
 
 Unavailable metrics are rendered as `N/A`.
 
