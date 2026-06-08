@@ -38,20 +38,73 @@ pub enum ExecutionOutcome {
     Trapped(Tbx16Error),
 }
 
-/// Primitive registry for the M2.2a threaded kernel.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PrimitiveOperand {
+    None,
+    Cell,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PrimitiveDescriptor {
+    pub id: PrimitiveId,
+    pub name: &'static str,
+    pub operand: PrimitiveOperand,
+}
+
+/// Primitive registry for the M2.3a threaded kernel.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u16)]
 pub enum PrimitiveId {
-    Lit = 1,
-    Branch = 2,
-    ZBranch = 3,
-    Halt = 4,
-    Exit = 5,
+    Lit = 0,
+    Branch = 1,
+    ZBranch = 2,
+    Halt = 3,
+    Exit = 4,
+    Dup = 16,
+    Drop = 17,
+    Swap = 18,
+    Over = 19,
+    Add = 32,
+    Sub = 33,
+    Mul = 34,
+    Div = 35,
+    Mod = 36,
+    Negate = 37,
+    Eq = 48,
+    Ne = 49,
+    Lt = 50,
+    Le = 51,
+    Gt = 52,
+    Ge = 53,
+    ToBool = 64,
+    Not = 65,
+    And = 66,
+    Or = 67,
+    Band = 68,
+    Bor = 69,
+    Fetch = 80,
+    Store = 81,
 }
 
 impl PrimitiveId {
     pub const fn as_cell(self) -> Cell {
         Cell::new(self as u16)
+    }
+
+    pub const fn descriptor(self) -> &'static PrimitiveDescriptor {
+        primitive_descriptor_by_id(self)
+    }
+
+    pub const fn name(self) -> &'static str {
+        self.descriptor().name
+    }
+
+    pub const fn operand(self) -> PrimitiveOperand {
+        self.descriptor().operand
+    }
+
+    pub fn from_name(name: &str) -> Option<Self> {
+        primitive_descriptor_by_name(name).map(|descriptor| descriptor.id)
     }
 }
 
@@ -60,14 +113,204 @@ impl TryFrom<Cell> for PrimitiveId {
 
     fn try_from(value: Cell) -> Result<Self, Self::Error> {
         match value.raw() {
-            1 => Ok(Self::Lit),
-            2 => Ok(Self::Branch),
-            3 => Ok(Self::ZBranch),
-            4 => Ok(Self::Halt),
-            5 => Ok(Self::Exit),
+            0 => Ok(Self::Lit),
+            1 => Ok(Self::Branch),
+            2 => Ok(Self::ZBranch),
+            3 => Ok(Self::Halt),
+            4 => Ok(Self::Exit),
+            16 => Ok(Self::Dup),
+            17 => Ok(Self::Drop),
+            18 => Ok(Self::Swap),
+            19 => Ok(Self::Over),
+            32 => Ok(Self::Add),
+            33 => Ok(Self::Sub),
+            34 => Ok(Self::Mul),
+            35 => Ok(Self::Div),
+            36 => Ok(Self::Mod),
+            37 => Ok(Self::Negate),
+            48 => Ok(Self::Eq),
+            49 => Ok(Self::Ne),
+            50 => Ok(Self::Lt),
+            51 => Ok(Self::Le),
+            52 => Ok(Self::Gt),
+            53 => Ok(Self::Ge),
+            64 => Ok(Self::ToBool),
+            65 => Ok(Self::Not),
+            66 => Ok(Self::And),
+            67 => Ok(Self::Or),
+            68 => Ok(Self::Band),
+            69 => Ok(Self::Bor),
+            80 => Ok(Self::Fetch),
+            81 => Ok(Self::Store),
             _ => Err(()),
         }
     }
+}
+
+pub const PRIMITIVE_REGISTRY: &[PrimitiveDescriptor] = &[
+    PrimitiveDescriptor {
+        id: PrimitiveId::Lit,
+        name: "LIT",
+        operand: PrimitiveOperand::Cell,
+    },
+    PrimitiveDescriptor {
+        id: PrimitiveId::Branch,
+        name: "BRANCH",
+        operand: PrimitiveOperand::Cell,
+    },
+    PrimitiveDescriptor {
+        id: PrimitiveId::ZBranch,
+        name: "ZBRANCH",
+        operand: PrimitiveOperand::Cell,
+    },
+    PrimitiveDescriptor {
+        id: PrimitiveId::Halt,
+        name: "HALT",
+        operand: PrimitiveOperand::None,
+    },
+    PrimitiveDescriptor {
+        id: PrimitiveId::Exit,
+        name: "EXIT",
+        operand: PrimitiveOperand::Cell,
+    },
+    PrimitiveDescriptor {
+        id: PrimitiveId::Dup,
+        name: "DUP",
+        operand: PrimitiveOperand::None,
+    },
+    PrimitiveDescriptor {
+        id: PrimitiveId::Drop,
+        name: "DROP",
+        operand: PrimitiveOperand::None,
+    },
+    PrimitiveDescriptor {
+        id: PrimitiveId::Swap,
+        name: "SWAP",
+        operand: PrimitiveOperand::None,
+    },
+    PrimitiveDescriptor {
+        id: PrimitiveId::Over,
+        name: "OVER",
+        operand: PrimitiveOperand::None,
+    },
+    PrimitiveDescriptor {
+        id: PrimitiveId::Add,
+        name: "ADD",
+        operand: PrimitiveOperand::None,
+    },
+    PrimitiveDescriptor {
+        id: PrimitiveId::Sub,
+        name: "SUB",
+        operand: PrimitiveOperand::None,
+    },
+    PrimitiveDescriptor {
+        id: PrimitiveId::Mul,
+        name: "MUL",
+        operand: PrimitiveOperand::None,
+    },
+    PrimitiveDescriptor {
+        id: PrimitiveId::Div,
+        name: "DIV",
+        operand: PrimitiveOperand::None,
+    },
+    PrimitiveDescriptor {
+        id: PrimitiveId::Mod,
+        name: "MOD",
+        operand: PrimitiveOperand::None,
+    },
+    PrimitiveDescriptor {
+        id: PrimitiveId::Negate,
+        name: "NEGATE",
+        operand: PrimitiveOperand::None,
+    },
+    PrimitiveDescriptor {
+        id: PrimitiveId::Eq,
+        name: "EQ",
+        operand: PrimitiveOperand::None,
+    },
+    PrimitiveDescriptor {
+        id: PrimitiveId::Ne,
+        name: "NE",
+        operand: PrimitiveOperand::None,
+    },
+    PrimitiveDescriptor {
+        id: PrimitiveId::Lt,
+        name: "LT",
+        operand: PrimitiveOperand::None,
+    },
+    PrimitiveDescriptor {
+        id: PrimitiveId::Le,
+        name: "LE",
+        operand: PrimitiveOperand::None,
+    },
+    PrimitiveDescriptor {
+        id: PrimitiveId::Gt,
+        name: "GT",
+        operand: PrimitiveOperand::None,
+    },
+    PrimitiveDescriptor {
+        id: PrimitiveId::Ge,
+        name: "GE",
+        operand: PrimitiveOperand::None,
+    },
+    PrimitiveDescriptor {
+        id: PrimitiveId::ToBool,
+        name: "TO_BOOL",
+        operand: PrimitiveOperand::None,
+    },
+    PrimitiveDescriptor {
+        id: PrimitiveId::Not,
+        name: "NOT",
+        operand: PrimitiveOperand::None,
+    },
+    PrimitiveDescriptor {
+        id: PrimitiveId::And,
+        name: "AND",
+        operand: PrimitiveOperand::None,
+    },
+    PrimitiveDescriptor {
+        id: PrimitiveId::Or,
+        name: "OR",
+        operand: PrimitiveOperand::None,
+    },
+    PrimitiveDescriptor {
+        id: PrimitiveId::Band,
+        name: "BAND",
+        operand: PrimitiveOperand::None,
+    },
+    PrimitiveDescriptor {
+        id: PrimitiveId::Bor,
+        name: "BOR",
+        operand: PrimitiveOperand::None,
+    },
+    PrimitiveDescriptor {
+        id: PrimitiveId::Fetch,
+        name: "FETCH",
+        operand: PrimitiveOperand::None,
+    },
+    PrimitiveDescriptor {
+        id: PrimitiveId::Store,
+        name: "STORE",
+        operand: PrimitiveOperand::None,
+    },
+];
+
+pub const fn primitive_descriptor_by_id(id: PrimitiveId) -> &'static PrimitiveDescriptor {
+    let mut index = 0;
+    while index < PRIMITIVE_REGISTRY.len() {
+        let descriptor = &PRIMITIVE_REGISTRY[index];
+        if descriptor.id as u16 == id as u16 {
+            return descriptor;
+        }
+        index += 1;
+    }
+    panic!("primitive registry missing descriptor")
+}
+
+pub fn primitive_descriptor_by_name(name: &str) -> Option<&'static PrimitiveDescriptor> {
+    PRIMITIVE_REGISTRY
+        .iter()
+        .find(|descriptor| descriptor.name == name)
 }
 
 /// Resolved word metadata for the shared XT namespace.
@@ -473,6 +716,10 @@ impl Tbx16Vm {
                 Ok(ExecutionOutcome::Returned)
             }
             PrimitiveId::Exit => Err(Tbx16Error::InvalidExecutionState),
+            _ => {
+                self.execute_primitive_no_operand(primitive)?;
+                Ok(ExecutionOutcome::Returned)
+            }
         }
     }
 
@@ -566,6 +813,11 @@ impl Tbx16Vm {
                 Ok(None)
             }
             PrimitiveId::Exit => self.execute_exit_from_operand(continuation_ip),
+            _ => {
+                self.execute_primitive_no_operand(primitive)?;
+                self.registers.ip = Some(continuation_ip);
+                Ok(None)
+            }
         }
     }
 
@@ -576,6 +828,40 @@ impl Tbx16Vm {
             PrimitiveId::ZBranch => self.execute_zbranch_from_operand(self.current_ip()?),
             PrimitiveId::Halt => Ok(()),
             PrimitiveId::Exit => Err(Tbx16Error::InvalidExecutionState),
+            _ => self.execute_primitive_no_operand(primitive),
+        }
+    }
+
+    fn execute_primitive_no_operand(&mut self, primitive: PrimitiveId) -> Result<(), Tbx16Error> {
+        match primitive {
+            PrimitiveId::Halt => Ok(()),
+            PrimitiveId::Dup => self.execute_dup(),
+            PrimitiveId::Drop => self.execute_drop(),
+            PrimitiveId::Swap => self.execute_swap(),
+            PrimitiveId::Over => self.execute_over(),
+            PrimitiveId::Add => self.execute_add(),
+            PrimitiveId::Sub => self.execute_sub(),
+            PrimitiveId::Mul => self.execute_mul(),
+            PrimitiveId::Div => self.execute_div(),
+            PrimitiveId::Mod => self.execute_mod(),
+            PrimitiveId::Negate => self.execute_negate(),
+            PrimitiveId::Eq => self.execute_eq(),
+            PrimitiveId::Ne => self.execute_ne(),
+            PrimitiveId::Lt => self.execute_lt(),
+            PrimitiveId::Le => self.execute_le(),
+            PrimitiveId::Gt => self.execute_gt(),
+            PrimitiveId::Ge => self.execute_ge(),
+            PrimitiveId::ToBool => self.execute_to_bool(),
+            PrimitiveId::Not => self.execute_not(),
+            PrimitiveId::And => self.execute_and(),
+            PrimitiveId::Or => self.execute_or(),
+            PrimitiveId::Band => self.execute_band(),
+            PrimitiveId::Bor => self.execute_bor(),
+            PrimitiveId::Fetch => self.execute_fetch(),
+            PrimitiveId::Store => self.execute_store(),
+            PrimitiveId::Lit | PrimitiveId::Branch | PrimitiveId::ZBranch | PrimitiveId::Exit => {
+                Err(Tbx16Error::InvalidExecutionState)
+            }
         }
     }
 
@@ -854,6 +1140,226 @@ impl Tbx16Vm {
         #[cfg(debug_assertions)]
         self.validate_invariants()
             .expect("tbx16 invariants must hold after successful state transitions");
+    }
+
+    fn execute_dup(&mut self) -> Result<(), Tbx16Error> {
+        self.ensure_data_stack_pushable(self.registers.dsp)?;
+        let value = self.peek_data_cell(0)?;
+        self.push_data_cell(value)
+    }
+
+    fn execute_drop(&mut self) -> Result<(), Tbx16Error> {
+        self.pop_data_cell()?;
+        Ok(())
+    }
+
+    fn execute_swap(&mut self) -> Result<(), Tbx16Error> {
+        let top = self.peek_data_cell(0)?;
+        let below = self.peek_data_cell(1)?;
+        let top_addr = self
+            .registers
+            .dsp
+            .checked_sub(2)
+            .ok_or(Tbx16Error::DataStackUnderflow)?;
+        let below_addr = self
+            .registers
+            .dsp
+            .checked_sub(4)
+            .ok_or(Tbx16Error::DataStackUnderflow)?;
+        self.memory.write_cell(top_addr, below)?;
+        self.memory.write_cell(below_addr, top)?;
+        Ok(())
+    }
+
+    fn execute_over(&mut self) -> Result<(), Tbx16Error> {
+        self.ensure_data_stack_pushable(self.registers.dsp)?;
+        let value = self.peek_data_cell(1)?;
+        self.push_data_cell(value)
+    }
+
+    fn execute_add(&mut self) -> Result<(), Tbx16Error> {
+        self.execute_binary_transform(|lhs, rhs| Cell::new(lhs.raw().wrapping_add(rhs.raw())))
+    }
+
+    fn execute_sub(&mut self) -> Result<(), Tbx16Error> {
+        self.execute_binary_transform(|lhs, rhs| Cell::new(lhs.raw().wrapping_sub(rhs.raw())))
+    }
+
+    fn execute_mul(&mut self) -> Result<(), Tbx16Error> {
+        self.execute_binary_transform(|lhs, rhs| {
+            Cell::from_i16(lhs.as_i16().wrapping_mul(rhs.as_i16()))
+        })
+    }
+
+    fn execute_div(&mut self) -> Result<(), Tbx16Error> {
+        self.execute_binary_result(Self::checked_div)
+    }
+
+    fn execute_mod(&mut self) -> Result<(), Tbx16Error> {
+        self.execute_binary_result(Self::checked_mod)
+    }
+
+    fn execute_negate(&mut self) -> Result<(), Tbx16Error> {
+        self.execute_unary_transform(|value| Cell::from_i16(value.as_i16().wrapping_neg()))
+    }
+
+    fn execute_eq(&mut self) -> Result<(), Tbx16Error> {
+        self.execute_binary_transform(|lhs, rhs| Cell::from_bool(lhs.raw() == rhs.raw()))
+    }
+
+    fn execute_ne(&mut self) -> Result<(), Tbx16Error> {
+        self.execute_binary_transform(|lhs, rhs| Cell::from_bool(lhs.raw() != rhs.raw()))
+    }
+
+    fn execute_lt(&mut self) -> Result<(), Tbx16Error> {
+        self.execute_binary_transform(|lhs, rhs| Cell::from_bool(lhs.as_i16() < rhs.as_i16()))
+    }
+
+    fn execute_le(&mut self) -> Result<(), Tbx16Error> {
+        self.execute_binary_transform(|lhs, rhs| Cell::from_bool(lhs.as_i16() <= rhs.as_i16()))
+    }
+
+    fn execute_gt(&mut self) -> Result<(), Tbx16Error> {
+        self.execute_binary_transform(|lhs, rhs| Cell::from_bool(lhs.as_i16() > rhs.as_i16()))
+    }
+
+    fn execute_ge(&mut self) -> Result<(), Tbx16Error> {
+        self.execute_binary_transform(|lhs, rhs| Cell::from_bool(lhs.as_i16() >= rhs.as_i16()))
+    }
+
+    fn execute_to_bool(&mut self) -> Result<(), Tbx16Error> {
+        self.execute_unary_transform(Cell::to_canonical_bool)
+    }
+
+    fn execute_not(&mut self) -> Result<(), Tbx16Error> {
+        self.execute_unary_transform(|value| Cell::from_bool(!value.is_truthy()))
+    }
+
+    fn execute_and(&mut self) -> Result<(), Tbx16Error> {
+        self.execute_binary_transform(|lhs, rhs| {
+            Cell::from_bool(lhs.is_truthy() && rhs.is_truthy())
+        })
+    }
+
+    fn execute_or(&mut self) -> Result<(), Tbx16Error> {
+        self.execute_binary_transform(|lhs, rhs| {
+            Cell::from_bool(lhs.is_truthy() || rhs.is_truthy())
+        })
+    }
+
+    fn execute_band(&mut self) -> Result<(), Tbx16Error> {
+        self.execute_binary_transform(|lhs, rhs| Cell::new(lhs.raw() & rhs.raw()))
+    }
+
+    fn execute_bor(&mut self) -> Result<(), Tbx16Error> {
+        self.execute_binary_transform(|lhs, rhs| Cell::new(lhs.raw() | rhs.raw()))
+    }
+
+    fn execute_fetch(&mut self) -> Result<(), Tbx16Error> {
+        let addr = Address::new(self.peek_data_cell(0)?.raw());
+        let value = self.memory.read_cell(addr)?;
+        let stack_addr = self
+            .registers
+            .dsp
+            .checked_sub(2)
+            .ok_or(Tbx16Error::DataStackUnderflow)?;
+        self.memory.write_cell(stack_addr, value)?;
+        Ok(())
+    }
+
+    fn execute_store(&mut self) -> Result<(), Tbx16Error> {
+        let value = self.peek_data_cell(0)?;
+        let addr = Address::new(self.peek_data_cell(1)?.raw());
+        let new_dsp = self
+            .registers
+            .dsp
+            .checked_sub(4)
+            .ok_or(Tbx16Error::DataStackUnderflow)?;
+        self.memory.write_cell(addr, value)?;
+        self.registers.dsp = new_dsp;
+        Ok(())
+    }
+
+    fn execute_unary_transform(
+        &mut self,
+        transform: impl FnOnce(Cell) -> Cell,
+    ) -> Result<(), Tbx16Error> {
+        let value = self.peek_data_cell(0)?;
+        let addr = self
+            .registers
+            .dsp
+            .checked_sub(2)
+            .ok_or(Tbx16Error::DataStackUnderflow)?;
+        self.memory.write_cell(addr, transform(value))?;
+        Ok(())
+    }
+
+    fn execute_binary_transform(
+        &mut self,
+        transform: impl FnOnce(Cell, Cell) -> Cell,
+    ) -> Result<(), Tbx16Error> {
+        let rhs = self.peek_data_cell(0)?;
+        let lhs = self.peek_data_cell(1)?;
+        let result = transform(lhs, rhs);
+        let dst_addr = self
+            .registers
+            .dsp
+            .checked_sub(4)
+            .ok_or(Tbx16Error::DataStackUnderflow)?;
+        let new_dsp = self
+            .registers
+            .dsp
+            .checked_sub(2)
+            .ok_or(Tbx16Error::DataStackUnderflow)?;
+        self.memory.write_cell(dst_addr, result)?;
+        self.registers.dsp = new_dsp;
+        Ok(())
+    }
+
+    fn execute_binary_result(
+        &mut self,
+        transform: impl FnOnce(Cell, Cell) -> Result<Cell, Tbx16Error>,
+    ) -> Result<(), Tbx16Error> {
+        let rhs = self.peek_data_cell(0)?;
+        let lhs = self.peek_data_cell(1)?;
+        let result = transform(lhs, rhs)?;
+        let dst_addr = self
+            .registers
+            .dsp
+            .checked_sub(4)
+            .ok_or(Tbx16Error::DataStackUnderflow)?;
+        let new_dsp = self
+            .registers
+            .dsp
+            .checked_sub(2)
+            .ok_or(Tbx16Error::DataStackUnderflow)?;
+        self.memory.write_cell(dst_addr, result)?;
+        self.registers.dsp = new_dsp;
+        Ok(())
+    }
+
+    fn checked_div(lhs: Cell, rhs: Cell) -> Result<Cell, Tbx16Error> {
+        let rhs = rhs.as_i16();
+        if rhs == 0 {
+            return Err(Tbx16Error::DivisionByZero);
+        }
+        let lhs = lhs.as_i16();
+        if lhs == i16::MIN && rhs == -1 {
+            return Ok(Cell::from_i16(i16::MIN));
+        }
+        Ok(Cell::from_i16(lhs / rhs))
+    }
+
+    fn checked_mod(lhs: Cell, rhs: Cell) -> Result<Cell, Tbx16Error> {
+        let rhs = rhs.as_i16();
+        if rhs == 0 {
+            return Err(Tbx16Error::DivisionByZero);
+        }
+        let lhs = lhs.as_i16();
+        if lhs == i16::MIN && rhs == -1 {
+            return Ok(Cell::new(0));
+        }
+        Ok(Cell::from_i16(lhs % rhs))
     }
 }
 
