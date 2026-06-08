@@ -1516,6 +1516,19 @@ fn output_primitives_cover_entry_threaded_and_atomic_traps() {
 
 #[test]
 fn putstr_rejects_end_crossing_without_mutation() {
+    let mut zero_len_vm = Tbx16Vm::default();
+    let mut image = ImageBuilder::new(CODE_START);
+    let putstr_xt = image.primitive(PrimitiveId::PutStr);
+    image.load_into(&mut zero_len_vm);
+    zero_len_vm
+        .memory_mut()
+        .write_cell(Address::new(0xfffe), Cell::new(0))
+        .unwrap();
+    zero_len_vm.push_data_cell(Cell::new(0xfffe)).unwrap();
+    assert_eq!(zero_len_vm.run(putstr_xt), ExecutionOutcome::Returned);
+    assert_eq!(zero_len_vm.output(), b"");
+    assert_eq!(zero_len_vm.registers().dsp, DATA_STACK_START);
+
     let mut length_vm = Tbx16Vm::default();
     let mut image = ImageBuilder::new(CODE_START);
     let putstr_xt = image.primitive(PrimitiveId::PutStr);

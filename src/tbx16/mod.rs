@@ -1425,19 +1425,28 @@ impl Tbx16Vm {
 
     fn read_length_prefixed_bytes(&self, addr: Address) -> Result<Vec<u8>, Tbx16Error> {
         let len = usize::from(self.memory.read_cell(addr)?.raw());
-        let bytes_start = addr.checked_add(2).ok_or(Tbx16Error::InvalidMemoryAccess {
-            addr,
-            operation: "string read",
-        })?;
+        let payload_start =
+            usize::from(addr.get())
+                .checked_add(2)
+                .ok_or(Tbx16Error::InvalidMemoryAccess {
+                    addr,
+                    operation: "string read",
+                })?;
+        payload_start
+            .checked_add(len)
+            .filter(|end| *end <= memory::MEMORY_SIZE)
+            .ok_or(Tbx16Error::InvalidMemoryAccess {
+                addr,
+                operation: "string read",
+            })?;
         let mut bytes = Vec::with_capacity(len);
         for offset in 0..len {
-            let byte_addr =
-                bytes_start
-                    .checked_add_usize(offset)
-                    .ok_or(Tbx16Error::InvalidMemoryAccess {
-                        addr,
-                        operation: "string read",
-                    })?;
+            let byte_addr = u16::try_from(payload_start + offset)
+                .map(Address::new)
+                .map_err(|_| Tbx16Error::InvalidMemoryAccess {
+                    addr,
+                    operation: "string read",
+                })?;
             bytes.push(self.memory.read_byte(byte_addr)?);
         }
         Ok(bytes)
