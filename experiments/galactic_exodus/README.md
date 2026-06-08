@@ -45,23 +45,44 @@ Selected rift edges are impassable in both directions and are excluded from all 
 - `B -> H`
 - `S -> H` while forbidding `B`
 
-## COSTS Output
+## Report Output
 
-`simulate.py` now prints a `COSTS` section after the map:
+`simulate.py` prints the following sections in order:
 
-- `rift_density`: configured density used for fault-line generation
-- `rift_count`: number of blocked undirected edges
-- `reachable`: whether `S -> H` is reachable
-- `best_cost`: minimum terrain cost from `S` to `H`
-- `best_path_length`: minimum number of moves among paths with `best_cost`
-- `cost_to_base`: minimum terrain cost from `S` to `B`
-- `cost_base_to_goal`: minimum terrain cost from `B` to `H`
-- `best_cost_via_base`: `cost_to_base + cost_base_to_goal`
-- `best_cost_without_base`: minimum terrain cost from `S` to `H` while forbidding `B`
-- `base_route_advantage_raw`: `best_cost_without_base - best_cost_via_base`
-- `base_is_mandatory`: whether `H` is reachable only via `B`
+- `MAP ID`
+- `OBJECTS`
+- `PARAMETERS`
+- `MAP`
+- `COSTS`
+- `VERDICT`
 
-Internally numeric values stay as `int | None`. The output layer converts unavailable costs to `N/A` and booleans to `yes` / `no`.
+The `COSTS` section includes the shortest-path metrics used by the verdict classifier:
+
+- `S_to_H_cost`
+- `S_to_H_steps`
+- `S_to_B_cost`
+- `B_to_H_cost`
+- `S_to_H_via_B_cost`
+- `S_to_H_without_B_cost`
+- `base_route_advantage_raw`
+
+Unavailable metrics are rendered as `N/A`.
+
+## Verdict Rules
+
+The verdict priority order is:
+
+1. `REJECT_TOO_HARD`
+2. `REJECT_BASE_MANDATORY`
+3. `ACCEPT`
+
+Classification rules:
+
+- `REJECT_TOO_HARD`: at least one of `S -> H`, `S -> B`, or `B -> H` is unreachable
+- `REJECT_BASE_MANDATORY`: all required segments are reachable, but `S -> H` has no route that avoids `B`
+- `ACCEPT`: any map not rejected by the higher-priority rules
+
+`ACCEPT` is only a minimal candidate verdict. It does not mean the map is already proven fun, balanced, or final-quality.
 
 ## Tests
 

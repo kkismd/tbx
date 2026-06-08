@@ -179,6 +179,7 @@ class AnalysisAndOutputTests(unittest.TestCase):
         self.assertEqual(analysis.best_cost_without_base, 17)
         self.assertEqual(analysis.base_route_advantage_raw, 0)
         self.assertFalse(analysis.base_is_mandatory)
+        self.assertEqual(simulate.classify_verdict(analysis), "ACCEPT")
 
     def test_analyze_paths_marks_base_as_mandatory_when_home_is_only_reachable_via_base(self) -> None:
         cells = filled_cells(".")
@@ -208,25 +209,64 @@ class AnalysisAndOutputTests(unittest.TestCase):
         self.assertIsNone(analysis.best_cost_without_base)
         self.assertIsNone(analysis.base_route_advantage_raw)
         self.assertTrue(analysis.base_is_mandatory)
+        self.assertEqual(simulate.classify_verdict(analysis), "REJECT_BASE_MANDATORY")
 
-    def test_format_output_includes_costs_section(self) -> None:
+    def test_analyze_paths_rejects_too_hard_when_any_required_route_is_unreachable(self) -> None:
+        cells = filled_cells(".")
+        b_position = (2, 1)
+        cells[simulate.SPECIAL_S] = "S"
+        cells[simulate.SPECIAL_H] = "H"
+        cells[b_position] = "B"
+        galactic_map = simulate.GalacticMap(
+            seed=11,
+            resource_count=0,
+            rift_density=0.04,
+            b_position=b_position,
+            r_positions=[],
+            rift_edges=(
+                simulate.normalize_edge(simulate.SPECIAL_S, (2, 1)),
+                simulate.normalize_edge(simulate.SPECIAL_S, (1, 2)),
+            ),
+            cells=cells,
+        )
+
+        analysis = simulate.analyze_paths(galactic_map)
+
+        self.assertFalse(analysis.reachable)
+        self.assertIsNone(analysis.best_cost)
+        self.assertIsNone(analysis.cost_to_base)
+        self.assertEqual(analysis.cost_base_to_goal, 13)
+        self.assertEqual(simulate.classify_verdict(analysis), "REJECT_TOO_HARD")
+
+    def test_format_output_uses_required_sections_and_accept_verdict(self) -> None:
         output = simulate.format_output(simulate.generate_map(42, 3))
 
-        self.assertIn("COSTS:", output)
+        self.assertIn("MAP ID\n", output)
+        self.assertIn("\nOBJECTS\n", output)
+        self.assertIn("\nPARAMETERS\n", output)
+        self.assertIn("\nMAP\n", output)
+        self.assertIn("\nCOSTS\n", output)
+        self.assertIn("\nVERDICT\n", output)
+        self.assertIn("  map_id: seed-42-rift-0.10-res-3", output)
+        self.assertIn("  B: (4,4)", output)
         self.assertIn("  rift_density: 0.10", output)
-        self.assertIn("  rift_count: 11", output)
-        self.assertIn("  reachable: yes", output)
-        self.assertIn("  best_cost: 17", output)
-        self.assertIn("  best_path_length: 14", output)
-        self.assertIn("  cost_to_base: 8", output)
-        self.assertIn("  cost_base_to_goal: 9", output)
-        self.assertIn("  best_cost_via_base: 17", output)
-        self.assertIn("  best_cost_without_base: 17", output)
-        self.assertIn("  base_route_advantage_raw: 0", output)
-        self.assertIn("  base_is_mandatory: no", output)
+        self.assertIn("  S_to_H_cost: 17", output)
+        self.assertIn("  S_to_H_steps: 14", output)
+        self.assertIn("  S_to_B_cost: 8", output)
+        self.assertIn("  B_to_H_cost: 9", output)
+        self.assertIn("  S_to_H_via_B_cost: 17", output)
+        self.assertIn("  S_to_H_without_B_cost: 17", output)
+        self.assertIn("  verdict: ACCEPT", output)
+        self.assertIn("  priority_1: REJECT_TOO_HARD", output)
+        self.assertIn("  priority_2: REJECT_BASE_MANDATORY", output)
+        self.assertIn("  priority_3: ACCEPT", output)
+        self.assertIn("  note: ACCEPT is a minimal candidate verdict, not a final fun/balance judgment.", output)
 
     def test_format_output_uses_na_for_unreachable_segments(self) -> None:
         cells = filled_cells(".")
+        cells[simulate.SPECIAL_S] = "S"
+        cells[simulate.SPECIAL_H] = "H"
+        cells[(2, 1)] = "B"
         galactic_map = simulate.GalacticMap(
             seed=7,
             resource_count=0,
@@ -244,14 +284,14 @@ class AnalysisAndOutputTests(unittest.TestCase):
 
         output = simulate.format_output(galactic_map)
 
-        self.assertIn("  reachable: no", output)
-        self.assertIn("  best_cost: N/A", output)
-        self.assertIn("  cost_to_base: N/A", output)
-        self.assertIn("  cost_base_to_goal: N/A", output)
-        self.assertIn("  best_cost_via_base: N/A", output)
-        self.assertIn("  best_cost_without_base: N/A", output)
+        self.assertIn("  S_to_H_cost: N/A", output)
+        self.assertIn("  S_to_H_steps: N/A", output)
+        self.assertIn("  S_to_B_cost: N/A", output)
+        self.assertIn("  B_to_H_cost: N/A", output)
+        self.assertIn("  S_to_H_via_B_cost: N/A", output)
+        self.assertIn("  S_to_H_without_B_cost: N/A", output)
         self.assertIn("  base_route_advantage_raw: N/A", output)
-        self.assertIn("  base_is_mandatory: no", output)
+        self.assertIn("  verdict: REJECT_TOO_HARD", output)
 
 
 if __name__ == "__main__":
