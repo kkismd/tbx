@@ -7,7 +7,7 @@ It is not the formal TBX application implementation. The future TBX-side impleme
 ## Run
 
 ```bash
-python experiments/galactic_exodus/simulate.py --seed 42
+python experiments/galactic_exodus/simulate.py --seed 42 --rift-density 0.10
 ```
 
 ## Terrain Costs
@@ -26,12 +26,30 @@ Each move adds the cost of the destination cell. The starting cell does not add 
 | `S` | start | 0 |
 | `H` | home | 1 |
 
-This experiment computes a baseline with full map information and no fault-line restrictions.
+This experiment computes a full-information baseline with optional fault-line restrictions on movement edges.
+
+## Fault-Line Rifts
+
+The grid has 112 undirected adjacent edges in total. Rift edges are chosen deterministically from the seed:
+
+```text
+rift_count = round(112 * rift_density)
+```
+
+Use `--rift-density FLOAT` to control the density. The default is `0.10`.
+
+Selected rift edges are impassable in both directions and are excluded from all shortest-path calculations:
+
+- `S -> H`
+- `S -> B`
+- `B -> H`
 
 ## COSTS Output
 
 `simulate.py` now prints a `COSTS` section after the map:
 
+- `rift_density`: configured density used for fault-line generation
+- `rift_count`: number of blocked undirected edges
 - `reachable`: whether `S -> H` is reachable
 - `best_cost`: minimum terrain cost from `S` to `H`
 - `best_path_length`: minimum number of moves among paths with `best_cost`
