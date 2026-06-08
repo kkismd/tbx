@@ -43,6 +43,7 @@ Selected rift edges are impassable in both directions and are excluded from all 
 - `S -> H`
 - `S -> B`
 - `B -> H`
+- `S -> H` while forbidding `B`
 
 ## COSTS Output
 
@@ -56,8 +57,11 @@ Selected rift edges are impassable in both directions and are excluded from all 
 - `cost_to_base`: minimum terrain cost from `S` to `B`
 - `cost_base_to_goal`: minimum terrain cost from `B` to `H`
 - `best_cost_via_base`: `cost_to_base + cost_base_to_goal`
+- `best_cost_without_base`: minimum terrain cost from `S` to `H` while forbidding `B`
+- `base_route_advantage_raw`: `best_cost_without_base - best_cost_via_base`
+- `base_is_mandatory`: whether `H` is reachable only via `B`
 
-Internally these values stay numeric or `None`. The output layer converts them to `yes` / `no` and `N/A`.
+Internally numeric values stay as `int | None`. The output layer converts unavailable costs to `N/A` and booleans to `yes` / `no`.
 
 ## Tests
 
