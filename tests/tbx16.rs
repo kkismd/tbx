@@ -22,6 +22,7 @@ struct VmSnapshot {
     bp: Address,
     step_counter: usize,
     call_depth: u16,
+    output: Vec<u8>,
     memory: Vec<u8>,
 }
 
@@ -33,6 +34,7 @@ fn snapshot(vm: &Tbx16Vm) -> VmSnapshot {
         bp: vm.registers().bp,
         step_counter: vm.step_counter(),
         call_depth: vm.call_depth(),
+        output: vm.output().to_vec(),
         memory: vm.memory().as_bytes().to_vec(),
     }
 }
@@ -109,6 +111,23 @@ impl ImageBuilder {
             };
             vm.memory_mut().write_cell(addr, cell).unwrap();
         }
+    }
+}
+
+fn write_length_prefixed_bytes(vm: &mut Tbx16Vm, addr: u16, bytes: &[u8]) {
+    let addr = Address::new(addr);
+    vm.memory_mut()
+        .write_cell(addr, Cell::new(bytes.len() as u16))
+        .unwrap();
+    for (offset, byte) in bytes.iter().copied().enumerate() {
+        vm.memory_mut()
+            .write_byte(
+                addr.checked_add(2)
+                    .and_then(|start| start.checked_add_usize(offset))
+                    .unwrap(),
+                byte,
+            )
+            .unwrap();
     }
 }
 
@@ -417,7 +436,7 @@ fn bp_slot_addresses_use_two_byte_steps() {
 }
 
 #[test]
-fn primitive_registry_matches_the_m2_3a_abi_contract() {
+fn primitive_registry_matches_the_m2_3b_abi_contract() {
     let mut ids = HashMap::new();
     let mut names = HashMap::new();
     for descriptor in PRIMITIVE_REGISTRY {
@@ -449,9 +468,13 @@ fn primitive_registry_matches_the_m2_3a_abi_contract() {
     assert_eq!(PrimitiveId::ToBool as u16, 64);
     assert_eq!(PrimitiveId::Fetch as u16, 80);
     assert_eq!(PrimitiveId::Store as u16, 81);
+    assert_eq!(PrimitiveId::PutChr as u16, 96);
+    assert_eq!(PrimitiveId::PutDec as u16, 97);
+    assert_eq!(PrimitiveId::PutStr as u16, 98);
 
     assert_eq!(PrimitiveId::Exit.operand(), PrimitiveOperand::Cell);
     assert_eq!(PrimitiveId::Dup.operand(), PrimitiveOperand::None);
+    assert_eq!(PrimitiveId::PutDec.operand(), PrimitiveOperand::None);
     assert_eq!(PrimitiveId::from_name("add"), None);
     assert_eq!(primitive_descriptor_by_name("add"), None);
     assert_eq!(PrimitiveId::try_from(Cell::new(0xffff)), Err(()));
@@ -1368,6 +1391,177 @@ fn memory_primitives_cover_little_endian_odd_addresses_and_atomic_traps() {
 }
 
 #[test]
+fn output_sink_supports_borrow_take_and_clear() {
+    let mut vm = Tbx16Vm::default();
+    assert_eq!(vm.output(), b"");
+
+    write_length_prefixed_bytes(&mut vm, 0x3000, b"abc");
+    let mut image = ImageBuilder::new(CODE_START);
+    let putstr_xt = image.primitive(PrimitiveId::PutStr);
+    image.load_into(&mut vm);
+
+    vm.push_data_cell(Cell::new(0x3000)).unwrap();
+    assert_eq!(vm.run(putstr_xt), ExecutionOutcome::Returned);
+    assert_eq!(vm.output(), b"abc");
+
+    let taken = vm.take_output();
+    assert_eq!(taken, b"abc");
+    assert_eq!(vm.output(), b"");
+
+    vm.push_data_cell(Cell::new(0x3000)).unwrap();
+    assert_eq!(vm.run(putstr_xt), ExecutionOutcome::Returned);
+    assert_eq!(vm.output(), b"abc");
+    vm.clear_output();
+    assert_eq!(vm.output(), b"");
+}
+
+#[test]
+fn output_sink_accumulates_across_runs_and_survives_reset() {
+    let mut vm = Tbx16Vm::default();
+    let mut image = ImageBuilder::new(CODE_START);
+    let putchr_xt = image.primitive(PrimitiveId::PutChr);
+    image.load_into(&mut vm);
+
+    vm.push_data_cell(Cell::new(u16::from(b'A'))).unwrap();
+    assert_eq!(vm.run(putchr_xt), ExecutionOutcome::Returned);
+    vm.push_data_cell(Cell::new(u16::from(b'B'))).unwrap();
+    assert_eq!(vm.run(putchr_xt), ExecutionOutcome::Returned);
+    assert_eq!(vm.output(), b"AB");
+
+    vm.reset_execution_state();
+    assert_eq!(vm.output(), b"AB");
+
+    vm.push_data_cell(Cell::new(u16::from(b'C'))).unwrap();
+    assert_eq!(vm.run(putchr_xt), ExecutionOutcome::Returned);
+    assert_eq!(vm.take_output(), b"ABC");
+}
+
+#[test]
+fn output_primitives_cover_entry_threaded_and_atomic_traps() {
+    let mut chr_vm = Tbx16Vm::default();
+    let mut chr_image = ImageBuilder::new(CODE_START);
+    let putchr_xt = chr_image.primitive(PrimitiveId::PutChr);
+    chr_image.load_into(&mut chr_vm);
+    for value in [0x0041, 0xff41, 0x0000] {
+        chr_vm.push_data_cell(Cell::new(value)).unwrap();
+        assert_eq!(chr_vm.run(putchr_xt), ExecutionOutcome::Returned);
+    }
+    assert_eq!(chr_vm.take_output(), vec![b'A', b'A', 0x00]);
+
+    let mut dec_vm = Tbx16Vm::default();
+    let mut dec_image = ImageBuilder::new(CODE_START);
+    let putdec_xt = dec_image.primitive(PrimitiveId::PutDec);
+    dec_image.load_into(&mut dec_vm);
+    for value in [0, 1234, -45, -32768] {
+        dec_vm.push_data_cell(Cell::from_i16(value)).unwrap();
+        assert_eq!(dec_vm.run(putdec_xt), ExecutionOutcome::Returned);
+    }
+    assert_eq!(dec_vm.take_output(), b"01234-45-32768");
+
+    let mut str_vm = Tbx16Vm::default();
+    let mut str_image = ImageBuilder::new(CODE_START);
+    let putstr_xt = str_image.primitive(PrimitiveId::PutStr);
+    str_image.load_into(&mut str_vm);
+    write_length_prefixed_bytes(&mut str_vm, 0x3001, b"hi\0");
+    str_vm.push_data_cell(Cell::new(0x3001)).unwrap();
+    assert_eq!(str_vm.run(putstr_xt), ExecutionOutcome::Returned);
+    assert_eq!(str_vm.take_output(), b"hi\0");
+
+    let mut threaded_vm = Tbx16Vm::default();
+    let mut threaded_image = ImageBuilder::new(CODE_START);
+    let lit_xt = threaded_image.primitive(PrimitiveId::Lit);
+    let putchr_xt = threaded_image.primitive(PrimitiveId::PutChr);
+    let putdec_xt = threaded_image.primitive(PrimitiveId::PutDec);
+    let putstr_xt = threaded_image.primitive(PrimitiveId::PutStr);
+    let halt_xt = threaded_image.primitive(PrimitiveId::Halt);
+    write_length_prefixed_bytes(&mut threaded_vm, 0x3100, b"!");
+    threaded_image.emit_xt(lit_xt);
+    threaded_image.emit_cell(Cell::new(u16::from(b'A')));
+    threaded_image.emit_xt(putchr_xt);
+    threaded_image.emit_xt(lit_xt);
+    threaded_image.emit_cell(Cell::from_i16(-12));
+    threaded_image.emit_xt(putdec_xt);
+    threaded_image.emit_xt(lit_xt);
+    threaded_image.emit_cell(Cell::new(0x3100));
+    threaded_image.emit_xt(putstr_xt);
+    threaded_image.emit_xt(halt_xt);
+    threaded_image.load_into(&mut threaded_vm);
+    assert_eq!(
+        threaded_vm.run_threaded(Address::new(CODE_START + 20)),
+        ExecutionOutcome::Halted
+    );
+    assert_eq!(threaded_vm.take_output(), b"A-12!");
+
+    for primitive in [
+        PrimitiveId::PutChr,
+        PrimitiveId::PutDec,
+        PrimitiveId::PutStr,
+    ] {
+        let mut vm = Tbx16Vm::default();
+        let mut image = ImageBuilder::new(CODE_START);
+        let xt = image.primitive(primitive);
+        image.load_into(&mut vm);
+        let before = snapshot(&vm);
+        assert_eq!(
+            vm.run(xt),
+            ExecutionOutcome::Trapped(Tbx16Error::DataStackUnderflow)
+        );
+        let after = snapshot(&vm);
+        assert_eq!(after.dsp, before.dsp);
+        assert_eq!(after.output, before.output);
+        assert_eq!(after.memory, before.memory);
+        assert_eq!(after.step_counter, 1);
+    }
+}
+
+#[test]
+fn putstr_rejects_end_crossing_without_mutation() {
+    let mut length_vm = Tbx16Vm::default();
+    let mut image = ImageBuilder::new(CODE_START);
+    let putstr_xt = image.primitive(PrimitiveId::PutStr);
+    image.load_into(&mut length_vm);
+    length_vm.push_data_cell(Cell::new(0xffff)).unwrap();
+    let before = snapshot(&length_vm);
+    assert_eq!(
+        length_vm.run(putstr_xt),
+        ExecutionOutcome::Trapped(Tbx16Error::InvalidMemoryAccess {
+            addr: Address::new(0xffff),
+            operation: "cell read",
+        })
+    );
+    let after = snapshot(&length_vm);
+    assert_eq!(after.dsp, before.dsp);
+    assert_eq!(after.output, before.output);
+    assert_eq!(after.memory, before.memory);
+
+    let mut payload_vm = Tbx16Vm::default();
+    let mut image = ImageBuilder::new(CODE_START);
+    let putstr_xt = image.primitive(PrimitiveId::PutStr);
+    image.load_into(&mut payload_vm);
+    payload_vm
+        .memory_mut()
+        .write_cell(Address::new(0xfffd), Cell::new(2))
+        .unwrap();
+    payload_vm
+        .memory_mut()
+        .write_byte(Address::new(0xffff), b'X')
+        .unwrap();
+    payload_vm.push_data_cell(Cell::new(0xfffd)).unwrap();
+    let before = snapshot(&payload_vm);
+    assert_eq!(
+        payload_vm.run(putstr_xt),
+        ExecutionOutcome::Trapped(Tbx16Error::InvalidMemoryAccess {
+            addr: Address::new(0xfffd),
+            operation: "string read",
+        })
+    );
+    let after = snapshot(&payload_vm);
+    assert_eq!(after.dsp, before.dsp);
+    assert_eq!(after.output, before.output);
+    assert_eq!(after.memory, before.memory);
+}
+
+#[test]
 fn threaded_program_executes_m2_3a_primitives() {
     let mut vm = Tbx16Vm::default();
     let mut image = ImageBuilder::new(CODE_START);
@@ -1977,6 +2171,23 @@ fn reset_execution_state_preserves_step_limit() {
     );
     assert_eq!(vm.step_counter(), 1);
     assert_eq!(vm.registers().ip, Some(Address::new(CODE_START + 14)));
+    assert_eq!(vm.peek_data_cell(0).unwrap(), Cell::new(0x9999));
+}
+
+#[test]
+fn reset_execution_state_preserves_output_sink() {
+    let mut vm = Tbx16Vm::default();
+    let mut image = ImageBuilder::new(CODE_START);
+    let putchr_xt = image.primitive(PrimitiveId::PutChr);
+    image.load_into(&mut vm);
+
+    vm.push_data_cell(Cell::new(u16::from(b'Q'))).unwrap();
+    assert_eq!(vm.run(putchr_xt), ExecutionOutcome::Returned);
+
+    vm.push_data_cell(Cell::new(0x9999)).unwrap();
+    vm.reset_execution_state();
+
+    assert_eq!(vm.output(), b"Q");
     assert_eq!(vm.peek_data_cell(0).unwrap(), Cell::new(0x9999));
 }
 

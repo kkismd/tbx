@@ -51,7 +51,7 @@ pub struct PrimitiveDescriptor {
     pub operand: PrimitiveOperand,
 }
 
-/// Primitive registry for the M2.3a threaded kernel.
+/// Primitive registry for the M2.3b threaded kernel.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u16)]
 pub enum PrimitiveId {
@@ -84,6 +84,9 @@ pub enum PrimitiveId {
     Bor = 69,
     Fetch = 80,
     Store = 81,
+    PutChr = 96,
+    PutDec = 97,
+    PutStr = 98,
 }
 
 impl PrimitiveId {
@@ -142,6 +145,9 @@ impl TryFrom<Cell> for PrimitiveId {
             69 => Ok(Self::Bor),
             80 => Ok(Self::Fetch),
             81 => Ok(Self::Store),
+            96 => Ok(Self::PutChr),
+            97 => Ok(Self::PutDec),
+            98 => Ok(Self::PutStr),
             _ => Err(()),
         }
     }
@@ -293,6 +299,21 @@ pub const PRIMITIVE_REGISTRY: &[PrimitiveDescriptor] = &[
         name: "STORE",
         operand: PrimitiveOperand::None,
     },
+    PrimitiveDescriptor {
+        id: PrimitiveId::PutChr,
+        name: "PUTCHR",
+        operand: PrimitiveOperand::None,
+    },
+    PrimitiveDescriptor {
+        id: PrimitiveId::PutDec,
+        name: "PUTDEC",
+        operand: PrimitiveOperand::None,
+    },
+    PrimitiveDescriptor {
+        id: PrimitiveId::PutStr,
+        name: "PUTSTR",
+        operand: PrimitiveOperand::None,
+    },
 ];
 
 pub const fn primitive_descriptor_by_id(id: PrimitiveId) -> &'static PrimitiveDescriptor {
@@ -331,6 +352,7 @@ pub struct Tbx16Vm {
     registers: Registers,
     data_stack_region: StackRegion,
     return_stack_region: StackRegion,
+    output: Vec<u8>,
     step_limit: Option<usize>,
     step_counter: usize,
     call_depth: u16,
@@ -381,6 +403,7 @@ impl Tbx16Vm {
             registers,
             data_stack_region,
             return_stack_region,
+            output: Vec::new(),
             step_limit: None,
             step_counter: 0,
             call_depth: 0,
@@ -418,6 +441,18 @@ impl Tbx16Vm {
 
     pub fn set_step_limit(&mut self, step_limit: Option<usize>) {
         self.step_limit = step_limit;
+    }
+
+    pub fn output(&self) -> &[u8] {
+        &self.output
+    }
+
+    pub fn take_output(&mut self) -> Vec<u8> {
+        std::mem::take(&mut self.output)
+    }
+
+    pub fn clear_output(&mut self) {
+        self.output.clear();
     }
 
     pub fn step_counter(&self) -> usize {
@@ -859,6 +894,9 @@ impl Tbx16Vm {
             PrimitiveId::Bor => self.execute_bor(),
             PrimitiveId::Fetch => self.execute_fetch(),
             PrimitiveId::Store => self.execute_store(),
+            PrimitiveId::PutChr => self.execute_putchr(),
+            PrimitiveId::PutDec => self.execute_putdec(),
+            PrimitiveId::PutStr => self.execute_putstr(),
             PrimitiveId::Lit | PrimitiveId::Branch | PrimitiveId::ZBranch | PrimitiveId::Exit => {
                 Err(Tbx16Error::InvalidExecutionState)
             }
@@ -1280,6 +1318,29 @@ impl Tbx16Vm {
         Ok(())
     }
 
+    fn execute_putchr(&mut self) -> Result<(), Tbx16Error> {
+        let value = self.peek_data_cell(0)?;
+        self.output.push(value.raw() as u8);
+        self.pop_data_cell()?;
+        Ok(())
+    }
+
+    fn execute_putdec(&mut self) -> Result<(), Tbx16Error> {
+        let value = self.peek_data_cell(0)?;
+        let rendered = value.as_i16().to_string();
+        self.output.extend_from_slice(rendered.as_bytes());
+        self.pop_data_cell()?;
+        Ok(())
+    }
+
+    fn execute_putstr(&mut self) -> Result<(), Tbx16Error> {
+        let addr = Address::new(self.peek_data_cell(0)?.raw());
+        let bytes = self.read_length_prefixed_bytes(addr)?;
+        self.output.extend_from_slice(&bytes);
+        self.pop_data_cell()?;
+        Ok(())
+    }
+
     fn execute_unary_transform(
         &mut self,
         transform: impl FnOnce(Cell) -> Cell,
@@ -1360,6 +1421,26 @@ impl Tbx16Vm {
             return Ok(Cell::new(0));
         }
         Ok(Cell::from_i16(lhs % rhs))
+    }
+
+    fn read_length_prefixed_bytes(&self, addr: Address) -> Result<Vec<u8>, Tbx16Error> {
+        let len = usize::from(self.memory.read_cell(addr)?.raw());
+        let bytes_start = addr.checked_add(2).ok_or(Tbx16Error::InvalidMemoryAccess {
+            addr,
+            operation: "string read",
+        })?;
+        let mut bytes = Vec::with_capacity(len);
+        for offset in 0..len {
+            let byte_addr =
+                bytes_start
+                    .checked_add_usize(offset)
+                    .ok_or(Tbx16Error::InvalidMemoryAccess {
+                        addr,
+                        operation: "string read",
+                    })?;
+            bytes.push(self.memory.read_byte(byte_addr)?);
+        }
+        Ok(bytes)
     }
 }
 
