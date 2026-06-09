@@ -1,6 +1,7 @@
 import csv
 from pathlib import Path
 import unittest
+from types import SimpleNamespace
 
 from experiments.galactic_exodus import fuel_metrics
 from experiments.galactic_exodus import metrics
@@ -98,6 +99,17 @@ class ConfigurationTests(unittest.TestCase):
                 resource_supply=5,
             ),
         )
+
+    def test_build_configurations_for_low_initial_run_has_108_items(self) -> None:
+        configurations = fuel_metrics.build_configurations(
+            rift_densities=[0.10, 0.15],
+            initial_fuels=[14, 16, 18, 20, 22, 24],
+            base_supplies=[8, 10, 12],
+            resource_supply=5,
+            resource_counts=[0, 1, 3],
+        )
+
+        self.assertEqual(len(configurations), 108)
 
 
 class DerivedMetricTests(unittest.TestCase):
@@ -208,6 +220,93 @@ class SummaryTests(unittest.TestCase):
                 collected={variant: [make_seed_metric(1, direct=True, via_base=True, via_resource=False)]},
             )
 
+    def test_build_initial_fuel_deltas_uses_adjacent_sorted_initial_fuels(self) -> None:
+        grouped_summaries = [
+            fuel_metrics.FuelMetricSummary(
+                configuration=fuel_metrics.FuelMetricConfiguration(0.10, 1, 14, 8, 5),
+                seed_start=1,
+                seed_count=1,
+                seed_end=1,
+                total_runs=1,
+                direct_feasible_count=0,
+                direct_feasible_ratio=0.10,
+                via_base_feasible_count=1,
+                via_base_feasible_ratio=1.0,
+                via_resource_feasible_count=0,
+                via_resource_feasible_ratio=0.0,
+                any_feasible_count=1,
+                any_feasible_ratio=0.40,
+                still_infeasible_count=0,
+                still_infeasible_ratio=0.60,
+                direct_failure_count=1,
+                rescued_by_base_count=1,
+                rescued_by_base_ratio=0.30,
+                rescued_by_resource_count=0,
+                rescued_by_resource_ratio=0.05,
+                base_only_rescue_count=1,
+                base_only_rescue_ratio=0.30,
+                resource_only_rescue_count=0,
+                resource_only_rescue_ratio=0.0,
+                both_supply_options_count=0,
+                both_supply_options_ratio=0.0,
+                base_rescue_rate_among_direct_failures=0.30,
+                resource_rescue_rate_among_direct_failures=0.05,
+                any_rescue_rate_among_direct_failures=0.30,
+                base_only_share_among_rescued=1.0,
+                any_feasible_ratio_delta_vs_r0=0.0,
+                still_infeasible_ratio_delta_vs_r0=0.0,
+                remaining_fuel_at_goal_stats=metrics.DistributionStats(1, 0, 1, 1, 1, 1),
+                required_supply_stats=metrics.DistributionStats(1, 0, 1, 1, 1, 1),
+                best_cost_via_resource_stats=metrics.DistributionStats(1, 0, 10, 10, 10, 10),
+            ),
+            fuel_metrics.FuelMetricSummary(
+                configuration=fuel_metrics.FuelMetricConfiguration(0.10, 1, 16, 8, 5),
+                seed_start=1,
+                seed_count=1,
+                seed_end=1,
+                total_runs=1,
+                direct_feasible_count=0,
+                direct_feasible_ratio=0.35,
+                via_base_feasible_count=1,
+                via_base_feasible_ratio=1.0,
+                via_resource_feasible_count=0,
+                via_resource_feasible_ratio=0.0,
+                any_feasible_count=1,
+                any_feasible_ratio=0.55,
+                still_infeasible_count=0,
+                still_infeasible_ratio=0.45,
+                direct_failure_count=1,
+                rescued_by_base_count=1,
+                rescued_by_base_ratio=0.20,
+                rescued_by_resource_count=0,
+                rescued_by_resource_ratio=0.10,
+                base_only_rescue_count=1,
+                base_only_rescue_ratio=0.20,
+                resource_only_rescue_count=0,
+                resource_only_rescue_ratio=0.0,
+                both_supply_options_count=0,
+                both_supply_options_ratio=0.0,
+                base_rescue_rate_among_direct_failures=0.20,
+                resource_rescue_rate_among_direct_failures=0.10,
+                any_rescue_rate_among_direct_failures=0.20,
+                base_only_share_among_rescued=1.0,
+                any_feasible_ratio_delta_vs_r0=0.0,
+                still_infeasible_ratio_delta_vs_r0=0.0,
+                remaining_fuel_at_goal_stats=metrics.DistributionStats(1, 0, 1, 1, 1, 1),
+                required_supply_stats=metrics.DistributionStats(1, 0, 1, 1, 1, 1),
+                best_cost_via_resource_stats=metrics.DistributionStats(1, 0, 10, 10, 10, 10),
+            ),
+        ]
+
+        deltas = fuel_metrics.build_initial_fuel_deltas(grouped_summaries)
+
+        self.assertIsNone(deltas[0].direct_feasible_ratio_delta)
+        self.assertAlmostEqual(deltas[1].direct_feasible_ratio_delta, 0.25)
+        self.assertAlmostEqual(deltas[1].any_feasible_ratio_delta, 0.15)
+        self.assertAlmostEqual(deltas[1].still_infeasible_ratio_delta, -0.15)
+        self.assertAlmostEqual(deltas[1].rescued_by_base_ratio_delta, -0.10)
+        self.assertAlmostEqual(deltas[1].rescued_by_resource_ratio_delta, 0.05)
+
 
 class CollectionAndCsvTests(unittest.TestCase):
     def test_resource_count_zero_produces_stable_resource_metrics(self) -> None:
@@ -308,6 +407,71 @@ class CollectionAndCsvTests(unittest.TestCase):
         self.assertEqual(rows[0]["resource_count"], "0")
         self.assertEqual(rows[1]["resource_count"], "1")
         self.assertEqual(rows[1]["any_feasible_ratio_delta_vs_r0"], "0.5")
+
+    def test_build_reproduction_command_preserves_low_initial_candidates(self) -> None:
+        args = SimpleNamespace(
+            seed_start=1,
+            seed_count=1000,
+            rift_density="0.10,0.15",
+            initial_fuels="14,16,18,20,22,24",
+            base_supplies="8,10,12",
+            resource_supply=5,
+            resource_counts="0,1,3",
+            csv_output=Path("experiments/galactic_exodus/results/fuel_comparison_low_initial_seed_1_1000.csv"),
+            markdown_output=Path("experiments/galactic_exodus/results/fuel_comparison_low_initial_seed_1_1000.md"),
+        )
+
+        command = fuel_metrics.build_reproduction_command(args)
+
+        self.assertIn("--initial-fuels 14,16,18,20,22,24", command)
+        self.assertIn("--base-supplies 8,10,12", command)
+        self.assertIn("--resource-counts 0,1,3", command)
+
+    def test_format_markdown_report_includes_comparison_sections(self) -> None:
+        summary = fuel_metrics.FuelMetricSummary(
+            configuration=fuel_metrics.FuelMetricConfiguration(0.10, 0, 14, 8, 5),
+            seed_start=1,
+            seed_count=1,
+            seed_end=1,
+            total_runs=1,
+            direct_feasible_count=0,
+            direct_feasible_ratio=0.1,
+            via_base_feasible_count=1,
+            via_base_feasible_ratio=1.0,
+            via_resource_feasible_count=0,
+            via_resource_feasible_ratio=0.0,
+            any_feasible_count=1,
+            any_feasible_ratio=1.0,
+            still_infeasible_count=0,
+            still_infeasible_ratio=0.0,
+            direct_failure_count=1,
+            rescued_by_base_count=1,
+            rescued_by_base_ratio=0.9,
+            rescued_by_resource_count=0,
+            rescued_by_resource_ratio=0.0,
+            base_only_rescue_count=1,
+            base_only_rescue_ratio=0.9,
+            resource_only_rescue_count=0,
+            resource_only_rescue_ratio=0.0,
+            both_supply_options_count=0,
+            both_supply_options_ratio=0.0,
+            base_rescue_rate_among_direct_failures=0.9,
+            resource_rescue_rate_among_direct_failures=0.0,
+            any_rescue_rate_among_direct_failures=0.9,
+            base_only_share_among_rescued=1.0,
+            any_feasible_ratio_delta_vs_r0=0.0,
+            still_infeasible_ratio_delta_vs_r0=0.0,
+            remaining_fuel_at_goal_stats=metrics.DistributionStats(1, 0, 5, 5, 5, 5),
+            required_supply_stats=metrics.DistributionStats(1, 0, 3, 3, 3, 3),
+            best_cost_via_resource_stats=metrics.DistributionStats(0, 1, None, None, None, None),
+        )
+
+        report = fuel_metrics.format_markdown_report("python ...", [summary])
+
+        self.assertIn("## Initial Fuel Comparison", report)
+        self.assertIn("## Base Supply Comparison", report)
+        self.assertIn("## Resource Count Comparison", report)
+        self.assertIn("| initial | direct | any | still |", report)
 
 
 if __name__ == "__main__":

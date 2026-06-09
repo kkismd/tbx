@@ -86,6 +86,16 @@ class FuelMetricSummary:
     best_cost_via_resource_stats: metrics.DistributionStats
 
 
+@dataclass(frozen=True)
+class InitialFuelDelta:
+    summary: FuelMetricSummary
+    direct_feasible_ratio_delta: float | None
+    any_feasible_ratio_delta: float | None
+    still_infeasible_ratio_delta: float | None
+    rescued_by_base_ratio_delta: float | None
+    rescued_by_resource_ratio_delta: float | None
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Compare Galactic Exodus fuel configurations across deterministic seed ranges."
@@ -506,6 +516,175 @@ def format_text_summary(summaries: list[FuelMetricSummary]) -> str:
     return "\n".join(lines)
 
 
+def build_initial_fuel_deltas(grouped_summaries: list[FuelMetricSummary]) -> list[InitialFuelDelta]:
+    deltas: list[InitialFuelDelta] = []
+    previous_summary: FuelMetricSummary | None = None
+    for summary in grouped_summaries:
+        deltas.append(
+            InitialFuelDelta(
+                summary=summary,
+                direct_feasible_ratio_delta=summary.direct_feasible_ratio - previous_summary.direct_feasible_ratio
+                if previous_summary is not None
+                else None,
+                any_feasible_ratio_delta=summary.any_feasible_ratio - previous_summary.any_feasible_ratio
+                if previous_summary is not None
+                else None,
+                still_infeasible_ratio_delta=summary.still_infeasible_ratio - previous_summary.still_infeasible_ratio
+                if previous_summary is not None
+                else None,
+                rescued_by_base_ratio_delta=summary.rescued_by_base_ratio - previous_summary.rescued_by_base_ratio
+                if previous_summary is not None
+                else None,
+                rescued_by_resource_ratio_delta=summary.rescued_by_resource_ratio - previous_summary.rescued_by_resource_ratio
+                if previous_summary is not None
+                else None,
+            )
+        )
+        previous_summary = summary
+    return deltas
+
+
+def group_summaries(
+    summaries: list[FuelMetricSummary],
+    *,
+    key_fn,
+) -> list[tuple[tuple[float | int, ...], list[FuelMetricSummary]]]:
+    grouped: dict[tuple[float | int, ...], list[FuelMetricSummary]] = {}
+    for summary in summaries:
+        grouped.setdefault(key_fn(summary), []).append(summary)
+    return [
+        (key, sorted(grouped_summaries, key=lambda summary: summary.configuration))
+        for key, grouped_summaries in sorted(grouped.items())
+    ]
+
+
+def format_initial_fuel_sections(summaries: list[FuelMetricSummary]) -> list[str]:
+    lines: list[str] = []
+    grouped = group_summaries(
+        summaries,
+        key_fn=lambda summary: (
+            summary.configuration.rift_density,
+            summary.configuration.resource_count,
+            summary.configuration.base_supply,
+        ),
+    )
+    for (rift_density, resource_count, base_supply), grouped_summaries in grouped:
+        lines.extend(
+            [
+                f"### density={rift_density:.2f} R={resource_count} B={base_supply}",
+                "",
+                "| initial | direct | any | still | base rescue | resource rescue | direct delta | any delta | still delta | base delta | resource delta |",
+                "| ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
+            ]
+        )
+        for delta in build_initial_fuel_deltas(grouped_summaries):
+            summary = delta.summary
+            lines.append(
+                "| "
+                + " | ".join(
+                    [
+                        str(summary.configuration.initial_fuel),
+                        format_ratio(summary.direct_feasible_ratio),
+                        format_ratio(summary.any_feasible_ratio),
+                        format_ratio(summary.still_infeasible_ratio),
+                        format_ratio(summary.rescued_by_base_ratio),
+                        format_ratio(summary.rescued_by_resource_ratio),
+                        format_ratio(delta.direct_feasible_ratio_delta),
+                        format_ratio(delta.any_feasible_ratio_delta),
+                        format_ratio(delta.still_infeasible_ratio_delta),
+                        format_ratio(delta.rescued_by_base_ratio_delta),
+                        format_ratio(delta.rescued_by_resource_ratio_delta),
+                    ]
+                )
+                + " |"
+            )
+        lines.append("")
+    return lines
+
+
+def format_base_supply_sections(summaries: list[FuelMetricSummary]) -> list[str]:
+    lines: list[str] = []
+    grouped = group_summaries(
+        summaries,
+        key_fn=lambda summary: (
+            summary.configuration.rift_density,
+            summary.configuration.resource_count,
+            summary.configuration.initial_fuel,
+        ),
+    )
+    for (rift_density, resource_count, initial_fuel), grouped_summaries in grouped:
+        lines.extend(
+            [
+                f"### density={rift_density:.2f} R={resource_count} initial={initial_fuel}",
+                "",
+                "| B supply | any | still | base rescue | resource rescue | base only | both | base-only share among rescued | remain med | required med |",
+                "| ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
+            ]
+        )
+        for summary in grouped_summaries:
+            lines.append(
+                "| "
+                + " | ".join(
+                    [
+                        str(summary.configuration.base_supply),
+                        format_ratio(summary.any_feasible_ratio),
+                        format_ratio(summary.still_infeasible_ratio),
+                        format_ratio(summary.rescued_by_base_ratio),
+                        format_ratio(summary.rescued_by_resource_ratio),
+                        format_ratio(summary.base_only_rescue_ratio),
+                        format_ratio(summary.both_supply_options_ratio),
+                        format_ratio(summary.base_only_share_among_rescued),
+                        metrics.format_number(summary.remaining_fuel_at_goal_stats.median_value),
+                        metrics.format_number(summary.required_supply_stats.median_value),
+                    ]
+                )
+                + " |"
+            )
+        lines.append("")
+    return lines
+
+
+def format_resource_count_sections(summaries: list[FuelMetricSummary]) -> list[str]:
+    lines: list[str] = []
+    grouped = group_summaries(
+        summaries,
+        key_fn=lambda summary: (
+            summary.configuration.rift_density,
+            summary.configuration.initial_fuel,
+            summary.configuration.base_supply,
+        ),
+    )
+    for (rift_density, initial_fuel, base_supply), grouped_summaries in grouped:
+        lines.extend(
+            [
+                f"### density={rift_density:.2f} initial={initial_fuel} B={base_supply}",
+                "",
+                "| R count | any | still | resource rescue | resource only | both | delta any vs R0 | delta still vs R0 | resource cost p90 |",
+                "| ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
+            ]
+        )
+        for summary in grouped_summaries:
+            lines.append(
+                "| "
+                + " | ".join(
+                    [
+                        str(summary.configuration.resource_count),
+                        format_ratio(summary.any_feasible_ratio),
+                        format_ratio(summary.still_infeasible_ratio),
+                        format_ratio(summary.rescued_by_resource_ratio),
+                        format_ratio(summary.resource_only_rescue_ratio),
+                        format_ratio(summary.both_supply_options_ratio),
+                        format_ratio(summary.any_feasible_ratio_delta_vs_r0),
+                        format_ratio(summary.still_infeasible_ratio_delta_vs_r0),
+                        metrics.format_number(summary.best_cost_via_resource_stats.p90_value),
+                    ]
+                )
+                + " |"
+            )
+        lines.append("")
+    return lines
+
+
 def format_markdown_report(command: str, summaries: list[FuelMetricSummary]) -> str:
     lines = [
         "# Galactic Exodus Fuel Comparison",
@@ -515,6 +694,18 @@ def format_markdown_report(command: str, summaries: list[FuelMetricSummary]) -> 
         "```bash",
         command,
         "```",
+        "",
+        "## Initial Fuel Comparison",
+        "",
+        *format_initial_fuel_sections(summaries),
+        "",
+        "## Base Supply Comparison",
+        "",
+        *format_base_supply_sections(summaries),
+        "",
+        "## Resource Count Comparison",
+        "",
+        *format_resource_count_sections(summaries),
         "",
         "## Summary Table",
         "",
