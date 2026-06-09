@@ -15,18 +15,22 @@ def make_map(
     *,
     cells: simulate.Cells,
     b_position: simulate.Position = (4, 4),
+    r_positions: list[simulate.Position] | None = None,
     rift_edges: tuple[simulate.Edge, ...] = (),
 ) -> simulate.GalacticMap:
     map_cells = dict(cells)
     map_cells[simulate.SPECIAL_S] = "S"
     map_cells[simulate.SPECIAL_H] = "H"
     map_cells[b_position] = "B"
+    resource_positions = [] if r_positions is None else list(r_positions)
+    for position in resource_positions:
+        map_cells[position] = "R"
     return simulate.GalacticMap(
         seed=0,
-        resource_count=0,
+        resource_count=len(resource_positions),
         rift_density=0.0,
         b_position=b_position,
-        r_positions=[],
+        r_positions=resource_positions,
         rift_edges=rift_edges,
         cells=map_cells,
     )
@@ -387,6 +391,8 @@ class AnalysisAndOutputTests(unittest.TestCase):
         self.assertIn("MAP ID\n", output)
         self.assertIn("\nOBJECTS\n", output)
         self.assertIn("\nPARAMETERS\n", output)
+        self.assertIn("\nFUEL PARAMETERS\n", output)
+        self.assertIn("\nFUEL ANALYSIS\n", output)
         self.assertIn("\nMAP\n", output)
         self.assertIn("\nCOSTS\n", output)
         self.assertIn("\nCOST CONTRIBUTIONS\n", output)
@@ -394,6 +400,11 @@ class AnalysisAndOutputTests(unittest.TestCase):
         self.assertIn("  map_id: seed-42-rift-0.10-res-3", output)
         self.assertIn("  B: (4,4)", output)
         self.assertIn("  rift_density: 0.10", output)
+        self.assertIn("  initial_fuel: 27", output)
+        self.assertIn("  base_supply: 10", output)
+        self.assertIn("  resource_supply: 5", output)
+        self.assertIn("  fuel_feasible_direct: yes", output)
+        self.assertIn("  fuel_feasible_via_base: yes", output)
         self.assertIn("  S_to_H_cost: 17", output)
         self.assertIn("  S_to_H_steps: 14", output)
         self.assertIn("  S_to_B_cost: 8", output)
@@ -474,6 +485,219 @@ class AnalysisAndOutputTests(unittest.TestCase):
         self.assertIn("  terrain_extra_cost: 0", output)
         self.assertIn("  rift_detour_cost: N/A", output)
         self.assertIn("  verdict: REJECT_TOO_HARD", output)
+
+    def test_format_output_reports_fuel_sections_for_custom_parameters(self) -> None:
+        galactic_map = make_map(cells=filled_cells("."), b_position=(2, 1))
+
+        output = simulate.format_output(
+            galactic_map,
+            initial_fuel=1,
+            base_supply=13,
+            resource_supply=5,
+        )
+
+        self.assertIn("  initial_fuel: 1", output)
+        self.assertIn("  base_supply: 13", output)
+        self.assertIn("  resource_supply: 5", output)
+        self.assertIn("  fuel_feasible_direct: no", output)
+        self.assertIn("  fuel_feasible_via_base: yes", output)
+        self.assertIn("  fuel_feasible_via_resource: no", output)
+        self.assertIn("  remaining_fuel_direct: N/A", output)
+        self.assertIn("  remaining_fuel_via_base: 0", output)
+        self.assertIn("  remaining_fuel_via_resource: N/A", output)
+        self.assertIn("  remaining_fuel_at_goal: 0", output)
+        self.assertIn("  required_supply: 13", output)
+        self.assertIn("  best_cost_via_resource: N/A", output)
+        self.assertIn("  best_resource_position: N/A", output)
+
+
+class FuelAnalysisTests(unittest.TestCase):
+    def test_direct_route_can_arrive_with_exactly_zero_fuel(self) -> None:
+        analysis = simulate.analyze_fuel(
+            make_map(cells=filled_cells(".")),
+            initial_fuel=14,
+            base_supply=0,
+            resource_supply=0,
+        )
+
+        self.assertTrue(analysis.fuel_feasible_direct)
+        self.assertEqual(analysis.remaining_fuel_direct, 0)
+        self.assertEqual(analysis.remaining_fuel_at_goal, 0)
+        self.assertEqual(analysis.required_supply, 0)
+
+    def test_base_route_can_resupply_after_arriving_with_zero_fuel(self) -> None:
+        analysis = simulate.analyze_fuel(
+            make_map(cells=filled_cells("."), b_position=(2, 1)),
+            initial_fuel=1,
+            base_supply=13,
+            resource_supply=0,
+        )
+
+        self.assertFalse(analysis.fuel_feasible_direct)
+        self.assertTrue(analysis.fuel_feasible_via_base)
+        self.assertEqual(analysis.remaining_fuel_via_base, 0)
+        self.assertEqual(analysis.remaining_fuel_at_goal, 0)
+        self.assertEqual(analysis.required_supply, 13)
+
+    def test_base_route_fails_when_initial_fuel_cannot_reach_base(self) -> None:
+        analysis = simulate.analyze_fuel(
+            make_map(cells=filled_cells("."), b_position=(4, 4)),
+            initial_fuel=5,
+            base_supply=100,
+            resource_supply=0,
+        )
+
+        self.assertFalse(analysis.fuel_feasible_via_base)
+        self.assertIsNone(analysis.remaining_fuel_via_base)
+
+    def test_base_route_fails_when_post_supply_fuel_is_still_insufficient(self) -> None:
+        analysis = simulate.analyze_fuel(
+            make_map(cells=filled_cells("."), b_position=(2, 1)),
+            initial_fuel=1,
+            base_supply=12,
+            resource_supply=0,
+        )
+
+        self.assertFalse(analysis.fuel_feasible_via_base)
+        self.assertIsNone(analysis.remaining_fuel_via_base)
+
+    def test_resource_route_is_feasible_when_any_one_resource_plan_works(self) -> None:
+        analysis = simulate.analyze_fuel(
+            make_map(
+                cells=filled_cells("."),
+                r_positions=[(2, 1), (8, 1)],
+            ),
+            initial_fuel=1,
+            base_supply=0,
+            resource_supply=13,
+        )
+
+        self.assertTrue(analysis.fuel_feasible_via_resource)
+        self.assertEqual(analysis.remaining_fuel_via_resource, 0)
+
+    def test_resource_remaining_fuel_uses_best_feasible_resource(self) -> None:
+        cells = filled_cells(".")
+        cells[(3, 1)] = "A"
+        analysis = simulate.analyze_fuel(
+            make_map(
+                cells=cells,
+                r_positions=[(2, 1), (4, 1)],
+            ),
+            initial_fuel=10,
+            base_supply=0,
+            resource_supply=10,
+        )
+
+        self.assertTrue(analysis.fuel_feasible_via_resource)
+        self.assertEqual(analysis.remaining_fuel_via_resource, 6)
+
+    def test_best_resource_cost_ignores_current_fuel_feasibility(self) -> None:
+        analysis = simulate.analyze_fuel(
+            make_map(
+                cells=filled_cells("."),
+                r_positions=[(2, 1)],
+            ),
+            initial_fuel=0,
+            base_supply=0,
+            resource_supply=0,
+        )
+
+        self.assertFalse(analysis.fuel_feasible_via_resource)
+        self.assertEqual(analysis.best_cost_via_resource, 14)
+        self.assertEqual(analysis.best_resource_position, (2, 1))
+
+    def test_resource_count_zero_returns_stable_empty_resource_values(self) -> None:
+        analysis = simulate.analyze_fuel(
+            make_map(cells=filled_cells(".")),
+            initial_fuel=27,
+            base_supply=10,
+            resource_supply=5,
+        )
+
+        self.assertFalse(analysis.fuel_feasible_via_resource)
+        self.assertIsNone(analysis.remaining_fuel_via_resource)
+        self.assertIsNone(analysis.best_cost_via_resource)
+        self.assertIsNone(analysis.best_resource_position)
+
+    def test_required_supply_is_zero_when_direct_route_is_feasible(self) -> None:
+        analysis = simulate.analyze_fuel(
+            make_map(cells=filled_cells("."), b_position=(2, 1)),
+            initial_fuel=20,
+            base_supply=0,
+            resource_supply=0,
+        )
+
+        self.assertEqual(analysis.required_supply, 0)
+
+    def test_required_supply_uses_reachable_supply_stop_when_direct_route_fails(self) -> None:
+        analysis = simulate.analyze_fuel(
+            make_map(cells=filled_cells("."), b_position=(2, 1)),
+            initial_fuel=10,
+            base_supply=0,
+            resource_supply=0,
+        )
+
+        self.assertEqual(analysis.required_supply, 4)
+
+    def test_required_supply_is_none_when_no_supply_stop_is_reachable_with_initial_fuel(self) -> None:
+        analysis = simulate.analyze_fuel(
+            make_map(
+                cells=filled_cells("."),
+                b_position=(4, 4),
+                r_positions=[(8, 1)],
+            ),
+            initial_fuel=1,
+            base_supply=0,
+            resource_supply=0,
+        )
+
+        self.assertIsNone(analysis.required_supply)
+
+    def test_unreachable_second_leg_is_treated_as_none_safely(self) -> None:
+        blocked_edges = (
+            simulate.normalize_edge(simulate.SPECIAL_S, (1, 2)),
+            simulate.normalize_edge((2, 1), (3, 1)),
+            simulate.normalize_edge((2, 1), (2, 2)),
+        )
+        analysis = simulate.analyze_fuel(
+            make_map(
+                cells=filled_cells("."),
+                r_positions=[(2, 1)],
+                rift_edges=blocked_edges,
+            ),
+            initial_fuel=10,
+            base_supply=0,
+            resource_supply=10,
+        )
+
+        self.assertFalse(analysis.fuel_feasible_via_resource)
+        self.assertIsNone(analysis.remaining_fuel_via_resource)
+        self.assertIsNone(analysis.best_cost_via_resource)
+        self.assertIsNone(analysis.best_resource_position)
+
+    def test_negative_inputs_are_rejected(self) -> None:
+        galactic_map = make_map(cells=filled_cells("."))
+
+        with self.assertRaisesRegex(ValueError, "initial-fuel"):
+            simulate.analyze_fuel(galactic_map, initial_fuel=-1, base_supply=0, resource_supply=0)
+        with self.assertRaisesRegex(ValueError, "base-supply"):
+            simulate.analyze_fuel(galactic_map, initial_fuel=0, base_supply=-1, resource_supply=0)
+        with self.assertRaisesRegex(ValueError, "resource-supply"):
+            simulate.analyze_fuel(galactic_map, initial_fuel=0, base_supply=0, resource_supply=-1)
+
+    def test_equal_cost_resource_choice_is_deterministic(self) -> None:
+        analysis = simulate.analyze_fuel(
+            make_map(
+                cells=filled_cells("."),
+                r_positions=[(2, 1), (1, 2)],
+            ),
+            initial_fuel=0,
+            base_supply=0,
+            resource_supply=0,
+        )
+
+        self.assertEqual(analysis.best_cost_via_resource, 14)
+        self.assertEqual(analysis.best_resource_position, (1, 2))
 
 
 if __name__ == "__main__":
