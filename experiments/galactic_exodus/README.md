@@ -16,6 +16,21 @@ python experiments/galactic_exodus/simulate.py --seed 42 --rift-density 0.10 --i
 python experiments/galactic_exodus/metrics.py --seed-start 1 --seed-count 1000 --rift-density 0.10 --resource-count 3
 ```
 
+航行力と B/R 補給候補を比較する場合は、次を実行します。
+
+```bash
+python experiments/galactic_exodus/fuel_metrics.py \
+  --seed-start 1 \
+  --seed-count 1000 \
+  --rift-density 0.10,0.15 \
+  --initial-fuels 24,27,30,33 \
+  --base-supplies 8,10,12 \
+  --resource-supply 5 \
+  --resource-counts 0,1,3 \
+  --csv-output experiments/galactic_exodus/results/fuel_comparison_seed_1_1000.csv \
+  --markdown-output experiments/galactic_exodus/results/fuel_comparison_seed_1_1000.md
+```
+
 ## 地形コスト
 
 基準となる経路分析では、8x8 グリッド上を4方向（`N/E/S/W`）に移動します。
@@ -217,10 +232,86 @@ verdict の優先順位は次のとおりです。
 
 `p90` は、到達可能サンプルを昇順に並べたうえで nearest-rank 方式で求めます。
 
+## Fuel Comparison Metrics
+
+`fuel_metrics.py` は、`simulate.analyze_fuel()` を使って複数の燃料条件を同じ seed 範囲で比較します。
+
+必須入力:
+
+- `--seed-start`
+- `--seed-count`
+- `--rift-density`
+- `--initial-fuels`
+- `--base-supplies`
+- `--resource-supply`
+- `--resource-counts`
+
+複数値引数はカンマ区切りです。`--rift-density` も `0.10,0.15` のように複数指定できます。
+
+configuration の並び順は常に次です。
+
+```text
+rift_density
+resource_count
+initial_fuel
+base_supply
+resource_supply
+```
+
+各 configuration について次を出力します。
+
+- `direct_feasible_count / ratio`
+- `via_base_feasible_count / ratio`
+- `via_resource_feasible_count / ratio`
+- `any_feasible_count / ratio`
+- `still_infeasible_count / ratio`
+- `rescued_by_base_count / ratio`
+- `rescued_by_resource_count / ratio`
+- `base_only_rescue_count / ratio`
+- `resource_only_rescue_count / ratio`
+- `both_supply_options_count / ratio`
+- `base_rescue_rate_among_direct_failures`
+- `resource_rescue_rate_among_direct_failures`
+- `any_rescue_rate_among_direct_failures`
+- `base_only_share_among_rescued`
+- `any_feasible_ratio_delta_vs_r0`
+- `still_infeasible_ratio_delta_vs_r0`
+
+分布統計は #1033 と同じ `DistributionStats` を使い、次の 3 指標を集計します。
+
+- `remaining_fuel_at_goal`
+- `required_supply`
+- `best_cost_via_resource`
+
+各分布は次の列を持ちます。
+
+- `sample_count`
+- `excluded_count`
+- `min`
+- `median`
+- `p90`
+- `max`
+
+規則:
+
+- `None` は分布から除外する
+- `remaining_fuel_at_goal` は走破不能 seed を除外する
+- `required_supply` は direct 成功時の `0` を含む
+- `best_cost_via_resource` は `resource_count=0` で全件 `N/A`
+
+出力:
+
+- 標準出力: 人が比較しやすい要約表
+- `--csv-output`: 1 configuration 1 行の CSV
+- `--markdown-output`: 再現コマンドと全 configuration 詳細を含む Markdown レポート
+
 ## テスト
 
 Python 実験環境のテストは、標準ライブラリの `unittest` で実行します。
 
 ```bash
-python -m unittest experiments.galactic_exodus.test_simulate experiments.galactic_exodus.test_metrics
+python -m unittest \
+  experiments.galactic_exodus.test_simulate \
+  experiments.galactic_exodus.test_metrics \
+  experiments.galactic_exodus.test_fuel_metrics
 ```
