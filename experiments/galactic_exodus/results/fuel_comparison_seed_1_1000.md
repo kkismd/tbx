@@ -17,9 +17,9 @@ python experiments/galactic_exodus/fuel_metrics.py \
 
 ## Conclusion
 
-- 全 72 configuration を評価したが、差分が出たのは `rift_density` だけだった。
+- 全 72 configuration を評価した結果、`direct_feasible_ratio`、`any_feasible_ratio`、`still_infeasible_ratio` と各 rescue 指標は、同じ `rift_density` の中では `initial_fuel`、`base_supply`、`resource_count` を変えても不変だった。
 - `initial_fuel=24/27/30/33`、`base_supply=8/10/12`、`resource_count=0/1/3` のどの組み合わせでも、`rescued_by_base`、`rescued_by_resource`、`base_only_rescue`、`resource_only_rescue`、`both_supply_options` はすべて `0.0%` だった。
-- `any_feasible_ratio` は `direct_feasible_ratio` と完全に一致し、`remaining_fuel_at_goal` の分布差は初期航行力や資源数の増減ぶんだけ機械的に平行移動した。
+- `any_feasible_ratio` は `direct_feasible_ratio` と完全に一致した。一方で `remaining_fuel_at_goal` は `initial_fuel` と `base_supply` に応じて変化し、`best_cost_via_resource` などの R 関連分布は `resource_count` に応じて変化した。
 - したがって、今回の候補集合では補給メカニクスは gameplay 上の選択肢としてまだ有効化されていない。現在の 8x8 マップと地形コストでは、到達可能な seed の多くが `initial_fuel=24` で既に走破できる。
 
 ## Main Comparison
@@ -37,7 +37,8 @@ python experiments/galactic_exodus/fuel_metrics.py \
   - テストした候補の中で最小値。
   - `27/30/33` に上げても `direct / any / still infeasible` は改善せず、余裕燃料だけが増えた。
 - `base_supply`: 暫定的に最小の `8`
-  - `10/12` は今回の条件では全指標が不変で、改善を示さなかった。
+  - `10/12` は走破率や rescue 指標を改善しなかった。
+  - `remaining_fuel_at_goal` は増えるが、補給の有効化にはつながっていない。
   - ただし「B 補給を有効な救済手段にする」という目的は未達なので、最終確定には追加評価が必要。
 - `resource_count`: 暫定的に `0`
   - `1/3` を追加しても `resource_only_rescue` と `any_feasible_ratio_delta_vs_r0` は全条件で `0.0%`。
