@@ -1,4 +1,8 @@
 import unittest
+from pathlib import Path
+import subprocess
+import sys
+from unittest.mock import patch
 
 from experiments.galactic_exodus import simulate
 
@@ -400,11 +404,12 @@ class AnalysisAndOutputTests(unittest.TestCase):
         self.assertIn("  map_id: seed-42-rift-0.10-res-3", output)
         self.assertIn("  B: (4,4)", output)
         self.assertIn("  rift_density: 0.10", output)
-        self.assertIn("  initial_fuel: 27", output)
-        self.assertIn("  base_supply: 10", output)
+        self.assertIn("  initial_fuel: 16", output)
+        self.assertIn("  base_supply: 8", output)
         self.assertIn("  resource_supply: 5", output)
-        self.assertIn("  fuel_feasible_direct: yes", output)
+        self.assertIn("  fuel_feasible_direct: no", output)
         self.assertIn("  fuel_feasible_via_base: yes", output)
+        self.assertIn("  fuel_feasible_via_resource: yes", output)
         self.assertIn("  S_to_H_cost: 17", output)
         self.assertIn("  S_to_H_steps: 14", output)
         self.assertIn("  S_to_B_cost: 8", output)
@@ -698,6 +703,127 @@ class FuelAnalysisTests(unittest.TestCase):
 
         self.assertEqual(analysis.best_cost_via_resource, 14)
         self.assertEqual(analysis.best_resource_position, (1, 2))
+
+
+class CliDefaultsTests(unittest.TestCase):
+    def test_parse_args_uses_phase1_default_recommendations(self) -> None:
+        with patch.object(sys, "argv", ["simulate.py"]):
+            args = simulate.parse_args()
+
+        self.assertEqual(args.resource_count, 3)
+        self.assertEqual(args.rift_density, 0.10)
+        self.assertEqual(args.initial_fuel, 16)
+        self.assertEqual(args.base_supply, 8)
+        self.assertEqual(args.resource_supply, 5)
+
+    def test_parse_args_preserves_explicit_argument_values(self) -> None:
+        with patch.object(
+            sys,
+            "argv",
+            [
+                "simulate.py",
+                "--seed",
+                "99",
+                "--resource-count",
+                "1",
+                "--rift-density",
+                "0.15",
+                "--initial-fuel",
+                "24",
+                "--base-supply",
+                "10",
+                "--resource-supply",
+                "6",
+            ],
+        ):
+            args = simulate.parse_args()
+
+        self.assertEqual(args.seed, 99)
+        self.assertEqual(args.resource_count, 1)
+        self.assertEqual(args.rift_density, 0.15)
+        self.assertEqual(args.initial_fuel, 24)
+        self.assertEqual(args.base_supply, 10)
+        self.assertEqual(args.resource_supply, 6)
+
+
+class ReadmeCommandTests(unittest.TestCase):
+    def run_command(self, *args: str) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            [sys.executable, *args],
+            check=True,
+            capture_output=True,
+            text=True,
+            cwd=Path(__file__).resolve().parents[2],
+        )
+
+    def test_readme_standard_simulate_command_runs(self) -> None:
+        result = self.run_command(
+            "experiments/galactic_exodus/simulate.py",
+            "--seed",
+            "42",
+            "--resource-count",
+            "3",
+            "--rift-density",
+            "0.10",
+            "--initial-fuel",
+            "16",
+            "--base-supply",
+            "8",
+            "--resource-supply",
+            "5",
+        )
+
+        self.assertIn("MAP ID", result.stdout)
+        self.assertIn("  initial_fuel: 16", result.stdout)
+        self.assertIn("  base_supply: 8", result.stdout)
+
+    def test_readme_standard_metrics_command_runs(self) -> None:
+        result = self.run_command(
+            "experiments/galactic_exodus/metrics.py",
+            "--seed-start",
+            "1",
+            "--seed-count",
+            "10",
+            "--rift-density",
+            "0.10",
+            "--resource-count",
+            "3",
+        )
+
+        self.assertIn("PHASE 0 METRICS", result.stdout)
+        self.assertIn("rift_density: 0.10", result.stdout)
+
+    def test_readme_standard_fuel_metrics_command_runs(self) -> None:
+        csv_output = Path(".tmp/readme-fuel-metrics.csv")
+        markdown_output = Path(".tmp/readme-fuel-metrics.md")
+        self.addCleanup(csv_output.unlink, missing_ok=True)
+        self.addCleanup(markdown_output.unlink, missing_ok=True)
+
+        result = self.run_command(
+            "experiments/galactic_exodus/fuel_metrics.py",
+            "--seed-start",
+            "1",
+            "--seed-count",
+            "10",
+            "--rift-density",
+            "0.10",
+            "--initial-fuels",
+            "14,16,18",
+            "--base-supplies",
+            "8,10",
+            "--resource-supply",
+            "5",
+            "--resource-counts",
+            "0,1,3",
+            "--csv-output",
+            str(csv_output),
+            "--markdown-output",
+            str(markdown_output),
+        )
+
+        self.assertIn("FUEL COMPARISON", result.stdout)
+        self.assertTrue(csv_output.exists())
+        self.assertTrue(markdown_output.exists())
 
 
 if __name__ == "__main__":

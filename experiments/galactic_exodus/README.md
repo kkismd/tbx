@@ -7,13 +7,23 @@
 ## 実行方法
 
 ```bash
-python experiments/galactic_exodus/simulate.py --seed 42 --rift-density 0.10 --initial-fuel 27 --base-supply 10 --resource-supply 5
+python experiments/galactic_exodus/simulate.py \
+  --seed 42 \
+  --resource-count 3 \
+  --rift-density 0.10 \
+  --initial-fuel 16 \
+  --base-supply 8 \
+  --resource-supply 5
 ```
 
 複数 seed の Phase 0 統計をまとめて出す場合は、次を実行します。
 
 ```bash
-python experiments/galactic_exodus/metrics.py --seed-start 1 --seed-count 1000 --rift-density 0.10 --resource-count 3
+python experiments/galactic_exodus/metrics.py \
+  --seed-start 1 \
+  --seed-count 10 \
+  --rift-density 0.10 \
+  --resource-count 3
 ```
 
 航行力と B/R 補給候補を比較する場合は、次を実行します。
@@ -21,15 +31,106 @@ python experiments/galactic_exodus/metrics.py --seed-start 1 --seed-count 1000 -
 ```bash
 python experiments/galactic_exodus/fuel_metrics.py \
   --seed-start 1 \
-  --seed-count 1000 \
-  --rift-density 0.10,0.15 \
-  --initial-fuels 24,27,30,33 \
-  --base-supplies 8,10,12 \
+  --seed-count 10 \
+  --rift-density 0.10 \
+  --initial-fuels 14,16,18 \
+  --base-supplies 8,10 \
   --resource-supply 5 \
   --resource-counts 0,1,3 \
-  --csv-output experiments/galactic_exodus/results/fuel_comparison_seed_1_1000.csv \
-  --markdown-output experiments/galactic_exodus/results/fuel_comparison_seed_1_1000.md
+  --csv-output .tmp/readme-fuel-metrics.csv \
+  --markdown-output .tmp/readme-fuel-metrics.md
 ```
+
+上の 3 コマンドは README の標準実行例として、unit test からそのまま実行できる形にしてあります。大規模比較を再現したい場合は、後述の結果ファイル生成コマンドを使ってください。
+
+## Phase 1 初期推奨値
+
+Phase 0 の最終判断として、Phase 1 最小縦断スライスへ渡す初期値は次とします。
+
+```text
+board_width: 8
+board_height: 8
+start_position: (1, 1)
+goal_position: (8, 8)
+
+terrain_weights:
+  plain (.): 0.60
+  nebula (N): 0.20
+  asteroid (A): 0.12
+  anomaly (@): 0.08
+
+terrain_costs:
+  plain (.): 1
+  nebula (N): 2
+  asteroid (A): 3
+  anomaly (@): 2
+  base (B): 1
+  resource (R): 1
+  goal (H): 1
+
+rift_density: 0.10
+
+base_positions:
+  (4,4) / (5,4) / (4,5) / (5,5)
+base_placement:
+  上記4候補から seed により 1 地点をランダム選択
+
+initial_fuel: 16
+base_supply: 8
+resource_count: 3
+resource_supply: 5
+```
+
+採用理由の要約:
+
+- `rift_density=0.10`
+  - 到達不能率 `2.3%`、`S->H cost median=16 / p90=18` で、断層影響を観測しつつ悪化を抑えられた。
+- 地形比率・地形コスト
+  - `terrain_extra_cost median=1 / p90=3`、positive ratio `73.3%` で地形差が十分に効いていたため現行値を維持する。
+- B 配置規則
+  - `B mandatory=0.0%`、`B avoid better=35.2%`、`tie=39.8%`、`B via better=25.0%` で固定解化していないため中央 4 候補ランダムを維持する。
+- `initial_fuel=16`
+  - `rift_density=0.10 / R=3 / B supply=10` で `direct=63.4%`、`any=97.7%`、`base rescue=34.3%`、`resource rescue=34.1%`。`14` は補給依存が強すぎ、`18` 以上は補給の役割が弱すぎた。
+- `base_supply=8`
+  - `8/10/12` の走破率差は小さく、増加分の主効果は残航行力だったため最小値を採用する。
+- `resource_count=3`
+  - 現行生成条件の観測比較で `1` より高い R 救済率を示した。これは同一マップへの追加配置の因果効果ではなく、地形・B/R 配置を含む母集団比較である。
+- `resource_supply=5`
+  - `initial_fuel=16 / resource_count=3` で R 救済が十分に立ち上がったため維持する。追加候補比較は未実施。
+
+暫定許容基準:
+
+```text
+到達不能率
+  0%〜3%: 許容
+  3%超〜5%: 要注意
+  5%超: 見直し対象
+
+B必須率
+  0%〜1%: 許容
+  1%超〜5%: 要注意
+  5%超: 見直し対象
+
+B経由偏重
+  B via better >= 70%: B経由が強すぎる可能性
+  B avoid better >= 70%: Bが価値を持たない可能性
+```
+
+Phase 1 で再検証する項目:
+
+- 到達率
+- 残航行力
+- 燃料切れ率
+- B訪問率
+- R訪問率
+- B/R補給回数
+- 直行率
+- 迂回率
+- R=3 の発見率・訪問率・盤面密度感
+- `resource_supply=5` の強さ
+- B補給による固定解化
+- 到達不能盤面の扱い
+- 単一地点・1回補給モデルで十分か
 
 ## 地形コスト
 
@@ -103,10 +204,10 @@ rift_count = round(112 * rift_density)
 - `base_supply`
 - `resource_supply`
 
-暫定 CLI 既定値:
+CLI 既定値:
 
-- `initial_fuel = 27`
-- `base_supply = 10`
+- `initial_fuel = 16`
+- `base_supply = 8`
 - `resource_supply = 5`
 
 いずれも 0 以上の整数で、負数は `ValueError` です。
@@ -246,7 +347,20 @@ verdict の優先順位は次のとおりです。
 - `--resource-supply`
 - `--resource-counts`
 
-複数値引数はカンマ区切りです。`--rift-density` も `0.10,0.15` のように複数指定できます。
+複数値引数はカンマ区切りです。`--rift-density` も `0.10,0.15` のように複数指定できます。大規模比較を再現する標準コマンドは次です。
+
+```bash
+python experiments/galactic_exodus/fuel_metrics.py \
+  --seed-start 1 \
+  --seed-count 1000 \
+  --rift-density 0.10,0.15 \
+  --initial-fuels 14,16,18,20,22,24 \
+  --base-supplies 8,10,12 \
+  --resource-supply 5 \
+  --resource-counts 0,1,3 \
+  --csv-output experiments/galactic_exodus/results/fuel_comparison_low_initial_seed_1_1000.csv \
+  --markdown-output experiments/galactic_exodus/results/fuel_comparison_low_initial_seed_1_1000.md
+```
 
 configuration の並び順は常に次です。
 
