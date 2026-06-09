@@ -15,8 +15,8 @@ HEIGHT = 8
 DEFAULT_SEED = 42
 DEFAULT_RESOURCE_COUNT = 3
 DEFAULT_RIFT_DENSITY = 0.10
-DEFAULT_INITIAL_FUEL = 27
-DEFAULT_BASE_SUPPLY = 10
+DEFAULT_INITIAL_FUEL = 16
+DEFAULT_BASE_SUPPLY = 8
 DEFAULT_RESOURCE_SUPPLY = 5
 TOTAL_UNDIRECTED_EDGES = WIDTH * (HEIGHT - 1) + HEIGHT * (WIDTH - 1)
 
@@ -136,13 +136,13 @@ def parse_args() -> argparse.Namespace:
         "--initial-fuel",
         type=int,
         default=DEFAULT_INITIAL_FUEL,
-        help="Initial fuel before movement (default: 27).",
+        help="Initial fuel before movement (default: 16).",
     )
     parser.add_argument(
         "--base-supply",
         type=int,
         default=DEFAULT_BASE_SUPPLY,
-        help="Fuel gained when resupplying once at B (default: 10).",
+        help="Fuel gained when resupplying once at B (default: 8).",
     )
     parser.add_argument(
         "--resource-supply",
