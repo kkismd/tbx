@@ -7,7 +7,7 @@
 ## 実行方法
 
 ```bash
-python experiments/galactic_exodus/simulate.py --seed 42 --rift-density 0.10
+python experiments/galactic_exodus/simulate.py --seed 42 --rift-density 0.10 --initial-fuel 27 --base-supply 10 --resource-supply 5
 ```
 
 複数 seed の Phase 0 統計をまとめて出す場合は、次を実行します。
@@ -58,8 +58,11 @@ rift_count = round(112 * rift_density)
 - `MAP ID`
 - `OBJECTS`
 - `PARAMETERS`
+- `FUEL PARAMETERS`
+- `FUEL ANALYSIS`
 - `MAP`
 - `COSTS`
+- `COST CONTRIBUTIONS`
 - `VERDICT`
 
 `COSTS` セクションには、verdict 分類に使う次の最短路指標が含まれます。
@@ -74,6 +77,67 @@ rift_count = round(112 * rift_density)
 - `base_is_mandatory`（`yes` / `no`）
 
 利用できない指標は `N/A` と表示されます。
+
+## 航行力モデル
+
+`simulate.py` には、1 seed レポートと後続比較用に再利用する純粋関数 `analyze_fuel()` があります。
+
+入力パラメータ:
+
+- `initial_fuel`
+- `base_supply`
+- `resource_supply`
+
+暫定 CLI 既定値:
+
+- `initial_fuel = 27`
+- `base_supply = 10`
+- `resource_supply = 5`
+
+いずれも 0 以上の整数で、負数は `ValueError` です。
+
+この分析では、既存の地形コストと断層制約をそのまま使います。
+
+- `S` では消費しない
+- 隣接マスへ移動すると、移動先マスの地形コストを消費する
+- 断層辺は通行不能
+- 燃料が負になる移動はできない
+- `B` / `R` / `H` にちょうど 0 で到着してよい
+- 補給は `B` または 1 つの `R` で最大 1 回だけ行う
+- 補給量は到着後に加算する
+- 燃料容量上限は設けない
+
+評価対象の走行計画は次の 3 種類だけです。
+
+- `direct`: 補給なし
+- `via_base`: `B` で 1 回補給
+- `via_resource`: 選んだ 1 つの `R` で 1 回補給
+
+`FUEL ANALYSIS` セクションには次が含まれます。
+
+- `fuel_feasible_direct`
+- `fuel_feasible_via_base`
+- `fuel_feasible_via_resource`
+- `remaining_fuel_direct`
+- `remaining_fuel_via_base`
+- `remaining_fuel_via_resource`
+- `remaining_fuel_at_goal`
+- `required_supply`
+- `best_cost_via_resource`
+- `best_resource_position`
+
+bool は `yes` / `no`、値なしは `N/A` で表示します。
+
+## この issue で扱わないもの
+
+次はこの燃料分析の対象外です。
+
+- `B` と `R` の両方で補給する経路
+- 複数の `R` で補給する経路
+- 同じ地点で複数回補給する経路
+- 補給地点の巡回順最適化
+- 正式な燃料容量
+- プローブ、敵、故障などの追加要素
 
 続いて `COST CONTRIBUTIONS` セクションで、同じ `GalacticMap` に対する全情報あり基準分析を出力します。ここでは地形配置と `S/H/B/R` 配置を固定したまま、経路計算条件だけを切り替えます。
 

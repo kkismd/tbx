@@ -15,6 +15,9 @@ HEIGHT = 8
 DEFAULT_SEED = 42
 DEFAULT_RESOURCE_COUNT = 3
 DEFAULT_RIFT_DENSITY = 0.10
+DEFAULT_INITIAL_FUEL = 27
+DEFAULT_BASE_SUPPLY = 10
+DEFAULT_RESOURCE_SUPPLY = 5
 TOTAL_UNDIRECTED_EDGES = WIDTH * (HEIGHT - 1) + HEIGHT * (WIDTH - 1)
 
 SPECIAL_S = (1, 1)
@@ -78,6 +81,31 @@ class CostContributionAnalysis:
     rift_detour_cost: int | None
 
 
+@dataclass(frozen=True)
+class FuelAnalysis:
+    fuel_feasible_direct: bool
+    fuel_feasible_via_base: bool
+    fuel_feasible_via_resource: bool
+    remaining_fuel_direct: int | None
+    remaining_fuel_via_base: int | None
+    remaining_fuel_via_resource: int | None
+    remaining_fuel_at_goal: int | None
+    required_supply: int | None
+    best_cost_via_resource: int | None
+    best_resource_position: Position | None
+
+
+@dataclass(frozen=True)
+class LegCost:
+    position: Position
+    cost_to_stop: int
+    cost_to_goal: int
+
+    @property
+    def total_cost(self) -> int:
+        return self.cost_to_stop + self.cost_to_goal
+
+
 VERDICT_REJECT_TOO_HARD = "REJECT_TOO_HARD"
 VERDICT_REJECT_BASE_MANDATORY = "REJECT_BASE_MANDATORY"
 VERDICT_ACCEPT = "ACCEPT"
@@ -104,6 +132,24 @@ def parse_args() -> argparse.Namespace:
         default=DEFAULT_RIFT_DENSITY,
         help="Density of impassable fault-line edges (default: 0.10).",
     )
+    parser.add_argument(
+        "--initial-fuel",
+        type=int,
+        default=DEFAULT_INITIAL_FUEL,
+        help="Initial fuel before movement (default: 27).",
+    )
+    parser.add_argument(
+        "--base-supply",
+        type=int,
+        default=DEFAULT_BASE_SUPPLY,
+        help="Fuel gained when resupplying once at B (default: 10).",
+    )
+    parser.add_argument(
+        "--resource-supply",
+        type=int,
+        default=DEFAULT_RESOURCE_SUPPLY,
+        help="Fuel gained when resupplying once at R (default: 5).",
+    )
     return parser.parse_args()
 
 
@@ -118,6 +164,11 @@ def validate_resource_count(resource_count: int) -> None:
 def validate_rift_density(rift_density: float) -> None:
     if not 0.0 <= rift_density <= 1.0:
         raise ValueError("rift-density must be between 0.0 and 1.0")
+
+
+def validate_non_negative(name: str, value: int) -> None:
+    if value < 0:
+        raise ValueError(f"{name} must be non-negative")
 
 
 def generate_map(seed: int, resource_count: int, rift_density: float = DEFAULT_RIFT_DENSITY) -> GalacticMap:
@@ -260,6 +311,168 @@ def shortest_path(
     return None
 
 
+def shortest_path_cost(
+    cells: Cells,
+    start: Position,
+    goal: Position,
+    blocked_edges: set[Edge],
+    *,
+    forbid_home_on_route: bool = False,
+) -> int | None:
+    forbidden_nodes = {SPECIAL_H} if forbid_home_on_route else None
+    result = shortest_path(
+        cells,
+        start,
+        goal,
+        blocked_edges,
+        forbidden_nodes=forbidden_nodes,
+    )
+    return None if result is None else result.cost
+
+
+def route_remaining_fuel(initial_fuel: int, total_cost: int, supply: int) -> int:
+    return initial_fuel + supply - total_cost
+
+
+def leg_costs_to_resource_positions(galactic_map: GalacticMap, blocked_edges: set[Edge]) -> list[LegCost]:
+    leg_costs: list[LegCost] = []
+    for position in sorted(galactic_map.r_positions):
+        cost_to_stop = shortest_path_cost(
+            galactic_map.cells,
+            SPECIAL_S,
+            position,
+            blocked_edges,
+            forbid_home_on_route=True,
+        )
+        cost_to_goal = shortest_path_cost(
+            galactic_map.cells,
+            position,
+            SPECIAL_H,
+            blocked_edges,
+        )
+        if cost_to_stop is None or cost_to_goal is None:
+            continue
+        leg_costs.append(
+            LegCost(
+                position=position,
+                cost_to_stop=cost_to_stop,
+                cost_to_goal=cost_to_goal,
+            )
+        )
+    return leg_costs
+
+
+def analyze_fuel(
+    galactic_map: GalacticMap,
+    *,
+    initial_fuel: int,
+    base_supply: int,
+    resource_supply: int,
+) -> FuelAnalysis:
+    validate_non_negative("initial-fuel", initial_fuel)
+    validate_non_negative("base-supply", base_supply)
+    validate_non_negative("resource-supply", resource_supply)
+
+    blocked_edges = set(galactic_map.rift_edges)
+
+    direct_cost = shortest_path_cost(galactic_map.cells, SPECIAL_S, SPECIAL_H, blocked_edges)
+    cost_to_base = shortest_path_cost(
+        galactic_map.cells,
+        SPECIAL_S,
+        galactic_map.b_position,
+        blocked_edges,
+        forbid_home_on_route=True,
+    )
+    cost_base_to_goal = shortest_path_cost(
+        galactic_map.cells,
+        galactic_map.b_position,
+        SPECIAL_H,
+        blocked_edges,
+    )
+
+    fuel_feasible_direct = direct_cost is not None and direct_cost <= initial_fuel
+    remaining_fuel_direct = None if not fuel_feasible_direct else initial_fuel - direct_cost
+
+    fuel_feasible_via_base = (
+        cost_to_base is not None
+        and cost_base_to_goal is not None
+        and cost_to_base <= initial_fuel
+        and cost_base_to_goal <= initial_fuel - cost_to_base + base_supply
+    )
+    remaining_fuel_via_base = None
+    if fuel_feasible_via_base:
+        remaining_fuel_via_base = route_remaining_fuel(
+            initial_fuel,
+            cost_to_base + cost_base_to_goal,
+            base_supply,
+        )
+
+    resource_leg_costs = leg_costs_to_resource_positions(galactic_map, blocked_edges)
+    best_resource_leg = min(resource_leg_costs, key=lambda leg: (leg.total_cost, leg.position), default=None)
+
+    feasible_resource_legs = [
+        leg
+        for leg in resource_leg_costs
+        if leg.cost_to_stop <= initial_fuel
+        and leg.cost_to_goal <= initial_fuel - leg.cost_to_stop + resource_supply
+    ]
+    best_remaining_resource_leg = max(
+        feasible_resource_legs,
+        key=lambda leg: (route_remaining_fuel(initial_fuel, leg.total_cost, resource_supply), -leg.position[0], -leg.position[1]),
+        default=None,
+    )
+
+    fuel_feasible_via_resource = best_remaining_resource_leg is not None
+    remaining_fuel_via_resource = None
+    if best_remaining_resource_leg is not None:
+        remaining_fuel_via_resource = route_remaining_fuel(
+            initial_fuel,
+            best_remaining_resource_leg.total_cost,
+            resource_supply,
+        )
+
+    remaining_candidates = [
+        value
+        for value in (
+            remaining_fuel_direct,
+            remaining_fuel_via_base,
+            remaining_fuel_via_resource,
+        )
+        if value is not None
+    ]
+    remaining_fuel_at_goal = max(remaining_candidates, default=None)
+
+    required_supply = None
+    if fuel_feasible_direct:
+        required_supply = 0
+    else:
+        supply_candidates: list[int] = []
+        if (
+            cost_to_base is not None
+            and cost_base_to_goal is not None
+            and cost_to_base <= initial_fuel
+        ):
+            supply_candidates.append(max(0, cost_to_base + cost_base_to_goal - initial_fuel))
+        for leg in resource_leg_costs:
+            if leg.cost_to_stop <= initial_fuel:
+                supply_candidates.append(max(0, leg.total_cost - initial_fuel))
+        if supply_candidates:
+            required_supply = min(supply_candidates)
+
+    return FuelAnalysis(
+        fuel_feasible_direct=fuel_feasible_direct,
+        fuel_feasible_via_base=fuel_feasible_via_base,
+        fuel_feasible_via_resource=fuel_feasible_via_resource,
+        remaining_fuel_direct=remaining_fuel_direct,
+        remaining_fuel_via_base=remaining_fuel_via_base,
+        remaining_fuel_via_resource=remaining_fuel_via_resource,
+        remaining_fuel_at_goal=remaining_fuel_at_goal,
+        required_supply=required_supply,
+        best_cost_via_resource=None if best_resource_leg is None else best_resource_leg.total_cost,
+        best_resource_position=None if best_resource_leg is None else best_resource_leg.position,
+    )
+
+
 def analyze_paths(galactic_map: GalacticMap) -> PathAnalysis:
     blocked_edges = set(galactic_map.rift_edges)
     best_route = shortest_path(galactic_map.cells, SPECIAL_S, SPECIAL_H, blocked_edges)
@@ -355,6 +568,10 @@ def format_yes_no(value: bool) -> str:
     return "yes" if value else "no"
 
 
+def format_optional_position(position: Position | None) -> str:
+    return "N/A" if position is None else format_position(position)
+
+
 def build_map_id(galactic_map: GalacticMap) -> str:
     return (
         f"seed-{galactic_map.seed}"
@@ -371,9 +588,21 @@ def classify_verdict(analysis: PathAnalysis) -> str:
     return VERDICT_ACCEPT
 
 
-def format_output(galactic_map: GalacticMap) -> str:
+def format_output(
+    galactic_map: GalacticMap,
+    *,
+    initial_fuel: int = DEFAULT_INITIAL_FUEL,
+    base_supply: int = DEFAULT_BASE_SUPPLY,
+    resource_supply: int = DEFAULT_RESOURCE_SUPPLY,
+) -> str:
     analysis = analyze_paths(galactic_map)
     cost_contributions = analyze_cost_contributions(galactic_map)
+    fuel_analysis = analyze_fuel(
+        galactic_map,
+        initial_fuel=initial_fuel,
+        base_supply=base_supply,
+        resource_supply=resource_supply,
+    )
     verdict = classify_verdict(analysis)
     resource_positions = ", ".join(format_position(position) for position in galactic_map.r_positions) or "(none)"
     lines = [
@@ -393,6 +622,23 @@ def format_output(galactic_map: GalacticMap) -> str:
         f"  rift_density: {galactic_map.rift_density:.2f}",
         f"  rift_count: {len(galactic_map.rift_edges)}",
         f"  terrain_distribution: {terrain_distribution(galactic_map.cells)}",
+        "",
+        "FUEL PARAMETERS",
+        f"  initial_fuel: {initial_fuel}",
+        f"  base_supply: {base_supply}",
+        f"  resource_supply: {resource_supply}",
+        "",
+        "FUEL ANALYSIS",
+        f"  fuel_feasible_direct: {format_yes_no(fuel_analysis.fuel_feasible_direct)}",
+        f"  fuel_feasible_via_base: {format_yes_no(fuel_analysis.fuel_feasible_via_base)}",
+        f"  fuel_feasible_via_resource: {format_yes_no(fuel_analysis.fuel_feasible_via_resource)}",
+        f"  remaining_fuel_direct: {format_optional_metric(fuel_analysis.remaining_fuel_direct)}",
+        f"  remaining_fuel_via_base: {format_optional_metric(fuel_analysis.remaining_fuel_via_base)}",
+        f"  remaining_fuel_via_resource: {format_optional_metric(fuel_analysis.remaining_fuel_via_resource)}",
+        f"  remaining_fuel_at_goal: {format_optional_metric(fuel_analysis.remaining_fuel_at_goal)}",
+        f"  required_supply: {format_optional_metric(fuel_analysis.required_supply)}",
+        f"  best_cost_via_resource: {format_optional_metric(fuel_analysis.best_cost_via_resource)}",
+        f"  best_resource_position: {format_optional_position(fuel_analysis.best_resource_position)}",
         "",
         "MAP",
         render_map(galactic_map.cells),
@@ -428,9 +674,19 @@ def main() -> int:
     args = parse_args()
     try:
         galactic_map = generate_map(args.seed, args.resource_count, args.rift_density)
+        validate_non_negative("initial-fuel", args.initial_fuel)
+        validate_non_negative("base-supply", args.base_supply)
+        validate_non_negative("resource-supply", args.resource_supply)
     except ValueError as exc:
         raise SystemExit(f"error: {exc}") from exc
-    print(format_output(galactic_map))
+    print(
+        format_output(
+            galactic_map,
+            initial_fuel=args.initial_fuel,
+            base_supply=args.base_supply,
+            resource_supply=args.resource_supply,
+        )
+    )
     return 0
 
 
