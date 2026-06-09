@@ -24,6 +24,7 @@ python experiments/galactic_exodus/fuel_metrics.py \
 - `initial_fuel=16` は direct と補給依存が最も素直に分かれる。`0.10 / R=3 / B=10` で `direct=63.4%`、`any=97.7%`、`base rescue=34.3%`、`resource rescue=34.1%`。`0.15 / R=3 / B=10` でも `direct=48.9%`、`any=93.8%`、`base rescue=44.7%`、`resource rescue=42.4%` を保つ。
 - `base_supply` の差は小さい。`8 -> 10 -> 12` は主に `remaining_fuel_at_goal` を増やし、走破率や rescue 指標の改善は限定的だった。
 - `resource_count=3` は `resource_count=1` より一貫して高い R 救済率を出す。特に `initial_fuel=16` では、`0.15 / B=10` で `34.4% -> 42.4%`、`0.10 / B=10` で `32.4% -> 34.1%` と改善し、`still_infeasible_ratio` は悪化しない。
+  - ただしこれは現行 `generate_map(seed, resource_count, rift_density)` による観測上の母集団比較であり、同一マップに R を増やした因果効果ではない。
 
 ## Main Findings
 
@@ -45,6 +46,7 @@ python experiments/galactic_exodus/fuel_metrics.py \
   - `16` と組み合わせたときも B only 依存を増やしすぎず、最小値で必要な救済効果を確保できる。
 - `resource_count`: `3`
   - `1` より高い R 救済率を示し、`resource_only_rescue` は小さいまま `both_supply_options` を大きく増やす。
+  - ただし `resource_count` 間では同じ seed でも地形・B/R 配置を含む標本が変わるため、現行生成条件における観測比較として扱う。
   - `0` では R を gameplay 上の選択肢として残せない。
 - `resource_supply`: `5` を維持
   - 今回の評価範囲で `initial_fuel=16` と `resource_count=3` の組み合わせだけで R 救済が十分に立ち上がった。
@@ -70,6 +72,7 @@ python experiments/galactic_exodus/fuel_metrics.py \
 
 - `rift_density=0.10` を主候補、`0.15` を比較対照とする判断は維持する。
 - #1040 には、`initial_fuel=16`、`base_supply=8`、`resource_count=3`、`resource_supply=5` を Phase 1 初期候補として渡せる。
+- `resource_count=3` の採用理由は現行生成条件での観測比較に基づく。Phase 1 では、R 個数の効果を実プレイとプレイテストで再確認する前提とする。
 - 追加の燃料候補比較は必須ではなくなった。以後の課題は、Phase 1 実装でこのパラメータ群が未知情報下のプレイ感でも機能するかの確認へ移せる。
 
 ## Initial Fuel Comparison
