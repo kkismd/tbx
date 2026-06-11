@@ -1,0 +1,288 @@
+#!/usr/bin/env python3
+
+from __future__ import annotations
+
+import argparse
+from pathlib import Path
+import sys
+from typing import Sequence, TextIO
+
+if __package__ in (None, ""):
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+
+from experiments.galactic_exodus import engine
+from experiments.galactic_exodus import simulate
+
+
+ABORTED_BY_USER = engine.FINAL_OUTCOME_ABORTED_NO_POLICY_ACTION
+KNOWN_TERRAIN_SYMBOLS = {".", "N", "A", "@", "B", "R"}
+DIRECTION_ORDER = ("N", "E", "S", "W")
+
+
+class CliArgumentParser(argparse.ArgumentParser):
+    def __init__(self, *, stderr: TextIO, **kwargs: object) -> None:
+        super().__init__(**kwargs)
+        self.stderr = stderr
+
+    def _print_message(self, message: str | None, file: TextIO | None = None) -> None:
+        super()._print_message(message, self.stderr)
+
+
+def build_parser(stderr: TextIO) -> argparse.ArgumentParser:
+    parser = CliArgumentParser(
+        stderr=stderr,
+        description="Play the Galactic Exodus Phase 1A2 prototype.",
+    )
+    parser.add_argument("--seed", type=int, help="Requested seed.")
+    parser.add_argument(
+        "--json-log",
+        type=Path,
+        help="Write the final GameLog schema_version=1 JSON to this path.",
+    )
+    return parser
+
+
+def parse_args(argv: Sequence[str], stderr: TextIO) -> argparse.Namespace:
+    parser = build_parser(stderr)
+    if not any(argument == "--seed" or argument.startswith("--seed=") for argument in argv):
+        parser.print_help(stderr)
+        raise SystemExit(0)
+    return parser.parse_args(argv)
+
+
+def main(
+    argv: Sequence[str] | None = None,
+    *,
+    stdin: TextIO | None = None,
+    stdout: TextIO | None = None,
+    stderr: TextIO | None = None,
+) -> int:
+    effective_argv = list(sys.argv[1:] if argv is None else argv)
+    effective_stdin = sys.stdin if stdin is None else stdin
+    effective_stdout = sys.stdout if stdout is None else stdout
+    effective_stderr = sys.stderr if stderr is None else stderr
+    try:
+        args = parse_args(effective_argv, effective_stderr)
+    except SystemExit as exc:
+        return int(exc.code) if isinstance(exc.code, int) else 1
+
+    try:
+        state = engine.create_game(args.seed)
+    except engine.GenerationError as exc:
+        print_generation_error(exc, effective_stdout)
+        if args.json_log is not None:
+            write_json_log(args.json_log, build_generation_error_log(args.seed, exc))
+        return 1
+
+    initial_state = engine.snapshot_state(state)
+    events: list[engine.TurnEvent] = []
+
+    render_state(state, effective_stdout)
+    while state.game_status == engine.GAME_STATUS_IN_PROGRESS:
+        effective_stdout.write("COMMAND> ")
+        effective_stdout.flush()
+        line = effective_stdin.readline()
+        if line == "":
+            break
+        if line.strip().upper() == "Q":
+            break
+        event = engine.apply_command(state, line)
+        events.append(event)
+        render_event(state, event, effective_stdout)
+        render_state(state, effective_stdout)
+
+    if args.json_log is not None:
+        write_json_log(args.json_log, build_session_log(args.seed, state, initial_state, events))
+    return 0
+
+
+def render_state(state: engine.GameState, output: TextIO) -> None:
+    output.write("MAP:\n")
+    for row in board_lines(state):
+        output.write(f"{row}\n")
+    output.write("     x=1 2 3 4 5 6 7 8\n")
+    output.write(
+        f"SEED: requested={state.requested_seed} effective={state.effective_seed} rerolls={state.reroll_count}\n"
+    )
+    output.write(f"POSITION: {format_position(state.player_position)}\n")
+    output.write(f"FUEL: {state.remaining_fuel}\n")
+    output.write(f"SUPPLY: {format_supply_status(state)}\n")
+    output.write(f"TURN: {state.turn_count}\n")
+    output.write(f"STATUS: {format_status(state.game_status)}\n")
+    output.write(f"BLOCKED: {format_blocked_directions(state)}\n")
+
+
+def board_lines(state: engine.GameState) -> list[str]:
+    rows: list[str] = []
+    for y in range(simulate.HEIGHT, 0, -1):
+        symbols = [display_symbol(state, (x, y)) for x in range(1, simulate.WIDTH + 1)]
+        rows.append(f"y={y} {' '.join(symbols)}")
+    return rows
+
+
+def display_symbol(state: engine.GameState, position: simulate.Position) -> str:
+    if position == state.player_position:
+        return "P"
+    if position == state.settings.start_position:
+        return "S"
+    if position == state.settings.goal_position:
+        return "H"
+    symbol = state.known_cells.get(position)
+    if symbol in KNOWN_TERRAIN_SYMBOLS:
+        return symbol
+    return "?"
+
+
+def render_event(state: engine.GameState, event: engine.TurnEvent, output: TextIO) -> None:
+    for line in format_event_messages(state, event):
+        output.write(f"{line}\n")
+
+
+def format_event_messages(state: engine.GameState, event: engine.TurnEvent) -> list[str]:
+    if event.outcome == engine.OUTCOME_MOVED:
+        messages = [f"MOVED TO {format_position(event.to_position)}, COST {event.fuel_spent}"]
+        if event.supply_applied and event.supply_source is not None:
+            messages.append(format_supply_message(state, event.supply_source))
+        if event.status_after == engine.GAME_STATUS_WON:
+            messages.append("YOU REACHED H")
+        elif event.status_after == engine.GAME_STATUS_LOST_FUEL:
+            messages.append("NO FURTHER MOVE IS POSSIBLE")
+        return messages
+    if event.outcome == engine.OUTCOME_BLOCKED_UNKNOWN_RIFT:
+        messages = [f"RIFT BLOCKED {direction_for_event(event)}, COST 1"]
+        if event.status_after == engine.GAME_STATUS_LOST_FUEL:
+            messages.append("NO FURTHER MOVE IS POSSIBLE")
+        return messages
+    if event.outcome == engine.OUTCOME_REJECTED_KNOWN_RIFT:
+        return [f"KNOWN RIFT {direction_for_event(event)}"]
+    if event.outcome == engine.OUTCOME_OUT_OF_BOUNDS:
+        return ["OUT OF BOUNDS"]
+    if event.outcome == engine.OUTCOME_REJECTED_INSUFFICIENT_FUEL:
+        needed = required_fuel_for_event(state, event)
+        return [f"INSUFFICIENT FUEL: NEED {needed}, HAVE {event.fuel_before}"]
+    if event.outcome == engine.OUTCOME_INVALID_COMMAND:
+        return ["INVALID COMMAND"]
+    raise ValueError(f"unexpected outcome: {event.outcome}")
+
+
+def format_supply_message(state: engine.GameState, source: engine.SupplySource) -> str:
+    if source.kind == engine.BASE_CELL:
+        return f"SUPPLIED AT B: +{state.settings.base_supply}"
+    if source.kind == engine.RESOURCE_CELL:
+        return f"SUPPLIED AT R{format_position(source.position)}: +{state.settings.resource_supply}"
+    raise ValueError(f"unexpected supply source kind: {source.kind}")
+
+
+def direction_for_event(event: engine.TurnEvent) -> str:
+    if event.attempted_position is None:
+        raise ValueError("event does not have an attempted position")
+    dx = event.attempted_position[0] - event.from_position[0]
+    dy = event.attempted_position[1] - event.from_position[1]
+    delta_map = {
+        (0, 1): "N",
+        (1, 0): "E",
+        (0, -1): "S",
+        (-1, 0): "W",
+    }
+    try:
+        return delta_map[(dx, dy)]
+    except KeyError as exc:
+        raise ValueError(f"unexpected move delta: {(dx, dy)!r}") from exc
+
+
+def required_fuel_for_event(state: engine.GameState, event: engine.TurnEvent) -> int:
+    if event.attempted_position is None:
+        raise ValueError("insufficient-fuel event does not have an attempted position")
+    edge = simulate.normalize_edge(event.from_position, event.attempted_position)
+    if engine.is_rift_edge(state, edge):
+        return 1
+    symbol = state.actual_map.cells[event.attempted_position]
+    return simulate.terrain_cost(symbol)
+
+
+def format_position(position: simulate.Position) -> str:
+    return f"({position[0]},{position[1]})"
+
+
+def format_status(status: str) -> str:
+    if status == engine.GAME_STATUS_IN_PROGRESS:
+        return "IN PROGRESS"
+    if status == engine.GAME_STATUS_WON:
+        return "WON"
+    if status == engine.GAME_STATUS_LOST_FUEL:
+        return "LOST FUEL"
+    raise ValueError(f"unexpected game status: {status}")
+
+
+def format_supply_status(state: engine.GameState) -> str:
+    if not state.supply_used or state.supply_source is None:
+        return "unused"
+    if state.supply_source.kind == engine.BASE_CELL:
+        return "B"
+    if state.supply_source.kind == engine.RESOURCE_CELL:
+        return f"R{format_position(state.supply_source.position)}"
+    raise ValueError(f"unexpected supply source kind: {state.supply_source.kind}")
+
+
+def format_blocked_directions(state: engine.GameState) -> str:
+    blocked: list[str] = []
+    for direction in DIRECTION_ORDER:
+        delta = engine.COMMAND_DELTAS[direction]
+        neighbor = engine.move_position(state.player_position, delta)
+        if not engine.is_inside_board(neighbor):
+            continue
+        edge = simulate.normalize_edge(state.player_position, neighbor)
+        if state.known_routes.get(edge) == engine.ROUTE_RIFT:
+            blocked.append(direction)
+    return "-" if not blocked else ",".join(blocked)
+
+
+def build_generation_error_log(requested_seed: int, exc: engine.GenerationError) -> engine.GameLog:
+    return engine.GameLog(
+        schema_version=engine.SCHEMA_VERSION,
+        settings=engine.DEFAULT_SETTINGS,
+        requested_seed=requested_seed,
+        effective_seed=None,
+        reroll_count=None,
+        initial_state=None,
+        events=(),
+        final_summary=None,
+        generation_error=exc.to_info(),
+    )
+
+
+def build_session_log(
+    requested_seed: int,
+    state: engine.GameState,
+    initial_state: dict[str, object],
+    events: list[engine.TurnEvent],
+) -> engine.GameLog:
+    if state.game_status == engine.GAME_STATUS_IN_PROGRESS:
+        final_outcome = ABORTED_BY_USER
+    else:
+        final_outcome = engine.final_outcome_for_status(state.game_status)
+    return engine.build_game_log(
+        settings=state.settings,
+        requested_seed=requested_seed,
+        state=state,
+        initial_state=initial_state,
+        events=events,
+        final_outcome=final_outcome,
+    )
+
+
+def print_generation_error(exc: engine.GenerationError, output: TextIO) -> None:
+    output.write(
+        "GENERATION ERROR: "
+        f"requested={exc.requested_seed} attempts={exc.attempts} "
+        f"reason={exc.reason} message={exc}\n"
+    )
+
+
+def write_json_log(path: Path, log: engine.GameLog) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(log.to_json() + "\n", encoding="utf-8")
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

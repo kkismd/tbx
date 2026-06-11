@@ -150,6 +150,124 @@ generation_error
 
 `GameLog.to_dict()` と `GameLog.to_json()` は key 順と配列順を固定し、同一 seed・同一 command 列から同一 JSON を生成します。
 
+## Phase 1A2 interactive CLI prototype
+
+`play.py` は Phase 1A2 用の対話 CLI です。盤面生成、移動、燃料、補給、勝敗判定は `engine.py` に委譲し、CLI 側は入力・ASCII 表示・JSON ログ出力だけを担当します。
+
+起動:
+
+```bash
+python experiments/galactic_exodus/play.py --seed 42
+python experiments/galactic_exodus/play.py --seed 42 --json-log .tmp/galactic-exodus-log.json
+```
+
+- `--seed <int>`
+  - 必須。requested seed を指定します。
+- `--json-log <path>`
+  - 任意。終了時に `GameLog schema_version=1` を JSON で書き出します。
+
+コマンド:
+
+```text
+N
+E
+S
+W
+Q
+```
+
+- 大文字小文字を区別しません
+- 前後空白を無視します
+- `Q` と EOF は状態を変えずに正常終了します
+
+盤面記号:
+
+```text
+?  未知セル
+.  既知 plain
+N  既知 nebula
+A  既知 asteroid
+@  既知 anomaly
+S  start
+H  goal
+B  既知 base
+R  既知 resource
+P  現在地
+```
+
+- `H` は開始時から表示されます
+- 未知の地形・B・R は表示しません
+- 表示優先順位は `P > S/H > B/R > terrain > ?` です
+
+状態表示:
+
+```text
+SEED: requested=<n> effective=<n> rerolls=<n>
+POSITION: (<x>,<y>)
+FUEL: <remaining>
+SUPPLY: unused | B | R(<x>,<y>)
+TURN: <n>
+STATUS: IN PROGRESS | WON | LOST FUEL
+BLOCKED: <known-rift-directions or ->
+```
+
+ターン結果文言:
+
+```text
+MOVED TO (x,y), COST n
+RIFT BLOCKED <direction>, COST 1
+KNOWN RIFT <direction>
+OUT OF BOUNDS
+INVALID COMMAND
+INSUFFICIENT FUEL: NEED n, HAVE m
+SUPPLIED AT B: +8
+SUPPLIED AT R(x,y): +5
+YOU REACHED H
+NO FURTHER MOVE IS POSSIBLE
+```
+
+fuel / 断層 / 補給 / 勝敗:
+
+- 各移動コストと断層判定は `engine.apply_command()` の結果をそのまま表示します
+- `B` 補給は 1 回だけ `+8`、`R` 補給も 1 回だけ `+5` です
+- `STATUS: WON` で勝利、`STATUS: LOST FUEL` で行動不能です
+
+requested / effective seed の再現:
+
+- playable map が見つからなかった候補は `requested_seed + attempt` で deterministic に再抽選されます
+- 画面の `requested=<n> effective=<n> rerolls=<n>` を記録すれば同じ map を再現できます
+
+JSON ログの用途:
+
+- `--json-log` は CLI セッションを `GameLog schema_version=1` として保存します
+- `Q` / EOF で終了したセッションは `final_summary.outcome = ABORTED_NO_POLICY_ACTION` になります
+
+これは Phase 1A のプロトタイプであり、完成ゲーム UI ではありません。
+
+固定 seed のサンプル操作:
+
+```text
+$ python experiments/galactic_exodus/play.py --seed 42
+MAP:
+y=8 ? ? ? ? ? ? ? H
+y=7 ? ? ? ? ? ? ? ?
+y=6 ? ? ? ? ? ? ? ?
+y=5 ? ? ? ? ? ? ? ?
+y=4 ? ? ? ? ? ? ? ?
+y=3 ? ? ? ? ? ? ? ?
+y=2 ? ? ? ? ? ? ? ?
+y=1 P ? ? ? ? ? ? ?
+     x=1 2 3 4 5 6 7 8
+SEED: requested=42 effective=42 rerolls=0
+POSITION: (1,1)
+FUEL: 16
+SUPPLY: unused
+TURN: 0
+STATUS: IN PROGRESS
+BLOCKED: -
+COMMAND> q
+```
+
 ## 実行方法
 
 ```bash
