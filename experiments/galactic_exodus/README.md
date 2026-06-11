@@ -87,6 +87,8 @@ log = engine.run_commands(42, ["E", "N", "E"])
 - `ABORTED_NO_POLICY_ACTION`
 
 generation error は通常敗北と分離し、`GameLog.generation_error` に記録します。
+`supply_source` は `{"kind": "B"|"R", "position": {"x": ..., "y": ...}}` の構造で保持し、
+補給後に別セルへ移動したあとも補給元座標を参照できます。
 
 ### deterministic log schema
 
@@ -134,6 +136,16 @@ final_summary
   rift_attempts
   invalid_or_rejected_actions
   path
+```
+
+```text
+generation_error
+  kind
+  requested_seed
+  attempts
+  last_candidate_seed
+  reason
+  message
 ```
 
 `GameLog.to_dict()` と `GameLog.to_json()` は key 順と配列順を固定し、同一 seed・同一 command 列から同一 JSON を生成します。

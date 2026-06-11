@@ -80,6 +80,18 @@ class ActualMap:
     resource_positions: tuple[simulate.Position, ...]
 
 
+@dataclass(frozen=True)
+class SupplySource:
+    kind: str
+    position: simulate.Position
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "kind": self.kind,
+            "position": position_to_dict(self.position),
+        }
+
+
 @dataclass
 class GameState:
     settings: GameSettings
@@ -90,7 +102,7 @@ class GameState:
     player_position: simulate.Position
     remaining_fuel: int
     supply_used: bool
-    supply_source: str | None
+    supply_source: SupplySource | None
     turn_count: int
     game_status: str
     requested_seed: int
@@ -106,11 +118,19 @@ class GameState:
 @dataclass(frozen=True)
 class GenerationErrorInfo:
     kind: str
+    requested_seed: int
+    attempts: int
+    last_candidate_seed: int | None
+    reason: str
     message: str
 
     def to_dict(self) -> dict[str, object]:
         return {
             "kind": self.kind,
+            "requested_seed": self.requested_seed,
+            "attempts": self.attempts,
+            "last_candidate_seed": self.last_candidate_seed,
+            "reason": self.reason,
             "message": self.message,
         }
 
@@ -129,7 +149,7 @@ class TurnEvent:
     discovered_cell: str | None
     discovered_rift: bool
     supply_applied: bool
-    supply_source: str | None
+    supply_source: SupplySource | None
     status_after: str
 
     def to_dict(self) -> dict[str, object]:
@@ -146,7 +166,7 @@ class TurnEvent:
             "discovered_cell": self.discovered_cell,
             "discovered_rift": self.discovered_rift,
             "supply_applied": self.supply_applied,
-            "supply_source": self.supply_source,
+            "supply_source": optional_supply_source_to_dict(self.supply_source),
             "status_after": self.status_after,
         }
 
@@ -156,7 +176,7 @@ class FinalSummary:
     outcome: str
     turn_count: int
     remaining_fuel: int
-    supply_source: str | None
+    supply_source: SupplySource | None
     base_visited: bool
     resource_visits: int
     rift_attempts: int
@@ -168,7 +188,7 @@ class FinalSummary:
             "outcome": self.outcome,
             "turn_count": self.turn_count,
             "remaining_fuel": self.remaining_fuel,
-            "supply_source": self.supply_source,
+            "supply_source": optional_supply_source_to_dict(self.supply_source),
             "base_visited": self.base_visited,
             "resource_visits": self.resource_visits,
             "rift_attempts": self.rift_attempts,
@@ -207,12 +227,30 @@ class GameLog:
 
 
 class GenerationError(ValueError):
-    def __init__(self, kind: str, message: str):
+    def __init__(
+        self,
+        *,
+        requested_seed: int,
+        attempts: int,
+        last_candidate_seed: int | None,
+        reason: str,
+        message: str,
+    ):
         super().__init__(message)
-        self.kind = kind
+        self.requested_seed = requested_seed
+        self.attempts = attempts
+        self.last_candidate_seed = last_candidate_seed
+        self.reason = reason
 
     def to_info(self) -> GenerationErrorInfo:
-        return GenerationErrorInfo(kind=self.kind, message=str(self))
+        return GenerationErrorInfo(
+            kind="GENERATION_ERROR",
+            requested_seed=self.requested_seed,
+            attempts=self.attempts,
+            last_candidate_seed=self.last_candidate_seed,
+            reason=self.reason,
+            message=str(self),
+        )
 
 
 def create_game(requested_seed: int, settings: GameSettings = DEFAULT_SETTINGS) -> GameState:
@@ -452,7 +490,11 @@ def apply_command(state: GameState, command: str) -> TurnEvent:
         state.known_cells[attempted_position] = destination_symbol
         discovered_cell = destination_symbol
 
-    supply_applied, supply_source = maybe_apply_supply(state, destination_symbol)
+    supply_applied, supply_source = maybe_apply_supply(
+        state,
+        destination_symbol,
+        attempted_position,
+    )
     if destination_symbol == BASE_CELL:
         state.base_visited = True
     if destination_symbol == RESOURCE_CELL:
@@ -481,8 +523,10 @@ def create_playable_map(
     requested_seed: int,
     settings: GameSettings,
 ) -> tuple[simulate.GalacticMap, int, int]:
+    last_candidate_seed: int | None = None
     for attempt in range(MAX_GENERATION_ATTEMPTS):
         candidate_seed = add_seed_offset(requested_seed, attempt)
+        last_candidate_seed = candidate_seed
         galactic_map = simulate.generate_map(
             candidate_seed,
             settings.resource_count,
@@ -491,17 +535,24 @@ def create_playable_map(
         if is_goal_reachable(galactic_map):
             return galactic_map, candidate_seed, attempt
     raise GenerationError(
-        "NO_REACHABLE_MAP",
-        f"failed to generate a reachable map after {MAX_GENERATION_ATTEMPTS} attempts",
+        requested_seed=requested_seed,
+        attempts=MAX_GENERATION_ATTEMPTS,
+        last_candidate_seed=last_candidate_seed,
+        reason="NO_REACHABLE_MAP",
+        message=f"failed to generate a reachable map after {MAX_GENERATION_ATTEMPTS} attempts",
     )
 
 
 def add_seed_offset(seed: int, offset: int) -> int:
     candidate = seed + offset
     if not MIN_INT64 <= candidate <= MAX_INT64:
+        last_candidate_seed = None if offset == 0 else seed + offset - 1
         raise GenerationError(
-            "SEED_OVERFLOW",
-            f"seed overflow while adding attempt {offset} to requested_seed={seed}",
+            requested_seed=seed,
+            attempts=offset + 1,
+            last_candidate_seed=last_candidate_seed,
+            reason="SEED_OVERFLOW",
+            message=f"seed overflow while adding attempt {offset} to requested_seed={seed}",
         )
     return candidate
 
@@ -518,7 +569,11 @@ def is_goal_reachable(galactic_map: simulate.GalacticMap) -> bool:
     )
 
 
-def maybe_apply_supply(state: GameState, destination_symbol: str) -> tuple[bool, str | None]:
+def maybe_apply_supply(
+    state: GameState,
+    destination_symbol: str,
+    position: simulate.Position,
+) -> tuple[bool, SupplySource | None]:
     if state.supply_used:
         return False, None
     if destination_symbol == BASE_CELL:
@@ -528,9 +583,9 @@ def maybe_apply_supply(state: GameState, destination_symbol: str) -> tuple[bool,
     else:
         return False, None
     state.supply_used = True
-    state.supply_source = destination_symbol
+    state.supply_source = SupplySource(kind=destination_symbol, position=position)
     state.remaining_fuel += supply_amount
-    return True, destination_symbol
+    return True, state.supply_source
 
 
 def determine_game_status(state: GameState) -> str:
@@ -614,7 +669,7 @@ def snapshot_state(state: GameState) -> dict[str, object]:
         "player_position": position_to_dict(state.player_position),
         "remaining_fuel": state.remaining_fuel,
         "supply_used": state.supply_used,
-        "supply_source": state.supply_source,
+        "supply_source": optional_supply_source_to_dict(state.supply_source),
         "turn_count": state.turn_count,
         "game_status": state.game_status,
         "requested_seed": state.requested_seed,
@@ -694,6 +749,12 @@ def optional_position_to_dict(position: simulate.Position | None) -> dict[str, i
     if position is None:
         return None
     return position_to_dict(position)
+
+
+def optional_supply_source_to_dict(source: SupplySource | None) -> dict[str, object] | None:
+    if source is None:
+        return None
+    return source.to_dict()
 
 
 def edge_to_dict(edge: simulate.Edge) -> dict[str, object]:

@@ -45,7 +45,7 @@ def make_state(
     visited_cells: set[simulate.Position] | None = None,
     known_routes: dict[simulate.Edge, str] | None = None,
     supply_used: bool = False,
-    supply_source: str | None = None,
+    supply_source: engine.SupplySource | None = None,
     turn_count: int = 0,
     requested_seed: int = 1,
     effective_seed: int = 1,
@@ -132,7 +132,10 @@ class CreateGameTests(unittest.TestCase):
         with self.assertRaises(engine.GenerationError) as ctx:
             engine.add_seed_offset(engine.MAX_INT64, 1)
 
-        self.assertEqual(ctx.exception.kind, "SEED_OVERFLOW")
+        self.assertEqual(ctx.exception.reason, "SEED_OVERFLOW")
+        self.assertEqual(ctx.exception.requested_seed, engine.MAX_INT64)
+        self.assertEqual(ctx.exception.attempts, 2)
+        self.assertEqual(ctx.exception.last_candidate_seed, engine.MAX_INT64)
 
     def test_exhausted_generation_attempts_raise_generation_error(self) -> None:
         reachable = simulate.generate_map(1, 3, 0.10)
@@ -143,7 +146,9 @@ class CreateGameTests(unittest.TestCase):
             with self.assertRaises(engine.GenerationError) as ctx:
                 engine.create_playable_map(1, engine.DEFAULT_SETTINGS)
 
-        self.assertEqual(ctx.exception.kind, "NO_REACHABLE_MAP")
+        self.assertEqual(ctx.exception.reason, "NO_REACHABLE_MAP")
+        self.assertEqual(ctx.exception.attempts, engine.MAX_GENERATION_ATTEMPTS)
+        self.assertEqual(ctx.exception.last_candidate_seed, 100)
 
 
 class ApplyCommandTests(unittest.TestCase):
@@ -191,10 +196,10 @@ class ApplyCommandTests(unittest.TestCase):
         second = engine.apply_command(state, "E")
 
         self.assertTrue(first.supply_applied)
-        self.assertEqual(first.supply_source, "B")
+        self.assertEqual(first.supply_source, engine.SupplySource(kind="B", position=(2, 1)))
         self.assertEqual(second.supply_applied, False)
         self.assertEqual(state.remaining_fuel, 3)
-        self.assertEqual(state.supply_source, "B")
+        self.assertEqual(state.supply_source, engine.SupplySource(kind="B", position=(2, 1)))
 
     def test_resource_supply_can_apply_after_arriving_with_zero_fuel(self) -> None:
         settings = engine.GameSettings(initial_fuel=1, resource_supply=5)
@@ -207,8 +212,21 @@ class ApplyCommandTests(unittest.TestCase):
         event = engine.apply_command(state, "E")
 
         self.assertTrue(event.supply_applied)
-        self.assertEqual(event.supply_source, "R")
+        self.assertEqual(event.supply_source, engine.SupplySource(kind="R", position=(2, 1)))
         self.assertEqual(state.remaining_fuel, 5)
+
+    def test_supply_source_position_survives_later_movement(self) -> None:
+        settings = engine.GameSettings(initial_fuel=4, resource_supply=5)
+        state = make_state(
+            actual_map=make_actual_map(cells=filled_cells("."), resource_positions=((2, 1),)),
+            settings=settings,
+            remaining_fuel=4,
+        )
+
+        engine.apply_command(state, "E")
+        engine.apply_command(state, "W")
+
+        self.assertEqual(state.supply_source, engine.SupplySource(kind="R", position=(2, 1)))
 
     def test_arriving_at_home_with_zero_fuel_is_a_win(self) -> None:
         state = make_state(
@@ -292,11 +310,25 @@ class RunCommandsTests(unittest.TestCase):
         self.assertEqual(log.final_summary.turn_count, 1)
 
     def test_run_commands_reports_generation_error_separately(self) -> None:
-        with patch.object(engine, "create_game", side_effect=engine.GenerationError("NO_REACHABLE_MAP", "no map")):
+        with patch.object(
+            engine,
+            "create_game",
+            side_effect=engine.GenerationError(
+                requested_seed=99,
+                attempts=100,
+                last_candidate_seed=198,
+                reason="NO_REACHABLE_MAP",
+                message="no map",
+            ),
+        ):
             log = engine.run_commands(99, ["E"])
 
         self.assertIsNone(log.final_summary)
-        self.assertEqual(log.generation_error.kind, "NO_REACHABLE_MAP")
+        self.assertEqual(log.generation_error.kind, "GENERATION_ERROR")
+        self.assertEqual(log.generation_error.reason, "NO_REACHABLE_MAP")
+        self.assertEqual(log.generation_error.requested_seed, 99)
+        self.assertEqual(log.generation_error.attempts, 100)
+        self.assertEqual(log.generation_error.last_candidate_seed, 198)
 
     def test_game_log_schema_and_summary_are_stable(self) -> None:
         log = engine.run_commands(42, ["E", "N"])
@@ -319,7 +351,62 @@ class RunCommandsTests(unittest.TestCase):
         self.assertEqual(payload["schema_version"], 1)
         self.assertIn("outcome", payload["final_summary"])
         self.assertIn("path", payload["final_summary"])
+        self.assertIn("supply_source", payload["final_summary"])
+        if payload["events"]:
+            self.assertIn("supply_source", payload["events"][0])
         json.loads(log.to_json())
+
+    def test_game_log_serializes_structured_supply_source(self) -> None:
+        state = make_state(
+            actual_map=make_actual_map(cells=filled_cells("."), base_position=(2, 1)),
+            settings=engine.GameSettings(initial_fuel=1, base_supply=3, resource_count=0),
+            remaining_fuel=1,
+            requested_seed=1,
+            effective_seed=1,
+        )
+        with patch.object(engine, "create_game", return_value=state):
+            payload = engine.run_commands(1, ["E"], settings=state.settings).to_dict()
+
+        self.assertEqual(
+            payload["events"][0]["supply_source"],
+            {
+                "kind": "B",
+                "position": {"x": 2, "y": 1},
+            },
+        )
+        self.assertEqual(
+            payload["final_summary"]["supply_source"],
+            {
+                "kind": "B",
+                "position": {"x": 2, "y": 1},
+            },
+        )
+
+    def test_game_log_serializes_structured_generation_error(self) -> None:
+        with patch.object(
+            engine,
+            "create_game",
+            side_effect=engine.GenerationError(
+                requested_seed=7,
+                attempts=2,
+                last_candidate_seed=7,
+                reason="SEED_OVERFLOW",
+                message="overflow",
+            ),
+        ):
+            payload = engine.run_commands(7, ["E"]).to_dict()
+
+        self.assertEqual(
+            payload["generation_error"],
+            {
+                "kind": "GENERATION_ERROR",
+                "requested_seed": 7,
+                "attempts": 2,
+                "last_candidate_seed": 7,
+                "reason": "SEED_OVERFLOW",
+                "message": "overflow",
+            },
+        )
 
 
 if __name__ == "__main__":
