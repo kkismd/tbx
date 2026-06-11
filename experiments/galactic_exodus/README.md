@@ -4,6 +4,140 @@
 
 これは正式な TBX アプリ実装ではありません。将来の TBX 側の実装は、`examples/galactic_exodus/` など別の場所に置く想定です。
 
+## Phase 1A1 engine
+
+`engine.py` は、標準入力や画面表示に依存しない Phase 1A1 用の非対話ゲームエンジンです。
+マップ生成は既存の `simulate.generate_map()` をそのまま利用し、到達不能マップだけを deterministic に再抽選します。
+
+公開 API:
+
+```python
+from experiments.galactic_exodus import engine
+
+state = engine.create_game(42)
+event = engine.apply_command(state, "E")
+log = engine.run_commands(42, ["E", "N", "E"])
+```
+
+- `create_game(requested_seed, settings=DEFAULT_SETTINGS) -> GameState`
+  - 到達可能な `S -> H` 経路を持つ候補が見つかるまで `requested_seed + attempt` を試す
+  - `attempt` は `0..99`
+  - `effective_seed` と `reroll_count` を state に保持する
+- `apply_command(state, command) -> TurnEvent`
+  - `state` をその場で更新する
+  - `command` は `N / E / S / W`
+  - 標準入力・標準出力は使わない
+- `run_commands(requested_seed, commands, settings=DEFAULT_SETTINGS, max_turns=256) -> GameLog`
+  - 非対話でコマンド列を最後まで実行する
+  - 勝敗、turn limit、コマンド枯渇、generation error をログ化する
+
+### state fields
+
+`GameState` は次の状態を保持します。
+
+- `actual_map`
+- `known_cells`
+- `visited_cells`
+- `known_routes`
+- `player_position`
+- `remaining_fuel`
+- `supply_used`
+- `supply_source`
+- `turn_count`
+- `game_status`
+- `requested_seed`
+- `effective_seed`
+- `reroll_count`
+
+開始時は `known_cells = {S, H}`、`visited_cells = {S}`、`known_routes = {}` です。
+
+### movement contract
+
+- 成功移動: 移動先地形コストを消費し、`known_routes` に `OPEN` を記録する
+- 未知断層への試行: 位置不変、`fuel -1`、`turn +1`、`known_routes` に `RIFT` を記録する
+- 既知断層への再試行: 行動拒否、fuel/turn 不変
+- 盤面外・無効コマンド・燃料不足: 状態不変
+- `H` / `B` / `R` へ残量 0 ちょうどで到着してよい
+- 補給は `B` または `R` の最初の 1 回だけで、到着後に加算する
+
+### turn outcomes
+
+`TurnEvent.outcome` は次の固定値を使います。
+
+- `MOVED`
+- `BLOCKED_UNKNOWN_RIFT`
+- `REJECTED_KNOWN_RIFT`
+- `REJECTED_INSUFFICIENT_FUEL`
+- `INVALID_COMMAND`
+- `OUT_OF_BOUNDS`
+
+### game status and final outcomes
+
+`GameState.game_status`:
+
+- `IN_PROGRESS`
+- `WON`
+- `LOST_FUEL`
+
+`GameLog.final_summary.outcome`:
+
+- `WON`
+- `LOST_FUEL`
+- `ABORTED_TURN_LIMIT`
+- `ABORTED_NO_POLICY_ACTION`
+
+generation error は通常敗北と分離し、`GameLog.generation_error` に記録します。
+
+### deterministic log schema
+
+`GameLog.schema_version` は `1` 固定です。
+
+```text
+GameLog
+  schema_version
+  settings
+  requested_seed
+  effective_seed
+  reroll_count
+  initial_state
+  events
+  final_summary
+  generation_error
+```
+
+```text
+TurnEvent
+  turn
+  command
+  outcome
+  from_position
+  attempted_position
+  to_position
+  fuel_before
+  fuel_spent
+  fuel_after
+  discovered_cell
+  discovered_rift
+  supply_applied
+  supply_source
+  status_after
+```
+
+```text
+final_summary
+  outcome
+  turn_count
+  remaining_fuel
+  supply_source
+  base_visited
+  resource_visits
+  rift_attempts
+  invalid_or_rejected_actions
+  path
+```
+
+`GameLog.to_dict()` と `GameLog.to_json()` は key 順と配列順を固定し、同一 seed・同一 command 列から同一 JSON を生成します。
+
 ## 実行方法
 
 ```bash
