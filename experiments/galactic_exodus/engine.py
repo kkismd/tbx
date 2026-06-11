@@ -146,6 +146,7 @@ class TurnEvent:
     fuel_before: int
     fuel_spent: int
     fuel_after: int
+    required_fuel: int | None
     discovered_cell: str | None
     discovered_rift: bool
     supply_applied: bool
@@ -163,6 +164,7 @@ class TurnEvent:
             "fuel_before": self.fuel_before,
             "fuel_spent": self.fuel_spent,
             "fuel_after": self.fuel_after,
+            "required_fuel": self.required_fuel,
             "discovered_cell": self.discovered_cell,
             "discovered_rift": self.discovered_rift,
             "supply_applied": self.supply_applied,
@@ -365,6 +367,7 @@ def apply_command(state: GameState, command: str) -> TurnEvent:
             fuel_before=state.remaining_fuel,
             fuel_spent=0,
             fuel_after=state.remaining_fuel,
+            required_fuel=None,
             discovered_cell=None,
             discovered_rift=False,
             supply_applied=False,
@@ -388,6 +391,7 @@ def apply_command(state: GameState, command: str) -> TurnEvent:
             fuel_before=fuel_before,
             fuel_spent=0,
             fuel_after=state.remaining_fuel,
+            required_fuel=None,
             discovered_cell=None,
             discovered_rift=False,
             supply_applied=False,
@@ -409,6 +413,7 @@ def apply_command(state: GameState, command: str) -> TurnEvent:
             fuel_before=fuel_before,
             fuel_spent=0,
             fuel_after=state.remaining_fuel,
+            required_fuel=None,
             discovered_cell=None,
             discovered_rift=False,
             supply_applied=False,
@@ -429,6 +434,7 @@ def apply_command(state: GameState, command: str) -> TurnEvent:
                 fuel_before=fuel_before,
                 fuel_spent=0,
                 fuel_after=state.remaining_fuel,
+                required_fuel=1,
                 discovered_cell=None,
                 discovered_rift=False,
                 supply_applied=False,
@@ -451,6 +457,7 @@ def apply_command(state: GameState, command: str) -> TurnEvent:
             fuel_before=fuel_before,
             fuel_spent=1,
             fuel_after=state.remaining_fuel,
+            required_fuel=None,
             discovered_cell=None,
             discovered_rift=True,
             supply_applied=False,
@@ -472,6 +479,7 @@ def apply_command(state: GameState, command: str) -> TurnEvent:
             fuel_before=fuel_before,
             fuel_spent=0,
             fuel_after=state.remaining_fuel,
+            required_fuel=fuel_cost,
             discovered_cell=None,
             discovered_rift=False,
             supply_applied=False,
@@ -511,6 +519,7 @@ def apply_command(state: GameState, command: str) -> TurnEvent:
         fuel_before=fuel_before,
         fuel_spent=fuel_cost,
         fuel_after=state.remaining_fuel,
+        required_fuel=None,
         discovered_cell=discovered_cell,
         discovered_rift=False,
         supply_applied=supply_applied,

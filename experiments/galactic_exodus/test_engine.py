@@ -177,9 +177,11 @@ class ApplyCommandTests(unittest.TestCase):
         self.assertEqual(first.outcome, engine.OUTCOME_BLOCKED_UNKNOWN_RIFT)
         self.assertTrue(first.discovered_rift)
         self.assertEqual(first.fuel_after, 2)
+        self.assertIsNone(first.required_fuel)
         self.assertEqual(first.turn, 1)
         self.assertEqual(second.outcome, engine.OUTCOME_REJECTED_KNOWN_RIFT)
         self.assertEqual(second.fuel_after, 2)
+        self.assertIsNone(second.required_fuel)
         self.assertEqual(second.turn, 1)
         self.assertEqual(state.rift_attempt_count, 1)
 
@@ -262,6 +264,9 @@ class ApplyCommandTests(unittest.TestCase):
         self.assertEqual(invalid.outcome, engine.OUTCOME_INVALID_COMMAND)
         self.assertEqual(out_of_bounds.outcome, engine.OUTCOME_OUT_OF_BOUNDS)
         self.assertEqual(insufficient.outcome, engine.OUTCOME_REJECTED_INSUFFICIENT_FUEL)
+        self.assertIsNone(invalid.required_fuel)
+        self.assertIsNone(out_of_bounds.required_fuel)
+        self.assertEqual(insufficient.required_fuel, 3)
         self.assertEqual(
             snapshot,
             (
@@ -354,6 +359,7 @@ class RunCommandsTests(unittest.TestCase):
         self.assertIn("supply_source", payload["final_summary"])
         if payload["events"]:
             self.assertIn("supply_source", payload["events"][0])
+            self.assertIn("required_fuel", payload["events"][0])
         json.loads(log.to_json())
 
     def test_game_log_serializes_structured_supply_source(self) -> None:
