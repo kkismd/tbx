@@ -12,8 +12,6 @@ if __package__ in (None, ""):
 
 from experiments.galactic_exodus import engine
 from experiments.galactic_exodus import simulate
-
-
 ABORTED_BY_USER = engine.FINAL_OUTCOME_ABORTED_NO_POLICY_ACTION
 KNOWN_TERRAIN_SYMBOLS = {".", "N", "A", "@", "B", "R"}
 DIRECTION_ORDER = ("N", "E", "S", "W")
@@ -158,8 +156,9 @@ def format_event_messages(state: engine.GameState, event: engine.TurnEvent) -> l
     if event.outcome == engine.OUTCOME_OUT_OF_BOUNDS:
         return ["OUT OF BOUNDS"]
     if event.outcome == engine.OUTCOME_REJECTED_INSUFFICIENT_FUEL:
-        needed = required_fuel_for_event(state, event)
-        return [f"INSUFFICIENT FUEL: NEED {needed}, HAVE {event.fuel_before}"]
+        if event.required_fuel is None:
+            raise ValueError("insufficient-fuel event must include required_fuel")
+        return [f"INSUFFICIENT FUEL: NEED {event.required_fuel}, HAVE {event.fuel_before}"]
     if event.outcome == engine.OUTCOME_INVALID_COMMAND:
         return ["INVALID COMMAND"]
     raise ValueError(f"unexpected outcome: {event.outcome}")
@@ -188,16 +187,6 @@ def direction_for_event(event: engine.TurnEvent) -> str:
         return delta_map[(dx, dy)]
     except KeyError as exc:
         raise ValueError(f"unexpected move delta: {(dx, dy)!r}") from exc
-
-
-def required_fuel_for_event(state: engine.GameState, event: engine.TurnEvent) -> int:
-    if event.attempted_position is None:
-        raise ValueError("insufficient-fuel event does not have an attempted position")
-    edge = simulate.normalize_edge(event.from_position, event.attempted_position)
-    if engine.is_rift_edge(state, edge):
-        return 1
-    symbol = state.actual_map.cells[event.attempted_position]
-    return simulate.terrain_cost(symbol)
 
 
 def format_position(position: simulate.Position) -> str:
@@ -272,9 +261,11 @@ def build_session_log(
 
 
 def print_generation_error(exc: engine.GenerationError, output: TextIO) -> None:
+    last_candidate_seed = "none" if exc.last_candidate_seed is None else str(exc.last_candidate_seed)
     output.write(
         "GENERATION ERROR: "
         f"requested={exc.requested_seed} attempts={exc.attempts} "
+        f"last_candidate_seed={last_candidate_seed} "
         f"reason={exc.reason} message={exc}\n"
     )
 

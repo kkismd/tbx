@@ -173,7 +173,10 @@ class PlayCliTests(unittest.TestCase):
 
         self.assertEqual(exit_code, 1)
         self.assertEqual(stderr, "")
-        self.assertIn("GENERATION ERROR: requested=99 attempts=100 reason=NO_REACHABLE_MAP message=no map", stdout)
+        self.assertIn(
+            "GENERATION ERROR: requested=99 attempts=100 last_candidate_seed=198 reason=NO_REACHABLE_MAP message=no map",
+            stdout,
+        )
 
     def test_same_seed_and_input_produce_same_output(self) -> None:
         first = self.run_cli(["--seed", "42"], "E\nN\nQ\n")

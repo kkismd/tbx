@@ -241,6 +241,7 @@ JSON ログの用途:
 
 - `--json-log` は CLI セッションを `GameLog schema_version=1` として保存します
 - `Q` / EOF で終了したセッションは `final_summary.outcome = ABORTED_NO_POLICY_ACTION` になります
+- generation error は通常敗北と分離し、`requested / attempts / last_candidate_seed / reason / message` を表示します
 
 これは Phase 1A のプロトタイプであり、完成ゲーム UI ではありません。
 
