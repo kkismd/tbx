@@ -184,7 +184,7 @@ class PlayCliTests(unittest.TestCase):
 
         self.assertEqual(first, second)
 
-    def test_json_log_writes_schema_version_1(self) -> None:
+    def test_json_log_writes_schema_version_2(self) -> None:
         with tempfile.TemporaryDirectory(dir=".tmp") as tmp_dir:
             log_path = Path(tmp_dir) / "play-log.json"
 
@@ -198,7 +198,7 @@ class PlayCliTests(unittest.TestCase):
         self.assertEqual(exit_code, 0)
         self.assertEqual(stderr, "")
         self.assertTrue(stdout.endswith("COMMAND> "))
-        self.assertEqual(payload["schema_version"], 1)
+        self.assertEqual(payload["schema_version"], 2)
         self.assertEqual(payload["final_summary"]["outcome"], engine.FINAL_OUTCOME_ABORTED_NO_POLICY_ACTION)
         self.assertIsNone(payload["generation_error"])
 

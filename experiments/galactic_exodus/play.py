@@ -35,7 +35,7 @@ def build_parser(stderr: TextIO) -> argparse.ArgumentParser:
     parser.add_argument(
         "--json-log",
         type=Path,
-        help="Write the final GameLog schema_version=1 JSON to this path.",
+        help="Write the final GameLog schema_version=2 JSON to this path.",
     )
     return parser
 
@@ -118,7 +118,7 @@ def board_lines(state: engine.GameState) -> list[str]:
     rows: list[str] = []
     for y in range(simulate.HEIGHT, 0, -1):
         symbols = [display_symbol(state, (x, y)) for x in range(1, simulate.WIDTH + 1)]
-        rows.append(f"{y} {' '.join(symbols)}")
+        rows.append(f"y={y} {' '.join(symbols)}")
     return rows
 
 
