@@ -44,8 +44,12 @@ def make_state(
     known_cells: dict[simulate.Position, str] | None = None,
     visited_cells: set[simulate.Position] | None = None,
     known_routes: dict[simulate.Edge, str] | None = None,
-    supply_used: bool = False,
-    supply_source: engine.SupplySource | None = None,
+    used_resource_positions: set[simulate.Position] | None = None,
+    base_visit_count: int = 0,
+    base_refuel_count: int = 0,
+    resource_visit_count: int = 0,
+    resource_refuel_count: int = 0,
+    last_supply_source: engine.SupplySource | None = None,
     turn_count: int = 0,
     requested_seed: int = 1,
     effective_seed: int = 1,
@@ -68,8 +72,12 @@ def make_state(
         known_routes={} if known_routes is None else dict(known_routes),
         player_position=player_position,
         remaining_fuel=remaining_fuel,
-        supply_used=supply_used,
-        supply_source=supply_source,
+        used_resource_positions=set() if used_resource_positions is None else set(used_resource_positions),
+        base_visit_count=base_visit_count,
+        base_refuel_count=base_refuel_count,
+        resource_visit_count=resource_visit_count,
+        resource_refuel_count=resource_refuel_count,
+        last_supply_source=last_supply_source,
         turn_count=turn_count,
         game_status=engine.GAME_STATUS_IN_PROGRESS,
         requested_seed=requested_seed,
@@ -94,6 +102,10 @@ def start_neighborhood_known_cells(
 
 
 class CreateGameTests(unittest.TestCase):
+    def test_game_settings_rejects_initial_fuel_above_max_fuel(self) -> None:
+        with self.assertRaisesRegex(ValueError, "initial-fuel must be less than or equal to max-fuel"):
+            engine.GameSettings(initial_fuel=17, max_fuel=16).validate()
+
     def test_create_game_reveals_start_neighborhood_and_home(self) -> None:
         custom_map = simulate.GalacticMap(
             seed=42,
@@ -275,8 +287,8 @@ class ApplyCommandTests(unittest.TestCase):
         self.assertEqual(second.discovered_cells, ())
         self.assertEqual(state.rift_attempt_count, 1)
 
-    def test_base_supply_applies_once_even_on_revisit(self) -> None:
-        settings = engine.GameSettings(initial_fuel=3, base_supply=2)
+    def test_base_refuels_to_max_on_first_visit_and_revisit(self) -> None:
+        settings = engine.GameSettings(initial_fuel=3, max_fuel=5)
         state = make_state(
             actual_map=make_actual_map(cells=filled_cells("."), base_position=(2, 1)),
             settings=settings,
@@ -287,14 +299,39 @@ class ApplyCommandTests(unittest.TestCase):
         engine.apply_command(state, "W")
         second = engine.apply_command(state, "E")
 
-        self.assertTrue(first.supply_applied)
+        self.assertEqual(first.supply_result, engine.SUPPLY_RESULT_BASE_REFUELED)
         self.assertEqual(first.supply_source, engine.SupplySource(kind="B", position=(2, 1)))
-        self.assertEqual(second.supply_applied, False)
-        self.assertEqual(state.remaining_fuel, 3)
-        self.assertEqual(state.supply_source, engine.SupplySource(kind="B", position=(2, 1)))
+        self.assertEqual(first.fuel_before_supply, 2)
+        self.assertEqual(first.fuel_after_supply, 5)
+        self.assertEqual(first.supply_amount, 3)
+        self.assertEqual(second.supply_result, engine.SUPPLY_RESULT_BASE_REFUELED)
+        self.assertEqual(second.fuel_before_supply, 4)
+        self.assertEqual(second.fuel_after_supply, 5)
+        self.assertEqual(state.remaining_fuel, 5)
+        self.assertEqual(state.base_visit_count, 2)
+        self.assertEqual(state.base_refuel_count, 2)
+        self.assertEqual(state.last_supply_source, engine.SupplySource(kind="B", position=(2, 1)))
+
+    def test_base_arrival_while_already_full_only_increments_visit_count(self) -> None:
+        settings = engine.GameSettings(initial_fuel=4, max_fuel=4)
+        state = make_state(
+            actual_map=make_actual_map(cells=filled_cells("."), base_position=(2, 1)),
+            settings=settings,
+            remaining_fuel=4,
+            last_supply_source=engine.SupplySource(kind="R", position=(7, 7)),
+        )
+
+        event = engine.apply_base_supply(state, (2, 1))
+
+        self.assertEqual(event.result, engine.SUPPLY_RESULT_BASE_ALREADY_FULL)
+        self.assertEqual(event.supply_amount, 0)
+        self.assertEqual(state.remaining_fuel, 4)
+        self.assertEqual(state.base_visit_count, 1)
+        self.assertEqual(state.base_refuel_count, 0)
+        self.assertEqual(state.last_supply_source, engine.SupplySource(kind="R", position=(7, 7)))
 
     def test_resource_supply_can_apply_after_arriving_with_zero_fuel(self) -> None:
-        settings = engine.GameSettings(initial_fuel=1, resource_supply=5)
+        settings = engine.GameSettings(initial_fuel=1, max_fuel=16, resource_supply=5)
         state = make_state(
             actual_map=make_actual_map(cells=filled_cells("."), resource_positions=((2, 1),)),
             settings=settings,
@@ -303,11 +340,67 @@ class ApplyCommandTests(unittest.TestCase):
 
         event = engine.apply_command(state, "E")
 
-        self.assertTrue(event.supply_applied)
+        self.assertEqual(event.supply_result, engine.SUPPLY_RESULT_RESOURCE_REFUELED)
         self.assertEqual(event.supply_source, engine.SupplySource(kind="R", position=(2, 1)))
         self.assertEqual(state.remaining_fuel, 5)
+        self.assertEqual(state.used_resource_positions, {(2, 1)})
+        self.assertEqual(state.resource_visit_count, 1)
+        self.assertEqual(state.resource_refuel_count, 1)
 
-    def test_supply_source_position_survives_later_movement(self) -> None:
+    def test_resource_supply_is_capped_by_max_fuel(self) -> None:
+        settings = engine.GameSettings(initial_fuel=16, max_fuel=16, resource_supply=5)
+        state = make_state(
+            actual_map=make_actual_map(cells=filled_cells("."), resource_positions=((2, 1),)),
+            settings=settings,
+            remaining_fuel=14,
+        )
+
+        event = engine.apply_command(state, "E")
+
+        self.assertEqual(event.supply_result, engine.SUPPLY_RESULT_RESOURCE_REFUELED)
+        self.assertEqual(event.supply_amount, 3)
+        self.assertEqual(event.fuel_before_supply, 13)
+        self.assertEqual(event.fuel_after_supply, 16)
+        self.assertEqual(state.remaining_fuel, 16)
+
+    def test_unused_resource_is_not_consumed_when_arriving_already_full(self) -> None:
+        settings = engine.GameSettings(initial_fuel=16, max_fuel=16, resource_supply=5)
+        state = make_state(
+            actual_map=make_actual_map(cells=filled_cells("."), resource_positions=((2, 1),)),
+            settings=settings,
+            remaining_fuel=16,
+            last_supply_source=engine.SupplySource(kind="B", position=(4, 4)),
+        )
+
+        event = engine.apply_resource_supply(state, (2, 1))
+
+        self.assertEqual(event.result, engine.SUPPLY_RESULT_RESOURCE_ALREADY_FULL)
+        self.assertEqual(event.supply_amount, 0)
+        self.assertEqual(state.used_resource_positions, set())
+        self.assertEqual(state.resource_visit_count, 1)
+        self.assertEqual(state.resource_refuel_count, 0)
+        self.assertEqual(state.last_supply_source, engine.SupplySource(kind="B", position=(4, 4)))
+
+    def test_used_resource_can_be_revisited_without_refueling(self) -> None:
+        settings = engine.GameSettings(initial_fuel=4, max_fuel=16, resource_supply=5)
+        state = make_state(
+            actual_map=make_actual_map(cells=filled_cells("."), resource_positions=((2, 1),)),
+            settings=settings,
+            remaining_fuel=4,
+        )
+
+        first = engine.apply_command(state, "E")
+        engine.apply_command(state, "W")
+        second = engine.apply_command(state, "E")
+
+        self.assertEqual(first.supply_result, engine.SUPPLY_RESULT_RESOURCE_REFUELED)
+        self.assertEqual(second.supply_result, engine.SUPPLY_RESULT_RESOURCE_ALREADY_USED)
+        self.assertEqual(second.supply_amount, 0)
+        self.assertEqual(state.used_resource_positions, {(2, 1)})
+        self.assertEqual(state.resource_visit_count, 2)
+        self.assertEqual(state.resource_refuel_count, 1)
+
+    def test_last_supply_source_survives_later_movement(self) -> None:
         settings = engine.GameSettings(initial_fuel=4, resource_supply=5)
         state = make_state(
             actual_map=make_actual_map(cells=filled_cells("."), resource_positions=((2, 1),)),
@@ -318,7 +411,7 @@ class ApplyCommandTests(unittest.TestCase):
         engine.apply_command(state, "E")
         engine.apply_command(state, "W")
 
-        self.assertEqual(state.supply_source, engine.SupplySource(kind="R", position=(2, 1)))
+        self.assertEqual(state.last_supply_source, engine.SupplySource(kind="R", position=(2, 1)))
 
     def test_arriving_at_home_with_zero_fuel_is_a_win(self) -> None:
         state = make_state(
@@ -401,7 +494,7 @@ class RunCommandsTests(unittest.TestCase):
         self.assertIsNone(log.generation_error)
 
     def test_run_commands_aborts_on_turn_limit(self) -> None:
-        settings = engine.GameSettings(initial_fuel=100)
+        settings = engine.GameSettings(initial_fuel=100, max_fuel=100)
         log = engine.run_commands(42, ["E"] * 100, settings=settings, max_turns=1)
 
         self.assertEqual(log.final_summary.outcome, engine.FINAL_OUTCOME_ABORTED_TURN_LIMIT)
@@ -446,20 +539,25 @@ class RunCommandsTests(unittest.TestCase):
                 "generation_error",
             ],
         )
-        self.assertEqual(payload["schema_version"], 2)
+        self.assertEqual(payload["schema_version"], 3)
         self.assertIn("outcome", payload["final_summary"])
         self.assertIn("path", payload["final_summary"])
-        self.assertIn("supply_source", payload["final_summary"])
+        self.assertIn("last_supply_source", payload["final_summary"])
+        self.assertIn("used_resource_positions", payload["final_summary"])
         if payload["events"]:
             self.assertIn("supply_source", payload["events"][0])
+            self.assertIn("supply_result", payload["events"][0])
+            self.assertIn("fuel_before_supply", payload["events"][0])
+            self.assertIn("fuel_after_supply", payload["events"][0])
+            self.assertIn("supply_amount", payload["events"][0])
             self.assertIn("required_fuel", payload["events"][0])
             self.assertIn("discovered_cells", payload["events"][0])
         json.loads(log.to_json())
 
-    def test_game_log_serializes_structured_supply_source(self) -> None:
+    def test_game_log_serializes_structured_last_supply_source(self) -> None:
         state = make_state(
             actual_map=make_actual_map(cells=filled_cells("."), base_position=(2, 1)),
-            settings=engine.GameSettings(initial_fuel=1, base_supply=3, resource_count=0),
+            settings=engine.GameSettings(initial_fuel=1, max_fuel=4, resource_count=0),
             remaining_fuel=1,
             requested_seed=1,
             effective_seed=1,
@@ -475,11 +573,55 @@ class RunCommandsTests(unittest.TestCase):
             },
         )
         self.assertEqual(
-            payload["final_summary"]["supply_source"],
+            payload["final_summary"]["last_supply_source"],
             {
                 "kind": "B",
                 "position": {"x": 2, "y": 1},
             },
+        )
+
+    def test_supply_helpers_cover_all_supply_results(self) -> None:
+        cells = filled_cells(".")
+        actual_map = make_actual_map(
+            cells=cells,
+            base_position=(2, 1),
+            resource_positions=((3, 1),),
+        )
+        settings = engine.GameSettings(initial_fuel=4, max_fuel=4, resource_supply=5)
+
+        base_full_state = make_state(
+            actual_map=actual_map,
+            settings=settings,
+            remaining_fuel=4,
+        )
+        resource_full_state = make_state(
+            actual_map=actual_map,
+            settings=settings,
+            player_position=(2, 1),
+            visited_cells={(1, 1), (2, 1)},
+            path=[(1, 1), (2, 1)],
+            remaining_fuel=4,
+            base_visit_count=1,
+        )
+        resource_used_state = make_state(
+            actual_map=actual_map,
+            settings=settings,
+            player_position=(2, 1),
+            visited_cells={(1, 1), (2, 1)},
+            path=[(1, 1), (2, 1)],
+            remaining_fuel=2,
+            used_resource_positions={(3, 1)},
+            base_visit_count=1,
+        )
+
+        self.assertEqual(engine.apply_base_supply(base_full_state, (2, 1)).result, engine.SUPPLY_RESULT_BASE_ALREADY_FULL)
+        self.assertEqual(
+            engine.apply_resource_supply(resource_full_state, (3, 1)).result,
+            engine.SUPPLY_RESULT_RESOURCE_ALREADY_FULL,
+        )
+        self.assertEqual(
+            engine.apply_resource_supply(resource_used_state, (3, 1)).result,
+            engine.SUPPLY_RESULT_RESOURCE_ALREADY_USED,
         )
 
     def test_game_log_serializes_structured_generation_error(self) -> None:

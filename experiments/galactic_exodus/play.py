@@ -35,7 +35,7 @@ def build_parser(stderr: TextIO) -> argparse.ArgumentParser:
     parser.add_argument(
         "--json-log",
         type=Path,
-        help="Write the final GameLog schema_version=2 JSON to this path.",
+        help="Write the final GameLog schema_version=3 JSON to this path.",
     )
     return parser
 
@@ -107,8 +107,9 @@ def render_state(state: engine.GameState, output: TextIO) -> None:
         f"SEED: requested={state.requested_seed} effective={state.effective_seed} rerolls={state.reroll_count}\n"
     )
     output.write(f"POSITION: {format_position(state.player_position)}\n")
-    output.write(f"FUEL: {state.remaining_fuel}\n")
-    output.write(f"SUPPLY: {format_supply_status(state)}\n")
+    output.write(f"FUEL: {state.remaining_fuel}/{state.settings.max_fuel}\n")
+    output.write(f"LAST SUPPLY: {format_last_supply_status(state)}\n")
+    output.write(f"USED R: {format_used_resources(state)}\n")
     output.write(f"TURN: {state.turn_count}\n")
     output.write(f"STATUS: {format_status(state.game_status)}\n")
     output.write(f"BLOCKED: {format_blocked_directions(state)}\n")
@@ -149,8 +150,9 @@ def format_event_messages(
         messages = [
             f"MOVED TO {format_position(event.to_position)}, COST {event.fuel_spent}"
         ]
-        if event.supply_applied and event.supply_source is not None:
-            messages.append(format_supply_message(state, event.supply_source))
+        supply_message = format_supply_message(event)
+        if supply_message is not None:
+            messages.append(supply_message)
         if event.status_after == engine.GAME_STATUS_WON:
             messages.append("YOU REACHED H")
         elif event.status_after == engine.GAME_STATUS_LOST_FUEL:
@@ -176,12 +178,31 @@ def format_event_messages(
     raise ValueError(f"unexpected outcome: {event.outcome}")
 
 
-def format_supply_message(state: engine.GameState, source: engine.SupplySource) -> str:
-    if source.kind == engine.BASE_CELL:
-        return f"SUPPLIED AT B: +{state.settings.base_supply}"
-    if source.kind == engine.RESOURCE_CELL:
-        return f"SUPPLIED AT R{format_position(source.position)}: +{state.settings.resource_supply}"
-    raise ValueError(f"unexpected supply source kind: {source.kind}")
+def format_supply_message(event: engine.TurnEvent) -> str | None:
+    source = event.supply_source
+    if event.supply_result == engine.SUPPLY_RESULT_NONE:
+        return None
+    if source is None:
+        raise ValueError("supply event must include supply_source")
+    if event.fuel_before_supply is None or event.fuel_after_supply is None:
+        raise ValueError("supply event must include fuel_before_supply and fuel_after_supply")
+    if event.supply_result == engine.SUPPLY_RESULT_BASE_REFUELED:
+        return (
+            f"REFUELED AT B{format_position(source.position)}: "
+            f"{event.fuel_before_supply} -> {event.fuel_after_supply}"
+        )
+    if event.supply_result == engine.SUPPLY_RESULT_BASE_ALREADY_FULL:
+        return f"BASE ALREADY FULL AT B{format_position(source.position)}"
+    if event.supply_result == engine.SUPPLY_RESULT_RESOURCE_REFUELED:
+        return (
+            f"REFUELED AT R{format_position(source.position)}: "
+            f"+{event.supply_amount} ({event.fuel_before_supply} -> {event.fuel_after_supply})"
+        )
+    if event.supply_result == engine.SUPPLY_RESULT_RESOURCE_ALREADY_FULL:
+        return f"RESOURCE ALREADY FULL AT R{format_position(source.position)}"
+    if event.supply_result == engine.SUPPLY_RESULT_RESOURCE_ALREADY_USED:
+        return f"RESOURCE ALREADY USED AT R{format_position(source.position)}"
+    raise ValueError(f"unexpected supply result: {event.supply_result}")
 
 
 def direction_for_event(event: engine.TurnEvent) -> str:
@@ -215,14 +236,20 @@ def format_status(status: str) -> str:
     raise ValueError(f"unexpected game status: {status}")
 
 
-def format_supply_status(state: engine.GameState) -> str:
-    if not state.supply_used or state.supply_source is None:
-        return "unused"
-    if state.supply_source.kind == engine.BASE_CELL:
-        return "B"
-    if state.supply_source.kind == engine.RESOURCE_CELL:
-        return f"R{format_position(state.supply_source.position)}"
-    raise ValueError(f"unexpected supply source kind: {state.supply_source.kind}")
+def format_last_supply_status(state: engine.GameState) -> str:
+    if state.last_supply_source is None:
+        return "none"
+    return format_supply_source(state.last_supply_source)
+
+
+def format_supply_source(source: engine.SupplySource) -> str:
+    return f"{source.kind}{format_position(source.position)}"
+
+
+def format_used_resources(state: engine.GameState) -> str:
+    if not state.used_resource_positions:
+        return "-"
+    return ",".join(format_position(position) for position in sorted(state.used_resource_positions))
 
 
 def format_blocked_directions(state: engine.GameState) -> str:

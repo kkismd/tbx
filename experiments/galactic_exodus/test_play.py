@@ -157,6 +157,27 @@ class PlayCliTests(unittest.TestCase):
             ["INSUFFICIENT FUEL: NEED 3, HAVE 2"],
         )
 
+    def test_turn_messages_cover_supply_results(self) -> None:
+        base_state = make_state(
+            actual_map=make_actual_map(cells=filled_cells("."), base_position=(2, 1)),
+            settings=engine.GameSettings(initial_fuel=3, max_fuel=5, resource_count=0),
+            remaining_fuel=3,
+        )
+        resource_state = make_state(
+            actual_map=make_actual_map(cells=filled_cells("."), resource_positions=((2, 1),)),
+            settings=engine.GameSettings(initial_fuel=3, max_fuel=16, resource_supply=5),
+            remaining_fuel=3,
+        )
+
+        base_event = engine.apply_command(base_state, "E")
+        resource_event = engine.apply_command(resource_state, "E")
+
+        self.assertIn("REFUELED AT B(2,1): 2 -> 5", play.format_event_messages(base_state, base_event))
+        self.assertIn(
+            "REFUELED AT R(2,1): +5 (2 -> 7)",
+            play.format_event_messages(resource_state, resource_event),
+        )
+
     def test_generation_error_is_reported_separately(self) -> None:
         with patch.object(
             engine,
@@ -184,7 +205,7 @@ class PlayCliTests(unittest.TestCase):
 
         self.assertEqual(first, second)
 
-    def test_json_log_writes_schema_version_2(self) -> None:
+    def test_json_log_writes_schema_version_3(self) -> None:
         with tempfile.TemporaryDirectory(dir=".tmp") as tmp_dir:
             log_path = Path(tmp_dir) / "play-log.json"
 
@@ -198,9 +219,25 @@ class PlayCliTests(unittest.TestCase):
         self.assertEqual(exit_code, 0)
         self.assertEqual(stderr, "")
         self.assertTrue(stdout.endswith("COMMAND> "))
-        self.assertEqual(payload["schema_version"], 2)
+        self.assertEqual(payload["schema_version"], 3)
         self.assertEqual(payload["final_summary"]["outcome"], engine.FINAL_OUTCOME_ABORTED_NO_POLICY_ACTION)
         self.assertIsNone(payload["generation_error"])
+
+    def test_state_panel_uses_fixed_supply_fields(self) -> None:
+        state = make_state(
+            actual_map=make_actual_map(cells=filled_cells("."), resource_positions=((3, 2), (2, 3))),
+            remaining_fuel=7,
+            used_resource_positions={(2, 3), (3, 2)},
+            last_supply_source=engine.SupplySource(kind="R", position=(3, 2)),
+        )
+
+        stdout = io.StringIO()
+        play.render_state(state, stdout)
+        rendered = stdout.getvalue()
+
+        self.assertIn("FUEL: 7/16\n", rendered)
+        self.assertIn("LAST SUPPLY: R(3,2)\n", rendered)
+        self.assertIn("USED R: (2,3),(3,2)\n", rendered)
 
 
 if __name__ == "__main__":

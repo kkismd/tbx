@@ -7,7 +7,7 @@ from typing import Iterable
 from experiments.galactic_exodus import simulate
 
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 MAX_GENERATION_ATTEMPTS = 100
 MIN_INT64 = -(2**63)
 MAX_INT64 = 2**63 - 1
@@ -35,6 +35,13 @@ RESOURCE_CELL = "R"
 BASE_CELL = "B"
 HOME_CELL = "H"
 
+SUPPLY_RESULT_NONE = "NONE"
+SUPPLY_RESULT_BASE_REFUELED = "BASE_REFUELED"
+SUPPLY_RESULT_BASE_ALREADY_FULL = "BASE_ALREADY_FULL"
+SUPPLY_RESULT_RESOURCE_REFUELED = "RESOURCE_REFUELED"
+SUPPLY_RESULT_RESOURCE_ALREADY_FULL = "RESOURCE_ALREADY_FULL"
+SUPPLY_RESULT_RESOURCE_ALREADY_USED = "RESOURCE_ALREADY_USED"
+
 COMMAND_DELTAS: dict[str, tuple[int, int]] = {
     "N": (0, 1),
     "E": (1, 0),
@@ -51,7 +58,7 @@ class GameSettings:
     goal_position: simulate.Position = simulate.SPECIAL_H
     rift_density: float = simulate.DEFAULT_RIFT_DENSITY
     initial_fuel: int = simulate.DEFAULT_INITIAL_FUEL
-    base_supply: int = simulate.DEFAULT_BASE_SUPPLY
+    max_fuel: int = simulate.DEFAULT_INITIAL_FUEL
     resource_count: int = simulate.DEFAULT_RESOURCE_COUNT
     resource_supply: int = simulate.DEFAULT_RESOURCE_SUPPLY
 
@@ -64,9 +71,11 @@ class GameSettings:
             raise ValueError("goal_position must be (8, 8)")
         simulate.validate_rift_density(self.rift_density)
         simulate.validate_non_negative("initial-fuel", self.initial_fuel)
-        simulate.validate_non_negative("base-supply", self.base_supply)
+        simulate.validate_non_negative("max-fuel", self.max_fuel)
         simulate.validate_non_negative("resource-supply", self.resource_supply)
         simulate.validate_resource_count(self.resource_count)
+        if self.initial_fuel > self.max_fuel:
+            raise ValueError("initial-fuel must be less than or equal to max-fuel")
 
 
 DEFAULT_SETTINGS = GameSettings()
@@ -113,18 +122,20 @@ class GameState:
     known_routes: dict[simulate.Edge, str]
     player_position: simulate.Position
     remaining_fuel: int
-    supply_used: bool
-    supply_source: SupplySource | None
+    used_resource_positions: set[simulate.Position]
+    base_visit_count: int
+    base_refuel_count: int
+    resource_visit_count: int
+    resource_refuel_count: int
+    last_supply_source: SupplySource | None
     turn_count: int
     game_status: str
     requested_seed: int
     effective_seed: int
     reroll_count: int
-    resource_visit_count: int = 0
     rift_attempt_count: int = 0
     invalid_or_rejected_action_count: int = 0
     path: list[simulate.Position] = field(default_factory=list)
-    base_visited: bool = False
 
 
 @dataclass(frozen=True)
@@ -161,8 +172,11 @@ class TurnEvent:
     required_fuel: int | None
     discovered_cells: tuple[DiscoveredCell, ...]
     discovered_rift: bool
-    supply_applied: bool
+    supply_result: str
     supply_source: SupplySource | None
+    fuel_before_supply: int | None
+    fuel_after_supply: int | None
+    supply_amount: int
     status_after: str
 
     def to_dict(self) -> dict[str, object]:
@@ -179,8 +193,11 @@ class TurnEvent:
             "required_fuel": self.required_fuel,
             "discovered_cells": [cell.to_dict() for cell in self.discovered_cells],
             "discovered_rift": self.discovered_rift,
-            "supply_applied": self.supply_applied,
+            "supply_result": self.supply_result,
             "supply_source": optional_supply_source_to_dict(self.supply_source),
+            "fuel_before_supply": self.fuel_before_supply,
+            "fuel_after_supply": self.fuel_after_supply,
+            "supply_amount": self.supply_amount,
             "status_after": self.status_after,
         }
 
@@ -190,9 +207,13 @@ class FinalSummary:
     outcome: str
     turn_count: int
     remaining_fuel: int
-    supply_source: SupplySource | None
-    base_visited: bool
-    resource_visits: int
+    max_fuel: int
+    used_resource_positions: tuple[simulate.Position, ...]
+    base_visit_count: int
+    base_refuel_count: int
+    resource_visit_count: int
+    resource_refuel_count: int
+    last_supply_source: SupplySource | None
     rift_attempts: int
     invalid_or_rejected_actions: int
     path: tuple[simulate.Position, ...]
@@ -202,13 +223,26 @@ class FinalSummary:
             "outcome": self.outcome,
             "turn_count": self.turn_count,
             "remaining_fuel": self.remaining_fuel,
-            "supply_source": optional_supply_source_to_dict(self.supply_source),
-            "base_visited": self.base_visited,
-            "resource_visits": self.resource_visits,
+            "max_fuel": self.max_fuel,
+            "used_resource_positions": positions_to_sorted_dicts(set(self.used_resource_positions)),
+            "base_visit_count": self.base_visit_count,
+            "base_refuel_count": self.base_refuel_count,
+            "resource_visit_count": self.resource_visit_count,
+            "resource_refuel_count": self.resource_refuel_count,
+            "last_supply_source": optional_supply_source_to_dict(self.last_supply_source),
             "rift_attempts": self.rift_attempts,
             "invalid_or_rejected_actions": self.invalid_or_rejected_actions,
             "path": [position_to_dict(position) for position in self.path],
         }
+
+
+@dataclass(frozen=True)
+class SupplyResolution:
+    result: str
+    source: SupplySource | None
+    fuel_before_supply: int | None
+    fuel_after_supply: int | None
+    supply_amount: int
 
 
 @dataclass(frozen=True)
@@ -285,8 +319,12 @@ def create_game(requested_seed: int, settings: GameSettings = DEFAULT_SETTINGS) 
         known_routes={},
         player_position=settings.start_position,
         remaining_fuel=settings.initial_fuel,
-        supply_used=False,
-        supply_source=None,
+        used_resource_positions=set(),
+        base_visit_count=0,
+        base_refuel_count=0,
+        resource_visit_count=0,
+        resource_refuel_count=0,
+        last_supply_source=None,
         turn_count=0,
         game_status=GAME_STATUS_IN_PROGRESS,
         requested_seed=requested_seed,
@@ -380,8 +418,11 @@ def apply_command(state: GameState, command: str) -> TurnEvent:
             required_fuel=None,
             discovered_cells=(),
             discovered_rift=False,
-            supply_applied=False,
+            supply_result=SUPPLY_RESULT_NONE,
             supply_source=None,
+            fuel_before_supply=None,
+            fuel_after_supply=None,
+            supply_amount=0,
             status_after=state.game_status,
         )
 
@@ -404,8 +445,11 @@ def apply_command(state: GameState, command: str) -> TurnEvent:
             required_fuel=None,
             discovered_cells=(),
             discovered_rift=False,
-            supply_applied=False,
+            supply_result=SUPPLY_RESULT_NONE,
             supply_source=None,
+            fuel_before_supply=None,
+            fuel_after_supply=None,
+            supply_amount=0,
             status_after=state.game_status,
         )
 
@@ -426,8 +470,11 @@ def apply_command(state: GameState, command: str) -> TurnEvent:
             required_fuel=None,
             discovered_cells=(),
             discovered_rift=False,
-            supply_applied=False,
+            supply_result=SUPPLY_RESULT_NONE,
             supply_source=None,
+            fuel_before_supply=None,
+            fuel_after_supply=None,
+            supply_amount=0,
             status_after=state.game_status,
         )
 
@@ -447,8 +494,11 @@ def apply_command(state: GameState, command: str) -> TurnEvent:
                 required_fuel=1,
                 discovered_cells=(),
                 discovered_rift=False,
-                supply_applied=False,
+                supply_result=SUPPLY_RESULT_NONE,
                 supply_source=None,
+                fuel_before_supply=None,
+                fuel_after_supply=None,
+                supply_amount=0,
                 status_after=state.game_status,
             )
 
@@ -470,8 +520,11 @@ def apply_command(state: GameState, command: str) -> TurnEvent:
             required_fuel=None,
             discovered_cells=(),
             discovered_rift=True,
-            supply_applied=False,
+            supply_result=SUPPLY_RESULT_NONE,
             supply_source=None,
+            fuel_before_supply=None,
+            fuel_after_supply=None,
+            supply_amount=0,
             status_after=state.game_status,
         )
 
@@ -492,8 +545,11 @@ def apply_command(state: GameState, command: str) -> TurnEvent:
             required_fuel=fuel_cost,
             discovered_cells=(),
             discovered_rift=False,
-            supply_applied=False,
+            supply_result=SUPPLY_RESULT_NONE,
             supply_source=None,
+            fuel_before_supply=None,
+            fuel_after_supply=None,
+            supply_amount=0,
             status_after=state.game_status,
         )
 
@@ -505,15 +561,11 @@ def apply_command(state: GameState, command: str) -> TurnEvent:
     state.path.append(attempted_position)
     discovered_cells = reveal_neighborhood(state, attempted_position)
 
-    supply_applied, supply_source = maybe_apply_supply(
+    supply_resolution = maybe_apply_supply(
         state,
         destination_symbol,
         attempted_position,
     )
-    if destination_symbol == BASE_CELL:
-        state.base_visited = True
-    if destination_symbol == RESOURCE_CELL:
-        state.resource_visit_count += 1
 
     state.game_status = determine_game_status(state)
     return TurnEvent(
@@ -529,8 +581,11 @@ def apply_command(state: GameState, command: str) -> TurnEvent:
         required_fuel=None,
         discovered_cells=discovered_cells,
         discovered_rift=False,
-        supply_applied=supply_applied,
-        supply_source=supply_source,
+        supply_result=supply_resolution.result,
+        supply_source=supply_resolution.source,
+        fuel_before_supply=supply_resolution.fuel_before_supply,
+        fuel_after_supply=supply_resolution.fuel_after_supply,
+        supply_amount=supply_resolution.supply_amount,
         status_after=state.game_status,
     )
 
@@ -589,19 +644,89 @@ def maybe_apply_supply(
     state: GameState,
     destination_symbol: str,
     position: simulate.Position,
-) -> tuple[bool, SupplySource | None]:
-    if state.supply_used:
-        return False, None
+) -> SupplyResolution:
     if destination_symbol == BASE_CELL:
-        supply_amount = state.settings.base_supply
-    elif destination_symbol == RESOURCE_CELL:
-        supply_amount = state.settings.resource_supply
-    else:
-        return False, None
-    state.supply_used = True
-    state.supply_source = SupplySource(kind=destination_symbol, position=position)
+        return apply_base_supply(state, position)
+    if destination_symbol == RESOURCE_CELL:
+        return apply_resource_supply(state, position)
+    return SupplyResolution(
+        result=SUPPLY_RESULT_NONE,
+        source=None,
+        fuel_before_supply=None,
+        fuel_after_supply=None,
+        supply_amount=0,
+    )
+
+
+def apply_base_supply(
+    state: GameState,
+    position: simulate.Position,
+) -> SupplyResolution:
+    state.base_visit_count += 1
+    source = SupplySource(kind=BASE_CELL, position=position)
+    fuel_before_supply = state.remaining_fuel
+    supply_amount = state.settings.max_fuel - fuel_before_supply
+    if supply_amount <= 0:
+        return SupplyResolution(
+            result=SUPPLY_RESULT_BASE_ALREADY_FULL,
+            source=source,
+            fuel_before_supply=fuel_before_supply,
+            fuel_after_supply=fuel_before_supply,
+            supply_amount=0,
+        )
+
+    state.remaining_fuel = state.settings.max_fuel
+    state.base_refuel_count += 1
+    state.last_supply_source = source
+    return SupplyResolution(
+        result=SUPPLY_RESULT_BASE_REFUELED,
+        source=source,
+        fuel_before_supply=fuel_before_supply,
+        fuel_after_supply=state.remaining_fuel,
+        supply_amount=supply_amount,
+    )
+
+
+def apply_resource_supply(
+    state: GameState,
+    position: simulate.Position,
+) -> SupplyResolution:
+    state.resource_visit_count += 1
+    source = SupplySource(kind=RESOURCE_CELL, position=position)
+    fuel_before_supply = state.remaining_fuel
+    if position in state.used_resource_positions:
+        return SupplyResolution(
+            result=SUPPLY_RESULT_RESOURCE_ALREADY_USED,
+            source=source,
+            fuel_before_supply=fuel_before_supply,
+            fuel_after_supply=fuel_before_supply,
+            supply_amount=0,
+        )
+
+    supply_amount = min(
+        state.settings.resource_supply,
+        state.settings.max_fuel - state.remaining_fuel,
+    )
+    if supply_amount <= 0:
+        return SupplyResolution(
+            result=SUPPLY_RESULT_RESOURCE_ALREADY_FULL,
+            source=source,
+            fuel_before_supply=fuel_before_supply,
+            fuel_after_supply=fuel_before_supply,
+            supply_amount=0,
+        )
+
     state.remaining_fuel += supply_amount
-    return True, state.supply_source
+    state.used_resource_positions.add(position)
+    state.resource_refuel_count += 1
+    state.last_supply_source = source
+    return SupplyResolution(
+        result=SUPPLY_RESULT_RESOURCE_REFUELED,
+        source=source,
+        fuel_before_supply=fuel_before_supply,
+        fuel_after_supply=state.remaining_fuel,
+        supply_amount=supply_amount,
+    )
 
 
 def reveal_neighborhood(
@@ -684,9 +809,13 @@ def build_game_log(
             outcome=final_outcome,
             turn_count=state.turn_count,
             remaining_fuel=state.remaining_fuel,
-            supply_source=state.supply_source,
-            base_visited=state.base_visited,
-            resource_visits=state.resource_visit_count,
+            max_fuel=state.settings.max_fuel,
+            used_resource_positions=tuple(sorted(state.used_resource_positions)),
+            base_visit_count=state.base_visit_count,
+            base_refuel_count=state.base_refuel_count,
+            resource_visit_count=state.resource_visit_count,
+            resource_refuel_count=state.resource_refuel_count,
+            last_supply_source=state.last_supply_source,
             rift_attempts=state.rift_attempt_count,
             invalid_or_rejected_actions=state.invalid_or_rejected_action_count,
             path=tuple(state.path),
@@ -703,8 +832,13 @@ def snapshot_state(state: GameState) -> dict[str, object]:
         "known_routes": known_routes_to_dict(state.known_routes),
         "player_position": position_to_dict(state.player_position),
         "remaining_fuel": state.remaining_fuel,
-        "supply_used": state.supply_used,
-        "supply_source": optional_supply_source_to_dict(state.supply_source),
+        "max_fuel": state.settings.max_fuel,
+        "used_resource_positions": positions_to_sorted_dicts(state.used_resource_positions),
+        "base_visit_count": state.base_visit_count,
+        "base_refuel_count": state.base_refuel_count,
+        "resource_visit_count": state.resource_visit_count,
+        "resource_refuel_count": state.resource_refuel_count,
+        "last_supply_source": optional_supply_source_to_dict(state.last_supply_source),
         "turn_count": state.turn_count,
         "game_status": state.game_status,
         "requested_seed": state.requested_seed,
@@ -721,7 +855,7 @@ def settings_to_dict(settings: GameSettings) -> dict[str, object]:
         "goal_position": position_to_dict(settings.goal_position),
         "rift_density": settings.rift_density,
         "initial_fuel": settings.initial_fuel,
-        "base_supply": settings.base_supply,
+        "max_fuel": settings.max_fuel,
         "resource_count": settings.resource_count,
         "resource_supply": settings.resource_supply,
     }
