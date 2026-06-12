@@ -7,7 +7,7 @@ from typing import Iterable
 from experiments.galactic_exodus import simulate
 
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 MAX_GENERATION_ATTEMPTS = 100
 MIN_INT64 = -(2**63)
 MAX_INT64 = 2**63 - 1
@@ -92,6 +92,18 @@ class SupplySource:
         }
 
 
+@dataclass(frozen=True)
+class DiscoveredCell:
+    position: simulate.Position
+    symbol: str
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "position": position_to_dict(self.position),
+            "symbol": self.symbol,
+        }
+
+
 @dataclass
 class GameState:
     settings: GameSettings
@@ -147,7 +159,7 @@ class TurnEvent:
     fuel_spent: int
     fuel_after: int
     required_fuel: int | None
-    discovered_cell: str | None
+    discovered_cells: tuple[DiscoveredCell, ...]
     discovered_rift: bool
     supply_applied: bool
     supply_source: SupplySource | None
@@ -165,7 +177,7 @@ class TurnEvent:
             "fuel_spent": self.fuel_spent,
             "fuel_after": self.fuel_after,
             "required_fuel": self.required_fuel,
-            "discovered_cell": self.discovered_cell,
+            "discovered_cells": [cell.to_dict() for cell in self.discovered_cells],
             "discovered_rift": self.discovered_rift,
             "supply_applied": self.supply_applied,
             "supply_source": optional_supply_source_to_dict(self.supply_source),
@@ -264,10 +276,7 @@ def create_game(requested_seed: int, settings: GameSettings = DEFAULT_SETTINGS) 
         base_position=galactic_map.b_position,
         resource_positions=tuple(galactic_map.r_positions),
     )
-    known_cells = {
-        settings.start_position: actual_map.cells[settings.start_position],
-        settings.goal_position: actual_map.cells[settings.goal_position],
-    }
+    known_cells = {settings.goal_position: actual_map.cells[settings.goal_position]}
     state = GameState(
         settings=settings,
         actual_map=actual_map,
@@ -285,6 +294,7 @@ def create_game(requested_seed: int, settings: GameSettings = DEFAULT_SETTINGS) 
         reroll_count=reroll_count,
         path=[settings.start_position],
     )
+    reveal_neighborhood(state, settings.start_position)
     state.game_status = determine_game_status(state)
     return state
 
@@ -368,7 +378,7 @@ def apply_command(state: GameState, command: str) -> TurnEvent:
             fuel_spent=0,
             fuel_after=state.remaining_fuel,
             required_fuel=None,
-            discovered_cell=None,
+            discovered_cells=(),
             discovered_rift=False,
             supply_applied=False,
             supply_source=None,
@@ -392,7 +402,7 @@ def apply_command(state: GameState, command: str) -> TurnEvent:
             fuel_spent=0,
             fuel_after=state.remaining_fuel,
             required_fuel=None,
-            discovered_cell=None,
+            discovered_cells=(),
             discovered_rift=False,
             supply_applied=False,
             supply_source=None,
@@ -414,7 +424,7 @@ def apply_command(state: GameState, command: str) -> TurnEvent:
             fuel_spent=0,
             fuel_after=state.remaining_fuel,
             required_fuel=None,
-            discovered_cell=None,
+            discovered_cells=(),
             discovered_rift=False,
             supply_applied=False,
             supply_source=None,
@@ -435,7 +445,7 @@ def apply_command(state: GameState, command: str) -> TurnEvent:
                 fuel_spent=0,
                 fuel_after=state.remaining_fuel,
                 required_fuel=1,
-                discovered_cell=None,
+                discovered_cells=(),
                 discovered_rift=False,
                 supply_applied=False,
                 supply_source=None,
@@ -458,7 +468,7 @@ def apply_command(state: GameState, command: str) -> TurnEvent:
             fuel_spent=1,
             fuel_after=state.remaining_fuel,
             required_fuel=None,
-            discovered_cell=None,
+            discovered_cells=(),
             discovered_rift=True,
             supply_applied=False,
             supply_source=None,
@@ -480,7 +490,7 @@ def apply_command(state: GameState, command: str) -> TurnEvent:
             fuel_spent=0,
             fuel_after=state.remaining_fuel,
             required_fuel=fuel_cost,
-            discovered_cell=None,
+            discovered_cells=(),
             discovered_rift=False,
             supply_applied=False,
             supply_source=None,
@@ -493,10 +503,7 @@ def apply_command(state: GameState, command: str) -> TurnEvent:
     state.known_routes[edge] = ROUTE_OPEN
     state.visited_cells.add(attempted_position)
     state.path.append(attempted_position)
-    discovered_cell = None
-    if attempted_position not in state.known_cells:
-        state.known_cells[attempted_position] = destination_symbol
-        discovered_cell = destination_symbol
+    discovered_cells = reveal_neighborhood(state, attempted_position)
 
     supply_applied, supply_source = maybe_apply_supply(
         state,
@@ -520,7 +527,7 @@ def apply_command(state: GameState, command: str) -> TurnEvent:
         fuel_spent=fuel_cost,
         fuel_after=state.remaining_fuel,
         required_fuel=None,
-        discovered_cell=discovered_cell,
+        discovered_cells=discovered_cells,
         discovered_rift=False,
         supply_applied=supply_applied,
         supply_source=supply_source,
@@ -595,6 +602,25 @@ def maybe_apply_supply(
     state.supply_source = SupplySource(kind=destination_symbol, position=position)
     state.remaining_fuel += supply_amount
     return True, state.supply_source
+
+
+def reveal_neighborhood(
+    state: GameState,
+    center: simulate.Position,
+    radius: int = 1,
+) -> tuple[DiscoveredCell, ...]:
+    discovered: list[DiscoveredCell] = []
+    for y in range(center[1] - radius, center[1] + radius + 1):
+        for x in range(center[0] - radius, center[0] + radius + 1):
+            position = (x, y)
+            if not is_inside_board(position):
+                continue
+            if position in state.known_cells:
+                continue
+            symbol = state.actual_map.cells[position]
+            state.known_cells[position] = symbol
+            discovered.append(DiscoveredCell(position=position, symbol=symbol))
+    return tuple(sorted(discovered, key=lambda cell: cell.position))
 
 
 def determine_game_status(state: GameState) -> str:

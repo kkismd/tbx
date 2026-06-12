@@ -4,9 +4,9 @@
 
 これは正式な TBX アプリ実装ではありません。将来の TBX 側の実装は、`examples/galactic_exodus/` など別の場所に置く想定です。
 
-## Phase 1A1 engine
+## Phase 1A prototype engine
 
-`engine.py` は、標準入力や画面表示に依存しない Phase 1A1 用の非対話ゲームエンジンです。
+`engine.py` は、標準入力や画面表示に依存しない Phase 1A 用の非対話ゲームエンジンです。
 マップ生成は既存の `simulate.generate_map()` をそのまま利用し、到達不能マップだけを deterministic に再抽選します。
 
 公開 API:
@@ -49,11 +49,19 @@ log = engine.run_commands(42, ["E", "N", "E"])
 - `effective_seed`
 - `reroll_count`
 
-開始時は `known_cells = {S, H}`、`visited_cells = {S}`、`known_routes = {}` です。
+開始時は `visited_cells = {S}`、`known_routes = {}` です。`known_cells` は `H` に加えて `S` を中心とした 3x3 範囲の盤面内セルで始まります。
+
+観測ルール:
+
+- 開始時に `S` を中心とした 3x3 範囲の盤面内セルを `known_cells` に追加します
+- 成功移動後に、新しい現在地を中心とした 3x3 範囲の盤面内セルを `known_cells` に追加します
+- 既知情報は累積し、離れても失われません
+- 断層は周囲観測では開示されず、移動失敗時にだけ `known_routes` へ記録されます
 
 ### movement contract
 
 - 成功移動: 移動先地形コストを消費し、`known_routes` に `OPEN` を記録する
+- 成功移動: 移動後の現在地を中心とした周囲 8 マスの地形と `B` / `R` を開示する
 - 未知断層への試行: 位置不変、`fuel -1`、`turn +1`、`known_routes` に `RIFT` を記録する
 - 既知断層への再試行: 行動拒否、fuel/turn 不変
 - 盤面外・無効コマンド・燃料不足: 状態不変
@@ -92,7 +100,7 @@ generation error は通常敗北と分離し、`GameLog.generation_error` に記
 
 ### deterministic log schema
 
-`GameLog.schema_version` は `1` 固定です。
+`GameLog.schema_version` は `2` 固定です。
 
 ```text
 GameLog
@@ -118,7 +126,7 @@ TurnEvent
   fuel_before
   fuel_spent
   fuel_after
-  discovered_cell
+  discovered_cells
   discovered_rift
   supply_applied
   supply_source
@@ -164,7 +172,7 @@ python experiments/galactic_exodus/play.py --seed 42 --json-log .tmp/galactic-ex
 - `--seed <int>`
   - 必須。requested seed を指定します。
 - `--json-log <path>`
-  - 任意。終了時に `GameLog schema_version=1` を JSON で書き出します。
+  - 任意。終了時に `GameLog schema_version=2` を JSON で書き出します。
 
 コマンド:
 
@@ -196,6 +204,7 @@ P  現在地
 ```
 
 - `H` は開始時から表示されます
+- `S` 周囲 8 マスの地形と `B` / `R` は開始時から表示されます
 - 未知の地形・B・R は表示しません
 - 表示優先順位は `P > S/H > B/R > terrain > ?` です
 
@@ -239,7 +248,7 @@ requested / effective seed の再現:
 
 JSON ログの用途:
 
-- `--json-log` は CLI セッションを `GameLog schema_version=1` として保存します
+- `--json-log` は CLI セッションを `GameLog schema_version=2` として保存します
 - `Q` / EOF で終了したセッションは `final_summary.outcome = ABORTED_NO_POLICY_ACTION` になります
 - generation error は通常敗北と分離し、`requested / attempts / last_candidate_seed / reason / message` を表示します
 

@@ -81,12 +81,51 @@ def make_state(
     return state
 
 
+def start_neighborhood_known_cells(
+    actual_map: engine.ActualMap,
+) -> dict[simulate.Position, str]:
+    return {
+        (1, 1): actual_map.cells[(1, 1)],
+        (1, 2): actual_map.cells[(1, 2)],
+        (2, 1): actual_map.cells[(2, 1)],
+        (2, 2): actual_map.cells[(2, 2)],
+        simulate.SPECIAL_H: actual_map.cells[simulate.SPECIAL_H],
+    }
+
+
 class CreateGameTests(unittest.TestCase):
-    def test_create_game_starts_with_only_s_and_h_known(self) -> None:
-        state = engine.create_game(42)
+    def test_create_game_reveals_start_neighborhood_and_home(self) -> None:
+        custom_map = simulate.GalacticMap(
+            seed=42,
+            resource_count=1,
+            rift_density=0.10,
+            b_position=(4, 4),
+            r_positions=[(5, 5)],
+            rift_edges=(),
+            cells=make_actual_map(
+                cells=filled_cells("."),
+                base_position=(4, 4),
+                resource_positions=((5, 5),),
+            ).cells,
+        )
+        with patch.object(
+            engine,
+            "create_playable_map",
+            return_value=(custom_map, 42, 0),
+        ):
+            state = engine.create_game(42)
 
         self.assertEqual(state.player_position, simulate.SPECIAL_S)
-        self.assertEqual(state.known_cells, {simulate.SPECIAL_S: "S", simulate.SPECIAL_H: "H"})
+        self.assertEqual(
+            state.known_cells,
+            {
+                (1, 1): "S",
+                (1, 2): ".",
+                (2, 1): ".",
+                (2, 2): ".",
+                simulate.SPECIAL_H: "H",
+            },
+        )
         self.assertEqual(state.visited_cells, {simulate.SPECIAL_S})
         self.assertEqual(state.known_routes, {})
         self.assertEqual(state.turn_count, 0)
@@ -155,17 +194,66 @@ class ApplyCommandTests(unittest.TestCase):
     def test_move_consumes_destination_terrain_cost_and_discovers_cell(self) -> None:
         cells = filled_cells(".")
         cells[(2, 1)] = "A"
-        state = make_state(actual_map=make_actual_map(cells=cells), remaining_fuel=10)
+        actual_map = make_actual_map(cells=cells)
+        state = make_state(
+            actual_map=actual_map,
+            remaining_fuel=10,
+            known_cells=start_neighborhood_known_cells(actual_map),
+        )
 
         event = engine.apply_command(state, "E")
 
         self.assertEqual(event.outcome, engine.OUTCOME_MOVED)
         self.assertEqual(event.fuel_spent, 3)
-        self.assertEqual(event.discovered_cell, "A")
+        self.assertEqual(
+            event.discovered_cells,
+            (
+                engine.DiscoveredCell(position=(3, 1), symbol="."),
+                engine.DiscoveredCell(position=(3, 2), symbol="."),
+            ),
+        )
         self.assertEqual(state.player_position, (2, 1))
         self.assertEqual(state.remaining_fuel, 7)
         self.assertEqual(state.turn_count, 1)
         self.assertEqual(state.known_routes[simulate.normalize_edge((1, 1), (2, 1))], engine.ROUTE_OPEN)
+        self.assertEqual(state.known_cells[(2, 1)], "A")
+
+    def test_move_reveals_centered_three_by_three_without_losing_known_cells(self) -> None:
+        cells = filled_cells(".")
+        cells[(2, 2)] = "B"
+        cells[(3, 2)] = "R"
+        cells[(3, 1)] = "A"
+        state = make_state(
+            actual_map=make_actual_map(cells=cells, base_position=(2, 2), resource_positions=((3, 2),)),
+            player_position=(2, 1),
+            known_cells={
+                (1, 1): "S",
+                (1, 2): ".",
+                (2, 1): ".",
+                (2, 2): "B",
+                simulate.SPECIAL_H: "H",
+            },
+            visited_cells={(1, 1), (2, 1)},
+            path=[(1, 1), (2, 1)],
+            remaining_fuel=10,
+        )
+
+        event = engine.apply_command(state, "N")
+
+        self.assertEqual(event.outcome, engine.OUTCOME_MOVED)
+        self.assertEqual(
+            event.discovered_cells,
+            (
+                engine.DiscoveredCell(position=(1, 3), symbol="."),
+                engine.DiscoveredCell(position=(2, 3), symbol="."),
+                engine.DiscoveredCell(position=(3, 1), symbol="A"),
+                engine.DiscoveredCell(position=(3, 2), symbol="R"),
+                engine.DiscoveredCell(position=(3, 3), symbol="."),
+            ),
+        )
+        self.assertEqual(state.known_cells[(1, 1)], "S")
+        self.assertEqual(state.known_cells[(3, 2)], "R")
+        self.assertEqual(state.known_cells[(3, 1)], "A")
 
     def test_unknown_rift_consumes_one_fuel_and_known_rift_retry_is_rejected(self) -> None:
         rift_edge = (simulate.normalize_edge((1, 1), (1, 2)),)
@@ -179,10 +267,12 @@ class ApplyCommandTests(unittest.TestCase):
         self.assertEqual(first.fuel_after, 2)
         self.assertIsNone(first.required_fuel)
         self.assertEqual(first.turn, 1)
+        self.assertEqual(first.discovered_cells, ())
         self.assertEqual(second.outcome, engine.OUTCOME_REJECTED_KNOWN_RIFT)
         self.assertEqual(second.fuel_after, 2)
         self.assertIsNone(second.required_fuel)
         self.assertEqual(second.turn, 1)
+        self.assertEqual(second.discovered_cells, ())
         self.assertEqual(state.rift_attempt_count, 1)
 
     def test_base_supply_applies_once_even_on_revisit(self) -> None:
@@ -267,6 +357,9 @@ class ApplyCommandTests(unittest.TestCase):
         self.assertIsNone(invalid.required_fuel)
         self.assertIsNone(out_of_bounds.required_fuel)
         self.assertEqual(insufficient.required_fuel, 3)
+        self.assertEqual(invalid.discovered_cells, ())
+        self.assertEqual(out_of_bounds.discovered_cells, ())
+        self.assertEqual(insufficient.discovered_cells, ())
         self.assertEqual(
             snapshot,
             (
@@ -353,13 +446,14 @@ class RunCommandsTests(unittest.TestCase):
                 "generation_error",
             ],
         )
-        self.assertEqual(payload["schema_version"], 1)
+        self.assertEqual(payload["schema_version"], 2)
         self.assertIn("outcome", payload["final_summary"])
         self.assertIn("path", payload["final_summary"])
         self.assertIn("supply_source", payload["final_summary"])
         if payload["events"]:
             self.assertIn("supply_source", payload["events"][0])
             self.assertIn("required_fuel", payload["events"][0])
+            self.assertIn("discovered_cells", payload["events"][0])
         json.loads(log.to_json())
 
     def test_game_log_serializes_structured_supply_source(self) -> None:
@@ -412,6 +506,26 @@ class RunCommandsTests(unittest.TestCase):
                 "reason": "SEED_OVERFLOW",
                 "message": "overflow",
             },
+        )
+
+    def test_game_log_serializes_all_discovered_cells_in_deterministic_order(self) -> None:
+        cells = filled_cells(".")
+        cells[(2, 1)] = "A"
+        actual_map = make_actual_map(cells=cells)
+        state = make_state(
+            actual_map=actual_map,
+            remaining_fuel=10,
+            known_cells=start_neighborhood_known_cells(actual_map),
+        )
+        with patch.object(engine, "create_game", return_value=state):
+            payload = engine.run_commands(1, ["E"]).to_dict()
+
+        self.assertEqual(
+            payload["events"][0]["discovered_cells"],
+            [
+                {"position": {"x": 3, "y": 1}, "symbol": "."},
+                {"position": {"x": 3, "y": 2}, "symbol": "."},
+            ],
         )
 
 
