@@ -3,15 +3,15 @@
 from __future__ import annotations
 
 import argparse
-from pathlib import Path
 import sys
+from pathlib import Path
 from typing import Sequence, TextIO
 
 if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from experiments.galactic_exodus import engine
-from experiments.galactic_exodus import simulate
+from experiments.galactic_exodus import engine, simulate
+
 ABORTED_BY_USER = engine.FINAL_OUTCOME_ABORTED_NO_POLICY_ACTION
 KNOWN_TERRAIN_SYMBOLS = {".", "N", "A", "@", "B", "R"}
 DIRECTION_ORDER = ("N", "E", "S", "W")
@@ -42,7 +42,9 @@ def build_parser(stderr: TextIO) -> argparse.ArgumentParser:
 
 def parse_args(argv: Sequence[str], stderr: TextIO) -> argparse.Namespace:
     parser = build_parser(stderr)
-    if not any(argument == "--seed" or argument.startswith("--seed=") for argument in argv):
+    if not any(
+        argument == "--seed" or argument.startswith("--seed=") for argument in argv
+    ):
         parser.print_help(stderr)
         raise SystemExit(0)
     return parser.parse_args(argv)
@@ -90,7 +92,9 @@ def main(
         render_state(state, effective_stdout)
 
     if args.json_log is not None:
-        write_json_log(args.json_log, build_session_log(args.seed, state, initial_state, events))
+        write_json_log(
+            args.json_log, build_session_log(args.seed, state, initial_state, events)
+        )
     return 0
 
 
@@ -98,7 +102,7 @@ def render_state(state: engine.GameState, output: TextIO) -> None:
     output.write("MAP:\n")
     for row in board_lines(state):
         output.write(f"{row}\n")
-    output.write("     x=1 2 3 4 5 6 7 8\n")
+    output.write("  1 2 3 4 5 6 7 8\n")
     output.write(
         f"SEED: requested={state.requested_seed} effective={state.effective_seed} rerolls={state.reroll_count}\n"
     )
@@ -114,7 +118,7 @@ def board_lines(state: engine.GameState) -> list[str]:
     rows: list[str] = []
     for y in range(simulate.HEIGHT, 0, -1):
         symbols = [display_symbol(state, (x, y)) for x in range(1, simulate.WIDTH + 1)]
-        rows.append(f"y={y} {' '.join(symbols)}")
+        rows.append(f"{y} {' '.join(symbols)}")
     return rows
 
 
@@ -131,14 +135,20 @@ def display_symbol(state: engine.GameState, position: simulate.Position) -> str:
     return "?"
 
 
-def render_event(state: engine.GameState, event: engine.TurnEvent, output: TextIO) -> None:
+def render_event(
+    state: engine.GameState, event: engine.TurnEvent, output: TextIO
+) -> None:
     for line in format_event_messages(state, event):
         output.write(f"{line}\n")
 
 
-def format_event_messages(state: engine.GameState, event: engine.TurnEvent) -> list[str]:
+def format_event_messages(
+    state: engine.GameState, event: engine.TurnEvent
+) -> list[str]:
     if event.outcome == engine.OUTCOME_MOVED:
-        messages = [f"MOVED TO {format_position(event.to_position)}, COST {event.fuel_spent}"]
+        messages = [
+            f"MOVED TO {format_position(event.to_position)}, COST {event.fuel_spent}"
+        ]
         if event.supply_applied and event.supply_source is not None:
             messages.append(format_supply_message(state, event.supply_source))
         if event.status_after == engine.GAME_STATUS_WON:
@@ -158,7 +168,9 @@ def format_event_messages(state: engine.GameState, event: engine.TurnEvent) -> l
     if event.outcome == engine.OUTCOME_REJECTED_INSUFFICIENT_FUEL:
         if event.required_fuel is None:
             raise ValueError("insufficient-fuel event must include required_fuel")
-        return [f"INSUFFICIENT FUEL: NEED {event.required_fuel}, HAVE {event.fuel_before}"]
+        return [
+            f"INSUFFICIENT FUEL: NEED {event.required_fuel}, HAVE {event.fuel_before}"
+        ]
     if event.outcome == engine.OUTCOME_INVALID_COMMAND:
         return ["INVALID COMMAND"]
     raise ValueError(f"unexpected outcome: {event.outcome}")
@@ -226,7 +238,9 @@ def format_blocked_directions(state: engine.GameState) -> str:
     return "-" if not blocked else ",".join(blocked)
 
 
-def build_generation_error_log(requested_seed: int, exc: engine.GenerationError) -> engine.GameLog:
+def build_generation_error_log(
+    requested_seed: int, exc: engine.GenerationError
+) -> engine.GameLog:
     return engine.GameLog(
         schema_version=engine.SCHEMA_VERSION,
         settings=engine.DEFAULT_SETTINGS,
@@ -261,7 +275,9 @@ def build_session_log(
 
 
 def print_generation_error(exc: engine.GenerationError, output: TextIO) -> None:
-    last_candidate_seed = "none" if exc.last_candidate_seed is None else str(exc.last_candidate_seed)
+    last_candidate_seed = (
+        "none" if exc.last_candidate_seed is None else str(exc.last_candidate_seed)
+    )
     output.write(
         "GENERATION ERROR: "
         f"requested={exc.requested_seed} attempts={exc.attempts} "
