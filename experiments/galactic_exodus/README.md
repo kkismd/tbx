@@ -41,8 +41,12 @@ log = engine.run_commands(42, ["E", "N", "E"])
 - `known_routes`
 - `player_position`
 - `remaining_fuel`
-- `supply_used`
-- `supply_source`
+- `used_resource_positions`
+- `base_visit_count`
+- `base_refuel_count`
+- `resource_visit_count`
+- `resource_refuel_count`
+- `last_supply_source`
 - `turn_count`
 - `game_status`
 - `requested_seed`
@@ -66,7 +70,12 @@ log = engine.run_commands(42, ["E", "N", "E"])
 - 既知断層への再試行: 行動拒否、fuel/turn 不変
 - 盤面外・無効コマンド・燃料不足: 状態不変
 - `H` / `B` / `R` へ残量 0 ちょうどで到着してよい
-- 補給は `B` または `R` の最初の 1 回だけで、到着後に加算する
+- `B` は到着ごとに `max_fuel=16` まで即時補給する
+- `B` は何度でも利用できる
+- `R` は燃料が実際に増加した最初の到着時だけ消費される
+- 満タンで未使用 `R` へ到着しても `R` は残る
+- 使用済み `R` は再利用できない
+- 補給は到着ターン内で即時適用され、追加 turn は発生しない
 
 ### turn outcomes
 
@@ -95,12 +104,12 @@ log = engine.run_commands(42, ["E", "N", "E"])
 - `ABORTED_NO_POLICY_ACTION`
 
 generation error は通常敗北と分離し、`GameLog.generation_error` に記録します。
-`supply_source` は `{"kind": "B"|"R", "position": {"x": ..., "y": ...}}` の構造で保持し、
-補給後に別セルへ移動したあとも補給元座標を参照できます。
+`last_supply_source` は `{"kind": "B"|"R", "position": {"x": ..., "y": ...}}` の構造で保持し、
+直近に実際の燃料増加が起きた補給元座標を参照できます。
 
 ### deterministic log schema
 
-`GameLog.schema_version` は `2` 固定です。
+`GameLog.schema_version` は `3` 固定です。
 
 ```text
 GameLog
@@ -128,8 +137,11 @@ TurnEvent
   fuel_after
   discovered_cells
   discovered_rift
-  supply_applied
+  supply_result
   supply_source
+  fuel_before_supply
+  fuel_after_supply
+  supply_amount
   status_after
 ```
 
@@ -138,9 +150,13 @@ final_summary
   outcome
   turn_count
   remaining_fuel
-  supply_source
-  base_visited
-  resource_visits
+  max_fuel
+  used_resource_positions
+  base_visit_count
+  base_refuel_count
+  resource_visit_count
+  resource_refuel_count
+  last_supply_source
   rift_attempts
   invalid_or_rejected_actions
   path
@@ -172,7 +188,7 @@ python experiments/galactic_exodus/play.py --seed 42 --json-log .tmp/galactic-ex
 - `--seed <int>`
   - 必須。requested seed を指定します。
 - `--json-log <path>`
-  - 任意。終了時に `GameLog schema_version=2` を JSON で書き出します。
+  - 任意。終了時に `GameLog schema_version=3` を JSON で書き出します。
 
 コマンド:
 
@@ -213,8 +229,9 @@ P  現在地
 ```text
 SEED: requested=<n> effective=<n> rerolls=<n>
 POSITION: (<x>,<y>)
-FUEL: <remaining>
-SUPPLY: unused | B | R(<x>,<y>)
+FUEL: <remaining>/<max>
+LAST SUPPLY: none | B(<x>,<y>) | R(<x>,<y>)
+USED R: - | (x1,y1),(x2,y2),...
 TURN: <n>
 STATUS: IN PROGRESS | WON | LOST FUEL
 BLOCKED: <known-rift-directions or ->
@@ -229,8 +246,11 @@ KNOWN RIFT <direction>
 OUT OF BOUNDS
 INVALID COMMAND
 INSUFFICIENT FUEL: NEED n, HAVE m
-SUPPLIED AT B: +8
-SUPPLIED AT R(x,y): +5
+REFUELED AT B(x,y): <before> -> <after>
+BASE ALREADY FULL AT B(x,y)
+REFUELED AT R(x,y): +<amount> (<before> -> <after>)
+RESOURCE ALREADY FULL AT R(x,y)
+RESOURCE ALREADY USED AT R(x,y)
 YOU REACHED H
 NO FURTHER MOVE IS POSSIBLE
 ```
@@ -238,7 +258,9 @@ NO FURTHER MOVE IS POSSIBLE
 fuel / 断層 / 補給 / 勝敗:
 
 - 各移動コストと断層判定は `engine.apply_command()` の結果をそのまま表示します
-- `B` 補給は 1 回だけ `+8`、`R` 補給も 1 回だけ `+5` です
+- `max_fuel=16`
+- `B` は到着ごとに満タンまで回復し、何度でも利用できます
+- `R` は最大 `+5` を供給し、燃料が増えた最初の到着時だけ消費されます
 - `STATUS: WON` で勝利、`STATUS: LOST FUEL` で行動不能です
 
 requested / effective seed の再現:
@@ -248,7 +270,7 @@ requested / effective seed の再現:
 
 JSON ログの用途:
 
-- `--json-log` は CLI セッションを `GameLog schema_version=2` として保存します
+- `--json-log` は CLI セッションを `GameLog schema_version=3` として保存します
 - `Q` / EOF で終了したセッションは `final_summary.outcome = ABORTED_NO_POLICY_ACTION` になります
 - generation error は通常敗北と分離し、`requested / attempts / last_candidate_seed / reason / message` を表示します
 
@@ -267,11 +289,12 @@ y=4 ? ? ? ? ? ? ? ?
 y=3 ? ? ? ? ? ? ? ?
 y=2 ? ? ? ? ? ? ? ?
 y=1 P ? ? ? ? ? ? ?
-     x=1 2 3 4 5 6 7 8
+  1 2 3 4 5 6 7 8
 SEED: requested=42 effective=42 rerolls=0
 POSITION: (1,1)
-FUEL: 16
-SUPPLY: unused
+FUEL: 16/16
+LAST SUPPLY: none
+USED R: -
 TURN: 0
 STATUS: IN PROGRESS
 BLOCKED: -
