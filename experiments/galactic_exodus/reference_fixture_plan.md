@@ -4,6 +4,8 @@
 
 通常の生成ゲーム挙動を変更せず、Python参照実装へ決定的なfixture注入・再生機能を追加する。
 
+本計画はPR #1077内で実装する。別Issueへ分割しない。
+
 ## 2. `engine.py`の変更
 
 ### 2.1 `validate_actual_map`を追加する
