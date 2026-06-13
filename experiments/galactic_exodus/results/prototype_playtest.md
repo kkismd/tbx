@@ -1,22 +1,22 @@
-# Galactic Exodus Phase 1B integrated playtest report
+# Galactic Exodus Phase 1B 統合プレイテストレポート
 
-## 1. Scope and versions
+## 1. 対象範囲とバージョン
 
-This report integrates Phase 1B1 manual evaluation (#1067) and Phase 1B2 deterministic policy evaluation (#1068) for the Python prototype before TBX implementation.
+本レポートは、TBX実装前のPythonプロトタイプについて、Phase 1B1の手動評価（#1067）とPhase 1B2の決定的方策による自動評価（#1068）を統合したものである。
 
-- Base branch: `integration/882-galactic-exodus`
+- ベースブランチ: `integration/882-galactic-exodus`
 - GameLog schema: version 3
-- Manual data: 10 sessions, requested seeds 1..10
-- Automated data: 2 deterministic policies x requested seeds 1..1000 = 2000 runs
-- Turn limit: 256
-- Fuel: `initial_fuel=max_fuel=16`
-- Supply: reusable immediate B refuel to maximum; each R coordinate supplies at most +5 once
-- Observation: cumulative 3x3 disclosure at start and after successful movement; rifts are learned only by failed traversal
-- Rift generation: after #1073/#1074, every rift edge touches at least one plain `.` sector
+- 手動評価: 10セッション、requested seed 1..10
+- 自動評価: 2種類の決定的方策 × requested seed 1..1000 = 2000ゲーム
+- turn上限: 256
+- 燃料: `initial_fuel=max_fuel=16`
+- 補給: Bは到着時に即時で最大まで回復し、何度でも利用可能。Rは各座標につき1回、最大+5
+- 観測: 開始時および成功移動後に周囲3x3を累積開示。断層は移動失敗時にのみ既知化
+- 断層生成: #1073 / #1074反映後、すべての断層辺は少なくとも片側が通常空間`.`である
 
-The automated policies are deliberately simple and are not optimal play. Their loss rates are comparative baselines, not direct estimates of human success.
+自動方策は意図的に単純であり、最適プレイを表すものではない。自動評価の敗北率は方策間比較の基準であり、人間プレイヤーの勝率を直接推定する値ではない。
 
-## 2. Reproduction commands
+## 2. 再現コマンド
 
 ```bash
 python -m unittest discover -s experiments/galactic_exodus -p 'test_*.py'
@@ -39,173 +39,173 @@ cargo clippy --all-targets -- -D warnings
 cargo test
 ```
 
-For deterministic-output confirmation, run the policy evaluator a second time to temporary files and compare both outputs with `diff -u`.
+決定性を確認する場合は、方策評価を一時ファイルへもう一度出力し、正式成果物と`diff -u`で比較する。
 
-## 3. Manual play results
+## 3. 手動プレイ結果
 
-### Objective results
+### 客観結果
 
-- Sessions: 10
-- Wins: 9
-- Fuel-loss defeats: 1 (seed 6)
-- Turn counts: 14..32
-- Remaining fuel on wins: 4..13
-- B visits/refuels: 14/14 total
-- R visits/refuels: 12/10 total
-- Rift attempts: 21 total
+- セッション数: 10
+- 勝利: 9
+- 燃料切れ敗北: 1（seed 6）
+- turn数: 14..32
+- 勝利時の残燃料: 4..13
+- B訪問 / 補給: 合計14 / 14
+- R訪問 / 補給: 合計12 / 10
+- 断層試行: 合計21
 
-### Subjective score means
+### 主観スコア平均
 
-| Measure | Mean / 5 |
+| 評価項目 | 平均 / 5 |
 |---|---:|
-| route decision | 4.6 |
-| information | 4.3 |
-| fuel tension | 4.2 |
-| supply choice | 4.1 |
-| rift fairness | 2.3 |
-| readability | 2.6 |
-| defeat clarity | 4.2 |
-| observation range | 5.0 |
-| resource reveal | 4.8 |
-| rift asymmetry | 1.4 |
-| base return value | 4.4 |
-| base loop risk safety | 5.0 |
+| 経路判断 | 4.6 |
+| 情報量 | 4.3 |
+| 燃料緊張感 | 4.2 |
+| 補給判断 | 4.1 |
+| 断層の納得感 | 2.3 |
+| 表示の読みやすさ | 2.6 |
+| 敗北の分かりやすさ | 4.2 |
+| 観測範囲 | 5.0 |
+| リソース開示 | 4.8 |
+| 断層だけ未知である非対称性 | 1.4 |
+| Bへ戻る価値 | 4.4 |
+| B往復が固定解にならない度合い | 5.0 |
 
-The strongest positive result is that the 3x3 cumulative observation model supports route decisions. The strongest negative result is presentation: discovered rifts and consumed R are difficult to recognize.
+最も強い肯定的結果は、周囲3x3の累積観測が経路判断を十分支えている点である。最も強い否定的結果は表示であり、発見済み断層と使用済みRが認識しにくい。
 
-Notable sessions:
+注目すべきセッション:
 
-- Seed 2: a known rift blocked return to B; the player reported that the discovered rift was not reflected on the map and that R +5 felt smaller than expected.
-- Seed 3: the player overlooked R and reported that alphabetic symbols can be missed at a glance.
-- Seed 6: the only defeat; consumed R could not be distinguished from unused R, and rift/B/R state was difficult to read.
-- Seeds 7, 9, and 10: rift display was repeatedly identified as unclear even in winning sessions.
+- seed 2: 断層によってBへ戻れなかった。発見済み断層が地図へ反映されない点と、Rの+5が期待より小さく感じた点が指摘された。
+- seed 3: Rを見落とし、アルファベット記号は瞬間的に見落としやすいと報告された。
+- seed 6: 唯一の敗北。使用済みRと未使用Rを区別できず、断層・B・Rの状態も読み取りにくかった。
+- seed 7、9、10: 勝利セッションでも断層表示が分かりにくいと繰り返し指摘された。
 
-## 4. Automated policy results
+## 4. 自動方策評価結果
 
-| Metric | GOAL_GREEDY | SUPPLY_AWARE |
+| 指標 | GOAL_GREEDY | SUPPLY_AWARE |
 |---|---:|---:|
-| total runs | 1000 | 1000 |
-| wins | 121 (0.121) | 154 (0.154) |
-| lost fuel | 677 (0.677) | 623 (0.623) |
-| turn limit | 1 (0.001) | 50 (0.050) |
-| no policy action | 201 (0.201) | 173 (0.173) |
-| median turns | 12 | 14 |
-| p90 turns | 16 | 23 |
-| median remaining fuel on wins | 2 | 4 |
-| p90 remaining fuel on wins | 6 | 10 |
-| B visit/refuel rate | 0.009 / 0.009 | 0.116 / 0.116 |
-| multiple B refuel rate | 0.001 | 0.054 |
-| R visit/refuel rate | 0.427 / 0.427 | 0.653 / 0.653 |
-| multiple R refuel rate | 0.087 | 0.264 |
-| no-supply win rate | 0.001 | 0.000 |
-| rift-attempt rate | 0.720 | 0.722 |
-| reroll rate | 0.012 | 0.012 |
+| 総ゲーム数 | 1000 | 1000 |
+| 勝利 | 121 (0.121) | 154 (0.154) |
+| 燃料切れ | 677 (0.677) | 623 (0.623) |
+| turn上限 | 1 (0.001) | 50 (0.050) |
+| 方策行動不能 | 201 (0.201) | 173 (0.173) |
+| turn数中央値 | 12 | 14 |
+| turn数p90 | 16 | 23 |
+| 勝利時残燃料中央値 | 2 | 4 |
+| 勝利時残燃料p90 | 6 | 10 |
+| B訪問率 / 補給率 | 0.009 / 0.009 | 0.116 / 0.116 |
+| B複数回補給率 | 0.001 | 0.054 |
+| R訪問率 / 補給率 | 0.427 / 0.427 | 0.653 / 0.653 |
+| 複数R補給率 | 0.087 | 0.264 |
+| 無補給勝利率 | 0.001 | 0.000 |
+| 断層試行率 | 0.720 | 0.722 |
+| reroll率 | 0.012 | 0.012 |
 
-SUPPLY_AWARE improves win rate by 3.3 percentage points, reduces fuel losses by 5.4 points, and uses R much more often. Its higher turn-limit rate reflects deterministic supply loops in a deliberately non-searching policy and is evidence that supply changes behavior, not that the rule is invalid.
+SUPPLY_AWAREはGOAL_GREEDYに比べて勝率を3.3ポイント改善し、燃料切れ率を5.4ポイント下げ、Rをより高い頻度で利用した。turn上限率が高いのは、探索を行わない決定的な補給方策が一部の盤面でループするためであり、補給ルール自体が不適切であることを示すものではない。むしろ、補給が方策の行動を実際に変えている証拠である。
 
-## 5. Fixture verification
+## 5. fixture検証
 
-The combined test suite verifies:
+統合テスト群では、以下を確認している。
 
-- start and post-move 3x3 cumulative disclosure
-- rifts not disclosed before failed traversal
-- B first refuel, repeated refuel, and full-arrival behavior
-- R first refuel, full-arrival non-consumption, used-R revisit, and separate-R independence
-- generation error and turn limit outcomes
-- policy access restricted to known state
-- deterministic tie-breaking and output ordering
-- non-progressing rejected actions terminate as `ABORTED_NO_POLICY_ACTION`
-- unknown-rift failure changes state and does not terminate as no-progress
-- output reproducibility for CSV and JSON
+- 開始時および成功移動後の周囲3x3累積開示
+- 断層が失敗試行前には開示されないこと
+- Bの初回補給、再補給、満タン到着
+- Rの初回補給、満タン時の未消費、使用済みR再訪、別Rの独立性
+- generation errorとturn limitのoutcome
+- 方策がknown state以外を参照しないこと
+- 決定的な同値順と出力順
+- 状態が進まない拒否行動を`ABORTED_NO_POLICY_ACTION`として終了すること
+- 未知断層失敗では状態が変化し、非進行終了と誤判定しないこと
+- CSVとJSONの再現性
 
-## 6. Answers to Q1..Q10
+## 6. Q1〜Q10への回答
 
-### Q1. Is fuel 16 too strict?
+### Q1. `initial_fuel=max_fuel=16`は厳しすぎないか
 
-**Answer: retain 16 for Phase 1.** Manual play won 9/10 with fuel-tension mean 4.2/5, indicating pressure without routine human failure. Automated win rates are only 0.121/0.154, but 17.3%-20.1% of runs stop because the intentionally myopic policy cannot make progress, so those runs do not isolate fuel capacity. Seed 6 demonstrates that fuel loss is possible and meaningful, but its notes identify consumed-R readability as a direct contributor.
+**結論: Phase 1では16を維持する。** 手動評価は9/10勝で、燃料緊張感の平均は4.2/5だった。緊張感はあるが、人間プレイで恒常的に失敗するほど厳しくはない。自動方策の勝率は0.121 / 0.154と低いが、17.3%〜20.1%は意図的に単純な方策が進行不能になった結果であり、燃料容量だけの影響を分離できない。seed 6は燃料切れが意味のある敗北であることを示す一方、notesでは使用済みRの読みにくさが直接的な要因として挙げられている。
 
-### Q2. Do B/R supplies affect route choice?
+### Q2. B/R補給は経路判断へ影響するか
 
-**Answer: yes, materially.** Manual supply-choice mean is 4.1/5, and seeds 6-9 explicitly discuss supply-related rerouting or value. SUPPLY_AWARE raises R refuel rate from 0.427 to 0.653 and win rate from 0.121 to 0.154. Supply must remain part of the macro decision model.
+**結論: 明確に影響する。** 手動の補給判断スコア平均は4.1/5で、seed 6〜9では補給に関連した引き返しや価値判断が明示されている。SUPPLY_AWAREはR補給率を0.427から0.653へ、勝率を0.121から0.154へ上げた。B/Rはマクロ移動の判断要素として維持すべきである。
 
-### Q3. Are three R sectors too many or too few?
+### Q3. R=3は多すぎる、または少なすぎるか
 
-**Answer: retain three.** Manual sessions visited R 12 times and refueled 10 times without reporting map-wide scarcity. Automated runs refuel at R in 42.7%/65.3% of runs and use multiple distinct R in 8.7%/26.4%. This is enough to influence routes without making every run supply-saturated.
+**結論: 3を維持する。** 手動10セッションでRは12回訪問され、10回補給されたが、盤面全体としてRが不足しているという報告はない。自動評価ではR補給率が42.7% / 65.3%、複数R補給率が8.7% / 26.4%だった。経路へ影響するには十分であり、すべてのゲームが補給過多になるほど多くはない。
 
-### Q4. Is maximum +5 valuable?
+### Q4. Rの最大+5に利用価値があるか
 
-**Answer: yes, but its value and state need clearer presentation.** Seeds 6-9 report R as useful, and SUPPLY_AWARE's higher R use accompanies a 3.3-point win improvement. Seed 2 felt +5 was less than expected, while seed 3 overlooked R. Keep +5 provisionally; improve display before numeric retuning.
+**結論: 利用価値はあるが、効果量と消費状態の表示改善が必要。** seed 6〜9ではRが有用と報告され、SUPPLY_AWAREの高いR利用率は勝率3.3ポイントの改善と対応している。一方、seed 2では+5が期待より小さく感じられ、seed 3ではR自体を見落としている。+5は暫定維持し、表示改善前に数値だけを変更しない。
 
-### Q5. Does reusable B become a fixed solution?
+### Q5. 再利用可能なBが固定解になっていないか
 
-**Answer: no.** Manual base-return-value mean is 4.4/5 and base-loop-risk safety is 5.0/5. Automated B refuel rates are only 0.009/0.116, and repeated B refuel rates are 0.001/0.054. Seed 6 used B three times but still lost, showing that return cost and route constraints prevent B from guaranteeing success.
+**結論: 固定解にはなっていない。** 手動のBへ戻る価値は平均4.4/5、B往復が固定解にならない度合いは5.0/5だった。自動評価のB補給率は0.009 / 0.116、複数回B補給率は0.001 / 0.054にとどまる。seed 6ではBを3回利用しても敗北しており、帰還距離と経路制約がBを万能解にしていない。
 
-### Q6. Is fuel -1 for an unknown rift failure appropriate?
+### Q6. 未知断層失敗のfuel -1は妥当か
 
-**Answer: retain the penalty.** Rift-fairness mean is low at 2.3/5, but notes repeatedly target the missing persistent display rather than the numeric penalty. Automated runs encounter rifts frequently (about 72%), generally with one or two attempts. The design problem is communicating learned boundaries, not evidence of excessive -1 cost.
+**結論: ペナルティは維持する。** 断層の納得感は平均2.3/5と低いが、notesで繰り返し指摘されているのは数値ペナルティではなく、発見済み断層が永続表示されない点である。自動評価では約72%のゲームが断層を試行し、多くは1〜2回に収まっている。問題は学習済みの境界を表示できていないことであり、-1が過剰である証拠はない。
 
-### Q7. Does 3x3 disclosure support route decisions?
+### Q7. 周囲3x3開示で経路判断が成立するか
 
-**Answer: yes.** Route-decision mean is 4.6/5, information 4.3/5, observation-range 5.0/5, and resource-reveal 4.8/5. Automated median turns are 12/14 and GOAL_GREEDY almost never reaches the turn limit. Retain the observation radius. Separately, hidden-rift asymmetry is poorly understood (1.4/5) and requires explanation and persistent visualization.
+**結論: 成立する。** 経路判断4.6/5、情報量4.3/5、観測範囲5.0/5、リソース開示4.8/5である。自動評価のturn中央値は12 / 14で、GOAL_GREEDYはほとんどturn上限に達しない。観測範囲は維持する。一方、断層だけが未知である非対称性は1.4/5と理解されにくく、説明と永続的な可視化が必要である。
 
-### Q8. Are unlimited B and coordinate-local one-use R natural?
+### Q8. B無制限再補給とR座標別1回消費は自然か
 
-**Answer: yes.** No manual note rejects the lifecycle rule; the failure case concerns distinguishing consumed R. Automated repeated B use remains limited while multiple R use occurs under supply-aware play. Keep both rules and make consumption state explicit.
+**結論: 自然であり維持する。** 手動notesにルールそのものへの否定はなく、問題は使用済みRの識別である。自動評価ではBの複数回利用は限定的で、SUPPLY_AWAREでは複数のRを使う行動が増えている。両方のライフサイクル規則を維持し、消費済み状態を明示する。
 
-### Q9. Are defeat and display understandable?
+### Q9. 敗北判定と表示は理解できるか
 
-**Answer: defeat is generally understandable; display is not.** Defeat-clarity mean is 4.2/5, while readability is only 2.6/5. Seed 6 lost after confusing consumed R with available R, and multiple seeds call out rift display. Keep outcome semantics, but require distinct used-R and discovered-rift representations.
+**結論: 敗北判定は概ね理解できるが、表示は不十分。** 敗北の分かりやすさは平均4.2/5だが、表示の読みやすさは2.6/5である。seed 6は使用済みRを未使用Rと誤認したことが敗北につながり、複数seedで断層表示が問題視された。outcomeの意味は維持し、使用済みRと発見済み断層を明確に区別する必要がある。
 
-### Q10. Is TBX state/display/log volume excessive?
+### Q10. TBXへ移植する状態量、表示量、ログ項目が過剰でないか
 
-**Answer: engine state and schema v3 are justified; the player-facing display should be smaller.** Automated validation depends on known routes, supply counters, used-resource positions, outcomes, and rerolls. Manual scores show enough information for decisions but poor readability. Preserve diagnostic state and logs, while designing a compact HUD/SRS presentation as a Phase 2 concern.
+**結論: エンジン状態とschema v3は妥当だが、プレイヤー向け表示は絞るべき。** 自動評価と検証には既知航路、補給カウンタ、使用済みR座標、outcome、reroll情報が必要である。手動評価では判断に必要な情報量は足りている一方、読みやすさが低い。診断用状態とログは維持し、通常HUD/SRSへ出す情報はPhase 2で簡素化する。
 
 ## 7. Findings
 
-The canonical finding records are in `prototype_findings.csv`.
+findingsの正本は`prototype_findings.csv`に記録する。
 
-- BLOCKER: 0
-- ADJUSTMENT: 3 (`P1B-004`, `P1B-008`, `P1B-010`)
-- PHASE_2: 1 (`P1B-012`)
-- NO_CHANGE: 8
+- BLOCKER: 0件
+- ADJUSTMENT: 3件（`P1B-004`, `P1B-008`, `P1B-010`）
+- PHASE_2: 1件（`P1B-012`）
+- NO_CHANGE: 8件
 
 ## 8. Blockers
 
-No Phase 1B blocker was identified. The prototype can proceed to #1059 after the user confirms that the manual interpretation and severities match the play experience.
+Phase 1BのBLOCKERは確認されなかった。ユーザーが手動評価の解釈とseverityが実際のプレイ感に合っていることを確認した後、#1059へ進める。
 
 ## 9. Adjustments
 
-1. Keep R +5 provisionally, but show its amount and consumed state explicitly (`P1B-004`).
-2. Explain hidden-rift asymmetry and persist discovered blocked boundaries on the map (`P1B-008`).
-3. Give unused R, consumed R, and discovered rifts unambiguous symbols, legend entries, and event feedback (`P1B-010`).
+1. Rの+5は暫定維持し、回復量と消費済み状態を明示する（`P1B-004`）。
+2. 断層だけが未知である非対称性を説明し、発見済みの通行不能境界を地図へ永続表示する（`P1B-008`）。
+3. 未使用R、使用済みR、発見済み断層に明確な別記号、凡例、直前イベント表示を与える（`P1B-010`）。
 
-These are specification/presentation adjustments, not reasons to rerun the full evaluation before #1059.
+これらは仕様・表示上の調整であり、#1059の前に全評価を再実行する理由にはならない。
 
-## 10. Phase 2 candidates
+## 10. Phase 2候補
 
-- Separate the complete schema-v3 diagnostic/log state from a compact player HUD.
-- Design SRS and macro-map presentation for terrain-flavored objects, consumed resources, and discovered rift boundaries.
-- Consider a targeted R +5 versus alternative amount comparison only after the display is corrected.
+- schema v3の完全な診断・ログ状態と、簡潔なプレイヤー向けHUDを分離する。
+- 地形フレイバーオブジェクト、使用済みリソース、発見済み断層境界を含むSRS・マクロマップ表示を設計する。
+- 表示改善後、必要であればR +5と代替値を比較する対象限定テストを行う。
 
-## 11. Specifications to retain
+## 11. 維持する仕様
 
 - `initial_fuel=max_fuel=16`
-- three R sectors
-- R maximum +5, once per coordinate, consumed only when fuel increases
-- B immediate unlimited refuel to maximum
-- cumulative 3x3 observation
-- rifts hidden until failed traversal
-- unknown-rift failed traversal costs one fuel
-- GameLog schema v3 and current objective counters
-- deterministic requested/effective seed and reroll behavior
+- Rを3個配置
+- Rは各座標につき1回、最大+5、実際に燃料が増えた場合のみ消費
+- Bは到着時に即時で最大まで回復し、何度でも利用可能
+- 周囲3x3の累積観測
+- 断層は移動失敗時まで未知
+- 未知断層への失敗試行は燃料-1
+- GameLog schema v3と現在の客観カウンタ
+- requested/effective seedとrerollの決定的挙動
 
-## 12. Handoff to #1059
+## 12. #1059への引き渡し
 
-#1059 should make final specification decisions on:
+#1059では、以下を最終決定する。
 
-- the exact macro-map symbols and legend for discovered rifts and consumed R
-- whether R +5 remains explicitly provisional or is frozen for TBX Phase 1
-- how hidden-rift asymmetry is explained in player-facing rules
-- which schema-v3 fields appear in the normal HUD versus logs/debug output
+- 発見済み断層と使用済みRの具体的なマクロマップ記号と凡例
+- R +5を暫定値として残すか、TBX Phase 1仕様として確定するか
+- 断層だけが試行時に判明する非対称性を、プレイヤー向けルールでどう説明するか
+- schema v3の各項目のうち、通常HUDへ表示する範囲とログ・デバッグのみに残す範囲
 
-With zero blockers, #1059 may start after user review of this report and `prototype_findings.csv`. No replay is required.
+BLOCKERは0件であるため、本レポートと`prototype_findings.csv`のユーザーレビュー後に#1059を開始できる。再プレイは不要である。
