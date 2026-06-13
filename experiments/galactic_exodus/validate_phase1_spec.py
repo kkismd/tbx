@@ -139,26 +139,26 @@ def position_key(value: dict[str, Any]) -> tuple[int, int]:
 
 def validate_injected_map(value: Any, label: str) -> None:
     actual_map = require_object(value, label)
-    expected_keys = {"default_symbol", "cell_overrides", "rift_edges", "base_position", "resource_positions"}
+    expected_keys = {"cells", "rift_edges", "base_position", "resource_positions"}
     if set(actual_map) != expected_keys:
         raise ValidationError(f"{label}: keys must be {sorted(expected_keys)}")
-    if not isinstance(actual_map["default_symbol"], str) or len(actual_map["default_symbol"]) != 1:
-        raise ValidationError(f"{label}.default_symbol must be one character")
 
-    override_positions: set[tuple[int, int]] = set()
-    overrides = actual_map["cell_overrides"]
-    if not isinstance(overrides, list):
-        raise ValidationError(f"{label}.cell_overrides must be an array")
-    for index, override in enumerate(overrides):
-        item = require_object(override, f"{label}.cell_overrides[{index}]")
-        validate_position(item.get("position"), f"{label}.cell_overrides[{index}].position")
+    cells = actual_map["cells"]
+    if not isinstance(cells, list):
+        raise ValidationError(f"{label}.cells must be an array")
+    seen_positions: set[tuple[int, int]] = set()
+    for index, cell in enumerate(cells):
+        item = require_object(cell, f"{label}.cells[{index}]")
+        validate_position(item.get("position"), f"{label}.cells[{index}].position")
         symbol = item.get("symbol")
         if not isinstance(symbol, str) or len(symbol) != 1:
-            raise ValidationError(f"{label}.cell_overrides[{index}].symbol must be one character")
+            raise ValidationError(f"{label}.cells[{index}].symbol must be one character")
         key = position_key(item["position"])
-        if key in override_positions:
-            raise ValidationError(f"{label}: duplicate cell override {key}")
-        override_positions.add(key)
+        if key in seen_positions:
+            raise ValidationError(f"{label}: duplicate cell position {key}")
+        seen_positions.add(key)
+    if len(seen_positions) != 64:
+        raise ValidationError(f"{label}.cells must contain exactly 64 positions")
 
     edges = actual_map["rift_edges"]
     if not isinstance(edges, list):
@@ -180,8 +180,7 @@ def validate_injected_map(value: Any, label: str) -> None:
             raise ValidationError(f"{label}: duplicate rift edge {normalized}")
         normalized_edges.add(normalized)
 
-    if actual_map["base_position"] is not None:
-        validate_position(actual_map["base_position"], f"{label}.base_position")
+    validate_position(actual_map["base_position"], f"{label}.base_position")
     resources = actual_map["resource_positions"]
     if not isinstance(resources, list):
         raise ValidationError(f"{label}.resource_positions must be an array")
@@ -216,7 +215,7 @@ def validate_fixtures(path: Path) -> None:
         required = {
             "name", "purpose", "mode", "settings", "requested_seed", "effective_seed",
             "reroll_count", "initial_actual_map", "commands", "expected_initial",
-            "expected_turns", "expected_final",
+            "expected_turns", "expected_final", "generation_stub", "max_turns",
         }
         missing = required - set(fixture)
         if missing:
@@ -230,17 +229,49 @@ def validate_fixtures(path: Path) -> None:
         if fixture["mode"] not in {"generated", "injected", "generation_error"}:
             raise ValidationError(f"fixture[{index}].mode is invalid")
         settings = require_object(fixture["settings"], f"fixture[{index}].settings")
+        expected_setting_keys = {
+            "width",
+            "height",
+            "start_position",
+            "goal_position",
+            "rift_density",
+            "initial_fuel",
+            "max_fuel",
+            "resource_count",
+            "resource_supply",
+        }
+        if set(settings) != expected_setting_keys:
+            raise ValidationError(f"fixture[{index}].settings keys must be {sorted(expected_setting_keys)}")
         for position_key_name in ("start_position", "goal_position"):
             validate_position(settings.get(position_key_name), f"fixture[{index}].settings.{position_key_name}")
+        if isinstance(fixture["max_turns"], bool) or not isinstance(fixture["max_turns"], int) or fixture["max_turns"] < 0:
+            raise ValidationError(f"fixture[{index}].max_turns must be a non-negative integer")
         if not isinstance(fixture["commands"], list) or not all(isinstance(command, str) for command in fixture["commands"]):
             raise ValidationError(f"fixture[{index}].commands must be an array of strings")
         if not isinstance(fixture["expected_turns"], list):
             raise ValidationError(f"fixture[{index}].expected_turns must be an array")
+        if fixture["expected_initial"] is not None:
+            require_object(fixture["expected_initial"], f"fixture[{index}].expected_initial")
         require_object(fixture["expected_final"], f"fixture[{index}].expected_final")
-        if fixture["mode"] == "injected":
+        if fixture["mode"] in {"generated", "injected"}:
             validate_injected_map(fixture["initial_actual_map"], f"fixture[{index}].initial_actual_map")
-        elif fixture["initial_actual_map"] is not None:
-            raise ValidationError(f"fixture[{index}].initial_actual_map must be null outside injected mode")
+            if fixture["generation_stub"] is not None:
+                raise ValidationError(f"fixture[{index}].generation_stub must be null outside generation_error mode")
+        else:
+            if fixture["initial_actual_map"] is not None:
+                raise ValidationError(f"fixture[{index}].initial_actual_map must be null in generation_error mode")
+            generation_stub = require_object(fixture["generation_stub"], f"fixture[{index}].generation_stub")
+            if set(generation_stub) != {"reachable_sequence"}:
+                raise ValidationError(f"fixture[{index}].generation_stub keys must be ['reachable_sequence']")
+            reachable_sequence = generation_stub["reachable_sequence"]
+            if (
+                not isinstance(reachable_sequence, list)
+                or not reachable_sequence
+                or not all(isinstance(item, bool) for item in reachable_sequence)
+            ):
+                raise ValidationError(
+                    f"fixture[{index}].generation_stub.reachable_sequence must be a non-empty array of booleans"
+                )
 
     missing_names = REQUIRED_FIXTURES - names
     if missing_names:

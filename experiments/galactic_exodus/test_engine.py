@@ -135,6 +135,9 @@ class CreateGameTests(unittest.TestCase):
                 (1, 2): ".",
                 (2, 1): ".",
                 (2, 2): ".",
+                (7, 7): ".",
+                (7, 8): ".",
+                (8, 7): ".",
                 simulate.SPECIAL_H: "H",
             },
         )
@@ -143,6 +146,33 @@ class CreateGameTests(unittest.TestCase):
         self.assertEqual(state.turn_count, 0)
         self.assertEqual(state.remaining_fuel, engine.DEFAULT_SETTINGS.initial_fuel)
         self.assertEqual(state.path, [simulate.SPECIAL_S])
+
+    def test_create_game_from_actual_map_reveals_start_and_goal_neighborhoods(self) -> None:
+        actual_map = make_actual_map(cells=filled_cells("."), resource_positions=((5, 5),))
+
+        state = engine.create_game_from_actual_map(
+            actual_map,
+            requested_seed=10,
+            effective_seed=12,
+            reroll_count=2,
+        )
+
+        self.assertEqual(
+            state.known_cells,
+            {
+                (1, 1): "S",
+                (1, 2): ".",
+                (2, 1): ".",
+                (2, 2): ".",
+                (7, 7): ".",
+                (7, 8): ".",
+                (8, 7): ".",
+                (8, 8): "H",
+            },
+        )
+        self.assertEqual(state.requested_seed, 10)
+        self.assertEqual(state.effective_seed, 12)
+        self.assertEqual(state.reroll_count, 2)
 
     def test_create_game_preserves_seed_compatibility_for_first_reachable_candidate(self) -> None:
         for seed in range(1, 1001):
@@ -200,6 +230,35 @@ class CreateGameTests(unittest.TestCase):
         self.assertEqual(ctx.exception.reason, "NO_REACHABLE_MAP")
         self.assertEqual(ctx.exception.attempts, engine.MAX_GENERATION_ATTEMPTS)
         self.assertEqual(ctx.exception.last_candidate_seed, 100)
+
+    def test_create_playable_map_uses_injected_generation_dependencies(self) -> None:
+        generated = simulate.generate_map(99, 3, 0.10)
+
+        galactic_map, effective_seed, reroll_count = engine.create_playable_map(
+            10,
+            engine.DEFAULT_SETTINGS,
+            generate_candidate=lambda seed, *_: generated,
+            is_reachable=lambda _: True,
+        )
+
+        self.assertEqual(galactic_map, generated)
+        self.assertEqual(effective_seed, 10)
+        self.assertEqual(reroll_count, 0)
+
+    def test_validate_actual_map_rejects_mismatched_base_metadata(self) -> None:
+        cells = filled_cells(".")
+        cells[(1, 1)] = "S"
+        cells[(8, 8)] = "H"
+        cells[(3, 3)] = "B"
+        actual_map = engine.ActualMap(
+            cells=cells,
+            rift_edges=(),
+            base_position=(4, 4),
+            resource_positions=(),
+        )
+
+        with self.assertRaisesRegex(ValueError, "base_position cell must be 'B'"):
+            engine.validate_actual_map(actual_map, engine.DEFAULT_SETTINGS)
 
 
 class ApplyCommandTests(unittest.TestCase):
@@ -477,6 +536,21 @@ class ApplyCommandTests(unittest.TestCase):
 
 
 class RunCommandsTests(unittest.TestCase):
+    def test_run_state_commands_preserves_existing_state_metadata(self) -> None:
+        state = engine.create_game_from_actual_map(
+            make_actual_map(cells=filled_cells(".")),
+            requested_seed=5,
+            effective_seed=7,
+            reroll_count=2,
+        )
+
+        log = engine.run_state_commands(state, ["E"], max_turns=10)
+
+        self.assertEqual(log.requested_seed, 5)
+        self.assertEqual(log.effective_seed, 7)
+        self.assertEqual(log.reroll_count, 2)
+        self.assertEqual(log.events[0].turn, 1)
+
     def test_run_commands_is_deterministic_for_same_seed_and_commands(self) -> None:
         commands = ["E", "N", "N", "W", "S"]
 

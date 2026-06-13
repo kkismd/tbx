@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 import json
-from typing import Iterable
+from typing import Callable, Iterable
 
 from experiments.galactic_exodus import simulate
 
@@ -48,6 +48,11 @@ COMMAND_DELTAS: dict[str, tuple[int, int]] = {
     "S": (0, -1),
     "W": (-1, 0),
 }
+
+VALID_CELL_SYMBOLS = frozenset({".", "N", "A", "@", BASE_CELL, RESOURCE_CELL, "S", HOME_CELL})
+
+CandidateGenerator = Callable[[int, int, float], simulate.GalacticMap]
+ReachabilityPredicate = Callable[[simulate.GalacticMap], bool]
 
 
 @dataclass(frozen=True)
@@ -301,20 +306,79 @@ class GenerationError(ValueError):
         )
 
 
-def create_game(requested_seed: int, settings: GameSettings = DEFAULT_SETTINGS) -> GameState:
+def validate_actual_map(actual_map: ActualMap, settings: GameSettings) -> None:
+    expected_positions = {
+        (x, y)
+        for y in range(1, settings.height + 1)
+        for x in range(1, settings.width + 1)
+    }
+    actual_positions = set(actual_map.cells)
+    missing_positions = sorted(expected_positions - actual_positions)
+    extra_positions = sorted(actual_positions - expected_positions)
+    if missing_positions or extra_positions:
+        raise ValueError(
+            f"actual_map.cells must contain exactly the board positions; missing={missing_positions}, extra={extra_positions}"
+        )
+
+    for position, symbol in actual_map.cells.items():
+        if symbol not in VALID_CELL_SYMBOLS:
+            raise ValueError(f"actual_map.cells[{position}] contains invalid symbol {symbol!r}")
+
+    if actual_map.cells[settings.start_position] != "S":
+        raise ValueError("start_position cell must be 'S'")
+    if actual_map.cells[settings.goal_position] != HOME_CELL:
+        raise ValueError("goal_position cell must be 'H'")
+    for position, symbol in actual_map.cells.items():
+        if symbol == "S" and position != settings.start_position:
+            raise ValueError(f"'S' may only appear at start_position, found at {position}")
+        if symbol == HOME_CELL and position != settings.goal_position:
+            raise ValueError(f"'H' may only appear at goal_position, found at {position}")
+
+    if actual_map.cells[actual_map.base_position] != BASE_CELL:
+        raise ValueError("base_position cell must be 'B'")
+    base_cells = {position for position, symbol in actual_map.cells.items() if symbol == BASE_CELL}
+    if base_cells != {actual_map.base_position}:
+        raise ValueError("actual_map base_position must exactly match the board's 'B' cell")
+
+    resource_positions = tuple(actual_map.resource_positions)
+    if len(set(resource_positions)) != len(resource_positions):
+        raise ValueError("resource_positions must not contain duplicates")
+    for position in resource_positions:
+        if actual_map.cells[position] != RESOURCE_CELL:
+            raise ValueError(f"resource_positions cell {position} must be 'R'")
+    resource_cells = {position for position, symbol in actual_map.cells.items() if symbol == RESOURCE_CELL}
+    if resource_cells != set(resource_positions):
+        raise ValueError("actual_map resource_positions must exactly match the board's 'R' cells")
+
+    normalized_rift_edges: set[simulate.Edge] = set()
+    for edge in actual_map.rift_edges:
+        start, goal = edge
+        if start not in expected_positions or goal not in expected_positions:
+            raise ValueError(f"rift edge {edge} must stay inside the board")
+        if abs(start[0] - goal[0]) + abs(start[1] - goal[1]) != 1:
+            raise ValueError(f"rift edge {edge} must connect adjacent positions")
+        normalized = simulate.normalize_edge(start, goal)
+        if edge != normalized:
+            raise ValueError(f"rift edge {edge} must be normalized")
+        if normalized in normalized_rift_edges:
+            raise ValueError(f"rift edge {edge} is duplicated")
+        normalized_rift_edges.add(normalized)
+
+
+def create_game_from_actual_map(
+    actual_map: ActualMap,
+    *,
+    settings: GameSettings = DEFAULT_SETTINGS,
+    requested_seed: int,
+    effective_seed: int,
+    reroll_count: int,
+) -> GameState:
     settings.validate()
-    galactic_map, effective_seed, reroll_count = create_playable_map(requested_seed, settings)
-    actual_map = ActualMap(
-        cells=dict(galactic_map.cells),
-        rift_edges=tuple(galactic_map.rift_edges),
-        base_position=galactic_map.b_position,
-        resource_positions=tuple(galactic_map.r_positions),
-    )
-    known_cells = {settings.goal_position: actual_map.cells[settings.goal_position]}
+    validate_actual_map(actual_map, settings)
     state = GameState(
         settings=settings,
         actual_map=actual_map,
-        known_cells=known_cells,
+        known_cells={},
         visited_cells={settings.start_position},
         known_routes={},
         player_position=settings.start_position,
@@ -333,8 +397,27 @@ def create_game(requested_seed: int, settings: GameSettings = DEFAULT_SETTINGS) 
         path=[settings.start_position],
     )
     reveal_neighborhood(state, settings.start_position)
+    reveal_neighborhood(state, settings.goal_position)
     state.game_status = determine_game_status(state)
     return state
+
+
+def create_game(requested_seed: int, settings: GameSettings = DEFAULT_SETTINGS) -> GameState:
+    settings.validate()
+    galactic_map, effective_seed, reroll_count = create_playable_map(requested_seed, settings)
+    actual_map = ActualMap(
+        cells=dict(galactic_map.cells),
+        rift_edges=tuple(galactic_map.rift_edges),
+        base_position=galactic_map.b_position,
+        resource_positions=tuple(galactic_map.r_positions),
+    )
+    return create_game_from_actual_map(
+        actual_map,
+        settings=settings,
+        requested_seed=requested_seed,
+        effective_seed=effective_seed,
+        reroll_count=reroll_count,
+    )
 
 
 def run_commands(
@@ -359,6 +442,16 @@ def run_commands(
             generation_error=exc.to_info(),
         )
 
+    return run_state_commands(state, commands, max_turns=max_turns)
+
+
+def run_state_commands(
+    state: GameState,
+    commands: Iterable[str],
+    *,
+    max_turns: int = 256,
+) -> GameLog:
+    simulate.validate_non_negative("max-turns", max_turns)
     initial_state = snapshot_state(state)
     events: list[TurnEvent] = []
     command_iter = iter(commands)
@@ -366,8 +459,8 @@ def run_commands(
     while state.game_status == GAME_STATUS_IN_PROGRESS:
         if state.turn_count >= max_turns:
             return build_game_log(
-                settings=settings,
-                requested_seed=requested_seed,
+                settings=state.settings,
+                requested_seed=state.requested_seed,
                 state=state,
                 initial_state=initial_state,
                 events=events,
@@ -378,8 +471,8 @@ def run_commands(
             command = next(command_iter)
         except StopIteration:
             return build_game_log(
-                settings=settings,
-                requested_seed=requested_seed,
+                settings=state.settings,
+                requested_seed=state.requested_seed,
                 state=state,
                 initial_state=initial_state,
                 events=events,
@@ -389,8 +482,8 @@ def run_commands(
         events.append(apply_command(state, command))
 
     return build_game_log(
-        settings=settings,
-        requested_seed=requested_seed,
+        settings=state.settings,
+        requested_seed=state.requested_seed,
         state=state,
         initial_state=initial_state,
         events=events,
@@ -593,17 +686,24 @@ def apply_command(state: GameState, command: str) -> TurnEvent:
 def create_playable_map(
     requested_seed: int,
     settings: GameSettings,
+    *,
+    generate_candidate: CandidateGenerator | None = None,
+    is_reachable: ReachabilityPredicate | None = None,
 ) -> tuple[simulate.GalacticMap, int, int]:
+    if generate_candidate is None:
+        generate_candidate = simulate.generate_map
+    if is_reachable is None:
+        is_reachable = is_goal_reachable
     last_candidate_seed: int | None = None
     for attempt in range(MAX_GENERATION_ATTEMPTS):
         candidate_seed = add_seed_offset(requested_seed, attempt)
         last_candidate_seed = candidate_seed
-        galactic_map = simulate.generate_map(
+        galactic_map = generate_candidate(
             candidate_seed,
             settings.resource_count,
             settings.rift_density,
         )
-        if is_goal_reachable(galactic_map):
+        if is_reachable(galactic_map):
             return galactic_map, candidate_seed, attempt
     raise GenerationError(
         requested_seed=requested_seed,
@@ -865,11 +965,14 @@ def actual_map_to_dict(actual_map: ActualMap) -> dict[str, object]:
     return {
         "cells": cells_to_sorted_rows(actual_map.cells),
         "rift_edges": [
-            edge_to_dict(edge)
+            [
+                position_to_dict(edge[0]),
+                position_to_dict(edge[1]),
+            ]
             for edge in sorted(actual_map.rift_edges)
         ],
         "base_position": position_to_dict(actual_map.base_position),
-        "resource_positions": [position_to_dict(position) for position in actual_map.resource_positions],
+        "resource_positions": [position_to_dict(position) for position in sorted(actual_map.resource_positions)],
     }
 
 
