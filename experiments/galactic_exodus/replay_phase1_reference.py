@@ -86,10 +86,10 @@ def actual_map_from_dict(value: Any) -> engine.ActualMap:
         raise ValueError("actual_map.rift_edges must be an array")
     rift_edges: list[simulate.Edge] = []
     for index, edge_value in enumerate(rift_edges_value):
-        if not isinstance(edge_value, list) or len(edge_value) != 2:
-            raise ValueError(f"actual_map.rift_edges[{index}] must contain two positions")
-        start = position_from_dict(edge_value[0], label=f"actual_map.rift_edges[{index}][0]")
-        goal = position_from_dict(edge_value[1], label=f"actual_map.rift_edges[{index}][1]")
+        if not isinstance(edge_value, dict) or set(edge_value) != {"from", "to"}:
+            raise ValueError(f"actual_map.rift_edges[{index}] must have exactly from and to")
+        start = position_from_dict(edge_value["from"], label=f"actual_map.rift_edges[{index}].from")
+        goal = position_from_dict(edge_value["to"], label=f"actual_map.rift_edges[{index}].to")
         rift_edges.append((start, goal))
 
     resource_positions_value = value["resource_positions"]

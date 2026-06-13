@@ -378,7 +378,9 @@ def create_game_from_actual_map(
     state = GameState(
         settings=settings,
         actual_map=actual_map,
-        known_cells={},
+        known_cells={
+            settings.goal_position: actual_map.cells[settings.goal_position],
+        },
         visited_cells={settings.start_position},
         known_routes={},
         player_position=settings.start_position,
@@ -397,7 +399,6 @@ def create_game_from_actual_map(
         path=[settings.start_position],
     )
     reveal_neighborhood(state, settings.start_position)
-    reveal_neighborhood(state, settings.goal_position)
     state.game_status = determine_game_status(state)
     return state
 
@@ -965,10 +966,7 @@ def actual_map_to_dict(actual_map: ActualMap) -> dict[str, object]:
     return {
         "cells": cells_to_sorted_rows(actual_map.cells),
         "rift_edges": [
-            [
-                position_to_dict(edge[0]),
-                position_to_dict(edge[1]),
-            ]
+            edge_to_dict(edge)
             for edge in sorted(actual_map.rift_edges)
         ],
         "base_position": position_to_dict(actual_map.base_position),

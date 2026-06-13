@@ -144,7 +144,9 @@ class Phase1SpecValidationTests(unittest.TestCase):
         fixture = payload["fixtures"][0]
         fixture["mode"] = "injected"
         fixture["initial_actual_map"] = self.make_actual_map_payload()
-        fixture["initial_actual_map"]["rift_edges"] = [[{"x": 2, "y": 1}, {"x": 1, "y": 1}]]
+        fixture["initial_actual_map"]["rift_edges"] = [
+            {"from": {"x": 2, "y": 1}, "to": {"x": 1, "y": 1}}
+        ]
         self.fixtures.write_text(json.dumps(payload), encoding="utf-8")
         with self.assertRaisesRegex(validator.ValidationError, "lexicographically sorted"):
             validator.validate_fixtures(self.fixtures)

@@ -135,9 +135,6 @@ class CreateGameTests(unittest.TestCase):
                 (1, 2): ".",
                 (2, 1): ".",
                 (2, 2): ".",
-                (7, 7): ".",
-                (7, 8): ".",
-                (8, 7): ".",
                 simulate.SPECIAL_H: "H",
             },
         )
@@ -164,9 +161,6 @@ class CreateGameTests(unittest.TestCase):
                 (1, 2): ".",
                 (2, 1): ".",
                 (2, 2): ".",
-                (7, 7): ".",
-                (7, 8): ".",
-                (8, 7): ".",
                 (8, 8): "H",
             },
         )

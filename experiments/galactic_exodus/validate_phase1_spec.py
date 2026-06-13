@@ -165,12 +165,13 @@ def validate_injected_map(value: Any, label: str) -> None:
         raise ValidationError(f"{label}.rift_edges must be an array")
     normalized_edges: set[tuple[tuple[int, int], tuple[int, int]]] = set()
     for index, edge in enumerate(edges):
-        if not isinstance(edge, list) or len(edge) != 2:
-            raise ValidationError(f"{label}.rift_edges[{index}] must contain two positions")
-        validate_position(edge[0], f"{label}.rift_edges[{index}][0]")
-        validate_position(edge[1], f"{label}.rift_edges[{index}][1]")
-        first = position_key(edge[0])
-        second = position_key(edge[1])
+        edge_obj = require_object(edge, f"{label}.rift_edges[{index}]")
+        if set(edge_obj) != {"from", "to"}:
+            raise ValidationError(f"{label}.rift_edges[{index}] must have exactly from and to")
+        validate_position(edge_obj["from"], f"{label}.rift_edges[{index}].from")
+        validate_position(edge_obj["to"], f"{label}.rift_edges[{index}].to")
+        first = position_key(edge_obj["from"])
+        second = position_key(edge_obj["to"])
         if first >= second:
             raise ValidationError(f"{label}.rift_edges[{index}] must be lexicographically sorted")
         if abs(first[0] - second[0]) + abs(first[1] - second[1]) != 1:
