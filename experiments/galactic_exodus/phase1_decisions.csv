@@ -1,0 +1,27 @@
+decision_id,question,current_behavior,decision,evidence,source_finding_ids,affected_issues,tbx_impact,status,deferred_issue
+INFO-001,開始時に既知となるセルは何か,"HとS周囲3x3が既知になる",Hは常時既知とし、開始時にS周囲3x3の地形・B・R・S・Hを開示する,"Phase 1Bでobservation_range_score=5.0、route_decision_score=4.6",P1B-007,#1052;#1054,known_cells初期化と初期描画をPythonと一致させる,DECIDED,-
+INFO-002,移動後に何を公開するか,"成功移動後に新しい現在地周囲3x3を累積開示",成功移動後のみ新しい現在地周囲3x3を累積開示し、失敗・拒否ではセルを開示しない,"情報量4.3/5、resource_reveal_score=4.8",P1B-007,#1052;#1054,known_cells更新条件を固定する,DECIDED,-
+INFO-003,actual mapを通常UIへ表示するか,Python内部だけがactual mapを保持する,通常UIと入力判定補助へactual map全体を漏らさない。表示はknown stateだけから生成する,"自動方策はknown stateのみで評価済み",P1B-007;P1B-012,#1052;#1054;#1056,描画APIとテスト用注入APIを分離する,DECIDED,-
+MOVE-001,有効な移動入力は何か,N/E/S/W,N/E/S/Wのみを移動入力として受理し、大文字小文字と前後空白を正規化する,"Python参照実装のCOMMAND_DELTAS",P1B-011,#1052;#1055,入力正規化と方向対応を固定する,DECIDED,-
+MOVE-002,盤面外・無効入力はturnを消費するか,状態を変えず拒否カウンタのみ増加,盤面外入力と無効入力は位置・燃料・turnを変えず拒否し、invalid_or_rejected_action_countのみ増加する,"Python schema v3の既存挙動",P1B-011,#1052;#1055,TurnEvent outcomeを一致させる,DECIDED,-
+MOVE-003,未知断層への試行をどう扱うか,"移動失敗、fuel -1、turn +1、known_routesへRIFT追加",未知断層への移動は失敗し、燃料1とturn1を消費し、その無向辺を既知断層として永続記録する,"rift_attempt_rate約0.72、数値より表示が問題",P1B-006;P1B-008;P1B-010,#1052;#1053;#1054,移動結果と既知経路更新を一致させる,DECIDED,-
+MOVE-004,既知断層へ再試行した場合どうするか,実行前に拒否しコストなし,既知断層への入力は位置・燃料・turnを変えず拒否し、拒否カウンタのみ増加する,"学習済み境界を再試行で課金しない現行契約",P1B-006;P1B-008,#1052;#1054;#1055,known_routesを入力前に参照する,DECIDED,-
+MOVE-005,燃料不足行動をどう扱うか,実行前に拒否しコストなし,移動先地形コストまたは未知断層試行コストを支払えない場合、位置・燃料・turnを変えず拒否する,"#1068で非進行検出を追加済み",P1B-001;P1B-011,#1052;#1053;#1055,required_fuelをTurnEventへ記録する,DECIDED,-
+FUEL-001,初期・最大燃料はいくつか,16/16,initial_fuel=16かつmax_fuel=16としてPhase 1仕様を確定する,"手動9/10勝、fuel_tension_score=4.2/5",P1B-001,#1053,定数とfixtureを16で固定する,DECIDED,-
+SUPPLY-001,B補給をどう扱うか,到着時に即時満タン・無制限,B到着時に自動でmax_fuelまで即時補給し、追加turnなし、利用回数制限なしとする,"multiple_base_refuel_rate最大0.054で固定解ではない",P1B-005;P1B-009,#1053,補給順序とカウンタを一致させる,DECIDED,-
+SUPPLY-002,R数と補給量はいくつか,R=3、各座標1回、最大+5,Rを3個配置し、各座標につき1回だけ最大+5を自動補給する。Phase 1中は数値を再調整しない,"resource_refuel_rate 0.427/0.653、P1B-004で有用性あり",P1B-003;P1B-004;P1B-009,#1050;#1053;#1054,生成数と補給量を固定する,DECIDED,-
+SUPPLY-003,満タン時のR/Bをどう扱うか,"Bは訪問のみ、Rは未消費",満タン到着では燃料を増やさず、Bはvisitのみ、未使用Rは消費しない。last_supply_sourceは変更しない,"schema v3のfixtureで検証済み",P1B-004;P1B-009,#1053,使用済み集合とイベント結果を一致させる,DECIDED,-
+SUPPLY-004,補給の適用順は何か,移動コスト後に到着セル補給,移動コストを支払って到着・観測更新した後に補給し、その後勝敗を確定する,"Python apply_commandの順序",P1B-002;P1B-009,#1053;#1056,turn fixtureのbefore/afterを一致させる,DECIDED,-
+WIN-001,勝利条件は何か,H到着,Hへ成功移動して到着した時点で勝利する。移動コスト支払い後の残燃料が0でも勝利を優先する,"必須fixtureの残量0 H到着",P1B-011,#1053;#1056,determine_game_status順序を固定する,DECIDED,-
+WIN-002,燃料切れ敗北条件は何か,燃料0かつH以外,移動または未知断層失敗後に燃料0となりHへ到着していない場合はLOST_FUELとする,"手動seed 6と自動評価outcome",P1B-001;P1B-011,#1053;#1056,通常敗北とabortを分離する,DECIDED,-
+WIN-003,行動不能を通常敗北に含めるか,方策評価ではabort、本体ルールには独立敗北なし,known stateだけから推測した行動不能を通常敗北条件にしない。入力終了・turn limit・評価方策停止はabortとして区別する,"自動評価にABORTED_NO_POLICY_ACTIONを保持",P1B-001;P1B-011,#1053;#1055;#1056,actual map依存の敗北判定を禁止する,DECIDED,-
+GEN-001,到達不能盤面をどう扱うか,requested_seed+iを最大100回試す,Hへ実際に到達可能な候補だけを採用し、requested_seedから順に最大100候補を試す,"reroll_rate=0.012、generation error fixture",P1B-011,#1050;#1051,候補seed列と上限をPythonと一致させる,DECIDED,-
+GEN-002,seed情報をどう記録するか,requested/effective/rerollを保持,requested_seed、effective_seed、reroll_countを状態とGameLogに必須記録し、seed overflowはgeneration errorとする,"再現性とschema v3契約",P1B-012,#1051;#1056,再現用メタデータを保存する,DECIDED,-
+RNG-001,PythonとTBXのRNGを完全互換にするか,未決,fixture注入方式を採用する。通常生成のseed->map完全一致は要求せず、統合テストではJSON fixtureのactual mapをロードする,"言語間RNG差を避け、状態遷移一致を優先",P1B-012,#1050;#1051;#1056,テスト用actual map注入経路を実装する,DECIDED,-
+UI-001,使用済みRをどう表示するか,Python表示では未使用と区別しにくい,Phase 1通常UIでは未使用Rを`R`、使用済みRを`r`で永続表示し、凡例と直前イベント文を付ける,"seed 6敗北、readability_score=2.6/5",P1B-004;P1B-010,#1054,known cellとused_resource_positionsを合成して描画する,DECIDED,-
+UI-002,発見済み断層をどう表示するか,ログ上のみ明確,Phase 1通常UIでは発見済み断層が存在することを永続表示し、現在地周辺表示では閉鎖方向を判別可能にする。具体的なBraille/SRS最終形式は#1076へ送る,"rift_asymmetry_score=1.4/5、複数seedで指摘",P1B-008;P1B-010,#1054,最低表示契約を実装し詳細デザインを分離する,DECIDED,-
+UI-003,断層だけ未知であることをどう説明するか,暗黙,「通常セル情報はスキャンで開示される。断層は通常センサーでは確定できず、航行試行時の空間応答で初めて既知になる」とルール文に明記する,"P1B-008のADJUSTMENT",P1B-008,#1054;#1055,help/説明文へ固定文言を追加する,DECIDED,-
+UI-004,通常HUDへ何を出すか,Pythonは評価情報を多く保持,通常HUDはマップ、現在位置、remaining/max fuel、turn、game status、直前移動結果、直前補給結果、help導線に限定する,"情報量は十分だがreadability=2.6/5",P1B-012,#1054;#1055,診断カウンタを常時表示しない,DECIDED,-
+UI-005,詳細表示設計をいつ行うか,未決,マクロマップ・局所SRS・Braille・端末幅・アクセシビリティの最終設計をPhase 2へ延期する,"Phase 1BのPHASE_2 finding",P1B-012,#1076;#1054,Phase 1では意味契約のみ固定する,DEFERRED,#1076
+LOG-001,GameLog schemaは何か,schema v3,TBX Phase 1はGameLog schema version 3とTurnEventの現行必須項目を採用する,"#1066/#1068/#1058の正本",P1B-012,#1056,Python/TBX比較の外部契約とする,DECIDED,-
+LOG-002,継続計測する指標は何か,補給・断層・seed・outcomeを記録,turn_count、remaining_fuel、B/R visit/refuel、used R、rift attempts、invalid/rejected actions、requested/effective seed、reroll、outcomeを保持する,"Phase 1B統合評価で使用",P1B-002;P1B-005;P1B-012,#1056,テレメトリと回帰比較に利用する,DECIDED,-
