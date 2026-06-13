@@ -121,6 +121,78 @@ class SessionError(RuntimeError):
     """Raised when a session cannot be recorded safely."""
 
 
+def sanitize_text(value: str) -> str:
+    """Return text that can always be encoded as UTF-8.
+
+    Valid Unicode, including emoji, is preserved. UTF-16 surrogate pairs are
+    combined when possible, and isolated surrogate code points are replaced.
+    """
+    try:
+        value.encode("utf-8")
+        return value
+    except UnicodeEncodeError:
+        repaired = value.encode(
+            "utf-16", errors="surrogatepass"
+        ).decode("utf-16", errors="replace")
+        return repaired.encode(
+            "utf-8", errors="replace"
+        ).decode("utf-8")
+
+
+def sanitize_row(
+    row: dict[str, str | int],
+) -> dict[str, str | int]:
+    return {
+        key: sanitize_text(value) if isinstance(value, str) else value
+        for key, value in row.items()
+    }
+
+
+def feedback_path_for(log_path: Path) -> Path:
+    return log_path.with_name(f"{log_path.stem}-feedback.json")
+
+
+def save_feedback(
+    path: Path,
+    seed: int,
+    answers: dict[str, str],
+) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "requested_seed": seed,
+        "answers": {
+            key: sanitize_text(value)
+            for key, value in answers.items()
+        },
+    }
+    temporary = path.with_suffix(path.suffix + ".tmp")
+    temporary.write_text(
+        json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    temporary.replace(path)
+
+
+def load_feedback(path: Path, seed: int) -> dict[str, str]:
+    if not path.exists():
+        return {}
+    try:
+        payload = json.loads(
+            path.read_text(encoding="utf-8", errors="replace")
+        )
+    except json.JSONDecodeError:
+        return {}
+    if payload.get("requested_seed") != seed:
+        return {}
+    answers = payload.get("answers")
+    if not isinstance(answers, dict):
+        return {}
+    return {
+        str(key): sanitize_text(str(value))
+        for key, value in answers.items()
+    }
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Play seeds interactively and record immediate feedback."
@@ -172,7 +244,7 @@ def load_existing_rows(path: Path) -> dict[int, dict[str, str]]:
     if not path.exists():
         return {}
 
-    with path.open(encoding="utf-8", newline="") as file:
+    with path.open(encoding="utf-8", errors="replace", newline="") as file:
         reader = csv.DictReader(file)
         if reader.fieldnames != FIELDNAMES:
             raise SessionError(
@@ -213,7 +285,7 @@ def write_rows(
         writer = csv.DictWriter(file, fieldnames=FIELDNAMES)
         writer.writeheader()
         for seed in sorted(rows_by_seed):
-            writer.writerow(rows_by_seed[seed])
+            writer.writerow(sanitize_row(rows_by_seed[seed]))
 
     temporary.replace(path)
 
@@ -377,33 +449,57 @@ def prompt_score(label: str) -> str:
 
 def prompt_nonempty(label: str) -> str:
     while True:
-        value = input(f"{label}\n> ").strip()
+        value = sanitize_text(input(f"{label}\n> ").strip())
         if value:
             return value
         print("空欄にはできません。短い内容でも入力してください。")
 
 
-def collect_subjective_values(seed: int) -> dict[str, str]:
+def collect_subjective_values(
+    seed: int,
+    feedback_path: Path,
+) -> dict[str, str]:
     print()
     print("-" * 72)
     print(f"SEED {seed}: プレイ直後の評価を入力してください")
     print("-" * 72)
 
-    answers: dict[str, str] = {}
+    answers = load_feedback(feedback_path, seed)
+    if answers:
+        print(
+            f"途中回答を読み込みました: {feedback_path}"
+        )
+
     for key, question in SCORE_QUESTIONS:
+        if key in answers and answers[key] in {"1", "2", "3", "4", "5"}:
+            print(f"{question}: {answers[key]}（保存済み）")
+            continue
         print()
         answers[key] = prompt_score(question)
+        save_feedback(feedback_path, seed, answers)
 
-    note_parts: list[str] = []
+    note_answers: list[str] = []
     print()
     print("最後に、以下を短く回答してください。")
-    for question in NOTE_QUESTIONS:
-        print()
-        answer = prompt_nonempty(question)
-        note_parts.append(f"{question}: {answer}")
+    for index, question in enumerate(NOTE_QUESTIONS):
+        key = f"note_{index}"
+        if key in answers and answers[key].strip():
+            answer = answers[key]
+            print(f"{question}: {answer}（保存済み）")
+        else:
+            print()
+            answer = prompt_nonempty(question)
+            answers[key] = answer
+            save_feedback(feedback_path, seed, answers)
+        note_answers.append(f"{question}: {answer}")
 
-    answers["notes"] = " / ".join(note_parts)
-    return answers
+    subjective = {
+        key: answers[key]
+        for key, _ in SCORE_QUESTIONS
+    }
+    subjective["notes"] = " / ".join(note_answers)
+    save_feedback(feedback_path, seed, answers)
+    return subjective
 
 
 def build_row(
@@ -485,14 +581,30 @@ def main() -> int:
                     continue
 
             log_path = args.log_dir / f"seed-{seed:03d}.json"
-            run_game(
-                args.python,
-                args.play_script,
-                seed,
-                log_path,
-            )
+            feedback_path = feedback_path_for(log_path)
+
+            reuse_existing_log = False
+            if log_path.exists() and seed not in redo_seeds:
+                reuse_existing_log = confirm(
+                    f"seed {seed}の既存JSONログがあります。"
+                    "プレイをやり直さず、このログから評価入力を再開しますか"
+                )
+
+            if not reuse_existing_log:
+                run_game(
+                    args.python,
+                    args.play_script,
+                    seed,
+                    log_path,
+                )
+                if feedback_path.exists():
+                    feedback_path.unlink()
+
             objective = load_objective_values(log_path, seed)
-            subjective = collect_subjective_values(seed)
+            subjective = collect_subjective_values(
+                seed,
+                feedback_path,
+            )
             rows[seed] = build_row(
                 seed,
                 args.player_id,
@@ -501,6 +613,8 @@ def main() -> int:
                 subjective,
             )
             write_rows(args.output, rows)
+            if feedback_path.exists():
+                feedback_path.unlink()
 
             print()
             print(
