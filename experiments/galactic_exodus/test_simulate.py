@@ -189,12 +189,55 @@ class RiftGenerationTests(unittest.TestCase):
             simulate.rift_count_for_density(1.01)
 
     def test_sample_rift_edges_is_deterministic_and_unique(self) -> None:
-        first = simulate.sample_rift_edges(42, 0.10)
-        second = simulate.sample_rift_edges(42, 0.10)
+        cells = filled_cells(".")
+
+        first = simulate.sample_rift_edges(42, 0.10, cells)
+        second = simulate.sample_rift_edges(42, 0.10, cells)
 
         self.assertEqual(first, second)
         self.assertEqual(len(first), 11)
         self.assertEqual(len(set(first)), 11)
+
+    def test_eligible_rift_edges_excludes_edges_with_no_plain_endpoint(self) -> None:
+        cells = filled_cells("N")
+        cells[(1, 1)] = "."
+        cells[(2, 2)] = "."
+
+        eligible = set(simulate.eligible_rift_edges(cells))
+
+        self.assertIn(simulate.normalize_edge((1, 1), (2, 1)), eligible)
+        self.assertIn(simulate.normalize_edge((2, 2), (2, 3)), eligible)
+        self.assertNotIn(simulate.normalize_edge((3, 2), (3, 3)), eligible)
+        self.assertNotIn(simulate.normalize_edge((3, 3), (4, 3)), eligible)
+
+    def test_eligible_rift_edges_include_plain_to_special_and_plain_to_plain_edges(self) -> None:
+        cells = filled_cells("N")
+        cells[(1, 1)] = "S"
+        cells[(2, 1)] = "."
+        cells[(2, 2)] = "."
+        cells[(3, 2)] = "B"
+
+        eligible = set(simulate.eligible_rift_edges(cells))
+
+        self.assertIn(simulate.normalize_edge((1, 1), (2, 1)), eligible)
+        self.assertIn(simulate.normalize_edge((2, 1), (2, 2)), eligible)
+        self.assertIn(simulate.normalize_edge((2, 2), (3, 2)), eligible)
+
+    def test_sample_rift_edges_only_selects_edges_with_plain_endpoint(self) -> None:
+        galactic_map = simulate.generate_map(42, 3)
+
+        for start, goal in galactic_map.rift_edges:
+            self.assertTrue(
+                galactic_map.cells[start] == "." or galactic_map.cells[goal] == ".",
+                msg=f"rift edge must touch plain space: {(start, goal)}",
+            )
+
+    def test_sample_rift_edges_raises_when_eligible_edges_are_insufficient(self) -> None:
+        cells = filled_cells("N")
+        cells[(1, 1)] = "."
+
+        with self.assertRaisesRegex(ValueError, "eligible rift edges"):
+            simulate.sample_rift_edges(42, 0.10, cells)
 
 
 class AnalysisAndOutputTests(unittest.TestCase):
@@ -227,13 +270,13 @@ class AnalysisAndOutputTests(unittest.TestCase):
         analysis = simulate.analyze_paths(galactic_map)
 
         self.assertTrue(analysis.reachable)
-        self.assertEqual(analysis.best_cost, 17)
+        self.assertEqual(analysis.best_cost, 16)
         self.assertEqual(analysis.best_path_length, 14)
-        self.assertEqual(analysis.cost_to_base, 8)
+        self.assertEqual(analysis.cost_to_base, 7)
         self.assertEqual(analysis.cost_base_to_goal, 9)
-        self.assertEqual(analysis.best_cost_via_base, 17)
+        self.assertEqual(analysis.best_cost_via_base, 16)
         self.assertEqual(analysis.best_cost_via_base, analysis.cost_to_base + analysis.cost_base_to_goal)
-        self.assertEqual(analysis.best_cost_without_base, 17)
+        self.assertEqual(analysis.best_cost_without_base, 16)
         self.assertEqual(analysis.base_route_advantage_raw, 0)
         self.assertFalse(analysis.base_is_mandatory)
         self.assertEqual(simulate.classify_verdict(analysis), "ACCEPT")
@@ -326,9 +369,9 @@ class AnalysisAndOutputTests(unittest.TestCase):
             simulate.CostContributionAnalysis(
                 plain_cost=14,
                 terrain_only_cost=15,
-                full_cost=17,
+                full_cost=16,
                 terrain_extra_cost=1,
-                rift_detour_cost=2,
+                rift_detour_cost=1,
             ),
         )
 
@@ -407,21 +450,21 @@ class AnalysisAndOutputTests(unittest.TestCase):
         self.assertIn("  initial_fuel: 16", output)
         self.assertIn("  base_supply: 8", output)
         self.assertIn("  resource_supply: 5", output)
-        self.assertIn("  fuel_feasible_direct: no", output)
+        self.assertIn("  fuel_feasible_direct: yes", output)
         self.assertIn("  fuel_feasible_via_base: yes", output)
         self.assertIn("  fuel_feasible_via_resource: yes", output)
-        self.assertIn("  S_to_H_cost: 17", output)
+        self.assertIn("  S_to_H_cost: 16", output)
         self.assertIn("  S_to_H_steps: 14", output)
-        self.assertIn("  S_to_B_cost: 8", output)
+        self.assertIn("  S_to_B_cost: 7", output)
         self.assertIn("  B_to_H_cost: 9", output)
-        self.assertIn("  S_to_H_via_B_cost: 17", output)
-        self.assertIn("  S_to_H_without_B_cost: 17", output)
+        self.assertIn("  S_to_H_via_B_cost: 16", output)
+        self.assertIn("  S_to_H_without_B_cost: 16", output)
         self.assertIn("  base_is_mandatory: no", output)
         self.assertIn("  plain_cost: 14", output)
         self.assertIn("  terrain_only_cost: 15", output)
-        self.assertIn("  full_cost: 17", output)
+        self.assertIn("  full_cost: 16", output)
         self.assertIn("  terrain_extra_cost: 1", output)
-        self.assertIn("  rift_detour_cost: 2", output)
+        self.assertIn("  rift_detour_cost: 1", output)
         self.assertIn("  verdict: ACCEPT", output)
         self.assertIn("  priority_1: REJECT_TOO_HARD", output)
         self.assertIn("  priority_2: REJECT_BASE_MANDATORY", output)

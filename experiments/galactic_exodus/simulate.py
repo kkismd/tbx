@@ -198,7 +198,7 @@ def generate_map(seed: int, resource_count: int, rift_density: float = DEFAULT_R
     for position in r_positions:
         cells[position] = "R"
 
-    rift_edges = sample_rift_edges(seed, rift_density)
+    rift_edges = sample_rift_edges(seed, rift_density, cells)
 
     return GalacticMap(
         seed=seed,
@@ -262,9 +262,22 @@ def rift_count_for_density(rift_density: float) -> int:
     return round(TOTAL_UNDIRECTED_EDGES * rift_density)
 
 
-def sample_rift_edges(seed: int, rift_density: float) -> tuple[Edge, ...]:
+def eligible_rift_edges(cells: Cells) -> list[Edge]:
+    return [
+        edge
+        for edge in undirected_adjacent_edges()
+        if cells[edge[0]] == "." or cells[edge[1]] == "."
+    ]
+
+
+def sample_rift_edges(seed: int, rift_density: float, cells: Cells) -> tuple[Edge, ...]:
     rift_count = rift_count_for_density(rift_density)
-    edges = undirected_adjacent_edges()
+    edges = eligible_rift_edges(cells)
+    if len(edges) < rift_count:
+        raise ValueError(
+            "eligible rift edges are insufficient for requested rift density: "
+            f"eligible={len(edges)} requested={rift_count}"
+        )
     rng = random.Random(f"{seed}:rift")
     selected = rng.sample(edges, rift_count)
     return tuple(sorted(selected))
