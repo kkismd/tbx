@@ -130,6 +130,38 @@ class EvaluateManualSessionsTests(unittest.TestCase):
 
         self.assertEqual(exit_code, 1)
 
+    def test_validate_manual_sessions_rejects_replacement_character_in_notes(self) -> None:
+        with tempfile.TemporaryDirectory(dir=".tmp") as tmp_dir:
+            root = Path(tmp_dir)
+            csv_path = root / "prototype_manual_sessions.csv"
+            log_path = root / "manual" / "seed-001.json"
+            make_log(log_path, requested_seed=1, effective_seed=1)
+            row = make_row(1, log_path)
+            row["notes"] = "断層�に阻まれた"
+            self.write_csv(csv_path, [row])
+
+            exit_code = evaluate_manual_sessions.main(
+                ["--csv", str(csv_path), "--seed-start", "1", "--seed-end", "1"]
+            )
+
+        self.assertEqual(exit_code, 1)
+
+    def test_validate_manual_sessions_rejects_replacement_character_in_player_id(self) -> None:
+        with tempfile.TemporaryDirectory(dir=".tmp") as tmp_dir:
+            root = Path(tmp_dir)
+            csv_path = root / "prototype_manual_sessions.csv"
+            log_path = root / "manual" / "seed-001.json"
+            make_log(log_path, requested_seed=1, effective_seed=1)
+            row = make_row(1, log_path)
+            row["player_id"] = "test�er"
+            self.write_csv(csv_path, [row])
+
+            exit_code = evaluate_manual_sessions.main(
+                ["--csv", str(csv_path), "--seed-start", "1", "--seed-end", "1"]
+            )
+
+        self.assertEqual(exit_code, 1)
+
 
 if __name__ == "__main__":
     unittest.main()

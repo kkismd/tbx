@@ -72,6 +72,13 @@ class ValidationError(ValueError):
     """Raised when CSV or JSON contents violate the manual-session contract."""
 
 
+def reject_replacement_character(value: str, label: str) -> None:
+    if "\uFFFD" in value:
+        raise ValidationError(
+            f"{label} must not contain the Unicode replacement character U+FFFD"
+        )
+
+
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Validate prototype_manual_sessions.csv against GameLog v3 JSON logs."
@@ -161,6 +168,7 @@ def validate_row_shape(
         )
     if not row["player_id"].strip():
         raise ValidationError(f"{label}.player_id must not be blank")
+    reject_replacement_character(row["player_id"], f"{label}.player_id")
 
     for field in SCORE_FIELDS:
         score = row[field]
@@ -169,6 +177,7 @@ def validate_row_shape(
 
     if not row["notes"].strip():
         raise ValidationError(f"{label}.notes must not be blank")
+    reject_replacement_character(row["notes"], f"{label}.notes")
 
 
 def load_log_summary(path: Path, expected_seed: int) -> dict[str, int | str]:
