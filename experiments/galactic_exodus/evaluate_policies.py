@@ -208,9 +208,6 @@ def choose_step_toward_target(view: PolicyView, target: simulate.Position) -> st
         edge = simulate.normalize_edge(view.player_position, attempted)
         if view.known_routes.get(edge) == engine.ROUTE_RIFT:
             continue
-        symbol = view.known_cells.get(attempted)
-        if symbol is not None and simulate.terrain_cost(symbol) > view.remaining_fuel:
-            continue
         candidates.append((manhattan_distance(attempted, target), index, direction))
     if not candidates:
         return None
@@ -254,10 +251,15 @@ def evaluate_policy_run(
     while state.game_status == engine.GAME_STATUS_IN_PROGRESS:
         if state.turn_count >= max_turns:
             return build_policy_run(policy, requested_seed, state, engine.FINAL_OUTCOME_ABORTED_TURN_LIMIT)
-        action = policy_fn(policy_view_from_state(state))
+        view = policy_view_from_state(state)
+        action = policy_fn(view)
         if action is None:
             return build_policy_run(policy, requested_seed, state, engine.FINAL_OUTCOME_ABORTED_NO_POLICY_ACTION)
+        before_key = progress_key_for_state(state)
         engine.apply_command(state, action)
+        after_key = progress_key_for_state(state)
+        if before_key == after_key:
+            return build_policy_run(policy, requested_seed, state, engine.FINAL_OUTCOME_ABORTED_NO_POLICY_ACTION)
 
     return build_policy_run(policy, requested_seed, state, engine.final_outcome_for_status(state.game_status))
 
@@ -285,6 +287,24 @@ def build_policy_run(
         rift_attempts=state.rift_attempt_count,
         invalid_or_rejected_actions=state.invalid_or_rejected_action_count,
         path_length=max(len(state.path) - 1, 0),
+    )
+
+
+def progress_key_for_state(state: engine.GameState) -> tuple[object, ...]:
+    return (
+        state.player_position,
+        state.remaining_fuel,
+        state.turn_count,
+        state.game_status,
+        tuple(sorted(state.known_routes.items())),
+        tuple(sorted(state.known_cells.items())),
+        tuple(sorted(state.used_resource_positions)),
+        state.base_visit_count,
+        state.base_refuel_count,
+        state.resource_visit_count,
+        state.resource_refuel_count,
+        state.rift_attempt_count,
+        tuple(state.path),
     )
 
 

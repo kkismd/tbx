@@ -42,6 +42,21 @@ class PolicySelectionTests(unittest.TestCase):
 
         self.assertEqual(evaluate_policies.choose_goal_greedy_action(view), "E")
 
+    def test_goal_greedy_can_choose_known_high_cost_cell_when_it_is_closest(self) -> None:
+        view = evaluate_policies.PolicyView(
+            known_cells={
+                (2, 1): "A",
+                (1, 2): ".",
+            },
+            known_routes={},
+            player_position=(1, 1),
+            remaining_fuel=2,
+            used_resource_positions=set(),
+            goal_position=(2, 1),
+        )
+
+        self.assertEqual(evaluate_policies.choose_goal_greedy_action(view), "E")
+
     def test_supply_aware_targets_known_supply_when_fuel_is_low(self) -> None:
         view = evaluate_policies.PolicyView(
             known_cells={
@@ -114,6 +129,61 @@ class EvaluatePolicyRunTests(unittest.TestCase):
 
         self.assertEqual(run.outcome, engine.FINAL_OUTCOME_ABORTED_NO_POLICY_ACTION)
         self.assertEqual(run.turn_count, 0)
+
+    def test_evaluate_policy_run_aborts_when_policy_repeats_non_progressing_move(self) -> None:
+        cells = filled_cells(".")
+        cells[(2, 2)] = "A"
+        actual_map = make_actual_map(cells=cells)
+        state = make_state(
+            actual_map=actual_map,
+            player_position=(2, 1),
+            remaining_fuel=0,
+            known_cells={
+                (1, 1): "S",
+                (2, 1): ".",
+                (2, 2): "A",
+                (3, 1): ".",
+                (3, 2): ".",
+                simulate.SPECIAL_H: "H",
+            },
+            visited_cells={(1, 1), (2, 1)},
+            path=[(1, 1), (2, 1)],
+        )
+        with patch.object(engine, "create_game", return_value=state):
+            run = evaluate_policies.evaluate_policy_run(
+                evaluate_policies.POLICY_GOAL_GREEDY,
+                1,
+                max_turns=256,
+            )
+
+        self.assertEqual(run.outcome, engine.FINAL_OUTCOME_ABORTED_NO_POLICY_ACTION)
+        self.assertEqual(run.turn_count, 0)
+
+    def test_evaluate_policy_run_continues_after_unknown_rift_changes_state(self) -> None:
+        cells = filled_cells(".")
+        actual_map = make_actual_map(
+            cells=cells,
+            rift_edges=(simulate.normalize_edge((1, 1), (1, 2)),),
+        )
+        state = make_state(
+            actual_map=actual_map,
+            known_cells={
+                (1, 1): "S",
+                (1, 2): ".",
+                (2, 1): ".",
+                (2, 2): ".",
+                simulate.SPECIAL_H: "H",
+            },
+        )
+        with patch.object(engine, "create_game", return_value=state):
+            run = evaluate_policies.evaluate_policy_run(
+                evaluate_policies.POLICY_GOAL_GREEDY,
+                1,
+                max_turns=256,
+            )
+
+        self.assertNotEqual(run.outcome, engine.FINAL_OUTCOME_ABORTED_NO_POLICY_ACTION)
+        self.assertGreater(run.turn_count, 0)
 
 
 class SummaryTests(unittest.TestCase):
