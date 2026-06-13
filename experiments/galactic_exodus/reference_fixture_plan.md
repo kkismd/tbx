@@ -1,29 +1,29 @@
-# Phase 1 reference fixture implementation plan
+# Phase 1参照fixture実装計画
 
-## 1. Scope
+## 1. 対象範囲
 
-This plan adds deterministic fixture injection and replay to the Python reference implementation without changing normal generated-game behavior.
+通常の生成ゲーム挙動を変更せず、Python参照実装へ決定的なfixture注入・再生機能を追加する。
 
-## 2. `engine.py` changes
+## 2. `engine.py`の変更
 
-### 2.1 Add `validate_actual_map`
+### 2.1 `validate_actual_map`を追加する
 
 ```python
 def validate_actual_map(actual_map: ActualMap, settings: GameSettings) -> None:
     ...
 ```
 
-It must reject:
+以下を明示エラーにする。
 
-- missing or extra board coordinates
-- symbols outside `. N A @ B R S H`
-- S/H not at the fixed settings positions
-- `base_position` whose cell is not `B`
-- `resource_positions` whose cells are not `R`
-- duplicate resources
-- rift edges that are non-adjacent, out of bounds, duplicated, or not normalized
+- 盤面座標の不足・余分
+- `. N A @ B R S H`以外のセル記号
+- S/Hが固定settings座標にない
+- `base_position`のセルが`B`でない
+- `resource_positions`のセルが`R`でない
+- R座標の重複
+- 断層辺が盤面外、非隣接、重複、未正規化
 
-### 2.2 Add `create_game_from_actual_map`
+### 2.2 `create_game_from_actual_map`を追加する
 
 ```python
 def create_game_from_actual_map(
@@ -37,17 +37,17 @@ def create_game_from_actual_map(
     ...
 ```
 
-It must:
+次を行う。
 
-1. validate settings and the map
-2. create the same initial state as `create_game`
-3. reveal H and the S-centered 3x3 neighborhood
-4. initialize path with S
-5. call `determine_game_status`
+1. settingsとactual mapを検証する
+2. `create_game`と同じ初期状態を作る
+3. HとS周囲3x3を開示する
+4. pathをSで初期化する
+5. `determine_game_status`を呼ぶ
 
-Refactor `create_game` to generate/select a map and then delegate to this function.
+`create_game`は盤面生成・選択後、この関数へ処理を委譲する。
 
-### 2.3 Add `run_state_commands`
+### 2.3 `run_state_commands`を追加する
 
 ```python
 def run_state_commands(
@@ -59,23 +59,23 @@ def run_state_commands(
     ...
 ```
 
-Move the existing command loop from `run_commands` into this function. `run_commands` must retain its current signature and behavior, create the generated state, and delegate.
+現在の`run_commands`にあるコマンドループをこの関数へ移す。`run_commands`の既存signatureと通常挙動は維持し、生成済みstateを作った後に委譲する。
 
-### 2.4 Keep evaluated loss behavior
+### 2.4 評価済みの敗北条件を維持する
 
-Do not change `determine_game_status` or `can_continue`.
+`determine_game_status`と`can_continue`は変更しない。
 
-The evaluated Phase 1B behavior is:
+Phase 1Bで評価済みの挙動は次である。
 
-- H arrival wins first
-- otherwise, if actual map has no adjacent non-rift destination whose terrain cost is payable with remaining fuel, status becomes `LOST_FUEL`
-- this can occur with positive remaining fuel
+- H到着を最初に勝利判定する
+- それ以外では、actual map上に「断層ではなく、現在燃料で移動先地形コストを支払える隣接辺」がなければ`LOST_FUEL`
+- remaining fuelが正でも`LOST_FUEL`になり得る
 
-The UI must not reveal the hidden actual-map reason.
+通常UIへactual map由来の敗北理由や未発見断層を漏らさない。
 
-### 2.5 Generation dependency injection
+### 2.5 盤面生成依存を注入可能にする
 
-Refactor candidate selection to accept defaults that preserve normal behavior:
+通常挙動を維持するdefault引数として、候補生成と到達判定を注入可能にする。
 
 ```python
 CandidateGenerator = Callable[[int, int, float], simulate.GalacticMap]
@@ -92,17 +92,17 @@ def create_playable_map(
     ...
 ```
 
-This is used only to replay deterministic generation-error fixtures. Existing callers need no changes.
+この注入経路はgeneration error fixtureの決定的再生に使う。既存callerは変更不要とする。
 
-## 3. New replay module
+## 3. 再生モジュール
 
-Add:
+以下を追加する。
 
 ```text
 experiments/galactic_exodus/replay_phase1_reference.py
 ```
 
-Required functions:
+必須関数:
 
 ```python
 load_fixture_file(path) -> dict
@@ -120,11 +120,11 @@ python experiments/galactic_exodus/replay_phase1_reference.py \
   --fixtures experiments/galactic_exodus/fixtures/phase1_reference.json
 ```
 
-It must exit non-zero on the first mismatch and identify fixture name and JSON path.
+最初の不一致で非0終了し、fixture名とJSON pathを表示する。
 
-## 4. Fixture map format
+## 4. actual map形式
 
-Use the same representation as `engine.actual_map_to_dict`:
+`engine.actual_map_to_dict`と同じ形式を使用する。
 
 ```json
 {
@@ -142,26 +142,28 @@ Use the same representation as `engine.actual_map_to_dict`:
 }
 ```
 
-All 64 cells must be recorded. `base_position` is never null because the current reference map always contains B. Every edge is normalized and sorted.
+- 64セルをすべて記録する
+- 現行参照mapには必ずBがあるため`base_position`をnullにしない
+- 全断層辺を正規化・ソートする
 
-## 5. Fixture modes
+## 5. fixture mode
 
 ### `generated`
 
-- run `create_game(requested_seed, settings)`
-- assert requested/effective/reroll metadata
-- assert generated actual map exactly equals `initial_actual_map`
-- then run commands from the generated state
+- `create_game(requested_seed, settings)`を実行する
+- requested/effective/rerollメタデータを検証する
+- 生成されたactual mapが`initial_actual_map`と完全一致することを検証する
+- その生成stateへcommandsを適用する
 
 ### `injected`
 
-- load `initial_actual_map`
-- call `create_game_from_actual_map`
-- run commands with `run_state_commands`
+- `initial_actual_map`をロードする
+- `create_game_from_actual_map`を呼ぶ
+- `run_state_commands`でcommandsを実行する
 
 ### `generation_error`
 
-Use fixture data:
+fixtureへ次を記録する。
 
 ```json
 "generation_stub": {
@@ -169,78 +171,78 @@ Use fixture data:
 }
 ```
 
-For seed-overflow coverage, use `requested_seed = 9223372036854775807`. Inject a deterministic candidate generator returning a canonical valid map and an `is_reachable` predicate that returns `false` for the first candidate. The next candidate calculation must produce the actual `SEED_OVERFLOW` GenerationError.
+seed overflow fixtureでは`requested_seed = 9223372036854775807`を使う。候補生成は正規の固定mapを返し、到達判定は最初の候補に`false`を返す。次candidate計算で実際の`SEED_OVERFLOW`を発生させる。
 
-## 6. Correct the 12 fixtures
+## 6. 12fixtureの修正
 
-### no-reroll initial board
+### no-reroll初期盤面
 
-- find a confirmed `reroll_count=0` seed by executing the current engine
-- serialize the complete selected actual map
-- do not hand-write effective seed
+- 現行engineを実行して`reroll_count=0`を確認したseedを採用する
+- 選択されたactual map全体をシリアライズする
+- effective seedを手書きしない
 
 ### reroll requested/effective seed
 
-- scan deterministic seeds until `reroll_count>0`
-- serialize the complete selected actual map and actual metadata
-- do not assume seed 123 rerolls
+- `reroll_count>0`となるseedを決定的に探索する
+- actual metadataと選択map全体をシリアライズする
+- seed 123がrerollするという仮定を置かない
 
-### normal move / rift / B / R fixtures
+### 通常移動・断層・B・R fixture
 
-- fixed S=(1,1), H=(8,8)
-- include a valid B cell and non-null `base_position` in every injected map
-- serialize all 64 cells
+- S=(1,1)、H=(8,8)を維持する
+- 全injected mapに有効なBセルと非nullの`base_position`を含める
+- 64セルすべてを記録する
 
-### zero-fuel H arrival
+### 残量0でH到着
 
-- keep S=(1,1), H=(8,8)
-- all traversed cells cost 1
-- use `initial_fuel=14`
-- commands: seven `E`, then seven `N`
-- final H move leaves fuel 0 and status `WON`
+- S=(1,1)、H=(8,8)を維持する
+- 経路上をすべてコスト1にする
+- `initial_fuel=14`
+- commandsは`E`を7回、その後`N`を7回
+- 最後のH到着でfuel 0、status `WON`を検証する
 
-### fuel-loss fixture
+### 燃料切れ敗北
 
-- use a fixed map and command sequence that the current `determine_game_status` actually classifies as `LOST_FUEL`
-- assert both remaining fuel and the lack of any payable actual adjacent move
+- 現行`determine_game_status`が実際に`LOST_FUEL`と判定する固定map・command列を使う
+- remaining fuelと、actual map上に支払える隣接移動がないことの両方を検証する
 
 ### generation error
 
-- use the injected reachability sequence described above
-- assert reason, attempts, requested seed, and last candidate seed
+- 上記の到達判定注入を使う
+- reason、attempts、requested seed、last candidate seedを検証する
 
 ### turn limit
 
-- use an injected map, `max_turns=1`, and at least two valid commands
-- assert one event and `ABORTED_TURN_LIMIT`
+- injected map、`max_turns=1`、有効commandを2件以上使う
+- event 1件と`ABORTED_TURN_LIMIT`を検証する
 
-## 7. Comparison rules
+## 7. 比較規則
 
-`expected_initial`, each `expected_turns[i]`, and `expected_final` are recursive partial matches:
+`expected_initial`、各`expected_turns[i]`、`expected_final`は再帰的partial matchとする。
 
-- every expected key must exist and equal the actual value
-- extra actual keys are allowed
-- arrays are ordered and compared by index
-- no `*_include` ad-hoc keys such as `known_cells_include`
-- when subset behavior is needed, record the exact expected array from the reference implementation
+- expectedにある全keyがactualに存在し一致する
+- actual側の余分なkeyは許可する
+- 配列は順序・indexを一致させる
+- `known_cells_include`のような独自subset keyを作らない
+- subsetが必要な場合も参照実装から得た正確な配列を記録する
 
-## 8. Tests
+## 8. テスト
 
-Add:
+以下を追加する。
 
 ```text
 experiments/galactic_exodus/test_phase1_reference_fixtures.py
 ```
 
-Required tests:
+必須テスト:
 
-- replay all 12 fixtures successfully
-- wrong fixture schema is rejected
-- malformed actual map is rejected
-- generated actual-map mismatch is rejected
-- expected turn mismatch reports fixture and path
-- generation error is produced by the injected dependency path
-- fixed-start zero-fuel H fixture wins
-- positive-fuel no-move state remains covered as `LOST_FUEL`
+- 12fixtureがすべて再生成功する
+- fixture schema不一致を拒否する
+- 不正actual mapを拒否する
+- generated actual map不一致を拒否する
+- expected turn不一致でfixture名とpathを表示する
+- 注入経路でgeneration errorが発生する
+- 固定S/Hの残量0到着fixtureが勝利する
+- remaining fuelが正でもactual move不能なら`LOST_FUEL`となる既存挙動を保持する
 
-Keep `validate_phase1_spec.py` as static structure validation. The replay test provides semantic validation.
+`validate_phase1_spec.py`は静的構造検証のまま維持し、再生テストが意味的整合性を保証する。
