@@ -144,7 +144,7 @@ class CreateGameTests(unittest.TestCase):
         self.assertEqual(state.remaining_fuel, engine.DEFAULT_SETTINGS.initial_fuel)
         self.assertEqual(state.path, [simulate.SPECIAL_S])
 
-    def test_create_game_from_actual_map_reveals_start_and_goal_neighborhoods(self) -> None:
+    def test_create_game_from_actual_map_reveals_start_neighborhood_and_goal(self) -> None:
         actual_map = make_actual_map(cells=filled_cells("."), resource_positions=((5, 5),))
 
         state = engine.create_game_from_actual_map(
