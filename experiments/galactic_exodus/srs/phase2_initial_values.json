@@ -1,0 +1,68 @@
+{
+  "schema_version": 1,
+  "sector_types": ["NORMAL", "BASE", "RESOURCE", "RIFT"],
+  "directions": ["N", "E", "S", "W"],
+  "object_types": ["BASE_NODE", "RESOURCE_CACHE", "SALVAGE"],
+  "invariants": {
+    "rift_blocked_edge_min": 1,
+    "rift_blocked_edge_max": 3,
+    "non_rift_blocked_edges": [],
+    "entry_must_be_open": true,
+    "selected_exit_must_be_open": true,
+    "odd_map_dimensions_only": true
+  },
+  "baseline": {
+    "width": 9,
+    "height": 9,
+    "entry_width": 1,
+    "obstacle_density": 0.2,
+    "observation_mode": "LOCAL_3X3",
+    "cost_mode": "TURN_ONLY",
+    "interaction_mode": "EXPLICIT_INTERACT",
+    "object_profile": "PROFILE_EXPLORATION",
+    "rift_knowledge_mode": "KNOWN_DESCRIPTOR",
+    "max_srs_turns": 40
+  },
+  "comparisons": {
+    "C1": {"field": "map_size", "values": [[7, 7], [9, 9]]},
+    "C2": {"field": "observation_mode", "values": ["FULL", "LOCAL_3X3"]},
+    "C3": {"field": "cost_mode", "values": ["TURN_ONLY", "SHARED_FUEL"]},
+    "C4": {"field": "interaction_mode", "values": ["AUTO_INTERACT", "EXPLICIT_INTERACT"]},
+    "C5": {"field": "object_profile", "values": ["PROFILE_MINIMAL", "PROFILE_EXPLORATION"]},
+    "C6": {"field": "rift_knowledge_mode", "values": ["KNOWN_DESCRIPTOR", "LOCAL_DISCOVERY"]},
+    "C7": {"field": "obstacle_density", "values": [0.1, 0.2]}
+  },
+  "object_profiles": {
+    "PROFILE_MINIMAL": {
+      "NORMAL": [],
+      "BASE": [{"type": "BASE_NODE", "count": 1}],
+      "RESOURCE": [{"type": "RESOURCE_CACHE", "count": 1}],
+      "RIFT": []
+    },
+    "PROFILE_EXPLORATION": {
+      "NORMAL": [{"type": "SALVAGE", "count_min": 0, "count_max": 1}],
+      "BASE": [{"type": "BASE_NODE", "count": 1}],
+      "RESOURCE": [{"type": "RESOURCE_CACHE", "count": 1}],
+      "RIFT": [
+        {"type": "SALVAGE", "count_min": 0, "count_max": 1},
+        {"type": "RESOURCE_CACHE", "count_min": 0, "count_max": 1, "exclusive_group": "rift_value"}
+      ]
+    }
+  },
+  "thresholds": {
+    "p90_srs_turn_max": 25,
+    "manual_sector_length_min": 3.5,
+    "manual_orientation_min": 4.0,
+    "manual_exploration_value_min": 3.5,
+    "no_action_rate_max": 0.01,
+    "blocked_edge_attempt_rate_max": 0.15
+  },
+  "persistent_fields": [
+    "generated_map_id",
+    "sector_type",
+    "blocked_edges",
+    "consumed_object_ids",
+    "activated_object_ids",
+    "discovered_cells"
+  ]
+}
