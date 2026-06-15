@@ -1,25 +1,25 @@
-# Galactic Exodus Phase 2 SRS terrain effects
+# Galactic Exodus Phase 2 SRS地形・要素仕様
 
-## 1. Scope
+## 1. 目的と対象範囲
 
-This document records the decisions from #1086 for SRS terrain, map-element passability, observation, movement-cost calculation, WARP_POINT placement, and Terrain/Object compatibility.
+本書は、#1086で確定したSRS地形、マップ要素の通行可否、観測、移動コスト計算、`WARP_POINT`配置、Terrain/Object配置互換性を記録する。
 
-Generation density and counts remain in #1088. Exact command resolution and turn handling remain in #1089.
+地形の配置数・密度は#1088で扱い、移動commandの厳密な解決規則とturn処理は#1089で扱う。
 
-## 2. Map sizes
+## 2. 盤面サイズ
 
 ```text
-supported map sizes:
+対応サイズ:
   9x9
   11x11
 
-baseline:
+基準サイズ:
   9x9
 ```
 
-`7x7` is not supported by the Phase 2 SRS model.
+Phase 2 SRSモデルでは`7x7`を使用しない。
 
-## 3. Terrain types
+## 3. Terrain型
 
 ```text
 FLOOR
@@ -33,9 +33,9 @@ RIFT_DISTORTION
 RIFT_BARRIER
 ```
 
-`WALL` is not used. Impassable cells must have a setting-specific type.
+`WALL`は使用しない。通行不能セルには、世界観上の意味を持つ個別の型を使用する。
 
-## 4. Object types relevant to movement
+## 4. 移動判定に関係するObject型
 
 ```text
 STAR
@@ -45,50 +45,50 @@ RESOURCE_CACHE
 SALVAGE
 ```
 
-`STATION_STRUCTURE` and `BASE_NODE` are replaced by one impassable, adjacent-interaction `STATION` object.
+`STATION_STRUCTURE`と`BASE_NODE`は廃止し、通行不能かつ隣接操作可能な1セルObjectである`STATION`へ統合する。
 
-## 5. Terrain attributes
+## 5. Terrain属性
 
-| id | Japanese name | passable | move multiplier | observation | blocks movement/line travel | can host WARP_POINT |
+| ID | 和名 | 通行可能 | 移動倍率 | 観測範囲 | 移動・直線航行を遮断 | `WARP_POINT`配置可 |
 |---|---|---:|---:|---|---:|---:|
 | `FLOOR` | 通常空間 | true | 1 | 5x5 | false | true |
 | `DEBRIS` | デブリ帯 | true | 2 | 5x5 | false | false |
 | `NEBULA` | 星雲 | true | 2 | 3x3 | false | false |
 | `ASTEROID_FIELD` | 小惑星密集域 | true | 3 | 5x5 | false | false |
 | `ASTEROID` | 大型小惑星 | false | - | - | true | false |
-| `GRAVITY_FIELD_VERTICAL` | 南北重力異常領域 | true | 1 or 2 | 5x5 | false | false |
-| `GRAVITY_FIELD_HORIZONTAL` | 東西重力異常領域 | true | 1 or 2 | 5x5 | false | false |
+| `GRAVITY_FIELD_VERTICAL` | 南北重力異常領域 | true | 1または2 | 5x5 | false | false |
+| `GRAVITY_FIELD_HORIZONTAL` | 東西重力異常領域 | true | 1または2 | 5x5 | false | false |
 | `RIFT_DISTORTION` | 断層歪曲領域 | true | 2 | 5x5 | false | false |
 | `RIFT_BARRIER` | 断層障壁 | false | - | - | true | false |
 
-Only `passable = false` elements block movement and straight-line travel. Passable terrain never blocks a route even when it increases cost or reduces observation.
+`passable = false`の要素だけが移動と直線航行を遮断する。通行可能Terrainは、移動コスト増加や観測範囲縮小の効果を持っていても経路を遮断しない。
 
-## 6. Observation
+## 6. 観測
 
-Observation is updated after every successful one-cell step.
+観測は成功した1セル移動ごとに更新する。
 
 ```text
-1. move to the next cell
-2. inspect the destination terrain
-3. NEBULA -> observe 3x3; otherwise -> observe 5x5
-4. merge the result into the persistent discovered map
-5. continue to the next step when movement remains
+1. 次のセルへ移動する
+2. 移動先セルのterrainを確認する
+3. NEBULAなら3x3、それ以外なら5x5を観測する
+4. 観測結果を永続的な既知マップへ統合する
+5. 移動が残っていれば次の1セルへ進む
 ```
 
-Known cells are cumulative and are not forgotten when entering NEBULA.
+既知セルは累積保持し、`NEBULA`へ進入しても過去に発見した情報を忘れない。
 
-A failed move that does not enter a new cell does not trigger destination-cell observation.
+新しいセルへの移動が成立しなかった場合、移動先セル基準の観測更新は発生しない。
 
-## 7. Geometric movement cost
+## 7. 幾何学的な移動コスト
 
-Use integer Euclidean approximation:
+ユークリッド距離を整数で近似する。
 
 ```text
 ORTHOGONAL_COST = 10
 DIAGONAL_COST = 14
 ```
 
-Route cost is the sum of actual one-cell steps. It is not calculated only from the route endpoints.
+経路コストは、実際に通過した1セル単位のstep costを合計する。始点と終点の座標差だけでは計算しない。
 
 ```text
 step_cost = geometric_step_cost
@@ -96,9 +96,9 @@ step_cost = geometric_step_cost
           * gravity_multiplier
 ```
 
-Examples:
+例:
 
-| destination terrain | orthogonal | diagonal |
+| 移動先Terrain | 縦横移動 | 斜め移動 |
 |---|---:|---:|
 | `FLOOR` | 10 | 14 |
 | `DEBRIS` | 20 | 28 |
@@ -106,11 +106,11 @@ Examples:
 | `ASTEROID_FIELD` | 30 | 42 |
 | `RIFT_DISTORTION` | 20 | 28 |
 
-## 8. Gravity fields
+## 8. 重力異常領域
 
 ### `GRAVITY_FIELD_VERTICAL`
 
-A north-south gravity field. A step whose X coordinate changes has double cost.
+南北方向に沿った重力異常領域であり、X座標の変化を伴う移動のコストを2倍にする。
 
 ```text
 if dx != 0:
@@ -121,7 +121,7 @@ else:
 
 ### `GRAVITY_FIELD_HORIZONTAL`
 
-An east-west gravity field. A step whose Y coordinate changes has double cost.
+東西方向に沿った重力異常領域であり、Y座標の変化を伴う移動のコストを2倍にする。
 
 ```text
 if dy != 0:
@@ -130,13 +130,13 @@ else:
   gravity_multiplier = 1
 ```
 
-Diagonal movement changes both axes, so it is doubled in either gravity-field type.
+斜め移動ではX座標とY座標の両方が変化するため、どちらの重力異常領域でもコストが2倍になる。
 
-In a GRAVITY sector, vertical and horizontal cells are selected randomly. Either type alone or both types may occur, but their total count must be at least one. Total placement amount is decided in #1088.
+`GRAVITY`星系では、南北・東西の重力異常セルをランダムに選択する。片方のみ、または両方の混在を許可するが、合計配置数は必ず1セル以上とする。総配置量は#1088で決定する。
 
-## 9. Impassable elements and STOP_BEFORE
+## 9. 通行不能要素と`STOP_BEFORE`
 
-The shared impassable set is:
+共通の通行不能要素は次のとおり。
 
 ```text
 ASTEROID
@@ -146,60 +146,60 @@ PLANET
 STATION
 ```
 
-All use the same behavior:
+すべて共通して次の挙動を使用する。
 
 ```text
 collision_behavior = STOP_BEFORE
 movement_cost_consumed = false
 ```
 
-Detailed turn consumption, partial-route position, and command semantics are decided in #1089.
+turn消費、途中まで進んだ場合の最終位置、command全体の扱いは#1089で決定する。
 
-## 10. WARP_POINT feature placement
+## 10. `WARP_POINT`の配置
 
-A WARP_POINT represents a gravity-stable location suitable for inter-sector warp.
+`WARP_POINT`は、隣接星系へワープ可能な重力の安定した地点を表す。
 
 ```text
-WARP_POINT may be placed on FLOOR only.
+WARP_POINTはFLOOR上にのみ配置可能
 ```
 
-Generation invariants:
+生成時の不変条件:
 
 ```text
-valid edge midpoint:
+有効な辺中央:
   terrain = FLOOR
   feature = WARP_POINT
 
-inner adjacent cell:
+内側隣接セル:
   terrain = FLOOR
 
-WARP_POINT cell:
-  no object
+WARP_POINTセル:
+  object配置不可
 
-RIFT blocked edge:
-  no WARP_POINT
+RIFTのblocked edge:
+  WARP_POINTを生成しない
 ```
 
-## 11. SectorType x Terrain matrix
+## 11. SectorType × Terrainマトリクス
 
-Legend:
+凡例:
 
-- `required`: at least one or structurally required
-- `optional`: allowed by the sector profile
-- `forbidden`: not allowed
-- `blocked-edge-required`: required on each blocked edge
+- `必須`: 1セル以上、または構造上必ず必要
+- `任意`: Sector profileに応じて配置可能
+- `禁止`: 配置不可
+- `blocked辺に必須`: 各blocked edgeに対応して必須
 
 | SectorType | FLOOR | DEBRIS | NEBULA | ASTEROID_FIELD | ASTEROID | GRAVITY_VERTICAL | GRAVITY_HORIZONTAL | RIFT_DISTORTION | RIFT_BARRIER |
 |---|---|---|---|---|---|---|---|---|---|
-| `NORMAL` | required | optional | forbidden | forbidden | forbidden | forbidden | forbidden | forbidden | forbidden |
-| `BASE` | required | optional | forbidden | forbidden | forbidden | forbidden | forbidden | forbidden | forbidden |
-| `RESOURCE` | required | required | forbidden | optional | optional | forbidden | forbidden | forbidden | forbidden |
-| `NEBULA` | required | optional | required | forbidden | forbidden | forbidden | forbidden | forbidden | forbidden |
-| `ASTEROID` | required | optional | forbidden | required | required | forbidden | forbidden | forbidden | forbidden |
-| `GRAVITY` | required | forbidden | forbidden | forbidden | forbidden | optional-or-required | optional-or-required | forbidden | forbidden |
-| `RIFT` | required | optional | forbidden | optional | optional | optional | optional | required | blocked-edge-required |
+| `NORMAL` | 必須 | 任意 | 禁止 | 禁止 | 禁止 | 禁止 | 禁止 | 禁止 | 禁止 |
+| `BASE` | 必須 | 任意 | 禁止 | 禁止 | 禁止 | 禁止 | 禁止 | 禁止 | 禁止 |
+| `RESOURCE` | 必須 | 必須 | 禁止 | 任意 | 任意 | 禁止 | 禁止 | 禁止 | 禁止 |
+| `NEBULA` | 必須 | 任意 | 必須 | 禁止 | 禁止 | 禁止 | 禁止 | 禁止 | 禁止 |
+| `ASTEROID` | 必須 | 任意 | 禁止 | 必須 | 必須 | 禁止 | 禁止 | 禁止 | 禁止 |
+| `GRAVITY` | 必須 | 禁止 | 禁止 | 禁止 | 禁止 | 必須または任意 | 必須または任意 | 禁止 | 禁止 |
+| `RIFT` | 必須 | 任意 | 禁止 | 任意 | 任意 | 任意 | 任意 | 必須 | blocked辺に必須 |
 
-Additional GRAVITY invariant:
+`GRAVITY`星系には、次の追加不変条件を適用する。
 
 ```text
 count(GRAVITY_FIELD_VERTICAL)
@@ -207,65 +207,65 @@ count(GRAVITY_FIELD_VERTICAL)
 >= 1
 ```
 
-`RIFT_DISTORTION` is placed randomly among passable cells immediately inside and adjacent to `RIFT_BARRIER`. Placement amount is decided in #1088.
+`RIFT_DISTORTION`は、`RIFT_BARRIER`の内側に隣接する通行可能候補セルへランダムに配置する。配置量は#1088で決定する。
 
-## 12. Terrain x Object matrix
+## 12. Terrain × Objectマトリクス
 
 | Terrain | STAR | PLANET | STATION | RESOURCE_CACHE | SALVAGE |
 |---|---:|---:|---:|---:|---:|
-| `FLOOR` | true | true | true | true | true |
-| `DEBRIS` | false | false | false | true | true |
-| `NEBULA` | true | true | false | true | true |
-| `ASTEROID_FIELD` | false | false | false | true | true |
-| `ASTEROID` | false | false | false | false | false |
-| `GRAVITY_FIELD_VERTICAL` | true | true | false | true | true |
-| `GRAVITY_FIELD_HORIZONTAL` | true | true | false | true | true |
-| `RIFT_DISTORTION` | false | false | false | true | true |
-| `RIFT_BARRIER` | false | false | false | false | false |
+| `FLOOR` | 可 | 可 | 可 | 可 | 可 |
+| `DEBRIS` | 不可 | 不可 | 不可 | 可 | 可 |
+| `NEBULA` | 可 | 可 | 不可 | 可 | 可 |
+| `ASTEROID_FIELD` | 不可 | 不可 | 不可 | 可 | 可 |
+| `ASTEROID` | 不可 | 不可 | 不可 | 不可 | 不可 |
+| `GRAVITY_FIELD_VERTICAL` | 可 | 可 | 不可 | 可 | 可 |
+| `GRAVITY_FIELD_HORIZONTAL` | 可 | 可 | 不可 | 可 | 可 |
+| `RIFT_DISTORTION` | 不可 | 不可 | 不可 | 可 | 可 |
+| `RIFT_BARRIER` | 不可 | 不可 | 不可 | 不可 | 不可 |
 
-Common object invariants:
+Object配置の共通不変条件:
 
 ```text
-WARP_POINT cell:
-  no object
+WARP_POINTセル:
+  object配置不可
 
-impassable terrain:
-  no object
+通行不能Terrain:
+  object配置不可
 
-one cell:
-  at most one object
+1セル:
+  objectは最大1個
 
 STAR:
-  exactly 1 per SRS map
+  SRSマップごとにexactly 1
 
 PLANET:
-  multiple per SRS map
+  SRSマップごとに複数
 
 STATION:
-  exactly 1 in BASE sectors
-  FLOOR only
-  impassable
-  adjacent INTERACT
+  BASE星系にexactly 1
+  FLOOR上のみ
+  通行不能
+  隣接セルからINTERACT
 ```
 
-## 13. Deferred decisions
+## 13. 後続Issueへ委譲する事項
 
-The following are intentionally delegated:
+以下は意図的に後続Issueへ委譲する。
 
 ```text
 #1088:
-  terrain counts and density
-  gravity-field total amount
-  RIFT_DISTORTION amount/probability
-  STAR/PLANET counts and spacing
-  deterministic placement retry rules
+  terrainの配置数・密度
+  重力異常領域の総配置量
+  RIFT_DISTORTIONの配置量・確率
+  STAR / PLANETの個数・間隔
+  決定的生成の再試行規則
 
 #1089:
-  command schemas
-  turn consumption on STOP_BEFORE
-  partial-route position
-  diagonal corner cutting
-  movement-budget exhaustion
-  VECTOR_COMMAND rasterization
-  DIRECTIONAL_THRUST limits
+  command schema
+  STOP_BEFORE時のturn消費
+  途中停止時の最終位置
+  斜め移動のcorner cutting
+  movement budget不足時の処理
+  VECTOR_COMMANDの経路ラスタライズ
+  DIRECTIONAL_THRUSTの距離上限
 ```
