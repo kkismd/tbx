@@ -1,0 +1,1081 @@
+{
+  "generation_schema_version": 1,
+  "map_sizes": [[9, 9], [11, 11]],
+  "sector_types": [
+    "NORMAL",
+    "BASE",
+    "RESOURCE",
+    "NEBULA",
+    "ASTEROID",
+    "GRAVITY",
+    "RIFT"
+  ],
+  "terrain_types": [
+    "FLOOR",
+    "DEBRIS",
+    "NEBULA",
+    "ASTEROID_FIELD",
+    "ASTEROID",
+    "GRAVITY_FIELD_VERTICAL",
+    "GRAVITY_FIELD_HORIZONTAL",
+    "RIFT_DISTORTION",
+    "RIFT_BARRIER"
+  ],
+  "object_types": [
+    "STAR",
+    "PLANET",
+    "STATION",
+    "RESOURCE_CACHE",
+    "SALVAGE"
+  ],
+  "legacy_contracts_removed": {
+    "generic_obstacle_density": true,
+    "fixed_single_cell_edge_entry_feature": true,
+    "entry_descriptor_specific_representation": true,
+    "generic_impassable_terrain_name": true,
+    "legacy_base_object_name": true,
+    "legacy_base_structure_terrain_name": true
+  },
+  "constraint_definitions": {
+    "CELESTIAL_NOT_ON_OUTER_EDGE": {
+      "subjects": ["STAR", "PLANET"],
+      "type": "outer_edge_forbidden"
+    },
+    "CELESTIAL_PAIR_MIN_CHEBYSHEV_2": {
+      "subjects": ["STAR", "PLANET"],
+      "type": "pairwise_min_chebyshev_distance",
+      "min_distance": 2
+    },
+    "CELESTIAL_FROM_WARP_FLAG_MIN_CHEBYSHEV_2": {
+      "subjects": ["STAR", "PLANET"],
+      "anchor": "warp_flagged_cell",
+      "type": "anchor_min_chebyshev_distance",
+      "min_distance": 2
+    },
+    "STATION_FROM_CELESTIAL_MIN_CHEBYSHEV_2": {
+      "subjects": ["STATION"],
+      "anchors": ["STAR", "PLANET"],
+      "type": "anchor_min_chebyshev_distance",
+      "min_distance": 2
+    },
+    "STATION_NEIGHBORHOOD_RESERVED_FLOOR": {
+      "subjects": ["STATION"],
+      "type": "neighbor_reserved_terrain",
+      "metric": "chebyshev",
+      "radius": 1,
+      "reserved_terrain": "FLOOR"
+    },
+    "VALUE_OBJECT_FROM_WARP_FLAG_MIN_CHEBYSHEV_2": {
+      "subjects": ["RESOURCE_CACHE", "SALVAGE"],
+      "anchor": "warp_flagged_cell",
+      "type": "anchor_min_chebyshev_distance",
+      "min_distance": 2
+    },
+    "VALUE_OBJECT_FROM_IMPASSABLE_CELESTIAL_MIN_CHEBYSHEV_2": {
+      "subjects": ["RESOURCE_CACHE", "SALVAGE"],
+      "anchors": ["STAR", "PLANET", "STATION"],
+      "type": "anchor_min_chebyshev_distance",
+      "min_distance": 2
+    },
+    "VALUE_OBJECTS_INDIVIDUALLY_REACHABLE": {
+      "subjects": ["RESOURCE_CACHE", "SALVAGE"],
+      "type": "must_be_reachable_individually"
+    },
+    "RESOURCE_FIELD_IMPASSABLE_BALANCE": {
+      "sector_type": "RESOURCE",
+      "type": "terrain_count_relation",
+      "left": ["ASTEROID_FIELD", "ASTEROID"],
+      "operator": "<=",
+      "right": ["DEBRIS"]
+    },
+    "ASTEROID_CLUSTER_IMPASSABLE_BALANCE": {
+      "sector_type": "ASTEROID",
+      "type": "terrain_count_relation",
+      "left": ["ASTEROID"],
+      "operator": "<=",
+      "right": {
+        "terrain": "ASTEROID_FIELD",
+        "divisor": 2
+      }
+    },
+    "GRAVITY_TOTAL_MIN_1": {
+      "sector_type": "GRAVITY",
+      "type": "terrain_sum_min",
+      "terrains": ["GRAVITY_FIELD_VERTICAL", "GRAVITY_FIELD_HORIZONTAL"],
+      "min": 1
+    },
+    "RIFT_DISTORTION_BARRIER_ADJACENT_PERCENT": {
+      "sector_type": "RIFT",
+      "type": "candidate_percent_range",
+      "terrain": "RIFT_DISTORTION",
+      "candidate_pool": "BARRIER_INNER_ADJACENT_FLOOR",
+      "min_percent": 30,
+      "max_percent": 60,
+      "minimum_count": 1,
+      "selection_order": "SEEDED_SHUFFLE_AFTER_COORDINATE_ORDER"
+    }
+  },
+  "global_generation_contract": {
+    "floor_policy": {
+      "derived_as_residual_after_terrain_placement": true
+    },
+    "terrain_role_contract": {
+      "required_terrain_min_count": 1,
+      "optional_terrain_min_count": 0
+    },
+    "celestial_objects": {
+      "STAR": {
+        "count": 1
+      },
+      "PLANET": {
+        "9x9": {
+          "min": 2,
+          "max": 4
+        },
+        "11x11": {
+          "min": 3,
+          "max": 6
+        }
+      }
+    },
+    "value_objects": {
+      "allow_resource_cache_and_salvage_on_same_map": true,
+      "allow_same_cell_overlap": false
+    },
+    "warp": {
+      "representation": {
+        "per_cell_directional_flags": ["N", "E", "S", "W"],
+        "legacy_fixed_entry_feature_removed": true,
+        "legacy_entry_descriptor_removed": true
+      },
+      "reserved_floor_cluster": {
+        "min_width": 2,
+        "min_height": 2,
+        "min_clusters_per_open_edge": 1,
+        "allow_additional_qualifying_clusters": true,
+        "protect_all_qualifying_cluster_cells_from_terrain_overwrite": true
+      },
+      "flag_generation": {
+        "non_rift": "ALLOW_AND_REQUIRE_ON_EACH_EDGE_WITH_ADJACENT_SECTOR",
+        "rift_open_edge": "ALLOW_AND_REQUIRE",
+        "rift_blocked_edge": "FORBID_AND_FILL_WITH_RIFT_BARRIER",
+        "galaxy_outer_edge": "FORBID"
+      },
+      "corners": {
+        "evaluate_each_touching_direction_independently": true,
+        "allow_two_direction_flags": true
+      },
+      "object_rules": {
+        "forbid_objects_on_outer_edge_cells_with_warp_flags": true,
+        "allow_objects_on_inner_reserved_floor_cells": true
+      },
+      "arrival_selection": {
+        "candidate_rule": "OPPOSITE_EDGE_WITH_RETURN_FLAG",
+        "north_south": {
+          "primary": "MIN_ABS_DEST_X_MINUS_SOURCE_X",
+          "tie_break": ["LOWER_X", "LOWER_Y"]
+        },
+        "east_west": {
+          "primary": "MIN_ABS_DEST_Y_MINUS_SOURCE_Y",
+          "tie_break": ["LOWER_Y", "LOWER_X"]
+        },
+        "no_candidate_behavior": "INVALID_MAP_RETRY"
+      }
+    },
+    "generation_order": [
+      "FLOOR_INIT",
+      "RIFT_BARRIER",
+      "WARP_FLOOR_RESERVATION",
+      "REQUIRED_TERRAIN",
+      "OPTIONAL_TERRAIN",
+      "STAR",
+      "PLANET",
+      "STATION",
+      "VALUE_OBJECTS",
+      "WARP_FLAG_DERIVATION",
+      "VALIDATION"
+    ],
+    "terrain_count_resolution": {
+      "steps": [
+        "DRAW_REQUIRED_TERRAIN_IN_RANGE",
+        "DRAW_OPTIONAL_TERRAIN_IN_RANGE_ALLOWING_ZERO",
+        "VALIDATE_SPECIAL_TERRAIN_LIMIT",
+        "REDUCE_OPTIONAL_TERRAIN_IN_FIXED_PRIORITY_WITHOUT_REROLL",
+        "REVALIDATE_REQUIRED_TERRAIN_MINIMUMS"
+      ],
+      "optional_terrain_reduction_rule": {
+        "unit": "ONE_CELL_PER_STEP",
+        "scan_order": "SECTOR_PROFILE_PRIORITY_ORDER",
+        "restart_priority_scan_after_each_decrement": true,
+        "stop_when_within_limit": true,
+        "fail_if_no_optional_terrain_can_be_reduced": true
+      }
+    },
+    "clustering": {
+      "clustered_terrains": [
+        "NEBULA",
+        "ASTEROID_FIELD",
+        "DEBRIS",
+        "GRAVITY_FIELD_VERTICAL",
+        "GRAVITY_FIELD_HORIZONTAL",
+        "RIFT_DISTORTION"
+      ],
+      "isolated_single_cell_ratio_max": 0.2,
+      "forbid_small_isolated_regions": true,
+      "NEBULA": {
+        "9x9": {
+          "cluster_count": {
+            "min": 1,
+            "max": 2
+          },
+          "cluster_min_size": 4
+        },
+        "11x11": {
+          "cluster_count": {
+            "min": 1,
+            "max": 3
+          },
+          "cluster_min_size": 4
+        }
+      },
+      "ASTEROID": {
+        "place_asteroid_field_first": true,
+        "asteroid_internal_or_neighbor_ratio_min": 0.5
+      },
+      "GRAVITY": {
+        "per_orientation_with_positive_count_min_clusters": 1,
+        "prefer_same_orientation_within_cluster": true
+      },
+      "RIFT_DISTORTION": {
+        "candidate_order": "COORDINATE_ASCENDING",
+        "selection": "SEEDED_SHUFFLE",
+        "percent_range": {
+          "min": 30,
+          "max": 60
+        },
+        "minimum_count": 1
+      }
+    },
+    "reachability": {
+      "required_same_component_targets": [
+        "ALL_WARP_FLAGGED_CELLS",
+        "STATION",
+        "UNCONSUMED_RESOURCE_CACHE",
+        "UNCOLLECTED_SALVAGE"
+      ],
+      "movement_rule_reference": {
+        "issue": 1089,
+        "rule_id": "PASSABLE_ADJACENCY"
+      },
+      "passable_terrain_counts_as_reachable_even_if_high_cost": true,
+      "path_cost_limit_is_validation_input": false,
+      "all_other_passable_cells_should_also_share_component": true
+    },
+    "seed_and_retry": {
+      "seed_inputs": [
+        "generation_schema_version",
+        "galaxy_seed",
+        "sector_x",
+        "sector_y",
+        "sector_descriptor"
+      ],
+      "seed_hash_algorithm": "SHA-256",
+      "seed_encoding": {
+        "serialization": "CANONICAL_JSON_OBJECT_UTF8",
+        "required_fields": [
+          "generation_schema_version",
+          "galaxy_seed",
+          "sector_x",
+          "sector_y",
+          "sector_descriptor"
+        ],
+        "unicode_normalization": "NFC",
+        "object_key_order": "LEXICOGRAPHIC_ASCENDING",
+        "set_like_field_encoding": "SORTED_ARRAY",
+        "sector_descriptor_encoding": {
+          "serialization": "CANONICAL_JSON_OBJECT",
+          "object_key_order": "LEXICOGRAPHIC_ASCENDING",
+          "blocked_edges_encoding": {
+            "container": "ARRAY",
+            "order": ["N", "E", "S", "W"]
+          },
+          "future_fields_rule": "APPLY_SAME_CANONICAL_JSON_RULES"
+        },
+        "digest_to_integer": {
+          "bytes": "FULL_32_BYTES",
+          "byte_order": "BIG_ENDIAN",
+          "signed": false
+        }
+      },
+      "python_reference_rng": "random.Random(seed)",
+      "tbx_port_requirement": "MATCH_FIXTURES_OR_INVARIANTS",
+      "attempt_seed": {
+        "payload_fields": ["base_seed", "retry_index"],
+        "serialization": "SAME_CANONICAL_JSON_OBJECT_ENCODING_AS_BASE_SEED"
+      },
+      "derived_seed_labels": [
+        "terrain_seed",
+        "celestial_seed",
+        "object_seed"
+      ],
+      "derived_seed_encoding": {
+        "payload_fields": ["attempt_seed", "phase_label"],
+        "serialization": "SAME_CANONICAL_JSON_OBJECT_ENCODING_AS_BASE_SEED"
+      },
+      "retry": {
+        "seed_source": "ATTEMPT_SEED_FROM_BASE_SEED_AND_RETRY_INDEX",
+        "scope": "FULL_MAP_REGENERATION",
+        "attempt_count_max": 64,
+        "retry_index_min": 0,
+        "retry_index_max": 63,
+        "initial_attempt_retry_index": 0,
+        "fallback_map": false
+      },
+      "versioning": {
+        "bump_generation_schema_version_when_seed_results_change": true
+      }
+    },
+    "generation_report_schema": {
+      "separate_from_game_log": true,
+      "required_fields": [
+        "seed",
+        "derived_seeds",
+        "retry_index",
+        "requested_counts",
+        "actual_counts",
+        "validation_results"
+      ]
+    }
+  },
+  "sector_profiles": {
+    "NORMAL": {
+      "required_terrain": ["FLOOR"],
+      "optional_terrain": ["DEBRIS"],
+      "optional_terrain_reduction_priority": ["DEBRIS"],
+      "forbidden_terrain": [
+        "NEBULA",
+        "ASTEROID_FIELD",
+        "ASTEROID",
+        "GRAVITY_FIELD_VERTICAL",
+        "GRAVITY_FIELD_HORIZONTAL",
+        "RIFT_DISTORTION",
+        "RIFT_BARRIER"
+      ],
+      "terrain_count_ranges": {
+        "9x9": {
+          "DEBRIS": {
+            "min": 0,
+            "max": 5
+          }
+        },
+        "11x11": {
+          "DEBRIS": {
+            "min": 0,
+            "max": 8
+          }
+        }
+      },
+      "special_terrain_limit": {
+        "9x9": {
+          "mode": "FIXED_MAX",
+          "counted_terrains": ["DEBRIS"],
+          "max": 5
+        },
+        "11x11": {
+          "mode": "FIXED_MAX",
+          "counted_terrains": ["DEBRIS"],
+          "max": 8
+        }
+      },
+      "impassable_cell_limit": {
+        "counted_terrains": ["ASTEROID"],
+        "counted_objects": ["STAR", "PLANET", "STATION"],
+        "excluded_terrains": ["RIFT_BARRIER"],
+        "9x9": 10,
+        "11x11": 15
+      },
+      "required_objects": ["STAR", "PLANET"],
+      "optional_objects": ["SALVAGE"],
+      "object_count_ranges": {
+        "9x9": {
+          "STAR": {
+            "min": 1,
+            "max": 1
+          },
+          "PLANET": {
+            "min": 2,
+            "max": 4
+          },
+          "SALVAGE": {
+            "min": 0,
+            "max": 1
+          }
+        },
+        "11x11": {
+          "STAR": {
+            "min": 1,
+            "max": 1
+          },
+          "PLANET": {
+            "min": 3,
+            "max": 6
+          },
+          "SALVAGE": {
+            "min": 0,
+            "max": 1
+          }
+        }
+      },
+      "placement_constraints": [
+        "CELESTIAL_NOT_ON_OUTER_EDGE",
+        "CELESTIAL_PAIR_MIN_CHEBYSHEV_2",
+        "CELESTIAL_FROM_WARP_FLAG_MIN_CHEBYSHEV_2",
+        "VALUE_OBJECT_FROM_WARP_FLAG_MIN_CHEBYSHEV_2",
+        "VALUE_OBJECT_FROM_IMPASSABLE_CELESTIAL_MIN_CHEBYSHEV_2",
+        "VALUE_OBJECTS_INDIVIDUALLY_REACHABLE"
+      ]
+    },
+    "BASE": {
+      "required_terrain": ["FLOOR"],
+      "optional_terrain": ["DEBRIS"],
+      "optional_terrain_reduction_priority": ["DEBRIS"],
+      "forbidden_terrain": [
+        "NEBULA",
+        "ASTEROID_FIELD",
+        "ASTEROID",
+        "GRAVITY_FIELD_VERTICAL",
+        "GRAVITY_FIELD_HORIZONTAL",
+        "RIFT_DISTORTION",
+        "RIFT_BARRIER"
+      ],
+      "terrain_count_ranges": {
+        "9x9": {
+          "DEBRIS": {
+            "min": 0,
+            "max": 4
+          }
+        },
+        "11x11": {
+          "DEBRIS": {
+            "min": 0,
+            "max": 6
+          }
+        }
+      },
+      "special_terrain_limit": {
+        "9x9": {
+          "mode": "FIXED_MAX",
+          "counted_terrains": ["DEBRIS"],
+          "max": 4
+        },
+        "11x11": {
+          "mode": "FIXED_MAX",
+          "counted_terrains": ["DEBRIS"],
+          "max": 6
+        }
+      },
+      "impassable_cell_limit": {
+        "counted_terrains": ["ASTEROID"],
+        "counted_objects": ["STAR", "PLANET", "STATION"],
+        "excluded_terrains": ["RIFT_BARRIER"],
+        "9x9": 10,
+        "11x11": 15
+      },
+      "required_objects": ["STAR", "PLANET", "STATION"],
+      "optional_objects": [],
+      "object_count_ranges": {
+        "9x9": {
+          "STAR": {
+            "min": 1,
+            "max": 1
+          },
+          "PLANET": {
+            "min": 2,
+            "max": 4
+          },
+          "STATION": {
+            "min": 1,
+            "max": 1
+          }
+        },
+        "11x11": {
+          "STAR": {
+            "min": 1,
+            "max": 1
+          },
+          "PLANET": {
+            "min": 3,
+            "max": 6
+          },
+          "STATION": {
+            "min": 1,
+            "max": 1
+          }
+        }
+      },
+      "placement_constraints": [
+        "CELESTIAL_NOT_ON_OUTER_EDGE",
+        "CELESTIAL_PAIR_MIN_CHEBYSHEV_2",
+        "CELESTIAL_FROM_WARP_FLAG_MIN_CHEBYSHEV_2",
+        "STATION_FROM_CELESTIAL_MIN_CHEBYSHEV_2",
+        "STATION_NEIGHBORHOOD_RESERVED_FLOOR"
+      ]
+    },
+    "RESOURCE": {
+      "required_terrain": ["FLOOR", "DEBRIS"],
+      "optional_terrain": ["ASTEROID_FIELD", "ASTEROID"],
+      "optional_terrain_reduction_priority": ["ASTEROID", "ASTEROID_FIELD"],
+      "forbidden_terrain": [
+        "NEBULA",
+        "GRAVITY_FIELD_VERTICAL",
+        "GRAVITY_FIELD_HORIZONTAL",
+        "RIFT_DISTORTION",
+        "RIFT_BARRIER"
+      ],
+      "terrain_count_ranges": {
+        "9x9": {
+          "DEBRIS": {
+            "min": 6,
+            "max": 12
+          },
+          "ASTEROID_FIELD": {
+            "min": 0,
+            "max": 5
+          },
+          "ASTEROID": {
+            "min": 0,
+            "max": 2
+          }
+        },
+        "11x11": {
+          "DEBRIS": {
+            "min": 9,
+            "max": 18
+          },
+          "ASTEROID_FIELD": {
+            "min": 0,
+            "max": 8
+          },
+          "ASTEROID": {
+            "min": 0,
+            "max": 3
+          }
+        }
+      },
+      "special_terrain_limit": {
+        "9x9": {
+          "mode": "FIXED_MAX",
+          "counted_terrains": ["DEBRIS", "ASTEROID_FIELD", "ASTEROID"],
+          "max": 16
+        },
+        "11x11": {
+          "mode": "FIXED_MAX",
+          "counted_terrains": ["DEBRIS", "ASTEROID_FIELD", "ASTEROID"],
+          "max": 24
+        }
+      },
+      "impassable_cell_limit": {
+        "counted_terrains": ["ASTEROID"],
+        "counted_objects": ["STAR", "PLANET", "STATION"],
+        "excluded_terrains": ["RIFT_BARRIER"],
+        "9x9": 10,
+        "11x11": 15
+      },
+      "required_objects": ["STAR", "PLANET", "RESOURCE_CACHE"],
+      "optional_objects": ["SALVAGE"],
+      "object_count_ranges": {
+        "9x9": {
+          "STAR": {
+            "min": 1,
+            "max": 1
+          },
+          "PLANET": {
+            "min": 2,
+            "max": 4
+          },
+          "RESOURCE_CACHE": {
+            "min": 1,
+            "max": 2
+          },
+          "SALVAGE": {
+            "min": 0,
+            "max": 1
+          }
+        },
+        "11x11": {
+          "STAR": {
+            "min": 1,
+            "max": 1
+          },
+          "PLANET": {
+            "min": 3,
+            "max": 6
+          },
+          "RESOURCE_CACHE": {
+            "min": 1,
+            "max": 3
+          },
+          "SALVAGE": {
+            "min": 0,
+            "max": 1
+          }
+        }
+      },
+      "placement_constraints": [
+        "CELESTIAL_NOT_ON_OUTER_EDGE",
+        "CELESTIAL_PAIR_MIN_CHEBYSHEV_2",
+        "CELESTIAL_FROM_WARP_FLAG_MIN_CHEBYSHEV_2",
+        "VALUE_OBJECT_FROM_WARP_FLAG_MIN_CHEBYSHEV_2",
+        "VALUE_OBJECT_FROM_IMPASSABLE_CELESTIAL_MIN_CHEBYSHEV_2",
+        "VALUE_OBJECTS_INDIVIDUALLY_REACHABLE",
+        "RESOURCE_FIELD_IMPASSABLE_BALANCE"
+      ]
+    },
+    "NEBULA": {
+      "required_terrain": ["FLOOR", "NEBULA"],
+      "optional_terrain": ["DEBRIS"],
+      "optional_terrain_reduction_priority": ["DEBRIS"],
+      "forbidden_terrain": [
+        "ASTEROID_FIELD",
+        "ASTEROID",
+        "GRAVITY_FIELD_VERTICAL",
+        "GRAVITY_FIELD_HORIZONTAL",
+        "RIFT_DISTORTION",
+        "RIFT_BARRIER"
+      ],
+      "terrain_count_ranges": {
+        "9x9": {
+          "NEBULA": {
+            "min": 12,
+            "max": 22
+          },
+          "DEBRIS": {
+            "min": 0,
+            "max": 4
+          }
+        },
+        "11x11": {
+          "NEBULA": {
+            "min": 18,
+            "max": 32
+          },
+          "DEBRIS": {
+            "min": 0,
+            "max": 6
+          }
+        }
+      },
+      "special_terrain_limit": {
+        "9x9": {
+          "mode": "FIXED_MAX",
+          "counted_terrains": ["NEBULA", "DEBRIS"],
+          "max": 24
+        },
+        "11x11": {
+          "mode": "FIXED_MAX",
+          "counted_terrains": ["NEBULA", "DEBRIS"],
+          "max": 35
+        }
+      },
+      "impassable_cell_limit": {
+        "counted_terrains": ["ASTEROID"],
+        "counted_objects": ["STAR", "PLANET", "STATION"],
+        "excluded_terrains": ["RIFT_BARRIER"],
+        "9x9": 10,
+        "11x11": 15
+      },
+      "required_objects": ["STAR", "PLANET"],
+      "optional_objects": ["SALVAGE"],
+      "object_count_ranges": {
+        "9x9": {
+          "STAR": {
+            "min": 1,
+            "max": 1
+          },
+          "PLANET": {
+            "min": 2,
+            "max": 4
+          },
+          "SALVAGE": {
+            "min": 0,
+            "max": 1
+          }
+        },
+        "11x11": {
+          "STAR": {
+            "min": 1,
+            "max": 1
+          },
+          "PLANET": {
+            "min": 3,
+            "max": 6
+          },
+          "SALVAGE": {
+            "min": 0,
+            "max": 1
+          }
+        }
+      },
+      "placement_constraints": [
+        "CELESTIAL_NOT_ON_OUTER_EDGE",
+        "CELESTIAL_PAIR_MIN_CHEBYSHEV_2",
+        "CELESTIAL_FROM_WARP_FLAG_MIN_CHEBYSHEV_2",
+        "VALUE_OBJECT_FROM_WARP_FLAG_MIN_CHEBYSHEV_2",
+        "VALUE_OBJECT_FROM_IMPASSABLE_CELESTIAL_MIN_CHEBYSHEV_2",
+        "VALUE_OBJECTS_INDIVIDUALLY_REACHABLE"
+      ]
+    },
+    "ASTEROID": {
+      "required_terrain": ["FLOOR", "ASTEROID_FIELD", "ASTEROID"],
+      "optional_terrain": ["DEBRIS"],
+      "optional_terrain_reduction_priority": ["DEBRIS"],
+      "forbidden_terrain": [
+        "NEBULA",
+        "GRAVITY_FIELD_VERTICAL",
+        "GRAVITY_FIELD_HORIZONTAL",
+        "RIFT_DISTORTION",
+        "RIFT_BARRIER"
+      ],
+      "terrain_count_ranges": {
+        "9x9": {
+          "ASTEROID_FIELD": {
+            "min": 10,
+            "max": 18
+          },
+          "ASTEROID": {
+            "min": 3,
+            "max": 7
+          },
+          "DEBRIS": {
+            "min": 0,
+            "max": 4
+          }
+        },
+        "11x11": {
+          "ASTEROID_FIELD": {
+            "min": 15,
+            "max": 27
+          },
+          "ASTEROID": {
+            "min": 5,
+            "max": 10
+          },
+          "DEBRIS": {
+            "min": 0,
+            "max": 6
+          }
+        }
+      },
+      "special_terrain_limit": {
+        "9x9": {
+          "mode": "FIXED_MAX",
+          "counted_terrains": ["ASTEROID_FIELD", "ASTEROID", "DEBRIS"],
+          "max": 25
+        },
+        "11x11": {
+          "mode": "FIXED_MAX",
+          "counted_terrains": ["ASTEROID_FIELD", "ASTEROID", "DEBRIS"],
+          "max": 38
+        }
+      },
+      "impassable_cell_limit": {
+        "counted_terrains": ["ASTEROID"],
+        "counted_objects": ["STAR", "PLANET", "STATION"],
+        "excluded_terrains": ["RIFT_BARRIER"],
+        "9x9": 10,
+        "11x11": 15
+      },
+      "required_objects": ["STAR", "PLANET"],
+      "optional_objects": ["RESOURCE_CACHE", "SALVAGE"],
+      "object_count_ranges": {
+        "9x9": {
+          "STAR": {
+            "min": 1,
+            "max": 1
+          },
+          "PLANET": {
+            "min": 2,
+            "max": 4
+          },
+          "RESOURCE_CACHE": {
+            "min": 0,
+            "max": 1
+          },
+          "SALVAGE": {
+            "min": 0,
+            "max": 2
+          }
+        },
+        "11x11": {
+          "STAR": {
+            "min": 1,
+            "max": 1
+          },
+          "PLANET": {
+            "min": 3,
+            "max": 6
+          },
+          "RESOURCE_CACHE": {
+            "min": 0,
+            "max": 1
+          },
+          "SALVAGE": {
+            "min": 0,
+            "max": 2
+          }
+        }
+      },
+      "placement_constraints": [
+        "CELESTIAL_NOT_ON_OUTER_EDGE",
+        "CELESTIAL_PAIR_MIN_CHEBYSHEV_2",
+        "CELESTIAL_FROM_WARP_FLAG_MIN_CHEBYSHEV_2",
+        "VALUE_OBJECT_FROM_WARP_FLAG_MIN_CHEBYSHEV_2",
+        "VALUE_OBJECT_FROM_IMPASSABLE_CELESTIAL_MIN_CHEBYSHEV_2",
+        "VALUE_OBJECTS_INDIVIDUALLY_REACHABLE",
+        "ASTEROID_CLUSTER_IMPASSABLE_BALANCE"
+      ]
+    },
+    "GRAVITY": {
+      "required_terrain": ["FLOOR"],
+      "optional_terrain": ["GRAVITY_FIELD_VERTICAL", "GRAVITY_FIELD_HORIZONTAL"],
+      "optional_terrain_reduction_priority": [
+        "GRAVITY_FIELD_HORIZONTAL",
+        "GRAVITY_FIELD_VERTICAL"
+      ],
+      "forbidden_terrain": [
+        "DEBRIS",
+        "NEBULA",
+        "ASTEROID_FIELD",
+        "ASTEROID",
+        "RIFT_DISTORTION",
+        "RIFT_BARRIER"
+      ],
+      "terrain_count_ranges": {
+        "9x9": {
+          "GRAVITY_FIELD_TOTAL": {
+            "min": 10,
+            "max": 20
+          }
+        },
+        "11x11": {
+          "GRAVITY_FIELD_TOTAL": {
+            "min": 15,
+            "max": 30
+          }
+        }
+      },
+      "special_terrain_limit": {
+        "9x9": {
+          "mode": "FIXED_MAX",
+          "counted_terrains": ["GRAVITY_FIELD_VERTICAL", "GRAVITY_FIELD_HORIZONTAL"],
+          "max": 20
+        },
+        "11x11": {
+          "mode": "FIXED_MAX",
+          "counted_terrains": ["GRAVITY_FIELD_VERTICAL", "GRAVITY_FIELD_HORIZONTAL"],
+          "max": 30
+        }
+      },
+      "impassable_cell_limit": {
+        "counted_terrains": ["ASTEROID"],
+        "counted_objects": ["STAR", "PLANET", "STATION"],
+        "excluded_terrains": ["RIFT_BARRIER"],
+        "9x9": 10,
+        "11x11": 15
+      },
+      "required_objects": ["STAR", "PLANET"],
+      "optional_objects": ["SALVAGE"],
+      "object_count_ranges": {
+        "9x9": {
+          "STAR": {
+            "min": 1,
+            "max": 1
+          },
+          "PLANET": {
+            "min": 2,
+            "max": 4
+          },
+          "SALVAGE": {
+            "min": 0,
+            "max": 1
+          }
+        },
+        "11x11": {
+          "STAR": {
+            "min": 1,
+            "max": 1
+          },
+          "PLANET": {
+            "min": 3,
+            "max": 6
+          },
+          "SALVAGE": {
+            "min": 0,
+            "max": 1
+          }
+        }
+      },
+      "placement_constraints": [
+        "CELESTIAL_NOT_ON_OUTER_EDGE",
+        "CELESTIAL_PAIR_MIN_CHEBYSHEV_2",
+        "CELESTIAL_FROM_WARP_FLAG_MIN_CHEBYSHEV_2",
+        "VALUE_OBJECT_FROM_WARP_FLAG_MIN_CHEBYSHEV_2",
+        "VALUE_OBJECT_FROM_IMPASSABLE_CELESTIAL_MIN_CHEBYSHEV_2",
+        "VALUE_OBJECTS_INDIVIDUALLY_REACHABLE",
+        "GRAVITY_TOTAL_MIN_1"
+      ]
+    },
+    "RIFT": {
+      "required_terrain": ["FLOOR", "RIFT_DISTORTION", "RIFT_BARRIER"],
+      "optional_terrain": [
+        "DEBRIS",
+        "ASTEROID_FIELD",
+        "ASTEROID",
+        "GRAVITY_FIELD_VERTICAL",
+        "GRAVITY_FIELD_HORIZONTAL"
+      ],
+      "optional_terrain_reduction_priority": [
+        "DEBRIS",
+        "ASTEROID_FIELD",
+        "ASTEROID",
+        "GRAVITY_FIELD_HORIZONTAL",
+        "GRAVITY_FIELD_VERTICAL"
+      ],
+      "forbidden_terrain": ["NEBULA"],
+      "terrain_count_ranges": {
+        "9x9": {
+          "RIFT_DISTORTION": {
+            "candidate_pool": "BARRIER_INNER_ADJACENT_FLOOR",
+            "min_percent": 30,
+            "max_percent": 60,
+            "minimum_count": 1
+          },
+          "DEBRIS": {
+            "min": 0,
+            "max": 4
+          },
+          "ASTEROID_FIELD": {
+            "min": 0,
+            "max": 4
+          },
+          "ASTEROID": {
+            "min": 0,
+            "max": 2
+          },
+          "GRAVITY_FIELD_TOTAL": {
+            "min": 0,
+            "max": 5
+          }
+        },
+        "11x11": {
+          "RIFT_DISTORTION": {
+            "candidate_pool": "BARRIER_INNER_ADJACENT_FLOOR",
+            "min_percent": 30,
+            "max_percent": 60,
+            "minimum_count": 1
+          },
+          "DEBRIS": {
+            "min": 0,
+            "max": 6
+          },
+          "ASTEROID_FIELD": {
+            "min": 0,
+            "max": 6
+          },
+          "ASTEROID": {
+            "min": 0,
+            "max": 3
+          },
+          "GRAVITY_FIELD_TOTAL": {
+            "min": 0,
+            "max": 8
+          }
+        }
+      },
+      "special_terrain_limit": {
+        "9x9": {
+          "mode": "BASE_TERRAIN_PLUS_ADDITIONAL_MAX",
+          "base_terrain": "RIFT_BARRIER",
+          "counted_additional_terrains": [
+            "RIFT_DISTORTION",
+            "DEBRIS",
+            "ASTEROID_FIELD",
+            "ASTEROID",
+            "GRAVITY_FIELD_VERTICAL",
+            "GRAVITY_FIELD_HORIZONTAL"
+          ],
+          "additional_max": 14
+        },
+        "11x11": {
+          "mode": "BASE_TERRAIN_PLUS_ADDITIONAL_MAX",
+          "base_terrain": "RIFT_BARRIER",
+          "counted_additional_terrains": [
+            "RIFT_DISTORTION",
+            "DEBRIS",
+            "ASTEROID_FIELD",
+            "ASTEROID",
+            "GRAVITY_FIELD_VERTICAL",
+            "GRAVITY_FIELD_HORIZONTAL"
+          ],
+          "additional_max": 22
+        }
+      },
+      "impassable_cell_limit": {
+        "counted_terrains": ["ASTEROID"],
+        "counted_objects": ["STAR", "PLANET", "STATION"],
+        "excluded_terrains": ["RIFT_BARRIER"],
+        "9x9": 10,
+        "11x11": 15
+      },
+      "required_objects": ["STAR", "PLANET", "RESOURCE_CACHE", "SALVAGE"],
+      "optional_objects": [],
+      "object_count_ranges": {
+        "9x9": {
+          "STAR": {
+            "min": 1,
+            "max": 1
+          },
+          "PLANET": {
+            "min": 2,
+            "max": 4
+          },
+          "RESOURCE_CACHE": {
+            "min": 1,
+            "max": 2
+          },
+          "SALVAGE": {
+            "min": 1,
+            "max": 2
+          }
+        },
+        "11x11": {
+          "STAR": {
+            "min": 1,
+            "max": 1
+          },
+          "PLANET": {
+            "min": 3,
+            "max": 6
+          },
+          "RESOURCE_CACHE": {
+            "min": 1,
+            "max": 2
+          },
+          "SALVAGE": {
+            "min": 1,
+            "max": 2
+          }
+        }
+      },
+      "placement_constraints": [
+        "CELESTIAL_NOT_ON_OUTER_EDGE",
+        "CELESTIAL_PAIR_MIN_CHEBYSHEV_2",
+        "CELESTIAL_FROM_WARP_FLAG_MIN_CHEBYSHEV_2",
+        "VALUE_OBJECT_FROM_WARP_FLAG_MIN_CHEBYSHEV_2",
+        "VALUE_OBJECT_FROM_IMPASSABLE_CELESTIAL_MIN_CHEBYSHEV_2",
+        "VALUE_OBJECTS_INDIVIDUALLY_REACHABLE",
+        "RIFT_DISTORTION_BARRIER_ADJACENT_PERCENT"
+      ]
+    }
+  }
+}
