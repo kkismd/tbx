@@ -2,8 +2,9 @@ from __future__ import annotations
 
 import csv
 import json
-import tempfile
 import unittest
+from contextlib import redirect_stdout
+from io import StringIO
 from pathlib import Path
 
 from experiments.galactic_exodus.srs import validate_phase2_initial_model as validator
@@ -11,15 +12,17 @@ from experiments.galactic_exodus.srs import validate_phase2_initial_model as val
 
 class Phase2InitialModelValidationTests(unittest.TestCase):
     def setUp(self) -> None:
-        self.tempdir = tempfile.TemporaryDirectory()
-        self.root = Path(self.tempdir.name)
+        self.root = Path(".tmp/phase2_initial_model_tests")
+        self.root.mkdir(parents=True, exist_ok=True)
         self.model = self.root / "model.md"
         self.questions = self.root / "questions.csv"
         self.values = self.root / "values.json"
         self.write_valid_artifacts()
 
     def tearDown(self) -> None:
-        self.tempdir.cleanup()
+        for path in (self.model, self.questions, self.values):
+            path.unlink(missing_ok=True)
+        self.root.rmdir()
 
     def write_valid_artifacts(self) -> None:
         self.model.write_text(
@@ -84,7 +87,7 @@ class Phase2InitialModelValidationTests(unittest.TestCase):
         with self.questions.open("w", encoding="utf-8", newline="") as file:
             writer = csv.DictWriter(file, fieldnames=validator.QUESTION_FIELDS)
             writer.writeheader()
-            for index in range(1, 17):
+            for index in range(1, 21):
                 writer.writerow(
                     {
                         "question_id": f"Q{index}",
@@ -101,6 +104,65 @@ class Phase2InitialModelValidationTests(unittest.TestCase):
 
     def test_validate_all_accepts_valid_artifacts(self) -> None:
         validator.validate_all(self.model, self.questions, self.values)
+
+    def test_cli_reports_twenty_questions(self) -> None:
+        stdout = StringIO()
+        with redirect_stdout(stdout):
+            exit_code = validator.main(
+                ["--model", str(self.model), "--questions", str(self.questions), "--values", str(self.values)]
+            )
+        self.assertEqual(exit_code, 0)
+        self.assertIn("questions: 20", stdout.getvalue())
+
+    def test_missing_q20_is_rejected(self) -> None:
+        rows = self.read_question_rows()
+        self.write_question_rows(rows[:-1])
+        with self.assertRaisesRegex(validator.ValidationError, "Q1..Q20 exactly once"):
+            validator.validate_questions(self.questions, validator.validate_values(self.values))
+
+    def test_extra_q21_is_rejected(self) -> None:
+        rows = self.read_question_rows()
+        extra = dict(rows[-1])
+        extra["question_id"] = "Q21"
+        rows.append(extra)
+        self.write_question_rows(rows)
+        with self.assertRaisesRegex(validator.ValidationError, "Q1..Q20 exactly once"):
+            validator.validate_questions(self.questions, validator.validate_values(self.values))
+
+    def test_duplicate_question_id_is_rejected(self) -> None:
+        rows = self.read_question_rows()
+        rows[-1]["question_id"] = "Q19"
+        self.write_question_rows(rows)
+        with self.assertRaisesRegex(validator.ValidationError, "Q1..Q20 exactly once"):
+            validator.validate_questions(self.questions, validator.validate_values(self.values))
+
+    def test_unknown_comparison_id_is_rejected(self) -> None:
+        rows = self.read_question_rows()
+        rows[0]["comparison_ids"] = "C9"
+        self.write_question_rows(rows)
+        with self.assertRaisesRegex(validator.ValidationError, "unknown comparisons"):
+            validator.validate_questions(self.questions, validator.validate_values(self.values))
+
+    def test_unknown_sector_type_is_rejected(self) -> None:
+        rows = self.read_question_rows()
+        rows[0]["required_sector_types"] = "VOID"
+        self.write_question_rows(rows)
+        with self.assertRaisesRegex(validator.ValidationError, "invalid required_sector_types"):
+            validator.validate_questions(self.questions, validator.validate_values(self.values))
+
+    def test_blank_field_is_rejected(self) -> None:
+        rows = self.read_question_rows()
+        rows[0]["decision_rule"] = ""
+        self.write_question_rows(rows)
+        with self.assertRaisesRegex(validator.ValidationError, "must not be blank"):
+            validator.validate_questions(self.questions, validator.validate_values(self.values))
+
+    def test_q11_to_q16_must_include_c8(self) -> None:
+        rows = self.read_question_rows()
+        rows[10]["comparison_ids"] = "C1"
+        self.write_question_rows(rows)
+        with self.assertRaisesRegex(validator.ValidationError, "Q11 must include C8"):
+            validator.validate_questions(self.questions, validator.validate_values(self.values))
 
     def test_schema_version_must_be_three(self) -> None:
         payload = json.loads(self.values.read_text(encoding="utf-8"))
@@ -164,6 +226,16 @@ class Phase2InitialModelValidationTests(unittest.TestCase):
         self.values.write_text(json.dumps(payload), encoding="utf-8")
         with self.assertRaisesRegex(validator.ValidationError, "persistent_fields must be"):
             validator.validate_values(self.values)
+
+    def read_question_rows(self) -> list[dict[str, str]]:
+        with self.questions.open(encoding="utf-8", newline="") as file:
+            return list(csv.DictReader(file))
+
+    def write_question_rows(self, rows: list[dict[str, str]]) -> None:
+        with self.questions.open("w", encoding="utf-8", newline="") as file:
+            writer = csv.DictWriter(file, fieldnames=validator.QUESTION_FIELDS)
+            writer.writeheader()
+            writer.writerows(rows)
 
 
 if __name__ == "__main__":
