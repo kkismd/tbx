@@ -301,6 +301,47 @@ Terrain個数決定:
 5. 必須Terrainの最低数を再検証
 ```
 
+任意Terrain削減アルゴリズム:
+
+```text
+1. SectorTypeごとの reduction priority を先頭から走査する
+2. 各Terrainがその最小値を上回っていれば1セルだけ減らす
+3. 1セル減らすたびに priority 走査を先頭へ戻す
+4. 合計上限を満たすまで繰り返す
+5. どの任意Terrainもこれ以上減らせなければ生成失敗
+```
+
+SectorType別 reduction priority:
+
+```text
+NORMAL:
+  DEBRIS
+
+BASE:
+  DEBRIS
+
+RESOURCE:
+  ASTEROID
+  ASTEROID_FIELD
+
+NEBULA:
+  DEBRIS
+
+ASTEROID:
+  DEBRIS
+
+GRAVITY:
+  GRAVITY_FIELD_HORIZONTAL
+  GRAVITY_FIELD_VERTICAL
+
+RIFT:
+  DEBRIS
+  ASTEROID_FIELD
+  ASTEROID
+  GRAVITY_FIELD_HORIZONTAL
+  GRAVITY_FIELD_VERTICAL
+```
+
 ## 7. クラスタ生成
 
 ```text
@@ -373,7 +414,26 @@ seed input:
   sector_descriptor
 
 seed construction:
-  SHA-256等で固定長整数化
+  canonical JSON UTF-8 bytesをSHA-256でhash
+  digest全32 bytesをbig-endian unsigned integerへ変換
+
+field order:
+  generation_schema_version
+  galaxy_seed
+  sector_x
+  sector_y
+  sector_descriptor
+
+normalization:
+  文字列はNFC
+  object keyは辞書順
+  set相当fieldは辞書順arrayへ正規化
+
+sector_descriptor canonical form:
+  canonical JSON object
+  object keyは辞書順
+  blocked_edgesはN/E/S/W辞書順array
+  将来field追加時も同じcanonical JSON規則を使う
 
 Python reference:
   random.Random(seed)
@@ -384,17 +444,35 @@ derived seeds:
   object_seed
 ```
 
+派生seedは、`retry_index`を含む再試行単位seedを先に作成し、その値とlabelを同じcanonical JSON規則でhashして求める。
+
+```text
+attempt_seed input:
+  base_seed
+  retry_index
+
+derived seed input:
+  attempt_seed
+  phase_label
+```
+
 TBX移植時は同一乱数列を要求せず、fixture一致または仕様不変条件一致を要求する。
 
 ### 9.2 再試行
 
 ```text
 失敗時:
-  元seedとretry_indexから派生seedを生成
+  base_seedとretry_indexからattempt_seedを生成
   マップ全体を再生成
 
-最大再試行:
-  64
+attempt数:
+  最大64
+
+retry_index:
+  0..63
+
+初回attempt:
+  retry_index = 0
 
 fallback map:
   なし

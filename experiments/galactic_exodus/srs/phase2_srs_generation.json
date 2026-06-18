@@ -202,7 +202,14 @@
         "VALIDATE_SPECIAL_TERRAIN_LIMIT",
         "REDUCE_OPTIONAL_TERRAIN_IN_FIXED_PRIORITY_WITHOUT_REROLL",
         "REVALIDATE_REQUIRED_TERRAIN_MINIMUMS"
-      ]
+      ],
+      "optional_terrain_reduction_rule": {
+        "unit": "ONE_CELL_PER_STEP",
+        "scan_order": "SECTOR_PROFILE_PRIORITY_ORDER",
+        "restart_priority_scan_after_each_decrement": true,
+        "stop_when_within_limit": true,
+        "fail_if_no_optional_terrain_can_be_reduced": true
+      }
     },
     "clustering": {
       "clustered_terrains": [
@@ -273,17 +280,55 @@
         "sector_descriptor"
       ],
       "seed_hash_algorithm": "SHA-256",
+      "seed_encoding": {
+        "serialization": "CANONICAL_JSON_UTF8",
+        "field_order": [
+          "generation_schema_version",
+          "galaxy_seed",
+          "sector_x",
+          "sector_y",
+          "sector_descriptor"
+        ],
+        "unicode_normalization": "NFC",
+        "object_key_order": "LEXICOGRAPHIC_ASCENDING",
+        "set_like_field_encoding": "SORTED_ARRAY",
+        "sector_descriptor_encoding": {
+          "serialization": "CANONICAL_JSON_OBJECT",
+          "object_key_order": "LEXICOGRAPHIC_ASCENDING",
+          "blocked_edges_encoding": {
+            "container": "ARRAY",
+            "order": ["N", "E", "S", "W"]
+          },
+          "future_fields_rule": "APPLY_SAME_CANONICAL_JSON_RULES"
+        },
+        "digest_to_integer": {
+          "bytes": "FULL_32_BYTES",
+          "byte_order": "BIG_ENDIAN",
+          "signed": false
+        }
+      },
       "python_reference_rng": "random.Random(seed)",
       "tbx_port_requirement": "MATCH_FIXTURES_OR_INVARIANTS",
+      "attempt_seed": {
+        "input_fields": ["base_seed", "retry_index"],
+        "encoding": "SAME_AS_BASE_SEED_ENCODING"
+      },
       "derived_seed_labels": [
         "terrain_seed",
         "celestial_seed",
         "object_seed"
       ],
+      "derived_seed_encoding": {
+        "input_fields": ["attempt_seed", "phase_label"],
+        "encoding": "SAME_AS_BASE_SEED_ENCODING"
+      },
       "retry": {
-        "seed_source": "BASE_SEED_PLUS_RETRY_INDEX",
+        "seed_source": "ATTEMPT_SEED_FROM_BASE_SEED_AND_RETRY_INDEX",
         "scope": "FULL_MAP_REGENERATION",
-        "max_retry_count": 64,
+        "attempt_count_max": 64,
+        "retry_index_min": 0,
+        "retry_index_max": 63,
+        "initial_attempt_retry_index": 0,
         "fallback_map": false
       },
       "versioning": {
@@ -306,6 +351,7 @@
     "NORMAL": {
       "required_terrain": ["FLOOR"],
       "optional_terrain": ["DEBRIS"],
+      "optional_terrain_reduction_priority": ["DEBRIS"],
       "forbidden_terrain": [
         "NEBULA",
         "ASTEROID_FIELD",
@@ -392,6 +438,7 @@
     "BASE": {
       "required_terrain": ["FLOOR"],
       "optional_terrain": ["DEBRIS"],
+      "optional_terrain_reduction_priority": ["DEBRIS"],
       "forbidden_terrain": [
         "NEBULA",
         "ASTEROID_FIELD",
@@ -477,6 +524,7 @@
     "RESOURCE": {
       "required_terrain": ["FLOOR", "DEBRIS"],
       "optional_terrain": ["ASTEROID_FIELD", "ASTEROID"],
+      "optional_terrain_reduction_priority": ["ASTEROID", "ASTEROID_FIELD"],
       "forbidden_terrain": [
         "NEBULA",
         "GRAVITY_FIELD_VERTICAL",
@@ -586,6 +634,7 @@
     "NEBULA": {
       "required_terrain": ["FLOOR", "NEBULA"],
       "optional_terrain": ["DEBRIS"],
+      "optional_terrain_reduction_priority": ["DEBRIS"],
       "forbidden_terrain": [
         "ASTEROID_FIELD",
         "ASTEROID",
@@ -679,6 +728,7 @@
     "ASTEROID": {
       "required_terrain": ["FLOOR", "ASTEROID_FIELD", "ASTEROID"],
       "optional_terrain": ["DEBRIS"],
+      "optional_terrain_reduction_priority": ["DEBRIS"],
       "forbidden_terrain": [
         "NEBULA",
         "GRAVITY_FIELD_VERTICAL",
@@ -788,6 +838,10 @@
     "GRAVITY": {
       "required_terrain": ["FLOOR"],
       "optional_terrain": ["GRAVITY_FIELD_VERTICAL", "GRAVITY_FIELD_HORIZONTAL"],
+      "optional_terrain_reduction_priority": [
+        "GRAVITY_FIELD_HORIZONTAL",
+        "GRAVITY_FIELD_VERTICAL"
+      ],
       "forbidden_terrain": [
         "DEBRIS",
         "NEBULA",
@@ -879,6 +933,13 @@
         "ASTEROID",
         "GRAVITY_FIELD_VERTICAL",
         "GRAVITY_FIELD_HORIZONTAL"
+      ],
+      "optional_terrain_reduction_priority": [
+        "DEBRIS",
+        "ASTEROID_FIELD",
+        "ASTEROID",
+        "GRAVITY_FIELD_HORIZONTAL",
+        "GRAVITY_FIELD_VERTICAL"
       ],
       "forbidden_terrain": ["NEBULA"],
       "terrain_count_ranges": {
