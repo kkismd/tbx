@@ -137,6 +137,321 @@ EXPECTED_SECTOR_REQUIRED_OBJECTS = {
     "GRAVITY": ["STAR", "PLANET"],
     "RIFT": ["STAR", "PLANET", "RESOURCE_CACHE", "SALVAGE"],
 }
+EXPECTED_TERRAIN_COUNT_RANGES = {
+    "NORMAL": {
+        "9x9": {"DEBRIS": {"min": 0, "max": 5}},
+        "11x11": {"DEBRIS": {"min": 0, "max": 8}},
+    },
+    "BASE": {
+        "9x9": {"DEBRIS": {"min": 0, "max": 4}},
+        "11x11": {"DEBRIS": {"min": 0, "max": 6}},
+    },
+    "RESOURCE": {
+        "9x9": {
+            "DEBRIS": {"min": 6, "max": 12},
+            "ASTEROID_FIELD": {"min": 0, "max": 5},
+            "ASTEROID": {"min": 0, "max": 2},
+        },
+        "11x11": {
+            "DEBRIS": {"min": 9, "max": 18},
+            "ASTEROID_FIELD": {"min": 0, "max": 8},
+            "ASTEROID": {"min": 0, "max": 3},
+        },
+    },
+    "NEBULA": {
+        "9x9": {"NEBULA": {"min": 12, "max": 22}, "DEBRIS": {"min": 0, "max": 4}},
+        "11x11": {"NEBULA": {"min": 18, "max": 32}, "DEBRIS": {"min": 0, "max": 6}},
+    },
+    "ASTEROID": {
+        "9x9": {
+            "ASTEROID_FIELD": {"min": 10, "max": 18},
+            "ASTEROID": {"min": 3, "max": 7},
+            "DEBRIS": {"min": 0, "max": 4},
+        },
+        "11x11": {
+            "ASTEROID_FIELD": {"min": 15, "max": 27},
+            "ASTEROID": {"min": 5, "max": 10},
+            "DEBRIS": {"min": 0, "max": 6},
+        },
+    },
+    "GRAVITY": {
+        "9x9": {"GRAVITY_FIELD_TOTAL": {"min": 10, "max": 20}},
+        "11x11": {"GRAVITY_FIELD_TOTAL": {"min": 15, "max": 30}},
+    },
+    "RIFT": {
+        "9x9": {
+            "RIFT_DISTORTION": {
+                "candidate_pool": "BARRIER_INNER_ADJACENT_FLOOR",
+                "min_percent": 30,
+                "max_percent": 60,
+                "minimum_count": 1,
+            },
+            "DEBRIS": {"min": 0, "max": 4},
+            "ASTEROID_FIELD": {"min": 0, "max": 4},
+            "ASTEROID": {"min": 0, "max": 2},
+            "GRAVITY_FIELD_TOTAL": {"min": 0, "max": 5},
+        },
+        "11x11": {
+            "RIFT_DISTORTION": {
+                "candidate_pool": "BARRIER_INNER_ADJACENT_FLOOR",
+                "min_percent": 30,
+                "max_percent": 60,
+                "minimum_count": 1,
+            },
+            "DEBRIS": {"min": 0, "max": 6},
+            "ASTEROID_FIELD": {"min": 0, "max": 6},
+            "ASTEROID": {"min": 0, "max": 3},
+            "GRAVITY_FIELD_TOTAL": {"min": 0, "max": 8},
+        },
+    },
+}
+EXPECTED_SPECIAL_TERRAIN_LIMITS = {
+    "NORMAL": {
+        "9x9": {"mode": "FIXED_MAX", "counted_terrains": ["DEBRIS"], "max": 5},
+        "11x11": {"mode": "FIXED_MAX", "counted_terrains": ["DEBRIS"], "max": 8},
+    },
+    "BASE": {
+        "9x9": {"mode": "FIXED_MAX", "counted_terrains": ["DEBRIS"], "max": 4},
+        "11x11": {"mode": "FIXED_MAX", "counted_terrains": ["DEBRIS"], "max": 6},
+    },
+    "RESOURCE": {
+        "9x9": {
+            "mode": "FIXED_MAX",
+            "counted_terrains": ["DEBRIS", "ASTEROID_FIELD", "ASTEROID"],
+            "max": 16,
+        },
+        "11x11": {
+            "mode": "FIXED_MAX",
+            "counted_terrains": ["DEBRIS", "ASTEROID_FIELD", "ASTEROID"],
+            "max": 24,
+        },
+    },
+    "NEBULA": {
+        "9x9": {"mode": "FIXED_MAX", "counted_terrains": ["NEBULA", "DEBRIS"], "max": 24},
+        "11x11": {"mode": "FIXED_MAX", "counted_terrains": ["NEBULA", "DEBRIS"], "max": 35},
+    },
+    "ASTEROID": {
+        "9x9": {
+            "mode": "FIXED_MAX",
+            "counted_terrains": ["ASTEROID_FIELD", "ASTEROID", "DEBRIS"],
+            "max": 25,
+        },
+        "11x11": {
+            "mode": "FIXED_MAX",
+            "counted_terrains": ["ASTEROID_FIELD", "ASTEROID", "DEBRIS"],
+            "max": 38,
+        },
+    },
+    "GRAVITY": {
+        "9x9": {
+            "mode": "FIXED_MAX",
+            "counted_terrains": ["GRAVITY_FIELD_VERTICAL", "GRAVITY_FIELD_HORIZONTAL"],
+            "max": 20,
+        },
+        "11x11": {
+            "mode": "FIXED_MAX",
+            "counted_terrains": ["GRAVITY_FIELD_VERTICAL", "GRAVITY_FIELD_HORIZONTAL"],
+            "max": 30,
+        },
+    },
+    "RIFT": {
+        "9x9": {
+            "mode": "BASE_TERRAIN_PLUS_ADDITIONAL_MAX",
+            "base_terrain": "RIFT_BARRIER",
+            "counted_additional_terrains": [
+                "RIFT_DISTORTION",
+                "DEBRIS",
+                "ASTEROID_FIELD",
+                "ASTEROID",
+                "GRAVITY_FIELD_VERTICAL",
+                "GRAVITY_FIELD_HORIZONTAL",
+            ],
+            "additional_max": 14,
+        },
+        "11x11": {
+            "mode": "BASE_TERRAIN_PLUS_ADDITIONAL_MAX",
+            "base_terrain": "RIFT_BARRIER",
+            "counted_additional_terrains": [
+                "RIFT_DISTORTION",
+                "DEBRIS",
+                "ASTEROID_FIELD",
+                "ASTEROID",
+                "GRAVITY_FIELD_VERTICAL",
+                "GRAVITY_FIELD_HORIZONTAL",
+            ],
+            "additional_max": 22,
+        },
+    },
+}
+EXPECTED_CONSTRAINT_DEFINITIONS = {
+    "CELESTIAL_NOT_ON_OUTER_EDGE": {
+        "subjects": ["STAR", "PLANET"],
+        "type": "outer_edge_forbidden",
+    },
+    "CELESTIAL_PAIR_MIN_CHEBYSHEV_2": {
+        "subjects": ["STAR", "PLANET"],
+        "type": "pairwise_min_chebyshev_distance",
+        "min_distance": 2,
+    },
+    "CELESTIAL_FROM_WARP_FLAG_MIN_CHEBYSHEV_2": {
+        "subjects": ["STAR", "PLANET"],
+        "anchor": "warp_flagged_cell",
+        "type": "anchor_min_chebyshev_distance",
+        "min_distance": 2,
+    },
+    "STATION_FROM_CELESTIAL_MIN_CHEBYSHEV_2": {
+        "subjects": ["STATION"],
+        "anchors": ["STAR", "PLANET"],
+        "type": "anchor_min_chebyshev_distance",
+        "min_distance": 2,
+    },
+    "STATION_NEIGHBORHOOD_RESERVED_FLOOR": {
+        "subjects": ["STATION"],
+        "type": "neighbor_reserved_terrain",
+        "metric": "chebyshev",
+        "radius": 1,
+        "reserved_terrain": "FLOOR",
+    },
+    "VALUE_OBJECT_FROM_WARP_FLAG_MIN_CHEBYSHEV_2": {
+        "subjects": ["RESOURCE_CACHE", "SALVAGE"],
+        "anchor": "warp_flagged_cell",
+        "type": "anchor_min_chebyshev_distance",
+        "min_distance": 2,
+    },
+    "VALUE_OBJECT_FROM_IMPASSABLE_CELESTIAL_MIN_CHEBYSHEV_2": {
+        "subjects": ["RESOURCE_CACHE", "SALVAGE"],
+        "anchors": ["STAR", "PLANET", "STATION"],
+        "type": "anchor_min_chebyshev_distance",
+        "min_distance": 2,
+    },
+    "VALUE_OBJECTS_INDIVIDUALLY_REACHABLE": {
+        "subjects": ["RESOURCE_CACHE", "SALVAGE"],
+        "type": "must_be_reachable_individually",
+    },
+    "RESOURCE_FIELD_IMPASSABLE_BALANCE": {
+        "sector_type": "RESOURCE",
+        "type": "terrain_count_relation",
+        "left": ["ASTEROID_FIELD", "ASTEROID"],
+        "operator": "<=",
+        "right": ["DEBRIS"],
+    },
+    "ASTEROID_CLUSTER_IMPASSABLE_BALANCE": {
+        "sector_type": "ASTEROID",
+        "type": "terrain_count_relation",
+        "left": ["ASTEROID"],
+        "operator": "<=",
+        "right": {"terrain": "ASTEROID_FIELD", "divisor": 2},
+    },
+    "GRAVITY_TOTAL_MIN_1": {
+        "sector_type": "GRAVITY",
+        "type": "terrain_sum_min",
+        "terrains": ["GRAVITY_FIELD_VERTICAL", "GRAVITY_FIELD_HORIZONTAL"],
+        "min": 1,
+    },
+    "RIFT_DISTORTION_BARRIER_ADJACENT_PERCENT": {
+        "sector_type": "RIFT",
+        "type": "candidate_percent_range",
+        "terrain": "RIFT_DISTORTION",
+        "candidate_pool": "BARRIER_INNER_ADJACENT_FLOOR",
+        "min_percent": 30,
+        "max_percent": 60,
+        "minimum_count": 1,
+        "selection_order": "SEEDED_SHUFFLE_AFTER_COORDINATE_ORDER",
+    },
+}
+EXPECTED_PLACEMENT_CONSTRAINTS = {
+    "NORMAL": [
+        "CELESTIAL_NOT_ON_OUTER_EDGE",
+        "CELESTIAL_PAIR_MIN_CHEBYSHEV_2",
+        "CELESTIAL_FROM_WARP_FLAG_MIN_CHEBYSHEV_2",
+        "VALUE_OBJECT_FROM_WARP_FLAG_MIN_CHEBYSHEV_2",
+        "VALUE_OBJECT_FROM_IMPASSABLE_CELESTIAL_MIN_CHEBYSHEV_2",
+        "VALUE_OBJECTS_INDIVIDUALLY_REACHABLE",
+    ],
+    "BASE": [
+        "CELESTIAL_NOT_ON_OUTER_EDGE",
+        "CELESTIAL_PAIR_MIN_CHEBYSHEV_2",
+        "CELESTIAL_FROM_WARP_FLAG_MIN_CHEBYSHEV_2",
+        "STATION_FROM_CELESTIAL_MIN_CHEBYSHEV_2",
+        "STATION_NEIGHBORHOOD_RESERVED_FLOOR",
+    ],
+    "RESOURCE": [
+        "CELESTIAL_NOT_ON_OUTER_EDGE",
+        "CELESTIAL_PAIR_MIN_CHEBYSHEV_2",
+        "CELESTIAL_FROM_WARP_FLAG_MIN_CHEBYSHEV_2",
+        "VALUE_OBJECT_FROM_WARP_FLAG_MIN_CHEBYSHEV_2",
+        "VALUE_OBJECT_FROM_IMPASSABLE_CELESTIAL_MIN_CHEBYSHEV_2",
+        "VALUE_OBJECTS_INDIVIDUALLY_REACHABLE",
+        "RESOURCE_FIELD_IMPASSABLE_BALANCE",
+    ],
+    "NEBULA": [
+        "CELESTIAL_NOT_ON_OUTER_EDGE",
+        "CELESTIAL_PAIR_MIN_CHEBYSHEV_2",
+        "CELESTIAL_FROM_WARP_FLAG_MIN_CHEBYSHEV_2",
+        "VALUE_OBJECT_FROM_WARP_FLAG_MIN_CHEBYSHEV_2",
+        "VALUE_OBJECT_FROM_IMPASSABLE_CELESTIAL_MIN_CHEBYSHEV_2",
+        "VALUE_OBJECTS_INDIVIDUALLY_REACHABLE",
+    ],
+    "ASTEROID": [
+        "CELESTIAL_NOT_ON_OUTER_EDGE",
+        "CELESTIAL_PAIR_MIN_CHEBYSHEV_2",
+        "CELESTIAL_FROM_WARP_FLAG_MIN_CHEBYSHEV_2",
+        "VALUE_OBJECT_FROM_WARP_FLAG_MIN_CHEBYSHEV_2",
+        "VALUE_OBJECT_FROM_IMPASSABLE_CELESTIAL_MIN_CHEBYSHEV_2",
+        "VALUE_OBJECTS_INDIVIDUALLY_REACHABLE",
+        "ASTEROID_CLUSTER_IMPASSABLE_BALANCE",
+    ],
+    "GRAVITY": [
+        "CELESTIAL_NOT_ON_OUTER_EDGE",
+        "CELESTIAL_PAIR_MIN_CHEBYSHEV_2",
+        "CELESTIAL_FROM_WARP_FLAG_MIN_CHEBYSHEV_2",
+        "VALUE_OBJECT_FROM_WARP_FLAG_MIN_CHEBYSHEV_2",
+        "VALUE_OBJECT_FROM_IMPASSABLE_CELESTIAL_MIN_CHEBYSHEV_2",
+        "VALUE_OBJECTS_INDIVIDUALLY_REACHABLE",
+        "GRAVITY_TOTAL_MIN_1",
+    ],
+    "RIFT": [
+        "CELESTIAL_NOT_ON_OUTER_EDGE",
+        "CELESTIAL_PAIR_MIN_CHEBYSHEV_2",
+        "CELESTIAL_FROM_WARP_FLAG_MIN_CHEBYSHEV_2",
+        "VALUE_OBJECT_FROM_WARP_FLAG_MIN_CHEBYSHEV_2",
+        "VALUE_OBJECT_FROM_IMPASSABLE_CELESTIAL_MIN_CHEBYSHEV_2",
+        "VALUE_OBJECTS_INDIVIDUALLY_REACHABLE",
+        "RIFT_DISTORTION_BARRIER_ADJACENT_PERCENT",
+    ],
+}
+EXPECTED_SEED_ENCODING = {
+    "serialization": "CANONICAL_JSON_OBJECT_UTF8",
+    "required_fields": [
+        "generation_schema_version",
+        "galaxy_seed",
+        "sector_x",
+        "sector_y",
+        "sector_descriptor",
+    ],
+    "unicode_normalization": "NFC",
+    "object_key_order": "LEXICOGRAPHIC_ASCENDING",
+    "set_like_field_encoding": "SORTED_ARRAY",
+    "sector_descriptor_encoding": {
+        "serialization": "CANONICAL_JSON_OBJECT",
+        "object_key_order": "LEXICOGRAPHIC_ASCENDING",
+        "blocked_edges_encoding": {"container": "ARRAY", "order": ["N", "E", "S", "W"]},
+        "future_fields_rule": "APPLY_SAME_CANONICAL_JSON_RULES",
+    },
+    "digest_to_integer": {
+        "bytes": "FULL_32_BYTES",
+        "byte_order": "BIG_ENDIAN",
+        "signed": False,
+    },
+}
+EXPECTED_ATTEMPT_SEED = {
+    "payload_fields": ["base_seed", "retry_index"],
+    "serialization": "SAME_CANONICAL_JSON_OBJECT_ENCODING_AS_BASE_SEED",
+}
+EXPECTED_DERIVED_SEED_ENCODING = {
+    "payload_fields": ["attempt_seed", "phase_label"],
+    "serialization": "SAME_CANONICAL_JSON_OBJECT_ENCODING_AS_BASE_SEED",
+}
 
 
 class ValidationError(ValueError):
@@ -219,6 +534,10 @@ def validate_sector_range_tables(profile: dict[str, Any], sector_type: str) -> N
         require(isinstance(table, dict), f"{sector_type}.{size_key} terrain ranges must be an object")
         for terrain_name, range_obj in table.items():
             validate_range_object(range_obj, f"{sector_type}.{size_key}.{terrain_name}")
+        require(
+            table == EXPECTED_TERRAIN_COUNT_RANGES[sector_type][size_key],
+            f"{sector_type}.{size_key}.terrain_count_ranges contract mismatch",
+        )
 
 
 def validate_required_optional_forbidden(profile: dict[str, Any], sector_type: str) -> None:
@@ -254,6 +573,7 @@ def validate_required_optional_forbidden(profile: dict[str, Any], sector_type: s
                 isinstance(range_obj, dict),
                 f"{sector_type}.{size_key}: required terrain {terrain_name} range is missing",
             )
+            validate_range_object(range_obj, f"{sector_type}.{size_key}.{terrain_name}")
             if "min" in range_obj:
                 require(
                     range_obj.get("min", 0) >= 1,
@@ -272,6 +592,7 @@ def validate_required_optional_forbidden(profile: dict[str, Any], sector_type: s
                 isinstance(range_obj, dict),
                 f"{sector_type}.{size_key}: optional terrain {terrain_name} range is invalid",
             )
+            validate_range_object(range_obj, f"{sector_type}.{size_key}.{terrain_name}")
             require(
                 range_obj.get("min") == 0,
                 f"{sector_type}.{size_key}: optional terrain {terrain_name} must allow 0",
@@ -310,6 +631,10 @@ def validate_special_limits(profile: dict[str, Any], sector_type: str) -> None:
                 isinstance(size_limit.get("additional_max"), int),
                 f"{sector_type}.{size_key} additional_max must be an integer",
             )
+        require(
+            size_limit == EXPECTED_SPECIAL_TERRAIN_LIMITS[sector_type][size_key],
+            f"{sector_type}.{size_key}.special_terrain_limit contract mismatch",
+        )
 
     impassable = profile.get("impassable_cell_limit")
     require(isinstance(impassable, dict), f"{sector_type}.impassable_cell_limit must be an object")
@@ -364,28 +689,9 @@ def validate_object_contracts(profile: dict[str, Any], sector_type: str) -> None
 
 
 def validate_constraint_definitions(definitions: dict[str, Any]) -> None:
-    expected = {
-        "CELESTIAL_NOT_ON_OUTER_EDGE",
-        "CELESTIAL_PAIR_MIN_CHEBYSHEV_2",
-        "CELESTIAL_FROM_WARP_FLAG_MIN_CHEBYSHEV_2",
-        "STATION_FROM_CELESTIAL_MIN_CHEBYSHEV_2",
-        "STATION_NEIGHBORHOOD_RESERVED_FLOOR",
-        "VALUE_OBJECT_FROM_WARP_FLAG_MIN_CHEBYSHEV_2",
-        "VALUE_OBJECT_FROM_IMPASSABLE_CELESTIAL_MIN_CHEBYSHEV_2",
-        "VALUE_OBJECTS_INDIVIDUALLY_REACHABLE",
-        "RESOURCE_FIELD_IMPASSABLE_BALANCE",
-        "ASTEROID_CLUSTER_IMPASSABLE_BALANCE",
-        "GRAVITY_TOTAL_MIN_1",
-        "RIFT_DISTORTION_BARRIER_ADJACENT_PERCENT",
-    }
-    require(set(definitions) == expected, "constraint_definitions must define the exact Phase 2 contract set")
-
-    rift = definitions["RIFT_DISTORTION_BARRIER_ADJACENT_PERCENT"]
-    require(rift.get("sector_type") == "RIFT", "RIFT_DISTORTION constraint must target RIFT")
-    require(rift.get("candidate_pool") == "BARRIER_INNER_ADJACENT_FLOOR", "RIFT_DISTORTION candidate_pool mismatch")
     require(
-        rift.get("min_percent") == 30 and rift.get("max_percent") == 60 and rift.get("minimum_count") == 1,
-        "RIFT_DISTORTION must be 30..60% with minimum_count 1",
+        definitions == EXPECTED_CONSTRAINT_DEFINITIONS,
+        "constraint_definitions contract mismatch",
     )
 
 
@@ -513,10 +819,26 @@ def validate_global_contract(contract: dict[str, Any]) -> None:
     seed = contract.get("seed_and_retry", {})
     require(seed.get("seed_hash_algorithm") == "SHA-256", "seed hash must be SHA-256")
     require(
+        seed.get("seed_encoding") == EXPECTED_SEED_ENCODING,
+        "seed_encoding contract mismatch",
+    )
+    require(
+        seed.get("attempt_seed") == EXPECTED_ATTEMPT_SEED,
+        "attempt_seed contract mismatch",
+    )
+    require(
         seed.get("derived_seed_labels") == ["terrain_seed", "celestial_seed", "object_seed"],
         "derived_seed_labels contract mismatch",
     )
+    require(
+        seed.get("derived_seed_encoding") == EXPECTED_DERIVED_SEED_ENCODING,
+        "derived_seed_encoding contract mismatch",
+    )
     retry = seed.get("retry", {})
+    require(
+        retry.get("seed_source") == "ATTEMPT_SEED_FROM_BASE_SEED_AND_RETRY_INDEX",
+        "retry.seed_source contract mismatch",
+    )
     require(
         retry.get("attempt_count_max") == 64
         and retry.get("retry_index_min") == 0
@@ -537,10 +859,14 @@ def validate_sector_profiles(profiles: dict[str, Any]) -> None:
     require(set(profiles) == EXPECTED_SECTOR_TYPES, "sector_profiles must define all seven sector types")
     for sector_type, profile in profiles.items():
         require(isinstance(profile, dict), f"{sector_type} profile must be an object")
-        validate_sector_range_tables(profile, sector_type)
         validate_required_optional_forbidden(profile, sector_type)
+        validate_sector_range_tables(profile, sector_type)
         validate_special_limits(profile, sector_type)
         validate_object_contracts(profile, sector_type)
+        require(
+            profile.get("placement_constraints") == EXPECTED_PLACEMENT_CONSTRAINTS[sector_type],
+            f"{sector_type}.placement_constraints contract mismatch",
+        )
 
 
 def validate(path: Path) -> dict[str, Any]:

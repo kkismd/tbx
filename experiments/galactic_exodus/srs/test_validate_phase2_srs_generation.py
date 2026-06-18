@@ -57,9 +57,9 @@ class Phase2SrsGenerationValidationTests(unittest.TestCase):
             validator.validate(self.path)
 
     def test_special_terrain_limit_violation_is_rejected(self) -> None:
-        self.payload["sector_profiles"]["RESOURCE"]["special_terrain_limit"]["9x9"]["max"] = "16"
+        self.payload["sector_profiles"]["RESOURCE"]["special_terrain_limit"]["9x9"]["max"] = 17
         self.write()
-        with self.assertRaisesRegex(validator.ValidationError, "special terrain max must be an integer"):
+        with self.assertRaisesRegex(validator.ValidationError, "special_terrain_limit contract mismatch"):
             validator.validate(self.path)
 
     def test_planet_count_mismatch_is_rejected(self) -> None:
@@ -75,6 +75,44 @@ class Phase2SrsGenerationValidationTests(unittest.TestCase):
         del self.payload["constraint_definitions"]["CELESTIAL_FROM_WARP_FLAG_MIN_CHEBYSHEV_2"]
         self.write()
         with self.assertRaisesRegex(validator.ValidationError, "constraint_definitions"):
+            validator.validate(self.path)
+
+    def test_constraint_chebyshev_distance_mismatch_is_rejected(self) -> None:
+        self.payload["constraint_definitions"]["CELESTIAL_PAIR_MIN_CHEBYSHEV_2"]["min_distance"] = 1
+        self.write()
+        with self.assertRaisesRegex(validator.ValidationError, "constraint_definitions"):
+            validator.validate(self.path)
+
+    def test_station_floor_reservation_radius_mismatch_is_rejected(self) -> None:
+        self.payload["constraint_definitions"]["STATION_NEIGHBORHOOD_RESERVED_FLOOR"]["radius"] = 0
+        self.write()
+        with self.assertRaisesRegex(validator.ValidationError, "constraint_definitions"):
+            validator.validate(self.path)
+
+    def test_resource_constraint_operator_mismatch_is_rejected(self) -> None:
+        self.payload["constraint_definitions"]["RESOURCE_FIELD_IMPASSABLE_BALANCE"]["operator"] = ">"
+        self.write()
+        with self.assertRaisesRegex(validator.ValidationError, "constraint_definitions"):
+            validator.validate(self.path)
+
+    def test_asteroid_constraint_divisor_mismatch_is_rejected(self) -> None:
+        self.payload["constraint_definitions"]["ASTEROID_CLUSTER_IMPASSABLE_BALANCE"]["right"][
+            "divisor"
+        ] = 999
+        self.write()
+        with self.assertRaisesRegex(validator.ValidationError, "constraint_definitions"):
+            validator.validate(self.path)
+
+    def test_gravity_constraint_min_mismatch_is_rejected(self) -> None:
+        self.payload["constraint_definitions"]["GRAVITY_TOTAL_MIN_1"]["min"] = 0
+        self.write()
+        with self.assertRaisesRegex(validator.ValidationError, "constraint_definitions"):
+            validator.validate(self.path)
+
+    def test_missing_required_placement_constraint_is_rejected(self) -> None:
+        self.payload["sector_profiles"]["RESOURCE"]["placement_constraints"].pop()
+        self.write()
+        with self.assertRaisesRegex(validator.ValidationError, "placement_constraints contract mismatch"):
             validator.validate(self.path)
 
     def test_warp_point_is_rejected(self) -> None:
@@ -103,6 +141,48 @@ class Phase2SrsGenerationValidationTests(unittest.TestCase):
         self.payload["global_generation_contract"]["seed_and_retry"]["retry"]["attempt_count_max"] = 63
         self.write()
         with self.assertRaisesRegex(validator.ValidationError, "64-attempt window"):
+            validator.validate(self.path)
+
+    def test_seed_encoding_serialization_mismatch_is_rejected(self) -> None:
+        self.payload["global_generation_contract"]["seed_and_retry"]["seed_encoding"][
+            "serialization"
+        ] = "PLAIN_STRING"
+        self.write()
+        with self.assertRaisesRegex(validator.ValidationError, "seed_encoding contract mismatch"):
+            validator.validate(self.path)
+
+    def test_seed_digest_byte_order_mismatch_is_rejected(self) -> None:
+        self.payload["global_generation_contract"]["seed_and_retry"]["seed_encoding"][
+            "digest_to_integer"
+        ]["byte_order"] = "LITTLE_ENDIAN"
+        self.write()
+        with self.assertRaisesRegex(validator.ValidationError, "seed_encoding contract mismatch"):
+            validator.validate(self.path)
+
+    def test_attempt_seed_payload_mismatch_is_rejected(self) -> None:
+        self.payload["global_generation_contract"]["seed_and_retry"]["attempt_seed"][
+            "payload_fields"
+        ] = ["retry_index"]
+        self.write()
+        with self.assertRaisesRegex(validator.ValidationError, "attempt_seed contract mismatch"):
+            validator.validate(self.path)
+
+    def test_derived_seed_payload_mismatch_is_rejected(self) -> None:
+        self.payload["global_generation_contract"]["seed_and_retry"]["derived_seed_encoding"][
+            "payload_fields"
+        ] = ["phase_label"]
+        self.write()
+        with self.assertRaisesRegex(
+            validator.ValidationError, "derived_seed_encoding contract mismatch"
+        ):
+            validator.validate(self.path)
+
+    def test_retry_seed_source_mismatch_is_rejected(self) -> None:
+        self.payload["global_generation_contract"]["seed_and_retry"]["retry"][
+            "seed_source"
+        ] = "SOMETHING_ELSE"
+        self.write()
+        with self.assertRaisesRegex(validator.ValidationError, "retry.seed_source contract mismatch"):
             validator.validate(self.path)
 
     def test_fallback_enabled_is_rejected(self) -> None:
