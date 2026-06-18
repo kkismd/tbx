@@ -1,0 +1,89 @@
+{
+  "schema_version": 3,
+  "generation_schema_version": 1,
+  "contract_references": {
+    "elements": "phase2_srs_elements.json",
+    "generation": "phase2_srs_generation.json",
+    "movement_rule_issue": 1089
+  },
+  "sector_types": [
+    "NORMAL",
+    "BASE",
+    "RESOURCE",
+    "NEBULA",
+    "ASTEROID",
+    "GRAVITY",
+    "RIFT"
+  ],
+  "directions": ["N", "E", "S", "W"],
+  "terrain_types": [
+    "FLOOR",
+    "DEBRIS",
+    "NEBULA",
+    "ASTEROID_FIELD",
+    "ASTEROID",
+    "GRAVITY_FIELD_VERTICAL",
+    "GRAVITY_FIELD_HORIZONTAL",
+    "RIFT_DISTORTION",
+    "RIFT_BARRIER"
+  ],
+  "object_types": ["STAR", "PLANET", "STATION", "RESOURCE_CACHE", "SALVAGE"],
+  "actor_types": ["PLAYER"],
+  "movement_rules": ["VECTOR_COMMAND", "MOVEMENT_POINTS", "DIRECTIONAL_THRUST"],
+  "path_input_modes": ["STEPWISE_ROUTE", "DESTINATION_AUTO_PATH", "ROUTE_PREVIEW"],
+  "baseline": {
+    "width": 9,
+    "height": 9,
+    "generation_profile": "phase2_srs_generation.json",
+    "generation_schema_version": 1,
+    "observation_mode": "LOCAL_3X3",
+    "cost_mode": "TURN_ONLY",
+    "interaction_mode": "EXPLICIT_INTERACT",
+    "sector_value_route": "VALUE_OBJECT_DETOUR",
+    "rift_knowledge_mode": "KNOWN_DESCRIPTOR",
+    "movement_rule": "MOVEMENT_POINTS",
+    "movement_points_per_turn": 4,
+    "path_input_mode": "ROUTE_PREVIEW",
+    "collision_behavior": "STOP_BEFORE",
+    "max_srs_turns": 40
+  },
+  "comparisons": {
+    "C1": {"field": "map_size", "values": [[9, 9], [11, 11]]},
+    "C2": {"field": "observation_mode", "values": ["FULL", "LOCAL_3X3"]},
+    "C3": {"field": "cost_mode", "values": ["TURN_ONLY", "SHARED_FUEL"]},
+    "C4": {"field": "interaction_mode", "values": ["AUTO_INTERACT", "EXPLICIT_INTERACT"]},
+    "C5": {"field": "sector_value_route", "values": ["DIRECT_EXIT", "VALUE_OBJECT_DETOUR"]},
+    "C6": {"field": "rift_knowledge_mode", "values": ["KNOWN_DESCRIPTOR", "LOCAL_DISCOVERY"]},
+    "C7": {
+      "field": "sector_type",
+      "values": ["NORMAL", "BASE", "RESOURCE", "NEBULA", "ASTEROID", "GRAVITY", "RIFT"]
+    },
+    "C8": {
+      "field": "movement_rule",
+      "values": ["VECTOR_COMMAND", "MOVEMENT_POINTS", "DIRECTIONAL_THRUST"]
+    }
+  },
+  "thresholds": {
+    "p90_srs_turn_max": 25,
+    "manual_sector_length_min": 3.5,
+    "manual_orientation_min": 4.0,
+    "manual_exploration_value_min": 3.5,
+    "manual_movement_comprehension_min": 4.0,
+    "manual_piloting_feel_min": 3.5,
+    "no_action_rate_max": 0.01,
+    "blocked_edge_attempt_rate_max": 0.15,
+    "unintended_collision_rate_max": 0.1
+  },
+  "persistent_fields": [
+    "generated_map_id",
+    "generation_schema_version",
+    "generation_seed",
+    "sector_type",
+    "blocked_edges",
+    "warp_flags",
+    "celestial_body_positions",
+    "consumed_object_ids",
+    "activated_object_ids",
+    "discovered_cells"
+  ]
+}
