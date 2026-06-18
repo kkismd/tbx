@@ -22,7 +22,7 @@ QUESTION_FIELDS = [
     "required_fixtures",
     "decision_rule",
 ]
-EXPECTED_QUESTIONS = {f"Q{index}" for index in range(1, 17)}
+EXPECTED_QUESTIONS = {f"Q{index}" for index in range(1, 21)}
 EXPECTED_COMPARISONS = {f"C{index}" for index in range(1, 9)}
 EXPECTED_SECTOR_TYPES = {
     "NORMAL",
@@ -250,8 +250,8 @@ def validate_questions(path: Path, values: dict[str, Any]) -> None:
         raise ValidationError(f"missing file: {path}") from exc
 
     ids = {row.get("question_id", "") for row in rows}
-    if ids != EXPECTED_QUESTIONS or len(rows) != 16:
-        raise ValidationError(f"{path}: questions must contain Q1..Q16 exactly once")
+    if ids != EXPECTED_QUESTIONS or len(rows) != 20:
+        raise ValidationError(f"{path}: questions must contain Q1..Q20 exactly once")
 
     comparisons = set(values["comparisons"])
     for row in rows:
@@ -311,7 +311,7 @@ def main(argv: list[str] | None = None) -> int:
         print(f"error: {exc}", file=sys.stderr)
         return 1
     print("Phase 2 SRS initial model: OK")
-    print("questions: 16")
+    print("questions: 20")
     print("comparisons: 8")
     print("sector types: 7")
     print("movement rules: 3")
