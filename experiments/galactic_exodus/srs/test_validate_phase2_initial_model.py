@@ -2,8 +2,9 @@ from __future__ import annotations
 
 import csv
 import json
+import shutil
 import unittest
-from contextlib import redirect_stdout
+from contextlib import redirect_stderr, redirect_stdout
 from io import StringIO
 from pathlib import Path
 
@@ -12,220 +13,45 @@ from experiments.galactic_exodus.srs import validate_phase2_initial_model as val
 
 class Phase2InitialModelValidationTests(unittest.TestCase):
     def setUp(self) -> None:
-        self.root = Path(".tmp/phase2_initial_model_tests")
+        self.fixtures = Path("experiments/galactic_exodus/srs")
+        self.root = Path(".tmp/phase2_initial_model_tests") / self._testMethodName
         self.root.mkdir(parents=True, exist_ok=True)
-        self.model = self.root / "model.md"
-        self.questions = self.root / "questions.csv"
-        self.values = self.root / "values.json"
-        self.write_valid_artifacts()
+        self.model = self.copy_fixture("phase2_initial_model.md")
+        self.questions = self.copy_fixture("phase2_questions.csv")
+        self.values = self.copy_fixture("phase2_initial_values.json")
+        self.elements = self.copy_fixture("phase2_srs_elements.json")
+        self.generation = self.copy_fixture("phase2_srs_generation.json")
 
     def tearDown(self) -> None:
-        for path in (self.model, self.questions, self.values):
-            path.unlink(missing_ok=True)
-        self.root.rmdir()
+        shutil.rmtree(self.root, ignore_errors=True)
 
-    def write_valid_artifacts(self) -> None:
-        self.model.write_text(
-            "SectorType SrsTerrainType SrsObjectType SrsActorType warp_flags blocked_edges "
-            "generation_schema_version generation_profile_ref GRAVITY_FIELD_VERTICAL "
-            "GRAVITY_FIELD_HORIZONTAL STATION STAR PLANET RESOURCE_CACHE SALVAGE 9x9 11x11 "
-            "LOCAL_3X3 TURN_ONLY EXPLICIT_INTERACT VALUE_OBJECT_DETOUR KNOWN_DESCRIPTOR "
-            "MOVEMENT_POINTS VECTOR_COMMAND DIRECTIONAL_THRUST STOP_BEFORE C1..C8 Q1..Q16 #1080\n",
-            encoding="utf-8",
+    def copy_fixture(self, name: str) -> Path:
+        src = self.fixtures / name
+        dst = self.root / name
+        dst.write_text(src.read_text(encoding="utf-8"), encoding="utf-8")
+        return dst
+
+    def validate_all(self) -> None:
+        validator.validate_all(
+            self.model,
+            self.questions,
+            self.values,
+            self.elements,
+            self.generation,
         )
-        values = {
-            "schema_version": 3,
-            "generation_schema_version": 1,
-            "contract_references": dict(validator.EXPECTED_CONTRACT_REFERENCES),
-            "sector_types": sorted(validator.EXPECTED_SECTOR_TYPES),
-            "directions": sorted(validator.EXPECTED_DIRECTIONS),
-            "terrain_types": sorted(validator.EXPECTED_TERRAIN_TYPES),
-            "object_types": sorted(validator.EXPECTED_OBJECT_TYPES),
-            "actor_types": sorted(validator.EXPECTED_ACTOR_TYPES),
-            "movement_rules": sorted(validator.EXPECTED_MOVEMENT_RULES),
-            "path_input_modes": sorted(validator.EXPECTED_PATH_INPUT_MODES),
-            "baseline": {
-                "width": 9,
-                "height": 9,
-                "generation_profile": "phase2_srs_generation.json",
-                "generation_schema_version": 1,
-                "observation_mode": "LOCAL_3X3",
-                "cost_mode": "TURN_ONLY",
-                "interaction_mode": "EXPLICIT_INTERACT",
-                "sector_value_route": "VALUE_OBJECT_DETOUR",
-                "rift_knowledge_mode": "KNOWN_DESCRIPTOR",
-                "movement_rule": "MOVEMENT_POINTS",
-                "movement_points_per_turn": 4,
-                "path_input_mode": "ROUTE_PREVIEW",
-                "collision_behavior": "STOP_BEFORE",
-                "max_srs_turns": 40,
-            },
-            "comparisons": {
-                "C1": {"field": "map_size", "values": [[9, 9], [11, 11]]},
-                "C2": {"field": "observation_mode", "values": ["FULL", "LOCAL_3X3"]},
-                "C3": {"field": "cost_mode", "values": ["TURN_ONLY", "SHARED_FUEL"]},
-                "C4": {"field": "interaction_mode", "values": ["AUTO_INTERACT", "EXPLICIT_INTERACT"]},
-                "C5": {
-                    "field": "sector_value_route",
-                    "values": ["DIRECT_EXIT", "VALUE_OBJECT_DETOUR"],
-                },
-                "C6": {"field": "rift_knowledge_mode", "values": ["KNOWN_DESCRIPTOR", "LOCAL_DISCOVERY"]},
-                "C7": {
-                    "field": "sector_type",
-                    "values": ["NORMAL", "BASE", "RESOURCE", "NEBULA", "ASTEROID", "GRAVITY", "RIFT"],
-                },
-                "C8": {
-                    "field": "movement_rule",
-                    "values": ["VECTOR_COMMAND", "MOVEMENT_POINTS", "DIRECTIONAL_THRUST"],
-                },
-            },
-            "thresholds": {},
-            "persistent_fields": sorted(validator.REQUIRED_PERSISTENT_FIELDS),
-        }
-        self.values.write_text(json.dumps(values), encoding="utf-8")
 
-        with self.questions.open("w", encoding="utf-8", newline="") as file:
-            writer = csv.DictWriter(file, fieldnames=validator.QUESTION_FIELDS)
-            writer.writeheader()
-            for index in range(1, 21):
-                writer.writerow(
-                    {
-                        "question_id": f"Q{index}",
-                        "question": "question",
-                        "hypothesis": "hypothesis",
-                        "comparison_ids": "C8" if index >= 11 else "C1",
-                        "automated_metrics": "metric",
-                        "manual_scores": "score",
-                        "required_sector_types": "NORMAL",
-                        "required_fixtures": "fixture",
-                        "decision_rule": "rule",
-                    }
-                )
-
-    def test_validate_all_accepts_valid_artifacts(self) -> None:
-        validator.validate_all(self.model, self.questions, self.values)
-
-    def test_cli_reports_twenty_questions(self) -> None:
+    def run_main(self, *args: str) -> tuple[int, str, str]:
         stdout = StringIO()
-        with redirect_stdout(stdout):
-            exit_code = validator.main(
-                ["--model", str(self.model), "--questions", str(self.questions), "--values", str(self.values)]
-            )
-        self.assertEqual(exit_code, 0)
-        self.assertIn("questions: 20", stdout.getvalue())
+        stderr = StringIO()
+        with redirect_stdout(stdout), redirect_stderr(stderr):
+            exit_code = validator.main(list(args))
+        return exit_code, stdout.getvalue(), stderr.getvalue()
 
-    def test_missing_q20_is_rejected(self) -> None:
-        rows = self.read_question_rows()
-        self.write_question_rows(rows[:-1])
-        with self.assertRaisesRegex(validator.ValidationError, "Q1..Q20 exactly once"):
-            validator.validate_questions(self.questions, validator.validate_values(self.values))
+    def read_json(self, path: Path) -> dict[str, object]:
+        return json.loads(path.read_text(encoding="utf-8"))
 
-    def test_extra_q21_is_rejected(self) -> None:
-        rows = self.read_question_rows()
-        extra = dict(rows[-1])
-        extra["question_id"] = "Q21"
-        rows.append(extra)
-        self.write_question_rows(rows)
-        with self.assertRaisesRegex(validator.ValidationError, "Q1..Q20 exactly once"):
-            validator.validate_questions(self.questions, validator.validate_values(self.values))
-
-    def test_duplicate_question_id_is_rejected(self) -> None:
-        rows = self.read_question_rows()
-        rows[-1]["question_id"] = "Q19"
-        self.write_question_rows(rows)
-        with self.assertRaisesRegex(validator.ValidationError, "Q1..Q20 exactly once"):
-            validator.validate_questions(self.questions, validator.validate_values(self.values))
-
-    def test_unknown_comparison_id_is_rejected(self) -> None:
-        rows = self.read_question_rows()
-        rows[0]["comparison_ids"] = "C9"
-        self.write_question_rows(rows)
-        with self.assertRaisesRegex(validator.ValidationError, "unknown comparisons"):
-            validator.validate_questions(self.questions, validator.validate_values(self.values))
-
-    def test_unknown_sector_type_is_rejected(self) -> None:
-        rows = self.read_question_rows()
-        rows[0]["required_sector_types"] = "VOID"
-        self.write_question_rows(rows)
-        with self.assertRaisesRegex(validator.ValidationError, "invalid required_sector_types"):
-            validator.validate_questions(self.questions, validator.validate_values(self.values))
-
-    def test_blank_field_is_rejected(self) -> None:
-        rows = self.read_question_rows()
-        rows[0]["decision_rule"] = ""
-        self.write_question_rows(rows)
-        with self.assertRaisesRegex(validator.ValidationError, "must not be blank"):
-            validator.validate_questions(self.questions, validator.validate_values(self.values))
-
-    def test_q11_to_q16_must_include_c8(self) -> None:
-        rows = self.read_question_rows()
-        rows[10]["comparison_ids"] = "C1"
-        self.write_question_rows(rows)
-        with self.assertRaisesRegex(validator.ValidationError, "Q11 must include C8"):
-            validator.validate_questions(self.questions, validator.validate_values(self.values))
-
-    def test_schema_version_must_be_three(self) -> None:
-        payload = json.loads(self.values.read_text(encoding="utf-8"))
-        payload["schema_version"] = 2
-        self.values.write_text(json.dumps(payload), encoding="utf-8")
-        with self.assertRaisesRegex(validator.ValidationError, "schema_version must be 3"):
-            validator.validate_values(self.values)
-
-    def test_generation_schema_version_must_be_one(self) -> None:
-        payload = json.loads(self.values.read_text(encoding="utf-8"))
-        payload["generation_schema_version"] = 2
-        self.values.write_text(json.dumps(payload), encoding="utf-8")
-        with self.assertRaisesRegex(validator.ValidationError, "generation_schema_version must be 1"):
-            validator.validate_values(self.values)
-
-    def test_feature_types_field_is_rejected(self) -> None:
-        payload = json.loads(self.values.read_text(encoding="utf-8"))
-        payload["feature_types"] = ["WARP_POINT"]
-        self.values.write_text(json.dumps(payload), encoding="utf-8")
-        with self.assertRaisesRegex(validator.ValidationError, "feature_types must not exist"):
-            validator.validate_values(self.values)
-
-    def test_baseline_must_be_9x9(self) -> None:
-        payload = json.loads(self.values.read_text(encoding="utf-8"))
-        payload["baseline"]["width"] = 11
-        self.values.write_text(json.dumps(payload), encoding="utf-8")
-        with self.assertRaisesRegex(validator.ValidationError, "baseline must be 9x9"):
-            validator.validate_values(self.values)
-
-    def test_c1_must_compare_9x9_and_11x11(self) -> None:
-        payload = json.loads(self.values.read_text(encoding="utf-8"))
-        payload["comparisons"]["C1"]["values"] = [[9, 9], [13, 13]]
-        self.values.write_text(json.dumps(payload), encoding="utf-8")
-        with self.assertRaisesRegex(validator.ValidationError, "C1 must compare 9x9 and 11x11"):
-            validator.validate_values(self.values)
-
-    def test_c5_must_compare_sector_value_route(self) -> None:
-        payload = json.loads(self.values.read_text(encoding="utf-8"))
-        payload["comparisons"]["C5"] = {"field": "object_profile", "values": ["A", "B"]}
-        self.values.write_text(json.dumps(payload), encoding="utf-8")
-        with self.assertRaisesRegex(validator.ValidationError, "C5 must compare sector_value_route"):
-            validator.validate_values(self.values)
-
-    def test_c7_must_include_all_sector_types(self) -> None:
-        payload = json.loads(self.values.read_text(encoding="utf-8"))
-        payload["comparisons"]["C7"]["values"] = ["NORMAL", "BASE"]
-        self.values.write_text(json.dumps(payload), encoding="utf-8")
-        with self.assertRaisesRegex(validator.ValidationError, "C7 must compare all sector types"):
-            validator.validate_values(self.values)
-
-    def test_c8_must_compare_all_movement_rules(self) -> None:
-        payload = json.loads(self.values.read_text(encoding="utf-8"))
-        payload["comparisons"]["C8"]["values"] = ["MOVEMENT_POINTS", "VECTOR_COMMAND"]
-        self.values.write_text(json.dumps(payload), encoding="utf-8")
-        with self.assertRaisesRegex(validator.ValidationError, "C8 must compare all movement rules"):
-            validator.validate_values(self.values)
-
-    def test_persistent_fields_must_include_schema_three_set(self) -> None:
-        payload = json.loads(self.values.read_text(encoding="utf-8"))
-        payload["persistent_fields"].remove("warp_flags")
-        self.values.write_text(json.dumps(payload), encoding="utf-8")
-        with self.assertRaisesRegex(validator.ValidationError, "persistent_fields must be"):
-            validator.validate_values(self.values)
+    def write_json(self, path: Path, payload: dict[str, object]) -> None:
+        path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
     def read_question_rows(self) -> list[dict[str, str]]:
         with self.questions.open(encoding="utf-8", newline="") as file:
@@ -236,6 +62,288 @@ class Phase2InitialModelValidationTests(unittest.TestCase):
             writer = csv.DictWriter(file, fieldnames=validator.QUESTION_FIELDS)
             writer.writeheader()
             writer.writerows(rows)
+
+    def mutate_question(self, question_id: str, field: str, value: str) -> None:
+        rows = self.read_question_rows()
+        for row in rows:
+            if row["question_id"] == question_id:
+                row[field] = value
+                break
+        self.write_question_rows(rows)
+
+    def assert_invalid(self, pattern: str) -> None:
+        with self.assertRaisesRegex(validator.ValidationError, pattern):
+            self.validate_all()
+
+    def test_validate_all_accepts_repository_artifacts(self) -> None:
+        validator.validate_all(
+            self.fixtures / "phase2_initial_model.md",
+            self.fixtures / "phase2_questions.csv",
+            self.fixtures / "phase2_initial_values.json",
+            self.fixtures / "phase2_srs_elements.json",
+            self.fixtures / "phase2_srs_generation.json",
+        )
+
+    def test_cli_reports_cross_file_ok(self) -> None:
+        exit_code, stdout, stderr = self.run_main(
+            "--model",
+            str(self.model),
+            "--questions",
+            str(self.questions),
+            "--values",
+            str(self.values),
+            "--elements",
+            str(self.elements),
+            "--generation",
+            str(self.generation),
+        )
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(stderr, "")
+        self.assertIn("cross-file: OK", stdout)
+
+    def test_cli_requires_elements_argument(self) -> None:
+        with redirect_stderr(StringIO()):
+            with self.assertRaises(SystemExit) as cm:
+                validator.main(
+                    [
+                        "--model",
+                        str(self.model),
+                        "--questions",
+                        str(self.questions),
+                        "--values",
+                        str(self.values),
+                        "--generation",
+                        str(self.generation),
+                    ]
+                )
+        self.assertNotEqual(cm.exception.code, 0)
+
+    def test_cli_requires_generation_argument(self) -> None:
+        with redirect_stderr(StringIO()):
+            with self.assertRaises(SystemExit) as cm:
+                validator.main(
+                    [
+                        "--model",
+                        str(self.model),
+                        "--questions",
+                        str(self.questions),
+                        "--values",
+                        str(self.values),
+                        "--elements",
+                        str(self.elements),
+                    ]
+                )
+        self.assertNotEqual(cm.exception.code, 0)
+
+    def test_cli_reports_error_for_broken_elements_json(self) -> None:
+        self.elements.write_text("{broken", encoding="utf-8")
+        exit_code, stdout, stderr = self.run_main(
+            "--model",
+            str(self.model),
+            "--questions",
+            str(self.questions),
+            "--values",
+            str(self.values),
+            "--elements",
+            str(self.elements),
+            "--generation",
+            str(self.generation),
+        )
+        self.assertEqual(exit_code, 1)
+        self.assertEqual(stdout, "")
+        self.assertIn("error:", stderr)
+
+    def test_values_generation_schema_version_must_match_generation(self) -> None:
+        payload = self.read_json(self.values)
+        payload["generation_schema_version"] = 2
+        self.write_json(self.values, payload)
+        self.assert_invalid("generation_schema_version must be 1")
+
+    def test_elements_schema_version_must_be_one(self) -> None:
+        payload = self.read_json(self.elements)
+        payload["schema_version"] = 2
+        self.write_json(self.elements, payload)
+        self.assert_invalid("schema_version must be 1")
+
+    def test_sector_types_must_include_rift(self) -> None:
+        payload = self.read_json(self.values)
+        payload["sector_types"].remove("RIFT")
+        self.write_json(self.values, payload)
+        self.assert_invalid("sector_types must be")
+
+    def test_terrain_types_must_include_rift_barrier(self) -> None:
+        payload = self.read_json(self.values)
+        payload["terrain_types"].remove("RIFT_BARRIER")
+        self.write_json(self.values, payload)
+        self.assert_invalid("terrain_types must be")
+
+    def test_object_types_must_include_station(self) -> None:
+        payload = self.read_json(self.values)
+        payload["object_types"].remove("STATION")
+        self.write_json(self.values, payload)
+        self.assert_invalid("object_types must be")
+
+    def test_elements_map_sizes_must_match_contract(self) -> None:
+        payload = self.read_json(self.elements)
+        payload["map_sizes"] = [[9, 9]]
+        self.write_json(self.elements, payload)
+        self.assert_invalid("map_sizes must be 9x9 and 11x11")
+
+    def test_generation_map_sizes_must_match_contract(self) -> None:
+        payload = self.read_json(self.generation)
+        payload["map_sizes"] = [[9, 9]]
+        self.write_json(self.generation, payload)
+        self.assert_invalid("map_sizes must be 9x9 and 11x11")
+
+    def test_contract_references_elements_basename_must_match(self) -> None:
+        payload = self.read_json(self.values)
+        payload["contract_references"]["elements"] = "wrong.json"
+        self.write_json(self.values, payload)
+        self.assert_invalid("contract_references must match")
+
+    def test_contract_references_generation_basename_must_match(self) -> None:
+        payload = self.read_json(self.values)
+        payload["contract_references"]["generation"] = "wrong.json"
+        self.write_json(self.values, payload)
+        self.assert_invalid("contract_references must match")
+
+    def test_generation_sector_profiles_must_include_gravity(self) -> None:
+        payload = self.read_json(self.generation)
+        del payload["sector_profiles"]["GRAVITY"]
+        self.write_json(self.generation, payload)
+        self.assert_invalid("sector_profiles must define all seven sector types")
+
+    def test_elements_sector_terrain_matrix_must_include_resource(self) -> None:
+        payload = self.read_json(self.elements)
+        del payload["sector_terrain_matrix"]["RESOURCE"]
+        self.write_json(self.elements, payload)
+        self.assert_invalid("sector_terrain_matrix must match values.sector_types")
+
+    def test_elements_terrain_object_matrix_must_include_floor(self) -> None:
+        payload = self.read_json(self.elements)
+        del payload["terrain_object_matrix"]["FLOOR"]
+        self.write_json(self.elements, payload)
+        self.assert_invalid("terrain_object_matrix must match values.terrain_types")
+
+    def test_elements_terrain_object_matrix_rejects_unknown_object(self) -> None:
+        payload = self.read_json(self.elements)
+        payload["terrain_object_matrix"]["FLOOR"].append("UNKNOWN_OBJECT")
+        self.write_json(self.elements, payload)
+        self.assert_invalid("terrain_object_matrix.FLOOR must stay within values.object_types")
+
+    def test_model_rejects_warp_point(self) -> None:
+        self.model.write_text(self.model.read_text(encoding="utf-8") + "\nWARP_POINT\n", encoding="utf-8")
+        self.assert_invalid("forbidden legacy token remains: WARP_POINT")
+
+    def test_values_reject_obstacle_density_key(self) -> None:
+        payload = self.read_json(self.values)
+        payload["obstacle_density"] = 1
+        self.write_json(self.values, payload)
+        self.assert_invalid("forbidden legacy token remains: obstacle_density")
+
+    def test_questions_reject_seven_by_seven_fixture(self) -> None:
+        self.mutate_question("Q17", "required_fixtures", "seven_by_seven_crossing")
+        self.assert_invalid("forbidden legacy token remains: seven_by_seven")
+
+    def test_elements_reject_base_node_object_type(self) -> None:
+        payload = self.read_json(self.elements)
+        payload["object_types"]["BASE_NODE"] = {"label": "legacy"}
+        self.write_json(self.elements, payload)
+        self.assert_invalid("forbidden legacy token remains: BASE_NODE")
+
+    def test_generation_allows_legacy_contracts_removed_record(self) -> None:
+        payload = self.read_json(self.generation)
+        payload["legacy_contracts_removed"]["WARP_POINT"] = "removed"
+        self.write_json(self.generation, payload)
+        self.validate_all()
+
+    def test_generation_rejects_legacy_token_outside_removed_contracts(self) -> None:
+        payload = self.read_json(self.generation)
+        payload["notes"] = "WARP_POINT"
+        self.write_json(self.generation, payload)
+        self.assert_invalid("forbidden legacy token remains: WARP_POINT")
+
+    def test_gravity_field_vertical_is_allowed(self) -> None:
+        self.model.write_text(
+            self.model.read_text(encoding="utf-8") + "\nGRAVITY_FIELD_VERTICAL\n",
+            encoding="utf-8",
+        )
+        self.validate_all()
+
+    def test_gravity_field_horizontal_is_allowed(self) -> None:
+        self.model.write_text(
+            self.model.read_text(encoding="utf-8") + "\nGRAVITY_FIELD_HORIZONTAL\n",
+            encoding="utf-8",
+        )
+        self.validate_all()
+
+    def test_gravity_field_token_is_rejected(self) -> None:
+        self.model.write_text(self.model.read_text(encoding="utf-8") + "\nGRAVITY_FIELD\n", encoding="utf-8")
+        self.assert_invalid("forbidden legacy token remains: GRAVITY_FIELD")
+
+    def test_q17_requires_terrain_count_by_type(self) -> None:
+        self.mutate_question(
+            "Q17",
+            "automated_metrics",
+            "special_terrain_ratio;isolated_cell_ratio;reachable_cell_ratio",
+        )
+        self.assert_invalid("Q17.automated_metrics must match")
+
+    def test_q18_requires_object_reachability_rate(self) -> None:
+        self.mutate_question(
+            "Q18",
+            "automated_metrics",
+            "celestial_spacing;object_count_by_type;object_detour_cost",
+        )
+        self.assert_invalid("Q18.automated_metrics must match")
+
+    def test_q19_requires_retry_index_p95(self) -> None:
+        self.mutate_question(
+            "Q19",
+            "automated_metrics",
+            "generation_failure_rate;retry_index_p50;max_retry_index",
+        )
+        self.assert_invalid("Q19.automated_metrics must match")
+
+    def test_q19_requires_all_sector_types(self) -> None:
+        self.mutate_question(
+            "Q19",
+            "required_sector_types",
+            "NORMAL;BASE;RESOURCE;NEBULA;ASTEROID;RIFT",
+        )
+        self.assert_invalid("Q19.required_sector_types must match")
+
+    def test_q19_requires_retry_index_p95_decision_rule(self) -> None:
+        self.mutate_question(
+            "Q19",
+            "decision_rule",
+            "generation_failure_rate=0、max_retry_index<=63",
+        )
+        self.assert_invalid("Q19.decision_rule must contain retry_index_p95<64")
+
+    def test_q20_requires_deterministic_map_match_rate(self) -> None:
+        self.mutate_question(
+            "Q20",
+            "automated_metrics",
+            "generation_report_match_rate;seed_collision_count",
+        )
+        self.assert_invalid("Q20.automated_metrics must match")
+
+    def test_q20_requires_all_sector_types(self) -> None:
+        self.mutate_question(
+            "Q20",
+            "required_sector_types",
+            "NORMAL;BASE;RESOURCE;NEBULA;ASTEROID;GRAVITY",
+        )
+        self.assert_invalid("Q20.required_sector_types must match")
+
+    def test_q20_requires_generation_report_match_rate_decision_rule(self) -> None:
+        self.mutate_question(
+            "Q20",
+            "decision_rule",
+            "deterministic_map_match_rate=1.0、seed_collision_count=0",
+        )
+        self.assert_invalid("Q20.decision_rule must contain generation_report_match_rate=1.0")
 
 
 if __name__ == "__main__":
