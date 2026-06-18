@@ -281,8 +281,8 @@
       ],
       "seed_hash_algorithm": "SHA-256",
       "seed_encoding": {
-        "serialization": "CANONICAL_JSON_UTF8",
-        "field_order": [
+        "serialization": "CANONICAL_JSON_OBJECT_UTF8",
+        "required_fields": [
           "generation_schema_version",
           "galaxy_seed",
           "sector_x",
@@ -310,8 +310,8 @@
       "python_reference_rng": "random.Random(seed)",
       "tbx_port_requirement": "MATCH_FIXTURES_OR_INVARIANTS",
       "attempt_seed": {
-        "input_fields": ["base_seed", "retry_index"],
-        "encoding": "SAME_AS_BASE_SEED_ENCODING"
+        "payload_fields": ["base_seed", "retry_index"],
+        "serialization": "SAME_CANONICAL_JSON_OBJECT_ENCODING_AS_BASE_SEED"
       },
       "derived_seed_labels": [
         "terrain_seed",
@@ -319,8 +319,8 @@
         "object_seed"
       ],
       "derived_seed_encoding": {
-        "input_fields": ["attempt_seed", "phase_label"],
-        "encoding": "SAME_AS_BASE_SEED_ENCODING"
+        "payload_fields": ["attempt_seed", "phase_label"],
+        "serialization": "SAME_CANONICAL_JSON_OBJECT_ENCODING_AS_BASE_SEED"
       },
       "retry": {
         "seed_source": "ATTEMPT_SEED_FROM_BASE_SEED_AND_RETRY_INDEX",

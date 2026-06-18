@@ -414,10 +414,10 @@ seed input:
   sector_descriptor
 
 seed construction:
-  canonical JSON UTF-8 bytesをSHA-256でhash
+  canonical JSON object UTF-8 bytesをSHA-256でhash
   digest全32 bytesをbig-endian unsigned integerへ変換
 
-field order:
+required fields:
   generation_schema_version
   galaxy_seed
   sector_x
@@ -432,7 +432,7 @@ normalization:
 sector_descriptor canonical form:
   canonical JSON object
   object keyは辞書順
-  blocked_edgesはN/E/S/W辞書順array
+  blocked_edgesはN/E/S/W方位順array
   将来field追加時も同じcanonical JSON規則を使う
 
 Python reference:
@@ -444,7 +444,7 @@ derived seeds:
   object_seed
 ```
 
-派生seedは、`retry_index`を含む再試行単位seedを先に作成し、その値とlabelを同じcanonical JSON規則でhashして求める。
+派生seedは、`retry_index`を含む再試行単位payloadをcanonical JSON objectとして直列化してattempt seedを作り、その値とlabelを同じcanonical JSON object規則でhashして求める。
 
 ```text
 attempt_seed input:
