@@ -35,31 +35,28 @@ EXPECTED_SECTOR_TYPES = {
 EXPECTED_DIRECTIONS = {"N", "E", "S", "W"}
 EXPECTED_TERRAIN_TYPES = {
     "FLOOR",
-    "WALL",
-    "STATION_STRUCTURE",
     "DEBRIS",
     "NEBULA",
     "ASTEROID_FIELD",
     "ASTEROID",
-    "GRAVITY_FIELD",
+    "GRAVITY_FIELD_VERTICAL",
+    "GRAVITY_FIELD_HORIZONTAL",
     "RIFT_DISTORTION",
     "RIFT_BARRIER",
 }
-EXPECTED_FEATURE_TYPES = {"WARP_POINT"}
-EXPECTED_OBJECT_TYPES = {"STAR", "PLANET", "BASE_NODE", "RESOURCE_CACHE", "SALVAGE"}
+EXPECTED_OBJECT_TYPES = {"STAR", "PLANET", "STATION", "RESOURCE_CACHE", "SALVAGE"}
 EXPECTED_ACTOR_TYPES = {"PLAYER"}
 EXPECTED_MOVEMENT_RULES = {"VECTOR_COMMAND", "MOVEMENT_POINTS", "DIRECTIONAL_THRUST"}
 EXPECTED_PATH_INPUT_MODES = {"STEPWISE_ROUTE", "DESTINATION_AUTO_PATH", "ROUTE_PREVIEW"}
 REQUIRED_BASELINE_KEYS = {
     "width",
     "height",
-    "warp_point_width",
-    "warp_clearance_depth",
-    "obstacle_density",
+    "generation_profile",
+    "generation_schema_version",
     "observation_mode",
     "cost_mode",
     "interaction_mode",
-    "object_profile",
+    "sector_value_route",
     "rift_knowledge_mode",
     "movement_rule",
     "movement_points_per_turn",
@@ -69,8 +66,11 @@ REQUIRED_BASELINE_KEYS = {
 }
 REQUIRED_PERSISTENT_FIELDS = {
     "generated_map_id",
+    "generation_schema_version",
+    "generation_seed",
     "sector_type",
     "blocked_edges",
+    "warp_flags",
     "celestial_body_positions",
     "consumed_object_ids",
     "activated_object_ids",
@@ -112,87 +112,33 @@ def require_exact_set(path: Path, data: dict[str, Any], key: str, expected: set[
         raise ValidationError(f"{path}: {key} must be {sorted(expected)}")
 
 
-def validate_celestial_profiles(path: Path, data: dict[str, Any]) -> None:
-    profiles = data.get("celestial_body_profiles")
-    if not isinstance(profiles, dict) or set(profiles) != {"7x7", "9x9"}:
-        raise ValidationError(f"{path}: celestial_body_profiles must define 7x7 and 9x9")
-    for size, profile in profiles.items():
-        if not isinstance(profile, dict) or set(profile) != {"STAR", "PLANET"}:
-            raise ValidationError(f"{path}: {size} celestial profile must define STAR and PLANET")
-        if profile["STAR"].get("count") != 1:
-            raise ValidationError(f"{path}: {size} STAR count must be exactly 1")
-        planet = profile["PLANET"]
-        minimum = planet.get("count_min")
-        maximum = planet.get("count_max")
-        if not isinstance(minimum, int) or not isinstance(maximum, int) or minimum < 1 or maximum < minimum:
-            raise ValidationError(f"{path}: {size} PLANET range must be valid and start at 1 or more")
-
-
-def validate_element_definitions(path: Path, data: dict[str, Any]) -> None:
-    definitions = data.get("element_definitions")
-    if not isinstance(definitions, dict):
-        raise ValidationError(f"{path}: element_definitions must be an object")
-    for object_type in ("STAR", "PLANET"):
-        definition = definitions.get(object_type)
-        if not isinstance(definition, dict):
-            raise ValidationError(f"{path}: missing {object_type} definition")
-        if definition.get("passable") is not False:
-            raise ValidationError(f"{path}: {object_type} must be impassable")
-        if definition.get("blocks_line_travel") is not True:
-            raise ValidationError(f"{path}: {object_type} must block line travel")
-        if definition.get("persistent_after_revisit") is not True:
-            raise ValidationError(f"{path}: {object_type} must persist after revisit")
-        if definition.get("collision_behavior") != "STOP_BEFORE":
-            raise ValidationError(f"{path}: {object_type} collision behavior must be STOP_BEFORE")
-        if set(definition.get("allowed_sector_types", [])) != EXPECTED_SECTOR_TYPES:
-            raise ValidationError(f"{path}: {object_type} must be allowed in every sector type")
-    warp = definitions.get("WARP_POINT")
-    if not isinstance(warp, dict):
-        raise ValidationError(f"{path}: missing WARP_POINT definition")
-    if warp.get("passable") is not True or warp.get("placement") != "EDGE_MIDPOINT":
-        raise ValidationError(f"{path}: WARP_POINT must be passable and placed at edge midpoint")
-    if warp.get("can_host_object") is not False:
-        raise ValidationError(f"{path}: WARP_POINT must not host objects")
-
-
 def validate_values(path: Path) -> dict[str, Any]:
     data = load_json(path)
-    if data.get("schema_version") != 2:
-        raise ValidationError(f"{path}: schema_version must be 2")
+    if data.get("schema_version") != 3:
+        raise ValidationError(f"{path}: schema_version must be 3")
+    if data.get("generation_schema_version") != 1:
+        raise ValidationError(f"{path}: generation_schema_version must be 1")
 
     require_exact_set(path, data, "sector_types", EXPECTED_SECTOR_TYPES)
     require_exact_set(path, data, "directions", EXPECTED_DIRECTIONS)
     require_exact_set(path, data, "terrain_types", EXPECTED_TERRAIN_TYPES)
-    require_exact_set(path, data, "feature_types", EXPECTED_FEATURE_TYPES)
     require_exact_set(path, data, "object_types", EXPECTED_OBJECT_TYPES)
     require_exact_set(path, data, "actor_types", EXPECTED_ACTOR_TYPES)
     require_exact_set(path, data, "movement_rules", EXPECTED_MOVEMENT_RULES)
     require_exact_set(path, data, "path_input_modes", EXPECTED_PATH_INPUT_MODES)
+    if "feature_types" in data:
+        raise ValidationError(f"{path}: feature_types must be removed")
 
-    invariants = data.get("invariants")
-    if not isinstance(invariants, dict):
-        raise ValidationError(f"{path}: invariants must be an object")
-    if invariants.get("rift_blocked_edge_min") != 1:
-        raise ValidationError(f"{path}: RIFT blocked-edge minimum must be 1")
-    if invariants.get("rift_blocked_edge_max") != 3:
-        raise ValidationError(f"{path}: RIFT blocked-edge maximum must be 3")
-    if invariants.get("non_rift_blocked_edges") != []:
-        raise ValidationError(f"{path}: non-RIFT blocked edges must be empty")
-    for key in (
-        "warp_point_must_be_open",
-        "selected_warp_direction_must_be_open",
-        "odd_map_dimensions_only",
-        "warp_point_at_edge_midpoint",
-        "all_warp_points_connected",
-    ):
-        if invariants.get(key) is not True:
-            raise ValidationError(f"{path}: invariant {key} must be true")
-    if invariants.get("star_count") != 1:
-        raise ValidationError(f"{path}: invariant star_count must be 1")
-    if invariants.get("planet_count_min", 0) < 1:
-        raise ValidationError(f"{path}: invariant planet_count_min must be at least 1")
-    if invariants.get("warp_point_object_overlap_allowed") is not False:
-        raise ValidationError(f"{path}: WARP_POINT/object overlap must be forbidden")
+    contract_references = data.get("contract_references")
+    if not isinstance(contract_references, dict):
+        raise ValidationError(f"{path}: contract_references must be an object")
+    expected_refs = {
+        "elements": "phase2_srs_elements.json",
+        "generation": "phase2_srs_generation.json",
+        "movement_rule_issue": 1089,
+    }
+    if contract_references != expected_refs:
+        raise ValidationError(f"{path}: contract_references must match {expected_refs}")
 
     baseline = data.get("baseline")
     if not isinstance(baseline, dict):
@@ -204,35 +150,23 @@ def validate_values(path: Path) -> dict[str, Any]:
         value = baseline[dimension]
         if isinstance(value, bool) or not isinstance(value, int) or value < 5 or value % 2 == 0:
             raise ValidationError(f"{path}: baseline {dimension} must be an odd integer >= 5")
-    density = baseline["obstacle_density"]
-    if not isinstance(density, (int, float)) or isinstance(density, bool) or not 0 <= density < 1:
-        raise ValidationError(f"{path}: obstacle_density must be in [0, 1)")
-    if baseline["warp_point_width"] != 1:
-        raise ValidationError(f"{path}: initial warp_point_width must be 1")
-    if not isinstance(baseline["warp_clearance_depth"], int) or baseline["warp_clearance_depth"] < 1:
-        raise ValidationError(f"{path}: warp_clearance_depth must be an integer >= 1")
+    if [baseline["width"], baseline["height"]] != [9, 9]:
+        raise ValidationError(f"{path}: baseline map size must be 9x9")
+    if baseline["generation_profile"] != "phase2_srs_generation.json":
+        raise ValidationError(f"{path}: generation_profile must reference phase2_srs_generation.json")
+    if baseline["generation_schema_version"] != 1:
+        raise ValidationError(f"{path}: baseline generation_schema_version must be 1")
     if baseline["movement_rule"] not in EXPECTED_MOVEMENT_RULES:
         raise ValidationError(f"{path}: invalid baseline movement_rule")
     if baseline["path_input_mode"] not in EXPECTED_PATH_INPUT_MODES:
         raise ValidationError(f"{path}: invalid baseline path_input_mode")
     if baseline["collision_behavior"] != "STOP_BEFORE":
         raise ValidationError(f"{path}: baseline collision_behavior must be STOP_BEFORE")
+    if baseline["sector_value_route"] not in {"DIRECT_EXIT", "VALUE_OBJECT_DETOUR"}:
+        raise ValidationError(f"{path}: invalid baseline sector_value_route")
     movement_points = baseline["movement_points_per_turn"]
     if not isinstance(movement_points, int) or movement_points < 1:
         raise ValidationError(f"{path}: movement_points_per_turn must be an integer >= 1")
-
-    validate_celestial_profiles(path, data)
-    validate_element_definitions(path, data)
-
-    terrain_profiles = data.get("terrain_profiles")
-    if not isinstance(terrain_profiles, dict) or set(terrain_profiles) != EXPECTED_SECTOR_TYPES:
-        raise ValidationError(f"{path}: terrain_profiles must define every sector type")
-    for sector_type, terrain_types in terrain_profiles.items():
-        if not isinstance(terrain_types, list) or not terrain_types:
-            raise ValidationError(f"{path}: {sector_type} terrain profile must not be empty")
-        unknown = set(terrain_types) - EXPECTED_TERRAIN_TYPES
-        if unknown:
-            raise ValidationError(f"{path}: {sector_type} has unknown terrain types {sorted(unknown)}")
 
     comparisons = data.get("comparisons")
     if not isinstance(comparisons, dict) or set(comparisons) != EXPECTED_COMPARISONS:
@@ -245,19 +179,22 @@ def validate_values(path: Path) -> dict[str, Any]:
         values = comparison.get("values")
         if not isinstance(values, list) or len(values) < 2 or len({json.dumps(v, sort_keys=True) for v in values}) != len(values):
             raise ValidationError(f"{path}: {comparison_id}.values must contain distinct values")
+    if comparisons["C1"] != {"field": "map_size", "values": [[9, 9], [11, 11]]}:
+        raise ValidationError(f"{path}: C1 must compare 9x9 and 11x11")
+    if comparisons["C5"] != {
+        "field": "sector_value_route",
+        "values": ["DIRECT_EXIT", "VALUE_OBJECT_DETOUR"],
+    }:
+        raise ValidationError(f"{path}: C5 must compare sector_value_route")
+    if comparisons["C7"] != {
+        "field": "sector_type",
+        "values": ["NORMAL", "BASE", "RESOURCE", "NEBULA", "ASTEROID", "GRAVITY", "RIFT"],
+    }:
+        raise ValidationError(f"{path}: C7 must compare all sector types")
     if comparisons["C8"].get("field") != "movement_rule":
         raise ValidationError(f"{path}: C8 must compare movement_rule")
     if set(comparisons["C8"].get("values", [])) != EXPECTED_MOVEMENT_RULES:
         raise ValidationError(f"{path}: C8 must compare all movement rules")
-
-    profiles = data.get("object_profiles")
-    if not isinstance(profiles, dict):
-        raise ValidationError(f"{path}: object_profiles must be an object")
-    if set(profiles) != {"PROFILE_MINIMAL", "PROFILE_EXPLORATION"}:
-        raise ValidationError(f"{path}: exactly two object profiles are required")
-    for profile_name, profile in profiles.items():
-        if not isinstance(profile, dict) or set(profile) != EXPECTED_SECTOR_TYPES:
-            raise ValidationError(f"{path}: {profile_name} must define every sector type")
 
     persistent = set(data.get("persistent_fields", []))
     if persistent != REQUIRED_PERSISTENT_FIELDS:
@@ -323,29 +260,18 @@ def validate_model(path: Path) -> None:
         "RIFT",
         "blocked_edges",
         "SrsTerrainType",
-        "SrsFeatureType",
         "SrsObjectType",
         "SrsActorType",
-        "WARP_POINT",
+        "warp_flags",
         "STAR",
         "PLANET",
-        "STOP_BEFORE",
-        "VECTOR_COMMAND",
-        "MOVEMENT_POINTS",
-        "DIRECTIONAL_THRUST",
-        "7x7",
         "9x9",
-        "LOCAL_3X3",
-        "TURN_ONLY",
-        "SHARED_FUEL",
-        "AUTO_INTERACT",
-        "EXPLICIT_INTERACT",
-        "PROFILE_MINIMAL",
-        "PROFILE_EXPLORATION",
-        "C1",
-        "C8",
-        "Q1..Q16",
-        "#1080",
+        "11x11",
+        "generation_profile_ref",
+        "phase2_srs_elements.json",
+        "phase2_srs_generation.json",
+        "#1097",
+        "#1098",
     ]
     for token in required_tokens:
         if token not in text:
