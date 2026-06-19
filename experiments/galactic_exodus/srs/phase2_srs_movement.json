@@ -1,0 +1,288 @@
+{
+  "movement_schema_version": 1,
+  "contract_references": {
+    "issue": 1089,
+    "elements": "phase2_srs_elements.json",
+    "generation": "phase2_srs_generation.json",
+    "initial_values": "phase2_initial_values.json"
+  },
+  "directions": [
+    "N",
+    "E",
+    "S",
+    "W"
+  ],
+  "diagonal_directions": [
+    "NE",
+    "SE",
+    "SW",
+    "NW"
+  ],
+  "coordinate_contract": {
+    "x_axis": "E_INCREASES_X",
+    "y_axis": "N_INCREASES_Y",
+    "origin": "MAP_LOCAL_INTEGER_CELL_COORDINATES",
+    "path_cells": "SOURCE_EXCLUDED_DESTINATION_INCLUDED"
+  },
+  "cost_units": {
+    "raw_cost_denominator": 10,
+    "movement_points_per_turn": 4,
+    "movement_cost_budget_raw": 40,
+    "orthogonal_raw_cost": 10,
+    "diagonal_raw_cost": 14,
+    "step_cost_formula": "geometric_step_cost * destination_terrain_multiplier * gravity_multiplier",
+    "turn_only_consumes_lrs_fuel": false,
+    "shared_fuel_consumption": "SUM_RAW_MOVEMENT_COST_DIV_10_ROUNDED_UP"
+  },
+  "baseline": {
+    "cost_mode": "TURN_ONLY",
+    "movement_rule": "MOVEMENT_POINTS",
+    "path_input_mode": "ROUTE_PREVIEW",
+    "interaction_mode": "EXPLICIT_INTERACT",
+    "collision_behavior": "STOP_BEFORE",
+    "observation_mode": "LOCAL_3X3",
+    "max_srs_turns": 40
+  },
+  "command_turn_rules": {
+    "invalid_or_rejected_command_consumes_turn": false,
+    "accepted_movement_command_consumes_srs_turn": true,
+    "movement_turn_cost": 1,
+    "accepted_interact_command_consumes_srs_turn": true,
+    "interact_turn_cost": 1,
+    "accepted_warp_or_exit_command_consumes_srs_turn": true,
+    "warp_or_exit_turn_cost": 1,
+    "turn_limit_check": "AFTER_ACCEPTED_COMMAND"
+  },
+  "movement_rules": {
+    "MOVEMENT_POINTS": {
+      "command_types": [
+        "MOVE_ROUTE",
+        "MOVE_TO"
+      ],
+      "allowed_step_directions": [
+        "N",
+        "E",
+        "S",
+        "W"
+      ],
+      "diagonal_allowed": false,
+      "direction_changes_within_turn": "FREE",
+      "unused_budget_carryover": false,
+      "budget_raw": 40,
+      "route_budget_behavior": "EXECUTE_LONGEST_PREFIX_WITHIN_BUDGET",
+      "zero_step_budget_failure": "REJECT_NO_TURN",
+      "move_to_pathfinding": {
+        "known_state_only": true,
+        "allowed_through_unknown_cells": false,
+        "neighbor_order": [
+          "N",
+          "E",
+          "S",
+          "W"
+        ],
+        "cost_rule": "LOWEST_TOTAL_RAW_COST_THEN_FEWEST_STEPS_THEN_LEXICOGRAPHIC_DIRECTION_LIST"
+      }
+    },
+    "VECTOR_COMMAND": {
+      "command_types": [
+        "MOVE_VECTOR"
+      ],
+      "angle_degrees": {
+        "origin": "N",
+        "rotation": "CLOCKWISE",
+        "min": 0,
+        "max": 359,
+        "integer_only": true
+      },
+      "distance": {
+        "min": 1,
+        "max": 4,
+        "integer_only": true
+      },
+      "endpoint_formula": {
+        "dx": "round_half_away_from_zero(sin(angle_degrees) * distance)",
+        "dy": "round_half_away_from_zero(cos(angle_degrees) * distance)",
+        "reject_if_endpoint_equals_source": true
+      },
+      "path_resolution": "SUPERCOVER_LINE",
+      "budget_raw": 40,
+      "terrain_cost_shortens_movement": true,
+      "route_budget_behavior": "EXECUTE_LONGEST_PREFIX_WITHIN_BUDGET"
+    },
+    "DIRECTIONAL_THRUST": {
+      "command_types": [
+        "THRUST"
+      ],
+      "allowed_directions": [
+        "N",
+        "NE",
+        "E",
+        "SE",
+        "S",
+        "SW",
+        "W",
+        "NW"
+      ],
+      "distance": {
+        "min": 1,
+        "max": 4,
+        "integer_only": true
+      },
+      "path_resolution": "STRAIGHT_DIRECTIONAL_RAY",
+      "direction_changes_within_command": "FORBIDDEN",
+      "budget_raw": 40,
+      "terrain_cost_shortens_movement": true,
+      "route_budget_behavior": "EXECUTE_LONGEST_PREFIX_WITHIN_BUDGET"
+    }
+  },
+  "collision": {
+    "behavior": "STOP_BEFORE",
+    "applies_to_impassable_terrain": [
+      "ASTEROID",
+      "RIFT_BARRIER"
+    ],
+    "applies_to_impassable_objects": [
+      "STAR",
+      "PLANET",
+      "STATION"
+    ],
+    "first_blocked_cell": {
+      "position": "UNCHANGED",
+      "movement_raw_cost": 0,
+      "movement_command_consumes_srs_turn": true,
+      "observation_update": false,
+      "event": "STOPPED_BEFORE_IMPASSABLE"
+    },
+    "after_partial_movement": {
+      "position": "LAST_ENTERED_PASSABLE_CELL",
+      "movement_raw_cost": "SUM_ENTERED_PASSABLE_STEP_COSTS",
+      "movement_command_consumes_srs_turn": true,
+      "observation_update": "FOR_EACH_ENTERED_PASSABLE_CELL",
+      "event": "PARTIAL_MOVE_STOPPED_BEFORE_IMPASSABLE"
+    },
+    "diagonal_corner_cutting": {
+      "rule": "FORBID_CUTTING_BETWEEN_TWO_ORTHOGONALLY_BLOCKED_CELLS",
+      "blocked_corner_behavior": "STOP_BEFORE"
+    },
+    "movement_cost_consumed_on_collision_cell": false
+  },
+  "observation": {
+    "FULL": {
+      "reveal": "ENTIRE_ACTUAL_MAP_AT_SECTOR_ENTRY",
+      "update_during_movement": false
+    },
+    "LOCAL_3X3": {
+      "default_size": 5,
+      "nebula_size": 3,
+      "use_destination_terrain": true,
+      "update_after_each_successful_step": true,
+      "known_map_is_cumulative": true,
+      "failed_or_rejected_command_updates_observation": false,
+      "first_blocked_cell_collision_updates_observation": false
+    }
+  },
+  "interaction": {
+    "mode": "EXPLICIT_INTERACT",
+    "invalid_target_consumes_turn": false,
+    "RESOURCE_CACHE": {
+      "passable": true,
+      "range": "SAME_CELL",
+      "effect": "REFUEL_PARTIAL",
+      "sector_total_refuel_amount": 5,
+      "per_cache_split_by_count": {
+        "1": [
+          5
+        ],
+        "2": [
+          3,
+          2
+        ],
+        "3": [
+          2,
+          2,
+          1
+        ]
+      },
+      "clamp_to_max_fuel": true,
+      "consume_when_refuel_amount_is_zero": false,
+      "persistent_field": "consumed_object_ids"
+    },
+    "STATION": {
+      "passable": false,
+      "range": "ADJACENT",
+      "effect": "REFUEL_TO_MAX",
+      "reusable": true,
+      "clamp_to_max_fuel": true,
+      "persistent_field": "activated_object_ids"
+    },
+    "SALVAGE": {
+      "passable": true,
+      "range": "SAME_CELL",
+      "effect": "DEFERRED_PLACEHOLDER",
+      "persistent_field": "consumed_object_ids"
+    }
+  },
+  "warp_exit": {
+    "warp_requires_cell_with_direction_flag": true,
+    "blocked_edge_or_outer_edge_is_rejected": true,
+    "no_return_flag_candidate_is_generation_error": true,
+    "accepted_warp_or_exit_consumes_srs_turn": true,
+    "invalid_warp_or_exit_consumes_turn": false
+  },
+  "game_log": {
+    "required_event_fields": [
+      "srs_turn",
+      "command_type",
+      "movement_rule",
+      "cost_mode",
+      "start_position",
+      "end_position",
+      "entered_cells",
+      "movement_raw_cost",
+      "fuel_delta",
+      "observation_updates",
+      "object_id",
+      "object_type",
+      "outcome"
+    ],
+    "required_events": [
+      "MOVE_ACCEPTED",
+      "MOVE_REJECTED",
+      "STOPPED_BEFORE_IMPASSABLE",
+      "INTERACT_ACCEPTED",
+      "INTERACT_REJECTED",
+      "OBJECT_CONSUMED",
+      "STATION_ACTIVATED",
+      "WARP_EXIT_ACCEPTED",
+      "WARP_EXIT_REJECTED",
+      "OBSERVATION_UPDATED"
+    ]
+  },
+  "evaluation_metrics": [
+    "goal_reach_rate",
+    "mean_commands_to_exit",
+    "collision_count",
+    "blocked_command_count",
+    "route_replanning_count",
+    "requested_vs_actual_distance",
+    "endpoint_rounding_error",
+    "unused_movement_points",
+    "unknown_space_collision_rate",
+    "resource_use_rate",
+    "resource_refuel_amount",
+    "resource_detour_cost",
+    "station_use_rate",
+    "value_object_detour_rate",
+    "object_acquisition_rate",
+    "fuel_waste_on_full_resource",
+    "repeat_object_attempt_rate",
+    "turn_only_vs_shared_fuel_failure_delta"
+  ],
+  "deferred_to_later_phase": [
+    "enemy_spawn",
+    "threat_clock_formula",
+    "encounter_rate",
+    "salvage_combat_or_repair_effect",
+    "final_input_ui"
+  ]
+}
