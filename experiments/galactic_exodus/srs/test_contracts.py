@@ -22,9 +22,7 @@ SRS_DIR = REPO_ROOT / "experiments" / "galactic_exodus" / "srs"
 
 class SrsContractTests(unittest.TestCase):
     def setUp(self) -> None:
-        tmp_root = REPO_ROOT / ".tmp"
-        tmp_root.mkdir(exist_ok=True)
-        self._temp_dir = tempfile.TemporaryDirectory(dir=tmp_root)
+        self._temp_dir = tempfile.TemporaryDirectory()
         self.temp_dir = Path(self._temp_dir.name)
         self.addCleanup(self._temp_dir.cleanup)
 
