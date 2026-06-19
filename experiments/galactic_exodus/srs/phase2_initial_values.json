@@ -36,7 +36,7 @@
     "height": 9,
     "generation_profile": "phase2_srs_generation.json",
     "generation_schema_version": 1,
-    "observation_mode": "LOCAL_3X3",
+    "observation_mode": "LOCAL_MOVEMENT",
     "cost_mode": "TURN_ONLY",
     "interaction_mode": "EXPLICIT_INTERACT",
     "sector_value_route": "VALUE_OBJECT_DETOUR",
@@ -49,7 +49,7 @@
   },
   "comparisons": {
     "C1": {"field": "map_size", "values": [[9, 9], [11, 11]]},
-    "C2": {"field": "observation_mode", "values": ["FULL", "LOCAL_3X3"]},
+    "C2": {"field": "observation_mode", "values": ["FULL", "LOCAL_MOVEMENT"]},
     "C3": {"field": "cost_mode", "values": ["TURN_ONLY", "SHARED_FUEL"]},
     "C4": {"field": "interaction_mode", "values": ["AUTO_INTERACT", "EXPLICIT_INTERACT"]},
     "C5": {"field": "sector_value_route", "values": ["DIRECT_EXIT", "VALUE_OBJECT_DETOUR"]},
