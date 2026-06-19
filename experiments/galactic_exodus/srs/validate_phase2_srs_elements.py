@@ -84,8 +84,8 @@ def validate(path: Path) -> dict[str, Any]:
             if terrain.get("movement_cost_consumed_on_collision") is not False:
                 raise ValidationError(f"{terrain_id}: collision must not consume movement cost")
 
-    if terrains["FLOOR"].get("allowed_features") != ["WARP_POINT"]:
-        raise ValidationError("FLOOR must host WARP_POINT")
+    if terrains["FLOOR"].get("allowed_features") != ["WARP_FLAG"]:
+        raise ValidationError("FLOOR must host WARP_FLAG")
     for terrain_id in EXPECTED_TERRAINS - {"FLOOR"}:
         if terrains[terrain_id].get("can_host_feature") is not False:
             raise ValidationError(f"{terrain_id} must not host features")

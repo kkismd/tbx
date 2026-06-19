@@ -37,7 +37,7 @@ class Phase2SrsElementsValidationTests(unittest.TestCase):
         with self.assertRaisesRegex(validator.ValidationError, "NEBULA"):
             validator.validate(self.path)
 
-    def test_only_floor_hosts_warp_point(self) -> None:
+    def test_only_floor_hosts_warp_flag(self) -> None:
         self.payload["terrain_types"]["DEBRIS"]["can_host_feature"] = True
         self.write()
         with self.assertRaisesRegex(validator.ValidationError, "DEBRIS must not host features"):
