@@ -148,9 +148,20 @@ class SrsActualMap:
 @dataclass(frozen=True, slots=True)
 class SrsKnownState:
     discovered_cells: frozenset[Position] = frozenset()
+    known_cells: Mapping[Position, SrsCell] = field(default_factory=dict)
+    visited_cells: frozenset[Position] = frozenset()
 
     def __post_init__(self) -> None:
-        object.__setattr__(self, "discovered_cells", frozenset(self.discovered_cells))
+        discovered_cells = frozenset(self.discovered_cells)
+        known_cells = _freeze_mapping(self.known_cells)
+        visited_cells = frozenset(self.visited_cells)
+
+        if not set(known_cells).issubset(discovered_cells):
+            raise SrsModelError("known_cells keys must be a subset of discovered_cells")
+
+        object.__setattr__(self, "discovered_cells", discovered_cells)
+        object.__setattr__(self, "known_cells", known_cells)
+        object.__setattr__(self, "visited_cells", visited_cells)
 
 
 @dataclass(frozen=True, slots=True)

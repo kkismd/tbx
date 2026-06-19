@@ -181,6 +181,28 @@ class SrsModelTests(unittest.TestCase):
                 objects={},
             )
 
+    def test_known_state_freezes_known_cells(self) -> None:
+        state = SrsKnownState(
+            discovered_cells={Position(0, 0)},
+            known_cells={Position(0, 0): SrsCell(SrsTerrainType.FLOOR)},
+        )
+
+        with self.assertRaises(TypeError):
+            state.known_cells[Position(1, 1)] = SrsCell(SrsTerrainType.NEBULA)
+
+    def test_known_state_freezes_visited_cells(self) -> None:
+        state = SrsKnownState(visited_cells={Position(0, 0)})
+
+        with self.assertRaises(AttributeError):
+            state.visited_cells.add(Position(1, 1))
+
+    def test_known_state_rejects_known_cell_outside_discovered_cells(self) -> None:
+        with self.assertRaisesRegex(SrsModelError, "known_cells keys must be a subset"):
+            SrsKnownState(
+                discovered_cells={Position(0, 0)},
+                known_cells={Position(1, 1): SrsCell(SrsTerrainType.FLOOR)},
+            )
+
 
 if __name__ == "__main__":
     unittest.main()
