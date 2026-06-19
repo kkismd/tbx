@@ -42,6 +42,10 @@ class Phase2SrsMovementValidationTests(unittest.TestCase):
         self.payload["movement_rules"]["MOVEMENT_POINTS"]["legacy"] = "WALL"
         self.assert_invalid("forbidden term WALL")
 
+    def test_legacy_local_3x3_is_rejected(self) -> None:
+        self.payload["baseline"]["observation_mode"] = "LOCAL_3X3"
+        self.assert_invalid("forbidden term LOCAL_3X3")
+
     def test_baseline_cost_mode_mismatch_is_rejected(self) -> None:
         self.payload["baseline"]["cost_mode"] = "SHARED_FUEL"
         self.assert_invalid("baseline.cost_mode")
@@ -95,7 +99,7 @@ class Phase2SrsMovementValidationTests(unittest.TestCase):
         self.assert_invalid("collision cell cost")
 
     def test_nebula_observation_size_mismatch_is_rejected(self) -> None:
-        self.payload["observation"]["LOCAL_3X3"]["nebula_size"] = 5
+        self.payload["observation"]["LOCAL_MOVEMENT"]["nebula_size"] = 5
         self.assert_invalid("nebula_size must be 3")
 
     def test_resource_total_refuel_mismatch_is_rejected(self) -> None:
