@@ -40,7 +40,7 @@
     "path_input_mode": "ROUTE_PREVIEW",
     "interaction_mode": "EXPLICIT_INTERACT",
     "collision_behavior": "STOP_BEFORE",
-    "observation_mode": "LOCAL_3X3",
+    "observation_mode": "LOCAL_MOVEMENT",
     "max_srs_turns": 40
   },
   "command_turn_rules": {
@@ -171,7 +171,7 @@
       "reveal": "ENTIRE_ACTUAL_MAP_AT_SECTOR_ENTRY",
       "update_during_movement": false
     },
-    "LOCAL_3X3": {
+    "LOCAL_MOVEMENT": {
       "default_size": 5,
       "nebula_size": 3,
       "use_destination_terrain": true,
