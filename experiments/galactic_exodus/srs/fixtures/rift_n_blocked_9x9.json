@@ -1,0 +1,30 @@
+{
+  "descriptor": {
+    "sector_id": "rift-n-1",
+    "sector_type": "RIFT",
+    "sector_seed": 4001,
+    "entry_edge": "S",
+    "blocked_edges": ["N"]
+  },
+  "expected": {
+    "width": 9,
+    "height": 9,
+    "player_position": [4, 8],
+    "warp_flags": {
+      "8,4": ["E"],
+      "4,8": ["S"],
+      "0,4": ["W"]
+    },
+    "blocked_warp_positions": ["4,0"],
+    "terrain_counts": {
+      "FLOOR": 72,
+      "RIFT_BARRIER": 9
+    },
+    "object_counts": {
+      "PLANET": 2,
+      "SALVAGE": 1,
+      "STAR": 1
+    },
+    "known_discovered_count": 0
+  }
+}
