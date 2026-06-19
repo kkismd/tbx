@@ -15,6 +15,7 @@ movement_points_per_turn = 4
 path_input_mode = ROUTE_PREVIEW
 interaction_mode = EXPLICIT_INTERACT
 collision_behavior = STOP_BEFORE
+observation_mode = LOCAL_MOVEMENT
 max_srs_turns = 40
 ```
 
@@ -153,7 +154,7 @@ observation update = each entered passable cell
 
 `FULL` はsector entry時にactual map全体を開示する。
 
-`LOCAL_3X3` では、成功した各1セル移動の後に移動先terrainを基準に観測する。
+`LOCAL_MOVEMENT` では、成功した各1セル移動の後に移動先terrainを基準に観測する。
 
 ```text
 default terrain = 5x5
