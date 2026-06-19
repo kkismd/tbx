@@ -1,0 +1,29 @@
+{
+  "descriptor": {
+    "sector_id": "base-1",
+    "sector_type": "BASE",
+    "sector_seed": 2001,
+    "entry_edge": "S",
+    "blocked_edges": []
+  },
+  "expected": {
+    "width": 9,
+    "height": 9,
+    "player_position": [4, 8],
+    "warp_flags": {
+      "4,0": ["N"],
+      "8,4": ["E"],
+      "4,8": ["S"],
+      "0,4": ["W"]
+    },
+    "terrain_counts": {
+      "FLOOR": 81
+    },
+    "object_counts": {
+      "PLANET": 2,
+      "STAR": 1,
+      "STATION": 1
+    },
+    "known_discovered_count": 0
+  }
+}

@@ -9,7 +9,12 @@ from experiments.galactic_exodus.srs.model import (
     SectorType,
     SrsActualMap,
     SrsCell,
+    SrsGameState,
     SrsModelError,
+    SrsKnownState,
+    SrsObjectState,
+    SrsObjectType,
+    SrsPersistentState,
     SrsTerrainType,
     validate_sector_descriptor,
 )
@@ -78,6 +83,103 @@ class SrsModelTests(unittest.TestCase):
         )
         with self.assertRaisesRegex(SrsModelError, "entry_edge must not be blocked"):
             validate_sector_descriptor(descriptor)
+
+    def test_game_state_freezes_objects_mapping(self) -> None:
+        position = Position(0, 0)
+        state = SrsGameState(
+            descriptor=SectorDescriptor(
+                sector_id="N-1",
+                sector_type=SectorType.NORMAL,
+                sector_seed=1,
+                entry_edge=Direction.N,
+            ),
+            actual_map=SrsActualMap(
+                width=1,
+                height=1,
+                cells=((SrsCell(SrsTerrainType.FLOOR, object_id="star-1"),),),
+            ),
+            known_state=SrsKnownState(),
+            persistent_state=SrsPersistentState(
+                generated_map_id="N-1:1",
+                generation_schema_version=1,
+                generation_seed=1,
+                sector_type=SectorType.NORMAL,
+                blocked_edges=frozenset(),
+            ),
+            player_position=position,
+            objects={
+                "star-1": SrsObjectState(
+                    object_id="star-1",
+                    object_type=SrsObjectType.STAR,
+                    position=position,
+                )
+            },
+        )
+
+        with self.assertRaises(TypeError):
+            state.objects["planet-1"] = SrsObjectState(
+                object_id="planet-1",
+                object_type=SrsObjectType.PLANET,
+                position=Position(0, 0),
+            )
+
+    def test_game_state_rejects_object_key_mismatch(self) -> None:
+        with self.assertRaisesRegex(SrsModelError, "objects mapping keys must match"):
+            SrsGameState(
+                descriptor=SectorDescriptor(
+                    sector_id="N-1",
+                    sector_type=SectorType.NORMAL,
+                    sector_seed=1,
+                    entry_edge=Direction.N,
+                ),
+                actual_map=SrsActualMap(
+                    width=1,
+                    height=1,
+                    cells=((SrsCell(SrsTerrainType.FLOOR, object_id="star-1"),),),
+                ),
+                known_state=SrsKnownState(),
+                persistent_state=SrsPersistentState(
+                    generated_map_id="N-1:1",
+                    generation_schema_version=1,
+                    generation_seed=1,
+                    sector_type=SectorType.NORMAL,
+                    blocked_edges=frozenset(),
+                ),
+                player_position=Position(0, 0),
+                objects={
+                    "bad-key": SrsObjectState(
+                        object_id="star-1",
+                        object_type=SrsObjectType.STAR,
+                        position=Position(0, 0),
+                    )
+                },
+            )
+
+    def test_game_state_rejects_map_object_mismatch(self) -> None:
+        with self.assertRaisesRegex(SrsModelError, "actual_map object_id values must match"):
+            SrsGameState(
+                descriptor=SectorDescriptor(
+                    sector_id="N-1",
+                    sector_type=SectorType.NORMAL,
+                    sector_seed=1,
+                    entry_edge=Direction.N,
+                ),
+                actual_map=SrsActualMap(
+                    width=1,
+                    height=1,
+                    cells=((SrsCell(SrsTerrainType.FLOOR, object_id="star-1"),),),
+                ),
+                known_state=SrsKnownState(),
+                persistent_state=SrsPersistentState(
+                    generated_map_id="N-1:1",
+                    generation_schema_version=1,
+                    generation_seed=1,
+                    sector_type=SectorType.NORMAL,
+                    blocked_edges=frozenset(),
+                ),
+                player_position=Position(0, 0),
+                objects={},
+            )
 
 
 if __name__ == "__main__":

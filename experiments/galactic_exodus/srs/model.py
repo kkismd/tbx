@@ -186,9 +186,26 @@ class SrsGameState:
     known_state: SrsKnownState
     persistent_state: SrsPersistentState
     player_position: Position
+    objects: Mapping[str, SrsObjectState] = field(default_factory=dict)
     srs_turn: int = 0
     fuel: int = 0
     max_fuel: int = 0
+
+    def __post_init__(self) -> None:
+        normalized_objects = _freeze_mapping(self.objects)
+        if any(object_id != state.object_id for object_id, state in normalized_objects.items()):
+            raise SrsModelError("objects mapping keys must match SrsObjectState.object_id")
+
+        map_object_ids = {
+            cell.object_id
+            for row in self.actual_map.cells
+            for cell in row
+            if cell.object_id is not None
+        }
+        if map_object_ids != set(normalized_objects):
+            raise SrsModelError("actual_map object_id values must match objects mapping keys")
+
+        object.__setattr__(self, "objects", normalized_objects)
 
 
 @dataclass(frozen=True, slots=True)
