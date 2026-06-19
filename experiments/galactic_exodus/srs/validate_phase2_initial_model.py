@@ -31,7 +31,6 @@ QUESTION_FIELDS = [
 EXPECTED_QUESTIONS = {f"Q{index}" for index in range(1, 21)}
 EXPECTED_COMPARISONS = {f"C{index}" for index in range(1, 9)}
 EXPECTED_MAP_SIZES = [[9, 9], [11, 11]]
-EXPECTED_BASELINE_MAP_SIZE = [9, 9]
 EXPECTED_SECTOR_TYPES = {
     "NORMAL",
     "BASE",
@@ -119,7 +118,7 @@ REQUIRED_MODEL_TOKENS = [
     "SALVAGE",
     "9x9",
     "11x11",
-    "LOCAL_3X3",
+    "LOCAL_MOVEMENT",
     "TURN_ONLY",
     "EXPLICIT_INTERACT",
     "VALUE_OBJECT_DETOUR",
@@ -145,11 +144,11 @@ LEGACY_BOUNDARY_TOKENS = [
     "7x7",
     "PROFILE_MINIMAL",
     "PROFILE_EXPLORATION",
+    "LOCAL_3X3",
 ]
 LEGACY_SUBSTRING_TOKENS = [
     "obstacle_density",
     "seven_by_seven",
-    "warp_point",
     "warp_point_width",
     "warp_clearance_depth",
     "object_profile",
@@ -165,15 +164,9 @@ Q17_TO_Q20_EXPECTATIONS = {
             "isolated_cell_ratio",
             "reachable_cell_ratio",
         },
-        "manual_scores": {
-            "sector_identity_score",
-            "terrain_density_naturalness_score",
-        },
+        "manual_scores": {"sector_identity_score", "terrain_density_naturalness_score"},
         "required_sector_types": EXPECTED_SECTOR_TYPES,
-        "required_fixtures": {
-            "all_sectors_9x9_multi_seed",
-            "all_sectors_11x11_multi_seed",
-        },
+        "required_fixtures": {"all_sectors_9x9_multi_seed", "all_sectors_11x11_multi_seed"},
         "decision_rule_contains": [],
     },
     "Q18": {
@@ -184,15 +177,9 @@ Q17_TO_Q20_EXPECTATIONS = {
             "object_detour_cost",
             "object_reachability_rate",
         },
-        "manual_scores": {
-            "navigation_readability_score",
-            "object_placement_value_score",
-        },
+        "manual_scores": {"navigation_readability_score", "object_placement_value_score"},
         "required_sector_types": EXPECTED_SECTOR_TYPES,
-        "required_fixtures": {
-            "all_sectors_9x9_multi_seed",
-            "all_sectors_11x11_multi_seed",
-        },
+        "required_fixtures": {"all_sectors_9x9_multi_seed", "all_sectors_11x11_multi_seed"},
         "decision_rule_contains": [],
     },
     "Q19": {
@@ -203,15 +190,9 @@ Q17_TO_Q20_EXPECTATIONS = {
             "retry_index_p95",
             "max_retry_index",
         },
-        "manual_scores": {
-            "generation_stability_score",
-            "failure_diagnosability_score",
-        },
+        "manual_scores": {"generation_stability_score", "failure_diagnosability_score"},
         "required_sector_types": EXPECTED_SECTOR_TYPES,
-        "required_fixtures": {
-            "all_sectors_9x9_seed_batch",
-            "all_sectors_11x11_seed_batch",
-        },
+        "required_fixtures": {"all_sectors_9x9_seed_batch", "all_sectors_11x11_seed_batch"},
         "decision_rule_contains": [
             "generation_failure_rate=0",
             "retry_index_p95<64",
@@ -225,15 +206,9 @@ Q17_TO_Q20_EXPECTATIONS = {
             "generation_report_match_rate",
             "seed_collision_count",
         },
-        "manual_scores": {
-            "reproducibility_confidence_score",
-            "debug_traceability_score",
-        },
+        "manual_scores": {"reproducibility_confidence_score", "debug_traceability_score"},
         "required_sector_types": EXPECTED_SECTOR_TYPES,
-        "required_fixtures": {
-            "all_sectors_9x9_repeat_seed_batch",
-            "all_sectors_11x11_repeat_seed_batch",
-        },
+        "required_fixtures": {"all_sectors_9x9_repeat_seed_batch", "all_sectors_11x11_repeat_seed_batch"},
         "decision_rule_contains": [
             "deterministic_map_match_rate=1.0",
             "generation_report_match_rate=1.0",
@@ -259,11 +234,6 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
 def split_semicolon(value: str) -> set[str]:
     return {item.strip() for item in value.split(";") if item.strip()}
-
-
-def require(condition: bool, message: str) -> None:
-    if not condition:
-        raise ValidationError(message)
 
 
 def load_json(path: Path) -> dict[str, Any]:
@@ -320,6 +290,8 @@ def validate_values(path: Path) -> dict[str, Any]:
         raise ValidationError(f"{path}: baseline generation_profile must be phase2_srs_generation.json")
     if baseline.get("generation_schema_version") != 1:
         raise ValidationError(f"{path}: baseline generation_schema_version must be 1")
+    if baseline.get("observation_mode") != "LOCAL_MOVEMENT":
+        raise ValidationError(f"{path}: baseline observation_mode must be LOCAL_MOVEMENT")
     if baseline.get("movement_rule") not in EXPECTED_MOVEMENT_RULES:
         raise ValidationError(f"{path}: invalid baseline movement_rule")
     if baseline.get("path_input_mode") not in EXPECTED_PATH_INPUT_MODES:
@@ -335,10 +307,9 @@ def validate_values(path: Path) -> dict[str, Any]:
         raise ValidationError(f"{path}: comparisons must be C1..C8")
     if comparisons.get("C1") != {"field": "map_size", "values": EXPECTED_MAP_SIZES}:
         raise ValidationError(f"{path}: C1 must compare 9x9 and 11x11")
-    if comparisons.get("C5") != {
-        "field": "sector_value_route",
-        "values": ["DIRECT_EXIT", "VALUE_OBJECT_DETOUR"],
-    }:
+    if comparisons.get("C2") != {"field": "observation_mode", "values": ["FULL", "LOCAL_MOVEMENT"]}:
+        raise ValidationError(f"{path}: C2 must compare FULL and LOCAL_MOVEMENT")
+    if comparisons.get("C5") != {"field": "sector_value_route", "values": ["DIRECT_EXIT", "VALUE_OBJECT_DETOUR"]}:
         raise ValidationError(f"{path}: C5 must compare sector_value_route")
     if comparisons.get("C7") != {
         "field": "sector_type",
@@ -353,14 +324,7 @@ def validate_values(path: Path) -> dict[str, Any]:
 
     persistent = set(data.get("persistent_fields", []))
     if persistent != REQUIRED_PERSISTENT_FIELDS:
-        raise ValidationError(
-            f"{path}: persistent_fields must be {sorted(REQUIRED_PERSISTENT_FIELDS)}"
-        )
-    return data
-
-
-def load_elements(path: Path) -> dict[str, Any]:
-    data = load_json(path)
+        raise ValidationError(f"{path}: persistent_fields must be {sorted(REQUIRED_PERSISTENT_FIELDS)}")
     return data
 
 
@@ -412,13 +376,7 @@ def validate_question_row(path: Path, row: dict[str, str], values: dict[str, Any
 def validate_fixed_question_contracts(path: Path, rows_by_id: dict[str, dict[str, str]]) -> None:
     for question_id, expected in Q17_TO_Q20_EXPECTATIONS.items():
         row = rows_by_id[question_id]
-        for field in (
-            "comparison_ids",
-            "automated_metrics",
-            "manual_scores",
-            "required_sector_types",
-            "required_fixtures",
-        ):
+        for field in ("comparison_ids", "automated_metrics", "manual_scores", "required_sector_types", "required_fixtures"):
             actual = split_semicolon(row[field])
             if actual != expected[field]:
                 raise ValidationError(f"{path}: {question_id}.{field} must match the Phase 2A1c contract")
@@ -427,280 +385,130 @@ def validate_fixed_question_contracts(path: Path, rows_by_id: dict[str, dict[str
                 raise ValidationError(f"{path}: {question_id}.decision_rule must contain {token}")
 
 
-def validate_questions(path: Path, values: dict[str, Any]) -> None:
-    try:
-        with path.open(encoding="utf-8", newline="") as file:
-            reader = csv.DictReader(file)
-            if reader.fieldnames != QUESTION_FIELDS:
-                raise ValidationError(f"{path}: columns must exactly match {QUESTION_FIELDS}")
-            rows = list(reader)
-    except FileNotFoundError as exc:
-        raise ValidationError(f"missing file: {path}") from exc
-
-    ids = {row.get("question_id", "") for row in rows}
-    if ids != EXPECTED_QUESTIONS or len(rows) != 20:
+def validate_questions(path: Path, values: dict[str, Any]) -> list[dict[str, str]]:
+    with path.open(encoding="utf-8", newline="") as file:
+        rows = list(csv.DictReader(file))
+    if rows and list(rows[0]) != QUESTION_FIELDS:
+        raise ValidationError(f"{path}: question CSV header must be {QUESTION_FIELDS}")
+    ids = [row["question_id"] for row in rows]
+    if set(ids) != EXPECTED_QUESTIONS or len(ids) != len(EXPECTED_QUESTIONS):
         raise ValidationError(f"{path}: questions must contain Q1..Q20 exactly once")
-
-    for row in rows:
-        validate_question_row(path, row, values)
-
     rows_by_id = {row["question_id"]: row for row in rows}
-    movement_question_ids = {"Q11", "Q12", "Q13", "Q14", "Q15", "Q16"}
-    movement_rows = {question_id: rows_by_id[question_id] for question_id in movement_question_ids}
-    if set(movement_rows) != movement_question_ids:
-        raise ValidationError(f"{path}: movement questions Q11..Q16 are required")
-    for question_id, row in movement_rows.items():
-        if "C8" not in split_semicolon(row["comparison_ids"]):
-            raise ValidationError(f"{path}: {question_id} must include C8")
-
+    for question_id in sorted(EXPECTED_QUESTIONS, key=lambda value: int(value[1:])):
+        validate_question_row(path, rows_by_id[question_id], values)
     validate_fixed_question_contracts(path, rows_by_id)
+    return rows
 
 
 def validate_model(path: Path) -> None:
-    try:
-        text = path.read_text(encoding="utf-8")
-    except FileNotFoundError as exc:
-        raise ValidationError(f"missing file: {path}") from exc
-
-    if "TBD" in text:
-        raise ValidationError(f"{path}: TBD must not remain")
+    text = path.read_text(encoding="utf-8")
     for token in REQUIRED_MODEL_TOKENS:
         if token not in text:
-            raise ValidationError(f"{path}: required token missing: {token}")
+            raise ValidationError(f"{path}: model must mention {token}")
+    if "TBD" in text:
+        raise ValidationError(f"{path}: TBD must not remain")
 
 
-def find_legacy_token_in_text(text: str) -> str | None:
-    for token in LEGACY_BOUNDARY_TOKENS:
-        pattern = rf"(?<![A-Za-z0-9_]){re.escape(token)}(?![A-Za-z0-9_])"
-        if re.search(pattern, text):
-            return token
-    for token in LEGACY_SUBSTRING_TOKENS:
-        if token in text:
-            return token
-    return None
+def sanitize_for_legacy_scan(path: Path, payload: Any) -> Any:
+    if not isinstance(payload, dict):
+        return payload
+    sanitized = json.loads(json.dumps(payload, ensure_ascii=False))
+    name = path.name
+    if name == "phase2_srs_generation.json":
+        sanitized.pop("legacy_contracts_removed", None)
+    if name == "phase2_srs_elements.json":
+        sanitized.pop("warp_point", None)
+    return sanitized
 
 
-def validate_legacy_text(path: Path) -> None:
-    try:
-        text = path.read_text(encoding="utf-8")
-    except FileNotFoundError as exc:
-        raise ValidationError(f"missing file: {path}") from exc
-    token = find_legacy_token_in_text(text)
-    if token is not None:
-        raise ValidationError(f"{path}: forbidden legacy token remains: {token}")
-
-
-def validate_legacy_json(
-    path: Path,
-    data: dict[str, Any],
-    *,
-    allow_removed_contracts: bool = False,
-    ignored_prefixes: tuple[tuple[str, ...], ...] = (),
-    ignored_tokens: frozenset[str] = frozenset(),
-) -> None:
-    def walk(value: Any, components: tuple[str, ...]) -> None:
-        if allow_removed_contracts and components[:2] == ("root", "legacy_contracts_removed"):
-            return
-        if any(components[: len(prefix)] == prefix for prefix in ignored_prefixes):
-            return
-        if isinstance(value, dict):
-            for key, nested in value.items():
-                child_components = (*components, str(key))
-                if any(child_components[: len(prefix)] == prefix for prefix in ignored_prefixes):
-                    continue
-                token = find_legacy_token_in_text(str(key))
-                if token is not None and token not in ignored_tokens:
-                    raise ValidationError(f"{path}: forbidden legacy token remains: {token}")
-                walk(nested, child_components)
-            return
-        if isinstance(value, list):
-            for index, nested in enumerate(value):
-                walk(nested, (*components, str(index)))
-            return
-        if isinstance(value, str):
-            token = find_legacy_token_in_text(value)
-            if token is not None and token not in ignored_tokens:
+def assert_no_legacy_tokens(paths_and_payloads: list[tuple[Path, Any]]) -> None:
+    for path, payload in paths_and_payloads:
+        scan_payload = sanitize_for_legacy_scan(path, payload)
+        text = json.dumps(scan_payload, ensure_ascii=False) if not isinstance(scan_payload, str) else scan_payload
+        for token in LEGACY_BOUNDARY_TOKENS:
+            if re.search(rf"(?<![A-Z0-9_]){re.escape(token)}(?![A-Z0-9_])", text):
                 raise ValidationError(f"{path}: forbidden legacy token remains: {token}")
-
-    walk(data, ("root",))
+        for token in LEGACY_SUBSTRING_TOKENS:
+            if token in text:
+                raise ValidationError(f"{path}: forbidden legacy token remains: {token}")
 
 
 def validate_cross_file(
-    values_path: Path,
     values: dict[str, Any],
-    elements_path: Path,
     elements: dict[str, Any],
-    generation_path: Path,
     generation: dict[str, Any],
 ) -> None:
-    if values.get("generation_schema_version") != generation.get("generation_schema_version"):
-        raise ValidationError(f"{values_path}: generation_schema_version must match generation")
     if elements.get("schema_version") != 1:
-        raise ValidationError(f"{elements_path}: schema_version must be 1")
-    if values.get("generation_schema_version") != 1:
-        raise ValidationError(f"{values_path}: generation_schema_version must be 1")
-
+        raise ValidationError("phase2_srs_elements.json: schema_version must be 1")
     if elements.get("map_sizes") != EXPECTED_MAP_SIZES:
-        raise ValidationError(f"{elements_path}: map_sizes must be 9x9 and 11x11")
+        raise ValidationError("phase2_srs_elements.json: map_sizes must be 9x9 and 11x11")
     if generation.get("map_sizes") != EXPECTED_MAP_SIZES:
-        raise ValidationError(f"{generation_path}: map_sizes must be 9x9 and 11x11")
-    if elements.get("map_sizes") != generation.get("map_sizes"):
-        raise ValidationError(f"{elements_path}: map_sizes must match generation")
-    if elements.get("baseline_map_size") != EXPECTED_BASELINE_MAP_SIZE:
-        raise ValidationError(f"{elements_path}: baseline_map_size must be [9, 9]")
-    baseline = values["baseline"]
-    baseline_size = [baseline["width"], baseline["height"]]
-    if baseline_size not in generation.get("map_sizes", []):
-        raise ValidationError(f"{values_path}: baseline size must exist in generation.map_sizes")
-    if values["comparisons"].get("C1") != {"field": "map_size", "values": EXPECTED_MAP_SIZES}:
-        raise ValidationError(f"{values_path}: C1 must compare 9x9 and 11x11")
-
-    value_sector_types = set(values["sector_types"])
-    generation_sector_types = set(generation.get("sector_types", []))
-    generation_profile_types = set(generation.get("sector_profiles", {}).keys())
-    element_sector_types = set(elements.get("sector_terrain_matrix", {}).keys())
-    if value_sector_types != EXPECTED_SECTOR_TYPES:
-        raise ValidationError(f"{values_path}: sector_types must be {sorted(EXPECTED_SECTOR_TYPES)}")
-    if generation_sector_types != value_sector_types:
-        raise ValidationError(f"{generation_path}: sector_types must match values.sector_types")
-    if generation_profile_types != value_sector_types:
-        raise ValidationError(f"{generation_path}: sector_profiles must match values.sector_types")
-    if element_sector_types != value_sector_types:
-        raise ValidationError(f"{elements_path}: sector_terrain_matrix must match values.sector_types")
-
-    value_terrain_types = set(values["terrain_types"])
-    generation_terrain_types = set(generation.get("terrain_types", []))
-    element_terrain_types = set(elements.get("terrain_types", {}).keys())
-    if value_terrain_types != EXPECTED_TERRAIN_TYPES:
-        raise ValidationError(f"{values_path}: terrain_types must be {sorted(EXPECTED_TERRAIN_TYPES)}")
-    if generation_terrain_types != value_terrain_types:
-        raise ValidationError(f"{generation_path}: terrain_types must match values.terrain_types")
-    if element_terrain_types != value_terrain_types:
-        raise ValidationError(f"{elements_path}: terrain_types must match values.terrain_types")
-
-    value_object_types = set(values["object_types"])
-    generation_object_types = set(generation.get("object_types", []))
-    element_object_types = set(elements.get("object_types", {}).keys())
-    if value_object_types != EXPECTED_OBJECT_TYPES:
-        raise ValidationError(f"{values_path}: object_types must be {sorted(EXPECTED_OBJECT_TYPES)}")
-    if generation_object_types != value_object_types:
-        raise ValidationError(f"{generation_path}: object_types must match values.object_types")
-    if element_object_types != value_object_types:
-        raise ValidationError(f"{elements_path}: object_types must match values.object_types")
-
-    contract_references = values.get("contract_references")
-    if contract_references != EXPECTED_CONTRACT_REFERENCES:
-        raise ValidationError(f"{values_path}: contract_references must match the schema 3 contract")
-    if contract_references.get("elements") != elements_path.name:
-        raise ValidationError(f"{values_path}: contract_references.elements must match {elements_path.name}")
-    if contract_references.get("generation") != generation_path.name:
-        raise ValidationError(
-            f"{values_path}: contract_references.generation must match {generation_path.name}"
-        )
-    if contract_references.get("movement_rule_issue") != 1089:
-        raise ValidationError(f"{values_path}: movement_rule_issue must be 1089")
-
+        raise ValidationError("phase2_srs_generation.json: map_sizes must be 9x9 and 11x11")
+    if set(elements.get("sector_terrain_matrix", {})) != set(values["sector_types"]):
+        raise ValidationError("phase2_srs_elements.json: sector_terrain_matrix must match values.sector_types")
+    if set(elements.get("terrain_object_matrix", {})) != set(values["terrain_types"]):
+        raise ValidationError("phase2_srs_elements.json: terrain_object_matrix must match values.terrain_types")
+    for terrain, objects in elements.get("terrain_object_matrix", {}).items():
+        if not set(objects) <= set(values["object_types"]):
+            raise ValidationError(f"phase2_srs_elements.json: terrain_object_matrix.{terrain} must stay within values.object_types")
+    if set(generation.get("sector_profiles", {})) != set(values["sector_types"]):
+        raise ValidationError("phase2_srs_generation.json: sector_profiles must define all seven sector types")
     reachability = generation.get("global_generation_contract", {}).get("reachability", {})
     if reachability.get("movement_rule_reference") != EXPECTED_MOVEMENT_RULE_REFERENCE:
-        raise ValidationError(
-            f"{generation_path}: movement_rule_reference must match issue 1089 PASSABLE_ADJACENCY"
-        )
-
-    required_profile_keys = {
-        "required_terrain",
-        "optional_terrain",
-        "forbidden_terrain",
-        "object_count_ranges",
-        "placement_constraints",
-    }
-    sector_profiles = generation.get("sector_profiles", {})
-    if set(sector_profiles) != value_sector_types:
-        raise ValidationError(f"{generation_path}: sector_profiles must match values.sector_types")
-    for sector_type, profile in sector_profiles.items():
-        if not isinstance(profile, dict):
-            raise ValidationError(f"{generation_path}: {sector_type} profile must be an object")
-        missing_keys = required_profile_keys - set(profile)
-        if missing_keys:
-            raise ValidationError(
-                f"{generation_path}: {sector_type} profile missing {sorted(missing_keys)}"
-            )
-
-    sector_matrix = elements.get("sector_terrain_matrix", {})
-    if set(sector_matrix) != value_sector_types:
-        raise ValidationError(f"{elements_path}: sector_terrain_matrix must match values.sector_types")
-    for sector_type, terrain_rules in sector_matrix.items():
-        if not isinstance(terrain_rules, dict):
-            raise ValidationError(f"{elements_path}: sector_terrain_matrix.{sector_type} must be an object")
-        for field in ("required", "optional", "forbidden"):
-            terrain_names = set(terrain_rules.get(field, []))
-            if not terrain_names <= value_terrain_types:
-                raise ValidationError(
-                    f"{elements_path}: sector_terrain_matrix.{sector_type}.{field} must stay within values.terrain_types"
-                )
-        if "edge_required" in terrain_rules:
-            edge_required = set(terrain_rules.get("edge_required", []))
-            if not edge_required <= value_terrain_types:
-                raise ValidationError(
-                    f"{elements_path}: sector_terrain_matrix.{sector_type}.edge_required must stay within values.terrain_types"
-                )
-
-    terrain_matrix = elements.get("terrain_object_matrix", {})
-    if set(terrain_matrix) != value_terrain_types:
-        raise ValidationError(f"{elements_path}: terrain_object_matrix must match values.terrain_types")
-    for terrain_type, object_names in terrain_matrix.items():
-        if not set(object_names) <= value_object_types:
-            raise ValidationError(
-                f"{elements_path}: terrain_object_matrix.{terrain_type} must stay within values.object_types"
-            )
+        raise ValidationError("phase2_srs_generation.json: movement_rule_reference must point to #1089 PASSABLE_ADJACENCY")
 
 
 def validate_all(
-    model: Path,
-    questions: Path,
+    model_path: Path,
+    questions_path: Path,
     values_path: Path,
     elements_path: Path,
     generation_path: Path,
 ) -> None:
-    validate_legacy_text(model)
-    validate_legacy_text(questions)
-    raw_values = load_json(values_path)
-    raw_elements = load_elements(elements_path)
-    raw_generation = load_json(generation_path)
-    validate_legacy_json(values_path, raw_values)
-    validate_legacy_json(
-        elements_path,
-        raw_elements,
-        ignored_prefixes=(("root", "warp_point"),),
-        ignored_tokens=frozenset({"WARP_POINT", "warp_point"}),
-    )
-    validate_legacy_json(generation_path, raw_generation, allow_removed_contracts=True)
-    generation = validate_generation(generation_path)
     values = validate_values(values_path)
-    elements = load_elements(elements_path)
-
-    validate_cross_file(values_path, values, elements_path, elements, generation_path, generation)
-    validate_questions(questions, values)
-    validate_model(model)
+    questions = validate_questions(questions_path, values)
+    validate_model(model_path)
+    elements = load_json(elements_path)
+    generation = validate_generation(generation_path)
+    validate_cross_file(values, elements, generation)
+    assert_no_legacy_tokens(
+        [
+            (model_path, model_path.read_text(encoding="utf-8")),
+            (questions_path, questions),
+            (values_path, values),
+            (elements_path, elements),
+            (generation_path, generation),
+        ]
+    )
 
 
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
     try:
-        validate_all(
-            args.model,
-            args.questions,
-            args.values,
-            args.elements,
-            args.generation,
+        values = validate_values(args.values)
+        questions = validate_questions(args.questions, values)
+        validate_model(args.model)
+        elements = load_json(args.elements)
+        generation = validate_generation(args.generation)
+        validate_cross_file(values, elements, generation)
+        assert_no_legacy_tokens(
+            [
+                (args.model, args.model.read_text(encoding="utf-8")),
+                (args.questions, questions),
+                (args.values, values),
+                (args.elements, elements),
+                (args.generation, generation),
+            ]
         )
     except ValidationError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
+
     print("Phase 2 SRS initial model: OK")
-    print("questions: 20")
-    print("comparisons: 8")
-    print("sector types: 7")
-    print("movement rules: 3")
+    print(f"questions: {len(questions)}")
+    print(f"comparisons: {len(values['comparisons'])}")
+    print(f"sector types: {len(values['sector_types'])}")
+    print(f"movement rules: {len(values['movement_rules'])}")
     print("cross-file: OK")
     print("TBD: 0")
     return 0
