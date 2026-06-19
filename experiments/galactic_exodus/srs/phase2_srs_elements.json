@@ -20,7 +20,7 @@
       "observation_size": 5,
       "blocks_line_travel": false,
       "can_host_feature": true,
-      "allowed_features": ["WARP_POINT"]
+      "allowed_features": ["WARP_FLAG"]
     },
     "DEBRIS": {
       "passable": true,
