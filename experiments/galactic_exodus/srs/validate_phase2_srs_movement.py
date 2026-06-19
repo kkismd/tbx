@@ -54,6 +54,7 @@ FORBIDDEN_TERMS = {
     "GRAVITY_FIELD",
     "seven_by_seven",
     "7x7",
+    "LOCAL_3X3",
 }
 
 
@@ -92,7 +93,7 @@ def validate_baseline(payload: dict[str, Any]) -> None:
         "path_input_mode": "ROUTE_PREVIEW",
         "interaction_mode": "EXPLICIT_INTERACT",
         "collision_behavior": "STOP_BEFORE",
-        "observation_mode": "LOCAL_3X3",
+        "observation_mode": "LOCAL_MOVEMENT",
         "max_srs_turns": 40,
     }
     for key, value in expected.items():
@@ -189,10 +190,10 @@ def validate_collision(payload: dict[str, Any]) -> None:
 def validate_observation(payload: dict[str, Any]) -> None:
     obs = payload.get("observation")
     require(isinstance(obs, dict), "observation must be an object")
-    require(set(obs) == {"FULL", "LOCAL_3X3"}, "observation must define FULL and LOCAL_3X3")
-    local = obs["LOCAL_3X3"]
-    require(local.get("default_size") == 5, "LOCAL_3X3 default_size must be 5")
-    require(local.get("nebula_size") == 3, "LOCAL_3X3 nebula_size must be 3")
+    require(set(obs) == {"FULL", "LOCAL_MOVEMENT"}, "observation must define FULL and LOCAL_MOVEMENT")
+    local = obs["LOCAL_MOVEMENT"]
+    require(local.get("default_size") == 5, "LOCAL_MOVEMENT default_size must be 5")
+    require(local.get("nebula_size") == 3, "LOCAL_MOVEMENT nebula_size must be 3")
     require(local.get("use_destination_terrain") is True, "observation must use destination terrain")
     require(local.get("update_after_each_successful_step") is True, "observation must update after each successful step")
     require(local.get("known_map_is_cumulative") is True, "known map must be cumulative")
