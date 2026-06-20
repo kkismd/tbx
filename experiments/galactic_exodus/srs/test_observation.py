@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import unittest
+from dataclasses import replace
 from pathlib import Path
 
 from experiments.galactic_exodus.srs.contracts import load_default_contracts
@@ -259,6 +260,37 @@ class SrsObservationTests(unittest.TestCase):
         self.assertEqual(restored.srs_turn, 0)
         self.assertEqual(restored.fuel, 0)
         self.assertEqual(restored.max_fuel, 0)
+
+    def test_restore_srs_state_applies_persistent_consumed_and_activated_flags(self) -> None:
+        original = make_state(sector_type=SectorType.RESOURCE)
+        object_ids = sorted(original.objects)
+        persistent = original.persistent_state
+        consumed_object_id = next(
+            object_id
+            for object_id in object_ids
+            if original.objects[object_id].object_type.value == "RESOURCE_CACHE"
+        )
+        activated_object_id = next(
+            object_id
+            for object_id in object_ids
+            if original.objects[object_id].object_type.value == "PLANET"
+        )
+        persistent = replace(
+            persistent,
+            consumed_object_ids=frozenset({consumed_object_id}),
+            activated_object_ids=frozenset({activated_object_id}),
+        )
+
+        restored = restore_srs_state(
+            descriptor=original.descriptor,
+            actual_map=original.actual_map,
+            persistent=persistent,
+            player_position=original.player_position,
+            objects=original.objects,
+        )
+
+        self.assertTrue(restored.objects[consumed_object_id].consumed)
+        self.assertTrue(restored.objects[activated_object_id].activated)
 
 
 if __name__ == "__main__":

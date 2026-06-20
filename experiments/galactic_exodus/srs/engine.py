@@ -6,9 +6,13 @@ from typing import Any, Mapping, Sequence
 
 from experiments.galactic_exodus.srs.contracts import SrsContracts
 from experiments.galactic_exodus.srs.log import (
+    INTERACT_ACCEPTED,
+    INTERACT_REJECTED,
     MOVE_ACCEPTED,
     MOVE_REJECTED,
+    OBJECT_CONSUMED,
     OBSERVATION_UPDATED,
+    STATION_ACTIVATED,
     STOPPED_BEFORE_IMPASSABLE,
     make_turn_event,
 )
@@ -36,6 +40,10 @@ class SrsObservationError(ValueError):
 
 
 class SrsMovementError(ValueError):
+    pass
+
+
+class SrsInteractionError(ValueError):
     pass
 
 
@@ -165,6 +173,7 @@ def restore_srs_state(
         position: actual_map.cell_at(position)
         for position in discovered_cells
     }
+    normalized_objects = _apply_persistent_object_flags(objects, persistent=persistent)
     return SrsGameState(
         descriptor=descriptor,
         actual_map=actual_map,
@@ -175,7 +184,7 @@ def restore_srs_state(
         ),
         persistent_state=persistent,
         player_position=player_position,
-        objects=objects,
+        objects=normalized_objects,
         srs_turn=0,
         fuel=0,
         max_fuel=0,
@@ -301,7 +310,9 @@ def apply_srs_command(
         return _apply_move_route(state, command, contracts=contracts, cost_mode=resolved_cost_mode)
     if command.command_type == "MOVE_TO":
         return _apply_move_to(state, command, contracts=contracts, cost_mode=resolved_cost_mode)
-    return _rejected_command_result(
+    if command.command_type == "INTERACT":
+        return _apply_interact(state, command, contracts=contracts)
+    return _rejected_movement_result(
         state,
         command_type=command.command_type,
         outcome="REJECTED_UNKNOWN_COMMAND",
@@ -357,7 +368,7 @@ def _apply_move_route(
     cost_mode: CostMode,
 ) -> SrsCommandResult:
     if not all(direction in contracts.movement.directions for direction in command.route):
-        return _rejected_command_result(
+        return _rejected_movement_result(
             state,
             command_type=command.command_type,
             outcome="REJECTED_UNKNOWN_COMMAND",
@@ -370,7 +381,7 @@ def _apply_move_route(
         contracts=contracts,
     )
     if not entered_cells and blocked_position is None:
-        return _rejected_command_result(
+        return _rejected_movement_result(
             state,
             command_type=command.command_type,
             outcome="REJECTED_ZERO_STEP",
@@ -470,7 +481,7 @@ def _apply_move_to(
     if target is None:
         raise SrsMovementError("MOVE_TO requires a target")
     if not state.actual_map.contains(target):
-        return _rejected_command_result(
+        return _rejected_movement_result(
             state,
             command_type=command.command_type,
             outcome="REJECTED_OUT_OF_BOUNDS",
@@ -479,7 +490,7 @@ def _apply_move_to(
             resolved_route=(),
         )
     if target == state.player_position:
-        return _rejected_command_result(
+        return _rejected_movement_result(
             state,
             command_type=command.command_type,
             outcome="REJECTED_SAME_POSITION",
@@ -488,7 +499,7 @@ def _apply_move_to(
             resolved_route=(),
         )
     if target not in state.known_state.discovered_cells:
-        return _rejected_command_result(
+        return _rejected_movement_result(
             state,
             command_type=command.command_type,
             outcome="REJECTED_UNKNOWN_TARGET",
@@ -500,7 +511,7 @@ def _apply_move_to(
     try:
         route = route_to_known_target(state, target)
     except SrsMovementError:
-        return _rejected_command_result(
+        return _rejected_movement_result(
             state,
             command_type=command.command_type,
             outcome="REJECTED_NO_PATH",
@@ -526,7 +537,7 @@ def _apply_move_to(
     )
 
 
-def _rejected_command_result(
+def _rejected_movement_result(
     state: SrsGameState,
     *,
     command_type: str,
@@ -554,6 +565,340 @@ def _rejected_command_result(
         resolved_route=resolved_route,
     )
     return SrsCommandResult(state=state, events=(event,))
+
+
+def _apply_interact(
+    state: SrsGameState,
+    command: SrsCommand,
+    *,
+    contracts: SrsContracts,
+) -> SrsCommandResult:
+    target_object_id = command.target_object_id
+    if target_object_id is None:
+        raise SrsInteractionError("INTERACT requires a target_object_id")
+
+    object_state = state.objects.get(target_object_id)
+    if object_state is None:
+        return _rejected_interaction_result(
+            state,
+            object_id=target_object_id,
+            outcome="REJECTED_UNKNOWN_OBJECT",
+        )
+
+    interaction_contract = _interaction_contract_for_object_type(object_state.object_type, contracts=contracts)
+    if interaction_contract is None:
+        return _rejected_interaction_result(
+            state,
+            object_id=target_object_id,
+            object_state=object_state,
+            outcome="REJECTED_UNSUPPORTED_OBJECT",
+        )
+    if not _is_valid_interaction_range(state.player_position, object_state.position, interaction_contract["range"]):
+        return _rejected_interaction_result(
+            state,
+            object_id=target_object_id,
+            object_state=object_state,
+            outcome="REJECTED_WRONG_RANGE",
+        )
+
+    if object_state.object_type in {SrsObjectType.RESOURCE_CACHE, SrsObjectType.SALVAGE} and _is_consumed_object(state, object_state):
+        return _rejected_interaction_result(
+            state,
+            object_id=target_object_id,
+            object_state=object_state,
+            outcome="REJECTED_ALREADY_CONSUMED",
+        )
+
+    if object_state.object_type is SrsObjectType.RESOURCE_CACHE:
+        return _apply_resource_cache_interaction(state, object_state, interaction_contract)
+    if object_state.object_type is SrsObjectType.STATION:
+        return _apply_station_interaction(state, object_state, interaction_contract)
+    if object_state.object_type is SrsObjectType.SALVAGE:
+        return _apply_salvage_interaction(state, object_state, interaction_contract)
+
+    return _rejected_interaction_result(
+        state,
+        object_id=target_object_id,
+        object_state=object_state,
+        outcome="REJECTED_UNSUPPORTED_OBJECT",
+    )
+
+
+def _apply_resource_cache_interaction(
+    state: SrsGameState,
+    object_state: SrsObjectState,
+    interaction_contract: Mapping[str, Any],
+) -> SrsCommandResult:
+    fuel_restore = _validated_fuel_restore(object_state)
+    fuel_before = state.fuel
+    fuel_after = min(state.max_fuel, fuel_before + fuel_restore)
+    fuel_delta = fuel_after - fuel_before
+    if fuel_delta == 0:
+        return _rejected_interaction_result(
+            state,
+            object_id=object_state.object_id,
+            object_state=object_state,
+            outcome="REJECTED_NO_EFFECT",
+        )
+
+    next_turn = state.srs_turn + 1
+    updated_state = _accepted_interaction_state(
+        state,
+        fuel_after=fuel_after,
+        next_turn=next_turn,
+        object_state=replace(object_state, consumed=True),
+        consumed_object_id=object_state.object_id,
+    )
+    events = (
+        _interaction_event(
+            srs_turn=next_turn,
+            event_type=INTERACT_ACCEPTED,
+            object_state=object_state,
+            interaction_contract=interaction_contract,
+            fuel_before=fuel_before,
+            fuel_after=fuel_after,
+            fuel_delta=fuel_delta,
+            outcome="ACCEPTED",
+        ),
+        make_turn_event(
+            srs_turn=next_turn,
+            event_type=OBJECT_CONSUMED,
+            payload={
+                "object_id": object_state.object_id,
+                "object_type": object_state.object_type.value,
+                "fuel_restore": fuel_restore,
+                "fuel_before": fuel_before,
+                "fuel_after": fuel_after,
+                "fuel_delta": fuel_delta,
+                "consumed": True,
+            },
+        ),
+    )
+    return SrsCommandResult(state=updated_state, events=events)
+
+
+def _apply_station_interaction(
+    state: SrsGameState,
+    object_state: SrsObjectState,
+    interaction_contract: Mapping[str, Any],
+) -> SrsCommandResult:
+    fuel_before = state.fuel
+    fuel_after = state.max_fuel
+    fuel_delta = fuel_after - fuel_before
+    if fuel_delta == 0:
+        return _rejected_interaction_result(
+            state,
+            object_id=object_state.object_id,
+            object_state=object_state,
+            outcome="REJECTED_NO_EFFECT",
+        )
+
+    next_turn = state.srs_turn + 1
+    updated_state = _accepted_interaction_state(
+        state,
+        fuel_after=fuel_after,
+        next_turn=next_turn,
+        object_state=replace(object_state, activated=True),
+        activated_object_id=object_state.object_id,
+    )
+    events = (
+        _interaction_event(
+            srs_turn=next_turn,
+            event_type=INTERACT_ACCEPTED,
+            object_state=object_state,
+            interaction_contract=interaction_contract,
+            fuel_before=fuel_before,
+            fuel_after=fuel_after,
+            fuel_delta=fuel_delta,
+            outcome="ACCEPTED",
+        ),
+        make_turn_event(
+            srs_turn=next_turn,
+            event_type=STATION_ACTIVATED,
+            payload={
+                "object_id": object_state.object_id,
+                "object_type": object_state.object_type.value,
+                "fuel_before": fuel_before,
+                "fuel_after": fuel_after,
+                "fuel_delta": fuel_delta,
+                "activated": True,
+                "reusable": True,
+            },
+        ),
+    )
+    return SrsCommandResult(state=updated_state, events=events)
+
+
+def _apply_salvage_interaction(
+    state: SrsGameState,
+    object_state: SrsObjectState,
+    interaction_contract: Mapping[str, Any],
+) -> SrsCommandResult:
+    next_turn = state.srs_turn + 1
+    updated_state = _accepted_interaction_state(
+        state,
+        fuel_after=state.fuel,
+        next_turn=next_turn,
+        object_state=replace(object_state, consumed=True),
+        consumed_object_id=object_state.object_id,
+    )
+    events = (
+        _interaction_event(
+            srs_turn=next_turn,
+            event_type=INTERACT_ACCEPTED,
+            object_state=object_state,
+            interaction_contract=interaction_contract,
+            fuel_before=state.fuel,
+            fuel_after=state.fuel,
+            fuel_delta=0,
+            outcome="ACCEPTED",
+        ),
+        make_turn_event(
+            srs_turn=next_turn,
+            event_type=OBJECT_CONSUMED,
+            payload={
+                "object_id": object_state.object_id,
+                "object_type": object_state.object_type.value,
+                "consumed": True,
+                "outcome": "ACCEPTED",
+            },
+        ),
+    )
+    return SrsCommandResult(state=updated_state, events=events)
+
+
+def _accepted_interaction_state(
+    state: SrsGameState,
+    *,
+    fuel_after: int,
+    next_turn: int,
+    object_state: SrsObjectState,
+    consumed_object_id: str | None = None,
+    activated_object_id: str | None = None,
+) -> SrsGameState:
+    objects = dict(state.objects)
+    objects[object_state.object_id] = object_state
+    consumed_object_ids = set(state.persistent_state.consumed_object_ids)
+    activated_object_ids = set(state.persistent_state.activated_object_ids)
+    if consumed_object_id is not None:
+        consumed_object_ids.add(consumed_object_id)
+    if activated_object_id is not None:
+        activated_object_ids.add(activated_object_id)
+    persistent_state = replace(
+        state.persistent_state,
+        consumed_object_ids=frozenset(consumed_object_ids),
+        activated_object_ids=frozenset(activated_object_ids),
+    )
+    return replace(
+        state,
+        objects=objects,
+        persistent_state=persistent_state,
+        srs_turn=next_turn,
+        fuel=fuel_after,
+    )
+
+
+def _rejected_interaction_result(
+    state: SrsGameState,
+    *,
+    object_id: str,
+    outcome: str,
+    object_state: SrsObjectState | None = None,
+) -> SrsCommandResult:
+    event = _interaction_event(
+        srs_turn=state.srs_turn,
+        event_type=INTERACT_REJECTED,
+        object_state=object_state,
+        interaction_contract=None,
+        fuel_before=state.fuel,
+        fuel_after=state.fuel,
+        fuel_delta=0,
+        outcome=outcome,
+        object_id=object_id,
+    )
+    return SrsCommandResult(state=state, events=(event,))
+
+
+def _interaction_event(
+    *,
+    srs_turn: int,
+    event_type: str,
+    object_state: SrsObjectState | None,
+    interaction_contract: Mapping[str, Any] | None,
+    fuel_before: int,
+    fuel_after: int,
+    fuel_delta: int,
+    outcome: str,
+    object_id: str | None = None,
+) -> Any:
+    resolved_object_id = object_id if object_id is not None else object_state.object_id
+    payload = {
+        "command_type": "INTERACT",
+        "object_id": resolved_object_id,
+        "object_type": None if object_state is None else object_state.object_type.value,
+        "interaction_range": None if interaction_contract is None else interaction_contract["range"],
+        "effect": None if interaction_contract is None else interaction_contract["effect"],
+        "position": None if object_state is None else _position_to_list(object_state.position),
+        "fuel_before": fuel_before,
+        "fuel_after": fuel_after,
+        "fuel_delta": fuel_delta,
+        "outcome": outcome,
+    }
+    return make_turn_event(
+        srs_turn=srs_turn,
+        event_type=event_type,
+        payload=payload,
+    )
+
+
+def _interaction_contract_for_object_type(
+    object_type: SrsObjectType,
+    *,
+    contracts: SrsContracts,
+) -> Mapping[str, Any] | None:
+    contract = contracts.movement.interaction.get(object_type.value)
+    if contract is None:
+        return None
+    if not isinstance(contract, Mapping):
+        raise SrsInteractionError(f"interaction contract for {object_type.value} must be a mapping")
+    return contract
+
+
+def _is_valid_interaction_range(player_position: Position, object_position: Position, interaction_range: object) -> bool:
+    if interaction_range == "SAME_CELL":
+        return player_position == object_position
+    if interaction_range == "ADJACENT":
+        distance = abs(player_position.x - object_position.x) + abs(player_position.y - object_position.y)
+        return distance == 1
+    raise SrsInteractionError(f"unsupported interaction range: {interaction_range}")
+
+
+def _is_consumed_object(state: SrsGameState, object_state: SrsObjectState) -> bool:
+    return object_state.consumed or object_state.object_id in state.persistent_state.consumed_object_ids
+
+
+def _validated_fuel_restore(object_state: SrsObjectState) -> int:
+    fuel_restore = object_state.metadata.get("fuel_restore")
+    if fuel_restore is None:
+        raise SrsInteractionError(f"{object_state.object_id} is missing fuel_restore metadata")
+    if not isinstance(fuel_restore, int) or isinstance(fuel_restore, bool) or fuel_restore <= 0:
+        raise SrsInteractionError(f"{object_state.object_id} fuel_restore must be a positive integer")
+    return fuel_restore
+
+
+def _apply_persistent_object_flags(
+    objects: Mapping[str, SrsObjectState],
+    *,
+    persistent: SrsPersistentState,
+) -> Mapping[str, SrsObjectState]:
+    normalized: dict[str, SrsObjectState] = {}
+    for object_id, object_state in objects.items():
+        normalized[object_id] = replace(
+            object_state,
+            consumed=object_state.consumed or object_id in persistent.consumed_object_ids,
+            activated=object_state.activated or object_id in persistent.activated_object_ids,
+        )
+    return normalized
 
 
 def _movement_event(

@@ -225,6 +225,10 @@ class SrsModelTests(unittest.TestCase):
         with self.assertRaisesRegex(SrsModelError, "MOVE_TO requires a target"):
             SrsCommand(command_type="MOVE_TO")
 
+    def test_srs_command_rejects_interact_without_target_object_id(self) -> None:
+        with self.assertRaisesRegex(SrsModelError, "INTERACT requires a target_object_id"):
+            SrsCommand(command_type="INTERACT")
+
     def test_srs_command_normalizes_route_to_tuple(self) -> None:
         command = SrsCommand(command_type="MOVE_ROUTE", route=[Direction.N, Direction.E])
         self.assertEqual(command.route, (Direction.N, Direction.E))

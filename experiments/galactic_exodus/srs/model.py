@@ -242,6 +242,7 @@ class SrsCommand:
     command_type: str
     route: tuple[Direction, ...] = ()
     target: Position | None = None
+    target_object_id: str | None = None
 
     def __post_init__(self) -> None:
         command_type = str(self.command_type)
@@ -254,6 +255,8 @@ class SrsCommand:
             raise SrsModelError("MOVE_ROUTE requires a non-empty route")
         if command_type == "MOVE_TO" and self.target is None:
             raise SrsModelError("MOVE_TO requires a target")
+        if command_type == "INTERACT" and not self.target_object_id:
+            raise SrsModelError("INTERACT requires a target_object_id")
 
         object.__setattr__(self, "command_type", command_type)
         object.__setattr__(self, "route", route)
