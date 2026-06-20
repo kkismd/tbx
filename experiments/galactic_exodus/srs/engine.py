@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections import deque
 from dataclasses import replace
 from typing import Any, Mapping, Sequence
 
@@ -255,6 +256,39 @@ def resolve_move_route(
     return tuple(entered_cells), blocked_position, raw_cost
 
 
+def route_to_known_target(
+    state: SrsGameState,
+    target: Position,
+) -> tuple[Direction, ...]:
+    start = state.player_position
+    if start == target:
+        return ()
+
+    came_from: dict[Position, tuple[Position, Direction] | None] = {start: None}
+    frontier: deque[Position] = deque([start])
+    directions = (Direction.N, Direction.E, Direction.S, Direction.W)
+
+    while frontier:
+        current = frontier.popleft()
+        for direction in directions:
+            next_position = _step_position(current, direction)
+            if next_position in came_from:
+                continue
+            if next_position not in state.known_state.discovered_cells:
+                continue
+            if not state.actual_map.contains(next_position):
+                continue
+            if is_impassable_cell(state, next_position):
+                continue
+
+            came_from[next_position] = (current, direction)
+            if next_position == target:
+                return _reconstruct_route(came_from, start=start, target=target)
+            frontier.append(next_position)
+
+    raise SrsMovementError(f"no route to known target: {target}")
+
+
 def apply_srs_command(
     state: SrsGameState,
     command: SrsCommand,
@@ -264,11 +298,7 @@ def apply_srs_command(
     if command.command_type == "MOVE_ROUTE":
         return _apply_move_route(state, command, contracts=contracts)
     if command.command_type == "MOVE_TO":
-        return _rejected_command_result(
-            state,
-            command_type=command.command_type,
-            outcome="REJECTED_MOVE_TO_UNIMPLEMENTED",
-        )
+        return _apply_move_to(state, command, contracts=contracts)
     return _rejected_command_result(
         state,
         command_type=command.command_type,
@@ -405,11 +435,74 @@ def _apply_move_route(
     )
 
 
+def _apply_move_to(
+    state: SrsGameState,
+    command: SrsCommand,
+    *,
+    contracts: SrsContracts,
+) -> SrsCommandResult:
+    target = command.target
+    if target is None:
+        raise SrsMovementError("MOVE_TO requires a target")
+    if not state.actual_map.contains(target):
+        return _rejected_command_result(
+            state,
+            command_type=command.command_type,
+            outcome="REJECTED_OUT_OF_BOUNDS",
+            target_position=target,
+            resolved_route=(),
+        )
+    if target == state.player_position:
+        return _rejected_command_result(
+            state,
+            command_type=command.command_type,
+            outcome="REJECTED_SAME_POSITION",
+            target_position=target,
+            resolved_route=(),
+        )
+    if target not in state.known_state.discovered_cells:
+        return _rejected_command_result(
+            state,
+            command_type=command.command_type,
+            outcome="REJECTED_UNKNOWN_TARGET",
+            target_position=target,
+            resolved_route=(),
+        )
+
+    try:
+        route = route_to_known_target(state, target)
+    except SrsMovementError:
+        return _rejected_command_result(
+            state,
+            command_type=command.command_type,
+            outcome="REJECTED_NO_PATH",
+            target_position=target,
+            resolved_route=(),
+        )
+
+    result = apply_srs_command(
+        state,
+        SrsCommand(command_type="MOVE_ROUTE", route=route),
+        contracts=contracts,
+    )
+    movement_event = _override_move_to_event(
+        result.events[0],
+        target_position=target,
+        resolved_route=route,
+    )
+    return SrsCommandResult(
+        state=result.state,
+        events=(movement_event, *result.events[1:]),
+    )
+
+
 def _rejected_command_result(
     state: SrsGameState,
     *,
     command_type: str,
     outcome: str,
+    target_position: Position | None = None,
+    resolved_route: Sequence[Direction] | None = None,
 ) -> SrsCommandResult:
     event = _movement_event(
         srs_turn=state.srs_turn,
@@ -422,6 +515,8 @@ def _rejected_command_result(
         movement_raw_cost=0,
         observation_updates=(),
         outcome=outcome,
+        target_position=target_position,
+        resolved_route=resolved_route,
     )
     return SrsCommandResult(state=state, events=(event,))
 
@@ -438,23 +533,29 @@ def _movement_event(
     movement_raw_cost: int,
     observation_updates: Sequence[Position],
     outcome: str,
+    target_position: Position | None = None,
+    resolved_route: Sequence[Direction] | None = None,
 ):
+    payload = {
+        "command_type": command_type,
+        "movement_rule": MovementRule.MOVEMENT_POINTS.value,
+        "cost_mode": CostMode.TURN_ONLY.value,
+        "start_position": _position_to_list(start_position),
+        "end_position": _position_to_list(end_position),
+        "entered_cells": [_position_to_list(position) for position in entered_cells],
+        "blocked_position": None if blocked_position is None else _position_to_list(blocked_position),
+        "movement_raw_cost": movement_raw_cost,
+        "fuel_delta": 0,
+        "observation_updates": [_position_to_list(position) for position in observation_updates],
+        "outcome": outcome,
+    }
+    if target_position is not None or resolved_route is not None:
+        payload["target_position"] = None if target_position is None else _position_to_list(target_position)
+        payload["resolved_route"] = [] if resolved_route is None else [direction.value for direction in resolved_route]
     return make_turn_event(
         srs_turn=srs_turn,
         event_type=event_type,
-        payload={
-            "command_type": command_type,
-            "movement_rule": MovementRule.MOVEMENT_POINTS.value,
-            "cost_mode": CostMode.TURN_ONLY.value,
-            "start_position": _position_to_list(start_position),
-            "end_position": _position_to_list(end_position),
-            "entered_cells": [_position_to_list(position) for position in entered_cells],
-            "blocked_position": None if blocked_position is None else _position_to_list(blocked_position),
-            "movement_raw_cost": movement_raw_cost,
-            "fuel_delta": 0,
-            "observation_updates": [_position_to_list(position) for position in observation_updates],
-            "outcome": outcome,
-        },
+        payload=payload,
     )
 
 
@@ -478,6 +579,24 @@ def _movement_turn_cost(contracts: SrsContracts) -> int:
     return turn_cost
 
 
+def _reconstruct_route(
+    came_from: Mapping[Position, tuple[Position, Direction] | None],
+    *,
+    start: Position,
+    target: Position,
+) -> tuple[Direction, ...]:
+    route: list[Direction] = []
+    current = target
+    while current != start:
+        previous = came_from.get(current)
+        if previous is None:
+            raise SrsMovementError(f"route reconstruction failed: {target}")
+        current, direction = previous
+        route.append(direction)
+    route.reverse()
+    return tuple(route)
+
+
 def _step_position(position: Position, direction: Direction) -> Position:
     deltas = {
         Direction.N: (0, -1),
@@ -491,3 +610,20 @@ def _step_position(position: Position, direction: Direction) -> Position:
 
 def _position_to_list(position: Position) -> list[int]:
     return [position.x, position.y]
+
+
+def _override_move_to_event(
+    event,
+    *,
+    target_position: Position,
+    resolved_route: Sequence[Direction],
+):
+    payload = dict(event.payload)
+    payload["command_type"] = "MOVE_TO"
+    payload["target_position"] = _position_to_list(target_position)
+    payload["resolved_route"] = [direction.value for direction in resolved_route]
+    return make_turn_event(
+        srs_turn=event.srs_turn,
+        event_type=event.event_type,
+        payload=payload,
+    )
