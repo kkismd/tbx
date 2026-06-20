@@ -7,7 +7,12 @@ from pathlib import Path
 from typing import Any
 
 from experiments.galactic_exodus.srs.contracts import load_default_contracts
-from experiments.galactic_exodus.srs.generate import EDGE_POSITIONS, SrsGenerationError, create_sector
+from experiments.galactic_exodus.srs.generate import (
+    EDGE_POSITIONS,
+    SrsGenerationError,
+    create_sector,
+    resource_cache_restore_values,
+)
 from experiments.galactic_exodus.srs.model import (
     Direction,
     Position,
@@ -39,6 +44,11 @@ def summarize_state(state: SrsGameState) -> dict[str, Any]:
         object_id: [object_state.position.x, object_state.position.y]
         for object_id, object_state in sorted(state.objects.items())
     }
+    object_metadata = {
+        object_id: dict(object_state.metadata)
+        for object_id, object_state in sorted(state.objects.items())
+        if object_state.metadata
+    }
     return {
         "width": state.actual_map.width,
         "height": state.actual_map.height,
@@ -50,6 +60,7 @@ def summarize_state(state: SrsGameState) -> dict[str, Any]:
         "terrain_counts": dict(sorted(terrain_counts.items())),
         "object_counts": dict(sorted(object_counts.items())),
         "object_positions": object_positions,
+        "object_metadata": object_metadata,
         "blocked_warp_positions": [
             f"{position.x},{position.y}"
             for direction, position in sorted(
@@ -200,6 +211,41 @@ class SrsGenerateTests(unittest.TestCase):
         )
 
         self.assertEqual(summarize_state(state)["object_counts"]["RESOURCE_CACHE"], 1)
+
+    def test_resource_cache_has_fuel_restore_metadata(self) -> None:
+        state = create_sector(
+            SectorDescriptor("resource-1", SectorType.RESOURCE, 3001, Direction.S),
+            contracts=self.contracts,
+        )
+
+        resource_cache = state.objects["resource-cache-1"]
+        self.assertEqual(resource_cache.metadata["fuel_restore"], 5)
+
+    def test_resource_cache_one_cache_restore_is_5(self) -> None:
+        self.assertEqual(resource_cache_restore_values(1), (5,))
+
+    def test_resource_cache_two_cache_restore_split_is_3_2(self) -> None:
+        self.assertEqual(resource_cache_restore_values(2), (3, 2))
+
+    def test_resource_cache_three_cache_restore_split_is_2_2_1(self) -> None:
+        self.assertEqual(resource_cache_restore_values(3), (2, 2, 1))
+
+    def test_resource_cache_restore_metadata_is_positive_int(self) -> None:
+        state = create_sector(
+            SectorDescriptor("resource-1", SectorType.RESOURCE, 3001, Direction.S),
+            contracts=self.contracts,
+        )
+
+        fuel_restore = state.objects["resource-cache-1"].metadata["fuel_restore"]
+        self.assertIs(type(fuel_restore), int)
+        self.assertGreater(fuel_restore, 0)
+
+    def test_resource_cache_restore_values_zero_caches_returns_empty(self) -> None:
+        self.assertEqual(resource_cache_restore_values(0), ())
+
+    def test_resource_cache_restore_values_rejects_more_than_three(self) -> None:
+        with self.assertRaisesRegex(SrsGenerationError, "at most 3"):
+            resource_cache_restore_values(4)
 
     def test_rift_has_one_salvage(self) -> None:
         state = create_sector(

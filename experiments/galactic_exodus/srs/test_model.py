@@ -183,6 +183,18 @@ class SrsModelTests(unittest.TestCase):
                 objects={},
             )
 
+    def test_object_state_freezes_metadata(self) -> None:
+        resource_cache = SrsObjectState(
+            object_id="resource-cache-1",
+            object_type=SrsObjectType.RESOURCE_CACHE,
+            position=Position(1, 2),
+            metadata={"fuel_restore": 5},
+        )
+
+        self.assertEqual(resource_cache.metadata["fuel_restore"], 5)
+        with self.assertRaises(TypeError):
+            resource_cache.metadata["fuel_restore"] = 4
+
     def test_known_state_freezes_known_cells(self) -> None:
         state = SrsKnownState(
             discovered_cells={Position(0, 0)},

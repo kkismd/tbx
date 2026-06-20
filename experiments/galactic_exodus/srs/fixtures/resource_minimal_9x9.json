@@ -24,6 +24,11 @@
       "RESOURCE_CACHE": 1,
       "STAR": 1
     },
+    "object_metadata": {
+      "resource-cache-1": {
+        "fuel_restore": 5
+      }
+    },
     "known_discovered_count": 0
   }
 }

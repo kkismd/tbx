@@ -44,6 +44,20 @@ SECTOR_EXTRA_OBJECTS = {
 }
 
 
+def resource_cache_restore_values(cache_count: int) -> tuple[int, ...]:
+    if cache_count < 0:
+        raise SrsGenerationError("resource cache count must be non-negative")
+    if cache_count == 0:
+        return ()
+    if cache_count == 1:
+        return (5,)
+    if cache_count == 2:
+        return (3, 2)
+    if cache_count == 3:
+        return (2, 2, 1)
+    raise SrsGenerationError("resource sectors support at most 3 resource caches")
+
+
 def create_sector(
     descriptor: SectorDescriptor,
     *,
@@ -173,7 +187,27 @@ def _place_objects(
             object_type=object_type,
             position=position,
         )
+    _assign_resource_cache_metadata(objects)
     return objects
+
+
+def _assign_resource_cache_metadata(objects: dict[str, SrsObjectState]) -> None:
+    resource_cache_ids = sorted(
+        object_id
+        for object_id, state in objects.items()
+        if state.object_type is SrsObjectType.RESOURCE_CACHE
+    )
+    restore_values = resource_cache_restore_values(len(resource_cache_ids))
+    for object_id, fuel_restore in zip(resource_cache_ids, restore_values, strict=True):
+        resource_cache = objects[object_id]
+        objects[object_id] = SrsObjectState(
+            object_id=resource_cache.object_id,
+            object_type=resource_cache.object_type,
+            position=resource_cache.position,
+            consumed=resource_cache.consumed,
+            activated=resource_cache.activated,
+            metadata={"fuel_restore": fuel_restore},
+        )
 
 
 def _collect_object_candidates(
