@@ -3,9 +3,10 @@ from __future__ import annotations
 import unittest
 from dataclasses import replace
 from pathlib import Path
+from typing import Iterable
 
 from experiments.galactic_exodus.srs.contracts import load_default_contracts
-from experiments.galactic_exodus.srs.engine import apply_srs_command, run_srs_commands
+from experiments.galactic_exodus.srs.engine import apply_srs_command, reveal_full_observation, run_srs_commands
 from experiments.galactic_exodus.srs.generate import create_sector
 from experiments.galactic_exodus.srs.log import (
     MOVE_ACCEPTED,
@@ -122,6 +123,33 @@ def _build_map(state: SrsGameState, rows: list[list[SrsCell]]) -> SrsActualMap:
         width=state.actual_map.width,
         height=state.actual_map.height,
         cells=tuple(tuple(row) for row in rows),
+    )
+
+
+def reveal_all_for_move_to(state: SrsGameState) -> SrsGameState:
+    return reveal_full_observation(state)
+
+
+def reveal_positions(
+    state: SrsGameState,
+    positions: Iterable[Position],
+) -> SrsGameState:
+    discovered_cells = frozenset(positions)
+    known_cells = {
+        position: state.actual_map.cell_at(position)
+        for position in discovered_cells
+    }
+    return replace(
+        state,
+        known_state=replace(
+            state.known_state,
+            discovered_cells=discovered_cells,
+            known_cells=known_cells,
+        ),
+        persistent_state=replace(
+            state.persistent_state,
+            discovered_cells=discovered_cells,
+        ),
     )
 
 
@@ -295,7 +323,7 @@ class SrsEngineMovementTests(unittest.TestCase):
         self.assertEqual(len(result.state.known_state.discovered_cells), 0)
         self.assertEqual([event.event_type for event in result.events], [MOVE_REJECTED])
 
-    def test_move_to_is_rejected_until_1114(self) -> None:
+    def test_move_to_rejects_unknown_target(self) -> None:
         state = make_state()
 
         result = apply_srs_command(
@@ -305,7 +333,147 @@ class SrsEngineMovementTests(unittest.TestCase):
         )
 
         self.assertEqual(result.events[0].event_type, MOVE_REJECTED)
-        self.assertEqual(result.events[0].payload["outcome"], "REJECTED_MOVE_TO_UNIMPLEMENTED")
+        self.assertEqual(result.events[0].payload["outcome"], "REJECTED_UNKNOWN_TARGET")
+        self.assertEqual(result.events[0].payload["target_position"], [4, 7])
+        self.assertEqual(result.events[0].payload["resolved_route"], [])
+        self.assertEqual(result.state, state)
+
+    def test_move_to_rejects_same_position(self) -> None:
+        state = make_state()
+
+        result = apply_srs_command(
+            state,
+            SrsCommand(command_type="MOVE_TO", target=state.player_position),
+            contracts=self.contracts,
+        )
+
+        self.assertEqual(result.events[0].event_type, MOVE_REJECTED)
+        self.assertEqual(result.events[0].payload["outcome"], "REJECTED_SAME_POSITION")
+        self.assertEqual(result.events[0].payload["target_position"], [4, 8])
+        self.assertEqual(result.events[0].payload["resolved_route"], [])
+        self.assertEqual(result.state, state)
+
+    def test_move_to_rejects_out_of_bounds_target(self) -> None:
+        state = make_state()
+
+        result = apply_srs_command(
+            state,
+            SrsCommand(command_type="MOVE_TO", target=Position(-1, 8)),
+            contracts=self.contracts,
+        )
+
+        self.assertEqual(result.events[0].event_type, MOVE_REJECTED)
+        self.assertEqual(result.events[0].payload["outcome"], "REJECTED_OUT_OF_BOUNDS")
+        self.assertEqual(result.events[0].payload["target_position"], [-1, 8])
+        self.assertEqual(result.events[0].payload["resolved_route"], [])
+        self.assertEqual(result.state, state)
+
+    def test_move_to_rejects_no_path(self) -> None:
+        target = Position(4, 6)
+        state = reveal_positions(make_state(), [target])
+
+        result = apply_srs_command(
+            state,
+            SrsCommand(command_type="MOVE_TO", target=target),
+            contracts=self.contracts,
+        )
+
+        self.assertEqual(result.events[0].event_type, MOVE_REJECTED)
+        self.assertEqual(result.events[0].payload["outcome"], "REJECTED_NO_PATH")
+        self.assertEqual(result.events[0].payload["target_position"], [4, 6])
+        self.assertEqual(result.events[0].payload["resolved_route"], [])
+        self.assertEqual(result.state, state)
+
+    def test_move_to_uses_known_cells_bfs_neighbor_order(self) -> None:
+        target = Position(5, 7)
+        state = reveal_positions(
+            make_state(),
+            [
+                Position(4, 7),
+                Position(5, 8),
+                target,
+            ],
+        )
+
+        result = apply_srs_command(
+            state,
+            SrsCommand(command_type="MOVE_TO", target=target),
+            contracts=self.contracts,
+        )
+
+        self.assertEqual(result.events[0].event_type, MOVE_ACCEPTED)
+        self.assertEqual(result.events[0].payload["resolved_route"], ["N", "E"])
+        self.assertEqual(result.events[0].payload["entered_cells"], [[4, 7], [5, 7]])
+
+    def test_move_to_executes_resolved_route(self) -> None:
+        state = reveal_all_for_move_to(make_state())
+
+        result = apply_srs_command(
+            state,
+            SrsCommand(command_type="MOVE_TO", target=Position(4, 6)),
+            contracts=self.contracts,
+        )
+
+        self.assertEqual(result.state.player_position, Position(4, 6))
+        self.assertEqual(result.events[0].event_type, MOVE_ACCEPTED)
+        self.assertEqual(result.events[0].payload["entered_cells"], [[4, 7], [4, 6]])
+        self.assertEqual(result.events[0].payload["movement_raw_cost"], 20)
+
+    def test_move_to_observation_updates_entered_cells(self) -> None:
+        state = reveal_all_for_move_to(make_state())
+
+        result = apply_srs_command(
+            state,
+            SrsCommand(command_type="MOVE_TO", target=Position(4, 6)),
+            contracts=self.contracts,
+        )
+
+        self.assertEqual(
+            [event.event_type for event in result.events],
+            [MOVE_ACCEPTED, OBSERVATION_UPDATED, OBSERVATION_UPDATED],
+        )
+        self.assertEqual(result.events[0].payload["observation_updates"], [[4, 7], [4, 6]])
+        self.assertEqual(result.state.known_state.visited_cells, frozenset({Position(4, 7), Position(4, 6)}))
+
+    def test_move_to_payload_contains_target_and_resolved_route(self) -> None:
+        state = reveal_all_for_move_to(make_state())
+
+        result = apply_srs_command(
+            state,
+            SrsCommand(command_type="MOVE_TO", target=Position(5, 7)),
+            contracts=self.contracts,
+        )
+
+        self.assertEqual(result.events[0].payload["command_type"], "MOVE_TO")
+        self.assertEqual(result.events[0].payload["target_position"], [5, 7])
+        self.assertEqual(result.events[0].payload["resolved_route"], ["N", "E"])
+
+    def test_move_to_budget_stop_uses_resolved_route_prefix(self) -> None:
+        state = reveal_all_for_move_to(make_state())
+
+        result = apply_srs_command(
+            state,
+            SrsCommand(command_type="MOVE_TO", target=Position(4, 3)),
+            contracts=self.contracts,
+        )
+
+        self.assertEqual(result.events[0].event_type, MOVE_ACCEPTED)
+        self.assertEqual(result.events[0].payload["outcome"], "BUDGET_EXHAUSTED")
+        self.assertEqual(result.events[0].payload["resolved_route"], ["N", "N", "N", "N", "N"])
+        self.assertEqual(result.events[0].payload["entered_cells"], [[4, 7], [4, 6], [4, 5], [4, 4]])
+        self.assertEqual(result.state.player_position, Position(4, 4))
+
+    def test_move_to_replaces_1107_unimplemented_reject(self) -> None:
+        state = reveal_all_for_move_to(make_state())
+
+        result = apply_srs_command(
+            state,
+            SrsCommand(command_type="MOVE_TO", target=Position(4, 7)),
+            contracts=self.contracts,
+        )
+
+        self.assertEqual(result.events[0].event_type, MOVE_ACCEPTED)
+        self.assertNotEqual(result.events[0].payload["outcome"], "REJECTED_MOVE_TO_UNIMPLEMENTED")
 
     def test_impassable_star_blocks_movement(self) -> None:
         state = place_object(make_state(), Position(4, 7), SrsObjectType.STAR, "star-blocker")
