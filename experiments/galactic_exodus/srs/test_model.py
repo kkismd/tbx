@@ -3,6 +3,8 @@ from __future__ import annotations
 import unittest
 
 from experiments.galactic_exodus.srs.model import (
+    SrsCommand,
+    SrsCommandResult,
     Direction,
     Position,
     SectorDescriptor,
@@ -202,6 +204,44 @@ class SrsModelTests(unittest.TestCase):
                 discovered_cells={Position(0, 0)},
                 known_cells={Position(1, 1): SrsCell(SrsTerrainType.FLOOR)},
             )
+
+    def test_srs_command_rejects_empty_move_route(self) -> None:
+        with self.assertRaisesRegex(SrsModelError, "MOVE_ROUTE requires a non-empty route"):
+            SrsCommand(command_type="MOVE_ROUTE")
+
+    def test_srs_command_rejects_move_to_without_target(self) -> None:
+        with self.assertRaisesRegex(SrsModelError, "MOVE_TO requires a target"):
+            SrsCommand(command_type="MOVE_TO")
+
+    def test_srs_command_normalizes_route_to_tuple(self) -> None:
+        command = SrsCommand(command_type="MOVE_ROUTE", route=[Direction.N, Direction.E])
+        self.assertEqual(command.route, (Direction.N, Direction.E))
+
+    def test_srs_command_result_freezes_events(self) -> None:
+        state = SrsGameState(
+            descriptor=SectorDescriptor(
+                sector_id="N-1",
+                sector_type=SectorType.NORMAL,
+                sector_seed=1,
+                entry_edge=Direction.N,
+            ),
+            actual_map=SrsActualMap(width=1, height=1, cells=((SrsCell(SrsTerrainType.FLOOR),),)),
+            known_state=SrsKnownState(),
+            persistent_state=SrsPersistentState(
+                generated_map_id="N-1:1",
+                generation_schema_version=1,
+                generation_seed=1,
+                sector_type=SectorType.NORMAL,
+                blocked_edges=frozenset(),
+            ),
+            player_position=Position(0, 0),
+            objects={},
+        )
+        result = SrsCommandResult(
+            state=state,
+            events=[],
+        )
+        self.assertEqual(result.events, ())
 
 
 if __name__ == "__main__":

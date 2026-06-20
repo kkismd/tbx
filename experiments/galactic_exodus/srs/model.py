@@ -237,6 +237,37 @@ class SrsGameLog:
         object.__setattr__(self, "events", tuple(self.events))
 
 
+@dataclass(frozen=True, slots=True)
+class SrsCommand:
+    command_type: str
+    route: tuple[Direction, ...] = ()
+    target: Position | None = None
+
+    def __post_init__(self) -> None:
+        command_type = str(self.command_type)
+        try:
+            route = tuple(Direction(direction) for direction in self.route)
+        except ValueError as exc:
+            raise SrsModelError("route must contain only Direction values") from exc
+
+        if command_type == "MOVE_ROUTE" and not route:
+            raise SrsModelError("MOVE_ROUTE requires a non-empty route")
+        if command_type == "MOVE_TO" and self.target is None:
+            raise SrsModelError("MOVE_TO requires a target")
+
+        object.__setattr__(self, "command_type", command_type)
+        object.__setattr__(self, "route", route)
+
+
+@dataclass(frozen=True, slots=True)
+class SrsCommandResult:
+    state: SrsGameState
+    events: tuple[SrsTurnEvent, ...]
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "events", tuple(self.events))
+
+
 def validate_sector_descriptor(descriptor: SectorDescriptor) -> None:
     if descriptor.sector_type is SectorType.RIFT:
         if not descriptor.blocked_edges:
