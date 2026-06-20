@@ -6,7 +6,13 @@ from pathlib import Path
 from typing import Iterable
 
 from experiments.galactic_exodus.srs.contracts import load_default_contracts
-from experiments.galactic_exodus.srs.engine import apply_srs_command, reveal_full_observation, run_srs_commands
+from experiments.galactic_exodus.srs.engine import (
+    SrsMovementError,
+    apply_srs_command,
+    fuel_delta_for_movement_raw_cost,
+    reveal_full_observation,
+    run_srs_commands,
+)
 from experiments.galactic_exodus.srs.generate import create_sector
 from experiments.galactic_exodus.srs.log import (
     MOVE_ACCEPTED,
@@ -15,6 +21,7 @@ from experiments.galactic_exodus.srs.log import (
     STOPPED_BEFORE_IMPASSABLE,
 )
 from experiments.galactic_exodus.srs.model import (
+    CostMode,
     Direction,
     Position,
     SectorDescriptor,
@@ -180,6 +187,48 @@ class SrsEngineMovementTests(unittest.TestCase):
 
         self.assertEqual(result.state.fuel, 7)
         self.assertEqual(result.events[0].payload["fuel_delta"], 0)
+        self.assertEqual(result.events[0].payload["fuel_before"], 7)
+        self.assertEqual(result.events[0].payload["fuel_after"], 7)
+
+    def test_fuel_delta_for_turn_only_is_zero(self) -> None:
+        self.assertEqual(
+            fuel_delta_for_movement_raw_cost(
+                40,
+                cost_mode=CostMode.TURN_ONLY,
+                contracts=self.contracts,
+            ),
+            0,
+        )
+
+    def test_fuel_delta_for_shared_fuel_uses_ceil_raw_cost_div_denominator(self) -> None:
+        expectations = {
+            0: 0,
+            1: -1,
+            10: -1,
+            11: -2,
+            20: -2,
+            30: -3,
+            40: -4,
+        }
+
+        for movement_raw_cost, expected_delta in expectations.items():
+            with self.subTest(movement_raw_cost=movement_raw_cost):
+                self.assertEqual(
+                    fuel_delta_for_movement_raw_cost(
+                        movement_raw_cost,
+                        cost_mode=CostMode.SHARED_FUEL,
+                        contracts=self.contracts,
+                    ),
+                    expected_delta,
+                )
+
+    def test_fuel_delta_rejects_negative_raw_cost(self) -> None:
+        with self.assertRaisesRegex(SrsMovementError, "movement_raw_cost must be non-negative"):
+            fuel_delta_for_movement_raw_cost(
+                -1,
+                cost_mode=CostMode.SHARED_FUEL,
+                contracts=self.contracts,
+            )
 
     def test_move_route_executes_longest_prefix_within_budget(self) -> None:
         state = make_state()
@@ -251,6 +300,65 @@ class SrsEngineMovementTests(unittest.TestCase):
         self.assertEqual(result.events[0].payload["movement_raw_cost"], 0)
         self.assertEqual(result.events[0].payload["observation_updates"], [])
 
+    def test_turn_only_payload_contains_fuel_before_and_after(self) -> None:
+        state = make_state(fuel=2, max_fuel=9)
+
+        result = apply_srs_command(
+            state,
+            SrsCommand(command_type="MOVE_ROUTE", route=(Direction.N, Direction.N, Direction.N, Direction.N)),
+            contracts=self.contracts,
+            cost_mode=CostMode.TURN_ONLY,
+        )
+
+        self.assertEqual(result.events[0].payload["cost_mode"], "TURN_ONLY")
+        self.assertEqual(result.events[0].payload["movement_raw_cost"], 40)
+        self.assertEqual(result.events[0].payload["fuel_delta"], 0)
+        self.assertEqual(result.events[0].payload["fuel_before"], 2)
+        self.assertEqual(result.events[0].payload["fuel_after"], 2)
+
+    def test_shared_fuel_consumes_ceil_raw_cost_div_10(self) -> None:
+        state = make_state(fuel=7, max_fuel=9)
+
+        result = apply_srs_command(
+            state,
+            SrsCommand(command_type="MOVE_ROUTE", route=(Direction.N, Direction.N, Direction.N, Direction.N)),
+            contracts=self.contracts,
+            cost_mode=CostMode.SHARED_FUEL,
+        )
+
+        self.assertEqual(result.state.fuel, 3)
+        self.assertEqual(result.events[0].payload["cost_mode"], "SHARED_FUEL")
+        self.assertEqual(result.events[0].payload["movement_raw_cost"], 40)
+        self.assertEqual(result.events[0].payload["fuel_delta"], -4)
+        self.assertEqual(result.events[0].payload["fuel_before"], 7)
+        self.assertEqual(result.events[0].payload["fuel_after"], 3)
+
+    def test_shared_fuel_clamps_state_fuel_to_zero(self) -> None:
+        state = make_state(fuel=2, max_fuel=9)
+
+        result = apply_srs_command(
+            state,
+            SrsCommand(command_type="MOVE_ROUTE", route=(Direction.N, Direction.N, Direction.N, Direction.N)),
+            contracts=self.contracts,
+            cost_mode=CostMode.SHARED_FUEL,
+        )
+
+        self.assertEqual(result.state.fuel, 0)
+
+    def test_shared_fuel_payload_keeps_rule_delta_even_when_clamped(self) -> None:
+        state = make_state(fuel=2, max_fuel=9)
+
+        result = apply_srs_command(
+            state,
+            SrsCommand(command_type="MOVE_ROUTE", route=(Direction.N, Direction.N, Direction.N, Direction.N)),
+            contracts=self.contracts,
+            cost_mode=CostMode.SHARED_FUEL,
+        )
+
+        self.assertEqual(result.events[0].payload["fuel_before"], 2)
+        self.assertEqual(result.events[0].payload["fuel_delta"], -4)
+        self.assertEqual(result.events[0].payload["fuel_after"], 0)
+
     def test_stop_before_after_partial_movement(self) -> None:
         state = place_object(make_state(), Position(4, 5), SrsObjectType.STAR, "star-blocker")
 
@@ -268,6 +376,48 @@ class SrsEngineMovementTests(unittest.TestCase):
         self.assertEqual(result.events[0].payload["blocked_position"], [4, 5])
         self.assertEqual(result.events[0].payload["movement_raw_cost"], 20)
 
+    def test_shared_fuel_first_blocked_cell_costs_zero_fuel(self) -> None:
+        state = replace_cell_terrain(
+            make_state(
+                sector_type=SectorType.RIFT,
+                entry_edge=Direction.S,
+                blocked_edges=frozenset({Direction.N}),
+                fuel=5,
+                max_fuel=9,
+            ),
+            Position(4, 7),
+            SrsTerrainType.RIFT_BARRIER,
+        )
+
+        result = apply_srs_command(
+            state,
+            SrsCommand(command_type="MOVE_ROUTE", route=(Direction.N,)),
+            contracts=self.contracts,
+            cost_mode=CostMode.SHARED_FUEL,
+        )
+
+        self.assertEqual(result.state.fuel, 5)
+        self.assertEqual(result.events[0].payload["movement_raw_cost"], 0)
+        self.assertEqual(result.events[0].payload["fuel_delta"], 0)
+        self.assertEqual(result.events[0].payload["fuel_before"], 5)
+        self.assertEqual(result.events[0].payload["fuel_after"], 5)
+
+    def test_shared_fuel_partial_blocked_counts_passable_cells_only(self) -> None:
+        state = place_object(make_state(fuel=5, max_fuel=9), Position(4, 5), SrsObjectType.STAR, "star-blocker")
+
+        result = apply_srs_command(
+            state,
+            SrsCommand(command_type="MOVE_ROUTE", route=(Direction.N, Direction.N, Direction.N, Direction.N)),
+            contracts=self.contracts,
+            cost_mode=CostMode.SHARED_FUEL,
+        )
+
+        self.assertEqual(result.state.fuel, 3)
+        self.assertEqual(result.events[0].event_type, STOPPED_BEFORE_IMPASSABLE)
+        self.assertEqual(result.events[0].payload["movement_raw_cost"], 20)
+        self.assertEqual(result.events[0].payload["fuel_delta"], -2)
+        self.assertEqual(result.events[0].payload["fuel_after"], 3)
+
     def test_budget_stop_is_move_accepted_not_blocked(self) -> None:
         state = make_state()
 
@@ -283,6 +433,24 @@ class SrsEngineMovementTests(unittest.TestCase):
         self.assertEqual(result.events[0].event_type, MOVE_ACCEPTED)
         self.assertIsNone(result.events[0].payload["blocked_position"])
         self.assertEqual(result.events[0].payload["outcome"], "BUDGET_EXHAUSTED")
+
+    def test_shared_fuel_budget_stop_counts_executed_prefix_only(self) -> None:
+        state = make_state(fuel=6, max_fuel=9)
+
+        result = apply_srs_command(
+            state,
+            SrsCommand(
+                command_type="MOVE_ROUTE",
+                route=(Direction.N, Direction.N, Direction.N, Direction.N, Direction.W),
+            ),
+            contracts=self.contracts,
+            cost_mode=CostMode.SHARED_FUEL,
+        )
+
+        self.assertEqual(result.state.fuel, 2)
+        self.assertEqual(result.events[0].payload["movement_raw_cost"], 40)
+        self.assertEqual(result.events[0].payload["fuel_delta"], -4)
+        self.assertEqual(result.events[0].payload["fuel_after"], 2)
 
     def test_successful_steps_update_observation(self) -> None:
         state = make_state()
@@ -322,6 +490,22 @@ class SrsEngineMovementTests(unittest.TestCase):
         self.assertEqual(result.state, state)
         self.assertEqual(len(result.state.known_state.discovered_cells), 0)
         self.assertEqual([event.event_type for event in result.events], [MOVE_REJECTED])
+
+    def test_shared_fuel_rejected_command_does_not_change_fuel(self) -> None:
+        state = make_state(fuel=5, max_fuel=9)
+
+        result = apply_srs_command(
+            state,
+            SrsCommand(command_type="INTERACT"),
+            contracts=self.contracts,
+            cost_mode=CostMode.SHARED_FUEL,
+        )
+
+        self.assertEqual(result.state.fuel, 5)
+        self.assertEqual(result.events[0].payload["cost_mode"], "SHARED_FUEL")
+        self.assertEqual(result.events[0].payload["fuel_delta"], 0)
+        self.assertEqual(result.events[0].payload["fuel_before"], 5)
+        self.assertEqual(result.events[0].payload["fuel_after"], 5)
 
     def test_move_to_rejects_unknown_target(self) -> None:
         state = make_state()
@@ -419,6 +603,23 @@ class SrsEngineMovementTests(unittest.TestCase):
         self.assertEqual(result.events[0].payload["entered_cells"], [[4, 7], [4, 6]])
         self.assertEqual(result.events[0].payload["movement_raw_cost"], 20)
 
+    def test_shared_fuel_move_to_uses_resolved_route_cost(self) -> None:
+        state = reveal_all_for_move_to(make_state(fuel=6, max_fuel=9))
+
+        result = apply_srs_command(
+            state,
+            SrsCommand(command_type="MOVE_TO", target=Position(4, 6)),
+            contracts=self.contracts,
+            cost_mode=CostMode.SHARED_FUEL,
+        )
+
+        self.assertEqual(result.state.fuel, 4)
+        self.assertEqual(result.events[0].payload["command_type"], "MOVE_TO")
+        self.assertEqual(result.events[0].payload["resolved_route"], ["N", "N"])
+        self.assertEqual(result.events[0].payload["movement_raw_cost"], 20)
+        self.assertEqual(result.events[0].payload["fuel_delta"], -2)
+        self.assertEqual(result.events[0].payload["fuel_after"], 4)
+
     def test_move_to_observation_updates_entered_cells(self) -> None:
         state = reveal_all_for_move_to(make_state())
 
@@ -504,6 +705,26 @@ class SrsEngineMovementTests(unittest.TestCase):
             [event.event_type for event in result.events],
             [MOVE_ACCEPTED, OBSERVATION_UPDATED, MOVE_REJECTED],
         )
+
+    def test_run_srs_commands_passes_shared_fuel_to_each_command(self) -> None:
+        state = make_state(fuel=8, max_fuel=9)
+
+        result = run_srs_commands(
+            state,
+            (
+                SrsCommand(command_type="MOVE_ROUTE", route=(Direction.N, Direction.N)),
+                SrsCommand(command_type="INTERACT"),
+            ),
+            contracts=self.contracts,
+            cost_mode=CostMode.SHARED_FUEL,
+        )
+
+        self.assertEqual(result.state.fuel, 6)
+        self.assertEqual(result.events[0].payload["cost_mode"], "SHARED_FUEL")
+        self.assertEqual(result.events[0].payload["fuel_delta"], -2)
+        self.assertEqual(result.events[-1].payload["cost_mode"], "SHARED_FUEL")
+        self.assertEqual(result.events[-1].payload["fuel_before"], 6)
+        self.assertEqual(result.events[-1].payload["fuel_after"], 6)
 
 
 if __name__ == "__main__":

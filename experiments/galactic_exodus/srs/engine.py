@@ -294,15 +294,18 @@ def apply_srs_command(
     command: SrsCommand,
     *,
     contracts: SrsContracts,
+    cost_mode: CostMode | None = None,
 ) -> SrsCommandResult:
+    resolved_cost_mode = _normalize_cost_mode(cost_mode, contracts=contracts)
     if command.command_type == "MOVE_ROUTE":
-        return _apply_move_route(state, command, contracts=contracts)
+        return _apply_move_route(state, command, contracts=contracts, cost_mode=resolved_cost_mode)
     if command.command_type == "MOVE_TO":
-        return _apply_move_to(state, command, contracts=contracts)
+        return _apply_move_to(state, command, contracts=contracts, cost_mode=resolved_cost_mode)
     return _rejected_command_result(
         state,
         command_type=command.command_type,
         outcome="REJECTED_UNKNOWN_COMMAND",
+        cost_mode=resolved_cost_mode,
     )
 
 
@@ -311,11 +314,13 @@ def run_srs_commands(
     commands: Sequence[SrsCommand],
     *,
     contracts: SrsContracts,
+    cost_mode: CostMode | None = None,
 ) -> SrsCommandResult:
+    resolved_cost_mode = _normalize_cost_mode(cost_mode, contracts=contracts)
     current_state = state
     all_events: list[Any] = []
     for command in commands:
-        result = apply_srs_command(current_state, command, contracts=contracts)
+        result = apply_srs_command(current_state, command, contracts=contracts, cost_mode=resolved_cost_mode)
         current_state = result.state
         all_events.extend(result.events)
     return SrsCommandResult(state=current_state, events=tuple(all_events))
@@ -349,12 +354,14 @@ def _apply_move_route(
     command: SrsCommand,
     *,
     contracts: SrsContracts,
+    cost_mode: CostMode,
 ) -> SrsCommandResult:
     if not all(direction in contracts.movement.directions for direction in command.route):
         return _rejected_command_result(
             state,
             command_type=command.command_type,
             outcome="REJECTED_UNKNOWN_COMMAND",
+            cost_mode=cost_mode,
         )
 
     entered_cells, blocked_position, movement_raw_cost = resolve_move_route(
@@ -367,21 +374,33 @@ def _apply_move_route(
             state,
             command_type=command.command_type,
             outcome="REJECTED_ZERO_STEP",
+            cost_mode=cost_mode,
         )
 
     next_turn = state.srs_turn + _movement_turn_cost(contracts)
+    fuel_before = state.fuel
+    fuel_delta = fuel_delta_for_movement_raw_cost(
+        movement_raw_cost,
+        cost_mode=cost_mode,
+        contracts=contracts,
+    )
+    fuel_after = max(0, fuel_before + fuel_delta)
 
     if not entered_cells:
-        result_state = replace(state, srs_turn=next_turn)
+        result_state = replace(state, srs_turn=next_turn, fuel=fuel_after)
         event = _movement_event(
             srs_turn=next_turn,
             event_type=STOPPED_BEFORE_IMPASSABLE,
             command_type=command.command_type,
+            cost_mode=cost_mode,
             start_position=state.player_position,
             end_position=state.player_position,
             entered_cells=(),
             blocked_position=blocked_position,
             movement_raw_cost=0,
+            fuel_delta=fuel_delta,
+            fuel_before=fuel_before,
+            fuel_after=fuel_after,
             observation_updates=(),
             outcome="STOPPED_BEFORE_IMPASSABLE",
         )
@@ -391,6 +410,7 @@ def _apply_move_route(
         state,
         player_position=entered_cells[-1],
         srs_turn=next_turn,
+        fuel=fuel_after,
     )
     observation_updates: list[Position] = []
     observation_events = []
@@ -421,11 +441,15 @@ def _apply_move_route(
         srs_turn=next_turn,
         event_type=movement_event_type,
         command_type=command.command_type,
+        cost_mode=cost_mode,
         start_position=state.player_position,
         end_position=entered_cells[-1],
         entered_cells=entered_cells,
         blocked_position=blocked_position,
         movement_raw_cost=movement_raw_cost,
+        fuel_delta=fuel_delta,
+        fuel_before=fuel_before,
+        fuel_after=fuel_after,
         observation_updates=tuple(observation_updates),
         outcome=outcome,
     )
@@ -440,6 +464,7 @@ def _apply_move_to(
     command: SrsCommand,
     *,
     contracts: SrsContracts,
+    cost_mode: CostMode,
 ) -> SrsCommandResult:
     target = command.target
     if target is None:
@@ -449,6 +474,7 @@ def _apply_move_to(
             state,
             command_type=command.command_type,
             outcome="REJECTED_OUT_OF_BOUNDS",
+            cost_mode=cost_mode,
             target_position=target,
             resolved_route=(),
         )
@@ -457,6 +483,7 @@ def _apply_move_to(
             state,
             command_type=command.command_type,
             outcome="REJECTED_SAME_POSITION",
+            cost_mode=cost_mode,
             target_position=target,
             resolved_route=(),
         )
@@ -465,6 +492,7 @@ def _apply_move_to(
             state,
             command_type=command.command_type,
             outcome="REJECTED_UNKNOWN_TARGET",
+            cost_mode=cost_mode,
             target_position=target,
             resolved_route=(),
         )
@@ -476,6 +504,7 @@ def _apply_move_to(
             state,
             command_type=command.command_type,
             outcome="REJECTED_NO_PATH",
+            cost_mode=cost_mode,
             target_position=target,
             resolved_route=(),
         )
@@ -484,6 +513,7 @@ def _apply_move_to(
         state,
         SrsCommand(command_type="MOVE_ROUTE", route=route),
         contracts=contracts,
+        cost_mode=cost_mode,
     )
     movement_event = _override_move_to_event(
         result.events[0],
@@ -501,6 +531,7 @@ def _rejected_command_result(
     *,
     command_type: str,
     outcome: str,
+    cost_mode: CostMode,
     target_position: Position | None = None,
     resolved_route: Sequence[Direction] | None = None,
 ) -> SrsCommandResult:
@@ -508,11 +539,15 @@ def _rejected_command_result(
         srs_turn=state.srs_turn,
         event_type=MOVE_REJECTED,
         command_type=command_type,
+        cost_mode=cost_mode,
         start_position=state.player_position,
         end_position=state.player_position,
         entered_cells=(),
         blocked_position=None,
         movement_raw_cost=0,
+        fuel_delta=0,
+        fuel_before=state.fuel,
+        fuel_after=state.fuel,
         observation_updates=(),
         outcome=outcome,
         target_position=target_position,
@@ -526,11 +561,15 @@ def _movement_event(
     srs_turn: int,
     event_type: str,
     command_type: str,
+    cost_mode: CostMode,
     start_position: Position,
     end_position: Position,
     entered_cells: Sequence[Position],
     blocked_position: Position | None,
     movement_raw_cost: int,
+    fuel_delta: int,
+    fuel_before: int,
+    fuel_after: int,
     observation_updates: Sequence[Position],
     outcome: str,
     target_position: Position | None = None,
@@ -539,13 +578,15 @@ def _movement_event(
     payload = {
         "command_type": command_type,
         "movement_rule": MovementRule.MOVEMENT_POINTS.value,
-        "cost_mode": CostMode.TURN_ONLY.value,
+        "cost_mode": cost_mode.value,
         "start_position": _position_to_list(start_position),
         "end_position": _position_to_list(end_position),
         "entered_cells": [_position_to_list(position) for position in entered_cells],
         "blocked_position": None if blocked_position is None else _position_to_list(blocked_position),
         "movement_raw_cost": movement_raw_cost,
-        "fuel_delta": 0,
+        "fuel_delta": fuel_delta,
+        "fuel_before": fuel_before,
+        "fuel_after": fuel_after,
         "observation_updates": [_position_to_list(position) for position in observation_updates],
         "outcome": outcome,
     }
@@ -577,6 +618,47 @@ def _movement_turn_cost(contracts: SrsContracts) -> int:
     if not isinstance(turn_cost, int) or isinstance(turn_cost, bool) or turn_cost <= 0:
         raise SrsMovementError("movement_turn_cost must be a positive integer")
     return turn_cost
+
+
+def fuel_delta_for_movement_raw_cost(
+    movement_raw_cost: int,
+    *,
+    cost_mode: CostMode,
+    contracts: SrsContracts,
+) -> int:
+    if not isinstance(movement_raw_cost, int) or isinstance(movement_raw_cost, bool):
+        raise SrsMovementError("movement_raw_cost must be an integer")
+    if movement_raw_cost < 0:
+        raise SrsMovementError("movement_raw_cost must be non-negative")
+    if cost_mode is CostMode.TURN_ONLY or movement_raw_cost == 0:
+        return 0
+    if cost_mode is not CostMode.SHARED_FUEL:
+        raise SrsMovementError(f"unsupported cost mode: {cost_mode}")
+
+    denominator = _movement_raw_cost_denominator(contracts)
+    return -((movement_raw_cost + denominator - 1) // denominator)
+
+
+def _normalize_cost_mode(
+    cost_mode: CostMode | None,
+    *,
+    contracts: SrsContracts,
+) -> CostMode:
+    raw_cost_mode = contracts.movement.baseline_cost_mode if cost_mode is None else cost_mode
+    try:
+        normalized = CostMode(raw_cost_mode)
+    except ValueError as exc:
+        raise SrsMovementError(f"unsupported cost mode: {raw_cost_mode}") from exc
+    if normalized not in {CostMode.TURN_ONLY, CostMode.SHARED_FUEL}:
+        raise SrsMovementError(f"unsupported cost mode: {raw_cost_mode}")
+    return normalized
+
+
+def _movement_raw_cost_denominator(contracts: SrsContracts) -> int:
+    denominator = contracts.movement.orthogonal_raw_cost
+    if not isinstance(denominator, int) or isinstance(denominator, bool) or denominator <= 0:
+        raise SrsMovementError("raw_cost_denominator must be a positive integer")
+    return denominator
 
 
 def _reconstruct_route(
