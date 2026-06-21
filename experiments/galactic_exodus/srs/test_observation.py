@@ -6,6 +6,7 @@ from pathlib import Path
 
 from experiments.galactic_exodus.srs.contracts import load_default_contracts
 from experiments.galactic_exodus.srs.engine import (
+    apply_srs_command,
     known_cell_at,
     observation_area,
     observation_size_for_terrain,
@@ -15,6 +16,7 @@ from experiments.galactic_exodus.srs.engine import (
     snapshot_srs_state,
 )
 from experiments.galactic_exodus.srs.generate import create_sector
+from experiments.galactic_exodus.srs.log import INTERACT_ACCEPTED
 from experiments.galactic_exodus.srs.model import (
     Direction,
     Position,
@@ -22,7 +24,9 @@ from experiments.galactic_exodus.srs.model import (
     SectorType,
     SrsActualMap,
     SrsCell,
+    SrsCommand,
     SrsGameState,
+    SrsObjectType,
     SrsTerrainType,
 )
 
@@ -262,23 +266,84 @@ class SrsObservationTests(unittest.TestCase):
         self.assertEqual(restored.max_fuel, 0)
 
     def test_restore_srs_state_applies_persistent_consumed_and_activated_flags(self) -> None:
-        original = make_state(sector_type=SectorType.RESOURCE)
-        object_ids = sorted(original.objects)
-        persistent = original.persistent_state
-        consumed_object_id = next(
+        resource_state = make_state(sector_type=SectorType.RESOURCE)
+        resource_cache_id = next(
             object_id
-            for object_id in object_ids
-            if original.objects[object_id].object_type.value == "RESOURCE_CACHE"
+            for object_id, object_state in resource_state.objects.items()
+            if object_state.object_type is SrsObjectType.RESOURCE_CACHE
         )
-        activated_object_id = next(
+        resource_persistent = replace(
+            resource_state.persistent_state,
+            consumed_object_ids=frozenset({resource_cache_id}),
+        )
+        restored_resource = restore_srs_state(
+            descriptor=resource_state.descriptor,
+            actual_map=resource_state.actual_map,
+            persistent=resource_persistent,
+            player_position=resource_state.player_position,
+            objects=resource_state.objects,
+        )
+        self.assertTrue(restored_resource.objects[resource_cache_id].consumed)
+
+        base_state = make_state(sector_type=SectorType.BASE)
+        station_id = next(
             object_id
-            for object_id in object_ids
-            if original.objects[object_id].object_type.value == "PLANET"
+            for object_id, object_state in base_state.objects.items()
+            if object_state.object_type is SrsObjectType.STATION
+        )
+        base_persistent = replace(
+            base_state.persistent_state,
+            activated_object_ids=frozenset({station_id}),
+        )
+        restored_base = restore_srs_state(
+            descriptor=base_state.descriptor,
+            actual_map=base_state.actual_map,
+            persistent=base_persistent,
+            player_position=base_state.player_position,
+            objects=base_state.objects,
+        )
+        self.assertTrue(restored_base.objects[station_id].activated)
+
+    def test_snapshot_after_warp_exit_keeps_existing_persistent_fields(self) -> None:
+        state = reveal_observation(
+            make_state(sector_type=SectorType.RIFT, sector_seed=4001, blocked_edges=frozenset({Direction.N})),
+            center=Position(4, 8),
+            contracts=self.contracts,
+        )
+        state = replace(
+            state,
+            persistent_state=replace(
+                state.persistent_state,
+                consumed_object_ids=frozenset({"salvage-1"}),
+                activated_object_ids=frozenset({"station-1"}),
+            ),
+        )
+
+        result = apply_srs_command(
+            state,
+            SrsCommand(command_type="WARP_EXIT", exit_direction=Direction.S),
+            contracts=self.contracts,
+        )
+        snapshot = snapshot_srs_state(result.state)
+
+        self.assertEqual(snapshot.generated_map_id, state.persistent_state.generated_map_id)
+        self.assertEqual(snapshot.blocked_edges, state.persistent_state.blocked_edges)
+        self.assertEqual(dict(snapshot.warp_flags), dict(state.persistent_state.warp_flags))
+        self.assertEqual(snapshot.celestial_body_positions, state.persistent_state.celestial_body_positions)
+        self.assertEqual(snapshot.consumed_object_ids, state.persistent_state.consumed_object_ids)
+        self.assertEqual(snapshot.activated_object_ids, state.persistent_state.activated_object_ids)
+        self.assertEqual(snapshot.discovered_cells, result.state.known_state.discovered_cells)
+
+    def test_revisit_restores_consumed_resource_cache(self) -> None:
+        original = make_state(sector_type=SectorType.RESOURCE)
+        resource_cache_id = next(
+            object_id
+            for object_id, object_state in original.objects.items()
+            if object_state.object_type is SrsObjectType.RESOURCE_CACHE
         )
         persistent = replace(
-            persistent,
-            consumed_object_ids=frozenset({consumed_object_id}),
-            activated_object_ids=frozenset({activated_object_id}),
+            original.persistent_state,
+            consumed_object_ids=frozenset({resource_cache_id}),
         )
 
         restored = restore_srs_state(
@@ -289,8 +354,80 @@ class SrsObservationTests(unittest.TestCase):
             objects=original.objects,
         )
 
-        self.assertTrue(restored.objects[consumed_object_id].consumed)
-        self.assertTrue(restored.objects[activated_object_id].activated)
+        self.assertTrue(restored.objects[resource_cache_id].consumed)
+
+    def test_revisit_restores_consumed_salvage(self) -> None:
+        original = make_state(sector_type=SectorType.NORMAL)
+        salvage_id = next(
+            object_id
+            for object_id, object_state in original.objects.items()
+            if object_state.object_type is SrsObjectType.SALVAGE
+        )
+        persistent = replace(
+            original.persistent_state,
+            consumed_object_ids=frozenset({salvage_id}),
+        )
+
+        restored = restore_srs_state(
+            descriptor=original.descriptor,
+            actual_map=original.actual_map,
+            persistent=persistent,
+            player_position=original.player_position,
+            objects=original.objects,
+        )
+
+        self.assertTrue(restored.objects[salvage_id].consumed)
+
+    def test_revisit_restores_activated_station_but_keeps_reusable_behavior(self) -> None:
+        original = make_state(sector_type=SectorType.BASE)
+        station_id, station_state = next(
+            (object_id, object_state)
+            for object_id, object_state in original.objects.items()
+            if object_state.object_type is SrsObjectType.STATION
+        )
+        persistent = replace(
+            original.persistent_state,
+            activated_object_ids=frozenset({station_id}),
+        )
+        restored = restore_srs_state(
+            descriptor=original.descriptor,
+            actual_map=original.actual_map,
+            persistent=persistent,
+            player_position=Position(station_state.position.x, station_state.position.y + 1),
+            objects=original.objects,
+        )
+        restored = replace(restored, fuel=1, max_fuel=9)
+
+        result = apply_srs_command(
+            restored,
+            SrsCommand(command_type="INTERACT", target_object_id=station_id),
+            contracts=self.contracts,
+        )
+
+        self.assertTrue(restored.objects[station_id].activated)
+        self.assertEqual(result.events[0].event_type, INTERACT_ACCEPTED)
+        self.assertEqual(result.state.fuel, 9)
+
+    def test_revisit_resets_turn_and_fuel(self) -> None:
+        original = replace(
+            make_state(sector_type=SectorType.BASE),
+            srs_turn=3,
+            fuel=5,
+            max_fuel=9,
+        )
+        persistent = snapshot_srs_state(original)
+
+        restored = restore_srs_state(
+            descriptor=original.descriptor,
+            actual_map=original.actual_map,
+            persistent=persistent,
+            player_position=original.player_position,
+            objects=original.objects,
+        )
+
+        self.assertEqual(restored.srs_turn, 0)
+        self.assertEqual(restored.fuel, 0)
+        self.assertEqual(restored.max_fuel, 0)
 
 
 if __name__ == "__main__":

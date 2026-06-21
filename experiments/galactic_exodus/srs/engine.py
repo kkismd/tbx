@@ -14,6 +14,8 @@ from experiments.galactic_exodus.srs.log import (
     OBSERVATION_UPDATED,
     STATION_ACTIVATED,
     STOPPED_BEFORE_IMPASSABLE,
+    WARP_EXIT_ACCEPTED,
+    WARP_EXIT_REJECTED,
     make_turn_event,
 )
 from experiments.galactic_exodus.srs.model import (
@@ -312,6 +314,8 @@ def apply_srs_command(
         return _apply_move_to(state, command, contracts=contracts, cost_mode=resolved_cost_mode)
     if command.command_type == "INTERACT":
         return _apply_interact(state, command, contracts=contracts)
+    if command.command_type == "WARP_EXIT":
+        return _apply_warp_exit(state, command)
     return _rejected_movement_result(
         state,
         command_type=command.command_type,
@@ -624,6 +628,77 @@ def _apply_interact(
     )
 
 
+def _apply_warp_exit(
+    state: SrsGameState,
+    command: SrsCommand,
+) -> SrsCommandResult:
+    exit_direction = command.exit_direction
+    if exit_direction is None:
+        raise SrsMovementError("WARP_EXIT requires an exit_direction")
+
+    start_position = state.player_position
+    if not state.actual_map.contains(start_position):
+        return SrsCommandResult(
+            state=state,
+            events=(
+                _warp_exit_event(
+                    srs_turn=state.srs_turn,
+                    event_type=WARP_EXIT_REJECTED,
+                    state=state,
+                    exit_direction=exit_direction,
+                    start_position=start_position,
+                    outcome="REJECTED_OUT_OF_BOUNDS",
+                ),
+            ),
+        )
+
+    if exit_direction in state.descriptor.blocked_edges:
+        return SrsCommandResult(
+            state=state,
+            events=(
+                _warp_exit_event(
+                    srs_turn=state.srs_turn,
+                    event_type=WARP_EXIT_REJECTED,
+                    state=state,
+                    exit_direction=exit_direction,
+                    start_position=start_position,
+                    outcome="REJECTED_BLOCKED_EDGE",
+                ),
+            ),
+        )
+
+    current_cell = state.actual_map.cell_at(start_position)
+    if exit_direction not in current_cell.warp_flags:
+        return SrsCommandResult(
+            state=state,
+            events=(
+                _warp_exit_event(
+                    srs_turn=state.srs_turn,
+                    event_type=WARP_EXIT_REJECTED,
+                    state=state,
+                    exit_direction=exit_direction,
+                    start_position=start_position,
+                    outcome="REJECTED_NO_WARP_FLAG",
+                ),
+            ),
+        )
+
+    next_turn = state.srs_turn + 1
+    return SrsCommandResult(
+        state=replace(state, srs_turn=next_turn),
+        events=(
+            _warp_exit_event(
+                srs_turn=next_turn,
+                event_type=WARP_EXIT_ACCEPTED,
+                state=state,
+                exit_direction=exit_direction,
+                start_position=start_position,
+                outcome="ACCEPTED",
+            ),
+        ),
+    )
+
+
 def _apply_resource_cache_interaction(
     state: SrsGameState,
     object_state: SrsObjectState,
@@ -899,6 +974,30 @@ def _apply_persistent_object_flags(
             activated=object_state.activated or object_id in persistent.activated_object_ids,
         )
     return normalized
+
+
+def _warp_exit_event(
+    *,
+    srs_turn: int,
+    event_type: str,
+    state: SrsGameState,
+    exit_direction: Direction,
+    start_position: Position,
+    outcome: str,
+):
+    return make_turn_event(
+        srs_turn=srs_turn,
+        event_type=event_type,
+        payload={
+            "command_type": "WARP_EXIT",
+            "exit_direction": exit_direction.value,
+            "start_position": _position_to_list(start_position),
+            "warp_position": _position_to_list(start_position),
+            "sector_id": state.descriptor.sector_id,
+            "generated_map_id": state.persistent_state.generated_map_id,
+            "outcome": outcome,
+        },
+    )
 
 
 def _movement_event(

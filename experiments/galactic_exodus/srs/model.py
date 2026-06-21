@@ -243,6 +243,7 @@ class SrsCommand:
     route: tuple[Direction, ...] = ()
     target: Position | None = None
     target_object_id: str | None = None
+    exit_direction: Direction | None = None
 
     def __post_init__(self) -> None:
         command_type = str(self.command_type)
@@ -250,6 +251,10 @@ class SrsCommand:
             route = tuple(Direction(direction) for direction in self.route)
         except ValueError as exc:
             raise SrsModelError("route must contain only Direction values") from exc
+        try:
+            exit_direction = None if self.exit_direction is None else Direction(self.exit_direction)
+        except ValueError as exc:
+            raise SrsModelError("exit_direction must be a Direction value") from exc
 
         if command_type == "MOVE_ROUTE" and not route:
             raise SrsModelError("MOVE_ROUTE requires a non-empty route")
@@ -257,9 +262,12 @@ class SrsCommand:
             raise SrsModelError("MOVE_TO requires a target")
         if command_type == "INTERACT" and not self.target_object_id:
             raise SrsModelError("INTERACT requires a target_object_id")
+        if command_type == "WARP_EXIT" and exit_direction is None:
+            raise SrsModelError("WARP_EXIT requires an exit_direction")
 
         object.__setattr__(self, "command_type", command_type)
         object.__setattr__(self, "route", route)
+        object.__setattr__(self, "exit_direction", exit_direction)
 
 
 @dataclass(frozen=True, slots=True)
@@ -280,3 +288,14 @@ def validate_sector_descriptor(descriptor: SectorDescriptor) -> None:
 
     if descriptor.entry_edge in descriptor.blocked_edges:
         raise SrsModelError("entry_edge must not be blocked")
+
+
+def derive_lrs_blocked_routes(
+    descriptor: SectorDescriptor,
+) -> frozenset[tuple[str, Direction]]:
+    if descriptor.sector_type is not SectorType.RIFT:
+        return frozenset()
+    return frozenset(
+        (descriptor.sector_id, direction)
+        for direction in descriptor.blocked_edges
+    )
