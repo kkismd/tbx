@@ -1,0 +1,26 @@
+{
+  "fixture_id": "warp_exit_s_9x9",
+  "description": "WARP_EXIT accepts when the player is on the matching warp flag.",
+  "sector": {
+    "sector_id": "normal-1001",
+    "sector_type": "NORMAL",
+    "sector_seed": 1001,
+    "entry_edge": "S",
+    "blocked_edges": []
+  },
+  "initial": {
+    "reveal": {
+      "mode": "FULL"
+    }
+  },
+  "commands": [
+    {"command_type": "WARP_EXIT", "exit_direction": "S"}
+  ],
+  "expect": {
+    "srs_turn": 1,
+    "fuel": 0,
+    "player_position": [4, 8],
+    "event_types": ["WARP_EXIT_ACCEPTED"],
+    "outcome": "ACCEPTED"
+  }
+}

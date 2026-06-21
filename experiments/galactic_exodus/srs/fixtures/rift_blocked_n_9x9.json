@@ -1,0 +1,27 @@
+{
+  "fixture_id": "rift_blocked_n_9x9",
+  "description": "WARP_EXIT rejects when the target edge is blocked in a rift sector.",
+  "sector": {
+    "sector_id": "rift-4001",
+    "sector_type": "RIFT",
+    "sector_seed": 4001,
+    "entry_edge": "S",
+    "blocked_edges": ["N"]
+  },
+  "initial": {
+    "player_position": [4, 0],
+    "reveal": {
+      "mode": "FULL"
+    }
+  },
+  "commands": [
+    {"command_type": "WARP_EXIT", "exit_direction": "N"}
+  ],
+  "expect": {
+    "srs_turn": 0,
+    "fuel": 0,
+    "player_position": [4, 0],
+    "event_types": ["WARP_EXIT_REJECTED"],
+    "outcome": "REJECTED_BLOCKED_EDGE"
+  }
+}

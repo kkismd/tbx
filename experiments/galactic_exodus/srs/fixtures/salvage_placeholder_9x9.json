@@ -1,0 +1,30 @@
+{
+  "fixture_id": "salvage_placeholder_9x9",
+  "description": "SALVAGE interaction consumes the salvage placeholder object.",
+  "sector": {
+    "sector_id": "normal-1001",
+    "sector_type": "NORMAL",
+    "sector_seed": 1001,
+    "entry_edge": "S",
+    "blocked_edges": []
+  },
+  "initial": {
+    "player_position": [4, 6],
+    "fuel": 2,
+    "max_fuel": 9,
+    "reveal": {
+      "mode": "FULL"
+    }
+  },
+  "commands": [
+    {"command_type": "INTERACT", "target_object_id": "salvage-1"}
+  ],
+  "expect": {
+    "srs_turn": 1,
+    "fuel": 2,
+    "player_position": [4, 6],
+    "event_types": ["INTERACT_ACCEPTED", "OBJECT_CONSUMED"],
+    "consumed_object_ids": ["salvage-1"],
+    "outcome": "ACCEPTED"
+  }
+}
