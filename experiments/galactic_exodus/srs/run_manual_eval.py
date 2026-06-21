@@ -22,6 +22,28 @@ DEFAULT_FIXTURES = (
     "revisit_resource_consumed_9x9.json",
 )
 
+MAP_LEGEND = (
+    ("?", "未発見"),
+    (".", "通常床 / 通行可能"),
+    (",", "debris / 残骸地形"),
+    ("~", "nebula / 星雲地形"),
+    (":", "asteroid field / 小惑星帯"),
+    ("#", "asteroid または rift barrier / 通行不能"),
+    ("*", "star / 恒星・通行不能"),
+    ("o", "planet / 惑星・通行不能"),
+    ("S", "station / 補給ステーション"),
+    ("R", "resource cache / 未消費の資源"),
+    ("r", "resource cache / 消費済み"),
+    ("$", "salvage / 未回収のサルベージ"),
+    ("s", "salvage / 回収済み"),
+    ("@", "player / 現在位置"),
+    ("^", "north warp flag"),
+    (">", "east warp flag"),
+    ("v", "south warp flag"),
+    ("<", "west warp flag"),
+    ("+", "複数方向のwarp flag"),
+)
+
 QUESTIONS = (
     ("natural", "自然だった点"),
     ("confusing", "分かりにくかった点"),
@@ -68,6 +90,14 @@ def _markdown_list(text: str) -> str:
     return "\n".join(f"- {line}" for line in text.splitlines())
 
 
+def _map_legend_text() -> str:
+    return "\n".join(f"{symbol}  {description}" for symbol, description in MAP_LEGEND)
+
+
+def _map_legend_markdown() -> str:
+    return "\n".join(f"- `{symbol}`: {description}" for symbol, description in MAP_LEGEND)
+
+
 def _event_rows(result: SrsFixtureRunResult) -> list[Mapping[str, object]]:
     return [
         {
@@ -87,6 +117,8 @@ def _print_case(result: SrsFixtureRunResult) -> None:
     print(json.dumps(result.summary, ensure_ascii=False, sort_keys=True, indent=2))
     print("\nlog events:")
     print(json.dumps(_event_rows(result), ensure_ascii=False, sort_keys=True, indent=2))
+    print("\nmap legend:")
+    print(_map_legend_text())
     print("\nknown map:")
     print(render_known_map_spaced(result.final_state))
     print("=" * 80)
@@ -100,6 +132,10 @@ def _write_header(path: Path, fixture_paths: tuple[Path, ...]) -> None:
         f"- created_at: {datetime.now().isoformat(timespec='seconds')}",
         "- renderer: render_known_map_spaced",
         "- note: compact render / JSON API は fixture regression 用に維持する",
+        "",
+        "## Map legend",
+        "",
+        _map_legend_markdown(),
         "",
         "## Fixtures",
         "",
