@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import argparse
-import json
 from datetime import datetime
 from pathlib import Path
 from typing import Iterable, Mapping
@@ -99,6 +98,12 @@ def _markdown_list(text: str) -> str:
     return "\n".join(f"- {line}" for line in text.splitlines())
 
 
+def _format_position(value: object) -> str:
+    if isinstance(value, (list, tuple)) and len(value) == 2:
+        return f"({value[0]},{value[1]})"
+    return "-"
+
+
 def _map_legend_items() -> list[str]:
     return [f"{symbol} {description}" for symbol, description in MAP_LEGEND]
 
@@ -150,15 +155,37 @@ def _case_goal_text(fixture_id: str) -> str:
     return "見ること: このcaseの目的をmap/logから判断できるか。"
 
 
-def _event_rows(result: SrsFixtureRunResult) -> list[Mapping[str, object]]:
-    return [
-        {
-            "srs_turn": event.srs_turn,
-            "event_type": event.event_type,
-            "payload": dict(event.payload),
-        }
-        for event in result.log.events
-    ]
+def _event_summary_lines(result: SrsFixtureRunResult) -> list[str]:
+    lines: list[str] = []
+    for event in result.log.events:
+        payload = dict(event.payload)
+        prefix = f"turn {event.srs_turn}: {event.event_type}"
+        if event.event_type == "MOVE_ACCEPTED":
+            lines.append(
+                f"{prefix} "
+                f"{payload.get('command_type', '-')} "
+                f"{_format_position(payload.get('start_position'))} -> {_format_position(payload.get('end_position'))} "
+                f"fuel {payload.get('fuel_before', '-')}->{payload.get('fuel_after', '-')}"
+            )
+        elif event.event_type == "OBSERVATION_UPDATED":
+            lines.append(
+                f"{prefix} "
+                f"center={_format_position(payload.get('center'))} "
+                f"new={payload.get('newly_discovered_count', '-')} "
+                f"total={payload.get('total_discovered_count', '-')}"
+            )
+        elif "outcome" in payload:
+            lines.append(f"{prefix} outcome={payload.get('outcome')}")
+        else:
+            lines.append(prefix)
+    return lines
+
+
+def _event_summary_text(result: SrsFixtureRunResult) -> str:
+    lines = _event_summary_lines(result)
+    if not lines:
+        return "- なし"
+    return "\n".join(f"- {line}" for line in lines)
 
 
 def _print_case(result: SrsFixtureRunResult) -> None:
@@ -168,8 +195,8 @@ def _print_case(result: SrsFixtureRunResult) -> None:
     print("evaluation guide:")
     print(_case_goal_text(result.fixture_id))
     print(_verdict_guide_text())
-    print("\nlog events:")
-    print(json.dumps(_event_rows(result), ensure_ascii=False, sort_keys=True, indent=2))
+    print("\nevent summary:")
+    print(_event_summary_text(result))
     print("\nmap legend:")
     print(_map_legend_text())
     print("\nknown map:")
@@ -220,7 +247,6 @@ def _append_case_result(
     answers: Mapping[str, str],
 ) -> None:
     render = render_known_map_spaced(result.final_state)
-    event_rows = _event_rows(result)
     section = f"""
 ## {result.fixture_id}
 
@@ -232,11 +258,9 @@ def _append_case_result(
 
 - {status}
 
-### log events
+### event summary
 
-```json
-{json.dumps(event_rows, ensure_ascii=False, sort_keys=True, indent=2)}
-```
+{_event_summary_text(result)}
 
 ### known map
 
