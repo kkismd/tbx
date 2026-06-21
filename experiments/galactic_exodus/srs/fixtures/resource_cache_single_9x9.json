@@ -1,0 +1,36 @@
+{
+  "fixture_id": "resource_cache_single_9x9",
+  "description": "RESOURCE_CACHE interaction consumes cache and restores fuel.",
+  "sector": {
+    "sector_id": "resource-3001",
+    "sector_type": "RESOURCE",
+    "sector_seed": 3001,
+    "entry_edge": "S",
+    "blocked_edges": []
+  },
+  "initial": {
+    "player_position": [2, 7],
+    "fuel": 2,
+    "max_fuel": 9,
+    "reveal": {
+      "mode": "FULL"
+    },
+    "persistent": {
+      "consumed_object_ids": [],
+      "activated_object_ids": [],
+      "discovered_cells": []
+    }
+  },
+  "commands": [
+    {"command_type": "INTERACT", "target_object_id": "resource-cache-1"}
+  ],
+  "cost_mode": "TURN_ONLY",
+  "expect": {
+    "srs_turn": 1,
+    "fuel": 7,
+    "player_position": [2, 7],
+    "event_types": ["INTERACT_ACCEPTED", "OBJECT_CONSUMED"],
+    "consumed_object_ids": ["resource-cache-1"],
+    "outcome": "ACCEPTED"
+  }
+}

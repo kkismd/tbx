@@ -1,0 +1,23 @@
+{
+  "fixture_id": "move_route_basic_9x9",
+  "description": "MOVE_ROUTE reveals only locally observed cells and advances one turn.",
+  "sector": {
+    "sector_id": "normal-1001",
+    "sector_type": "NORMAL",
+    "sector_seed": 1001,
+    "entry_edge": "S",
+    "blocked_edges": []
+  },
+  "commands": [
+    {"command_type": "MOVE_ROUTE", "route": ["N"]}
+  ],
+  "expect": {
+    "srs_turn": 1,
+    "fuel": 0,
+    "player_position": [4, 7],
+    "event_types": ["MOVE_ACCEPTED", "OBSERVATION_UPDATED"],
+    "outcome": "ACCEPTED",
+    "render_contains": "@",
+    "render_not_contains": "*"
+  }
+}
