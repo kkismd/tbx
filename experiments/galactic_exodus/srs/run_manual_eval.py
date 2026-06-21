@@ -134,7 +134,7 @@ def _case_goal_text(fixture_id: str) -> str:
     if fixture_id == "move_to_known_9x9":
         return "見ること: MOVE_TOが既知map上の自動移動として自然で、経路結果をlogで追えるか。"
     if fixture_id == "resource_cache_single_9x9":
-        return "見ること: resource取得、消費状態、fuel回復がmap/log/summaryで分かるか。"
+        return "見ること: resource取得、消費状態、fuel回復がmap/logで分かるか。"
     if fixture_id == "station_refuel_9x9":
         return "見ること: stationの位置、隣接interaction、refuel to maxが分かるか。"
     if fixture_id == "salvage_placeholder_9x9":
@@ -144,10 +144,10 @@ def _case_goal_text(fixture_id: str) -> str:
     if fixture_id == "rift_blocked_n_9x9":
         return "見ること: RIFT由来の北出口不可が、拒否理由として分かるか。"
     if fixture_id == "shared_fuel_cost_9x9":
-        return "見ること: SHARED_FUELのfuel消費がlog/summaryで追え、重すぎないか。"
+        return "見ること: SHARED_FUELのfuel消費がlogで追え、重すぎないか。"
     if fixture_id == "revisit_resource_consumed_9x9":
         return "見ること: 再訪時に発見済み・消費済み状態が復元されているか。"
-    return "見ること: このcaseの目的をmap/log/summaryから判断できるか。"
+    return "見ること: このcaseの目的をmap/logから判断できるか。"
 
 
 def _event_rows(result: SrsFixtureRunResult) -> list[Mapping[str, object]]:
@@ -168,8 +168,6 @@ def _print_case(result: SrsFixtureRunResult) -> None:
     print("evaluation guide:")
     print(_case_goal_text(result.fixture_id))
     print(_verdict_guide_text())
-    print("\nsummary:")
-    print(json.dumps(result.summary, ensure_ascii=False, sort_keys=True, indent=2))
     print("\nlog events:")
     print(json.dumps(_event_rows(result), ensure_ascii=False, sort_keys=True, indent=2))
     print("\nmap legend:")
@@ -177,6 +175,12 @@ def _print_case(result: SrsFixtureRunResult) -> None:
     print("\nknown map:")
     print(render_known_map_spaced(result.final_state))
     print("=" * 80)
+
+
+def _print_verdict_context(result: SrsFixtureRunResult) -> None:
+    print("\n判定前の確認:")
+    print(_case_goal_text(result.fixture_id))
+    print(_verdict_guide_text())
 
 
 def _write_header(path: Path, fixture_paths: tuple[Path, ...]) -> None:
@@ -228,12 +232,6 @@ def _append_case_result(
 
 - {status}
 
-### summary
-
-```json
-{json.dumps(result.summary, ensure_ascii=False, sort_keys=True, indent=2)}
-```
-
 ### log events
 
 ```json
@@ -281,6 +279,7 @@ def run_manual_eval(fixture_paths: tuple[Path, ...], *, output_path: Path) -> No
         if proceed not in {"yes", "y"}:
             continue
 
+        _print_verdict_context(result)
         status = _prompt_line("判定を入力してください: OK / 要調整 / 保留", default="OK")
         answers = {key: _prompt_multiline(label) for key, label in QUESTIONS}
         _append_case_result(output_path, result=result, status=status, answers=answers)
