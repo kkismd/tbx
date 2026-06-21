@@ -15,6 +15,7 @@ from experiments.galactic_exodus.srs.engine import (
 )
 from experiments.galactic_exodus.srs.generate import create_sector
 from experiments.galactic_exodus.srs.log import (
+    INTERACT_REJECTED,
     MOVE_ACCEPTED,
     MOVE_REJECTED,
     OBSERVATION_UPDATED,
@@ -483,26 +484,25 @@ class SrsEngineMovementTests(unittest.TestCase):
 
         result = apply_srs_command(
             state,
-            SrsCommand(command_type="INTERACT"),
+            SrsCommand(command_type="INTERACT", target_object_id="missing-object"),
             contracts=self.contracts,
         )
 
         self.assertEqual(result.state, state)
         self.assertEqual(len(result.state.known_state.discovered_cells), 0)
-        self.assertEqual([event.event_type for event in result.events], [MOVE_REJECTED])
+        self.assertEqual([event.event_type for event in result.events], [INTERACT_REJECTED])
 
     def test_shared_fuel_rejected_command_does_not_change_fuel(self) -> None:
         state = make_state(fuel=5, max_fuel=9)
 
         result = apply_srs_command(
             state,
-            SrsCommand(command_type="INTERACT"),
+            SrsCommand(command_type="INTERACT", target_object_id="missing-object"),
             contracts=self.contracts,
             cost_mode=CostMode.SHARED_FUEL,
         )
 
         self.assertEqual(result.state.fuel, 5)
-        self.assertEqual(result.events[0].payload["cost_mode"], "SHARED_FUEL")
         self.assertEqual(result.events[0].payload["fuel_delta"], 0)
         self.assertEqual(result.events[0].payload["fuel_before"], 5)
         self.assertEqual(result.events[0].payload["fuel_after"], 5)
@@ -695,7 +695,7 @@ class SrsEngineMovementTests(unittest.TestCase):
             state,
             (
                 SrsCommand(command_type="MOVE_ROUTE", route=(Direction.N,)),
-                SrsCommand(command_type="INTERACT"),
+                SrsCommand(command_type="INTERACT", target_object_id="missing-object"),
             ),
             contracts=self.contracts,
         )
@@ -703,7 +703,7 @@ class SrsEngineMovementTests(unittest.TestCase):
         self.assertEqual(result.state.srs_turn, 1)
         self.assertEqual(
             [event.event_type for event in result.events],
-            [MOVE_ACCEPTED, OBSERVATION_UPDATED, MOVE_REJECTED],
+            [MOVE_ACCEPTED, OBSERVATION_UPDATED, INTERACT_REJECTED],
         )
 
     def test_run_srs_commands_passes_shared_fuel_to_each_command(self) -> None:
@@ -713,7 +713,7 @@ class SrsEngineMovementTests(unittest.TestCase):
             state,
             (
                 SrsCommand(command_type="MOVE_ROUTE", route=(Direction.N, Direction.N)),
-                SrsCommand(command_type="INTERACT"),
+                SrsCommand(command_type="INTERACT", target_object_id="missing-object"),
             ),
             contracts=self.contracts,
             cost_mode=CostMode.SHARED_FUEL,
@@ -722,7 +722,6 @@ class SrsEngineMovementTests(unittest.TestCase):
         self.assertEqual(result.state.fuel, 6)
         self.assertEqual(result.events[0].payload["cost_mode"], "SHARED_FUEL")
         self.assertEqual(result.events[0].payload["fuel_delta"], -2)
-        self.assertEqual(result.events[-1].payload["cost_mode"], "SHARED_FUEL")
         self.assertEqual(result.events[-1].payload["fuel_before"], 6)
         self.assertEqual(result.events[-1].payload["fuel_after"], 6)
 

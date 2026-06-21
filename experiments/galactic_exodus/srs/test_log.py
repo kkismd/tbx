@@ -3,9 +3,13 @@ from __future__ import annotations
 import unittest
 
 from experiments.galactic_exodus.srs.log import (
+    INTERACT_ACCEPTED,
+    INTERACT_REJECTED,
     MOVE_ACCEPTED,
     MOVE_REJECTED,
     OBSERVATION_UPDATED,
+    OBJECT_CONSUMED,
+    STATION_ACTIVATED,
     build_srs_log,
     make_turn_event,
 )
@@ -103,6 +107,78 @@ class SrsLogTests(unittest.TestCase):
             set(event.payload),
             {"center", "newly_discovered_count", "total_discovered_count"},
         )
+
+    def test_interact_accepted_payload_has_required_fields(self) -> None:
+        event = make_turn_event(
+            srs_turn=2,
+            event_type=INTERACT_ACCEPTED,
+            payload={
+                "command_type": "INTERACT",
+                "object_id": "resource-cache-1",
+                "object_type": "RESOURCE_CACHE",
+                "interaction_range": "SAME_CELL",
+                "effect": "REFUEL_PARTIAL",
+                "position": [4, 7],
+                "fuel_before": 2,
+                "fuel_after": 7,
+                "fuel_delta": 5,
+                "outcome": "ACCEPTED",
+            },
+        )
+
+        self.assertEqual(
+            set(event.payload),
+            {
+                "command_type",
+                "object_id",
+                "object_type",
+                "interaction_range",
+                "effect",
+                "position",
+                "fuel_before",
+                "fuel_after",
+                "fuel_delta",
+                "outcome",
+            },
+        )
+
+    def test_interact_rejected_payload_has_required_fields(self) -> None:
+        event = make_turn_event(
+            srs_turn=1,
+            event_type=INTERACT_REJECTED,
+            payload={
+                "command_type": "INTERACT",
+                "object_id": "station-1",
+                "object_type": "STATION",
+                "interaction_range": "ADJACENT",
+                "effect": "REFUEL_TO_MAX",
+                "position": [4, 7],
+                "fuel_before": 9,
+                "fuel_after": 9,
+                "fuel_delta": 0,
+                "outcome": "REJECTED_NO_EFFECT",
+            },
+        )
+
+        self.assertEqual(event.payload["outcome"], "REJECTED_NO_EFFECT")
+
+    def test_object_consumed_payload_can_be_logged(self) -> None:
+        event = make_turn_event(
+            srs_turn=3,
+            event_type=OBJECT_CONSUMED,
+            payload={"object_id": "salvage-1", "object_type": "SALVAGE", "consumed": True},
+        )
+
+        self.assertTrue(event.payload["consumed"])
+
+    def test_station_activated_payload_can_be_logged(self) -> None:
+        event = make_turn_event(
+            srs_turn=3,
+            event_type=STATION_ACTIVATED,
+            payload={"object_id": "station-1", "object_type": "STATION", "activated": True, "reusable": True},
+        )
+
+        self.assertTrue(event.payload["activated"])
 
 
 if __name__ == "__main__":
