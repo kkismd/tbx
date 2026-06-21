@@ -5,16 +5,19 @@ __all__ = [
     "SrsFixtureRunResult",
     "fixture_result_to_jsonable",
     "render_known_map",
+    "render_known_map_spaced",
     "run_fixture",
     "run_fixture_data",
 ]
 
 
 def __getattr__(name: str):
-    if name == "render_known_map":
-        from experiments.galactic_exodus.srs.render import render_known_map
+    if name in {"render_known_map", "render_known_map_spaced"}:
+        from importlib import import_module
 
-        return render_known_map
+        render_module = import_module("experiments.galactic_exodus.srs.render")
+
+        return getattr(render_module, name)
     if name in {
         "SrsFixtureError",
         "SrsFixtureRunResult",
