@@ -47,6 +47,12 @@ MAP_LEGEND = (
 MAP_LEGEND_COLUMNS = 3
 MAP_LEGEND_COLUMN_WIDTH = 24
 
+VERDICT_GUIDE = (
+    "OK: このcaseの目的をmap/logから判断できる",
+    "要調整: 表示・ログ・仕様・fixtureのどれかを直したい",
+    "保留: このcaseだけでは判断できず、追加確認が必要",
+)
+
 QUESTIONS = (
     ("natural", "自然だった点"),
     ("confusing", "分かりにくかった点"),
@@ -118,6 +124,32 @@ def _map_legend_text() -> str:
     )
 
 
+def _verdict_guide_text() -> str:
+    return "\n".join(VERDICT_GUIDE)
+
+
+def _case_goal_text(fixture_id: str) -> str:
+    if fixture_id == "move_route_basic_9x9":
+        return "見ること: 初期観測範囲、現在位置@、salvage $、南warp v、MOVE_ROUTEの結果が読み取れるか。"
+    if fixture_id == "move_to_known_9x9":
+        return "見ること: MOVE_TOが既知map上の自動移動として自然で、経路結果をlogで追えるか。"
+    if fixture_id == "resource_cache_single_9x9":
+        return "見ること: resource取得、消費状態、fuel回復がmap/log/summaryで分かるか。"
+    if fixture_id == "station_refuel_9x9":
+        return "見ること: stationの位置、隣接interaction、refuel to maxが分かるか。"
+    if fixture_id == "salvage_placeholder_9x9":
+        return "見ること: salvage placeholderの表示と消費記録が、現段階の評価対象として十分か。"
+    if fixture_id == "warp_exit_s_9x9":
+        return "見ること: vと南WARP_EXITの関係、成功log、出口としての分かりやすさ。"
+    if fixture_id == "rift_blocked_n_9x9":
+        return "見ること: RIFT由来の北出口不可が、拒否理由として分かるか。"
+    if fixture_id == "shared_fuel_cost_9x9":
+        return "見ること: SHARED_FUELのfuel消費がlog/summaryで追え、重すぎないか。"
+    if fixture_id == "revisit_resource_consumed_9x9":
+        return "見ること: 再訪時に発見済み・消費済み状態が復元されているか。"
+    return "見ること: このcaseの目的をmap/log/summaryから判断できるか。"
+
+
 def _event_rows(result: SrsFixtureRunResult) -> list[Mapping[str, object]]:
     return [
         {
@@ -133,7 +165,10 @@ def _print_case(result: SrsFixtureRunResult) -> None:
     print("\n" + "=" * 80)
     print(result.fixture_id)
     print("-" * 80)
-    print("summary:")
+    print("evaluation guide:")
+    print(_case_goal_text(result.fixture_id))
+    print(_verdict_guide_text())
+    print("\nsummary:")
     print(json.dumps(result.summary, ensure_ascii=False, sort_keys=True, indent=2))
     print("\nlog events:")
     print(json.dumps(_event_rows(result), ensure_ascii=False, sort_keys=True, indent=2))
@@ -152,6 +187,12 @@ def _write_header(path: Path, fixture_paths: tuple[Path, ...]) -> None:
         f"- created_at: {datetime.now().isoformat(timespec='seconds')}",
         "- renderer: render_known_map_spaced",
         "- note: compact render / JSON API は fixture regression 用に維持する",
+        "",
+        "## 判定基準",
+        "",
+        "```text",
+        _verdict_guide_text(),
+        "```",
         "",
         "## Map legend",
         "",
@@ -178,6 +219,10 @@ def _append_case_result(
     event_rows = _event_rows(result)
     section = f"""
 ## {result.fixture_id}
+
+### このcaseで見ること
+
+{_case_goal_text(result.fixture_id)}
 
 ### 判定
 
