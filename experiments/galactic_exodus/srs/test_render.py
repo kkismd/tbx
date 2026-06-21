@@ -4,7 +4,7 @@ import unittest
 from dataclasses import replace
 
 from experiments.galactic_exodus.srs.model import Direction, Position, SrsCell, SrsObjectType, SrsTerrainType
-from experiments.galactic_exodus.srs.render import render_known_map
+from experiments.galactic_exodus.srs.render import render_known_map, render_known_map_spaced
 from experiments.galactic_exodus.srs.test_engine_movement import make_state, place_object, reveal_positions, replace_cell_terrain
 
 
@@ -106,3 +106,13 @@ class SrsRenderTests(unittest.TestCase):
         rendered = render_known_map(state)
 
         self.assertEqual([len(row) for row in rendered.splitlines()], [9] * 9)
+
+    def test_spaced_known_render_inserts_single_spaces_between_cells(self) -> None:
+        state = reveal_positions(make_state(), [Position(x, 8) for x in range(9)])
+
+        rendered = render_known_map_spaced(state)
+
+        lines = rendered.splitlines()
+        self.assertEqual(lines[0], "? ? ? ? ? ? ? ? ?")
+        self.assertEqual(lines[8], ". . . . @ . . . .")
+        self.assertEqual([len(row) for row in lines], [17] * 9)
