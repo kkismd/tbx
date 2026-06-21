@@ -24,25 +24,28 @@ DEFAULT_FIXTURES = (
 
 MAP_LEGEND = (
     ("?", "未発見"),
-    (".", "通常床 / 通行可能"),
-    (",", "debris / 残骸地形"),
-    ("~", "nebula / 星雲地形"),
-    (":", "asteroid field / 小惑星帯"),
-    ("#", "asteroid または rift barrier / 通行不能"),
-    ("*", "star / 恒星・通行不能"),
-    ("o", "planet / 惑星・通行不能"),
-    ("S", "station / 補給ステーション"),
-    ("R", "resource cache / 未消費の資源"),
-    ("r", "resource cache / 消費済み"),
-    ("$", "salvage / 未回収のサルベージ"),
-    ("s", "salvage / 回収済み"),
-    ("@", "player / 現在位置"),
-    ("^", "north warp flag"),
-    (">", "east warp flag"),
-    ("v", "south warp flag"),
-    ("<", "west warp flag"),
-    ("+", "複数方向のwarp flag"),
+    (".", "床/通行可"),
+    (",", "残骸地形"),
+    ("~", "星雲"),
+    (":", "小惑星帯"),
+    ("#", "通行不能"),
+    ("*", "恒星"),
+    ("o", "惑星"),
+    ("S", "補給ステーション"),
+    ("R", "資源/未消費"),
+    ("r", "資源/消費済み"),
+    ("$", "salvage/未回収"),
+    ("s", "salvage/回収済み"),
+    ("@", "現在位置"),
+    ("^", "北warp"),
+    (">", "東warp"),
+    ("v", "南warp"),
+    ("<", "西warp"),
+    ("+", "複数warp"),
 )
+
+MAP_LEGEND_COLUMNS = 3
+MAP_LEGEND_COLUMN_WIDTH = 24
 
 QUESTIONS = (
     ("natural", "自然だった点"),
@@ -90,12 +93,29 @@ def _markdown_list(text: str) -> str:
     return "\n".join(f"- {line}" for line in text.splitlines())
 
 
+def _map_legend_items() -> list[str]:
+    return [f"{symbol} {description}" for symbol, description in MAP_LEGEND]
+
+
+def _wrap_columns(items: Iterable[str], *, columns: int, column_width: int) -> str:
+    rows: list[str] = []
+    row: list[str] = []
+    for item in items:
+        row.append(item.ljust(column_width))
+        if len(row) == columns:
+            rows.append("".join(row).rstrip())
+            row = []
+    if row:
+        rows.append("".join(row).rstrip())
+    return "\n".join(rows)
+
+
 def _map_legend_text() -> str:
-    return "\n".join(f"{symbol}  {description}" for symbol, description in MAP_LEGEND)
-
-
-def _map_legend_markdown() -> str:
-    return "\n".join(f"- `{symbol}`: {description}" for symbol, description in MAP_LEGEND)
+    return _wrap_columns(
+        _map_legend_items(),
+        columns=MAP_LEGEND_COLUMNS,
+        column_width=MAP_LEGEND_COLUMN_WIDTH,
+    )
 
 
 def _event_rows(result: SrsFixtureRunResult) -> list[Mapping[str, object]]:
@@ -135,7 +155,9 @@ def _write_header(path: Path, fixture_paths: tuple[Path, ...]) -> None:
         "",
         "## Map legend",
         "",
-        _map_legend_markdown(),
+        "```text",
+        _map_legend_text(),
+        "```",
         "",
         "## Fixtures",
         "",
