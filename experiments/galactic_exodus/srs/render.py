@@ -39,13 +39,21 @@ _WARP_SYMBOLS = {
 
 
 def render_known_map(state: SrsGameState) -> str:
+    return _render_known_map(state, cell_separator="")
+
+
+def render_known_map_spaced(state: SrsGameState) -> str:
+    return _render_known_map(state, cell_separator=" ")
+
+
+def _render_known_map(state: SrsGameState, *, cell_separator: str) -> str:
     rows: list[str] = []
     for y in range(state.actual_map.height):
         chars: list[str] = []
         for x in range(state.actual_map.width):
             position = Position(x, y)
             chars.append(_render_position(state, position))
-        rows.append("".join(chars))
+        rows.append(cell_separator.join(chars))
     return "\n".join(rows)
 
 
