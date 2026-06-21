@@ -22,6 +22,31 @@ DEFAULT_FIXTURES = (
     "revisit_resource_consumed_9x9.json",
 )
 
+MAP_LEGEND = (
+    ("?", "未発見"),
+    (".", "床/通行可"),
+    (",", "残骸地形"),
+    ("~", "星雲"),
+    (":", "小惑星帯"),
+    ("#", "通行不能"),
+    ("*", "恒星"),
+    ("o", "惑星"),
+    ("S", "補給ステーション"),
+    ("R", "資源/未消費"),
+    ("r", "資源/消費済み"),
+    ("$", "salvage/未回収"),
+    ("s", "salvage/回収済み"),
+    ("@", "現在位置"),
+    ("^", "北warp"),
+    (">", "東warp"),
+    ("v", "南warp"),
+    ("<", "西warp"),
+    ("+", "複数warp"),
+)
+
+MAP_LEGEND_COLUMNS = 3
+MAP_LEGEND_COLUMN_WIDTH = 24
+
 QUESTIONS = (
     ("natural", "自然だった点"),
     ("confusing", "分かりにくかった点"),
@@ -68,6 +93,31 @@ def _markdown_list(text: str) -> str:
     return "\n".join(f"- {line}" for line in text.splitlines())
 
 
+def _map_legend_items() -> list[str]:
+    return [f"{symbol} {description}" for symbol, description in MAP_LEGEND]
+
+
+def _wrap_columns(items: Iterable[str], *, columns: int, column_width: int) -> str:
+    rows: list[str] = []
+    row: list[str] = []
+    for item in items:
+        row.append(item.ljust(column_width))
+        if len(row) == columns:
+            rows.append("".join(row).rstrip())
+            row = []
+    if row:
+        rows.append("".join(row).rstrip())
+    return "\n".join(rows)
+
+
+def _map_legend_text() -> str:
+    return _wrap_columns(
+        _map_legend_items(),
+        columns=MAP_LEGEND_COLUMNS,
+        column_width=MAP_LEGEND_COLUMN_WIDTH,
+    )
+
+
 def _event_rows(result: SrsFixtureRunResult) -> list[Mapping[str, object]]:
     return [
         {
@@ -87,6 +137,8 @@ def _print_case(result: SrsFixtureRunResult) -> None:
     print(json.dumps(result.summary, ensure_ascii=False, sort_keys=True, indent=2))
     print("\nlog events:")
     print(json.dumps(_event_rows(result), ensure_ascii=False, sort_keys=True, indent=2))
+    print("\nmap legend:")
+    print(_map_legend_text())
     print("\nknown map:")
     print(render_known_map_spaced(result.final_state))
     print("=" * 80)
@@ -100,6 +152,12 @@ def _write_header(path: Path, fixture_paths: tuple[Path, ...]) -> None:
         f"- created_at: {datetime.now().isoformat(timespec='seconds')}",
         "- renderer: render_known_map_spaced",
         "- note: compact render / JSON API は fixture regression 用に維持する",
+        "",
+        "## Map legend",
+        "",
+        "```text",
+        _map_legend_text(),
+        "```",
         "",
         "## Fixtures",
         "",
