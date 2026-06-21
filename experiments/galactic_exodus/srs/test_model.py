@@ -18,6 +18,7 @@ from experiments.galactic_exodus.srs.model import (
     SrsObjectType,
     SrsPersistentState,
     SrsTerrainType,
+    derive_lrs_blocked_routes,
     validate_sector_descriptor,
 )
 
@@ -229,9 +230,45 @@ class SrsModelTests(unittest.TestCase):
         with self.assertRaisesRegex(SrsModelError, "INTERACT requires a target_object_id"):
             SrsCommand(command_type="INTERACT")
 
+    def test_srs_command_rejects_warp_exit_without_exit_direction(self) -> None:
+        with self.assertRaisesRegex(SrsModelError, "WARP_EXIT requires an exit_direction"):
+            SrsCommand(command_type="WARP_EXIT")
+
     def test_srs_command_normalizes_route_to_tuple(self) -> None:
         command = SrsCommand(command_type="MOVE_ROUTE", route=[Direction.N, Direction.E])
         self.assertEqual(command.route, (Direction.N, Direction.E))
+
+    def test_srs_command_normalizes_exit_direction(self) -> None:
+        command = SrsCommand(command_type="WARP_EXIT", exit_direction="N")
+        self.assertEqual(command.exit_direction, Direction.N)
+
+    def test_srs_command_rejects_invalid_exit_direction(self) -> None:
+        with self.assertRaisesRegex(SrsModelError, "exit_direction must be a Direction value"):
+            SrsCommand(command_type="WARP_EXIT", exit_direction="X")
+
+    def test_derive_lrs_blocked_routes_returns_rift_edges(self) -> None:
+        descriptor = SectorDescriptor(
+            sector_id="rift-1",
+            sector_type=SectorType.RIFT,
+            sector_seed=1,
+            entry_edge=Direction.S,
+            blocked_edges=frozenset({Direction.N, Direction.E}),
+        )
+
+        self.assertEqual(
+            derive_lrs_blocked_routes(descriptor),
+            frozenset({("rift-1", Direction.N), ("rift-1", Direction.E)}),
+        )
+
+    def test_derive_lrs_blocked_routes_ignores_non_rift_sectors(self) -> None:
+        descriptor = SectorDescriptor(
+            sector_id="normal-1",
+            sector_type=SectorType.NORMAL,
+            sector_seed=1,
+            entry_edge=Direction.S,
+        )
+
+        self.assertEqual(derive_lrs_blocked_routes(descriptor), frozenset())
 
     def test_srs_command_result_freezes_events(self) -> None:
         state = SrsGameState(

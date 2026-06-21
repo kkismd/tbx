@@ -151,6 +151,22 @@ class SrsGenerateTests(unittest.TestCase):
 
         self.assertNotIn("4,0", summarize_state(state)["warp_flags"])
 
+    def test_blocked_edge_line_is_rift_barrier(self) -> None:
+        state = create_sector(
+            SectorDescriptor(
+                "rift-1",
+                SectorType.RIFT,
+                4001,
+                Direction.S,
+                blocked_edges=frozenset({Direction.N}),
+            ),
+            contracts=self.contracts,
+        )
+
+        for x in range(state.actual_map.width):
+            with self.subTest(x=x):
+                self.assertEqual(state.actual_map.cell_at(Position(x, 0)).terrain.value, "RIFT_BARRIER")
+
     def test_non_blocked_edges_have_warp_candidates(self) -> None:
         state = create_sector(
             SectorDescriptor(

@@ -10,6 +10,8 @@ from experiments.galactic_exodus.srs.log import (
     OBSERVATION_UPDATED,
     OBJECT_CONSUMED,
     STATION_ACTIVATED,
+    WARP_EXIT_ACCEPTED,
+    WARP_EXIT_REJECTED,
     build_srs_log,
     make_turn_event,
 )
@@ -179,6 +181,51 @@ class SrsLogTests(unittest.TestCase):
         )
 
         self.assertTrue(event.payload["activated"])
+
+    def test_warp_exit_accepted_payload_has_required_fields(self) -> None:
+        event = make_turn_event(
+            srs_turn=1,
+            event_type=WARP_EXIT_ACCEPTED,
+            payload={
+                "command_type": "WARP_EXIT",
+                "exit_direction": "N",
+                "start_position": [4, 0],
+                "warp_position": [4, 0],
+                "sector_id": "normal-1001",
+                "generated_map_id": "normal-1001:1001",
+                "outcome": "ACCEPTED",
+            },
+        )
+
+        self.assertEqual(
+            set(event.payload),
+            {
+                "command_type",
+                "exit_direction",
+                "start_position",
+                "warp_position",
+                "sector_id",
+                "generated_map_id",
+                "outcome",
+            },
+        )
+
+    def test_warp_exit_rejected_payload_has_required_fields(self) -> None:
+        event = make_turn_event(
+            srs_turn=0,
+            event_type=WARP_EXIT_REJECTED,
+            payload={
+                "command_type": "WARP_EXIT",
+                "exit_direction": "W",
+                "start_position": [4, 4],
+                "warp_position": [4, 4],
+                "sector_id": "rift-4001",
+                "generated_map_id": "rift-4001:4001",
+                "outcome": "REJECTED_NO_WARP_FLAG",
+            },
+        )
+
+        self.assertEqual(event.payload["outcome"], "REJECTED_NO_WARP_FLAG")
 
 
 if __name__ == "__main__":
