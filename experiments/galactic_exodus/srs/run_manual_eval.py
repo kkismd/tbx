@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import argparse
 import re
+from dataclasses import replace
 from datetime import datetime
 from pathlib import Path
 from typing import Iterable, Mapping, Sequence
 
+from experiments.galactic_exodus.srs.model import Position, SrsGameState
 from experiments.galactic_exodus.srs.render import render_known_map_spaced
 from experiments.galactic_exodus.srs.run_fixture import FIXTURES_DIR, SrsFixtureRunResult, run_fixture
 
@@ -41,7 +43,7 @@ MAP_LEGEND = (
     ("r", "資源/消費済み"),
     ("$", "salvage/未回収"),
     ("s", "salvage/回収済み"),
-    ("@", "現在位置"),
+    ("@", "現在位置（重要記号と重なる場合は隣接空白へ表示）"),
     ("^", "北warp"),
     (">", "東warp"),
     ("v", "南warp"),
@@ -237,6 +239,59 @@ def _event_summary_text(result: SrsFixtureRunResult) -> str:
     return "\n".join(f"- {line}" for line in lines)
 
 
+def _render_known_map_spaced_for_manual_eval(state: SrsGameState) -> str:
+    render = render_known_map_spaced(state)
+    player = state.player_position
+    if not state.actual_map.contains(player):
+        return render
+
+    hidden_player_state = replace(state, player_position=Position(-1, -1))
+    underlay_rows = render_known_map_spaced(hidden_player_state).splitlines()
+    if not (0 <= player.y < len(underlay_rows)):
+        return render
+
+    player_row = underlay_rows[player.y]
+    player_cell_index = player.x * 2
+    if not (0 <= player_cell_index < len(player_row)):
+        return render
+
+    under_player = player_row[player_cell_index]
+    if under_player in {"?", "."}:
+        return render
+
+    row_chars = list(player_row)
+    if player.x < state.actual_map.width - 1:
+        row_chars[player_cell_index + 1] = "@"
+    elif player.x > 0:
+        row_chars[player_cell_index - 1] = "@"
+    else:
+        row_chars.append("@")
+
+    underlay_rows[player.y] = "".join(row_chars)
+    return "\n".join(underlay_rows)
+
+
+def _player_cell_text(state: SrsGameState) -> str:
+    player = state.player_position
+    if not state.actual_map.contains(player):
+        return f"- position=({player.x},{player.y}), out_of_bounds=True"
+
+    cell = state.actual_map.cell_at(player)
+    details = [f"position=({player.x},{player.y})", f"terrain={cell.terrain.value}"]
+
+    if cell.warp_flags:
+        warp = "".join(direction.value for direction in sorted(cell.warp_flags, key=lambda direction: direction.value))
+        details.append(f"warp={warp}")
+
+    if cell.object_id is not None:
+        object_state = state.objects[cell.object_id]
+        details.append(f"object={object_state.object_type.value}")
+        details.append(f"consumed={str(object_state.consumed).lower()}")
+        details.append(f"activated={str(object_state.activated).lower()}")
+
+    return "- " + ", ".join(details)
+
+
 def _print_case(result: SrsFixtureRunResult) -> None:
     print("\n" + "=" * 80)
     print(result.fixture_id)
@@ -248,8 +303,10 @@ def _print_case(result: SrsFixtureRunResult) -> None:
     print(_event_summary_text(result))
     print("\nmap legend:")
     print(_map_legend_text())
+    print("\nplayer cell:")
+    print(_player_cell_text(result.final_state))
     print("\nknown map:")
-    print(render_known_map_spaced(result.final_state))
+    print(_render_known_map_spaced_for_manual_eval(result.final_state))
     print("=" * 80)
 
 
@@ -265,8 +322,9 @@ def _write_header(path: Path, fixture_paths: tuple[Path, ...]) -> None:
         "# SRS Manual Evaluation",
         "",
         f"- created_at: {datetime.now().isoformat(timespec='seconds')}",
-        "- renderer: render_known_map_spaced",
+        "- renderer: manual-eval overlay over render_known_map_spaced",
         "- note: compact render / JSON API は fixture regression 用に維持する",
+        "- note: 重要記号と現在位置が重なる場合、足元記号を残して `@` を隣接空白へ表示する",
         "",
         "## 判定基準",
         "",
@@ -311,7 +369,7 @@ def _append_case_result(
     status: str,
     answers: Mapping[str, str],
 ) -> None:
-    render = render_known_map_spaced(result.final_state)
+    render = _render_known_map_spaced_for_manual_eval(result.final_state)
     section = f"""
 ## {result.fixture_id}
 
@@ -326,6 +384,10 @@ def _append_case_result(
 ### event summary
 
 {_event_summary_text(result)}
+
+### player cell
+
+{_player_cell_text(result.final_state)}
 
 ### known map
 
