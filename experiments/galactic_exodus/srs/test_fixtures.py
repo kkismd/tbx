@@ -6,6 +6,7 @@ from pathlib import Path
 
 from experiments.galactic_exodus.srs.contracts import load_default_contracts
 from experiments.galactic_exodus.srs.log import build_srs_log
+from experiments.galactic_exodus.srs.model import Position
 from experiments.galactic_exodus.srs.run_fixture import (
     FIXTURES_DIR,
     REPO_ROOT,
@@ -77,6 +78,36 @@ class SrsFixtureTests(unittest.TestCase):
         self.assertEqual(payload["fixture_id"], "resource_cache_single_9x9")
         self.assertEqual(payload["final_state"]["fuel"], 7)
         json.dumps(payload)
+
+    def test_resource_cache_fixture_restores_manual_eval_discovered_cells(self) -> None:
+        result = run_fixture(FIXTURES_DIR / "resource_cache_single_9x9.json", contracts=self.contracts)
+
+        self.assertEqual(
+            result.initial_state.known_state.discovered_cells,
+            frozenset(
+                {
+                    Position(2, 7),
+                    Position(2, 6),
+                    Position(3, 7),
+                    Position(1, 7),
+                }
+            ),
+        )
+
+    def test_revisit_resource_fixture_preserves_manual_eval_discovered_cells(self) -> None:
+        result = run_fixture(FIXTURES_DIR / "revisit_resource_consumed_9x9.json", contracts=self.contracts)
+
+        self.assertEqual(
+            result.initial_state.known_state.discovered_cells,
+            frozenset(
+                {
+                    Position(2, 7),
+                    Position(2, 6),
+                    Position(3, 7),
+                    Position(1, 7),
+                }
+            ),
+        )
 
     def test_game_log_json_serializable(self) -> None:
         result = run_fixture(FIXTURES_DIR / "move_route_basic_9x9.json", contracts=self.contracts)

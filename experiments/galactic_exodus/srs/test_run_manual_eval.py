@@ -87,6 +87,18 @@ class SrsRunManualEvalTests(unittest.TestCase):
             ],
         )
 
+    def test_manual_eval_resource_cache_fixture_keeps_target_area_visible(self) -> None:
+        result = run_fixture(Path(__file__).resolve().parent / "fixtures" / "resource_cache_single_9x9.json")
+
+        self.assertEqual(
+            _player_cell_text(result.final_state),
+            "- position=(2,7), terrain=FLOOR, object=RESOURCE_CACHE, consumed=true, activated=false",
+        )
+        self.assertEqual(
+            _render_known_map_spaced_for_manual_eval(result.final_state).splitlines()[7],
+            "? . r@. ? ? ? ? ?",
+        )
+
     def test_event_summary_station_includes_refuel_and_activation(self) -> None:
         lines = self._summary_lines_for_fixture("station_refuel_9x9.json")
 
@@ -115,4 +127,12 @@ class SrsRunManualEvalTests(unittest.TestCase):
         self.assertIn(
             "turn 0: INTERACT_REJECTED RESOURCE_CACHE resource-cache-1 outcome=REJECTED_ALREADY_CONSUMED fuel 2->2 consumed=true",
             lines,
+        )
+
+    def test_manual_eval_revisit_resource_fixture_shows_consumed_player_cell(self) -> None:
+        result = run_fixture(Path(__file__).resolve().parent / "fixtures" / "revisit_resource_consumed_9x9.json")
+
+        self.assertEqual(
+            _player_cell_text(result.final_state),
+            "- position=(2,7), terrain=FLOOR, object=RESOURCE_CACHE, consumed=true, activated=false",
         )

@@ -18,7 +18,7 @@
     "persistent": {
       "consumed_object_ids": [],
       "activated_object_ids": [],
-      "discovered_cells": []
+      "discovered_cells": [[2, 7], [2, 6], [3, 7], [1, 7]]
     }
   },
   "commands": [
