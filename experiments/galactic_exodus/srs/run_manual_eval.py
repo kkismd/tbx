@@ -155,6 +155,74 @@ def _format_position(value: object) -> str:
     return "-"
 
 
+def _format_bool(value: object) -> str:
+    if isinstance(value, bool):
+        return str(value).lower()
+    return str(value)
+
+
+def _summary_token(name: str, value: object) -> str | None:
+    if value is None:
+        return None
+    return f"{name}={_format_bool(value)}"
+
+
+def _interaction_subject_tokens(payload: Mapping[str, object]) -> list[str]:
+    return [
+        str(payload.get("object_type", "-") or "-"),
+        str(payload.get("object_id", "-") or "-"),
+    ]
+
+
+def _interaction_event_summary(prefix: str, payload: Mapping[str, object]) -> str:
+    object_type = str(payload.get("object_type", "-") or "-")
+    tokens: list[str] = [prefix, *_interaction_subject_tokens(payload)]
+
+    outcome = payload.get("outcome")
+    if outcome is not None:
+        tokens.append(f"outcome={outcome}")
+
+    fuel_before = payload.get("fuel_before")
+    fuel_after = payload.get("fuel_after")
+    if fuel_before is not None or fuel_after is not None:
+        tokens.append(f"fuel {fuel_before if fuel_before is not None else '-'}->{fuel_after if fuel_after is not None else '-'}")
+
+    if object_type == "RESOURCE_CACHE":
+        if prefix.endswith("INTERACT_ACCEPTED") or payload.get("fuel_restore") is not None:
+            restore = payload.get("fuel_restore", payload.get("fuel_delta"))
+            tokens.append(f"restore={restore if restore is not None else '-'}")
+        if payload.get("consumed") is not None:
+            tokens.append(f"consumed={_format_bool(payload.get('consumed'))}")
+        elif prefix.endswith("INTERACT_ACCEPTED") or outcome == "REJECTED_ALREADY_CONSUMED":
+            tokens.append("consumed=true")
+    elif object_type == "STATION":
+        if prefix.endswith("INTERACT_ACCEPTED"):
+            tokens.append("refuel_to_max=true")
+            tokens.append("activated=true")
+        else:
+            activated = _summary_token("activated", payload.get("activated"))
+            if activated is not None:
+                tokens.append(activated)
+    elif object_type == "SALVAGE":
+        if prefix.endswith("INTERACT_ACCEPTED"):
+            tokens.append("placeholder=true")
+            tokens.append("consumed=true")
+        else:
+            consumed = _summary_token("consumed", payload.get("consumed"))
+            if consumed is not None:
+                tokens.append(consumed)
+
+    if object_type not in {"RESOURCE_CACHE", "STATION", "SALVAGE"}:
+        consumed = _summary_token("consumed", payload.get("consumed"))
+        if consumed is not None:
+            tokens.append(consumed)
+        activated = _summary_token("activated", payload.get("activated"))
+        if activated is not None:
+            tokens.append(activated)
+
+    return " ".join(tokens)
+
+
 def _map_legend_items() -> list[str]:
     return [f"{symbol} {description}" for symbol, description in MAP_LEGEND]
 
@@ -225,6 +293,10 @@ def _event_summary_lines(result: SrsFixtureRunResult) -> list[str]:
                 f"new={payload.get('newly_discovered_count', '-')} "
                 f"total={payload.get('total_discovered_count', '-')}"
             )
+        elif event.event_type in {"INTERACT_ACCEPTED", "INTERACT_REJECTED"}:
+            lines.append(_interaction_event_summary(prefix, payload))
+        elif event.event_type in {"OBJECT_CONSUMED", "STATION_ACTIVATED"}:
+            lines.append(" ".join([prefix, *_interaction_subject_tokens(payload)]))
         elif "outcome" in payload:
             lines.append(f"{prefix} outcome={payload.get('outcome')}")
         else:
