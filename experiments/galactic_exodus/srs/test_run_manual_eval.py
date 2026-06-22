@@ -2,13 +2,23 @@ from __future__ import annotations
 
 import unittest
 from dataclasses import replace
+from pathlib import Path
 
 from experiments.galactic_exodus.srs.model import Direction, Position, SrsObjectType, SrsTerrainType
-from experiments.galactic_exodus.srs.run_manual_eval import _player_cell_text, _render_known_map_spaced_for_manual_eval
+from experiments.galactic_exodus.srs.run_fixture import run_fixture
+from experiments.galactic_exodus.srs.run_manual_eval import (
+    _event_summary_lines,
+    _player_cell_text,
+    _render_known_map_spaced_for_manual_eval,
+)
 from experiments.galactic_exodus.srs.test_engine_movement import make_state, place_object, reveal_positions, replace_cell_terrain
 
 
 class SrsRunManualEvalTests(unittest.TestCase):
+    def _summary_lines_for_fixture(self, fixture_name: str) -> list[str]:
+        result = run_fixture(Path(__file__).resolve().parent / "fixtures" / fixture_name)
+        return _event_summary_lines(result)
+
     def test_manual_eval_render_keeps_player_on_floor_cell(self) -> None:
         state = replace(make_state(), player_position=Position(4, 7))
         state = reveal_positions(state, [Position(x, 7) for x in range(9)])
@@ -64,4 +74,45 @@ class SrsRunManualEvalTests(unittest.TestCase):
         self.assertEqual(
             text,
             "- position=(4,8), terrain=RIFT_BARRIER, warp=S, object=SALVAGE, consumed=true, activated=false",
+        )
+
+    def test_event_summary_resource_cache_includes_fuel_and_consumed_state(self) -> None:
+        lines = self._summary_lines_for_fixture("resource_cache_single_9x9.json")
+
+        self.assertEqual(
+            lines[-2:],
+            [
+                "turn 1: INTERACT_ACCEPTED RESOURCE_CACHE resource-cache-1 outcome=ACCEPTED fuel 2->7 restore=5 consumed=true",
+                "turn 1: OBJECT_CONSUMED RESOURCE_CACHE resource-cache-1",
+            ],
+        )
+
+    def test_event_summary_station_includes_refuel_and_activation(self) -> None:
+        lines = self._summary_lines_for_fixture("station_refuel_9x9.json")
+
+        self.assertEqual(
+            lines[-2:],
+            [
+                "turn 1: INTERACT_ACCEPTED STATION station-1 outcome=ACCEPTED fuel 2->9 refuel_to_max=true activated=true",
+                "turn 1: STATION_ACTIVATED STATION station-1",
+            ],
+        )
+
+    def test_event_summary_salvage_marks_placeholder_and_consumed(self) -> None:
+        lines = self._summary_lines_for_fixture("salvage_placeholder_9x9.json")
+
+        self.assertEqual(
+            lines[-2:],
+            [
+                "turn 1: INTERACT_ACCEPTED SALVAGE salvage-1 outcome=ACCEPTED fuel 2->2 placeholder=true consumed=true",
+                "turn 1: OBJECT_CONSUMED SALVAGE salvage-1",
+            ],
+        )
+
+    def test_event_summary_revisit_resource_reject_mentions_consumed_object(self) -> None:
+        lines = self._summary_lines_for_fixture("revisit_resource_consumed_9x9.json")
+
+        self.assertIn(
+            "turn 0: INTERACT_REJECTED RESOURCE_CACHE resource-cache-1 outcome=REJECTED_ALREADY_CONSUMED fuel 2->2 consumed=true",
+            lines,
         )
