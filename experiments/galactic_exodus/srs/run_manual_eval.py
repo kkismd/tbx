@@ -1,12 +1,18 @@
 from __future__ import annotations
 
 import argparse
+import re
 from datetime import datetime
 from pathlib import Path
-from typing import Iterable, Mapping
+from typing import Iterable, Mapping, Sequence
 
 from experiments.galactic_exodus.srs.render import render_known_map_spaced
 from experiments.galactic_exodus.srs.run_fixture import FIXTURES_DIR, SrsFixtureRunResult, run_fixture
+
+try:
+    import readline  # noqa: F401  # Enables line editing/backspace on Unix-like terminals.
+except ImportError:  # pragma: no cover - readline is platform dependent.
+    pass
 
 
 DEFAULT_FIXTURES = (
@@ -59,6 +65,12 @@ QUESTIONS = (
     ("auto_eval", "#1082 自動評価に渡したい観点"),
 )
 
+VALID_STATUSES = ("OK", "要調整", "保留")
+
+
+class ManualEvalInterrupted(Exception):
+    """Raised when the evaluator intentionally interrupts input."""
+
 
 def _default_output_path() -> Path:
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -75,17 +87,54 @@ def _fixture_paths(names: Iterable[str]) -> tuple[Path, ...]:
     return tuple(paths)
 
 
+def _fixture_id_from_path(path: Path) -> str:
+    return path.stem
+
+
+def _clean_input(text: str) -> str:
+    cleaned: list[str] = []
+    for character in text:
+        if character in {"\b", "\x7f"}:
+            if cleaned:
+                cleaned.pop()
+            continue
+        if ord(character) < 32 and character != "\t":
+            continue
+        cleaned.append(character)
+    return "".join(cleaned).strip()
+
+
+def _read_input(prompt: str) -> str:
+    try:
+        return _clean_input(input(prompt))
+    except UnicodeDecodeError as exc:
+        print("\n入力の途中で不完全なUTF-8バイト列を検出したため、このcaseの入力を中断します。")
+        print("ここまでに記録済みのcaseは保存されています。同じ --output で再実行してください。")
+        raise ManualEvalInterrupted from exc
+    except (EOFError, KeyboardInterrupt) as exc:
+        raise ManualEvalInterrupted from exc
+
+
 def _prompt_line(prompt: str, *, default: str = "") -> str:
     suffix = f" [{default}]" if default else ""
-    answer = input(f"{prompt}{suffix}: ").strip()
+    answer = _read_input(f"{prompt}{suffix}: ")
     return answer or default
+
+
+def _prompt_choice(prompt: str, *, choices: Sequence[str], default: str) -> str:
+    normalized = {choice.lower(): choice for choice in choices}
+    while True:
+        answer = _prompt_line(prompt, default=default)
+        if answer.lower() in normalized:
+            return normalized[answer.lower()]
+        print(f"入力値が不明です。{' / '.join(choices)} のいずれかを入力してください。")
 
 
 def _prompt_multiline(prompt: str) -> str:
     print(f"{prompt}（空行で終了。なければそのままEnter）")
     lines: list[str] = []
     while True:
-        line = input("  > ").rstrip()
+        line = _read_input("  > ").rstrip()
         if line == "":
             break
         lines.append(line)
@@ -239,6 +288,22 @@ def _write_header(path: Path, fixture_paths: tuple[Path, ...]) -> None:
     path.write_text("\n".join(lines), encoding="utf-8")
 
 
+def _recorded_fixture_ids(path: Path, fixture_paths: tuple[Path, ...]) -> set[str]:
+    if not path.exists():
+        return set()
+    expected_ids = {_fixture_id_from_path(fixture_path) for fixture_path in fixture_paths}
+    text = path.read_text(encoding="utf-8")
+    recorded_ids = set(re.findall(r"^## ([^\n]+)$", text, flags=re.MULTILINE))
+    return recorded_ids & expected_ids
+
+
+def _prepare_output_file(path: Path, fixture_paths: tuple[Path, ...], *, restart: bool) -> set[str]:
+    if restart or not path.exists():
+        _write_header(path, fixture_paths)
+        return set()
+    return _recorded_fixture_ids(path, fixture_paths)
+
+
 def _append_case_result(
     path: Path,
     *,
@@ -289,25 +354,39 @@ def _append_case_result(
         file.write(section)
 
 
-def run_manual_eval(fixture_paths: tuple[Path, ...], *, output_path: Path) -> None:
-    _write_header(output_path, fixture_paths)
+def run_manual_eval(fixture_paths: tuple[Path, ...], *, output_path: Path, restart: bool = False) -> None:
+    recorded_ids = _prepare_output_file(output_path, fixture_paths, restart=restart)
     print(f"記録先: {output_path}")
+    if recorded_ids:
+        print(f"再開: 記録済みcaseをskipします: {', '.join(sorted(recorded_ids))}")
     print("各caseで出力を確認し、質問に回答してください。回答はcaseごとにMarkdownへ追記されます。")
+    print("中断しても同じ --output を指定して再実行すれば、記録済みcaseの次から再開します。")
 
-    for index, fixture_path in enumerate(fixture_paths, start=1):
-        print(f"\ncase {index}/{len(fixture_paths)}: {fixture_path}")
-        result = run_fixture(fixture_path)
-        _print_case(result)
+    try:
+        for index, fixture_path in enumerate(fixture_paths, start=1):
+            fixture_id = _fixture_id_from_path(fixture_path)
+            if fixture_id in recorded_ids:
+                print(f"\ncase {index}/{len(fixture_paths)}: {fixture_path} は記録済みのためskipします。")
+                continue
 
-        proceed = _prompt_line("このcaseを記録しますか？ yes/no", default="yes").lower()
-        if proceed not in {"yes", "y"}:
-            continue
+            print(f"\ncase {index}/{len(fixture_paths)}: {fixture_path}")
+            result = run_fixture(fixture_path)
+            _print_case(result)
 
-        _print_verdict_context(result)
-        status = _prompt_line("判定を入力してください: OK / 要調整 / 保留", default="OK")
-        answers = {key: _prompt_multiline(label) for key, label in QUESTIONS}
-        _append_case_result(output_path, result=result, status=status, answers=answers)
-        print(f"記録しました: {output_path}")
+            proceed = _prompt_choice("このcaseを記録しますか？ yes/no", choices=("yes", "y", "no", "n"), default="yes")
+            if proceed in {"no", "n"}:
+                continue
+
+            _print_verdict_context(result)
+            status = _prompt_choice("判定を入力してください: OK / 要調整 / 保留", choices=VALID_STATUSES, default="OK")
+            answers = {key: _prompt_multiline(label) for key, label in QUESTIONS}
+            _append_case_result(output_path, result=result, status=status, answers=answers)
+            recorded_ids.add(result.fixture_id)
+            print(f"記録しました: {output_path}")
+    except ManualEvalInterrupted:
+        print("\n中断しました。ここまでに記録済みのcaseはMarkdownに保存されています。")
+        print(f"再開するには同じ --output を指定して再実行してください: {output_path}")
+        return
 
     print("\n完了しました。")
     print(f"記録先: {output_path}")
@@ -326,11 +405,16 @@ def main() -> int:
         default=None,
         help="Markdown output path. Defaults to srs_manual_eval_<timestamp>.md.",
     )
+    parser.add_argument(
+        "--restart",
+        action="store_true",
+        help="Overwrite the output file and start from the first case.",
+    )
     args = parser.parse_args()
 
     fixture_names = tuple(args.fixtures) if args.fixtures else DEFAULT_FIXTURES
     output_path = args.output or _default_output_path()
-    run_manual_eval(_fixture_paths(fixture_names), output_path=output_path)
+    run_manual_eval(_fixture_paths(fixture_names), output_path=output_path, restart=args.restart)
     return 0
 
 
