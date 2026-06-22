@@ -107,6 +107,10 @@ def _clean_input(text: str) -> str:
 def _read_input(prompt: str) -> str:
     try:
         return _clean_input(input(prompt))
+    except UnicodeDecodeError as exc:
+        print("\n入力の途中で不完全なUTF-8バイト列を検出したため、このcaseの入力を中断します。")
+        print("ここまでに記録済みのcaseは保存されています。同じ --output で再実行してください。")
+        raise ManualEvalInterrupted from exc
     except (EOFError, KeyboardInterrupt) as exc:
         raise ManualEvalInterrupted from exc
 
