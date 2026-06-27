@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import csv
+import json
 from collections import deque
 from dataclasses import dataclass, replace
 from enum import Enum
 import statistics
+from pathlib import Path
 from types import MappingProxyType
 from typing import Any, Callable, Iterable, Mapping
 
@@ -19,6 +22,7 @@ from experiments.galactic_exodus.srs.generate import create_sector
 from experiments.galactic_exodus.srs.log import (
     INTERACT_REJECTED,
     MOVE_REJECTED,
+    OBSERVATION_UPDATED,
     WARP_EXIT_ACCEPTED,
     WARP_EXIT_REJECTED,
 )
@@ -78,6 +82,48 @@ _VALUE_OBJECT_TYPES = frozenset(
         SrsObjectType.STATION,
         SrsObjectType.SALVAGE,
     }
+)
+POLICY_RUNS_CSV_FIELDNAMES = [
+    "case_id",
+    "policy",
+    "sector_type",
+    "sector_seed",
+    "entry_edge",
+    "selected_exit_edge",
+    "cost_mode",
+    "outcome",
+    "srs_turn_count",
+    "command_count",
+    "final_fuel",
+    "max_fuel",
+    "objects_discovered",
+    "objects_acquired",
+    "station_used",
+    "resource_used",
+    "salvage_acquired",
+    "blocked_edge_attempt_count",
+    "observation_5x5_count",
+    "observation_3x3_count",
+]
+_POLICY_SUMMARY_METRIC_KEYS = (
+    "run_count_by_policy",
+    "run_count_by_cost_mode",
+    "run_count_by_sector_type",
+    "run_count_by_outcome",
+    "exit_rate",
+    "median_srs_turn_count",
+    "p90_srs_turn_count",
+    "object_discovery_rate",
+    "object_acquisition_rate",
+    "station_use_rate",
+    "resource_use_rate",
+    "salvage_acquisition_rate",
+    "blocked_edge_attempt_rate",
+    "turn_limit_rate",
+    "no_policy_action_rate",
+    "turn_only_exit_rate",
+    "shared_fuel_exit_rate",
+    "turn_only_vs_shared_fuel_failure_delta",
 )
 
 
@@ -825,6 +871,78 @@ def summarize_policy_runs(policy_runs: Iterable[PolicyRunResult]) -> dict[str, A
     return summary
 
 
+def build_policy_summary_document(policy_runs: Iterable[PolicyRunResult]) -> dict[str, Any]:
+    summary = summarize_policy_runs(policy_runs)
+    return {
+        "run_count": summary["run_count"],
+        "policies": summary["by_policy"],
+        "conditions": {
+            "cost_modes": summary["by_cost_mode"],
+            "sector_types": summary["by_sector_type"],
+            "outcomes": summary["by_outcome"],
+        },
+        "metrics": {
+            key: summary[key]
+            for key in _POLICY_SUMMARY_METRIC_KEYS
+        },
+    }
+
+
+def write_policy_runs_csv(output_path: Path, policy_runs: Iterable[PolicyRunResult]) -> None:
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    ordered_runs = sorted(policy_runs, key=_policy_run_csv_sort_key)
+    with output_path.open("w", encoding="utf-8", newline="") as file:
+        writer = csv.DictWriter(file, fieldnames=POLICY_RUNS_CSV_FIELDNAMES)
+        writer.writeheader()
+        writer.writerows(_policy_run_csv_row(run) for run in ordered_runs)
+
+
+def write_policy_summary_json(summary_path: Path, policy_runs: Iterable[PolicyRunResult]) -> None:
+    summary_path.parent.mkdir(parents=True, exist_ok=True)
+    payload = build_policy_summary_document(policy_runs)
+    summary_path.write_text(json.dumps(payload, ensure_ascii=True, indent=2) + "\n", encoding="utf-8")
+
+
+def _policy_run_csv_sort_key(run: PolicyRunResult) -> tuple[Any, ...]:
+    return (
+        run.evaluation_case.case_id,
+        run.policy_name,
+        run.evaluation_case.cost_mode.value,
+        run.evaluation_case.sector_seed,
+        run.outcome.value,
+        run.command_count,
+    )
+
+
+def _policy_run_csv_row(run: PolicyRunResult) -> dict[str, Any]:
+    final_state = run.final_state
+    objects_discovered = _discovered_value_object_ids(run)
+    objects_acquired = _acquired_value_object_ids(run)
+    observation_counts = _observation_counts(run)
+    return {
+        "case_id": run.evaluation_case.case_id,
+        "policy": run.policy_name,
+        "sector_type": run.evaluation_case.sector_type.value,
+        "sector_seed": run.evaluation_case.sector_seed,
+        "entry_edge": run.evaluation_case.entry_edge.value,
+        "selected_exit_edge": run.evaluation_case.selected_exit_edge.value,
+        "cost_mode": run.evaluation_case.cost_mode.value,
+        "outcome": run.outcome.value,
+        "srs_turn_count": None if final_state is None else final_state.srs_turn,
+        "command_count": run.command_count,
+        "final_fuel": None if final_state is None else final_state.fuel,
+        "max_fuel": None if final_state is None else final_state.max_fuel,
+        "objects_discovered": len(objects_discovered),
+        "objects_acquired": len(objects_acquired),
+        "station_used": int(_has_used_station(run)),
+        "resource_used": int(_has_used_resource_cache(run)),
+        "salvage_acquired": int(_has_acquired_salvage(run)),
+        "blocked_edge_attempt_count": _blocked_edge_attempt_count(run),
+        "observation_5x5_count": observation_counts[5],
+        "observation_3x3_count": observation_counts[3],
+    }
+
+
 def _build_summary_metrics(runs: tuple[PolicyRunResult, ...]) -> dict[str, Any]:
     srs_turn_counts = sorted(
         run.final_state.srs_turn
@@ -935,18 +1053,81 @@ def _failure_rate_delta(
 
 
 def _has_discovered_value_object(run: PolicyRunResult) -> bool:
+    return bool(_discovered_value_object_ids(run))
+
+
+def _discovered_value_object_ids(run: PolicyRunResult) -> tuple[str, ...]:
     final_state = run.final_state
     if final_state is None:
-        return False
-    return any(
-        object_state is not None and object_state.object_type in _VALUE_OBJECT_TYPES
-        for cell in final_state.known_state.known_cells.values()
-        for object_state in [None if cell.object_id is None else final_state.objects.get(cell.object_id)]
+        return ()
+    return tuple(
+        sorted(
+            {
+                object_state.object_id
+                for cell in final_state.known_state.known_cells.values()
+                for object_state in [None if cell.object_id is None else final_state.objects.get(cell.object_id)]
+                if object_state is not None and object_state.object_type in _VALUE_OBJECT_TYPES
+            }
+        )
     )
 
 
+def _acquired_value_object_ids(run: PolicyRunResult) -> tuple[str, ...]:
+    final_state = run.final_state
+    if final_state is None:
+        return ()
+    return tuple(
+        sorted(
+            {
+                object_id
+                for object_id in (
+                    *final_state.persistent_state.consumed_object_ids,
+                    *final_state.persistent_state.activated_object_ids,
+                )
+                if _object_matches_type(final_state, object_id, expected_types=_VALUE_OBJECT_TYPES)
+            }
+        )
+    )
+
+
+def _observation_counts(run: PolicyRunResult) -> dict[int, int]:
+    counts = {3: 0, 5: 0}
+    final_state = run.final_state
+    if final_state is None:
+        return counts
+    for event in run.event_log:
+        if event.event_type != OBSERVATION_UPDATED:
+            continue
+        center = event.payload.get("center")
+        if not isinstance(center, list) or len(center) != 2:
+            continue
+        position = Position(center[0], center[1])
+        terrain = final_state.actual_map.cell_at(position).terrain
+        size = 3 if terrain is SrsTerrainType.NEBULA else 5
+        counts[size] += 1
+    return counts
+
+
+def _blocked_edge_attempt_count(run: PolicyRunResult) -> int:
+    return sum(
+        1
+        for event in run.event_log
+        if event.event_type == WARP_EXIT_REJECTED and event.payload.get("outcome") == "REJECTED_BLOCKED_EDGE"
+    )
+
+
+def _object_matches_type(
+    final_state: SrsGameState,
+    object_id: str,
+    *,
+    expected_types: frozenset[SrsObjectType],
+) -> bool:
+    object_state = final_state.objects.get(object_id)
+    return object_state is not None and object_state.object_type in expected_types
+
+
 def _has_acquired_value_object(run: PolicyRunResult) -> bool:
-    return _has_used_station(run) or _has_used_resource_cache(run) or _has_acquired_salvage(run)
+    return bool(_acquired_value_object_ids(run))
 
 
 def _has_used_station(run: PolicyRunResult) -> bool:
@@ -992,10 +1173,7 @@ def _persistent_object_match(
 
 
 def _attempted_blocked_edge(run: PolicyRunResult) -> bool:
-    return any(
-        event.event_type == WARP_EXIT_REJECTED and event.payload.get("outcome") == "REJECTED_BLOCKED_EDGE"
-        for event in run.event_log
-    )
+    return _blocked_edge_attempt_count(run) > 0
 
 
 _POLICY_COMMAND_GENERATORS: Mapping[str, Callable[..., SrsCommand | None]] = MappingProxyType(

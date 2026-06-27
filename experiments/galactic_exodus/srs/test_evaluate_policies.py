@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import csv
 import json
+import tempfile
 import unittest
 from dataclasses import replace
 from pathlib import Path
@@ -17,6 +19,7 @@ from experiments.galactic_exodus.srs.evaluate_policies import (
     PolicyRunResult,
     PolicyRunOutcome,
     RevisitMode,
+    build_policy_summary_document,
     build_default_evaluation_cases,
     build_object_greedy_candidates,
     choose_explore_then_exit_command,
@@ -29,11 +32,14 @@ from experiments.galactic_exodus.srs.evaluate_policies import (
     route_on_known_cells,
     run_policy_evaluation_case,
     summarize_policy_runs,
+    write_policy_runs_csv,
+    write_policy_summary_json,
 )
 from experiments.galactic_exodus.srs.log import (
     INTERACT_ACCEPTED,
     INTERACT_REJECTED,
     MOVE_REJECTED,
+    OBSERVATION_UPDATED,
     OBJECT_CONSUMED,
     STATION_ACTIVATED,
     WARP_EXIT_ACCEPTED,
@@ -1237,6 +1243,14 @@ class PolicyRunAggregationTests(unittest.TestCase):
         discovered_object_ids=(),
     ) -> PolicyRunResult:
         state = make_state()
+        if sector_type is SectorType.NEBULA:
+            nebula_positions = [state.player_position]
+            for event in events:
+                center = event.payload.get("center")
+                if isinstance(center, list) and len(center) == 2:
+                    nebula_positions.append(Position(center[0], center[1]))
+            for position in nebula_positions:
+                state = replace_cell_terrain(state, position, SrsTerrainType.NEBULA)
         if discovered_object_ids:
             positions = [Position(4 + index, 4) for index, _ in enumerate(discovered_object_ids)]
             for object_id, position in zip(discovered_object_ids, positions, strict=True):
@@ -1427,6 +1441,173 @@ class PolicyRunAggregationTests(unittest.TestCase):
         self.assertNotIn(str(REPO_ROOT), serialized)
         self.assertNotIn("generated_at", serialized)
         self.assertNotIn("hostname", serialized)
+
+
+class PolicyRunWriterTests(PolicyRunAggregationTests):
+    def test_csv_writer_preserves_column_order_and_stable_sort(self) -> None:
+        runs = [
+            self.make_run_result(
+                case_id="case-b",
+                policy_name=OBJECT_GREEDY_POLICY_NAME,
+                sector_type=SectorType.NEBULA,
+                cost_mode=CostMode.SHARED_FUEL,
+                outcome=PolicyRunOutcome.ABORTED_NO_POLICY_ACTION,
+                srs_turn=7,
+                discovered_object_ids=("salvage-1",),
+                consumed_object_ids=frozenset({"salvage-1"}),
+                events=(
+                    make_turn_event(
+                        srs_turn=1,
+                        event_type=OBSERVATION_UPDATED,
+                        payload={"center": [4, 4], "newly_discovered_count": 3, "total_discovered_count": 9},
+                    ),
+                    make_turn_event(
+                        srs_turn=2,
+                        event_type=WARP_EXIT_REJECTED,
+                        payload={"outcome": "REJECTED_BLOCKED_EDGE"},
+                    ),
+                ),
+            ),
+            self.make_run_result(
+                case_id="case-a",
+                policy_name=EXIT_GREEDY_POLICY_NAME,
+                sector_type=SectorType.NORMAL,
+                cost_mode=CostMode.TURN_ONLY,
+                outcome=PolicyRunOutcome.EXITED,
+                srs_turn=5,
+                discovered_object_ids=("resource-cache-1", "station-1"),
+                consumed_object_ids=frozenset({"resource-cache-1"}),
+                activated_object_ids=frozenset({"station-1"}),
+                events=(
+                    make_turn_event(
+                        srs_turn=1,
+                        event_type=OBSERVATION_UPDATED,
+                        payload={"center": [4, 4], "newly_discovered_count": 5, "total_discovered_count": 25},
+                    ),
+                    make_turn_event(
+                        srs_turn=2,
+                        event_type=OBSERVATION_UPDATED,
+                        payload={"center": [5, 4], "newly_discovered_count": 4, "total_discovered_count": 29},
+                    ),
+                ),
+            ),
+        ]
+
+        with tempfile.TemporaryDirectory(dir=".tmp") as tmp_dir:
+            output_path = Path(tmp_dir) / "nested" / "policy_runs.csv"
+            write_policy_runs_csv(output_path, runs)
+            with output_path.open(encoding="utf-8", newline="") as file:
+                rows = list(csv.DictReader(file))
+                fieldnames = list(rows[0].keys())
+
+        self.assertEqual(
+            fieldnames,
+            [
+                "case_id",
+                "policy",
+                "sector_type",
+                "sector_seed",
+                "entry_edge",
+                "selected_exit_edge",
+                "cost_mode",
+                "outcome",
+                "srs_turn_count",
+                "command_count",
+                "final_fuel",
+                "max_fuel",
+                "objects_discovered",
+                "objects_acquired",
+                "station_used",
+                "resource_used",
+                "salvage_acquired",
+                "blocked_edge_attempt_count",
+                "observation_5x5_count",
+                "observation_3x3_count",
+            ],
+        )
+        self.assertEqual([row["case_id"] for row in rows], ["case-a", "case-b"])
+        self.assertEqual(rows[0]["station_used"], "1")
+        self.assertEqual(rows[0]["resource_used"], "1")
+        self.assertEqual(rows[0]["objects_discovered"], "2")
+        self.assertEqual(rows[0]["objects_acquired"], "2")
+        self.assertEqual(rows[0]["observation_5x5_count"], "2")
+        self.assertEqual(rows[0]["observation_3x3_count"], "0")
+        self.assertEqual(rows[1]["salvage_acquired"], "1")
+        self.assertEqual(rows[1]["blocked_edge_attempt_count"], "1")
+        self.assertEqual(rows[1]["observation_3x3_count"], "1")
+
+    def test_json_summary_writer_uses_fixed_top_level_keys_and_indent(self) -> None:
+        runs = [
+            self.make_run_result(
+                case_id="case-a",
+                policy_name=EXIT_GREEDY_POLICY_NAME,
+                sector_type=SectorType.NORMAL,
+                cost_mode=CostMode.TURN_ONLY,
+                outcome=PolicyRunOutcome.EXITED,
+                srs_turn=2,
+            ),
+            self.make_run_result(
+                case_id="case-b",
+                policy_name=OBJECT_GREEDY_POLICY_NAME,
+                sector_type=SectorType.BASE,
+                cost_mode=CostMode.SHARED_FUEL,
+                outcome=PolicyRunOutcome.ABORTED_NO_POLICY_ACTION,
+                srs_turn=3,
+            ),
+        ]
+
+        with tempfile.TemporaryDirectory(dir=".tmp") as tmp_dir:
+            summary_path = Path(tmp_dir) / "nested" / "policy_summary.json"
+            write_policy_summary_json(summary_path, runs)
+            text = summary_path.read_text(encoding="utf-8")
+            payload = json.loads(text)
+
+        self.assertEqual(list(payload.keys()), ["run_count", "policies", "conditions", "metrics"])
+        self.assertTrue(text.startswith('{\n  "run_count": 2,\n  "policies": {\n'))
+        self.assertEqual(list(payload["conditions"].keys()), ["cost_modes", "sector_types", "outcomes"])
+        self.assertNotIn("generated_at", text)
+        self.assertNotIn(str(REPO_ROOT), text)
+        self.assertNotIn("PosixPath", text)
+
+    def test_same_input_produces_same_csv_and_json(self) -> None:
+        runs = [
+            self.make_run_result(
+                case_id="case-b",
+                policy_name=OBJECT_GREEDY_POLICY_NAME,
+                sector_type=SectorType.BASE,
+                cost_mode=CostMode.SHARED_FUEL,
+                outcome=PolicyRunOutcome.EXITED,
+                srs_turn=4,
+            ),
+            self.make_run_result(
+                case_id="case-a",
+                policy_name=EXIT_GREEDY_POLICY_NAME,
+                sector_type=SectorType.NORMAL,
+                cost_mode=CostMode.TURN_ONLY,
+                outcome=PolicyRunOutcome.ABORTED_TURN_LIMIT,
+                srs_turn=6,
+            ),
+        ]
+
+        with tempfile.TemporaryDirectory(dir=".tmp") as first_tmp_dir:
+            first_csv_path = Path(first_tmp_dir) / "policy_runs.csv"
+            first_json_path = Path(first_tmp_dir) / "policy_summary.json"
+            write_policy_runs_csv(first_csv_path, runs)
+            write_policy_summary_json(first_json_path, runs)
+            first_csv = first_csv_path.read_text(encoding="utf-8")
+            first_json = first_json_path.read_text(encoding="utf-8")
+
+        with tempfile.TemporaryDirectory(dir=".tmp") as second_tmp_dir:
+            second_csv_path = Path(second_tmp_dir) / "policy_runs.csv"
+            second_json_path = Path(second_tmp_dir) / "policy_summary.json"
+            write_policy_runs_csv(second_csv_path, list(reversed(runs)))
+            write_policy_summary_json(second_json_path, list(reversed(runs)))
+            second_csv = second_csv_path.read_text(encoding="utf-8")
+            second_json = second_json_path.read_text(encoding="utf-8")
+
+        self.assertEqual(first_csv, second_csv)
+        self.assertEqual(first_json, second_json)
+        self.assertEqual(build_policy_summary_document(runs), build_policy_summary_document(list(reversed(runs))))
 
 
 if __name__ == "__main__":
