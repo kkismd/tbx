@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import argparse
 import csv
 import json
 from collections import deque
@@ -7,11 +8,12 @@ from dataclasses import dataclass, replace
 from enum import Enum
 import statistics
 from pathlib import Path
+import sys
 from types import MappingProxyType
 from typing import Any, Callable, Iterable, Mapping
 
 from experiments.galactic_exodus import metrics
-from experiments.galactic_exodus.srs.contracts import SrsContracts
+from experiments.galactic_exodus.srs.contracts import SrsContracts, load_default_contracts
 from experiments.galactic_exodus.srs.engine import (
     apply_srs_command,
     restore_srs_state,
@@ -125,6 +127,12 @@ _POLICY_SUMMARY_METRIC_KEYS = (
     "shared_fuel_exit_rate",
     "turn_only_vs_shared_fuel_failure_delta",
 )
+POLICY_NAME_ORDER = (
+    EXIT_GREEDY_POLICY_NAME,
+    EXPLORE_THEN_EXIT_POLICY_NAME,
+    OBJECT_GREEDY_POLICY_NAME,
+)
+REPO_ROOT = Path(__file__).resolve().parents[3]
 
 
 def _freeze_mapping(mapping: Mapping[str, Any]) -> Mapping[str, Any]:
@@ -903,6 +911,49 @@ def write_policy_summary_json(summary_path: Path, policy_runs: Iterable[PolicyRu
     summary_path.write_text(json.dumps(payload, ensure_ascii=True, indent=2) + "\n", encoding="utf-8")
 
 
+def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--output-runs",
+        type=Path,
+        required=True,
+        help="CSV file path for per-run policy evaluation results.",
+    )
+    parser.add_argument(
+        "--output-summary",
+        type=Path,
+        required=True,
+        help="JSON file path for aggregated policy evaluation results.",
+    )
+    return parser.parse_args(argv)
+
+
+def evaluate_default_policies(*, contracts: SrsContracts) -> tuple[PolicyRunResult, ...]:
+    runs: list[PolicyRunResult] = []
+    for evaluation_case in build_default_evaluation_cases():
+        for policy_name in POLICY_NAME_ORDER:
+            runs.append(
+                run_policy_evaluation_case(
+                    evaluation_case,
+                    policy_name,
+                    contracts=contracts,
+                )
+            )
+    return tuple(runs)
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = parse_args(argv)
+    try:
+        policy_runs = evaluate_default_policies(contracts=load_default_contracts(REPO_ROOT))
+        write_policy_runs_csv(args.output_runs, policy_runs)
+        write_policy_summary_json(args.output_summary, policy_runs)
+    except (OSError, ValueError) as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    return 0
+
+
 def _policy_run_csv_sort_key(run: PolicyRunResult) -> tuple[Any, ...]:
     return (
         run.evaluation_case.case_id,
@@ -1455,3 +1506,7 @@ def _step_position(position: Position, direction: Direction) -> Position:
     }
     dx, dy = deltas[direction]
     return Position(position.x + dx, position.y + dy)
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
