@@ -10,10 +10,12 @@ from experiments.galactic_exodus.srs.contracts import load_default_contracts
 from experiments.galactic_exodus.srs.evaluate_policies import (
     EvaluationCase,
     EvaluationCaseError,
+    EXPLORE_THEN_EXIT_POLICY_NAME,
     InitialRevealMode,
     RevisitMode,
     build_default_evaluation_cases,
     build_object_greedy_candidates,
+    choose_explore_then_exit_command,
     choose_exit_greedy_command,
     choose_known_target_step,
     choose_object_greedy_command,
@@ -775,6 +777,191 @@ class ObjectGreedyPolicyTests(unittest.TestCase):
                 ),
                 SrsCommand(command_type="MOVE_ROUTE", route=(Direction.N,)),
             )
+
+
+class ExploreThenExitPolicyTests(unittest.TestCase):
+    def test_policy_name_is_stable(self) -> None:
+        self.assertEqual(EXPLORE_THEN_EXIT_POLICY_NAME, "EXPLORE_THEN_EXIT")
+
+    def test_returns_single_step_move_route_toward_selected_frontier(self) -> None:
+        state = replace(make_state(), player_position=Position(4, 4))
+        state = reveal_positions(
+            state,
+            [
+                Position(4, 4),
+                Position(4, 3),
+                Position(4, 5),
+                Position(3, 4),
+                Position(5, 4),
+                Position(4, 2),
+                Position(3, 3),
+                Position(5, 3),
+            ],
+        )
+        state = replace_cell_terrain(state, Position(3, 4), SrsTerrainType.ASTEROID)
+        state = replace_cell_terrain(state, Position(5, 4), SrsTerrainType.ASTEROID)
+        state = replace_cell_terrain(state, Position(4, 5), SrsTerrainType.ASTEROID)
+        state = reveal_positions(
+            state,
+            [
+                Position(4, 4),
+                Position(4, 3),
+                Position(4, 5),
+                Position(3, 4),
+                Position(5, 4),
+                Position(4, 2),
+                Position(3, 3),
+                Position(5, 3),
+            ],
+        )
+
+        command = choose_explore_then_exit_command(state, selected_exit_edge=Direction.N)
+
+        self.assertEqual(command, SrsCommand(command_type="MOVE_ROUTE", route=(Direction.N,)))
+
+    def test_steps_into_unknown_when_current_position_is_frontier(self) -> None:
+        state = replace(make_state(), player_position=Position(4, 4))
+        state = reveal_positions(
+            state,
+            [
+                Position(4, 4),
+                Position(4, 5),
+                Position(3, 4),
+                Position(5, 4),
+            ],
+        )
+
+        command = choose_explore_then_exit_command(state, selected_exit_edge=Direction.N)
+
+        self.assertEqual(command, SrsCommand(command_type="MOVE_ROUTE", route=(Direction.N,)))
+
+    def test_selected_exit_edge_breaks_unknown_direction_ties(self) -> None:
+        state = replace(make_state(), player_position=Position(4, 4))
+        state = reveal_positions(
+            state,
+            [
+                Position(4, 4),
+                Position(4, 5),
+                Position(3, 4),
+            ],
+        )
+
+        command = choose_explore_then_exit_command(state, selected_exit_edge=Direction.E)
+
+        self.assertEqual(command, SrsCommand(command_type="MOVE_ROUTE", route=(Direction.E,)))
+
+    def test_falls_back_to_exit_greedy_after_max_explore_steps(self) -> None:
+        state = replace(make_state(), player_position=Position(4, 4), srs_turn=12)
+        state = reveal_positions(
+            state,
+            [Position(x, y) for y in range(9) for x in range(9)],
+        )
+        state = replace_cell_warp_flags(state, Position(6, 4), frozenset({Direction.N}))
+
+        command = choose_explore_then_exit_command(state, selected_exit_edge=Direction.N)
+
+        self.assertEqual(command, SrsCommand(command_type="MOVE_ROUTE", route=(Direction.E,)))
+
+    def test_falls_back_to_exit_greedy_when_no_frontier_exists(self) -> None:
+        state = replace(make_state(), player_position=Position(4, 4))
+        state = reveal_positions(
+            state,
+            [Position(x, y) for y in range(9) for x in range(9)],
+        )
+        state = replace_cell_warp_flags(state, Position(6, 4), frozenset({Direction.N}))
+
+        command = choose_explore_then_exit_command(state, selected_exit_edge=Direction.N)
+
+        self.assertEqual(command, SrsCommand(command_type="MOVE_ROUTE", route=(Direction.E,)))
+
+    def test_returns_no_action_when_frontier_and_exit_are_unreachable(self) -> None:
+        state = replace(make_state(), player_position=Position(4, 4))
+        state = reveal_positions(
+            state,
+            [
+                Position(4, 4),
+                Position(4, 3),
+                Position(4, 5),
+                Position(3, 4),
+                Position(5, 4),
+                Position(6, 4),
+            ],
+        )
+        state = replace_cell_terrain(state, Position(4, 3), SrsTerrainType.ASTEROID)
+        state = replace_cell_terrain(state, Position(4, 5), SrsTerrainType.ASTEROID)
+        state = replace_cell_terrain(state, Position(3, 4), SrsTerrainType.ASTEROID)
+        state = replace_cell_terrain(state, Position(5, 4), SrsTerrainType.ASTEROID)
+        state = reveal_positions(
+            state,
+            [
+                Position(4, 4),
+                Position(4, 3),
+                Position(4, 5),
+                Position(3, 4),
+                Position(5, 4),
+                Position(6, 4),
+            ],
+        )
+
+        self.assertIsNone(
+            choose_explore_then_exit_command(state, selected_exit_edge=Direction.N)
+        )
+
+    def test_never_returns_interact_or_move_to(self) -> None:
+        state = replace(make_state(), player_position=Position(4, 4))
+        state = reveal_positions(
+            state,
+            [
+                Position(4, 4),
+                Position(4, 5),
+                Position(3, 4),
+                Position(5, 4),
+            ],
+        )
+
+        command = choose_explore_then_exit_command(state, selected_exit_edge=Direction.N)
+
+        self.assertIsNotNone(command)
+        self.assertNotIn(command.command_type, {"INTERACT", "MOVE_TO"})
+
+    def test_uses_known_state_without_reading_unknown_cell_contents(self) -> None:
+        state = replace(make_state(), player_position=Position(4, 4))
+        state = reveal_positions(
+            state,
+            [
+                Position(4, 4),
+                Position(4, 5),
+                Position(3, 4),
+                Position(5, 4),
+            ],
+        )
+
+        with patch(
+            "experiments.galactic_exodus.srs.model.SrsActualMap.cell_at",
+            side_effect=AssertionError("actual_map.cell_at must not be used"),
+        ):
+            self.assertEqual(
+                choose_explore_then_exit_command(state, selected_exit_edge=Direction.N),
+                SrsCommand(command_type="MOVE_ROUTE", route=(Direction.N,)),
+            )
+
+    def test_is_deterministic_for_same_input(self) -> None:
+        state = replace(make_state(), player_position=Position(4, 4))
+        state = reveal_positions(
+            state,
+            [
+                Position(4, 4),
+                Position(4, 5),
+                Position(3, 4),
+                Position(5, 4),
+            ],
+        )
+
+        first = choose_explore_then_exit_command(state, selected_exit_edge=Direction.N)
+        second = choose_explore_then_exit_command(state, selected_exit_edge=Direction.N)
+
+        self.assertEqual(first, SrsCommand(command_type="MOVE_ROUTE", route=(Direction.N,)))
+        self.assertEqual(first, second)
 
 
 if __name__ == "__main__":
