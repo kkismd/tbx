@@ -14,6 +14,7 @@ from experiments.galactic_exodus.srs.evaluate_policies import (
     EXIT_GREEDY_POLICY_NAME,
     InitialRevealMode,
     OBJECT_GREEDY_POLICY_NAME,
+    PolicyRunResult,
     PolicyRunOutcome,
     RevisitMode,
     build_default_evaluation_cases,
@@ -27,8 +28,18 @@ from experiments.galactic_exodus.srs.evaluate_policies import (
     iter_known_cardinal_neighbors,
     route_on_known_cells,
     run_policy_evaluation_case,
+    summarize_policy_runs,
 )
-from experiments.galactic_exodus.srs.log import INTERACT_REJECTED, MOVE_REJECTED, WARP_EXIT_ACCEPTED, WARP_EXIT_REJECTED
+from experiments.galactic_exodus.srs.log import (
+    INTERACT_ACCEPTED,
+    INTERACT_REJECTED,
+    MOVE_REJECTED,
+    OBJECT_CONSUMED,
+    STATION_ACTIVATED,
+    WARP_EXIT_ACCEPTED,
+    WARP_EXIT_REJECTED,
+    make_turn_event,
+)
 from experiments.galactic_exodus.srs.model import (
     CostMode,
     Direction,
@@ -1185,6 +1196,237 @@ class PolicyRunLoopTests(unittest.TestCase):
             )
 
         self.assertEqual(first, second)
+
+
+class PolicyRunAggregationTests(unittest.TestCase):
+    def make_case(
+        self,
+        *,
+        case_id: str,
+        sector_type: SectorType,
+        cost_mode: CostMode,
+    ) -> EvaluationCase:
+        blocked_edges = frozenset({Direction.W}) if sector_type is SectorType.RIFT else frozenset()
+        return EvaluationCase(
+            case_id=case_id,
+            sector_id=f"{sector_type.value.lower()}-{case_id}",
+            sector_type=sector_type,
+            sector_seed=1000,
+            entry_edge=Direction.S,
+            blocked_edges=blocked_edges,
+            selected_exit_edge=Direction.N,
+            cost_mode=cost_mode,
+            initial_fuel=0,
+            max_fuel=9,
+            initial_reveal_mode=InitialRevealMode.NONE,
+            revisit_mode=RevisitMode.FIRST_VISIT,
+        )
+
+    def make_run_result(
+        self,
+        *,
+        case_id: str,
+        policy_name: str,
+        sector_type: SectorType,
+        cost_mode: CostMode,
+        outcome: PolicyRunOutcome,
+        srs_turn: int,
+        events=(),
+        consumed_object_ids=frozenset(),
+        activated_object_ids=frozenset(),
+        discovered_object_ids=(),
+    ) -> PolicyRunResult:
+        state = make_state()
+        if discovered_object_ids:
+            positions = [Position(4 + index, 4) for index, _ in enumerate(discovered_object_ids)]
+            for object_id, position in zip(discovered_object_ids, positions, strict=True):
+                object_type = {
+                    "resource-cache-1": SrsObjectType.RESOURCE_CACHE,
+                    "station-1": SrsObjectType.STATION,
+                    "salvage-1": SrsObjectType.SALVAGE,
+                }[object_id]
+                state = place_object(state, position, object_type, object_id)
+            state = reveal_positions(state, positions)
+        final_state = replace(
+            state,
+            descriptor=replace(state.descriptor, sector_type=sector_type),
+            srs_turn=srs_turn,
+            persistent_state=replace(
+                state.persistent_state,
+                consumed_object_ids=consumed_object_ids,
+                activated_object_ids=activated_object_ids,
+                sector_type=sector_type,
+            ),
+        )
+        return PolicyRunResult(
+            evaluation_case=self.make_case(case_id=case_id, sector_type=sector_type, cost_mode=cost_mode),
+            policy_name=policy_name,
+            outcome=outcome,
+            final_state=final_state,
+            command_count=len(events),
+            event_log=tuple(events),
+            action_sequence=(),
+        )
+
+    def test_summarizes_run_counts_rates_and_percentiles(self) -> None:
+        runs = [
+            self.make_run_result(
+                case_id="normal-turn-exit",
+                policy_name=EXIT_GREEDY_POLICY_NAME,
+                sector_type=SectorType.NORMAL,
+                cost_mode=CostMode.TURN_ONLY,
+                outcome=PolicyRunOutcome.EXITED,
+                srs_turn=4,
+                discovered_object_ids=("salvage-1",),
+                consumed_object_ids=frozenset({"salvage-1"}),
+                events=(
+                    make_turn_event(
+                        srs_turn=1,
+                        event_type=INTERACT_ACCEPTED,
+                        payload={"object_id": "salvage-1", "object_type": "SALVAGE", "outcome": "ACCEPTED"},
+                    ),
+                    make_turn_event(
+                        srs_turn=1,
+                        event_type=OBJECT_CONSUMED,
+                        payload={"object_id": "salvage-1", "object_type": "SALVAGE"},
+                    ),
+                    make_turn_event(
+                        srs_turn=4,
+                        event_type=WARP_EXIT_ACCEPTED,
+                        payload={"outcome": "ACCEPTED"},
+                    ),
+                ),
+            ),
+            self.make_run_result(
+                case_id="base-shared-exit",
+                policy_name=OBJECT_GREEDY_POLICY_NAME,
+                sector_type=SectorType.BASE,
+                cost_mode=CostMode.SHARED_FUEL,
+                outcome=PolicyRunOutcome.EXITED,
+                srs_turn=8,
+                discovered_object_ids=("station-1",),
+                activated_object_ids=frozenset({"station-1"}),
+                events=(
+                    make_turn_event(
+                        srs_turn=3,
+                        event_type=INTERACT_ACCEPTED,
+                        payload={"object_id": "station-1", "object_type": "STATION", "outcome": "ACCEPTED"},
+                    ),
+                    make_turn_event(
+                        srs_turn=3,
+                        event_type=STATION_ACTIVATED,
+                        payload={"object_id": "station-1", "object_type": "STATION"},
+                    ),
+                    make_turn_event(
+                        srs_turn=8,
+                        event_type=WARP_EXIT_ACCEPTED,
+                        payload={"outcome": "ACCEPTED"},
+                    ),
+                ),
+            ),
+            self.make_run_result(
+                case_id="resource-turn-limit",
+                policy_name=OBJECT_GREEDY_POLICY_NAME,
+                sector_type=SectorType.RESOURCE,
+                cost_mode=CostMode.TURN_ONLY,
+                outcome=PolicyRunOutcome.ABORTED_TURN_LIMIT,
+                srs_turn=6,
+                discovered_object_ids=("resource-cache-1",),
+                consumed_object_ids=frozenset({"resource-cache-1"}),
+                events=(
+                    make_turn_event(
+                        srs_turn=2,
+                        event_type=INTERACT_ACCEPTED,
+                        payload={"object_id": "resource-cache-1", "object_type": "RESOURCE_CACHE", "outcome": "ACCEPTED"},
+                    ),
+                    make_turn_event(
+                        srs_turn=2,
+                        event_type=OBJECT_CONSUMED,
+                        payload={"object_id": "resource-cache-1", "object_type": "RESOURCE_CACHE"},
+                    ),
+                ),
+            ),
+            self.make_run_result(
+                case_id="rift-no-policy",
+                policy_name=EXPLORE_THEN_EXIT_POLICY_NAME,
+                sector_type=SectorType.RIFT,
+                cost_mode=CostMode.SHARED_FUEL,
+                outcome=PolicyRunOutcome.ABORTED_NO_POLICY_ACTION,
+                srs_turn=10,
+                events=(
+                    make_turn_event(
+                        srs_turn=0,
+                        event_type=WARP_EXIT_REJECTED,
+                        payload={"outcome": "REJECTED_BLOCKED_EDGE"},
+                    ),
+                ),
+            ),
+        ]
+
+        summary = summarize_policy_runs(runs)
+
+        self.assertEqual(summary["run_count"], 4)
+        self.assertEqual(summary["run_count_by_policy"][EXIT_GREEDY_POLICY_NAME], 1)
+        self.assertEqual(summary["run_count_by_policy"][OBJECT_GREEDY_POLICY_NAME], 2)
+        self.assertEqual(summary["run_count_by_cost_mode"], {"TURN_ONLY": 2, "SHARED_FUEL": 2})
+        self.assertEqual(
+            summary["run_count_by_outcome"],
+            {
+                "EXITED": 2,
+                "ABORTED_TURN_LIMIT": 1,
+                "ABORTED_NO_POLICY_ACTION": 1,
+                "RESOURCE_DEPLETED": 0,
+                "GENERATION_ERROR": 0,
+            },
+        )
+        self.assertEqual(summary["run_count_by_sector_type"]["RIFT"], 1)
+        self.assertEqual(summary["exit_rate"], 0.5)
+        self.assertEqual(summary["median_srs_turn_count"], 7.0)
+        self.assertEqual(summary["p90_srs_turn_count"], 10)
+        self.assertEqual(summary["object_discovery_rate"], 0.75)
+        self.assertEqual(summary["object_acquisition_rate"], 0.75)
+        self.assertEqual(summary["station_use_rate"], 0.25)
+        self.assertEqual(summary["resource_use_rate"], 0.25)
+        self.assertEqual(summary["salvage_acquisition_rate"], 0.25)
+        self.assertEqual(summary["blocked_edge_attempt_rate"], 0.25)
+        self.assertEqual(summary["turn_limit_rate"], 0.25)
+        self.assertEqual(summary["no_policy_action_rate"], 0.25)
+        self.assertEqual(summary["turn_only_exit_rate"], 0.5)
+        self.assertEqual(summary["shared_fuel_exit_rate"], 0.5)
+        self.assertEqual(summary["turn_only_vs_shared_fuel_failure_delta"], 0.0)
+        self.assertEqual(summary["by_policy"][EXIT_GREEDY_POLICY_NAME]["exit_rate"], 1.0)
+        self.assertEqual(summary["by_cost_mode"]["TURN_ONLY"]["run_count"], 2)
+        self.assertEqual(summary["by_sector_type"]["RESOURCE"]["resource_use_rate"], 1.0)
+        self.assertEqual(summary["by_outcome"]["ABORTED_NO_POLICY_ACTION"]["run_count"], 1)
+
+    def test_same_run_list_returns_same_summary_regardless_of_input_order(self) -> None:
+        runs = [
+            self.make_run_result(
+                case_id="case-a",
+                policy_name=EXIT_GREEDY_POLICY_NAME,
+                sector_type=SectorType.NORMAL,
+                cost_mode=CostMode.TURN_ONLY,
+                outcome=PolicyRunOutcome.EXITED,
+                srs_turn=2,
+            ),
+            self.make_run_result(
+                case_id="case-b",
+                policy_name=OBJECT_GREEDY_POLICY_NAME,
+                sector_type=SectorType.BASE,
+                cost_mode=CostMode.SHARED_FUEL,
+                outcome=PolicyRunOutcome.ABORTED_NO_POLICY_ACTION,
+                srs_turn=3,
+            ),
+        ]
+
+        first = summarize_policy_runs(runs)
+        second = summarize_policy_runs(list(reversed(runs)))
+
+        self.assertEqual(first, second)
+        serialized = json.dumps(first, sort_keys=True)
+        self.assertNotIn(str(REPO_ROOT), serialized)
+        self.assertNotIn("generated_at", serialized)
+        self.assertNotIn("hostname", serialized)
 
 
 if __name__ == "__main__":

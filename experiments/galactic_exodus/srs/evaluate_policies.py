@@ -3,9 +3,11 @@ from __future__ import annotations
 from collections import deque
 from dataclasses import dataclass, replace
 from enum import Enum
+import statistics
 from types import MappingProxyType
 from typing import Any, Callable, Iterable, Mapping
 
+from experiments.galactic_exodus import metrics
 from experiments.galactic_exodus.srs.contracts import SrsContracts
 from experiments.galactic_exodus.srs.engine import (
     apply_srs_command,
@@ -70,6 +72,13 @@ _EXPLORE_THEN_EXIT_MIN_UNKNOWN_FRONTIER_COUNT = 1
 _EXPLORE_THEN_EXIT_MAX_EXPLORE_STEPS = 12
 DEFAULT_MAX_SRS_TURN = 50
 DEFAULT_MAX_COMMANDS = 50
+_VALUE_OBJECT_TYPES = frozenset(
+    {
+        SrsObjectType.RESOURCE_CACHE,
+        SrsObjectType.STATION,
+        SrsObjectType.SALVAGE,
+    }
+)
 
 
 def _freeze_mapping(mapping: Mapping[str, Any]) -> Mapping[str, Any]:
@@ -756,6 +765,237 @@ class PolicyRunResult:
     command_count: int
     event_log: tuple[SrsTurnEvent, ...]
     action_sequence: tuple[SrsCommand, ...]
+
+
+def summarize_policy_runs(policy_runs: Iterable[PolicyRunResult]) -> dict[str, Any]:
+    runs = tuple(policy_runs)
+    if not runs:
+        raise ValueError("policy_runs must not be empty")
+
+    turn_only_exit_rate = _exit_rate_for_cost_mode(runs, CostMode.TURN_ONLY)
+    shared_fuel_exit_rate = _exit_rate_for_cost_mode(runs, CostMode.SHARED_FUEL)
+
+    summary = _build_summary_metrics(runs)
+    summary["run_count_by_policy"] = _count_by_group(
+        runs,
+        key_fn=lambda run: run.policy_name,
+        preferred_keys=tuple(_POLICY_COMMAND_GENERATORS),
+    )
+    summary["run_count_by_cost_mode"] = _count_by_group(
+        runs,
+        key_fn=lambda run: run.evaluation_case.cost_mode.value,
+        preferred_keys=tuple(cost_mode.value for cost_mode in CostMode),
+    )
+    summary["run_count_by_sector_type"] = _count_by_group(
+        runs,
+        key_fn=lambda run: run.evaluation_case.sector_type.value,
+        preferred_keys=tuple(sector_type.value for sector_type in SectorType),
+    )
+    summary["run_count_by_outcome"] = _count_by_group(
+        runs,
+        key_fn=lambda run: run.outcome.value,
+        preferred_keys=tuple(outcome.value for outcome in PolicyRunOutcome),
+    )
+    summary["turn_only_exit_rate"] = turn_only_exit_rate
+    summary["shared_fuel_exit_rate"] = shared_fuel_exit_rate
+    summary["turn_only_vs_shared_fuel_failure_delta"] = _failure_rate_delta(
+        turn_only_exit_rate=turn_only_exit_rate,
+        shared_fuel_exit_rate=shared_fuel_exit_rate,
+    )
+    summary["by_policy"] = _summaries_by_group(
+        runs,
+        key_fn=lambda run: run.policy_name,
+        preferred_keys=tuple(_POLICY_COMMAND_GENERATORS),
+    )
+    summary["by_cost_mode"] = _summaries_by_group(
+        runs,
+        key_fn=lambda run: run.evaluation_case.cost_mode.value,
+        preferred_keys=tuple(cost_mode.value for cost_mode in CostMode),
+    )
+    summary["by_sector_type"] = _summaries_by_group(
+        runs,
+        key_fn=lambda run: run.evaluation_case.sector_type.value,
+        preferred_keys=tuple(sector_type.value for sector_type in SectorType),
+    )
+    summary["by_outcome"] = _summaries_by_group(
+        runs,
+        key_fn=lambda run: run.outcome.value,
+        preferred_keys=tuple(outcome.value for outcome in PolicyRunOutcome),
+    )
+    return summary
+
+
+def _build_summary_metrics(runs: tuple[PolicyRunResult, ...]) -> dict[str, Any]:
+    srs_turn_counts = sorted(
+        run.final_state.srs_turn
+        for run in runs
+        if run.final_state is not None
+    )
+    run_count = len(runs)
+    return {
+        "run_count": run_count,
+        "exit_rate": _rounded_ratio(_count_runs(runs, lambda run: run.outcome is PolicyRunOutcome.EXITED), run_count),
+        "median_srs_turn_count": _median_or_none(srs_turn_counts),
+        "p90_srs_turn_count": _p90_or_none(srs_turn_counts),
+        "object_discovery_rate": _rounded_ratio(_count_runs(runs, _has_discovered_value_object), run_count),
+        "object_acquisition_rate": _rounded_ratio(_count_runs(runs, _has_acquired_value_object), run_count),
+        "station_use_rate": _rounded_ratio(_count_runs(runs, _has_used_station), run_count),
+        "resource_use_rate": _rounded_ratio(_count_runs(runs, _has_used_resource_cache), run_count),
+        "salvage_acquisition_rate": _rounded_ratio(_count_runs(runs, _has_acquired_salvage), run_count),
+        "blocked_edge_attempt_rate": _rounded_ratio(_count_runs(runs, _attempted_blocked_edge), run_count),
+        "turn_limit_rate": _rounded_ratio(
+            _count_runs(runs, lambda run: run.outcome is PolicyRunOutcome.ABORTED_TURN_LIMIT),
+            run_count,
+        ),
+        "no_policy_action_rate": _rounded_ratio(
+            _count_runs(runs, lambda run: run.outcome is PolicyRunOutcome.ABORTED_NO_POLICY_ACTION),
+            run_count,
+        ),
+    }
+
+
+def _count_by_group(
+    runs: tuple[PolicyRunResult, ...],
+    *,
+    key_fn: Callable[[PolicyRunResult], str],
+    preferred_keys: tuple[str, ...],
+) -> dict[str, int]:
+    counts = {key: 0 for key in preferred_keys}
+    for run in runs:
+        key = key_fn(run)
+        counts[key] = counts.get(key, 0) + 1
+    ordered_keys = list(preferred_keys) + sorted(key for key in counts if key not in preferred_keys)
+    return {key: counts[key] for key in ordered_keys if counts.get(key, 0) > 0 or key in preferred_keys}
+
+
+def _summaries_by_group(
+    runs: tuple[PolicyRunResult, ...],
+    *,
+    key_fn: Callable[[PolicyRunResult], str],
+    preferred_keys: tuple[str, ...],
+) -> dict[str, dict[str, Any]]:
+    grouped: dict[str, list[PolicyRunResult]] = {}
+    for run in runs:
+        key = key_fn(run)
+        grouped.setdefault(key, []).append(run)
+
+    ordered_keys = [key for key in preferred_keys if key in grouped]
+    ordered_keys.extend(sorted(key for key in grouped if key not in preferred_keys))
+    return {
+        key: _build_summary_metrics(tuple(grouped[key]))
+        for key in ordered_keys
+    }
+
+
+def _count_runs(runs: Iterable[PolicyRunResult], predicate: Callable[[PolicyRunResult], bool]) -> int:
+    return sum(1 for run in runs if predicate(run))
+
+
+def _rounded_ratio(count: int, total: int) -> float:
+    if total == 0:
+        return 0.0
+    return round(count / total, 6)
+
+
+def _median_or_none(series: list[int]) -> float | int | None:
+    if not series:
+        return None
+    return statistics.median(series)
+
+
+def _p90_or_none(series: list[int]) -> int | None:
+    if not series:
+        return None
+    return metrics.percentile_nearest_rank(series, 0.90)
+
+
+def _exit_rate_for_cost_mode(
+    runs: tuple[PolicyRunResult, ...],
+    cost_mode: CostMode,
+) -> float | None:
+    matched_runs = tuple(run for run in runs if run.evaluation_case.cost_mode is cost_mode)
+    if not matched_runs:
+        return None
+    return _rounded_ratio(
+        _count_runs(matched_runs, lambda run: run.outcome is PolicyRunOutcome.EXITED),
+        len(matched_runs),
+    )
+
+
+def _failure_rate_delta(
+    *,
+    turn_only_exit_rate: float | None,
+    shared_fuel_exit_rate: float | None,
+) -> float | None:
+    if turn_only_exit_rate is None or shared_fuel_exit_rate is None:
+        return None
+    turn_only_failure_rate = 1.0 - turn_only_exit_rate
+    shared_fuel_failure_rate = 1.0 - shared_fuel_exit_rate
+    return round(turn_only_failure_rate - shared_fuel_failure_rate, 6)
+
+
+def _has_discovered_value_object(run: PolicyRunResult) -> bool:
+    final_state = run.final_state
+    if final_state is None:
+        return False
+    return any(
+        object_state is not None and object_state.object_type in _VALUE_OBJECT_TYPES
+        for cell in final_state.known_state.known_cells.values()
+        for object_state in [None if cell.object_id is None else final_state.objects.get(cell.object_id)]
+    )
+
+
+def _has_acquired_value_object(run: PolicyRunResult) -> bool:
+    return _has_used_station(run) or _has_used_resource_cache(run) or _has_acquired_salvage(run)
+
+
+def _has_used_station(run: PolicyRunResult) -> bool:
+    return _persistent_object_match(
+        run,
+        object_ids=run.final_state.persistent_state.activated_object_ids if run.final_state else (),
+        expected_type=SrsObjectType.STATION,
+    )
+
+
+def _has_used_resource_cache(run: PolicyRunResult) -> bool:
+    return _persistent_object_match(
+        run,
+        object_ids=run.final_state.persistent_state.consumed_object_ids if run.final_state else (),
+        expected_type=SrsObjectType.RESOURCE_CACHE,
+    )
+
+
+def _has_acquired_salvage(run: PolicyRunResult) -> bool:
+    return _persistent_object_match(
+        run,
+        object_ids=run.final_state.persistent_state.consumed_object_ids if run.final_state else (),
+        expected_type=SrsObjectType.SALVAGE,
+    )
+
+
+def _persistent_object_match(
+    run: PolicyRunResult,
+    *,
+    object_ids: Iterable[str],
+    expected_type: SrsObjectType | None,
+) -> bool:
+    final_state = run.final_state
+    if final_state is None:
+        return False
+    for object_id in object_ids:
+        object_state = final_state.objects.get(object_id)
+        if object_state is None:
+            continue
+        if expected_type is None or object_state.object_type is expected_type:
+            return True
+    return False
+
+
+def _attempted_blocked_edge(run: PolicyRunResult) -> bool:
+    return any(
+        event.event_type == WARP_EXIT_REJECTED and event.payload.get("outcome") == "REJECTED_BLOCKED_EDGE"
+        for event in run.event_log
+    )
 
 
 _POLICY_COMMAND_GENERATORS: Mapping[str, Callable[..., SrsCommand | None]] = MappingProxyType(
