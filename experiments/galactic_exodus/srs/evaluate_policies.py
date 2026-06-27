@@ -47,12 +47,15 @@ _REVISIT_CONSUMED_OBJECT_TYPES = frozenset({SrsObjectType.RESOURCE_CACHE, SrsObj
 _KNOWN_IMPASSABLE_TERRAINS = frozenset({SrsTerrainType.ASTEROID, SrsTerrainType.RIFT_BARRIER})
 _KNOWN_IMPASSABLE_OBJECT_TYPES = frozenset({SrsObjectType.STAR, SrsObjectType.PLANET, SrsObjectType.STATION})
 EXIT_GREEDY_POLICY_NAME = "EXIT_GREEDY"
+EXPLORE_THEN_EXIT_POLICY_NAME = "EXPLORE_THEN_EXIT"
 OBJECT_GREEDY_POLICY_NAME = "OBJECT_GREEDY"
 _OBJECT_GREEDY_PRIORITY = {
     SrsObjectType.RESOURCE_CACHE: 0,
     SrsObjectType.STATION: 1,
     SrsObjectType.SALVAGE: 2,
 }
+_EXPLORE_THEN_EXIT_MIN_UNKNOWN_FRONTIER_COUNT = 1
+_EXPLORE_THEN_EXIT_MAX_EXPLORE_STEPS = 12
 
 
 def _freeze_mapping(mapping: Mapping[str, Any]) -> Mapping[str, Any]:
@@ -213,6 +216,134 @@ def choose_exit_greedy_command(
         command_type="MOVE_ROUTE",
         route=(first_step,),
     )
+
+
+def choose_explore_then_exit_command(
+    state: SrsGameState,
+    *,
+    selected_exit_edge: Direction,
+) -> SrsCommand | None:
+    selected_exit_edge = Direction(selected_exit_edge)
+    frontier_candidates = _build_unknown_frontier_candidates(state)
+    if (
+        state.srs_turn >= _EXPLORE_THEN_EXIT_MAX_EXPLORE_STEPS
+        or len(frontier_candidates) < _EXPLORE_THEN_EXIT_MIN_UNKNOWN_FRONTIER_COUNT
+    ):
+        return choose_exit_greedy_command(state, selected_exit_edge=selected_exit_edge)
+
+    if state.player_position in {candidate[0] for candidate in frontier_candidates}:
+        direction = _choose_unknown_frontier_step(
+            state.player_position,
+            known_cells=state.known_state.known_cells,
+            map_width=state.actual_map.width,
+            map_height=state.actual_map.height,
+            selected_exit_edge=selected_exit_edge,
+        )
+        if direction is not None:
+            return SrsCommand(command_type="MOVE_ROUTE", route=(direction,))
+        return choose_exit_greedy_command(state, selected_exit_edge=selected_exit_edge)
+
+    best_choice: tuple[int, int, int, int, tuple[Direction, ...]] | None = None
+    for position, unknown_neighbor_count in frontier_candidates:
+        route = route_on_known_cells(
+            state.player_position,
+            position,
+            known_cells=state.known_state.known_cells,
+            objects=state.objects,
+        )
+        if route is None or not route:
+            continue
+        choice = (
+            -unknown_neighbor_count,
+            len(route),
+            position.y,
+            position.x,
+            route,
+        )
+        if best_choice is None or choice < best_choice:
+            best_choice = choice
+
+    if best_choice is None:
+        return choose_exit_greedy_command(state, selected_exit_edge=selected_exit_edge)
+
+    return SrsCommand(command_type="MOVE_ROUTE", route=(best_choice[4][0],))
+
+
+def _build_unknown_frontier_candidates(
+    state: SrsGameState,
+) -> tuple[tuple[Position, int], ...]:
+    candidates: list[tuple[Position, int]] = []
+    known_cells = state.known_state.known_cells
+    for position in known_cells:
+        if not is_known_passable_cell(position, known_cells=known_cells, objects=state.objects):
+            continue
+        unknown_neighbor_count = _count_unknown_cardinal_neighbors(
+            position,
+            known_cells=known_cells,
+            map_width=state.actual_map.width,
+            map_height=state.actual_map.height,
+        )
+        if unknown_neighbor_count > 0:
+            candidates.append((position, unknown_neighbor_count))
+    candidates.sort(key=lambda candidate: (-candidate[1], candidate[0].y, candidate[0].x))
+    return tuple(candidates)
+
+
+def _count_unknown_cardinal_neighbors(
+    position: Position,
+    *,
+    known_cells: Mapping[Position, SrsCell],
+    map_width: int,
+    map_height: int,
+) -> int:
+    return sum(
+        1
+        for _, neighbor in iter_known_cardinal_neighbors(position)
+        if _is_within_map_bounds(neighbor, map_width=map_width, map_height=map_height) and neighbor not in known_cells
+    )
+
+
+def _choose_unknown_frontier_step(
+    position: Position,
+    *,
+    known_cells: Mapping[Position, SrsCell],
+    map_width: int,
+    map_height: int,
+    selected_exit_edge: Direction,
+) -> Direction | None:
+    preferred_direction = _selected_exit_preferred_direction(selected_exit_edge)
+    candidates = [
+        direction
+        for direction, neighbor in iter_known_cardinal_neighbors(position)
+        if _is_within_map_bounds(neighbor, map_width=map_width, map_height=map_height) and neighbor not in known_cells
+    ]
+    if not candidates:
+        return None
+    return min(
+        candidates,
+        key=lambda direction: (
+            0 if direction is preferred_direction else 1,
+            _DIRECTION_ORDER.index(direction),
+        ),
+    )
+
+
+def _selected_exit_preferred_direction(selected_exit_edge: Direction) -> Direction:
+    return {
+        Direction.N: Direction.N,
+        Direction.E: Direction.E,
+        Direction.S: Direction.S,
+        Direction.W: Direction.W,
+    }[selected_exit_edge]
+
+
+def _is_within_map_bounds(
+    position: Position,
+    *,
+    map_width: int,
+    map_height: int,
+) -> bool:
+    return 0 <= position.x < map_width and 0 <= position.y < map_height
 
 
 @dataclass(frozen=True, slots=True)
