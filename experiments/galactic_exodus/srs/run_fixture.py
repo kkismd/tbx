@@ -14,12 +14,15 @@ from experiments.galactic_exodus.srs.model import (
     Direction,
     ObservationMode,
     Position,
+    SrsActualMap,
+    SrsCell,
     SectorDescriptor,
     SectorType,
     SrsCommand,
     SrsGameLog,
     SrsGameState,
     SrsPersistentState,
+    SrsTerrainType,
 )
 from experiments.galactic_exodus.srs.render import render_known_map
 
@@ -109,6 +112,10 @@ def state_from_fixture(data: Mapping[str, Any], *, contracts: SrsContracts) -> S
         initial = {}
     if not isinstance(initial, Mapping):
         raise SrsFixtureError("initial must be an object")
+
+    cell_overrides = initial.get("cell_overrides")
+    if cell_overrides is not None:
+        state = _apply_cell_overrides(state, overrides=cell_overrides)
 
     reveal = initial.get("reveal")
     if reveal is not None:
@@ -237,6 +244,34 @@ def _apply_reveal(state: SrsGameState, *, reveal: Any, contracts: SrsContracts) 
     if mode == ObservationMode.LOCAL_MOVEMENT.value:
         return reveal_observation(state, center=state.player_position, contracts=contracts)
     raise SrsFixtureError(f"invalid reveal mode: {mode}")
+
+
+def _apply_cell_overrides(state: SrsGameState, *, overrides: Any) -> SrsGameState:
+    if not isinstance(overrides, list):
+        raise SrsFixtureError("initial.cell_overrides must be a list")
+
+    rows = [list(row) for row in state.actual_map.cells]
+    for index, override in enumerate(overrides, 1):
+        if not isinstance(override, Mapping):
+            raise SrsFixtureError(f"initial.cell_overrides[{index}] must be an object")
+        position = _position(override.get("position"), field_name=f"initial.cell_overrides[{index}].position")
+        if not state.actual_map.contains(position):
+            raise SrsFixtureError(f"initial.cell_overrides[{index}].position out of bounds: {position}")
+        terrain = _terrain_type(override.get("terrain"), field_name=f"initial.cell_overrides[{index}].terrain")
+        cell = rows[position.y][position.x]
+        rows[position.y][position.x] = SrsCell(
+            terrain=terrain,
+            object_id=cell.object_id,
+            actor_id=cell.actor_id,
+            warp_flags=cell.warp_flags,
+        )
+
+    actual_map = SrsActualMap(
+        width=state.actual_map.width,
+        height=state.actual_map.height,
+        cells=tuple(tuple(row) for row in rows),
+    )
+    return replace(state, actual_map=actual_map)
 
 
 def _apply_persistent_overrides(
@@ -433,6 +468,13 @@ def _sector_type(value: Any) -> SectorType:
         return SectorType(value)
     except ValueError as exc:
         raise SrsFixtureError(f"invalid sector_type: {value}") from exc
+
+
+def _terrain_type(value: Any, *, field_name: str) -> SrsTerrainType:
+    try:
+        return SrsTerrainType(value)
+    except ValueError as exc:
+        raise SrsFixtureError(f"invalid {field_name}: {value}") from exc
 
 
 def _print_cli_result(result: SrsFixtureRunResult) -> None:

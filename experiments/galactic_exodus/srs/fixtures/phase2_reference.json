@@ -1,0 +1,199 @@
+{
+  "reference_schema_version": 1,
+  "spec_refs": [
+    "experiments/galactic_exodus/srs/phase2_srs_spec.md",
+    "experiments/galactic_exodus/srs/phase2_decisions.csv"
+  ],
+  "cases": [
+    {
+      "case_id": "normal_first_visit",
+      "fixture_path": "move_route_basic_9x9.json",
+      "coverage_tags": ["NORMAL_FIRST_VISIT"],
+      "final_expect": {
+        "cost_mode": "TURN_ONLY",
+        "srs_turn": 1,
+        "fuel": 0,
+        "player_position": [4, 7],
+        "event_types": ["MOVE_ACCEPTED", "OBSERVATION_UPDATED"],
+        "outcome": "ACCEPTED",
+        "discovered_count": 20
+      }
+    },
+    {
+      "case_id": "resource_cache_interaction",
+      "fixture_path": "resource_cache_single_9x9.json",
+      "coverage_tags": ["RESOURCE_CACHE_INTERACTION"],
+      "initial_expect": {
+        "discovered_count": 4
+      },
+      "final_expect": {
+        "cost_mode": "TURN_ONLY",
+        "srs_turn": 1,
+        "fuel": 7,
+        "player_position": [2, 7],
+        "event_types": ["INTERACT_ACCEPTED", "OBJECT_CONSUMED"],
+        "consumed_object_ids": ["resource-cache-1"],
+        "outcome": "ACCEPTED",
+        "discovered_count": 4
+      }
+    },
+    {
+      "case_id": "resource_cache_consumed_revisit",
+      "fixture_path": "revisit_resource_consumed_9x9.json",
+      "coverage_tags": ["RESOURCE_CACHE_CONSUMED_REVISIT", "REVISIT_PERSISTENT_STATE"],
+      "initial_expect": {
+        "discovered_count": 4,
+        "consumed_object_ids": ["resource-cache-1"]
+      },
+      "final_expect": {
+        "cost_mode": "TURN_ONLY",
+        "srs_turn": 0,
+        "fuel": 2,
+        "player_position": [2, 7],
+        "event_types": ["INTERACT_REJECTED"],
+        "consumed_object_ids": ["resource-cache-1"],
+        "outcome": "REJECTED_ALREADY_CONSUMED",
+        "discovered_count": 4
+      }
+    },
+    {
+      "case_id": "base_station_interaction",
+      "fixture_path": "station_refuel_9x9.json",
+      "coverage_tags": ["BASE_STATION_INTERACTION"],
+      "final_expect": {
+        "cost_mode": "TURN_ONLY",
+        "srs_turn": 1,
+        "fuel": 9,
+        "player_position": [3, 1],
+        "event_types": ["INTERACT_ACCEPTED", "STATION_ACTIVATED"],
+        "activated_object_ids": ["station-1"],
+        "outcome": "ACCEPTED",
+        "discovered_count": 81
+      }
+    },
+    {
+      "case_id": "salvage_placeholder_interaction",
+      "fixture_path": "salvage_placeholder_9x9.json",
+      "coverage_tags": ["SALVAGE_PLACEHOLDER_INTERACTION"],
+      "final_expect": {
+        "cost_mode": "TURN_ONLY",
+        "srs_turn": 1,
+        "fuel": 2,
+        "player_position": [4, 6],
+        "event_types": ["INTERACT_ACCEPTED", "OBJECT_CONSUMED"],
+        "consumed_object_ids": ["salvage-1"],
+        "outcome": "ACCEPTED",
+        "discovered_count": 81
+      }
+    },
+    {
+      "case_id": "nebula_3x3_observation",
+      "fixture_path": "nebula_observation_3x3_9x9.json",
+      "coverage_tags": ["NEBULA_3X3_OBSERVATION"],
+      "final_expect": {
+        "cost_mode": "TURN_ONLY",
+        "srs_turn": 1,
+        "fuel": 0,
+        "player_position": [4, 7],
+        "event_types": ["MOVE_ACCEPTED", "OBSERVATION_UPDATED"],
+        "outcome": "ACCEPTED",
+        "discovered_count": 9
+      }
+    },
+    {
+      "case_id": "rift_blocked_edge",
+      "fixture_path": "rift_blocked_n_9x9.json",
+      "coverage_tags": ["RIFT_BLOCKED_EDGE"],
+      "final_expect": {
+        "cost_mode": "TURN_ONLY",
+        "srs_turn": 0,
+        "fuel": 0,
+        "player_position": [4, 0],
+        "event_types": ["WARP_EXIT_REJECTED"],
+        "outcome": "REJECTED_BLOCKED_EDGE",
+        "discovered_count": 81
+      }
+    },
+    {
+      "case_id": "warp_exit_accepted",
+      "fixture_path": "warp_exit_s_9x9.json",
+      "coverage_tags": ["WARP_EXIT_ACCEPTED"],
+      "final_expect": {
+        "cost_mode": "TURN_ONLY",
+        "srs_turn": 1,
+        "fuel": 0,
+        "player_position": [4, 8],
+        "event_types": ["WARP_EXIT_ACCEPTED"],
+        "outcome": "ACCEPTED",
+        "discovered_count": 81
+      }
+    },
+    {
+      "case_id": "warp_exit_rejected",
+      "fixture_path": "warp_exit_rejected_no_flag_9x9.json",
+      "coverage_tags": ["WARP_EXIT_REJECTED"],
+      "final_expect": {
+        "cost_mode": "TURN_ONLY",
+        "srs_turn": 0,
+        "fuel": 0,
+        "player_position": [4, 7],
+        "event_types": ["WARP_EXIT_REJECTED"],
+        "outcome": "REJECTED_NO_WARP_FLAG",
+        "discovered_count": 81
+      }
+    },
+    {
+      "case_id": "turn_only_route",
+      "fixture_path": "turn_only_cost_9x9.json",
+      "coverage_tags": ["TURN_ONLY"],
+      "final_expect": {
+        "cost_mode": "TURN_ONLY",
+        "srs_turn": 1,
+        "fuel": 9,
+        "player_position": [4, 6],
+        "event_types": ["MOVE_ACCEPTED", "OBSERVATION_UPDATED", "OBSERVATION_UPDATED"],
+        "outcome": "ACCEPTED",
+        "discovered_count": 81
+      }
+    },
+    {
+      "case_id": "shared_fuel_route",
+      "fixture_path": "shared_fuel_cost_9x9.json",
+      "coverage_tags": ["SHARED_FUEL"],
+      "final_expect": {
+        "cost_mode": "SHARED_FUEL",
+        "srs_turn": 1,
+        "fuel": 7,
+        "player_position": [4, 6],
+        "event_types": ["MOVE_ACCEPTED", "OBSERVATION_UPDATED", "OBSERVATION_UPDATED"],
+        "outcome": "ACCEPTED",
+        "discovered_count": 81
+      }
+    },
+    {
+      "case_id": "persistent_discovered_cells_restore",
+      "fixture_path": "discovered_cells_restore_9x9.json",
+      "coverage_tags": ["PERSISTENT_DISCOVERED_CELLS_RESTORE"],
+      "initial_expect": {
+        "discovered_count": 4
+      },
+      "final_expect": {
+        "cost_mode": "TURN_ONLY",
+        "srs_turn": 0,
+        "fuel": 0,
+        "player_position": [4, 7],
+        "event_types": [],
+        "consumed_object_ids": [],
+        "activated_object_ids": [],
+        "discovered_count": 4
+      }
+    }
+  ],
+  "comparisons": {
+    "turn_only_vs_shared_fuel": {
+      "turn_only_case_id": "turn_only_route",
+      "shared_fuel_case_id": "shared_fuel_route",
+      "expected_fuel_delta": 2
+    }
+  }
+}

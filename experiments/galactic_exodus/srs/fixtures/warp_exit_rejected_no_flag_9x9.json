@@ -1,0 +1,30 @@
+{
+  "fixture_id": "warp_exit_rejected_no_flag_9x9",
+  "description": "WARP_EXIT rejects when the current cell lacks the requested warp flag.",
+  "sector": {
+    "sector_id": "normal-1001",
+    "sector_type": "NORMAL",
+    "sector_seed": 1001,
+    "entry_edge": "S",
+    "blocked_edges": []
+  },
+  "initial": {
+    "player_position": [4, 7],
+    "reveal": {
+      "mode": "FULL"
+    }
+  },
+  "commands": [
+    {
+      "command_type": "WARP_EXIT",
+      "exit_direction": "N"
+    }
+  ],
+  "expect": {
+    "srs_turn": 0,
+    "fuel": 0,
+    "player_position": [4, 7],
+    "event_types": ["WARP_EXIT_REJECTED"],
+    "outcome": "REJECTED_NO_WARP_FLAG"
+  }
+}

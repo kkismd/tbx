@@ -1,0 +1,32 @@
+{
+  "fixture_id": "turn_only_cost_9x9",
+  "description": "TURN_ONLY keeps fuel unchanged for the same two-step route used by SHARED_FUEL.",
+  "sector": {
+    "sector_id": "normal-1001",
+    "sector_type": "NORMAL",
+    "sector_seed": 1001,
+    "entry_edge": "S",
+    "blocked_edges": []
+  },
+  "initial": {
+    "fuel": 9,
+    "max_fuel": 9,
+    "reveal": {
+      "mode": "FULL"
+    }
+  },
+  "commands": [
+    {
+      "command_type": "MOVE_ROUTE",
+      "route": ["N", "N"]
+    }
+  ],
+  "cost_mode": "TURN_ONLY",
+  "expect": {
+    "srs_turn": 1,
+    "fuel": 9,
+    "player_position": [4, 6],
+    "event_types": ["MOVE_ACCEPTED", "OBSERVATION_UPDATED", "OBSERVATION_UPDATED"],
+    "outcome": "ACCEPTED"
+  }
+}
