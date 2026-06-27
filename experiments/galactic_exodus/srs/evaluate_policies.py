@@ -1,9 +1,10 @@
 from __future__ import annotations
 
+from collections import deque
 from dataclasses import dataclass, replace
 from enum import Enum
 from types import MappingProxyType
-from typing import Any, Mapping
+from typing import Any, Iterable, Mapping
 
 from experiments.galactic_exodus.srs.contracts import SrsContracts
 from experiments.galactic_exodus.srs.engine import restore_srs_state, reveal_full_observation, reveal_observation
@@ -41,10 +42,113 @@ class RevisitMode(str, Enum):
 
 _DIRECTION_ORDER = (Direction.N, Direction.E, Direction.S, Direction.W)
 _REVISIT_CONSUMED_OBJECT_TYPES = frozenset({SrsObjectType.RESOURCE_CACHE, SrsObjectType.SALVAGE})
+_KNOWN_IMPASSABLE_TERRAINS = frozenset({SrsTerrainType.ASTEROID, SrsTerrainType.RIFT_BARRIER})
+_KNOWN_IMPASSABLE_OBJECT_TYPES = frozenset({SrsObjectType.STAR, SrsObjectType.PLANET, SrsObjectType.STATION})
 
 
 def _freeze_mapping(mapping: Mapping[str, Any]) -> Mapping[str, Any]:
     return MappingProxyType(dict(mapping))
+
+
+def iter_known_cardinal_neighbors(position: Position) -> tuple[tuple[Direction, Position], ...]:
+    return tuple(
+        (direction, _step_position(position, direction))
+        for direction in _DIRECTION_ORDER
+    )
+
+
+def is_known_passable_cell(
+    position: Position,
+    *,
+    known_cells: Mapping[Position, SrsCell],
+    objects: Mapping[str, Any],
+) -> bool:
+    cell = known_cells.get(position)
+    if cell is None:
+        return False
+    if cell.terrain in _KNOWN_IMPASSABLE_TERRAINS:
+        return False
+    if cell.object_id is None:
+        return True
+
+    object_state = objects.get(cell.object_id)
+    if object_state is None:
+        return False
+    return object_state.object_type not in _KNOWN_IMPASSABLE_OBJECT_TYPES
+
+
+def route_on_known_cells(
+    start: Position,
+    target: Position,
+    *,
+    known_cells: Mapping[Position, SrsCell],
+    objects: Mapping[str, Any],
+) -> tuple[Direction, ...] | None:
+    if not is_known_passable_cell(start, known_cells=known_cells, objects=objects):
+        return None
+    if not is_known_passable_cell(target, known_cells=known_cells, objects=objects):
+        return None
+    if start == target:
+        return ()
+
+    came_from: dict[Position, tuple[Position, Direction] | None] = {start: None}
+    frontier: deque[Position] = deque([start])
+
+    while frontier:
+        current = frontier.popleft()
+        for direction, next_position in iter_known_cardinal_neighbors(current):
+            if next_position in came_from:
+                continue
+            if not is_known_passable_cell(next_position, known_cells=known_cells, objects=objects):
+                continue
+            came_from[next_position] = (current, direction)
+            if next_position == target:
+                return _reconstruct_route(came_from, start=start, target=target)
+            frontier.append(next_position)
+
+    return None
+
+
+def first_known_route_step(
+    start: Position,
+    target: Position,
+    *,
+    known_cells: Mapping[Position, SrsCell],
+    objects: Mapping[str, Any],
+) -> Direction | None:
+    route = route_on_known_cells(start, target, known_cells=known_cells, objects=objects)
+    if route is None or not route:
+        return None
+    return route[0]
+
+
+def choose_known_target_step(
+    start: Position,
+    targets: Iterable[Position],
+    *,
+    known_cells: Mapping[Position, SrsCell],
+    objects: Mapping[str, Any],
+) -> tuple[Position, Direction] | None:
+    best_choice: tuple[int, int, int, int, Position, Direction] | None = None
+    for target in targets:
+        route = route_on_known_cells(start, target, known_cells=known_cells, objects=objects)
+        if route is None or not route:
+            continue
+        first_step = route[0]
+        choice = (
+            len(route),
+            target.y,
+            target.x,
+            _DIRECTION_ORDER.index(first_step),
+            target,
+            first_step,
+        )
+        if best_choice is None or choice < best_choice:
+            best_choice = choice
+
+    if best_choice is None:
+        return None
+    return best_choice[4], best_choice[5]
 
 
 @dataclass(frozen=True, slots=True)
@@ -363,3 +467,32 @@ def _replace_player_cell_terrain(
 
 def _sorted_directions(directions: frozenset[Direction]) -> tuple[Direction, ...]:
     return tuple(direction for direction in _DIRECTION_ORDER if direction in directions)
+
+
+def _reconstruct_route(
+    came_from: Mapping[Position, tuple[Position, Direction] | None],
+    *,
+    start: Position,
+    target: Position,
+) -> tuple[Direction, ...]:
+    route: list[Direction] = []
+    current = target
+    while current != start:
+        previous = came_from.get(current)
+        if previous is None:
+            raise EvaluationCaseError(f"known-state route reconstruction failed: {target}")
+        current, direction = previous
+        route.append(direction)
+    route.reverse()
+    return tuple(route)
+
+
+def _step_position(position: Position, direction: Direction) -> Position:
+    deltas = {
+        Direction.N: (0, -1),
+        Direction.E: (1, 0),
+        Direction.S: (0, 1),
+        Direction.W: (-1, 0),
+    }
+    dx, dy = deltas[direction]
+    return Position(position.x + dx, position.y + dy)
