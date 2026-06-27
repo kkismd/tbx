@@ -16,7 +16,7 @@ class Phase2ReferenceValidationTests(unittest.TestCase):
         self.tmp_root.mkdir(exist_ok=True)
         self.tempdir = tempfile.TemporaryDirectory(dir=self.tmp_root)
         self.path = Path(self.tempdir.name) / "phase2_reference.json"
-        source = Path(__file__).with_name("phase2_reference.json")
+        source = Path(__file__).parent / "fixtures" / "phase2_reference.json"
         self.source_dir = source.parent
         self.payload = json.loads(source.read_text(encoding="utf-8"))
         for case in self.payload["cases"]:
@@ -66,7 +66,7 @@ class Phase2ReferenceValidationTests(unittest.TestCase):
             [
                 "python",
                 "experiments/galactic_exodus/srs/validate_phase2_results.py",
-                "experiments/galactic_exodus/srs/phase2_reference.json",
+                "experiments/galactic_exodus/srs/fixtures/phase2_reference.json",
             ],
             cwd=self.repo_root,
             capture_output=True,

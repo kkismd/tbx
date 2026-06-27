@@ -7,7 +7,7 @@
   "cases": [
     {
       "case_id": "normal_first_visit",
-      "fixture_path": "fixtures/move_route_basic_9x9.json",
+      "fixture_path": "move_route_basic_9x9.json",
       "coverage_tags": ["NORMAL_FIRST_VISIT"],
       "final_expect": {
         "cost_mode": "TURN_ONLY",
@@ -21,7 +21,7 @@
     },
     {
       "case_id": "resource_cache_interaction",
-      "fixture_path": "fixtures/resource_cache_single_9x9.json",
+      "fixture_path": "resource_cache_single_9x9.json",
       "coverage_tags": ["RESOURCE_CACHE_INTERACTION"],
       "initial_expect": {
         "discovered_count": 4
@@ -39,7 +39,7 @@
     },
     {
       "case_id": "resource_cache_consumed_revisit",
-      "fixture_path": "fixtures/revisit_resource_consumed_9x9.json",
+      "fixture_path": "revisit_resource_consumed_9x9.json",
       "coverage_tags": ["RESOURCE_CACHE_CONSUMED_REVISIT", "REVISIT_PERSISTENT_STATE"],
       "initial_expect": {
         "discovered_count": 4,
@@ -58,7 +58,7 @@
     },
     {
       "case_id": "base_station_interaction",
-      "fixture_path": "fixtures/station_refuel_9x9.json",
+      "fixture_path": "station_refuel_9x9.json",
       "coverage_tags": ["BASE_STATION_INTERACTION"],
       "final_expect": {
         "cost_mode": "TURN_ONLY",
@@ -73,7 +73,7 @@
     },
     {
       "case_id": "salvage_placeholder_interaction",
-      "fixture_path": "fixtures/salvage_placeholder_9x9.json",
+      "fixture_path": "salvage_placeholder_9x9.json",
       "coverage_tags": ["SALVAGE_PLACEHOLDER_INTERACTION"],
       "final_expect": {
         "cost_mode": "TURN_ONLY",
@@ -88,7 +88,7 @@
     },
     {
       "case_id": "nebula_3x3_observation",
-      "fixture_path": "fixtures/nebula_observation_3x3_9x9.json",
+      "fixture_path": "nebula_observation_3x3_9x9.json",
       "coverage_tags": ["NEBULA_3X3_OBSERVATION"],
       "final_expect": {
         "cost_mode": "TURN_ONLY",
@@ -102,7 +102,7 @@
     },
     {
       "case_id": "rift_blocked_edge",
-      "fixture_path": "fixtures/rift_blocked_n_9x9.json",
+      "fixture_path": "rift_blocked_n_9x9.json",
       "coverage_tags": ["RIFT_BLOCKED_EDGE"],
       "final_expect": {
         "cost_mode": "TURN_ONLY",
@@ -116,7 +116,7 @@
     },
     {
       "case_id": "warp_exit_accepted",
-      "fixture_path": "fixtures/warp_exit_s_9x9.json",
+      "fixture_path": "warp_exit_s_9x9.json",
       "coverage_tags": ["WARP_EXIT_ACCEPTED"],
       "final_expect": {
         "cost_mode": "TURN_ONLY",
@@ -130,7 +130,7 @@
     },
     {
       "case_id": "warp_exit_rejected",
-      "fixture_path": "fixtures/warp_exit_rejected_no_flag_9x9.json",
+      "fixture_path": "warp_exit_rejected_no_flag_9x9.json",
       "coverage_tags": ["WARP_EXIT_REJECTED"],
       "final_expect": {
         "cost_mode": "TURN_ONLY",
@@ -144,7 +144,7 @@
     },
     {
       "case_id": "turn_only_route",
-      "fixture_path": "fixtures/turn_only_cost_9x9.json",
+      "fixture_path": "turn_only_cost_9x9.json",
       "coverage_tags": ["TURN_ONLY"],
       "final_expect": {
         "cost_mode": "TURN_ONLY",
@@ -158,7 +158,7 @@
     },
     {
       "case_id": "shared_fuel_route",
-      "fixture_path": "fixtures/shared_fuel_cost_9x9.json",
+      "fixture_path": "shared_fuel_cost_9x9.json",
       "coverage_tags": ["SHARED_FUEL"],
       "final_expect": {
         "cost_mode": "SHARED_FUEL",
@@ -172,7 +172,7 @@
     },
     {
       "case_id": "persistent_discovered_cells_restore",
-      "fixture_path": "fixtures/discovered_cells_restore_9x9.json",
+      "fixture_path": "discovered_cells_restore_9x9.json",
       "coverage_tags": ["PERSISTENT_DISCOVERED_CELLS_RESTORE"],
       "initial_expect": {
         "discovered_count": 4

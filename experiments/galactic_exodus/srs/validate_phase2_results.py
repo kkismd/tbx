@@ -65,7 +65,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "reference",
         type=Path,
         nargs="?",
-        default=Path("experiments/galactic_exodus/srs/phase2_reference.json"),
+        default=Path("experiments/galactic_exodus/srs/fixtures/phase2_reference.json"),
     )
     return parser.parse_args(argv)
 
