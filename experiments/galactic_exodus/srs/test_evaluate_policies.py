@@ -2,13 +2,17 @@ from __future__ import annotations
 
 import csv
 import json
+import shutil
 import tempfile
 import unittest
+from contextlib import redirect_stderr, redirect_stdout
 from dataclasses import replace
+from io import StringIO
 from pathlib import Path
 from unittest.mock import patch
 
 from experiments.galactic_exodus.srs.contracts import load_default_contracts
+from experiments.galactic_exodus.srs import evaluate_policies as evaluator
 from experiments.galactic_exodus.srs.evaluate_policies import (
     EvaluationCase,
     EvaluationCaseError,
@@ -26,9 +30,11 @@ from experiments.galactic_exodus.srs.evaluate_policies import (
     choose_exit_greedy_command,
     choose_known_target_step,
     choose_object_greedy_command,
+    evaluate_default_policies,
     first_known_route_step,
     is_known_passable_cell,
     iter_known_cardinal_neighbors,
+    parse_args,
     route_on_known_cells,
     run_policy_evaluation_case,
     summarize_policy_runs,
@@ -1608,6 +1614,138 @@ class PolicyRunWriterTests(PolicyRunAggregationTests):
         self.assertEqual(first_csv, second_csv)
         self.assertEqual(first_json, second_json)
         self.assertEqual(build_policy_summary_document(runs), build_policy_summary_document(list(reversed(runs))))
+
+
+class EvaluatePoliciesCliTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.root = Path(".tmp/evaluate_policies_cli_tests") / self._testMethodName
+        self.root.mkdir(parents=True, exist_ok=True)
+
+    def tearDown(self) -> None:
+        shutil.rmtree(self.root, ignore_errors=True)
+
+    def run_main(self, *args: str) -> tuple[int, str, str]:
+        stdout = StringIO()
+        stderr = StringIO()
+        with redirect_stdout(stdout), redirect_stderr(stderr):
+            exit_code = evaluator.main(list(args))
+        return exit_code, stdout.getvalue(), stderr.getvalue()
+
+    def test_parse_args_accepts_required_output_paths(self) -> None:
+        args = parse_args(
+            [
+                "--output-runs",
+                str(self.root / "policy_runs.csv"),
+                "--output-summary",
+                str(self.root / "policy_summary.json"),
+            ]
+        )
+
+        self.assertEqual(args.output_runs, self.root / "policy_runs.csv")
+        self.assertEqual(args.output_summary, self.root / "policy_summary.json")
+
+    def test_main_writes_csv_and_json_to_requested_paths(self) -> None:
+        output_runs = self.root / "results" / "policy_runs.csv"
+        output_summary = self.root / "results" / "policy_summary.json"
+
+        exit_code, stdout, stderr = self.run_main(
+            "--output-runs",
+            str(output_runs),
+            "--output-summary",
+            str(output_summary),
+        )
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(stdout, "")
+        self.assertEqual(stderr, "")
+        self.assertTrue(output_runs.is_file())
+        self.assertTrue(output_summary.is_file())
+        with output_runs.open(encoding="utf-8", newline="") as file:
+            rows = list(csv.DictReader(file))
+        summary = json.loads(output_summary.read_text(encoding="utf-8"))
+        self.assertEqual(len(rows), len(build_default_evaluation_cases()) * 3)
+        self.assertEqual(summary["run_count"], len(rows))
+
+    def test_main_creates_missing_parent_directories(self) -> None:
+        output_runs = self.root / "deep" / "nested" / "policy_runs.csv"
+        output_summary = self.root / "deep" / "nested" / "policy_summary.json"
+
+        exit_code, _, stderr = self.run_main(
+            "--output-runs",
+            str(output_runs),
+            "--output-summary",
+            str(output_summary),
+        )
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(stderr, "")
+        self.assertTrue(output_runs.exists())
+        self.assertTrue(output_summary.exists())
+
+    def test_same_cli_equivalent_processing_is_fully_reproducible(self) -> None:
+        first_runs = self.root / "first" / "policy_runs.csv"
+        first_summary = self.root / "first" / "policy_summary.json"
+        second_runs = self.root / "second" / "policy_runs.csv"
+        second_summary = self.root / "second" / "policy_summary.json"
+
+        first_exit_code, _, first_stderr = self.run_main(
+            "--output-runs",
+            str(first_runs),
+            "--output-summary",
+            str(first_summary),
+        )
+        second_exit_code, _, second_stderr = self.run_main(
+            "--output-runs",
+            str(second_runs),
+            "--output-summary",
+            str(second_summary),
+        )
+
+        self.assertEqual(first_exit_code, 0)
+        self.assertEqual(second_exit_code, 0)
+        self.assertEqual(first_stderr, "")
+        self.assertEqual(second_stderr, "")
+        self.assertEqual(first_runs.read_text(encoding="utf-8"), second_runs.read_text(encoding="utf-8"))
+        self.assertEqual(first_summary.read_text(encoding="utf-8"), second_summary.read_text(encoding="utf-8"))
+
+    def test_main_returns_non_zero_on_write_failure(self) -> None:
+        blocked_parent = self.root / "blocked"
+        blocked_parent.write_text("not a directory", encoding="utf-8")
+
+        exit_code, stdout, stderr = self.run_main(
+            "--output-runs",
+            str(blocked_parent / "policy_runs.csv"),
+            "--output-summary",
+            str(self.root / "policy_summary.json"),
+        )
+
+        self.assertEqual(exit_code, 1)
+        self.assertEqual(stdout, "")
+        self.assertIn("error:", stderr)
+
+    def test_missing_required_arguments_exit_non_zero(self) -> None:
+        with redirect_stderr(StringIO()):
+            with self.assertRaises(SystemExit) as cm:
+                evaluator.main(
+                    [
+                        "--output-runs",
+                        str(self.root / "policy_runs.csv"),
+                    ]
+                )
+        self.assertNotEqual(cm.exception.code, 0)
+
+    def test_evaluate_default_policies_runs_all_default_cases_and_policies(self) -> None:
+        runs = evaluate_default_policies(contracts=load_default_contracts(REPO_ROOT))
+
+        self.assertEqual(len(runs), len(build_default_evaluation_cases()) * 3)
+        self.assertEqual(
+            {run.policy_name for run in runs},
+            {
+                EXIT_GREEDY_POLICY_NAME,
+                EXPLORE_THEN_EXIT_POLICY_NAME,
+                OBJECT_GREEDY_POLICY_NAME,
+            },
+        )
 
 
 if __name__ == "__main__":
