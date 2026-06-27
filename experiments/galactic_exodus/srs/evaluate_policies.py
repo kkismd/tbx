@@ -4,11 +4,22 @@ from collections import deque
 from dataclasses import dataclass, replace
 from enum import Enum
 from types import MappingProxyType
-from typing import Any, Iterable, Mapping
+from typing import Any, Callable, Iterable, Mapping
 
 from experiments.galactic_exodus.srs.contracts import SrsContracts
-from experiments.galactic_exodus.srs.engine import restore_srs_state, reveal_full_observation, reveal_observation
+from experiments.galactic_exodus.srs.engine import (
+    apply_srs_command,
+    restore_srs_state,
+    reveal_full_observation,
+    reveal_observation,
+)
 from experiments.galactic_exodus.srs.generate import create_sector
+from experiments.galactic_exodus.srs.log import (
+    INTERACT_REJECTED,
+    MOVE_REJECTED,
+    WARP_EXIT_ACCEPTED,
+    WARP_EXIT_REJECTED,
+)
 from experiments.galactic_exodus.srs.model import (
     CostMode,
     Direction,
@@ -22,6 +33,7 @@ from experiments.galactic_exodus.srs.model import (
     SrsObjectState,
     SrsObjectType,
     SrsTerrainType,
+    SrsTurnEvent,
     validate_sector_descriptor,
 )
 
@@ -56,6 +68,8 @@ _OBJECT_GREEDY_PRIORITY = {
 }
 _EXPLORE_THEN_EXIT_MIN_UNKNOWN_FRONTIER_COUNT = 1
 _EXPLORE_THEN_EXIT_MAX_EXPLORE_STEPS = 12
+DEFAULT_MAX_SRS_TURN = 50
+DEFAULT_MAX_COMMANDS = 50
 
 
 def _freeze_mapping(mapping: Mapping[str, Any]) -> Mapping[str, Any]:
@@ -723,6 +737,196 @@ def build_default_evaluation_cases() -> tuple[EvaluationCase, ...]:
             initial_player_position=Position(4, 4),
         ),
     )
+
+
+class PolicyRunOutcome(str, Enum):
+    EXITED = "EXITED"
+    ABORTED_TURN_LIMIT = "ABORTED_TURN_LIMIT"
+    ABORTED_NO_POLICY_ACTION = "ABORTED_NO_POLICY_ACTION"
+    RESOURCE_DEPLETED = "RESOURCE_DEPLETED"
+    GENERATION_ERROR = "GENERATION_ERROR"
+
+
+@dataclass(frozen=True, slots=True)
+class PolicyRunResult:
+    evaluation_case: EvaluationCase
+    policy_name: str
+    outcome: PolicyRunOutcome
+    final_state: SrsGameState | None
+    command_count: int
+    event_log: tuple[SrsTurnEvent, ...]
+    action_sequence: tuple[SrsCommand, ...]
+
+
+_POLICY_COMMAND_GENERATORS: Mapping[str, Callable[..., SrsCommand | None]] = MappingProxyType(
+    {
+        EXIT_GREEDY_POLICY_NAME: choose_exit_greedy_command,
+        EXPLORE_THEN_EXIT_POLICY_NAME: choose_explore_then_exit_command,
+        OBJECT_GREEDY_POLICY_NAME: choose_object_greedy_command,
+    }
+)
+_REJECTED_RUN_EVENT_TYPES = frozenset({MOVE_REJECTED, INTERACT_REJECTED, WARP_EXIT_REJECTED})
+
+
+def run_policy_evaluation_case(
+    evaluation_case: EvaluationCase,
+    policy_name: str,
+    *,
+    contracts: SrsContracts,
+    max_srs_turn: int = DEFAULT_MAX_SRS_TURN,
+    max_commands: int = DEFAULT_MAX_COMMANDS,
+) -> PolicyRunResult:
+    if max_srs_turn < 0:
+        raise ValueError("max_srs_turn must be non-negative")
+    if max_commands < 0:
+        raise ValueError("max_commands must be non-negative")
+
+    try:
+        current_state = evaluation_case.build_initial_state(contracts=contracts)
+    except (EvaluationCaseError, SrsModelError, ValueError):
+        return PolicyRunResult(
+            evaluation_case=evaluation_case,
+            policy_name=policy_name,
+            outcome=PolicyRunOutcome.GENERATION_ERROR,
+            final_state=None,
+            command_count=0,
+            event_log=(),
+            action_sequence=(),
+        )
+
+    events: list[SrsTurnEvent] = []
+    action_sequence: list[SrsCommand] = []
+    rejected_commands: set[SrsCommand] = set()
+    rejected_object_ids: set[str] = set()
+
+    while True:
+        if current_state.srs_turn >= max_srs_turn or len(action_sequence) >= max_commands:
+            return _build_policy_run_result(
+                evaluation_case=evaluation_case,
+                policy_name=policy_name,
+                outcome=PolicyRunOutcome.ABORTED_TURN_LIMIT,
+                final_state=current_state,
+                events=events,
+                action_sequence=action_sequence,
+            )
+
+        try:
+            command = choose_policy_command(
+                current_state,
+                policy_name=policy_name,
+                contracts=contracts,
+                selected_exit_edge=evaluation_case.selected_exit_edge,
+                rejected_object_ids=rejected_object_ids,
+            )
+        except (EvaluationCaseError, SrsModelError, ValueError):
+            return _build_policy_run_result(
+                evaluation_case=evaluation_case,
+                policy_name=policy_name,
+                outcome=PolicyRunOutcome.GENERATION_ERROR,
+                final_state=current_state,
+                events=events,
+                action_sequence=action_sequence,
+            )
+
+        if command is None or command in rejected_commands:
+            return _build_policy_run_result(
+                evaluation_case=evaluation_case,
+                policy_name=policy_name,
+                outcome=PolicyRunOutcome.ABORTED_NO_POLICY_ACTION,
+                final_state=current_state,
+                events=events,
+                action_sequence=action_sequence,
+            )
+
+        result = apply_srs_command(
+            current_state,
+            command,
+            contracts=contracts,
+            cost_mode=evaluation_case.cost_mode,
+        )
+        current_state = result.state
+        action_sequence.append(command)
+        events.extend(result.events)
+
+        outcome = _classify_run_outcome(result.events)
+        if outcome is not None:
+            return _build_policy_run_result(
+                evaluation_case=evaluation_case,
+                policy_name=policy_name,
+                outcome=outcome,
+                final_state=current_state,
+                events=events,
+                action_sequence=action_sequence,
+            )
+
+        if _command_was_rejected(result.events):
+            rejected_commands.add(command)
+            if command.command_type == "INTERACT" and command.target_object_id is not None:
+                rejected_object_ids.add(command.target_object_id)
+
+
+def choose_policy_command(
+    state: SrsGameState,
+    *,
+    policy_name: str,
+    contracts: SrsContracts,
+    selected_exit_edge: Direction,
+    rejected_object_ids: Iterable[str] = (),
+) -> SrsCommand | None:
+    generator = _POLICY_COMMAND_GENERATORS.get(policy_name)
+    if generator is None:
+        raise EvaluationCaseError(f"unsupported policy_name: {policy_name}")
+    if policy_name == OBJECT_GREEDY_POLICY_NAME:
+        return generator(
+            state,
+            contracts=contracts,
+            selected_exit_edge=selected_exit_edge,
+            rejected_object_ids=rejected_object_ids,
+        )
+    return generator(state, selected_exit_edge=selected_exit_edge)
+
+
+def _build_policy_run_result(
+    *,
+    evaluation_case: EvaluationCase,
+    policy_name: str,
+    outcome: PolicyRunOutcome,
+    final_state: SrsGameState | None,
+    events: Iterable[SrsTurnEvent],
+    action_sequence: Iterable[SrsCommand],
+) -> PolicyRunResult:
+    action_sequence = tuple(action_sequence)
+    return PolicyRunResult(
+        evaluation_case=evaluation_case,
+        policy_name=policy_name,
+        outcome=outcome,
+        final_state=final_state,
+        command_count=len(action_sequence),
+        event_log=tuple(events),
+        action_sequence=action_sequence,
+    )
+
+
+def _classify_run_outcome(events: Iterable[SrsTurnEvent]) -> PolicyRunOutcome | None:
+    event_types = {event.event_type for event in events}
+    if WARP_EXIT_ACCEPTED in event_types:
+        return PolicyRunOutcome.EXITED
+    if _contains_resource_depleted_event(events):
+        return PolicyRunOutcome.RESOURCE_DEPLETED
+    return None
+
+
+def _contains_resource_depleted_event(events: Iterable[SrsTurnEvent]) -> bool:
+    return any(
+        event.payload.get("outcome") == PolicyRunOutcome.RESOURCE_DEPLETED.value
+        for event in events
+    )
+
+
+def _command_was_rejected(events: Iterable[SrsTurnEvent]) -> bool:
+    for event in events:
+        return event.event_type in _REJECTED_RUN_EVENT_TYPES
+    return False
 
 
 def _apply_initial_reveal(

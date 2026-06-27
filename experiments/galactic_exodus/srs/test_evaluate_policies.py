@@ -11,7 +11,10 @@ from experiments.galactic_exodus.srs.evaluate_policies import (
     EvaluationCase,
     EvaluationCaseError,
     EXPLORE_THEN_EXIT_POLICY_NAME,
+    EXIT_GREEDY_POLICY_NAME,
     InitialRevealMode,
+    OBJECT_GREEDY_POLICY_NAME,
+    PolicyRunOutcome,
     RevisitMode,
     build_default_evaluation_cases,
     build_object_greedy_candidates,
@@ -19,13 +22,13 @@ from experiments.galactic_exodus.srs.evaluate_policies import (
     choose_exit_greedy_command,
     choose_known_target_step,
     choose_object_greedy_command,
-    EXIT_GREEDY_POLICY_NAME,
     first_known_route_step,
     is_known_passable_cell,
     iter_known_cardinal_neighbors,
-    OBJECT_GREEDY_POLICY_NAME,
     route_on_known_cells,
+    run_policy_evaluation_case,
 )
+from experiments.galactic_exodus.srs.log import INTERACT_REJECTED, MOVE_REJECTED, WARP_EXIT_ACCEPTED, WARP_EXIT_REJECTED
 from experiments.galactic_exodus.srs.model import (
     CostMode,
     Direction,
@@ -961,6 +964,226 @@ class ExploreThenExitPolicyTests(unittest.TestCase):
         second = choose_explore_then_exit_command(state, selected_exit_edge=Direction.N)
 
         self.assertEqual(first, SrsCommand(command_type="MOVE_ROUTE", route=(Direction.N,)))
+        self.assertEqual(first, second)
+
+
+class PolicyRunLoopTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.contracts = load_default_contracts(REPO_ROOT)
+
+    def make_case(self, *, selected_exit_edge: Direction = Direction.S) -> EvaluationCase:
+        return EvaluationCase(
+            case_id=f"run-loop-{selected_exit_edge.value.lower()}",
+            sector_id="normal-1001",
+            sector_type=SectorType.NORMAL,
+            sector_seed=1001,
+            entry_edge=Direction.S,
+            blocked_edges=frozenset(),
+            selected_exit_edge=selected_exit_edge,
+            cost_mode=CostMode.TURN_ONLY,
+            initial_fuel=0,
+            max_fuel=9,
+            initial_reveal_mode=InitialRevealMode.NONE,
+            revisit_mode=RevisitMode.FIRST_VISIT,
+        )
+
+    def make_exit_ready_state(self) -> SrsGameState:
+        return reveal_positions(make_state(entry_edge=Direction.S), [Position(4, 8)])
+
+    def test_classifies_warp_exit_accepted_as_exited(self) -> None:
+        case = self.make_case(selected_exit_edge=Direction.S)
+
+        with patch.object(EvaluationCase, "build_initial_state", return_value=self.make_exit_ready_state()):
+            result = run_policy_evaluation_case(
+                case,
+                EXIT_GREEDY_POLICY_NAME,
+                contracts=self.contracts,
+            )
+
+        self.assertEqual(result.outcome, PolicyRunOutcome.EXITED)
+        self.assertEqual(result.command_count, 1)
+        self.assertEqual(result.action_sequence, (SrsCommand(command_type="WARP_EXIT", exit_direction=Direction.S),))
+        self.assertEqual(result.event_log[0].event_type, WARP_EXIT_ACCEPTED)
+
+    def test_policy_returning_no_action_aborts_run(self) -> None:
+        case = self.make_case()
+
+        with patch.object(EvaluationCase, "build_initial_state", return_value=self.make_exit_ready_state()):
+            with patch(
+                "experiments.galactic_exodus.srs.evaluate_policies.choose_policy_command",
+                return_value=None,
+            ):
+                result = run_policy_evaluation_case(
+                    case,
+                    EXIT_GREEDY_POLICY_NAME,
+                    contracts=self.contracts,
+                )
+
+        self.assertEqual(result.outcome, PolicyRunOutcome.ABORTED_NO_POLICY_ACTION)
+        self.assertEqual(result.command_count, 0)
+        self.assertEqual(result.event_log, ())
+
+    def test_max_srs_turn_aborts_before_querying_policy(self) -> None:
+        case = self.make_case()
+        state = replace(self.make_exit_ready_state(), srs_turn=3)
+
+        with patch.object(EvaluationCase, "build_initial_state", return_value=state):
+            with patch(
+                "experiments.galactic_exodus.srs.evaluate_policies.choose_policy_command",
+                side_effect=AssertionError("policy should not be queried"),
+            ):
+                result = run_policy_evaluation_case(
+                    case,
+                    EXIT_GREEDY_POLICY_NAME,
+                    contracts=self.contracts,
+                    max_srs_turn=3,
+                )
+
+        self.assertEqual(result.outcome, PolicyRunOutcome.ABORTED_TURN_LIMIT)
+        self.assertEqual(result.command_count, 0)
+
+    def test_max_commands_aborts_after_reaching_command_limit(self) -> None:
+        case = self.make_case()
+        state = replace(make_state(), player_position=Position(4, 4))
+        state = reveal_positions(state, [Position(4, 4), Position(4, 3)])
+
+        with patch.object(EvaluationCase, "build_initial_state", return_value=state):
+            with patch(
+                "experiments.galactic_exodus.srs.evaluate_policies.choose_policy_command",
+                return_value=SrsCommand(command_type="MOVE_ROUTE", route=(Direction.N,)),
+            ):
+                result = run_policy_evaluation_case(
+                    case,
+                    EXIT_GREEDY_POLICY_NAME,
+                    contracts=self.contracts,
+                    max_commands=1,
+                )
+
+        self.assertEqual(result.outcome, PolicyRunOutcome.ABORTED_TURN_LIMIT)
+        self.assertEqual(result.command_count, 1)
+        self.assertEqual(result.action_sequence, (SrsCommand(command_type="MOVE_ROUTE", route=(Direction.N,)),))
+
+    def test_warp_exit_rejected_does_not_end_run(self) -> None:
+        case = self.make_case(selected_exit_edge=Direction.S)
+
+        with patch.object(EvaluationCase, "build_initial_state", return_value=self.make_exit_ready_state()):
+            with patch(
+                "experiments.galactic_exodus.srs.evaluate_policies.choose_policy_command",
+                side_effect=[
+                    SrsCommand(command_type="WARP_EXIT", exit_direction=Direction.N),
+                    SrsCommand(command_type="WARP_EXIT", exit_direction=Direction.S),
+                ],
+            ):
+                result = run_policy_evaluation_case(
+                    case,
+                    EXIT_GREEDY_POLICY_NAME,
+                    contracts=self.contracts,
+                )
+
+        self.assertEqual(result.outcome, PolicyRunOutcome.EXITED)
+        self.assertEqual(result.command_count, 2)
+        self.assertEqual(result.event_log[0].event_type, WARP_EXIT_REJECTED)
+        self.assertEqual(result.event_log[-1].event_type, WARP_EXIT_ACCEPTED)
+
+    def test_move_rejected_does_not_end_run(self) -> None:
+        case = self.make_case(selected_exit_edge=Direction.S)
+
+        with patch.object(EvaluationCase, "build_initial_state", return_value=self.make_exit_ready_state()):
+            with patch(
+                "experiments.galactic_exodus.srs.evaluate_policies.choose_policy_command",
+                side_effect=[
+                    SrsCommand(command_type="MOVE_TO", target=Position(0, 0)),
+                    SrsCommand(command_type="WARP_EXIT", exit_direction=Direction.S),
+                ],
+            ):
+                result = run_policy_evaluation_case(
+                    case,
+                    EXIT_GREEDY_POLICY_NAME,
+                    contracts=self.contracts,
+                )
+
+        self.assertEqual(result.outcome, PolicyRunOutcome.EXITED)
+        self.assertEqual(result.event_log[0].event_type, MOVE_REJECTED)
+        self.assertEqual(result.event_log[-1].event_type, WARP_EXIT_ACCEPTED)
+
+    def test_interact_rejected_does_not_end_run(self) -> None:
+        case = self.make_case(selected_exit_edge=Direction.S)
+
+        with patch.object(EvaluationCase, "build_initial_state", return_value=self.make_exit_ready_state()):
+            with patch(
+                "experiments.galactic_exodus.srs.evaluate_policies.choose_policy_command",
+                side_effect=[
+                    SrsCommand(command_type="INTERACT", target_object_id="missing-object"),
+                    SrsCommand(command_type="WARP_EXIT", exit_direction=Direction.S),
+                ],
+            ):
+                result = run_policy_evaluation_case(
+                    case,
+                    EXIT_GREEDY_POLICY_NAME,
+                    contracts=self.contracts,
+                )
+
+        self.assertEqual(result.outcome, PolicyRunOutcome.EXITED)
+        self.assertEqual(result.event_log[0].event_type, INTERACT_REJECTED)
+        self.assertEqual(result.event_log[-1].event_type, WARP_EXIT_ACCEPTED)
+
+    def test_repeated_invalid_action_is_suppressed_as_no_policy_action(self) -> None:
+        case = self.make_case()
+        repeated_command = SrsCommand(command_type="MOVE_TO", target=Position(0, 0))
+
+        with patch.object(EvaluationCase, "build_initial_state", return_value=self.make_exit_ready_state()):
+            with patch(
+                "experiments.galactic_exodus.srs.evaluate_policies.choose_policy_command",
+                side_effect=[repeated_command, repeated_command],
+            ):
+                result = run_policy_evaluation_case(
+                    case,
+                    EXIT_GREEDY_POLICY_NAME,
+                    contracts=self.contracts,
+                )
+
+        self.assertEqual(result.outcome, PolicyRunOutcome.ABORTED_NO_POLICY_ACTION)
+        self.assertEqual(result.command_count, 1)
+        self.assertEqual(result.event_log[0].event_type, MOVE_REJECTED)
+        self.assertEqual(result.action_sequence, (repeated_command,))
+
+    def test_action_sequence_is_recorded_in_order(self) -> None:
+        case = self.make_case(selected_exit_edge=Direction.S)
+        first = SrsCommand(command_type="MOVE_TO", target=Position(0, 0))
+        second = SrsCommand(command_type="WARP_EXIT", exit_direction=Direction.S)
+
+        with patch.object(EvaluationCase, "build_initial_state", return_value=self.make_exit_ready_state()):
+            with patch(
+                "experiments.galactic_exodus.srs.evaluate_policies.choose_policy_command",
+                side_effect=[first, second],
+            ):
+                result = run_policy_evaluation_case(
+                    case,
+                    EXIT_GREEDY_POLICY_NAME,
+                    contracts=self.contracts,
+                )
+
+        self.assertEqual(result.action_sequence, (first, second))
+        self.assertEqual(result.command_count, 2)
+
+    def test_same_input_produces_same_run_result(self) -> None:
+        case = self.make_case(selected_exit_edge=Direction.S)
+        state = self.make_exit_ready_state()
+
+        with patch.object(EvaluationCase, "build_initial_state", return_value=state):
+            first = run_policy_evaluation_case(
+                case,
+                EXIT_GREEDY_POLICY_NAME,
+                contracts=self.contracts,
+            )
+        with patch.object(EvaluationCase, "build_initial_state", return_value=state):
+            second = run_policy_evaluation_case(
+                case,
+                EXIT_GREEDY_POLICY_NAME,
+                contracts=self.contracts,
+            )
+
         self.assertEqual(first, second)
 
 
