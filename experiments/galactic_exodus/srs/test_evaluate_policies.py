@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import unittest
+from dataclasses import replace
 from pathlib import Path
 from unittest.mock import patch
 
@@ -12,7 +13,9 @@ from experiments.galactic_exodus.srs.evaluate_policies import (
     InitialRevealMode,
     RevisitMode,
     build_default_evaluation_cases,
+    choose_exit_greedy_command,
     choose_known_target_step,
+    EXIT_GREEDY_POLICY_NAME,
     first_known_route_step,
     is_known_passable_cell,
     iter_known_cardinal_neighbors,
@@ -24,6 +27,8 @@ from experiments.galactic_exodus.srs.model import (
     Position,
     SectorDescriptor,
     SectorType,
+    SrsCell,
+    SrsCommand,
     SrsGameState,
     SrsObjectType,
     SrsTerrainType,
@@ -32,6 +37,40 @@ from experiments.galactic_exodus.srs.test_engine_movement import make_state, pla
 
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
+
+
+def replace_cell_warp_flags(
+    state: SrsGameState,
+    position: Position,
+    warp_flags: frozenset[Direction],
+) -> SrsGameState:
+    rows = [list(row) for row in state.actual_map.cells]
+    current = state.actual_map.cell_at(position)
+    rows[position.y][position.x] = SrsCell(
+        terrain=current.terrain,
+        object_id=current.object_id,
+        actor_id=current.actor_id,
+        warp_flags=warp_flags,
+    )
+    actual_map = replace(
+        state.actual_map,
+        cells=tuple(tuple(row) for row in rows),
+    )
+    return replace(
+        state,
+        actual_map=actual_map,
+        known_state=replace(
+            state.known_state,
+            known_cells={
+                known_position: (
+                    rows[known_position.y][known_position.x]
+                    if known_position == position
+                    else known_cell
+                )
+                for known_position, known_cell in state.known_state.known_cells.items()
+            },
+        ),
+    )
 
 
 class EvaluationCaseTests(unittest.TestCase):
@@ -361,6 +400,112 @@ class KnownStateRoutingHelperTests(unittest.TestCase):
 
         self.assertEqual(first, (Direction.N, Direction.E))
         self.assertEqual(first, second)
+
+
+class ExitGreedyPolicyTests(unittest.TestCase):
+    def test_policy_name_is_stable(self) -> None:
+        self.assertEqual(EXIT_GREEDY_POLICY_NAME, "EXIT_GREEDY")
+
+    def test_returns_warp_exit_when_current_cell_has_selected_exit(self) -> None:
+        state = reveal_positions(make_state(entry_edge=Direction.S), [Position(4, 8)])
+
+        command = choose_exit_greedy_command(state, selected_exit_edge=Direction.S)
+
+        self.assertEqual(
+            command,
+            SrsCommand(command_type="WARP_EXIT", exit_direction=Direction.S),
+        )
+
+    def test_returns_single_step_move_route_toward_nearest_known_warp_cell(self) -> None:
+        state = reveal_positions(
+            make_state(),
+            [Position(4, 8), Position(5, 8), Position(6, 8)],
+        )
+        state = replace_cell_warp_flags(state, Position(6, 8), frozenset({Direction.N}))
+
+        command = choose_exit_greedy_command(state, selected_exit_edge=Direction.N)
+
+        self.assertEqual(
+            command,
+            SrsCommand(command_type="MOVE_ROUTE", route=(Direction.E,)),
+        )
+        self.assertEqual(command.route, (Direction.E,))
+
+    def test_returns_no_action_when_selected_exit_warp_cell_is_undiscovered(self) -> None:
+        state = reveal_positions(make_state(), [Position(4, 8), Position(4, 7)])
+
+        self.assertIsNone(
+            choose_exit_greedy_command(state, selected_exit_edge=Direction.N)
+        )
+
+    def test_returns_no_action_when_known_warp_cell_is_unreachable(self) -> None:
+        state = reveal_positions(
+            make_state(),
+            [Position(4, 8), Position(5, 8), Position(6, 8)],
+        )
+        state = replace_cell_terrain(state, Position(5, 8), SrsTerrainType.ASTEROID)
+        state = reveal_positions(state, [Position(4, 8), Position(5, 8), Position(6, 8)])
+        state = replace_cell_warp_flags(state, Position(6, 8), frozenset({Direction.N}))
+
+        self.assertIsNone(
+            choose_exit_greedy_command(state, selected_exit_edge=Direction.N)
+        )
+
+    def test_does_not_detour_to_objects_before_exit(self) -> None:
+        state = reveal_positions(
+            place_object(make_state(), Position(4, 7), SrsObjectType.SALVAGE, "salvage-a"),
+            [Position(4, 8), Position(4, 7), Position(5, 8), Position(6, 8)],
+        )
+        state = replace_cell_warp_flags(state, Position(6, 8), frozenset({Direction.N}))
+
+        command = choose_exit_greedy_command(state, selected_exit_edge=Direction.N)
+
+        self.assertEqual(
+            command,
+            SrsCommand(command_type="MOVE_ROUTE", route=(Direction.E,)),
+        )
+
+    def test_never_returns_move_to(self) -> None:
+        state = reveal_positions(
+            make_state(),
+            [Position(4, 8), Position(5, 8), Position(6, 8)],
+        )
+        state = replace_cell_warp_flags(state, Position(6, 8), frozenset({Direction.N}))
+
+        command = choose_exit_greedy_command(state, selected_exit_edge=Direction.N)
+
+        self.assertIsNotNone(command)
+        self.assertNotEqual(command.command_type, "MOVE_TO")
+
+    def test_is_deterministic_for_same_input(self) -> None:
+        state = reveal_positions(
+            make_state(),
+            [Position(4, 8), Position(4, 7), Position(5, 8), Position(5, 7)],
+        )
+        state = replace_cell_warp_flags(state, Position(4, 7), frozenset({Direction.N}))
+        state = replace_cell_warp_flags(state, Position(5, 8), frozenset({Direction.N}))
+
+        first = choose_exit_greedy_command(state, selected_exit_edge=Direction.N)
+        second = choose_exit_greedy_command(state, selected_exit_edge=Direction.N)
+
+        self.assertEqual(first, SrsCommand(command_type="MOVE_ROUTE", route=(Direction.N,)))
+        self.assertEqual(first, second)
+
+    def test_uses_known_state_without_actual_map(self) -> None:
+        state = reveal_positions(
+            make_state(),
+            [Position(4, 8), Position(5, 8), Position(6, 8)],
+        )
+        state = replace_cell_warp_flags(state, Position(6, 8), frozenset({Direction.N}))
+
+        with patch(
+            "experiments.galactic_exodus.srs.model.SrsActualMap.cell_at",
+            side_effect=AssertionError("actual_map must not be used"),
+        ):
+            self.assertEqual(
+                choose_exit_greedy_command(state, selected_exit_edge=Direction.N),
+                SrsCommand(command_type="MOVE_ROUTE", route=(Direction.E,)),
+            )
 
 
 if __name__ == "__main__":

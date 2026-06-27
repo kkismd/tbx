@@ -16,6 +16,7 @@ from experiments.galactic_exodus.srs.model import (
     SectorDescriptor,
     SectorType,
     SrsCell,
+    SrsCommand,
     SrsGameState,
     SrsModelError,
     SrsObjectType,
@@ -44,6 +45,7 @@ _DIRECTION_ORDER = (Direction.N, Direction.E, Direction.S, Direction.W)
 _REVISIT_CONSUMED_OBJECT_TYPES = frozenset({SrsObjectType.RESOURCE_CACHE, SrsObjectType.SALVAGE})
 _KNOWN_IMPASSABLE_TERRAINS = frozenset({SrsTerrainType.ASTEROID, SrsTerrainType.RIFT_BARRIER})
 _KNOWN_IMPASSABLE_OBJECT_TYPES = frozenset({SrsObjectType.STAR, SrsObjectType.PLANET, SrsObjectType.STATION})
+EXIT_GREEDY_POLICY_NAME = "EXIT_GREEDY"
 
 
 def _freeze_mapping(mapping: Mapping[str, Any]) -> Mapping[str, Any]:
@@ -149,6 +151,44 @@ def choose_known_target_step(
     if best_choice is None:
         return None
     return best_choice[4], best_choice[5]
+
+
+def choose_exit_greedy_command(
+    state: SrsGameState,
+    *,
+    selected_exit_edge: Direction,
+) -> SrsCommand | None:
+    selected_exit_edge = Direction(selected_exit_edge)
+    known_cells = state.known_state.known_cells
+    current_cell = known_cells.get(state.player_position)
+    if current_cell is not None and selected_exit_edge in current_cell.warp_flags:
+        return SrsCommand(
+            command_type="WARP_EXIT",
+            exit_direction=selected_exit_edge,
+        )
+
+    targets = tuple(
+        position
+        for position, cell in known_cells.items()
+        if selected_exit_edge in cell.warp_flags
+    )
+    if not targets:
+        return None
+
+    choice = choose_known_target_step(
+        state.player_position,
+        targets,
+        known_cells=known_cells,
+        objects=state.objects,
+    )
+    if choice is None:
+        return None
+
+    _, first_step = choice
+    return SrsCommand(
+        command_type="MOVE_ROUTE",
+        route=(first_step,),
+    )
 
 
 @dataclass(frozen=True, slots=True)
