@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from experiments.galactic_exodus.srs.contracts import load_default_contracts
 from experiments.galactic_exodus.srs.evaluate_policies import (
@@ -11,8 +12,23 @@ from experiments.galactic_exodus.srs.evaluate_policies import (
     InitialRevealMode,
     RevisitMode,
     build_default_evaluation_cases,
+    choose_known_target_step,
+    first_known_route_step,
+    is_known_passable_cell,
+    iter_known_cardinal_neighbors,
+    route_on_known_cells,
 )
-from experiments.galactic_exodus.srs.model import CostMode, Direction, SectorDescriptor, SectorType, SrsGameState
+from experiments.galactic_exodus.srs.model import (
+    CostMode,
+    Direction,
+    Position,
+    SectorDescriptor,
+    SectorType,
+    SrsGameState,
+    SrsObjectType,
+    SrsTerrainType,
+)
+from experiments.galactic_exodus.srs.test_engine_movement import make_state, place_object, reveal_positions, replace_cell_terrain
 
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -166,6 +182,185 @@ class DefaultEvaluationCasesTests(unittest.TestCase):
 
         self.assertEqual(len(case_ids), len(set(case_ids)))
         self.assertEqual(case_ids, [case.metadata()["case_id"] for case in self.cases])
+
+
+class KnownStateRoutingHelperTests(unittest.TestCase):
+    def test_known_passable_cell_uses_known_cells_only(self) -> None:
+        state = reveal_positions(make_state(), [Position(4, 8), Position(4, 7)])
+
+        self.assertTrue(
+            is_known_passable_cell(
+                Position(4, 7),
+                known_cells=state.known_state.known_cells,
+                objects=state.objects,
+            )
+        )
+        self.assertFalse(
+            is_known_passable_cell(
+                Position(4, 6),
+                known_cells=state.known_state.known_cells,
+                objects=state.objects,
+            )
+        )
+
+    def test_known_passable_cell_rejects_impassable_terrain_and_celestial_objects(self) -> None:
+        state = replace_cell_terrain(make_state(), Position(4, 7), SrsTerrainType.ASTEROID)
+        state = reveal_positions(state, [Position(4, 7), Position(4, 6), Position(4, 5), Position(5, 7), Position(5, 6)])
+        state = place_object(state, Position(4, 6), SrsObjectType.STAR, "star-a")
+        state = place_object(state, Position(4, 5), SrsObjectType.PLANET, "planet-a")
+        state = place_object(state, Position(5, 7), SrsObjectType.STATION, "station-a")
+        state = place_object(state, Position(5, 6), SrsObjectType.RESOURCE_CACHE, "resource-a")
+        state = reveal_positions(state, [Position(4, 7), Position(4, 6), Position(4, 5), Position(5, 7), Position(5, 6)])
+
+        self.assertFalse(
+            is_known_passable_cell(
+                Position(4, 7),
+                known_cells=state.known_state.known_cells,
+                objects=state.objects,
+            )
+        )
+        self.assertFalse(
+            is_known_passable_cell(
+                Position(4, 6),
+                known_cells=state.known_state.known_cells,
+                objects=state.objects,
+            )
+        )
+        self.assertFalse(
+            is_known_passable_cell(
+                Position(4, 5),
+                known_cells=state.known_state.known_cells,
+                objects=state.objects,
+            )
+        )
+        self.assertFalse(
+            is_known_passable_cell(
+                Position(5, 7),
+                known_cells=state.known_state.known_cells,
+                objects=state.objects,
+            )
+        )
+        self.assertTrue(
+            is_known_passable_cell(
+                Position(5, 6),
+                known_cells=state.known_state.known_cells,
+                objects=state.objects,
+            )
+        )
+
+    def test_salvage_is_treated_as_known_passable(self) -> None:
+        state = place_object(make_state(), Position(4, 7), SrsObjectType.SALVAGE, "salvage-a")
+        state = reveal_positions(state, [Position(4, 8), Position(4, 7)])
+
+        self.assertTrue(
+            is_known_passable_cell(
+                Position(4, 7),
+                known_cells=state.known_state.known_cells,
+                objects=state.objects,
+            )
+        )
+
+    def test_route_on_known_cells_does_not_cross_undiscovered_cells(self) -> None:
+        state = reveal_positions(
+            make_state(),
+            [Position(4, 8), Position(5, 8), Position(5, 7), Position(5, 6)],
+        )
+
+        self.assertEqual(
+            route_on_known_cells(
+                Position(4, 8),
+                Position(5, 6),
+                known_cells=state.known_state.known_cells,
+                objects=state.objects,
+            ),
+            (Direction.E, Direction.N, Direction.N),
+        )
+        self.assertIsNone(
+            route_on_known_cells(
+                Position(4, 8),
+                Position(4, 6),
+                known_cells=state.known_state.known_cells,
+                objects=state.objects,
+            )
+        )
+
+    def test_first_known_route_step_uses_known_state_without_actual_map(self) -> None:
+        state = reveal_positions(
+            make_state(),
+            [Position(4, 8), Position(4, 7), Position(4, 6)],
+        )
+
+        with patch(
+            "experiments.galactic_exodus.srs.engine.route_to_known_target",
+            side_effect=AssertionError("engine.route_to_known_target must not be used"),
+        ):
+            self.assertEqual(
+                first_known_route_step(
+                    Position(4, 8),
+                    Position(4, 6),
+                    known_cells=state.known_state.known_cells,
+                    objects=state.objects,
+                ),
+                Direction.N,
+            )
+
+    def test_choose_known_target_step_applies_deterministic_tie_breaking(self) -> None:
+        state = reveal_positions(
+            make_state(),
+            [Position(4, 8), Position(4, 7), Position(5, 8), Position(3, 8)],
+        )
+
+        self.assertEqual(
+            choose_known_target_step(
+                Position(4, 8),
+                [Position(4, 7), Position(5, 8), Position(3, 8)],
+                known_cells=state.known_state.known_cells,
+                objects=state.objects,
+            ),
+            (Position(4, 7), Direction.N),
+        )
+        self.assertEqual(
+            choose_known_target_step(
+                Position(4, 8),
+                [Position(5, 8), Position(3, 8)],
+                known_cells=state.known_state.known_cells,
+                objects=state.objects,
+            ),
+            (Position(3, 8), Direction.W),
+        )
+
+    def test_iter_known_cardinal_neighbors_is_stable(self) -> None:
+        self.assertEqual(
+            iter_known_cardinal_neighbors(Position(4, 8)),
+            (
+                (Direction.N, Position(4, 7)),
+                (Direction.E, Position(5, 8)),
+                (Direction.S, Position(4, 9)),
+                (Direction.W, Position(3, 8)),
+            ),
+        )
+
+    def test_route_on_known_cells_is_deterministic_for_same_input(self) -> None:
+        state = reveal_positions(
+            make_state(),
+            [Position(4, 8), Position(4, 7), Position(5, 8), Position(5, 7)],
+        )
+
+        first = route_on_known_cells(
+            Position(4, 8),
+            Position(5, 7),
+            known_cells=state.known_state.known_cells,
+            objects=state.objects,
+        )
+        second = route_on_known_cells(
+            Position(4, 8),
+            Position(5, 7),
+            known_cells=state.known_state.known_cells,
+            objects=state.objects,
+        )
+
+        self.assertEqual(first, (Direction.N, Direction.E))
+        self.assertEqual(first, second)
 
 
 if __name__ == "__main__":
