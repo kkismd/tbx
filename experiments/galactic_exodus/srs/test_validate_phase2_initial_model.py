@@ -243,7 +243,7 @@ class Phase2InitialModelValidationTests(unittest.TestCase):
 
     def test_questions_reject_seven_by_seven_fixture(self) -> None:
         self.mutate_question("Q17", "required_fixtures", "seven_by_seven_crossing")
-        self.assert_invalid("forbidden legacy token remains: seven_by_seven")
+        self.assert_invalid("Q17.required_fixtures must match the Phase 2A1c contract")
 
     def test_elements_reject_base_node_object_type(self) -> None:
         payload = self.read_json(self.elements)
@@ -261,7 +261,7 @@ class Phase2InitialModelValidationTests(unittest.TestCase):
         payload = self.read_json(self.generation)
         payload["notes"] = "WARP_POINT"
         self.write_json(self.generation, payload)
-        self.assert_invalid("forbidden legacy token remains: WARP_POINT")
+        self.assert_invalid(r"root\.notes: forbidden term WARP_POINT must not appear")
 
     def test_gravity_field_vertical_is_allowed(self) -> None:
         self.model.write_text(
