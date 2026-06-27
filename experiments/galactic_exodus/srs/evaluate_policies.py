@@ -19,6 +19,7 @@ from experiments.galactic_exodus.srs.model import (
     SrsCommand,
     SrsGameState,
     SrsModelError,
+    SrsObjectState,
     SrsObjectType,
     SrsTerrainType,
     validate_sector_descriptor,
@@ -46,6 +47,12 @@ _REVISIT_CONSUMED_OBJECT_TYPES = frozenset({SrsObjectType.RESOURCE_CACHE, SrsObj
 _KNOWN_IMPASSABLE_TERRAINS = frozenset({SrsTerrainType.ASTEROID, SrsTerrainType.RIFT_BARRIER})
 _KNOWN_IMPASSABLE_OBJECT_TYPES = frozenset({SrsObjectType.STAR, SrsObjectType.PLANET, SrsObjectType.STATION})
 EXIT_GREEDY_POLICY_NAME = "EXIT_GREEDY"
+OBJECT_GREEDY_POLICY_NAME = "OBJECT_GREEDY"
+_OBJECT_GREEDY_PRIORITY = {
+    SrsObjectType.RESOURCE_CACHE: 0,
+    SrsObjectType.STATION: 1,
+    SrsObjectType.SALVAGE: 2,
+}
 
 
 def _freeze_mapping(mapping: Mapping[str, Any]) -> Mapping[str, Any]:
@@ -131,26 +138,43 @@ def choose_known_target_step(
     known_cells: Mapping[Position, SrsCell],
     objects: Mapping[str, Any],
 ) -> tuple[Position, Direction] | None:
-    best_choice: tuple[int, int, int, int, Position, Direction] | None = None
+    choice = _choose_known_target_route(
+        start,
+        targets,
+        known_cells=known_cells,
+        objects=objects,
+    )
+    if choice is None:
+        return None
+    return choice[0], choice[2][0]
+
+
+def _choose_known_target_route(
+    start: Position,
+    targets: Iterable[Position],
+    *,
+    known_cells: Mapping[Position, SrsCell],
+    objects: Mapping[str, Any],
+) -> tuple[Position, int, tuple[Direction, ...]] | None:
+    best_choice: tuple[int, int, int, int, Position, tuple[Direction, ...]] | None = None
     for target in targets:
         route = route_on_known_cells(start, target, known_cells=known_cells, objects=objects)
         if route is None or not route:
             continue
-        first_step = route[0]
         choice = (
             len(route),
             target.y,
             target.x,
-            _DIRECTION_ORDER.index(first_step),
+            _DIRECTION_ORDER.index(route[0]),
             target,
-            first_step,
+            route,
         )
         if best_choice is None or choice < best_choice:
             best_choice = choice
 
     if best_choice is None:
         return None
-    return best_choice[4], best_choice[5]
+    return best_choice[4], best_choice[0], best_choice[5]
 
 
 def choose_exit_greedy_command(
@@ -189,6 +213,148 @@ def choose_exit_greedy_command(
         command_type="MOVE_ROUTE",
         route=(first_step,),
     )
+
+
+@dataclass(frozen=True, slots=True)
+class ObjectGreedyCandidate:
+    object_id: str
+    object_type: SrsObjectType
+    object_position: Position
+    interaction_positions: tuple[Position, ...]
+
+
+def _known_interaction_positions_for_object(
+    object_state: SrsObjectState,
+    *,
+    known_cells: Mapping[Position, SrsCell],
+    objects: Mapping[str, Any],
+    contracts: SrsContracts,
+) -> tuple[Position, ...]:
+    contract = contracts.movement.interaction.get(object_state.object_type.value)
+    if not isinstance(contract, Mapping):
+        raise EvaluationCaseError(f"interaction contract missing for {object_state.object_type.value}")
+    interaction_range = contract.get("range")
+    if interaction_range == "SAME_CELL":
+        if is_known_passable_cell(object_state.position, known_cells=known_cells, objects=objects):
+            return (object_state.position,)
+        return ()
+    if interaction_range == "ADJACENT":
+        return tuple(
+            position
+            for _, position in iter_known_cardinal_neighbors(object_state.position)
+            if is_known_passable_cell(position, known_cells=known_cells, objects=objects)
+        )
+    raise EvaluationCaseError(f"unsupported interaction range: {interaction_range}")
+
+
+def _is_object_greedy_candidate(
+    object_state: SrsObjectState,
+    *,
+    fuel: int,
+    max_fuel: int,
+    rejected_object_ids: frozenset[str],
+) -> bool:
+    if object_state.object_id in rejected_object_ids:
+        return False
+    if object_state.object_type is SrsObjectType.RESOURCE_CACHE:
+        return not object_state.consumed and fuel != max_fuel
+    if object_state.object_type is SrsObjectType.STATION:
+        return not object_state.activated and fuel != max_fuel
+    if object_state.object_type is SrsObjectType.SALVAGE:
+        return not object_state.consumed
+    return False
+
+
+def build_object_greedy_candidates(
+    state: SrsGameState,
+    *,
+    contracts: SrsContracts,
+    rejected_object_ids: Iterable[str] = (),
+) -> tuple[ObjectGreedyCandidate, ...]:
+    rejected = frozenset(rejected_object_ids)
+    candidates: list[ObjectGreedyCandidate] = []
+    for position, cell in state.known_state.known_cells.items():
+        object_id = cell.object_id
+        if object_id is None:
+            continue
+        object_state = state.objects.get(object_id)
+        if object_state is None:
+            continue
+        if position != object_state.position:
+            continue
+        if object_state.object_type not in _OBJECT_GREEDY_PRIORITY:
+            continue
+        if not _is_object_greedy_candidate(
+            object_state,
+            fuel=state.fuel,
+            max_fuel=state.max_fuel,
+            rejected_object_ids=rejected,
+        ):
+            continue
+        interaction_positions = _known_interaction_positions_for_object(
+            object_state,
+            known_cells=state.known_state.known_cells,
+            objects=state.objects,
+            contracts=contracts,
+        )
+        if not interaction_positions:
+            continue
+        candidates.append(
+            ObjectGreedyCandidate(
+                object_id=object_id,
+                object_type=object_state.object_type,
+                object_position=object_state.position,
+                interaction_positions=interaction_positions,
+            )
+        )
+    return tuple(candidates)
+
+
+def choose_object_greedy_command(
+    state: SrsGameState,
+    *,
+    contracts: SrsContracts,
+    selected_exit_edge: Direction,
+    rejected_object_ids: Iterable[str] = (),
+) -> SrsCommand | None:
+    best_choice: tuple[int, int, int, int, str, ObjectGreedyCandidate, tuple[Direction, ...]] | None = None
+    for candidate in build_object_greedy_candidates(
+        state,
+        contracts=contracts,
+        rejected_object_ids=rejected_object_ids,
+    ):
+        if state.player_position in candidate.interaction_positions:
+            route: tuple[Direction, ...] = ()
+        else:
+            route_choice = _choose_known_target_route(
+                state.player_position,
+                candidate.interaction_positions,
+                known_cells=state.known_state.known_cells,
+                objects=state.objects,
+            )
+            if route_choice is None:
+                continue
+            _, _, route = route_choice
+        choice = (
+            _OBJECT_GREEDY_PRIORITY[candidate.object_type],
+            len(route),
+            candidate.object_position.y,
+            candidate.object_position.x,
+            candidate.object_id,
+            candidate,
+            route,
+        )
+        if best_choice is None or choice < best_choice:
+            best_choice = choice
+
+    if best_choice is None:
+        return choose_exit_greedy_command(state, selected_exit_edge=selected_exit_edge)
+
+    candidate = best_choice[5]
+    route = best_choice[6]
+    if not route:
+        return SrsCommand(command_type="INTERACT", target_object_id=candidate.object_id)
+    return SrsCommand(command_type="MOVE_ROUTE", route=(route[0],))
 
 
 @dataclass(frozen=True, slots=True)

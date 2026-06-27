@@ -13,12 +13,15 @@ from experiments.galactic_exodus.srs.evaluate_policies import (
     InitialRevealMode,
     RevisitMode,
     build_default_evaluation_cases,
+    build_object_greedy_candidates,
     choose_exit_greedy_command,
     choose_known_target_step,
+    choose_object_greedy_command,
     EXIT_GREEDY_POLICY_NAME,
     first_known_route_step,
     is_known_passable_cell,
     iter_known_cardinal_neighbors,
+    OBJECT_GREEDY_POLICY_NAME,
     route_on_known_cells,
 )
 from experiments.galactic_exodus.srs.model import (
@@ -70,6 +73,26 @@ def replace_cell_warp_flags(
                 for known_position, known_cell in state.known_state.known_cells.items()
             },
         ),
+    )
+
+
+def place_object_with_metadata(
+    state: SrsGameState,
+    position: Position,
+    object_type: SrsObjectType,
+    object_id: str,
+    *,
+    fuel_restore: int | None = None,
+) -> SrsGameState:
+    state = place_object(state, position, object_type, object_id)
+    if fuel_restore is None:
+        return state
+    return replace(
+        state,
+        objects={
+            **state.objects,
+            object_id: replace(state.objects[object_id], metadata={"fuel_restore": fuel_restore}),
+        },
     )
 
 
@@ -505,6 +528,252 @@ class ExitGreedyPolicyTests(unittest.TestCase):
             self.assertEqual(
                 choose_exit_greedy_command(state, selected_exit_edge=Direction.N),
                 SrsCommand(command_type="MOVE_ROUTE", route=(Direction.E,)),
+            )
+
+
+class ObjectGreedyPolicyTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.contracts = load_default_contracts(REPO_ROOT)
+
+    def test_policy_name_is_stable(self) -> None:
+        self.assertEqual(OBJECT_GREEDY_POLICY_NAME, "OBJECT_GREEDY")
+
+    def test_prioritizes_known_unconsumed_resource_cache(self) -> None:
+        state = place_object_with_metadata(
+            make_state(fuel=2, max_fuel=9),
+            Position(4, 8),
+            SrsObjectType.RESOURCE_CACHE,
+            "resource-cache-1",
+            fuel_restore=5,
+        )
+        state = place_object(state, Position(5, 8), SrsObjectType.SALVAGE, "salvage-1")
+        state = reveal_positions(state, [Position(4, 8), Position(5, 8)])
+
+        command = choose_object_greedy_command(
+            state,
+            contracts=self.contracts,
+            selected_exit_edge=Direction.N,
+        )
+
+        self.assertEqual(
+            command,
+            SrsCommand(command_type="INTERACT", target_object_id="resource-cache-1"),
+        )
+
+    def test_resource_cache_is_excluded_at_full_fuel(self) -> None:
+        state = place_object_with_metadata(
+            make_state(fuel=9, max_fuel=9),
+            Position(4, 8),
+            SrsObjectType.RESOURCE_CACHE,
+            "resource-cache-1",
+            fuel_restore=5,
+        )
+        state = reveal_positions(state, [Position(4, 8), Position(4, 7), Position(4, 6)])
+        state = replace_cell_warp_flags(state, Position(4, 6), frozenset({Direction.N}))
+
+        command = choose_object_greedy_command(
+            state,
+            contracts=self.contracts,
+            selected_exit_edge=Direction.N,
+        )
+
+        self.assertEqual(
+            command,
+            SrsCommand(command_type="MOVE_ROUTE", route=(Direction.N,)),
+        )
+
+    def test_known_unactivated_station_is_a_candidate(self) -> None:
+        state = place_object(make_state(fuel=2, max_fuel=9), Position(4, 7), SrsObjectType.STATION, "station-1")
+        state = reveal_positions(state, [Position(4, 8), Position(4, 7)])
+
+        command = choose_object_greedy_command(
+            state,
+            contracts=self.contracts,
+            selected_exit_edge=Direction.N,
+        )
+
+        self.assertEqual(
+            command,
+            SrsCommand(command_type="INTERACT", target_object_id="station-1"),
+        )
+
+    def test_station_is_excluded_at_full_fuel(self) -> None:
+        state = place_object(make_state(fuel=9, max_fuel=9), Position(4, 7), SrsObjectType.STATION, "station-1")
+        state = reveal_positions(state, [Position(4, 8), Position(4, 7), Position(5, 8)])
+        state = replace_cell_warp_flags(state, Position(5, 8), frozenset({Direction.N}))
+
+        command = choose_object_greedy_command(
+            state,
+            contracts=self.contracts,
+            selected_exit_edge=Direction.N,
+        )
+
+        self.assertEqual(
+            command,
+            SrsCommand(command_type="MOVE_ROUTE", route=(Direction.E,)),
+        )
+
+    def test_known_unconsumed_salvage_is_a_candidate(self) -> None:
+        state = place_object(make_state(fuel=2, max_fuel=9), Position(5, 8), SrsObjectType.SALVAGE, "salvage-1")
+        state = reveal_positions(state, [Position(4, 8), Position(5, 8)])
+
+        command = choose_object_greedy_command(
+            state,
+            contracts=self.contracts,
+            selected_exit_edge=Direction.N,
+        )
+
+        self.assertEqual(
+            command,
+            SrsCommand(command_type="MOVE_ROUTE", route=(Direction.E,)),
+        )
+
+    def test_returns_interact_when_in_interaction_range(self) -> None:
+        state = place_object(make_state(fuel=2, max_fuel=9), Position(4, 7), SrsObjectType.STATION, "station-1")
+        state = reveal_positions(state, [Position(4, 8), Position(4, 7), Position(5, 8)])
+
+        command = choose_object_greedy_command(
+            state,
+            contracts=self.contracts,
+            selected_exit_edge=Direction.N,
+        )
+
+        self.assertEqual(
+            command,
+            SrsCommand(command_type="INTERACT", target_object_id="station-1"),
+        )
+
+    def test_returns_single_step_move_route_when_out_of_range(self) -> None:
+        state = place_object_with_metadata(
+            make_state(fuel=2, max_fuel=9),
+            Position(4, 6),
+            SrsObjectType.RESOURCE_CACHE,
+            "resource-cache-1",
+            fuel_restore=5,
+        )
+        state = reveal_positions(state, [Position(4, 8), Position(4, 7), Position(4, 6)])
+
+        command = choose_object_greedy_command(
+            state,
+            contracts=self.contracts,
+            selected_exit_edge=Direction.N,
+        )
+
+        self.assertEqual(
+            command,
+            SrsCommand(command_type="MOVE_ROUTE", route=(Direction.N,)),
+        )
+        self.assertEqual(command.route, (Direction.N,))
+
+    def test_falls_back_to_exit_greedy_when_no_object_candidates_exist(self) -> None:
+        state = reveal_positions(make_state(), [Position(4, 8), Position(4, 7), Position(4, 6)])
+        state = replace_cell_warp_flags(state, Position(4, 6), frozenset({Direction.N}))
+
+        command = choose_object_greedy_command(
+            state,
+            contracts=self.contracts,
+            selected_exit_edge=Direction.N,
+        )
+
+        self.assertEqual(
+            command,
+            SrsCommand(command_type="MOVE_ROUTE", route=(Direction.N,)),
+        )
+
+    def test_rejected_object_is_not_retried(self) -> None:
+        state = place_object_with_metadata(
+            make_state(fuel=2, max_fuel=9),
+            Position(4, 8),
+            SrsObjectType.RESOURCE_CACHE,
+            "resource-cache-1",
+            fuel_restore=5,
+        )
+        state = place_object(state, Position(5, 8), SrsObjectType.SALVAGE, "salvage-1")
+        state = reveal_positions(state, [Position(4, 8), Position(5, 8)])
+
+        command = choose_object_greedy_command(
+            state,
+            contracts=self.contracts,
+            selected_exit_edge=Direction.N,
+            rejected_object_ids={"resource-cache-1"},
+        )
+
+        self.assertEqual(
+            command,
+            SrsCommand(command_type="MOVE_ROUTE", route=(Direction.E,)),
+        )
+
+    def test_build_candidates_uses_known_cells_only(self) -> None:
+        state = place_object_with_metadata(
+            make_state(fuel=2, max_fuel=9),
+            Position(4, 6),
+            SrsObjectType.RESOURCE_CACHE,
+            "resource-cache-1",
+            fuel_restore=5,
+        )
+        state = reveal_positions(state, [Position(4, 8), Position(4, 7)])
+
+        candidates = build_object_greedy_candidates(
+            state,
+            contracts=self.contracts,
+        )
+
+        self.assertEqual(candidates, ())
+
+    def test_never_returns_move_to(self) -> None:
+        state = place_object(make_state(fuel=2, max_fuel=9), Position(5, 8), SrsObjectType.SALVAGE, "salvage-1")
+        state = reveal_positions(state, [Position(4, 8), Position(5, 8)])
+
+        command = choose_object_greedy_command(
+            state,
+            contracts=self.contracts,
+            selected_exit_edge=Direction.N,
+        )
+
+        self.assertIsNotNone(command)
+        self.assertNotEqual(command.command_type, "MOVE_TO")
+
+    def test_is_deterministic_for_same_input(self) -> None:
+        state = place_object(make_state(fuel=2, max_fuel=9), Position(3, 8), SrsObjectType.SALVAGE, "salvage-a")
+        state = place_object(state, Position(5, 8), SrsObjectType.SALVAGE, "salvage-b")
+        state = reveal_positions(state, [Position(4, 8), Position(3, 8), Position(5, 8)])
+
+        first = choose_object_greedy_command(
+            state,
+            contracts=self.contracts,
+            selected_exit_edge=Direction.N,
+        )
+        second = choose_object_greedy_command(
+            state,
+            contracts=self.contracts,
+            selected_exit_edge=Direction.N,
+        )
+
+        self.assertEqual(first, SrsCommand(command_type="MOVE_ROUTE", route=(Direction.W,)))
+        self.assertEqual(first, second)
+
+    def test_uses_known_state_without_actual_map(self) -> None:
+        state = place_object_with_metadata(
+            make_state(fuel=2, max_fuel=9),
+            Position(4, 6),
+            SrsObjectType.RESOURCE_CACHE,
+            "resource-cache-1",
+            fuel_restore=5,
+        )
+        state = reveal_positions(state, [Position(4, 8), Position(4, 7), Position(4, 6)])
+
+        with patch(
+            "experiments.galactic_exodus.srs.model.SrsActualMap.cell_at",
+            side_effect=AssertionError("actual_map must not be used"),
+        ):
+            self.assertEqual(
+                choose_object_greedy_command(
+                    state,
+                    contracts=self.contracts,
+                    selected_exit_edge=Direction.N,
+                ),
+                SrsCommand(command_type="MOVE_ROUTE", route=(Direction.N,)),
             )
 
 
