@@ -23,10 +23,14 @@ REQUIRED_FIXTURES = {
     "resource_cache_single_9x9.json",
     "station_refuel_9x9.json",
     "salvage_placeholder_9x9.json",
+    "nebula_observation_3x3_9x9.json",
     "warp_exit_s_9x9.json",
+    "warp_exit_rejected_no_flag_9x9.json",
     "rift_blocked_n_9x9.json",
+    "turn_only_cost_9x9.json",
     "shared_fuel_cost_9x9.json",
     "revisit_resource_consumed_9x9.json",
+    "discovered_cells_restore_9x9.json",
 }
 
 
@@ -108,6 +112,12 @@ class SrsFixtureTests(unittest.TestCase):
                 }
             ),
         )
+
+    def test_nebula_fixture_applies_cell_override_before_observation(self) -> None:
+        result = run_fixture(FIXTURES_DIR / "nebula_observation_3x3_9x9.json", contracts=self.contracts)
+
+        self.assertEqual(len(result.final_state.known_state.discovered_cells), 9)
+        self.assertEqual(result.final_state.actual_map.cell_at(Position(4, 7)).terrain.value, "NEBULA")
 
     def test_game_log_json_serializable(self) -> None:
         result = run_fixture(FIXTURES_DIR / "move_route_basic_9x9.json", contracts=self.contracts)
