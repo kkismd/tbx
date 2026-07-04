@@ -225,11 +225,13 @@ def movement_raw_cost_for_step(
 ) -> int:
     if direction not in contracts.movement.directions:
         raise SrsMovementError(f"unsupported movement direction: {direction}")
-    return _orthogonal_step_raw_cost(destination)
+    return _orthogonal_step_raw_cost(destination, contracts=contracts)
 
 
 def _orthogonal_step_raw_cost(
     destination: SrsCell,
+    *,
+    contracts: SrsContracts,
 ) -> int:
     terrain_multipliers = {
         SrsTerrainType.FLOOR: 1,
@@ -243,7 +245,7 @@ def _orthogonal_step_raw_cost(
     multiplier = terrain_multipliers.get(destination.terrain)
     if multiplier is None:
         raise SrsMovementError(f"impassable terrain has no movement cost: {destination.terrain.value}")
-    return 10 * multiplier
+    return _movement_raw_cost_denominator(contracts) * multiplier
 
 
 def is_impassable_cell(
@@ -434,7 +436,7 @@ def apply_srs_command(
     if command.command_type == "INTERACT":
         return _apply_interact(state, command, contracts=contracts)
     if command.command_type == "COMBAT_STEP":
-        return _apply_combat_step(state, command)
+        return _apply_combat_step(state, command, contracts=contracts)
     if command.command_type == "WARP_EXIT":
         return _apply_warp_exit(state, command)
     return _rejected_movement_result(
@@ -838,6 +840,8 @@ def _apply_warp_exit(
 def _apply_combat_step(
     state: SrsGameState,
     command: SrsCommand,
+    *,
+    contracts: SrsContracts,
 ) -> SrsCommandResult:
     combat_state = state.combat_state
     if combat_state is None:
@@ -864,7 +868,7 @@ def _apply_combat_step(
     enemy_actions: tuple[Mapping[str, Any], ...] = ()
     enemy_states = combat_state.enemies
     if phase_from is SrsCombatPhase.ENEMY_ACTION:
-        enemy_states, enemy_actions = _resolve_enemy_action_phase(state)
+        enemy_states, enemy_actions = _resolve_enemy_action_phase(state, contracts=contracts)
         combat_turn_after += 1
         player_after = _recover_player_energy(player_before)
 
@@ -946,6 +950,8 @@ def _recover_player_energy(player: SrsPlayerCombatState) -> SrsPlayerCombatState
 
 def _resolve_enemy_action_phase(
     state: SrsGameState,
+    *,
+    contracts: SrsContracts,
 ) -> tuple[Mapping[str, Any], tuple[Mapping[str, Any], ...]]:
     combat_state = state.combat_state
     if combat_state is None:
@@ -960,6 +966,7 @@ def _resolve_enemy_action_phase(
             state,
             enemy=enemy,
             attackable_positions=attackable_positions,
+            contracts=contracts,
         )
         updated_enemies[enemy_id] = updated_enemy
         actions.append(action)
@@ -972,6 +979,7 @@ def _resolve_enemy_action(
     *,
     enemy: SrsEnemyCombatState,
     attackable_positions: Sequence[Position],
+    contracts: SrsContracts,
 ) -> tuple[SrsEnemyCombatState, Mapping[str, Any]]:
     can_attack_before_move = is_attackable_position(
         state,
@@ -998,6 +1006,7 @@ def _resolve_enemy_action(
         state,
         start=enemy.position,
         attackable_positions=attackable_positions,
+        contracts=contracts,
     )
     moved_path = planned_path[: enemy.movement_power]
     final_position = enemy.position if not moved_path else moved_path[-1]
@@ -1028,11 +1037,12 @@ def _select_enemy_path_to_attack_position(
     *,
     start: Position,
     attackable_positions: Sequence[Position],
+    contracts: SrsContracts,
 ) -> tuple[Position | None, tuple[Position, ...], int]:
     if not state.actual_map.contains(start):
         raise SrsCombatError(f"enemy position out of bounds: {start}")
 
-    best_paths = _dijkstra_enemy_paths(state, start=start)
+    best_paths = _dijkstra_enemy_paths(state, start=start, contracts=contracts)
     best_target: Position | None = None
     best_path: tuple[Position, ...] = ()
     best_cost: int | None = None
@@ -1059,6 +1069,7 @@ def _dijkstra_enemy_paths(
     state: SrsGameState,
     *,
     start: Position,
+    contracts: SrsContracts,
 ) -> Mapping[Position, tuple[int, tuple[Position, ...]]]:
     best_paths: dict[Position, tuple[int, tuple[tuple[int, int], ...], tuple[Position, ...]]] = {
         start: (0, (), ())
@@ -1080,7 +1091,10 @@ def _dijkstra_enemy_paths(
             if is_impassable_cell(state, next_position):
                 continue
 
-            step_cost = _orthogonal_step_raw_cost(state.actual_map.cell_at(next_position))
+            step_cost = _orthogonal_step_raw_cost(
+                state.actual_map.cell_at(next_position),
+                contracts=contracts,
+            )
             next_path = recorded_path + (next_position,)
             next_path_key = current_path_key + (_position_sort_key(next_position),)
             candidate = (current_cost + step_cost, next_path_key, next_path)

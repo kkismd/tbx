@@ -469,6 +469,12 @@ def _validate_expectations(expect: Any, result: SrsFixtureRunResult) -> None:
             if needle not in result.render:
                 raise SrsFixtureError(f"expect mismatch for render_contains: missing {needle!r}")
 
+    render_not_contains = expect.get("render_not_contains")
+    if render_not_contains is not None:
+        for needle in _normalize_expected_strings(render_not_contains, field_name="render_not_contains"):
+            if needle in result.render:
+                raise SrsFixtureError(f"expect mismatch for render_not_contains: found {needle!r}")
+
 
 def _enemy_positions_payload(final_state: SrsGameState) -> Mapping[str, list[int]]:
     if final_state.combat_state is None:
@@ -489,12 +495,6 @@ def _flatten_enemy_actions(log: SrsGameLog) -> list[Mapping[str, Any]]:
             if isinstance(action, Mapping):
                 actions.append(dict(action))
     return actions
-
-    render_not_contains = expect.get("render_not_contains")
-    if render_not_contains is not None:
-        for needle in _normalize_expected_strings(render_not_contains, field_name="render_not_contains"):
-            if needle in result.render:
-                raise SrsFixtureError(f"expect mismatch for render_not_contains: found {needle!r}")
 
 
 def _normalize_expected_strings(value: Any, *, field_name: str) -> list[str]:
