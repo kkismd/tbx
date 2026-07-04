@@ -46,6 +46,7 @@ REQUIRED_FIXTURES = {
     "combat_enemy_counterattack_fallback_energy_9x9.json",
     "combat_energy_pressure_danger3_9x9.json",
     "combat_energy_pressure_danger4_9x9.json",
+    "combat_encounter_spawn_cap_9x9.json",
 }
 
 
@@ -239,6 +240,24 @@ class SrsFixtureTests(unittest.TestCase):
         self.assertEqual(danger4.log.events[1].payload["player_energy_after"], 2)
         self.assertEqual(danger4.log.events[4].payload["player_energy_after"], 1)
         self.assertTrue(danger4.log.events[4].payload["enemy_actions"][1]["reaction"]["fallback_to_defend"])
+
+    def test_encounter_spawn_fixture_accepts_fixed_composition_and_spawn_cap(self) -> None:
+        result = run_fixture(FIXTURES_DIR / "combat_encounter_spawn_cap_9x9.json", contracts=self.contracts)
+
+        self.assertEqual(
+            result.summary["combat_enemy_positions"],
+            {
+                "enemy-1": [8, 4],
+                "enemy-2": [4, 8],
+            },
+        )
+        self.assertEqual(
+            result.summary["combat_enemy_durabilities"],
+            {
+                "enemy-1": 3,
+                "enemy-2": 5,
+            },
+        )
 
     def test_custom_orthogonal_raw_cost_is_used_by_movement_and_enemy_pathfinding(self) -> None:
         custom_contracts = replace(
