@@ -51,6 +51,29 @@ class SrsActorType(str, Enum):
     PLAYER = "PLAYER"
 
 
+class SrsWeaponType(str, Enum):
+    PHOTON_TORPEDO = "PHOTON_TORPEDO"
+    PHASER = "PHASER"
+    ENEMY_WEAPON = "ENEMY_WEAPON"
+
+
+class SrsEnemyTier(str, Enum):
+    TIER1 = "TIER1"
+    TIER2 = "TIER2"
+    TIER3 = "TIER3"
+    TIER4 = "TIER4"
+
+
+class SrsCombatPhase(str, Enum):
+    PLAYER_MOVEMENT = "PLAYER_MOVEMENT"
+    PLAYER_ATTACK = "PLAYER_ATTACK"
+    ENEMY_ACTION = "ENEMY_ACTION"
+
+
+class ResourceManagementMode(str, Enum):
+    NONE = "NONE"
+
+
 class CostMode(str, Enum):
     TURN_ONLY = "TURN_ONLY"
     SHARED_FUEL = "SHARED_FUEL"
@@ -84,6 +107,166 @@ def _freeze_mapping(mapping: Mapping[Any, Any]) -> Mapping[Any, Any]:
 class Position:
     x: int
     y: int
+
+
+@dataclass(frozen=True, slots=True)
+class SrsWeaponProfile:
+    weapon_type: SrsWeaponType
+    damage: int | None
+    range: int
+    ammo_cost: int = 0
+    energy_cost: int = 0
+    resource_management: ResourceManagementMode = ResourceManagementMode.NONE
+
+    def __post_init__(self) -> None:
+        if self.damage is not None and self.damage <= 0:
+            raise SrsModelError("weapon damage must be positive")
+        if self.range <= 0:
+            raise SrsModelError("weapon range must be positive")
+        if self.ammo_cost < 0:
+            raise SrsModelError("weapon ammo_cost must be non-negative")
+        if self.energy_cost < 0:
+            raise SrsModelError("weapon energy_cost must be non-negative")
+
+
+@dataclass(frozen=True, slots=True)
+class SrsPlayerCombatState:
+    durability: int = 100
+    defense: int = 0
+    movement_power: int = 4
+    photon_torpedo_ammo: int = 6
+    photon_torpedo_ammo_capacity: int = 6
+    energy: int = 6
+    energy_capacity: int = 6
+    energy_recovery: int = 1
+
+    def __post_init__(self) -> None:
+        if self.durability <= 0:
+            raise SrsModelError("player durability must be positive")
+        if self.defense < 0:
+            raise SrsModelError("player defense must be non-negative")
+        if self.movement_power <= 0:
+            raise SrsModelError("player movement_power must be positive")
+        if self.photon_torpedo_ammo < 0:
+            raise SrsModelError("player photon_torpedo_ammo must be non-negative")
+        if self.photon_torpedo_ammo_capacity <= 0:
+            raise SrsModelError("player photon_torpedo_ammo_capacity must be positive")
+        if self.photon_torpedo_ammo > self.photon_torpedo_ammo_capacity:
+            raise SrsModelError("player photon_torpedo_ammo must not exceed capacity")
+        if self.energy < 0:
+            raise SrsModelError("player energy must be non-negative")
+        if self.energy_capacity <= 0:
+            raise SrsModelError("player energy_capacity must be positive")
+        if self.energy > self.energy_capacity:
+            raise SrsModelError("player energy must not exceed capacity")
+        if self.energy_recovery < 0:
+            raise SrsModelError("player energy_recovery must be non-negative")
+
+
+@dataclass(frozen=True, slots=True)
+class SrsEnemyCombatState:
+    enemy_id: str
+    tier: SrsEnemyTier
+    position: Position
+    durability: int
+    attack_damage: int
+    movement_power: int
+
+    def __post_init__(self) -> None:
+        if self.enemy_id == "":
+            raise SrsModelError("enemy_id must not be empty")
+        if self.durability <= 0:
+            raise SrsModelError("enemy durability must be positive")
+        if self.attack_damage <= 0:
+            raise SrsModelError("enemy attack_damage must be positive")
+        if self.movement_power <= 0:
+            raise SrsModelError("enemy movement_power must be positive")
+
+
+def default_weapon_profiles() -> Mapping[SrsWeaponType, SrsWeaponProfile]:
+    return _freeze_mapping(
+        {
+            SrsWeaponType.PHOTON_TORPEDO: SrsWeaponProfile(
+                weapon_type=SrsWeaponType.PHOTON_TORPEDO,
+                damage=3,
+                range=3,
+                ammo_cost=1,
+            ),
+            SrsWeaponType.PHASER: SrsWeaponProfile(
+                weapon_type=SrsWeaponType.PHASER,
+                damage=1,
+                range=2,
+                energy_cost=1,
+            ),
+            SrsWeaponType.ENEMY_WEAPON: SrsWeaponProfile(
+                weapon_type=SrsWeaponType.ENEMY_WEAPON,
+                damage=None,
+                range=2,
+                resource_management=ResourceManagementMode.NONE,
+            ),
+        }
+    )
+
+
+def enemy_tier_defaults(
+    tier: SrsEnemyTier,
+) -> tuple[int, int, int]:
+    defaults = {
+        SrsEnemyTier.TIER1: (3, 6, 3),
+        SrsEnemyTier.TIER2: (5, 7, 3),
+        SrsEnemyTier.TIER3: (8, 8, 3),
+        SrsEnemyTier.TIER4: (12, 10, 3),
+    }
+    return defaults[tier]
+
+
+def create_enemy_combat_state(
+    *,
+    enemy_id: str,
+    tier: SrsEnemyTier,
+    position: Position,
+) -> SrsEnemyCombatState:
+    durability, attack_damage, movement_power = enemy_tier_defaults(tier)
+    return SrsEnemyCombatState(
+        enemy_id=enemy_id,
+        tier=tier,
+        position=position,
+        durability=durability,
+        attack_damage=attack_damage,
+        movement_power=movement_power,
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class SrsCombatState:
+    player: SrsPlayerCombatState = field(default_factory=SrsPlayerCombatState)
+    enemies: Mapping[str, SrsEnemyCombatState] = field(default_factory=dict)
+    weapon_profiles: Mapping[SrsWeaponType, SrsWeaponProfile] = field(default_factory=default_weapon_profiles)
+    phase: SrsCombatPhase = SrsCombatPhase.PLAYER_MOVEMENT
+    combat_turn: int = 0
+    player_attack_target_id: str | None = None
+
+    def __post_init__(self) -> None:
+        normalized_enemies = _freeze_mapping(self.enemies)
+        normalized_weapons = _freeze_mapping(self.weapon_profiles)
+
+        if any(enemy_id != state.enemy_id for enemy_id, state in normalized_enemies.items()):
+            raise SrsModelError("enemies mapping keys must match SrsEnemyCombatState.enemy_id")
+        if self.combat_turn < 0:
+            raise SrsModelError("combat_turn must be non-negative")
+        if self.player_attack_target_id is not None and self.player_attack_target_id not in normalized_enemies:
+            raise SrsModelError("player_attack_target_id must reference an existing enemy")
+
+        object.__setattr__(self, "enemies", normalized_enemies)
+        object.__setattr__(self, "weapon_profiles", normalized_weapons)
+
+    @property
+    def enemy_presence(self) -> bool:
+        return bool(self.enemies)
+
+    @property
+    def target_available(self) -> bool:
+        return self.player_attack_target_id is not None and self.player_attack_target_id in self.enemies
 
 
 @dataclass(frozen=True, slots=True)
@@ -198,6 +381,7 @@ class SrsGameState:
     persistent_state: SrsPersistentState
     player_position: Position
     objects: Mapping[str, SrsObjectState] = field(default_factory=dict)
+    combat_state: SrsCombatState | None = None
     srs_turn: int = 0
     fuel: int = 0
     max_fuel: int = 0
@@ -215,6 +399,11 @@ class SrsGameState:
         }
         if map_object_ids != set(normalized_objects):
             raise SrsModelError("actual_map object_id values must match objects mapping keys")
+
+        if self.combat_state is not None:
+            for enemy in self.combat_state.enemies.values():
+                if not self.actual_map.contains(enemy.position):
+                    raise SrsModelError("combat enemy position must be within actual_map bounds")
 
         object.__setattr__(self, "objects", normalized_objects)
 
