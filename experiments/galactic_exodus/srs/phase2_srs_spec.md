@@ -265,7 +265,7 @@ PHOTON_TORPEDO:
 
 PHASER:
   damage = 1
-  range = 1
+  range = 2
   energy_cost = 1
 
 ENEMY_WEAPON:
