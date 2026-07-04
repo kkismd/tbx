@@ -1141,7 +1141,7 @@ def _resolve_enemy_action_phase(
     player = combat_state.player
     actions = []
     attackable_positions = enemy_attackable_positions(state)
-    for enemy_id in sorted(tuple(updated_enemies)):
+    for enemy_id in tuple(updated_enemies):
         enemy = updated_enemies.get(enemy_id)
         if enemy is None:
             continue

@@ -44,6 +44,8 @@ REQUIRED_FIXTURES = {
     "combat_enemy_defend_9x9.json",
     "combat_enemy_counterattack_9x9.json",
     "combat_enemy_counterattack_fallback_energy_9x9.json",
+    "combat_energy_pressure_danger3_9x9.json",
+    "combat_energy_pressure_danger4_9x9.json",
 }
 
 
@@ -218,6 +220,25 @@ class SrsFixtureTests(unittest.TestCase):
         )
         self.assertTrue(fallback.summary["enemy_actions"][0]["reaction"]["fallback_to_defend"])
         self.assertEqual(fallback.final_state.combat_state.player.energy, 1)
+
+    def test_multi_enemy_pressure_fixtures_preserve_tier_order_and_energy_pressure(self) -> None:
+        danger3 = run_fixture(FIXTURES_DIR / "combat_energy_pressure_danger3_9x9.json", contracts=self.contracts)
+        danger4 = run_fixture(FIXTURES_DIR / "combat_energy_pressure_danger4_9x9.json", contracts=self.contracts)
+
+        self.assertEqual(
+            [action["enemy_id"] for action in danger3.log.events[1].payload["enemy_actions"]],
+            ["enemy-1", "enemy-2", "enemy-4"],
+        )
+        self.assertEqual(danger3.log.events[1].payload["player_energy_after"], 3)
+        self.assertEqual(danger3.log.events[4].payload["player_energy_after"], 1)
+        self.assertTrue(danger3.log.events[4].payload["enemy_actions"][2]["reaction"]["fallback_to_defend"])
+        self.assertEqual(
+            [action["enemy_id"] for action in danger4.log.events[1].payload["enemy_actions"]],
+            ["enemy-1", "enemy-2", "enemy-3", "enemy-4"],
+        )
+        self.assertEqual(danger4.log.events[1].payload["player_energy_after"], 2)
+        self.assertEqual(danger4.log.events[4].payload["player_energy_after"], 1)
+        self.assertTrue(danger4.log.events[4].payload["enemy_actions"][1]["reaction"]["fallback_to_defend"])
 
     def test_custom_orthogonal_raw_cost_is_used_by_movement_and_enemy_pathfinding(self) -> None:
         custom_contracts = replace(

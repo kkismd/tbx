@@ -1,0 +1,81 @@
+{
+  "fixture_id": "combat_energy_pressure_danger3_9x9",
+  "description": "Three enemies act in tier order, and repeated counterattacks exhaust the last counterattack on the second combat turn.",
+  "sector": {
+    "sector_id": "normal-9121",
+    "sector_type": "NORMAL",
+    "sector_seed": 9121,
+    "entry_edge": "S",
+    "blocked_edges": []
+  },
+  "initial": {
+    "reveal": {"mode": "FULL"},
+    "player_position": [1, 4],
+    "combat": {
+      "phase": "PLAYER_ATTACK",
+      "enemies": [
+        {"enemy_id": "enemy-4", "tier": "TIER4", "position": [2, 4]},
+        {"enemy_id": "enemy-2", "tier": "TIER2", "position": [1, 3]},
+        {"enemy_id": "enemy-1", "tier": "TIER1", "position": [0, 4]}
+      ],
+      "player_attack_target_id": "enemy-4"
+    }
+  },
+  "commands": [
+    {
+      "command_type": "COMBAT_STEP",
+      "player_attack_action": "ATTACK",
+      "player_attack_weapon": "PHASER"
+    },
+    {
+      "command_type": "COMBAT_STEP",
+      "enemy_reactions": {
+        "enemy-1": "COUNTERATTACK",
+        "enemy-2": "COUNTERATTACK",
+        "enemy-4": "COUNTERATTACK"
+      }
+    },
+    {
+      "command_type": "COMBAT_STEP"
+    },
+    {
+      "command_type": "COMBAT_STEP",
+      "player_attack_action": "ATTACK",
+      "player_attack_weapon": "PHASER"
+    },
+    {
+      "command_type": "COMBAT_STEP",
+      "enemy_reactions": {
+        "enemy-1": "COUNTERATTACK",
+        "enemy-2": "COUNTERATTACK",
+        "enemy-4": "COUNTERATTACK"
+      }
+    }
+  ],
+  "expect": {
+    "event_types": [
+      "COMBAT_TRANSITIONED",
+      "COMBAT_TRANSITIONED",
+      "COMBAT_TRANSITIONED",
+      "COMBAT_TRANSITIONED",
+      "COMBAT_TRANSITIONED"
+    ],
+    "combat_phase": "PLAYER_MOVEMENT",
+    "combat_turn": 2,
+    "enemy_presence": true,
+    "combat_player_durability": 59,
+    "combat_player_energy": 1,
+    "combat_player_torpedo_ammo": 6,
+    "combat_enemy_positions": {
+      "enemy-1": [0, 4],
+      "enemy-2": [1, 3],
+      "enemy-4": [2, 4]
+    },
+    "combat_enemy_durabilities": {
+      "enemy-1": 1,
+      "enemy-2": 3,
+      "enemy-4": 9
+    },
+    "outcome": "ACCEPTED"
+  }
+}

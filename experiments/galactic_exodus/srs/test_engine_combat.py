@@ -11,6 +11,7 @@ from experiments.galactic_exodus.srs.engine import (
     enemy_attackable_positions,
     has_clear_line_of_sight,
     is_attackable_position,
+    run_srs_commands,
 )
 from experiments.galactic_exodus.srs.log import COMBAT_TRANSITIONED, WARP_EXIT_REJECTED
 from experiments.galactic_exodus.srs.model import (
@@ -324,6 +325,154 @@ class SrsEngineCombatTests(unittest.TestCase):
         self.assertEqual(result.state.combat_state.phase, SrsCombatPhase.PLAYER_MOVEMENT)
         self.assertEqual(result.state.combat_state.combat_turn, 1)
         self.assertEqual(result.state.combat_state.player.energy, 6)
+
+    def test_combat_state_normalizes_enemy_order_by_tier(self) -> None:
+        enemy_t4 = create_enemy_combat_state(
+            enemy_id="enemy-4",
+            tier=SrsEnemyTier.TIER4,
+            position=Position(2, 4),
+        )
+        enemy_t2 = create_enemy_combat_state(
+            enemy_id="enemy-2",
+            tier=SrsEnemyTier.TIER2,
+            position=Position(1, 3),
+        )
+        enemy_t1 = create_enemy_combat_state(
+            enemy_id="enemy-1",
+            tier=SrsEnemyTier.TIER1,
+            position=Position(0, 4),
+        )
+
+        combat_state = SrsCombatState(
+            enemies={
+                "enemy-4": enemy_t4,
+                "enemy-2": enemy_t2,
+                "enemy-1": enemy_t1,
+            },
+        )
+
+        self.assertEqual(tuple(combat_state.enemies), ("enemy-1", "enemy-2", "enemy-4"))
+
+    def test_multiple_enemy_actions_follow_tier_ascending_order(self) -> None:
+        state = replace(make_state(), player_position=Position(1, 4))
+        enemy_t4 = create_enemy_combat_state(
+            enemy_id="enemy-4",
+            tier=SrsEnemyTier.TIER4,
+            position=Position(2, 4),
+        )
+        enemy_t2 = create_enemy_combat_state(
+            enemy_id="enemy-2",
+            tier=SrsEnemyTier.TIER2,
+            position=Position(1, 3),
+        )
+        enemy_t1 = create_enemy_combat_state(
+            enemy_id="enemy-1",
+            tier=SrsEnemyTier.TIER1,
+            position=Position(0, 4),
+        )
+        state = replace(
+            state,
+            combat_state=SrsCombatState(
+                enemies={
+                    "enemy-4": enemy_t4,
+                    "enemy-2": enemy_t2,
+                    "enemy-1": enemy_t1,
+                },
+                phase=SrsCombatPhase.ENEMY_ACTION,
+            ),
+        )
+
+        result = apply_srs_command(
+            state,
+            SrsCommand(
+                command_type="COMBAT_STEP",
+                enemy_reactions={
+                    "enemy-1": "COUNTERATTACK",
+                    "enemy-2": "COUNTERATTACK",
+                    "enemy-4": "COUNTERATTACK",
+                },
+            ),
+            contracts=self.contracts,
+        )
+
+        enemy_actions = result.events[0].payload["enemy_actions"]
+        self.assertEqual(
+            [action["enemy_id"] for action in enemy_actions],
+            ["enemy-1", "enemy-2", "enemy-4"],
+        )
+        self.assertEqual(result.state.combat_state.player.energy, 4)
+        self.assertEqual(result.state.combat_state.enemies["enemy-1"].durability, 2)
+        self.assertEqual(result.state.combat_state.enemies["enemy-2"].durability, 4)
+        self.assertEqual(result.state.combat_state.enemies["enemy-4"].durability, 11)
+
+    def test_three_enemy_pressure_can_exhaust_counterattacks_on_second_turn(self) -> None:
+        state = replace(make_state(), player_position=Position(1, 4))
+        state = replace(
+            state,
+            combat_state=SrsCombatState(
+                enemies={
+                    "enemy-4": create_enemy_combat_state(
+                        enemy_id="enemy-4",
+                        tier=SrsEnemyTier.TIER4,
+                        position=Position(2, 4),
+                    ),
+                    "enemy-2": create_enemy_combat_state(
+                        enemy_id="enemy-2",
+                        tier=SrsEnemyTier.TIER2,
+                        position=Position(1, 3),
+                    ),
+                    "enemy-1": create_enemy_combat_state(
+                        enemy_id="enemy-1",
+                        tier=SrsEnemyTier.TIER1,
+                        position=Position(0, 4),
+                    ),
+                },
+                phase=SrsCombatPhase.PLAYER_ATTACK,
+                player_attack_target_id="enemy-4",
+            ),
+        )
+
+        result = run_srs_commands(
+            state,
+            (
+                SrsCommand(
+                    command_type="COMBAT_STEP",
+                    player_attack_action="ATTACK",
+                    player_attack_weapon="PHASER",
+                ),
+                SrsCommand(
+                    command_type="COMBAT_STEP",
+                    enemy_reactions={
+                        "enemy-1": "COUNTERATTACK",
+                        "enemy-2": "COUNTERATTACK",
+                        "enemy-4": "COUNTERATTACK",
+                    },
+                ),
+                SrsCommand(command_type="COMBAT_STEP"),
+                SrsCommand(
+                    command_type="COMBAT_STEP",
+                    player_attack_action="ATTACK",
+                    player_attack_weapon="PHASER",
+                ),
+                SrsCommand(
+                    command_type="COMBAT_STEP",
+                    enemy_reactions={
+                        "enemy-1": "COUNTERATTACK",
+                        "enemy-2": "COUNTERATTACK",
+                        "enemy-4": "COUNTERATTACK",
+                    },
+                ),
+            ),
+            contracts=self.contracts,
+        )
+
+        self.assertEqual(result.events[1].payload["player_energy_after"], 3)
+        self.assertEqual(result.events[4].payload["player_energy_after"], 1)
+        self.assertEqual(
+            [action["reaction"]["resolved_reaction"] for action in result.events[4].payload["enemy_actions"]],
+            ["COUNTERATTACK", "COUNTERATTACK", "DEFEND"],
+        )
+        self.assertTrue(result.events[4].payload["enemy_actions"][2]["reaction"]["fallback_to_defend"])
 
     def test_enemy_action_moves_to_lowest_total_movement_cost_attack_cell(self) -> None:
         state = replace(make_state(), player_position=Position(4, 4))
