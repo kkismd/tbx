@@ -10,6 +10,7 @@ from experiments.galactic_exodus.srs.model import (
     SrsCombatPhase,
     SrsCombatState,
     SrsEnemyTier,
+    SrsEnemyReaction,
     SectorDescriptor,
     SectorType,
     SrsActualMap,
@@ -21,6 +22,7 @@ from experiments.galactic_exodus.srs.model import (
     SrsObjectState,
     SrsObjectType,
     SrsPersistentState,
+    SrsPlayerAttackAction,
     SrsTerrainType,
     SrsWeaponType,
     create_enemy_combat_state,
@@ -339,6 +341,31 @@ class SrsModelTests(unittest.TestCase):
     def test_srs_command_normalizes_exit_direction(self) -> None:
         command = SrsCommand(command_type="WARP_EXIT", exit_direction="N")
         self.assertEqual(command.exit_direction, Direction.N)
+
+    def test_srs_command_normalizes_combat_action_fields(self) -> None:
+        command = SrsCommand(
+            command_type="COMBAT_STEP",
+            player_attack_action="ATTACK",
+            player_attack_weapon="PHOTON_TORPEDO",
+            enemy_reactions={"enemy-1": "COUNTERATTACK"},
+        )
+
+        self.assertEqual(command.player_attack_action, SrsPlayerAttackAction.ATTACK)
+        self.assertEqual(command.player_attack_weapon, SrsWeaponType.PHOTON_TORPEDO)
+        self.assertEqual(command.enemy_reactions["enemy-1"], SrsEnemyReaction.COUNTERATTACK)
+
+    def test_srs_command_rejects_attack_without_weapon(self) -> None:
+        with self.assertRaisesRegex(SrsModelError, "ATTACK requires a player_attack_weapon"):
+            SrsCommand(command_type="COMBAT_STEP", player_attack_action="ATTACK")
+
+    def test_srs_command_rejects_combat_fields_for_non_combat_command(self) -> None:
+        with self.assertRaisesRegex(SrsModelError, "combat action fields require COMBAT_STEP"):
+            SrsCommand(command_type="MOVE_TO", target=Position(1, 1), player_attack_action="SKIP")
+
+    def test_player_combat_state_allows_zero_durability(self) -> None:
+        player = SrsPlayerCombatState(durability=0)
+
+        self.assertEqual(player.durability, 0)
 
     def test_srs_command_rejects_invalid_exit_direction(self) -> None:
         with self.assertRaisesRegex(SrsModelError, "exit_direction must be a Direction value"):

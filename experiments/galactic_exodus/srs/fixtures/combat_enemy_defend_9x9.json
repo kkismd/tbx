@@ -1,0 +1,69 @@
+{
+  "fixture_id": "combat_enemy_defend_9x9",
+  "description": "A defend reaction halves incoming tier2 damage and rounds the final damage up.",
+  "sector": {
+    "sector_id": "normal-9112",
+    "sector_type": "NORMAL",
+    "sector_seed": 9112,
+    "entry_edge": "S",
+    "blocked_edges": []
+  },
+  "initial": {
+    "reveal": {"mode": "FULL"},
+    "player_position": [4, 4],
+    "combat": {
+      "phase": "ENEMY_ACTION",
+      "enemies": [
+        {"enemy_id": "enemy-1", "tier": "TIER2", "position": [4, 5]}
+      ]
+    }
+  },
+  "commands": [
+    {
+      "command_type": "COMBAT_STEP",
+      "enemy_reactions": {
+        "enemy-1": "DEFEND"
+      }
+    }
+  ],
+  "expect": {
+    "event_types": ["COMBAT_TRANSITIONED"],
+    "combat_phase": "PLAYER_MOVEMENT",
+    "combat_turn": 1,
+    "enemy_presence": true,
+    "combat_player_durability": 96,
+    "combat_player_energy": 6,
+    "combat_player_torpedo_ammo": 6,
+    "combat_enemy_positions": {
+      "enemy-1": [4, 5]
+    },
+    "combat_enemy_durabilities": {
+      "enemy-1": 5
+    },
+    "enemy_actions": [
+      {
+        "enemy_id": "enemy-1",
+        "start_position": [4, 5],
+        "target_attackable_position": [4, 5],
+        "planned_path": [],
+        "moved_path": [],
+        "final_position": [4, 5],
+        "movement_power": 3,
+        "movement_cost": 0,
+        "attacked_player": true,
+        "can_attack_before_move": true,
+        "can_attack_after_move": true,
+        "reaction": {
+          "selected_reaction": "DEFEND",
+          "resolved_reaction": "DEFEND",
+          "counterattack_available": true,
+          "fallback_to_defend": false,
+          "damage_to_player": 4,
+          "counterattack_damage": 0,
+          "enemy_destroyed": false
+        }
+      }
+    ],
+    "outcome": "ACCEPTED"
+  }
+}

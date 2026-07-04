@@ -70,6 +70,16 @@ class SrsCombatPhase(str, Enum):
     ENEMY_ACTION = "ENEMY_ACTION"
 
 
+class SrsPlayerAttackAction(str, Enum):
+    ATTACK = "ATTACK"
+    SKIP = "SKIP"
+
+
+class SrsEnemyReaction(str, Enum):
+    COUNTERATTACK = "COUNTERATTACK"
+    DEFEND = "DEFEND"
+
+
 class ResourceManagementMode(str, Enum):
     NONE = "NONE"
 
@@ -141,8 +151,8 @@ class SrsPlayerCombatState:
     energy_recovery: int = 1
 
     def __post_init__(self) -> None:
-        if self.durability <= 0:
-            raise SrsModelError("player durability must be positive")
+        if self.durability < 0:
+            raise SrsModelError("player durability must be non-negative")
         if self.defense < 0:
             raise SrsModelError("player defense must be non-negative")
         if self.movement_power <= 0:
@@ -433,6 +443,9 @@ class SrsCommand:
     target: Position | None = None
     target_object_id: str | None = None
     exit_direction: Direction | None = None
+    player_attack_action: SrsPlayerAttackAction | None = None
+    player_attack_weapon: SrsWeaponType | None = None
+    enemy_reactions: Mapping[str, SrsEnemyReaction] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         command_type = str(self.command_type)
@@ -444,6 +457,35 @@ class SrsCommand:
             exit_direction = None if self.exit_direction is None else Direction(self.exit_direction)
         except ValueError as exc:
             raise SrsModelError("exit_direction must be a Direction value") from exc
+        try:
+            player_attack_action = (
+                None
+                if self.player_attack_action is None
+                else SrsPlayerAttackAction(self.player_attack_action)
+            )
+        except ValueError as exc:
+            raise SrsModelError("player_attack_action must be ATTACK or SKIP") from exc
+        try:
+            player_attack_weapon = (
+                None
+                if self.player_attack_weapon is None
+                else SrsWeaponType(self.player_attack_weapon)
+            )
+        except ValueError as exc:
+            raise SrsModelError("player_attack_weapon must be a SrsWeaponType value") from exc
+        if player_attack_weapon is SrsWeaponType.ENEMY_WEAPON:
+            raise SrsModelError("player_attack_weapon must be PHOTON_TORPEDO or PHASER")
+        if not isinstance(self.enemy_reactions, Mapping):
+            raise SrsModelError("enemy_reactions must be a mapping")
+        try:
+            enemy_reactions = _freeze_mapping(
+                {
+                    str(enemy_id): SrsEnemyReaction(reaction)
+                    for enemy_id, reaction in self.enemy_reactions.items()
+                }
+            )
+        except ValueError as exc:
+            raise SrsModelError("enemy_reactions values must be COUNTERATTACK or DEFEND") from exc
 
         if command_type == "MOVE_ROUTE" and not route:
             raise SrsModelError("MOVE_ROUTE requires a non-empty route")
@@ -453,10 +495,37 @@ class SrsCommand:
             raise SrsModelError("INTERACT requires a target_object_id")
         if command_type == "WARP_EXIT" and exit_direction is None:
             raise SrsModelError("WARP_EXIT requires an exit_direction")
+        if command_type != "COMBAT_STEP" and (
+            player_attack_action is not None
+            or player_attack_weapon is not None
+            or enemy_reactions
+        ):
+            raise SrsModelError("combat action fields require COMBAT_STEP")
+        if player_attack_action is SrsPlayerAttackAction.ATTACK and player_attack_weapon is None:
+            raise SrsModelError("ATTACK requires a player_attack_weapon")
+        if player_attack_action is not SrsPlayerAttackAction.ATTACK and player_attack_weapon is not None:
+            raise SrsModelError("player_attack_weapon requires ATTACK")
 
         object.__setattr__(self, "command_type", command_type)
         object.__setattr__(self, "route", route)
         object.__setattr__(self, "exit_direction", exit_direction)
+        object.__setattr__(self, "player_attack_action", player_attack_action)
+        object.__setattr__(self, "player_attack_weapon", player_attack_weapon)
+        object.__setattr__(self, "enemy_reactions", enemy_reactions)
+
+    def __hash__(self) -> int:
+        return hash(
+            (
+                self.command_type,
+                self.route,
+                self.target,
+                self.target_object_id,
+                self.exit_direction,
+                self.player_attack_action,
+                self.player_attack_weapon,
+                tuple(sorted(self.enemy_reactions.items())),
+            )
+        )
 
 
 @dataclass(frozen=True, slots=True)

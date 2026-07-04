@@ -48,7 +48,8 @@
         "movement_cost": 50,
         "attacked_player": false,
         "can_attack_before_move": false,
-        "can_attack_after_move": false
+        "can_attack_after_move": false,
+        "reaction": null
       }
     ],
     "outcome": "ACCEPTED"

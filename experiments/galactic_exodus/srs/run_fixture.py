@@ -17,8 +17,10 @@ from experiments.galactic_exodus.srs.model import (
     SrsCombatPhase,
     SrsCombatState,
     SrsEnemyTier,
+    SrsEnemyReaction,
     SrsActualMap,
     SrsCell,
+    SrsPlayerAttackAction,
     SectorDescriptor,
     SectorType,
     SrsCommand,
@@ -27,6 +29,7 @@ from experiments.galactic_exodus.srs.model import (
     SrsPlayerCombatState,
     SrsPersistentState,
     SrsTerrainType,
+    SrsWeaponType,
     create_enemy_combat_state,
 )
 from experiments.galactic_exodus.srs.render import render_known_map
@@ -35,7 +38,18 @@ from experiments.galactic_exodus.srs.render import render_known_map
 REPO_ROOT = Path(__file__).resolve().parents[3]
 FIXTURES_DIR = Path(__file__).resolve().parent / "fixtures"
 
-_ALLOWED_COMMAND_KEYS = frozenset({"command_type", "route", "target", "target_object_id", "exit_direction"})
+_ALLOWED_COMMAND_KEYS = frozenset(
+    {
+        "command_type",
+        "route",
+        "target",
+        "target_object_id",
+        "exit_direction",
+        "player_attack_action",
+        "player_attack_weapon",
+        "enemy_reactions",
+    }
+)
 _ALLOWED_COMMAND_TYPES = frozenset({"MOVE_ROUTE", "MOVE_TO", "INTERACT", "WARP_EXIT", "COMBAT_STEP"})
 
 
@@ -83,6 +97,9 @@ def command_from_json(data: Mapping[str, Any]) -> SrsCommand:
     target: Position | None = None
     target_object_id: str | None = None
     exit_direction: Direction | None = None
+    player_attack_action: SrsPlayerAttackAction | None = None
+    player_attack_weapon: SrsWeaponType | None = None
+    enemy_reactions: Mapping[str, SrsEnemyReaction] = {}
 
     if "route" in data:
         route_value = data["route"]
@@ -95,6 +112,30 @@ def command_from_json(data: Mapping[str, Any]) -> SrsCommand:
         target_object_id = _required_str(data, "target_object_id")
     if "exit_direction" in data:
         exit_direction = _direction(data["exit_direction"])
+    if "player_attack_action" in data:
+        try:
+            player_attack_action = SrsPlayerAttackAction(_required_str(data, "player_attack_action"))
+        except ValueError as exc:
+            raise SrsFixtureError(f"invalid player_attack_action: {data['player_attack_action']}") from exc
+    if "player_attack_weapon" in data:
+        try:
+            player_attack_weapon = SrsWeaponType(_required_str(data, "player_attack_weapon"))
+        except ValueError as exc:
+            raise SrsFixtureError(f"invalid player_attack_weapon: {data['player_attack_weapon']}") from exc
+    if "enemy_reactions" in data:
+        raw_enemy_reactions = data["enemy_reactions"]
+        if not isinstance(raw_enemy_reactions, Mapping):
+            raise SrsFixtureError("enemy_reactions must be an object")
+        enemy_reactions = {}
+        for enemy_id, reaction in raw_enemy_reactions.items():
+            if not isinstance(enemy_id, str) or enemy_id == "":
+                raise SrsFixtureError("enemy_reactions keys must be non-empty strings")
+            if not isinstance(reaction, str):
+                raise SrsFixtureError("enemy_reactions values must be strings")
+            try:
+                enemy_reactions[enemy_id] = SrsEnemyReaction(reaction)
+            except ValueError as exc:
+                raise SrsFixtureError(f"invalid enemy reaction: {reaction}") from exc
 
     try:
         return SrsCommand(
@@ -103,6 +144,9 @@ def command_from_json(data: Mapping[str, Any]) -> SrsCommand:
             target=target,
             target_object_id=target_object_id,
             exit_direction=exit_direction,
+            player_attack_action=player_attack_action,
+            player_attack_weapon=player_attack_weapon,
+            enemy_reactions=enemy_reactions,
         )
     except ValueError as exc:
         raise SrsFixtureError(str(exc)) from exc
@@ -426,8 +470,15 @@ def _build_summary(
         "combat_phase": final_state.combat_state.phase.value if final_state.combat_state is not None else None,
         "combat_turn": final_state.combat_state.combat_turn if final_state.combat_state is not None else None,
         "enemy_presence": final_state.combat_state.enemy_presence if final_state.combat_state is not None else False,
+        "combat_player_durability": final_state.combat_state.player.durability if final_state.combat_state is not None else None,
         "combat_player_energy": final_state.combat_state.player.energy if final_state.combat_state is not None else None,
+        "combat_player_torpedo_ammo": (
+            final_state.combat_state.player.photon_torpedo_ammo
+            if final_state.combat_state is not None
+            else None
+        ),
         "combat_enemy_positions": enemy_positions,
+        "combat_enemy_durabilities": _enemy_durabilities_payload(final_state),
         "enemy_actions": enemy_actions,
         "outcome": primary_outcome,
         "render_line_count": len(render.splitlines()),
@@ -454,8 +505,14 @@ def _validate_expectations(expect: Any, result: SrsFixtureRunResult) -> None:
         ("combat_phase", final_state.combat_state.phase.value if final_state.combat_state is not None else None),
         ("combat_turn", final_state.combat_state.combat_turn if final_state.combat_state is not None else None),
         ("enemy_presence", final_state.combat_state.enemy_presence if final_state.combat_state is not None else False),
+        ("combat_player_durability", final_state.combat_state.player.durability if final_state.combat_state is not None else None),
         ("combat_player_energy", final_state.combat_state.player.energy if final_state.combat_state is not None else None),
+        (
+            "combat_player_torpedo_ammo",
+            final_state.combat_state.player.photon_torpedo_ammo if final_state.combat_state is not None else None,
+        ),
         ("combat_enemy_positions", enemy_positions),
+        ("combat_enemy_durabilities", _enemy_durabilities_payload(final_state)),
         ("enemy_actions", enemy_actions),
         ("outcome", result.summary.get("outcome")),
     )
@@ -481,6 +538,15 @@ def _enemy_positions_payload(final_state: SrsGameState) -> Mapping[str, list[int
         return {}
     return {
         enemy_id: _position_to_list(enemy.position)
+        for enemy_id, enemy in sorted(final_state.combat_state.enemies.items())
+    }
+
+
+def _enemy_durabilities_payload(final_state: SrsGameState) -> Mapping[str, int]:
+    if final_state.combat_state is None:
+        return {}
+    return {
+        enemy_id: enemy.durability
         for enemy_id, enemy in sorted(final_state.combat_state.enemies.items())
     }
 

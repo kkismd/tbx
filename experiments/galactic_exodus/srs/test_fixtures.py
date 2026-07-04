@@ -39,6 +39,11 @@ REQUIRED_FIXTURES = {
     "combat_attack_blocked_los_9x9.json",
     "combat_attack_out_of_range_9x9.json",
     "combat_enemy_movement_tiebreak_9x9.json",
+    "combat_torpedo_destroy_no_counterattack_9x9.json",
+    "combat_phaser_attack_damage_9x9.json",
+    "combat_enemy_defend_9x9.json",
+    "combat_enemy_counterattack_9x9.json",
+    "combat_enemy_counterattack_fallback_energy_9x9.json",
 }
 
 
@@ -181,9 +186,38 @@ class SrsFixtureTests(unittest.TestCase):
                     "attacked_player": False,
                     "can_attack_before_move": False,
                     "can_attack_after_move": False,
+                    "reaction": None,
                 }
             ],
         )
+
+    def test_combat_resolution_fixtures_cover_attack_and_reaction_outcomes(self) -> None:
+        torpedo = run_fixture(FIXTURES_DIR / "combat_torpedo_destroy_no_counterattack_9x9.json", contracts=self.contracts)
+        phaser = run_fixture(FIXTURES_DIR / "combat_phaser_attack_damage_9x9.json", contracts=self.contracts)
+        defend = run_fixture(FIXTURES_DIR / "combat_enemy_defend_9x9.json", contracts=self.contracts)
+        counterattack = run_fixture(FIXTURES_DIR / "combat_enemy_counterattack_9x9.json", contracts=self.contracts)
+        fallback = run_fixture(
+            FIXTURES_DIR / "combat_enemy_counterattack_fallback_energy_9x9.json",
+            contracts=self.contracts,
+        )
+
+        self.assertFalse(torpedo.final_state.combat_state.enemy_presence)
+        self.assertEqual(torpedo.final_state.combat_state.player.photon_torpedo_ammo, 5)
+        self.assertEqual(phaser.final_state.combat_state.enemies["enemy-1"].durability, 4)
+        self.assertEqual(phaser.final_state.combat_state.player.energy, 5)
+        self.assertEqual(defend.final_state.combat_state.player.durability, 96)
+        self.assertEqual(
+            defend.summary["enemy_actions"][0]["reaction"]["resolved_reaction"],
+            "DEFEND",
+        )
+        self.assertEqual(counterattack.final_state.combat_state.player.durability, 94)
+        self.assertEqual(counterattack.final_state.combat_state.enemies["enemy-1"].durability, 2)
+        self.assertEqual(
+            counterattack.summary["enemy_actions"][0]["reaction"]["resolved_reaction"],
+            "COUNTERATTACK",
+        )
+        self.assertTrue(fallback.summary["enemy_actions"][0]["reaction"]["fallback_to_defend"])
+        self.assertEqual(fallback.final_state.combat_state.player.energy, 1)
 
     def test_custom_orthogonal_raw_cost_is_used_by_movement_and_enemy_pathfinding(self) -> None:
         custom_contracts = replace(
