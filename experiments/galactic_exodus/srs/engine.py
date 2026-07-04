@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections import deque
 from dataclasses import replace
+from heapq import heappop, heappush
 from typing import Any, Mapping, Sequence
 
 from experiments.galactic_exodus.srs.contracts import SrsContracts
@@ -31,6 +32,7 @@ from experiments.galactic_exodus.srs.model import (
     SrsCombatPhase,
     SrsCommand,
     SrsCommandResult,
+    SrsEnemyCombatState,
     SrsGameState,
     SrsKnownState,
     SrsObjectType,
@@ -62,6 +64,12 @@ class SrsCombatError(ValueError):
 _PLAYER_ATTACK_WEAPONS = (
     SrsWeaponType.PHOTON_TORPEDO,
     SrsWeaponType.PHASER,
+)
+_ENEMY_PATH_TIEBREAK_DIRECTIONS = (
+    Direction.N,
+    Direction.W,
+    Direction.E,
+    Direction.S,
 )
 
 
@@ -217,7 +225,12 @@ def movement_raw_cost_for_step(
 ) -> int:
     if direction not in contracts.movement.directions:
         raise SrsMovementError(f"unsupported movement direction: {direction}")
+    return _orthogonal_step_raw_cost(destination)
 
+
+def _orthogonal_step_raw_cost(
+    destination: SrsCell,
+) -> int:
     terrain_multipliers = {
         SrsTerrainType.FLOOR: 1,
         SrsTerrainType.DEBRIS: 2,
@@ -230,7 +243,7 @@ def movement_raw_cost_for_step(
     multiplier = terrain_multipliers.get(destination.terrain)
     if multiplier is None:
         raise SrsMovementError(f"impassable terrain has no movement cost: {destination.terrain.value}")
-    return contracts.movement.orthogonal_raw_cost * multiplier
+    return 10 * multiplier
 
 
 def is_impassable_cell(
@@ -322,6 +335,26 @@ def is_attackable_position(
     if combat_range_distance(attacker, target) > weapon_profile.range:
         return False
     return has_clear_line_of_sight(state, attacker=attacker, target=target)
+
+
+def enemy_attackable_positions(
+    state: SrsGameState,
+) -> tuple[Position, ...]:
+    player_position = state.player_position
+    attackable_positions = []
+    for position in _iter_positions(state.actual_map):
+        if position == player_position:
+            continue
+        if is_impassable_cell(state, position):
+            continue
+        if is_attackable_position(
+            state,
+            attacker=position,
+            target=player_position,
+            weapon_type=SrsWeaponType.ENEMY_WEAPON,
+        ):
+            attackable_positions.append(position)
+    return tuple(sorted(attackable_positions, key=_position_sort_key))
 
 
 def resolve_move_route(
@@ -828,7 +861,10 @@ def _apply_combat_step(
     phase_to = _next_combat_phase(state, target_attackable=target_attackable)
     player_after = player_before
     combat_turn_after = combat_state.combat_turn
+    enemy_actions: tuple[Mapping[str, Any], ...] = ()
+    enemy_states = combat_state.enemies
     if phase_from is SrsCombatPhase.ENEMY_ACTION:
+        enemy_states, enemy_actions = _resolve_enemy_action_phase(state)
         combat_turn_after += 1
         player_after = _recover_player_energy(player_before)
 
@@ -836,6 +872,7 @@ def _apply_combat_step(
         state,
         combat_state=replace(
             combat_state,
+            enemies=enemy_states,
             player=player_after,
             phase=phase_to,
             combat_turn=combat_turn_after,
@@ -856,6 +893,7 @@ def _apply_combat_step(
                     "enemy_presence": combat_state.enemy_presence,
                     "target_available": combat_state.target_available,
                     "target_attackable": target_attackable,
+                    "enemy_actions": enemy_actions,
                     "player_energy_before": player_before.energy,
                     "player_energy_after": player_after.energy,
                     "outcome": "ACCEPTED",
@@ -904,6 +942,158 @@ def _recover_player_energy(player: SrsPlayerCombatState) -> SrsPlayerCombatState
         player,
         energy=min(player.energy_capacity, player.energy + player.energy_recovery),
     )
+
+
+def _resolve_enemy_action_phase(
+    state: SrsGameState,
+) -> tuple[Mapping[str, Any], tuple[Mapping[str, Any], ...]]:
+    combat_state = state.combat_state
+    if combat_state is None:
+        raise SrsCombatError("combat_state is required for enemy action resolution")
+
+    updated_enemies = dict(combat_state.enemies)
+    actions = []
+    attackable_positions = enemy_attackable_positions(state)
+    for enemy_id in sorted(updated_enemies):
+        enemy = updated_enemies[enemy_id]
+        updated_enemy, action = _resolve_enemy_action(
+            state,
+            enemy=enemy,
+            attackable_positions=attackable_positions,
+        )
+        updated_enemies[enemy_id] = updated_enemy
+        actions.append(action)
+
+    return updated_enemies, tuple(actions)
+
+
+def _resolve_enemy_action(
+    state: SrsGameState,
+    *,
+    enemy: SrsEnemyCombatState,
+    attackable_positions: Sequence[Position],
+) -> tuple[SrsEnemyCombatState, Mapping[str, Any]]:
+    can_attack_before_move = is_attackable_position(
+        state,
+        attacker=enemy.position,
+        target=state.player_position,
+        weapon_type=SrsWeaponType.ENEMY_WEAPON,
+    )
+    if can_attack_before_move:
+        return enemy, {
+            "enemy_id": enemy.enemy_id,
+            "start_position": _position_to_list(enemy.position),
+            "target_attackable_position": _position_to_list(enemy.position),
+            "planned_path": [],
+            "moved_path": [],
+            "final_position": _position_to_list(enemy.position),
+            "movement_power": enemy.movement_power,
+            "movement_cost": 0,
+            "attacked_player": True,
+            "can_attack_before_move": True,
+            "can_attack_after_move": True,
+        }
+
+    planned_target, planned_path, movement_cost = _select_enemy_path_to_attack_position(
+        state,
+        start=enemy.position,
+        attackable_positions=attackable_positions,
+    )
+    moved_path = planned_path[: enemy.movement_power]
+    final_position = enemy.position if not moved_path else moved_path[-1]
+    updated_enemy = replace(enemy, position=final_position)
+    can_attack_after_move = is_attackable_position(
+        state,
+        attacker=final_position,
+        target=state.player_position,
+        weapon_type=SrsWeaponType.ENEMY_WEAPON,
+    )
+    return updated_enemy, {
+        "enemy_id": enemy.enemy_id,
+        "start_position": _position_to_list(enemy.position),
+        "target_attackable_position": None if planned_target is None else _position_to_list(planned_target),
+        "planned_path": [_position_to_list(position) for position in planned_path],
+        "moved_path": [_position_to_list(position) for position in moved_path],
+        "final_position": _position_to_list(final_position),
+        "movement_power": enemy.movement_power,
+        "movement_cost": movement_cost,
+        "attacked_player": False,
+        "can_attack_before_move": False,
+        "can_attack_after_move": can_attack_after_move,
+    }
+
+
+def _select_enemy_path_to_attack_position(
+    state: SrsGameState,
+    *,
+    start: Position,
+    attackable_positions: Sequence[Position],
+) -> tuple[Position | None, tuple[Position, ...], int]:
+    if not state.actual_map.contains(start):
+        raise SrsCombatError(f"enemy position out of bounds: {start}")
+
+    best_paths = _dijkstra_enemy_paths(state, start=start)
+    best_target: Position | None = None
+    best_path: tuple[Position, ...] = ()
+    best_cost: int | None = None
+    for target in attackable_positions:
+        if target == start:
+            continue
+        candidate = best_paths.get(target)
+        if candidate is None:
+            continue
+        candidate_cost, candidate_path = candidate
+        target_key = _position_sort_key(target)
+        best_target_key = None if best_target is None else _position_sort_key(best_target)
+        if best_cost is None or (candidate_cost, target_key) < (best_cost, best_target_key):
+            best_target = target
+            best_path = candidate_path
+            best_cost = candidate_cost
+
+    if best_target is None or best_cost is None:
+        return None, (), 0
+    return best_target, best_path, best_cost
+
+
+def _dijkstra_enemy_paths(
+    state: SrsGameState,
+    *,
+    start: Position,
+) -> Mapping[Position, tuple[int, tuple[Position, ...]]]:
+    best_paths: dict[Position, tuple[int, tuple[tuple[int, int], ...], tuple[Position, ...]]] = {
+        start: (0, (), ())
+    }
+    frontier: list[tuple[int, tuple[tuple[int, int], ...], Position]] = [(0, (), start)]
+
+    while frontier:
+        current_cost, current_path_key, current_position = heappop(frontier)
+        recorded_cost, recorded_path_key, recorded_path = best_paths[current_position]
+        if (current_cost, current_path_key) != (recorded_cost, recorded_path_key):
+            continue
+
+        for direction in _ENEMY_PATH_TIEBREAK_DIRECTIONS:
+            next_position = _step_position(current_position, direction)
+            if next_position == state.player_position:
+                continue
+            if not state.actual_map.contains(next_position):
+                continue
+            if is_impassable_cell(state, next_position):
+                continue
+
+            step_cost = _orthogonal_step_raw_cost(state.actual_map.cell_at(next_position))
+            next_path = recorded_path + (next_position,)
+            next_path_key = current_path_key + (_position_sort_key(next_position),)
+            candidate = (current_cost + step_cost, next_path_key, next_path)
+            existing = best_paths.get(next_position)
+            if existing is not None and candidate[:2] >= existing[:2]:
+                continue
+            best_paths[next_position] = candidate
+            heappush(frontier, (candidate[0], candidate[1], next_position))
+
+    return {
+        position: (cost, path)
+        for position, (cost, _path_key, path) in best_paths.items()
+    }
 
 
 def _apply_resource_cache_interaction(
@@ -1339,6 +1529,10 @@ def _step_position(position: Position, direction: Direction) -> Position:
     }
     dx, dy = deltas[direction]
     return Position(position.x + dx, position.y + dy)
+
+
+def _position_sort_key(position: Position) -> tuple[int, int]:
+    return (position.y, position.x)
 
 
 def _position_to_list(position: Position) -> list[int]:

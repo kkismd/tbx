@@ -1,0 +1,56 @@
+{
+  "fixture_id": "combat_enemy_movement_tiebreak_9x9",
+  "description": "Enemy picks a deterministic equal-cost attackable cell and moves only three cells along that Dijkstra path.",
+  "sector": {
+    "sector_id": "normal-9105",
+    "sector_type": "NORMAL",
+    "sector_seed": 9105,
+    "entry_edge": "S",
+    "blocked_edges": []
+  },
+  "initial": {
+    "reveal": {"mode": "FULL"},
+    "player_position": [6, 4],
+    "cell_overrides": [
+      {"position": [1, 4], "terrain": "ASTEROID"},
+      {"position": [2, 4], "terrain": "ASTEROID"},
+      {"position": [3, 4], "terrain": "ASTEROID"},
+      {"position": [4, 4], "terrain": "ASTEROID"}
+    ],
+    "combat": {
+      "phase": "ENEMY_ACTION",
+      "enemies": [
+        {"enemy_id": "enemy-1", "tier": "TIER1", "position": [0, 4]}
+      ]
+    }
+  },
+  "commands": [
+    {"command_type": "COMBAT_STEP"}
+  ],
+  "expect": {
+    "event_types": ["COMBAT_TRANSITIONED"],
+    "combat_phase": "PLAYER_MOVEMENT",
+    "combat_turn": 1,
+    "enemy_presence": true,
+    "combat_player_energy": 6,
+    "combat_enemy_positions": {
+      "enemy-1": [2, 3]
+    },
+    "enemy_actions": [
+      {
+        "enemy_id": "enemy-1",
+        "start_position": [0, 4],
+        "target_attackable_position": [4, 3],
+        "planned_path": [[0, 3], [1, 3], [2, 3], [3, 3], [4, 3]],
+        "moved_path": [[0, 3], [1, 3], [2, 3]],
+        "final_position": [2, 3],
+        "movement_power": 3,
+        "movement_cost": 50,
+        "attacked_player": false,
+        "can_attack_before_move": false,
+        "can_attack_after_move": false
+      }
+    ],
+    "outcome": "ACCEPTED"
+  }
+}

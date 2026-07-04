@@ -188,6 +188,8 @@ def run_fixture_data(data: Mapping[str, Any], *, contracts: SrsContracts) -> Srs
 
 def fixture_result_to_jsonable(result: SrsFixtureRunResult) -> Mapping[str, Any]:
     final_state = result.final_state
+    enemy_positions = _enemy_positions_payload(final_state)
+    enemy_actions = _flatten_enemy_actions(result.log)
     return {
         "fixture_id": result.fixture_id,
         "final_state": {
@@ -203,6 +205,7 @@ def fixture_result_to_jsonable(result: SrsFixtureRunResult) -> Mapping[str, Any]
             "combat_turn": final_state.combat_state.combat_turn if final_state.combat_state is not None else None,
             "enemy_presence": final_state.combat_state.enemy_presence if final_state.combat_state is not None else False,
             "combat_player_energy": final_state.combat_state.player.energy if final_state.combat_state is not None else None,
+            "combat_enemy_positions": enemy_positions,
         },
         "log": {
             "events": [
@@ -215,7 +218,7 @@ def fixture_result_to_jsonable(result: SrsFixtureRunResult) -> Mapping[str, Any]
             ]
         },
         "render": result.render,
-        "summary": dict(result.summary),
+        "summary": dict(result.summary) | {"enemy_actions": enemy_actions},
     }
 
 
@@ -406,6 +409,8 @@ def _build_summary(
     primary_outcome = None
     if log.events:
         primary_outcome = log.events[0].payload.get("outcome")
+    enemy_positions = _enemy_positions_payload(final_state)
+    enemy_actions = _flatten_enemy_actions(log)
     return {
         "fixture_id": fixture_id,
         "cost_mode": cost_mode.value,
@@ -422,6 +427,8 @@ def _build_summary(
         "combat_turn": final_state.combat_state.combat_turn if final_state.combat_state is not None else None,
         "enemy_presence": final_state.combat_state.enemy_presence if final_state.combat_state is not None else False,
         "combat_player_energy": final_state.combat_state.player.energy if final_state.combat_state is not None else None,
+        "combat_enemy_positions": enemy_positions,
+        "enemy_actions": enemy_actions,
         "outcome": primary_outcome,
         "render_line_count": len(render.splitlines()),
     }
@@ -435,6 +442,8 @@ def _validate_expectations(expect: Any, result: SrsFixtureRunResult) -> None:
 
     final_state = result.final_state
     event_types = [event.event_type for event in result.log.events]
+    enemy_positions = _enemy_positions_payload(final_state)
+    enemy_actions = _flatten_enemy_actions(result.log)
     comparisons = (
         ("srs_turn", final_state.srs_turn),
         ("fuel", final_state.fuel),
@@ -446,6 +455,8 @@ def _validate_expectations(expect: Any, result: SrsFixtureRunResult) -> None:
         ("combat_turn", final_state.combat_state.combat_turn if final_state.combat_state is not None else None),
         ("enemy_presence", final_state.combat_state.enemy_presence if final_state.combat_state is not None else False),
         ("combat_player_energy", final_state.combat_state.player.energy if final_state.combat_state is not None else None),
+        ("combat_enemy_positions", enemy_positions),
+        ("enemy_actions", enemy_actions),
         ("outcome", result.summary.get("outcome")),
     )
     for field_name, actual in comparisons:
@@ -457,6 +468,27 @@ def _validate_expectations(expect: Any, result: SrsFixtureRunResult) -> None:
         for needle in _normalize_expected_strings(render_contains, field_name="render_contains"):
             if needle not in result.render:
                 raise SrsFixtureError(f"expect mismatch for render_contains: missing {needle!r}")
+
+
+def _enemy_positions_payload(final_state: SrsGameState) -> Mapping[str, list[int]]:
+    if final_state.combat_state is None:
+        return {}
+    return {
+        enemy_id: _position_to_list(enemy.position)
+        for enemy_id, enemy in sorted(final_state.combat_state.enemies.items())
+    }
+
+
+def _flatten_enemy_actions(log: SrsGameLog) -> list[Mapping[str, Any]]:
+    actions = []
+    for event in log.events:
+        event_actions = event.payload.get("enemy_actions")
+        if not isinstance(event_actions, (list, tuple)):
+            continue
+        for action in event_actions:
+            if isinstance(action, Mapping):
+                actions.append(dict(action))
+    return actions
 
     render_not_contains = expect.get("render_not_contains")
     if render_not_contains is not None:

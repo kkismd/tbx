@@ -35,6 +35,7 @@ REQUIRED_FIXTURES = {
     "combat_attack_clear_los_9x9.json",
     "combat_attack_blocked_los_9x9.json",
     "combat_attack_out_of_range_9x9.json",
+    "combat_enemy_movement_tiebreak_9x9.json",
 }
 
 
@@ -145,6 +146,30 @@ class SrsFixtureTests(unittest.TestCase):
         self.assertEqual(clear.final_state.combat_state.phase.value, "PLAYER_ATTACK")
         self.assertEqual(blocked.final_state.combat_state.phase.value, "ENEMY_ACTION")
         self.assertEqual(out_of_range.final_state.combat_state.phase.value, "ENEMY_ACTION")
+
+    def test_enemy_movement_fixture_keeps_target_path_and_final_position_deterministic(self) -> None:
+        result = run_fixture(FIXTURES_DIR / "combat_enemy_movement_tiebreak_9x9.json", contracts=self.contracts)
+
+        self.assertEqual(result.final_state.combat_state.phase.value, "PLAYER_MOVEMENT")
+        self.assertEqual(result.final_state.combat_state.enemies["enemy-1"].position, Position(2, 3))
+        self.assertEqual(
+            result.summary["enemy_actions"],
+            [
+                {
+                    "enemy_id": "enemy-1",
+                    "start_position": [0, 4],
+                    "target_attackable_position": [4, 3],
+                    "planned_path": [[0, 3], [1, 3], [2, 3], [3, 3], [4, 3]],
+                    "moved_path": [[0, 3], [1, 3], [2, 3]],
+                    "final_position": [2, 3],
+                    "movement_power": 3,
+                    "movement_cost": 50,
+                    "attacked_player": False,
+                    "can_attack_before_move": False,
+                    "can_attack_after_move": False,
+                }
+            ],
+        )
 
     def test_required_fixture_set_exists(self) -> None:
         existing = {path.name for path in FIXTURES_DIR.glob("*.json")}
