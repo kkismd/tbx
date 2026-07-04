@@ -179,3 +179,22 @@ class SrsFixtureRegressionTests(unittest.TestCase):
             [action["reaction"]["resolved_reaction"] for action in result.log.events[4].payload["enemy_actions"]],
             ["COUNTERATTACK", "DEFEND", "DEFEND", "DEFEND"],
         )
+
+    def test_combat_encounter_spawn_cap(self) -> None:
+        result = run_named_fixture("combat_encounter_spawn_cap_9x9")
+
+        self.assertEqual(result.log.events, ())
+        self.assertEqual(
+            result.summary["combat_enemy_positions"],
+            {
+                "enemy-1": [8, 4],
+                "enemy-2": [4, 8],
+            },
+        )
+        self.assertEqual(
+            result.summary["combat_enemy_durabilities"],
+            {
+                "enemy-1": 3,
+                "enemy-2": 5,
+            },
+        )

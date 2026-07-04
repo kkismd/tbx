@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any, Mapping
 
 from experiments.galactic_exodus.srs.contracts import SrsContracts, load_default_contracts
+from experiments.galactic_exodus.srs.encounter import combat_state_from_fixed_encounter
 from experiments.galactic_exodus.srs.engine import restore_srs_state, reveal_full_observation, reveal_observation, run_srs_commands
 from experiments.galactic_exodus.srs.generate import create_sector
 from experiments.galactic_exodus.srs.log import build_srs_log
@@ -187,7 +188,7 @@ def state_from_fixture(data: Mapping[str, Any], *, contracts: SrsContracts) -> S
 
     combat = initial.get("combat")
     if combat is not None:
-        state = replace(state, combat_state=_combat_state(combat))
+        state = replace(state, combat_state=_combat_state(state, combat))
 
     return replace(state, fuel=fuel, max_fuel=max_fuel, srs_turn=srs_turn)
 
@@ -379,7 +380,7 @@ def _apply_persistent_overrides(
     )
 
 
-def _combat_state(data: Any) -> SrsCombatState:
+def _combat_state(state: SrsGameState, data: Any) -> SrsCombatState:
     if not isinstance(data, Mapping):
         raise SrsFixtureError("initial.combat must be an object")
 
@@ -407,6 +408,33 @@ def _combat_state(data: Any) -> SrsCombatState:
         energy_recovery=_optional_int(player_data, "energy_recovery", default=1),
     )
 
+    player_attack_target_id = data.get("player_attack_target_id")
+    if player_attack_target_id is not None and not isinstance(player_attack_target_id, str):
+        raise SrsFixtureError("initial.combat.player_attack_target_id must be a string")
+
+    try:
+        base_combat_state = SrsCombatState(
+            player=player,
+            phase=phase,
+            combat_turn=combat_turn,
+        )
+        if "encounter" in data:
+            return _combat_state_from_encounter_fixture(
+                state,
+                data["encounter"],
+                base_combat_state=base_combat_state,
+                player_attack_target_id=player_attack_target_id,
+            )
+        return replace(
+            base_combat_state,
+            enemies=_combat_enemies(data),
+            player_attack_target_id=player_attack_target_id,
+        )
+    except ValueError as exc:
+        raise SrsFixtureError(str(exc)) from exc
+
+
+def _combat_enemies(data: Mapping[str, Any]) -> Mapping[str, Any]:
     raw_enemies = data.get("enemies", [])
     if not isinstance(raw_enemies, list):
         raise SrsFixtureError("initial.combat.enemies must be a list")
@@ -425,18 +453,39 @@ def _combat_state(data: Any) -> SrsCombatState:
             tier=tier,
             position=_position(raw_enemy.get("position"), field_name=f"initial.combat.enemies[{index}].position"),
         )
+    return enemies
 
-    player_attack_target_id = data.get("player_attack_target_id")
-    if player_attack_target_id is not None and not isinstance(player_attack_target_id, str):
-        raise SrsFixtureError("initial.combat.player_attack_target_id must be a string")
+
+def _combat_state_from_encounter_fixture(
+    state: SrsGameState,
+    data: Any,
+    *,
+    base_combat_state: SrsCombatState,
+    player_attack_target_id: str | None,
+) -> SrsCombatState:
+    if not isinstance(data, Mapping):
+        raise SrsFixtureError("initial.combat.encounter must be an object")
+    danger_score = _required_int(data, "danger_score")
+    raw_composition = data.get("composition")
+    if not isinstance(raw_composition, list):
+        raise SrsFixtureError("initial.combat.encounter.composition must be a list")
+
+    composition: list[SrsEnemyTier] = []
+    for index, raw_tier in enumerate(raw_composition, 1):
+        if not isinstance(raw_tier, str):
+            raise SrsFixtureError(f"initial.combat.encounter.composition[{index}] must be a string")
+        try:
+            composition.append(SrsEnemyTier(raw_tier))
+        except ValueError as exc:
+            raise SrsFixtureError(f"invalid enemy tier: {raw_tier}") from exc
 
     try:
-        return SrsCombatState(
-            player=player,
-            enemies=enemies,
-            phase=phase,
-            combat_turn=combat_turn,
+        return combat_state_from_fixed_encounter(
+            state,
+            danger_score=danger_score,
+            composition=tuple(composition),
             player_attack_target_id=player_attack_target_id,
+            base_combat_state=base_combat_state,
         )
     except ValueError as exc:
         raise SrsFixtureError(str(exc)) from exc
