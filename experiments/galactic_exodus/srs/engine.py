@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections import deque
 from dataclasses import replace
 from heapq import heappop, heappush
+from math import ceil
 from typing import Any, Mapping, Sequence
 
 from experiments.galactic_exodus.srs.contracts import SrsContracts
@@ -33,10 +34,12 @@ from experiments.galactic_exodus.srs.model import (
     SrsCommand,
     SrsCommandResult,
     SrsEnemyCombatState,
+    SrsEnemyReaction,
     SrsGameState,
     SrsKnownState,
     SrsObjectType,
     SrsObjectState,
+    SrsPlayerAttackAction,
     SrsPlayerCombatState,
     SrsPersistentState,
     SrsTerrainType,
@@ -864,13 +867,36 @@ def _apply_combat_step(
     target_attackable = _player_target_is_attackable(state)
     phase_to = _next_combat_phase(state, target_attackable=target_attackable)
     player_after = player_before
+    player_action: Mapping[str, Any] | None = None
     combat_turn_after = combat_state.combat_turn
     enemy_actions: tuple[Mapping[str, Any], ...] = ()
     enemy_states = combat_state.enemies
-    if phase_from is SrsCombatPhase.ENEMY_ACTION:
-        enemy_states, enemy_actions = _resolve_enemy_action_phase(state, contracts=contracts)
-        combat_turn_after += 1
-        player_after = _recover_player_energy(player_before)
+    player_attack_target_id = combat_state.player_attack_target_id
+
+    try:
+        if phase_from is SrsCombatPhase.PLAYER_ATTACK:
+            enemy_states, player_after, player_action = _resolve_player_attack_phase(state, command)
+            if player_attack_target_id not in enemy_states:
+                player_attack_target_id = None
+        elif phase_from is SrsCombatPhase.ENEMY_ACTION:
+            enemy_states, player_after, enemy_actions = _resolve_enemy_action_phase(state, command, contracts=contracts)
+            combat_turn_after += 1
+            player_after = _recover_player_energy(player_after)
+    except SrsCombatError as exc:
+        return SrsCommandResult(
+            state=state,
+            events=(
+                make_turn_event(
+                    srs_turn=state.srs_turn,
+                    event_type=COMBAT_REJECTED,
+                    payload={
+                        "command_type": command.command_type,
+                        "phase": phase_from.value,
+                        "outcome": str(exc),
+                    },
+                ),
+            ),
+        )
 
     updated_state = replace(
         state,
@@ -880,6 +906,7 @@ def _apply_combat_step(
             player=player_after,
             phase=phase_to,
             combat_turn=combat_turn_after,
+            player_attack_target_id=player_attack_target_id,
         ),
     )
     return SrsCommandResult(
@@ -897,14 +924,92 @@ def _apply_combat_step(
                     "enemy_presence": combat_state.enemy_presence,
                     "target_available": combat_state.target_available,
                     "target_attackable": target_attackable,
+                    "player_action": player_action,
                     "enemy_actions": enemy_actions,
+                    "player_durability_before": player_before.durability,
+                    "player_durability_after": player_after.durability,
                     "player_energy_before": player_before.energy,
                     "player_energy_after": player_after.energy,
+                    "player_torpedo_ammo_before": player_before.photon_torpedo_ammo,
+                    "player_torpedo_ammo_after": player_after.photon_torpedo_ammo,
                     "outcome": "ACCEPTED",
                 },
             ),
         ),
     )
+
+
+def _resolve_player_attack_phase(
+    state: SrsGameState,
+    command: SrsCommand,
+) -> tuple[Mapping[str, SrsEnemyCombatState], SrsPlayerCombatState, Mapping[str, Any]]:
+    combat_state = state.combat_state
+    if combat_state is None:
+        raise SrsCombatError("combat_state is required for player attack resolution")
+
+    action = command.player_attack_action or SrsPlayerAttackAction.SKIP
+    payload: dict[str, Any] = {
+        "selected_action": action.value,
+        "selected_weapon": None if command.player_attack_weapon is None else command.player_attack_weapon.value,
+        "target_enemy_id": combat_state.player_attack_target_id,
+        "attack_executed": False,
+        "damage_applied": 0,
+        "resource_cost": 0,
+        "resource_type": None,
+        "target_destroyed": False,
+    }
+    if action is SrsPlayerAttackAction.SKIP:
+        return combat_state.enemies, combat_state.player, payload
+    if not combat_state.target_available:
+        raise SrsCombatError("REJECTED_TARGET_UNAVAILABLE")
+    if command.player_attack_weapon is None:
+        raise SrsCombatError("REJECTED_ATTACK_WEAPON_REQUIRED")
+
+    weapon_profile = combat_state.weapon_profiles.get(command.player_attack_weapon)
+    if weapon_profile is None or weapon_profile.damage is None:
+        raise SrsCombatError("REJECTED_INVALID_ATTACK_WEAPON")
+
+    target_enemy_id = combat_state.player_attack_target_id
+    target_enemy = combat_state.enemies[target_enemy_id]
+    if not is_attackable_position(
+        state,
+        attacker=state.player_position,
+        target=target_enemy.position,
+        weapon_type=command.player_attack_weapon,
+    ):
+        raise SrsCombatError("REJECTED_TARGET_NOT_ATTACKABLE")
+
+    player = combat_state.player
+    if weapon_profile.ammo_cost > 0:
+        if player.photon_torpedo_ammo < weapon_profile.ammo_cost:
+            raise SrsCombatError("REJECTED_INSUFFICIENT_TORPEDO_AMMO")
+        player = replace(
+            player,
+            photon_torpedo_ammo=player.photon_torpedo_ammo - weapon_profile.ammo_cost,
+        )
+        payload["resource_cost"] = weapon_profile.ammo_cost
+        payload["resource_type"] = "PHOTON_TORPEDO_AMMO"
+    if weapon_profile.energy_cost > 0:
+        if player.energy < weapon_profile.energy_cost:
+            raise SrsCombatError("REJECTED_INSUFFICIENT_PHASER_ENERGY")
+        player = replace(
+            player,
+            energy=player.energy - weapon_profile.energy_cost,
+        )
+        payload["resource_cost"] = weapon_profile.energy_cost
+        payload["resource_type"] = "ENERGY"
+
+    updated_enemies = dict(combat_state.enemies)
+    remaining_durability = target_enemy.durability - weapon_profile.damage
+    payload["attack_executed"] = True
+    payload["damage_applied"] = weapon_profile.damage
+    if remaining_durability <= 0:
+        del updated_enemies[target_enemy_id]
+        payload["target_destroyed"] = True
+    else:
+        updated_enemies[target_enemy_id] = replace(target_enemy, durability=remaining_durability)
+        payload["target_remaining_durability"] = remaining_durability
+    return updated_enemies, player, payload
 
 
 def _player_target_is_attackable(state: SrsGameState) -> bool:
@@ -948,39 +1053,134 @@ def _recover_player_energy(player: SrsPlayerCombatState) -> SrsPlayerCombatState
     )
 
 
-def _resolve_enemy_action_phase(
+def _resolve_enemy_attack_reaction(
     state: SrsGameState,
     *,
+    command: SrsCommand,
+    enemy: SrsEnemyCombatState,
+) -> tuple[SrsPlayerCombatState, SrsEnemyCombatState | None, Mapping[str, Any]]:
+    combat_state = state.combat_state
+    if combat_state is None:
+        raise SrsCombatError("combat_state is required for enemy reaction resolution")
+
+    selected_reaction = command.enemy_reactions.get(enemy.enemy_id, SrsEnemyReaction.DEFEND)
+    counterattack_available = _counterattack_available(state, enemy=enemy)
+    resolved_reaction = selected_reaction
+    if selected_reaction is SrsEnemyReaction.COUNTERATTACK and not counterattack_available:
+        resolved_reaction = SrsEnemyReaction.DEFEND
+
+    damage_to_player = enemy.attack_damage
+    player = combat_state.player
+    updated_enemy: SrsEnemyCombatState | None = enemy
+    counterattack_damage = 0
+    if resolved_reaction is SrsEnemyReaction.DEFEND:
+        damage_to_player = ceil(enemy.attack_damage * 0.5)
+    else:
+        phaser_profile = combat_state.weapon_profiles[SrsWeaponType.PHASER]
+        player = replace(
+            player,
+            energy=player.energy - phaser_profile.energy_cost,
+        )
+        counterattack_damage = phaser_profile.damage or 0
+        remaining_enemy_durability = enemy.durability - counterattack_damage
+        if remaining_enemy_durability <= 0:
+            updated_enemy = None
+        else:
+            updated_enemy = replace(enemy, durability=remaining_enemy_durability)
+
+    player = replace(
+        player,
+        durability=max(0, player.durability - damage_to_player),
+    )
+    return player, updated_enemy, {
+        "selected_reaction": selected_reaction.value,
+        "resolved_reaction": resolved_reaction.value,
+        "counterattack_available": counterattack_available,
+        "fallback_to_defend": (
+            selected_reaction is SrsEnemyReaction.COUNTERATTACK
+            and resolved_reaction is SrsEnemyReaction.DEFEND
+        ),
+        "damage_to_player": damage_to_player,
+        "counterattack_damage": counterattack_damage,
+        "enemy_destroyed": updated_enemy is None,
+    }
+
+
+def _counterattack_available(
+    state: SrsGameState,
+    *,
+    enemy: SrsEnemyCombatState,
+) -> bool:
+    combat_state = state.combat_state
+    if combat_state is None:
+        raise SrsCombatError("combat_state is required for counterattack checks")
+    phaser_profile = combat_state.weapon_profiles.get(SrsWeaponType.PHASER)
+    if phaser_profile is None:
+        raise SrsCombatError("missing weapon profile: PHASER")
+    if combat_state.player.energy < phaser_profile.energy_cost:
+        return False
+    return is_attackable_position(
+        state,
+        attacker=state.player_position,
+        target=enemy.position,
+        weapon_type=SrsWeaponType.PHASER,
+    )
+
+
+def _resolve_enemy_action_phase(
+    state: SrsGameState,
+    command: SrsCommand,
+    *,
     contracts: SrsContracts,
-) -> tuple[Mapping[str, Any], tuple[Mapping[str, Any], ...]]:
+) -> tuple[Mapping[str, Any], SrsPlayerCombatState, tuple[Mapping[str, Any], ...]]:
     combat_state = state.combat_state
     if combat_state is None:
         raise SrsCombatError("combat_state is required for enemy action resolution")
 
     updated_enemies = dict(combat_state.enemies)
+    player = combat_state.player
     actions = []
     attackable_positions = enemy_attackable_positions(state)
-    for enemy_id in sorted(updated_enemies):
-        enemy = updated_enemies[enemy_id]
-        updated_enemy, action = _resolve_enemy_action(
+    for enemy_id in sorted(tuple(updated_enemies)):
+        enemy = updated_enemies.get(enemy_id)
+        if enemy is None:
+            continue
+        working_state = replace(
             state,
+            combat_state=replace(
+                combat_state,
+                enemies=updated_enemies,
+                player=player,
+            ),
+        )
+        updated_enemy, player, action = _resolve_enemy_action(
+            working_state,
+            command=command,
             enemy=enemy,
             attackable_positions=attackable_positions,
             contracts=contracts,
         )
-        updated_enemies[enemy_id] = updated_enemy
+        if updated_enemy is None:
+            del updated_enemies[enemy_id]
+        else:
+            updated_enemies[enemy_id] = updated_enemy
         actions.append(action)
 
-    return updated_enemies, tuple(actions)
+    return updated_enemies, player, tuple(actions)
 
 
 def _resolve_enemy_action(
     state: SrsGameState,
     *,
+    command: SrsCommand,
     enemy: SrsEnemyCombatState,
     attackable_positions: Sequence[Position],
     contracts: SrsContracts,
-) -> tuple[SrsEnemyCombatState, Mapping[str, Any]]:
+) -> tuple[SrsEnemyCombatState | None, SrsPlayerCombatState, Mapping[str, Any]]:
+    combat_state = state.combat_state
+    if combat_state is None:
+        raise SrsCombatError("combat_state is required for enemy action resolution")
+
     can_attack_before_move = is_attackable_position(
         state,
         attacker=enemy.position,
@@ -988,7 +1188,12 @@ def _resolve_enemy_action(
         weapon_type=SrsWeaponType.ENEMY_WEAPON,
     )
     if can_attack_before_move:
-        return enemy, {
+        player_after, enemy_after, reaction = _resolve_enemy_attack_reaction(
+            state,
+            command=command,
+            enemy=enemy,
+        )
+        return enemy_after, player_after, {
             "enemy_id": enemy.enemy_id,
             "start_position": _position_to_list(enemy.position),
             "target_attackable_position": _position_to_list(enemy.position),
@@ -1000,6 +1205,7 @@ def _resolve_enemy_action(
             "attacked_player": True,
             "can_attack_before_move": True,
             "can_attack_after_move": True,
+            "reaction": reaction,
         }
 
     planned_target, planned_path, movement_cost = _select_enemy_path_to_attack_position(
@@ -1017,7 +1223,7 @@ def _resolve_enemy_action(
         target=state.player_position,
         weapon_type=SrsWeaponType.ENEMY_WEAPON,
     )
-    return updated_enemy, {
+    return updated_enemy, combat_state.player, {
         "enemy_id": enemy.enemy_id,
         "start_position": _position_to_list(enemy.position),
         "target_attackable_position": None if planned_target is None else _position_to_list(planned_target),
@@ -1029,6 +1235,7 @@ def _resolve_enemy_action(
         "attacked_player": False,
         "can_attack_before_move": False,
         "can_attack_after_move": can_attack_after_move,
+        "reaction": None,
     }
 
 

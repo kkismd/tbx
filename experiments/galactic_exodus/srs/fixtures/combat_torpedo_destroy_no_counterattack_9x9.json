@@ -1,0 +1,43 @@
+{
+  "fixture_id": "combat_torpedo_destroy_no_counterattack_9x9",
+  "description": "A photon torpedo spends one ammo, destroys the selected tier1 enemy, and leaves no enemy counterattack.",
+  "sector": {
+    "sector_id": "normal-9110",
+    "sector_type": "NORMAL",
+    "sector_seed": 9110,
+    "entry_edge": "S",
+    "blocked_edges": []
+  },
+  "initial": {
+    "reveal": {"mode": "FULL"},
+    "player_position": [1, 4],
+    "combat": {
+      "phase": "PLAYER_ATTACK",
+      "enemies": [
+        {"enemy_id": "enemy-1", "tier": "TIER1", "position": [3, 4]}
+      ],
+      "player_attack_target_id": "enemy-1"
+    }
+  },
+  "commands": [
+    {
+      "command_type": "COMBAT_STEP",
+      "player_attack_action": "ATTACK",
+      "player_attack_weapon": "PHOTON_TORPEDO"
+    },
+    {"command_type": "COMBAT_STEP"}
+  ],
+  "expect": {
+    "event_types": ["COMBAT_TRANSITIONED", "COMBAT_TRANSITIONED"],
+    "combat_phase": "PLAYER_MOVEMENT",
+    "combat_turn": 1,
+    "enemy_presence": false,
+    "combat_player_durability": 100,
+    "combat_player_energy": 6,
+    "combat_player_torpedo_ammo": 5,
+    "combat_enemy_positions": {},
+    "combat_enemy_durabilities": {},
+    "enemy_actions": [],
+    "outcome": "ACCEPTED"
+  }
+}

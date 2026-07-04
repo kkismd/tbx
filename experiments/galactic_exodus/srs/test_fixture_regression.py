@@ -113,3 +113,37 @@ class SrsFixtureRegressionTests(unittest.TestCase):
             result.summary["enemy_actions"][0]["target_attackable_position"],
             [4, 3],
         )
+        self.assertIsNone(result.summary["enemy_actions"][0]["reaction"])
+
+    def test_combat_torpedo_destroy_no_counterattack(self) -> None:
+        result = run_named_fixture("combat_torpedo_destroy_no_counterattack_9x9")
+
+        self.assertEqual(result.final_state.combat_state.player.photon_torpedo_ammo, 5)
+        self.assertFalse(result.final_state.combat_state.enemy_presence)
+        self.assertEqual(result.summary["enemy_actions"], [])
+
+    def test_combat_phaser_attack_damage(self) -> None:
+        result = run_named_fixture("combat_phaser_attack_damage_9x9")
+
+        self.assertEqual(result.final_state.combat_state.player.energy, 5)
+        self.assertEqual(result.final_state.combat_state.enemies["enemy-1"].durability, 4)
+
+    def test_combat_enemy_defend(self) -> None:
+        result = run_named_fixture("combat_enemy_defend_9x9")
+
+        self.assertEqual(result.final_state.combat_state.player.durability, 96)
+        self.assertEqual(result.summary["enemy_actions"][0]["reaction"]["resolved_reaction"], "DEFEND")
+
+    def test_combat_enemy_counterattack(self) -> None:
+        result = run_named_fixture("combat_enemy_counterattack_9x9")
+
+        self.assertEqual(result.final_state.combat_state.player.durability, 94)
+        self.assertEqual(result.final_state.combat_state.enemies["enemy-1"].durability, 2)
+        self.assertEqual(result.summary["enemy_actions"][0]["reaction"]["resolved_reaction"], "COUNTERATTACK")
+
+    def test_combat_enemy_counterattack_fallback_energy(self) -> None:
+        result = run_named_fixture("combat_enemy_counterattack_fallback_energy_9x9")
+
+        self.assertEqual(result.final_state.combat_state.player.durability, 97)
+        self.assertEqual(result.final_state.combat_state.player.energy, 1)
+        self.assertTrue(result.summary["enemy_actions"][0]["reaction"]["fallback_to_defend"])
