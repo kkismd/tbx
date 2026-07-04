@@ -32,6 +32,9 @@ REQUIRED_FIXTURES = {
     "revisit_resource_consumed_9x9.json",
     "discovered_cells_restore_9x9.json",
     "combat_core_state_9x9.json",
+    "combat_attack_clear_los_9x9.json",
+    "combat_attack_blocked_los_9x9.json",
+    "combat_attack_out_of_range_9x9.json",
 }
 
 
@@ -133,6 +136,15 @@ class SrsFixtureTests(unittest.TestCase):
         self.assertEqual(result.final_state.combat_state.combat_turn, 1)
         self.assertTrue(result.final_state.combat_state.enemy_presence)
         self.assertEqual(result.final_state.combat_state.player.energy, 6)
+
+    def test_combat_attackability_fixtures_cover_allow_and_reject_cases(self) -> None:
+        clear = run_fixture(FIXTURES_DIR / "combat_attack_clear_los_9x9.json", contracts=self.contracts)
+        blocked = run_fixture(FIXTURES_DIR / "combat_attack_blocked_los_9x9.json", contracts=self.contracts)
+        out_of_range = run_fixture(FIXTURES_DIR / "combat_attack_out_of_range_9x9.json", contracts=self.contracts)
+
+        self.assertEqual(clear.final_state.combat_state.phase.value, "PLAYER_ATTACK")
+        self.assertEqual(blocked.final_state.combat_state.phase.value, "ENEMY_ACTION")
+        self.assertEqual(out_of_range.final_state.combat_state.phase.value, "ENEMY_ACTION")
 
     def test_required_fixture_set_exists(self) -> None:
         existing = {path.name for path in FIXTURES_DIR.glob("*.json")}
