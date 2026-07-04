@@ -235,16 +235,16 @@ class SrsGenerateTests(unittest.TestCase):
         )
 
         resource_cache = state.objects["resource-cache-1"]
-        self.assertEqual(resource_cache.metadata["fuel_restore"], 5)
+        self.assertEqual(resource_cache.metadata["fuel_restore"], 3)
 
-    def test_resource_cache_one_cache_restore_is_5(self) -> None:
-        self.assertEqual(resource_cache_restore_values(1), (5,))
+    def test_resource_cache_one_cache_restore_is_3(self) -> None:
+        self.assertEqual(resource_cache_restore_values(1), (3,))
 
-    def test_resource_cache_two_cache_restore_split_is_3_2(self) -> None:
-        self.assertEqual(resource_cache_restore_values(2), (3, 2))
+    def test_resource_cache_two_cache_restore_is_fixed_3(self) -> None:
+        self.assertEqual(resource_cache_restore_values(2), (3, 3))
 
-    def test_resource_cache_three_cache_restore_split_is_2_2_1(self) -> None:
-        self.assertEqual(resource_cache_restore_values(3), (2, 2, 1))
+    def test_resource_cache_three_cache_restore_is_fixed_3(self) -> None:
+        self.assertEqual(resource_cache_restore_values(3), (3, 3, 3))
 
     def test_resource_cache_restore_metadata_is_positive_int(self) -> None:
         state = create_sector(
@@ -259,9 +259,8 @@ class SrsGenerateTests(unittest.TestCase):
     def test_resource_cache_restore_values_zero_caches_returns_empty(self) -> None:
         self.assertEqual(resource_cache_restore_values(0), ())
 
-    def test_resource_cache_restore_values_rejects_more_than_three(self) -> None:
-        with self.assertRaisesRegex(SrsGenerationError, "at most 3"):
-            resource_cache_restore_values(4)
+    def test_resource_cache_restore_values_accepts_more_than_three(self) -> None:
+        self.assertEqual(resource_cache_restore_values(4), (3, 3, 3, 3))
 
     def test_rift_has_one_salvage(self) -> None:
         state = create_sector(

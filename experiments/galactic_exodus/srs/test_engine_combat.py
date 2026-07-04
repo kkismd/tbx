@@ -17,10 +17,12 @@ from experiments.galactic_exodus.srs.log import COMBAT_TRANSITIONED, WARP_EXIT_R
 from experiments.galactic_exodus.srs.model import (
     Direction,
     Position,
+    SrsBaseUpgrade,
     SrsCombatPhase,
     SrsCombatState,
     SrsCommand,
     SrsEnemyTier,
+    SrsSalvageChoice,
     SrsTerrainType,
     SrsWeaponType,
     create_enemy_combat_state,
@@ -244,6 +246,74 @@ class SrsEngineCombatTests(unittest.TestCase):
                 "target_destroyed": True,
             },
         )
+
+    def test_destroyed_enemy_drop_adds_salvage_and_applies_choice(self) -> None:
+        state = replace(make_state(), player_position=Position(1, 4))
+        enemy = create_enemy_combat_state(
+            enemy_id="enemy-3",
+            tier=SrsEnemyTier.TIER3,
+            position=Position(3, 4),
+            drop_salvage=True,
+        )
+        enemy = replace(enemy, durability=3)
+        state = replace(
+            state,
+            player_state=replace(state.player_state, energy=3, salvage=1),
+            combat_state=SrsCombatState(
+                player=replace(state.player_state, energy=3, salvage=1),
+                enemies={"enemy-3": enemy},
+                phase=SrsCombatPhase.PLAYER_ATTACK,
+                player_attack_target_id="enemy-3",
+            ),
+        )
+
+        result = apply_srs_command(
+            state,
+            SrsCommand(
+                command_type="COMBAT_STEP",
+                player_attack_action="ATTACK",
+                player_attack_weapon="PHOTON_TORPEDO",
+                salvage_choice=SrsSalvageChoice.RECOVER_ENERGY,
+            ),
+            contracts=self.contracts,
+        )
+
+        self.assertFalse(result.state.combat_state.enemy_presence)
+        self.assertEqual(result.state.player_state.energy, 6)
+        self.assertEqual(result.state.player_state.salvage, 3)
+        self.assertEqual(result.events[0].payload["player_action"]["salvage_reward"]["selected_salvage_choice"], "RECOVER_ENERGY")
+
+    def test_destroyed_enemy_without_drop_does_not_change_salvage(self) -> None:
+        state = replace(make_state(), player_position=Position(1, 4))
+        enemy = create_enemy_combat_state(
+            enemy_id="enemy-1",
+            tier=SrsEnemyTier.TIER1,
+            position=Position(3, 4),
+            drop_salvage=False,
+        )
+        state = replace(
+            state,
+            player_state=replace(state.player_state, salvage=2),
+            combat_state=SrsCombatState(
+                player=replace(state.player_state, salvage=2),
+                enemies={"enemy-1": enemy},
+                phase=SrsCombatPhase.PLAYER_ATTACK,
+                player_attack_target_id="enemy-1",
+            ),
+        )
+
+        result = apply_srs_command(
+            state,
+            SrsCommand(
+                command_type="COMBAT_STEP",
+                player_attack_action="ATTACK",
+                player_attack_weapon="PHOTON_TORPEDO",
+            ),
+            contracts=self.contracts,
+        )
+
+        self.assertEqual(result.state.player_state.salvage, 2)
+        self.assertNotIn("salvage_reward", result.events[0].payload["player_action"])
 
     def test_player_attack_with_phaser_consumes_energy_and_applies_fixed_damage(self) -> None:
         state = replace(make_state(), player_position=Position(1, 4))

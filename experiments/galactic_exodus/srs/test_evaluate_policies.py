@@ -642,6 +642,19 @@ class ObjectGreedyPolicyTests(unittest.TestCase):
             SrsCommand(command_type="MOVE_ROUTE", route=(Direction.E,)),
         )
 
+    def test_station_is_candidate_for_upgrade_even_when_fuel_is_full(self) -> None:
+        state = place_object(make_state(fuel=9, max_fuel=9), Position(4, 7), SrsObjectType.STATION, "station-1")
+        state = replace(state, player_state=replace(state.player_state, salvage=4))
+        state = reveal_positions(state, [Position(4, 8), Position(4, 7)])
+
+        command = choose_object_greedy_command(
+            state,
+            contracts=self.contracts,
+            selected_exit_edge=Direction.N,
+        )
+
+        self.assertEqual(command, SrsCommand(command_type="INTERACT", target_object_id="station-1"))
+
     def test_known_unconsumed_salvage_is_a_candidate(self) -> None:
         state = place_object(make_state(fuel=2, max_fuel=9), Position(5, 8), SrsObjectType.SALVAGE, "salvage-1")
         state = reveal_positions(state, [Position(4, 8), Position(5, 8)])

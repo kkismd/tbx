@@ -458,6 +458,7 @@ def _known_interaction_positions_for_object(
 def _is_object_greedy_candidate(
     object_state: SrsObjectState,
     *,
+    state: SrsGameState,
     fuel: int,
     max_fuel: int,
     rejected_object_ids: frozenset[str],
@@ -467,7 +468,14 @@ def _is_object_greedy_candidate(
     if object_state.object_type is SrsObjectType.RESOURCE_CACHE:
         return not object_state.consumed and fuel != max_fuel
     if object_state.object_type is SrsObjectType.STATION:
-        return not object_state.activated and fuel != max_fuel
+        player = state.player_state if state.combat_state is None else state.combat_state.player
+        return not object_state.activated and (
+            fuel != max_fuel
+            or player.durability != player.durability_capacity
+            or player.energy != player.energy_capacity
+            or player.photon_torpedo_ammo != player.photon_torpedo_ammo_capacity
+            or player.salvage >= 3
+        )
     if object_state.object_type is SrsObjectType.SALVAGE:
         return not object_state.consumed
     return False
@@ -494,6 +502,7 @@ def build_object_greedy_candidates(
             continue
         if not _is_object_greedy_candidate(
             object_state,
+            state=state,
             fuel=state.fuel,
             max_fuel=state.max_fuel,
             rejected_object_ids=rejected,

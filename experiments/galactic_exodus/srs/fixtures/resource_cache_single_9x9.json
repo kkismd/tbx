@@ -1,6 +1,6 @@
 {
   "fixture_id": "resource_cache_single_9x9",
-  "description": "RESOURCE_CACHE interaction consumes cache and restores fuel.",
+  "description": "RESOURCE_CACHE interaction consumes cache and restores fixed fuel +3.",
   "sector": {
     "sector_id": "resource-3001",
     "sector_type": "RESOURCE",
@@ -27,7 +27,7 @@
   "cost_mode": "TURN_ONLY",
   "expect": {
     "srs_turn": 1,
-    "fuel": 7,
+    "fuel": 5,
     "player_position": [2, 7],
     "event_types": ["INTERACT_ACCEPTED", "OBJECT_CONSUMED"],
     "consumed_object_ids": ["resource-cache-1"],

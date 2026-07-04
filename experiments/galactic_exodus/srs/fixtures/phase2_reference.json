@@ -29,7 +29,7 @@
       "final_expect": {
         "cost_mode": "TURN_ONLY",
         "srs_turn": 1,
-        "fuel": 7,
+        "fuel": 5,
         "player_position": [2, 7],
         "event_types": ["INTERACT_ACCEPTED", "OBJECT_CONSUMED"],
         "consumed_object_ids": ["resource-cache-1"],
