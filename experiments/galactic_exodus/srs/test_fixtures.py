@@ -47,6 +47,8 @@ REQUIRED_FIXTURES = {
     "combat_energy_pressure_danger3_9x9.json",
     "combat_energy_pressure_danger4_9x9.json",
     "combat_encounter_spawn_cap_9x9.json",
+    "combat_encounter_wait_nebula_9x9.json",
+    "combat_encounter_wait_base_docked_9x9.json",
 }
 
 

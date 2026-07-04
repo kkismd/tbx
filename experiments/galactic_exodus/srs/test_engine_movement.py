@@ -20,6 +20,7 @@ from experiments.galactic_exodus.srs.log import (
     MOVE_REJECTED,
     OBSERVATION_UPDATED,
     STOPPED_BEFORE_IMPASSABLE,
+    WAIT_ACCEPTED,
 )
 from experiments.galactic_exodus.srs.model import (
     CostMode,
@@ -176,6 +177,21 @@ class SrsEngineMovementTests(unittest.TestCase):
         )
 
         self.assertEqual(result.state.srs_turn, 1)
+
+    def test_wait_consumes_one_turn_without_moving(self) -> None:
+        state = make_state(fuel=7, max_fuel=9)
+
+        result = apply_srs_command(
+            state,
+            SrsCommand(command_type="WAIT"),
+            contracts=self.contracts,
+        )
+
+        self.assertEqual(result.state.srs_turn, 1)
+        self.assertEqual(result.state.player_position, state.player_position)
+        self.assertEqual(result.state.fuel, 7)
+        self.assertEqual(result.events[0].event_type, WAIT_ACCEPTED)
+        self.assertEqual(result.events[0].payload["outcome"], "ACCEPTED")
 
     def test_turn_only_does_not_consume_fuel(self) -> None:
         state = make_state(fuel=7, max_fuel=9)

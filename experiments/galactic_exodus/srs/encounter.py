@@ -2,11 +2,14 @@ from __future__ import annotations
 
 from collections import Counter
 from dataclasses import dataclass
+from enum import Enum
 from types import MappingProxyType
 from typing import Mapping, Sequence
 
+from experiments.galactic_exodus.srs.log import ENCOUNTER_ROLLED, make_turn_event
 from experiments.galactic_exodus.srs.model import (
     Position,
+    SectorType,
     SrsCombatState,
     SrsEnemyCombatState,
     SrsEnemyTier,
@@ -19,6 +22,14 @@ from experiments.galactic_exodus.srs.model import (
 
 class SrsEncounterError(ValueError):
     pass
+
+
+class EncounterRollDisposition(str, Enum):
+    REQUIRED = "REQUIRED"
+    SKIPPED_COMMAND = "SKIPPED_COMMAND"
+    SKIPPED_NO_TURN_ADVANCE = "SKIPPED_NO_TURN_ADVANCE"
+    SKIPPED_ENEMY_PRESENCE = "SKIPPED_ENEMY_PRESENCE"
+    SUPPRESSED_BASE_DOCKED = "SUPPRESSED_BASE_DOCKED"
 
 
 @dataclass(frozen=True, slots=True)
@@ -34,6 +45,30 @@ class EncounterCompositionOption:
             raise SrsEncounterError("composition tiers must not be empty")
 
 
+@dataclass(frozen=True, slots=True)
+class FixedEncounterRoll:
+    roll_result: str
+    danger_score: int | None = None
+    composition: tuple[SrsEnemyTier, ...] = ()
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "roll_result", str(self.roll_result))
+        object.__setattr__(self, "composition", tuple(self.composition))
+        if self.roll_result not in {"success", "failure"}:
+            raise SrsEncounterError("roll_result must be success or failure")
+        if self.roll_result == "success":
+            if self.danger_score is None:
+                raise SrsEncounterError("successful encounter roll requires danger_score")
+            if not self.composition:
+                raise SrsEncounterError("successful encounter roll requires composition")
+            validate_fixed_encounter_composition(
+                danger_score=self.danger_score,
+                composition=self.composition,
+            )
+        elif self.danger_score is not None or self.composition:
+            raise SrsEncounterError("failed encounter roll must not specify danger_score or composition")
+
+
 def _freeze_mapping(mapping: Mapping[object, object]) -> Mapping[object, object]:
     return MappingProxyType(dict(mapping))
 
@@ -44,6 +79,10 @@ _TIER_ORDER = {
     SrsEnemyTier.TIER3: 3,
     SrsEnemyTier.TIER4: 4,
 }
+
+EXPECTED_SRS_TURNS = 4
+ENCOUNTERS_PER_LRS_STEP = 0.75
+BASE_ENCOUNTER_CHANCE_PER_SRS_TURN = 0.18
 
 ENEMY_GROUP_COSTS: Mapping[SrsEnemyTier, int] = _freeze_mapping(
     {
@@ -97,6 +136,17 @@ ENCOUNTER_COMPOSITION_TABLE: Mapping[int, tuple[EncounterCompositionOption, ...]
 
 def enemy_group_cost(tier: SrsEnemyTier) -> int:
     return ENEMY_GROUP_COSTS[tier]
+
+
+def terrain_encounter_modifier(terrain: SrsTerrainType) -> float:
+    if terrain is SrsTerrainType.NEBULA:
+        return 0.7
+    return 1.0
+
+
+def actual_encounter_chance(state: SrsGameState) -> float:
+    terrain = state.actual_map.cell_at(state.player_position).terrain
+    return BASE_ENCOUNTER_CHANCE_PER_SRS_TURN * terrain_encounter_modifier(terrain)
 
 
 def encounter_group_budget_range(danger_score: int) -> tuple[int, int]:
@@ -166,7 +216,7 @@ def spawn_enemies_for_encounter(
             tier=tier,
             position=position,
         )
-        for index, (tier, position) in enumerate(zip(selected_tiers, candidates, strict=True), start=1)
+        for index, (tier, position) in enumerate(zip(selected_tiers, candidates[: len(selected_tiers)], strict=True), start=1)
     )
 
 
@@ -198,10 +248,105 @@ def combat_state_from_fixed_encounter(
     )
 
 
+def encounter_roll_disposition(
+    previous_state: SrsGameState,
+    *,
+    command_type: str,
+    next_state: SrsGameState,
+) -> EncounterRollDisposition:
+    if command_type not in {"MOVE_ROUTE", "MOVE_TO", "WAIT"}:
+        return EncounterRollDisposition.SKIPPED_COMMAND
+    if next_state.srs_turn <= previous_state.srs_turn:
+        return EncounterRollDisposition.SKIPPED_NO_TURN_ADVANCE
+    if _enemy_presence(previous_state) or _enemy_presence(next_state):
+        return EncounterRollDisposition.SKIPPED_ENEMY_PRESENCE
+    if is_base_docked(next_state):
+        return EncounterRollDisposition.SUPPRESSED_BASE_DOCKED
+    return EncounterRollDisposition.REQUIRED
+
+
+def resolve_fixed_encounter_roll(
+    state: SrsGameState,
+    *,
+    command_type: str,
+    roll: FixedEncounterRoll,
+) -> tuple[SrsGameState, object]:
+    chance = actual_encounter_chance(state)
+    terrain = state.actual_map.cell_at(state.player_position).terrain
+    if roll.roll_result == "failure":
+        return (
+            state,
+            make_turn_event(
+                srs_turn=state.srs_turn,
+                event_type=ENCOUNTER_ROLLED,
+                payload={
+                    "command_type": command_type,
+                    "terrain": terrain.value,
+                    "terrain_modifier": terrain_encounter_modifier(terrain),
+                    "base_encounter_chance_per_srs_turn": BASE_ENCOUNTER_CHANCE_PER_SRS_TURN,
+                    "actual_encounter_chance": chance,
+                    "roll_result": "failure",
+                    "enemy_spawned": False,
+                    "outcome": "NO_ENCOUNTER",
+                },
+            ),
+        )
+
+    updated_combat_state = combat_state_from_fixed_encounter(
+        state,
+        danger_score=roll.danger_score,
+        composition=roll.composition,
+        base_combat_state=state.combat_state,
+    )
+    updated_state = SrsGameState(
+        descriptor=state.descriptor,
+        actual_map=state.actual_map,
+        known_state=state.known_state,
+        persistent_state=state.persistent_state,
+        player_position=state.player_position,
+        objects=state.objects,
+        combat_state=updated_combat_state,
+        srs_turn=state.srs_turn,
+        fuel=state.fuel,
+        max_fuel=state.max_fuel,
+    )
+    return (
+        updated_state,
+        make_turn_event(
+            srs_turn=state.srs_turn,
+            event_type=ENCOUNTER_ROLLED,
+            payload={
+                "command_type": command_type,
+                "terrain": terrain.value,
+                "terrain_modifier": terrain_encounter_modifier(terrain),
+                "base_encounter_chance_per_srs_turn": BASE_ENCOUNTER_CHANCE_PER_SRS_TURN,
+                "actual_encounter_chance": chance,
+                "roll_result": "success",
+                "danger_score": roll.danger_score,
+                "composition": [tier.value for tier in roll.composition],
+                "enemy_spawned": True,
+                "spawned_enemy_ids": sorted(updated_combat_state.enemies),
+                "outcome": "ENCOUNTER_STARTED",
+            },
+        ),
+    )
+
+
 def _validated_danger_score(danger_score: int) -> int:
     if danger_score not in ENCOUNTER_GROUP_BUDGETS:
         raise SrsEncounterError("danger_score must be in range 0..4")
     return danger_score
+
+
+def is_base_docked(state: SrsGameState) -> bool:
+    if state.descriptor.sector_type is not SectorType.BASE:
+        return False
+    for object_state in state.objects.values():
+        if object_state.object_type is not SrsObjectType.STATION:
+            continue
+        if _is_adjacent(state.player_position, object_state.position):
+            return True
+    return False
 
 
 def _warp_point_positions(state: SrsGameState) -> tuple[Position, ...]:
@@ -230,3 +375,11 @@ def _tier_asc_sort_key(tier: SrsEnemyTier) -> int:
 
 def _tier_desc_sort_key(tier: SrsEnemyTier) -> int:
     return -_tier_asc_sort_key(tier)
+
+
+def _enemy_presence(state: SrsGameState) -> bool:
+    return state.combat_state is not None and state.combat_state.enemy_presence
+
+
+def _is_adjacent(a: Position, b: Position) -> bool:
+    return max(abs(a.x - b.x), abs(a.y - b.y)) == 1

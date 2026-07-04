@@ -18,6 +18,7 @@ from experiments.galactic_exodus.srs.log import (
     OBSERVATION_UPDATED,
     STATION_ACTIVATED,
     STOPPED_BEFORE_IMPASSABLE,
+    WAIT_ACCEPTED,
     WARP_EXIT_ACCEPTED,
     WARP_EXIT_REJECTED,
     make_turn_event,
@@ -440,6 +441,8 @@ def apply_srs_command(
         return _apply_interact(state, command, contracts=contracts)
     if command.command_type == "COMBAT_STEP":
         return _apply_combat_step(state, command, contracts=contracts)
+    if command.command_type == "WAIT":
+        return _apply_wait(state)
     if command.command_type == "WARP_EXIT":
         return _apply_warp_exit(state, command)
     return _rejected_movement_result(
@@ -751,6 +754,30 @@ def _apply_interact(
         object_id=target_object_id,
         object_state=object_state,
         outcome="REJECTED_UNSUPPORTED_OBJECT",
+    )
+
+
+def _apply_wait(
+    state: SrsGameState,
+) -> SrsCommandResult:
+    next_turn = state.srs_turn + 1
+    return SrsCommandResult(
+        state=replace(state, srs_turn=next_turn),
+        events=(
+            make_turn_event(
+                srs_turn=next_turn,
+                event_type=WAIT_ACCEPTED,
+                payload={
+                    "command_type": "WAIT",
+                    "start_position": _position_to_list(state.player_position),
+                    "end_position": _position_to_list(state.player_position),
+                    "fuel_delta": 0,
+                    "fuel_before": state.fuel,
+                    "fuel_after": state.fuel,
+                    "outcome": "ACCEPTED",
+                },
+            ),
+        ),
     )
 
 
