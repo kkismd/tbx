@@ -147,3 +147,35 @@ class SrsFixtureRegressionTests(unittest.TestCase):
         self.assertEqual(result.final_state.combat_state.player.durability, 97)
         self.assertEqual(result.final_state.combat_state.player.energy, 1)
         self.assertTrue(result.summary["enemy_actions"][0]["reaction"]["fallback_to_defend"])
+
+    def test_combat_energy_pressure_danger3(self) -> None:
+        result = run_named_fixture("combat_energy_pressure_danger3_9x9")
+
+        self.assertEqual(result.final_state.combat_state.player.energy, 1)
+        self.assertEqual(result.final_state.combat_state.player.durability, 59)
+        self.assertEqual(
+            [action["enemy_id"] for action in result.log.events[1].payload["enemy_actions"]],
+            ["enemy-1", "enemy-2", "enemy-4"],
+        )
+        self.assertEqual(result.log.events[1].payload["player_energy_after"], 3)
+        self.assertEqual(result.log.events[4].payload["player_energy_after"], 1)
+        self.assertEqual(
+            [action["reaction"]["resolved_reaction"] for action in result.log.events[4].payload["enemy_actions"]],
+            ["COUNTERATTACK", "COUNTERATTACK", "DEFEND"],
+        )
+
+    def test_combat_energy_pressure_danger4(self) -> None:
+        result = run_named_fixture("combat_energy_pressure_danger4_9x9")
+
+        self.assertEqual(result.final_state.combat_state.player.energy, 1)
+        self.assertEqual(result.final_state.combat_state.player.durability, 50)
+        self.assertEqual(
+            [action["enemy_id"] for action in result.log.events[1].payload["enemy_actions"]],
+            ["enemy-1", "enemy-2", "enemy-3", "enemy-4"],
+        )
+        self.assertEqual(result.log.events[1].payload["player_energy_after"], 2)
+        self.assertEqual(result.log.events[4].payload["player_energy_after"], 1)
+        self.assertEqual(
+            [action["reaction"]["resolved_reaction"] for action in result.log.events[4].payload["enemy_actions"]],
+            ["COUNTERATTACK", "DEFEND", "DEFEND", "DEFEND"],
+        )

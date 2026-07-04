@@ -113,6 +113,30 @@ def _freeze_mapping(mapping: Mapping[Any, Any]) -> Mapping[Any, Any]:
     return MappingProxyType(dict(mapping))
 
 
+def _enemy_tier_sort_key(tier: SrsEnemyTier) -> int:
+    order = {
+        SrsEnemyTier.TIER1: 1,
+        SrsEnemyTier.TIER2: 2,
+        SrsEnemyTier.TIER3: 3,
+        SrsEnemyTier.TIER4: 4,
+    }
+    return order[tier]
+
+
+def _freeze_enemy_mapping(
+    mapping: Mapping[str, "SrsEnemyCombatState"],
+) -> Mapping[str, "SrsEnemyCombatState"]:
+    return MappingProxyType(
+        {
+            enemy_id: enemy
+            for enemy_id, enemy in sorted(
+                mapping.items(),
+                key=lambda item: _enemy_tier_sort_key(item[1].tier),
+            )
+        }
+    )
+
+
 @dataclass(frozen=True, slots=True)
 class Position:
     x: int
@@ -257,7 +281,7 @@ class SrsCombatState:
     player_attack_target_id: str | None = None
 
     def __post_init__(self) -> None:
-        normalized_enemies = _freeze_mapping(self.enemies)
+        normalized_enemies = _freeze_enemy_mapping(self.enemies)
         normalized_weapons = _freeze_mapping(self.weapon_profiles)
 
         if any(enemy_id != state.enemy_id for enemy_id, state in normalized_enemies.items()):
