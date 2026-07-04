@@ -80,6 +80,22 @@ class SrsEnemyReaction(str, Enum):
     DEFEND = "DEFEND"
 
 
+class SrsSalvageChoice(str, Enum):
+    RECOVER_DURABILITY = "RECOVER_DURABILITY"
+    RECOVER_ENERGY = "RECOVER_ENERGY"
+    RECOVER_PHOTON_TORPEDO_AMMO = "RECOVER_PHOTON_TORPEDO_AMMO"
+    STORE_ONLY = "STORE_ONLY"
+
+
+class SrsBaseUpgrade(str, Enum):
+    PHASER_POWER = "PHASER_POWER"
+    PHOTON_TORPEDO_POWER = "PHOTON_TORPEDO_POWER"
+    ENERGY_CAPACITY = "ENERGY_CAPACITY"
+    PHOTON_TORPEDO_AMMO_CAPACITY = "PHOTON_TORPEDO_AMMO_CAPACITY"
+    DEFENSE = "DEFENSE"
+    EVASION = "EVASION"
+
+
 class ResourceManagementMode(str, Enum):
     NONE = "NONE"
 
@@ -166,19 +182,30 @@ class SrsWeaponProfile:
 @dataclass(frozen=True, slots=True)
 class SrsPlayerCombatState:
     durability: int = 100
+    durability_capacity: int = 100
     defense: int = 0
+    evasion: int = 0
     movement_power: int = 4
     photon_torpedo_ammo: int = 6
     photon_torpedo_ammo_capacity: int = 6
+    photon_torpedo_power: int = 0
     energy: int = 6
     energy_capacity: int = 6
+    phaser_power: int = 0
     energy_recovery: int = 1
+    salvage: int = 0
 
     def __post_init__(self) -> None:
         if self.durability < 0:
             raise SrsModelError("player durability must be non-negative")
+        if self.durability_capacity <= 0:
+            raise SrsModelError("player durability_capacity must be positive")
+        if self.durability > self.durability_capacity:
+            raise SrsModelError("player durability must not exceed durability_capacity")
         if self.defense < 0:
             raise SrsModelError("player defense must be non-negative")
+        if self.evasion < 0:
+            raise SrsModelError("player evasion must be non-negative")
         if self.movement_power <= 0:
             raise SrsModelError("player movement_power must be positive")
         if self.photon_torpedo_ammo < 0:
@@ -187,14 +214,20 @@ class SrsPlayerCombatState:
             raise SrsModelError("player photon_torpedo_ammo_capacity must be positive")
         if self.photon_torpedo_ammo > self.photon_torpedo_ammo_capacity:
             raise SrsModelError("player photon_torpedo_ammo must not exceed capacity")
+        if self.photon_torpedo_power < 0:
+            raise SrsModelError("player photon_torpedo_power must be non-negative")
         if self.energy < 0:
             raise SrsModelError("player energy must be non-negative")
         if self.energy_capacity <= 0:
             raise SrsModelError("player energy_capacity must be positive")
         if self.energy > self.energy_capacity:
             raise SrsModelError("player energy must not exceed capacity")
+        if self.phaser_power < 0:
+            raise SrsModelError("player phaser_power must be non-negative")
         if self.energy_recovery < 0:
             raise SrsModelError("player energy_recovery must be non-negative")
+        if self.salvage < 0:
+            raise SrsModelError("player salvage must be non-negative")
 
 
 @dataclass(frozen=True, slots=True)
@@ -205,6 +238,7 @@ class SrsEnemyCombatState:
     durability: int
     attack_damage: int
     movement_power: int
+    drop_salvage: bool = False
 
     def __post_init__(self) -> None:
         if self.enemy_id == "":
@@ -259,6 +293,7 @@ def create_enemy_combat_state(
     enemy_id: str,
     tier: SrsEnemyTier,
     position: Position,
+    drop_salvage: bool = False,
 ) -> SrsEnemyCombatState:
     durability, attack_damage, movement_power = enemy_tier_defaults(tier)
     return SrsEnemyCombatState(
@@ -268,6 +303,7 @@ def create_enemy_combat_state(
         durability=durability,
         attack_damage=attack_damage,
         movement_power=movement_power,
+        drop_salvage=drop_salvage,
     )
 
 
@@ -414,6 +450,7 @@ class SrsGameState:
     known_state: SrsKnownState
     persistent_state: SrsPersistentState
     player_position: Position
+    player_state: SrsPlayerCombatState = field(default_factory=SrsPlayerCombatState)
     objects: Mapping[str, SrsObjectState] = field(default_factory=dict)
     combat_state: SrsCombatState | None = None
     srs_turn: int = 0
@@ -470,6 +507,8 @@ class SrsCommand:
     player_attack_action: SrsPlayerAttackAction | None = None
     player_attack_weapon: SrsWeaponType | None = None
     enemy_reactions: Mapping[str, SrsEnemyReaction] = field(default_factory=dict)
+    salvage_choice: SrsSalvageChoice | None = None
+    base_upgrade_choice: SrsBaseUpgrade | None = None
 
     def __post_init__(self) -> None:
         command_type = str(self.command_type)
@@ -497,6 +536,22 @@ class SrsCommand:
             )
         except ValueError as exc:
             raise SrsModelError("player_attack_weapon must be a SrsWeaponType value") from exc
+        try:
+            salvage_choice = (
+                None
+                if self.salvage_choice is None
+                else SrsSalvageChoice(self.salvage_choice)
+            )
+        except ValueError as exc:
+            raise SrsModelError("salvage_choice must be a SrsSalvageChoice value") from exc
+        try:
+            base_upgrade_choice = (
+                None
+                if self.base_upgrade_choice is None
+                else SrsBaseUpgrade(self.base_upgrade_choice)
+            )
+        except ValueError as exc:
+            raise SrsModelError("base_upgrade_choice must be a SrsBaseUpgrade value") from exc
         if player_attack_weapon is SrsWeaponType.ENEMY_WEAPON:
             raise SrsModelError("player_attack_weapon must be PHOTON_TORPEDO or PHASER")
         if not isinstance(self.enemy_reactions, Mapping):
@@ -525,6 +580,10 @@ class SrsCommand:
             or enemy_reactions
         ):
             raise SrsModelError("combat action fields require COMBAT_STEP")
+        if salvage_choice is not None and command_type not in {"INTERACT", "COMBAT_STEP"}:
+            raise SrsModelError("salvage_choice requires INTERACT or COMBAT_STEP")
+        if base_upgrade_choice is not None and command_type != "INTERACT":
+            raise SrsModelError("base_upgrade_choice requires INTERACT")
         if player_attack_action is SrsPlayerAttackAction.ATTACK and player_attack_weapon is None:
             raise SrsModelError("ATTACK requires a player_attack_weapon")
         if player_attack_action is not SrsPlayerAttackAction.ATTACK and player_attack_weapon is not None:
@@ -536,6 +595,8 @@ class SrsCommand:
         object.__setattr__(self, "player_attack_action", player_attack_action)
         object.__setattr__(self, "player_attack_weapon", player_attack_weapon)
         object.__setattr__(self, "enemy_reactions", enemy_reactions)
+        object.__setattr__(self, "salvage_choice", salvage_choice)
+        object.__setattr__(self, "base_upgrade_choice", base_upgrade_choice)
 
     def __hash__(self) -> int:
         return hash(
@@ -548,6 +609,8 @@ class SrsCommand:
                 self.player_attack_action,
                 self.player_attack_weapon,
                 tuple(sorted(self.enemy_reactions.items())),
+                self.salvage_choice,
+                self.base_upgrade_choice,
             )
         )
 

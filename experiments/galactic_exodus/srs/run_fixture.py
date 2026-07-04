@@ -17,6 +17,7 @@ from experiments.galactic_exodus.srs.engine import apply_srs_command, restore_sr
 from experiments.galactic_exodus.srs.generate import create_sector
 from experiments.galactic_exodus.srs.log import build_srs_log
 from experiments.galactic_exodus.srs.model import (
+    SrsBaseUpgrade,
     CostMode,
     Direction,
     ObservationMode,
@@ -33,6 +34,7 @@ from experiments.galactic_exodus.srs.model import (
     SrsCommand,
     SrsGameLog,
     SrsGameState,
+    SrsSalvageChoice,
     SrsPlayerCombatState,
     SrsPersistentState,
     SrsTerrainType,
@@ -55,6 +57,8 @@ _ALLOWED_COMMAND_KEYS = frozenset(
         "player_attack_action",
         "player_attack_weapon",
         "enemy_reactions",
+        "salvage_choice",
+        "base_upgrade_choice",
         "encounter_roll",
     }
 )
@@ -114,6 +118,8 @@ def command_from_json(data: Mapping[str, Any]) -> SrsCommand:
     player_attack_action: SrsPlayerAttackAction | None = None
     player_attack_weapon: SrsWeaponType | None = None
     enemy_reactions: Mapping[str, SrsEnemyReaction] = {}
+    salvage_choice: SrsSalvageChoice | None = None
+    base_upgrade_choice: SrsBaseUpgrade | None = None
 
     if "route" in data:
         route_value = data["route"]
@@ -150,6 +156,16 @@ def command_from_json(data: Mapping[str, Any]) -> SrsCommand:
                 enemy_reactions[enemy_id] = SrsEnemyReaction(reaction)
             except ValueError as exc:
                 raise SrsFixtureError(f"invalid enemy reaction: {reaction}") from exc
+    if "salvage_choice" in data:
+        try:
+            salvage_choice = SrsSalvageChoice(_required_str(data, "salvage_choice"))
+        except ValueError as exc:
+            raise SrsFixtureError(f"invalid salvage_choice: {data['salvage_choice']}") from exc
+    if "base_upgrade_choice" in data:
+        try:
+            base_upgrade_choice = SrsBaseUpgrade(_required_str(data, "base_upgrade_choice"))
+        except ValueError as exc:
+            raise SrsFixtureError(f"invalid base_upgrade_choice: {data['base_upgrade_choice']}") from exc
 
     try:
         return SrsCommand(
@@ -161,6 +177,8 @@ def command_from_json(data: Mapping[str, Any]) -> SrsCommand:
             player_attack_action=player_attack_action,
             player_attack_weapon=player_attack_weapon,
             enemy_reactions=enemy_reactions,
+            salvage_choice=salvage_choice,
+            base_upgrade_choice=base_upgrade_choice,
         )
     except ValueError as exc:
         raise SrsFixtureError(str(exc)) from exc
@@ -194,6 +212,7 @@ def state_from_fixture(data: Mapping[str, Any], *, contracts: SrsContracts) -> S
     fuel = _optional_int(initial, "fuel", default=state.fuel)
     max_fuel = _optional_int(initial, "max_fuel", default=state.max_fuel)
     srs_turn = _optional_int(initial, "srs_turn", default=state.srs_turn)
+    player_state = _player_state(initial.get("player"))
 
     persistent = initial.get("persistent")
     if persistent is not None:
@@ -207,9 +226,9 @@ def state_from_fixture(data: Mapping[str, Any], *, contracts: SrsContracts) -> S
 
     combat = initial.get("combat")
     if combat is not None:
-        state = replace(state, combat_state=_combat_state(state, combat))
+        state = replace(state, player_state=player_state, combat_state=_combat_state(state, combat, player_state=player_state))
 
-    return replace(state, fuel=fuel, max_fuel=max_fuel, srs_turn=srs_turn)
+    return replace(state, fuel=fuel, max_fuel=max_fuel, srs_turn=srs_turn, player_state=player_state)
 
 
 def run_fixture(path: Path, *, contracts: SrsContracts | None = None) -> SrsFixtureRunResult:
@@ -288,6 +307,16 @@ def fixture_result_to_jsonable(result: SrsFixtureRunResult) -> Mapping[str, Any]
             "fuel": final_state.fuel,
             "max_fuel": final_state.max_fuel,
             "player_position": _position_to_list(final_state.player_position),
+            "player_durability": final_state.player_state.durability,
+            "player_energy": final_state.player_state.energy,
+            "player_torpedo_ammo": final_state.player_state.photon_torpedo_ammo,
+            "player_salvage": final_state.player_state.salvage,
+            "player_energy_capacity": final_state.player_state.energy_capacity,
+            "player_torpedo_ammo_capacity": final_state.player_state.photon_torpedo_ammo_capacity,
+            "player_phaser_power": final_state.player_state.phaser_power,
+            "player_photon_torpedo_power": final_state.player_state.photon_torpedo_power,
+            "player_defense": final_state.player_state.defense,
+            "player_evasion": final_state.player_state.evasion,
             "consumed_object_ids": sorted(final_state.persistent_state.consumed_object_ids),
             "activated_object_ids": sorted(final_state.persistent_state.activated_object_ids),
             "discovered_count": len(final_state.known_state.discovered_cells),
@@ -426,7 +455,7 @@ def _apply_persistent_overrides(
     )
 
 
-def _combat_state(state: SrsGameState, data: Any) -> SrsCombatState:
+def _combat_state(state: SrsGameState, data: Any, *, player_state: SrsPlayerCombatState) -> SrsCombatState:
     if not isinstance(data, Mapping):
         raise SrsFixtureError("initial.combat must be an object")
 
@@ -437,22 +466,7 @@ def _combat_state(state: SrsGameState, data: Any) -> SrsCombatState:
         raise SrsFixtureError(f"invalid combat phase: {raw_phase}") from exc
 
     combat_turn = _optional_int(data, "combat_turn", default=0)
-    player_data = data.get("player", {})
-    if player_data is None:
-        player_data = {}
-    if not isinstance(player_data, Mapping):
-        raise SrsFixtureError("initial.combat.player must be an object")
-
-    player = SrsPlayerCombatState(
-        durability=_optional_int(player_data, "durability", default=100),
-        defense=_optional_int(player_data, "defense", default=0),
-        movement_power=_optional_int(player_data, "movement_power", default=4),
-        photon_torpedo_ammo=_optional_int(player_data, "photon_torpedo_ammo", default=6),
-        photon_torpedo_ammo_capacity=_optional_int(player_data, "photon_torpedo_ammo_capacity", default=6),
-        energy=_optional_int(player_data, "energy", default=6),
-        energy_capacity=_optional_int(player_data, "energy_capacity", default=6),
-        energy_recovery=_optional_int(player_data, "energy_recovery", default=1),
-    )
+    player = _player_state(data.get("player"), default=player_state)
 
     player_attack_target_id = data.get("player_attack_target_id")
     if player_attack_target_id is not None and not isinstance(player_attack_target_id, str):
@@ -494,10 +508,20 @@ def _combat_enemies(data: Mapping[str, Any]) -> Mapping[str, Any]:
             tier = SrsEnemyTier(raw_tier)
         except ValueError as exc:
             raise SrsFixtureError(f"invalid enemy tier: {raw_tier}") from exc
-        enemies[enemy_id] = create_enemy_combat_state(
+        enemy = create_enemy_combat_state(
             enemy_id=enemy_id,
             tier=tier,
             position=_position(raw_enemy.get("position"), field_name=f"initial.combat.enemies[{index}].position"),
+            drop_salvage=_optional_bool(raw_enemy, "drop_salvage", default=False),
+        )
+        durability = _optional_int(raw_enemy, "durability", default=enemy.durability)
+        attack_damage = _optional_int(raw_enemy, "attack_damage", default=enemy.attack_damage)
+        movement_power = _optional_int(raw_enemy, "movement_power", default=enemy.movement_power)
+        enemies[enemy_id] = replace(
+            enemy,
+            durability=durability,
+            attack_damage=attack_damage,
+            movement_power=movement_power,
         )
     return enemies
 
@@ -594,6 +618,16 @@ def _build_summary(
         "fuel": final_state.fuel,
         "max_fuel": final_state.max_fuel,
         "player_position": _position_to_list(final_state.player_position),
+        "player_durability": final_state.player_state.durability,
+        "player_energy": final_state.player_state.energy,
+        "player_torpedo_ammo": final_state.player_state.photon_torpedo_ammo,
+        "player_salvage": final_state.player_state.salvage,
+        "player_energy_capacity": final_state.player_state.energy_capacity,
+        "player_torpedo_ammo_capacity": final_state.player_state.photon_torpedo_ammo_capacity,
+        "player_phaser_power": final_state.player_state.phaser_power,
+        "player_photon_torpedo_power": final_state.player_state.photon_torpedo_power,
+        "player_defense": final_state.player_state.defense,
+        "player_evasion": final_state.player_state.evasion,
         "event_types": [event.event_type for event in log.events],
         "event_count": len(log.events),
         "consumed_object_ids": sorted(final_state.persistent_state.consumed_object_ids),
@@ -631,6 +665,16 @@ def _validate_expectations(expect: Any, result: SrsFixtureRunResult) -> None:
         ("srs_turn", final_state.srs_turn),
         ("fuel", final_state.fuel),
         ("player_position", _position_to_list(final_state.player_position)),
+        ("player_durability", final_state.player_state.durability),
+        ("player_energy", final_state.player_state.energy),
+        ("player_torpedo_ammo", final_state.player_state.photon_torpedo_ammo),
+        ("player_salvage", final_state.player_state.salvage),
+        ("player_energy_capacity", final_state.player_state.energy_capacity),
+        ("player_torpedo_ammo_capacity", final_state.player_state.photon_torpedo_ammo_capacity),
+        ("player_phaser_power", final_state.player_state.phaser_power),
+        ("player_photon_torpedo_power", final_state.player_state.photon_torpedo_power),
+        ("player_defense", final_state.player_state.defense),
+        ("player_evasion", final_state.player_state.evasion),
         ("event_types", event_types),
         ("consumed_object_ids", sorted(final_state.persistent_state.consumed_object_ids)),
         ("activated_object_ids", sorted(final_state.persistent_state.activated_object_ids)),
@@ -733,10 +777,46 @@ def _optional_int(mapping: Mapping[str, Any], field_name: str, *, default: int) 
     return value
 
 
+def _optional_bool(mapping: Mapping[str, Any], field_name: str, *, default: bool) -> bool:
+    if field_name not in mapping:
+        return default
+    value = mapping[field_name]
+    if not isinstance(value, bool):
+        raise SrsFixtureError(f"{field_name} must be a boolean")
+    return value
+
+
 def _optional_position(mapping: Mapping[str, Any], field_name: str) -> Position | None:
     if field_name not in mapping:
         return None
     return _position(mapping[field_name], field_name=field_name)
+
+
+def _player_state(data: Any, *, default: SrsPlayerCombatState | None = None) -> SrsPlayerCombatState:
+    defaults = SrsPlayerCombatState() if default is None else default
+    if data is None:
+        return defaults
+    if not isinstance(data, Mapping):
+        raise SrsFixtureError("player must be an object")
+    return SrsPlayerCombatState(
+        durability=_optional_int(data, "durability", default=defaults.durability),
+        durability_capacity=_optional_int(data, "durability_capacity", default=defaults.durability_capacity),
+        defense=_optional_int(data, "defense", default=defaults.defense),
+        evasion=_optional_int(data, "evasion", default=defaults.evasion),
+        movement_power=_optional_int(data, "movement_power", default=defaults.movement_power),
+        photon_torpedo_ammo=_optional_int(data, "photon_torpedo_ammo", default=defaults.photon_torpedo_ammo),
+        photon_torpedo_ammo_capacity=_optional_int(
+            data,
+            "photon_torpedo_ammo_capacity",
+            default=defaults.photon_torpedo_ammo_capacity,
+        ),
+        photon_torpedo_power=_optional_int(data, "photon_torpedo_power", default=defaults.photon_torpedo_power),
+        energy=_optional_int(data, "energy", default=defaults.energy),
+        energy_capacity=_optional_int(data, "energy_capacity", default=defaults.energy_capacity),
+        phaser_power=_optional_int(data, "phaser_power", default=defaults.phaser_power),
+        energy_recovery=_optional_int(data, "energy_recovery", default=defaults.energy_recovery),
+        salvage=_optional_int(data, "salvage", default=defaults.salvage),
+    )
 
 
 def _optional_str_list(mapping: Mapping[str, Any], field_name: str, *, default: list[str]) -> list[str]:

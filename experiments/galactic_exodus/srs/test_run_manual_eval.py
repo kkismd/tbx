@@ -82,7 +82,7 @@ class SrsRunManualEvalTests(unittest.TestCase):
         self.assertEqual(
             lines[-2:],
             [
-                "turn 1: INTERACT_ACCEPTED RESOURCE_CACHE resource-cache-1 outcome=ACCEPTED fuel 2->7 restore=5 consumed=true",
+                "turn 1: INTERACT_ACCEPTED RESOURCE_CACHE resource-cache-1 outcome=ACCEPTED fuel 2->5 restore=3 consumed=true",
                 "turn 1: OBJECT_CONSUMED RESOURCE_CACHE resource-cache-1",
             ],
         )

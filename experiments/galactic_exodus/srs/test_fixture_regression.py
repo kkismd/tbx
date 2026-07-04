@@ -43,7 +43,7 @@ class SrsFixtureRegressionTests(unittest.TestCase):
         self.assertIn("INTERACT_ACCEPTED", event_types(result))
         self.assertIn("OBJECT_CONSUMED", event_types(result))
         self.assertEqual(primary_outcome(result), "ACCEPTED")
-        self.assertEqual(result.final_state.fuel, 7)
+        self.assertEqual(result.final_state.fuel, 5)
         self.assertIn("resource-cache-1", result.final_state.persistent_state.consumed_object_ids)
         self.assertTrue(result.final_state.objects["resource-cache-1"].consumed)
         self.assertIn(Position(2, 7), result.final_state.known_state.discovered_cells)
@@ -55,6 +55,9 @@ class SrsFixtureRegressionTests(unittest.TestCase):
         self.assertIn("STATION_ACTIVATED", event_types(result))
         self.assertEqual(primary_outcome(result), "ACCEPTED")
         self.assertEqual(result.final_state.fuel, result.final_state.max_fuel)
+        self.assertEqual(result.final_state.player_state.durability, 100)
+        self.assertEqual(result.final_state.player_state.energy, 6)
+        self.assertEqual(result.final_state.player_state.photon_torpedo_ammo, 6)
         self.assertIn("station-1", result.final_state.persistent_state.activated_object_ids)
         self.assertTrue(result.final_state.objects["station-1"].activated)
 
@@ -66,6 +69,19 @@ class SrsFixtureRegressionTests(unittest.TestCase):
         self.assertEqual(primary_outcome(result), "ACCEPTED")
         self.assertIn("salvage-1", result.final_state.persistent_state.consumed_object_ids)
         self.assertTrue(result.final_state.objects["salvage-1"].consumed)
+        self.assertEqual(result.final_state.player_state.salvage, 1)
+
+    def test_salvage_recover_durability(self) -> None:
+        result = run_named_fixture("salvage_recover_durability_9x9")
+
+        self.assertEqual(result.final_state.player_state.durability, 100)
+        self.assertEqual(result.final_state.player_state.salvage, 1)
+
+    def test_base_upgrade_defense(self) -> None:
+        result = run_named_fixture("base_upgrade_defense_9x9")
+
+        self.assertEqual(result.final_state.player_state.salvage, 0)
+        self.assertEqual(result.final_state.player_state.defense, 2)
 
     def test_warp_exit_s(self) -> None:
         result = run_named_fixture("warp_exit_s_9x9")
@@ -127,6 +143,21 @@ class SrsFixtureRegressionTests(unittest.TestCase):
 
         self.assertEqual(result.final_state.combat_state.player.energy, 5)
         self.assertEqual(result.final_state.combat_state.enemies["enemy-1"].durability, 4)
+
+    def test_combat_salvage_drop_tier3_energy(self) -> None:
+        result = run_named_fixture("combat_salvage_drop_tier3_energy_9x9")
+
+        self.assertEqual(result.final_state.player_state.energy, 6)
+        self.assertEqual(result.final_state.player_state.salvage, 3)
+        self.assertEqual(
+            result.log.events[0].payload["player_action"]["salvage_reward"]["selected_salvage_choice"],
+            "RECOVER_ENERGY",
+        )
+
+    def test_combat_salvage_no_drop_tier1(self) -> None:
+        result = run_named_fixture("combat_salvage_no_drop_tier1_9x9")
+
+        self.assertEqual(result.final_state.player_state.salvage, 2)
 
     def test_combat_enemy_defend(self) -> None:
         result = run_named_fixture("combat_enemy_defend_9x9")

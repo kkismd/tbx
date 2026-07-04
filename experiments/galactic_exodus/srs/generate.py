@@ -47,15 +47,7 @@ SECTOR_EXTRA_OBJECTS = {
 def resource_cache_restore_values(cache_count: int) -> tuple[int, ...]:
     if cache_count < 0:
         raise SrsGenerationError("resource cache count must be non-negative")
-    if cache_count == 0:
-        return ()
-    if cache_count == 1:
-        return (5,)
-    if cache_count == 2:
-        return (3, 2)
-    if cache_count == 3:
-        return (2, 2, 1)
-    raise SrsGenerationError("resource sectors support at most 3 resource caches")
+    return tuple(3 for _ in range(cache_count))
 
 
 def create_sector(

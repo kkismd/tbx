@@ -24,6 +24,7 @@ from experiments.galactic_exodus.srs.log import (
     make_turn_event,
 )
 from experiments.galactic_exodus.srs.model import (
+    SrsBaseUpgrade,
     Direction,
     CostMode,
     MovementRule,
@@ -36,12 +37,14 @@ from experiments.galactic_exodus.srs.model import (
     SrsCommandResult,
     SrsEnemyCombatState,
     SrsEnemyReaction,
+    SrsEnemyTier,
     SrsGameState,
     SrsKnownState,
     SrsObjectType,
     SrsObjectState,
     SrsPlayerAttackAction,
     SrsPlayerCombatState,
+    SrsSalvageChoice,
     SrsPersistentState,
     SrsTerrainType,
     SrsWeaponType,
@@ -75,6 +78,54 @@ _ENEMY_PATH_TIEBREAK_DIRECTIONS = (
     Direction.E,
     Direction.S,
 )
+_RESOURCE_CACHE_FUEL_RESTORE = 3
+_SALVAGE_BASE_VALUE = 1
+_SALVAGE_BASE_RECOVERY = {
+    SrsSalvageChoice.RECOVER_DURABILITY: 8,
+    SrsSalvageChoice.RECOVER_ENERGY: 2,
+    SrsSalvageChoice.RECOVER_PHOTON_TORPEDO_AMMO: 1,
+    SrsSalvageChoice.STORE_ONLY: 0,
+}
+_SALVAGE_DROP_VALUES = {
+    SrsEnemyTier.TIER1: 1,
+    SrsEnemyTier.TIER2: 1,
+    SrsEnemyTier.TIER3: 2,
+    SrsEnemyTier.TIER4: 3,
+}
+_SALVAGE_DROP_RECOVERY = {
+    SrsEnemyTier.TIER1: {
+        SrsSalvageChoice.RECOVER_DURABILITY: 8,
+        SrsSalvageChoice.RECOVER_ENERGY: 2,
+        SrsSalvageChoice.RECOVER_PHOTON_TORPEDO_AMMO: 1,
+        SrsSalvageChoice.STORE_ONLY: 0,
+    },
+    SrsEnemyTier.TIER2: {
+        SrsSalvageChoice.RECOVER_DURABILITY: 8,
+        SrsSalvageChoice.RECOVER_ENERGY: 2,
+        SrsSalvageChoice.RECOVER_PHOTON_TORPEDO_AMMO: 1,
+        SrsSalvageChoice.STORE_ONLY: 0,
+    },
+    SrsEnemyTier.TIER3: {
+        SrsSalvageChoice.RECOVER_DURABILITY: 12,
+        SrsSalvageChoice.RECOVER_ENERGY: 3,
+        SrsSalvageChoice.RECOVER_PHOTON_TORPEDO_AMMO: 1,
+        SrsSalvageChoice.STORE_ONLY: 0,
+    },
+    SrsEnemyTier.TIER4: {
+        SrsSalvageChoice.RECOVER_DURABILITY: 16,
+        SrsSalvageChoice.RECOVER_ENERGY: 4,
+        SrsSalvageChoice.RECOVER_PHOTON_TORPEDO_AMMO: 2,
+        SrsSalvageChoice.STORE_ONLY: 0,
+    },
+}
+_BASE_UPGRADE_COSTS = {
+    SrsBaseUpgrade.PHASER_POWER: 4,
+    SrsBaseUpgrade.PHOTON_TORPEDO_POWER: 5,
+    SrsBaseUpgrade.ENERGY_CAPACITY: 3,
+    SrsBaseUpgrade.PHOTON_TORPEDO_AMMO_CAPACITY: 3,
+    SrsBaseUpgrade.DEFENSE: 4,
+    SrsBaseUpgrade.EVASION: 4,
+}
 
 
 def observation_size_for_terrain(
@@ -186,6 +237,25 @@ def snapshot_srs_state(
     return replace(
         state.persistent_state,
         discovered_cells=state.known_state.discovered_cells,
+    )
+
+
+def _current_player_state(state: SrsGameState) -> SrsPlayerCombatState:
+    if state.combat_state is not None:
+        return state.combat_state.player
+    return state.player_state
+
+
+def _replace_player_state(
+    state: SrsGameState,
+    player_state: SrsPlayerCombatState,
+) -> SrsGameState:
+    updated_state = replace(state, player_state=player_state)
+    if updated_state.combat_state is None:
+        return updated_state
+    return replace(
+        updated_state,
+        combat_state=replace(updated_state.combat_state, player=player_state),
     )
 
 
@@ -745,9 +815,19 @@ def _apply_interact(
     if object_state.object_type is SrsObjectType.RESOURCE_CACHE:
         return _apply_resource_cache_interaction(state, object_state, interaction_contract)
     if object_state.object_type is SrsObjectType.STATION:
-        return _apply_station_interaction(state, object_state, interaction_contract)
+        return _apply_station_interaction(
+            state,
+            object_state,
+            interaction_contract,
+            base_upgrade_choice=command.base_upgrade_choice,
+        )
     if object_state.object_type is SrsObjectType.SALVAGE:
-        return _apply_salvage_interaction(state, object_state, interaction_contract)
+        return _apply_salvage_interaction(
+            state,
+            object_state,
+            interaction_contract,
+            salvage_choice=command.salvage_choice,
+        )
 
     return _rejected_interaction_result(
         state,
@@ -927,6 +1007,7 @@ def _apply_combat_step(
 
     updated_state = replace(
         state,
+        player_state=player_after,
         combat_state=replace(
             combat_state,
             enemies=enemy_states,
@@ -1033,6 +1114,15 @@ def _resolve_player_attack_phase(
     if remaining_durability <= 0:
         del updated_enemies[target_enemy_id]
         payload["target_destroyed"] = True
+        if target_enemy.drop_salvage:
+            player, salvage_reward = _apply_salvage_reward_to_player(
+                player,
+                salvage_value=_SALVAGE_DROP_VALUES[target_enemy.tier],
+                choice=command.salvage_choice,
+                recovery_amounts=_SALVAGE_DROP_RECOVERY[target_enemy.tier],
+                source="ENEMY_DROP",
+            )
+            payload["salvage_reward"] = salvage_reward
     else:
         updated_enemies[target_enemy_id] = replace(target_enemy, durability=remaining_durability)
         payload["target_remaining_durability"] = remaining_durability
@@ -1349,9 +1439,8 @@ def _apply_resource_cache_interaction(
     object_state: SrsObjectState,
     interaction_contract: Mapping[str, Any],
 ) -> SrsCommandResult:
-    fuel_restore = _validated_fuel_restore(object_state)
     fuel_before = state.fuel
-    fuel_after = min(state.max_fuel, fuel_before + fuel_restore)
+    fuel_after = min(state.max_fuel, fuel_before + _RESOURCE_CACHE_FUEL_RESTORE)
     fuel_delta = fuel_after - fuel_before
     if fuel_delta == 0:
         return _rejected_interaction_result(
@@ -1386,7 +1475,7 @@ def _apply_resource_cache_interaction(
             payload={
                 "object_id": object_state.object_id,
                 "object_type": object_state.object_type.value,
-                "fuel_restore": fuel_restore,
+                "fuel_restore": _RESOURCE_CACHE_FUEL_RESTORE,
                 "fuel_before": fuel_before,
                 "fuel_after": fuel_after,
                 "fuel_delta": fuel_delta,
@@ -1401,17 +1490,40 @@ def _apply_station_interaction(
     state: SrsGameState,
     object_state: SrsObjectState,
     interaction_contract: Mapping[str, Any],
+    *,
+    base_upgrade_choice: SrsBaseUpgrade | None,
 ) -> SrsCommandResult:
+    player_before = _current_player_state(state)
     fuel_before = state.fuel
     fuel_after = state.max_fuel
     fuel_delta = fuel_after - fuel_before
-    if fuel_delta == 0:
-        return _rejected_interaction_result(
-            state,
-            object_id=object_state.object_id,
-            object_state=object_state,
-            outcome="REJECTED_NO_EFFECT",
-        )
+    available_upgrades = [
+        upgrade.value
+        for upgrade, cost in _BASE_UPGRADE_COSTS.items()
+        if player_before.salvage >= cost
+    ]
+    player_after_recovery = replace(
+        player_before,
+        durability=player_before.durability_capacity,
+        energy=player_before.energy_capacity,
+        photon_torpedo_ammo=player_before.photon_torpedo_ammo_capacity,
+    )
+    player_after_upgrade = player_after_recovery
+    applied_upgrade = None
+    salvage_spent = 0
+    if base_upgrade_choice is not None:
+        try:
+            player_after_upgrade, salvage_spent, applied_upgrade = _apply_base_upgrade_choice(
+                player_after_recovery,
+                upgrade=base_upgrade_choice,
+            )
+        except SrsInteractionError:
+            return _rejected_interaction_result(
+                state,
+                object_id=object_state.object_id,
+                object_state=object_state,
+                outcome="REJECTED_UPGRADE_UNAVAILABLE",
+            )
 
     next_turn = state.srs_turn + 1
     updated_state = _accepted_interaction_state(
@@ -1421,6 +1533,7 @@ def _apply_station_interaction(
         object_state=replace(object_state, activated=True),
         activated_object_id=object_state.object_id,
     )
+    updated_state = _replace_player_state(updated_state, player_after_upgrade)
     events = (
         _interaction_event(
             srs_turn=next_turn,
@@ -1431,6 +1544,14 @@ def _apply_station_interaction(
             fuel_after=fuel_after,
             fuel_delta=fuel_delta,
             outcome="ACCEPTED",
+            player_before=player_before,
+            player_after=player_after_upgrade,
+            extra_payload={
+                "available_upgrades": available_upgrades,
+                "selected_upgrade": None if base_upgrade_choice is None else base_upgrade_choice.value,
+                "applied_upgrade": applied_upgrade,
+                "salvage_spent": salvage_spent,
+            },
         ),
         make_turn_event(
             srs_turn=next_turn,
@@ -1443,6 +1564,18 @@ def _apply_station_interaction(
                 "fuel_delta": fuel_delta,
                 "activated": True,
                 "reusable": True,
+                "player_durability_before": player_before.durability,
+                "player_durability_after": player_after_upgrade.durability,
+                "player_energy_before": player_before.energy,
+                "player_energy_after": player_after_upgrade.energy,
+                "player_torpedo_ammo_before": player_before.photon_torpedo_ammo,
+                "player_torpedo_ammo_after": player_after_upgrade.photon_torpedo_ammo,
+                "salvage_before": player_before.salvage,
+                "salvage_after": player_after_upgrade.salvage,
+                "available_upgrades": available_upgrades,
+                "selected_upgrade": None if base_upgrade_choice is None else base_upgrade_choice.value,
+                "applied_upgrade": applied_upgrade,
+                "salvage_spent": salvage_spent,
             },
         ),
     )
@@ -1453,7 +1586,17 @@ def _apply_salvage_interaction(
     state: SrsGameState,
     object_state: SrsObjectState,
     interaction_contract: Mapping[str, Any],
+    *,
+    salvage_choice: SrsSalvageChoice | None,
 ) -> SrsCommandResult:
+    player_before = _current_player_state(state)
+    player_after, salvage_reward = _apply_salvage_reward_to_player(
+        player_before,
+        salvage_value=_SALVAGE_BASE_VALUE,
+        choice=salvage_choice,
+        recovery_amounts=_SALVAGE_BASE_RECOVERY,
+        source="MAP_PICKUP",
+    )
     next_turn = state.srs_turn + 1
     updated_state = _accepted_interaction_state(
         state,
@@ -1462,6 +1605,7 @@ def _apply_salvage_interaction(
         object_state=replace(object_state, consumed=True),
         consumed_object_id=object_state.object_id,
     )
+    updated_state = _replace_player_state(updated_state, player_after)
     events = (
         _interaction_event(
             srs_turn=next_turn,
@@ -1472,6 +1616,9 @@ def _apply_salvage_interaction(
             fuel_after=state.fuel,
             fuel_delta=0,
             outcome="ACCEPTED",
+            player_before=player_before,
+            player_after=player_after,
+            extra_payload=salvage_reward,
         ),
         make_turn_event(
             srs_turn=next_turn,
@@ -1481,10 +1628,98 @@ def _apply_salvage_interaction(
                 "object_type": object_state.object_type.value,
                 "consumed": True,
                 "outcome": "ACCEPTED",
+                **salvage_reward,
             },
         ),
     )
     return SrsCommandResult(state=updated_state, events=events)
+
+
+def _apply_salvage_reward_to_player(
+    player: SrsPlayerCombatState,
+    *,
+    salvage_value: int,
+    choice: SrsSalvageChoice | None,
+    recovery_amounts: Mapping[SrsSalvageChoice, int],
+    source: str,
+) -> tuple[SrsPlayerCombatState, Mapping[str, Any]]:
+    resolved_choice = SrsSalvageChoice.STORE_ONLY if choice is None else choice
+    recovery_amount = recovery_amounts[resolved_choice]
+    durability_before = player.durability
+    energy_before = player.energy
+    ammo_before = player.photon_torpedo_ammo
+
+    updated_player = player
+    if resolved_choice is SrsSalvageChoice.RECOVER_DURABILITY:
+        updated_player = replace(
+            updated_player,
+            durability=min(updated_player.durability_capacity, updated_player.durability + recovery_amount),
+        )
+    elif resolved_choice is SrsSalvageChoice.RECOVER_ENERGY:
+        updated_player = replace(
+            updated_player,
+            energy=min(updated_player.energy_capacity, updated_player.energy + recovery_amount),
+        )
+    elif resolved_choice is SrsSalvageChoice.RECOVER_PHOTON_TORPEDO_AMMO:
+        updated_player = replace(
+            updated_player,
+            photon_torpedo_ammo=min(
+                updated_player.photon_torpedo_ammo_capacity,
+                updated_player.photon_torpedo_ammo + recovery_amount,
+            ),
+        )
+
+    updated_player = replace(updated_player, salvage=updated_player.salvage + salvage_value)
+    return updated_player, {
+        "reward_source": source,
+        "salvage_value": salvage_value,
+        "salvage_before": player.salvage,
+        "salvage_after": updated_player.salvage,
+        "selected_salvage_choice": resolved_choice.value,
+        "durability_before": durability_before,
+        "durability_after": updated_player.durability,
+        "durability_delta": updated_player.durability - durability_before,
+        "energy_before": energy_before,
+        "energy_after": updated_player.energy,
+        "energy_delta": updated_player.energy - energy_before,
+        "photon_torpedo_ammo_before": ammo_before,
+        "photon_torpedo_ammo_after": updated_player.photon_torpedo_ammo,
+        "photon_torpedo_ammo_delta": updated_player.photon_torpedo_ammo - ammo_before,
+    }
+
+
+def _apply_base_upgrade_choice(
+    player: SrsPlayerCombatState,
+    *,
+    upgrade: SrsBaseUpgrade,
+) -> tuple[SrsPlayerCombatState, int, str]:
+    cost = _BASE_UPGRADE_COSTS[upgrade]
+    if player.salvage < cost:
+        raise SrsInteractionError(f"insufficient salvage for base upgrade: {upgrade.value}")
+
+    updated_player = replace(player, salvage=player.salvage - cost)
+    if upgrade is SrsBaseUpgrade.PHASER_POWER:
+        updated_player = replace(updated_player, phaser_power=updated_player.phaser_power + 1)
+    elif upgrade is SrsBaseUpgrade.PHOTON_TORPEDO_POWER:
+        updated_player = replace(updated_player, photon_torpedo_power=updated_player.photon_torpedo_power + 1)
+    elif upgrade is SrsBaseUpgrade.ENERGY_CAPACITY:
+        updated_player = replace(
+            updated_player,
+            energy_capacity=updated_player.energy_capacity + 1,
+            energy=updated_player.energy + 1,
+        )
+    elif upgrade is SrsBaseUpgrade.PHOTON_TORPEDO_AMMO_CAPACITY:
+        updated_player = replace(
+            updated_player,
+            photon_torpedo_ammo_capacity=updated_player.photon_torpedo_ammo_capacity + 1,
+            photon_torpedo_ammo=updated_player.photon_torpedo_ammo + 1,
+        )
+    elif upgrade is SrsBaseUpgrade.DEFENSE:
+        updated_player = replace(updated_player, defense=updated_player.defense + 1)
+    elif upgrade is SrsBaseUpgrade.EVASION:
+        updated_player = replace(updated_player, evasion=updated_player.evasion + 1)
+
+    return updated_player, cost, upgrade.value
 
 
 def _accepted_interaction_state(
@@ -1550,6 +1785,9 @@ def _interaction_event(
     fuel_delta: int,
     outcome: str,
     object_id: str | None = None,
+    player_before: SrsPlayerCombatState | None = None,
+    player_after: SrsPlayerCombatState | None = None,
+    extra_payload: Mapping[str, Any] | None = None,
 ) -> Any:
     resolved_object_id = object_id if object_id is not None else object_state.object_id
     payload = {
@@ -1564,6 +1802,19 @@ def _interaction_event(
         "fuel_delta": fuel_delta,
         "outcome": outcome,
     }
+    if player_before is not None and player_after is not None:
+        payload |= {
+            "player_durability_before": player_before.durability,
+            "player_durability_after": player_after.durability,
+            "player_energy_before": player_before.energy,
+            "player_energy_after": player_after.energy,
+            "player_torpedo_ammo_before": player_before.photon_torpedo_ammo,
+            "player_torpedo_ammo_after": player_after.photon_torpedo_ammo,
+            "salvage_before": player_before.salvage,
+            "salvage_after": player_after.salvage,
+        }
+    if extra_payload is not None:
+        payload |= dict(extra_payload)
     return make_turn_event(
         srs_turn=srs_turn,
         event_type=event_type,
@@ -1595,15 +1846,6 @@ def _is_valid_interaction_range(player_position: Position, object_position: Posi
 
 def _is_consumed_object(state: SrsGameState, object_state: SrsObjectState) -> bool:
     return object_state.consumed or object_state.object_id in state.persistent_state.consumed_object_ids
-
-
-def _validated_fuel_restore(object_state: SrsObjectState) -> int:
-    fuel_restore = object_state.metadata.get("fuel_restore")
-    if fuel_restore is None:
-        raise SrsInteractionError(f"{object_state.object_id} is missing fuel_restore metadata")
-    if not isinstance(fuel_restore, int) or isinstance(fuel_restore, bool) or fuel_restore <= 0:
-        raise SrsInteractionError(f"{object_state.object_id} fuel_restore must be a positive integer")
-    return fuel_restore
 
 
 def _apply_persistent_object_flags(

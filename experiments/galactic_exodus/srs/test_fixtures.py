@@ -26,6 +26,8 @@ REQUIRED_FIXTURES = {
     "resource_cache_single_9x9.json",
     "station_refuel_9x9.json",
     "salvage_placeholder_9x9.json",
+    "salvage_recover_durability_9x9.json",
+    "base_upgrade_defense_9x9.json",
     "nebula_observation_3x3_9x9.json",
     "warp_exit_s_9x9.json",
     "warp_exit_rejected_no_flag_9x9.json",
@@ -41,6 +43,8 @@ REQUIRED_FIXTURES = {
     "combat_enemy_movement_tiebreak_9x9.json",
     "combat_torpedo_destroy_no_counterattack_9x9.json",
     "combat_phaser_attack_damage_9x9.json",
+    "combat_salvage_drop_tier3_energy_9x9.json",
+    "combat_salvage_no_drop_tier1_9x9.json",
     "combat_enemy_defend_9x9.json",
     "combat_enemy_counterattack_9x9.json",
     "combat_enemy_counterattack_fallback_energy_9x9.json",
@@ -98,7 +102,7 @@ class SrsFixtureTests(unittest.TestCase):
         payload = fixture_result_to_jsonable(result)
 
         self.assertEqual(payload["fixture_id"], "resource_cache_single_9x9")
-        self.assertEqual(payload["final_state"]["fuel"], 7)
+        self.assertEqual(payload["final_state"]["fuel"], 5)
         json.dumps(payload)
 
     def test_fixture_runner_validates_render_not_contains(self) -> None:

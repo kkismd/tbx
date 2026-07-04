@@ -1,0 +1,52 @@
+{
+  "fixture_id": "combat_salvage_drop_tier3_energy_9x9",
+  "description": "A destroyed tier3 enemy with fixed salvage drop recovers energy and adds salvage.",
+  "sector": {
+    "sector_id": "normal-9120",
+    "sector_type": "NORMAL",
+    "sector_seed": 9120,
+    "entry_edge": "S",
+    "blocked_edges": []
+  },
+  "initial": {
+    "reveal": {"mode": "FULL"},
+    "player_position": [1, 4],
+    "player": {
+      "energy": 3,
+      "salvage": 1
+    },
+    "combat": {
+      "phase": "PLAYER_ATTACK",
+      "player": {
+        "energy": 3,
+        "salvage": 1
+      },
+      "enemies": [
+        {"enemy_id": "enemy-3", "tier": "TIER3", "position": [3, 4], "drop_salvage": true, "durability": 3}
+      ],
+      "player_attack_target_id": "enemy-3"
+    }
+  },
+  "commands": [
+    {
+      "command_type": "COMBAT_STEP",
+      "player_attack_action": "ATTACK",
+      "player_attack_weapon": "PHOTON_TORPEDO",
+      "salvage_choice": "RECOVER_ENERGY"
+    }
+  ],
+  "expect": {
+    "event_types": ["COMBAT_TRANSITIONED"],
+    "combat_phase": "ENEMY_ACTION",
+    "combat_turn": 0,
+    "enemy_presence": false,
+    "player_energy": 6,
+    "player_salvage": 3,
+    "combat_player_energy": 6,
+    "combat_player_torpedo_ammo": 5,
+    "combat_enemy_positions": {},
+    "combat_enemy_durabilities": {},
+    "enemy_actions": [],
+    "outcome": "ACCEPTED"
+  }
+}

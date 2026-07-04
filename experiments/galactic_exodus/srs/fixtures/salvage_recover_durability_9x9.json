@@ -1,6 +1,6 @@
 {
-  "fixture_id": "salvage_placeholder_9x9",
-  "description": "SALVAGE interaction stores salvage without immediate recovery when no choice is supplied.",
+  "fixture_id": "salvage_recover_durability_9x9",
+  "description": "SALVAGE interaction recovers durability and still adds salvage inventory.",
   "sector": {
     "sector_id": "normal-1001",
     "sector_type": "NORMAL",
@@ -12,16 +12,24 @@
     "player_position": [4, 6],
     "fuel": 2,
     "max_fuel": 9,
+    "player": {
+      "durability": 92
+    },
     "reveal": {
       "mode": "FULL"
     }
   },
   "commands": [
-    {"command_type": "INTERACT", "target_object_id": "salvage-1"}
+    {
+      "command_type": "INTERACT",
+      "target_object_id": "salvage-1",
+      "salvage_choice": "RECOVER_DURABILITY"
+    }
   ],
   "expect": {
     "srs_turn": 1,
     "fuel": 2,
+    "player_durability": 100,
     "player_salvage": 1,
     "player_position": [4, 6],
     "event_types": ["INTERACT_ACCEPTED", "OBJECT_CONSUMED"],

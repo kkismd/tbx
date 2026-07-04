@@ -5,7 +5,7 @@ from dataclasses import replace
 from pathlib import Path
 
 from experiments.galactic_exodus.srs.contracts import load_default_contracts
-from experiments.galactic_exodus.srs.engine import SrsInteractionError, apply_srs_command
+from experiments.galactic_exodus.srs.engine import apply_srs_command
 from experiments.galactic_exodus.srs.log import (
     INTERACT_ACCEPTED,
     INTERACT_REJECTED,
@@ -15,29 +15,15 @@ from experiments.galactic_exodus.srs.log import (
 from experiments.galactic_exodus.srs.model import (
     Direction,
     Position,
+    SrsBaseUpgrade,
     SrsCommand,
     SrsObjectType,
+    SrsSalvageChoice,
 )
 from experiments.galactic_exodus.srs.test_engine_movement import make_state, place_object
 
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
-
-
-def place_object_with_metadata(
-    object_type: SrsObjectType,
-    *,
-    position: Position,
-    object_id: str,
-    fuel_restore: int | None = None,
-):
-    state = place_object(make_state(fuel=2, max_fuel=9), position, object_type, object_id)
-    if fuel_restore is None:
-        return state
-    objects = dict(state.objects)
-    objects[object_id] = replace(objects[object_id], metadata={"fuel_restore": fuel_restore})
-    return replace(state, objects=objects)
-
 
 class SrsEngineInteractionTests(unittest.TestCase):
     @classmethod
@@ -45,12 +31,7 @@ class SrsEngineInteractionTests(unittest.TestCase):
         cls.contracts = load_default_contracts(REPO_ROOT)
 
     def test_resource_cache_refuels_and_consumes(self) -> None:
-        state = place_object_with_metadata(
-            SrsObjectType.RESOURCE_CACHE,
-            position=Position(4, 8),
-            object_id="resource-cache-1",
-            fuel_restore=5,
-        )
+        state = place_object(make_state(fuel=2, max_fuel=9), Position(4, 8), SrsObjectType.RESOURCE_CACHE, "resource-cache-1")
 
         result = apply_srs_command(
             state,
@@ -58,19 +39,14 @@ class SrsEngineInteractionTests(unittest.TestCase):
             contracts=self.contracts,
         )
 
-        self.assertEqual(result.state.fuel, 7)
+        self.assertEqual(result.state.fuel, 5)
         self.assertEqual(result.state.srs_turn, 1)
         self.assertTrue(result.state.objects["resource-cache-1"].consumed)
         self.assertIn("resource-cache-1", result.state.persistent_state.consumed_object_ids)
         self.assertEqual([event.event_type for event in result.events], [INTERACT_ACCEPTED, OBJECT_CONSUMED])
 
-    def test_resource_cache_reads_fuel_restore_metadata(self) -> None:
-        state = place_object_with_metadata(
-            SrsObjectType.RESOURCE_CACHE,
-            position=Position(4, 8),
-            object_id="resource-cache-1",
-            fuel_restore=3,
-        )
+    def test_resource_cache_uses_issue_fixed_restore_value(self) -> None:
+        state = place_object(make_state(fuel=2, max_fuel=9), Position(4, 8), SrsObjectType.RESOURCE_CACHE, "resource-cache-1")
 
         result = apply_srs_command(
             state,
@@ -81,13 +57,8 @@ class SrsEngineInteractionTests(unittest.TestCase):
         self.assertEqual(result.events[0].payload["fuel_delta"], 3)
         self.assertEqual(result.events[1].payload["fuel_restore"], 3)
 
-    def test_resource_cache_does_not_recompute_restore_from_cache_count(self) -> None:
-        state = place_object_with_metadata(
-            SrsObjectType.RESOURCE_CACHE,
-            position=Position(4, 8),
-            object_id="resource-cache-1",
-            fuel_restore=4,
-        )
+    def test_resource_cache_caps_at_max_fuel(self) -> None:
+        state = place_object(make_state(fuel=8, max_fuel=9), Position(4, 8), SrsObjectType.RESOURCE_CACHE, "resource-cache-1")
 
         result = apply_srs_command(
             state,
@@ -95,42 +66,11 @@ class SrsEngineInteractionTests(unittest.TestCase):
             contracts=self.contracts,
         )
 
-        self.assertEqual(result.state.fuel, 6)
-        self.assertEqual(result.events[1].payload["fuel_restore"], 4)
-
-    def test_resource_cache_missing_fuel_restore_raises(self) -> None:
-        state = place_object(make_state(fuel=2, max_fuel=9), Position(4, 8), SrsObjectType.RESOURCE_CACHE, "resource-cache-1")
-
-        with self.assertRaisesRegex(SrsInteractionError, "missing fuel_restore"):
-            apply_srs_command(
-                state,
-                SrsCommand(command_type="INTERACT", target_object_id="resource-cache-1"),
-                contracts=self.contracts,
-            )
-
-    def test_resource_cache_invalid_fuel_restore_raises(self) -> None:
-        state = place_object_with_metadata(
-            SrsObjectType.RESOURCE_CACHE,
-            position=Position(4, 8),
-            object_id="resource-cache-1",
-            fuel_restore=0,
-        )
-
-        with self.assertRaisesRegex(SrsInteractionError, "positive integer"):
-            apply_srs_command(
-                state,
-                SrsCommand(command_type="INTERACT", target_object_id="resource-cache-1"),
-                contracts=self.contracts,
-            )
+        self.assertEqual(result.state.fuel, 9)
+        self.assertEqual(result.events[0].payload["fuel_delta"], 1)
 
     def test_resource_cache_full_fuel_does_not_consume(self) -> None:
-        state = place_object_with_metadata(
-            SrsObjectType.RESOURCE_CACHE,
-            position=Position(4, 8),
-            object_id="resource-cache-1",
-            fuel_restore=5,
-        )
-        state = replace(state, fuel=9, max_fuel=9)
+        state = place_object(make_state(fuel=9, max_fuel=9), Position(4, 8), SrsObjectType.RESOURCE_CACHE, "resource-cache-1")
 
         result = apply_srs_command(
             state,
@@ -143,12 +83,7 @@ class SrsEngineInteractionTests(unittest.TestCase):
         self.assertEqual(result.state, state)
 
     def test_resource_cache_revisit_remains_consumed(self) -> None:
-        state = place_object_with_metadata(
-            SrsObjectType.RESOURCE_CACHE,
-            position=Position(4, 8),
-            object_id="resource-cache-1",
-            fuel_restore=5,
-        )
+        state = place_object(make_state(fuel=2, max_fuel=9), Position(4, 8), SrsObjectType.RESOURCE_CACHE, "resource-cache-1")
         consumed_state = replace(
             state,
             objects={
@@ -170,8 +105,17 @@ class SrsEngineInteractionTests(unittest.TestCase):
         self.assertEqual(result.events[0].payload["outcome"], "REJECTED_ALREADY_CONSUMED")
         self.assertEqual(result.state, consumed_state)
 
-    def test_station_refuels_to_max(self) -> None:
+    def test_station_recovers_all_resources_to_max(self) -> None:
         state = place_object(make_state(fuel=2, max_fuel=9), Position(4, 7), SrsObjectType.STATION, "station-1")
+        state = replace(
+            state,
+            player_state=replace(
+                state.player_state,
+                durability=91,
+                energy=2,
+                photon_torpedo_ammo=1,
+            ),
+        )
 
         result = apply_srs_command(
             state,
@@ -180,6 +124,9 @@ class SrsEngineInteractionTests(unittest.TestCase):
         )
 
         self.assertEqual(result.state.fuel, 9)
+        self.assertEqual(result.state.player_state.durability, 100)
+        self.assertEqual(result.state.player_state.energy, 6)
+        self.assertEqual(result.state.player_state.photon_torpedo_ammo, 6)
         self.assertEqual(result.state.srs_turn, 1)
         self.assertTrue(result.state.objects["station-1"].activated)
         self.assertIn("station-1", result.state.persistent_state.activated_object_ids)
@@ -221,19 +168,29 @@ class SrsEngineInteractionTests(unittest.TestCase):
         self.assertEqual(result.events[0].payload["outcome"], "REJECTED_WRONG_RANGE")
         self.assertEqual(result.state, state)
 
-    def test_station_full_fuel_rejected_no_effect(self) -> None:
+    def test_station_can_buy_base_upgrade(self) -> None:
         state = place_object(make_state(fuel=9, max_fuel=9), Position(4, 7), SrsObjectType.STATION, "station-1")
+        state = replace(
+            state,
+            player_state=replace(state.player_state, salvage=4, defense=1),
+        )
 
         result = apply_srs_command(
             state,
-            SrsCommand(command_type="INTERACT", target_object_id="station-1"),
+            SrsCommand(
+                command_type="INTERACT",
+                target_object_id="station-1",
+                base_upgrade_choice=SrsBaseUpgrade.DEFENSE,
+            ),
             contracts=self.contracts,
         )
 
-        self.assertEqual(result.events[0].payload["outcome"], "REJECTED_NO_EFFECT")
-        self.assertEqual(result.state, state)
+        self.assertEqual(result.events[0].payload["outcome"], "ACCEPTED")
+        self.assertEqual(result.state.player_state.salvage, 0)
+        self.assertEqual(result.state.player_state.defense, 2)
+        self.assertEqual(result.events[0].payload["selected_upgrade"], "DEFENSE")
 
-    def test_salvage_consumed_placeholder(self) -> None:
+    def test_salvage_store_only_adds_inventory(self) -> None:
         state = place_object(make_state(fuel=2, max_fuel=9), Position(4, 8), SrsObjectType.SALVAGE, "salvage-1")
 
         result = apply_srs_command(
@@ -246,9 +203,29 @@ class SrsEngineInteractionTests(unittest.TestCase):
         self.assertIn("salvage-1", result.state.persistent_state.consumed_object_ids)
         self.assertEqual(result.state.srs_turn, 1)
         self.assertEqual(result.events[0].payload["fuel_delta"], 0)
+        self.assertEqual(result.state.player_state.salvage, 1)
+        self.assertEqual(result.events[0].payload["selected_salvage_choice"], "STORE_ONLY")
+
+    def test_salvage_recover_energy_adds_inventory_and_caps_no_overflow(self) -> None:
+        state = place_object(make_state(fuel=2, max_fuel=9), Position(4, 8), SrsObjectType.SALVAGE, "salvage-1")
+        state = replace(state, player_state=replace(state.player_state, energy=5))
+
+        result = apply_srs_command(
+            state,
+            SrsCommand(
+                command_type="INTERACT",
+                target_object_id="salvage-1",
+                salvage_choice=SrsSalvageChoice.RECOVER_ENERGY,
+            ),
+            contracts=self.contracts,
+        )
+
+        self.assertEqual(result.state.player_state.energy, 6)
+        self.assertEqual(result.state.player_state.salvage, 1)
+        self.assertEqual(result.events[0].payload["energy_delta"], 1)
 
     def test_interact_rejected_does_not_consume_turn(self) -> None:
-        state = place_object(make_state(fuel=9, max_fuel=9), Position(4, 7), SrsObjectType.STATION, "station-1")
+        state = place_object(make_state(fuel=2, max_fuel=9), Position(4, 6), SrsObjectType.STATION, "station-1")
 
         result = apply_srs_command(
             state,
@@ -271,12 +248,7 @@ class SrsEngineInteractionTests(unittest.TestCase):
         self.assertEqual(result.state.srs_turn, 1)
 
     def test_interaction_log_fields(self) -> None:
-        state = place_object_with_metadata(
-            SrsObjectType.RESOURCE_CACHE,
-            position=Position(4, 8),
-            object_id="resource-cache-1",
-            fuel_restore=5,
-        )
+        state = place_object(make_state(fuel=2, max_fuel=9), Position(4, 8), SrsObjectType.RESOURCE_CACHE, "resource-cache-1")
 
         result = apply_srs_command(
             state,

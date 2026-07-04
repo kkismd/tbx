@@ -9,6 +9,7 @@ from experiments.galactic_exodus.srs.model import (
     Position,
     SrsCombatPhase,
     SrsCombatState,
+    SrsBaseUpgrade,
     SrsEnemyTier,
     SrsEnemyReaction,
     SectorDescriptor,
@@ -24,6 +25,7 @@ from experiments.galactic_exodus.srs.model import (
     SrsPersistentState,
     SrsPlayerAttackAction,
     SrsTerrainType,
+    SrsSalvageChoice,
     SrsWeaponType,
     create_enemy_combat_state,
     default_weapon_profiles,
@@ -197,13 +199,18 @@ class SrsModelTests(unittest.TestCase):
         player = SrsPlayerCombatState()
 
         self.assertEqual(player.durability, 100)
+        self.assertEqual(player.durability_capacity, 100)
         self.assertEqual(player.defense, 0)
+        self.assertEqual(player.evasion, 0)
         self.assertEqual(player.movement_power, 4)
         self.assertEqual(player.photon_torpedo_ammo, 6)
         self.assertEqual(player.photon_torpedo_ammo_capacity, 6)
+        self.assertEqual(player.photon_torpedo_power, 0)
         self.assertEqual(player.energy, 6)
         self.assertEqual(player.energy_capacity, 6)
+        self.assertEqual(player.phaser_power, 0)
         self.assertEqual(player.energy_recovery, 1)
+        self.assertEqual(player.salvage, 0)
 
     def test_weapon_profiles_use_issue_1196_fixed_values(self) -> None:
         weapons = default_weapon_profiles()
@@ -354,6 +361,17 @@ class SrsModelTests(unittest.TestCase):
         self.assertEqual(command.player_attack_weapon, SrsWeaponType.PHOTON_TORPEDO)
         self.assertEqual(command.enemy_reactions["enemy-1"], SrsEnemyReaction.COUNTERATTACK)
 
+    def test_srs_command_normalizes_reward_choice_fields(self) -> None:
+        command = SrsCommand(
+            command_type="INTERACT",
+            target_object_id="salvage-1",
+            salvage_choice="RECOVER_ENERGY",
+            base_upgrade_choice="ENERGY_CAPACITY",
+        )
+
+        self.assertEqual(command.salvage_choice, SrsSalvageChoice.RECOVER_ENERGY)
+        self.assertEqual(command.base_upgrade_choice, SrsBaseUpgrade.ENERGY_CAPACITY)
+
     def test_srs_command_rejects_attack_without_weapon(self) -> None:
         with self.assertRaisesRegex(SrsModelError, "ATTACK requires a player_attack_weapon"):
             SrsCommand(command_type="COMBAT_STEP", player_attack_action="ATTACK")
@@ -361,6 +379,14 @@ class SrsModelTests(unittest.TestCase):
     def test_srs_command_rejects_combat_fields_for_non_combat_command(self) -> None:
         with self.assertRaisesRegex(SrsModelError, "combat action fields require COMBAT_STEP"):
             SrsCommand(command_type="MOVE_TO", target=Position(1, 1), player_attack_action="SKIP")
+
+    def test_srs_command_rejects_salvage_choice_for_non_reward_command(self) -> None:
+        with self.assertRaisesRegex(SrsModelError, "salvage_choice requires INTERACT or COMBAT_STEP"):
+            SrsCommand(command_type="MOVE_TO", target=Position(1, 1), salvage_choice="STORE_ONLY")
+
+    def test_srs_command_rejects_base_upgrade_choice_for_non_interact(self) -> None:
+        with self.assertRaisesRegex(SrsModelError, "base_upgrade_choice requires INTERACT"):
+            SrsCommand(command_type="COMBAT_STEP", base_upgrade_choice="DEFENSE")
 
     def test_player_combat_state_allows_zero_durability(self) -> None:
         player = SrsPlayerCombatState(durability=0)
