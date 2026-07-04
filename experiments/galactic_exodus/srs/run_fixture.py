@@ -6,8 +6,14 @@ from pathlib import Path
 from typing import Any, Mapping
 
 from experiments.galactic_exodus.srs.contracts import SrsContracts, load_default_contracts
-from experiments.galactic_exodus.srs.encounter import combat_state_from_fixed_encounter
-from experiments.galactic_exodus.srs.engine import restore_srs_state, reveal_full_observation, reveal_observation, run_srs_commands
+from experiments.galactic_exodus.srs.encounter import (
+    EncounterRollDisposition,
+    FixedEncounterRoll,
+    combat_state_from_fixed_encounter,
+    encounter_roll_disposition,
+    resolve_fixed_encounter_roll,
+)
+from experiments.galactic_exodus.srs.engine import apply_srs_command, restore_srs_state, reveal_full_observation, reveal_observation
 from experiments.galactic_exodus.srs.generate import create_sector
 from experiments.galactic_exodus.srs.log import build_srs_log
 from experiments.galactic_exodus.srs.model import (
@@ -49,9 +55,10 @@ _ALLOWED_COMMAND_KEYS = frozenset(
         "player_attack_action",
         "player_attack_weapon",
         "enemy_reactions",
+        "encounter_roll",
     }
 )
-_ALLOWED_COMMAND_TYPES = frozenset({"MOVE_ROUTE", "MOVE_TO", "INTERACT", "WARP_EXIT", "COMBAT_STEP"})
+_ALLOWED_COMMAND_TYPES = frozenset({"MOVE_ROUTE", "MOVE_TO", "INTERACT", "WARP_EXIT", "COMBAT_STEP", "WAIT"})
 
 
 class SrsFixtureError(ValueError):
@@ -66,6 +73,12 @@ class SrsFixtureRunResult:
     log: SrsGameLog
     render: str
     summary: Mapping[str, Any]
+
+
+@dataclass(frozen=True, slots=True)
+class FixtureCommandPlan:
+    command: SrsCommand
+    encounter_roll: FixedEncounterRoll | None = None
 
 
 def load_fixture(path: Path) -> Mapping[str, Any]:
@@ -153,6 +166,12 @@ def command_from_json(data: Mapping[str, Any]) -> SrsCommand:
         raise SrsFixtureError(str(exc)) from exc
 
 
+def fixture_command_plan_from_json(data: Mapping[str, Any]) -> FixtureCommandPlan:
+    command = command_from_json(data)
+    encounter_roll = _encounter_roll_from_json(data.get("encounter_roll"))
+    return FixtureCommandPlan(command=command, encounter_roll=encounter_roll)
+
+
 def state_from_fixture(data: Mapping[str, Any], *, contracts: SrsContracts) -> SrsGameState:
     descriptor = _sector_descriptor(data.get("sector"))
     state = create_sector(descriptor, contracts=contracts)
@@ -205,12 +224,39 @@ def run_fixture_data(data: Mapping[str, Any], *, contracts: SrsContracts) -> Srs
 
     fixture_id = _required_str(data, "fixture_id")
     initial_state = state_from_fixture(data, contracts=contracts)
-    commands = _commands_from_fixture(data)
+    command_plans = _commands_from_fixture(data)
     cost_mode = _fixture_cost_mode(data, contracts=contracts)
 
-    command_result = run_srs_commands(initial_state, commands, contracts=contracts, cost_mode=cost_mode)
-    final_state = command_result.state
-    log = build_srs_log(command_result.events)
+    current_state = initial_state
+    all_events: list[Any] = []
+    for index, command_plan in enumerate(command_plans, start=1):
+        result = apply_srs_command(current_state, command_plan.command, contracts=contracts, cost_mode=cost_mode)
+        all_events.extend(result.events)
+        disposition = encounter_roll_disposition(
+            current_state,
+            command_type=command_plan.command.command_type,
+            next_state=result.state,
+        )
+        if command_plan.encounter_roll is None:
+            current_state = result.state
+            continue
+        if disposition is EncounterRollDisposition.REQUIRED:
+            result_state, encounter_event = resolve_fixed_encounter_roll(
+                result.state,
+                command_type=command_plan.command.command_type,
+                roll=command_plan.encounter_roll,
+            )
+            current_state = result_state
+            all_events.append(encounter_event)
+            continue
+        if command_plan.encounter_roll is not None:
+            raise SrsFixtureError(
+                f"commands[{index}].encounter_roll is not allowed when encounter disposition is {disposition.value}"
+            )
+        current_state = result.state
+
+    final_state = current_state
+    log = build_srs_log(tuple(all_events))
     rendered = render_known_map(final_state)
     summary = _build_summary(
         fixture_id=fixture_id,
@@ -267,11 +313,11 @@ def fixture_result_to_jsonable(result: SrsFixtureRunResult) -> Mapping[str, Any]
     }
 
 
-def _commands_from_fixture(data: Mapping[str, Any]) -> tuple[SrsCommand, ...]:
+def _commands_from_fixture(data: Mapping[str, Any]) -> tuple[FixtureCommandPlan, ...]:
     commands = data.get("commands")
     if not isinstance(commands, list):
         raise SrsFixtureError("commands must be a list")
-    return tuple(command_from_json(command) for command in commands)
+    return tuple(fixture_command_plan_from_json(command) for command in commands)
 
 
 def _fixture_cost_mode(data: Mapping[str, Any], *, contracts: SrsContracts) -> CostMode:
@@ -486,6 +532,43 @@ def _combat_state_from_encounter_fixture(
             composition=tuple(composition),
             player_attack_target_id=player_attack_target_id,
             base_combat_state=base_combat_state,
+        )
+    except ValueError as exc:
+        raise SrsFixtureError(str(exc)) from exc
+
+
+def _encounter_roll_from_json(data: Any) -> FixedEncounterRoll | None:
+    if data is None:
+        return None
+    if not isinstance(data, Mapping):
+        raise SrsFixtureError("encounter_roll must be an object")
+
+    roll_result = _required_str(data, "roll_result")
+    raw_danger_score = data.get("danger_score")
+    danger_score = None
+    if raw_danger_score is not None:
+        if not isinstance(raw_danger_score, int) or isinstance(raw_danger_score, bool):
+            raise SrsFixtureError("encounter_roll.danger_score must be an integer")
+        danger_score = raw_danger_score
+
+    raw_composition = data.get("composition")
+    composition: list[SrsEnemyTier] = []
+    if raw_composition is not None:
+        if not isinstance(raw_composition, list):
+            raise SrsFixtureError("encounter_roll.composition must be a list")
+        for index, raw_tier in enumerate(raw_composition, 1):
+            if not isinstance(raw_tier, str):
+                raise SrsFixtureError(f"encounter_roll.composition[{index}] must be a string")
+            try:
+                composition.append(SrsEnemyTier(raw_tier))
+            except ValueError as exc:
+                raise SrsFixtureError(f"invalid enemy tier: {raw_tier}") from exc
+
+    try:
+        return FixedEncounterRoll(
+            roll_result=roll_result,
+            danger_score=danger_score,
+            composition=tuple(composition),
         )
     except ValueError as exc:
         raise SrsFixtureError(str(exc)) from exc

@@ -198,3 +198,18 @@ class SrsFixtureRegressionTests(unittest.TestCase):
                 "enemy-2": 5,
             },
         )
+
+    def test_combat_encounter_wait_nebula(self) -> None:
+        result = run_named_fixture("combat_encounter_wait_nebula_9x9")
+
+        self.assertEqual(event_types(result), ["WAIT_ACCEPTED", "ENCOUNTER_ROLLED"])
+        self.assertEqual(primary_outcome(result), "ACCEPTED")
+        self.assertTrue(result.final_state.combat_state.enemy_presence)
+        self.assertAlmostEqual(result.log.events[1].payload["actual_encounter_chance"], 0.126)
+
+    def test_combat_encounter_wait_base_docked(self) -> None:
+        result = run_named_fixture("combat_encounter_wait_base_docked_9x9")
+
+        self.assertEqual(event_types(result), ["WAIT_ACCEPTED"])
+        self.assertEqual(primary_outcome(result), "ACCEPTED")
+        self.assertIsNone(result.final_state.combat_state)
