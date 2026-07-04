@@ -7,6 +7,9 @@ from experiments.galactic_exodus.srs.model import (
     SrsCommandResult,
     Direction,
     Position,
+    SrsCombatPhase,
+    SrsCombatState,
+    SrsEnemyTier,
     SectorDescriptor,
     SectorType,
     SrsActualMap,
@@ -14,10 +17,14 @@ from experiments.galactic_exodus.srs.model import (
     SrsGameState,
     SrsModelError,
     SrsKnownState,
+    SrsPlayerCombatState,
     SrsObjectState,
     SrsObjectType,
     SrsPersistentState,
     SrsTerrainType,
+    SrsWeaponType,
+    create_enemy_combat_state,
+    default_weapon_profiles,
     derive_lrs_blocked_routes,
     validate_sector_descriptor,
 )
@@ -181,6 +188,97 @@ class SrsModelTests(unittest.TestCase):
                     blocked_edges=frozenset(),
                 ),
                 player_position=Position(0, 0),
+                objects={},
+            )
+
+    def test_player_combat_state_uses_issue_1196_fixed_values(self) -> None:
+        player = SrsPlayerCombatState()
+
+        self.assertEqual(player.durability, 100)
+        self.assertEqual(player.defense, 0)
+        self.assertEqual(player.movement_power, 4)
+        self.assertEqual(player.photon_torpedo_ammo, 6)
+        self.assertEqual(player.photon_torpedo_ammo_capacity, 6)
+        self.assertEqual(player.energy, 6)
+        self.assertEqual(player.energy_capacity, 6)
+        self.assertEqual(player.energy_recovery, 1)
+
+    def test_weapon_profiles_use_issue_1196_fixed_values(self) -> None:
+        weapons = default_weapon_profiles()
+
+        self.assertEqual(weapons[SrsWeaponType.PHOTON_TORPEDO].damage, 3)
+        self.assertEqual(weapons[SrsWeaponType.PHOTON_TORPEDO].ammo_cost, 1)
+        self.assertEqual(weapons[SrsWeaponType.PHOTON_TORPEDO].range, 3)
+        self.assertEqual(weapons[SrsWeaponType.PHASER].damage, 1)
+        self.assertEqual(weapons[SrsWeaponType.PHASER].energy_cost, 1)
+        self.assertEqual(weapons[SrsWeaponType.PHASER].range, 2)
+        self.assertIsNone(weapons[SrsWeaponType.ENEMY_WEAPON].damage)
+        self.assertEqual(weapons[SrsWeaponType.ENEMY_WEAPON].range, 2)
+
+    def test_create_enemy_combat_state_uses_tier_fixed_values(self) -> None:
+        expectations = {
+            SrsEnemyTier.TIER1: (3, 6, 3),
+            SrsEnemyTier.TIER2: (5, 7, 3),
+            SrsEnemyTier.TIER3: (8, 8, 3),
+            SrsEnemyTier.TIER4: (12, 10, 3),
+        }
+
+        for tier, expected in expectations.items():
+            with self.subTest(tier=tier.value):
+                enemy = create_enemy_combat_state(
+                    enemy_id=f"{tier.value.lower()}-1",
+                    tier=tier,
+                    position=Position(0, 0),
+                )
+                self.assertEqual((enemy.durability, enemy.attack_damage, enemy.movement_power), expected)
+
+    def test_combat_state_enemy_presence_reflects_enemy_list(self) -> None:
+        empty = SrsCombatState()
+        enemy = create_enemy_combat_state(
+            enemy_id="enemy-1",
+            tier=SrsEnemyTier.TIER1,
+            position=Position(0, 0),
+        )
+        occupied = SrsCombatState(enemies={"enemy-1": enemy}, player_attack_target_id="enemy-1")
+
+        self.assertFalse(empty.enemy_presence)
+        self.assertTrue(occupied.enemy_presence)
+        self.assertTrue(occupied.target_available)
+
+    def test_game_state_rejects_out_of_bounds_combat_enemy(self) -> None:
+        enemy = create_enemy_combat_state(
+            enemy_id="enemy-1",
+            tier=SrsEnemyTier.TIER1,
+            position=Position(9, 9),
+        )
+
+        with self.assertRaisesRegex(SrsModelError, "combat enemy position must be within actual_map bounds"):
+            SrsGameState(
+                descriptor=SectorDescriptor(
+                    sector_id="N-1",
+                    sector_type=SectorType.NORMAL,
+                    sector_seed=1,
+                    entry_edge=Direction.N,
+                ),
+                actual_map=SrsActualMap(
+                    width=1,
+                    height=1,
+                    cells=((SrsCell(SrsTerrainType.FLOOR),),),
+                ),
+                known_state=SrsKnownState(),
+                persistent_state=SrsPersistentState(
+                    generated_map_id="N-1:1",
+                    generation_schema_version=1,
+                    generation_seed=1,
+                    sector_type=SectorType.NORMAL,
+                    blocked_edges=frozenset(),
+                ),
+                player_position=Position(0, 0),
+                combat_state=SrsCombatState(
+                    phase=SrsCombatPhase.PLAYER_MOVEMENT,
+                    enemies={"enemy-1": enemy},
+                    player_attack_target_id="enemy-1",
+                ),
                 objects={},
             )
 

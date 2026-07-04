@@ -6,6 +6,8 @@ from typing import Any, Mapping, Sequence
 
 from experiments.galactic_exodus.srs.contracts import SrsContracts
 from experiments.galactic_exodus.srs.log import (
+    COMBAT_REJECTED,
+    COMBAT_TRANSITIONED,
     INTERACT_ACCEPTED,
     INTERACT_REJECTED,
     MOVE_ACCEPTED,
@@ -26,12 +28,14 @@ from experiments.galactic_exodus.srs.model import (
     SectorDescriptor,
     SrsActualMap,
     SrsCell,
+    SrsCombatPhase,
     SrsCommand,
     SrsCommandResult,
     SrsGameState,
     SrsKnownState,
     SrsObjectType,
     SrsObjectState,
+    SrsPlayerCombatState,
     SrsPersistentState,
     SrsTerrainType,
 )
@@ -314,6 +318,8 @@ def apply_srs_command(
         return _apply_move_to(state, command, contracts=contracts, cost_mode=resolved_cost_mode)
     if command.command_type == "INTERACT":
         return _apply_interact(state, command, contracts=contracts)
+    if command.command_type == "COMBAT_STEP":
+        return _apply_combat_step(state, command)
     if command.command_type == "WARP_EXIT":
         return _apply_warp_exit(state, command)
     return _rejected_movement_result(
@@ -637,6 +643,21 @@ def _apply_warp_exit(
         raise SrsMovementError("WARP_EXIT requires an exit_direction")
 
     start_position = state.player_position
+    if state.combat_state is not None and state.combat_state.enemy_presence:
+        return SrsCommandResult(
+            state=state,
+            events=(
+                _warp_exit_event(
+                    srs_turn=state.srs_turn,
+                    event_type=WARP_EXIT_REJECTED,
+                    state=state,
+                    exit_direction=exit_direction,
+                    start_position=start_position,
+                    outcome="REJECTED_ENEMY_PRESENCE",
+                ),
+            ),
+        )
+
     if not state.actual_map.contains(start_position):
         return SrsCommandResult(
             state=state,
@@ -696,6 +717,84 @@ def _apply_warp_exit(
                 outcome="ACCEPTED",
             ),
         ),
+    )
+
+
+def _apply_combat_step(
+    state: SrsGameState,
+    command: SrsCommand,
+) -> SrsCommandResult:
+    combat_state = state.combat_state
+    if combat_state is None:
+        return SrsCommandResult(
+            state=state,
+            events=(
+                make_turn_event(
+                    srs_turn=state.srs_turn,
+                    event_type=COMBAT_REJECTED,
+                    payload={
+                        "command_type": command.command_type,
+                        "outcome": "REJECTED_NO_COMBAT_STATE",
+                    },
+                ),
+            ),
+        )
+
+    player_before = combat_state.player
+    phase_from = combat_state.phase
+    phase_to = _next_combat_phase(combat_state)
+    player_after = player_before
+    combat_turn_after = combat_state.combat_turn
+    if phase_from is SrsCombatPhase.ENEMY_ACTION:
+        combat_turn_after += 1
+        player_after = _recover_player_energy(player_before)
+
+    updated_state = replace(
+        state,
+        combat_state=replace(
+            combat_state,
+            player=player_after,
+            phase=phase_to,
+            combat_turn=combat_turn_after,
+        ),
+    )
+    return SrsCommandResult(
+        state=updated_state,
+        events=(
+            make_turn_event(
+                srs_turn=state.srs_turn,
+                event_type=COMBAT_TRANSITIONED,
+                payload={
+                    "command_type": command.command_type,
+                    "phase_from": phase_from.value,
+                    "phase_to": phase_to.value,
+                    "combat_turn_before": combat_state.combat_turn,
+                    "combat_turn_after": combat_turn_after,
+                    "enemy_presence": combat_state.enemy_presence,
+                    "target_available": combat_state.target_available,
+                    "player_energy_before": player_before.energy,
+                    "player_energy_after": player_after.energy,
+                    "outcome": "ACCEPTED",
+                },
+            ),
+        ),
+    )
+
+
+def _next_combat_phase(combat_state: Any) -> SrsCombatPhase:
+    if combat_state.phase is SrsCombatPhase.PLAYER_MOVEMENT:
+        if combat_state.enemy_presence and combat_state.target_available:
+            return SrsCombatPhase.PLAYER_ATTACK
+        return SrsCombatPhase.ENEMY_ACTION
+    if combat_state.phase is SrsCombatPhase.PLAYER_ATTACK:
+        return SrsCombatPhase.ENEMY_ACTION
+    return SrsCombatPhase.PLAYER_MOVEMENT
+
+
+def _recover_player_energy(player: SrsPlayerCombatState) -> SrsPlayerCombatState:
+    return replace(
+        player,
+        energy=min(player.energy_capacity, player.energy + player.energy_recovery),
     )
 
 

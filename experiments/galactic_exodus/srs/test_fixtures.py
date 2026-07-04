@@ -31,6 +31,7 @@ REQUIRED_FIXTURES = {
     "shared_fuel_cost_9x9.json",
     "revisit_resource_consumed_9x9.json",
     "discovered_cells_restore_9x9.json",
+    "combat_core_state_9x9.json",
 }
 
 
@@ -124,6 +125,14 @@ class SrsFixtureTests(unittest.TestCase):
         payload = {"events": [dict(event.payload) | {"event_type": event.event_type, "srs_turn": event.srs_turn} for event in build_srs_log(result.log.events).events]}
 
         json.dumps(payload)
+
+    def test_combat_fixture_blocks_warp_and_advances_phase_deterministically(self) -> None:
+        result = run_fixture(FIXTURES_DIR / "combat_core_state_9x9.json", contracts=self.contracts)
+
+        self.assertEqual(result.final_state.combat_state.phase.value, "PLAYER_MOVEMENT")
+        self.assertEqual(result.final_state.combat_state.combat_turn, 1)
+        self.assertTrue(result.final_state.combat_state.enemy_presence)
+        self.assertEqual(result.final_state.combat_state.player.energy, 6)
 
     def test_required_fixture_set_exists(self) -> None:
         existing = {path.name for path in FIXTURES_DIR.glob("*.json")}

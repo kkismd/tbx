@@ -14,6 +14,9 @@ from experiments.galactic_exodus.srs.model import (
     Direction,
     ObservationMode,
     Position,
+    SrsCombatPhase,
+    SrsCombatState,
+    SrsEnemyTier,
     SrsActualMap,
     SrsCell,
     SectorDescriptor,
@@ -21,8 +24,10 @@ from experiments.galactic_exodus.srs.model import (
     SrsCommand,
     SrsGameLog,
     SrsGameState,
+    SrsPlayerCombatState,
     SrsPersistentState,
     SrsTerrainType,
+    create_enemy_combat_state,
 )
 from experiments.galactic_exodus.srs.render import render_known_map
 
@@ -31,7 +36,7 @@ REPO_ROOT = Path(__file__).resolve().parents[3]
 FIXTURES_DIR = Path(__file__).resolve().parent / "fixtures"
 
 _ALLOWED_COMMAND_KEYS = frozenset({"command_type", "route", "target", "target_object_id", "exit_direction"})
-_ALLOWED_COMMAND_TYPES = frozenset({"MOVE_ROUTE", "MOVE_TO", "INTERACT", "WARP_EXIT"})
+_ALLOWED_COMMAND_TYPES = frozenset({"MOVE_ROUTE", "MOVE_TO", "INTERACT", "WARP_EXIT", "COMBAT_STEP"})
 
 
 class SrsFixtureError(ValueError):
@@ -136,6 +141,10 @@ def state_from_fixture(data: Mapping[str, Any], *, contracts: SrsContracts) -> S
     else:
         state = replace(state, player_position=player_position)
 
+    combat = initial.get("combat")
+    if combat is not None:
+        state = replace(state, combat_state=_combat_state(combat))
+
     return replace(state, fuel=fuel, max_fuel=max_fuel, srs_turn=srs_turn)
 
 
@@ -190,6 +199,10 @@ def fixture_result_to_jsonable(result: SrsFixtureRunResult) -> Mapping[str, Any]
             "activated_object_ids": sorted(final_state.persistent_state.activated_object_ids),
             "discovered_count": len(final_state.known_state.discovered_cells),
             "event_count": len(result.log.events),
+            "combat_phase": final_state.combat_state.phase.value if final_state.combat_state is not None else None,
+            "combat_turn": final_state.combat_state.combat_turn if final_state.combat_state is not None else None,
+            "enemy_presence": final_state.combat_state.enemy_presence if final_state.combat_state is not None else False,
+            "combat_player_energy": final_state.combat_state.player.energy if final_state.combat_state is not None else None,
         },
         "log": {
             "events": [
@@ -319,6 +332,69 @@ def _apply_persistent_overrides(
     )
 
 
+def _combat_state(data: Any) -> SrsCombatState:
+    if not isinstance(data, Mapping):
+        raise SrsFixtureError("initial.combat must be an object")
+
+    raw_phase = data.get("phase", SrsCombatPhase.PLAYER_MOVEMENT.value)
+    try:
+        phase = SrsCombatPhase(raw_phase)
+    except ValueError as exc:
+        raise SrsFixtureError(f"invalid combat phase: {raw_phase}") from exc
+
+    combat_turn = _optional_int(data, "combat_turn", default=0)
+    player_data = data.get("player", {})
+    if player_data is None:
+        player_data = {}
+    if not isinstance(player_data, Mapping):
+        raise SrsFixtureError("initial.combat.player must be an object")
+
+    player = SrsPlayerCombatState(
+        durability=_optional_int(player_data, "durability", default=100),
+        defense=_optional_int(player_data, "defense", default=0),
+        movement_power=_optional_int(player_data, "movement_power", default=4),
+        photon_torpedo_ammo=_optional_int(player_data, "photon_torpedo_ammo", default=6),
+        photon_torpedo_ammo_capacity=_optional_int(player_data, "photon_torpedo_ammo_capacity", default=6),
+        energy=_optional_int(player_data, "energy", default=6),
+        energy_capacity=_optional_int(player_data, "energy_capacity", default=6),
+        energy_recovery=_optional_int(player_data, "energy_recovery", default=1),
+    )
+
+    raw_enemies = data.get("enemies", [])
+    if not isinstance(raw_enemies, list):
+        raise SrsFixtureError("initial.combat.enemies must be a list")
+    enemies = {}
+    for index, raw_enemy in enumerate(raw_enemies, 1):
+        if not isinstance(raw_enemy, Mapping):
+            raise SrsFixtureError(f"initial.combat.enemies[{index}] must be an object")
+        enemy_id = _required_str(raw_enemy, "enemy_id")
+        raw_tier = _required_str(raw_enemy, "tier")
+        try:
+            tier = SrsEnemyTier(raw_tier)
+        except ValueError as exc:
+            raise SrsFixtureError(f"invalid enemy tier: {raw_tier}") from exc
+        enemies[enemy_id] = create_enemy_combat_state(
+            enemy_id=enemy_id,
+            tier=tier,
+            position=_position(raw_enemy.get("position"), field_name=f"initial.combat.enemies[{index}].position"),
+        )
+
+    player_attack_target_id = data.get("player_attack_target_id")
+    if player_attack_target_id is not None and not isinstance(player_attack_target_id, str):
+        raise SrsFixtureError("initial.combat.player_attack_target_id must be a string")
+
+    try:
+        return SrsCombatState(
+            player=player,
+            enemies=enemies,
+            phase=phase,
+            combat_turn=combat_turn,
+            player_attack_target_id=player_attack_target_id,
+        )
+    except ValueError as exc:
+        raise SrsFixtureError(str(exc)) from exc
+
+
 def _build_summary(
     *,
     fixture_id: str,
@@ -342,6 +418,10 @@ def _build_summary(
         "consumed_object_ids": sorted(final_state.persistent_state.consumed_object_ids),
         "activated_object_ids": sorted(final_state.persistent_state.activated_object_ids),
         "discovered_count": len(final_state.known_state.discovered_cells),
+        "combat_phase": final_state.combat_state.phase.value if final_state.combat_state is not None else None,
+        "combat_turn": final_state.combat_state.combat_turn if final_state.combat_state is not None else None,
+        "enemy_presence": final_state.combat_state.enemy_presence if final_state.combat_state is not None else False,
+        "combat_player_energy": final_state.combat_state.player.energy if final_state.combat_state is not None else None,
         "outcome": primary_outcome,
         "render_line_count": len(render.splitlines()),
     }
@@ -362,6 +442,10 @@ def _validate_expectations(expect: Any, result: SrsFixtureRunResult) -> None:
         ("event_types", event_types),
         ("consumed_object_ids", sorted(final_state.persistent_state.consumed_object_ids)),
         ("activated_object_ids", sorted(final_state.persistent_state.activated_object_ids)),
+        ("combat_phase", final_state.combat_state.phase.value if final_state.combat_state is not None else None),
+        ("combat_turn", final_state.combat_state.combat_turn if final_state.combat_state is not None else None),
+        ("enemy_presence", final_state.combat_state.enemy_presence if final_state.combat_state is not None else False),
+        ("combat_player_energy", final_state.combat_state.player.energy if final_state.combat_state is not None else None),
         ("outcome", result.summary.get("outcome")),
     )
     for field_name, actual in comparisons:
