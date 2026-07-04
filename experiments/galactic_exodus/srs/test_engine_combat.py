@@ -8,6 +8,7 @@ from experiments.galactic_exodus.srs.contracts import load_default_contracts
 from experiments.galactic_exodus.srs.engine import (
     apply_srs_command,
     bresenham_line,
+    enemy_attackable_positions,
     has_clear_line_of_sight,
     is_attackable_position,
 )
@@ -116,6 +117,17 @@ class SrsEngineCombatTests(unittest.TestCase):
             )
         )
 
+    def test_enemy_attackable_positions_enumerates_clear_los_cells(self) -> None:
+        state = replace(make_state(), player_position=Position(4, 4))
+
+        positions = enemy_attackable_positions(state)
+
+        self.assertIn(Position(2, 4), positions)
+        self.assertIn(Position(4, 2), positions)
+        self.assertIn(Position(6, 6), positions)
+        self.assertNotIn(Position(4, 4), positions)
+        self.assertNotIn(Position(1, 4), positions)
+
     def test_combat_step_skips_attack_phase_without_target(self) -> None:
         state = make_state()
         enemy = create_enemy_combat_state(
@@ -211,6 +223,66 @@ class SrsEngineCombatTests(unittest.TestCase):
         self.assertEqual(result.state.combat_state.phase, SrsCombatPhase.PLAYER_MOVEMENT)
         self.assertEqual(result.state.combat_state.combat_turn, 1)
         self.assertEqual(result.state.combat_state.player.energy, 6)
+
+    def test_enemy_action_moves_to_lowest_total_movement_cost_attack_cell(self) -> None:
+        state = replace(make_state(), player_position=Position(4, 4))
+        for position in (Position(1, 4), Position(2, 4)):
+            state = replace_cell_terrain(state, position, SrsTerrainType.ASTEROID_FIELD)
+        enemy = create_enemy_combat_state(
+            enemy_id="enemy-1",
+            tier=SrsEnemyTier.TIER1,
+            position=Position(0, 4),
+        )
+        state = replace(
+            state,
+            combat_state=SrsCombatState(
+                enemies={"enemy-1": enemy},
+                phase=SrsCombatPhase.ENEMY_ACTION,
+            ),
+        )
+
+        result = apply_srs_command(
+            state,
+            SrsCommand(command_type="COMBAT_STEP"),
+            contracts=self.contracts,
+        )
+
+        enemy_action = result.events[0].payload["enemy_actions"][0]
+        self.assertEqual(enemy_action["target_attackable_position"], [2, 3])
+        self.assertEqual(enemy_action["planned_path"], [[0, 3], [1, 3], [2, 3]])
+        self.assertEqual(result.state.combat_state.enemies["enemy-1"].position, Position(2, 3))
+
+    def test_enemy_action_uses_deterministic_cell_order_for_equal_cost_targets(self) -> None:
+        state = replace(make_state(), player_position=Position(6, 4))
+        for position in (Position(1, 4), Position(2, 4), Position(3, 4), Position(4, 4)):
+            state = replace_cell_terrain(state, position, SrsTerrainType.ASTEROID)
+        enemy = create_enemy_combat_state(
+            enemy_id="enemy-1",
+            tier=SrsEnemyTier.TIER1,
+            position=Position(0, 4),
+        )
+        state = replace(
+            state,
+            combat_state=SrsCombatState(
+                enemies={"enemy-1": enemy},
+                phase=SrsCombatPhase.ENEMY_ACTION,
+            ),
+        )
+
+        result = apply_srs_command(
+            state,
+            SrsCommand(command_type="COMBAT_STEP"),
+            contracts=self.contracts,
+        )
+
+        enemy_action = result.events[0].payload["enemy_actions"][0]
+        self.assertEqual(enemy_action["target_attackable_position"], [4, 3])
+        self.assertEqual(
+            enemy_action["planned_path"],
+            [[0, 3], [1, 3], [2, 3], [3, 3], [4, 3]],
+        )
+        self.assertEqual(enemy_action["moved_path"], [[0, 3], [1, 3], [2, 3]])
+        self.assertEqual(result.state.combat_state.enemies["enemy-1"].position, Position(2, 3))
 
     def test_warp_exit_rejected_while_enemy_presence_true(self) -> None:
         state = make_state(entry_edge=Direction.S)

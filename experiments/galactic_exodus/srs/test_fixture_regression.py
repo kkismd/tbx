@@ -102,3 +102,14 @@ class SrsFixtureRegressionTests(unittest.TestCase):
         self.assertIn("resource-cache-1", result.final_state.persistent_state.consumed_object_ids)
         self.assertTrue(result.final_state.objects["resource-cache-1"].consumed)
         self.assertIn(Position(2, 7), result.final_state.known_state.discovered_cells)
+
+    def test_combat_enemy_movement_tiebreak(self) -> None:
+        result = run_named_fixture("combat_enemy_movement_tiebreak_9x9")
+
+        self.assertIn("COMBAT_TRANSITIONED", event_types(result))
+        self.assertEqual(primary_outcome(result), "ACCEPTED")
+        self.assertEqual(result.final_state.combat_state.enemies["enemy-1"].position, Position(2, 3))
+        self.assertEqual(
+            result.summary["enemy_actions"][0]["target_attackable_position"],
+            [4, 3],
+        )

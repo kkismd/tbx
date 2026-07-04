@@ -2,11 +2,13 @@ from __future__ import annotations
 
 import json
 import unittest
+from dataclasses import replace
 from pathlib import Path
 
 from experiments.galactic_exodus.srs.contracts import load_default_contracts
+from experiments.galactic_exodus.srs.engine import apply_srs_command
 from experiments.galactic_exodus.srs.log import build_srs_log
-from experiments.galactic_exodus.srs.model import Position
+from experiments.galactic_exodus.srs.model import Direction, Position, SrsCombatPhase, SrsCombatState, SrsCommand, SrsEnemyTier, create_enemy_combat_state
 from experiments.galactic_exodus.srs.run_fixture import (
     FIXTURES_DIR,
     REPO_ROOT,
@@ -15,6 +17,7 @@ from experiments.galactic_exodus.srs.run_fixture import (
     load_fixture,
     run_fixture,
 )
+from experiments.galactic_exodus.srs.test_engine_movement import make_state
 
 
 REQUIRED_FIXTURES = {
@@ -35,6 +38,7 @@ REQUIRED_FIXTURES = {
     "combat_attack_clear_los_9x9.json",
     "combat_attack_blocked_los_9x9.json",
     "combat_attack_out_of_range_9x9.json",
+    "combat_enemy_movement_tiebreak_9x9.json",
 }
 
 
@@ -86,6 +90,17 @@ class SrsFixtureTests(unittest.TestCase):
         self.assertEqual(payload["fixture_id"], "resource_cache_single_9x9")
         self.assertEqual(payload["final_state"]["fuel"], 7)
         json.dumps(payload)
+
+    def test_fixture_runner_validates_render_not_contains(self) -> None:
+        path = FIXTURES_DIR / "move_route_basic_9x9.json"
+        payload = dict(load_fixture(path))
+        payload["expect"] = dict(payload["expect"])
+        payload["expect"]["render_not_contains"] = "."
+
+        with self.assertRaisesRegex(SrsFixtureError, "expect mismatch for render_not_contains"):
+            from experiments.galactic_exodus.srs.run_fixture import run_fixture_data
+
+            run_fixture_data(payload, contracts=self.contracts)
 
     def test_resource_cache_fixture_restores_manual_eval_discovered_cells(self) -> None:
         result = run_fixture(FIXTURES_DIR / "resource_cache_single_9x9.json", contracts=self.contracts)
@@ -145,6 +160,69 @@ class SrsFixtureTests(unittest.TestCase):
         self.assertEqual(clear.final_state.combat_state.phase.value, "PLAYER_ATTACK")
         self.assertEqual(blocked.final_state.combat_state.phase.value, "ENEMY_ACTION")
         self.assertEqual(out_of_range.final_state.combat_state.phase.value, "ENEMY_ACTION")
+
+    def test_enemy_movement_fixture_keeps_target_path_and_final_position_deterministic(self) -> None:
+        result = run_fixture(FIXTURES_DIR / "combat_enemy_movement_tiebreak_9x9.json", contracts=self.contracts)
+
+        self.assertEqual(result.final_state.combat_state.phase.value, "PLAYER_MOVEMENT")
+        self.assertEqual(result.final_state.combat_state.enemies["enemy-1"].position, Position(2, 3))
+        self.assertEqual(
+            result.summary["enemy_actions"],
+            [
+                {
+                    "enemy_id": "enemy-1",
+                    "start_position": [0, 4],
+                    "target_attackable_position": [4, 3],
+                    "planned_path": [[0, 3], [1, 3], [2, 3], [3, 3], [4, 3]],
+                    "moved_path": [[0, 3], [1, 3], [2, 3]],
+                    "final_position": [2, 3],
+                    "movement_power": 3,
+                    "movement_cost": 50,
+                    "attacked_player": False,
+                    "can_attack_before_move": False,
+                    "can_attack_after_move": False,
+                }
+            ],
+        )
+
+    def test_custom_orthogonal_raw_cost_is_used_by_movement_and_enemy_pathfinding(self) -> None:
+        custom_contracts = replace(
+            self.contracts,
+            movement=replace(
+                self.contracts.movement,
+                orthogonal_raw_cost=7,
+                movement_cost_budget_raw=28,
+            ),
+        )
+
+        movement_state = make_state()
+        movement_result = apply_srs_command(
+            movement_state,
+            SrsCommand(command_type="MOVE_ROUTE", route=(Direction.N,)),
+            contracts=custom_contracts,
+        )
+        self.assertEqual(movement_result.events[0].payload["movement_raw_cost"], 7)
+
+        enemy_state = replace(make_state(), player_position=Position(4, 4))
+        enemy = create_enemy_combat_state(
+            enemy_id="enemy-1",
+            tier=SrsEnemyTier.TIER1,
+            position=Position(0, 4),
+        )
+        enemy_state = replace(
+            enemy_state,
+            combat_state=SrsCombatState(
+                enemies={"enemy-1": enemy},
+                phase=SrsCombatPhase.ENEMY_ACTION,
+            ),
+        )
+        enemy_result = apply_srs_command(
+            enemy_state,
+            SrsCommand(command_type="COMBAT_STEP"),
+            contracts=custom_contracts,
+        )
+
+        self.assertEqual(enemy_result.events[0].payload["enemy_actions"][0]["movement_cost"], 14)
 
     def test_required_fixture_set_exists(self) -> None:
         existing = {path.name for path in FIXTURES_DIR.glob("*.json")}
