@@ -36,7 +36,7 @@ class Phase2ReferenceValidationTests(unittest.TestCase):
 
     def test_valid_reference_is_accepted(self) -> None:
         summary = validator.validate(self.path)
-        self.assertEqual(summary["case_count"], 12)
+        self.assertEqual(summary["case_count"], 16)
 
     def test_missing_required_case_is_rejected(self) -> None:
         self.payload["cases"] = [case for case in self.payload["cases"] if case["case_id"] != "shared_fuel_route"]
