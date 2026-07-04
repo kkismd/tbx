@@ -1,0 +1,35 @@
+{
+  "fixture_id": "combat_attack_blocked_los_9x9",
+  "description": "Selected target skips PLAYER_ATTACK when an impassable intermediate cell blocks line of sight.",
+  "sector": {
+    "sector_id": "normal-9103",
+    "sector_type": "NORMAL",
+    "sector_seed": 9103,
+    "entry_edge": "S",
+    "blocked_edges": []
+  },
+  "initial": {
+    "cell_overrides": [
+      {"position": [2, 4], "terrain": "ASTEROID"}
+    ],
+    "reveal": {"mode": "FULL"},
+    "player_position": [1, 4],
+    "combat": {
+      "phase": "PLAYER_MOVEMENT",
+      "enemies": [
+        {"enemy_id": "enemy-1", "tier": "TIER1", "position": [3, 4]}
+      ],
+      "player_attack_target_id": "enemy-1"
+    }
+  },
+  "commands": [
+    {"command_type": "COMBAT_STEP"}
+  ],
+  "expect": {
+    "event_types": ["COMBAT_TRANSITIONED"],
+    "combat_phase": "ENEMY_ACTION",
+    "combat_turn": 0,
+    "enemy_presence": true,
+    "outcome": "ACCEPTED"
+  }
+}

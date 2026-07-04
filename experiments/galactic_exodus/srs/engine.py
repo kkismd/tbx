@@ -38,6 +38,8 @@ from experiments.galactic_exodus.srs.model import (
     SrsPlayerCombatState,
     SrsPersistentState,
     SrsTerrainType,
+    SrsWeaponType,
+    default_weapon_profiles,
 )
 
 
@@ -51,6 +53,16 @@ class SrsMovementError(ValueError):
 
 class SrsInteractionError(ValueError):
     pass
+
+
+class SrsCombatError(ValueError):
+    pass
+
+
+_PLAYER_ATTACK_WEAPONS = (
+    SrsWeaponType.PHOTON_TORPEDO,
+    SrsWeaponType.PHASER,
+)
 
 
 def observation_size_for_terrain(
@@ -240,6 +252,76 @@ def is_impassable_cell(
         SrsObjectType.PLANET,
         SrsObjectType.STATION,
     }
+
+
+def bresenham_line(
+    start: Position,
+    end: Position,
+) -> tuple[Position, ...]:
+    x0 = start.x
+    y0 = start.y
+    x1 = end.x
+    y1 = end.y
+    dx = abs(x1 - x0)
+    dy = abs(y1 - y0)
+    sx = 1 if x0 < x1 else -1
+    sy = 1 if y0 < y1 else -1
+    err = dx - dy
+
+    line: list[Position] = []
+    while True:
+        line.append(Position(x0, y0))
+        if x0 == x1 and y0 == y1:
+            return tuple(line)
+
+        err_twice = err * 2
+        if err_twice > -dy:
+            err -= dy
+            x0 += sx
+        if err_twice < dx:
+            err += dx
+            y0 += sy
+
+
+def combat_range_distance(
+    attacker: Position,
+    target: Position,
+) -> int:
+    return max(abs(attacker.x - target.x), abs(attacker.y - target.y))
+
+
+def has_clear_line_of_sight(
+    state: SrsGameState,
+    *,
+    attacker: Position,
+    target: Position,
+) -> bool:
+    if not state.actual_map.contains(attacker):
+        raise SrsCombatError(f"attacker position out of bounds: {attacker}")
+    if not state.actual_map.contains(target):
+        raise SrsCombatError(f"target position out of bounds: {target}")
+
+    for position in bresenham_line(attacker, target)[1:-1]:
+        if is_impassable_cell(state, position):
+            return False
+    return True
+
+
+def is_attackable_position(
+    state: SrsGameState,
+    *,
+    attacker: Position,
+    target: Position,
+    weapon_type: SrsWeaponType,
+) -> bool:
+    weapon_profiles = default_weapon_profiles() if state.combat_state is None else state.combat_state.weapon_profiles
+    weapon_profile = weapon_profiles.get(weapon_type)
+    if weapon_profile is None:
+        raise SrsCombatError(f"missing weapon profile: {weapon_type.value}")
+
+    if combat_range_distance(attacker, target) > weapon_profile.range:
+        return False
+    return has_clear_line_of_sight(state, attacker=attacker, target=target)
 
 
 def resolve_move_route(
@@ -742,7 +824,8 @@ def _apply_combat_step(
 
     player_before = combat_state.player
     phase_from = combat_state.phase
-    phase_to = _next_combat_phase(combat_state)
+    target_attackable = _player_target_is_attackable(state)
+    phase_to = _next_combat_phase(state, target_attackable=target_attackable)
     player_after = player_before
     combat_turn_after = combat_state.combat_turn
     if phase_from is SrsCombatPhase.ENEMY_ACTION:
@@ -772,6 +855,7 @@ def _apply_combat_step(
                     "combat_turn_after": combat_turn_after,
                     "enemy_presence": combat_state.enemy_presence,
                     "target_available": combat_state.target_available,
+                    "target_attackable": target_attackable,
                     "player_energy_before": player_before.energy,
                     "player_energy_after": player_after.energy,
                     "outcome": "ACCEPTED",
@@ -781,9 +865,33 @@ def _apply_combat_step(
     )
 
 
-def _next_combat_phase(combat_state: Any) -> SrsCombatPhase:
+def _player_target_is_attackable(state: SrsGameState) -> bool:
+    combat_state = state.combat_state
+    if combat_state is None or not combat_state.target_available:
+        return False
+
+    enemy = combat_state.enemies[combat_state.player_attack_target_id]
+    return any(
+        is_attackable_position(
+            state,
+            attacker=state.player_position,
+            target=enemy.position,
+            weapon_type=weapon_type,
+        )
+        for weapon_type in _PLAYER_ATTACK_WEAPONS
+    )
+
+
+def _next_combat_phase(
+    state: SrsGameState,
+    *,
+    target_attackable: bool,
+) -> SrsCombatPhase:
+    combat_state = state.combat_state
+    if combat_state is None:
+        raise SrsCombatError("combat_state is required for combat phase transitions")
     if combat_state.phase is SrsCombatPhase.PLAYER_MOVEMENT:
-        if combat_state.enemy_presence and combat_state.target_available:
+        if combat_state.enemy_presence and target_attackable:
             return SrsCombatPhase.PLAYER_ATTACK
         return SrsCombatPhase.ENEMY_ACTION
     if combat_state.phase is SrsCombatPhase.PLAYER_ATTACK:

@@ -1,0 +1,32 @@
+{
+  "fixture_id": "combat_attack_clear_los_9x9",
+  "description": "Selected target enters PLAYER_ATTACK when it is within range and line of sight is clear.",
+  "sector": {
+    "sector_id": "normal-9102",
+    "sector_type": "NORMAL",
+    "sector_seed": 9102,
+    "entry_edge": "S",
+    "blocked_edges": []
+  },
+  "initial": {
+    "reveal": {"mode": "FULL"},
+    "player_position": [1, 4],
+    "combat": {
+      "phase": "PLAYER_MOVEMENT",
+      "enemies": [
+        {"enemy_id": "enemy-1", "tier": "TIER1", "position": [3, 4]}
+      ],
+      "player_attack_target_id": "enemy-1"
+    }
+  },
+  "commands": [
+    {"command_type": "COMBAT_STEP"}
+  ],
+  "expect": {
+    "event_types": ["COMBAT_TRANSITIONED"],
+    "combat_phase": "PLAYER_ATTACK",
+    "combat_turn": 0,
+    "enemy_presence": true,
+    "outcome": "ACCEPTED"
+  }
+}
