@@ -1,1 +1,0 @@
-SRS移動方向をlower-left座標系に同期
