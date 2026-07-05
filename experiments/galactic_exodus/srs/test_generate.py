@@ -83,6 +83,17 @@ class SrsGenerateTests(unittest.TestCase):
     def setUpClass(cls) -> None:
         cls.contracts = load_default_contracts(REPO_ROOT)
 
+    def test_internal_edge_positions_are_lower_left_origin(self) -> None:
+        self.assertEqual(
+            EDGE_POSITIONS,
+            {
+                Direction.N: Position(4, 8),
+                Direction.E: Position(8, 4),
+                Direction.S: Position(4, 0),
+                Direction.W: Position(0, 4),
+            },
+        )
+
     def test_same_seed_same_map(self) -> None:
         descriptor = SectorDescriptor("normal-1", SectorType.NORMAL, 1001, Direction.S)
         first = create_sector(descriptor, contracts=self.contracts)
@@ -149,9 +160,9 @@ class SrsGenerateTests(unittest.TestCase):
             contracts=self.contracts,
         )
 
-        self.assertNotIn("4,0", summarize_state(state)["warp_flags"])
+        self.assertNotIn("4,8", summarize_state(state)["warp_flags"])
 
-    def test_blocked_edge_line_is_rift_barrier(self) -> None:
+    def test_north_blocked_edge_line_is_rift_barrier(self) -> None:
         state = create_sector(
             SectorDescriptor(
                 "rift-1",
@@ -159,6 +170,22 @@ class SrsGenerateTests(unittest.TestCase):
                 4001,
                 Direction.S,
                 blocked_edges=frozenset({Direction.N}),
+            ),
+            contracts=self.contracts,
+        )
+
+        for x in range(state.actual_map.width):
+            with self.subTest(x=x):
+                self.assertEqual(state.actual_map.cell_at(Position(x, 8)).terrain.value, "RIFT_BARRIER")
+
+    def test_south_blocked_edge_line_is_rift_barrier(self) -> None:
+        state = create_sector(
+            SectorDescriptor(
+                "rift-1",
+                SectorType.RIFT,
+                4001,
+                Direction.N,
+                blocked_edges=frozenset({Direction.S}),
             ),
             contracts=self.contracts,
         )
@@ -183,7 +210,7 @@ class SrsGenerateTests(unittest.TestCase):
             summarize_state(state)["warp_flags"],
             {
                 "0,4": ["W"],
-                "4,8": ["S"],
+                "4,0": ["S"],
                 "8,4": ["E"],
             },
         )

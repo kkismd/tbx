@@ -9,13 +9,13 @@
   "expected": {
     "width": 9,
     "height": 9,
-    "player_position": [4, 8],
+    "player_position": [4, 0],
     "warp_flags": {
       "8,4": ["E"],
-      "4,8": ["S"],
+      "4,0": ["S"],
       "0,4": ["W"]
     },
-    "blocked_warp_positions": ["4,0"],
+    "blocked_warp_positions": ["4,8"],
     "terrain_counts": {
       "FLOOR": 72,
       "RIFT_BARRIER": 9

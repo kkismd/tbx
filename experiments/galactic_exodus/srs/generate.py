@@ -29,10 +29,12 @@ MAP_WIDTH = 9
 MAP_HEIGHT = 9
 MAP_CENTER = Position(4, 4)
 
+# Internal SRS coordinates are 0-origin lower-left:
+# x increases eastward and y increases northward.
 EDGE_POSITIONS = {
-    Direction.N: Position(4, 0),
+    Direction.N: Position(4, 8),
     Direction.E: Position(8, 4),
-    Direction.S: Position(4, 8),
+    Direction.S: Position(4, 0),
     Direction.W: Position(0, 4),
 }
 
@@ -117,14 +119,14 @@ def _make_floor_cells(*, width: int, height: int) -> list[list[SrsCell]]:
 def _apply_rift_barriers(cells: list[list[SrsCell]], blocked_edges: frozenset[Direction]) -> None:
     for edge in blocked_edges:
         if edge is Direction.N:
-            for x in range(len(cells[0])):
-                cells[0][x] = SrsCell(terrain=SrsTerrainType.RIFT_BARRIER)
+            for x in range(len(cells[-1])):
+                cells[-1][x] = SrsCell(terrain=SrsTerrainType.RIFT_BARRIER)
         elif edge is Direction.E:
             for row in cells:
                 row[-1] = SrsCell(terrain=SrsTerrainType.RIFT_BARRIER)
         elif edge is Direction.S:
-            for x in range(len(cells[-1])):
-                cells[-1][x] = SrsCell(terrain=SrsTerrainType.RIFT_BARRIER)
+            for x in range(len(cells[0])):
+                cells[0][x] = SrsCell(terrain=SrsTerrainType.RIFT_BARRIER)
         elif edge is Direction.W:
             for row in cells:
                 row[0] = SrsCell(terrain=SrsTerrainType.RIFT_BARRIER)
