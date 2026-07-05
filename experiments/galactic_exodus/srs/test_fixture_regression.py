@@ -25,7 +25,7 @@ class SrsFixtureRegressionTests(unittest.TestCase):
         self.assertIn("MOVE_ACCEPTED", event_types(result))
         self.assertEqual(primary_outcome(result), "ACCEPTED")
         self.assertEqual(result.final_state.srs_turn, 1)
-        self.assertEqual(result.final_state.player_position, Position(4, 7))
+        self.assertEqual(result.final_state.player_position, Position(4, 1))
         self.assertEqual(result.final_state.fuel, 0)
 
     def test_move_to_known(self) -> None:
@@ -34,7 +34,7 @@ class SrsFixtureRegressionTests(unittest.TestCase):
         self.assertIn("MOVE_ACCEPTED", event_types(result))
         self.assertEqual(primary_outcome(result), "ACCEPTED")
         self.assertEqual(result.final_state.srs_turn, 1)
-        self.assertEqual(result.final_state.player_position, Position(4, 6))
+        self.assertEqual(result.final_state.player_position, Position(4, 2))
         self.assertEqual(result.final_state.fuel, 0)
 
     def test_resource_cache_single(self) -> None:
@@ -89,7 +89,7 @@ class SrsFixtureRegressionTests(unittest.TestCase):
         self.assertIn("WARP_EXIT_ACCEPTED", event_types(result))
         self.assertEqual(primary_outcome(result), "ACCEPTED")
         self.assertEqual(result.final_state.srs_turn, 1)
-        self.assertEqual(result.final_state.player_position, Position(4, 8))
+        self.assertEqual(result.final_state.player_position, Position(4, 0))
         self.assertEqual(result.final_state.fuel, 0)
 
     def test_rift_blocked_n(self) -> None:
@@ -218,8 +218,8 @@ class SrsFixtureRegressionTests(unittest.TestCase):
         self.assertEqual(
             result.summary["combat_enemy_positions"],
             {
-                "enemy-1": [8, 4],
-                "enemy-2": [4, 8],
+                "enemy-1": [4, 0],
+                "enemy-2": [8, 4],
             },
         )
         self.assertEqual(

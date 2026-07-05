@@ -31,7 +31,7 @@ class SrsEngineInteractionTests(unittest.TestCase):
         cls.contracts = load_default_contracts(REPO_ROOT)
 
     def test_resource_cache_refuels_and_consumes(self) -> None:
-        state = place_object(make_state(fuel=2, max_fuel=9), Position(4, 8), SrsObjectType.RESOURCE_CACHE, "resource-cache-1")
+        state = place_object(make_state(fuel=2, max_fuel=9), Position(4, 0), SrsObjectType.RESOURCE_CACHE, "resource-cache-1")
 
         result = apply_srs_command(
             state,
@@ -46,7 +46,7 @@ class SrsEngineInteractionTests(unittest.TestCase):
         self.assertEqual([event.event_type for event in result.events], [INTERACT_ACCEPTED, OBJECT_CONSUMED])
 
     def test_resource_cache_uses_issue_fixed_restore_value(self) -> None:
-        state = place_object(make_state(fuel=2, max_fuel=9), Position(4, 8), SrsObjectType.RESOURCE_CACHE, "resource-cache-1")
+        state = place_object(make_state(fuel=2, max_fuel=9), Position(4, 0), SrsObjectType.RESOURCE_CACHE, "resource-cache-1")
 
         result = apply_srs_command(
             state,
@@ -58,7 +58,7 @@ class SrsEngineInteractionTests(unittest.TestCase):
         self.assertEqual(result.events[1].payload["fuel_restore"], 3)
 
     def test_resource_cache_caps_at_max_fuel(self) -> None:
-        state = place_object(make_state(fuel=8, max_fuel=9), Position(4, 8), SrsObjectType.RESOURCE_CACHE, "resource-cache-1")
+        state = place_object(make_state(fuel=8, max_fuel=9), Position(4, 0), SrsObjectType.RESOURCE_CACHE, "resource-cache-1")
 
         result = apply_srs_command(
             state,
@@ -70,7 +70,7 @@ class SrsEngineInteractionTests(unittest.TestCase):
         self.assertEqual(result.events[0].payload["fuel_delta"], 1)
 
     def test_resource_cache_full_fuel_does_not_consume(self) -> None:
-        state = place_object(make_state(fuel=9, max_fuel=9), Position(4, 8), SrsObjectType.RESOURCE_CACHE, "resource-cache-1")
+        state = place_object(make_state(fuel=9, max_fuel=9), Position(4, 0), SrsObjectType.RESOURCE_CACHE, "resource-cache-1")
 
         result = apply_srs_command(
             state,
@@ -83,7 +83,7 @@ class SrsEngineInteractionTests(unittest.TestCase):
         self.assertEqual(result.state, state)
 
     def test_resource_cache_revisit_remains_consumed(self) -> None:
-        state = place_object(make_state(fuel=2, max_fuel=9), Position(4, 8), SrsObjectType.RESOURCE_CACHE, "resource-cache-1")
+        state = place_object(make_state(fuel=2, max_fuel=9), Position(4, 0), SrsObjectType.RESOURCE_CACHE, "resource-cache-1")
         consumed_state = replace(
             state,
             objects={
@@ -106,7 +106,7 @@ class SrsEngineInteractionTests(unittest.TestCase):
         self.assertEqual(result.state, consumed_state)
 
     def test_station_recovers_all_resources_to_max(self) -> None:
-        state = place_object(make_state(fuel=2, max_fuel=9), Position(4, 7), SrsObjectType.STATION, "station-1")
+        state = place_object(make_state(fuel=2, max_fuel=9), Position(4, 1), SrsObjectType.STATION, "station-1")
         state = replace(
             state,
             player_state=replace(
@@ -133,7 +133,7 @@ class SrsEngineInteractionTests(unittest.TestCase):
         self.assertEqual([event.event_type for event in result.events], [INTERACT_ACCEPTED, STATION_ACTIVATED])
 
     def test_station_reusable(self) -> None:
-        state = place_object(make_state(fuel=3, max_fuel=9), Position(4, 7), SrsObjectType.STATION, "station-1")
+        state = place_object(make_state(fuel=3, max_fuel=9), Position(4, 1), SrsObjectType.STATION, "station-1")
         state = replace(
             state,
             persistent_state=replace(
@@ -157,7 +157,7 @@ class SrsEngineInteractionTests(unittest.TestCase):
         self.assertEqual(result.state.fuel, 9)
 
     def test_station_requires_adjacent(self) -> None:
-        state = place_object(make_state(fuel=2, max_fuel=9), Position(4, 6), SrsObjectType.STATION, "station-1")
+        state = place_object(make_state(fuel=2, max_fuel=9), Position(4, 2), SrsObjectType.STATION, "station-1")
 
         result = apply_srs_command(
             state,
@@ -169,7 +169,7 @@ class SrsEngineInteractionTests(unittest.TestCase):
         self.assertEqual(result.state, state)
 
     def test_station_can_buy_base_upgrade(self) -> None:
-        state = place_object(make_state(fuel=9, max_fuel=9), Position(4, 7), SrsObjectType.STATION, "station-1")
+        state = place_object(make_state(fuel=9, max_fuel=9), Position(4, 1), SrsObjectType.STATION, "station-1")
         state = replace(
             state,
             player_state=replace(state.player_state, salvage=4, defense=1),
@@ -191,7 +191,7 @@ class SrsEngineInteractionTests(unittest.TestCase):
         self.assertEqual(result.events[0].payload["selected_upgrade"], "DEFENSE")
 
     def test_salvage_store_only_adds_inventory(self) -> None:
-        state = place_object(make_state(fuel=2, max_fuel=9), Position(4, 8), SrsObjectType.SALVAGE, "salvage-1")
+        state = place_object(make_state(fuel=2, max_fuel=9), Position(4, 0), SrsObjectType.SALVAGE, "salvage-1")
 
         result = apply_srs_command(
             state,
@@ -207,7 +207,7 @@ class SrsEngineInteractionTests(unittest.TestCase):
         self.assertEqual(result.events[0].payload["selected_salvage_choice"], "STORE_ONLY")
 
     def test_salvage_recover_energy_adds_inventory_and_caps_no_overflow(self) -> None:
-        state = place_object(make_state(fuel=2, max_fuel=9), Position(4, 8), SrsObjectType.SALVAGE, "salvage-1")
+        state = place_object(make_state(fuel=2, max_fuel=9), Position(4, 0), SrsObjectType.SALVAGE, "salvage-1")
         state = replace(state, player_state=replace(state.player_state, energy=5))
 
         result = apply_srs_command(
@@ -225,7 +225,7 @@ class SrsEngineInteractionTests(unittest.TestCase):
         self.assertEqual(result.events[0].payload["energy_delta"], 1)
 
     def test_interact_rejected_does_not_consume_turn(self) -> None:
-        state = place_object(make_state(fuel=2, max_fuel=9), Position(4, 6), SrsObjectType.STATION, "station-1")
+        state = place_object(make_state(fuel=2, max_fuel=9), Position(4, 2), SrsObjectType.STATION, "station-1")
 
         result = apply_srs_command(
             state,
@@ -237,7 +237,7 @@ class SrsEngineInteractionTests(unittest.TestCase):
         self.assertEqual(result.state, state)
 
     def test_interact_accepted_consumes_one_turn(self) -> None:
-        state = place_object(make_state(fuel=1, max_fuel=9), Position(4, 7), SrsObjectType.STATION, "station-1")
+        state = place_object(make_state(fuel=1, max_fuel=9), Position(4, 1), SrsObjectType.STATION, "station-1")
 
         result = apply_srs_command(
             state,
@@ -248,7 +248,7 @@ class SrsEngineInteractionTests(unittest.TestCase):
         self.assertEqual(result.state.srs_turn, 1)
 
     def test_interaction_log_fields(self) -> None:
-        state = place_object(make_state(fuel=2, max_fuel=9), Position(4, 8), SrsObjectType.RESOURCE_CACHE, "resource-cache-1")
+        state = place_object(make_state(fuel=2, max_fuel=9), Position(4, 0), SrsObjectType.RESOURCE_CACHE, "resource-cache-1")
 
         result = apply_srs_command(
             state,

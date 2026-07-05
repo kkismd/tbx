@@ -243,7 +243,7 @@ def _choose_known_target_route(
             continue
         choice = (
             len(route),
-            target.y,
+            -target.y,
             target.x,
             _DIRECTION_ORDER.index(route[0]),
             target,
@@ -333,7 +333,7 @@ def choose_explore_then_exit_command(
         choice = (
             -unknown_neighbor_count,
             len(route),
-            position.y,
+            -position.y,
             position.x,
             route,
         )
@@ -362,7 +362,7 @@ def _build_unknown_frontier_candidates(
         )
         if unknown_neighbor_count > 0:
             candidates.append((position, unknown_neighbor_count))
-    candidates.sort(key=lambda candidate: (-candidate[1], candidate[0].y, candidate[0].x))
+    candidates.sort(key=lambda candidate: (-candidate[1], -candidate[0].y, candidate[0].x))
     return tuple(candidates)
 
 
@@ -1508,9 +1508,9 @@ def _reconstruct_route(
 
 def _step_position(position: Position, direction: Direction) -> Position:
     deltas = {
-        Direction.N: (0, -1),
+        Direction.N: (0, 1),
         Direction.E: (1, 0),
-        Direction.S: (0, 1),
+        Direction.S: (0, -1),
         Direction.W: (-1, 0),
     }
     dx, dy = deltas[direction]

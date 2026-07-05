@@ -184,8 +184,8 @@ class SrsEngineWarpTests(unittest.TestCase):
             {
                 "command_type": "WARP_EXIT",
                 "exit_direction": "N",
-                "start_position": [4, 0],
-                "warp_position": [4, 0],
+                "start_position": [4, 8],
+                "warp_position": [4, 8],
                 "sector_id": state.descriptor.sector_id,
                 "generated_map_id": state.persistent_state.generated_map_id,
                 "outcome": "ACCEPTED",

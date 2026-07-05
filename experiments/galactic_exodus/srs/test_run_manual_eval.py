@@ -20,23 +20,23 @@ class SrsRunManualEvalTests(unittest.TestCase):
         return _event_summary_lines(result)
 
     def test_manual_eval_render_keeps_player_on_floor_cell(self) -> None:
-        state = replace(make_state(), player_position=Position(4, 7))
-        state = reveal_positions(state, [Position(x, 7) for x in range(9)])
+        state = replace(make_state(), player_position=Position(4, 1))
+        state = reveal_positions(state, [Position(x, 1) for x in range(9)])
 
         rendered = _render_known_map_spaced_for_manual_eval(state)
 
-        self.assertEqual(rendered.splitlines()[7], ". . . . @ . . . .")
+        self.assertEqual(rendered.splitlines()[1], ". . . . @ . . . .")
 
     def test_manual_eval_render_shows_player_beside_warp_symbol(self) -> None:
-        state = reveal_positions(make_state(), [Position(4, 8)])
+        state = reveal_positions(make_state(), [Position(4, 0)])
 
         rendered = _render_known_map_spaced_for_manual_eval(state)
 
-        self.assertEqual(rendered.splitlines()[8], "? ? ? ? v@? ? ? ?")
+        self.assertEqual(rendered.splitlines()[0], "? ? ? ? v@? ? ? ?")
 
     def test_manual_eval_render_shows_player_beside_salvage_symbol(self) -> None:
-        state = place_object(make_state(), Position(4, 6), SrsObjectType.SALVAGE, "salvage-a")
-        state = replace(state, player_position=Position(4, 6))
+        state = place_object(make_state(), Position(4, 2), SrsObjectType.SALVAGE, "salvage-a")
+        state = replace(state, player_position=Position(4, 2))
         state = replace(
             state,
             objects={
@@ -44,11 +44,11 @@ class SrsRunManualEvalTests(unittest.TestCase):
                 "salvage-a": replace(state.objects["salvage-a"], consumed=True),
             },
         )
-        state = reveal_positions(state, [Position(4, 6)])
+        state = reveal_positions(state, [Position(4, 2)])
 
         rendered = _render_known_map_spaced_for_manual_eval(state)
 
-        self.assertEqual(rendered.splitlines()[6], "? ? ? ? s@? ? ? ?")
+        self.assertEqual(rendered.splitlines()[2], "? ? ? ? s@? ? ? ?")
 
     def test_manual_eval_render_uses_left_space_at_right_edge(self) -> None:
         state = reveal_positions(make_state(entry_edge=Direction.E), [Position(8, 4)])
@@ -58,7 +58,7 @@ class SrsRunManualEvalTests(unittest.TestCase):
         self.assertEqual(rendered.splitlines()[4], "? ? ? ? ? ? ? ?@>")
 
     def test_player_cell_text_includes_object_and_warp_details(self) -> None:
-        state = place_object(make_state(), Position(4, 8), SrsObjectType.SALVAGE, "salvage-a")
+        state = place_object(make_state(), Position(4, 0), SrsObjectType.SALVAGE, "salvage-a")
         state = replace(
             state,
             objects={
@@ -66,14 +66,14 @@ class SrsRunManualEvalTests(unittest.TestCase):
                 "salvage-a": replace(state.objects["salvage-a"], consumed=True),
             },
         )
-        state = replace_cell_terrain(state, Position(4, 8), SrsTerrainType.RIFT_BARRIER)
-        state = reveal_positions(state, [Position(4, 8)])
+        state = replace_cell_terrain(state, Position(4, 0), SrsTerrainType.RIFT_BARRIER)
+        state = reveal_positions(state, [Position(4, 0)])
 
         text = _player_cell_text(state)
 
         self.assertEqual(
             text,
-            "- position=(4,8), terrain=RIFT_BARRIER, warp=S, object=SALVAGE, consumed=true, activated=false",
+            "- position=(4,0), terrain=RIFT_BARRIER, warp=S, object=SALVAGE, consumed=true, activated=false",
         )
 
     def test_event_summary_resource_cache_includes_fuel_and_consumed_state(self) -> None:
