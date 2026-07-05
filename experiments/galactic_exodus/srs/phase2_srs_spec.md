@@ -47,6 +47,77 @@ max_srs_turns = 40
 
 SRS はローカル整数座標の 9x9 盤面で扱う。座標は `Position(x, y)` とし、`x` は東に進むほど増え、`y` は北に進むほど増える。方角列は `Direction = N | E | S | W` で表す。
 
+座標契約は internal coordinate と display coordinate の 2 層に分ける。
+
+```text
+internal coordinate:
+  used by Python prototype, fixtures, validators, tests, and engine event payloads
+  origin = lower-left
+  x increases eastward
+  y increases northward
+  coordinates are 0-based
+  9x9 valid range = (0,0) ... (8,8)
+
+display coordinate:
+  used by render output, HUD, manual evaluation text, docs, and display samples
+  origin = lower-left
+  x increases eastward
+  y increases northward
+  coordinates are 1-based
+  9x9 display range = (1,1) ... (9,9)
+```
+
+`Position(x, y)` は internal coordinate を表す。display coordinate が必要な箇所では、internal `Position` から明示的に変換する。
+
+```text
+display_x = internal_x + 1
+display_y = internal_y + 1
+
+internal_x = display_x - 1
+internal_y = display_y - 1
+```
+
+Python prototype の `SrsActualMap.cells` は internal y 軸と同じ順で保持する。
+
+```text
+cells[0] = y=0 の south row
+cells[height - 1] = y=height - 1 の north row
+```
+
+したがって、internal `Position` から cell へアクセスする時は `cells[position.y][position.x]` を使う。表示時だけ north-to-south に描画するため、`y=height-1` から `y=0` へ降順に走査する。
+
+9x9 baseline の edge / warp point は internal coordinate では次になる。
+
+```text
+N edge: y = 8
+S edge: y = 0
+E edge: x = 8
+W edge: x = 0
+
+N warp point: Position(4,8)
+E warp point: Position(8,4)
+S warp point: Position(4,0)
+W warp point: Position(0,4)
+```
+
+同じ点を display coordinate で表示する場合は次になる。
+
+```text
+N warp point: (5,9)
+E warp point: (9,5)
+S warp point: (5,1)
+W warp point: (1,5)
+```
+
+`RIFT_BARRIER` は blocked edge に対応する外縁 cell に置く。
+
+```text
+N blocked: internal y=height-1 row / display y=height row
+S blocked: internal y=0 row / display y=1 row
+E blocked: internal x=width-1 column / display x=width column
+W blocked: internal x=0 column / display x=1 column
+```
+
 固定語彙は次の enum 名に合わせる。
 
 ```text
