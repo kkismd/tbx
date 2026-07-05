@@ -9,7 +9,10 @@
     "blocked_edges": []
   },
   "initial": {
-    "player_position": [4, 7],
+    "player_position": [
+      5,
+      8
+    ],
     "reveal": {
       "mode": "FULL"
     }
@@ -23,8 +26,13 @@
   "expect": {
     "srs_turn": 0,
     "fuel": 0,
-    "player_position": [4, 7],
-    "event_types": ["WARP_EXIT_REJECTED"],
+    "player_position": [
+      5,
+      8
+    ],
+    "event_types": [
+      "WARP_EXIT_REJECTED"
+    ],
     "outcome": "REJECTED_NO_WARP_FLAG"
   }
 }

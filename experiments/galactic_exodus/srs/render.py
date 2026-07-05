@@ -48,9 +48,9 @@ def render_known_map_spaced(state: SrsGameState) -> str:
 
 def _render_known_map(state: SrsGameState, *, cell_separator: str) -> str:
     rows: list[str] = []
-    for y in range(state.actual_map.height):
+    for y in range(1, state.actual_map.height + 1):
         chars: list[str] = []
-        for x in range(state.actual_map.width):
+        for x in range(1, state.actual_map.width + 1):
             position = Position(x, y)
             chars.append(_render_position(state, position))
         rows.append(cell_separator.join(chars))

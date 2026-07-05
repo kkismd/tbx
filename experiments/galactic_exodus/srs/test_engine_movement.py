@@ -73,7 +73,8 @@ def replace_cell_terrain(
 ) -> SrsGameState:
     rows = [list(row) for row in state.actual_map.cells]
     current = state.actual_map.cell_at(position)
-    rows[position.y][position.x] = SrsCell(
+    row_idx, col_idx = state.actual_map.indices_for(position)
+    rows[row_idx][col_idx] = SrsCell(
         terrain=terrain,
         object_id=current.object_id,
         actor_id=current.actor_id,
@@ -90,7 +91,8 @@ def place_object(
 ) -> SrsGameState:
     rows = [list(row) for row in state.actual_map.cells]
     current = state.actual_map.cell_at(position)
-    rows[position.y][position.x] = SrsCell(
+    row_idx, col_idx = state.actual_map.indices_for(position)
+    rows[row_idx][col_idx] = SrsCell(
         terrain=current.terrain,
         object_id=object_id,
         actor_id=current.actor_id,
@@ -259,13 +261,13 @@ class SrsEngineMovementTests(unittest.TestCase):
             contracts=self.contracts,
         )
 
-        self.assertEqual(result.state.player_position, Position(4, 4))
+        self.assertEqual(result.state.player_position, Position(5, 5))
         self.assertEqual(result.events[0].event_type, MOVE_ACCEPTED)
         self.assertEqual(result.events[0].payload["movement_raw_cost"], 40)
         self.assertEqual(result.events[0].payload["outcome"], "BUDGET_EXHAUSTED")
 
     def test_debris_cost_shortens_movement(self) -> None:
-        state = replace_cell_terrain(make_state(), Position(4, 7), SrsTerrainType.DEBRIS)
+        state = replace_cell_terrain(make_state(), Position(5, 8), SrsTerrainType.DEBRIS)
 
         result = apply_srs_command(
             state,
@@ -276,11 +278,11 @@ class SrsEngineMovementTests(unittest.TestCase):
             contracts=self.contracts,
         )
 
-        self.assertEqual(result.state.player_position, Position(4, 5))
+        self.assertEqual(result.state.player_position, Position(5, 6))
         self.assertEqual(result.events[0].payload["movement_raw_cost"], 40)
 
     def test_asteroid_field_cost_shortens_movement(self) -> None:
-        state = replace_cell_terrain(make_state(), Position(4, 7), SrsTerrainType.ASTEROID_FIELD)
+        state = replace_cell_terrain(make_state(), Position(5, 8), SrsTerrainType.ASTEROID_FIELD)
 
         result = apply_srs_command(
             state,
@@ -291,7 +293,7 @@ class SrsEngineMovementTests(unittest.TestCase):
             contracts=self.contracts,
         )
 
-        self.assertEqual(result.state.player_position, Position(4, 6))
+        self.assertEqual(result.state.player_position, Position(5, 7))
         self.assertEqual(result.events[0].payload["movement_raw_cost"], 40)
 
     def test_stop_before_first_blocked_cell(self) -> None:
@@ -301,7 +303,7 @@ class SrsEngineMovementTests(unittest.TestCase):
                 entry_edge=Direction.S,
                 blocked_edges=frozenset({Direction.N}),
             ),
-            Position(4, 7),
+            Position(5, 8),
             SrsTerrainType.RIFT_BARRIER,
         )
 
@@ -377,7 +379,7 @@ class SrsEngineMovementTests(unittest.TestCase):
         self.assertEqual(result.events[0].payload["fuel_after"], 0)
 
     def test_stop_before_after_partial_movement(self) -> None:
-        state = place_object(make_state(), Position(4, 5), SrsObjectType.STAR, "star-blocker")
+        state = place_object(make_state(), Position(5, 6), SrsObjectType.STAR, "star-blocker")
 
         result = apply_srs_command(
             state,
@@ -388,9 +390,9 @@ class SrsEngineMovementTests(unittest.TestCase):
             contracts=self.contracts,
         )
 
-        self.assertEqual(result.state.player_position, Position(4, 6))
+        self.assertEqual(result.state.player_position, Position(5, 7))
         self.assertEqual(result.events[0].event_type, STOPPED_BEFORE_IMPASSABLE)
-        self.assertEqual(result.events[0].payload["blocked_position"], [4, 5])
+        self.assertEqual(result.events[0].payload["blocked_position"], [5, 6])
         self.assertEqual(result.events[0].payload["movement_raw_cost"], 20)
 
     def test_shared_fuel_first_blocked_cell_costs_zero_fuel(self) -> None:
@@ -402,7 +404,7 @@ class SrsEngineMovementTests(unittest.TestCase):
                 fuel=5,
                 max_fuel=9,
             ),
-            Position(4, 7),
+            Position(5, 8),
             SrsTerrainType.RIFT_BARRIER,
         )
 
@@ -420,7 +422,7 @@ class SrsEngineMovementTests(unittest.TestCase):
         self.assertEqual(result.events[0].payload["fuel_after"], 5)
 
     def test_shared_fuel_partial_blocked_counts_passable_cells_only(self) -> None:
-        state = place_object(make_state(fuel=5, max_fuel=9), Position(4, 5), SrsObjectType.STAR, "star-blocker")
+        state = place_object(make_state(fuel=5, max_fuel=9), Position(5, 6), SrsObjectType.STAR, "star-blocker")
 
         result = apply_srs_command(
             state,
@@ -479,11 +481,11 @@ class SrsEngineMovementTests(unittest.TestCase):
         )
 
         self.assertEqual([event.event_type for event in result.events], [MOVE_ACCEPTED, OBSERVATION_UPDATED, OBSERVATION_UPDATED])
-        self.assertEqual(result.events[0].payload["observation_updates"], [[4, 7], [4, 6]])
-        self.assertEqual(result.state.known_state.visited_cells, frozenset({Position(4, 7), Position(4, 6)}))
+        self.assertEqual(result.events[0].payload["observation_updates"], [[5, 8], [5, 7]])
+        self.assertEqual(result.state.known_state.visited_cells, frozenset({Position(5, 8), Position(5, 7)}))
 
     def test_partial_blocked_updates_observation_for_entered_cells_only(self) -> None:
-        state = place_object(make_state(), Position(4, 5), SrsObjectType.STATION, "station-blocker")
+        state = place_object(make_state(), Position(5, 6), SrsObjectType.STATION, "station-blocker")
 
         result = apply_srs_command(
             state,
@@ -492,8 +494,8 @@ class SrsEngineMovementTests(unittest.TestCase):
         )
 
         self.assertEqual([event.event_type for event in result.events], [STOPPED_BEFORE_IMPASSABLE, OBSERVATION_UPDATED, OBSERVATION_UPDATED])
-        self.assertEqual(result.events[0].payload["observation_updates"], [[4, 7], [4, 6]])
-        self.assertNotIn(Position(4, 5), result.state.known_state.visited_cells)
+        self.assertEqual(result.events[0].payload["observation_updates"], [[5, 8], [5, 7]])
+        self.assertNotIn(Position(5, 6), result.state.known_state.visited_cells)
 
     def test_rejected_command_no_turn_no_observation(self) -> None:
         state = make_state()
@@ -528,13 +530,13 @@ class SrsEngineMovementTests(unittest.TestCase):
 
         result = apply_srs_command(
             state,
-            SrsCommand(command_type="MOVE_TO", target=Position(4, 7)),
+            SrsCommand(command_type="MOVE_TO", target=Position(5, 8)),
             contracts=self.contracts,
         )
 
         self.assertEqual(result.events[0].event_type, MOVE_REJECTED)
         self.assertEqual(result.events[0].payload["outcome"], "REJECTED_UNKNOWN_TARGET")
-        self.assertEqual(result.events[0].payload["target_position"], [4, 7])
+        self.assertEqual(result.events[0].payload["target_position"], [5, 8])
         self.assertEqual(result.events[0].payload["resolved_route"], [])
         self.assertEqual(result.state, state)
 
@@ -549,7 +551,7 @@ class SrsEngineMovementTests(unittest.TestCase):
 
         self.assertEqual(result.events[0].event_type, MOVE_REJECTED)
         self.assertEqual(result.events[0].payload["outcome"], "REJECTED_SAME_POSITION")
-        self.assertEqual(result.events[0].payload["target_position"], [4, 8])
+        self.assertEqual(result.events[0].payload["target_position"], [5, 9])
         self.assertEqual(result.events[0].payload["resolved_route"], [])
         self.assertEqual(result.state, state)
 
@@ -558,18 +560,18 @@ class SrsEngineMovementTests(unittest.TestCase):
 
         result = apply_srs_command(
             state,
-            SrsCommand(command_type="MOVE_TO", target=Position(-1, 8)),
+            SrsCommand(command_type="MOVE_TO", target=Position(-1, 9)),
             contracts=self.contracts,
         )
 
         self.assertEqual(result.events[0].event_type, MOVE_REJECTED)
         self.assertEqual(result.events[0].payload["outcome"], "REJECTED_OUT_OF_BOUNDS")
-        self.assertEqual(result.events[0].payload["target_position"], [-1, 8])
+        self.assertEqual(result.events[0].payload["target_position"], [-1, 9])
         self.assertEqual(result.events[0].payload["resolved_route"], [])
         self.assertEqual(result.state, state)
 
     def test_move_to_rejects_no_path(self) -> None:
-        target = Position(4, 6)
+        target = Position(5, 7)
         state = reveal_positions(make_state(), [target])
 
         result = apply_srs_command(
@@ -580,17 +582,17 @@ class SrsEngineMovementTests(unittest.TestCase):
 
         self.assertEqual(result.events[0].event_type, MOVE_REJECTED)
         self.assertEqual(result.events[0].payload["outcome"], "REJECTED_NO_PATH")
-        self.assertEqual(result.events[0].payload["target_position"], [4, 6])
+        self.assertEqual(result.events[0].payload["target_position"], [5, 7])
         self.assertEqual(result.events[0].payload["resolved_route"], [])
         self.assertEqual(result.state, state)
 
     def test_move_to_uses_known_cells_bfs_neighbor_order(self) -> None:
-        target = Position(5, 7)
+        target = Position(6, 8)
         state = reveal_positions(
             make_state(),
             [
-                Position(4, 7),
                 Position(5, 8),
+                Position(6, 9),
                 target,
             ],
         )
@@ -603,20 +605,20 @@ class SrsEngineMovementTests(unittest.TestCase):
 
         self.assertEqual(result.events[0].event_type, MOVE_ACCEPTED)
         self.assertEqual(result.events[0].payload["resolved_route"], ["N", "E"])
-        self.assertEqual(result.events[0].payload["entered_cells"], [[4, 7], [5, 7]])
+        self.assertEqual(result.events[0].payload["entered_cells"], [[5, 8], [6, 8]])
 
     def test_move_to_executes_resolved_route(self) -> None:
         state = reveal_all_for_move_to(make_state())
 
         result = apply_srs_command(
             state,
-            SrsCommand(command_type="MOVE_TO", target=Position(4, 6)),
+            SrsCommand(command_type="MOVE_TO", target=Position(5, 7)),
             contracts=self.contracts,
         )
 
-        self.assertEqual(result.state.player_position, Position(4, 6))
+        self.assertEqual(result.state.player_position, Position(5, 7))
         self.assertEqual(result.events[0].event_type, MOVE_ACCEPTED)
-        self.assertEqual(result.events[0].payload["entered_cells"], [[4, 7], [4, 6]])
+        self.assertEqual(result.events[0].payload["entered_cells"], [[5, 8], [5, 7]])
         self.assertEqual(result.events[0].payload["movement_raw_cost"], 20)
 
     def test_shared_fuel_move_to_uses_resolved_route_cost(self) -> None:
@@ -624,7 +626,7 @@ class SrsEngineMovementTests(unittest.TestCase):
 
         result = apply_srs_command(
             state,
-            SrsCommand(command_type="MOVE_TO", target=Position(4, 6)),
+            SrsCommand(command_type="MOVE_TO", target=Position(5, 7)),
             contracts=self.contracts,
             cost_mode=CostMode.SHARED_FUEL,
         )
@@ -641,7 +643,7 @@ class SrsEngineMovementTests(unittest.TestCase):
 
         result = apply_srs_command(
             state,
-            SrsCommand(command_type="MOVE_TO", target=Position(4, 6)),
+            SrsCommand(command_type="MOVE_TO", target=Position(5, 7)),
             contracts=self.contracts,
         )
 
@@ -649,20 +651,20 @@ class SrsEngineMovementTests(unittest.TestCase):
             [event.event_type for event in result.events],
             [MOVE_ACCEPTED, OBSERVATION_UPDATED, OBSERVATION_UPDATED],
         )
-        self.assertEqual(result.events[0].payload["observation_updates"], [[4, 7], [4, 6]])
-        self.assertEqual(result.state.known_state.visited_cells, frozenset({Position(4, 7), Position(4, 6)}))
+        self.assertEqual(result.events[0].payload["observation_updates"], [[5, 8], [5, 7]])
+        self.assertEqual(result.state.known_state.visited_cells, frozenset({Position(5, 8), Position(5, 7)}))
 
     def test_move_to_payload_contains_target_and_resolved_route(self) -> None:
         state = reveal_all_for_move_to(make_state())
 
         result = apply_srs_command(
             state,
-            SrsCommand(command_type="MOVE_TO", target=Position(5, 7)),
+            SrsCommand(command_type="MOVE_TO", target=Position(6, 8)),
             contracts=self.contracts,
         )
 
         self.assertEqual(result.events[0].payload["command_type"], "MOVE_TO")
-        self.assertEqual(result.events[0].payload["target_position"], [5, 7])
+        self.assertEqual(result.events[0].payload["target_position"], [6, 8])
         self.assertEqual(result.events[0].payload["resolved_route"], ["N", "E"])
 
     def test_move_to_budget_stop_uses_resolved_route_prefix(self) -> None:
@@ -670,22 +672,22 @@ class SrsEngineMovementTests(unittest.TestCase):
 
         result = apply_srs_command(
             state,
-            SrsCommand(command_type="MOVE_TO", target=Position(4, 3)),
+            SrsCommand(command_type="MOVE_TO", target=Position(5, 4)),
             contracts=self.contracts,
         )
 
         self.assertEqual(result.events[0].event_type, MOVE_ACCEPTED)
         self.assertEqual(result.events[0].payload["outcome"], "BUDGET_EXHAUSTED")
         self.assertEqual(result.events[0].payload["resolved_route"], ["N", "N", "N", "N", "N"])
-        self.assertEqual(result.events[0].payload["entered_cells"], [[4, 7], [4, 6], [4, 5], [4, 4]])
-        self.assertEqual(result.state.player_position, Position(4, 4))
+        self.assertEqual(result.events[0].payload["entered_cells"], [[5, 8], [5, 7], [5, 6], [5, 5]])
+        self.assertEqual(result.state.player_position, Position(5, 5))
 
     def test_move_to_replaces_1107_unimplemented_reject(self) -> None:
         state = reveal_all_for_move_to(make_state())
 
         result = apply_srs_command(
             state,
-            SrsCommand(command_type="MOVE_TO", target=Position(4, 7)),
+            SrsCommand(command_type="MOVE_TO", target=Position(5, 8)),
             contracts=self.contracts,
         )
 
@@ -693,7 +695,7 @@ class SrsEngineMovementTests(unittest.TestCase):
         self.assertNotEqual(result.events[0].payload["outcome"], "REJECTED_MOVE_TO_UNIMPLEMENTED")
 
     def test_impassable_star_blocks_movement(self) -> None:
-        state = place_object(make_state(), Position(4, 7), SrsObjectType.STAR, "star-blocker")
+        state = place_object(make_state(), Position(5, 8), SrsObjectType.STAR, "star-blocker")
 
         result = apply_srs_command(
             state,
@@ -702,7 +704,7 @@ class SrsEngineMovementTests(unittest.TestCase):
         )
 
         self.assertEqual(result.events[0].event_type, STOPPED_BEFORE_IMPASSABLE)
-        self.assertEqual(result.events[0].payload["blocked_position"], [4, 7])
+        self.assertEqual(result.events[0].payload["blocked_position"], [5, 8])
 
     def test_run_srs_commands_accumulates_events(self) -> None:
         state = make_state()

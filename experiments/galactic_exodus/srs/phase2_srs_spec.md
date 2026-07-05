@@ -4,7 +4,7 @@
 
 この文書は、Phase 2 SRS の正本仕様書である。`experiments/galactic_exodus/srs/phase2_decisions.csv` と矛盾しない断定形の仕様として扱い、Python prototype・reference fixture・TBX 実装は本書を起点に整合させる。
 
-Python 実装は参照実装であり、正本ではない。仕様と prototype が矛盾した場合は prototype を修正する。`phase2_reference.json` と `validate_phase2_results.py` は、本書で固定した外部契約を replay 可能な形で検証する。
+Python 実装は実行可能な参照実装であり、正本ではない。仕様と prototype が矛盾した場合は prototype を修正する。`phase2_reference.json` と `validate_phase2_results.py` は、本書で固定した外部契約を replay 可能な形で検証する。#1165、#1166、#1167 はこの比較面と成果物同期の follow-up issue として扱う。
 
 ## 2. Scope and deferred items
 
@@ -46,6 +46,13 @@ max_srs_turns = 40
 ## 4. Data model and coordinate system
 
 SRS はローカル整数座標の 9x9 盤面で扱う。座標は `Position(x, y)` とし、`x` は東に進むほど増え、`y` は北に進むほど増える。方角列は `Direction = N | E | S | W` で表す。
+
+SRS coordinate contract:
+  origin = lower-left
+  x increases eastward
+  y increases northward
+  coordinates are 1-based
+  for 9x9 baseline, valid range is (1,1) through (9,9)
 
 固定語彙は次の enum 名に合わせる。
 

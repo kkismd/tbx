@@ -9,18 +9,41 @@
     "blocked_edges": []
   },
   "initial": {
-    "player_position": [4, 7],
+    "player_position": [
+      5,
+      8
+    ],
     "persistent": {
       "consumed_object_ids": [],
       "activated_object_ids": [],
-      "discovered_cells": [[3, 6], [4, 6], [5, 6], [4, 7]]
+      "discovered_cells": [
+        [
+          4,
+          7
+        ],
+        [
+          5,
+          7
+        ],
+        [
+          6,
+          7
+        ],
+        [
+          5,
+          8
+        ]
+      ]
     }
   },
   "commands": [],
   "expect": {
     "srs_turn": 0,
     "fuel": 0,
-    "player_position": [4, 7],
+    "player_position": [
+      5,
+      8
+    ],
     "event_types": [],
     "consumed_object_ids": [],
     "activated_object_ids": []

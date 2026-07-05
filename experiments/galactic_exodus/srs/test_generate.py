@@ -73,8 +73,8 @@ def summarize_state(state: SrsGameState) -> dict[str, Any]:
 
 
 def _iter_cells(state: SrsGameState):
-    for y, row in enumerate(state.actual_map.cells):
-        for x, cell in enumerate(row):
+    for y, row in enumerate(state.actual_map.cells, start=1):
+        for x, cell in enumerate(row, start=1):
             yield Position(x, y), cell
 
 
@@ -149,7 +149,7 @@ class SrsGenerateTests(unittest.TestCase):
             contracts=self.contracts,
         )
 
-        self.assertNotIn("4,0", summarize_state(state)["warp_flags"])
+        self.assertNotIn("5,1", summarize_state(state)["warp_flags"])
 
     def test_blocked_edge_line_is_rift_barrier(self) -> None:
         state = create_sector(
@@ -163,9 +163,9 @@ class SrsGenerateTests(unittest.TestCase):
             contracts=self.contracts,
         )
 
-        for x in range(state.actual_map.width):
+        for x in range(1, state.actual_map.width + 1):
             with self.subTest(x=x):
-                self.assertEqual(state.actual_map.cell_at(Position(x, 0)).terrain.value, "RIFT_BARRIER")
+                self.assertEqual(state.actual_map.cell_at(Position(x, 1)).terrain.value, "RIFT_BARRIER")
 
     def test_non_blocked_edges_have_warp_candidates(self) -> None:
         state = create_sector(
@@ -182,9 +182,9 @@ class SrsGenerateTests(unittest.TestCase):
         self.assertEqual(
             summarize_state(state)["warp_flags"],
             {
-                "0,4": ["W"],
-                "4,8": ["S"],
-                "8,4": ["E"],
+                "1,5": ["W"],
+                "5,9": ["S"],
+                "9,5": ["E"],
             },
         )
 
@@ -298,7 +298,7 @@ class SrsGenerateTests(unittest.TestCase):
         self.assertEqual(state.persistent_state.generated_map_id, "rift-1:4001")
         self.assertEqual(state.persistent_state.generation_seed, 4001)
         self.assertEqual(state.persistent_state.blocked_edges, frozenset({Direction.N}))
-        self.assertEqual(state.persistent_state.warp_flags[Position(8, 4)], frozenset({Direction.E}))
+        self.assertEqual(state.persistent_state.warp_flags[Position(9, 5)], frozenset({Direction.E}))
         self.assertEqual(
             set(state.persistent_state.celestial_body_positions),
             {"star-1", "planet-1", "planet-2"},

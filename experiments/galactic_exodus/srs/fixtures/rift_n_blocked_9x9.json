@@ -4,18 +4,31 @@
     "sector_type": "RIFT",
     "sector_seed": 4001,
     "entry_edge": "S",
-    "blocked_edges": ["N"]
+    "blocked_edges": [
+      "N"
+    ]
   },
   "expected": {
     "width": 9,
     "height": 9,
-    "player_position": [4, 8],
+    "player_position": [
+      5,
+      9
+    ],
     "warp_flags": {
-      "8,4": ["E"],
-      "4,8": ["S"],
-      "0,4": ["W"]
+      "1,5": [
+        "W"
+      ],
+      "9,5": [
+        "E"
+      ],
+      "5,9": [
+        "S"
+      ]
     },
-    "blocked_warp_positions": ["4,0"],
+    "blocked_warp_positions": [
+      "5,1"
+    ],
     "terrain_counts": {
       "FLOOR": 72,
       "RIFT_BARRIER": 9

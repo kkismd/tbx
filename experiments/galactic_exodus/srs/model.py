@@ -390,12 +390,16 @@ class SrsActualMap:
         object.__setattr__(self, "cells", normalized)
 
     def contains(self, position: Position) -> bool:
-        return 0 <= position.x < self.width and 0 <= position.y < self.height
+        return 1 <= position.x <= self.width and 1 <= position.y <= self.height
 
-    def cell_at(self, position: Position) -> SrsCell:
+    def indices_for(self, position: Position) -> tuple[int, int]:
         if not self.contains(position):
             raise IndexError(f"position out of bounds: {position}")
-        return self.cells[position.y][position.x]
+        return (position.y - 1, position.x - 1)
+
+    def cell_at(self, position: Position) -> SrsCell:
+        row_idx, col_idx = self.indices_for(position)
+        return self.cells[row_idx][col_idx]
 
 
 @dataclass(frozen=True, slots=True)

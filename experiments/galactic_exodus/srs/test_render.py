@@ -15,7 +15,7 @@ class SrsRenderTests(unittest.TestCase):
         self.assertEqual(rendered.splitlines(), ["?" * 9] * 9)
 
     def test_known_render_does_not_leak_actual_terrain(self) -> None:
-        state = replace_cell_terrain(make_state(), Position(4, 4), SrsTerrainType.NEBULA)
+        state = replace_cell_terrain(make_state(), Position(5, 5), SrsTerrainType.NEBULA)
 
         rendered = render_known_map(state)
 
@@ -23,7 +23,7 @@ class SrsRenderTests(unittest.TestCase):
         self.assertNotIn("~", rendered)
 
     def test_known_render_player_overrides_cell_symbol(self) -> None:
-        state = reveal_positions(make_state(), [Position(4, 8)])
+        state = reveal_positions(make_state(), [Position(5, 9)])
 
         rendered = render_known_map(state)
 
@@ -31,13 +31,13 @@ class SrsRenderTests(unittest.TestCase):
 
     def test_known_render_object_symbols(self) -> None:
         state = reveal_positions(
-            place_object(make_state(), Position(1, 1), SrsObjectType.STAR, "star-a"),
-            [Position(1, 1), Position(2, 1), Position(3, 1), Position(4, 1)],
+            place_object(make_state(), Position(2, 2), SrsObjectType.STAR, "star-a"),
+            [Position(2, 2), Position(3, 2), Position(4, 2), Position(5, 2)],
         )
-        state = place_object(state, Position(2, 1), SrsObjectType.PLANET, "planet-a")
-        state = place_object(state, Position(3, 1), SrsObjectType.STATION, "station-a")
-        state = place_object(state, Position(4, 1), SrsObjectType.RESOURCE_CACHE, "resource-a")
-        state = reveal_positions(state, [Position(1, 1), Position(2, 1), Position(3, 1), Position(4, 1)])
+        state = place_object(state, Position(3, 2), SrsObjectType.PLANET, "planet-a")
+        state = place_object(state, Position(4, 2), SrsObjectType.STATION, "station-a")
+        state = place_object(state, Position(5, 2), SrsObjectType.RESOURCE_CACHE, "resource-a")
+        state = reveal_positions(state, [Position(2, 2), Position(3, 2), Position(4, 2), Position(5, 2)])
 
         rendered = render_known_map(state)
 
@@ -48,7 +48,7 @@ class SrsRenderTests(unittest.TestCase):
         self.assertEqual(row[4], "R")
 
     def test_known_render_consumed_resource_cache_lowercase(self) -> None:
-        state = place_object(make_state(), Position(2, 2), SrsObjectType.RESOURCE_CACHE, "resource-a")
+        state = place_object(make_state(), Position(3, 3), SrsObjectType.RESOURCE_CACHE, "resource-a")
         state = replace(
             state,
             objects={
@@ -56,14 +56,14 @@ class SrsRenderTests(unittest.TestCase):
                 "resource-a": replace(state.objects["resource-a"], consumed=True),
             },
         )
-        state = reveal_positions(state, [Position(2, 2)])
+        state = reveal_positions(state, [Position(3, 3)])
 
         rendered = render_known_map(state)
 
         self.assertEqual(rendered.splitlines()[2][2], "r")
 
     def test_known_render_consumed_salvage_lowercase(self) -> None:
-        state = place_object(make_state(), Position(2, 2), SrsObjectType.SALVAGE, "salvage-a")
+        state = place_object(make_state(), Position(3, 3), SrsObjectType.SALVAGE, "salvage-a")
         state = replace(
             state,
             objects={
@@ -71,7 +71,7 @@ class SrsRenderTests(unittest.TestCase):
                 "salvage-a": replace(state.objects["salvage-a"], consumed=True),
             },
         )
-        state = reveal_positions(state, [Position(2, 2)])
+        state = reveal_positions(state, [Position(3, 3)])
 
         rendered = render_known_map(state)
 
@@ -94,21 +94,21 @@ class SrsRenderTests(unittest.TestCase):
                 cells=tuple(tuple(row) for row in rows),
             ),
         )
-        state = reveal_positions(state, [Position(1, 1)])
+        state = reveal_positions(state, [Position(2, 2)])
 
         rendered = render_known_map(state)
 
         self.assertEqual(rendered.splitlines()[1][1], "+")
 
     def test_known_render_row_widths_are_stable(self) -> None:
-        state = reveal_positions(make_state(), [Position(x, y) for y in range(9) for x in range(9)])
+        state = reveal_positions(make_state(), [Position(x, y) for y in range(1, 10) for x in range(1, 10)])
 
         rendered = render_known_map(state)
 
         self.assertEqual([len(row) for row in rendered.splitlines()], [9] * 9)
 
     def test_spaced_known_render_inserts_single_spaces_between_cells(self) -> None:
-        state = reveal_positions(make_state(), [Position(x, 8) for x in range(9)])
+        state = reveal_positions(make_state(), [Position(x, 9) for x in range(1, 10)])
 
         rendered = render_known_map_spaced(state)
 

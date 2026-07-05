@@ -77,7 +77,8 @@ def replace_cell_warp_flags(
 ) -> SrsGameState:
     rows = [list(row) for row in state.actual_map.cells]
     current = state.actual_map.cell_at(position)
-    rows[position.y][position.x] = SrsCell(
+    row_idx, col_idx = state.actual_map.indices_for(position)
+    rows[row_idx][col_idx] = SrsCell(
         terrain=current.terrain,
         object_id=current.object_id,
         actor_id=current.actor_id,
@@ -94,7 +95,7 @@ def replace_cell_warp_flags(
             state.known_state,
             known_cells={
                 known_position: (
-                    rows[known_position.y][known_position.x]
+                    rows[state.actual_map.indices_for(known_position)[0]][state.actual_map.indices_for(known_position)[1]]
                     if known_position == position
                     else known_cell
                 )
@@ -276,49 +277,11 @@ class DefaultEvaluationCasesTests(unittest.TestCase):
 
 class KnownStateRoutingHelperTests(unittest.TestCase):
     def test_known_passable_cell_uses_known_cells_only(self) -> None:
-        state = reveal_positions(make_state(), [Position(4, 8), Position(4, 7)])
+        state = reveal_positions(make_state(), [Position(5, 9), Position(5, 8)])
 
         self.assertTrue(
             is_known_passable_cell(
-                Position(4, 7),
-                known_cells=state.known_state.known_cells,
-                objects=state.objects,
-            )
-        )
-        self.assertFalse(
-            is_known_passable_cell(
-                Position(4, 6),
-                known_cells=state.known_state.known_cells,
-                objects=state.objects,
-            )
-        )
-
-    def test_known_passable_cell_rejects_impassable_terrain_and_celestial_objects(self) -> None:
-        state = replace_cell_terrain(make_state(), Position(4, 7), SrsTerrainType.ASTEROID)
-        state = reveal_positions(state, [Position(4, 7), Position(4, 6), Position(4, 5), Position(5, 7), Position(5, 6)])
-        state = place_object(state, Position(4, 6), SrsObjectType.STAR, "star-a")
-        state = place_object(state, Position(4, 5), SrsObjectType.PLANET, "planet-a")
-        state = place_object(state, Position(5, 7), SrsObjectType.STATION, "station-a")
-        state = place_object(state, Position(5, 6), SrsObjectType.RESOURCE_CACHE, "resource-a")
-        state = reveal_positions(state, [Position(4, 7), Position(4, 6), Position(4, 5), Position(5, 7), Position(5, 6)])
-
-        self.assertFalse(
-            is_known_passable_cell(
-                Position(4, 7),
-                known_cells=state.known_state.known_cells,
-                objects=state.objects,
-            )
-        )
-        self.assertFalse(
-            is_known_passable_cell(
-                Position(4, 6),
-                known_cells=state.known_state.known_cells,
-                objects=state.objects,
-            )
-        )
-        self.assertFalse(
-            is_known_passable_cell(
-                Position(4, 5),
+                Position(5, 8),
                 known_cells=state.known_state.known_cells,
                 objects=state.objects,
             )
@@ -330,21 +293,59 @@ class KnownStateRoutingHelperTests(unittest.TestCase):
                 objects=state.objects,
             )
         )
-        self.assertTrue(
+
+    def test_known_passable_cell_rejects_impassable_terrain_and_celestial_objects(self) -> None:
+        state = replace_cell_terrain(make_state(), Position(5, 8), SrsTerrainType.ASTEROID)
+        state = reveal_positions(state, [Position(5, 8), Position(5, 7), Position(5, 6), Position(6, 8), Position(6, 7)])
+        state = place_object(state, Position(5, 7), SrsObjectType.STAR, "star-a")
+        state = place_object(state, Position(5, 6), SrsObjectType.PLANET, "planet-a")
+        state = place_object(state, Position(6, 8), SrsObjectType.STATION, "station-a")
+        state = place_object(state, Position(6, 7), SrsObjectType.RESOURCE_CACHE, "resource-a")
+        state = reveal_positions(state, [Position(5, 8), Position(5, 7), Position(5, 6), Position(6, 8), Position(6, 7)])
+
+        self.assertFalse(
+            is_known_passable_cell(
+                Position(5, 8),
+                known_cells=state.known_state.known_cells,
+                objects=state.objects,
+            )
+        )
+        self.assertFalse(
+            is_known_passable_cell(
+                Position(5, 7),
+                known_cells=state.known_state.known_cells,
+                objects=state.objects,
+            )
+        )
+        self.assertFalse(
             is_known_passable_cell(
                 Position(5, 6),
                 known_cells=state.known_state.known_cells,
                 objects=state.objects,
             )
         )
+        self.assertFalse(
+            is_known_passable_cell(
+                Position(6, 8),
+                known_cells=state.known_state.known_cells,
+                objects=state.objects,
+            )
+        )
+        self.assertTrue(
+            is_known_passable_cell(
+                Position(6, 7),
+                known_cells=state.known_state.known_cells,
+                objects=state.objects,
+            )
+        )
 
     def test_salvage_is_treated_as_known_passable(self) -> None:
-        state = place_object(make_state(), Position(4, 7), SrsObjectType.SALVAGE, "salvage-a")
-        state = reveal_positions(state, [Position(4, 8), Position(4, 7)])
+        state = place_object(make_state(), Position(5, 8), SrsObjectType.SALVAGE, "salvage-a")
+        state = reveal_positions(state, [Position(5, 9), Position(5, 8)])
 
         self.assertTrue(
             is_known_passable_cell(
-                Position(4, 7),
+                Position(5, 8),
                 known_cells=state.known_state.known_cells,
                 objects=state.objects,
             )
@@ -353,13 +354,13 @@ class KnownStateRoutingHelperTests(unittest.TestCase):
     def test_route_on_known_cells_does_not_cross_undiscovered_cells(self) -> None:
         state = reveal_positions(
             make_state(),
-            [Position(4, 8), Position(5, 8), Position(5, 7), Position(5, 6)],
+            [Position(5, 9), Position(6, 9), Position(6, 8), Position(6, 7)],
         )
 
         self.assertEqual(
             route_on_known_cells(
-                Position(4, 8),
-                Position(5, 6),
+                Position(5, 9),
+                Position(6, 7),
                 known_cells=state.known_state.known_cells,
                 objects=state.objects,
             ),
@@ -367,8 +368,8 @@ class KnownStateRoutingHelperTests(unittest.TestCase):
         )
         self.assertIsNone(
             route_on_known_cells(
-                Position(4, 8),
-                Position(4, 6),
+                Position(5, 9),
+                Position(5, 7),
                 known_cells=state.known_state.known_cells,
                 objects=state.objects,
             )
@@ -377,7 +378,7 @@ class KnownStateRoutingHelperTests(unittest.TestCase):
     def test_first_known_route_step_uses_known_state_without_actual_map(self) -> None:
         state = reveal_positions(
             make_state(),
-            [Position(4, 8), Position(4, 7), Position(4, 6)],
+            [Position(5, 9), Position(5, 8), Position(5, 7)],
         )
 
         with patch(
@@ -386,8 +387,8 @@ class KnownStateRoutingHelperTests(unittest.TestCase):
         ):
             self.assertEqual(
                 first_known_route_step(
-                    Position(4, 8),
-                    Position(4, 6),
+                    Position(5, 9),
+                    Position(5, 7),
                     known_cells=state.known_state.known_cells,
                     objects=state.objects,
                 ),
@@ -397,54 +398,54 @@ class KnownStateRoutingHelperTests(unittest.TestCase):
     def test_choose_known_target_step_applies_deterministic_tie_breaking(self) -> None:
         state = reveal_positions(
             make_state(),
-            [Position(4, 8), Position(4, 7), Position(5, 8), Position(3, 8)],
+            [Position(5, 9), Position(5, 8), Position(6, 9), Position(4, 9)],
         )
 
         self.assertEqual(
             choose_known_target_step(
-                Position(4, 8),
-                [Position(4, 7), Position(5, 8), Position(3, 8)],
+                Position(5, 9),
+                [Position(5, 8), Position(6, 9), Position(4, 9)],
                 known_cells=state.known_state.known_cells,
                 objects=state.objects,
             ),
-            (Position(4, 7), Direction.N),
+            (Position(5, 8), Direction.N),
         )
         self.assertEqual(
             choose_known_target_step(
-                Position(4, 8),
-                [Position(5, 8), Position(3, 8)],
+                Position(5, 9),
+                [Position(6, 9), Position(4, 9)],
                 known_cells=state.known_state.known_cells,
                 objects=state.objects,
             ),
-            (Position(3, 8), Direction.W),
+            (Position(4, 9), Direction.W),
         )
 
     def test_iter_known_cardinal_neighbors_is_stable(self) -> None:
         self.assertEqual(
-            iter_known_cardinal_neighbors(Position(4, 8)),
+            iter_known_cardinal_neighbors(Position(5, 9)),
             (
-                (Direction.N, Position(4, 7)),
-                (Direction.E, Position(5, 8)),
-                (Direction.S, Position(4, 9)),
-                (Direction.W, Position(3, 8)),
+                (Direction.N, Position(5, 8)),
+                (Direction.E, Position(6, 9)),
+                (Direction.S, Position(5, 10)),
+                (Direction.W, Position(4, 9)),
             ),
         )
 
     def test_route_on_known_cells_is_deterministic_for_same_input(self) -> None:
         state = reveal_positions(
             make_state(),
-            [Position(4, 8), Position(4, 7), Position(5, 8), Position(5, 7)],
+            [Position(5, 9), Position(5, 8), Position(6, 9), Position(6, 8)],
         )
 
         first = route_on_known_cells(
-            Position(4, 8),
-            Position(5, 7),
+            Position(5, 9),
+            Position(6, 8),
             known_cells=state.known_state.known_cells,
             objects=state.objects,
         )
         second = route_on_known_cells(
-            Position(4, 8),
-            Position(5, 7),
+            Position(5, 9),
+            Position(6, 8),
             known_cells=state.known_state.known_cells,
             objects=state.objects,
         )
@@ -458,7 +459,7 @@ class ExitGreedyPolicyTests(unittest.TestCase):
         self.assertEqual(EXIT_GREEDY_POLICY_NAME, "EXIT_GREEDY")
 
     def test_returns_warp_exit_when_current_cell_has_selected_exit(self) -> None:
-        state = reveal_positions(make_state(entry_edge=Direction.S), [Position(4, 8)])
+        state = reveal_positions(make_state(entry_edge=Direction.S), [Position(5, 9)])
 
         command = choose_exit_greedy_command(state, selected_exit_edge=Direction.S)
 
@@ -470,9 +471,9 @@ class ExitGreedyPolicyTests(unittest.TestCase):
     def test_returns_single_step_move_route_toward_nearest_known_warp_cell(self) -> None:
         state = reveal_positions(
             make_state(),
-            [Position(4, 8), Position(5, 8), Position(6, 8)],
+            [Position(5, 9), Position(6, 9), Position(7, 9)],
         )
-        state = replace_cell_warp_flags(state, Position(6, 8), frozenset({Direction.N}))
+        state = replace_cell_warp_flags(state, Position(7, 9), frozenset({Direction.N}))
 
         command = choose_exit_greedy_command(state, selected_exit_edge=Direction.N)
 
@@ -483,7 +484,7 @@ class ExitGreedyPolicyTests(unittest.TestCase):
         self.assertEqual(command.route, (Direction.E,))
 
     def test_returns_no_action_when_selected_exit_warp_cell_is_undiscovered(self) -> None:
-        state = reveal_positions(make_state(), [Position(4, 8), Position(4, 7)])
+        state = reveal_positions(make_state(), [Position(5, 9), Position(5, 8)])
 
         self.assertIsNone(
             choose_exit_greedy_command(state, selected_exit_edge=Direction.N)
@@ -492,11 +493,11 @@ class ExitGreedyPolicyTests(unittest.TestCase):
     def test_returns_no_action_when_known_warp_cell_is_unreachable(self) -> None:
         state = reveal_positions(
             make_state(),
-            [Position(4, 8), Position(5, 8), Position(6, 8)],
+            [Position(5, 9), Position(6, 9), Position(7, 9)],
         )
-        state = replace_cell_terrain(state, Position(5, 8), SrsTerrainType.ASTEROID)
-        state = reveal_positions(state, [Position(4, 8), Position(5, 8), Position(6, 8)])
-        state = replace_cell_warp_flags(state, Position(6, 8), frozenset({Direction.N}))
+        state = replace_cell_terrain(state, Position(6, 9), SrsTerrainType.ASTEROID)
+        state = reveal_positions(state, [Position(5, 9), Position(6, 9), Position(7, 9)])
+        state = replace_cell_warp_flags(state, Position(7, 9), frozenset({Direction.N}))
 
         self.assertIsNone(
             choose_exit_greedy_command(state, selected_exit_edge=Direction.N)
@@ -504,10 +505,10 @@ class ExitGreedyPolicyTests(unittest.TestCase):
 
     def test_does_not_detour_to_objects_before_exit(self) -> None:
         state = reveal_positions(
-            place_object(make_state(), Position(4, 7), SrsObjectType.SALVAGE, "salvage-a"),
-            [Position(4, 8), Position(4, 7), Position(5, 8), Position(6, 8)],
+            place_object(make_state(), Position(5, 8), SrsObjectType.SALVAGE, "salvage-a"),
+            [Position(5, 9), Position(5, 8), Position(6, 9), Position(7, 9)],
         )
-        state = replace_cell_warp_flags(state, Position(6, 8), frozenset({Direction.N}))
+        state = replace_cell_warp_flags(state, Position(7, 9), frozenset({Direction.N}))
 
         command = choose_exit_greedy_command(state, selected_exit_edge=Direction.N)
 
@@ -519,9 +520,9 @@ class ExitGreedyPolicyTests(unittest.TestCase):
     def test_never_returns_move_to(self) -> None:
         state = reveal_positions(
             make_state(),
-            [Position(4, 8), Position(5, 8), Position(6, 8)],
+            [Position(5, 9), Position(6, 9), Position(7, 9)],
         )
-        state = replace_cell_warp_flags(state, Position(6, 8), frozenset({Direction.N}))
+        state = replace_cell_warp_flags(state, Position(7, 9), frozenset({Direction.N}))
 
         command = choose_exit_greedy_command(state, selected_exit_edge=Direction.N)
 
@@ -531,10 +532,10 @@ class ExitGreedyPolicyTests(unittest.TestCase):
     def test_is_deterministic_for_same_input(self) -> None:
         state = reveal_positions(
             make_state(),
-            [Position(4, 8), Position(4, 7), Position(5, 8), Position(5, 7)],
+            [Position(5, 9), Position(5, 8), Position(6, 9), Position(6, 8)],
         )
-        state = replace_cell_warp_flags(state, Position(4, 7), frozenset({Direction.N}))
         state = replace_cell_warp_flags(state, Position(5, 8), frozenset({Direction.N}))
+        state = replace_cell_warp_flags(state, Position(6, 9), frozenset({Direction.N}))
 
         first = choose_exit_greedy_command(state, selected_exit_edge=Direction.N)
         second = choose_exit_greedy_command(state, selected_exit_edge=Direction.N)
@@ -545,9 +546,9 @@ class ExitGreedyPolicyTests(unittest.TestCase):
     def test_uses_known_state_without_actual_map(self) -> None:
         state = reveal_positions(
             make_state(),
-            [Position(4, 8), Position(5, 8), Position(6, 8)],
+            [Position(5, 9), Position(6, 9), Position(7, 9)],
         )
-        state = replace_cell_warp_flags(state, Position(6, 8), frozenset({Direction.N}))
+        state = replace_cell_warp_flags(state, Position(7, 9), frozenset({Direction.N}))
 
         with patch(
             "experiments.galactic_exodus.srs.model.SrsActualMap.cell_at",
@@ -570,13 +571,13 @@ class ObjectGreedyPolicyTests(unittest.TestCase):
     def test_prioritizes_known_unconsumed_resource_cache(self) -> None:
         state = place_object_with_metadata(
             make_state(fuel=2, max_fuel=9),
-            Position(4, 8),
+            Position(5, 9),
             SrsObjectType.RESOURCE_CACHE,
             "resource-cache-1",
             fuel_restore=5,
         )
-        state = place_object(state, Position(5, 8), SrsObjectType.SALVAGE, "salvage-1")
-        state = reveal_positions(state, [Position(4, 8), Position(5, 8)])
+        state = place_object(state, Position(6, 9), SrsObjectType.SALVAGE, "salvage-1")
+        state = reveal_positions(state, [Position(5, 9), Position(6, 9)])
 
         command = choose_object_greedy_command(
             state,
@@ -592,13 +593,13 @@ class ObjectGreedyPolicyTests(unittest.TestCase):
     def test_resource_cache_is_excluded_at_full_fuel(self) -> None:
         state = place_object_with_metadata(
             make_state(fuel=9, max_fuel=9),
-            Position(4, 8),
+            Position(5, 9),
             SrsObjectType.RESOURCE_CACHE,
             "resource-cache-1",
             fuel_restore=5,
         )
-        state = reveal_positions(state, [Position(4, 8), Position(4, 7), Position(4, 6)])
-        state = replace_cell_warp_flags(state, Position(4, 6), frozenset({Direction.N}))
+        state = reveal_positions(state, [Position(5, 9), Position(5, 8), Position(5, 7)])
+        state = replace_cell_warp_flags(state, Position(5, 7), frozenset({Direction.N}))
 
         command = choose_object_greedy_command(
             state,
@@ -612,8 +613,8 @@ class ObjectGreedyPolicyTests(unittest.TestCase):
         )
 
     def test_known_unactivated_station_is_a_candidate(self) -> None:
-        state = place_object(make_state(fuel=2, max_fuel=9), Position(4, 7), SrsObjectType.STATION, "station-1")
-        state = reveal_positions(state, [Position(4, 8), Position(4, 7)])
+        state = place_object(make_state(fuel=2, max_fuel=9), Position(5, 8), SrsObjectType.STATION, "station-1")
+        state = reveal_positions(state, [Position(5, 9), Position(5, 8)])
 
         command = choose_object_greedy_command(
             state,
@@ -627,9 +628,9 @@ class ObjectGreedyPolicyTests(unittest.TestCase):
         )
 
     def test_station_is_excluded_at_full_fuel(self) -> None:
-        state = place_object(make_state(fuel=9, max_fuel=9), Position(4, 7), SrsObjectType.STATION, "station-1")
-        state = reveal_positions(state, [Position(4, 8), Position(4, 7), Position(5, 8)])
-        state = replace_cell_warp_flags(state, Position(5, 8), frozenset({Direction.N}))
+        state = place_object(make_state(fuel=9, max_fuel=9), Position(5, 8), SrsObjectType.STATION, "station-1")
+        state = reveal_positions(state, [Position(5, 9), Position(5, 8), Position(6, 9)])
+        state = replace_cell_warp_flags(state, Position(6, 9), frozenset({Direction.N}))
 
         command = choose_object_greedy_command(
             state,
@@ -643,9 +644,9 @@ class ObjectGreedyPolicyTests(unittest.TestCase):
         )
 
     def test_station_is_candidate_for_upgrade_even_when_fuel_is_full(self) -> None:
-        state = place_object(make_state(fuel=9, max_fuel=9), Position(4, 7), SrsObjectType.STATION, "station-1")
+        state = place_object(make_state(fuel=9, max_fuel=9), Position(5, 8), SrsObjectType.STATION, "station-1")
         state = replace(state, player_state=replace(state.player_state, salvage=4))
-        state = reveal_positions(state, [Position(4, 8), Position(4, 7)])
+        state = reveal_positions(state, [Position(5, 9), Position(5, 8)])
 
         command = choose_object_greedy_command(
             state,
@@ -656,8 +657,8 @@ class ObjectGreedyPolicyTests(unittest.TestCase):
         self.assertEqual(command, SrsCommand(command_type="INTERACT", target_object_id="station-1"))
 
     def test_known_unconsumed_salvage_is_a_candidate(self) -> None:
-        state = place_object(make_state(fuel=2, max_fuel=9), Position(5, 8), SrsObjectType.SALVAGE, "salvage-1")
-        state = reveal_positions(state, [Position(4, 8), Position(5, 8)])
+        state = place_object(make_state(fuel=2, max_fuel=9), Position(6, 9), SrsObjectType.SALVAGE, "salvage-1")
+        state = reveal_positions(state, [Position(5, 9), Position(6, 9)])
 
         command = choose_object_greedy_command(
             state,
@@ -671,8 +672,8 @@ class ObjectGreedyPolicyTests(unittest.TestCase):
         )
 
     def test_returns_interact_when_in_interaction_range(self) -> None:
-        state = place_object(make_state(fuel=2, max_fuel=9), Position(4, 7), SrsObjectType.STATION, "station-1")
-        state = reveal_positions(state, [Position(4, 8), Position(4, 7), Position(5, 8)])
+        state = place_object(make_state(fuel=2, max_fuel=9), Position(5, 8), SrsObjectType.STATION, "station-1")
+        state = reveal_positions(state, [Position(5, 9), Position(5, 8), Position(6, 9)])
 
         command = choose_object_greedy_command(
             state,
@@ -688,12 +689,12 @@ class ObjectGreedyPolicyTests(unittest.TestCase):
     def test_returns_single_step_move_route_when_out_of_range(self) -> None:
         state = place_object_with_metadata(
             make_state(fuel=2, max_fuel=9),
-            Position(4, 6),
+            Position(5, 7),
             SrsObjectType.RESOURCE_CACHE,
             "resource-cache-1",
             fuel_restore=5,
         )
-        state = reveal_positions(state, [Position(4, 8), Position(4, 7), Position(4, 6)])
+        state = reveal_positions(state, [Position(5, 9), Position(5, 8), Position(5, 7)])
 
         command = choose_object_greedy_command(
             state,
@@ -708,8 +709,8 @@ class ObjectGreedyPolicyTests(unittest.TestCase):
         self.assertEqual(command.route, (Direction.N,))
 
     def test_falls_back_to_exit_greedy_when_no_object_candidates_exist(self) -> None:
-        state = reveal_positions(make_state(), [Position(4, 8), Position(4, 7), Position(4, 6)])
-        state = replace_cell_warp_flags(state, Position(4, 6), frozenset({Direction.N}))
+        state = reveal_positions(make_state(), [Position(5, 9), Position(5, 8), Position(5, 7)])
+        state = replace_cell_warp_flags(state, Position(5, 7), frozenset({Direction.N}))
 
         command = choose_object_greedy_command(
             state,
@@ -725,13 +726,13 @@ class ObjectGreedyPolicyTests(unittest.TestCase):
     def test_rejected_object_is_not_retried(self) -> None:
         state = place_object_with_metadata(
             make_state(fuel=2, max_fuel=9),
-            Position(4, 8),
+            Position(5, 9),
             SrsObjectType.RESOURCE_CACHE,
             "resource-cache-1",
             fuel_restore=5,
         )
-        state = place_object(state, Position(5, 8), SrsObjectType.SALVAGE, "salvage-1")
-        state = reveal_positions(state, [Position(4, 8), Position(5, 8)])
+        state = place_object(state, Position(6, 9), SrsObjectType.SALVAGE, "salvage-1")
+        state = reveal_positions(state, [Position(5, 9), Position(6, 9)])
 
         command = choose_object_greedy_command(
             state,
@@ -748,12 +749,12 @@ class ObjectGreedyPolicyTests(unittest.TestCase):
     def test_build_candidates_uses_known_cells_only(self) -> None:
         state = place_object_with_metadata(
             make_state(fuel=2, max_fuel=9),
-            Position(4, 6),
+            Position(5, 7),
             SrsObjectType.RESOURCE_CACHE,
             "resource-cache-1",
             fuel_restore=5,
         )
-        state = reveal_positions(state, [Position(4, 8), Position(4, 7)])
+        state = reveal_positions(state, [Position(5, 9), Position(5, 8)])
 
         candidates = build_object_greedy_candidates(
             state,
@@ -763,8 +764,8 @@ class ObjectGreedyPolicyTests(unittest.TestCase):
         self.assertEqual(candidates, ())
 
     def test_never_returns_move_to(self) -> None:
-        state = place_object(make_state(fuel=2, max_fuel=9), Position(5, 8), SrsObjectType.SALVAGE, "salvage-1")
-        state = reveal_positions(state, [Position(4, 8), Position(5, 8)])
+        state = place_object(make_state(fuel=2, max_fuel=9), Position(6, 9), SrsObjectType.SALVAGE, "salvage-1")
+        state = reveal_positions(state, [Position(5, 9), Position(6, 9)])
 
         command = choose_object_greedy_command(
             state,
@@ -776,9 +777,9 @@ class ObjectGreedyPolicyTests(unittest.TestCase):
         self.assertNotEqual(command.command_type, "MOVE_TO")
 
     def test_is_deterministic_for_same_input(self) -> None:
-        state = place_object(make_state(fuel=2, max_fuel=9), Position(3, 8), SrsObjectType.SALVAGE, "salvage-a")
-        state = place_object(state, Position(5, 8), SrsObjectType.SALVAGE, "salvage-b")
-        state = reveal_positions(state, [Position(4, 8), Position(3, 8), Position(5, 8)])
+        state = place_object(make_state(fuel=2, max_fuel=9), Position(4, 9), SrsObjectType.SALVAGE, "salvage-a")
+        state = place_object(state, Position(6, 9), SrsObjectType.SALVAGE, "salvage-b")
+        state = reveal_positions(state, [Position(5, 9), Position(4, 9), Position(6, 9)])
 
         first = choose_object_greedy_command(
             state,
@@ -797,12 +798,12 @@ class ObjectGreedyPolicyTests(unittest.TestCase):
     def test_uses_known_state_without_actual_map(self) -> None:
         state = place_object_with_metadata(
             make_state(fuel=2, max_fuel=9),
-            Position(4, 6),
+            Position(5, 7),
             SrsObjectType.RESOURCE_CACHE,
             "resource-cache-1",
             fuel_restore=5,
         )
-        state = reveal_positions(state, [Position(4, 8), Position(4, 7), Position(4, 6)])
+        state = reveal_positions(state, [Position(5, 9), Position(5, 8), Position(5, 7)])
 
         with patch(
             "experiments.galactic_exodus.srs.model.SrsActualMap.cell_at",
@@ -823,34 +824,34 @@ class ExploreThenExitPolicyTests(unittest.TestCase):
         self.assertEqual(EXPLORE_THEN_EXIT_POLICY_NAME, "EXPLORE_THEN_EXIT")
 
     def test_returns_single_step_move_route_toward_selected_frontier(self) -> None:
-        state = replace(make_state(), player_position=Position(4, 4))
+        state = replace(make_state(), player_position=Position(5, 5))
         state = reveal_positions(
             state,
             [
-                Position(4, 4),
-                Position(4, 3),
-                Position(4, 5),
-                Position(3, 4),
+                Position(5, 5),
                 Position(5, 4),
-                Position(4, 2),
-                Position(3, 3),
+                Position(5, 6),
+                Position(4, 5),
+                Position(6, 5),
                 Position(5, 3),
+                Position(4, 4),
+                Position(6, 4),
             ],
         )
-        state = replace_cell_terrain(state, Position(3, 4), SrsTerrainType.ASTEROID)
-        state = replace_cell_terrain(state, Position(5, 4), SrsTerrainType.ASTEROID)
         state = replace_cell_terrain(state, Position(4, 5), SrsTerrainType.ASTEROID)
+        state = replace_cell_terrain(state, Position(6, 5), SrsTerrainType.ASTEROID)
+        state = replace_cell_terrain(state, Position(5, 6), SrsTerrainType.ASTEROID)
         state = reveal_positions(
             state,
             [
-                Position(4, 4),
-                Position(4, 3),
-                Position(4, 5),
-                Position(3, 4),
+                Position(5, 5),
                 Position(5, 4),
-                Position(4, 2),
-                Position(3, 3),
+                Position(5, 6),
+                Position(4, 5),
+                Position(6, 5),
                 Position(5, 3),
+                Position(4, 4),
+                Position(6, 4),
             ],
         )
 
@@ -859,14 +860,14 @@ class ExploreThenExitPolicyTests(unittest.TestCase):
         self.assertEqual(command, SrsCommand(command_type="MOVE_ROUTE", route=(Direction.N,)))
 
     def test_steps_into_unknown_when_current_position_is_frontier(self) -> None:
-        state = replace(make_state(), player_position=Position(4, 4))
+        state = replace(make_state(), player_position=Position(5, 5))
         state = reveal_positions(
             state,
             [
-                Position(4, 4),
+                Position(5, 5),
+                Position(5, 6),
                 Position(4, 5),
-                Position(3, 4),
-                Position(5, 4),
+                Position(6, 5),
             ],
         )
 
@@ -875,13 +876,13 @@ class ExploreThenExitPolicyTests(unittest.TestCase):
         self.assertEqual(command, SrsCommand(command_type="MOVE_ROUTE", route=(Direction.N,)))
 
     def test_selected_exit_edge_breaks_unknown_direction_ties(self) -> None:
-        state = replace(make_state(), player_position=Position(4, 4))
+        state = replace(make_state(), player_position=Position(5, 5))
         state = reveal_positions(
             state,
             [
-                Position(4, 4),
+                Position(5, 5),
+                Position(5, 6),
                 Position(4, 5),
-                Position(3, 4),
             ],
         )
 
@@ -890,55 +891,55 @@ class ExploreThenExitPolicyTests(unittest.TestCase):
         self.assertEqual(command, SrsCommand(command_type="MOVE_ROUTE", route=(Direction.E,)))
 
     def test_falls_back_to_exit_greedy_after_max_explore_steps(self) -> None:
-        state = replace(make_state(), player_position=Position(4, 4), srs_turn=12)
+        state = replace(make_state(), player_position=Position(5, 5), srs_turn=12)
         state = reveal_positions(
             state,
-            [Position(x, y) for y in range(9) for x in range(9)],
+            [Position(x, y) for y in range(1, 10) for x in range(1, 10)],
         )
-        state = replace_cell_warp_flags(state, Position(6, 4), frozenset({Direction.N}))
+        state = replace_cell_warp_flags(state, Position(7, 5), frozenset({Direction.N}))
 
         command = choose_explore_then_exit_command(state, selected_exit_edge=Direction.N)
 
         self.assertEqual(command, SrsCommand(command_type="MOVE_ROUTE", route=(Direction.E,)))
 
     def test_falls_back_to_exit_greedy_when_no_frontier_exists(self) -> None:
-        state = replace(make_state(), player_position=Position(4, 4))
+        state = replace(make_state(), player_position=Position(5, 5))
         state = reveal_positions(
             state,
-            [Position(x, y) for y in range(9) for x in range(9)],
+            [Position(x, y) for y in range(1, 10) for x in range(1, 10)],
         )
-        state = replace_cell_warp_flags(state, Position(6, 4), frozenset({Direction.N}))
+        state = replace_cell_warp_flags(state, Position(7, 5), frozenset({Direction.N}))
 
         command = choose_explore_then_exit_command(state, selected_exit_edge=Direction.N)
 
-        self.assertEqual(command, SrsCommand(command_type="MOVE_ROUTE", route=(Direction.E,)))
+        self.assertEqual(command, SrsCommand(command_type="MOVE_ROUTE", route=(Direction.N,)))
 
     def test_returns_no_action_when_frontier_and_exit_are_unreachable(self) -> None:
-        state = replace(make_state(), player_position=Position(4, 4))
+        state = replace(make_state(), player_position=Position(5, 5))
         state = reveal_positions(
             state,
             [
-                Position(4, 4),
-                Position(4, 3),
-                Position(4, 5),
-                Position(3, 4),
+                Position(5, 5),
                 Position(5, 4),
-                Position(6, 4),
+                Position(5, 6),
+                Position(4, 5),
+                Position(6, 5),
+                Position(7, 5),
             ],
         )
-        state = replace_cell_terrain(state, Position(4, 3), SrsTerrainType.ASTEROID)
-        state = replace_cell_terrain(state, Position(4, 5), SrsTerrainType.ASTEROID)
-        state = replace_cell_terrain(state, Position(3, 4), SrsTerrainType.ASTEROID)
         state = replace_cell_terrain(state, Position(5, 4), SrsTerrainType.ASTEROID)
+        state = replace_cell_terrain(state, Position(5, 6), SrsTerrainType.ASTEROID)
+        state = replace_cell_terrain(state, Position(4, 5), SrsTerrainType.ASTEROID)
+        state = replace_cell_terrain(state, Position(6, 5), SrsTerrainType.ASTEROID)
         state = reveal_positions(
             state,
             [
-                Position(4, 4),
-                Position(4, 3),
-                Position(4, 5),
-                Position(3, 4),
+                Position(5, 5),
                 Position(5, 4),
-                Position(6, 4),
+                Position(5, 6),
+                Position(4, 5),
+                Position(6, 5),
+                Position(7, 5),
             ],
         )
 
@@ -947,14 +948,14 @@ class ExploreThenExitPolicyTests(unittest.TestCase):
         )
 
     def test_never_returns_interact_or_move_to(self) -> None:
-        state = replace(make_state(), player_position=Position(4, 4))
+        state = replace(make_state(), player_position=Position(5, 5))
         state = reveal_positions(
             state,
             [
-                Position(4, 4),
+                Position(5, 5),
+                Position(5, 6),
                 Position(4, 5),
-                Position(3, 4),
-                Position(5, 4),
+                Position(6, 5),
             ],
         )
 
@@ -964,14 +965,14 @@ class ExploreThenExitPolicyTests(unittest.TestCase):
         self.assertNotIn(command.command_type, {"INTERACT", "MOVE_TO"})
 
     def test_uses_known_state_without_reading_unknown_cell_contents(self) -> None:
-        state = replace(make_state(), player_position=Position(4, 4))
+        state = replace(make_state(), player_position=Position(5, 5))
         state = reveal_positions(
             state,
             [
-                Position(4, 4),
+                Position(5, 5),
+                Position(5, 6),
                 Position(4, 5),
-                Position(3, 4),
-                Position(5, 4),
+                Position(6, 5),
             ],
         )
 
@@ -985,14 +986,14 @@ class ExploreThenExitPolicyTests(unittest.TestCase):
             )
 
     def test_is_deterministic_for_same_input(self) -> None:
-        state = replace(make_state(), player_position=Position(4, 4))
+        state = replace(make_state(), player_position=Position(5, 5))
         state = reveal_positions(
             state,
             [
-                Position(4, 4),
+                Position(5, 5),
+                Position(5, 6),
                 Position(4, 5),
-                Position(3, 4),
-                Position(5, 4),
+                Position(6, 5),
             ],
         )
 
@@ -1025,7 +1026,7 @@ class PolicyRunLoopTests(unittest.TestCase):
         )
 
     def make_exit_ready_state(self) -> SrsGameState:
-        return reveal_positions(make_state(entry_edge=Direction.S), [Position(4, 8)])
+        return reveal_positions(make_state(entry_edge=Direction.S), [Position(5, 9)])
 
     def test_classifies_warp_exit_accepted_as_exited(self) -> None:
         case = self.make_case(selected_exit_edge=Direction.S)
@@ -1081,8 +1082,8 @@ class PolicyRunLoopTests(unittest.TestCase):
 
     def test_max_commands_aborts_after_reaching_command_limit(self) -> None:
         case = self.make_case()
-        state = replace(make_state(), player_position=Position(4, 4))
-        state = reveal_positions(state, [Position(4, 4), Position(4, 3)])
+        state = replace(make_state(), player_position=Position(5, 5))
+        state = reveal_positions(state, [Position(5, 5), Position(5, 4)])
 
         with patch.object(EvaluationCase, "build_initial_state", return_value=state):
             with patch(
@@ -1129,7 +1130,7 @@ class PolicyRunLoopTests(unittest.TestCase):
             with patch(
                 "experiments.galactic_exodus.srs.evaluate_policies.choose_policy_command",
                 side_effect=[
-                    SrsCommand(command_type="MOVE_TO", target=Position(0, 0)),
+                    SrsCommand(command_type="MOVE_TO", target=Position(1, 1)),
                     SrsCommand(command_type="WARP_EXIT", exit_direction=Direction.S),
                 ],
             ):
@@ -1166,7 +1167,7 @@ class PolicyRunLoopTests(unittest.TestCase):
 
     def test_repeated_invalid_action_is_suppressed_as_no_policy_action(self) -> None:
         case = self.make_case()
-        repeated_command = SrsCommand(command_type="MOVE_TO", target=Position(0, 0))
+        repeated_command = SrsCommand(command_type="MOVE_TO", target=Position(1, 1))
 
         with patch.object(EvaluationCase, "build_initial_state", return_value=self.make_exit_ready_state()):
             with patch(
@@ -1186,7 +1187,7 @@ class PolicyRunLoopTests(unittest.TestCase):
 
     def test_action_sequence_is_recorded_in_order(self) -> None:
         case = self.make_case(selected_exit_edge=Direction.S)
-        first = SrsCommand(command_type="MOVE_TO", target=Position(0, 0))
+        first = SrsCommand(command_type="MOVE_TO", target=Position(1, 1))
         second = SrsCommand(command_type="WARP_EXIT", exit_direction=Direction.S)
 
         with patch.object(EvaluationCase, "build_initial_state", return_value=self.make_exit_ready_state()):

@@ -52,8 +52,8 @@ class SrsEncounterTests(unittest.TestCase):
         self.assertEqual(encounter_group_budget_range(4), (4, 5))
 
     def test_issue_1202_fixed_encounter_values_and_nebula_modifier_are_used(self) -> None:
-        nebula_state = replace(make_state(), player_position=Position(4, 4))
-        nebula_state = replace_cell_terrain(nebula_state, Position(4, 4), SrsTerrainType.NEBULA)
+        nebula_state = replace(make_state(), player_position=Position(5, 5))
+        nebula_state = replace_cell_terrain(nebula_state, Position(5, 5), SrsTerrainType.NEBULA)
 
         self.assertEqual(EXPECTED_SRS_TURNS, 4)
         self.assertEqual(ENCOUNTERS_PER_LRS_STEP, 0.75)
@@ -76,15 +76,15 @@ class SrsEncounterTests(unittest.TestCase):
         )
 
     def test_spawn_candidates_use_passable_warp_points_outside_player_neighbor_ring(self) -> None:
-        state = replace(make_state(), player_position=Position(4, 4))
+        state = replace(make_state(), player_position=Position(5, 5))
 
         self.assertEqual(
             spawn_candidate_points(state),
             (
-                Position(4, 0),
-                Position(0, 4),
-                Position(8, 4),
-                Position(4, 8),
+                Position(5, 1),
+                Position(1, 5),
+                Position(9, 5),
+                Position(5, 9),
             ),
         )
 
@@ -102,13 +102,13 @@ class SrsEncounterTests(unittest.TestCase):
             entry_edge=descriptor.entry_edge,
             blocked_edges=descriptor.blocked_edges,
         )
-        state = replace(state, descriptor=descriptor, player_position=Position(4, 4))
+        state = replace(state, descriptor=descriptor, player_position=Position(5, 5))
 
         self.assertEqual(
             spawn_candidate_points(state),
             (
-                Position(8, 4),
-                Position(4, 8),
+                Position(9, 5),
+                Position(5, 9),
             ),
         )
 
@@ -126,7 +126,7 @@ class SrsEncounterTests(unittest.TestCase):
             entry_edge=descriptor.entry_edge,
             blocked_edges=descriptor.blocked_edges,
         )
-        state = replace(state, descriptor=descriptor, player_position=Position(4, 4))
+        state = replace(state, descriptor=descriptor, player_position=Position(5, 5))
 
         enemies = spawn_enemies_for_encounter(
             state,
@@ -141,8 +141,8 @@ class SrsEncounterTests(unittest.TestCase):
         self.assertEqual(
             [(enemy.enemy_id, enemy.tier, enemy.position) for enemy in enemies],
             [
-                ("enemy-1", SrsEnemyTier.TIER1, Position(8, 4)),
-                ("enemy-2", SrsEnemyTier.TIER2, Position(4, 8)),
+                ("enemy-1", SrsEnemyTier.TIER1, Position(9, 5)),
+                ("enemy-2", SrsEnemyTier.TIER2, Position(5, 9)),
             ],
         )
 
@@ -153,14 +153,14 @@ class SrsEncounterTests(unittest.TestCase):
         self.assertEqual(
             result.summary["combat_enemy_positions"],
             {
-                "enemy-1": [8, 4],
-                "enemy-2": [4, 8],
+                "enemy-1": [9, 5],
+                "enemy-2": [5, 9],
             },
         )
 
     def test_encounter_roll_is_suppressed_while_enemy_presence_is_active(self) -> None:
         enemy = spawn_enemies_for_encounter(
-            replace(make_state(), player_position=Position(4, 4)),
+            replace(make_state(), player_position=Position(5, 5)),
             danger_score=0,
             composition=(SrsEnemyTier.TIER1,),
         )[0]
@@ -176,7 +176,7 @@ class SrsEncounterTests(unittest.TestCase):
 
     def test_movement_turn_without_enemies_requires_encounter_roll(self) -> None:
         previous_state = make_state()
-        next_state = replace(previous_state, srs_turn=1, player_position=Position(4, 7))
+        next_state = replace(previous_state, srs_turn=1, player_position=Position(5, 8))
 
         disposition = encounter_roll_disposition(previous_state, command_type="MOVE_ROUTE", next_state=next_state)
 

@@ -9,23 +9,41 @@
     "blocked_edges": []
   },
   "initial": {
-    "reveal": {"mode": "LOCAL_MOVEMENT"},
+    "reveal": {
+      "mode": "LOCAL_MOVEMENT"
+    },
     "combat": {
       "phase": "PLAYER_MOVEMENT",
       "player": {
         "energy": 5
       },
       "enemies": [
-        {"enemy_id": "enemy-1", "tier": "TIER1", "position": [4, 8]}
+        {
+          "enemy_id": "enemy-1",
+          "tier": "TIER1",
+          "position": [
+            5,
+            9
+          ]
+        }
       ],
       "player_attack_target_id": "enemy-1"
     }
   },
   "commands": [
-    {"command_type": "WARP_EXIT", "exit_direction": "S"},
-    {"command_type": "COMBAT_STEP"},
-    {"command_type": "COMBAT_STEP"},
-    {"command_type": "COMBAT_STEP"}
+    {
+      "command_type": "WARP_EXIT",
+      "exit_direction": "S"
+    },
+    {
+      "command_type": "COMBAT_STEP"
+    },
+    {
+      "command_type": "COMBAT_STEP"
+    },
+    {
+      "command_type": "COMBAT_STEP"
+    }
   ],
   "expect": {
     "event_types": [

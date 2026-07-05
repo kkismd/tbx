@@ -157,7 +157,7 @@ def observation_area(
         Position(x, y)
         for y in range(center.y - radius, center.y + radius + 1)
         for x in range(center.x - radius, center.x + radius + 1)
-        if 0 <= x < actual_map.width and 0 <= y < actual_map.height
+        if 1 <= x <= actual_map.width and 1 <= y <= actual_map.height
     }
     return frozenset(positions)
 
@@ -547,8 +547,8 @@ def _validated_observation_size(value: object, *, field_name: str) -> int:
 
 
 def _iter_positions(actual_map: SrsActualMap):
-    for y, row in enumerate(actual_map.cells):
-        for x, _ in enumerate(row):
+    for y, row in enumerate(actual_map.cells, start=1):
+        for x, _ in enumerate(row, start=1):
             yield Position(x, y)
 
 

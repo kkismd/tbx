@@ -25,7 +25,7 @@ class SrsFixtureRegressionTests(unittest.TestCase):
         self.assertIn("MOVE_ACCEPTED", event_types(result))
         self.assertEqual(primary_outcome(result), "ACCEPTED")
         self.assertEqual(result.final_state.srs_turn, 1)
-        self.assertEqual(result.final_state.player_position, Position(4, 7))
+        self.assertEqual(result.final_state.player_position, Position(5, 8))
         self.assertEqual(result.final_state.fuel, 0)
 
     def test_move_to_known(self) -> None:
@@ -34,7 +34,7 @@ class SrsFixtureRegressionTests(unittest.TestCase):
         self.assertIn("MOVE_ACCEPTED", event_types(result))
         self.assertEqual(primary_outcome(result), "ACCEPTED")
         self.assertEqual(result.final_state.srs_turn, 1)
-        self.assertEqual(result.final_state.player_position, Position(4, 6))
+        self.assertEqual(result.final_state.player_position, Position(5, 7))
         self.assertEqual(result.final_state.fuel, 0)
 
     def test_resource_cache_single(self) -> None:
@@ -46,7 +46,7 @@ class SrsFixtureRegressionTests(unittest.TestCase):
         self.assertEqual(result.final_state.fuel, 5)
         self.assertIn("resource-cache-1", result.final_state.persistent_state.consumed_object_ids)
         self.assertTrue(result.final_state.objects["resource-cache-1"].consumed)
-        self.assertIn(Position(2, 7), result.final_state.known_state.discovered_cells)
+        self.assertIn(Position(3, 8), result.final_state.known_state.discovered_cells)
 
     def test_station_refuel(self) -> None:
         result = run_named_fixture("station_refuel_9x9")
@@ -89,7 +89,7 @@ class SrsFixtureRegressionTests(unittest.TestCase):
         self.assertIn("WARP_EXIT_ACCEPTED", event_types(result))
         self.assertEqual(primary_outcome(result), "ACCEPTED")
         self.assertEqual(result.final_state.srs_turn, 1)
-        self.assertEqual(result.final_state.player_position, Position(4, 8))
+        self.assertEqual(result.final_state.player_position, Position(5, 9))
         self.assertEqual(result.final_state.fuel, 0)
 
     def test_rift_blocked_n(self) -> None:
@@ -98,7 +98,7 @@ class SrsFixtureRegressionTests(unittest.TestCase):
         self.assertTrue(any("REJECTED" in event_type for event_type in event_types(result)))
         self.assertEqual(primary_outcome(result), "REJECTED_BLOCKED_EDGE")
         self.assertEqual(result.final_state.srs_turn, 0)
-        self.assertEqual(result.final_state.player_position, Position(4, 0))
+        self.assertEqual(result.final_state.player_position, Position(5, 1))
         self.assertEqual(result.final_state.fuel, 0)
 
     def test_shared_fuel_cost_uses_shared_fuel_without_fixing_exact_delta(self) -> None:
@@ -117,17 +117,17 @@ class SrsFixtureRegressionTests(unittest.TestCase):
         self.assertEqual(result.final_state.fuel, 2)
         self.assertIn("resource-cache-1", result.final_state.persistent_state.consumed_object_ids)
         self.assertTrue(result.final_state.objects["resource-cache-1"].consumed)
-        self.assertIn(Position(2, 7), result.final_state.known_state.discovered_cells)
+        self.assertIn(Position(3, 8), result.final_state.known_state.discovered_cells)
 
     def test_combat_enemy_movement_tiebreak(self) -> None:
         result = run_named_fixture("combat_enemy_movement_tiebreak_9x9")
 
         self.assertIn("COMBAT_TRANSITIONED", event_types(result))
         self.assertEqual(primary_outcome(result), "ACCEPTED")
-        self.assertEqual(result.final_state.combat_state.enemies["enemy-1"].position, Position(2, 3))
+        self.assertEqual(result.final_state.combat_state.enemies["enemy-1"].position, Position(3, 4))
         self.assertEqual(
             result.summary["enemy_actions"][0]["target_attackable_position"],
-            [4, 3],
+            [5, 4],
         )
         self.assertIsNone(result.summary["enemy_actions"][0]["reaction"])
 
@@ -218,8 +218,8 @@ class SrsFixtureRegressionTests(unittest.TestCase):
         self.assertEqual(
             result.summary["combat_enemy_positions"],
             {
-                "enemy-1": [8, 4],
-                "enemy-2": [4, 8],
+                "enemy-1": [9, 5],
+                "enemy-2": [5, 9],
             },
         )
         self.assertEqual(

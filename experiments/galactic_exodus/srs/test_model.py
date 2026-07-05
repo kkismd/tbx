@@ -42,7 +42,7 @@ class SrsModelTests(unittest.TestCase):
         self.assertIs(SectorType(SectorType.RIFT.value), SectorType.RIFT)
 
     def test_position_equality(self) -> None:
-        self.assertEqual(Position(2, 3), Position(2, 3))
+        self.assertEqual(Position(3, 4), Position(3, 4))
 
     def test_actual_map_contains(self) -> None:
         actual_map = SrsActualMap(
@@ -53,18 +53,18 @@ class SrsModelTests(unittest.TestCase):
                 (SrsCell(SrsTerrainType.NEBULA), SrsCell(SrsTerrainType.ASTEROID_FIELD)),
             ),
         )
-        self.assertTrue(actual_map.contains(Position(1, 1)))
-        self.assertFalse(actual_map.contains(Position(2, 1)))
+        self.assertTrue(actual_map.contains(Position(2, 2)))
+        self.assertFalse(actual_map.contains(Position(3, 2)))
 
     def test_actual_map_cell_at(self) -> None:
         cell = SrsCell(SrsTerrainType.RIFT_DISTORTION)
         actual_map = SrsActualMap(width=1, height=1, cells=((cell,),))
-        self.assertIs(actual_map.cell_at(Position(0, 0)), cell)
+        self.assertIs(actual_map.cell_at(Position(1, 1)), cell)
 
     def test_actual_map_cell_at_rejects_out_of_bounds(self) -> None:
         actual_map = SrsActualMap(width=1, height=1, cells=((SrsCell(SrsTerrainType.FLOOR),),))
         with self.assertRaisesRegex(IndexError, "position out of bounds"):
-            actual_map.cell_at(Position(-1, 0))
+            actual_map.cell_at(Position(-1, 1))
 
     def test_sector_descriptor_rift_requires_blocked_edges(self) -> None:
         descriptor = SectorDescriptor(
@@ -99,7 +99,7 @@ class SrsModelTests(unittest.TestCase):
             validate_sector_descriptor(descriptor)
 
     def test_game_state_freezes_objects_mapping(self) -> None:
-        position = Position(0, 0)
+        position = Position(1, 1)
         state = SrsGameState(
             descriptor=SectorDescriptor(
                 sector_id="N-1",
@@ -134,7 +134,7 @@ class SrsModelTests(unittest.TestCase):
             state.objects["planet-1"] = SrsObjectState(
                 object_id="planet-1",
                 object_type=SrsObjectType.PLANET,
-                position=Position(0, 0),
+                position=Position(1, 1),
             )
 
     def test_game_state_rejects_object_key_mismatch(self) -> None:
@@ -159,12 +159,12 @@ class SrsModelTests(unittest.TestCase):
                     sector_type=SectorType.NORMAL,
                     blocked_edges=frozenset(),
                 ),
-                player_position=Position(0, 0),
+                player_position=Position(1, 1),
                 objects={
                     "bad-key": SrsObjectState(
                         object_id="star-1",
                         object_type=SrsObjectType.STAR,
-                        position=Position(0, 0),
+                        position=Position(1, 1),
                     )
                 },
             )
@@ -191,7 +191,7 @@ class SrsModelTests(unittest.TestCase):
                     sector_type=SectorType.NORMAL,
                     blocked_edges=frozenset(),
                 ),
-                player_position=Position(0, 0),
+                player_position=Position(1, 1),
                 objects={},
             )
 
@@ -237,7 +237,7 @@ class SrsModelTests(unittest.TestCase):
                 enemy = create_enemy_combat_state(
                     enemy_id=f"{tier.value.lower()}-1",
                     tier=tier,
-                    position=Position(0, 0),
+                    position=Position(1, 1),
                 )
                 self.assertEqual((enemy.durability, enemy.attack_damage, enemy.movement_power), expected)
 
@@ -246,7 +246,7 @@ class SrsModelTests(unittest.TestCase):
         enemy = create_enemy_combat_state(
             enemy_id="enemy-1",
             tier=SrsEnemyTier.TIER1,
-            position=Position(0, 0),
+            position=Position(1, 1),
         )
         occupied = SrsCombatState(enemies={"enemy-1": enemy}, player_attack_target_id="enemy-1")
 
@@ -258,7 +258,7 @@ class SrsModelTests(unittest.TestCase):
         enemy = create_enemy_combat_state(
             enemy_id="enemy-1",
             tier=SrsEnemyTier.TIER1,
-            position=Position(9, 9),
+            position=Position(10, 10),
         )
 
         with self.assertRaisesRegex(SrsModelError, "combat enemy position must be within actual_map bounds"):
@@ -282,7 +282,7 @@ class SrsModelTests(unittest.TestCase):
                     sector_type=SectorType.NORMAL,
                     blocked_edges=frozenset(),
                 ),
-                player_position=Position(0, 0),
+                player_position=Position(1, 1),
                 combat_state=SrsCombatState(
                     phase=SrsCombatPhase.PLAYER_MOVEMENT,
                     enemies={"enemy-1": enemy},
@@ -295,7 +295,7 @@ class SrsModelTests(unittest.TestCase):
         resource_cache = SrsObjectState(
             object_id="resource-cache-1",
             object_type=SrsObjectType.RESOURCE_CACHE,
-            position=Position(1, 2),
+            position=Position(2, 3),
             metadata={"fuel_restore": 5},
         )
 
@@ -305,24 +305,24 @@ class SrsModelTests(unittest.TestCase):
 
     def test_known_state_freezes_known_cells(self) -> None:
         state = SrsKnownState(
-            discovered_cells={Position(0, 0)},
-            known_cells={Position(0, 0): SrsCell(SrsTerrainType.FLOOR)},
+            discovered_cells={Position(1, 1)},
+            known_cells={Position(1, 1): SrsCell(SrsTerrainType.FLOOR)},
         )
 
         with self.assertRaises(TypeError):
-            state.known_cells[Position(1, 1)] = SrsCell(SrsTerrainType.NEBULA)
+            state.known_cells[Position(2, 2)] = SrsCell(SrsTerrainType.NEBULA)
 
     def test_known_state_freezes_visited_cells(self) -> None:
-        state = SrsKnownState(visited_cells={Position(0, 0)})
+        state = SrsKnownState(visited_cells={Position(1, 1)})
 
         with self.assertRaises(AttributeError):
-            state.visited_cells.add(Position(1, 1))
+            state.visited_cells.add(Position(2, 2))
 
     def test_known_state_rejects_known_cell_outside_discovered_cells(self) -> None:
         with self.assertRaisesRegex(SrsModelError, "known_cells keys must be a subset"):
             SrsKnownState(
-                discovered_cells={Position(0, 0)},
-                known_cells={Position(1, 1): SrsCell(SrsTerrainType.FLOOR)},
+                discovered_cells={Position(1, 1)},
+                known_cells={Position(2, 2): SrsCell(SrsTerrainType.FLOOR)},
             )
 
     def test_srs_command_rejects_empty_move_route(self) -> None:
@@ -378,11 +378,11 @@ class SrsModelTests(unittest.TestCase):
 
     def test_srs_command_rejects_combat_fields_for_non_combat_command(self) -> None:
         with self.assertRaisesRegex(SrsModelError, "combat action fields require COMBAT_STEP"):
-            SrsCommand(command_type="MOVE_TO", target=Position(1, 1), player_attack_action="SKIP")
+            SrsCommand(command_type="MOVE_TO", target=Position(2, 2), player_attack_action="SKIP")
 
     def test_srs_command_rejects_salvage_choice_for_non_reward_command(self) -> None:
         with self.assertRaisesRegex(SrsModelError, "salvage_choice requires INTERACT or COMBAT_STEP"):
-            SrsCommand(command_type="MOVE_TO", target=Position(1, 1), salvage_choice="STORE_ONLY")
+            SrsCommand(command_type="MOVE_TO", target=Position(2, 2), salvage_choice="STORE_ONLY")
 
     def test_srs_command_rejects_base_upgrade_choice_for_non_interact(self) -> None:
         with self.assertRaisesRegex(SrsModelError, "base_upgrade_choice requires INTERACT"):
@@ -438,7 +438,7 @@ class SrsModelTests(unittest.TestCase):
                 sector_type=SectorType.NORMAL,
                 blocked_edges=frozenset(),
             ),
-            player_position=Position(0, 0),
+            player_position=Position(1, 1),
             objects={},
         )
         result = SrsCommandResult(

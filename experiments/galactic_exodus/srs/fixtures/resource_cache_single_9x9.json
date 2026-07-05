@@ -9,7 +9,10 @@
     "blocked_edges": []
   },
   "initial": {
-    "player_position": [2, 7],
+    "player_position": [
+      3,
+      8
+    ],
     "fuel": 2,
     "max_fuel": 9,
     "reveal": {
@@ -18,19 +21,47 @@
     "persistent": {
       "consumed_object_ids": [],
       "activated_object_ids": [],
-      "discovered_cells": [[2, 7], [2, 6], [3, 7], [1, 7]]
+      "discovered_cells": [
+        [
+          3,
+          8
+        ],
+        [
+          3,
+          7
+        ],
+        [
+          4,
+          8
+        ],
+        [
+          2,
+          8
+        ]
+      ]
     }
   },
   "commands": [
-    {"command_type": "INTERACT", "target_object_id": "resource-cache-1"}
+    {
+      "command_type": "INTERACT",
+      "target_object_id": "resource-cache-1"
+    }
   ],
   "cost_mode": "TURN_ONLY",
   "expect": {
     "srs_turn": 1,
     "fuel": 5,
-    "player_position": [2, 7],
-    "event_types": ["INTERACT_ACCEPTED", "OBJECT_CONSUMED"],
-    "consumed_object_ids": ["resource-cache-1"],
+    "player_position": [
+      3,
+      8
+    ],
+    "event_types": [
+      "INTERACT_ACCEPTED",
+      "OBJECT_CONSUMED"
+    ],
+    "consumed_object_ids": [
+      "resource-cache-1"
+    ],
     "outcome": "ACCEPTED"
   }
 }

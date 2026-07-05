@@ -59,7 +59,8 @@ def replace_cell_terrain(
 ) -> SrsGameState:
     rows = [list(row) for row in state.actual_map.cells]
     current = state.actual_map.cell_at(position)
-    rows[position.y][position.x] = SrsCell(
+    row_idx, col_idx = state.actual_map.indices_for(position)
+    rows[row_idx][col_idx] = SrsCell(
         terrain=terrain,
         object_id=current.object_id,
         actor_id=current.actor_id,
@@ -103,18 +104,18 @@ class SrsObservationTests(unittest.TestCase):
     def test_observation_area_clips_at_map_edge(self) -> None:
         state = make_state()
 
-        area = observation_area(state.actual_map, center=Position(0, 0), size=5)
+        area = observation_area(state.actual_map, center=Position(1, 1), size=5)
 
         self.assertEqual(len(area), 9)
-        self.assertIn(Position(0, 0), area)
-        self.assertIn(Position(2, 2), area)
-        self.assertNotIn(Position(3, 3), area)
+        self.assertIn(Position(1, 1), area)
+        self.assertIn(Position(3, 3), area)
+        self.assertNotIn(Position(4, 4), area)
 
     def test_observation_area_rejects_out_of_bounds_center(self) -> None:
         state = make_state()
 
         with self.assertRaisesRegex(ValueError, "out of bounds"):
-            observation_area(state.actual_map, center=Position(-1, 0), size=5)
+            observation_area(state.actual_map, center=Position(-1, 1), size=5)
 
     def test_full_observation_reveals_all_cells(self) -> None:
         state = make_state()
@@ -131,7 +132,7 @@ class SrsObservationTests(unittest.TestCase):
 
         revealed = reveal_observation(
             state,
-            center=Position(4, 4),
+            center=Position(5, 5),
             contracts=self.contracts,
         )
 
@@ -140,11 +141,11 @@ class SrsObservationTests(unittest.TestCase):
         self.assertEqual(revealed.persistent_state.discovered_cells, revealed.known_state.discovered_cells)
 
     def test_local_movement_nebula_reveals_3x3(self) -> None:
-        state = replace_cell_terrain(make_state(), Position(4, 4), SrsTerrainType.NEBULA)
+        state = replace_cell_terrain(make_state(), Position(5, 5), SrsTerrainType.NEBULA)
 
         revealed = reveal_observation(
             state,
-            center=Position(4, 4),
+            center=Position(5, 5),
             contracts=self.contracts,
         )
 
@@ -155,13 +156,13 @@ class SrsObservationTests(unittest.TestCase):
         state = make_state()
         first = reveal_observation(
             state,
-            center=Position(4, 4),
+            center=Position(5, 5),
             contracts=self.contracts,
         )
 
         second = reveal_observation(
             first,
-            center=Position(6, 4),
+            center=Position(7, 5),
             contracts=self.contracts,
         )
 
@@ -174,11 +175,11 @@ class SrsObservationTests(unittest.TestCase):
 
         revealed = reveal_observation(
             state,
-            center=Position(4, 4),
+            center=Position(5, 5),
             contracts=self.contracts,
         )
 
-        self.assertEqual(revealed.known_state.visited_cells, frozenset({Position(4, 4)}))
+        self.assertEqual(revealed.known_state.visited_cells, frozenset({Position(5, 5)}))
 
     def test_rejected_command_does_not_reveal_when_observation_not_called(self) -> None:
         state = make_state()
@@ -199,24 +200,24 @@ class SrsObservationTests(unittest.TestCase):
     def test_known_cell_at_returns_none_for_unseen_cell(self) -> None:
         state = make_state()
 
-        self.assertIsNone(known_cell_at(state, Position(4, 4)))
+        self.assertIsNone(known_cell_at(state, Position(5, 5)))
 
     def test_known_cell_at_returns_known_cell_for_seen_cell(self) -> None:
         state = reveal_observation(
             make_state(),
-            center=Position(4, 4),
+            center=Position(5, 5),
             contracts=self.contracts,
         )
 
         self.assertEqual(
-            known_cell_at(state, Position(4, 4)),
-            state.actual_map.cell_at(Position(4, 4)),
+            known_cell_at(state, Position(5, 5)),
+            state.actual_map.cell_at(Position(5, 5)),
         )
 
     def test_snapshot_srs_state_uses_known_discovered_cells(self) -> None:
         state = reveal_observation(
             make_state(),
-            center=Position(4, 4),
+            center=Position(5, 5),
             contracts=self.contracts,
         )
 
@@ -227,7 +228,7 @@ class SrsObservationTests(unittest.TestCase):
     def test_restore_srs_state_restores_discovered_cells_and_known_cells(self) -> None:
         original = reveal_observation(
             make_state(),
-            center=Position(4, 4),
+            center=Position(5, 5),
             contracts=self.contracts,
         )
         persistent = snapshot_srs_state(original)
@@ -236,7 +237,7 @@ class SrsObservationTests(unittest.TestCase):
             descriptor=original.descriptor,
             actual_map=original.actual_map,
             persistent=persistent,
-            player_position=Position(0, 4),
+            player_position=Position(1, 5),
             objects=original.objects,
         )
 
@@ -247,7 +248,7 @@ class SrsObservationTests(unittest.TestCase):
     def test_restore_srs_state_does_not_restore_visited_cells(self) -> None:
         original = reveal_observation(
             make_state(),
-            center=Position(4, 4),
+            center=Position(5, 5),
             contracts=self.contracts,
         )
         persistent = snapshot_srs_state(original)
@@ -256,7 +257,7 @@ class SrsObservationTests(unittest.TestCase):
             descriptor=original.descriptor,
             actual_map=original.actual_map,
             persistent=persistent,
-            player_position=Position(0, 4),
+            player_position=Position(1, 5),
             objects=original.objects,
         )
 
@@ -307,7 +308,7 @@ class SrsObservationTests(unittest.TestCase):
     def test_snapshot_after_warp_exit_keeps_existing_persistent_fields(self) -> None:
         state = reveal_observation(
             make_state(sector_type=SectorType.RIFT, sector_seed=4001, blocked_edges=frozenset({Direction.N})),
-            center=Position(4, 8),
+            center=Position(5, 9),
             contracts=self.contracts,
         )
         state = replace(

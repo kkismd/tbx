@@ -56,7 +56,8 @@ def replace_cell(
 ) -> SrsGameState:
     rows = [list(row) for row in state.actual_map.cells]
     current = state.actual_map.cell_at(position)
-    rows[position.y][position.x] = SrsCell(
+    row_idx, col_idx = state.actual_map.indices_for(position)
+    rows[row_idx][col_idx] = SrsCell(
         terrain=current.terrain if terrain is None else terrain,
         object_id=current.object_id,
         actor_id=current.actor_id,
@@ -80,7 +81,7 @@ class SrsEngineWarpTests(unittest.TestCase):
             SrsCommand(command_type="WARP_EXIT")
 
     def test_warp_exit_requires_current_cell_direction_flag(self) -> None:
-        state = make_state(player_position=Position(4, 4))
+        state = make_state(player_position=Position(5, 5))
 
         result = apply_srs_command(
             state,
@@ -147,7 +148,7 @@ class SrsEngineWarpTests(unittest.TestCase):
         self.assertEqual(result.state.srs_turn, state.srs_turn + 1)
 
     def test_warp_exit_rejected_does_not_consume_turn(self) -> None:
-        state = make_state(player_position=Position(4, 4))
+        state = make_state(player_position=Position(5, 5))
 
         result = apply_srs_command(
             state,
@@ -184,8 +185,8 @@ class SrsEngineWarpTests(unittest.TestCase):
             {
                 "command_type": "WARP_EXIT",
                 "exit_direction": "N",
-                "start_position": [4, 0],
-                "warp_position": [4, 0],
+                "start_position": [5, 1],
+                "warp_position": [5, 1],
                 "sector_id": state.descriptor.sector_id,
                 "generated_map_id": state.persistent_state.generated_map_id,
                 "outcome": "ACCEPTED",
@@ -194,7 +195,7 @@ class SrsEngineWarpTests(unittest.TestCase):
 
     def test_warp_exit_rejects_out_of_bounds_player_position_first(self) -> None:
         state = make_state(entry_edge=Direction.S)
-        state = replace(state, player_position=Position(-1, 8))
+        state = replace(state, player_position=Position(-1, 9))
 
         result = apply_srs_command(
             state,

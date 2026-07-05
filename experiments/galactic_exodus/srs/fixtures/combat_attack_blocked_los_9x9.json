@@ -10,23 +10,45 @@
   },
   "initial": {
     "cell_overrides": [
-      {"position": [2, 4], "terrain": "ASTEROID"}
+      {
+        "position": [
+          3,
+          5
+        ],
+        "terrain": "ASTEROID"
+      }
     ],
-    "reveal": {"mode": "FULL"},
-    "player_position": [1, 4],
+    "reveal": {
+      "mode": "FULL"
+    },
+    "player_position": [
+      2,
+      5
+    ],
     "combat": {
       "phase": "PLAYER_MOVEMENT",
       "enemies": [
-        {"enemy_id": "enemy-1", "tier": "TIER1", "position": [3, 4]}
+        {
+          "enemy_id": "enemy-1",
+          "tier": "TIER1",
+          "position": [
+            4,
+            5
+          ]
+        }
       ],
       "player_attack_target_id": "enemy-1"
     }
   },
   "commands": [
-    {"command_type": "COMBAT_STEP"}
+    {
+      "command_type": "COMBAT_STEP"
+    }
   ],
   "expect": {
-    "event_types": ["COMBAT_TRANSITIONED"],
+    "event_types": [
+      "COMBAT_TRANSITIONED"
+    ],
     "combat_phase": "ENEMY_ACTION",
     "combat_turn": 0,
     "enemy_presence": true,

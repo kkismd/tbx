@@ -11,7 +11,10 @@
   "initial": {
     "cell_overrides": [
       {
-        "position": [4, 7],
+        "position": [
+          5,
+          8
+        ],
         "terrain": "NEBULA"
       }
     ]
@@ -19,14 +22,22 @@
   "commands": [
     {
       "command_type": "MOVE_ROUTE",
-      "route": ["N"]
+      "route": [
+        "N"
+      ]
     }
   ],
   "expect": {
     "srs_turn": 1,
     "fuel": 0,
-    "player_position": [4, 7],
-    "event_types": ["MOVE_ACCEPTED", "OBSERVATION_UPDATED"],
+    "player_position": [
+      5,
+      8
+    ],
+    "event_types": [
+      "MOVE_ACCEPTED",
+      "OBSERVATION_UPDATED"
+    ],
     "outcome": "ACCEPTED"
   }
 }

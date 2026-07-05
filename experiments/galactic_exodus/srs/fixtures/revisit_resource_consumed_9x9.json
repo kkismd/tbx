@@ -9,27 +9,59 @@
     "blocked_edges": []
   },
   "initial": {
-    "player_position": [2, 7],
+    "player_position": [
+      3,
+      8
+    ],
     "fuel": 2,
     "max_fuel": 9,
     "reveal": {
       "mode": "FULL"
     },
     "persistent": {
-      "consumed_object_ids": ["resource-cache-1"],
+      "consumed_object_ids": [
+        "resource-cache-1"
+      ],
       "activated_object_ids": [],
-      "discovered_cells": [[2, 7], [2, 6], [3, 7], [1, 7]]
+      "discovered_cells": [
+        [
+          3,
+          8
+        ],
+        [
+          3,
+          7
+        ],
+        [
+          4,
+          8
+        ],
+        [
+          2,
+          8
+        ]
+      ]
     }
   },
   "commands": [
-    {"command_type": "INTERACT", "target_object_id": "resource-cache-1"}
+    {
+      "command_type": "INTERACT",
+      "target_object_id": "resource-cache-1"
+    }
   ],
   "expect": {
     "srs_turn": 0,
     "fuel": 2,
-    "player_position": [2, 7],
-    "event_types": ["INTERACT_REJECTED"],
-    "consumed_object_ids": ["resource-cache-1"],
+    "player_position": [
+      3,
+      8
+    ],
+    "event_types": [
+      "INTERACT_REJECTED"
+    ],
+    "consumed_object_ids": [
+      "resource-cache-1"
+    ],
     "outcome": "REJECTED_ALREADY_CONSUMED"
   }
 }

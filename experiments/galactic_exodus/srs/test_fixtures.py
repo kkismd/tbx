@@ -123,10 +123,10 @@ class SrsFixtureTests(unittest.TestCase):
             result.initial_state.known_state.discovered_cells,
             frozenset(
                 {
-                    Position(2, 7),
-                    Position(2, 6),
+                    Position(3, 8),
                     Position(3, 7),
-                    Position(1, 7),
+                    Position(4, 8),
+                    Position(2, 8),
                 }
             ),
         )
@@ -138,10 +138,10 @@ class SrsFixtureTests(unittest.TestCase):
             result.initial_state.known_state.discovered_cells,
             frozenset(
                 {
-                    Position(2, 7),
-                    Position(2, 6),
+                    Position(3, 8),
                     Position(3, 7),
-                    Position(1, 7),
+                    Position(4, 8),
+                    Position(2, 8),
                 }
             ),
         )
@@ -150,7 +150,7 @@ class SrsFixtureTests(unittest.TestCase):
         result = run_fixture(FIXTURES_DIR / "nebula_observation_3x3_9x9.json", contracts=self.contracts)
 
         self.assertEqual(len(result.final_state.known_state.discovered_cells), 9)
-        self.assertEqual(result.final_state.actual_map.cell_at(Position(4, 7)).terrain.value, "NEBULA")
+        self.assertEqual(result.final_state.actual_map.cell_at(Position(5, 8)).terrain.value, "NEBULA")
 
     def test_game_log_json_serializable(self) -> None:
         result = run_fixture(FIXTURES_DIR / "move_route_basic_9x9.json", contracts=self.contracts)
@@ -179,17 +179,17 @@ class SrsFixtureTests(unittest.TestCase):
         result = run_fixture(FIXTURES_DIR / "combat_enemy_movement_tiebreak_9x9.json", contracts=self.contracts)
 
         self.assertEqual(result.final_state.combat_state.phase.value, "PLAYER_MOVEMENT")
-        self.assertEqual(result.final_state.combat_state.enemies["enemy-1"].position, Position(2, 3))
+        self.assertEqual(result.final_state.combat_state.enemies["enemy-1"].position, Position(3, 4))
         self.assertEqual(
             result.summary["enemy_actions"],
             [
                 {
                     "enemy_id": "enemy-1",
-                    "start_position": [0, 4],
-                    "target_attackable_position": [4, 3],
-                    "planned_path": [[0, 3], [1, 3], [2, 3], [3, 3], [4, 3]],
-                    "moved_path": [[0, 3], [1, 3], [2, 3]],
-                    "final_position": [2, 3],
+                    "start_position": [1, 5],
+                    "target_attackable_position": [5, 4],
+                    "planned_path": [[1, 4], [2, 4], [3, 4], [4, 4], [5, 4]],
+                    "moved_path": [[1, 4], [2, 4], [3, 4]],
+                    "final_position": [3, 4],
                     "movement_power": 3,
                     "movement_cost": 50,
                     "attacked_player": False,
@@ -253,8 +253,8 @@ class SrsFixtureTests(unittest.TestCase):
         self.assertEqual(
             result.summary["combat_enemy_positions"],
             {
-                "enemy-1": [8, 4],
-                "enemy-2": [4, 8],
+                "enemy-1": [9, 5],
+                "enemy-2": [5, 9],
             },
         )
         self.assertEqual(
@@ -283,11 +283,11 @@ class SrsFixtureTests(unittest.TestCase):
         )
         self.assertEqual(movement_result.events[0].payload["movement_raw_cost"], 7)
 
-        enemy_state = replace(make_state(), player_position=Position(4, 4))
+        enemy_state = replace(make_state(), player_position=Position(5, 5))
         enemy = create_enemy_combat_state(
             enemy_id="enemy-1",
             tier=SrsEnemyTier.TIER1,
-            position=Position(0, 4),
+            position=Position(1, 5),
         )
         enemy_state = replace(
             enemy_state,

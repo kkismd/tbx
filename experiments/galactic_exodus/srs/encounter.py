@@ -351,8 +351,8 @@ def is_base_docked(state: SrsGameState) -> bool:
 
 def _warp_point_positions(state: SrsGameState) -> tuple[Position, ...]:
     positions: list[Position] = []
-    for y, row in enumerate(state.actual_map.cells):
-        for x, cell in enumerate(row):
+    for y, row in enumerate(state.actual_map.cells, start=1):
+        for x, cell in enumerate(row, start=1):
             if not cell.warp_flags:
                 continue
             if cell.terrain in {SrsTerrainType.ASTEROID, SrsTerrainType.RIFT_BARRIER}:

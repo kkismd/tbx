@@ -9,12 +9,23 @@
   "expected": {
     "width": 9,
     "height": 9,
-    "player_position": [4, 8],
+    "player_position": [
+      5,
+      9
+    ],
     "warp_flags": {
-      "4,0": ["N"],
-      "8,4": ["E"],
-      "4,8": ["S"],
-      "0,4": ["W"]
+      "5,1": [
+        "N"
+      ],
+      "1,5": [
+        "W"
+      ],
+      "9,5": [
+        "E"
+      ],
+      "5,9": [
+        "S"
+      ]
     },
     "terrain_counts": {
       "FLOOR": 81

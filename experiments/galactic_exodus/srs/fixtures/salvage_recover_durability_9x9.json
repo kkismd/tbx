@@ -9,7 +9,10 @@
     "blocked_edges": []
   },
   "initial": {
-    "player_position": [4, 6],
+    "player_position": [
+      5,
+      7
+    ],
     "fuel": 2,
     "max_fuel": 9,
     "player": {
@@ -31,9 +34,17 @@
     "fuel": 2,
     "player_durability": 100,
     "player_salvage": 1,
-    "player_position": [4, 6],
-    "event_types": ["INTERACT_ACCEPTED", "OBJECT_CONSUMED"],
-    "consumed_object_ids": ["salvage-1"],
+    "player_position": [
+      5,
+      7
+    ],
+    "event_types": [
+      "INTERACT_ACCEPTED",
+      "OBJECT_CONSUMED"
+    ],
+    "consumed_object_ids": [
+      "salvage-1"
+    ],
     "outcome": "ACCEPTED"
   }
 }

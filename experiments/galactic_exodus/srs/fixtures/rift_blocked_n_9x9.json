@@ -6,22 +6,35 @@
     "sector_type": "RIFT",
     "sector_seed": 4001,
     "entry_edge": "S",
-    "blocked_edges": ["N"]
+    "blocked_edges": [
+      "N"
+    ]
   },
   "initial": {
-    "player_position": [4, 0],
+    "player_position": [
+      5,
+      1
+    ],
     "reveal": {
       "mode": "FULL"
     }
   },
   "commands": [
-    {"command_type": "WARP_EXIT", "exit_direction": "N"}
+    {
+      "command_type": "WARP_EXIT",
+      "exit_direction": "N"
+    }
   ],
   "expect": {
     "srs_turn": 0,
     "fuel": 0,
-    "player_position": [4, 0],
-    "event_types": ["WARP_EXIT_REJECTED"],
+    "player_position": [
+      5,
+      1
+    ],
+    "event_types": [
+      "WARP_EXIT_REJECTED"
+    ],
     "outcome": "REJECTED_BLOCKED_EDGE"
   }
 }

@@ -278,10 +278,10 @@ def _validate_known_map_secrecy(case_id: str, result: SrsFixtureRunResult) -> No
     if any(len(row) != state.actual_map.width for row in rows):
         raise ValidationError(f"{case_id}: render width mismatch")
 
-    for y in range(state.actual_map.height):
-        for x in range(state.actual_map.width):
+    for y in range(1, state.actual_map.height + 1):
+        for x in range(1, state.actual_map.width + 1):
             position = Position(x, y)
-            rendered = rows[y][x]
+            rendered = rows[y - 1][x - 1]
             if position in discovered:
                 if rendered == "?":
                     raise ValidationError(f"{case_id}: discovered cell rendered as unknown at {position}")

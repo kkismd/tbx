@@ -64,39 +64,39 @@ class SrsEngineCombatTests(unittest.TestCase):
         self.assertEqual(result.state.combat_state.combat_turn, 0)
 
     def test_bresenham_line_returns_expected_cells(self) -> None:
-        line = bresenham_line(Position(1, 1), Position(4, 3))
+        line = bresenham_line(Position(2, 2), Position(5, 4))
 
         self.assertEqual(
             line,
             (
-                Position(1, 1),
                 Position(2, 2),
-                Position(3, 2),
+                Position(3, 3),
                 Position(4, 3),
+                Position(5, 4),
             ),
         )
 
     def test_line_of_sight_is_blocked_by_impassable_intermediate_cell(self) -> None:
-        state = replace_cell_terrain(make_state(), Position(2, 4), SrsTerrainType.ASTEROID)
+        state = replace_cell_terrain(make_state(), Position(3, 5), SrsTerrainType.ASTEROID)
 
         self.assertFalse(
             has_clear_line_of_sight(
                 state,
-                attacker=Position(1, 4),
-                target=Position(3, 4),
+                attacker=Position(2, 5),
+                target=Position(4, 5),
             )
         )
 
     def test_line_of_sight_ignores_attacker_and_target_cells_for_blocking(self) -> None:
         state = make_state()
-        state = replace_cell_terrain(state, Position(1, 4), SrsTerrainType.ASTEROID)
-        state = replace_cell_terrain(state, Position(3, 4), SrsTerrainType.ASTEROID)
+        state = replace_cell_terrain(state, Position(2, 5), SrsTerrainType.ASTEROID)
+        state = replace_cell_terrain(state, Position(4, 5), SrsTerrainType.ASTEROID)
 
         self.assertTrue(
             has_clear_line_of_sight(
                 state,
-                attacker=Position(1, 4),
-                target=Position(3, 4),
+                attacker=Position(2, 5),
+                target=Position(4, 5),
             )
         )
 
@@ -106,30 +106,30 @@ class SrsEngineCombatTests(unittest.TestCase):
         self.assertTrue(
             is_attackable_position(
                 state,
-                attacker=Position(1, 4),
-                target=Position(4, 4),
+                attacker=Position(2, 5),
+                target=Position(5, 5),
                 weapon_type=SrsWeaponType.PHOTON_TORPEDO,
             )
         )
         self.assertFalse(
             is_attackable_position(
                 state,
-                attacker=Position(1, 4),
-                target=Position(4, 4),
+                attacker=Position(2, 5),
+                target=Position(5, 5),
                 weapon_type=SrsWeaponType.PHASER,
             )
         )
 
     def test_enemy_attackable_positions_enumerates_clear_los_cells(self) -> None:
-        state = replace(make_state(), player_position=Position(4, 4))
+        state = replace(make_state(), player_position=Position(5, 5))
 
         positions = enemy_attackable_positions(state)
 
-        self.assertIn(Position(2, 4), positions)
-        self.assertIn(Position(4, 2), positions)
-        self.assertIn(Position(6, 6), positions)
-        self.assertNotIn(Position(4, 4), positions)
-        self.assertNotIn(Position(1, 4), positions)
+        self.assertIn(Position(3, 5), positions)
+        self.assertIn(Position(5, 3), positions)
+        self.assertIn(Position(7, 7), positions)
+        self.assertNotIn(Position(5, 5), positions)
+        self.assertNotIn(Position(2, 5), positions)
 
     def test_combat_step_skips_attack_phase_without_target(self) -> None:
         state = make_state()
@@ -154,15 +154,15 @@ class SrsEngineCombatTests(unittest.TestCase):
         self.assertEqual(result.state.combat_state.phase, SrsCombatPhase.ENEMY_ACTION)
 
     def test_combat_step_skips_attack_phase_when_line_of_sight_is_blocked(self) -> None:
-        state = replace_cell_terrain(make_state(), Position(2, 4), SrsTerrainType.ASTEROID)
+        state = replace_cell_terrain(make_state(), Position(3, 5), SrsTerrainType.ASTEROID)
         enemy = create_enemy_combat_state(
             enemy_id="enemy-1",
             tier=SrsEnemyTier.TIER1,
-            position=Position(3, 4),
+            position=Position(4, 5),
         )
         state = replace(
             state,
-            player_position=Position(1, 4),
+            player_position=Position(2, 5),
             combat_state=SrsCombatState(
                 enemies={"enemy-1": enemy},
                 player_attack_target_id="enemy-1",
@@ -183,11 +183,11 @@ class SrsEngineCombatTests(unittest.TestCase):
         enemy = create_enemy_combat_state(
             enemy_id="enemy-1",
             tier=SrsEnemyTier.TIER1,
-            position=Position(5, 4),
+            position=Position(6, 5),
         )
         state = replace(
             state,
-            player_position=Position(1, 4),
+            player_position=Position(2, 5),
             combat_state=SrsCombatState(
                 enemies={"enemy-1": enemy},
                 player_attack_target_id="enemy-1",
@@ -204,11 +204,11 @@ class SrsEngineCombatTests(unittest.TestCase):
         self.assertFalse(result.events[0].payload["target_attackable"])
 
     def test_player_attack_with_torpedo_consumes_ammo_and_removes_destroyed_enemy(self) -> None:
-        state = replace(make_state(), player_position=Position(1, 4))
+        state = replace(make_state(), player_position=Position(2, 5))
         enemy = create_enemy_combat_state(
             enemy_id="enemy-1",
             tier=SrsEnemyTier.TIER1,
-            position=Position(3, 4),
+            position=Position(4, 5),
         )
         state = replace(
             state,
@@ -248,11 +248,11 @@ class SrsEngineCombatTests(unittest.TestCase):
         )
 
     def test_destroyed_enemy_drop_adds_salvage_and_applies_choice(self) -> None:
-        state = replace(make_state(), player_position=Position(1, 4))
+        state = replace(make_state(), player_position=Position(2, 5))
         enemy = create_enemy_combat_state(
             enemy_id="enemy-3",
             tier=SrsEnemyTier.TIER3,
-            position=Position(3, 4),
+            position=Position(4, 5),
             drop_salvage=True,
         )
         enemy = replace(enemy, durability=3)
@@ -284,11 +284,11 @@ class SrsEngineCombatTests(unittest.TestCase):
         self.assertEqual(result.events[0].payload["player_action"]["salvage_reward"]["selected_salvage_choice"], "RECOVER_ENERGY")
 
     def test_destroyed_enemy_without_drop_does_not_change_salvage(self) -> None:
-        state = replace(make_state(), player_position=Position(1, 4))
+        state = replace(make_state(), player_position=Position(2, 5))
         enemy = create_enemy_combat_state(
             enemy_id="enemy-1",
             tier=SrsEnemyTier.TIER1,
-            position=Position(3, 4),
+            position=Position(4, 5),
             drop_salvage=False,
         )
         state = replace(
@@ -316,11 +316,11 @@ class SrsEngineCombatTests(unittest.TestCase):
         self.assertNotIn("salvage_reward", result.events[0].payload["player_action"])
 
     def test_player_attack_with_phaser_consumes_energy_and_applies_fixed_damage(self) -> None:
-        state = replace(make_state(), player_position=Position(1, 4))
+        state = replace(make_state(), player_position=Position(2, 5))
         enemy = create_enemy_combat_state(
             enemy_id="enemy-1",
             tier=SrsEnemyTier.TIER2,
-            position=Position(2, 4),
+            position=Position(3, 5),
         )
         state = replace(
             state,
@@ -346,11 +346,11 @@ class SrsEngineCombatTests(unittest.TestCase):
         self.assertEqual(result.events[0].payload["player_action"]["damage_applied"], 1)
 
     def test_player_attack_can_skip_without_consuming_resources(self) -> None:
-        state = replace(make_state(), player_position=Position(1, 4))
+        state = replace(make_state(), player_position=Position(2, 5))
         enemy = create_enemy_combat_state(
             enemy_id="enemy-1",
             tier=SrsEnemyTier.TIER1,
-            position=Position(3, 4),
+            position=Position(4, 5),
         )
         combat_state = SrsCombatState(
             enemies={"enemy-1": enemy},
@@ -400,17 +400,17 @@ class SrsEngineCombatTests(unittest.TestCase):
         enemy_t4 = create_enemy_combat_state(
             enemy_id="enemy-4",
             tier=SrsEnemyTier.TIER4,
-            position=Position(2, 4),
+            position=Position(3, 5),
         )
         enemy_t2 = create_enemy_combat_state(
             enemy_id="enemy-2",
             tier=SrsEnemyTier.TIER2,
-            position=Position(1, 3),
+            position=Position(2, 4),
         )
         enemy_t1 = create_enemy_combat_state(
             enemy_id="enemy-1",
             tier=SrsEnemyTier.TIER1,
-            position=Position(0, 4),
+            position=Position(1, 5),
         )
 
         combat_state = SrsCombatState(
@@ -424,21 +424,21 @@ class SrsEngineCombatTests(unittest.TestCase):
         self.assertEqual(tuple(combat_state.enemies), ("enemy-1", "enemy-2", "enemy-4"))
 
     def test_multiple_enemy_actions_follow_tier_ascending_order(self) -> None:
-        state = replace(make_state(), player_position=Position(1, 4))
+        state = replace(make_state(), player_position=Position(2, 5))
         enemy_t4 = create_enemy_combat_state(
             enemy_id="enemy-4",
             tier=SrsEnemyTier.TIER4,
-            position=Position(2, 4),
+            position=Position(3, 5),
         )
         enemy_t2 = create_enemy_combat_state(
             enemy_id="enemy-2",
             tier=SrsEnemyTier.TIER2,
-            position=Position(1, 3),
+            position=Position(2, 4),
         )
         enemy_t1 = create_enemy_combat_state(
             enemy_id="enemy-1",
             tier=SrsEnemyTier.TIER1,
-            position=Position(0, 4),
+            position=Position(1, 5),
         )
         state = replace(
             state,
@@ -476,7 +476,7 @@ class SrsEngineCombatTests(unittest.TestCase):
         self.assertEqual(result.state.combat_state.enemies["enemy-4"].durability, 11)
 
     def test_three_enemy_pressure_can_exhaust_counterattacks_on_second_turn(self) -> None:
-        state = replace(make_state(), player_position=Position(1, 4))
+        state = replace(make_state(), player_position=Position(2, 5))
         state = replace(
             state,
             combat_state=SrsCombatState(
@@ -484,17 +484,17 @@ class SrsEngineCombatTests(unittest.TestCase):
                     "enemy-4": create_enemy_combat_state(
                         enemy_id="enemy-4",
                         tier=SrsEnemyTier.TIER4,
-                        position=Position(2, 4),
+                        position=Position(3, 5),
                     ),
                     "enemy-2": create_enemy_combat_state(
                         enemy_id="enemy-2",
                         tier=SrsEnemyTier.TIER2,
-                        position=Position(1, 3),
+                        position=Position(2, 4),
                     ),
                     "enemy-1": create_enemy_combat_state(
                         enemy_id="enemy-1",
                         tier=SrsEnemyTier.TIER1,
-                        position=Position(0, 4),
+                        position=Position(1, 5),
                     ),
                 },
                 phase=SrsCombatPhase.PLAYER_ATTACK,
@@ -545,13 +545,13 @@ class SrsEngineCombatTests(unittest.TestCase):
         self.assertTrue(result.events[4].payload["enemy_actions"][2]["reaction"]["fallback_to_defend"])
 
     def test_enemy_action_moves_to_lowest_total_movement_cost_attack_cell(self) -> None:
-        state = replace(make_state(), player_position=Position(4, 4))
-        for position in (Position(1, 4), Position(2, 4)):
+        state = replace(make_state(), player_position=Position(5, 5))
+        for position in (Position(2, 5), Position(3, 5)):
             state = replace_cell_terrain(state, position, SrsTerrainType.ASTEROID_FIELD)
         enemy = create_enemy_combat_state(
             enemy_id="enemy-1",
             tier=SrsEnemyTier.TIER1,
-            position=Position(0, 4),
+            position=Position(1, 5),
         )
         state = replace(
             state,
@@ -568,18 +568,18 @@ class SrsEngineCombatTests(unittest.TestCase):
         )
 
         enemy_action = result.events[0].payload["enemy_actions"][0]
-        self.assertEqual(enemy_action["target_attackable_position"], [2, 3])
-        self.assertEqual(enemy_action["planned_path"], [[0, 3], [1, 3], [2, 3]])
-        self.assertEqual(result.state.combat_state.enemies["enemy-1"].position, Position(2, 3))
+        self.assertEqual(enemy_action["target_attackable_position"], [3, 4])
+        self.assertEqual(enemy_action["planned_path"], [[1, 4], [2, 4], [3, 4]])
+        self.assertEqual(result.state.combat_state.enemies["enemy-1"].position, Position(3, 4))
 
     def test_enemy_action_uses_deterministic_cell_order_for_equal_cost_targets(self) -> None:
-        state = replace(make_state(), player_position=Position(6, 4))
-        for position in (Position(1, 4), Position(2, 4), Position(3, 4), Position(4, 4)):
+        state = replace(make_state(), player_position=Position(7, 5))
+        for position in (Position(2, 5), Position(3, 5), Position(4, 5), Position(5, 5)):
             state = replace_cell_terrain(state, position, SrsTerrainType.ASTEROID)
         enemy = create_enemy_combat_state(
             enemy_id="enemy-1",
             tier=SrsEnemyTier.TIER1,
-            position=Position(0, 4),
+            position=Position(1, 5),
         )
         state = replace(
             state,
@@ -596,13 +596,13 @@ class SrsEngineCombatTests(unittest.TestCase):
         )
 
         enemy_action = result.events[0].payload["enemy_actions"][0]
-        self.assertEqual(enemy_action["target_attackable_position"], [4, 3])
+        self.assertEqual(enemy_action["target_attackable_position"], [5, 4])
         self.assertEqual(
             enemy_action["planned_path"],
-            [[0, 3], [1, 3], [2, 3], [3, 3], [4, 3]],
+            [[1, 4], [2, 4], [3, 4], [4, 4], [5, 4]],
         )
-        self.assertEqual(enemy_action["moved_path"], [[0, 3], [1, 3], [2, 3]])
-        self.assertEqual(result.state.combat_state.enemies["enemy-1"].position, Position(2, 3))
+        self.assertEqual(enemy_action["moved_path"], [[1, 4], [2, 4], [3, 4]])
+        self.assertEqual(result.state.combat_state.enemies["enemy-1"].position, Position(3, 4))
 
     def test_enemy_attack_defend_halves_damage_and_rounds_up(self) -> None:
         state = make_state()
@@ -635,11 +635,11 @@ class SrsEngineCombatTests(unittest.TestCase):
         enemy = create_enemy_combat_state(
             enemy_id="enemy-1",
             tier=SrsEnemyTier.TIER1,
-            position=Position(2, 4),
+            position=Position(3, 5),
         )
         state = replace(
             state,
-            player_position=Position(1, 4),
+            player_position=Position(2, 5),
             combat_state=SrsCombatState(
                 enemies={"enemy-1": enemy},
                 phase=SrsCombatPhase.ENEMY_ACTION,
@@ -665,7 +665,7 @@ class SrsEngineCombatTests(unittest.TestCase):
         enemy = create_enemy_combat_state(
             enemy_id="enemy-1",
             tier=SrsEnemyTier.TIER1,
-            position=Position(2, 4),
+            position=Position(3, 5),
         )
         combat_state = SrsCombatState(
             enemies={"enemy-1": enemy},
@@ -674,7 +674,7 @@ class SrsEngineCombatTests(unittest.TestCase):
         combat_state = replace(combat_state, player=replace(combat_state.player, energy=0))
         state = replace(
             state,
-            player_position=Position(1, 4),
+            player_position=Position(2, 5),
             combat_state=combat_state,
         )
 

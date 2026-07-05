@@ -18,15 +18,25 @@
   "commands": [
     {
       "command_type": "MOVE_ROUTE",
-      "route": ["N", "N"]
+      "route": [
+        "N",
+        "N"
+      ]
     }
   ],
   "cost_mode": "TURN_ONLY",
   "expect": {
     "srs_turn": 1,
     "fuel": 9,
-    "player_position": [4, 6],
-    "event_types": ["MOVE_ACCEPTED", "OBSERVATION_UPDATED", "OBSERVATION_UPDATED"],
+    "player_position": [
+      5,
+      7
+    ],
+    "event_types": [
+      "MOVE_ACCEPTED",
+      "OBSERVATION_UPDATED",
+      "OBSERVATION_UPDATED"
+    ],
     "outcome": "ACCEPTED"
   }
 }

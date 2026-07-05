@@ -394,8 +394,9 @@ def _apply_cell_overrides(state: SrsGameState, *, overrides: Any) -> SrsGameStat
         if not state.actual_map.contains(position):
             raise SrsFixtureError(f"initial.cell_overrides[{index}].position out of bounds: {position}")
         terrain = _terrain_type(override.get("terrain"), field_name=f"initial.cell_overrides[{index}].terrain")
-        cell = rows[position.y][position.x]
-        rows[position.y][position.x] = SrsCell(
+        row_idx, col_idx = state.actual_map.indices_for(position)
+        cell = rows[row_idx][col_idx]
+        rows[row_idx][col_idx] = SrsCell(
             terrain=terrain,
             object_id=cell.object_id,
             actor_id=cell.actor_id,

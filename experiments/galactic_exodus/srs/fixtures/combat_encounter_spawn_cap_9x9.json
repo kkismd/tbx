@@ -6,16 +6,28 @@
     "sector_type": "RIFT",
     "sector_seed": 9202,
     "entry_edge": "S",
-    "blocked_edges": ["N", "W"]
+    "blocked_edges": [
+      "N",
+      "W"
+    ]
   },
   "initial": {
-    "reveal": {"mode": "FULL"},
-    "player_position": [4, 4],
+    "reveal": {
+      "mode": "FULL"
+    },
+    "player_position": [
+      5,
+      5
+    ],
     "combat": {
       "phase": "PLAYER_MOVEMENT",
       "encounter": {
         "danger_score": 4,
-        "composition": ["TIER2", "TIER1", "TIER1"]
+        "composition": [
+          "TIER2",
+          "TIER1",
+          "TIER1"
+        ]
       }
     }
   },
@@ -29,8 +41,14 @@
     "combat_player_energy": 6,
     "combat_player_torpedo_ammo": 6,
     "combat_enemy_positions": {
-      "enemy-1": [8, 4],
-      "enemy-2": [4, 8]
+      "enemy-1": [
+        9,
+        5
+      ],
+      "enemy-2": [
+        5,
+        9
+      ]
     },
     "combat_enemy_durabilities": {
       "enemy-1": 3,

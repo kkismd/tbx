@@ -27,13 +27,13 @@ class SrsGenerationError(ValueError):
 
 MAP_WIDTH = 9
 MAP_HEIGHT = 9
-MAP_CENTER = Position(4, 4)
+MAP_CENTER = Position(5, 5)
 
 EDGE_POSITIONS = {
-    Direction.N: Position(4, 0),
-    Direction.E: Position(8, 4),
-    Direction.S: Position(4, 8),
-    Direction.W: Position(0, 4),
+    Direction.N: Position(5, 1),
+    Direction.E: Position(9, 5),
+    Direction.S: Position(5, 9),
+    Direction.W: Position(1, 5),
 }
 
 SECTOR_EXTRA_OBJECTS = {
@@ -138,8 +138,10 @@ def _apply_warp_flags(cells: list[list[SrsCell]], descriptor: SectorDescriptor) 
     }
     for direction in open_edges:
         position = EDGE_POSITIONS[direction]
-        base = cells[position.y][position.x]
-        cells[position.y][position.x] = SrsCell(
+        row_idx = position.y - 1
+        col_idx = position.x - 1
+        base = cells[row_idx][col_idx]
+        cells[row_idx][col_idx] = SrsCell(
             terrain=base.terrain,
             object_id=base.object_id,
             actor_id=base.actor_id,
@@ -168,11 +170,13 @@ def _place_objects(
 
     objects: dict[str, SrsObjectState] = {}
     for (object_type, object_id), position in zip(object_specs, shuffled[: len(object_specs)], strict=True):
-        cells[position.y][position.x] = SrsCell(
-            terrain=cells[position.y][position.x].terrain,
+        row_idx = position.y - 1
+        col_idx = position.x - 1
+        cells[row_idx][col_idx] = SrsCell(
+            terrain=cells[row_idx][col_idx].terrain,
             object_id=object_id,
-            actor_id=cells[position.y][position.x].actor_id,
-            warp_flags=cells[position.y][position.x].warp_flags,
+            actor_id=cells[row_idx][col_idx].actor_id,
+            warp_flags=cells[row_idx][col_idx].warp_flags,
         )
         objects[object_id] = SrsObjectState(
             object_id=object_id,
@@ -208,8 +212,8 @@ def _collect_object_candidates(
     player_position: Position,
 ) -> list[Position]:
     candidates: list[Position] = []
-    for y, row in enumerate(cells):
-        for x, cell in enumerate(row):
+    for y, row in enumerate(cells, start=1):
+        for x, cell in enumerate(row, start=1):
             position = Position(x, y)
             if position == player_position:
                 continue
@@ -224,6 +228,6 @@ def _collect_object_candidates(
 
 
 def _iter_cells(actual_map: SrsActualMap) -> Iterable[tuple[Position, SrsCell]]:
-    for y, row in enumerate(actual_map.cells):
-        for x, cell in enumerate(row):
+    for y, row in enumerate(actual_map.cells, start=1):
+        for x, cell in enumerate(row, start=1):
             yield Position(x, y), cell

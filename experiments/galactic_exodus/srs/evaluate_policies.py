@@ -1471,7 +1471,8 @@ def _replace_player_cell_terrain(
     rows = [list(row) for row in state.actual_map.cells]
     position = state.player_position
     current = state.actual_map.cell_at(position)
-    rows[position.y][position.x] = SrsCell(
+    row_idx, col_idx = state.actual_map.indices_for(position)
+    rows[row_idx][col_idx] = SrsCell(
         terrain=terrain,
         object_id=current.object_id,
         actor_id=current.actor_id,

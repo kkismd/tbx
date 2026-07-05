@@ -9,12 +9,24 @@
     "blocked_edges": []
   },
   "initial": {
-    "reveal": {"mode": "FULL"},
-    "player_position": [1, 4],
+    "reveal": {
+      "mode": "FULL"
+    },
+    "player_position": [
+      2,
+      5
+    ],
     "combat": {
       "phase": "PLAYER_ATTACK",
       "enemies": [
-        {"enemy_id": "enemy-1", "tier": "TIER1", "position": [3, 4]}
+        {
+          "enemy_id": "enemy-1",
+          "tier": "TIER1",
+          "position": [
+            4,
+            5
+          ]
+        }
       ],
       "player_attack_target_id": "enemy-1"
     }
@@ -25,10 +37,15 @@
       "player_attack_action": "ATTACK",
       "player_attack_weapon": "PHOTON_TORPEDO"
     },
-    {"command_type": "COMBAT_STEP"}
+    {
+      "command_type": "COMBAT_STEP"
+    }
   ],
   "expect": {
-    "event_types": ["COMBAT_TRANSITIONED", "COMBAT_TRANSITIONED"],
+    "event_types": [
+      "COMBAT_TRANSITIONED",
+      "COMBAT_TRANSITIONED"
+    ],
     "combat_phase": "PLAYER_MOVEMENT",
     "combat_turn": 1,
     "enemy_presence": false,
