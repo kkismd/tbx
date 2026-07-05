@@ -23,11 +23,11 @@ class SrsRenderTests(unittest.TestCase):
         self.assertNotIn("~", rendered)
 
     def test_known_render_player_overrides_cell_symbol(self) -> None:
-        state = reveal_positions(make_state(), [Position(4, 8)])
+        state = reveal_positions(make_state(), [Position(4, 0)])
 
         rendered = render_known_map(state)
 
-        self.assertEqual(rendered.splitlines()[8][4], "@")
+        self.assertEqual(rendered.splitlines()[0][4], "@")
 
     def test_known_render_object_symbols(self) -> None:
         state = reveal_positions(
@@ -108,11 +108,11 @@ class SrsRenderTests(unittest.TestCase):
         self.assertEqual([len(row) for row in rendered.splitlines()], [9] * 9)
 
     def test_spaced_known_render_inserts_single_spaces_between_cells(self) -> None:
-        state = reveal_positions(make_state(), [Position(x, 8) for x in range(9)])
+        state = reveal_positions(make_state(), [Position(x, 0) for x in range(9)])
 
         rendered = render_known_map_spaced(state)
 
         lines = rendered.splitlines()
-        self.assertEqual(lines[0], "? ? ? ? ? ? ? ? ?")
-        self.assertEqual(lines[8], ". . . . @ . . . .")
+        self.assertEqual(lines[0], ". . . . @ . . . .")
+        self.assertEqual(lines[8], "? ? ? ? ? ? ? ? ?")
         self.assertEqual([len(row) for row in lines], [17] * 9)

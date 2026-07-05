@@ -34,7 +34,7 @@
       "COMBAT_TRANSITIONED",
       "COMBAT_TRANSITIONED"
     ],
-    "combat_phase": "PLAYER_MOVEMENT",
+    "combat_phase": "ENEMY_ACTION",
     "combat_turn": 1,
     "enemy_presence": true,
     "combat_player_energy": 6,

@@ -19,7 +19,7 @@
   "expect": {
     "srs_turn": 1,
     "fuel": 0,
-    "player_position": [4, 8],
+    "player_position": [4, 0],
     "event_types": ["WARP_EXIT_ACCEPTED"],
     "outcome": "ACCEPTED"
   }

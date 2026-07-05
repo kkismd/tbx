@@ -2012,9 +2012,9 @@ def _reconstruct_route(
 
 def _step_position(position: Position, direction: Direction) -> Position:
     deltas = {
-        Direction.N: (0, -1),
+        Direction.N: (0, 1),
         Direction.E: (1, 0),
-        Direction.S: (0, 1),
+        Direction.S: (0, -1),
         Direction.W: (-1, 0),
     }
     dx, dy = deltas[direction]

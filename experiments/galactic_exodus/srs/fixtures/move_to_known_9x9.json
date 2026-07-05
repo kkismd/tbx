@@ -9,17 +9,28 @@
     "blocked_edges": []
   },
   "initial": {
+    "cell_overrides": [
+      {
+        "position": [4, 1],
+        "terrain": "FLOOR"
+      },
+      {
+        "position": [4, 2],
+        "terrain": "FLOOR",
+        "object_id": null
+      }
+    ],
     "reveal": {
       "mode": "FULL"
     }
   },
   "commands": [
-    {"command_type": "MOVE_TO", "target": [4, 6]}
+    {"command_type": "MOVE_TO", "target": [4, 2]}
   ],
   "expect": {
     "srs_turn": 1,
     "fuel": 0,
-    "player_position": [4, 6],
+    "player_position": [4, 2],
     "event_types": ["MOVE_ACCEPTED", "OBSERVATION_UPDATED", "OBSERVATION_UPDATED"],
     "outcome": "ACCEPTED"
   }

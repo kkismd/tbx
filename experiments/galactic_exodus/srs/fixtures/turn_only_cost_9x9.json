@@ -11,6 +11,17 @@
   "initial": {
     "fuel": 9,
     "max_fuel": 9,
+    "cell_overrides": [
+      {
+        "position": [4, 1],
+        "terrain": "FLOOR"
+      },
+      {
+        "position": [4, 2],
+        "terrain": "FLOOR",
+        "object_id": null
+      }
+    ],
     "reveal": {
       "mode": "FULL"
     }
@@ -25,7 +36,7 @@
   "expect": {
     "srs_turn": 1,
     "fuel": 9,
-    "player_position": [4, 6],
+    "player_position": [4, 2],
     "event_types": ["MOVE_ACCEPTED", "OBSERVATION_UPDATED", "OBSERVATION_UPDATED"],
     "outcome": "ACCEPTED"
   }

@@ -387,6 +387,7 @@ def _apply_cell_overrides(state: SrsGameState, *, overrides: Any) -> SrsGameStat
         raise SrsFixtureError("initial.cell_overrides must be a list")
 
     rows = [list(row) for row in state.actual_map.cells]
+    objects = dict(state.objects)
     for index, override in enumerate(overrides, 1):
         if not isinstance(override, Mapping):
             raise SrsFixtureError(f"initial.cell_overrides[{index}] must be an object")
@@ -395,9 +396,21 @@ def _apply_cell_overrides(state: SrsGameState, *, overrides: Any) -> SrsGameStat
             raise SrsFixtureError(f"initial.cell_overrides[{index}].position out of bounds: {position}")
         terrain = _terrain_type(override.get("terrain"), field_name=f"initial.cell_overrides[{index}].terrain")
         cell = rows[position.y][position.x]
+        object_id = cell.object_id
+        if "object_id" in override:
+            raw_object_id = override["object_id"]
+            if raw_object_id is not None and not isinstance(raw_object_id, str):
+                raise SrsFixtureError(f"initial.cell_overrides[{index}].object_id must be a string or null")
+            if raw_object_id is not None and raw_object_id != cell.object_id:
+                raise SrsFixtureError(
+                    f"initial.cell_overrides[{index}].object_id may only preserve the current object or clear it with null"
+                )
+            object_id = raw_object_id
+            if object_id is None and cell.object_id is not None:
+                objects.pop(cell.object_id, None)
         rows[position.y][position.x] = SrsCell(
             terrain=terrain,
-            object_id=cell.object_id,
+            object_id=object_id,
             actor_id=cell.actor_id,
             warp_flags=cell.warp_flags,
         )
@@ -407,7 +420,7 @@ def _apply_cell_overrides(state: SrsGameState, *, overrides: Any) -> SrsGameStat
         height=state.actual_map.height,
         cells=tuple(tuple(row) for row in rows),
     )
-    return replace(state, actual_map=actual_map)
+    return replace(state, actual_map=actual_map, objects=objects)
 
 
 def _apply_persistent_overrides(

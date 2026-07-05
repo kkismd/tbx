@@ -107,8 +107,8 @@ class SrsEncounterTests(unittest.TestCase):
         self.assertEqual(
             spawn_candidate_points(state),
             (
+                Position(4, 0),
                 Position(8, 4),
-                Position(4, 8),
             ),
         )
 
@@ -141,8 +141,8 @@ class SrsEncounterTests(unittest.TestCase):
         self.assertEqual(
             [(enemy.enemy_id, enemy.tier, enemy.position) for enemy in enemies],
             [
-                ("enemy-1", SrsEnemyTier.TIER1, Position(8, 4)),
-                ("enemy-2", SrsEnemyTier.TIER2, Position(4, 8)),
+                ("enemy-1", SrsEnemyTier.TIER1, Position(4, 0)),
+                ("enemy-2", SrsEnemyTier.TIER2, Position(8, 4)),
             ],
         )
 
@@ -153,8 +153,8 @@ class SrsEncounterTests(unittest.TestCase):
         self.assertEqual(
             result.summary["combat_enemy_positions"],
             {
-                "enemy-1": [8, 4],
-                "enemy-2": [4, 8],
+                "enemy-1": [4, 0],
+                "enemy-2": [8, 4],
             },
         )
 
@@ -176,7 +176,7 @@ class SrsEncounterTests(unittest.TestCase):
 
     def test_movement_turn_without_enemies_requires_encounter_roll(self) -> None:
         previous_state = make_state()
-        next_state = replace(previous_state, srs_turn=1, player_position=Position(4, 7))
+        next_state = replace(previous_state, srs_turn=1, player_position=Position(4, 1))
 
         disposition = encounter_roll_disposition(previous_state, command_type="MOVE_ROUTE", next_state=next_state)
 

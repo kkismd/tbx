@@ -4,7 +4,9 @@
 
 この文書は、Phase 2 SRS の正本仕様書である。`experiments/galactic_exodus/srs/phase2_decisions.csv` と矛盾しない断定形の仕様として扱い、Python prototype・reference fixture・TBX 実装は本書を起点に整合させる。
 
-Python 実装は参照実装であり、正本ではない。仕様と prototype が矛盾した場合は prototype を修正する。`phase2_reference.json` と `validate_phase2_results.py` は、本書で固定した外部契約を replay 可能な形で検証する。
+Python 実装は実行可能な参照実装であり、正本ではない。仕様と prototype が矛盾した場合は prototype を修正する。`phase2_reference.json` と `validate_phase2_results.py` は、本書で固定した外部契約を replay 可能な形で検証する。
+
+本書は movement / interaction / reward の follow-up 契約として #1165, #1166, #1167 を取り込んだ正本仕様である。
 
 ## 2. Scope and deferred items
 
