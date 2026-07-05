@@ -14,6 +14,7 @@ if __package__ in {None, ""}:
     sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from experiments.galactic_exodus.srs.model import Position
+from experiments.galactic_exodus.srs.render import render_row_for_internal_y
 from experiments.galactic_exodus.srs.run_fixture import FIXTURES_DIR, REPO_ROOT, SrsFixtureRunResult, run_fixture
 
 
@@ -281,7 +282,7 @@ def _validate_known_map_secrecy(case_id: str, result: SrsFixtureRunResult) -> No
     for y in range(state.actual_map.height):
         for x in range(state.actual_map.width):
             position = Position(x, y)
-            rendered = rows[y][x]
+            rendered = rows[render_row_for_internal_y(height=state.actual_map.height, y=y)][x]
             if position in discovered:
                 if rendered == "?":
                     raise ValidationError(f"{case_id}: discovered cell rendered as unknown at {position}")

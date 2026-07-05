@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Iterable, Mapping, Sequence
 
 from experiments.galactic_exodus.srs.model import Position, SrsGameState
-from experiments.galactic_exodus.srs.render import render_known_map_spaced
+from experiments.galactic_exodus.srs.render import render_known_map_spaced, render_row_for_internal_y, to_display_position
 from experiments.galactic_exodus.srs.run_fixture import FIXTURES_DIR, SrsFixtureRunResult, run_fixture
 
 try:
@@ -151,7 +151,8 @@ def _markdown_list(text: str) -> str:
 
 def _format_position(value: object) -> str:
     if isinstance(value, (list, tuple)) and len(value) == 2:
-        return f"({value[0]},{value[1]})"
+        display_x, display_y = to_display_position(Position(value[0], value[1]))
+        return f"({display_x},{display_y})"
     return "-"
 
 
@@ -319,10 +320,11 @@ def _render_known_map_spaced_for_manual_eval(state: SrsGameState) -> str:
 
     hidden_player_state = replace(state, player_position=Position(-1, -1))
     underlay_rows = render_known_map_spaced(hidden_player_state).splitlines()
-    if not (0 <= player.y < len(underlay_rows)):
+    player_row_index = render_row_for_internal_y(height=state.actual_map.height, y=player.y)
+    if not (0 <= player_row_index < len(underlay_rows)):
         return render
 
-    player_row = underlay_rows[player.y]
+    player_row = underlay_rows[player_row_index]
     player_cell_index = player.x * 2
     if not (0 <= player_cell_index < len(player_row)):
         return render
@@ -339,17 +341,19 @@ def _render_known_map_spaced_for_manual_eval(state: SrsGameState) -> str:
     else:
         row_chars.append("@")
 
-    underlay_rows[player.y] = "".join(row_chars)
+    underlay_rows[player_row_index] = "".join(row_chars)
     return "\n".join(underlay_rows)
 
 
 def _player_cell_text(state: SrsGameState) -> str:
     player = state.player_position
     if not state.actual_map.contains(player):
-        return f"- position=({player.x},{player.y}), out_of_bounds=True"
+        display_x, display_y = to_display_position(player)
+        return f"- position=({display_x},{display_y}), out_of_bounds=True"
 
     cell = state.actual_map.cell_at(player)
-    details = [f"position=({player.x},{player.y})", f"terrain={cell.terrain.value}"]
+    display_x, display_y = to_display_position(player)
+    details = [f"position=({display_x},{display_y})", f"terrain={cell.terrain.value}"]
 
     if cell.warp_flags:
         warp = "".join(direction.value for direction in sorted(cell.warp_flags, key=lambda direction: direction.value))
