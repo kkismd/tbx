@@ -9,7 +9,7 @@
     "blocked_edges": []
   },
   "initial": {
-    "player_position": [2, 7],
+    "player_position": [2, 6],
     "fuel": 2,
     "max_fuel": 9,
     "reveal": {
@@ -18,7 +18,7 @@
     "persistent": {
       "consumed_object_ids": ["resource-cache-1"],
       "activated_object_ids": [],
-      "discovered_cells": [[2, 7], [2, 6], [3, 7], [1, 7]]
+      "discovered_cells": [[2, 6], [2, 5], [3, 6], [1, 6]]
     }
   },
   "commands": [
@@ -27,7 +27,7 @@
   "expect": {
     "srs_turn": 0,
     "fuel": 2,
-    "player_position": [2, 7],
+    "player_position": [2, 6],
     "event_types": ["INTERACT_REJECTED"],
     "consumed_object_ids": ["resource-cache-1"],
     "outcome": "REJECTED_ALREADY_CONSUMED"

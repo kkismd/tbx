@@ -9,7 +9,7 @@
     "blocked_edges": []
   },
   "initial": {
-    "player_position": [3, 1],
+    "player_position": [5, 2],
     "fuel": 2,
     "max_fuel": 9,
     "player": {
@@ -30,7 +30,7 @@
     "player_durability": 100,
     "player_energy": 6,
     "player_torpedo_ammo": 6,
-    "player_position": [3, 1],
+    "player_position": [5, 2],
     "event_types": ["INTERACT_ACCEPTED", "STATION_ACTIVATED"],
     "activated_object_ids": ["station-1"],
     "outcome": "ACCEPTED"

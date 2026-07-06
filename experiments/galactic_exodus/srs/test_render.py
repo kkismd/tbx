@@ -162,7 +162,7 @@ class SrsRenderTests(unittest.TestCase):
         rendered = render_known_map(state)
         lines = rendered.splitlines()
 
-        self.assertEqual(lines[0][3], ".")
+        self.assertEqual(lines[0][3], "^")
         self.assertEqual(lines[8][3], "?")
 
     def test_render_bottom_row_is_internal_south_row(self) -> None:
@@ -202,7 +202,7 @@ class SrsRenderTests(unittest.TestCase):
 
         lines = rendered.splitlines()
         self.assertEqual(lines[0], "? ? ? ? ? ? ? ? ?")
-        self.assertEqual(lines[8], ". . . . @ . . . .")
+        self.assertEqual(lines[8], "+ v v v @ v v v +")
         self.assertEqual([len(row) for row in lines], [17] * 9)
 
     def test_display_map_shape_uses_axis_labels_and_blank_separator(self) -> None:
@@ -219,7 +219,7 @@ class SrsRenderTests(unittest.TestCase):
 
         rendered = render_display_map(state)
 
-        self.assertEqual(self._display_cell(rendered, display_x=4, display_y=9), ".")
+        self.assertEqual(self._display_cell(rendered, display_x=4, display_y=9), "^")
         self.assertEqual(self._display_cell(rendered, display_x=5, display_y=1), "@")
         self.assertEqual(to_display_position(Position(3, 8)), (4, 9))
         self.assertEqual(from_display_position(5, 1), Position(4, 0))
