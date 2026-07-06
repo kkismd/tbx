@@ -15,8 +15,15 @@ if __package__ in (None, ""):
 from experiments.galactic_exodus import engine as lrs_engine
 from experiments.galactic_exodus.display import render_lrs_border_light_map
 from experiments.galactic_exodus.hud import CompactHudContext, render_compact_hud
+from experiments.galactic_exodus.srs import engine as srs_engine
+from experiments.galactic_exodus.srs import event_format as srs_event_format
+from experiments.galactic_exodus.srs.contracts import load_default_contracts
 from experiments.galactic_exodus.srs import model as srs_model
 from experiments.galactic_exodus.srs.render import render_display_map
+
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
+SRS_CONTRACTS = load_default_contracts(REPO_ROOT)
 
 
 COMMAND_LOOK = "LOOK"
@@ -115,7 +122,7 @@ def parse_integrated_command(raw: str) -> IntegratedCommand:
     tokens = normalized.split()
     if len(tokens) == 1 and tokens[0] in _COMMAND_DIRECTIONS:
         return IntegratedCommand(kind=COMMAND_MOVE, directions=(tokens[0],), raw=normalized)
-    if tokens and tokens[0] == "MOVE" and _all_directions(tokens[1:]):
+    if tokens and tokens[0] == "MOVE" and tokens[1:]:
         return IntegratedCommand(kind=COMMAND_MOVE, directions=tuple(tokens[1:]), raw=normalized)
     if tokens and tokens[0] == "EXIT" and _all_directions(tokens[1:]) and len(tokens[1:]) == 1:
         return IntegratedCommand(kind=COMMAND_EXIT, directions=(tokens[1],), raw=normalized)
@@ -167,11 +174,7 @@ def execute_integrated_command(
             should_quit=True,
         )
     if command.kind == COMMAND_MOVE:
-        return IntegratedCommandResult(
-            accepted=False,
-            command_type=COMMAND_MOVE,
-            summary_lines=("MOVE  rejected: movement is not implemented in integrated CLI yet",),
-        )
+        return _execute_move_command(state, command)
     if command.kind == COMMAND_INTERACT:
         return IntegratedCommandResult(
             accepted=False,
@@ -263,6 +266,56 @@ def _normalize_command_text(raw: str) -> str:
 
 def _all_directions(tokens: Sequence[str]) -> bool:
     return bool(tokens) and all(token in _COMMAND_DIRECTIONS for token in tokens)
+
+
+def _execute_move_command(
+    state: IntegratedGameState,
+    command: IntegratedCommand,
+) -> IntegratedCommandResult:
+    if not _all_directions(command.directions):
+        summary = "MOVE  rejected: invalid direction"
+        state.last_event_summary = summary
+        return IntegratedCommandResult(
+            accepted=False,
+            command_type=COMMAND_MOVE,
+            summary_lines=(summary,),
+            changed_lrs_position=False,
+            changed_srs_position=False,
+        )
+
+    route = tuple(_DIRECTION_ENUM[direction] for direction in command.directions)
+    previous_position = state.srs_state.player_position
+    result = srs_engine.apply_srs_command(
+        state.srs_state,
+        srs_model.SrsCommand(command_type="MOVE_ROUTE", route=route),
+        contracts=SRS_CONTRACTS,
+    )
+    state.srs_state = result.state
+
+    summary_lines = tuple(_format_summary_lines(result.events))
+    if summary_lines:
+        state.last_event_summary = summary_lines[0]
+
+    return IntegratedCommandResult(
+        accepted=_movement_result_accepted(result),
+        command_type=COMMAND_MOVE,
+        summary_lines=summary_lines,
+        changed_lrs_position=False,
+        changed_srs_position=result.state.player_position != previous_position,
+    )
+
+
+def _format_summary_lines(events: Sequence[srs_model.SrsTurnEvent]) -> list[str]:
+    summary_lines: list[str] = []
+    for event in events:
+        summary_lines.extend(srs_event_format.format_srs_event_summary_lines(event))
+    return summary_lines
+
+
+def _movement_result_accepted(result: srs_model.SrsCommandResult) -> bool:
+    if not result.events:
+        return False
+    return result.events[0].event_type != srs_engine.MOVE_REJECTED
 
 
 def _sector_type_for_lrs_symbol(symbol: str | None) -> srs_model.SectorType:
