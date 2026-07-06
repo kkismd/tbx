@@ -7,6 +7,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Iterable, Mapping, Sequence
 
+from experiments.galactic_exodus.hud import CompactHudContext, render_compact_hud
 from experiments.galactic_exodus.srs.model import Position, SrsGameState
 from experiments.galactic_exodus.srs.render import render_display_map, render_row_for_internal_y, to_display_position
 from experiments.galactic_exodus.srs.run_fixture import FIXTURES_DIR, SrsFixtureRunResult, run_fixture
@@ -369,6 +370,20 @@ def _player_cell_text(state: SrsGameState) -> str:
     return "- " + ", ".join(details)
 
 
+def _compact_hud_text(result: SrsFixtureRunResult) -> str:
+    last_event_summary = None
+    event_lines = _event_summary_lines(result)
+    if event_lines:
+        last_event_summary = event_lines[-1]
+    return render_compact_hud(
+        CompactHudContext(
+            srs_state=result.final_state,
+            last_event_summary=last_event_summary,
+            cost_mode=str(result.summary.get("cost_mode", "-") or "-"),
+        )
+    )
+
+
 def _print_case(result: SrsFixtureRunResult) -> None:
     print("\n" + "=" * 80)
     print(result.fixture_id)
@@ -384,6 +399,8 @@ def _print_case(result: SrsFixtureRunResult) -> None:
     print(_player_cell_text(result.final_state))
     print("\nknown map:")
     print(_render_known_map_spaced_for_manual_eval(result.final_state))
+    print("\ncompact hud:")
+    print(_compact_hud_text(result))
     print("=" * 80)
 
 
