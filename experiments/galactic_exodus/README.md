@@ -282,9 +282,9 @@ JSON ログの用途:
 python experiments/galactic_exodus/integrated_play.py --seed 42
 ```
 
-このCLIでは `N/E/S/W` は最終的に SRS内の移動として扱います。LRS座標は `EXIT N/E/S/W` が成功した場合だけ変化します。
+このCLIでは `N/E/S/W` と `MOVE <route>` は SRS 内移動として実行され、`EXIT N/E/S/W` が成功した場合だけ LRS 座標が変化します。
 
-この issue 時点では、`N/E/S/W` / `MOVE` / `INTERACT` / `EXIT` は parser のみ先行し、実行は後続 issue で追加します。
+`INTERACT` は minimal SRS builder 上の `RESOURCE_CACHE` / `STATION` と接続されており、既存 SRS interaction を integrated CLI から試せます。
 
 既存 `play.py` は LRS-only prototype として残しています。
 
