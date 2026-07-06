@@ -11,6 +11,7 @@ if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from experiments.galactic_exodus import engine, simulate
+from experiments.galactic_exodus.display import render_lrs_border_light_map
 
 ABORTED_BY_USER = engine.FINAL_OUTCOME_ABORTED_NO_POLICY_ACTION
 KNOWN_TERRAIN_SYMBOLS = {".", "N", "A", "@", "B", "R"}
@@ -100,9 +101,8 @@ def main(
 
 def render_state(state: engine.GameState, output: TextIO) -> None:
     output.write("MAP:\n")
-    for row in board_lines(state):
-        output.write(f"{row}\n")
-    output.write("  1 2 3 4 5 6 7 8\n")
+    output.write(render_lrs_border_light_map(state))
+    output.write("\n")
     output.write(
         f"SEED: requested={state.requested_seed} effective={state.effective_seed} rerolls={state.reroll_count}\n"
     )
