@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import io
+from dataclasses import replace
 from pathlib import Path
 import subprocess
 import unittest
@@ -410,7 +411,39 @@ class IntegratedPlayCliTests(unittest.TestCase):
             frozenset({srs_model.Direction.N}),
         )
 
-    def test_interact_currently_rejected_without_changing_positions(self) -> None:
+    def test_resource_sector_places_resource_cache_at_fixed_position(self) -> None:
+        state = integrated_play.create_integrated_game(42)
+        state.srs_state = integrated_play._create_minimal_srs_for_sector(
+            seed=state.lrs_state.effective_seed,
+            lrs_position=state.lrs_state.player_position,
+            sector_symbol="R",
+        )
+
+        cache_cell = state.srs_state.actual_map.cell_at(srs_model.Position(4, 5))
+
+        self.assertEqual(cache_cell.object_id, "resource-cache-1")
+        self.assertEqual(
+            state.srs_state.objects["resource-cache-1"].object_type,
+            srs_model.SrsObjectType.RESOURCE_CACHE,
+        )
+
+    def test_base_sector_places_station_at_fixed_position(self) -> None:
+        state = integrated_play.create_integrated_game(42)
+        state.srs_state = integrated_play._create_minimal_srs_for_sector(
+            seed=state.lrs_state.effective_seed,
+            lrs_position=state.lrs_state.player_position,
+            sector_symbol="B",
+        )
+
+        station_cell = state.srs_state.actual_map.cell_at(srs_model.Position(4, 5))
+
+        self.assertEqual(station_cell.object_id, "station-1")
+        self.assertEqual(
+            state.srs_state.objects["station-1"].object_type,
+            srs_model.SrsObjectType.STATION,
+        )
+
+    def test_interact_rejected_without_object_or_position_change(self) -> None:
         state = integrated_play.create_integrated_game(42)
         old_lrs = state.lrs_state.player_position
         old_srs = state.srs_state.player_position
@@ -424,7 +457,111 @@ class IntegratedPlayCliTests(unittest.TestCase):
         self.assertEqual(result.command_type, integrated_play.COMMAND_INTERACT)
         self.assertEqual(state.lrs_state.player_position, old_lrs)
         self.assertEqual(state.srs_state.player_position, old_srs)
-        self.assertIn("interaction is not implemented", result.summary_lines[0])
+        self.assertIn("no object", result.summary_lines[0])
+
+    def test_resource_cache_interact_accepted_without_changing_lrs(self) -> None:
+        state = integrated_play.create_integrated_game(42)
+        state.srs_state = integrated_play._create_minimal_srs_for_sector(
+            seed=state.lrs_state.effective_seed,
+            lrs_position=state.lrs_state.player_position,
+            sector_symbol="R",
+        )
+        state.srs_state = replace(
+            state.srs_state,
+            player_position=srs_model.Position(4, 5),
+            fuel=3,
+            max_fuel=9,
+        )
+        old_lrs = state.lrs_state.player_position
+
+        result = integrated_play.execute_integrated_command(
+            state,
+            integrated_play.parse_integrated_command("INTERACT"),
+        )
+        rendered = integrated_play.render_integrated_response(state, result)
+
+        self.assertTrue(result.accepted)
+        self.assertEqual(result.command_type, integrated_play.COMMAND_INTERACT)
+        self.assertEqual(state.lrs_state.player_position, old_lrs)
+        self.assertIn("resource-cache-1", state.srs_state.persistent_state.consumed_object_ids)
+        self.assertTrue(state.srs_state.objects["resource-cache-1"].consumed)
+        self.assertTrue(any("CACHE acquired" in line for line in result.summary_lines))
+        self.assertIn("LAST    CACHE acquired", rendered)
+
+    def test_station_interact_accepted_without_changing_lrs(self) -> None:
+        state = integrated_play.create_integrated_game(42)
+        state.srs_state = integrated_play._create_minimal_srs_for_sector(
+            seed=state.lrs_state.effective_seed,
+            lrs_position=state.lrs_state.player_position,
+            sector_symbol="B",
+        )
+        state.srs_state = replace(state.srs_state, fuel=2, max_fuel=9)
+        old_lrs = state.lrs_state.player_position
+        old_srs = state.srs_state.player_position
+
+        result = integrated_play.execute_integrated_command(
+            state,
+            integrated_play.parse_integrated_command("INTERACT"),
+        )
+        rendered = integrated_play.render_integrated_response(state, result)
+
+        self.assertTrue(result.accepted)
+        self.assertEqual(state.lrs_state.player_position, old_lrs)
+        self.assertEqual(state.srs_state.player_position, old_srs)
+        self.assertIn("station-1", state.srs_state.persistent_state.activated_object_ids)
+        self.assertTrue(state.srs_state.objects["station-1"].activated)
+        self.assertTrue(any("BASE station activated" in line for line in result.summary_lines))
+        self.assertIn("LAST    BASE station activated", rendered)
+
+    def test_repeated_resource_cache_interact_is_rejected_after_consumption(self) -> None:
+        state = integrated_play.create_integrated_game(42)
+        state.srs_state = integrated_play._create_minimal_srs_for_sector(
+            seed=state.lrs_state.effective_seed,
+            lrs_position=state.lrs_state.player_position,
+            sector_symbol="R",
+        )
+        state.srs_state = replace(
+            state.srs_state,
+            player_position=srs_model.Position(4, 5),
+            fuel=3,
+            max_fuel=9,
+        )
+
+        first = integrated_play.execute_integrated_command(
+            state,
+            integrated_play.parse_integrated_command("INTERACT"),
+        )
+        second = integrated_play.execute_integrated_command(
+            state,
+            integrated_play.parse_integrated_command("INTERACT"),
+        )
+
+        self.assertTrue(first.accepted)
+        self.assertFalse(second.accepted)
+        self.assertIn("already consumed", second.summary_lines[0])
+
+    def test_consumed_resource_cache_symbol_is_visible_after_player_moves_off_cell(self) -> None:
+        state = integrated_play.create_integrated_game(42)
+        state.srs_state = integrated_play._create_minimal_srs_for_sector(
+            seed=state.lrs_state.effective_seed,
+            lrs_position=state.lrs_state.player_position,
+            sector_symbol="R",
+        )
+        state.srs_state = replace(
+            state.srs_state,
+            player_position=srs_model.Position(4, 5),
+            fuel=3,
+            max_fuel=9,
+        )
+
+        result = integrated_play.execute_integrated_command(
+            state,
+            integrated_play.parse_integrated_command("INTERACT"),
+        )
+        state.srs_state = self._replace_srs_position(state.srs_state, srs_model.Position(4, 4))
+        rendered = integrated_play.render_integrated_response(state, result)
+
+        self.assertIn(" 6  ? ? . . r . . ? ?", rendered)
 
     def test_response_section_order(self) -> None:
         state = integrated_play.create_integrated_game(42)

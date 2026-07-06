@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import re
 import sys
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Sequence, TextIO
@@ -41,6 +42,8 @@ _DEFAULT_SENSOR_SIZE = 5
 _SRS_MAP_WIDTH = 9
 _SRS_MAP_HEIGHT = 9
 _SRS_CENTER = srs_model.Position(4, 4)
+_DEFAULT_SRS_FUEL = 3
+_DEFAULT_SRS_MAX_FUEL = 9
 _ENTRY_POSITIONS = {
     "N": srs_model.Position(4, 8),
     "E": srs_model.Position(8, 4),
@@ -59,6 +62,18 @@ _ALL_EXIT_WARP_FLAGS = {
     _ENTRY_POSITIONS["E"]: frozenset({_DIRECTION_ENUM["E"]}),
     _ENTRY_POSITIONS["S"]: frozenset({_DIRECTION_ENUM["S"]}),
     _ENTRY_POSITIONS["W"]: frozenset({_DIRECTION_ENUM["W"]}),
+}
+_MINIMAL_OBJECT_SPECS = {
+    "R": (
+        "resource-cache-1",
+        srs_model.SrsObjectType.RESOURCE_CACHE,
+        srs_model.Position(4, 5),
+    ),
+    "B": (
+        "station-1",
+        srs_model.SrsObjectType.STATION,
+        srs_model.Position(4, 5),
+    ),
 }
 
 
@@ -183,11 +198,7 @@ def execute_integrated_command(
     if command.kind == COMMAND_MOVE:
         return _execute_move_command(state, command)
     if command.kind == COMMAND_INTERACT:
-        return IntegratedCommandResult(
-            accepted=False,
-            command_type=COMMAND_INTERACT,
-            summary_lines=("INTERACT rejected: interaction is not implemented in integrated CLI yet",),
-        )
+        return _execute_interact_command(state)
     if command.kind == COMMAND_EXIT:
         return _execute_exit_command(state, command)
     return IntegratedCommandResult(
@@ -308,6 +319,40 @@ def _execute_move_command(
     )
 
 
+def _execute_interact_command(
+    state: IntegratedGameState,
+) -> IntegratedCommandResult:
+    target_object_id = _find_interaction_target_object_id(state.srs_state)
+    if target_object_id is None:
+        summary = f"INTERACT rejected: no object at SRS={_display_srs_position(state.srs_state.player_position)}"
+        state.last_event_summary = summary
+        return IntegratedCommandResult(
+            accepted=False,
+            command_type=COMMAND_INTERACT,
+            summary_lines=(summary,),
+            changed_lrs_position=False,
+            changed_srs_position=False,
+        )
+
+    result = srs_engine.apply_srs_command(
+        state.srs_state,
+        srs_model.SrsCommand(command_type="INTERACT", target_object_id=target_object_id),
+        contracts=SRS_CONTRACTS,
+    )
+    state.srs_state = result.state
+    summary_lines = tuple(_format_summary_lines(result.events))
+    if summary_lines:
+        state.last_event_summary = summary_lines[-1]
+
+    return IntegratedCommandResult(
+        accepted=_interaction_result_accepted(result),
+        command_type=COMMAND_INTERACT,
+        summary_lines=summary_lines,
+        changed_lrs_position=False,
+        changed_srs_position=False,
+    )
+
+
 def _format_summary_lines(events: Sequence[srs_model.SrsTurnEvent]) -> list[str]:
     summary_lines: list[str] = []
     for event in events:
@@ -319,6 +364,61 @@ def _movement_result_accepted(result: srs_model.SrsCommandResult) -> bool:
     if not result.events:
         return False
     return result.events[0].event_type != srs_engine.MOVE_REJECTED
+
+
+def _interaction_result_accepted(result: srs_model.SrsCommandResult) -> bool:
+    if not result.events:
+        return False
+    return result.events[0].event_type != srs_engine.INTERACT_REJECTED
+
+
+def _find_interaction_target_object_id(
+    state: srs_model.SrsGameState,
+) -> str | None:
+    player_position = state.player_position
+    candidates: list[tuple[int, int, int, str]] = []
+    for object_id, object_state in state.objects.items():
+        interaction_range = _interaction_range_for_object(object_state.object_type)
+        if interaction_range is None:
+            continue
+        if not _object_is_interactable_from_player(
+            player_position=player_position,
+            object_position=object_state.position,
+            interaction_range=interaction_range,
+        ):
+            continue
+        priority = 0 if object_state.position == player_position else 1
+        candidates.append((priority, object_state.position.y, object_state.position.x, object_id))
+
+    if not candidates:
+        return None
+    candidates.sort()
+    return candidates[0][3]
+
+
+def _interaction_range_for_object(
+    object_type: srs_model.SrsObjectType,
+) -> str | None:
+    contract = SRS_CONTRACTS.movement.interaction.get(object_type.value)
+    if not isinstance(contract, Mapping):
+        return None
+    interaction_range = contract.get("range")
+    return interaction_range if isinstance(interaction_range, str) else None
+
+
+def _object_is_interactable_from_player(
+    *,
+    player_position: srs_model.Position,
+    object_position: srs_model.Position,
+    interaction_range: str,
+) -> bool:
+    if interaction_range == "SAME_CELL":
+        return object_position == player_position
+    if interaction_range == "ADJACENT":
+        dx = abs(object_position.x - player_position.x)
+        dy = abs(object_position.y - player_position.y)
+        return dx + dy == 1
+    return False
 
 
 def _execute_exit_command(
@@ -490,7 +590,14 @@ def _create_minimal_srs_for_sector(
     sector_type = _sector_type_for_lrs_symbol(sector_symbol)
     player_position = _player_position_for_entry(entry_direction)
     warp_flags = _warp_flags_for_entry(entry_direction)
-    rows = _make_floor_rows(warp_flags)
+    objects = _minimal_objects_for_sector(sector_symbol)
+    rows = _make_floor_rows(
+        warp_flags,
+        object_positions={
+            object_state.position: object_id
+            for object_id, object_state in objects.items()
+        },
+    )
     actual_map = srs_model.SrsActualMap(
         width=_SRS_MAP_WIDTH,
         height=_SRS_MAP_HEIGHT,
@@ -531,12 +638,28 @@ def _create_minimal_srs_for_sector(
         ),
         persistent_state=persistent_state,
         player_position=player_position,
-        objects={},
+        objects=objects,
         combat_state=None,
         srs_turn=0,
-        fuel=0,
-        max_fuel=0,
+        fuel=_DEFAULT_SRS_FUEL,
+        max_fuel=_DEFAULT_SRS_MAX_FUEL,
     )
+
+
+def _minimal_objects_for_sector(
+    sector_symbol: str | None,
+) -> dict[str, srs_model.SrsObjectState]:
+    spec = _MINIMAL_OBJECT_SPECS.get(sector_symbol or "")
+    if spec is None:
+        return {}
+    object_id, object_type, position = spec
+    return {
+        object_id: srs_model.SrsObjectState(
+            object_id=object_id,
+            object_type=object_type,
+            position=position,
+        )
+    }
 
 
 def _player_position_for_entry(entry_direction: str | None) -> srs_model.Position:
@@ -553,6 +676,8 @@ def _warp_flags_for_entry(
 
 def _make_floor_rows(
     warp_flags: dict[srs_model.Position, frozenset[srs_model.Direction]],
+    *,
+    object_positions: Mapping[srs_model.Position, str],
 ) -> list[list[srs_model.SrsCell]]:
     rows: list[list[srs_model.SrsCell]] = []
     for y in range(_SRS_MAP_HEIGHT):
@@ -562,6 +687,7 @@ def _make_floor_rows(
             row.append(
                 srs_model.SrsCell(
                     terrain=srs_model.SrsTerrainType.FLOOR,
+                    object_id=object_positions.get(position),
                     warp_flags=warp_flags.get(position, frozenset()),
                 )
             )
