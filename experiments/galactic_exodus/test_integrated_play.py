@@ -160,7 +160,7 @@ class IntegratedPlayCliTests(unittest.TestCase):
         self.assertEqual(state.srs_state.player_position, old_srs)
         self.assertIn("COMMAND rejected: unknown command", result.summary_lines[0])
 
-    def test_move_currently_rejected_without_changing_positions(self) -> None:
+    def test_direction_command_moves_only_srs(self) -> None:
         state = integrated_play.create_integrated_game(42)
         old_lrs = state.lrs_state.player_position
         old_srs = state.srs_state.player_position
@@ -170,11 +170,89 @@ class IntegratedPlayCliTests(unittest.TestCase):
             integrated_play.parse_integrated_command("E"),
         )
 
-        self.assertFalse(result.accepted)
+        self.assertTrue(result.accepted)
+        self.assertEqual(result.command_type, integrated_play.COMMAND_MOVE)
+        self.assertFalse(result.changed_lrs_position)
+        self.assertTrue(result.changed_srs_position)
+        self.assertEqual(state.lrs_state.player_position, old_lrs)
+        self.assertEqual(state.srs_state.player_position, srs_model.Position(old_srs.x + 1, old_srs.y))
+        self.assertTrue(result.summary_lines[0].startswith("MOVE  accepted"))
+
+    def test_repeated_direction_commands_never_move_lrs(self) -> None:
+        state = integrated_play.create_integrated_game(42)
+        old_lrs = state.lrs_state.player_position
+
+        first = integrated_play.execute_integrated_command(
+            state,
+            integrated_play.parse_integrated_command("E"),
+        )
+        second = integrated_play.execute_integrated_command(
+            state,
+            integrated_play.parse_integrated_command("E"),
+        )
+
+        self.assertTrue(first.accepted)
+        self.assertTrue(second.accepted)
+        self.assertEqual(state.lrs_state.player_position, old_lrs)
+
+    def test_move_route_comma_syntax_moves_only_srs(self) -> None:
+        state = integrated_play.create_integrated_game(42)
+        old_lrs = state.lrs_state.player_position
+
+        result = integrated_play.execute_integrated_command(
+            state,
+            integrated_play.parse_integrated_command("MOVE E,E,N"),
+        )
+
+        self.assertTrue(result.accepted)
         self.assertEqual(result.command_type, integrated_play.COMMAND_MOVE)
         self.assertEqual(state.lrs_state.player_position, old_lrs)
+        self.assertEqual(state.srs_state.player_position, srs_model.Position(6, 5))
+        self.assertTrue(result.summary_lines[0].startswith("MOVE  accepted"))
+
+    def test_move_route_whitespace_syntax_moves_only_srs(self) -> None:
+        state = integrated_play.create_integrated_game(42)
+        old_lrs = state.lrs_state.player_position
+
+        result = integrated_play.execute_integrated_command(
+            state,
+            integrated_play.parse_integrated_command("MOVE E E N"),
+        )
+
+        self.assertTrue(result.accepted)
+        self.assertEqual(result.command_type, integrated_play.COMMAND_MOVE)
+        self.assertEqual(state.lrs_state.player_position, old_lrs)
+        self.assertEqual(state.srs_state.player_position, srs_model.Position(6, 5))
+        self.assertTrue(result.summary_lines[0].startswith("MOVE  accepted"))
+
+    def test_move_invalid_direction_rejected_without_changing_positions(self) -> None:
+        state = integrated_play.create_integrated_game(42)
+        old_lrs = state.lrs_state.player_position
+        old_srs = state.srs_state.player_position
+
+        result = integrated_play.execute_integrated_command(
+            state,
+            integrated_play.parse_integrated_command("MOVE X"),
+        )
+
+        self.assertFalse(result.accepted)
+        self.assertEqual(result.command_type, integrated_play.COMMAND_MOVE)
+        self.assertFalse(result.changed_lrs_position)
+        self.assertFalse(result.changed_srs_position)
+        self.assertEqual(state.lrs_state.player_position, old_lrs)
         self.assertEqual(state.srs_state.player_position, old_srs)
-        self.assertIn("movement is not implemented", result.summary_lines[0])
+        self.assertIn("invalid direction", result.summary_lines[0])
+
+    def test_hud_last_updates_after_move(self) -> None:
+        state = integrated_play.create_integrated_game(42)
+
+        result = integrated_play.execute_integrated_command(
+            state,
+            integrated_play.parse_integrated_command("E"),
+        )
+        rendered = integrated_play.render_integrated_response(state, result)
+
+        self.assertIn("LAST    MOVE  accepted", rendered)
 
     def test_exit_currently_rejected_without_changing_positions(self) -> None:
         state = integrated_play.create_integrated_game(42)
