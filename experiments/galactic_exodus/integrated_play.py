@@ -53,6 +53,13 @@ _DIRECTION_ENUM = {
     "S": srs_model.Direction.S,
     "W": srs_model.Direction.W,
 }
+_LRS_DIRECTION_DELTAS = lrs_engine.COMMAND_DELTAS
+_ALL_EXIT_WARP_FLAGS = {
+    _ENTRY_POSITIONS["N"]: frozenset({_DIRECTION_ENUM["N"]}),
+    _ENTRY_POSITIONS["E"]: frozenset({_DIRECTION_ENUM["E"]}),
+    _ENTRY_POSITIONS["S"]: frozenset({_DIRECTION_ENUM["S"]}),
+    _ENTRY_POSITIONS["W"]: frozenset({_DIRECTION_ENUM["W"]}),
+}
 
 
 class CliArgumentParser(argparse.ArgumentParser):
@@ -124,7 +131,7 @@ def parse_integrated_command(raw: str) -> IntegratedCommand:
         return IntegratedCommand(kind=COMMAND_MOVE, directions=(tokens[0],), raw=normalized)
     if tokens and tokens[0] == "MOVE" and tokens[1:]:
         return IntegratedCommand(kind=COMMAND_MOVE, directions=tuple(tokens[1:]), raw=normalized)
-    if tokens and tokens[0] == "EXIT" and _all_directions(tokens[1:]) and len(tokens[1:]) == 1:
+    if tokens and tokens[0] == "EXIT" and len(tokens[1:]) == 1:
         return IntegratedCommand(kind=COMMAND_EXIT, directions=(tokens[1],), raw=normalized)
     return IntegratedCommand(kind=COMMAND_UNKNOWN, raw=normalized)
 
@@ -182,11 +189,7 @@ def execute_integrated_command(
             summary_lines=("INTERACT rejected: interaction is not implemented in integrated CLI yet",),
         )
     if command.kind == COMMAND_EXIT:
-        return IntegratedCommandResult(
-            accepted=False,
-            command_type=COMMAND_EXIT,
-            summary_lines=("EXIT  rejected: exit is not implemented in integrated CLI yet",),
-        )
+        return _execute_exit_command(state, command)
     return IntegratedCommandResult(
         accepted=False,
         command_type=COMMAND_UNKNOWN,
@@ -318,6 +321,150 @@ def _movement_result_accepted(result: srs_model.SrsCommandResult) -> bool:
     return result.events[0].event_type != srs_engine.MOVE_REJECTED
 
 
+def _execute_exit_command(
+    state: IntegratedGameState,
+    command: IntegratedCommand,
+) -> IntegratedCommandResult:
+    direction = command.directions[0] if command.directions else ""
+    if direction not in _COMMAND_DIRECTIONS:
+        summary = "EXIT  rejected: invalid direction"
+        state.last_event_summary = summary
+        return IntegratedCommandResult(
+            accepted=False,
+            command_type=COMMAND_EXIT,
+            summary_lines=(summary,),
+            changed_lrs_position=False,
+            changed_srs_position=False,
+        )
+
+    previous_srs_position = state.srs_state.player_position
+    warp_result = srs_engine.apply_srs_command(
+        state.srs_state,
+        srs_model.SrsCommand(command_type="WARP_EXIT", exit_direction=_DIRECTION_ENUM[direction]),
+        contracts=SRS_CONTRACTS,
+    )
+    if not _warp_exit_result_accepted(warp_result):
+        summary = _warp_exit_rejected_summary(direction, previous_srs_position)
+        state.last_event_summary = summary
+        return IntegratedCommandResult(
+            accepted=False,
+            command_type=COMMAND_EXIT,
+            summary_lines=(summary,),
+            changed_lrs_position=False,
+            changed_srs_position=False,
+        )
+
+    lrs_state = state.lrs_state
+    old_lrs_position = lrs_state.player_position
+    new_lrs_position = _exit_destination(old_lrs_position, direction)
+    if not lrs_engine.is_inside_board(new_lrs_position):
+        summary = f"EXIT  rejected: {direction} would leave LRS map"
+        state.last_event_summary = summary
+        return IntegratedCommandResult(
+            accepted=False,
+            command_type=COMMAND_EXIT,
+            summary_lines=(summary,),
+            changed_lrs_position=False,
+            changed_srs_position=False,
+        )
+
+    edge = _normalize_lrs_edge(old_lrs_position, new_lrs_position)
+    if lrs_state.known_routes.get(edge) == lrs_engine.ROUTE_RIFT:
+        summary = f"EXIT  rejected: {direction} edge is blocked by RIFT"
+        state.last_event_summary = summary
+        return IntegratedCommandResult(
+            accepted=False,
+            command_type=COMMAND_EXIT,
+            summary_lines=(summary,),
+            changed_lrs_position=False,
+            changed_srs_position=False,
+        )
+
+    old_position, moved_position = _apply_lrs_exit_move(lrs_state, direction)
+    sector_symbol = state.lrs_state.known_cells.get(moved_position)
+    state.srs_state = _create_minimal_srs_for_sector(
+        seed=state.lrs_state.effective_seed,
+        lrs_position=moved_position,
+        sector_symbol=sector_symbol,
+        entry_direction=_opposite_direction(direction),
+    )
+
+    entered_sector_type = state.srs_state.descriptor.sector_type.value
+    summary_lines = (
+        f"EXIT  {direction} accepted from SRS={_display_srs_position(previous_srs_position)}",
+        f"LRS   moved {direction}: LRS={_display_lrs_position(old_position)} -> LRS={_display_lrs_position(moved_position)}",
+        f"SRS   entered sector TYPE={entered_sector_type} at SRS={_display_srs_position(state.srs_state.player_position)}",
+    )
+    state.last_event_summary = summary_lines[-1]
+    return IntegratedCommandResult(
+        accepted=True,
+        command_type=COMMAND_EXIT,
+        summary_lines=summary_lines,
+        changed_lrs_position=old_position != moved_position,
+        changed_srs_position=state.srs_state.player_position != previous_srs_position,
+    )
+
+
+def _warp_exit_result_accepted(result: srs_model.SrsCommandResult) -> bool:
+    if not result.events:
+        return False
+    return result.events[0].event_type == srs_engine.WARP_EXIT_ACCEPTED
+
+
+def _warp_exit_rejected_summary(
+    direction: str,
+    position: srs_model.Position,
+) -> str:
+    return f"EXIT  rejected: no {direction} warp point at SRS={_display_srs_position(position)}"
+
+
+def _apply_lrs_exit_move(
+    state: lrs_engine.GameState,
+    direction: str,
+) -> tuple[tuple[int, int], tuple[int, int]]:
+    old_position = state.player_position
+    new_position = _exit_destination(old_position, direction)
+    edge = _normalize_lrs_edge(old_position, new_position)
+
+    state.player_position = new_position
+    state.visited_cells.add(new_position)
+    state.known_routes[edge] = lrs_engine.ROUTE_OPEN
+    state.turn_count += 1
+    state.path.append(new_position)
+    lrs_engine.reveal_neighborhood(state, new_position)
+    state.game_status = lrs_engine.determine_game_status(state)
+    return old_position, new_position
+
+
+def _exit_destination(position: tuple[int, int], direction: str) -> tuple[int, int]:
+    return lrs_engine.move_position(position, _LRS_DIRECTION_DELTAS[direction])
+
+
+def _normalize_lrs_edge(
+    start: tuple[int, int],
+    goal: tuple[int, int],
+) -> tuple[tuple[int, int], tuple[int, int]]:
+    return lrs_engine.simulate.normalize_edge(start, goal)
+
+
+def _opposite_direction(direction: str) -> str:
+    opposites = {
+        "N": "S",
+        "E": "W",
+        "S": "N",
+        "W": "E",
+    }
+    return opposites[direction]
+
+
+def _display_lrs_position(position: tuple[int, int]) -> str:
+    return f"({position[0]},{position[1]})"
+
+
+def _display_srs_position(position: srs_model.Position) -> str:
+    return f"({position.x + 1},{position.y + 1})"
+
+
 def _sector_type_for_lrs_symbol(symbol: str | None) -> srs_model.SectorType:
     mapping = {
         "N": srs_model.SectorType.NEBULA,
@@ -401,10 +548,7 @@ def _player_position_for_entry(entry_direction: str | None) -> srs_model.Positio
 def _warp_flags_for_entry(
     entry_direction: str | None,
 ) -> dict[srs_model.Position, frozenset[srs_model.Direction]]:
-    if entry_direction is None:
-        return {}
-    direction = _DIRECTION_ENUM[entry_direction]
-    return {_ENTRY_POSITIONS[entry_direction]: frozenset({direction})}
+    return dict(_ALL_EXIT_WARP_FLAGS)
 
 
 def _make_floor_rows(
