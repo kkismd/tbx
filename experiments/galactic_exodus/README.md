@@ -274,6 +274,20 @@ JSON ログの用途:
 - `Q` / EOF で終了したセッションは `final_summary.outcome = ABORTED_NO_POLICY_ACTION` になります
 - generation error は通常敗北と分離し、`requested / attempts / last_candidate_seed / reason / message` を表示します
 
+## Integrated command-response CLI prototype
+
+`integrated_play.py` は、LRS / SRS / HUD を command response として表示する統合CLIプロトタイプです。
+
+```bash
+python experiments/galactic_exodus/integrated_play.py --seed 42
+```
+
+このCLIでは `N/E/S/W` は最終的に SRS内の移動として扱います。LRS座標は `EXIT N/E/S/W` が成功した場合だけ変化します。
+
+この issue 時点では、`N/E/S/W` / `MOVE` / `INTERACT` / `EXIT` は parser のみ先行し、実行は後続 issue で追加します。
+
+既存 `play.py` は LRS-only prototype として残しています。
+
 これは Phase 1A のプロトタイプであり、完成ゲーム UI ではありません。
 
 固定 seed のサンプル操作:
