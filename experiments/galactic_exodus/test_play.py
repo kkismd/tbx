@@ -76,6 +76,7 @@ class PlayCliTests(unittest.TestCase):
 
         self.assertEqual(exit_code, 0)
         self.assertEqual(stdout.count("MAP:\n"), 1)
+        self.assertEqual(stdout.count("HUD:\n"), 1)
         self.assertIn("TURN: 0\n", stdout)
         self.assertTrue(stdout.endswith("COMMAND> "))
 
@@ -249,6 +250,20 @@ class PlayCliTests(unittest.TestCase):
         self.assertIn("MAP:\n  +---+---+---+---+---+---+---+---+\n", rendered)
         self.assertNotIn("y=8 ", rendered)
         self.assertIn("1 | @   ?   ?   ?   ?   ?   ?   ? |\n", rendered)
+
+    def test_render_state_includes_hud_after_map_and_keeps_legacy_lines(self) -> None:
+        state = make_state(actual_map=make_actual_map(cells=filled_cells(".")))
+
+        stdout = io.StringIO()
+        play.render_state(state, stdout)
+        rendered = stdout.getvalue()
+
+        self.assertIn("\nHUD:\nSECTOR", rendered)
+        self.assertLess(rendered.index("MAP:\n"), rendered.index("HUD:\n"))
+        self.assertLess(rendered.index("HUD:\n"), rendered.index("SEED:"))
+        self.assertIn("POSITION: (1,1)\n", rendered)
+        self.assertIn("FUEL: 16/16\n", rendered)
+        self.assertIn("STATUS: IN PROGRESS\n", rendered)
 
 
 if __name__ == "__main__":

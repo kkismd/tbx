@@ -1,13 +1,17 @@
 from __future__ import annotations
 
+import io
 import unittest
+from contextlib import redirect_stdout
 from dataclasses import replace
 from pathlib import Path
 
 from experiments.galactic_exodus.srs.model import Direction, Position, SrsObjectType, SrsTerrainType
 from experiments.galactic_exodus.srs.run_fixture import run_fixture
 from experiments.galactic_exodus.srs.run_manual_eval import (
+    _compact_hud_text,
     _event_summary_lines,
+    _print_case,
     _player_cell_text,
     _render_known_map_spaced_for_manual_eval,
 )
@@ -149,3 +153,26 @@ class SrsRunManualEvalTests(unittest.TestCase):
             _player_cell_text(result.final_state),
             "- position=(3,8), terrain=FLOOR, object=RESOURCE_CACHE, consumed=true, activated=false",
         )
+
+    def test_compact_hud_uses_display_coordinates_without_internal_debug(self) -> None:
+        result = run_fixture(Path(__file__).resolve().parent / "fixtures" / "resource_cache_single_9x9.json")
+
+        rendered = _compact_hud_text(result)
+
+        self.assertIn("SRS=(3,8)", rendered)
+        self.assertIn("COST=TURN_ONLY", rendered)
+        self.assertNotIn("internal=", rendered)
+        self.assertNotIn("Position(", rendered)
+
+    def test_print_case_includes_compact_hud_section_and_keeps_existing_sections(self) -> None:
+        result = run_fixture(Path(__file__).resolve().parent / "fixtures" / "resource_cache_single_9x9.json")
+
+        stdout = io.StringIO()
+        with redirect_stdout(stdout):
+            _print_case(result)
+        rendered = stdout.getvalue()
+
+        self.assertIn("event summary:\n", rendered)
+        self.assertIn("player cell:\n", rendered)
+        self.assertIn("known map:\n", rendered)
+        self.assertIn("compact hud:\n", rendered)

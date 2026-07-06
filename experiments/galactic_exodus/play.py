@@ -12,6 +12,7 @@ if __package__ in (None, ""):
 
 from experiments.galactic_exodus import engine, simulate
 from experiments.galactic_exodus.display import render_lrs_border_light_map
+from experiments.galactic_exodus.hud import CompactHudContext, render_compact_hud
 
 ABORTED_BY_USER = engine.FINAL_OUTCOME_ABORTED_NO_POLICY_ACTION
 KNOWN_TERRAIN_SYMBOLS = {".", "N", "A", "@", "B", "R"}
@@ -102,6 +103,9 @@ def main(
 def render_state(state: engine.GameState, output: TextIO) -> None:
     output.write("MAP:\n")
     output.write(render_lrs_border_light_map(state))
+    output.write("\n")
+    output.write("HUD:\n")
+    output.write(render_compact_hud(CompactHudContext(lrs_state=state)))
     output.write("\n")
     output.write(
         f"SEED: requested={state.requested_seed} effective={state.effective_seed} rerolls={state.reroll_count}\n"
