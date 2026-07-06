@@ -129,8 +129,30 @@ class IntegratedPlayCliTests(unittest.TestCase):
 
         self.assertIsNotNone(state.lrs_state)
         self.assertIsNotNone(state.srs_state)
-        self.assertEqual(state.srs_state.player_position, srs_model.Position(4, 4))
+        self.assertEqual(state.srs_state.player_position, srs_model.Position(0, 0))
         self.assertEqual(state.last_event_summary, "GAME  started seed=42")
+
+    def test_create_integrated_game_discovers_lower_left_sensor_window(self) -> None:
+        state = integrated_play.create_integrated_game(42)
+
+        discovered = state.srs_state.known_state.discovered_cells
+
+        self.assertEqual(
+            discovered,
+            frozenset(
+                {
+                    srs_model.Position(0, 0),
+                    srs_model.Position(1, 0),
+                    srs_model.Position(2, 0),
+                    srs_model.Position(0, 1),
+                    srs_model.Position(1, 1),
+                    srs_model.Position(2, 1),
+                    srs_model.Position(0, 2),
+                    srs_model.Position(1, 2),
+                    srs_model.Position(2, 2),
+                }
+            ),
+        )
 
     def test_look_does_not_change_state(self) -> None:
         state = integrated_play.create_integrated_game(42)
@@ -239,7 +261,7 @@ class IntegratedPlayCliTests(unittest.TestCase):
         self.assertTrue(result.accepted)
         self.assertEqual(result.command_type, integrated_play.COMMAND_MOVE)
         self.assertEqual(state.lrs_state.player_position, old_lrs)
-        self.assertEqual(state.srs_state.player_position, srs_model.Position(6, 5))
+        self.assertEqual(state.srs_state.player_position, srs_model.Position(2, 1))
         self.assertTrue(result.summary_lines[0].startswith("MOVE  accepted"))
 
     def test_move_route_whitespace_syntax_moves_only_srs(self) -> None:
@@ -254,7 +276,7 @@ class IntegratedPlayCliTests(unittest.TestCase):
         self.assertTrue(result.accepted)
         self.assertEqual(result.command_type, integrated_play.COMMAND_MOVE)
         self.assertEqual(state.lrs_state.player_position, old_lrs)
-        self.assertEqual(state.srs_state.player_position, srs_model.Position(6, 5))
+        self.assertEqual(state.srs_state.player_position, srs_model.Position(2, 1))
         self.assertTrue(result.summary_lines[0].startswith("MOVE  accepted"))
 
     def test_move_invalid_direction_rejected_without_changing_positions(self) -> None:
@@ -289,7 +311,6 @@ class IntegratedPlayCliTests(unittest.TestCase):
     def test_exit_rejected_without_matching_warp_flag(self) -> None:
         state = integrated_play.create_integrated_game(42)
         old_lrs = state.lrs_state.player_position
-        old_srs = state.srs_state.player_position
         state.srs_state = self._replace_srs_position(state.srs_state, srs_model.Position(4, 4))
 
         result = integrated_play.execute_integrated_command(
@@ -301,7 +322,6 @@ class IntegratedPlayCliTests(unittest.TestCase):
         self.assertEqual(result.command_type, integrated_play.COMMAND_EXIT)
         self.assertEqual(state.lrs_state.player_position, old_lrs)
         self.assertEqual(state.srs_state.player_position, srs_model.Position(4, 4))
-        self.assertEqual(old_srs, srs_model.Position(4, 4))
         self.assertIn("no E warp point", result.summary_lines[0])
 
     def test_exit_accepted_moves_lrs_east_and_enters_new_srs_from_west(self) -> None:
@@ -517,7 +537,12 @@ class IntegratedPlayCliTests(unittest.TestCase):
             lrs_position=state.lrs_state.player_position,
             sector_symbol="B",
         )
-        state.srs_state = replace(state.srs_state, fuel=2, max_fuel=9)
+        state.srs_state = replace(
+            state.srs_state,
+            player_position=srs_model.Position(4, 4),
+            fuel=2,
+            max_fuel=9,
+        )
         old_lrs = state.lrs_state.player_position
         old_srs = state.srs_state.player_position
 
@@ -570,7 +595,7 @@ class IntegratedPlayCliTests(unittest.TestCase):
             sector_symbol="R",
         )
         state.srs_state = replace(
-            state.srs_state,
+            self._replace_srs_visibility(state.srs_state, srs_model.Position(4, 5)),
             player_position=srs_model.Position(4, 5),
             fuel=3,
             max_fuel=9,
@@ -628,6 +653,9 @@ class IntegratedPlayCliTests(unittest.TestCase):
             self.assertGreater(next_index, current_index, fragment)
             current_index = next_index
 
+        self.assertIn(" 1  @ . . ? ? ? ? ? ?", stdout)
+        self.assertIn("SECTOR  LRS=(1,1)  TYPE=NORMAL  SRS=(1,1)  SENSOR=5x5", stdout)
+
     def _replace_srs_position(
         self,
         state: srs_model.SrsGameState,
@@ -644,4 +672,32 @@ class IntegratedPlayCliTests(unittest.TestCase):
             srs_turn=state.srs_turn,
             fuel=state.fuel,
             max_fuel=state.max_fuel,
+        )
+
+    def _replace_srs_visibility(
+        self,
+        state: srs_model.SrsGameState,
+        center: srs_model.Position,
+    ) -> srs_model.SrsGameState:
+        discovered_cells = integrated_play._observed_positions(center, state.descriptor.sector_type)
+        known_cells = {
+            position: state.actual_map.cell_at(position)
+            for position in discovered_cells
+        }
+        return replace(
+            state,
+            known_state=srs_model.SrsKnownState(
+                discovered_cells=discovered_cells,
+                known_cells=known_cells,
+                visited_cells=frozenset({state.player_position}),
+            ),
+            persistent_state=replace(
+                state.persistent_state,
+                discovered_cells=discovered_cells,
+                warp_flags={
+                    position: cell.warp_flags
+                    for position, cell in known_cells.items()
+                    if cell.warp_flags
+                },
+            ),
         )

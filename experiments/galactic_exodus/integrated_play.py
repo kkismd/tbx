@@ -46,7 +46,7 @@ _NEBULA_SENSOR_SIZE = 3
 _DEFAULT_SENSOR_SIZE = 5
 _SRS_MAP_WIDTH = 9
 _SRS_MAP_HEIGHT = 9
-_SRS_CENTER = srs_model.Position(4, 4)
+_SRS_START_POSITION = srs_model.Position(0, 0)
 _DEFAULT_SRS_FUEL = 3
 _DEFAULT_SRS_MAX_FUEL = 9
 _ENTRY_POSITIONS = {
@@ -700,7 +700,7 @@ def _minimal_objects_for_sector(
 
 def _player_position_for_entry(entry_direction: str | None) -> srs_model.Position:
     if entry_direction is None:
-        return _SRS_CENTER
+        return _SRS_START_POSITION
     return _ENTRY_POSITIONS[entry_direction]
 
 
