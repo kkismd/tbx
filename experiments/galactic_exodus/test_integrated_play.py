@@ -5,6 +5,7 @@ from dataclasses import replace
 from pathlib import Path
 import subprocess
 import unittest
+from typing import TextIO
 
 from experiments.galactic_exodus import engine as lrs_engine
 from experiments.galactic_exodus import integrated_play
@@ -12,12 +13,13 @@ from experiments.galactic_exodus.srs import model as srs_model
 
 
 class IntegratedPlayCliTests(unittest.TestCase):
-    def run_cli(self, argv: list[str], stdin_text: str) -> tuple[int, str, str]:
+    def run_cli(self, argv: list[str], stdin_text: str | TextIO) -> tuple[int, str, str]:
         stdout = io.StringIO()
         stderr = io.StringIO()
+        stdin = io.StringIO(stdin_text) if isinstance(stdin_text, str) else stdin_text
         exit_code = integrated_play.main(
             argv,
-            stdin=io.StringIO(stdin_text),
+            stdin=stdin,
             stdout=stdout,
             stderr=stderr,
         )
@@ -101,6 +103,26 @@ class IntegratedPlayCliTests(unittest.TestCase):
             integrated_play.parse_integrated_command("foo"),
             integrated_play.IntegratedCommand(kind=integrated_play.COMMAND_UNKNOWN, raw="FOO"),
         )
+
+    def test_clean_command_input_removes_backspace_del_and_control_chars(self) -> None:
+        self.assertEqual(integrated_play._clean_command_input("EN\x7f"), "E")
+        self.assertEqual(integrated_play._clean_command_input("\x00E\r\n"), "E")
+
+    def test_readline_unicode_decode_error_ends_session_without_traceback(self) -> None:
+        class DecodeErrorStdin:
+            def readline(self) -> str:
+                raise UnicodeDecodeError("utf-8", b"\x80", 0, 1, "invalid continuation byte")
+
+        exit_code, stdout, stderr = self.run_cli(["--seed", "42"], DecodeErrorStdin())
+
+        self.assertEqual(exit_code, 0)
+        self.assertIn("RESULT\n", stdout)
+        self.assertIn("GAME  started seed=42", stdout)
+        self.assertIn("LRS\n", stdout)
+        self.assertIn("SRS\n", stdout)
+        self.assertIn("HUD\n", stdout)
+        self.assertTrue(stdout.endswith("COMMAND> "))
+        self.assertEqual(stderr, "input decode error; session ended\n")
 
     def test_create_integrated_game_creates_lrs_and_srs(self) -> None:
         state = integrated_play.create_integrated_game(42)
