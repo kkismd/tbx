@@ -239,6 +239,17 @@ class PlayCliTests(unittest.TestCase):
         self.assertIn("LAST SUPPLY: R(3,2)\n", rendered)
         self.assertIn("USED R: (2,3),(3,2)\n", rendered)
 
+    def test_render_state_uses_border_light_map(self) -> None:
+        state = make_state(actual_map=make_actual_map(cells=filled_cells(".")))
+
+        stdout = io.StringIO()
+        play.render_state(state, stdout)
+        rendered = stdout.getvalue()
+
+        self.assertIn("MAP:\n  +---+---+---+---+---+---+---+---+\n", rendered)
+        self.assertNotIn("y=8 ", rendered)
+        self.assertIn("1 | @   ?   ?   ?   ?   ?   ?   ? |\n", rendered)
+
 
 if __name__ == "__main__":
     unittest.main()
