@@ -46,6 +46,19 @@ def render_known_map_spaced(state: SrsGameState) -> str:
     return _render_known_map(state, cell_separator=" ")
 
 
+def render_display_map(state: SrsGameState) -> str:
+    rows: list[str] = []
+    for display_y in range(state.actual_map.height, 0, -1):
+        symbols: list[str] = []
+        for display_x in range(1, state.actual_map.width + 1):
+            internal_position = from_display_position(display_x, display_y)
+            symbols.append(_display_cell_symbol(state, internal_position))
+        rows.append(f"{display_y:>2}  {' '.join(symbols)}")
+
+    x_axis = "    " + " ".join(str(display_x) for display_x in range(1, state.actual_map.width + 1))
+    return "\n".join([*rows, "", x_axis])
+
+
 def to_display_position(position: Position) -> tuple[int, int]:
     return (position.x + 1, position.y + 1)
 
@@ -75,6 +88,28 @@ def _render_position(state: SrsGameState, position: Position) -> str:
     if position == state.player_position:
         return "@"
 
+    return _known_cell_symbol(state, position)
+
+
+def _display_cell_symbol(state: SrsGameState, position: Position) -> str:
+    if position == state.player_position:
+        return "@"
+    if position not in state.known_state.discovered_cells:
+        return UNKNOWN_SYMBOL
+    if _has_visible_enemy(state, position):
+        return "e"
+
+    return _known_cell_symbol(state, position)
+
+
+def _has_visible_enemy(state: SrsGameState, position: Position) -> bool:
+    combat_state = state.combat_state
+    if combat_state is None:
+        return False
+    return any(enemy.position == position for enemy in combat_state.enemies.values())
+
+
+def _known_cell_symbol(state: SrsGameState, position: Position) -> str:
     cell = state.known_state.known_cells[position]
     if cell.object_id is not None:
         object_state = state.objects[cell.object_id]

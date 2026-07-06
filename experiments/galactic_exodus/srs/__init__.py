@@ -4,6 +4,7 @@ __all__ = [
     "SrsFixtureError",
     "SrsFixtureRunResult",
     "fixture_result_to_jsonable",
+    "render_display_map",
     "render_known_map",
     "render_known_map_spaced",
     "run_fixture",
@@ -12,7 +13,7 @@ __all__ = [
 
 
 def __getattr__(name: str):
-    if name in {"render_known_map", "render_known_map_spaced"}:
+    if name in {"render_display_map", "render_known_map", "render_known_map_spaced"}:
         from importlib import import_module
 
         render_module = import_module("experiments.galactic_exodus.srs.render")

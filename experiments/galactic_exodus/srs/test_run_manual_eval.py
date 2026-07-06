@@ -29,14 +29,16 @@ class SrsRunManualEvalTests(unittest.TestCase):
 
         rendered = _render_known_map_spaced_for_manual_eval(state)
 
-        self.assertEqual(rendered.splitlines()[self._row_for_internal_y(height=9, y=1)], ". . . . @ . . . .")
+        self.assertEqual(rendered.splitlines()[self._row_for_internal_y(height=9, y=1)], " 2  . . . . @ . . . .")
+        self.assertEqual(rendered.splitlines()[9], "")
+        self.assertEqual(rendered.splitlines()[10], "    1 2 3 4 5 6 7 8 9")
 
     def test_manual_eval_render_shows_player_beside_warp_symbol(self) -> None:
         state = reveal_positions(make_state(), [Position(4, 0)])
 
         rendered = _render_known_map_spaced_for_manual_eval(state)
 
-        self.assertEqual(rendered.splitlines()[self._row_for_internal_y(height=9, y=0)], "? ? ? ? v@? ? ? ?")
+        self.assertEqual(rendered.splitlines()[self._row_for_internal_y(height=9, y=0)], " 1  ? ? ? ? v@? ? ? ?")
 
     def test_manual_eval_render_shows_player_beside_salvage_symbol(self) -> None:
         state = place_object(make_state(), Position(4, 2), SrsObjectType.SALVAGE, "salvage-a")
@@ -52,14 +54,14 @@ class SrsRunManualEvalTests(unittest.TestCase):
 
         rendered = _render_known_map_spaced_for_manual_eval(state)
 
-        self.assertEqual(rendered.splitlines()[self._row_for_internal_y(height=9, y=2)], "? ? ? ? s@? ? ? ?")
+        self.assertEqual(rendered.splitlines()[self._row_for_internal_y(height=9, y=2)], " 3  ? ? ? ? s@? ? ? ?")
 
     def test_manual_eval_render_uses_left_space_at_right_edge(self) -> None:
         state = reveal_positions(make_state(entry_edge=Direction.E), [Position(8, 4)])
 
         rendered = _render_known_map_spaced_for_manual_eval(state)
 
-        self.assertEqual(rendered.splitlines()[self._row_for_internal_y(height=9, y=4)], "? ? ? ? ? ? ? ?@>")
+        self.assertEqual(rendered.splitlines()[self._row_for_internal_y(height=9, y=4)], " 5  ? ? ? ? ? ? ? ?@>")
 
     def test_player_cell_text_includes_object_and_warp_details(self) -> None:
         state = place_object(make_state(), Position(4, 0), SrsObjectType.SALVAGE, "salvage-a")
@@ -107,7 +109,7 @@ class SrsRunManualEvalTests(unittest.TestCase):
         )
         self.assertEqual(
             _render_known_map_spaced_for_manual_eval(result.final_state).splitlines()[self._row_for_internal_y(height=9, y=7)],
-            "? . r@. ? ? ? ? ?",
+            " 8  ? . r@. ? ? ? ? ?",
         )
 
     def test_event_summary_station_includes_refuel_and_activation(self) -> None:
