@@ -11,10 +11,14 @@ from experiments.galactic_exodus.srs.run_manual_eval import (
     _player_cell_text,
     _render_known_map_spaced_for_manual_eval,
 )
+from experiments.galactic_exodus.srs.render import render_row_for_internal_y
 from experiments.galactic_exodus.srs.test_engine_movement import make_state, place_object, reveal_positions, replace_cell_terrain
 
 
 class SrsRunManualEvalTests(unittest.TestCase):
+    def _row_for_internal_y(self, *, height: int, y: int) -> int:
+        return render_row_for_internal_y(height=height, y=y)
+
     def _summary_lines_for_fixture(self, fixture_name: str) -> list[str]:
         result = run_fixture(Path(__file__).resolve().parent / "fixtures" / fixture_name)
         return _event_summary_lines(result)
@@ -25,14 +29,14 @@ class SrsRunManualEvalTests(unittest.TestCase):
 
         rendered = _render_known_map_spaced_for_manual_eval(state)
 
-        self.assertEqual(rendered.splitlines()[1], ". . . . @ . . . .")
+        self.assertEqual(rendered.splitlines()[self._row_for_internal_y(height=9, y=1)], ". . . . @ . . . .")
 
     def test_manual_eval_render_shows_player_beside_warp_symbol(self) -> None:
         state = reveal_positions(make_state(), [Position(4, 0)])
 
         rendered = _render_known_map_spaced_for_manual_eval(state)
 
-        self.assertEqual(rendered.splitlines()[0], "? ? ? ? v@? ? ? ?")
+        self.assertEqual(rendered.splitlines()[self._row_for_internal_y(height=9, y=0)], "? ? ? ? v@? ? ? ?")
 
     def test_manual_eval_render_shows_player_beside_salvage_symbol(self) -> None:
         state = place_object(make_state(), Position(4, 2), SrsObjectType.SALVAGE, "salvage-a")
@@ -48,14 +52,14 @@ class SrsRunManualEvalTests(unittest.TestCase):
 
         rendered = _render_known_map_spaced_for_manual_eval(state)
 
-        self.assertEqual(rendered.splitlines()[2], "? ? ? ? s@? ? ? ?")
+        self.assertEqual(rendered.splitlines()[self._row_for_internal_y(height=9, y=2)], "? ? ? ? s@? ? ? ?")
 
     def test_manual_eval_render_uses_left_space_at_right_edge(self) -> None:
         state = reveal_positions(make_state(entry_edge=Direction.E), [Position(8, 4)])
 
         rendered = _render_known_map_spaced_for_manual_eval(state)
 
-        self.assertEqual(rendered.splitlines()[4], "? ? ? ? ? ? ? ?@>")
+        self.assertEqual(rendered.splitlines()[self._row_for_internal_y(height=9, y=4)], "? ? ? ? ? ? ? ?@>")
 
     def test_player_cell_text_includes_object_and_warp_details(self) -> None:
         state = place_object(make_state(), Position(4, 0), SrsObjectType.SALVAGE, "salvage-a")
@@ -73,8 +77,15 @@ class SrsRunManualEvalTests(unittest.TestCase):
 
         self.assertEqual(
             text,
-            "- position=(4,0), terrain=RIFT_BARRIER, warp=S, object=SALVAGE, consumed=true, activated=false",
+            "- position=(5,1), terrain=RIFT_BARRIER, warp=S, object=SALVAGE, consumed=true, activated=false",
         )
+
+    def test_event_summary_positions_use_display_coordinates(self) -> None:
+        lines = self._summary_lines_for_fixture("move_to_known_9x9.json")
+
+        self.assertIn("turn 1: MOVE_ACCEPTED MOVE_TO (5,1) -> (5,3) fuel 0->0", lines)
+        self.assertIn("turn 1: OBSERVATION_UPDATED center=(5,2) new=0 total=81", lines)
+        self.assertIn("turn 1: OBSERVATION_UPDATED center=(5,3) new=0 total=81", lines)
 
     def test_event_summary_resource_cache_includes_fuel_and_consumed_state(self) -> None:
         lines = self._summary_lines_for_fixture("resource_cache_single_9x9.json")
@@ -92,10 +103,10 @@ class SrsRunManualEvalTests(unittest.TestCase):
 
         self.assertEqual(
             _player_cell_text(result.final_state),
-            "- position=(2,7), terrain=FLOOR, object=RESOURCE_CACHE, consumed=true, activated=false",
+            "- position=(3,8), terrain=FLOOR, object=RESOURCE_CACHE, consumed=true, activated=false",
         )
         self.assertEqual(
-            _render_known_map_spaced_for_manual_eval(result.final_state).splitlines()[7],
+            _render_known_map_spaced_for_manual_eval(result.final_state).splitlines()[self._row_for_internal_y(height=9, y=7)],
             "? . r@. ? ? ? ? ?",
         )
 
@@ -134,5 +145,5 @@ class SrsRunManualEvalTests(unittest.TestCase):
 
         self.assertEqual(
             _player_cell_text(result.final_state),
-            "- position=(2,7), terrain=FLOOR, object=RESOURCE_CACHE, consumed=true, activated=false",
+            "- position=(3,8), terrain=FLOOR, object=RESOURCE_CACHE, consumed=true, activated=false",
         )

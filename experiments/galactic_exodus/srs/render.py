@@ -46,9 +46,21 @@ def render_known_map_spaced(state: SrsGameState) -> str:
     return _render_known_map(state, cell_separator=" ")
 
 
+def to_display_position(position: Position) -> tuple[int, int]:
+    return (position.x + 1, position.y + 1)
+
+
+def from_display_position(x: int, y: int) -> Position:
+    return Position(x - 1, y - 1)
+
+
+def render_row_for_internal_y(*, height: int, y: int) -> int:
+    return height - 1 - y
+
+
 def _render_known_map(state: SrsGameState, *, cell_separator: str) -> str:
     rows: list[str] = []
-    for y in range(state.actual_map.height):
+    for y in range(state.actual_map.height - 1, -1, -1):
         chars: list[str] = []
         for x in range(state.actual_map.width):
             position = Position(x, y)
