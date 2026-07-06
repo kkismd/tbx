@@ -3,6 +3,7 @@ from __future__ import annotations
 import unittest
 from dataclasses import replace
 
+from experiments.galactic_exodus.display_reference import expected_srs_display_snapshot, make_srs_display_snapshot_state
 from experiments.galactic_exodus.srs.model import (
     Direction,
     Position,
@@ -77,60 +78,7 @@ class SrsRenderTests(unittest.TestCase):
         )
 
     def _build_baseline_snapshot_state(self):
-        state = replace(make_state(), player_position=Position(6, 3))
-
-        barrier_positions = [Position(8, y) for y in range(6)]
-        floor_positions = [
-            Position(3, 6),
-            Position(4, 6),
-            Position(5, 6),
-            Position(3, 5),
-            Position(4, 5),
-            Position(5, 5),
-            Position(6, 5),
-            Position(7, 5),
-            Position(3, 4),
-            Position(4, 4),
-            Position(5, 4),
-            Position(6, 4),
-            Position(7, 4),
-            Position(3, 3),
-            Position(4, 3),
-            Position(5, 3),
-            Position(6, 3),
-            Position(7, 3),
-            Position(3, 2),
-            Position(5, 2),
-            Position(6, 2),
-            Position(7, 2),
-            Position(2, 1),
-            Position(3, 1),
-            Position(4, 1),
-            Position(5, 1),
-            Position(6, 1),
-            Position(7, 1),
-        ]
-        warp_positions = [Position(x, 0) for x in range(2, 8)]
-        known_positions = set(floor_positions)
-        known_positions.update(barrier_positions)
-        known_positions.update(warp_positions)
-        known_positions.add(Position(4, 2))
-        known_positions.add(Position(4, 4))
-
-        for position in barrier_positions:
-            state = self._replace_cell(
-                state,
-                position,
-                terrain=SrsTerrainType.RIFT_BARRIER,
-                warp_flags=frozenset(),
-            )
-        for position in warp_positions:
-            state = self._replace_cell(state, position, warp_flags=frozenset({Direction.S}))
-
-        state = place_object(state, Position(4, 2), SrsObjectType.SALVAGE, "salvage-a")
-        state = self._with_enemy(state, enemy_id="enemy-1", position=Position(4, 4))
-        state = reveal_positions(state, known_positions)
-        return state
+        return make_srs_display_snapshot_state()
 
     def test_known_render_unknown_cells_are_question_marks(self) -> None:
         rendered = render_known_map(make_state())
@@ -395,21 +343,4 @@ class SrsRenderTests(unittest.TestCase):
     def test_display_map_snapshot_matches_issue_baseline_shape(self) -> None:
         rendered = render_display_map(self._build_baseline_snapshot_state())
 
-        self.assertEqual(
-            rendered,
-            "\n".join(
-                [
-                    " 9  ? ? ? ? ? ? ? ? ?",
-                    " 8  ? ? ? ? ? ? ? ? ?",
-                    " 7  ? ? ? . . . ? ? ?",
-                    " 6  ? ? ? . . . . . #",
-                    " 5  ? ? ? . e . . . #",
-                    " 4  ? ? ? . . . @ . #",
-                    " 3  ? ? ? . $ . . . #",
-                    " 2  ? ? . . . . . . #",
-                    " 1  ? ? v v v v v v #",
-                    "",
-                    "    1 2 3 4 5 6 7 8 9",
-                ]
-            ),
-        )
+        self.assertEqual(rendered, expected_srs_display_snapshot())
