@@ -92,14 +92,14 @@ class PlayCliTests(unittest.TestCase):
         exit_code, stdout, _ = self.run_cli(["--seed", "42"], "  e  \nQ\n")
 
         self.assertEqual(exit_code, 0)
-        self.assertIn("MOVED TO (2,1), COST ", stdout)
+        self.assertIn("MOVE  accepted to LRS=(2,1)", stdout)
         self.assertIn("TURN: 1\n", stdout)
 
     def test_invalid_input_leaves_state_unchanged(self) -> None:
         exit_code, stdout, _ = self.run_cli(["--seed", "42"], "X\nQ\n")
 
         self.assertEqual(exit_code, 0)
-        self.assertIn("INVALID COMMAND\n", stdout)
+        self.assertIn("MOVE  rejected: invalid command\n", stdout)
         self.assertIn("POSITION: (1,1)\n", stdout)
         self.assertIn("TURN: 0\n", stdout)
 
@@ -151,11 +151,17 @@ class PlayCliTests(unittest.TestCase):
         insufficient_state = make_state(actual_map=make_actual_map(cells=cells), remaining_fuel=2)
         insufficient_event = engine.apply_command(insufficient_state, "E")
 
-        self.assertEqual(play.format_event_messages(rift_state, blocked_event), ["RIFT BLOCKED N, COST 1"])
-        self.assertEqual(play.format_event_messages(rift_state, known_event), ["KNOWN RIFT N"])
+        self.assertEqual(
+            play.format_event_messages(rift_state, blocked_event),
+            ["RIFT  discovered: LRS edge (1,1)-N is blocked"],
+        )
+        self.assertEqual(
+            play.format_event_messages(rift_state, known_event),
+            ["MOVE  rejected: known RIFT blocks N"],
+        )
         self.assertEqual(
             play.format_event_messages(insufficient_state, insufficient_event),
-            ["INSUFFICIENT FUEL: NEED 3, HAVE 2"],
+            ["MOVE  rejected: insufficient fuel"],
         )
 
     def test_turn_messages_cover_supply_results(self) -> None:
@@ -173,9 +179,12 @@ class PlayCliTests(unittest.TestCase):
         base_event = engine.apply_command(base_state, "E")
         resource_event = engine.apply_command(resource_state, "E")
 
-        self.assertIn("REFUELED AT B(2,1): 2 -> 5", play.format_event_messages(base_state, base_event))
         self.assertIn(
-            "REFUELED AT R(2,1): +5 (2 -> 7)",
+            "BASE  refueled: 2 -> 5 at LRS=(2,1)",
+            play.format_event_messages(base_state, base_event),
+        )
+        self.assertIn(
+            "CACHE acquired: fuel +5 -> 7/16 at LRS=(2,1)",
             play.format_event_messages(resource_state, resource_event),
         )
 

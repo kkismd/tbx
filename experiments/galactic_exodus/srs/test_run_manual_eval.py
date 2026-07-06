@@ -89,9 +89,8 @@ class SrsRunManualEvalTests(unittest.TestCase):
     def test_event_summary_positions_use_display_coordinates(self) -> None:
         lines = self._summary_lines_for_fixture("move_to_known_9x9.json")
 
-        self.assertIn("turn 1: MOVE_ACCEPTED MOVE_TO (5,1) -> (5,3) fuel 0->0", lines)
-        self.assertIn("turn 1: OBSERVATION_UPDATED center=(5,2) new=0 total=81", lines)
-        self.assertIn("turn 1: OBSERVATION_UPDATED center=(5,3) new=0 total=81", lines)
+        self.assertIn("turn 1: MOVE  accepted route=N,N to SRS=(5,3)", lines)
+        self.assertIn("turn 1: SCAN  5x5 update: +0 known cells, total=81", lines)
 
     def test_event_summary_resource_cache_includes_fuel_and_consumed_state(self) -> None:
         lines = self._summary_lines_for_fixture("resource_cache_single_9x9.json")
@@ -99,8 +98,8 @@ class SrsRunManualEvalTests(unittest.TestCase):
         self.assertEqual(
             lines[-2:],
             [
-                "turn 1: INTERACT_ACCEPTED RESOURCE_CACHE resource-cache-1 outcome=ACCEPTED fuel 2->5 restore=3 consumed=true",
-                "turn 1: OBJECT_CONSUMED RESOURCE_CACHE resource-cache-1",
+                "turn 1: INTERACT accepted: RESOURCE_CACHE at SRS=(3,8)",
+                "turn 1: CACHE acquired: fuel +3 -> 5",
             ],
         )
 
@@ -122,8 +121,8 @@ class SrsRunManualEvalTests(unittest.TestCase):
         self.assertEqual(
             lines[-2:],
             [
-                "turn 1: INTERACT_ACCEPTED STATION station-1 outcome=ACCEPTED fuel 2->9 refuel_to_max=true activated=true",
-                "turn 1: STATION_ACTIVATED STATION station-1",
+                "turn 1: INTERACT accepted: STATION at SRS=(4,1)",
+                "turn 1: BASE station activated: full recovery complete",
             ],
         )
 
@@ -133,8 +132,8 @@ class SrsRunManualEvalTests(unittest.TestCase):
         self.assertEqual(
             lines[-2:],
             [
-                "turn 1: INTERACT_ACCEPTED SALVAGE salvage-1 outcome=ACCEPTED fuel 2->2 placeholder=true consumed=true",
-                "turn 1: OBJECT_CONSUMED SALVAGE salvage-1",
+                "turn 1: INTERACT accepted: SALVAGE at SRS=(5,7)",
+                "turn 1: SALVAGE acquired: +1 inventory, durability +0 -> 100",
             ],
         )
 
@@ -142,7 +141,7 @@ class SrsRunManualEvalTests(unittest.TestCase):
         lines = self._summary_lines_for_fixture("revisit_resource_consumed_9x9.json")
 
         self.assertIn(
-            "turn 0: INTERACT_REJECTED RESOURCE_CACHE resource-cache-1 outcome=REJECTED_ALREADY_CONSUMED fuel 2->2 consumed=true",
+            "turn 0: INTERACT  rejected: already consumed",
             lines,
         )
 

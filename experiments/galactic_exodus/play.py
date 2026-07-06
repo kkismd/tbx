@@ -10,7 +10,7 @@ from typing import Sequence, TextIO
 if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from experiments.galactic_exodus import engine, simulate
+from experiments.galactic_exodus import engine, event_format, simulate
 from experiments.galactic_exodus.display import render_lrs_border_light_map
 from experiments.galactic_exodus.hud import CompactHudContext, render_compact_hud
 
@@ -151,38 +151,24 @@ def format_event_messages(
     state: engine.GameState, event: engine.TurnEvent
 ) -> list[str]:
     if event.outcome == engine.OUTCOME_MOVED:
-        messages = [
-            f"MOVED TO {format_position(event.to_position)}, COST {event.fuel_spent}"
-        ]
-        supply_message = format_supply_message(event)
+        messages = [event_format.format_lrs_event_summary(event)]
+        supply_message = format_supply_message(state, event)
         if supply_message is not None:
             messages.append(supply_message)
         if event.status_after == engine.GAME_STATUS_WON:
-            messages.append("YOU REACHED H")
+            messages.append(f"HOME  reached at LRS={format_position(event.to_position)}")
         elif event.status_after == engine.GAME_STATUS_LOST_FUEL:
-            messages.append("NO FURTHER MOVE IS POSSIBLE")
+            messages.append("STATUS fuel depleted: no further move is possible")
         return messages
     if event.outcome == engine.OUTCOME_BLOCKED_UNKNOWN_RIFT:
-        messages = [f"RIFT BLOCKED {direction_for_event(event)}, COST 1"]
+        messages = [event_format.format_lrs_event_summary(event)]
         if event.status_after == engine.GAME_STATUS_LOST_FUEL:
-            messages.append("NO FURTHER MOVE IS POSSIBLE")
+            messages.append("STATUS fuel depleted: no further move is possible")
         return messages
-    if event.outcome == engine.OUTCOME_REJECTED_KNOWN_RIFT:
-        return [f"KNOWN RIFT {direction_for_event(event)}"]
-    if event.outcome == engine.OUTCOME_OUT_OF_BOUNDS:
-        return ["OUT OF BOUNDS"]
-    if event.outcome == engine.OUTCOME_REJECTED_INSUFFICIENT_FUEL:
-        if event.required_fuel is None:
-            raise ValueError("insufficient-fuel event must include required_fuel")
-        return [
-            f"INSUFFICIENT FUEL: NEED {event.required_fuel}, HAVE {event.fuel_before}"
-        ]
-    if event.outcome == engine.OUTCOME_INVALID_COMMAND:
-        return ["INVALID COMMAND"]
-    raise ValueError(f"unexpected outcome: {event.outcome}")
+    return [event_format.format_lrs_event_summary(event)]
 
 
-def format_supply_message(event: engine.TurnEvent) -> str | None:
+def format_supply_message(state: engine.GameState, event: engine.TurnEvent) -> str | None:
     source = event.supply_source
     if event.supply_result == engine.SUPPLY_RESULT_NONE:
         return None
@@ -192,20 +178,24 @@ def format_supply_message(event: engine.TurnEvent) -> str | None:
         raise ValueError("supply event must include fuel_before_supply and fuel_after_supply")
     if event.supply_result == engine.SUPPLY_RESULT_BASE_REFUELED:
         return (
-            f"REFUELED AT B{format_position(source.position)}: "
-            f"{event.fuel_before_supply} -> {event.fuel_after_supply}"
+            "BASE  refueled: "
+            f"{event.fuel_before_supply} -> {event.fuel_after_supply} at LRS={format_position(source.position)}"
         )
     if event.supply_result == engine.SUPPLY_RESULT_BASE_ALREADY_FULL:
-        return f"BASE ALREADY FULL AT B{format_position(source.position)}"
+        return f"BASE  already full at LRS={format_position(source.position)}"
     if event.supply_result == engine.SUPPLY_RESULT_RESOURCE_REFUELED:
+        fuel_after = event.fuel_after_supply
+        if fuel_after is None:
+            raise ValueError("resource refuel event must include fuel_after_supply")
         return (
-            f"REFUELED AT R{format_position(source.position)}: "
-            f"+{event.supply_amount} ({event.fuel_before_supply} -> {event.fuel_after_supply})"
+            "CACHE acquired: "
+            f"fuel +{event.supply_amount} -> {fuel_after}/{state.settings.max_fuel} "
+            f"at LRS={format_position(source.position)}"
         )
     if event.supply_result == engine.SUPPLY_RESULT_RESOURCE_ALREADY_FULL:
-        return f"RESOURCE ALREADY FULL AT R{format_position(source.position)}"
+        return f"CACHE full: no refuel at LRS={format_position(source.position)}"
     if event.supply_result == engine.SUPPLY_RESULT_RESOURCE_ALREADY_USED:
-        return f"RESOURCE ALREADY USED AT R{format_position(source.position)}"
+        return f"CACHE already used at LRS={format_position(source.position)}"
     raise ValueError(f"unexpected supply result: {event.supply_result}")
 
 

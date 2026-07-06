@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Iterable, Mapping, Sequence
 
 from experiments.galactic_exodus.hud import CompactHudContext, render_compact_hud
+from experiments.galactic_exodus.srs import event_format
 from experiments.galactic_exodus.srs.model import Position, SrsGameState
 from experiments.galactic_exodus.srs.render import render_display_map, render_row_for_internal_y, to_display_position
 from experiments.galactic_exodus.srs.run_fixture import FIXTURES_DIR, SrsFixtureRunResult, run_fixture
@@ -279,30 +280,8 @@ def _case_goal_text(fixture_id: str) -> str:
 def _event_summary_lines(result: SrsFixtureRunResult) -> list[str]:
     lines: list[str] = []
     for event in result.log.events:
-        payload = dict(event.payload)
-        prefix = f"turn {event.srs_turn}: {event.event_type}"
-        if event.event_type == "MOVE_ACCEPTED":
-            lines.append(
-                f"{prefix} "
-                f"{payload.get('command_type', '-')} "
-                f"{_format_position(payload.get('start_position'))} -> {_format_position(payload.get('end_position'))} "
-                f"fuel {payload.get('fuel_before', '-')}->{payload.get('fuel_after', '-')}"
-            )
-        elif event.event_type == "OBSERVATION_UPDATED":
-            lines.append(
-                f"{prefix} "
-                f"center={_format_position(payload.get('center'))} "
-                f"new={payload.get('newly_discovered_count', '-')} "
-                f"total={payload.get('total_discovered_count', '-')}"
-            )
-        elif event.event_type in {"INTERACT_ACCEPTED", "INTERACT_REJECTED"}:
-            lines.append(_interaction_event_summary(prefix, payload))
-        elif event.event_type in {"OBJECT_CONSUMED", "STATION_ACTIVATED"}:
-            lines.append(" ".join([prefix, *_interaction_subject_tokens(payload)]))
-        elif "outcome" in payload:
-            lines.append(f"{prefix} outcome={payload.get('outcome')}")
-        else:
-            lines.append(prefix)
+        for summary_line in event_format.format_srs_event_summary_lines(event):
+            lines.append(f"turn {event.srs_turn}: {summary_line}")
     return lines
 
 
@@ -372,9 +351,10 @@ def _player_cell_text(state: SrsGameState) -> str:
 
 def _compact_hud_text(result: SrsFixtureRunResult) -> str:
     last_event_summary = None
-    event_lines = _event_summary_lines(result)
-    if event_lines:
-        last_event_summary = event_lines[-1]
+    for event in result.log.events:
+        summary_lines = event_format.format_srs_event_summary_lines(event)
+        if summary_lines:
+            last_event_summary = summary_lines[-1]
     return render_compact_hud(
         CompactHudContext(
             srs_state=result.final_state,
