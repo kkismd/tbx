@@ -82,7 +82,7 @@ B. spec file 反映用の後続 issue が作成済みで、そのリンクが本
 |---|---|---|
 | [`srs_warp.md`](srs_warp.md) | #1088, #1254, #1255 | #1262 で追加 |
 | `srs_map_generation.md` | #1085, #1086, #1088 | #1263 / #1264 と連動 |
-| `srs_movement.md` | #1083, #1089 | #1267 で移植予定 |
+| [`srs_movement.md`](srs_movement.md) | #1083, #1089 | #1267 で追加 |
 | `srs_encounter.md` | #1178, #1194 | 後続候補 |
 | `srs_combat.md` | #1178, #1194 | 後続候補 |
 | `integrated_cli.md` | #1241, #1242, #1243, #1244, #1245 | #1268 と連動 |
