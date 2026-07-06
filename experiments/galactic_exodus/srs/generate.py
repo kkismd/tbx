@@ -133,20 +133,58 @@ def _apply_rift_barriers(cells: list[list[SrsCell]], blocked_edges: frozenset[Di
 
 
 def _apply_warp_flags(cells: list[list[SrsCell]], descriptor: SectorDescriptor) -> None:
-    open_edges = {
-        direction
-        for direction in Direction
-        if direction not in descriptor.blocked_edges
-    }
-    for direction in open_edges:
-        position = EDGE_POSITIONS[direction]
-        base = cells[position.y][position.x]
-        cells[position.y][position.x] = SrsCell(
-            terrain=base.terrain,
-            object_id=base.object_id,
-            actor_id=base.actor_id,
-            warp_flags=frozenset({direction}),
-        )
+    for direction in Direction:
+        if direction in descriptor.blocked_edges:
+            continue
+        warp_positions = [
+            position
+            for position in _edge_cells(width=len(cells[0]), height=len(cells), direction=direction)
+            if _has_floor_square(cells, position)
+        ]
+        if not warp_positions:
+            raise SrsGenerationError(f"open edge {direction.value} has no warp candidate")
+        for position in warp_positions:
+            _add_warp_flag(cells, position, direction)
+
+
+def _edge_cells(*, width: int, height: int, direction: Direction) -> Iterable[Position]:
+    if direction is Direction.N:
+        return (Position(x, height - 1) for x in range(width))
+    if direction is Direction.E:
+        return (Position(width - 1, y) for y in range(height))
+    if direction is Direction.S:
+        return (Position(x, 0) for x in range(width))
+    return (Position(0, y) for y in range(height))
+
+
+def _has_floor_square(cells: list[list[SrsCell]], position: Position) -> bool:
+    width = len(cells[0])
+    height = len(cells)
+    for min_x in range(position.x - 1, position.x + 1):
+        for min_y in range(position.y - 1, position.y + 1):
+            if min_x < 0 or min_y < 0:
+                continue
+            if min_x + 1 >= width or min_y + 1 >= height:
+                continue
+            square = (
+                cells[min_y][min_x],
+                cells[min_y][min_x + 1],
+                cells[min_y + 1][min_x],
+                cells[min_y + 1][min_x + 1],
+            )
+            if all(cell.terrain is SrsTerrainType.FLOOR for cell in square):
+                return True
+    return False
+
+
+def _add_warp_flag(cells: list[list[SrsCell]], position: Position, direction: Direction) -> None:
+    base = cells[position.y][position.x]
+    cells[position.y][position.x] = SrsCell(
+        terrain=base.terrain,
+        object_id=base.object_id,
+        actor_id=base.actor_id,
+        warp_flags=base.warp_flags | frozenset({direction}),
+    )
 
 
 def _place_objects(

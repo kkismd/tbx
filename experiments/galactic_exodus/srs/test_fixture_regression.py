@@ -46,7 +46,7 @@ class SrsFixtureRegressionTests(unittest.TestCase):
         self.assertEqual(result.final_state.fuel, 5)
         self.assertIn("resource-cache-1", result.final_state.persistent_state.consumed_object_ids)
         self.assertTrue(result.final_state.objects["resource-cache-1"].consumed)
-        self.assertIn(Position(2, 7), result.final_state.known_state.discovered_cells)
+        self.assertIn(Position(2, 6), result.final_state.known_state.discovered_cells)
 
     def test_station_refuel(self) -> None:
         result = run_named_fixture("station_refuel_9x9")
@@ -117,17 +117,17 @@ class SrsFixtureRegressionTests(unittest.TestCase):
         self.assertEqual(result.final_state.fuel, 2)
         self.assertIn("resource-cache-1", result.final_state.persistent_state.consumed_object_ids)
         self.assertTrue(result.final_state.objects["resource-cache-1"].consumed)
-        self.assertIn(Position(2, 7), result.final_state.known_state.discovered_cells)
+        self.assertIn(Position(2, 6), result.final_state.known_state.discovered_cells)
 
     def test_combat_enemy_movement_tiebreak(self) -> None:
         result = run_named_fixture("combat_enemy_movement_tiebreak_9x9")
 
         self.assertIn("COMBAT_TRANSITIONED", event_types(result))
         self.assertEqual(primary_outcome(result), "ACCEPTED")
-        self.assertEqual(result.final_state.combat_state.enemies["enemy-1"].position, Position(2, 3))
+        self.assertEqual(result.final_state.combat_state.enemies["enemy-1"].position, Position(2, 5))
         self.assertEqual(
             result.summary["enemy_actions"][0]["target_attackable_position"],
-            [4, 3],
+            [4, 5],
         )
         self.assertIsNone(result.summary["enemy_actions"][0]["reaction"])
 
@@ -218,15 +218,17 @@ class SrsFixtureRegressionTests(unittest.TestCase):
         self.assertEqual(
             result.summary["combat_enemy_positions"],
             {
-                "enemy-1": [4, 0],
-                "enemy-2": [8, 4],
+                "enemy-1": [1, 0],
+                "enemy-2": [2, 0],
+                "enemy-3": [3, 0],
             },
         )
         self.assertEqual(
             result.summary["combat_enemy_durabilities"],
             {
                 "enemy-1": 3,
-                "enemy-2": 5,
+                "enemy-2": 3,
+                "enemy-3": 5,
             },
         )
 

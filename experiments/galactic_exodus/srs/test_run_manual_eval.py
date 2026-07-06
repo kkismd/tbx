@@ -33,7 +33,7 @@ class SrsRunManualEvalTests(unittest.TestCase):
 
         rendered = _render_known_map_spaced_for_manual_eval(state)
 
-        self.assertEqual(rendered.splitlines()[self._row_for_internal_y(height=9, y=1)], " 2  . . . . @ . . . .")
+        self.assertEqual(rendered.splitlines()[self._row_for_internal_y(height=9, y=1)], " 2  < . . . @ . . . >")
         self.assertEqual(rendered.splitlines()[9], "")
         self.assertEqual(rendered.splitlines()[10], "    1 2 3 4 5 6 7 8 9")
 
@@ -98,7 +98,7 @@ class SrsRunManualEvalTests(unittest.TestCase):
         self.assertEqual(
             lines[-2:],
             [
-                "turn 1: INTERACT accepted: RESOURCE_CACHE at SRS=(3,8)",
+                "turn 1: INTERACT accepted: RESOURCE_CACHE at SRS=(3,7)",
                 "turn 1: CACHE acquired: fuel +3 -> 5",
             ],
         )
@@ -108,11 +108,11 @@ class SrsRunManualEvalTests(unittest.TestCase):
 
         self.assertEqual(
             _player_cell_text(result.final_state),
-            "- position=(3,8), terrain=FLOOR, object=RESOURCE_CACHE, consumed=true, activated=false",
+            "- position=(3,7), terrain=FLOOR, object=RESOURCE_CACHE, consumed=true, activated=false",
         )
         self.assertEqual(
-            _render_known_map_spaced_for_manual_eval(result.final_state).splitlines()[self._row_for_internal_y(height=9, y=7)],
-            " 8  ? . r@. ? ? ? ? ?",
+            _render_known_map_spaced_for_manual_eval(result.final_state).splitlines()[self._row_for_internal_y(height=9, y=6)],
+            " 7  ? . r@. ? ? ? ? ?",
         )
 
     def test_event_summary_station_includes_refuel_and_activation(self) -> None:
@@ -121,7 +121,7 @@ class SrsRunManualEvalTests(unittest.TestCase):
         self.assertEqual(
             lines[-2:],
             [
-                "turn 1: INTERACT accepted: STATION at SRS=(4,1)",
+                "turn 1: INTERACT accepted: STATION at SRS=(6,4)",
                 "turn 1: BASE station activated: full recovery complete",
             ],
         )
@@ -132,7 +132,7 @@ class SrsRunManualEvalTests(unittest.TestCase):
         self.assertEqual(
             lines[-2:],
             [
-                "turn 1: INTERACT accepted: SALVAGE at SRS=(5,7)",
+                "turn 1: INTERACT accepted: SALVAGE at SRS=(8,6)",
                 "turn 1: SALVAGE acquired: +1 inventory, durability +0 -> 100",
             ],
         )
@@ -150,7 +150,7 @@ class SrsRunManualEvalTests(unittest.TestCase):
 
         self.assertEqual(
             _player_cell_text(result.final_state),
-            "- position=(3,8), terrain=FLOOR, object=RESOURCE_CACHE, consumed=true, activated=false",
+            "- position=(3,7), terrain=FLOOR, object=RESOURCE_CACHE, consumed=true, activated=false",
         )
 
     def test_compact_hud_uses_display_coordinates_without_internal_debug(self) -> None:
@@ -158,7 +158,7 @@ class SrsRunManualEvalTests(unittest.TestCase):
 
         rendered = _compact_hud_text(result)
 
-        self.assertIn("SRS=(3,8)", rendered)
+        self.assertIn("SRS=(3,7)", rendered)
         self.assertIn("COST=TURN_ONLY", rendered)
         self.assertNotIn("internal=", rendered)
         self.assertNotIn("Position(", rendered)
@@ -192,13 +192,13 @@ class SrsRunManualEvalTests(unittest.TestCase):
         self.assertLess(event_index, player_index)
         self.assertLess(player_index, map_index)
         self.assertLess(map_index, hud_index)
-        self.assertIn("turn 1: INTERACT accepted: RESOURCE_CACHE at SRS=(3,8)", rendered)
+        self.assertIn("turn 1: INTERACT accepted: RESOURCE_CACHE at SRS=(3,7)", rendered)
         self.assertIn("turn 1: CACHE acquired: fuel +3 -> 5", rendered)
         self.assertIn(
-            "- position=(3,8), terrain=FLOOR, object=RESOURCE_CACHE, consumed=true, activated=false",
+            "- position=(3,7), terrain=FLOOR, object=RESOURCE_CACHE, consumed=true, activated=false",
             rendered,
         )
-        self.assertIn("SECTOR  LRS=-      TYPE=RESOURCE  SRS=(3,8)  SENSOR=5x5", rendered)
+        self.assertIn("SECTOR  LRS=-      TYPE=RESOURCE  SRS=(3,7)  SENSOR=5x5", rendered)
         self.assertIn("LAST    CACHE acquired: fuel +3 -> 5", rendered)
         self.assertNotIn("internal=", rendered)
         self.assertNotIn("Position(", rendered)

@@ -75,16 +75,44 @@ class SrsEncounterTests(unittest.TestCase):
             ],
         )
 
-    def test_spawn_candidates_use_passable_warp_points_outside_player_neighbor_ring(self) -> None:
+    def test_spawn_candidates_use_all_passable_warp_points_outside_player_neighbor_ring(self) -> None:
         state = replace(make_state(), player_position=Position(4, 4))
 
         self.assertEqual(
             spawn_candidate_points(state),
             (
+                Position(0, 0),
+                Position(1, 0),
+                Position(2, 0),
+                Position(3, 0),
                 Position(4, 0),
+                Position(5, 0),
+                Position(6, 0),
+                Position(7, 0),
+                Position(8, 0),
+                Position(0, 1),
+                Position(8, 1),
+                Position(0, 2),
+                Position(8, 2),
+                Position(0, 3),
+                Position(8, 3),
                 Position(0, 4),
                 Position(8, 4),
+                Position(0, 5),
+                Position(8, 5),
+                Position(0, 6),
+                Position(8, 6),
+                Position(0, 7),
+                Position(8, 7),
+                Position(0, 8),
+                Position(1, 8),
+                Position(2, 8),
+                Position(3, 8),
                 Position(4, 8),
+                Position(5, 8),
+                Position(6, 8),
+                Position(7, 8),
+                Position(8, 8),
             ),
         )
 
@@ -107,12 +135,25 @@ class SrsEncounterTests(unittest.TestCase):
         self.assertEqual(
             spawn_candidate_points(state),
             (
+                Position(1, 0),
+                Position(2, 0),
+                Position(3, 0),
                 Position(4, 0),
+                Position(5, 0),
+                Position(6, 0),
+                Position(7, 0),
+                Position(8, 0),
+                Position(8, 1),
+                Position(8, 2),
+                Position(8, 3),
                 Position(8, 4),
+                Position(8, 5),
+                Position(8, 6),
+                Position(8, 7),
             ),
         )
 
-    def test_spawn_cap_keeps_strongest_enemies_then_sorts_result_ascending(self) -> None:
+    def test_spawn_keeps_sorted_enemy_tiers_when_candidates_are_sufficient(self) -> None:
         descriptor = SectorDescriptor(
             sector_id="rift-9202",
             sector_type=SectorType.RIFT,
@@ -141,20 +182,22 @@ class SrsEncounterTests(unittest.TestCase):
         self.assertEqual(
             [(enemy.enemy_id, enemy.tier, enemy.position) for enemy in enemies],
             [
-                ("enemy-1", SrsEnemyTier.TIER1, Position(4, 0)),
-                ("enemy-2", SrsEnemyTier.TIER2, Position(8, 4)),
+                ("enemy-1", SrsEnemyTier.TIER1, Position(1, 0)),
+                ("enemy-2", SrsEnemyTier.TIER1, Position(2, 0)),
+                ("enemy-3", SrsEnemyTier.TIER2, Position(3, 0)),
             ],
         )
 
     def test_fixture_accepts_fixed_encounter_composition_input(self) -> None:
         result = run_fixture(FIXTURES_DIR / "combat_encounter_spawn_cap_9x9.json", contracts=self.contracts)
 
-        self.assertEqual(tuple(result.final_state.combat_state.enemies), ("enemy-1", "enemy-2"))
+        self.assertEqual(tuple(result.final_state.combat_state.enemies), ("enemy-1", "enemy-2", "enemy-3"))
         self.assertEqual(
             result.summary["combat_enemy_positions"],
             {
-                "enemy-1": [4, 0],
-                "enemy-2": [8, 4],
+                "enemy-1": [1, 0],
+                "enemy-2": [2, 0],
+                "enemy-3": [3, 0],
             },
         )
 

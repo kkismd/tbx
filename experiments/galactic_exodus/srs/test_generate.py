@@ -78,6 +78,18 @@ def _iter_cells(state: SrsGameState):
             yield Position(x, y), cell
 
 
+def _edge_positions(state: SrsGameState, direction: Direction) -> list[Position]:
+    width = state.actual_map.width
+    height = state.actual_map.height
+    if direction is Direction.N:
+        return [Position(x, height - 1) for x in range(width)]
+    if direction is Direction.E:
+        return [Position(width - 1, y) for y in range(height)]
+    if direction is Direction.S:
+        return [Position(x, 0) for x in range(width)]
+    return [Position(0, y) for y in range(height)]
+
+
 class SrsGenerateTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
@@ -160,7 +172,9 @@ class SrsGenerateTests(unittest.TestCase):
             contracts=self.contracts,
         )
 
-        self.assertNotIn("4,8", summarize_state(state)["warp_flags"])
+        self.assertFalse(
+            any(Direction.N in cell.warp_flags for _, cell in _iter_cells(state))
+        )
 
     def test_north_blocked_edge_line_is_rift_barrier(self) -> None:
         state = create_sector(
@@ -194,7 +208,45 @@ class SrsGenerateTests(unittest.TestCase):
             with self.subTest(x=x):
                 self.assertEqual(state.actual_map.cell_at(Position(x, 0)).terrain.value, "RIFT_BARRIER")
 
-    def test_non_blocked_edges_have_warp_candidates(self) -> None:
+    def test_all_floor_open_edges_have_multiple_warp_flags(self) -> None:
+        state = create_sector(
+            SectorDescriptor("normal-1", SectorType.NORMAL, 1001, Direction.S),
+            contracts=self.contracts,
+        )
+
+        for direction in Direction:
+            with self.subTest(direction=direction.value):
+                positions = [
+                    position
+                    for position in _edge_positions(state, direction)
+                    if direction in state.actual_map.cell_at(position).warp_flags
+                ]
+                self.assertGreater(len(positions), 1)
+
+    def test_all_floor_corners_can_have_two_warp_flags(self) -> None:
+        state = create_sector(
+            SectorDescriptor("normal-1", SectorType.NORMAL, 1001, Direction.S),
+            contracts=self.contracts,
+        )
+
+        self.assertEqual(
+            state.actual_map.cell_at(Position(0, 0)).warp_flags,
+            frozenset({Direction.S, Direction.W}),
+        )
+        self.assertEqual(
+            state.actual_map.cell_at(Position(8, 0)).warp_flags,
+            frozenset({Direction.S, Direction.E}),
+        )
+        self.assertEqual(
+            state.actual_map.cell_at(Position(0, 8)).warp_flags,
+            frozenset({Direction.N, Direction.W}),
+        )
+        self.assertEqual(
+            state.actual_map.cell_at(Position(8, 8)).warp_flags,
+            frozenset({Direction.N, Direction.E}),
+        )
+
+    def test_non_blocked_rift_edges_still_have_warp_candidates(self) -> None:
         state = create_sector(
             SectorDescriptor(
                 "rift-1",
@@ -206,14 +258,27 @@ class SrsGenerateTests(unittest.TestCase):
             contracts=self.contracts,
         )
 
-        self.assertEqual(
-            summarize_state(state)["warp_flags"],
-            {
-                "0,4": ["W"],
-                "4,0": ["S"],
-                "8,4": ["E"],
-            },
+        for direction in (Direction.S, Direction.E, Direction.W):
+            with self.subTest(direction=direction.value):
+                self.assertTrue(
+                    any(
+                        direction in state.actual_map.cell_at(position).warp_flags
+                        for position in _edge_positions(state, direction)
+                    )
+                )
+
+    def test_warp_flag_cells_are_floor_and_object_free(self) -> None:
+        state = create_sector(
+            SectorDescriptor("normal-1", SectorType.NORMAL, 1001, Direction.S),
+            contracts=self.contracts,
         )
+
+        for position, cell in _iter_cells(state):
+            if not cell.warp_flags:
+                continue
+            with self.subTest(position=position):
+                self.assertEqual(cell.terrain.value, "FLOOR")
+                self.assertIsNone(cell.object_id)
 
     def test_star_exactly_one(self) -> None:
         state = create_sector(
@@ -326,6 +391,10 @@ class SrsGenerateTests(unittest.TestCase):
         self.assertEqual(state.persistent_state.generation_seed, 4001)
         self.assertEqual(state.persistent_state.blocked_edges, frozenset({Direction.N}))
         self.assertEqual(state.persistent_state.warp_flags[Position(8, 4)], frozenset({Direction.E}))
+        self.assertEqual(
+            state.persistent_state.warp_flags[Position(0, 0)],
+            frozenset({Direction.S, Direction.W}),
+        )
         self.assertEqual(
             set(state.persistent_state.celestial_body_positions),
             {"star-1", "planet-1", "planet-2"},

@@ -123,10 +123,10 @@ class SrsFixtureTests(unittest.TestCase):
             result.initial_state.known_state.discovered_cells,
             frozenset(
                 {
-                    Position(2, 7),
                     Position(2, 6),
-                    Position(3, 7),
-                    Position(1, 7),
+                    Position(2, 5),
+                    Position(3, 6),
+                    Position(1, 6),
                 }
             ),
         )
@@ -138,10 +138,10 @@ class SrsFixtureTests(unittest.TestCase):
             result.initial_state.known_state.discovered_cells,
             frozenset(
                 {
-                    Position(2, 7),
                     Position(2, 6),
-                    Position(3, 7),
-                    Position(1, 7),
+                    Position(2, 5),
+                    Position(3, 6),
+                    Position(1, 6),
                 }
             ),
         )
@@ -179,17 +179,17 @@ class SrsFixtureTests(unittest.TestCase):
         result = run_fixture(FIXTURES_DIR / "combat_enemy_movement_tiebreak_9x9.json", contracts=self.contracts)
 
         self.assertEqual(result.final_state.combat_state.phase.value, "PLAYER_MOVEMENT")
-        self.assertEqual(result.final_state.combat_state.enemies["enemy-1"].position, Position(2, 3))
+        self.assertEqual(result.final_state.combat_state.enemies["enemy-1"].position, Position(2, 5))
         self.assertEqual(
             result.summary["enemy_actions"],
             [
                 {
                     "enemy_id": "enemy-1",
                     "start_position": [0, 4],
-                    "target_attackable_position": [4, 3],
-                    "planned_path": [[0, 3], [1, 3], [2, 3], [3, 3], [4, 3]],
-                    "moved_path": [[0, 3], [1, 3], [2, 3]],
-                    "final_position": [2, 3],
+                    "target_attackable_position": [4, 5],
+                    "planned_path": [[0, 5], [1, 5], [2, 5], [3, 5], [4, 5]],
+                    "moved_path": [[0, 5], [1, 5], [2, 5]],
+                    "final_position": [2, 5],
                     "movement_power": 3,
                     "movement_cost": 50,
                     "attacked_player": False,
@@ -253,15 +253,17 @@ class SrsFixtureTests(unittest.TestCase):
         self.assertEqual(
             result.summary["combat_enemy_positions"],
             {
-                "enemy-1": [4, 0],
-                "enemy-2": [8, 4],
+                "enemy-1": [1, 0],
+                "enemy-2": [2, 0],
+                "enemy-3": [3, 0],
             },
         )
         self.assertEqual(
             result.summary["combat_enemy_durabilities"],
             {
                 "enemy-1": 3,
-                "enemy-2": 5,
+                "enemy-2": 3,
+                "enemy-3": 5,
             },
         )
 
