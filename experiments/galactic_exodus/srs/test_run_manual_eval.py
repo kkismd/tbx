@@ -175,3 +175,30 @@ class SrsRunManualEvalTests(unittest.TestCase):
         self.assertIn("player cell:\n", rendered)
         self.assertIn("known map:\n", rendered)
         self.assertIn("compact hud:\n", rendered)
+
+    def test_manual_eval_output_snapshot_sections_and_key_lines(self) -> None:
+        result = run_fixture(Path(__file__).resolve().parent / "fixtures" / "resource_cache_single_9x9.json")
+
+        stdout = io.StringIO()
+        with redirect_stdout(stdout):
+            _print_case(result)
+        rendered = stdout.getvalue()
+
+        event_index = rendered.index("event summary:\n")
+        player_index = rendered.index("player cell:\n")
+        map_index = rendered.index("known map:\n")
+        hud_index = rendered.index("compact hud:\n")
+
+        self.assertLess(event_index, player_index)
+        self.assertLess(player_index, map_index)
+        self.assertLess(map_index, hud_index)
+        self.assertIn("turn 1: INTERACT accepted: RESOURCE_CACHE at SRS=(3,8)", rendered)
+        self.assertIn("turn 1: CACHE acquired: fuel +3 -> 5", rendered)
+        self.assertIn(
+            "- position=(3,8), terrain=FLOOR, object=RESOURCE_CACHE, consumed=true, activated=false",
+            rendered,
+        )
+        self.assertIn("SECTOR  LRS=-      TYPE=RESOURCE  SRS=(3,8)  SENSOR=5x5", rendered)
+        self.assertIn("LAST    CACHE acquired: fuel +3 -> 5", rendered)
+        self.assertNotIn("internal=", rendered)
+        self.assertNotIn("Position(", rendered)

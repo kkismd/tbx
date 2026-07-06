@@ -211,6 +211,117 @@ class SrsEventFormatTests(unittest.TestCase):
         self.assertEqual(event_format.format_srs_event_summary(event), "EVENT UNKNOWN_EVENT")
         self.assertIn("UNKNOWN_EVENT", event_format.format_srs_debug_event(event))
 
+    def test_srs_event_wording_snapshot(self) -> None:
+        rendered = "\n".join(
+            [
+                event_format.format_srs_event_summary(
+                    make_turn_event(
+                        srs_turn=1,
+                        event_type=log.MOVE_ACCEPTED,
+                        payload={"resolved_route": ["E", "E"], "end_position": [6, 3]},
+                    )
+                ),
+                event_format.format_srs_event_summary(
+                    make_turn_event(
+                        srs_turn=1,
+                        event_type=log.OBSERVATION_UPDATED,
+                        payload={"newly_discovered_count": 6, "total_discovered_count": 34},
+                    )
+                ),
+                event_format.format_srs_event_summary(
+                    make_turn_event(
+                        srs_turn=1,
+                        event_type=log.STOPPED_BEFORE_IMPASSABLE,
+                        payload={"terrain": "RIFT_BARRIER", "blocked_position": [8, 3]},
+                    )
+                ),
+                event_format.format_srs_event_summary(
+                    make_turn_event(
+                        srs_turn=1,
+                        event_type=log.WARP_EXIT_ACCEPTED,
+                        payload={"exit_direction": "S", "start_position": [4, 0]},
+                    )
+                ),
+                event_format.format_srs_event_summary(
+                    make_turn_event(
+                        srs_turn=0,
+                        event_type=log.WARP_EXIT_REJECTED,
+                        payload={"exit_direction": "E", "outcome": "REJECTED_BLOCKED_EDGE"},
+                    )
+                ),
+                event_format.format_srs_event_summary(
+                    make_turn_event(
+                        srs_turn=1,
+                        event_type=log.OBJECT_CONSUMED,
+                        payload={"object_type": "RESOURCE_CACHE", "fuel_delta": 3, "fuel_after": 6, "max_fuel": 9},
+                    )
+                ),
+                event_format.format_srs_event_summary(
+                    make_turn_event(
+                        srs_turn=1,
+                        event_type=log.OBJECT_CONSUMED,
+                        payload={
+                            "object_type": "SALVAGE",
+                            "salvage_after": 1,
+                            "durability_delta": 8,
+                            "durability_after": 100,
+                            "durability_capacity": 100,
+                        },
+                    )
+                ),
+                *event_format.format_srs_event_summary_lines(
+                    make_turn_event(
+                        srs_turn=1,
+                        event_type=log.STATION_ACTIVATED,
+                        payload={"applied_upgrade": "DEFENSE", "salvage_before": 4, "salvage_after": 0},
+                    )
+                ),
+                event_format.format_srs_event_summary(
+                    make_turn_event(
+                        srs_turn=1,
+                        event_type=log.COMBAT_TRANSITIONED,
+                        payload={
+                            "phase_to": "PLAYER_ATTACK",
+                            "player_action": {"target_enemy_id": "enemy-1"},
+                            "target_position": [4, 4],
+                        },
+                    )
+                ),
+                event_format.format_srs_event_summary(
+                    make_turn_event(
+                        srs_turn=1,
+                        event_type=log.ENCOUNTER_ROLLED,
+                        payload={
+                            "roll": 0.12,
+                            "threshold": 0.18,
+                            "enemy_id": "enemy-1",
+                            "enemy_tier": "TIER2",
+                            "spawn_position": [4, 4],
+                        },
+                    )
+                ),
+            ]
+        )
+
+        self.assertEqual(
+            rendered,
+            "\n".join(
+                [
+                    "MOVE  accepted route=E,E to SRS=(7,4)",
+                    "SCAN  5x5 update: +6 known cells, total=34",
+                    "STOP  blocked by RIFT_BARRIER at SRS=(9,4)",
+                    "WARP  S accepted from SRS=(5,1)",
+                    "WARP  rejected: E edge is blocked by RIFT_BARRIER",
+                    "CACHE acquired: fuel +3 -> 6/9",
+                    "SALVAGE acquired: +1 inventory, durability +8 -> 100/100",
+                    "BASE station activated: full recovery complete",
+                    "UPGRADE defense +1, salvage 4 -> 0",
+                    "COMBAT phase=PLAYER_ATTACK target=enemy-1 at SRS=(5,5)",
+                    "ENCOUNTER roll=0.12 threshold=0.18 -> spawned enemy-1 TIER2 at SRS=(5,5)",
+                ]
+            ),
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -213,6 +213,75 @@ class CompactHudTests(unittest.TestCase):
             with self.subTest(forbidden=forbidden):
                 self.assertNotIn(forbidden, rendered)
 
+    def test_compact_hud_snapshot_matches_1076_baseline(self) -> None:
+        cells = filled_cells(".")
+        cells[(3, 5)] = "R"
+        lrs_state = make_lrs_state(
+            actual_map=make_actual_map(cells=cells),
+            player_position=(3, 5),
+            remaining_fuel=6,
+            known_cells={(3, 5): "R", (8, 8): "H"},
+            turn_count=18,
+        )
+        player_state = SrsPlayerCombatState(
+            durability=100,
+            durability_capacity=100,
+            energy=6,
+            energy_capacity=6,
+            photon_torpedo_ammo=6,
+            photon_torpedo_ammo_capacity=6,
+            salvage=1,
+        )
+        enemy = create_enemy_combat_state(
+            enemy_id="enemy-1",
+            tier=SrsEnemyTier.TIER2,
+            position=Position(4, 4),
+        )
+        state = replace(
+            make_srs_state(
+                sector_type=SectorType.RIFT,
+                blocked_edges=frozenset({Direction.W}),
+                fuel=6,
+                max_fuel=9,
+            ),
+            player_position=Position(6, 3),
+            srs_turn=4,
+            player_state=player_state,
+            combat_state=SrsCombatState(
+                player=player_state,
+                enemies={"enemy-1": enemy},
+                phase=SrsCombatPhase.PLAYER_MOVEMENT,
+                player_attack_target_id="enemy-1",
+            ),
+        )
+        state = place_object(state, Position(4, 2), SrsObjectType.SALVAGE, "salvage-a")
+        state = reveal_positions(state, _all_positions(state))
+
+        rendered = render_compact_hud(
+            CompactHudContext(
+                lrs_state=lrs_state,
+                srs_state=state,
+                last_event_summary="MOVE  accepted route=E,E to SRS=(7,4)",
+                cost_mode="TURN_ONLY",
+            )
+        )
+
+        self.assertEqual(
+            rendered,
+            "\n".join(
+                [
+                    "SECTOR  LRS=(3,5)  TYPE=RIFT  SRS=(7,4)  SENSOR=5x5",
+                    "TURN    LRS=18     SRS=4      COST=TURN_ONLY",
+                    "FUEL    6/9        STATUS=EXPLORING",
+                    "PLAYER  DUR=100/100  EN=6/6    TORP=6/6    SALVAGE=1",
+                    "COMBAT  PHASE=PLAYER_MOVEMENT  ENEMY=enemy-1 TIER2 hp=5 at SRS=(5,5)",
+                    "WARP    -",
+                    "REWARD  SALVAGE detected at SRS=(5,3)",
+                    "LAST    MOVE  accepted route=E,E to SRS=(7,4)",
+                ]
+            ),
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

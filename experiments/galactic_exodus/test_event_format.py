@@ -104,6 +104,55 @@ class LrsEventFormatTests(unittest.TestCase):
         self.assertEqual(event_format.format_lrs_event_summary(event), "EVENT UNKNOWN_EVENT")
         self.assertIn("UNKNOWN_EVENT", event_format.format_lrs_debug_event(event))
 
+    def test_lrs_event_wording_snapshot(self) -> None:
+        moved_state = make_state(actual_map=make_actual_map(cells=filled_cells(".")))
+        blocked_edge = ((1, 1), (1, 2))
+        discovered_rift_state = make_state(
+            actual_map=make_actual_map(cells=filled_cells("."), rift_edges=(blocked_edge,)),
+        )
+        known_rift_state = make_state(
+            actual_map=make_actual_map(cells=filled_cells("."), rift_edges=(blocked_edge,)),
+        )
+        engine.apply_command(known_rift_state, "N")
+        low_fuel_cells = filled_cells(".")
+        low_fuel_cells[(2, 1)] = "A"
+        low_fuel_state = make_state(
+            actual_map=make_actual_map(cells=low_fuel_cells),
+            remaining_fuel=2,
+        )
+        invalid_state = make_state(actual_map=make_actual_map(cells=filled_cells(".")))
+        home_state = make_state(
+            actual_map=make_actual_map(cells=filled_cells(".")),
+            player_position=(8, 7),
+            known_cells={(8, 7): ".", (8, 8): "H"},
+            visited_cells={(8, 7)},
+        )
+
+        rendered = "\n".join(
+            [
+                event_format.format_lrs_event_summary(engine.apply_command(moved_state, "E")),
+                event_format.format_lrs_event_summary(engine.apply_command(discovered_rift_state, "N")),
+                event_format.format_lrs_event_summary(engine.apply_command(known_rift_state, "N")),
+                event_format.format_lrs_event_summary(engine.apply_command(low_fuel_state, "E")),
+                event_format.format_lrs_event_summary(engine.apply_command(invalid_state, "X")),
+                event_format.format_lrs_event_summary(engine.apply_command(home_state, "N")),
+            ]
+        )
+
+        self.assertEqual(
+            rendered,
+            "\n".join(
+                [
+                    "MOVE  accepted to LRS=(2,1)",
+                    "RIFT  discovered: LRS edge (1,1)-N is blocked",
+                    "MOVE  rejected: known RIFT blocks N",
+                    "MOVE  rejected: insufficient fuel",
+                    "MOVE  rejected: invalid command",
+                    "MOVE  accepted to LRS=(8,8)",
+                ]
+            ),
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -3,50 +3,14 @@ from __future__ import annotations
 import unittest
 
 from experiments.galactic_exodus import display, engine, simulate
+from experiments.galactic_exodus.display_reference import expected_lrs_display_snapshot, make_lrs_display_snapshot_state
 from experiments.galactic_exodus.test_engine import filled_cells
 from experiments.galactic_exodus.test_engine import make_actual_map
 from experiments.galactic_exodus.test_engine import make_state
 
 
 def make_snapshot_state() -> engine.GameState:
-    cells = filled_cells(".")
-    cells[(4, 7)] = "N"
-    actual_map = make_actual_map(
-        cells=cells,
-        base_position=(4, 5),
-        resource_positions=((3, 6),),
-    )
-    vertical_rift = simulate.normalize_edge((3, 6), (4, 6))
-    horizontal_rift = simulate.normalize_edge((3, 5), (3, 4))
-    known_cells = {
-        (1, 1): "S",
-        (2, 1): ".",
-        (3, 1): ".",
-        (2, 4): ".",
-        (3, 4): ".",
-        (4, 4): ".",
-        (2, 5): ".",
-        (3, 5): ".",
-        (4, 5): "B",
-        (2, 6): ".",
-        (3, 6): "R",
-        (4, 6): ".",
-        (2, 7): ".",
-        (3, 7): ".",
-        (4, 7): "N",
-        (8, 8): "H",
-    }
-    return make_state(
-        actual_map=actual_map,
-        player_position=(3, 5),
-        known_cells=known_cells,
-        visited_cells={(1, 1), (3, 5)},
-        known_routes={
-            vertical_rift: engine.ROUTE_RIFT,
-            horizontal_rift: engine.ROUTE_RIFT,
-        },
-        path=[(1, 1), (2, 1), (3, 1), (3, 5)],
-    )
+    return make_lrs_display_snapshot_state()
 
 
 class DisplayTests(unittest.TestCase):
@@ -132,31 +96,7 @@ class DisplayTests(unittest.TestCase):
 
         rendered = display.render_lrs_border_light_map(state)
 
-        self.assertEqual(
-            rendered,
-            "\n".join(
-                [
-                    "  +---+---+---+---+---+---+---+---+",
-                    "8 | ?   ?   ?   ?   ?   ?   ?   H |",
-                    "  +                               +",
-                    "7 | ?   .   .   N   ?   ?   ?   ? |",
-                    "  +           +                   +",
-                    "6 | ?   .   R | .   ?   ?   ?   ? |",
-                    "  +           +                   +",
-                    "5 | ?   .   @   B   ?   ?   ?   ? |",
-                    "  +       +---+                   +",
-                    "4 | ?   .   .   .   ?   ?   ?   ? |",
-                    "  +                               +",
-                    "3 | ?   ?   ?   ?   ?   ?   ?   ? |",
-                    "  +                               +",
-                    "2 | ?   ?   ?   ?   ?   ?   ?   ? |",
-                    "  +                               +",
-                    "1 | S   .   .   ?   ?   ?   ?   ? |",
-                    "  +---+---+---+---+---+---+---+---+",
-                    "    1   2   3   4   5   6   7   8",
-                ]
-            ),
-        )
+        self.assertEqual(rendered, expected_lrs_display_snapshot())
 
 
 if __name__ == "__main__":
