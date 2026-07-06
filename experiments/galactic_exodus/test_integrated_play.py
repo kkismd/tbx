@@ -5,6 +5,7 @@ from pathlib import Path
 import subprocess
 import unittest
 
+from experiments.galactic_exodus import engine as lrs_engine
 from experiments.galactic_exodus import integrated_play
 from experiments.galactic_exodus.srs import model as srs_model
 
@@ -81,6 +82,14 @@ class IntegratedPlayCliTests(unittest.TestCase):
                 kind=integrated_play.COMMAND_EXIT,
                 directions=("E",),
                 raw="EXIT E",
+            ),
+        )
+        self.assertEqual(
+            integrated_play.parse_integrated_command("exit x"),
+            integrated_play.IntegratedCommand(
+                kind=integrated_play.COMMAND_EXIT,
+                directions=("X",),
+                raw="EXIT X",
             ),
         )
         self.assertEqual(
@@ -254,10 +263,11 @@ class IntegratedPlayCliTests(unittest.TestCase):
 
         self.assertIn("LAST    MOVE  accepted", rendered)
 
-    def test_exit_currently_rejected_without_changing_positions(self) -> None:
+    def test_exit_rejected_without_matching_warp_flag(self) -> None:
         state = integrated_play.create_integrated_game(42)
         old_lrs = state.lrs_state.player_position
         old_srs = state.srs_state.player_position
+        state.srs_state = self._replace_srs_position(state.srs_state, srs_model.Position(4, 4))
 
         result = integrated_play.execute_integrated_command(
             state,
@@ -267,8 +277,138 @@ class IntegratedPlayCliTests(unittest.TestCase):
         self.assertFalse(result.accepted)
         self.assertEqual(result.command_type, integrated_play.COMMAND_EXIT)
         self.assertEqual(state.lrs_state.player_position, old_lrs)
+        self.assertEqual(state.srs_state.player_position, srs_model.Position(4, 4))
+        self.assertEqual(old_srs, srs_model.Position(4, 4))
+        self.assertIn("no E warp point", result.summary_lines[0])
+
+    def test_exit_accepted_moves_lrs_east_and_enters_new_srs_from_west(self) -> None:
+        state = integrated_play.create_integrated_game(42)
+        state.lrs_state.player_position = (1, 1)
+        state.srs_state = self._replace_srs_position(state.srs_state, srs_model.Position(8, 4))
+
+        result = integrated_play.execute_integrated_command(
+            state,
+            integrated_play.parse_integrated_command("EXIT E"),
+        )
+
+        self.assertTrue(result.accepted)
+        self.assertTrue(result.changed_lrs_position)
+        self.assertTrue(result.changed_srs_position)
+        self.assertEqual(state.lrs_state.player_position, (2, 1))
+        self.assertEqual(state.srs_state.player_position, srs_model.Position(0, 4))
+        self.assertIn("EXIT  E accepted from SRS=(9,5)", result.summary_lines[0])
+        self.assertIn("LRS   moved E: LRS=(1,1) -> LRS=(2,1)", result.summary_lines[1])
+        self.assertIn("SRS   entered sector TYPE=", result.summary_lines[2])
+        self.assertIn("at SRS=(1,5)", result.summary_lines[2])
+
+    def test_exit_out_of_bounds_rejected(self) -> None:
+        state = integrated_play.create_integrated_game(42)
+        state.lrs_state.player_position = (8, 8)
+        state.srs_state = self._replace_srs_position(state.srs_state, srs_model.Position(8, 4))
+
+        result = integrated_play.execute_integrated_command(
+            state,
+            integrated_play.parse_integrated_command("EXIT E"),
+        )
+
+        self.assertFalse(result.accepted)
+        self.assertEqual(state.lrs_state.player_position, (8, 8))
+        self.assertEqual(state.srs_state.player_position, srs_model.Position(8, 4))
+        self.assertIn("would leave LRS map", result.summary_lines[0])
+
+    def test_exit_known_rift_rejected(self) -> None:
+        state = integrated_play.create_integrated_game(42)
+        state.lrs_state.player_position = (1, 1)
+        blocked_edge = lrs_engine.simulate.normalize_edge((1, 1), (2, 1))
+        state.lrs_state.known_routes[blocked_edge] = lrs_engine.ROUTE_RIFT
+        state.srs_state = self._replace_srs_position(state.srs_state, srs_model.Position(8, 4))
+
+        result = integrated_play.execute_integrated_command(
+            state,
+            integrated_play.parse_integrated_command("EXIT E"),
+        )
+
+        self.assertFalse(result.accepted)
+        self.assertEqual(state.lrs_state.player_position, (1, 1))
+        self.assertEqual(state.srs_state.player_position, srs_model.Position(8, 4))
+        self.assertIn("edge is blocked by RIFT", result.summary_lines[0])
+
+    def test_exit_invalid_direction_rejected_without_changing_positions(self) -> None:
+        state = integrated_play.create_integrated_game(42)
+        old_lrs = state.lrs_state.player_position
+        old_srs = state.srs_state.player_position
+
+        result = integrated_play.execute_integrated_command(
+            state,
+            integrated_play.parse_integrated_command("EXIT X"),
+        )
+
+        self.assertFalse(result.accepted)
+        self.assertEqual(result.command_type, integrated_play.COMMAND_EXIT)
+        self.assertEqual(state.lrs_state.player_position, old_lrs)
         self.assertEqual(state.srs_state.player_position, old_srs)
-        self.assertIn("exit is not implemented", result.summary_lines[0])
+        self.assertIn("invalid direction", result.summary_lines[0])
+
+    def test_hud_last_updates_after_exit(self) -> None:
+        state = integrated_play.create_integrated_game(42)
+        state.lrs_state.player_position = (1, 1)
+        state.srs_state = self._replace_srs_position(state.srs_state, srs_model.Position(8, 4))
+
+        result = integrated_play.execute_integrated_command(
+            state,
+            integrated_play.parse_integrated_command("EXIT E"),
+        )
+        rendered = integrated_play.render_integrated_response(state, result)
+
+        self.assertIn("LAST    SRS   entered sector TYPE=", rendered)
+
+    def test_initial_srs_has_all_four_exit_warp_flags(self) -> None:
+        state = integrated_play.create_integrated_game(42)
+
+        self.assertEqual(
+            state.srs_state.actual_map.cell_at(srs_model.Position(0, 4)).warp_flags,
+            frozenset({srs_model.Direction.W}),
+        )
+        self.assertEqual(
+            state.srs_state.actual_map.cell_at(srs_model.Position(8, 4)).warp_flags,
+            frozenset({srs_model.Direction.E}),
+        )
+        self.assertEqual(
+            state.srs_state.actual_map.cell_at(srs_model.Position(4, 0)).warp_flags,
+            frozenset({srs_model.Direction.S}),
+        )
+        self.assertEqual(
+            state.srs_state.actual_map.cell_at(srs_model.Position(4, 8)).warp_flags,
+            frozenset({srs_model.Direction.N}),
+        )
+
+    def test_new_srs_after_exit_keeps_all_four_exit_warp_flags(self) -> None:
+        state = integrated_play.create_integrated_game(42)
+        state.lrs_state.player_position = (1, 1)
+        state.srs_state = self._replace_srs_position(state.srs_state, srs_model.Position(8, 4))
+
+        integrated_play.execute_integrated_command(
+            state,
+            integrated_play.parse_integrated_command("EXIT E"),
+        )
+
+        self.assertEqual(state.srs_state.player_position, srs_model.Position(0, 4))
+        self.assertEqual(
+            state.srs_state.actual_map.cell_at(srs_model.Position(0, 4)).warp_flags,
+            frozenset({srs_model.Direction.W}),
+        )
+        self.assertEqual(
+            state.srs_state.actual_map.cell_at(srs_model.Position(8, 4)).warp_flags,
+            frozenset({srs_model.Direction.E}),
+        )
+        self.assertEqual(
+            state.srs_state.actual_map.cell_at(srs_model.Position(4, 0)).warp_flags,
+            frozenset({srs_model.Direction.S}),
+        )
+        self.assertEqual(
+            state.srs_state.actual_map.cell_at(srs_model.Position(4, 8)).warp_flags,
+            frozenset({srs_model.Direction.N}),
+        )
 
     def test_interact_currently_rejected_without_changing_positions(self) -> None:
         state = integrated_play.create_integrated_game(42)
@@ -328,3 +468,21 @@ class IntegratedPlayCliTests(unittest.TestCase):
             self.assertNotEqual(next_index, -1, fragment)
             self.assertGreater(next_index, current_index, fragment)
             current_index = next_index
+
+    def _replace_srs_position(
+        self,
+        state: srs_model.SrsGameState,
+        position: srs_model.Position,
+    ) -> srs_model.SrsGameState:
+        return srs_model.SrsGameState(
+            descriptor=state.descriptor,
+            actual_map=state.actual_map,
+            known_state=state.known_state,
+            persistent_state=state.persistent_state,
+            player_position=position,
+            objects=state.objects,
+            combat_state=state.combat_state,
+            srs_turn=state.srs_turn,
+            fuel=state.fuel,
+            max_fuel=state.max_fuel,
+        )
