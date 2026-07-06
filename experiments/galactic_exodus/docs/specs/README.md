@@ -80,7 +80,7 @@ B. spec file 反映用の後続 issue が作成済みで、そのリンクが本
 
 | Spec file | 主な入力 issue | 状態 |
 |---|---|---|
-| `srs_warp.md` | #1088, #1254, #1255 | #1262 で移植予定 |
+| [`srs_warp.md`](srs_warp.md) | #1088, #1254, #1255 | #1262 で追加 |
 | `srs_map_generation.md` | #1085, #1086, #1088 | #1263 / #1264 と連動 |
 | `srs_movement.md` | #1083, #1089 | #1267 で移植予定 |
 | `srs_encounter.md` | #1178, #1194 | 後続候補 |
