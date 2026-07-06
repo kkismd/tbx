@@ -10,6 +10,11 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Sequence, TextIO
 
+try:
+    import readline  # noqa: F401  # Enables line editing/backspace on Unix-like terminals.
+except ImportError:  # pragma: no cover - readline is platform dependent.
+    pass
+
 if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
@@ -109,6 +114,10 @@ class IntegratedGameState:
     srs_state: srs_model.SrsGameState
     last_event_summary: str | None = None
     session_aborted: bool = False
+
+
+class CommandInputInterrupted(Exception):
+    """Raised when command input cannot be decoded safely."""
 
 
 def build_parser(stderr: TextIO) -> argparse.ArgumentParser:
@@ -262,8 +271,12 @@ def main(
     while True:
         effective_stdout.write("COMMAND> ")
         effective_stdout.flush()
-        line = effective_stdin.readline()
-        if line == "":
+        try:
+            line = _read_command_line(effective_stdin)
+        except CommandInputInterrupted:
+            effective_stderr.write("input decode error; session ended\n")
+            break
+        if line is None:
             break
         command = parse_integrated_command(line)
         result = execute_integrated_command(state, command)
@@ -276,6 +289,29 @@ def main(
 def _normalize_command_text(raw: str) -> str:
     stripped = raw.strip().upper().replace(",", " ")
     return re.sub(r"\s+", " ", stripped)
+
+
+def _clean_command_input(text: str) -> str:
+    cleaned: list[str] = []
+    for character in text:
+        if character in {"\b", "\x7f"}:
+            if cleaned:
+                cleaned.pop()
+            continue
+        if ord(character) < 32 and character != "\t":
+            continue
+        cleaned.append(character)
+    return "".join(cleaned).strip()
+
+
+def _read_command_line(stdin: TextIO) -> str | None:
+    try:
+        line = stdin.readline()
+    except UnicodeDecodeError as exc:
+        raise CommandInputInterrupted from exc
+    if line == "":
+        return None
+    return _clean_command_input(line)
 
 
 def _all_directions(tokens: Sequence[str]) -> bool:
