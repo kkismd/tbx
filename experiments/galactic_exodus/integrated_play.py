@@ -62,12 +62,6 @@ _DIRECTION_ENUM = {
     "W": srs_model.Direction.W,
 }
 _LRS_DIRECTION_DELTAS = lrs_engine.COMMAND_DELTAS
-_ALL_EXIT_WARP_FLAGS = {
-    _ENTRY_POSITIONS["N"]: frozenset({_DIRECTION_ENUM["N"]}),
-    _ENTRY_POSITIONS["E"]: frozenset({_DIRECTION_ENUM["E"]}),
-    _ENTRY_POSITIONS["S"]: frozenset({_DIRECTION_ENUM["S"]}),
-    _ENTRY_POSITIONS["W"]: frozenset({_DIRECTION_ENUM["W"]}),
-}
 _MINIMAL_OBJECT_SPECS = {
     "R": (
         "resource-cache-1",
@@ -707,7 +701,48 @@ def _player_position_for_entry(entry_direction: str | None) -> srs_model.Positio
 def _warp_flags_for_entry(
     entry_direction: str | None,
 ) -> dict[srs_model.Position, frozenset[srs_model.Direction]]:
-    return dict(_ALL_EXIT_WARP_FLAGS)
+    del entry_direction
+
+    cells = _make_floor_rows({}, object_positions={})
+    warp_flags: dict[srs_model.Position, frozenset[srs_model.Direction]] = {}
+    for direction in srs_model.Direction:
+        for position in _edge_cells(direction):
+            if not _has_floor_square(cells, position):
+                continue
+            current_flags = warp_flags.get(position, frozenset())
+            warp_flags[position] = current_flags | frozenset({direction})
+    return warp_flags
+
+
+def _edge_cells(direction: srs_model.Direction) -> list[srs_model.Position]:
+    if direction is srs_model.Direction.N:
+        return [srs_model.Position(x, _SRS_MAP_HEIGHT - 1) for x in range(_SRS_MAP_WIDTH)]
+    if direction is srs_model.Direction.E:
+        return [srs_model.Position(_SRS_MAP_WIDTH - 1, y) for y in range(_SRS_MAP_HEIGHT)]
+    if direction is srs_model.Direction.S:
+        return [srs_model.Position(x, 0) for x in range(_SRS_MAP_WIDTH)]
+    return [srs_model.Position(0, y) for y in range(_SRS_MAP_HEIGHT)]
+
+
+def _has_floor_square(
+    cells: Sequence[Sequence[srs_model.SrsCell]],
+    position: srs_model.Position,
+) -> bool:
+    for min_x in range(position.x - 1, position.x + 1):
+        for min_y in range(position.y - 1, position.y + 1):
+            if min_x < 0 or min_y < 0:
+                continue
+            if min_x + 1 >= _SRS_MAP_WIDTH or min_y + 1 >= _SRS_MAP_HEIGHT:
+                continue
+            square = (
+                cells[min_y][min_x],
+                cells[min_y][min_x + 1],
+                cells[min_y + 1][min_x],
+                cells[min_y + 1][min_x + 1],
+            )
+            if all(cell.terrain is srs_model.SrsTerrainType.FLOOR for cell in square):
+                return True
+    return False
 
 
 def _make_floor_rows(
