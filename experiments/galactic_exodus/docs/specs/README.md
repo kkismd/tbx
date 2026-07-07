@@ -85,7 +85,7 @@ B. spec file 反映用の後続 issue が作成済みで、そのリンクが本
 | [`srs_movement.md`](srs_movement.md) | #1083, #1089 | #1267 で追加 |
 | `srs_encounter.md` | #1178, #1194 | 後続候補 |
 | `srs_combat.md` | #1178, #1194 | 後続候補 |
-| `integrated_cli.md` | #1241, #1242, #1243, #1244, #1245 | #1268 と連動 |
+| [`integrated_cli.md`](integrated_cli.md) | #1241, #1242, #1243, #1244, #1245 | #1268 / #1279 で追加・補完 |
 | `display.md` | #1076, #1214, #1218, #1230-#1235 | 後続候補 |
 | `balance.md` | #1178, #1194, #1257 | 後続候補 |
 
