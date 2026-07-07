@@ -232,13 +232,42 @@ class SrsRenderTests(unittest.TestCase):
 
         self.assertEqual(self._display_cell(rendered, display_x=7, display_y=4), "@")
 
-    def test_display_map_enemy_overlay_uses_e_for_known_cell(self) -> None:
+    def test_display_map_enemy_overlay_uses_e1_for_known_cell(self) -> None:
         state = reveal_positions(make_state(), [Position(4, 4)])
         state = self._with_enemy(state, enemy_id="enemy-1", position=Position(4, 4))
 
         rendered = render_display_map(state)
 
-        self.assertEqual(self._display_cell(rendered, display_x=5, display_y=5), "e")
+        self.assertEqual(self._display_cell(rendered, display_x=5, display_y=5), "e1")
+
+    def test_display_map_multiple_enemies_use_stable_target_ids(self) -> None:
+        state = reveal_positions(make_state(), [Position(3, 4), Position(5, 4)])
+        enemy_1 = create_enemy_combat_state(
+            enemy_id="enemy-1",
+            tier=SrsEnemyTier.TIER2,
+            position=Position(3, 4),
+        )
+        enemy_2 = create_enemy_combat_state(
+            enemy_id="enemy-2",
+            tier=SrsEnemyTier.TIER1,
+            position=Position(5, 4),
+        )
+        state = replace(
+            state,
+            combat_state=SrsCombatState(
+                enemies={"enemy-1": enemy_1, "enemy-2": enemy_2},
+                player_attack_target_id="enemy-1",
+            ),
+        )
+
+        rendered = render_display_map(state)
+
+        ordered_positions = [enemy.position for enemy in state.combat_state.enemies.values()]
+        first_display_x, first_display_y = to_display_position(ordered_positions[0])
+        second_display_x, second_display_y = to_display_position(ordered_positions[1])
+
+        self.assertEqual(self._display_cell(rendered, display_x=first_display_x, display_y=first_display_y), "e1")
+        self.assertEqual(self._display_cell(rendered, display_x=second_display_x, display_y=second_display_y), "e2")
 
     def test_display_map_hides_enemy_on_unknown_cell(self) -> None:
         state = self._with_enemy(make_state(), enemy_id="enemy-1", position=Position(4, 4))
@@ -265,7 +294,7 @@ class SrsRenderTests(unittest.TestCase):
 
         rendered = render_display_map(state)
 
-        self.assertEqual(self._display_cell(rendered, display_x=5, display_y=5), "e")
+        self.assertEqual(self._display_cell(rendered, display_x=5, display_y=5), "e1")
 
     def test_display_map_object_symbols_follow_contract(self) -> None:
         positions = [
@@ -338,7 +367,17 @@ class SrsRenderTests(unittest.TestCase):
         self.assertEqual(self._display_cell(rendered, display_x=5, display_y=5), "?")
         self.assertNotIn("*", rendered)
         self.assertNotIn("^", rendered)
-        self.assertNotIn("e", rendered)
+        self.assertNotIn("e1", rendered)
+
+    def test_display_map_uses_fixed_width_tokens_when_combat_targets_exist(self) -> None:
+        state = reveal_positions(make_state(), [Position(4, 4)])
+        state = self._with_enemy(state, enemy_id="enemy-1", position=Position(4, 4))
+
+        rendered = render_display_map(state)
+        lines = rendered.splitlines()
+
+        self.assertEqual(lines[4], " 5   ?  ?  ?  ? e1  ?  ?  ?  ?")
+        self.assertEqual(lines[10], "     1  2  3  4  5  6  7  8  9")
 
     def test_display_map_snapshot_matches_issue_baseline_shape(self) -> None:
         rendered = render_display_map(self._build_baseline_snapshot_state())
