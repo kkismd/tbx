@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from collections.abc import Mapping, Sequence
+
 from experiments.galactic_exodus.srs.model import Direction, Position, SrsGameState, SrsObjectType, SrsTerrainType
 
 
@@ -47,15 +49,32 @@ def render_known_map_spaced(state: SrsGameState) -> str:
 
 
 def render_display_map(state: SrsGameState) -> str:
-    rows: list[str] = []
+    enemy_tokens_by_position = _combat_enemy_tokens_by_position(state)
+    raw_rows: list[tuple[int, list[str]]] = []
     for display_y in range(state.actual_map.height, 0, -1):
         symbols: list[str] = []
         for display_x in range(1, state.actual_map.width + 1):
             internal_position = from_display_position(display_x, display_y)
-            symbols.append(_display_cell_symbol(state, internal_position))
-        rows.append(f"{display_y:>2}  {' '.join(symbols)}")
+            symbols.append(
+                _display_cell_symbol(
+                    state,
+                    internal_position,
+                    enemy_tokens_by_position=enemy_tokens_by_position,
+                )
+            )
+        raw_rows.append((display_y, symbols))
 
-    x_axis = "    " + " ".join(str(display_x) for display_x in range(1, state.actual_map.width + 1))
+    cell_token_width = _display_cell_token_width(
+        raw_rows,
+        force_min_width=2 if enemy_tokens_by_position else 1,
+    )
+    rows = [
+        f"{display_y:>2}  " + " ".join(symbol.rjust(cell_token_width) for symbol in symbols)
+        for display_y, symbols in raw_rows
+    ]
+    x_axis = "    " + " ".join(
+        str(display_x).rjust(cell_token_width) for display_x in range(1, state.actual_map.width + 1)
+    )
     return "\n".join([*rows, "", x_axis])
 
 
@@ -91,15 +110,44 @@ def _render_position(state: SrsGameState, position: Position) -> str:
     return _known_cell_symbol(state, position)
 
 
-def _display_cell_symbol(state: SrsGameState, position: Position) -> str:
+def _display_cell_symbol(
+    state: SrsGameState,
+    position: Position,
+    *,
+    enemy_tokens_by_position: Mapping[Position, str] | None = None,
+) -> str:
     if position == state.player_position:
         return "@"
     if position not in state.known_state.discovered_cells:
         return UNKNOWN_SYMBOL
-    if _has_visible_enemy(state, position):
+    if enemy_tokens_by_position is not None:
+        enemy_token = enemy_tokens_by_position.get(position)
+        if enemy_token is not None:
+            return enemy_token
+    elif _has_visible_enemy(state, position):
         return "e"
 
     return _known_cell_symbol(state, position)
+
+
+def _combat_enemy_tokens_by_position(state: SrsGameState) -> dict[Position, str]:
+    combat_state = state.combat_state
+    if combat_state is None:
+        return {}
+
+    return {
+        enemy.position: f"e{index}"
+        for index, enemy in enumerate(combat_state.enemies.values(), start=1)
+    }
+
+
+def _display_cell_token_width(
+    raw_rows: Sequence[tuple[int, Sequence[str]]],
+    *,
+    force_min_width: int,
+) -> int:
+    longest = max((len(symbol) for _, symbols in raw_rows for symbol in symbols), default=1)
+    return max(force_min_width, longest)
 
 
 def _has_visible_enemy(state: SrsGameState, position: Position) -> bool:
