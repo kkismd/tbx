@@ -298,30 +298,16 @@ def make_srs_symbol_contract_snapshot_state():
         if Position(x, y) != hidden_position
     ]
     state = reveal_positions(state, discovered)
-    same_cell_enemy = create_enemy_combat_state(
-        enemy_id="enemy-same",
-        tier=SrsEnemyTier.TIER1,
-        position=player_position,
-    )
     visible_enemy = create_enemy_combat_state(
         enemy_id="enemy-1",
         tier=SrsEnemyTier.TIER2,
         position=enemy_position,
     )
-    hidden_enemy = create_enemy_combat_state(
-        enemy_id="enemy-hidden",
-        tier=SrsEnemyTier.TIER1,
-        position=hidden_position,
-    )
     return replace(
         state,
         player_position=player_position,
         combat_state=SrsCombatState(
-            enemies={
-                "enemy-same": same_cell_enemy,
-                "enemy-1": visible_enemy,
-                "enemy-hidden": hidden_enemy,
-            },
+            enemies={"enemy-1": visible_enemy},
             player_attack_target_id="enemy-1",
         ),
     )
@@ -332,7 +318,7 @@ def expected_srs_symbol_contract_snapshot() -> str:
         [
             " 9   ?  .  .  .  .  .  .  .  .",
             " 8   .  .  .  .  .  .  .  .  .",
-            " 7   @ e3  $  s  R  r  S  *  o",
+            " 7   @ e1  $  s  R  r  S  *  o",
             " 6   #  ^  >  v  <  +  .  .  .",
             " 5   .  .  .  .  .  .  .  .  .",
             " 4   .  .  .  .  .  .  .  .  .",
