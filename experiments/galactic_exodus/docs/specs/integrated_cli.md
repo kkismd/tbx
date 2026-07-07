@@ -37,6 +37,18 @@ LOG  optional
 現行 `integrated_play.py` では `RESULT`, `LRS`, `SRS`, `HUD` を返す。
 詳細LOG panelは必要に応じて後続で追加する。
 
+combat中に target指定commandを受け付ける場合は、SRS map上の `e` 表示だけに依存せず、response内に target id と位置の対応を表示する必要がある。
+
+```text
+TARGETS optional:
+  E1  enemy_id=<id>  tier=TIER1  position=(display_x,display_y)  hp=<current>/<max>
+  E2  enemy_id=<id>  tier=TIER2  position=(display_x,display_y)  hp=<current>/<max>
+```
+
+現行renderでは visible enemy はSRS map上で `e` として描画される。
+`E1` / `E2` のような識別子はmap glyphではなく、TARGETS panel または combat summaryで提示されるtarget idとする。
+TARGETS panel自体は #1281 時点ではCLI表示契約として定義し、実装は後続issueで扱う。
+
 ## command parsing
 
 入力は次の正規化を受ける。
@@ -57,8 +69,8 @@ CLI command surface:
 | `WAIT` | 探索中に移動せずSRS turnを進める | no | no |
 | `INTERACT` | SRS object interaction | no | no |
 | `EXIT <dir>` | SRSから隣接LRS sectorへ移動 | yes, if accepted | yes, new sector entry |
-| `ATTACK <target>` | combat player action | no | no |
-| `ATTACK <weapon> <target>` | weapon指定つきcombat player action | no | no |
+| `ATTACK <target_id>` | combat player action | no | no |
+| `ATTACK <weapon> <target_id>` | weapon指定つきcombat player action | no | no |
 | `SKIP` | combat player attack phaseで攻撃しない | no | no |
 | `COUNTER` | enemy attackへのphaser counterattack | no | no |
 | `DEFEND` | enemy attackへのdefend reaction | no | no |
@@ -314,8 +326,8 @@ phase別のcommand availabilityは次を基本とする。
 | `WAIT` | yes | no | no | no |
 | `INTERACT` | yes | no | no | no |
 | `EXIT <dir>` | yes | no | no | no |
-| `ATTACK <target>` | no | yes | no | no |
-| `ATTACK <weapon> <target>` | no | optional | no | no |
+| `ATTACK <target_id>` | no | yes | no | no |
+| `ATTACK <weapon> <target_id>` | no | optional | no | no |
 | `SKIP` | no | yes | no | no |
 | `COUNTER` | no | no | yes | no |
 | `DEFEND` | no | no | yes | no |
@@ -325,6 +337,46 @@ phase別のcommand availabilityは次を基本とする。
 | `Q` / `QUIT` | yes | yes | yes | yes |
 
 phaseに合わないcommandはrejectし、LRS / SRS positionとSRS turnを進めない。
+
+## combat target identity
+
+combat commandで使う `<target_id>` は、SRS map glyphそのものではなく、responseで提示されるtarget idである。
+
+現行のSRS map表示では、visible enemy は `e` として描画される。
+これは「そこに敵がいる」ことだけを示すglyphであり、複数敵を一意に識別できない。
+そのため、`ATTACK <target_id>` を受け付けるCLIは、同じresponse内でtarget idと敵の位置・内部enemy_idの対応を表示しなければならない。
+
+表示契約:
+
+```text
+SRS:
+  visible enemies are rendered as `e`
+
+TARGETS:
+  E1  enemy_id=<engine_enemy_id>  tier=<tier>  pos=(display_x,display_y)  hp=<current>/<max>
+  E2  enemy_id=<engine_enemy_id>  tier=<tier>  pos=(display_x,display_y)  hp=<current>/<max>
+```
+
+`E1` / `E2` はCLI表示用の短いtarget idであり、engine内部の `enemy_id` と同一である必要はない。
+ただし、同一response内で必ず対応を示す。
+
+例:
+
+```text
+SRS:
+  9  ? ? ? ? ? ? ? ? ?
+  8  ? ? ? ? ? ? ? ? ?
+  7  ? ? . . e ? ? ? ?
+  6  ? ? . @ . ? ? ? ?
+
+TARGETS:
+  E1  enemy_id=enemy-0001  tier=TIER1  pos=(5,7)  hp=3/3
+
+COMMAND> ATTACK PHASER E1
+```
+
+後続実装では、parserはCLI target idを engine enemy_idへ解決してからSRS combat commandへ委譲する。
+TARGETS panel / combat summaryの実装は #1281 時点ではdeferredとする。
 
 ## combat phase command loop
 
@@ -361,18 +413,21 @@ combat中は `MOVE`, `WAIT`, `INTERACT`, `EXIT` は受理しない。
 `COMBAT_PLAYER_ACTION` では、プレイヤーは攻撃するか、攻撃せずにskipするかを選ぶ。
 
 ```text
-ATTACK <target>
-ATTACK <weapon> <target>
+ATTACK <target_id>
+ATTACK <weapon> <target_id>
 SKIP
 ```
 
-`ATTACK <target>` は、初期CLIでは既定武器または実装側の現行既定に委譲する。
+`ATTACK <target_id>` は、初期CLIでは既定武器または実装側の現行既定に委譲する。
 weapon選択をCLIに露出する場合は、次の形式を使う。
 
 ```text
 ATTACK PHASER E1
 ATTACK TORPEDO E1
 ```
+
+ただし、`E1` はSRS map上のglyphではなく、TARGETS panelまたはcombat summaryで提示されるtarget idである。
+`E1` が表示されていない状態で `ATTACK PHASER E1` を受け付けてはならない。
 
 `SKIP` は、player attack phaseで攻撃せずにenemy action sequenceへ進めるcombat系commandである。
 combat / enemy_presence active のため、追加のencounter rollは行わない。
@@ -450,7 +505,7 @@ combat phaseの状態遷移は次を基本とする。
 
 ```text
 COMBAT_PLAYER_ACTION
-  ATTACK <target>
+  ATTACK <target_id>
     -> enemy destroyed: enemy removed
     -> remaining enemy exists: COMBAT_REACTION or enemy action sequence
     -> no enemy remains: EXPLORATION
@@ -569,6 +624,8 @@ REJECTED_ENEMY_PRESENCE
 - HELP summaryからstandalone `N/E/S/W` を外し、`MOVE <route>` を案内する実装
 - integrated CLIに `WAIT` / `ATTACK` / `SKIP` / `COUNTER` / `DEFEND` parserを追加する実装
 - integrated CLIに `cli_phase` / `pending_enemy_attack` を追加する実装
+- TARGETS panel / combat summaryでtarget idとengine enemy_idの対応を表示する実装
+- target idをengine enemy_idへ解決してSRS combat commandへ渡す実装
 - EXIT時のLRS fuel消費
 - EXIT時のdurability / ship status制約
 - full combat phaseとintegrated CLI command loopの実装統合
