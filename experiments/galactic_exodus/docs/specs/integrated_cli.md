@@ -37,17 +37,28 @@ LOG  optional
 現行 `integrated_play.py` では `RESULT`, `LRS`, `SRS`, `HUD` を返す。
 詳細LOG panelは必要に応じて後続で追加する。
 
-combat中に target指定commandを受け付ける場合は、SRS map上の `e` 表示だけに依存せず、response内に target id と位置の対応を表示する必要がある。
+combat中に target指定commandを受け付ける場合は、SRS map上で visible enemy を `e1`, `e2`, ... のような target id 付き token として直接表示する。
+同じresponse内では、TARGETS panel または combat summary により、その `E1` / `E2` と内部 `enemy_id` の対応も補助表示する。
 
 ```text
+combat SRS map:
+  visible targetable enemies are rendered as e1, e2, ...
+  non-enemy cells are padded to the same cell token width
+
 TARGETS optional:
   E1  enemy_id=<id>  tier=TIER1  position=(display_x,display_y)  hp=<current>/<max>
   E2  enemy_id=<id>  tier=TIER2  position=(display_x,display_y)  hp=<current>/<max>
 ```
 
-現行renderでは visible enemy はSRS map上で `e` として描画される。
-`E1` / `E2` のような識別子はmap glyphではなく、TARGETS panel または combat summaryで提示されるtarget idとする。
-TARGETS panel自体は #1281 時点ではCLI表示契約として定義し、実装は後続issueで扱う。
+combat display map では複数文字tokenを扱うため、cell幅を固定する。
+
+```text
+cell_token_width = max(2, longest_visible_cell_token_width)
+```
+
+通常cell symbolも同じ幅にpaddingし、列位置が崩れないようにする。
+map上の `e1` / `e2` は表示tokenであり、CLI入力では case-insensitive に `E1` / `E2` を受け付ける。
+TARGETS panel自体は #1281 / #1283 時点ではCLI表示契約として定義し、実装は後続issueで扱う。
 
 ## command parsing
 
@@ -340,17 +351,18 @@ phaseに合わないcommandはrejectし、LRS / SRS positionとSRS turnを進め
 
 ## combat target identity
 
-combat commandで使う `<target_id>` は、SRS map glyphそのものではなく、responseで提示されるtarget idである。
+combat commandで使う `<target_id>` は、combat中のSRS map上に直接表示される target id と対応する。
 
-現行のSRS map表示では、visible enemy は `e` として描画される。
-これは「そこに敵がいる」ことだけを示すglyphであり、複数敵を一意に識別できない。
-そのため、`ATTACK <target_id>` を受け付けるCLIは、同じresponse内でtarget idと敵の位置・内部enemy_idの対応を表示しなければならない。
+combat中の visible enemy は `e1`, `e2`, ... のような複数文字tokenで描画する。
+これは targetable enemy を map 上で直接識別するための表示契約であり、TARGETS panel はその補助情報を示す。
+そのため、`ATTACK <target_id>` を受け付けるCLIは、同じresponse内で map token、target id、敵の位置、内部enemy_id の対応を表示しなければならない。
 
 表示契約:
 
 ```text
 SRS:
-  visible enemies are rendered as `e`
+  visible targetable enemies are rendered as `e1`, `e2`, ...
+  non-enemy cells are padded to the same fixed cell token width
 
 TARGETS:
   E1  enemy_id=<engine_enemy_id>  tier=<tier>  pos=(display_x,display_y)  hp=<current>/<max>
@@ -358,25 +370,33 @@ TARGETS:
 ```
 
 `E1` / `E2` はCLI表示用の短いtarget idであり、engine内部の `enemy_id` と同一である必要はない。
-ただし、同一response内で必ず対応を示す。
+ただし、同一response内で必ず `e1 -> E1 -> engine_enemy_id` の対応を示す。
+入力時は case-insensitive に `E1` / `E2` として扱う。
+
+固定幅cell tokenは次で決める。
+
+```text
+cell_token_width = max(2, longest_visible_cell_token_width)
+```
 
 例:
 
 ```text
 SRS:
-  9  ? ? ? ? ? ? ? ? ?
-  8  ? ? ? ? ? ? ? ? ?
-  7  ? ? . . e ? ? ? ?
-  6  ? ? . @ . ? ? ? ?
+  9  ?  ?  ?  ?  ?  ?  ?  ?  ?
+  8  ?  ?  ?  ?  ?  ?  ?  ?  ?
+  7  ?  ?  .  .  e1 ?  ?  ?  ?
+  6  ?  ?  .  @  .  e2 ?  ?  ?
 
 TARGETS:
   E1  enemy_id=enemy-0001  tier=TIER1  pos=(5,7)  hp=3/3
+  E2  enemy_id=enemy-0002  tier=TIER2  pos=(6,6)  hp=5/5
 
 COMMAND> ATTACK PHASER E1
 ```
 
 後続実装では、parserはCLI target idを engine enemy_idへ解決してからSRS combat commandへ委譲する。
-TARGETS panel / combat summaryの実装は #1281 時点ではdeferredとする。
+TARGETS panel / combat summaryは map 上の `e1` / `e2` を補助説明する表示として残す。
 
 ## combat phase command loop
 
@@ -426,7 +446,7 @@ ATTACK PHASER E1
 ATTACK TORPEDO E1
 ```
 
-ただし、`E1` はSRS map上のglyphではなく、TARGETS panelまたはcombat summaryで提示されるtarget idである。
+ただし、`E1` はSRS map上の `e1` と対応するCLI target idであり、同じresponse内でTARGETS panelまたはcombat summaryにも対応を表示する。
 `E1` が表示されていない状態で `ATTACK PHASER E1` を受け付けてはならない。
 
 `SKIP` は、player attack phaseで攻撃せずにenemy action sequenceへ進めるcombat系commandである。
@@ -624,6 +644,8 @@ REJECTED_ENEMY_PRESENCE
 - HELP summaryからstandalone `N/E/S/W` を外し、`MOVE <route>` を案内する実装
 - integrated CLIに `WAIT` / `ATTACK` / `SKIP` / `COUNTER` / `DEFEND` parserを追加する実装
 - integrated CLIに `cli_phase` / `pending_enemy_attack` を追加する実装
+- combat中のSRS mapで `e1` / `e2` を表示する実装
+- combat display mapで固定幅cell token描画を行う実装
 - TARGETS panel / combat summaryでtarget idとengine enemy_idの対応を表示する実装
 - target idをengine enemy_idへ解決してSRS combat commandへ渡す実装
 - EXIT時のLRS fuel消費
