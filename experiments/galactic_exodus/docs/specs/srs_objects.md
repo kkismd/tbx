@@ -357,7 +357,7 @@ once drop_salvage is true, #1276 object lifecycle applies.
 ## Follow-up ordering memo
 
 ```text
-1. #1277 Step 1 records the B decision in the source-of-truth spec.
+1. #1277 records the B decision in the source-of-truth spec.
 2. #1277 / #1292 synchronized implementation / fixtures / tests with the B decision.
 3. #1276 replaces immediate enemy drop reward with dropped SALVAGE object lifecycle.
 4. #1278 randomizes drop/no-drop decision without conflicting with #1276.
