@@ -55,7 +55,7 @@ RECOVER_DURABILITY は SALVAGE pickup では非対応にし、durability recover
 
 この文書は #1277 の仕様判断を反映した source-of-truth である。
 
-注意: #1277 Step 1 は documentation-only であり、実装・fixture・snapshot はまだ B 方針へ同期しない。実装同期は #1277 Step 2 で扱う。
+#1277 / #1292 により、実装・fixture・test は B 方針へ同期済み。
 
 ## Map SALVAGE pickup
 
@@ -87,8 +87,7 @@ RECOVER_DURABILITY
 
 `RECOVER_DURABILITY` が SALVAGE reward choice として指定された場合は、暗黙に `STORE_ONLY` へ丸めず、明示的に reject する。
 
-reject reason 名は実装PRで確定する。
-候補:
+reject reason:
 
 ```text
 REJECTED_UNSUPPORTED_SALVAGE_CHOICE
@@ -184,8 +183,7 @@ RECOVER_DURABILITY
 
 `RECOVER_DURABILITY` が dropped SALVAGE pickup の `salvage_choice` として指定された場合も、暗黙に `STORE_ONLY` へ丸めず、明示的に reject する。
 
-reject reason 名は実装PRで確定する。
-候補:
+reject reason:
 
 ```text
 REJECTED_UNSUPPORTED_SALVAGE_CHOICE
@@ -287,19 +285,19 @@ SALVAGE pickup does not provide durability recovery.
 
 ## Fixture regression references
 
-#1266 / #1288 時点で確認済みの fixture regression:
+#1292 時点で確認済みの fixture regression:
 
 ```text
 test_salvage_placeholder
-test_salvage_recover_durability
+test_salvage_reject_recover_durability
+test_salvage_recover_energy
+test_salvage_recover_photon_torpedo_ammo
 test_base_upgrade_defense
 test_combat_salvage_drop_tier3_energy
 test_combat_salvage_no_drop_tier1
 ```
 
-#1277 により、`test_salvage_recover_durability` は後続の実装同期で更新または置換される。
-
-この spec 更新では fixture を変更しない。fixture は実装済み挙動の regression 固定であり、spec変更に合わせた更新は別PRで行う。
+#1293 は documentation-only であり、fixture は変更しない。dropped SALVAGE object lifecycle の fixture 更新は #1294 で扱う。
 
 ## Deferred / follow-up issues
 
@@ -338,7 +336,7 @@ Durability recovery:
 Implementation sync:
 
 ```text
-#1277 Step 2 updates engine.py / model.py / fixtures / tests to match this spec.
+#1277 / #1292 updated engine.py / fixtures / tests to match this spec.
 ```
 
 ### #1278
@@ -362,7 +360,7 @@ once drop_salvage is true, #1276 object lifecycle applies.
 
 ```text
 1. #1277 Step 1 records the B decision in the source-of-truth spec.
-2. #1277 Step 2 synchronizes implementation / fixtures / tests with the B decision.
+2. #1277 / #1292 synchronized implementation / fixtures / tests with the B decision.
 3. #1276 replaces immediate enemy drop reward with dropped SALVAGE object lifecycle.
 4. #1278 randomizes drop/no-drop decision without conflicting with #1276.
 5. #1275 should be integrated into the same spawn-based lifecycle after #1276.
