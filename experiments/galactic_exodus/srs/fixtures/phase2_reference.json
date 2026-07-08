@@ -297,13 +297,37 @@
       }
     },
     {
-      "case_id": "combat_salvage_drop_tier3_energy",
-      "fixture_path": "combat_salvage_drop_tier3_energy_9x9.json",
-      "coverage_tags": ["COMBAT_PLAYER_ATTACK", "REWARD_ENEMY_DROP"],
+      "case_id": "combat_salvage_drop_object_tier3",
+      "fixture_path": "combat_salvage_drop_object_tier3_9x9.json",
+      "coverage_tags": ["COMBAT_PLAYER_ATTACK", "REWARD_ENEMY_DROP_OBJECT"],
       "final_expect": {
         "cost_mode": "TURN_ONLY",
         "player_position": [1, 4],
         "event_types": ["COMBAT_TRANSITIONED"],
+        "combat_phase": "ENEMY_ACTION",
+        "combat_turn": 0,
+        "enemy_presence": false,
+        "player_energy": 3,
+        "player_torpedo_ammo": 5,
+        "player_salvage": 1,
+        "combat_player_durability": 100,
+        "combat_player_energy": 3,
+        "combat_player_torpedo_ammo": 5,
+        "combat_enemy_positions": {},
+        "combat_enemy_durabilities": {},
+        "outcome": "ACCEPTED",
+        "discovered_count": 81
+      }
+    },
+    {
+      "case_id": "combat_salvage_drop_then_interact",
+      "fixture_path": "combat_salvage_drop_then_interact_9x9.json",
+      "coverage_tags": ["COMBAT_PLAYER_ATTACK", "REWARD_ENEMY_DROP_PICKUP"],
+      "final_expect": {
+        "cost_mode": "TURN_ONLY",
+        "srs_turn": 2,
+        "player_position": [3, 4],
+        "event_types": ["COMBAT_TRANSITIONED", "MOVE_ACCEPTED", "OBSERVATION_UPDATED", "OBSERVATION_UPDATED", "INTERACT_ACCEPTED", "OBJECT_CONSUMED"],
         "combat_phase": "ENEMY_ACTION",
         "combat_turn": 0,
         "enemy_presence": false,
@@ -313,6 +337,7 @@
         "combat_player_durability": 100,
         "combat_player_energy": 6,
         "combat_player_torpedo_ammo": 5,
+        "consumed_object_ids": ["enemy-drop-salvage-enemy-3"],
         "combat_enemy_positions": {},
         "combat_enemy_durabilities": {},
         "outcome": "ACCEPTED",

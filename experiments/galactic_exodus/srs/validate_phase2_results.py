@@ -37,7 +37,8 @@ REQUIRED_CASE_IDS = {
     "persistent_discovered_cells_restore",
     "combat_encounter_wait_nebula",
     "combat_enemy_counterattack",
-    "combat_salvage_drop_tier3_energy",
+    "combat_salvage_drop_object_tier3",
+    "combat_salvage_drop_then_interact",
 }
 ALLOWED_EXPECT_FIELDS = {
     "cost_mode",
@@ -122,7 +123,8 @@ def validate(reference_path: Path) -> dict[str, Any]:
     _validate_salvage_photon_pickup(results["salvage_recover_photon_torpedo_ammo"])
     _validate_encounter_payload(results["combat_encounter_wait_nebula"])
     _validate_enemy_counterattack(results["combat_enemy_counterattack"])
-    _validate_enemy_drop_reward(results["combat_salvage_drop_tier3_energy"])
+    _validate_enemy_drop_object(results["combat_salvage_drop_object_tier3"])
+    _validate_enemy_drop_pickup(results["combat_salvage_drop_then_interact"])
     return {
         "case_count": len(cases),
         "fixture_dir": str(FIXTURES_DIR.relative_to(REPO_ROOT)),
@@ -431,19 +433,26 @@ def _validate_enemy_counterattack(result: SrsFixtureRunResult) -> None:
         raise ValidationError("combat_enemy_counterattack: representative reaction damage values changed")
 
 
-def _validate_enemy_drop_reward(result: SrsFixtureRunResult) -> None:
+def _validate_enemy_drop_object(result: SrsFixtureRunResult) -> None:
     payload = result.log.events[0].payload.get("player_action")
     if not isinstance(payload, dict):
-        raise ValidationError("combat_salvage_drop_tier3_energy: player_action payload is required")
-    reward = payload.get("salvage_reward")
-    if not isinstance(reward, dict):
-        raise ValidationError("combat_salvage_drop_tier3_energy: salvage_reward payload is required")
-    if reward.get("reward_source") != "ENEMY_DROP":
-        raise ValidationError("combat_salvage_drop_tier3_energy: reward source must be ENEMY_DROP")
-    if reward.get("selected_salvage_choice") != "RECOVER_ENERGY":
-        raise ValidationError("combat_salvage_drop_tier3_energy: energy recovery choice must be recorded")
-    if reward.get("salvage_after") != 3 or reward.get("energy_after") != 6:
-        raise ValidationError("combat_salvage_drop_tier3_energy: representative enemy drop reward values changed")
+        raise ValidationError("combat_salvage_drop_object_tier3: player_action payload is required")
+    salvage_drop = payload.get("salvage_drop")
+    if not isinstance(salvage_drop, dict):
+        raise ValidationError("combat_salvage_drop_object_tier3: salvage_drop payload is required")
+    if salvage_drop.get("reward_source") != "ENEMY_DROP" or salvage_drop.get("spawned") is not True:
+        raise ValidationError("combat_salvage_drop_object_tier3: dropped object payload must record ENEMY_DROP spawn")
+    if salvage_drop.get("salvage_value") != 2 or salvage_drop.get("enemy_tier") != "TIER3":
+        raise ValidationError("combat_salvage_drop_object_tier3: representative drop value changed")
+    if result.final_state.player_state.salvage != 1 or result.final_state.player_state.energy != 3:
+        raise ValidationError("combat_salvage_drop_object_tier3: kill step must not apply immediate reward")
+
+
+def _validate_enemy_drop_pickup(result: SrsFixtureRunResult) -> None:
+    if result.final_state.player_state.salvage != 3 or result.final_state.player_state.energy != 6:
+        raise ValidationError("combat_salvage_drop_then_interact: pickup reward values changed")
+    if "enemy-drop-salvage-enemy-3" not in result.final_state.persistent_state.consumed_object_ids:
+        raise ValidationError("combat_salvage_drop_then_interact: dropped salvage must be consumed via INTERACT")
 
 
 def _require_str(mapping: dict[str, Any], field_name: str, path: Path) -> str:

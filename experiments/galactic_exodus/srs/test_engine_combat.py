@@ -247,7 +247,7 @@ class SrsEngineCombatTests(unittest.TestCase):
             },
         )
 
-    def test_destroyed_enemy_drop_adds_salvage_and_applies_choice(self) -> None:
+    def test_destroyed_enemy_drop_spawns_salvage_object_without_immediate_reward(self) -> None:
         state = replace(make_state(), player_position=Position(1, 4))
         enemy = create_enemy_combat_state(
             enemy_id="enemy-3",
@@ -273,17 +273,33 @@ class SrsEngineCombatTests(unittest.TestCase):
                 command_type="COMBAT_STEP",
                 player_attack_action="ATTACK",
                 player_attack_weapon="PHOTON_TORPEDO",
-                salvage_choice=SrsSalvageChoice.RECOVER_ENERGY,
             ),
             contracts=self.contracts,
         )
 
         self.assertFalse(result.state.combat_state.enemy_presence)
-        self.assertEqual(result.state.player_state.energy, 6)
-        self.assertEqual(result.state.player_state.salvage, 3)
-        self.assertEqual(result.events[0].payload["player_action"]["salvage_reward"]["selected_salvage_choice"], "RECOVER_ENERGY")
+        self.assertEqual(result.state.player_state.energy, 3)
+        self.assertEqual(result.state.player_state.salvage, 1)
+        self.assertEqual(result.state.combat_state.player.photon_torpedo_ammo, 5)
+        self.assertIn("enemy-drop-salvage-enemy-3", result.state.objects)
+        self.assertEqual(
+            result.state.actual_map.cell_at(Position(3, 4)).object_id,
+            "enemy-drop-salvage-enemy-3",
+        )
+        self.assertEqual(
+            result.events[0].payload["player_action"]["salvage_drop"],
+            {
+                "reward_source": "ENEMY_DROP",
+                "object_id": "enemy-drop-salvage-enemy-3",
+                "position": [3, 4],
+                "enemy_id": "enemy-3",
+                "enemy_tier": "TIER3",
+                "salvage_value": 2,
+                "spawned": True,
+            },
+        )
 
-    def test_destroyed_enemy_drop_rejects_unsupported_salvage_choice(self) -> None:
+    def test_destroyed_enemy_drop_ignores_salvage_choice_until_interact(self) -> None:
         state = replace(make_state(), player_position=Position(1, 4))
         enemy = create_enemy_combat_state(
             enemy_id="enemy-3",
@@ -314,9 +330,13 @@ class SrsEngineCombatTests(unittest.TestCase):
             contracts=self.contracts,
         )
 
-        self.assertEqual(result.events[0].event_type, COMBAT_REJECTED)
-        self.assertEqual(result.events[0].payload["outcome"], "REJECTED_UNSUPPORTED_SALVAGE_CHOICE")
-        self.assertEqual(result.state, state)
+        self.assertEqual(result.events[0].event_type, COMBAT_TRANSITIONED)
+        self.assertEqual(result.state.player_state.durability, 92)
+        self.assertEqual(result.state.player_state.salvage, 1)
+        self.assertEqual(
+            result.events[0].payload["player_action"]["salvage_drop"]["spawned"],
+            True,
+        )
 
     def test_destroyed_enemy_without_drop_does_not_change_salvage(self) -> None:
         state = replace(make_state(), player_position=Position(1, 4))
@@ -348,7 +368,52 @@ class SrsEngineCombatTests(unittest.TestCase):
         )
 
         self.assertEqual(result.state.player_state.salvage, 2)
-        self.assertNotIn("salvage_reward", result.events[0].payload["player_action"])
+        self.assertNotIn("salvage_drop", result.events[0].payload["player_action"])
+
+    def test_counterattack_destroyed_enemy_drop_spawns_salvage_object(self) -> None:
+        state = replace(make_state(), player_position=Position(1, 4))
+        enemy = create_enemy_combat_state(
+            enemy_id="enemy-2",
+            tier=SrsEnemyTier.TIER2,
+            position=Position(2, 4),
+            drop_salvage=True,
+        )
+        enemy = replace(enemy, durability=1)
+        state = replace(
+            state,
+            combat_state=SrsCombatState(
+                enemies={"enemy-2": enemy},
+                phase=SrsCombatPhase.ENEMY_ACTION,
+            ),
+        )
+
+        result = apply_srs_command(
+            state,
+            SrsCommand(
+                command_type="COMBAT_STEP",
+                enemy_reactions={"enemy-2": "COUNTERATTACK"},
+            ),
+            contracts=self.contracts,
+        )
+
+        self.assertFalse(result.state.combat_state.enemy_presence)
+        self.assertEqual(result.state.player_state.salvage, 0)
+        self.assertEqual(
+            result.state.actual_map.cell_at(Position(2, 4)).object_id,
+            "enemy-drop-salvage-enemy-2",
+        )
+        self.assertEqual(
+            result.events[0].payload["enemy_actions"][0]["reaction"]["salvage_drop"],
+            {
+                "reward_source": "ENEMY_DROP",
+                "object_id": "enemy-drop-salvage-enemy-2",
+                "position": [2, 4],
+                "enemy_id": "enemy-2",
+                "enemy_tier": "TIER2",
+                "salvage_value": 1,
+                "spawned": True,
+            },
+        )
 
     def test_player_attack_with_phaser_consumes_energy_and_applies_fixed_damage(self) -> None:
         state = replace(make_state(), player_position=Position(1, 4))

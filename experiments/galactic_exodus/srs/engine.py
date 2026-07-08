@@ -128,6 +128,9 @@ _BASE_UPGRADE_COSTS = {
     SrsBaseUpgrade.DEFENSE: 4,
     SrsBaseUpgrade.EVASION: 4,
 }
+_ENEMY_DROP_REWARD_SOURCE = "ENEMY_DROP"
+_MAP_PICKUP_REWARD_SOURCE = "MAP_PICKUP"
+_ENEMY_DROP_SKIP_OCCUPIED_CELL = "OCCUPIED_CELL"
 
 
 def observation_size_for_terrain(
@@ -984,11 +987,15 @@ def _apply_combat_step(
 
     try:
         if phase_from is SrsCombatPhase.PLAYER_ATTACK:
-            enemy_states, player_after, player_action = _resolve_player_attack_phase(state, command)
+            state, enemy_states, player_after, player_action = _resolve_player_attack_phase(state, command)
             if player_attack_target_id not in enemy_states:
                 player_attack_target_id = None
         elif phase_from is SrsCombatPhase.ENEMY_ACTION:
-            enemy_states, player_after, enemy_actions = _resolve_enemy_action_phase(state, command, contracts=contracts)
+            state, enemy_states, player_after, enemy_actions = _resolve_enemy_action_phase(
+                state,
+                command,
+                contracts=contracts,
+            )
             combat_turn_after += 1
             player_after = _recover_player_energy(player_after)
     except SrsCombatError as exc:
@@ -1052,7 +1059,7 @@ def _apply_combat_step(
 def _resolve_player_attack_phase(
     state: SrsGameState,
     command: SrsCommand,
-) -> tuple[Mapping[str, SrsEnemyCombatState], SrsPlayerCombatState, Mapping[str, Any]]:
+) -> tuple[SrsGameState, Mapping[str, SrsEnemyCombatState], SrsPlayerCombatState, Mapping[str, Any]]:
     combat_state = state.combat_state
     if combat_state is None:
         raise SrsCombatError("combat_state is required for player attack resolution")
@@ -1069,7 +1076,7 @@ def _resolve_player_attack_phase(
         "target_destroyed": False,
     }
     if action is SrsPlayerAttackAction.SKIP:
-        return combat_state.enemies, combat_state.player, payload
+        return state, combat_state.enemies, combat_state.player, payload
     if not combat_state.target_available:
         raise SrsCombatError("REJECTED_TARGET_UNAVAILABLE")
     if command.player_attack_weapon is None:
@@ -1117,22 +1124,15 @@ def _resolve_player_attack_phase(
         del updated_enemies[target_enemy_id]
         payload["target_destroyed"] = True
         if target_enemy.drop_salvage:
-            resolved_choice = _resolve_salvage_choice(
-                command.salvage_choice,
-                error_type=SrsCombatError,
+            state, salvage_drop = _spawn_enemy_drop_salvage_object(
+                state,
+                enemy=target_enemy,
             )
-            player, salvage_reward = _apply_salvage_reward_to_player(
-                player,
-                salvage_value=_SALVAGE_DROP_VALUES[target_enemy.tier],
-                resolved_choice=resolved_choice,
-                recovery_amounts=_SALVAGE_DROP_RECOVERY[target_enemy.tier],
-                source="ENEMY_DROP",
-            )
-            payload["salvage_reward"] = salvage_reward
+            payload["salvage_drop"] = salvage_drop
     else:
         updated_enemies[target_enemy_id] = replace(target_enemy, durability=remaining_durability)
         payload["target_remaining_durability"] = remaining_durability
-    return updated_enemies, player, payload
+    return state, updated_enemies, player, payload
 
 
 def _player_target_is_attackable(state: SrsGameState) -> bool:
@@ -1215,7 +1215,7 @@ def _resolve_enemy_attack_reaction(
         player,
         durability=max(0, player.durability - damage_to_player),
     )
-    return player, updated_enemy, {
+    reaction_payload: dict[str, Any] = {
         "selected_reaction": selected_reaction.value,
         "resolved_reaction": resolved_reaction.value,
         "counterattack_available": counterattack_available,
@@ -1227,6 +1227,7 @@ def _resolve_enemy_attack_reaction(
         "counterattack_damage": counterattack_damage,
         "enemy_destroyed": updated_enemy is None,
     }
+    return player, updated_enemy, reaction_payload
 
 
 def _counterattack_available(
@@ -1255,7 +1256,7 @@ def _resolve_enemy_action_phase(
     command: SrsCommand,
     *,
     contracts: SrsContracts,
-) -> tuple[Mapping[str, Any], SrsPlayerCombatState, tuple[Mapping[str, Any], ...]]:
+) -> tuple[SrsGameState, Mapping[str, Any], SrsPlayerCombatState, tuple[Mapping[str, Any], ...]]:
     combat_state = state.combat_state
     if combat_state is None:
         raise SrsCombatError("combat_state is required for enemy action resolution")
@@ -1264,19 +1265,20 @@ def _resolve_enemy_action_phase(
     player = combat_state.player
     actions = []
     attackable_positions = enemy_attackable_positions(state)
+    updated_state = state
     for enemy_id in tuple(updated_enemies):
         enemy = updated_enemies.get(enemy_id)
         if enemy is None:
             continue
         working_state = replace(
-            state,
+            updated_state,
             combat_state=replace(
                 combat_state,
                 enemies=updated_enemies,
                 player=player,
             ),
         )
-        updated_enemy, player, action = _resolve_enemy_action(
+        updated_state, updated_enemy, player, action = _resolve_enemy_action(
             working_state,
             command=command,
             enemy=enemy,
@@ -1289,7 +1291,7 @@ def _resolve_enemy_action_phase(
             updated_enemies[enemy_id] = updated_enemy
         actions.append(action)
 
-    return updated_enemies, player, tuple(actions)
+    return updated_state, updated_enemies, player, tuple(actions)
 
 
 def _resolve_enemy_action(
@@ -1299,7 +1301,7 @@ def _resolve_enemy_action(
     enemy: SrsEnemyCombatState,
     attackable_positions: Sequence[Position],
     contracts: SrsContracts,
-) -> tuple[SrsEnemyCombatState | None, SrsPlayerCombatState, Mapping[str, Any]]:
+) -> tuple[SrsGameState, SrsEnemyCombatState | None, SrsPlayerCombatState, Mapping[str, Any]]:
     combat_state = state.combat_state
     if combat_state is None:
         raise SrsCombatError("combat_state is required for enemy action resolution")
@@ -1316,7 +1318,11 @@ def _resolve_enemy_action(
             command=command,
             enemy=enemy,
         )
-        return enemy_after, player_after, {
+        if enemy_after is None and enemy.drop_salvage:
+            state, salvage_drop = _spawn_enemy_drop_salvage_object(state, enemy=enemy)
+            reaction = dict(reaction)
+            reaction["salvage_drop"] = salvage_drop
+        return state, enemy_after, player_after, {
             "enemy_id": enemy.enemy_id,
             "start_position": _position_to_list(enemy.position),
             "target_attackable_position": _position_to_list(enemy.position),
@@ -1346,7 +1352,7 @@ def _resolve_enemy_action(
         target=state.player_position,
         weapon_type=SrsWeaponType.ENEMY_WEAPON,
     )
-    return updated_enemy, combat_state.player, {
+    return state, updated_enemy, combat_state.player, {
         "enemy_id": enemy.enemy_id,
         "start_position": _position_to_list(enemy.position),
         "target_attackable_position": None if planned_target is None else _position_to_list(planned_target),
@@ -1588,6 +1594,88 @@ def _apply_station_interaction(
     return SrsCommandResult(state=updated_state, events=events)
 
 
+def _spawn_enemy_drop_salvage_object(
+    state: SrsGameState,
+    *,
+    enemy: SrsEnemyCombatState,
+) -> tuple[SrsGameState, Mapping[str, Any]]:
+    cell = state.actual_map.cell_at(enemy.position)
+    payload = {
+        "reward_source": _ENEMY_DROP_REWARD_SOURCE,
+        "object_id": _enemy_drop_object_id(enemy.enemy_id),
+        "position": _position_to_list(enemy.position),
+        "enemy_id": enemy.enemy_id,
+        "enemy_tier": enemy.tier.value,
+        "salvage_value": _SALVAGE_DROP_VALUES[enemy.tier],
+    }
+    if cell.object_id is not None:
+        return state, payload | {
+            "spawned": False,
+            "skip_reason": _ENEMY_DROP_SKIP_OCCUPIED_CELL,
+        }
+
+    object_id = _enemy_drop_object_id(enemy.enemy_id)
+    object_state = SrsObjectState(
+        object_id=object_id,
+        object_type=SrsObjectType.SALVAGE,
+        position=enemy.position,
+        metadata={
+            "reward_source": _ENEMY_DROP_REWARD_SOURCE,
+            "dropped_by_enemy_id": enemy.enemy_id,
+            "dropped_by_enemy_tier": enemy.tier.value,
+            "salvage_value": _SALVAGE_DROP_VALUES[enemy.tier],
+        },
+    )
+    return _state_with_added_object(state, object_state=object_state), payload | {"spawned": True}
+
+
+def _enemy_drop_object_id(enemy_id: str) -> str:
+    return f"enemy-drop-salvage-{enemy_id}"
+
+
+def _state_with_added_object(
+    state: SrsGameState,
+    *,
+    object_state: SrsObjectState,
+) -> SrsGameState:
+    rows = [list(row) for row in state.actual_map.cells]
+    current_cell = state.actual_map.cell_at(object_state.position)
+    rows[object_state.position.y][object_state.position.x] = SrsCell(
+        terrain=current_cell.terrain,
+        object_id=object_state.object_id,
+        actor_id=current_cell.actor_id,
+        warp_flags=current_cell.warp_flags,
+    )
+    actual_map = SrsActualMap(
+        width=state.actual_map.width,
+        height=state.actual_map.height,
+        cells=tuple(tuple(row) for row in rows),
+    )
+    known_cells = dict(state.known_state.known_cells)
+    if object_state.position in known_cells:
+        known_cells[object_state.position] = actual_map.cell_at(object_state.position)
+    return replace(
+        state,
+        actual_map=actual_map,
+        known_state=replace(state.known_state, known_cells=known_cells),
+        objects={
+            **state.objects,
+            object_state.object_id: object_state,
+        },
+    )
+
+
+def _salvage_reward_profile(
+    object_state: SrsObjectState,
+) -> tuple[str, int, Mapping[SrsSalvageChoice, int]]:
+    reward_source = object_state.metadata.get("reward_source")
+    if reward_source == _ENEMY_DROP_REWARD_SOURCE:
+        enemy_tier = SrsEnemyTier(object_state.metadata["dropped_by_enemy_tier"])
+        salvage_value = int(object_state.metadata["salvage_value"])
+        return reward_source, salvage_value, _SALVAGE_DROP_RECOVERY[enemy_tier]
+    return _MAP_PICKUP_REWARD_SOURCE, _SALVAGE_BASE_VALUE, _SALVAGE_BASE_RECOVERY
+
+
 def _apply_salvage_interaction(
     state: SrsGameState,
     object_state: SrsObjectState,
@@ -1597,16 +1685,17 @@ def _apply_salvage_interaction(
 ) -> SrsCommandResult:
     player_before = _current_player_state(state)
     try:
+        reward_source, salvage_value, recovery_amounts = _salvage_reward_profile(object_state)
         resolved_choice = _resolve_salvage_choice(
             salvage_choice,
             error_type=SrsInteractionError,
         )
         player_after, salvage_reward = _apply_salvage_reward_to_player(
             player_before,
-            salvage_value=_SALVAGE_BASE_VALUE,
+            salvage_value=salvage_value,
             resolved_choice=resolved_choice,
-            recovery_amounts=_SALVAGE_BASE_RECOVERY,
-            source="MAP_PICKUP",
+            recovery_amounts=recovery_amounts,
+            source=reward_source,
         )
     except SrsInteractionError as exc:
         return _rejected_interaction_result(
