@@ -13,7 +13,7 @@ from experiments.galactic_exodus.srs.engine import (
     is_attackable_position,
     run_srs_commands,
 )
-from experiments.galactic_exodus.srs.log import COMBAT_TRANSITIONED, WARP_EXIT_REJECTED
+from experiments.galactic_exodus.srs.log import COMBAT_REJECTED, COMBAT_TRANSITIONED, WARP_EXIT_REJECTED
 from experiments.galactic_exodus.srs.model import (
     Direction,
     Position,
@@ -282,6 +282,41 @@ class SrsEngineCombatTests(unittest.TestCase):
         self.assertEqual(result.state.player_state.energy, 6)
         self.assertEqual(result.state.player_state.salvage, 3)
         self.assertEqual(result.events[0].payload["player_action"]["salvage_reward"]["selected_salvage_choice"], "RECOVER_ENERGY")
+
+    def test_destroyed_enemy_drop_rejects_unsupported_salvage_choice(self) -> None:
+        state = replace(make_state(), player_position=Position(1, 4))
+        enemy = create_enemy_combat_state(
+            enemy_id="enemy-3",
+            tier=SrsEnemyTier.TIER3,
+            position=Position(3, 4),
+            drop_salvage=True,
+        )
+        enemy = replace(enemy, durability=3)
+        state = replace(
+            state,
+            player_state=replace(state.player_state, durability=92, salvage=1),
+            combat_state=SrsCombatState(
+                player=replace(state.player_state, durability=92, salvage=1),
+                enemies={"enemy-3": enemy},
+                phase=SrsCombatPhase.PLAYER_ATTACK,
+                player_attack_target_id="enemy-3",
+            ),
+        )
+
+        result = apply_srs_command(
+            state,
+            SrsCommand(
+                command_type="COMBAT_STEP",
+                player_attack_action="ATTACK",
+                player_attack_weapon="PHOTON_TORPEDO",
+                salvage_choice=SrsSalvageChoice.RECOVER_DURABILITY,
+            ),
+            contracts=self.contracts,
+        )
+
+        self.assertEqual(result.events[0].event_type, COMBAT_REJECTED)
+        self.assertEqual(result.events[0].payload["outcome"], "REJECTED_UNSUPPORTED_SALVAGE_CHOICE")
+        self.assertEqual(result.state, state)
 
     def test_destroyed_enemy_without_drop_does_not_change_salvage(self) -> None:
         state = replace(make_state(), player_position=Position(1, 4))

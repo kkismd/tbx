@@ -1,6 +1,6 @@
 {
-  "fixture_id": "salvage_recover_durability_9x9",
-  "description": "SALVAGE interaction recovers durability and still adds salvage inventory.",
+  "fixture_id": "salvage_recover_energy_9x9",
+  "description": "SALVAGE interaction recovers energy and still adds salvage inventory.",
   "sector": {
     "sector_id": "normal-1001",
     "sector_type": "NORMAL",
@@ -13,7 +13,7 @@
     "fuel": 2,
     "max_fuel": 9,
     "player": {
-      "durability": 92
+      "energy": 5
     },
     "reveal": {
       "mode": "FULL"
@@ -23,13 +23,13 @@
     {
       "command_type": "INTERACT",
       "target_object_id": "salvage-1",
-      "salvage_choice": "RECOVER_DURABILITY"
+      "salvage_choice": "RECOVER_ENERGY"
     }
   ],
   "expect": {
     "srs_turn": 1,
     "fuel": 2,
-    "player_durability": 100,
+    "player_energy": 6,
     "player_salvage": 1,
     "player_position": [7, 5],
     "event_types": ["INTERACT_ACCEPTED", "OBJECT_CONSUMED"],

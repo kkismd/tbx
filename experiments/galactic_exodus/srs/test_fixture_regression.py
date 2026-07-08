@@ -71,10 +71,33 @@ class SrsFixtureRegressionTests(unittest.TestCase):
         self.assertTrue(result.final_state.objects["salvage-1"].consumed)
         self.assertEqual(result.final_state.player_state.salvage, 1)
 
-    def test_salvage_recover_durability(self) -> None:
-        result = run_named_fixture("salvage_recover_durability_9x9")
+    def test_salvage_reject_recover_durability(self) -> None:
+        result = run_named_fixture("salvage_reject_recover_durability_9x9")
 
-        self.assertEqual(result.final_state.player_state.durability, 100)
+        self.assertIn("INTERACT_REJECTED", event_types(result))
+        self.assertEqual(primary_outcome(result), "REJECTED_UNSUPPORTED_SALVAGE_CHOICE")
+        self.assertEqual(result.final_state.srs_turn, 0)
+        self.assertEqual(result.final_state.player_state.durability, 92)
+        self.assertEqual(result.final_state.player_state.salvage, 0)
+        self.assertNotIn("salvage-1", result.final_state.persistent_state.consumed_object_ids)
+        self.assertFalse(result.final_state.objects["salvage-1"].consumed)
+
+    def test_salvage_recover_energy(self) -> None:
+        result = run_named_fixture("salvage_recover_energy_9x9")
+
+        self.assertIn("INTERACT_ACCEPTED", event_types(result))
+        self.assertIn("OBJECT_CONSUMED", event_types(result))
+        self.assertEqual(primary_outcome(result), "ACCEPTED")
+        self.assertEqual(result.final_state.player_state.energy, 6)
+        self.assertEqual(result.final_state.player_state.salvage, 1)
+
+    def test_salvage_recover_photon_torpedo_ammo(self) -> None:
+        result = run_named_fixture("salvage_recover_photon_torpedo_ammo_9x9")
+
+        self.assertIn("INTERACT_ACCEPTED", event_types(result))
+        self.assertIn("OBJECT_CONSUMED", event_types(result))
+        self.assertEqual(primary_outcome(result), "ACCEPTED")
+        self.assertEqual(result.final_state.player_state.photon_torpedo_ammo, 6)
         self.assertEqual(result.final_state.player_state.salvage, 1)
 
     def test_base_upgrade_defense(self) -> None:
