@@ -25,7 +25,9 @@ REQUIRED_CASE_IDS = {
     "resource_cache_consumed_revisit",
     "base_station_interaction",
     "base_upgrade_defense",
-    "salvage_recover_durability",
+    "salvage_reject_recover_durability",
+    "salvage_recover_energy",
+    "salvage_recover_photon_torpedo_ammo",
     "nebula_3x3_observation",
     "rift_blocked_edge",
     "warp_exit_accepted",
@@ -115,7 +117,9 @@ def validate(reference_path: Path) -> dict[str, Any]:
     _validate_revisit_persistent_state(results["resource_cache_consumed_revisit"])
     _validate_base_station_recovery(results["base_station_interaction"])
     _validate_base_upgrade(results["base_upgrade_defense"])
-    _validate_salvage_pickup_reward(results["salvage_recover_durability"])
+    _validate_salvage_reject_pickup(results["salvage_reject_recover_durability"])
+    _validate_salvage_energy_pickup(results["salvage_recover_energy"])
+    _validate_salvage_photon_pickup(results["salvage_recover_photon_torpedo_ammo"])
     _validate_encounter_payload(results["combat_encounter_wait_nebula"])
     _validate_enemy_counterattack(results["combat_enemy_counterattack"])
     _validate_enemy_drop_reward(results["combat_salvage_drop_tier3_energy"])
@@ -370,14 +374,36 @@ def _validate_base_upgrade(result: SrsFixtureRunResult) -> None:
         raise ValidationError("base_upgrade_defense: salvage inventory must be exhausted by the representative purchase")
 
 
-def _validate_salvage_pickup_reward(result: SrsFixtureRunResult) -> None:
+def _validate_salvage_reject_pickup(result: SrsFixtureRunResult) -> None:
     payload = result.log.events[0].payload
-    if payload.get("selected_salvage_choice") != "RECOVER_DURABILITY":
-        raise ValidationError("salvage_recover_durability: durability recovery choice must be recorded")
+    if payload.get("outcome") != "REJECTED_UNSUPPORTED_SALVAGE_CHOICE":
+        raise ValidationError("salvage_reject_recover_durability: unsupported choice must be rejected")
+    if result.final_state.player_state.durability != 92 or result.final_state.player_state.salvage != 0:
+        raise ValidationError("salvage_reject_recover_durability: player state must remain unchanged")
+    if result.final_state.persistent_state.consumed_object_ids:
+        raise ValidationError("salvage_reject_recover_durability: rejected pickup must not consume the object")
+
+
+def _validate_salvage_energy_pickup(result: SrsFixtureRunResult) -> None:
+    payload = result.log.events[0].payload
+    if payload.get("selected_salvage_choice") != "RECOVER_ENERGY":
+        raise ValidationError("salvage_recover_energy: energy recovery choice must be recorded")
     if payload.get("salvage_after") != 1:
-        raise ValidationError("salvage_recover_durability: salvage inventory must increase by 1")
-    if payload.get("durability_delta") != 8:
-        raise ValidationError("salvage_recover_durability: representative pickup must recover 8 durability")
+        raise ValidationError("salvage_recover_energy: salvage inventory must increase by 1")
+    if payload.get("energy_delta") != 1 or payload.get("energy_after") != 6:
+        raise ValidationError("salvage_recover_energy: representative pickup must recover energy up to capacity")
+
+
+def _validate_salvage_photon_pickup(result: SrsFixtureRunResult) -> None:
+    payload = result.log.events[0].payload
+    if payload.get("selected_salvage_choice") != "RECOVER_PHOTON_TORPEDO_AMMO":
+        raise ValidationError("salvage_recover_photon_torpedo_ammo: photon recovery choice must be recorded")
+    if payload.get("salvage_after") != 1:
+        raise ValidationError("salvage_recover_photon_torpedo_ammo: salvage inventory must increase by 1")
+    if payload.get("photon_torpedo_ammo_delta") != 1 or payload.get("photon_torpedo_ammo_after") != 6:
+        raise ValidationError(
+            "salvage_recover_photon_torpedo_ammo: representative pickup must recover torpedo ammo up to capacity"
+        )
 
 
 def _validate_encounter_payload(result: SrsFixtureRunResult) -> None:

@@ -80,8 +80,14 @@ _ENEMY_PATH_TIEBREAK_DIRECTIONS = (
 )
 _RESOURCE_CACHE_FUEL_RESTORE = 3
 _SALVAGE_BASE_VALUE = 1
+_SUPPORTED_SALVAGE_RECOVERY_CHOICES = frozenset(
+    {
+        SrsSalvageChoice.RECOVER_ENERGY,
+        SrsSalvageChoice.RECOVER_PHOTON_TORPEDO_AMMO,
+        SrsSalvageChoice.STORE_ONLY,
+    }
+)
 _SALVAGE_BASE_RECOVERY = {
-    SrsSalvageChoice.RECOVER_DURABILITY: 8,
     SrsSalvageChoice.RECOVER_ENERGY: 2,
     SrsSalvageChoice.RECOVER_PHOTON_TORPEDO_AMMO: 1,
     SrsSalvageChoice.STORE_ONLY: 0,
@@ -94,25 +100,21 @@ _SALVAGE_DROP_VALUES = {
 }
 _SALVAGE_DROP_RECOVERY = {
     SrsEnemyTier.TIER1: {
-        SrsSalvageChoice.RECOVER_DURABILITY: 8,
         SrsSalvageChoice.RECOVER_ENERGY: 2,
         SrsSalvageChoice.RECOVER_PHOTON_TORPEDO_AMMO: 1,
         SrsSalvageChoice.STORE_ONLY: 0,
     },
     SrsEnemyTier.TIER2: {
-        SrsSalvageChoice.RECOVER_DURABILITY: 8,
         SrsSalvageChoice.RECOVER_ENERGY: 2,
         SrsSalvageChoice.RECOVER_PHOTON_TORPEDO_AMMO: 1,
         SrsSalvageChoice.STORE_ONLY: 0,
     },
     SrsEnemyTier.TIER3: {
-        SrsSalvageChoice.RECOVER_DURABILITY: 12,
         SrsSalvageChoice.RECOVER_ENERGY: 3,
         SrsSalvageChoice.RECOVER_PHOTON_TORPEDO_AMMO: 1,
         SrsSalvageChoice.STORE_ONLY: 0,
     },
     SrsEnemyTier.TIER4: {
-        SrsSalvageChoice.RECOVER_DURABILITY: 16,
         SrsSalvageChoice.RECOVER_ENERGY: 4,
         SrsSalvageChoice.RECOVER_PHOTON_TORPEDO_AMMO: 2,
         SrsSalvageChoice.STORE_ONLY: 0,
@@ -1115,10 +1117,14 @@ def _resolve_player_attack_phase(
         del updated_enemies[target_enemy_id]
         payload["target_destroyed"] = True
         if target_enemy.drop_salvage:
+            resolved_choice = _resolve_salvage_choice(
+                command.salvage_choice,
+                error_type=SrsCombatError,
+            )
             player, salvage_reward = _apply_salvage_reward_to_player(
                 player,
                 salvage_value=_SALVAGE_DROP_VALUES[target_enemy.tier],
-                choice=command.salvage_choice,
+                resolved_choice=resolved_choice,
                 recovery_amounts=_SALVAGE_DROP_RECOVERY[target_enemy.tier],
                 source="ENEMY_DROP",
             )
@@ -1590,13 +1596,25 @@ def _apply_salvage_interaction(
     salvage_choice: SrsSalvageChoice | None,
 ) -> SrsCommandResult:
     player_before = _current_player_state(state)
-    player_after, salvage_reward = _apply_salvage_reward_to_player(
-        player_before,
-        salvage_value=_SALVAGE_BASE_VALUE,
-        choice=salvage_choice,
-        recovery_amounts=_SALVAGE_BASE_RECOVERY,
-        source="MAP_PICKUP",
-    )
+    try:
+        resolved_choice = _resolve_salvage_choice(
+            salvage_choice,
+            error_type=SrsInteractionError,
+        )
+        player_after, salvage_reward = _apply_salvage_reward_to_player(
+            player_before,
+            salvage_value=_SALVAGE_BASE_VALUE,
+            resolved_choice=resolved_choice,
+            recovery_amounts=_SALVAGE_BASE_RECOVERY,
+            source="MAP_PICKUP",
+        )
+    except SrsInteractionError as exc:
+        return _rejected_interaction_result(
+            state,
+            object_id=object_state.object_id,
+            object_state=object_state,
+            outcome=str(exc),
+        )
     next_turn = state.srs_turn + 1
     updated_state = _accepted_interaction_state(
         state,
@@ -1639,23 +1657,17 @@ def _apply_salvage_reward_to_player(
     player: SrsPlayerCombatState,
     *,
     salvage_value: int,
-    choice: SrsSalvageChoice | None,
+    resolved_choice: SrsSalvageChoice,
     recovery_amounts: Mapping[SrsSalvageChoice, int],
     source: str,
 ) -> tuple[SrsPlayerCombatState, Mapping[str, Any]]:
-    resolved_choice = SrsSalvageChoice.STORE_ONLY if choice is None else choice
     recovery_amount = recovery_amounts[resolved_choice]
     durability_before = player.durability
     energy_before = player.energy
     ammo_before = player.photon_torpedo_ammo
 
     updated_player = player
-    if resolved_choice is SrsSalvageChoice.RECOVER_DURABILITY:
-        updated_player = replace(
-            updated_player,
-            durability=min(updated_player.durability_capacity, updated_player.durability + recovery_amount),
-        )
-    elif resolved_choice is SrsSalvageChoice.RECOVER_ENERGY:
+    if resolved_choice is SrsSalvageChoice.RECOVER_ENERGY:
         updated_player = replace(
             updated_player,
             energy=min(updated_player.energy_capacity, updated_player.energy + recovery_amount),
@@ -1686,6 +1698,18 @@ def _apply_salvage_reward_to_player(
         "photon_torpedo_ammo_after": updated_player.photon_torpedo_ammo,
         "photon_torpedo_ammo_delta": updated_player.photon_torpedo_ammo - ammo_before,
     }
+
+
+def _resolve_salvage_choice(
+    choice: SrsSalvageChoice | None,
+    *,
+    error_type: type[SrsInteractionError] | type[SrsCombatError],
+) -> SrsSalvageChoice:
+    if choice is None:
+        return SrsSalvageChoice.STORE_ONLY
+    if choice in _SUPPORTED_SALVAGE_RECOVERY_CHOICES:
+        return choice
+    raise error_type("REJECTED_UNSUPPORTED_SALVAGE_CHOICE")
 
 
 def _apply_base_upgrade_choice(

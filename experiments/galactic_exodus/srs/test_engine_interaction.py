@@ -224,6 +224,46 @@ class SrsEngineInteractionTests(unittest.TestCase):
         self.assertEqual(result.state.player_state.salvage, 1)
         self.assertEqual(result.events[0].payload["energy_delta"], 1)
 
+    def test_salvage_recover_photon_torpedo_ammo_adds_inventory_and_caps_no_overflow(self) -> None:
+        state = place_object(make_state(fuel=2, max_fuel=9), Position(4, 0), SrsObjectType.SALVAGE, "salvage-1")
+        state = replace(state, player_state=replace(state.player_state, photon_torpedo_ammo=5))
+
+        result = apply_srs_command(
+            state,
+            SrsCommand(
+                command_type="INTERACT",
+                target_object_id="salvage-1",
+                salvage_choice=SrsSalvageChoice.RECOVER_PHOTON_TORPEDO_AMMO,
+            ),
+            contracts=self.contracts,
+        )
+
+        self.assertEqual(result.state.player_state.photon_torpedo_ammo, 6)
+        self.assertEqual(result.state.player_state.salvage, 1)
+        self.assertEqual(result.events[0].payload["photon_torpedo_ammo_delta"], 1)
+
+    def test_salvage_recover_durability_is_rejected_without_consuming_object(self) -> None:
+        state = place_object(make_state(fuel=2, max_fuel=9), Position(4, 0), SrsObjectType.SALVAGE, "salvage-1")
+        state = replace(state, player_state=replace(state.player_state, durability=92))
+
+        result = apply_srs_command(
+            state,
+            SrsCommand(
+                command_type="INTERACT",
+                target_object_id="salvage-1",
+                salvage_choice=SrsSalvageChoice.RECOVER_DURABILITY,
+            ),
+            contracts=self.contracts,
+        )
+
+        self.assertEqual(result.events[0].event_type, INTERACT_REJECTED)
+        self.assertEqual(result.events[0].payload["outcome"], "REJECTED_UNSUPPORTED_SALVAGE_CHOICE")
+        self.assertEqual(result.state.srs_turn, 0)
+        self.assertEqual(result.state.player_state.durability, 92)
+        self.assertEqual(result.state.player_state.salvage, 0)
+        self.assertFalse(result.state.objects["salvage-1"].consumed)
+        self.assertNotIn("salvage-1", result.state.persistent_state.consumed_object_ids)
+
     def test_interact_rejected_does_not_consume_turn(self) -> None:
         state = place_object(make_state(fuel=2, max_fuel=9), Position(4, 2), SrsObjectType.STATION, "station-1")
 

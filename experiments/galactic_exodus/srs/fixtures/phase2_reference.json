@@ -95,8 +95,46 @@
       }
     },
     {
-      "case_id": "salvage_recover_durability",
-      "fixture_path": "salvage_recover_durability_9x9.json",
+      "case_id": "salvage_reject_recover_durability",
+      "fixture_path": "salvage_reject_recover_durability_9x9.json",
+      "coverage_tags": ["SALVAGE_PICKUP_REJECT", "REWARD_SALVAGE_PICKUP"],
+      "final_expect": {
+        "cost_mode": "TURN_ONLY",
+        "srs_turn": 0,
+        "fuel": 2,
+        "player_durability": 92,
+        "player_energy": 6,
+        "player_torpedo_ammo": 6,
+        "player_salvage": 0,
+        "player_position": [7, 5],
+        "event_types": ["INTERACT_REJECTED"],
+        "consumed_object_ids": [],
+        "outcome": "REJECTED_UNSUPPORTED_SALVAGE_CHOICE",
+        "discovered_count": 81
+      }
+    },
+    {
+      "case_id": "salvage_recover_energy",
+      "fixture_path": "salvage_recover_energy_9x9.json",
+      "coverage_tags": ["SALVAGE_PICKUP", "REWARD_SALVAGE_PICKUP"],
+      "final_expect": {
+        "cost_mode": "TURN_ONLY",
+        "srs_turn": 1,
+        "fuel": 2,
+        "player_durability": 100,
+        "player_energy": 6,
+        "player_torpedo_ammo": 6,
+        "player_salvage": 1,
+        "player_position": [7, 5],
+        "event_types": ["INTERACT_ACCEPTED", "OBJECT_CONSUMED"],
+        "consumed_object_ids": ["salvage-1"],
+        "outcome": "ACCEPTED",
+        "discovered_count": 81
+      }
+    },
+    {
+      "case_id": "salvage_recover_photon_torpedo_ammo",
+      "fixture_path": "salvage_recover_photon_torpedo_ammo_9x9.json",
       "coverage_tags": ["SALVAGE_PICKUP", "REWARD_SALVAGE_PICKUP"],
       "final_expect": {
         "cost_mode": "TURN_ONLY",
