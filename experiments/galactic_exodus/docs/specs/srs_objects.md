@@ -53,8 +53,6 @@ SALVAGE取得時の即時回復は:
 RECOVER_DURABILITY は SALVAGE pickup では非対応にし、durability recovery は BASE / STATION に寄せる。
 ```
 
-この文書は #1277 の仕様判断を反映した source-of-truth である。
-
 #1277 / #1292 により、実装・fixture・test は B 方針へ同期済み。
 
 ## Map SALVAGE pickup
