@@ -167,14 +167,40 @@ class SrsFixtureRegressionTests(unittest.TestCase):
         self.assertEqual(result.final_state.combat_state.player.energy, 5)
         self.assertEqual(result.final_state.combat_state.enemies["enemy-1"].durability, 4)
 
-    def test_combat_salvage_drop_tier3_energy(self) -> None:
-        result = run_named_fixture("combat_salvage_drop_tier3_energy_9x9")
+    def test_combat_salvage_drop_object_tier3(self) -> None:
+        result = run_named_fixture("combat_salvage_drop_object_tier3_9x9")
 
+        self.assertEqual(result.final_state.player_state.energy, 3)
+        self.assertEqual(result.final_state.player_state.salvage, 1)
+        self.assertEqual(
+            result.final_state.actual_map.cell_at(Position(3, 4)).object_id,
+            "enemy-drop-salvage-enemy-3",
+        )
+        self.assertEqual(
+            result.log.events[0].payload["player_action"]["salvage_drop"]["salvage_value"],
+            2,
+        )
+
+    def test_combat_salvage_drop_then_interact(self) -> None:
+        result = run_named_fixture("combat_salvage_drop_then_interact_9x9")
+
+        self.assertEqual(result.final_state.srs_turn, 2)
+        self.assertEqual(result.final_state.player_position, Position(3, 4))
         self.assertEqual(result.final_state.player_state.energy, 6)
         self.assertEqual(result.final_state.player_state.salvage, 3)
+        self.assertIn(
+            "enemy-drop-salvage-enemy-3",
+            result.final_state.persistent_state.consumed_object_ids,
+        )
+
+    def test_combat_salvage_drop_occupied_cell_skip(self) -> None:
+        result = run_named_fixture("combat_salvage_drop_occupied_cell_skip_9x9")
+
+        self.assertEqual(result.final_state.player_state.salvage, 0)
+        self.assertEqual(result.final_state.actual_map.cell_at(Position(3, 3)).object_id, "salvage-1")
         self.assertEqual(
-            result.log.events[0].payload["player_action"]["salvage_reward"]["selected_salvage_choice"],
-            "RECOVER_ENERGY",
+            result.log.events[0].payload["player_action"]["salvage_drop"]["skip_reason"],
+            "OCCUPIED_CELL",
         )
 
     def test_combat_salvage_no_drop_tier1(self) -> None:

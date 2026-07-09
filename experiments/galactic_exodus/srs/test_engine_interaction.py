@@ -17,6 +17,7 @@ from experiments.galactic_exodus.srs.model import (
     Position,
     SrsBaseUpgrade,
     SrsCommand,
+    SrsObjectState,
     SrsObjectType,
     SrsSalvageChoice,
 )
@@ -263,6 +264,77 @@ class SrsEngineInteractionTests(unittest.TestCase):
         self.assertEqual(result.state.player_state.salvage, 0)
         self.assertFalse(result.state.objects["salvage-1"].consumed)
         self.assertNotIn("salvage-1", result.state.persistent_state.consumed_object_ids)
+
+    def test_enemy_drop_salvage_interaction_uses_enemy_tier_reward_profile(self) -> None:
+        state = place_object(make_state(fuel=2, max_fuel=9), Position(4, 0), SrsObjectType.SALVAGE, "enemy-drop-salvage-enemy-3")
+        state = replace(
+            state,
+            player_state=replace(state.player_state, energy=3, salvage=1),
+            objects={
+                **state.objects,
+                "enemy-drop-salvage-enemy-3": SrsObjectState(
+                    object_id="enemy-drop-salvage-enemy-3",
+                    object_type=SrsObjectType.SALVAGE,
+                    position=Position(4, 0),
+                    metadata={
+                        "reward_source": "ENEMY_DROP",
+                        "dropped_by_enemy_id": "enemy-3",
+                        "dropped_by_enemy_tier": "TIER3",
+                        "salvage_value": 2,
+                    },
+                ),
+            },
+        )
+
+        result = apply_srs_command(
+            state,
+            SrsCommand(
+                command_type="INTERACT",
+                target_object_id="enemy-drop-salvage-enemy-3",
+                salvage_choice=SrsSalvageChoice.RECOVER_ENERGY,
+            ),
+            contracts=self.contracts,
+        )
+
+        self.assertEqual(result.state.player_state.energy, 6)
+        self.assertEqual(result.state.player_state.salvage, 3)
+        self.assertEqual(result.events[0].payload["reward_source"], "ENEMY_DROP")
+        self.assertEqual(result.events[0].payload["salvage_value"], 2)
+
+    def test_enemy_drop_salvage_rejects_unsupported_choice(self) -> None:
+        state = place_object(make_state(fuel=2, max_fuel=9), Position(4, 0), SrsObjectType.SALVAGE, "enemy-drop-salvage-enemy-1")
+        state = replace(
+            state,
+            player_state=replace(state.player_state, durability=92),
+            objects={
+                **state.objects,
+                "enemy-drop-salvage-enemy-1": SrsObjectState(
+                    object_id="enemy-drop-salvage-enemy-1",
+                    object_type=SrsObjectType.SALVAGE,
+                    position=Position(4, 0),
+                    metadata={
+                        "reward_source": "ENEMY_DROP",
+                        "dropped_by_enemy_id": "enemy-1",
+                        "dropped_by_enemy_tier": "TIER1",
+                        "salvage_value": 1,
+                    },
+                ),
+            },
+        )
+
+        result = apply_srs_command(
+            state,
+            SrsCommand(
+                command_type="INTERACT",
+                target_object_id="enemy-drop-salvage-enemy-1",
+                salvage_choice=SrsSalvageChoice.RECOVER_DURABILITY,
+            ),
+            contracts=self.contracts,
+        )
+
+        self.assertEqual(result.events[0].event_type, INTERACT_REJECTED)
+        self.assertEqual(result.events[0].payload["outcome"], "REJECTED_UNSUPPORTED_SALVAGE_CHOICE")
+        self.assertFalse(result.state.objects["enemy-drop-salvage-enemy-1"].consumed)
 
     def test_interact_rejected_does_not_consume_turn(self) -> None:
         state = place_object(make_state(fuel=2, max_fuel=9), Position(4, 2), SrsObjectType.STATION, "station-1")
