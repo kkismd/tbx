@@ -131,6 +131,7 @@ _BASE_UPGRADE_COSTS = {
 _ENEMY_DROP_REWARD_SOURCE = "ENEMY_DROP"
 _MAP_PICKUP_REWARD_SOURCE = "MAP_PICKUP"
 _ENEMY_DROP_SKIP_OCCUPIED_CELL = "OCCUPIED_CELL"
+_ENEMY_DROP_SKIP_OBJECT_ID_COLLISION = "OBJECT_ID_COLLISION"
 
 
 def observation_size_for_terrain(
@@ -1615,6 +1616,11 @@ def _spawn_enemy_drop_salvage_object(
         }
 
     object_id = _enemy_drop_object_id(enemy.enemy_id)
+    if object_id in state.objects:
+        return state, payload | {
+            "spawned": False,
+            "skip_reason": _ENEMY_DROP_SKIP_OBJECT_ID_COLLISION,
+        }
     object_state = SrsObjectState(
         object_id=object_id,
         object_type=SrsObjectType.SALVAGE,

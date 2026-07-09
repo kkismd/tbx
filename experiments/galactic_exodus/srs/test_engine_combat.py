@@ -22,12 +22,13 @@ from experiments.galactic_exodus.srs.model import (
     SrsCombatState,
     SrsCommand,
     SrsEnemyTier,
+    SrsObjectType,
     SrsSalvageChoice,
     SrsTerrainType,
     SrsWeaponType,
     create_enemy_combat_state,
 )
-from experiments.galactic_exodus.srs.test_engine_movement import make_state, replace_cell_terrain
+from experiments.galactic_exodus.srs.test_engine_movement import make_state, place_object, replace_cell_terrain
 
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -412,6 +413,59 @@ class SrsEngineCombatTests(unittest.TestCase):
                 "enemy_tier": "TIER2",
                 "salvage_value": 1,
                 "spawned": True,
+            },
+        )
+
+    def test_destroyed_enemy_drop_skips_on_object_id_collision(self) -> None:
+        state = place_object(
+            replace(make_state(), player_position=Position(1, 4)),
+            Position(6, 6),
+            SrsObjectType.SALVAGE,
+            "enemy-drop-salvage-enemy-3",
+        )
+        enemy = create_enemy_combat_state(
+            enemy_id="enemy-3",
+            tier=SrsEnemyTier.TIER3,
+            position=Position(3, 4),
+            drop_salvage=True,
+        )
+        enemy = replace(enemy, durability=3)
+        state = replace(
+            state,
+            combat_state=SrsCombatState(
+                enemies={"enemy-3": enemy},
+                phase=SrsCombatPhase.PLAYER_ATTACK,
+                player_attack_target_id="enemy-3",
+            ),
+        )
+
+        result = apply_srs_command(
+            state,
+            SrsCommand(
+                command_type="COMBAT_STEP",
+                player_attack_action="ATTACK",
+                player_attack_weapon="PHOTON_TORPEDO",
+            ),
+            contracts=self.contracts,
+        )
+
+        self.assertFalse(result.state.combat_state.enemy_presence)
+        self.assertIsNone(result.state.actual_map.cell_at(Position(3, 4)).object_id)
+        self.assertEqual(
+            result.state.objects["enemy-drop-salvage-enemy-3"].position,
+            Position(6, 6),
+        )
+        self.assertEqual(
+            result.events[0].payload["player_action"]["salvage_drop"],
+            {
+                "reward_source": "ENEMY_DROP",
+                "object_id": "enemy-drop-salvage-enemy-3",
+                "position": [3, 4],
+                "enemy_id": "enemy-3",
+                "enemy_tier": "TIER3",
+                "salvage_value": 2,
+                "spawned": False,
+                "skip_reason": "OBJECT_ID_COLLISION",
             },
         )
 
