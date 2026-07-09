@@ -8,13 +8,16 @@ from experiments.galactic_exodus.srs.contracts import load_default_contracts
 from experiments.galactic_exodus.srs.encounter import (
     BASE_ENCOUNTER_CHANCE_PER_SRS_TURN,
     ENCOUNTERS_PER_LRS_STEP,
+    ENEMY_SALVAGE_DROP_CHANCES,
     EXPECTED_SRS_TURNS,
     EncounterRollDisposition,
     actual_encounter_chance,
     encounter_roll_disposition,
     encounter_composition_options,
     encounter_group_budget_range,
+    enemy_salvage_drop_chance,
     enemy_group_cost,
+    resolve_enemy_salvage_drop,
     spawn_candidate_points,
     spawn_enemies_for_encounter,
     terrain_encounter_modifier,
@@ -74,6 +77,48 @@ class SrsEncounterTests(unittest.TestCase):
                 (5, (SrsEnemyTier.TIER4,)),
             ],
         )
+
+    def test_enemy_salvage_drop_chance_is_tier_monotonic(self) -> None:
+        ordered_tiers = (
+            SrsEnemyTier.TIER1,
+            SrsEnemyTier.TIER2,
+            SrsEnemyTier.TIER3,
+            SrsEnemyTier.TIER4,
+        )
+
+        self.assertEqual(
+            [enemy_salvage_drop_chance(tier) for tier in ordered_tiers],
+            [ENEMY_SALVAGE_DROP_CHANCES[tier] for tier in ordered_tiers],
+        )
+        self.assertLessEqual(enemy_salvage_drop_chance(SrsEnemyTier.TIER1), enemy_salvage_drop_chance(SrsEnemyTier.TIER2))
+        self.assertLessEqual(enemy_salvage_drop_chance(SrsEnemyTier.TIER2), enemy_salvage_drop_chance(SrsEnemyTier.TIER3))
+        self.assertLessEqual(enemy_salvage_drop_chance(SrsEnemyTier.TIER3), enemy_salvage_drop_chance(SrsEnemyTier.TIER4))
+
+    def test_enemy_salvage_drop_roll_success(self) -> None:
+        resolved, payload = resolve_enemy_salvage_drop(tier=SrsEnemyTier.TIER2, roll=0.34)
+
+        self.assertTrue(resolved)
+        self.assertEqual(payload["enemy_tier"], "TIER2")
+        self.assertEqual(payload["salvage_drop_chance"], 0.35)
+        self.assertEqual(payload["salvage_drop_roll"], 0.34)
+        self.assertTrue(payload["drop_salvage"])
+
+    def test_enemy_salvage_drop_roll_failure(self) -> None:
+        resolved, payload = resolve_enemy_salvage_drop(tier=SrsEnemyTier.TIER2, roll=0.36)
+
+        self.assertFalse(resolved)
+        self.assertEqual(payload["salvage_drop_chance"], 0.35)
+        self.assertEqual(payload["salvage_drop_roll"], 0.36)
+        self.assertFalse(payload["drop_salvage"])
+
+    def test_enemy_salvage_drop_roll_boundary_equal_chance_is_failure(self) -> None:
+        resolved, payload = resolve_enemy_salvage_drop(
+            tier=SrsEnemyTier.TIER3,
+            roll=enemy_salvage_drop_chance(SrsEnemyTier.TIER3),
+        )
+
+        self.assertFalse(resolved)
+        self.assertFalse(payload["drop_salvage"])
 
     def test_spawn_candidates_use_all_passable_warp_points_outside_player_neighbor_ring(self) -> None:
         state = replace(make_state(), player_position=Position(4, 4))
@@ -233,6 +278,23 @@ class SrsEncounterTests(unittest.TestCase):
         self.assertEqual(result.log.events[0].event_type, "WAIT_ACCEPTED")
         self.assertEqual(result.log.events[1].event_type, "ENCOUNTER_ROLLED")
         self.assertAlmostEqual(result.log.events[1].payload["actual_encounter_chance"], 0.126)
+        spawned_enemy = result.log.events[1].payload["spawned_enemies"][0]
+        self.assertEqual(spawned_enemy["enemy_id"], "enemy-1")
+        self.assertEqual(spawned_enemy["enemy_tier"], "TIER2")
+        self.assertEqual(spawned_enemy["salvage_drop_chance"], 0.35)
+        self.assertEqual(spawned_enemy["salvage_drop_roll"], 0.4346763120373218)
+        self.assertFalse(spawned_enemy["drop_salvage"])
+        self.assertEqual(
+            result.summary["combat_enemy_salvage_drops"],
+            {
+                "enemy-1": {
+                    "enemy_tier": "TIER2",
+                    "salvage_drop_chance": 0.35,
+                    "salvage_drop_roll": 0.4346763120373218,
+                    "drop_salvage": False,
+                }
+            },
+        )
 
     def test_wait_fixture_suppresses_encounter_when_base_docked(self) -> None:
         result = run_fixture(FIXTURES_DIR / "combat_encounter_wait_base_docked_9x9.json", contracts=self.contracts)

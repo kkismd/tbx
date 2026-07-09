@@ -16,6 +16,7 @@ from experiments.galactic_exodus.srs.run_fixture import (
     fixture_result_to_jsonable,
     load_fixture,
     run_fixture,
+    run_fixture_data,
 )
 from experiments.galactic_exodus.srs.test_engine_movement import make_state
 
@@ -108,6 +109,48 @@ class SrsFixtureTests(unittest.TestCase):
         self.assertEqual(payload["fixture_id"], "resource_cache_single_9x9")
         self.assertEqual(payload["final_state"]["fuel"], 5)
         json.dumps(payload)
+
+    def test_fixture_explicit_drop_salvage_override_bypasses_random_roll(self) -> None:
+        payload = {
+            "fixture_id": "explicit_drop_salvage_override",
+            "sector": {
+                "sector_id": "normal-override",
+                "sector_type": "NORMAL",
+                "sector_seed": 9101,
+                "entry_edge": "S",
+                "blocked_edges": [],
+            },
+            "initial": {
+                "combat": {
+                    "phase": "PLAYER_MOVEMENT",
+                    "enemies": [
+                        {"enemy_id": "enemy-1", "tier": "TIER1", "position": [1, 1], "drop_salvage": True},
+                        {"enemy_id": "enemy-2", "tier": "TIER2", "position": [2, 1], "drop_salvage": False},
+                    ],
+                }
+            },
+            "commands": [],
+        }
+
+        result = run_fixture_data(payload, contracts=self.contracts)
+
+        self.assertEqual(
+            result.summary["combat_enemy_salvage_drops"],
+            {
+                "enemy-1": {
+                    "enemy_tier": "TIER1",
+                    "salvage_drop_chance": None,
+                    "salvage_drop_roll": None,
+                    "drop_salvage": True,
+                },
+                "enemy-2": {
+                    "enemy_tier": "TIER2",
+                    "salvage_drop_chance": None,
+                    "salvage_drop_roll": None,
+                    "drop_salvage": False,
+                },
+            },
+        )
 
     def test_fixture_runner_validates_render_not_contains(self) -> None:
         path = FIXTURES_DIR / "move_route_basic_9x9.json"

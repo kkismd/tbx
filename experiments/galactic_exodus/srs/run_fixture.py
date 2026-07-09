@@ -299,6 +299,7 @@ def run_fixture_data(data: Mapping[str, Any], *, contracts: SrsContracts) -> Srs
 def fixture_result_to_jsonable(result: SrsFixtureRunResult) -> Mapping[str, Any]:
     final_state = result.final_state
     enemy_positions = _enemy_positions_payload(final_state)
+    enemy_salvage_drops = _enemy_salvage_drop_payload(final_state)
     enemy_actions = _flatten_enemy_actions(result.log)
     return {
         "fixture_id": result.fixture_id,
@@ -326,6 +327,7 @@ def fixture_result_to_jsonable(result: SrsFixtureRunResult) -> Mapping[str, Any]
             "enemy_presence": final_state.combat_state.enemy_presence if final_state.combat_state is not None else False,
             "combat_player_energy": final_state.combat_state.player.energy if final_state.combat_state is not None else None,
             "combat_enemy_positions": enemy_positions,
+            "combat_enemy_salvage_drops": enemy_salvage_drops,
         },
         "log": {
             "events": [
@@ -623,6 +625,7 @@ def _build_summary(
     if log.events:
         primary_outcome = log.events[0].payload.get("outcome")
     enemy_positions = _enemy_positions_payload(final_state)
+    enemy_salvage_drops = _enemy_salvage_drop_payload(final_state)
     enemy_actions = _flatten_enemy_actions(log)
     return {
         "fixture_id": fixture_id,
@@ -658,6 +661,7 @@ def _build_summary(
         ),
         "combat_enemy_positions": enemy_positions,
         "combat_enemy_durabilities": _enemy_durabilities_payload(final_state),
+        "combat_enemy_salvage_drops": enemy_salvage_drops,
         "enemy_actions": enemy_actions,
         "outcome": primary_outcome,
         "render_line_count": len(render.splitlines()),
@@ -673,6 +677,7 @@ def _validate_expectations(expect: Any, result: SrsFixtureRunResult) -> None:
     final_state = result.final_state
     event_types = [event.event_type for event in result.log.events]
     enemy_positions = _enemy_positions_payload(final_state)
+    enemy_salvage_drops = _enemy_salvage_drop_payload(final_state)
     enemy_actions = _flatten_enemy_actions(result.log)
     comparisons = (
         ("srs_turn", final_state.srs_turn),
@@ -702,6 +707,7 @@ def _validate_expectations(expect: Any, result: SrsFixtureRunResult) -> None:
         ),
         ("combat_enemy_positions", enemy_positions),
         ("combat_enemy_durabilities", _enemy_durabilities_payload(final_state)),
+        ("combat_enemy_salvage_drops", enemy_salvage_drops),
         ("enemy_actions", enemy_actions),
         ("outcome", result.summary.get("outcome")),
     )
@@ -736,6 +742,20 @@ def _enemy_durabilities_payload(final_state: SrsGameState) -> Mapping[str, int]:
         return {}
     return {
         enemy_id: enemy.durability
+        for enemy_id, enemy in sorted(final_state.combat_state.enemies.items())
+    }
+
+
+def _enemy_salvage_drop_payload(final_state: SrsGameState) -> Mapping[str, Mapping[str, Any]]:
+    if final_state.combat_state is None:
+        return {}
+    return {
+        enemy_id: {
+            "enemy_tier": enemy.tier.value,
+            "salvage_drop_chance": enemy.salvage_drop_chance,
+            "salvage_drop_roll": enemy.salvage_drop_roll,
+            "drop_salvage": enemy.drop_salvage,
+        }
         for enemy_id, enemy in sorted(final_state.combat_state.enemies.items())
     }
 

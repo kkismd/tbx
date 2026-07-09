@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections import Counter
 from dataclasses import dataclass
 from enum import Enum
+import random
 from types import MappingProxyType
 from typing import Mapping, Sequence
 
@@ -93,6 +94,15 @@ ENEMY_GROUP_COSTS: Mapping[SrsEnemyTier, int] = _freeze_mapping(
     }
 )
 
+ENEMY_SALVAGE_DROP_CHANCES: Mapping[SrsEnemyTier, float] = _freeze_mapping(
+    {
+        SrsEnemyTier.TIER1: 0.25,
+        SrsEnemyTier.TIER2: 0.35,
+        SrsEnemyTier.TIER3: 0.50,
+        SrsEnemyTier.TIER4: 0.75,
+    }
+)
+
 ENCOUNTER_GROUP_BUDGETS: Mapping[int, tuple[int, int]] = _freeze_mapping(
     {
         0: (1, 1),
@@ -136,6 +146,30 @@ ENCOUNTER_COMPOSITION_TABLE: Mapping[int, tuple[EncounterCompositionOption, ...]
 
 def enemy_group_cost(tier: SrsEnemyTier) -> int:
     return ENEMY_GROUP_COSTS[tier]
+
+
+def enemy_salvage_drop_chance(tier: SrsEnemyTier) -> float:
+    return ENEMY_SALVAGE_DROP_CHANCES[tier]
+
+
+def resolve_enemy_salvage_drop(
+    *,
+    tier: SrsEnemyTier,
+    roll: float,
+) -> tuple[bool, Mapping[str, object]]:
+    if not 0.0 <= roll <= 1.0:
+        raise SrsEncounterError("enemy salvage drop roll must be within 0.0..1.0")
+    chance = enemy_salvage_drop_chance(tier)
+    drop_salvage = roll < chance
+    return (
+        drop_salvage,
+        {
+            "enemy_tier": tier.value,
+            "salvage_drop_chance": chance,
+            "salvage_drop_roll": roll,
+            "drop_salvage": drop_salvage,
+        },
+    )
 
 
 def terrain_encounter_modifier(terrain: SrsTerrainType) -> float:
@@ -210,13 +244,32 @@ def spawn_enemies_for_encounter(
     )
     candidates = spawn_candidate_points(state)
     selected_tiers = apply_spawn_cap(planned_enemies, len(candidates))
+    rng = _enemy_salvage_drop_rng(
+        state,
+        danger_score=danger_score,
+        composition=selected_tiers,
+    )
+    debug_payloads = [
+        resolve_enemy_salvage_drop(tier=tier, roll=rng.random())
+        for tier in selected_tiers
+    ]
     return tuple(
         create_enemy_combat_state(
             enemy_id=f"enemy-{index}",
             tier=tier,
             position=position,
+            drop_salvage=drop_salvage,
+            salvage_drop_chance=payload["salvage_drop_chance"],
+            salvage_drop_roll=payload["salvage_drop_roll"],
         )
-        for index, (tier, position) in enumerate(zip(selected_tiers, candidates[: len(selected_tiers)], strict=True), start=1)
+        for index, ((tier, position), (drop_salvage, payload)) in enumerate(
+            zip(
+                zip(selected_tiers, candidates[: len(selected_tiers)], strict=True),
+                debug_payloads,
+                strict=True,
+            ),
+            start=1,
+        )
     )
 
 
@@ -326,6 +379,17 @@ def resolve_fixed_encounter_roll(
                 "composition": [tier.value for tier in roll.composition],
                 "enemy_spawned": True,
                 "spawned_enemy_ids": sorted(updated_combat_state.enemies),
+                "spawned_enemies": [
+                    {
+                        "enemy_id": enemy.enemy_id,
+                        "enemy_tier": enemy.tier.value,
+                        "position": [enemy.position.x, enemy.position.y],
+                        "salvage_drop_chance": enemy.salvage_drop_chance,
+                        "salvage_drop_roll": enemy.salvage_drop_roll,
+                        "drop_salvage": enemy.drop_salvage,
+                    }
+                    for enemy in updated_combat_state.enemies.values()
+                ],
                 "outcome": "ENCOUNTER_STARTED",
             },
         ),
@@ -375,6 +439,21 @@ def _tier_asc_sort_key(tier: SrsEnemyTier) -> int:
 
 def _tier_desc_sort_key(tier: SrsEnemyTier) -> int:
     return -_tier_asc_sort_key(tier)
+
+
+def _enemy_salvage_drop_rng(
+    state: SrsGameState,
+    *,
+    danger_score: int,
+    composition: Sequence[SrsEnemyTier],
+) -> random.Random:
+    composition_token = ",".join(tier.value for tier in composition)
+    seed = (
+        f"{state.descriptor.sector_id}|{state.descriptor.sector_seed}|"
+        f"{state.srs_turn}|{state.player_position.x},{state.player_position.y}|"
+        f"{danger_score}|{composition_token}"
+    )
+    return random.Random(seed)
 
 
 def _enemy_presence(state: SrsGameState) -> bool:
