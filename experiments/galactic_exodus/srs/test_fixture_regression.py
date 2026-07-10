@@ -167,6 +167,29 @@ class SrsFixtureRegressionTests(unittest.TestCase):
         self.assertEqual(result.final_state.combat_state.player.energy, 5)
         self.assertEqual(result.final_state.combat_state.enemies["enemy-1"].durability, 4)
 
+    def test_combat_counterattack_salvage_drop_object_tier2(self) -> None:
+        result = run_named_fixture("combat_counterattack_salvage_drop_object_tier2_9x9")
+
+        self.assertFalse(result.final_state.combat_state.enemy_presence)
+        self.assertEqual(result.final_state.player_state.salvage, 0)
+        self.assertEqual(
+            result.final_state.actual_map.cell_at(Position(2, 4)).object_id,
+            "enemy-drop-salvage-enemy-2",
+        )
+        self.assertEqual(
+            result.summary["enemy_actions"][0]["reaction"]["salvage_drop"],
+            {
+                "reward_source": "ENEMY_DROP",
+                "object_id": "enemy-drop-salvage-enemy-2",
+                "position": [2, 4],
+                "enemy_id": "enemy-2",
+                "enemy_tier": "TIER2",
+                "salvage_value": 1,
+                "spawned": True,
+            },
+        )
+        self.assertTrue(result.summary["enemy_actions"][0]["reaction"]["enemy_destroyed"])
+
     def test_combat_salvage_drop_object_tier3(self) -> None:
         result = run_named_fixture("combat_salvage_drop_object_tier3_9x9")
 
