@@ -1,0 +1,75 @@
+{
+  "fixture_id": "combat_counterattack_salvage_drop_object_tier2_9x9",
+  "description": "A counterattack kill spawns a dropped tier2 SALVAGE object without immediate reward.",
+  "sector": {
+    "sector_id": "normal-9113",
+    "sector_type": "NORMAL",
+    "sector_seed": 9113,
+    "entry_edge": "S",
+    "blocked_edges": []
+  },
+  "initial": {
+    "reveal": {"mode": "FULL"},
+    "player_position": [1, 4],
+    "combat": {
+      "phase": "ENEMY_ACTION",
+      "enemies": [
+        {"enemy_id": "enemy-2", "tier": "TIER2", "position": [2, 4], "drop_salvage": true, "durability": 1}
+      ]
+    }
+  },
+  "commands": [
+    {
+      "command_type": "COMBAT_STEP",
+      "enemy_reactions": {
+        "enemy-2": "COUNTERATTACK"
+      }
+    }
+  ],
+  "expect": {
+    "event_types": ["COMBAT_TRANSITIONED"],
+    "combat_phase": "PLAYER_MOVEMENT",
+    "combat_turn": 1,
+    "enemy_presence": false,
+    "player_salvage": 0,
+    "combat_player_durability": 93,
+    "combat_player_energy": 6,
+    "combat_player_torpedo_ammo": 6,
+    "combat_enemy_positions": {},
+    "combat_enemy_durabilities": {},
+    "enemy_actions": [
+      {
+        "enemy_id": "enemy-2",
+        "start_position": [2, 4],
+        "target_attackable_position": [2, 4],
+        "planned_path": [],
+        "moved_path": [],
+        "final_position": [2, 4],
+        "movement_power": 3,
+        "movement_cost": 0,
+        "attacked_player": true,
+        "can_attack_before_move": true,
+        "can_attack_after_move": true,
+        "reaction": {
+          "selected_reaction": "COUNTERATTACK",
+          "resolved_reaction": "COUNTERATTACK",
+          "counterattack_available": true,
+          "fallback_to_defend": false,
+          "damage_to_player": 7,
+          "counterattack_damage": 1,
+          "enemy_destroyed": true,
+          "salvage_drop": {
+            "reward_source": "ENEMY_DROP",
+            "object_id": "enemy-drop-salvage-enemy-2",
+            "position": [2, 4],
+            "enemy_id": "enemy-2",
+            "enemy_tier": "TIER2",
+            "salvage_value": 1,
+            "spawned": true
+          }
+        }
+      }
+    ],
+    "outcome": "ACCEPTED"
+  }
+}

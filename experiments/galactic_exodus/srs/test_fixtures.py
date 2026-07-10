@@ -46,6 +46,7 @@ REQUIRED_FIXTURES = {
     "combat_enemy_movement_tiebreak_9x9.json",
     "combat_torpedo_destroy_no_counterattack_9x9.json",
     "combat_phaser_attack_damage_9x9.json",
+    "combat_counterattack_salvage_drop_object_tier2_9x9.json",
     "combat_salvage_drop_object_tier3_9x9.json",
     "combat_salvage_drop_then_interact_9x9.json",
     "combat_salvage_drop_occupied_cell_skip_9x9.json",
