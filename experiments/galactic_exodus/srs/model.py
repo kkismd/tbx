@@ -239,6 +239,8 @@ class SrsEnemyCombatState:
     attack_damage: int
     movement_power: int
     drop_salvage: bool = False
+    salvage_drop_chance: float | None = None
+    salvage_drop_roll: float | None = None
 
     def __post_init__(self) -> None:
         if self.enemy_id == "":
@@ -249,6 +251,10 @@ class SrsEnemyCombatState:
             raise SrsModelError("enemy attack_damage must be positive")
         if self.movement_power <= 0:
             raise SrsModelError("enemy movement_power must be positive")
+        if self.salvage_drop_chance is not None and not 0.0 <= self.salvage_drop_chance <= 1.0:
+            raise SrsModelError("enemy salvage_drop_chance must be within 0.0..1.0")
+        if self.salvage_drop_roll is not None and not 0.0 <= self.salvage_drop_roll <= 1.0:
+            raise SrsModelError("enemy salvage_drop_roll must be within 0.0..1.0")
 
 
 def default_weapon_profiles() -> Mapping[SrsWeaponType, SrsWeaponProfile]:
@@ -294,6 +300,8 @@ def create_enemy_combat_state(
     tier: SrsEnemyTier,
     position: Position,
     drop_salvage: bool = False,
+    salvage_drop_chance: float | None = None,
+    salvage_drop_roll: float | None = None,
 ) -> SrsEnemyCombatState:
     durability, attack_damage, movement_power = enemy_tier_defaults(tier)
     return SrsEnemyCombatState(
@@ -304,6 +312,8 @@ def create_enemy_combat_state(
         attack_damage=attack_damage,
         movement_power=movement_power,
         drop_salvage=drop_salvage,
+        salvage_drop_chance=salvage_drop_chance,
+        salvage_drop_roll=salvage_drop_roll,
     )
 
 

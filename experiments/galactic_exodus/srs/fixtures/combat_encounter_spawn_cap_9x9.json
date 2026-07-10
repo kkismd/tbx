@@ -33,6 +33,26 @@
       "enemy-2": [2, 0],
       "enemy-3": [3, 0]
     },
+    "combat_enemy_salvage_drops": {
+      "enemy-1": {
+        "enemy_tier": "TIER1",
+        "salvage_drop_chance": 0.25,
+        "salvage_drop_roll": 0.9978751120979634,
+        "drop_salvage": false
+      },
+      "enemy-2": {
+        "enemy_tier": "TIER1",
+        "salvage_drop_chance": 0.25,
+        "salvage_drop_roll": 0.35529620005192497,
+        "drop_salvage": false
+      },
+      "enemy-3": {
+        "enemy_tier": "TIER2",
+        "salvage_drop_chance": 0.35,
+        "salvage_drop_roll": 0.5111271963184837,
+        "drop_salvage": false
+      }
+    },
     "combat_enemy_durabilities": {
       "enemy-1": 3,
       "enemy-2": 3,
