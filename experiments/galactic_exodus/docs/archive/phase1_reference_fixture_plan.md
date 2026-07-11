@@ -1,5 +1,14 @@
 # Phase 1参照fixture実装計画
 
+> **文書区分:** 履歴資料 — 完了済み実装計画
+>
+> この文書は PR #1077 の実装計画を保存するための履歴資料です。現行の gameplay 仕様や active plan ではありません。現行仕様は `experiments/galactic_exodus/docs/specs/`、現行挙動はコード・fixtures・testsを参照してください。
+
+- Former path: `experiments/galactic_exodus/reference_fixture_plan.md`
+- Related issue: #1059
+- Implemented by: PR #1077
+- Archived by: #1316
+
 ## 1. 対象範囲
 
 通常の生成ゲーム挙動を変更せず、Python参照実装へ決定的なfixture注入・再生機能を追加する。
