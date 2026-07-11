@@ -1,5 +1,9 @@
 # Galactic Exodus Fuel Comparison
 
+> **文書区分:** 評価根拠
+>
+> この文書は gameplay 仕様の正本ではありません。現行仕様は `experiments/galactic_exodus/docs/specs/` を参照してください。
+
 ## Reproduction
 
 ```bash
@@ -12,7 +16,7 @@ python experiments/galactic_exodus/fuel_metrics.py \
   --resource-supply 5 \
   --resource-counts 0,1,3 \
   --csv-output experiments/galactic_exodus/results/fuel_comparison_low_initial_seed_1_1000.csv \
-  --markdown-output experiments/galactic_exodus/results/fuel_comparison_low_initial_seed_1_1000.md
+  --markdown-output experiments/galactic_exodus/docs/evaluations/phase1_fuel_comparison_low_initial_seed_1_1000.md
 ```
 
 ## Conclusion

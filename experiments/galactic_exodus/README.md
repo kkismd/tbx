@@ -670,7 +670,7 @@ python experiments/galactic_exodus/fuel_metrics.py \
   --resource-supply 5 \
   --resource-counts 0,1,3 \
   --csv-output experiments/galactic_exodus/results/fuel_comparison_low_initial_seed_1_1000.csv \
-  --markdown-output experiments/galactic_exodus/results/fuel_comparison_low_initial_seed_1_1000.md
+  --markdown-output experiments/galactic_exodus/docs/evaluations/phase1_fuel_comparison_low_initial_seed_1_1000.md
 ```
 
 configuration の並び順は常に次です。

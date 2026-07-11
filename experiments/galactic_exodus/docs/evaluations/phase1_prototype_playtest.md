@@ -1,5 +1,9 @@
 # Galactic Exodus Phase 1B 統合プレイテストレポート
 
+> **文書区分:** 評価根拠
+>
+> この文書は gameplay 仕様の正本ではありません。現行仕様は `experiments/galactic_exodus/docs/specs/` を参照してください。
+
 ## 1. 対象範囲とバージョン
 
 本レポートは、TBX実装前のPythonプロトタイプについて、Phase 1B1の手動評価（#1067）とPhase 1B2の決定的方策による自動評価（#1068）を統合したものである。

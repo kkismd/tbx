@@ -13,6 +13,7 @@ Galactic Exodus では、issue comment、設計メモ、fixtures、snapshots、R
 |---|---|
 | issue | 議論・決定ログ。仕様を確定してよいが、issueだけで完了扱いにしない。 |
 | `experiments/galactic_exodus/docs/specs/` | 仕様正本。実装 issue が参照する source of truth。 |
+| `experiments/galactic_exodus/docs/evaluations/` | 評価根拠。比較レポート、観察、再現手順を保持するが、現行仕様正本としては扱わない。 |
 | `experiments/galactic_exodus/docs/design/` | 表示案・比較サンプル・設計メモ。ゲームルール正本としては扱わない。 |
 | fixtures / snapshots | 実装済み挙動の regression 固定。正本仕様と矛盾した場合は正本仕様を優先する。 |
 | README | 実行方法・ユーザー向け説明。詳細仕様は experiments/galactic_exodus/docs/specs へリンクする。 |
@@ -43,6 +44,11 @@ Implementation PR:
 
 `experiments/galactic_exodus/docs/design/galactic_exodus_display_samples.md` のような文書は、表示案や比較サンプルとして扱う。
 ゲームルールを再決定しない。
+
+### 3.5. experiments/galactic_exodus/docs/evaluations は評価根拠
+
+`experiments/galactic_exodus/docs/evaluations/` は、採用判断の根拠となる評価結果・比較・観察・再現手順を集約する。
+この配下の Markdown は現行仕様の正本ではなく、current source は `experiments/galactic_exodus/docs/specs/` を参照する。
 
 ### 4. fixtures / snapshots は regression 固定
 

@@ -206,6 +206,17 @@ status は #1314 の定義に従い、`MIGRATED` / `PARTIAL` / `MISSING` / `CONF
 | `experiments/galactic_exodus/srs/phase2_srs_generation.md` | `## 5` | `warp_flags` generation / blocked edge / return-cell selection | `docs/specs/srs_warp.md`, `docs/specs/srs_map_generation.md` | WARP / blocked edge / board edge ルールは current docs に移植済み。 | `MIGRATED` | なし | 維持のみ。 | - |
 | `experiments/galactic_exodus/srs/phase2_srs_generation.md` | `## 6-9` | generation order / cluster generation / reachability / seed retry report | `docs/specs/srs_map_generation.md` | 現行 generator 手順と board-edge decision は docs 化済み。 | `PARTIAL` | legacy の retry/report schema を current docs はまだ全面移植していない。 | terrain-count 実装有無と合わせて current generator contract を補完する。 | #1263, #1264 |
 
+## evaluation evidence inventory (#1313 / #1314)
+
+評価文書は gameplay specification の `CURRENT_SOURCE` ではなく、`experiments/galactic_exodus/docs/evaluations/` に集約した `EVALUATION` として扱う。
+
+| inventory path | classification | final destination | status | note |
+|---|---|---|---|---|
+| `experiments/galactic_exodus/docs/evaluations/phase1_prototype_playtest.md` | `EVALUATION` | `experiments/galactic_exodus/docs/evaluations/phase1_prototype_playtest.md` | `current` | Phase 1B の手動/自動評価の統合レポート。 |
+| `experiments/galactic_exodus/docs/evaluations/phase1_fuel_comparison_low_initial_seed_1_1000.md` | `EVALUATION` | `experiments/galactic_exodus/docs/evaluations/phase1_fuel_comparison_low_initial_seed_1_1000.md` | `current` | 低 initial fuel 候補の比較レポート。 |
+| `experiments/galactic_exodus/docs/evaluations/phase1_fuel_comparison_seed_1_1000.md` | `EVALUATION` | `experiments/galactic_exodus/docs/evaluations/phase1_fuel_comparison_seed_1_1000.md` | `current` | 高 initial fuel 候補の比較レポート。 |
+| `experiments/galactic_exodus/docs/evaluations/phase2_srs_playtest.md` | `EVALUATION` | `experiments/galactic_exodus/docs/evaluations/phase2_srs_playtest.md` | `current` | Phase 2 SRS の手動/自動評価統合メモ。 |
+
 ## 棚卸しメモ
 
 - code searchだけを正本にしない。未実装仕様はcode searchでは見つからないため。
