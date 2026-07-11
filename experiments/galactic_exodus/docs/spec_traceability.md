@@ -212,6 +212,7 @@ status は #1314 の定義に従い、`MIGRATED` / `PARTIAL` / `MISSING` / `CONF
 
 | inventory path | classification | final destination | status | note |
 |---|---|---|---|---|
+| `experiments/galactic_exodus/reference_fixture_plan.md` | `HISTORICAL_IMPLEMENTATION_PLAN` | `experiments/galactic_exodus/docs/archive/phase1_reference_fixture_plan.md` | `archived` | former path。PR #1077 の実装経緯を保存する履歴資料。follow-up issue: #1316 |
 | `experiments/galactic_exodus/docs/evaluations/phase1_prototype_playtest.md` | `EVALUATION` | `experiments/galactic_exodus/docs/evaluations/phase1_prototype_playtest.md` | `current` | Phase 1B の手動/自動評価の統合レポート。 |
 | `experiments/galactic_exodus/docs/evaluations/phase1_fuel_comparison_low_initial_seed_1_1000.md` | `EVALUATION` | `experiments/galactic_exodus/docs/evaluations/phase1_fuel_comparison_low_initial_seed_1_1000.md` | `current` | 低 initial fuel 候補の比較レポート。 |
 | `experiments/galactic_exodus/docs/evaluations/phase1_fuel_comparison_seed_1_1000.md` | `EVALUATION` | `experiments/galactic_exodus/docs/evaluations/phase1_fuel_comparison_seed_1_1000.md` | `current` | 高 initial fuel 候補の比較レポート。 |
