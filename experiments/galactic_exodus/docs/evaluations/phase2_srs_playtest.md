@@ -1,5 +1,9 @@
 # Galactic Exodus Phase 2 SRS評価統合メモ
 
+> **文書区分:** 評価根拠
+>
+> この文書は gameplay 仕様の正本ではありません。現行仕様は `experiments/galactic_exodus/docs/specs/` を参照してください。
+
 ## 1. 対象と前提
 
 本メモは issue #1162 の成果物として、Phase 2 SRS の移動・探索ルールに関する既存評価結果を decision issue へ渡しやすい形に整理したものである。
