@@ -131,7 +131,7 @@ cargo test
 - SRS warp: [`docs/specs/srs_warp.md`](docs/specs/srs_warp.md)
 - Phase 1 canonical spec migration: #1323
 - SRS combat: [`docs/specs/srs_combat.md`](docs/specs/srs_combat.md)
-- Display canonical spec migration: #1322
+- Display: [`docs/specs/display.md`](docs/specs/display.md)
 - SRS encounter: [`docs/specs/srs_encounter.md`](docs/specs/srs_encounter.md)
 
 ### Evaluations
