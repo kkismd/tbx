@@ -129,10 +129,10 @@ cargo test
 - SRS movement: [`docs/specs/srs_movement.md`](docs/specs/srs_movement.md)
 - SRS objects: [`docs/specs/srs_objects.md`](docs/specs/srs_objects.md)
 - SRS warp: [`docs/specs/srs_warp.md`](docs/specs/srs_warp.md)
-- Phase 1 canonical spec migration: #1319
-- SRS combat canonical spec migration: #1320
-- Display canonical spec migration: #1321
-- SRS encounter canonical spec migration: #1322
+- Phase 1 canonical spec migration: #1323
+- SRS combat: [`docs/specs/srs_combat.md`](docs/specs/srs_combat.md)
+- Display canonical spec migration: #1322
+- SRS encounter canonical spec migration: #1320
 
 ### Evaluations
 
