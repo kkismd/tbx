@@ -90,7 +90,7 @@ B. spec file 反映用の後続 issue が作成済みで、そのリンクが本
 | `srs_map_generation.md` | #1085, #1086, #1088 | #1263 / #1264 と連動 |
 | [`srs_movement.md`](srs_movement.md) | #1083, #1089 | #1267 で追加 |
 | [`srs_objects.md`](srs_objects.md) | #1266, #1288 | #1288 で追加 |
-| `srs_encounter.md` | #1178, #1194 | 後続候補 |
+| [`srs_encounter.md`](srs_encounter.md) | #1178, #1194, #1320 | #1320 で追加 |
 | [`srs_combat.md`](srs_combat.md) | #1178, #1194, #1319 | #1319 で追加 |
 | [`integrated_cli.md`](integrated_cli.md) | #1241, #1242, #1243, #1244, #1245 | #1268 / #1279 で追加・補完 |
 | `display.md` | #1076, #1214, #1218, #1230-#1235 | 後続候補 |
