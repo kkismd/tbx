@@ -1,5 +1,14 @@
 # Galactic Exodus Phase 2 SRS初期モデル
 
+> **文書区分:** 履歴資料 — 旧仕様
+>
+> この文書は過去の仕様・設計経緯を保存するための archive です。現行の gameplay specification ではありません。現行仕様は `experiments/galactic_exodus/docs/specs/` を参照してください。
+
+- Former path: `experiments/galactic_exodus/srs/phase2_initial_model.md`
+- Former role: `Phase 2` 初期データモデル・設計前提
+- Superseded by: `experiments/galactic_exodus/docs/specs/README.md`, `experiments/galactic_exodus/docs/specs/srs_map_generation.md`, `experiments/galactic_exodus/docs/specs/srs_movement.md`, `experiments/galactic_exodus/docs/specs/srs_warp.md`
+- Archived by: #1318
+
 ## 1. 目的
 
 本書は、星系内SRS移動・探索の初期検証で使用するモデル境界を固定する。最終仕様ではなく、#1080 のプロトタイプ実装と評価設計が同じ入力契約を参照できる状態を作る。

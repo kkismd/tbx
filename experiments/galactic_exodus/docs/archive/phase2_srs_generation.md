@@ -1,5 +1,14 @@
 # Galactic Exodus Phase 2 SRS生成仕様
 
+> **文書区分:** 履歴資料 — 旧仕様
+>
+> この文書は過去の仕様・設計経緯を保存するための archive です。現行の gameplay specification ではありません。現行仕様は `experiments/galactic_exodus/docs/specs/` を参照してください。
+
+- Former path: `experiments/galactic_exodus/srs/phase2_srs_generation.md`
+- Former role: `SRS` generation設計
+- Superseded by: `experiments/galactic_exodus/docs/specs/srs_map_generation.md`, `experiments/galactic_exodus/docs/specs/srs_warp.md`, `experiments/galactic_exodus/docs/specs/srs_encounter.md`
+- Archived by: #1318
+
 ## 1. 目的と対象範囲
 
 > **旧仕様に関する注記**

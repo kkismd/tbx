@@ -1,5 +1,14 @@
 # Galactic Exodus Phase 1 TBX移植仕様
 
+> **文書区分:** 履歴資料 — 旧仕様
+>
+> この文書は過去の仕様・設計経緯を保存するための archive です。現行の gameplay specification ではありません。現行仕様は `experiments/galactic_exodus/docs/specs/` を参照してください。
+
+- Former path: `experiments/galactic_exodus/phase1_spec.md`
+- Former role: `Phase 1` TBX移植仕様の統合正本
+- Superseded by: `experiments/galactic_exodus/docs/specs/phase1.md`
+- Archived by: #1318
+
 ## 1. 位置づけ
 
 本書は、Python参照実装とPhase 1B評価結果を基に、TBXへ移植するPhase 1仕様を確定する正本である。

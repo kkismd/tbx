@@ -1,5 +1,14 @@
 # Galactic Exodus Phase 2 SRS移動解決規則
 
+> **文書区分:** 履歴資料 — 旧仕様
+>
+> この文書は過去の仕様・設計経緯を保存するための archive です。現行の gameplay specification ではありません。現行仕様は `experiments/galactic_exodus/docs/specs/` を参照してください。
+
+- Former path: `experiments/galactic_exodus/srs/phase2_srs_movement.md`
+- Former role: `SRS` movement解決仕様
+- Superseded by: `experiments/galactic_exodus/docs/specs/srs_movement.md`, `experiments/galactic_exodus/docs/specs/srs_warp.md`
+- Archived by: #1318
+
 ## 1. 目的
 
 本書は #1089 の成果物として、SRS内の移動command、経路列挙、地形cost、衝突、観測更新、turn/fuel、interaction、warp/exit の解決規則を固定する。

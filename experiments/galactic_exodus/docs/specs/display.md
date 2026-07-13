@@ -22,7 +22,7 @@ authority 優先順位:
 1. merged decision issue と `experiments/galactic_exodus/docs/specs/` 配下の current docs
 2. current implementation と regression tests
 3. `experiments/galactic_exodus/docs/design/galactic_exodus_display_samples.md`
-4. `experiments/galactic_exodus/srs/phase2_srs_spec.md`
+4. `experiments/galactic_exodus/docs/archive/phase2_srs_spec.md`
 
 参照根拠:
 

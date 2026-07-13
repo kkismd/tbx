@@ -129,7 +129,7 @@ issue 分類:
 |---|---:|---|---|---|---|---|
 | Phase 2 表示 baseline | #1076 | border-light LRS macro map、north-to-south SRS map、compact HUD、one-line last event、debug/log分離、ASCII fallbackを採用。 | `docs/design/galactic_exodus_display_samples.md`、LRS/SRS renderer、HUD、event formatter、display snapshot。 | `docs/design/galactic_exodus_display_samples.md`、#1231 LRS renderer、#1232 SRS renderer、#1233 compact HUD、#1234 event wording、#1235 snapshot。 | `implemented` | #1259 後に `docs/specs/galactic_exodus/display.md` へ canonical summary を追加またはミラーする。 |
 | SRS座標契約 | #1218 | engine / fixture / validator / raw payload は internal 0-origin lower-left、render / manual eval / HUD / docs は display 1-origin lower-left。 | SRS model / tests / fixtures / render / manual docs。 | #1220〜#1223 で座標変換・表示同期を実装。#1076 もこの方針を参照。 | `implemented` | 将来の display spec に短い正本メモを置き、upper-leftやdisplay 0-originの再導入を防ぐ。 |
-| SRS要素体系 | #1085/#1086 | SectorType、terrain、feature/object/actor を分離。terrainの通行可否・移動コスト・観測効果を定義。現行terrain setでは汎用`WALL`を使わない。 | `phase2_srs_elements.md`、JSON、validator、tests、model enum、movement/observation engine。 | `experiments/galactic_exodus/srs/phase2_srs_elements.md`、JSON、validator/tests、model enumに反映済み。 | `implemented` | 既存docに古い`WARP_POINT`用語が残る。#1259後のspec作成時にcleanupする。 |
+| SRS要素体系 | #1085/#1086 | SectorType、terrain、feature/object/actor を分離。terrainの通行可否・移動コスト・観測効果を定義。現行terrain setでは汎用`WALL`を使わない。 | `phase2_srs_elements.md`、JSON、validator、tests、model enum、movement/observation engine。 | `experiments/galactic_exodus/docs/archive/phase2_srs_elements.md`、JSON、validator/tests、model enumに反映済み。 | `implemented` | 既存docに古い`WARP_POINT`用語が残る。#1259後のspec作成時にcleanupする。 |
 | SRS object状態・interaction | #1085/#1087 | STATIONは隣接interaction・再利用可。RESOURCE_CACHE/SALVAGEは同一セルinteraction、使用後は除去。STAR/PLANETはstatic impassable。使用/取得はSRS turnを1消費。fuel満タン時のstation/cacheはno-op。 | SRS model/object state、interaction engine、fixtures/tests、event formatter。 | object type/stateは`srs/model.py`に存在。#1245でintegrated CLIへINTERACT接続。#1085コメントに#1087決定が記録済み。 | `partial` | object lifecycle の canonical spec が必要。fuel満タンno-opとturn消費のtest coverageもspec追加時に再確認する。 |
 | SRS WARP flags | #1088 | `WARP_POINT`、辺中央固定、Feature warp point、WarpZoneを廃止。各FLOOR cellが方向別`warp_flags`を持つ。辺に接する2x2 FLOOR clusterを構成する外周cellにflagを付与。四隅は2方向を持ち得る。 | `srs/generate.py`、`srs/test_generate.py`、`integrated_play.py`、`test_integrated_play.py`、render/HUD/docs。 | #1254で`srs/generate.py`を更新。#1255でminimal integrated SRSを同期。各PRでtest更新。 | `partial` | #1259配下で`srs_warp.md`を作成する。古いdocの`WARP_POINT`表現も、現行仕様を指す箇所は更新する。 |
 | RIFT edge / RIFT_BARRIER対応 | #1088 | RIFT blocked edgeは対応方向のwarp flagを禁止し、RIFT_BARRIERを配置する。non-blocked edgeは通常の2x2 FLOOR warp rule。銀河外縁方向はwarp flag禁止。 | SRS generator、RIFT fixtures/tests、LRS EXIT validation、renderer/HUD wording。 | `srs/generate.py`は`descriptor.blocked_edges`方向のwarp flagをskipし、RIFT_BARRIERを配置。integrated CLIはblocked/out-of-bounds EXITをreject。 | `partial` | `create_sector()`はboard境界情報を持たないため、non-blocked directionをopen扱いする。LRS descriptor統合時に解消、または制限として明文化する。 |
@@ -161,13 +161,26 @@ issue 分類:
 | 6 | #1083/#1089のSRS移動・探索最終決定に直接対応するcanonical docがない。 | `srs_movement.md`を作るか、`integrated_cli.md`とSRS engine specへ分割して記録する。 |
 | 7 | integrated CLI EXIT specにはfuel/combat制約が書かれているが、minimal CLIがすべて実装しているとは限らない。 | `integrated_cli.md`で現在のimplemented constraintとdeferred constraintを分けて書く。 |
 
+## legacy spec archive inventory (#1318)
+
+`#1318` で legacy specification 6文書を `docs/archive/` へ移動し、`docs/specs/` を唯一の `CURRENT_SOURCE` とした。旧 path は former path としてのみ保持する。
+
+| classification | former path | final destination | status | current source | follow-up |
+|---|---|---|---|---|---|
+| `LEGACY_CANONICAL_SPEC` | `experiments/galactic_exodus/phase1_spec.md` | `experiments/galactic_exodus/docs/archive/phase1_spec.md` | `archived` | `experiments/galactic_exodus/docs/specs/phase1.md` | #1318 |
+| `LEGACY_DOMAIN_SPEC` | `experiments/galactic_exodus/srs/phase2_srs_elements.md` | `experiments/galactic_exodus/docs/archive/phase2_srs_elements.md` | `archived` | `experiments/galactic_exodus/docs/specs/srs_map_generation.md`, `experiments/galactic_exodus/docs/specs/srs_objects.md`, `experiments/galactic_exodus/docs/specs/srs_combat.md` | #1318 |
+| `LEGACY_CONSOLIDATED_SPEC` | `experiments/galactic_exodus/srs/phase2_srs_spec.md` | `experiments/galactic_exodus/docs/archive/phase2_srs_spec.md` | `archived` | `experiments/galactic_exodus/docs/specs/srs_map_generation.md`, `experiments/galactic_exodus/docs/specs/srs_movement.md`, `experiments/galactic_exodus/docs/specs/srs_objects.md`, `experiments/galactic_exodus/docs/specs/srs_warp.md`, `experiments/galactic_exodus/docs/specs/srs_combat.md`, `experiments/galactic_exodus/docs/specs/srs_encounter.md`, `experiments/galactic_exodus/docs/specs/display.md` | #1318 |
+| `LEGACY_DOMAIN_SPEC` | `experiments/galactic_exodus/srs/phase2_srs_movement.md` | `experiments/galactic_exodus/docs/archive/phase2_srs_movement.md` | `archived` | `experiments/galactic_exodus/docs/specs/srs_movement.md`, `experiments/galactic_exodus/docs/specs/srs_warp.md` | #1318 |
+| `LEGACY_DESIGN_MODEL` | `experiments/galactic_exodus/srs/phase2_initial_model.md` | `experiments/galactic_exodus/docs/archive/phase2_initial_model.md` | `archived` | `experiments/galactic_exodus/docs/specs/README.md`, `experiments/galactic_exodus/docs/specs/srs_map_generation.md`, `experiments/galactic_exodus/docs/specs/srs_movement.md`, `experiments/galactic_exodus/docs/specs/srs_warp.md` | #1318 |
+| `LEGACY_DOMAIN_SPEC` | `experiments/galactic_exodus/srs/phase2_srs_generation.md` | `experiments/galactic_exodus/docs/archive/phase2_srs_generation.md` | `archived` | `experiments/galactic_exodus/docs/specs/srs_map_generation.md`, `experiments/galactic_exodus/docs/specs/srs_warp.md`, `experiments/galactic_exodus/docs/specs/srs_encounter.md` | #1318 |
+
 ## legacy spec migration matrix (#1314)
 
 `LEGACY_SOURCE` として棚卸し対象にした6文書を、section単位で current docs へ照合した結果を記録する。
 
 status は #1314 の定義に従い、`MIGRATED` / `PARTIAL` / `MISSING` / `CONFLICTING` / `OBSOLETE` のみを使う。
 
-| source path | source section | spec item | current docs destination | current reflection | status | conflict detail | action | follow-up issue |
+| former path | source section | spec item | current docs destination | current reflection | status | conflict detail | action | follow-up issue |
 |---|---|---|---|---|---|---|---|---|
 | `experiments/galactic_exodus/phase1_spec.md` | `## 1` | Phase 1 authority / inputs / decision register | `docs/specs/phase1.md` | `phase1.md` が `CURRENT_SOURCE` として authority、schema version、decision register、fixture validator を current path で固定した。 | `MIGRATED` | なし | 維持のみ。 | #1323 |
 | `experiments/galactic_exodus/phase1_spec.md` | `## 2-3` | board / known state / movement contract | `docs/specs/phase1.md` | fixed 8x8 board、`known_cells` / `visited_cells` / `known_routes`、unknown / known `RIFT`、movement resolution order を current gameplay contract として移植した。 | `MIGRATED` | なし | 維持のみ。 | #1323 |
