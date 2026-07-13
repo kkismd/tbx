@@ -8,6 +8,16 @@
 
 ## 2. 盤面サイズ
 
+> **旧仕様に関する注記**
+>
+> 状態: `SUPERSEDED`
+>
+> このsectionは現行仕様の正本ではない。
+> 現在の正本: `experiments/galactic_exodus/docs/specs/srs_movement.md`, `experiments/galactic_exodus/docs/specs/srs_map_generation.md`
+> 置換内容: `11x11` candidate を含む盤面候補は current Phase 2 baseline では採用されず、現行仕様は `9x9` baseline を正本として固定している。
+> 履歴として残す内容: `11x11` candidate の検討履歴。
+> 関連issue: #1321
+
 ```text
 対応サイズ:
   9x9
@@ -48,6 +58,17 @@ SALVAGE
 `STATION_STRUCTURE`と`BASE_NODE`は廃止し、通行不能かつ隣接操作可能な1セルObjectである`STATION`へ統合する。
 
 ## 5. Terrain属性
+
+> **旧仕様に関する注記**
+>
+> 状態: `CONFLICTING`
+>
+> このsectionは現行仕様の正本ではない。
+> 現在の正本: `experiments/galactic_exodus/docs/specs/srs_movement.md`, `experiments/galactic_exodus/docs/specs/srs_warp.md`
+> 旧記述: `RIFT_DISTORTION` の移動倍率を `2` とし、`GRAVITY_FIELD_VERTICAL` / `GRAVITY_FIELD_HORIZONTAL` を `1または2` としている。
+> 現行仕様: `srs_movement.md` は `RIFT_DISTORTION` と両 `GRAVITY_FIELD_*` の移動倍率を baseline で `1` に固定している。
+> 競合内容: legacy の地形倍率表を current baseline として読むと、移動コストと gravity field の効果を誤認する。
+> 関連issue: #1321
 
 | ID | 和名 | 通行可能 | 移動倍率 | 観測範囲 | 移動・直線航行を遮断 | `WARP_POINT`配置可 |
 |---|---|---:|---:|---|---:|---:|
@@ -108,6 +129,17 @@ step_cost = geometric_step_cost
 
 ## 8. 重力異常領域
 
+> **旧仕様に関する注記**
+>
+> 状態: `CONFLICTING`
+>
+> このsectionは現行仕様の正本ではない。
+> 現在の正本: `experiments/galactic_exodus/docs/specs/srs_movement.md`
+> 旧記述: `GRAVITY_FIELD_VERTICAL` / `GRAVITY_FIELD_HORIZONTAL` は移動方向に応じて `gravity_multiplier = 1 or 2` を取る。
+> 現行仕様: `srs_movement.md` は current baseline の gravity field multiplier を両方とも `1` に固定している。
+> 競合内容: legacy は方向依存の追加コストを前提にしているが、current contract は比較候補ではなく baseline の固定値を採用している。
+> 関連issue: #1321
+
 ### `GRAVITY_FIELD_VERTICAL`
 
 南北方向に沿った重力異常領域であり、X座標の変化を伴う移動のコストを2倍にする。
@@ -157,6 +189,16 @@ turn消費、途中まで進んだ場合の最終位置、command全体の扱い
 
 ## 10. `WARP_POINT`の配置
 
+> **旧仕様に関する注記**
+>
+> 状態: `SUPERSEDED`
+>
+> このsectionは現行仕様の正本ではない。
+> 現在の正本: `experiments/galactic_exodus/docs/specs/srs_warp.md`, `experiments/galactic_exodus/docs/specs/srs_map_generation.md`
+> 置換内容: object/feature としての `WARP_POINT` 配置規則は廃止され、現行仕様は各 cell の `warp_flags` と edge / return-cell selection 契約で warp を表現する。
+> 履歴として残す内容: `WARP_POINT` を独立 feature として扱っていた旧配置前提。
+> 関連issue: #1321
+
 `WARP_POINT`は、隣接星系へワープ可能な重力の安定した地点を表す。
 
 ```text
@@ -181,6 +223,16 @@ RIFTのblocked edge:
 ```
 
 ## 11. SectorType × Terrainマトリクス
+
+> **旧仕様に関する注記**
+>
+> 状態: `SUPERSEDED`
+>
+> このsectionは現行仕様の正本ではない。
+> 現在の正本: `experiments/galactic_exodus/docs/specs/srs_map_generation.md`, `experiments/galactic_exodus/docs/specs/srs_objects.md`, `experiments/galactic_exodus/docs/specs/srs_warp.md`
+> 置換内容: `## 11-12` の terrain / object matrix は current docs で generator の必須・任意・禁止要素、object 配置制約、`warp_flags` 契約へ分割移行された。
+> 履歴として残す内容: full terrain-count profile、`11x11` range、現行 docs で deferred のまま残している matrix 比較根拠。
+> 関連issue: #1321
 
 凡例:
 

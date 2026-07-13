@@ -177,6 +177,17 @@ LRS で対象 sector へ入った時点で、必ず SRS を開始する。省略
 
 ## 7. Object placement and lifecycle
 
+> **旧仕様に関する注記**
+>
+> 状態: `CONFLICTING`
+>
+> このsectionは現行仕様の正本ではない。
+> 現在の正本: `experiments/galactic_exodus/docs/specs/srs_movement.md`, `experiments/galactic_exodus/docs/specs/srs_objects.md`, `experiments/galactic_exodus/docs/specs/srs_map_generation.md`
+> 旧記述: `SALVAGE` の即時回復 choice に `RECOVER_DURABILITY` を含めている。
+> 現行仕様: `srs_objects.md` は `SALVAGE` の choice を `RECOVER_ENERGY` / `RECOVER_PHOTON_TORPEDO_AMMO` / `STORE_ONLY` に固定している。
+> 競合内容: legacy の object lifecycle を current contract として読むと、`SALVAGE` の choice set と即時回復対象を誤認する。
+> 関連issue: #1321
+
 SRS 上の主要 object は `STAR`、`PLANET`、`STATION`、`RESOURCE_CACHE`、`SALVAGE` である。
 
 `STAR`、`PLANET`、`STATION` は impassable object、`RESOURCE_CACHE` と `SALVAGE` は passable object とする。
@@ -505,6 +516,16 @@ reward:
 加えて、既存の known map / visited / warp / consumed / activated object / blocked edge 表示契約も維持する。
 
 ## 18. Deferred follow-up map
+
+> **旧仕様に関する注記**
+>
+> 状態: `SUPERSEDED`
+>
+> このsectionは現行仕様の正本ではない。
+> 現在の正本: `experiments/galactic_exodus/docs/specs/README.md`
+> 置換内容: follow-up map を monolithic spec に維持する方式は廃止され、現行仕様の source issue / follow-up は `README.md` と各 current spec header で管理する。
+> 履歴として残す内容: split migration 前の follow-up 一覧。
+> 関連issue: #1321
 
 現時点で open の follow-up は次のとおりとする。
 

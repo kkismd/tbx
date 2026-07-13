@@ -2,6 +2,16 @@
 
 ## 1. 目的と対象範囲
 
+> **旧仕様に関する注記**
+>
+> 状態: `SUPERSEDED`
+>
+> このsectionは現行仕様の正本ではない。
+> 現在の正本: `experiments/galactic_exodus/docs/specs/srs_map_generation.md`
+> 置換内容: `## 1-4` の generation scope、terrain-count profile、placement constraints は current generator contract と deferred 範囲を `srs_map_generation.md` に分離して整理した。
+> 履歴として残す内容: full terrain-count range、`11x11` profile、seed/report schema を含む旧 monolithic 生成仕様。
+> 関連issue: #1321
+
 本書は、#1088で確定したSRS星系生成規則を、日本語仕様書と機械可読JSON契約へ固定する。
 
 対象成果物:
@@ -276,6 +286,16 @@ E / W:
 到着候補が存在しないマップは生成不正とし、決定的再試行を行う。実行時fallbackは設けない。
 
 ## 6. 生成順
+
+> **旧仕様に関する注記**
+>
+> 状態: `SUPERSEDED`
+>
+> このsectionは現行仕様の正本ではない。
+> 現在の正本: `experiments/galactic_exodus/docs/specs/srs_map_generation.md`
+> 置換内容: `## 6-9` の生成手順、cluster generation、到達可能性、seed retry/report は current docs で現行 generator contract に必要な範囲だけを正本化している。
+> 履歴として残す内容: retry/report schema、current docs で deferred のまま残している seed 派生と generation report の詳細。
+> 関連issue: #1321
 
 ```text
 1. FLOOR初期化
