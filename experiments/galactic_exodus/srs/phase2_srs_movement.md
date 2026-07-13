@@ -87,6 +87,16 @@ budget_raw = 40
 
 ## 6. VECTOR_COMMAND
 
+> **旧仕様に関する注記**
+>
+> 状態: `SUPERSEDED`
+>
+> このsectionは現行仕様の正本ではない。
+> 現在の正本: `experiments/galactic_exodus/docs/specs/srs_movement.md`
+> 置換内容: `## 6-7` の `VECTOR_COMMAND` / `DIRECTIONAL_THRUST` は baseline ではなく、current docs では historical comparison candidate としてのみ扱う。
+> 履歴として残す内容: 比較用 command surface、angle / distance、ray / supercover line の旧比較条件。
+> 関連issue: #1321
+
 `VECTOR_COMMAND` は比較対象である。
 
 ```text
@@ -165,6 +175,17 @@ first blocked cell collision = no observation update
 ```
 
 ## 10. interaction
+
+> **旧仕様に関する注記**
+>
+> 状態: `CONFLICTING`
+>
+> このsectionは現行仕様の正本ではない。
+> 現在の正本: `experiments/galactic_exodus/docs/specs/srs_movement.md`, `experiments/galactic_exodus/docs/specs/srs_objects.md`, `experiments/galactic_exodus/docs/specs/srs_map_generation.md`
+> 旧記述: `RESOURCE_CACHE` を sector total `+5` split とし、`SALVAGE` の効果を `DEFERRED_PLACEHOLDER` としている。
+> 現行仕様: `srs_objects.md` は `RESOURCE_CACHE` を fixed fuel `+3`、`SALVAGE` を `RECOVER_ENERGY` / `RECOVER_PHOTON_TORPEDO_AMMO` / `STORE_ONLY` の fixed Phase 2 initial behavior としている。
+> 競合内容: legacy の interaction baseline を current contract として読むと、回復量と `SALVAGE` choice set を誤認する。
+> 関連issue: #1321
 
 baselineは `EXPLICIT_INTERACT` である。
 
