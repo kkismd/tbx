@@ -1,4 +1,4 @@
-# Galactic Exodus SRS combat specification
+# Galactic Exodus SRS 戦闘仕様
 
 Source issue: #1319
 Parent issue: #1314
@@ -6,64 +6,64 @@ Decision inputs: #1178, #1194
 Related: #1195, #1259, #1275, #1276, #1296, #1303, #1304, #1318
 Base branch: `integration/882-galactic-exodus`
 
-This document is the CURRENT_SOURCE for Galactic Exodus SRS combat.
+この文書は、Galactic Exodus の SRS 戦闘に関する `CURRENT_SOURCE` である。
 
-- issue comment, legacy spec, fixtures, and implementation are evidence or regression surfaces
-- when they diverge, update them from this document rather than treating them as competing authorities
-- advanced hit probability, evasion probability, and final balance tuning remain deferred
-- this document does not invent new combat rules beyond what current implementation and regression already fix
+- issue comment、legacy spec、fixture、実装は参照根拠または regression 面として扱う
+- それらと差分がある場合は、競合する正本として扱うのではなく、この文書に合わせて更新する
+- 高度な命中率、回避率、最終的なバランス調整は deferred のままとする
+- この文書は、現行実装と既存 regression がすでに固定している範囲を超えて、新しい戦闘ルールを追加しない
 
-## 1. Status and authority
+## 1. 文書の位置付けと正本性
 
-This file is the current source of truth for Phase 2 combat state, command flow, enemy action, reaction, and combat event payloads.
+このファイルは、Phase 2 の戦闘状態、command の流れ、enemy 行動、reaction、combat event payload の current source of truth である。
 
-Authority order:
+authority優先順位:
 
-1. merged decision issues and current docs under `experiments/galactic_exodus/docs/specs/`
-2. current implementation and regression tests
+1. `experiments/galactic_exodus/docs/specs/` 配下の、マージ済み判断 issue と current docs
+2. 現行実装と regression test
 3. legacy `experiments/galactic_exodus/docs/archive/phase2_srs_spec.md`
 
-Referenced evidence:
+参照根拠:
 
 - legacy baseline: `experiments/galactic_exodus/docs/archive/phase2_srs_spec.md`
 - implementation: `experiments/galactic_exodus/srs/model.py`, `experiments/galactic_exodus/srs/engine.py`
 - regression: `experiments/galactic_exodus/srs/test_engine_combat.py`, `experiments/galactic_exodus/srs/test_fixture_regression.py`, `experiments/galactic_exodus/srs/fixtures/combat_*.json`
 
-## 2. Scope and boundaries
+## 2. 対象範囲と境界
 
-Included:
+対象:
 
-- combat state and phase progression
-- `COMBAT_STEP` command contract
-- player attack resolution
-- enemy action order, attack, and movement
-- `COUNTERATTACK` / `DEFEND` reaction handling
-- combat resource consumption and recovery timing
-- enemy destruction and action skipping
-- combat event payloads
-- combat comparison fields used by fixture regression
+- 戦闘状態と phase progression
+- `COMBAT_STEP` の command 契約
+- player attack の解決
+- enemy の行動順、攻撃、移動
+- `COUNTERATTACK` / `DEFEND` reaction 処理
+- 戦闘リソースの消費と回復タイミング
+- enemy 破壊と行動 skip
+- combat event payload
+- fixture regression で使う combat 比較項目
 
-Delegated to other current specs:
+他の current spec へ委譲する範囲:
 
-- encounter roll, danger score, and spawn composition: `docs/specs/srs_encounter.md`
-- dropped `SALVAGE` object lifecycle, pickup, and reward effects: `docs/specs/srs_objects.md`
-- non-combat SRS movement: `docs/specs/srs_movement.md`
-- integrated CLI parsing and rendering: `docs/specs/integrated_cli.md`
-- map generation and placement: `docs/specs/srs_map_generation.md`
+- encounter roll、danger score、spawn composition: `docs/specs/srs_encounter.md`
+- drop された `SALVAGE` object の lifecycle、pickup、reward effect: `docs/specs/srs_objects.md`
+- 非戦闘 SRS movement: `docs/specs/srs_movement.md`
+- 統合 CLI の parsing と rendering: `docs/specs/integrated_cli.md`
+- map 生成と配置: `docs/specs/srs_map_generation.md`
 
-Non-scope:
+対象外:
 
-- encounter chance rebalance
-- enemy `SALVAGE` drop probability rebalance
-- pickup effect redesign
-- base upgrade cost tuning
-- final weapon and enemy balance
-- new hit or evasion probability systems
-- new weapon types, enemy tiers, or reaction types
+- encounter chance の再バランス
+- enemy `SALVAGE` drop probability の再バランス
+- pickup effect の再設計
+- base upgrade cost の調整
+- 最終的な weapon / enemy balance
+- 新しい hit probability または evasion probability system
+- 新しい weapon type、enemy tier、reaction type
 
-## 3. Combat state model
+## 3. 状態モデル
 
-Current combat state is `SrsCombatState` with these fields:
+現行の戦闘状態は `SrsCombatState` であり、次の field を持つ。
 
 - `player`
 - `enemies`
@@ -72,12 +72,12 @@ Current combat state is `SrsCombatState` with these fields:
 - `combat_turn`
 - `player_attack_target_id`
 
-Derived booleans:
+導出値:
 
 - `enemy_presence = bool(enemies)`
 - `target_available = player_attack_target_id references an existing enemy`
 
-Current phase enum names:
+現行 phase の enum 名:
 
 ```text
 PLAYER_MOVEMENT
@@ -85,58 +85,59 @@ PLAYER_ATTACK
 ENEMY_ACTION
 ```
 
-Baseline transition cycle:
+基準となる遷移 cycle:
 
 ```text
 PLAYER_MOVEMENT -> PLAYER_ATTACK -> ENEMY_ACTION -> PLAYER_MOVEMENT
 ```
 
-Transition rules:
+遷移ルール:
 
-- `PLAYER_MOVEMENT` accepts `COMBAT_STEP` as a phase advance only
-- if `enemy_presence` is true and the selected target is attackable by at least one player weapon, the next phase is `PLAYER_ATTACK`
-- otherwise `PLAYER_MOVEMENT` skips directly to `ENEMY_ACTION`
-- `PLAYER_ATTACK` advances to `ENEMY_ACTION`
-- `ENEMY_ACTION` advances to `PLAYER_MOVEMENT`
+- `PLAYER_MOVEMENT` は phase advance 専用の command として `COMBAT_STEP` を受理する
+- `enemy_presence` が `true` で、選択中 target を少なくとも 1 つの player weapon が attack 可能な場合、次の phase は `PLAYER_ATTACK` になる
+- それ以外では、`PLAYER_MOVEMENT` は `ENEMY_ACTION` へ直接 skip する
+- `PLAYER_ATTACK` は `ENEMY_ACTION` へ進む
+- `ENEMY_ACTION` は `PLAYER_MOVEMENT` へ進む
 
-State invariants:
+状態の不変条件:
 
-- rejected combat actions do not change phase, `combat_turn`, player resources, or enemy state
-- destroying the current target clears `player_attack_target_id`
-- `enemy_presence` becomes false when the last enemy is removed from `enemies`
-- current implementation keeps an empty `combat_state` with `enemy_presence = false`; it does not auto-replace it with `None` during `COMBAT_STEP`
+- reject された戦闘 action は、phase、`combat_turn`、player resource、enemy state を変更しない
+- 現在の target を破壊した場合は `player_attack_target_id` を clear する
+- 最後の enemy が `enemies` から除去されると `enemy_presence` は `false` になる
+- 現行実装は、`enemy_presence = false` の空 `combat_state` を維持し、`COMBAT_STEP` 中に自動で `None` へ置き換えない
 
-## 4. Combat command contract
+## 4. コマンド契約
 
-Combat uses `SrsCommand(command_type="COMBAT_STEP", ...)`.
+戦闘では `SrsCommand(command_type="COMBAT_STEP", ...)` を用いる。
 
-Current accepted combat-related fields:
+現行で受理する戦闘関連 field:
 
-- `player_attack_action`: `ATTACK` or `SKIP`
-- `player_attack_weapon`: `PHOTON_TORPEDO` or `PHASER`
-- `enemy_reactions`: mapping from enemy id to `COUNTERATTACK` or `DEFEND`
-- `salvage_choice`: accepted by the command model, but current combat resolution does not consume it because dropped `SALVAGE` reward resolution is delegated to `INTERACT`
+- `player_attack_action`: `ATTACK` または `SKIP`
+- `player_attack_weapon`: `PHOTON_TORPEDO` または `PHASER`
+- `enemy_reactions`: enemy id から `COUNTERATTACK` または `DEFEND` への mapping
+- `salvage_choice`: command model では受理するが、現行の戦闘解決では消費しない。drop された `SALVAGE` reward 解決は `INTERACT` へ委譲しているためである
 
-Command meaning by phase:
+phase ごとの command 意味:
 
-- `PLAYER_MOVEMENT`: advance the combat phase; no movement payload is consumed here
-- `PLAYER_ATTACK`: resolve player attack or explicit skip
-- `ENEMY_ACTION`: resolve all remaining enemies in tier order, then reactions
+- `PLAYER_MOVEMENT`: 戦闘 phase を進める。この段階では movement payload を消費しない
+- `PLAYER_ATTACK`: player attack または明示的な skip を解決する
+- `ENEMY_ACTION`: 残っている enemy を tier 順にすべて解決し、その後 reaction を解決する
 
-Reject conditions fixed by current implementation:
+現行実装で固定されている reject 条件:
 
-- no combat state: `REJECTED_NO_COMBAT_STATE`
-- target missing: `REJECTED_TARGET_UNAVAILABLE`
-- attack selected without weapon: `REJECTED_ATTACK_WEAPON_REQUIRED`
-- invalid attack weapon: `REJECTED_INVALID_ATTACK_WEAPON`
-- target outside range or blocked by line of sight: `REJECTED_TARGET_NOT_ATTACKABLE`
-- insufficient torpedo ammo: `REJECTED_INSUFFICIENT_TORPEDO_AMMO`
-- insufficient phaser energy: `REJECTED_INSUFFICIENT_PHASER_ENERGY`
-`COMBAT_REJECTED` leaves `srs_turn` unchanged.
+- 戦闘状態がない: `REJECTED_NO_COMBAT_STATE`
+- target が存在しない: `REJECTED_TARGET_UNAVAILABLE`
+- attack を選んだが weapon がない: `REJECTED_ATTACK_WEAPON_REQUIRED`
+- 無効な attack weapon: `REJECTED_INVALID_ATTACK_WEAPON`
+- target が射程外、または line of sight が blocked: `REJECTED_TARGET_NOT_ATTACKABLE`
+- torpedo ammo が不足している: `REJECTED_INSUFFICIENT_TORPEDO_AMMO`
+- phaser energy が不足している: `REJECTED_INSUFFICIENT_PHASER_ENERGY`
 
-## 5. Player combat resources and capacities
+`COMBAT_REJECTED` は `srs_turn` を変更しない。
 
-Current default player combat state:
+## 5. プレイヤーの戦闘リソースと容量
+
+現行の player 戦闘状態のデフォルト値:
 
 | Field | Default |
 |---|---:|
@@ -154,26 +155,26 @@ Current default player combat state:
 | `energy_recovery` | 1 |
 | `salvage` | 0 |
 
-Current combat timing:
+現行の戦闘タイミング:
 
-- torpedo ammo is consumed only on a successful torpedo attack execution
-- phaser energy is consumed only on a successful phaser attack execution or successful counterattack resolution
-- player energy recovers by `energy_recovery` only after `ENEMY_ACTION` resolves and `combat_turn` increments
-- `COMBAT_STEP` itself does not consume SRS fuel and does not advance `srs_turn`
+- torpedo ammo は、torpedo attack の実行が成功した場合にのみ消費する
+- phaser energy は、phaser attack の実行が成功した場合、または `COUNTERATTACK` の解決が成功した場合にのみ消費する
+- player energy は、`ENEMY_ACTION` の解決後かつ `combat_turn` increment 後に、`energy_recovery` だけ回復する
+- `COMBAT_STEP` 自体は SRS fuel を消費せず、`srs_turn` も進めない
 
-Current implementation stores combat upgrades directly in player state:
+現行実装は、戦闘 upgrade を player state に直接保持する。
 
 - `defense`
 - `evasion`
 - `phaser_power`
 - `photon_torpedo_power`
-- expanded capacities for energy and torpedo ammo
+- energy と torpedo ammo の拡張 capacity
 
-Current combat resolution does not yet apply `defense`, `evasion`, `phaser_power`, or `photon_torpedo_power` modifiers. They remain part of persistent player combat state and comparison state.
+現行の戦闘解決では、`defense`、`evasion`、`phaser_power`、`photon_torpedo_power` modifier をまだ適用しない。これらは永続的な player 戦闘状態および比較状態の一部として保持する。
 
-## 6. Weapon profiles
+## 6. 武装プロファイル
 
-Current fixed weapon profiles:
+現行の固定 weapon profile:
 
 | Weapon | Base damage | Range | Resource type | Resource cost | Power modifier field |
 |---|---:|---:|---|---:|---|
@@ -181,7 +182,7 @@ Current fixed weapon profiles:
 | `PHOTON_TORPEDO` | 3 | 3 | `PHOTON_TORPEDO_AMMO` | 1 | `photon_torpedo_power` |
 | `ENEMY_WEAPON` | tier-based | 2 | none | 0 | none |
 
-Enemy base damage is resolved from enemy tier defaults:
+enemy の base damage は、enemy tier のデフォルト値から解決する。
 
 | Enemy tier | Durability | Attack damage | Movement power |
 |---|---:|---:|---:|
@@ -190,51 +191,51 @@ Enemy base damage is resolved from enemy tier defaults:
 | `TIER3` | 8 | 8 | 3 |
 | `TIER4` | 12 | 10 | 3 |
 
-## 7. Targeting, range, and line of sight
+## 7. ターゲット選択、射程、見通し判定
 
-Current targeting contract:
+現行の targeting 契約:
 
-- the player target is identified by `player_attack_target_id`
-- the target must exist in `combat_state.enemies`
-- attackability is checked from the player position to the enemy position
-- enemy attackability is checked from enemy position to player position
+- player の target は `player_attack_target_id` で識別する
+- target は `combat_state.enemies` 内に存在しなければならない
+- player 側の attackability は player position から enemy position への関係で判定する
+- enemy 側の attackability は enemy position から player position への関係で判定する
 
-Current distance metric:
+現行の距離 metric:
 
 ```text
 combat_range_distance = max(abs(dx), abs(dy))
 ```
 
-Current line-of-sight contract:
+現行の line-of-sight 契約:
 
-- line of sight uses Bresenham cells between attacker and target
-- attacker and target cells themselves do not block line of sight
-- intermediate impassable cells block line of sight
-- impassable terrain or object rules come from `srs_movement.md`
+- line of sight は attacker と target の間にある Bresenham cell を使う
+- attacker 自身と target 自身の cell は line of sight を block しない
+- 中間の impassable cell は line of sight を block する
+- impassable terrain / object のルールは `srs_movement.md` に従う
 
-Attack rejection contract:
+attack の reject 契約:
 
-- out-of-range or blocked line of sight resolves as `REJECTED_TARGET_NOT_ATTACKABLE`
-- rejected attacks consume no ammo and no energy
+- 射程外、または line of sight blocked は `REJECTED_TARGET_NOT_ATTACKABLE` として解決する
+- reject された attack は ammo も energy も消費しない
 
-## 8. Player attack resolution
+## 8. プレイヤー攻撃の解決
 
-Current resolution order in `PLAYER_ATTACK`:
+`PLAYER_ATTACK` における現行の解決順:
 
-1. read `player_attack_action`; default to `SKIP`
-2. if action is `SKIP`, emit accepted `player_action` payload with no resource change
-3. validate that `target_available` is true
-4. validate that a player weapon was supplied and that the weapon is one of the current player attack weapons
-5. validate range and line of sight against the current target enemy
-6. validate the required resource for the selected weapon
-7. consume ammo or energy
-8. apply fixed weapon damage to enemy durability
-9. if the enemy is destroyed, remove it from `enemies`
-10. if the destroyed enemy has `drop_salvage = true`, call the dropped `SALVAGE` object helper and attach `salvage_drop` payload
-11. if the enemy survives, keep it with reduced durability
-12. if the destroyed enemy was `player_attack_target_id`, clear the target id before storing the next combat state
+1. `player_attack_action` を読む。デフォルトは `SKIP`
+2. action が `SKIP` なら、resource 変更なしの accepted `player_action` payload を emit する
+3. `target_available` が `true` であることを検証する
+4. player weapon が指定されており、かつ current player attack weapon のいずれかであることを検証する
+5. 現在の target enemy に対して、射程と line of sight を検証する
+6. 選択 weapon に必要な resource を検証する
+7. ammo または energy を消費する
+8. 固定 weapon damage を enemy durability に適用する
+9. enemy が破壊された場合は `enemies` から除去する
+10. 破壊された enemy が `drop_salvage = true` なら、drop された `SALVAGE` object helper を呼び、`salvage_drop` payload を付与する
+11. enemy が生存した場合は、durability を減らした状態で保持する
+12. 破壊された enemy が `player_attack_target_id` だった場合は、次の戦闘状態を保存する前に target id を clear する
 
-Current player attack payload fields:
+現行の player attack payload field:
 
 - `selected_action`
 - `selected_weapon`
@@ -244,42 +245,42 @@ Current player attack payload fields:
 - `resource_cost`
 - `resource_type`
 - `target_destroyed`
-- `target_remaining_durability` when the enemy survives
-- `salvage_drop` when a dropped object is generated or skipped
+- enemy が生存した場合の `target_remaining_durability`
+- drop された object が生成または skip された場合の `salvage_drop`
 
-## 9. Enemy action order and resolution
+## 9. 敵行動順と解決
 
-Current enemy action ordering:
+現行の enemy 行動順:
 
-- `SrsCombatState` normalizes enemy storage by ascending tier order
-- iteration order during `ENEMY_ACTION` follows the normalized enemy mapping
-- equal-tier ordering is whatever insertion order produced before normalization; current tests only fix tier ordering, not a secondary enemy-id sort
+- `SrsCombatState` は enemy storage を tier 昇順で正規化する
+- `ENEMY_ACTION` 中の iteration 順は、その正規化済み mapping に従う
+- 同 tier 内の順序は、正規化前の insertion order に依存する。現行 test は tier 順のみを固定し、二次的な enemy-id sort は固定していない
 
-Current action flow for each remaining enemy:
+残っている各 enemy に対する現行の行動フロー:
 
-1. skip the slot if that enemy was already removed by an earlier reaction
-2. check whether the enemy can already attack the player with `ENEMY_WEAPON`
-3. if it can attack, resolve attack and the chosen reaction immediately
-4. otherwise compute attackable cells around the player, choose the lowest-cost reachable one, and move up to `movement_power` cells along the path
-5. after movement, do not attack in the same `COMBAT_STEP`; the payload only records whether the final position is now attackable
+1. その enemy が、より前の reaction によってすでに除去されていれば slot を skip する
+2. enemy が `ENEMY_WEAPON` で player をすでに攻撃できるか確認する
+3. 攻撃できる場合は、攻撃と選択された reaction をただちに解決する
+4. 攻撃できない場合は、player 周囲の attackable cell を計算し、最小 cost で到達可能な cell を選び、path に沿って最大 `movement_power` cell まで移動する
+5. 移動後は、同じ `COMBAT_STEP` 内では攻撃しない。payload には最終位置から attackable になったかどうかだけを記録する
 
-Current enemy action payload order matches action resolution order.
+現行の enemy action payload 順序は、action 解決順と一致する。
 
-## 10. Enemy movement during combat
+## 10. 戦闘中の敵移動
 
-Current movement contract:
+現行の movement 契約:
 
-- `movement_power` is 3 for every current enemy tier
-- path search uses Dijkstra over orthogonal movement only
-- the player cell is never entered
-- impassable terrain and impassable object cells are excluded
-- enemy-occupied cells are not specially blocked in current path search; current tests do not define a separate enemy-body collision rule
-- the chosen target is the reachable attackable position with the lowest total movement cost
-- equal-cost target cells break ties by position sort order `(y, x)`
-- equal-cost path expansion uses direction order `N`, `W`, `E`, `S`
-- if no attackable cell is reachable, the enemy stays in place and returns an empty path
+- `movement_power` は現行の全 enemy tier で 3 とする
+- path search は、直交移動のみを対象とした Dijkstra を使う
+- player の cell には入らない
+- impassable terrain と impassable object cell は除外する
+- 現行の path search では、enemy が占有している cell を特別扱いで block しない。enemy body collision の独立ルールは現行 test で未定義である
+- 選ぶ target は、到達可能で attackable な位置のうち、総移動 cost が最小のものとする
+- 同 cost の target cell は位置順 `(y, x)` で tie-break する
+- 同 cost の path expansion は方向順 `N`, `W`, `E`, `S` で tie-break する
+- 到達可能な attackable cell がない場合、enemy はその場に留まり、空 path を返す
 
-Current movement payload fields:
+現行の movement payload field:
 
 - `target_attackable_position`
 - `planned_path`
@@ -290,47 +291,47 @@ Current movement payload fields:
 - `can_attack_before_move`
 - `can_attack_after_move`
 
-## 11. Reaction contract
+## 11. リアクション契約
 
-Current baseline reactions:
+現行の baseline reaction:
 
 ```text
 COUNTERATTACK
 DEFEND
 ```
 
-### COUNTERATTACK
+### `COUNTERATTACK`
 
-Current counterattack requirements:
+現行の `COUNTERATTACK` 要件:
 
-- selected reaction for that enemy is `COUNTERATTACK`
-- player has enough phaser energy for `PHASER.energy_cost`
-- the enemy is within phaser range and line of sight from the player position
+- その enemy に対して選択された reaction が `COUNTERATTACK` である
+- player が `PHASER.energy_cost` 分の phaser energy を十分に持つ
+- その enemy が、player position から phaser の射程内かつ line of sight 内にいる
 
-Current counterattack behavior:
+現行の `COUNTERATTACK` 挙動:
 
-- consume 1 phaser energy from the combat player state
-- deal fixed phaser damage 1 to the enemy
-- do not reduce the enemy's outgoing attack damage
-- the enemy may be destroyed by the counterattack before later enemy actions resolve
-- if the enemy had `drop_salvage = true`, attach dropped `SALVAGE` payload and hand off lifecycle to `srs_objects.md`
+- 戦闘 player state から phaser energy を 1 消費する
+- enemy に固定 phaser damage 1 を与える
+- enemy の outgoing attack damage は減らさない
+- その enemy は、後続 enemy action の前に counterattack で破壊されてよい
+- その enemy が `drop_salvage = true` なら、drop された `SALVAGE` payload を付与し、lifecycle を `srs_objects.md` へ委譲する
 
-### DEFEND
+### `DEFEND`
 
-Current defend behavior:
+現行の `DEFEND` 挙動:
 
-- halve incoming enemy damage
-- round up with `ceil(enemy.attack_damage * 0.5)`
-- do not consume player energy or ammo
-- current implementation does not apply `defense` as an additional modifier
+- 受ける enemy damage を半減する
+- `ceil(enemy.attack_damage * 0.5)` で切り上げる
+- player energy と ammo は消費しない
+- 現行実装は `defense` を追加 modifier として適用しない
 
-### Fallback
+### フォールバック
 
-Current fallback rule:
+現行の fallback ルール:
 
-- if `COUNTERATTACK` was requested but energy, range, or line of sight requirements fail, resolve as `DEFEND`
+- `COUNTERATTACK` が要求されても、energy、射程、line of sight の要件を満たさない場合は `DEFEND` として解決する
 
-Reaction payload fields:
+reaction payload field:
 
 - `selected_reaction`
 - `resolved_reaction`
@@ -339,36 +340,36 @@ Reaction payload fields:
 - `damage_to_player`
 - `counterattack_damage`
 - `enemy_destroyed`
-- `salvage_drop` when counterattack destruction triggers a dropped object helper
+- counterattack 破壊で drop helper が起動した場合の `salvage_drop`
 
-## 12. Enemy destruction and action skipping
+## 12. 敵破壊と行動スキップ
 
-Current destruction contract:
+現行の破壊契約:
 
-- an enemy destroyed by player attack is removed before `ENEMY_ACTION`
-- an enemy destroyed by counterattack is removed immediately during that enemy's action
-- later iteration skips any enemy id already removed from the current `updated_enemies`
-- destroyed enemies do not receive later actions in the same `COMBAT_STEP`
-- `enemy_presence` is derived from the remaining enemy count
-- after the last enemy is destroyed, the phase still advances according to the normal phase transition rule; current implementation does not special-case a terminal combat phase
+- player attack で破壊された enemy は `ENEMY_ACTION` 前に除去される
+- counterattack で破壊された enemy は、その enemy の action 中に即時除去される
+- 後続 iteration では、すでに current `updated_enemies` から除去された enemy id を skip する
+- 破壊された enemy は、同じ `COMBAT_STEP` 中の後続 action を受けない
+- `enemy_presence` は残っている enemy 数から導出する
+- 最後の enemy を破壊した後も、phase は通常の遷移ルールに従って進む。現行実装は terminal combat phase を特別扱いしない
 
-Current regressions fixed by tests and fixtures include:
+test と fixture で固定されている現行 regression には次を含む。
 
-- torpedo kill produces no later enemy action for the destroyed enemy
-- counterattack kill skips subsequent actions for that enemy
-- dropped `SALVAGE` remains a combat-to-object boundary, not an immediate reward
+- torpedo kill された enemy には、その後の enemy action が発生しない
+- counterattack kill は、その enemy の後続 action を skip する
+- drop された `SALVAGE` は、即時 reward ではなく combat-to-object 境界として扱う
 
-## 13. Combat turn and SRS turn accounting
+## 13. 戦闘ターンとSRSターンの計上
 
-Current accounting contract:
+現行の計上契約:
 
-- `COMBAT_STEP` does not advance `srs_turn`
-- rejected combat actions do not advance `combat_turn`
-- `combat_turn` increments only after `ENEMY_ACTION` resolves
-- player energy recovery is applied after `ENEMY_ACTION` and after the increment, capped by `energy_capacity`
-- `PLAYER_MOVEMENT -> PLAYER_ATTACK` and `PLAYER_ATTACK -> ENEMY_ACTION` transitions do not increment `combat_turn`
+- `COMBAT_STEP` は `srs_turn` を進めない
+- reject された戦闘 action は `combat_turn` を進めない
+- `combat_turn` は `ENEMY_ACTION` の解決後にのみ increment する
+- player energy recovery は `ENEMY_ACTION` の後、かつ increment 後に適用し、`energy_capacity` で cap する
+- `PLAYER_MOVEMENT -> PLAYER_ATTACK` と `PLAYER_ATTACK -> ENEMY_ACTION` の遷移では `combat_turn` を increment しない
 
-Example from current fixture behavior:
+現行 fixture 挙動の例:
 
 ```text
 initial: phase=PLAYER_MOVEMENT, combat_turn=0
@@ -376,39 +377,39 @@ COMBAT_STEP -> PLAYER_ATTACK or ENEMY_ACTION, combat_turn=0
 COMBAT_STEP at ENEMY_ACTION -> PLAYER_MOVEMENT, combat_turn=1, energy recovers
 ```
 
-## 14. Event and payload contract
+## 14. イベントとpayloadの契約
 
-Current combat event types:
+現行の combat event type:
 
 - `COMBAT_TRANSITIONED`
 - `COMBAT_REJECTED`
 
-`COMBAT_REJECTED.payload` contains:
+`COMBAT_REJECTED.payload` が含む内容:
 
 - `command_type`
-- `phase` when combat state existed
+- 戦闘状態が存在した場合の `phase`
 - `outcome`
 
-`COMBAT_TRANSITIONED.payload` contains:
+`COMBAT_TRANSITIONED.payload` が含む内容:
 
 | Field | Meaning |
 |---|---|
-| `command_type` | currently always `COMBAT_STEP` |
-| `phase_from` | previous combat phase |
-| `phase_to` | next combat phase |
-| `combat_turn_before` | previous turn counter |
-| `combat_turn_after` | updated turn counter |
-| `enemy_presence` | whether enemies existed before the transition payload was built |
-| `target_available` | whether `player_attack_target_id` referenced a live enemy before resolution |
-| `target_attackable` | whether the target was attackable at phase-advance time |
-| `player_action` | player attack or skip payload, or `null` outside `PLAYER_ATTACK` |
-| `enemy_actions` | ordered list of enemy action payloads, or empty list outside `ENEMY_ACTION` |
-| `player_durability_before` / `after` | player durability delta |
-| `player_energy_before` / `after` | player energy delta |
-| `player_torpedo_ammo_before` / `after` | player torpedo ammo delta |
-| `outcome` | currently `ACCEPTED` |
+| `command_type` | 現状は常に `COMBAT_STEP` |
+| `phase_from` | 遷移前の combat phase |
+| `phase_to` | 遷移後の combat phase |
+| `combat_turn_before` | 更新前の turn counter |
+| `combat_turn_after` | 更新後の turn counter |
+| `enemy_presence` | 遷移 payload 構築時点で、遷移前に enemy が存在したか |
+| `target_available` | 解決前に `player_attack_target_id` が生きた enemy を参照していたか |
+| `target_attackable` | phase advance 時点で target が attackable だったか |
+| `player_action` | player attack または skip payload。`PLAYER_ATTACK` 以外では `null` |
+| `enemy_actions` | enemy action payload の順序付き list。`ENEMY_ACTION` 以外では空 list |
+| `player_durability_before` / `after` | player durability の差分 |
+| `player_energy_before` / `after` | player energy の差分 |
+| `player_torpedo_ammo_before` / `after` | player torpedo ammo の差分 |
+| `outcome` | 現状は `ACCEPTED` |
 
-Representative payload shape:
+代表的な payload shape:
 
 ```text
 COMBAT_TRANSITIONED.payload:
@@ -422,9 +423,9 @@ COMBAT_TRANSITIONED.payload:
   player_torpedo_ammo_before/after
 ```
 
-## 15. Persistent and comparison state
+## 15. 永続状態と比較状態
 
-Current combat comparison fields used by fixture regression:
+fixture regression が使う現行の combat 比較項目:
 
 - `combat_phase`
 - `combat_turn`
@@ -435,7 +436,7 @@ Current combat comparison fields used by fixture regression:
 - `combat_enemy_positions`
 - `combat_enemy_durabilities`
 
-Current combat state also carries, and comparisons may inspect through event payloads:
+現行の combat state は次も保持しており、比較では event payload 経由で参照されうる。
 
 - enemy id
 - enemy tier
@@ -443,47 +444,47 @@ Current combat state also carries, and comparisons may inspect through event pay
 - enemy durability
 - enemy `drop_salvage`
 - player `salvage`
-- player combat upgrade fields
+- player の戦闘 upgrade field
 - `player_attack_target_id`
 
-Persistence boundary:
+永続化の境界:
 
-- `combat_state` is part of the live `SrsGameState`
-- `SrsPersistentState` does not store combat phase, combat turn, or enemy roster
-- current sector persistence model is therefore object/discovery focused, not a serialized combat snapshot model
-- this document treats combat persistence across commands within one `SrsGameState` as current behavior, and does not define sector-revisit combat restoration beyond that
+- `combat_state` は live な `SrsGameState` の一部である
+- `SrsPersistentState` は combat phase、combat turn、enemy roster を保存しない
+- そのため、現行の sector 永続化 model は、直列化された combat snapshot ではなく object / discovery 中心である
+- この文書は、1 つの `SrsGameState` 内で command をまたいで保持される combat persistence を current behavior として扱い、それを超える sector revisit 時の combat 復元は定義しない
 
-## 16. Reward boundary
+## 16. 報酬境界
 
-Combat-owned boundary:
+combat 側が責務を持つ境界:
 
-- determine whether an enemy was destroyed
-- read `enemy.drop_salvage`
-- call the dropped `SALVAGE` object helper when needed
-- attach `salvage_drop` information to combat payloads
+- enemy が破壊されたかどうかを判定する
+- `enemy.drop_salvage` を読む
+- 必要に応じて drop された `SALVAGE` object helper を呼ぶ
+- combat payload に `salvage_drop` 情報を付与する
 
-Delegated to `srs_objects.md`:
+`srs_objects.md` へ委譲する範囲:
 
-- dropped `SALVAGE` object schema
-- pickup through `INTERACT`
-- salvage value application to inventory and recovery
-- occupied-cell skip and object-id collision handling details
+- drop された `SALVAGE` object schema
+- `INTERACT` による pickup
+- salvage value の inventory 反映と recovery
+- occupied-cell skip と object-id collision 処理の詳細
 
-Current combat spec does not reintroduce legacy immediate reward or `salvage_reward` behavior at kill time.
+現行の combat spec は、kill 時点の legacy 即時 reward や `salvage_reward` 挙動を再導入しない。
 
-## 17. Implementation and regression references
+## 17. 実装と回帰確認の参照
 
-Implementation:
+実装:
 
 - `experiments/galactic_exodus/srs/engine.py`
 - `experiments/galactic_exodus/srs/model.py`
 
-Regression tests:
+Regression test:
 
 - `experiments/galactic_exodus/srs/test_engine_combat.py`
 - `experiments/galactic_exodus/srs/test_fixture_regression.py`
 
-Fixtures:
+Fixture:
 
 - `experiments/galactic_exodus/srs/fixtures/combat_attack_blocked_los_9x9.json`
 - `experiments/galactic_exodus/srs/fixtures/combat_attack_clear_los_9x9.json`
@@ -503,7 +504,7 @@ Fixtures:
 - `experiments/galactic_exodus/srs/fixtures/combat_salvage_no_drop_tier1_9x9.json`
 - `experiments/galactic_exodus/srs/fixtures/combat_torpedo_destroy_no_counterattack_9x9.json`
 
-Traceability issues and PR history:
+traceability 用の issue / PR 履歴:
 
 - #1178
 - #1194
@@ -516,13 +517,13 @@ Traceability issues and PR history:
 - #1304
 - #1319
 
-## 18. Deferred items
+## 18. 後続へ委譲する項目
 
-Deferred:
+後続へ委譲する項目:
 
-- hit probability
-- evasion probability
-- defense / evasion final tuning
-- advanced combat probability and tuning: #1195
-- final enemy AI tuning
-- final weapon balance
+- 命中率
+- 回避率
+- `defense` / `evasion` の最終調整
+- 高度な戦闘確率と調整: #1195
+- 最終的な enemy AI 調整
+- 最終的な武装バランス
