@@ -40,7 +40,7 @@ authority優先順位:
 - base station interaction
 - base upgrade と salvage 消費
 - `persistent_state` / SRS turn / fuel / `player_state` への副作用
-- #1275 / #1278 との follow-up 関係
+- #1275 / #1278 との追跡関係
 
 対象外:
 
@@ -81,7 +81,7 @@ RECOVER_DURABILITY は SALVAGE pickup では非対応にし、durability recover
 
 #1277 / #1292 により、実装・fixture・test は B 方針へ同期済みである。
 
-## 4. Map 上の `SALVAGE` pickup
+## 4. マップ上の`SALVAGE`取得
 
 仕様:
 
@@ -117,7 +117,7 @@ reject reason:
 REJECTED_UNSUPPORTED_SALVAGE_CHOICE
 ```
 
-## 5. `SALVAGE` reward の共通フロー
+## 5. `SALVAGE`報酬の共通フロー
 
 仕様:
 
@@ -132,25 +132,25 @@ REJECTED_UNSUPPORTED_SALVAGE_CHOICE
 
 durability recovery は `BASE` / `STATION` recovery 側で扱う。
 
-## 6. Enemy `SALVAGE` drop randomization
+## 6. 敵`SALVAGE` dropの乱数化
 
 #1278 では、enemy dropped `SALVAGE` の drop / no-drop 判定を、固定 bool だけでなく random roll でも決められるようにする。
 
-Before #1278:
+変更前の#1278:
 
 ```text
-enemy.drop_salvage bool determines drop/no-drop.
-fixtures can explicitly set drop_salvage true / false.
-there is no drop chance table, random roll, or seed-driven drop resolution.
+enemy.drop_salvage bool が drop / no-drop を決める。
+fixture では drop_salvage true / false を明示できる。
+drop chance table、random roll、seed driven の drop resolution は存在しない。
 ```
 
-After #1278:
+変更後の#1278:
 
 ```text
-enemy SALVAGE drop/no-drop is resolved before combat reward resolution.
-normal encounter / enemy spawn may resolve drop_salvage from enemy tier and RNG roll.
-combat reads only the already-resolved enemy.drop_salvage bool and does not re-roll.
-explicit fixture / fixed encounter drop_salvage values remain deterministic overrides.
+enemy SALVAGE の drop / no-drop は combat reward resolution 前に確定する。
+通常の encounter / enemy spawn では enemy tier と RNG roll から drop_salvage を決めてよい。
+combat は、すでに確定済みの enemy.drop_salvage bool だけを読み、再 roll しない。
+explicit fixture / fixed encounter の drop_salvage 値は deterministic override のまま維持する。
 ```
 
 仕様:
@@ -221,22 +221,22 @@ drop_salvage
 - ただし chance / roll / result を debug または fixture summary から追跡できることを必須とする
 - drop chance は gameplay balance に影響するため、実装 PR では採用値の理由を短く記録する
 
-## 7. Enemy が drop する `SALVAGE` object の lifecycle
+## 7. 敵がdropする`SALVAGE` objectのライフサイクル
 
-Before #1276:
+変更前の#1276:
 
 ```text
-player attack kill with target_enemy.drop_salvage=true applied ENEMY_DROP reward immediately.
-no map object was generated.
-INTERACT was not required.
+player attack で target_enemy.drop_salvage=true の kill が起きた場合、ENEMY_DROP reward を即時適用していた。
+map object は生成されなかった。
+INTERACT は不要だった。
 ```
 
-After #1276:
+変更後の#1276:
 
 ```text
-enemy kill with drop_salvage=true spawns a SALVAGE object at the destroyed enemy position.
-player inventory is not updated at kill time.
-reward is applied when the dropped object is picked up with INTERACT.
+drop_salvage=true の enemy を kill した場合、破壊された enemy の位置に SALVAGE object を spawn する。
+player inventory は kill 時点では更新しない。
+reward は、drop された object を INTERACT で取得した時点で適用する。
 ```
 
 仕様:
@@ -372,7 +372,7 @@ skip_reason, if spawned=false
 - 実際の exact key name は #1294 で実装に合わせて最終化してよい
 - ただし PR 本文で spec との差分があれば明記する
 
-## 8. Base station / upgrade
+## 8. 基地ステーションと強化
 
 仕様:
 
@@ -396,7 +396,7 @@ EVASION: 4
 durability recovery は `BASE` / `STATION` interaction で引き続き対応する。
 `SALVAGE` pickup では durability recovery を提供しない。
 
-## 9. Fixture regression の参照
+## 9. fixture回帰確認の参照
 
 #1296 時点で確認済みの fixture regression:
 
@@ -414,17 +414,17 @@ test_combat_salvage_no_drop_tier1
 
 #1297 は documentation-only であり、fixture は変更しない。enemy `SALVAGE` drop randomization の fixture 更新は #1298 で扱う。
 
-## 10. Deferred / follow-up issue
+## 10. 後続のissueと追跡項目
 
 ### #1275
 
 `#1275 counterattack撃破時にも enemy dropped SALVAGE を適用する`
 
-Follow-up:
+追跡事項:
 
 ```text
-counterattack kill should use the same dropped SALVAGE object spawn helper.
-immediate ENEMY_DROP reward should not be reintroduced.
+counterattack kill でも、同じ dropped SALVAGE object spawn helper を使うべきである。
+immediate ENEMY_DROP reward は再導入しない。
 ```
 
 #1296 により、counterattack reaction payload 側でも `salvage_drop` を扱える土台は入っている。残件がある場合は #1275 の scope を再確認する。
@@ -433,7 +433,7 @@ immediate ENEMY_DROP reward should not be reintroduced.
 
 `#1277 SALVAGE取得時の即時回復対象を ammo / energy 中心に再整理する`
 
-Decision:
+判断:
 
 ```text
 B を採用する。
@@ -450,35 +450,35 @@ Durability recovery:
   BASE / STATION recovery側で扱う
 ```
 
-Implementation sync:
+実装同期:
 
 ```text
-#1277 / #1292 updated engine.py / fixtures / tests to match this spec.
+#1277 / #1292 で engine.py / fixture / test をこの spec に同期済みである。
 ```
 
 ### #1278
 
 `#1278 enemy SALVAGE drop発生判定をランダム化する`
 
-Decision:
+判断:
 
 ```text
-recorded above in `Enemy SALVAGE drop randomization`.
+上記の `enemy SALVAGE dropのランダム化` 節に記録したとおりである。
 ```
 
-Implementation sync:
+実装同期:
 
 ```text
-#1298 updates encounter/spawn implementation, fixtures, and tests to match this spec.
+#1298 で encounter / spawn 実装、fixture、test をこの spec に同期する。
 ```
 
-## 11. follow-up 順序メモ
+## 11. 追跡対応順メモ
 
 ```text
-1. #1277 records the B decision in the source-of-truth spec.
-2. #1277 / #1292 synchronized implementation / fixtures / tests with the B decision.
-3. #1276 / #1295 / #1296 replaced immediate enemy drop reward with dropped SALVAGE object lifecycle.
-4. #1278 / #1297 records enemy SALVAGE drop randomization in the source-of-truth spec.
-5. #1278 / #1298 synchronizes encounter/spawn implementation, fixtures, and tests with the randomization spec.
-6. #1275 should be rechecked against the spawn-based lifecycle after #1296.
+1. #1277 で B 判断を source-of-truth spec に記録する。
+2. #1277 / #1292 で、その B 判断へ実装 / fixture / test を同期する。
+3. #1276 / #1295 / #1296 で、immediate enemy drop reward を dropped SALVAGE object lifecycle へ置き換える。
+4. #1278 / #1297 で、enemy SALVAGE drop のランダム化を source-of-truth spec に記録する。
+5. #1278 / #1298 で、ランダム化 spec へ encounter / spawn 実装、fixture、test を同期する。
+6. #1296 後に、#1275 を spawn-based lifecycle 前提で再確認する。
 ```
