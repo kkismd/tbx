@@ -194,8 +194,8 @@ current renderer は `actor_id` や actor type を表示入力として使って
 normal SRS overlay priority は current `render_display_map(...)` を正本とする。
 
 ```text
-1. unknown / undiscovered cell -> ?
-2. player                     -> @
+1. player                     -> @
+2. unknown / undiscovered cell -> ?
 3. visible enemy              -> enemy overlay
 4. visible object             -> object glyph
 5. visible warp flags         -> warp glyph
@@ -263,6 +263,7 @@ current meaning:
 
 display contract:
 
+- `player_position` は `discovered_cells` より優先して `@` を表示する
 - `discovered_cells` に含まれない cell は `?` とし、terrain / object / enemy / warp を漏らさない
 - `known_cells` は `discovered_cells` に対応する snapshot として symbol 決定に使う
 - `visited_cells` は current renderer の symbol 決定に使っていないため、必須入力にしない
