@@ -42,7 +42,7 @@
 - former role: `Phase 2` SRS統合仕様
 - former path: `experiments/galactic_exodus/srs/phase2_srs_spec.md`
 - related issue / PR: #1178 / #1194 / #1319 / #1320 / #1321 / #1322 / #1318
-- superseded by: `../specs/srs_movement.md`, `../specs/srs_objects.md`, `../specs/srs_warp.md`, `../specs/srs_combat.md`, `../specs/srs_encounter.md`, `../specs/display.md`
+- superseded by: `../specs/srs_map_generation.md`, `../specs/srs_movement.md`, `../specs/srs_objects.md`, `../specs/srs_warp.md`, `../specs/srs_combat.md`, `../specs/srs_encounter.md`, `../specs/display.md`
 - status: archived
 - reason retained: split migration 前の統合仕様と section 単位の判断履歴を保持するため
 

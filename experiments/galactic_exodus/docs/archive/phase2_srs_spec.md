@@ -6,7 +6,7 @@
 
 - Former path: `experiments/galactic_exodus/srs/phase2_srs_spec.md`
 - Former role: `Phase 2` SRS統合仕様
-- Superseded by: `experiments/galactic_exodus/docs/specs/srs_movement.md`, `experiments/galactic_exodus/docs/specs/srs_objects.md`, `experiments/galactic_exodus/docs/specs/srs_warp.md`, `experiments/galactic_exodus/docs/specs/srs_combat.md`, `experiments/galactic_exodus/docs/specs/srs_encounter.md`, `experiments/galactic_exodus/docs/specs/display.md`
+- Superseded by: `experiments/galactic_exodus/docs/specs/srs_map_generation.md`, `experiments/galactic_exodus/docs/specs/srs_movement.md`, `experiments/galactic_exodus/docs/specs/srs_objects.md`, `experiments/galactic_exodus/docs/specs/srs_warp.md`, `experiments/galactic_exodus/docs/specs/srs_combat.md`, `experiments/galactic_exodus/docs/specs/srs_encounter.md`, `experiments/galactic_exodus/docs/specs/display.md`
 - Archived by: #1318
 
 ## 1. Status and authority
