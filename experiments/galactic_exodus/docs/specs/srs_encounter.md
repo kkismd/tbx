@@ -21,11 +21,11 @@ authority の優先順位:
 
 1. merged 済みの specification decision issue と `experiments/galactic_exodus/docs/specs/`
 2. current implementation と regression tests
-3. legacy `experiments/galactic_exodus/srs/phase2_srs_spec.md`
+3. legacy `experiments/galactic_exodus/docs/archive/phase2_srs_spec.md`
 
 根拠として参照する主な source:
 
-- legacy baseline: `experiments/galactic_exodus/srs/phase2_srs_spec.md`
+- legacy baseline: `experiments/galactic_exodus/docs/archive/phase2_srs_spec.md`
 - 実装: `experiments/galactic_exodus/srs/encounter.py`, `experiments/galactic_exodus/srs/engine.py`, `experiments/galactic_exodus/srs/run_fixture.py`, `experiments/galactic_exodus/srs/model.py`
 - 回帰: `experiments/galactic_exodus/srs/test_encounter.py`, `experiments/galactic_exodus/srs/test_fixtures.py`, `experiments/galactic_exodus/srs/test_fixture_regression.py`, `experiments/galactic_exodus/srs/fixtures/combat_encounter_*.json`
 

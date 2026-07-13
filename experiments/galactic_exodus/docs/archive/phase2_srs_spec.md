@@ -1,5 +1,14 @@
 # Galactic Exodus Phase 2 SRS Specification
 
+> **文書区分:** 履歴資料 — 旧仕様
+>
+> この文書は過去の仕様・設計経緯を保存するための archive です。現行の gameplay specification ではありません。現行仕様は `experiments/galactic_exodus/docs/specs/` を参照してください。
+
+- Former path: `experiments/galactic_exodus/srs/phase2_srs_spec.md`
+- Former role: `Phase 2` SRS統合仕様
+- Superseded by: `experiments/galactic_exodus/docs/specs/srs_movement.md`, `experiments/galactic_exodus/docs/specs/srs_objects.md`, `experiments/galactic_exodus/docs/specs/srs_warp.md`, `experiments/galactic_exodus/docs/specs/srs_combat.md`, `experiments/galactic_exodus/docs/specs/srs_encounter.md`, `experiments/galactic_exodus/docs/specs/display.md`
+- Archived by: #1318
+
 ## 1. Status and authority
 
 この文書は、Phase 2 SRS の正本仕様書である。`experiments/galactic_exodus/srs/phase2_decisions.csv` と矛盾しない断定形の仕様として扱い、Python prototype・reference fixture・TBX 実装は本書を起点に整合させる。

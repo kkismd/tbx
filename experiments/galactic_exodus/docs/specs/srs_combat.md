@@ -21,11 +21,11 @@ Authority order:
 
 1. merged decision issues and current docs under `experiments/galactic_exodus/docs/specs/`
 2. current implementation and regression tests
-3. legacy `experiments/galactic_exodus/srs/phase2_srs_spec.md`
+3. legacy `experiments/galactic_exodus/docs/archive/phase2_srs_spec.md`
 
 Referenced evidence:
 
-- legacy baseline: `experiments/galactic_exodus/srs/phase2_srs_spec.md`
+- legacy baseline: `experiments/galactic_exodus/docs/archive/phase2_srs_spec.md`
 - implementation: `experiments/galactic_exodus/srs/model.py`, `experiments/galactic_exodus/srs/engine.py`
 - regression: `experiments/galactic_exodus/srs/test_engine_combat.py`, `experiments/galactic_exodus/srs/test_fixture_regression.py`, `experiments/galactic_exodus/srs/fixtures/combat_*.json`
 

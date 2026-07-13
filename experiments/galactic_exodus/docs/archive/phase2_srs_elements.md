@@ -1,5 +1,14 @@
 # Galactic Exodus Phase 2 SRS地形・要素仕様
 
+> **文書区分:** 履歴資料 — 旧仕様
+>
+> この文書は過去の仕様・設計経緯を保存するための archive です。現行の gameplay specification ではありません。現行仕様は `experiments/galactic_exodus/docs/specs/` を参照してください。
+
+- Former path: `experiments/galactic_exodus/srs/phase2_srs_elements.md`
+- Former role: `SRS` terrain / object / actor 要素仕様
+- Superseded by: `experiments/galactic_exodus/docs/specs/srs_map_generation.md`, `experiments/galactic_exodus/docs/specs/srs_objects.md`, `experiments/galactic_exodus/docs/specs/srs_combat.md`
+- Archived by: #1318
+
 ## 1. 目的と対象範囲
 
 本書は、#1086で確定したSRS地形、マップ要素の通行可否、観測、移動コスト計算、`WARP_POINT`配置、Terrain/Object配置互換性を記録する。
