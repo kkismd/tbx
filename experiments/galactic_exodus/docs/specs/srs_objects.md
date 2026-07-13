@@ -438,16 +438,16 @@ immediate ENEMY_DROP reward は再導入しない。
 ```text
 B を採用する。
 
-Supported:
+対応する即時回復:
   RECOVER_ENERGY
   RECOVER_PHOTON_TORPEDO_AMMO
   STORE_ONLY
 
-Unsupported:
-  RECOVER_DURABILITY on SALVAGE pickup
+対応しない即時回復:
+  SALVAGE pickup における RECOVER_DURABILITY
 
-Durability recovery:
-  BASE / STATION recovery側で扱う
+durability 回復:
+  BASE / STATION の recovery 側で扱う
 ```
 
 実装同期:

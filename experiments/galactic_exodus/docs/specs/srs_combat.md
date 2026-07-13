@@ -521,9 +521,9 @@ traceability 用の issue / PR 履歴:
 
 後続へ委譲する項目:
 
-- hit probability
-- evasion probability
-- defense / evasion final tuning
-- advanced combat probability and tuning: #1195
-- final enemy AI tuning
-- final weapon balance
+- 命中率
+- 回避率
+- `defense` / `evasion` の最終調整
+- 高度な戦闘確率と調整: #1195
+- 最終的な enemy AI 調整
+- 最終的な武装バランス
