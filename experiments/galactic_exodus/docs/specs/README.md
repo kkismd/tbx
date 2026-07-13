@@ -93,7 +93,7 @@ B. spec file 反映用の後続 issue が作成済みで、そのリンクが本
 | [`srs_encounter.md`](srs_encounter.md) | #1178, #1194, #1320 | #1320 で追加 |
 | [`srs_combat.md`](srs_combat.md) | #1178, #1194, #1319 | #1319 で追加 |
 | [`integrated_cli.md`](integrated_cli.md) | #1241, #1242, #1243, #1244, #1245 | #1268 / #1279 で追加・補完 |
-| `display.md` | #1076, #1214, #1218, #1230-#1235 | 後続候補 |
+| [`display.md`](display.md) | #1076, #1214, #1218, #1230-#1235 | #1322 で追加 |
 | `balance.md` | #1178, #1194, #1257 | 後続候補 |
 
 ## 現時点の移植優先度
@@ -106,7 +106,7 @@ B. spec file 反映用の後続 issue が作成済みで、そのリンクが本
 3. #1241 integrated CLI / EXIT -> integrated_cli.md
 4. #1083/#1089 SRS movement / exploration -> srs_movement.md
 5. #1178/#1194 encounter / combat / balance -> srs_encounter.md, srs_combat.md, balance.md
-6. #1076 display baseline -> display.md
+6. #1076 display baseline -> [`display.md`](display.md)
 ```
 
 ## 注意
