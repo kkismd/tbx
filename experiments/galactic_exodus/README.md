@@ -26,9 +26,7 @@ python -m unittest discover experiments/galactic_exodus
 - Script: [`play.py`](play.py)
 - Commands: `N`, `E`, `S`, `W`, `Q`
 - Options: `--seed`, `--json-log`
-- Phase 1 canonical spec migration: #1319
-
-> **Migration pending:** The canonical Phase 1 spec is planned for `docs/specs/phase1.md` in #1319. This README keeps only the minimum entrypoint summary.
+- Specification: [`docs/specs/phase1.md`](docs/specs/phase1.md)
 
 Example:
 
@@ -52,9 +50,7 @@ python experiments/galactic_exodus/integrated_play.py --seed 42
 
 - Module: `experiments.galactic_exodus.engine`
 - Main APIs: `create_game`, `apply_command`, `run_commands`
-- Phase 1 canonical spec migration: #1319
-
-> **Migration pending:** The canonical Phase 1 spec is planned for `docs/specs/phase1.md` in #1319. This section intentionally omits the detailed state and log schemas.
+- Specification: [`docs/specs/phase1.md`](docs/specs/phase1.md)
 
 ### Phase 1 reference fixture replay
 
@@ -129,7 +125,7 @@ cargo test
 - SRS movement: [`docs/specs/srs_movement.md`](docs/specs/srs_movement.md)
 - SRS objects: [`docs/specs/srs_objects.md`](docs/specs/srs_objects.md)
 - SRS warp: [`docs/specs/srs_warp.md`](docs/specs/srs_warp.md)
-- Phase 1 canonical spec migration: #1323
+- Phase 1: [`docs/specs/phase1.md`](docs/specs/phase1.md)
 - SRS combat: [`docs/specs/srs_combat.md`](docs/specs/srs_combat.md)
 - Display: [`docs/specs/display.md`](docs/specs/display.md)
 - SRS encounter: [`docs/specs/srs_encounter.md`](docs/specs/srs_encounter.md)
