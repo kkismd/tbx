@@ -183,8 +183,8 @@ known `RIFT` retry:
 successful move resolution order:
 
 1. attempted destination を決定する
-2. edge が `RIFT` 既知かを確認する
-3. destination が board 内かを確認する
+2. destination が board 内かを確認する
+3. edge が `RIFT` 既知かを確認する
 4. unknown `RIFT` なら 1 fuel を消費して失敗を確定する
 5. destination cell の fuel cost を計算する
 6. fuel 不足なら実行前に拒否する
