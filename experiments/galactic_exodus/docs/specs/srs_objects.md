@@ -1,4 +1,4 @@
-# Galactic Exodus SRS objects and rewards
+# Galactic Exodus SRS object と reward
 
 Source issue: #1288
 Decision issue: #1277
@@ -6,43 +6,65 @@ Parent issue: #1266
 Related: #1178, #1185, #1194, #1259, #1275, #1276, #1277, #1278
 Base branch: `integration/882-galactic-exodus`
 
-This document records the Phase 2 source-of-truth specification for SRS object interaction, SALVAGE rewards, and RESOURCE / STATION reward timing.
+この文書は、Phase 2 における SRS object interaction、`SALVAGE` reward、`RESOURCE` / `STATION` reward timing の source-of-truth spec を記録する。
 
-## Scope
+## 1. 文書の位置付けと正本性
 
-Included:
+このファイルは、Phase 2 の object interaction と `SALVAGE` reward に関する current source of truth である。
 
-- map上の SALVAGE pickup
-- SALVAGE reward common flow
-- salvage_choice / recovery choice
-- enemy dropped SALVAGE object lifecycle
-- enemy SALVAGE drop randomization
-- tier-based enemy SALVAGE drop chance
-- dropped SALVAGE spawn
-- dropped SALVAGE pickup through `INTERACT`
+authority優先順位:
+
+1. マージ済み判断 issue と `experiments/galactic_exodus/docs/specs/` 配下の current docs
+2. 現行実装と fixture regression
+3. legacy doc と過去の issue comment
+
+参照根拠:
+
+- implementation: `experiments/galactic_exodus/srs/engine.py`, `experiments/galactic_exodus/srs/model.py`
+- regression: `experiments/galactic_exodus/srs/test_fixture_regression.py`
+- legacy / archive: `experiments/galactic_exodus/docs/archive/`
+
+## 2. 対象範囲と境界
+
+対象:
+
+- map 上の `SALVAGE` pickup
+- `SALVAGE` reward の共通フロー
+- `salvage_choice` / recovery choice
+- enemy が drop する `SALVAGE` object の lifecycle
+- enemy `SALVAGE` drop の randomization
+- tier-based enemy `SALVAGE` drop chance
+- drop された `SALVAGE` の spawn
+- `INTERACT` による dropped `SALVAGE` pickup
 - drop payload / skip payload
 - base station interaction
-- base upgrade と salvage消費
-- persistent_state / SRS turn / fuel / player_state への副作用
-- #1275 / #1278 との follow-up関係
+- base upgrade と salvage 消費
+- `persistent_state` / SRS turn / fuel / `player_state` への副作用
+- #1275 / #1278 との follow-up 関係
 
-Excluded:
+対象外:
 
-- gameplay実装変更
-- fixture / snapshot 更新
-- SALVAGE効果量の再バランス
-- enemy drop randomization 実装 (#1278)
-- counterattack実装変更 (#1275)
-- integrated CLI入力UI実装
-- 近傍空きcell探索ルール
+- gameplay 実装の変更
+- fixture / snapshot の更新
+- `SALVAGE` 効果量の再バランス
+- enemy drop randomization 実装そのもの (#1278)
+- counterattack 実装の変更 (#1275)
+- integrated CLI の入力 UI 実装
+- 近傍空き cell 探索ルール
 
-## Current Phase 2 initial behavior
+他の current spec へ委譲する範囲:
 
-#1266 の棚卸し結果として、SALVAGE は prototype-only ではなく Phase 2 初期仕様として固定する。
+- 戦闘 phase と `COMBAT_STEP`: `docs/specs/srs_combat.md`
+- encounter / spawn 全体の決定: `docs/specs/srs_encounter.md`
+- movement と impassable 判定: `docs/specs/srs_movement.md`
+
+## 3. 現行仕様
+
+#1266 の棚卸し結果として、`SALVAGE` は prototype-only ではなく、Phase 2 初期仕様として固定する。
 
 #1288 / PR #1289 では、現行実装と fixture regression が固定していた挙動を正本化した。
 
-#1277 では、SALVAGE取得時の即時回復対象について B 方針を採用した。
+#1277 では、`SALVAGE` 取得時の即時回復対象について B 方針を採用した。
 
 ```text
 SALVAGE取得時の即時回復は:
@@ -55,25 +77,25 @@ SALVAGE取得時の即時回復は:
 RECOVER_DURABILITY は SALVAGE pickup では非対応にし、durability recovery は BASE / STATION に寄せる。
 ```
 
-この文書は #1277 の仕様判断を反映した source-of-truth である。
+この文書は、#1277 の仕様判断を反映した source-of-truth である。
 
-#1277 / #1292 により、実装・fixture・test は B 方針へ同期済み。
+#1277 / #1292 により、実装・fixture・test は B 方針へ同期済みである。
 
-## Map SALVAGE pickup
+## 4. Map 上の `SALVAGE` pickup
 
 仕様:
 
-- map上の SALVAGE object は `INTERACT` で取得する
+- map 上の `SALVAGE` object は `INTERACT` で取得する
 - `reward_source` は `MAP_PICKUP`
 - base salvage value は `1`
 - `salvage_choice` がない場合は `STORE_ONLY`
-- successful interaction で SRS turn `+1`
+- successful interaction で SRS turn は `+1`
 - fuel は変化しない
 - object は consumed になる
 - `persistent_state.consumed_object_ids` に `object_id` を追加する
 - `player_state` / `combat_state.player` に reward を反映する
 
-Supported immediate effects:
+対応する即時効果:
 
 ```text
 RECOVER_ENERGY
@@ -81,13 +103,13 @@ RECOVER_PHOTON_TORPEDO_AMMO
 STORE_ONLY
 ```
 
-Unsupported immediate effects:
+対応しない即時効果:
 
 ```text
 RECOVER_DURABILITY
 ```
 
-`RECOVER_DURABILITY` が SALVAGE reward choice として指定された場合は、暗黙に `STORE_ONLY` へ丸めず、明示的に reject する。
+`RECOVER_DURABILITY` が `SALVAGE` reward choice として指定された場合は、暗黙に `STORE_ONLY` へ丸めず、明示的に reject する。
 
 reject reason:
 
@@ -95,24 +117,24 @@ reject reason:
 REJECTED_UNSUPPORTED_SALVAGE_CHOICE
 ```
 
-## SALVAGE reward common flow
+## 5. `SALVAGE` reward の共通フロー
 
 仕様:
 
-- choiceなしの場合は `STORE_ONLY`
-- `RECOVER_ENERGY` は `energy_capacity` まで回復
-- `RECOVER_PHOTON_TORPEDO_AMMO` は `photon_torpedo_ammo_capacity` まで回復
-- `STORE_ONLY` は即時回復せず、salvage inventory のみ増やす
-- どのsupported choiceでも salvage inventory は `salvage_value` 分増える
-- reward payload には `salvage_before` / `salvage_after` / `selected_salvage_choice` / 各delta が含まれる
+- choice がない場合は `STORE_ONLY`
+- `RECOVER_ENERGY` は `energy_capacity` まで回復する
+- `RECOVER_PHOTON_TORPEDO_AMMO` は `photon_torpedo_ammo_capacity` まで回復する
+- `STORE_ONLY` は即時回復せず、salvage inventory だけを増やす
+- どの対応済み choice でも salvage inventory は `salvage_value` 分だけ増える
+- reward payload には `salvage_before` / `salvage_after` / `selected_salvage_choice` / 各 delta を含める
 
-`RECOVER_DURABILITY` は SALVAGE pickup immediate effect としては非対応とする。
+`RECOVER_DURABILITY` は `SALVAGE` pickup の immediate effect としては非対応とする。
 
-durability recovery は BASE / STATION recovery 側で扱う。
+durability recovery は `BASE` / `STATION` recovery 側で扱う。
 
-## Enemy SALVAGE drop randomization
+## 6. Enemy `SALVAGE` drop randomization
 
-#1278 では、enemy dropped SALVAGE の drop/no-drop 判定を固定boolだけでなく random roll で決められるようにする。
+#1278 では、enemy dropped `SALVAGE` の drop / no-drop 判定を、固定 bool だけでなく random roll でも決められるようにする。
 
 Before #1278:
 
@@ -133,16 +155,16 @@ explicit fixture / fixed encounter drop_salvage values remain deterministic over
 
 仕様:
 
-- enemy SALVAGE drop判定は combat reward resolution 前に確定する
-- combat中には drop判定を再rollしない
-- 通常 encounter / enemy spawn 側で random roll により `drop_salvage` bool を確定する
-- fixture / fixed encounter は `drop_salvage: true / false` を明示できる
-- explicit `drop_salvage` 指定は random roll より優先する
-- `drop_salvage == true` の enemy が破壊された場合は #1276 / #1296 の dropped SALVAGE object lifecycle を使う
-- `drop_salvage == false` の enemy が破壊された場合は dropped SALVAGE object を生成しない
-- #1278 は drop発生有無だけを決め、immediate reward は再導入しない
+- enemy `SALVAGE` drop 判定は、combat reward resolution より前に確定する
+- combat 中に drop 判定を再 roll しない
+- 通常の encounter / enemy spawn 側で random roll により `drop_salvage` bool を確定する
+- fixture / fixed encounter では `drop_salvage: true / false` を明示できる
+- 明示的な `drop_salvage` 指定は random roll より優先する
+- `drop_salvage == true` の enemy が破壊された場合は、#1276 / #1296 の dropped `SALVAGE` object lifecycle を使う
+- `drop_salvage == false` の enemy が破壊された場合は dropped `SALVAGE` object を生成しない
+- #1278 は drop 発生有無だけを決め、immediate reward は再導入しない
 
-Tier-based drop chance:
+tier-based drop chance:
 
 ```text
 TIER1: 0.25
@@ -151,14 +173,14 @@ TIER3: 0.50
 TIER4: 0.75
 ```
 
-Drop chance constraints:
+drop chance 制約:
 
 ```text
 0.0 <= chance <= 1.0
 TIER1 <= TIER2 <= TIER3 <= TIER4
 ```
 
-Roll resolution:
+roll 解決:
 
 ```text
 roll < chance:
@@ -168,7 +190,7 @@ roll >= chance:
   drop_salvage = false
 ```
 
-Fixture / fixed encounter override:
+fixture / fixed encounter override:
 
 ```text
 explicit drop_salvage: true
@@ -183,7 +205,7 @@ no explicit drop_salvage:
   resolve drop_salvage from tier chance and roll
 ```
 
-Debug payload / summary meaning:
+debug payload / summary の意味:
 
 ```text
 enemy_id
@@ -196,10 +218,10 @@ drop_salvage
 補足:
 
 - exact payload key name は #1298 の実装に合わせて最終化してよい
-- ただし chance / roll / result を debug または fixture summary から追跡できることが必要
-- drop chance は gameplay balance に影響するため、実装PRでは採用値の理由を短く記録する
+- ただし chance / roll / result を debug または fixture summary から追跡できることを必須とする
+- drop chance は gameplay balance に影響するため、実装 PR では採用値の理由を短く記録する
 
-## Enemy dropped SALVAGE object lifecycle
+## 7. Enemy が drop する `SALVAGE` object の lifecycle
 
 Before #1276:
 
@@ -219,22 +241,22 @@ reward is applied when the dropped object is picked up with INTERACT.
 
 仕様:
 
-- 対象 enemy の `drop_salvage` が `true` の場合のみ drop候補になる
+- 対象 enemy の `drop_salvage` が `true` の場合にのみ drop 候補になる
 - `drop_salvage` が `false` の場合、object は生成しない
-- object_type は `SALVAGE`
-- position は destroyed enemy の position
+- `object_type` は `SALVAGE`
+- `position` は破壊された enemy の position
 - `reward_source` は `ENEMY_DROP`
 - `salvage_value` は enemy tier から解決する
-- generated dropped SALVAGE は map上の initial SALVAGE と同じ `INTERACT` lifecycle で取得する
+- 生成された dropped `SALVAGE` は、map 上の初期 `SALVAGE` と同じ `INTERACT` lifecycle で取得する
 - player inventory は kill 時点では更新しない
-- successful pickup で SRS turn `+1`
+- successful pickup で SRS turn は `+1`
 - fuel は変化しない
 - object は consumed になる
 - `persistent_state.consumed_object_ids` に `object_id` を追加する
 - `player_state` / `combat_state.player` に reward を反映する
-- reward payload には `salvage_before` / `salvage_after` / `selected_salvage_choice` / 各delta が含まれる
+- reward payload には `salvage_before` / `salvage_after` / `selected_salvage_choice` / 各 delta を含める
 
-Dropped SALVAGE metadata / payload meaning:
+dropped `SALVAGE` metadata / payload の意味:
 
 ```text
 reward_source: ENEMY_DROP
@@ -247,9 +269,9 @@ recovery_profile or enemy_tier
 補足:
 
 - 実装上の保持形式は Step 2 (#1294) で決めてよい
-- ただし `INTERACT` 時に value / recovery amount を再現できることが必要
+- ただし `INTERACT` 時に value / recovery amount を再現できることを必須とする
 
-Drop value by enemy tier:
+enemy tier ごとの drop value:
 
 ```text
 TIER1: salvage +1
@@ -258,7 +280,7 @@ TIER3: salvage +2
 TIER4: salvage +3
 ```
 
-Supported recovery choices for dropped SALVAGE:
+dropped `SALVAGE` に対応する recovery choice:
 
 ```text
 RECOVER_ENERGY
@@ -266,13 +288,13 @@ RECOVER_PHOTON_TORPEDO_AMMO
 STORE_ONLY
 ```
 
-Unsupported recovery choices for dropped SALVAGE:
+dropped `SALVAGE` で対応しない recovery choice:
 
 ```text
 RECOVER_DURABILITY
 ```
 
-`RECOVER_DURABILITY` が dropped SALVAGE pickup の `salvage_choice` として指定された場合も、暗黙に `STORE_ONLY` へ丸めず、明示的に reject する。
+`RECOVER_DURABILITY` が dropped `SALVAGE` pickup の `salvage_choice` として指定された場合も、暗黙に `STORE_ONLY` へ丸めず、明示的に reject する。
 
 reject reason:
 
@@ -280,7 +302,7 @@ reject reason:
 REJECTED_UNSUPPORTED_SALVAGE_CHOICE
 ```
 
-Recovery amount by enemy tier:
+enemy tier ごとの recovery amount:
 
 ```text
 TIER1:
@@ -304,7 +326,7 @@ TIER4:
   STORE_ONLY: 0
 ```
 
-Occupied-cell skip policy:
+occupied-cell skip 方針:
 
 ```text
 destroyed enemy position の cell.object_id が None の場合のみ dropped SALVAGE を生成する
@@ -313,15 +335,15 @@ cell.object_id が既にある場合は生成しない
 payload に spawned=false と skip_reason を記録する
 ```
 
-推奨 skip reason:
+推奨する skip reason:
 
 ```text
 OCCUPIED_CELL
 ```
 
-実装PRで別名にする場合は、PR本文に理由を書く。
+実装 PR で別名にする場合は、PR 本文に理由を書く。
 
-Event payload meaning:
+event payload における意味:
 
 ```text
 player attack phase:
@@ -348,19 +370,19 @@ skip_reason, if spawned=false
 
 - #1293 は payload shape の意味を正本化する
 - 実際の exact key name は #1294 で実装に合わせて最終化してよい
-- ただし PR本文で specとの差分があれば明記する
+- ただし PR 本文で spec との差分があれば明記する
 
-## Base station / upgrade
+## 8. Base station / upgrade
 
 仕様:
 
 - `STATION` interaction は fuel / durability / energy / photon torpedo ammo を回復する
-- successful interaction で SRS turn `+1`
+- successful interaction で SRS turn は `+1`
 - station は activated になる
 - `persistent_state.activated_object_ids` に `object_id` を追加する
-- `base_upgrade_choice` が指定され、costを満たす場合、salvageを消費して player能力を更新する
+- `base_upgrade_choice` が指定され、cost を満たす場合、salvage を消費して player 能力を更新する
 
-Current upgrade cost:
+現行の upgrade cost:
 
 ```text
 PHASER_POWER: 4
@@ -371,10 +393,10 @@ DEFENSE: 4
 EVASION: 4
 ```
 
-Durability recovery remains supported on BASE / STATION interaction.
-SALVAGE pickup does not provide durability recovery.
+durability recovery は `BASE` / `STATION` interaction で引き続き対応する。
+`SALVAGE` pickup では durability recovery を提供しない。
 
-## Fixture regression references
+## 9. Fixture regression の参照
 
 #1296 時点で確認済みの fixture regression:
 
@@ -390,9 +412,9 @@ test_combat_salvage_drop_occupied_cell_skip
 test_combat_salvage_no_drop_tier1
 ```
 
-#1297 は documentation-only であり、fixture は変更しない。enemy SALVAGE drop randomization の fixture 更新は #1298 で扱う。
+#1297 は documentation-only であり、fixture は変更しない。enemy `SALVAGE` drop randomization の fixture 更新は #1298 で扱う。
 
-## Deferred / follow-up issues
+## 10. Deferred / follow-up issue
 
 ### #1275
 
@@ -450,7 +472,7 @@ Implementation sync:
 #1298 updates encounter/spawn implementation, fixtures, and tests to match this spec.
 ```
 
-## Follow-up ordering memo
+## 11. follow-up 順序メモ
 
 ```text
 1. #1277 records the B decision in the source-of-truth spec.
