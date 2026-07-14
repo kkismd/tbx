@@ -37,8 +37,8 @@ def candidate_summary(state) -> dict[str, int]:
     }
     return {
         "count": len(candidates),
-        "north": sum(position.y == 0 for position in candidates),
-        "south": sum(position.y == state.actual_map.height - 1 for position in candidates),
+        "y_min": sum(position.y == 0 for position in candidates),
+        "y_max": sum(position.y == state.actual_map.height - 1 for position in candidates),
         "west": sum(position.x == 0 and position not in corners for position in candidates),
         "east": sum(
             position.x == state.actual_map.width - 1 and position not in corners
@@ -62,8 +62,8 @@ class SrsEncounterBalanceTests(unittest.TestCase):
             candidate_summary(state),
             {
                 "count": 32,
-                "north": 9,
-                "south": 9,
+                "y_min": 9,
+                "y_max": 9,
                 "west": 7,
                 "east": 7,
                 "corners": 4,
@@ -109,8 +109,8 @@ class SrsEncounterBalanceTests(unittest.TestCase):
             candidate_summary(state),
             {
                 "count": 15,
-                "north": 8,
-                "south": 0,
+                "y_min": 8,
+                "y_max": 0,
                 "west": 0,
                 "east": 7,
                 "corners": 1,

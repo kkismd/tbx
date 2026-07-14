@@ -32,8 +32,8 @@ This document records the #1257 audit result for encounter spawn candidates and 
 
 - all `FLOOR` 9x9 / player center (`Position(4, 4)`)
   - candidate count = 32
-  - north = 9
-  - south = 9
+  - y_min = 9
+  - y_max = 9
   - west = 7
   - east = 7
   - corners = 4
@@ -46,10 +46,10 @@ This document records the #1257 audit result for encounter spawn candidates and 
 - `SectorType.RIFT`, `blocked_edges = {N, W}`, player center
   - candidate count = 15
   - blocked edge 側の candidate は除外される
-  - north = 8, south = 0, west = 0, east = 7, corners = 2
+  - y_min = 8, y_max = 0, west = 0, east = 7, corners = 1
   - 残る candidate の Chebyshev 距離はすべて 4
 
-west / east の件数は corner を別集計に分離しており、外周分布を二重計上しないための分析用 summary である。
+`y_min` / `y_max` は座標ベースの集計であり、`Direction.N` / `Direction.S` とは意図的に切り分けている。west / east の件数は corner を別集計に分離しており、外周分布を二重計上しないための分析用 summary である。
 
 ## 4. Spawn result checks
 
