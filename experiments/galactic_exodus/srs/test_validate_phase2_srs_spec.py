@@ -11,7 +11,12 @@ class Phase2SrsSpecValidationTests(unittest.TestCase):
     def setUp(self) -> None:
         self.tempdir = tempfile.TemporaryDirectory()
         self.path = Path(self.tempdir.name) / "phase2_srs_spec.md"
-        source = Path(__file__).with_name("phase2_srs_spec.md")
+        source = (
+            Path(__file__).resolve().parents[1]
+            / "docs"
+            / "archive"
+            / "phase2_srs_spec.md"
+        )
         self.text = source.read_text(encoding="utf-8")
         self.write()
 

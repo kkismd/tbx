@@ -14,9 +14,10 @@ from experiments.galactic_exodus.archive.evaluation.srs import validate_phase2_i
 class Phase2InitialModelValidationTests(unittest.TestCase):
     def setUp(self) -> None:
         self.fixtures = Path("experiments/galactic_exodus/srs")
+        self.archive_docs = Path("experiments/galactic_exodus/docs/archive")
         self.root = Path(".tmp/phase2_initial_model_tests") / self._testMethodName
         self.root.mkdir(parents=True, exist_ok=True)
-        self.model = self.copy_fixture("phase2_initial_model.md")
+        self.model = self.copy_archive_doc("phase2_initial_model.md")
         self.questions = self.copy_fixture("phase2_questions.csv")
         self.values = self.copy_fixture("phase2_initial_values.json")
         self.elements = self.copy_fixture("phase2_srs_elements.json")
@@ -27,6 +28,12 @@ class Phase2InitialModelValidationTests(unittest.TestCase):
 
     def copy_fixture(self, name: str) -> Path:
         src = self.fixtures / name
+        dst = self.root / name
+        dst.write_text(src.read_text(encoding="utf-8"), encoding="utf-8")
+        return dst
+
+    def copy_archive_doc(self, name: str) -> Path:
+        src = self.archive_docs / name
         dst = self.root / name
         dst.write_text(src.read_text(encoding="utf-8"), encoding="utf-8")
         return dst
@@ -77,7 +84,7 @@ class Phase2InitialModelValidationTests(unittest.TestCase):
 
     def test_validate_all_accepts_repository_artifacts(self) -> None:
         validator.validate_all(
-            self.fixtures / "phase2_initial_model.md",
+            self.archive_docs / "phase2_initial_model.md",
             self.fixtures / "phase2_questions.csv",
             self.fixtures / "phase2_initial_values.json",
             self.fixtures / "phase2_srs_elements.json",
