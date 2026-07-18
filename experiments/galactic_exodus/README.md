@@ -7,6 +7,7 @@ This directory contains the Python prototype and evaluation environment for Gala
 - LRS Phase 1 prototype: available
 - SRS prototype / fixtures: available
 - `integrated_play.py`: command-response prototype
+- Phase 1 LRS-only `play.py` and completed evaluation scripts: archived under `archive/evaluation/`
 - Current implementation is incremental and not the final TBX application
 
 ## Quick start
@@ -14,25 +15,11 @@ This directory contains the Python prototype and evaluation environment for Gala
 Run these commands from the repository root:
 
 ```bash
-python experiments/galactic_exodus/play.py --seed 42
 python experiments/galactic_exodus/integrated_play.py --seed 42
 python -m unittest discover experiments/galactic_exodus
 ```
 
 ## Available entrypoints
-
-### Phase 1 LRS interactive CLI
-
-- Script: [`play.py`](play.py)
-- Commands: `N`, `E`, `S`, `W`, `Q`
-- Options: `--seed`, `--json-log`
-- Specification: [`docs/specs/phase1.md`](docs/specs/phase1.md)
-
-Example:
-
-```bash
-python experiments/galactic_exodus/play.py --seed 42
-```
 
 ### Integrated LRS / SRS CLI
 
@@ -77,19 +64,20 @@ python -m experiments.galactic_exodus.srs.run_fixture \
   experiments/galactic_exodus/srs/fixtures/resource_cache_single_9x9.json
 ```
 
-### Metrics and evaluation scripts
+### Current generation helper and archived evaluation scripts
 
 - [`simulate.py`](simulate.py): deterministic Phase 1 map generation sample
-- [`metrics.py`](metrics.py): aggregate Phase 1 map metrics over seed ranges
-- [`fuel_metrics.py`](fuel_metrics.py): compare fuel configurations across seed ranges
+- Archived Phase 1 evaluation scripts: [`archive/evaluation/phase1_lrs/`](archive/evaluation/phase1_lrs/)
+- Archived SRS evaluation scripts: [`archive/evaluation/srs/`](archive/evaluation/srs/)
+- Archived manual-session runner, recovery, and validation scripts: [`archive/evaluation/manual_sessions/`](archive/evaluation/manual_sessions/)
 - Evaluation reports: [`docs/evaluations/README.md`](docs/evaluations/README.md)
 
 Examples:
 
 ```bash
 python experiments/galactic_exodus/simulate.py --seed 42
-python experiments/galactic_exodus/metrics.py --seed-start 1 --seed-count 10
-python experiments/galactic_exodus/fuel_metrics.py \
+python experiments/galactic_exodus/archive/evaluation/phase1_lrs/metrics.py --seed-start 1 --seed-count 10
+python experiments/galactic_exodus/archive/evaluation/phase1_lrs/fuel_metrics.py \
   --seed-start 1 \
   --seed-count 10 \
   --rift-density 0.10 \
@@ -144,6 +132,8 @@ cargo test
 
 - [`docs/archive/README.md`](docs/archive/README.md)
 - Archive documents are implementation history, not the current source
+- [`archive/README.md`](archive/README.md)
+- Archived code is historical evaluation support, not current runtime or operator tooling
 
 ### Traceability
 
@@ -154,10 +144,11 @@ cargo test
 
 | Path | Purpose |
 |---|---|
-| `engine.py` / `play.py` / `integrated_play.py` | Main prototype engine and interactive entrypoints |
-| `simulate.py` / `metrics.py` / `fuel_metrics.py` | Metrics, simulation, and evaluation helpers |
+| `engine.py` / `integrated_play.py` | Main prototype engine and current interactive entrypoint |
+| `simulate.py` | Current deterministic Phase 1 map generation helper |
 | `fixtures/` | Phase 1 reference fixtures |
 | `srs/` | Phase 2 SRS prototype code, fixtures, and tests |
+| `archive/evaluation/` | Completed evaluation support scripts retained for reference |
 | `docs/specs/` | Current gameplay specifications |
 | `docs/evaluations/` | Evaluation reports and reproduction notes |
 | `docs/design/` | Design references and display samples |

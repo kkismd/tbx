@@ -5,7 +5,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from experiments.galactic_exodus.srs import validate_phase2_decisions as validator
+from experiments.galactic_exodus.archive.evaluation.srs import validate_phase2_decisions as validator
 
 
 class Phase2DecisionValidationTests(unittest.TestCase):

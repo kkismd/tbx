@@ -25,14 +25,14 @@
 ```bash
 python -m unittest discover -s experiments/galactic_exodus -p 'test_*.py'
 
-python experiments/galactic_exodus/evaluate_policies.py \
+python experiments/galactic_exodus/archive/evaluation/phase1_lrs/evaluate_policies.py \
   --seed-start 1 \
   --seed-end 1000 \
   --max-turns 256 \
   --output experiments/galactic_exodus/results/prototype_policy_runs.csv \
   --summary experiments/galactic_exodus/results/prototype_policy_summary.json
 
-python experiments/galactic_exodus/validate_phase1b_results.py \
+python experiments/galactic_exodus/archive/evaluation/phase1_lrs/validate_phase1b_results.py \
   --manual experiments/galactic_exodus/results/prototype_manual_sessions.csv \
   --runs experiments/galactic_exodus/results/prototype_policy_runs.csv \
   --summary experiments/galactic_exodus/results/prototype_policy_summary.json \

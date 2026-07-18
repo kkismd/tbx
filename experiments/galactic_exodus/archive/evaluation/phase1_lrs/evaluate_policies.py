@@ -13,14 +13,14 @@ import sys
 from typing import Callable
 
 if __package__ in (None, ""):
-    sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+    sys.path.insert(0, str(Path(__file__).resolve().parents[5]))
     from experiments.galactic_exodus import engine
-    from experiments.galactic_exodus import metrics
     from experiments.galactic_exodus import simulate
+    from experiments.galactic_exodus.archive.evaluation.phase1_lrs import metrics
 else:
     from experiments.galactic_exodus import engine
-    from experiments.galactic_exodus import metrics
     from experiments.galactic_exodus import simulate
+    from experiments.galactic_exodus.archive.evaluation.phase1_lrs import metrics
 
 
 POLICY_GOAL_GREEDY = "GOAL_GREEDY"

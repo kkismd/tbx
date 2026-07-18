@@ -12,7 +12,7 @@ if str(REPO_ROOT) not in sys.path:
 
 from experiments.galactic_exodus import engine
 from experiments.galactic_exodus import simulate
-from experiments.galactic_exodus import validate_phase1_spec
+from experiments.galactic_exodus.archive.evaluation.phase1_lrs import validate_phase1_spec
 
 
 def load_fixture_file(path: str | Path) -> dict[str, Any]:

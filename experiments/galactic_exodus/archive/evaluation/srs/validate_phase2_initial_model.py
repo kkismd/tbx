@@ -13,9 +13,11 @@ from pathlib import Path
 from typing import Any
 
 if __package__ in {None, ""}:
-    sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
+    sys.path.insert(0, str(Path(__file__).resolve().parents[5]))
 
-from experiments.galactic_exodus.srs import validate_phase2_srs_generation as generation_validator
+from experiments.galactic_exodus.archive.evaluation.srs import (
+    validate_phase2_srs_generation as generation_validator,
+)
 
 QUESTION_FIELDS = [
     "question_id",
@@ -339,7 +341,7 @@ def validate_generation(path: Path) -> dict[str, Any]:
 
     sanitized = json.loads(json.dumps(generation))
     sanitized["legacy_contracts_removed"] = {"legacy_contracts_documented": "removed"}
-    repo_root = Path(__file__).resolve().parents[3]
+    repo_root = Path(__file__).resolve().parents[5]
     temp_dir = repo_root / ".tmp"
     temp_dir.mkdir(parents=True, exist_ok=True)
     temp_path = temp_dir / f"validate-phase2-initial-model-generation-{os.getpid()}.json"

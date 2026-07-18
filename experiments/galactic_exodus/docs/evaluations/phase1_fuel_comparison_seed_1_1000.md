@@ -7,7 +7,7 @@
 ## Reproduction
 
 ```bash
-python experiments/galactic_exodus/fuel_metrics.py \
+python experiments/galactic_exodus/archive/evaluation/phase1_lrs/fuel_metrics.py \
   --seed-start 1 \
   --seed-count 1000 \
   --rift-density 0.10,0.15 \

@@ -7,7 +7,7 @@ import unittest
 from pathlib import Path
 
 from experiments.galactic_exodus import simulate
-from experiments.galactic_exodus import validate_phase1_spec as validator
+from experiments.galactic_exodus.archive.evaluation.phase1_lrs import validate_phase1_spec as validator
 
 
 class Phase1SpecValidationTests(unittest.TestCase):

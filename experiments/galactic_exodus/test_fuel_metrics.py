@@ -3,9 +3,9 @@ from pathlib import Path
 import unittest
 from types import SimpleNamespace
 
-from experiments.galactic_exodus import fuel_metrics
-from experiments.galactic_exodus import metrics
 from experiments.galactic_exodus import simulate
+from experiments.galactic_exodus.archive.evaluation.phase1_lrs import fuel_metrics
+from experiments.galactic_exodus.archive.evaluation.phase1_lrs import metrics
 
 
 def make_fuel_analysis(

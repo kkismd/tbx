@@ -8,7 +8,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from experiments.galactic_exodus import run_manual_sessions
+from experiments.galactic_exodus.archive.evaluation.manual_sessions import run_manual_sessions
 
 
 def make_log(log_path: Path, *, requested_seed: int, effective_seed: int) -> None:
@@ -85,7 +85,7 @@ class RunManualSessionsTests(unittest.TestCase):
             run_manual_sessions.save_feedback(feedback_path, 1, complete_answers())
 
             args = argparse.Namespace(
-                play_script=Path("experiments/galactic_exodus/play.py"),
+                play_script=Path("experiments/galactic_exodus/archive/evaluation/phase1_lrs/play.py"),
                 log_dir=log_dir,
                 output=output_path,
                 player_id="tester",

@@ -11,9 +11,8 @@ from io import StringIO
 from pathlib import Path
 from unittest.mock import patch
 
-from experiments.galactic_exodus.srs.contracts import load_default_contracts
-from experiments.galactic_exodus.srs import evaluate_policies as evaluator
-from experiments.galactic_exodus.srs.evaluate_policies import (
+from experiments.galactic_exodus.archive.evaluation.srs import evaluate_policies as evaluator
+from experiments.galactic_exodus.archive.evaluation.srs.evaluate_policies import (
     EvaluationCase,
     EvaluationCaseError,
     EXPLORE_THEN_EXIT_POLICY_NAME,
@@ -41,6 +40,7 @@ from experiments.galactic_exodus.srs.evaluate_policies import (
     write_policy_runs_csv,
     write_policy_summary_json,
 )
+from experiments.galactic_exodus.srs.contracts import load_default_contracts
 from experiments.galactic_exodus.srs.log import (
     INTERACT_ACCEPTED,
     INTERACT_REJECTED,
@@ -1047,7 +1047,7 @@ class PolicyRunLoopTests(unittest.TestCase):
 
         with patch.object(EvaluationCase, "build_initial_state", return_value=self.make_exit_ready_state()):
             with patch(
-                "experiments.galactic_exodus.srs.evaluate_policies.choose_policy_command",
+                "experiments.galactic_exodus.archive.evaluation.srs.evaluate_policies.choose_policy_command",
                 return_value=None,
             ):
                 result = run_policy_evaluation_case(
@@ -1066,7 +1066,7 @@ class PolicyRunLoopTests(unittest.TestCase):
 
         with patch.object(EvaluationCase, "build_initial_state", return_value=state):
             with patch(
-                "experiments.galactic_exodus.srs.evaluate_policies.choose_policy_command",
+                "experiments.galactic_exodus.archive.evaluation.srs.evaluate_policies.choose_policy_command",
                 side_effect=AssertionError("policy should not be queried"),
             ):
                 result = run_policy_evaluation_case(
@@ -1086,7 +1086,7 @@ class PolicyRunLoopTests(unittest.TestCase):
 
         with patch.object(EvaluationCase, "build_initial_state", return_value=state):
             with patch(
-                "experiments.galactic_exodus.srs.evaluate_policies.choose_policy_command",
+                "experiments.galactic_exodus.archive.evaluation.srs.evaluate_policies.choose_policy_command",
                 return_value=SrsCommand(command_type="MOVE_ROUTE", route=(Direction.N,)),
             ):
                 result = run_policy_evaluation_case(
@@ -1105,7 +1105,7 @@ class PolicyRunLoopTests(unittest.TestCase):
 
         with patch.object(EvaluationCase, "build_initial_state", return_value=self.make_exit_ready_state()):
             with patch(
-                "experiments.galactic_exodus.srs.evaluate_policies.choose_policy_command",
+                "experiments.galactic_exodus.archive.evaluation.srs.evaluate_policies.choose_policy_command",
                 side_effect=[
                     SrsCommand(command_type="WARP_EXIT", exit_direction=Direction.N),
                     SrsCommand(command_type="WARP_EXIT", exit_direction=Direction.S),
@@ -1127,7 +1127,7 @@ class PolicyRunLoopTests(unittest.TestCase):
 
         with patch.object(EvaluationCase, "build_initial_state", return_value=self.make_exit_ready_state()):
             with patch(
-                "experiments.galactic_exodus.srs.evaluate_policies.choose_policy_command",
+                "experiments.galactic_exodus.archive.evaluation.srs.evaluate_policies.choose_policy_command",
                 side_effect=[
                     SrsCommand(command_type="MOVE_TO", target=Position(0, 0)),
                     SrsCommand(command_type="WARP_EXIT", exit_direction=Direction.S),
@@ -1148,7 +1148,7 @@ class PolicyRunLoopTests(unittest.TestCase):
 
         with patch.object(EvaluationCase, "build_initial_state", return_value=self.make_exit_ready_state()):
             with patch(
-                "experiments.galactic_exodus.srs.evaluate_policies.choose_policy_command",
+                "experiments.galactic_exodus.archive.evaluation.srs.evaluate_policies.choose_policy_command",
                 side_effect=[
                     SrsCommand(command_type="INTERACT", target_object_id="missing-object"),
                     SrsCommand(command_type="WARP_EXIT", exit_direction=Direction.S),
@@ -1170,7 +1170,7 @@ class PolicyRunLoopTests(unittest.TestCase):
 
         with patch.object(EvaluationCase, "build_initial_state", return_value=self.make_exit_ready_state()):
             with patch(
-                "experiments.galactic_exodus.srs.evaluate_policies.choose_policy_command",
+                "experiments.galactic_exodus.archive.evaluation.srs.evaluate_policies.choose_policy_command",
                 side_effect=[repeated_command, repeated_command],
             ):
                 result = run_policy_evaluation_case(
@@ -1191,7 +1191,7 @@ class PolicyRunLoopTests(unittest.TestCase):
 
         with patch.object(EvaluationCase, "build_initial_state", return_value=self.make_exit_ready_state()):
             with patch(
-                "experiments.galactic_exodus.srs.evaluate_policies.choose_policy_command",
+                "experiments.galactic_exodus.archive.evaluation.srs.evaluate_policies.choose_policy_command",
                 side_effect=[first, second],
             ):
                 result = run_policy_evaluation_case(

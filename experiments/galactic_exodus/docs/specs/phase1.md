@@ -27,8 +27,9 @@ authority 優先順位:
 
 参照根拠:
 
-- 実装: `experiments/galactic_exodus/engine.py`, `experiments/galactic_exodus/play.py`, `experiments/galactic_exodus/display.py`, `experiments/galactic_exodus/hud.py`, `experiments/galactic_exodus/event_format.py`, `experiments/galactic_exodus/evaluate_policies.py`
-- fixture / validator: `experiments/galactic_exodus/fixtures/phase1_reference.json`, `experiments/galactic_exodus/validate_phase1_spec.py`
+- 実装: `experiments/galactic_exodus/engine.py`, `experiments/galactic_exodus/display.py`, `experiments/galactic_exodus/hud.py`, `experiments/galactic_exodus/event_format.py`
+- archive reference: `experiments/galactic_exodus/archive/evaluation/phase1_lrs/play.py`, `experiments/galactic_exodus/archive/evaluation/phase1_lrs/evaluate_policies.py`
+- fixture / validator: `experiments/galactic_exodus/fixtures/phase1_reference.json`, `experiments/galactic_exodus/archive/evaluation/phase1_lrs/validate_phase1_spec.py`
 - decision register: `experiments/galactic_exodus/phase1_decisions.csv`
 - evaluation evidence: `experiments/galactic_exodus/docs/evaluations/phase1_prototype_playtest.md`, `experiments/galactic_exodus/docs/evaluations/phase1_fuel_comparison_low_initial_seed_1_1000.md`, `experiments/galactic_exodus/docs/evaluations/phase1_fuel_comparison_seed_1_1000.md`
 
@@ -74,7 +75,7 @@ current implementation が持つ外部契約:
 Phase 1 で参照する入力:
 
 - decision register: `experiments/galactic_exodus/phase1_decisions.csv`
-- fixture validator: `experiments/galactic_exodus/validate_phase1_spec.py`
+- fixture validator: `experiments/galactic_exodus/archive/evaluation/phase1_lrs/validate_phase1_spec.py`
 - replay fixture: `experiments/galactic_exodus/fixtures/phase1_reference.json`
 
 この文書は field 名や scenario 名を current implementation と同じ token で記述する。日本語 alias や新しい英語 token は追加しない。

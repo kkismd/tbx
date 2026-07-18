@@ -6,7 +6,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from experiments.galactic_exodus.srs import validate_phase2_srs_movement as validator
+from experiments.galactic_exodus.archive.evaluation.srs import validate_phase2_srs_movement as validator
 
 
 class Phase2SrsMovementValidationTests(unittest.TestCase):
@@ -136,7 +136,7 @@ class Phase2SrsMovementValidationTests(unittest.TestCase):
         result = subprocess.run(
             [
                 "python",
-                "experiments/galactic_exodus/srs/validate_phase2_srs_movement.py",
+                "experiments/galactic_exodus/archive/evaluation/srs/validate_phase2_srs_movement.py",
                 str(self.path),
             ],
             cwd=self.repo_root,
@@ -151,7 +151,7 @@ class Phase2SrsMovementValidationTests(unittest.TestCase):
         result = subprocess.run(
             [
                 "python",
-                "experiments/galactic_exodus/srs/validate_phase2_srs_movement.py",
+                "experiments/galactic_exodus/archive/evaluation/srs/validate_phase2_srs_movement.py",
                 "experiments/galactic_exodus/srs/phase2_srs_movement.json",
             ],
             cwd=self.repo_root,

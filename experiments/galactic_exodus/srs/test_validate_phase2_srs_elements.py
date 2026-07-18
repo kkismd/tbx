@@ -5,7 +5,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from experiments.galactic_exodus.srs import validate_phase2_srs_elements as validator
+from experiments.galactic_exodus.archive.evaluation.srs import validate_phase2_srs_elements as validator
 
 
 class Phase2SrsElementsValidationTests(unittest.TestCase):

@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any
 
 if __package__ in {None, ""}:
-    sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
+    sys.path.insert(0, str(Path(__file__).resolve().parents[5]))
 
 from experiments.galactic_exodus.srs.model import Position
 from experiments.galactic_exodus.srs.render import render_row_for_internal_y

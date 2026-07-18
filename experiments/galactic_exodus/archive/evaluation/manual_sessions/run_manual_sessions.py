@@ -8,7 +8,7 @@ For each requested seed:
   4. Append or update one row in prototype_manual_sessions.csv.
 
 Example:
-    python experiments/galactic_exodus/run_manual_sessions.py \
+    python experiments/galactic_exodus/archive/evaluation/manual_sessions/run_manual_sessions.py \
       --player-id kkismd
 
 The script is resumable. Seeds already recorded with all subjective fields
@@ -200,7 +200,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--play-script",
         type=Path,
-        default=Path("experiments/galactic_exodus/play.py"),
+        default=Path("experiments/galactic_exodus/archive/evaluation/phase1_lrs/play.py"),
         help="Path to the interactive Galactic Exodus CLI",
     )
     parser.add_argument(
