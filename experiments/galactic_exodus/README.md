@@ -69,7 +69,7 @@ python -m experiments.galactic_exodus.srs.run_fixture \
 - [`simulate.py`](simulate.py): deterministic Phase 1 map generation sample
 - Archived Phase 1 evaluation scripts: [`archive/evaluation/phase1_lrs/`](archive/evaluation/phase1_lrs/)
 - Archived SRS evaluation scripts: [`archive/evaluation/srs/`](archive/evaluation/srs/)
-- Archived manual-session recovery and validation scripts: [`archive/evaluation/manual_sessions/`](archive/evaluation/manual_sessions/)
+- Archived manual-session runner, recovery, and validation scripts: [`archive/evaluation/manual_sessions/`](archive/evaluation/manual_sessions/)
 - Evaluation reports: [`docs/evaluations/README.md`](docs/evaluations/README.md)
 
 Examples:

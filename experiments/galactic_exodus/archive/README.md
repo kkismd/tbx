@@ -7,7 +7,6 @@ Archived files are not current runtime modules, gameplay specification sources, 
 Current runtime and operator entrypoints remain outside this directory, including:
 
 - `experiments/galactic_exodus/integrated_play.py`
-- `experiments/galactic_exodus/run_manual_sessions.py`
 - `experiments/galactic_exodus/srs/run_manual_eval.py`
 - `experiments/galactic_exodus/srs/run_fixture.py`
 

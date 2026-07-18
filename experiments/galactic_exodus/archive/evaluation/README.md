@@ -10,6 +10,8 @@ The files are kept for past evaluation reproduction and reference only. They are
 |---|---|
 | `experiments/galactic_exodus/create_manual_sessions_csv.py` | `experiments/galactic_exodus/archive/evaluation/manual_sessions/create_manual_sessions_csv.py` |
 | `experiments/galactic_exodus/evaluate_manual_sessions.py` | `experiments/galactic_exodus/archive/evaluation/manual_sessions/evaluate_manual_sessions.py` |
+| `experiments/galactic_exodus/run_manual_sessions.py` | `experiments/galactic_exodus/archive/evaluation/manual_sessions/run_manual_sessions.py` |
+| `experiments/galactic_exodus/test_run_manual_sessions.py` | `experiments/galactic_exodus/archive/evaluation/manual_sessions/test_run_manual_sessions.py` |
 | `experiments/galactic_exodus/evaluate_policies.py` | `experiments/galactic_exodus/archive/evaluation/phase1_lrs/evaluate_policies.py` |
 | `experiments/galactic_exodus/fuel_metrics.py` | `experiments/galactic_exodus/archive/evaluation/phase1_lrs/fuel_metrics.py` |
 | `experiments/galactic_exodus/metrics.py` | `experiments/galactic_exodus/archive/evaluation/phase1_lrs/metrics.py` |
@@ -30,4 +32,4 @@ The files are kept for past evaluation reproduction and reference only. They are
 
 `simulate.py` stays in the active tree because it is imported directly by `engine.py`. Moving it would change the current runtime dependency graph and should be handled only by a dedicated refactor that separates map generation from evaluation helpers.
 
-`integrated_play.py`, `run_manual_sessions.py`, `srs/run_manual_eval.py`, and `srs/run_fixture.py` stay active because they are current operator or fixture entrypoints. `run_manual_sessions.py` still points at the archived Phase 1 LRS CLI when it needs to reproduce the old manual-session flow.
+`integrated_play.py`, `srs/run_manual_eval.py`, and `srs/run_fixture.py` stay active because they are current operator or fixture entrypoints. `run_manual_sessions.py` moved into this archive because it is coupled to the archived Phase 1 LRS CLI and manual-session evaluation flow.

@@ -22,11 +22,11 @@ Classification summary after #1340 archive movement:
 
 | Classification | Count | Notes |
 |---|---:|---|
-| `KEEP` | 54 | Current implementation modules plus current regression tests/support |
-| `KEEP_AS_TOOL` | 5 | Manual CLIs and fixture runners that are still useful even when not imported as core modules |
+| `KEEP` | 53 | Current implementation modules plus current regression tests/support |
+| `KEEP_AS_TOOL` | 4 | Manual CLIs and fixture runners that are still useful even when not imported as core modules |
 | `EVALUATION_SUPPORT` | 1 | Evaluation helper still imported by current runtime |
 | `LEGACY_REFERENCE` | 0 | No file needed this label in the current tree |
-| `ARCHIVED_EVALUATION` | 17 | Completed evaluation support scripts retained under `archive/evaluation/` |
+| `ARCHIVED_EVALUATION` | 19 | Completed evaluation support scripts retained under `archive/evaluation/` |
 | `ARCHIVE_CANDIDATE` | 0 | No file remains only as a candidate after #1340 |
 | `DELETE_CANDIDATE` | 0 | No file was marked safe-to-delete in this audit |
 | `UNKNOWN` | 0 | No file required additional ownership clarification to classify |
@@ -39,6 +39,8 @@ The following files were moved without deletion. The archived files are past eva
 |---|---|---|
 | `experiments/galactic_exodus/create_manual_sessions_csv.py` | `experiments/galactic_exodus/archive/evaluation/manual_sessions/create_manual_sessions_csv.py` | `ARCHIVE_CANDIDATE` -> `ARCHIVED_EVALUATION` |
 | `experiments/galactic_exodus/evaluate_manual_sessions.py` | `experiments/galactic_exodus/archive/evaluation/manual_sessions/evaluate_manual_sessions.py` | `EVALUATION_SUPPORT` -> `ARCHIVED_EVALUATION` |
+| `experiments/galactic_exodus/run_manual_sessions.py` | `experiments/galactic_exodus/archive/evaluation/manual_sessions/run_manual_sessions.py` | `KEEP_AS_TOOL` -> `ARCHIVED_EVALUATION` |
+| `experiments/galactic_exodus/test_run_manual_sessions.py` | `experiments/galactic_exodus/archive/evaluation/manual_sessions/test_run_manual_sessions.py` | `KEEP` -> `ARCHIVED_EVALUATION` |
 | `experiments/galactic_exodus/evaluate_policies.py` | `experiments/galactic_exodus/archive/evaluation/phase1_lrs/evaluate_policies.py` | `EVALUATION_SUPPORT` -> `ARCHIVED_EVALUATION` |
 | `experiments/galactic_exodus/fuel_metrics.py` | `experiments/galactic_exodus/archive/evaluation/phase1_lrs/fuel_metrics.py` | `EVALUATION_SUPPORT` -> `ARCHIVED_EVALUATION` |
 | `experiments/galactic_exodus/metrics.py` | `experiments/galactic_exodus/archive/evaluation/phase1_lrs/metrics.py` | `EVALUATION_SUPPORT` -> `ARCHIVED_EVALUATION` |
@@ -61,7 +63,7 @@ The following files were moved without deletion. The archived files are past eva
 
 | File | Kind | Role | Referenced by | Test / command coverage | Classification | Recommended action | Notes |
 |---|---|---|---|---|---|---|---|
-| `archive/evaluation/manual_sessions/create_manual_sessions_csv.py` | generated support | Bootstrap blank manual-session CSV rows from JSON logs | Archived reference only; no current README/docs command | Not part of current active unittest surface | `ARCHIVED_EVALUATION` | Retain under archive for manual session recovery reference | Superseded by `run_manual_sessions.py`, but may help reconstruct old logs |
+| `archive/evaluation/manual_sessions/create_manual_sessions_csv.py` | generated support | Bootstrap blank manual-session CSV rows from JSON logs | Archived reference only; no current README/docs command | Not part of current active unittest surface | `ARCHIVED_EVALUATION` | Retain under archive for manual session recovery reference | Superseded by the archived manual-session runner, but may help reconstruct old logs |
 | `display.py` | implementation | Render current Phase 1 / integrated map output | Imported by `play.py` and `integrated_play.py`; cited by specs | Covered by `test_display.py` and snapshot tests | `KEEP` | Retain as active rendering module | Current CLI rendering path |
 | `display_reference.py` | generated support | Build snapshot reference states and expected render strings for tests | Imported by display snapshot tests | Covered by `test_display.py`, `test_display_snapshot.py`, `srs/test_render.py`, `srs/test_display_snapshot.py` | `KEEP` | Retain as active regression support | Current snapshot oracle support, not dead legacy |
 | `engine.py` | implementation | Phase 1 non-interactive engine and log generation | Imported by current tools, tests, docs, and archived evaluation scripts | Covered by `test_engine.py` and dependent tests | `KEEP` | Retain as active core implementation | Foundation for Phase 1 prototype behavior |
@@ -72,9 +74,9 @@ The following files were moved without deletion. The archived files are past eva
 | `hud.py` | implementation | Render compact HUD/status summaries | Imported by `play.py`, `integrated_play.py`, `srs/run_manual_eval.py` | Covered by `test_hud.py` and CLI tests | `KEEP` | Retain as active UI support | Shared display helper |
 | `integrated_play.py` | CLI / manual tool | Interactive integrated LRS/SRS command-response prototype | Documented in README and integrated CLI spec; covered by dedicated tests | Covered by `test_integrated_play.py` | `KEEP_AS_TOOL` | Retain as current manual CLI entrypoint | Not imported as library core, but active operator-facing tool |
 | `archive/evaluation/phase1_lrs/metrics.py` | evaluation / analysis | Aggregate Phase 1 map metrics over seed ranges | Archived reference; imported by archived evaluation scripts | Covered by `test_metrics.py` and CLI tests in `test_simulate.py` | `ARCHIVED_EVALUATION` | Retain under archive as completed evaluation support module | Feeds archived reports and tuning scripts |
-| `archive/evaluation/phase1_lrs/play.py` | CLI / manual tool | Interactive Phase 1 LRS prototype CLI | Archived reference; `run_manual_sessions.py` can still point to it for old manual-session flow | Covered by archived `archive/evaluation/phase1_lrs/test_play.py` when run directly | `ARCHIVED_EVALUATION` | Retain with `test_play.py` under archive | Phase 1 LRS-only play surface is no longer the current README entrypoint |
+| `archive/evaluation/phase1_lrs/play.py` | CLI / manual tool | Interactive Phase 1 LRS prototype CLI | Archived reference; archived `run_manual_sessions.py` points to it for old manual-session flow | Covered by archived `archive/evaluation/phase1_lrs/test_play.py` when run directly | `ARCHIVED_EVALUATION` | Retain with `test_play.py` under archive | Phase 1 LRS-only play surface is no longer the current README entrypoint |
 | `replay_phase1_reference.py` | fixture runner | Replay `phase1_reference.json` against current engine | Documented in README and archive plan; used by fixture test | Covered by `test_phase1_reference_fixtures.py` | `KEEP_AS_TOOL` | Retain as manual regression runner | Useful when checking Phase 1 reference fixture drift |
-| `run_manual_sessions.py` | CLI / manual tool | Run interactive manual sessions and append scored feedback CSV rows | Covered by dedicated tests; output referenced by evaluation docs | Covered by `test_run_manual_sessions.py` | `KEEP_AS_TOOL` | Retain as manual playtest operator tool | Current manual-evaluation workflow |
+| `archive/evaluation/manual_sessions/run_manual_sessions.py` | CLI / manual tool | Run archived Phase 1 LRS manual sessions and append scored feedback CSV rows | Archived with Phase 1 manual-session evaluation flow | Covered by archived `archive/evaluation/manual_sessions/test_run_manual_sessions.py` when run directly | `ARCHIVED_EVALUATION` | Retain under archive as completed manual-session runner | Coupled to archived Phase 1 LRS-only `play.py` |
 | `simulate.py` | evaluation / analysis | Deterministic Phase 1 map generation sample and CLI helpers | Documented in README; imported directly by `engine.py` and archived evaluation stack | Covered by `test_simulate.py` | `EVALUATION_SUPPORT` | Retain in active tree | Excluded from archive because current runtime imports it directly |
 | `srs/__init__.py` | implementation | Expose SRS package convenience exports | Imported by `integrated_play.py` and tests via package API | Covered indirectly by unittest discovery and `run_fixture` callers | `KEEP` | Retain as active package surface | Current package entrypoint |
 | `srs/contracts.py` | implementation | Define/load SRS contracts and shared constants | Imported throughout SRS engine/generate/evaluate/test paths | Covered by `srs/test_contracts.py` and wider SRS suite | `KEEP` | Retain as active SRS core module | Central contract boundary |
@@ -132,7 +134,7 @@ The following files were moved without deletion. The archived files are past eva
 | `test_metrics.py` | test | Regression/unit test for metrics aggregation | Unittest discovery under `experiments/galactic_exodus` | Directly executed by `python -m unittest discover experiments/galactic_exodus` | `KEEP` | Retain as current regression coverage | Current automated test coverage |
 | `test_phase1_reference_fixtures.py` | test | Regression/unit test for Phase 1 reference fixtures | Unittest discovery under `experiments/galactic_exodus` | Directly executed by `python -m unittest discover experiments/galactic_exodus` | `KEEP` | Retain as current regression coverage | Current automated test coverage |
 | `archive/evaluation/phase1_lrs/test_play.py` | test | Regression/unit test for archived Phase 1 CLI behavior | Archived with `play.py` | Directly runnable by path or explicit unittest target | `ARCHIVED_EVALUATION` | Retain with archived `play.py` | Archived together so the old CLI behavior remains inspectable |
-| `test_run_manual_sessions.py` | test | Regression/unit test for manual-session runner | Unittest discovery under `experiments/galactic_exodus` | Directly executed by `python -m unittest discover experiments/galactic_exodus` | `KEEP` | Retain as current regression coverage | Current automated test coverage |
+| `archive/evaluation/manual_sessions/test_run_manual_sessions.py` | test | Regression/unit test for archived manual-session runner | Archived with `run_manual_sessions.py` | Directly runnable by path or explicit unittest target | `ARCHIVED_EVALUATION` | Retain with archived `run_manual_sessions.py` | Archived together so the old manual-session flow remains inspectable |
 | `test_simulate.py` | test | Regression/unit test for simulation helpers and CLIs | Unittest discovery under `experiments/galactic_exodus` | Directly executed by `python -m unittest discover experiments/galactic_exodus` | `KEEP` | Retain as current regression coverage | Current automated test coverage |
 | `test_validate_phase1_spec.py` | test | Regression/unit test for Phase 1 artifact validator | Unittest discovery under `experiments/galactic_exodus` | Directly executed by `python -m unittest discover experiments/galactic_exodus` | `KEEP` | Retain as current regression coverage | Current automated test coverage |
 | `test_validate_phase1b_results.py` | test | Regression/unit test for Phase 1B result validator | Unittest discovery under `experiments/galactic_exodus` | Directly executed by `python -m unittest discover experiments/galactic_exodus` | `KEEP` | Retain as current regression coverage | Current automated test coverage |
@@ -170,13 +172,14 @@ Files in `KEEP_AS_TOOL` are still worth retaining even when they are not foundat
 
 - `integrated_play.py`
 - `replay_phase1_reference.py`
-- `run_manual_sessions.py`
 - `srs/run_fixture.py`
 - `srs/run_manual_eval.py`
 
 These are the current human-facing or operator-facing entrypoints for manual play, fixture replay, or fixture review.
 
 `play.py` was removed from this bucket in #1340 because the standalone Phase 1 LRS-only CLI is no longer the current README entrypoint. It moved to `archive/evaluation/phase1_lrs/play.py` with `test_play.py`.
+
+`run_manual_sessions.py` was also removed from this bucket because it is coupled to the archived Phase 1 LRS-only CLI and completed manual-session evaluation workflow. It moved to `archive/evaluation/manual_sessions/run_manual_sessions.py` with `test_run_manual_sessions.py`.
 
 ## 6. EVALUATION_SUPPORT
 
@@ -194,7 +197,7 @@ It remains active because `engine.py` imports it directly. The completed Phase 1
 
 - Phase 1 LRS evaluation scripts under `archive/evaluation/phase1_lrs/`
 - SRS evaluation scripts under `archive/evaluation/srs/`
-- manual-session recovery and validation scripts under `archive/evaluation/manual_sessions/`
+- manual-session runner, recovery, and validation scripts under `archive/evaluation/manual_sessions/`
 
 Why these files were not placed in `DELETE_CANDIDATE`:
 
@@ -205,7 +208,8 @@ Why these files were not placed in `DELETE_CANDIDATE`:
 Why these files are not current runtime or operator tools:
 
 - `integrated_play.py` is the current integrated CLI entrypoint
-- `run_manual_sessions.py`, `srs/run_manual_eval.py`, and `srs/run_fixture.py` remain active operator or fixture tools
+- `srs/run_manual_eval.py` and `srs/run_fixture.py` remain active operator or fixture tools
+- `run_manual_sessions.py` moved to archive because it depends on the archived Phase 1 LRS-only CLI
 - archived validators and batch evaluators are historical evidence support, not current gameplay specifications
 
 ## 8. DELETE_CANDIDATE
@@ -227,6 +231,6 @@ The only previous borderline file was `create_manual_sessions_csv.py`; it is now
 ## 10. Recommended follow-up issues
 
 1. If `simulate.py` should be archived later, first split the current map generation dependency used by `engine.py` into an active implementation module.
-2. If manual playtest workflows are still expected, add explicit operator documentation for `run_manual_sessions.py` in `experiments/galactic_exodus/README.md` or an evaluation operations note.
+2. If manual playtest workflows are restarted, decide whether to build them around `integrated_play.py` or restore a new active runner instead of reusing the archived Phase 1 LRS-only flow.
 3. Consider whether artifact validators should be grouped under a clearer subdirectory in a later refactor, without changing behavior in this inventory-only PR.
 4. If future cleanup is desired, re-audit generated results and non-Python operator assets together with this inventory so delete/archive decisions are made with the full workflow in view.

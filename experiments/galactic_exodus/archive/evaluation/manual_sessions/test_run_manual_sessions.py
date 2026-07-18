@@ -8,7 +8,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from experiments.galactic_exodus import run_manual_sessions
+from experiments.galactic_exodus.archive.evaluation.manual_sessions import run_manual_sessions
 
 
 def make_log(log_path: Path, *, requested_seed: int, effective_seed: int) -> None:
