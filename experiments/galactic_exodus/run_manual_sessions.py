@@ -200,7 +200,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--play-script",
         type=Path,
-        default=Path("experiments/galactic_exodus/play.py"),
+        default=Path("experiments/galactic_exodus/archive/evaluation/phase1_lrs/play.py"),
         help="Path to the interactive Galactic Exodus CLI",
     )
     parser.add_argument(

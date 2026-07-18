@@ -8,7 +8,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from experiments.galactic_exodus import engine
-from experiments.galactic_exodus import evaluate_policies
+from experiments.galactic_exodus.archive.evaluation.phase1_lrs import evaluate_policies
 from experiments.galactic_exodus import simulate
 from experiments.galactic_exodus.test_engine import filled_cells
 from experiments.galactic_exodus.test_engine import make_actual_map

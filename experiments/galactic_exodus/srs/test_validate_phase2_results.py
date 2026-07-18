@@ -6,7 +6,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from experiments.galactic_exodus.srs import validate_phase2_results as validator
+from experiments.galactic_exodus.archive.evaluation.srs import validate_phase2_results as validator
 
 
 class Phase2ReferenceValidationTests(unittest.TestCase):
@@ -65,7 +65,7 @@ class Phase2ReferenceValidationTests(unittest.TestCase):
         result = subprocess.run(
             [
                 "python",
-                "experiments/galactic_exodus/srs/validate_phase2_results.py",
+                "experiments/galactic_exodus/archive/evaluation/srs/validate_phase2_results.py",
                 "experiments/galactic_exodus/srs/fixtures/phase2_reference.json",
             ],
             cwd=self.repo_root,
@@ -82,7 +82,7 @@ class Phase2ReferenceValidationTests(unittest.TestCase):
         result = subprocess.run(
             [
                 "python",
-                "experiments/galactic_exodus/srs/validate_phase2_results.py",
+                "experiments/galactic_exodus/archive/evaluation/srs/validate_phase2_results.py",
                 str(self.path),
             ],
             cwd=self.repo_root,

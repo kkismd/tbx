@@ -8,7 +8,7 @@ from contextlib import redirect_stderr, redirect_stdout
 from io import StringIO
 from pathlib import Path
 
-from experiments.galactic_exodus.srs import validate_phase2_initial_model as validator
+from experiments.galactic_exodus.archive.evaluation.srs import validate_phase2_initial_model as validator
 
 
 class Phase2InitialModelValidationTests(unittest.TestCase):

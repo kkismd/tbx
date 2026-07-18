@@ -822,7 +822,7 @@ class ReadmeCommandTests(unittest.TestCase):
 
     def test_readme_standard_metrics_command_runs(self) -> None:
         result = self.run_command(
-            "experiments/galactic_exodus/metrics.py",
+            "experiments/galactic_exodus/archive/evaluation/phase1_lrs/metrics.py",
             "--seed-start",
             "1",
             "--seed-count",
@@ -843,7 +843,7 @@ class ReadmeCommandTests(unittest.TestCase):
         self.addCleanup(markdown_output.unlink, missing_ok=True)
 
         result = self.run_command(
-            "experiments/galactic_exodus/fuel_metrics.py",
+            "experiments/galactic_exodus/archive/evaluation/phase1_lrs/fuel_metrics.py",
             "--seed-start",
             "1",
             "--seed-count",

@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Sequence, TextIO
 
 if __package__ in (None, ""):
-    sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+    sys.path.insert(0, str(Path(__file__).resolve().parents[5]))
 
 from experiments.galactic_exodus import engine, event_format, simulate
 from experiments.galactic_exodus.display import render_lrs_border_light_map

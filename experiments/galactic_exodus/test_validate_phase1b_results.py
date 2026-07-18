@@ -6,7 +6,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from experiments.galactic_exodus import validate_phase1b_results as validator
+from experiments.galactic_exodus.archive.evaluation.phase1_lrs import validate_phase1b_results as validator
 
 
 class Phase1BValidationTests(unittest.TestCase):

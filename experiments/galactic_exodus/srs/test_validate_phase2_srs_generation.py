@@ -6,7 +6,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from experiments.galactic_exodus.srs import validate_phase2_srs_generation as validator
+from experiments.galactic_exodus.archive.evaluation.srs import validate_phase2_srs_generation as validator
 
 
 class Phase2SrsGenerationValidationTests(unittest.TestCase):
@@ -211,7 +211,7 @@ class Phase2SrsGenerationValidationTests(unittest.TestCase):
         result = subprocess.run(
             [
                 "python",
-                "experiments/galactic_exodus/srs/validate_phase2_srs_generation.py",
+                "experiments/galactic_exodus/archive/evaluation/srs/validate_phase2_srs_generation.py",
                 str(self.path),
             ],
             cwd=self.repo_root,

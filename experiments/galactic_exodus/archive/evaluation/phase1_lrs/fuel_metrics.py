@@ -9,12 +9,12 @@ from pathlib import Path
 import sys
 
 if __package__ in (None, ""):
-    sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
-    from experiments.galactic_exodus import metrics
+    sys.path.insert(0, str(Path(__file__).resolve().parents[5]))
     from experiments.galactic_exodus import simulate
+    from experiments.galactic_exodus.archive.evaluation.phase1_lrs import metrics
 else:
-    from experiments.galactic_exodus import metrics
     from experiments.galactic_exodus import simulate
+    from experiments.galactic_exodus.archive.evaluation.phase1_lrs import metrics
 
 
 @dataclass(frozen=True, order=True)
@@ -766,7 +766,7 @@ def format_distribution_block(name: str, stats: metrics.DistributionStats) -> li
 
 def build_reproduction_command(args: argparse.Namespace) -> str:
     parts = [
-        "python experiments/galactic_exodus/fuel_metrics.py",
+        "python experiments/galactic_exodus/archive/evaluation/phase1_lrs/fuel_metrics.py",
         f"--seed-start {args.seed_start}",
         f"--seed-count {args.seed_count}",
         f"--rift-density {args.rift_density}",

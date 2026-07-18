@@ -35,3 +35,4 @@
 - CSV / JSON は既存 `results/` 配下の機械可読成果物である。
 - Markdown の移動に伴って CSV / JSON は移動しない。
 - 再生成時の Markdown 出力先は `docs/evaluations/` を使う。
+- 完了済み評価支援スクリプトは `../../archive/evaluation/` 配下に保持する。

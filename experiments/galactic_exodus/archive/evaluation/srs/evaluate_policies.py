@@ -12,7 +12,7 @@ import sys
 from types import MappingProxyType
 from typing import Any, Callable, Iterable, Mapping
 
-from experiments.galactic_exodus import metrics
+from experiments.galactic_exodus.archive.evaluation.phase1_lrs import metrics
 from experiments.galactic_exodus.srs.contracts import SrsContracts, load_default_contracts
 from experiments.galactic_exodus.srs.engine import (
     apply_srs_command,
@@ -132,7 +132,7 @@ POLICY_NAME_ORDER = (
     EXPLORE_THEN_EXIT_POLICY_NAME,
     OBJECT_GREEDY_POLICY_NAME,
 )
-REPO_ROOT = Path(__file__).resolve().parents[3]
+REPO_ROOT = Path(__file__).resolve().parents[5]
 
 
 def _freeze_mapping(mapping: Mapping[str, Any]) -> Mapping[str, Any]:
