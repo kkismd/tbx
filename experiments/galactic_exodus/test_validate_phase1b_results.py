@@ -121,7 +121,8 @@ class Phase1BValidationTests(unittest.TestCase):
             validator.validate_summary(self.summary, run_counts)
 
     def test_validate_findings_requires_all_questions(self) -> None:
-        rows = list(csv.DictReader(self.findings.open(encoding="utf-8", newline="")))
+        with self.findings.open(encoding="utf-8", newline="") as file:
+            rows = list(csv.DictReader(file))
         with self.findings.open("w", encoding="utf-8", newline="") as file:
             writer = csv.DictWriter(file, fieldnames=validator.FINDING_FIELDS)
             writer.writeheader()
