@@ -6,7 +6,7 @@ import argparse
 import re
 import sys
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Sequence, TextIO
 
@@ -21,6 +21,7 @@ if __package__ in (None, ""):
 from experiments.galactic_exodus import engine as lrs_engine
 from experiments.galactic_exodus.display import render_lrs_border_light_map
 from experiments.galactic_exodus.hud import CompactHudContext, render_compact_hud
+from experiments.galactic_exodus.srs import generate as srs_generate
 from experiments.galactic_exodus.srs import engine as srs_engine
 from experiments.galactic_exodus.srs import event_format as srs_event_format
 from experiments.galactic_exodus.srs.contracts import load_default_contracts
@@ -42,19 +43,8 @@ COMMAND_EXIT = "EXIT"
 COMMAND_UNKNOWN = "UNKNOWN"
 
 _COMMAND_DIRECTIONS = frozenset({"N", "E", "S", "W"})
-_NEBULA_SENSOR_SIZE = 3
-_DEFAULT_SENSOR_SIZE = 5
-_SRS_MAP_WIDTH = 9
-_SRS_MAP_HEIGHT = 9
-_SRS_START_POSITION = srs_model.Position(0, 0)
 _DEFAULT_SRS_FUEL = 3
 _DEFAULT_SRS_MAX_FUEL = 9
-_ENTRY_POSITIONS = {
-    "N": srs_model.Position(4, 8),
-    "E": srs_model.Position(8, 4),
-    "S": srs_model.Position(4, 0),
-    "W": srs_model.Position(0, 4),
-}
 _DIRECTION_ENUM = {
     "N": srs_model.Direction.N,
     "E": srs_model.Direction.E,
@@ -62,18 +52,6 @@ _DIRECTION_ENUM = {
     "W": srs_model.Direction.W,
 }
 _LRS_DIRECTION_DELTAS = lrs_engine.COMMAND_DELTAS
-_MINIMAL_OBJECT_SPECS = {
-    "R": (
-        "resource-cache-1",
-        srs_model.SrsObjectType.RESOURCE_CACHE,
-        srs_model.Position(4, 5),
-    ),
-    "B": (
-        "station-1",
-        srs_model.SrsObjectType.STATION,
-        srs_model.Position(4, 5),
-    ),
-}
 
 
 class CliArgumentParser(argparse.ArgumentParser):
@@ -156,12 +134,7 @@ def parse_integrated_command(raw: str) -> IntegratedCommand:
 
 def create_integrated_game(seed: int) -> IntegratedGameState:
     lrs_state = lrs_engine.create_game(seed)
-    sector_symbol = lrs_state.known_cells.get(lrs_state.player_position)
-    srs_state = _create_minimal_srs_for_sector(
-        seed=lrs_state.effective_seed,
-        lrs_position=lrs_state.player_position,
-        sector_symbol=sector_symbol,
-    )
+    srs_state = _create_srs_for_lrs_sector(lrs_state, entry_edge=srs_model.Direction.S)
     return IntegratedGameState(
         lrs_state=lrs_state,
         srs_state=srs_state,
@@ -499,7 +472,7 @@ def _execute_exit_command(
         )
 
     edge = _normalize_lrs_edge(old_lrs_position, new_lrs_position)
-    if lrs_state.known_routes.get(edge) == lrs_engine.ROUTE_RIFT:
+    if _lrs_edge_is_rift(lrs_state, edge):
         summary = f"EXIT  rejected: {direction} edge is blocked by RIFT"
         state.last_event_summary = summary
         return IntegratedCommandResult(
@@ -511,12 +484,10 @@ def _execute_exit_command(
         )
 
     old_position, moved_position = _apply_lrs_exit_move(lrs_state, direction)
-    sector_symbol = state.lrs_state.known_cells.get(moved_position)
-    state.srs_state = _create_minimal_srs_for_sector(
-        seed=state.lrs_state.effective_seed,
-        lrs_position=moved_position,
-        sector_symbol=sector_symbol,
-        entry_direction=_opposite_direction(direction),
+    state.srs_state = _create_srs_for_lrs_sector(
+        state.lrs_state,
+        entry_edge=_DIRECTION_ENUM[_opposite_direction(direction)],
+        previous_srs_state=warp_result.state,
     )
 
     entered_sector_type = state.srs_state.descriptor.sector_type.value
@@ -610,176 +581,77 @@ def _sector_type_for_lrs_symbol(symbol: str | None) -> srs_model.SectorType:
     return mapping.get(symbol or "", srs_model.SectorType.NORMAL)
 
 
-def _create_minimal_srs_for_sector(
+def _sector_descriptor_for_lrs_position(
     *,
-    seed: int,
+    lrs_state: lrs_engine.GameState,
     lrs_position: tuple[int, int],
-    sector_symbol: str | None,
-    entry_direction: str | None = None,
-) -> srs_model.SrsGameState:
-    sector_type = _sector_type_for_lrs_symbol(sector_symbol)
-    player_position = _player_position_for_entry(entry_direction)
-    warp_flags = _warp_flags_for_entry(entry_direction)
-    objects = _minimal_objects_for_sector(sector_symbol)
-    rows = _make_floor_rows(
-        warp_flags,
-        object_positions={
-            object_state.position: object_id
-            for object_id, object_state in objects.items()
-        },
-    )
-    actual_map = srs_model.SrsActualMap(
-        width=_SRS_MAP_WIDTH,
-        height=_SRS_MAP_HEIGHT,
-        cells=tuple(tuple(row) for row in rows),
-    )
-    discovered_cells = _observed_positions(player_position, sector_type)
-    known_cells = {
-        position: actual_map.cell_at(position)
-        for position in discovered_cells
-    }
-    descriptor = srs_model.SectorDescriptor(
+    entry_edge: srs_model.Direction,
+) -> srs_model.SectorDescriptor:
+    sector_symbol = lrs_state.actual_map.cells.get(lrs_position)
+    return srs_model.SectorDescriptor(
         sector_id=f"lrs-{lrs_position[0]}-{lrs_position[1]}",
-        sector_type=sector_type,
-        sector_seed=seed,
-        entry_edge=_DIRECTION_ENUM.get(entry_direction or "S", srs_model.Direction.S),
+        sector_type=_sector_type_for_lrs_symbol(sector_symbol),
+        sector_seed=lrs_state.effective_seed,
+        entry_edge=entry_edge,
         blocked_edges=frozenset(),
     )
-    persistent_state = srs_model.SrsPersistentState(
-        generated_map_id=f"{descriptor.sector_id}:{seed}",
-        generation_schema_version=1,
-        generation_seed=seed,
-        sector_type=sector_type,
-        blocked_edges=frozenset(),
-        warp_flags={
-            position: cell.warp_flags
-            for position, cell in known_cells.items()
-            if cell.warp_flags
-        },
-        discovered_cells=discovered_cells,
+
+
+def _lrs_edge_is_rift(
+    lrs_state: lrs_engine.GameState,
+    edge: tuple[tuple[int, int], tuple[int, int]],
+) -> bool:
+    return (
+        edge in lrs_state.actual_map.rift_edges
+        or lrs_state.known_routes.get(edge) == lrs_engine.ROUTE_RIFT
     )
-    return srs_model.SrsGameState(
-        descriptor=descriptor,
-        actual_map=actual_map,
-        known_state=srs_model.SrsKnownState(
-            discovered_cells=discovered_cells,
-            known_cells=known_cells,
-            visited_cells=frozenset({player_position}),
-        ),
-        persistent_state=persistent_state,
-        player_position=player_position,
-        objects=objects,
+
+
+def _create_srs_for_lrs_sector(
+    lrs_state: lrs_engine.GameState,
+    *,
+    entry_edge: srs_model.Direction,
+    previous_srs_state: srs_model.SrsGameState | None = None,
+) -> srs_model.SrsGameState:
+    descriptor = _sector_descriptor_for_lrs_position(
+        lrs_state=lrs_state,
+        lrs_position=lrs_state.player_position,
+        entry_edge=entry_edge,
+    )
+    generated = srs_generate.create_sector(descriptor, contracts=SRS_CONTRACTS)
+    return _initialize_integrated_srs_state(
+        generated,
+        previous_srs_state=previous_srs_state,
+    )
+
+
+def _initialize_integrated_srs_state(
+    generated: srs_model.SrsGameState,
+    *,
+    previous_srs_state: srs_model.SrsGameState | None,
+) -> srs_model.SrsGameState:
+    if previous_srs_state is None:
+        fuel = _DEFAULT_SRS_FUEL
+        max_fuel = _DEFAULT_SRS_MAX_FUEL
+        player_state = srs_model.SrsPlayerCombatState()
+    else:
+        fuel = previous_srs_state.fuel
+        max_fuel = previous_srs_state.max_fuel
+        player_state = previous_srs_state.player_state
+
+    initialized = replace(
+        generated,
+        player_state=player_state,
         combat_state=None,
         srs_turn=0,
-        fuel=_DEFAULT_SRS_FUEL,
-        max_fuel=_DEFAULT_SRS_MAX_FUEL,
+        fuel=fuel,
+        max_fuel=max_fuel,
     )
-
-
-def _minimal_objects_for_sector(
-    sector_symbol: str | None,
-) -> dict[str, srs_model.SrsObjectState]:
-    spec = _MINIMAL_OBJECT_SPECS.get(sector_symbol or "")
-    if spec is None:
-        return {}
-    object_id, object_type, position = spec
-    return {
-        object_id: srs_model.SrsObjectState(
-            object_id=object_id,
-            object_type=object_type,
-            position=position,
-        )
-    }
-
-
-def _player_position_for_entry(entry_direction: str | None) -> srs_model.Position:
-    if entry_direction is None:
-        return _SRS_START_POSITION
-    return _ENTRY_POSITIONS[entry_direction]
-
-
-def _warp_flags_for_entry(
-    entry_direction: str | None,
-) -> dict[srs_model.Position, frozenset[srs_model.Direction]]:
-    del entry_direction
-
-    cells = _make_floor_rows({}, object_positions={})
-    warp_flags: dict[srs_model.Position, frozenset[srs_model.Direction]] = {}
-    for direction in srs_model.Direction:
-        for position in _edge_cells(direction):
-            if not _has_floor_square(cells, position):
-                continue
-            current_flags = warp_flags.get(position, frozenset())
-            warp_flags[position] = current_flags | frozenset({direction})
-    return warp_flags
-
-
-def _edge_cells(direction: srs_model.Direction) -> list[srs_model.Position]:
-    if direction is srs_model.Direction.N:
-        return [srs_model.Position(x, _SRS_MAP_HEIGHT - 1) for x in range(_SRS_MAP_WIDTH)]
-    if direction is srs_model.Direction.E:
-        return [srs_model.Position(_SRS_MAP_WIDTH - 1, y) for y in range(_SRS_MAP_HEIGHT)]
-    if direction is srs_model.Direction.S:
-        return [srs_model.Position(x, 0) for x in range(_SRS_MAP_WIDTH)]
-    return [srs_model.Position(0, y) for y in range(_SRS_MAP_HEIGHT)]
-
-
-def _has_floor_square(
-    cells: Sequence[Sequence[srs_model.SrsCell]],
-    position: srs_model.Position,
-) -> bool:
-    for min_x in range(position.x - 1, position.x + 1):
-        for min_y in range(position.y - 1, position.y + 1):
-            if min_x < 0 or min_y < 0:
-                continue
-            if min_x + 1 >= _SRS_MAP_WIDTH or min_y + 1 >= _SRS_MAP_HEIGHT:
-                continue
-            square = (
-                cells[min_y][min_x],
-                cells[min_y][min_x + 1],
-                cells[min_y + 1][min_x],
-                cells[min_y + 1][min_x + 1],
-            )
-            if all(cell.terrain is srs_model.SrsTerrainType.FLOOR for cell in square):
-                return True
-    return False
-
-
-def _make_floor_rows(
-    warp_flags: dict[srs_model.Position, frozenset[srs_model.Direction]],
-    *,
-    object_positions: Mapping[srs_model.Position, str],
-) -> list[list[srs_model.SrsCell]]:
-    rows: list[list[srs_model.SrsCell]] = []
-    for y in range(_SRS_MAP_HEIGHT):
-        row: list[srs_model.SrsCell] = []
-        for x in range(_SRS_MAP_WIDTH):
-            position = srs_model.Position(x, y)
-            row.append(
-                srs_model.SrsCell(
-                    terrain=srs_model.SrsTerrainType.FLOOR,
-                    object_id=object_positions.get(position),
-                    warp_flags=warp_flags.get(position, frozenset()),
-                )
-            )
-        rows.append(row)
-    return rows
-
-
-def _observed_positions(
-    center: srs_model.Position,
-    sector_type: srs_model.SectorType,
-) -> frozenset[srs_model.Position]:
-    size = _NEBULA_SENSOR_SIZE if sector_type is srs_model.SectorType.NEBULA else _DEFAULT_SENSOR_SIZE
-    radius = size // 2
-    positions = set()
-    for dx in range(-radius, radius + 1):
-        for dy in range(-radius, radius + 1):
-            x = center.x + dx
-            y = center.y + dy
-            if 0 <= x < _SRS_MAP_WIDTH and 0 <= y < _SRS_MAP_HEIGHT:
-                positions.add(srs_model.Position(x, y))
-    return frozenset(positions)
+    return srs_engine.reveal_observation(
+        initialized,
+        center=initialized.player_position,
+        contracts=SRS_CONTRACTS,
+    )
 
 
 if __name__ == "__main__":

@@ -129,30 +129,73 @@ class IntegratedPlayCliTests(unittest.TestCase):
 
         self.assertIsNotNone(state.lrs_state)
         self.assertIsNotNone(state.srs_state)
-        self.assertEqual(state.srs_state.player_position, srs_model.Position(0, 0))
+        self.assertEqual(state.srs_state.descriptor.sector_id, "lrs-1-1")
+        self.assertEqual(state.srs_state.descriptor.sector_seed, state.lrs_state.effective_seed)
+        self.assertEqual(state.srs_state.player_position, srs_model.Position(4, 0))
+        self.assertEqual(state.srs_state.fuel, 3)
+        self.assertEqual(state.srs_state.max_fuel, 9)
         self.assertEqual(state.last_event_summary, "GAME  started seed=42")
 
-    def test_create_integrated_game_discovers_lower_left_sensor_window(self) -> None:
+    def test_create_integrated_game_uses_generated_sector(self) -> None:
         state = integrated_play.create_integrated_game(42)
 
-        discovered = state.srs_state.known_state.discovered_cells
+        object_types = {
+            object_state.object_type
+            for object_state in state.srs_state.objects.values()
+        }
+
+        self.assertIn(srs_model.SrsObjectType.STAR, object_types)
+        self.assertIn(srs_model.SrsObjectType.PLANET, object_types)
+        self.assertIn(srs_model.SrsObjectType.SALVAGE, object_types)
+
+    def test_initial_sector_uses_south_entry_position(self) -> None:
+        state = integrated_play.create_integrated_game(42)
+
+        self.assertEqual(state.srs_state.descriptor.entry_edge, srs_model.Direction.S)
+        self.assertEqual(state.srs_state.player_position, srs_model.Position(4, 0))
+
+    def test_initial_observation_uses_srs_observation_rule(self) -> None:
+        state = integrated_play.create_integrated_game(42)
+
+        expected = integrated_play.srs_engine.observation_area(
+            state.srs_state.actual_map,
+            center=state.srs_state.player_position,
+            size=5,
+        )
+
+        self.assertEqual(state.srs_state.known_state.discovered_cells, expected)
+        self.assertEqual(state.srs_state.known_state.visited_cells, frozenset({state.srs_state.player_position}))
+
+    def test_initial_sector_descriptor_matches_lrs_cell(self) -> None:
+        state = integrated_play.create_integrated_game(42)
+
+        symbol = state.lrs_state.actual_map.cells[state.lrs_state.player_position]
 
         self.assertEqual(
-            discovered,
-            frozenset(
-                {
-                    srs_model.Position(0, 0),
-                    srs_model.Position(1, 0),
-                    srs_model.Position(2, 0),
-                    srs_model.Position(0, 1),
-                    srs_model.Position(1, 1),
-                    srs_model.Position(2, 1),
-                    srs_model.Position(0, 2),
-                    srs_model.Position(1, 2),
-                    srs_model.Position(2, 2),
-                }
-            ),
+            state.srs_state.descriptor.sector_type,
+            integrated_play._sector_type_for_lrs_symbol(symbol),
         )
+
+    def test_initial_sector_descriptor_preserves_existing_blocked_edge_contract(self) -> None:
+        state = integrated_play.create_integrated_game(42)
+
+        self.assertEqual(state.srs_state.descriptor.blocked_edges, frozenset())
+
+    def test_same_descriptor_reproduces_actual_map_and_objects(self) -> None:
+        state = integrated_play.create_integrated_game(42)
+        descriptor = state.srs_state.descriptor
+
+        first = integrated_play.srs_generate.create_sector(
+            descriptor,
+            contracts=integrated_play.SRS_CONTRACTS,
+        )
+        second = integrated_play.srs_generate.create_sector(
+            descriptor,
+            contracts=integrated_play.SRS_CONTRACTS,
+        )
+
+        self.assertEqual(first.actual_map, second.actual_map)
+        self.assertEqual(first.objects, second.objects)
 
     def test_look_does_not_change_state(self) -> None:
         state = integrated_play.create_integrated_game(42)
@@ -261,7 +304,7 @@ class IntegratedPlayCliTests(unittest.TestCase):
         self.assertTrue(result.accepted)
         self.assertEqual(result.command_type, integrated_play.COMMAND_MOVE)
         self.assertEqual(state.lrs_state.player_position, old_lrs)
-        self.assertEqual(state.srs_state.player_position, srs_model.Position(2, 1))
+        self.assertEqual(state.srs_state.player_position, srs_model.Position(6, 1))
         self.assertTrue(result.summary_lines[0].startswith("MOVE  accepted"))
 
     def test_move_route_whitespace_syntax_moves_only_srs(self) -> None:
@@ -276,7 +319,7 @@ class IntegratedPlayCliTests(unittest.TestCase):
         self.assertTrue(result.accepted)
         self.assertEqual(result.command_type, integrated_play.COMMAND_MOVE)
         self.assertEqual(state.lrs_state.player_position, old_lrs)
-        self.assertEqual(state.srs_state.player_position, srs_model.Position(2, 1))
+        self.assertEqual(state.srs_state.player_position, srs_model.Position(6, 1))
         self.assertTrue(result.summary_lines[0].startswith("MOVE  accepted"))
 
     def test_move_invalid_direction_rejected_without_changing_positions(self) -> None:
@@ -327,6 +370,7 @@ class IntegratedPlayCliTests(unittest.TestCase):
     def test_exit_accepted_moves_lrs_east_and_enters_new_srs_from_west(self) -> None:
         state = integrated_play.create_integrated_game(42)
         state.lrs_state.player_position = (1, 1)
+        self._remove_lrs_rift_edge(state, (1, 1), (2, 1))
         state.srs_state = self._replace_srs_position(state.srs_state, srs_model.Position(8, 4))
 
         result = integrated_play.execute_integrated_command(
@@ -343,6 +387,57 @@ class IntegratedPlayCliTests(unittest.TestCase):
         self.assertIn("LRS   moved E: LRS=(1,1) -> LRS=(2,1)", result.summary_lines[1])
         self.assertIn("SRS   entered sector TYPE=", result.summary_lines[2])
         self.assertIn("at SRS=(1,5)", result.summary_lines[2])
+
+    def test_exit_preserves_ship_resources_and_player_state(self) -> None:
+        state = integrated_play.create_integrated_game(42)
+        state.lrs_state.player_position = (1, 1)
+        self._remove_lrs_rift_edge(state, (1, 1), (2, 1))
+        player_state = srs_model.SrsPlayerCombatState(
+            durability=77,
+            energy=4,
+            photon_torpedo_ammo=2,
+            salvage=5,
+        )
+        state.srs_state = replace(
+            self._replace_srs_position(state.srs_state, srs_model.Position(8, 4)),
+            fuel=2,
+            max_fuel=8,
+            player_state=player_state,
+            srs_turn=9,
+            combat_state=None,
+        )
+
+        result = integrated_play.execute_integrated_command(
+            state,
+            integrated_play.parse_integrated_command("EXIT E"),
+        )
+
+        self.assertTrue(result.accepted)
+        self.assertEqual(state.srs_state.player_position, srs_model.Position(0, 4))
+        self.assertEqual(state.srs_state.fuel, 2)
+        self.assertEqual(state.srs_state.max_fuel, 8)
+        self.assertEqual(state.srs_state.player_state, player_state)
+        self.assertEqual(state.srs_state.srs_turn, 0)
+        self.assertIsNone(state.srs_state.combat_state)
+
+    def test_reentering_sector_regenerates_without_persistent_restore(self) -> None:
+        state = integrated_play.create_integrated_game(42)
+        first = self._create_srs_for_lrs_symbol(state, "R")
+        consumed = replace(
+            first.persistent_state,
+            consumed_object_ids=frozenset({"resource-cache-1"}),
+        )
+        state.srs_state = replace(first, persistent_state=consumed)
+
+        regenerated = integrated_play._create_srs_for_lrs_sector(
+            state.lrs_state,
+            entry_edge=srs_model.Direction.S,
+            previous_srs_state=state.srs_state,
+        )
+
+        self.assertEqual(regenerated.actual_map, first.actual_map)
+        self.assertEqual(regenerated.objects["resource-cache-1"].consumed, False)
+        self.assertEqual(regenerated.persistent_state.consumed_object_ids, frozenset())
 
     def test_exit_out_of_bounds_rejected(self) -> None:
         state = integrated_play.create_integrated_game(42)
@@ -364,6 +459,27 @@ class IntegratedPlayCliTests(unittest.TestCase):
         state.lrs_state.player_position = (1, 1)
         blocked_edge = lrs_engine.simulate.normalize_edge((1, 1), (2, 1))
         state.lrs_state.known_routes[blocked_edge] = lrs_engine.ROUTE_RIFT
+        state.srs_state = self._replace_srs_position(state.srs_state, srs_model.Position(8, 4))
+
+        result = integrated_play.execute_integrated_command(
+            state,
+            integrated_play.parse_integrated_command("EXIT E"),
+        )
+
+        self.assertFalse(result.accepted)
+        self.assertEqual(state.lrs_state.player_position, (1, 1))
+        self.assertEqual(state.srs_state.player_position, srs_model.Position(8, 4))
+        self.assertIn("edge is blocked by RIFT", result.summary_lines[0])
+
+    def test_exit_actual_rift_rejected_even_when_route_is_unknown(self) -> None:
+        state = integrated_play.create_integrated_game(42)
+        state.lrs_state.player_position = (1, 1)
+        blocked_edge = lrs_engine.simulate.normalize_edge((1, 1), (2, 1))
+        state.lrs_state.actual_map = replace(
+            state.lrs_state.actual_map,
+            rift_edges=(blocked_edge,),
+        )
+        state.lrs_state.known_routes.pop(blocked_edge, None)
         state.srs_state = self._replace_srs_position(state.srs_state, srs_model.Position(8, 4))
 
         result = integrated_play.execute_integrated_command(
@@ -420,19 +536,28 @@ class IntegratedPlayCliTests(unittest.TestCase):
                 for position in positions
                 if direction in state.srs_state.actual_map.cell_at(position).warp_flags
             ]
-            self.assertGreater(len(flagged_positions), 1)
+            if direction in state.srs_state.descriptor.blocked_edges:
+                self.assertEqual(flagged_positions, [])
+            else:
+                self.assertGreater(len(flagged_positions), 1)
 
-    def test_initial_srs_lower_left_corner_has_s_and_w_warp_flags(self) -> None:
+    def test_initial_srs_keeps_generated_open_edge_warp_flags(self) -> None:
         state = integrated_play.create_integrated_game(42)
 
-        self.assertEqual(
-            state.srs_state.actual_map.cell_at(srs_model.Position(0, 0)).warp_flags,
-            frozenset({srs_model.Direction.S, srs_model.Direction.W}),
+        self.assertEqual(state.srs_state.descriptor.blocked_edges, frozenset())
+        self.assertIn(
+            srs_model.Direction.S,
+            state.srs_state.actual_map.cell_at(srs_model.Position(4, 0)).warp_flags,
+        )
+        self.assertIn(
+            srs_model.Direction.W,
+            state.srs_state.actual_map.cell_at(srs_model.Position(0, 4)).warp_flags,
         )
 
     def test_exit_from_non_center_edge_warp_is_accepted(self) -> None:
         state = integrated_play.create_integrated_game(42)
         state.lrs_state.player_position = (1, 1)
+        self._remove_lrs_rift_edge(state, (1, 1), (2, 1))
         state.srs_state = self._replace_srs_position(state.srs_state, srs_model.Position(8, 0))
 
         result = integrated_play.execute_integrated_command(
@@ -454,10 +579,10 @@ class IntegratedPlayCliTests(unittest.TestCase):
 
         self.assertFalse(result.accepted)
         self.assertEqual(state.lrs_state.player_position, (1, 1))
-        self.assertEqual(state.srs_state.player_position, srs_model.Position(0, 0))
+        self.assertEqual(state.srs_state.player_position, srs_model.Position(4, 0))
         self.assertIn("would leave LRS map", result.summary_lines[0])
 
-    def test_exit_west_from_initial_position_is_rejected_by_lrs_bounds(self) -> None:
+    def test_exit_west_from_initial_position_is_rejected_by_blocked_srs_edge(self) -> None:
         state = integrated_play.create_integrated_game(42)
 
         result = integrated_play.execute_integrated_command(
@@ -467,18 +592,15 @@ class IntegratedPlayCliTests(unittest.TestCase):
 
         self.assertFalse(result.accepted)
         self.assertEqual(state.lrs_state.player_position, (1, 1))
-        self.assertEqual(state.srs_state.player_position, srs_model.Position(0, 0))
-        self.assertIn("would leave LRS map", result.summary_lines[0])
+        self.assertEqual(state.srs_state.player_position, srs_model.Position(4, 0))
+        self.assertIn("no W warp point", result.summary_lines[0])
 
-    def test_resource_sector_places_resource_cache_at_fixed_position(self) -> None:
+    def test_resource_sector_contains_resource_cache_from_generation(self) -> None:
         state = integrated_play.create_integrated_game(42)
-        state.srs_state = integrated_play._create_minimal_srs_for_sector(
-            seed=state.lrs_state.effective_seed,
-            lrs_position=state.lrs_state.player_position,
-            sector_symbol="R",
-        )
+        state.srs_state = self._create_srs_for_lrs_symbol(state, "R")
 
-        cache_cell = state.srs_state.actual_map.cell_at(srs_model.Position(4, 5))
+        cache_position = self._find_object_position(state.srs_state, srs_model.SrsObjectType.RESOURCE_CACHE)
+        cache_cell = state.srs_state.actual_map.cell_at(cache_position)
 
         self.assertEqual(cache_cell.object_id, "resource-cache-1")
         self.assertEqual(
@@ -486,15 +608,12 @@ class IntegratedPlayCliTests(unittest.TestCase):
             srs_model.SrsObjectType.RESOURCE_CACHE,
         )
 
-    def test_base_sector_places_station_at_fixed_position(self) -> None:
+    def test_base_sector_contains_station_from_generation(self) -> None:
         state = integrated_play.create_integrated_game(42)
-        state.srs_state = integrated_play._create_minimal_srs_for_sector(
-            seed=state.lrs_state.effective_seed,
-            lrs_position=state.lrs_state.player_position,
-            sector_symbol="B",
-        )
+        state.srs_state = self._create_srs_for_lrs_symbol(state, "B")
 
-        station_cell = state.srs_state.actual_map.cell_at(srs_model.Position(4, 5))
+        station_position = self._find_object_position(state.srs_state, srs_model.SrsObjectType.STATION)
+        station_cell = state.srs_state.actual_map.cell_at(station_position)
 
         self.assertEqual(station_cell.object_id, "station-1")
         self.assertEqual(
@@ -520,14 +639,11 @@ class IntegratedPlayCliTests(unittest.TestCase):
 
     def test_resource_cache_interact_accepted_without_changing_lrs(self) -> None:
         state = integrated_play.create_integrated_game(42)
-        state.srs_state = integrated_play._create_minimal_srs_for_sector(
-            seed=state.lrs_state.effective_seed,
-            lrs_position=state.lrs_state.player_position,
-            sector_symbol="R",
-        )
+        state.srs_state = self._create_srs_for_lrs_symbol(state, "R")
+        cache_position = self._find_object_position(state.srs_state, srs_model.SrsObjectType.RESOURCE_CACHE)
         state.srs_state = replace(
             state.srs_state,
-            player_position=srs_model.Position(4, 5),
+            player_position=cache_position,
             fuel=3,
             max_fuel=9,
         )
@@ -549,14 +665,12 @@ class IntegratedPlayCliTests(unittest.TestCase):
 
     def test_station_interact_accepted_without_changing_lrs(self) -> None:
         state = integrated_play.create_integrated_game(42)
-        state.srs_state = integrated_play._create_minimal_srs_for_sector(
-            seed=state.lrs_state.effective_seed,
-            lrs_position=state.lrs_state.player_position,
-            sector_symbol="B",
-        )
+        state.srs_state = self._create_srs_for_lrs_symbol(state, "B")
+        station_position = self._find_object_position(state.srs_state, srs_model.SrsObjectType.STATION)
+        interaction_position = self._adjacent_floor_position(state.srs_state, station_position)
         state.srs_state = replace(
             state.srs_state,
-            player_position=srs_model.Position(4, 4),
+            player_position=interaction_position,
             fuel=2,
             max_fuel=9,
         )
@@ -579,14 +693,11 @@ class IntegratedPlayCliTests(unittest.TestCase):
 
     def test_repeated_resource_cache_interact_is_rejected_after_consumption(self) -> None:
         state = integrated_play.create_integrated_game(42)
-        state.srs_state = integrated_play._create_minimal_srs_for_sector(
-            seed=state.lrs_state.effective_seed,
-            lrs_position=state.lrs_state.player_position,
-            sector_symbol="R",
-        )
+        state.srs_state = self._create_srs_for_lrs_symbol(state, "R")
+        cache_position = self._find_object_position(state.srs_state, srs_model.SrsObjectType.RESOURCE_CACHE)
         state.srs_state = replace(
             state.srs_state,
-            player_position=srs_model.Position(4, 5),
+            player_position=cache_position,
             fuel=3,
             max_fuel=9,
         )
@@ -606,14 +717,12 @@ class IntegratedPlayCliTests(unittest.TestCase):
 
     def test_consumed_resource_cache_symbol_is_visible_after_player_moves_off_cell(self) -> None:
         state = integrated_play.create_integrated_game(42)
-        state.srs_state = integrated_play._create_minimal_srs_for_sector(
-            seed=state.lrs_state.effective_seed,
-            lrs_position=state.lrs_state.player_position,
-            sector_symbol="R",
-        )
+        state.srs_state = self._create_srs_for_lrs_symbol(state, "R")
+        cache_position = self._find_object_position(state.srs_state, srs_model.SrsObjectType.RESOURCE_CACHE)
+        move_off_position = self._adjacent_floor_position(state.srs_state, cache_position)
         state.srs_state = replace(
-            self._replace_srs_visibility(state.srs_state, srs_model.Position(4, 5)),
-            player_position=srs_model.Position(4, 5),
+            self._replace_srs_visibility(state.srs_state, cache_position),
+            player_position=cache_position,
             fuel=3,
             max_fuel=9,
         )
@@ -622,10 +731,10 @@ class IntegratedPlayCliTests(unittest.TestCase):
             state,
             integrated_play.parse_integrated_command("INTERACT"),
         )
-        state.srs_state = self._replace_srs_position(state.srs_state, srs_model.Position(4, 4))
+        state.srs_state = self._replace_srs_position(state.srs_state, move_off_position)
         rendered = integrated_play.render_integrated_response(state, result)
 
-        self.assertIn(" 6  ? ? . . r . . ? ?", rendered)
+        self.assertIn("r", rendered)
 
     def test_response_section_order(self) -> None:
         state = integrated_play.create_integrated_game(42)
@@ -670,51 +779,80 @@ class IntegratedPlayCliTests(unittest.TestCase):
             self.assertGreater(next_index, current_index, fragment)
             current_index = next_index
 
-        self.assertIn(" 1  @ v v ? ? ? ? ? ?", stdout)
-        self.assertIn("SECTOR  LRS=(1,1)  TYPE=NORMAL  SRS=(1,1)  SENSOR=5x5", stdout)
+        self.assertIn(" 1  ? ? v v @ v v ? ?", stdout)
+        self.assertIn("SECTOR  LRS=(1,1)  TYPE=NORMAL  SRS=(5,1)  SENSOR=5x5", stdout)
 
     def _replace_srs_position(
         self,
         state: srs_model.SrsGameState,
         position: srs_model.Position,
     ) -> srs_model.SrsGameState:
-        return srs_model.SrsGameState(
-            descriptor=state.descriptor,
-            actual_map=state.actual_map,
-            known_state=state.known_state,
-            persistent_state=state.persistent_state,
-            player_position=position,
-            objects=state.objects,
-            combat_state=state.combat_state,
-            srs_turn=state.srs_turn,
-            fuel=state.fuel,
-            max_fuel=state.max_fuel,
-        )
+        return replace(state, player_position=position)
 
     def _replace_srs_visibility(
         self,
         state: srs_model.SrsGameState,
         center: srs_model.Position,
     ) -> srs_model.SrsGameState:
-        discovered_cells = integrated_play._observed_positions(center, state.descriptor.sector_type)
-        known_cells = {
-            position: state.actual_map.cell_at(position)
-            for position in discovered_cells
-        }
-        return replace(
+        return integrated_play.srs_engine.reveal_observation(
             state,
-            known_state=srs_model.SrsKnownState(
-                discovered_cells=discovered_cells,
-                known_cells=known_cells,
-                visited_cells=frozenset({state.player_position}),
-            ),
-            persistent_state=replace(
-                state.persistent_state,
-                discovered_cells=discovered_cells,
-                warp_flags={
-                    position: cell.warp_flags
-                    for position, cell in known_cells.items()
-                    if cell.warp_flags
-                },
+            center=center,
+            contracts=integrated_play.SRS_CONTRACTS,
+        )
+
+    def _create_srs_for_lrs_symbol(
+        self,
+        state: integrated_play.IntegratedGameState,
+        symbol: str,
+    ) -> srs_model.SrsGameState:
+        cells = dict(state.lrs_state.actual_map.cells)
+        cells[state.lrs_state.player_position] = symbol
+        state.lrs_state.actual_map = replace(state.lrs_state.actual_map, cells=cells)
+        return integrated_play._create_srs_for_lrs_sector(
+            state.lrs_state,
+            entry_edge=srs_model.Direction.S,
+        )
+
+    def _remove_lrs_rift_edge(
+        self,
+        state: integrated_play.IntegratedGameState,
+        start: tuple[int, int],
+        goal: tuple[int, int],
+    ) -> None:
+        edge = lrs_engine.simulate.normalize_edge(start, goal)
+        state.lrs_state.actual_map = replace(
+            state.lrs_state.actual_map,
+            rift_edges=tuple(
+                existing_edge
+                for existing_edge in state.lrs_state.actual_map.rift_edges
+                if existing_edge != edge
             ),
         )
+
+    def _find_object_position(
+        self,
+        state: srs_model.SrsGameState,
+        object_type: srs_model.SrsObjectType,
+    ) -> srs_model.Position:
+        for object_state in state.objects.values():
+            if object_state.object_type is object_type:
+                return object_state.position
+        self.fail(f"object type not generated: {object_type.value}")
+
+    def _adjacent_floor_position(
+        self,
+        state: srs_model.SrsGameState,
+        position: srs_model.Position,
+    ) -> srs_model.Position:
+        for candidate in (
+            srs_model.Position(position.x + 1, position.y),
+            srs_model.Position(position.x - 1, position.y),
+            srs_model.Position(position.x, position.y + 1),
+            srs_model.Position(position.x, position.y - 1),
+        ):
+            if not state.actual_map.contains(candidate):
+                continue
+            cell = state.actual_map.cell_at(candidate)
+            if cell.terrain is srs_model.SrsTerrainType.FLOOR and cell.object_id is None:
+                return candidate
+        self.fail(f"no adjacent floor position for {position}")
