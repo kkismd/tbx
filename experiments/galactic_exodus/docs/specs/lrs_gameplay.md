@@ -199,10 +199,14 @@ actual edge contract:
 - sector間edgeの actual 状態は LRS `actual_map` が正本として保持する
 - board 外方向には destination sector が存在せず、通過不可である
 - actual `RIFT` edge は双方向通過不能である
-- board 内かつ actual `RIFT` でない edge は通過可能である
-- source から `dir` へ通過可能なら、destination から `opposite(dir)` へも同じ edge として通過可能である
+- board 内かつ actual `RIFT` でない edge は、LRS topology 上の `OPEN` edge である
+- source から `dir` へ LRS topology 上 `OPEN` なら、destination から `opposite(dir)` へも同じ edge として `OPEN` である
 - `known_routes` は発見・表示状態であり、actual な通行可否の正本ではない
 - 未発見 `RIFT` も `actual_map` 上では blocked である
+
+movement acceptance:
+
+- 実際の movement command が成功するには、LRS topology 上の `OPEN` edge に加えて、fuel、game status、command rejection 等の LRS movement contract を別途満たす必要がある
 
 責務境界:
 
