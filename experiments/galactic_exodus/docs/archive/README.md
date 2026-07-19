@@ -14,7 +14,7 @@
 - former role: `Phase 1` TBX移植仕様の統合正本
 - former path: `experiments/galactic_exodus/phase1_spec.md`
 - related issue / PR: #1058 / #1323 / #1318
-- superseded by: `../specs/phase1.md`
+- superseded by: `../specs/lrs_gameplay.md`
 - status: archived
 - reason retained: `Phase 1` の統合仕様と履歴 appendix を分離した経緯を保存するため
 
