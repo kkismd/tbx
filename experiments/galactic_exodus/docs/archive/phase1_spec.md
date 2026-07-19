@@ -6,7 +6,7 @@
 
 - Former path: `experiments/galactic_exodus/phase1_spec.md`
 - Former role: `Phase 1` TBX移植仕様の統合正本
-- Superseded by: `experiments/galactic_exodus/docs/specs/phase1.md`
+- Superseded by: `experiments/galactic_exodus/docs/specs/lrs_gameplay.md`
 - Archived by: #1318
 
 ## 1. 位置づけ

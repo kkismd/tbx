@@ -1,10 +1,10 @@
 # Galactic Exodus prototype
 
-This directory contains the Python prototype and evaluation environment for Galactic Exodus before the TBX implementation. It is used to validate the project incrementally across Phase 1 LRS, Phase 2 SRS, and the integrated command-response CLI. It is not the final TBX application. The current gameplay specification lives under [`docs/specs/`](docs/specs/).
+This directory contains the Python prototype and evaluation environment for Galactic Exodus before the TBX implementation. It is used to validate the project incrementally across LRS gameplay, SRS gameplay, and the integrated command-response CLI. It is not the final TBX application. The current gameplay specification lives under [`docs/specs/`](docs/specs/).
 
 ## Status
 
-- LRS Phase 1 prototype: available
+- LRS gameplay prototype: available
 - SRS prototype / fixtures: available
 - `integrated_play.py`: command-response prototype
 - Phase 1 LRS-only `play.py` and completed evaluation scripts: archived under `archive/evaluation/`
@@ -33,11 +33,11 @@ Example:
 python experiments/galactic_exodus/integrated_play.py --seed 42
 ```
 
-### Non-interactive Phase 1 engine
+### Non-interactive LRS engine
 
 - Module: `experiments.galactic_exodus.engine`
 - Main APIs: `create_game`, `apply_command`, `run_commands`
-- Specification: [`docs/specs/phase1.md`](docs/specs/phase1.md)
+- Specification: [`docs/specs/lrs_gameplay.md`](docs/specs/lrs_gameplay.md)
 
 ### Phase 1 reference fixture replay
 
@@ -113,7 +113,7 @@ cargo test
 - SRS movement: [`docs/specs/srs_movement.md`](docs/specs/srs_movement.md)
 - SRS objects: [`docs/specs/srs_objects.md`](docs/specs/srs_objects.md)
 - SRS warp: [`docs/specs/srs_warp.md`](docs/specs/srs_warp.md)
-- Phase 1: [`docs/specs/phase1.md`](docs/specs/phase1.md)
+- LRS gameplay: [`docs/specs/lrs_gameplay.md`](docs/specs/lrs_gameplay.md)
 - SRS combat: [`docs/specs/srs_combat.md`](docs/specs/srs_combat.md)
 - Display: [`docs/specs/display.md`](docs/specs/display.md)
 - SRS encounter: [`docs/specs/srs_encounter.md`](docs/specs/srs_encounter.md)
