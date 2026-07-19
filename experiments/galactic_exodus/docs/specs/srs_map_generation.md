@@ -10,7 +10,8 @@ Follow-up: #1263, #1264, #1350, #1351, #1344
 
 SRS map generation は、actual な LRS sector state から構築された `SectorDescriptor` を入力にして、9x9 の SRS local map、terrain、objects、warp flags、persistent generation metadata を作る。
 
-現時点では、WARP / RIFT edge 表現とobject配置は実装済みである。
+現行prototypeでは、WARP / RIFT edge 表現とobject配置の一部は旧contractで実装済みである。
+`spawn_position` と3方向集合contractへの同期は #1351 で実装する。
 一方、#1088 で検討された SectorType別 terrain-count generation profile は、現行prototypeではまだ full implementation にしない。
 
 ## mapと座標

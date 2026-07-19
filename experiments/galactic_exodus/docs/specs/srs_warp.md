@@ -172,14 +172,22 @@ board edgeは壁ではなく、外周cellの先に退出先が存在しない状
 
 SRSからLRSへ移動するのは `EXIT <dir>` のみである。
 
-`EXIT <dir>` は、少なくとも次を満たす場合に成功する。
+SRS WARP_EXIT の local validation は、少なくとも次を満たす場合に成功する。
 
 ```text
 - 現在playerがいるcellがSRS map内にある
 - 現在cellの warp_flags に <dir> が含まれる
 - <dir> が allowed_exit_edges に含まれる
-- destination側の対応進入方向もallowedである
 - combat等、上位game loop上の移動禁止条件を満たしている
+```
+
+source / destination を組み合わせた sector 遷移の受理は integrated adapter の責務である。
+integrated transition validation は少なくとも次を確認する。
+
+```text
+- source exit directionがsource.allowed_exit_edgesに含まれる
+- destination ingress directionがdestination.allowed_exit_edgesに含まれる
+- destination spawn_positionがENTRY_POSITIONSの対応位置と一致する
 ```
 
 board edge方向は `warp_flags` を持たないため失敗する。
