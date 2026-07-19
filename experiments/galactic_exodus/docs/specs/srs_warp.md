@@ -3,6 +3,7 @@
 Source issue: #1088
 Related implementation: #1254, #1255
 Traceability audit: #1260
+Boundary contract: #1350
 
 この文書は、Galactic Exodus Phase 2 SRS における WARP / RIFT edge / SRS外周 exit 表現の仕様正本である。
 
@@ -25,8 +26,10 @@ SRS local map から隣接 LRS sector へ移動できる地点を、旧来の固
 | `warp_flags` | SRS cell が持つ方向別 exit flag。値は `N`, `E`, `S`, `W` の集合。 |
 | warp cell | `warp_flags` が空でない passable cell。 |
 | exit direction | `warp_flags` に含まれる LRS移動方向。 |
-| blocked edge | LRS上でRIFT等により通行不能なsector間edge。 |
-| `RIFT_BARRIER` | SRS外周に配置される通行不能terrain。対応するLRS edgeがblockedであることを表す。 |
+| `allowed_exit_edges` | actual に隣接sectorが存在し、RIFTで遮断されていない方向集合。 |
+| `board_edge_directions` | LRS board外で隣接sectorが存在しない方向集合。 |
+| `rift_blocked_edges` | actual RIFT による双方向通過不能edgeの方向集合。 |
+| `RIFT_BARRIER` | RIFT blocked edge のSRS外周一列に配置される通行不能terrain。 |
 
 ## 廃止した表現
 
@@ -41,6 +44,32 @@ SRS local map から隣接 LRS sector へ移動できる地点を、旧来の固
 
 WARPは object / feature ではなく、SRS cell の `warp_flags` で表現する。
 
+## SectorDescriptorとの関係
+
+SRS generation と WARP_EXIT は、同じ3方向集合 contract を参照する。
+
+```python
+@dataclass(frozen=True, slots=True)
+class SectorDescriptor:
+    sector_id: str
+    sector_type: SectorType
+    sector_seed: int
+    spawn_position: Position
+    allowed_exit_edges: frozenset[Direction]
+    board_edge_directions: frozenset[Direction]
+    rift_blocked_edges: frozenset[Direction]
+```
+
+`Direction.N/E/S/W` の各方向は、必ず次のいずれか1つに属する。
+
+```text
+allowed_exit_edges
+board_edge_directions
+rift_blocked_edges
+```
+
+3集合は相互排他的であり、和集合は全方向と一致しなければならない。
+
 ## 基本ルール
 
 ### 1. warp可能cell
@@ -51,7 +80,8 @@ warp可能cellは、次の条件を満たす。
 - terrain が passable である
 - 通常は FLOOR cell として扱う
 - SRS map の外周に接している
-- 対応方向の `warp_flags` を持つ
+- 対応方向が allowed_exit_edges に含まれる
+- 対応方向の warp_flags を持つ
 ```
 
 warp可能cellは、通常の移動対象cellでもある。
@@ -74,12 +104,15 @@ S edgeの場合:
 ### 3. 四隅のmulti-flag
 
 四隅cellは、条件を満たせば2方向のwarp flagを持てる。
+各方向は個別に `allowed_exit_edges` と 2x2 FLOOR cluster 条件を満たす必要がある。
 
 例:
 
 ```text
 south-west corner:
-  `S` と `W` の両方の2x2 FLOOR cluster条件を満たす場合、warp_flags = {S, W} になり得る。
+  S と W の両方が allowed_exit_edges に含まれ、
+  両方向の2x2 FLOOR cluster条件を満たす場合、
+  warp_flags = {S, W} になり得る。
 ```
 
 表示上は、単方向なら `^`, `>`, `v`, `<` などで表し、複数方向を持つcellは `+` で表してよい。
@@ -95,61 +128,89 @@ south-west corner:
 - playerがexit可能なcell上で、RESOURCE_CACHE / SALVAGE / STATION等のinteraction対象と意味が衝突するのを避ける
 ```
 
-## RIFT / blocked edge との関係
+## direction分類ごとの生成規則
 
-### 1. blocked edge 方向はwarp禁止
+### `allowed_exit_edges`
 
-LRS上で対応方向のedgeがblockedの場合、その方向のwarp flagは付与しない。
-
-例:
+`allowed_exit_edges` に含まれる方向だけが warp flag を生成できる。
 
 ```text
-blocked_edges = {E}
-
-SRS cell上の `E` warp flag:
-  付与しない
+- 対応方向の外周cellは通常terrain
+- 2x2 FLOOR cluster条件を満たす外周cellへwarp flagを生成する
+- EXIT <dir> の候補方向になる
 ```
 
-### 2. RIFT_BARRIER配置
+ENTRYは、destination側の対応進入方向もallowedの場合のみ許可する。
 
-blocked edgeに対応するSRS外周には `RIFT_BARRIER` を配置する。
+### `board_edge_directions`
+
+`board_edge_directions` に含まれる方向は、LRS destinationが存在しない。
 
 ```text
-E edge blocked:
-  SRS map の east外周に `RIFT_BARRIER` を配置する
+- warp flagを生成しない
+- RIFT_BARRIERを生成しない
+- 外周cellは通行可能
+- EXIT <dir> は成立しない
 ```
 
-`RIFT_BARRIER` は通行不能terrainである。
-そのため、playerはblocked edge側の外周cellへ移動できず、その方向の `EXIT` も成立しない。
+board edgeは壁ではなく、外周cellの先に退出先が存在しない状態である。
+そのため、playerはboard edge側の外周cellへ移動できるが、その方向へWARP_EXITしない。
 
-### 3. non-blocked edge
+### `rift_blocked_edges`
 
-blockedではない方向では、通常の2x2 FLOOR cluster条件に従ってwarp flagを付与する。
+`rift_blocked_edges` に含まれる方向は、actual RIFT による双方向通過不能edgeである。
 
-ただし、銀河外縁方向はLRS destinationが存在しないため、warp flagを付与してはならない。
-SRS generator単体でLRS board境界情報を持たない場合、その制限は呼び出し側または後続統合で保証する。
-この制限は #1264 で扱う。
+```text
+- warp flagを生成しない
+- 外周一列をRIFT_BARRIERにする
+- 外周cell自体へ進入できない
+- EXIT <dir> は成立しない
+- 対応方向からのENTRYも成立しない
+```
 
 ## EXIT command との関係
 
 SRSからLRSへ移動するのは `EXIT <dir>` のみである。
 
-`EXIT <dir>` は、少なくとも次を満たす場合に成功する。
+SRS WARP_EXIT の local validation は、少なくとも次を満たす場合に成功する。
 
 ```text
 - 現在playerがいるcellがSRS map内にある
-- 現在cellの `warp_flags` に `<dir>` が含まれる
-- `<dir>` が known blocked edge ではない
-- LRS destinationがboard内にある
+- 現在cellの warp_flags に <dir> が含まれる
+- <dir> が allowed_exit_edges に含まれる
 - combat等、上位game loop上の移動禁止条件を満たしている
 ```
 
-この文書では、SRS cell側の `warp_flags` と blocked edge 表現を定義する。
-統合CLI上の実装済み / deferred制約の一覧化は #1268 で扱う。
+source / destination を組み合わせた sector 遷移の受理は integrated adapter の責務である。
+integrated transition validation は少なくとも次を確認する。
+
+```text
+- source exit directionがsource.allowed_exit_edgesに含まれる
+- destination ingress directionがdestination.allowed_exit_edgesに含まれる
+- destination spawn_positionがENTRY_POSITIONSの対応位置と一致する
+```
+
+board edge方向は `warp_flags` を持たないため失敗する。
+RIFT blocked edge方向も `warp_flags` を持たず、外周一列が `RIFT_BARRIER` であるため失敗する。
+
+## known_routesとの関係
+
+`known_routes` は発見済み情報・表示情報である。
+WARP generation と WARP_EXIT は actual な3方向集合 contract を参照する。
+
+```text
+known_routes:
+  発見済み情報・表示情報
+
+allowed_exit_edges / board_edge_directions / rift_blocked_edges:
+  actualなゲーム状態・SRS生成入力・WARP_EXIT判定入力
+```
+
+actual RIFTは未発見でも `rift_blocked_edges` に反映する。
 
 ## 実装反映先
 
-現行prototypeでは、主に次へ反映されている。
+この仕様は、主に次へ反映される。
 
 ```text
 experiments/galactic_exodus/srs/generate.py
@@ -158,8 +219,8 @@ experiments/galactic_exodus/integrated_play.py
 experiments/galactic_exodus/test_integrated_play.py
 ```
 
-#1254 では `srs/generate.py` の `warp_flags` 生成を #1088 仕様へ同期した。
-#1255 では `integrated_play.py` の minimal SRS `warp_flags` を #1088 仕様へ同期した。
+#1351 では Python model / validation / generation / fixture / test を新しい3方向集合 contract へ同期する。
+#1344 では integrated adapter と `integrated_play.py` を同じ contract へ接続する。
 
 ## 表示との関係
 
@@ -180,6 +241,4 @@ experiments/galactic_exodus/test_integrated_play.py
 ## 後続課題
 
 この文書では、terrain-count generation profile の完全実装は扱わない。
-#1088 の terrain-count generation profile を今すぐ実装するか deferred にするかは #1263 で扱う。
-
-SRS generatorにLRS board外縁情報を渡す設計は #1264 で扱う。
+#1088 の terrain-count generation profile は #1263 で deferred としている。
