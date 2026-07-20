@@ -5,6 +5,13 @@ edition = "2021"
 rust-version = "1.76"
 description = "Tiny BASIC eXtensible - a bootstrappable BASIC interpreter"
 
+[workspace]
+members = [
+    ".",
+    "crates/tbx-next",
+]
+resolver = "2"
+
 [lib]
 name = "tbx"
 path = "src/lib.rs"

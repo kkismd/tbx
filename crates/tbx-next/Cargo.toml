@@ -1,0 +1,17 @@
+[package]
+name = "tbx-next"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.76"
+publish = false
+description = "Next-generation TBX implementation placeholder"
+
+[lib]
+name = "tbx_next"
+path = "src/lib.rs"
+
+[[bin]]
+name = "tbx-next"
+path = "src/main.rs"
+
+[dependencies]
