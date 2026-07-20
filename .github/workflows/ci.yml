@@ -11,8 +11,8 @@ env:
     RUSTFLAGS: -Dwarnings
 
 jobs:
-    check:
-        name: Check
+    current-check:
+        name: Current / Check
         runs-on: ubuntu-latest
         steps:
             - uses: actions/checkout@v4
@@ -20,10 +20,10 @@ jobs:
               with:
                   toolchain: stable
             - uses: Swatinem/rust-cache@v2
-            - run: cargo check --workspace --all-targets
+            - run: cargo check -p tbx --all-targets
 
-    test:
-        name: Test
+    current-test:
+        name: Current / Test
         runs-on: ubuntu-latest
         steps:
             - uses: actions/checkout@v4
@@ -31,10 +31,32 @@ jobs:
               with:
                   toolchain: stable
             - uses: Swatinem/rust-cache@v2
-            - run: cargo test --workspace
+            - run: cargo test -p tbx
+
+    next-check:
+        name: Next / Check
+        runs-on: ubuntu-latest
+        steps:
+            - uses: actions/checkout@v4
+            - uses: dtolnay/rust-toolchain@stable
+              with:
+                  toolchain: stable
+            - uses: Swatinem/rust-cache@v2
+            - run: cargo check -p tbx-next --all-targets
+
+    next-test:
+        name: Next / Test
+        runs-on: ubuntu-latest
+        steps:
+            - uses: actions/checkout@v4
+            - uses: dtolnay/rust-toolchain@stable
+              with:
+                  toolchain: stable
+            - uses: Swatinem/rust-cache@v2
+            - run: cargo test -p tbx-next
 
     clippy:
-        name: Clippy
+        name: Workspace / Clippy
         runs-on: ubuntu-latest
         steps:
             - uses: actions/checkout@v4
@@ -46,7 +68,7 @@ jobs:
             - run: cargo clippy --workspace --all-targets
 
     fmt:
-        name: Format
+        name: Workspace / Format
         runs-on: ubuntu-latest
         steps:
             - uses: actions/checkout@v4
