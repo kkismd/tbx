@@ -20,7 +20,7 @@ jobs:
               with:
                   toolchain: stable
             - uses: Swatinem/rust-cache@v2
-            - run: cargo check --all-targets
+            - run: cargo check --workspace --all-targets
 
     test:
         name: Test
@@ -31,7 +31,7 @@ jobs:
               with:
                   toolchain: stable
             - uses: Swatinem/rust-cache@v2
-            - run: cargo test
+            - run: cargo test --workspace
 
     clippy:
         name: Clippy
@@ -43,7 +43,7 @@ jobs:
                   toolchain: stable
                   components: clippy
             - uses: Swatinem/rust-cache@v2
-            - run: cargo clippy --all-targets
+            - run: cargo clippy --workspace --all-targets
 
     fmt:
         name: Format
@@ -54,4 +54,4 @@ jobs:
               with:
                   toolchain: stable
                   components: rustfmt
-            - run: cargo fmt --check
+            - run: cargo fmt --all --check
