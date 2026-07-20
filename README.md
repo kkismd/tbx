@@ -5,17 +5,10 @@ Rust で実装された最小限のプリミティブセットを土台として
 
 ## 現行 TBX と TBX Next
 
-現行実装はルート package `tbx` です。ADR #1358 に基づき、次世代実装の入口として独立 package `tbx-next` を `crates/tbx-next` に追加しています。TBX Next は現行 `tbx` に依存せず、現時点では開発中であることを示す最小 crate です。
+現行実装はルート package `tbx` です。
+`crates/tbx-next/` は開発中の次世代実装であり、現時点では現行 `tbx` との互換性を保証しません。
 
-TBX Next の案内は [`crates/tbx-next/README.md`](./crates/tbx-next/README.md) と [`docs/next/README.md`](./docs/next/README.md) を参照してください。実装事実の正本はコードとテストで、非自明な why はソースコードコメントに記録します。
-
-```sh
-cargo build -p tbx
-cargo test -p tbx
-cargo build -p tbx-next
-cargo test -p tbx-next
-cargo run -p tbx-next --bin tbx-next
-```
+TBX Next の位置付け、設計判断、実装、テスト、開発コマンド、進捗への入口は [`docs/next/README.md`](./docs/next/README.md) を参照してください。
 
 ## アーキテクチャの概要
 
