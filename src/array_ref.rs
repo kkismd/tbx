@@ -158,7 +158,7 @@ impl ArrayRef {
 /// semantics for arrays, which are out of scope for this issue.
 impl std::fmt::Debug for ArrayRef {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "ArrayRef({:?}, {:?})", self.shape, &*self.inner.borrow())
+        write!(f, "ArrayRef({:?}, {:?})", self.shape, *self.inner.borrow())
     }
 }
 
