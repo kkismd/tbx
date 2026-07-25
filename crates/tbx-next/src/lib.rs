@@ -2,6 +2,10 @@
 #[allow(dead_code)]
 mod value;
 
+// Phase 2 exposes the internal stack contract before the VM consumes it.
+#[allow(dead_code)]
+mod stack;
+
 pub const STATUS_MESSAGE: &str =
     "TBX Next is under development; language features are not implemented yet.";
 
