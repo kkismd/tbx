@@ -6,6 +6,11 @@ mod value;
 #[allow(dead_code)]
 mod stack;
 
+// Phase A for ADR #1368 centralizes validated word-name identity before the
+// registry, primitive bootstrap, and compiler consume it.
+#[allow(dead_code)]
+mod name;
+
 pub const STATUS_MESSAGE: &str =
     "TBX Next is under development; language features are not implemented yet.";
 
