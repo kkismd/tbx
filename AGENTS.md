@@ -29,10 +29,27 @@ TBX は、実用的な言語機能を拡充しながらも、コアを小さく�
 7. **外側は BASIC、内側は小さな拡張可能コアに保つ**
    ユーザー向けの表面構文は BASIC らしく実用的でよい。ただし内部実装は、Forth 的な自己拡張性と小さな VM コアを保つ方向に整理する。
 
-## 実装前に読むべきドキュメント
+## 実装前に確認する情報
 
-- **[`docs/agent-notes.md`](docs/agent-notes.md)** — 実装上の注意・落とし穴・レビュー由来の知見をまとめた日本語の共有ノート。構文の落とし穴・配列 convention・ブランチ運用など、実装前に確認すること。
-- **[`docs/notes/star-trek-mayfield-1972.md`](docs/notes/star-trek-mayfield-1972.md)** — STTR1 実装時に参照する Mayfield 原典のルール抽出メモ。
+この節は「すべての作業で常に読むドキュメント一覧」ではなく、変更対象に応じて確認する情報を定義する。
+
+### すべての作業で確認するもの
+
+- 適用される `AGENTS.md`
+- 選択した skill の `SKILL.md`
+
+### 現行 `tbx` crate / TBX 言語実装を変更する場合
+
+- **[`docs/agent-notes.md`](docs/agent-notes.md)** — 現行 `tbx` crate、TBX 構文、標準ライブラリ、`lib/` 配下の TBX プログラムに関する注意・落とし穴・レビュー由来の知見をまとめた日本語の共有ノート。`crates/tbx-next` のみを変更する作業では、issue や変更対象が明示的に関連しない限り必読ではない。
+
+### `crates/tbx-next` を変更する場合
+
+- **[`docs/next/README.md`](docs/next/README.md)** — TBX Next の対象範囲、現行 `tbx` crate との境界、source of truth、参照すべき ADR / milestone を確認する入口文書。`crates/tbx-next` を変更する作業では最初に確認する。
+- 必要に応じて **[`crates/tbx-next/README.md`](crates/tbx-next/README.md)** も確認する。
+
+### Star Trek サンプルゲームを変更する場合
+
+- **[`docs/notes/star-trek-mayfield-1972.md`](docs/notes/star-trek-mayfield-1972.md)** — `lib/trek.tbx`、Star Trek 関連テスト、Mayfield 版仕様に触れる場合に参照する原典ルール抽出メモ。VM、compiler、`crates/tbx-next`、一般的な Rust 実装作業では必読ではない。
 
 ## Architecture
 
