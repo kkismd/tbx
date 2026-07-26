@@ -22,6 +22,11 @@ mod word;
 #[allow(dead_code)]
 mod binding;
 
+// Phase D for ADR #1368 coordinates primitive bootstrap publication without
+// merging primitive identity, word definitions, name binding, or VM state.
+#[allow(dead_code)]
+mod bootstrap;
+
 pub const STATUS_MESSAGE: &str =
     "TBX Next is under development; language features are not implemented yet.";
 
