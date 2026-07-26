@@ -11,6 +11,12 @@ mod stack;
 #[allow(dead_code)]
 mod name;
 
+// Phase B for ADR #1368/#1369 keeps published executable word definitions
+// separate from name binding, primitive bootstrap, builders, and mutable VM
+// execution state.
+#[allow(dead_code)]
+mod word;
+
 pub const STATUS_MESSAGE: &str =
     "TBX Next is under development; language features are not implemented yet.";
 
