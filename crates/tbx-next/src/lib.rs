@@ -27,6 +27,11 @@ mod binding;
 #[allow(dead_code)]
 mod bootstrap;
 
+// Phase E for ADR #1368/#1369 coordinates explicit word redefinition as a
+// separate publication boundary from ordinary registration and bootstrap.
+#[allow(dead_code)]
+mod redefinition;
+
 pub const STATUS_MESSAGE: &str =
     "TBX Next is under development; language features are not implemented yet.";
 
