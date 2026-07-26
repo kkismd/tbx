@@ -19,6 +19,13 @@ pub(crate) enum BindingInsertError {
     NameConflict,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum BindingReplaceError {
+    MissingName,
+    TargetIsNotWord,
+    CurrentWordMismatch { actual: WordId },
+}
+
 /// Crate-internal map from normalized names to their current published binding.
 ///
 /// This registry owns only name-to-binding state. It deliberately does not own
@@ -50,6 +57,34 @@ impl Bindings {
 
     pub(crate) fn get(&self, name: &NormalizedName) -> Option<&Binding> {
         self.entries.get(name)
+    }
+
+    pub(crate) fn current_word(
+        &self,
+        name: &NormalizedName,
+    ) -> Result<WordId, BindingReplaceError> {
+        match self.entries.get(name) {
+            Some(Binding::Word(id)) => Ok(*id),
+            None => Err(BindingReplaceError::MissingName),
+        }
+    }
+
+    pub(crate) fn replace_word(
+        &mut self,
+        name: &NormalizedName,
+        expected: WordId,
+        replacement: WordId,
+    ) -> Result<(), BindingReplaceError> {
+        match self.entries.get_mut(name) {
+            Some(Binding::Word(current)) if *current == expected => {
+                *current = replacement;
+                Ok(())
+            }
+            Some(Binding::Word(actual)) => {
+                Err(BindingReplaceError::CurrentWordMismatch { actual: *actual })
+            }
+            None => Err(BindingReplaceError::MissingName),
+        }
     }
 
     pub(crate) fn len(&self) -> usize {
@@ -278,5 +313,71 @@ mod tests {
             Err(BindingInsertError::NameConflict)
         );
         assert_eq!(bindings.get(&name("SAME")), Some(&binding));
+    }
+
+    #[test]
+    fn replace_word_updates_only_the_expected_existing_word_binding() {
+        let mut words = PublishedWords::new();
+        let old = add_word(&mut words, 40);
+        let new = add_word(&mut words, 41);
+        let other = add_word(&mut words, 42);
+        let mut bindings = Bindings::new();
+
+        bindings
+            .insert_new(name("TARGET"), Binding::Word(old))
+            .expect("new name should register");
+        bindings
+            .insert_new(name("OTHER"), Binding::Word(other))
+            .expect("new name should register");
+
+        assert_eq!(bindings.current_word(&name("TARGET")), Ok(old));
+        assert_eq!(bindings.replace_word(&name("TARGET"), old, new), Ok(()));
+
+        assert_eq!(bindings.current_word(&name("TARGET")), Ok(new));
+        assert_eq!(bindings.get(&name("OTHER")), Some(&Binding::Word(other)));
+        assert_eq!(bindings.len(), 2);
+    }
+
+    #[test]
+    fn replace_word_rejects_missing_name_without_mutation() {
+        let mut words = PublishedWords::new();
+        let existing = add_word(&mut words, 50);
+        let replacement = add_word(&mut words, 51);
+        let mut bindings = Bindings::new();
+
+        bindings
+            .insert_new(name("EXISTING"), Binding::Word(existing))
+            .expect("new name should register");
+
+        assert_eq!(
+            bindings.replace_word(&name("MISSING"), existing, replacement),
+            Err(BindingReplaceError::MissingName)
+        );
+        assert_eq!(
+            bindings.current_word(&name("MISSING")),
+            Err(BindingReplaceError::MissingName)
+        );
+        assert_eq!(bindings.current_word(&name("EXISTING")), Ok(existing));
+        assert_eq!(bindings.len(), 1);
+    }
+
+    #[test]
+    fn replace_word_rejects_unexpected_current_word_without_mutation() {
+        let mut words = PublishedWords::new();
+        let expected = add_word(&mut words, 60);
+        let actual = add_word(&mut words, 61);
+        let replacement = add_word(&mut words, 62);
+        let mut bindings = Bindings::new();
+
+        bindings
+            .insert_new(name("TARGET"), Binding::Word(actual))
+            .expect("new name should register");
+
+        assert_eq!(
+            bindings.replace_word(&name("TARGET"), expected, replacement),
+            Err(BindingReplaceError::CurrentWordMismatch { actual })
+        );
+        assert_eq!(bindings.current_word(&name("TARGET")), Ok(actual));
+        assert_eq!(bindings.len(), 1);
     }
 }
