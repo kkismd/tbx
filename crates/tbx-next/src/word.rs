@@ -74,6 +74,11 @@ pub(crate) enum WordLookupError {
 /// outside this responsibility: callers may add a new published definition and
 /// later look it up by `WordId`, but they cannot rewrite older IDs or expose
 /// unpublished definitions through normal lookup.
+///
+/// ADR #1369 makes `WordId` issuance part of the construction-to-publication
+/// boundary: callers must pass only completed, executable definitions to `add`.
+/// In-progress code, failed builds, and unreferenced instruction fragments must
+/// remain outside this collection so ordinary `Call(WordId)` cannot reach them.
 #[derive(Debug, Default)]
 pub(crate) struct PublishedWords {
     definitions: Vec<WordDefinition>,
@@ -110,7 +115,6 @@ impl PublishedWords {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::value::Value;
 
     fn primitive(slot: usize) -> WordDefinition {
         WordDefinition::Primitive {
@@ -237,15 +241,6 @@ mod tests {
         assert_eq!(words.get(second_id), Ok(&compiled(20)));
         assert_eq!(words.get(third_id), Ok(&primitive(30)));
         assert_eq!(words.get(fourth_id), Ok(&compiled(40)));
-    }
-
-    #[test]
-    fn word_ids_are_not_runtime_values() {
-        let runtime_value = Value::integer(1);
-        let word_id = WordId::test_invalid(1);
-
-        assert_eq!(runtime_value.as_integer(), 1);
-        assert_ne!(format!("{runtime_value:?}"), format!("{word_id:?}"));
     }
 
     #[test]

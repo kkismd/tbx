@@ -11,8 +11,9 @@ mod stack;
 #[allow(dead_code)]
 mod name;
 
-// Phase B for ADR #1368 keeps published executable word definitions separate
-// from name binding, primitive bootstrap, and mutable VM execution state.
+// Phase B for ADR #1368/#1369 keeps published executable word definitions
+// separate from name binding, primitive bootstrap, builders, and mutable VM
+// execution state.
 #[allow(dead_code)]
 mod word;
 
