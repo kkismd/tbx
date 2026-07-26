@@ -17,6 +17,11 @@ mod name;
 #[allow(dead_code)]
 mod word;
 
+// Phase C for ADR #1368 keeps the current name binding table separate from word
+// definitions, VM state, compiler surfaces, and future scalar/array storage.
+#[allow(dead_code)]
+mod binding;
+
 pub const STATUS_MESSAGE: &str =
     "TBX Next is under development; language features are not implemented yet.";
 
