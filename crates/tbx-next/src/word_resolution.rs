@@ -9,30 +9,12 @@ pub(crate) enum WordResolutionError {
     TargetIsNotWord,
 }
 
-/// Minimal compiled representation for an already-resolved word reference.
+/// Resolves a source word name through the current published binding only.
 ///
-/// This stores only the `WordId` selected at compile time. Keeping names,
-/// normalized names, or binding-table handles here would move name lookup into
-/// VM execution and would make later redefinitions affect existing code.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct CompiledWordReference {
-    target: WordId,
-}
-
-impl CompiledWordReference {
-    pub(crate) const fn target(self) -> WordId {
-        self.target
-    }
-}
-
-pub(crate) fn compile_word_reference(
-    bindings: &Bindings,
-    source_name: &str,
-) -> Result<CompiledWordReference, WordResolutionError> {
-    let target = resolve_word_name(bindings, source_name)?;
-    Ok(CompiledWordReference { target })
-}
-
+/// The resolver returns the `WordId` selected at lookup time and does not retain
+/// names, scan published definitions, or create fallback bindings. Future
+/// compiler paths must store this ID in their real compiled representation so
+/// later redefinitions only affect future resolutions.
 pub(crate) fn resolve_word_name(
     bindings: &Bindings,
     source_name: &str,
@@ -138,7 +120,6 @@ mod tests {
         let mut words = PublishedWords::new();
         let mut bindings = Bindings::new();
         let id = publish_initial(&mut words, &mut bindings, "KNOWN", primitive(3));
-        let compiled_output = Vec::<CompiledWordReference>::new();
 
         assert_eq!(
             resolve_word_name(&bindings, "MISSING"),
@@ -147,7 +128,6 @@ mod tests {
         assert_eq!(words.len(), 1);
         assert_eq!(bindings.len(), 1);
         assert_eq!(bindings.get(&name("KNOWN")), Some(&Binding::Word(id)));
-        assert!(compiled_output.is_empty());
     }
 
     #[test]
@@ -165,50 +145,28 @@ mod tests {
     }
 
     #[test]
-    fn compile_word_reference_stores_only_the_resolved_word_id() {
-        let mut words = PublishedWords::new();
-        let mut bindings = Bindings::new();
-        let first = publish_initial(&mut words, &mut bindings, "FIRST", primitive(5));
-        let second = publish_initial(&mut words, &mut bindings, "SECOND", compiled(20));
-
-        let references = [
-            compile_word_reference(&bindings, "first").expect("first should resolve"),
-            compile_word_reference(&bindings, "SECOND").expect("second should resolve"),
-        ];
-
-        assert_eq!(references[0].target(), first);
-        assert_eq!(references[1].target(), second);
-    }
-
-    #[test]
-    fn existing_compiled_reference_keeps_old_word_id_after_redefinition() {
+    fn saved_resolution_keeps_old_word_id_after_redefinition() {
         let mut words = PublishedWords::new();
         let mut bindings = Bindings::new();
         let old_definition = primitive(6);
         let new_definition = compiled(30);
         let old = publish_initial(&mut words, &mut bindings, "TARGET", old_definition);
 
-        let old_reference =
-            compile_word_reference(&bindings, "target").expect("old target should resolve");
+        let old_resolution =
+            resolve_word_name(&bindings, "target").expect("old target should resolve");
         let redefinition =
             redefine_word(&mut words, &mut bindings, &name("TARGET"), new_definition)
                 .expect("existing word should redefine");
-        let new_reference =
-            compile_word_reference(&bindings, "target").expect("new target should resolve");
+        let new_resolution =
+            resolve_word_name(&bindings, "target").expect("new target should resolve");
         let lookup = PublishedWordLookup::new(&words);
 
-        assert_eq!(old_reference.target(), old);
-        assert_eq!(old_reference.target(), redefinition.previous());
-        assert_eq!(new_reference.target(), redefinition.current());
-        assert_ne!(old_reference.target(), new_reference.target());
-        assert_eq!(
-            lookup.lookup_word(old_reference.target()),
-            Ok(&old_definition)
-        );
-        assert_eq!(
-            lookup.lookup_word(new_reference.target()),
-            Ok(&new_definition)
-        );
+        assert_eq!(old_resolution, old);
+        assert_eq!(old_resolution, redefinition.previous());
+        assert_eq!(new_resolution, redefinition.current());
+        assert_ne!(old_resolution, new_resolution);
+        assert_eq!(lookup.lookup_word(old_resolution), Ok(&old_definition));
+        assert_eq!(lookup.lookup_word(new_resolution), Ok(&new_definition));
     }
 
     #[test]
@@ -219,24 +177,18 @@ mod tests {
         let new_definition = compiled(41);
         publish_initial(&mut words, &mut bindings, "CHAIN", old_definition);
 
-        let old_reference =
-            compile_word_reference(&bindings, "CHAIN").expect("old target should resolve");
+        let old_resolution =
+            resolve_word_name(&bindings, "CHAIN").expect("old target should resolve");
         let redefinition = redefine_word(&mut words, &mut bindings, &name("CHAIN"), new_definition)
             .expect("existing word should redefine");
-        let new_reference =
-            compile_word_reference(&bindings, "CHAIN").expect("new target should resolve");
+        let new_resolution =
+            resolve_word_name(&bindings, "CHAIN").expect("new target should resolve");
         let lookup = PublishedWordLookup::new(&words);
 
-        assert_eq!(old_reference.target(), redefinition.previous());
-        assert_eq!(new_reference.target(), redefinition.current());
-        assert_eq!(
-            lookup.lookup_word(old_reference.target()),
-            Ok(&old_definition)
-        );
-        assert_eq!(
-            lookup.lookup_word(new_reference.target()),
-            Ok(&new_definition)
-        );
+        assert_eq!(old_resolution, redefinition.previous());
+        assert_eq!(new_resolution, redefinition.current());
+        assert_eq!(lookup.lookup_word(old_resolution), Ok(&old_definition));
+        assert_eq!(lookup.lookup_word(new_resolution), Ok(&new_definition));
     }
 
     #[test]

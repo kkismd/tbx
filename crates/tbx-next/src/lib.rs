@@ -37,8 +37,8 @@ mod redefinition;
 #[allow(dead_code)]
 mod word_lookup;
 
-// Phase G for ADR #1368 connects source word references to the current word
-// binding and freezes the resolved `WordId` in a minimal compiled form.
+// Phase G1 for ADR #1368 resolves source word names through the current word
+// binding without introducing compiler or VM execution dependencies.
 #[allow(dead_code)]
 mod word_resolution;
 
