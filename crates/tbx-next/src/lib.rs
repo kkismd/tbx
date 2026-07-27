@@ -37,6 +37,11 @@ mod redefinition;
 #[allow(dead_code)]
 mod word_lookup;
 
+// Phase G for ADR #1368 connects source word references to the current word
+// binding and freezes the resolved `WordId` in a minimal compiled form.
+#[allow(dead_code)]
+mod word_resolution;
+
 pub const STATUS_MESSAGE: &str =
     "TBX Next is under development; language features are not implemented yet.";
 
