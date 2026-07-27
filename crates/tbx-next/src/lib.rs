@@ -32,6 +32,11 @@ mod bootstrap;
 #[allow(dead_code)]
 mod redefinition;
 
+// Phase F for ADR #1367/#1368 gives the future VM a read-only lookup boundary
+// over published executable words without exposing registration or binding APIs.
+#[allow(dead_code)]
+mod word_lookup;
+
 pub const STATUS_MESSAGE: &str =
     "TBX Next is under development; language features are not implemented yet.";
 

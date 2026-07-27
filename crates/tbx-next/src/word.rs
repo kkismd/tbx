@@ -31,7 +31,7 @@ pub(crate) struct WordId {
 
 impl WordId {
     #[cfg(test)]
-    const fn test_invalid(slot: usize) -> Self {
+    pub(crate) const fn test_invalid(slot: usize) -> Self {
         Self { slot }
     }
 }
