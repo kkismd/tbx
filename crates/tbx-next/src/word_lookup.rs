@@ -122,36 +122,6 @@ mod tests {
     }
 
     #[test]
-    fn invalid_ids_are_reported_without_mutating_words() {
-        let mut words = PublishedWords::new();
-        let empty_id = WordId::test_invalid(0);
-
-        assert_eq!(
-            PublishedWordLookup::new(&words).lookup_word(empty_id),
-            Err(WordLookupError::InvalidWordId { id: empty_id })
-        );
-        assert_eq!(words.len(), 0);
-
-        let valid = words.add(primitive(5));
-        let out_of_range = WordId::test_invalid(2);
-        let max_id = WordId::test_invalid(usize::MAX);
-
-        assert_eq!(
-            PublishedWordLookup::new(&words).lookup_word(out_of_range),
-            Err(WordLookupError::InvalidWordId { id: out_of_range })
-        );
-        assert_eq!(
-            PublishedWordLookup::new(&words).lookup_word(max_id),
-            Err(WordLookupError::InvalidWordId { id: max_id })
-        );
-        assert_eq!(words.len(), 1);
-        assert_eq!(
-            PublishedWordLookup::new(&words).lookup_word(valid),
-            Ok(&primitive(5))
-        );
-    }
-
-    #[test]
     fn lookup_does_not_require_bindings_or_names() {
         let mut words = PublishedWords::new();
         let primitive_id = words.add(primitive(11));

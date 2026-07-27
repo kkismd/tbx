@@ -31,7 +31,7 @@ pub(crate) struct WordId {
 
 impl WordId {
     #[cfg(test)]
-    pub(crate) const fn test_invalid(slot: usize) -> Self {
+    const fn test_invalid(slot: usize) -> Self {
         Self { slot }
     }
 }
@@ -115,6 +115,7 @@ impl PublishedWords {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::word_lookup::PublishedWordLookup;
 
     fn primitive(slot: usize) -> WordDefinition {
         WordDefinition::Primitive {
@@ -221,6 +222,38 @@ mod tests {
         );
         assert_eq!(words.len(), 1);
         assert_eq!(words.get(valid_id), Ok(&primitive(1)));
+    }
+
+    #[test]
+    fn read_only_lookup_rejects_invalid_ids_without_widening_word_id_visibility() {
+        let mut words = PublishedWords::new();
+
+        let empty_id = WordId::test_invalid(0);
+        assert_eq!(
+            PublishedWordLookup::new(&words).lookup_word(empty_id),
+            Err(WordLookupError::InvalidWordId { id: empty_id })
+        );
+        assert_eq!(words.len(), 0);
+
+        let valid_id = words.add(primitive(1));
+        let out_of_range_id = WordId::test_invalid(2);
+        let max_id = WordId::test_invalid(usize::MAX);
+
+        assert_eq!(
+            PublishedWordLookup::new(&words).lookup_word(out_of_range_id),
+            Err(WordLookupError::InvalidWordId {
+                id: out_of_range_id
+            })
+        );
+        assert_eq!(
+            PublishedWordLookup::new(&words).lookup_word(max_id),
+            Err(WordLookupError::InvalidWordId { id: max_id })
+        );
+        assert_eq!(words.len(), 1);
+        assert_eq!(
+            PublishedWordLookup::new(&words).lookup_word(valid_id),
+            Ok(&primitive(1))
+        );
     }
 
     #[test]
