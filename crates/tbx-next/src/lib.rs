@@ -37,6 +37,11 @@ mod redefinition;
 #[allow(dead_code)]
 mod word_lookup;
 
+// Phase G1 for ADR #1368 resolves source word names through the current word
+// binding without introducing compiler or VM execution dependencies.
+#[allow(dead_code)]
+mod word_resolution;
+
 pub const STATUS_MESSAGE: &str =
     "TBX Next is under development; language features are not implemented yet.";
 
