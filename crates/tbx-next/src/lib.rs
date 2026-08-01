@@ -11,6 +11,11 @@ mod instruction;
 #[allow(dead_code)]
 mod stack;
 
+// Phase 5 for ADR #1367 adds mutable VM execution state and the one-instruction
+// execution boundary over a read-only instruction view.
+#[allow(dead_code)]
+mod vm;
+
 // Phase A for ADR #1368 centralizes validated word-name identity before the
 // registry, primitive bootstrap, and compiler consume it.
 #[allow(dead_code)]
