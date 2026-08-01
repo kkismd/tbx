@@ -1,6 +1,6 @@
 use crate::binding::{BindingReplaceError, Bindings};
 use crate::name::NormalizedName;
-use crate::word::{PublishedWords, WordDefinition, WordId};
+use crate::word::{CompletedWordDefinition, PublishedWords, WordId};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct WordRedefinition {
@@ -35,7 +35,7 @@ pub(crate) fn redefine_word(
     words: &mut PublishedWords,
     bindings: &mut Bindings,
     name: &NormalizedName,
-    definition: WordDefinition,
+    definition: CompletedWordDefinition,
 ) -> Result<WordRedefinition, WordRedefinitionError> {
     let previous = bindings
         .current_word(name)
@@ -74,29 +74,35 @@ impl WordRedefinitionError {
 mod tests {
     use super::*;
     use crate::binding::{Binding, Bindings};
-    use crate::word::{InstructionAddress, PrimitiveId};
+    use crate::instruction::{Instruction, InstructionSequence};
+    use crate::value::Value;
+    use crate::word::{PrimitiveId, WordDefinition};
 
     fn name(input: &str) -> NormalizedName {
         NormalizedName::new(input).expect("test input should be a valid word name")
     }
 
-    fn primitive(slot: usize) -> WordDefinition {
+    fn primitive(slot: usize) -> CompletedWordDefinition {
+        CompletedWordDefinition::primitive(PrimitiveId::from_slot(slot))
+    }
+
+    fn primitive_definition(slot: usize) -> WordDefinition {
         WordDefinition::Primitive {
             primitive: PrimitiveId::from_slot(slot),
         }
     }
 
-    fn compiled(index: usize) -> WordDefinition {
-        WordDefinition::Compiled {
-            entry: InstructionAddress::from_index(index),
-        }
+    fn compiled(code: &mut InstructionSequence, value: i16) -> CompletedWordDefinition {
+        let entry = code.append(Instruction::Push(Value::integer(value)));
+        CompletedWordDefinition::compiled(entry, code.view())
+            .expect("test compiled entry should be valid")
     }
 
     fn publish_initial(
         words: &mut PublishedWords,
         bindings: &mut Bindings,
         input: &str,
-        definition: WordDefinition,
+        definition: CompletedWordDefinition,
     ) -> WordId {
         let id = words.add(definition);
         bindings
@@ -114,13 +120,19 @@ mod tests {
         bindings: &Bindings,
         input: &str,
         result: WordRedefinition,
-        old_definition: WordDefinition,
-        new_definition: WordDefinition,
+        old_definition: CompletedWordDefinition,
+        new_definition: CompletedWordDefinition,
     ) {
         assert_ne!(result.previous(), result.current());
         assert_word_binding(bindings, input, result.current());
-        assert_eq!(words.get(result.previous()), Ok(&old_definition));
-        assert_eq!(words.get(result.current()), Ok(&new_definition));
+        assert_eq!(
+            words.get(result.previous()),
+            Ok(&old_definition.definition())
+        );
+        assert_eq!(
+            words.get(result.current()),
+            Ok(&new_definition.definition())
+        );
     }
 
     #[test]
@@ -147,10 +159,11 @@ mod tests {
 
     #[test]
     fn primitive_word_can_be_redefined_as_compiled_word() {
+        let mut code = InstructionSequence::new();
         let mut words = PublishedWords::new();
         let mut bindings = Bindings::new();
         let old_definition = primitive(3);
-        let new_definition = compiled(100);
+        let new_definition = compiled(&mut code, 100);
         let old = publish_initial(&mut words, &mut bindings, "ABS", old_definition);
 
         let result = redefine_word(&mut words, &mut bindings, &name("ABS"), new_definition)
@@ -169,9 +182,10 @@ mod tests {
 
     #[test]
     fn compiled_word_can_be_redefined_as_primitive_word() {
+        let mut code = InstructionSequence::new();
         let mut words = PublishedWords::new();
         let mut bindings = Bindings::new();
-        let old_definition = compiled(200);
+        let old_definition = compiled(&mut code, 200);
         let new_definition = primitive(4);
         let old = publish_initial(&mut words, &mut bindings, "RUN", old_definition);
 
@@ -191,10 +205,11 @@ mod tests {
 
     #[test]
     fn compiled_word_can_be_redefined_as_compiled_word() {
+        let mut code = InstructionSequence::new();
         let mut words = PublishedWords::new();
         let mut bindings = Bindings::new();
-        let old_definition = compiled(300);
-        let new_definition = compiled(301);
+        let old_definition = compiled(&mut code, 300);
+        let new_definition = compiled(&mut code, 301);
         let old = publish_initial(&mut words, &mut bindings, "LOOP", old_definition);
 
         let result = redefine_word(&mut words, &mut bindings, &name("LOOP"), new_definition)
@@ -218,13 +233,13 @@ mod tests {
         let other_definition = primitive(5);
         let other = publish_initial(&mut words, &mut bindings, "OTHER", other_definition);
 
-        let result = redefine_word(&mut words, &mut bindings, &name("MISSING"), compiled(400));
+        let result = redefine_word(&mut words, &mut bindings, &name("MISSING"), primitive(400));
 
         assert_eq!(result, Err(WordRedefinitionError::UndefinedName));
         assert_eq!(words.len(), 1);
         assert_eq!(bindings.len(), 1);
         assert_word_binding(&bindings, "OTHER", other);
-        assert_eq!(words.get(other), Ok(&other_definition));
+        assert_eq!(words.get(other), Ok(&other_definition.definition()));
     }
 
     #[test]
@@ -232,7 +247,8 @@ mod tests {
         let mut words = PublishedWords::new();
         let mut bindings = Bindings::new();
         let old_definition = primitive(6);
-        let new_definition = compiled(500);
+        let mut code = InstructionSequence::new();
+        let new_definition = compiled(&mut code, 500);
         let old = publish_initial(&mut words, &mut bindings, "foo", old_definition);
 
         let result = redefine_word(&mut words, &mut bindings, &name("FOO"), new_definition)
@@ -252,12 +268,13 @@ mod tests {
 
     #[test]
     fn repeated_redefinitions_keep_all_previous_definitions_addressable() {
+        let mut code = InstructionSequence::new();
         let mut words = PublishedWords::new();
         let mut bindings = Bindings::new();
         let first_definition = primitive(7);
-        let second_definition = compiled(600);
+        let second_definition = compiled(&mut code, 600);
         let third_definition = primitive(8);
-        let fourth_definition = compiled(601);
+        let fourth_definition = compiled(&mut code, 601);
         let first = publish_initial(&mut words, &mut bindings, "CHAIN", first_definition);
 
         let second = redefine_word(&mut words, &mut bindings, &name("CHAIN"), second_definition)
@@ -274,22 +291,28 @@ mod tests {
         assert_ne!(second, third);
         assert_ne!(third, fourth);
         assert_word_binding(&bindings, "CHAIN", fourth);
-        assert_eq!(words.get(first), Ok(&first_definition));
-        assert_eq!(words.get(second), Ok(&second_definition));
-        assert_eq!(words.get(third), Ok(&third_definition));
-        assert_eq!(words.get(fourth), Ok(&fourth_definition));
+        assert_eq!(words.get(first), Ok(&first_definition.definition()));
+        assert_eq!(words.get(second), Ok(&second_definition.definition()));
+        assert_eq!(words.get(third), Ok(&third_definition.definition()));
+        assert_eq!(words.get(fourth), Ok(&fourth_definition.definition()));
         assert_eq!(words.len(), 4);
         assert_eq!(bindings.len(), 1);
     }
 
     #[test]
     fn redefinition_does_not_require_vm_state_or_handler_table() {
+        let mut code = InstructionSequence::new();
         let mut words = PublishedWords::new();
         let mut bindings = Bindings::new();
         publish_initial(&mut words, &mut bindings, "BOUNDARY", primitive(9));
 
-        let result = redefine_word(&mut words, &mut bindings, &name("BOUNDARY"), compiled(700))
-            .expect("completed definition should publish without VM state");
+        let result = redefine_word(
+            &mut words,
+            &mut bindings,
+            &name("BOUNDARY"),
+            compiled(&mut code, 700),
+        )
+        .expect("completed definition should publish without VM state");
 
         assert_word_binding(&bindings, "BOUNDARY", result.current());
         assert_eq!(words.len(), 2);

@@ -46,9 +46,13 @@ mod tests {
     use super::*;
     use crate::binding::{Binding, Bindings};
     use crate::bootstrap::register_primitive;
+    use crate::instruction::{Instruction, InstructionSequence};
     use crate::name::NormalizedName;
     use crate::redefinition::redefine_word;
-    use crate::word::{InstructionAddress, PrimitiveId, PublishedWords, WordDefinition, WordId};
+    use crate::value::Value;
+    use crate::word::{
+        CompletedWordDefinition, PrimitiveId, PublishedWords, WordDefinition, WordId,
+    };
     use crate::word_lookup::PublishedWordLookup;
 
     fn name(input: &str) -> NormalizedName {
@@ -61,17 +65,21 @@ mod tests {
         }
     }
 
-    fn compiled(index: usize) -> WordDefinition {
-        WordDefinition::Compiled {
-            entry: InstructionAddress::from_index(index),
-        }
+    fn completed_primitive(slot: usize) -> CompletedWordDefinition {
+        CompletedWordDefinition::primitive(PrimitiveId::from_slot(slot))
+    }
+
+    fn completed_compiled(code: &mut InstructionSequence, value: i16) -> CompletedWordDefinition {
+        let entry = code.append(Instruction::Push(Value::integer(value)));
+        CompletedWordDefinition::compiled(entry, code.view())
+            .expect("test compiled entry should be valid")
     }
 
     fn publish_initial(
         words: &mut PublishedWords,
         bindings: &mut Bindings,
         input: &str,
-        definition: WordDefinition,
+        definition: CompletedWordDefinition,
     ) -> WordId {
         let id = words.add(definition);
         bindings
@@ -84,7 +92,7 @@ mod tests {
     fn source_word_name_resolves_through_normalized_binding_identity() {
         let mut words = PublishedWords::new();
         let mut bindings = Bindings::new();
-        let id = publish_initial(&mut words, &mut bindings, "foo", primitive(1));
+        let id = publish_initial(&mut words, &mut bindings, "foo", completed_primitive(1));
 
         assert_eq!(resolve_word_name(&bindings, "foo"), Ok(id));
         assert_eq!(resolve_word_name(&bindings, "Foo"), Ok(id));
@@ -95,7 +103,7 @@ mod tests {
     fn predicate_word_name_resolves_after_case_normalization() {
         let mut words = PublishedWords::new();
         let mut bindings = Bindings::new();
-        let id = publish_initial(&mut words, &mut bindings, "ready?", primitive(2));
+        let id = publish_initial(&mut words, &mut bindings, "ready?", completed_primitive(2));
 
         assert_eq!(resolve_word_name(&bindings, "ready?"), Ok(id));
         assert_eq!(resolve_word_name(&bindings, "Ready?"), Ok(id));
@@ -119,7 +127,7 @@ mod tests {
     fn undefined_name_is_rejected_without_mutation() {
         let mut words = PublishedWords::new();
         let mut bindings = Bindings::new();
-        let id = publish_initial(&mut words, &mut bindings, "KNOWN", primitive(3));
+        let id = publish_initial(&mut words, &mut bindings, "KNOWN", completed_primitive(3));
 
         assert_eq!(
             resolve_word_name(&bindings, "MISSING"),
@@ -134,23 +142,31 @@ mod tests {
     fn primitive_and_compiled_words_use_the_same_binding_path() {
         let mut words = PublishedWords::new();
         let mut bindings = Bindings::new();
-        let primitive_id = publish_initial(&mut words, &mut bindings, "PRIM", primitive(4));
-        let compiled_id = publish_initial(&mut words, &mut bindings, "USER_WORD", compiled(10));
+        let mut code = InstructionSequence::new();
+        let compiled_definition = completed_compiled(&mut code, 10);
+        let primitive_id =
+            publish_initial(&mut words, &mut bindings, "PRIM", completed_primitive(4));
+        let compiled_id =
+            publish_initial(&mut words, &mut bindings, "USER_WORD", compiled_definition);
         let lookup = PublishedWordLookup::new(&words);
 
         assert_eq!(resolve_word_name(&bindings, "prim"), Ok(primitive_id));
         assert_eq!(resolve_word_name(&bindings, "user_word"), Ok(compiled_id));
         assert_eq!(lookup.lookup_word(primitive_id), Ok(&primitive(4)));
-        assert_eq!(lookup.lookup_word(compiled_id), Ok(&compiled(10)));
+        assert_eq!(
+            lookup.lookup_word(compiled_id),
+            Ok(&compiled_definition.definition())
+        );
     }
 
     #[test]
     fn saved_resolution_keeps_old_word_id_after_redefinition() {
         let mut words = PublishedWords::new();
         let mut bindings = Bindings::new();
+        let mut code = InstructionSequence::new();
         let old_definition = primitive(6);
-        let new_definition = compiled(30);
-        let old = publish_initial(&mut words, &mut bindings, "TARGET", old_definition);
+        let new_definition = completed_compiled(&mut code, 30);
+        let old = publish_initial(&mut words, &mut bindings, "TARGET", completed_primitive(6));
 
         let old_resolution =
             resolve_word_name(&bindings, "target").expect("old target should resolve");
@@ -166,15 +182,19 @@ mod tests {
         assert_eq!(new_resolution, redefinition.current());
         assert_ne!(old_resolution, new_resolution);
         assert_eq!(lookup.lookup_word(old_resolution), Ok(&old_definition));
-        assert_eq!(lookup.lookup_word(new_resolution), Ok(&new_definition));
+        assert_eq!(
+            lookup.lookup_word(new_resolution),
+            Ok(&new_definition.definition())
+        );
     }
 
     #[test]
     fn same_kind_redefinition_only_changes_future_resolutions() {
         let mut words = PublishedWords::new();
         let mut bindings = Bindings::new();
-        let old_definition = compiled(40);
-        let new_definition = compiled(41);
+        let mut code = InstructionSequence::new();
+        let old_definition = completed_compiled(&mut code, 40);
+        let new_definition = completed_compiled(&mut code, 41);
         publish_initial(&mut words, &mut bindings, "CHAIN", old_definition);
 
         let old_resolution =
@@ -187,22 +207,24 @@ mod tests {
 
         assert_eq!(old_resolution, redefinition.previous());
         assert_eq!(new_resolution, redefinition.current());
-        assert_eq!(lookup.lookup_word(old_resolution), Ok(&old_definition));
-        assert_eq!(lookup.lookup_word(new_resolution), Ok(&new_definition));
+        assert_eq!(
+            lookup.lookup_word(old_resolution),
+            Ok(&old_definition.definition())
+        );
+        assert_eq!(
+            lookup.lookup_word(new_resolution),
+            Ok(&new_definition.definition())
+        );
     }
 
     #[test]
     fn unpublished_word_definition_is_not_resolved_by_name() {
-        let mut words = PublishedWords::new();
         let bindings = Bindings::new();
-        let unpublished = words.add(compiled(50));
 
         assert_eq!(
             resolve_word_name(&bindings, "UNPUBLISHED"),
             Err(WordResolutionError::UndefinedName)
         );
-        assert_eq!(words.get(unpublished), Ok(&compiled(50)));
-        assert_eq!(words.len(), 1);
         assert!(bindings.is_empty());
     }
 

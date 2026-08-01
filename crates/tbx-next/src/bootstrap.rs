@@ -1,6 +1,6 @@
 use crate::binding::{Binding, BindingInsertError, Bindings};
 use crate::name::NormalizedName;
-use crate::word::{PrimitiveId, PublishedWords, WordDefinition, WordId};
+use crate::word::{CompletedWordDefinition, PrimitiveId, PublishedWords, WordId};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum PrimitiveBootstrapError {
@@ -26,7 +26,7 @@ pub(crate) fn register_primitive(
         return Err(PrimitiveBootstrapError::NameConflict);
     }
 
-    let id = words.add(WordDefinition::Primitive { primitive });
+    let id = words.add(CompletedWordDefinition::primitive(primitive));
 
     bindings
         .insert_new(name, Binding::Word(id))
@@ -46,6 +46,7 @@ impl PrimitiveBootstrapError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::word::WordDefinition;
 
     fn name(input: &str) -> NormalizedName {
         NormalizedName::new(input).expect("test input should be a valid word name")
