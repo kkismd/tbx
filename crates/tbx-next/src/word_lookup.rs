@@ -25,9 +25,11 @@ impl<'a> PublishedWordLookup<'a> {
 mod tests {
     use super::*;
     use crate::binding::{Binding, Bindings};
+    use crate::instruction::{Instruction, InstructionSequence};
     use crate::name::NormalizedName;
     use crate::redefinition::redefine_word;
-    use crate::word::{InstructionAddress, PrimitiveId};
+    use crate::value::Value;
+    use crate::word::{CompletedWordDefinition, InstructionAddress, PrimitiveId};
 
     fn name(input: &str) -> NormalizedName {
         NormalizedName::new(input).expect("test input should be a valid word name")
@@ -39,17 +41,25 @@ mod tests {
         }
     }
 
-    fn compiled(index: usize) -> WordDefinition {
-        WordDefinition::Compiled {
-            entry: InstructionAddress::from_index(index),
-        }
+    fn completed_primitive(slot: usize) -> CompletedWordDefinition {
+        CompletedWordDefinition::primitive(PrimitiveId::from_slot(slot))
+    }
+
+    fn compiled_definition(entry: InstructionAddress) -> WordDefinition {
+        WordDefinition::Compiled { entry }
+    }
+
+    fn completed_compiled(code: &mut InstructionSequence, value: i16) -> CompletedWordDefinition {
+        let entry = code.append(Instruction::Push(Value::integer(value)));
+        CompletedWordDefinition::compiled(entry, code.view())
+            .expect("test compiled entry should be valid")
     }
 
     fn publish_initial(
         words: &mut PublishedWords,
         bindings: &mut Bindings,
         input: &str,
-        definition: WordDefinition,
+        definition: CompletedWordDefinition,
     ) -> WordId {
         let id = words.add(definition);
         bindings
@@ -69,9 +79,7 @@ mod tests {
     fn primitive_lookup_preserves_primitive_identity() {
         let mut words = PublishedWords::new();
         let primitive_id = PrimitiveId::from_slot(17);
-        let id = words.add(WordDefinition::Primitive {
-            primitive: primitive_id,
-        });
+        let id = words.add(CompletedWordDefinition::primitive(primitive_id));
         let lookup = PublishedWordLookup::new(&words);
 
         match lookup.lookup_word(id).expect("word id should be valid") {
@@ -82,9 +90,13 @@ mod tests {
 
     #[test]
     fn compiled_lookup_preserves_entry_address() {
+        let mut code = InstructionSequence::new();
         let mut words = PublishedWords::new();
-        let entry = InstructionAddress::from_index(42);
-        let id = words.add(WordDefinition::Compiled { entry });
+        let entry = code.append(Instruction::Halt);
+        let id = words.add(
+            CompletedWordDefinition::compiled(entry, code.view())
+                .expect("compiled entry should be valid"),
+        );
         let lookup = PublishedWordLookup::new(&words);
 
         match lookup.lookup_word(id).expect("word id should be valid") {
@@ -96,36 +108,46 @@ mod tests {
     #[test]
     fn multiple_definitions_lookup_by_their_own_ids() {
         let mut words = PublishedWords::new();
-        let first = words.add(primitive(1));
-        let second = words.add(compiled(20));
-        let third = words.add(primitive(3));
+        let mut code = InstructionSequence::new();
+        let second_definition = completed_compiled(&mut code, 20);
+        let first = words.add(completed_primitive(1));
+        let second = words.add(second_definition);
+        let third = words.add(completed_primitive(3));
         let lookup = PublishedWordLookup::new(&words);
 
         assert_eq!(lookup.lookup_word(first), Ok(&primitive(1)));
-        assert_eq!(lookup.lookup_word(second), Ok(&compiled(20)));
+        assert_eq!(
+            lookup.lookup_word(second),
+            Ok(&second_definition.definition())
+        );
         assert_eq!(lookup.lookup_word(third), Ok(&primitive(3)));
     }
 
     #[test]
     fn later_additions_do_not_change_lookup_for_existing_ids() {
         let mut words = PublishedWords::new();
-        let old = words.add(compiled(10));
+        let mut code = InstructionSequence::new();
+        let old_definition = completed_compiled(&mut code, 10);
+        let new_definition = completed_compiled(&mut code, 99);
+        let old = words.add(old_definition);
         let old_definition = *PublishedWordLookup::new(&words)
             .lookup_word(old)
             .expect("old id should be valid");
 
-        let new = words.add(compiled(99));
+        let new = words.add(new_definition);
         let lookup = PublishedWordLookup::new(&words);
 
         assert_eq!(lookup.lookup_word(old), Ok(&old_definition));
-        assert_eq!(lookup.lookup_word(new), Ok(&compiled(99)));
+        assert_eq!(lookup.lookup_word(new), Ok(&new_definition.definition()));
     }
 
     #[test]
     fn lookup_does_not_require_bindings_or_names() {
         let mut words = PublishedWords::new();
-        let primitive_id = words.add(primitive(11));
-        let compiled_id = words.add(compiled(12));
+        let mut code = InstructionSequence::new();
+        let compiled_definition = completed_compiled(&mut code, 12);
+        let primitive_id = words.add(completed_primitive(11));
+        let compiled_id = words.add(compiled_definition);
         let lookup = PublishedWordLookup::new(&words);
 
         assert_eq!(
@@ -134,7 +156,7 @@ mod tests {
         );
         assert_eq!(
             vm_like_dispatch_target(lookup, compiled_id),
-            Ok(&compiled(12))
+            Ok(&compiled_definition.definition())
         );
     }
 
@@ -142,9 +164,10 @@ mod tests {
     fn lookup_result_is_independent_from_current_name_binding() {
         let mut words = PublishedWords::new();
         let mut bindings = Bindings::new();
+        let mut code = InstructionSequence::new();
         let old_definition = primitive(30);
-        let new_definition = compiled(300);
-        let old = publish_initial(&mut words, &mut bindings, "TARGET", old_definition);
+        let new_definition = completed_compiled(&mut code, 300);
+        let old = publish_initial(&mut words, &mut bindings, "TARGET", completed_primitive(30));
 
         let redefinition =
             redefine_word(&mut words, &mut bindings, &name("TARGET"), new_definition)
@@ -162,7 +185,7 @@ mod tests {
         );
         assert_eq!(
             lookup.lookup_word(redefinition.current()),
-            Ok(&new_definition)
+            Ok(&new_definition.definition())
         );
     }
 }

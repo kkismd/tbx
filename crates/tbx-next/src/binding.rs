@@ -99,20 +99,16 @@ impl Bindings {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::word::{PrimitiveId, PublishedWords, WordDefinition};
+    use crate::word::{CompletedWordDefinition, PrimitiveId, PublishedWords};
 
     fn name(input: &str) -> NormalizedName {
         NormalizedName::new(input).expect("test input should be a valid word name")
     }
 
-    fn primitive_word(slot: usize) -> WordDefinition {
-        WordDefinition::Primitive {
-            primitive: PrimitiveId::from_slot(slot),
-        }
-    }
-
     fn add_word(words: &mut PublishedWords, primitive_slot: usize) -> WordId {
-        words.add(primitive_word(primitive_slot))
+        words.add(CompletedWordDefinition::primitive(PrimitiveId::from_slot(
+            primitive_slot,
+        )))
     }
 
     fn word_binding(words: &mut PublishedWords, primitive_slot: usize) -> Binding {
