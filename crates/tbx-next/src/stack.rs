@@ -1,3 +1,4 @@
+use crate::instruction::InstructionAddress;
 use crate::value::Value;
 
 // ADR #1366 keeps the two stacks separate even in the initial host VM:
@@ -74,27 +75,19 @@ impl DataStack {
 ///
 /// ADR #1366 separates language values from VM control state: the data stack
 /// stores only `Value`, while return addresses stay unobservable through user
-/// data-stack operations. This placeholder intentionally does not expose or
-/// commit to a return-address layout; Phase 3 can replace its internals when
-/// `InstructionAddress` exists.
+/// data-stack operations.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct ReturnFrame {
-    kind: ReturnFrameKind,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum ReturnFrameKind {
-    Placeholder,
-    #[cfg(test)]
-    TestId(usize),
+    return_address: InstructionAddress,
 }
 
 impl ReturnFrame {
-    #[cfg(test)]
-    fn test_frame(id: usize) -> Self {
-        Self {
-            kind: ReturnFrameKind::TestId(id),
-        }
+    pub(crate) const fn new(return_address: InstructionAddress) -> Self {
+        Self { return_address }
+    }
+
+    pub(crate) const fn return_address(self) -> InstructionAddress {
+        self.return_address
     }
 }
 
@@ -114,6 +107,13 @@ impl ReturnStack {
 
     pub(crate) fn pop(&mut self) -> Result<ReturnFrame, StackError> {
         self.frames.pop().ok_or(StackError::ReturnStackUnderflow)
+    }
+
+    pub(crate) fn peek(&self) -> Result<ReturnFrame, StackError> {
+        self.frames
+            .last()
+            .copied()
+            .ok_or(StackError::ReturnStackUnderflow)
     }
 
     pub(crate) fn depth(&self) -> usize {
@@ -245,8 +245,8 @@ mod tests {
     #[test]
     fn return_stack_pushes_and_pops_frames_in_lifo_order() {
         let mut stack = ReturnStack::new();
-        let first = ReturnFrame::test_frame(1);
-        let second = ReturnFrame::test_frame(2);
+        let first = ReturnFrame::new(InstructionAddress::from_index(1));
+        let second = ReturnFrame::new(InstructionAddress::from_index(2));
 
         stack.push(first);
         stack.push(second);
@@ -258,11 +258,33 @@ mod tests {
     }
 
     #[test]
+    fn return_frame_exposes_return_address() {
+        let address = InstructionAddress::from_index(4);
+        let frame = ReturnFrame::new(address);
+
+        assert_eq!(frame.return_address(), address);
+    }
+
+    #[test]
     fn return_stack_underflow_does_not_mutate_state() {
         let mut stack = ReturnStack::new();
 
         assert_eq!(stack.pop(), Err(StackError::ReturnStackUnderflow));
+        assert_eq!(stack.peek(), Err(StackError::ReturnStackUnderflow));
         assert_eq!(stack.depth(), 0);
+        assert!(stack.is_empty());
+    }
+
+    #[test]
+    fn return_stack_peek_does_not_pop_frame() {
+        let mut stack = ReturnStack::new();
+        let frame = ReturnFrame::new(InstructionAddress::from_index(3));
+
+        stack.push(frame);
+
+        assert_eq!(stack.peek(), Ok(frame));
+        assert_eq!(stack.depth(), 1);
+        assert_eq!(stack.pop(), Ok(frame));
         assert!(stack.is_empty());
     }
 
@@ -270,13 +292,14 @@ mod tests {
     fn data_stack_and_return_stack_are_independent() {
         let mut data_stack = DataStack::new();
         let mut return_stack = ReturnStack::new();
+        let frame = ReturnFrame::new(InstructionAddress::from_index(1));
 
         data_stack.push(Value::integer(42));
-        return_stack.push(ReturnFrame::test_frame(1));
+        return_stack.push(frame);
 
         assert_eq!(data_stack.pop(), Ok(Value::integer(42)));
         assert_eq!(return_stack.depth(), 1);
-        assert_eq!(return_stack.pop(), Ok(ReturnFrame::test_frame(1)));
+        assert_eq!(return_stack.pop(), Ok(frame));
         assert!(data_stack.is_empty());
         assert!(return_stack.is_empty());
     }

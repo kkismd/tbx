@@ -1,6 +1,8 @@
 use crate::instruction::{
     Instruction, InstructionAddress, InstructionAddressError, InstructionView,
 };
+#[cfg(test)]
+use crate::stack::ReturnFrame;
 use crate::stack::{DataStack, ReturnStack, StackError};
 use crate::value::Value;
 
@@ -40,7 +42,9 @@ pub(crate) enum VmErrorKind {
     InstructionFetch { source: InstructionAddressError },
     UnexpectedEndOfCode { source: InstructionAddressError },
     DataStackUnderflow { source: StackError },
+    ReturnStackUnderflow { source: StackError },
     InvalidJumpTarget { source: InstructionAddressError },
+    InvalidReturnTarget { source: InstructionAddressError },
 }
 
 impl Vm {
@@ -83,6 +87,7 @@ impl Vm {
             Instruction::JumpIfZero(target) => {
                 self.step_jump_if_zero(instructions, address, target)
             }
+            Instruction::Return => self.step_return(instructions, address),
             Instruction::Halt => {
                 self.halted = true;
                 Ok(StepOutcome::Halted)
@@ -113,6 +118,11 @@ impl Vm {
 
     pub(crate) fn return_stack_depth(&self) -> usize {
         self.return_stack.depth()
+    }
+
+    #[cfg(test)]
+    fn push_return_frame(&mut self, frame: ReturnFrame) {
+        self.return_stack.push(frame);
     }
 
     pub(crate) fn peek_data(&self) -> Result<Value, StackError> {
@@ -179,6 +189,25 @@ impl Vm {
         Ok(StepOutcome::Continued)
     }
 
+    fn step_return(
+        &mut self,
+        instructions: InstructionView<'_>,
+        address: InstructionAddress,
+    ) -> Result<StepOutcome, VmError> {
+        let frame = self.return_stack.peek().map_err(|source| VmError {
+            address,
+            kind: VmErrorKind::ReturnStackUnderflow { source },
+        })?;
+        let target = self.valid_return_target(instructions, address, frame.return_address())?;
+
+        self.return_stack
+            .pop()
+            .expect("return frame was checked before consuming Return frame");
+        self.instruction_pointer = target;
+
+        Ok(StepOutcome::Continued)
+    }
+
     fn valid_next_address(
         &self,
         instructions: InstructionView<'_>,
@@ -203,6 +232,20 @@ impl Vm {
             .map_err(|source| VmError {
                 address,
                 kind: VmErrorKind::InvalidJumpTarget { source },
+            })
+    }
+
+    fn valid_return_target(
+        &self,
+        instructions: InstructionView<'_>,
+        address: InstructionAddress,
+        target: InstructionAddress,
+    ) -> Result<InstructionAddress, VmError> {
+        instructions
+            .validate_address(target)
+            .map_err(|source| VmError {
+                address,
+                kind: VmErrorKind::InvalidReturnTarget { source },
             })
     }
 }
@@ -238,6 +281,10 @@ mod tests {
         assert_eq!(vm.instruction_pointer(), expected_ip);
         assert_eq!(vm.is_halted(), halted);
         assert_eq!(vm.return_stack_depth(), 0);
+    }
+
+    fn return_frame(return_address: InstructionAddress) -> ReturnFrame {
+        ReturnFrame::new(return_address)
     }
 
     #[test]
@@ -512,6 +559,144 @@ mod tests {
     }
 
     #[test]
+    fn return_moves_to_valid_frame_target_and_preserves_data_and_halted_state() {
+        let mut code = InstructionSequence::new();
+        let target = code.append(Instruction::Halt);
+        let entry = code.append(Instruction::Return);
+        let mut vm = new_vm(&code, entry);
+        vm.data_stack.push(value(11));
+        vm.push_return_frame(return_frame(target));
+
+        assert_eq!(vm.step(code.view()), Ok(StepOutcome::Continued));
+
+        assert_clean_control(&vm, target, false);
+        assert_eq!(vm.data_stack_depth(), 1);
+        assert_eq!(vm.peek_data(), Ok(value(11)));
+    }
+
+    #[test]
+    fn return_pops_only_top_frame_and_uses_lifo_order() {
+        let mut code = InstructionSequence::new();
+        let first_target = code.append(Instruction::Halt);
+        let second_target = code.append(Instruction::Halt);
+        let entry = code.append(Instruction::Return);
+        let mut vm = new_vm(&code, entry);
+
+        vm.push_return_frame(return_frame(first_target));
+        vm.push_return_frame(return_frame(second_target));
+
+        assert_eq!(vm.step(code.view()), Ok(StepOutcome::Continued));
+
+        assert_eq!(vm.instruction_pointer(), second_target);
+        assert!(!vm.is_halted());
+        assert_eq!(vm.return_stack_depth(), 1);
+
+        vm.instruction_pointer = entry;
+        assert_eq!(vm.step(code.view()), Ok(StepOutcome::Continued));
+
+        assert_clean_control(&vm, first_target, false);
+    }
+
+    #[test]
+    fn return_underflow_reports_error_without_mutation_or_implicit_halt() {
+        let mut code = InstructionSequence::new();
+        let entry = code.append(Instruction::Return);
+        let mut vm = new_vm(&code, entry);
+
+        let result = vm.step(code.view());
+
+        assert_eq!(
+            result,
+            Err(VmError {
+                address: entry,
+                kind: VmErrorKind::ReturnStackUnderflow {
+                    source: StackError::ReturnStackUnderflow
+                }
+            })
+        );
+        assert_clean_control(&vm, entry, false);
+        assert_eq!(vm.data_stack_depth(), 0);
+    }
+
+    #[test]
+    fn return_rejects_end_target_without_popping_frame_or_mutation() {
+        let mut code = InstructionSequence::new();
+        let entry = code.append(Instruction::Return);
+        let end = address(code.len());
+        let mut vm = new_vm(&code, entry);
+        vm.data_stack.push(value(3));
+        vm.push_return_frame(return_frame(end));
+
+        let result = vm.step(code.view());
+
+        assert_eq!(
+            result,
+            Err(VmError {
+                address: entry,
+                kind: VmErrorKind::InvalidReturnTarget {
+                    source: InstructionAddressError::EndAddress { address: end }
+                }
+            })
+        );
+        assert_eq!(vm.instruction_pointer(), entry);
+        assert!(!vm.is_halted());
+        assert_eq!(vm.return_stack_depth(), 1);
+        assert_eq!(vm.data_stack_depth(), 1);
+        assert_eq!(vm.peek_data(), Ok(value(3)));
+    }
+
+    #[test]
+    fn return_rejects_out_of_range_target_without_popping_frame_or_mutation() {
+        let mut code = InstructionSequence::new();
+        let entry = code.append(Instruction::Return);
+        let invalid = address(usize::MAX);
+        let mut vm = new_vm(&code, entry);
+        vm.push_return_frame(return_frame(invalid));
+
+        let result = vm.step(code.view());
+
+        assert_eq!(
+            result,
+            Err(VmError {
+                address: entry,
+                kind: VmErrorKind::InvalidReturnTarget {
+                    source: InstructionAddressError::InvalidAddress { address: invalid }
+                }
+            })
+        );
+        assert_eq!(vm.instruction_pointer(), entry);
+        assert!(!vm.is_halted());
+        assert_eq!(vm.return_stack_depth(), 1);
+        assert_eq!(vm.data_stack_depth(), 0);
+    }
+
+    #[test]
+    fn return_rejects_target_missing_from_current_instruction_view() {
+        let mut full_code = InstructionSequence::new();
+        let entry = full_code.append(Instruction::Return);
+        let target = full_code.append(Instruction::Halt);
+        let mut shorter_code = InstructionSequence::new();
+        shorter_code.append(Instruction::Return);
+        let mut vm = new_vm(&full_code, entry);
+        vm.push_return_frame(return_frame(target));
+
+        let result = vm.step(shorter_code.view());
+
+        assert_eq!(
+            result,
+            Err(VmError {
+                address: entry,
+                kind: VmErrorKind::InvalidReturnTarget {
+                    source: InstructionAddressError::EndAddress { address: target }
+                }
+            })
+        );
+        assert_eq!(vm.instruction_pointer(), entry);
+        assert!(!vm.is_halted());
+        assert_eq!(vm.return_stack_depth(), 1);
+    }
+
+    #[test]
     fn halt_sets_halted_without_changing_stacks_or_instruction_pointer() {
         let mut code = InstructionSequence::new();
         let entry = code.append(Instruction::Halt);
@@ -582,6 +767,71 @@ mod tests {
 
         assert_eq!(vm.data_stack_depth(), 1);
         assert_eq!(vm.peek_data(), Ok(value(42)));
+    }
+
+    #[test]
+    fn run_continues_after_return_until_halt() {
+        let mut code = InstructionSequence::new();
+        let entry = code.append(Instruction::Return);
+        code.append(Instruction::Push(value(99)));
+        let target = code.append(Instruction::Push(value(8)));
+        code.append(Instruction::Halt);
+        let mut vm = new_vm(&code, entry);
+        vm.push_return_frame(return_frame(target));
+
+        assert_eq!(vm.run(code.view()), Ok(RunOutcome::Halted));
+
+        assert!(vm.is_halted());
+        assert_eq!(vm.return_stack_depth(), 0);
+        assert_eq!(vm.data_stack_depth(), 1);
+        assert_eq!(vm.peek_data(), Ok(value(8)));
+    }
+
+    #[test]
+    fn run_reports_return_underflow_as_vm_error() {
+        let mut code = InstructionSequence::new();
+        let entry = code.append(Instruction::Return);
+        let mut vm = new_vm(&code, entry);
+
+        let result = vm.run(code.view());
+
+        assert_eq!(
+            result,
+            Err(VmError {
+                address: entry,
+                kind: VmErrorKind::ReturnStackUnderflow {
+                    source: StackError::ReturnStackUnderflow
+                }
+            })
+        );
+        assert_clean_control(&vm, entry, false);
+    }
+
+    #[test]
+    fn run_preserves_successful_steps_before_invalid_return_target() {
+        let mut code = InstructionSequence::new();
+        let entry = code.append(Instruction::Push(value(5)));
+        let bad_return = code.append(Instruction::Return);
+        let invalid = address(100);
+        let mut vm = new_vm(&code, entry);
+        vm.push_return_frame(return_frame(invalid));
+
+        let result = vm.run(code.view());
+
+        assert_eq!(
+            result,
+            Err(VmError {
+                address: bad_return,
+                kind: VmErrorKind::InvalidReturnTarget {
+                    source: InstructionAddressError::InvalidAddress { address: invalid }
+                }
+            })
+        );
+        assert_eq!(vm.instruction_pointer(), bad_return);
+        assert!(!vm.is_halted());
+        assert_eq!(vm.return_stack_depth(), 1);
+        assert_eq!(vm.data_stack_depth(), 1);
+        assert_eq!(vm.peek_data(), Ok(value(5)));
     }
 
     #[test]
