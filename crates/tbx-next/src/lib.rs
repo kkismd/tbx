@@ -2,6 +2,11 @@
 #[allow(dead_code)]
 mod value;
 
+// Phase 4 for ADR #1367 keeps the typed shared instruction sequence outside
+// mutable VM execution state and exposes only a read-only fetch boundary.
+#[allow(dead_code)]
+mod instruction;
+
 // Phase 2 exposes the internal stack contract before the VM consumes it.
 #[allow(dead_code)]
 mod stack;

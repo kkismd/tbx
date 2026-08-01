@@ -1,22 +1,6 @@
-/// Absolute address into the shared TBX Next instruction sequence.
-///
-/// ADR #1367 defines instruction addresses as VM-control identifiers, not
-/// runtime values. The concrete backing type is intentionally private and must
-/// not become a serialized or public ABI contract.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub(crate) struct InstructionAddress {
-    index: usize,
-}
+use crate::instruction::{InstructionAddressError, InstructionView};
 
-impl InstructionAddress {
-    pub(crate) const fn from_index(index: usize) -> Self {
-        Self { index }
-    }
-
-    pub(crate) const fn as_index(self) -> usize {
-        self.index
-    }
-}
+pub(crate) use crate::instruction::InstructionAddress;
 
 /// Internal identifier for a published executable word definition.
 ///
@@ -67,6 +51,11 @@ pub(crate) enum WordLookupError {
     InvalidWordId { id: WordId },
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum WordDefinitionError {
+    InvalidCompiledEntry { error: InstructionAddressError },
+}
+
 /// Monotonic collection of published, executable word definitions.
 ///
 /// This collection deliberately has no removal, replacement, arbitrary insert,
@@ -97,6 +86,15 @@ impl PublishedWords {
         id
     }
 
+    pub(crate) fn add_validated(
+        &mut self,
+        definition: WordDefinition,
+        instructions: InstructionView<'_>,
+    ) -> Result<WordId, WordDefinitionError> {
+        validate_definition(definition, instructions)?;
+        Ok(self.add(definition))
+    }
+
     pub(crate) fn get(&self, id: WordId) -> Result<&WordDefinition, WordLookupError> {
         self.definitions
             .get(id.slot)
@@ -112,9 +110,24 @@ impl PublishedWords {
     }
 }
 
+fn validate_definition(
+    definition: WordDefinition,
+    instructions: InstructionView<'_>,
+) -> Result<(), WordDefinitionError> {
+    match definition {
+        WordDefinition::Primitive { .. } => Ok(()),
+        WordDefinition::Compiled { entry } => instructions
+            .validate_address(entry)
+            .map(|_| ())
+            .map_err(|error| WordDefinitionError::InvalidCompiledEntry { error }),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::instruction::{Instruction, InstructionAddressError, InstructionSequence};
+    use crate::value::Value;
     use crate::word_lookup::PublishedWordLookup;
 
     fn primitive(slot: usize) -> WordDefinition {
@@ -127,6 +140,10 @@ mod tests {
         WordDefinition::Compiled {
             entry: InstructionAddress::from_index(index),
         }
+    }
+
+    fn compiled_entry(entry: InstructionAddress) -> WordDefinition {
+        WordDefinition::Compiled { entry }
     }
 
     #[test]
@@ -285,5 +302,61 @@ mod tests {
 
         assert_eq!(words.get(primitive_id), Ok(&primitive(0)));
         assert_eq!(words.get(compiled_id), Ok(&compiled(8)));
+    }
+
+    #[test]
+    fn validated_add_accepts_compiled_entry_in_the_shared_instruction_sequence() {
+        let mut code = InstructionSequence::new();
+        let entry = code.append(Instruction::Push(Value::integer(42)));
+        code.append(Instruction::Halt);
+        let mut words = PublishedWords::new();
+
+        let id = words
+            .add_validated(compiled_entry(entry), code.view())
+            .expect("compiled entry should point at an existing instruction");
+
+        assert_eq!(words.len(), 1);
+        assert_eq!(words.get(id), Ok(&compiled_entry(entry)));
+    }
+
+    #[test]
+    fn validated_add_rejects_compiled_entry_at_end_without_issuing_word_id() {
+        let mut code = InstructionSequence::new();
+        code.append(Instruction::Halt);
+        let end = InstructionAddress::from_index(code.len());
+        let mut words = PublishedWords::new();
+
+        let result = words.add_validated(compiled_entry(end), code.view());
+
+        assert_eq!(
+            result,
+            Err(WordDefinitionError::InvalidCompiledEntry {
+                error: InstructionAddressError::EndAddress { address: end }
+            })
+        );
+        assert!(words.is_empty());
+    }
+
+    #[test]
+    fn validated_add_rejects_compiled_entry_outside_current_owner_view() {
+        let mut source_code = InstructionSequence::new();
+        source_code.append(Instruction::Push(Value::integer(1)));
+        let source_entry = source_code.append(Instruction::Halt);
+        let target_code = InstructionSequence::new();
+        let mut words = PublishedWords::new();
+
+        // InstructionAddress intentionally has no owner tag. Publication must
+        // validate against the owner view that will back VM execution.
+        let result = words.add_validated(compiled_entry(source_entry), target_code.view());
+
+        assert_eq!(
+            result,
+            Err(WordDefinitionError::InvalidCompiledEntry {
+                error: InstructionAddressError::InvalidAddress {
+                    address: source_entry
+                }
+            })
+        );
+        assert!(words.is_empty());
     }
 }
