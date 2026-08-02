@@ -45,6 +45,11 @@ impl DataStack {
         self.values.is_empty()
     }
 
+    #[cfg(test)]
+    pub(crate) fn as_slice(&self) -> &[Value] {
+        &self.values
+    }
+
     pub(crate) fn require_depth(&self, required: usize) -> Result<(), StackError> {
         if self.values.len() < required {
             return Err(StackError::DataStackUnderflow);
@@ -126,6 +131,11 @@ impl ReturnStack {
 
     pub(crate) fn is_empty(&self) -> bool {
         self.frames.is_empty()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn as_slice(&self) -> &[ReturnFrame] {
+        &self.frames
     }
 }
 
