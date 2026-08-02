@@ -195,6 +195,9 @@ impl Vm {
             }
             Instruction::Return => self.step_return(instructions, address),
             Instruction::Halt => {
+                // Halt commits only the state transition. In halted state, the
+                // IP records the Halt instruction that stopped execution; it is
+                // no longer interpreted as the next instruction to fetch.
                 self.halted = true;
                 Ok(StepOutcome::Halted)
             }
@@ -457,6 +460,41 @@ mod tests {
             PublishedWordLookup::new(words),
             primitives.lookup(),
         )
+    }
+
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    struct VmSnapshot {
+        instruction_pointer: InstructionAddress,
+        data_stack: Vec<Value>,
+        return_stack: Vec<ReturnFrame>,
+        halted: bool,
+    }
+
+    fn snapshot(vm: &Vm) -> VmSnapshot {
+        VmSnapshot {
+            instruction_pointer: vm.instruction_pointer,
+            data_stack: vm.data_stack.as_slice().to_vec(),
+            return_stack: vm.return_stack.as_slice().to_vec(),
+            halted: vm.halted,
+        }
+    }
+
+    fn assert_vm_state(vm: &Vm, expected: VmSnapshot) {
+        assert_eq!(snapshot(vm), expected);
+    }
+
+    fn expected_state(
+        instruction_pointer: InstructionAddress,
+        data_stack: Vec<Value>,
+        return_stack: Vec<ReturnFrame>,
+        halted: bool,
+    ) -> VmSnapshot {
+        VmSnapshot {
+            instruction_pointer,
+            data_stack,
+            return_stack,
+            halted,
+        }
     }
 
     fn assert_clean_control(vm: &Vm, expected_ip: InstructionAddress, halted: bool) {
@@ -952,6 +990,37 @@ mod tests {
     }
 
     #[test]
+    fn run_keeps_successful_primitive_state_before_failed_primitive_call() {
+        let mut primitives = PrimitiveRegistry::new();
+        let push = primitives.register(push_42);
+        let fail = primitives.register(fail_after_partial_stack_update);
+        let mut words = PublishedWords::new();
+        let push_word = words.add(CompletedWordDefinition::primitive(push));
+        let fail_word = words.add(CompletedWordDefinition::primitive(fail));
+        let mut code = InstructionSequence::new();
+        let entry = code.append(Instruction::Call(push_word));
+        let failing_call = code.append(Instruction::Call(fail_word));
+        code.append(Instruction::Halt);
+        let mut vm = new_vm(&code, entry);
+
+        let result = vm.run(execution(&code, &words, &primitives));
+
+        let error = VmError {
+            address: failing_call,
+            kind: VmErrorKind::PrimitiveFailed {
+                primitive: fail,
+                source: PrimitiveError::Failed,
+            },
+        };
+        assert_eq!(result, Err(error));
+        assert_eq!(error.address(), failing_call);
+        assert_vm_state(
+            &vm,
+            expected_state(failing_call, vec![value(42)], Vec::new(), false),
+        );
+    }
+
+    #[test]
     fn primitive_call_rejects_unregistered_primitive_without_mutation() {
         let primitives = PrimitiveRegistry::new();
         let primitive = PrimitiveId::from_slot(0);
@@ -1094,6 +1163,52 @@ mod tests {
     }
 
     #[test]
+    fn run_preserves_nested_call_state_when_inner_compiled_word_fails() {
+        let primitives = PrimitiveRegistry::new();
+        let mut words = PublishedWords::new();
+        let mut code = InstructionSequence::new();
+        let inner_entry = code.append(Instruction::Push(value(0)));
+        let failing_branch = code.append(Instruction::JumpIfZero(address(99)));
+        code.append(Instruction::Return);
+        let inner = words.add(
+            CompletedWordDefinition::compiled(inner_entry, code.view())
+                .expect("inner entry should be valid"),
+        );
+        let outer_entry = code.append(Instruction::Push(value(11)));
+        code.append(Instruction::Call(inner));
+        let after_inner = code.append(Instruction::Return);
+        let outer = words.add(
+            CompletedWordDefinition::compiled(outer_entry, code.view())
+                .expect("outer entry should be valid"),
+        );
+        let entry = code.append(Instruction::Call(outer));
+        let after_outer = code.append(Instruction::Halt);
+        let mut vm = new_vm(&code, entry);
+
+        let result = vm.run(execution(&code, &words, &primitives));
+
+        let error = VmError {
+            address: failing_branch,
+            kind: VmErrorKind::InvalidJumpTarget {
+                source: InstructionAddressError::InvalidAddress {
+                    address: address(99),
+                },
+            },
+        };
+        assert_eq!(result, Err(error));
+        assert_eq!(error.address(), failing_branch);
+        assert_vm_state(
+            &vm,
+            expected_state(
+                failing_branch,
+                vec![value(11), value(0)],
+                vec![return_frame(after_outer), return_frame(after_inner)],
+                false,
+            ),
+        );
+    }
+
+    #[test]
     fn compiled_call_revalidates_entry_against_current_instruction_view() {
         let primitives = PrimitiveRegistry::new();
         let mut words = PublishedWords::new();
@@ -1196,17 +1311,31 @@ mod tests {
     }
 
     #[test]
+    fn halt_at_end_keeps_instruction_pointer_on_halt_instruction() {
+        let mut code = InstructionSequence::new();
+        let entry = code.append(Instruction::Push(value(8)));
+        let halt = code.append(Instruction::Halt);
+        let mut vm = new_vm(&code, entry);
+
+        assert_eq!(vm.run(code.view()), Ok(RunOutcome::Halted));
+
+        assert_vm_state(&vm, expected_state(halt, vec![value(8)], Vec::new(), true));
+    }
+
+    #[test]
     fn halted_step_and_run_are_idempotent() {
         let mut code = InstructionSequence::new();
         let entry = code.append(Instruction::Halt);
         let mut vm = new_vm(&code, entry);
+        vm.data_stack.push(value(3));
+        vm.push_return_frame(return_frame(entry));
 
         assert_eq!(vm.step(code.view()), Ok(StepOutcome::Halted));
+        let halted = snapshot(&vm);
         assert_eq!(vm.step(code.view()), Ok(StepOutcome::Halted));
         assert_eq!(vm.run(code.view()), Ok(RunOutcome::Halted));
 
-        assert_clean_control(&vm, entry, true);
-        assert_eq!(vm.data_stack_depth(), 0);
+        assert_vm_state(&vm, halted);
     }
 
     #[test]
