@@ -12,7 +12,7 @@ pub(crate) enum StackError {
     ReturnStackUnderflow,
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug, Clone, Default)]
 pub(crate) struct DataStack {
     values: Vec<Value>,
 }
@@ -68,6 +68,10 @@ impl DataStack {
             .expect("depth was checked before popping lhs");
 
         Ok((lhs, rhs))
+    }
+
+    pub(crate) fn restore(&mut self, checkpoint: Self) {
+        *self = checkpoint;
     }
 }
 
