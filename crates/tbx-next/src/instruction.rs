@@ -1,4 +1,5 @@
 use crate::value::Value;
+use crate::word::WordId;
 
 /// Absolute address into the shared TBX Next instruction sequence.
 ///
@@ -29,11 +30,13 @@ impl InstructionAddress {
 
 /// Crate-internal typed instruction for the future VM execution core.
 ///
-/// This is intentionally a small, orthogonal instruction set. Word calls,
-/// stack effects, and primitive dispatch belong to later VM execution work.
+/// This is intentionally a small, orthogonal instruction set. `Call` carries
+/// an already-resolved word identifier so runtime VM execution never performs
+/// name lookup.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Instruction {
     Push(Value),
+    Call(WordId),
     Jump(InstructionAddress),
     JumpIfZero(InstructionAddress),
     Return,

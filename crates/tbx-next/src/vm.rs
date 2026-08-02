@@ -1,10 +1,11 @@
 use crate::instruction::{
     Instruction, InstructionAddress, InstructionAddressError, InstructionView,
 };
-#[cfg(test)]
-use crate::stack::ReturnFrame;
-use crate::stack::{DataStack, ReturnStack, StackError};
+use crate::primitive::{PrimitiveContext, PrimitiveError, PrimitiveLookup, PrimitiveLookupError};
+use crate::stack::{DataStack, ReturnFrame, ReturnStack, StackError};
 use crate::value::Value;
+use crate::word::{WordDefinition, WordId, WordLookupError};
+use crate::word_lookup::PublishedWordLookup;
 
 /// Mutable execution state for the initial TBX Next VM core.
 ///
@@ -39,12 +40,115 @@ pub(crate) struct VmError {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum VmErrorKind {
-    InstructionFetch { source: InstructionAddressError },
-    UnexpectedEndOfCode { source: InstructionAddressError },
-    DataStackUnderflow { source: StackError },
-    ReturnStackUnderflow { source: StackError },
-    InvalidJumpTarget { source: InstructionAddressError },
-    InvalidReturnTarget { source: InstructionAddressError },
+    InstructionFetch {
+        source: InstructionAddressError,
+    },
+    UnexpectedEndOfCode {
+        source: InstructionAddressError,
+    },
+    DataStackUnderflow {
+        source: StackError,
+    },
+    ReturnStackUnderflow {
+        source: StackError,
+    },
+    InvalidJumpTarget {
+        source: InstructionAddressError,
+    },
+    InvalidReturnTarget {
+        source: InstructionAddressError,
+    },
+    InvalidWordId {
+        source: WordLookupError,
+    },
+    InvalidPrimitiveId {
+        source: PrimitiveLookupError,
+    },
+    PrimitiveFailed {
+        primitive: crate::word::PrimitiveId,
+        source: PrimitiveError,
+    },
+    InvalidCompiledEntry {
+        source: InstructionAddressError,
+    },
+}
+
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct ExecutionView<'a> {
+    instructions: InstructionView<'a>,
+    words: PublishedWordLookup<'a>,
+    primitives: PrimitiveLookup<'a>,
+}
+
+impl<'a> ExecutionView<'a> {
+    pub(crate) const fn new(
+        instructions: InstructionView<'a>,
+        words: PublishedWordLookup<'a>,
+        primitives: PrimitiveLookup<'a>,
+    ) -> Self {
+        Self {
+            instructions,
+            words,
+            primitives,
+        }
+    }
+
+    pub(crate) const fn instructions(self) -> InstructionView<'a> {
+        self.instructions
+    }
+
+    pub(crate) const fn words(self) -> PublishedWordLookup<'a> {
+        self.words
+    }
+
+    pub(crate) const fn primitives(self) -> PrimitiveLookup<'a> {
+        self.primitives
+    }
+}
+
+pub(crate) trait VmExecutionView<'a>: Copy {
+    fn instructions(self) -> InstructionView<'a>;
+
+    fn lookup_word(self, id: WordId) -> Result<WordDefinition, WordLookupError>;
+
+    fn lookup_handler(
+        self,
+        id: crate::word::PrimitiveId,
+    ) -> Result<crate::primitive::PrimitiveHandler, PrimitiveLookupError>;
+}
+
+impl<'a> VmExecutionView<'a> for ExecutionView<'a> {
+    fn instructions(self) -> InstructionView<'a> {
+        self.instructions()
+    }
+
+    fn lookup_word(self, id: WordId) -> Result<WordDefinition, WordLookupError> {
+        self.words().lookup_word(id).copied()
+    }
+
+    fn lookup_handler(
+        self,
+        id: crate::word::PrimitiveId,
+    ) -> Result<crate::primitive::PrimitiveHandler, PrimitiveLookupError> {
+        self.primitives().lookup_handler(id)
+    }
+}
+
+impl<'a> VmExecutionView<'a> for InstructionView<'a> {
+    fn instructions(self) -> InstructionView<'a> {
+        self
+    }
+
+    fn lookup_word(self, id: WordId) -> Result<WordDefinition, WordLookupError> {
+        Err(WordLookupError::InvalidWordId { id })
+    }
+
+    fn lookup_handler(
+        self,
+        id: crate::word::PrimitiveId,
+    ) -> Result<crate::primitive::PrimitiveHandler, PrimitiveLookupError> {
+        Err(PrimitiveLookupError::InvalidPrimitiveId { id })
+    }
 }
 
 impl Vm {
@@ -67,15 +171,16 @@ impl Vm {
         })
     }
 
-    pub(crate) fn step(
+    pub(crate) fn step<'a, E: VmExecutionView<'a>>(
         &mut self,
-        instructions: InstructionView<'_>,
+        execution: E,
     ) -> Result<StepOutcome, VmError> {
         if self.halted {
             return Ok(StepOutcome::Halted);
         }
 
         let address = self.instruction_pointer;
+        let instructions = execution.instructions();
         let instruction = *instructions.get(address).map_err(|source| VmError {
             address,
             kind: VmErrorKind::InstructionFetch { source },
@@ -83,6 +188,7 @@ impl Vm {
 
         match instruction {
             Instruction::Push(value) => self.step_push(instructions, address, value),
+            Instruction::Call(id) => self.step_call(execution, address, id),
             Instruction::Jump(target) => self.step_jump(instructions, address, target),
             Instruction::JumpIfZero(target) => {
                 self.step_jump_if_zero(instructions, address, target)
@@ -95,9 +201,12 @@ impl Vm {
         }
     }
 
-    pub(crate) fn run(&mut self, instructions: InstructionView<'_>) -> Result<RunOutcome, VmError> {
+    pub(crate) fn run<'a, E: VmExecutionView<'a>>(
+        &mut self,
+        execution: E,
+    ) -> Result<RunOutcome, VmError> {
         loop {
-            match self.step(instructions)? {
+            match self.step(execution)? {
                 StepOutcome::Continued => {}
                 StepOutcome::Halted => return Ok(RunOutcome::Halted),
             }
@@ -158,6 +267,64 @@ impl Vm {
         self.instruction_pointer = target;
 
         Ok(StepOutcome::Continued)
+    }
+
+    fn step_call<'a, E: VmExecutionView<'a>>(
+        &mut self,
+        execution: E,
+        address: InstructionAddress,
+        id: WordId,
+    ) -> Result<StepOutcome, VmError> {
+        let instructions = execution.instructions();
+        let next = self.valid_next_address(instructions, address)?;
+        let definition = execution.lookup_word(id).map_err(|source| VmError {
+            address,
+            kind: VmErrorKind::InvalidWordId { source },
+        })?;
+
+        match definition {
+            WordDefinition::Primitive { primitive } => {
+                let handler = execution
+                    .lookup_handler(primitive)
+                    .map_err(|source| VmError {
+                        address,
+                        kind: VmErrorKind::InvalidPrimitiveId { source },
+                    })?;
+
+                let checkpoint = self.data_stack.clone();
+                let mut context = PrimitiveContext::new(&mut self.data_stack);
+                match handler(&mut context) {
+                    Ok(()) => {
+                        self.instruction_pointer = next;
+                        Ok(StepOutcome::Continued)
+                    }
+                    Err(source) => {
+                        // Primitive calls are a VM commit boundary: handlers
+                        // may perform multiple data-stack operations, so the VM
+                        // restores the entry checkpoint on failure instead of
+                        // relying on every handler to be internally atomic.
+                        self.data_stack.restore(checkpoint);
+                        Err(VmError {
+                            address,
+                            kind: VmErrorKind::PrimitiveFailed { primitive, source },
+                        })
+                    }
+                }
+            }
+            WordDefinition::Compiled { entry } => {
+                let entry = instructions
+                    .validate_address(entry)
+                    .map_err(|source| VmError {
+                        address,
+                        kind: VmErrorKind::InvalidCompiledEntry { source },
+                    })?;
+
+                self.return_stack.push(ReturnFrame::new(next));
+                self.instruction_pointer = entry;
+
+                Ok(StepOutcome::Continued)
+            }
+        }
     }
 
     fn step_jump_if_zero(
@@ -264,6 +431,9 @@ impl VmError {
 mod tests {
     use super::*;
     use crate::instruction::InstructionSequence;
+    use crate::primitive::{PrimitiveLookupError, PrimitiveRegistry};
+    use crate::word::{CompletedWordDefinition, PrimitiveId, PublishedWords, WordLookupError};
+    use crate::word_lookup::PublishedWordLookup;
 
     fn value(value: i16) -> Value {
         Value::integer(value)
@@ -277,6 +447,18 @@ mod tests {
         Vm::new(code.view(), entry).expect("test entry should be valid")
     }
 
+    fn execution<'a>(
+        code: &'a InstructionSequence,
+        words: &'a PublishedWords,
+        primitives: &'a PrimitiveRegistry,
+    ) -> ExecutionView<'a> {
+        ExecutionView::new(
+            code.view(),
+            PublishedWordLookup::new(words),
+            primitives.lookup(),
+        )
+    }
+
     fn assert_clean_control(vm: &Vm, expected_ip: InstructionAddress, halted: bool) {
         assert_eq!(vm.instruction_pointer(), expected_ip);
         assert_eq!(vm.is_halted(), halted);
@@ -285,6 +467,25 @@ mod tests {
 
     fn return_frame(return_address: InstructionAddress) -> ReturnFrame {
         ReturnFrame::new(return_address)
+    }
+
+    fn push_42(context: &mut PrimitiveContext<'_>) -> Result<(), PrimitiveError> {
+        context.push(value(42));
+        Ok(())
+    }
+
+    fn add_top_two(context: &mut PrimitiveContext<'_>) -> Result<(), PrimitiveError> {
+        let (lhs, rhs) = context.pop2()?;
+        context.push(value(lhs.as_integer() + rhs.as_integer()));
+        Ok(())
+    }
+
+    fn fail_after_partial_stack_update(
+        context: &mut PrimitiveContext<'_>,
+    ) -> Result<(), PrimitiveError> {
+        context.pop()?;
+        context.push(value(99));
+        Err(PrimitiveError::Failed)
     }
 
     #[test]
@@ -694,6 +895,292 @@ mod tests {
         assert_eq!(vm.instruction_pointer(), entry);
         assert!(!vm.is_halted());
         assert_eq!(vm.return_stack_depth(), 1);
+    }
+
+    #[test]
+    fn primitive_call_runs_without_return_frame_and_advances_to_next_instruction() {
+        let mut primitives = PrimitiveRegistry::new();
+        let primitive = primitives.register(push_42);
+        let mut words = PublishedWords::new();
+        let word = words.add(CompletedWordDefinition::primitive(primitive));
+        let mut code = InstructionSequence::new();
+        let entry = code.append(Instruction::Call(word));
+        let next = code.append(Instruction::Halt);
+        let mut vm = new_vm(&code, entry);
+
+        assert_eq!(
+            vm.step(execution(&code, &words, &primitives)),
+            Ok(StepOutcome::Continued)
+        );
+
+        assert_eq!(vm.instruction_pointer(), next);
+        assert!(!vm.is_halted());
+        assert_eq!(vm.return_stack_depth(), 0);
+        assert_eq!(vm.peek_data(), Ok(value(42)));
+    }
+
+    #[test]
+    fn primitive_failure_restores_data_stack_and_preserves_control_state() {
+        let mut primitives = PrimitiveRegistry::new();
+        let primitive = primitives.register(fail_after_partial_stack_update);
+        let mut words = PublishedWords::new();
+        let word = words.add(CompletedWordDefinition::primitive(primitive));
+        let mut code = InstructionSequence::new();
+        let entry = code.append(Instruction::Push(value(7)));
+        let call = code.append(Instruction::Call(word));
+        code.append(Instruction::Halt);
+        let mut vm = new_vm(&code, entry);
+
+        assert_eq!(vm.step(code.view()), Ok(StepOutcome::Continued));
+        let result = vm.step(execution(&code, &words, &primitives));
+
+        assert_eq!(
+            result,
+            Err(VmError {
+                address: call,
+                kind: VmErrorKind::PrimitiveFailed {
+                    primitive,
+                    source: PrimitiveError::Failed
+                }
+            })
+        );
+        assert_eq!(vm.instruction_pointer(), call);
+        assert!(!vm.is_halted());
+        assert_eq!(vm.return_stack_depth(), 0);
+        assert_eq!(vm.data_stack_depth(), 1);
+        assert_eq!(vm.peek_data(), Ok(value(7)));
+    }
+
+    #[test]
+    fn primitive_call_rejects_unregistered_primitive_without_mutation() {
+        let primitives = PrimitiveRegistry::new();
+        let primitive = PrimitiveId::from_slot(0);
+        let mut words = PublishedWords::new();
+        let word = words.add(CompletedWordDefinition::primitive(primitive));
+        let mut code = InstructionSequence::new();
+        let entry = code.append(Instruction::Call(word));
+        code.append(Instruction::Halt);
+        let mut vm = new_vm(&code, entry);
+
+        let result = vm.step(execution(&code, &words, &primitives));
+
+        assert_eq!(
+            result,
+            Err(VmError {
+                address: entry,
+                kind: VmErrorKind::InvalidPrimitiveId {
+                    source: PrimitiveLookupError::InvalidPrimitiveId { id: primitive }
+                }
+            })
+        );
+        assert_clean_control(&vm, entry, false);
+        assert_eq!(vm.data_stack_depth(), 0);
+    }
+
+    #[test]
+    fn call_rejects_unpublished_word_id_without_mutation() {
+        let mut other_words = PublishedWords::new();
+        let unpublished = other_words.add(CompletedWordDefinition::primitive(
+            PrimitiveId::from_slot(0),
+        ));
+        let words = PublishedWords::new();
+        let primitives = PrimitiveRegistry::new();
+        let mut code = InstructionSequence::new();
+        let entry = code.append(Instruction::Call(unpublished));
+        code.append(Instruction::Halt);
+        let mut vm = new_vm(&code, entry);
+
+        let result = vm.step(execution(&code, &words, &primitives));
+
+        assert_eq!(
+            result,
+            Err(VmError {
+                address: entry,
+                kind: VmErrorKind::InvalidWordId {
+                    source: WordLookupError::InvalidWordId { id: unpublished }
+                }
+            })
+        );
+        assert_clean_control(&vm, entry, false);
+        assert_eq!(vm.data_stack_depth(), 0);
+    }
+
+    #[test]
+    fn call_at_end_rejects_missing_return_address_before_dispatch() {
+        let mut primitives = PrimitiveRegistry::new();
+        let primitive = primitives.register(push_42);
+        let mut words = PublishedWords::new();
+        let word = words.add(CompletedWordDefinition::primitive(primitive));
+        let mut code = InstructionSequence::new();
+        let entry = code.append(Instruction::Call(word));
+        let mut vm = new_vm(&code, entry);
+
+        let result = vm.step(execution(&code, &words, &primitives));
+
+        assert_eq!(
+            result,
+            Err(VmError {
+                address: entry,
+                kind: VmErrorKind::UnexpectedEndOfCode {
+                    source: InstructionAddressError::EndAddress {
+                        address: address(1)
+                    }
+                }
+            })
+        );
+        assert_clean_control(&vm, entry, false);
+        assert_eq!(vm.data_stack_depth(), 0);
+    }
+
+    #[test]
+    fn compiled_call_pushes_return_frame_and_return_resumes_after_call() {
+        let primitives = PrimitiveRegistry::new();
+        let mut words = PublishedWords::new();
+        let mut code = InstructionSequence::new();
+        let compiled_entry = code.append(Instruction::Push(value(7)));
+        code.append(Instruction::Return);
+        let word = words.add(
+            CompletedWordDefinition::compiled(compiled_entry, code.view())
+                .expect("compiled entry should be valid"),
+        );
+        let call = code.append(Instruction::Call(word));
+        let after_call = code.append(Instruction::Halt);
+        let mut vm = new_vm(&code, call);
+        let execution = execution(&code, &words, &primitives);
+
+        assert_eq!(vm.step(execution), Ok(StepOutcome::Continued));
+        assert_eq!(vm.instruction_pointer(), compiled_entry);
+        assert_eq!(vm.return_stack_depth(), 1);
+
+        assert_eq!(vm.step(execution), Ok(StepOutcome::Continued));
+        assert_eq!(vm.step(execution), Ok(StepOutcome::Continued));
+
+        assert_eq!(vm.instruction_pointer(), after_call);
+        assert_eq!(vm.return_stack_depth(), 0);
+        assert_eq!(vm.peek_data(), Ok(value(7)));
+    }
+
+    #[test]
+    fn nested_compiled_calls_return_in_lifo_order() {
+        let primitives = PrimitiveRegistry::new();
+        let mut words = PublishedWords::new();
+        let mut code = InstructionSequence::new();
+        let inner_entry = code.append(Instruction::Push(value(2)));
+        code.append(Instruction::Return);
+        let inner = words.add(
+            CompletedWordDefinition::compiled(inner_entry, code.view())
+                .expect("inner entry should be valid"),
+        );
+        let outer_entry = code.append(Instruction::Push(value(1)));
+        code.append(Instruction::Call(inner));
+        code.append(Instruction::Return);
+        let outer = words.add(
+            CompletedWordDefinition::compiled(outer_entry, code.view())
+                .expect("outer entry should be valid"),
+        );
+        let entry = code.append(Instruction::Call(outer));
+        code.append(Instruction::Halt);
+        let mut vm = new_vm(&code, entry);
+
+        assert_eq!(
+            vm.run(execution(&code, &words, &primitives)),
+            Ok(RunOutcome::Halted)
+        );
+
+        assert!(vm.is_halted());
+        assert_eq!(vm.return_stack_depth(), 0);
+        assert_eq!(vm.pop_data(), Ok(value(2)));
+        assert_eq!(vm.pop_data(), Ok(value(1)));
+    }
+
+    #[test]
+    fn compiled_call_revalidates_entry_against_current_instruction_view() {
+        let primitives = PrimitiveRegistry::new();
+        let mut words = PublishedWords::new();
+        let mut full_code = InstructionSequence::new();
+        let entry = full_code.append(Instruction::Halt);
+        full_code.append(Instruction::Halt);
+        let compiled_entry = full_code.append(Instruction::Return);
+        let word = words.add(
+            CompletedWordDefinition::compiled(compiled_entry, full_code.view())
+                .expect("compiled entry should be valid in full code"),
+        );
+        let mut short_code = InstructionSequence::new();
+        let call = short_code.append(Instruction::Call(word));
+        short_code.append(Instruction::Halt);
+        let mut vm = new_vm(&short_code, call);
+
+        let result = vm.step(execution(&short_code, &words, &primitives));
+
+        assert_eq!(
+            result,
+            Err(VmError {
+                address: call,
+                kind: VmErrorKind::InvalidCompiledEntry {
+                    source: InstructionAddressError::EndAddress {
+                        address: compiled_entry
+                    }
+                }
+            })
+        );
+        assert_clean_control(&vm, call, false);
+        assert_eq!(vm.data_stack_depth(), 0);
+        assert_eq!(entry.as_index(), 0);
+    }
+
+    #[test]
+    fn run_mixes_primitive_and_compiled_word_dispatch() {
+        let mut primitives = PrimitiveRegistry::new();
+        let add = primitives.register(add_top_two);
+        let mut words = PublishedWords::new();
+        let add_word = words.add(CompletedWordDefinition::primitive(add));
+        let mut code = InstructionSequence::new();
+        let compiled_entry = code.append(Instruction::Push(value(30)));
+        code.append(Instruction::Push(value(12)));
+        code.append(Instruction::Call(add_word));
+        code.append(Instruction::Return);
+        let compiled_word = words.add(
+            CompletedWordDefinition::compiled(compiled_entry, code.view())
+                .expect("compiled entry should be valid"),
+        );
+        let entry = code.append(Instruction::Call(compiled_word));
+        code.append(Instruction::Halt);
+        let mut vm = new_vm(&code, entry);
+
+        assert_eq!(
+            vm.run(execution(&code, &words, &primitives)),
+            Ok(RunOutcome::Halted)
+        );
+
+        assert_eq!(vm.return_stack_depth(), 0);
+        assert_eq!(vm.data_stack_depth(), 1);
+        assert_eq!(vm.peek_data(), Ok(value(42)));
+    }
+
+    #[test]
+    fn old_word_id_call_keeps_old_definition_after_redefinition() {
+        let mut primitives = PrimitiveRegistry::new();
+        let old_primitive = primitives.register(push_42);
+        let new_primitive = primitives.register(|context| {
+            context.push(value(99));
+            Ok(())
+        });
+        let mut words = PublishedWords::new();
+        let old_word = words.add(CompletedWordDefinition::primitive(old_primitive));
+        let new_word = words.add(CompletedWordDefinition::primitive(new_primitive));
+        let mut code = InstructionSequence::new();
+        let entry = code.append(Instruction::Call(old_word));
+        code.append(Instruction::Call(new_word));
+        code.append(Instruction::Halt);
+        let mut vm = new_vm(&code, entry);
+
+        assert_eq!(
+            vm.run(execution(&code, &words, &primitives)),
+            Ok(RunOutcome::Halted)
+        );
+
+        assert_eq!(vm.pop_data(), Ok(value(99)));
+        assert_eq!(vm.pop_data(), Ok(value(42)));
     }
 
     #[test]

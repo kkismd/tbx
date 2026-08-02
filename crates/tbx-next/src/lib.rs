@@ -47,6 +47,11 @@ mod redefinition;
 #[allow(dead_code)]
 mod word_lookup;
 
+// Phase G2 for ADR #1367 adds crate-internal primitive handlers behind a
+// read-only lookup boundary for VM call dispatch.
+#[allow(dead_code)]
+mod primitive;
+
 // Phase G1 for ADR #1368 resolves source word names through the current word
 // binding without introducing compiler or VM execution dependencies.
 #[allow(dead_code)]
