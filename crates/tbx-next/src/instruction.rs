@@ -29,14 +29,14 @@ impl InstructionAddress {
 
 /// Crate-internal typed instruction for the future VM execution core.
 ///
-/// This is intentionally a small, orthogonal instruction set for Phase 4. Word
-/// calls, returns, stack effects, and primitive dispatch belong to later VM
-/// execution work.
+/// This is intentionally a small, orthogonal instruction set. Word calls,
+/// stack effects, and primitive dispatch belong to later VM execution work.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Instruction {
     Push(Value),
     Jump(InstructionAddress),
     JumpIfZero(InstructionAddress),
+    Return,
     Halt,
 }
 
@@ -170,15 +170,18 @@ mod tests {
 
         let first = code.append(push(10));
         let second = code.append(push(20));
-        let third = code.append(Instruction::Halt);
+        let third = code.append(Instruction::Return);
+        let fourth = code.append(Instruction::Halt);
         let view = code.view();
 
         assert_eq!(first.as_index(), 0);
         assert_eq!(second.as_index(), 1);
         assert_eq!(third.as_index(), 2);
+        assert_eq!(fourth.as_index(), 3);
         assert_eq!(view.get(first), Ok(&push(10)));
         assert_eq!(view.get(second), Ok(&push(20)));
-        assert_eq!(view.get(third), Ok(&Instruction::Halt));
+        assert_eq!(view.get(third), Ok(&Instruction::Return));
+        assert_eq!(view.get(fourth), Ok(&Instruction::Halt));
     }
 
     #[test]
