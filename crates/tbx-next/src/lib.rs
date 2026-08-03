@@ -57,6 +57,11 @@ mod primitive;
 #[allow(dead_code)]
 mod word_resolution;
 
+// ADR #1411/#1414 keep complete source text ownership and validated spans in a
+// crate-internal source-processing boundary, separate from runtime VM state.
+#[allow(dead_code)]
+mod source;
+
 pub const STATUS_MESSAGE: &str =
     "TBX Next is under development; language features are not implemented yet.";
 
