@@ -1,8 +1,12 @@
+use crate::binding::Bindings;
 use crate::instruction::{Instruction, InstructionAddress, InstructionSequence};
 use crate::lexer::{LexError, Lexer, Token, TokenKind};
+use crate::primitive::PrimitiveLookup;
 use crate::source::{SourceError, SourceId, SourceSpan, SourceView};
 use crate::value::Value;
-use crate::vm::{RunOutcome, Vm, VmError};
+use crate::vm::{ExecutionView, RunOutcome, Vm, VmError};
+use crate::word_lookup::PublishedWordLookup;
+use crate::word_resolution::{resolve_word_name, WordResolutionError};
 
 #[derive(Debug)]
 pub(crate) struct TemporaryExecutionUnit {
@@ -15,6 +19,18 @@ pub(crate) struct TemporaryExecutionUnit {
 pub(crate) struct InstructionSource {
     address: InstructionAddress,
     span: SourceSpan,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct SourceCompileContext<'a> {
+    bindings: &'a Bindings,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct SourceExecutionContext<'a> {
+    compile: SourceCompileContext<'a>,
+    words: PublishedWordLookup<'a>,
+    primitives: PrimitiveLookup<'a>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -43,6 +59,7 @@ pub(crate) enum CompileErrorKind {
     UnsupportedToken { kind: TokenKind },
     IntegerLiteralOutOfRange,
     IntegerLiteralConversion,
+    WordResolution { source: WordResolutionError },
 }
 
 impl From<SourceError> for SourceProcessorError {
@@ -72,6 +89,7 @@ impl From<VmError> for SourceProcessorError {
 pub(crate) fn compile_source(
     view: SourceView<'_>,
     source_id: SourceId,
+    context: SourceCompileContext<'_>,
 ) -> Result<TemporaryExecutionUnit, SourceProcessorError> {
     let mut lexer = Lexer::new(view, source_id)?;
     let mut instructions = InstructionSequence::new();
@@ -90,6 +108,15 @@ pub(crate) fn compile_source(
                     token.span(),
                 );
             }
+            TokenKind::Name => {
+                let id = compile_word_reference(view, token, context)?;
+                append_mapped(
+                    &mut instructions,
+                    &mut spans,
+                    Instruction::Call(id),
+                    token.span(),
+                );
+            }
             TokenKind::LineBoundary => {}
             TokenKind::Eof => {
                 append_mapped(
@@ -100,7 +127,7 @@ pub(crate) fn compile_source(
                 );
                 break;
             }
-            TokenKind::Name | TokenKind::Minus => {
+            TokenKind::Minus => {
                 return Err(CompileError {
                     span: token.span(),
                     kind: CompileErrorKind::UnsupportedToken { kind: token.kind() },
@@ -121,14 +148,23 @@ pub(crate) fn compile_source(
 pub(crate) fn run_source(
     view: SourceView<'_>,
     source_id: SourceId,
+    context: SourceExecutionContext<'_>,
 ) -> Result<SourceRunResult, SourceProcessorError> {
-    let unit = compile_source(view, source_id)?;
-    run_unit(&unit)
+    let unit = compile_source(view, source_id, context.compile())?;
+    run_unit(&unit, context)
 }
 
-fn run_unit(unit: &TemporaryExecutionUnit) -> Result<SourceRunResult, SourceProcessorError> {
+fn run_unit(
+    unit: &TemporaryExecutionUnit,
+    context: SourceExecutionContext<'_>,
+) -> Result<SourceRunResult, SourceProcessorError> {
     let mut vm = Vm::new(unit.instructions.view(), unit.entry)?;
-    let outcome = vm.run(unit.instructions.view())?;
+    let execution = ExecutionView::new(
+        unit.instructions.view(),
+        context.words(),
+        context.primitives(),
+    );
+    let outcome = vm.run(execution)?;
     let data_stack = drain_data_stack(&mut vm);
 
     Ok(SourceRunResult {
@@ -136,6 +172,20 @@ fn run_unit(unit: &TemporaryExecutionUnit) -> Result<SourceRunResult, SourceProc
         data_stack,
         instruction_count: unit.instructions.len(),
     })
+}
+
+fn compile_word_reference(
+    view: SourceView<'_>,
+    token: Token,
+    context: SourceCompileContext<'_>,
+) -> Result<crate::word::WordId, SourceProcessorError> {
+    let source_name = view.slice(token.span())?;
+    resolve_word_name(context.bindings(), source_name)
+        .map_err(|source| CompileError {
+            span: token.span(),
+            kind: CompileErrorKind::WordResolution { source },
+        })
+        .map_err(SourceProcessorError::Compile)
 }
 
 fn compile_integer_literal(
@@ -224,6 +274,42 @@ impl TemporaryExecutionUnit {
     }
 }
 
+impl<'a> SourceCompileContext<'a> {
+    pub(crate) const fn new(bindings: &'a Bindings) -> Self {
+        Self { bindings }
+    }
+
+    pub(crate) const fn bindings(self) -> &'a Bindings {
+        self.bindings
+    }
+}
+
+impl<'a> SourceExecutionContext<'a> {
+    pub(crate) const fn new(
+        bindings: &'a Bindings,
+        words: PublishedWordLookup<'a>,
+        primitives: PrimitiveLookup<'a>,
+    ) -> Self {
+        Self {
+            compile: SourceCompileContext::new(bindings),
+            words,
+            primitives,
+        }
+    }
+
+    pub(crate) const fn compile(self) -> SourceCompileContext<'a> {
+        self.compile
+    }
+
+    pub(crate) const fn words(self) -> PublishedWordLookup<'a> {
+        self.words
+    }
+
+    pub(crate) const fn primitives(self) -> PrimitiveLookup<'a> {
+        self.primitives
+    }
+}
+
 impl SourceRunResult {
     pub(crate) fn outcome(&self) -> RunOutcome {
         self.outcome
@@ -251,8 +337,15 @@ impl CompileError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::binding::{Binding, Bindings};
+    use crate::bootstrap::register_primitive;
     use crate::lexer::InvalidCharacterReason;
+    use crate::name::NormalizedName;
+    use crate::primitive::{PrimitiveContext, PrimitiveError, PrimitiveRegistry};
+    use crate::redefinition::redefine_word;
     use crate::source::SourceTexts;
+    use crate::word::{CompletedWordDefinition, PrimitiveId, PublishedWords, WordId};
+    use crate::word_lookup::PublishedWordLookup;
 
     fn source(text: &str) -> (SourceTexts, SourceId) {
         let mut sources = SourceTexts::new();
@@ -267,19 +360,45 @@ mod tests {
 
     fn compile(text: &str) -> (SourceTexts, SourceId, TemporaryExecutionUnit) {
         let (sources, id) = source(text);
-        let unit = compile_source(sources.view(), id).expect("source should compile");
+        let bindings = Bindings::new();
+        let unit = compile_source(sources.view(), id, SourceCompileContext::new(&bindings))
+            .expect("source should compile");
+        (sources, id, unit)
+    }
+
+    fn compile_with_bindings(
+        text: &str,
+        bindings: &Bindings,
+    ) -> (SourceTexts, SourceId, TemporaryExecutionUnit) {
+        let (sources, id) = source(text);
+        let unit = compile_source(sources.view(), id, SourceCompileContext::new(bindings))
+            .expect("source should compile");
         (sources, id, unit)
     }
 
     fn run(text: &str) -> (SourceTexts, SourceId, SourceRunResult) {
         let (sources, id) = source(text);
-        let result = run_source(sources.view(), id).expect("source should run");
+        let words = PublishedWords::new();
+        let bindings = Bindings::new();
+        let primitives = PrimitiveRegistry::new();
+        let result = run_source(
+            sources.view(),
+            id,
+            SourceExecutionContext::new(
+                &bindings,
+                PublishedWordLookup::new(&words),
+                primitives.lookup(),
+            ),
+        )
+        .expect("source should run");
         (sources, id, result)
     }
 
     fn compile_error(text: &str) -> (SourceTexts, SourceId, SourceProcessorError) {
         let (sources, id) = source(text);
-        let error = compile_source(sources.view(), id).expect_err("source should fail");
+        let bindings = Bindings::new();
+        let error = compile_source(sources.view(), id, SourceCompileContext::new(&bindings))
+            .expect_err("source should fail");
         (sources, id, error)
     }
 
@@ -289,6 +408,52 @@ mod tests {
 
     fn address(index: usize) -> InstructionAddress {
         InstructionAddress::from_index(index)
+    }
+
+    fn name(input: &str) -> NormalizedName {
+        NormalizedName::new(input).expect("test input should be a valid word name")
+    }
+
+    fn completed_primitive(slot: usize) -> CompletedWordDefinition {
+        CompletedWordDefinition::primitive(PrimitiveId::from_slot(slot))
+    }
+
+    fn completed_compiled(code: &mut InstructionSequence, value: i16) -> CompletedWordDefinition {
+        let entry = code.append(Instruction::Push(Value::integer(value)));
+        CompletedWordDefinition::compiled(entry, code.view())
+            .expect("test compiled entry should be valid")
+    }
+
+    fn publish_initial(
+        words: &mut PublishedWords,
+        bindings: &mut Bindings,
+        input: &str,
+        definition: CompletedWordDefinition,
+    ) -> WordId {
+        let id = words.add(definition);
+        bindings
+            .insert_new(name(input), Binding::Word(id))
+            .expect("initial test binding should register");
+        id
+    }
+
+    fn push_7(context: &mut PrimitiveContext<'_>) -> Result<(), PrimitiveError> {
+        context.push(value(7));
+        Ok(())
+    }
+
+    fn add_top_two(context: &mut PrimitiveContext<'_>) -> Result<(), PrimitiveError> {
+        let (lhs, rhs) = context.pop2()?;
+        context.push(value(lhs.as_integer() + rhs.as_integer()));
+        Ok(())
+    }
+
+    fn fail_after_partial_stack_update(
+        context: &mut PrimitiveContext<'_>,
+    ) -> Result<(), PrimitiveError> {
+        context.pop()?;
+        context.push(value(99));
+        Err(PrimitiveError::Failed)
     }
 
     #[test]
@@ -301,7 +466,18 @@ mod tests {
         assert_eq!(unit.instructions().get(address(0)), Ok(&Instruction::Halt));
         assert_eq!(unit.source_span(address(0)), Some(span(view, id, 0, 0)));
 
-        let result = run_unit(&unit).expect("halt-only unit should run");
+        let words = PublishedWords::new();
+        let bindings = Bindings::new();
+        let primitives = PrimitiveRegistry::new();
+        let result = run_unit(
+            &unit,
+            SourceExecutionContext::new(
+                &bindings,
+                PublishedWordLookup::new(&words),
+                primitives.lookup(),
+            ),
+        )
+        .expect("halt-only unit should run");
         assert_eq!(result.outcome(), RunOutcome::Halted);
         assert_eq!(result.data_stack(), []);
         assert_eq!(result.instruction_count(), 1);
@@ -375,9 +551,19 @@ mod tests {
     fn each_run_uses_fresh_vm_state() {
         let (mut sources, first) = source("1 2");
         let second = sources.register("");
+        let words = PublishedWords::new();
+        let bindings = Bindings::new();
+        let primitives = PrimitiveRegistry::new();
+        let context = SourceExecutionContext::new(
+            &bindings,
+            PublishedWordLookup::new(&words),
+            primitives.lookup(),
+        );
 
-        let first_result = run_source(sources.view(), first).expect("first source should run");
-        let second_result = run_source(sources.view(), second).expect("second source should run");
+        let first_result =
+            run_source(sources.view(), first, context).expect("first source should run");
+        let second_result =
+            run_source(sources.view(), second, context).expect("second source should run");
 
         assert_eq!(first_result.data_stack(), [value(1), value(2)]);
         assert_eq!(second_result.data_stack(), []);
@@ -408,8 +594,8 @@ mod tests {
             name_error,
             SourceProcessorError::Compile(CompileError {
                 span: span(sources.view(), id, 0, 3),
-                kind: CompileErrorKind::UnsupportedToken {
-                    kind: TokenKind::Name
+                kind: CompileErrorKind::WordResolution {
+                    source: WordResolutionError::UndefinedName
                 },
             })
         );
@@ -444,15 +630,32 @@ mod tests {
     fn invalid_source_id_is_reported_at_source_boundary() {
         let (sources, valid) = source("1");
         let invalid = valid.test_next_slot();
+        let words = PublishedWords::new();
+        let bindings = Bindings::new();
+        let primitives = PrimitiveRegistry::new();
 
         assert_eq!(
-            compile_source(sources.view(), invalid).expect_err("invalid source should fail"),
+            compile_source(
+                sources.view(),
+                invalid,
+                SourceCompileContext::new(&bindings)
+            )
+            .expect_err("invalid source should fail"),
             SourceProcessorError::Lex(LexError::Source(SourceError::InvalidSourceId {
                 id: invalid
             }))
         );
         assert_eq!(
-            run_source(sources.view(), invalid).expect_err("invalid source should fail"),
+            run_source(
+                sources.view(),
+                invalid,
+                SourceExecutionContext::new(
+                    &bindings,
+                    PublishedWordLookup::new(&words),
+                    primitives.lookup()
+                )
+            )
+            .expect_err("invalid source should fail"),
             SourceProcessorError::Lex(LexError::Source(SourceError::InvalidSourceId {
                 id: invalid
             }))
@@ -482,16 +685,249 @@ mod tests {
     }
 
     #[test]
+    fn names_compile_to_call_in_source_order_with_source_spans() {
+        let mut words = PublishedWords::new();
+        let mut bindings = Bindings::new();
+        let mut shared_code = InstructionSequence::new();
+        let first = publish_initial(&mut words, &mut bindings, "ALPHA", completed_primitive(1));
+        let second = publish_initial(
+            &mut words,
+            &mut bindings,
+            "BETA?",
+            completed_compiled(&mut shared_code, 9),
+        );
+
+        let (sources, id, unit) = compile_with_bindings("alpha 12 beta?", &bindings);
+        let view = sources.view();
+
+        assert_eq!(unit.entry(), address(0));
+        assert_eq!(unit.len(), 4);
+        assert_eq!(
+            unit.instructions().get(address(0)),
+            Ok(&Instruction::Call(first))
+        );
+        assert_eq!(
+            unit.instructions().get(address(1)),
+            Ok(&Instruction::Push(value(12)))
+        );
+        assert_eq!(
+            unit.instructions().get(address(2)),
+            Ok(&Instruction::Call(second))
+        );
+        assert_eq!(unit.instructions().get(address(3)), Ok(&Instruction::Halt));
+        assert_eq!(unit.source_span(address(0)), Some(span(view, id, 0, 5)));
+        assert_eq!(unit.source_span(address(1)), Some(span(view, id, 6, 8)));
+        assert_eq!(unit.source_span(address(2)), Some(span(view, id, 9, 14)));
+    }
+
+    #[test]
+    fn case_variants_resolve_to_same_word_id_during_compile() {
+        let mut words = PublishedWords::new();
+        let mut bindings = Bindings::new();
+        let id = publish_initial(&mut words, &mut bindings, "ready?", completed_primitive(2));
+
+        let (_sources, _source_id, unit) = compile_with_bindings("ready? Ready? READY?", &bindings);
+
+        assert_eq!(
+            unit.instructions().get(address(0)),
+            Ok(&Instruction::Call(id))
+        );
+        assert_eq!(
+            unit.instructions().get(address(1)),
+            Ok(&Instruction::Call(id))
+        );
+        assert_eq!(
+            unit.instructions().get(address(2)),
+            Ok(&Instruction::Call(id))
+        );
+    }
+
+    #[test]
+    fn primitive_and_compiled_words_use_same_resolve_and_emit_path() {
+        let mut words = PublishedWords::new();
+        let mut bindings = Bindings::new();
+        let mut shared_code = InstructionSequence::new();
+        let primitive = publish_initial(&mut words, &mut bindings, "PRIM", completed_primitive(3));
+        let compiled = publish_initial(
+            &mut words,
+            &mut bindings,
+            "USER_WORD",
+            completed_compiled(&mut shared_code, 10),
+        );
+
+        let (_sources, _source_id, unit) = compile_with_bindings("prim user_word", &bindings);
+
+        assert_eq!(
+            unit.instructions().get(address(0)),
+            Ok(&Instruction::Call(primitive))
+        );
+        assert_eq!(
+            unit.instructions().get(address(1)),
+            Ok(&Instruction::Call(compiled))
+        );
+    }
+
+    #[test]
+    fn saved_execution_unit_keeps_old_word_id_after_redefinition() {
+        let mut words = PublishedWords::new();
+        let mut bindings = Bindings::new();
+        let mut shared_code = InstructionSequence::new();
+        let old = publish_initial(&mut words, &mut bindings, "TARGET", completed_primitive(4));
+
+        let (_old_sources, _old_source_id, old_unit) = compile_with_bindings("target", &bindings);
+        let redefinition = redefine_word(
+            &mut words,
+            &mut bindings,
+            &name("TARGET"),
+            completed_compiled(&mut shared_code, 11),
+        )
+        .expect("existing word should redefine");
+        let (_new_sources, _new_source_id, new_unit) = compile_with_bindings("target", &bindings);
+
+        assert_eq!(redefinition.previous(), old);
+        assert_ne!(redefinition.previous(), redefinition.current());
+        assert_eq!(
+            old_unit.instructions().get(address(0)),
+            Ok(&Instruction::Call(redefinition.previous()))
+        );
+        assert_eq!(
+            new_unit.instructions().get(address(0)),
+            Ok(&Instruction::Call(redefinition.current()))
+        );
+        assert_eq!(
+            old_unit.instructions().get(address(0)),
+            Ok(&Instruction::Call(old))
+        );
+    }
+
+    #[test]
+    fn undefined_name_is_span_compile_error_without_publication_mutation() {
+        let mut words = PublishedWords::new();
+        let mut bindings = Bindings::new();
+        let mut primitives = PrimitiveRegistry::new();
+        let id = publish_initial(&mut words, &mut bindings, "KNOWN", completed_primitive(5));
+        primitives.register(push_7);
+        let (sources, source_id) = source("known missing");
+
+        let error = compile_source(
+            sources.view(),
+            source_id,
+            SourceCompileContext::new(&bindings),
+        )
+        .expect_err("undefined name should fail");
+
+        assert_eq!(
+            error,
+            SourceProcessorError::Compile(CompileError {
+                span: span(sources.view(), source_id, 6, 13),
+                kind: CompileErrorKind::WordResolution {
+                    source: WordResolutionError::UndefinedName
+                },
+            })
+        );
+        assert_eq!(words.len(), 1);
+        assert_eq!(bindings.len(), 1);
+        assert_eq!(bindings.get(&name("KNOWN")), Some(&Binding::Word(id)));
+        assert_eq!(primitives.len(), 1);
+    }
+
+    #[test]
+    fn primitive_word_call_runs_from_temporary_execution_unit() {
+        let mut words = PublishedWords::new();
+        let mut bindings = Bindings::new();
+        let mut primitives = PrimitiveRegistry::new();
+        let primitive = primitives.register(push_7);
+        register_primitive(&mut words, &mut bindings, name("PUSH7"), primitive)
+            .expect("primitive should register");
+        let (sources, source_id) = source("push7");
+
+        let result = run_source(
+            sources.view(),
+            source_id,
+            SourceExecutionContext::new(
+                &bindings,
+                PublishedWordLookup::new(&words),
+                primitives.lookup(),
+            ),
+        )
+        .expect("primitive call should run");
+
+        assert_eq!(result.outcome(), RunOutcome::Halted);
+        assert_eq!(result.data_stack(), [value(7)]);
+        assert_eq!(result.instruction_count(), 2);
+    }
+
+    #[test]
+    fn integer_literals_and_primitive_calls_run_in_source_order() {
+        let mut words = PublishedWords::new();
+        let mut bindings = Bindings::new();
+        let mut primitives = PrimitiveRegistry::new();
+        let primitive = primitives.register(add_top_two);
+        register_primitive(&mut words, &mut bindings, name("ADD"), primitive)
+            .expect("primitive should register");
+        let (sources, source_id) = source("2 5 add");
+
+        let result = run_source(
+            sources.view(),
+            source_id,
+            SourceExecutionContext::new(
+                &bindings,
+                PublishedWordLookup::new(&words),
+                primitives.lookup(),
+            ),
+        )
+        .expect("mixed source should run");
+
+        assert_eq!(result.outcome(), RunOutcome::Halted);
+        assert_eq!(result.data_stack(), [value(7)]);
+    }
+
+    #[test]
+    fn primitive_failure_reports_call_address_through_vm_boundary() {
+        let mut words = PublishedWords::new();
+        let mut bindings = Bindings::new();
+        let mut primitives = PrimitiveRegistry::new();
+        let primitive = primitives.register(fail_after_partial_stack_update);
+        register_primitive(&mut words, &mut bindings, name("FAIL"), primitive)
+            .expect("primitive should register");
+        let (sources, source_id) = source("1 fail");
+
+        let error = run_source(
+            sources.view(),
+            source_id,
+            SourceExecutionContext::new(
+                &bindings,
+                PublishedWordLookup::new(&words),
+                primitives.lookup(),
+            ),
+        )
+        .expect_err("primitive failure should fail source run");
+        let SourceProcessorError::Vm(error) = error else {
+            panic!("expected VM error");
+        };
+
+        assert_eq!(error.address(), address(1));
+        match error.kind() {
+            crate::vm::VmErrorKind::PrimitiveFailed {
+                primitive: actual, ..
+            } => assert_eq!(actual, primitive),
+            other => panic!("unexpected VM error kind: {other:?}"),
+        }
+    }
+
+    #[test]
     fn compile_failure_does_not_return_partial_execution_unit() {
         let (sources, id) = source("1 RUN 2");
-        let error = compile_source(sources.view(), id).expect_err("source should fail");
+        let bindings = Bindings::new();
+        let error = compile_source(sources.view(), id, SourceCompileContext::new(&bindings))
+            .expect_err("source should fail");
 
         assert_eq!(
             error,
             SourceProcessorError::Compile(CompileError {
                 span: span(sources.view(), id, 2, 5),
-                kind: CompileErrorKind::UnsupportedToken {
-                    kind: TokenKind::Name
+                kind: CompileErrorKind::WordResolution {
+                    source: WordResolutionError::UndefinedName
                 },
             })
         );
