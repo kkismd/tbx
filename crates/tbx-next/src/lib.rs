@@ -62,6 +62,11 @@ mod word_resolution;
 #[allow(dead_code)]
 mod source;
 
+// ADR #1412 keeps non-incremental lexical analysis as a crate-internal source
+// processing boundary that emits token categories and source spans only.
+#[allow(dead_code)]
+mod lexer;
+
 pub const STATUS_MESSAGE: &str =
     "TBX Next is under development; language features are not implemented yet.";
 
