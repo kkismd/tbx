@@ -35,6 +35,14 @@ impl SourceId {
     const fn test_invalid(owner: SourceOwnerId, slot: usize) -> Self {
         Self { owner, slot }
     }
+
+    #[cfg(test)]
+    pub(crate) const fn test_next_slot(self) -> Self {
+        Self {
+            owner: self.owner,
+            slot: self.slot + 1,
+        }
+    }
 }
 
 /// Validated byte span within one registered source text.
