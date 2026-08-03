@@ -1,17 +1,39 @@
+use std::sync::atomic::{AtomicUsize, Ordering};
+
+static NEXT_SOURCE_OWNER_ID: AtomicUsize = AtomicUsize::new(1);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+struct SourceOwnerId {
+    id: usize,
+}
+
+impl SourceOwnerId {
+    fn next() -> Self {
+        let id = NEXT_SOURCE_OWNER_ID
+            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |next| {
+                next.checked_add(1)
+            })
+            .expect("source owner id space exhausted");
+
+        Self { id }
+    }
+}
+
 /// Crate-internal identifier for one registered, complete source text.
 ///
-/// ADR #1411 makes source identity local to source processing. The backing slot
-/// is deliberately private so future storage layout changes cannot become a
-/// public or serialized contract.
+/// ADR #1411 makes source identity local to source processing. The backing
+/// owner and slot are deliberately private so future storage layout changes
+/// cannot become a public or serialized contract.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) struct SourceId {
+    owner: SourceOwnerId,
     slot: usize,
 }
 
 impl SourceId {
     #[cfg(test)]
-    const fn test_invalid(slot: usize) -> Self {
-        Self { slot }
+    const fn test_invalid(owner: SourceOwnerId, slot: usize) -> Self {
+        Self { owner, slot }
     }
 }
 
@@ -68,18 +90,23 @@ pub(crate) enum SourceError {
 ///
 /// This boundary owns only source-processing input text. It must not be merged
 /// into runtime values, VM state, bindings, or executable word registries.
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub(crate) struct SourceTexts {
+    owner: SourceOwnerId,
     sources: Vec<Box<str>>,
 }
 
 impl SourceTexts {
     pub(crate) fn new() -> Self {
-        Self::default()
+        Self {
+            owner: SourceOwnerId::next(),
+            sources: Vec::new(),
+        }
     }
 
     pub(crate) fn register(&mut self, text: impl Into<Box<str>>) -> SourceId {
         let id = SourceId {
+            owner: self.owner,
             slot: self.sources.len(),
         };
         self.sources.push(text.into());
@@ -88,6 +115,7 @@ impl SourceTexts {
 
     pub(crate) fn view(&self) -> SourceView<'_> {
         SourceView {
+            owner: self.owner,
             sources: &self.sources,
         }
     }
@@ -104,11 +132,16 @@ impl SourceTexts {
 /// Read-only lookup and validation boundary over registered source texts.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct SourceView<'a> {
+    owner: SourceOwnerId,
     sources: &'a [Box<str>],
 }
 
 impl<'a> SourceView<'a> {
     pub(crate) fn source(self, id: SourceId) -> Result<&'a str, SourceError> {
+        if id.owner != self.owner {
+            return Err(SourceError::InvalidSourceId { id });
+        }
+
         self.sources
             .get(id.slot)
             .map(|source| source.as_ref())
@@ -332,7 +365,7 @@ mod tests {
     #[test]
     fn invalid_source_id_does_not_fallback_to_another_source() {
         let (sources, valid) = register("ABC");
-        let invalid = SourceId::test_invalid(valid.slot + 1);
+        let invalid = SourceId::test_invalid(valid.owner, valid.slot + 1);
 
         assert_eq!(
             sources.view().source(invalid),
@@ -341,6 +374,28 @@ mod tests {
         assert_eq!(
             sources.view().span(invalid, 0, 0),
             Err(SourceError::InvalidSourceId { id: invalid })
+        );
+    }
+
+    #[test]
+    fn source_ids_from_different_owners_do_not_collide_at_the_same_slot() {
+        let mut first_owner = SourceTexts::new();
+        let first_id = first_owner.register("ABC");
+        let first_span = span(first_owner.view(), first_id, 0, 1);
+
+        let mut second_owner = SourceTexts::new();
+        let second_id = second_owner.register("XYZ");
+
+        assert_eq!(first_id.slot, second_id.slot);
+        assert_ne!(first_id, second_id);
+        assert_eq!(first_owner.view().slice(first_span), Ok("A"));
+        assert_eq!(
+            second_owner.view().source(first_id),
+            Err(SourceError::InvalidSourceId { id: first_id })
+        );
+        assert_eq!(
+            second_owner.view().slice(first_span),
+            Err(SourceError::InvalidSourceId { id: first_id })
         );
     }
 
