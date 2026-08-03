@@ -67,6 +67,11 @@ mod source;
 #[allow(dead_code)]
 mod lexer;
 
+// ADR #1413 connects complete source processing to temporary VM execution
+// without adding parser, binding, public word publication, or CLI concerns.
+#[allow(dead_code)]
+mod source_processor;
+
 pub const STATUS_MESSAGE: &str =
     "TBX Next is under development; language features are not implemented yet.";
 
