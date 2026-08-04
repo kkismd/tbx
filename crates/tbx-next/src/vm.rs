@@ -1,5 +1,5 @@
 use crate::instruction::{
-    Instruction, InstructionAddress, InstructionAddressError, InstructionView,
+    CodeLocation, Instruction, InstructionAddress, InstructionAddressError, InstructionView,
 };
 use crate::primitive::{PrimitiveContext, PrimitiveError, PrimitiveLookup, PrimitiveLookupError};
 use crate::stack::{DataStack, ReturnFrame, ReturnStack, StackError};
@@ -15,7 +15,7 @@ use crate::word_lookup::PublishedWordLookup;
 /// fetch and validate instructions without gaining append or mutation access.
 #[derive(Debug)]
 pub(crate) struct Vm {
-    instruction_pointer: InstructionAddress,
+    instruction_pointer: CodeLocation,
     data_stack: DataStack,
     return_stack: ReturnStack,
     halted: bool,
@@ -34,7 +34,7 @@ pub(crate) enum RunOutcome {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct VmError {
-    address: InstructionAddress,
+    location: CodeLocation,
     kind: VmErrorKind,
 }
 
@@ -156,10 +156,18 @@ impl Vm {
         instructions: InstructionView<'_>,
         entry: InstructionAddress,
     ) -> Result<Self, VmError> {
+        let location = instructions.location(entry);
+        Self::new_at_location(instructions, location)
+    }
+
+    pub(crate) fn new_at_location(
+        instructions: InstructionView<'_>,
+        entry: CodeLocation,
+    ) -> Result<Self, VmError> {
         instructions
-            .validate_address(entry)
+            .validate_location(entry)
             .map_err(|source| VmError {
-                address: entry,
+                location: entry,
                 kind: VmErrorKind::InstructionFetch { source },
             })?;
 
@@ -179,21 +187,23 @@ impl Vm {
             return Ok(StepOutcome::Halted);
         }
 
-        let address = self.instruction_pointer;
+        let location = self.instruction_pointer;
         let instructions = execution.instructions();
-        let instruction = *instructions.get(address).map_err(|source| VmError {
-            address,
-            kind: VmErrorKind::InstructionFetch { source },
-        })?;
+        let instruction = *instructions
+            .get_location(location)
+            .map_err(|source| VmError {
+                location,
+                kind: VmErrorKind::InstructionFetch { source },
+            })?;
 
         match instruction {
-            Instruction::Push(value) => self.step_push(instructions, address, value),
-            Instruction::Call(id) => self.step_call(execution, address, id),
-            Instruction::Jump(target) => self.step_jump(instructions, address, target),
+            Instruction::Push(value) => self.step_push(instructions, location, value),
+            Instruction::Call(id) => self.step_call(execution, location, id),
+            Instruction::Jump(target) => self.step_jump(instructions, location, target),
             Instruction::JumpIfZero(target) => {
-                self.step_jump_if_zero(instructions, address, target)
+                self.step_jump_if_zero(instructions, location, target)
             }
-            Instruction::Return => self.step_return(instructions, address),
+            Instruction::Return => self.step_return(instructions, location),
             Instruction::Halt => {
                 // Halt commits only the state transition. In halted state, the
                 // IP records the Halt instruction that stopped execution; it is
@@ -216,7 +226,7 @@ impl Vm {
         }
     }
 
-    pub(crate) const fn instruction_pointer(&self) -> InstructionAddress {
+    pub(crate) const fn instruction_pointer(&self) -> CodeLocation {
         self.instruction_pointer
     }
 
@@ -248,10 +258,10 @@ impl Vm {
     fn step_push(
         &mut self,
         instructions: InstructionView<'_>,
-        address: InstructionAddress,
+        location: CodeLocation,
         value: Value,
     ) -> Result<StepOutcome, VmError> {
-        let next = self.valid_next_address(instructions, address)?;
+        let next = self.valid_next_location(instructions, location)?;
 
         self.data_stack.push(value);
         self.instruction_pointer = next;
@@ -262,10 +272,10 @@ impl Vm {
     fn step_jump(
         &mut self,
         instructions: InstructionView<'_>,
-        address: InstructionAddress,
+        location: CodeLocation,
         target: InstructionAddress,
     ) -> Result<StepOutcome, VmError> {
-        let target = self.valid_jump_target(instructions, address, target)?;
+        let target = self.valid_jump_target(instructions, location, target)?;
 
         self.instruction_pointer = target;
 
@@ -275,13 +285,13 @@ impl Vm {
     fn step_call<'a, E: VmExecutionView<'a>>(
         &mut self,
         execution: E,
-        address: InstructionAddress,
+        location: CodeLocation,
         id: WordId,
     ) -> Result<StepOutcome, VmError> {
         let instructions = execution.instructions();
-        let next = self.valid_next_address(instructions, address)?;
+        let next = self.valid_next_location(instructions, location)?;
         let definition = execution.lookup_word(id).map_err(|source| VmError {
-            address,
+            location,
             kind: VmErrorKind::InvalidWordId { source },
         })?;
 
@@ -290,7 +300,7 @@ impl Vm {
                 let handler = execution
                     .lookup_handler(primitive)
                     .map_err(|source| VmError {
-                        address,
+                        location,
                         kind: VmErrorKind::InvalidPrimitiveId { source },
                     })?;
 
@@ -308,7 +318,7 @@ impl Vm {
                         // relying on every handler to be internally atomic.
                         self.data_stack.restore(checkpoint);
                         Err(VmError {
-                            address,
+                            location,
                             kind: VmErrorKind::PrimitiveFailed { primitive, source },
                         })
                     }
@@ -318,9 +328,10 @@ impl Vm {
                 let entry = instructions
                     .validate_address(entry)
                     .map_err(|source| VmError {
-                        address,
+                        location,
                         kind: VmErrorKind::InvalidCompiledEntry { source },
-                    })?;
+                    })
+                    .map(|address| instructions.location(address))?;
 
                 self.return_stack.push(ReturnFrame::new(next));
                 self.instruction_pointer = entry;
@@ -333,11 +344,11 @@ impl Vm {
     fn step_jump_if_zero(
         &mut self,
         instructions: InstructionView<'_>,
-        address: InstructionAddress,
+        location: CodeLocation,
         target: InstructionAddress,
     ) -> Result<StepOutcome, VmError> {
         self.data_stack.require_depth(1).map_err(|source| VmError {
-            address,
+            location,
             kind: VmErrorKind::DataStackUnderflow { source },
         })?;
 
@@ -346,9 +357,9 @@ impl Vm {
             .peek()
             .expect("depth was checked before reading JumpIfZero condition");
         let next = if condition.is_zero() {
-            self.valid_jump_target(instructions, address, target)?
+            self.valid_jump_target(instructions, location, target)?
         } else {
-            self.valid_next_address(instructions, address)?
+            self.valid_next_location(instructions, location)?
         };
 
         self.data_stack
@@ -362,13 +373,13 @@ impl Vm {
     fn step_return(
         &mut self,
         instructions: InstructionView<'_>,
-        address: InstructionAddress,
+        location: CodeLocation,
     ) -> Result<StepOutcome, VmError> {
         let frame = self.return_stack.peek().map_err(|source| VmError {
-            address,
+            location,
             kind: VmErrorKind::ReturnStackUnderflow { source },
         })?;
-        let target = self.valid_return_target(instructions, address, frame.return_address())?;
+        let target = self.valid_return_target(instructions, location, frame.return_location())?;
 
         self.return_stack
             .pop()
@@ -378,15 +389,17 @@ impl Vm {
         Ok(StepOutcome::Continued)
     }
 
-    fn valid_next_address(
+    fn valid_next_location(
         &self,
         instructions: InstructionView<'_>,
-        address: InstructionAddress,
-    ) -> Result<InstructionAddress, VmError> {
+        location: CodeLocation,
+    ) -> Result<CodeLocation, VmError> {
         instructions
-            .checked_next_address(address)
+            .validate_location(location)
+            .and_then(|address| instructions.checked_next_address(address))
+            .map(|address| instructions.location(address))
             .map_err(|source| VmError {
-                address,
+                location,
                 kind: VmErrorKind::UnexpectedEndOfCode { source },
             })
     }
@@ -394,13 +407,15 @@ impl Vm {
     fn valid_jump_target(
         &self,
         instructions: InstructionView<'_>,
-        address: InstructionAddress,
+        location: CodeLocation,
         target: InstructionAddress,
-    ) -> Result<InstructionAddress, VmError> {
+    ) -> Result<CodeLocation, VmError> {
+        let target = instructions.location(target);
         instructions
-            .validate_address(target)
+            .validate_location(target)
+            .map(|address| instructions.location(address))
             .map_err(|source| VmError {
-                address,
+                location,
                 kind: VmErrorKind::InvalidJumpTarget { source },
             })
     }
@@ -408,21 +423,26 @@ impl Vm {
     fn valid_return_target(
         &self,
         instructions: InstructionView<'_>,
-        address: InstructionAddress,
-        target: InstructionAddress,
-    ) -> Result<InstructionAddress, VmError> {
+        location: CodeLocation,
+        target: CodeLocation,
+    ) -> Result<CodeLocation, VmError> {
         instructions
-            .validate_address(target)
+            .validate_location(target)
+            .map(|address| instructions.location(address))
             .map_err(|source| VmError {
-                address,
+                location,
                 kind: VmErrorKind::InvalidReturnTarget { source },
             })
     }
 }
 
 impl VmError {
+    pub(crate) const fn location(self) -> CodeLocation {
+        self.location
+    }
+
     pub(crate) const fn address(self) -> InstructionAddress {
-        self.address
+        self.location.address()
     }
 
     pub(crate) const fn kind(self) -> VmErrorKind {
@@ -450,6 +470,10 @@ mod tests {
         Vm::new(code.view(), entry).expect("test entry should be valid")
     }
 
+    fn location(code: &InstructionSequence, address: InstructionAddress) -> CodeLocation {
+        code.view().location(address)
+    }
+
     fn execution<'a>(
         code: &'a InstructionSequence,
         words: &'a PublishedWords,
@@ -464,7 +488,7 @@ mod tests {
 
     #[derive(Debug, Clone, PartialEq, Eq)]
     struct VmSnapshot {
-        instruction_pointer: InstructionAddress,
+        instruction_pointer: CodeLocation,
         data_stack: Vec<Value>,
         return_stack: Vec<ReturnFrame>,
         halted: bool,
@@ -484,7 +508,7 @@ mod tests {
     }
 
     fn expected_state(
-        instruction_pointer: InstructionAddress,
+        instruction_pointer: CodeLocation,
         data_stack: Vec<Value>,
         return_stack: Vec<ReturnFrame>,
         halted: bool,
@@ -497,14 +521,14 @@ mod tests {
         }
     }
 
-    fn assert_clean_control(vm: &Vm, expected_ip: InstructionAddress, halted: bool) {
+    fn assert_clean_control(vm: &Vm, expected_ip: CodeLocation, halted: bool) {
         assert_eq!(vm.instruction_pointer(), expected_ip);
         assert_eq!(vm.is_halted(), halted);
         assert_eq!(vm.return_stack_depth(), 0);
     }
 
-    fn return_frame(return_address: InstructionAddress) -> ReturnFrame {
-        ReturnFrame::new(return_address)
+    fn return_frame(code: &InstructionSequence, return_address: InstructionAddress) -> ReturnFrame {
+        ReturnFrame::new(location(code, return_address))
     }
 
     fn push_42(context: &mut PrimitiveContext<'_>) -> Result<(), PrimitiveError> {
@@ -534,12 +558,46 @@ mod tests {
         assert_eq!(
             Vm::new(code.view(), entry).expect_err("empty code should reject entry"),
             VmError {
-                address: entry,
+                location: location(&code, entry),
                 kind: VmErrorKind::InstructionFetch {
                     source: InstructionAddressError::EndAddress { address: entry }
                 }
             }
         );
+    }
+
+    #[test]
+    fn new_at_location_rejects_cross_owner_entry_without_index_fallback() {
+        let mut source = InstructionSequence::new();
+        let source_entry = source.append(Instruction::Halt);
+        let mut target = InstructionSequence::new();
+        let target_entry = target.append(Instruction::Push(value(99)));
+        let entry = location(&source, source_entry);
+
+        assert_eq!(source_entry.as_index(), target_entry.as_index());
+        assert_eq!(
+            Vm::new_at_location(target.view(), entry).expect_err("entry owner should mismatch"),
+            VmError {
+                location: entry,
+                kind: VmErrorKind::InstructionFetch {
+                    source: InstructionAddressError::CodeSpaceMismatch {
+                        expected: target.view().code_space(),
+                        actual: source.view().code_space(),
+                        address: source_entry,
+                    }
+                }
+            }
+        );
+    }
+
+    #[test]
+    fn new_records_same_owner_entry_location() {
+        let mut code = InstructionSequence::new();
+        let entry = code.append(Instruction::Halt);
+
+        let vm = new_vm(&code, entry);
+
+        assert_clean_control(&vm, location(&code, entry), false);
     }
 
     #[test]
@@ -551,7 +609,7 @@ mod tests {
 
         assert_eq!(vm.step(code.view()), Ok(StepOutcome::Continued));
 
-        assert_clean_control(&vm, next, false);
+        assert_clean_control(&vm, location(&code, next), false);
         assert_eq!(vm.data_stack_depth(), 1);
         assert_eq!(vm.peek_data(), Ok(value(10)));
     }
@@ -585,7 +643,7 @@ mod tests {
         assert_eq!(
             result,
             Err(VmError {
-                address: entry,
+                location: location(&code, entry),
                 kind: VmErrorKind::UnexpectedEndOfCode {
                     source: InstructionAddressError::EndAddress {
                         address: address(1)
@@ -593,7 +651,7 @@ mod tests {
                 }
             })
         );
-        assert_clean_control(&vm, entry, false);
+        assert_clean_control(&vm, location(&code, entry), false);
         assert_eq!(vm.data_stack_depth(), 0);
     }
 
@@ -609,13 +667,17 @@ mod tests {
         assert_eq!(
             result,
             Err(VmError {
-                address: entry,
+                location: location(&code, entry),
                 kind: VmErrorKind::InstructionFetch {
-                    source: InstructionAddressError::EndAddress { address: entry }
+                    source: InstructionAddressError::CodeSpaceMismatch {
+                        expected: other.view().code_space(),
+                        actual: code.view().code_space(),
+                        address: entry
+                    }
                 }
             })
         );
-        assert_clean_control(&vm, entry, false);
+        assert_clean_control(&vm, location(&code, entry), false);
         assert_eq!(vm.data_stack_depth(), 0);
     }
 
@@ -628,7 +690,7 @@ mod tests {
 
         assert_eq!(vm.step(code.view()), Ok(StepOutcome::Continued));
 
-        assert_clean_control(&vm, entry, false);
+        assert_clean_control(&vm, location(&code, entry), false);
     }
 
     #[test]
@@ -640,7 +702,7 @@ mod tests {
 
         assert_eq!(vm.step(code.view()), Ok(StepOutcome::Continued));
 
-        assert_eq!(vm.instruction_pointer(), target);
+        assert_eq!(vm.instruction_pointer(), location(&code, target));
     }
 
     #[test]
@@ -655,7 +717,7 @@ mod tests {
         assert_eq!(
             result,
             Err(VmError {
-                address: entry,
+                location: location(&code, entry),
                 kind: VmErrorKind::InvalidJumpTarget {
                     source: InstructionAddressError::InvalidAddress {
                         address: address(10)
@@ -663,7 +725,7 @@ mod tests {
                 }
             })
         );
-        assert_clean_control(&vm, entry, false);
+        assert_clean_control(&vm, location(&code, entry), false);
         assert_eq!(vm.data_stack_depth(), 0);
     }
 
@@ -679,13 +741,13 @@ mod tests {
         assert_eq!(
             result,
             Err(VmError {
-                address: entry,
+                location: location(&code, entry),
                 kind: VmErrorKind::InvalidJumpTarget {
                     source: InstructionAddressError::EndAddress { address: end }
                 }
             })
         );
-        assert_clean_control(&vm, entry, false);
+        assert_clean_control(&vm, location(&code, entry), false);
     }
 
     #[test]
@@ -700,7 +762,7 @@ mod tests {
         assert_eq!(vm.step(code.view()), Ok(StepOutcome::Continued));
         assert_eq!(vm.step(code.view()), Ok(StepOutcome::Continued));
 
-        assert_clean_control(&vm, target, false);
+        assert_clean_control(&vm, location(&code, target), false);
         assert_eq!(vm.data_stack_depth(), 0);
         assert_eq!(branch.as_index(), 1);
     }
@@ -717,7 +779,7 @@ mod tests {
         assert_eq!(vm.step(code.view()), Ok(StepOutcome::Continued));
         assert_eq!(vm.step(code.view()), Ok(StepOutcome::Continued));
 
-        assert_clean_control(&vm, next, false);
+        assert_clean_control(&vm, location(&code, next), false);
         assert_eq!(vm.data_stack_depth(), 0);
         assert_eq!(branch.as_index(), 1);
     }
@@ -734,13 +796,13 @@ mod tests {
         assert_eq!(
             result,
             Err(VmError {
-                address: entry,
+                location: location(&code, entry),
                 kind: VmErrorKind::DataStackUnderflow {
                     source: StackError::DataStackUnderflow
                 }
             })
         );
-        assert_clean_control(&vm, entry, false);
+        assert_clean_control(&vm, location(&code, entry), false);
         assert_eq!(vm.data_stack_depth(), 0);
     }
 
@@ -758,7 +820,7 @@ mod tests {
         assert_eq!(
             result,
             Err(VmError {
-                address: branch,
+                location: location(&code, branch),
                 kind: VmErrorKind::InvalidJumpTarget {
                     source: InstructionAddressError::InvalidAddress {
                         address: address(99)
@@ -766,7 +828,7 @@ mod tests {
                 }
             })
         );
-        assert_clean_control(&vm, branch, false);
+        assert_clean_control(&vm, location(&code, branch), false);
         assert_eq!(vm.data_stack_depth(), 1);
         assert_eq!(vm.peek_data(), Ok(value(0)));
     }
@@ -784,7 +846,7 @@ mod tests {
         assert_eq!(
             result,
             Err(VmError {
-                address: branch,
+                location: location(&code, branch),
                 kind: VmErrorKind::UnexpectedEndOfCode {
                     source: InstructionAddressError::EndAddress {
                         address: address(2)
@@ -792,7 +854,7 @@ mod tests {
                 }
             })
         );
-        assert_clean_control(&vm, branch, false);
+        assert_clean_control(&vm, location(&code, branch), false);
         assert_eq!(vm.data_stack_depth(), 1);
         assert_eq!(vm.peek_data(), Ok(value(1)));
     }
@@ -804,11 +866,11 @@ mod tests {
         let entry = code.append(Instruction::Return);
         let mut vm = new_vm(&code, entry);
         vm.data_stack.push(value(11));
-        vm.push_return_frame(return_frame(target));
+        vm.push_return_frame(return_frame(&code, target));
 
         assert_eq!(vm.step(code.view()), Ok(StepOutcome::Continued));
 
-        assert_clean_control(&vm, target, false);
+        assert_clean_control(&vm, location(&code, target), false);
         assert_eq!(vm.data_stack_depth(), 1);
         assert_eq!(vm.peek_data(), Ok(value(11)));
     }
@@ -821,19 +883,19 @@ mod tests {
         let entry = code.append(Instruction::Return);
         let mut vm = new_vm(&code, entry);
 
-        vm.push_return_frame(return_frame(first_target));
-        vm.push_return_frame(return_frame(second_target));
+        vm.push_return_frame(return_frame(&code, first_target));
+        vm.push_return_frame(return_frame(&code, second_target));
 
         assert_eq!(vm.step(code.view()), Ok(StepOutcome::Continued));
 
-        assert_eq!(vm.instruction_pointer(), second_target);
+        assert_eq!(vm.instruction_pointer(), location(&code, second_target));
         assert!(!vm.is_halted());
         assert_eq!(vm.return_stack_depth(), 1);
 
-        vm.instruction_pointer = entry;
+        vm.instruction_pointer = location(&code, entry);
         assert_eq!(vm.step(code.view()), Ok(StepOutcome::Continued));
 
-        assert_clean_control(&vm, first_target, false);
+        assert_clean_control(&vm, location(&code, first_target), false);
     }
 
     #[test]
@@ -847,13 +909,13 @@ mod tests {
         assert_eq!(
             result,
             Err(VmError {
-                address: entry,
+                location: location(&code, entry),
                 kind: VmErrorKind::ReturnStackUnderflow {
                     source: StackError::ReturnStackUnderflow
                 }
             })
         );
-        assert_clean_control(&vm, entry, false);
+        assert_clean_control(&vm, location(&code, entry), false);
         assert_eq!(vm.data_stack_depth(), 0);
     }
 
@@ -864,20 +926,20 @@ mod tests {
         let end = address(code.len());
         let mut vm = new_vm(&code, entry);
         vm.data_stack.push(value(3));
-        vm.push_return_frame(return_frame(end));
+        vm.push_return_frame(return_frame(&code, end));
 
         let result = vm.step(code.view());
 
         assert_eq!(
             result,
             Err(VmError {
-                address: entry,
+                location: location(&code, entry),
                 kind: VmErrorKind::InvalidReturnTarget {
                     source: InstructionAddressError::EndAddress { address: end }
                 }
             })
         );
-        assert_eq!(vm.instruction_pointer(), entry);
+        assert_eq!(vm.instruction_pointer(), location(&code, entry));
         assert!(!vm.is_halted());
         assert_eq!(vm.return_stack_depth(), 1);
         assert_eq!(vm.data_stack_depth(), 1);
@@ -890,20 +952,20 @@ mod tests {
         let entry = code.append(Instruction::Return);
         let invalid = address(usize::MAX);
         let mut vm = new_vm(&code, entry);
-        vm.push_return_frame(return_frame(invalid));
+        vm.push_return_frame(return_frame(&code, invalid));
 
         let result = vm.step(code.view());
 
         assert_eq!(
             result,
             Err(VmError {
-                address: entry,
+                location: location(&code, entry),
                 kind: VmErrorKind::InvalidReturnTarget {
                     source: InstructionAddressError::InvalidAddress { address: invalid }
                 }
             })
         );
-        assert_eq!(vm.instruction_pointer(), entry);
+        assert_eq!(vm.instruction_pointer(), location(&code, entry));
         assert!(!vm.is_halted());
         assert_eq!(vm.return_stack_depth(), 1);
         assert_eq!(vm.data_stack_depth(), 0);
@@ -912,25 +974,28 @@ mod tests {
     #[test]
     fn return_rejects_target_missing_from_current_instruction_view() {
         let mut full_code = InstructionSequence::new();
-        let entry = full_code.append(Instruction::Return);
         let target = full_code.append(Instruction::Halt);
         let mut shorter_code = InstructionSequence::new();
-        shorter_code.append(Instruction::Return);
-        let mut vm = new_vm(&full_code, entry);
-        vm.push_return_frame(return_frame(target));
+        let entry = shorter_code.append(Instruction::Return);
+        let mut vm = new_vm(&shorter_code, entry);
+        vm.push_return_frame(return_frame(&full_code, target));
 
         let result = vm.step(shorter_code.view());
 
         assert_eq!(
             result,
             Err(VmError {
-                address: entry,
+                location: location(&shorter_code, entry),
                 kind: VmErrorKind::InvalidReturnTarget {
-                    source: InstructionAddressError::EndAddress { address: target }
+                    source: InstructionAddressError::CodeSpaceMismatch {
+                        expected: shorter_code.view().code_space(),
+                        actual: full_code.view().code_space(),
+                        address: target
+                    }
                 }
             })
         );
-        assert_eq!(vm.instruction_pointer(), entry);
+        assert_eq!(vm.instruction_pointer(), location(&shorter_code, entry));
         assert!(!vm.is_halted());
         assert_eq!(vm.return_stack_depth(), 1);
     }
@@ -951,7 +1016,7 @@ mod tests {
             Ok(StepOutcome::Continued)
         );
 
-        assert_eq!(vm.instruction_pointer(), next);
+        assert_eq!(vm.instruction_pointer(), location(&code, next));
         assert!(!vm.is_halted());
         assert_eq!(vm.return_stack_depth(), 0);
         assert_eq!(vm.peek_data(), Ok(value(42)));
@@ -975,14 +1040,14 @@ mod tests {
         assert_eq!(
             result,
             Err(VmError {
-                address: call,
+                location: location(&code, call),
                 kind: VmErrorKind::PrimitiveFailed {
                     primitive,
                     source: PrimitiveError::Failed
                 }
             })
         );
-        assert_eq!(vm.instruction_pointer(), call);
+        assert_eq!(vm.instruction_pointer(), location(&code, call));
         assert!(!vm.is_halted());
         assert_eq!(vm.return_stack_depth(), 0);
         assert_eq!(vm.data_stack_depth(), 1);
@@ -1006,7 +1071,7 @@ mod tests {
         let result = vm.run(execution(&code, &words, &primitives));
 
         let error = VmError {
-            address: failing_call,
+            location: location(&code, failing_call),
             kind: VmErrorKind::PrimitiveFailed {
                 primitive: fail,
                 source: PrimitiveError::Failed,
@@ -1016,7 +1081,12 @@ mod tests {
         assert_eq!(error.address(), failing_call);
         assert_vm_state(
             &vm,
-            expected_state(failing_call, vec![value(42)], Vec::new(), false),
+            expected_state(
+                location(&code, failing_call),
+                vec![value(42)],
+                Vec::new(),
+                false,
+            ),
         );
     }
 
@@ -1036,13 +1106,13 @@ mod tests {
         assert_eq!(
             result,
             Err(VmError {
-                address: entry,
+                location: location(&code, entry),
                 kind: VmErrorKind::InvalidPrimitiveId {
                     source: PrimitiveLookupError::InvalidPrimitiveId { id: primitive }
                 }
             })
         );
-        assert_clean_control(&vm, entry, false);
+        assert_clean_control(&vm, location(&code, entry), false);
         assert_eq!(vm.data_stack_depth(), 0);
     }
 
@@ -1064,13 +1134,13 @@ mod tests {
         assert_eq!(
             result,
             Err(VmError {
-                address: entry,
+                location: location(&code, entry),
                 kind: VmErrorKind::InvalidWordId {
                     source: WordLookupError::InvalidWordId { id: unpublished }
                 }
             })
         );
-        assert_clean_control(&vm, entry, false);
+        assert_clean_control(&vm, location(&code, entry), false);
         assert_eq!(vm.data_stack_depth(), 0);
     }
 
@@ -1089,7 +1159,7 @@ mod tests {
         assert_eq!(
             result,
             Err(VmError {
-                address: entry,
+                location: location(&code, entry),
                 kind: VmErrorKind::UnexpectedEndOfCode {
                     source: InstructionAddressError::EndAddress {
                         address: address(1)
@@ -1097,7 +1167,7 @@ mod tests {
                 }
             })
         );
-        assert_clean_control(&vm, entry, false);
+        assert_clean_control(&vm, location(&code, entry), false);
         assert_eq!(vm.data_stack_depth(), 0);
     }
 
@@ -1118,13 +1188,13 @@ mod tests {
         let execution = execution(&code, &words, &primitives);
 
         assert_eq!(vm.step(execution), Ok(StepOutcome::Continued));
-        assert_eq!(vm.instruction_pointer(), compiled_entry);
+        assert_eq!(vm.instruction_pointer(), location(&code, compiled_entry));
         assert_eq!(vm.return_stack_depth(), 1);
 
         assert_eq!(vm.step(execution), Ok(StepOutcome::Continued));
         assert_eq!(vm.step(execution), Ok(StepOutcome::Continued));
 
-        assert_eq!(vm.instruction_pointer(), after_call);
+        assert_eq!(vm.instruction_pointer(), location(&code, after_call));
         assert_eq!(vm.return_stack_depth(), 0);
         assert_eq!(vm.peek_data(), Ok(value(7)));
     }
@@ -1188,7 +1258,7 @@ mod tests {
         let result = vm.run(execution(&code, &words, &primitives));
 
         let error = VmError {
-            address: failing_branch,
+            location: location(&code, failing_branch),
             kind: VmErrorKind::InvalidJumpTarget {
                 source: InstructionAddressError::InvalidAddress {
                     address: address(99),
@@ -1200,9 +1270,12 @@ mod tests {
         assert_vm_state(
             &vm,
             expected_state(
-                failing_branch,
+                location(&code, failing_branch),
                 vec![value(11), value(0)],
-                vec![return_frame(after_outer), return_frame(after_inner)],
+                vec![
+                    return_frame(&code, after_outer),
+                    return_frame(&code, after_inner),
+                ],
                 false,
             ),
         );
@@ -1230,7 +1303,7 @@ mod tests {
         assert_eq!(
             result,
             Err(VmError {
-                address: call,
+                location: location(&short_code, call),
                 kind: VmErrorKind::InvalidCompiledEntry {
                     source: InstructionAddressError::EndAddress {
                         address: compiled_entry
@@ -1238,7 +1311,7 @@ mod tests {
                 }
             })
         );
-        assert_clean_control(&vm, call, false);
+        assert_clean_control(&vm, location(&short_code, call), false);
         assert_eq!(vm.data_stack_depth(), 0);
         assert_eq!(entry.as_index(), 0);
     }
@@ -1306,7 +1379,7 @@ mod tests {
 
         assert_eq!(vm.step(code.view()), Ok(StepOutcome::Halted));
 
-        assert_clean_control(&vm, entry, true);
+        assert_clean_control(&vm, location(&code, entry), true);
         assert_eq!(vm.data_stack_depth(), 0);
     }
 
@@ -1319,7 +1392,10 @@ mod tests {
 
         assert_eq!(vm.run(code.view()), Ok(RunOutcome::Halted));
 
-        assert_vm_state(&vm, expected_state(halt, vec![value(8)], Vec::new(), true));
+        assert_vm_state(
+            &vm,
+            expected_state(location(&code, halt), vec![value(8)], Vec::new(), true),
+        );
     }
 
     #[test]
@@ -1328,7 +1404,7 @@ mod tests {
         let entry = code.append(Instruction::Halt);
         let mut vm = new_vm(&code, entry);
         vm.data_stack.push(value(3));
-        vm.push_return_frame(return_frame(entry));
+        vm.push_return_frame(return_frame(&code, entry));
 
         assert_eq!(vm.step(code.view()), Ok(StepOutcome::Halted));
         let halted = snapshot(&vm);
@@ -1393,7 +1469,7 @@ mod tests {
         let target = code.append(Instruction::Push(value(8)));
         code.append(Instruction::Halt);
         let mut vm = new_vm(&code, entry);
-        vm.push_return_frame(return_frame(target));
+        vm.push_return_frame(return_frame(&code, target));
 
         assert_eq!(vm.run(code.view()), Ok(RunOutcome::Halted));
 
@@ -1414,13 +1490,13 @@ mod tests {
         assert_eq!(
             result,
             Err(VmError {
-                address: entry,
+                location: location(&code, entry),
                 kind: VmErrorKind::ReturnStackUnderflow {
                     source: StackError::ReturnStackUnderflow
                 }
             })
         );
-        assert_clean_control(&vm, entry, false);
+        assert_clean_control(&vm, location(&code, entry), false);
     }
 
     #[test]
@@ -1430,20 +1506,20 @@ mod tests {
         let bad_return = code.append(Instruction::Return);
         let invalid = address(100);
         let mut vm = new_vm(&code, entry);
-        vm.push_return_frame(return_frame(invalid));
+        vm.push_return_frame(return_frame(&code, invalid));
 
         let result = vm.run(code.view());
 
         assert_eq!(
             result,
             Err(VmError {
-                address: bad_return,
+                location: location(&code, bad_return),
                 kind: VmErrorKind::InvalidReturnTarget {
                     source: InstructionAddressError::InvalidAddress { address: invalid }
                 }
             })
         );
-        assert_eq!(vm.instruction_pointer(), bad_return);
+        assert_eq!(vm.instruction_pointer(), location(&code, bad_return));
         assert!(!vm.is_halted());
         assert_eq!(vm.return_stack_depth(), 1);
         assert_eq!(vm.data_stack_depth(), 1);
@@ -1462,7 +1538,7 @@ mod tests {
         assert_eq!(
             result,
             Err(VmError {
-                address: bad_branch,
+                location: location(&code, bad_branch),
                 kind: VmErrorKind::UnexpectedEndOfCode {
                     source: InstructionAddressError::EndAddress {
                         address: address(2)
@@ -1470,22 +1546,25 @@ mod tests {
                 }
             })
         );
-        assert_clean_control(&vm, bad_branch, false);
+        assert_clean_control(&vm, location(&code, bad_branch), false);
         assert_eq!(vm.data_stack_depth(), 1);
         assert_eq!(vm.peek_data(), Ok(value(5)));
     }
 
     #[test]
     fn vm_error_exposes_failed_instruction_address_and_kind() {
+        let code = InstructionSequence::new();
         let address = address(3);
+        let location = location(&code, address);
         let error = VmError {
-            address,
+            location,
             kind: VmErrorKind::DataStackUnderflow {
                 source: StackError::DataStackUnderflow,
             },
         };
 
         assert_eq!(error.address(), address);
+        assert_eq!(error.location(), location);
         assert_eq!(
             error.kind(),
             VmErrorKind::DataStackUnderflow {

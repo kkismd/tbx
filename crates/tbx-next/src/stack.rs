@@ -1,4 +1,4 @@
-use crate::instruction::InstructionAddress;
+use crate::instruction::CodeLocation;
 use crate::value::Value;
 
 // ADR #1366 keeps the two stacks separate even in the initial host VM:
@@ -87,16 +87,16 @@ impl DataStack {
 /// data-stack operations.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct ReturnFrame {
-    return_address: InstructionAddress,
+    return_location: CodeLocation,
 }
 
 impl ReturnFrame {
-    pub(crate) const fn new(return_address: InstructionAddress) -> Self {
-        Self { return_address }
+    pub(crate) const fn new(return_location: CodeLocation) -> Self {
+        Self { return_location }
     }
 
-    pub(crate) const fn return_address(self) -> InstructionAddress {
-        self.return_address
+    pub(crate) const fn return_location(self) -> CodeLocation {
+        self.return_location
     }
 }
 
@@ -258,9 +258,16 @@ mod tests {
 
     #[test]
     fn return_stack_pushes_and_pops_frames_in_lifo_order() {
+        let code = crate::instruction::InstructionSequence::new();
+        let first_location = code
+            .view()
+            .location(crate::instruction::InstructionAddress::from_index(1));
+        let second_location = code
+            .view()
+            .location(crate::instruction::InstructionAddress::from_index(2));
         let mut stack = ReturnStack::new();
-        let first = ReturnFrame::new(InstructionAddress::from_index(1));
-        let second = ReturnFrame::new(InstructionAddress::from_index(2));
+        let first = ReturnFrame::new(first_location);
+        let second = ReturnFrame::new(second_location);
 
         stack.push(first);
         stack.push(second);
@@ -273,10 +280,13 @@ mod tests {
 
     #[test]
     fn return_frame_exposes_return_address() {
-        let address = InstructionAddress::from_index(4);
-        let frame = ReturnFrame::new(address);
+        let code = crate::instruction::InstructionSequence::new();
+        let location = code
+            .view()
+            .location(crate::instruction::InstructionAddress::from_index(4));
+        let frame = ReturnFrame::new(location);
 
-        assert_eq!(frame.return_address(), address);
+        assert_eq!(frame.return_location(), location);
     }
 
     #[test]
@@ -291,8 +301,12 @@ mod tests {
 
     #[test]
     fn return_stack_peek_does_not_pop_frame() {
+        let code = crate::instruction::InstructionSequence::new();
+        let location = code
+            .view()
+            .location(crate::instruction::InstructionAddress::from_index(3));
         let mut stack = ReturnStack::new();
-        let frame = ReturnFrame::new(InstructionAddress::from_index(3));
+        let frame = ReturnFrame::new(location);
 
         stack.push(frame);
 
@@ -304,9 +318,13 @@ mod tests {
 
     #[test]
     fn data_stack_and_return_stack_are_independent() {
+        let code = crate::instruction::InstructionSequence::new();
+        let location = code
+            .view()
+            .location(crate::instruction::InstructionAddress::from_index(1));
         let mut data_stack = DataStack::new();
         let mut return_stack = ReturnStack::new();
-        let frame = ReturnFrame::new(InstructionAddress::from_index(1));
+        let frame = ReturnFrame::new(location);
 
         data_stack.push(Value::integer(42));
         return_stack.push(frame);
