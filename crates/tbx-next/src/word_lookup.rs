@@ -25,11 +25,12 @@ impl<'a> PublishedWordLookup<'a> {
 mod tests {
     use super::*;
     use crate::binding::{Binding, Bindings};
+    use crate::instruction::CodeLocation;
     use crate::instruction::{Instruction, InstructionSequence};
     use crate::name::NormalizedName;
     use crate::redefinition::redefine_word;
     use crate::value::Value;
-    use crate::word::{CompletedWordDefinition, InstructionAddress, PrimitiveId};
+    use crate::word::{CompletedWordDefinition, PrimitiveId};
 
     fn name(input: &str) -> NormalizedName {
         NormalizedName::new(input).expect("test input should be a valid word name")
@@ -45,13 +46,13 @@ mod tests {
         CompletedWordDefinition::primitive(PrimitiveId::from_slot(slot))
     }
 
-    fn compiled_definition(entry: InstructionAddress) -> WordDefinition {
+    fn compiled_definition(entry: CodeLocation) -> WordDefinition {
         WordDefinition::Compiled { entry }
     }
 
     fn completed_compiled(code: &mut InstructionSequence, value: i16) -> CompletedWordDefinition {
         let entry = code.append(Instruction::Push(Value::integer(value)));
-        CompletedWordDefinition::compiled(entry, code.view())
+        CompletedWordDefinition::compiled(code.view().location(entry), code.view())
             .expect("test compiled entry should be valid")
     }
 
@@ -89,18 +90,23 @@ mod tests {
     }
 
     #[test]
-    fn compiled_lookup_preserves_entry_address() {
+    fn compiled_lookup_preserves_entry_location() {
         let mut code = InstructionSequence::new();
         let mut words = PublishedWords::new();
         let entry = code.append(Instruction::Halt);
+        let location = code.view().location(entry);
         let id = words.add(
-            CompletedWordDefinition::compiled(entry, code.view())
+            CompletedWordDefinition::compiled(location, code.view())
                 .expect("compiled entry should be valid"),
         );
         let lookup = PublishedWordLookup::new(&words);
 
         match lookup.lookup_word(id).expect("word id should be valid") {
-            WordDefinition::Compiled { entry: actual } => assert_eq!(*actual, entry),
+            WordDefinition::Compiled { entry: actual } => {
+                assert_eq!(*actual, location);
+                assert_eq!(actual.code_space(), code.code_space());
+                assert_eq!(actual.address(), entry);
+            }
             WordDefinition::Primitive { .. } => panic!("compiled id returned primitive word"),
         }
     }

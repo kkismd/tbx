@@ -94,7 +94,7 @@ mod tests {
 
     fn compiled(code: &mut InstructionSequence, value: i16) -> CompletedWordDefinition {
         let entry = code.append(Instruction::Push(Value::integer(value)));
-        CompletedWordDefinition::compiled(entry, code.view())
+        CompletedWordDefinition::compiled(code.view().location(entry), code.view())
             .expect("test compiled entry should be valid")
     }
 
@@ -223,6 +223,44 @@ mod tests {
             result,
             old_definition,
             new_definition,
+        );
+    }
+
+    #[test]
+    fn compiled_redefinition_keeps_old_and_new_code_locations() {
+        let mut old_code = InstructionSequence::new();
+        let mut new_code = InstructionSequence::new();
+        let mut words = PublishedWords::new();
+        let mut bindings = Bindings::new();
+        let old_entry = old_code.append(Instruction::Push(Value::integer(300)));
+        let new_entry = new_code.append(Instruction::Push(Value::integer(301)));
+        let old_location = old_code.view().location(old_entry);
+        let new_location = new_code.view().location(new_entry);
+        let old_definition = CompletedWordDefinition::compiled(old_location, old_code.view())
+            .expect("old compiled entry should be valid");
+        let new_definition = CompletedWordDefinition::compiled(new_location, new_code.view())
+            .expect("new compiled entry should be valid");
+        let old = publish_initial(&mut words, &mut bindings, "LOOP", old_definition);
+
+        assert_eq!(old_entry.as_index(), new_entry.as_index());
+        assert_ne!(old_location, new_location);
+        let result = redefine_word(&mut words, &mut bindings, &name("LOOP"), new_definition)
+            .expect("existing word should redefine");
+
+        assert_eq!(result.previous(), old);
+        assert_ne!(result.previous(), result.current());
+        assert_word_binding(&bindings, "LOOP", result.current());
+        assert_eq!(
+            words.get(result.previous()),
+            Ok(&WordDefinition::Compiled {
+                entry: old_location
+            })
+        );
+        assert_eq!(
+            words.get(result.current()),
+            Ok(&WordDefinition::Compiled {
+                entry: new_location
+            })
         );
     }
 

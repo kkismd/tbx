@@ -326,7 +326,7 @@ impl Vm {
             }
             WordDefinition::Compiled { entry } => {
                 let entry = instructions
-                    .validate_address(entry)
+                    .validate_location(entry)
                     .map_err(|source| VmError {
                         location,
                         kind: VmErrorKind::InvalidCompiledEntry { source },
@@ -1179,7 +1179,7 @@ mod tests {
         let compiled_entry = code.append(Instruction::Push(value(7)));
         code.append(Instruction::Return);
         let word = words.add(
-            CompletedWordDefinition::compiled(compiled_entry, code.view())
+            CompletedWordDefinition::compiled(location(&code, compiled_entry), code.view())
                 .expect("compiled entry should be valid"),
         );
         let call = code.append(Instruction::Call(word));
@@ -1207,14 +1207,14 @@ mod tests {
         let inner_entry = code.append(Instruction::Push(value(2)));
         code.append(Instruction::Return);
         let inner = words.add(
-            CompletedWordDefinition::compiled(inner_entry, code.view())
+            CompletedWordDefinition::compiled(location(&code, inner_entry), code.view())
                 .expect("inner entry should be valid"),
         );
         let outer_entry = code.append(Instruction::Push(value(1)));
         code.append(Instruction::Call(inner));
         code.append(Instruction::Return);
         let outer = words.add(
-            CompletedWordDefinition::compiled(outer_entry, code.view())
+            CompletedWordDefinition::compiled(location(&code, outer_entry), code.view())
                 .expect("outer entry should be valid"),
         );
         let entry = code.append(Instruction::Call(outer));
@@ -1241,14 +1241,14 @@ mod tests {
         let failing_branch = code.append(Instruction::JumpIfZero(address(99)));
         code.append(Instruction::Return);
         let inner = words.add(
-            CompletedWordDefinition::compiled(inner_entry, code.view())
+            CompletedWordDefinition::compiled(location(&code, inner_entry), code.view())
                 .expect("inner entry should be valid"),
         );
         let outer_entry = code.append(Instruction::Push(value(11)));
         code.append(Instruction::Call(inner));
         let after_inner = code.append(Instruction::Return);
         let outer = words.add(
-            CompletedWordDefinition::compiled(outer_entry, code.view())
+            CompletedWordDefinition::compiled(location(&code, outer_entry), code.view())
                 .expect("outer entry should be valid"),
         );
         let entry = code.append(Instruction::Call(outer));
@@ -1290,8 +1290,11 @@ mod tests {
         full_code.append(Instruction::Halt);
         let compiled_entry = full_code.append(Instruction::Return);
         let word = words.add(
-            CompletedWordDefinition::compiled(compiled_entry, full_code.view())
-                .expect("compiled entry should be valid in full code"),
+            CompletedWordDefinition::compiled(
+                location(&full_code, compiled_entry),
+                full_code.view(),
+            )
+            .expect("compiled entry should be valid in full code"),
         );
         let mut short_code = InstructionSequence::new();
         let call = short_code.append(Instruction::Call(word));
@@ -1305,8 +1308,10 @@ mod tests {
             Err(VmError {
                 location: location(&short_code, call),
                 kind: VmErrorKind::InvalidCompiledEntry {
-                    source: InstructionAddressError::EndAddress {
-                        address: compiled_entry
+                    source: InstructionAddressError::CodeSpaceMismatch {
+                        expected: short_code.code_space(),
+                        actual: full_code.code_space(),
+                        address: compiled_entry,
                     }
                 }
             })
@@ -1328,7 +1333,7 @@ mod tests {
         code.append(Instruction::Call(add_word));
         code.append(Instruction::Return);
         let compiled_word = words.add(
-            CompletedWordDefinition::compiled(compiled_entry, code.view())
+            CompletedWordDefinition::compiled(location(&code, compiled_entry), code.view())
                 .expect("compiled entry should be valid"),
         );
         let entry = code.append(Instruction::Call(compiled_word));

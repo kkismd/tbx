@@ -1,6 +1,4 @@
-use crate::instruction::{InstructionAddressError, InstructionView};
-
-pub(crate) use crate::instruction::InstructionAddress;
+use crate::instruction::{CodeLocation, InstructionAddressError, InstructionView};
 
 /// Internal identifier for a published executable word definition.
 ///
@@ -43,7 +41,7 @@ impl PrimitiveId {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum WordDefinition {
     Primitive { primitive: PrimitiveId },
-    Compiled { entry: InstructionAddress },
+    Compiled { entry: CodeLocation },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -59,11 +57,11 @@ impl CompletedWordDefinition {
     }
 
     pub(crate) fn compiled(
-        entry: InstructionAddress,
+        entry: CodeLocation,
         instructions: InstructionView<'_>,
     ) -> Result<Self, WordDefinitionError> {
         instructions
-            .validate_address(entry)
+            .validate_location(entry)
             .map(|_| Self {
                 definition: WordDefinition::Compiled { entry },
             })
@@ -135,7 +133,9 @@ impl PublishedWords {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::instruction::{Instruction, InstructionAddressError, InstructionSequence};
+    use crate::instruction::{
+        CodeLocation, Instruction, InstructionAddress, InstructionAddressError, InstructionSequence,
+    };
     use crate::value::Value;
     use crate::word_lookup::PublishedWordLookup;
 
@@ -150,13 +150,13 @@ mod tests {
     }
 
     fn completed_compiled(
-        entry: InstructionAddress,
+        entry: CodeLocation,
         instructions: InstructionView<'_>,
     ) -> Result<CompletedWordDefinition, WordDefinitionError> {
         CompletedWordDefinition::compiled(entry, instructions)
     }
 
-    fn compiled_entry_definition(entry: InstructionAddress) -> WordDefinition {
+    fn compiled_entry_definition(entry: CodeLocation) -> WordDefinition {
         WordDefinition::Compiled { entry }
     }
 
@@ -177,10 +177,12 @@ mod tests {
 
         let mut code = InstructionSequence::new();
         let second_entry = code.append(Instruction::Halt);
+        let second_location = code.view().location(second_entry);
 
         let first_id = words.add(completed_primitive(7));
         let second_id = words.add(
-            completed_compiled(second_entry, code.view()).expect("compiled entry should be valid"),
+            completed_compiled(second_location, code.view())
+                .expect("compiled entry should be valid"),
         );
         let third_id = words.add(completed_primitive(9));
 
@@ -190,7 +192,7 @@ mod tests {
         assert_eq!(words.get(first_id), Ok(&primitive_definition(7)));
         assert_eq!(
             words.get(second_id),
-            Ok(&compiled_entry_definition(second_entry))
+            Ok(&compiled_entry_definition(second_location))
         );
         assert_eq!(words.get(third_id), Ok(&primitive_definition(9)));
     }
@@ -202,16 +204,21 @@ mod tests {
         let mut code = InstructionSequence::new();
         let old_entry = code.append(Instruction::Push(Value::integer(3)));
         let new_entry = code.append(Instruction::Halt);
+        let old_location = code.view().location(old_entry);
+        let new_location = code.view().location(new_entry);
 
         let old_id = words
-            .add(completed_compiled(old_entry, code.view()).expect("old entry should be valid"));
+            .add(completed_compiled(old_location, code.view()).expect("old entry should be valid"));
         let old_definition = *words.get(old_id).expect("old id should be valid");
 
         let new_id = words
-            .add(completed_compiled(new_entry, code.view()).expect("new entry should be valid"));
+            .add(completed_compiled(new_location, code.view()).expect("new entry should be valid"));
 
         assert_eq!(words.get(old_id), Ok(&old_definition));
-        assert_eq!(words.get(new_id), Ok(&compiled_entry_definition(new_entry)));
+        assert_eq!(
+            words.get(new_id),
+            Ok(&compiled_entry_definition(new_location))
+        );
     }
 
     #[test]
@@ -220,10 +227,12 @@ mod tests {
 
         let mut code = InstructionSequence::new();
         let entry = code.append(Instruction::Halt);
+        let location = code.view().location(entry);
 
         let primitive_id = words.add(completed_primitive(5));
-        let compiled_id = words
-            .add(completed_compiled(entry, code.view()).expect("compiled entry should be valid"));
+        let compiled_id = words.add(
+            completed_compiled(location, code.view()).expect("compiled entry should be valid"),
+        );
 
         match words
             .get(primitive_id)
@@ -237,7 +246,7 @@ mod tests {
 
         match words.get(compiled_id).expect("compiled id should be valid") {
             WordDefinition::Compiled { entry: actual } => {
-                assert_eq!(*actual, entry);
+                assert_eq!(*actual, location);
             }
             WordDefinition::Primitive { .. } => panic!("compiled id returned primitive word"),
         }
@@ -312,33 +321,35 @@ mod tests {
         let mut code = InstructionSequence::new();
         let second_entry = code.append(Instruction::Push(Value::integer(20)));
         let fourth_entry = code.append(Instruction::Halt);
+        let second_location = code.view().location(second_entry);
+        let fourth_location = code.view().location(fourth_entry);
 
         let first_id = words.add(completed_primitive(10));
         let second_id = words.add(
-            completed_compiled(second_entry, code.view()).expect("second entry should be valid"),
+            completed_compiled(second_location, code.view()).expect("second entry should be valid"),
         );
         let third_id = words.add(completed_primitive(30));
 
         assert_eq!(words.get(first_id), Ok(&primitive_definition(10)));
         assert_eq!(
             words.get(second_id),
-            Ok(&compiled_entry_definition(second_entry))
+            Ok(&compiled_entry_definition(second_location))
         );
         assert_eq!(words.get(third_id), Ok(&primitive_definition(30)));
 
         let fourth_id = words.add(
-            completed_compiled(fourth_entry, code.view()).expect("fourth entry should be valid"),
+            completed_compiled(fourth_location, code.view()).expect("fourth entry should be valid"),
         );
 
         assert_eq!(words.get(first_id), Ok(&primitive_definition(10)));
         assert_eq!(
             words.get(second_id),
-            Ok(&compiled_entry_definition(second_entry))
+            Ok(&compiled_entry_definition(second_location))
         );
         assert_eq!(words.get(third_id), Ok(&primitive_definition(30)));
         assert_eq!(
             words.get(fourth_id),
-            Ok(&compiled_entry_definition(fourth_entry))
+            Ok(&compiled_entry_definition(fourth_location))
         );
     }
 
@@ -348,15 +359,17 @@ mod tests {
 
         let mut code = InstructionSequence::new();
         let entry = code.append(Instruction::Halt);
+        let location = code.view().location(entry);
 
         let primitive_id = words.add(completed_primitive(0));
-        let compiled_id = words
-            .add(completed_compiled(entry, code.view()).expect("compiled entry should be valid"));
+        let compiled_id = words.add(
+            completed_compiled(location, code.view()).expect("compiled entry should be valid"),
+        );
 
         assert_eq!(words.get(primitive_id), Ok(&primitive_definition(0)));
         assert_eq!(
             words.get(compiled_id),
-            Ok(&compiled_entry_definition(entry))
+            Ok(&compiled_entry_definition(location))
         );
     }
 
@@ -365,15 +378,16 @@ mod tests {
         let mut code = InstructionSequence::new();
         let entry = code.append(Instruction::Push(Value::integer(42)));
         code.append(Instruction::Halt);
+        let location = code.view().location(entry);
         let mut words = PublishedWords::new();
 
         let id = words.add(
-            completed_compiled(entry, code.view())
+            completed_compiled(location, code.view())
                 .expect("compiled entry should point at an existing instruction"),
         );
 
         assert_eq!(words.len(), 1);
-        assert_eq!(words.get(id), Ok(&compiled_entry_definition(entry)));
+        assert_eq!(words.get(id), Ok(&compiled_entry_definition(location)));
     }
 
     #[test]
@@ -381,9 +395,11 @@ mod tests {
         let mut code = InstructionSequence::new();
         code.append(Instruction::Halt);
         let end = InstructionAddress::from_index(code.len());
+        let end_location = code.view().location(end);
         let mut words = PublishedWords::new();
 
-        let result = completed_compiled(end, code.view()).map(|definition| words.add(definition));
+        let result =
+            completed_compiled(end_location, code.view()).map(|definition| words.add(definition));
 
         assert_eq!(
             result,
@@ -395,24 +411,90 @@ mod tests {
     }
 
     #[test]
-    fn completed_compiled_rejects_entry_outside_current_owner_view() {
+    fn completed_compiled_rejects_entry_outside_current_owner_view_before_issuing_word_id() {
         let mut source_code = InstructionSequence::new();
         source_code.append(Instruction::Push(Value::integer(1)));
         let source_entry = source_code.append(Instruction::Halt);
+        let source_location = source_code.view().location(source_entry);
         let target_code = InstructionSequence::new();
         let mut words = PublishedWords::new();
 
-        // InstructionAddress intentionally has no owner tag. Publication must
-        // validate against the owner view that will back VM execution.
-        let result = completed_compiled(source_entry, target_code.view())
+        let result = completed_compiled(source_location, target_code.view())
             .map(|definition| words.add(definition));
 
         assert_eq!(
             result,
             Err(WordDefinitionError::InvalidCompiledEntry {
-                error: InstructionAddressError::InvalidAddress {
-                    address: source_entry
+                error: InstructionAddressError::CodeSpaceMismatch {
+                    expected: target_code.code_space(),
+                    actual: source_code.code_space(),
+                    address: source_entry,
                 }
+            })
+        );
+        assert!(words.is_empty());
+    }
+
+    #[test]
+    fn completed_compiled_rejects_same_index_from_different_code_space_without_fallback() {
+        let mut source_code = InstructionSequence::new();
+        let source_entry = source_code.append(Instruction::Push(Value::integer(1)));
+        let source_location = source_code.view().location(source_entry);
+        let mut target_code = InstructionSequence::new();
+        let target_entry = target_code.append(Instruction::Push(Value::integer(2)));
+        let mut words = PublishedWords::new();
+
+        assert_eq!(source_entry.as_index(), target_entry.as_index());
+        let result = completed_compiled(source_location, target_code.view())
+            .map(|definition| words.add(definition));
+
+        assert_eq!(
+            result,
+            Err(WordDefinitionError::InvalidCompiledEntry {
+                error: InstructionAddressError::CodeSpaceMismatch {
+                    expected: target_code.code_space(),
+                    actual: source_code.code_space(),
+                    address: source_entry,
+                }
+            })
+        );
+        assert!(words.is_empty());
+    }
+
+    #[test]
+    fn completed_compiled_rejects_same_owner_out_of_range_before_issuing_word_id() {
+        let mut code = InstructionSequence::new();
+        code.append(Instruction::Halt);
+        let invalid = InstructionAddress::from_index(code.len() + 1);
+        let invalid_location = code.view().location(invalid);
+        let mut words = PublishedWords::new();
+
+        let result = completed_compiled(invalid_location, code.view())
+            .map(|definition| words.add(definition));
+
+        assert_eq!(
+            result,
+            Err(WordDefinitionError::InvalidCompiledEntry {
+                error: InstructionAddressError::InvalidAddress { address: invalid }
+            })
+        );
+        assert!(words.is_empty());
+    }
+
+    #[test]
+    fn completed_compiled_rejects_empty_sequence_entry_before_issuing_word_id() {
+        let code = InstructionSequence::new();
+        let entry = InstructionAddress::from_index(0);
+        let location = code.view().location(entry);
+        let mut words = PublishedWords::new();
+
+        let result =
+            completed_compiled(location, code.view()).map(|definition| words.add(definition));
+
+        assert_eq!(
+            result,
+            Err(WordDefinitionError::InvalidCompiledEntry {
+                error: InstructionAddressError::EndAddress { address: entry }
             })
         );
         assert!(words.is_empty());
