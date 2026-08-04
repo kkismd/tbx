@@ -1,11 +1,16 @@
 use crate::value::Value;
 use crate::word::WordId;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
-/// Absolute address into the shared TBX Next instruction sequence.
+static NEXT_CODE_SPACE_ID: AtomicUsize = AtomicUsize::new(1);
+
+/// Sequence-local address into one TBX Next instruction owner.
 ///
 /// ADR #1367 defines instruction addresses as VM-control identifiers, not
 /// runtime values. The concrete backing type is intentionally private and must
-/// not become a serialized or public ABI contract.
+/// not become a serialized or public ABI contract. This address does not carry
+/// owner identity; use `CodeLocation` when a position must be tied to a
+/// specific instruction sequence.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) struct InstructionAddress {
     index: usize,
@@ -28,6 +33,45 @@ impl InstructionAddress {
     }
 }
 
+/// Opaque identity for one instruction-sequence owner.
+///
+/// A code-space ID is not an instruction operand and is not a serialized
+/// address. It only preserves the owner side of a sequence-local address at
+/// crate-internal validation boundaries.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub(crate) struct CodeSpaceId {
+    raw: usize,
+}
+
+impl CodeSpaceId {
+    fn next() -> Self {
+        let raw = NEXT_CODE_SPACE_ID
+            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
+                current.checked_add(1)
+            })
+            .expect("code-space ID allocation overflowed");
+
+        Self { raw }
+    }
+}
+
+/// Owner-qualified instruction position.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub(crate) struct CodeLocation {
+    code_space: CodeSpaceId,
+    address: InstructionAddress,
+}
+
+impl CodeLocation {
+    pub(crate) const fn code_space(self) -> CodeSpaceId {
+        self.code_space
+    }
+
+    pub(crate) const fn address(self) -> InstructionAddress {
+        self.address
+    }
+}
+
 /// Crate-internal typed instruction for the future VM execution core.
 ///
 /// This is intentionally a small, orthogonal instruction set. `Call` carries
@@ -45,18 +89,30 @@ pub(crate) enum Instruction {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum InstructionAddressError {
-    InvalidAddress { address: InstructionAddress },
-    EndAddress { address: InstructionAddress },
-    AddressOverflow { address: InstructionAddress },
+    InvalidAddress {
+        address: InstructionAddress,
+    },
+    EndAddress {
+        address: InstructionAddress,
+    },
+    AddressOverflow {
+        address: InstructionAddress,
+    },
+    CodeSpaceMismatch {
+        expected: CodeSpaceId,
+        actual: CodeSpaceId,
+        address: InstructionAddress,
+    },
 }
 
-/// Owner for the single shared instruction sequence.
+/// Owner for one instruction sequence.
 ///
 /// The owner is deliberately separate from VM state. Builders may append here,
 /// while the future VM receives only `InstructionView` so it cannot replace,
 /// truncate, or append instructions through its fetch boundary.
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub(crate) struct InstructionSequence {
+    code_space: CodeSpaceId,
     instructions: Vec<Instruction>,
 }
 
@@ -73,8 +129,13 @@ impl InstructionSequence {
 
     pub(crate) fn view(&self) -> InstructionView<'_> {
         InstructionView {
+            code_space: self.code_space,
             instructions: &self.instructions,
         }
+    }
+
+    pub(crate) const fn code_space(&self) -> CodeSpaceId {
+        self.code_space
     }
 
     pub(crate) fn len(&self) -> usize {
@@ -86,6 +147,15 @@ impl InstructionSequence {
     }
 }
 
+impl Default for InstructionSequence {
+    fn default() -> Self {
+        Self {
+            code_space: CodeSpaceId::next(),
+            instructions: Vec::new(),
+        }
+    }
+}
+
 /// Read-only instruction fetch boundary for VM execution.
 ///
 /// `code.len()` may be useful as a builder append position, but it is not a
@@ -93,6 +163,7 @@ impl InstructionSequence {
 /// accepted by this view.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct InstructionView<'a> {
+    code_space: CodeSpaceId,
     instructions: &'a [Instruction],
 }
 
@@ -106,11 +177,41 @@ impl<'a> InstructionView<'a> {
             .ok_or_else(|| self.address_error(address))
     }
 
+    pub(crate) fn get_location(
+        self,
+        location: CodeLocation,
+    ) -> Result<&'a Instruction, InstructionAddressError> {
+        let address = self.validate_location(location)?;
+        self.get(address)
+    }
+
     pub(crate) fn validate_address(
         self,
         address: InstructionAddress,
     ) -> Result<InstructionAddress, InstructionAddressError> {
         self.get(address).map(|_| address)
+    }
+
+    pub(crate) fn location(self, address: InstructionAddress) -> CodeLocation {
+        CodeLocation {
+            code_space: self.code_space,
+            address,
+        }
+    }
+
+    pub(crate) fn validate_location(
+        self,
+        location: CodeLocation,
+    ) -> Result<InstructionAddress, InstructionAddressError> {
+        if location.code_space != self.code_space {
+            return Err(InstructionAddressError::CodeSpaceMismatch {
+                expected: self.code_space,
+                actual: location.code_space,
+                address: location.address,
+            });
+        }
+
+        self.validate_address(location.address)
     }
 
     pub(crate) fn checked_next_address(
@@ -128,6 +229,10 @@ impl<'a> InstructionView<'a> {
 
     pub(crate) fn is_empty(self) -> bool {
         self.instructions.is_empty()
+    }
+
+    pub(crate) const fn code_space(self) -> CodeSpaceId {
+        self.code_space
     }
 
     fn address_error(self, address: InstructionAddress) -> InstructionAddressError {
@@ -149,6 +254,130 @@ mod tests {
 
     fn address(index: usize) -> InstructionAddress {
         InstructionAddress::from_index(index)
+    }
+
+    #[test]
+    fn empty_sequences_receive_distinct_code_space_ids() {
+        let first = InstructionSequence::new();
+        let second = InstructionSequence::new();
+
+        assert_ne!(first.code_space(), second.code_space());
+        assert_ne!(first.view().code_space(), second.view().code_space());
+    }
+
+    #[test]
+    fn new_and_default_allocate_distinct_code_space_ids() {
+        let from_new = InstructionSequence::new();
+        let from_default = InstructionSequence::default();
+
+        assert_ne!(from_new.code_space(), from_default.code_space());
+    }
+
+    #[test]
+    fn views_from_same_sequence_share_code_space_id() {
+        let mut code = InstructionSequence::new();
+        code.append(Instruction::Halt);
+
+        let first = code.view();
+        let second = code.view();
+
+        assert_eq!(first.code_space(), code.code_space());
+        assert_eq!(first.code_space(), second.code_space());
+    }
+
+    #[test]
+    fn cloned_view_preserves_code_space_id() {
+        let mut code = InstructionSequence::new();
+        let entry = code.append(Instruction::Halt);
+        let view = code.view();
+        let clone = view;
+
+        assert_eq!(view.code_space(), clone.code_space());
+        assert_eq!(clone.get(entry), Ok(&Instruction::Halt));
+    }
+
+    #[test]
+    fn same_local_index_locations_differ_between_code_spaces() {
+        let mut first = InstructionSequence::new();
+        let mut second = InstructionSequence::new();
+        let first_address = first.append(push(1));
+        let second_address = second.append(push(1));
+
+        assert_eq!(first_address.as_index(), second_address.as_index());
+        assert_ne!(
+            first.view().location(first_address),
+            second.view().location(second_address)
+        );
+    }
+
+    #[test]
+    fn view_constructs_and_validates_same_owner_locations() {
+        let mut code = InstructionSequence::new();
+        let entry = code.append(push(42));
+        let view = code.view();
+        let location = view.location(entry);
+
+        assert_eq!(location.code_space(), view.code_space());
+        assert_eq!(location.address(), entry);
+        assert_eq!(view.validate_location(location), Ok(entry));
+        assert_eq!(view.get_location(location), Ok(&push(42)));
+    }
+
+    #[test]
+    fn cross_owner_location_is_rejected_without_index_fallback() {
+        let mut source = InstructionSequence::new();
+        let source_address = source.append(push(1));
+        let source_location = source.view().location(source_address);
+
+        let mut target = InstructionSequence::new();
+        let target_address = target.append(push(99));
+        let target_view = target.view();
+
+        assert_eq!(source_address.as_index(), target_address.as_index());
+        assert_eq!(
+            target_view.get_location(source_location),
+            Err(InstructionAddressError::CodeSpaceMismatch {
+                expected: target_view.code_space(),
+                actual: source_location.code_space(),
+                address: source_address,
+            })
+        );
+    }
+
+    #[test]
+    fn same_owner_location_rejects_end_and_out_of_range_addresses() {
+        let mut code = InstructionSequence::new();
+        code.append(Instruction::Halt);
+        let view = code.view();
+        let end = view.location(address(1));
+        let out_of_range = view.location(address(2));
+
+        assert_eq!(
+            view.validate_location(end),
+            Err(InstructionAddressError::EndAddress {
+                address: end.address()
+            })
+        );
+        assert_eq!(
+            view.validate_location(out_of_range),
+            Err(InstructionAddressError::InvalidAddress {
+                address: out_of_range.address()
+            })
+        );
+    }
+
+    #[test]
+    fn empty_sequence_rejects_same_owner_location_at_append_position() {
+        let code = InstructionSequence::new();
+        let view = code.view();
+        let location = view.location(address(0));
+
+        assert_eq!(
+            view.validate_location(location),
+            Err(InstructionAddressError::EndAddress {
+                address: location.address()
+            })
+        );
     }
 
     #[test]
