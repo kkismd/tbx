@@ -1,5 +1,8 @@
 use crate::binding::Bindings;
-use crate::instruction::{Instruction, InstructionAddress, InstructionSequence};
+use crate::instruction::{
+    CodeSpaceLookup, CodeSpaceLookupError, Instruction, InstructionAddress, InstructionSequence,
+    InstructionView,
+};
 use crate::lexer::{LexError, Lexer, Token, TokenKind};
 use crate::primitive::PrimitiveLookup;
 use crate::source::{SourceError, SourceId, SourceSpan, SourceView};
@@ -29,6 +32,7 @@ pub(crate) struct SourceCompileContext<'a> {
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct SourceExecutionContext<'a> {
     compile: SourceCompileContext<'a>,
+    code_spaces: &'a [InstructionView<'a>],
     words: PublishedWordLookup<'a>,
     primitives: PrimitiveLookup<'a>,
 }
@@ -45,6 +49,7 @@ pub(crate) enum SourceProcessorError {
     Source(SourceError),
     Lex(LexError),
     Compile(CompileError),
+    CodeSpaceLookup(CodeSpaceLookupError),
     Vm(VmError),
 }
 
@@ -83,6 +88,12 @@ impl From<CompileError> for SourceProcessorError {
 impl From<VmError> for SourceProcessorError {
     fn from(error: VmError) -> Self {
         Self::Vm(error)
+    }
+}
+
+impl From<CodeSpaceLookupError> for SourceProcessorError {
+    fn from(error: CodeSpaceLookupError) -> Self {
+        Self::CodeSpaceLookup(error)
     }
 }
 
@@ -159,8 +170,11 @@ fn run_unit(
     context: SourceExecutionContext<'_>,
 ) -> Result<SourceRunResult, SourceProcessorError> {
     let mut vm = Vm::new(unit.instructions.view(), unit.entry)?;
-    let execution = ExecutionView::new(
-        unit.instructions.view(),
+    let mut code_spaces = Vec::with_capacity(context.code_spaces().len() + 1);
+    code_spaces.push(unit.instructions.view());
+    code_spaces.extend_from_slice(context.code_spaces());
+    let execution = ExecutionView::with_code_spaces(
+        CodeSpaceLookup::new(&code_spaces)?,
         context.words(),
         context.primitives(),
     );
@@ -292,6 +306,21 @@ impl<'a> SourceExecutionContext<'a> {
     ) -> Self {
         Self {
             compile: SourceCompileContext::new(bindings),
+            code_spaces: &[],
+            words,
+            primitives,
+        }
+    }
+
+    pub(crate) const fn with_code_spaces(
+        bindings: &'a Bindings,
+        code_spaces: &'a [InstructionView<'a>],
+        words: PublishedWordLookup<'a>,
+        primitives: PrimitiveLookup<'a>,
+    ) -> Self {
+        Self {
+            compile: SourceCompileContext::new(bindings),
+            code_spaces,
             words,
             primitives,
         }
@@ -299,6 +328,10 @@ impl<'a> SourceExecutionContext<'a> {
 
     pub(crate) const fn compile(self) -> SourceCompileContext<'a> {
         self.compile
+    }
+
+    pub(crate) const fn code_spaces(self) -> &'a [InstructionView<'a>] {
+        self.code_spaces
     }
 
     pub(crate) const fn words(self) -> PublishedWordLookup<'a> {
@@ -854,6 +887,39 @@ mod tests {
 
         assert_eq!(result.outcome(), RunOutcome::Halted);
         assert_eq!(result.data_stack(), [value(7)]);
+        assert_eq!(result.instruction_count(), 2);
+    }
+
+    #[test]
+    fn compiled_word_call_runs_with_temporary_and_published_code_spaces() {
+        let mut words = PublishedWords::new();
+        let mut bindings = Bindings::new();
+        let primitives = PrimitiveRegistry::new();
+        let mut published_code = InstructionSequence::new();
+        publish_initial(
+            &mut words,
+            &mut bindings,
+            "USER_WORD",
+            completed_compiled(&mut published_code, 10),
+        );
+        published_code.append(Instruction::Return);
+        let (sources, source_id) = source("user_word");
+        let published_views = [published_code.view()];
+
+        let result = run_source(
+            sources.view(),
+            source_id,
+            SourceExecutionContext::with_code_spaces(
+                &bindings,
+                &published_views,
+                PublishedWordLookup::new(&words),
+                primitives.lookup(),
+            ),
+        )
+        .expect("published compiled word should run");
+
+        assert_eq!(result.outcome(), RunOutcome::Halted);
+        assert_eq!(result.data_stack(), [value(10)]);
         assert_eq!(result.instruction_count(), 2);
     }
 
