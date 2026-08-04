@@ -71,7 +71,7 @@ mod tests {
 
     fn completed_compiled(code: &mut InstructionSequence, value: i16) -> CompletedWordDefinition {
         let entry = code.append(Instruction::Push(Value::integer(value)));
-        CompletedWordDefinition::compiled(entry, code.view())
+        CompletedWordDefinition::compiled(code.view().location(entry), code.view())
             .expect("test compiled entry should be valid")
     }
 
