@@ -63,6 +63,13 @@ pub(crate) struct CodeLocation {
 }
 
 impl CodeLocation {
+    pub(crate) const fn new(code_space: CodeSpaceId, address: InstructionAddress) -> Self {
+        Self {
+            code_space,
+            address,
+        }
+    }
+
     pub(crate) const fn code_space(self) -> CodeSpaceId {
         self.code_space
     }
@@ -103,6 +110,31 @@ pub(crate) enum InstructionAddressError {
         actual: CodeSpaceId,
         address: InstructionAddress,
     },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum CodeSpaceLookupError {
+    UnknownCodeSpace { code_space: CodeSpaceId },
+    DuplicateCodeSpace { code_space: CodeSpaceId },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum InstructionLookupError {
+    UnknownCodeSpace { code_space: CodeSpaceId },
+    Address { source: InstructionAddressError },
+}
+
+impl From<CodeSpaceLookupError> for InstructionLookupError {
+    fn from(error: CodeSpaceLookupError) -> Self {
+        match error {
+            CodeSpaceLookupError::UnknownCodeSpace { code_space } => {
+                Self::UnknownCodeSpace { code_space }
+            }
+            CodeSpaceLookupError::DuplicateCodeSpace { code_space } => {
+                Self::UnknownCodeSpace { code_space }
+            }
+        }
+    }
 }
 
 /// Owner for one instruction sequence.
@@ -165,6 +197,104 @@ impl Default for InstructionSequence {
 pub(crate) struct InstructionView<'a> {
     code_space: CodeSpaceId,
     instructions: &'a [Instruction],
+}
+
+/// Read-only lookup over multiple instruction owners.
+///
+/// The lookup stores only `InstructionView`s, so consumers can fetch and
+/// validate existing code locations without gaining append, truncate, or
+/// replacement authority over any owner.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct CodeSpaceLookup<'a> {
+    views: &'a [InstructionView<'a>],
+}
+
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum InstructionLookup<'a> {
+    Single(InstructionView<'a>),
+    Multiple(CodeSpaceLookup<'a>),
+}
+
+impl<'a> CodeSpaceLookup<'a> {
+    pub(crate) fn new(views: &'a [InstructionView<'a>]) -> Result<Self, CodeSpaceLookupError> {
+        for (index, view) in views.iter().enumerate() {
+            if views[index + 1..]
+                .iter()
+                .any(|other| other.code_space() == view.code_space())
+            {
+                return Err(CodeSpaceLookupError::DuplicateCodeSpace {
+                    code_space: view.code_space(),
+                });
+            }
+        }
+
+        Ok(Self { views })
+    }
+
+    pub(crate) fn view_for(
+        self,
+        code_space: CodeSpaceId,
+    ) -> Result<InstructionView<'a>, CodeSpaceLookupError> {
+        self.views
+            .iter()
+            .copied()
+            .find(|view| view.code_space() == code_space)
+            .ok_or(CodeSpaceLookupError::UnknownCodeSpace { code_space })
+    }
+}
+
+impl<'a> From<InstructionView<'a>> for InstructionLookup<'a> {
+    fn from(view: InstructionView<'a>) -> Self {
+        Self::Single(view)
+    }
+}
+
+impl<'a> From<CodeSpaceLookup<'a>> for InstructionLookup<'a> {
+    fn from(lookup: CodeSpaceLookup<'a>) -> Self {
+        Self::Multiple(lookup)
+    }
+}
+
+impl<'a> InstructionLookup<'a> {
+    pub(crate) fn view_for(
+        self,
+        code_space: CodeSpaceId,
+    ) -> Result<InstructionView<'a>, CodeSpaceLookupError> {
+        match self {
+            Self::Single(view) if view.code_space() == code_space => Ok(view),
+            Self::Single(_) => Err(CodeSpaceLookupError::UnknownCodeSpace { code_space }),
+            Self::Multiple(lookup) => lookup.view_for(code_space),
+        }
+    }
+
+    pub(crate) fn get_location(
+        self,
+        location: CodeLocation,
+    ) -> Result<&'a Instruction, InstructionLookupError> {
+        self.view_for(location.code_space())?
+            .get_location(location)
+            .map_err(|source| InstructionLookupError::Address { source })
+    }
+
+    pub(crate) fn validate_location(
+        self,
+        location: CodeLocation,
+    ) -> Result<InstructionAddress, InstructionLookupError> {
+        self.view_for(location.code_space())?
+            .validate_location(location)
+            .map_err(|source| InstructionLookupError::Address { source })
+    }
+
+    pub(crate) fn checked_next_location(
+        self,
+        location: CodeLocation,
+    ) -> Result<CodeLocation, InstructionLookupError> {
+        let view = self.view_for(location.code_space())?;
+        view.validate_location(location)
+            .and_then(|address| view.checked_next_address(address))
+            .map(|address| view.location(address))
+            .map_err(|source| InstructionLookupError::Address { source })
+    }
 }
 
 impl<'a> InstructionView<'a> {
@@ -254,6 +384,10 @@ mod tests {
 
     fn address(index: usize) -> InstructionAddress {
         InstructionAddress::from_index(index)
+    }
+
+    fn address_lookup_error(source: InstructionAddressError) -> InstructionLookupError {
+        InstructionLookupError::Address { source }
     }
 
     #[test]
@@ -493,5 +627,132 @@ mod tests {
         assert_eq!(view.validate_address(target), Ok(target));
         assert_eq!(view.get(jump), Ok(&Instruction::Jump(target)));
         assert_eq!(view.get(jump_if_zero), Ok(&Instruction::JumpIfZero(target)));
+    }
+
+    #[test]
+    fn code_space_lookup_resolves_registered_views_by_code_space_id() {
+        let mut first = InstructionSequence::new();
+        let first_entry = first.append(push(10));
+        let mut second = InstructionSequence::new();
+        let second_entry = second.append(push(20));
+        let views = [first.view(), second.view()];
+        let lookup = CodeSpaceLookup::new(&views).expect("views should be distinct");
+        let first_view = lookup
+            .view_for(first.code_space())
+            .expect("first code space should be registered");
+        let second_view = lookup
+            .view_for(second.code_space())
+            .expect("second code space should be registered");
+
+        assert_eq!(first_view.get(first_entry), Ok(&push(10)));
+        assert_eq!(second_view.get(second_entry), Ok(&push(20)));
+    }
+
+    #[test]
+    fn instruction_lookup_does_not_fallback_to_same_local_index_in_another_space() {
+        let mut registered = InstructionSequence::new();
+        let registered_entry = registered.append(push(10));
+        let mut unregistered = InstructionSequence::new();
+        let unregistered_entry = unregistered.append(push(99));
+        let views = [registered.view()];
+        let lookup = InstructionLookup::from(
+            CodeSpaceLookup::new(&views).expect("single registered view is valid"),
+        );
+
+        assert_eq!(registered_entry.as_index(), unregistered_entry.as_index());
+        assert_eq!(
+            lookup.get_location(unregistered.view().location(unregistered_entry)),
+            Err(InstructionLookupError::UnknownCodeSpace {
+                code_space: unregistered.code_space()
+            })
+        );
+    }
+
+    #[test]
+    fn instruction_lookup_keeps_same_local_index_separate_between_spaces() {
+        let mut first = InstructionSequence::new();
+        let first_entry = first.append(push(1));
+        let mut second = InstructionSequence::new();
+        let second_entry = second.append(push(2));
+        let views = [second.view(), first.view()];
+        let lookup = InstructionLookup::from(
+            CodeSpaceLookup::new(&views).expect("views should be distinct"),
+        );
+
+        assert_eq!(first_entry.as_index(), second_entry.as_index());
+        assert_eq!(
+            lookup.get_location(first.view().location(first_entry)),
+            Ok(&push(1))
+        );
+        assert_eq!(
+            lookup.get_location(second.view().location(second_entry)),
+            Ok(&push(2))
+        );
+    }
+
+    #[test]
+    fn instruction_lookup_distinguishes_unknown_space_from_invalid_local_address() {
+        let mut registered = InstructionSequence::new();
+        registered.append(Instruction::Halt);
+        let unregistered = InstructionSequence::new();
+        let views = [registered.view()];
+        let lookup = InstructionLookup::from(
+            CodeSpaceLookup::new(&views).expect("single registered view is valid"),
+        );
+        let end = registered.view().location(address(1));
+        let out_of_range = registered.view().location(address(2));
+        let unknown = unregistered.view().location(address(1));
+
+        assert_eq!(
+            lookup.validate_location(end),
+            Err(address_lookup_error(InstructionAddressError::EndAddress {
+                address: end.address()
+            }))
+        );
+        assert_eq!(
+            lookup.validate_location(out_of_range),
+            Err(address_lookup_error(
+                InstructionAddressError::InvalidAddress {
+                    address: out_of_range.address()
+                }
+            ))
+        );
+        assert_eq!(
+            lookup.validate_location(unknown),
+            Err(InstructionLookupError::UnknownCodeSpace {
+                code_space: unregistered.code_space()
+            })
+        );
+    }
+
+    #[test]
+    fn instruction_lookup_reports_end_for_empty_registered_space() {
+        let empty = InstructionSequence::new();
+        let views = [empty.view()];
+        let lookup = InstructionLookup::from(
+            CodeSpaceLookup::new(&views).expect("single registered view is valid"),
+        );
+        let location = empty.view().location(address(0));
+
+        assert_eq!(
+            lookup.get_location(location),
+            Err(address_lookup_error(InstructionAddressError::EndAddress {
+                address: location.address()
+            }))
+        );
+    }
+
+    #[test]
+    fn code_space_lookup_rejects_duplicate_registered_spaces() {
+        let mut code = InstructionSequence::new();
+        code.append(Instruction::Halt);
+        let views = [code.view(), code.view()];
+
+        assert_eq!(
+            CodeSpaceLookup::new(&views).expect_err("duplicate code spaces should be rejected"),
+            CodeSpaceLookupError::DuplicateCodeSpace {
+                code_space: code.code_space()
+            }
+        );
     }
 }

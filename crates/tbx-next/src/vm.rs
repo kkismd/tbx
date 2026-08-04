@@ -1,5 +1,6 @@
 use crate::instruction::{
-    CodeLocation, Instruction, InstructionAddress, InstructionAddressError, InstructionView,
+    CodeLocation, CodeSpaceLookup, Instruction, InstructionAddress, InstructionLookup,
+    InstructionLookupError, InstructionView,
 };
 use crate::primitive::{PrimitiveContext, PrimitiveError, PrimitiveLookup, PrimitiveLookupError};
 use crate::stack::{DataStack, ReturnFrame, ReturnStack, StackError};
@@ -41,10 +42,10 @@ pub(crate) struct VmError {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum VmErrorKind {
     InstructionFetch {
-        source: InstructionAddressError,
+        source: InstructionLookupError,
     },
     UnexpectedEndOfCode {
-        source: InstructionAddressError,
+        source: InstructionLookupError,
     },
     DataStackUnderflow {
         source: StackError,
@@ -53,10 +54,10 @@ pub(crate) enum VmErrorKind {
         source: StackError,
     },
     InvalidJumpTarget {
-        source: InstructionAddressError,
+        source: InstructionLookupError,
     },
     InvalidReturnTarget {
-        source: InstructionAddressError,
+        source: InstructionLookupError,
     },
     InvalidWordId {
         source: WordLookupError,
@@ -69,20 +70,28 @@ pub(crate) enum VmErrorKind {
         source: PrimitiveError,
     },
     InvalidCompiledEntry {
-        source: InstructionAddressError,
+        source: InstructionLookupError,
     },
 }
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct ExecutionView<'a> {
-    instructions: InstructionView<'a>,
+    instructions: InstructionLookup<'a>,
     words: PublishedWordLookup<'a>,
     primitives: PrimitiveLookup<'a>,
 }
 
 impl<'a> ExecutionView<'a> {
-    pub(crate) const fn new(
+    pub(crate) fn new(
         instructions: InstructionView<'a>,
+        words: PublishedWordLookup<'a>,
+        primitives: PrimitiveLookup<'a>,
+    ) -> Self {
+        Self::with_instruction_lookup(instructions.into(), words, primitives)
+    }
+
+    pub(crate) const fn with_instruction_lookup(
+        instructions: InstructionLookup<'a>,
         words: PublishedWordLookup<'a>,
         primitives: PrimitiveLookup<'a>,
     ) -> Self {
@@ -93,7 +102,15 @@ impl<'a> ExecutionView<'a> {
         }
     }
 
-    pub(crate) const fn instructions(self) -> InstructionView<'a> {
+    pub(crate) fn with_code_spaces(
+        code_spaces: CodeSpaceLookup<'a>,
+        words: PublishedWordLookup<'a>,
+        primitives: PrimitiveLookup<'a>,
+    ) -> Self {
+        Self::with_instruction_lookup(code_spaces.into(), words, primitives)
+    }
+
+    pub(crate) const fn instructions(self) -> InstructionLookup<'a> {
         self.instructions
     }
 
@@ -107,7 +124,7 @@ impl<'a> ExecutionView<'a> {
 }
 
 pub(crate) trait VmExecutionView<'a>: Copy {
-    fn instructions(self) -> InstructionView<'a>;
+    fn instructions(self) -> InstructionLookup<'a>;
 
     fn lookup_word(self, id: WordId) -> Result<WordDefinition, WordLookupError>;
 
@@ -118,7 +135,7 @@ pub(crate) trait VmExecutionView<'a>: Copy {
 }
 
 impl<'a> VmExecutionView<'a> for ExecutionView<'a> {
-    fn instructions(self) -> InstructionView<'a> {
+    fn instructions(self) -> InstructionLookup<'a> {
         self.instructions()
     }
 
@@ -135,8 +152,8 @@ impl<'a> VmExecutionView<'a> for ExecutionView<'a> {
 }
 
 impl<'a> VmExecutionView<'a> for InstructionView<'a> {
-    fn instructions(self) -> InstructionView<'a> {
-        self
+    fn instructions(self) -> InstructionLookup<'a> {
+        self.into()
     }
 
     fn lookup_word(self, id: WordId) -> Result<WordDefinition, WordLookupError> {
@@ -164,7 +181,15 @@ impl Vm {
         instructions: InstructionView<'_>,
         entry: CodeLocation,
     ) -> Result<Self, VmError> {
-        instructions
+        Self::new_at_location_in(instructions, entry)
+    }
+
+    pub(crate) fn new_at_location_in<'a, E: VmExecutionView<'a>>(
+        execution: E,
+        entry: CodeLocation,
+    ) -> Result<Self, VmError> {
+        execution
+            .instructions()
             .validate_location(entry)
             .map_err(|source| VmError {
                 location: entry,
@@ -257,7 +282,7 @@ impl Vm {
 
     fn step_push(
         &mut self,
-        instructions: InstructionView<'_>,
+        instructions: InstructionLookup<'_>,
         location: CodeLocation,
         value: Value,
     ) -> Result<StepOutcome, VmError> {
@@ -271,7 +296,7 @@ impl Vm {
 
     fn step_jump(
         &mut self,
-        instructions: InstructionView<'_>,
+        instructions: InstructionLookup<'_>,
         location: CodeLocation,
         target: InstructionAddress,
     ) -> Result<StepOutcome, VmError> {
@@ -331,7 +356,7 @@ impl Vm {
                         location,
                         kind: VmErrorKind::InvalidCompiledEntry { source },
                     })
-                    .map(|address| instructions.location(address))?;
+                    .map(|_| entry)?;
 
                 self.return_stack.push(ReturnFrame::new(next));
                 self.instruction_pointer = entry;
@@ -343,7 +368,7 @@ impl Vm {
 
     fn step_jump_if_zero(
         &mut self,
-        instructions: InstructionView<'_>,
+        instructions: InstructionLookup<'_>,
         location: CodeLocation,
         target: InstructionAddress,
     ) -> Result<StepOutcome, VmError> {
@@ -372,7 +397,7 @@ impl Vm {
 
     fn step_return(
         &mut self,
-        instructions: InstructionView<'_>,
+        instructions: InstructionLookup<'_>,
         location: CodeLocation,
     ) -> Result<StepOutcome, VmError> {
         let frame = self.return_stack.peek().map_err(|source| VmError {
@@ -391,13 +416,11 @@ impl Vm {
 
     fn valid_next_location(
         &self,
-        instructions: InstructionView<'_>,
+        instructions: InstructionLookup<'_>,
         location: CodeLocation,
     ) -> Result<CodeLocation, VmError> {
         instructions
-            .validate_location(location)
-            .and_then(|address| instructions.checked_next_address(address))
-            .map(|address| instructions.location(address))
+            .checked_next_location(location)
             .map_err(|source| VmError {
                 location,
                 kind: VmErrorKind::UnexpectedEndOfCode { source },
@@ -406,14 +429,14 @@ impl Vm {
 
     fn valid_jump_target(
         &self,
-        instructions: InstructionView<'_>,
+        instructions: InstructionLookup<'_>,
         location: CodeLocation,
         target: InstructionAddress,
     ) -> Result<CodeLocation, VmError> {
-        let target = instructions.location(target);
+        let target = CodeLocation::new(location.code_space(), target);
         instructions
             .validate_location(target)
-            .map(|address| instructions.location(address))
+            .map(|_| target)
             .map_err(|source| VmError {
                 location,
                 kind: VmErrorKind::InvalidJumpTarget { source },
@@ -422,13 +445,13 @@ impl Vm {
 
     fn valid_return_target(
         &self,
-        instructions: InstructionView<'_>,
+        instructions: InstructionLookup<'_>,
         location: CodeLocation,
         target: CodeLocation,
     ) -> Result<CodeLocation, VmError> {
         instructions
             .validate_location(target)
-            .map(|address| instructions.location(address))
+            .map(|_| target)
             .map_err(|source| VmError {
                 location,
                 kind: VmErrorKind::InvalidReturnTarget { source },
@@ -453,6 +476,7 @@ impl VmError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::instruction::InstructionAddressError;
     use crate::instruction::InstructionSequence;
     use crate::primitive::{PrimitiveLookupError, PrimitiveRegistry};
     use crate::word::{CompletedWordDefinition, PrimitiveId, PublishedWords, WordLookupError};
@@ -464,6 +488,10 @@ mod tests {
 
     fn address(index: usize) -> InstructionAddress {
         InstructionAddress::from_index(index)
+    }
+
+    fn address_lookup_error(source: InstructionAddressError) -> InstructionLookupError {
+        InstructionLookupError::Address { source }
     }
 
     fn new_vm(code: &InstructionSequence, entry: InstructionAddress) -> Vm {
@@ -560,14 +588,16 @@ mod tests {
             VmError {
                 location: location(&code, entry),
                 kind: VmErrorKind::InstructionFetch {
-                    source: InstructionAddressError::EndAddress { address: entry }
+                    source: address_lookup_error(InstructionAddressError::EndAddress {
+                        address: entry,
+                    })
                 }
             }
         );
     }
 
     #[test]
-    fn new_at_location_rejects_cross_owner_entry_without_index_fallback() {
+    fn new_at_location_rejects_unregistered_entry_code_space_without_index_fallback() {
         let mut source = InstructionSequence::new();
         let source_entry = source.append(Instruction::Halt);
         let mut target = InstructionSequence::new();
@@ -580,10 +610,8 @@ mod tests {
             VmError {
                 location: entry,
                 kind: VmErrorKind::InstructionFetch {
-                    source: InstructionAddressError::CodeSpaceMismatch {
-                        expected: target.view().code_space(),
-                        actual: source.view().code_space(),
-                        address: source_entry,
+                    source: InstructionLookupError::UnknownCodeSpace {
+                        code_space: source.view().code_space(),
                     }
                 }
             }
@@ -645,9 +673,9 @@ mod tests {
             Err(VmError {
                 location: location(&code, entry),
                 kind: VmErrorKind::UnexpectedEndOfCode {
-                    source: InstructionAddressError::EndAddress {
+                    source: address_lookup_error(InstructionAddressError::EndAddress {
                         address: address(1)
-                    }
+                    })
                 }
             })
         );
@@ -656,7 +684,7 @@ mod tests {
     }
 
     #[test]
-    fn step_rejects_invalid_current_instruction_pointer_without_mutation() {
+    fn step_rejects_unregistered_current_code_space_without_mutation() {
         let mut code = InstructionSequence::new();
         let entry = code.append(Instruction::Halt);
         let other = InstructionSequence::new();
@@ -669,10 +697,8 @@ mod tests {
             Err(VmError {
                 location: location(&code, entry),
                 kind: VmErrorKind::InstructionFetch {
-                    source: InstructionAddressError::CodeSpaceMismatch {
-                        expected: other.view().code_space(),
-                        actual: code.view().code_space(),
-                        address: entry
+                    source: InstructionLookupError::UnknownCodeSpace {
+                        code_space: code.view().code_space(),
                     }
                 }
             })
@@ -719,9 +745,9 @@ mod tests {
             Err(VmError {
                 location: location(&code, entry),
                 kind: VmErrorKind::InvalidJumpTarget {
-                    source: InstructionAddressError::InvalidAddress {
+                    source: address_lookup_error(InstructionAddressError::InvalidAddress {
                         address: address(10)
-                    }
+                    })
                 }
             })
         );
@@ -743,7 +769,9 @@ mod tests {
             Err(VmError {
                 location: location(&code, entry),
                 kind: VmErrorKind::InvalidJumpTarget {
-                    source: InstructionAddressError::EndAddress { address: end }
+                    source: address_lookup_error(InstructionAddressError::EndAddress {
+                        address: end,
+                    })
                 }
             })
         );
@@ -822,9 +850,9 @@ mod tests {
             Err(VmError {
                 location: location(&code, branch),
                 kind: VmErrorKind::InvalidJumpTarget {
-                    source: InstructionAddressError::InvalidAddress {
+                    source: address_lookup_error(InstructionAddressError::InvalidAddress {
                         address: address(99)
-                    }
+                    })
                 }
             })
         );
@@ -848,9 +876,9 @@ mod tests {
             Err(VmError {
                 location: location(&code, branch),
                 kind: VmErrorKind::UnexpectedEndOfCode {
-                    source: InstructionAddressError::EndAddress {
+                    source: address_lookup_error(InstructionAddressError::EndAddress {
                         address: address(2)
-                    }
+                    })
                 }
             })
         );
@@ -935,7 +963,9 @@ mod tests {
             Err(VmError {
                 location: location(&code, entry),
                 kind: VmErrorKind::InvalidReturnTarget {
-                    source: InstructionAddressError::EndAddress { address: end }
+                    source: address_lookup_error(InstructionAddressError::EndAddress {
+                        address: end,
+                    })
                 }
             })
         );
@@ -961,7 +991,9 @@ mod tests {
             Err(VmError {
                 location: location(&code, entry),
                 kind: VmErrorKind::InvalidReturnTarget {
-                    source: InstructionAddressError::InvalidAddress { address: invalid }
+                    source: address_lookup_error(InstructionAddressError::InvalidAddress {
+                        address: invalid,
+                    })
                 }
             })
         );
@@ -972,7 +1004,7 @@ mod tests {
     }
 
     #[test]
-    fn return_rejects_target_missing_from_current_instruction_view() {
+    fn return_rejects_unregistered_target_code_space_without_mutation() {
         let mut full_code = InstructionSequence::new();
         let target = full_code.append(Instruction::Halt);
         let mut shorter_code = InstructionSequence::new();
@@ -987,10 +1019,8 @@ mod tests {
             Err(VmError {
                 location: location(&shorter_code, entry),
                 kind: VmErrorKind::InvalidReturnTarget {
-                    source: InstructionAddressError::CodeSpaceMismatch {
-                        expected: shorter_code.view().code_space(),
-                        actual: full_code.view().code_space(),
-                        address: target
+                    source: InstructionLookupError::UnknownCodeSpace {
+                        code_space: full_code.view().code_space(),
                     }
                 }
             })
@@ -1161,9 +1191,9 @@ mod tests {
             Err(VmError {
                 location: location(&code, entry),
                 kind: VmErrorKind::UnexpectedEndOfCode {
-                    source: InstructionAddressError::EndAddress {
+                    source: address_lookup_error(InstructionAddressError::EndAddress {
                         address: address(1)
-                    }
+                    })
                 }
             })
         );
@@ -1260,9 +1290,9 @@ mod tests {
         let error = VmError {
             location: location(&code, failing_branch),
             kind: VmErrorKind::InvalidJumpTarget {
-                source: InstructionAddressError::InvalidAddress {
+                source: address_lookup_error(InstructionAddressError::InvalidAddress {
                     address: address(99),
-                },
+                }),
             },
         };
         assert_eq!(result, Err(error));
@@ -1282,7 +1312,7 @@ mod tests {
     }
 
     #[test]
-    fn compiled_call_revalidates_entry_against_current_instruction_view() {
+    fn compiled_call_rejects_unregistered_entry_code_space() {
         let primitives = PrimitiveRegistry::new();
         let mut words = PublishedWords::new();
         let mut full_code = InstructionSequence::new();
@@ -1308,10 +1338,8 @@ mod tests {
             Err(VmError {
                 location: location(&short_code, call),
                 kind: VmErrorKind::InvalidCompiledEntry {
-                    source: InstructionAddressError::CodeSpaceMismatch {
-                        expected: short_code.code_space(),
-                        actual: full_code.code_space(),
-                        address: compiled_entry,
+                    source: InstructionLookupError::UnknownCodeSpace {
+                        code_space: full_code.code_space(),
                     }
                 }
             })
@@ -1520,7 +1548,9 @@ mod tests {
             Err(VmError {
                 location: location(&code, bad_return),
                 kind: VmErrorKind::InvalidReturnTarget {
-                    source: InstructionAddressError::InvalidAddress { address: invalid }
+                    source: address_lookup_error(InstructionAddressError::InvalidAddress {
+                        address: invalid,
+                    })
                 }
             })
         );
@@ -1545,9 +1575,9 @@ mod tests {
             Err(VmError {
                 location: location(&code, bad_branch),
                 kind: VmErrorKind::UnexpectedEndOfCode {
-                    source: InstructionAddressError::EndAddress {
+                    source: address_lookup_error(InstructionAddressError::EndAddress {
                         address: address(2)
-                    }
+                    })
                 }
             })
         );
