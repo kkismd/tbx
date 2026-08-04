@@ -4,11 +4,13 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 static NEXT_CODE_SPACE_ID: AtomicUsize = AtomicUsize::new(1);
 
-/// Absolute address into the shared TBX Next instruction sequence.
+/// Sequence-local address into one TBX Next instruction owner.
 ///
 /// ADR #1367 defines instruction addresses as VM-control identifiers, not
 /// runtime values. The concrete backing type is intentionally private and must
-/// not become a serialized or public ABI contract.
+/// not become a serialized or public ABI contract. This address does not carry
+/// owner identity; use `CodeLocation` when a position must be tied to a
+/// specific instruction sequence.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) struct InstructionAddress {
     index: usize,
