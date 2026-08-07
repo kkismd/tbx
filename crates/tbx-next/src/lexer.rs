@@ -24,7 +24,19 @@ impl Token {
 pub(crate) enum TokenKind {
     IntegerLiteral,
     Name,
+    Plus,
     Minus,
+    Star,
+    Slash,
+    Percent,
+    LParen,
+    RParen,
+    Equal,
+    NotEqual,
+    Less,
+    LessEqual,
+    Greater,
+    GreaterEqual,
     LineBoundary,
     Eof,
 }
@@ -110,7 +122,16 @@ impl<'a> Lexer<'a> {
         match byte {
             b'0'..=b'9' => self.integer_literal(),
             b'A'..=b'Z' | b'a'..=b'z' | b'_' => self.name(),
+            b'+' => self.single_byte_token(TokenKind::Plus),
             b'-' => self.single_byte_token(TokenKind::Minus),
+            b'*' => self.single_byte_token(TokenKind::Star),
+            b'/' => self.single_byte_token(TokenKind::Slash),
+            b'%' => self.single_byte_token(TokenKind::Percent),
+            b'(' => self.single_byte_token(TokenKind::LParen),
+            b')' => self.single_byte_token(TokenKind::RParen),
+            b'=' => self.single_byte_token(TokenKind::Equal),
+            b'<' => self.less_prefixed_operator(),
+            b'>' => self.greater_prefixed_operator(),
             b'\n' => self.line_boundary(1),
             b'\r' => {
                 let len = if self.source.as_bytes().get(start + 1) == Some(&b'\n') {
@@ -223,6 +244,40 @@ impl<'a> Lexer<'a> {
         self.token(kind, start, self.offset)
     }
 
+    fn less_prefixed_operator(&mut self) -> Result<Token, LexError> {
+        let start = self.offset;
+        self.offset += 1;
+
+        let kind = match self.source.as_bytes().get(self.offset) {
+            Some(b'>') => {
+                self.offset += 1;
+                TokenKind::NotEqual
+            }
+            Some(b'=') => {
+                self.offset += 1;
+                TokenKind::LessEqual
+            }
+            _ => TokenKind::Less,
+        };
+
+        self.token(kind, start, self.offset)
+    }
+
+    fn greater_prefixed_operator(&mut self) -> Result<Token, LexError> {
+        let start = self.offset;
+        self.offset += 1;
+
+        let kind = match self.source.as_bytes().get(self.offset) {
+            Some(b'=') => {
+                self.offset += 1;
+                TokenKind::GreaterEqual
+            }
+            _ => TokenKind::Greater,
+        };
+
+        self.token(kind, start, self.offset)
+    }
+
     fn line_boundary(&mut self, len: usize) -> Result<Token, LexError> {
         let start = self.offset;
         self.offset += len;
@@ -259,7 +314,22 @@ impl<'a> Lexer<'a> {
 }
 
 fn is_token_boundary(byte: u8) -> bool {
-    matches!(byte, b' ' | b'\t' | b'\n' | b'\r' | b'-')
+    matches!(
+        byte,
+        b' ' | b'\t'
+            | b'\n'
+            | b'\r'
+            | b'+'
+            | b'-'
+            | b'*'
+            | b'/'
+            | b'%'
+            | b'('
+            | b')'
+            | b'='
+            | b'<'
+            | b'>'
+    )
 }
 
 #[cfg(test)]
@@ -376,6 +446,131 @@ mod tests {
         assert_eq!(
             slices(sources.view(), &tokens),
             ["-", "1", "2", "-", "3", ""]
+        );
+    }
+
+    #[test]
+    fn single_character_expression_operators_keep_source_spans() {
+        let (sources, id, tokens) = lex_all("+ - * / % ( ) = < >");
+
+        assert_eq!(
+            kinds(&tokens),
+            [
+                TokenKind::Plus,
+                TokenKind::Minus,
+                TokenKind::Star,
+                TokenKind::Slash,
+                TokenKind::Percent,
+                TokenKind::LParen,
+                TokenKind::RParen,
+                TokenKind::Equal,
+                TokenKind::Less,
+                TokenKind::Greater,
+                TokenKind::Eof
+            ]
+        );
+        assert_token(tokens[0], TokenKind::Plus, id, 0, 1);
+        assert_token(tokens[1], TokenKind::Minus, id, 2, 3);
+        assert_token(tokens[2], TokenKind::Star, id, 4, 5);
+        assert_token(tokens[3], TokenKind::Slash, id, 6, 7);
+        assert_token(tokens[4], TokenKind::Percent, id, 8, 9);
+        assert_token(tokens[5], TokenKind::LParen, id, 10, 11);
+        assert_token(tokens[6], TokenKind::RParen, id, 12, 13);
+        assert_token(tokens[7], TokenKind::Equal, id, 14, 15);
+        assert_token(tokens[8], TokenKind::Less, id, 16, 17);
+        assert_token(tokens[9], TokenKind::Greater, id, 18, 19);
+        assert_eq!(
+            slices(sources.view(), &tokens),
+            ["+", "-", "*", "/", "%", "(", ")", "=", "<", ">", ""]
+        );
+    }
+
+    #[test]
+    fn multi_character_expression_operators_use_longest_match() {
+        let (sources, id, tokens) = lex_all("<> <= >= << >> <=> <>=");
+
+        assert_eq!(
+            kinds(&tokens),
+            [
+                TokenKind::NotEqual,
+                TokenKind::LessEqual,
+                TokenKind::GreaterEqual,
+                TokenKind::Less,
+                TokenKind::Less,
+                TokenKind::Greater,
+                TokenKind::Greater,
+                TokenKind::LessEqual,
+                TokenKind::Greater,
+                TokenKind::NotEqual,
+                TokenKind::Equal,
+                TokenKind::Eof
+            ]
+        );
+        assert_token(tokens[0], TokenKind::NotEqual, id, 0, 2);
+        assert_token(tokens[1], TokenKind::LessEqual, id, 3, 5);
+        assert_token(tokens[2], TokenKind::GreaterEqual, id, 6, 8);
+        assert_eq!(
+            slices(sources.view(), &tokens),
+            ["<>", "<=", ">=", "<", "<", ">", ">", "<=", ">", "<>", "=", ""]
+        );
+    }
+
+    #[test]
+    fn unsupported_expression_punctuation_stays_structured_error() {
+        for source in ["!", ",", ":"] {
+            let (sources, id) = lexer_for(source);
+            let view = sources.view();
+            let mut lexer = Lexer::new(view, id).expect("test source should build a lexer");
+            let character = source.chars().next().expect("source should not be empty");
+
+            assert_eq!(
+                lexer.next_token(),
+                Err(LexError::InvalidCharacter {
+                    span: view
+                        .span(id, 0, character.len_utf8())
+                        .expect("punctuation span should validate"),
+                    character,
+                    reason: InvalidCharacterReason::UnsupportedPunctuation
+                }),
+                "{source:?} should remain unsupported punctuation"
+            );
+        }
+    }
+
+    #[test]
+    fn expression_operators_are_name_boundaries_without_whitespace() {
+        let (sources, _id, tokens) = lex_all("1+2 A*(B-3) READY?<>DONE X/Y%Z");
+
+        assert_eq!(
+            kinds(&tokens),
+            [
+                TokenKind::IntegerLiteral,
+                TokenKind::Plus,
+                TokenKind::IntegerLiteral,
+                TokenKind::Name,
+                TokenKind::Star,
+                TokenKind::LParen,
+                TokenKind::Name,
+                TokenKind::Minus,
+                TokenKind::IntegerLiteral,
+                TokenKind::RParen,
+                TokenKind::Name,
+                TokenKind::NotEqual,
+                TokenKind::Name,
+                TokenKind::Name,
+                TokenKind::Slash,
+                TokenKind::Name,
+                TokenKind::Percent,
+                TokenKind::Name,
+                TokenKind::Eof
+            ]
+        );
+        assert_eq!(
+            slices(sources.view(), &tokens),
+            [
+                "1", "+", "2", "A", "*", "(", "B", "-", "3", ")", "READY?", "<>", "DONE", "X", "/",
+                "Y", "%", "Z", ""
+            ]
         );
     }
 
