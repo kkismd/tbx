@@ -19,7 +19,7 @@ use crate::word_resolution::{resolve_word_name, WordResolutionError};
 pub(crate) struct TemporaryExecutionUnit {
     instructions: InstructionSequence,
     mapping: InstructionSourceMapping,
-    entry: InstructionAddress,
+    entry: CodeLocation,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -153,7 +153,9 @@ pub(crate) fn compile_source(
         }
     }
 
-    let entry = InstructionAddress::from_index(0);
+    let entry = instructions
+        .view()
+        .location(InstructionAddress::from_index(0));
     Ok(TemporaryExecutionUnit {
         instructions,
         mapping,
@@ -174,7 +176,6 @@ fn run_unit(
     unit: &TemporaryExecutionUnit,
     context: SourceExecutionContext<'_>,
 ) -> Result<SourceRunResult, SourceProcessorError> {
-    let mut vm = Vm::new(unit.instructions.view(), unit.entry)?;
     let mut code_spaces = Vec::with_capacity(context.code_spaces().len() + 1);
     code_spaces.push(unit.instructions.view());
     code_spaces.extend_from_slice(context.code_spaces());
@@ -183,6 +184,7 @@ fn run_unit(
         context.words(),
         context.primitives(),
     );
+    let mut vm = Vm::new_at_location_in(execution, unit.entry)?;
     let outcome = vm.run(execution)?;
     let data_stack = drain_data_stack(&mut vm);
 
@@ -274,11 +276,11 @@ fn drain_data_stack(vm: &mut Vm) -> Vec<Value> {
 
 impl TemporaryExecutionUnit {
     pub(crate) fn entry(&self) -> InstructionAddress {
-        self.entry
+        self.entry.address()
     }
 
     pub(crate) fn entry_location(&self) -> CodeLocation {
-        self.instructions.view().location(self.entry)
+        self.entry
     }
 
     pub(crate) fn instructions(&self) -> crate::instruction::InstructionView<'_> {
@@ -471,6 +473,14 @@ mod tests {
 
     fn completed_compiled(code: &mut InstructionSequence, value: i16) -> CompletedWordDefinition {
         let entry = code.append(Instruction::Push(Value::integer(value)));
+        CompletedWordDefinition::compiled(code.view().location(entry), code.view())
+            .expect("test compiled entry should be valid")
+    }
+
+    fn completed_compiled_at(
+        code: &InstructionSequence,
+        entry: InstructionAddress,
+    ) -> CompletedWordDefinition {
         CompletedWordDefinition::compiled(code.view().location(entry), code.view())
             .expect("test compiled entry should be valid")
     }
@@ -1022,20 +1032,30 @@ mod tests {
     }
 
     #[test]
-    fn integer_literals_and_primitive_calls_run_in_source_order() {
+    fn integer_literals_primitive_and_compiled_calls_run_in_source_order() {
         let mut words = PublishedWords::new();
         let mut bindings = Bindings::new();
         let mut primitives = PrimitiveRegistry::new();
+        let mut published_code = InstructionSequence::new();
         let primitive = primitives.register(add_top_two);
+        publish_initial(
+            &mut words,
+            &mut bindings,
+            "USER_WORD",
+            completed_compiled(&mut published_code, 5),
+        );
+        published_code.append(Instruction::Return);
         register_primitive(&mut words, &mut bindings, name("ADD"), primitive)
             .expect("primitive should register");
-        let (sources, source_id) = source("2 5 add");
+        let (sources, source_id) = source("2 user_word add");
+        let published_views = [published_code.view()];
 
         let result = run_source(
             sources.view(),
             source_id,
-            SourceExecutionContext::new(
+            SourceExecutionContext::with_code_spaces(
                 &bindings,
+                &published_views,
                 PublishedWordLookup::new(&words),
                 primitives.lookup(),
             ),
@@ -1044,6 +1064,162 @@ mod tests {
 
         assert_eq!(result.outcome(), RunOutcome::Halted);
         assert_eq!(result.data_stack(), [value(7)]);
+    }
+
+    #[test]
+    fn published_compiled_word_can_call_nested_compiled_words() {
+        let mut words = PublishedWords::new();
+        let mut bindings = Bindings::new();
+        let primitives = PrimitiveRegistry::new();
+
+        let mut inner_code = InstructionSequence::new();
+        let inner_entry = inner_code.append(Instruction::Push(value(3)));
+        inner_code.append(Instruction::Return);
+        let inner = publish_initial(
+            &mut words,
+            &mut bindings,
+            "INNER",
+            completed_compiled_at(&inner_code, inner_entry),
+        );
+
+        let mut middle_code = InstructionSequence::new();
+        let middle_entry = middle_code.append(Instruction::Call(inner));
+        middle_code.append(Instruction::Push(value(4)));
+        middle_code.append(Instruction::Return);
+        let middle = publish_initial(
+            &mut words,
+            &mut bindings,
+            "MIDDLE",
+            completed_compiled_at(&middle_code, middle_entry),
+        );
+
+        let mut outer_code = InstructionSequence::new();
+        let outer_entry = outer_code.append(Instruction::Call(middle));
+        outer_code.append(Instruction::Push(value(5)));
+        outer_code.append(Instruction::Return);
+        publish_initial(
+            &mut words,
+            &mut bindings,
+            "OUTER",
+            completed_compiled_at(&outer_code, outer_entry),
+        );
+
+        let (sources, source_id) = source("outer");
+        let published_views = [inner_code.view(), middle_code.view(), outer_code.view()];
+
+        let result = run_source(
+            sources.view(),
+            source_id,
+            SourceExecutionContext::with_code_spaces(
+                &bindings,
+                &published_views,
+                PublishedWordLookup::new(&words),
+                primitives.lookup(),
+            ),
+        )
+        .expect("nested compiled call should run");
+
+        assert_eq!(result.outcome(), RunOutcome::Halted);
+        assert_eq!(result.data_stack(), [value(3), value(4), value(5)]);
+    }
+
+    #[test]
+    fn saved_unit_runs_old_compiled_entry_after_redefinition() {
+        let mut words = PublishedWords::new();
+        let mut bindings = Bindings::new();
+        let primitives = PrimitiveRegistry::new();
+
+        let mut old_code = InstructionSequence::new();
+        let old_entry = old_code.append(Instruction::Push(value(41)));
+        old_code.append(Instruction::Return);
+        let old = publish_initial(
+            &mut words,
+            &mut bindings,
+            "TARGET",
+            completed_compiled_at(&old_code, old_entry),
+        );
+        let (_old_sources, _old_source_id, old_unit) = compile_with_bindings("target", &bindings);
+
+        let mut new_code = InstructionSequence::new();
+        let new_entry = new_code.append(Instruction::Push(value(99)));
+        new_code.append(Instruction::Return);
+        let redefinition = redefine_word(
+            &mut words,
+            &mut bindings,
+            &name("TARGET"),
+            completed_compiled_at(&new_code, new_entry),
+        )
+        .expect("existing word should redefine");
+        let (new_sources, new_source_id) = source("target");
+        let published_views = [old_code.view(), new_code.view()];
+
+        let old_result = run_unit(
+            &old_unit,
+            SourceExecutionContext::with_code_spaces(
+                &bindings,
+                &published_views,
+                PublishedWordLookup::new(&words),
+                primitives.lookup(),
+            ),
+        )
+        .expect("old early-bound unit should run");
+        let new_result = run_source(
+            new_sources.view(),
+            new_source_id,
+            SourceExecutionContext::with_code_spaces(
+                &bindings,
+                &published_views,
+                PublishedWordLookup::new(&words),
+                primitives.lookup(),
+            ),
+        )
+        .expect("newly compiled unit should run");
+
+        assert_eq!(redefinition.previous(), old);
+        assert_ne!(redefinition.previous(), redefinition.current());
+        assert_eq!(
+            old_unit.instructions().get(address(0)),
+            Ok(&Instruction::Call(old))
+        );
+        assert_eq!(old_result.data_stack(), [value(41)]);
+        assert_eq!(new_result.data_stack(), [value(99)]);
+        assert_eq!(words.len(), 2);
+    }
+
+    #[test]
+    fn source_run_does_not_publish_temporary_code_or_reuse_vm_state() {
+        let mut words = PublishedWords::new();
+        let mut bindings = Bindings::new();
+        let primitives = PrimitiveRegistry::new();
+        let mut published_code = InstructionSequence::new();
+        publish_initial(
+            &mut words,
+            &mut bindings,
+            "USER_WORD",
+            completed_compiled(&mut published_code, 8),
+        );
+        published_code.append(Instruction::Return);
+        let original_word_count = words.len();
+        let original_published_len = published_code.len();
+        let (mut sources, first) = source("1 user_word");
+        let second = sources.register("user_word");
+        let published_views = [published_code.view()];
+        let context = SourceExecutionContext::with_code_spaces(
+            &bindings,
+            &published_views,
+            PublishedWordLookup::new(&words),
+            primitives.lookup(),
+        );
+
+        let first_result = run_source(sources.view(), first, context)
+            .expect("first source should run with a fresh VM");
+        let second_result = run_source(sources.view(), second, context)
+            .expect("second source should run with a fresh VM");
+
+        assert_eq!(first_result.data_stack(), [value(1), value(8)]);
+        assert_eq!(second_result.data_stack(), [value(8)]);
+        assert_eq!(words.len(), original_word_count);
+        assert_eq!(published_code.len(), original_published_len);
     }
 
     #[test]
