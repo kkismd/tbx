@@ -1,11 +1,15 @@
 use crate::binding::Bindings;
 use crate::instruction::{
-    CodeSpaceLookup, CodeSpaceLookupError, Instruction, InstructionAddress, InstructionSequence,
-    InstructionView,
+    CodeLocation, CodeSpaceLookup, CodeSpaceLookupError, Instruction, InstructionAddress,
+    InstructionSequence, InstructionView,
 };
 use crate::lexer::{LexError, Lexer, Token, TokenKind};
 use crate::primitive::PrimitiveLookup;
 use crate::source::{SourceError, SourceId, SourceSpan, SourceView};
+use crate::source_mapping::{
+    InstructionSourceMapping, InstructionSourceMappingView, SourceMappingAppendError,
+    SourceMappingLookupError,
+};
 use crate::value::Value;
 use crate::vm::{ExecutionView, RunOutcome, Vm, VmError};
 use crate::word_lookup::PublishedWordLookup;
@@ -14,14 +18,8 @@ use crate::word_resolution::{resolve_word_name, WordResolutionError};
 #[derive(Debug)]
 pub(crate) struct TemporaryExecutionUnit {
     instructions: InstructionSequence,
-    spans: Vec<InstructionSource>,
+    mapping: InstructionSourceMapping,
     entry: InstructionAddress,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct InstructionSource {
-    address: InstructionAddress,
-    span: SourceSpan,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -50,6 +48,7 @@ pub(crate) enum SourceProcessorError {
     Lex(LexError),
     Compile(CompileError),
     CodeSpaceLookup(CodeSpaceLookupError),
+    SourceMappingAppend(SourceMappingAppendError),
     Vm(VmError),
 }
 
@@ -97,6 +96,12 @@ impl From<CodeSpaceLookupError> for SourceProcessorError {
     }
 }
 
+impl From<SourceMappingAppendError> for SourceProcessorError {
+    fn from(error: SourceMappingAppendError) -> Self {
+        Self::SourceMappingAppend(error)
+    }
+}
+
 pub(crate) fn compile_source(
     view: SourceView<'_>,
     source_id: SourceId,
@@ -104,7 +109,7 @@ pub(crate) fn compile_source(
 ) -> Result<TemporaryExecutionUnit, SourceProcessorError> {
     let mut lexer = Lexer::new(view, source_id)?;
     let mut instructions = InstructionSequence::new();
-    let mut spans = Vec::new();
+    let mut mapping = InstructionSourceMapping::new(instructions.code_space());
 
     loop {
         let token = lexer.next_token()?;
@@ -114,28 +119,28 @@ pub(crate) fn compile_source(
                 let value = compile_integer_literal(view, token)?;
                 append_mapped(
                     &mut instructions,
-                    &mut spans,
+                    &mut mapping,
                     Instruction::Push(Value::integer(value)),
                     token.span(),
-                );
+                )?;
             }
             TokenKind::Name => {
                 let id = compile_word_reference(view, token, context)?;
                 append_mapped(
                     &mut instructions,
-                    &mut spans,
+                    &mut mapping,
                     Instruction::Call(id),
                     token.span(),
-                );
+                )?;
             }
             TokenKind::LineBoundary => {}
             TokenKind::Eof => {
                 append_mapped(
                     &mut instructions,
-                    &mut spans,
+                    &mut mapping,
                     Instruction::Halt,
                     token.span(),
-                );
+                )?;
                 break;
             }
             TokenKind::Minus => {
@@ -151,7 +156,7 @@ pub(crate) fn compile_source(
     let entry = InstructionAddress::from_index(0);
     Ok(TemporaryExecutionUnit {
         instructions,
-        spans,
+        mapping,
         entry,
     })
 }
@@ -247,13 +252,13 @@ fn parse_unsigned_i16(source: &str, span: SourceSpan) -> Result<i16, CompileErro
 
 fn append_mapped(
     instructions: &mut InstructionSequence,
-    spans: &mut Vec<InstructionSource>,
+    mapping: &mut InstructionSourceMapping,
     instruction: Instruction,
     span: SourceSpan,
-) -> InstructionAddress {
+) -> Result<InstructionAddress, SourceMappingAppendError> {
     let address = instructions.append(instruction);
-    spans.push(InstructionSource { address, span });
-    address
+    mapping.append_mapped(address, span)?;
+    Ok(address)
 }
 
 fn drain_data_stack(vm: &mut Vm) -> Vec<Value> {
@@ -272,19 +277,27 @@ impl TemporaryExecutionUnit {
         self.entry
     }
 
+    pub(crate) fn entry_location(&self) -> CodeLocation {
+        self.instructions.view().location(self.entry)
+    }
+
     pub(crate) fn instructions(&self) -> crate::instruction::InstructionView<'_> {
         self.instructions.view()
+    }
+
+    pub(crate) fn source_mapping(&self) -> InstructionSourceMappingView<'_> {
+        self.mapping.view()
     }
 
     pub(crate) fn len(&self) -> usize {
         self.instructions.len()
     }
 
-    pub(crate) fn source_span(&self, address: InstructionAddress) -> Option<SourceSpan> {
-        self.spans
-            .iter()
-            .find(|source| source.address == address)
-            .map(|source| source.span)
+    pub(crate) fn source_span(
+        &self,
+        location: CodeLocation,
+    ) -> Result<Option<SourceSpan>, SourceMappingLookupError> {
+        self.mapping.view().source_span(location)
     }
 }
 
@@ -377,6 +390,7 @@ mod tests {
     use crate::primitive::{PrimitiveContext, PrimitiveError, PrimitiveRegistry};
     use crate::redefinition::redefine_word;
     use crate::source::SourceTexts;
+    use crate::source_mapping::{SourceMappingLookup, SourceMappingLookupError};
     use crate::word::{CompletedWordDefinition, PrimitiveId, PublishedWords, WordId};
     use crate::word_lookup::PublishedWordLookup;
 
@@ -443,6 +457,10 @@ mod tests {
         InstructionAddress::from_index(index)
     }
 
+    fn location(unit: &TemporaryExecutionUnit, index: usize) -> CodeLocation {
+        unit.instructions().location(address(index))
+    }
+
     fn name(input: &str) -> NormalizedName {
         NormalizedName::new(input).expect("test input should be a valid word name")
     }
@@ -495,9 +513,13 @@ mod tests {
         let view = sources.view();
 
         assert_eq!(unit.entry(), address(0));
+        assert_eq!(unit.entry_location(), location(&unit, 0));
         assert_eq!(unit.len(), 1);
         assert_eq!(unit.instructions().get(address(0)), Ok(&Instruction::Halt));
-        assert_eq!(unit.source_span(address(0)), Some(span(view, id, 0, 0)));
+        assert_eq!(
+            unit.source_span(location(&unit, 0)),
+            Ok(Some(span(view, id, 0, 0)))
+        );
 
         let words = PublishedWords::new();
         let bindings = Bindings::new();
@@ -525,8 +547,8 @@ mod tests {
             assert_eq!(unit.len(), 1);
             assert_eq!(unit.instructions().get(address(0)), Ok(&Instruction::Halt));
             assert_eq!(
-                unit.source_span(address(0)),
-                Some(span(sources.view(), id, eof, eof)),
+                unit.source_span(location(&unit, 0)),
+                Ok(Some(span(sources.view(), id, eof, eof))),
                 "{source:?} should map Halt to EOF"
             );
         }
@@ -556,11 +578,26 @@ mod tests {
             Ok(&Instruction::Push(value(32767)))
         );
         assert_eq!(unit.instructions().get(address(4)), Ok(&Instruction::Halt));
-        assert_eq!(unit.source_span(address(0)), Some(span(view, id, 0, 1)));
-        assert_eq!(unit.source_span(address(1)), Some(span(view, id, 2, 3)));
-        assert_eq!(unit.source_span(address(2)), Some(span(view, id, 4, 6)));
-        assert_eq!(unit.source_span(address(3)), Some(span(view, id, 7, 12)));
-        assert_eq!(unit.source_span(address(4)), Some(span(view, id, 12, 12)));
+        assert_eq!(
+            unit.source_span(location(&unit, 0)),
+            Ok(Some(span(view, id, 0, 1)))
+        );
+        assert_eq!(
+            unit.source_span(location(&unit, 1)),
+            Ok(Some(span(view, id, 2, 3)))
+        );
+        assert_eq!(
+            unit.source_span(location(&unit, 2)),
+            Ok(Some(span(view, id, 4, 6)))
+        );
+        assert_eq!(
+            unit.source_span(location(&unit, 3)),
+            Ok(Some(span(view, id, 7, 12)))
+        );
+        assert_eq!(
+            unit.source_span(location(&unit, 4)),
+            Ok(Some(span(view, id, 12, 12)))
+        );
     }
 
     #[test]
@@ -700,20 +737,72 @@ mod tests {
         let (_sources, _id, unit) = compile("10 20");
 
         assert_eq!(
-            unit.spans
-                .iter()
-                .map(|source| source.address)
-                .collect::<Vec<_>>(),
-            [address(0), address(1), address(2)]
+            unit.source_mapping().code_space(),
+            unit.instructions().code_space()
         );
-        assert_eq!(unit.len(), unit.spans.len());
+        assert_eq!(unit.source_mapping().len(), unit.len());
         assert_eq!(
-            unit.spans
-                .iter()
-                .enumerate()
-                .map(|(index, source)| source.address.as_index() == index)
+            (0..unit.len())
+                .map(|index| unit.source_span(location(&unit, index)).is_ok())
                 .collect::<Vec<_>>(),
             [true, true, true]
+        );
+    }
+
+    #[test]
+    fn temporary_mapping_location_uses_unit_code_space_identity() {
+        let (first_sources, first_source_id, first_unit) = compile("10");
+        let (second_sources, second_source_id, second_unit) = compile("20");
+        let first_span = span(first_sources.view(), first_source_id, 0, 2);
+        let second_span = span(second_sources.view(), second_source_id, 0, 2);
+        let mapping_views = [first_unit.source_mapping(), second_unit.source_mapping()];
+        let lookup = SourceMappingLookup::new(&mapping_views).expect("unit mappings are distinct");
+
+        assert_eq!(
+            first_unit.source_mapping().code_space(),
+            first_unit.instructions().code_space()
+        );
+        assert_eq!(
+            first_unit
+                .instructions()
+                .location(address(0))
+                .address()
+                .as_index(),
+            second_unit
+                .instructions()
+                .location(address(0))
+                .address()
+                .as_index()
+        );
+        assert_ne!(
+            first_unit.instructions().code_space(),
+            second_unit.instructions().code_space()
+        );
+        assert_eq!(
+            lookup.source_span(first_unit.instructions().location(address(0))),
+            Ok(Some(first_span))
+        );
+        assert_eq!(
+            lookup.source_span(second_unit.instructions().location(address(0))),
+            Ok(Some(second_span))
+        );
+    }
+
+    #[test]
+    fn temporary_mapping_rejects_other_code_space_without_index_fallback() {
+        let (_sources, _source_id, unit) = compile("10");
+        let mut other_code = InstructionSequence::new();
+        let other_address = other_code.append(Instruction::Halt);
+
+        assert_eq!(
+            unit.source_span(other_code.view().location(other_address)),
+            Err(SourceMappingLookupError::Address {
+                source: crate::instruction::InstructionAddressError::CodeSpaceMismatch {
+                    expected: unit.source_mapping().code_space(),
+                    actual: other_code.code_space(),
+                    address: other_address,
+                }
+            })
         );
     }
 
@@ -748,9 +837,18 @@ mod tests {
             Ok(&Instruction::Call(second))
         );
         assert_eq!(unit.instructions().get(address(3)), Ok(&Instruction::Halt));
-        assert_eq!(unit.source_span(address(0)), Some(span(view, id, 0, 5)));
-        assert_eq!(unit.source_span(address(1)), Some(span(view, id, 6, 8)));
-        assert_eq!(unit.source_span(address(2)), Some(span(view, id, 9, 14)));
+        assert_eq!(
+            unit.source_span(location(&unit, 0)),
+            Ok(Some(span(view, id, 0, 5)))
+        );
+        assert_eq!(
+            unit.source_span(location(&unit, 1)),
+            Ok(Some(span(view, id, 6, 8)))
+        );
+        assert_eq!(
+            unit.source_span(location(&unit, 2)),
+            Ok(Some(span(view, id, 9, 14)))
+        );
     }
 
     #[test]

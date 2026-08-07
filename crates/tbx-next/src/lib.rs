@@ -62,6 +62,11 @@ mod word_resolution;
 #[allow(dead_code)]
 mod source;
 
+// ADR #1421 keeps source mappings owner-qualified by code space without adding
+// source spans to runtime values, instruction operands, or VM state.
+#[allow(dead_code)]
+mod source_mapping;
+
 // ADR #1412 keeps non-incremental lexical analysis as a crate-internal source
 // processing boundary that emits token categories and source spans only.
 #[allow(dead_code)]
