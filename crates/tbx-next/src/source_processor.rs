@@ -151,7 +151,19 @@ pub(crate) fn compile_source(
                 )?;
                 break;
             }
-            TokenKind::Minus => {
+            TokenKind::Plus
+            | TokenKind::Minus
+            | TokenKind::Star
+            | TokenKind::Slash
+            | TokenKind::Percent
+            | TokenKind::LParen
+            | TokenKind::RParen
+            | TokenKind::Equal
+            | TokenKind::NotEqual
+            | TokenKind::Less
+            | TokenKind::LessEqual
+            | TokenKind::Greater
+            | TokenKind::GreaterEqual => {
                 return Err(CompileError {
                     span: token.span(),
                     kind: CompileErrorKind::UnsupportedToken { kind: token.kind() },
