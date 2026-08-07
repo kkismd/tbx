@@ -142,6 +142,17 @@ impl LocalLineNumberTable {
     }
 }
 
+impl LineNumberError {
+    pub(crate) const fn primary_span(self) -> SourceSpan {
+        match self {
+            Self::Duplicate { duplicate_span, .. } => duplicate_span,
+            Self::Undefined { span, .. }
+            | Self::InvalidDefinitionTarget { span, .. }
+            | Self::Patch { span, .. } => span,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
