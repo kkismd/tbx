@@ -1,9 +1,11 @@
 use crate::binding::Bindings;
+use crate::expression::{parse_expression, ExpressionError, ExpressionSyntaxErrorKind};
 use crate::instruction::{
     CodeLocation, CodeSpaceLookup, CodeSpaceLookupError, Instruction, InstructionAddress,
     InstructionSequence, InstructionView,
 };
 use crate::lexer::{LexError, Lexer, Token, TokenKind};
+use crate::operator::OperatorLookup;
 use crate::primitive::PrimitiveLookup;
 use crate::source::{SourceError, SourceId, SourceSpan, SourceView};
 use crate::source_mapping::{
@@ -25,6 +27,7 @@ pub(crate) struct TemporaryExecutionUnit {
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct SourceCompileContext<'a> {
     bindings: &'a Bindings,
+    operators: Option<OperatorLookup>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -72,6 +75,7 @@ pub(crate) enum CompileErrorKind {
     IntegerLiteralOutOfRange,
     IntegerLiteralConversion,
     WordResolution { source: WordResolutionError },
+    Expression { source: ExpressionSyntaxErrorKind },
 }
 
 impl From<SourceError> for SourceProcessorError {
@@ -116,62 +120,96 @@ pub(crate) fn compile_source(
     context: SourceCompileContext<'_>,
 ) -> Result<TemporaryExecutionUnit, SourceProcessorError> {
     let mut lexer = Lexer::new(view, source_id)?;
-    let mut instructions = InstructionSequence::new();
-    let mut mapping = InstructionSourceMapping::new(instructions.code_space());
+    let mut tokens = Vec::new();
 
     loop {
         let token = lexer.next_token()?;
+        let done = token.kind() == TokenKind::Eof;
+        tokens.push(token);
+        if done {
+            break;
+        }
+    }
 
-        match token.kind() {
-            TokenKind::IntegerLiteral => {
-                let value = compile_integer_literal(view, token)?;
-                append_mapped(
-                    &mut instructions,
-                    &mut mapping,
-                    Instruction::Push(Value::integer(value)),
-                    token.span(),
-                )?;
+    let mut instructions = InstructionSequence::new();
+    let mut mapping = InstructionSourceMapping::new(instructions.code_space());
+
+    if source_requires_expression(&tokens) {
+        let Some(operators) = context.operators() else {
+            let token = first_expression_syntax_token(&tokens)
+                .expect("expression input should contain expression syntax");
+            return Err(CompileError {
+                span: token.span(),
+                kind: CompileErrorKind::UnsupportedToken { kind: token.kind() },
             }
-            TokenKind::Name => {
-                let id = compile_word_reference(view, token, context)?;
-                append_mapped(
-                    &mut instructions,
-                    &mut mapping,
-                    Instruction::Call(id),
-                    token.span(),
-                )?;
-            }
-            TokenKind::LineBoundary => {}
-            TokenKind::Eof => {
-                append_mapped(
-                    &mut instructions,
-                    &mut mapping,
-                    Instruction::Halt,
-                    token.span(),
-                )?;
-                break;
-            }
-            TokenKind::Plus
-            | TokenKind::Minus
-            | TokenKind::Star
-            | TokenKind::Slash
-            | TokenKind::Percent
-            | TokenKind::LParen
-            | TokenKind::RParen
-            | TokenKind::Equal
-            | TokenKind::NotEqual
-            | TokenKind::Less
-            | TokenKind::LessEqual
-            | TokenKind::Greater
-            | TokenKind::GreaterEqual => {
-                return Err(CompileError {
-                    span: token.span(),
-                    kind: CompileErrorKind::UnsupportedToken { kind: token.kind() },
+            .into());
+        };
+
+        let expression_tokens = tokens
+            .iter()
+            .copied()
+            .filter(|token| token.kind() != TokenKind::LineBoundary)
+            .collect::<Vec<_>>();
+        parse_expression(view, &expression_tokens, operators)
+            .map_err(SourceProcessorError::from_expression_error)?
+            .commit_to(&mut instructions, &mut mapping)
+            .map_err(SourceProcessorError::from_expression_error)?;
+    } else {
+        for token in &tokens {
+            match token.kind() {
+                TokenKind::IntegerLiteral => {
+                    let value = compile_integer_literal(view, *token)?;
+                    append_mapped(
+                        &mut instructions,
+                        &mut mapping,
+                        Instruction::Push(Value::integer(value)),
+                        token.span(),
+                    )?;
                 }
-                .into());
+                TokenKind::Name => {
+                    let id = compile_word_reference(view, *token, context)?;
+                    append_mapped(
+                        &mut instructions,
+                        &mut mapping,
+                        Instruction::Call(id),
+                        token.span(),
+                    )?;
+                }
+                TokenKind::LineBoundary => {}
+                TokenKind::Eof => {}
+                TokenKind::Plus
+                | TokenKind::Minus
+                | TokenKind::Star
+                | TokenKind::Slash
+                | TokenKind::Percent
+                | TokenKind::LParen
+                | TokenKind::RParen
+                | TokenKind::Equal
+                | TokenKind::NotEqual
+                | TokenKind::Less
+                | TokenKind::LessEqual
+                | TokenKind::Greater
+                | TokenKind::GreaterEqual => {
+                    return Err(CompileError {
+                        span: token.span(),
+                        kind: CompileErrorKind::UnsupportedToken { kind: token.kind() },
+                    }
+                    .into());
+                }
             }
         }
     }
+
+    let eof = tokens
+        .last()
+        .copied()
+        .expect("lexer should always produce an EOF token");
+    append_mapped(
+        &mut instructions,
+        &mut mapping,
+        Instruction::Halt,
+        eof.span(),
+    )?;
 
     let entry = instructions
         .view()
@@ -292,6 +330,38 @@ fn parse_unsigned_i16(source: &str, span: SourceSpan) -> Result<i16, CompileErro
     })
 }
 
+fn source_requires_expression(tokens: &[Token]) -> bool {
+    tokens
+        .iter()
+        .any(|token| is_expression_syntax_token(token.kind()))
+}
+
+fn first_expression_syntax_token(tokens: &[Token]) -> Option<Token> {
+    tokens
+        .iter()
+        .copied()
+        .find(|token| is_expression_syntax_token(token.kind()))
+}
+
+const fn is_expression_syntax_token(kind: TokenKind) -> bool {
+    matches!(
+        kind,
+        TokenKind::Plus
+            | TokenKind::Minus
+            | TokenKind::Star
+            | TokenKind::Slash
+            | TokenKind::Percent
+            | TokenKind::LParen
+            | TokenKind::RParen
+            | TokenKind::Equal
+            | TokenKind::NotEqual
+            | TokenKind::Less
+            | TokenKind::LessEqual
+            | TokenKind::Greater
+            | TokenKind::GreaterEqual
+    )
+}
+
 fn append_mapped(
     instructions: &mut InstructionSequence,
     mapping: &mut InstructionSourceMapping,
@@ -345,11 +415,25 @@ impl TemporaryExecutionUnit {
 
 impl<'a> SourceCompileContext<'a> {
     pub(crate) const fn new(bindings: &'a Bindings) -> Self {
-        Self { bindings }
+        Self {
+            bindings,
+            operators: None,
+        }
+    }
+
+    pub(crate) const fn with_operators(bindings: &'a Bindings, operators: OperatorLookup) -> Self {
+        Self {
+            bindings,
+            operators: Some(operators),
+        }
     }
 
     pub(crate) const fn bindings(self) -> &'a Bindings {
         self.bindings
+    }
+
+    pub(crate) const fn operators(self) -> Option<OperatorLookup> {
+        self.operators
     }
 }
 
@@ -368,6 +452,21 @@ impl<'a> SourceExecutionContext<'a> {
         }
     }
 
+    pub(crate) const fn with_operators(
+        bindings: &'a Bindings,
+        operators: OperatorLookup,
+        words: PublishedWordLookup<'a>,
+        primitives: PrimitiveLookup<'a>,
+    ) -> Self {
+        Self {
+            compile: SourceCompileContext::with_operators(bindings, operators),
+            code_spaces: &[],
+            source_mappings: &[],
+            words,
+            primitives,
+        }
+    }
+
     pub(crate) const fn with_code_spaces(
         bindings: &'a Bindings,
         code_spaces: &'a [InstructionView<'a>],
@@ -376,6 +475,22 @@ impl<'a> SourceExecutionContext<'a> {
     ) -> Self {
         Self {
             compile: SourceCompileContext::new(bindings),
+            code_spaces,
+            source_mappings: &[],
+            words,
+            primitives,
+        }
+    }
+
+    pub(crate) const fn with_code_spaces_and_operators(
+        bindings: &'a Bindings,
+        operators: OperatorLookup,
+        code_spaces: &'a [InstructionView<'a>],
+        words: PublishedWordLookup<'a>,
+        primitives: PrimitiveLookup<'a>,
+    ) -> Self {
+        Self {
+            compile: SourceCompileContext::with_operators(bindings, operators),
             code_spaces,
             source_mappings: &[],
             words,
@@ -420,6 +535,21 @@ impl<'a> SourceExecutionContext<'a> {
     }
 }
 
+impl SourceProcessorError {
+    fn from_expression_error(error: ExpressionError) -> Self {
+        match error {
+            ExpressionError::Source(error) => Self::Source(error),
+            ExpressionError::Syntax(error) => Self::Compile(CompileError {
+                span: error.span(),
+                kind: CompileErrorKind::Expression {
+                    source: error.kind(),
+                },
+            }),
+            ExpressionError::SourceMappingAppend(error) => Self::SourceMappingAppend(error),
+        }
+    }
+}
+
 impl SourceRunResult {
     pub(crate) fn outcome(&self) -> RunOutcome {
         self.outcome
@@ -461,6 +591,7 @@ mod tests {
     use crate::bootstrap::register_primitive;
     use crate::lexer::InvalidCharacterReason;
     use crate::name::NormalizedName;
+    use crate::operator::{register_operator_primitives, OperatorSemantic, OperatorWords};
     use crate::primitive::{PrimitiveContext, PrimitiveError, PrimitiveRegistry};
     use crate::redefinition::redefine_word;
     use crate::source::SourceTexts;
@@ -497,6 +628,21 @@ mod tests {
         (sources, id, unit)
     }
 
+    fn compile_expression(
+        text: &str,
+        operators: OperatorWords,
+    ) -> (SourceTexts, SourceId, TemporaryExecutionUnit) {
+        let (sources, id) = source(text);
+        let bindings = Bindings::new();
+        let unit = compile_source(
+            sources.view(),
+            id,
+            SourceCompileContext::with_operators(&bindings, operators.lookup()),
+        )
+        .expect("expression source should compile");
+        (sources, id, unit)
+    }
+
     fn run(text: &str) -> (SourceTexts, SourceId, SourceRunResult) {
         let (sources, id) = source(text);
         let words = PublishedWords::new();
@@ -515,11 +661,46 @@ mod tests {
         (sources, id, result)
     }
 
+    fn run_expression(text: &str) -> (SourceTexts, SourceId, SourceRunResult) {
+        let (sources, id) = source(text);
+        let mut words = PublishedWords::new();
+        let bindings = Bindings::new();
+        let mut primitives = PrimitiveRegistry::new();
+        let operators = register_operator_primitives(&mut primitives, &mut words);
+        let result = run_source(
+            sources.view(),
+            id,
+            SourceExecutionContext::with_operators(
+                &bindings,
+                operators.lookup(),
+                PublishedWordLookup::new(&words),
+                primitives.lookup(),
+            ),
+        )
+        .expect("expression source should run");
+        (sources, id, result)
+    }
+
     fn compile_error(text: &str) -> (SourceTexts, SourceId, SourceProcessorError) {
         let (sources, id) = source(text);
         let bindings = Bindings::new();
         let error = compile_source(sources.view(), id, SourceCompileContext::new(&bindings))
             .expect_err("source should fail");
+        (sources, id, error)
+    }
+
+    fn compile_expression_error(text: &str) -> (SourceTexts, SourceId, SourceProcessorError) {
+        let (sources, id) = source(text);
+        let mut words = PublishedWords::new();
+        let bindings = Bindings::new();
+        let mut primitives = PrimitiveRegistry::new();
+        let operators = register_operator_primitives(&mut primitives, &mut words);
+        let error = compile_source(
+            sources.view(),
+            id,
+            SourceCompileContext::with_operators(&bindings, operators.lookup()),
+        )
+        .expect_err("expression source should fail");
         (sources, id, error)
     }
 
@@ -541,6 +722,13 @@ mod tests {
 
     fn completed_primitive(slot: usize) -> CompletedWordDefinition {
         CompletedWordDefinition::primitive(PrimitiveId::from_slot(slot))
+    }
+
+    fn operator_fixture() -> (PublishedWords, PrimitiveRegistry, OperatorWords) {
+        let mut words = PublishedWords::new();
+        let mut primitives = PrimitiveRegistry::new();
+        let operators = register_operator_primitives(&mut primitives, &mut words);
+        (words, primitives, operators)
     }
 
     fn completed_compiled(code: &mut InstructionSequence, value: i16) -> CompletedWordDefinition {
@@ -720,6 +908,96 @@ mod tests {
 
         assert_eq!(result.outcome(), RunOutcome::Halted);
         assert_eq!(result.data_stack(), [value(0), value(42), value(32767)]);
+    }
+
+    #[test]
+    fn expression_precedence_runs_through_source_processor() {
+        let (_sources, _id, result) = run_expression("1 + 2 * 3");
+
+        assert_eq!(result.outcome(), RunOutcome::Halted);
+        assert_eq!(result.data_stack(), [value(7)]);
+        assert_eq!(result.instruction_count(), 6);
+    }
+
+    #[test]
+    fn expression_parenthesis_unary_and_comparison_run_through_source_processor() {
+        let (_sources, _id, result) = run_expression("-(1 + 2) < -2");
+
+        assert_eq!(result.outcome(), RunOutcome::Halted);
+        assert_eq!(result.data_stack(), [value(1)]);
+    }
+
+    #[test]
+    fn expression_operator_calls_map_to_operator_source_spans() {
+        let (_words, _primitives, operators) = operator_fixture();
+        let (sources, id, unit) = compile_expression("1 + 2 * 3", operators);
+        let view = sources.view();
+
+        assert_eq!(
+            unit.instructions().get(address(3)),
+            Ok(&Instruction::Call(
+                operators.lookup().resolve(OperatorSemantic::Multiply)
+            ))
+        );
+        assert_eq!(
+            unit.instructions().get(address(4)),
+            Ok(&Instruction::Call(
+                operators.lookup().resolve(OperatorSemantic::Add)
+            ))
+        );
+        assert_eq!(
+            unit.source_span(location(&unit, 3)),
+            Ok(Some(span(view, id, 6, 7)))
+        );
+        assert_eq!(
+            unit.source_span(location(&unit, 4)),
+            Ok(Some(span(view, id, 2, 3)))
+        );
+    }
+
+    #[test]
+    fn expression_arithmetic_failure_maps_runtime_error_to_operator_span() {
+        let (sources, id) = source("1 / 0");
+        let mut words = PublishedWords::new();
+        let bindings = Bindings::new();
+        let mut primitives = PrimitiveRegistry::new();
+        let operators = register_operator_primitives(&mut primitives, &mut words);
+
+        let error = run_source(
+            sources.view(),
+            id,
+            SourceExecutionContext::with_operators(
+                &bindings,
+                operators.lookup(),
+                PublishedWordLookup::new(&words),
+                primitives.lookup(),
+            ),
+        )
+        .expect_err("division by zero should fail at runtime");
+
+        let SourceProcessorError::Runtime(error) = error else {
+            panic!("expected runtime error");
+        };
+        assert_eq!(
+            error.source_span(),
+            Ok(Some(span(sources.view(), id, 2, 3)))
+        );
+        assert_eq!(error.vm().address(), address(2));
+    }
+
+    #[test]
+    fn malformed_expression_is_span_compile_error_without_runtime_start() {
+        let (sources, id, error) = compile_expression_error("1 +");
+
+        assert_eq!(
+            error,
+            SourceProcessorError::Compile(CompileError {
+                span: span(sources.view(), id, 3, 3),
+                kind: CompileErrorKind::Expression {
+                    source: ExpressionSyntaxErrorKind::MissingOperand,
+                },
+            })
+        );
     }
 
     #[test]
