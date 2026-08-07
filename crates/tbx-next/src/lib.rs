@@ -87,6 +87,11 @@ mod operator;
 #[allow(dead_code)]
 mod expression;
 
+// ADR #1456/#1449 keep Tiny BASIC local line numbers as owner-local
+// compile-time identifiers resolved by builders, never as runtime values.
+#[allow(dead_code)]
+mod line_number;
+
 pub const STATUS_MESSAGE: &str =
     "TBX Next is under development; language features are not implemented yet.";
 
