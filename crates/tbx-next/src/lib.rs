@@ -82,6 +82,11 @@ mod source_processor;
 #[allow(dead_code)]
 mod operator;
 
+// ADR #1442/#1451 parse minimal expressions into expression-local staging
+// before committing resolved instructions into a temporary execution unit.
+#[allow(dead_code)]
+mod expression;
+
 pub const STATUS_MESSAGE: &str =
     "TBX Next is under development; language features are not implemented yet.";
 
