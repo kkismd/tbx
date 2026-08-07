@@ -182,6 +182,7 @@ pub(crate) fn compile_source(
                 | TokenKind::Star
                 | TokenKind::Slash
                 | TokenKind::Percent
+                | TokenKind::Comma
                 | TokenKind::LParen
                 | TokenKind::RParen
                 | TokenKind::Equal
