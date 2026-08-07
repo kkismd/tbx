@@ -159,6 +159,38 @@ impl InstructionSequence {
         address
     }
 
+    pub(crate) fn patch_branch_target(
+        &mut self,
+        branch: InstructionAddress,
+        target: InstructionAddress,
+    ) -> Result<(), BranchTargetPatchError> {
+        self.view()
+            .validate_address(target)
+            .map_err(|source| BranchTargetPatchError::InvalidTarget { source })?;
+
+        let instruction = self
+            .instructions
+            .get(branch.as_index())
+            .copied()
+            .ok_or_else(|| BranchTargetPatchError::InvalidBranch {
+                source: self.view().address_error(branch),
+            })?;
+
+        let patched = match instruction {
+            Instruction::Jump(_) => Instruction::Jump(target),
+            Instruction::JumpIfZero(_) => Instruction::JumpIfZero(target),
+            instruction => {
+                return Err(BranchTargetPatchError::NonBranchInstruction {
+                    address: branch,
+                    instruction,
+                });
+            }
+        };
+
+        self.instructions[branch.as_index()] = patched;
+        Ok(())
+    }
+
     pub(crate) fn view(&self) -> InstructionView<'_> {
         InstructionView {
             code_space: self.code_space,
@@ -186,6 +218,20 @@ impl Default for InstructionSequence {
             instructions: Vec::new(),
         }
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum BranchTargetPatchError {
+    InvalidBranch {
+        source: InstructionAddressError,
+    },
+    InvalidTarget {
+        source: InstructionAddressError,
+    },
+    NonBranchInstruction {
+        address: InstructionAddress,
+        instruction: Instruction,
+    },
 }
 
 /// Read-only instruction fetch boundary for VM execution.
@@ -627,6 +673,68 @@ mod tests {
         assert_eq!(view.validate_address(target), Ok(target));
         assert_eq!(view.get(jump), Ok(&Instruction::Jump(target)));
         assert_eq!(view.get(jump_if_zero), Ok(&Instruction::JumpIfZero(target)));
+    }
+
+    #[test]
+    fn branch_target_patch_updates_only_branch_operands() {
+        let mut code = InstructionSequence::new();
+        let initial = code.append(Instruction::Halt);
+        let jump = code.append(Instruction::Jump(initial));
+        let jump_if_zero = code.append(Instruction::JumpIfZero(initial));
+        let target = code.append(push(7));
+
+        assert_eq!(code.patch_branch_target(jump, target), Ok(()));
+        assert_eq!(code.patch_branch_target(jump_if_zero, target), Ok(()));
+
+        assert_eq!(code.view().get(jump), Ok(&Instruction::Jump(target)));
+        assert_eq!(
+            code.view().get(jump_if_zero),
+            Ok(&Instruction::JumpIfZero(target))
+        );
+    }
+
+    #[test]
+    fn branch_target_patch_rejects_end_and_out_of_range_targets() {
+        let mut code = InstructionSequence::new();
+        let target = code.append(Instruction::Halt);
+        let branch = code.append(Instruction::Jump(target));
+        let end = address(2);
+        let out_of_range = address(3);
+
+        assert_eq!(
+            code.patch_branch_target(branch, end),
+            Err(BranchTargetPatchError::InvalidTarget {
+                source: InstructionAddressError::EndAddress { address: end }
+            })
+        );
+        assert_eq!(
+            code.patch_branch_target(branch, out_of_range),
+            Err(BranchTargetPatchError::InvalidTarget {
+                source: InstructionAddressError::InvalidAddress {
+                    address: out_of_range
+                }
+            })
+        );
+        assert_eq!(code.view().get(branch), Ok(&Instruction::Jump(target)));
+    }
+
+    #[test]
+    fn branch_target_patch_rejects_non_branch_instruction() {
+        let mut code = InstructionSequence::new();
+        let push = code.append(push(1));
+        let target = code.append(Instruction::Halt);
+
+        assert_eq!(
+            code.patch_branch_target(push, target),
+            Err(BranchTargetPatchError::NonBranchInstruction {
+                address: push,
+                instruction: Instruction::Push(Value::integer(1)),
+            })
+        );
+        assert_eq!(
+            code.view().get(push),
+            Ok(&Instruction::Push(Value::integer(1)))
+        );
     }
 
     #[test]
