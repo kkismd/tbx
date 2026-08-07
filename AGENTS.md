@@ -175,8 +175,8 @@ cargo test
 # Run a single test by name
 cargo test test_name
 
-# Lint (must pass with zero warnings — use --all-targets to catch #[cfg(test)] code)
-cargo clippy --all-targets -- -D warnings
+# Lint (must pass with zero warnings across the workspace)
+cargo ci-clippy
 
 # Format check
 cargo fmt --check
@@ -210,12 +210,12 @@ cargo run
 コミット前に以下のコマンドを実行してCIと同じ条件でチェックすること。
 
 ```bash
-cargo clippy --all-targets -- -D warnings
-cargo test
-cargo fmt --check
+cargo ci-clippy
+cargo ci-test
+cargo ci-fmt
 ```
 
-**重要**: `--all-targets` を省略すると `#[cfg(test)]` ブロック内のコードが lint 対象から外れ、CIでのみ検出される警告が発生する。
+**重要**: CI の `Workspace / Clippy` は workspace 全体を対象にするため、`--workspace` を省略すると `crates/tbx-next` などが lint 対象から外れ、CIでのみ検出される警告が発生する。`--all-targets` を省略すると `#[cfg(test)]` ブロック内のコードが lint 対象から外れる。
 
 ## ユーザーへの確認ルール
 

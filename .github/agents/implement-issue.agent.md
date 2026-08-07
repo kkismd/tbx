@@ -63,7 +63,7 @@ Rustのベストプラクティスに従いコードを実装する。
 ```bash
 cargo build
 cargo test
-cargo clippy --all-targets -- -D warnings
+cargo ci-clippy
 ```
 
 ビルドエラー・テスト失敗・clippy警告がある場合は修正してから次のステップに進む。
@@ -133,7 +133,7 @@ INSERT OR REPLACE INTO session_state (key, value) VALUES ('review_before_review_
          ```bash
          cargo build
          cargo test
-         cargo clippy --all-targets -- -D warnings
+         cargo ci-clippy
          ```
        - 以下の形式でコミットしてpushする（事前に SQL で `loop_count` の値を取得しておくこと）：
          ```bash
