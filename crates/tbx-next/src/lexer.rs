@@ -29,6 +29,7 @@ pub(crate) enum TokenKind {
     Star,
     Slash,
     Percent,
+    Comma,
     LParen,
     RParen,
     Equal,
@@ -127,6 +128,7 @@ impl<'a> Lexer<'a> {
             b'*' => self.single_byte_token(TokenKind::Star),
             b'/' => self.single_byte_token(TokenKind::Slash),
             b'%' => self.single_byte_token(TokenKind::Percent),
+            b',' => self.single_byte_token(TokenKind::Comma),
             b'(' => self.single_byte_token(TokenKind::LParen),
             b')' => self.single_byte_token(TokenKind::RParen),
             b'=' => self.single_byte_token(TokenKind::Equal),
@@ -324,6 +326,7 @@ fn is_token_boundary(byte: u8) -> bool {
             | b'*'
             | b'/'
             | b'%'
+            | b','
             | b'('
             | b')'
             | b'='
@@ -486,6 +489,92 @@ mod tests {
     }
 
     #[test]
+    fn comma_keeps_source_span_as_control_separator_token() {
+        let (sources, id, tokens) = lex_all(",");
+
+        assert_eq!(kinds(&tokens), [TokenKind::Comma, TokenKind::Eof]);
+        assert_token(tokens[0], TokenKind::Comma, id, 0, 1);
+        assert_eq!(slices(sources.view(), &tokens), [",", ""]);
+    }
+
+    #[test]
+    fn bif_control_flow_shape_keeps_comma_and_line_number_lexical_only() {
+        let (sources, id, tokens) = lex_all("BIF 1, 200");
+
+        assert_eq!(
+            kinds(&tokens),
+            [
+                TokenKind::Name,
+                TokenKind::IntegerLiteral,
+                TokenKind::Comma,
+                TokenKind::IntegerLiteral,
+                TokenKind::Eof
+            ]
+        );
+        assert_token(tokens[0], TokenKind::Name, id, 0, 3);
+        assert_token(tokens[1], TokenKind::IntegerLiteral, id, 4, 5);
+        assert_token(tokens[2], TokenKind::Comma, id, 5, 6);
+        assert_token(tokens[3], TokenKind::IntegerLiteral, id, 7, 10);
+        assert_eq!(
+            slices(sources.view(), &tokens),
+            ["BIF", "1", ",", "200", ""]
+        );
+    }
+
+    #[test]
+    fn statement_start_integer_remains_integer_literal_before_bif() {
+        let (sources, id, tokens) = lex_all("100 BIF 1, 200");
+
+        assert_eq!(
+            kinds(&tokens),
+            [
+                TokenKind::IntegerLiteral,
+                TokenKind::Name,
+                TokenKind::IntegerLiteral,
+                TokenKind::Comma,
+                TokenKind::IntegerLiteral,
+                TokenKind::Eof
+            ]
+        );
+        assert_token(tokens[0], TokenKind::IntegerLiteral, id, 0, 3);
+        assert_token(tokens[1], TokenKind::Name, id, 4, 7);
+        assert_token(tokens[2], TokenKind::IntegerLiteral, id, 8, 9);
+        assert_token(tokens[3], TokenKind::Comma, id, 9, 10);
+        assert_token(tokens[4], TokenKind::IntegerLiteral, id, 11, 14);
+        assert_eq!(
+            slices(sources.view(), &tokens),
+            ["100", "BIF", "1", ",", "200", ""]
+        );
+    }
+
+    #[test]
+    fn comma_is_a_boundary_for_names_integers_and_operators() {
+        let (sources, _id, tokens) = lex_all("A,123,+B,READY?,<>C");
+
+        assert_eq!(
+            kinds(&tokens),
+            [
+                TokenKind::Name,
+                TokenKind::Comma,
+                TokenKind::IntegerLiteral,
+                TokenKind::Comma,
+                TokenKind::Plus,
+                TokenKind::Name,
+                TokenKind::Comma,
+                TokenKind::Name,
+                TokenKind::Comma,
+                TokenKind::NotEqual,
+                TokenKind::Name,
+                TokenKind::Eof
+            ]
+        );
+        assert_eq!(
+            slices(sources.view(), &tokens),
+            ["A", ",", "123", ",", "+", "B", ",", "READY?", ",", "<>", "C", ""]
+        );
+    }
+
+    #[test]
     fn multi_character_expression_operators_use_longest_match() {
         let (sources, id, tokens) = lex_all("<> <= >= << >> <=> <>=");
 
@@ -517,7 +606,7 @@ mod tests {
 
     #[test]
     fn unsupported_expression_punctuation_stays_structured_error() {
-        for source in ["!", ",", ":"] {
+        for source in ["!", ":", ";"] {
             let (sources, id) = lexer_for(source);
             let view = sources.view();
             let mut lexer = Lexer::new(view, id).expect("test source should build a lexer");
@@ -684,7 +773,7 @@ mod tests {
 
     #[test]
     fn unsupported_punctuation_is_structured_error() {
-        let (sources, id) = lexer_for("A,B");
+        let (sources, id) = lexer_for("A:B");
         let view = sources.view();
         let mut lexer = Lexer::new(view, id).expect("test source should build a lexer");
 
@@ -694,7 +783,7 @@ mod tests {
                 span: view
                     .span(id, 1, 2)
                     .expect("punctuation span should validate"),
-                character: ',',
+                character: ':',
                 reason: InvalidCharacterReason::UnsupportedPunctuation
             })
         );
