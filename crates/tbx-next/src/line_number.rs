@@ -14,7 +14,7 @@ pub(crate) struct LocalLineNumber {
     raw: u64,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub(crate) struct LocalLineNumberTable {
     definitions: HashMap<LocalLineNumber, LineNumberDefinition>,
     patches: Vec<UnresolvedLineNumberPatch>,
@@ -139,15 +139,6 @@ impl LocalLineNumberTable {
         }
 
         Ok(())
-    }
-}
-
-impl Default for LocalLineNumberTable {
-    fn default() -> Self {
-        Self {
-            definitions: HashMap::new(),
-            patches: Vec::new(),
-        }
     }
 }
 
