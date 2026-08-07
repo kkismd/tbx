@@ -77,6 +77,11 @@ mod lexer;
 #[allow(dead_code)]
 mod source_processor;
 
+// ADR #1442 keeps expression operators as published primitive words resolved
+// through a crate-internal lookup instead of surface name bindings.
+#[allow(dead_code)]
+mod operator;
+
 pub const STATUS_MESSAGE: &str =
     "TBX Next is under development; language features are not implemented yet.";
 
