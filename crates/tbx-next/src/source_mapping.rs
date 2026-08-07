@@ -46,7 +46,6 @@ impl InstructionSourceMapping {
         self.append(address, Some(span))
     }
 
-    #[cfg(test)]
     pub(crate) fn append_unmapped(
         &mut self,
         address: InstructionAddress,
