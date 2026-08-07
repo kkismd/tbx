@@ -8,7 +8,7 @@ use crate::primitive::PrimitiveLookup;
 use crate::source::{SourceError, SourceId, SourceSpan, SourceView};
 use crate::source_mapping::{
     InstructionSourceMapping, InstructionSourceMappingView, SourceMappingAppendError,
-    SourceMappingLookupError,
+    SourceMappingLookup, SourceMappingLookupError,
 };
 use crate::value::Value;
 use crate::vm::{ExecutionView, RunOutcome, Vm, VmError};
@@ -31,6 +31,7 @@ pub(crate) struct SourceCompileContext<'a> {
 pub(crate) struct SourceExecutionContext<'a> {
     compile: SourceCompileContext<'a>,
     code_spaces: &'a [InstructionView<'a>],
+    source_mappings: &'a [InstructionSourceMappingView<'a>],
     words: PublishedWordLookup<'a>,
     primitives: PrimitiveLookup<'a>,
 }
@@ -43,13 +44,20 @@ pub(crate) struct SourceRunResult {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct RuntimeError {
+    vm: VmError,
+    source_span: Result<Option<SourceSpan>, SourceMappingLookupError>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum SourceProcessorError {
     Source(SourceError),
     Lex(LexError),
     Compile(CompileError),
     CodeSpaceLookup(CodeSpaceLookupError),
     SourceMappingAppend(SourceMappingAppendError),
-    Vm(VmError),
+    SourceMappingLookup(SourceMappingLookupError),
+    Runtime(RuntimeError),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -84,12 +92,6 @@ impl From<CompileError> for SourceProcessorError {
     }
 }
 
-impl From<VmError> for SourceProcessorError {
-    fn from(error: VmError) -> Self {
-        Self::Vm(error)
-    }
-}
-
 impl From<CodeSpaceLookupError> for SourceProcessorError {
     fn from(error: CodeSpaceLookupError) -> Self {
         Self::CodeSpaceLookup(error)
@@ -99,6 +101,12 @@ impl From<CodeSpaceLookupError> for SourceProcessorError {
 impl From<SourceMappingAppendError> for SourceProcessorError {
     fn from(error: SourceMappingAppendError) -> Self {
         Self::SourceMappingAppend(error)
+    }
+}
+
+impl From<SourceMappingLookupError> for SourceProcessorError {
+    fn from(error: SourceMappingLookupError) -> Self {
+        Self::SourceMappingLookup(error)
     }
 }
 
@@ -184,14 +192,34 @@ fn run_unit(
         context.words(),
         context.primitives(),
     );
-    let mut vm = Vm::new_at_location_in(execution, unit.entry)?;
-    let outcome = vm.run(execution)?;
+    let mut vm = Vm::new_at_location_in(execution, unit.entry)
+        .map_err(|error| map_runtime_error(error, unit, context))?;
+    let outcome = vm
+        .run(execution)
+        .map_err(|error| map_runtime_error(error, unit, context))?;
     let data_stack = drain_data_stack(&mut vm);
 
     Ok(SourceRunResult {
         outcome,
         data_stack,
         instruction_count: unit.instructions.len(),
+    })
+}
+
+fn map_runtime_error(
+    error: VmError,
+    unit: &TemporaryExecutionUnit,
+    context: SourceExecutionContext<'_>,
+) -> SourceProcessorError {
+    let mut mapping_views = Vec::with_capacity(context.source_mappings().len() + 1);
+    mapping_views.push(unit.source_mapping());
+    mapping_views.extend_from_slice(context.source_mappings());
+    let source_span = SourceMappingLookup::new(&mapping_views)
+        .and_then(|lookup| lookup.source_span(error.location()));
+
+    SourceProcessorError::Runtime(RuntimeError {
+        vm: error,
+        source_span,
     })
 }
 
@@ -322,6 +350,7 @@ impl<'a> SourceExecutionContext<'a> {
         Self {
             compile: SourceCompileContext::new(bindings),
             code_spaces: &[],
+            source_mappings: &[],
             words,
             primitives,
         }
@@ -336,6 +365,23 @@ impl<'a> SourceExecutionContext<'a> {
         Self {
             compile: SourceCompileContext::new(bindings),
             code_spaces,
+            source_mappings: &[],
+            words,
+            primitives,
+        }
+    }
+
+    pub(crate) const fn with_code_spaces_and_mappings(
+        bindings: &'a Bindings,
+        code_spaces: &'a [InstructionView<'a>],
+        source_mappings: &'a [InstructionSourceMappingView<'a>],
+        words: PublishedWordLookup<'a>,
+        primitives: PrimitiveLookup<'a>,
+    ) -> Self {
+        Self {
+            compile: SourceCompileContext::new(bindings),
+            code_spaces,
+            source_mappings,
             words,
             primitives,
         }
@@ -347,6 +393,10 @@ impl<'a> SourceExecutionContext<'a> {
 
     pub(crate) const fn code_spaces(self) -> &'a [InstructionView<'a>] {
         self.code_spaces
+    }
+
+    pub(crate) const fn source_mappings(self) -> &'a [InstructionSourceMappingView<'a>] {
+        self.source_mappings
     }
 
     pub(crate) const fn words(self) -> PublishedWordLookup<'a> {
@@ -369,6 +419,16 @@ impl SourceRunResult {
 
     pub(crate) fn instruction_count(&self) -> usize {
         self.instruction_count
+    }
+}
+
+impl RuntimeError {
+    pub(crate) const fn vm(self) -> VmError {
+        self.vm
+    }
+
+    pub(crate) const fn source_span(self) -> Result<Option<SourceSpan>, SourceMappingLookupError> {
+        self.source_span
     }
 }
 
@@ -483,6 +543,38 @@ mod tests {
     ) -> CompletedWordDefinition {
         CompletedWordDefinition::compiled(code.view().location(entry), code.view())
             .expect("test compiled entry should be valid")
+    }
+
+    fn mapping_for(
+        code: &InstructionSequence,
+        entries: &[(InstructionAddress, Option<SourceSpan>)],
+    ) -> InstructionSourceMapping {
+        let mut mapping = InstructionSourceMapping::new(code.code_space());
+        for (address, span) in entries {
+            match span {
+                Some(span) => mapping
+                    .append_mapped(*address, *span)
+                    .expect("mapped instruction should append"),
+                None => mapping
+                    .append_unmapped(*address)
+                    .expect("unmapped instruction should append"),
+            }
+        }
+        mapping
+    }
+
+    fn assert_runtime_error(
+        error: SourceProcessorError,
+        expected_vm_location: CodeLocation,
+        expected_span: Result<Option<SourceSpan>, SourceMappingLookupError>,
+    ) -> RuntimeError {
+        let SourceProcessorError::Runtime(error) = error else {
+            panic!("expected runtime error");
+        };
+
+        assert_eq!(error.vm().location(), expected_vm_location);
+        assert_eq!(error.source_span(), expected_span);
+        error
     }
 
     fn publish_initial(
@@ -1242,9 +1334,14 @@ mod tests {
             ),
         )
         .expect_err("primitive failure should fail source run");
-        let SourceProcessorError::Vm(error) = error else {
-            panic!("expected VM error");
+        let SourceProcessorError::Runtime(error) = error else {
+            panic!("expected runtime error");
         };
+        assert_eq!(
+            error.source_span(),
+            Ok(Some(span(sources.view(), source_id, 2, 6)))
+        );
+        let error = error.vm();
 
         assert_eq!(error.address(), address(1));
         match error.kind() {
@@ -1253,6 +1350,330 @@ mod tests {
             } => assert_eq!(actual, primitive),
             other => panic!("unexpected VM error kind: {other:?}"),
         }
+    }
+
+    #[test]
+    fn temporary_runtime_error_maps_to_temporary_source_span() {
+        let mut words = PublishedWords::new();
+        let mut bindings = Bindings::new();
+        let mut primitives = PrimitiveRegistry::new();
+        let primitive = primitives.register(fail_after_partial_stack_update);
+        register_primitive(&mut words, &mut bindings, name("FAIL"), primitive)
+            .expect("primitive should register");
+        let (sources, source_id, unit) = compile_with_bindings("1 fail", &bindings);
+
+        let error = run_unit(
+            &unit,
+            SourceExecutionContext::new(
+                &bindings,
+                PublishedWordLookup::new(&words),
+                primitives.lookup(),
+            ),
+        )
+        .expect_err("primitive failure should fail source run");
+
+        assert_runtime_error(
+            error,
+            location(&unit, 1),
+            Ok(Some(span(sources.view(), source_id, 2, 6))),
+        );
+    }
+
+    #[test]
+    fn published_runtime_error_maps_to_published_source_span() {
+        let mut sources = SourceTexts::new();
+        let published_source = sources.register("fail");
+        let temporary_source = sources.register("bad");
+        let mut words = PublishedWords::new();
+        let mut bindings = Bindings::new();
+        let mut primitives = PrimitiveRegistry::new();
+        let primitive = primitives.register(fail_after_partial_stack_update);
+        let fail = publish_initial(
+            &mut words,
+            &mut bindings,
+            "FAIL",
+            CompletedWordDefinition::primitive(primitive),
+        );
+        let mut published_code = InstructionSequence::new();
+        let published_entry = published_code.append(Instruction::Call(fail));
+        let published_return = published_code.append(Instruction::Return);
+        publish_initial(
+            &mut words,
+            &mut bindings,
+            "BAD",
+            completed_compiled_at(&published_code, published_entry),
+        );
+        let published_span = span(sources.view(), published_source, 0, 4);
+        let published_mapping = mapping_for(
+            &published_code,
+            &[
+                (published_entry, Some(published_span)),
+                (published_return, None),
+            ],
+        );
+        let published_views = [published_code.view()];
+        let mapping_views = [published_mapping.view()];
+
+        let error = run_source(
+            sources.view(),
+            temporary_source,
+            SourceExecutionContext::with_code_spaces_and_mappings(
+                &bindings,
+                &published_views,
+                &mapping_views,
+                PublishedWordLookup::new(&words),
+                primitives.lookup(),
+            ),
+        )
+        .expect_err("published primitive failure should fail source run");
+
+        assert_runtime_error(
+            error,
+            published_code.view().location(published_entry),
+            Ok(Some(published_span)),
+        );
+    }
+
+    #[test]
+    fn nested_published_runtime_error_uses_deepest_callee_mapping() {
+        let mut sources = SourceTexts::new();
+        let inner_source = sources.register("inner_fail");
+        let middle_source = sources.register("middle_call");
+        let outer_source = sources.register("outer_call");
+        let temporary_source = sources.register("outer");
+        let mut words = PublishedWords::new();
+        let mut bindings = Bindings::new();
+        let mut primitives = PrimitiveRegistry::new();
+        let primitive = primitives.register(fail_after_partial_stack_update);
+        let fail = publish_initial(
+            &mut words,
+            &mut bindings,
+            "FAIL",
+            CompletedWordDefinition::primitive(primitive),
+        );
+
+        let mut inner_code = InstructionSequence::new();
+        let inner_entry = inner_code.append(Instruction::Call(fail));
+        let inner_return = inner_code.append(Instruction::Return);
+        let inner = publish_initial(
+            &mut words,
+            &mut bindings,
+            "INNER",
+            completed_compiled_at(&inner_code, inner_entry),
+        );
+
+        let mut middle_code = InstructionSequence::new();
+        let middle_entry = middle_code.append(Instruction::Call(inner));
+        let middle_return = middle_code.append(Instruction::Return);
+        let middle = publish_initial(
+            &mut words,
+            &mut bindings,
+            "MIDDLE",
+            completed_compiled_at(&middle_code, middle_entry),
+        );
+
+        let mut outer_code = InstructionSequence::new();
+        let outer_entry = outer_code.append(Instruction::Call(middle));
+        let outer_return = outer_code.append(Instruction::Return);
+        publish_initial(
+            &mut words,
+            &mut bindings,
+            "OUTER",
+            completed_compiled_at(&outer_code, outer_entry),
+        );
+
+        let inner_span = span(sources.view(), inner_source, 0, 10);
+        let middle_span = span(sources.view(), middle_source, 0, 11);
+        let outer_span = span(sources.view(), outer_source, 0, 10);
+        let inner_mapping = mapping_for(
+            &inner_code,
+            &[(inner_entry, Some(inner_span)), (inner_return, None)],
+        );
+        let middle_mapping = mapping_for(
+            &middle_code,
+            &[(middle_entry, Some(middle_span)), (middle_return, None)],
+        );
+        let outer_mapping = mapping_for(
+            &outer_code,
+            &[(outer_entry, Some(outer_span)), (outer_return, None)],
+        );
+        let published_views = [inner_code.view(), middle_code.view(), outer_code.view()];
+        let mapping_views = [
+            inner_mapping.view(),
+            middle_mapping.view(),
+            outer_mapping.view(),
+        ];
+
+        let error = run_source(
+            sources.view(),
+            temporary_source,
+            SourceExecutionContext::with_code_spaces_and_mappings(
+                &bindings,
+                &published_views,
+                &mapping_views,
+                PublishedWordLookup::new(&words),
+                primitives.lookup(),
+            ),
+        )
+        .expect_err("nested published primitive failure should fail source run");
+
+        assert_eq!(inner_entry.as_index(), middle_entry.as_index());
+        assert_eq!(middle_entry.as_index(), outer_entry.as_index());
+        assert_runtime_error(
+            error,
+            inner_code.view().location(inner_entry),
+            Ok(Some(inner_span)),
+        );
+    }
+
+    #[test]
+    fn published_runtime_error_without_mapping_is_unknown_space() {
+        let mut words = PublishedWords::new();
+        let mut bindings = Bindings::new();
+        let mut primitives = PrimitiveRegistry::new();
+        let primitive = primitives.register(fail_after_partial_stack_update);
+        let fail = publish_initial(
+            &mut words,
+            &mut bindings,
+            "FAIL",
+            CompletedWordDefinition::primitive(primitive),
+        );
+        let mut published_code = InstructionSequence::new();
+        let published_entry = published_code.append(Instruction::Call(fail));
+        published_code.append(Instruction::Return);
+        publish_initial(
+            &mut words,
+            &mut bindings,
+            "BAD",
+            completed_compiled_at(&published_code, published_entry),
+        );
+        let (sources, source_id) = source("bad");
+        let published_views = [published_code.view()];
+
+        let error = run_source(
+            sources.view(),
+            source_id,
+            SourceExecutionContext::with_code_spaces(
+                &bindings,
+                &published_views,
+                PublishedWordLookup::new(&words),
+                primitives.lookup(),
+            ),
+        )
+        .expect_err("published primitive failure should fail source run");
+
+        assert_runtime_error(
+            error,
+            published_code.view().location(published_entry),
+            Err(SourceMappingLookupError::UnknownCodeSpace {
+                code_space: published_code.code_space(),
+            }),
+        );
+    }
+
+    #[test]
+    fn runtime_error_mapping_distinguishes_end_out_of_range_and_unmapped() {
+        let mut sources = SourceTexts::new();
+        let temporary_source = sources.register("bad");
+        let mut words = PublishedWords::new();
+        let mut bindings = Bindings::new();
+        let mut primitives = PrimitiveRegistry::new();
+        let primitive = primitives.register(fail_after_partial_stack_update);
+        let fail = publish_initial(
+            &mut words,
+            &mut bindings,
+            "FAIL",
+            CompletedWordDefinition::primitive(primitive),
+        );
+
+        let mut end_code = InstructionSequence::new();
+        let end_entry = end_code.append(Instruction::Call(fail));
+        end_code.append(Instruction::Return);
+        publish_initial(
+            &mut words,
+            &mut bindings,
+            "ENDFAIL",
+            completed_compiled_at(&end_code, end_entry),
+        );
+        let end_mapping = InstructionSourceMapping::new(end_code.code_space());
+
+        let mut out_of_range_code = InstructionSequence::new();
+        let out_of_range_padding = out_of_range_code.append(Instruction::Push(value(1)));
+        out_of_range_code.append(Instruction::Push(value(2)));
+        let out_of_range_entry = out_of_range_code.append(Instruction::Call(fail));
+        out_of_range_code.append(Instruction::Return);
+        publish_initial(
+            &mut words,
+            &mut bindings,
+            "RANGEFAIL",
+            completed_compiled_at(&out_of_range_code, out_of_range_entry),
+        );
+        let out_of_range_mapping = mapping_for(
+            &out_of_range_code,
+            &[(
+                out_of_range_padding,
+                Some(span(sources.view(), temporary_source, 0, 3)),
+            )],
+        );
+
+        let mut unmapped_code = InstructionSequence::new();
+        let unmapped_entry = unmapped_code.append(Instruction::Call(fail));
+        unmapped_code.append(Instruction::Return);
+        publish_initial(
+            &mut words,
+            &mut bindings,
+            "UNMAPPEDFAIL",
+            completed_compiled_at(&unmapped_code, unmapped_entry),
+        );
+        let unmapped_mapping = mapping_for(&unmapped_code, &[(unmapped_entry, None)]);
+
+        let published_views = [
+            end_code.view(),
+            out_of_range_code.view(),
+            unmapped_code.view(),
+        ];
+        let mapping_views = [
+            end_mapping.view(),
+            out_of_range_mapping.view(),
+            unmapped_mapping.view(),
+        ];
+        let context = SourceExecutionContext::with_code_spaces_and_mappings(
+            &bindings,
+            &published_views,
+            &mapping_views,
+            PublishedWordLookup::new(&words),
+            primitives.lookup(),
+        );
+
+        let end_source = sources.register("endfail");
+        let out_of_range_source = sources.register("rangefail");
+        let unmapped_source = sources.register("unmappedfail");
+
+        assert_runtime_error(
+            run_source(sources.view(), end_source, context).expect_err("end mapping should fail"),
+            end_code.view().location(end_entry),
+            Err(SourceMappingLookupError::Address {
+                source: crate::instruction::InstructionAddressError::EndAddress {
+                    address: end_entry,
+                },
+            }),
+        );
+        assert_runtime_error(
+            run_source(sources.view(), out_of_range_source, context)
+                .expect_err("out-of-range mapping should fail"),
+            out_of_range_code.view().location(out_of_range_entry),
+            Err(SourceMappingLookupError::Address {
+                source: crate::instruction::InstructionAddressError::InvalidAddress {
+                    address: out_of_range_entry,
+                },
+            }),
+        );
+        assert_runtime_error(
+            run_source(sources.view(), unmapped_source, context)
+                .expect_err("unmapped location should preserve VM failure"),
+            unmapped_code.view().location(unmapped_entry),
+            Ok(None),
+        );
     }
 
     #[test]
