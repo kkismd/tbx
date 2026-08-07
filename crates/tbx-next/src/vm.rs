@@ -350,13 +350,7 @@ impl Vm {
                 }
             }
             WordDefinition::Compiled { entry } => {
-                let entry = instructions
-                    .validate_location(entry)
-                    .map_err(|source| VmError {
-                        location,
-                        kind: VmErrorKind::InvalidCompiledEntry { source },
-                    })
-                    .map(|_| entry)?;
+                let entry = self.valid_compiled_entry(instructions, location, entry)?;
 
                 self.return_stack.push(ReturnFrame::new(next));
                 self.instruction_pointer = entry;
@@ -457,6 +451,21 @@ impl Vm {
                 kind: VmErrorKind::InvalidReturnTarget { source },
             })
     }
+
+    fn valid_compiled_entry(
+        &self,
+        instructions: InstructionLookup<'_>,
+        location: CodeLocation,
+        entry: CodeLocation,
+    ) -> Result<CodeLocation, VmError> {
+        instructions
+            .validate_location(entry)
+            .map(|_| entry)
+            .map_err(|source| VmError {
+                location,
+                kind: VmErrorKind::InvalidCompiledEntry { source },
+            })
+    }
 }
 
 impl VmError {
@@ -509,6 +518,18 @@ mod tests {
     ) -> ExecutionView<'a> {
         ExecutionView::new(
             code.view(),
+            PublishedWordLookup::new(words),
+            primitives.lookup(),
+        )
+    }
+
+    fn multi_execution<'a>(
+        code_spaces: &'a [InstructionView<'a>],
+        words: &'a PublishedWords,
+        primitives: &'a PrimitiveRegistry,
+    ) -> ExecutionView<'a> {
+        ExecutionView::with_code_spaces(
+            CodeSpaceLookup::new(code_spaces).expect("test code spaces should be distinct"),
             PublishedWordLookup::new(words),
             primitives.lookup(),
         )
@@ -1227,6 +1248,234 @@ mod tests {
         assert_eq!(vm.instruction_pointer(), location(&code, after_call));
         assert_eq!(vm.return_stack_depth(), 0);
         assert_eq!(vm.peek_data(), Ok(value(7)));
+    }
+
+    #[test]
+    fn compiled_call_enters_published_code_space_and_returns_to_caller_space() {
+        let primitives = PrimitiveRegistry::new();
+        let mut words = PublishedWords::new();
+        let mut callee_code = InstructionSequence::new();
+        let callee_entry = callee_code.append(Instruction::Push(value(17)));
+        callee_code.append(Instruction::Return);
+        let word = words.add(
+            CompletedWordDefinition::compiled(
+                location(&callee_code, callee_entry),
+                callee_code.view(),
+            )
+            .expect("callee entry should be valid"),
+        );
+        let mut caller_code = InstructionSequence::new();
+        let call = caller_code.append(Instruction::Call(word));
+        let after_call = caller_code.append(Instruction::Halt);
+        let code_spaces = [caller_code.view(), callee_code.view()];
+        let execution = multi_execution(&code_spaces, &words, &primitives);
+        let mut vm = Vm::new_at_location_in(execution, location(&caller_code, call))
+            .expect("caller entry should be valid");
+
+        assert_eq!(vm.step(execution), Ok(StepOutcome::Continued));
+        assert_eq!(
+            vm.instruction_pointer(),
+            location(&callee_code, callee_entry)
+        );
+        assert_eq!(
+            vm.return_stack.as_slice(),
+            &[return_frame(&caller_code, after_call)]
+        );
+
+        assert_eq!(vm.step(execution), Ok(StepOutcome::Continued));
+        assert_eq!(vm.step(execution), Ok(StepOutcome::Continued));
+
+        assert_clean_control(&vm, location(&caller_code, after_call), false);
+        assert_eq!(vm.peek_data(), Ok(value(17)));
+    }
+
+    #[test]
+    fn three_level_cross_space_compiled_calls_return_through_each_caller_space() {
+        let primitives = PrimitiveRegistry::new();
+        let mut words = PublishedWords::new();
+
+        let mut level3_code = InstructionSequence::new();
+        let level3_entry = level3_code.append(Instruction::Push(value(3)));
+        level3_code.append(Instruction::Return);
+        let level3 = words.add(
+            CompletedWordDefinition::compiled(
+                location(&level3_code, level3_entry),
+                level3_code.view(),
+            )
+            .expect("level3 entry should be valid"),
+        );
+
+        let mut level2_code = InstructionSequence::new();
+        let level2_entry = level2_code.append(Instruction::Push(value(2)));
+        level2_code.append(Instruction::Call(level3));
+        level2_code.append(Instruction::Return);
+        let level2 = words.add(
+            CompletedWordDefinition::compiled(
+                location(&level2_code, level2_entry),
+                level2_code.view(),
+            )
+            .expect("level2 entry should be valid"),
+        );
+
+        let mut level1_code = InstructionSequence::new();
+        let level1_entry = level1_code.append(Instruction::Push(value(1)));
+        level1_code.append(Instruction::Call(level2));
+        level1_code.append(Instruction::Return);
+        let level1 = words.add(
+            CompletedWordDefinition::compiled(
+                location(&level1_code, level1_entry),
+                level1_code.view(),
+            )
+            .expect("level1 entry should be valid"),
+        );
+
+        let mut caller_code = InstructionSequence::new();
+        let entry = caller_code.append(Instruction::Call(level1));
+        caller_code.append(Instruction::Halt);
+        let code_spaces = [
+            caller_code.view(),
+            level1_code.view(),
+            level2_code.view(),
+            level3_code.view(),
+        ];
+        let execution = multi_execution(&code_spaces, &words, &primitives);
+        let mut vm = Vm::new_at_location_in(execution, location(&caller_code, entry))
+            .expect("caller entry should be valid");
+
+        assert_eq!(vm.run(execution), Ok(RunOutcome::Halted));
+
+        assert!(vm.is_halted());
+        assert_eq!(vm.return_stack_depth(), 0);
+        assert_eq!(vm.pop_data(), Ok(value(3)));
+        assert_eq!(vm.pop_data(), Ok(value(2)));
+        assert_eq!(vm.pop_data(), Ok(value(1)));
+    }
+
+    #[test]
+    fn cross_space_call_does_not_fallback_to_same_local_index_in_caller_space() {
+        let primitives = PrimitiveRegistry::new();
+        let mut words = PublishedWords::new();
+
+        let mut callee_code = InstructionSequence::new();
+        let callee_entry = callee_code.append(Instruction::Push(value(21)));
+        callee_code.append(Instruction::Return);
+        let word = words.add(
+            CompletedWordDefinition::compiled(
+                location(&callee_code, callee_entry),
+                callee_code.view(),
+            )
+            .expect("callee entry should be valid"),
+        );
+
+        let mut caller_code = InstructionSequence::new();
+        let call = caller_code.append(Instruction::Call(word));
+        caller_code.append(Instruction::Halt);
+        assert_eq!(call.as_index(), callee_entry.as_index());
+
+        let code_spaces = [caller_code.view(), callee_code.view()];
+        let execution = multi_execution(&code_spaces, &words, &primitives);
+        let mut vm = Vm::new_at_location_in(execution, location(&caller_code, call))
+            .expect("caller entry should be valid");
+
+        assert_eq!(vm.step(execution), Ok(StepOutcome::Continued));
+
+        assert_eq!(
+            vm.instruction_pointer(),
+            location(&callee_code, callee_entry)
+        );
+        assert_ne!(vm.instruction_pointer(), location(&caller_code, call));
+    }
+
+    #[test]
+    fn local_branch_inside_cross_space_callee_stays_in_callee_space() {
+        let primitives = PrimitiveRegistry::new();
+        let mut words = PublishedWords::new();
+
+        let mut callee_code = InstructionSequence::new();
+        let callee_entry = callee_code.append(Instruction::Jump(address(2)));
+        callee_code.append(Instruction::Push(value(99)));
+        callee_code.append(Instruction::Push(value(5)));
+        callee_code.append(Instruction::Return);
+        let word = words.add(
+            CompletedWordDefinition::compiled(
+                location(&callee_code, callee_entry),
+                callee_code.view(),
+            )
+            .expect("callee entry should be valid"),
+        );
+
+        let mut caller_code = InstructionSequence::new();
+        let entry = caller_code.append(Instruction::Call(word));
+        caller_code.append(Instruction::Halt);
+        let code_spaces = [caller_code.view(), callee_code.view()];
+        let execution = multi_execution(&code_spaces, &words, &primitives);
+        let mut vm = Vm::new_at_location_in(execution, location(&caller_code, entry))
+            .expect("caller entry should be valid");
+
+        assert_eq!(vm.run(execution), Ok(RunOutcome::Halted));
+
+        assert_eq!(vm.return_stack_depth(), 0);
+        assert_eq!(vm.data_stack_depth(), 1);
+        assert_eq!(vm.peek_data(), Ok(value(5)));
+    }
+
+    #[test]
+    fn cross_space_compiled_call_rejects_invalid_entry_address_atomically() {
+        #[derive(Clone, Copy)]
+        struct InvalidCompiledEntryView<'a> {
+            instructions: InstructionLookup<'a>,
+            entry: CodeLocation,
+        }
+
+        impl<'a> VmExecutionView<'a> for InvalidCompiledEntryView<'a> {
+            fn instructions(self) -> InstructionLookup<'a> {
+                self.instructions
+            }
+
+            fn lookup_word(self, _id: WordId) -> Result<WordDefinition, WordLookupError> {
+                Ok(WordDefinition::Compiled { entry: self.entry })
+            }
+
+            fn lookup_handler(
+                self,
+                id: PrimitiveId,
+            ) -> Result<crate::primitive::PrimitiveHandler, PrimitiveLookupError> {
+                Err(PrimitiveLookupError::InvalidPrimitiveId { id })
+            }
+        }
+
+        let mut callee_code = InstructionSequence::new();
+        callee_code.append(Instruction::Return);
+        let invalid_entry = CodeLocation::new(callee_code.code_space(), address(99));
+        let mut caller_code = InstructionSequence::new();
+        let call = caller_code.append(Instruction::Call(WordId::test_invalid(0)));
+        caller_code.append(Instruction::Halt);
+        let code_spaces = [caller_code.view(), callee_code.view()];
+        let execution = InvalidCompiledEntryView {
+            instructions: CodeSpaceLookup::new(&code_spaces)
+                .expect("test code spaces should be distinct")
+                .into(),
+            entry: invalid_entry,
+        };
+        let mut vm = Vm::new_at_location_in(execution, location(&caller_code, call))
+            .expect("caller entry should be valid");
+        vm.data_stack.push(value(4));
+        let before = snapshot(&vm);
+
+        let result = vm.step(execution);
+
+        assert_eq!(
+            result,
+            Err(VmError {
+                location: location(&caller_code, call),
+                kind: VmErrorKind::InvalidCompiledEntry {
+                    source: address_lookup_error(InstructionAddressError::InvalidAddress {
+                        address: address(99),
+                    })
+                }
+            })
+        );
+        assert_vm_state(&vm, before);
     }
 
     #[test]
