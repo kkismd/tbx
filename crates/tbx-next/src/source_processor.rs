@@ -5,6 +5,7 @@ use crate::instruction::{
     InstructionSequence, InstructionView,
 };
 use crate::lexer::{LexError, Lexer, Token, TokenKind};
+use crate::line_number::{LineNumberError, LocalLineNumber, LocalLineNumberTable};
 use crate::operator::OperatorLookup;
 use crate::primitive::PrimitiveLookup;
 use crate::source::{SourceError, SourceId, SourceSpan, SourceView};
@@ -16,6 +17,7 @@ use crate::value::Value;
 use crate::vm::{ExecutionView, RunOutcome, Vm, VmError};
 use crate::word_lookup::PublishedWordLookup;
 use crate::word_resolution::{resolve_word_name, WordResolutionError};
+use std::collections::HashSet;
 
 #[derive(Debug)]
 pub(crate) struct TemporaryExecutionUnit {
@@ -72,10 +74,31 @@ pub(crate) struct CompileError {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum CompileErrorKind {
     UnsupportedToken { kind: TokenKind },
+    BifSyntax { source: BifSyntaxErrorKind },
     IntegerLiteralOutOfRange,
     IntegerLiteralConversion,
+    LineNumberLiteralOutOfRange,
+    LineNumberLiteralConversion,
+    LineNumber { source: LineNumberError },
     WordResolution { source: WordResolutionError },
     Expression { source: ExpressionSyntaxErrorKind },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum BifSyntaxErrorKind {
+    MissingCondition,
+    MissingComma,
+    MissingTarget,
+    TrailingToken { kind: TokenKind },
+}
+
+type OptionalLineNumberPrefix = Option<(LocalLineNumber, SourceSpan)>;
+
+struct StatementCompileState<'a> {
+    instructions: &'a mut InstructionSequence,
+    mapping: &'a mut InstructionSourceMapping,
+    line_numbers: &'a mut LocalLineNumberTable,
+    referenced_line_numbers: &'a HashSet<LocalLineNumber>,
 }
 
 impl From<SourceError> for SourceProcessorError {
@@ -134,72 +157,14 @@ pub(crate) fn compile_source(
     let mut instructions = InstructionSequence::new();
     let mut mapping = InstructionSourceMapping::new(instructions.code_space());
 
-    if source_requires_expression(&tokens) {
-        let Some(operators) = context.operators() else {
-            let token = first_expression_syntax_token(&tokens)
-                .expect("expression input should contain expression syntax");
-            return Err(CompileError {
-                span: token.span(),
-                kind: CompileErrorKind::UnsupportedToken { kind: token.kind() },
-            }
-            .into());
-        };
-
-        let expression_tokens = tokens
-            .iter()
-            .copied()
-            .filter(|token| token.kind() != TokenKind::LineBoundary)
-            .collect::<Vec<_>>();
-        parse_expression(view, &expression_tokens, operators)
-            .map_err(SourceProcessorError::from_expression_error)?
-            .commit_to(&mut instructions, &mut mapping)
-            .map_err(SourceProcessorError::from_expression_error)?;
-    } else {
-        for token in &tokens {
-            match token.kind() {
-                TokenKind::IntegerLiteral => {
-                    let value = compile_integer_literal(view, *token)?;
-                    append_mapped(
-                        &mut instructions,
-                        &mut mapping,
-                        Instruction::Push(Value::integer(value)),
-                        token.span(),
-                    )?;
-                }
-                TokenKind::Name => {
-                    let id = compile_word_reference(view, *token, context)?;
-                    append_mapped(
-                        &mut instructions,
-                        &mut mapping,
-                        Instruction::Call(id),
-                        token.span(),
-                    )?;
-                }
-                TokenKind::LineBoundary => {}
-                TokenKind::Eof => {}
-                TokenKind::Plus
-                | TokenKind::Minus
-                | TokenKind::Star
-                | TokenKind::Slash
-                | TokenKind::Percent
-                | TokenKind::Comma
-                | TokenKind::LParen
-                | TokenKind::RParen
-                | TokenKind::Equal
-                | TokenKind::NotEqual
-                | TokenKind::Less
-                | TokenKind::LessEqual
-                | TokenKind::Greater
-                | TokenKind::GreaterEqual => {
-                    return Err(CompileError {
-                        span: token.span(),
-                        kind: CompileErrorKind::UnsupportedToken { kind: token.kind() },
-                    }
-                    .into());
-                }
-            }
-        }
-    }
+    compile_statements(
+        view,
+        source_id,
+        &tokens,
+        context,
+        &mut instructions,
+        &mut mapping,
+    )?;
 
     let eof = tokens
         .last()
@@ -220,6 +185,277 @@ pub(crate) fn compile_source(
         mapping,
         entry,
     })
+}
+
+fn compile_statements(
+    view: SourceView<'_>,
+    source_id: SourceId,
+    tokens: &[Token],
+    context: SourceCompileContext<'_>,
+    instructions: &mut InstructionSequence,
+    mapping: &mut InstructionSourceMapping,
+) -> Result<(), SourceProcessorError> {
+    let mut line_numbers = LocalLineNumberTable::new();
+    // A leading integer remains an expression/literal unless this unit uses it
+    // as local control-flow syntax. This preserves existing source paths while
+    // keeping line numbers compile-time-only.
+    let referenced_line_numbers = collect_referenced_line_numbers(view, tokens);
+
+    for statement in LogicalStatements::new(tokens) {
+        compile_statement(
+            view,
+            source_id,
+            statement,
+            context,
+            &mut StatementCompileState {
+                instructions,
+                mapping,
+                line_numbers: &mut line_numbers,
+                referenced_line_numbers: &referenced_line_numbers,
+            },
+        )?;
+    }
+
+    line_numbers
+        .resolve(instructions)
+        .map_err(|source| line_number_compile_error(source).into())
+}
+
+fn compile_statement(
+    view: SourceView<'_>,
+    source_id: SourceId,
+    statement: &[Token],
+    context: SourceCompileContext<'_>,
+    state: &mut StatementCompileState<'_>,
+) -> Result<(), SourceProcessorError> {
+    if statement.is_empty() {
+        return Ok(());
+    }
+
+    let (line_number, body) =
+        split_statement_line_number(view, statement, state.referenced_line_numbers)?;
+    let start = state.instructions.len();
+    compile_statement_body(
+        view,
+        source_id,
+        body,
+        context,
+        state.instructions,
+        state.mapping,
+        state.line_numbers,
+    )?;
+
+    if let Some((line_number, span)) = line_number {
+        let target = InstructionAddress::from_index(start);
+        state
+            .line_numbers
+            .define(state.instructions, line_number, target, span)
+            .map_err(|source| line_number_compile_error(source).into())
+    } else {
+        Ok(())
+    }
+}
+
+fn split_statement_line_number<'a>(
+    view: SourceView<'_>,
+    statement: &'a [Token],
+    referenced_line_numbers: &HashSet<LocalLineNumber>,
+) -> Result<(OptionalLineNumberPrefix, &'a [Token]), SourceProcessorError> {
+    let Some((&first, rest)) = statement.split_first() else {
+        return Ok((None, statement));
+    };
+
+    if first.kind() != TokenKind::IntegerLiteral
+        || !is_statement_line_number_candidate(view, first, rest, referenced_line_numbers)?
+    {
+        return Ok((None, statement));
+    }
+
+    let line_number = compile_line_number_literal(view, first)?;
+    Ok((Some((line_number, first.span())), rest))
+}
+
+fn compile_statement_body(
+    view: SourceView<'_>,
+    source_id: SourceId,
+    tokens: &[Token],
+    context: SourceCompileContext<'_>,
+    instructions: &mut InstructionSequence,
+    mapping: &mut InstructionSourceMapping,
+    line_numbers: &mut LocalLineNumberTable,
+) -> Result<(), SourceProcessorError> {
+    let Some((&first, _)) = tokens.split_first() else {
+        return Ok(());
+    };
+
+    if is_bif_keyword(view, first)? {
+        return compile_bif(
+            view,
+            source_id,
+            tokens,
+            context,
+            instructions,
+            mapping,
+            line_numbers,
+        );
+    }
+
+    if source_requires_expression(tokens) {
+        let Some(operators) = context.operators() else {
+            let token = first_expression_syntax_token(tokens)
+                .expect("expression input should contain expression syntax");
+            return Err(CompileError {
+                span: token.span(),
+                kind: CompileErrorKind::UnsupportedToken { kind: token.kind() },
+            }
+            .into());
+        };
+
+        compile_expression_tokens(view, source_id, tokens, operators, instructions, mapping)
+    } else {
+        compile_simple_tokens(view, tokens, context, instructions, mapping)
+    }
+}
+
+fn compile_simple_tokens(
+    view: SourceView<'_>,
+    tokens: &[Token],
+    context: SourceCompileContext<'_>,
+    instructions: &mut InstructionSequence,
+    mapping: &mut InstructionSourceMapping,
+) -> Result<(), SourceProcessorError> {
+    for token in tokens {
+        match token.kind() {
+            TokenKind::IntegerLiteral => {
+                let value = compile_integer_literal(view, *token)?;
+                append_mapped(
+                    instructions,
+                    mapping,
+                    Instruction::Push(Value::integer(value)),
+                    token.span(),
+                )?;
+            }
+            TokenKind::Name => {
+                let id = compile_word_reference(view, *token, context)?;
+                append_mapped(instructions, mapping, Instruction::Call(id), token.span())?;
+            }
+            TokenKind::LineBoundary | TokenKind::Eof => {}
+            TokenKind::Plus
+            | TokenKind::Minus
+            | TokenKind::Star
+            | TokenKind::Slash
+            | TokenKind::Percent
+            | TokenKind::Comma
+            | TokenKind::LParen
+            | TokenKind::RParen
+            | TokenKind::Equal
+            | TokenKind::NotEqual
+            | TokenKind::Less
+            | TokenKind::LessEqual
+            | TokenKind::Greater
+            | TokenKind::GreaterEqual => {
+                return Err(CompileError {
+                    span: token.span(),
+                    kind: CompileErrorKind::UnsupportedToken { kind: token.kind() },
+                }
+                .into());
+            }
+        }
+    }
+
+    Ok(())
+}
+
+fn compile_bif(
+    view: SourceView<'_>,
+    source_id: SourceId,
+    tokens: &[Token],
+    context: SourceCompileContext<'_>,
+    instructions: &mut InstructionSequence,
+    mapping: &mut InstructionSourceMapping,
+    line_numbers: &mut LocalLineNumberTable,
+) -> Result<(), SourceProcessorError> {
+    let bif = tokens
+        .first()
+        .copied()
+        .expect("BIF compiler requires the keyword token");
+    let Some(operators) = context.operators() else {
+        return Err(CompileError {
+            span: bif.span(),
+            kind: CompileErrorKind::UnsupportedToken { kind: bif.kind() },
+        }
+        .into());
+    };
+    let Some(comma_index) = find_top_level_comma(&tokens[1..]).map(|index| index + 1) else {
+        return Err(bif_syntax(bif.span(), BifSyntaxErrorKind::MissingComma).into());
+    };
+    if comma_index == 1 {
+        return Err(bif_syntax(bif.span(), BifSyntaxErrorKind::MissingCondition).into());
+    }
+
+    compile_expression_tokens(
+        view,
+        source_id,
+        &tokens[1..comma_index],
+        operators,
+        instructions,
+        mapping,
+    )?;
+
+    let target_tokens = &tokens[comma_index + 1..];
+    let Some((&target, rest)) = target_tokens.split_first() else {
+        return Err(bif_syntax(
+            tokens[comma_index].span(),
+            BifSyntaxErrorKind::MissingTarget,
+        )
+        .into());
+    };
+    if target.kind() != TokenKind::IntegerLiteral {
+        return Err(bif_syntax(target.span(), BifSyntaxErrorKind::MissingTarget).into());
+    }
+    if let Some(trailing) = rest.first().copied() {
+        return Err(bif_syntax(
+            trailing.span(),
+            BifSyntaxErrorKind::TrailingToken {
+                kind: trailing.kind(),
+            },
+        )
+        .into());
+    }
+
+    let line_number = compile_line_number_literal(view, target)?;
+    let branch = append_mapped(
+        instructions,
+        mapping,
+        Instruction::JumpIfZero(InstructionAddress::from_index(0)),
+        bif.span(),
+    )?;
+    line_numbers.add_patch(line_number, branch, target.span());
+    Ok(())
+}
+
+fn compile_expression_tokens(
+    view: SourceView<'_>,
+    source_id: SourceId,
+    tokens: &[Token],
+    operators: OperatorLookup,
+    instructions: &mut InstructionSequence,
+    mapping: &mut InstructionSourceMapping,
+) -> Result<(), SourceProcessorError> {
+    let mut expression_tokens = tokens
+        .iter()
+        .copied()
+        .filter(|token| token.kind() != TokenKind::LineBoundary)
+        .collect::<Vec<_>>();
+    let end = expression_tokens
+        .last()
+        .map_or(0, |token| token.span().end());
+    expression_tokens.push(Token::new(TokenKind::Eof, view.span(source_id, end, end)?));
+
+    parse_expression(view, &expression_tokens, operators)
+        .map_err(SourceProcessorError::from_expression_error)?
+        .commit_to(instructions, mapping)
+        .map_err(SourceProcessorError::from_expression_error)
 }
 
 pub(crate) fn run_source(
@@ -296,6 +532,49 @@ fn compile_integer_literal(
     parse_unsigned_i16(source, token.span()).map_err(SourceProcessorError::Compile)
 }
 
+fn compile_line_number_literal(
+    view: SourceView<'_>,
+    token: Token,
+) -> Result<LocalLineNumber, SourceProcessorError> {
+    let source = view.slice(token.span())?;
+    parse_local_line_number(source, token.span()).map_err(SourceProcessorError::Compile)
+}
+
+fn parse_local_line_number(
+    source: &str,
+    span: SourceSpan,
+) -> Result<LocalLineNumber, CompileError> {
+    let mut value: u64 = 0;
+    let mut saw_digit = false;
+
+    for byte in source.bytes() {
+        let Some(digit) = byte.checked_sub(b'0').filter(|digit| *digit <= 9) else {
+            return Err(CompileError {
+                span,
+                kind: CompileErrorKind::LineNumberLiteralConversion,
+            });
+        };
+
+        saw_digit = true;
+        value = value
+            .checked_mul(10)
+            .and_then(|value| value.checked_add(u64::from(digit)))
+            .ok_or(CompileError {
+                span,
+                kind: CompileErrorKind::LineNumberLiteralOutOfRange,
+            })?;
+    }
+
+    if !saw_digit {
+        return Err(CompileError {
+            span,
+            kind: CompileErrorKind::LineNumberLiteralConversion,
+        });
+    }
+
+    Ok(LocalLineNumber::new(value))
+}
+
 fn parse_unsigned_i16(source: &str, span: SourceSpan) -> Result<i16, CompileError> {
     let mut value: i32 = 0;
     let mut saw_digit = false;
@@ -363,6 +642,106 @@ const fn is_expression_syntax_token(kind: TokenKind) -> bool {
     )
 }
 
+fn is_bif_keyword(view: SourceView<'_>, token: Token) -> Result<bool, SourceProcessorError> {
+    if token.kind() != TokenKind::Name {
+        return Ok(false);
+    }
+
+    Ok(view.slice(token.span())?.eq_ignore_ascii_case("BIF"))
+}
+
+fn is_statement_line_number_candidate(
+    view: SourceView<'_>,
+    token: Token,
+    rest: &[Token],
+    referenced_line_numbers: &HashSet<LocalLineNumber>,
+) -> Result<bool, SourceProcessorError> {
+    let Some(next) = rest.first().copied() else {
+        return Ok(false);
+    };
+    if next.kind() != TokenKind::Name {
+        return Ok(false);
+    }
+    if is_bif_keyword(view, next)? {
+        return Ok(true);
+    }
+
+    let source = view.slice(token.span())?;
+    Ok(parse_local_line_number(source, token.span())
+        .map(|line_number| referenced_line_numbers.contains(&line_number))
+        .unwrap_or(false))
+}
+
+fn collect_referenced_line_numbers(
+    view: SourceView<'_>,
+    tokens: &[Token],
+) -> HashSet<LocalLineNumber> {
+    let mut references = HashSet::new();
+
+    for statement in LogicalStatements::new(tokens) {
+        let bif_index = match statement {
+            [first, second, ..]
+                if first.kind() == TokenKind::IntegerLiteral
+                    && is_bif_keyword(view, *second).unwrap_or(false) =>
+            {
+                Some(1)
+            }
+            [first, ..] if is_bif_keyword(view, *first).unwrap_or(false) => Some(0),
+            _ => None,
+        };
+        let Some(bif_index) = bif_index else {
+            continue;
+        };
+        let Some(comma_index) =
+            find_top_level_comma(&statement[bif_index + 1..]).map(|index| bif_index + 1 + index)
+        else {
+            continue;
+        };
+        let Some(target) = statement.get(comma_index + 1).copied() else {
+            continue;
+        };
+        if target.kind() != TokenKind::IntegerLiteral {
+            continue;
+        }
+        if let Ok(source) = view.slice(target.span()) {
+            if let Ok(line_number) = parse_local_line_number(source, target.span()) {
+                references.insert(line_number);
+            }
+        }
+    }
+
+    references
+}
+
+fn find_top_level_comma(tokens: &[Token]) -> Option<usize> {
+    let mut depth = 0usize;
+
+    for (index, token) in tokens.iter().copied().enumerate() {
+        match token.kind() {
+            TokenKind::LParen => depth = depth.saturating_add(1),
+            TokenKind::RParen => depth = depth.saturating_sub(1),
+            TokenKind::Comma if depth == 0 => return Some(index),
+            _ => {}
+        }
+    }
+
+    None
+}
+
+fn bif_syntax(span: SourceSpan, source: BifSyntaxErrorKind) -> CompileError {
+    CompileError {
+        span,
+        kind: CompileErrorKind::BifSyntax { source },
+    }
+}
+
+fn line_number_compile_error(source: LineNumberError) -> CompileError {
+    CompileError {
+        span: source.primary_span(),
+        kind: CompileErrorKind::LineNumber { source },
+    }
+}
+
 fn append_mapped(
     instructions: &mut InstructionSequence,
     mapping: &mut InstructionSourceMapping,
@@ -372,6 +751,62 @@ fn append_mapped(
     let address = instructions.append(instruction);
     mapping.append_mapped(address, span)?;
     Ok(address)
+}
+
+#[derive(Debug, Clone, Copy)]
+struct LogicalStatements<'a> {
+    tokens: &'a [Token],
+    position: usize,
+}
+
+impl<'a> LogicalStatements<'a> {
+    const fn new(tokens: &'a [Token]) -> Self {
+        Self {
+            tokens,
+            position: 0,
+        }
+    }
+}
+
+impl<'a> Iterator for LogicalStatements<'a> {
+    type Item = &'a [Token];
+
+    fn next(&mut self) -> Option<Self::Item> {
+        while matches!(
+            self.tokens.get(self.position).map(|token| token.kind()),
+            Some(TokenKind::LineBoundary)
+        ) {
+            self.position += 1;
+        }
+
+        if matches!(
+            self.tokens.get(self.position).map(|token| token.kind()),
+            Some(TokenKind::Eof) | None
+        ) {
+            return None;
+        }
+
+        let start = self.position;
+        let mut depth = 0usize;
+
+        while let Some(token) = self.tokens.get(self.position).copied() {
+            match token.kind() {
+                TokenKind::LParen => {
+                    depth = depth.saturating_add(1);
+                    self.position += 1;
+                }
+                TokenKind::RParen => {
+                    depth = depth.saturating_sub(1);
+                    self.position += 1;
+                }
+                TokenKind::LineBoundary if depth == 0 => break,
+                TokenKind::Eof => break,
+                _ => self.position += 1,
+            }
+        }
+
+        Some(&self.tokens[start..self.position])
+    }
 }
 
 fn drain_data_stack(vm: &mut Vm) -> Vec<Value> {
@@ -644,6 +1079,21 @@ mod tests {
         (sources, id, unit)
     }
 
+    fn compile_with_bindings_and_operators(
+        text: &str,
+        bindings: &Bindings,
+        operators: OperatorLookup,
+    ) -> (SourceTexts, SourceId, TemporaryExecutionUnit) {
+        let (sources, id) = source(text);
+        let unit = compile_source(
+            sources.view(),
+            id,
+            SourceCompileContext::with_operators(bindings, operators),
+        )
+        .expect("source should compile with operators");
+        (sources, id, unit)
+    }
+
     fn run(text: &str) -> (SourceTexts, SourceId, SourceRunResult) {
         let (sources, id) = source(text);
         let words = PublishedWords::new();
@@ -703,6 +1153,43 @@ mod tests {
         )
         .expect_err("expression source should fail");
         (sources, id, error)
+    }
+
+    fn compile_with_operators_error(text: &str) -> (SourceTexts, SourceId, SourceProcessorError) {
+        let (sources, id) = source(text);
+        let mut words = PublishedWords::new();
+        let bindings = Bindings::new();
+        let mut primitives = PrimitiveRegistry::new();
+        let operators = register_operator_primitives(&mut primitives, &mut words);
+        let error = compile_source(
+            sources.view(),
+            id,
+            SourceCompileContext::with_operators(&bindings, operators.lookup()),
+        )
+        .expect_err("source should fail");
+        (sources, id, error)
+    }
+
+    fn run_with_bindings_and_operators(
+        text: &str,
+        bindings: &Bindings,
+        words: &PublishedWords,
+        primitives: &PrimitiveRegistry,
+        operators: OperatorLookup,
+    ) -> (SourceTexts, SourceId, SourceRunResult) {
+        let (sources, id) = source(text);
+        let result = run_source(
+            sources.view(),
+            id,
+            SourceExecutionContext::with_operators(
+                bindings,
+                operators,
+                PublishedWordLookup::new(words),
+                primitives.lookup(),
+            ),
+        )
+        .expect("source should run with operators");
+        (sources, id, result)
     }
 
     fn value(value: i16) -> Value {
@@ -929,6 +1416,138 @@ mod tests {
     }
 
     #[test]
+    fn bif_zero_condition_jumps_to_forward_line_number() {
+        let mut words = PublishedWords::new();
+        let mut bindings = Bindings::new();
+        let mut primitives = PrimitiveRegistry::new();
+        let operators = register_operator_primitives(&mut primitives, &mut words);
+        let push7_id = primitives.register(push_7);
+        register_primitive(&mut words, &mut bindings, name("PUSH7"), push7_id)
+            .expect("primitive should register");
+
+        let (_sources, _id, result) = run_with_bindings_and_operators(
+            "100 BIF 0, 200\n1\n200 push7",
+            &bindings,
+            &words,
+            &primitives,
+            operators.lookup(),
+        );
+
+        assert_eq!(result.outcome(), RunOutcome::Halted);
+        assert_eq!(result.data_stack(), [value(7)]);
+    }
+
+    #[test]
+    fn bif_nonzero_condition_falls_through() {
+        let mut words = PublishedWords::new();
+        let mut bindings = Bindings::new();
+        let mut primitives = PrimitiveRegistry::new();
+        let operators = register_operator_primitives(&mut primitives, &mut words);
+        let push7_id = primitives.register(push_7);
+        register_primitive(&mut words, &mut bindings, name("PUSH7"), push7_id)
+            .expect("primitive should register");
+
+        let (_sources, _id, result) = run_with_bindings_and_operators(
+            "100 BIF 1, 200\n2\n200 push7",
+            &bindings,
+            &words,
+            &primitives,
+            operators.lookup(),
+        );
+
+        assert_eq!(result.outcome(), RunOutcome::Halted);
+        assert_eq!(result.data_stack(), [value(2), value(7)]);
+    }
+
+    #[test]
+    fn bif_condition_uses_expression_precedence_and_comparison() {
+        let mut words = PublishedWords::new();
+        let mut bindings = Bindings::new();
+        let mut primitives = PrimitiveRegistry::new();
+        let operators = register_operator_primitives(&mut primitives, &mut words);
+        let push7_id = primitives.register(push_7);
+        register_primitive(&mut words, &mut bindings, name("PUSH7"), push7_id)
+            .expect("primitive should register");
+
+        let (_sources, _id, result) = run_with_bindings_and_operators(
+            "BIF 1 + 2 * 3 <> 7, 200\n5\n200 push7",
+            &bindings,
+            &words,
+            &primitives,
+            operators.lookup(),
+        );
+
+        assert_eq!(result.outcome(), RunOutcome::Halted);
+        assert_eq!(result.data_stack(), [value(7)]);
+    }
+
+    #[test]
+    fn bif_resolves_backward_line_number_without_cross_space_lookup() {
+        let mut words = PublishedWords::new();
+        let mut bindings = Bindings::new();
+        let mut primitives = PrimitiveRegistry::new();
+        let operators = register_operator_primitives(&mut primitives, &mut words);
+        let push7_id = primitives.register(push_7);
+        register_primitive(&mut words, &mut bindings, name("PUSH7"), push7_id)
+            .expect("primitive should register");
+
+        let (_sources, _id, unit) = compile_with_bindings_and_operators(
+            "100 push7\nBIF 1, 100",
+            &bindings,
+            operators.lookup(),
+        );
+
+        assert_eq!(
+            unit.instructions().get(address(2)),
+            Ok(&Instruction::JumpIfZero(address(0)))
+        );
+    }
+
+    #[test]
+    fn bif_line_number_context_does_not_steal_expression_integers() {
+        let mut words = PublishedWords::new();
+        let mut bindings = Bindings::new();
+        let mut primitives = PrimitiveRegistry::new();
+        let operators = register_operator_primitives(&mut primitives, &mut words);
+        let push7_id = primitives.register(push_7);
+        register_primitive(&mut words, &mut bindings, name("PUSH7"), push7_id)
+            .expect("primitive should register");
+
+        let (_sources, _id, result) = run_with_bindings_and_operators(
+            "1 + 2\n100 BIF 1, 200\n200 push7",
+            &bindings,
+            &words,
+            &primitives,
+            operators.lookup(),
+        );
+
+        assert_eq!(result.outcome(), RunOutcome::Halted);
+        assert_eq!(result.data_stack(), [value(3), value(7)]);
+    }
+
+    #[test]
+    fn physical_line_integer_inside_parenthesized_continuation_is_not_line_number() {
+        let mut words = PublishedWords::new();
+        let mut bindings = Bindings::new();
+        let mut primitives = PrimitiveRegistry::new();
+        let operators = register_operator_primitives(&mut primitives, &mut words);
+        let push7_id = primitives.register(push_7);
+        register_primitive(&mut words, &mut bindings, name("PUSH7"), push7_id)
+            .expect("primitive should register");
+
+        let (_sources, _id, result) = run_with_bindings_and_operators(
+            "BIF (1 +\n2) = 4, 200\n5\n200 push7",
+            &bindings,
+            &words,
+            &primitives,
+            operators.lookup(),
+        );
+
+        assert_eq!(result.outcome(), RunOutcome::Halted);
+        assert_eq!(result.data_stack(), [value(7)]);
+    }
+
+    #[test]
     fn expression_operator_calls_map_to_operator_source_spans() {
         let (_words, _primitives, operators) = operator_fixture();
         let (sources, id, unit) = compile_expression("1 + 2 * 3", operators);
@@ -997,6 +1616,105 @@ mod tests {
                 kind: CompileErrorKind::Expression {
                     source: ExpressionSyntaxErrorKind::MissingOperand,
                 },
+            })
+        );
+    }
+
+    #[test]
+    fn bif_rejects_missing_comma_target_and_trailing_tokens_as_compile_errors() {
+        let cases = [
+            ("BIF 0 200", 0, 3, BifSyntaxErrorKind::MissingComma),
+            ("BIF 0,", 5, 6, BifSyntaxErrorKind::MissingTarget),
+            (
+                "BIF 0, 200 300",
+                11,
+                14,
+                BifSyntaxErrorKind::TrailingToken {
+                    kind: TokenKind::IntegerLiteral,
+                },
+            ),
+        ];
+
+        for (source, start, end, source_kind) in cases {
+            let (sources, id, error) = compile_with_operators_error(source);
+            assert_eq!(
+                error,
+                SourceProcessorError::Compile(CompileError {
+                    span: span(sources.view(), id, start, end),
+                    kind: CompileErrorKind::BifSyntax {
+                        source: source_kind
+                    },
+                }),
+                "{source:?} should fail as malformed BIF"
+            );
+        }
+    }
+
+    #[test]
+    fn bif_rejects_missing_condition_as_compile_error() {
+        let (sources, id, error) = compile_with_operators_error("BIF , 200");
+
+        assert_eq!(
+            error,
+            SourceProcessorError::Compile(CompileError {
+                span: span(sources.view(), id, 0, 3),
+                kind: CompileErrorKind::BifSyntax {
+                    source: BifSyntaxErrorKind::MissingCondition
+                },
+            })
+        );
+    }
+
+    #[test]
+    fn undefined_bif_line_number_is_compile_error_at_target_operand() {
+        let (sources, id, error) = compile_with_operators_error("BIF 0, 200");
+        let SourceProcessorError::Compile(error) = error else {
+            panic!("expected compile error");
+        };
+
+        assert_eq!(error.span(), span(sources.view(), id, 7, 10));
+        assert_eq!(
+            error.kind(),
+            CompileErrorKind::LineNumber {
+                source: LineNumberError::Undefined {
+                    line_number: LocalLineNumber::new(200),
+                    span: span(sources.view(), id, 7, 10),
+                }
+            }
+        );
+    }
+
+    #[test]
+    fn duplicate_line_number_is_compile_error_at_duplicate_span() {
+        let (sources, id, error) =
+            compile_with_operators_error("100 BIF 1, 200\n100 BIF 1, 200\n200 BIF 1, 200");
+        let SourceProcessorError::Compile(error) = error else {
+            panic!("expected compile error");
+        };
+
+        assert_eq!(error.span(), span(sources.view(), id, 15, 18));
+        assert_eq!(
+            error.kind(),
+            CompileErrorKind::LineNumber {
+                source: LineNumberError::Duplicate {
+                    line_number: LocalLineNumber::new(100),
+                    original_span: span(sources.view(), id, 0, 3),
+                    duplicate_span: span(sources.view(), id, 15, 18),
+                }
+            }
+        );
+    }
+
+    #[test]
+    fn colon_prefixed_line_number_syntax_is_not_accepted_as_local_line_number() {
+        let (sources, id, error) = compile_with_operators_error("100: BIF 0, 100");
+
+        assert_eq!(
+            error,
+            SourceProcessorError::Lex(LexError::InvalidCharacter {
+                span: span(sources.view(), id, 3, 4),
+                character: ':',
+                reason: InvalidCharacterReason::UnsupportedPunctuation,
             })
         );
     }
