@@ -29,6 +29,7 @@ pub(crate) fn resolve_normalized_word(
 ) -> Result<WordId, WordResolutionError> {
     match bindings.get(name) {
         Some(Binding::Word(id)) => Ok(*id),
+        Some(Binding::Variable(_)) => Err(WordResolutionError::TargetIsNotWord),
         None => Err(WordResolutionError::UndefinedName),
     }
 }
@@ -46,6 +47,7 @@ mod tests {
     use super::*;
     use crate::binding::{Binding, Bindings};
     use crate::bootstrap::register_primitive;
+    use crate::global_variable::GlobalVariables;
     use crate::instruction::{Instruction, InstructionSequence};
     use crate::name::NormalizedName;
     use crate::redefinition::redefine_word;
@@ -241,5 +243,20 @@ mod tests {
         .expect("primitive should bootstrap");
 
         assert_eq!(resolve_word_name(&bindings, "bootstrapped"), Ok(id));
+    }
+
+    #[test]
+    fn variable_binding_is_not_resolved_as_word() {
+        let mut globals = GlobalVariables::new();
+        let variable = globals.allocate();
+        let mut bindings = Bindings::new();
+        bindings
+            .insert_new(name("A"), Binding::Variable(variable))
+            .expect("variable should register");
+
+        assert_eq!(
+            resolve_word_name(&bindings, "A"),
+            Err(WordResolutionError::TargetIsNotWord)
+        );
     }
 }

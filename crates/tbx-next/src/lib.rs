@@ -92,6 +92,11 @@ mod expression;
 #[allow(dead_code)]
 mod line_number;
 
+// ADR #1370 keeps global variable identity and storage as session-owned mutable
+// state, separate from VM control state and runtime values.
+#[allow(dead_code)]
+mod global_variable;
+
 pub const STATUS_MESSAGE: &str =
     "TBX Next is under development; language features are not implemented yet.";
 

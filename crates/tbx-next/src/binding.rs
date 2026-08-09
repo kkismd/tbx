@@ -1,17 +1,18 @@
 use std::collections::HashMap;
 
+use crate::global_variable::GlobalVarId;
 use crate::name::NormalizedName;
 use crate::word::WordId;
 
 /// Current published binding for one normalized TBX Next name.
 ///
-/// ADR #1368 keeps words, scalars, and arrays in one logical namespace. This
-/// enum starts with word bindings only because scalar and array IDs do not exist
-/// yet; later variants must use the same registry so ordinary registration can
-/// reject cross-kind name conflicts.
+/// ADR #1368 keeps words, scalars, and arrays in one logical namespace, so
+/// ordinary registration rejects cross-kind name conflicts through this same
+/// registry instead of splitting words and variables into separate maps.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Binding {
     Word(WordId),
+    Variable(GlobalVarId),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -65,6 +66,7 @@ impl Bindings {
     ) -> Result<WordId, BindingReplaceError> {
         match self.entries.get(name) {
             Some(Binding::Word(id)) => Ok(*id),
+            Some(Binding::Variable(_)) => Err(BindingReplaceError::TargetIsNotWord),
             None => Err(BindingReplaceError::MissingName),
         }
     }
@@ -83,6 +85,7 @@ impl Bindings {
             Some(Binding::Word(actual)) => {
                 Err(BindingReplaceError::CurrentWordMismatch { actual: *actual })
             }
+            Some(Binding::Variable(_)) => Err(BindingReplaceError::TargetIsNotWord),
             None => Err(BindingReplaceError::MissingName),
         }
     }
@@ -99,6 +102,7 @@ impl Bindings {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::global_variable::GlobalVariables;
     use crate::word::{CompletedWordDefinition, PrimitiveId, PublishedWords};
 
     fn name(input: &str) -> NormalizedName {
@@ -113,6 +117,10 @@ mod tests {
 
     fn word_binding(words: &mut PublishedWords, primitive_slot: usize) -> Binding {
         Binding::Word(add_word(words, primitive_slot))
+    }
+
+    fn variable_binding(globals: &mut GlobalVariables) -> Binding {
+        Binding::Variable(globals.allocate())
     }
 
     #[test]
@@ -173,7 +181,20 @@ mod tests {
             .expect("binding should exist")
         {
             Binding::Word(actual_id) => assert_eq!(*actual_id, id),
+            Binding::Variable(_) => panic!("word binding should preserve kind"),
         }
+    }
+
+    #[test]
+    fn variable_binding_registers_and_looks_up_in_the_same_namespace() {
+        let mut globals = GlobalVariables::new();
+        let binding = variable_binding(&mut globals);
+        let mut bindings = Bindings::new();
+
+        assert_eq!(bindings.insert_new(name("A"), binding), Ok(()));
+
+        assert_eq!(bindings.get(&name("A")), Some(&binding));
+        assert_eq!(bindings.len(), 1);
     }
 
     #[test]
@@ -268,6 +289,63 @@ mod tests {
             Err(BindingInsertError::NameConflict)
         );
         assert_eq!(bindings.get(&name("Foo")), Some(&first));
+    }
+
+    #[test]
+    fn word_then_variable_same_name_is_rejected() {
+        let mut words = PublishedWords::new();
+        let word = word_binding(&mut words, 12);
+        let mut globals = GlobalVariables::new();
+        let variable = variable_binding(&mut globals);
+        let mut bindings = Bindings::new();
+
+        bindings
+            .insert_new(name("X"), word)
+            .expect("word should register first");
+
+        assert_eq!(
+            bindings.insert_new(name("X"), variable),
+            Err(BindingInsertError::NameConflict)
+        );
+        assert_eq!(bindings.get(&name("X")), Some(&word));
+    }
+
+    #[test]
+    fn variable_then_word_same_name_is_rejected() {
+        let mut globals = GlobalVariables::new();
+        let variable = variable_binding(&mut globals);
+        let mut words = PublishedWords::new();
+        let word = word_binding(&mut words, 13);
+        let mut bindings = Bindings::new();
+
+        bindings
+            .insert_new(name("Y"), variable)
+            .expect("variable should register first");
+
+        assert_eq!(
+            bindings.insert_new(name("Y"), word),
+            Err(BindingInsertError::NameConflict)
+        );
+        assert_eq!(bindings.get(&name("Y")), Some(&variable));
+    }
+
+    #[test]
+    fn word_and_variable_case_variant_registration_is_a_name_conflict() {
+        let mut globals = GlobalVariables::new();
+        let variable = variable_binding(&mut globals);
+        let mut words = PublishedWords::new();
+        let word = word_binding(&mut words, 14);
+        let mut bindings = Bindings::new();
+
+        bindings
+            .insert_new(name("score"), variable)
+            .expect("variable should register first");
+
+        assert_eq!(
+            bindings.insert_new(name("SCORE"), word),
+            Err(BindingInsertError::NameConflict)
+        );
+        assert_eq!(bindings.get(&name("Score")), Some(&variable));
     }
 
     #[test]
@@ -374,6 +452,44 @@ mod tests {
             Err(BindingReplaceError::CurrentWordMismatch { actual })
         );
         assert_eq!(bindings.current_word(&name("TARGET")), Ok(actual));
+        assert_eq!(bindings.len(), 1);
+    }
+
+    #[test]
+    fn current_word_rejects_variable_binding() {
+        let mut globals = GlobalVariables::new();
+        let variable = variable_binding(&mut globals);
+        let mut bindings = Bindings::new();
+
+        bindings
+            .insert_new(name("TOTAL"), variable)
+            .expect("variable should register");
+
+        assert_eq!(
+            bindings.current_word(&name("TOTAL")),
+            Err(BindingReplaceError::TargetIsNotWord)
+        );
+        assert_eq!(bindings.get(&name("TOTAL")), Some(&variable));
+    }
+
+    #[test]
+    fn replace_word_rejects_variable_binding_without_mutation() {
+        let mut globals = GlobalVariables::new();
+        let variable = variable_binding(&mut globals);
+        let mut words = PublishedWords::new();
+        let expected = add_word(&mut words, 70);
+        let replacement = add_word(&mut words, 71);
+        let mut bindings = Bindings::new();
+
+        bindings
+            .insert_new(name("TOTAL"), variable)
+            .expect("variable should register");
+
+        assert_eq!(
+            bindings.replace_word(&name("TOTAL"), expected, replacement),
+            Err(BindingReplaceError::TargetIsNotWord)
+        );
+        assert_eq!(bindings.get(&name("TOTAL")), Some(&variable));
         assert_eq!(bindings.len(), 1);
     }
 }
