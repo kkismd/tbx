@@ -474,15 +474,15 @@ fn run_unit(
     let mut code_spaces = Vec::with_capacity(context.code_spaces().len() + 1);
     code_spaces.push(unit.instructions.view());
     code_spaces.extend_from_slice(context.code_spaces());
-    let execution = ExecutionView::with_code_spaces(
+    let mut execution = ExecutionView::with_code_spaces(
         CodeSpaceLookup::new(&code_spaces)?,
         context.words(),
         context.primitives(),
     );
-    let mut vm = Vm::new_at_location_in(execution, unit.entry)
+    let mut vm = Vm::new_at_location_in(&mut execution, unit.entry)
         .map_err(|error| map_runtime_error(error, unit, context))?;
     let outcome = vm
-        .run(execution)
+        .run(&mut execution)
         .map_err(|error| map_runtime_error(error, unit, context))?;
     let data_stack = drain_data_stack(&mut vm);
 

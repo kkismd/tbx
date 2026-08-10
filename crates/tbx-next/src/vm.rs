@@ -1,3 +1,4 @@
+use crate::global_variable::{GlobalVarId, GlobalVariableError, GlobalVariableViewMut};
 use crate::instruction::{
     CodeLocation, CodeSpaceLookup, Instruction, InstructionAddress, InstructionLookup,
     InstructionLookupError, InstructionView,
@@ -69,16 +70,20 @@ pub(crate) enum VmErrorKind {
         primitive: crate::word::PrimitiveId,
         source: PrimitiveError,
     },
+    InvalidGlobalVarId {
+        source: GlobalVariableError,
+    },
     InvalidCompiledEntry {
         source: InstructionLookupError,
     },
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug)]
 pub(crate) struct ExecutionView<'a> {
     instructions: InstructionLookup<'a>,
     words: PublishedWordLookup<'a>,
     primitives: PrimitiveLookup<'a>,
+    globals: Option<GlobalVariableViewMut<'a>>,
 }
 
 impl<'a> ExecutionView<'a> {
@@ -99,6 +104,7 @@ impl<'a> ExecutionView<'a> {
             instructions,
             words,
             primitives,
+            globals: None,
         }
     }
 
@@ -108,6 +114,11 @@ impl<'a> ExecutionView<'a> {
         primitives: PrimitiveLookup<'a>,
     ) -> Self {
         Self::with_instruction_lookup(code_spaces.into(), words, primitives)
+    }
+
+    pub(crate) fn with_globals(mut self, globals: GlobalVariableViewMut<'a>) -> Self {
+        self.globals = Some(globals);
+        self
     }
 
     pub(crate) const fn instructions(self) -> InstructionLookup<'a> {
@@ -123,48 +134,99 @@ impl<'a> ExecutionView<'a> {
     }
 }
 
-pub(crate) trait VmExecutionView<'a>: Copy {
-    fn instructions(self) -> InstructionLookup<'a>;
+pub(crate) trait VmExecutionView<'a> {
+    fn instructions(&self) -> InstructionLookup<'a>;
 
-    fn lookup_word(self, id: WordId) -> Result<WordDefinition, WordLookupError>;
+    fn lookup_word(&self, id: WordId) -> Result<WordDefinition, WordLookupError>;
 
     fn lookup_handler(
-        self,
+        &self,
         id: crate::word::PrimitiveId,
     ) -> Result<crate::primitive::PrimitiveHandler, PrimitiveLookupError>;
+
+    fn read_global(&self, id: GlobalVarId) -> Result<Value, GlobalVariableError>;
+
+    fn write_global(&mut self, id: GlobalVarId, value: Value) -> Result<(), GlobalVariableError>;
 }
 
 impl<'a> VmExecutionView<'a> for ExecutionView<'a> {
-    fn instructions(self) -> InstructionLookup<'a> {
-        self.instructions()
+    fn instructions(&self) -> InstructionLookup<'a> {
+        self.instructions
     }
 
-    fn lookup_word(self, id: WordId) -> Result<WordDefinition, WordLookupError> {
-        self.words().lookup_word(id).copied()
+    fn lookup_word(&self, id: WordId) -> Result<WordDefinition, WordLookupError> {
+        self.words.lookup_word(id).copied()
     }
 
     fn lookup_handler(
-        self,
+        &self,
         id: crate::word::PrimitiveId,
     ) -> Result<crate::primitive::PrimitiveHandler, PrimitiveLookupError> {
-        self.primitives().lookup_handler(id)
+        self.primitives.lookup_handler(id)
+    }
+
+    fn read_global(&self, id: GlobalVarId) -> Result<Value, GlobalVariableError> {
+        self.globals
+            .as_ref()
+            .ok_or(GlobalVariableError::InvalidGlobalVarId { id })?
+            .read(id)
+    }
+
+    fn write_global(&mut self, id: GlobalVarId, value: Value) -> Result<(), GlobalVariableError> {
+        self.globals
+            .as_mut()
+            .ok_or(GlobalVariableError::InvalidGlobalVarId { id })?
+            .write(id, value)
     }
 }
 
 impl<'a> VmExecutionView<'a> for InstructionView<'a> {
-    fn instructions(self) -> InstructionLookup<'a> {
-        self.into()
+    fn instructions(&self) -> InstructionLookup<'a> {
+        (*self).into()
     }
 
-    fn lookup_word(self, id: WordId) -> Result<WordDefinition, WordLookupError> {
+    fn lookup_word(&self, id: WordId) -> Result<WordDefinition, WordLookupError> {
         Err(WordLookupError::InvalidWordId { id })
     }
 
     fn lookup_handler(
-        self,
+        &self,
         id: crate::word::PrimitiveId,
     ) -> Result<crate::primitive::PrimitiveHandler, PrimitiveLookupError> {
         Err(PrimitiveLookupError::InvalidPrimitiveId { id })
+    }
+
+    fn read_global(&self, id: GlobalVarId) -> Result<Value, GlobalVariableError> {
+        Err(GlobalVariableError::InvalidGlobalVarId { id })
+    }
+
+    fn write_global(&mut self, id: GlobalVarId, _value: Value) -> Result<(), GlobalVariableError> {
+        Err(GlobalVariableError::InvalidGlobalVarId { id })
+    }
+}
+
+impl<'a, T: VmExecutionView<'a> + ?Sized> VmExecutionView<'a> for &mut T {
+    fn instructions(&self) -> InstructionLookup<'a> {
+        (**self).instructions()
+    }
+
+    fn lookup_word(&self, id: WordId) -> Result<WordDefinition, WordLookupError> {
+        (**self).lookup_word(id)
+    }
+
+    fn lookup_handler(
+        &self,
+        id: crate::word::PrimitiveId,
+    ) -> Result<crate::primitive::PrimitiveHandler, PrimitiveLookupError> {
+        (**self).lookup_handler(id)
+    }
+
+    fn read_global(&self, id: GlobalVarId) -> Result<Value, GlobalVariableError> {
+        (**self).read_global(id)
+    }
+
+    fn write_global(&mut self, id: GlobalVarId, value: Value) -> Result<(), GlobalVariableError> {
+        (**self).write_global(id, value)
     }
 }
 
@@ -206,7 +268,7 @@ impl Vm {
 
     pub(crate) fn step<'a, E: VmExecutionView<'a>>(
         &mut self,
-        execution: E,
+        mut execution: E,
     ) -> Result<StepOutcome, VmError> {
         if self.halted {
             return Ok(StepOutcome::Halted);
@@ -223,6 +285,8 @@ impl Vm {
 
         match instruction {
             Instruction::Push(value) => self.step_push(instructions, location, value),
+            Instruction::LoadVar(id) => self.step_load_var(&mut execution, location, id),
+            Instruction::StoreVar(id) => self.step_store_var(&mut execution, location, id),
             Instruction::Call(id) => self.step_call(execution, location, id),
             Instruction::Jump(target) => self.step_jump(instructions, location, target),
             Instruction::JumpIfZero(target) => {
@@ -241,10 +305,10 @@ impl Vm {
 
     pub(crate) fn run<'a, E: VmExecutionView<'a>>(
         &mut self,
-        execution: E,
+        mut execution: E,
     ) -> Result<RunOutcome, VmError> {
         loop {
-            match self.step(execution)? {
+            match self.step(&mut execution)? {
                 StepOutcome::Continued => {}
                 StepOutcome::Halted => return Ok(RunOutcome::Halted),
             }
@@ -289,6 +353,61 @@ impl Vm {
         let next = self.valid_next_location(instructions, location)?;
 
         self.data_stack.push(value);
+        self.instruction_pointer = next;
+
+        Ok(StepOutcome::Continued)
+    }
+
+    fn step_load_var<'a, E: VmExecutionView<'a>>(
+        &mut self,
+        execution: &mut E,
+        location: CodeLocation,
+        id: GlobalVarId,
+    ) -> Result<StepOutcome, VmError> {
+        let instructions = execution.instructions();
+        let next = self.valid_next_location(instructions, location)?;
+        let value = execution.read_global(id).map_err(|source| VmError {
+            location,
+            kind: VmErrorKind::InvalidGlobalVarId { source },
+        })?;
+
+        // ADR #1370 variables are external storage, while ADR #1367 keeps this
+        // VM instruction atomic: only after all fallible checks succeed do we
+        // publish the stack/IP state transition.
+        self.data_stack.push(value);
+        self.instruction_pointer = next;
+
+        Ok(StepOutcome::Continued)
+    }
+
+    fn step_store_var<'a, E: VmExecutionView<'a>>(
+        &mut self,
+        execution: &mut E,
+        location: CodeLocation,
+        id: GlobalVarId,
+    ) -> Result<StepOutcome, VmError> {
+        self.data_stack.require_depth(1).map_err(|source| VmError {
+            location,
+            kind: VmErrorKind::DataStackUnderflow { source },
+        })?;
+        let value = self
+            .data_stack
+            .peek()
+            .expect("depth was checked before reading StoreVar value");
+        let instructions = execution.instructions();
+        let next = self.valid_next_location(instructions, location)?;
+        execution.read_global(id).map_err(|source| VmError {
+            location,
+            kind: VmErrorKind::InvalidGlobalVarId { source },
+        })?;
+
+        // Validate before mutation so storage, stack, and IP commit together.
+        execution
+            .write_global(id, value)
+            .expect("global variable ID was checked before StoreVar commit");
+        self.data_stack
+            .pop()
+            .expect("depth was checked before consuming StoreVar value");
         self.instruction_pointer = next;
 
         Ok(StepOutcome::Continued)
@@ -485,6 +604,7 @@ impl VmError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::global_variable::GlobalVariables;
     use crate::instruction::InstructionAddressError;
     use crate::instruction::InstructionSequence;
     use crate::primitive::{PrimitiveLookupError, PrimitiveRegistry};
@@ -533,6 +653,15 @@ mod tests {
             PublishedWordLookup::new(words),
             primitives.lookup(),
         )
+    }
+
+    fn execution_with_globals<'a>(
+        code: &'a InstructionSequence,
+        words: &'a PublishedWords,
+        primitives: &'a PrimitiveRegistry,
+        globals: &'a mut GlobalVariables,
+    ) -> ExecutionView<'a> {
+        execution(code, words, primitives).with_globals(globals.view_mut())
     }
 
     #[derive(Debug, Clone, PartialEq, Eq)]
@@ -679,6 +808,297 @@ mod tests {
         assert_eq!(vm.pop_data(), Ok(value(3)));
         assert_eq!(vm.pop_data(), Ok(value(2)));
         assert_eq!(vm.pop_data(), Ok(value(1)));
+    }
+
+    #[test]
+    fn load_var_pushes_global_value_and_advances() {
+        let words = PublishedWords::new();
+        let primitives = PrimitiveRegistry::new();
+        let mut globals = GlobalVariables::new();
+        let id = globals.allocate();
+        globals
+            .view_mut()
+            .write(id, value(37))
+            .expect("allocated global should be valid");
+        let mut code = InstructionSequence::new();
+        let entry = code.append(Instruction::LoadVar(id));
+        let next = code.append(Instruction::Halt);
+        let mut vm = new_vm(&code, entry);
+
+        assert_eq!(
+            vm.step(execution_with_globals(
+                &code,
+                &words,
+                &primitives,
+                &mut globals
+            )),
+            Ok(StepOutcome::Continued)
+        );
+
+        assert_clean_control(&vm, location(&code, next), false);
+        assert_eq!(vm.data_stack_depth(), 1);
+        assert_eq!(vm.peek_data(), Ok(value(37)));
+    }
+
+    #[test]
+    fn store_var_consumes_value_and_updates_global() {
+        let words = PublishedWords::new();
+        let primitives = PrimitiveRegistry::new();
+        let mut globals = GlobalVariables::new();
+        let id = globals.allocate();
+        let mut code = InstructionSequence::new();
+        let entry = code.append(Instruction::Push(value(82)));
+        let store = code.append(Instruction::StoreVar(id));
+        let next = code.append(Instruction::Halt);
+        let mut vm = new_vm(&code, entry);
+
+        {
+            let mut execution = execution_with_globals(&code, &words, &primitives, &mut globals);
+            assert_eq!(vm.step(&mut execution), Ok(StepOutcome::Continued));
+            assert_eq!(vm.step(&mut execution), Ok(StepOutcome::Continued));
+        }
+
+        assert_clean_control(&vm, location(&code, next), false);
+        assert_eq!(vm.data_stack_depth(), 0);
+        assert_eq!(globals.view().read(id), Ok(value(82)));
+        assert_eq!(store.as_index(), 1);
+    }
+
+    #[test]
+    fn store_then_load_round_trips_global_value() {
+        let words = PublishedWords::new();
+        let primitives = PrimitiveRegistry::new();
+        let mut globals = GlobalVariables::new();
+        let id = globals.allocate();
+        let mut code = InstructionSequence::new();
+        let entry = code.append(Instruction::Push(value(-13)));
+        code.append(Instruction::StoreVar(id));
+        code.append(Instruction::LoadVar(id));
+        code.append(Instruction::Halt);
+        let mut vm = new_vm(&code, entry);
+
+        assert_eq!(
+            vm.run(execution_with_globals(
+                &code,
+                &words,
+                &primitives,
+                &mut globals
+            )),
+            Ok(RunOutcome::Halted)
+        );
+
+        assert!(vm.is_halted());
+        assert_eq!(vm.data_stack_depth(), 1);
+        assert_eq!(vm.peek_data(), Ok(value(-13)));
+        assert_eq!(globals.view().read(id), Ok(value(-13)));
+    }
+
+    #[test]
+    fn multiple_global_slots_keep_independent_runtime_identity() {
+        let words = PublishedWords::new();
+        let primitives = PrimitiveRegistry::new();
+        let mut globals = GlobalVariables::new();
+        let first = globals.allocate();
+        let second = globals.allocate();
+        let mut code = InstructionSequence::new();
+        let entry = code.append(Instruction::Push(value(10)));
+        code.append(Instruction::StoreVar(first));
+        code.append(Instruction::Push(value(20)));
+        code.append(Instruction::StoreVar(second));
+        code.append(Instruction::LoadVar(first));
+        code.append(Instruction::LoadVar(second));
+        code.append(Instruction::Halt);
+        let mut vm = new_vm(&code, entry);
+
+        assert_eq!(
+            vm.run(execution_with_globals(
+                &code,
+                &words,
+                &primitives,
+                &mut globals
+            )),
+            Ok(RunOutcome::Halted)
+        );
+
+        assert_eq!(vm.pop_data(), Ok(value(20)));
+        assert_eq!(vm.pop_data(), Ok(value(10)));
+        assert_eq!(globals.view().read(first), Ok(value(10)));
+        assert_eq!(globals.view().read(second), Ok(value(20)));
+    }
+
+    #[test]
+    fn load_var_invalid_id_preserves_vm_and_global_state() {
+        let words = PublishedWords::new();
+        let primitives = PrimitiveRegistry::new();
+        let mut globals = GlobalVariables::new();
+        let valid = globals.allocate();
+        globals
+            .view_mut()
+            .write(valid, value(5))
+            .expect("allocated global should be valid");
+        let invalid = GlobalVarId::test_invalid(99);
+        let mut code = InstructionSequence::new();
+        let entry = code.append(Instruction::LoadVar(invalid));
+        code.append(Instruction::Halt);
+        let mut vm = new_vm(&code, entry);
+        vm.data_stack.push(value(1));
+        let before = snapshot(&vm);
+
+        let result = vm.step(execution_with_globals(
+            &code,
+            &words,
+            &primitives,
+            &mut globals,
+        ));
+
+        assert_eq!(
+            result,
+            Err(VmError {
+                location: location(&code, entry),
+                kind: VmErrorKind::InvalidGlobalVarId {
+                    source: GlobalVariableError::InvalidGlobalVarId { id: invalid }
+                }
+            })
+        );
+        assert_vm_state(&vm, before);
+        assert_eq!(globals.view().read(valid), Ok(value(5)));
+    }
+
+    #[test]
+    fn store_var_invalid_id_preserves_vm_and_global_state() {
+        let words = PublishedWords::new();
+        let primitives = PrimitiveRegistry::new();
+        let mut globals = GlobalVariables::new();
+        let valid = globals.allocate();
+        let invalid = GlobalVarId::test_invalid(99);
+        let mut code = InstructionSequence::new();
+        let entry = code.append(Instruction::Push(value(8)));
+        let store = code.append(Instruction::StoreVar(invalid));
+        code.append(Instruction::Halt);
+        let mut vm = new_vm(&code, entry);
+
+        {
+            let mut execution = execution_with_globals(&code, &words, &primitives, &mut globals);
+            assert_eq!(vm.step(&mut execution), Ok(StepOutcome::Continued));
+            let before = snapshot(&vm);
+
+            let result = vm.step(&mut execution);
+
+            assert_eq!(
+                result,
+                Err(VmError {
+                    location: location(&code, store),
+                    kind: VmErrorKind::InvalidGlobalVarId {
+                        source: GlobalVariableError::InvalidGlobalVarId { id: invalid }
+                    }
+                })
+            );
+            assert_vm_state(&vm, before);
+        }
+        assert_eq!(globals.view().read(valid), Ok(value(0)));
+    }
+
+    #[test]
+    fn store_var_underflow_preserves_vm_and_global_state() {
+        let words = PublishedWords::new();
+        let primitives = PrimitiveRegistry::new();
+        let mut globals = GlobalVariables::new();
+        let id = globals.allocate();
+        let mut code = InstructionSequence::new();
+        let entry = code.append(Instruction::StoreVar(id));
+        code.append(Instruction::Halt);
+        let mut vm = new_vm(&code, entry);
+        let before = snapshot(&vm);
+
+        let result = vm.step(execution_with_globals(
+            &code,
+            &words,
+            &primitives,
+            &mut globals,
+        ));
+
+        assert_eq!(
+            result,
+            Err(VmError {
+                location: location(&code, entry),
+                kind: VmErrorKind::DataStackUnderflow {
+                    source: StackError::DataStackUnderflow
+                }
+            })
+        );
+        assert_vm_state(&vm, before);
+        assert_eq!(globals.view().read(id), Ok(value(0)));
+    }
+
+    #[test]
+    fn load_var_missing_next_location_preserves_stack_and_global_state() {
+        let words = PublishedWords::new();
+        let primitives = PrimitiveRegistry::new();
+        let mut globals = GlobalVariables::new();
+        let id = globals.allocate();
+        globals
+            .view_mut()
+            .write(id, value(44))
+            .expect("allocated global should be valid");
+        let mut code = InstructionSequence::new();
+        let entry = code.append(Instruction::LoadVar(id));
+        let mut vm = new_vm(&code, entry);
+        let before = snapshot(&vm);
+
+        let result = vm.step(execution_with_globals(
+            &code,
+            &words,
+            &primitives,
+            &mut globals,
+        ));
+
+        assert_eq!(
+            result,
+            Err(VmError {
+                location: location(&code, entry),
+                kind: VmErrorKind::UnexpectedEndOfCode {
+                    source: address_lookup_error(InstructionAddressError::EndAddress {
+                        address: address(1)
+                    })
+                }
+            })
+        );
+        assert_vm_state(&vm, before);
+        assert_eq!(globals.view().read(id), Ok(value(44)));
+    }
+
+    #[test]
+    fn store_var_missing_next_location_preserves_stack_and_global_state() {
+        let words = PublishedWords::new();
+        let primitives = PrimitiveRegistry::new();
+        let mut globals = GlobalVariables::new();
+        let id = globals.allocate();
+        let mut code = InstructionSequence::new();
+        let entry = code.append(Instruction::Push(value(12)));
+        let store = code.append(Instruction::StoreVar(id));
+        let mut vm = new_vm(&code, entry);
+
+        {
+            let mut execution = execution_with_globals(&code, &words, &primitives, &mut globals);
+            assert_eq!(vm.step(&mut execution), Ok(StepOutcome::Continued));
+            let before = snapshot(&vm);
+
+            let result = vm.step(&mut execution);
+
+            assert_eq!(
+                result,
+                Err(VmError {
+                    location: location(&code, store),
+                    kind: VmErrorKind::UnexpectedEndOfCode {
+                        source: address_lookup_error(InstructionAddressError::EndAddress {
+                            address: address(2)
+                        })
+                    }
+                })
+            );
+            assert_vm_state(&vm, before);
+        }
+        assert_eq!(globals.view().read(id), Ok(value(0)));
     }
 
     #[test]
@@ -1236,14 +1656,14 @@ mod tests {
         let call = code.append(Instruction::Call(word));
         let after_call = code.append(Instruction::Halt);
         let mut vm = new_vm(&code, call);
-        let execution = execution(&code, &words, &primitives);
+        let mut execution = execution(&code, &words, &primitives);
 
-        assert_eq!(vm.step(execution), Ok(StepOutcome::Continued));
+        assert_eq!(vm.step(&mut execution), Ok(StepOutcome::Continued));
         assert_eq!(vm.instruction_pointer(), location(&code, compiled_entry));
         assert_eq!(vm.return_stack_depth(), 1);
 
-        assert_eq!(vm.step(execution), Ok(StepOutcome::Continued));
-        assert_eq!(vm.step(execution), Ok(StepOutcome::Continued));
+        assert_eq!(vm.step(&mut execution), Ok(StepOutcome::Continued));
+        assert_eq!(vm.step(&mut execution), Ok(StepOutcome::Continued));
 
         assert_eq!(vm.instruction_pointer(), location(&code, after_call));
         assert_eq!(vm.return_stack_depth(), 0);
@@ -1268,11 +1688,11 @@ mod tests {
         let call = caller_code.append(Instruction::Call(word));
         let after_call = caller_code.append(Instruction::Halt);
         let code_spaces = [caller_code.view(), callee_code.view()];
-        let execution = multi_execution(&code_spaces, &words, &primitives);
-        let mut vm = Vm::new_at_location_in(execution, location(&caller_code, call))
+        let mut execution = multi_execution(&code_spaces, &words, &primitives);
+        let mut vm = Vm::new_at_location_in(&mut execution, location(&caller_code, call))
             .expect("caller entry should be valid");
 
-        assert_eq!(vm.step(execution), Ok(StepOutcome::Continued));
+        assert_eq!(vm.step(&mut execution), Ok(StepOutcome::Continued));
         assert_eq!(
             vm.instruction_pointer(),
             location(&callee_code, callee_entry)
@@ -1282,8 +1702,8 @@ mod tests {
             &[return_frame(&caller_code, after_call)]
         );
 
-        assert_eq!(vm.step(execution), Ok(StepOutcome::Continued));
-        assert_eq!(vm.step(execution), Ok(StepOutcome::Continued));
+        assert_eq!(vm.step(&mut execution), Ok(StepOutcome::Continued));
+        assert_eq!(vm.step(&mut execution), Ok(StepOutcome::Continued));
 
         assert_clean_control(&vm, location(&caller_code, after_call), false);
         assert_eq!(vm.peek_data(), Ok(value(17)));
@@ -1338,11 +1758,11 @@ mod tests {
             level2_code.view(),
             level3_code.view(),
         ];
-        let execution = multi_execution(&code_spaces, &words, &primitives);
-        let mut vm = Vm::new_at_location_in(execution, location(&caller_code, entry))
+        let mut execution = multi_execution(&code_spaces, &words, &primitives);
+        let mut vm = Vm::new_at_location_in(&mut execution, location(&caller_code, entry))
             .expect("caller entry should be valid");
 
-        assert_eq!(vm.run(execution), Ok(RunOutcome::Halted));
+        assert_eq!(vm.run(&mut execution), Ok(RunOutcome::Halted));
 
         assert!(vm.is_halted());
         assert_eq!(vm.return_stack_depth(), 0);
@@ -1373,11 +1793,11 @@ mod tests {
         assert_eq!(call.as_index(), callee_entry.as_index());
 
         let code_spaces = [caller_code.view(), callee_code.view()];
-        let execution = multi_execution(&code_spaces, &words, &primitives);
-        let mut vm = Vm::new_at_location_in(execution, location(&caller_code, call))
+        let mut execution = multi_execution(&code_spaces, &words, &primitives);
+        let mut vm = Vm::new_at_location_in(&mut execution, location(&caller_code, call))
             .expect("caller entry should be valid");
 
-        assert_eq!(vm.step(execution), Ok(StepOutcome::Continued));
+        assert_eq!(vm.step(&mut execution), Ok(StepOutcome::Continued));
 
         assert_eq!(
             vm.instruction_pointer(),
@@ -1408,11 +1828,11 @@ mod tests {
         let entry = caller_code.append(Instruction::Call(word));
         caller_code.append(Instruction::Halt);
         let code_spaces = [caller_code.view(), callee_code.view()];
-        let execution = multi_execution(&code_spaces, &words, &primitives);
-        let mut vm = Vm::new_at_location_in(execution, location(&caller_code, entry))
+        let mut execution = multi_execution(&code_spaces, &words, &primitives);
+        let mut vm = Vm::new_at_location_in(&mut execution, location(&caller_code, entry))
             .expect("caller entry should be valid");
 
-        assert_eq!(vm.run(execution), Ok(RunOutcome::Halted));
+        assert_eq!(vm.run(&mut execution), Ok(RunOutcome::Halted));
 
         assert_eq!(vm.return_stack_depth(), 0);
         assert_eq!(vm.data_stack_depth(), 1);
@@ -1428,19 +1848,31 @@ mod tests {
         }
 
         impl<'a> VmExecutionView<'a> for InvalidCompiledEntryView<'a> {
-            fn instructions(self) -> InstructionLookup<'a> {
+            fn instructions(&self) -> InstructionLookup<'a> {
                 self.instructions
             }
 
-            fn lookup_word(self, _id: WordId) -> Result<WordDefinition, WordLookupError> {
+            fn lookup_word(&self, _id: WordId) -> Result<WordDefinition, WordLookupError> {
                 Ok(WordDefinition::Compiled { entry: self.entry })
             }
 
             fn lookup_handler(
-                self,
+                &self,
                 id: PrimitiveId,
             ) -> Result<crate::primitive::PrimitiveHandler, PrimitiveLookupError> {
                 Err(PrimitiveLookupError::InvalidPrimitiveId { id })
+            }
+
+            fn read_global(&self, id: GlobalVarId) -> Result<Value, GlobalVariableError> {
+                Err(GlobalVariableError::InvalidGlobalVarId { id })
+            }
+
+            fn write_global(
+                &mut self,
+                id: GlobalVarId,
+                _value: Value,
+            ) -> Result<(), GlobalVariableError> {
+                Err(GlobalVariableError::InvalidGlobalVarId { id })
             }
         }
 
@@ -1451,18 +1883,18 @@ mod tests {
         let call = caller_code.append(Instruction::Call(WordId::test_invalid(0)));
         caller_code.append(Instruction::Halt);
         let code_spaces = [caller_code.view(), callee_code.view()];
-        let execution = InvalidCompiledEntryView {
+        let mut execution = InvalidCompiledEntryView {
             instructions: CodeSpaceLookup::new(&code_spaces)
                 .expect("test code spaces should be distinct")
                 .into(),
             entry: invalid_entry,
         };
-        let mut vm = Vm::new_at_location_in(execution, location(&caller_code, call))
+        let mut vm = Vm::new_at_location_in(&mut execution, location(&caller_code, call))
             .expect("caller entry should be valid");
         vm.data_stack.push(value(4));
         let before = snapshot(&vm);
 
-        let result = vm.step(execution);
+        let result = vm.step(&mut execution);
 
         assert_eq!(
             result,
