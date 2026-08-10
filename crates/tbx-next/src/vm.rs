@@ -401,10 +401,15 @@ impl Vm {
             kind: VmErrorKind::InvalidGlobalVarId { source },
         })?;
 
-        // Validate before mutation so storage, stack, and IP commit together.
+        // Validate before VM mutation so storage, stack, and IP commit through
+        // the external storage boundary without converting trait errors into
+        // panics.
         execution
             .write_global(id, value)
-            .expect("global variable ID was checked before StoreVar commit");
+            .map_err(|source| VmError {
+                location,
+                kind: VmErrorKind::InvalidGlobalVarId { source },
+            })?;
         self.data_stack
             .pop()
             .expect("depth was checked before consuming StoreVar value");
@@ -996,6 +1001,69 @@ mod tests {
             assert_vm_state(&vm, before);
         }
         assert_eq!(globals.view().read(valid), Ok(value(0)));
+    }
+
+    #[test]
+    fn store_var_write_failure_returns_vm_error_without_mutating_vm_state() {
+        struct WriteFailingGlobalView<'a> {
+            instructions: InstructionLookup<'a>,
+        }
+
+        impl<'a> VmExecutionView<'a> for WriteFailingGlobalView<'a> {
+            fn instructions(&self) -> InstructionLookup<'a> {
+                self.instructions
+            }
+
+            fn lookup_word(&self, id: WordId) -> Result<WordDefinition, WordLookupError> {
+                Err(WordLookupError::InvalidWordId { id })
+            }
+
+            fn lookup_handler(
+                &self,
+                id: PrimitiveId,
+            ) -> Result<crate::primitive::PrimitiveHandler, PrimitiveLookupError> {
+                Err(PrimitiveLookupError::InvalidPrimitiveId { id })
+            }
+
+            fn read_global(&self, _id: GlobalVarId) -> Result<Value, GlobalVariableError> {
+                Ok(value(99))
+            }
+
+            fn write_global(
+                &mut self,
+                id: GlobalVarId,
+                _value: Value,
+            ) -> Result<(), GlobalVariableError> {
+                Err(GlobalVariableError::InvalidGlobalVarId { id })
+            }
+        }
+
+        let failing = GlobalVarId::test_invalid(7);
+        let mut code = InstructionSequence::new();
+        let entry = code.append(Instruction::Push(value(14)));
+        let store = code.append(Instruction::StoreVar(failing));
+        code.append(Instruction::Halt);
+        let mut execution = WriteFailingGlobalView {
+            instructions: code.view().into(),
+        };
+        let mut vm = Vm::new_at_location_in(&mut execution, location(&code, entry))
+            .expect("test entry should be valid");
+
+        assert_eq!(vm.step(&mut execution), Ok(StepOutcome::Continued));
+        let before = snapshot(&vm);
+
+        let result = vm.step(&mut execution);
+
+        assert_eq!(
+            result,
+            Err(VmError {
+                location: location(&code, store),
+                kind: VmErrorKind::InvalidGlobalVarId {
+                    source: GlobalVariableError::InvalidGlobalVarId { id: failing }
+                }
+            })
+        );
+        assert_vm_state(&vm, before);
     }
 
     #[test]
