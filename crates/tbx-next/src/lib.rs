@@ -42,6 +42,11 @@ mod bootstrap;
 #[allow(dead_code)]
 mod redefinition;
 
+// ADR #1370 reserves selected source-form spellings before any ordinary binding
+// publication can commit IDs, storage, or namespace entries.
+#[allow(dead_code)]
+mod publication_name;
+
 // Phase F for ADR #1367/#1368 gives the future VM a read-only lookup boundary
 // over published executable words without exposing registration or binding APIs.
 #[allow(dead_code)]

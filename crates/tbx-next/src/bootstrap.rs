@@ -1,6 +1,7 @@
 use crate::binding::{Binding, BindingInsertError, Bindings};
 use crate::global_variable::{GlobalVarId, GlobalVariables};
 use crate::name::NormalizedName;
+use crate::publication_name::{validate_publication_name, PublicationNameError};
 use crate::word::{CompletedWordDefinition, PrimitiveId, PublishedWords, WordId};
 
 const BUILTIN_GLOBAL_VARIABLE_NAMES: [&str; 26] = [
@@ -10,6 +11,7 @@ const BUILTIN_GLOBAL_VARIABLE_NAMES: [&str; 26] = [
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum PrimitiveBootstrapError {
+    ReservedName,
     NameConflict,
     BindingRegistrationInvariantViolated,
 }
@@ -33,6 +35,9 @@ pub(crate) fn register_primitive(
     name: NormalizedName,
     primitive: PrimitiveId,
 ) -> Result<WordId, PrimitiveBootstrapError> {
+    validate_publication_name(&name)
+        .map_err(PrimitiveBootstrapError::from_publication_name_error)?;
+
     if bindings.get(&name).is_some() {
         return Err(PrimitiveBootstrapError::NameConflict);
     }
@@ -84,6 +89,12 @@ fn builtin_global_variable_names() -> [NormalizedName; 26] {
 }
 
 impl PrimitiveBootstrapError {
+    fn from_publication_name_error(error: PublicationNameError) -> Self {
+        match error {
+            PublicationNameError::ReservedName => Self::ReservedName,
+        }
+    }
+
     fn from_binding_insert_error(error: BindingInsertError) -> Self {
         match error {
             BindingInsertError::NameConflict => Self::BindingRegistrationInvariantViolated,
@@ -131,6 +142,35 @@ mod tests {
         let distinct: HashSet<_> = ids.iter().copied().collect();
 
         assert_eq!(distinct.len(), ids.len());
+    }
+
+    #[test]
+    fn reserved_primitive_names_are_rejected_without_mutation() {
+        for input in ["VAR", "var", "Var", "LET", "let", "Let"] {
+            let mut words = PublishedWords::new();
+            let mut bindings = Bindings::new();
+
+            let result = register_primitive(&mut words, &mut bindings, name(input), primitive(80));
+
+            assert_eq!(result, Err(PrimitiveBootstrapError::ReservedName));
+            assert_eq!(words.len(), 0, "{input:?} should not issue a word id");
+            assert_eq!(bindings.len(), 0, "{input:?} should not bind a name");
+        }
+    }
+
+    #[test]
+    fn ordinary_names_near_reserved_spellings_can_register_as_primitives() {
+        for input in ["VAR1", "LETTER", "_LET"] {
+            let mut words = PublishedWords::new();
+            let mut bindings = Bindings::new();
+
+            let id = register_primitive(&mut words, &mut bindings, name(input), primitive(81))
+                .expect("ordinary name should register");
+
+            assert_eq!(words.len(), 1);
+            assert_eq!(bindings.len(), 1);
+            assert_word_binding(&bindings, input, id);
+        }
     }
 
     #[test]
