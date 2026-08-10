@@ -214,17 +214,21 @@ pub(crate) fn process_source(
     source_id: SourceId,
     context: SourceProcessingContext<'_>,
 ) -> Result<TemporaryExecutionUnit, SourceProcessorError> {
-    let mut lexer = Lexer::new(view, source_id)?;
-    let mut tokens = Vec::new();
-
-    loop {
-        let token = lexer.next_token()?;
-        let done = token.kind() == TokenKind::Eof;
-        tokens.push(token);
-        if done {
-            break;
+    let tokens = match lex_source(view, source_id) {
+        Ok(tokens) => tokens,
+        Err((tokens, error)) => {
+            let complete_prefix_end = complete_statement_prefix_end(&tokens);
+            // `VAR` commits per complete form (#1465), so a later lexical
+            // failure must not turn the whole source into a transaction.
+            process_statement_prefix_before_lex_error(
+                view,
+                source_id,
+                &tokens[..complete_prefix_end],
+                context,
+            )?;
+            return Err(SourceProcessorError::Lex(error));
         }
-    }
+    };
 
     let mut instructions = InstructionSequence::new();
     let mut mapping = InstructionSourceMapping::new(instructions.code_space());
@@ -257,6 +261,31 @@ pub(crate) fn process_source(
         mapping,
         entry,
     })
+}
+
+fn lex_source(
+    view: SourceView<'_>,
+    source_id: SourceId,
+) -> Result<Vec<Token>, (Vec<Token>, LexError)> {
+    let mut lexer = match Lexer::new(view, source_id) {
+        Ok(lexer) => lexer,
+        Err(error) => return Err((Vec::new(), error)),
+    };
+    let mut tokens = Vec::new();
+
+    loop {
+        let token = match lexer.next_token() {
+            Ok(token) => token,
+            Err(error) => return Err((tokens, error)),
+        };
+        let done = token.kind() == TokenKind::Eof;
+        tokens.push(token);
+        if done {
+            break;
+        }
+    }
+
+    Ok(tokens)
 }
 
 fn compile_statements(
@@ -359,6 +388,35 @@ fn compile_statement(
     }
 }
 
+fn process_statement_prefix_before_lex_error(
+    view: SourceView<'_>,
+    source_id: SourceId,
+    tokens: &[Token],
+    mut context: SourceProcessingContext<'_>,
+) -> Result<(), SourceProcessorError> {
+    let mut instructions = InstructionSequence::new();
+    let mut mapping = InstructionSourceMapping::new(instructions.code_space());
+    let mut line_numbers = LocalLineNumberTable::new();
+    let referenced_line_numbers = collect_referenced_line_numbers(view, tokens);
+
+    for statement in LogicalStatements::new(tokens) {
+        process_statement(
+            view,
+            source_id,
+            statement,
+            &mut context,
+            &mut StatementCompileState {
+                instructions: &mut instructions,
+                mapping: &mut mapping,
+                line_numbers: &mut line_numbers,
+                referenced_line_numbers: &referenced_line_numbers,
+            },
+        )?;
+    }
+
+    Ok(())
+}
+
 fn process_statement(
     view: SourceView<'_>,
     source_id: SourceId,
@@ -403,6 +461,23 @@ fn process_statement(
     } else {
         Ok(())
     }
+}
+
+fn complete_statement_prefix_end(tokens: &[Token]) -> usize {
+    let mut depth = 0usize;
+    let mut complete_end = 0usize;
+
+    for (index, token) in tokens.iter().copied().enumerate() {
+        match token.kind() {
+            TokenKind::LParen => depth = depth.saturating_add(1),
+            TokenKind::RParen => depth = depth.saturating_sub(1),
+            TokenKind::LineBoundary if depth == 0 => complete_end = index + 1,
+            TokenKind::Eof => return index,
+            _ => {}
+        }
+    }
+
+    complete_end
 }
 
 fn split_statement_line_number<'a>(
@@ -2598,6 +2673,50 @@ mod tests {
             panic!("SCORE should be a variable binding");
         };
         assert_eq!(globals.view().read(variable), Ok(Value::integer(0)));
+    }
+
+    #[test]
+    fn successful_var_is_not_rolled_back_by_later_lexical_failure() {
+        let mut globals = GlobalVariables::new();
+        let mut bindings = Bindings::new();
+
+        let (sources, id, error) = process_error("VAR SCORE\n@", &mut globals, &mut bindings);
+
+        assert_eq!(
+            error,
+            SourceProcessorError::Lex(LexError::InvalidCharacter {
+                span: span(sources.view(), id, 10, 11),
+                character: '@',
+                reason: InvalidCharacterReason::UnsupportedPunctuation,
+            })
+        );
+        let Binding::Variable(variable) = bindings
+            .get(&name("SCORE"))
+            .copied()
+            .expect("successful VAR should remain committed before later lexical failure")
+        else {
+            panic!("SCORE should be a variable binding");
+        };
+        assert_eq!(globals.view().read(variable), Ok(Value::integer(0)));
+    }
+
+    #[test]
+    fn var_in_same_form_as_lexical_failure_is_not_committed() {
+        let mut globals = GlobalVariables::new();
+        let mut bindings = Bindings::new();
+
+        let (sources, id, error) = process_error("VAR SCORE @", &mut globals, &mut bindings);
+
+        assert_eq!(
+            error,
+            SourceProcessorError::Lex(LexError::InvalidCharacter {
+                span: span(sources.view(), id, 10, 11),
+                character: '@',
+                reason: InvalidCharacterReason::UnsupportedPunctuation,
+            })
+        );
+        assert_eq!(bindings.get(&name("SCORE")), None);
+        assert!(globals.is_empty());
     }
 
     #[test]
