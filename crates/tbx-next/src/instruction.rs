@@ -1,3 +1,4 @@
+use crate::global_variable::GlobalVarId;
 use crate::value::Value;
 use crate::word::WordId;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -87,6 +88,8 @@ impl CodeLocation {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Instruction {
     Push(Value),
+    LoadVar(GlobalVarId),
+    StoreVar(GlobalVarId),
     Call(WordId),
     Jump(InstructionAddress),
     JumpIfZero(InstructionAddress),
