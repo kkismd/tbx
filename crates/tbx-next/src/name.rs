@@ -14,6 +14,11 @@ pub(crate) enum NameError {
     InvalidWordName,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ReservedNameError {
+    ReservedPublicationName,
+}
+
 impl NormalizedName {
     pub(crate) fn new(input: &str) -> Result<Self, NameError> {
         validate_word_name(input)?;
@@ -26,6 +31,18 @@ impl NormalizedName {
     pub(crate) fn as_str(&self) -> &str {
         &self.text
     }
+}
+
+pub(crate) fn validate_publication_name(name: &NormalizedName) -> Result<(), ReservedNameError> {
+    if is_reserved_publication_name(name) {
+        Err(ReservedNameError::ReservedPublicationName)
+    } else {
+        Ok(())
+    }
+}
+
+pub(crate) fn is_reserved_publication_name(name: &NormalizedName) -> bool {
+    matches!(name.as_str(), "VAR" | "LET")
 }
 
 fn validate_word_name(input: &str) -> Result<(), NameError> {
@@ -162,5 +179,29 @@ mod tests {
             NormalizedName::new(literal),
             Err(NameError::InvalidWordName)
         );
+    }
+
+    #[test]
+    fn var_and_let_are_reserved_publication_names_after_normalization() {
+        for reserved in ["VAR", "var", "Var", "LET", "let", "Let"] {
+            let name = name(reserved);
+
+            assert_eq!(
+                validate_publication_name(&name),
+                Err(ReservedNameError::ReservedPublicationName),
+                "{reserved:?} should be reserved"
+            );
+            assert!(is_reserved_publication_name(&name));
+        }
+    }
+
+    #[test]
+    fn ordinary_names_are_not_reserved_for_publication() {
+        for ordinary in ["A", "VARIABLE", "LETTER", "VAR1", "LETTERS", "_LET"] {
+            let name = name(ordinary);
+
+            assert_eq!(validate_publication_name(&name), Ok(()));
+            assert!(!is_reserved_publication_name(&name));
+        }
     }
 }

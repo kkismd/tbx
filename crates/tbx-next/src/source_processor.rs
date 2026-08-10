@@ -1,11 +1,13 @@
-use crate::binding::Bindings;
+use crate::binding::{Binding, BindingInsertError, Bindings};
 use crate::expression::{parse_expression, ExpressionError, ExpressionSyntaxErrorKind};
+use crate::global_variable::GlobalVariables;
 use crate::instruction::{
     CodeLocation, CodeSpaceLookup, CodeSpaceLookupError, Instruction, InstructionAddress,
     InstructionSequence, InstructionView,
 };
 use crate::lexer::{LexError, Lexer, Token, TokenKind};
 use crate::line_number::{LineNumberError, LocalLineNumber, LocalLineNumberTable};
+use crate::name::{validate_publication_name, NameError, NormalizedName, ReservedNameError};
 use crate::operator::OperatorLookup;
 use crate::primitive::PrimitiveLookup;
 use crate::source::{SourceError, SourceId, SourceSpan, SourceView};
@@ -29,6 +31,13 @@ pub(crate) struct TemporaryExecutionUnit {
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct SourceCompileContext<'a> {
     bindings: &'a Bindings,
+    operators: Option<OperatorLookup>,
+}
+
+#[derive(Debug)]
+pub(crate) struct SourceProcessContext<'a> {
+    bindings: &'a mut Bindings,
+    globals: &'a mut GlobalVariables,
     operators: Option<OperatorLookup>,
 }
 
@@ -74,6 +83,7 @@ pub(crate) struct CompileError {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum CompileErrorKind {
     UnsupportedToken { kind: TokenKind },
+    VarSyntax { source: VarSyntaxErrorKind },
     BifSyntax { source: BifSyntaxErrorKind },
     IntegerLiteralOutOfRange,
     IntegerLiteralConversion,
@@ -82,6 +92,16 @@ pub(crate) enum CompileErrorKind {
     LineNumber { source: LineNumberError },
     WordResolution { source: WordResolutionError },
     Expression { source: ExpressionSyntaxErrorKind },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum VarSyntaxErrorKind {
+    MissingName,
+    TrailingToken { kind: TokenKind },
+    InvalidName { source: NameError },
+    ReservedName,
+    NameConflict,
+    BindingCommitInvariantViolated,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -137,22 +157,26 @@ impl From<SourceMappingLookupError> for SourceProcessorError {
     }
 }
 
+impl VarSyntaxErrorKind {
+    fn from_reserved_name_error(error: ReservedNameError) -> Self {
+        match error {
+            ReservedNameError::ReservedPublicationName => Self::ReservedName,
+        }
+    }
+
+    fn from_binding_insert_error(error: BindingInsertError) -> Self {
+        match error {
+            BindingInsertError::NameConflict => Self::BindingCommitInvariantViolated,
+        }
+    }
+}
+
 pub(crate) fn compile_source(
     view: SourceView<'_>,
     source_id: SourceId,
     context: SourceCompileContext<'_>,
 ) -> Result<TemporaryExecutionUnit, SourceProcessorError> {
-    let mut lexer = Lexer::new(view, source_id)?;
-    let mut tokens = Vec::new();
-
-    loop {
-        let token = lexer.next_token()?;
-        let done = token.kind() == TokenKind::Eof;
-        tokens.push(token);
-        if done {
-            break;
-        }
-    }
+    let tokens = lex_source(view, source_id)?;
 
     let mut instructions = InstructionSequence::new();
     let mut mapping = InstructionSourceMapping::new(instructions.code_space());
@@ -187,6 +211,64 @@ pub(crate) fn compile_source(
     })
 }
 
+pub(crate) fn process_source(
+    view: SourceView<'_>,
+    source_id: SourceId,
+    mut context: SourceProcessContext<'_>,
+) -> Result<TemporaryExecutionUnit, SourceProcessorError> {
+    let tokens = lex_source(view, source_id)?;
+    let mut instructions = InstructionSequence::new();
+    let mut mapping = InstructionSourceMapping::new(instructions.code_space());
+
+    process_statements(
+        view,
+        source_id,
+        &tokens,
+        &mut context,
+        &mut instructions,
+        &mut mapping,
+    )?;
+
+    let eof = tokens
+        .last()
+        .copied()
+        .expect("lexer should always produce an EOF token");
+    append_mapped(
+        &mut instructions,
+        &mut mapping,
+        Instruction::Halt,
+        eof.span(),
+    )?;
+
+    let entry = instructions
+        .view()
+        .location(InstructionAddress::from_index(0));
+    Ok(TemporaryExecutionUnit {
+        instructions,
+        mapping,
+        entry,
+    })
+}
+
+fn lex_source(
+    view: SourceView<'_>,
+    source_id: SourceId,
+) -> Result<Vec<Token>, SourceProcessorError> {
+    let mut lexer = Lexer::new(view, source_id)?;
+    let mut tokens = Vec::new();
+
+    loop {
+        let token = lexer.next_token()?;
+        let done = token.kind() == TokenKind::Eof;
+        tokens.push(token);
+        if done {
+            break;
+        }
+    }
+
+    Ok(tokens)
+}
+
 fn compile_statements(
     view: SourceView<'_>,
     source_id: SourceId,
@@ -203,6 +285,37 @@ fn compile_statements(
 
     for statement in LogicalStatements::new(tokens) {
         compile_statement(
+            view,
+            source_id,
+            statement,
+            context,
+            &mut StatementCompileState {
+                instructions,
+                mapping,
+                line_numbers: &mut line_numbers,
+                referenced_line_numbers: &referenced_line_numbers,
+            },
+        )?;
+    }
+
+    line_numbers
+        .resolve(instructions)
+        .map_err(|source| line_number_compile_error(source).into())
+}
+
+fn process_statements(
+    view: SourceView<'_>,
+    source_id: SourceId,
+    tokens: &[Token],
+    context: &mut SourceProcessContext<'_>,
+    instructions: &mut InstructionSequence,
+    mapping: &mut InstructionSourceMapping,
+) -> Result<(), SourceProcessorError> {
+    let mut line_numbers = LocalLineNumberTable::new();
+    let referenced_line_numbers = collect_referenced_line_numbers(view, tokens);
+
+    for statement in LogicalStatements::new(tokens) {
+        process_statement(
             view,
             source_id,
             statement,
@@ -244,6 +357,50 @@ fn compile_statement(
         state.mapping,
         state.line_numbers,
     )?;
+
+    if let Some((line_number, span)) = line_number {
+        let target = InstructionAddress::from_index(start);
+        state
+            .line_numbers
+            .define(state.instructions, line_number, target, span)
+            .map_err(|source| line_number_compile_error(source).into())
+    } else {
+        Ok(())
+    }
+}
+
+fn process_statement(
+    view: SourceView<'_>,
+    source_id: SourceId,
+    statement: &[Token],
+    context: &mut SourceProcessContext<'_>,
+    state: &mut StatementCompileState<'_>,
+) -> Result<(), SourceProcessorError> {
+    if statement.is_empty() {
+        return Ok(());
+    }
+
+    let (line_number, body) =
+        split_statement_line_number(view, statement, state.referenced_line_numbers)?;
+    let start = state.instructions.len();
+
+    if is_var_keyword_token(view, body.first().copied())? {
+        publish_var_declaration(view, body, context.bindings, context.globals)?;
+    } else {
+        let compile_context = SourceCompileContext {
+            bindings: &*context.bindings,
+            operators: context.operators,
+        };
+        compile_statement_body(
+            view,
+            source_id,
+            body,
+            compile_context,
+            state.instructions,
+            state.mapping,
+            state.line_numbers,
+        )?;
+    }
 
     if let Some((line_number, span)) = line_number {
         let target = InstructionAddress::from_index(start);
@@ -650,6 +807,72 @@ fn is_bif_keyword(view: SourceView<'_>, token: Token) -> Result<bool, SourceProc
     Ok(view.slice(token.span())?.eq_ignore_ascii_case("BIF"))
 }
 
+fn is_var_keyword_token(
+    view: SourceView<'_>,
+    token: Option<Token>,
+) -> Result<bool, SourceProcessorError> {
+    let Some(token) = token else {
+        return Ok(false);
+    };
+    if token.kind() != TokenKind::Name {
+        return Ok(false);
+    }
+
+    Ok(view.slice(token.span())?.eq_ignore_ascii_case("VAR"))
+}
+
+fn publish_var_declaration(
+    view: SourceView<'_>,
+    tokens: &[Token],
+    bindings: &mut Bindings,
+    globals: &mut GlobalVariables,
+) -> Result<(), SourceProcessorError> {
+    let var = tokens
+        .first()
+        .copied()
+        .expect("VAR declaration parser requires the keyword token");
+    let Some(name_token) = tokens.get(1).copied() else {
+        return Err(var_syntax(var.span(), VarSyntaxErrorKind::MissingName).into());
+    };
+    if name_token.kind() != TokenKind::Name {
+        return Err(var_syntax(name_token.span(), VarSyntaxErrorKind::MissingName).into());
+    }
+    if let Some(trailing) = tokens.get(2).copied() {
+        return Err(var_syntax(
+            trailing.span(),
+            VarSyntaxErrorKind::TrailingToken {
+                kind: trailing.kind(),
+            },
+        )
+        .into());
+    }
+
+    let source_name = view.slice(name_token.span())?;
+    let name = NormalizedName::new(source_name)
+        .map_err(|source| {
+            var_syntax(
+                name_token.span(),
+                VarSyntaxErrorKind::InvalidName { source },
+            )
+        })
+        .map_err(SourceProcessorError::Compile)?;
+    validate_publication_name(&name)
+        .map_err(VarSyntaxErrorKind::from_reserved_name_error)
+        .map_err(|source| var_syntax(name_token.span(), source))
+        .map_err(SourceProcessorError::Compile)?;
+
+    if bindings.get(&name).is_some() {
+        return Err(var_syntax(name_token.span(), VarSyntaxErrorKind::NameConflict).into());
+    }
+
+    let id = globals.allocate();
+    bindings
+        .insert_new(name, Binding::Variable(id))
+        .map_err(VarSyntaxErrorKind::from_binding_insert_error)
+        .map_err(|source| var_syntax(name_token.span(), source))
+        .map_err(SourceProcessorError::Compile)
+}
+
 fn is_statement_line_number_candidate(
     view: SourceView<'_>,
     token: Token,
@@ -732,6 +955,13 @@ fn bif_syntax(span: SourceSpan, source: BifSyntaxErrorKind) -> CompileError {
     CompileError {
         span,
         kind: CompileErrorKind::BifSyntax { source },
+    }
+}
+
+fn var_syntax(span: SourceSpan, source: VarSyntaxErrorKind) -> CompileError {
+    CompileError {
+        span,
+        kind: CompileErrorKind::VarSyntax { source },
     }
 }
 
@@ -870,6 +1100,28 @@ impl<'a> SourceCompileContext<'a> {
 
     pub(crate) const fn operators(self) -> Option<OperatorLookup> {
         self.operators
+    }
+}
+
+impl<'a> SourceProcessContext<'a> {
+    pub(crate) fn new(bindings: &'a mut Bindings, globals: &'a mut GlobalVariables) -> Self {
+        Self {
+            bindings,
+            globals,
+            operators: None,
+        }
+    }
+
+    pub(crate) fn with_operators(
+        bindings: &'a mut Bindings,
+        globals: &'a mut GlobalVariables,
+        operators: OperatorLookup,
+    ) -> Self {
+        Self {
+            bindings,
+            globals,
+            operators: Some(operators),
+        }
     }
 }
 
@@ -1024,7 +1276,8 @@ impl CompileError {
 mod tests {
     use super::*;
     use crate::binding::{Binding, Bindings};
-    use crate::bootstrap::register_primitive;
+    use crate::bootstrap::{register_builtin_global_variables, register_primitive};
+    use crate::global_variable::{GlobalVarId, GlobalVariables};
     use crate::lexer::InvalidCharacterReason;
     use crate::name::NormalizedName;
     use crate::operator::{register_operator_primitives, OperatorSemantic, OperatorWords};
@@ -1170,6 +1423,36 @@ mod tests {
         (sources, id, error)
     }
 
+    fn process_with_bindings(
+        text: &str,
+        bindings: &mut Bindings,
+        globals: &mut GlobalVariables,
+    ) -> (SourceTexts, SourceId, TemporaryExecutionUnit) {
+        let (sources, id) = source(text);
+        let unit = process_source(
+            sources.view(),
+            id,
+            SourceProcessContext::new(bindings, globals),
+        )
+        .expect("source should process");
+        (sources, id, unit)
+    }
+
+    fn process_error_with_bindings(
+        text: &str,
+        bindings: &mut Bindings,
+        globals: &mut GlobalVariables,
+    ) -> (SourceTexts, SourceId, SourceProcessorError) {
+        let (sources, id) = source(text);
+        let error = process_source(
+            sources.view(),
+            id,
+            SourceProcessContext::new(bindings, globals),
+        )
+        .expect_err("source should fail");
+        (sources, id, error)
+    }
+
     fn run_with_bindings_and_operators(
         text: &str,
         bindings: &Bindings,
@@ -1278,6 +1561,23 @@ mod tests {
         id
     }
 
+    fn variable_id(bindings: &Bindings, input: &str) -> Option<GlobalVarId> {
+        match bindings.get(&name(input)) {
+            Some(Binding::Variable(id)) => Some(*id),
+            _ => None,
+        }
+    }
+
+    fn assert_variable_binding(
+        bindings: &Bindings,
+        globals: &GlobalVariables,
+        input: &str,
+    ) -> GlobalVarId {
+        let id = variable_id(bindings, input).expect("variable binding should exist");
+        assert_eq!(globals.view().read(id), Ok(Value::integer(0)));
+        id
+    }
+
     fn push_7(context: &mut PrimitiveContext<'_>) -> Result<(), PrimitiveError> {
         context.push(value(7));
         Ok(())
@@ -1295,6 +1595,201 @@ mod tests {
         context.pop()?;
         context.push(value(99));
         Err(PrimitiveError::Failed)
+    }
+
+    #[test]
+    fn var_declaration_publishes_zero_initialized_global_variable() {
+        let mut bindings = Bindings::new();
+        let mut globals = GlobalVariables::new();
+
+        let (_sources, _id, unit) = process_with_bindings("VAR SCORE", &mut bindings, &mut globals);
+
+        assert_eq!(unit.len(), 1);
+        assert_variable_binding(&bindings, &globals, "SCORE");
+    }
+
+    #[test]
+    fn var_declaration_uses_normalized_name_identity() {
+        let mut bindings = Bindings::new();
+        let mut globals = GlobalVariables::new();
+
+        process_with_bindings("var Score_Total", &mut bindings, &mut globals);
+
+        let id = assert_variable_binding(&bindings, &globals, "SCORE_TOTAL");
+        assert_eq!(variable_id(&bindings, "score_total"), Some(id));
+        assert_eq!(variable_id(&bindings, "Score_Total"), Some(id));
+    }
+
+    #[test]
+    fn var_declaration_is_visible_to_following_forms_in_the_same_source() {
+        let mut bindings = Bindings::new();
+        let mut globals = GlobalVariables::new();
+
+        let (sources, id, error) =
+            process_error_with_bindings("VAR SCORE\nSCORE", &mut bindings, &mut globals);
+
+        assert_variable_binding(&bindings, &globals, "score");
+        assert_eq!(
+            error,
+            SourceProcessorError::Compile(CompileError {
+                span: span(sources.view(), id, 10, 15),
+                kind: CompileErrorKind::WordResolution {
+                    source: WordResolutionError::TargetIsNotWord
+                },
+            })
+        );
+    }
+
+    #[test]
+    fn duplicate_var_declaration_is_name_conflict_without_new_binding() {
+        let mut bindings = Bindings::new();
+        let mut globals = GlobalVariables::new();
+        process_with_bindings("VAR SCORE", &mut bindings, &mut globals);
+        let first = assert_variable_binding(&bindings, &globals, "score");
+        let original_globals = globals.len();
+
+        let (sources, id, error) =
+            process_error_with_bindings("VAR score", &mut bindings, &mut globals);
+
+        assert_eq!(
+            error,
+            SourceProcessorError::Compile(CompileError {
+                span: span(sources.view(), id, 4, 9),
+                kind: CompileErrorKind::VarSyntax {
+                    source: VarSyntaxErrorKind::NameConflict
+                },
+            })
+        );
+        assert_eq!(variable_id(&bindings, "SCORE"), Some(first));
+        assert_eq!(globals.len(), original_globals);
+    }
+
+    #[test]
+    fn var_declaration_conflicts_with_existing_word_binding() {
+        let mut words = PublishedWords::new();
+        let mut bindings = Bindings::new();
+        let mut globals = GlobalVariables::new();
+        let word = register_primitive(
+            &mut words,
+            &mut bindings,
+            name("SCORE"),
+            PrimitiveId::from_slot(1),
+        )
+        .expect("test word should register");
+
+        let (sources, id, error) =
+            process_error_with_bindings("VAR score", &mut bindings, &mut globals);
+
+        assert_eq!(
+            error,
+            SourceProcessorError::Compile(CompileError {
+                span: span(sources.view(), id, 4, 9),
+                kind: CompileErrorKind::VarSyntax {
+                    source: VarSyntaxErrorKind::NameConflict
+                },
+            })
+        );
+        assert_eq!(bindings.get(&name("score")), Some(&Binding::Word(word)));
+        assert_eq!(globals.len(), 0);
+    }
+
+    #[test]
+    fn var_a_is_builtin_variable_collision_not_reserved_name() {
+        let mut bindings = Bindings::new();
+        let mut globals = GlobalVariables::new();
+        let ids = register_builtin_global_variables(&mut globals, &mut bindings)
+            .expect("A-Z globals should bootstrap");
+
+        let (sources, id, error) =
+            process_error_with_bindings("VAR A", &mut bindings, &mut globals);
+
+        assert_eq!(
+            error,
+            SourceProcessorError::Compile(CompileError {
+                span: span(sources.view(), id, 4, 5),
+                kind: CompileErrorKind::VarSyntax {
+                    source: VarSyntaxErrorKind::NameConflict
+                },
+            })
+        );
+        assert_eq!(variable_id(&bindings, "A"), Some(ids[0]));
+        assert_eq!(globals.len(), 26);
+    }
+
+    #[test]
+    fn var_rejects_reserved_publication_names() {
+        for reserved in ["VAR", "var", "LET", "let"] {
+            let mut bindings = Bindings::new();
+            let mut globals = GlobalVariables::new();
+            let text = format!("VAR {reserved}");
+            let (sources, id, error) =
+                process_error_with_bindings(&text, &mut bindings, &mut globals);
+
+            assert_eq!(
+                error,
+                SourceProcessorError::Compile(CompileError {
+                    span: span(sources.view(), id, 4, 4 + reserved.len()),
+                    kind: CompileErrorKind::VarSyntax {
+                        source: VarSyntaxErrorKind::ReservedName
+                    },
+                }),
+                "{reserved:?} should be rejected"
+            );
+            assert!(bindings.is_empty());
+            assert_eq!(globals.len(), 0);
+        }
+    }
+
+    #[test]
+    fn malformed_var_forms_report_structured_spans_without_publication() {
+        for (text, start, end, expected) in [
+            ("VAR", 0, 3, VarSyntaxErrorKind::MissingName),
+            ("VAR 123", 4, 7, VarSyntaxErrorKind::MissingName),
+            (
+                "VAR SCORE EXTRA",
+                10,
+                15,
+                VarSyntaxErrorKind::TrailingToken {
+                    kind: TokenKind::Name,
+                },
+            ),
+        ] {
+            let mut bindings = Bindings::new();
+            let mut globals = GlobalVariables::new();
+            let (sources, id, error) =
+                process_error_with_bindings(text, &mut bindings, &mut globals);
+
+            assert_eq!(
+                error,
+                SourceProcessorError::Compile(CompileError {
+                    span: span(sources.view(), id, start, end),
+                    kind: CompileErrorKind::VarSyntax { source: expected },
+                }),
+                "{text:?} should fail with structured VAR syntax"
+            );
+            assert!(bindings.is_empty());
+            assert_eq!(globals.len(), 0);
+        }
+    }
+
+    #[test]
+    fn successful_var_is_not_rolled_back_when_later_form_fails() {
+        let mut bindings = Bindings::new();
+        let mut globals = GlobalVariables::new();
+
+        let (_sources, _id, error) =
+            process_error_with_bindings("VAR SCORE\nUNKNOWN", &mut bindings, &mut globals);
+
+        assert!(matches!(
+            error,
+            SourceProcessorError::Compile(CompileError {
+                kind: CompileErrorKind::WordResolution {
+                    source: WordResolutionError::UndefinedName
+                },
+                ..
+            })
+        ));
+        assert_variable_binding(&bindings, &globals, "SCORE");
     }
 
     #[test]

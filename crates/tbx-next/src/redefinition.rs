@@ -1,5 +1,5 @@
 use crate::binding::{BindingReplaceError, Bindings};
-use crate::name::NormalizedName;
+use crate::name::{validate_publication_name, NormalizedName, ReservedNameError};
 use crate::word::{CompletedWordDefinition, PublishedWords, WordId};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -20,6 +20,7 @@ impl WordRedefinition {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum WordRedefinitionError {
+    ReservedName,
     UndefinedName,
     TargetIsNotWord,
     BindingCommitInvariantViolated,
@@ -37,6 +38,8 @@ pub(crate) fn redefine_word(
     name: &NormalizedName,
     definition: CompletedWordDefinition,
 ) -> Result<WordRedefinition, WordRedefinitionError> {
+    validate_publication_name(name).map_err(WordRedefinitionError::from_reserved_name_error)?;
+
     let previous = bindings
         .current_word(name)
         .map_err(WordRedefinitionError::from_precheck_error)?;
@@ -51,6 +54,12 @@ pub(crate) fn redefine_word(
 }
 
 impl WordRedefinitionError {
+    fn from_reserved_name_error(error: ReservedNameError) -> Self {
+        match error {
+            ReservedNameError::ReservedPublicationName => Self::ReservedName,
+        }
+    }
+
     fn from_precheck_error(error: BindingReplaceError) -> Self {
         match error {
             BindingReplaceError::MissingName => Self::UndefinedName,
@@ -278,6 +287,20 @@ mod tests {
         assert_eq!(bindings.len(), 1);
         assert_word_binding(&bindings, "OTHER", other);
         assert_eq!(words.get(other), Ok(&other_definition.definition()));
+    }
+
+    #[test]
+    fn reserved_names_are_rejected_before_issuing_replacement_word_id() {
+        for reserved in ["VAR", "var", "LET", "let"] {
+            let mut words = PublishedWords::new();
+            let mut bindings = Bindings::new();
+
+            let result = redefine_word(&mut words, &mut bindings, &name(reserved), primitive(410));
+
+            assert_eq!(result, Err(WordRedefinitionError::ReservedName));
+            assert_eq!(words.len(), 0, "{reserved:?} should not publish a word");
+            assert!(bindings.is_empty(), "{reserved:?} should not bind a name");
+        }
     }
 
     #[test]

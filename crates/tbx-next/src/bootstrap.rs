@@ -1,6 +1,6 @@
 use crate::binding::{Binding, BindingInsertError, Bindings};
 use crate::global_variable::{GlobalVarId, GlobalVariables};
-use crate::name::NormalizedName;
+use crate::name::{validate_publication_name, NormalizedName, ReservedNameError};
 use crate::word::{CompletedWordDefinition, PrimitiveId, PublishedWords, WordId};
 
 const BUILTIN_GLOBAL_VARIABLE_NAMES: [&str; 26] = [
@@ -10,6 +10,7 @@ const BUILTIN_GLOBAL_VARIABLE_NAMES: [&str; 26] = [
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum PrimitiveBootstrapError {
+    ReservedName,
     NameConflict,
     BindingRegistrationInvariantViolated,
 }
@@ -33,6 +34,8 @@ pub(crate) fn register_primitive(
     name: NormalizedName,
     primitive: PrimitiveId,
 ) -> Result<WordId, PrimitiveBootstrapError> {
+    validate_publication_name(&name).map_err(PrimitiveBootstrapError::from_reserved_name_error)?;
+
     if bindings.get(&name).is_some() {
         return Err(PrimitiveBootstrapError::NameConflict);
     }
@@ -84,6 +87,12 @@ fn builtin_global_variable_names() -> [NormalizedName; 26] {
 }
 
 impl PrimitiveBootstrapError {
+    fn from_reserved_name_error(error: ReservedNameError) -> Self {
+        match error {
+            ReservedNameError::ReservedPublicationName => Self::ReservedName,
+        }
+    }
+
     fn from_binding_insert_error(error: BindingInsertError) -> Self {
         match error {
             BindingInsertError::NameConflict => Self::BindingRegistrationInvariantViolated,
@@ -296,6 +305,21 @@ mod tests {
         assert_word_binding(&bindings, "ALIAS_TWO", second);
         assert_primitive(&words, first, primitive);
         assert_primitive(&words, second, primitive);
+    }
+
+    #[test]
+    fn reserved_names_are_rejected_before_publishing_word_ids() {
+        for reserved in ["VAR", "var", "LET", "let"] {
+            let mut words = PublishedWords::new();
+            let mut bindings = Bindings::new();
+
+            let result =
+                register_primitive(&mut words, &mut bindings, name(reserved), primitive(55));
+
+            assert_eq!(result, Err(PrimitiveBootstrapError::ReservedName));
+            assert_eq!(words.len(), 0, "{reserved:?} should not publish a word");
+            assert!(bindings.is_empty(), "{reserved:?} should not bind a name");
+        }
     }
 
     #[test]
