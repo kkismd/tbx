@@ -97,6 +97,7 @@ pub(crate) enum CompileErrorKind {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum VarSyntaxErrorKind {
     MissingName,
+    LineNumberNotAllowed,
     TrailingToken { kind: TokenKind },
     InvalidName { source: NameError },
     ReservedName,
@@ -380,11 +381,18 @@ fn process_statement(
         return Ok(());
     }
 
+    if let Some(span) = statement_var_line_number_prefix(view, statement)? {
+        return Err(var_syntax(span, VarSyntaxErrorKind::LineNumberNotAllowed).into());
+    }
+
     let (line_number, body) =
         split_statement_line_number(view, statement, state.referenced_line_numbers)?;
     let start = state.instructions.len();
 
     if is_var_keyword_token(view, body.first().copied())? {
+        if let Some((_line_number, span)) = line_number {
+            return Err(var_syntax(span, VarSyntaxErrorKind::LineNumberNotAllowed).into());
+        }
         publish_var_declaration(view, body, context.bindings, context.globals)?;
     } else {
         let compile_context = SourceCompileContext {
@@ -411,6 +419,20 @@ fn process_statement(
     } else {
         Ok(())
     }
+}
+
+fn statement_var_line_number_prefix(
+    view: SourceView<'_>,
+    statement: &[Token],
+) -> Result<Option<SourceSpan>, SourceProcessorError> {
+    let [first, second, ..] = statement else {
+        return Ok(None);
+    };
+    if first.kind() != TokenKind::IntegerLiteral {
+        return Ok(None);
+    }
+
+    Ok(is_var_keyword_token(view, Some(*second))?.then_some(first.span()))
 }
 
 fn split_statement_line_number<'a>(
@@ -1770,6 +1792,27 @@ mod tests {
             assert!(bindings.is_empty());
             assert_eq!(globals.len(), 0);
         }
+    }
+
+    #[test]
+    fn line_numbered_var_is_rejected_before_publication() {
+        let mut bindings = Bindings::new();
+        let mut globals = GlobalVariables::new();
+
+        let (sources, id, error) =
+            process_error_with_bindings("10 VAR SCORE", &mut bindings, &mut globals);
+
+        assert_eq!(
+            error,
+            SourceProcessorError::Compile(CompileError {
+                span: span(sources.view(), id, 0, 2),
+                kind: CompileErrorKind::VarSyntax {
+                    source: VarSyntaxErrorKind::LineNumberNotAllowed
+                },
+            })
+        );
+        assert!(bindings.is_empty());
+        assert_eq!(globals.len(), 0);
     }
 
     #[test]
