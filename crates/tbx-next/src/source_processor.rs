@@ -142,17 +142,7 @@ pub(crate) fn compile_source(
     source_id: SourceId,
     context: SourceCompileContext<'_>,
 ) -> Result<TemporaryExecutionUnit, SourceProcessorError> {
-    let mut lexer = Lexer::new(view, source_id)?;
-    let mut tokens = Vec::new();
-
-    loop {
-        let token = lexer.next_token()?;
-        let done = token.kind() == TokenKind::Eof;
-        tokens.push(token);
-        if done {
-            break;
-        }
-    }
+    let segmented = SegmentedSource::collect(view, source_id)?;
 
     let mut instructions = InstructionSequence::new();
     let mut mapping = InstructionSourceMapping::new(instructions.code_space());
@@ -160,16 +150,16 @@ pub(crate) fn compile_source(
     compile_statements(
         view,
         source_id,
-        &tokens,
+        segmented.completed_statements(),
         context,
         &mut instructions,
         &mut mapping,
     )?;
 
-    let eof = tokens
-        .last()
-        .copied()
-        .expect("lexer should always produce an EOF token");
+    let eof = match segmented.terminal() {
+        Terminal::Eof(eof) => eof,
+        Terminal::LexError(error) => return Err(error.into()),
+    };
     append_mapped(
         &mut instructions,
         &mut mapping,
@@ -190,7 +180,7 @@ pub(crate) fn compile_source(
 fn compile_statements(
     view: SourceView<'_>,
     source_id: SourceId,
-    tokens: &[Token],
+    statements: &[LogicalStatement],
     context: SourceCompileContext<'_>,
     instructions: &mut InstructionSequence,
     mapping: &mut InstructionSourceMapping,
@@ -199,13 +189,13 @@ fn compile_statements(
     // A leading integer remains an expression/literal unless this unit uses it
     // as local control-flow syntax. This preserves existing source paths while
     // keeping line numbers compile-time-only.
-    let referenced_line_numbers = collect_referenced_line_numbers(view, tokens);
+    let referenced_line_numbers = collect_referenced_line_numbers(view, statements);
 
-    for statement in LogicalStatements::new(tokens) {
+    for statement in statements {
         compile_statement(
             view,
             source_id,
-            statement,
+            statement.tokens(),
             context,
             &mut StatementCompileState {
                 instructions,
@@ -674,12 +664,13 @@ fn is_statement_line_number_candidate(
 
 fn collect_referenced_line_numbers(
     view: SourceView<'_>,
-    tokens: &[Token],
+    statements: &[LogicalStatement],
 ) -> HashSet<LocalLineNumber> {
     let mut references = HashSet::new();
 
-    for statement in LogicalStatements::new(tokens) {
-        let bif_index = match statement {
+    for statement in statements {
+        let tokens = statement.tokens();
+        let bif_index = match tokens {
             [first, second, ..]
                 if first.kind() == TokenKind::IntegerLiteral
                     && is_bif_keyword(view, *second).unwrap_or(false) =>
@@ -693,11 +684,11 @@ fn collect_referenced_line_numbers(
             continue;
         };
         let Some(comma_index) =
-            find_top_level_comma(&statement[bif_index + 1..]).map(|index| bif_index + 1 + index)
+            find_top_level_comma(&tokens[bif_index + 1..]).map(|index| bif_index + 1 + index)
         else {
             continue;
         };
-        let Some(target) = statement.get(comma_index + 1).copied() else {
+        let Some(target) = tokens.get(comma_index + 1).copied() else {
             continue;
         };
         if target.kind() != TokenKind::IntegerLiteral {
@@ -753,59 +744,118 @@ fn append_mapped(
     Ok(address)
 }
 
-#[derive(Debug, Clone, Copy)]
-struct LogicalStatements<'a> {
-    tokens: &'a [Token],
-    position: usize,
+// Segmentation is the source of truth for top-level statement boundaries.
+// Lexical failure keeps already completed statements visible while leaving the
+// unbounded tail unavailable to semantic compilation and source-wide analysis.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct SegmentedSource {
+    completed_statements: Vec<LogicalStatement>,
+    incomplete_tail: Vec<Token>,
+    terminal: Terminal,
 }
 
-impl<'a> LogicalStatements<'a> {
-    const fn new(tokens: &'a [Token]) -> Self {
-        Self {
-            tokens,
-            position: 0,
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct LogicalStatement {
+    tokens: Vec<Token>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Terminal {
+    Eof(Token),
+    LexError(LexError),
+}
+
+impl SegmentedSource {
+    fn collect(view: SourceView<'_>, source_id: SourceId) -> Result<Self, SourceProcessorError> {
+        let mut collector = LogicalStatementCollector::new();
+        let mut lexer = Lexer::new(view, source_id)?;
+
+        loop {
+            match lexer.next_token() {
+                Ok(token) if token.kind() == TokenKind::Eof => {
+                    return Ok(collector.finish(Terminal::Eof(token)));
+                }
+                Ok(token) => collector.push_token(token),
+                Err(error) => return Ok(collector.finish(Terminal::LexError(error))),
+            }
         }
+    }
+
+    fn completed_statements(&self) -> &[LogicalStatement] {
+        &self.completed_statements
+    }
+
+    fn terminal(&self) -> Terminal {
+        self.terminal
+    }
+
+    #[cfg(test)]
+    fn incomplete_tail(&self) -> &[Token] {
+        &self.incomplete_tail
     }
 }
 
-impl<'a> Iterator for LogicalStatements<'a> {
-    type Item = &'a [Token];
+impl LogicalStatement {
+    fn new(tokens: Vec<Token>) -> Self {
+        Self { tokens }
+    }
 
-    fn next(&mut self) -> Option<Self::Item> {
-        while matches!(
-            self.tokens.get(self.position).map(|token| token.kind()),
-            Some(TokenKind::LineBoundary)
-        ) {
-            self.position += 1;
+    fn tokens(&self) -> &[Token] {
+        &self.tokens
+    }
+}
+
+#[derive(Debug, Default)]
+struct LogicalStatementCollector {
+    completed_statements: Vec<LogicalStatement>,
+    current_tokens: Vec<Token>,
+    depth: usize,
+}
+
+impl LogicalStatementCollector {
+    fn new() -> Self {
+        Self {
+            completed_statements: Vec::new(),
+            current_tokens: Vec::new(),
+            depth: 0,
         }
+    }
 
-        if matches!(
-            self.tokens.get(self.position).map(|token| token.kind()),
-            Some(TokenKind::Eof) | None
-        ) {
-            return None;
-        }
-
-        let start = self.position;
-        let mut depth = 0usize;
-
-        while let Some(token) = self.tokens.get(self.position).copied() {
-            match token.kind() {
-                TokenKind::LParen => {
-                    depth = depth.saturating_add(1);
-                    self.position += 1;
-                }
-                TokenKind::RParen => {
-                    depth = depth.saturating_sub(1);
-                    self.position += 1;
-                }
-                TokenKind::LineBoundary if depth == 0 => break,
-                TokenKind::Eof => break,
-                _ => self.position += 1,
+    fn push_token(&mut self, token: Token) {
+        match token.kind() {
+            TokenKind::LParen => {
+                self.depth = self.depth.saturating_add(1);
+                self.current_tokens.push(token);
             }
+            TokenKind::RParen => {
+                self.depth = self.depth.saturating_sub(1);
+                self.current_tokens.push(token);
+            }
+            TokenKind::LineBoundary if self.depth == 0 => self.finish_current_statement(),
+            _ => self.current_tokens.push(token),
+        }
+    }
+
+    fn finish(mut self, terminal: Terminal) -> SegmentedSource {
+        if matches!(terminal, Terminal::Eof(_)) {
+            self.finish_current_statement();
         }
 
-        Some(&self.tokens[start..self.position])
+        SegmentedSource {
+            completed_statements: self.completed_statements,
+            incomplete_tail: self.current_tokens,
+            terminal,
+        }
+    }
+
+    fn finish_current_statement(&mut self) {
+        if self.current_tokens.is_empty() {
+            return;
+        }
+
+        let tokens = std::mem::take(&mut self.current_tokens);
+        self.completed_statements
+            .push(LogicalStatement::new(tokens));
     }
 }
 
@@ -1140,6 +1190,13 @@ mod tests {
         (sources, id, error)
     }
 
+    fn segment(text: &str) -> (SourceTexts, SourceId, SegmentedSource) {
+        let (sources, id) = source(text);
+        let segmented =
+            SegmentedSource::collect(sources.view(), id).expect("source should segment");
+        (sources, id, segmented)
+    }
+
     fn compile_expression_error(text: &str) -> (SourceTexts, SourceId, SourceProcessorError) {
         let (sources, id) = source(text);
         let mut words = PublishedWords::new();
@@ -1194,6 +1251,10 @@ mod tests {
 
     fn value(value: i16) -> Value {
         Value::integer(value)
+    }
+
+    fn token_kinds(tokens: &[Token]) -> Vec<TokenKind> {
+        tokens.iter().map(|token| token.kind()).collect()
     }
 
     fn address(index: usize) -> InstructionAddress {
@@ -1342,6 +1403,96 @@ mod tests {
                 "{source:?} should map Halt to EOF"
             );
         }
+    }
+
+    #[test]
+    fn segmentation_collects_completed_statements_without_top_level_boundaries() {
+        let (_sources, _id, segmented) = segment("1\n\n2 3\r\n");
+
+        assert_eq!(segmented.completed_statements().len(), 2);
+        assert_eq!(
+            token_kinds(segmented.completed_statements()[0].tokens()),
+            [TokenKind::IntegerLiteral]
+        );
+        assert_eq!(
+            token_kinds(segmented.completed_statements()[1].tokens()),
+            [TokenKind::IntegerLiteral, TokenKind::IntegerLiteral]
+        );
+        assert_eq!(segmented.incomplete_tail(), []);
+        assert!(matches!(segmented.terminal(), Terminal::Eof(_)));
+    }
+
+    #[test]
+    fn segmentation_completes_final_non_empty_statement_at_eof() {
+        let (_sources, _id, segmented) = segment("1 2");
+
+        assert_eq!(segmented.completed_statements().len(), 1);
+        assert_eq!(
+            token_kinds(segmented.completed_statements()[0].tokens()),
+            [TokenKind::IntegerLiteral, TokenKind::IntegerLiteral]
+        );
+        assert_eq!(segmented.incomplete_tail(), []);
+    }
+
+    #[test]
+    fn segmentation_preserves_parenthesized_line_boundary_inside_statement() {
+        let (_sources, _id, segmented) = segment("1 + (\n2)\n3");
+
+        assert_eq!(segmented.completed_statements().len(), 2);
+        assert_eq!(
+            token_kinds(segmented.completed_statements()[0].tokens()),
+            [
+                TokenKind::IntegerLiteral,
+                TokenKind::Plus,
+                TokenKind::LParen,
+                TokenKind::LineBoundary,
+                TokenKind::IntegerLiteral,
+                TokenKind::RParen
+            ]
+        );
+        assert_eq!(
+            token_kinds(segmented.completed_statements()[1].tokens()),
+            [TokenKind::IntegerLiteral]
+        );
+    }
+
+    #[test]
+    fn segmentation_distinguishes_completed_prefix_from_lexical_failure() {
+        let (sources, id, segmented) = segment("VAR SCORE\n@");
+
+        assert_eq!(segmented.completed_statements().len(), 1);
+        assert_eq!(
+            token_kinds(segmented.completed_statements()[0].tokens()),
+            [TokenKind::Name, TokenKind::Name]
+        );
+        assert_eq!(segmented.incomplete_tail(), []);
+        assert_eq!(
+            segmented.terminal(),
+            Terminal::LexError(LexError::InvalidCharacter {
+                span: span(sources.view(), id, 10, 11),
+                character: '@',
+                reason: InvalidCharacterReason::UnsupportedPunctuation,
+            })
+        );
+    }
+
+    #[test]
+    fn segmentation_keeps_unbounded_lexical_failure_prefix_as_incomplete_tail() {
+        let (sources, id, segmented) = segment("VAR SCORE @");
+
+        assert_eq!(segmented.completed_statements(), []);
+        assert_eq!(
+            token_kinds(segmented.incomplete_tail()),
+            [TokenKind::Name, TokenKind::Name]
+        );
+        assert_eq!(
+            segmented.terminal(),
+            Terminal::LexError(LexError::InvalidCharacter {
+                span: span(sources.view(), id, 10, 11),
+                character: '@',
+                reason: InvalidCharacterReason::UnsupportedPunctuation,
+            })
+        );
     }
 
     #[test]
@@ -1801,6 +1952,58 @@ mod tests {
             error,
             SourceProcessorError::Lex(LexError::InvalidCharacter {
                 span: span(sources.view(), id, 0, 1),
+                character: '@',
+                reason: InvalidCharacterReason::UnsupportedPunctuation,
+            })
+        );
+    }
+
+    #[test]
+    fn completed_statement_compile_error_takes_precedence_over_later_lexical_error() {
+        let (sources, id, error) = compile_error("MISSING\n@");
+
+        assert_eq!(
+            error,
+            SourceProcessorError::Compile(CompileError {
+                span: span(sources.view(), id, 0, 7),
+                kind: CompileErrorKind::WordResolution {
+                    source: WordResolutionError::UndefinedName
+                },
+            })
+        );
+    }
+
+    #[test]
+    fn successful_completed_statements_do_not_publish_partial_unit_before_lexical_error() {
+        let mut words = PublishedWords::new();
+        let mut bindings = Bindings::new();
+        let mut primitives = PrimitiveRegistry::new();
+        let known = primitives.register(push_7);
+        register_primitive(&mut words, &mut bindings, name("KNOWN"), known)
+            .expect("primitive should register");
+        let (sources, id) = source("KNOWN\n@");
+
+        let error = compile_source(sources.view(), id, SourceCompileContext::new(&bindings))
+            .expect_err("lexical failure should prevent partial unit publication");
+
+        assert_eq!(
+            error,
+            SourceProcessorError::Lex(LexError::InvalidCharacter {
+                span: span(sources.view(), id, 6, 7),
+                character: '@',
+                reason: InvalidCharacterReason::UnsupportedPunctuation,
+            })
+        );
+    }
+
+    #[test]
+    fn incomplete_tail_is_not_preanalyzed_or_compiled_before_lexical_error() {
+        let (sources, id, error) = compile_error("100 @");
+
+        assert_eq!(
+            error,
+            SourceProcessorError::Lex(LexError::InvalidCharacter {
+                span: span(sources.view(), id, 4, 5),
                 character: '@',
                 reason: InvalidCharacterReason::UnsupportedPunctuation,
             })
