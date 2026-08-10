@@ -97,6 +97,7 @@ mod tests {
     use crate::global_variable::GlobalVariables;
     use crate::value::Value;
     use crate::word::WordDefinition;
+    use std::collections::HashSet;
 
     fn name(input: &str) -> NormalizedName {
         NormalizedName::new(input).expect("test input should be a valid word name")
@@ -124,6 +125,12 @@ mod tests {
             bindings.get(&name(input)),
             Some(&Binding::Variable(expected))
         );
+    }
+
+    fn assert_distinct_variable_ids(ids: &[GlobalVarId]) {
+        let distinct: HashSet<_> = ids.iter().copied().collect();
+
+        assert_eq!(distinct.len(), ids.len());
     }
 
     #[test]
@@ -317,6 +324,7 @@ mod tests {
             .expect("empty namespace should accept built-in globals");
 
         assert_eq!(ids.len(), 26);
+        assert_distinct_variable_ids(&ids);
         assert_eq!(globals.len(), 26);
         assert_eq!(bindings.len(), 26);
 
@@ -339,6 +347,26 @@ mod tests {
         assert_variable_binding(&bindings, "A", ids[0]);
         assert_variable_binding(&bindings, "z", ids[25]);
         assert_variable_binding(&bindings, "Z", ids[25]);
+    }
+
+    #[test]
+    fn builtin_global_bootstrap_duplicate_run_preserves_existing_variables() {
+        let mut globals = GlobalVariables::new();
+        let mut bindings = Bindings::new();
+        let ids = register_builtin_global_variables(&mut globals, &mut bindings)
+            .expect("first A-Z bootstrap should register");
+
+        let result = register_builtin_global_variables(&mut globals, &mut bindings);
+
+        assert_eq!(result, Err(BuiltinGlobalBootstrapError::NameConflict));
+        assert_eq!(globals.len(), 26);
+        assert_eq!(bindings.len(), 26);
+        assert_distinct_variable_ids(&ids);
+
+        for (index, letter) in BUILTIN_GLOBAL_VARIABLE_NAMES.iter().enumerate() {
+            assert_variable_binding(&bindings, letter, ids[index]);
+            assert_eq!(globals.view().read(ids[index]), Ok(Value::integer(0)));
+        }
     }
 
     #[test]
