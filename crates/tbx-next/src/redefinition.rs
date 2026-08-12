@@ -1,6 +1,5 @@
 use crate::binding::{BindingReplaceError, Bindings};
 use crate::name::NormalizedName;
-use crate::publication_name::{validate_publication_name, PublicationNameError};
 use crate::word::{CompletedWordDefinition, PublishedWords, WordId};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -21,7 +20,6 @@ impl WordRedefinition {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum WordRedefinitionError {
-    ReservedName,
     UndefinedName,
     TargetIsNotWord,
     BindingCommitInvariantViolated,
@@ -39,8 +37,6 @@ pub(crate) fn redefine_word(
     name: &NormalizedName,
     definition: CompletedWordDefinition,
 ) -> Result<WordRedefinition, WordRedefinitionError> {
-    validate_publication_name(name).map_err(WordRedefinitionError::from_publication_name_error)?;
-
     let previous = bindings
         .current_word(name)
         .map_err(WordRedefinitionError::from_precheck_error)?;
@@ -55,12 +51,6 @@ pub(crate) fn redefine_word(
 }
 
 impl WordRedefinitionError {
-    fn from_publication_name_error(error: PublicationNameError) -> Self {
-        match error {
-            PublicationNameError::ReservedName => Self::ReservedName,
-        }
-    }
-
     fn from_precheck_error(error: BindingReplaceError) -> Self {
         match error {
             BindingReplaceError::MissingName => Self::UndefinedName,
@@ -146,26 +136,11 @@ mod tests {
     }
 
     #[test]
-    fn reserved_redefinition_names_are_rejected_before_issuing_word_id() {
-        for input in ["VAR", "var", "Var", "LET", "let", "Let"] {
-            let mut words = PublishedWords::new();
-            let mut bindings = Bindings::new();
-            let old_definition = primitive(10);
-            let old = publish_initial(&mut words, &mut bindings, input, old_definition);
-
-            let result = redefine_word(&mut words, &mut bindings, &name(input), primitive(11));
-
-            assert_eq!(result, Err(WordRedefinitionError::ReservedName));
-            assert_eq!(words.len(), 1, "{input:?} should not issue a word id");
-            assert_eq!(bindings.len(), 1, "{input:?} should not change bindings");
-            assert_word_binding(&bindings, input, old);
-            assert_eq!(words.get(old), Ok(&old_definition.definition()));
-        }
-    }
-
-    #[test]
-    fn ordinary_names_near_reserved_spellings_can_be_redefined() {
-        for input in ["VAR1", "LETTER", "_LET"] {
+    fn names_that_were_formerly_reserved_are_ordinary_word_redefinition_targets_when_bound_as_words(
+    ) {
+        for input in [
+            "VAR", "var", "Var", "LET", "let", "Let", "VAR1", "LETTER", "_LET",
+        ] {
             let mut words = PublishedWords::new();
             let mut bindings = Bindings::new();
             let old_definition = primitive(12);
