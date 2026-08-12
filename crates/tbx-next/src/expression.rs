@@ -1,3 +1,4 @@
+use crate::global_variable::GlobalVarId;
 use crate::instruction::{Instruction, InstructionSequence};
 use crate::lexer::{Token, TokenKind};
 use crate::operator::{OperatorLookup, OperatorSemantic};
@@ -20,6 +21,7 @@ pub(crate) struct StagedInstruction {
 pub(crate) enum ExpressionError {
     Source(SourceError),
     Syntax(ExpressionSyntaxError),
+    Variable(ExpressionVariableError),
     SourceMappingAppend(SourceMappingAppendError),
 }
 
@@ -40,6 +42,26 @@ pub(crate) enum ExpressionSyntaxErrorKind {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct ExpressionVariableError {
+    span: SourceSpan,
+    kind: ExpressionVariableErrorKind,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ExpressionVariableErrorKind {
+    InvalidName,
+    UndefinedName,
+    TargetIsNotVariable,
+}
+
+pub(crate) trait ExpressionVariableResolver {
+    fn resolve_variable(
+        &self,
+        source_name: &str,
+    ) -> Result<GlobalVarId, ExpressionVariableErrorKind>;
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct ParsedExpression {
     contains_comparison: bool,
 }
@@ -51,11 +73,12 @@ struct BinaryOperator {
     comparison: bool,
 }
 
-#[derive(Debug, Clone, Copy)]
-struct ExpressionParser<'a> {
+#[derive(Clone, Copy)]
+struct ExpressionParser<'a, 'r> {
     view: SourceView<'a>,
     tokens: &'a [Token],
     operators: OperatorLookup,
+    variables: &'r dyn ExpressionVariableResolver,
     position: usize,
 }
 
@@ -68,9 +91,22 @@ pub(crate) fn parse_expression(
     view: SourceView<'_>,
     tokens: &[Token],
     operators: OperatorLookup,
+    variables: &dyn ExpressionVariableResolver,
 ) -> Result<ExpressionStaging, ExpressionError> {
-    let mut parser = ExpressionParser::new(view, tokens, operators);
+    let mut parser = ExpressionParser::new(view, tokens, operators, variables);
     parser.parse_complete()
+}
+
+impl<F> ExpressionVariableResolver for F
+where
+    F: Fn(&str) -> Result<GlobalVarId, ExpressionVariableErrorKind>,
+{
+    fn resolve_variable(
+        &self,
+        source_name: &str,
+    ) -> Result<GlobalVarId, ExpressionVariableErrorKind> {
+        self(source_name)
+    }
 }
 
 impl ExpressionStaging {
@@ -128,18 +164,34 @@ impl ExpressionSyntaxError {
     }
 }
 
+impl ExpressionVariableError {
+    pub(crate) const fn span(self) -> SourceSpan {
+        self.span
+    }
+
+    pub(crate) const fn kind(self) -> ExpressionVariableErrorKind {
+        self.kind
+    }
+}
+
 impl From<SourceError> for ExpressionError {
     fn from(error: SourceError) -> Self {
         Self::Source(error)
     }
 }
 
-impl<'a> ExpressionParser<'a> {
-    fn new(view: SourceView<'a>, tokens: &'a [Token], operators: OperatorLookup) -> Self {
+impl<'a, 'r> ExpressionParser<'a, 'r> {
+    fn new(
+        view: SourceView<'a>,
+        tokens: &'a [Token],
+        operators: OperatorLookup,
+        variables: &'r dyn ExpressionVariableResolver,
+    ) -> Self {
         Self {
             view,
             tokens,
             operators,
+            variables,
             position: 0,
         }
     }
@@ -232,6 +284,23 @@ impl<'a> ExpressionParser<'a> {
                 let token = self.advance();
                 let value = self.parse_unsigned_i16(token)?;
                 staging.push(Instruction::Push(Value::integer(value)), token.span());
+                Ok(ParsedExpression {
+                    contains_comparison: false,
+                })
+            }
+            TokenKind::Name => {
+                let token = self.advance();
+                let source_name = self.view.slice(token.span())?;
+                let id = self
+                    .variables
+                    .resolve_variable(source_name)
+                    .map_err(|kind| {
+                        ExpressionError::Variable(ExpressionVariableError {
+                            span: token.span(),
+                            kind,
+                        })
+                    })?;
+                staging.push(Instruction::LoadVar(id), token.span());
                 Ok(ParsedExpression {
                     contains_comparison: false,
                 })
@@ -427,6 +496,7 @@ mod tests {
     use crate::primitive::PrimitiveRegistry;
     use crate::source::{SourceId, SourceTexts};
     use crate::word::PublishedWords;
+    use std::collections::HashMap;
 
     fn source(text: &str) -> (SourceTexts, SourceId) {
         let mut sources = SourceTexts::new();
@@ -456,19 +526,51 @@ mod tests {
     }
 
     fn parse(text: &str) -> (SourceTexts, SourceId, ExpressionStaging) {
+        parse_with_variables(text, empty_variables())
+    }
+
+    fn parse_with_variables(
+        text: &str,
+        variables: impl ExpressionVariableResolver,
+    ) -> (SourceTexts, SourceId, ExpressionStaging) {
         let (sources, id) = source(text);
         let tokens = lex(sources.view(), id);
-        let staging = parse_expression(sources.view(), &tokens, operators())
+        let staging = parse_expression(sources.view(), &tokens, operators(), &variables)
             .expect("expression should parse");
         (sources, id, staging)
     }
 
     fn parse_error(text: &str) -> (SourceTexts, SourceId, ExpressionError) {
+        parse_error_with_variables(text, empty_variables())
+    }
+
+    fn parse_error_with_variables(
+        text: &str,
+        variables: impl ExpressionVariableResolver,
+    ) -> (SourceTexts, SourceId, ExpressionError) {
         let (sources, id) = source(text);
         let tokens = lex(sources.view(), id);
-        let error = parse_expression(sources.view(), &tokens, operators())
+        let error = parse_expression(sources.view(), &tokens, operators(), &variables)
             .expect_err("expression should fail");
         (sources, id, error)
+    }
+
+    fn empty_variables() -> impl ExpressionVariableResolver {
+        |_source_name: &str| Err(ExpressionVariableErrorKind::UndefinedName)
+    }
+
+    fn variables(cases: &[(&str, GlobalVarId)]) -> impl ExpressionVariableResolver {
+        let variables = cases
+            .iter()
+            .map(|(name, id)| (name.to_ascii_uppercase(), *id))
+            .collect::<HashMap<_, _>>();
+
+        move |source_name: &str| {
+            variables
+                .get(&source_name.to_ascii_uppercase())
+                .copied()
+                .ok_or(ExpressionVariableErrorKind::UndefinedName)
+        }
     }
 
     fn span(view: SourceView<'_>, source_id: SourceId, start: usize, end: usize) -> SourceSpan {
@@ -503,6 +605,19 @@ mod tests {
     ) {
         let ExpressionError::Syntax(error) = error else {
             panic!("expected syntax error");
+        };
+
+        assert_eq!(error.span(), expected_span);
+        assert_eq!(error.kind(), expected_kind);
+    }
+
+    fn assert_variable_error(
+        error: ExpressionError,
+        expected_span: SourceSpan,
+        expected_kind: ExpressionVariableErrorKind,
+    ) {
+        let ExpressionError::Variable(error) = error else {
+            panic!("expected variable resolution error");
         };
 
         assert_eq!(error.span(), expected_span);
@@ -688,17 +803,103 @@ mod tests {
     }
 
     #[test]
-    fn name_and_call_like_sequence_remain_unsupported_primary_syntax() {
-        for source in ["FOO", "FOO(1)"] {
-            let (sources, id, error) = parse_error(source);
-            assert_syntax_error(
-                error,
-                span(sources.view(), id, 0, 3),
-                ExpressionSyntaxErrorKind::UnexpectedToken {
-                    kind: TokenKind::Name,
-                },
+    fn name_primary_lowers_to_load_var_with_original_name_span() {
+        let variable = GlobalVarId::test_invalid(12);
+        let (sources, id, staging) = parse_with_variables("foo", variables(&[("FOO", variable)]));
+
+        assert_eq!(instructions(&staging), [Instruction::LoadVar(variable)]);
+        assert_eq!(spans(&staging), [span(sources.view(), id, 0, 3)]);
+    }
+
+    #[test]
+    fn name_primary_resolution_is_case_insensitive_at_resolver_boundary() {
+        let variable = GlobalVarId::test_invalid(3);
+
+        for source in ["A", "a", "Mixed_Case", "mixed_case"] {
+            let (_sources, _id, staging) = parse_with_variables(
+                source,
+                variables(&[("MIXED_CASE", variable), ("A", variable)]),
             );
+
+            assert_eq!(instructions(&staging), [Instruction::LoadVar(variable)]);
         }
+    }
+
+    #[test]
+    fn name_primary_preserves_postfix_order_with_operators_and_grouping() {
+        let lookup = operators();
+        let a = GlobalVarId::test_invalid(0);
+        let b = GlobalVarId::test_invalid(1);
+        let c = GlobalVarId::test_invalid(2);
+        let (sources, id, staging) =
+            parse_with_variables("(A + B) * C", variables(&[("A", a), ("B", b), ("C", c)]));
+        let view = sources.view();
+
+        assert_eq!(
+            instructions(&staging),
+            [
+                Instruction::LoadVar(a),
+                Instruction::LoadVar(b),
+                call(lookup, OperatorSemantic::Add),
+                Instruction::LoadVar(c),
+                call(lookup, OperatorSemantic::Multiply),
+            ]
+        );
+        assert_eq!(
+            spans(&staging),
+            [
+                span(view, id, 1, 2),
+                span(view, id, 5, 6),
+                span(view, id, 3, 4),
+                span(view, id, 10, 11),
+                span(view, id, 8, 9),
+            ]
+        );
+    }
+
+    #[test]
+    fn name_primary_combines_with_unary_and_comparison() {
+        let lookup = operators();
+        let a = GlobalVarId::test_invalid(0);
+        let b = GlobalVarId::test_invalid(1);
+        let (_sources, _id, staging) =
+            parse_with_variables("-(A) < B", variables(&[("A", a), ("B", b)]));
+
+        assert_eq!(
+            instructions(&staging),
+            [
+                Instruction::LoadVar(a),
+                call(lookup, OperatorSemantic::Negate),
+                Instruction::LoadVar(b),
+                call(lookup, OperatorSemantic::Less),
+            ]
+        );
+    }
+
+    #[test]
+    fn unresolved_name_primary_is_structured_variable_error_at_name_span() {
+        let (sources, id, error) = parse_error("FOO");
+
+        assert_variable_error(
+            error,
+            span(sources.view(), id, 0, 3),
+            ExpressionVariableErrorKind::UndefinedName,
+        );
+    }
+
+    #[test]
+    fn call_like_name_sequence_still_does_not_fallback_to_call_syntax() {
+        let variable = GlobalVarId::test_invalid(4);
+        let (sources, id, error) =
+            parse_error_with_variables("FOO(1)", variables(&[("FOO", variable)]));
+
+        assert_syntax_error(
+            error,
+            span(sources.view(), id, 3, 4),
+            ExpressionSyntaxErrorKind::UnexpectedToken {
+                kind: TokenKind::LParen,
+            },
+        );
     }
 
     #[test]
