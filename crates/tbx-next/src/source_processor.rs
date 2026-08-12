@@ -1,6 +1,8 @@
 use crate::binding::Bindings;
-use crate::expression::{parse_expression, ExpressionError, ExpressionSyntaxErrorKind};
-use crate::global_variable::GlobalVariables;
+use crate::expression::{
+    parse_expression, ExpressionError, ExpressionSyntaxErrorKind, ExpressionVariableErrorKind,
+};
+use crate::global_variable::{GlobalVariableView, GlobalVariables};
 use crate::instruction::{
     CodeLocation, CodeSpaceLookup, CodeSpaceLookupError, Instruction, InstructionAddress,
     InstructionSequence, InstructionView,
@@ -52,6 +54,7 @@ pub(crate) struct SourceExecutionContext<'a> {
     source_words: Option<SourceWordLookup<'a>>,
     code_spaces: &'a [InstructionView<'a>],
     source_mappings: &'a [InstructionSourceMappingView<'a>],
+    globals: Option<GlobalVariableView<'a>>,
     words: PublishedWordLookup<'a>,
     primitives: PrimitiveLookup<'a>,
 }
@@ -101,6 +104,7 @@ pub(crate) enum CompileErrorKind {
     LineNumber { source: LineNumberError },
     WordResolution { source: WordResolutionError },
     Expression { source: ExpressionSyntaxErrorKind },
+    ExpressionVariable { source: ExpressionVariableErrorKind },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -484,6 +488,7 @@ fn compile_bif(
         view,
         source_id,
         &tokens[1..comma_index],
+        context.bindings(),
         operators,
         instructions,
         mapping,
@@ -525,6 +530,7 @@ fn compile_expression_tokens(
     view: SourceView<'_>,
     source_id: SourceId,
     tokens: &[Token],
+    bindings: &Bindings,
     operators: OperatorLookup,
     instructions: &mut InstructionSequence,
     mapping: &mut InstructionSourceMapping,
@@ -539,7 +545,8 @@ fn compile_expression_tokens(
         .map_or(0, |token| token.span().end());
     expression_tokens.push(Token::new(TokenKind::Eof, view.span(source_id, end, end)?));
 
-    parse_expression(view, &expression_tokens, operators)
+    let resolver = |source_name: &str| resolve_variable_name(bindings, source_name);
+    parse_expression(view, &expression_tokens, operators, &resolver)
         .map_err(SourceProcessorError::from_expression_error)?
         .commit_to(instructions, mapping)
         .map_err(SourceProcessorError::from_expression_error)
@@ -566,6 +573,9 @@ fn run_unit(
         context.words(),
         context.primitives(),
     );
+    if let Some(globals) = context.globals() {
+        execution = execution.with_global_reader(globals);
+    }
     let mut vm = Vm::new_at_location_in(&mut execution, unit.entry)
         .map_err(|error| map_runtime_error(error, unit, context))?;
     let outcome = vm
@@ -595,6 +605,23 @@ fn map_runtime_error(
         vm: error,
         source_span,
     })
+}
+
+fn resolve_variable_name(
+    bindings: &Bindings,
+    source_name: &str,
+) -> Result<crate::global_variable::GlobalVarId, ExpressionVariableErrorKind> {
+    match resolve_binding_name(bindings, source_name) {
+        Ok(ResolvedBinding::Variable(id)) => Ok(id),
+        Ok(ResolvedBinding::RuntimeWord(_) | ResolvedBinding::SourceWord(_)) => {
+            Err(ExpressionVariableErrorKind::TargetIsNotVariable)
+        }
+        Err(WordResolutionError::InvalidWordName) => Err(ExpressionVariableErrorKind::InvalidName),
+        Err(WordResolutionError::UndefinedName) => Err(ExpressionVariableErrorKind::UndefinedName),
+        Err(WordResolutionError::TargetIsNotWord) => {
+            unreachable!("binding lookup does not require a runtime word target")
+        }
+    }
 }
 
 fn compile_word_reference(
@@ -1092,6 +1119,7 @@ impl<'a> SourceExecutionContext<'a> {
             source_words: None,
             code_spaces: &[],
             source_mappings: &[],
+            globals: None,
             words,
             primitives,
         }
@@ -1109,6 +1137,7 @@ impl<'a> SourceExecutionContext<'a> {
             source_words: None,
             code_spaces: &[],
             source_mappings: &[],
+            globals: None,
             words,
             primitives,
         }
@@ -1126,6 +1155,7 @@ impl<'a> SourceExecutionContext<'a> {
             source_words: Some(source_words),
             code_spaces: &[],
             source_mappings: &[],
+            globals: None,
             words,
             primitives,
         }
@@ -1144,6 +1174,7 @@ impl<'a> SourceExecutionContext<'a> {
             source_words: Some(source_words),
             code_spaces: &[],
             source_mappings: &[],
+            globals: None,
             words,
             primitives,
         }
@@ -1161,6 +1192,7 @@ impl<'a> SourceExecutionContext<'a> {
             source_words: None,
             code_spaces,
             source_mappings: &[],
+            globals: None,
             words,
             primitives,
         }
@@ -1179,6 +1211,7 @@ impl<'a> SourceExecutionContext<'a> {
             source_words: None,
             code_spaces,
             source_mappings: &[],
+            globals: None,
             words,
             primitives,
         }
@@ -1197,9 +1230,15 @@ impl<'a> SourceExecutionContext<'a> {
             source_words: None,
             code_spaces,
             source_mappings,
+            globals: None,
             words,
             primitives,
         }
+    }
+
+    pub(crate) const fn with_globals(mut self, globals: GlobalVariableView<'a>) -> Self {
+        self.globals = Some(globals);
+        self
     }
 
     fn compile_context(&self) -> SourceCompileContext<'_> {
@@ -1219,6 +1258,10 @@ impl<'a> SourceExecutionContext<'a> {
         self.source_mappings
     }
 
+    pub(crate) const fn globals(self) -> Option<GlobalVariableView<'a>> {
+        self.globals
+    }
+
     pub(crate) const fn words(self) -> PublishedWordLookup<'a> {
         self.words
     }
@@ -1235,6 +1278,12 @@ impl SourceProcessorError {
             ExpressionError::Syntax(error) => Self::Compile(CompileError {
                 span: error.span(),
                 kind: CompileErrorKind::Expression {
+                    source: error.kind(),
+                },
+            }),
+            ExpressionError::Variable(error) => Self::Compile(CompileError {
+                span: error.span(),
+                kind: CompileErrorKind::ExpressionVariable {
                     source: error.kind(),
                 },
             }),
@@ -1408,6 +1457,30 @@ mod tests {
             ),
         )
         .expect("source should run with operators");
+        (sources, id, result)
+    }
+
+    fn run_with_bindings_operators_and_globals(
+        text: &str,
+        bindings: &Bindings,
+        globals: &GlobalVariables,
+        words: &PublishedWords,
+        primitives: &PrimitiveRegistry,
+        operators: OperatorLookup,
+    ) -> (SourceTexts, SourceId, SourceRunResult) {
+        let (sources, id) = source(text);
+        let result = run_source(
+            sources.view(),
+            id,
+            SourceExecutionContext::with_operators(
+                bindings,
+                operators,
+                PublishedWordLookup::new(words),
+                primitives.lookup(),
+            )
+            .with_globals(globals.view()),
+        )
+        .expect("source should run with operators and globals");
         (sources, id, result)
     }
 
@@ -2035,6 +2108,268 @@ mod tests {
             unit.source_span(location(&unit, 4)),
             Ok(Some(span(view, id, 6, 7)))
         );
+    }
+
+    #[test]
+    fn bif_condition_lowers_builtin_variable_names_to_load_var() {
+        let (_operator_words, _operator_primitives, operators) = operator_fixture();
+        let mut words = PublishedWords::new();
+        let mut bindings = Bindings::new();
+        let mut globals = GlobalVariables::new();
+        let variables = register_builtin_global_variables(&mut globals, &mut bindings)
+            .expect("A-Z variables should bootstrap");
+        let push7_id = words.add(completed_primitive(0));
+        bindings
+            .insert_new(name("PUSH7"), Binding::Word(push7_id))
+            .expect("primitive word should register");
+
+        let (sources, id, unit) = compile_with_bindings_and_operators(
+            "BIF a + B, 100\n100 PUSH7",
+            &bindings,
+            operators.lookup(),
+        );
+        let view = sources.view();
+
+        assert_eq!(
+            unit.instructions().get(address(0)),
+            Ok(&Instruction::LoadVar(variables[0]))
+        );
+        assert_eq!(
+            unit.instructions().get(address(1)),
+            Ok(&Instruction::LoadVar(variables[1]))
+        );
+        assert_eq!(
+            unit.source_span(location(&unit, 0)),
+            Ok(Some(span(view, id, 4, 5)))
+        );
+        assert_eq!(
+            unit.source_span(location(&unit, 1)),
+            Ok(Some(span(view, id, 8, 9)))
+        );
+    }
+
+    #[test]
+    fn bif_condition_lowers_user_published_variable_name_to_load_var() {
+        let (_operator_words, _operator_primitives, operators) = operator_fixture();
+        let mut source_words = SourceWordRegistry::new();
+        let mut words = PublishedWords::new();
+        let mut bindings = Bindings::new();
+        let mut globals = GlobalVariables::new();
+        register_builtin_source_words(&mut source_words, &mut bindings)
+            .expect("VAR source word should bootstrap");
+        compile_with_var("VAR Score", &mut bindings, &mut globals, &source_words);
+        let Some(Binding::Variable(score)) = bindings.get(&name("score")).copied() else {
+            panic!("SCORE should be a published variable");
+        };
+        let push7_id = words.add(completed_primitive(0));
+        bindings
+            .insert_new(name("PUSH7"), Binding::Word(push7_id))
+            .expect("primitive word should register");
+
+        let (sources, id, unit) = compile_with_bindings_and_operators(
+            "BIF score = 0, 100\n100 PUSH7",
+            &bindings,
+            operators.lookup(),
+        );
+
+        assert_eq!(
+            unit.instructions().get(address(0)),
+            Ok(&Instruction::LoadVar(score))
+        );
+        assert_eq!(
+            unit.source_span(location(&unit, 0)),
+            Ok(Some(span(sources.view(), id, 4, 9)))
+        );
+    }
+
+    #[test]
+    fn bif_condition_variable_reads_from_global_storage_at_runtime() {
+        let mut words = PublishedWords::new();
+        let mut bindings = Bindings::new();
+        let mut primitives = PrimitiveRegistry::new();
+        let mut globals = GlobalVariables::new();
+        let variables = register_builtin_global_variables(&mut globals, &mut bindings)
+            .expect("A-Z variables should bootstrap");
+        let operators = register_operator_primitives(&mut primitives, &mut words);
+        let push7_id = primitives.register(push_7);
+        register_primitive(&mut words, &mut bindings, name("PUSH7"), push7_id)
+            .expect("primitive should register");
+
+        globals
+            .view_mut()
+            .write(variables[0], value(0))
+            .expect("A should be writable");
+        let (_sources, _id, zero_result) = run_with_bindings_operators_and_globals(
+            "BIF A, 100\n5\n100 PUSH7",
+            &bindings,
+            &globals,
+            &words,
+            &primitives,
+            operators.lookup(),
+        );
+        assert_eq!(zero_result.data_stack(), [value(7)]);
+
+        globals
+            .view_mut()
+            .write(variables[0], value(1))
+            .expect("A should be writable");
+        let (_sources, _id, nonzero_result) = run_with_bindings_operators_and_globals(
+            "BIF a, 100\n5\n100 PUSH7",
+            &bindings,
+            &globals,
+            &words,
+            &primitives,
+            operators.lookup(),
+        );
+        assert_eq!(nonzero_result.data_stack(), [value(5), value(7)]);
+    }
+
+    #[test]
+    fn bif_load_var_runtime_failure_maps_to_name_span() {
+        let mut words = PublishedWords::new();
+        let mut bindings = Bindings::new();
+        let mut primitives = PrimitiveRegistry::new();
+        let mut globals = GlobalVariables::new();
+        let variables = register_builtin_global_variables(&mut globals, &mut bindings)
+            .expect("A-Z variables should bootstrap");
+        let operators = register_operator_primitives(&mut primitives, &mut words);
+        let push7_id = primitives.register(push_7);
+        register_primitive(&mut words, &mut bindings, name("PUSH7"), push7_id)
+            .expect("primitive should register");
+        let (sources, id) = source("BIF A, 100\n100 PUSH7");
+
+        let error = run_source(
+            sources.view(),
+            id,
+            SourceExecutionContext::with_operators(
+                &bindings,
+                operators.lookup(),
+                PublishedWordLookup::new(&words),
+                primitives.lookup(),
+            ),
+        )
+        .expect_err("LoadVar without execution globals should fail at runtime");
+
+        let SourceProcessorError::Runtime(runtime) = error else {
+            panic!("expected runtime error");
+        };
+        assert_eq!(
+            runtime.source_span(),
+            Ok(Some(span(sources.view(), id, 4, 5)))
+        );
+        assert_eq!(runtime.vm().address(), address(0));
+        assert!(matches!(
+            runtime.vm().kind(),
+            crate::vm::VmErrorKind::InvalidGlobalVarId {
+                source: crate::global_variable::GlobalVariableError::InvalidGlobalVarId { id }
+            } if id == variables[0]
+        ));
+    }
+
+    #[test]
+    fn bif_name_primary_resolution_failures_are_compile_errors_at_name_span() {
+        let mut source_words = SourceWordRegistry::new();
+        let mut words = PublishedWords::new();
+        let mut bindings = Bindings::new();
+        let mut primitives = PrimitiveRegistry::new();
+        let operators = register_operator_primitives(&mut primitives, &mut words);
+        let push7_id = primitives.register(push_7);
+        register_primitive(&mut words, &mut bindings, name("PUSH7"), push7_id)
+            .expect("primitive should register");
+        register_builtin_source_words(&mut source_words, &mut bindings)
+            .expect("source words should register");
+
+        let cases = [
+            (
+                "BIF MISSING, 100\n100 PUSH7",
+                4,
+                11,
+                ExpressionVariableErrorKind::UndefinedName,
+            ),
+            (
+                "BIF PUSH7, 100\n100 PUSH7",
+                4,
+                9,
+                ExpressionVariableErrorKind::TargetIsNotVariable,
+            ),
+            (
+                "BIF VAR, 100\n100 PUSH7",
+                4,
+                7,
+                ExpressionVariableErrorKind::TargetIsNotVariable,
+            ),
+        ];
+
+        for (source_text, start, end, source_kind) in cases {
+            let (sources, id) = source(source_text);
+            let error = compile_source(
+                sources.view(),
+                id,
+                SourceCompileContext::with_source_words_and_operators(
+                    &bindings,
+                    source_words.lookup(),
+                    operators.lookup(),
+                ),
+            )
+            .expect_err("non-variable expression name should fail");
+
+            assert_eq!(
+                error,
+                SourceProcessorError::Compile(CompileError {
+                    span: span(sources.view(), id, start, end),
+                    kind: CompileErrorKind::ExpressionVariable {
+                        source: source_kind
+                    },
+                }),
+                "{source_text:?} should reject expression name without fallback"
+            );
+        }
+    }
+
+    #[test]
+    fn bif_expression_name_resolution_failure_does_not_partially_commit() {
+        let (_operator_words, _operator_primitives, operators) = operator_fixture();
+        let mut bindings = Bindings::new();
+        let mut globals = GlobalVariables::new();
+        let a = globals.allocate();
+        bindings
+            .insert_new(name("A"), Binding::Variable(a))
+            .expect("variable should register");
+        let (sources, id) = source("A + MISSING");
+        let mut lexer = Lexer::new(sources.view(), id).expect("lexer should build");
+        let mut tokens = Vec::new();
+        loop {
+            let token = lexer.next_token().expect("source should lex");
+            if token.kind() == TokenKind::Eof {
+                break;
+            }
+            tokens.push(token);
+        }
+        let mut instructions = InstructionSequence::new();
+        let mut mapping = InstructionSourceMapping::new(instructions.code_space());
+
+        let error = compile_expression_tokens(
+            sources.view(),
+            id,
+            &tokens,
+            &bindings,
+            operators.lookup(),
+            &mut instructions,
+            &mut mapping,
+        )
+        .expect_err("later unresolved name should fail the expression");
+
+        assert_eq!(
+            error,
+            SourceProcessorError::Compile(CompileError {
+                span: span(sources.view(), id, 4, 11),
+                kind: CompileErrorKind::ExpressionVariable {
+                    source: ExpressionVariableErrorKind::UndefinedName
+                },
+            })
+        );
+        assert_eq!(instructions.len(), 0);
+        assert_eq!(mapping.view().len(), 0);
     }
 
     #[test]

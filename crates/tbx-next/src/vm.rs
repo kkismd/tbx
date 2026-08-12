@@ -1,4 +1,6 @@
-use crate::global_variable::{GlobalVarId, GlobalVariableError, GlobalVariableViewMut};
+use crate::global_variable::{
+    GlobalVarId, GlobalVariableError, GlobalVariableView, GlobalVariableViewMut,
+};
 use crate::instruction::{
     CodeLocation, CodeSpaceLookup, Instruction, InstructionAddress, InstructionLookup,
     InstructionLookupError, InstructionView,
@@ -83,7 +85,13 @@ pub(crate) struct ExecutionView<'a> {
     instructions: InstructionLookup<'a>,
     words: PublishedWordLookup<'a>,
     primitives: PrimitiveLookup<'a>,
-    globals: Option<GlobalVariableViewMut<'a>>,
+    globals: Option<GlobalExecutionAccess<'a>>,
+}
+
+#[derive(Debug)]
+enum GlobalExecutionAccess<'a> {
+    Read(GlobalVariableView<'a>),
+    Write(GlobalVariableViewMut<'a>),
 }
 
 impl<'a> ExecutionView<'a> {
@@ -117,7 +125,12 @@ impl<'a> ExecutionView<'a> {
     }
 
     pub(crate) fn with_globals(mut self, globals: GlobalVariableViewMut<'a>) -> Self {
-        self.globals = Some(globals);
+        self.globals = Some(GlobalExecutionAccess::Write(globals));
+        self
+    }
+
+    pub(crate) fn with_global_reader(mut self, globals: GlobalVariableView<'a>) -> Self {
+        self.globals = Some(GlobalExecutionAccess::Read(globals));
         self
     }
 
@@ -166,17 +179,20 @@ impl<'a> VmExecutionView<'a> for ExecutionView<'a> {
     }
 
     fn read_global(&self, id: GlobalVarId) -> Result<Value, GlobalVariableError> {
-        self.globals
-            .as_ref()
-            .ok_or(GlobalVariableError::InvalidGlobalVarId { id })?
-            .read(id)
+        match &self.globals {
+            Some(GlobalExecutionAccess::Read(globals)) => globals.read(id),
+            Some(GlobalExecutionAccess::Write(globals)) => globals.read(id),
+            None => Err(GlobalVariableError::InvalidGlobalVarId { id }),
+        }
     }
 
     fn write_global(&mut self, id: GlobalVarId, value: Value) -> Result<(), GlobalVariableError> {
-        self.globals
-            .as_mut()
-            .ok_or(GlobalVariableError::InvalidGlobalVarId { id })?
-            .write(id, value)
+        match &mut self.globals {
+            Some(GlobalExecutionAccess::Write(globals)) => globals.write(id, value),
+            Some(GlobalExecutionAccess::Read(_)) | None => {
+                Err(GlobalVariableError::InvalidGlobalVarId { id })
+            }
+        }
     }
 }
 
