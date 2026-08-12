@@ -82,6 +82,11 @@ mod lexer;
 #[allow(dead_code)]
 mod source_processor;
 
+// ADR #1484 keeps source-processing words distinct from runtime executable
+// words while still allowing published source words to share ordinary binding.
+#[allow(dead_code)]
+mod source_word;
+
 // ADR #1442 keeps expression operators as published primitive words resolved
 // through a crate-internal lookup instead of surface name bindings.
 #[allow(dead_code)]

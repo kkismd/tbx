@@ -2,6 +2,7 @@ use crate::binding::{Binding, BindingInsertError, Bindings};
 use crate::global_variable::{GlobalVarId, GlobalVariables};
 use crate::name::NormalizedName;
 use crate::publication_name::{validate_publication_name, PublicationNameError};
+use crate::source_word::{NativeSourceWordHandler, SourceWordId, SourceWordRegistry};
 use crate::word::{CompletedWordDefinition, PrimitiveId, PublishedWords, WordId};
 
 const BUILTIN_GLOBAL_VARIABLE_NAMES: [&str; 26] = [
@@ -19,6 +20,13 @@ pub(crate) enum PrimitiveBootstrapError {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum BuiltinGlobalBootstrapError {
     NameConflict,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SourceWordBootstrapError {
+    ReservedName,
+    NameConflict,
+    BindingRegistrationInvariantViolated,
 }
 
 /// Registers one primitive word through the bootstrap-only publication boundary.
@@ -82,6 +90,34 @@ pub(crate) fn register_builtin_global_variables(
     Ok(ids)
 }
 
+/// Registers one native source word in the shared published name table.
+///
+/// Source word handlers are stored separately from executable word definitions
+/// so a published source word cannot be reached through `WordId` or
+/// `Instruction::Call`. As with primitive bootstrap, name conflicts are
+/// prechecked before issuing the monotonic source-word ID.
+pub(crate) fn register_native_source_word(
+    source_words: &mut SourceWordRegistry,
+    bindings: &mut Bindings,
+    name: NormalizedName,
+    handler: NativeSourceWordHandler,
+) -> Result<SourceWordId, SourceWordBootstrapError> {
+    validate_publication_name(&name)
+        .map_err(SourceWordBootstrapError::from_publication_name_error)?;
+
+    if bindings.get(&name).is_some() {
+        return Err(SourceWordBootstrapError::NameConflict);
+    }
+
+    let id = source_words.register(handler);
+
+    bindings
+        .insert_new(name, Binding::SourceWord(id))
+        .map_err(SourceWordBootstrapError::from_binding_insert_error)?;
+
+    Ok(id)
+}
+
 fn builtin_global_variable_names() -> [NormalizedName; 26] {
     BUILTIN_GLOBAL_VARIABLE_NAMES.map(|name| {
         NormalizedName::new(name).expect("built-in global variable name should be valid")
@@ -102,10 +138,25 @@ impl PrimitiveBootstrapError {
     }
 }
 
+impl SourceWordBootstrapError {
+    fn from_publication_name_error(error: PublicationNameError) -> Self {
+        match error {
+            PublicationNameError::ReservedName => Self::ReservedName,
+        }
+    }
+
+    fn from_binding_insert_error(error: BindingInsertError) -> Self {
+        match error {
+            BindingInsertError::NameConflict => Self::BindingRegistrationInvariantViolated,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::global_variable::GlobalVariables;
+    use crate::source_word::{NativeSourceWordContext, SourceWordError};
     use crate::value::Value;
     use crate::word::WordDefinition;
     use std::collections::HashSet;
@@ -116,6 +167,10 @@ mod tests {
 
     fn primitive(slot: usize) -> PrimitiveId {
         PrimitiveId::from_slot(slot)
+    }
+
+    fn source_handler(_context: &mut NativeSourceWordContext<'_>) -> Result<(), SourceWordError> {
+        Ok(())
     }
 
     fn assert_primitive(words: &PublishedWords, id: WordId, expected: PrimitiveId) {
@@ -135,6 +190,13 @@ mod tests {
         assert_eq!(
             bindings.get(&name(input)),
             Some(&Binding::Variable(expected))
+        );
+    }
+
+    fn assert_source_word_binding(bindings: &Bindings, input: &str, expected: SourceWordId) {
+        assert_eq!(
+            bindings.get(&name(input)),
+            Some(&Binding::SourceWord(expected))
         );
     }
 
@@ -353,6 +415,112 @@ mod tests {
 
         assert_word_binding(&bindings, "VM_FREE_BOUNDARY", id);
         assert_primitive(&words, id, primitive(60));
+    }
+
+    #[test]
+    fn empty_collections_accept_first_source_word() {
+        let mut source_words = SourceWordRegistry::new();
+        let mut bindings = Bindings::new();
+
+        let id = register_native_source_word(
+            &mut source_words,
+            &mut bindings,
+            name("SOURCE_TEST"),
+            source_handler,
+        )
+        .expect("new source word name should register");
+
+        assert_eq!(source_words.len(), 1);
+        assert_eq!(bindings.len(), 1);
+        assert_source_word_binding(&bindings, "source_test", id);
+    }
+
+    #[test]
+    fn duplicate_source_word_registration_is_rejected_without_mutation() {
+        let mut source_words = SourceWordRegistry::new();
+        let mut bindings = Bindings::new();
+        let first = register_native_source_word(
+            &mut source_words,
+            &mut bindings,
+            name("DUP_SOURCE"),
+            source_handler,
+        )
+        .expect("first source word should register");
+
+        let result = register_native_source_word(
+            &mut source_words,
+            &mut bindings,
+            name("dup_source"),
+            source_handler,
+        );
+
+        assert_eq!(result, Err(SourceWordBootstrapError::NameConflict));
+        assert_eq!(source_words.len(), 1);
+        assert_eq!(bindings.len(), 1);
+        assert_source_word_binding(&bindings, "DUP_SOURCE", first);
+    }
+
+    #[test]
+    fn primitive_registration_conflicts_with_existing_source_word_binding() {
+        let mut words = PublishedWords::new();
+        let mut source_words = SourceWordRegistry::new();
+        let mut bindings = Bindings::new();
+        let source_word = register_native_source_word(
+            &mut source_words,
+            &mut bindings,
+            name("SHARED"),
+            source_handler,
+        )
+        .expect("source word should register");
+
+        let result = register_primitive(&mut words, &mut bindings, name("shared"), primitive(82));
+
+        assert_eq!(result, Err(PrimitiveBootstrapError::NameConflict));
+        assert_eq!(words.len(), 0);
+        assert_eq!(source_words.len(), 1);
+        assert_source_word_binding(&bindings, "SHARED", source_word);
+    }
+
+    #[test]
+    fn source_word_registration_conflicts_with_existing_runtime_word_binding() {
+        let mut words = PublishedWords::new();
+        let mut source_words = SourceWordRegistry::new();
+        let mut bindings = Bindings::new();
+        let word = register_primitive(&mut words, &mut bindings, name("SHARED"), primitive(83))
+            .expect("primitive should register");
+
+        let result = register_native_source_word(
+            &mut source_words,
+            &mut bindings,
+            name("shared"),
+            source_handler,
+        );
+
+        assert_eq!(result, Err(SourceWordBootstrapError::NameConflict));
+        assert_eq!(source_words.len(), 0);
+        assert_word_binding(&bindings, "SHARED", word);
+    }
+
+    #[test]
+    fn source_word_registration_conflicts_with_existing_variable_binding() {
+        let mut globals = GlobalVariables::new();
+        let mut source_words = SourceWordRegistry::new();
+        let mut bindings = Bindings::new();
+        let variable = globals.allocate();
+        bindings
+            .insert_new(name("A"), Binding::Variable(variable))
+            .expect("test variable should register");
+
+        let result = register_native_source_word(
+            &mut source_words,
+            &mut bindings,
+            name("a"),
+            source_handler,
+        );
+
+        assert_eq!(result, Err(SourceWordBootstrapError::NameConflict));
+        assert_eq!(source_words.len(), 0);
+        assert_variable_binding(&bindings, "A", variable);
     }
 
     #[test]

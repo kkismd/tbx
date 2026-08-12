@@ -1,5 +1,7 @@
 use crate::binding::{Binding, Bindings};
+use crate::global_variable::GlobalVarId;
 use crate::name::{NameError, NormalizedName};
+use crate::source_word::SourceWordId;
 use crate::word::WordId;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -7,6 +9,13 @@ pub(crate) enum WordResolutionError {
     InvalidWordName,
     UndefinedName,
     TargetIsNotWord,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ResolvedBinding {
+    RuntimeWord(WordId),
+    SourceWord(SourceWordId),
+    Variable(GlobalVarId),
 }
 
 /// Resolves a source word name through the current published binding only.
@@ -29,7 +38,23 @@ pub(crate) fn resolve_normalized_word(
 ) -> Result<WordId, WordResolutionError> {
     match bindings.get(name) {
         Some(Binding::Word(id)) => Ok(*id),
-        Some(Binding::Variable(_)) => Err(WordResolutionError::TargetIsNotWord),
+        Some(Binding::SourceWord(_) | Binding::Variable(_)) => {
+            Err(WordResolutionError::TargetIsNotWord)
+        }
+        None => Err(WordResolutionError::UndefinedName),
+    }
+}
+
+pub(crate) fn resolve_binding_name(
+    bindings: &Bindings,
+    source_name: &str,
+) -> Result<ResolvedBinding, WordResolutionError> {
+    let name = NormalizedName::new(source_name).map_err(WordResolutionError::from)?;
+
+    match bindings.get(&name) {
+        Some(Binding::Word(id)) => Ok(ResolvedBinding::RuntimeWord(*id)),
+        Some(Binding::SourceWord(id)) => Ok(ResolvedBinding::SourceWord(*id)),
+        Some(Binding::Variable(id)) => Ok(ResolvedBinding::Variable(*id)),
         None => Err(WordResolutionError::UndefinedName),
     }
 }
@@ -51,6 +76,7 @@ mod tests {
     use crate::instruction::{Instruction, InstructionSequence};
     use crate::name::NormalizedName;
     use crate::redefinition::redefine_word;
+    use crate::source_word::SourceWordRegistry;
     use crate::value::Value;
     use crate::word::{
         CompletedWordDefinition, PrimitiveId, PublishedWords, WordDefinition, WordId,
@@ -88,6 +114,12 @@ mod tests {
             .insert_new(name(input), Binding::Word(id))
             .expect("initial test binding should register");
         id
+    }
+
+    fn source_handler(
+        _context: &mut crate::source_word::NativeSourceWordContext<'_>,
+    ) -> Result<(), crate::source_word::SourceWordError> {
+        Ok(())
     }
 
     #[test]
@@ -257,6 +289,55 @@ mod tests {
         assert_eq!(
             resolve_word_name(&bindings, "A"),
             Err(WordResolutionError::TargetIsNotWord)
+        );
+    }
+
+    #[test]
+    fn published_source_word_resolves_as_source_binding_not_runtime_word() {
+        let mut source_words = SourceWordRegistry::new();
+        let id = source_words.register(source_handler);
+        let mut bindings = Bindings::new();
+        bindings
+            .insert_new(name("SOURCE_ONLY"), Binding::SourceWord(id))
+            .expect("source word should register");
+
+        assert_eq!(
+            resolve_binding_name(&bindings, "source_only"),
+            Ok(ResolvedBinding::SourceWord(id))
+        );
+        assert_eq!(
+            resolve_word_name(&bindings, "SOURCE_ONLY"),
+            Err(WordResolutionError::TargetIsNotWord)
+        );
+    }
+
+    #[test]
+    fn binding_resolution_preserves_runtime_source_and_variable_kinds() {
+        let mut words = PublishedWords::new();
+        let mut source_words = SourceWordRegistry::new();
+        let mut globals = GlobalVariables::new();
+        let mut bindings = Bindings::new();
+        let runtime = publish_initial(&mut words, &mut bindings, "RUNME", completed_primitive(8));
+        let source = source_words.register(source_handler);
+        let variable = globals.allocate();
+        bindings
+            .insert_new(name("SOURCE_ONLY"), Binding::SourceWord(source))
+            .expect("source word should register");
+        bindings
+            .insert_new(name("A"), Binding::Variable(variable))
+            .expect("variable should register");
+
+        assert_eq!(
+            resolve_binding_name(&bindings, "runme"),
+            Ok(ResolvedBinding::RuntimeWord(runtime))
+        );
+        assert_eq!(
+            resolve_binding_name(&bindings, "source_only"),
+            Ok(ResolvedBinding::SourceWord(source))
+        );
+        assert_eq!(
+            resolve_binding_name(&bindings, "a"),
+            Ok(ResolvedBinding::Variable(variable))
         );
     }
 }
