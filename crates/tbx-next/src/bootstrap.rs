@@ -2,8 +2,7 @@ use crate::binding::{Binding, BindingInsertError, Bindings};
 use crate::global_variable::{GlobalVarId, GlobalVariables};
 use crate::name::NormalizedName;
 use crate::source_word::{
-    unsupported_source_word, var_source_word, NativeSourceWordHandler, SourceWordId,
-    SourceWordRegistry,
+    let_source_word, var_source_word, NativeSourceWordHandler, SourceWordId, SourceWordRegistry,
 };
 use crate::word::{CompletedWordDefinition, PrimitiveId, PublishedWords, WordId};
 
@@ -126,9 +125,8 @@ pub(crate) fn register_builtin_source_words(
 
     let var = register_native_source_word(source_words, bindings, var_name, var_source_word)
         .expect("prechecked VAR source word should remain available");
-    let let_ =
-        register_native_source_word(source_words, bindings, let_name, unsupported_source_word)
-            .expect("prechecked LET source word should remain available");
+    let let_ = register_native_source_word(source_words, bindings, let_name, let_source_word)
+        .expect("prechecked LET source word should remain available");
 
     Ok(BuiltinSourceWordIds { var, let_ })
 }
@@ -192,7 +190,9 @@ mod tests {
         PrimitiveId::from_slot(slot)
     }
 
-    fn source_handler(_context: &mut NativeSourceWordContext<'_>) -> Result<(), SourceWordError> {
+    fn source_handler(
+        _context: &mut NativeSourceWordContext<'_, '_>,
+    ) -> Result<(), SourceWordError> {
         Ok(())
     }
 

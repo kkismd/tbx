@@ -17,8 +17,8 @@ use crate::source_mapping::{
     SourceMappingLookup, SourceMappingLookupError,
 };
 use crate::source_word::{
-    NativeSourceWordContext, NativeSourceWordPublicationContext, SourceWordError, SourceWordId,
-    SourceWordLookup, SourceWordLookupError,
+    NativeSourceWordBindingAccess, NativeSourceWordContext, NativeSourceWordContextParts,
+    SourceWordError, SourceWordId, SourceWordLookup, SourceWordLookupError,
 };
 use crate::value::Value;
 use crate::vm::{ExecutionView, RunOutcome, Vm, VmError};
@@ -47,16 +47,22 @@ enum BindingAccess<'a> {
     Write(&'a mut Bindings),
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug)]
 pub(crate) struct SourceExecutionContext<'a> {
     bindings: &'a Bindings,
     operators: Option<OperatorLookup>,
     source_words: Option<SourceWordLookup<'a>>,
     code_spaces: &'a [InstructionView<'a>],
     source_mappings: &'a [InstructionSourceMappingView<'a>],
-    globals: Option<GlobalVariableView<'a>>,
+    globals: Option<SourceGlobalAccess<'a>>,
     words: PublishedWordLookup<'a>,
     primitives: PrimitiveLookup<'a>,
+}
+
+#[derive(Debug)]
+enum SourceGlobalAccess<'a> {
+    Read(GlobalVariableView<'a>),
+    Write(crate::global_variable::GlobalVariableViewMut<'a>),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -392,18 +398,23 @@ fn compile_statement_leading_source_word(
         return Err(SourceProcessorError::SourceWordContextUnavailable { id });
     };
     let handler = source_words.lookup_handler(id)?;
-    let publication = context
-        .publication_context()
-        .map(|(bindings, globals)| NativeSourceWordPublicationContext::new(bindings, globals));
-    let mut source_word_context = NativeSourceWordContext::new(
+    let operators = context.operators();
+    let globals = context.globals.as_deref_mut();
+    let binding_access = match &mut context.bindings {
+        BindingAccess::Read(bindings) => NativeSourceWordBindingAccess::Read(bindings),
+        BindingAccess::Write(bindings) => NativeSourceWordBindingAccess::Write(bindings),
+    };
+    let mut source_word_context = NativeSourceWordContext::new(NativeSourceWordContextParts {
         view,
         source_id,
         tokens,
+        bindings: binding_access,
+        operators,
         instructions,
         mapping,
         local_line_number_prefix,
-        publication,
-    );
+        globals,
+    });
     handler(&mut source_word_context)?;
     Ok(true)
 }
@@ -565,22 +576,25 @@ fn run_unit(
     unit: &TemporaryExecutionUnit,
     context: SourceExecutionContext<'_>,
 ) -> Result<SourceRunResult, SourceProcessorError> {
-    let mut code_spaces = Vec::with_capacity(context.code_spaces().len() + 1);
+    let mut code_spaces = Vec::with_capacity(context.code_spaces.len() + 1);
     code_spaces.push(unit.instructions.view());
-    code_spaces.extend_from_slice(context.code_spaces());
+    code_spaces.extend_from_slice(context.code_spaces);
     let mut execution = ExecutionView::with_code_spaces(
         CodeSpaceLookup::new(&code_spaces)?,
-        context.words(),
-        context.primitives(),
+        context.words,
+        context.primitives,
     );
-    if let Some(globals) = context.globals() {
-        execution = execution.with_global_reader(globals);
+    if let Some(globals) = context.globals {
+        execution = match globals {
+            SourceGlobalAccess::Read(globals) => execution.with_global_reader(globals),
+            SourceGlobalAccess::Write(globals) => execution.with_globals(globals),
+        };
     }
     let mut vm = Vm::new_at_location_in(&mut execution, unit.entry)
-        .map_err(|error| map_runtime_error(error, unit, context))?;
+        .map_err(|error| map_runtime_error(error, unit, context.source_mappings))?;
     let outcome = vm
         .run(&mut execution)
-        .map_err(|error| map_runtime_error(error, unit, context))?;
+        .map_err(|error| map_runtime_error(error, unit, context.source_mappings))?;
     let data_stack = drain_data_stack(&mut vm);
 
     Ok(SourceRunResult {
@@ -593,11 +607,11 @@ fn run_unit(
 fn map_runtime_error(
     error: VmError,
     unit: &TemporaryExecutionUnit,
-    context: SourceExecutionContext<'_>,
+    source_mappings: &[InstructionSourceMappingView<'_>],
 ) -> SourceProcessorError {
-    let mut mapping_views = Vec::with_capacity(context.source_mappings().len() + 1);
+    let mut mapping_views = Vec::with_capacity(source_mappings.len() + 1);
     mapping_views.push(unit.source_mapping());
-    mapping_views.extend_from_slice(context.source_mappings());
+    mapping_views.extend_from_slice(source_mappings);
     let source_span = SourceMappingLookup::new(&mapping_views)
         .and_then(|lookup| lookup.source_span(error.location()));
 
@@ -1237,7 +1251,15 @@ impl<'a> SourceExecutionContext<'a> {
     }
 
     pub(crate) const fn with_globals(mut self, globals: GlobalVariableView<'a>) -> Self {
-        self.globals = Some(globals);
+        self.globals = Some(SourceGlobalAccess::Read(globals));
+        self
+    }
+
+    pub(crate) fn with_mut_globals(
+        mut self,
+        globals: crate::global_variable::GlobalVariableViewMut<'a>,
+    ) -> Self {
+        self.globals = Some(SourceGlobalAccess::Write(globals));
         self
     }
 
@@ -1250,23 +1272,19 @@ impl<'a> SourceExecutionContext<'a> {
         }
     }
 
-    pub(crate) const fn code_spaces(self) -> &'a [InstructionView<'a>] {
+    pub(crate) const fn code_spaces(&self) -> &'a [InstructionView<'a>] {
         self.code_spaces
     }
 
-    pub(crate) const fn source_mappings(self) -> &'a [InstructionSourceMappingView<'a>] {
+    pub(crate) const fn source_mappings(&self) -> &'a [InstructionSourceMappingView<'a>] {
         self.source_mappings
     }
 
-    pub(crate) const fn globals(self) -> Option<GlobalVariableView<'a>> {
-        self.globals
-    }
-
-    pub(crate) const fn words(self) -> PublishedWordLookup<'a> {
+    pub(crate) const fn words(&self) -> PublishedWordLookup<'a> {
         self.words
     }
 
-    pub(crate) const fn primitives(self) -> PrimitiveLookup<'a> {
+    pub(crate) const fn primitives(&self) -> PrimitiveLookup<'a> {
         self.primitives
     }
 }
@@ -1342,7 +1360,9 @@ mod tests {
     use crate::redefinition::redefine_word;
     use crate::source::SourceTexts;
     use crate::source_mapping::{SourceMappingLookup, SourceMappingLookupError};
-    use crate::source_word::{NativeSourceWordContext, SourceWordRegistry, VarSyntaxErrorKind};
+    use crate::source_word::{
+        LetSyntaxErrorKind, NativeSourceWordContext, SourceWordRegistry, VarSyntaxErrorKind,
+    };
     use crate::word::{CompletedWordDefinition, PrimitiveId, PublishedWords, WordId};
     use crate::word_lookup::PublishedWordLookup;
 
@@ -1484,8 +1504,35 @@ mod tests {
         (sources, id, result)
     }
 
+    fn run_with_source_words_operators_and_mut_globals(
+        text: &str,
+        bindings: &Bindings,
+        globals: &mut GlobalVariables,
+        source_words: &SourceWordRegistry,
+        words: &PublishedWords,
+        primitives: &PrimitiveRegistry,
+        operators: OperatorLookup,
+    ) -> (SourceTexts, SourceId, SourceRunResult) {
+        let (sources, id) = source(text);
+        let result = run_source(
+            sources.view(),
+            id,
+            SourceExecutionContext::with_source_words_and_operators(
+                bindings,
+                source_words.lookup(),
+                operators,
+                PublishedWordLookup::new(words),
+                primitives.lookup(),
+            )
+            .with_mut_globals(globals.view_mut()),
+        )
+        .expect("LET source should run with mutable globals");
+
+        (sources, id, result)
+    }
+
     fn emit_source_word_marker(
-        context: &mut NativeSourceWordContext<'_>,
+        context: &mut NativeSourceWordContext<'_, '_>,
     ) -> Result<(), SourceWordError> {
         let first = context
             .tokens()
@@ -2183,6 +2230,302 @@ mod tests {
     }
 
     #[test]
+    fn let_lowers_rhs_expression_then_store_var_with_source_mapping() {
+        let (_words, _primitives, operators) = operator_fixture();
+        let mut source_words = SourceWordRegistry::new();
+        let mut bindings = Bindings::new();
+        let mut globals = GlobalVariables::new();
+        register_builtin_source_words(&mut source_words, &mut bindings)
+            .expect("built-in source words should bootstrap");
+        let variables = register_builtin_global_variables(&mut globals, &mut bindings)
+            .expect("A-Z variables should bootstrap");
+        let (sources, id) = source("LET A = 1 + 2 * 3");
+
+        let unit = compile_source(
+            sources.view(),
+            id,
+            SourceCompileContext::with_source_words_and_operators(
+                &bindings,
+                source_words.lookup(),
+                operators.lookup(),
+            ),
+        )
+        .expect("LET should compile");
+
+        assert_eq!(
+            unit.instructions().get(address(0)),
+            Ok(&Instruction::Push(value(1)))
+        );
+        assert_eq!(
+            unit.instructions().get(address(1)),
+            Ok(&Instruction::Push(value(2)))
+        );
+        assert_eq!(
+            unit.instructions().get(address(2)),
+            Ok(&Instruction::Push(value(3)))
+        );
+        assert_eq!(
+            unit.instructions().get(address(3)),
+            Ok(&Instruction::Call(
+                operators.lookup().resolve(OperatorSemantic::Multiply)
+            ))
+        );
+        assert_eq!(
+            unit.instructions().get(address(4)),
+            Ok(&Instruction::Call(
+                operators.lookup().resolve(OperatorSemantic::Add)
+            ))
+        );
+        assert_eq!(
+            unit.instructions().get(address(5)),
+            Ok(&Instruction::StoreVar(variables[0]))
+        );
+        assert_eq!(unit.instructions().get(address(6)), Ok(&Instruction::Halt));
+        assert!(!matches!(
+            unit.instructions().get(address(0)),
+            Ok(Instruction::Call(_))
+        ));
+        assert_eq!(
+            unit.source_span(location(&unit, 5)),
+            Ok(Some(span(sources.view(), id, 4, 5)))
+        );
+    }
+
+    #[test]
+    fn let_updates_builtin_and_user_variables_with_case_insensitive_resolution() {
+        let (words, primitives, operators) = operator_fixture();
+        let mut source_words = SourceWordRegistry::new();
+        let mut bindings = Bindings::new();
+        let mut globals = GlobalVariables::new();
+        register_builtin_source_words(&mut source_words, &mut bindings)
+            .expect("built-in source words should bootstrap");
+        let variables = register_builtin_global_variables(&mut globals, &mut bindings)
+            .expect("A-Z variables should bootstrap");
+        compile_with_var("VAR Score", &mut bindings, &mut globals, &source_words);
+        let Some(Binding::Variable(score)) = bindings.get(&name("score")).copied() else {
+            panic!("SCORE should be a published variable");
+        };
+
+        globals
+            .view_mut()
+            .write(variables[1], value(4))
+            .expect("B should be writable");
+        run_with_source_words_operators_and_mut_globals(
+            "let a = b + 2 * 3\nLET score = A",
+            &bindings,
+            &mut globals,
+            &source_words,
+            &words,
+            &primitives,
+            operators.lookup(),
+        );
+
+        assert_eq!(globals.view().read(variables[0]), Ok(value(10)));
+        assert_eq!(globals.view().read(score), Ok(value(10)));
+    }
+
+    #[test]
+    fn let_rhs_variable_load_mapping_uses_reference_name_span() {
+        let (_words, _primitives, operators) = operator_fixture();
+        let mut source_words = SourceWordRegistry::new();
+        let mut bindings = Bindings::new();
+        let mut globals = GlobalVariables::new();
+        register_builtin_source_words(&mut source_words, &mut bindings)
+            .expect("built-in source words should bootstrap");
+        let variables = register_builtin_global_variables(&mut globals, &mut bindings)
+            .expect("A-Z variables should bootstrap");
+        let (sources, id) = source("LET A = B + 1");
+
+        let unit = compile_source(
+            sources.view(),
+            id,
+            SourceCompileContext::with_source_words_and_operators(
+                &bindings,
+                source_words.lookup(),
+                operators.lookup(),
+            ),
+        )
+        .expect("LET should compile");
+
+        assert_eq!(
+            unit.instructions().get(address(0)),
+            Ok(&Instruction::LoadVar(variables[1]))
+        );
+        assert_eq!(
+            unit.source_span(location(&unit, 0)),
+            Ok(Some(span(sources.view(), id, 8, 9)))
+        );
+        assert_eq!(
+            unit.source_span(location(&unit, 3)),
+            Ok(Some(span(sources.view(), id, 4, 5)))
+        );
+    }
+
+    #[test]
+    fn let_rejects_target_resolution_and_syntax_errors_at_primary_span() {
+        let mut source_words = SourceWordRegistry::new();
+        let mut words = PublishedWords::new();
+        let mut bindings = Bindings::new();
+        let mut globals = GlobalVariables::new();
+        let mut primitives = PrimitiveRegistry::new();
+        let operators = register_operator_primitives(&mut primitives, &mut words);
+        register_builtin_source_words(&mut source_words, &mut bindings)
+            .expect("built-in source words should bootstrap");
+        register_builtin_global_variables(&mut globals, &mut bindings)
+            .expect("A-Z variables should bootstrap");
+        let push7_id = primitives.register(push_7);
+        register_primitive(&mut words, &mut bindings, name("PUSH7"), push7_id)
+            .expect("runtime word should register");
+
+        let (sources, id) = source("LET MISSING = 1");
+        let error = compile_source(
+            sources.view(),
+            id,
+            SourceCompileContext::with_source_words_and_operators(
+                &bindings,
+                source_words.lookup(),
+                operators.lookup(),
+            ),
+        )
+        .expect_err("LET unresolved target should fail");
+
+        assert_eq!(
+            error,
+            SourceProcessorError::SourceWord(SourceWordError::LetTarget {
+                span: span(sources.view(), id, 4, 11),
+                source: ExpressionVariableErrorKind::UndefinedName,
+            })
+        );
+
+        for (source_text, start, end, source_kind) in [
+            (
+                "LET PUSH7 = 1",
+                4,
+                9,
+                ExpressionVariableErrorKind::TargetIsNotVariable,
+            ),
+            (
+                "LET VAR = 1",
+                4,
+                7,
+                ExpressionVariableErrorKind::TargetIsNotVariable,
+            ),
+        ] {
+            let (sources, id) = source(source_text);
+            let error = compile_source(
+                sources.view(),
+                id,
+                SourceCompileContext::with_source_words_and_operators(
+                    &bindings,
+                    source_words.lookup(),
+                    operators.lookup(),
+                ),
+            )
+            .expect_err("LET non-variable target should fail");
+
+            assert_eq!(
+                error,
+                SourceProcessorError::SourceWord(SourceWordError::LetTarget {
+                    span: span(sources.view(), id, start, end),
+                    source: source_kind,
+                }),
+                "{source_text:?} should reject non-variable target"
+            );
+        }
+
+        for (source_text, start, end, kind) in [
+            ("LET", 0, 3, LetSyntaxErrorKind::Target),
+            ("LET 123 = 1", 4, 7, LetSyntaxErrorKind::Target),
+            ("LET A 1", 6, 7, LetSyntaxErrorKind::Equal),
+            ("LET A =", 6, 7, LetSyntaxErrorKind::Rhs),
+        ] {
+            let (sources, id) = source(source_text);
+            let error = compile_source(
+                sources.view(),
+                id,
+                SourceCompileContext::with_source_words_and_operators(
+                    &bindings,
+                    source_words.lookup(),
+                    operators.lookup(),
+                ),
+            )
+            .expect_err("LET syntax should fail");
+
+            assert_eq!(
+                error,
+                SourceProcessorError::SourceWord(SourceWordError::LetSyntax {
+                    span: span(sources.view(), id, start, end),
+                    kind,
+                }),
+                "{source_text:?} should report LET syntax error"
+            );
+        }
+    }
+
+    #[test]
+    fn failed_let_expression_does_not_compile_prior_rhs_instructions() {
+        let (_words, _primitives, operators) = operator_fixture();
+        let mut source_words = SourceWordRegistry::new();
+        let mut bindings = Bindings::new();
+        let mut globals = GlobalVariables::new();
+        register_builtin_source_words(&mut source_words, &mut bindings)
+            .expect("built-in source words should bootstrap");
+        let variables = register_builtin_global_variables(&mut globals, &mut bindings)
+            .expect("A-Z variables should bootstrap");
+        let (sources, id) = source("LET A = B + MISSING");
+
+        let error = compile_source(
+            sources.view(),
+            id,
+            SourceCompileContext::with_source_words_and_operators(
+                &bindings,
+                source_words.lookup(),
+                operators.lookup(),
+            ),
+        )
+        .expect_err("later unresolved RHS name should fail LET");
+
+        let SourceProcessorError::SourceWord(SourceWordError::Expression {
+            source: ExpressionError::Variable(error),
+        }) = error
+        else {
+            panic!("expected LET RHS variable resolution error");
+        };
+        assert_eq!(error.span(), span(sources.view(), id, 12, 19));
+        assert_eq!(error.kind(), ExpressionVariableErrorKind::UndefinedName);
+        assert_eq!(globals.view().read(variables[0]), Ok(value(0)));
+        assert_eq!(globals.view().read(variables[1]), Ok(value(0)));
+    }
+
+    #[test]
+    fn line_number_prefixed_let_jumps_to_rhs_start_and_runs_store_var() {
+        let (words, primitives, operators) = operator_fixture();
+        let mut source_words = SourceWordRegistry::new();
+        let mut bindings = Bindings::new();
+        let mut globals = GlobalVariables::new();
+        register_builtin_source_words(&mut source_words, &mut bindings)
+            .expect("built-in source words should bootstrap");
+        let variables = register_builtin_global_variables(&mut globals, &mut bindings)
+            .expect("A-Z variables should bootstrap");
+
+        globals
+            .view_mut()
+            .write(variables[0], value(5))
+            .expect("A should be writable");
+        run_with_source_words_operators_and_mut_globals(
+            "BIF 0, 100\nLET A = 1\n100 LET A = A + 1",
+            &bindings,
+            &mut globals,
+            &source_words,
+            &words,
+            &primitives,
+            operators.lookup(),
+        );
+
+        assert_eq!(globals.view().read(variables[0]), Ok(value(6)));
+    }
+
+    #[test]
     fn bif_condition_variable_reads_from_global_storage_at_runtime() {
         let mut words = PublishedWords::new();
         let mut bindings = Bindings::new();
@@ -2535,16 +2878,26 @@ mod tests {
         let words = PublishedWords::new();
         let bindings = Bindings::new();
         let primitives = PrimitiveRegistry::new();
-        let context = SourceExecutionContext::new(
-            &bindings,
-            PublishedWordLookup::new(&words),
-            primitives.lookup(),
-        );
-
-        let first_result =
-            run_source(sources.view(), first, context).expect("first source should run");
-        let second_result =
-            run_source(sources.view(), second, context).expect("second source should run");
+        let first_result = run_source(
+            sources.view(),
+            first,
+            SourceExecutionContext::new(
+                &bindings,
+                PublishedWordLookup::new(&words),
+                primitives.lookup(),
+            ),
+        )
+        .expect("first source should run");
+        let second_result = run_source(
+            sources.view(),
+            second,
+            SourceExecutionContext::new(
+                &bindings,
+                PublishedWordLookup::new(&words),
+                primitives.lookup(),
+            ),
+        )
+        .expect("second source should run");
 
         assert_eq!(first_result.data_stack(), [value(1), value(2)]);
         assert_eq!(second_result.data_stack(), []);
@@ -3550,17 +3903,28 @@ mod tests {
         let (mut sources, first) = source("1 user_word");
         let second = sources.register("user_word");
         let published_views = [published_code.view()];
-        let context = SourceExecutionContext::with_code_spaces(
-            &bindings,
-            &published_views,
-            PublishedWordLookup::new(&words),
-            primitives.lookup(),
-        );
-
-        let first_result = run_source(sources.view(), first, context)
-            .expect("first source should run with a fresh VM");
-        let second_result = run_source(sources.view(), second, context)
-            .expect("second source should run with a fresh VM");
+        let first_result = run_source(
+            sources.view(),
+            first,
+            SourceExecutionContext::with_code_spaces(
+                &bindings,
+                &published_views,
+                PublishedWordLookup::new(&words),
+                primitives.lookup(),
+            ),
+        )
+        .expect("first source should run with a fresh VM");
+        let second_result = run_source(
+            sources.view(),
+            second,
+            SourceExecutionContext::with_code_spaces(
+                &bindings,
+                &published_views,
+                PublishedWordLookup::new(&words),
+                primitives.lookup(),
+            ),
+        )
+        .expect("second source should run with a fresh VM");
 
         assert_eq!(first_result.data_stack(), [value(1), value(8)]);
         assert_eq!(second_result.data_stack(), [value(8)]);
@@ -3891,20 +4255,23 @@ mod tests {
             out_of_range_mapping.view(),
             unmapped_mapping.view(),
         ];
-        let context = SourceExecutionContext::with_code_spaces_and_mappings(
-            &bindings,
-            &published_views,
-            &mapping_views,
-            PublishedWordLookup::new(&words),
-            primitives.lookup(),
-        );
-
         let end_source = sources.register("endfail");
         let out_of_range_source = sources.register("rangefail");
         let unmapped_source = sources.register("unmappedfail");
 
         assert_runtime_error(
-            run_source(sources.view(), end_source, context).expect_err("end mapping should fail"),
+            run_source(
+                sources.view(),
+                end_source,
+                SourceExecutionContext::with_code_spaces_and_mappings(
+                    &bindings,
+                    &published_views,
+                    &mapping_views,
+                    PublishedWordLookup::new(&words),
+                    primitives.lookup(),
+                ),
+            )
+            .expect_err("end mapping should fail"),
             end_code.view().location(end_entry),
             Err(SourceMappingLookupError::Address {
                 source: crate::instruction::InstructionAddressError::EndAddress {
@@ -3913,8 +4280,18 @@ mod tests {
             }),
         );
         assert_runtime_error(
-            run_source(sources.view(), out_of_range_source, context)
-                .expect_err("out-of-range mapping should fail"),
+            run_source(
+                sources.view(),
+                out_of_range_source,
+                SourceExecutionContext::with_code_spaces_and_mappings(
+                    &bindings,
+                    &published_views,
+                    &mapping_views,
+                    PublishedWordLookup::new(&words),
+                    primitives.lookup(),
+                ),
+            )
+            .expect_err("out-of-range mapping should fail"),
             out_of_range_code.view().location(out_of_range_entry),
             Err(SourceMappingLookupError::Address {
                 source: crate::instruction::InstructionAddressError::InvalidAddress {
@@ -3923,8 +4300,18 @@ mod tests {
             }),
         );
         assert_runtime_error(
-            run_source(sources.view(), unmapped_source, context)
-                .expect_err("unmapped location should preserve VM failure"),
+            run_source(
+                sources.view(),
+                unmapped_source,
+                SourceExecutionContext::with_code_spaces_and_mappings(
+                    &bindings,
+                    &published_views,
+                    &mapping_views,
+                    PublishedWordLookup::new(&words),
+                    primitives.lookup(),
+                ),
+            )
+            .expect_err("unmapped location should preserve VM failure"),
             unmapped_code.view().location(unmapped_entry),
             Ok(None),
         );

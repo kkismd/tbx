@@ -116,7 +116,7 @@ impl ExpressionStaging {
         }
     }
 
-    fn push(&mut self, instruction: Instruction, span: SourceSpan) {
+    pub(crate) fn append_mapped_instruction(&mut self, instruction: Instruction, span: SourceSpan) {
         self.entries.push(StagedInstruction { instruction, span });
     }
 
@@ -228,7 +228,7 @@ impl<'a, 'r> ExpressionParser<'a, 'r> {
             let operator_token = self.advance();
             let rhs = self.parse_infix_expression(staging, operator.precedence + 1)?;
             parsed.contains_comparison |= operator.comparison || rhs.contains_comparison;
-            staging.push(
+            staging.append_mapped_instruction(
                 Instruction::Call(self.operators.resolve(operator.semantic)),
                 operator_token.span(),
             );
@@ -252,7 +252,7 @@ impl<'a, 'r> ExpressionParser<'a, 'r> {
             }
 
             let parsed = self.parse_infix_expression(staging, PRECEDENCE_PREFIX)?;
-            staging.push(
+            staging.append_mapped_instruction(
                 Instruction::Call(self.operators.resolve(OperatorSemantic::Negate)),
                 minus.span(),
             );
@@ -283,7 +283,10 @@ impl<'a, 'r> ExpressionParser<'a, 'r> {
             TokenKind::IntegerLiteral => {
                 let token = self.advance();
                 let value = self.parse_unsigned_i16(token)?;
-                staging.push(Instruction::Push(Value::integer(value)), token.span());
+                staging.append_mapped_instruction(
+                    Instruction::Push(Value::integer(value)),
+                    token.span(),
+                );
                 Ok(ParsedExpression {
                     contains_comparison: false,
                 })
@@ -300,7 +303,7 @@ impl<'a, 'r> ExpressionParser<'a, 'r> {
                             kind,
                         })
                     })?;
-                staging.push(Instruction::LoadVar(id), token.span());
+                staging.append_mapped_instruction(Instruction::LoadVar(id), token.span());
                 Ok(ParsedExpression {
                     contains_comparison: false,
                 })
@@ -346,7 +349,8 @@ impl<'a, 'r> ExpressionParser<'a, 'r> {
         }
 
         let token = self.advance();
-        staging.push(Instruction::Push(Value::integer(i16::MIN)), token.span());
+        staging
+            .append_mapped_instruction(Instruction::Push(Value::integer(i16::MIN)), token.span());
         Ok(true)
     }
 

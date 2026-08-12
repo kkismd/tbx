@@ -1,10 +1,15 @@
 use crate::binding::{Binding, BindingInsertError, Bindings};
+use crate::expression::{
+    parse_expression, ExpressionError, ExpressionStaging, ExpressionVariableErrorKind,
+};
 use crate::global_variable::GlobalVariables;
 use crate::instruction::{Instruction, InstructionSequence};
 use crate::lexer::{Token, TokenKind};
 use crate::name::{NameError, NormalizedName};
+use crate::operator::OperatorLookup;
 use crate::source::{SourceError, SourceId, SourceSpan, SourceView};
 use crate::source_mapping::{InstructionSourceMapping, SourceMappingAppendError};
+use crate::word_resolution::{resolve_binding_name, ResolvedBinding, WordResolutionError};
 
 /// Internal identifier for a published source-processing word.
 ///
@@ -27,7 +32,7 @@ impl SourceWordId {
 }
 
 pub(crate) type NativeSourceWordHandler =
-    fn(&mut NativeSourceWordContext<'_>) -> Result<(), SourceWordError>;
+    fn(&mut NativeSourceWordContext<'_, '_>) -> Result<(), SourceWordError>;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum SourceWordError {
@@ -58,6 +63,20 @@ pub(crate) enum SourceWordError {
     VarBindingCommitInvariantViolated {
         span: SourceSpan,
     },
+    LetSyntax {
+        span: SourceSpan,
+        kind: LetSyntaxErrorKind,
+    },
+    LetTarget {
+        span: SourceSpan,
+        source: ExpressionVariableErrorKind,
+    },
+    LetExpressionContextUnavailable {
+        span: SourceSpan,
+    },
+    Expression {
+        source: ExpressionError,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -71,6 +90,13 @@ pub(crate) enum VarSyntaxErrorKind {
     TrailingToken { kind: TokenKind },
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum LetSyntaxErrorKind {
+    Target,
+    Equal,
+    Rhs,
+}
+
 /// Narrow source-processing capability passed to native source words.
 ///
 /// This is deliberately smaller than a compiler or VM handle. Native source
@@ -78,38 +104,46 @@ pub(crate) enum VarSyntaxErrorKind {
 /// instructions. Publication-capable contexts expose only explicit declaration
 /// operations; native handlers still cannot mutate words, runtime VM state, or
 /// published code spaces through this context.
-pub(crate) struct NativeSourceWordContext<'a> {
-    view: SourceView<'a>,
+pub(crate) struct NativeSourceWordContext<'source, 'state> {
+    view: SourceView<'source>,
     source_id: SourceId,
-    tokens: &'a [Token],
-    instructions: &'a mut InstructionSequence,
-    mapping: &'a mut InstructionSourceMapping,
+    tokens: &'source [Token],
+    bindings: NativeSourceWordBindingAccess<'state>,
+    operators: Option<OperatorLookup>,
+    instructions: &'state mut InstructionSequence,
+    mapping: &'state mut InstructionSourceMapping,
     local_line_number_prefix: Option<SourceSpan>,
-    publication: Option<NativeSourceWordPublicationContext<'a, 'a>>,
+    globals: Option<&'state mut GlobalVariables>,
 }
 
-impl<'a> NativeSourceWordContext<'a> {
-    pub(crate) fn new(
-        view: SourceView<'a>,
-        source_id: SourceId,
-        tokens: &'a [Token],
-        instructions: &'a mut InstructionSequence,
-        mapping: &'a mut InstructionSourceMapping,
-        local_line_number_prefix: Option<SourceSpan>,
-        publication: Option<NativeSourceWordPublicationContext<'a, 'a>>,
-    ) -> Self {
+pub(crate) struct NativeSourceWordContextParts<'source, 'state> {
+    pub(crate) view: SourceView<'source>,
+    pub(crate) source_id: SourceId,
+    pub(crate) tokens: &'source [Token],
+    pub(crate) bindings: NativeSourceWordBindingAccess<'state>,
+    pub(crate) operators: Option<OperatorLookup>,
+    pub(crate) instructions: &'state mut InstructionSequence,
+    pub(crate) mapping: &'state mut InstructionSourceMapping,
+    pub(crate) local_line_number_prefix: Option<SourceSpan>,
+    pub(crate) globals: Option<&'state mut GlobalVariables>,
+}
+
+impl<'source, 'state> NativeSourceWordContext<'source, 'state> {
+    pub(crate) fn new(parts: NativeSourceWordContextParts<'source, 'state>) -> Self {
         Self {
-            view,
-            source_id,
-            tokens,
-            instructions,
-            mapping,
-            local_line_number_prefix,
-            publication,
+            view: parts.view,
+            source_id: parts.source_id,
+            tokens: parts.tokens,
+            bindings: parts.bindings,
+            operators: parts.operators,
+            instructions: parts.instructions,
+            mapping: parts.mapping,
+            local_line_number_prefix: parts.local_line_number_prefix,
+            globals: parts.globals,
         }
     }
 
-    pub(crate) const fn view(&self) -> SourceView<'a> {
+    pub(crate) const fn view(&self) -> SourceView<'source> {
         self.view
     }
 
@@ -117,7 +151,7 @@ impl<'a> NativeSourceWordContext<'a> {
         self.source_id
     }
 
-    pub(crate) const fn tokens(&self) -> &'a [Token] {
+    pub(crate) const fn tokens(&self) -> &'source [Token] {
         self.tokens
     }
 
@@ -141,37 +175,25 @@ impl<'a> NativeSourceWordContext<'a> {
         name: NormalizedName,
         span: SourceSpan,
     ) -> Result<(), SourceWordError> {
-        let Some(publication) = &mut self.publication else {
+        let Some(globals) = &mut self.globals else {
             return Err(SourceWordError::VarPublicationContextUnavailable);
         };
 
-        publication.publish_global_variable(name, span)
-    }
-}
+        let bindings = match &mut self.bindings {
+            NativeSourceWordBindingAccess::Read(_) => {
+                return Err(SourceWordError::VarPublicationContextUnavailable);
+            }
+            NativeSourceWordBindingAccess::Write(bindings) => &mut **bindings,
+        };
 
-pub(crate) struct NativeSourceWordPublicationContext<'a, 'b> {
-    bindings: &'a mut Bindings,
-    globals: &'b mut GlobalVariables,
-}
-
-impl<'a, 'b> NativeSourceWordPublicationContext<'a, 'b> {
-    pub(crate) fn new(bindings: &'a mut Bindings, globals: &'b mut GlobalVariables) -> Self {
-        Self { bindings, globals }
-    }
-
-    fn publish_global_variable(
-        &mut self,
-        name: NormalizedName,
-        span: SourceSpan,
-    ) -> Result<(), SourceWordError> {
-        if self.bindings.get(&name).is_some() {
+        if bindings.get(&name).is_some() {
             return Err(SourceWordError::VarNameConflict { span });
         }
 
-        let id = self.globals.allocate();
+        let id = globals.allocate();
         // #1370/#1478/#1487 make binding insertion the VAR commit point:
         // after this succeeds, no recoverable fallible work may remain here.
-        self.bindings
+        bindings
             .insert_new(name, Binding::Variable(id))
             .map_err(|source| match source {
                 BindingInsertError::NameConflict => {
@@ -179,10 +201,74 @@ impl<'a, 'b> NativeSourceWordPublicationContext<'a, 'b> {
                 }
             })
     }
+
+    pub(crate) fn resolve_variable_target(
+        &self,
+        source_name: &str,
+    ) -> Result<crate::global_variable::GlobalVarId, ExpressionVariableErrorKind> {
+        resolve_variable_name(self.bindings(), source_name)
+    }
+
+    pub(crate) fn stage_expression(
+        &self,
+        tokens: &[Token],
+        anchor: SourceSpan,
+    ) -> Result<ExpressionStaging, SourceWordError> {
+        let Some(operators) = self.operators else {
+            return Err(SourceWordError::LetExpressionContextUnavailable { span: anchor });
+        };
+
+        let mut expression_tokens = tokens
+            .iter()
+            .copied()
+            .filter(|token| token.kind() != TokenKind::LineBoundary)
+            .collect::<Vec<_>>();
+        let end = expression_tokens
+            .last()
+            .map_or(anchor.end(), |token| token.span().end());
+        expression_tokens.push(Token::new(
+            TokenKind::Eof,
+            self.view.span(self.source_id, end, end).map_err(|source| {
+                SourceWordError::Expression {
+                    source: ExpressionError::Source(source),
+                }
+            })?,
+        ));
+
+        let resolver = |source_name: &str| resolve_variable_name(self.bindings(), source_name);
+        parse_expression(self.view, &expression_tokens, operators, &resolver)
+            .map_err(|source| SourceWordError::Expression { source })
+    }
+
+    pub(crate) fn commit_staging(
+        &mut self,
+        staging: &ExpressionStaging,
+    ) -> Result<(), SourceWordError> {
+        staging
+            .commit_to(self.instructions, self.mapping)
+            .map_err(|source| match source {
+                ExpressionError::SourceMappingAppend(source) => {
+                    SourceWordError::SourceMappingAppend { source }
+                }
+                source => SourceWordError::Expression { source },
+            })
+    }
+
+    fn bindings(&self) -> &Bindings {
+        match &self.bindings {
+            NativeSourceWordBindingAccess::Read(bindings) => bindings,
+            NativeSourceWordBindingAccess::Write(bindings) => bindings,
+        }
+    }
+}
+
+pub(crate) enum NativeSourceWordBindingAccess<'a> {
+    Read(&'a Bindings),
+    Write(&'a mut Bindings),
 }
 
 pub(crate) fn var_source_word(
-    context: &mut NativeSourceWordContext<'_>,
+    context: &mut NativeSourceWordContext<'_, '_>,
 ) -> Result<(), SourceWordError> {
     if let Some(span) = context.local_line_number_prefix() {
         return Err(SourceWordError::VarLocalLineNumberPrefix { span });
@@ -226,8 +312,66 @@ pub(crate) fn var_source_word(
     context.publish_global_variable(name, name_token.span())
 }
 
+pub(crate) fn let_source_word(
+    context: &mut NativeSourceWordContext<'_, '_>,
+) -> Result<(), SourceWordError> {
+    let let_token = context
+        .tokens()
+        .first()
+        .copied()
+        .expect("LET source word requires its leading token");
+    let Some(target_token) = context.tokens().get(1).copied() else {
+        return Err(SourceWordError::LetSyntax {
+            span: let_token.span(),
+            kind: LetSyntaxErrorKind::Target,
+        });
+    };
+    if target_token.kind() != TokenKind::Name {
+        return Err(SourceWordError::LetSyntax {
+            span: target_token.span(),
+            kind: LetSyntaxErrorKind::Target,
+        });
+    }
+
+    let Some(equal_token) = context.tokens().get(2).copied() else {
+        return Err(SourceWordError::LetSyntax {
+            span: target_token.span(),
+            kind: LetSyntaxErrorKind::Equal,
+        });
+    };
+    if equal_token.kind() != TokenKind::Equal {
+        return Err(SourceWordError::LetSyntax {
+            span: equal_token.span(),
+            kind: LetSyntaxErrorKind::Equal,
+        });
+    }
+
+    let rhs_tokens = &context.tokens()[3..];
+    if rhs_tokens.is_empty() {
+        return Err(SourceWordError::LetSyntax {
+            span: equal_token.span(),
+            kind: LetSyntaxErrorKind::Rhs,
+        });
+    }
+
+    let source_name = context
+        .view()
+        .slice(target_token.span())
+        .map_err(|source| SourceWordError::Source { source })?;
+    let target = context
+        .resolve_variable_target(source_name)
+        .map_err(|source| SourceWordError::LetTarget {
+            span: target_token.span(),
+            source,
+        })?;
+
+    let mut staging = context.stage_expression(rhs_tokens, equal_token.span())?;
+    staging.append_mapped_instruction(Instruction::StoreVar(target), target_token.span());
+    context.commit_staging(&staging)
+}
+
 pub(crate) fn unsupported_source_word(
-    context: &mut NativeSourceWordContext<'_>,
+    context: &mut NativeSourceWordContext<'_, '_>,
 ) -> Result<(), SourceWordError> {
     let first = context
         .tokens()
@@ -235,6 +379,23 @@ pub(crate) fn unsupported_source_word(
         .copied()
         .expect("source word requires its leading token");
     Err(SourceWordError::UnsupportedSourceWord { span: first.span() })
+}
+
+fn resolve_variable_name(
+    bindings: &Bindings,
+    source_name: &str,
+) -> Result<crate::global_variable::GlobalVarId, ExpressionVariableErrorKind> {
+    match resolve_binding_name(bindings, source_name) {
+        Ok(ResolvedBinding::Variable(id)) => Ok(id),
+        Ok(ResolvedBinding::RuntimeWord(_) | ResolvedBinding::SourceWord(_)) => {
+            Err(ExpressionVariableErrorKind::TargetIsNotVariable)
+        }
+        Err(WordResolutionError::InvalidWordName) => Err(ExpressionVariableErrorKind::InvalidName),
+        Err(WordResolutionError::UndefinedName) => Err(ExpressionVariableErrorKind::UndefinedName),
+        Err(WordResolutionError::TargetIsNotWord) => {
+            unreachable!("binding lookup does not require a runtime word target")
+        }
+    }
 }
 
 #[derive(Debug, Default)]
@@ -290,7 +451,7 @@ mod tests {
     use crate::source::SourceTexts;
     use crate::value::Value;
 
-    fn push_one(context: &mut NativeSourceWordContext<'_>) -> Result<(), SourceWordError> {
+    fn push_one(context: &mut NativeSourceWordContext<'_, '_>) -> Result<(), SourceWordError> {
         let first = context
             .tokens()
             .first()
@@ -348,15 +509,18 @@ mod tests {
         }
         let mut instructions = InstructionSequence::new();
         let mut mapping = InstructionSourceMapping::new(instructions.code_space());
-        let mut context = NativeSourceWordContext::new(
-            sources.view(),
+        let bindings = Bindings::new();
+        let mut context = NativeSourceWordContext::new(NativeSourceWordContextParts {
+            view: sources.view(),
             source_id,
-            &tokens[..1],
-            &mut instructions,
-            &mut mapping,
-            None,
-            None,
-        );
+            tokens: &tokens[..1],
+            bindings: NativeSourceWordBindingAccess::Read(&bindings),
+            operators: None,
+            instructions: &mut instructions,
+            mapping: &mut mapping,
+            local_line_number_prefix: None,
+            globals: None,
+        });
 
         push_one(&mut context).expect("test source word should emit");
 
