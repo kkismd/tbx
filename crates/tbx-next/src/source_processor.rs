@@ -14,7 +14,7 @@ use crate::source_mapping::{
     SourceMappingLookup, SourceMappingLookupError,
 };
 use crate::source_word::{
-    NativeSourceWordContext, SourceWordError, SourceWordLookup, SourceWordLookupError,
+    NativeSourceWordContext, SourceWordError, SourceWordId, SourceWordLookup, SourceWordLookupError,
 };
 use crate::value::Value;
 use crate::vm::{ExecutionView, RunOutcome, Vm, VmError};
@@ -68,6 +68,7 @@ pub(crate) enum SourceProcessorError {
     CodeSpaceLookup(CodeSpaceLookupError),
     SourceMappingAppend(SourceMappingAppendError),
     SourceMappingLookup(SourceMappingLookupError),
+    SourceWordContextUnavailable { id: SourceWordId },
     SourceWordLookup(SourceWordLookupError),
     SourceWord(SourceWordError),
     Runtime(RuntimeError),
@@ -368,13 +369,7 @@ fn compile_statement_leading_source_word(
         return Ok(false);
     };
     let Some(source_words) = context.source_words() else {
-        return Err(CompileError {
-            span: first.span(),
-            kind: CompileErrorKind::WordResolution {
-                source: WordResolutionError::TargetIsNotWord,
-            },
-        }
-        .into());
+        return Err(SourceProcessorError::SourceWordContextUnavailable { id });
     };
     let handler = source_words.lookup_handler(id)?;
     let mut source_word_context =
@@ -2425,6 +2420,32 @@ mod tests {
             unit.instructions().get(address(0)),
             Ok(Instruction::Call(_))
         ));
+    }
+
+    #[test]
+    fn source_word_binding_without_lookup_is_internal_context_error() {
+        let mut source_words = SourceWordRegistry::new();
+        let mut bindings = Bindings::new();
+        let source_word = register_native_source_word(
+            &mut source_words,
+            &mut bindings,
+            name("SOURCE_MARKER"),
+            emit_source_word_marker,
+        )
+        .expect("source word should register");
+        let (sources, source_id) = source("source_marker");
+
+        let error = compile_source(
+            sources.view(),
+            source_id,
+            SourceCompileContext::new(&bindings),
+        )
+        .expect_err("source word binding without lookup should fail as context error");
+
+        assert_eq!(
+            error,
+            SourceProcessorError::SourceWordContextUnavailable { id: source_word }
+        );
     }
 
     #[test]
