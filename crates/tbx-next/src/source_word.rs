@@ -1,6 +1,9 @@
+use crate::binding::{Binding, BindingInsertError, Bindings};
+use crate::global_variable::GlobalVariables;
 use crate::instruction::{Instruction, InstructionSequence};
-use crate::lexer::Token;
-use crate::source::{SourceId, SourceSpan, SourceView};
+use crate::lexer::{Token, TokenKind};
+use crate::name::{NameError, NormalizedName};
+use crate::source::{SourceError, SourceId, SourceSpan, SourceView};
 use crate::source_mapping::{InstructionSourceMapping, SourceMappingAppendError};
 
 /// Internal identifier for a published source-processing word.
@@ -28,7 +31,33 @@ pub(crate) type NativeSourceWordHandler =
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum SourceWordError {
-    SourceMappingAppend { source: SourceMappingAppendError },
+    Source {
+        source: SourceError,
+    },
+    SourceMappingAppend {
+        source: SourceMappingAppendError,
+    },
+    UnsupportedSourceWord {
+        span: SourceSpan,
+    },
+    VarSyntax {
+        span: SourceSpan,
+        kind: VarSyntaxErrorKind,
+    },
+    VarLocalLineNumberPrefix {
+        span: SourceSpan,
+    },
+    VarPublicationContextUnavailable,
+    VarName {
+        span: SourceSpan,
+        source: NameError,
+    },
+    VarNameConflict {
+        span: SourceSpan,
+    },
+    VarBindingCommitInvariantViolated {
+        span: SourceSpan,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -36,18 +65,27 @@ pub(crate) enum SourceWordLookupError {
     InvalidSourceWordId { id: SourceWordId },
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum VarSyntaxErrorKind {
+    MissingName,
+    TrailingToken { kind: TokenKind },
+}
+
 /// Narrow source-processing capability passed to native source words.
 ///
 /// This is deliberately smaller than a compiler or VM handle. Native source
 /// words can inspect the current logical statement and emit mapped temporary
-/// instructions, but they cannot mutate bindings, words, globals, runtime VM
-/// state, or published code spaces through this context.
+/// instructions. Publication-capable contexts expose only explicit declaration
+/// operations; native handlers still cannot mutate words, runtime VM state, or
+/// published code spaces through this context.
 pub(crate) struct NativeSourceWordContext<'a> {
     view: SourceView<'a>,
     source_id: SourceId,
     tokens: &'a [Token],
     instructions: &'a mut InstructionSequence,
     mapping: &'a mut InstructionSourceMapping,
+    local_line_number_prefix: Option<SourceSpan>,
+    publication: Option<NativeSourceWordPublicationContext<'a, 'a>>,
 }
 
 impl<'a> NativeSourceWordContext<'a> {
@@ -57,6 +95,8 @@ impl<'a> NativeSourceWordContext<'a> {
         tokens: &'a [Token],
         instructions: &'a mut InstructionSequence,
         mapping: &'a mut InstructionSourceMapping,
+        local_line_number_prefix: Option<SourceSpan>,
+        publication: Option<NativeSourceWordPublicationContext<'a, 'a>>,
     ) -> Self {
         Self {
             view,
@@ -64,6 +104,8 @@ impl<'a> NativeSourceWordContext<'a> {
             tokens,
             instructions,
             mapping,
+            local_line_number_prefix,
+            publication,
         }
     }
 
@@ -79,6 +121,10 @@ impl<'a> NativeSourceWordContext<'a> {
         self.tokens
     }
 
+    pub(crate) const fn local_line_number_prefix(&self) -> Option<SourceSpan> {
+        self.local_line_number_prefix
+    }
+
     pub(crate) fn append_mapped(
         &mut self,
         instruction: Instruction,
@@ -89,6 +135,106 @@ impl<'a> NativeSourceWordContext<'a> {
             .append_mapped(address, span)
             .map_err(|source| SourceWordError::SourceMappingAppend { source })
     }
+
+    pub(crate) fn publish_global_variable(
+        &mut self,
+        name: NormalizedName,
+        span: SourceSpan,
+    ) -> Result<(), SourceWordError> {
+        let Some(publication) = &mut self.publication else {
+            return Err(SourceWordError::VarPublicationContextUnavailable);
+        };
+
+        publication.publish_global_variable(name, span)
+    }
+}
+
+pub(crate) struct NativeSourceWordPublicationContext<'a, 'b> {
+    bindings: &'a mut Bindings,
+    globals: &'b mut GlobalVariables,
+}
+
+impl<'a, 'b> NativeSourceWordPublicationContext<'a, 'b> {
+    pub(crate) fn new(bindings: &'a mut Bindings, globals: &'b mut GlobalVariables) -> Self {
+        Self { bindings, globals }
+    }
+
+    fn publish_global_variable(
+        &mut self,
+        name: NormalizedName,
+        span: SourceSpan,
+    ) -> Result<(), SourceWordError> {
+        if self.bindings.get(&name).is_some() {
+            return Err(SourceWordError::VarNameConflict { span });
+        }
+
+        let id = self.globals.allocate();
+        // #1370/#1478/#1487 make binding insertion the VAR commit point:
+        // after this succeeds, no recoverable fallible work may remain here.
+        self.bindings
+            .insert_new(name, Binding::Variable(id))
+            .map_err(|source| match source {
+                BindingInsertError::NameConflict => {
+                    SourceWordError::VarBindingCommitInvariantViolated { span }
+                }
+            })
+    }
+}
+
+pub(crate) fn var_source_word(
+    context: &mut NativeSourceWordContext<'_>,
+) -> Result<(), SourceWordError> {
+    if let Some(span) = context.local_line_number_prefix() {
+        return Err(SourceWordError::VarLocalLineNumberPrefix { span });
+    }
+
+    let var = context
+        .tokens()
+        .first()
+        .copied()
+        .expect("VAR source word requires its leading token");
+    let Some(name_token) = context.tokens().get(1).copied() else {
+        return Err(SourceWordError::VarSyntax {
+            span: var.span(),
+            kind: VarSyntaxErrorKind::MissingName,
+        });
+    };
+    if name_token.kind() != TokenKind::Name {
+        return Err(SourceWordError::VarSyntax {
+            span: name_token.span(),
+            kind: VarSyntaxErrorKind::MissingName,
+        });
+    }
+    if let Some(trailing) = context.tokens().get(2).copied() {
+        return Err(SourceWordError::VarSyntax {
+            span: trailing.span(),
+            kind: VarSyntaxErrorKind::TrailingToken {
+                kind: trailing.kind(),
+            },
+        });
+    }
+
+    let source_name = context
+        .view()
+        .slice(name_token.span())
+        .map_err(|source| SourceWordError::Source { source })?;
+    let name = NormalizedName::new(source_name).map_err(|source| SourceWordError::VarName {
+        span: name_token.span(),
+        source,
+    })?;
+
+    context.publish_global_variable(name, name_token.span())
+}
+
+pub(crate) fn unsupported_source_word(
+    context: &mut NativeSourceWordContext<'_>,
+) -> Result<(), SourceWordError> {
+    let first = context
+        .tokens()
+        .first()
+        .copied()
+        .expect("source word requires its leading token");
+    Err(SourceWordError::UnsupportedSourceWord { span: first.span() })
 }
 
 #[derive(Debug, Default)]
@@ -208,6 +354,8 @@ mod tests {
             &tokens[..1],
             &mut instructions,
             &mut mapping,
+            None,
+            None,
         );
 
         push_one(&mut context).expect("test source word should emit");

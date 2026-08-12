@@ -1,8 +1,10 @@
 use crate::binding::{Binding, BindingInsertError, Bindings};
 use crate::global_variable::{GlobalVarId, GlobalVariables};
 use crate::name::NormalizedName;
-use crate::publication_name::{validate_publication_name, PublicationNameError};
-use crate::source_word::{NativeSourceWordHandler, SourceWordId, SourceWordRegistry};
+use crate::source_word::{
+    unsupported_source_word, var_source_word, NativeSourceWordHandler, SourceWordId,
+    SourceWordRegistry,
+};
 use crate::word::{CompletedWordDefinition, PrimitiveId, PublishedWords, WordId};
 
 const BUILTIN_GLOBAL_VARIABLE_NAMES: [&str; 26] = [
@@ -12,7 +14,6 @@ const BUILTIN_GLOBAL_VARIABLE_NAMES: [&str; 26] = [
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum PrimitiveBootstrapError {
-    ReservedName,
     NameConflict,
     BindingRegistrationInvariantViolated,
 }
@@ -24,7 +25,6 @@ pub(crate) enum BuiltinGlobalBootstrapError {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum SourceWordBootstrapError {
-    ReservedName,
     NameConflict,
     BindingRegistrationInvariantViolated,
 }
@@ -43,9 +43,6 @@ pub(crate) fn register_primitive(
     name: NormalizedName,
     primitive: PrimitiveId,
 ) -> Result<WordId, PrimitiveBootstrapError> {
-    validate_publication_name(&name)
-        .map_err(PrimitiveBootstrapError::from_publication_name_error)?;
-
     if bindings.get(&name).is_some() {
         return Err(PrimitiveBootstrapError::NameConflict);
     }
@@ -102,9 +99,6 @@ pub(crate) fn register_native_source_word(
     name: NormalizedName,
     handler: NativeSourceWordHandler,
 ) -> Result<SourceWordId, SourceWordBootstrapError> {
-    validate_publication_name(&name)
-        .map_err(SourceWordBootstrapError::from_publication_name_error)?;
-
     if bindings.get(&name).is_some() {
         return Err(SourceWordBootstrapError::NameConflict);
     }
@@ -118,19 +112,54 @@ pub(crate) fn register_native_source_word(
     Ok(id)
 }
 
+pub(crate) fn register_builtin_source_words(
+    source_words: &mut SourceWordRegistry,
+    bindings: &mut Bindings,
+) -> Result<BuiltinSourceWordIds, SourceWordBootstrapError> {
+    // #1487 makes built-in source-word bindings the source of truth for name
+    // occupation; bootstrap must fail rather than silently overwrite a binding.
+    let var_name = builtin_name("VAR");
+    let let_name = builtin_name("LET");
+    if bindings.get(&var_name).is_some() || bindings.get(&let_name).is_some() {
+        return Err(SourceWordBootstrapError::NameConflict);
+    }
+
+    let var = register_native_source_word(source_words, bindings, var_name, var_source_word)
+        .expect("prechecked VAR source word should remain available");
+    let let_ =
+        register_native_source_word(source_words, bindings, let_name, unsupported_source_word)
+            .expect("prechecked LET source word should remain available");
+
+    Ok(BuiltinSourceWordIds { var, let_ })
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct BuiltinSourceWordIds {
+    var: SourceWordId,
+    let_: SourceWordId,
+}
+
+impl BuiltinSourceWordIds {
+    pub(crate) const fn var(self) -> SourceWordId {
+        self.var
+    }
+
+    pub(crate) const fn let_(self) -> SourceWordId {
+        self.let_
+    }
+}
+
 fn builtin_global_variable_names() -> [NormalizedName; 26] {
     BUILTIN_GLOBAL_VARIABLE_NAMES.map(|name| {
         NormalizedName::new(name).expect("built-in global variable name should be valid")
     })
 }
 
-impl PrimitiveBootstrapError {
-    fn from_publication_name_error(error: PublicationNameError) -> Self {
-        match error {
-            PublicationNameError::ReservedName => Self::ReservedName,
-        }
-    }
+fn builtin_name(input: &str) -> NormalizedName {
+    NormalizedName::new(input).expect("built-in source word name should be valid")
+}
 
+impl PrimitiveBootstrapError {
     fn from_binding_insert_error(error: BindingInsertError) -> Self {
         match error {
             BindingInsertError::NameConflict => Self::BindingRegistrationInvariantViolated,
@@ -139,12 +168,6 @@ impl PrimitiveBootstrapError {
 }
 
 impl SourceWordBootstrapError {
-    fn from_publication_name_error(error: PublicationNameError) -> Self {
-        match error {
-            PublicationNameError::ReservedName => Self::ReservedName,
-        }
-    }
-
     fn from_binding_insert_error(error: BindingInsertError) -> Self {
         match error {
             BindingInsertError::NameConflict => Self::BindingRegistrationInvariantViolated,
@@ -204,35 +227,6 @@ mod tests {
         let distinct: HashSet<_> = ids.iter().copied().collect();
 
         assert_eq!(distinct.len(), ids.len());
-    }
-
-    #[test]
-    fn reserved_primitive_names_are_rejected_without_mutation() {
-        for input in ["VAR", "var", "Var", "LET", "let", "Let"] {
-            let mut words = PublishedWords::new();
-            let mut bindings = Bindings::new();
-
-            let result = register_primitive(&mut words, &mut bindings, name(input), primitive(80));
-
-            assert_eq!(result, Err(PrimitiveBootstrapError::ReservedName));
-            assert_eq!(words.len(), 0, "{input:?} should not issue a word id");
-            assert_eq!(bindings.len(), 0, "{input:?} should not bind a name");
-        }
-    }
-
-    #[test]
-    fn ordinary_names_near_reserved_spellings_can_register_as_primitives() {
-        for input in ["VAR1", "LETTER", "_LET"] {
-            let mut words = PublishedWords::new();
-            let mut bindings = Bindings::new();
-
-            let id = register_primitive(&mut words, &mut bindings, name(input), primitive(81))
-                .expect("ordinary name should register");
-
-            assert_eq!(words.len(), 1);
-            assert_eq!(bindings.len(), 1);
-            assert_word_binding(&bindings, input, id);
-        }
     }
 
     #[test]
@@ -521,6 +515,60 @@ mod tests {
         assert_eq!(result, Err(SourceWordBootstrapError::NameConflict));
         assert_eq!(source_words.len(), 0);
         assert_variable_binding(&bindings, "A", variable);
+    }
+
+    #[test]
+    fn builtin_source_word_bootstrap_publishes_var_as_source_word_binding() {
+        let mut source_words = SourceWordRegistry::new();
+        let mut bindings = Bindings::new();
+
+        let ids = register_builtin_source_words(&mut source_words, &mut bindings)
+            .expect("empty namespace should accept built-in source words");
+
+        assert_eq!(source_words.len(), 2);
+        assert_source_word_binding(&bindings, "VAR", ids.var());
+        assert_source_word_binding(&bindings, "var", ids.var());
+        assert_source_word_binding(&bindings, "LET", ids.let_());
+        assert_source_word_binding(&bindings, "let", ids.let_());
+    }
+
+    #[test]
+    fn builtin_source_word_bootstrap_conflicts_without_overwriting_binding() {
+        let mut source_words = SourceWordRegistry::new();
+        let mut bindings = Bindings::new();
+        let existing = register_native_source_word(
+            &mut source_words,
+            &mut bindings,
+            name("var"),
+            source_handler,
+        )
+        .expect("test source word should register");
+
+        let result = register_builtin_source_words(&mut source_words, &mut bindings);
+
+        assert_eq!(result, Err(SourceWordBootstrapError::NameConflict));
+        assert_eq!(source_words.len(), 1);
+        assert_source_word_binding(&bindings, "VAR", existing);
+    }
+
+    #[test]
+    fn builtin_source_word_bootstrap_let_conflict_does_not_publish_var_prefix() {
+        let mut source_words = SourceWordRegistry::new();
+        let mut bindings = Bindings::new();
+        let existing = register_native_source_word(
+            &mut source_words,
+            &mut bindings,
+            name("let"),
+            source_handler,
+        )
+        .expect("test LET source word should register");
+
+        let result = register_builtin_source_words(&mut source_words, &mut bindings);
+
+        assert_eq!(result, Err(SourceWordBootstrapError::NameConflict));
+        assert_eq!(source_words.len(), 1);
+        assert_eq!(bindings.get(&name("VAR")), None);
+        assert_source_word_binding(&bindings, "LET", existing);
     }
 
     #[test]

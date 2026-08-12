@@ -1,5 +1,6 @@
 use crate::binding::Bindings;
 use crate::expression::{parse_expression, ExpressionError, ExpressionSyntaxErrorKind};
+use crate::global_variable::GlobalVariables;
 use crate::instruction::{
     CodeLocation, CodeSpaceLookup, CodeSpaceLookupError, Instruction, InstructionAddress,
     InstructionSequence, InstructionView,
@@ -14,7 +15,8 @@ use crate::source_mapping::{
     SourceMappingLookup, SourceMappingLookupError,
 };
 use crate::source_word::{
-    NativeSourceWordContext, SourceWordError, SourceWordId, SourceWordLookup, SourceWordLookupError,
+    NativeSourceWordContext, NativeSourceWordPublicationContext, SourceWordError, SourceWordId,
+    SourceWordLookup, SourceWordLookupError,
 };
 use crate::value::Value;
 use crate::vm::{ExecutionView, RunOutcome, Vm, VmError};
@@ -31,16 +33,23 @@ pub(crate) struct TemporaryExecutionUnit {
     entry: CodeLocation,
 }
 
-#[derive(Debug, Clone, Copy)]
 pub(crate) struct SourceCompileContext<'a> {
-    bindings: &'a Bindings,
+    bindings: BindingAccess<'a>,
     operators: Option<OperatorLookup>,
     source_words: Option<SourceWordLookup<'a>>,
+    globals: Option<&'a mut GlobalVariables>,
+}
+
+enum BindingAccess<'a> {
+    Read(&'a Bindings),
+    Write(&'a mut Bindings),
 }
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct SourceExecutionContext<'a> {
-    compile: SourceCompileContext<'a>,
+    bindings: &'a Bindings,
+    operators: Option<OperatorLookup>,
+    source_words: Option<SourceWordLookup<'a>>,
     code_spaces: &'a [InstructionView<'a>],
     source_mappings: &'a [InstructionSourceMappingView<'a>],
     words: PublishedWordLookup<'a>,
@@ -203,7 +212,7 @@ fn compile_statements(
     view: SourceView<'_>,
     source_id: SourceId,
     statements: &[LogicalStatement],
-    context: SourceCompileContext<'_>,
+    mut context: SourceCompileContext<'_>,
     instructions: &mut InstructionSequence,
     mapping: &mut InstructionSourceMapping,
 ) -> Result<(), SourceProcessorError> {
@@ -218,7 +227,7 @@ fn compile_statements(
             view,
             source_id,
             statement.tokens(),
-            context,
+            &mut context,
             &mut StatementCompileState {
                 instructions,
                 mapping,
@@ -237,24 +246,28 @@ fn compile_statement(
     view: SourceView<'_>,
     source_id: SourceId,
     statement: &[Token],
-    context: SourceCompileContext<'_>,
+    context: &mut SourceCompileContext<'_>,
     state: &mut StatementCompileState<'_>,
 ) -> Result<(), SourceProcessorError> {
     if statement.is_empty() {
         return Ok(());
     }
 
-    let (line_number, body) =
-        split_statement_line_number(view, statement, state.referenced_line_numbers)?;
+    let (line_number, body) = split_statement_line_number(
+        view,
+        statement,
+        state.referenced_line_numbers,
+        context.bindings(),
+    )?;
     let start = state.instructions.len();
+    let local_line_number_prefix = line_number.map(|(_, span)| span);
     compile_statement_body(
         view,
         source_id,
         body,
         context,
-        state.instructions,
-        state.mapping,
-        state.line_numbers,
+        local_line_number_prefix,
+        state,
     )?;
 
     if let Some((line_number, span)) = line_number {
@@ -272,13 +285,20 @@ fn split_statement_line_number<'a>(
     view: SourceView<'_>,
     statement: &'a [Token],
     referenced_line_numbers: &HashSet<LocalLineNumber>,
+    bindings: &Bindings,
 ) -> Result<(OptionalLineNumberPrefix, &'a [Token]), SourceProcessorError> {
     let Some((&first, rest)) = statement.split_first() else {
         return Ok((None, statement));
     };
 
     if first.kind() != TokenKind::IntegerLiteral
-        || !is_statement_line_number_candidate(view, first, rest, referenced_line_numbers)?
+        || !is_statement_line_number_candidate(
+            view,
+            first,
+            rest,
+            referenced_line_numbers,
+            bindings,
+        )?
     {
         return Ok((None, statement));
     }
@@ -291,10 +311,9 @@ fn compile_statement_body(
     view: SourceView<'_>,
     source_id: SourceId,
     tokens: &[Token],
-    context: SourceCompileContext<'_>,
-    instructions: &mut InstructionSequence,
-    mapping: &mut InstructionSourceMapping,
-    line_numbers: &mut LocalLineNumberTable,
+    context: &mut SourceCompileContext<'_>,
+    local_line_number_prefix: Option<SourceSpan>,
+    state: &mut StatementCompileState<'_>,
 ) -> Result<(), SourceProcessorError> {
     let Some((&first, _)) = tokens.split_first() else {
         return Ok(());
@@ -306,9 +325,9 @@ fn compile_statement_body(
             source_id,
             tokens,
             context,
-            instructions,
-            mapping,
-            line_numbers,
+            state.instructions,
+            state.mapping,
+            state.line_numbers,
         );
     }
 
@@ -317,8 +336,9 @@ fn compile_statement_body(
         source_id,
         tokens,
         context,
-        instructions,
-        mapping,
+        local_line_number_prefix,
+        state.instructions,
+        state.mapping,
     )? {
         return Ok(());
     }
@@ -331,14 +351,15 @@ fn compile_statement_body(
         .into());
     }
 
-    compile_simple_tokens(view, tokens, context, instructions, mapping)
+    compile_simple_tokens(view, tokens, context, state.instructions, state.mapping)
 }
 
 fn compile_statement_leading_source_word(
     view: SourceView<'_>,
     source_id: SourceId,
     tokens: &[Token],
-    context: SourceCompileContext<'_>,
+    context: &mut SourceCompileContext<'_>,
+    local_line_number_prefix: Option<SourceSpan>,
     instructions: &mut InstructionSequence,
     mapping: &mut InstructionSourceMapping,
 ) -> Result<bool, SourceProcessorError> {
@@ -367,8 +388,18 @@ fn compile_statement_leading_source_word(
         return Err(SourceProcessorError::SourceWordContextUnavailable { id });
     };
     let handler = source_words.lookup_handler(id)?;
-    let mut source_word_context =
-        NativeSourceWordContext::new(view, source_id, tokens, instructions, mapping);
+    let publication = context
+        .publication_context()
+        .map(|(bindings, globals)| NativeSourceWordPublicationContext::new(bindings, globals));
+    let mut source_word_context = NativeSourceWordContext::new(
+        view,
+        source_id,
+        tokens,
+        instructions,
+        mapping,
+        local_line_number_prefix,
+        publication,
+    );
     handler(&mut source_word_context)?;
     Ok(true)
 }
@@ -376,7 +407,7 @@ fn compile_statement_leading_source_word(
 fn compile_simple_tokens(
     view: SourceView<'_>,
     tokens: &[Token],
-    context: SourceCompileContext<'_>,
+    context: &SourceCompileContext<'_>,
     instructions: &mut InstructionSequence,
     mapping: &mut InstructionSourceMapping,
 ) -> Result<(), SourceProcessorError> {
@@ -426,7 +457,7 @@ fn compile_bif(
     view: SourceView<'_>,
     source_id: SourceId,
     tokens: &[Token],
-    context: SourceCompileContext<'_>,
+    context: &SourceCompileContext<'_>,
     instructions: &mut InstructionSequence,
     mapping: &mut InstructionSourceMapping,
     line_numbers: &mut LocalLineNumberTable,
@@ -519,7 +550,7 @@ pub(crate) fn run_source(
     source_id: SourceId,
     context: SourceExecutionContext<'_>,
 ) -> Result<SourceRunResult, SourceProcessorError> {
-    let unit = compile_source(view, source_id, context.compile())?;
+    let unit = compile_source(view, source_id, context.compile_context())?;
     run_unit(&unit, context)
 }
 
@@ -569,7 +600,7 @@ fn map_runtime_error(
 fn compile_word_reference(
     view: SourceView<'_>,
     token: Token,
-    context: SourceCompileContext<'_>,
+    context: &SourceCompileContext<'_>,
 ) -> Result<crate::word::WordId, SourceProcessorError> {
     let source_name = view.slice(token.span())?;
     resolve_word_name(context.bindings(), source_name)
@@ -704,6 +735,7 @@ fn is_statement_line_number_candidate(
     token: Token,
     rest: &[Token],
     referenced_line_numbers: &HashSet<LocalLineNumber>,
+    bindings: &Bindings,
 ) -> Result<bool, SourceProcessorError> {
     let Some(next) = rest.first().copied() else {
         return Ok(false);
@@ -712,6 +744,13 @@ fn is_statement_line_number_candidate(
         return Ok(false);
     }
     if is_bif_keyword(view, next)? {
+        return Ok(true);
+    }
+    let next_source = view.slice(next.span())?;
+    if matches!(
+        resolve_binding_name(bindings, next_source),
+        Ok(ResolvedBinding::SourceWord(_))
+    ) {
         return Ok(true);
     }
 
@@ -961,17 +1000,19 @@ impl TemporaryExecutionUnit {
 impl<'a> SourceCompileContext<'a> {
     pub(crate) const fn new(bindings: &'a Bindings) -> Self {
         Self {
-            bindings,
+            bindings: BindingAccess::Read(bindings),
             operators: None,
             source_words: None,
+            globals: None,
         }
     }
 
     pub(crate) const fn with_operators(bindings: &'a Bindings, operators: OperatorLookup) -> Self {
         Self {
-            bindings,
+            bindings: BindingAccess::Read(bindings),
             operators: Some(operators),
             source_words: None,
+            globals: None,
         }
     }
 
@@ -980,9 +1021,10 @@ impl<'a> SourceCompileContext<'a> {
         source_words: SourceWordLookup<'a>,
     ) -> Self {
         Self {
-            bindings,
+            bindings: BindingAccess::Read(bindings),
             operators: None,
             source_words: Some(source_words),
+            globals: None,
         }
     }
 
@@ -992,22 +1034,49 @@ impl<'a> SourceCompileContext<'a> {
         operators: OperatorLookup,
     ) -> Self {
         Self {
-            bindings,
+            bindings: BindingAccess::Read(bindings),
             operators: Some(operators),
             source_words: Some(source_words),
+            globals: None,
         }
     }
 
-    pub(crate) const fn bindings(self) -> &'a Bindings {
-        self.bindings
+    pub(crate) fn with_source_word_publication(
+        bindings: &'a mut Bindings,
+        source_words: SourceWordLookup<'a>,
+        globals: &'a mut GlobalVariables,
+    ) -> Self {
+        Self {
+            bindings: BindingAccess::Write(bindings),
+            operators: None,
+            source_words: Some(source_words),
+            globals: Some(globals),
+        }
     }
 
-    pub(crate) const fn operators(self) -> Option<OperatorLookup> {
+    pub(crate) fn bindings(&self) -> &Bindings {
+        match &self.bindings {
+            BindingAccess::Read(bindings) => bindings,
+            BindingAccess::Write(bindings) => bindings,
+        }
+    }
+
+    pub(crate) const fn operators(&self) -> Option<OperatorLookup> {
         self.operators
     }
 
-    pub(crate) const fn source_words(self) -> Option<SourceWordLookup<'a>> {
+    pub(crate) const fn source_words(&self) -> Option<SourceWordLookup<'a>> {
         self.source_words
+    }
+
+    fn publication_context(&mut self) -> Option<(&mut Bindings, &mut GlobalVariables)> {
+        let globals = self.globals.as_deref_mut()?;
+        let bindings = match &mut self.bindings {
+            BindingAccess::Read(_) => return None,
+            BindingAccess::Write(bindings) => &mut **bindings,
+        };
+
+        Some((bindings, globals))
     }
 }
 
@@ -1018,7 +1087,9 @@ impl<'a> SourceExecutionContext<'a> {
         primitives: PrimitiveLookup<'a>,
     ) -> Self {
         Self {
-            compile: SourceCompileContext::new(bindings),
+            bindings,
+            operators: None,
+            source_words: None,
             code_spaces: &[],
             source_mappings: &[],
             words,
@@ -1033,7 +1104,9 @@ impl<'a> SourceExecutionContext<'a> {
         primitives: PrimitiveLookup<'a>,
     ) -> Self {
         Self {
-            compile: SourceCompileContext::with_operators(bindings, operators),
+            bindings,
+            operators: Some(operators),
+            source_words: None,
             code_spaces: &[],
             source_mappings: &[],
             words,
@@ -1048,7 +1121,9 @@ impl<'a> SourceExecutionContext<'a> {
         primitives: PrimitiveLookup<'a>,
     ) -> Self {
         Self {
-            compile: SourceCompileContext::with_source_words(bindings, source_words),
+            bindings,
+            operators: None,
+            source_words: Some(source_words),
             code_spaces: &[],
             source_mappings: &[],
             words,
@@ -1064,11 +1139,9 @@ impl<'a> SourceExecutionContext<'a> {
         primitives: PrimitiveLookup<'a>,
     ) -> Self {
         Self {
-            compile: SourceCompileContext::with_source_words_and_operators(
-                bindings,
-                source_words,
-                operators,
-            ),
+            bindings,
+            operators: Some(operators),
+            source_words: Some(source_words),
             code_spaces: &[],
             source_mappings: &[],
             words,
@@ -1083,7 +1156,9 @@ impl<'a> SourceExecutionContext<'a> {
         primitives: PrimitiveLookup<'a>,
     ) -> Self {
         Self {
-            compile: SourceCompileContext::new(bindings),
+            bindings,
+            operators: None,
+            source_words: None,
             code_spaces,
             source_mappings: &[],
             words,
@@ -1099,7 +1174,9 @@ impl<'a> SourceExecutionContext<'a> {
         primitives: PrimitiveLookup<'a>,
     ) -> Self {
         Self {
-            compile: SourceCompileContext::with_operators(bindings, operators),
+            bindings,
+            operators: Some(operators),
+            source_words: None,
             code_spaces,
             source_mappings: &[],
             words,
@@ -1115,7 +1192,9 @@ impl<'a> SourceExecutionContext<'a> {
         primitives: PrimitiveLookup<'a>,
     ) -> Self {
         Self {
-            compile: SourceCompileContext::new(bindings),
+            bindings,
+            operators: None,
+            source_words: None,
             code_spaces,
             source_mappings,
             words,
@@ -1123,8 +1202,13 @@ impl<'a> SourceExecutionContext<'a> {
         }
     }
 
-    pub(crate) const fn compile(self) -> SourceCompileContext<'a> {
-        self.compile
+    fn compile_context(&self) -> SourceCompileContext<'_> {
+        SourceCompileContext {
+            bindings: BindingAccess::Read(self.bindings),
+            operators: self.operators,
+            source_words: self.source_words,
+            globals: None,
+        }
     }
 
     pub(crate) const fn code_spaces(self) -> &'a [InstructionView<'a>] {
@@ -1197,7 +1281,11 @@ impl CompileError {
 mod tests {
     use super::*;
     use crate::binding::{Binding, Bindings};
-    use crate::bootstrap::{register_native_source_word, register_primitive};
+    use crate::bootstrap::{
+        register_builtin_global_variables, register_builtin_source_words,
+        register_native_source_word, register_primitive,
+    };
+    use crate::global_variable::GlobalVariables;
     use crate::lexer::InvalidCharacterReason;
     use crate::name::NormalizedName;
     use crate::operator::{register_operator_primitives, OperatorSemantic, OperatorWords};
@@ -1205,7 +1293,7 @@ mod tests {
     use crate::redefinition::redefine_word;
     use crate::source::SourceTexts;
     use crate::source_mapping::{SourceMappingLookup, SourceMappingLookupError};
-    use crate::source_word::{NativeSourceWordContext, SourceWordRegistry};
+    use crate::source_word::{NativeSourceWordContext, SourceWordRegistry, VarSyntaxErrorKind};
     use crate::word::{CompletedWordDefinition, PrimitiveId, PublishedWords, WordId};
     use crate::word_lookup::PublishedWordLookup;
 
@@ -1332,6 +1420,46 @@ mod tests {
             .copied()
             .expect("source word handler should receive statement tokens");
         context.append_mapped(Instruction::Push(value(99)), first.span())
+    }
+
+    fn compile_with_var(
+        text: &str,
+        bindings: &mut Bindings,
+        globals: &mut GlobalVariables,
+        source_words: &SourceWordRegistry,
+    ) -> (SourceTexts, SourceId, TemporaryExecutionUnit) {
+        let (sources, id) = source(text);
+        let unit = compile_source(
+            sources.view(),
+            id,
+            SourceCompileContext::with_source_word_publication(
+                bindings,
+                source_words.lookup(),
+                globals,
+            ),
+        )
+        .expect("VAR source should compile");
+        (sources, id, unit)
+    }
+
+    fn compile_with_var_error(
+        text: &str,
+        bindings: &mut Bindings,
+        globals: &mut GlobalVariables,
+        source_words: &SourceWordRegistry,
+    ) -> (SourceTexts, SourceId, SourceProcessorError) {
+        let (sources, id) = source(text);
+        let error = compile_source(
+            sources.view(),
+            id,
+            SourceCompileContext::with_source_word_publication(
+                bindings,
+                source_words.lookup(),
+                globals,
+            ),
+        )
+        .expect_err("VAR source should fail");
+        (sources, id, error)
     }
 
     fn value(value: i16) -> Value {
@@ -2527,6 +2655,221 @@ mod tests {
                 },
             })
         );
+    }
+
+    #[test]
+    fn var_declares_global_variable_through_source_word_binding_without_runtime_instruction() {
+        let mut source_words = SourceWordRegistry::new();
+        let mut bindings = Bindings::new();
+        let mut globals = GlobalVariables::new();
+        let builtin = register_builtin_source_words(&mut source_words, &mut bindings)
+            .expect("built-in source words should bootstrap");
+
+        let (_sources, _id, unit) =
+            compile_with_var("VAR SCORE", &mut bindings, &mut globals, &source_words);
+
+        let Some(Binding::Variable(id)) = bindings.get(&name("score")).copied() else {
+            panic!("SCORE should be published as a variable");
+        };
+        assert_eq!(
+            bindings.get(&name("VAR")),
+            Some(&Binding::SourceWord(builtin.var()))
+        );
+        assert_eq!(globals.view().read(id), Ok(value(0)));
+        assert_eq!(globals.len(), 1);
+        assert_eq!(unit.len(), 1);
+        assert_eq!(unit.instructions().get(address(0)), Ok(&Instruction::Halt));
+    }
+
+    #[test]
+    fn var_uses_normalized_name_identity_for_mixed_case_declarations() {
+        let mut source_words = SourceWordRegistry::new();
+        let mut bindings = Bindings::new();
+        let mut globals = GlobalVariables::new();
+        register_builtin_source_words(&mut source_words, &mut bindings)
+            .expect("built-in source words should bootstrap");
+
+        compile_with_var("vAr Mixed_Case", &mut bindings, &mut globals, &source_words);
+
+        let binding = bindings
+            .get(&name("MIXED_CASE"))
+            .copied()
+            .expect("mixed-case declaration should publish");
+        assert_eq!(bindings.get(&name("mixed_case")), Some(&binding));
+        assert!(matches!(binding, Binding::Variable(_)));
+    }
+
+    #[test]
+    fn var_rejects_malformed_statements_with_primary_source_word_error_span() {
+        for source_text in ["VAR", "VAR 123", "VAR SCORE EXTRA"] {
+            let mut source_words = SourceWordRegistry::new();
+            let mut bindings = Bindings::new();
+            let mut globals = GlobalVariables::new();
+            register_builtin_source_words(&mut source_words, &mut bindings)
+                .expect("built-in source words should bootstrap");
+
+            let (sources, id, error) =
+                compile_with_var_error(source_text, &mut bindings, &mut globals, &source_words);
+
+            let expected = match source_text {
+                "VAR" => SourceWordError::VarSyntax {
+                    span: span(sources.view(), id, 0, 3),
+                    kind: VarSyntaxErrorKind::MissingName,
+                },
+                "VAR 123" => SourceWordError::VarSyntax {
+                    span: span(sources.view(), id, 4, 7),
+                    kind: VarSyntaxErrorKind::MissingName,
+                },
+                "VAR SCORE EXTRA" => SourceWordError::VarSyntax {
+                    span: span(sources.view(), id, 10, 15),
+                    kind: VarSyntaxErrorKind::TrailingToken {
+                        kind: TokenKind::Name,
+                    },
+                },
+                _ => unreachable!(),
+            };
+            assert_eq!(error, SourceProcessorError::SourceWord(expected));
+            assert_eq!(globals.len(), 0, "{source_text:?} should not allocate");
+            assert_eq!(bindings.get(&name("SCORE")), None);
+        }
+    }
+
+    #[test]
+    fn var_rejects_duplicate_and_cross_kind_name_collisions_at_declared_name_span() {
+        let mut source_words = SourceWordRegistry::new();
+        let mut bindings = Bindings::new();
+        let mut globals = GlobalVariables::new();
+        register_builtin_source_words(&mut source_words, &mut bindings)
+            .expect("built-in source words should bootstrap");
+        compile_with_var("VAR SCORE", &mut bindings, &mut globals, &source_words);
+
+        let (sources, id, error) =
+            compile_with_var_error("VAR score", &mut bindings, &mut globals, &source_words);
+
+        assert_eq!(
+            error,
+            SourceProcessorError::SourceWord(SourceWordError::VarNameConflict {
+                span: span(sources.view(), id, 4, 9)
+            })
+        );
+        assert_eq!(globals.len(), 1);
+
+        let mut words = PublishedWords::new();
+        let mut runtime_bindings = Bindings::new();
+        let mut runtime_globals = GlobalVariables::new();
+        let primitive = PrimitiveId::from_slot(90);
+        register_primitive(
+            &mut words,
+            &mut runtime_bindings,
+            name("RUNTIME"),
+            primitive,
+        )
+        .expect("runtime word should register");
+        register_builtin_source_words(&mut source_words, &mut runtime_bindings)
+            .expect("VAR should register after runtime word");
+        let (sources, id, error) = compile_with_var_error(
+            "VAR RUNTIME",
+            &mut runtime_bindings,
+            &mut runtime_globals,
+            &source_words,
+        );
+        assert_eq!(
+            error,
+            SourceProcessorError::SourceWord(SourceWordError::VarNameConflict {
+                span: span(sources.view(), id, 4, 11)
+            })
+        );
+        assert_eq!(runtime_globals.len(), 0);
+    }
+
+    #[test]
+    fn var_rejects_existing_source_word_and_builtin_variable_collisions_normally() {
+        let mut source_words = SourceWordRegistry::new();
+        let mut bindings = Bindings::new();
+        let mut globals = GlobalVariables::new();
+        register_builtin_source_words(&mut source_words, &mut bindings)
+            .expect("VAR source word should bootstrap");
+        register_builtin_global_variables(&mut globals, &mut bindings)
+            .expect("A-Z variables should bootstrap after VAR/LET");
+
+        for (source_text, start, end) in [("VAR VAR", 4, 7), ("VAR let", 4, 7), ("VAR A", 4, 5)] {
+            let (sources, id, error) =
+                compile_with_var_error(source_text, &mut bindings, &mut globals, &source_words);
+            assert_eq!(
+                error,
+                SourceProcessorError::SourceWord(SourceWordError::VarNameConflict {
+                    span: span(sources.view(), id, start, end)
+                }),
+                "{source_text:?} should be an ordinary binding collision"
+            );
+        }
+        assert!(bindings.get(&name("VAR")).is_some());
+        assert!(bindings.get(&name("LET")).is_some());
+        assert!(bindings.get(&name("A")).is_some());
+    }
+
+    #[test]
+    fn line_number_prefixed_var_is_rejected_before_publication() {
+        let mut source_words = SourceWordRegistry::new();
+        let mut bindings = Bindings::new();
+        let mut globals = GlobalVariables::new();
+        register_builtin_source_words(&mut source_words, &mut bindings)
+            .expect("VAR source word should bootstrap");
+
+        let (sources, id, error) =
+            compile_with_var_error("10 VAR SCORE", &mut bindings, &mut globals, &source_words);
+
+        assert_eq!(
+            error,
+            SourceProcessorError::SourceWord(SourceWordError::VarLocalLineNumberPrefix {
+                span: span(sources.view(), id, 0, 2)
+            })
+        );
+        assert_eq!(globals.len(), 0);
+        assert_eq!(bindings.get(&name("SCORE")), None);
+    }
+
+    #[test]
+    fn successful_var_commit_survives_later_statement_and_completed_lexical_failures() {
+        for source_text in ["VAR SCORE\nMISSING", "VAR SCORE\n@"] {
+            let mut source_words = SourceWordRegistry::new();
+            let mut bindings = Bindings::new();
+            let mut globals = GlobalVariables::new();
+            register_builtin_source_words(&mut source_words, &mut bindings)
+                .expect("VAR source word should bootstrap");
+
+            let (_sources, _id, error) =
+                compile_with_var_error(source_text, &mut bindings, &mut globals, &source_words);
+
+            assert!(
+                matches!(
+                    error,
+                    SourceProcessorError::Compile(_) | SourceProcessorError::Lex(_)
+                ),
+                "{source_text:?} should fail after the completed VAR statement"
+            );
+            assert!(matches!(
+                bindings.get(&name("SCORE")),
+                Some(Binding::Variable(_))
+            ));
+            assert_eq!(globals.len(), 1);
+        }
+    }
+
+    #[test]
+    fn same_statement_lexical_failure_does_not_commit_var() {
+        let mut source_words = SourceWordRegistry::new();
+        let mut bindings = Bindings::new();
+        let mut globals = GlobalVariables::new();
+        register_builtin_source_words(&mut source_words, &mut bindings)
+            .expect("VAR source word should bootstrap");
+
+        let (_sources, _id, error) =
+            compile_with_var_error("VAR SCORE @", &mut bindings, &mut globals, &source_words);
+
+        assert!(matches!(error, SourceProcessorError::Lex(_)));
+        assert_eq!(bindings.get(&name("SCORE")), None);
+        assert_eq!(globals.len(), 0);
     }
 
     #[test]
