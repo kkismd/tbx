@@ -2,6 +2,7 @@ use std::collections::HashMap;
 
 use crate::global_variable::GlobalVarId;
 use crate::name::NormalizedName;
+use crate::source_word::SourceWordId;
 use crate::word::WordId;
 
 /// Current published binding for one normalized TBX Next name.
@@ -12,6 +13,7 @@ use crate::word::WordId;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Binding {
     Word(WordId),
+    SourceWord(SourceWordId),
     Variable(GlobalVarId),
 }
 
@@ -66,7 +68,9 @@ impl Bindings {
     ) -> Result<WordId, BindingReplaceError> {
         match self.entries.get(name) {
             Some(Binding::Word(id)) => Ok(*id),
-            Some(Binding::Variable(_)) => Err(BindingReplaceError::TargetIsNotWord),
+            Some(Binding::SourceWord(_) | Binding::Variable(_)) => {
+                Err(BindingReplaceError::TargetIsNotWord)
+            }
             None => Err(BindingReplaceError::MissingName),
         }
     }
@@ -85,7 +89,9 @@ impl Bindings {
             Some(Binding::Word(actual)) => {
                 Err(BindingReplaceError::CurrentWordMismatch { actual: *actual })
             }
-            Some(Binding::Variable(_)) => Err(BindingReplaceError::TargetIsNotWord),
+            Some(Binding::SourceWord(_) | Binding::Variable(_)) => {
+                Err(BindingReplaceError::TargetIsNotWord)
+            }
             None => Err(BindingReplaceError::MissingName),
         }
     }
@@ -103,6 +109,7 @@ impl Bindings {
 mod tests {
     use super::*;
     use crate::global_variable::GlobalVariables;
+    use crate::source_word::SourceWordRegistry;
     use crate::word::{CompletedWordDefinition, PrimitiveId, PublishedWords};
 
     fn name(input: &str) -> NormalizedName {
@@ -121,6 +128,16 @@ mod tests {
 
     fn variable_binding(globals: &mut GlobalVariables) -> Binding {
         Binding::Variable(globals.allocate())
+    }
+
+    fn source_word_binding(source_words: &mut SourceWordRegistry) -> Binding {
+        fn handler(
+            _context: &mut crate::source_word::NativeSourceWordContext<'_>,
+        ) -> Result<(), crate::source_word::SourceWordError> {
+            Ok(())
+        }
+
+        Binding::SourceWord(source_words.register(handler))
     }
 
     #[test]
@@ -181,8 +198,22 @@ mod tests {
             .expect("binding should exist")
         {
             Binding::Word(actual_id) => assert_eq!(*actual_id, id),
-            Binding::Variable(_) => panic!("word binding should preserve kind"),
+            Binding::SourceWord(_) | Binding::Variable(_) => {
+                panic!("word binding should preserve kind")
+            }
         }
+    }
+
+    #[test]
+    fn source_word_binding_registers_and_looks_up_in_the_same_namespace() {
+        let mut source_words = SourceWordRegistry::new();
+        let binding = source_word_binding(&mut source_words);
+        let mut bindings = Bindings::new();
+
+        assert_eq!(bindings.insert_new(name("SOURCE_ONLY"), binding), Ok(()));
+
+        assert_eq!(bindings.get(&name("source_only")), Some(&binding));
+        assert_eq!(bindings.len(), 1);
     }
 
     #[test]
