@@ -83,6 +83,7 @@ pub(crate) struct CompileError {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum CompileErrorKind {
     UnsupportedToken { kind: TokenKind },
+    BareExpression,
     BifSyntax { source: BifSyntaxErrorKind },
     IntegerLiteralOutOfRange,
     IntegerLiteralConversion,
@@ -322,21 +323,15 @@ fn compile_statement_body(
         return Ok(());
     }
 
-    if source_requires_expression(tokens) {
-        let Some(operators) = context.operators() else {
-            let token = first_expression_syntax_token(tokens)
-                .expect("expression input should contain expression syntax");
-            return Err(CompileError {
-                span: token.span(),
-                kind: CompileErrorKind::UnsupportedToken { kind: token.kind() },
-            }
-            .into());
-        };
-
-        compile_expression_tokens(view, source_id, tokens, operators, instructions, mapping)
-    } else {
-        compile_simple_tokens(view, tokens, context, instructions, mapping)
+    if contains_expression_syntax(tokens) {
+        return Err(CompileError {
+            span: first.span(),
+            kind: CompileErrorKind::BareExpression,
+        }
+        .into());
     }
+
+    compile_simple_tokens(view, tokens, context, instructions, mapping)
 }
 
 fn compile_statement_leading_source_word(
@@ -671,17 +666,10 @@ fn parse_unsigned_i16(source: &str, span: SourceSpan) -> Result<i16, CompileErro
     })
 }
 
-fn source_requires_expression(tokens: &[Token]) -> bool {
+fn contains_expression_syntax(tokens: &[Token]) -> bool {
     tokens
         .iter()
         .any(|token| is_expression_syntax_token(token.kind()))
-}
-
-fn first_expression_syntax_token(tokens: &[Token]) -> Option<Token> {
-    tokens
-        .iter()
-        .copied()
-        .find(|token| is_expression_syntax_token(token.kind()))
 }
 
 const fn is_expression_syntax_token(kind: TokenKind) -> bool {
@@ -1250,21 +1238,6 @@ mod tests {
         (sources, id, unit)
     }
 
-    fn compile_expression(
-        text: &str,
-        operators: OperatorWords,
-    ) -> (SourceTexts, SourceId, TemporaryExecutionUnit) {
-        let (sources, id) = source(text);
-        let bindings = Bindings::new();
-        let unit = compile_source(
-            sources.view(),
-            id,
-            SourceCompileContext::with_operators(&bindings, operators.lookup()),
-        )
-        .expect("expression source should compile");
-        (sources, id, unit)
-    }
-
     fn compile_with_bindings_and_operators(
         text: &str,
         bindings: &Bindings,
@@ -1298,26 +1271,6 @@ mod tests {
         (sources, id, result)
     }
 
-    fn run_expression(text: &str) -> (SourceTexts, SourceId, SourceRunResult) {
-        let (sources, id) = source(text);
-        let mut words = PublishedWords::new();
-        let bindings = Bindings::new();
-        let mut primitives = PrimitiveRegistry::new();
-        let operators = register_operator_primitives(&mut primitives, &mut words);
-        let result = run_source(
-            sources.view(),
-            id,
-            SourceExecutionContext::with_operators(
-                &bindings,
-                operators.lookup(),
-                PublishedWordLookup::new(&words),
-                primitives.lookup(),
-            ),
-        )
-        .expect("expression source should run");
-        (sources, id, result)
-    }
-
     fn compile_error(text: &str) -> (SourceTexts, SourceId, SourceProcessorError) {
         let (sources, id) = source(text);
         let bindings = Bindings::new();
@@ -1331,21 +1284,6 @@ mod tests {
         let segmented =
             SegmentedSource::collect(sources.view(), id).expect("source should segment");
         (sources, id, segmented)
-    }
-
-    fn compile_expression_error(text: &str) -> (SourceTexts, SourceId, SourceProcessorError) {
-        let (sources, id) = source(text);
-        let mut words = PublishedWords::new();
-        let bindings = Bindings::new();
-        let mut primitives = PrimitiveRegistry::new();
-        let operators = register_operator_primitives(&mut primitives, &mut words);
-        let error = compile_source(
-            sources.view(),
-            id,
-            SourceCompileContext::with_operators(&bindings, operators.lookup()),
-        )
-        .expect_err("expression source should fail");
-        (sources, id, error)
     }
 
     fn compile_with_operators_error(text: &str) -> (SourceTexts, SourceId, SourceProcessorError) {
@@ -1697,20 +1635,108 @@ mod tests {
     }
 
     #[test]
-    fn expression_precedence_runs_through_source_processor() {
-        let (_sources, _id, result) = run_expression("1 + 2 * 3");
+    fn top_level_bare_expression_is_rejected_before_expression_parsing() {
+        let cases = [
+            ("1 + 2 * 3", 0, 1),
+            ("(1 + 2)", 0, 1),
+            ("1 < 2", 0, 1),
+            ("-1", 0, 1),
+        ];
 
-        assert_eq!(result.outcome(), RunOutcome::Halted);
-        assert_eq!(result.data_stack(), [value(7)]);
-        assert_eq!(result.instruction_count(), 6);
+        for (source, start, end) in cases {
+            let (sources, id, error) = compile_with_operators_error(source);
+            assert_eq!(
+                error,
+                SourceProcessorError::Compile(CompileError {
+                    span: span(sources.view(), id, start, end),
+                    kind: CompileErrorKind::BareExpression,
+                }),
+                "{source:?} should not compile as a top-level statement"
+            );
+        }
     }
 
     #[test]
-    fn expression_parenthesis_unary_and_comparison_run_through_source_processor() {
-        let (_sources, _id, result) = run_expression("-(1 + 2) < -2");
+    fn unresolved_and_variable_leading_expression_inputs_are_not_rescued() {
+        let mut globals = crate::global_variable::GlobalVariables::new();
+        let variable = globals.allocate();
+        let mut bindings = Bindings::new();
+        bindings
+            .insert_new(name("A"), Binding::Variable(variable))
+            .expect("variable should register");
+
+        let cases = [("MISSING + 1", 0, 7), ("A + 1", 0, 1)];
+
+        for (input, start, end) in cases {
+            let (sources, id) = source(input);
+            let mut words = PublishedWords::new();
+            let mut primitives = PrimitiveRegistry::new();
+            let operators = register_operator_primitives(&mut primitives, &mut words);
+            let error = compile_source(
+                sources.view(),
+                id,
+                SourceCompileContext::with_operators(&bindings, operators.lookup()),
+            )
+            .expect_err("name-leading bare expression should fail");
+
+            assert_eq!(
+                error,
+                SourceProcessorError::Compile(CompileError {
+                    span: span(sources.view(), id, start, end),
+                    kind: CompileErrorKind::BareExpression,
+                }),
+                "{input:?} should not be rescued as a top-level expression"
+            );
+        }
+    }
+
+    #[test]
+    fn local_line_number_prefixed_bare_expression_is_rejected() {
+        let mut words = PublishedWords::new();
+        let mut bindings = Bindings::new();
+        let mut primitives = PrimitiveRegistry::new();
+        let operators = register_operator_primitives(&mut primitives, &mut words);
+        let push7_id = primitives.register(push_7);
+        register_primitive(&mut words, &mut bindings, name("PUSH7"), push7_id)
+            .expect("primitive should register");
+
+        let (sources, id) = source("100 MISSING + 2\nBIF 1, 100");
+        let error = compile_source(
+            sources.view(),
+            id,
+            SourceCompileContext::with_operators(&bindings, operators.lookup()),
+        )
+        .expect_err("line-number-prefixed bare expression should fail");
+
+        assert_eq!(
+            error,
+            SourceProcessorError::Compile(CompileError {
+                span: span(sources.view(), id, 4, 11),
+                kind: CompileErrorKind::BareExpression,
+            })
+        );
+    }
+
+    #[test]
+    fn local_line_number_prefixed_runtime_word_still_compiles() {
+        let mut words = PublishedWords::new();
+        let mut bindings = Bindings::new();
+        let mut primitives = PrimitiveRegistry::new();
+        let operators = register_operator_primitives(&mut primitives, &mut words);
+        let push7_id = primitives.register(push_7);
+        register_primitive(&mut words, &mut bindings, name("PUSH7"), push7_id)
+            .expect("primitive should register");
+
+        let (_sources, _id, result) = run_with_bindings_and_operators(
+            "100 PUSH7\nBIF 1, 100",
+            &bindings,
+            &words,
+            &primitives,
+            operators.lookup(),
+        );
 
         assert_eq!(result.outcome(), RunOutcome::Halted);
-        assert_eq!(result.data_stack(), [value(1)]);
+        assert_eq!(result.data_stack(), [value(7)]);
     }
 
     #[test]
@@ -1802,7 +1828,7 @@ mod tests {
     }
 
     #[test]
-    fn bif_line_number_context_does_not_steal_expression_integers() {
+    fn bif_line_number_context_does_not_steal_plain_integer_statements() {
         let mut words = PublishedWords::new();
         let mut bindings = Bindings::new();
         let mut primitives = PrimitiveRegistry::new();
@@ -1812,7 +1838,7 @@ mod tests {
             .expect("primitive should register");
 
         let (_sources, _id, result) = run_with_bindings_and_operators(
-            "1 + 2\n100 BIF 1, 200\n200 push7",
+            "1\n100 BIF 1, 200\n200 push7",
             &bindings,
             &words,
             &primitives,
@@ -1820,7 +1846,7 @@ mod tests {
         );
 
         assert_eq!(result.outcome(), RunOutcome::Halted);
-        assert_eq!(result.data_stack(), [value(3), value(7)]);
+        assert_eq!(result.data_stack(), [value(1), value(7)]);
     }
 
     #[test]
@@ -1846,9 +1872,19 @@ mod tests {
     }
 
     #[test]
-    fn expression_operator_calls_map_to_operator_source_spans() {
+    fn bif_expression_operator_calls_map_to_operator_source_spans() {
         let (_words, _primitives, operators) = operator_fixture();
-        let (sources, id, unit) = compile_expression("1 + 2 * 3", operators);
+        let mut words = PublishedWords::new();
+        let mut bindings = Bindings::new();
+        let push7_id = words.add(completed_primitive(0));
+        bindings
+            .insert_new(name("PUSH7"), Binding::Word(push7_id))
+            .expect("primitive word should register");
+        let (sources, id, unit) = compile_with_bindings_and_operators(
+            "BIF 1 + 2 * 3, 100\n100 PUSH7",
+            &bindings,
+            operators.lookup(),
+        );
         let view = sources.view();
 
         assert_eq!(
@@ -1865,21 +1901,24 @@ mod tests {
         );
         assert_eq!(
             unit.source_span(location(&unit, 3)),
-            Ok(Some(span(view, id, 6, 7)))
+            Ok(Some(span(view, id, 10, 11)))
         );
         assert_eq!(
             unit.source_span(location(&unit, 4)),
-            Ok(Some(span(view, id, 2, 3)))
+            Ok(Some(span(view, id, 6, 7)))
         );
     }
 
     #[test]
-    fn expression_arithmetic_failure_maps_runtime_error_to_operator_span() {
-        let (sources, id) = source("1 / 0");
+    fn bif_expression_arithmetic_failure_maps_runtime_error_to_operator_span() {
+        let (sources, id) = source("BIF 1 / 0, 100\n100 PUSH7");
         let mut words = PublishedWords::new();
-        let bindings = Bindings::new();
+        let mut bindings = Bindings::new();
         let mut primitives = PrimitiveRegistry::new();
         let operators = register_operator_primitives(&mut primitives, &mut words);
+        let push7_id = primitives.register(push_7);
+        register_primitive(&mut words, &mut bindings, name("PUSH7"), push7_id)
+            .expect("primitive should register");
 
         let error = run_source(
             sources.view(),
@@ -1898,19 +1937,19 @@ mod tests {
         };
         assert_eq!(
             error.source_span(),
-            Ok(Some(span(sources.view(), id, 2, 3)))
+            Ok(Some(span(sources.view(), id, 6, 7)))
         );
         assert_eq!(error.vm().address(), address(2));
     }
 
     #[test]
-    fn malformed_expression_is_span_compile_error_without_runtime_start() {
-        let (sources, id, error) = compile_expression_error("1 +");
+    fn malformed_bif_expression_is_span_compile_error_without_runtime_start() {
+        let (sources, id, error) = compile_with_operators_error("BIF 1 +, 100\n100");
 
         assert_eq!(
             error,
             SourceProcessorError::Compile(CompileError {
-                span: span(sources.view(), id, 3, 3),
+                span: span(sources.view(), id, 7, 7),
                 kind: CompileErrorKind::Expression {
                     source: ExpressionSyntaxErrorKind::MissingOperand,
                 },
@@ -2084,9 +2123,7 @@ mod tests {
             minus_error,
             SourceProcessorError::Compile(CompileError {
                 span: span(sources.view(), id, 0, 1),
-                kind: CompileErrorKind::UnsupportedToken {
-                    kind: TokenKind::Minus
-                },
+                kind: CompileErrorKind::BareExpression,
             })
         );
     }
