@@ -1534,11 +1534,7 @@ mod tests {
     fn emit_source_word_marker(
         context: &mut NativeSourceWordContext<'_, '_>,
     ) -> Result<(), SourceWordError> {
-        let first = context
-            .tokens()
-            .first()
-            .copied()
-            .expect("source word handler should receive statement tokens");
+        let first = context.source_word_token();
         context.append_mapped(Instruction::Push(value(99)), first.span())
     }
 
