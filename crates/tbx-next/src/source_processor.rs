@@ -2427,6 +2427,102 @@ mod tests {
     }
 
     #[test]
+    fn source_to_vm_e2e_successful_var_survives_later_statement_failure() {
+        let (_words, _primitives, operators, source_words, mut bindings, mut globals, _variables) =
+            global_source_fixture();
+        let original_globals_len = globals.len();
+        let (sources, id) = source("VAR SCORE\nLET A = MISSING + 1");
+
+        let error = compile_source(
+            sources.view(),
+            id,
+            SourceCompileContext::with_source_word_publication_and_operators(
+                &mut bindings,
+                source_words.lookup(),
+                operators.lookup(),
+                &mut globals,
+            ),
+        )
+        .expect_err("later LET RHS failure should fail the source");
+
+        let SourceProcessorError::SourceWord(SourceWordError::Expression {
+            source: ExpressionError::Variable(error),
+        }) = error
+        else {
+            panic!("expected later LET RHS variable error");
+        };
+        assert_eq!(error.span(), span(sources.view(), id, 18, 25));
+        assert_eq!(error.kind(), ExpressionVariableErrorKind::UndefinedName);
+        let Some(Binding::Variable(score)) = bindings.get(&name("SCORE")).copied() else {
+            panic!("completed VAR should remain published after later failure");
+        };
+        assert_eq!(globals.len(), original_globals_len + 1);
+        assert_eq!(globals.view().read(score), Ok(value(0)));
+    }
+
+    #[test]
+    fn source_to_vm_e2e_failed_var_does_not_publish_binding_or_storage() {
+        for source_text in ["VAR SCORE EXTRA", "VAR A"] {
+            let (
+                _words,
+                _primitives,
+                operators,
+                source_words,
+                mut bindings,
+                mut globals,
+                _variables,
+            ) = global_source_fixture();
+            let original_globals_len = globals.len();
+            let (sources, id) = source(source_text);
+
+            let error = compile_source(
+                sources.view(),
+                id,
+                SourceCompileContext::with_source_word_publication_and_operators(
+                    &mut bindings,
+                    source_words.lookup(),
+                    operators.lookup(),
+                    &mut globals,
+                ),
+            )
+            .expect_err("failed VAR statement should reject the source");
+
+            match source_text {
+                "VAR SCORE EXTRA" => {
+                    assert_eq!(
+                        error,
+                        SourceProcessorError::SourceWord(SourceWordError::VarSyntax {
+                            span: span(sources.view(), id, 10, 15),
+                            kind: VarSyntaxErrorKind::TrailingToken {
+                                kind: TokenKind::Name,
+                            },
+                        })
+                    );
+                    assert_eq!(bindings.get(&name("SCORE")), None);
+                }
+                "VAR A" => {
+                    assert_eq!(
+                        error,
+                        SourceProcessorError::SourceWord(SourceWordError::VarNameConflict {
+                            span: span(sources.view(), id, 4, 5),
+                        })
+                    );
+                    assert!(matches!(
+                        bindings.get(&name("A")),
+                        Some(Binding::Variable(_))
+                    ));
+                }
+                _ => unreachable!(),
+            }
+            assert_eq!(
+                globals.len(),
+                original_globals_len,
+                "{source_text:?} should not allocate storage"
+            );
+        }
+    }
+
+    #[test]
     fn source_to_vm_e2e_reuses_global_storage_across_fresh_executions_only() {
         let (
             mut words,
