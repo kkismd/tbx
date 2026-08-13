@@ -132,7 +132,7 @@ mod tests {
 
     fn source_word_binding(source_words: &mut SourceWordRegistry) -> Binding {
         fn handler(
-            _context: &mut crate::source_word::NativeSourceWordContext<'_>,
+            _context: &mut crate::source_word::NativeSourceWordContext<'_, '_>,
         ) -> Result<(), crate::source_word::SourceWordError> {
             Ok(())
         }

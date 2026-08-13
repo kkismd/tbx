@@ -117,7 +117,7 @@ mod tests {
     }
 
     fn source_handler(
-        _context: &mut crate::source_word::NativeSourceWordContext<'_>,
+        _context: &mut crate::source_word::NativeSourceWordContext<'_, '_>,
     ) -> Result<(), crate::source_word::SourceWordError> {
         Ok(())
     }
