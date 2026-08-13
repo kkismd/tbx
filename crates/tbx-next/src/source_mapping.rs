@@ -1,5 +1,19 @@
-use crate::instruction::{CodeLocation, CodeSpaceId, InstructionAddress, InstructionAddressError};
+use crate::instruction::{
+    BranchTargetPatchError, CodeLocation, CodeSpaceId, Instruction, InstructionAddress,
+    InstructionAddressError, InstructionSequence, InstructionView,
+};
 use crate::source::SourceSpan;
+
+/// Crate-internal owner for executable instructions and their source mapping.
+///
+/// #1461 requires ordinary codegen to decide `Instruction + Option<SourceSpan>`
+/// together and commit both in the same local address order. Backpatching is
+/// intentionally limited to instruction operands and never rewrites origins.
+#[derive(Debug)]
+pub(crate) struct SourceMappedCode {
+    instructions: InstructionSequence,
+    mapping: InstructionSourceMapping,
+}
 
 /// Owner for source spans keyed by one instruction sequence's code space.
 ///
@@ -79,6 +93,79 @@ impl InstructionSourceMapping {
 
         self.spans.push(span);
         Ok(())
+    }
+}
+
+impl SourceMappedCode {
+    pub(crate) fn new() -> Self {
+        let instructions = InstructionSequence::new();
+        let mapping = InstructionSourceMapping::new(instructions.code_space());
+        Self {
+            instructions,
+            mapping,
+        }
+    }
+
+    pub(crate) fn append_mapped(
+        &mut self,
+        instruction: Instruction,
+        span: SourceSpan,
+    ) -> Result<InstructionAddress, SourceMappingAppendError> {
+        self.append(instruction, Some(span))
+    }
+
+    pub(crate) fn append_unmapped(
+        &mut self,
+        instruction: Instruction,
+    ) -> Result<InstructionAddress, SourceMappingAppendError> {
+        self.append(instruction, None)
+    }
+
+    pub(crate) fn patch_branch_target(
+        &mut self,
+        branch: InstructionAddress,
+        target: InstructionAddress,
+    ) -> Result<(), BranchTargetPatchError> {
+        self.instructions.patch_branch_target(branch, target)
+    }
+
+    pub(crate) fn validate_address(
+        &self,
+        address: InstructionAddress,
+    ) -> Result<InstructionAddress, InstructionAddressError> {
+        self.instructions.view().validate_address(address)
+    }
+
+    pub(crate) fn instruction_view(&self) -> InstructionView<'_> {
+        self.instructions.view()
+    }
+
+    pub(crate) fn source_mapping(&self) -> InstructionSourceMappingView<'_> {
+        self.mapping.view()
+    }
+
+    pub(crate) const fn code_space(&self) -> CodeSpaceId {
+        self.instructions.code_space()
+    }
+
+    pub(crate) fn len(&self) -> usize {
+        self.instructions.len()
+    }
+
+    fn append(
+        &mut self,
+        instruction: Instruction,
+        span: Option<SourceSpan>,
+    ) -> Result<InstructionAddress, SourceMappingAppendError> {
+        let address = self.instructions.append(instruction);
+        self.mapping.append(address, span)?;
+        Ok(address)
+    }
+}
+
+impl Default for SourceMappedCode {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -196,6 +283,60 @@ mod tests {
 
     fn address(index: usize) -> InstructionAddress {
         InstructionAddress::from_index(index)
+    }
+
+    #[test]
+    fn source_mapped_code_appends_instruction_and_origin_at_same_address() {
+        let (sources, source_id) = source("10 20");
+        let mut code = SourceMappedCode::new();
+        let first_span = span(sources.view(), source_id, 0, 2);
+        let first = code
+            .append_mapped(Instruction::Halt, first_span)
+            .expect("mapped instruction should append");
+        let second = code
+            .append_unmapped(Instruction::Return)
+            .expect("unmapped instruction should append");
+
+        assert_eq!(first, address(0));
+        assert_eq!(second, address(1));
+        assert_eq!(code.len(), code.source_mapping().len());
+        assert_eq!(code.instruction_view().get(first), Ok(&Instruction::Halt));
+        assert_eq!(
+            code.source_mapping()
+                .source_span(code.instruction_view().location(first)),
+            Ok(Some(first_span))
+        );
+        assert_eq!(
+            code.source_mapping()
+                .source_span(code.instruction_view().location(second)),
+            Ok(None)
+        );
+    }
+
+    #[test]
+    fn source_mapped_code_backpatch_keeps_existing_origin() {
+        let (sources, source_id) = source("BIF 0, 20\n20");
+        let branch_span = span(sources.view(), source_id, 0, 3);
+        let mut code = SourceMappedCode::new();
+        let branch = code
+            .append_mapped(Instruction::JumpIfZero(address(0)), branch_span)
+            .expect("branch should append");
+        let target = code
+            .append_unmapped(Instruction::Halt)
+            .expect("target should append");
+        let branch_location = code.instruction_view().location(branch);
+
+        code.patch_branch_target(branch, target)
+            .expect("branch target should patch");
+
+        assert_eq!(
+            code.instruction_view().get(branch),
+            Ok(&Instruction::JumpIfZero(target))
+        );
+        assert_eq!(
+            code.source_mapping().source_span(branch_location),
+            Ok(Some(branch_span))
+        );
     }
 
     #[test]

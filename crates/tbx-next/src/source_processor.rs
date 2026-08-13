@@ -5,7 +5,7 @@ use crate::expression::{
 use crate::global_variable::{GlobalVariableView, GlobalVariables};
 use crate::instruction::{
     CodeLocation, CodeSpaceLookup, CodeSpaceLookupError, Instruction, InstructionAddress,
-    InstructionSequence, InstructionView,
+    InstructionView,
 };
 use crate::lexer::{LexError, Lexer, Token, TokenKind};
 use crate::line_number::{LineNumberError, LocalLineNumber, LocalLineNumberTable};
@@ -13,8 +13,8 @@ use crate::operator::OperatorLookup;
 use crate::primitive::PrimitiveLookup;
 use crate::source::{SourceError, SourceId, SourceSpan, SourceView};
 use crate::source_mapping::{
-    InstructionSourceMapping, InstructionSourceMappingView, SourceMappingAppendError,
-    SourceMappingLookup, SourceMappingLookupError,
+    InstructionSourceMappingView, SourceMappedCode, SourceMappingAppendError, SourceMappingLookup,
+    SourceMappingLookupError,
 };
 use crate::source_word::{
     NativeSourceWordBindingAccess, NativeSourceWordContext, NativeSourceWordContextParts,
@@ -30,8 +30,7 @@ use std::collections::HashSet;
 
 #[derive(Debug)]
 pub(crate) struct TemporaryExecutionUnit {
-    instructions: InstructionSequence,
-    mapping: InstructionSourceMapping,
+    code: SourceMappedCode,
     entry: CodeLocation,
 }
 
@@ -124,8 +123,7 @@ pub(crate) enum BifSyntaxErrorKind {
 type OptionalLineNumberPrefix = Option<(LocalLineNumber, SourceSpan)>;
 
 struct StatementCompileState<'a> {
-    instructions: &'a mut InstructionSequence,
-    mapping: &'a mut InstructionSourceMapping,
+    code: &'a mut SourceMappedCode,
     line_numbers: &'a mut LocalLineNumberTable,
     referenced_line_numbers: &'a HashSet<LocalLineNumber>,
 }
@@ -185,37 +183,26 @@ pub(crate) fn compile_source(
 ) -> Result<TemporaryExecutionUnit, SourceProcessorError> {
     let segmented = SegmentedSource::collect(view, source_id)?;
 
-    let mut instructions = InstructionSequence::new();
-    let mut mapping = InstructionSourceMapping::new(instructions.code_space());
+    let mut code = SourceMappedCode::new();
 
     compile_statements(
         view,
         source_id,
         segmented.completed_statements(),
         context,
-        &mut instructions,
-        &mut mapping,
+        &mut code,
     )?;
 
     let eof = match segmented.terminal() {
         Terminal::Eof(eof) => eof,
         Terminal::LexError(error) => return Err(error.into()),
     };
-    append_mapped(
-        &mut instructions,
-        &mut mapping,
-        Instruction::Halt,
-        eof.span(),
-    )?;
+    code.append_mapped(Instruction::Halt, eof.span())?;
 
-    let entry = instructions
-        .view()
+    let entry = code
+        .instruction_view()
         .location(InstructionAddress::from_index(0));
-    Ok(TemporaryExecutionUnit {
-        instructions,
-        mapping,
-        entry,
-    })
+    Ok(TemporaryExecutionUnit { code, entry })
 }
 
 fn compile_statements(
@@ -223,8 +210,7 @@ fn compile_statements(
     source_id: SourceId,
     statements: &[LogicalStatement],
     mut context: SourceCompileContext<'_>,
-    instructions: &mut InstructionSequence,
-    mapping: &mut InstructionSourceMapping,
+    code: &mut SourceMappedCode,
 ) -> Result<(), SourceProcessorError> {
     let mut line_numbers = LocalLineNumberTable::new();
     // A leading integer remains an expression/literal unless this unit uses it
@@ -239,8 +225,7 @@ fn compile_statements(
             statement.tokens(),
             &mut context,
             &mut StatementCompileState {
-                instructions,
-                mapping,
+                code,
                 line_numbers: &mut line_numbers,
                 referenced_line_numbers: &referenced_line_numbers,
             },
@@ -248,7 +233,7 @@ fn compile_statements(
     }
 
     line_numbers
-        .resolve(instructions)
+        .resolve(code)
         .map_err(|source| line_number_compile_error(source).into())
 }
 
@@ -269,7 +254,7 @@ fn compile_statement(
         state.referenced_line_numbers,
         context.bindings(),
     )?;
-    let start = state.instructions.len();
+    let start = state.code.len();
     let local_line_number_prefix = line_number.map(|(_, span)| span);
     compile_statement_body(
         view,
@@ -284,7 +269,7 @@ fn compile_statement(
         let target = InstructionAddress::from_index(start);
         state
             .line_numbers
-            .define(state.instructions, line_number, target, span)
+            .define(state.code, line_number, target, span)
             .map_err(|source| line_number_compile_error(source).into())
     } else {
         Ok(())
@@ -335,8 +320,7 @@ fn compile_statement_body(
             source_id,
             tokens,
             context,
-            state.instructions,
-            state.mapping,
+            state.code,
             state.line_numbers,
         );
     }
@@ -347,8 +331,7 @@ fn compile_statement_body(
         tokens,
         context,
         local_line_number_prefix,
-        state.instructions,
-        state.mapping,
+        state.code,
     )? {
         return Ok(());
     }
@@ -361,7 +344,7 @@ fn compile_statement_body(
         .into());
     }
 
-    compile_simple_tokens(view, tokens, context, state.instructions, state.mapping)
+    compile_simple_tokens(view, tokens, context, state.code)
 }
 
 fn compile_statement_leading_source_word(
@@ -370,8 +353,7 @@ fn compile_statement_leading_source_word(
     tokens: &[Token],
     context: &mut SourceCompileContext<'_>,
     local_line_number_prefix: Option<SourceSpan>,
-    instructions: &mut InstructionSequence,
-    mapping: &mut InstructionSourceMapping,
+    code: &mut SourceMappedCode,
 ) -> Result<bool, SourceProcessorError> {
     let Some(first) = tokens.first().copied() else {
         return Ok(false);
@@ -410,8 +392,7 @@ fn compile_statement_leading_source_word(
         tokens,
         bindings: binding_access,
         operators,
-        instructions,
-        mapping,
+        code,
         local_line_number_prefix,
         globals,
     });
@@ -423,23 +404,17 @@ fn compile_simple_tokens(
     view: SourceView<'_>,
     tokens: &[Token],
     context: &SourceCompileContext<'_>,
-    instructions: &mut InstructionSequence,
-    mapping: &mut InstructionSourceMapping,
+    code: &mut SourceMappedCode,
 ) -> Result<(), SourceProcessorError> {
     for token in tokens {
         match token.kind() {
             TokenKind::IntegerLiteral => {
                 let value = compile_integer_literal(view, *token)?;
-                append_mapped(
-                    instructions,
-                    mapping,
-                    Instruction::Push(Value::integer(value)),
-                    token.span(),
-                )?;
+                code.append_mapped(Instruction::Push(Value::integer(value)), token.span())?;
             }
             TokenKind::Name => {
                 let id = compile_word_reference(view, *token, context)?;
-                append_mapped(instructions, mapping, Instruction::Call(id), token.span())?;
+                code.append_mapped(Instruction::Call(id), token.span())?;
             }
             TokenKind::LineBoundary | TokenKind::Eof => {}
             TokenKind::Plus
@@ -473,8 +448,7 @@ fn compile_bif(
     source_id: SourceId,
     tokens: &[Token],
     context: &SourceCompileContext<'_>,
-    instructions: &mut InstructionSequence,
-    mapping: &mut InstructionSourceMapping,
+    code: &mut SourceMappedCode,
     line_numbers: &mut LocalLineNumberTable,
 ) -> Result<(), SourceProcessorError> {
     let bif = tokens
@@ -501,8 +475,7 @@ fn compile_bif(
         &tokens[1..comma_index],
         context.bindings(),
         operators,
-        instructions,
-        mapping,
+        code,
     )?;
 
     let target_tokens = &tokens[comma_index + 1..];
@@ -527,9 +500,7 @@ fn compile_bif(
     }
 
     let line_number = compile_line_number_literal(view, target)?;
-    let branch = append_mapped(
-        instructions,
-        mapping,
+    let branch = code.append_mapped(
         Instruction::JumpIfZero(InstructionAddress::from_index(0)),
         bif.span(),
     )?;
@@ -543,8 +514,7 @@ fn compile_expression_tokens(
     tokens: &[Token],
     bindings: &Bindings,
     operators: OperatorLookup,
-    instructions: &mut InstructionSequence,
-    mapping: &mut InstructionSourceMapping,
+    code: &mut SourceMappedCode,
 ) -> Result<(), SourceProcessorError> {
     let mut expression_tokens = tokens
         .iter()
@@ -559,7 +529,7 @@ fn compile_expression_tokens(
     let resolver = |source_name: &str| resolve_variable_name(bindings, source_name);
     parse_expression(view, &expression_tokens, operators, &resolver)
         .map_err(SourceProcessorError::from_expression_error)?
-        .commit_to(instructions, mapping)
+        .commit_to(code)
         .map_err(SourceProcessorError::from_expression_error)
 }
 
@@ -577,7 +547,7 @@ fn run_unit(
     context: SourceExecutionContext<'_>,
 ) -> Result<SourceRunResult, SourceProcessorError> {
     let mut code_spaces = Vec::with_capacity(context.code_spaces.len() + 1);
-    code_spaces.push(unit.instructions.view());
+    code_spaces.push(unit.code.instruction_view());
     code_spaces.extend_from_slice(context.code_spaces);
     let mut execution = ExecutionView::with_code_spaces(
         CodeSpaceLookup::new(&code_spaces)?,
@@ -600,7 +570,7 @@ fn run_unit(
     Ok(SourceRunResult {
         outcome,
         data_stack,
-        instruction_count: unit.instructions.len(),
+        instruction_count: unit.code.len(),
     })
 }
 
@@ -872,17 +842,6 @@ fn line_number_compile_error(source: LineNumberError) -> CompileError {
     }
 }
 
-fn append_mapped(
-    instructions: &mut InstructionSequence,
-    mapping: &mut InstructionSourceMapping,
-    instruction: Instruction,
-    span: SourceSpan,
-) -> Result<InstructionAddress, SourceMappingAppendError> {
-    let address = instructions.append(instruction);
-    mapping.append_mapped(address, span)?;
-    Ok(address)
-}
-
 // Segmentation is the source of truth for top-level statement boundaries.
 // Lexical failure keeps already completed statements visible while leaving the
 // unbounded tail unavailable to semantic compilation and source-wide analysis.
@@ -1019,22 +978,22 @@ impl TemporaryExecutionUnit {
     }
 
     pub(crate) fn instructions(&self) -> crate::instruction::InstructionView<'_> {
-        self.instructions.view()
+        self.code.instruction_view()
     }
 
     pub(crate) fn source_mapping(&self) -> InstructionSourceMappingView<'_> {
-        self.mapping.view()
+        self.code.source_mapping()
     }
 
     pub(crate) fn len(&self) -> usize {
-        self.instructions.len()
+        self.code.len()
     }
 
     pub(crate) fn source_span(
         &self,
         location: CodeLocation,
     ) -> Result<Option<SourceSpan>, SourceMappingLookupError> {
-        self.mapping.view().source_span(location)
+        self.code.source_mapping().source_span(location)
     }
 }
 
@@ -1367,13 +1326,16 @@ mod tests {
         register_native_source_word, register_primitive,
     };
     use crate::global_variable::{GlobalVarId, GlobalVariables};
+    use crate::instruction::InstructionSequence;
     use crate::lexer::InvalidCharacterReason;
     use crate::name::NormalizedName;
     use crate::operator::{register_operator_primitives, OperatorSemantic, OperatorWords};
     use crate::primitive::{PrimitiveContext, PrimitiveError, PrimitiveRegistry};
     use crate::redefinition::redefine_word;
     use crate::source::SourceTexts;
-    use crate::source_mapping::{SourceMappingLookup, SourceMappingLookupError};
+    use crate::source_mapping::{
+        InstructionSourceMapping, SourceMappingLookup, SourceMappingLookupError,
+    };
     use crate::source_word::{
         LetSyntaxErrorKind, NativeSourceWordContext, SourceWordRegistry, VarSyntaxErrorKind,
     };
@@ -2966,8 +2928,7 @@ mod tests {
             }
             tokens.push(token);
         }
-        let mut instructions = InstructionSequence::new();
-        let mut mapping = InstructionSourceMapping::new(instructions.code_space());
+        let mut code = SourceMappedCode::new();
 
         let error = compile_expression_tokens(
             sources.view(),
@@ -2975,8 +2936,7 @@ mod tests {
             &tokens,
             &bindings,
             operators.lookup(),
-            &mut instructions,
-            &mut mapping,
+            &mut code,
         )
         .expect_err("later unresolved name should fail the expression");
 
@@ -2989,8 +2949,8 @@ mod tests {
                 },
             })
         );
-        assert_eq!(instructions.len(), 0);
-        assert_eq!(mapping.view().len(), 0);
+        assert_eq!(code.len(), 0);
+        assert_eq!(code.source_mapping().len(), 0);
     }
 
     #[test]

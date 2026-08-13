@@ -3,12 +3,12 @@ use crate::expression::{
     parse_expression, ExpressionError, ExpressionStaging, ExpressionVariableErrorKind,
 };
 use crate::global_variable::GlobalVariables;
-use crate::instruction::{Instruction, InstructionSequence};
+use crate::instruction::Instruction;
 use crate::lexer::{Token, TokenKind};
 use crate::name::{NameError, NormalizedName};
 use crate::operator::OperatorLookup;
 use crate::source::{SourceError, SourceId, SourceSpan, SourceView};
-use crate::source_mapping::{InstructionSourceMapping, SourceMappingAppendError};
+use crate::source_mapping::{SourceMappedCode, SourceMappingAppendError};
 use crate::word_resolution::{resolve_binding_name, ResolvedBinding, WordResolutionError};
 
 /// Internal identifier for a published source-processing word.
@@ -227,8 +227,7 @@ pub(crate) struct NativeSourceWordContext<'source, 'state> {
     reader: SourceStatementReader<'source>,
     bindings: NativeSourceWordBindingAccess<'state>,
     operators: Option<OperatorLookup>,
-    instructions: &'state mut InstructionSequence,
-    mapping: &'state mut InstructionSourceMapping,
+    code: &'state mut SourceMappedCode,
     local_line_number_prefix: Option<SourceSpan>,
     globals: Option<&'state mut GlobalVariables>,
 }
@@ -239,8 +238,7 @@ pub(crate) struct NativeSourceWordContextParts<'source, 'state> {
     pub(crate) tokens: &'source [Token],
     pub(crate) bindings: NativeSourceWordBindingAccess<'state>,
     pub(crate) operators: Option<OperatorLookup>,
-    pub(crate) instructions: &'state mut InstructionSequence,
-    pub(crate) mapping: &'state mut InstructionSourceMapping,
+    pub(crate) code: &'state mut SourceMappedCode,
     pub(crate) local_line_number_prefix: Option<SourceSpan>,
     pub(crate) globals: Option<&'state mut GlobalVariables>,
 }
@@ -260,8 +258,7 @@ impl<'source, 'state> NativeSourceWordContext<'source, 'state> {
             reader,
             bindings: parts.bindings,
             operators: parts.operators,
-            instructions: parts.instructions,
-            mapping: parts.mapping,
+            code: parts.code,
             local_line_number_prefix: parts.local_line_number_prefix,
             globals: parts.globals,
         }
@@ -292,9 +289,9 @@ impl<'source, 'state> NativeSourceWordContext<'source, 'state> {
         instruction: Instruction,
         span: SourceSpan,
     ) -> Result<(), SourceWordError> {
-        let address = self.instructions.append(instruction);
-        self.mapping
-            .append_mapped(address, span)
+        self.code
+            .append_mapped(instruction, span)
+            .map(|_| ())
             .map_err(|source| SourceWordError::SourceMappingAppend { source })
     }
 
@@ -372,14 +369,12 @@ impl<'source, 'state> NativeSourceWordContext<'source, 'state> {
         &mut self,
         staging: &ExpressionStaging,
     ) -> Result<(), SourceWordError> {
-        staging
-            .commit_to(self.instructions, self.mapping)
-            .map_err(|source| match source {
-                ExpressionError::SourceMappingAppend(source) => {
-                    SourceWordError::SourceMappingAppend { source }
-                }
-                source => SourceWordError::Expression { source },
-            })
+        staging.commit_to(self.code).map_err(|source| match source {
+            ExpressionError::SourceMappingAppend(source) => {
+                SourceWordError::SourceMappingAppend { source }
+            }
+            source => SourceWordError::Expression { source },
+        })
     }
 
     fn bindings(&self) -> &Bindings {
@@ -605,8 +600,7 @@ mod tests {
     #[test]
     fn native_context_lends_one_reader_without_resetting_position() {
         let (sources, source_id, tokens) = statement_tokens("TEST A B");
-        let mut instructions = InstructionSequence::new();
-        let mut mapping = InstructionSourceMapping::new(instructions.code_space());
+        let mut code = SourceMappedCode::new();
         let bindings = Bindings::new();
         let mut context = NativeSourceWordContext::new(NativeSourceWordContextParts {
             view: sources.view(),
@@ -614,8 +608,7 @@ mod tests {
             tokens: &tokens,
             bindings: NativeSourceWordBindingAccess::Read(&bindings),
             operators: None,
-            instructions: &mut instructions,
-            mapping: &mut mapping,
+            code: &mut code,
             local_line_number_prefix: None,
             globals: None,
         });
@@ -808,8 +801,7 @@ mod tests {
                 break;
             }
         }
-        let mut instructions = InstructionSequence::new();
-        let mut mapping = InstructionSourceMapping::new(instructions.code_space());
+        let mut code = SourceMappedCode::new();
         let bindings = Bindings::new();
         let mut context = NativeSourceWordContext::new(NativeSourceWordContextParts {
             view: sources.view(),
@@ -817,8 +809,7 @@ mod tests {
             tokens: &tokens[..1],
             bindings: NativeSourceWordBindingAccess::Read(&bindings),
             operators: None,
-            instructions: &mut instructions,
-            mapping: &mut mapping,
+            code: &mut code,
             local_line_number_prefix: None,
             globals: None,
         });
@@ -826,8 +817,7 @@ mod tests {
         push_one(&mut context).expect("test source word should emit");
 
         assert_eq!(
-            instructions
-                .view()
+            code.instruction_view()
                 .get(crate::instruction::InstructionAddress::from_index(0)),
             Ok(&Instruction::Push(Value::integer(1)))
         );
