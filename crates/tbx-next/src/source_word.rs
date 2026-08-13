@@ -124,7 +124,7 @@ pub(crate) enum SourceStatementExpected {
 /// Source words receive this boundary instead of raw statement tokens. It can
 /// consume only the current statement slice handed in by segmentation and has
 /// no rewind, absolute seek, or cross-statement access.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug)]
 pub(crate) struct SourceStatementReader<'source> {
     tokens: &'source [Token],
     position: usize,
@@ -132,7 +132,7 @@ pub(crate) struct SourceStatementReader<'source> {
 }
 
 impl<'source> SourceStatementReader<'source> {
-    pub(crate) const fn new(tokens: &'source [Token], missing_anchor: SourceSpan) -> Self {
+    const fn new(tokens: &'source [Token], missing_anchor: SourceSpan) -> Self {
         Self {
             tokens,
             position: 0,
@@ -223,7 +223,8 @@ impl<'source> SourceStatementReader<'source> {
 pub(crate) struct NativeSourceWordContext<'source, 'state> {
     view: SourceView<'source>,
     source_id: SourceId,
-    tokens: &'source [Token],
+    source_word_token: Token,
+    reader: SourceStatementReader<'source>,
     bindings: NativeSourceWordBindingAccess<'state>,
     operators: Option<OperatorLookup>,
     instructions: &'state mut InstructionSequence,
@@ -246,10 +247,17 @@ pub(crate) struct NativeSourceWordContextParts<'source, 'state> {
 
 impl<'source, 'state> NativeSourceWordContext<'source, 'state> {
     pub(crate) fn new(parts: NativeSourceWordContextParts<'source, 'state>) -> Self {
+        let source_word_token = parts
+            .tokens
+            .first()
+            .copied()
+            .expect("source word context requires its leading token");
+        let reader = SourceStatementReader::new(&parts.tokens[1..], source_word_token.span());
         Self {
             view: parts.view,
             source_id: parts.source_id,
-            tokens: parts.tokens,
+            source_word_token,
+            reader,
             bindings: parts.bindings,
             operators: parts.operators,
             instructions: parts.instructions,
@@ -268,15 +276,11 @@ impl<'source, 'state> NativeSourceWordContext<'source, 'state> {
     }
 
     pub(crate) fn source_word_token(&self) -> Token {
-        self.tokens
-            .first()
-            .copied()
-            .expect("source word requires its leading token")
+        self.source_word_token
     }
 
-    pub(crate) fn statement_reader(&self) -> SourceStatementReader<'source> {
-        let source_word = self.source_word_token();
-        SourceStatementReader::new(&self.tokens[1..], source_word.span())
+    pub(crate) fn statement_reader_mut(&mut self) -> &mut SourceStatementReader<'source> {
+        &mut self.reader
     }
 
     pub(crate) const fn local_line_number_prefix(&self) -> Option<SourceSpan> {
@@ -398,7 +402,7 @@ pub(crate) fn var_source_word(
         return Err(SourceWordError::VarLocalLineNumberPrefix { span });
     }
 
-    let mut reader = context.statement_reader();
+    let reader = context.statement_reader_mut();
     let name_token = reader.read_name().map_err(var_reader_error)?;
     reader.finish().map_err(var_reader_error)?;
 
@@ -417,10 +421,13 @@ pub(crate) fn var_source_word(
 pub(crate) fn let_source_word(
     context: &mut NativeSourceWordContext<'_, '_>,
 ) -> Result<(), SourceWordError> {
-    let mut reader = context.statement_reader();
-    let target_token = reader.read_name().map_err(let_reader_error)?;
-    let equal_token = reader.expect(TokenKind::Equal).map_err(let_reader_error)?;
-    let rhs_tokens = reader.remaining_expression().map_err(let_reader_error)?;
+    let (target_token, equal_span, rhs_tokens) = {
+        let reader = context.statement_reader_mut();
+        let target_token = reader.read_name().map_err(let_reader_error)?;
+        let equal_token = reader.expect(TokenKind::Equal).map_err(let_reader_error)?;
+        let rhs_tokens = reader.remaining_expression().map_err(let_reader_error)?;
+        (target_token, equal_token.span(), rhs_tokens)
+    };
 
     let source_name = context
         .view()
@@ -433,7 +440,7 @@ pub(crate) fn let_source_word(
             source,
         })?;
 
-    let mut staging = context.stage_expression(rhs_tokens, equal_token.span())?;
+    let mut staging = context.stage_expression(rhs_tokens, equal_span)?;
     staging.append_mapped_instruction(Instruction::StoreVar(target), target_token.span());
     context.commit_staging(&staging)
 }
@@ -593,6 +600,47 @@ mod tests {
     fn push_one(context: &mut NativeSourceWordContext<'_, '_>) -> Result<(), SourceWordError> {
         let first = context.source_word_token();
         context.append_mapped(Instruction::Push(Value::integer(1)), first.span())
+    }
+
+    #[test]
+    fn native_context_lends_one_reader_without_resetting_position() {
+        let (sources, source_id, tokens) = statement_tokens("TEST A B");
+        let mut instructions = InstructionSequence::new();
+        let mut mapping = InstructionSourceMapping::new(instructions.code_space());
+        let bindings = Bindings::new();
+        let mut context = NativeSourceWordContext::new(NativeSourceWordContextParts {
+            view: sources.view(),
+            source_id,
+            tokens: &tokens,
+            bindings: NativeSourceWordBindingAccess::Read(&bindings),
+            operators: None,
+            instructions: &mut instructions,
+            mapping: &mut mapping,
+            local_line_number_prefix: None,
+            globals: None,
+        });
+
+        let first_body_token = context
+            .statement_reader_mut()
+            .read_name()
+            .expect("first body name should be read");
+        let second_body_token = context
+            .statement_reader_mut()
+            .read_name()
+            .expect("second borrow should continue from current position");
+
+        assert_eq!(
+            first_body_token.span(),
+            span(sources.view(), source_id, 5, 6)
+        );
+        assert_eq!(
+            second_body_token.span(),
+            span(sources.view(), source_id, 7, 8)
+        );
+        context
+            .statement_reader_mut()
+            .finish()
+            .expect("reader should be exhausted after both body names");
     }
 
     #[test]
