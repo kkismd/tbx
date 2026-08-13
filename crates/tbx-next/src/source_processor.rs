@@ -1095,6 +1095,20 @@ impl<'a> SourceCompileContext<'a> {
         }
     }
 
+    pub(crate) fn with_source_word_publication_and_operators(
+        bindings: &'a mut Bindings,
+        source_words: SourceWordLookup<'a>,
+        operators: OperatorLookup,
+        globals: &'a mut GlobalVariables,
+    ) -> Self {
+        Self {
+            bindings: BindingAccess::Write(bindings),
+            operators: Some(operators),
+            source_words: Some(source_words),
+            globals: Some(globals),
+        }
+    }
+
     pub(crate) fn bindings(&self) -> &Bindings {
         match &self.bindings {
             BindingAccess::Read(bindings) => bindings,
@@ -1352,7 +1366,7 @@ mod tests {
         register_builtin_global_variables, register_builtin_source_words,
         register_native_source_word, register_primitive,
     };
-    use crate::global_variable::GlobalVariables;
+    use crate::global_variable::{GlobalVarId, GlobalVariables};
     use crate::lexer::InvalidCharacterReason;
     use crate::name::NormalizedName;
     use crate::operator::{register_operator_primitives, OperatorSemantic, OperatorWords};
@@ -1607,6 +1621,37 @@ mod tests {
         let mut primitives = PrimitiveRegistry::new();
         let operators = register_operator_primitives(&mut primitives, &mut words);
         (words, primitives, operators)
+    }
+
+    fn global_source_fixture() -> (
+        PublishedWords,
+        PrimitiveRegistry,
+        OperatorWords,
+        SourceWordRegistry,
+        Bindings,
+        GlobalVariables,
+        Vec<GlobalVarId>,
+    ) {
+        let mut words = PublishedWords::new();
+        let mut primitives = PrimitiveRegistry::new();
+        let operators = register_operator_primitives(&mut primitives, &mut words);
+        let mut source_words = SourceWordRegistry::new();
+        let mut bindings = Bindings::new();
+        let mut globals = GlobalVariables::new();
+        register_builtin_source_words(&mut source_words, &mut bindings)
+            .expect("built-in source words should bootstrap");
+        let variables = register_builtin_global_variables(&mut globals, &mut bindings)
+            .expect("A-Z variables should bootstrap");
+
+        (
+            words,
+            primitives,
+            operators,
+            source_words,
+            bindings,
+            globals,
+            variables,
+        )
     }
 
     fn completed_compiled(code: &mut InstructionSequence, value: i16) -> CompletedWordDefinition {
@@ -2318,6 +2363,243 @@ mod tests {
 
         assert_eq!(globals.view().read(variables[0]), Ok(value(10)));
         assert_eq!(globals.view().read(score), Ok(value(10)));
+    }
+
+    #[test]
+    fn source_to_vm_e2e_updates_builtin_variables_through_formal_expression_context() {
+        let (words, primitives, operators, source_words, bindings, mut globals, variables) =
+            global_source_fixture();
+
+        let (_sources, _id, result) = run_with_source_words_operators_and_mut_globals(
+            "LET A = 40 + 2\nLET B = A + 1",
+            &bindings,
+            &mut globals,
+            &source_words,
+            &words,
+            &primitives,
+            operators.lookup(),
+        );
+
+        assert_eq!(result.outcome(), RunOutcome::Halted);
+        assert_eq!(result.data_stack(), []);
+        assert_eq!(globals.view().read(variables[0]), Ok(value(42)));
+        assert_eq!(globals.view().read(variables[1]), Ok(value(43)));
+    }
+
+    #[test]
+    fn source_to_vm_e2e_publishes_user_var_for_later_let_in_same_source() {
+        let (words, primitives, operators, source_words, mut bindings, mut globals, variables) =
+            global_source_fixture();
+        let (sources, id) = source("VAR SCORE\nLET SCORE = SCORE + 1\nLET A = SCORE");
+
+        let unit = compile_source(
+            sources.view(),
+            id,
+            SourceCompileContext::with_source_word_publication_and_operators(
+                &mut bindings,
+                source_words.lookup(),
+                operators.lookup(),
+                &mut globals,
+            ),
+        )
+        .expect("same-source VAR and LET statements should compile");
+        let Some(Binding::Variable(score)) = bindings.get(&name("SCORE")).copied() else {
+            panic!("SCORE should be published by the VAR statement");
+        };
+
+        let result = run_unit(
+            &unit,
+            SourceExecutionContext::with_source_words_and_operators(
+                &bindings,
+                source_words.lookup(),
+                operators.lookup(),
+                PublishedWordLookup::new(&words),
+                primitives.lookup(),
+            )
+            .with_mut_globals(globals.view_mut()),
+        )
+        .expect("same-source VAR and LET unit should run");
+
+        assert_eq!(result.outcome(), RunOutcome::Halted);
+        assert_eq!(result.data_stack(), []);
+        assert_eq!(globals.view().read(score), Ok(value(1)));
+        assert_eq!(globals.view().read(variables[0]), Ok(value(1)));
+    }
+
+    #[test]
+    fn source_to_vm_e2e_successful_var_survives_later_statement_failure() {
+        let (_words, _primitives, operators, source_words, mut bindings, mut globals, _variables) =
+            global_source_fixture();
+        let original_globals_len = globals.len();
+        let (sources, id) = source("VAR SCORE\nLET A = MISSING + 1");
+
+        let error = compile_source(
+            sources.view(),
+            id,
+            SourceCompileContext::with_source_word_publication_and_operators(
+                &mut bindings,
+                source_words.lookup(),
+                operators.lookup(),
+                &mut globals,
+            ),
+        )
+        .expect_err("later LET RHS failure should fail the source");
+
+        let SourceProcessorError::SourceWord(SourceWordError::Expression {
+            source: ExpressionError::Variable(error),
+        }) = error
+        else {
+            panic!("expected later LET RHS variable error");
+        };
+        assert_eq!(error.span(), span(sources.view(), id, 18, 25));
+        assert_eq!(error.kind(), ExpressionVariableErrorKind::UndefinedName);
+        let Some(Binding::Variable(score)) = bindings.get(&name("SCORE")).copied() else {
+            panic!("completed VAR should remain published after later failure");
+        };
+        assert_eq!(globals.len(), original_globals_len + 1);
+        assert_eq!(globals.view().read(score), Ok(value(0)));
+    }
+
+    #[test]
+    fn source_to_vm_e2e_failed_var_does_not_publish_binding_or_storage() {
+        for source_text in ["VAR SCORE EXTRA", "VAR A"] {
+            let (
+                _words,
+                _primitives,
+                operators,
+                source_words,
+                mut bindings,
+                mut globals,
+                _variables,
+            ) = global_source_fixture();
+            let original_globals_len = globals.len();
+            let (sources, id) = source(source_text);
+
+            let error = compile_source(
+                sources.view(),
+                id,
+                SourceCompileContext::with_source_word_publication_and_operators(
+                    &mut bindings,
+                    source_words.lookup(),
+                    operators.lookup(),
+                    &mut globals,
+                ),
+            )
+            .expect_err("failed VAR statement should reject the source");
+
+            match source_text {
+                "VAR SCORE EXTRA" => {
+                    assert_eq!(
+                        error,
+                        SourceProcessorError::SourceWord(SourceWordError::VarSyntax {
+                            span: span(sources.view(), id, 10, 15),
+                            kind: VarSyntaxErrorKind::TrailingToken {
+                                kind: TokenKind::Name,
+                            },
+                        })
+                    );
+                    assert_eq!(bindings.get(&name("SCORE")), None);
+                }
+                "VAR A" => {
+                    assert_eq!(
+                        error,
+                        SourceProcessorError::SourceWord(SourceWordError::VarNameConflict {
+                            span: span(sources.view(), id, 4, 5),
+                        })
+                    );
+                    assert!(matches!(
+                        bindings.get(&name("A")),
+                        Some(Binding::Variable(_))
+                    ));
+                }
+                _ => unreachable!(),
+            }
+            assert_eq!(
+                globals.len(),
+                original_globals_len,
+                "{source_text:?} should not allocate storage"
+            );
+        }
+    }
+
+    #[test]
+    fn source_to_vm_e2e_reuses_global_storage_across_fresh_executions_only() {
+        let (
+            mut words,
+            mut primitives,
+            operators,
+            source_words,
+            mut bindings,
+            mut globals,
+            variables,
+        ) = global_source_fixture();
+        let push7_id = primitives.register(push_7);
+        register_primitive(&mut words, &mut bindings, name("PUSH7"), push7_id)
+            .expect("runtime word should register");
+
+        let (_sources, _id, first_result) = run_with_source_words_operators_and_mut_globals(
+            "PUSH7\nLET A = 10",
+            &bindings,
+            &mut globals,
+            &source_words,
+            &words,
+            &primitives,
+            operators.lookup(),
+        );
+        assert_eq!(first_result.data_stack(), [value(7)]);
+        assert_eq!(globals.view().read(variables[0]), Ok(value(10)));
+
+        let (_sources, _id, second_result) = run_with_source_words_operators_and_mut_globals(
+            "LET B = A + 1",
+            &bindings,
+            &mut globals,
+            &source_words,
+            &words,
+            &primitives,
+            operators.lookup(),
+        );
+
+        assert_eq!(second_result.outcome(), RunOutcome::Halted);
+        assert_eq!(second_result.data_stack(), []);
+        assert_eq!(globals.view().read(variables[0]), Ok(value(10)));
+        assert_eq!(globals.view().read(variables[1]), Ok(value(11)));
+    }
+
+    #[test]
+    fn source_to_vm_e2e_rhs_runtime_failure_maps_operator_and_preserves_target() {
+        let (words, primitives, operators, source_words, bindings, mut globals, variables) =
+            global_source_fixture();
+        let (sources, id) = source("LET A = 7\nLET A = 32767 + 1");
+
+        let error = run_source(
+            sources.view(),
+            id,
+            SourceExecutionContext::with_source_words_and_operators(
+                &bindings,
+                source_words.lookup(),
+                operators.lookup(),
+                PublishedWordLookup::new(&words),
+                primitives.lookup(),
+            )
+            .with_mut_globals(globals.view_mut()),
+        )
+        .expect_err("checked arithmetic overflow should fail before StoreVar");
+
+        let SourceProcessorError::Runtime(error) = error else {
+            panic!("expected runtime error");
+        };
+        assert_eq!(
+            error.source_span(),
+            Ok(Some(span(sources.view(), id, 24, 25)))
+        );
+        assert!(matches!(
+            error.vm().kind(),
+            crate::vm::VmErrorKind::PrimitiveFailed {
+                source: PrimitiveError::Failed,
+                ..
+            }
+        ));
+        assert_eq!(globals.view().read(variables[0]), Ok(value(7)));
     }
 
     #[test]
