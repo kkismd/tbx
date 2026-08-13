@@ -97,6 +97,122 @@ pub(crate) enum LetSyntaxErrorKind {
     Rhs,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SourceStatementReaderError {
+    Missing {
+        expected: SourceStatementExpected,
+        span: SourceSpan,
+    },
+    Unexpected {
+        expected: SourceStatementExpected,
+        actual: Token,
+    },
+    TrailingToken {
+        actual: Token,
+    },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SourceStatementExpected {
+    Name,
+    Token(TokenKind),
+    Expression,
+}
+
+/// Forward-only reader over the body of one completed logical statement.
+///
+/// Source words receive this boundary instead of raw statement tokens. It can
+/// consume only the current statement slice handed in by segmentation and has
+/// no rewind, absolute seek, or cross-statement access.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct SourceStatementReader<'source> {
+    tokens: &'source [Token],
+    position: usize,
+    missing_anchor: SourceSpan,
+}
+
+impl<'source> SourceStatementReader<'source> {
+    pub(crate) const fn new(tokens: &'source [Token], missing_anchor: SourceSpan) -> Self {
+        Self {
+            tokens,
+            position: 0,
+            missing_anchor,
+        }
+    }
+
+    pub(crate) fn read_name(&mut self) -> Result<Token, SourceStatementReaderError> {
+        let token = self.expect_present(SourceStatementExpected::Name)?;
+        if token.kind() != TokenKind::Name {
+            return Err(SourceStatementReaderError::Unexpected {
+                expected: SourceStatementExpected::Name,
+                actual: token,
+            });
+        }
+        self.consume(token);
+        Ok(token)
+    }
+
+    pub(crate) fn expect(
+        &mut self,
+        expected: TokenKind,
+    ) -> Result<Token, SourceStatementReaderError> {
+        let expected_item = SourceStatementExpected::Token(expected);
+        let token = self.expect_present(expected_item)?;
+        if token.kind() != expected {
+            return Err(SourceStatementReaderError::Unexpected {
+                expected: expected_item,
+                actual: token,
+            });
+        }
+        self.consume(token);
+        Ok(token)
+    }
+
+    pub(crate) fn remaining_expression(
+        &mut self,
+    ) -> Result<&'source [Token], SourceStatementReaderError> {
+        if self.is_exhausted() {
+            return Err(SourceStatementReaderError::Missing {
+                expected: SourceStatementExpected::Expression,
+                span: self.missing_anchor,
+            });
+        }
+
+        let remaining = &self.tokens[self.position..];
+        self.position = self.tokens.len();
+        Ok(remaining)
+    }
+
+    pub(crate) fn finish(&self) -> Result<(), SourceStatementReaderError> {
+        if let Some(actual) = self.tokens.get(self.position).copied() {
+            return Err(SourceStatementReaderError::TrailingToken { actual });
+        }
+        Ok(())
+    }
+
+    pub(crate) fn is_exhausted(&self) -> bool {
+        self.position == self.tokens.len()
+    }
+
+    fn expect_present(
+        &self,
+        expected: SourceStatementExpected,
+    ) -> Result<Token, SourceStatementReaderError> {
+        self.tokens
+            .get(self.position)
+            .copied()
+            .ok_or(SourceStatementReaderError::Missing {
+                expected,
+                span: self.missing_anchor,
+            })
+    }
+
+    fn consume(&mut self, token: Token) {
+        self.position += 1;
+        self.missing_anchor = token.span();
+    }
+}
+
 /// Narrow source-processing capability passed to native source words.
 ///
 /// This is deliberately smaller than a compiler or VM handle. Native source
@@ -151,8 +267,16 @@ impl<'source, 'state> NativeSourceWordContext<'source, 'state> {
         self.source_id
     }
 
-    pub(crate) const fn tokens(&self) -> &'source [Token] {
+    pub(crate) fn source_word_token(&self) -> Token {
         self.tokens
+            .first()
+            .copied()
+            .expect("source word requires its leading token")
+    }
+
+    pub(crate) fn statement_reader(&self) -> SourceStatementReader<'source> {
+        let source_word = self.source_word_token();
+        SourceStatementReader::new(&self.tokens[1..], source_word.span())
     }
 
     pub(crate) const fn local_line_number_prefix(&self) -> Option<SourceSpan> {
@@ -274,31 +398,9 @@ pub(crate) fn var_source_word(
         return Err(SourceWordError::VarLocalLineNumberPrefix { span });
     }
 
-    let var = context
-        .tokens()
-        .first()
-        .copied()
-        .expect("VAR source word requires its leading token");
-    let Some(name_token) = context.tokens().get(1).copied() else {
-        return Err(SourceWordError::VarSyntax {
-            span: var.span(),
-            kind: VarSyntaxErrorKind::MissingName,
-        });
-    };
-    if name_token.kind() != TokenKind::Name {
-        return Err(SourceWordError::VarSyntax {
-            span: name_token.span(),
-            kind: VarSyntaxErrorKind::MissingName,
-        });
-    }
-    if let Some(trailing) = context.tokens().get(2).copied() {
-        return Err(SourceWordError::VarSyntax {
-            span: trailing.span(),
-            kind: VarSyntaxErrorKind::TrailingToken {
-                kind: trailing.kind(),
-            },
-        });
-    }
+    let mut reader = context.statement_reader();
+    let name_token = reader.read_name().map_err(var_reader_error)?;
+    reader.finish().map_err(var_reader_error)?;
 
     let source_name = context
         .view()
@@ -315,44 +417,10 @@ pub(crate) fn var_source_word(
 pub(crate) fn let_source_word(
     context: &mut NativeSourceWordContext<'_, '_>,
 ) -> Result<(), SourceWordError> {
-    let let_token = context
-        .tokens()
-        .first()
-        .copied()
-        .expect("LET source word requires its leading token");
-    let Some(target_token) = context.tokens().get(1).copied() else {
-        return Err(SourceWordError::LetSyntax {
-            span: let_token.span(),
-            kind: LetSyntaxErrorKind::Target,
-        });
-    };
-    if target_token.kind() != TokenKind::Name {
-        return Err(SourceWordError::LetSyntax {
-            span: target_token.span(),
-            kind: LetSyntaxErrorKind::Target,
-        });
-    }
-
-    let Some(equal_token) = context.tokens().get(2).copied() else {
-        return Err(SourceWordError::LetSyntax {
-            span: target_token.span(),
-            kind: LetSyntaxErrorKind::Equal,
-        });
-    };
-    if equal_token.kind() != TokenKind::Equal {
-        return Err(SourceWordError::LetSyntax {
-            span: equal_token.span(),
-            kind: LetSyntaxErrorKind::Equal,
-        });
-    }
-
-    let rhs_tokens = &context.tokens()[3..];
-    if rhs_tokens.is_empty() {
-        return Err(SourceWordError::LetSyntax {
-            span: equal_token.span(),
-            kind: LetSyntaxErrorKind::Rhs,
-        });
-    }
+    let mut reader = context.statement_reader();
+    let target_token = reader.read_name().map_err(let_reader_error)?;
+    let equal_token = reader.expect(TokenKind::Equal).map_err(let_reader_error)?;
+    let rhs_tokens = reader.remaining_expression().map_err(let_reader_error)?;
 
     let source_name = context
         .view()
@@ -373,12 +441,62 @@ pub(crate) fn let_source_word(
 pub(crate) fn unsupported_source_word(
     context: &mut NativeSourceWordContext<'_, '_>,
 ) -> Result<(), SourceWordError> {
-    let first = context
-        .tokens()
-        .first()
-        .copied()
-        .expect("source word requires its leading token");
+    let first = context.source_word_token();
     Err(SourceWordError::UnsupportedSourceWord { span: first.span() })
+}
+
+fn var_reader_error(error: SourceStatementReaderError) -> SourceWordError {
+    match error {
+        SourceStatementReaderError::Missing { span, .. } => SourceWordError::VarSyntax {
+            span,
+            kind: VarSyntaxErrorKind::MissingName,
+        },
+        SourceStatementReaderError::Unexpected { actual, .. } => SourceWordError::VarSyntax {
+            span: actual.span(),
+            kind: VarSyntaxErrorKind::MissingName,
+        },
+        SourceStatementReaderError::TrailingToken { actual } => SourceWordError::VarSyntax {
+            span: actual.span(),
+            kind: VarSyntaxErrorKind::TrailingToken {
+                kind: actual.kind(),
+            },
+        },
+    }
+}
+
+fn let_reader_error(error: SourceStatementReaderError) -> SourceWordError {
+    let (span, kind) = match error {
+        SourceStatementReaderError::Missing { expected, span } => {
+            (span, let_syntax_kind_for_missing(expected))
+        }
+        SourceStatementReaderError::Unexpected { expected, actual } => {
+            (actual.span(), let_syntax_kind_for_unexpected(expected))
+        }
+        SourceStatementReaderError::TrailingToken { actual } => {
+            (actual.span(), LetSyntaxErrorKind::Rhs)
+        }
+    };
+    SourceWordError::LetSyntax { span, kind }
+}
+
+fn let_syntax_kind_for_missing(expected: SourceStatementExpected) -> LetSyntaxErrorKind {
+    match expected {
+        SourceStatementExpected::Name => LetSyntaxErrorKind::Target,
+        SourceStatementExpected::Token(TokenKind::Equal) => LetSyntaxErrorKind::Equal,
+        SourceStatementExpected::Token(_) | SourceStatementExpected::Expression => {
+            LetSyntaxErrorKind::Rhs
+        }
+    }
+}
+
+fn let_syntax_kind_for_unexpected(expected: SourceStatementExpected) -> LetSyntaxErrorKind {
+    match expected {
+        SourceStatementExpected::Name => LetSyntaxErrorKind::Target,
+        SourceStatementExpected::Token(TokenKind::Equal) => LetSyntaxErrorKind::Equal,
+        SourceStatementExpected::Token(_) | SourceStatementExpected::Expression => {
+            LetSyntaxErrorKind::Rhs
+        }
+    }
 }
 
 fn resolve_variable_name(
@@ -451,13 +569,148 @@ mod tests {
     use crate::source::SourceTexts;
     use crate::value::Value;
 
+    fn statement_tokens(text: &str) -> (SourceTexts, SourceId, Vec<Token>) {
+        let mut sources = SourceTexts::new();
+        let source_id = sources.register(text);
+        let mut lexer = crate::lexer::Lexer::new(sources.view(), source_id)
+            .expect("test source should create lexer");
+        let mut tokens = Vec::new();
+        loop {
+            let token = lexer.next_token().expect("test source should lex");
+            if token.kind() == TokenKind::Eof {
+                break;
+            }
+            tokens.push(token);
+        }
+        (sources, source_id, tokens)
+    }
+
+    fn span(view: SourceView<'_>, source_id: SourceId, start: usize, end: usize) -> SourceSpan {
+        view.span(source_id, start, end)
+            .expect("test span should be valid")
+    }
+
     fn push_one(context: &mut NativeSourceWordContext<'_, '_>) -> Result<(), SourceWordError> {
-        let first = context
-            .tokens()
-            .first()
-            .copied()
-            .expect("test source word should receive its leading token");
+        let first = context.source_word_token();
         context.append_mapped(Instruction::Push(Value::integer(1)), first.span())
+    }
+
+    #[test]
+    fn statement_reader_reads_name_and_expected_token_sequentially() {
+        let (sources, source_id, tokens) = statement_tokens("LET Score = 1");
+        let mut reader = SourceStatementReader::new(&tokens[1..], tokens[0].span());
+
+        let name = reader.read_name().expect("name should be read");
+        let equal = reader.expect(TokenKind::Equal).expect("'=' should be read");
+
+        assert_eq!(name.kind(), TokenKind::Name);
+        assert_eq!(name.span(), span(sources.view(), source_id, 4, 9));
+        assert_eq!(equal.kind(), TokenKind::Equal);
+        assert_eq!(equal.span(), span(sources.view(), source_id, 10, 11));
+    }
+
+    #[test]
+    fn statement_reader_reports_token_kind_mismatch_at_actual_span() {
+        let (sources, source_id, tokens) = statement_tokens("LET A 1");
+        let mut reader = SourceStatementReader::new(&tokens[1..], tokens[0].span());
+
+        reader.read_name().expect("name should be read");
+        let error = reader
+            .expect(TokenKind::Equal)
+            .expect_err("integer should not satisfy '='");
+
+        assert_eq!(
+            error,
+            SourceStatementReaderError::Unexpected {
+                expected: SourceStatementExpected::Token(TokenKind::Equal),
+                actual: Token::new(
+                    TokenKind::IntegerLiteral,
+                    span(sources.view(), source_id, 6, 7)
+                ),
+            }
+        );
+    }
+
+    #[test]
+    fn statement_reader_reports_missing_required_token_at_previous_span() {
+        let (sources, source_id, tokens) = statement_tokens("LET A");
+        let mut reader = SourceStatementReader::new(&tokens[1..], tokens[0].span());
+
+        reader.read_name().expect("name should be read");
+        let error = reader
+            .expect(TokenKind::Equal)
+            .expect_err("missing '=' should fail");
+
+        assert_eq!(
+            error,
+            SourceStatementReaderError::Missing {
+                expected: SourceStatementExpected::Token(TokenKind::Equal),
+                span: span(sources.view(), source_id, 4, 5),
+            }
+        );
+    }
+
+    #[test]
+    fn statement_reader_returns_remaining_expression_and_finishes() {
+        let (_sources, _source_id, tokens) = statement_tokens("LET A = 1 + 2 * 3");
+        let mut reader = SourceStatementReader::new(&tokens[1..], tokens[0].span());
+
+        reader.read_name().expect("name should be read");
+        reader.expect(TokenKind::Equal).expect("'=' should be read");
+        let rhs = reader
+            .remaining_expression()
+            .expect("remaining RHS should exist");
+
+        assert_eq!(
+            rhs.iter().map(|token| token.kind()).collect::<Vec<_>>(),
+            [
+                TokenKind::IntegerLiteral,
+                TokenKind::Plus,
+                TokenKind::IntegerLiteral,
+                TokenKind::Star,
+                TokenKind::IntegerLiteral,
+            ]
+        );
+        assert!(reader.is_exhausted());
+        reader
+            .finish()
+            .expect("remaining expression consumes to end");
+    }
+
+    #[test]
+    fn statement_reader_rejects_empty_remaining_expression() {
+        let (sources, source_id, tokens) = statement_tokens("LET A =");
+        let mut reader = SourceStatementReader::new(&tokens[1..], tokens[0].span());
+
+        reader.read_name().expect("name should be read");
+        reader.expect(TokenKind::Equal).expect("'=' should be read");
+        let error = reader
+            .remaining_expression()
+            .expect_err("empty RHS should fail");
+
+        assert_eq!(
+            error,
+            SourceStatementReaderError::Missing {
+                expected: SourceStatementExpected::Expression,
+                span: span(sources.view(), source_id, 6, 7),
+            }
+        );
+    }
+
+    #[test]
+    fn statement_reader_finish_rejects_trailing_token() {
+        let (sources, source_id, tokens) = statement_tokens("VAR SCORE EXTRA");
+        let mut reader = SourceStatementReader::new(&tokens[1..], tokens[0].span());
+
+        reader.read_name().expect("name should be read");
+        let error = reader.finish().expect_err("trailing token should fail");
+
+        assert_eq!(
+            error,
+            SourceStatementReaderError::TrailingToken {
+                actual: Token::new(TokenKind::Name, span(sources.view(), source_id, 10, 15)),
+            }
+        );
     }
 
     #[test]
