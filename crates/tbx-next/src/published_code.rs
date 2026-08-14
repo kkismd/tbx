@@ -24,6 +24,8 @@ pub(crate) struct PublishedCode {
 #[derive(Debug)]
 pub(crate) struct PublishedWordBuilder<'a> {
     code: &'a mut SourceMappedCode,
+    body_start: InstructionAddress,
+    unresolved_patches: Vec<InstructionAddress>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -44,6 +46,18 @@ pub(crate) enum WordBodyBuildError {
     },
     BranchTargetPatch {
         source: BranchTargetPatchError,
+    },
+    BranchInstructionRequiresPatch {
+        instruction: Instruction,
+    },
+    AddressOutsideCurrentBody {
+        address: InstructionAddress,
+    },
+    UnknownBranchPatch {
+        branch: InstructionAddress,
+    },
+    UnresolvedBranchPatch {
+        branch: InstructionAddress,
     },
     InvalidEntry {
         source: InstructionAddressError,
@@ -140,9 +154,13 @@ impl PublishedCode {
     ) -> Result<PublishedWordEntry, WordBodyBuildError> {
         let entry_address = InstructionAddress::from_index(self.code.len());
 
-        build(&mut PublishedWordBuilder {
+        let mut builder = PublishedWordBuilder {
             code: &mut self.code,
-        })?;
+            body_start: entry_address,
+            unresolved_patches: Vec::new(),
+        };
+        build(&mut builder)?;
+        builder.finish()?;
 
         self.code
             .validate_address(entry_address)
@@ -170,6 +188,7 @@ impl PublishedWordBuilder<'_> {
         instruction: Instruction,
         span: SourceSpan,
     ) -> Result<InstructionAddress, WordBodyBuildError> {
+        reject_direct_branch_instruction(instruction)?;
         self.code
             .append_mapped(instruction, span)
             .map_err(|source| WordBodyBuildError::SourceMappingAppend { source })
@@ -179,9 +198,45 @@ impl PublishedWordBuilder<'_> {
         &mut self,
         instruction: Instruction,
     ) -> Result<InstructionAddress, WordBodyBuildError> {
+        reject_direct_branch_instruction(instruction)?;
         self.code
             .append_unmapped(instruction)
             .map_err(|source| WordBodyBuildError::SourceMappingAppend { source })
+    }
+
+    pub(crate) fn append_mapped_jump_placeholder(
+        &mut self,
+        span: SourceSpan,
+    ) -> Result<InstructionAddress, WordBodyBuildError> {
+        self.append_branch_placeholder(
+            Instruction::Jump(InstructionAddress::from_index(0)),
+            Some(span),
+        )
+    }
+
+    pub(crate) fn append_unmapped_jump_placeholder(
+        &mut self,
+    ) -> Result<InstructionAddress, WordBodyBuildError> {
+        self.append_branch_placeholder(Instruction::Jump(InstructionAddress::from_index(0)), None)
+    }
+
+    pub(crate) fn append_mapped_jump_if_zero_placeholder(
+        &mut self,
+        span: SourceSpan,
+    ) -> Result<InstructionAddress, WordBodyBuildError> {
+        self.append_branch_placeholder(
+            Instruction::JumpIfZero(InstructionAddress::from_index(0)),
+            Some(span),
+        )
+    }
+
+    pub(crate) fn append_unmapped_jump_if_zero_placeholder(
+        &mut self,
+    ) -> Result<InstructionAddress, WordBodyBuildError> {
+        self.append_branch_placeholder(
+            Instruction::JumpIfZero(InstructionAddress::from_index(0)),
+            None,
+        )
     }
 
     pub(crate) fn patch_branch_target(
@@ -189,9 +244,72 @@ impl PublishedWordBuilder<'_> {
         branch: InstructionAddress,
         target: InstructionAddress,
     ) -> Result<(), WordBodyBuildError> {
+        self.validate_current_body_address(branch)?;
+        self.validate_current_body_address(target)?;
+        let Some(position) = self
+            .unresolved_patches
+            .iter()
+            .position(|pending| *pending == branch)
+        else {
+            return Err(WordBodyBuildError::UnknownBranchPatch { branch });
+        };
+
         self.code
             .patch_branch_target(branch, target)
-            .map_err(|source| WordBodyBuildError::BranchTargetPatch { source })
+            .map_err(|source| WordBodyBuildError::BranchTargetPatch { source })?;
+
+        self.unresolved_patches.swap_remove(position);
+        Ok(())
+    }
+
+    fn append_branch_placeholder(
+        &mut self,
+        instruction: Instruction,
+        span: Option<SourceSpan>,
+    ) -> Result<InstructionAddress, WordBodyBuildError> {
+        let branch = if let Some(span) = span {
+            self.code.append_mapped(instruction, span)
+        } else {
+            self.code.append_unmapped(instruction)
+        }
+        .map_err(|source| WordBodyBuildError::SourceMappingAppend { source })?;
+
+        self.unresolved_patches.push(branch);
+        Ok(branch)
+    }
+
+    fn validate_current_body_address(
+        &self,
+        address: InstructionAddress,
+    ) -> Result<(), WordBodyBuildError> {
+        if address.as_index() < self.body_start.as_index() || address.as_index() >= self.code.len()
+        {
+            return Err(WordBodyBuildError::AddressOutsideCurrentBody { address });
+        }
+
+        Ok(())
+    }
+
+    fn finish(self) -> Result<(), WordBodyBuildError> {
+        if let Some(branch) = self.unresolved_patches.first().copied() {
+            return Err(WordBodyBuildError::UnresolvedBranchPatch { branch });
+        }
+
+        Ok(())
+    }
+}
+
+fn reject_direct_branch_instruction(instruction: Instruction) -> Result<(), WordBodyBuildError> {
+    match instruction {
+        Instruction::Jump(_) | Instruction::JumpIfZero(_) => {
+            Err(WordBodyBuildError::BranchInstructionRequiresPatch { instruction })
+        }
+        Instruction::Push(_)
+        | Instruction::LoadVar(_)
+        | Instruction::StoreVar(_)
+        | Instruction::Call(_)
+        | Instruction::Return
+        | Instruction::Halt => Ok(()),
     }
 }
 
@@ -581,8 +699,7 @@ mod tests {
 
         let word = code
             .publish_new_word(&mut words, &mut bindings, name("BRANCH"), |builder| {
-                let branch = builder
-                    .append_unmapped(Instruction::Jump(InstructionAddress::from_index(0)))?;
+                let branch = builder.append_unmapped_jump_placeholder()?;
                 let target = builder.append_unmapped(Instruction::Return)?;
                 builder.patch_branch_target(branch, target)?;
                 Ok(())
@@ -593,6 +710,119 @@ mod tests {
             code.instruction_view().get_location(word.entry()),
             Ok(&Instruction::Jump(InstructionAddress::from_index(1)))
         );
+    }
+
+    #[test]
+    fn direct_branch_append_is_rejected_before_publication() {
+        let mut code = PublishedCode::new();
+        let mut words = PublishedWords::new();
+        let mut bindings = Bindings::new();
+        let branch = Instruction::Jump(InstructionAddress::from_index(0));
+
+        let result = code.publish_new_word(&mut words, &mut bindings, name("BRANCH"), |builder| {
+            builder.append_unmapped(branch)?;
+            Ok(())
+        });
+
+        assert_eq!(
+            result,
+            Err(NewWordPublicationError::Build {
+                source: WordBodyBuildError::BranchInstructionRequiresPatch {
+                    instruction: branch
+                }
+            })
+        );
+        assert_eq!(code.len(), 0);
+        assert_eq!(words.len(), 0);
+        assert!(bindings.is_empty());
+    }
+
+    #[test]
+    fn unresolved_branch_patch_rejects_successful_publication() {
+        let mut code = PublishedCode::new();
+        let mut words = PublishedWords::new();
+        let mut bindings = Bindings::new();
+
+        let result = code.publish_new_word(&mut words, &mut bindings, name("BROKEN"), |builder| {
+            let _branch = builder.append_unmapped_jump_placeholder()?;
+            builder.append_unmapped(Instruction::Return)?;
+            Ok(())
+        });
+
+        assert_eq!(
+            result,
+            Err(NewWordPublicationError::Build {
+                source: WordBodyBuildError::UnresolvedBranchPatch {
+                    branch: InstructionAddress::from_index(0)
+                }
+            })
+        );
+        assert_eq!(code.len(), 2);
+        assert_eq!(words.len(), 0);
+        assert!(bindings.is_empty());
+    }
+
+    #[test]
+    fn later_build_cannot_patch_branch_from_previous_word() {
+        let mut code = PublishedCode::new();
+        let mut words = PublishedWords::new();
+        let mut bindings = Bindings::new();
+        let old = code
+            .publish_new_word(&mut words, &mut bindings, name("OLD"), |builder| {
+                let branch = builder.append_unmapped_jump_placeholder()?;
+                let target = builder.append_unmapped(Instruction::Return)?;
+                builder.patch_branch_target(branch, target)?;
+                Ok(())
+            })
+            .expect("old word should publish");
+
+        let result = code.publish_new_word(&mut words, &mut bindings, name("NEW"), |builder| {
+            let target = builder.append_unmapped(Instruction::Return)?;
+            builder.patch_branch_target(old.entry().address(), target)?;
+            Ok(())
+        });
+
+        assert_eq!(
+            result,
+            Err(NewWordPublicationError::Build {
+                source: WordBodyBuildError::AddressOutsideCurrentBody {
+                    address: old.entry().address()
+                }
+            })
+        );
+        assert_eq!(
+            code.instruction_view().get_location(old.entry()),
+            Ok(&Instruction::Jump(InstructionAddress::from_index(1)))
+        );
+        assert_eq!(words.len(), 1);
+        assert_eq!(bindings.get(&name("OLD")), Some(&Binding::Word(old.id())));
+        assert!(bindings.get(&name("NEW")).is_none());
+    }
+
+    #[test]
+    fn later_build_cannot_patch_branch_to_previous_word_target() {
+        let mut code = PublishedCode::new();
+        let mut words = PublishedWords::new();
+        let mut bindings = Bindings::new();
+        let old = publish_push(&mut code, &mut words, &mut bindings, "OLD", 1);
+
+        let result = code.publish_new_word(&mut words, &mut bindings, name("NEW"), |builder| {
+            let branch = builder.append_unmapped_jump_placeholder()?;
+            builder.patch_branch_target(branch, old.entry().address())?;
+            Ok(())
+        });
+
+        assert_eq!(
+            result,
+            Err(NewWordPublicationError::Build {
+                source: WordBodyBuildError::AddressOutsideCurrentBody {
+                    address: old.entry().address()
+                }
+            })
+        );
+        assert_eq!(words.len(), 1);
+        assert_eq!(bindings.get(&name("OLD")), Some(&Binding::Word(old.id())));
+        assert!(bindings.get(&name("NEW")).is_none());
     }
 
     #[test]
