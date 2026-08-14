@@ -1,7 +1,6 @@
-use crate::instruction::{
-    BranchTargetPatchError, InstructionAddress, InstructionAddressError, InstructionSequence,
-};
+use crate::instruction::{BranchTargetPatchError, InstructionAddress, InstructionAddressError};
 use crate::source::SourceSpan;
+use crate::source_mapping::SourceMappedCode;
 use std::collections::HashMap;
 
 /// Owner-local compile-time line number identifier.
@@ -73,19 +72,18 @@ impl LocalLineNumberTable {
 
     pub(crate) fn define(
         &mut self,
-        instructions: &InstructionSequence,
+        code: &SourceMappedCode,
         line_number: LocalLineNumber,
         target: InstructionAddress,
         span: SourceSpan,
     ) -> Result<(), LineNumberError> {
-        instructions
-            .view()
-            .validate_address(target)
-            .map_err(|source| LineNumberError::InvalidDefinitionTarget {
+        code.validate_address(target).map_err(|source| {
+            LineNumberError::InvalidDefinitionTarget {
                 line_number,
                 span,
                 source,
-            })?;
+            }
+        })?;
 
         if let Some(existing) = self.definitions.get(&line_number) {
             return Err(LineNumberError::Duplicate {
@@ -113,10 +111,7 @@ impl LocalLineNumberTable {
         });
     }
 
-    pub(crate) fn resolve(
-        &self,
-        instructions: &mut InstructionSequence,
-    ) -> Result<(), LineNumberError> {
+    pub(crate) fn resolve(&self, code: &mut SourceMappedCode) -> Result<(), LineNumberError> {
         let mut resolved = Vec::with_capacity(self.patches.len());
         for patch in &self.patches {
             let Some(definition) = self.definitions.get(&patch.line_number) else {
@@ -129,8 +124,7 @@ impl LocalLineNumberTable {
         }
 
         for (patch, target) in resolved {
-            instructions
-                .patch_branch_target(patch.branch, target)
+            code.patch_branch_target(patch.branch, target)
                 .map_err(|source| LineNumberError::Patch {
                     line_number: patch.line_number,
                     span: patch.span,
@@ -179,15 +173,20 @@ mod tests {
         LocalLineNumber::new(raw)
     }
 
+    fn append(code: &mut SourceMappedCode, instruction: Instruction) -> InstructionAddress {
+        code.append_unmapped(instruction)
+            .expect("test instruction should append")
+    }
+
     #[test]
     fn resolves_same_owner_forward_line_number_patch() {
         let (sources, source_id) = source("BIF 0, 200\n200 DONE");
         let branch_span = span(sources.view(), source_id, 7, 10);
         let target_span = span(sources.view(), source_id, 11, 14);
-        let mut code = InstructionSequence::new();
-        let placeholder = code.append(Instruction::Halt);
-        let branch = code.append(Instruction::JumpIfZero(placeholder));
-        let target = code.append(Instruction::Halt);
+        let mut code = SourceMappedCode::new();
+        let placeholder = append(&mut code, Instruction::Halt);
+        let branch = append(&mut code, Instruction::JumpIfZero(placeholder));
+        let target = append(&mut code, Instruction::Halt);
         let mut table = LocalLineNumberTable::new();
 
         table.add_patch(line(200), branch, branch_span);
@@ -197,7 +196,7 @@ mod tests {
         table.resolve(&mut code).expect("patch should resolve");
 
         assert_eq!(
-            code.view().get(branch),
+            code.instruction_view().get(branch),
             Ok(&Instruction::JumpIfZero(target))
         );
     }
@@ -207,9 +206,9 @@ mod tests {
         let (sources, source_id) = source("100 START\nBIF 0, 100");
         let target_span = span(sources.view(), source_id, 0, 3);
         let branch_span = span(sources.view(), source_id, 17, 20);
-        let mut code = InstructionSequence::new();
-        let target = code.append(Instruction::Halt);
-        let branch = code.append(Instruction::Jump(address(0)));
+        let mut code = SourceMappedCode::new();
+        let target = append(&mut code, Instruction::Halt);
+        let branch = append(&mut code, Instruction::Jump(address(0)));
         let mut table = LocalLineNumberTable::new();
 
         table
@@ -218,7 +217,10 @@ mod tests {
         table.add_patch(line(100), branch, branch_span);
         table.resolve(&mut code).expect("patch should resolve");
 
-        assert_eq!(code.view().get(branch), Ok(&Instruction::Jump(target)));
+        assert_eq!(
+            code.instruction_view().get(branch),
+            Ok(&Instruction::Jump(target))
+        );
     }
 
     #[test]
@@ -226,8 +228,8 @@ mod tests {
         let (sources, source_id) = source("100 A\n100 B");
         let first_span = span(sources.view(), source_id, 0, 3);
         let second_span = span(sources.view(), source_id, 6, 9);
-        let mut code = InstructionSequence::new();
-        let target = code.append(Instruction::Halt);
+        let mut code = SourceMappedCode::new();
+        let target = append(&mut code, Instruction::Halt);
         let mut table = LocalLineNumberTable::new();
 
         table
@@ -248,8 +250,8 @@ mod tests {
     fn undefined_line_number_reports_operand_span() {
         let (sources, source_id) = source("BIF 0, 200");
         let branch_span = span(sources.view(), source_id, 7, 10);
-        let mut code = InstructionSequence::new();
-        let branch = code.append(Instruction::JumpIfZero(address(0)));
+        let mut code = SourceMappedCode::new();
+        let branch = append(&mut code, Instruction::JumpIfZero(address(0)));
         let mut table = LocalLineNumberTable::new();
 
         table.add_patch(line(200), branch, branch_span);
@@ -268,8 +270,8 @@ mod tests {
         let large = line(u64::from(i16::MAX as u16) + 1);
         let (sources, source_id) = source("40000 TARGET");
         let target_span = span(sources.view(), source_id, 0, 5);
-        let mut code = InstructionSequence::new();
-        let target = code.append(Instruction::Halt);
+        let mut code = SourceMappedCode::new();
+        let target = append(&mut code, Instruction::Halt);
         let mut table = LocalLineNumberTable::new();
 
         table
@@ -283,8 +285,8 @@ mod tests {
     fn definition_rejects_end_and_out_of_range_targets() {
         let (sources, source_id) = source("100 A");
         let line_span = span(sources.view(), source_id, 0, 3);
-        let mut code = InstructionSequence::new();
-        code.append(Instruction::Halt);
+        let mut code = SourceMappedCode::new();
+        append(&mut code, Instruction::Halt);
         let mut table = LocalLineNumberTable::new();
 
         assert_eq!(
@@ -314,10 +316,10 @@ mod tests {
         let (sources, source_id) = source("100 A\n100 B");
         let first_span = span(sources.view(), source_id, 0, 3);
         let second_span = span(sources.view(), source_id, 6, 9);
-        let mut first_code = InstructionSequence::new();
-        let mut second_code = InstructionSequence::new();
-        let first_target = first_code.append(Instruction::Halt);
-        let second_target = second_code.append(Instruction::Push(Value::integer(1)));
+        let mut first_code = SourceMappedCode::new();
+        let mut second_code = SourceMappedCode::new();
+        let first_target = append(&mut first_code, Instruction::Halt);
+        let second_target = append(&mut second_code, Instruction::Push(Value::integer(1)));
         let mut first_table = LocalLineNumberTable::new();
         let mut second_table = LocalLineNumberTable::new();
 
@@ -334,9 +336,9 @@ mod tests {
         let (sources, source_id) = source("BIF 0, 100");
         let branch_span = span(sources.view(), source_id, 7, 10);
         let target_span = span(sources.view(), source_id, 7, 10);
-        let mut code = InstructionSequence::new();
-        let non_branch = code.append(Instruction::Push(Value::integer(1)));
-        let target = code.append(Instruction::Halt);
+        let mut code = SourceMappedCode::new();
+        let non_branch = append(&mut code, Instruction::Push(Value::integer(1)));
+        let target = append(&mut code, Instruction::Halt);
         let mut table = LocalLineNumberTable::new();
 
         table

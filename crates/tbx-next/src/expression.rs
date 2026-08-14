@@ -1,9 +1,9 @@
 use crate::global_variable::GlobalVarId;
-use crate::instruction::{Instruction, InstructionSequence};
+use crate::instruction::Instruction;
 use crate::lexer::{Token, TokenKind};
 use crate::operator::{OperatorLookup, OperatorSemantic};
 use crate::source::{SourceError, SourceSpan, SourceView};
-use crate::source_mapping::{InstructionSourceMapping, SourceMappingAppendError};
+use crate::source_mapping::{SourceMappedCode, SourceMappingAppendError};
 use crate::value::Value;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -120,15 +120,9 @@ impl ExpressionStaging {
         self.entries.push(StagedInstruction { instruction, span });
     }
 
-    pub(crate) fn commit_to(
-        &self,
-        instructions: &mut InstructionSequence,
-        mapping: &mut InstructionSourceMapping,
-    ) -> Result<(), ExpressionError> {
+    pub(crate) fn commit_to(&self, code: &mut SourceMappedCode) -> Result<(), ExpressionError> {
         for entry in &self.entries {
-            let address = instructions.append(entry.instruction);
-            mapping
-                .append_mapped(address, entry.span)
+            code.append_mapped(entry.instruction, entry.span)
                 .map_err(ExpressionError::SourceMappingAppend)?;
         }
 
@@ -910,26 +904,24 @@ mod tests {
     fn commit_appends_staged_instructions_only_after_parse_success() {
         let (sources, id, staging) = parse("1+2");
         let view = sources.view();
-        let mut instructions = InstructionSequence::new();
-        let mut mapping = InstructionSourceMapping::new(instructions.code_space());
+        let mut code = SourceMappedCode::new();
 
-        staging
-            .commit_to(&mut instructions, &mut mapping)
-            .expect("staging should commit");
+        staging.commit_to(&mut code).expect("staging should commit");
 
-        assert_eq!(instructions.len(), 3);
+        assert_eq!(code.len(), 3);
         assert_eq!(
-            instructions.view().get(InstructionAddress::from_index(0)),
+            code.instruction_view()
+                .get(InstructionAddress::from_index(0)),
             Ok(&Instruction::Push(value(1)))
         );
         assert_eq!(
-            instructions.view().get(InstructionAddress::from_index(1)),
+            code.instruction_view()
+                .get(InstructionAddress::from_index(1)),
             Ok(&Instruction::Push(value(2)))
         );
         assert_eq!(
-            mapping.view().source_span(
-                instructions
-                    .view()
+            code.source_mapping().source_span(
+                code.instruction_view()
                     .location(InstructionAddress::from_index(2))
             ),
             Ok(Some(span(view, id, 1, 2)))
@@ -937,6 +929,6 @@ mod tests {
 
         let (_sources, _id, error) = parse_error("1+");
         assert!(matches!(error, ExpressionError::Syntax(_)));
-        assert_eq!(instructions.len(), 3);
+        assert_eq!(code.len(), 3);
     }
 }
