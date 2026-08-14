@@ -67,6 +67,11 @@ mod source;
 #[allow(dead_code)]
 mod source_mapping;
 
+// ADR #1369/#1461 coordinates internal runtime word body construction and
+// publication into one shared source-mapped published code owner.
+#[allow(dead_code)]
+mod published_code;
+
 // ADR #1412 keeps non-incremental lexical analysis as a crate-internal source
 // processing boundary that emits token categories and source spans only.
 #[allow(dead_code)]
