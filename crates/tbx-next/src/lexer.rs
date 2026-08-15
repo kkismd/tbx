@@ -432,6 +432,25 @@ mod tests {
     }
 
     #[test]
+    fn end_lexes_as_an_ordinary_name() {
+        let (sources, id, tokens) = lex_all("END end End");
+
+        assert_eq!(
+            kinds(&tokens),
+            [
+                TokenKind::Name,
+                TokenKind::Name,
+                TokenKind::Name,
+                TokenKind::Eof
+            ]
+        );
+        assert_token(tokens[0], TokenKind::Name, id, 0, 3);
+        assert_token(tokens[1], TokenKind::Name, id, 4, 7);
+        assert_token(tokens[2], TokenKind::Name, id, 8, 11);
+        assert_eq!(slices(sources.view(), &tokens), ["END", "end", "End", ""]);
+    }
+
+    #[test]
     fn minus_is_separate_from_integer_literals() {
         let (sources, _id, tokens) = lex_all("-1 2-3");
 

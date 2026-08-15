@@ -20,6 +20,7 @@ pub(crate) enum Binding {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum BindingInsertError {
     NameConflict,
+    ReservedName,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -50,11 +51,24 @@ impl Bindings {
         name: NormalizedName,
         binding: Binding,
     ) -> Result<(), BindingInsertError> {
-        if self.entries.contains_key(&name) {
+        self.validate_new_name(&name)?;
+
+        self.entries.insert(name, binding);
+        Ok(())
+    }
+
+    pub(crate) fn validate_new_name(
+        &self,
+        name: &NormalizedName,
+    ) -> Result<(), BindingInsertError> {
+        if is_semantic_reserved_binding_name(name) {
+            return Err(BindingInsertError::ReservedName);
+        }
+
+        if self.entries.contains_key(name) {
             return Err(BindingInsertError::NameConflict);
         }
 
-        self.entries.insert(name, binding);
         Ok(())
     }
 
@@ -103,6 +117,13 @@ impl Bindings {
     pub(crate) fn is_empty(&self) -> bool {
         self.entries.is_empty()
     }
+}
+
+// ADR #1500 3.1.1 makes only normalized END a semantic reserved binding name.
+// Keep this as a publication policy: do not turn END into a lexer keyword, mix
+// it into NormalizedName validation, or revive a general reserved spelling set.
+fn is_semantic_reserved_binding_name(name: &NormalizedName) -> bool {
+    name.as_str() == "END"
 }
 
 #[cfg(test)]
@@ -320,6 +341,46 @@ mod tests {
             Err(BindingInsertError::NameConflict)
         );
         assert_eq!(bindings.get(&name("Foo")), Some(&first));
+    }
+
+    #[test]
+    fn end_case_variants_are_rejected_as_reserved_names() {
+        for input in ["END", "end", "End"] {
+            let mut words = PublishedWords::new();
+            let binding = word_binding(&mut words, 10);
+            let mut bindings = Bindings::new();
+
+            assert_eq!(
+                bindings.validate_new_name(&name(input)),
+                Err(BindingInsertError::ReservedName)
+            );
+            assert_eq!(
+                bindings.insert_new(name(input), binding),
+                Err(BindingInsertError::ReservedName)
+            );
+            assert!(bindings.is_empty());
+        }
+    }
+
+    #[test]
+    fn validate_new_name_distinguishes_reserved_name_from_conflict() {
+        let mut words = PublishedWords::new();
+        let mut bindings = Bindings::new();
+        let existing = word_binding(&mut words, 20);
+
+        bindings
+            .insert_new(name("TAKEN"), existing)
+            .expect("test binding should register");
+
+        assert_eq!(
+            bindings.validate_new_name(&name("TAKEN")),
+            Err(BindingInsertError::NameConflict)
+        );
+        assert_eq!(
+            bindings.validate_new_name(&name("END")),
+            Err(BindingInsertError::ReservedName)
+        );
+        assert_eq!(bindings.validate_new_name(&name("AVAILABLE")), Ok(()));
     }
 
     #[test]
