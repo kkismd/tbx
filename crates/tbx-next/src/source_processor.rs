@@ -1361,7 +1361,7 @@ impl<'source> RuntimeDefinitionPublisher<'source>
         let mut body_error = None;
         let published = self
             .code
-            .publish_new_word_with_bindings(self.words, bindings, name, |body_bindings, builder| {
+            .publish_new_word(self.words, bindings, name, |body_bindings, builder| {
                 let result = compile_definition_body(
                     self.view,
                     self.source_id,

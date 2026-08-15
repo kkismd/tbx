@@ -248,7 +248,7 @@ mod tests {
         let mut bindings = Bindings::new();
 
         let word = code
-            .publish_new_word(&mut words, &mut bindings, name("BRANCH"), |builder| {
+            .publish_new_word(&mut words, &mut bindings, name("BRANCH"), |_, builder| {
                 let target: &mut dyn InstructionBuildTarget = builder;
                 let branch = target
                     .append_mapped_jump_if_zero_placeholder(branch_span)
@@ -281,7 +281,7 @@ mod tests {
         let mut bindings = Bindings::new();
         let branch = Instruction::Jump(InstructionAddress::from_index(0));
 
-        let result = code.publish_new_word(&mut words, &mut bindings, name("BAD"), |builder| {
+        let result = code.publish_new_word(&mut words, &mut bindings, name("BAD"), |_, builder| {
             let target: &mut dyn InstructionBuildTarget = builder;
             target
                 .append_mapped(branch, branch_span)
@@ -307,14 +307,14 @@ mod tests {
         let mut words = PublishedWords::new();
         let mut bindings = Bindings::new();
         let old = code
-            .publish_new_word(&mut words, &mut bindings, name("OLD"), |builder| {
+            .publish_new_word(&mut words, &mut bindings, name("OLD"), |_, builder| {
                 builder.append_unmapped(push(1))?;
                 builder.append_unmapped(Instruction::Return)?;
                 Ok(())
             })
             .expect("old word should publish");
 
-        let result = code.publish_new_word(&mut words, &mut bindings, name("NEW"), |builder| {
+        let result = code.publish_new_word(&mut words, &mut bindings, name("NEW"), |_, builder| {
             let target: &mut dyn InstructionBuildTarget = builder;
             let branch = target
                 .append_mapped_jump_placeholder(branch_span)
