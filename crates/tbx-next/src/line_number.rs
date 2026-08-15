@@ -1,6 +1,6 @@
-use crate::instruction::{BranchTargetPatchError, InstructionAddress, InstructionAddressError};
+use crate::instruction::InstructionAddress;
+use crate::instruction_builder::{InstructionBuildError, InstructionBuildTarget};
 use crate::source::SourceSpan;
-use crate::source_mapping::SourceMappedCode;
 use std::collections::HashMap;
 
 /// Owner-local compile-time line number identifier.
@@ -46,12 +46,12 @@ pub(crate) enum LineNumberError {
     InvalidDefinitionTarget {
         line_number: LocalLineNumber,
         span: SourceSpan,
-        source: InstructionAddressError,
+        source: InstructionBuildError,
     },
     Patch {
         line_number: LocalLineNumber,
         span: SourceSpan,
-        source: BranchTargetPatchError,
+        source: InstructionBuildError,
     },
 }
 
@@ -72,18 +72,18 @@ impl LocalLineNumberTable {
 
     pub(crate) fn define(
         &mut self,
-        code: &SourceMappedCode,
+        target_owner: &dyn InstructionBuildTarget,
         line_number: LocalLineNumber,
         target: InstructionAddress,
         span: SourceSpan,
     ) -> Result<(), LineNumberError> {
-        code.validate_address(target).map_err(|source| {
-            LineNumberError::InvalidDefinitionTarget {
+        target_owner
+            .validate_local_target(target)
+            .map_err(|source| LineNumberError::InvalidDefinitionTarget {
                 line_number,
                 span,
                 source,
-            }
-        })?;
+            })?;
 
         if let Some(existing) = self.definitions.get(&line_number) {
             return Err(LineNumberError::Duplicate {
@@ -111,7 +111,10 @@ impl LocalLineNumberTable {
         });
     }
 
-    pub(crate) fn resolve(&self, code: &mut SourceMappedCode) -> Result<(), LineNumberError> {
+    pub(crate) fn resolve(
+        &self,
+        target: &mut dyn InstructionBuildTarget,
+    ) -> Result<(), LineNumberError> {
         let mut resolved = Vec::with_capacity(self.patches.len());
         for patch in &self.patches {
             let Some(definition) = self.definitions.get(&patch.line_number) else {
@@ -123,8 +126,9 @@ impl LocalLineNumberTable {
             resolved.push((*patch, definition.target));
         }
 
-        for (patch, target) in resolved {
-            code.patch_branch_target(patch.branch, target)
+        for (patch, target_address) in resolved {
+            target
+                .patch_branch_target(patch.branch, target_address)
                 .map_err(|source| LineNumberError::Patch {
                     line_number: patch.line_number,
                     span: patch.span,
@@ -150,8 +154,11 @@ impl LineNumberError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::instruction::{Instruction, InstructionAddress};
+    use crate::instruction::{
+        BranchTargetPatchError, Instruction, InstructionAddress, InstructionAddressError,
+    };
     use crate::source::{SourceId, SourceTexts, SourceView};
+    use crate::source_mapping::SourceMappedCode;
     use crate::value::Value;
 
     fn source(text: &str) -> (SourceTexts, SourceId) {
@@ -294,8 +301,10 @@ mod tests {
             Err(LineNumberError::InvalidDefinitionTarget {
                 line_number: line(100),
                 span: line_span,
-                source: InstructionAddressError::EndAddress {
-                    address: address(1)
+                source: InstructionBuildError::InvalidAddress {
+                    source: InstructionAddressError::EndAddress {
+                        address: address(1)
+                    }
                 },
             })
         );
@@ -304,8 +313,10 @@ mod tests {
             Err(LineNumberError::InvalidDefinitionTarget {
                 line_number: line(100),
                 span: line_span,
-                source: InstructionAddressError::InvalidAddress {
-                    address: address(2)
+                source: InstructionBuildError::InvalidAddress {
+                    source: InstructionAddressError::InvalidAddress {
+                        address: address(2)
+                    }
                 },
             })
         );
@@ -351,9 +362,11 @@ mod tests {
             Err(LineNumberError::Patch {
                 line_number: line(100),
                 span: branch_span,
-                source: BranchTargetPatchError::NonBranchInstruction {
-                    address: non_branch,
-                    instruction: Instruction::Push(Value::integer(1)),
+                source: InstructionBuildError::BranchTargetPatch {
+                    source: BranchTargetPatchError::NonBranchInstruction {
+                        address: non_branch,
+                        instruction: Instruction::Push(Value::integer(1)),
+                    }
                 },
             })
         );

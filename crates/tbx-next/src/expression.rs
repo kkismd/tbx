@@ -1,9 +1,9 @@
 use crate::global_variable::GlobalVarId;
 use crate::instruction::Instruction;
+use crate::instruction_builder::{InstructionBuildError, InstructionBuildTarget};
 use crate::lexer::{Token, TokenKind};
 use crate::operator::{OperatorLookup, OperatorSemantic};
 use crate::source::{SourceError, SourceSpan, SourceView};
-use crate::source_mapping::{SourceMappedCode, SourceMappingAppendError};
 use crate::value::Value;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -22,7 +22,7 @@ pub(crate) enum ExpressionError {
     Source(SourceError),
     Syntax(ExpressionSyntaxError),
     Variable(ExpressionVariableError),
-    SourceMappingAppend(SourceMappingAppendError),
+    InstructionBuild(InstructionBuildError),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -120,10 +120,14 @@ impl ExpressionStaging {
         self.entries.push(StagedInstruction { instruction, span });
     }
 
-    pub(crate) fn commit_to(&self, code: &mut SourceMappedCode) -> Result<(), ExpressionError> {
+    pub(crate) fn commit_to(
+        &self,
+        target: &mut dyn InstructionBuildTarget,
+    ) -> Result<(), ExpressionError> {
         for entry in &self.entries {
-            code.append_mapped(entry.instruction, entry.span)
-                .map_err(ExpressionError::SourceMappingAppend)?;
+            target
+                .append_mapped(entry.instruction, entry.span)
+                .map_err(ExpressionError::InstructionBuild)?;
         }
 
         Ok(())
@@ -493,6 +497,7 @@ mod tests {
     use crate::operator::register_operator_primitives;
     use crate::primitive::PrimitiveRegistry;
     use crate::source::{SourceId, SourceTexts};
+    use crate::source_mapping::SourceMappedCode;
     use crate::word::PublishedWords;
     use std::collections::HashMap;
 

@@ -193,6 +193,14 @@ impl PublishedWord {
 }
 
 impl PublishedWordBuilder<'_> {
+    pub(crate) fn current_address(&self) -> InstructionAddress {
+        InstructionAddress::from_index(self.code.len())
+    }
+
+    pub(crate) fn current_len(&self) -> usize {
+        self.code.len()
+    }
+
     pub(crate) fn append_mapped(
         &mut self,
         instruction: Instruction,
@@ -286,6 +294,13 @@ impl PublishedWordBuilder<'_> {
 
         self.unresolved_patches.push(branch);
         Ok(branch)
+    }
+
+    pub(crate) fn validate_local_target(
+        &self,
+        address: InstructionAddress,
+    ) -> Result<(), WordBodyBuildError> {
+        self.validate_current_body_address(address)
     }
 
     fn validate_current_body_address(
