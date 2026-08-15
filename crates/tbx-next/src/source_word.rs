@@ -877,6 +877,7 @@ impl SourceWordLookup<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::block_code::BlockCodeBuilder;
     use crate::source::SourceTexts;
     use crate::source_mapping::SourceMappedCode;
     use crate::value::Value;
@@ -911,6 +912,7 @@ mod tests {
     fn native_context_lends_one_reader_without_resetting_position() {
         let (sources, source_id, tokens) = statement_tokens("TEST A B");
         let mut code = SourceMappedCode::new();
+        let mut builder = BlockCodeBuilder::new(&mut code);
         let bindings = Bindings::new();
         let mut context = NativeSourceWordContext::new(NativeSourceWordContextParts {
             view: sources.view(),
@@ -919,7 +921,7 @@ mod tests {
             block_reader: None,
             bindings: NativeSourceWordBindingAccess::Read(&bindings),
             operators: None,
-            code: &mut code,
+            code: &mut builder,
             local_line_number_prefix: None,
             globals: None,
             runtime_definitions: None,
@@ -1114,21 +1116,25 @@ mod tests {
             }
         }
         let mut code = SourceMappedCode::new();
+        let mut builder = BlockCodeBuilder::new(&mut code);
         let bindings = Bindings::new();
-        let mut context = NativeSourceWordContext::new(NativeSourceWordContextParts {
-            view: sources.view(),
-            source_id,
-            tokens: &tokens[..1],
-            block_reader: None,
-            bindings: NativeSourceWordBindingAccess::Read(&bindings),
-            operators: None,
-            code: &mut code,
-            local_line_number_prefix: None,
-            globals: None,
-            runtime_definitions: None,
-        });
+        {
+            let mut context = NativeSourceWordContext::new(NativeSourceWordContextParts {
+                view: sources.view(),
+                source_id,
+                tokens: &tokens[..1],
+                block_reader: None,
+                bindings: NativeSourceWordBindingAccess::Read(&bindings),
+                operators: None,
+                code: &mut builder,
+                local_line_number_prefix: None,
+                globals: None,
+                runtime_definitions: None,
+            });
 
-        push_one(&mut context).expect("test source word should emit");
+            push_one(&mut context).expect("test source word should emit");
+        }
+        builder.finish().expect("block should complete");
 
         assert_eq!(
             code.instruction_view()
@@ -1142,6 +1148,7 @@ mod tests {
         for input in ["VAR END", "VAR end", "VAR End"] {
             let (sources, source_id, tokens) = statement_tokens(input);
             let mut code = SourceMappedCode::new();
+            let mut builder = BlockCodeBuilder::new(&mut code);
             let mut bindings = Bindings::new();
             let mut globals = GlobalVariables::new();
             let expected_span = span(sources.view(), source_id, 4, 7);
@@ -1154,7 +1161,7 @@ mod tests {
                     block_reader: None,
                     bindings: NativeSourceWordBindingAccess::Write(&mut bindings),
                     operators: None,
-                    code: &mut code,
+                    code: &mut builder,
                     local_line_number_prefix: None,
                     globals: Some(&mut globals),
                     runtime_definitions: None,

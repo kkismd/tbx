@@ -1,4 +1,5 @@
 use crate::binding::Bindings;
+use crate::block_code::BlockCodeBuilder;
 use crate::expression::{
     parse_expression, ExpressionError, ExpressionSyntaxErrorKind, ExpressionVariableErrorKind,
 };
@@ -214,20 +215,24 @@ pub(crate) fn compile_source(
 
     let mut code = SourceMappedCode::new();
 
-    compile_statements(
-        view,
-        source_id,
-        segmented.completed_statements(),
-        segmented.terminal(),
-        context,
-        &mut code,
-    )?;
+    {
+        let mut builder = BlockCodeBuilder::new(&mut code);
+        compile_statements(
+            view,
+            source_id,
+            segmented.completed_statements(),
+            segmented.terminal(),
+            context,
+            &mut builder,
+        )?;
 
-    let eof_span = match segmented.terminal() {
-        Terminal::Eof { span } => span,
-        Terminal::LexError(error) => return Err(error.into()),
-    };
-    InstructionBuildTarget::append_mapped(&mut code, Instruction::Halt, eof_span)?;
+        let eof_span = match segmented.terminal() {
+            Terminal::Eof { span } => span,
+            Terminal::LexError(error) => return Err(error.into()),
+        };
+        InstructionBuildTarget::append_mapped(&mut builder, Instruction::Halt, eof_span)?;
+        builder.finish().map_err(InstructionBuildError::from)?;
+    }
 
     let entry = code
         .instruction_view()
@@ -3856,6 +3861,7 @@ mod tests {
             tokens.push(token);
         }
         let mut code = SourceMappedCode::new();
+        let mut builder = BlockCodeBuilder::new(&mut code);
 
         let error = compile_expression_tokens(
             sources.view(),
@@ -3863,7 +3869,7 @@ mod tests {
             &tokens,
             &bindings,
             operators.lookup(),
-            &mut code,
+            &mut builder,
         )
         .expect_err("later unresolved name should fail the expression");
 

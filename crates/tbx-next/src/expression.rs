@@ -492,6 +492,7 @@ const fn unexpected_token(token: Token) -> ExpressionSyntaxErrorKind {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::block_code::BlockCodeBuilder;
     use crate::instruction::InstructionAddress;
     use crate::lexer::Lexer;
     use crate::operator::register_operator_primitives;
@@ -910,8 +911,12 @@ mod tests {
         let (sources, id, staging) = parse("1+2");
         let view = sources.view();
         let mut code = SourceMappedCode::new();
+        let mut builder = BlockCodeBuilder::new(&mut code);
 
-        staging.commit_to(&mut code).expect("staging should commit");
+        staging
+            .commit_to(&mut builder)
+            .expect("staging should commit");
+        builder.finish().expect("block should complete");
 
         assert_eq!(code.len(), 3);
         assert_eq!(
