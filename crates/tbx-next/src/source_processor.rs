@@ -7,14 +7,14 @@ use crate::instruction::{
     CodeLocation, CodeSpaceLookup, CodeSpaceLookupError, Instruction, InstructionAddress,
     InstructionView,
 };
+use crate::instruction_builder::{InstructionBuildError, InstructionBuildTarget};
 use crate::lexer::{LexError, Lexer, Token, TokenKind};
 use crate::line_number::{LineNumberError, LocalLineNumber, LocalLineNumberTable};
 use crate::operator::OperatorLookup;
 use crate::primitive::PrimitiveLookup;
 use crate::source::{SourceError, SourceId, SourceSpan, SourceView};
 use crate::source_mapping::{
-    InstructionSourceMappingView, SourceMappedCode, SourceMappingAppendError, SourceMappingLookup,
-    SourceMappingLookupError,
+    InstructionSourceMappingView, SourceMappedCode, SourceMappingLookup, SourceMappingLookupError,
 };
 use crate::source_word::{
     NativeSourceWordBindingAccess, NativeSourceWordContext, NativeSourceWordContextParts,
@@ -78,13 +78,13 @@ pub(crate) struct RuntimeError {
     source_span: Result<Option<SourceSpan>, SourceMappingLookupError>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum SourceProcessorError {
     Source(SourceError),
     Lex(LexError),
     Compile(CompileError),
     CodeSpaceLookup(CodeSpaceLookupError),
-    SourceMappingAppend(SourceMappingAppendError),
+    InstructionBuild(InstructionBuildError),
     SourceMappingLookup(SourceMappingLookupError),
     SourceWordContextUnavailable { id: SourceWordId },
     SourceWordLookup(SourceWordLookupError),
@@ -92,13 +92,13 @@ pub(crate) enum SourceProcessorError {
     Runtime(RuntimeError),
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct CompileError {
     span: SourceSpan,
     kind: CompileErrorKind,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum CompileErrorKind {
     UnsupportedToken { kind: TokenKind },
     BareExpression,
@@ -107,7 +107,7 @@ pub(crate) enum CompileErrorKind {
     IntegerLiteralConversion,
     LineNumberLiteralOutOfRange,
     LineNumberLiteralConversion,
-    LineNumber { source: LineNumberError },
+    LineNumber { source: Box<LineNumberError> },
     WordResolution { source: WordResolutionError },
     Expression { source: ExpressionSyntaxErrorKind },
     ExpressionVariable { source: ExpressionVariableErrorKind },
@@ -124,7 +124,7 @@ pub(crate) enum BifSyntaxErrorKind {
 type OptionalLineNumberPrefix = Option<(LocalLineNumber, SourceSpan)>;
 
 struct StatementCompileState<'a> {
-    code: &'a mut SourceMappedCode,
+    code: &'a mut dyn InstructionBuildTarget,
     line_numbers: &'a mut LocalLineNumberTable,
     referenced_line_numbers: &'a HashSet<LocalLineNumber>,
 }
@@ -153,9 +153,9 @@ impl From<CodeSpaceLookupError> for SourceProcessorError {
     }
 }
 
-impl From<SourceMappingAppendError> for SourceProcessorError {
-    fn from(error: SourceMappingAppendError) -> Self {
-        Self::SourceMappingAppend(error)
+impl From<InstructionBuildError> for SourceProcessorError {
+    fn from(error: InstructionBuildError) -> Self {
+        Self::InstructionBuild(error)
     }
 }
 
@@ -199,7 +199,7 @@ pub(crate) fn compile_source(
         Terminal::Eof(eof) => eof,
         Terminal::LexError(error) => return Err(error.into()),
     };
-    code.append_mapped(Instruction::Halt, eof.span())?;
+    InstructionBuildTarget::append_mapped(&mut code, Instruction::Halt, eof.span())?;
 
     let entry = code
         .instruction_view()
@@ -260,7 +260,7 @@ fn compile_statement<'source>(
         state.referenced_line_numbers,
         context.bindings(),
     )?;
-    let start = state.code.len();
+    let start = state.code.current_address();
     let local_line_number_prefix = line_number.map(|(_, span)| span);
     compile_statement_body(
         view,
@@ -273,10 +273,9 @@ fn compile_statement<'source>(
     )?;
 
     if let Some((line_number, span)) = line_number {
-        let target = InstructionAddress::from_index(start);
         state
             .line_numbers
-            .define(state.code, line_number, target, span)
+            .define(state.code, line_number, start, span)
             .map_err(|source| line_number_compile_error(source).into())
     } else {
         Ok(())
@@ -362,7 +361,7 @@ fn compile_statement_leading_source_word<'source>(
     tokens: &'source [Token],
     context: &mut SourceCompileContext<'_>,
     local_line_number_prefix: Option<SourceSpan>,
-    code: &mut SourceMappedCode,
+    code: &mut dyn InstructionBuildTarget,
     cursor: &mut LogicalStatementCursor<'source, 'source>,
 ) -> Result<bool, SourceProcessorError> {
     let Some(first) = tokens.first().copied() else {
@@ -415,7 +414,7 @@ fn compile_simple_tokens(
     view: SourceView<'_>,
     tokens: &[Token],
     context: &SourceCompileContext<'_>,
-    code: &mut SourceMappedCode,
+    code: &mut dyn InstructionBuildTarget,
 ) -> Result<(), SourceProcessorError> {
     for token in tokens {
         match token.kind() {
@@ -459,7 +458,7 @@ fn compile_bif(
     source_id: SourceId,
     tokens: &[Token],
     context: &SourceCompileContext<'_>,
-    code: &mut SourceMappedCode,
+    code: &mut dyn InstructionBuildTarget,
     line_numbers: &mut LocalLineNumberTable,
 ) -> Result<(), SourceProcessorError> {
     let bif = tokens
@@ -511,10 +510,7 @@ fn compile_bif(
     }
 
     let line_number = compile_line_number_literal(view, target)?;
-    let branch = code.append_mapped(
-        Instruction::JumpIfZero(InstructionAddress::from_index(0)),
-        bif.span(),
-    )?;
+    let branch = code.append_mapped_jump_if_zero_placeholder(bif.span())?;
     line_numbers.add_patch(line_number, branch, target.span());
     Ok(())
 }
@@ -525,7 +521,7 @@ fn compile_expression_tokens(
     tokens: &[Token],
     bindings: &Bindings,
     operators: OperatorLookup,
-    code: &mut SourceMappedCode,
+    code: &mut dyn InstructionBuildTarget,
 ) -> Result<(), SourceProcessorError> {
     let mut expression_tokens = tokens
         .iter()
@@ -849,7 +845,9 @@ fn bif_syntax(span: SourceSpan, source: BifSyntaxErrorKind) -> CompileError {
 fn line_number_compile_error(source: LineNumberError) -> CompileError {
     CompileError {
         span: source.primary_span(),
-        kind: CompileErrorKind::LineNumber { source },
+        kind: CompileErrorKind::LineNumber {
+            source: Box::new(source),
+        },
     }
 }
 
@@ -1354,7 +1352,7 @@ impl SourceProcessorError {
                     source: error.kind(),
                 },
             }),
-            ExpressionError::SourceMappingAppend(error) => Self::SourceMappingAppend(error),
+            ExpressionError::InstructionBuild(error) => Self::InstructionBuild(error),
         }
     }
 }
@@ -1384,12 +1382,12 @@ impl RuntimeError {
 }
 
 impl CompileError {
-    pub(crate) const fn span(self) -> SourceSpan {
+    pub(crate) const fn span(&self) -> SourceSpan {
         self.span
     }
 
-    pub(crate) const fn kind(self) -> CompileErrorKind {
-        self.kind
+    pub(crate) fn kind(&self) -> CompileErrorKind {
+        self.kind.clone()
     }
 }
 
@@ -3252,10 +3250,10 @@ mod tests {
         assert_eq!(
             error.kind(),
             CompileErrorKind::LineNumber {
-                source: LineNumberError::Undefined {
+                source: Box::new(LineNumberError::Undefined {
                     line_number: LocalLineNumber::new(200),
                     span: span(sources.view(), id, 7, 10),
-                }
+                })
             }
         );
     }
@@ -3272,11 +3270,11 @@ mod tests {
         assert_eq!(
             error.kind(),
             CompileErrorKind::LineNumber {
-                source: LineNumberError::Duplicate {
+                source: Box::new(LineNumberError::Duplicate {
                     line_number: LocalLineNumber::new(100),
                     original_span: span(sources.view(), id, 0, 3),
                     duplicate_span: span(sources.view(), id, 15, 18),
-                }
+                })
             }
         );
     }

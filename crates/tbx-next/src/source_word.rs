@@ -4,11 +4,11 @@ use crate::expression::{
 };
 use crate::global_variable::GlobalVariables;
 use crate::instruction::Instruction;
+use crate::instruction_builder::{InstructionBuildError, InstructionBuildTarget};
 use crate::lexer::{LexError, Token, TokenKind};
 use crate::name::{NameError, NormalizedName};
 use crate::operator::OperatorLookup;
 use crate::source::{SourceError, SourceId, SourceSpan, SourceView};
-use crate::source_mapping::{SourceMappedCode, SourceMappingAppendError};
 use crate::word_resolution::{resolve_binding_name, ResolvedBinding, WordResolutionError};
 
 /// Internal identifier for a published source-processing word.
@@ -39,8 +39,8 @@ pub(crate) enum SourceWordError {
     Source {
         source: SourceError,
     },
-    SourceMappingAppend {
-        source: SourceMappingAppendError,
+    InstructionBuild {
+        source: InstructionBuildError,
     },
     UnsupportedSourceWord {
         span: SourceSpan,
@@ -304,7 +304,7 @@ pub(crate) struct NativeSourceWordContext<'source, 'state> {
     block_reader: Option<SourceBlockReader<'source, 'state>>,
     bindings: NativeSourceWordBindingAccess<'state>,
     operators: Option<OperatorLookup>,
-    code: &'state mut SourceMappedCode,
+    code: &'state mut dyn InstructionBuildTarget,
     local_line_number_prefix: Option<SourceSpan>,
     globals: Option<&'state mut GlobalVariables>,
 }
@@ -316,7 +316,7 @@ pub(crate) struct NativeSourceWordContextParts<'source, 'state> {
     pub(crate) block_reader: Option<SourceBlockReader<'source, 'state>>,
     pub(crate) bindings: NativeSourceWordBindingAccess<'state>,
     pub(crate) operators: Option<OperatorLookup>,
-    pub(crate) code: &'state mut SourceMappedCode,
+    pub(crate) code: &'state mut dyn InstructionBuildTarget,
     pub(crate) local_line_number_prefix: Option<SourceSpan>,
     pub(crate) globals: Option<&'state mut GlobalVariables>,
 }
@@ -375,7 +375,7 @@ impl<'source, 'state> NativeSourceWordContext<'source, 'state> {
         self.code
             .append_mapped(instruction, span)
             .map(|_| ())
-            .map_err(|source| SourceWordError::SourceMappingAppend { source })
+            .map_err(|source| SourceWordError::InstructionBuild { source })
     }
 
     pub(crate) fn publish_global_variable(
@@ -459,8 +459,8 @@ impl<'source, 'state> NativeSourceWordContext<'source, 'state> {
         staging: &ExpressionStaging,
     ) -> Result<(), SourceWordError> {
         staging.commit_to(self.code).map_err(|source| match source {
-            ExpressionError::SourceMappingAppend(source) => {
-                SourceWordError::SourceMappingAppend { source }
+            ExpressionError::InstructionBuild(source) => {
+                SourceWordError::InstructionBuild { source }
             }
             source => SourceWordError::Expression { source },
         })
@@ -658,6 +658,7 @@ impl SourceWordLookup<'_> {
 mod tests {
     use super::*;
     use crate::source::SourceTexts;
+    use crate::source_mapping::SourceMappedCode;
     use crate::value::Value;
 
     fn statement_tokens(text: &str) -> (SourceTexts, SourceId, Vec<Token>) {

@@ -67,6 +67,11 @@ mod source;
 #[allow(dead_code)]
 mod source_mapping;
 
+// #1504 keeps statement lowering independent from concrete instruction owners
+// while preserving published-word branch patch contracts.
+#[allow(dead_code)]
+mod instruction_builder;
+
 // ADR #1369/#1461 coordinates internal runtime word body construction and
 // publication into one shared source-mapped published code owner.
 #[allow(dead_code)]
