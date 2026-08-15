@@ -1,4 +1,4 @@
-use crate::binding::{Binding, BindingReplaceError, Bindings};
+use crate::binding::{Binding, BindingInsertError, BindingReplaceError, Bindings};
 use crate::instruction::{
     BranchTargetPatchError, CodeLocation, Instruction, InstructionAddress, InstructionAddressError,
     InstructionView,
@@ -69,6 +69,7 @@ pub(crate) enum WordBodyBuildError {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum NewWordPublicationError {
     NameConflict,
+    ReservedName,
     Build { source: WordBodyBuildError },
     Definition { source: WordDefinitionError },
     BindingCommitInvariantViolated,
@@ -95,9 +96,9 @@ impl PublishedCode {
         name: NormalizedName,
         build: impl FnOnce(&mut PublishedWordBuilder<'_>) -> Result<(), WordBodyBuildError>,
     ) -> Result<PublishedWord, NewWordPublicationError> {
-        if bindings.get(&name).is_some() {
-            return Err(NewWordPublicationError::NameConflict);
-        }
+        bindings
+            .validate_new_name(&name)
+            .map_err(NewWordPublicationError::from_precheck_error)?;
 
         let entry = self
             .build_word_body(build)
@@ -169,6 +170,15 @@ impl PublishedCode {
         Ok(PublishedWordEntry {
             location: self.code.instruction_view().location(entry_address),
         })
+    }
+}
+
+impl NewWordPublicationError {
+    fn from_precheck_error(error: BindingInsertError) -> Self {
+        match error {
+            BindingInsertError::NameConflict => Self::NameConflict,
+            BindingInsertError::ReservedName => Self::ReservedName,
+        }
     }
 }
 
@@ -542,6 +552,28 @@ mod tests {
             assert_eq!(code.len(), 0);
             assert_eq!(words.len(), 0);
             assert_eq!(bindings.get(&name("TAKEN")), Some(&existing));
+        }
+    }
+
+    #[test]
+    fn reserved_name_is_rejected_before_building_code() {
+        for input in ["END", "end", "End"] {
+            let mut code = PublishedCode::new();
+            let mut words = PublishedWords::new();
+            let mut bindings = Bindings::new();
+            let mut build_called = false;
+
+            let result = code.publish_new_word(&mut words, &mut bindings, name(input), |builder| {
+                build_called = true;
+                builder.append_unmapped(push(1))?;
+                Ok(())
+            });
+
+            assert_eq!(result, Err(NewWordPublicationError::ReservedName));
+            assert!(!build_called);
+            assert_eq!(code.len(), 0);
+            assert_eq!(words.len(), 0);
+            assert!(bindings.is_empty());
         }
     }
 

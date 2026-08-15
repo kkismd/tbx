@@ -83,6 +83,13 @@ mod tests {
     }
 
     #[test]
+    fn accepts_end_as_an_ordinary_normalized_name() {
+        assert_eq!(name("END").as_str(), "END");
+        assert_eq!(name("end").as_str(), "END");
+        assert_eq!(name("End").as_str(), "END");
+    }
+
+    #[test]
     fn normalizes_ascii_letters_to_uppercase() {
         assert_eq!(name("foo").as_str(), "FOO");
         assert_eq!(name("FOO").as_str(), "FOO");

@@ -14,17 +14,20 @@ const BUILTIN_GLOBAL_VARIABLE_NAMES: [&str; 26] = [
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum PrimitiveBootstrapError {
     NameConflict,
+    ReservedName,
     BindingRegistrationInvariantViolated,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum BuiltinGlobalBootstrapError {
     NameConflict,
+    ReservedName,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum SourceWordBootstrapError {
     NameConflict,
+    ReservedName,
     BindingRegistrationInvariantViolated,
 }
 
@@ -42,9 +45,9 @@ pub(crate) fn register_primitive(
     name: NormalizedName,
     primitive: PrimitiveId,
 ) -> Result<WordId, PrimitiveBootstrapError> {
-    if bindings.get(&name).is_some() {
-        return Err(PrimitiveBootstrapError::NameConflict);
-    }
+    bindings
+        .validate_new_name(&name)
+        .map_err(PrimitiveBootstrapError::from_precheck_error)?;
 
     let id = words.add(CompletedWordDefinition::primitive(primitive));
 
@@ -68,9 +71,9 @@ pub(crate) fn register_builtin_global_variables(
     let names = builtin_global_variable_names();
 
     for name in &names {
-        if bindings.get(name).is_some() {
-            return Err(BuiltinGlobalBootstrapError::NameConflict);
-        }
+        bindings
+            .validate_new_name(name)
+            .map_err(BuiltinGlobalBootstrapError::from)?;
     }
 
     let mut ids = Vec::with_capacity(names.len());
@@ -98,9 +101,9 @@ pub(crate) fn register_native_source_word(
     name: NormalizedName,
     handler: NativeSourceWordHandler,
 ) -> Result<SourceWordId, SourceWordBootstrapError> {
-    if bindings.get(&name).is_some() {
-        return Err(SourceWordBootstrapError::NameConflict);
-    }
+    bindings
+        .validate_new_name(&name)
+        .map_err(SourceWordBootstrapError::from_precheck_error)?;
 
     let id = source_words.register(handler);
 
@@ -119,9 +122,12 @@ pub(crate) fn register_builtin_source_words(
     // occupation; bootstrap must fail rather than silently overwrite a binding.
     let var_name = builtin_name("VAR");
     let let_name = builtin_name("LET");
-    if bindings.get(&var_name).is_some() || bindings.get(&let_name).is_some() {
-        return Err(SourceWordBootstrapError::NameConflict);
-    }
+    bindings
+        .validate_new_name(&var_name)
+        .map_err(SourceWordBootstrapError::from_precheck_error)?;
+    bindings
+        .validate_new_name(&let_name)
+        .map_err(SourceWordBootstrapError::from_precheck_error)?;
 
     let var = register_native_source_word(source_words, bindings, var_name, var_source_word)
         .expect("prechecked VAR source word should remain available");
@@ -158,17 +164,42 @@ fn builtin_name(input: &str) -> NormalizedName {
 }
 
 impl PrimitiveBootstrapError {
+    fn from_precheck_error(error: BindingInsertError) -> Self {
+        match error {
+            BindingInsertError::NameConflict => Self::NameConflict,
+            BindingInsertError::ReservedName => Self::ReservedName,
+        }
+    }
+
     fn from_binding_insert_error(error: BindingInsertError) -> Self {
         match error {
             BindingInsertError::NameConflict => Self::BindingRegistrationInvariantViolated,
+            BindingInsertError::ReservedName => Self::BindingRegistrationInvariantViolated,
+        }
+    }
+}
+
+impl From<BindingInsertError> for BuiltinGlobalBootstrapError {
+    fn from(error: BindingInsertError) -> Self {
+        match error {
+            BindingInsertError::NameConflict => Self::NameConflict,
+            BindingInsertError::ReservedName => Self::ReservedName,
         }
     }
 }
 
 impl SourceWordBootstrapError {
+    fn from_precheck_error(error: BindingInsertError) -> Self {
+        match error {
+            BindingInsertError::NameConflict => Self::NameConflict,
+            BindingInsertError::ReservedName => Self::ReservedName,
+        }
+    }
+
     fn from_binding_insert_error(error: BindingInsertError) -> Self {
         match error {
             BindingInsertError::NameConflict => Self::BindingRegistrationInvariantViolated,
+            BindingInsertError::ReservedName => Self::BindingRegistrationInvariantViolated,
         }
     }
 }
@@ -342,6 +373,20 @@ mod tests {
     }
 
     #[test]
+    fn reserved_primitive_name_is_rejected_without_word_id() {
+        for input in ["END", "end", "End"] {
+            let mut words = PublishedWords::new();
+            let mut bindings = Bindings::new();
+
+            let result = register_primitive(&mut words, &mut bindings, name(input), primitive(21));
+
+            assert_eq!(result, Err(PrimitiveBootstrapError::ReservedName));
+            assert_eq!(words.len(), 0);
+            assert!(bindings.is_empty());
+        }
+    }
+
+    #[test]
     fn case_variant_bootstrap_registration_is_rejected_without_mutation() {
         let mut words = PublishedWords::new();
         let mut bindings = Bindings::new();
@@ -452,6 +497,25 @@ mod tests {
         assert_eq!(source_words.len(), 1);
         assert_eq!(bindings.len(), 1);
         assert_source_word_binding(&bindings, "DUP_SOURCE", first);
+    }
+
+    #[test]
+    fn reserved_source_word_name_is_rejected_without_source_word_id() {
+        for input in ["END", "end", "End"] {
+            let mut source_words = SourceWordRegistry::new();
+            let mut bindings = Bindings::new();
+
+            let result = register_native_source_word(
+                &mut source_words,
+                &mut bindings,
+                name(input),
+                source_handler,
+            );
+
+            assert_eq!(result, Err(SourceWordBootstrapError::ReservedName));
+            assert_eq!(source_words.len(), 0);
+            assert!(bindings.is_empty());
+        }
     }
 
     #[test]

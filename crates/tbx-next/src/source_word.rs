@@ -60,6 +60,9 @@ pub(crate) enum SourceWordError {
     VarNameConflict {
         span: SourceSpan,
     },
+    VarReservedName {
+        span: SourceSpan,
+    },
     VarBindingCommitInvariantViolated {
         span: SourceSpan,
     },
@@ -311,9 +314,12 @@ impl<'source, 'state> NativeSourceWordContext<'source, 'state> {
             NativeSourceWordBindingAccess::Write(bindings) => &mut **bindings,
         };
 
-        if bindings.get(&name).is_some() {
-            return Err(SourceWordError::VarNameConflict { span });
-        }
+        bindings
+            .validate_new_name(&name)
+            .map_err(|source| match source {
+                BindingInsertError::NameConflict => SourceWordError::VarNameConflict { span },
+                BindingInsertError::ReservedName => SourceWordError::VarReservedName { span },
+            })?;
 
         let id = globals.allocate();
         // #1370/#1478/#1487 make binding insertion the VAR commit point:
@@ -322,6 +328,9 @@ impl<'source, 'state> NativeSourceWordContext<'source, 'state> {
             .insert_new(name, Binding::Variable(id))
             .map_err(|source| match source {
                 BindingInsertError::NameConflict => {
+                    SourceWordError::VarBindingCommitInvariantViolated { span }
+                }
+                BindingInsertError::ReservedName => {
                     SourceWordError::VarBindingCommitInvariantViolated { span }
                 }
             })
@@ -821,5 +830,40 @@ mod tests {
                 .get(crate::instruction::InstructionAddress::from_index(0)),
             Ok(&Instruction::Push(Value::integer(1)))
         );
+    }
+
+    #[test]
+    fn var_reserved_name_is_rejected_without_allocating_global_slot() {
+        for input in ["VAR END", "VAR end", "VAR End"] {
+            let (sources, source_id, tokens) = statement_tokens(input);
+            let mut code = SourceMappedCode::new();
+            let mut bindings = Bindings::new();
+            let mut globals = GlobalVariables::new();
+            let expected_span = span(sources.view(), source_id, 4, 7);
+
+            let result = {
+                let mut context = NativeSourceWordContext::new(NativeSourceWordContextParts {
+                    view: sources.view(),
+                    source_id,
+                    tokens: &tokens,
+                    bindings: NativeSourceWordBindingAccess::Write(&mut bindings),
+                    operators: None,
+                    code: &mut code,
+                    local_line_number_prefix: None,
+                    globals: Some(&mut globals),
+                });
+
+                var_source_word(&mut context)
+            };
+
+            assert_eq!(
+                result,
+                Err(SourceWordError::VarReservedName {
+                    span: expected_span
+                })
+            );
+            assert!(globals.is_empty());
+            assert!(bindings.is_empty());
+        }
     }
 }
