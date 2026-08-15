@@ -18,7 +18,8 @@ use crate::source_mapping::{
 };
 use crate::source_word::{
     NativeSourceWordBindingAccess, NativeSourceWordContext, NativeSourceWordContextParts,
-    SourceWordError, SourceWordId, SourceWordLookup, SourceWordLookupError,
+    SourceBlockCursor, SourceBlockRead, SourceBlockReader, SourceBlockStatement,
+    SourceBlockTerminal, SourceWordError, SourceWordId, SourceWordLookup, SourceWordLookupError,
 };
 use crate::value::Value;
 use crate::vm::{ExecutionView, RunOutcome, Vm, VmError};
@@ -189,6 +190,7 @@ pub(crate) fn compile_source(
         view,
         source_id,
         segmented.completed_statements(),
+        segmented.terminal(),
         context,
         &mut code,
     )?;
@@ -205,10 +207,11 @@ pub(crate) fn compile_source(
     Ok(TemporaryExecutionUnit { code, entry })
 }
 
-fn compile_statements(
-    view: SourceView<'_>,
+fn compile_statements<'source>(
+    view: SourceView<'source>,
     source_id: SourceId,
-    statements: &[LogicalStatement],
+    statements: &'source [LogicalStatement],
+    terminal: Terminal,
     mut context: SourceCompileContext<'_>,
     code: &mut SourceMappedCode,
 ) -> Result<(), SourceProcessorError> {
@@ -217,8 +220,9 @@ fn compile_statements(
     // as local control-flow syntax. This preserves existing source paths while
     // keeping line numbers compile-time-only.
     let referenced_line_numbers = collect_referenced_line_numbers(view, statements);
+    let mut cursor = LogicalStatementCursor::new(view, source_id, statements, terminal);
 
-    for statement in statements {
+    while let Some(statement) = cursor.next_completed_statement() {
         compile_statement(
             view,
             source_id,
@@ -229,6 +233,7 @@ fn compile_statements(
                 line_numbers: &mut line_numbers,
                 referenced_line_numbers: &referenced_line_numbers,
             },
+            &mut cursor,
         )?;
     }
 
@@ -237,12 +242,13 @@ fn compile_statements(
         .map_err(|source| line_number_compile_error(source).into())
 }
 
-fn compile_statement(
-    view: SourceView<'_>,
+fn compile_statement<'source>(
+    view: SourceView<'source>,
     source_id: SourceId,
-    statement: &[Token],
+    statement: &'source [Token],
     context: &mut SourceCompileContext<'_>,
     state: &mut StatementCompileState<'_>,
+    cursor: &mut LogicalStatementCursor<'source, 'source>,
 ) -> Result<(), SourceProcessorError> {
     if statement.is_empty() {
         return Ok(());
@@ -263,6 +269,7 @@ fn compile_statement(
         context,
         local_line_number_prefix,
         state,
+        cursor,
     )?;
 
     if let Some((line_number, span)) = line_number {
@@ -302,13 +309,14 @@ fn split_statement_line_number<'a>(
     Ok((Some((line_number, first.span())), rest))
 }
 
-fn compile_statement_body(
-    view: SourceView<'_>,
+fn compile_statement_body<'source>(
+    view: SourceView<'source>,
     source_id: SourceId,
-    tokens: &[Token],
+    tokens: &'source [Token],
     context: &mut SourceCompileContext<'_>,
     local_line_number_prefix: Option<SourceSpan>,
     state: &mut StatementCompileState<'_>,
+    cursor: &mut LogicalStatementCursor<'source, 'source>,
 ) -> Result<(), SourceProcessorError> {
     let Some((&first, _)) = tokens.split_first() else {
         return Ok(());
@@ -332,6 +340,7 @@ fn compile_statement_body(
         context,
         local_line_number_prefix,
         state.code,
+        cursor,
     )? {
         return Ok(());
     }
@@ -347,13 +356,14 @@ fn compile_statement_body(
     compile_simple_tokens(view, tokens, context, state.code)
 }
 
-fn compile_statement_leading_source_word(
-    view: SourceView<'_>,
+fn compile_statement_leading_source_word<'source>(
+    view: SourceView<'source>,
     source_id: SourceId,
-    tokens: &[Token],
+    tokens: &'source [Token],
     context: &mut SourceCompileContext<'_>,
     local_line_number_prefix: Option<SourceSpan>,
     code: &mut SourceMappedCode,
+    cursor: &mut LogicalStatementCursor<'source, 'source>,
 ) -> Result<bool, SourceProcessorError> {
     let Some(first) = tokens.first().copied() else {
         return Ok(false);
@@ -390,6 +400,7 @@ fn compile_statement_leading_source_word(
         view,
         source_id,
         tokens,
+        block_reader: Some(SourceBlockReader::new(cursor)),
         bindings: binding_access,
         operators,
         code,
@@ -857,6 +868,15 @@ struct LogicalStatement {
     tokens: Vec<Token>,
 }
 
+#[derive(Debug)]
+struct LogicalStatementCursor<'source, 'statements> {
+    view: SourceView<'source>,
+    source_id: SourceId,
+    statements: &'statements [LogicalStatement],
+    terminal: Terminal,
+    position: usize,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Terminal {
     Eof(Token),
@@ -900,6 +920,62 @@ impl LogicalStatement {
 
     fn tokens(&self) -> &[Token] {
         &self.tokens
+    }
+
+    fn span(&self, view: SourceView<'_>, source_id: SourceId) -> Result<SourceSpan, SourceError> {
+        let first = self
+            .tokens
+            .first()
+            .expect("logical statements are never empty");
+        let last = self
+            .tokens
+            .last()
+            .expect("logical statements are never empty");
+        view.span(source_id, first.span().start(), last.span().end())
+    }
+}
+
+impl<'source, 'statements> LogicalStatementCursor<'source, 'statements> {
+    fn new(
+        view: SourceView<'source>,
+        source_id: SourceId,
+        statements: &'statements [LogicalStatement],
+        terminal: Terminal,
+    ) -> Self {
+        Self {
+            view,
+            source_id,
+            statements,
+            terminal,
+            position: 0,
+        }
+    }
+
+    fn next_completed_statement(&mut self) -> Option<&'statements LogicalStatement> {
+        let statement = self.statements.get(self.position)?;
+        self.position += 1;
+        Some(statement)
+    }
+}
+
+impl<'statements> SourceBlockCursor<'statements> for LogicalStatementCursor<'_, 'statements> {
+    fn read_next_block_statement(
+        &mut self,
+    ) -> Result<SourceBlockRead<'statements>, SourceWordError> {
+        let Some(statement) = self.next_completed_statement() else {
+            return Ok(SourceBlockRead::Terminal(match self.terminal {
+                Terminal::Eof(token) => SourceBlockTerminal::Eof { span: token.span() },
+                Terminal::LexError(error) => SourceBlockTerminal::LexError { error },
+            }));
+        };
+
+        let span = statement
+            .span(self.view, self.source_id)
+            .map_err(|source| SourceWordError::Source { source })?;
+        Ok(SourceBlockRead::Statement(SourceBlockStatement::new(
+            statement.tokens(),
+            span,
+        )))
     }
 }
 
@@ -1512,6 +1588,125 @@ mod tests {
     ) -> Result<(), SourceWordError> {
         let first = context.source_word_token();
         context.append_mapped(Instruction::Push(value(99)), first.span())
+    }
+
+    fn consume_one_following_statement(
+        context: &mut NativeSourceWordContext<'_, '_>,
+    ) -> Result<(), SourceWordError> {
+        let read = context
+            .block_reader_mut()
+            .expect("block reader should be available to source words")
+            .next_statement()?;
+        let SourceBlockRead::Statement(statement) = read else {
+            let span = match read {
+                SourceBlockRead::Terminal(terminal) => terminal
+                    .eof_span()
+                    .unwrap_or_else(|| context.source_word_token().span()),
+                SourceBlockRead::Statement(_) => unreachable!(),
+            };
+            return Err(SourceWordError::UnsupportedSourceWord { span });
+        };
+
+        context.append_mapped(
+            Instruction::Push(value(statement.tokens().len() as i16)),
+            statement.span(),
+        )
+    }
+
+    fn consume_two_following_statements(
+        context: &mut NativeSourceWordContext<'_, '_>,
+    ) -> Result<(), SourceWordError> {
+        for _ in 0..2 {
+            consume_one_following_statement(context)?;
+        }
+        Ok(())
+    }
+
+    fn consume_standalone_marker(
+        context: &mut NativeSourceWordContext<'_, '_>,
+    ) -> Result<(), SourceWordError> {
+        let read = context
+            .block_reader_mut()
+            .expect("block reader should be available to source words")
+            .next_statement()?;
+        let SourceBlockRead::Statement(statement) = read else {
+            return Err(SourceWordError::UnsupportedSourceWord {
+                span: context.source_word_token().span(),
+            });
+        };
+        if let Some(token) = statement.standalone_name() {
+            let source_name = context
+                .view()
+                .slice(token.span())
+                .map_err(|source| SourceWordError::Source { source })?;
+            if source_name.eq_ignore_ascii_case("END") {
+                return context.append_mapped(Instruction::Push(value(0)), statement.span());
+            }
+        }
+
+        context.append_mapped(
+            Instruction::Push(value(statement.tokens().len() as i16)),
+            statement.span(),
+        )
+    }
+
+    fn read_eof_terminal_as_missing_terminator(
+        context: &mut NativeSourceWordContext<'_, '_>,
+    ) -> Result<(), SourceWordError> {
+        let read = context
+            .block_reader_mut()
+            .expect("block reader should be available to source words")
+            .next_statement()?;
+        let SourceBlockRead::Terminal(SourceBlockTerminal::Eof { span }) = read else {
+            return Err(SourceWordError::UnsupportedSourceWord {
+                span: context.source_word_token().span(),
+            });
+        };
+
+        Err(SourceWordError::UnsupportedSourceWord { span })
+    }
+
+    fn observe_lex_terminal_without_converting_to_eof(
+        context: &mut NativeSourceWordContext<'_, '_>,
+    ) -> Result<(), SourceWordError> {
+        let read = context
+            .block_reader_mut()
+            .expect("block reader should be available to source words")
+            .next_statement()?;
+        let SourceBlockRead::Terminal(terminal) = read else {
+            return Err(SourceWordError::UnsupportedSourceWord {
+                span: context.source_word_token().span(),
+            });
+        };
+        assert!(terminal.lex_error().is_some());
+        Ok(())
+    }
+
+    fn nested_reader_fixture(
+        context: &mut NativeSourceWordContext<'_, '_>,
+    ) -> Result<(), SourceWordError> {
+        fn consume_inner<'source>(
+            reader: &mut SourceBlockReader<'source, '_>,
+        ) -> Result<SourceBlockRead<'source>, SourceWordError> {
+            reader.next_statement()
+        }
+
+        let (first, second) = {
+            let reader = context
+                .block_reader_mut()
+                .expect("block reader should be available to source words");
+            let first = consume_inner(reader)?;
+            let second = reader.next_statement()?;
+            (first, second)
+        };
+
+        assert!(matches!(first, SourceBlockRead::Statement(_)));
+        let SourceBlockRead::Statement(statement) = second else {
+            return Err(SourceWordError::UnsupportedSourceWord {
+                span: context.source_word_token().span(),
+            });
+        };
+        context.append_mapped(Instruction::Push(value(2)), statement.span())
     }
 
     fn compile_with_var(
@@ -3480,6 +3675,252 @@ mod tests {
         );
         assert_eq!(
             unit.instructions().get(address(2)),
+            Ok(&Instruction::Push(value(99)))
+        );
+    }
+
+    #[test]
+    fn block_reader_consumes_one_statement_without_outer_reprocessing() {
+        let mut source_words = SourceWordRegistry::new();
+        let mut bindings = Bindings::new();
+        register_native_source_word(
+            &mut source_words,
+            &mut bindings,
+            name("BLOCK"),
+            consume_one_following_statement,
+        )
+        .expect("block source word should register");
+        register_native_source_word(
+            &mut source_words,
+            &mut bindings,
+            name("SOURCE_MARKER"),
+            emit_source_word_marker,
+        )
+        .expect("marker source word should register");
+        let (sources, source_id) = source("BLOCK\nMISSING\nSOURCE_MARKER");
+
+        let unit = compile_source(
+            sources.view(),
+            source_id,
+            SourceCompileContext::with_source_words(&bindings, source_words.lookup()),
+        )
+        .expect("consumed unresolved statement should not be reprocessed by outer loop");
+
+        assert_eq!(unit.len(), 3);
+        assert_eq!(
+            unit.instructions().get(address(0)),
+            Ok(&Instruction::Push(value(1)))
+        );
+        assert_eq!(
+            unit.instructions().get(address(1)),
+            Ok(&Instruction::Push(value(99)))
+        );
+        assert_eq!(unit.instructions().get(address(2)), Ok(&Instruction::Halt));
+    }
+
+    #[test]
+    fn block_reader_consumes_multiple_statements_without_duplicates() {
+        let mut source_words = SourceWordRegistry::new();
+        let mut bindings = Bindings::new();
+        register_native_source_word(
+            &mut source_words,
+            &mut bindings,
+            name("BLOCK2"),
+            consume_two_following_statements,
+        )
+        .expect("block source word should register");
+        register_native_source_word(
+            &mut source_words,
+            &mut bindings,
+            name("SOURCE_MARKER"),
+            emit_source_word_marker,
+        )
+        .expect("marker source word should register");
+        let (sources, source_id) = source("BLOCK2\nFIRST\nSECOND\nSOURCE_MARKER");
+
+        let unit = compile_source(
+            sources.view(),
+            source_id,
+            SourceCompileContext::with_source_words(&bindings, source_words.lookup()),
+        )
+        .expect("both consumed statements should be skipped by outer loop");
+
+        assert_eq!(unit.len(), 4);
+        assert_eq!(
+            unit.instructions().get(address(0)),
+            Ok(&Instruction::Push(value(1)))
+        );
+        assert_eq!(
+            unit.instructions().get(address(1)),
+            Ok(&Instruction::Push(value(1)))
+        );
+        assert_eq!(
+            unit.instructions().get(address(2)),
+            Ok(&Instruction::Push(value(99)))
+        );
+    }
+
+    #[test]
+    fn block_reader_exposes_whole_statement_for_standalone_marker_detection() {
+        let mut source_words = SourceWordRegistry::new();
+        let mut bindings = Bindings::new();
+        register_native_source_word(
+            &mut source_words,
+            &mut bindings,
+            name("BLOCK"),
+            consume_standalone_marker,
+        )
+        .expect("block source word should register");
+        register_native_source_word(
+            &mut source_words,
+            &mut bindings,
+            name("SOURCE_MARKER"),
+            emit_source_word_marker,
+        )
+        .expect("marker source word should register");
+        let (sources, source_id) = source("BLOCK\nEND\nSOURCE_MARKER");
+
+        let unit = compile_source(
+            sources.view(),
+            source_id,
+            SourceCompileContext::with_source_words(&bindings, source_words.lookup()),
+        )
+        .expect("standalone marker should be consumed by block reader");
+
+        assert_eq!(
+            unit.instructions().get(address(0)),
+            Ok(&Instruction::Push(value(0)))
+        );
+        assert_eq!(
+            unit.instructions().get(address(1)),
+            Ok(&Instruction::Push(value(99)))
+        );
+    }
+
+    #[test]
+    fn block_reader_keeps_multi_token_marker_candidate_as_statement() {
+        let mut source_words = SourceWordRegistry::new();
+        let mut bindings = Bindings::new();
+        register_native_source_word(
+            &mut source_words,
+            &mut bindings,
+            name("BLOCK"),
+            consume_standalone_marker,
+        )
+        .expect("block source word should register");
+        register_native_source_word(
+            &mut source_words,
+            &mut bindings,
+            name("SOURCE_MARKER"),
+            emit_source_word_marker,
+        )
+        .expect("marker source word should register");
+        let (sources, source_id) = source("BLOCK\nEND X\nSOURCE_MARKER");
+
+        let unit = compile_source(
+            sources.view(),
+            source_id,
+            SourceCompileContext::with_source_words(&bindings, source_words.lookup()),
+        )
+        .expect("multi-token marker candidate should be available to the handler");
+
+        assert_eq!(
+            unit.instructions().get(address(0)),
+            Ok(&Instruction::Push(value(2)))
+        );
+        assert_eq!(
+            unit.instructions().get(address(1)),
+            Ok(&Instruction::Push(value(99)))
+        );
+    }
+
+    #[test]
+    fn block_reader_reports_eof_span_for_missing_terminator_errors() {
+        let mut source_words = SourceWordRegistry::new();
+        let mut bindings = Bindings::new();
+        register_native_source_word(
+            &mut source_words,
+            &mut bindings,
+            name("BLOCK"),
+            read_eof_terminal_as_missing_terminator,
+        )
+        .expect("block source word should register");
+        let (sources, source_id) = source("BLOCK");
+
+        let error = compile_source(
+            sources.view(),
+            source_id,
+            SourceCompileContext::with_source_words(&bindings, source_words.lookup()),
+        )
+        .expect_err("missing block terminator should use EOF terminal span");
+
+        assert_eq!(
+            error,
+            SourceProcessorError::SourceWord(SourceWordError::UnsupportedSourceWord {
+                span: span(sources.view(), source_id, 5, 5)
+            })
+        );
+    }
+
+    #[test]
+    fn block_reader_does_not_convert_lexical_failure_terminal_to_eof() {
+        let mut source_words = SourceWordRegistry::new();
+        let mut bindings = Bindings::new();
+        register_native_source_word(
+            &mut source_words,
+            &mut bindings,
+            name("BLOCK"),
+            observe_lex_terminal_without_converting_to_eof,
+        )
+        .expect("block source word should register");
+        let (sources, source_id) = source("BLOCK\n@");
+
+        let error = compile_source(
+            sources.view(),
+            source_id,
+            SourceCompileContext::with_source_words(&bindings, source_words.lookup()),
+        )
+        .expect_err("lexical failure should remain the source terminal error");
+
+        assert!(matches!(
+            error,
+            SourceProcessorError::Lex(LexError::InvalidCharacter { .. })
+        ));
+    }
+
+    #[test]
+    fn nested_block_reader_fixture_advances_the_shared_cursor_once() {
+        let mut source_words = SourceWordRegistry::new();
+        let mut bindings = Bindings::new();
+        register_native_source_word(
+            &mut source_words,
+            &mut bindings,
+            name("NEST"),
+            nested_reader_fixture,
+        )
+        .expect("nested source word should register");
+        register_native_source_word(
+            &mut source_words,
+            &mut bindings,
+            name("SOURCE_MARKER"),
+            emit_source_word_marker,
+        )
+        .expect("marker source word should register");
+        let (sources, source_id) = source("NEST\nINNER\nOUTER\nSOURCE_MARKER");
+
+        let unit = compile_source(
+            sources.view(),
+            source_id,
+            SourceCompileContext::with_source_words(&bindings, source_words.lookup()),
+        )
+        .expect("inner and outer reader use should share one cursor");
+
+        assert_eq!(
+            unit.instructions().get(address(0)),
+            Ok(&Instruction::Push(value(2)))
+        );
+        assert_eq!(
+            unit.instructions().get(address(1)),
             Ok(&Instruction::Push(value(99)))
         );
     }

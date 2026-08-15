@@ -4,7 +4,7 @@ use crate::expression::{
 };
 use crate::global_variable::GlobalVariables;
 use crate::instruction::Instruction;
-use crate::lexer::{Token, TokenKind};
+use crate::lexer::{LexError, Token, TokenKind};
 use crate::name::{NameError, NormalizedName};
 use crate::operator::OperatorLookup;
 use crate::source::{SourceError, SourceId, SourceSpan, SourceView};
@@ -122,6 +122,79 @@ pub(crate) enum SourceStatementExpected {
     Expression,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct SourceBlockStatement<'source> {
+    tokens: &'source [Token],
+    span: SourceSpan,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SourceBlockTerminal {
+    Eof { span: SourceSpan },
+    LexError { error: LexError },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SourceBlockRead<'source> {
+    Statement(SourceBlockStatement<'source>),
+    Terminal(SourceBlockTerminal),
+}
+
+pub(crate) trait SourceBlockCursor<'source> {
+    fn read_next_block_statement(&mut self) -> Result<SourceBlockRead<'source>, SourceWordError>;
+}
+
+pub(crate) struct SourceBlockReader<'source, 'cursor> {
+    cursor: &'cursor mut dyn SourceBlockCursor<'source>,
+}
+
+impl<'source> SourceBlockStatement<'source> {
+    pub(crate) const fn new(tokens: &'source [Token], span: SourceSpan) -> Self {
+        Self { tokens, span }
+    }
+
+    pub(crate) const fn tokens(self) -> &'source [Token] {
+        self.tokens
+    }
+
+    pub(crate) const fn span(self) -> SourceSpan {
+        self.span
+    }
+
+    pub(crate) fn standalone_name(self) -> Option<Token> {
+        match self.tokens {
+            [token] if token.kind() == TokenKind::Name => Some(*token),
+            _ => None,
+        }
+    }
+}
+
+impl SourceBlockTerminal {
+    pub(crate) const fn eof_span(self) -> Option<SourceSpan> {
+        match self {
+            Self::Eof { span } => Some(span),
+            Self::LexError { .. } => None,
+        }
+    }
+
+    pub(crate) const fn lex_error(self) -> Option<LexError> {
+        match self {
+            Self::Eof { .. } => None,
+            Self::LexError { error } => Some(error),
+        }
+    }
+}
+
+impl<'source, 'cursor> SourceBlockReader<'source, 'cursor> {
+    pub(crate) fn new(cursor: &'cursor mut dyn SourceBlockCursor<'source>) -> Self {
+        Self { cursor }
+    }
+
+    pub(crate) fn next_statement(&mut self) -> Result<SourceBlockRead<'source>, SourceWordError> {
+        self.cursor.read_next_block_statement()
+    }
+}
+
 /// Forward-only reader over the body of one completed logical statement.
 ///
 /// Source words receive this boundary instead of raw statement tokens. It can
@@ -228,6 +301,7 @@ pub(crate) struct NativeSourceWordContext<'source, 'state> {
     source_id: SourceId,
     source_word_token: Token,
     reader: SourceStatementReader<'source>,
+    block_reader: Option<SourceBlockReader<'source, 'state>>,
     bindings: NativeSourceWordBindingAccess<'state>,
     operators: Option<OperatorLookup>,
     code: &'state mut SourceMappedCode,
@@ -239,6 +313,7 @@ pub(crate) struct NativeSourceWordContextParts<'source, 'state> {
     pub(crate) view: SourceView<'source>,
     pub(crate) source_id: SourceId,
     pub(crate) tokens: &'source [Token],
+    pub(crate) block_reader: Option<SourceBlockReader<'source, 'state>>,
     pub(crate) bindings: NativeSourceWordBindingAccess<'state>,
     pub(crate) operators: Option<OperatorLookup>,
     pub(crate) code: &'state mut SourceMappedCode,
@@ -259,6 +334,7 @@ impl<'source, 'state> NativeSourceWordContext<'source, 'state> {
             source_id: parts.source_id,
             source_word_token,
             reader,
+            block_reader: parts.block_reader,
             bindings: parts.bindings,
             operators: parts.operators,
             code: parts.code,
@@ -281,6 +357,10 @@ impl<'source, 'state> NativeSourceWordContext<'source, 'state> {
 
     pub(crate) fn statement_reader_mut(&mut self) -> &mut SourceStatementReader<'source> {
         &mut self.reader
+    }
+
+    pub(crate) fn block_reader_mut(&mut self) -> Option<&mut SourceBlockReader<'source, 'state>> {
+        self.block_reader.as_mut()
     }
 
     pub(crate) const fn local_line_number_prefix(&self) -> Option<SourceSpan> {
@@ -615,6 +695,7 @@ mod tests {
             view: sources.view(),
             source_id,
             tokens: &tokens,
+            block_reader: None,
             bindings: NativeSourceWordBindingAccess::Read(&bindings),
             operators: None,
             code: &mut code,
@@ -816,6 +897,7 @@ mod tests {
             view: sources.view(),
             source_id,
             tokens: &tokens[..1],
+            block_reader: None,
             bindings: NativeSourceWordBindingAccess::Read(&bindings),
             operators: None,
             code: &mut code,
@@ -846,6 +928,7 @@ mod tests {
                     view: sources.view(),
                     source_id,
                     tokens: &tokens,
+                    block_reader: None,
                     bindings: NativeSourceWordBindingAccess::Write(&mut bindings),
                     operators: None,
                     code: &mut code,
