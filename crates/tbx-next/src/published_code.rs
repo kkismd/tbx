@@ -1,14 +1,12 @@
 use crate::binding::{Binding, BindingInsertError, BindingReplaceError, Bindings};
+use crate::block_code::{BlockCodeBuildError, BlockCodeBuilder};
 use crate::instruction::{
-    BranchTargetPatchError, CodeLocation, Instruction, InstructionAddress, InstructionAddressError,
-    InstructionView,
+    CodeLocation, Instruction, InstructionAddress, InstructionAddressError, InstructionView,
 };
 use crate::name::NormalizedName;
 use crate::redefinition::{redefine_word, WordRedefinition, WordRedefinitionError};
 use crate::source::SourceSpan;
-use crate::source_mapping::{
-    InstructionSourceMappingView, SourceMappedCode, SourceMappingAppendError,
-};
+use crate::source_mapping::{InstructionSourceMappingView, SourceMappedCode};
 use crate::word::{CompletedWordDefinition, PublishedWords, WordDefinitionError, WordId};
 
 /// Session-owned code space for all published compiled runtime words.
@@ -23,9 +21,7 @@ pub(crate) struct PublishedCode {
 
 #[derive(Debug)]
 pub(crate) struct PublishedWordBuilder<'a> {
-    code: &'a mut SourceMappedCode,
-    body_start: InstructionAddress,
-    unresolved_patches: Vec<InstructionAddress>,
+    block: BlockCodeBuilder<'a>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -42,10 +38,10 @@ pub(crate) struct PublishedWord {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum WordBodyBuildError {
     SourceMappingAppend {
-        source: SourceMappingAppendError,
+        source: crate::source_mapping::SourceMappingAppendError,
     },
     BranchTargetPatch {
-        source: BranchTargetPatchError,
+        source: crate::instruction::BranchTargetPatchError,
     },
     BranchInstructionRequiresPatch {
         instruction: Instruction,
@@ -157,9 +153,7 @@ impl PublishedCode {
         let entry_address = InstructionAddress::from_index(self.code.len());
 
         let mut builder = PublishedWordBuilder {
-            code: &mut self.code,
-            body_start: entry_address,
-            unresolved_patches: Vec::new(),
+            block: BlockCodeBuilder::new(&mut self.code),
         };
         build(&mut builder)?;
         builder.finish()?;
@@ -181,11 +175,8 @@ impl PublishedCode {
     where
         E: From<WordBodyBuildError>,
     {
-        let entry_address = InstructionAddress::from_index(self.code.len());
         let mut builder = PublishedWordBuilder {
-            code: &mut self.code,
-            body_start: entry_address,
-            unresolved_patches: Vec::new(),
+            block: BlockCodeBuilder::new(&mut self.code),
         };
         build(&mut builder)?;
         builder.finish().map_err(E::from)
@@ -213,11 +204,11 @@ impl PublishedWord {
 
 impl PublishedWordBuilder<'_> {
     pub(crate) fn current_address(&self) -> InstructionAddress {
-        InstructionAddress::from_index(self.code.len())
+        self.block.current_address()
     }
 
     pub(crate) fn current_len(&self) -> usize {
-        self.code.len()
+        self.block.current_len()
     }
 
     pub(crate) fn append_mapped(
@@ -225,55 +216,52 @@ impl PublishedWordBuilder<'_> {
         instruction: Instruction,
         span: SourceSpan,
     ) -> Result<InstructionAddress, WordBodyBuildError> {
-        reject_direct_branch_instruction(instruction)?;
-        self.code
+        self.block
             .append_mapped(instruction, span)
-            .map_err(|source| WordBodyBuildError::SourceMappingAppend { source })
+            .map_err(WordBodyBuildError::from)
     }
 
     pub(crate) fn append_unmapped(
         &mut self,
         instruction: Instruction,
     ) -> Result<InstructionAddress, WordBodyBuildError> {
-        reject_direct_branch_instruction(instruction)?;
-        self.code
+        self.block
             .append_unmapped(instruction)
-            .map_err(|source| WordBodyBuildError::SourceMappingAppend { source })
+            .map_err(WordBodyBuildError::from)
     }
 
     pub(crate) fn append_mapped_jump_placeholder(
         &mut self,
         span: SourceSpan,
     ) -> Result<InstructionAddress, WordBodyBuildError> {
-        self.append_branch_placeholder(
-            Instruction::Jump(InstructionAddress::from_index(0)),
-            Some(span),
-        )
+        self.block
+            .append_mapped_jump_placeholder(span)
+            .map_err(WordBodyBuildError::from)
     }
 
     pub(crate) fn append_unmapped_jump_placeholder(
         &mut self,
     ) -> Result<InstructionAddress, WordBodyBuildError> {
-        self.append_branch_placeholder(Instruction::Jump(InstructionAddress::from_index(0)), None)
+        self.block
+            .append_unmapped_jump_placeholder()
+            .map_err(WordBodyBuildError::from)
     }
 
     pub(crate) fn append_mapped_jump_if_zero_placeholder(
         &mut self,
         span: SourceSpan,
     ) -> Result<InstructionAddress, WordBodyBuildError> {
-        self.append_branch_placeholder(
-            Instruction::JumpIfZero(InstructionAddress::from_index(0)),
-            Some(span),
-        )
+        self.block
+            .append_mapped_jump_if_zero_placeholder(span)
+            .map_err(WordBodyBuildError::from)
     }
 
     pub(crate) fn append_unmapped_jump_if_zero_placeholder(
         &mut self,
     ) -> Result<InstructionAddress, WordBodyBuildError> {
-        self.append_branch_placeholder(
-            Instruction::JumpIfZero(InstructionAddress::from_index(0)),
-            None,
-        )
+        self.block
+            .append_unmapped_jump_if_zero_placeholder()
+            .map_err(WordBodyBuildError::from)
     }
 
     pub(crate) fn patch_branch_target(
@@ -281,79 +269,48 @@ impl PublishedWordBuilder<'_> {
         branch: InstructionAddress,
         target: InstructionAddress,
     ) -> Result<(), WordBodyBuildError> {
-        self.validate_current_body_address(branch)?;
-        self.validate_current_body_address(target)?;
-        let Some(position) = self
-            .unresolved_patches
-            .iter()
-            .position(|pending| *pending == branch)
-        else {
-            return Err(WordBodyBuildError::UnknownBranchPatch { branch });
-        };
-
-        self.code
+        self.block
             .patch_branch_target(branch, target)
-            .map_err(|source| WordBodyBuildError::BranchTargetPatch { source })?;
-
-        self.unresolved_patches.swap_remove(position);
-        Ok(())
-    }
-
-    fn append_branch_placeholder(
-        &mut self,
-        instruction: Instruction,
-        span: Option<SourceSpan>,
-    ) -> Result<InstructionAddress, WordBodyBuildError> {
-        let branch = if let Some(span) = span {
-            self.code.append_mapped(instruction, span)
-        } else {
-            self.code.append_unmapped(instruction)
-        }
-        .map_err(|source| WordBodyBuildError::SourceMappingAppend { source })?;
-
-        self.unresolved_patches.push(branch);
-        Ok(branch)
+            .map_err(WordBodyBuildError::from)
     }
 
     pub(crate) fn validate_local_target(
         &self,
         address: InstructionAddress,
     ) -> Result<(), WordBodyBuildError> {
-        self.validate_current_body_address(address)
-    }
-
-    fn validate_current_body_address(
-        &self,
-        address: InstructionAddress,
-    ) -> Result<(), WordBodyBuildError> {
-        if address.as_index() < self.body_start.as_index() || address.as_index() >= self.code.len()
-        {
-            return Err(WordBodyBuildError::AddressOutsideCurrentBody { address });
-        }
-
-        Ok(())
+        self.block
+            .validate_local_target(address)
+            .map_err(WordBodyBuildError::from)
     }
 
     fn finish(self) -> Result<(), WordBodyBuildError> {
-        if let Some(branch) = self.unresolved_patches.first().copied() {
-            return Err(WordBodyBuildError::UnresolvedBranchPatch { branch });
-        }
-
-        Ok(())
+        self.block
+            .finish()
+            .map(|_| ())
+            .map_err(WordBodyBuildError::from)
     }
 }
 
-fn reject_direct_branch_instruction(instruction: Instruction) -> Result<(), WordBodyBuildError> {
-    match instruction {
-        Instruction::Jump(_) | Instruction::JumpIfZero(_) => {
-            Err(WordBodyBuildError::BranchInstructionRequiresPatch { instruction })
+impl From<BlockCodeBuildError> for WordBodyBuildError {
+    fn from(error: BlockCodeBuildError) -> Self {
+        match error {
+            BlockCodeBuildError::SourceMappingAppend { source } => {
+                Self::SourceMappingAppend { source }
+            }
+            BlockCodeBuildError::BranchTargetPatch { source } => Self::BranchTargetPatch { source },
+            BlockCodeBuildError::BranchInstructionRequiresPatch { instruction } => {
+                Self::BranchInstructionRequiresPatch { instruction }
+            }
+            BlockCodeBuildError::AddressOutsideCurrentBlock { address } => {
+                Self::AddressOutsideCurrentBody { address }
+            }
+            BlockCodeBuildError::UnknownBranchPatch { branch } => {
+                Self::UnknownBranchPatch { branch }
+            }
+            BlockCodeBuildError::UnresolvedBranchPatch { branch } => {
+                Self::UnresolvedBranchPatch { branch }
+            }
         }
-        Instruction::Push(_)
-        | Instruction::LoadVar(_)
-        | Instruction::StoreVar(_)
-        | Instruction::Call(_)
-        | Instruction::Return
-        | Instruction::Halt => Ok(()),
     }
 }
 

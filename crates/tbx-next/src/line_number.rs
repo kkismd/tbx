@@ -154,9 +154,8 @@ impl LineNumberError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::instruction::{
-        BranchTargetPatchError, Instruction, InstructionAddress, InstructionAddressError,
-    };
+    use crate::block_code::{BlockCodeBuildError, BlockCodeBuilder};
+    use crate::instruction::{Instruction, InstructionAddress};
     use crate::source::{SourceId, SourceTexts, SourceView};
     use crate::source_mapping::SourceMappedCode;
     use crate::value::Value;
@@ -180,8 +179,9 @@ mod tests {
         LocalLineNumber::new(raw)
     }
 
-    fn append(code: &mut SourceMappedCode, instruction: Instruction) -> InstructionAddress {
-        code.append_unmapped(instruction)
+    fn append(builder: &mut BlockCodeBuilder<'_>, instruction: Instruction) -> InstructionAddress {
+        builder
+            .append_unmapped(instruction)
             .expect("test instruction should append")
     }
 
@@ -191,16 +191,19 @@ mod tests {
         let branch_span = span(sources.view(), source_id, 7, 10);
         let target_span = span(sources.view(), source_id, 11, 14);
         let mut code = SourceMappedCode::new();
-        let placeholder = append(&mut code, Instruction::Halt);
-        let branch = append(&mut code, Instruction::JumpIfZero(placeholder));
-        let target = append(&mut code, Instruction::Halt);
+        let mut builder = BlockCodeBuilder::new(&mut code);
+        let branch = builder
+            .append_unmapped_jump_if_zero_placeholder()
+            .expect("branch should append");
+        let target = append(&mut builder, Instruction::Halt);
         let mut table = LocalLineNumberTable::new();
 
         table.add_patch(line(200), branch, branch_span);
         table
-            .define(&code, line(200), target, target_span)
+            .define(&builder, line(200), target, target_span)
             .expect("target should define");
-        table.resolve(&mut code).expect("patch should resolve");
+        table.resolve(&mut builder).expect("patch should resolve");
+        builder.finish().expect("block should complete");
 
         assert_eq!(
             code.instruction_view().get(branch),
@@ -214,15 +217,19 @@ mod tests {
         let target_span = span(sources.view(), source_id, 0, 3);
         let branch_span = span(sources.view(), source_id, 17, 20);
         let mut code = SourceMappedCode::new();
-        let target = append(&mut code, Instruction::Halt);
-        let branch = append(&mut code, Instruction::Jump(address(0)));
+        let mut builder = BlockCodeBuilder::new(&mut code);
+        let target = append(&mut builder, Instruction::Halt);
+        let branch = builder
+            .append_unmapped_jump_placeholder()
+            .expect("branch should append");
         let mut table = LocalLineNumberTable::new();
 
         table
-            .define(&code, line(100), target, target_span)
+            .define(&builder, line(100), target, target_span)
             .expect("target should define");
         table.add_patch(line(100), branch, branch_span);
-        table.resolve(&mut code).expect("patch should resolve");
+        table.resolve(&mut builder).expect("patch should resolve");
+        builder.finish().expect("block should complete");
 
         assert_eq!(
             code.instruction_view().get(branch),
@@ -236,15 +243,16 @@ mod tests {
         let first_span = span(sources.view(), source_id, 0, 3);
         let second_span = span(sources.view(), source_id, 6, 9);
         let mut code = SourceMappedCode::new();
-        let target = append(&mut code, Instruction::Halt);
+        let mut builder = BlockCodeBuilder::new(&mut code);
+        let target = append(&mut builder, Instruction::Halt);
         let mut table = LocalLineNumberTable::new();
 
         table
-            .define(&code, line(100), target, first_span)
+            .define(&builder, line(100), target, first_span)
             .expect("first definition should succeed");
 
         assert_eq!(
-            table.define(&code, line(100), target, second_span),
+            table.define(&builder, line(100), target, second_span),
             Err(LineNumberError::Duplicate {
                 line_number: line(100),
                 original_span: first_span,
@@ -258,13 +266,16 @@ mod tests {
         let (sources, source_id) = source("BIF 0, 200");
         let branch_span = span(sources.view(), source_id, 7, 10);
         let mut code = SourceMappedCode::new();
-        let branch = append(&mut code, Instruction::JumpIfZero(address(0)));
+        let mut builder = BlockCodeBuilder::new(&mut code);
+        let branch = builder
+            .append_unmapped_jump_if_zero_placeholder()
+            .expect("branch should append");
         let mut table = LocalLineNumberTable::new();
 
         table.add_patch(line(200), branch, branch_span);
 
         assert_eq!(
-            table.resolve(&mut code),
+            table.resolve(&mut builder),
             Err(LineNumberError::Undefined {
                 line_number: line(200),
                 span: branch_span,
@@ -278,11 +289,12 @@ mod tests {
         let (sources, source_id) = source("40000 TARGET");
         let target_span = span(sources.view(), source_id, 0, 5);
         let mut code = SourceMappedCode::new();
-        let target = append(&mut code, Instruction::Halt);
+        let mut builder = BlockCodeBuilder::new(&mut code);
+        let target = append(&mut builder, Instruction::Halt);
         let mut table = LocalLineNumberTable::new();
 
         table
-            .define(&code, large, target, target_span)
+            .define(&builder, large, target, target_span)
             .expect("large line number should be compile-time-only");
 
         assert_eq!(large.raw(), 32768);
@@ -293,30 +305,31 @@ mod tests {
         let (sources, source_id) = source("100 A");
         let line_span = span(sources.view(), source_id, 0, 3);
         let mut code = SourceMappedCode::new();
-        append(&mut code, Instruction::Halt);
+        let mut builder = BlockCodeBuilder::new(&mut code);
+        append(&mut builder, Instruction::Halt);
         let mut table = LocalLineNumberTable::new();
 
         assert_eq!(
-            table.define(&code, line(100), address(1), line_span),
+            table.define(&builder, line(100), address(1), line_span),
             Err(LineNumberError::InvalidDefinitionTarget {
                 line_number: line(100),
                 span: line_span,
-                source: InstructionBuildError::InvalidAddress {
-                    source: InstructionAddressError::EndAddress {
-                        address: address(1)
-                    }
+                source: InstructionBuildError::BlockCodeBuild {
+                    source: BlockCodeBuildError::AddressOutsideCurrentBlock {
+                        address: address(1),
+                    },
                 },
             })
         );
         assert_eq!(
-            table.define(&code, line(100), address(2), line_span),
+            table.define(&builder, line(100), address(2), line_span),
             Err(LineNumberError::InvalidDefinitionTarget {
                 line_number: line(100),
                 span: line_span,
-                source: InstructionBuildError::InvalidAddress {
-                    source: InstructionAddressError::InvalidAddress {
-                        address: address(2)
-                    }
+                source: InstructionBuildError::BlockCodeBuild {
+                    source: BlockCodeBuildError::AddressOutsideCurrentBlock {
+                        address: address(2),
+                    },
                 },
             })
         );
@@ -329,16 +342,18 @@ mod tests {
         let second_span = span(sources.view(), source_id, 6, 9);
         let mut first_code = SourceMappedCode::new();
         let mut second_code = SourceMappedCode::new();
-        let first_target = append(&mut first_code, Instruction::Halt);
-        let second_target = append(&mut second_code, Instruction::Push(Value::integer(1)));
+        let mut first_builder = BlockCodeBuilder::new(&mut first_code);
+        let mut second_builder = BlockCodeBuilder::new(&mut second_code);
+        let first_target = append(&mut first_builder, Instruction::Halt);
+        let second_target = append(&mut second_builder, Instruction::Push(Value::integer(1)));
         let mut first_table = LocalLineNumberTable::new();
         let mut second_table = LocalLineNumberTable::new();
 
         first_table
-            .define(&first_code, line(100), first_target, first_span)
+            .define(&first_builder, line(100), first_target, first_span)
             .expect("first owner should define line");
         second_table
-            .define(&second_code, line(100), second_target, second_span)
+            .define(&second_builder, line(100), second_target, second_span)
             .expect("second owner should define same local line");
     }
 
@@ -348,25 +363,23 @@ mod tests {
         let branch_span = span(sources.view(), source_id, 7, 10);
         let target_span = span(sources.view(), source_id, 7, 10);
         let mut code = SourceMappedCode::new();
-        let non_branch = append(&mut code, Instruction::Push(Value::integer(1)));
-        let target = append(&mut code, Instruction::Halt);
+        let mut builder = BlockCodeBuilder::new(&mut code);
+        let non_branch = append(&mut builder, Instruction::Push(Value::integer(1)));
+        let target = append(&mut builder, Instruction::Halt);
         let mut table = LocalLineNumberTable::new();
 
         table
-            .define(&code, line(100), target, target_span)
+            .define(&builder, line(100), target, target_span)
             .expect("line should define");
         table.add_patch(line(100), non_branch, branch_span);
 
         assert_eq!(
-            table.resolve(&mut code),
+            table.resolve(&mut builder),
             Err(LineNumberError::Patch {
                 line_number: line(100),
                 span: branch_span,
-                source: InstructionBuildError::BranchTargetPatch {
-                    source: BranchTargetPatchError::NonBranchInstruction {
-                        address: non_branch,
-                        instruction: Instruction::Push(Value::integer(1)),
-                    }
+                source: InstructionBuildError::BlockCodeBuild {
+                    source: BlockCodeBuildError::UnknownBranchPatch { branch: non_branch },
                 },
             })
         );

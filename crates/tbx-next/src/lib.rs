@@ -67,6 +67,11 @@ mod source;
 #[allow(dead_code)]
 mod source_mapping;
 
+// #1518/#1519 centralizes unpublished block construction, local branch
+// completion, and source mapping order before any runtime publication step.
+#[allow(dead_code)]
+mod block_code;
+
 // #1504 keeps statement lowering independent from concrete instruction owners
 // while preserving published-word branch patch contracts.
 #[allow(dead_code)]

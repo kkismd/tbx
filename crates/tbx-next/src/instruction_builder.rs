@@ -1,16 +1,18 @@
-use crate::instruction::{
-    BranchTargetPatchError, Instruction, InstructionAddress, InstructionAddressError,
-};
+use crate::block_code::{BlockCodeBuildError, BlockCodeBuilder};
+use crate::instruction::{Instruction, InstructionAddress};
 use crate::published_code::{PublishedWordBuilder, WordBodyBuildError};
 use crate::source::SourceSpan;
-use crate::source_mapping::{SourceMappedCode, SourceMappingAppendError};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum InstructionBuildError {
-    SourceMappingAppend { source: SourceMappingAppendError },
-    BranchTargetPatch { source: BranchTargetPatchError },
+    BlockCodeBuild { source: BlockCodeBuildError },
     WordBodyBuild { source: WordBodyBuildError },
-    InvalidAddress { source: InstructionAddressError },
+}
+
+impl From<BlockCodeBuildError> for InstructionBuildError {
+    fn from(source: BlockCodeBuildError) -> Self {
+        Self::BlockCodeBuild { source }
+    }
 }
 
 pub(crate) trait InstructionBuildTarget {
@@ -53,9 +55,9 @@ pub(crate) trait InstructionBuildTarget {
     ) -> Result<(), InstructionBuildError>;
 }
 
-impl InstructionBuildTarget for SourceMappedCode {
+impl InstructionBuildTarget for BlockCodeBuilder<'_> {
     fn current_len(&self) -> usize {
-        self.len()
+        self.current_len()
     }
 
     fn append_mapped(
@@ -63,40 +65,32 @@ impl InstructionBuildTarget for SourceMappedCode {
         instruction: Instruction,
         span: SourceSpan,
     ) -> Result<InstructionAddress, InstructionBuildError> {
-        SourceMappedCode::append_mapped(self, instruction, span)
-            .map_err(|source| InstructionBuildError::SourceMappingAppend { source })
+        BlockCodeBuilder::append_mapped(self, instruction, span)
+            .map_err(|source| InstructionBuildError::BlockCodeBuild { source })
     }
 
     fn append_unmapped(
         &mut self,
         instruction: Instruction,
     ) -> Result<InstructionAddress, InstructionBuildError> {
-        SourceMappedCode::append_unmapped(self, instruction)
-            .map_err(|source| InstructionBuildError::SourceMappingAppend { source })
+        BlockCodeBuilder::append_unmapped(self, instruction)
+            .map_err(|source| InstructionBuildError::BlockCodeBuild { source })
     }
 
     fn append_mapped_jump_placeholder(
         &mut self,
         span: SourceSpan,
     ) -> Result<InstructionAddress, InstructionBuildError> {
-        SourceMappedCode::append_mapped(
-            self,
-            Instruction::Jump(InstructionAddress::from_index(0)),
-            span,
-        )
-        .map_err(|source| InstructionBuildError::SourceMappingAppend { source })
+        BlockCodeBuilder::append_mapped_jump_placeholder(self, span)
+            .map_err(|source| InstructionBuildError::BlockCodeBuild { source })
     }
 
     fn append_mapped_jump_if_zero_placeholder(
         &mut self,
         span: SourceSpan,
     ) -> Result<InstructionAddress, InstructionBuildError> {
-        SourceMappedCode::append_mapped(
-            self,
-            Instruction::JumpIfZero(InstructionAddress::from_index(0)),
-            span,
-        )
-        .map_err(|source| InstructionBuildError::SourceMappingAppend { source })
+        BlockCodeBuilder::append_mapped_jump_if_zero_placeholder(self, span)
+            .map_err(|source| InstructionBuildError::BlockCodeBuild { source })
     }
 
     fn patch_branch_target(
@@ -104,17 +98,16 @@ impl InstructionBuildTarget for SourceMappedCode {
         branch: InstructionAddress,
         target: InstructionAddress,
     ) -> Result<(), InstructionBuildError> {
-        SourceMappedCode::patch_branch_target(self, branch, target)
-            .map_err(|source| InstructionBuildError::BranchTargetPatch { source })
+        BlockCodeBuilder::patch_branch_target(self, branch, target)
+            .map_err(|source| InstructionBuildError::BlockCodeBuild { source })
     }
 
     fn validate_local_target(
         &self,
         address: InstructionAddress,
     ) -> Result<(), InstructionBuildError> {
-        self.validate_address(address)
-            .map(|_| ())
-            .map_err(|source| InstructionBuildError::InvalidAddress { source })
+        BlockCodeBuilder::validate_local_target(self, address)
+            .map_err(|source| InstructionBuildError::BlockCodeBuild { source })
     }
 }
 
@@ -178,10 +171,12 @@ impl InstructionBuildTarget for PublishedWordBuilder<'_> {
 mod tests {
     use super::*;
     use crate::binding::Bindings;
+    use crate::block_code::BlockCodeBuildError;
     use crate::instruction::Instruction;
     use crate::name::NormalizedName;
     use crate::published_code::{NewWordPublicationError, PublishedCode};
     use crate::source::{SourceId, SourceTexts, SourceView};
+    use crate::source_mapping::SourceMappedCode;
     use crate::value::Value;
     use crate::word::PublishedWords;
 
@@ -211,6 +206,13 @@ mod tests {
         }
     }
 
+    fn unwrap_block_build_error(error: InstructionBuildError) -> BlockCodeBuildError {
+        match error {
+            InstructionBuildError::BlockCodeBuild { source } => source,
+            source => panic!("unexpected target error: {source:?}"),
+        }
+    }
+
     #[test]
     fn temporary_target_maps_placeholder_and_patches_without_mapping_change() {
         let (sources, source_id) = source("BIF X, 20\n20");
@@ -218,14 +220,17 @@ mod tests {
         let target_span = span(sources.view(), source_id, 10, 12);
         let mut code = SourceMappedCode::new();
 
-        let branch = code
+        let mut builder = BlockCodeBuilder::new(&mut code);
+        let branch = builder
             .append_mapped_jump_if_zero_placeholder(branch_span)
             .expect("branch placeholder should append");
-        let target = code
+        let target = builder
             .append_mapped(Instruction::Halt, target_span)
             .expect("target should append");
-        code.patch_branch_target(branch, target)
+        builder
+            .patch_branch_target(branch, target)
             .expect("branch should patch");
+        builder.finish().expect("block should complete");
 
         assert_eq!(
             code.instruction_view().get(branch),
@@ -330,6 +335,26 @@ mod tests {
                 source: WordBodyBuildError::AddressOutsideCurrentBody {
                     address: old.entry().address()
                 }
+            })
+        );
+    }
+
+    #[test]
+    fn block_target_rejects_direct_branch_append_through_common_interface() {
+        let mut code = SourceMappedCode::new();
+        let mut builder = BlockCodeBuilder::new(&mut code);
+        let branch = Instruction::Jump(InstructionAddress::from_index(0));
+        let target: &mut dyn InstructionBuildTarget = &mut builder;
+
+        let result = target
+            .append_unmapped(branch)
+            .map(|_| ())
+            .map_err(unwrap_block_build_error);
+
+        assert_eq!(
+            result,
+            Err(BlockCodeBuildError::BranchInstructionRequiresPatch {
+                instruction: branch
             })
         );
     }
