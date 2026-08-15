@@ -2,7 +2,8 @@ use crate::binding::{Binding, BindingInsertError, Bindings};
 use crate::global_variable::{GlobalVarId, GlobalVariables};
 use crate::name::NormalizedName;
 use crate::source_word::{
-    let_source_word, var_source_word, NativeSourceWordHandler, SourceWordId, SourceWordRegistry,
+    def_source_word, let_source_word, var_source_word, NativeSourceWordHandler, SourceWordId,
+    SourceWordRegistry,
 };
 use crate::word::{CompletedWordDefinition, PrimitiveId, PublishedWords, WordId};
 
@@ -122,25 +123,32 @@ pub(crate) fn register_builtin_source_words(
     // occupation; bootstrap must fail rather than silently overwrite a binding.
     let var_name = builtin_name("VAR");
     let let_name = builtin_name("LET");
+    let def_name = builtin_name("DEF");
     bindings
         .validate_new_name(&var_name)
         .map_err(SourceWordBootstrapError::from_precheck_error)?;
     bindings
         .validate_new_name(&let_name)
         .map_err(SourceWordBootstrapError::from_precheck_error)?;
+    bindings
+        .validate_new_name(&def_name)
+        .map_err(SourceWordBootstrapError::from_precheck_error)?;
 
     let var = register_native_source_word(source_words, bindings, var_name, var_source_word)
         .expect("prechecked VAR source word should remain available");
     let let_ = register_native_source_word(source_words, bindings, let_name, let_source_word)
         .expect("prechecked LET source word should remain available");
+    let def = register_native_source_word(source_words, bindings, def_name, def_source_word)
+        .expect("prechecked DEF source word should remain available");
 
-    Ok(BuiltinSourceWordIds { var, let_ })
+    Ok(BuiltinSourceWordIds { var, let_, def })
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct BuiltinSourceWordIds {
     var: SourceWordId,
     let_: SourceWordId,
+    def: SourceWordId,
 }
 
 impl BuiltinSourceWordIds {
@@ -150,6 +158,10 @@ impl BuiltinSourceWordIds {
 
     pub(crate) const fn let_(self) -> SourceWordId {
         self.let_
+    }
+
+    pub(crate) const fn def(self) -> SourceWordId {
+        self.def
     }
 }
 
@@ -589,11 +601,13 @@ mod tests {
         let ids = register_builtin_source_words(&mut source_words, &mut bindings)
             .expect("empty namespace should accept built-in source words");
 
-        assert_eq!(source_words.len(), 2);
+        assert_eq!(source_words.len(), 3);
         assert_source_word_binding(&bindings, "VAR", ids.var());
         assert_source_word_binding(&bindings, "var", ids.var());
         assert_source_word_binding(&bindings, "LET", ids.let_());
         assert_source_word_binding(&bindings, "let", ids.let_());
+        assert_source_word_binding(&bindings, "DEF", ids.def());
+        assert_source_word_binding(&bindings, "def", ids.def());
     }
 
     #[test]
@@ -633,6 +647,27 @@ mod tests {
         assert_eq!(source_words.len(), 1);
         assert_eq!(bindings.get(&name("VAR")), None);
         assert_source_word_binding(&bindings, "LET", existing);
+    }
+
+    #[test]
+    fn builtin_source_word_bootstrap_def_conflict_does_not_publish_prefix() {
+        let mut source_words = SourceWordRegistry::new();
+        let mut bindings = Bindings::new();
+        let existing = register_native_source_word(
+            &mut source_words,
+            &mut bindings,
+            name("def"),
+            source_handler,
+        )
+        .expect("test DEF source word should register");
+
+        let result = register_builtin_source_words(&mut source_words, &mut bindings);
+
+        assert_eq!(result, Err(SourceWordBootstrapError::NameConflict));
+        assert_eq!(source_words.len(), 1);
+        assert_eq!(bindings.get(&name("VAR")), None);
+        assert_eq!(bindings.get(&name("LET")), None);
+        assert_source_word_binding(&bindings, "DEF", existing);
     }
 
     #[test]

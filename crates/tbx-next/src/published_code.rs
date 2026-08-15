@@ -59,6 +59,7 @@ pub(crate) enum WordBodyBuildError {
     UnresolvedBranchPatch {
         branch: InstructionAddress,
     },
+    DefinitionBodyCompileRejected,
     InvalidEntry {
         source: InstructionAddressError,
     },
@@ -94,14 +95,14 @@ impl PublishedCode {
         words: &mut PublishedWords,
         bindings: &mut Bindings,
         name: NormalizedName,
-        build: impl FnOnce(&mut PublishedWordBuilder<'_>) -> Result<(), WordBodyBuildError>,
+        build: impl FnOnce(&Bindings, &mut PublishedWordBuilder<'_>) -> Result<(), WordBodyBuildError>,
     ) -> Result<PublishedWord, NewWordPublicationError> {
         bindings
             .validate_new_name(&name)
             .map_err(NewWordPublicationError::from_precheck_error)?;
 
         let entry = self
-            .build_word_body(build)
+            .build_word_body(|builder| build(bindings, builder))
             .map_err(|source| NewWordPublicationError::Build { source })?;
         let definition = CompletedWordDefinition::compiled(entry.location, self.instruction_view())
             .map_err(|source| NewWordPublicationError::Definition { source })?;
@@ -414,7 +415,7 @@ mod tests {
         input: &str,
         value: i16,
     ) -> PublishedWord {
-        code.publish_new_word(words, bindings, name(input), |builder| {
+        code.publish_new_word(words, bindings, name(input), |_, builder| {
             builder.append_unmapped(push(value))?;
             builder.append_unmapped(Instruction::Return)?;
             Ok(())
@@ -476,7 +477,7 @@ mod tests {
         let mut bindings = Bindings::new();
 
         let word = code
-            .publish_new_word(&mut words, &mut bindings, name("MAPPED"), |builder| {
+            .publish_new_word(&mut words, &mut bindings, name("MAPPED"), |_, builder| {
                 builder.append_mapped(push(1), first_span)?;
                 builder.append_unmapped(Instruction::Return)?;
                 Ok(())
@@ -499,10 +500,11 @@ mod tests {
         let mut words = PublishedWords::new();
         let mut bindings = Bindings::new();
 
-        let result = code.publish_new_word(&mut words, &mut bindings, name("BROKEN"), |builder| {
-            builder.append_unmapped(push(1))?;
-            Err(WordBodyBuildError::BodyRejected)
-        });
+        let result =
+            code.publish_new_word(&mut words, &mut bindings, name("BROKEN"), |_, builder| {
+                builder.append_unmapped(push(1))?;
+                Err(WordBodyBuildError::BodyRejected)
+            });
 
         assert_eq!(
             result,
@@ -528,7 +530,7 @@ mod tests {
         let mut words = PublishedWords::new();
         let mut bindings = Bindings::new();
 
-        let result = code.publish_new_word(&mut words, &mut bindings, name("EMPTY"), |_| Ok(()));
+        let result = code.publish_new_word(&mut words, &mut bindings, name("EMPTY"), |_, _| Ok(()));
 
         assert_eq!(
             result,
@@ -576,7 +578,7 @@ mod tests {
                 .expect("test binding should register");
 
             let result =
-                code.publish_new_word(&mut words, &mut bindings, name("TAKEN"), |builder| {
+                code.publish_new_word(&mut words, &mut bindings, name("TAKEN"), |_, builder| {
                     builder.append_unmapped(push(1))?;
                     Ok(())
                 });
@@ -596,11 +598,12 @@ mod tests {
             let mut bindings = Bindings::new();
             let mut build_called = false;
 
-            let result = code.publish_new_word(&mut words, &mut bindings, name(input), |builder| {
-                build_called = true;
-                builder.append_unmapped(push(1))?;
-                Ok(())
-            });
+            let result =
+                code.publish_new_word(&mut words, &mut bindings, name(input), |_, builder| {
+                    build_called = true;
+                    builder.append_unmapped(push(1))?;
+                    Ok(())
+                });
 
             assert_eq!(result, Err(NewWordPublicationError::ReservedName));
             assert!(!build_called);
@@ -693,7 +696,7 @@ mod tests {
         let mut words = PublishedWords::new();
         let mut bindings = Bindings::new();
         let old = code
-            .publish_new_word(&mut words, &mut bindings, name("TARGET"), |builder| {
+            .publish_new_word(&mut words, &mut bindings, name("TARGET"), |_, builder| {
                 builder.append_mapped(push(1), old_span)?;
                 builder.append_unmapped(Instruction::Return)?;
                 Ok(())
@@ -734,7 +737,7 @@ mod tests {
         let mut bindings = Bindings::new();
         let old = publish_push(&mut code, &mut words, &mut bindings, "TARGET", 1);
         let caller = code
-            .publish_new_word(&mut words, &mut bindings, name("CALLER"), |builder| {
+            .publish_new_word(&mut words, &mut bindings, name("CALLER"), |_, builder| {
                 builder.append_unmapped(Instruction::Call(old.id()))?;
                 builder.append_unmapped(Instruction::Return)?;
                 Ok(())
@@ -763,7 +766,7 @@ mod tests {
         let mut bindings = Bindings::new();
 
         let word = code
-            .publish_new_word(&mut words, &mut bindings, name("BRANCH"), |builder| {
+            .publish_new_word(&mut words, &mut bindings, name("BRANCH"), |_, builder| {
                 let branch = builder.append_unmapped_jump_placeholder()?;
                 let target = builder.append_unmapped(Instruction::Return)?;
                 builder.patch_branch_target(branch, target)?;
@@ -784,10 +787,11 @@ mod tests {
         let mut bindings = Bindings::new();
         let branch = Instruction::Jump(InstructionAddress::from_index(0));
 
-        let result = code.publish_new_word(&mut words, &mut bindings, name("BRANCH"), |builder| {
-            builder.append_unmapped(branch)?;
-            Ok(())
-        });
+        let result =
+            code.publish_new_word(&mut words, &mut bindings, name("BRANCH"), |_, builder| {
+                builder.append_unmapped(branch)?;
+                Ok(())
+            });
 
         assert_eq!(
             result,
@@ -808,11 +812,12 @@ mod tests {
         let mut words = PublishedWords::new();
         let mut bindings = Bindings::new();
 
-        let result = code.publish_new_word(&mut words, &mut bindings, name("BROKEN"), |builder| {
-            let _branch = builder.append_unmapped_jump_placeholder()?;
-            builder.append_unmapped(Instruction::Return)?;
-            Ok(())
-        });
+        let result =
+            code.publish_new_word(&mut words, &mut bindings, name("BROKEN"), |_, builder| {
+                let _branch = builder.append_unmapped_jump_placeholder()?;
+                builder.append_unmapped(Instruction::Return)?;
+                Ok(())
+            });
 
         assert_eq!(
             result,
@@ -833,7 +838,7 @@ mod tests {
         let mut words = PublishedWords::new();
         let mut bindings = Bindings::new();
         let old = code
-            .publish_new_word(&mut words, &mut bindings, name("OLD"), |builder| {
+            .publish_new_word(&mut words, &mut bindings, name("OLD"), |_, builder| {
                 let branch = builder.append_unmapped_jump_placeholder()?;
                 let target = builder.append_unmapped(Instruction::Return)?;
                 builder.patch_branch_target(branch, target)?;
@@ -841,7 +846,7 @@ mod tests {
             })
             .expect("old word should publish");
 
-        let result = code.publish_new_word(&mut words, &mut bindings, name("NEW"), |builder| {
+        let result = code.publish_new_word(&mut words, &mut bindings, name("NEW"), |_, builder| {
             let target = builder.append_unmapped(Instruction::Return)?;
             builder.patch_branch_target(old.entry().address(), target)?;
             Ok(())
@@ -871,7 +876,7 @@ mod tests {
         let mut bindings = Bindings::new();
         let old = publish_push(&mut code, &mut words, &mut bindings, "OLD", 1);
 
-        let result = code.publish_new_word(&mut words, &mut bindings, name("NEW"), |builder| {
+        let result = code.publish_new_word(&mut words, &mut bindings, name("NEW"), |_, builder| {
             let branch = builder.append_unmapped_jump_placeholder()?;
             builder.patch_branch_target(branch, old.entry().address())?;
             Ok(())
@@ -899,7 +904,7 @@ mod tests {
         let mut words = PublishedWords::new();
         let mut bindings = Bindings::new();
         let old = code
-            .publish_new_word(&mut words, &mut bindings, name("TARGET"), |builder| {
+            .publish_new_word(&mut words, &mut bindings, name("TARGET"), |_, builder| {
                 builder.append_mapped(push(1), old_span)?;
                 builder.append_unmapped(Instruction::Return)?;
                 Ok(())

@@ -9,6 +9,7 @@ use crate::lexer::{LexError, Token, TokenKind};
 use crate::name::{NameError, NormalizedName};
 use crate::operator::OperatorLookup;
 use crate::source::{SourceError, SourceId, SourceSpan, SourceView};
+use crate::word::WordId;
 use crate::word_resolution::{resolve_binding_name, ResolvedBinding, WordResolutionError};
 
 /// Internal identifier for a published source-processing word.
@@ -80,6 +81,41 @@ pub(crate) enum SourceWordError {
     Expression {
         source: ExpressionError,
     },
+    DefSyntax {
+        span: SourceSpan,
+        kind: DefSyntaxErrorKind,
+    },
+    DefName {
+        span: SourceSpan,
+        source: NameError,
+    },
+    DefNameConflict {
+        span: SourceSpan,
+    },
+    DefReservedName {
+        span: SourceSpan,
+    },
+    DefPublicationContextUnavailable {
+        span: SourceSpan,
+    },
+    DefMissingEnd {
+        span: SourceSpan,
+    },
+    DefLex {
+        source: LexError,
+    },
+    DefBodyCompile {
+        span: SourceSpan,
+    },
+    DefBodyBuild {
+        span: SourceSpan,
+    },
+    DefDefinition {
+        span: SourceSpan,
+    },
+    DefBindingCommitInvariantViolated {
+        span: SourceSpan,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -98,6 +134,47 @@ pub(crate) enum LetSyntaxErrorKind {
     Target,
     Equal,
     Rhs,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum DefSyntaxErrorKind {
+    MissingName,
+    TrailingToken { kind: TokenKind },
+}
+
+impl SourceWordError {
+    pub(crate) fn primary_span(self) -> Option<SourceSpan> {
+        match self {
+            Self::Source { .. }
+            | Self::InstructionBuild { .. }
+            | Self::VarPublicationContextUnavailable
+            | Self::Expression { .. } => None,
+            Self::UnsupportedSourceWord { span }
+            | Self::VarSyntax { span, .. }
+            | Self::VarLocalLineNumberPrefix { span }
+            | Self::VarName { span, .. }
+            | Self::VarNameConflict { span }
+            | Self::VarReservedName { span }
+            | Self::VarBindingCommitInvariantViolated { span }
+            | Self::LetSyntax { span, .. }
+            | Self::LetTarget { span, .. }
+            | Self::LetExpressionContextUnavailable { span }
+            | Self::DefSyntax { span, .. }
+            | Self::DefName { span, .. }
+            | Self::DefNameConflict { span }
+            | Self::DefReservedName { span }
+            | Self::DefPublicationContextUnavailable { span }
+            | Self::DefMissingEnd { span }
+            | Self::DefBodyCompile { span }
+            | Self::DefBodyBuild { span }
+            | Self::DefDefinition { span }
+            | Self::DefBindingCommitInvariantViolated { span } => Some(span),
+            Self::DefLex { source } => match source {
+                LexError::Source(_) => None,
+                LexError::InvalidCharacter { span, .. } => Some(span),
+            },
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -146,6 +223,17 @@ pub(crate) trait SourceBlockCursor<'source> {
 
 pub(crate) struct SourceBlockReader<'source, 'cursor> {
     cursor: &'cursor mut dyn SourceBlockCursor<'source>,
+}
+
+pub(crate) trait RuntimeDefinitionPublisher<'source> {
+    fn publish_runtime_definition(
+        &mut self,
+        bindings: &mut Bindings,
+        name: NormalizedName,
+        name_span: SourceSpan,
+        body: &[SourceBlockStatement<'source>],
+        end_span: SourceSpan,
+    ) -> Result<WordId, SourceWordError>;
 }
 
 impl<'source> SourceBlockStatement<'source> {
@@ -307,6 +395,7 @@ pub(crate) struct NativeSourceWordContext<'source, 'state> {
     code: &'state mut dyn InstructionBuildTarget,
     local_line_number_prefix: Option<SourceSpan>,
     globals: Option<&'state mut GlobalVariables>,
+    runtime_definitions: Option<&'state mut dyn RuntimeDefinitionPublisher<'source>>,
 }
 
 pub(crate) struct NativeSourceWordContextParts<'source, 'state> {
@@ -319,6 +408,7 @@ pub(crate) struct NativeSourceWordContextParts<'source, 'state> {
     pub(crate) code: &'state mut dyn InstructionBuildTarget,
     pub(crate) local_line_number_prefix: Option<SourceSpan>,
     pub(crate) globals: Option<&'state mut GlobalVariables>,
+    pub(crate) runtime_definitions: Option<&'state mut dyn RuntimeDefinitionPublisher<'source>>,
 }
 
 impl<'source, 'state> NativeSourceWordContext<'source, 'state> {
@@ -340,6 +430,7 @@ impl<'source, 'state> NativeSourceWordContext<'source, 'state> {
             code: parts.code,
             local_line_number_prefix: parts.local_line_number_prefix,
             globals: parts.globals,
+            runtime_definitions: parts.runtime_definitions,
         }
     }
 
@@ -414,6 +505,45 @@ impl<'source, 'state> NativeSourceWordContext<'source, 'state> {
                     SourceWordError::VarBindingCommitInvariantViolated { span }
                 }
             })
+    }
+
+    pub(crate) fn validate_runtime_definition_name(
+        &self,
+        name: &NormalizedName,
+        span: SourceSpan,
+    ) -> Result<(), SourceWordError> {
+        self.bindings()
+            .validate_new_name(name)
+            .map_err(|source| match source {
+                BindingInsertError::NameConflict => SourceWordError::DefNameConflict { span },
+                BindingInsertError::ReservedName => SourceWordError::DefReservedName { span },
+            })
+    }
+
+    pub(crate) fn has_runtime_definition_publication(&self) -> bool {
+        self.runtime_definitions.is_some()
+            && matches!(&self.bindings, NativeSourceWordBindingAccess::Write(_))
+    }
+
+    pub(crate) fn publish_runtime_definition(
+        &mut self,
+        name: NormalizedName,
+        name_span: SourceSpan,
+        body: &[SourceBlockStatement<'source>],
+        end_span: SourceSpan,
+    ) -> Result<WordId, SourceWordError> {
+        let Some(publisher) = &mut self.runtime_definitions else {
+            return Err(SourceWordError::DefPublicationContextUnavailable {
+                span: self.source_word_token.span(),
+            });
+        };
+        let NativeSourceWordBindingAccess::Write(bindings) = &mut self.bindings else {
+            return Err(SourceWordError::DefPublicationContextUnavailable {
+                span: self.source_word_token.span(),
+            });
+        };
+
+        publisher.publish_runtime_definition(bindings, name, name_span, body, end_span)
     }
 
     pub(crate) fn resolve_variable_target(
@@ -529,11 +659,82 @@ pub(crate) fn let_source_word(
     context.commit_staging(&staging)
 }
 
+pub(crate) fn def_source_word(
+    context: &mut NativeSourceWordContext<'_, '_>,
+) -> Result<(), SourceWordError> {
+    let name_token = {
+        let reader = context.statement_reader_mut();
+        let name_token = reader.read_name().map_err(def_reader_error)?;
+        reader.finish().map_err(def_reader_error)?;
+        name_token
+    };
+
+    let source_name = context
+        .view()
+        .slice(name_token.span())
+        .map_err(|source| SourceWordError::Source { source })?;
+    let name = NormalizedName::new(source_name).map_err(|source| SourceWordError::DefName {
+        span: name_token.span(),
+        source,
+    })?;
+    context.validate_runtime_definition_name(&name, name_token.span())?;
+    if !context.has_runtime_definition_publication() {
+        return Err(SourceWordError::DefPublicationContextUnavailable {
+            span: context.source_word_token().span(),
+        });
+    }
+
+    let view = context.view();
+    let mut body = Vec::new();
+    let end_span = loop {
+        let read = {
+            let Some(reader) = context.block_reader_mut() else {
+                return Err(SourceWordError::DefPublicationContextUnavailable {
+                    span: context.source_word_token().span(),
+                });
+            };
+            reader.next_statement()?
+        };
+
+        match read {
+            SourceBlockRead::Statement(statement) if is_standalone_end(view, statement)? => {
+                break statement.span();
+            }
+            SourceBlockRead::Statement(statement) => body.push(statement),
+            SourceBlockRead::Terminal(SourceBlockTerminal::Eof { span }) => {
+                return Err(SourceWordError::DefMissingEnd { span });
+            }
+            SourceBlockRead::Terminal(SourceBlockTerminal::LexError { error }) => {
+                return Err(SourceWordError::DefLex { source: error });
+            }
+        }
+    };
+
+    context.publish_runtime_definition(name, name_token.span(), &body, end_span)?;
+    Ok(())
+}
+
 pub(crate) fn unsupported_source_word(
     context: &mut NativeSourceWordContext<'_, '_>,
 ) -> Result<(), SourceWordError> {
     let first = context.source_word_token();
     Err(SourceWordError::UnsupportedSourceWord { span: first.span() })
+}
+
+fn is_standalone_end(
+    view: SourceView<'_>,
+    statement: SourceBlockStatement<'_>,
+) -> Result<bool, SourceWordError> {
+    let Some(token) = statement.standalone_name() else {
+        return Ok(false);
+    };
+    let source_name = view
+        .slice(token.span())
+        .map_err(|source| SourceWordError::Source { source })?;
+    let Ok(name) = NormalizedName::new(source_name) else {
+        return Ok(false);
+    };
+    Ok(name.as_str() == "END")
 }
 
 fn var_reader_error(error: SourceStatementReaderError) -> SourceWordError {
@@ -549,6 +750,25 @@ fn var_reader_error(error: SourceStatementReaderError) -> SourceWordError {
         SourceStatementReaderError::TrailingToken { actual } => SourceWordError::VarSyntax {
             span: actual.span(),
             kind: VarSyntaxErrorKind::TrailingToken {
+                kind: actual.kind(),
+            },
+        },
+    }
+}
+
+fn def_reader_error(error: SourceStatementReaderError) -> SourceWordError {
+    match error {
+        SourceStatementReaderError::Missing { span, .. } => SourceWordError::DefSyntax {
+            span,
+            kind: DefSyntaxErrorKind::MissingName,
+        },
+        SourceStatementReaderError::Unexpected { actual, .. } => SourceWordError::DefSyntax {
+            span: actual.span(),
+            kind: DefSyntaxErrorKind::MissingName,
+        },
+        SourceStatementReaderError::TrailingToken { actual } => SourceWordError::DefSyntax {
+            span: actual.span(),
+            kind: DefSyntaxErrorKind::TrailingToken {
                 kind: actual.kind(),
             },
         },
@@ -702,6 +922,7 @@ mod tests {
             code: &mut code,
             local_line_number_prefix: None,
             globals: None,
+            runtime_definitions: None,
         });
 
         let first_body_token = context
@@ -904,6 +1125,7 @@ mod tests {
             code: &mut code,
             local_line_number_prefix: None,
             globals: None,
+            runtime_definitions: None,
         });
 
         push_one(&mut context).expect("test source word should emit");
@@ -935,6 +1157,7 @@ mod tests {
                     code: &mut code,
                     local_line_number_prefix: None,
                     globals: Some(&mut globals),
+                    runtime_definitions: None,
                 });
 
                 var_source_word(&mut context)
