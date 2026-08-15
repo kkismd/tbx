@@ -12,6 +12,7 @@ use crate::lexer::{LexError, Lexer, Token, TokenKind};
 use crate::line_number::{LineNumberError, LocalLineNumber, LocalLineNumberTable};
 use crate::operator::OperatorLookup;
 use crate::primitive::PrimitiveLookup;
+use crate::published_code::{PublishedWordBuilder, WordBodyBuildError};
 use crate::source::{SourceError, SourceId, SourceSpan, SourceView};
 use crate::source_mapping::{
     InstructionSourceMappingView, SourceMappedCode, SourceMappingLookup, SourceMappingLookupError,
@@ -40,6 +41,17 @@ pub(crate) struct SourceCompileContext<'a> {
     operators: Option<OperatorLookup>,
     source_words: Option<SourceWordLookup<'a>>,
     globals: Option<&'a mut GlobalVariables>,
+}
+
+pub(crate) struct DefinitionBodyCompileContext<'a> {
+    bindings: &'a Bindings,
+    operators: Option<OperatorLookup>,
+    source_words: Option<SourceWordLookup<'a>>,
+}
+
+pub(crate) struct DefinitionBodyStatements<'a> {
+    statements: &'a [LogicalStatement],
+    terminal: Terminal,
 }
 
 enum BindingAccess<'a> {
@@ -159,6 +171,12 @@ impl From<InstructionBuildError> for SourceProcessorError {
     }
 }
 
+impl From<WordBodyBuildError> for SourceProcessorError {
+    fn from(error: WordBodyBuildError) -> Self {
+        Self::InstructionBuild(InstructionBuildError::WordBodyBuild { source: error })
+    }
+}
+
 impl From<SourceMappingLookupError> for SourceProcessorError {
     fn from(error: SourceMappingLookupError) -> Self {
         Self::SourceMappingLookup(error)
@@ -207,13 +225,37 @@ pub(crate) fn compile_source(
     Ok(TemporaryExecutionUnit { code, entry })
 }
 
+pub(crate) fn compile_definition_body<'source>(
+    view: SourceView<'source>,
+    source_id: SourceId,
+    body: DefinitionBodyStatements<'source>,
+    context: DefinitionBodyCompileContext<'_>,
+    builder: &mut PublishedWordBuilder<'_>,
+) -> Result<(), SourceProcessorError> {
+    let context = SourceCompileContext {
+        bindings: BindingAccess::Read(context.bindings),
+        operators: context.operators,
+        source_words: context.source_words,
+        globals: None,
+    };
+
+    compile_statements(
+        view,
+        source_id,
+        body.statements,
+        body.terminal,
+        context,
+        builder,
+    )
+}
+
 fn compile_statements<'source>(
     view: SourceView<'source>,
     source_id: SourceId,
     statements: &'source [LogicalStatement],
     terminal: Terminal,
     mut context: SourceCompileContext<'_>,
-    code: &mut SourceMappedCode,
+    code: &mut dyn InstructionBuildTarget,
 ) -> Result<(), SourceProcessorError> {
     let mut line_numbers = LocalLineNumberTable::new();
     // A leading integer remains an expression/literal unless this unit uses it
@@ -1168,6 +1210,45 @@ impl<'a> SourceCompileContext<'a> {
     }
 }
 
+impl<'a> DefinitionBodyCompileContext<'a> {
+    pub(crate) const fn new(bindings: &'a Bindings) -> Self {
+        Self {
+            bindings,
+            operators: None,
+            source_words: None,
+        }
+    }
+
+    pub(crate) const fn with_operators(bindings: &'a Bindings, operators: OperatorLookup) -> Self {
+        Self {
+            bindings,
+            operators: Some(operators),
+            source_words: None,
+        }
+    }
+
+    pub(crate) const fn with_source_words_and_operators(
+        bindings: &'a Bindings,
+        source_words: SourceWordLookup<'a>,
+        operators: OperatorLookup,
+    ) -> Self {
+        Self {
+            bindings,
+            operators: Some(operators),
+            source_words: Some(source_words),
+        }
+    }
+}
+
+impl<'a> DefinitionBodyStatements<'a> {
+    const fn new(statements: &'a [LogicalStatement], terminal: Terminal) -> Self {
+        Self {
+            statements,
+            terminal,
+        }
+    }
+}
+
 impl<'a> SourceExecutionContext<'a> {
     pub(crate) const fn new(
         bindings: &'a Bindings,
@@ -1405,6 +1486,7 @@ mod tests {
     use crate::name::NormalizedName;
     use crate::operator::{register_operator_primitives, OperatorSemantic, OperatorWords};
     use crate::primitive::{PrimitiveContext, PrimitiveError, PrimitiveRegistry};
+    use crate::published_code::PublishedCode;
     use crate::redefinition::redefine_word;
     use crate::source::SourceTexts;
     use crate::source_mapping::{
@@ -1745,6 +1827,49 @@ mod tests {
         )
         .expect_err("VAR source should fail");
         (sources, id, error)
+    }
+
+    fn compile_body(
+        text: &str,
+        context: DefinitionBodyCompileContext<'_>,
+    ) -> (SourceTexts, SourceId, PublishedCode) {
+        let (sources, id, segmented) = segment(text);
+        let mut code = PublishedCode::new();
+        compile_body_into(&mut code, sources.view(), id, &segmented, context)
+            .expect("definition body should compile");
+        (sources, id, code)
+    }
+
+    fn compile_body_error(
+        text: &str,
+        context: DefinitionBodyCompileContext<'_>,
+    ) -> (SourceTexts, SourceId, SourceProcessorError) {
+        let (sources, id, segmented) = segment(text);
+        let mut code = PublishedCode::new();
+        let error = compile_body_into(&mut code, sources.view(), id, &segmented, context)
+            .expect_err("definition body should fail");
+        (sources, id, error)
+    }
+
+    fn compile_body_into(
+        code: &mut PublishedCode,
+        view: SourceView<'_>,
+        source_id: SourceId,
+        segmented: &SegmentedSource,
+        context: DefinitionBodyCompileContext<'_>,
+    ) -> Result<(), SourceProcessorError> {
+        code.test_build_word_body(|builder| {
+            compile_definition_body(
+                view,
+                source_id,
+                DefinitionBodyStatements::new(
+                    segmented.completed_statements(),
+                    segmented.terminal(),
+                ),
+                context,
+                builder,
+            )
+        })
     }
 
     fn value(value: i16) -> Value {
@@ -2423,6 +2548,273 @@ mod tests {
             unit.source_span(location(&unit, 0)),
             Ok(Some(span(sources.view(), id, 4, 9)))
         );
+    }
+
+    #[test]
+    fn definition_body_empty_slice_appends_no_return_or_publication() {
+        let bindings = Bindings::new();
+        let (_sources, _id, code) = compile_body("", DefinitionBodyCompileContext::new(&bindings));
+
+        assert_eq!(code.len(), 0);
+    }
+
+    #[test]
+    fn definition_body_lowers_existing_runtime_word_call_with_source_mapping() {
+        let mut words = PublishedWords::new();
+        let mut bindings = Bindings::new();
+        let call_target = words.add(completed_primitive(0));
+        bindings
+            .insert_new(name("TARGET"), Binding::Word(call_target))
+            .expect("runtime word should register");
+
+        let (sources, id, code) =
+            compile_body("target", DefinitionBodyCompileContext::new(&bindings));
+
+        assert_eq!(
+            code.instruction_view().get(address(0)),
+            Ok(&Instruction::Call(call_target))
+        );
+        assert_eq!(
+            code.source_mapping()
+                .source_span(code.instruction_view().location(address(0))),
+            Ok(Some(span(sources.view(), id, 0, 6)))
+        );
+    }
+
+    #[test]
+    fn definition_body_dispatches_source_word_through_binding_capability() {
+        let mut source_words = SourceWordRegistry::new();
+        let mut bindings = Bindings::new();
+        register_native_source_word(
+            &mut source_words,
+            &mut bindings,
+            name("SOURCE_MARKER"),
+            emit_source_word_marker,
+        )
+        .expect("source word should register");
+
+        let (_sources, _id, code) = compile_body(
+            "source_marker",
+            DefinitionBodyCompileContext {
+                bindings: &bindings,
+                operators: None,
+                source_words: Some(source_words.lookup()),
+            },
+        );
+
+        assert_eq!(
+            code.instruction_view().get(address(0)),
+            Ok(&Instruction::Push(value(99)))
+        );
+    }
+
+    #[test]
+    fn definition_body_let_lowers_expression_to_published_builder() {
+        let (_words, _primitives, operators) = operator_fixture();
+        let mut source_words = SourceWordRegistry::new();
+        let mut bindings = Bindings::new();
+        let mut globals = GlobalVariables::new();
+        register_builtin_source_words(&mut source_words, &mut bindings)
+            .expect("built-in source words should bootstrap");
+        let variables = register_builtin_global_variables(&mut globals, &mut bindings)
+            .expect("A-Z variables should bootstrap");
+
+        let (_sources, _id, code) = compile_body(
+            "LET A = 1 + 2",
+            DefinitionBodyCompileContext::with_source_words_and_operators(
+                &bindings,
+                source_words.lookup(),
+                operators.lookup(),
+            ),
+        );
+
+        assert_eq!(
+            code.instruction_view().get(address(0)),
+            Ok(&Instruction::Push(value(1)))
+        );
+        assert_eq!(
+            code.instruction_view().get(address(1)),
+            Ok(&Instruction::Push(value(2)))
+        );
+        assert_eq!(
+            code.instruction_view().get(address(2)),
+            Ok(&Instruction::Call(
+                operators.lookup().resolve(OperatorSemantic::Add)
+            ))
+        );
+        assert_eq!(
+            code.instruction_view().get(address(3)),
+            Ok(&Instruction::StoreVar(variables[0]))
+        );
+    }
+
+    #[test]
+    fn definition_body_var_fails_without_publication_capability() {
+        let mut source_words = SourceWordRegistry::new();
+        let mut bindings = Bindings::new();
+        let globals = GlobalVariables::new();
+        register_builtin_source_words(&mut source_words, &mut bindings)
+            .expect("built-in source words should bootstrap");
+        let original_globals_len = globals.len();
+
+        let (_sources, _id, error) = compile_body_error(
+            "VAR SCORE",
+            DefinitionBodyCompileContext {
+                bindings: &bindings,
+                operators: None,
+                source_words: Some(source_words.lookup()),
+            },
+        );
+
+        assert_eq!(
+            error,
+            SourceProcessorError::SourceWord(SourceWordError::VarPublicationContextUnavailable)
+        );
+        assert_eq!(bindings.get(&name("SCORE")), None);
+        assert_eq!(globals.len(), original_globals_len);
+    }
+
+    #[test]
+    fn definition_body_rejects_bare_expression() {
+        let (_operator_words, _operator_primitives, operators) = operator_fixture();
+        let bindings = Bindings::new();
+        let (sources, id, error) = compile_body_error(
+            "1 + 2",
+            DefinitionBodyCompileContext::with_operators(&bindings, operators.lookup()),
+        );
+
+        assert_eq!(
+            error,
+            SourceProcessorError::Compile(CompileError {
+                span: span(sources.view(), id, 0, 1),
+                kind: CompileErrorKind::BareExpression,
+            })
+        );
+    }
+
+    #[test]
+    fn definition_body_patches_forward_and_backward_local_line_numbers() {
+        let (_operator_words, _operator_primitives, operators) = operator_fixture();
+        let bindings = Bindings::new();
+
+        let (_sources, _id, code) = compile_body(
+            "100 BIF 0, 200\n1\n200 BIF 0, 100",
+            DefinitionBodyCompileContext::with_operators(&bindings, operators.lookup()),
+        );
+
+        assert_eq!(
+            code.instruction_view().get(address(1)),
+            Ok(&Instruction::JumpIfZero(address(3)))
+        );
+        assert_eq!(
+            code.instruction_view().get(address(4)),
+            Ok(&Instruction::JumpIfZero(address(0)))
+        );
+    }
+
+    #[test]
+    fn definition_body_rejects_duplicate_and_undefined_local_line_numbers() {
+        let (_operator_words, _operator_primitives, operators) = operator_fixture();
+        let mut words = PublishedWords::new();
+        let mut bindings = Bindings::new();
+        let target = words.add(completed_primitive(0));
+        bindings
+            .insert_new(name("PUSH7"), Binding::Word(target))
+            .expect("runtime word should register");
+        let (duplicate_sources, duplicate_id, duplicate) = compile_body_error(
+            "100 BIF 1, 100\n100 PUSH7",
+            DefinitionBodyCompileContext::with_operators(&bindings, operators.lookup()),
+        );
+        let (undefined_sources, undefined_id, undefined) = compile_body_error(
+            "BIF 1, 200",
+            DefinitionBodyCompileContext::with_operators(&bindings, operators.lookup()),
+        );
+
+        assert_eq!(
+            duplicate,
+            SourceProcessorError::Compile(CompileError {
+                span: span(duplicate_sources.view(), duplicate_id, 15, 18),
+                kind: CompileErrorKind::LineNumber {
+                    source: Box::new(LineNumberError::Duplicate {
+                        line_number: LocalLineNumber::new(100),
+                        original_span: span(duplicate_sources.view(), duplicate_id, 0, 3),
+                        duplicate_span: span(duplicate_sources.view(), duplicate_id, 15, 18),
+                    }),
+                },
+            })
+        );
+        assert_eq!(
+            undefined,
+            SourceProcessorError::Compile(CompileError {
+                span: span(undefined_sources.view(), undefined_id, 7, 10),
+                kind: CompileErrorKind::LineNumber {
+                    source: Box::new(LineNumberError::Undefined {
+                        line_number: LocalLineNumber::new(200),
+                        span: span(undefined_sources.view(), undefined_id, 7, 10),
+                    }),
+                },
+            })
+        );
+    }
+
+    #[test]
+    fn definition_body_line_number_preanalysis_is_owner_local() {
+        let (_operator_words, _operator_primitives, operators) = operator_fixture();
+        let mut words = PublishedWords::new();
+        let mut bindings = Bindings::new();
+        let target = words.add(completed_primitive(0));
+        bindings
+            .insert_new(name("PUSH7"), Binding::Word(target))
+            .expect("runtime word should register");
+        let (first_sources, first_id, first_segmented) = segment("BIF 0, 100\n100 PUSH7");
+        let (second_sources, second_id, second_segmented) = segment("100 PUSH7");
+        let mut code = PublishedCode::new();
+
+        compile_body_into(
+            &mut code,
+            first_sources.view(),
+            first_id,
+            &first_segmented,
+            DefinitionBodyCompileContext::with_operators(&bindings, operators.lookup()),
+        )
+        .expect("first body should compile");
+        let second_start = code.len();
+        compile_body_into(
+            &mut code,
+            second_sources.view(),
+            second_id,
+            &second_segmented,
+            DefinitionBodyCompileContext::with_operators(&bindings, operators.lookup()),
+        )
+        .expect("second body should compile independently");
+
+        assert_eq!(
+            code.instruction_view().get(address(second_start)),
+            Ok(&Instruction::Push(value(100)))
+        );
+        assert_eq!(
+            code.instruction_view().get(address(second_start + 1)),
+            Ok(&Instruction::Call(target))
+        );
+    }
+
+    #[test]
+    fn definition_body_unpublished_self_or_later_word_is_undefined() {
+        let bindings = Bindings::new();
+        for source_text in ["SELF", "LATER"] {
+            let (sources, id, error) =
+                compile_body_error(source_text, DefinitionBodyCompileContext::new(&bindings));
+            assert_eq!(
+                error,
+                SourceProcessorError::Compile(CompileError {
+                    span: span(sources.view(), id, 0, source_text.len()),
+                    kind: CompileErrorKind::WordResolution {
+                        source: WordResolutionError::UndefinedName,
+                    },
+                }),
+                "{source_text:?} should not receive a temporary body binding"
+            );
+        }
     }
 
     #[test]

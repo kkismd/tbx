@@ -171,6 +171,24 @@ impl PublishedCode {
             location: self.code.instruction_view().location(entry_address),
         })
     }
+
+    #[cfg(test)]
+    pub(crate) fn test_build_word_body<E>(
+        &mut self,
+        build: impl FnOnce(&mut PublishedWordBuilder<'_>) -> Result<(), E>,
+    ) -> Result<(), E>
+    where
+        E: From<WordBodyBuildError>,
+    {
+        let entry_address = InstructionAddress::from_index(self.code.len());
+        let mut builder = PublishedWordBuilder {
+            code: &mut self.code,
+            body_start: entry_address,
+            unresolved_patches: Vec::new(),
+        };
+        build(&mut builder)?;
+        builder.finish().map_err(E::from)
+    }
 }
 
 impl NewWordPublicationError {
