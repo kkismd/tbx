@@ -59,6 +59,7 @@ pub(crate) enum WordBodyBuildError {
     UnresolvedBranchPatch {
         branch: InstructionAddress,
     },
+    DefinitionBodyCompileRejected,
     InvalidEntry {
         source: InstructionAddressError,
     },
@@ -102,6 +103,34 @@ impl PublishedCode {
 
         let entry = self
             .build_word_body(build)
+            .map_err(|source| NewWordPublicationError::Build { source })?;
+        let definition = CompletedWordDefinition::compiled(entry.location, self.instruction_view())
+            .map_err(|source| NewWordPublicationError::Definition { source })?;
+        let id = words.add(definition);
+
+        bindings
+            .insert_new(name, Binding::Word(id))
+            .map_err(|_| NewWordPublicationError::BindingCommitInvariantViolated)?;
+
+        Ok(PublishedWord {
+            id,
+            entry: entry.location,
+        })
+    }
+
+    pub(crate) fn publish_new_word_with_bindings(
+        &mut self,
+        words: &mut PublishedWords,
+        bindings: &mut Bindings,
+        name: NormalizedName,
+        build: impl FnOnce(&Bindings, &mut PublishedWordBuilder<'_>) -> Result<(), WordBodyBuildError>,
+    ) -> Result<PublishedWord, NewWordPublicationError> {
+        bindings
+            .validate_new_name(&name)
+            .map_err(NewWordPublicationError::from_precheck_error)?;
+
+        let entry = self
+            .build_word_body(|builder| build(bindings, builder))
             .map_err(|source| NewWordPublicationError::Build { source })?;
         let definition = CompletedWordDefinition::compiled(entry.location, self.instruction_view())
             .map_err(|source| NewWordPublicationError::Definition { source })?;
