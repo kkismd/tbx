@@ -2173,6 +2173,109 @@ mod tests {
         )
     }
 
+    struct RuntimeDefinitionSession {
+        words: PublishedWords,
+        primitives: PrimitiveRegistry,
+        operators: OperatorWords,
+        source_words: SourceWordRegistry,
+        bindings: Bindings,
+        globals: GlobalVariables,
+        code: PublishedCode,
+    }
+
+    impl RuntimeDefinitionSession {
+        fn new() -> Self {
+            let (words, primitives, operators) = operator_fixture();
+            let mut source_words = SourceWordRegistry::new();
+            let mut bindings = Bindings::new();
+            register_builtin_source_words(&mut source_words, &mut bindings)
+                .expect("built-in source words should bootstrap");
+
+            Self {
+                words,
+                primitives,
+                operators,
+                source_words,
+                bindings,
+                globals: GlobalVariables::new(),
+                code: PublishedCode::new(),
+            }
+        }
+
+        fn publish_def(&mut self, text: &str) -> (SourceTexts, SourceId, TemporaryExecutionUnit) {
+            compile_with_def(
+                text,
+                &mut self.bindings,
+                &mut self.globals,
+                &self.source_words,
+                self.operators.lookup(),
+                &mut self.code,
+                &mut self.words,
+            )
+        }
+
+        fn publish_def_error(
+            &mut self,
+            text: &str,
+        ) -> (SourceTexts, SourceId, SourceProcessorError) {
+            compile_with_def_error(
+                text,
+                &mut self.bindings,
+                &mut self.globals,
+                &self.source_words,
+                self.operators.lookup(),
+                &mut self.code,
+                &mut self.words,
+            )
+        }
+
+        fn compile_caller(&self, text: &str) -> (SourceTexts, SourceId, TemporaryExecutionUnit) {
+            compile_with_bindings(text, &self.bindings)
+        }
+
+        fn run_unit_with_published_code(
+            &self,
+            unit: &TemporaryExecutionUnit,
+        ) -> Result<SourceRunResult, SourceProcessorError> {
+            let code_spaces = [self.code.instruction_view()];
+            let source_mappings = [self.code.source_mapping()];
+            run_unit(
+                unit,
+                SourceExecutionContext::with_code_spaces_and_mappings(
+                    &self.bindings,
+                    &code_spaces,
+                    &source_mappings,
+                    PublishedWordLookup::new(&self.words),
+                    self.primitives.lookup(),
+                ),
+            )
+        }
+
+        fn run_caller(&self, text: &str) -> (SourceTexts, SourceId, SourceRunResult) {
+            let (sources, id, unit) = self.compile_caller(text);
+            let result = self
+                .run_unit_with_published_code(&unit)
+                .expect("caller should run against published code");
+
+            (sources, id, result)
+        }
+
+        fn register_primitive(
+            &mut self,
+            source_name: &str,
+            primitive: fn(&mut PrimitiveContext<'_>) -> Result<(), PrimitiveError>,
+        ) -> WordId {
+            let primitive = self.primitives.register(primitive);
+            register_primitive(
+                &mut self.words,
+                &mut self.bindings,
+                name(source_name),
+                primitive,
+            )
+            .expect("primitive should register")
+        }
+    }
+
     fn completed_compiled(code: &mut InstructionSequence, value: i16) -> CompletedWordDefinition {
         let entry = code.append(Instruction::Push(Value::integer(value)));
         CompletedWordDefinition::compiled(code.view().location(entry), code.view())
@@ -5234,6 +5337,240 @@ mod tests {
             })
         );
         assert_eq!(bindings.get(&name("FOO")), None);
+    }
+
+    #[test]
+    fn published_def_runs_from_later_source_without_merging_code_spaces() {
+        let mut session = RuntimeDefinitionSession::new();
+        session.publish_def("DEF FOO\n7\nEND");
+        let Some(Binding::Word(foo)) = session.bindings.get(&name("FOO")).copied() else {
+            panic!("FOO should be published");
+        };
+        let (caller_sources, caller_id, caller) = session.compile_caller("foo");
+        let original_published_len = session.code.len();
+
+        let result = session
+            .run_unit_with_published_code(&caller)
+            .expect("later caller should execute published FOO");
+
+        assert_eq!(
+            caller.instructions().get(address(0)),
+            Ok(&Instruction::Call(foo))
+        );
+        assert_eq!(
+            caller.source_span(location(&caller, 0)),
+            Ok(Some(span(caller_sources.view(), caller_id, 0, 3)))
+        );
+        assert_eq!(
+            session.code.instruction_view().get(address(0)),
+            Ok(&Instruction::Push(value(7)))
+        );
+        assert_eq!(
+            session.code.instruction_view().get(address(1)),
+            Ok(&Instruction::Return)
+        );
+        assert_eq!(result.outcome(), RunOutcome::Halted);
+        assert_eq!(result.data_stack(), [value(7)]);
+        assert_eq!(result.instruction_count(), 2);
+        assert_eq!(session.code.len(), original_published_len);
+    }
+
+    #[test]
+    fn published_def_body_can_call_existing_published_runtime_word() {
+        let mut session = RuntimeDefinitionSession::new();
+        session.publish_def("DEF BASE\n3\nEND");
+        let Some(Binding::Word(base)) = session.bindings.get(&name("BASE")).copied() else {
+            panic!("BASE should be published");
+        };
+
+        session.publish_def("DEF WRAP\nbase\n4\nEND");
+        let Some(Binding::Word(wrap)) = session.bindings.get(&name("WRAP")).copied() else {
+            panic!("WRAP should be published");
+        };
+        let (_caller_sources, _caller_id, caller) = session.compile_caller("wrap");
+        let result = session
+            .run_unit_with_published_code(&caller)
+            .expect("nested published word should run");
+
+        assert_eq!(
+            caller.instructions().get(address(0)),
+            Ok(&Instruction::Call(wrap))
+        );
+        assert_eq!(
+            session.code.instruction_view().get(address(2)),
+            Ok(&Instruction::Call(base))
+        );
+        assert_eq!(result.data_stack(), [value(3), value(4)]);
+    }
+
+    #[test]
+    fn production_published_runtime_error_maps_to_definition_source_span() {
+        let mut session = RuntimeDefinitionSession::new();
+        let fail = session.register_primitive("FAIL", fail_after_partial_stack_update);
+        let (definition_sources, definition_id, _unit) =
+            session.publish_def("DEF BAD\n1 fail\nEND");
+        let (caller_sources, caller_id, caller) = session.compile_caller("bad");
+        let published_views = [session.code.instruction_view()];
+        let published_mappings = [session.code.source_mapping()];
+
+        let error = run_unit(
+            &caller,
+            SourceExecutionContext::with_code_spaces_and_mappings(
+                &session.bindings,
+                &published_views,
+                &published_mappings,
+                PublishedWordLookup::new(&session.words),
+                session.primitives.lookup(),
+            ),
+        )
+        .expect_err("published body failure should fail caller");
+
+        assert_eq!(
+            caller.source_span(location(&caller, 0)),
+            Ok(Some(span(caller_sources.view(), caller_id, 0, 3)))
+        );
+        assert_eq!(
+            session.code.instruction_view().get(address(1)),
+            Ok(&Instruction::Call(fail))
+        );
+        assert_runtime_error(
+            error,
+            session.code.instruction_view().location(address(1)),
+            Ok(Some(span(definition_sources.view(), definition_id, 10, 14))),
+        );
+    }
+
+    #[test]
+    fn failed_def_fragment_does_not_publish_and_later_def_runs_after_fragment() {
+        let mut session = RuntimeDefinitionSession::new();
+        let (keep_sources, keep_id, _keep_unit) = session.publish_def("DEF KEEP\n5\nEND");
+        let Some(Binding::Word(keep)) = session.bindings.get(&name("KEEP")).copied() else {
+            panic!("KEEP should be published");
+        };
+        let keep_entry = session.code.instruction_view().location(address(0));
+        let keep_span = span(keep_sources.view(), keep_id, 9, 10);
+        let words_len_before_failure = session.words.len();
+        let code_len_before_failure = session.code.len();
+
+        let (bad_sources, bad_id, error) = session.publish_def_error("DEF BAD\n1 MISSING\nEND");
+
+        assert_eq!(
+            error,
+            SourceProcessorError::SourceWord(SourceWordError::DefBodyCompile {
+                span: span(bad_sources.view(), bad_id, 10, 17)
+            })
+        );
+        assert_eq!(session.bindings.get(&name("BAD")), None);
+        assert_eq!(session.words.len(), words_len_before_failure);
+        assert_eq!(
+            session.words.get(keep).expect("KEEP should remain defined"),
+            &crate::word::WordDefinition::Compiled { entry: keep_entry }
+        );
+        assert_eq!(
+            session.code.source_mapping().source_span(keep_entry),
+            Ok(Some(keep_span))
+        );
+        assert_eq!(
+            session
+                .code
+                .instruction_view()
+                .get(address(code_len_before_failure)),
+            Ok(&Instruction::Push(value(1)))
+        );
+
+        session.publish_def("DEF GOOD\n7\nEND");
+        let Some(Binding::Word(good)) = session.bindings.get(&name("GOOD")).copied() else {
+            panic!("GOOD should be published");
+        };
+        let expected_good_entry = session
+            .code
+            .instruction_view()
+            .location(address(code_len_before_failure + 1));
+        assert_eq!(
+            session.words.get(good).expect("GOOD should be defined"),
+            &crate::word::WordDefinition::Compiled {
+                entry: expected_good_entry
+            }
+        );
+
+        let (_keep_caller_sources, _keep_caller_id, keep_result) = session.run_caller("keep");
+        let (_good_caller_sources, _good_caller_id, good_result) = session.run_caller("good");
+
+        assert_eq!(keep_result.data_stack(), [value(5)]);
+        assert_eq!(good_result.data_stack(), [value(7)]);
+    }
+
+    #[test]
+    fn published_code_redefinition_preserves_early_bound_callers_and_mappings() {
+        let mut session = RuntimeDefinitionSession::new();
+        let (old_sources, old_id, _old_def_unit) = session.publish_def("DEF TARGET\n41\nEND");
+        let Some(Binding::Word(old)) = session.bindings.get(&name("TARGET")).copied() else {
+            panic!("TARGET should be published");
+        };
+        let (_old_caller_sources, _old_caller_id, old_caller) = session.compile_caller("target");
+        let old_entry = session.code.instruction_view().location(address(0));
+        let old_span = span(old_sources.view(), old_id, 11, 13);
+
+        let (new_sources, new_id) = source("99\nEND");
+        let new_value_span = span(new_sources.view(), new_id, 0, 2);
+        let new_end_span = span(new_sources.view(), new_id, 3, 6);
+        let redefinition = session
+            .code
+            .redefine_word(
+                &mut session.words,
+                &mut session.bindings,
+                &name("TARGET"),
+                |builder| {
+                    builder.append_mapped(Instruction::Push(value(99)), new_value_span)?;
+                    builder.append_mapped(Instruction::Return, new_end_span)?;
+                    Ok(())
+                },
+            )
+            .expect("TARGET should redefine in published code");
+        let (_new_caller_sources, _new_caller_id, new_caller) = session.compile_caller("target");
+        let new_entry = session.code.instruction_view().location(address(2));
+
+        let old_result = session
+            .run_unit_with_published_code(&old_caller)
+            .expect("old caller should still run old body");
+        let new_result = session
+            .run_unit_with_published_code(&new_caller)
+            .expect("new caller should run new body");
+
+        assert_eq!(redefinition.previous(), old);
+        assert_ne!(redefinition.previous(), redefinition.current());
+        assert_eq!(
+            old_caller.instructions().get(address(0)),
+            Ok(&Instruction::Call(redefinition.previous()))
+        );
+        assert_eq!(
+            new_caller.instructions().get(address(0)),
+            Ok(&Instruction::Call(redefinition.current()))
+        );
+        assert_eq!(old_result.data_stack(), [value(41)]);
+        assert_eq!(new_result.data_stack(), [value(99)]);
+        assert_eq!(
+            session
+                .words
+                .get(old)
+                .expect("old word should remain defined"),
+            &crate::word::WordDefinition::Compiled { entry: old_entry }
+        );
+        assert_eq!(
+            session
+                .words
+                .get(redefinition.current())
+                .expect("new word should be defined"),
+            &crate::word::WordDefinition::Compiled { entry: new_entry }
+        );
+        assert_eq!(
+            session.code.source_mapping().source_span(old_entry),
+            Ok(Some(old_span))
+        );
+        assert_eq!(
+            session.code.source_mapping().source_span(new_entry),
+            Ok(Some(new_value_span))
+        );
     }
 
     #[test]
