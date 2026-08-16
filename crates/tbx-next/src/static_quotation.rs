@@ -1,7 +1,9 @@
 use crate::block_code::{BlockCodeBuildError, BlockCodeBuilder, CompletedBlockCode};
-use crate::instruction::{Instruction, InstructionAddress};
+use crate::instruction::{Instruction, InstructionAddress, InstructionView};
 use crate::source::SourceSpan;
-use crate::source_mapping::{SourceMappedCode, SourceMappingLookupError};
+use crate::source_mapping::{
+    InstructionSourceMappingView, SourceMappedCode, SourceMappingLookupError,
+};
 
 /// Immutable unpublished code artifact for a static quotation.
 ///
@@ -44,6 +46,24 @@ impl StaticQuotation {
         Ok(Self { code, completed })
     }
 
+    pub(crate) fn try_build<E>(
+        build: impl FnOnce(&mut BlockCodeBuilder<'_>) -> Result<(), E>,
+    ) -> Result<Self, E>
+    where
+        E: From<StaticQuotationBuildError>,
+    {
+        let mut code = SourceMappedCode::new();
+        let completed = {
+            let mut builder = BlockCodeBuilder::new(&mut code);
+            build(&mut builder)?;
+            builder
+                .finish()
+                .map_err(|source| StaticQuotationBuildError::Build { source })?
+        };
+
+        Ok(Self { code, completed })
+    }
+
     pub(crate) fn attach_to(
         &self,
         parent: &mut BlockCodeBuilder<'_>,
@@ -68,6 +88,14 @@ impl StaticQuotation {
 
     pub(crate) fn len(&self) -> usize {
         self.completed.len()
+    }
+
+    pub(crate) fn instruction_view(&self) -> InstructionView<'_> {
+        self.code.instruction_view()
+    }
+
+    pub(crate) fn source_mapping(&self) -> InstructionSourceMappingView<'_> {
+        self.code.source_mapping()
     }
 
     fn rebased_instructions(
