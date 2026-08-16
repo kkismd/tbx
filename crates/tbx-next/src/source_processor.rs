@@ -26,6 +26,7 @@ use crate::source_word::{
     SourceBlockStatement, SourceBlockTerminal, SourceWordError, SourceWordId, SourceWordLookup,
     SourceWordLookupError,
 };
+use crate::static_quotation::{StaticQuotation, StaticQuotationBuildError};
 use crate::value::Value;
 use crate::vm::{ExecutionView, RunOutcome, Vm, VmError};
 use crate::word::{PublishedWords, WordId};
@@ -55,7 +56,18 @@ pub(crate) struct DefinitionBodyCompileContext<'a> {
     source_words: Option<SourceWordLookup<'a>>,
 }
 
+pub(crate) struct QuotationBodyCompileContext<'a> {
+    bindings: &'a Bindings,
+    operators: Option<OperatorLookup>,
+    source_words: Option<SourceWordLookup<'a>>,
+}
+
 pub(crate) struct DefinitionBodyStatements<'a> {
+    statements: &'a [SourceBlockStatement<'a>],
+    terminal: Terminal,
+}
+
+pub(crate) struct QuotationBodyStatements<'a> {
     statements: &'a [SourceBlockStatement<'a>],
     terminal: Terminal,
 }
@@ -188,6 +200,16 @@ impl From<WordBodyBuildError> for SourceProcessorError {
     }
 }
 
+impl From<StaticQuotationBuildError> for SourceProcessorError {
+    fn from(error: StaticQuotationBuildError) -> Self {
+        match error {
+            StaticQuotationBuildError::Build { source } => {
+                Self::InstructionBuild(InstructionBuildError::BlockCodeBuild { source })
+            }
+        }
+    }
+}
+
 impl From<SourceMappingLookupError> for SourceProcessorError {
     fn from(error: SourceMappingLookupError) -> Self {
         Self::SourceMappingLookup(error)
@@ -263,6 +285,34 @@ pub(crate) fn compile_definition_body<'source>(
         context,
         builder,
     )
+}
+
+pub(crate) fn compile_quotation_body<'source>(
+    view: SourceView<'source>,
+    source_id: SourceId,
+    body: QuotationBodyStatements<'source>,
+    context: QuotationBodyCompileContext<'_>,
+) -> Result<StaticQuotation, SourceProcessorError> {
+    let context = SourceCompileContext {
+        bindings: BindingAccess::Read(context.bindings),
+        operators: context.operators,
+        source_words: context.source_words,
+        // #1516/#1500: quotation bodies reuse statement lowering but have no
+        // capability to publish bindings, globals, or runtime definitions.
+        globals: None,
+        runtime_definitions: None,
+    };
+
+    StaticQuotation::try_build(|builder| {
+        compile_statements(
+            view,
+            source_id,
+            body.statements,
+            body.terminal,
+            context,
+            builder,
+        )
+    })
 }
 
 fn compile_statements<'source, S>(
@@ -1334,7 +1384,46 @@ impl<'a> DefinitionBodyCompileContext<'a> {
     }
 }
 
+impl<'a> QuotationBodyCompileContext<'a> {
+    pub(crate) const fn new(bindings: &'a Bindings) -> Self {
+        Self {
+            bindings,
+            operators: None,
+            source_words: None,
+        }
+    }
+
+    pub(crate) const fn with_operators(bindings: &'a Bindings, operators: OperatorLookup) -> Self {
+        Self {
+            bindings,
+            operators: Some(operators),
+            source_words: None,
+        }
+    }
+
+    pub(crate) const fn with_source_words_and_operators(
+        bindings: &'a Bindings,
+        source_words: SourceWordLookup<'a>,
+        operators: OperatorLookup,
+    ) -> Self {
+        Self {
+            bindings,
+            operators: Some(operators),
+            source_words: Some(source_words),
+        }
+    }
+}
+
 impl<'a> DefinitionBodyStatements<'a> {
+    const fn new(statements: &'a [SourceBlockStatement<'a>], terminal: Terminal) -> Self {
+        Self {
+            statements,
+            terminal,
+        }
+    }
+}
+
+impl<'a> QuotationBodyStatements<'a> {
     const fn new(statements: &'a [SourceBlockStatement<'a>], terminal: Terminal) -> Self {
         Self {
             statements,
@@ -2116,6 +2205,50 @@ mod tests {
         })
     }
 
+    fn compile_quotation(
+        text: &str,
+        context: QuotationBodyCompileContext<'_>,
+    ) -> (SourceTexts, SourceId, StaticQuotation) {
+        let (sources, id, segmented) = segment(text);
+        let quotation = compile_quotation_from_segmented(sources.view(), id, &segmented, context)
+            .expect("quotation body should compile");
+        (sources, id, quotation)
+    }
+
+    fn compile_quotation_error(
+        text: &str,
+        context: QuotationBodyCompileContext<'_>,
+    ) -> (SourceTexts, SourceId, SourceProcessorError) {
+        let (sources, id, segmented) = segment(text);
+        let error = compile_quotation_from_segmented(sources.view(), id, &segmented, context)
+            .expect_err("quotation body should fail");
+        (sources, id, error)
+    }
+
+    fn compile_quotation_from_segmented(
+        view: SourceView<'_>,
+        source_id: SourceId,
+        segmented: &SegmentedSource,
+        context: QuotationBodyCompileContext<'_>,
+    ) -> Result<StaticQuotation, SourceProcessorError> {
+        let statements = segmented
+            .completed_statements()
+            .iter()
+            .map(|statement| {
+                Ok(SourceBlockStatement::new(
+                    statement.tokens(),
+                    statement.span(view, source_id)?,
+                ))
+            })
+            .collect::<Result<Vec<_>, SourceError>>()?;
+        compile_quotation_body(
+            view,
+            source_id,
+            QuotationBodyStatements::new(&statements, segmented.terminal()),
+            context,
+        )
+    }
+
     fn value(value: i16) -> Value {
         Value::integer(value)
     }
@@ -2130,6 +2263,10 @@ mod tests {
 
     fn location(unit: &TemporaryExecutionUnit, index: usize) -> CodeLocation {
         unit.instructions().location(address(index))
+    }
+
+    fn quotation_location(quotation: &StaticQuotation, index: usize) -> CodeLocation {
+        quotation.instruction_view().location(address(index))
     }
 
     fn name(input: &str) -> NormalizedName {
@@ -3162,6 +3299,301 @@ mod tests {
                 "{source_text:?} should not receive a temporary body binding"
             );
         }
+    }
+
+    #[test]
+    fn quotation_body_empty_slice_completes_empty_static_quotation() {
+        let bindings = Bindings::new();
+        let (_sources, _id, quotation) =
+            compile_quotation("", QuotationBodyCompileContext::new(&bindings));
+
+        assert_eq!(quotation.len(), 0);
+    }
+
+    #[test]
+    fn quotation_body_lowers_existing_runtime_word_call_with_source_mapping() {
+        let mut words = PublishedWords::new();
+        let mut bindings = Bindings::new();
+        let call_target = words.add(completed_primitive(0));
+        bindings
+            .insert_new(name("TARGET"), Binding::Word(call_target))
+            .expect("runtime word should register");
+
+        let (sources, id, quotation) =
+            compile_quotation("target", QuotationBodyCompileContext::new(&bindings));
+
+        assert_eq!(
+            quotation.instruction_view().get(address(0)),
+            Ok(&Instruction::Call(call_target))
+        );
+        assert_eq!(
+            quotation
+                .source_mapping()
+                .source_span(quotation_location(&quotation, 0)),
+            Ok(Some(span(sources.view(), id, 0, 6)))
+        );
+    }
+
+    #[test]
+    fn quotation_body_dispatches_source_word_through_binding_capability() {
+        let (_words, _primitives, operators) = operator_fixture();
+        let mut source_words = SourceWordRegistry::new();
+        let mut bindings = Bindings::new();
+        register_native_source_word(
+            &mut source_words,
+            &mut bindings,
+            name("SOURCE_MARKER"),
+            emit_source_word_marker,
+        )
+        .expect("source word should register");
+
+        let (_sources, _id, quotation) = compile_quotation(
+            "source_marker",
+            QuotationBodyCompileContext::with_source_words_and_operators(
+                &bindings,
+                source_words.lookup(),
+                operators.lookup(),
+            ),
+        );
+
+        assert_eq!(
+            quotation.instruction_view().get(address(0)),
+            Ok(&Instruction::Push(value(99)))
+        );
+    }
+
+    #[test]
+    fn quotation_body_let_lowers_without_publication_capability() {
+        let (_words, _primitives, operators) = operator_fixture();
+        let mut source_words = SourceWordRegistry::new();
+        let mut bindings = Bindings::new();
+        let mut globals = GlobalVariables::new();
+        register_builtin_source_words(&mut source_words, &mut bindings)
+            .expect("built-in source words should bootstrap");
+        let variables = register_builtin_global_variables(&mut globals, &mut bindings)
+            .expect("A-Z variables should bootstrap");
+
+        let (_sources, _id, quotation) = compile_quotation(
+            "LET A = 1 + 2",
+            QuotationBodyCompileContext::with_source_words_and_operators(
+                &bindings,
+                source_words.lookup(),
+                operators.lookup(),
+            ),
+        );
+
+        assert_eq!(
+            quotation.instruction_view().get(address(0)),
+            Ok(&Instruction::Push(value(1)))
+        );
+        assert_eq!(
+            quotation.instruction_view().get(address(1)),
+            Ok(&Instruction::Push(value(2)))
+        );
+        assert_eq!(
+            quotation.instruction_view().get(address(2)),
+            Ok(&Instruction::Call(
+                operators.lookup().resolve(OperatorSemantic::Add)
+            ))
+        );
+        assert_eq!(
+            quotation.instruction_view().get(address(3)),
+            Ok(&Instruction::StoreVar(variables[0]))
+        );
+    }
+
+    #[test]
+    fn quotation_body_var_fails_without_binding_or_global_publication() {
+        let (_operator_words, _operator_primitives, operators) = operator_fixture();
+        let mut source_words = SourceWordRegistry::new();
+        let mut bindings = Bindings::new();
+        let globals = GlobalVariables::new();
+        register_builtin_source_words(&mut source_words, &mut bindings)
+            .expect("built-in source words should bootstrap");
+        let original_bindings_len = bindings.len();
+        let original_globals_len = globals.len();
+
+        let (_sources, _id, error) = compile_quotation_error(
+            "VAR SCORE",
+            QuotationBodyCompileContext::with_source_words_and_operators(
+                &bindings,
+                source_words.lookup(),
+                operators.lookup(),
+            ),
+        );
+
+        assert_eq!(
+            error,
+            SourceProcessorError::SourceWord(SourceWordError::VarPublicationContextUnavailable)
+        );
+        assert_eq!(bindings.len(), original_bindings_len);
+        assert_eq!(bindings.get(&name("SCORE")), None);
+        assert_eq!(globals.len(), original_globals_len);
+    }
+
+    #[test]
+    fn quotation_body_def_fails_without_runtime_definition_publication() {
+        let (_operator_words, _operator_primitives, operators) = operator_fixture();
+        let mut source_words = SourceWordRegistry::new();
+        let mut bindings = Bindings::new();
+        let words = PublishedWords::new();
+        register_builtin_source_words(&mut source_words, &mut bindings)
+            .expect("built-in source words should bootstrap");
+        let original_bindings_len = bindings.len();
+
+        let (sources, id, error) = compile_quotation_error(
+            "DEF F\nEND",
+            QuotationBodyCompileContext::with_source_words_and_operators(
+                &bindings,
+                source_words.lookup(),
+                operators.lookup(),
+            ),
+        );
+
+        assert_eq!(
+            error,
+            SourceProcessorError::SourceWord(SourceWordError::DefPublicationContextUnavailable {
+                span: span(sources.view(), id, 0, 3),
+            })
+        );
+        assert_eq!(bindings.len(), original_bindings_len);
+        assert_eq!(bindings.get(&name("F")), None);
+        assert_eq!(words.len(), 0);
+    }
+
+    #[test]
+    fn quotation_body_patches_forward_and_backward_local_line_numbers() {
+        let (_operator_words, _operator_primitives, operators) = operator_fixture();
+        let bindings = Bindings::new();
+
+        let (_sources, _id, quotation) = compile_quotation(
+            "100 BIF 0, 200\n1\n200 BIF 0, 100",
+            QuotationBodyCompileContext::with_operators(&bindings, operators.lookup()),
+        );
+
+        assert_eq!(
+            quotation.instruction_view().get(address(1)),
+            Ok(&Instruction::JumpIfZero(address(3)))
+        );
+        assert_eq!(
+            quotation.instruction_view().get(address(4)),
+            Ok(&Instruction::JumpIfZero(address(0)))
+        );
+    }
+
+    #[test]
+    fn quotation_body_rejects_duplicate_and_undefined_local_line_numbers() {
+        let (_operator_words, _operator_primitives, operators) = operator_fixture();
+        let mut words = PublishedWords::new();
+        let mut bindings = Bindings::new();
+        let target = words.add(completed_primitive(0));
+        bindings
+            .insert_new(name("PUSH7"), Binding::Word(target))
+            .expect("runtime word should register");
+        let (duplicate_sources, duplicate_id, duplicate) = compile_quotation_error(
+            "100 BIF 1, 100\n100 PUSH7",
+            QuotationBodyCompileContext::with_operators(&bindings, operators.lookup()),
+        );
+        let (undefined_sources, undefined_id, undefined) = compile_quotation_error(
+            "BIF 1, 200",
+            QuotationBodyCompileContext::with_operators(&bindings, operators.lookup()),
+        );
+
+        assert_eq!(
+            duplicate,
+            SourceProcessorError::Compile(CompileError {
+                span: span(duplicate_sources.view(), duplicate_id, 15, 18),
+                kind: CompileErrorKind::LineNumber {
+                    source: Box::new(LineNumberError::Duplicate {
+                        line_number: LocalLineNumber::new(100),
+                        original_span: span(duplicate_sources.view(), duplicate_id, 0, 3),
+                        duplicate_span: span(duplicate_sources.view(), duplicate_id, 15, 18),
+                    }),
+                },
+            })
+        );
+        assert_eq!(
+            undefined,
+            SourceProcessorError::Compile(CompileError {
+                span: span(undefined_sources.view(), undefined_id, 7, 10),
+                kind: CompileErrorKind::LineNumber {
+                    source: Box::new(LineNumberError::Undefined {
+                        line_number: LocalLineNumber::new(200),
+                        span: span(undefined_sources.view(), undefined_id, 7, 10),
+                    }),
+                },
+            })
+        );
+    }
+
+    #[test]
+    fn quotation_body_line_number_scope_is_independent_per_quotation() {
+        let (_operator_words, _operator_primitives, operators) = operator_fixture();
+        let mut words = PublishedWords::new();
+        let mut bindings = Bindings::new();
+        let target = words.add(completed_primitive(0));
+        bindings
+            .insert_new(name("PUSH7"), Binding::Word(target))
+            .expect("runtime word should register");
+
+        let (_first_sources, _first_id, first) = compile_quotation(
+            "100 PUSH7\nBIF 0, 100",
+            QuotationBodyCompileContext::with_operators(&bindings, operators.lookup()),
+        );
+        let (_second_sources, _second_id, second) = compile_quotation(
+            "100 PUSH7\nBIF 0, 100",
+            QuotationBodyCompileContext::with_operators(&bindings, operators.lookup()),
+        );
+        let (_undefined_sources, _undefined_id, undefined) = compile_quotation_error(
+            "BIF 0, 100",
+            QuotationBodyCompileContext::with_operators(&bindings, operators.lookup()),
+        );
+
+        assert_eq!(
+            first.instruction_view().get(address(2)),
+            Ok(&Instruction::JumpIfZero(address(0)))
+        );
+        assert_eq!(
+            second.instruction_view().get(address(2)),
+            Ok(&Instruction::JumpIfZero(address(0)))
+        );
+        assert!(matches!(
+            undefined,
+            SourceProcessorError::Compile(CompileError {
+                kind: CompileErrorKind::LineNumber { .. },
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn quotation_body_failure_returns_no_completed_artifact_and_next_build_can_succeed() {
+        let (_operator_words, _operator_primitives, operators) = operator_fixture();
+        let bindings = Bindings::new();
+        let (sources, id, error) = compile_quotation_error(
+            "BIF 1, 200",
+            QuotationBodyCompileContext::with_operators(&bindings, operators.lookup()),
+        );
+        let (_next_sources, _next_id, next) =
+            compile_quotation("1", QuotationBodyCompileContext::new(&bindings));
+
+        assert_eq!(
+            error,
+            SourceProcessorError::Compile(CompileError {
+                span: span(sources.view(), id, 7, 10),
+                kind: CompileErrorKind::LineNumber {
+                    source: Box::new(LineNumberError::Undefined {
+                        line_number: LocalLineNumber::new(200),
+                        span: span(sources.view(), id, 7, 10),
+                    }),
+                },
+            })
+        );
+        assert_eq!(next.len(), 1);
+        assert_eq!(
+            next.instruction_view().get(address(0)),
+            Ok(&Instruction::Push(value(1)))
+        );
     }
 
     #[test]
