@@ -3,7 +3,7 @@ use crate::global_variable::{GlobalVarId, GlobalVariables};
 use crate::name::NormalizedName;
 use crate::source_word::{
     def_source_word, let_source_word, var_source_word, NativeSourceWordHandler, SourceWordId,
-    SourceWordRegistry,
+    SourceWordRegistry, SourceWordSyntaxMarker,
 };
 use crate::word::{CompletedWordDefinition, PrimitiveId, PublishedWords, WordId};
 
@@ -102,14 +102,29 @@ pub(crate) fn register_native_source_word(
     name: NormalizedName,
     handler: NativeSourceWordHandler,
 ) -> Result<SourceWordId, SourceWordBootstrapError> {
+    register_native_source_word_with_markers(source_words, bindings, name, handler, Vec::new())
+}
+
+pub(crate) fn register_native_source_word_with_markers(
+    source_words: &mut SourceWordRegistry,
+    bindings: &mut Bindings,
+    name: NormalizedName,
+    handler: NativeSourceWordHandler,
+    syntax_markers: Vec<SourceWordSyntaxMarker>,
+) -> Result<SourceWordId, SourceWordBootstrapError> {
+    let marker_names = syntax_markers
+        .iter()
+        .map(|marker| marker.name().clone())
+        .collect::<Vec<_>>();
+
     bindings
-        .validate_new_name(&name)
+        .validate_new_source_word_with_markers(&name, &marker_names)
         .map_err(SourceWordBootstrapError::from_precheck_error)?;
 
-    let id = source_words.register(handler);
+    let id = source_words.register_with_markers(handler, syntax_markers);
 
     bindings
-        .insert_new(name, Binding::SourceWord(id))
+        .insert_new_source_word_with_markers(name, id, &marker_names)
         .map_err(SourceWordBootstrapError::from_binding_insert_error)?;
 
     Ok(id)
@@ -220,7 +235,10 @@ impl SourceWordBootstrapError {
 mod tests {
     use super::*;
     use crate::global_variable::GlobalVariables;
-    use crate::source_word::{NativeSourceWordContext, SourceWordError};
+    use crate::source_word::{
+        NativeSourceWordContext, SourceWordError, SourceWordSyntaxMarker,
+        SourceWordSyntaxMarkerRole,
+    };
     use crate::value::Value;
     use crate::word::WordDefinition;
     use std::collections::HashSet;
@@ -237,6 +255,10 @@ mod tests {
         _context: &mut NativeSourceWordContext<'_, '_>,
     ) -> Result<(), SourceWordError> {
         Ok(())
+    }
+
+    fn marker(input: &str, role: SourceWordSyntaxMarkerRole) -> SourceWordSyntaxMarker {
+        SourceWordSyntaxMarker::new(name(input), role)
     }
 
     fn assert_primitive(words: &PublishedWords, id: WordId, expected: PrimitiveId) {
@@ -487,6 +509,51 @@ mod tests {
     }
 
     #[test]
+    fn source_word_registration_publishes_multiple_syntax_markers() {
+        let mut source_words = SourceWordRegistry::new();
+        let mut bindings = Bindings::new();
+        let markers = vec![
+            marker("ELSIF", SourceWordSyntaxMarkerRole::BlockContinuation),
+            marker("ELSE", SourceWordSyntaxMarkerRole::BlockContinuation),
+            marker("ENDIF", SourceWordSyntaxMarkerRole::BlockTerminator),
+        ];
+
+        let id = register_native_source_word_with_markers(
+            &mut source_words,
+            &mut bindings,
+            name("IF"),
+            source_handler,
+            markers,
+        )
+        .expect("source word with markers should register");
+
+        assert_source_word_binding(&bindings, "if", id);
+        assert_eq!(bindings.syntax_marker_reservation_len(), 3);
+        assert_eq!(
+            bindings
+                .syntax_marker_reservation(&name("elsif"))
+                .map(|reservation| reservation.owner()),
+            Some(id)
+        );
+        assert_eq!(bindings.get(&name("ELSE")), None);
+        let stored_markers = source_words
+            .lookup()
+            .syntax_markers(id)
+            .expect("registered source word should have marker metadata");
+        assert_eq!(stored_markers.len(), 3);
+        assert_eq!(stored_markers[0].name(), &name("ELSIF"));
+        assert_eq!(
+            stored_markers[0].role(),
+            SourceWordSyntaxMarkerRole::BlockContinuation
+        );
+        assert_eq!(stored_markers[2].name(), &name("ENDIF"));
+        assert_eq!(
+            stored_markers[2].role(),
+            SourceWordSyntaxMarkerRole::BlockTerminator
+        );
+    }
+
+    #[test]
     fn duplicate_source_word_registration_is_rejected_without_mutation() {
         let mut source_words = SourceWordRegistry::new();
         let mut bindings = Bindings::new();
@@ -512,6 +579,47 @@ mod tests {
     }
 
     #[test]
+    fn source_word_name_cannot_be_declared_as_own_marker() {
+        let mut source_words = SourceWordRegistry::new();
+        let mut bindings = Bindings::new();
+
+        let result = register_native_source_word_with_markers(
+            &mut source_words,
+            &mut bindings,
+            name("IF"),
+            source_handler,
+            vec![marker("if", SourceWordSyntaxMarkerRole::BlockTerminator)],
+        );
+
+        assert_eq!(result, Err(SourceWordBootstrapError::NameConflict));
+        assert_eq!(source_words.len(), 0);
+        assert!(bindings.is_empty());
+        assert_eq!(bindings.syntax_marker_reservation_len(), 0);
+    }
+
+    #[test]
+    fn duplicate_marker_names_are_rejected_case_insensitively() {
+        let mut source_words = SourceWordRegistry::new();
+        let mut bindings = Bindings::new();
+
+        let result = register_native_source_word_with_markers(
+            &mut source_words,
+            &mut bindings,
+            name("IF"),
+            source_handler,
+            vec![
+                marker("ELSE", SourceWordSyntaxMarkerRole::BlockContinuation),
+                marker("else", SourceWordSyntaxMarkerRole::BlockTerminator),
+            ],
+        );
+
+        assert_eq!(result, Err(SourceWordBootstrapError::NameConflict));
+        assert_eq!(source_words.len(), 0);
+        assert!(bindings.is_empty());
+        assert_eq!(bindings.syntax_marker_reservation_len(), 0);
+    }
+
+    #[test]
     fn reserved_source_word_name_is_rejected_without_source_word_id() {
         for input in ["END", "end", "End"] {
             let mut source_words = SourceWordRegistry::new();
@@ -527,6 +635,27 @@ mod tests {
             assert_eq!(result, Err(SourceWordBootstrapError::ReservedName));
             assert_eq!(source_words.len(), 0);
             assert!(bindings.is_empty());
+        }
+    }
+
+    #[test]
+    fn reserved_marker_name_is_rejected_without_publication() {
+        for input in ["END", "end", "End"] {
+            let mut source_words = SourceWordRegistry::new();
+            let mut bindings = Bindings::new();
+
+            let result = register_native_source_word_with_markers(
+                &mut source_words,
+                &mut bindings,
+                name("IF"),
+                source_handler,
+                vec![marker(input, SourceWordSyntaxMarkerRole::BlockTerminator)],
+            );
+
+            assert_eq!(result, Err(SourceWordBootstrapError::ReservedName));
+            assert_eq!(source_words.len(), 0);
+            assert!(bindings.is_empty());
+            assert_eq!(bindings.syntax_marker_reservation_len(), 0);
         }
     }
 
@@ -572,6 +701,31 @@ mod tests {
     }
 
     #[test]
+    fn source_word_marker_conflicts_with_existing_runtime_word_binding() {
+        let mut words = PublishedWords::new();
+        let mut source_words = SourceWordRegistry::new();
+        let mut bindings = Bindings::new();
+        let word = register_primitive(&mut words, &mut bindings, name("ELSE"), primitive(84))
+            .expect("primitive should register");
+
+        let result = register_native_source_word_with_markers(
+            &mut source_words,
+            &mut bindings,
+            name("IF"),
+            source_handler,
+            vec![marker(
+                "else",
+                SourceWordSyntaxMarkerRole::BlockContinuation,
+            )],
+        );
+
+        assert_eq!(result, Err(SourceWordBootstrapError::NameConflict));
+        assert_eq!(source_words.len(), 0);
+        assert_eq!(bindings.syntax_marker_reservation_len(), 0);
+        assert_word_binding(&bindings, "ELSE", word);
+    }
+
+    #[test]
     fn source_word_registration_conflicts_with_existing_variable_binding() {
         let mut globals = GlobalVariables::new();
         let mut source_words = SourceWordRegistry::new();
@@ -591,6 +745,159 @@ mod tests {
         assert_eq!(result, Err(SourceWordBootstrapError::NameConflict));
         assert_eq!(source_words.len(), 0);
         assert_variable_binding(&bindings, "A", variable);
+    }
+
+    #[test]
+    fn source_word_marker_conflicts_with_existing_source_word_binding() {
+        let mut source_words = SourceWordRegistry::new();
+        let mut bindings = Bindings::new();
+        let existing = register_native_source_word(
+            &mut source_words,
+            &mut bindings,
+            name("ELSE"),
+            source_handler,
+        )
+        .expect("source word should register");
+
+        let result = register_native_source_word_with_markers(
+            &mut source_words,
+            &mut bindings,
+            name("IF"),
+            source_handler,
+            vec![marker(
+                "else",
+                SourceWordSyntaxMarkerRole::BlockContinuation,
+            )],
+        );
+
+        assert_eq!(result, Err(SourceWordBootstrapError::NameConflict));
+        assert_eq!(source_words.len(), 1);
+        assert_eq!(bindings.syntax_marker_reservation_len(), 0);
+        assert_source_word_binding(&bindings, "ELSE", existing);
+    }
+
+    #[test]
+    fn source_word_marker_conflicts_with_existing_variable_binding() {
+        let mut globals = GlobalVariables::new();
+        let mut source_words = SourceWordRegistry::new();
+        let mut bindings = Bindings::new();
+        let variable = globals.allocate();
+        bindings
+            .insert_new(name("ELSE"), Binding::Variable(variable))
+            .expect("test variable should register");
+
+        let result = register_native_source_word_with_markers(
+            &mut source_words,
+            &mut bindings,
+            name("IF"),
+            source_handler,
+            vec![marker(
+                "else",
+                SourceWordSyntaxMarkerRole::BlockContinuation,
+            )],
+        );
+
+        assert_eq!(result, Err(SourceWordBootstrapError::NameConflict));
+        assert_eq!(source_words.len(), 0);
+        assert_eq!(bindings.syntax_marker_reservation_len(), 0);
+        assert_variable_binding(&bindings, "ELSE", variable);
+    }
+
+    #[test]
+    fn marker_registration_conflict_does_not_publish_prefix() {
+        let mut source_words = SourceWordRegistry::new();
+        let mut bindings = Bindings::new();
+        let mut globals = GlobalVariables::new();
+        bindings
+            .insert_new(name("ENDIF"), Binding::Variable(globals.allocate()))
+            .expect("test conflict should register");
+
+        let result = register_native_source_word_with_markers(
+            &mut source_words,
+            &mut bindings,
+            name("IF"),
+            source_handler,
+            vec![
+                marker("ELSIF", SourceWordSyntaxMarkerRole::BlockContinuation),
+                marker("ENDIF", SourceWordSyntaxMarkerRole::BlockTerminator),
+            ],
+        );
+
+        assert_eq!(result, Err(SourceWordBootstrapError::NameConflict));
+        assert_eq!(source_words.len(), 0);
+        assert_eq!(bindings.get(&name("IF")), None);
+        assert_eq!(bindings.syntax_marker_reservation(&name("ELSIF")), None);
+        assert_eq!(bindings.syntax_marker_reservation_len(), 0);
+    }
+
+    #[test]
+    fn existing_marker_reservation_rejects_later_source_word_name_and_marker() {
+        let mut source_words = SourceWordRegistry::new();
+        let mut bindings = Bindings::new();
+        let owner = register_native_source_word_with_markers(
+            &mut source_words,
+            &mut bindings,
+            name("IF"),
+            source_handler,
+            vec![marker("ENDIF", SourceWordSyntaxMarkerRole::BlockTerminator)],
+        )
+        .expect("owner source word should register");
+
+        let source_name_result = register_native_source_word(
+            &mut source_words,
+            &mut bindings,
+            name("endif"),
+            source_handler,
+        );
+        let marker_result = register_native_source_word_with_markers(
+            &mut source_words,
+            &mut bindings,
+            name("WHILE"),
+            source_handler,
+            vec![marker("endif", SourceWordSyntaxMarkerRole::BlockTerminator)],
+        );
+
+        assert_eq!(
+            source_name_result,
+            Err(SourceWordBootstrapError::NameConflict)
+        );
+        assert_eq!(marker_result, Err(SourceWordBootstrapError::NameConflict));
+        assert_eq!(source_words.len(), 1);
+        assert_source_word_binding(&bindings, "IF", owner);
+        assert_eq!(
+            bindings
+                .syntax_marker_reservation(&name("ENDIF"))
+                .map(|reservation| reservation.owner()),
+            Some(owner)
+        );
+    }
+
+    #[test]
+    fn marker_reservation_rejects_later_runtime_word_and_variable_publication() {
+        let mut words = PublishedWords::new();
+        let mut globals = GlobalVariables::new();
+        let mut source_words = SourceWordRegistry::new();
+        let mut bindings = Bindings::new();
+        let owner = register_native_source_word_with_markers(
+            &mut source_words,
+            &mut bindings,
+            name("IF"),
+            source_handler,
+            vec![marker("ENDIF", SourceWordSyntaxMarkerRole::BlockTerminator)],
+        )
+        .expect("owner source word should register");
+        let variable = globals.allocate();
+
+        let runtime_result =
+            register_primitive(&mut words, &mut bindings, name("endif"), primitive(85));
+        let variable_result = bindings.insert_new(name("endif"), Binding::Variable(variable));
+
+        assert_eq!(runtime_result, Err(PrimitiveBootstrapError::NameConflict));
+        assert_eq!(variable_result, Err(BindingInsertError::NameConflict));
+        assert_eq!(words.len(), 0);
+        assert_eq!(bindings.len(), 1);
+        assert_source_word_binding(&bindings, "IF", owner);
+        assert_eq!(bindings.get(&name("ENDIF")), None);
     }
 
     #[test]
