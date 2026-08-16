@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use crate::global_variable::GlobalVarId;
 use crate::name::NormalizedName;
@@ -24,6 +24,17 @@ pub(crate) enum BindingInsertError {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct SyntaxMarkerReservation {
+    owner: SourceWordId,
+}
+
+impl SyntaxMarkerReservation {
+    pub(crate) const fn owner(self) -> SourceWordId {
+        self.owner
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum BindingReplaceError {
     MissingName,
     TargetIsNotWord,
@@ -39,6 +50,9 @@ pub(crate) enum BindingReplaceError {
 #[derive(Debug, Default)]
 pub(crate) struct Bindings {
     entries: HashMap<NormalizedName, Binding>,
+    // #1513 keeps syntax markers distinct from bindings while reserving their
+    // names in the same case-insensitive publication namespace.
+    syntax_marker_reservations: HashMap<NormalizedName, SyntaxMarkerReservation>,
 }
 
 impl Bindings {
@@ -69,11 +83,56 @@ impl Bindings {
             return Err(BindingInsertError::NameConflict);
         }
 
+        if self.syntax_marker_reservations.contains_key(name) {
+            return Err(BindingInsertError::NameConflict);
+        }
+
+        Ok(())
+    }
+
+    pub(crate) fn insert_new_source_word_with_markers(
+        &mut self,
+        name: NormalizedName,
+        id: SourceWordId,
+        marker_names: &[NormalizedName],
+    ) -> Result<(), BindingInsertError> {
+        self.validate_new_source_word_with_markers(&name, marker_names)?;
+
+        self.entries.insert(name, Binding::SourceWord(id));
+        for marker_name in marker_names {
+            self.syntax_marker_reservations
+                .insert(marker_name.clone(), SyntaxMarkerReservation { owner: id });
+        }
+        Ok(())
+    }
+
+    pub(crate) fn validate_new_source_word_with_markers(
+        &self,
+        name: &NormalizedName,
+        marker_names: &[NormalizedName],
+    ) -> Result<(), BindingInsertError> {
+        self.validate_new_name(name)?;
+
+        let mut declared = HashSet::with_capacity(marker_names.len());
+        for marker_name in marker_names {
+            self.validate_new_name(marker_name)?;
+            if marker_name == name || !declared.insert(marker_name) {
+                return Err(BindingInsertError::NameConflict);
+            }
+        }
+
         Ok(())
     }
 
     pub(crate) fn get(&self, name: &NormalizedName) -> Option<&Binding> {
         self.entries.get(name)
+    }
+
+    pub(crate) fn syntax_marker_reservation(
+        &self,
+        name: &NormalizedName,
+    ) -> Option<SyntaxMarkerReservation> {
+        self.syntax_marker_reservations.get(name).copied()
     }
 
     pub(crate) fn current_word(
@@ -112,6 +171,10 @@ impl Bindings {
 
     pub(crate) fn len(&self) -> usize {
         self.entries.len()
+    }
+
+    pub(crate) fn syntax_marker_reservation_len(&self) -> usize {
+        self.syntax_marker_reservations.len()
     }
 
     pub(crate) fn is_empty(&self) -> bool {

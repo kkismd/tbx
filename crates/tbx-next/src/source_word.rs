@@ -36,6 +36,32 @@ pub(crate) type NativeSourceWordHandler =
     fn(&mut NativeSourceWordContext<'_, '_>) -> Result<(), SourceWordError>;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SourceWordSyntaxMarkerRole {
+    BlockContinuation,
+    BlockTerminator,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct SourceWordSyntaxMarker {
+    name: NormalizedName,
+    role: SourceWordSyntaxMarkerRole,
+}
+
+impl SourceWordSyntaxMarker {
+    pub(crate) fn new(name: NormalizedName, role: SourceWordSyntaxMarkerRole) -> Self {
+        Self { name, role }
+    }
+
+    pub(crate) fn name(&self) -> &NormalizedName {
+        &self.name
+    }
+
+    pub(crate) const fn role(&self) -> SourceWordSyntaxMarkerRole {
+        self.role
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum SourceWordError {
     Source {
         source: SourceError,
@@ -829,7 +855,13 @@ fn resolve_variable_name(
 
 #[derive(Debug, Default)]
 pub(crate) struct SourceWordRegistry {
-    handlers: Vec<NativeSourceWordHandler>,
+    entries: Vec<SourceWordEntry>,
+}
+
+#[derive(Debug, Clone)]
+struct SourceWordEntry {
+    handler: NativeSourceWordHandler,
+    syntax_markers: Vec<SourceWordSyntaxMarker>,
 }
 
 impl SourceWordRegistry {
@@ -838,8 +870,19 @@ impl SourceWordRegistry {
     }
 
     pub(crate) fn register(&mut self, handler: NativeSourceWordHandler) -> SourceWordId {
-        let id = SourceWordId::from_slot(self.handlers.len());
-        self.handlers.push(handler);
+        self.register_with_markers(handler, Vec::new())
+    }
+
+    pub(crate) fn register_with_markers(
+        &mut self,
+        handler: NativeSourceWordHandler,
+        syntax_markers: Vec<SourceWordSyntaxMarker>,
+    ) -> SourceWordId {
+        let id = SourceWordId::from_slot(self.entries.len());
+        self.entries.push(SourceWordEntry {
+            handler,
+            syntax_markers,
+        });
         id
     }
 
@@ -848,11 +891,11 @@ impl SourceWordRegistry {
     }
 
     pub(crate) fn len(&self) -> usize {
-        self.handlers.len()
+        self.entries.len()
     }
 
     pub(crate) fn is_empty(&self) -> bool {
-        self.handlers.is_empty()
+        self.entries.is_empty()
     }
 }
 
@@ -861,15 +904,26 @@ pub(crate) struct SourceWordLookup<'a> {
     registry: &'a SourceWordRegistry,
 }
 
-impl SourceWordLookup<'_> {
+impl<'a> SourceWordLookup<'a> {
     pub(crate) fn lookup_handler(
         self,
         id: SourceWordId,
     ) -> Result<NativeSourceWordHandler, SourceWordLookupError> {
         self.registry
-            .handlers
+            .entries
             .get(id.as_slot())
-            .copied()
+            .map(|entry| entry.handler)
+            .ok_or(SourceWordLookupError::InvalidSourceWordId { id })
+    }
+
+    pub(crate) fn syntax_markers(
+        self,
+        id: SourceWordId,
+    ) -> Result<&'a [SourceWordSyntaxMarker], SourceWordLookupError> {
+        self.registry
+            .entries
+            .get(id.as_slot())
+            .map(|entry| entry.syntax_markers.as_slice())
             .ok_or(SourceWordLookupError::InvalidSourceWordId { id })
     }
 }
