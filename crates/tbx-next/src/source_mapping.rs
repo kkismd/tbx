@@ -144,6 +144,20 @@ impl SourceMappedCode {
         self.mapping.view()
     }
 
+    pub(crate) fn mapped_instruction(
+        &self,
+        address: InstructionAddress,
+    ) -> Result<(&Instruction, Option<SourceSpan>), SourceMappingLookupError> {
+        let location = self.instruction_view().location(address);
+        let instruction = self
+            .instruction_view()
+            .get(address)
+            .map_err(|source| SourceMappingLookupError::Address { source })?;
+        let span = self.source_mapping().source_span(location)?;
+
+        Ok((instruction, span))
+    }
+
     pub(crate) const fn code_space(&self) -> CodeSpaceId {
         self.instructions.code_space()
     }

@@ -72,6 +72,11 @@ mod source_mapping;
 #[allow(dead_code)]
 mod block_code;
 
+// #1516/#1518 keeps static quotations as immutable unpublished artifacts and
+// makes parent attachment an explicit local-address rebasing boundary.
+#[allow(dead_code)]
+mod static_quotation;
+
 // #1504 keeps statement lowering independent from concrete instruction owners
 // while preserving published-word branch patch contracts.
 #[allow(dead_code)]
