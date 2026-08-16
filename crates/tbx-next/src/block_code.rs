@@ -16,6 +16,7 @@ pub(crate) struct BlockCodeBuilder<'a> {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct CompletedBlockCode {
     entry: InstructionAddress,
+    end: InstructionAddress,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -62,6 +63,30 @@ impl<'a> BlockCodeBuilder<'a> {
         instruction: Instruction,
     ) -> Result<InstructionAddress, BlockCodeBuildError> {
         reject_direct_branch_instruction(instruction)?;
+        self.code
+            .append_unmapped(instruction)
+            .map_err(|source| BlockCodeBuildError::SourceMappingAppend { source })
+    }
+
+    pub(crate) fn append_resolved_mapped(
+        &mut self,
+        instruction: Instruction,
+        span: SourceSpan,
+    ) -> Result<InstructionAddress, BlockCodeBuildError> {
+        // #1516/#1518: completed child artifacts may attach already-resolved
+        // branches after rebasing. Ordinary builders must still use placeholders
+        // so unresolved patches cannot masquerade as completed block code.
+        self.code
+            .append_mapped(instruction, span)
+            .map_err(|source| BlockCodeBuildError::SourceMappingAppend { source })
+    }
+
+    pub(crate) fn append_resolved_unmapped(
+        &mut self,
+        instruction: Instruction,
+    ) -> Result<InstructionAddress, BlockCodeBuildError> {
+        // See `append_resolved_mapped`; this is only for validated attachment of
+        // completed local code, not for ordinary branch construction.
         self.code
             .append_unmapped(instruction)
             .map_err(|source| BlockCodeBuildError::SourceMappingAppend { source })
@@ -144,6 +169,7 @@ impl<'a> BlockCodeBuilder<'a> {
 
         Ok(CompletedBlockCode {
             entry: self.block_start,
+            end: self.current_address(),
         })
     }
 
@@ -167,6 +193,23 @@ impl<'a> BlockCodeBuilder<'a> {
 impl CompletedBlockCode {
     pub(crate) const fn entry(self) -> InstructionAddress {
         self.entry
+    }
+
+    #[cfg(test)]
+    pub(crate) const fn test_new(entry: InstructionAddress, end: InstructionAddress) -> Self {
+        Self { entry, end }
+    }
+
+    pub(crate) const fn end(self) -> InstructionAddress {
+        self.end
+    }
+
+    pub(crate) fn len(self) -> usize {
+        self.end.as_index() - self.entry.as_index()
+    }
+
+    pub(crate) fn contains(self, address: InstructionAddress) -> bool {
+        address.as_index() >= self.entry.as_index() && address.as_index() < self.end.as_index()
     }
 }
 
