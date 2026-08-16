@@ -509,6 +509,7 @@ where
         return Err(SourceProcessorError::SourceWordContextUnavailable { id });
     };
     let handler = source_words.lookup_handler(id)?;
+    let syntax_markers = source_words.syntax_markers(id)?;
     let operators = context.operators();
     let globals = context.globals.as_deref_mut();
     let mut runtime_publisher =
@@ -534,7 +535,7 @@ where
         view,
         source_id,
         tokens,
-        block_reader: Some(SourceBlockReader::new(cursor)),
+        block_reader: Some(SourceBlockReader::new(view, cursor, syntax_markers)),
         bindings: binding_access,
         operators,
         code,
@@ -1751,7 +1752,7 @@ mod tests {
     use crate::binding::{Binding, Bindings};
     use crate::bootstrap::{
         register_builtin_global_variables, register_builtin_source_words,
-        register_native_source_word, register_primitive,
+        register_native_source_word, register_native_source_word_with_markers, register_primitive,
     };
     use crate::global_variable::{GlobalVarId, GlobalVariables};
     use crate::instruction::InstructionSequence;
@@ -1766,8 +1767,8 @@ mod tests {
         InstructionSourceMapping, SourceMappingLookup, SourceMappingLookupError,
     };
     use crate::source_word::{
-        DefSyntaxErrorKind, LetSyntaxErrorKind, NativeSourceWordContext, SourceWordRegistry,
-        VarSyntaxErrorKind,
+        DefSyntaxErrorKind, LetSyntaxErrorKind, NativeSourceWordContext, SourceBlockItem,
+        SourceWordRegistry, SourceWordSyntaxMarker, SourceWordSyntaxMarkerRole, VarSyntaxErrorKind,
     };
     use crate::word::{CompletedWordDefinition, PrimitiveId, PublishedWords, WordId};
     use crate::word_lookup::PublishedWordLookup;
@@ -2002,6 +2003,73 @@ mod tests {
             Instruction::Push(value(statement.tokens().len() as i16)),
             statement.span(),
         )
+    }
+
+    fn classify_one_declared_block_item(
+        context: &mut NativeSourceWordContext<'_, '_>,
+    ) -> Result<(), SourceWordError> {
+        let item = context
+            .block_reader_mut()
+            .expect("block reader should be available to source words")
+            .next_item()?;
+
+        let (emitted, span) = match item {
+            SourceBlockItem::Statement(statement) => {
+                (statement.tokens().len() as i16, statement.span())
+            }
+            SourceBlockItem::Marker(marker) => {
+                let value = match marker.role() {
+                    SourceWordSyntaxMarkerRole::BlockContinuation => 10,
+                    SourceWordSyntaxMarkerRole::BlockTerminator => 20,
+                };
+                assert_eq!(marker.statement().span(), marker.span());
+                assert_eq!(marker.token().span(), marker.span());
+                assert!(!marker.name().as_str().is_empty());
+                (value, marker.span())
+            }
+            SourceBlockItem::Terminal(terminal) => {
+                let span = terminal
+                    .eof_span()
+                    .unwrap_or_else(|| context.source_word_token().span());
+                (30, span)
+            }
+        };
+
+        context.append_mapped(Instruction::Push(value(emitted)), span)
+    }
+
+    fn consume_until_declared_terminator(
+        context: &mut NativeSourceWordContext<'_, '_>,
+    ) -> Result<(), SourceWordError> {
+        loop {
+            let item = context
+                .block_reader_mut()
+                .expect("block reader should be available to source words")
+                .next_item()?;
+            match item {
+                SourceBlockItem::Statement(statement) => {
+                    context.append_mapped(
+                        Instruction::Push(value(statement.tokens().len() as i16)),
+                        statement.span(),
+                    )?;
+                }
+                SourceBlockItem::Marker(marker)
+                    if marker.role() == SourceWordSyntaxMarkerRole::BlockTerminator =>
+                {
+                    context.append_mapped(Instruction::Push(value(20)), marker.span())?;
+                    return Ok(());
+                }
+                SourceBlockItem::Marker(marker) => {
+                    context.append_mapped(Instruction::Push(value(10)), marker.span())?;
+                }
+                SourceBlockItem::Terminal(terminal) => {
+                    let span = terminal
+                        .eof_span()
+                        .unwrap_or_else(|| context.source_word_token().span());
+                    return Err(SourceWordError::UnsupportedSourceWord { span });
+                }
+            }
+        }
     }
 
     fn read_eof_terminal_as_missing_terminator(
@@ -2271,6 +2339,10 @@ mod tests {
 
     fn name(input: &str) -> NormalizedName {
         NormalizedName::new(input).expect("test input should be a valid word name")
+    }
+
+    fn marker(input: &str, role: SourceWordSyntaxMarkerRole) -> SourceWordSyntaxMarker {
+        SourceWordSyntaxMarker::new(name(input), role)
     }
 
     fn completed_primitive(slot: usize) -> CompletedWordDefinition {
@@ -5000,6 +5072,123 @@ mod tests {
         );
         assert_eq!(
             unit.instructions().get(address(1)),
+            Ok(&Instruction::Push(value(99)))
+        );
+    }
+
+    #[test]
+    fn block_reader_recognizes_owner_declared_marker_roles() {
+        let mut source_words = SourceWordRegistry::new();
+        let mut bindings = Bindings::new();
+        register_native_source_word_with_markers(
+            &mut source_words,
+            &mut bindings,
+            name("BLOCK"),
+            classify_one_declared_block_item,
+            vec![marker(
+                "ELSE",
+                SourceWordSyntaxMarkerRole::BlockContinuation,
+            )],
+        )
+        .expect("block source word should register with marker");
+        let (sources, source_id) = source("BLOCK\nelse");
+
+        let unit = compile_source(
+            sources.view(),
+            source_id,
+            SourceCompileContext::with_source_words(&bindings, source_words.lookup()),
+        )
+        .expect("declared marker should be classified");
+
+        assert_eq!(
+            unit.instructions().get(address(0)),
+            Ok(&Instruction::Push(value(10)))
+        );
+        assert_eq!(
+            unit.source_span(location(&unit, 0)),
+            Ok(Some(span(sources.view(), source_id, 6, 10)))
+        );
+    }
+
+    #[test]
+    fn block_reader_does_not_treat_undeclared_name_as_marker() {
+        let mut source_words = SourceWordRegistry::new();
+        let mut bindings = Bindings::new();
+        register_native_source_word_with_markers(
+            &mut source_words,
+            &mut bindings,
+            name("BLOCK"),
+            classify_one_declared_block_item,
+            vec![marker("ENDIF", SourceWordSyntaxMarkerRole::BlockTerminator)],
+        )
+        .expect("block source word should register with marker");
+        let (sources, source_id) = source("BLOCK\nELSE");
+
+        let unit = compile_source(
+            sources.view(),
+            source_id,
+            SourceCompileContext::with_source_words(&bindings, source_words.lookup()),
+        )
+        .expect("undeclared marker spelling should remain a statement");
+
+        assert_eq!(
+            unit.instructions().get(address(0)),
+            Ok(&Instruction::Push(value(1)))
+        );
+    }
+
+    #[test]
+    fn block_reader_keeps_other_owner_marker_as_statement() {
+        let mut source_words = SourceWordRegistry::new();
+        let mut bindings = Bindings::new();
+        register_native_source_word_with_markers(
+            &mut source_words,
+            &mut bindings,
+            name("OUTER"),
+            consume_until_declared_terminator,
+            vec![marker(
+                "OUT_END",
+                SourceWordSyntaxMarkerRole::BlockTerminator,
+            )],
+        )
+        .expect("outer source word should register with marker");
+        register_native_source_word_with_markers(
+            &mut source_words,
+            &mut bindings,
+            name("INNER"),
+            classify_one_declared_block_item,
+            vec![marker(
+                "INNER_END",
+                SourceWordSyntaxMarkerRole::BlockTerminator,
+            )],
+        )
+        .expect("inner source word should register with a distinct marker");
+        register_native_source_word(
+            &mut source_words,
+            &mut bindings,
+            name("SOURCE_MARKER"),
+            emit_source_word_marker,
+        )
+        .expect("source word should register");
+        let (sources, source_id) = source("OUTER\nINNER_END\nOUT_END\nSOURCE_MARKER");
+
+        let unit = compile_source(
+            sources.view(),
+            source_id,
+            SourceCompileContext::with_source_words(&bindings, source_words.lookup()),
+        )
+        .expect("outer reader should classify only its own markers");
+
+        assert_eq!(
+            unit.instructions().get(address(0)),
+            Ok(&Instruction::Push(value(1)))
+        );
+        assert_eq!(
+            unit.instructions().get(address(1)),
+            Ok(&Instruction::Push(value(20)))
+        );
+        assert_eq!(
+            unit.instructions().get(address(2)),
             Ok(&Instruction::Push(value(99)))
         );
     }

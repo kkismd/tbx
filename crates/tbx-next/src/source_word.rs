@@ -231,6 +231,14 @@ pub(crate) struct SourceBlockStatement<'source> {
     span: SourceSpan,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct SourceBlockMarker<'source> {
+    statement: SourceBlockStatement<'source>,
+    token: Token,
+    name: NormalizedName,
+    role: SourceWordSyntaxMarkerRole,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum SourceBlockTerminal {
     Eof { span: SourceSpan },
@@ -243,12 +251,21 @@ pub(crate) enum SourceBlockRead<'source> {
     Terminal(SourceBlockTerminal),
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum SourceBlockItem<'source> {
+    Statement(SourceBlockStatement<'source>),
+    Marker(SourceBlockMarker<'source>),
+    Terminal(SourceBlockTerminal),
+}
+
 pub(crate) trait SourceBlockCursor<'source> {
     fn read_next_block_statement(&mut self) -> Result<SourceBlockRead<'source>, SourceWordError>;
 }
 
 pub(crate) struct SourceBlockReader<'source, 'cursor> {
+    view: SourceView<'source>,
     cursor: &'cursor mut dyn SourceBlockCursor<'source>,
+    syntax_markers: &'cursor [SourceWordSyntaxMarker],
 }
 
 pub(crate) trait RuntimeDefinitionPublisher<'source> {
@@ -283,6 +300,28 @@ impl<'source> SourceBlockStatement<'source> {
     }
 }
 
+impl<'source> SourceBlockMarker<'source> {
+    pub(crate) const fn statement(&self) -> SourceBlockStatement<'source> {
+        self.statement
+    }
+
+    pub(crate) const fn token(&self) -> Token {
+        self.token
+    }
+
+    pub(crate) fn name(&self) -> &NormalizedName {
+        &self.name
+    }
+
+    pub(crate) const fn role(&self) -> SourceWordSyntaxMarkerRole {
+        self.role
+    }
+
+    pub(crate) const fn span(&self) -> SourceSpan {
+        self.statement.span()
+    }
+}
+
 impl SourceBlockTerminal {
     pub(crate) const fn eof_span(self) -> Option<SourceSpan> {
         match self {
@@ -300,12 +339,63 @@ impl SourceBlockTerminal {
 }
 
 impl<'source, 'cursor> SourceBlockReader<'source, 'cursor> {
-    pub(crate) fn new(cursor: &'cursor mut dyn SourceBlockCursor<'source>) -> Self {
-        Self { cursor }
+    pub(crate) fn new(
+        view: SourceView<'source>,
+        cursor: &'cursor mut dyn SourceBlockCursor<'source>,
+        syntax_markers: &'cursor [SourceWordSyntaxMarker],
+    ) -> Self {
+        Self {
+            view,
+            cursor,
+            syntax_markers,
+        }
     }
 
     pub(crate) fn next_statement(&mut self) -> Result<SourceBlockRead<'source>, SourceWordError> {
         self.cursor.read_next_block_statement()
+    }
+
+    pub(crate) fn next_item(&mut self) -> Result<SourceBlockItem<'source>, SourceWordError> {
+        match self.next_statement()? {
+            SourceBlockRead::Statement(statement) => {
+                if let Some(marker) = self.classify_marker(statement)? {
+                    Ok(SourceBlockItem::Marker(marker))
+                } else {
+                    Ok(SourceBlockItem::Statement(statement))
+                }
+            }
+            SourceBlockRead::Terminal(terminal) => Ok(SourceBlockItem::Terminal(terminal)),
+        }
+    }
+
+    fn classify_marker(
+        &self,
+        statement: SourceBlockStatement<'source>,
+    ) -> Result<Option<SourceBlockMarker<'source>>, SourceWordError> {
+        // #1513/#1516: structured matching is owner-declaration driven and
+        // complete-statement based. The outer reader must not raw-scan nested
+        // marker spellings or treat another source word's markers as its own.
+        let Some(token) = statement.standalone_name() else {
+            return Ok(None);
+        };
+        let source_name = self
+            .view
+            .slice(token.span())
+            .map_err(|source| SourceWordError::Source { source })?;
+        let Ok(name) = NormalizedName::new(source_name) else {
+            return Ok(None);
+        };
+
+        Ok(self
+            .syntax_markers
+            .iter()
+            .find(|marker| marker.name() == &name)
+            .map(|marker| SourceBlockMarker {
+                statement,
+                token,
+                name,
+                role: marker.role(),
+            }))
     }
 }
 
