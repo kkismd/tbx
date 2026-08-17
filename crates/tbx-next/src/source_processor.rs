@@ -2554,6 +2554,36 @@ mod tests {
         Ok(())
     }
 
+    fn push_1(context: &mut PrimitiveContext<'_>) -> Result<(), PrimitiveError> {
+        context.push(value(1));
+        Ok(())
+    }
+
+    fn push_2(context: &mut PrimitiveContext<'_>) -> Result<(), PrimitiveError> {
+        context.push(value(2));
+        Ok(())
+    }
+
+    fn push_3(context: &mut PrimitiveContext<'_>) -> Result<(), PrimitiveError> {
+        context.push(value(3));
+        Ok(())
+    }
+
+    fn push_4(context: &mut PrimitiveContext<'_>) -> Result<(), PrimitiveError> {
+        context.push(value(4));
+        Ok(())
+    }
+
+    fn push_5(context: &mut PrimitiveContext<'_>) -> Result<(), PrimitiveError> {
+        context.push(value(5));
+        Ok(())
+    }
+
+    fn push_41(context: &mut PrimitiveContext<'_>) -> Result<(), PrimitiveError> {
+        context.push(value(41));
+        Ok(())
+    }
+
     fn add_top_two(context: &mut PrimitiveContext<'_>) -> Result<(), PrimitiveError> {
         let (lhs, rhs) = context.pop2()?;
         context.push(value(lhs.as_integer() + rhs.as_integer()));
@@ -2617,16 +2647,16 @@ mod tests {
 
     #[test]
     fn segmentation_collects_completed_statements_without_top_level_boundaries() {
-        let (_sources, _id, segmented) = segment("1\n\n2 3\r\n");
+        let (_sources, _id, segmented) = segment("RUN\n\nCALL F\r\n");
 
         assert_eq!(segmented.completed_statements().len(), 2);
         assert_eq!(
             token_kinds(segmented.completed_statements()[0].tokens()),
-            [TokenKind::IntegerLiteral]
+            [TokenKind::Name]
         );
         assert_eq!(
             token_kinds(segmented.completed_statements()[1].tokens()),
-            [TokenKind::IntegerLiteral, TokenKind::IntegerLiteral]
+            [TokenKind::Name, TokenKind::Name]
         );
         assert_eq!(segmented.incomplete_tail(), []);
         assert!(matches!(segmented.terminal(), Terminal::Eof { .. }));
@@ -2634,35 +2664,36 @@ mod tests {
 
     #[test]
     fn segmentation_completes_final_non_empty_statement_at_eof() {
-        let (_sources, _id, segmented) = segment("1 2");
+        let (_sources, _id, segmented) = segment("RUN F");
 
         assert_eq!(segmented.completed_statements().len(), 1);
         assert_eq!(
             token_kinds(segmented.completed_statements()[0].tokens()),
-            [TokenKind::IntegerLiteral, TokenKind::IntegerLiteral]
+            [TokenKind::Name, TokenKind::Name]
         );
         assert_eq!(segmented.incomplete_tail(), []);
     }
 
     #[test]
     fn segmentation_preserves_parenthesized_line_boundary_inside_statement() {
-        let (_sources, _id, segmented) = segment("1 + (\n2)\n3");
+        let (_sources, _id, segmented) = segment("BIF A + (\nB)\nRUN");
 
         assert_eq!(segmented.completed_statements().len(), 2);
         assert_eq!(
             token_kinds(segmented.completed_statements()[0].tokens()),
             [
-                TokenKind::IntegerLiteral,
+                TokenKind::Name,
+                TokenKind::Name,
                 TokenKind::Plus,
                 TokenKind::LParen,
                 TokenKind::LineBoundary,
-                TokenKind::IntegerLiteral,
+                TokenKind::Name,
                 TokenKind::RParen
             ]
         );
         assert_eq!(
             token_kinds(segmented.completed_statements()[1].tokens()),
-            [TokenKind::IntegerLiteral]
+            [TokenKind::Name]
         );
     }
 
@@ -2875,7 +2906,7 @@ mod tests {
             .expect("primitive should register");
 
         let (_sources, _id, result) = run_with_bindings_and_operators(
-            "100 BIF 0, 200\n1\n200 push7",
+            "100 BIF 0, 200\nPUSH7\n200 push7",
             &bindings,
             &words,
             &primitives,
@@ -2897,7 +2928,7 @@ mod tests {
             .expect("primitive should register");
 
         let (_sources, _id, result) = run_with_bindings_and_operators(
-            "100 BIF 1, 200\n2\n200 push7",
+            "100 BIF 1, 200\nPUSH7\n200 push7",
             &bindings,
             &words,
             &primitives,
@@ -2905,7 +2936,7 @@ mod tests {
         );
 
         assert_eq!(result.outcome(), RunOutcome::Halted);
-        assert_eq!(result.data_stack(), [value(2), value(7)]);
+        assert_eq!(result.data_stack(), [value(7), value(7)]);
     }
 
     #[test]
@@ -2919,7 +2950,7 @@ mod tests {
             .expect("primitive should register");
 
         let (_sources, _id, result) = run_with_bindings_and_operators(
-            "BIF 1 + 2 * 3 <> 7, 200\n5\n200 push7",
+            "BIF 1 + 2 * 3 <> 7, 200\nPUSH7\n200 push7",
             &bindings,
             &words,
             &primitives,
@@ -2985,7 +3016,7 @@ mod tests {
             .expect("primitive should register");
 
         let (_sources, _id, result) = run_with_bindings_and_operators(
-            "BIF (1 +\n2) = 4, 200\n5\n200 push7",
+            "BIF (1 +\n2) = 4, 200\nPUSH7\n200 push7",
             &bindings,
             &words,
             &primitives,
@@ -3251,10 +3282,15 @@ mod tests {
     #[test]
     fn definition_body_patches_forward_and_backward_local_line_numbers() {
         let (_operator_words, _operator_primitives, operators) = operator_fixture();
-        let bindings = Bindings::new();
+        let mut words = PublishedWords::new();
+        let mut bindings = Bindings::new();
+        let target = words.add(completed_primitive(0));
+        bindings
+            .insert_new(name("PUSH7"), Binding::Word(target))
+            .expect("runtime word should register");
 
         let (_sources, _id, code) = compile_body(
-            "100 BIF 0, 200\n1\n200 BIF 0, 100",
+            "100 BIF 0, 200\nPUSH7\n200 BIF 0, 100",
             DefinitionBodyCompileContext::with_operators(&bindings, operators.lookup()),
         );
 
@@ -3536,10 +3572,15 @@ mod tests {
     #[test]
     fn quotation_body_patches_forward_and_backward_local_line_numbers() {
         let (_operator_words, _operator_primitives, operators) = operator_fixture();
-        let bindings = Bindings::new();
+        let mut words = PublishedWords::new();
+        let mut bindings = Bindings::new();
+        let target = words.add(completed_primitive(0));
+        bindings
+            .insert_new(name("PUSH7"), Binding::Word(target))
+            .expect("runtime word should register");
 
         let (_sources, _id, quotation) = compile_quotation(
-            "100 BIF 0, 200\n1\n200 BIF 0, 100",
+            "100 BIF 0, 200\nPUSH7\n200 BIF 0, 100",
             QuotationBodyCompileContext::with_operators(&bindings, operators.lookup()),
         );
 
@@ -3641,13 +3682,18 @@ mod tests {
     #[test]
     fn quotation_body_failure_returns_no_completed_artifact_and_next_build_can_succeed() {
         let (_operator_words, _operator_primitives, operators) = operator_fixture();
-        let bindings = Bindings::new();
+        let mut words = PublishedWords::new();
+        let mut bindings = Bindings::new();
+        let target = words.add(completed_primitive(0));
+        bindings
+            .insert_new(name("PUSH7"), Binding::Word(target))
+            .expect("runtime word should register");
         let (sources, id, error) = compile_quotation_error(
             "BIF 1, 200",
             QuotationBodyCompileContext::with_operators(&bindings, operators.lookup()),
         );
         let (_next_sources, _next_id, next) =
-            compile_quotation("1", QuotationBodyCompileContext::new(&bindings));
+            compile_quotation("PUSH7", QuotationBodyCompileContext::new(&bindings));
 
         assert_eq!(
             error,
@@ -3664,7 +3710,7 @@ mod tests {
         assert_eq!(next.len(), 1);
         assert_eq!(
             next.instruction_view().get(address(0)),
-            Ok(&Instruction::Push(value(1)))
+            Ok(&Instruction::Call(target))
         );
     }
 
@@ -4219,7 +4265,7 @@ mod tests {
             .write(variables[0], value(0))
             .expect("A should be writable");
         let (_sources, _id, zero_result) = run_with_bindings_operators_and_globals(
-            "BIF A, 100\n5\n100 PUSH7",
+            "BIF A, 100\nPUSH7\n100 PUSH7",
             &bindings,
             &globals,
             &words,
@@ -4233,14 +4279,14 @@ mod tests {
             .write(variables[0], value(1))
             .expect("A should be writable");
         let (_sources, _id, nonzero_result) = run_with_bindings_operators_and_globals(
-            "BIF a, 100\n5\n100 PUSH7",
+            "BIF a, 100\nPUSH7\n100 PUSH7",
             &bindings,
             &globals,
             &words,
             &primitives,
             operators.lookup(),
         );
-        assert_eq!(nonzero_result.data_stack(), [value(5), value(7)]);
+        assert_eq!(nonzero_result.data_stack(), [value(7), value(7)]);
     }
 
     #[test]
@@ -4539,7 +4585,29 @@ mod tests {
 
     #[test]
     fn run_leaves_data_stack_snapshot_in_source_order() {
-        let (_sources, _id, result) = run("1\n2\r\n3");
+        let mut words = PublishedWords::new();
+        let mut bindings = Bindings::new();
+        let mut primitives = PrimitiveRegistry::new();
+        let push1 = primitives.register(push_1);
+        let push2 = primitives.register(push_2);
+        let push3 = primitives.register(push_3);
+        register_primitive(&mut words, &mut bindings, name("PUSH1"), push1)
+            .expect("primitive should register");
+        register_primitive(&mut words, &mut bindings, name("PUSH2"), push2)
+            .expect("primitive should register");
+        register_primitive(&mut words, &mut bindings, name("PUSH3"), push3)
+            .expect("primitive should register");
+        let (sources, id) = source("PUSH1\nPUSH2\r\nPUSH3");
+        let result = run_source(
+            sources.view(),
+            id,
+            SourceExecutionContext::new(
+                &bindings,
+                PublishedWordLookup::new(&words),
+                primitives.lookup(),
+            ),
+        )
+        .expect("source should run");
 
         assert_eq!(result.outcome(), RunOutcome::Halted);
         assert_eq!(result.data_stack(), [value(1), value(2), value(3)]);
@@ -4548,11 +4616,17 @@ mod tests {
 
     #[test]
     fn each_run_uses_fresh_vm_state() {
-        let (mut sources, first) = source("1 2");
+        let (mut sources, first) = source("PUSH1 PUSH2");
         let second = sources.register("");
-        let words = PublishedWords::new();
-        let bindings = Bindings::new();
-        let primitives = PrimitiveRegistry::new();
+        let mut words = PublishedWords::new();
+        let mut bindings = Bindings::new();
+        let mut primitives = PrimitiveRegistry::new();
+        let push1 = primitives.register(push_1);
+        let push2 = primitives.register(push_2);
+        register_primitive(&mut words, &mut bindings, name("PUSH1"), push1)
+            .expect("primitive should register");
+        register_primitive(&mut words, &mut bindings, name("PUSH2"), push2)
+            .expect("primitive should register");
         let first_result = run_source(
             sources.view(),
             first,
@@ -4687,7 +4761,7 @@ mod tests {
 
     #[test]
     fn invalid_source_id_is_reported_at_source_boundary() {
-        let (sources, valid) = source("1");
+        let (sources, valid) = source("RUN");
         let invalid = valid.test_next_slot();
         let words = PublishedWords::new();
         let bindings = Bindings::new();
@@ -4723,7 +4797,11 @@ mod tests {
 
     #[test]
     fn mapping_matches_instruction_addresses_in_order() {
-        let (_sources, _id, unit) = compile("10 20");
+        let mut words = PublishedWords::new();
+        let mut bindings = Bindings::new();
+        publish_initial(&mut words, &mut bindings, "PUSH1", completed_primitive(1));
+        publish_initial(&mut words, &mut bindings, "PUSH2", completed_primitive(2));
+        let (_sources, _id, unit) = compile_with_bindings("PUSH1 PUSH2", &bindings);
 
         assert_eq!(
             unit.source_mapping().code_space(),
@@ -4740,10 +4818,16 @@ mod tests {
 
     #[test]
     fn temporary_mapping_location_uses_unit_code_space_identity() {
-        let (first_sources, first_source_id, first_unit) = compile("10");
-        let (second_sources, second_source_id, second_unit) = compile("20");
-        let first_span = span(first_sources.view(), first_source_id, 0, 2);
-        let second_span = span(second_sources.view(), second_source_id, 0, 2);
+        let mut words = PublishedWords::new();
+        let mut bindings = Bindings::new();
+        publish_initial(&mut words, &mut bindings, "PUSH1", completed_primitive(1));
+        publish_initial(&mut words, &mut bindings, "PUSH2", completed_primitive(2));
+        let (first_sources, first_source_id, first_unit) =
+            compile_with_bindings("PUSH1", &bindings);
+        let (second_sources, second_source_id, second_unit) =
+            compile_with_bindings("PUSH2", &bindings);
+        let first_span = span(first_sources.view(), first_source_id, 0, 5);
+        let second_span = span(second_sources.view(), second_source_id, 0, 5);
         let mapping_views = [first_unit.source_mapping(), second_unit.source_mapping()];
         let lookup = SourceMappingLookup::new(&mapping_views).expect("unit mappings are distinct");
 
@@ -4779,7 +4863,10 @@ mod tests {
 
     #[test]
     fn temporary_mapping_rejects_other_code_space_without_index_fallback() {
-        let (_sources, _source_id, unit) = compile("10");
+        let mut words = PublishedWords::new();
+        let mut bindings = Bindings::new();
+        publish_initial(&mut words, &mut bindings, "PUSH1", completed_primitive(1));
+        let (_sources, _source_id, unit) = compile_with_bindings("PUSH1", &bindings);
         let mut other_code = InstructionSequence::new();
         let other_address = other_code.append(Instruction::Halt);
 
@@ -5792,9 +5879,13 @@ mod tests {
         register_builtin_source_words(&mut source_words, &mut bindings)
             .expect("built-in source words should bootstrap");
         let mut code = PublishedCode::new();
+        let push7 = words.add(completed_primitive(0));
+        bindings
+            .insert_new(name("PUSH7"), Binding::Word(push7))
+            .expect("runtime word should register");
 
         let (_sources, _id, unit) = compile_with_def(
-            "DEF FOO\nEND\n1",
+            "DEF FOO\nEND\nPUSH7",
             &mut bindings,
             &mut globals,
             &source_words,
@@ -5810,7 +5901,7 @@ mod tests {
         );
         assert_eq!(
             unit.instructions().get(address(0)),
-            Ok(&Instruction::Push(value(1)))
+            Ok(&Instruction::Call(push7))
         );
         assert_eq!(unit.instructions().get(address(1)), Ok(&Instruction::Halt));
     }
@@ -5865,10 +5956,14 @@ mod tests {
         register_builtin_source_words(&mut source_words, &mut bindings)
             .expect("built-in source words should bootstrap");
         let mut code = PublishedCode::new();
+        let push7 = words.add(completed_primitive(0));
+        bindings
+            .insert_new(name("PUSH7"), Binding::Word(push7))
+            .expect("runtime word should register");
         let initial_words_len = words.len();
 
         let (sources, id, error) = compile_with_def_error(
-            "DEF BAD\n1 MISSING\nEND",
+            "DEF BAD\nPUSH7 MISSING\nEND",
             &mut bindings,
             &mut globals,
             &source_words,
@@ -5880,14 +5975,14 @@ mod tests {
         assert_eq!(
             error,
             SourceProcessorError::SourceWord(SourceWordError::DefBodyCompile {
-                span: span(sources.view(), id, 10, 17)
+                span: span(sources.view(), id, 14, 21)
             })
         );
         assert_eq!(bindings.get(&name("BAD")), None);
         assert_eq!(words.len(), initial_words_len);
         assert_eq!(
             code.instruction_view().get(address(0)),
-            Ok(&Instruction::Push(value(1)))
+            Ok(&Instruction::Call(push7))
         );
 
         compile_with_def(
@@ -5969,7 +6064,8 @@ mod tests {
     #[test]
     fn published_def_runs_from_later_source_without_merging_code_spaces() {
         let mut session = RuntimeDefinitionSession::new();
-        session.publish_def("DEF FOO\n7\nEND");
+        let push7 = session.register_primitive("PUSH7", push_7);
+        session.publish_def("DEF FOO\nPUSH7\nEND");
         let Some(Binding::Word(foo)) = session.bindings.get(&name("FOO")).copied() else {
             panic!("FOO should be published");
         };
@@ -5990,7 +6086,7 @@ mod tests {
         );
         assert_eq!(
             session.code.instruction_view().get(address(0)),
-            Ok(&Instruction::Push(value(7)))
+            Ok(&Instruction::Call(push7))
         );
         assert_eq!(
             session.code.instruction_view().get(address(1)),
@@ -6005,12 +6101,14 @@ mod tests {
     #[test]
     fn published_def_body_can_call_existing_published_runtime_word() {
         let mut session = RuntimeDefinitionSession::new();
-        session.publish_def("DEF BASE\n3\nEND");
+        session.register_primitive("PUSH3", push_3);
+        session.register_primitive("PUSH4", push_4);
+        session.publish_def("DEF BASE\nPUSH3\nEND");
         let Some(Binding::Word(base)) = session.bindings.get(&name("BASE")).copied() else {
             panic!("BASE should be published");
         };
 
-        session.publish_def("DEF WRAP\nbase\n4\nEND");
+        session.publish_def("DEF WRAP\nbase\nPUSH4\nEND");
         let Some(Binding::Word(wrap)) = session.bindings.get(&name("WRAP")).copied() else {
             panic!("WRAP should be published");
         };
@@ -6033,9 +6131,10 @@ mod tests {
     #[test]
     fn production_published_runtime_error_maps_to_definition_source_span() {
         let mut session = RuntimeDefinitionSession::new();
+        session.register_primitive("PUSH7", push_7);
         let fail = session.register_primitive("FAIL", fail_after_partial_stack_update);
         let (definition_sources, definition_id, _unit) =
-            session.publish_def("DEF BAD\n1 fail\nEND");
+            session.publish_def("DEF BAD\nPUSH7 fail\nEND");
         let (caller_sources, caller_id, caller) = session.compile_caller("bad");
         let published_views = [session.code.instruction_view()];
         let published_mappings = [session.code.source_mapping()];
@@ -6063,28 +6162,30 @@ mod tests {
         assert_runtime_error(
             error,
             session.code.instruction_view().location(address(1)),
-            Ok(Some(span(definition_sources.view(), definition_id, 10, 14))),
+            Ok(Some(span(definition_sources.view(), definition_id, 14, 18))),
         );
     }
 
     #[test]
     fn failed_def_fragment_does_not_publish_and_later_def_runs_after_fragment() {
         let mut session = RuntimeDefinitionSession::new();
-        let (keep_sources, keep_id, _keep_unit) = session.publish_def("DEF KEEP\n5\nEND");
+        session.register_primitive("PUSH5", push_5);
+        session.register_primitive("PUSH7", push_7);
+        let (keep_sources, keep_id, _keep_unit) = session.publish_def("DEF KEEP\nPUSH5\nEND");
         let Some(Binding::Word(keep)) = session.bindings.get(&name("KEEP")).copied() else {
             panic!("KEEP should be published");
         };
         let keep_entry = session.code.instruction_view().location(address(0));
-        let keep_span = span(keep_sources.view(), keep_id, 9, 10);
+        let keep_span = span(keep_sources.view(), keep_id, 9, 14);
         let words_len_before_failure = session.words.len();
         let code_len_before_failure = session.code.len();
 
-        let (bad_sources, bad_id, error) = session.publish_def_error("DEF BAD\n1 MISSING\nEND");
+        let (bad_sources, bad_id, error) = session.publish_def_error("DEF BAD\nPUSH7 MISSING\nEND");
 
         assert_eq!(
             error,
             SourceProcessorError::SourceWord(SourceWordError::DefBodyCompile {
-                span: span(bad_sources.view(), bad_id, 10, 17)
+                span: span(bad_sources.view(), bad_id, 14, 21)
             })
         );
         assert_eq!(session.bindings.get(&name("BAD")), None);
@@ -6102,10 +6203,12 @@ mod tests {
                 .code
                 .instruction_view()
                 .get(address(code_len_before_failure)),
-            Ok(&Instruction::Push(value(1)))
+            Ok(&Instruction::Call(
+                resolve_word_name(&session.bindings, "PUSH7").expect("PUSH7 should resolve")
+            ))
         );
 
-        session.publish_def("DEF GOOD\n7\nEND");
+        session.publish_def("DEF GOOD\nPUSH7\nEND");
         let Some(Binding::Word(good)) = session.bindings.get(&name("GOOD")).copied() else {
             panic!("GOOD should be published");
         };
@@ -6130,13 +6233,14 @@ mod tests {
     #[test]
     fn published_code_redefinition_preserves_early_bound_callers_and_mappings() {
         let mut session = RuntimeDefinitionSession::new();
-        let (old_sources, old_id, _old_def_unit) = session.publish_def("DEF TARGET\n41\nEND");
+        session.register_primitive("PUSH41", push_41);
+        let (old_sources, old_id, _old_def_unit) = session.publish_def("DEF TARGET\nPUSH41\nEND");
         let Some(Binding::Word(old)) = session.bindings.get(&name("TARGET")).copied() else {
             panic!("TARGET should be published");
         };
         let (_old_caller_sources, _old_caller_id, old_caller) = session.compile_caller("target");
         let old_entry = session.code.instruction_view().location(address(0));
-        let old_span = span(old_sources.view(), old_id, 11, 13);
+        let old_span = span(old_sources.view(), old_id, 11, 17);
 
         let (new_sources, new_id) = source("99\nEND");
         let new_value_span = span(new_sources.view(), new_id, 0, 2);
@@ -6376,6 +6480,7 @@ mod tests {
         let mut bindings = Bindings::new();
         let mut primitives = PrimitiveRegistry::new();
         let mut published_code = InstructionSequence::new();
+        let push2 = primitives.register(push_2);
         let primitive = primitives.register(add_top_two);
         publish_initial(
             &mut words,
@@ -6384,9 +6489,11 @@ mod tests {
             completed_compiled(&mut published_code, 5),
         );
         published_code.append(Instruction::Return);
+        register_primitive(&mut words, &mut bindings, name("PUSH2"), push2)
+            .expect("primitive should register");
         register_primitive(&mut words, &mut bindings, name("ADD"), primitive)
             .expect("primitive should register");
-        let (sources, source_id) = source("2 user_word add");
+        let (sources, source_id) = source("PUSH2 user_word add");
         let published_views = [published_code.view()];
 
         let result = run_source(
@@ -6540,7 +6647,7 @@ mod tests {
         published_code.append(Instruction::Return);
         let original_word_count = words.len();
         let original_published_len = published_code.len();
-        let (mut sources, first) = source("1 user_word");
+        let (mut sources, first) = source("user_word user_word");
         let second = sources.register("user_word");
         let published_views = [published_code.view()];
         let first_result = run_source(
@@ -6566,7 +6673,7 @@ mod tests {
         )
         .expect("second source should run with a fresh VM");
 
-        assert_eq!(first_result.data_stack(), [value(1), value(8)]);
+        assert_eq!(first_result.data_stack(), [value(8), value(8)]);
         assert_eq!(second_result.data_stack(), [value(8)]);
         assert_eq!(words.len(), original_word_count);
         assert_eq!(published_code.len(), original_published_len);
@@ -6577,10 +6684,13 @@ mod tests {
         let mut words = PublishedWords::new();
         let mut bindings = Bindings::new();
         let mut primitives = PrimitiveRegistry::new();
+        let push7 = primitives.register(push_7);
         let primitive = primitives.register(fail_after_partial_stack_update);
+        register_primitive(&mut words, &mut bindings, name("PUSH7"), push7)
+            .expect("primitive should register");
         register_primitive(&mut words, &mut bindings, name("FAIL"), primitive)
             .expect("primitive should register");
-        let (sources, source_id) = source("1 fail");
+        let (sources, source_id) = source("PUSH7 fail");
 
         let error = run_source(
             sources.view(),
@@ -6597,7 +6707,7 @@ mod tests {
         };
         assert_eq!(
             error.source_span(),
-            Ok(Some(span(sources.view(), source_id, 2, 6)))
+            Ok(Some(span(sources.view(), source_id, 6, 10)))
         );
         let error = error.vm();
 
@@ -6615,10 +6725,13 @@ mod tests {
         let mut words = PublishedWords::new();
         let mut bindings = Bindings::new();
         let mut primitives = PrimitiveRegistry::new();
+        let push7 = primitives.register(push_7);
         let primitive = primitives.register(fail_after_partial_stack_update);
+        register_primitive(&mut words, &mut bindings, name("PUSH7"), push7)
+            .expect("primitive should register");
         register_primitive(&mut words, &mut bindings, name("FAIL"), primitive)
             .expect("primitive should register");
-        let (sources, source_id, unit) = compile_with_bindings("1 fail", &bindings);
+        let (sources, source_id, unit) = compile_with_bindings("PUSH7 fail", &bindings);
 
         let error = run_unit(
             &unit,
@@ -6633,7 +6746,7 @@ mod tests {
         assert_runtime_error(
             error,
             location(&unit, 1),
-            Ok(Some(span(sources.view(), source_id, 2, 6))),
+            Ok(Some(span(sources.view(), source_id, 6, 10))),
         );
     }
 
@@ -6959,7 +7072,7 @@ mod tests {
 
     #[test]
     fn compile_failure_does_not_return_partial_execution_unit() {
-        let (sources, id) = source("1 RUN 2");
+        let (sources, id) = source("RUN");
         let bindings = Bindings::new();
         let error = compile_source(sources.view(), id, SourceCompileContext::new(&bindings))
             .expect_err("source should fail");
@@ -6967,7 +7080,7 @@ mod tests {
         assert_eq!(
             error,
             SourceProcessorError::Compile(CompileError {
-                span: span(sources.view(), id, 2, 5),
+                span: span(sources.view(), id, 0, 3),
                 kind: CompileErrorKind::WordResolution {
                     source: WordResolutionError::UndefinedName
                 },
