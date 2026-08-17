@@ -21,10 +21,10 @@ use crate::source_mapping::{
     InstructionSourceMappingView, SourceMappedCode, SourceMappingLookup, SourceMappingLookupError,
 };
 use crate::source_word::{
-    NativeSourceWordBindingAccess, NativeSourceWordContext, NativeSourceWordContextParts,
-    RuntimeDefinitionPublisher, SourceBlockCursor, SourceBlockRead, SourceBlockReader,
-    SourceBlockStatement, SourceBlockTerminal, SourceWordError, SourceWordId, SourceWordLookup,
-    SourceWordLookupError,
+    classify_source_block_marker, NativeSourceWordBindingAccess, NativeSourceWordContext,
+    NativeSourceWordContextParts, RuntimeDefinitionPublisher, SourceBlockCursor, SourceBlockRead,
+    SourceBlockReader, SourceBlockStatement, SourceBlockTerminal, SourceWordError, SourceWordId,
+    SourceWordLookup, SourceWordLookupError,
 };
 use crate::static_quotation::{StaticQuotation, StaticQuotationBuildError};
 use crate::value::Value;
@@ -506,6 +506,7 @@ where
     };
     let handler = source_words.lookup_handler(id)?;
     let syntax_markers = source_words.syntax_markers(id)?;
+    let body_start_position = cursor.position();
     let operators = context.operators();
     let globals = context.globals.as_deref_mut();
     let mut runtime_publisher =
@@ -538,208 +539,68 @@ where
         local_line_number_prefix,
         globals,
         runtime_definitions,
-        line_numbers: Some(state.line_numbers),
-        source_words: Some(source_words),
-        statement_processor: Some(process_source_word_block_statement),
     });
     handler(&mut source_word_context)?;
-    Ok(true)
-}
 
-fn process_source_word_block_statement<'source>(
-    context: &mut NativeSourceWordContext<'source, '_>,
-    statement: SourceBlockStatement<'source>,
-) -> Result<(), SourceWordError> {
-    let start = {
-        let access = context.compile_access();
-        access.code.current_address()
-    };
-    let (line_number, body) = split_statement_line_number(context.view(), statement.tokens())
-        .map_err(|source| map_block_statement_compile_error(source, statement.span()))?;
-    let local_line_number_prefix = line_number.map(|(_, span)| span);
-    compile_source_word_block_statement_body(context, body, local_line_number_prefix, statement)?;
-
-    let Some((line_number, span)) = line_number else {
-        return Ok(());
-    };
-    let access = context.compile_access();
-    let Some(line_numbers) = access.line_numbers else {
-        return Err(SourceWordError::BlockStatementCompile {
-            span: statement.span(),
-        });
-    };
-    line_numbers
-        .define(access.code, line_number, start, span)
-        .map_err(|_| SourceWordError::BlockStatementCompile { span })
-}
-
-fn compile_source_word_block_statement_body<'source>(
-    context: &mut NativeSourceWordContext<'source, '_>,
-    tokens: &'source [Token],
-    local_line_number_prefix: Option<SourceSpan>,
-    statement: SourceBlockStatement<'source>,
-) -> Result<(), SourceWordError> {
-    let Some((&first, _)) = tokens.split_first() else {
-        return Ok(());
-    };
-
-    if is_bif_keyword(context.view(), first)
-        .map_err(|source| map_block_statement_compile_error(source, statement.span()))?
-    {
-        let view = context.view();
-        let source_id = context.source_id();
-        let access = context.compile_access();
-        let Some(line_numbers) = access.line_numbers else {
-            return Err(SourceWordError::BlockStatementCompile {
-                span: statement.span(),
-            });
-        };
-        let bindings = match access.bindings {
-            NativeSourceWordBindingAccess::Read(bindings) => bindings,
-            NativeSourceWordBindingAccess::Write(bindings) => bindings,
-        };
-        let compile_context = SourceCompileContext {
-            bindings: BindingAccess::Read(bindings),
-            operators: access.operators,
-            source_words: access.source_words,
-            globals: None,
-            runtime_definitions: None,
-        };
-        return compile_bif(
+    if !syntax_markers.is_empty() && cursor.position() == body_start_position {
+        compile_structured_source_word_body(
             view,
             source_id,
-            tokens,
-            &compile_context,
-            access.code,
-            line_numbers,
-        )
-        .map_err(|source| map_block_statement_compile_error(source, statement.span()));
-    }
-
-    if compile_statement_leading_source_word_in_context(
-        context,
-        tokens,
-        local_line_number_prefix,
-        statement,
-    )? {
-        return Ok(());
-    }
-
-    if contains_expression_syntax(tokens) {
-        return Err(SourceWordError::BlockStatementCompile { span: first.span() });
-    }
-
-    let view = context.view();
-    let access = context.compile_access();
-    let bindings = match access.bindings {
-        NativeSourceWordBindingAccess::Read(bindings) => bindings,
-        NativeSourceWordBindingAccess::Write(bindings) => bindings,
-    };
-    let compile_context = SourceCompileContext {
-        bindings: BindingAccess::Read(bindings),
-        operators: access.operators,
-        source_words: access.source_words,
-        globals: None,
-        runtime_definitions: None,
-    };
-    compile_simple_tokens(view, tokens, &compile_context, access.code)
-        .map_err(|source| map_block_statement_compile_error(source, statement.span()))
-}
-
-fn compile_statement_leading_source_word_in_context<'source>(
-    context: &mut NativeSourceWordContext<'source, '_>,
-    tokens: &'source [Token],
-    local_line_number_prefix: Option<SourceSpan>,
-    statement: SourceBlockStatement<'source>,
-) -> Result<bool, SourceWordError> {
-    let Some(first) = tokens.first().copied() else {
-        return Ok(false);
-    };
-    if first.kind() != TokenKind::Name {
-        return Ok(false);
-    }
-
-    let source_name = context
-        .view()
-        .slice(first.span())
-        .map_err(|source| SourceWordError::Source { source })?;
-    let view = context.view();
-    let source_id = context.source_id();
-    let access = context.compile_access();
-    let bindings = match &access.bindings {
-        NativeSourceWordBindingAccess::Read(bindings) => *bindings,
-        NativeSourceWordBindingAccess::Write(bindings) => bindings,
-    };
-    let binding = match resolve_binding_name(bindings, source_name) {
-        Ok(binding) => binding,
-        Err(WordResolutionError::InvalidWordName | WordResolutionError::UndefinedName) => {
-            return Ok(false);
-        }
-        Err(WordResolutionError::TargetIsNotWord) => {
-            unreachable!("binding-kind resolution does not classify published bindings as non-word")
-        }
-    };
-
-    let ResolvedBinding::SourceWord(id) = binding else {
-        return Ok(false);
-    };
-    let Some(source_words) = access.source_words else {
-        return Err(SourceWordError::BlockStatementCompile {
-            span: statement.span(),
-        });
-    };
-    let handler =
-        source_words
-            .lookup_handler(id)
-            .map_err(|_| SourceWordError::BlockStatementCompile {
-                span: statement.span(),
-            })?;
-    let syntax_markers =
-        source_words
-            .syntax_markers(id)
-            .map_err(|_| SourceWordError::BlockStatementCompile {
-                span: statement.span(),
-            })?;
-
-    // #1516/#1533: nested structured source words are entered through normal
-    // binding dispatch, while the shared logical-statement cursor remains
-    // owned by the source processor.
-    let mut source_word_context = NativeSourceWordContext::new(NativeSourceWordContextParts {
-        view,
-        source_id,
-        tokens,
-        block_reader: Some(SourceBlockReader::new(
-            view,
-            access
-                .cursor
-                .expect("nested block processing requires an outer reader"),
             syntax_markers,
-        )),
-        bindings: access.bindings,
-        operators: access.operators,
-        code: access.code,
-        local_line_number_prefix,
-        globals: access.globals,
-        runtime_definitions: None,
-        line_numbers: access.line_numbers,
-        source_words: access.source_words,
-        statement_processor: access.statement_processor,
-    });
-    handler(&mut source_word_context)?;
+            context,
+            state,
+            cursor,
+            first.span(),
+        )?;
+    }
+
     Ok(true)
 }
 
-fn map_block_statement_compile_error(
-    source: SourceProcessorError,
-    fallback: SourceSpan,
-) -> SourceWordError {
-    match source {
-        SourceProcessorError::Source(source) => SourceWordError::Source { source },
-        SourceProcessorError::Lex(source) => SourceWordError::DefLex { source },
-        SourceProcessorError::SourceWord(source) => source,
-        source => SourceWordError::BlockStatementCompile {
-            span: source.primary_span().unwrap_or(fallback),
-        },
+fn compile_structured_source_word_body<'source, S>(
+    view: SourceView<'source>,
+    source_id: SourceId,
+    syntax_markers: &[crate::source_word::SourceWordSyntaxMarker],
+    context: &mut SourceCompileContext<'_>,
+    state: &mut StatementCompileState<'_>,
+    cursor: &mut LogicalStatementCursor<'source, 'source, S>,
+    missing_anchor: SourceSpan,
+) -> Result<(), SourceProcessorError>
+where
+    S: LogicalStatementView,
+{
+    loop {
+        let read = cursor.read_next_block_statement()?;
+        let statement = match read {
+            SourceBlockRead::Statement(statement) => statement,
+            SourceBlockRead::Terminal(SourceBlockTerminal::LexError { error }) => {
+                return Err(SourceProcessorError::Lex(error));
+            }
+            SourceBlockRead::Terminal(SourceBlockTerminal::Eof { span }) => {
+                return Err(SourceProcessorError::SourceWord(
+                    SourceWordError::UnsupportedSourceWord {
+                        span: if span.start() == span.end() {
+                            missing_anchor
+                        } else {
+                            span
+                        },
+                    },
+                ));
+            }
+        };
+
+        if let Some(marker) = classify_source_block_marker(view, syntax_markers, statement)? {
+            if marker.role() == crate::source_word::SourceWordSyntaxMarkerRole::BlockTerminator {
+                return Ok(());
+            }
+            continue;
+        }
+
+        // #1516/#1533: the source processor keeps the logical-statement cursor
+        // and normal traversal. A nested source word is just another
+        // statement-leading dispatch; when it completes, this loop resumes at
+        // the next statement for the outer owner.
+        compile_statement(view, source_id, statement.tokens(), context, state, cursor)?;
     }
 }
 
@@ -1235,6 +1096,10 @@ impl<'source, 'statements, S> LogicalStatementCursor<'source, 'statements, S> {
         let statement = self.statements.get(self.position)?;
         self.position += 1;
         Some(statement)
+    }
+
+    fn position(&self) -> usize {
+        self.position
     }
 }
 
@@ -2194,28 +2059,9 @@ mod tests {
     }
 
     fn process_until_declared_terminator(
-        context: &mut NativeSourceWordContext<'_, '_>,
+        _context: &mut NativeSourceWordContext<'_, '_>,
     ) -> Result<(), SourceWordError> {
-        loop {
-            match context.process_next_block_item()? {
-                SourceBlockItem::Statement(_) => {}
-                SourceBlockItem::Marker(marker)
-                    if marker.role() == SourceWordSyntaxMarkerRole::BlockTerminator =>
-                {
-                    context.append_mapped(Instruction::Push(value(20)), marker.span())?;
-                    return Ok(());
-                }
-                SourceBlockItem::Marker(marker) => {
-                    context.append_mapped(Instruction::Push(value(10)), marker.span())?;
-                }
-                SourceBlockItem::Terminal(SourceBlockTerminal::LexError { error }) => {
-                    return Err(SourceWordError::DefLex { source: error });
-                }
-                SourceBlockItem::Terminal(SourceBlockTerminal::Eof { span }) => {
-                    return Err(SourceWordError::UnsupportedSourceWord { span });
-                }
-            }
-        }
+        Ok(())
     }
 
     fn read_eof_terminal_as_missing_terminator(
@@ -5550,7 +5396,7 @@ mod tests {
         )
         .expect("structured body unit should run");
 
-        assert_eq!(result.data_stack(), [value(7), value(20), value(7)]);
+        assert_eq!(result.data_stack(), [value(7), value(7)]);
     }
 
     #[test]
@@ -5583,10 +5429,7 @@ mod tests {
             panic!("SCORE should be published by nested VAR");
         };
         assert_eq!(globals.view().read(id), Ok(value(0)));
-        assert_eq!(
-            unit.instructions().get(address(0)),
-            Ok(&Instruction::Push(value(20)))
-        );
+        assert_eq!(unit.instructions().get(address(0)), Ok(&Instruction::Halt));
     }
 
     #[test]
@@ -5634,10 +5477,7 @@ mod tests {
         )
         .expect("nested same-owner source word should run");
 
-        assert_eq!(
-            result.data_stack(),
-            [value(1), value(20), value(2), value(20), value(3)]
-        );
+        assert_eq!(result.data_stack(), [value(1), value(2), value(3)]);
     }
 
     #[test]
@@ -5699,10 +5539,7 @@ mod tests {
         )
         .expect("nested different-owner source word should run");
 
-        assert_eq!(
-            result.data_stack(),
-            [value(1), value(20), value(2), value(20), value(3)]
-        );
+        assert_eq!(result.data_stack(), [value(1), value(2), value(3)]);
     }
 
     #[test]
@@ -5742,9 +5579,7 @@ mod tests {
 
         assert!(matches!(
             error,
-            SourceProcessorError::SourceWord(SourceWordError::DefLex {
-                source: LexError::InvalidCharacter { .. }
-            })
+            SourceProcessorError::Lex(LexError::InvalidCharacter { .. })
         ));
     }
 

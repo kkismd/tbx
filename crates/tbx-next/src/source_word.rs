@@ -6,7 +6,6 @@ use crate::global_variable::GlobalVariables;
 use crate::instruction::Instruction;
 use crate::instruction_builder::{InstructionBuildError, InstructionBuildTarget};
 use crate::lexer::{LexError, Token, TokenKind};
-use crate::line_number::LocalLineNumberTable;
 use crate::name::{NameError, NormalizedName};
 use crate::operator::OperatorLookup;
 use crate::source::{SourceError, SourceId, SourceSpan, SourceView};
@@ -35,11 +34,6 @@ impl SourceWordId {
 
 pub(crate) type NativeSourceWordHandler =
     fn(&mut NativeSourceWordContext<'_, '_>) -> Result<(), SourceWordError>;
-pub(crate) type SourceBlockStatementProcessor<'source> =
-    for<'state> fn(
-        &mut NativeSourceWordContext<'source, 'state>,
-        SourceBlockStatement<'source>,
-    ) -> Result<(), SourceWordError>;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum SourceWordSyntaxMarkerRole {
@@ -148,9 +142,6 @@ pub(crate) enum SourceWordError {
     DefBindingCommitInvariantViolated {
         span: SourceSpan,
     },
-    BlockStatementCompile {
-        span: SourceSpan,
-    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -203,8 +194,7 @@ impl SourceWordError {
             | Self::DefBodyCompile { span }
             | Self::DefBodyBuild { span }
             | Self::DefDefinition { span }
-            | Self::DefBindingCommitInvariantViolated { span }
-            | Self::BlockStatementCompile { span } => Some(span),
+            | Self::DefBindingCommitInvariantViolated { span } => Some(span),
             Self::DefLex { source } => match source {
                 LexError::Source(_) => None,
                 LexError::InvalidCharacter { span, .. } => Some(span),
@@ -365,10 +355,6 @@ impl<'source, 'cursor> SourceBlockReader<'source, 'cursor> {
         self.cursor.read_next_block_statement()
     }
 
-    pub(crate) fn cursor_mut(&mut self) -> &mut dyn SourceBlockCursor<'source> {
-        self.cursor
-    }
-
     pub(crate) fn next_item(&mut self) -> Result<SourceBlockItem<'source>, SourceWordError> {
         match self.next_statement()? {
             SourceBlockRead::Statement(statement) => {
@@ -386,31 +372,37 @@ impl<'source, 'cursor> SourceBlockReader<'source, 'cursor> {
         &self,
         statement: SourceBlockStatement<'source>,
     ) -> Result<Option<SourceBlockMarker<'source>>, SourceWordError> {
-        // #1513/#1516: structured matching is owner-declaration driven and
-        // complete-statement based. The outer reader must not raw-scan nested
-        // marker spellings or treat another source word's markers as its own.
-        let Some(token) = statement.standalone_name() else {
-            return Ok(None);
-        };
-        let source_name = self
-            .view
-            .slice(token.span())
-            .map_err(|source| SourceWordError::Source { source })?;
-        let Ok(name) = NormalizedName::new(source_name) else {
-            return Ok(None);
-        };
-
-        Ok(self
-            .syntax_markers
-            .iter()
-            .find(|marker| marker.name() == &name)
-            .map(|marker| SourceBlockMarker {
-                statement,
-                token,
-                name,
-                role: marker.role(),
-            }))
+        classify_source_block_marker(self.view, self.syntax_markers, statement)
     }
+}
+
+pub(crate) fn classify_source_block_marker<'source>(
+    view: SourceView<'source>,
+    syntax_markers: &[SourceWordSyntaxMarker],
+    statement: SourceBlockStatement<'source>,
+) -> Result<Option<SourceBlockMarker<'source>>, SourceWordError> {
+    // #1513/#1516: structured matching is owner-declaration driven and
+    // complete-statement based. The outer reader must not raw-scan nested
+    // marker spellings or treat another source word's markers as its own.
+    let Some(token) = statement.standalone_name() else {
+        return Ok(None);
+    };
+    let source_name = view
+        .slice(token.span())
+        .map_err(|source| SourceWordError::Source { source })?;
+    let Ok(name) = NormalizedName::new(source_name) else {
+        return Ok(None);
+    };
+
+    Ok(syntax_markers
+        .iter()
+        .find(|marker| marker.name() == &name)
+        .map(|marker| SourceBlockMarker {
+            statement,
+            token,
+            name,
+            role: marker.role(),
+        }))
 }
 
 /// Forward-only reader over the body of one completed logical statement.
@@ -526,9 +518,6 @@ pub(crate) struct NativeSourceWordContext<'source, 'state> {
     local_line_number_prefix: Option<SourceSpan>,
     globals: Option<&'state mut GlobalVariables>,
     runtime_definitions: Option<&'state mut dyn RuntimeDefinitionPublisher<'source>>,
-    line_numbers: Option<&'state mut LocalLineNumberTable>,
-    source_words: Option<SourceWordLookup<'state>>,
-    statement_processor: Option<SourceBlockStatementProcessor<'source>>,
 }
 
 pub(crate) struct NativeSourceWordContextParts<'source, 'state> {
@@ -542,9 +531,6 @@ pub(crate) struct NativeSourceWordContextParts<'source, 'state> {
     pub(crate) local_line_number_prefix: Option<SourceSpan>,
     pub(crate) globals: Option<&'state mut GlobalVariables>,
     pub(crate) runtime_definitions: Option<&'state mut dyn RuntimeDefinitionPublisher<'source>>,
-    pub(crate) line_numbers: Option<&'state mut LocalLineNumberTable>,
-    pub(crate) source_words: Option<SourceWordLookup<'state>>,
-    pub(crate) statement_processor: Option<SourceBlockStatementProcessor<'source>>,
 }
 
 impl<'source, 'state> NativeSourceWordContext<'source, 'state> {
@@ -567,9 +553,6 @@ impl<'source, 'state> NativeSourceWordContext<'source, 'state> {
             local_line_number_prefix: parts.local_line_number_prefix,
             globals: parts.globals,
             runtime_definitions: parts.runtime_definitions,
-            line_numbers: parts.line_numbers,
-            source_words: parts.source_words,
-            statement_processor: parts.statement_processor,
         }
     }
 
@@ -591,27 +574,6 @@ impl<'source, 'state> NativeSourceWordContext<'source, 'state> {
 
     pub(crate) fn block_reader_mut(&mut self) -> Option<&mut SourceBlockReader<'source, 'state>> {
         self.block_reader.as_mut()
-    }
-
-    pub(crate) fn process_next_block_item(
-        &mut self,
-    ) -> Result<SourceBlockItem<'source>, SourceWordError> {
-        let Some(reader) = &mut self.block_reader else {
-            return Err(SourceWordError::UnsupportedSourceWord {
-                span: self.source_word_token.span(),
-            });
-        };
-        let item = reader.next_item()?;
-        let SourceBlockItem::Statement(statement) = item else {
-            return Ok(item);
-        };
-        let Some(process_statement) = self.statement_processor else {
-            return Err(SourceWordError::UnsupportedSourceWord {
-                span: statement.span(),
-            });
-        };
-        process_statement(self, statement)?;
-        Ok(SourceBlockItem::Statement(statement))
     }
 
     pub(crate) const fn local_line_number_prefix(&self) -> Option<SourceSpan> {
@@ -762,45 +724,11 @@ impl<'source, 'state> NativeSourceWordContext<'source, 'state> {
             NativeSourceWordBindingAccess::Write(bindings) => bindings,
         }
     }
-
-    pub(crate) fn compile_access(&mut self) -> NativeSourceWordCompileAccess<'_, 'source> {
-        NativeSourceWordCompileAccess {
-            bindings: match &mut self.bindings {
-                NativeSourceWordBindingAccess::Read(bindings) => {
-                    NativeSourceWordBindingAccess::Read(bindings)
-                }
-                NativeSourceWordBindingAccess::Write(bindings) => {
-                    NativeSourceWordBindingAccess::Write(bindings)
-                }
-            },
-            operators: self.operators,
-            code: &mut *self.code,
-            globals: self.globals.as_deref_mut(),
-            line_numbers: self.line_numbers.as_deref_mut(),
-            source_words: self.source_words,
-            statement_processor: self.statement_processor,
-            cursor: self
-                .block_reader
-                .as_mut()
-                .map(SourceBlockReader::cursor_mut),
-        }
-    }
 }
 
 pub(crate) enum NativeSourceWordBindingAccess<'a> {
     Read(&'a Bindings),
     Write(&'a mut Bindings),
-}
-
-pub(crate) struct NativeSourceWordCompileAccess<'state, 'source> {
-    pub(crate) bindings: NativeSourceWordBindingAccess<'state>,
-    pub(crate) operators: Option<OperatorLookup>,
-    pub(crate) code: &'state mut dyn InstructionBuildTarget,
-    pub(crate) globals: Option<&'state mut GlobalVariables>,
-    pub(crate) line_numbers: Option<&'state mut LocalLineNumberTable>,
-    pub(crate) source_words: Option<SourceWordLookup<'state>>,
-    pub(crate) statement_processor: Option<SourceBlockStatementProcessor<'source>>,
-    pub(crate) cursor: Option<&'state mut dyn SourceBlockCursor<'source>>,
 }
 
 pub(crate) fn var_source_word(
@@ -1147,9 +1075,6 @@ mod tests {
             local_line_number_prefix: None,
             globals: None,
             runtime_definitions: None,
-            line_numbers: None,
-            source_words: None,
-            statement_processor: None,
         });
 
         let first_body_token = context
@@ -1355,9 +1280,6 @@ mod tests {
                 local_line_number_prefix: None,
                 globals: None,
                 runtime_definitions: None,
-                line_numbers: None,
-                source_words: None,
-                statement_processor: None,
             });
 
             push_one(&mut context).expect("test source word should emit");
@@ -1393,9 +1315,6 @@ mod tests {
                     local_line_number_prefix: None,
                     globals: Some(&mut globals),
                     runtime_definitions: None,
-                    line_numbers: None,
-                    source_words: None,
-                    statement_processor: None,
                 });
 
                 var_source_word(&mut context)
