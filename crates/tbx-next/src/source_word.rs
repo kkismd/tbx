@@ -35,10 +35,22 @@ impl SourceWordId {
 pub(crate) type NativeSourceWordHandler =
     fn(&mut NativeSourceWordContext<'_, '_>) -> Result<(), SourceWordError>;
 
+pub(crate) type SourceBlockMarkerHandler<'source> =
+    for<'state> fn(
+        &mut SourceBlockMarkerContext<'source, 'state>,
+        SourceBlockMarker<'source>,
+    ) -> Result<SourceBlockMarkerAction, SourceWordError>;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum SourceWordSyntaxMarkerRole {
     BlockContinuation,
     BlockTerminator,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SourceBlockMarkerAction {
+    Continue,
+    Complete,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -279,6 +291,18 @@ pub(crate) trait RuntimeDefinitionPublisher<'source> {
     ) -> Result<WordId, SourceWordError>;
 }
 
+/// Narrow capability passed when a structured source word receives a marker.
+///
+/// The source processor owns traversal and cursor advancement. Marker handlers
+/// can update the owner's grammar state by emitting mapped temporary
+/// instructions, but they cannot pull or dispatch ordinary statements.
+pub(crate) struct SourceBlockMarkerContext<'source, 'state> {
+    view: SourceView<'source>,
+    source_id: SourceId,
+    source_word_token: Token,
+    code: &'state mut dyn InstructionBuildTarget,
+}
+
 impl<'source> SourceBlockStatement<'source> {
     pub(crate) const fn new(tokens: &'source [Token], span: SourceSpan) -> Self {
         Self { tokens, span }
@@ -297,6 +321,45 @@ impl<'source> SourceBlockStatement<'source> {
             [token] if token.kind() == TokenKind::Name => Some(*token),
             _ => None,
         }
+    }
+}
+
+impl<'source, 'state> SourceBlockMarkerContext<'source, 'state> {
+    pub(crate) const fn new(
+        view: SourceView<'source>,
+        source_id: SourceId,
+        source_word_token: Token,
+        code: &'state mut dyn InstructionBuildTarget,
+    ) -> Self {
+        Self {
+            view,
+            source_id,
+            source_word_token,
+            code,
+        }
+    }
+
+    pub(crate) const fn view(&self) -> SourceView<'source> {
+        self.view
+    }
+
+    pub(crate) const fn source_id(&self) -> SourceId {
+        self.source_id
+    }
+
+    pub(crate) fn source_word_token(&self) -> Token {
+        self.source_word_token
+    }
+
+    pub(crate) fn append_mapped(
+        &mut self,
+        instruction: Instruction,
+        span: SourceSpan,
+    ) -> Result<(), SourceWordError> {
+        self.code
+            .append_mapped(instruction, span)
+            .map(|_| ())
+            .map_err(|source| SourceWordError::InstructionBuild { source })
     }
 }
 
@@ -518,6 +581,7 @@ pub(crate) struct NativeSourceWordContext<'source, 'state> {
     local_line_number_prefix: Option<SourceSpan>,
     globals: Option<&'state mut GlobalVariables>,
     runtime_definitions: Option<&'state mut dyn RuntimeDefinitionPublisher<'source>>,
+    block_marker_handler: Option<SourceBlockMarkerHandler<'source>>,
 }
 
 pub(crate) struct NativeSourceWordContextParts<'source, 'state> {
@@ -553,6 +617,7 @@ impl<'source, 'state> NativeSourceWordContext<'source, 'state> {
             local_line_number_prefix: parts.local_line_number_prefix,
             globals: parts.globals,
             runtime_definitions: parts.runtime_definitions,
+            block_marker_handler: None,
         }
     }
 
@@ -574,6 +639,14 @@ impl<'source, 'state> NativeSourceWordContext<'source, 'state> {
 
     pub(crate) fn block_reader_mut(&mut self) -> Option<&mut SourceBlockReader<'source, 'state>> {
         self.block_reader.as_mut()
+    }
+
+    pub(crate) fn set_block_marker_handler(&mut self, handler: SourceBlockMarkerHandler<'source>) {
+        self.block_marker_handler = Some(handler);
+    }
+
+    pub(crate) const fn block_marker_handler(&self) -> Option<SourceBlockMarkerHandler<'source>> {
+        self.block_marker_handler
     }
 
     pub(crate) const fn local_line_number_prefix(&self) -> Option<SourceSpan> {

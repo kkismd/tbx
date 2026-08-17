@@ -22,7 +22,8 @@ use crate::source_mapping::{
 };
 use crate::source_word::{
     classify_source_block_marker, NativeSourceWordBindingAccess, NativeSourceWordContext,
-    NativeSourceWordContextParts, RuntimeDefinitionPublisher, SourceBlockCursor, SourceBlockRead,
+    NativeSourceWordContextParts, RuntimeDefinitionPublisher, SourceBlockCursor,
+    SourceBlockMarkerAction, SourceBlockMarkerContext, SourceBlockMarkerHandler, SourceBlockRead,
     SourceBlockReader, SourceBlockStatement, SourceBlockTerminal, SourceWordError, SourceWordId,
     SourceWordLookup, SourceWordLookupError,
 };
@@ -528,43 +529,54 @@ where
         BindingAccess::Read(bindings) => NativeSourceWordBindingAccess::Read(bindings),
         BindingAccess::Write(bindings) => NativeSourceWordBindingAccess::Write(bindings),
     };
-    let mut source_word_context = NativeSourceWordContext::new(NativeSourceWordContextParts {
-        view,
-        source_id,
-        tokens,
-        block_reader: Some(SourceBlockReader::new(view, cursor, syntax_markers)),
-        bindings: binding_access,
-        operators,
-        code: state.code,
-        local_line_number_prefix,
-        globals,
-        runtime_definitions,
-    });
-    handler(&mut source_word_context)?;
+    let block_marker_handler = {
+        let mut source_word_context = NativeSourceWordContext::new(NativeSourceWordContextParts {
+            view,
+            source_id,
+            tokens,
+            block_reader: Some(SourceBlockReader::new(view, cursor, syntax_markers)),
+            bindings: binding_access,
+            operators,
+            code: state.code,
+            local_line_number_prefix,
+            globals,
+            runtime_definitions,
+        });
+        handler(&mut source_word_context)?;
+        source_word_context.block_marker_handler()
+    };
 
     if !syntax_markers.is_empty() && cursor.position() == body_start_position {
         compile_structured_source_word_body(
-            view,
-            source_id,
-            syntax_markers,
+            StructuredSourceWordOwner {
+                view,
+                source_id,
+                syntax_markers,
+                block_marker_handler,
+                source_word_token: first,
+            },
             context,
             state,
             cursor,
-            first.span(),
         )?;
     }
 
     Ok(true)
 }
 
-fn compile_structured_source_word_body<'source, S>(
+struct StructuredSourceWordOwner<'source, 'markers> {
     view: SourceView<'source>,
     source_id: SourceId,
-    syntax_markers: &[crate::source_word::SourceWordSyntaxMarker],
+    syntax_markers: &'markers [crate::source_word::SourceWordSyntaxMarker],
+    block_marker_handler: Option<SourceBlockMarkerHandler<'source>>,
+    source_word_token: Token,
+}
+
+fn compile_structured_source_word_body<'source, S>(
+    owner: StructuredSourceWordOwner<'source, '_>,
     context: &mut SourceCompileContext<'_>,
     state: &mut StatementCompileState<'_>,
     cursor: &mut LogicalStatementCursor<'source, 'source, S>,
-    missing_anchor: SourceSpan,
 ) -> Result<(), SourceProcessorError>
 where
     S: LogicalStatementView,
@@ -580,7 +592,7 @@ where
                 return Err(SourceProcessorError::SourceWord(
                     SourceWordError::UnsupportedSourceWord {
                         span: if span.start() == span.end() {
-                            missing_anchor
+                            owner.source_word_token.span()
                         } else {
                             span
                         },
@@ -589,18 +601,40 @@ where
             }
         };
 
-        if let Some(marker) = classify_source_block_marker(view, syntax_markers, statement)? {
-            if marker.role() == crate::source_word::SourceWordSyntaxMarkerRole::BlockTerminator {
-                return Ok(());
+        if let Some(marker) =
+            classify_source_block_marker(owner.view, owner.syntax_markers, statement)?
+        {
+            let Some(handle_marker) = owner.block_marker_handler else {
+                return Err(SourceProcessorError::SourceWord(
+                    SourceWordError::UnsupportedSourceWord {
+                        span: marker.span(),
+                    },
+                ));
+            };
+            let mut marker_context = SourceBlockMarkerContext::new(
+                owner.view,
+                owner.source_id,
+                owner.source_word_token,
+                state.code,
+            );
+            match handle_marker(&mut marker_context, marker)? {
+                SourceBlockMarkerAction::Continue => continue,
+                SourceBlockMarkerAction::Complete => return Ok(()),
             }
-            continue;
         }
 
         // #1516/#1533: the source processor keeps the logical-statement cursor
         // and normal traversal. A nested source word is just another
         // statement-leading dispatch; when it completes, this loop resumes at
         // the next statement for the outer owner.
-        compile_statement(view, source_id, statement.tokens(), context, state, cursor)?;
+        compile_statement(
+            owner.view,
+            owner.source_id,
+            statement.tokens(),
+            context,
+            state,
+            cursor,
+        )?;
     }
 }
 
@@ -1754,7 +1788,8 @@ mod tests {
     };
     use crate::source_word::{
         DefSyntaxErrorKind, LetSyntaxErrorKind, NativeSourceWordContext, SourceBlockItem,
-        SourceWordRegistry, SourceWordSyntaxMarker, SourceWordSyntaxMarkerRole, VarSyntaxErrorKind,
+        SourceBlockMarker, SourceBlockMarkerAction, SourceBlockMarkerContext, SourceWordRegistry,
+        SourceWordSyntaxMarker, SourceWordSyntaxMarkerRole, VarSyntaxErrorKind,
     };
     use crate::word::{CompletedWordDefinition, PrimitiveId, PublishedWords, WordId};
     use crate::word_lookup::PublishedWordLookup;
@@ -2058,9 +2093,25 @@ mod tests {
         }
     }
 
+    fn transition_on_declared_marker(
+        context: &mut SourceBlockMarkerContext<'_, '_>,
+        marker: SourceBlockMarker<'_>,
+    ) -> Result<SourceBlockMarkerAction, SourceWordError> {
+        let emitted = match marker.role() {
+            SourceWordSyntaxMarkerRole::BlockContinuation => 10,
+            SourceWordSyntaxMarkerRole::BlockTerminator => 20,
+        };
+        context.append_mapped(Instruction::Push(value(emitted)), marker.span())?;
+        Ok(match marker.role() {
+            SourceWordSyntaxMarkerRole::BlockContinuation => SourceBlockMarkerAction::Continue,
+            SourceWordSyntaxMarkerRole::BlockTerminator => SourceBlockMarkerAction::Complete,
+        })
+    }
+
     fn process_until_declared_terminator(
-        _context: &mut NativeSourceWordContext<'_, '_>,
+        context: &mut NativeSourceWordContext<'_, '_>,
     ) -> Result<(), SourceWordError> {
+        context.set_block_marker_handler(transition_on_declared_marker);
         Ok(())
     }
 
@@ -5396,7 +5447,7 @@ mod tests {
         )
         .expect("structured body unit should run");
 
-        assert_eq!(result.data_stack(), [value(7), value(7)]);
+        assert_eq!(result.data_stack(), [value(7), value(20), value(7)]);
     }
 
     #[test]
@@ -5429,7 +5480,64 @@ mod tests {
             panic!("SCORE should be published by nested VAR");
         };
         assert_eq!(globals.view().read(id), Ok(value(0)));
-        assert_eq!(unit.instructions().get(address(0)), Ok(&Instruction::Halt));
+        assert_eq!(
+            unit.instructions().get(address(0)),
+            Ok(&Instruction::Push(value(20)))
+        );
+    }
+
+    #[test]
+    fn structured_body_owner_marker_transition_continues_to_statement_and_outer_resume() {
+        let mut source_words = SourceWordRegistry::new();
+        let mut words = PublishedWords::new();
+        let mut primitives = PrimitiveRegistry::new();
+        let mut bindings = Bindings::new();
+        for (source_name, primitive) in [
+            (
+                "PUSH1",
+                push_1 as fn(&mut PrimitiveContext<'_>) -> Result<(), PrimitiveError>,
+            ),
+            ("PUSH2", push_2),
+            ("PUSH3", push_3),
+        ] {
+            let primitive = primitives.register(primitive);
+            register_primitive(&mut words, &mut bindings, name(source_name), primitive)
+                .expect("runtime word should register");
+        }
+        register_native_source_word_with_markers(
+            &mut source_words,
+            &mut bindings,
+            name("OUTER"),
+            process_until_declared_terminator,
+            vec![
+                marker("OUT_ELSE", SourceWordSyntaxMarkerRole::BlockContinuation),
+                marker("OUT_DONE", SourceWordSyntaxMarkerRole::BlockTerminator),
+            ],
+        )
+        .expect("outer source word should register");
+        let (sources, source_id) = source("OUTER\nPUSH1\nOUT_ELSE\nPUSH2\nOUT_DONE\nPUSH3");
+
+        let unit = compile_source(
+            sources.view(),
+            source_id,
+            SourceCompileContext::with_source_words(&bindings, source_words.lookup()),
+        )
+        .expect("structured body should compile owner marker transitions");
+        let result = run_unit(
+            &unit,
+            SourceExecutionContext::with_source_words(
+                &bindings,
+                source_words.lookup(),
+                PublishedWordLookup::new(&words),
+                primitives.lookup(),
+            ),
+        )
+        .expect("structured body unit should run");
+
+        assert_eq!(
+            result.data_stack(),
+            [value(1), value(10), value(2), value(20), value(3)]
+        );
     }
 
     #[test]
@@ -5477,7 +5585,10 @@ mod tests {
         )
         .expect("nested same-owner source word should run");
 
-        assert_eq!(result.data_stack(), [value(1), value(2), value(3)]);
+        assert_eq!(
+            result.data_stack(),
+            [value(1), value(20), value(2), value(20), value(3)]
+        );
     }
 
     #[test]
@@ -5539,7 +5650,10 @@ mod tests {
         )
         .expect("nested different-owner source word should run");
 
-        assert_eq!(result.data_stack(), [value(1), value(2), value(3)]);
+        assert_eq!(
+            result.data_stack(),
+            [value(1), value(20), value(2), value(20), value(3)]
+        );
     }
 
     #[test]
