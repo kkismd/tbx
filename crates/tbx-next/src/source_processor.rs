@@ -34,7 +34,6 @@ use crate::word_lookup::PublishedWordLookup;
 use crate::word_resolution::{
     resolve_binding_name, resolve_word_name, ResolvedBinding, WordResolutionError,
 };
-use std::collections::HashSet;
 
 #[derive(Debug)]
 pub(crate) struct TemporaryExecutionUnit {
@@ -161,7 +160,6 @@ type OptionalLineNumberPrefix = Option<(LocalLineNumber, SourceSpan)>;
 struct StatementCompileState<'a> {
     code: &'a mut dyn InstructionBuildTarget,
     line_numbers: &'a mut LocalLineNumberTable,
-    referenced_line_numbers: &'a HashSet<LocalLineNumber>,
 }
 
 impl From<SourceError> for SourceProcessorError {
@@ -327,10 +325,6 @@ where
     S: LogicalStatementView,
 {
     let mut line_numbers = LocalLineNumberTable::new();
-    // A leading integer remains an expression/literal unless this unit uses it
-    // as local control-flow syntax. This preserves existing source paths while
-    // keeping line numbers compile-time-only.
-    let referenced_line_numbers = collect_referenced_line_numbers(view, statements);
     let mut cursor = LogicalStatementCursor::new(view, source_id, statements, terminal);
 
     while let Some(statement) = cursor.next_completed_statement() {
@@ -342,7 +336,6 @@ where
             &mut StatementCompileState {
                 code,
                 line_numbers: &mut line_numbers,
-                referenced_line_numbers: &referenced_line_numbers,
             },
             &mut cursor,
         )?;
@@ -368,12 +361,7 @@ where
         return Ok(());
     }
 
-    let (line_number, body) = split_statement_line_number(
-        view,
-        statement,
-        state.referenced_line_numbers,
-        context.bindings(),
-    )?;
+    let (line_number, body) = split_statement_line_number(view, statement)?;
     let start = state.code.current_address();
     let local_line_number_prefix = line_number.map(|(_, span)| span);
     compile_statement_body(
@@ -399,23 +387,31 @@ where
 fn split_statement_line_number<'a>(
     view: SourceView<'_>,
     statement: &'a [Token],
-    referenced_line_numbers: &HashSet<LocalLineNumber>,
-    bindings: &Bindings,
 ) -> Result<(OptionalLineNumberPrefix, &'a [Token]), SourceProcessorError> {
     let Some((&first, rest)) = statement.split_first() else {
         return Ok((None, statement));
     };
 
-    if first.kind() != TokenKind::IntegerLiteral
-        || !is_statement_line_number_candidate(
-            view,
-            first,
-            rest,
-            referenced_line_numbers,
-            bindings,
-        )?
-    {
+    if first.kind() != TokenKind::IntegerLiteral {
         return Ok((None, statement));
+    }
+
+    // #1535: line-number definition recognition is local to the complete
+    // logical statement. Do not consult later branch references or binding
+    // resolution before deciding whether the leading integer is a prefix.
+    let Some(next) = rest.first().copied() else {
+        return Err(CompileError {
+            span: first.span(),
+            kind: CompileErrorKind::BareExpression,
+        }
+        .into());
+    };
+    if next.kind() != TokenKind::Name {
+        return Err(CompileError {
+            span: first.span(),
+            kind: CompileErrorKind::BareExpression,
+        }
+        .into());
     }
 
     let line_number = compile_line_number_literal(view, first)?;
@@ -883,81 +879,6 @@ fn is_bif_keyword(view: SourceView<'_>, token: Token) -> Result<bool, SourceProc
     }
 
     Ok(view.slice(token.span())?.eq_ignore_ascii_case("BIF"))
-}
-
-fn is_statement_line_number_candidate(
-    view: SourceView<'_>,
-    token: Token,
-    rest: &[Token],
-    referenced_line_numbers: &HashSet<LocalLineNumber>,
-    bindings: &Bindings,
-) -> Result<bool, SourceProcessorError> {
-    let Some(next) = rest.first().copied() else {
-        return Ok(false);
-    };
-    if next.kind() != TokenKind::Name {
-        return Ok(false);
-    }
-    if is_bif_keyword(view, next)? {
-        return Ok(true);
-    }
-    let next_source = view.slice(next.span())?;
-    if matches!(
-        resolve_binding_name(bindings, next_source),
-        Ok(ResolvedBinding::SourceWord(_))
-    ) {
-        return Ok(true);
-    }
-
-    let source = view.slice(token.span())?;
-    Ok(parse_local_line_number(source, token.span())
-        .map(|line_number| referenced_line_numbers.contains(&line_number))
-        .unwrap_or(false))
-}
-
-fn collect_referenced_line_numbers<S>(
-    view: SourceView<'_>,
-    statements: &[S],
-) -> HashSet<LocalLineNumber>
-where
-    S: LogicalStatementView,
-{
-    let mut references = HashSet::new();
-
-    for statement in statements {
-        let tokens = statement.tokens();
-        let bif_index = match tokens {
-            [first, second, ..]
-                if first.kind() == TokenKind::IntegerLiteral
-                    && is_bif_keyword(view, *second).unwrap_or(false) =>
-            {
-                Some(1)
-            }
-            [first, ..] if is_bif_keyword(view, *first).unwrap_or(false) => Some(0),
-            _ => None,
-        };
-        let Some(bif_index) = bif_index else {
-            continue;
-        };
-        let Some(comma_index) =
-            find_top_level_comma(&tokens[bif_index + 1..]).map(|index| bif_index + 1 + index)
-        else {
-            continue;
-        };
-        let Some(target) = tokens.get(comma_index + 1).copied() else {
-            continue;
-        };
-        if target.kind() != TokenKind::IntegerLiteral {
-            continue;
-        }
-        if let Ok(source) = view.slice(target.span()) {
-            if let Ok(line_number) = parse_local_line_number(source, target.span()) {
-                references.insert(line_number);
-            }
-        }
-    }
-
-    references
 }
 
 fn find_top_level_comma(tokens: &[Token]) -> Option<usize> {
@@ -2737,57 +2658,19 @@ mod tests {
     }
 
     #[test]
-    fn integer_literals_compile_to_push_in_source_order() {
-        let (sources, id, unit) = compile("0 1 42\n32767");
-        let view = sources.view();
+    fn standalone_integer_statements_are_rejected() {
+        for source_text in ["100", "100 + 1"] {
+            let (sources, id, error) = compile_with_operators_error(source_text);
 
-        assert_eq!(unit.entry(), address(0));
-        assert_eq!(unit.len(), 5);
-        assert_eq!(
-            unit.instructions().get(address(0)),
-            Ok(&Instruction::Push(value(0)))
-        );
-        assert_eq!(
-            unit.instructions().get(address(1)),
-            Ok(&Instruction::Push(value(1)))
-        );
-        assert_eq!(
-            unit.instructions().get(address(2)),
-            Ok(&Instruction::Push(value(42)))
-        );
-        assert_eq!(
-            unit.instructions().get(address(3)),
-            Ok(&Instruction::Push(value(32767)))
-        );
-        assert_eq!(unit.instructions().get(address(4)), Ok(&Instruction::Halt));
-        assert_eq!(
-            unit.source_span(location(&unit, 0)),
-            Ok(Some(span(view, id, 0, 1)))
-        );
-        assert_eq!(
-            unit.source_span(location(&unit, 1)),
-            Ok(Some(span(view, id, 2, 3)))
-        );
-        assert_eq!(
-            unit.source_span(location(&unit, 2)),
-            Ok(Some(span(view, id, 4, 6)))
-        );
-        assert_eq!(
-            unit.source_span(location(&unit, 3)),
-            Ok(Some(span(view, id, 7, 12)))
-        );
-        assert_eq!(
-            unit.source_span(location(&unit, 4)),
-            Ok(Some(span(view, id, 12, 12)))
-        );
-    }
-
-    #[test]
-    fn leading_zeroes_are_decimal_spelling_only() {
-        let (_sources, _id, result) = run("000 00042 032767");
-
-        assert_eq!(result.outcome(), RunOutcome::Halted);
-        assert_eq!(result.data_stack(), [value(0), value(42), value(32767)]);
+            assert_eq!(
+                error,
+                SourceProcessorError::Compile(CompileError {
+                    span: span(sources.view(), id, 0, 3),
+                    kind: CompileErrorKind::BareExpression,
+                }),
+                "{source_text:?} should not compile as a statement"
+            );
+        }
     }
 
     #[test]
@@ -2869,6 +2752,21 @@ mod tests {
             SourceProcessorError::Compile(CompileError {
                 span: span(sources.view(), id, 4, 11),
                 kind: CompileErrorKind::BareExpression,
+            })
+        );
+    }
+
+    #[test]
+    fn local_line_number_prefixed_missing_name_uses_word_resolution_error() {
+        let (sources, id, error) = compile_error("100 MISSING");
+
+        assert_eq!(
+            error,
+            SourceProcessorError::Compile(CompileError {
+                span: span(sources.view(), id, 4, 11),
+                kind: CompileErrorKind::WordResolution {
+                    source: WordResolutionError::UndefinedName,
+                },
             })
         );
     }
@@ -2984,7 +2882,7 @@ mod tests {
     }
 
     #[test]
-    fn bif_line_number_context_does_not_steal_plain_integer_statements() {
+    fn unused_local_line_number_definition_is_accepted() {
         let mut words = PublishedWords::new();
         let mut bindings = Bindings::new();
         let mut primitives = PrimitiveRegistry::new();
@@ -2994,7 +2892,7 @@ mod tests {
             .expect("primitive should register");
 
         let (_sources, _id, result) = run_with_bindings_and_operators(
-            "1\n100 BIF 1, 200\n200 push7",
+            "100 push7",
             &bindings,
             &words,
             &primitives,
@@ -3002,7 +2900,7 @@ mod tests {
         );
 
         assert_eq!(result.outcome(), RunOutcome::Halted);
-        assert_eq!(result.data_stack(), [value(1), value(7)]);
+        assert_eq!(result.data_stack(), [value(7)]);
     }
 
     #[test]
@@ -3350,7 +3248,7 @@ mod tests {
     }
 
     #[test]
-    fn definition_body_line_number_preanalysis_is_owner_local() {
+    fn definition_body_unused_line_number_prefix_is_compile_time_only() {
         let (_operator_words, _operator_primitives, operators) = operator_fixture();
         let mut words = PublishedWords::new();
         let mut bindings = Bindings::new();
@@ -3382,10 +3280,6 @@ mod tests {
 
         assert_eq!(
             code.instruction_view().get(address(second_start)),
-            Ok(&Instruction::Push(value(100)))
-        );
-        assert_eq!(
-            code.instruction_view().get(address(second_start + 1)),
             Ok(&Instruction::Call(target))
         );
     }
@@ -3591,6 +3485,27 @@ mod tests {
         assert_eq!(
             quotation.instruction_view().get(address(4)),
             Ok(&Instruction::JumpIfZero(address(0)))
+        );
+    }
+
+    #[test]
+    fn quotation_body_unused_line_number_prefix_is_compile_time_only() {
+        let (_operator_words, _operator_primitives, operators) = operator_fixture();
+        let mut words = PublishedWords::new();
+        let mut bindings = Bindings::new();
+        let target = words.add(completed_primitive(0));
+        bindings
+            .insert_new(name("PUSH7"), Binding::Word(target))
+            .expect("runtime word should register");
+
+        let (_sources, _id, quotation) = compile_quotation(
+            "100 PUSH7",
+            QuotationBodyCompileContext::with_operators(&bindings, operators.lookup()),
+        );
+
+        assert_eq!(
+            quotation.instruction_view().get(address(0)),
+            Ok(&Instruction::Call(target))
         );
     }
 
@@ -4655,7 +4570,7 @@ mod tests {
     }
 
     #[test]
-    fn integer_range_error_keeps_literal_span_and_does_not_run() {
+    fn standalone_out_of_range_integer_is_rejected_as_statement() {
         for source in ["32768", "999999999999999999999999999999"] {
             let (sources, id, error) = compile_error(source);
 
@@ -4663,9 +4578,9 @@ mod tests {
                 error,
                 SourceProcessorError::Compile(CompileError {
                     span: span(sources.view(), id, 0, source.len()),
-                    kind: CompileErrorKind::IntegerLiteralOutOfRange,
+                    kind: CompileErrorKind::BareExpression,
                 }),
-                "{source:?} should reject out-of-range integer"
+                "{source:?} should reject standalone integer statement"
             );
         }
     }
@@ -7096,6 +7011,6 @@ mod tests {
         };
 
         assert_eq!(error.span(), span(sources.view(), id, 0, 5));
-        assert_eq!(error.kind(), CompileErrorKind::IntegerLiteralOutOfRange);
+        assert_eq!(error.kind(), CompileErrorKind::BareExpression);
     }
 }
