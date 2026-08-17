@@ -451,7 +451,7 @@ where
         tokens,
         context,
         local_line_number_prefix,
-        state.code,
+        state,
         cursor,
     )? {
         return Ok(());
@@ -474,7 +474,7 @@ fn compile_statement_leading_source_word<'source, S>(
     tokens: &'source [Token],
     context: &mut SourceCompileContext<'_>,
     local_line_number_prefix: Option<SourceSpan>,
-    code: &mut dyn InstructionBuildTarget,
+    state: &mut StatementCompileState<'_>,
     cursor: &mut LogicalStatementCursor<'source, 'source, S>,
 ) -> Result<bool, SourceProcessorError>
 where
@@ -534,13 +534,213 @@ where
         block_reader: Some(SourceBlockReader::new(view, cursor, syntax_markers)),
         bindings: binding_access,
         operators,
-        code,
+        code: state.code,
         local_line_number_prefix,
         globals,
         runtime_definitions,
+        line_numbers: Some(state.line_numbers),
+        source_words: Some(source_words),
+        statement_processor: Some(process_source_word_block_statement),
     });
     handler(&mut source_word_context)?;
     Ok(true)
+}
+
+fn process_source_word_block_statement<'source>(
+    context: &mut NativeSourceWordContext<'source, '_>,
+    statement: SourceBlockStatement<'source>,
+) -> Result<(), SourceWordError> {
+    let start = {
+        let access = context.compile_access();
+        access.code.current_address()
+    };
+    let (line_number, body) = split_statement_line_number(context.view(), statement.tokens())
+        .map_err(|source| map_block_statement_compile_error(source, statement.span()))?;
+    let local_line_number_prefix = line_number.map(|(_, span)| span);
+    compile_source_word_block_statement_body(context, body, local_line_number_prefix, statement)?;
+
+    let Some((line_number, span)) = line_number else {
+        return Ok(());
+    };
+    let access = context.compile_access();
+    let Some(line_numbers) = access.line_numbers else {
+        return Err(SourceWordError::BlockStatementCompile {
+            span: statement.span(),
+        });
+    };
+    line_numbers
+        .define(access.code, line_number, start, span)
+        .map_err(|_| SourceWordError::BlockStatementCompile { span })
+}
+
+fn compile_source_word_block_statement_body<'source>(
+    context: &mut NativeSourceWordContext<'source, '_>,
+    tokens: &'source [Token],
+    local_line_number_prefix: Option<SourceSpan>,
+    statement: SourceBlockStatement<'source>,
+) -> Result<(), SourceWordError> {
+    let Some((&first, _)) = tokens.split_first() else {
+        return Ok(());
+    };
+
+    if is_bif_keyword(context.view(), first)
+        .map_err(|source| map_block_statement_compile_error(source, statement.span()))?
+    {
+        let view = context.view();
+        let source_id = context.source_id();
+        let access = context.compile_access();
+        let Some(line_numbers) = access.line_numbers else {
+            return Err(SourceWordError::BlockStatementCompile {
+                span: statement.span(),
+            });
+        };
+        let bindings = match access.bindings {
+            NativeSourceWordBindingAccess::Read(bindings) => bindings,
+            NativeSourceWordBindingAccess::Write(bindings) => bindings,
+        };
+        let compile_context = SourceCompileContext {
+            bindings: BindingAccess::Read(bindings),
+            operators: access.operators,
+            source_words: access.source_words,
+            globals: None,
+            runtime_definitions: None,
+        };
+        return compile_bif(
+            view,
+            source_id,
+            tokens,
+            &compile_context,
+            access.code,
+            line_numbers,
+        )
+        .map_err(|source| map_block_statement_compile_error(source, statement.span()));
+    }
+
+    if compile_statement_leading_source_word_in_context(
+        context,
+        tokens,
+        local_line_number_prefix,
+        statement,
+    )? {
+        return Ok(());
+    }
+
+    if contains_expression_syntax(tokens) {
+        return Err(SourceWordError::BlockStatementCompile { span: first.span() });
+    }
+
+    let view = context.view();
+    let access = context.compile_access();
+    let bindings = match access.bindings {
+        NativeSourceWordBindingAccess::Read(bindings) => bindings,
+        NativeSourceWordBindingAccess::Write(bindings) => bindings,
+    };
+    let compile_context = SourceCompileContext {
+        bindings: BindingAccess::Read(bindings),
+        operators: access.operators,
+        source_words: access.source_words,
+        globals: None,
+        runtime_definitions: None,
+    };
+    compile_simple_tokens(view, tokens, &compile_context, access.code)
+        .map_err(|source| map_block_statement_compile_error(source, statement.span()))
+}
+
+fn compile_statement_leading_source_word_in_context<'source>(
+    context: &mut NativeSourceWordContext<'source, '_>,
+    tokens: &'source [Token],
+    local_line_number_prefix: Option<SourceSpan>,
+    statement: SourceBlockStatement<'source>,
+) -> Result<bool, SourceWordError> {
+    let Some(first) = tokens.first().copied() else {
+        return Ok(false);
+    };
+    if first.kind() != TokenKind::Name {
+        return Ok(false);
+    }
+
+    let source_name = context
+        .view()
+        .slice(first.span())
+        .map_err(|source| SourceWordError::Source { source })?;
+    let view = context.view();
+    let source_id = context.source_id();
+    let access = context.compile_access();
+    let bindings = match &access.bindings {
+        NativeSourceWordBindingAccess::Read(bindings) => *bindings,
+        NativeSourceWordBindingAccess::Write(bindings) => bindings,
+    };
+    let binding = match resolve_binding_name(bindings, source_name) {
+        Ok(binding) => binding,
+        Err(WordResolutionError::InvalidWordName | WordResolutionError::UndefinedName) => {
+            return Ok(false);
+        }
+        Err(WordResolutionError::TargetIsNotWord) => {
+            unreachable!("binding-kind resolution does not classify published bindings as non-word")
+        }
+    };
+
+    let ResolvedBinding::SourceWord(id) = binding else {
+        return Ok(false);
+    };
+    let Some(source_words) = access.source_words else {
+        return Err(SourceWordError::BlockStatementCompile {
+            span: statement.span(),
+        });
+    };
+    let handler =
+        source_words
+            .lookup_handler(id)
+            .map_err(|_| SourceWordError::BlockStatementCompile {
+                span: statement.span(),
+            })?;
+    let syntax_markers =
+        source_words
+            .syntax_markers(id)
+            .map_err(|_| SourceWordError::BlockStatementCompile {
+                span: statement.span(),
+            })?;
+
+    // #1516/#1533: nested structured source words are entered through normal
+    // binding dispatch, while the shared logical-statement cursor remains
+    // owned by the source processor.
+    let mut source_word_context = NativeSourceWordContext::new(NativeSourceWordContextParts {
+        view,
+        source_id,
+        tokens,
+        block_reader: Some(SourceBlockReader::new(
+            view,
+            access
+                .cursor
+                .expect("nested block processing requires an outer reader"),
+            syntax_markers,
+        )),
+        bindings: access.bindings,
+        operators: access.operators,
+        code: access.code,
+        local_line_number_prefix,
+        globals: access.globals,
+        runtime_definitions: None,
+        line_numbers: access.line_numbers,
+        source_words: access.source_words,
+        statement_processor: access.statement_processor,
+    });
+    handler(&mut source_word_context)?;
+    Ok(true)
+}
+
+fn map_block_statement_compile_error(
+    source: SourceProcessorError,
+    fallback: SourceSpan,
+) -> SourceWordError {
+    match source {
+        SourceProcessorError::Source(source) => SourceWordError::Source { source },
+        SourceProcessorError::Lex(source) => SourceWordError::DefLex { source },
+        SourceProcessorError::SourceWord(source) => source,
+        source => SourceWordError::BlockStatementCompile {
+            span: source.primary_span().unwrap_or(fallback),
+        },
+    }
 }
 
 fn compile_simple_tokens(
@@ -1987,6 +2187,31 @@ mod tests {
                     let span = terminal
                         .eof_span()
                         .unwrap_or_else(|| context.source_word_token().span());
+                    return Err(SourceWordError::UnsupportedSourceWord { span });
+                }
+            }
+        }
+    }
+
+    fn process_until_declared_terminator(
+        context: &mut NativeSourceWordContext<'_, '_>,
+    ) -> Result<(), SourceWordError> {
+        loop {
+            match context.process_next_block_item()? {
+                SourceBlockItem::Statement(_) => {}
+                SourceBlockItem::Marker(marker)
+                    if marker.role() == SourceWordSyntaxMarkerRole::BlockTerminator =>
+                {
+                    context.append_mapped(Instruction::Push(value(20)), marker.span())?;
+                    return Ok(());
+                }
+                SourceBlockItem::Marker(marker) => {
+                    context.append_mapped(Instruction::Push(value(10)), marker.span())?;
+                }
+                SourceBlockItem::Terminal(SourceBlockTerminal::LexError { error }) => {
+                    return Err(SourceWordError::DefLex { source: error });
+                }
+                SourceBlockItem::Terminal(SourceBlockTerminal::Eof { span }) => {
                     return Err(SourceWordError::UnsupportedSourceWord { span });
                 }
             }
@@ -5284,6 +5509,243 @@ mod tests {
             unit.instructions().get(address(1)),
             Ok(&Instruction::Push(value(99)))
         );
+    }
+
+    #[test]
+    fn structured_body_processes_runtime_word_statement_and_line_prefix() {
+        let mut source_words = SourceWordRegistry::new();
+        let mut words = PublishedWords::new();
+        let mut primitives = PrimitiveRegistry::new();
+        let mut bindings = Bindings::new();
+        let push7_id = primitives.register(push_7);
+        register_primitive(&mut words, &mut bindings, name("PUSH7"), push7_id)
+            .expect("runtime word should register");
+        register_native_source_word_with_markers(
+            &mut source_words,
+            &mut bindings,
+            name("OUTER"),
+            process_until_declared_terminator,
+            vec![marker(
+                "OUT_DONE",
+                SourceWordSyntaxMarkerRole::BlockTerminator,
+            )],
+        )
+        .expect("outer source word should register");
+        let (sources, source_id) = source("OUTER\n100 PUSH7\nOUT_DONE\nPUSH7");
+
+        let unit = compile_source(
+            sources.view(),
+            source_id,
+            SourceCompileContext::with_source_words(&bindings, source_words.lookup()),
+        )
+        .expect("structured body should compile ordinary runtime statements");
+        let result = run_unit(
+            &unit,
+            SourceExecutionContext::with_source_words(
+                &bindings,
+                source_words.lookup(),
+                PublishedWordLookup::new(&words),
+                primitives.lookup(),
+            ),
+        )
+        .expect("structured body unit should run");
+
+        assert_eq!(result.data_stack(), [value(7), value(20), value(7)]);
+    }
+
+    #[test]
+    fn structured_body_source_word_dispatch_preserves_publication_capability() {
+        let mut source_words = SourceWordRegistry::new();
+        let mut bindings = Bindings::new();
+        let mut globals = GlobalVariables::new();
+        register_builtin_source_words(&mut source_words, &mut bindings)
+            .expect("built-in source words should bootstrap");
+        register_native_source_word_with_markers(
+            &mut source_words,
+            &mut bindings,
+            name("OUTER"),
+            process_until_declared_terminator,
+            vec![marker(
+                "OUT_DONE",
+                SourceWordSyntaxMarkerRole::BlockTerminator,
+            )],
+        )
+        .expect("outer source word should register");
+
+        let (_sources, _id, unit) = compile_with_var(
+            "OUTER\nVAR SCORE\nOUT_DONE",
+            &mut bindings,
+            &mut globals,
+            &source_words,
+        );
+
+        let Some(Binding::Variable(id)) = bindings.get(&name("SCORE")).copied() else {
+            panic!("SCORE should be published by nested VAR");
+        };
+        assert_eq!(globals.view().read(id), Ok(value(0)));
+        assert_eq!(
+            unit.instructions().get(address(0)),
+            Ok(&Instruction::Push(value(20)))
+        );
+    }
+
+    #[test]
+    fn nested_same_owner_source_word_completes_before_outer_continues() {
+        let mut source_words = SourceWordRegistry::new();
+        let mut words = PublishedWords::new();
+        let mut primitives = PrimitiveRegistry::new();
+        let mut bindings = Bindings::new();
+        for (source_name, primitive) in [
+            (
+                "PUSH1",
+                push_1 as fn(&mut PrimitiveContext<'_>) -> Result<(), PrimitiveError>,
+            ),
+            ("PUSH2", push_2),
+            ("PUSH3", push_3),
+        ] {
+            let primitive = primitives.register(primitive);
+            register_primitive(&mut words, &mut bindings, name(source_name), primitive)
+                .expect("runtime word should register");
+        }
+        register_native_source_word_with_markers(
+            &mut source_words,
+            &mut bindings,
+            name("OUTER"),
+            process_until_declared_terminator,
+            vec![marker("DONE", SourceWordSyntaxMarkerRole::BlockTerminator)],
+        )
+        .expect("same-owner source word should register");
+        let (sources, source_id) = source("OUTER\nOUTER\nPUSH1\nDONE\nPUSH2\nDONE\nPUSH3");
+
+        let unit = compile_source(
+            sources.view(),
+            source_id,
+            SourceCompileContext::with_source_words(&bindings, source_words.lookup()),
+        )
+        .expect("nested same-owner source word should compile");
+        let result = run_unit(
+            &unit,
+            SourceExecutionContext::with_source_words(
+                &bindings,
+                source_words.lookup(),
+                PublishedWordLookup::new(&words),
+                primitives.lookup(),
+            ),
+        )
+        .expect("nested same-owner source word should run");
+
+        assert_eq!(
+            result.data_stack(),
+            [value(1), value(20), value(2), value(20), value(3)]
+        );
+    }
+
+    #[test]
+    fn nested_different_owner_marker_set_does_not_leak_to_outer() {
+        let mut source_words = SourceWordRegistry::new();
+        let mut words = PublishedWords::new();
+        let mut primitives = PrimitiveRegistry::new();
+        let mut bindings = Bindings::new();
+        for (source_name, primitive) in [
+            (
+                "PUSH1",
+                push_1 as fn(&mut PrimitiveContext<'_>) -> Result<(), PrimitiveError>,
+            ),
+            ("PUSH2", push_2),
+            ("PUSH3", push_3),
+        ] {
+            let primitive = primitives.register(primitive);
+            register_primitive(&mut words, &mut bindings, name(source_name), primitive)
+                .expect("runtime word should register");
+        }
+        register_native_source_word_with_markers(
+            &mut source_words,
+            &mut bindings,
+            name("OUTER"),
+            process_until_declared_terminator,
+            vec![marker(
+                "OUT_DONE",
+                SourceWordSyntaxMarkerRole::BlockTerminator,
+            )],
+        )
+        .expect("outer source word should register");
+        register_native_source_word_with_markers(
+            &mut source_words,
+            &mut bindings,
+            name("INNER"),
+            process_until_declared_terminator,
+            vec![marker(
+                "IN_DONE",
+                SourceWordSyntaxMarkerRole::BlockTerminator,
+            )],
+        )
+        .expect("inner source word should register");
+        let (sources, source_id) = source("OUTER\nINNER\nPUSH1\nIN_DONE\nPUSH2\nOUT_DONE\nPUSH3");
+
+        let unit = compile_source(
+            sources.view(),
+            source_id,
+            SourceCompileContext::with_source_words(&bindings, source_words.lookup()),
+        )
+        .expect("nested different-owner source word should compile");
+        let result = run_unit(
+            &unit,
+            SourceExecutionContext::with_source_words(
+                &bindings,
+                source_words.lookup(),
+                PublishedWordLookup::new(&words),
+                primitives.lookup(),
+            ),
+        )
+        .expect("nested different-owner source word should run");
+
+        assert_eq!(
+            result.data_stack(),
+            [value(1), value(20), value(2), value(20), value(3)]
+        );
+    }
+
+    #[test]
+    fn nested_body_lexical_failure_preempts_outer_missing_terminator() {
+        let mut source_words = SourceWordRegistry::new();
+        let mut bindings = Bindings::new();
+        register_native_source_word_with_markers(
+            &mut source_words,
+            &mut bindings,
+            name("OUTER"),
+            process_until_declared_terminator,
+            vec![marker(
+                "OUT_DONE",
+                SourceWordSyntaxMarkerRole::BlockTerminator,
+            )],
+        )
+        .expect("outer source word should register");
+        register_native_source_word_with_markers(
+            &mut source_words,
+            &mut bindings,
+            name("INNER"),
+            process_until_declared_terminator,
+            vec![marker(
+                "IN_DONE",
+                SourceWordSyntaxMarkerRole::BlockTerminator,
+            )],
+        )
+        .expect("inner source word should register");
+        let (sources, source_id) = source("OUTER\nINNER\n@");
+
+        let error = compile_source(
+            sources.view(),
+            source_id,
+            SourceCompileContext::with_source_words(&bindings, source_words.lookup()),
+        )
+        .expect_err("inner lexical error should be preserved");
+
+        assert!(matches!(
+            error,
+            SourceProcessorError::SourceWord(SourceWordError::DefLex {
+                source: LexError::InvalidCharacter { .. }
+            })
+        ));
     }
 
     #[test]
