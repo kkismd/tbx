@@ -3489,6 +3489,27 @@ mod tests {
     }
 
     #[test]
+    fn quotation_body_unused_line_number_prefix_is_compile_time_only() {
+        let (_operator_words, _operator_primitives, operators) = operator_fixture();
+        let mut words = PublishedWords::new();
+        let mut bindings = Bindings::new();
+        let target = words.add(completed_primitive(0));
+        bindings
+            .insert_new(name("PUSH7"), Binding::Word(target))
+            .expect("runtime word should register");
+
+        let (_sources, _id, quotation) = compile_quotation(
+            "100 PUSH7",
+            QuotationBodyCompileContext::with_operators(&bindings, operators.lookup()),
+        );
+
+        assert_eq!(
+            quotation.instruction_view().get(address(0)),
+            Ok(&Instruction::Call(target))
+        );
+    }
+
+    #[test]
     fn quotation_body_rejects_duplicate_and_undefined_local_line_numbers() {
         let (_operator_words, _operator_primitives, operators) = operator_fixture();
         let mut words = PublishedWords::new();
