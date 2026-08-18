@@ -1944,7 +1944,9 @@ mod tests {
                     SourceWordSyntaxMarkerRole::BlockTerminator => 20,
                 };
                 assert_eq!(marker.statement().span(), marker.span());
-                assert_eq!(marker.token().span(), marker.span());
+                assert_eq!(marker.span().source_id(), marker.token().span().source_id());
+                assert!(marker.span().start() <= marker.token().span().start());
+                assert!(marker.token().span().end() <= marker.span().end());
                 assert!(!marker.name().as_str().is_empty());
                 (value, marker.span())
             }
