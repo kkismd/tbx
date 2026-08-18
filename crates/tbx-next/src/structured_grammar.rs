@@ -17,7 +17,7 @@ pub(crate) enum MarkerCardinality {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct MarkerGroup {
-    markers: Vec<MarkerIdentity>,
+    marker: MarkerIdentity,
     cardinality: MarkerCardinality,
 }
 
@@ -30,7 +30,6 @@ pub(crate) struct StructuredGrammar {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum GrammarDeclarationError {
     MissingTerminator,
-    EmptyMarkerGroup { group_index: usize },
     DuplicateIntermediateMarker,
     TerminatorConflictsWithIntermediateMarker,
 }
@@ -96,15 +95,15 @@ impl MarkerCardinality {
 }
 
 impl MarkerGroup {
-    pub(crate) fn new(markers: Vec<MarkerIdentity>, cardinality: MarkerCardinality) -> Self {
+    pub(crate) fn new(marker: MarkerIdentity, cardinality: MarkerCardinality) -> Self {
         Self {
-            markers,
+            marker,
             cardinality,
         }
     }
 
-    pub(crate) fn markers(&self) -> &[MarkerIdentity] {
-        &self.markers
+    pub(crate) fn marker(&self) -> &MarkerIdentity {
+        &self.marker
     }
 
     pub(crate) const fn cardinality(&self) -> MarkerCardinality {
@@ -112,7 +111,7 @@ impl MarkerGroup {
     }
 
     fn contains(&self, marker: &MarkerIdentity) -> bool {
-        self.markers.iter().any(|candidate| candidate == marker)
+        &self.marker == marker
     }
 
     fn is_required_count_met(&self, accepted_count: usize) -> bool {
@@ -249,15 +248,9 @@ impl GrammarProgress {
 
 fn validate_groups(groups: &[MarkerGroup]) -> Result<(), GrammarDeclarationError> {
     let mut seen = HashSet::new();
-    for (group_index, group) in groups.iter().enumerate() {
-        if group.markers().is_empty() {
-            return Err(GrammarDeclarationError::EmptyMarkerGroup { group_index });
-        }
-
-        for marker in group.markers() {
-            if !seen.insert(marker.clone()) {
-                return Err(GrammarDeclarationError::DuplicateIntermediateMarker);
-            }
+    for group in groups {
+        if !seen.insert(group.marker().clone()) {
+            return Err(GrammarDeclarationError::DuplicateIntermediateMarker);
         }
     }
 
@@ -287,11 +280,8 @@ mod tests {
         MarkerIdentity::new(name(input))
     }
 
-    fn group(markers: &[&str], cardinality: MarkerCardinality) -> MarkerGroup {
-        MarkerGroup::new(
-            markers.iter().map(|input| marker(input)).collect(),
-            cardinality,
-        )
+    fn group(input: &str, cardinality: MarkerCardinality) -> MarkerGroup {
+        MarkerGroup::new(marker(input), cardinality)
     }
 
     fn grammar(
@@ -313,8 +303,8 @@ mod tests {
     fn grammar_rejects_duplicate_intermediate_marker() {
         let error = grammar(
             vec![
-                group(&["ELSIF"], MarkerCardinality::ZeroOrMore),
-                group(&["elsif"], MarkerCardinality::Optional),
+                group("ELSIF", MarkerCardinality::ZeroOrMore),
+                group("elsif", MarkerCardinality::Optional),
             ],
             "ENDIF",
         )
@@ -325,11 +315,8 @@ mod tests {
 
     #[test]
     fn grammar_rejects_terminator_that_matches_intermediate_marker() {
-        let error = grammar(
-            vec![group(&["ENDIF"], MarkerCardinality::Optional)],
-            "endif",
-        )
-        .expect_err("terminator/intermediate overlap should be rejected");
+        let error = grammar(vec![group("ENDIF", MarkerCardinality::Optional)], "endif")
+            .expect_err("terminator/intermediate overlap should be rejected");
 
         assert_eq!(
             error,
@@ -339,30 +326,26 @@ mod tests {
 
     #[test]
     fn grammar_rejects_missing_terminator() {
-        let error =
-            StructuredGrammar::new(vec![group(&["CASE"], MarkerCardinality::OneOrMore)], None)
-                .expect_err("terminator is mandatory");
+        let error = StructuredGrammar::new(vec![group("CASE", MarkerCardinality::OneOrMore)], None)
+            .expect_err("terminator is mandatory");
 
         assert_eq!(error, GrammarDeclarationError::MissingTerminator);
     }
 
     #[test]
-    fn grammar_rejects_empty_marker_group() {
-        let error = grammar(vec![group(&[], MarkerCardinality::Optional)], "ENDIF")
-            .expect_err("empty marker group cannot classify progress");
+    fn marker_group_holds_exactly_one_marker_identity() {
+        let group = group("ELSIF", MarkerCardinality::ZeroOrMore);
 
-        assert_eq!(
-            error,
-            GrammarDeclarationError::EmptyMarkerGroup { group_index: 0 }
-        );
+        assert_eq!(group.marker().name(), &name("ELSIF"));
+        assert_eq!(group.cardinality(), MarkerCardinality::ZeroOrMore);
     }
 
     #[test]
     fn one_accepts_exactly_one_marker_before_progressing() {
         let grammar = grammar(
             vec![
-                group(&["THEN"], MarkerCardinality::One),
-                group(&["ELSE"], MarkerCardinality::Optional),
+                group("THEN", MarkerCardinality::One),
+                group("ELSE", MarkerCardinality::Optional),
             ],
             "ENDIF",
         )
@@ -390,8 +373,8 @@ mod tests {
     fn optional_accepts_zero_or_one_marker() {
         let grammar = grammar(
             vec![
-                group(&["ELSE"], MarkerCardinality::Optional),
-                group(&["FINALLY"], MarkerCardinality::Optional),
+                group("ELSE", MarkerCardinality::Optional),
+                group("FINALLY", MarkerCardinality::Optional),
             ],
             "ENDIF",
         )
@@ -420,11 +403,8 @@ mod tests {
 
     #[test]
     fn zero_or_more_accepts_zero_one_or_many_markers() {
-        let grammar = grammar(
-            vec![group(&["ELSIF"], MarkerCardinality::ZeroOrMore)],
-            "ENDIF",
-        )
-        .expect("valid grammar");
+        let grammar = grammar(vec![group("ELSIF", MarkerCardinality::ZeroOrMore)], "ENDIF")
+            .expect("valid grammar");
         let mut skipped = grammar.start();
         assert_eq!(
             skipped.accept(&marker("ENDIF")),
@@ -449,7 +429,7 @@ mod tests {
     #[test]
     fn one_or_more_requires_one_marker_and_accepts_many() {
         let grammar = grammar(
-            vec![group(&["CASE"], MarkerCardinality::OneOrMore)],
+            vec![group("CASE", MarkerCardinality::OneOrMore)],
             "ENDSWITCH",
         )
         .expect("valid grammar");
@@ -480,9 +460,9 @@ mod tests {
     fn minimum_zero_groups_can_be_skipped_in_sequence() {
         let grammar = grammar(
             vec![
-                group(&["ELSIF"], MarkerCardinality::ZeroOrMore),
-                group(&["ELSE"], MarkerCardinality::Optional),
-                group(&["CLEANUP"], MarkerCardinality::Optional),
+                group("ELSIF", MarkerCardinality::ZeroOrMore),
+                group("ELSE", MarkerCardinality::Optional),
+                group("CLEANUP", MarkerCardinality::Optional),
             ],
             "ENDIF",
         )
@@ -499,8 +479,8 @@ mod tests {
     fn required_group_blocks_later_group_and_terminator_until_satisfied() {
         let grammar = grammar(
             vec![
-                group(&["CASE"], MarkerCardinality::OneOrMore),
-                group(&["DEFAULT"], MarkerCardinality::Optional),
+                group("CASE", MarkerCardinality::OneOrMore),
+                group("DEFAULT", MarkerCardinality::Optional),
             ],
             "ENDSWITCH",
         )
@@ -534,8 +514,8 @@ mod tests {
     fn later_group_prevents_accepting_earlier_group_marker() {
         let grammar = grammar(
             vec![
-                group(&["ELSIF"], MarkerCardinality::ZeroOrMore),
-                group(&["ELSE"], MarkerCardinality::Optional),
+                group("ELSIF", MarkerCardinality::ZeroOrMore),
+                group("ELSE", MarkerCardinality::Optional),
             ],
             "ENDIF",
         )
@@ -575,8 +555,8 @@ mod tests {
     fn unknown_marker_is_rejected_without_progress_update() {
         let grammar = grammar(
             vec![
-                group(&["ELSIF"], MarkerCardinality::ZeroOrMore),
-                group(&["ELSE"], MarkerCardinality::Optional),
+                group("ELSIF", MarkerCardinality::ZeroOrMore),
+                group("ELSE", MarkerCardinality::Optional),
             ],
             "ENDIF",
         )
@@ -609,8 +589,8 @@ mod tests {
     fn if_like_grammar_uses_repeated_continuation_and_optional_fallback() {
         let grammar = grammar(
             vec![
-                group(&["ELSIF"], MarkerCardinality::ZeroOrMore),
-                group(&["ELSE"], MarkerCardinality::Optional),
+                group("ELSIF", MarkerCardinality::ZeroOrMore),
+                group("ELSE", MarkerCardinality::Optional),
             ],
             "ENDIF",
         )
@@ -639,8 +619,8 @@ mod tests {
     fn switch_like_grammar_uses_required_cases_and_optional_default() {
         let grammar = grammar(
             vec![
-                group(&["CASE"], MarkerCardinality::OneOrMore),
-                group(&["DEFAULT"], MarkerCardinality::Optional),
+                group("CASE", MarkerCardinality::OneOrMore),
+                group("DEFAULT", MarkerCardinality::Optional),
             ],
             "ENDSWITCH",
         )
