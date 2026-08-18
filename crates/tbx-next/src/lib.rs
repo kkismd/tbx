@@ -102,6 +102,11 @@ mod source_processor;
 #[allow(dead_code)]
 mod source_word;
 
+// #1543 keeps ordered syntax-marker grammar legality separate from source
+// traversal, statement payload parsing, and owner-specific lowering state.
+#[allow(dead_code)]
+mod structured_grammar;
+
 // ADR #1442 keeps expression operators as published primitive words resolved
 // through a crate-internal lookup instead of surface name bindings.
 #[allow(dead_code)]
