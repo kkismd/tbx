@@ -21,12 +21,15 @@ use crate::source_mapping::{
     InstructionSourceMappingView, SourceMappedCode, SourceMappingLookup, SourceMappingLookupError,
 };
 use crate::source_word::{
-    NativeSourceWordBindingAccess, NativeSourceWordContext, NativeSourceWordContextParts,
+    classify_source_block_marker, NativeSourceWordBindingAccess, NativeSourceWordContext,
+    NativeSourceWordContextParts, NativeStructuredSourceWordMarkerContext,
+    NativeStructuredSourceWordMarkerHandler, NativeStructuredSourceWordState,
     RuntimeDefinitionPublisher, SourceBlockCursor, SourceBlockRead, SourceBlockReader,
-    SourceBlockStatement, SourceBlockTerminal, SourceWordError, SourceWordId, SourceWordLookup,
-    SourceWordLookupError,
+    SourceBlockStatement, SourceBlockTerminal, SourceWordError, SourceWordId, SourceWordKind,
+    SourceWordLookup, SourceWordLookupError, SourceWordSyntaxMarker,
 };
 use crate::static_quotation::{StaticQuotation, StaticQuotationBuildError};
+use crate::structured_grammar::{GrammarAccept, GrammarProgress, MarkerIdentity};
 use crate::value::Value;
 use crate::vm::{ExecutionView, RunOutcome, Vm, VmError};
 use crate::word::{PublishedWords, WordId};
@@ -160,6 +163,19 @@ type OptionalLineNumberPrefix = Option<(LocalLineNumber, SourceSpan)>;
 struct StatementCompileState<'a> {
     code: &'a mut dyn InstructionBuildTarget,
     line_numbers: &'a mut LocalLineNumberTable,
+}
+
+struct StructuredSourceWordFrame {
+    progress: GrammarProgress,
+    syntax_markers: Vec<SourceWordSyntaxMarker>,
+    state: Box<dyn NativeStructuredSourceWordState>,
+    marker_handler: NativeStructuredSourceWordMarkerHandler,
+    completion_handler: NativeStructuredSourceWordMarkerHandler,
+}
+
+enum StatementCompileOutcome {
+    Complete,
+    StartedStructured(StructuredSourceWordFrame),
 }
 
 impl From<SourceError> for SourceProcessorError {
@@ -326,9 +342,21 @@ where
 {
     let mut line_numbers = LocalLineNumberTable::new();
     let mut cursor = LogicalStatementCursor::new(view, source_id, statements, terminal);
+    let mut structured_frames = Vec::new();
 
     while let Some(statement) = cursor.next_completed_statement() {
-        compile_statement(
+        let block_statement = cursor.block_statement(statement)?;
+        if process_current_owner_marker(
+            view,
+            source_id,
+            block_statement,
+            &mut structured_frames,
+            code,
+        )? {
+            continue;
+        }
+
+        match compile_statement(
             view,
             source_id,
             statement.tokens(),
@@ -338,12 +366,67 @@ where
                 line_numbers: &mut line_numbers,
             },
             &mut cursor,
-        )?;
+        )? {
+            StatementCompileOutcome::Complete => {}
+            StatementCompileOutcome::StartedStructured(frame) => structured_frames.push(frame),
+        }
+    }
+
+    if structured_frames.last().is_some() {
+        match terminal {
+            Terminal::Eof { span } => {
+                return Err(SourceWordError::StructuredMissingTerminator { span }.into());
+            }
+            Terminal::LexError(error) => return Err(error.into()),
+        }
     }
 
     line_numbers
         .resolve(code)
         .map_err(|source| line_number_compile_error(source).into())
+}
+
+fn process_current_owner_marker<'source>(
+    view: SourceView<'source>,
+    source_id: SourceId,
+    statement: SourceBlockStatement<'source>,
+    structured_frames: &mut Vec<StructuredSourceWordFrame>,
+    code: &mut dyn InstructionBuildTarget,
+) -> Result<bool, SourceProcessorError> {
+    let Some(frame) = structured_frames.last_mut() else {
+        return Ok(false);
+    };
+
+    let Some(marker) = classify_source_block_marker(view, statement, &frame.syntax_markers)? else {
+        return Ok(false);
+    };
+
+    let marker_identity = MarkerIdentity::new(marker.name().clone());
+    let marker_span = marker.span();
+    let accepted = frame.progress.accept(&marker_identity).map_err(|source| {
+        SourceWordError::StructuredGrammar {
+            span: marker_span,
+            source,
+        }
+    })?;
+    let handler = match accepted {
+        GrammarAccept::Intermediate { .. } => frame.marker_handler,
+        GrammarAccept::Terminator => frame.completion_handler,
+    };
+    let mut marker_context = NativeStructuredSourceWordMarkerContext::new(
+        view,
+        source_id,
+        marker,
+        &mut *frame.state,
+        code,
+    );
+    handler(&mut marker_context)?;
+
+    if matches!(accepted, GrammarAccept::Terminator) {
+        structured_frames.pop();
+    }
+
+    Ok(true)
 }
 
 fn compile_statement<'source, S>(
@@ -353,18 +436,18 @@ fn compile_statement<'source, S>(
     context: &mut SourceCompileContext<'_>,
     state: &mut StatementCompileState<'_>,
     cursor: &mut LogicalStatementCursor<'source, 'source, S>,
-) -> Result<(), SourceProcessorError>
+) -> Result<StatementCompileOutcome, SourceProcessorError>
 where
     S: LogicalStatementView,
 {
     if statement.is_empty() {
-        return Ok(());
+        return Ok(StatementCompileOutcome::Complete);
     }
 
     let (line_number, body) = split_statement_line_number(view, statement)?;
     let start = state.code.current_address();
     let local_line_number_prefix = line_number.map(|(_, span)| span);
-    compile_statement_body(
+    let outcome = compile_statement_body(
         view,
         source_id,
         body,
@@ -378,10 +461,10 @@ where
         state
             .line_numbers
             .define(state.code, line_number, start, span)
-            .map_err(|source| line_number_compile_error(source).into())
-    } else {
-        Ok(())
+            .map_err(|source| SourceProcessorError::from(line_number_compile_error(source)))?;
     }
+
+    Ok(outcome)
 }
 
 fn split_statement_line_number<'a>(
@@ -426,26 +509,27 @@ fn compile_statement_body<'source, S>(
     local_line_number_prefix: Option<SourceSpan>,
     state: &mut StatementCompileState<'_>,
     cursor: &mut LogicalStatementCursor<'source, 'source, S>,
-) -> Result<(), SourceProcessorError>
+) -> Result<StatementCompileOutcome, SourceProcessorError>
 where
     S: LogicalStatementView,
 {
     let Some((&first, _)) = tokens.split_first() else {
-        return Ok(());
+        return Ok(StatementCompileOutcome::Complete);
     };
 
     if is_bif_keyword(view, first)? {
-        return compile_bif(
+        compile_bif(
             view,
             source_id,
             tokens,
             context,
             state.code,
             state.line_numbers,
-        );
+        )?;
+        return Ok(StatementCompileOutcome::Complete);
     }
 
-    if compile_statement_leading_source_word(
+    if let Some(outcome) = compile_statement_leading_source_word(
         view,
         source_id,
         tokens,
@@ -454,7 +538,7 @@ where
         state.code,
         cursor,
     )? {
-        return Ok(());
+        return Ok(outcome);
     }
 
     if contains_expression_syntax(tokens) {
@@ -465,7 +549,8 @@ where
         .into());
     }
 
-    compile_simple_tokens(view, tokens, context, state.code)
+    compile_simple_tokens(view, tokens, context, state.code)?;
+    Ok(StatementCompileOutcome::Complete)
 }
 
 fn compile_statement_leading_source_word<'source, S>(
@@ -476,22 +561,22 @@ fn compile_statement_leading_source_word<'source, S>(
     local_line_number_prefix: Option<SourceSpan>,
     code: &mut dyn InstructionBuildTarget,
     cursor: &mut LogicalStatementCursor<'source, 'source, S>,
-) -> Result<bool, SourceProcessorError>
+) -> Result<Option<StatementCompileOutcome>, SourceProcessorError>
 where
     S: LogicalStatementView,
 {
     let Some(first) = tokens.first().copied() else {
-        return Ok(false);
+        return Ok(None);
     };
     if first.kind() != TokenKind::Name {
-        return Ok(false);
+        return Ok(None);
     }
 
     let source_name = view.slice(first.span())?;
     let binding = match resolve_binding_name(context.bindings(), source_name) {
         Ok(binding) => binding,
         Err(WordResolutionError::InvalidWordName | WordResolutionError::UndefinedName) => {
-            return Ok(false);
+            return Ok(None);
         }
         Err(WordResolutionError::TargetIsNotWord) => {
             unreachable!("binding-kind resolution does not classify published bindings as non-word")
@@ -499,13 +584,13 @@ where
     };
 
     let ResolvedBinding::SourceWord(id) = binding else {
-        return Ok(false);
+        return Ok(None);
     };
     let Some(source_words) = context.source_words() else {
         return Err(SourceProcessorError::SourceWordContextUnavailable { id });
     };
-    let handler = source_words.lookup_handler(id)?;
-    let syntax_markers = source_words.syntax_markers(id)?;
+    let syntax_markers = source_words.syntax_markers(id)?.to_vec();
+    let source_word_kind = source_words.kind(id)?;
     let operators = context.operators();
     let globals = context.globals.as_deref_mut();
     let mut runtime_publisher =
@@ -527,20 +612,57 @@ where
         BindingAccess::Read(bindings) => NativeSourceWordBindingAccess::Read(bindings),
         BindingAccess::Write(bindings) => NativeSourceWordBindingAccess::Write(bindings),
     };
-    let mut source_word_context = NativeSourceWordContext::new(NativeSourceWordContextParts {
-        view,
-        source_id,
-        tokens,
-        block_reader: Some(SourceBlockReader::new(view, cursor, syntax_markers)),
-        bindings: binding_access,
-        operators,
-        code,
-        local_line_number_prefix,
-        globals,
-        runtime_definitions,
-    });
-    handler(&mut source_word_context)?;
-    Ok(true)
+    match source_word_kind {
+        SourceWordKind::OneShot(handler) => {
+            let mut source_word_context =
+                NativeSourceWordContext::new(NativeSourceWordContextParts {
+                    view,
+                    source_id,
+                    tokens,
+                    block_reader: Some(SourceBlockReader::new(
+                        view,
+                        cursor,
+                        syntax_markers.as_slice(),
+                    )),
+                    bindings: binding_access,
+                    operators,
+                    code,
+                    local_line_number_prefix,
+                    globals,
+                    runtime_definitions,
+                });
+            handler(&mut source_word_context)?;
+            Ok(Some(StatementCompileOutcome::Complete))
+        }
+        SourceWordKind::Structured(structured) => {
+            let mut source_word_context =
+                NativeSourceWordContext::new(NativeSourceWordContextParts {
+                    view,
+                    source_id,
+                    tokens,
+                    // #1546 keeps structured starter validation statement-local:
+                    // source traversal remains owned by the source processor.
+                    block_reader: None,
+                    bindings: binding_access,
+                    operators,
+                    code,
+                    local_line_number_prefix,
+                    globals,
+                    runtime_definitions,
+                });
+            let start_handler = structured.start_handler();
+            let state = start_handler(&mut source_word_context)?;
+            Ok(Some(StatementCompileOutcome::StartedStructured(
+                StructuredSourceWordFrame {
+                    progress: structured.grammar().start(),
+                    syntax_markers,
+                    state,
+                    marker_handler: structured.marker_handler(),
+                    completion_handler: structured.completion_handler(),
+                },
+            )))
+        }
+    }
 }
 
 fn compile_simple_tokens(
@@ -1036,6 +1158,19 @@ impl<'source, 'statements, S> LogicalStatementCursor<'source, 'statements, S> {
         self.position += 1;
         Some(statement)
     }
+
+    fn block_statement(
+        &self,
+        statement: &'statements S,
+    ) -> Result<SourceBlockStatement<'statements>, SourceWordError>
+    where
+        S: LogicalStatementView,
+    {
+        let span = statement
+            .span(self.view, self.source_id)
+            .map_err(|source| SourceWordError::Source { source })?;
+        Ok(SourceBlockStatement::new(statement.tokens(), span))
+    }
 }
 
 impl<'statements, S> SourceBlockCursor<'statements> for LogicalStatementCursor<'_, 'statements, S>
@@ -1052,13 +1187,7 @@ where
             }));
         };
 
-        let span = statement
-            .span(self.view, self.source_id)
-            .map_err(|source| SourceWordError::Source { source })?;
-        Ok(SourceBlockRead::Statement(SourceBlockStatement::new(
-            statement.tokens(),
-            span,
-        )))
+        Ok(SourceBlockRead::Statement(self.block_statement(statement)?))
     }
 }
 
@@ -1673,7 +1802,8 @@ mod tests {
     use crate::binding::{Binding, Bindings};
     use crate::bootstrap::{
         register_builtin_global_variables, register_builtin_source_words,
-        register_native_source_word, register_native_source_word_with_markers, register_primitive,
+        register_native_source_word, register_native_source_word_with_markers,
+        register_native_structured_source_word, register_primitive,
     };
     use crate::global_variable::{GlobalVarId, GlobalVariables};
     use crate::instruction::InstructionSequence;
@@ -1688,8 +1818,12 @@ mod tests {
         InstructionSourceMapping, SourceMappingLookup, SourceMappingLookupError,
     };
     use crate::source_word::{
-        DefSyntaxErrorKind, LetSyntaxErrorKind, NativeSourceWordContext, SourceBlockItem,
+        DefSyntaxErrorKind, LetSyntaxErrorKind, NativeSourceWordContext,
+        NativeStructuredSourceWordMarkerContext, NativeStructuredSourceWordState, SourceBlockItem,
         SourceWordRegistry, SourceWordSyntaxMarker, SourceWordSyntaxMarkerRole, VarSyntaxErrorKind,
+    };
+    use crate::structured_grammar::{
+        GrammarProgressError, MarkerCardinality, MarkerGroup, MarkerIdentity, StructuredGrammar,
     };
     use crate::word::{CompletedWordDefinition, PrimitiveId, PublishedWords, WordId};
     use crate::word_lookup::PublishedWordLookup;
@@ -2266,6 +2400,63 @@ mod tests {
 
     fn marker(input: &str, role: SourceWordSyntaxMarkerRole) -> SourceWordSyntaxMarker {
         SourceWordSyntaxMarker::new(name(input), role)
+    }
+
+    fn marker_identity(input: &str) -> MarkerIdentity {
+        MarkerIdentity::new(name(input))
+    }
+
+    fn marker_group(input: &str, cardinality: MarkerCardinality) -> MarkerGroup {
+        MarkerGroup::new(marker_identity(input), cardinality)
+    }
+
+    fn structured_grammar(groups: Vec<MarkerGroup>, terminator: &str) -> StructuredGrammar {
+        StructuredGrammar::new(groups, Some(marker_identity(terminator)))
+            .expect("test structured grammar should be valid")
+    }
+
+    #[derive(Debug)]
+    struct TestStructuredState {
+        marker_count: i16,
+    }
+
+    impl NativeStructuredSourceWordState for TestStructuredState {
+        fn as_any(&mut self) -> &mut dyn std::any::Any {
+            self
+        }
+    }
+
+    fn start_structured_fixture(
+        context: &mut NativeSourceWordContext<'_, '_>,
+    ) -> Result<Box<dyn NativeStructuredSourceWordState>, SourceWordError> {
+        assert!(
+            context.block_reader_mut().is_none(),
+            "structured starters must not receive cursor traversal"
+        );
+        let first = context.source_word_token();
+        context.append_mapped(Instruction::Push(value(40)), first.span())?;
+        Ok(Box::new(TestStructuredState { marker_count: 0 }))
+    }
+
+    fn handle_structured_marker_fixture(
+        context: &mut NativeStructuredSourceWordMarkerContext<'_, '_>,
+    ) -> Result<(), SourceWordError> {
+        let remaining_len = context.remaining_tokens().len() as i16;
+        let state = context
+            .state_mut::<TestStructuredState>()
+            .expect("test structured state should downcast");
+        state.marker_count += 1;
+        let emitted = 10 + state.marker_count + remaining_len;
+        context.append_mapped(Instruction::Push(value(emitted)), context.marker().span())
+    }
+
+    fn complete_structured_fixture(
+        context: &mut NativeStructuredSourceWordMarkerContext<'_, '_>,
+    ) -> Result<(), SourceWordError> {
+        if let Some(token) = context.remaining_tokens().first().copied() {
+            return Err(SourceWordError::UnsupportedSourceWord { span: token.span() });
+        }
+        context.append_mapped(Instruction::Push(value(30)), context.marker().span())
     }
 
     fn completed_primitive(slot: usize) -> CompletedWordDefinition {
@@ -5285,6 +5476,264 @@ mod tests {
         assert_eq!(
             unit.instructions().get(address(1)),
             Ok(&Instruction::Push(value(99)))
+        );
+    }
+
+    #[test]
+    fn structured_source_word_processes_body_marker_completion_and_resume_in_source_order() {
+        let mut source_words = SourceWordRegistry::new();
+        let mut bindings = Bindings::new();
+        register_native_structured_source_word(
+            &mut source_words,
+            &mut bindings,
+            name("STRUCT"),
+            structured_grammar(
+                vec![marker_group("PART", MarkerCardinality::ZeroOrMore)],
+                "ENDSTRUCT",
+            ),
+            start_structured_fixture,
+            handle_structured_marker_fixture,
+            complete_structured_fixture,
+        )
+        .expect("structured source word should register");
+        register_native_source_word(
+            &mut source_words,
+            &mut bindings,
+            name("SOURCE_MARKER"),
+            emit_source_word_marker,
+        )
+        .expect("source word should register");
+        let mut words = PublishedWords::new();
+        let primitive = words.add(completed_primitive(0));
+        bindings
+            .insert_new(name("PUSH7"), Binding::Word(primitive))
+            .expect("runtime word should register");
+        let (sources, source_id) = source("STRUCT\nPUSH7\nPART BODY\nENDSTRUCT\nSOURCE_MARKER");
+
+        let unit = compile_source(
+            sources.view(),
+            source_id,
+            SourceCompileContext::with_source_words(&bindings, source_words.lookup()),
+        )
+        .expect("structured source should compile");
+
+        assert_eq!(
+            unit.instructions().get(address(0)),
+            Ok(&Instruction::Push(value(40)))
+        );
+        assert_eq!(
+            unit.instructions().get(address(1)),
+            Ok(&Instruction::Call(primitive))
+        );
+        assert_eq!(
+            unit.instructions().get(address(2)),
+            Ok(&Instruction::Push(value(12)))
+        );
+        assert_eq!(
+            unit.instructions().get(address(3)),
+            Ok(&Instruction::Push(value(30)))
+        );
+        assert_eq!(
+            unit.instructions().get(address(4)),
+            Ok(&Instruction::Push(value(99)))
+        );
+        assert_eq!(unit.instructions().get(address(5)), Ok(&Instruction::Halt));
+        assert_eq!(
+            unit.source_span(location(&unit, 2)),
+            Ok(Some(span(sources.view(), source_id, 13, 22)))
+        );
+    }
+
+    #[test]
+    fn nested_same_owner_structured_words_suspend_and_resume_parent() {
+        let mut source_words = SourceWordRegistry::new();
+        let mut bindings = Bindings::new();
+        register_native_structured_source_word(
+            &mut source_words,
+            &mut bindings,
+            name("BOX"),
+            structured_grammar(
+                vec![marker_group("CUT", MarkerCardinality::ZeroOrMore)],
+                "ENDBOX",
+            ),
+            start_structured_fixture,
+            handle_structured_marker_fixture,
+            complete_structured_fixture,
+        )
+        .expect("structured source word should register");
+        let (sources, source_id) = source("BOX\nBOX\nCUT\nENDBOX\nCUT\nENDBOX");
+
+        let unit = compile_source(
+            sources.view(),
+            source_id,
+            SourceCompileContext::with_source_words(&bindings, source_words.lookup()),
+        )
+        .expect("nested structured source should compile");
+
+        assert_eq!(
+            (0..6)
+                .map(|index| unit.instructions().get(address(index)).copied())
+                .collect::<Result<Vec<_>, _>>()
+                .expect("instructions should exist"),
+            [
+                Instruction::Push(value(40)),
+                Instruction::Push(value(40)),
+                Instruction::Push(value(11)),
+                Instruction::Push(value(30)),
+                Instruction::Push(value(11)),
+                Instruction::Push(value(30)),
+            ]
+        );
+    }
+
+    #[test]
+    fn current_owner_marker_grammar_error_does_not_fallback_to_normal_statement() {
+        let mut source_words = SourceWordRegistry::new();
+        let mut bindings = Bindings::new();
+        register_native_structured_source_word(
+            &mut source_words,
+            &mut bindings,
+            name("IFX"),
+            structured_grammar(
+                vec![marker_group("ELSE", MarkerCardinality::Optional)],
+                "ENDIF",
+            ),
+            start_structured_fixture,
+            handle_structured_marker_fixture,
+            complete_structured_fixture,
+        )
+        .expect("structured source word should register");
+        let (sources, source_id) = source("IFX\nELSE\nELSE\nENDIF");
+
+        let error = compile_source(
+            sources.view(),
+            source_id,
+            SourceCompileContext::with_source_words(&bindings, source_words.lookup()),
+        )
+        .expect_err("second ELSE should be rejected by structured grammar");
+
+        assert_eq!(
+            error,
+            SourceProcessorError::SourceWord(SourceWordError::StructuredGrammar {
+                span: span(sources.view(), source_id, 9, 13),
+                source: GrammarProgressError::CardinalityExceeded { group_index: 0 }
+            })
+        );
+    }
+
+    #[test]
+    fn child_processing_does_not_classify_ancestor_marker() {
+        let mut source_words = SourceWordRegistry::new();
+        let mut bindings = Bindings::new();
+        register_native_structured_source_word(
+            &mut source_words,
+            &mut bindings,
+            name("OUTER"),
+            structured_grammar(Vec::new(), "OUT_END"),
+            start_structured_fixture,
+            handle_structured_marker_fixture,
+            complete_structured_fixture,
+        )
+        .expect("outer source word should register");
+        register_native_structured_source_word(
+            &mut source_words,
+            &mut bindings,
+            name("INNER"),
+            structured_grammar(Vec::new(), "IN_END"),
+            start_structured_fixture,
+            handle_structured_marker_fixture,
+            complete_structured_fixture,
+        )
+        .expect("inner source word should register");
+        let (sources, source_id) = source("OUTER\nINNER\nOUT_END\nIN_END\nOUT_END");
+
+        let error = compile_source(
+            sources.view(),
+            source_id,
+            SourceCompileContext::with_source_words(&bindings, source_words.lookup()),
+        )
+        .expect_err("ancestor marker should be an ordinary child-body statement");
+
+        assert_eq!(
+            error,
+            SourceProcessorError::Compile(CompileError {
+                span: span(sources.view(), source_id, 12, 19),
+                kind: CompileErrorKind::WordResolution {
+                    source: WordResolutionError::UndefinedName
+                },
+            })
+        );
+    }
+
+    #[test]
+    fn eof_reports_missing_terminator_for_innermost_structured_owner() {
+        let mut source_words = SourceWordRegistry::new();
+        let mut bindings = Bindings::new();
+        register_native_structured_source_word(
+            &mut source_words,
+            &mut bindings,
+            name("OUTER"),
+            structured_grammar(Vec::new(), "OUT_END"),
+            start_structured_fixture,
+            handle_structured_marker_fixture,
+            complete_structured_fixture,
+        )
+        .expect("outer source word should register");
+        register_native_structured_source_word(
+            &mut source_words,
+            &mut bindings,
+            name("INNER"),
+            structured_grammar(Vec::new(), "IN_END"),
+            start_structured_fixture,
+            handle_structured_marker_fixture,
+            complete_structured_fixture,
+        )
+        .expect("inner source word should register");
+        let (sources, source_id) = source("OUTER\nINNER");
+
+        let error = compile_source(
+            sources.view(),
+            source_id,
+            SourceCompileContext::with_source_words(&bindings, source_words.lookup()),
+        )
+        .expect_err("innermost unfinished owner should report missing terminator");
+
+        assert_eq!(
+            error,
+            SourceProcessorError::SourceWord(SourceWordError::StructuredMissingTerminator {
+                span: span(sources.view(), source_id, 11, 11)
+            })
+        );
+    }
+
+    #[test]
+    fn legal_terminator_owner_completion_failure_keeps_structured_instance_failed() {
+        let mut source_words = SourceWordRegistry::new();
+        let mut bindings = Bindings::new();
+        register_native_structured_source_word(
+            &mut source_words,
+            &mut bindings,
+            name("BOX"),
+            structured_grammar(Vec::new(), "ENDBOX"),
+            start_structured_fixture,
+            handle_structured_marker_fixture,
+            complete_structured_fixture,
+        )
+        .expect("structured source word should register");
+        let (sources, source_id) = source("BOX\nENDBOX FAIL\nENDBOX");
+
+        let error = compile_source(
+            sources.view(),
+            source_id,
+            SourceCompileContext::with_source_words(&bindings, source_words.lookup()),
+        )
+        .expect_err("terminator payload should fail owner completion");
+
+        assert_eq!(
+            error,
+            SourceProcessorError::SourceWord(SourceWordError::UnsupportedSourceWord {
+                span: span(sources.view(), source_id, 11, 15)
+            })
         );
     }
 

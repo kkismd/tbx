@@ -9,6 +9,7 @@ use crate::lexer::{LexError, Token, TokenKind};
 use crate::name::{NameError, NormalizedName};
 use crate::operator::OperatorLookup;
 use crate::source::{SourceError, SourceId, SourceSpan, SourceView};
+use crate::structured_grammar::StructuredGrammar;
 use crate::word::WordId;
 use crate::word_resolution::{resolve_binding_name, ResolvedBinding, WordResolutionError};
 
@@ -34,6 +35,18 @@ impl SourceWordId {
 
 pub(crate) type NativeSourceWordHandler =
     fn(&mut NativeSourceWordContext<'_, '_>) -> Result<(), SourceWordError>;
+
+pub(crate) type NativeStructuredSourceWordStartHandler =
+    fn(
+        &mut NativeSourceWordContext<'_, '_>,
+    ) -> Result<Box<dyn NativeStructuredSourceWordState>, SourceWordError>;
+
+pub(crate) type NativeStructuredSourceWordMarkerHandler =
+    fn(&mut NativeStructuredSourceWordMarkerContext<'_, '_>) -> Result<(), SourceWordError>;
+
+pub(crate) trait NativeStructuredSourceWordState {
+    fn as_any(&mut self) -> &mut dyn std::any::Any;
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum SourceWordSyntaxMarkerRole {
@@ -142,11 +155,19 @@ pub(crate) enum SourceWordError {
     DefBindingCommitInvariantViolated {
         span: SourceSpan,
     },
+    StructuredMissingTerminator {
+        span: SourceSpan,
+    },
+    StructuredGrammar {
+        span: SourceSpan,
+        source: crate::structured_grammar::GrammarProgressError,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum SourceWordLookupError {
     InvalidSourceWordId { id: SourceWordId },
+    SourceWordKindMismatch { id: SourceWordId },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -194,7 +215,9 @@ impl SourceWordError {
             | Self::DefBodyCompile { span }
             | Self::DefBodyBuild { span }
             | Self::DefDefinition { span }
-            | Self::DefBindingCommitInvariantViolated { span } => Some(span),
+            | Self::DefBindingCommitInvariantViolated { span }
+            | Self::StructuredMissingTerminator { span }
+            | Self::StructuredGrammar { span, .. } => Some(span),
             Self::DefLex { source } => match source {
                 LexError::Source(_) => None,
                 LexError::InvalidCharacter { span, .. } => Some(span),
@@ -387,28 +410,34 @@ impl<'source, 'cursor> SourceBlockReader<'source, 'cursor> {
         // #1513/#1516: structured matching is owner-declaration driven and
         // complete-statement based. The outer reader must not raw-scan nested
         // marker spellings or treat another source word's markers as its own.
-        let Some(token) = statement.leading_name() else {
-            return Ok(None);
-        };
-        let source_name = self
-            .view
-            .slice(token.span())
-            .map_err(|source| SourceWordError::Source { source })?;
-        let Ok(name) = NormalizedName::new(source_name) else {
-            return Ok(None);
-        };
-
-        Ok(self
-            .syntax_markers
-            .iter()
-            .find(|marker| marker.name() == &name)
-            .map(|marker| SourceBlockMarker {
-                statement,
-                token,
-                name,
-                role: marker.role(),
-            }))
+        classify_source_block_marker(self.view, statement, self.syntax_markers)
     }
+}
+
+pub(crate) fn classify_source_block_marker<'source>(
+    view: SourceView<'source>,
+    statement: SourceBlockStatement<'source>,
+    syntax_markers: &[SourceWordSyntaxMarker],
+) -> Result<Option<SourceBlockMarker<'source>>, SourceWordError> {
+    let Some(token) = statement.leading_name() else {
+        return Ok(None);
+    };
+    let source_name = view
+        .slice(token.span())
+        .map_err(|source| SourceWordError::Source { source })?;
+    let Ok(name) = NormalizedName::new(source_name) else {
+        return Ok(None);
+    };
+
+    Ok(syntax_markers
+        .iter()
+        .find(|marker| marker.name() == &name)
+        .map(|marker| SourceBlockMarker {
+            statement,
+            token,
+            name,
+            role: marker.role(),
+        }))
 }
 
 /// Forward-only reader over the body of one completed logical statement.
@@ -524,6 +553,14 @@ pub(crate) struct NativeSourceWordContext<'source, 'state> {
     local_line_number_prefix: Option<SourceSpan>,
     globals: Option<&'state mut GlobalVariables>,
     runtime_definitions: Option<&'state mut dyn RuntimeDefinitionPublisher<'source>>,
+}
+
+pub(crate) struct NativeStructuredSourceWordMarkerContext<'source, 'state> {
+    view: SourceView<'source>,
+    source_id: SourceId,
+    marker: SourceBlockMarker<'source>,
+    state: &'state mut dyn NativeStructuredSourceWordState,
+    code: &'state mut dyn InstructionBuildTarget,
 }
 
 pub(crate) struct NativeSourceWordContextParts<'source, 'state> {
@@ -729,6 +766,55 @@ impl<'source, 'state> NativeSourceWordContext<'source, 'state> {
             NativeSourceWordBindingAccess::Read(bindings) => bindings,
             NativeSourceWordBindingAccess::Write(bindings) => bindings,
         }
+    }
+}
+
+impl<'source, 'state> NativeStructuredSourceWordMarkerContext<'source, 'state> {
+    pub(crate) const fn new(
+        view: SourceView<'source>,
+        source_id: SourceId,
+        marker: SourceBlockMarker<'source>,
+        state: &'state mut dyn NativeStructuredSourceWordState,
+        code: &'state mut dyn InstructionBuildTarget,
+    ) -> Self {
+        Self {
+            view,
+            source_id,
+            marker,
+            state,
+            code,
+        }
+    }
+
+    pub(crate) const fn view(&self) -> SourceView<'source> {
+        self.view
+    }
+
+    pub(crate) const fn source_id(&self) -> SourceId {
+        self.source_id
+    }
+
+    pub(crate) const fn marker(&self) -> &SourceBlockMarker<'source> {
+        &self.marker
+    }
+
+    pub(crate) fn remaining_tokens(&self) -> &'source [Token] {
+        self.marker.remaining_tokens()
+    }
+
+    pub(crate) fn state_mut<T: 'static>(&mut self) -> Option<&mut T> {
+        self.state.as_any().downcast_mut::<T>()
+    }
+
+    pub(crate) fn append_mapped(
+        &mut self,
+        instruction: Instruction,
+        span: SourceSpan,
+    ) -> Result<(), SourceWordError> {
+        self.code
+            .append_mapped(instruction, span)
+            .map(|_| ())
+            .map_err(|source| SourceWordError::InstructionBuild { source })
     }
 }
 
@@ -962,8 +1048,70 @@ pub(crate) struct SourceWordRegistry {
 
 #[derive(Debug, Clone)]
 struct SourceWordEntry {
-    handler: NativeSourceWordHandler,
+    kind: SourceWordEntryKind,
     syntax_markers: Vec<SourceWordSyntaxMarker>,
+}
+
+#[derive(Debug, Clone)]
+enum SourceWordEntryKind {
+    OneShot(NativeSourceWordHandler),
+    Structured(NativeStructuredSourceWord),
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct NativeStructuredSourceWord {
+    grammar: StructuredGrammar,
+    start_handler: NativeStructuredSourceWordStartHandler,
+    marker_handler: NativeStructuredSourceWordMarkerHandler,
+    completion_handler: NativeStructuredSourceWordMarkerHandler,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum SourceWordKind<'a> {
+    OneShot(NativeSourceWordHandler),
+    Structured(NativeStructuredSourceWordRef<'a>),
+}
+
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct NativeStructuredSourceWordRef<'a> {
+    grammar: &'a StructuredGrammar,
+    start_handler: NativeStructuredSourceWordStartHandler,
+    marker_handler: NativeStructuredSourceWordMarkerHandler,
+    completion_handler: NativeStructuredSourceWordMarkerHandler,
+}
+
+impl NativeStructuredSourceWord {
+    fn new(
+        grammar: StructuredGrammar,
+        start_handler: NativeStructuredSourceWordStartHandler,
+        marker_handler: NativeStructuredSourceWordMarkerHandler,
+        completion_handler: NativeStructuredSourceWordMarkerHandler,
+    ) -> Self {
+        Self {
+            grammar,
+            start_handler,
+            marker_handler,
+            completion_handler,
+        }
+    }
+}
+
+impl<'a> NativeStructuredSourceWordRef<'a> {
+    pub(crate) const fn grammar(self) -> &'a StructuredGrammar {
+        self.grammar
+    }
+
+    pub(crate) const fn start_handler(self) -> NativeStructuredSourceWordStartHandler {
+        self.start_handler
+    }
+
+    pub(crate) const fn marker_handler(self) -> NativeStructuredSourceWordMarkerHandler {
+        self.marker_handler
+    }
+
+    pub(crate) const fn completion_handler(self) -> NativeStructuredSourceWordMarkerHandler {
+        self.completion_handler
+    }
 }
 
 impl SourceWordRegistry {
@@ -982,7 +1130,28 @@ impl SourceWordRegistry {
     ) -> SourceWordId {
         let id = SourceWordId::from_slot(self.entries.len());
         self.entries.push(SourceWordEntry {
-            handler,
+            kind: SourceWordEntryKind::OneShot(handler),
+            syntax_markers,
+        });
+        id
+    }
+
+    pub(crate) fn register_structured(
+        &mut self,
+        grammar: StructuredGrammar,
+        start_handler: NativeStructuredSourceWordStartHandler,
+        marker_handler: NativeStructuredSourceWordMarkerHandler,
+        completion_handler: NativeStructuredSourceWordMarkerHandler,
+    ) -> SourceWordId {
+        let syntax_markers = syntax_markers_for_grammar(&grammar);
+        let id = SourceWordId::from_slot(self.entries.len());
+        self.entries.push(SourceWordEntry {
+            kind: SourceWordEntryKind::Structured(NativeStructuredSourceWord::new(
+                grammar,
+                start_handler,
+                marker_handler,
+                completion_handler,
+            )),
             syntax_markers,
         });
         id
@@ -1007,6 +1176,28 @@ pub(crate) struct SourceWordLookup<'a> {
 }
 
 impl<'a> SourceWordLookup<'a> {
+    pub(crate) fn kind(
+        self,
+        id: SourceWordId,
+    ) -> Result<SourceWordKind<'a>, SourceWordLookupError> {
+        let entry = self
+            .registry
+            .entries
+            .get(id.as_slot())
+            .ok_or(SourceWordLookupError::InvalidSourceWordId { id })?;
+        Ok(match &entry.kind {
+            SourceWordEntryKind::OneShot(handler) => SourceWordKind::OneShot(*handler),
+            SourceWordEntryKind::Structured(word) => {
+                SourceWordKind::Structured(NativeStructuredSourceWordRef {
+                    grammar: &word.grammar,
+                    start_handler: word.start_handler,
+                    marker_handler: word.marker_handler,
+                    completion_handler: word.completion_handler,
+                })
+            }
+        })
+    }
+
     pub(crate) fn lookup_handler(
         self,
         id: SourceWordId,
@@ -1014,8 +1205,13 @@ impl<'a> SourceWordLookup<'a> {
         self.registry
             .entries
             .get(id.as_slot())
-            .map(|entry| entry.handler)
             .ok_or(SourceWordLookupError::InvalidSourceWordId { id })
+            .and_then(|entry| match entry.kind {
+                SourceWordEntryKind::OneShot(handler) => Ok(handler),
+                SourceWordEntryKind::Structured(_) => {
+                    Err(SourceWordLookupError::SourceWordKindMismatch { id })
+                }
+            })
     }
 
     pub(crate) fn syntax_markers(
@@ -1028,6 +1224,26 @@ impl<'a> SourceWordLookup<'a> {
             .map(|entry| entry.syntax_markers.as_slice())
             .ok_or(SourceWordLookupError::InvalidSourceWordId { id })
     }
+}
+
+pub(crate) fn syntax_markers_for_grammar(
+    grammar: &StructuredGrammar,
+) -> Vec<SourceWordSyntaxMarker> {
+    let mut markers = grammar
+        .groups()
+        .iter()
+        .map(|group| {
+            SourceWordSyntaxMarker::new(
+                group.marker().name().clone(),
+                SourceWordSyntaxMarkerRole::BlockContinuation,
+            )
+        })
+        .collect::<Vec<_>>();
+    markers.push(SourceWordSyntaxMarker::new(
+        grammar.terminator().name().clone(),
+        SourceWordSyntaxMarkerRole::BlockTerminator,
+    ));
+    markers
 }
 
 #[cfg(test)]

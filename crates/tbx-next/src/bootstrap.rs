@@ -2,9 +2,12 @@ use crate::binding::{Binding, BindingInsertError, Bindings};
 use crate::global_variable::{GlobalVarId, GlobalVariables};
 use crate::name::NormalizedName;
 use crate::source_word::{
-    def_source_word, let_source_word, var_source_word, NativeSourceWordHandler, SourceWordId,
-    SourceWordRegistry, SourceWordSyntaxMarker,
+    def_source_word, let_source_word, syntax_markers_for_grammar, var_source_word,
+    NativeSourceWordHandler, NativeStructuredSourceWordMarkerHandler,
+    NativeStructuredSourceWordStartHandler, SourceWordId, SourceWordRegistry,
+    SourceWordSyntaxMarker,
 };
+use crate::structured_grammar::StructuredGrammar;
 use crate::word::{CompletedWordDefinition, PrimitiveId, PublishedWords, WordId};
 
 const BUILTIN_GLOBAL_VARIABLE_NAMES: [&str; 26] = [
@@ -122,6 +125,38 @@ pub(crate) fn register_native_source_word_with_markers(
         .map_err(SourceWordBootstrapError::from_precheck_error)?;
 
     let id = source_words.register_with_markers(handler, syntax_markers);
+
+    bindings
+        .insert_new_source_word_with_markers(name, id, &marker_names)
+        .map_err(SourceWordBootstrapError::from_binding_insert_error)?;
+
+    Ok(id)
+}
+
+pub(crate) fn register_native_structured_source_word(
+    source_words: &mut SourceWordRegistry,
+    bindings: &mut Bindings,
+    name: NormalizedName,
+    grammar: StructuredGrammar,
+    start_handler: NativeStructuredSourceWordStartHandler,
+    marker_handler: NativeStructuredSourceWordMarkerHandler,
+    completion_handler: NativeStructuredSourceWordMarkerHandler,
+) -> Result<SourceWordId, SourceWordBootstrapError> {
+    let marker_names = syntax_markers_for_grammar(&grammar)
+        .iter()
+        .map(|marker| marker.name().clone())
+        .collect::<Vec<_>>();
+
+    bindings
+        .validate_new_source_word_with_markers(&name, &marker_names)
+        .map_err(SourceWordBootstrapError::from_precheck_error)?;
+
+    let id = source_words.register_structured(
+        grammar,
+        start_handler,
+        marker_handler,
+        completion_handler,
+    );
 
     bindings
         .insert_new_source_word_with_markers(name, id, &marker_names)
