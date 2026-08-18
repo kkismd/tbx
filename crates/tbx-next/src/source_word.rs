@@ -292,6 +292,13 @@ impl<'source> SourceBlockStatement<'source> {
         self.span
     }
 
+    pub(crate) fn leading_name(self) -> Option<Token> {
+        self.tokens
+            .first()
+            .copied()
+            .filter(|token| token.kind() == TokenKind::Name)
+    }
+
     pub(crate) fn standalone_name(self) -> Option<Token> {
         match self.tokens {
             [token] if token.kind() == TokenKind::Name => Some(*token),
@@ -307,6 +314,11 @@ impl<'source> SourceBlockMarker<'source> {
 
     pub(crate) const fn token(&self) -> Token {
         self.token
+    }
+
+    pub(crate) fn remaining_tokens(&self) -> &'source [Token] {
+        let marker_len = usize::from(!self.statement.tokens().is_empty());
+        &self.statement.tokens()[marker_len..]
     }
 
     pub(crate) fn name(&self) -> &NormalizedName {
@@ -375,7 +387,7 @@ impl<'source, 'cursor> SourceBlockReader<'source, 'cursor> {
         // #1513/#1516: structured matching is owner-declaration driven and
         // complete-statement based. The outer reader must not raw-scan nested
         // marker spellings or treat another source word's markers as its own.
-        let Some(token) = statement.standalone_name() else {
+        let Some(token) = statement.leading_name() else {
             return Ok(None);
         };
         let source_name = self
@@ -1042,6 +1054,58 @@ mod tests {
         (sources, source_id, tokens)
     }
 
+    struct OneStatementCursor<'source> {
+        next: Option<SourceBlockStatement<'source>>,
+        eof_span: SourceSpan,
+    }
+
+    impl<'source> OneStatementCursor<'source> {
+        fn new(statement: SourceBlockStatement<'source>, eof_span: SourceSpan) -> Self {
+            Self {
+                next: Some(statement),
+                eof_span,
+            }
+        }
+    }
+
+    impl<'source> SourceBlockCursor<'source> for OneStatementCursor<'source> {
+        fn read_next_block_statement(
+            &mut self,
+        ) -> Result<SourceBlockRead<'source>, SourceWordError> {
+            Ok(self.next.take().map_or(
+                SourceBlockRead::Terminal(SourceBlockTerminal::Eof {
+                    span: self.eof_span,
+                }),
+                SourceBlockRead::Statement,
+            ))
+        }
+    }
+
+    fn syntax_marker(input: &str, role: SourceWordSyntaxMarkerRole) -> SourceWordSyntaxMarker {
+        SourceWordSyntaxMarker::new(
+            NormalizedName::new(input).expect("test marker name should normalize"),
+            role,
+        )
+    }
+
+    fn with_next_block_item(
+        text: &str,
+        syntax_markers: &[SourceWordSyntaxMarker],
+        inspect: impl FnOnce(SourceView<'_>, SourceId, &[Token], SourceBlockItem<'_>),
+    ) {
+        let (sources, source_id, tokens) = statement_tokens(text);
+        let statement_span = span(sources.view(), source_id, 0, text.len());
+        let statement = SourceBlockStatement::new(&tokens, statement_span);
+        let mut cursor = OneStatementCursor::new(statement, statement_span);
+        let mut reader = SourceBlockReader::new(sources.view(), &mut cursor, syntax_markers);
+
+        let item = reader
+            .next_item()
+            .expect("test block item should classify without error");
+
+        inspect(sources.view(), source_id, &tokens, item);
+    }
+
     fn span(view: SourceView<'_>, source_id: SourceId, start: usize, end: usize) -> SourceSpan {
         view.span(source_id, start, end)
             .expect("test span should be valid")
@@ -1050,6 +1114,140 @@ mod tests {
     fn push_one(context: &mut NativeSourceWordContext<'_, '_>) -> Result<(), SourceWordError> {
         let first = context.source_word_token();
         context.append_mapped(Instruction::Push(Value::integer(1)), first.span())
+    }
+
+    #[test]
+    fn block_reader_classifies_standalone_leading_marker_with_empty_remainder() {
+        let markers = [syntax_marker(
+            "ELSE",
+            SourceWordSyntaxMarkerRole::BlockContinuation,
+        )];
+
+        with_next_block_item("ELSE", &markers, |view, source_id, _tokens, item| {
+            let SourceBlockItem::Marker(marker) = item else {
+                panic!("standalone leading marker should classify");
+            };
+
+            assert_eq!(marker.name().as_str(), "ELSE");
+            assert_eq!(marker.role(), SourceWordSyntaxMarkerRole::BlockContinuation);
+            assert_eq!(marker.statement().span(), span(view, source_id, 0, 4));
+            assert_eq!(marker.span(), span(view, source_id, 0, 4));
+            assert_eq!(marker.token().span(), span(view, source_id, 0, 4));
+            assert!(marker.remaining_tokens().is_empty());
+        });
+    }
+
+    #[test]
+    fn block_reader_classifies_leading_marker_with_nonempty_remainder() {
+        let markers = [syntax_marker(
+            "ELSIF",
+            SourceWordSyntaxMarkerRole::BlockContinuation,
+        )];
+
+        with_next_block_item("ELSIF X > 0", &markers, |view, source_id, _tokens, item| {
+            let SourceBlockItem::Marker(marker) = item else {
+                panic!("leading marker with payload should classify");
+            };
+
+            assert_eq!(marker.name().as_str(), "ELSIF");
+            assert_eq!(marker.statement().span(), span(view, source_id, 0, 11));
+            assert_eq!(marker.span(), span(view, source_id, 0, 11));
+            assert_eq!(marker.token().span(), span(view, source_id, 0, 5));
+            assert_eq!(
+                marker
+                    .remaining_tokens()
+                    .iter()
+                    .map(|token| token.kind())
+                    .collect::<Vec<_>>(),
+                [
+                    TokenKind::Name,
+                    TokenKind::Greater,
+                    TokenKind::IntegerLiteral
+                ]
+            );
+            assert_eq!(
+                marker.remaining_tokens().first().map(|token| token.span()),
+                Some(span(view, source_id, 6, 7))
+            );
+        });
+    }
+
+    #[test]
+    fn block_reader_uses_only_leading_name_for_marker_identity() {
+        let markers = [syntax_marker(
+            "CASE",
+            SourceWordSyntaxMarkerRole::BlockContinuation,
+        )];
+
+        with_next_block_item("CASE 1 +", &markers, |_view, _source_id, _tokens, item| {
+            let SourceBlockItem::Marker(marker) = item else {
+                panic!("payload syntax should not affect marker identity");
+            };
+
+            assert_eq!(marker.name().as_str(), "CASE");
+            assert_eq!(marker.remaining_tokens().len(), 2);
+        });
+    }
+
+    #[test]
+    fn block_reader_does_not_classify_undeclared_leading_name() {
+        let markers = [syntax_marker(
+            "ELSE",
+            SourceWordSyntaxMarkerRole::BlockContinuation,
+        )];
+
+        with_next_block_item("ELSIF X", &markers, |view, source_id, tokens, item| {
+            let SourceBlockItem::Statement(statement) = item else {
+                panic!("undeclared leading name should remain a statement");
+            };
+
+            assert_eq!(statement.tokens(), tokens);
+            assert_eq!(statement.span(), span(view, source_id, 0, 7));
+        });
+    }
+
+    #[test]
+    fn block_reader_does_not_scan_marker_name_after_statement_start() {
+        let markers = [syntax_marker(
+            "ELSE",
+            SourceWordSyntaxMarkerRole::BlockContinuation,
+        )];
+
+        with_next_block_item(
+            "PRINT ELSE",
+            &markers,
+            |_view, _source_id, _tokens, item| {
+                assert!(matches!(item, SourceBlockItem::Statement(_)));
+            },
+        );
+    }
+
+    #[test]
+    fn block_reader_does_not_classify_name_after_line_number_prefix() {
+        let markers = [syntax_marker(
+            "ELSE",
+            SourceWordSyntaxMarkerRole::BlockContinuation,
+        )];
+
+        with_next_block_item("100 ELSE", &markers, |_view, _source_id, _tokens, item| {
+            assert!(matches!(item, SourceBlockItem::Statement(_)));
+        });
+    }
+
+    #[test]
+    fn block_reader_ignores_marker_declared_only_by_outer_owner() {
+        let child_markers = [syntax_marker(
+            "END",
+            SourceWordSyntaxMarkerRole::BlockTerminator,
+        )];
+
+        with_next_block_item(
+            "ELSE X",
+            &child_markers,
+            |_view, _source_id, _tokens, item| {
+                assert!(matches!(item, SourceBlockItem::Statement(_)));
+            },
+        );
     }
 
     #[test]
