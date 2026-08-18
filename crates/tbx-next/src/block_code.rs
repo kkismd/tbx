@@ -13,6 +13,20 @@ pub(crate) struct BlockCodeBuilder<'a> {
     unresolved_patches: Vec<InstructionAddress>,
 }
 
+/// Owned variant of `BlockCodeBuilder` for processor-managed nested contexts.
+///
+/// Structured source words need a build destination that can live in an owner
+/// frame across multiple statements. The borrow-based `BlockCodeBuilder` stays
+/// the ordinary boundary; this owned form preserves the same local block
+/// contract without giving source-word handlers cursor traversal or parent
+/// target access.
+#[derive(Debug)]
+pub(crate) struct OwnedBlockCodeBuilder {
+    code: SourceMappedCode,
+    block_start: InstructionAddress,
+    unresolved_patches: Vec<InstructionAddress>,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct CompletedBlockCode {
     entry: InstructionAddress,
@@ -187,6 +201,157 @@ impl<'a> BlockCodeBuilder<'a> {
 
         self.unresolved_patches.push(branch);
         Ok(branch)
+    }
+}
+
+impl OwnedBlockCodeBuilder {
+    pub(crate) fn new() -> Self {
+        let code = SourceMappedCode::new();
+        let block_start = InstructionAddress::from_index(code.len());
+        Self {
+            code,
+            block_start,
+            unresolved_patches: Vec::new(),
+        }
+    }
+
+    pub(crate) fn current_address(&self) -> InstructionAddress {
+        InstructionAddress::from_index(self.code.len())
+    }
+
+    pub(crate) fn current_len(&self) -> usize {
+        self.code.len()
+    }
+
+    pub(crate) fn append_mapped(
+        &mut self,
+        instruction: Instruction,
+        span: SourceSpan,
+    ) -> Result<InstructionAddress, BlockCodeBuildError> {
+        reject_direct_branch_instruction(instruction)?;
+        self.code
+            .append_mapped(instruction, span)
+            .map_err(|source| BlockCodeBuildError::SourceMappingAppend { source })
+    }
+
+    pub(crate) fn append_unmapped(
+        &mut self,
+        instruction: Instruction,
+    ) -> Result<InstructionAddress, BlockCodeBuildError> {
+        reject_direct_branch_instruction(instruction)?;
+        self.code
+            .append_unmapped(instruction)
+            .map_err(|source| BlockCodeBuildError::SourceMappingAppend { source })
+    }
+
+    pub(crate) fn append_resolved_mapped(
+        &mut self,
+        instruction: Instruction,
+        span: SourceSpan,
+    ) -> Result<InstructionAddress, BlockCodeBuildError> {
+        self.code
+            .append_mapped(instruction, span)
+            .map_err(|source| BlockCodeBuildError::SourceMappingAppend { source })
+    }
+
+    pub(crate) fn append_resolved_unmapped(
+        &mut self,
+        instruction: Instruction,
+    ) -> Result<InstructionAddress, BlockCodeBuildError> {
+        self.code
+            .append_unmapped(instruction)
+            .map_err(|source| BlockCodeBuildError::SourceMappingAppend { source })
+    }
+
+    pub(crate) fn append_mapped_jump_placeholder(
+        &mut self,
+        span: SourceSpan,
+    ) -> Result<InstructionAddress, BlockCodeBuildError> {
+        self.append_branch_placeholder(
+            Instruction::Jump(InstructionAddress::from_index(0)),
+            Some(span),
+        )
+    }
+
+    pub(crate) fn append_mapped_jump_if_zero_placeholder(
+        &mut self,
+        span: SourceSpan,
+    ) -> Result<InstructionAddress, BlockCodeBuildError> {
+        self.append_branch_placeholder(
+            Instruction::JumpIfZero(InstructionAddress::from_index(0)),
+            Some(span),
+        )
+    }
+
+    pub(crate) fn patch_branch_target(
+        &mut self,
+        branch: InstructionAddress,
+        target: InstructionAddress,
+    ) -> Result<(), BlockCodeBuildError> {
+        self.validate_local_target(branch)?;
+        self.validate_local_target(target)?;
+        let Some(position) = self
+            .unresolved_patches
+            .iter()
+            .position(|pending| *pending == branch)
+        else {
+            return Err(BlockCodeBuildError::UnknownBranchPatch { branch });
+        };
+
+        self.code
+            .patch_branch_target(branch, target)
+            .map_err(|source| BlockCodeBuildError::BranchTargetPatch { source })?;
+
+        self.unresolved_patches.swap_remove(position);
+        Ok(())
+    }
+
+    pub(crate) fn validate_local_target(
+        &self,
+        address: InstructionAddress,
+    ) -> Result<(), BlockCodeBuildError> {
+        if address.as_index() < self.block_start.as_index() || address.as_index() >= self.code.len()
+        {
+            return Err(BlockCodeBuildError::AddressOutsideCurrentBlock { address });
+        }
+
+        Ok(())
+    }
+
+    pub(crate) fn finish(
+        self,
+    ) -> Result<(SourceMappedCode, CompletedBlockCode), BlockCodeBuildError> {
+        if let Some(branch) = self.unresolved_patches.first().copied() {
+            return Err(BlockCodeBuildError::UnresolvedBranchPatch { branch });
+        }
+
+        let completed = CompletedBlockCode {
+            entry: self.block_start,
+            end: self.current_address(),
+        };
+        Ok((self.code, completed))
+    }
+
+    fn append_branch_placeholder(
+        &mut self,
+        instruction: Instruction,
+        span: Option<SourceSpan>,
+    ) -> Result<InstructionAddress, BlockCodeBuildError> {
+        let branch = if let Some(span) = span {
+            self.code.append_mapped(instruction, span)
+        } else {
+            self.code.append_unmapped(instruction)
+        }
+        .map_err(|source| BlockCodeBuildError::SourceMappingAppend { source })?;
+
+        self.unresolved_patches.push(branch);
+        Ok(branch)
+    }
+}
+
+impl Default for OwnedBlockCodeBuilder {
+    fn default() -> Self {
+        Self::new()
     }
 }
 

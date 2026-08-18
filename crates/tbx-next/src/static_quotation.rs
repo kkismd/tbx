@@ -1,5 +1,6 @@
 use crate::block_code::{BlockCodeBuildError, BlockCodeBuilder, CompletedBlockCode};
 use crate::instruction::{Instruction, InstructionAddress, InstructionView};
+use crate::instruction_builder::{InstructionBuildError, InstructionBuildTarget};
 use crate::source::SourceSpan;
 use crate::source_mapping::{
     InstructionSourceMappingView, SourceMappedCode, SourceMappingLookupError,
@@ -28,9 +29,14 @@ pub(crate) enum StaticQuotationAttachError {
     InvalidLocalTarget { target: InstructionAddress },
     TargetRebaseOverflow { target: InstructionAddress },
     ParentAppend { source: BlockCodeBuildError },
+    TargetAppend { source: InstructionBuildError },
 }
 
 impl StaticQuotation {
+    pub(crate) fn from_completed(code: SourceMappedCode, completed: CompletedBlockCode) -> Self {
+        Self { code, completed }
+    }
+
     pub(crate) fn build(
         build: impl FnOnce(&mut BlockCodeBuilder<'_>) -> Result<(), BlockCodeBuildError>,
     ) -> Result<Self, StaticQuotationBuildError> {
@@ -80,6 +86,28 @@ impl StaticQuotation {
                 parent
                     .append_resolved_unmapped(instruction)
                     .map_err(|source| StaticQuotationAttachError::ParentAppend { source })?;
+            }
+        }
+
+        Ok(())
+    }
+
+    pub(crate) fn attach_to_target(
+        &self,
+        target: &mut dyn InstructionBuildTarget,
+    ) -> Result<(), StaticQuotationAttachError> {
+        let parent_start = target.current_address();
+        let instructions = self.rebased_instructions(parent_start)?;
+
+        for MappedInstruction { instruction, span } in instructions {
+            if let Some(span) = span {
+                target
+                    .append_resolved_mapped(instruction, span)
+                    .map_err(|source| StaticQuotationAttachError::TargetAppend { source })?;
+            } else {
+                target
+                    .append_resolved_unmapped(instruction)
+                    .map_err(|source| StaticQuotationAttachError::TargetAppend { source })?;
             }
         }
 

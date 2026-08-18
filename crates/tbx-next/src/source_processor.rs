@@ -1,5 +1,6 @@
 use crate::binding::Bindings;
 use crate::block_code::BlockCodeBuilder;
+use crate::block_code::OwnedBlockCodeBuilder;
 use crate::expression::{
     parse_expression, ExpressionError, ExpressionSyntaxErrorKind, ExpressionVariableErrorKind,
 };
@@ -28,7 +29,9 @@ use crate::source_word::{
     SourceBlockStatement, SourceBlockTerminal, SourceWordError, SourceWordId, SourceWordKind,
     SourceWordLookup, SourceWordLookupError, SourceWordSyntaxMarker,
 };
-use crate::static_quotation::{StaticQuotation, StaticQuotationBuildError};
+use crate::static_quotation::{
+    StaticQuotation, StaticQuotationAttachError, StaticQuotationBuildError,
+};
 use crate::structured_grammar::{GrammarAccept, GrammarProgress, MarkerIdentity};
 use crate::value::Value;
 use crate::vm::{ExecutionView, RunOutcome, Vm, VmError};
@@ -126,6 +129,7 @@ pub(crate) enum SourceProcessorError {
     SourceWordContextUnavailable { id: SourceWordId },
     SourceWordLookup(SourceWordLookupError),
     SourceWord(SourceWordError),
+    StaticQuotationAttach(StaticQuotationAttachError),
     Runtime(RuntimeError),
 }
 
@@ -168,6 +172,8 @@ struct StatementCompileState<'a> {
 struct StructuredSourceWordFrame {
     progress: GrammarProgress,
     syntax_markers: Vec<SourceWordSyntaxMarker>,
+    code: OwnedBlockCodeBuilder,
+    line_numbers: LocalLineNumberTable,
     state: Box<dyn NativeStructuredSourceWordState>,
     marker_handler: NativeStructuredSourceWordMarkerHandler,
     completion_handler: NativeStructuredSourceWordMarkerHandler,
@@ -175,7 +181,7 @@ struct StructuredSourceWordFrame {
 
 enum StatementCompileOutcome {
     Complete,
-    StartedStructured(StructuredSourceWordFrame),
+    StartedStructured(Box<StructuredSourceWordFrame>),
 }
 
 impl From<SourceError> for SourceProcessorError {
@@ -221,6 +227,12 @@ impl From<StaticQuotationBuildError> for SourceProcessorError {
                 Self::InstructionBuild(InstructionBuildError::BlockCodeBuild { source })
             }
         }
+    }
+}
+
+impl From<StaticQuotationAttachError> for SourceProcessorError {
+    fn from(error: StaticQuotationAttachError) -> Self {
+        Self::StaticQuotationAttach(error)
     }
 }
 
@@ -356,19 +368,18 @@ where
             continue;
         }
 
+        let mut statement_state =
+            current_statement_compile_state(code, &mut line_numbers, &mut structured_frames);
         match compile_statement(
             view,
             source_id,
             statement.tokens(),
             &mut context,
-            &mut StatementCompileState {
-                code,
-                line_numbers: &mut line_numbers,
-            },
+            &mut statement_state,
             &mut cursor,
         )? {
             StatementCompileOutcome::Complete => {}
-            StatementCompileOutcome::StartedStructured(frame) => structured_frames.push(frame),
+            StatementCompileOutcome::StartedStructured(frame) => structured_frames.push(*frame),
         }
     }
 
@@ -386,14 +397,32 @@ where
         .map_err(|source| line_number_compile_error(source).into())
 }
 
+fn current_statement_compile_state<'a>(
+    root_code: &'a mut dyn InstructionBuildTarget,
+    root_line_numbers: &'a mut LocalLineNumberTable,
+    structured_frames: &'a mut [StructuredSourceWordFrame],
+) -> StatementCompileState<'a> {
+    if let Some(frame) = structured_frames.last_mut() {
+        StatementCompileState {
+            code: &mut frame.code,
+            line_numbers: &mut frame.line_numbers,
+        }
+    } else {
+        StatementCompileState {
+            code: root_code,
+            line_numbers: root_line_numbers,
+        }
+    }
+}
+
 fn process_current_owner_marker<'source>(
     view: SourceView<'source>,
     source_id: SourceId,
     statement: SourceBlockStatement<'source>,
     structured_frames: &mut Vec<StructuredSourceWordFrame>,
-    code: &mut dyn InstructionBuildTarget,
+    root_code: &mut dyn InstructionBuildTarget,
 ) -> Result<bool, SourceProcessorError> {
-    let Some(frame) = structured_frames.last_mut() else {
+    let Some(frame) = structured_frames.last() else {
         return Ok(false);
     };
 
@@ -403,30 +432,70 @@ fn process_current_owner_marker<'source>(
 
     let marker_identity = MarkerIdentity::new(marker.name().clone());
     let marker_span = marker.span();
-    let accepted = frame.progress.accept(&marker_identity).map_err(|source| {
-        SourceWordError::StructuredGrammar {
-            span: marker_span,
-            source,
-        }
-    })?;
-    let handler = match accepted {
-        GrammarAccept::Intermediate { .. } => frame.marker_handler,
-        GrammarAccept::Terminator => frame.completion_handler,
+    let terminator = {
+        let frame = structured_frames
+            .last_mut()
+            .expect("current owner should still exist");
+        let accepted = frame.progress.accept(&marker_identity).map_err(|source| {
+            SourceWordError::StructuredGrammar {
+                span: marker_span,
+                source,
+            }
+        })?;
+        let handler = match accepted {
+            GrammarAccept::Intermediate { .. } => frame.marker_handler,
+            GrammarAccept::Terminator => frame.completion_handler,
+        };
+        let mut marker_context = NativeStructuredSourceWordMarkerContext::new(
+            view,
+            source_id,
+            marker,
+            &mut *frame.state,
+            &mut frame.code,
+        );
+        handler(&mut marker_context)?;
+        matches!(accepted, GrammarAccept::Terminator)
     };
-    let mut marker_context = NativeStructuredSourceWordMarkerContext::new(
-        view,
-        source_id,
-        marker,
-        &mut *frame.state,
-        code,
-    );
-    handler(&mut marker_context)?;
 
-    if matches!(accepted, GrammarAccept::Terminator) {
-        structured_frames.pop();
+    if terminator {
+        let quotation = complete_structured_frame(
+            structured_frames
+                .pop()
+                .expect("terminator requires a current owner frame"),
+        )?;
+        attach_to_current_target(quotation, root_code, structured_frames)?;
     }
 
     Ok(true)
+}
+
+fn complete_structured_frame(
+    mut frame: StructuredSourceWordFrame,
+) -> Result<StaticQuotation, SourceProcessorError> {
+    frame
+        .line_numbers
+        .resolve(&mut frame.code)
+        .map_err(|source| SourceProcessorError::from(line_number_compile_error(source)))?;
+    let (code, completed) = frame
+        .code
+        .finish()
+        .map_err(|source| InstructionBuildError::BlockCodeBuild { source })?;
+    Ok(StaticQuotation::from_completed(code, completed))
+}
+
+fn attach_to_current_target(
+    quotation: StaticQuotation,
+    root_code: &mut dyn InstructionBuildTarget,
+    structured_frames: &mut [StructuredSourceWordFrame],
+) -> Result<(), SourceProcessorError> {
+    let target: &mut dyn InstructionBuildTarget = if let Some(frame) = structured_frames.last_mut()
+    {
+        &mut frame.code
+    } else {
+        root_code
+    };
+    quotation.attach_to_target(target)?;
+    Ok(())
 }
 
 fn compile_statement<'source, S>(
@@ -635,6 +704,7 @@ where
             Ok(Some(StatementCompileOutcome::Complete))
         }
         SourceWordKind::Structured(structured) => {
+            let mut structured_code = OwnedBlockCodeBuilder::new();
             let mut source_word_context =
                 NativeSourceWordContext::new(NativeSourceWordContextParts {
                     view,
@@ -645,22 +715,24 @@ where
                     block_reader: None,
                     bindings: binding_access,
                     operators,
-                    code,
+                    code: &mut structured_code,
                     local_line_number_prefix,
                     globals,
                     runtime_definitions,
                 });
             let start_handler = structured.start_handler();
             let state = start_handler(&mut source_word_context)?;
-            Ok(Some(StatementCompileOutcome::StartedStructured(
+            Ok(Some(StatementCompileOutcome::StartedStructured(Box::new(
                 StructuredSourceWordFrame {
                     progress: structured.grammar().start(),
                     syntax_markers,
+                    code: structured_code,
+                    line_numbers: LocalLineNumberTable::new(),
                     state,
                     marker_handler: structured.marker_handler(),
                     completion_handler: structured.completion_handler(),
                 },
-            )))
+            ))))
         }
     }
 }
@@ -1422,6 +1494,17 @@ impl<'a> DefinitionBodyCompileContext<'a> {
         }
     }
 
+    pub(crate) const fn with_source_words(
+        bindings: &'a Bindings,
+        source_words: SourceWordLookup<'a>,
+    ) -> Self {
+        Self {
+            bindings,
+            operators: None,
+            source_words: Some(source_words),
+        }
+    }
+
     pub(crate) const fn with_source_words_and_operators(
         bindings: &'a Bindings,
         source_words: SourceWordLookup<'a>,
@@ -1449,6 +1532,17 @@ impl<'a> QuotationBodyCompileContext<'a> {
             bindings,
             operators: Some(operators),
             source_words: None,
+        }
+    }
+
+    pub(crate) const fn with_source_words(
+        bindings: &'a Bindings,
+        source_words: SourceWordLookup<'a>,
+    ) -> Self {
+        Self {
+            bindings,
+            operators: None,
+            source_words: Some(source_words),
         }
     }
 
@@ -1729,7 +1823,10 @@ impl<'a> SourceExecutionContext<'a> {
 impl SourceProcessorError {
     fn primary_span(&self) -> Option<SourceSpan> {
         match self {
-            Self::Source(_) | Self::CodeSpaceLookup(_) | Self::SourceMappingLookup(_) => None,
+            Self::Source(_)
+            | Self::CodeSpaceLookup(_)
+            | Self::SourceMappingLookup(_)
+            | Self::StaticQuotationAttach(_) => None,
             Self::Lex(error) => match error {
                 LexError::Source(_) => None,
                 LexError::InvalidCharacter { span, .. } => Some(*span),
@@ -5545,6 +5642,59 @@ mod tests {
     }
 
     #[test]
+    fn structured_body_statement_stays_owner_local_until_successful_completion() {
+        let mut source_words = SourceWordRegistry::new();
+        let mut bindings = Bindings::new();
+        register_native_structured_source_word(
+            &mut source_words,
+            &mut bindings,
+            name("BOX"),
+            structured_grammar(Vec::new(), "ENDBOX"),
+            start_structured_fixture,
+            handle_structured_marker_fixture,
+            complete_structured_fixture,
+        )
+        .expect("structured source word should register");
+        register_native_source_word(
+            &mut source_words,
+            &mut bindings,
+            name("SOURCE_MARKER"),
+            emit_source_word_marker,
+        )
+        .expect("source word should register");
+        let (sources, source_id) = source("BOX\nSOURCE_MARKER\nENDBOX FAIL");
+        let segmented =
+            SegmentedSource::collect(sources.view(), source_id).expect("source should segment");
+        let mut parent_code = SourceMappedCode::new();
+        let error = {
+            let mut parent_builder = BlockCodeBuilder::new(&mut parent_code);
+            let error = compile_statements(
+                sources.view(),
+                source_id,
+                segmented.completed_statements(),
+                segmented.terminal(),
+                SourceCompileContext::with_source_words(&bindings, source_words.lookup()),
+                &mut parent_builder,
+            )
+            .expect_err("completion failure should reject the structured instance");
+            assert_eq!(
+                parent_builder.current_len(),
+                0,
+                "body instructions must remain owner-local until completion succeeds"
+            );
+            error
+        };
+
+        assert_eq!(
+            error,
+            SourceProcessorError::SourceWord(SourceWordError::UnsupportedSourceWord {
+                span: span(sources.view(), source_id, 25, 29)
+            })
+        );
+        assert_eq!(parent_code.len(), 0);
+    }
+
+    #[test]
     fn nested_same_owner_structured_words_suspend_and_resume_parent() {
         let mut source_words = SourceWordRegistry::new();
         let mut bindings = Bindings::new();
@@ -5735,6 +5885,36 @@ mod tests {
                 span: span(sources.view(), source_id, 11, 15)
             })
         );
+    }
+
+    #[test]
+    fn structured_child_in_quotation_context_does_not_gain_publication_capability() {
+        let mut source_words = SourceWordRegistry::new();
+        let mut bindings = Bindings::new();
+        let globals = GlobalVariables::new();
+        register_builtin_source_words(&mut source_words, &mut bindings)
+            .expect("built-in source words should bootstrap");
+        register_native_structured_source_word(
+            &mut source_words,
+            &mut bindings,
+            name("BOX"),
+            structured_grammar(Vec::new(), "ENDBOX"),
+            start_structured_fixture,
+            handle_structured_marker_fixture,
+            complete_structured_fixture,
+        )
+        .expect("structured source word should register");
+        let (_sources, _source_id, error) = compile_quotation_error(
+            "BOX\nVAR SCORE\nENDBOX",
+            QuotationBodyCompileContext::with_source_words(&bindings, source_words.lookup()),
+        );
+
+        assert_eq!(
+            error,
+            SourceProcessorError::SourceWord(SourceWordError::VarPublicationContextUnavailable)
+        );
+        assert!(bindings.get(&name("SCORE")).is_none());
+        assert!(globals.is_empty());
     }
 
     #[test]

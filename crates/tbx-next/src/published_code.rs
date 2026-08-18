@@ -230,6 +230,25 @@ impl PublishedWordBuilder<'_> {
             .map_err(WordBodyBuildError::from)
     }
 
+    pub(crate) fn append_resolved_mapped(
+        &mut self,
+        instruction: Instruction,
+        span: SourceSpan,
+    ) -> Result<InstructionAddress, WordBodyBuildError> {
+        self.block
+            .append_resolved_mapped(instruction, span)
+            .map_err(WordBodyBuildError::from)
+    }
+
+    pub(crate) fn append_resolved_unmapped(
+        &mut self,
+        instruction: Instruction,
+    ) -> Result<InstructionAddress, WordBodyBuildError> {
+        self.block
+            .append_resolved_unmapped(instruction)
+            .map_err(WordBodyBuildError::from)
+    }
+
     pub(crate) fn append_mapped_jump_placeholder(
         &mut self,
         span: SourceSpan,

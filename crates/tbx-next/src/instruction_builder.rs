@@ -1,4 +1,4 @@
-use crate::block_code::{BlockCodeBuildError, BlockCodeBuilder};
+use crate::block_code::{BlockCodeBuildError, BlockCodeBuilder, OwnedBlockCodeBuilder};
 use crate::instruction::{Instruction, InstructionAddress};
 use crate::published_code::{PublishedWordBuilder, WordBodyBuildError};
 use crate::source::SourceSpan;
@@ -29,6 +29,17 @@ pub(crate) trait InstructionBuildTarget {
     ) -> Result<InstructionAddress, InstructionBuildError>;
 
     fn append_unmapped(
+        &mut self,
+        instruction: Instruction,
+    ) -> Result<InstructionAddress, InstructionBuildError>;
+
+    fn append_resolved_mapped(
+        &mut self,
+        instruction: Instruction,
+        span: SourceSpan,
+    ) -> Result<InstructionAddress, InstructionBuildError>;
+
+    fn append_resolved_unmapped(
         &mut self,
         instruction: Instruction,
     ) -> Result<InstructionAddress, InstructionBuildError>;
@@ -77,6 +88,23 @@ impl InstructionBuildTarget for BlockCodeBuilder<'_> {
             .map_err(|source| InstructionBuildError::BlockCodeBuild { source })
     }
 
+    fn append_resolved_mapped(
+        &mut self,
+        instruction: Instruction,
+        span: SourceSpan,
+    ) -> Result<InstructionAddress, InstructionBuildError> {
+        BlockCodeBuilder::append_resolved_mapped(self, instruction, span)
+            .map_err(|source| InstructionBuildError::BlockCodeBuild { source })
+    }
+
+    fn append_resolved_unmapped(
+        &mut self,
+        instruction: Instruction,
+    ) -> Result<InstructionAddress, InstructionBuildError> {
+        BlockCodeBuilder::append_resolved_unmapped(self, instruction)
+            .map_err(|source| InstructionBuildError::BlockCodeBuild { source })
+    }
+
     fn append_mapped_jump_placeholder(
         &mut self,
         span: SourceSpan,
@@ -111,6 +139,79 @@ impl InstructionBuildTarget for BlockCodeBuilder<'_> {
     }
 }
 
+impl InstructionBuildTarget for OwnedBlockCodeBuilder {
+    fn current_len(&self) -> usize {
+        self.current_len()
+    }
+
+    fn append_mapped(
+        &mut self,
+        instruction: Instruction,
+        span: SourceSpan,
+    ) -> Result<InstructionAddress, InstructionBuildError> {
+        OwnedBlockCodeBuilder::append_mapped(self, instruction, span)
+            .map_err(|source| InstructionBuildError::BlockCodeBuild { source })
+    }
+
+    fn append_unmapped(
+        &mut self,
+        instruction: Instruction,
+    ) -> Result<InstructionAddress, InstructionBuildError> {
+        OwnedBlockCodeBuilder::append_unmapped(self, instruction)
+            .map_err(|source| InstructionBuildError::BlockCodeBuild { source })
+    }
+
+    fn append_resolved_mapped(
+        &mut self,
+        instruction: Instruction,
+        span: SourceSpan,
+    ) -> Result<InstructionAddress, InstructionBuildError> {
+        OwnedBlockCodeBuilder::append_resolved_mapped(self, instruction, span)
+            .map_err(|source| InstructionBuildError::BlockCodeBuild { source })
+    }
+
+    fn append_resolved_unmapped(
+        &mut self,
+        instruction: Instruction,
+    ) -> Result<InstructionAddress, InstructionBuildError> {
+        OwnedBlockCodeBuilder::append_resolved_unmapped(self, instruction)
+            .map_err(|source| InstructionBuildError::BlockCodeBuild { source })
+    }
+
+    fn append_mapped_jump_placeholder(
+        &mut self,
+        span: SourceSpan,
+    ) -> Result<InstructionAddress, InstructionBuildError> {
+        OwnedBlockCodeBuilder::append_mapped_jump_placeholder(self, span)
+            .map_err(|source| InstructionBuildError::BlockCodeBuild { source })
+    }
+
+    fn append_mapped_jump_if_zero_placeholder(
+        &mut self,
+        span: SourceSpan,
+    ) -> Result<InstructionAddress, InstructionBuildError> {
+        OwnedBlockCodeBuilder::append_mapped_jump_if_zero_placeholder(self, span)
+            .map_err(|source| InstructionBuildError::BlockCodeBuild { source })
+    }
+
+    fn patch_branch_target(
+        &mut self,
+        branch: InstructionAddress,
+        target: InstructionAddress,
+    ) -> Result<(), InstructionBuildError> {
+        OwnedBlockCodeBuilder::patch_branch_target(self, branch, target)
+            .map_err(|source| InstructionBuildError::BlockCodeBuild { source })
+    }
+
+    fn validate_local_target(
+        &self,
+        address: InstructionAddress,
+    ) -> Result<(), InstructionBuildError> {
+        OwnedBlockCodeBuilder::validate_local_target(self, address)
+            .map_err(|source| InstructionBuildError::BlockCodeBuild { source })
+    }
+}
+
 impl InstructionBuildTarget for PublishedWordBuilder<'_> {
     fn current_len(&self) -> usize {
         self.current_len()
@@ -130,6 +231,23 @@ impl InstructionBuildTarget for PublishedWordBuilder<'_> {
         instruction: Instruction,
     ) -> Result<InstructionAddress, InstructionBuildError> {
         PublishedWordBuilder::append_unmapped(self, instruction)
+            .map_err(|source| InstructionBuildError::WordBodyBuild { source })
+    }
+
+    fn append_resolved_mapped(
+        &mut self,
+        instruction: Instruction,
+        span: SourceSpan,
+    ) -> Result<InstructionAddress, InstructionBuildError> {
+        PublishedWordBuilder::append_resolved_mapped(self, instruction, span)
+            .map_err(|source| InstructionBuildError::WordBodyBuild { source })
+    }
+
+    fn append_resolved_unmapped(
+        &mut self,
+        instruction: Instruction,
+    ) -> Result<InstructionAddress, InstructionBuildError> {
+        PublishedWordBuilder::append_resolved_unmapped(self, instruction)
             .map_err(|source| InstructionBuildError::WordBodyBuild { source })
     }
 
