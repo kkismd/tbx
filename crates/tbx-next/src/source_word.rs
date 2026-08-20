@@ -90,7 +90,18 @@ pub(crate) struct NativeStructuredSourceWordContext<'source, 'state> {
     view: SourceView<'source>,
     source_id: SourceId,
     code: &'state mut dyn InstructionBuildTarget,
-    owner_local_target_lengths: Vec<usize>,
+    owner_local_targets: Vec<StructuredOwnerLocalTarget>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct StructuredOwnerLocalTarget {
+    instructions: Vec<StructuredOwnerLocalInstruction>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct StructuredOwnerLocalInstruction {
+    instruction: Instruction,
+    span: Option<SourceSpan>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -500,13 +511,13 @@ impl<'source, 'state> NativeStructuredSourceWordContext<'source, 'state> {
         view: SourceView<'source>,
         source_id: SourceId,
         code: &'state mut dyn InstructionBuildTarget,
-        owner_local_target_lengths: Vec<usize>,
+        owner_local_targets: Vec<StructuredOwnerLocalTarget>,
     ) -> Self {
         Self {
             view,
             source_id,
             code,
-            owner_local_target_lengths,
+            owner_local_targets,
         }
     }
 
@@ -529,8 +540,88 @@ impl<'source, 'state> NativeStructuredSourceWordContext<'source, 'state> {
             .map_err(|source| SourceWordError::InstructionBuild { source })
     }
 
-    pub(crate) fn owner_local_target_len(&self, index: usize) -> Option<usize> {
-        self.owner_local_target_lengths.get(index).copied()
+    pub(crate) fn append_owner_local_target(
+        &mut self,
+        index: usize,
+        anchor: SourceSpan,
+    ) -> Result<(), SourceWordError> {
+        let Some(target) = self.owner_local_targets.get(index) else {
+            return Err(SourceWordError::UnsupportedSourceWord { span: anchor });
+        };
+        target.append_to(self.code, anchor)
+    }
+}
+
+impl StructuredOwnerLocalTarget {
+    pub(crate) fn new(instructions: Vec<(Instruction, Option<SourceSpan>)>) -> Self {
+        Self {
+            instructions: instructions
+                .into_iter()
+                .map(|(instruction, span)| StructuredOwnerLocalInstruction { instruction, span })
+                .collect(),
+        }
+    }
+
+    pub(crate) fn len(&self) -> usize {
+        self.instructions.len()
+    }
+
+    fn append_to(
+        &self,
+        code: &mut dyn InstructionBuildTarget,
+        anchor: SourceSpan,
+    ) -> Result<(), SourceWordError> {
+        let parent_start = code.current_address();
+        for mapped in &self.instructions {
+            let instruction = self.rebase_instruction(mapped.instruction, parent_start, anchor)?;
+            if let Some(span) = mapped.span {
+                code.append_resolved_mapped(instruction, span)
+            } else {
+                code.append_resolved_unmapped(instruction)
+            }
+            .map_err(|source| SourceWordError::InstructionBuild { source })?;
+        }
+        Ok(())
+    }
+
+    fn rebase_instruction(
+        &self,
+        instruction: Instruction,
+        parent_start: crate::instruction::InstructionAddress,
+        anchor: SourceSpan,
+    ) -> Result<Instruction, SourceWordError> {
+        match instruction {
+            Instruction::Jump(target) => self
+                .rebase_target(target, parent_start, anchor)
+                .map(Instruction::Jump),
+            Instruction::JumpIfZero(target) => self
+                .rebase_target(target, parent_start, anchor)
+                .map(Instruction::JumpIfZero),
+            Instruction::Push(_)
+            | Instruction::LoadVar(_)
+            | Instruction::StoreVar(_)
+            | Instruction::Call(_)
+            | Instruction::Return
+            | Instruction::Halt => Ok(instruction),
+        }
+    }
+
+    fn rebase_target(
+        &self,
+        target: crate::instruction::InstructionAddress,
+        parent_start: crate::instruction::InstructionAddress,
+        anchor: SourceSpan,
+    ) -> Result<crate::instruction::InstructionAddress, SourceWordError> {
+        if target.as_index() >= self.instructions.len() {
+            return Err(SourceWordError::UnsupportedSourceWord { span: anchor });
+        }
+        let parent_index = parent_start
+            .as_index()
+            .checked_add(target.as_index())
+            .ok_or(SourceWordError::UnsupportedSourceWord { span: anchor })?;
+        Ok(crate::instruction::InstructionAddress::from_index(
+            parent_index,
+        ))
     }
 }
 

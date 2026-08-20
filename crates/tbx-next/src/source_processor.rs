@@ -29,7 +29,7 @@ use crate::source_word::{
     SourceBlockCursor, SourceBlockMarker, SourceBlockRead, SourceBlockReader, SourceBlockStatement,
     SourceBlockTerminal, SourceWordDispatch, SourceWordError, SourceWordId, SourceWordLookup,
     SourceWordLookupError, SourceWordSyntaxMarker, StructuredBodyCapabilities,
-    StructuredBuildTargetScope, StructuredLineNumberScope,
+    StructuredBuildTargetScope, StructuredLineNumberScope, StructuredOwnerLocalTarget,
 };
 use crate::static_quotation::{StaticQuotation, StaticQuotationBuildError};
 use crate::structured_grammar::{GrammarAccept, GrammarProgress, MarkerIdentity};
@@ -299,10 +299,12 @@ impl StructuredSourceFrame {
         &self.owner_line_numbers[index]
     }
 
-    fn owner_local_target_lengths(&self) -> Vec<usize> {
+    fn owner_local_target_snapshots(
+        &self,
+    ) -> Result<Vec<StructuredOwnerLocalTarget>, SourceProcessorError> {
         self.owner_targets
             .iter()
-            .map(|target| target.borrow().current_len())
+            .map(|target| target.borrow().snapshot())
             .collect()
     }
 }
@@ -371,6 +373,23 @@ impl OwnerLocalBuildTarget {
         }
         Ok(())
     }
+
+    fn snapshot(&self) -> Result<StructuredOwnerLocalTarget, SourceProcessorError> {
+        if let Some(branch) = self.unresolved_patches.first().copied() {
+            return Err(InstructionBuildError::BlockCodeBuild {
+                source: BlockCodeBuildError::UnresolvedBranchPatch { branch },
+            }
+            .into());
+        }
+
+        let mut instructions = Vec::with_capacity(self.code.len());
+        for index in 0..self.code.len() {
+            let address = InstructionAddress::from_index(index);
+            let (instruction, span) = self.code.mapped_instruction(address)?;
+            instructions.push((*instruction, span));
+        }
+        Ok(StructuredOwnerLocalTarget::new(instructions))
+    }
 }
 
 impl InstructionBuildTarget for SharedOwnerLocalBuildTarget {
@@ -398,6 +417,33 @@ impl InstructionBuildTarget for SharedOwnerLocalBuildTarget {
         instruction: Instruction,
     ) -> Result<InstructionAddress, InstructionBuildError> {
         reject_owner_local_direct_branch(instruction)?;
+        self.target
+            .borrow_mut()
+            .code
+            .append_unmapped(instruction)
+            .map_err(|source| InstructionBuildError::BlockCodeBuild {
+                source: BlockCodeBuildError::SourceMappingAppend { source },
+            })
+    }
+
+    fn append_resolved_mapped(
+        &mut self,
+        instruction: Instruction,
+        span: SourceSpan,
+    ) -> Result<InstructionAddress, InstructionBuildError> {
+        self.target
+            .borrow_mut()
+            .code
+            .append_mapped(instruction, span)
+            .map_err(|source| InstructionBuildError::BlockCodeBuild {
+                source: BlockCodeBuildError::SourceMappingAppend { source },
+            })
+    }
+
+    fn append_resolved_unmapped(
+        &mut self,
+        instruction: Instruction,
+    ) -> Result<InstructionAddress, InstructionBuildError> {
         self.target
             .borrow_mut()
             .code
@@ -513,9 +559,26 @@ where
                 source,
             })?;
 
-    let owner_local_target_lengths = frame.owner_local_target_lengths();
+    let callback_target = match accept {
+        GrammarAccept::Intermediate { .. } => frame.body_target.clone(),
+        GrammarAccept::Terminator => {
+            frame.resolve_owner_line_numbers(code)?;
+            frame.enclosing_target.clone()
+        }
+    };
+    let owner_local_targets = frame.owner_local_target_snapshots()?;
+    let mut owner_target;
+    let callback_code = match &callback_target {
+        BuildTargetHandle::Parent => &mut *code,
+        BuildTargetHandle::OwnerLocal(target) => {
+            owner_target = SharedOwnerLocalBuildTarget {
+                target: target.clone(),
+            };
+            &mut owner_target as &mut dyn InstructionBuildTarget
+        }
+    };
     let mut owner_context =
-        NativeStructuredSourceWordContext::new(view, source_id, code, owner_local_target_lengths);
+        NativeStructuredSourceWordContext::new(view, source_id, callback_code, owner_local_targets);
     match accept {
         GrammarAccept::Intermediate { .. } => {
             frame
@@ -529,10 +592,9 @@ where
     }
 
     if matches!(accept, GrammarAccept::Terminator) {
-        let frame = structured_frames
+        structured_frames
             .pop()
             .expect("terminator handling requires current frame");
-        frame.resolve_owner_line_numbers(code)?;
     }
 
     Ok(true)
@@ -2514,7 +2576,7 @@ mod tests {
         context_index: usize,
         marker_value: i16,
         complete_value: i16,
-        complete_with_target0_len: bool,
+        commit_targets: Vec<usize>,
         fail_completion: bool,
     }
 
@@ -2525,7 +2587,7 @@ mod tests {
                 context_index: 0,
                 marker_value: 20,
                 complete_value: 30,
-                complete_with_target0_len: false,
+                commit_targets: Vec::new(),
                 fail_completion: false,
             }
         }
@@ -2540,7 +2602,7 @@ mod tests {
                 context_index: 0,
                 marker_value: 20,
                 complete_value: 30,
-                complete_with_target0_len: false,
+                commit_targets: Vec::new(),
                 fail_completion: false,
             }
         }
@@ -2562,7 +2624,7 @@ mod tests {
                 context_index: 0,
                 marker_value: 20,
                 complete_value: 30,
-                complete_with_target0_len: false,
+                commit_targets: Vec::new(),
                 fail_completion: false,
             }
         }
@@ -2577,7 +2639,29 @@ mod tests {
                 context_index: 0,
                 marker_value: 20,
                 complete_value: 30,
-                complete_with_target0_len: true,
+                commit_targets: vec![0],
+                fail_completion: false,
+            }
+        }
+
+        fn split_owner_local_targets() -> Self {
+            Self {
+                body_contexts: vec![
+                    StructuredBodyContext::new(
+                        StructuredBuildTargetScope::OwnerLocal(0),
+                        StructuredLineNumberScope::OwnerLocal(0),
+                        StructuredBodyCapabilities::inherit(),
+                    ),
+                    StructuredBodyContext::new(
+                        StructuredBuildTargetScope::OwnerLocal(1),
+                        StructuredLineNumberScope::OwnerLocal(1),
+                        StructuredBodyCapabilities::inherit(),
+                    ),
+                ],
+                context_index: 0,
+                marker_value: 20,
+                complete_value: 30,
+                commit_targets: vec![0, 1],
                 fail_completion: false,
             }
         }
@@ -2616,14 +2700,14 @@ mod tests {
                     span: marker.span(),
                 });
             }
-            let emitted = if self.complete_with_target0_len {
-                context
-                    .owner_local_target_len(0)
-                    .expect("owner-local target should exist") as i16
-            } else {
-                self.complete_value
-            };
-            context.append_mapped(Instruction::Push(value(emitted)), marker.span())
+            if self.commit_targets.is_empty() {
+                return context
+                    .append_mapped(Instruction::Push(value(self.complete_value)), marker.span());
+            }
+            for target in &self.commit_targets {
+                context.append_owner_local_target(*target, marker.span())?;
+            }
+            Ok(())
         }
     }
 
@@ -2665,6 +2749,14 @@ mod tests {
     ) -> Result<StructuredSourceWordInstance, SourceWordError> {
         Ok(StructuredSourceWordInstance::new(Box::new(
             StructuredProbeOwner::owner_local_target(),
+        )))
+    }
+
+    fn start_split_owner_local_targets_probe(
+        _context: &mut NativeSourceWordContext<'_, '_>,
+    ) -> Result<StructuredSourceWordInstance, SourceWordError> {
+        Ok(StructuredSourceWordInstance::new(Box::new(
+            StructuredProbeOwner::split_owner_local_targets(),
         )))
     }
 
@@ -5967,13 +6059,103 @@ mod tests {
 
         assert_eq!(
             unit.instructions().get(address(0)),
-            Ok(&Instruction::Push(value(1)))
+            Ok(&Instruction::Call(body_word))
         );
         assert_eq!(
             unit.instructions().get(address(1)),
             Ok(&Instruction::Call(body_word))
         );
         assert_eq!(unit.instructions().get(address(2)), Ok(&Instruction::Halt));
+    }
+
+    #[test]
+    fn nested_child_completion_inside_owner_local_target_stays_in_enclosing_target() {
+        let mut source_words = SourceWordRegistry::new();
+        let mut bindings = Bindings::new();
+        register_structured_probe(
+            &mut source_words,
+            &mut bindings,
+            "OUTER",
+            start_owner_local_target_probe,
+            vec![marker(
+                "OUT_END",
+                SourceWordSyntaxMarkerRole::BlockTerminator,
+            )],
+            structured_grammar(Vec::new(), "OUT_END"),
+        );
+        register_structured_probe(
+            &mut source_words,
+            &mut bindings,
+            "INNER",
+            start_structured_probe,
+            vec![marker(
+                "IN_END",
+                SourceWordSyntaxMarkerRole::BlockTerminator,
+            )],
+            structured_grammar(Vec::new(), "IN_END"),
+        );
+        let (sources, source_id) = source("OUTER\nINNER\nIN_END\nOUT_END");
+
+        let unit = compile_source(
+            sources.view(),
+            source_id,
+            SourceCompileContext::with_source_words(&bindings, source_words.lookup()),
+        )
+        .expect("nested child completion should stay inside parent owner-local target");
+
+        assert_eq!(
+            unit.instructions().get(address(0)),
+            Ok(&Instruction::Push(value(10)))
+        );
+        assert_eq!(
+            unit.instructions().get(address(1)),
+            Ok(&Instruction::Push(value(30)))
+        );
+        assert_eq!(unit.instructions().get(address(2)), Ok(&Instruction::Halt));
+    }
+
+    #[test]
+    fn structured_owner_can_commit_distinct_owner_local_targets_after_marker_switch() {
+        let mut words = PublishedWords::new();
+        let mut bindings = Bindings::new();
+        let first_word =
+            publish_initial(&mut words, &mut bindings, "FIRST", completed_primitive(7));
+        let second_word =
+            publish_initial(&mut words, &mut bindings, "SECOND", completed_primitive(8));
+        let mut source_words = SourceWordRegistry::new();
+        register_structured_probe(
+            &mut source_words,
+            &mut bindings,
+            "BLOCK",
+            start_split_owner_local_targets_probe,
+            vec![
+                marker("ELSE", SourceWordSyntaxMarkerRole::BlockContinuation),
+                marker("END", SourceWordSyntaxMarkerRole::BlockTerminator),
+            ],
+            structured_grammar(vec![("ELSE", MarkerCardinality::Optional)], "END"),
+        );
+        let (sources, source_id) = source("BLOCK\nFIRST\nELSE\nSECOND\nEND");
+
+        let unit = compile_source(
+            sources.view(),
+            source_id,
+            SourceCompileContext::with_source_words(&bindings, source_words.lookup()),
+        )
+        .expect("owner should commit both owner-local body targets");
+
+        assert_eq!(
+            unit.instructions().get(address(0)),
+            Ok(&Instruction::Call(first_word))
+        );
+        assert_eq!(
+            unit.instructions().get(address(1)),
+            Ok(&Instruction::Push(value(20)))
+        );
+        assert_eq!(
+            unit.instructions().get(address(2)),
+            Ok(&Instruction::Call(second_word))
+        );
+        assert_eq!(unit.instructions().get(address(3)), Ok(&Instruction::Halt));
     }
 
     #[test]

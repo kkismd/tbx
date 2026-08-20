@@ -33,6 +33,17 @@ pub(crate) trait InstructionBuildTarget {
         instruction: Instruction,
     ) -> Result<InstructionAddress, InstructionBuildError>;
 
+    fn append_resolved_mapped(
+        &mut self,
+        instruction: Instruction,
+        span: SourceSpan,
+    ) -> Result<InstructionAddress, InstructionBuildError>;
+
+    fn append_resolved_unmapped(
+        &mut self,
+        instruction: Instruction,
+    ) -> Result<InstructionAddress, InstructionBuildError>;
+
     fn append_mapped_jump_placeholder(
         &mut self,
         span: SourceSpan,
@@ -74,6 +85,23 @@ impl InstructionBuildTarget for BlockCodeBuilder<'_> {
         instruction: Instruction,
     ) -> Result<InstructionAddress, InstructionBuildError> {
         BlockCodeBuilder::append_unmapped(self, instruction)
+            .map_err(|source| InstructionBuildError::BlockCodeBuild { source })
+    }
+
+    fn append_resolved_mapped(
+        &mut self,
+        instruction: Instruction,
+        span: SourceSpan,
+    ) -> Result<InstructionAddress, InstructionBuildError> {
+        BlockCodeBuilder::append_resolved_mapped(self, instruction, span)
+            .map_err(|source| InstructionBuildError::BlockCodeBuild { source })
+    }
+
+    fn append_resolved_unmapped(
+        &mut self,
+        instruction: Instruction,
+    ) -> Result<InstructionAddress, InstructionBuildError> {
+        BlockCodeBuilder::append_resolved_unmapped(self, instruction)
             .map_err(|source| InstructionBuildError::BlockCodeBuild { source })
     }
 
@@ -130,6 +158,23 @@ impl InstructionBuildTarget for PublishedWordBuilder<'_> {
         instruction: Instruction,
     ) -> Result<InstructionAddress, InstructionBuildError> {
         PublishedWordBuilder::append_unmapped(self, instruction)
+            .map_err(|source| InstructionBuildError::WordBodyBuild { source })
+    }
+
+    fn append_resolved_mapped(
+        &mut self,
+        instruction: Instruction,
+        span: SourceSpan,
+    ) -> Result<InstructionAddress, InstructionBuildError> {
+        PublishedWordBuilder::append_resolved_mapped(self, instruction, span)
+            .map_err(|source| InstructionBuildError::WordBodyBuild { source })
+    }
+
+    fn append_resolved_unmapped(
+        &mut self,
+        instruction: Instruction,
+    ) -> Result<InstructionAddress, InstructionBuildError> {
+        PublishedWordBuilder::append_resolved_unmapped(self, instruction)
             .map_err(|source| InstructionBuildError::WordBodyBuild { source })
     }
 
