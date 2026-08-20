@@ -167,9 +167,11 @@ impl InstructionSequence {
         branch: InstructionAddress,
         target: InstructionAddress,
     ) -> Result<(), BranchTargetPatchError> {
-        self.view()
-            .validate_address(target)
-            .map_err(|source| BranchTargetPatchError::InvalidTarget { source })?;
+        if target.as_index() > self.instructions.len() {
+            return Err(BranchTargetPatchError::InvalidTarget {
+                source: InstructionAddressError::InvalidAddress { address: target },
+            });
+        }
 
         let instruction = self
             .instructions
@@ -697,19 +699,15 @@ mod tests {
     }
 
     #[test]
-    fn branch_target_patch_rejects_end_and_out_of_range_targets() {
+    fn branch_target_patch_accepts_end_and_rejects_out_of_range_targets() {
         let mut code = InstructionSequence::new();
         let target = code.append(Instruction::Halt);
         let branch = code.append(Instruction::Jump(target));
         let end = address(2);
         let out_of_range = address(3);
 
-        assert_eq!(
-            code.patch_branch_target(branch, end),
-            Err(BranchTargetPatchError::InvalidTarget {
-                source: InstructionAddressError::EndAddress { address: end }
-            })
-        );
+        assert_eq!(code.patch_branch_target(branch, end), Ok(()));
+        assert_eq!(code.view().get(branch), Ok(&Instruction::Jump(end)));
         assert_eq!(
             code.patch_branch_target(branch, out_of_range),
             Err(BranchTargetPatchError::InvalidTarget {
@@ -718,7 +716,7 @@ mod tests {
                 }
             })
         );
-        assert_eq!(code.view().get(branch), Ok(&Instruction::Jump(target)));
+        assert_eq!(code.view().get(branch), Ok(&Instruction::Jump(end)));
     }
 
     #[test]

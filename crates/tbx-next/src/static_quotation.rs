@@ -143,7 +143,7 @@ impl StaticQuotation {
         target: InstructionAddress,
         parent_start: InstructionAddress,
     ) -> Result<InstructionAddress, StaticQuotationAttachError> {
-        if !self.completed.contains(target) {
+        if !self.completed.contains(target) && target != self.completed.end() {
             return Err(StaticQuotationAttachError::InvalidLocalTarget { target });
         }
 
