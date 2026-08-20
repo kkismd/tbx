@@ -35,6 +35,75 @@ impl SourceWordId {
 pub(crate) type NativeSourceWordHandler =
     fn(&mut NativeSourceWordContext<'_, '_>) -> Result<(), SourceWordError>;
 
+pub(crate) type NativeStructuredSourceWordStartHandler =
+    fn(
+        &mut NativeSourceWordContext<'_, '_>,
+    ) -> Result<StructuredSourceWordInstance, SourceWordError>;
+
+pub(crate) trait NativeStructuredSourceWordOwner: std::fmt::Debug {
+    fn current_body_context(&self) -> StructuredBodyContext;
+
+    fn accept_marker(
+        &mut self,
+        context: &mut NativeStructuredSourceWordContext<'_, '_>,
+        marker: SourceBlockMarker<'_>,
+        accept: crate::structured_grammar::GrammarAccept,
+    ) -> Result<(), SourceWordError>;
+
+    fn complete(
+        &mut self,
+        context: &mut NativeStructuredSourceWordContext<'_, '_>,
+        marker: SourceBlockMarker<'_>,
+    ) -> Result<(), SourceWordError>;
+}
+
+#[derive(Debug)]
+pub(crate) struct StructuredSourceWordInstance {
+    owner: Box<dyn NativeStructuredSourceWordOwner>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct StructuredBodyContext {
+    build_target: StructuredBuildTargetScope,
+    line_number_scope: StructuredLineNumberScope,
+    capabilities: StructuredBodyCapabilities,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum StructuredBuildTargetScope {
+    Enclosing,
+    OwnerLocal(usize),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum StructuredLineNumberScope {
+    Enclosing,
+    OwnerLocal(usize),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct StructuredBodyCapabilities {
+    publication: bool,
+}
+
+pub(crate) struct NativeStructuredSourceWordContext<'source, 'state> {
+    view: SourceView<'source>,
+    source_id: SourceId,
+    code: &'state mut dyn InstructionBuildTarget,
+    owner_local_targets: Vec<StructuredOwnerLocalTarget>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct StructuredOwnerLocalTarget {
+    instructions: Vec<StructuredOwnerLocalInstruction>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct StructuredOwnerLocalInstruction {
+    instruction: Instruction,
+    span: Option<SourceSpan>,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum SourceWordSyntaxMarkerRole {
     BlockContinuation,
@@ -142,6 +211,13 @@ pub(crate) enum SourceWordError {
     DefBindingCommitInvariantViolated {
         span: SourceSpan,
     },
+    StructuredGrammar {
+        span: SourceSpan,
+        source: crate::structured_grammar::GrammarProgressError,
+    },
+    StructuredMissingTerminator {
+        span: SourceSpan,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -194,7 +270,9 @@ impl SourceWordError {
             | Self::DefBodyCompile { span }
             | Self::DefBodyBuild { span }
             | Self::DefDefinition { span }
-            | Self::DefBindingCommitInvariantViolated { span } => Some(span),
+            | Self::DefBindingCommitInvariantViolated { span }
+            | Self::StructuredGrammar { span, .. }
+            | Self::StructuredMissingTerminator { span } => Some(span),
             Self::DefLex { source } => match source {
                 LexError::Source(_) => None,
                 LexError::InvalidCharacter { span, .. } => Some(span),
@@ -308,6 +386,20 @@ impl<'source> SourceBlockStatement<'source> {
 }
 
 impl<'source> SourceBlockMarker<'source> {
+    pub(crate) fn new(
+        statement: SourceBlockStatement<'source>,
+        token: Token,
+        name: NormalizedName,
+        role: SourceWordSyntaxMarkerRole,
+    ) -> Self {
+        Self {
+            statement,
+            token,
+            name,
+            role,
+        }
+    }
+
     pub(crate) const fn statement(&self) -> SourceBlockStatement<'source> {
         self.statement
     }
@@ -347,6 +439,189 @@ impl SourceBlockTerminal {
             Self::Eof { .. } => None,
             Self::LexError { error } => Some(error),
         }
+    }
+}
+
+impl StructuredSourceWordInstance {
+    pub(crate) fn new(owner: Box<dyn NativeStructuredSourceWordOwner>) -> Self {
+        Self { owner }
+    }
+
+    pub(crate) fn into_owner(self) -> Box<dyn NativeStructuredSourceWordOwner> {
+        self.owner
+    }
+}
+
+impl StructuredBodyContext {
+    pub(crate) const fn inherited() -> Self {
+        Self {
+            build_target: StructuredBuildTargetScope::Enclosing,
+            line_number_scope: StructuredLineNumberScope::Enclosing,
+            capabilities: StructuredBodyCapabilities::inherit(),
+        }
+    }
+
+    pub(crate) const fn new(
+        build_target: StructuredBuildTargetScope,
+        line_number_scope: StructuredLineNumberScope,
+        capabilities: StructuredBodyCapabilities,
+    ) -> Self {
+        Self {
+            build_target,
+            line_number_scope,
+            capabilities,
+        }
+    }
+
+    pub(crate) const fn build_target(self) -> StructuredBuildTargetScope {
+        self.build_target
+    }
+
+    pub(crate) const fn line_number_scope(self) -> StructuredLineNumberScope {
+        self.line_number_scope
+    }
+
+    pub(crate) const fn capabilities(self) -> StructuredBodyCapabilities {
+        self.capabilities
+    }
+}
+
+impl StructuredBodyCapabilities {
+    pub(crate) const fn inherit() -> Self {
+        Self { publication: true }
+    }
+
+    pub(crate) const fn without_publication() -> Self {
+        Self { publication: false }
+    }
+
+    pub(crate) const fn allows_publication(self) -> bool {
+        self.publication
+    }
+
+    pub(crate) const fn intersect(self, enclosing: Self) -> Self {
+        Self {
+            publication: self.publication && enclosing.publication,
+        }
+    }
+}
+
+impl<'source, 'state> NativeStructuredSourceWordContext<'source, 'state> {
+    pub(crate) fn new(
+        view: SourceView<'source>,
+        source_id: SourceId,
+        code: &'state mut dyn InstructionBuildTarget,
+        owner_local_targets: Vec<StructuredOwnerLocalTarget>,
+    ) -> Self {
+        Self {
+            view,
+            source_id,
+            code,
+            owner_local_targets,
+        }
+    }
+
+    pub(crate) const fn view(&self) -> SourceView<'source> {
+        self.view
+    }
+
+    pub(crate) const fn source_id(&self) -> SourceId {
+        self.source_id
+    }
+
+    pub(crate) fn append_mapped(
+        &mut self,
+        instruction: Instruction,
+        span: SourceSpan,
+    ) -> Result<(), SourceWordError> {
+        self.code
+            .append_mapped(instruction, span)
+            .map(|_| ())
+            .map_err(|source| SourceWordError::InstructionBuild { source })
+    }
+
+    pub(crate) fn append_owner_local_target(
+        &mut self,
+        index: usize,
+        anchor: SourceSpan,
+    ) -> Result<(), SourceWordError> {
+        let Some(target) = self.owner_local_targets.get(index) else {
+            return Err(SourceWordError::UnsupportedSourceWord { span: anchor });
+        };
+        target.append_to(self.code, anchor)
+    }
+}
+
+impl StructuredOwnerLocalTarget {
+    pub(crate) fn new(instructions: Vec<(Instruction, Option<SourceSpan>)>) -> Self {
+        Self {
+            instructions: instructions
+                .into_iter()
+                .map(|(instruction, span)| StructuredOwnerLocalInstruction { instruction, span })
+                .collect(),
+        }
+    }
+
+    pub(crate) fn len(&self) -> usize {
+        self.instructions.len()
+    }
+
+    fn append_to(
+        &self,
+        code: &mut dyn InstructionBuildTarget,
+        anchor: SourceSpan,
+    ) -> Result<(), SourceWordError> {
+        let parent_start = code.current_address();
+        for mapped in &self.instructions {
+            let instruction = self.rebase_instruction(mapped.instruction, parent_start, anchor)?;
+            if let Some(span) = mapped.span {
+                code.append_resolved_mapped(instruction, span)
+            } else {
+                code.append_resolved_unmapped(instruction)
+            }
+            .map_err(|source| SourceWordError::InstructionBuild { source })?;
+        }
+        Ok(())
+    }
+
+    fn rebase_instruction(
+        &self,
+        instruction: Instruction,
+        parent_start: crate::instruction::InstructionAddress,
+        anchor: SourceSpan,
+    ) -> Result<Instruction, SourceWordError> {
+        match instruction {
+            Instruction::Jump(target) => self
+                .rebase_target(target, parent_start, anchor)
+                .map(Instruction::Jump),
+            Instruction::JumpIfZero(target) => self
+                .rebase_target(target, parent_start, anchor)
+                .map(Instruction::JumpIfZero),
+            Instruction::Push(_)
+            | Instruction::LoadVar(_)
+            | Instruction::StoreVar(_)
+            | Instruction::Call(_)
+            | Instruction::Return
+            | Instruction::Halt => Ok(instruction),
+        }
+    }
+
+    fn rebase_target(
+        &self,
+        target: crate::instruction::InstructionAddress,
+        parent_start: crate::instruction::InstructionAddress,
+        anchor: SourceSpan,
+    ) -> Result<crate::instruction::InstructionAddress, SourceWordError> {
+        if target.as_index() >= self.instructions.len() {
+            return Err(SourceWordError::UnsupportedSourceWord { span: anchor });
+        }
+        let parent_index = parent_start
+            .as_index()
+            .checked_add(target.as_index())
+            .ok_or(SourceWordError::UnsupportedSourceWord { span: anchor })?;
+        Ok(crate::instruction::InstructionAddress::from_index(
+            parent_index,
+        ))
     }
 }
 
@@ -962,8 +1237,17 @@ pub(crate) struct SourceWordRegistry {
 
 #[derive(Debug, Clone)]
 struct SourceWordEntry {
-    handler: NativeSourceWordHandler,
+    kind: SourceWordKind,
     syntax_markers: Vec<SourceWordSyntaxMarker>,
+}
+
+#[derive(Debug, Clone)]
+enum SourceWordKind {
+    OneShot(NativeSourceWordHandler),
+    Structured {
+        start: NativeStructuredSourceWordStartHandler,
+        grammar: crate::structured_grammar::StructuredGrammar,
+    },
 }
 
 impl SourceWordRegistry {
@@ -982,7 +1266,21 @@ impl SourceWordRegistry {
     ) -> SourceWordId {
         let id = SourceWordId::from_slot(self.entries.len());
         self.entries.push(SourceWordEntry {
-            handler,
+            kind: SourceWordKind::OneShot(handler),
+            syntax_markers,
+        });
+        id
+    }
+
+    pub(crate) fn register_structured(
+        &mut self,
+        start: NativeStructuredSourceWordStartHandler,
+        grammar: crate::structured_grammar::StructuredGrammar,
+        syntax_markers: Vec<SourceWordSyntaxMarker>,
+    ) -> SourceWordId {
+        let id = SourceWordId::from_slot(self.entries.len());
+        self.entries.push(SourceWordEntry {
+            kind: SourceWordKind::Structured { start, grammar },
             syntax_markers,
         });
         id
@@ -1006,16 +1304,44 @@ pub(crate) struct SourceWordLookup<'a> {
     registry: &'a SourceWordRegistry,
 }
 
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum SourceWordDispatch<'a> {
+    OneShot(NativeSourceWordHandler),
+    Structured {
+        start: NativeStructuredSourceWordStartHandler,
+        grammar: &'a crate::structured_grammar::StructuredGrammar,
+    },
+}
+
 impl<'a> SourceWordLookup<'a> {
+    pub(crate) fn lookup_dispatch(
+        self,
+        id: SourceWordId,
+    ) -> Result<SourceWordDispatch<'a>, SourceWordLookupError> {
+        let entry = self
+            .registry
+            .entries
+            .get(id.as_slot())
+            .ok_or(SourceWordLookupError::InvalidSourceWordId { id })?;
+        Ok(match &entry.kind {
+            SourceWordKind::OneShot(handler) => SourceWordDispatch::OneShot(*handler),
+            SourceWordKind::Structured { start, grammar } => SourceWordDispatch::Structured {
+                start: *start,
+                grammar,
+            },
+        })
+    }
+
     pub(crate) fn lookup_handler(
         self,
         id: SourceWordId,
     ) -> Result<NativeSourceWordHandler, SourceWordLookupError> {
-        self.registry
-            .entries
-            .get(id.as_slot())
-            .map(|entry| entry.handler)
-            .ok_or(SourceWordLookupError::InvalidSourceWordId { id })
+        match self.lookup_dispatch(id)? {
+            SourceWordDispatch::OneShot(handler) => Ok(handler),
+            SourceWordDispatch::Structured { .. } => {
+                Err(SourceWordLookupError::InvalidSourceWordId { id })
+            }
+        }
     }
 
     pub(crate) fn syntax_markers(
