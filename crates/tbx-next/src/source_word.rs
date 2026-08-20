@@ -64,8 +64,15 @@ pub(crate) struct StructuredSourceWordInstance {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct StructuredBodyContext {
+    build_target: StructuredBuildTargetScope,
     line_number_scope: StructuredLineNumberScope,
     capabilities: StructuredBodyCapabilities,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum StructuredBuildTargetScope {
+    Enclosing,
+    OwnerLocal(usize),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -83,6 +90,7 @@ pub(crate) struct NativeStructuredSourceWordContext<'source, 'state> {
     view: SourceView<'source>,
     source_id: SourceId,
     code: &'state mut dyn InstructionBuildTarget,
+    owner_local_target_lengths: Vec<usize>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -436,19 +444,26 @@ impl StructuredSourceWordInstance {
 impl StructuredBodyContext {
     pub(crate) const fn inherited() -> Self {
         Self {
+            build_target: StructuredBuildTargetScope::Enclosing,
             line_number_scope: StructuredLineNumberScope::Enclosing,
             capabilities: StructuredBodyCapabilities::inherit(),
         }
     }
 
     pub(crate) const fn new(
+        build_target: StructuredBuildTargetScope,
         line_number_scope: StructuredLineNumberScope,
         capabilities: StructuredBodyCapabilities,
     ) -> Self {
         Self {
+            build_target,
             line_number_scope,
             capabilities,
         }
+    }
+
+    pub(crate) const fn build_target(self) -> StructuredBuildTargetScope {
+        self.build_target
     }
 
     pub(crate) const fn line_number_scope(self) -> StructuredLineNumberScope {
@@ -485,11 +500,13 @@ impl<'source, 'state> NativeStructuredSourceWordContext<'source, 'state> {
         view: SourceView<'source>,
         source_id: SourceId,
         code: &'state mut dyn InstructionBuildTarget,
+        owner_local_target_lengths: Vec<usize>,
     ) -> Self {
         Self {
             view,
             source_id,
             code,
+            owner_local_target_lengths,
         }
     }
 
@@ -510,6 +527,10 @@ impl<'source, 'state> NativeStructuredSourceWordContext<'source, 'state> {
             .append_mapped(instruction, span)
             .map(|_| ())
             .map_err(|source| SourceWordError::InstructionBuild { source })
+    }
+
+    pub(crate) fn owner_local_target_len(&self, index: usize) -> Option<usize> {
+        self.owner_local_target_lengths.get(index).copied()
     }
 }
 

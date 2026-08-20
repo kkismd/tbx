@@ -2,7 +2,7 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use crate::binding::Bindings;
-use crate::block_code::BlockCodeBuilder;
+use crate::block_code::{BlockCodeBuildError, BlockCodeBuilder};
 use crate::expression::{
     parse_expression, ExpressionError, ExpressionSyntaxErrorKind, ExpressionVariableErrorKind,
 };
@@ -29,7 +29,7 @@ use crate::source_word::{
     SourceBlockCursor, SourceBlockMarker, SourceBlockRead, SourceBlockReader, SourceBlockStatement,
     SourceBlockTerminal, SourceWordDispatch, SourceWordError, SourceWordId, SourceWordLookup,
     SourceWordLookupError, SourceWordSyntaxMarker, StructuredBodyCapabilities,
-    StructuredLineNumberScope,
+    StructuredBuildTargetScope, StructuredLineNumberScope,
 };
 use crate::static_quotation::{StaticQuotation, StaticQuotationBuildError};
 use crate::structured_grammar::{GrammarAccept, GrammarProgress, MarkerIdentity};
@@ -167,6 +167,7 @@ struct StatementCompileState<'a> {
     code: &'a mut dyn InstructionBuildTarget,
     line_numbers: Rc<RefCell<LocalLineNumberTable>>,
     capabilities: StructuredBodyCapabilities,
+    target: BuildTargetHandle,
 }
 
 struct StatementTraversal<'source, 'cursor, S> {
@@ -180,11 +181,36 @@ struct StructuredSourceFrame {
     syntax_markers: Vec<SourceWordSyntaxMarker>,
     progress: GrammarProgress,
     owner: Box<dyn NativeStructuredSourceWordOwner>,
+    enclosing_target: BuildTargetHandle,
+    body_target: BuildTargetHandle,
     enclosing_capabilities: StructuredBodyCapabilities,
     body_capabilities: StructuredBodyCapabilities,
     enclosing_line_numbers: Rc<RefCell<LocalLineNumberTable>>,
     current_line_numbers: Rc<RefCell<LocalLineNumberTable>>,
-    owner_line_numbers: Vec<Rc<RefCell<LocalLineNumberTable>>>,
+    owner_line_numbers: Vec<OwnerLocalLineNumberScope>,
+    owner_targets: Vec<Rc<RefCell<OwnerLocalBuildTarget>>>,
+}
+
+#[derive(Debug, Clone)]
+enum BuildTargetHandle {
+    Parent,
+    OwnerLocal(Rc<RefCell<OwnerLocalBuildTarget>>),
+}
+
+#[derive(Debug)]
+struct OwnerLocalLineNumberScope {
+    table: Rc<RefCell<LocalLineNumberTable>>,
+    target: BuildTargetHandle,
+}
+
+#[derive(Debug)]
+struct OwnerLocalBuildTarget {
+    code: SourceMappedCode,
+    unresolved_patches: Vec<InstructionAddress>,
+}
+
+struct SharedOwnerLocalBuildTarget {
+    target: Rc<RefCell<OwnerLocalBuildTarget>>,
 }
 
 impl StructuredSourceFrame {
@@ -192,6 +218,7 @@ impl StructuredSourceFrame {
         syntax_markers: Vec<SourceWordSyntaxMarker>,
         progress: GrammarProgress,
         owner: Box<dyn NativeStructuredSourceWordOwner>,
+        enclosing_target: BuildTargetHandle,
         enclosing_line_numbers: Rc<RefCell<LocalLineNumberTable>>,
         enclosing_capabilities: StructuredBodyCapabilities,
     ) -> Self {
@@ -199,27 +226,33 @@ impl StructuredSourceFrame {
             syntax_markers,
             progress,
             owner,
+            enclosing_target: enclosing_target.clone(),
+            body_target: enclosing_target,
             enclosing_capabilities,
             body_capabilities: enclosing_capabilities,
             current_line_numbers: enclosing_line_numbers.clone(),
             enclosing_line_numbers,
             owner_line_numbers: Vec::new(),
+            owner_targets: Vec::new(),
         }
     }
 
     fn apply_owner_context(&mut self) {
         let context = self.owner.current_body_context();
+        self.body_target = match context.build_target() {
+            StructuredBuildTargetScope::Enclosing => self.enclosing_target.clone(),
+            StructuredBuildTargetScope::OwnerLocal(index) => {
+                self.owner_target(index);
+                BuildTargetHandle::OwnerLocal(self.owner_targets[index].clone())
+            }
+        };
         self.body_capabilities = context
             .capabilities()
             .intersect(self.enclosing_capabilities);
         self.current_line_numbers = match context.line_number_scope() {
             StructuredLineNumberScope::Enclosing => self.enclosing_line_numbers.clone(),
             StructuredLineNumberScope::OwnerLocal(index) => {
-                while self.owner_line_numbers.len() <= index {
-                    self.owner_line_numbers
-                        .push(Rc::new(RefCell::new(LocalLineNumberTable::new())));
-                }
-                self.owner_line_numbers[index].clone()
+                self.owner_line_number_scope(index).table.clone()
             }
         };
     }
@@ -228,13 +261,201 @@ impl StructuredSourceFrame {
         &self,
         code: &mut dyn InstructionBuildTarget,
     ) -> Result<(), SourceProcessorError> {
-        for line_numbers in &self.owner_line_numbers {
-            line_numbers
+        for scope in &self.owner_line_numbers {
+            let mut owner_target;
+            let target = match &scope.target {
+                BuildTargetHandle::Parent => &mut *code,
+                BuildTargetHandle::OwnerLocal(target) => {
+                    owner_target = SharedOwnerLocalBuildTarget {
+                        target: target.clone(),
+                    };
+                    &mut owner_target as &mut dyn InstructionBuildTarget
+                }
+            };
+            scope
+                .table
                 .borrow_mut()
-                .resolve(code)
+                .resolve(target)
                 .map_err(|source| SourceProcessorError::from(line_number_compile_error(source)))?;
         }
         Ok(())
+    }
+
+    fn owner_target(&mut self, index: usize) -> Rc<RefCell<OwnerLocalBuildTarget>> {
+        while self.owner_targets.len() <= index {
+            self.owner_targets
+                .push(Rc::new(RefCell::new(OwnerLocalBuildTarget::new())));
+        }
+        self.owner_targets[index].clone()
+    }
+
+    fn owner_line_number_scope(&mut self, index: usize) -> &OwnerLocalLineNumberScope {
+        while self.owner_line_numbers.len() <= index {
+            self.owner_line_numbers.push(OwnerLocalLineNumberScope {
+                table: Rc::new(RefCell::new(LocalLineNumberTable::new())),
+                target: self.body_target.clone(),
+            });
+        }
+        &self.owner_line_numbers[index]
+    }
+
+    fn owner_local_target_lengths(&self) -> Vec<usize> {
+        self.owner_targets
+            .iter()
+            .map(|target| target.borrow().current_len())
+            .collect()
+    }
+}
+
+impl OwnerLocalBuildTarget {
+    fn new() -> Self {
+        Self {
+            code: SourceMappedCode::new(),
+            unresolved_patches: Vec::new(),
+        }
+    }
+
+    fn current_len(&self) -> usize {
+        self.code.len()
+    }
+
+    fn append_branch_placeholder(
+        &mut self,
+        instruction: Instruction,
+        span: Option<SourceSpan>,
+    ) -> Result<InstructionAddress, InstructionBuildError> {
+        let branch = match span {
+            Some(span) => self.code.append_mapped(instruction, span),
+            None => self.code.append_unmapped(instruction),
+        }
+        .map_err(|source| InstructionBuildError::BlockCodeBuild {
+            source: BlockCodeBuildError::SourceMappingAppend { source },
+        })?;
+        self.unresolved_patches.push(branch);
+        Ok(branch)
+    }
+
+    fn patch_branch_target(
+        &mut self,
+        branch: InstructionAddress,
+        target: InstructionAddress,
+    ) -> Result<(), InstructionBuildError> {
+        self.validate_local_target(branch)?;
+        self.validate_local_target(target)?;
+        let Some(position) = self
+            .unresolved_patches
+            .iter()
+            .position(|pending| *pending == branch)
+        else {
+            return Err(InstructionBuildError::BlockCodeBuild {
+                source: BlockCodeBuildError::UnknownBranchPatch { branch },
+            });
+        };
+        self.code
+            .patch_branch_target(branch, target)
+            .map_err(|source| InstructionBuildError::BlockCodeBuild {
+                source: BlockCodeBuildError::BranchTargetPatch { source },
+            })?;
+        self.unresolved_patches.swap_remove(position);
+        Ok(())
+    }
+
+    fn validate_local_target(
+        &self,
+        address: InstructionAddress,
+    ) -> Result<(), InstructionBuildError> {
+        if address.as_index() >= self.code.len() {
+            return Err(InstructionBuildError::BlockCodeBuild {
+                source: BlockCodeBuildError::AddressOutsideCurrentBlock { address },
+            });
+        }
+        Ok(())
+    }
+}
+
+impl InstructionBuildTarget for SharedOwnerLocalBuildTarget {
+    fn current_len(&self) -> usize {
+        self.target.borrow().current_len()
+    }
+
+    fn append_mapped(
+        &mut self,
+        instruction: Instruction,
+        span: SourceSpan,
+    ) -> Result<InstructionAddress, InstructionBuildError> {
+        reject_owner_local_direct_branch(instruction)?;
+        self.target
+            .borrow_mut()
+            .code
+            .append_mapped(instruction, span)
+            .map_err(|source| InstructionBuildError::BlockCodeBuild {
+                source: BlockCodeBuildError::SourceMappingAppend { source },
+            })
+    }
+
+    fn append_unmapped(
+        &mut self,
+        instruction: Instruction,
+    ) -> Result<InstructionAddress, InstructionBuildError> {
+        reject_owner_local_direct_branch(instruction)?;
+        self.target
+            .borrow_mut()
+            .code
+            .append_unmapped(instruction)
+            .map_err(|source| InstructionBuildError::BlockCodeBuild {
+                source: BlockCodeBuildError::SourceMappingAppend { source },
+            })
+    }
+
+    fn append_mapped_jump_placeholder(
+        &mut self,
+        span: SourceSpan,
+    ) -> Result<InstructionAddress, InstructionBuildError> {
+        self.target.borrow_mut().append_branch_placeholder(
+            Instruction::Jump(InstructionAddress::from_index(0)),
+            Some(span),
+        )
+    }
+
+    fn append_mapped_jump_if_zero_placeholder(
+        &mut self,
+        span: SourceSpan,
+    ) -> Result<InstructionAddress, InstructionBuildError> {
+        self.target.borrow_mut().append_branch_placeholder(
+            Instruction::JumpIfZero(InstructionAddress::from_index(0)),
+            Some(span),
+        )
+    }
+
+    fn patch_branch_target(
+        &mut self,
+        branch: InstructionAddress,
+        target: InstructionAddress,
+    ) -> Result<(), InstructionBuildError> {
+        self.target.borrow_mut().patch_branch_target(branch, target)
+    }
+
+    fn validate_local_target(
+        &self,
+        address: InstructionAddress,
+    ) -> Result<(), InstructionBuildError> {
+        self.target.borrow().validate_local_target(address)
+    }
+}
+
+fn reject_owner_local_direct_branch(instruction: Instruction) -> Result<(), InstructionBuildError> {
+    match instruction {
+        Instruction::Jump(_) | Instruction::JumpIfZero(_) => {
+            Err(InstructionBuildError::BlockCodeBuild {
+                source: BlockCodeBuildError::BranchInstructionRequiresPatch { instruction },
+            })
+        }
+        Instruction::Push(_)
+        | Instruction::LoadVar(_)
+        | Instruction::StoreVar(_)
+        | Instruction::Call(_)
+        | Instruction::Return
+        | Instruction::Halt => Ok(()),
     }
 }
 
@@ -242,15 +463,23 @@ fn current_processing_context(
     structured_frames: &[StructuredSourceFrame],
     root_line_numbers: &Rc<RefCell<LocalLineNumberTable>>,
 ) -> (
+    BuildTargetHandle,
     Rc<RefCell<LocalLineNumberTable>>,
     StructuredBodyCapabilities,
 ) {
     structured_frames.last().map_or(
         (
+            BuildTargetHandle::Parent,
             root_line_numbers.clone(),
             StructuredBodyCapabilities::inherit(),
         ),
-        |frame| (frame.current_line_numbers.clone(), frame.body_capabilities),
+        |frame| {
+            (
+                frame.body_target.clone(),
+                frame.current_line_numbers.clone(),
+                frame.body_capabilities,
+            )
+        },
     )
 }
 
@@ -284,7 +513,9 @@ where
                 source,
             })?;
 
-    let mut owner_context = NativeStructuredSourceWordContext::new(view, source_id, code);
+    let owner_local_target_lengths = frame.owner_local_target_lengths();
+    let mut owner_context =
+        NativeStructuredSourceWordContext::new(view, source_id, code, owner_local_target_lengths);
     match accept {
         GrammarAccept::Intermediate { .. } => {
             frame
@@ -501,15 +732,26 @@ where
             continue;
         }
 
-        let (line_numbers, capabilities) =
+        let (target_handle, line_numbers, capabilities) =
             current_processing_context(&structured_frames, &root_line_numbers);
+        let mut owner_target;
+        let statement_code = match &target_handle {
+            BuildTargetHandle::Parent => &mut *code,
+            BuildTargetHandle::OwnerLocal(target) => {
+                owner_target = SharedOwnerLocalBuildTarget {
+                    target: target.clone(),
+                };
+                &mut owner_target as &mut dyn InstructionBuildTarget
+            }
+        };
         compile_statement(
             statement.tokens(),
             &mut context,
             &mut StatementCompileState {
-                code,
+                code: statement_code,
                 line_numbers,
                 capabilities,
+                target: target_handle,
             },
             &mut StatementTraversal {
                 view,
@@ -526,15 +768,6 @@ where
         }
         Terminal::LexError(error) => return Err(error.into()),
         Terminal::Eof { .. } => {}
-    }
-
-    for frame in &structured_frames {
-        for line_numbers in &frame.owner_line_numbers {
-            line_numbers
-                .borrow_mut()
-                .resolve(code)
-                .map_err(|source| SourceProcessorError::from(line_number_compile_error(source)))?;
-        }
     }
 
     let result = root_line_numbers
@@ -636,10 +869,8 @@ where
         tokens,
         context,
         local_line_number_prefix,
-        state.code,
+        state,
         traversal,
-        state.line_numbers.clone(),
-        state.capabilities,
     )? {
         return Ok(());
     }
@@ -659,10 +890,8 @@ fn compile_statement_leading_source_word<'source, S>(
     tokens: &'source [Token],
     context: &mut SourceCompileContext<'_>,
     local_line_number_prefix: Option<SourceSpan>,
-    code: &mut dyn InstructionBuildTarget,
+    state: &mut StatementCompileState<'_>,
     traversal: &mut StatementTraversal<'source, '_, S>,
-    current_line_numbers: Rc<RefCell<LocalLineNumberTable>>,
-    current_capabilities: StructuredBodyCapabilities,
 ) -> Result<bool, SourceProcessorError>
 where
     S: LogicalStatementView,
@@ -697,11 +926,11 @@ where
     let globals = context
         .globals
         .as_deref_mut()
-        .filter(|_| current_capabilities.allows_publication());
+        .filter(|_| state.capabilities.allows_publication());
     let mut runtime_publisher = context
         .runtime_definitions
         .as_mut()
-        .filter(|_| current_capabilities.allows_publication())
+        .filter(|_| state.capabilities.allows_publication())
         .map(|publication| RuntimeDefinitionPublisherAdapter {
             view: traversal.view,
             source_id: traversal.source_id,
@@ -713,7 +942,7 @@ where
     let runtime_definitions = runtime_publisher
         .as_mut()
         .map(|publisher| publisher as &mut dyn RuntimeDefinitionPublisher<'source>);
-    let binding_access = if current_capabilities.allows_publication() {
+    let binding_access = if state.capabilities.allows_publication() {
         match &mut context.bindings {
             BindingAccess::Read(bindings) => NativeSourceWordBindingAccess::Read(bindings),
             BindingAccess::Write(bindings) => NativeSourceWordBindingAccess::Write(bindings),
@@ -738,7 +967,7 @@ where
         },
         bindings: binding_access,
         operators,
-        code,
+        code: state.code,
         local_line_number_prefix,
         globals,
         runtime_definitions,
@@ -751,8 +980,9 @@ where
                 syntax_markers.to_vec(),
                 grammar.start(),
                 instance.into_owner(),
-                current_line_numbers,
-                current_capabilities,
+                state.target.clone(),
+                state.line_numbers.clone(),
+                state.capabilities,
             );
             frame.apply_owner_context();
             traversal.structured_frames.push(frame);
@@ -1909,8 +2139,8 @@ mod tests {
         DefSyntaxErrorKind, LetSyntaxErrorKind, NativeSourceWordContext,
         NativeStructuredSourceWordContext, NativeStructuredSourceWordOwner, SourceBlockItem,
         SourceBlockMarker, SourceWordRegistry, SourceWordSyntaxMarker, SourceWordSyntaxMarkerRole,
-        StructuredBodyCapabilities, StructuredBodyContext, StructuredLineNumberScope,
-        StructuredSourceWordInstance, VarSyntaxErrorKind,
+        StructuredBodyCapabilities, StructuredBodyContext, StructuredBuildTargetScope,
+        StructuredLineNumberScope, StructuredSourceWordInstance, VarSyntaxErrorKind,
     };
     use crate::structured_grammar::{
         MarkerCardinality, MarkerGroup, MarkerIdentity, StructuredGrammar,
@@ -2284,6 +2514,8 @@ mod tests {
         context_index: usize,
         marker_value: i16,
         complete_value: i16,
+        complete_with_target0_len: bool,
+        fail_completion: bool,
     }
 
     impl StructuredProbeOwner {
@@ -2293,18 +2525,23 @@ mod tests {
                 context_index: 0,
                 marker_value: 20,
                 complete_value: 30,
+                complete_with_target0_len: false,
+                fail_completion: false,
             }
         }
 
         fn without_publication() -> Self {
             Self {
                 body_contexts: vec![StructuredBodyContext::new(
+                    StructuredBuildTargetScope::Enclosing,
                     StructuredLineNumberScope::Enclosing,
                     StructuredBodyCapabilities::without_publication(),
                 )],
                 context_index: 0,
                 marker_value: 20,
                 complete_value: 30,
+                complete_with_target0_len: false,
+                fail_completion: false,
             }
         }
 
@@ -2312,10 +2549,12 @@ mod tests {
             Self {
                 body_contexts: vec![
                     StructuredBodyContext::new(
+                        StructuredBuildTargetScope::Enclosing,
                         StructuredLineNumberScope::OwnerLocal(0),
                         StructuredBodyCapabilities::inherit(),
                     ),
                     StructuredBodyContext::new(
+                        StructuredBuildTargetScope::Enclosing,
                         StructuredLineNumberScope::OwnerLocal(1),
                         StructuredBodyCapabilities::inherit(),
                     ),
@@ -2323,6 +2562,30 @@ mod tests {
                 context_index: 0,
                 marker_value: 20,
                 complete_value: 30,
+                complete_with_target0_len: false,
+                fail_completion: false,
+            }
+        }
+
+        fn owner_local_target() -> Self {
+            Self {
+                body_contexts: vec![StructuredBodyContext::new(
+                    StructuredBuildTargetScope::OwnerLocal(0),
+                    StructuredLineNumberScope::OwnerLocal(0),
+                    StructuredBodyCapabilities::inherit(),
+                )],
+                context_index: 0,
+                marker_value: 20,
+                complete_value: 30,
+                complete_with_target0_len: true,
+                fail_completion: false,
+            }
+        }
+
+        fn failing_owner_local_target() -> Self {
+            Self {
+                fail_completion: true,
+                ..Self::owner_local_target()
             }
         }
     }
@@ -2348,7 +2611,19 @@ mod tests {
             context: &mut NativeStructuredSourceWordContext<'_, '_>,
             marker: SourceBlockMarker<'_>,
         ) -> Result<(), SourceWordError> {
-            context.append_mapped(Instruction::Push(value(self.complete_value)), marker.span())
+            if self.fail_completion {
+                return Err(SourceWordError::UnsupportedSourceWord {
+                    span: marker.span(),
+                });
+            }
+            let emitted = if self.complete_with_target0_len {
+                context
+                    .owner_local_target_len(0)
+                    .expect("owner-local target should exist") as i16
+            } else {
+                self.complete_value
+            };
+            context.append_mapped(Instruction::Push(value(emitted)), marker.span())
         }
     }
 
@@ -2382,6 +2657,22 @@ mod tests {
         )?;
         Ok(StructuredSourceWordInstance::new(Box::new(
             StructuredProbeOwner::split_line_number_scopes(),
+        )))
+    }
+
+    fn start_owner_local_target_probe(
+        _context: &mut NativeSourceWordContext<'_, '_>,
+    ) -> Result<StructuredSourceWordInstance, SourceWordError> {
+        Ok(StructuredSourceWordInstance::new(Box::new(
+            StructuredProbeOwner::owner_local_target(),
+        )))
+    }
+
+    fn start_failing_owner_local_target_probe(
+        _context: &mut NativeSourceWordContext<'_, '_>,
+    ) -> Result<StructuredSourceWordInstance, SourceWordError> {
+        Ok(StructuredSourceWordInstance::new(Box::new(
+            StructuredProbeOwner::failing_owner_local_target(),
         )))
     }
 
@@ -5649,6 +5940,71 @@ mod tests {
             Ok(&Instruction::Push(value(30)))
         );
         assert_eq!(unit.instructions().get(address(3)), Ok(&Instruction::Halt));
+    }
+
+    #[test]
+    fn structured_body_context_can_select_owner_local_build_target() {
+        let mut words = PublishedWords::new();
+        let mut bindings = Bindings::new();
+        let body_word = publish_initial(&mut words, &mut bindings, "BODY", completed_primitive(7));
+        let mut source_words = SourceWordRegistry::new();
+        register_structured_probe(
+            &mut source_words,
+            &mut bindings,
+            "BLOCK",
+            start_owner_local_target_probe,
+            vec![marker("END", SourceWordSyntaxMarkerRole::BlockTerminator)],
+            structured_grammar(Vec::new(), "END"),
+        );
+        let (sources, source_id) = source("BLOCK\nBODY\nEND\nBODY");
+
+        let unit = compile_source(
+            sources.view(),
+            source_id,
+            SourceCompileContext::with_source_words(&bindings, source_words.lookup()),
+        )
+        .expect("owner-local body target should compile");
+
+        assert_eq!(
+            unit.instructions().get(address(0)),
+            Ok(&Instruction::Push(value(1)))
+        );
+        assert_eq!(
+            unit.instructions().get(address(1)),
+            Ok(&Instruction::Call(body_word))
+        );
+        assert_eq!(unit.instructions().get(address(2)), Ok(&Instruction::Halt));
+    }
+
+    #[test]
+    fn structured_completion_failure_does_not_commit_owner_local_target() {
+        let mut words = PublishedWords::new();
+        let mut bindings = Bindings::new();
+        publish_initial(&mut words, &mut bindings, "BODY", completed_primitive(7));
+        let mut source_words = SourceWordRegistry::new();
+        register_structured_probe(
+            &mut source_words,
+            &mut bindings,
+            "BLOCK",
+            start_failing_owner_local_target_probe,
+            vec![marker("END", SourceWordSyntaxMarkerRole::BlockTerminator)],
+            structured_grammar(Vec::new(), "END"),
+        );
+        let (sources, source_id) = source("BLOCK\nBODY\nEND");
+
+        let error = compile_source(
+            sources.view(),
+            source_id,
+            SourceCompileContext::with_source_words(&bindings, source_words.lookup()),
+        )
+        .expect_err("owner completion failure should reject the structured instance");
+
+        assert_eq!(
+            error,
+            SourceProcessorError::SourceWord(SourceWordError::UnsupportedSourceWord {
+                span: span(sources.view(), source_id, 11, 14)
+            })
+        );
     }
 
     #[test]
