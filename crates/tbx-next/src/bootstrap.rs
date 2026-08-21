@@ -2,8 +2,12 @@ use crate::binding::{Binding, BindingInsertError, Bindings};
 use crate::global_variable::{GlobalVarId, GlobalVariables};
 use crate::name::NormalizedName;
 use crate::source_word::{
-    def_source_word, let_source_word, var_source_word, NativeSourceWordHandler, SourceWordId,
-    SourceWordRegistry, SourceWordSyntaxMarker,
+    def_source_word, if_source_word, let_source_word, var_source_word, NativeSourceWordHandler,
+    NativeStructuredSourceWordStartHandler, SourceWordId, SourceWordRegistry,
+    SourceWordSyntaxMarker, SourceWordSyntaxMarkerRole,
+};
+use crate::structured_grammar::{
+    MarkerCardinality, MarkerGroup, MarkerIdentity, StructuredGrammar,
 };
 use crate::word::{CompletedWordDefinition, PrimitiveId, PublishedWords, WordId};
 
@@ -130,6 +134,32 @@ pub(crate) fn register_native_source_word_with_markers(
     Ok(id)
 }
 
+pub(crate) fn register_native_structured_source_word(
+    source_words: &mut SourceWordRegistry,
+    bindings: &mut Bindings,
+    name: NormalizedName,
+    start: NativeStructuredSourceWordStartHandler,
+    grammar: StructuredGrammar,
+    syntax_markers: Vec<SourceWordSyntaxMarker>,
+) -> Result<SourceWordId, SourceWordBootstrapError> {
+    let marker_names = syntax_markers
+        .iter()
+        .map(|marker| marker.name().clone())
+        .collect::<Vec<_>>();
+
+    bindings
+        .validate_new_source_word_with_markers(&name, &marker_names)
+        .map_err(SourceWordBootstrapError::from_precheck_error)?;
+
+    let id = source_words.register_structured(start, grammar, syntax_markers);
+
+    bindings
+        .insert_new_source_word_with_markers(name, id, &marker_names)
+        .map_err(SourceWordBootstrapError::from_binding_insert_error)?;
+
+    Ok(id)
+}
+
 pub(crate) fn register_builtin_source_words(
     source_words: &mut SourceWordRegistry,
     bindings: &mut Bindings,
@@ -139,6 +169,7 @@ pub(crate) fn register_builtin_source_words(
     let var_name = builtin_name("VAR");
     let let_name = builtin_name("LET");
     let def_name = builtin_name("DEF");
+    let if_name = builtin_name("IF");
     bindings
         .validate_new_name(&var_name)
         .map_err(SourceWordBootstrapError::from_precheck_error)?;
@@ -148,6 +179,16 @@ pub(crate) fn register_builtin_source_words(
     bindings
         .validate_new_name(&def_name)
         .map_err(SourceWordBootstrapError::from_precheck_error)?;
+    bindings
+        .validate_new_source_word_with_markers(
+            &if_name,
+            &[
+                builtin_name("ELSIF"),
+                builtin_name("ELSE"),
+                builtin_name("ENDIF"),
+            ],
+        )
+        .map_err(SourceWordBootstrapError::from_precheck_error)?;
 
     let var = register_native_source_word(source_words, bindings, var_name, var_source_word)
         .expect("prechecked VAR source word should remain available");
@@ -155,8 +196,35 @@ pub(crate) fn register_builtin_source_words(
         .expect("prechecked LET source word should remain available");
     let def = register_native_source_word(source_words, bindings, def_name, def_source_word)
         .expect("prechecked DEF source word should remain available");
+    let if_ = register_native_structured_source_word(
+        source_words,
+        bindings,
+        if_name,
+        if_source_word,
+        if_grammar(),
+        vec![
+            SourceWordSyntaxMarker::new(
+                builtin_name("ELSIF"),
+                SourceWordSyntaxMarkerRole::BlockContinuation,
+            ),
+            SourceWordSyntaxMarker::new(
+                builtin_name("ELSE"),
+                SourceWordSyntaxMarkerRole::BlockContinuation,
+            ),
+            SourceWordSyntaxMarker::new(
+                builtin_name("ENDIF"),
+                SourceWordSyntaxMarkerRole::BlockTerminator,
+            ),
+        ],
+    )
+    .expect("prechecked IF source word should remain available");
 
-    Ok(BuiltinSourceWordIds { var, let_, def })
+    Ok(BuiltinSourceWordIds {
+        var,
+        let_,
+        def,
+        if_,
+    })
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -164,6 +232,7 @@ pub(crate) struct BuiltinSourceWordIds {
     var: SourceWordId,
     let_: SourceWordId,
     def: SourceWordId,
+    if_: SourceWordId,
 }
 
 impl BuiltinSourceWordIds {
@@ -178,6 +247,10 @@ impl BuiltinSourceWordIds {
     pub(crate) const fn def(self) -> SourceWordId {
         self.def
     }
+
+    pub(crate) const fn if_(self) -> SourceWordId {
+        self.if_
+    }
 }
 
 fn builtin_global_variable_names() -> [NormalizedName; 26] {
@@ -188,6 +261,23 @@ fn builtin_global_variable_names() -> [NormalizedName; 26] {
 
 fn builtin_name(input: &str) -> NormalizedName {
     NormalizedName::new(input).expect("built-in source word name should be valid")
+}
+
+fn if_grammar() -> StructuredGrammar {
+    StructuredGrammar::new(
+        vec![
+            MarkerGroup::new(
+                MarkerIdentity::new(builtin_name("ELSIF")),
+                MarkerCardinality::ZeroOrMore,
+            ),
+            MarkerGroup::new(
+                MarkerIdentity::new(builtin_name("ELSE")),
+                MarkerCardinality::Optional,
+            ),
+        ],
+        Some(MarkerIdentity::new(builtin_name("ENDIF"))),
+    )
+    .expect("built-in IF grammar should be valid")
 }
 
 impl PrimitiveBootstrapError {
@@ -908,13 +998,33 @@ mod tests {
         let ids = register_builtin_source_words(&mut source_words, &mut bindings)
             .expect("empty namespace should accept built-in source words");
 
-        assert_eq!(source_words.len(), 3);
+        assert_eq!(source_words.len(), 4);
         assert_source_word_binding(&bindings, "VAR", ids.var());
         assert_source_word_binding(&bindings, "var", ids.var());
         assert_source_word_binding(&bindings, "LET", ids.let_());
         assert_source_word_binding(&bindings, "let", ids.let_());
         assert_source_word_binding(&bindings, "DEF", ids.def());
         assert_source_word_binding(&bindings, "def", ids.def());
+        assert_source_word_binding(&bindings, "IF", ids.if_());
+        assert_source_word_binding(&bindings, "if", ids.if_());
+        assert_eq!(
+            bindings
+                .syntax_marker_reservation(&name("ELSIF"))
+                .map(|reservation| reservation.owner()),
+            Some(ids.if_())
+        );
+        assert_eq!(
+            bindings
+                .syntax_marker_reservation(&name("ELSE"))
+                .map(|reservation| reservation.owner()),
+            Some(ids.if_())
+        );
+        assert_eq!(
+            bindings
+                .syntax_marker_reservation(&name("ENDIF"))
+                .map(|reservation| reservation.owner()),
+            Some(ids.if_())
+        );
     }
 
     #[test]

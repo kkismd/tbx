@@ -343,7 +343,7 @@ impl OwnerLocalBuildTarget {
         target: InstructionAddress,
     ) -> Result<(), InstructionBuildError> {
         self.validate_local_target(branch)?;
-        self.validate_local_target(target)?;
+        self.validate_local_branch_target(target)?;
         let Some(position) = self
             .unresolved_patches
             .iter()
@@ -367,6 +367,18 @@ impl OwnerLocalBuildTarget {
         address: InstructionAddress,
     ) -> Result<(), InstructionBuildError> {
         if address.as_index() >= self.code.len() {
+            return Err(InstructionBuildError::BlockCodeBuild {
+                source: BlockCodeBuildError::AddressOutsideCurrentBlock { address },
+            });
+        }
+        Ok(())
+    }
+
+    fn validate_local_branch_target(
+        &self,
+        address: InstructionAddress,
+    ) -> Result<(), InstructionBuildError> {
+        if address.as_index() > self.code.len() {
             return Err(InstructionBuildError::BlockCodeBuild {
                 source: BlockCodeBuildError::AddressOutsideCurrentBlock { address },
             });
@@ -532,6 +544,8 @@ fn current_processing_context(
 fn dispatch_current_owner_marker<'source, S>(
     view: SourceView<'source>,
     source_id: SourceId,
+    bindings: &Bindings,
+    operators: Option<OperatorLookup>,
     statement: &'source S,
     code: &mut dyn InstructionBuildTarget,
     structured_frames: &mut Vec<StructuredSourceFrame>,
@@ -577,8 +591,14 @@ where
             &mut owner_target as &mut dyn InstructionBuildTarget
         }
     };
-    let mut owner_context =
-        NativeStructuredSourceWordContext::new(view, source_id, callback_code, owner_local_targets);
+    let mut owner_context = NativeStructuredSourceWordContext::new(
+        view,
+        source_id,
+        bindings,
+        operators,
+        callback_code,
+        owner_local_targets,
+    );
     match accept {
         GrammarAccept::Intermediate { .. } => {
             frame
@@ -789,8 +809,15 @@ where
     let mut structured_frames = Vec::new();
 
     while let Some(statement) = cursor.next_completed_statement() {
-        if dispatch_current_owner_marker(view, source_id, statement, code, &mut structured_frames)?
-        {
+        if dispatch_current_owner_marker(
+            view,
+            source_id,
+            context.bindings(),
+            context.operators(),
+            statement,
+            code,
+            &mut structured_frames,
+        )? {
             continue;
         }
 
@@ -2198,7 +2225,7 @@ mod tests {
         InstructionSourceMapping, SourceMappingLookup, SourceMappingLookupError,
     };
     use crate::source_word::{
-        DefSyntaxErrorKind, LetSyntaxErrorKind, NativeSourceWordContext,
+        DefSyntaxErrorKind, IfSyntaxErrorKind, LetSyntaxErrorKind, NativeSourceWordContext,
         NativeStructuredSourceWordContext, NativeStructuredSourceWordOwner, SourceBlockItem,
         SourceBlockMarker, SourceWordRegistry, SourceWordSyntaxMarker, SourceWordSyntaxMarkerRole,
         StructuredBodyCapabilities, StructuredBodyContext, StructuredBuildTargetScope,
@@ -6364,6 +6391,265 @@ mod tests {
         assert_eq!(
             unit.instructions().get(address(8)),
             Ok(&Instruction::Push(value(30)))
+        );
+    }
+
+    #[test]
+    fn builtin_if_runs_true_false_and_elsif_paths() {
+        let (words, primitives, operators, source_words, bindings, mut globals, variables) =
+            global_source_fixture();
+
+        run_with_source_words_operators_and_mut_globals(
+            "IF 1\nLET A = 11\nELSE\nLET A = 22\nENDIF",
+            &bindings,
+            &mut globals,
+            &source_words,
+            &words,
+            &primitives,
+            operators.lookup(),
+        );
+        assert_eq!(globals.view().read(variables[0]), Ok(value(11)));
+
+        run_with_source_words_operators_and_mut_globals(
+            "IF 0\nLET B = 11\nELSE\nLET B = 22\nENDIF",
+            &bindings,
+            &mut globals,
+            &source_words,
+            &words,
+            &primitives,
+            operators.lookup(),
+        );
+        assert_eq!(globals.view().read(variables[1]), Ok(value(22)));
+
+        run_with_source_words_operators_and_mut_globals(
+            "IF 0\nLET C = 11\nELSIF 1\nLET C = 33\nELSE\nLET C = 44\nENDIF",
+            &bindings,
+            &mut globals,
+            &source_words,
+            &words,
+            &primitives,
+            operators.lookup(),
+        );
+        assert_eq!(globals.view().read(variables[2]), Ok(value(33)));
+    }
+
+    #[test]
+    fn builtin_if_accepts_empty_branches_and_nested_if() {
+        let (words, primitives, operators, source_words, bindings, mut globals, variables) =
+            global_source_fixture();
+
+        run_with_source_words_operators_and_mut_globals(
+            "IF 0\nELSIF 0\nELSE\nENDIF\nIF 1\nIF 0\nLET A = 10\nELSE\nLET A = 20\nENDIF\nENDIF",
+            &bindings,
+            &mut globals,
+            &source_words,
+            &words,
+            &primitives,
+            operators.lookup(),
+        );
+
+        assert_eq!(globals.view().read(variables[0]), Ok(value(20)));
+    }
+
+    #[test]
+    fn builtin_if_rejects_marker_payload_and_order_errors_at_local_span() {
+        let (words, primitives, operators, source_words, bindings, _globals, _variables) =
+            global_source_fixture();
+        let (sources, source_id) = source("IF 1\nELSE\nELSIF 1\nENDIF");
+
+        let error = compile_source(
+            sources.view(),
+            source_id,
+            SourceCompileContext::with_source_words_and_operators(
+                &bindings,
+                source_words.lookup(),
+                operators.lookup(),
+            ),
+        )
+        .expect_err("ELSIF after ELSE should be rejected by common grammar");
+
+        assert_eq!(
+            error,
+            SourceProcessorError::SourceWord(SourceWordError::StructuredGrammar {
+                span: span(sources.view(), source_id, 10, 17),
+                source: crate::structured_grammar::GrammarProgressError::BackwardMarker {
+                    marker_group_index: 0,
+                    current_group_index: 1
+                },
+            })
+        );
+
+        let (sources, source_id) = source("IF 1\nELSE X\nENDIF");
+        let error = compile_source(
+            sources.view(),
+            source_id,
+            SourceCompileContext::with_source_words_and_operators(
+                &bindings,
+                source_words.lookup(),
+                operators.lookup(),
+            ),
+        )
+        .expect_err("ELSE payload should be rejected by IF semantics");
+
+        assert_eq!(
+            error,
+            SourceProcessorError::SourceWord(SourceWordError::IfSyntax {
+                span: span(sources.view(), source_id, 10, 11),
+                kind: IfSyntaxErrorKind::TrailingToken {
+                    kind: TokenKind::Name
+                },
+            })
+        );
+
+        drop((words, primitives));
+    }
+
+    #[test]
+    fn builtin_if_rejects_missing_condition_and_marker_line_number_prefix() {
+        let (_words, _primitives, operators, source_words, bindings, _globals, _variables) =
+            global_source_fixture();
+        let (sources, source_id) = source("IF 1\nELSIF\nENDIF");
+
+        let error = compile_source(
+            sources.view(),
+            source_id,
+            SourceCompileContext::with_source_words_and_operators(
+                &bindings,
+                source_words.lookup(),
+                operators.lookup(),
+            ),
+        )
+        .expect_err("ELSIF requires a condition");
+
+        assert_eq!(
+            error,
+            SourceProcessorError::SourceWord(SourceWordError::IfSyntax {
+                span: span(sources.view(), source_id, 5, 10),
+                kind: IfSyntaxErrorKind::MissingCondition,
+            })
+        );
+
+        let (sources, source_id) = source("IF 1\n100 ELSE\nENDIF");
+        let error = compile_source(
+            sources.view(),
+            source_id,
+            SourceCompileContext::with_source_words_and_operators(
+                &bindings,
+                source_words.lookup(),
+                operators.lookup(),
+            ),
+        )
+        .expect_err("line-number-prefixed marker should not classify as a marker");
+
+        assert_eq!(
+            error,
+            SourceProcessorError::Compile(CompileError {
+                span: span(sources.view(), source_id, 9, 13),
+                kind: CompileErrorKind::WordResolution {
+                    source: WordResolutionError::UndefinedName
+                },
+            })
+        );
+    }
+
+    #[test]
+    fn builtin_if_body_cannot_publish_and_failed_if_does_not_poison_next_compile() {
+        let (_words, _primitives, operators, source_words, mut bindings, mut globals, _variables) =
+            global_source_fixture();
+        let (sources, source_id) = source("IF 1\nVAR SCORE\nENDIF");
+
+        let error = compile_source(
+            sources.view(),
+            source_id,
+            SourceCompileContext::with_source_word_publication_and_operators(
+                &mut bindings,
+                source_words.lookup(),
+                operators.lookup(),
+                &mut globals,
+            ),
+        )
+        .expect_err("IF branch publication should fail through capability");
+
+        assert_eq!(
+            error,
+            SourceProcessorError::SourceWord(SourceWordError::VarPublicationContextUnavailable)
+        );
+        assert_eq!(bindings.get(&name("SCORE")), None);
+
+        let (sources, source_id) = source("IF 1\nENDIF");
+        compile_source(
+            sources.view(),
+            source_id,
+            SourceCompileContext::with_source_words_and_operators(
+                &bindings,
+                source_words.lookup(),
+                operators.lookup(),
+            ),
+        )
+        .expect("independent source should compile after failed IF");
+    }
+
+    #[test]
+    fn builtin_if_generated_jumps_use_branch_origin_spans() {
+        let (_words, _primitives, operators, source_words, bindings, _globals, _variables) =
+            global_source_fixture();
+        let (sources, source_id) = source("IF 1\nLET A = 2\nENDIF");
+
+        let unit = compile_source(
+            sources.view(),
+            source_id,
+            SourceCompileContext::with_source_words_and_operators(
+                &bindings,
+                source_words.lookup(),
+                operators.lookup(),
+            ),
+        )
+        .expect("IF should compile");
+
+        assert_eq!(
+            unit.instructions().get(address(1)),
+            Ok(&Instruction::JumpIfZero(address(4)))
+        );
+        assert_eq!(unit.instructions().get(address(4)), Ok(&Instruction::Halt));
+        assert_eq!(
+            unit.source_span(location(&unit, 1)),
+            Ok(Some(span(sources.view(), source_id, 0, 4)))
+        );
+        assert_eq!(
+            unit.source_span(location(&unit, 2)),
+            Ok(Some(span(sources.view(), source_id, 13, 14)))
+        );
+    }
+
+    #[test]
+    fn builtin_if_merge_jump_targets_final_halt_instruction_not_executable_end() {
+        let (_words, _primitives, operators, source_words, bindings, _globals, _variables) =
+            global_source_fixture();
+        let (sources, source_id) = source("IF 1\nLET A = 2\nELSE\nLET A = 3\nENDIF");
+
+        let unit = compile_source(
+            sources.view(),
+            source_id,
+            SourceCompileContext::with_source_words_and_operators(
+                &bindings,
+                source_words.lookup(),
+                operators.lookup(),
+            ),
+        )
+        .expect("IF/ELSE should compile");
+
+        assert_eq!(
+            unit.instructions().get(address(1)),
+            Ok(&Instruction::JumpIfZero(address(5)))
+        );
+        assert_eq!(
+            unit.instructions().get(address(4)),
+            Ok(&Instruction::Jump(address(7)))
+        );
+        assert_eq!(unit.instructions().get(address(7)), Ok(&Instruction::Halt));
+        assert_eq!(
+            unit.source_span(location(&unit, 4)),
+            Ok(Some(span(sources.view(), source_id, 0, 4)))
         );
     }
 

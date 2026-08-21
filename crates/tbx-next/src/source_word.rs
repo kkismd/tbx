@@ -89,6 +89,8 @@ pub(crate) struct StructuredBodyCapabilities {
 pub(crate) struct NativeStructuredSourceWordContext<'source, 'state> {
     view: SourceView<'source>,
     source_id: SourceId,
+    bindings: &'state Bindings,
+    operators: Option<OperatorLookup>,
     code: &'state mut dyn InstructionBuildTarget,
     owner_local_targets: Vec<StructuredOwnerLocalTarget>,
 }
@@ -211,6 +213,10 @@ pub(crate) enum SourceWordError {
     DefBindingCommitInvariantViolated {
         span: SourceSpan,
     },
+    IfSyntax {
+        span: SourceSpan,
+        kind: IfSyntaxErrorKind,
+    },
     StructuredGrammar {
         span: SourceSpan,
         source: crate::structured_grammar::GrammarProgressError,
@@ -244,6 +250,12 @@ pub(crate) enum DefSyntaxErrorKind {
     TrailingToken { kind: TokenKind },
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum IfSyntaxErrorKind {
+    MissingCondition,
+    TrailingToken { kind: TokenKind },
+}
+
 impl SourceWordError {
     pub(crate) fn primary_span(self) -> Option<SourceSpan> {
         match self {
@@ -271,6 +283,7 @@ impl SourceWordError {
             | Self::DefBodyBuild { span }
             | Self::DefDefinition { span }
             | Self::DefBindingCommitInvariantViolated { span }
+            | Self::IfSyntax { span, .. }
             | Self::StructuredGrammar { span, .. }
             | Self::StructuredMissingTerminator { span } => Some(span),
             Self::DefLex { source } => match source {
@@ -510,12 +523,16 @@ impl<'source, 'state> NativeStructuredSourceWordContext<'source, 'state> {
     pub(crate) fn new(
         view: SourceView<'source>,
         source_id: SourceId,
+        bindings: &'state Bindings,
+        operators: Option<OperatorLookup>,
         code: &'state mut dyn InstructionBuildTarget,
         owner_local_targets: Vec<StructuredOwnerLocalTarget>,
     ) -> Self {
         Self {
             view,
             source_id,
+            bindings,
+            operators,
             code,
             owner_local_targets,
         }
@@ -540,6 +557,38 @@ impl<'source, 'state> NativeStructuredSourceWordContext<'source, 'state> {
             .map_err(|source| SourceWordError::InstructionBuild { source })
     }
 
+    pub(crate) fn current_address(&self) -> crate::instruction::InstructionAddress {
+        self.code.current_address()
+    }
+
+    pub(crate) fn append_mapped_jump_placeholder(
+        &mut self,
+        span: SourceSpan,
+    ) -> Result<crate::instruction::InstructionAddress, SourceWordError> {
+        self.code
+            .append_mapped_jump_placeholder(span)
+            .map_err(|source| SourceWordError::InstructionBuild { source })
+    }
+
+    pub(crate) fn append_mapped_jump_if_zero_placeholder(
+        &mut self,
+        span: SourceSpan,
+    ) -> Result<crate::instruction::InstructionAddress, SourceWordError> {
+        self.code
+            .append_mapped_jump_if_zero_placeholder(span)
+            .map_err(|source| SourceWordError::InstructionBuild { source })
+    }
+
+    pub(crate) fn patch_branch_target(
+        &mut self,
+        branch: crate::instruction::InstructionAddress,
+        target: crate::instruction::InstructionAddress,
+    ) -> Result<(), SourceWordError> {
+        self.code
+            .patch_branch_target(branch, target)
+            .map_err(|source| SourceWordError::InstructionBuild { source })
+    }
+
     pub(crate) fn append_owner_local_target(
         &mut self,
         index: usize,
@@ -549,6 +598,37 @@ impl<'source, 'state> NativeStructuredSourceWordContext<'source, 'state> {
             return Err(SourceWordError::UnsupportedSourceWord { span: anchor });
         };
         target.append_to(self.code, anchor)
+    }
+
+    pub(crate) fn stage_expression(
+        &self,
+        tokens: &[Token],
+        anchor: SourceSpan,
+    ) -> Result<ExpressionStaging, SourceWordError> {
+        let Some(operators) = self.operators else {
+            return Err(SourceWordError::LetExpressionContextUnavailable { span: anchor });
+        };
+
+        let mut expression_tokens = tokens
+            .iter()
+            .copied()
+            .filter(|token| token.kind() != TokenKind::LineBoundary)
+            .collect::<Vec<_>>();
+        let end = expression_tokens
+            .last()
+            .map_or(anchor.end(), |token| token.span().end());
+        expression_tokens.push(Token::new(
+            TokenKind::Eof,
+            self.view.span(self.source_id, end, end).map_err(|source| {
+                SourceWordError::Expression {
+                    source: ExpressionError::Source(source),
+                }
+            })?,
+        ));
+
+        let resolver = |source_name: &str| resolve_variable_name(self.bindings, source_name);
+        parse_expression(self.view, &expression_tokens, operators, &resolver)
+            .map_err(|source| SourceWordError::Expression { source })
     }
 }
 
@@ -612,7 +692,7 @@ impl StructuredOwnerLocalTarget {
         parent_start: crate::instruction::InstructionAddress,
         anchor: SourceSpan,
     ) -> Result<crate::instruction::InstructionAddress, SourceWordError> {
-        if target.as_index() >= self.instructions.len() {
+        if target.as_index() > self.instructions.len() {
             return Err(SourceWordError::UnsupportedSourceWord { span: anchor });
         }
         let parent_index = parent_start
@@ -847,6 +927,22 @@ impl<'source, 'state> NativeSourceWordContext<'source, 'state> {
 
     pub(crate) fn source_word_token(&self) -> Token {
         self.source_word_token
+    }
+
+    pub(crate) fn statement_span(&self) -> Result<SourceSpan, SourceWordError> {
+        let last = self
+            .reader
+            .tokens
+            .last()
+            .copied()
+            .unwrap_or(self.source_word_token);
+        self.view
+            .span(
+                self.source_id,
+                self.source_word_token.span().start(),
+                last.span().end(),
+            )
+            .map_err(|source| SourceWordError::Source { source })
     }
 
     pub(crate) fn statement_reader_mut(&mut self) -> &mut SourceStatementReader<'source> {
@@ -1115,6 +1211,197 @@ pub(crate) fn def_source_word(
 
     context.publish_runtime_definition(name, name_token.span(), &body, end_span)?;
     Ok(())
+}
+
+#[derive(Debug)]
+struct IfSourceWordOwner {
+    branches: Vec<IfBranch>,
+    current_body_index: usize,
+}
+
+#[derive(Debug)]
+struct IfBranch {
+    condition: Option<ExpressionStaging>,
+    origin_span: SourceSpan,
+}
+
+pub(crate) fn if_source_word(
+    context: &mut NativeSourceWordContext<'_, '_>,
+) -> Result<StructuredSourceWordInstance, SourceWordError> {
+    let condition = parse_required_if_condition_from_reader(context)?;
+    let origin_span = context.statement_span()?;
+    Ok(StructuredSourceWordInstance::new(Box::new(
+        IfSourceWordOwner {
+            branches: vec![IfBranch {
+                condition: Some(condition),
+                origin_span,
+            }],
+            current_body_index: 0,
+        },
+    )))
+}
+
+impl NativeStructuredSourceWordOwner for IfSourceWordOwner {
+    fn current_body_context(&self) -> StructuredBodyContext {
+        StructuredBodyContext::new(
+            StructuredBuildTargetScope::OwnerLocal(self.current_body_index),
+            StructuredLineNumberScope::OwnerLocal(self.current_body_index),
+            StructuredBodyCapabilities::without_publication(),
+        )
+    }
+
+    fn accept_marker(
+        &mut self,
+        context: &mut NativeStructuredSourceWordContext<'_, '_>,
+        marker: SourceBlockMarker<'_>,
+        _accept: crate::structured_grammar::GrammarAccept,
+    ) -> Result<(), SourceWordError> {
+        let condition = if marker.name().as_str() == "ELSIF" {
+            Some(parse_required_if_condition_from_tokens(
+                marker.remaining_tokens(),
+                marker.token().span(),
+                context,
+            )?)
+        } else {
+            require_empty_if_marker_remainder(&marker)?;
+            None
+        };
+
+        self.branches.push(IfBranch {
+            condition,
+            origin_span: marker.span(),
+        });
+        self.current_body_index += 1;
+        Ok(())
+    }
+
+    fn complete(
+        &mut self,
+        context: &mut NativeStructuredSourceWordContext<'_, '_>,
+        marker: SourceBlockMarker<'_>,
+    ) -> Result<(), SourceWordError> {
+        require_empty_if_marker_remainder(&marker)?;
+
+        let mut merge_jumps = Vec::new();
+        for index in 0..self.branches.len() {
+            let branch = &self.branches[index];
+            let branch_if_false = if let Some(condition) = &branch.condition {
+                commit_if_condition(context, condition)?;
+                Some(context.append_mapped_jump_if_zero_placeholder(branch.origin_span)?)
+            } else {
+                None
+            };
+
+            context.append_owner_local_target(index, branch.origin_span)?;
+
+            if index + 1 < self.branches.len() {
+                merge_jumps.push(context.append_mapped_jump_placeholder(branch.origin_span)?);
+            }
+
+            if let Some(branch_if_false) = branch_if_false {
+                context.patch_branch_target(branch_if_false, context.current_address())?;
+            }
+        }
+
+        let merge_target = context.current_address();
+        for jump in merge_jumps {
+            context.patch_branch_target(jump, merge_target)?;
+        }
+        Ok(())
+    }
+}
+
+fn parse_required_if_condition_from_reader(
+    context: &mut NativeSourceWordContext<'_, '_>,
+) -> Result<ExpressionStaging, SourceWordError> {
+    let (tokens, anchor) = {
+        let reader = context.statement_reader_mut();
+        let tokens = reader
+            .remaining_expression()
+            .map_err(if_reader_error_for_condition)?;
+        (tokens, context.source_word_token().span())
+    };
+    parse_required_if_condition_from_tokens(tokens, anchor, context)
+}
+
+fn parse_required_if_condition_from_tokens(
+    tokens: &[Token],
+    anchor: SourceSpan,
+    context: &impl IfConditionContext,
+) -> Result<ExpressionStaging, SourceWordError> {
+    if tokens.is_empty() {
+        return Err(SourceWordError::IfSyntax {
+            span: anchor,
+            kind: IfSyntaxErrorKind::MissingCondition,
+        });
+    }
+    context.stage_if_expression(tokens, anchor)
+}
+
+trait IfConditionContext {
+    fn stage_if_expression(
+        &self,
+        tokens: &[Token],
+        anchor: SourceSpan,
+    ) -> Result<ExpressionStaging, SourceWordError>;
+}
+
+impl IfConditionContext for NativeSourceWordContext<'_, '_> {
+    fn stage_if_expression(
+        &self,
+        tokens: &[Token],
+        anchor: SourceSpan,
+    ) -> Result<ExpressionStaging, SourceWordError> {
+        self.stage_expression(tokens, anchor)
+    }
+}
+
+impl IfConditionContext for NativeStructuredSourceWordContext<'_, '_> {
+    fn stage_if_expression(
+        &self,
+        tokens: &[Token],
+        anchor: SourceSpan,
+    ) -> Result<ExpressionStaging, SourceWordError> {
+        self.stage_expression(tokens, anchor)
+    }
+}
+
+fn commit_if_condition(
+    context: &mut NativeStructuredSourceWordContext<'_, '_>,
+    condition: &ExpressionStaging,
+) -> Result<(), SourceWordError> {
+    for entry in condition.entries() {
+        context.append_mapped(entry.instruction(), entry.span())?;
+    }
+    Ok(())
+}
+
+fn require_empty_if_marker_remainder(
+    marker: &SourceBlockMarker<'_>,
+) -> Result<(), SourceWordError> {
+    if let Some(token) = marker.remaining_tokens().first().copied() {
+        return Err(SourceWordError::IfSyntax {
+            span: token.span(),
+            kind: IfSyntaxErrorKind::TrailingToken { kind: token.kind() },
+        });
+    }
+    Ok(())
+}
+
+fn if_reader_error_for_condition(error: SourceStatementReaderError) -> SourceWordError {
+    match error {
+        SourceStatementReaderError::Missing { span, .. } => SourceWordError::IfSyntax {
+            span,
+            kind: IfSyntaxErrorKind::MissingCondition,
+        },
+        SourceStatementReaderError::Unexpected { actual, .. }
+        | SourceStatementReaderError::TrailingToken { actual } => SourceWordError::IfSyntax {
+            span: actual.span(),
+            kind: IfSyntaxErrorKind::TrailingToken {
+                kind: actual.kind(),
+            },
+        },
+    }
 }
 
 pub(crate) fn unsupported_source_word(

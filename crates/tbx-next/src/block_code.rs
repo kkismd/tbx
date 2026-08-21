@@ -133,7 +133,7 @@ impl<'a> BlockCodeBuilder<'a> {
         target: InstructionAddress,
     ) -> Result<(), BlockCodeBuildError> {
         self.validate_local_target(branch)?;
-        self.validate_local_target(target)?;
+        self.validate_local_branch_target(target)?;
         let Some(position) = self
             .unresolved_patches
             .iter()
@@ -155,6 +155,18 @@ impl<'a> BlockCodeBuilder<'a> {
         address: InstructionAddress,
     ) -> Result<(), BlockCodeBuildError> {
         if address.as_index() < self.block_start.as_index() || address.as_index() >= self.code.len()
+        {
+            return Err(BlockCodeBuildError::AddressOutsideCurrentBlock { address });
+        }
+
+        Ok(())
+    }
+
+    fn validate_local_branch_target(
+        &self,
+        address: InstructionAddress,
+    ) -> Result<(), BlockCodeBuildError> {
+        if address.as_index() < self.block_start.as_index() || address.as_index() > self.code.len()
         {
             return Err(BlockCodeBuildError::AddressOutsideCurrentBlock { address });
         }

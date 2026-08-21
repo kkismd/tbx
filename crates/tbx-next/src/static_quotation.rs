@@ -143,7 +143,7 @@ impl StaticQuotation {
         target: InstructionAddress,
         parent_start: InstructionAddress,
     ) -> Result<InstructionAddress, StaticQuotationAttachError> {
-        if !self.completed.contains(target) {
+        if !self.completed.contains(target) && target != self.completed.end() {
             return Err(StaticQuotationAttachError::InvalidLocalTarget { target });
         }
 
@@ -274,6 +274,36 @@ mod tests {
     }
 
     #[test]
+    fn one_past_end_branch_targets_attach_to_parent_following_instruction() {
+        let quotation = StaticQuotation::build(|builder| {
+            let jump = builder.append_unmapped_jump_placeholder()?;
+            let jump_if_zero = builder.append_unmapped_jump_if_zero_placeholder()?;
+            let end = builder.current_address();
+            builder.patch_branch_target(jump, end)?;
+            builder.patch_branch_target(jump_if_zero, end)?;
+            Ok(())
+        })
+        .expect("quotation can complete with local end boundary targets");
+
+        let parent = build_parent(|builder| {
+            builder.append_unmapped(push(99))?;
+            quotation.attach_to(builder).map_err(|_| unreachable!())?;
+            builder.append_unmapped(push(7))?;
+            Ok(())
+        });
+
+        assert_eq!(
+            parent.instruction_view().get(address(1)),
+            Ok(&Instruction::Jump(address(3)))
+        );
+        assert_eq!(
+            parent.instruction_view().get(address(2)),
+            Ok(&Instruction::JumpIfZero(address(3)))
+        );
+        assert_eq!(parent.instruction_view().get(address(3)), Ok(&push(7)));
+    }
+
+    #[test]
     fn unresolved_branch_rejects_quotation_completion() {
         let error = StaticQuotation::build(|builder| {
             builder.append_unmapped_jump_placeholder()?;
@@ -309,6 +339,30 @@ mod tests {
             Err(StaticQuotationAttachError::InvalidLocalTarget {
                 target: address(99)
             })
+        );
+        assert_eq!(parent.current_len(), 1);
+        parent.finish().expect("parent should still complete");
+        assert_eq!(parent_code.len(), 1);
+    }
+
+    #[test]
+    fn one_past_end_plus_one_rejects_attachment_without_parent_mutation() {
+        let mut code = SourceMappedCode::new();
+        code.append_unmapped(Instruction::Jump(address(2)))
+            .expect("test quotation instruction should append");
+        let quotation = StaticQuotation {
+            code,
+            completed: CompletedBlockCode::test_new(address(0), address(1)),
+        };
+        let mut parent_code = SourceMappedCode::new();
+        let mut parent = BlockCodeBuilder::new(&mut parent_code);
+        parent
+            .append_unmapped(push(10))
+            .expect("prefix should append");
+
+        assert_eq!(
+            quotation.attach_to(&mut parent),
+            Err(StaticQuotationAttachError::InvalidLocalTarget { target: address(2) })
         );
         assert_eq!(parent.current_len(), 1);
         parent.finish().expect("parent should still complete");
