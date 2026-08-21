@@ -6610,6 +6610,7 @@ mod tests {
             unit.instructions().get(address(1)),
             Ok(&Instruction::JumpIfZero(address(4)))
         );
+        assert_eq!(unit.instructions().get(address(4)), Ok(&Instruction::Halt));
         assert_eq!(
             unit.source_span(location(&unit, 1)),
             Ok(Some(span(sources.view(), source_id, 0, 4)))
@@ -6617,6 +6618,38 @@ mod tests {
         assert_eq!(
             unit.source_span(location(&unit, 2)),
             Ok(Some(span(sources.view(), source_id, 13, 14)))
+        );
+    }
+
+    #[test]
+    fn builtin_if_merge_jump_targets_final_halt_instruction_not_executable_end() {
+        let (_words, _primitives, operators, source_words, bindings, _globals, _variables) =
+            global_source_fixture();
+        let (sources, source_id) = source("IF 1\nLET A = 2\nELSE\nLET A = 3\nENDIF");
+
+        let unit = compile_source(
+            sources.view(),
+            source_id,
+            SourceCompileContext::with_source_words_and_operators(
+                &bindings,
+                source_words.lookup(),
+                operators.lookup(),
+            ),
+        )
+        .expect("IF/ELSE should compile");
+
+        assert_eq!(
+            unit.instructions().get(address(1)),
+            Ok(&Instruction::JumpIfZero(address(5)))
+        );
+        assert_eq!(
+            unit.instructions().get(address(4)),
+            Ok(&Instruction::Jump(address(7)))
+        );
+        assert_eq!(unit.instructions().get(address(7)), Ok(&Instruction::Halt));
+        assert_eq!(
+            unit.source_span(location(&unit, 4)),
+            Ok(Some(span(sources.view(), source_id, 0, 4)))
         );
     }
 
