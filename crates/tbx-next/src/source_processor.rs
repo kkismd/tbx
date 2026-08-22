@@ -258,10 +258,10 @@ impl StructuredSourceFrame {
     }
 
     fn resolve_owner_line_numbers(
-        &self,
+        &mut self,
         code: &mut dyn InstructionBuildTarget,
     ) -> Result<(), SourceProcessorError> {
-        for scope in &self.owner_line_numbers {
+        for scope in &mut self.owner_line_numbers {
             let mut owner_target;
             let target = match &scope.target {
                 BuildTargetHandle::Parent => &mut *code,
@@ -573,12 +573,10 @@ where
                 source,
             })?;
 
+    frame.resolve_owner_line_numbers(code)?;
     let callback_target = match accept {
         GrammarAccept::Intermediate { .. } => frame.body_target.clone(),
-        GrammarAccept::Terminator => {
-            frame.resolve_owner_line_numbers(code)?;
-            frame.enclosing_target.clone()
-        }
+        GrammarAccept::Terminator => frame.enclosing_target.clone(),
     };
     let owner_local_targets = frame.owner_local_target_snapshots()?;
     let mut owner_target;
@@ -6395,6 +6393,53 @@ mod tests {
     }
 
     #[test]
+    fn structured_reused_owner_local_scope_resolves_new_patches_incrementally() {
+        let mut words = PublishedWords::new();
+        let mut primitives = PrimitiveRegistry::new();
+        let mut bindings = Bindings::new();
+        let operators = register_operator_primitives(&mut primitives, &mut words);
+        let push7 = primitives.register(push_7);
+        let push5 = primitives.register(push_5);
+        let fail = primitives.register(fail_after_partial_stack_update);
+        register_primitive(&mut words, &mut bindings, name("PUSH7"), push7)
+            .expect("PUSH7 primitive should register");
+        register_primitive(&mut words, &mut bindings, name("PUSH5"), push5)
+            .expect("PUSH5 primitive should register");
+        register_primitive(&mut words, &mut bindings, name("FAIL"), fail)
+            .expect("FAIL primitive should register");
+        let mut source_words = SourceWordRegistry::new();
+        register_structured_probe(
+            &mut source_words,
+            &mut bindings,
+            "BLOCK",
+            start_owner_local_target_probe,
+            vec![
+                marker("ELSE", SourceWordSyntaxMarkerRole::BlockContinuation),
+                marker("END", SourceWordSyntaxMarkerRole::BlockTerminator),
+            ],
+            structured_grammar(vec![("ELSE", MarkerCardinality::Optional)], "END"),
+        );
+        let (sources, source_id) = source(
+            "BLOCK\nBIF 0, 10\nFAIL\n10 PUSH7\nBIF 1, 10\nELSE\nBIF 0, 20\nFAIL\n20 PUSH5\nBIF 1, 20\nEND",
+        );
+
+        let result = run_source(
+            sources.view(),
+            source_id,
+            SourceExecutionContext::with_source_words_and_operators(
+                &bindings,
+                source_words.lookup(),
+                operators.lookup(),
+                PublishedWordLookup::new(&words),
+                primitives.lookup(),
+            ),
+        )
+        .expect("reused owner-local scope should resolve marker and terminator patches");
+
+        assert_eq!(result.data_stack(), [value(7), value(20), value(5)]);
+    }
+
+    #[test]
     fn builtin_if_runs_true_false_and_elsif_paths() {
         let (words, primitives, operators, source_words, bindings, mut globals, variables) =
             global_source_fixture();
@@ -6434,6 +6479,35 @@ mod tests {
     }
 
     #[test]
+    fn builtin_if_source_to_vm_covers_simple_false_and_multiple_elsif_selection() {
+        let (words, primitives, operators, source_words, bindings, mut globals, variables) =
+            global_source_fixture();
+
+        run_with_source_words_operators_and_mut_globals(
+            "IF 1\nLET A = 1\nENDIF\nIF 0\nLET B = 1\nENDIF",
+            &bindings,
+            &mut globals,
+            &source_words,
+            &words,
+            &primitives,
+            operators.lookup(),
+        );
+        assert_eq!(globals.view().read(variables[0]), Ok(value(1)));
+        assert_eq!(globals.view().read(variables[1]), Ok(value(0)));
+
+        run_with_source_words_operators_and_mut_globals(
+            "IF 0\nLET C = 10\nELSIF 0\nLET C = 20\nELSIF 1\nLET C = 30\nELSE\nLET C = 40\nENDIF",
+            &bindings,
+            &mut globals,
+            &source_words,
+            &words,
+            &primitives,
+            operators.lookup(),
+        );
+        assert_eq!(globals.view().read(variables[2]), Ok(value(30)));
+    }
+
+    #[test]
     fn builtin_if_accepts_empty_branches_and_nested_if() {
         let (words, primitives, operators, source_words, bindings, mut globals, variables) =
             global_source_fixture();
@@ -6449,6 +6523,146 @@ mod tests {
         );
 
         assert_eq!(globals.view().read(variables[0]), Ok(value(20)));
+    }
+
+    #[test]
+    fn builtin_if_quotation_local_line_number_branch_runs_inside_body_only() {
+        let (mut words, mut primitives, operators) = operator_fixture();
+        let mut source_words = SourceWordRegistry::new();
+        let mut bindings = Bindings::new();
+        register_builtin_source_words(&mut source_words, &mut bindings)
+            .expect("built-in source words should bootstrap");
+        let push7 = primitives.register(push_7);
+        let fail = primitives.register(fail_after_partial_stack_update);
+        register_primitive(&mut words, &mut bindings, name("PUSH7"), push7)
+            .expect("PUSH7 primitive should register");
+        register_primitive(&mut words, &mut bindings, name("FAIL"), fail)
+            .expect("FAIL primitive should register");
+        let (sources, source_id) = source("IF 1\nBIF 0, 20\nFAIL\n20 PUSH7\nENDIF");
+
+        let result = run_source(
+            sources.view(),
+            source_id,
+            SourceExecutionContext::with_source_words_and_operators(
+                &bindings,
+                source_words.lookup(),
+                operators.lookup(),
+                PublishedWordLookup::new(&words),
+                primitives.lookup(),
+            ),
+        )
+        .expect("quotation-local line-number branch should run inside the branch body");
+        assert_eq!(result.data_stack(), [value(7)]);
+
+        let (sources, source_id) = source("IF 1\nBIF 0, 99\nENDIF\n99 PUSH7");
+        let error = compile_source(
+            sources.view(),
+            source_id,
+            SourceCompileContext::with_source_words_and_operators(
+                &bindings,
+                source_words.lookup(),
+                operators.lookup(),
+            ),
+        )
+        .expect_err("quotation-local branch should not resolve a parent line number");
+        assert_eq!(
+            error,
+            SourceProcessorError::Compile(CompileError {
+                span: span(sources.view(), source_id, 12, 14),
+                kind: CompileErrorKind::LineNumber {
+                    source: Box::new(LineNumberError::Undefined {
+                        line_number: LocalLineNumber::new(99),
+                        span: span(sources.view(), source_id, 12, 14),
+                    }),
+                },
+            })
+        );
+
+        let (sources, source_id) = source("IF 0\nELSE\nBIF 0, 20\nFAIL\n20 PUSH7\nENDIF");
+        let result = run_source(
+            sources.view(),
+            source_id,
+            SourceExecutionContext::with_source_words_and_operators(
+                &bindings,
+                source_words.lookup(),
+                operators.lookup(),
+                PublishedWordLookup::new(&words),
+                primitives.lookup(),
+            ),
+        )
+        .expect("same local line number should work in a later IF branch body");
+        assert_eq!(result.data_stack(), [value(7)]);
+    }
+
+    #[test]
+    fn builtin_if_rejects_parent_jump_into_branch_body_line_number() {
+        let (mut words, mut primitives, operators) = operator_fixture();
+        let mut source_words = SourceWordRegistry::new();
+        let mut bindings = Bindings::new();
+        register_builtin_source_words(&mut source_words, &mut bindings)
+            .expect("built-in source words should bootstrap");
+        let push7 = primitives.register(push_7);
+        register_primitive(&mut words, &mut bindings, name("PUSH7"), push7)
+            .expect("PUSH7 primitive should register");
+        let (sources, source_id) = source("BIF 0, 20\nIF 1\n20 PUSH7\nENDIF");
+
+        let error = compile_source(
+            sources.view(),
+            source_id,
+            SourceCompileContext::with_source_words_and_operators(
+                &bindings,
+                source_words.lookup(),
+                operators.lookup(),
+            ),
+        )
+        .expect_err("parent scope should not resolve a quotation-local line number");
+
+        assert_eq!(
+            error,
+            SourceProcessorError::Compile(CompileError {
+                span: span(sources.view(), source_id, 7, 9),
+                kind: CompileErrorKind::LineNumber {
+                    source: Box::new(LineNumberError::Undefined {
+                        line_number: LocalLineNumber::new(20),
+                        span: span(sources.view(), source_id, 7, 9),
+                    }),
+                },
+            })
+        );
+    }
+
+    #[test]
+    fn builtin_if_allows_same_line_number_in_separate_branch_quotations() {
+        let (mut words, mut primitives, operators) = operator_fixture();
+        let mut source_words = SourceWordRegistry::new();
+        let mut bindings = Bindings::new();
+        register_builtin_source_words(&mut source_words, &mut bindings)
+            .expect("built-in source words should bootstrap");
+        let push7 = primitives.register(push_7);
+        let push5 = primitives.register(push_5);
+        let fail = primitives.register(fail_after_partial_stack_update);
+        register_primitive(&mut words, &mut bindings, name("PUSH7"), push7)
+            .expect("PUSH7 primitive should register");
+        register_primitive(&mut words, &mut bindings, name("PUSH5"), push5)
+            .expect("PUSH5 primitive should register");
+        register_primitive(&mut words, &mut bindings, name("FAIL"), fail)
+            .expect("FAIL primitive should register");
+
+        let (sources, source_id) =
+            source("IF 1\nBIF 0, 10\nFAIL\n10 PUSH7\nELSE\nBIF 0, 10\nFAIL\n10 PUSH5\nENDIF");
+        let result = run_source(
+            sources.view(),
+            source_id,
+            SourceExecutionContext::with_source_words_and_operators(
+                &bindings,
+                source_words.lookup(),
+                operators.lookup(),
+                PublishedWordLookup::new(&words),
+                primitives.lookup(),
+            ),
+        )
+        .expect("same local line number should be valid in separate IF branch quotations");
+        assert_eq!(result.data_stack(), [value(7)]);
     }
 
     #[test]
@@ -6590,6 +6804,146 @@ mod tests {
     }
 
     #[test]
+    fn builtin_if_body_def_capability_failure_does_not_publish_runtime_definition() {
+        let (mut words, _primitives, operators) = operator_fixture();
+        let mut source_words = SourceWordRegistry::new();
+        let mut bindings = Bindings::new();
+        let mut globals = GlobalVariables::new();
+        register_builtin_source_words(&mut source_words, &mut bindings)
+            .expect("built-in source words should bootstrap");
+        let mut code = PublishedCode::new();
+        let initial_words_len = words.len();
+
+        let (sources, source_id) = source("IF 1\nDEF INNER\nEND\nENDIF");
+        let error = compile_source(
+            sources.view(),
+            source_id,
+            SourceCompileContext::with_runtime_definition_publication_and_operators(
+                &mut bindings,
+                source_words.lookup(),
+                operators.lookup(),
+                &mut globals,
+                &mut code,
+                &mut words,
+            ),
+        )
+        .expect_err("IF branch DEF should fail through missing publication capability");
+
+        assert_eq!(
+            error,
+            SourceProcessorError::SourceWord(SourceWordError::DefPublicationContextUnavailable {
+                span: span(sources.view(), source_id, 5, 8)
+            })
+        );
+        assert_eq!(bindings.get(&name("INNER")), None);
+        assert_eq!(words.len(), initial_words_len);
+        assert_eq!(code.len(), 0);
+
+        compile_with_def(
+            "DEF OK\nEND",
+            &mut bindings,
+            &mut globals,
+            &source_words,
+            operators.lookup(),
+            &mut code,
+            &mut words,
+        );
+        assert!(matches!(bindings.get(&name("OK")), Some(Binding::Word(_))));
+    }
+
+    #[test]
+    fn failed_if_lexical_input_returns_no_unit_and_independent_source_runs() {
+        let (words, primitives, operators, source_words, bindings, mut globals, variables) =
+            global_source_fixture();
+        let (sources, source_id) = source("IF 1\nLET A = 2\n@");
+
+        let error = compile_source(
+            sources.view(),
+            source_id,
+            SourceCompileContext::with_source_words_and_operators(
+                &bindings,
+                source_words.lookup(),
+                operators.lookup(),
+            ),
+        )
+        .expect_err("malformed IF source should not return a completed unit");
+        assert!(matches!(error, SourceProcessorError::Lex(_)));
+
+        run_with_source_words_operators_and_mut_globals(
+            "IF 1\nLET A = 12\nENDIF",
+            &bindings,
+            &mut globals,
+            &source_words,
+            &words,
+            &primitives,
+            operators.lookup(),
+        );
+        assert_eq!(globals.view().read(variables[0]), Ok(value(12)));
+    }
+
+    #[test]
+    fn builtin_if_runtime_errors_map_to_original_branch_body_spans() {
+        for (source_text, expected_start, expected_end) in [
+            ("IF 1\nFAIL\nELSE\nENDIF", 5, 9),
+            ("IF 0\nELSIF 1\nFAIL\nELSE\nENDIF", 13, 17),
+            ("IF 0\nELSIF 0\nELSE\nFAIL\nENDIF", 18, 22),
+        ] {
+            let mut words = PublishedWords::new();
+            let mut primitives = PrimitiveRegistry::new();
+            let fail = primitives.register(fail_after_partial_stack_update);
+            let mut source_words = SourceWordRegistry::new();
+            let mut bindings = Bindings::new();
+            register_builtin_source_words(&mut source_words, &mut bindings)
+                .expect("built-in source words should bootstrap");
+            register_primitive(&mut words, &mut bindings, name("FAIL"), fail)
+                .expect("FAIL primitive should register");
+            let (sources, source_id) = source(source_text);
+
+            let unit = compile_source(
+                sources.view(),
+                source_id,
+                SourceCompileContext::with_source_words_and_operators(
+                    &bindings,
+                    source_words.lookup(),
+                    register_operator_primitives(&mut primitives, &mut words).lookup(),
+                ),
+            )
+            .expect("IF source should compile");
+            let error = run_unit(
+                &unit,
+                SourceExecutionContext::new(
+                    &bindings,
+                    PublishedWordLookup::new(&words),
+                    primitives.lookup(),
+                ),
+            )
+            .expect_err("selected IF branch should fail at runtime");
+
+            let SourceProcessorError::Runtime(error) = error else {
+                panic!("expected runtime error");
+            };
+            assert_eq!(
+                unit.source_span(error.vm().location()),
+                Ok(Some(span(
+                    sources.view(),
+                    source_id,
+                    expected_start,
+                    expected_end,
+                )))
+            );
+            assert_eq!(
+                error.source_span(),
+                Ok(Some(span(
+                    sources.view(),
+                    source_id,
+                    expected_start,
+                    expected_end,
+                )))
+            );
+        }
+    }
+
+    #[test]
     fn builtin_if_generated_jumps_use_branch_origin_spans() {
         let (_words, _primitives, operators, source_words, bindings, _globals, _variables) =
             global_source_fixture();
@@ -6618,6 +6972,62 @@ mod tests {
         assert_eq!(
             unit.source_span(location(&unit, 2)),
             Ok(Some(span(sources.view(), source_id, 13, 14)))
+        );
+    }
+
+    #[test]
+    fn builtin_if_generated_jumps_map_if_elsif_and_merge_origins() {
+        let (_words, _primitives, operators, source_words, bindings, _globals, _variables) =
+            global_source_fixture();
+        let (sources, source_id) =
+            source("IF 0\nLET A = 1\nELSIF 1\nLET A = 2\nELSE\nLET A = 3\nENDIF");
+
+        let unit = compile_source(
+            sources.view(),
+            source_id,
+            SourceCompileContext::with_source_words_and_operators(
+                &bindings,
+                source_words.lookup(),
+                operators.lookup(),
+            ),
+        )
+        .expect("IF/ELSIF/ELSE should compile");
+
+        assert_eq!(
+            unit.instructions().get(address(1)),
+            Ok(&Instruction::JumpIfZero(address(5)))
+        );
+        assert_eq!(
+            unit.instructions().get(address(4)),
+            Ok(&Instruction::Jump(address(12)))
+        );
+        assert_eq!(
+            unit.instructions().get(address(6)),
+            Ok(&Instruction::JumpIfZero(address(10)))
+        );
+        assert_eq!(
+            unit.instructions().get(address(9)),
+            Ok(&Instruction::Jump(address(12)))
+        );
+        assert_eq!(
+            unit.source_span(location(&unit, 1)),
+            Ok(Some(span(sources.view(), source_id, 0, 4)))
+        );
+        assert_eq!(
+            unit.source_span(location(&unit, 4)),
+            Ok(Some(span(sources.view(), source_id, 0, 4)))
+        );
+        assert_eq!(
+            unit.source_span(location(&unit, 6)),
+            Ok(Some(span(sources.view(), source_id, 15, 22)))
+        );
+        assert_eq!(
+            unit.source_span(location(&unit, 9)),
+            Ok(Some(span(sources.view(), source_id, 15, 22)))
+        );
+        assert_eq!(
+            unit.source_span(location(&unit, 7)),
+            Ok(Some(span(sources.view(), source_id, 31, 32)))
         );
     }
 
@@ -6651,6 +7061,70 @@ mod tests {
             unit.source_span(location(&unit, 4)),
             Ok(Some(span(sources.view(), source_id, 0, 4)))
         );
+    }
+
+    #[test]
+    fn marker_reservation_blocks_publication_through_production_source_processing() {
+        let mut source_words = SourceWordRegistry::new();
+        let mut bindings = Bindings::new();
+        let mut globals = GlobalVariables::new();
+        register_builtin_source_words(&mut source_words, &mut bindings)
+            .expect("built-in source words should bootstrap");
+        let (sources, source_id) = source("VAR ENDIF");
+
+        let error = compile_source(
+            sources.view(),
+            source_id,
+            SourceCompileContext::with_source_word_publication(
+                &mut bindings,
+                source_words.lookup(),
+                &mut globals,
+            ),
+        )
+        .expect_err("syntax-marker reservation should reject variable publication");
+
+        assert_eq!(
+            error,
+            SourceProcessorError::SourceWord(SourceWordError::VarNameConflict {
+                span: span(sources.view(), source_id, 4, 9)
+            })
+        );
+        assert_eq!(bindings.get(&name("ENDIF")), None);
+        assert_eq!(globals.len(), 0);
+    }
+
+    #[test]
+    fn builtin_if_can_call_published_runtime_word_from_branch_body() {
+        let mut session = RuntimeDefinitionSession::new();
+        session.register_primitive("PUSH7", push_7);
+        session.publish_def("DEF MARK\nPUSH7\nEND");
+        let (sources, source_id) = source("IF 1\nMARK\nENDIF");
+
+        let unit = compile_source(
+            sources.view(),
+            source_id,
+            SourceCompileContext::with_source_words_and_operators(
+                &session.bindings,
+                session.source_words.lookup(),
+                session.operators.lookup(),
+            ),
+        )
+        .expect("IF source should compile");
+        let code_spaces = [session.code.instruction_view()];
+        let source_mappings = [session.code.source_mapping()];
+        let result = run_unit(
+            &unit,
+            SourceExecutionContext::with_code_spaces_and_mappings(
+                &session.bindings,
+                &code_spaces,
+                &source_mappings,
+                PublishedWordLookup::new(&session.words),
+                session.primitives.lookup(),
+            ),
+        )
+        .expect("IF branch should execute published runtime word");
+
+        assert_eq!(result.data_stack(), [value(7)]);
     }
 
     #[test]
