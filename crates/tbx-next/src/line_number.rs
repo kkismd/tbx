@@ -112,28 +112,25 @@ impl LocalLineNumberTable {
     }
 
     pub(crate) fn resolve(
-        &self,
+        &mut self,
         target: &mut dyn InstructionBuildTarget,
     ) -> Result<(), LineNumberError> {
-        let mut resolved = Vec::with_capacity(self.patches.len());
-        for patch in &self.patches {
+        while let Some(patch) = self.patches.first().copied() {
             let Some(definition) = self.definitions.get(&patch.line_number) else {
                 return Err(LineNumberError::Undefined {
                     line_number: patch.line_number,
                     span: patch.span,
                 });
             };
-            resolved.push((*patch, definition.target));
-        }
 
-        for (patch, target_address) in resolved {
             target
-                .patch_branch_target(patch.branch, target_address)
+                .patch_branch_target(patch.branch, definition.target)
                 .map_err(|source| LineNumberError::Patch {
                     line_number: patch.line_number,
                     span: patch.span,
                     source,
                 })?;
+            self.patches.swap_remove(0);
         }
 
         Ok(())
@@ -208,6 +205,52 @@ mod tests {
         assert_eq!(
             code.instruction_view().get(branch),
             Ok(&Instruction::JumpIfZero(target))
+        );
+    }
+
+    #[test]
+    fn resolve_consumes_only_current_pending_patches() {
+        let (sources, source_id) = source("BIF 0, 100\n100 BODY\nBIF 0, 200\n200 BODY");
+        let first_branch_span = span(sources.view(), source_id, 7, 10);
+        let first_target_span = span(sources.view(), source_id, 11, 14);
+        let second_branch_span = span(sources.view(), source_id, 28, 31);
+        let second_target_span = span(sources.view(), source_id, 32, 35);
+        let mut code = SourceMappedCode::new();
+        let mut builder = BlockCodeBuilder::new(&mut code);
+        let first_branch = builder
+            .append_unmapped_jump_if_zero_placeholder()
+            .expect("first branch should append");
+        let first_target = append(&mut builder, Instruction::Push(Value::integer(1)));
+        let mut table = LocalLineNumberTable::new();
+
+        table.add_patch(line(100), first_branch, first_branch_span);
+        table
+            .define(&builder, line(100), first_target, first_target_span)
+            .expect("first target should define");
+        table
+            .resolve(&mut builder)
+            .expect("first pending patch should resolve");
+
+        let second_branch = builder
+            .append_unmapped_jump_if_zero_placeholder()
+            .expect("second branch should append");
+        let second_target = append(&mut builder, Instruction::Push(Value::integer(2)));
+        table.add_patch(line(200), second_branch, second_branch_span);
+        table
+            .define(&builder, line(200), second_target, second_target_span)
+            .expect("second target should define");
+        table
+            .resolve(&mut builder)
+            .expect("later pending patch should resolve without repatching the first");
+        builder.finish().expect("block should complete");
+
+        assert_eq!(
+            code.instruction_view().get(first_branch),
+            Ok(&Instruction::JumpIfZero(first_target))
+        );
+        assert_eq!(
+            code.instruction_view().get(second_branch),
+            Ok(&Instruction::JumpIfZero(second_target))
         );
     }
 

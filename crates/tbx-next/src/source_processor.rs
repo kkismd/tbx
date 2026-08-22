@@ -201,7 +201,6 @@ enum BuildTargetHandle {
 struct OwnerLocalLineNumberScope {
     table: Rc<RefCell<LocalLineNumberTable>>,
     target: BuildTargetHandle,
-    resolved: bool,
 }
 
 #[derive(Debug)]
@@ -263,9 +262,6 @@ impl StructuredSourceFrame {
         code: &mut dyn InstructionBuildTarget,
     ) -> Result<(), SourceProcessorError> {
         for scope in &mut self.owner_line_numbers {
-            if scope.resolved {
-                continue;
-            }
             let mut owner_target;
             let target = match &scope.target {
                 BuildTargetHandle::Parent => &mut *code,
@@ -281,7 +277,6 @@ impl StructuredSourceFrame {
                 .borrow_mut()
                 .resolve(target)
                 .map_err(|source| SourceProcessorError::from(line_number_compile_error(source)))?;
-            scope.resolved = true;
         }
         Ok(())
     }
@@ -299,7 +294,6 @@ impl StructuredSourceFrame {
             self.owner_line_numbers.push(OwnerLocalLineNumberScope {
                 table: Rc::new(RefCell::new(LocalLineNumberTable::new())),
                 target: self.body_target.clone(),
-                resolved: false,
             });
         }
         &self.owner_line_numbers[index]
@@ -6396,6 +6390,53 @@ mod tests {
             unit.instructions().get(address(8)),
             Ok(&Instruction::Push(value(30)))
         );
+    }
+
+    #[test]
+    fn structured_reused_owner_local_scope_resolves_new_patches_incrementally() {
+        let mut words = PublishedWords::new();
+        let mut primitives = PrimitiveRegistry::new();
+        let mut bindings = Bindings::new();
+        let operators = register_operator_primitives(&mut primitives, &mut words);
+        let push7 = primitives.register(push_7);
+        let push5 = primitives.register(push_5);
+        let fail = primitives.register(fail_after_partial_stack_update);
+        register_primitive(&mut words, &mut bindings, name("PUSH7"), push7)
+            .expect("PUSH7 primitive should register");
+        register_primitive(&mut words, &mut bindings, name("PUSH5"), push5)
+            .expect("PUSH5 primitive should register");
+        register_primitive(&mut words, &mut bindings, name("FAIL"), fail)
+            .expect("FAIL primitive should register");
+        let mut source_words = SourceWordRegistry::new();
+        register_structured_probe(
+            &mut source_words,
+            &mut bindings,
+            "BLOCK",
+            start_owner_local_target_probe,
+            vec![
+                marker("ELSE", SourceWordSyntaxMarkerRole::BlockContinuation),
+                marker("END", SourceWordSyntaxMarkerRole::BlockTerminator),
+            ],
+            structured_grammar(vec![("ELSE", MarkerCardinality::Optional)], "END"),
+        );
+        let (sources, source_id) = source(
+            "BLOCK\nBIF 0, 10\nFAIL\n10 PUSH7\nBIF 1, 10\nELSE\nBIF 0, 20\nFAIL\n20 PUSH5\nBIF 1, 20\nEND",
+        );
+
+        let result = run_source(
+            sources.view(),
+            source_id,
+            SourceExecutionContext::with_source_words_and_operators(
+                &bindings,
+                source_words.lookup(),
+                operators.lookup(),
+                PublishedWordLookup::new(&words),
+                primitives.lookup(),
+            ),
+        )
+        .expect("reused owner-local scope should resolve marker and terminator patches");
+
+        assert_eq!(result.data_stack(), [value(7), value(20), value(5)]);
     }
 
     #[test]
