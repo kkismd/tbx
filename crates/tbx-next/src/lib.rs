@@ -102,6 +102,11 @@ mod source_processor;
 #[allow(dead_code)]
 mod source_word;
 
+// #1556/#1559/#1561 keep user-defined source-word implementations as a small,
+// immutable source-processing instruction artifact with typed local validation.
+#[allow(dead_code)]
+mod source_word_ir;
+
 // #1543 keeps ordered syntax-marker grammar legality separate from source
 // traversal, statement payload parsing, and owner-specific lowering state.
 #[allow(dead_code)]

@@ -9,6 +9,7 @@ use crate::lexer::{LexError, Token, TokenKind};
 use crate::name::{NameError, NormalizedName};
 use crate::operator::OperatorLookup;
 use crate::source::{SourceError, SourceId, SourceSpan, SourceView};
+use crate::source_word_ir::SourceWordImplementation;
 use crate::word::WordId;
 use crate::word_resolution::{resolve_binding_name, ResolvedBinding, WordResolutionError};
 
@@ -1535,6 +1536,7 @@ enum SourceWordKind {
         start: NativeStructuredSourceWordStartHandler,
         grammar: crate::structured_grammar::StructuredGrammar,
     },
+    UserDefined(SourceWordImplementation),
 }
 
 impl SourceWordRegistry {
@@ -1573,6 +1575,19 @@ impl SourceWordRegistry {
         id
     }
 
+    pub(crate) fn register_user_defined(
+        &mut self,
+        implementation: SourceWordImplementation,
+        syntax_markers: Vec<SourceWordSyntaxMarker>,
+    ) -> SourceWordId {
+        let id = SourceWordId::from_slot(self.entries.len());
+        self.entries.push(SourceWordEntry {
+            kind: SourceWordKind::UserDefined(implementation),
+            syntax_markers,
+        });
+        id
+    }
+
     pub(crate) fn lookup(&self) -> SourceWordLookup<'_> {
         SourceWordLookup { registry: self }
     }
@@ -1598,6 +1613,7 @@ pub(crate) enum SourceWordDispatch<'a> {
         start: NativeStructuredSourceWordStartHandler,
         grammar: &'a crate::structured_grammar::StructuredGrammar,
     },
+    UserDefined(&'a SourceWordImplementation),
 }
 
 impl<'a> SourceWordLookup<'a> {
@@ -1616,6 +1632,9 @@ impl<'a> SourceWordLookup<'a> {
                 start: *start,
                 grammar,
             },
+            SourceWordKind::UserDefined(implementation) => {
+                SourceWordDispatch::UserDefined(implementation)
+            }
         })
     }
 
@@ -1625,7 +1644,7 @@ impl<'a> SourceWordLookup<'a> {
     ) -> Result<NativeSourceWordHandler, SourceWordLookupError> {
         match self.lookup_dispatch(id)? {
             SourceWordDispatch::OneShot(handler) => Ok(handler),
-            SourceWordDispatch::Structured { .. } => {
+            SourceWordDispatch::Structured { .. } | SourceWordDispatch::UserDefined(_) => {
                 Err(SourceWordLookupError::InvalidSourceWordId { id })
             }
         }
@@ -2134,5 +2153,33 @@ mod tests {
             assert!(globals.is_empty());
             assert!(bindings.is_empty());
         }
+    }
+
+    #[test]
+    fn registry_keeps_completed_user_defined_source_word_under_source_word_id() {
+        let implementation = crate::source_word_ir::SourceWordImplementationBuilder::new()
+            .complete()
+            .expect("empty implementation artifact should complete");
+        let mut registry = SourceWordRegistry::new();
+
+        let id = registry.register_user_defined(implementation.clone(), Vec::new());
+
+        assert_eq!(registry.len(), 1);
+        match registry
+            .lookup()
+            .lookup_dispatch(id)
+            .expect("registered source word should resolve")
+        {
+            SourceWordDispatch::UserDefined(registered) => {
+                assert_eq!(registered, &implementation);
+            }
+            SourceWordDispatch::OneShot(_) | SourceWordDispatch::Structured { .. } => {
+                panic!("user-defined source word should keep its implementation artifact")
+            }
+        }
+        assert_eq!(
+            registry.lookup().lookup_handler(id),
+            Err(SourceWordLookupError::InvalidSourceWordId { id })
+        );
     }
 }
