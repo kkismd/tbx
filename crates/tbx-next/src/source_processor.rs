@@ -1050,7 +1050,7 @@ where
                 traversal.cursor,
                 syntax_markers,
             )),
-            SourceWordDispatch::Structured { .. } | SourceWordDispatch::UserDefined(_) => None,
+            SourceWordDispatch::Structured { .. } => None,
         },
         bindings: binding_access,
         operators,
@@ -1073,9 +1073,6 @@ where
             );
             frame.apply_owner_context();
             traversal.structured_frames.push(frame);
-        }
-        SourceWordDispatch::UserDefined(_) => {
-            return Err(SourceWordError::UnsupportedSourceWord { span: first.span() }.into());
         }
     }
     Ok(true)
