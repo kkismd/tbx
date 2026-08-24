@@ -779,7 +779,7 @@ pub(crate) struct SourceStatementReader<'source> {
 }
 
 impl<'source> SourceStatementReader<'source> {
-    const fn new(tokens: &'source [Token], missing_anchor: SourceSpan) -> Self {
+    pub(crate) const fn new(tokens: &'source [Token], missing_anchor: SourceSpan) -> Self {
         Self {
             tokens,
             position: 0,
@@ -828,6 +828,41 @@ impl<'source> SourceStatementReader<'source> {
         let remaining = &self.tokens[self.position..];
         self.position = self.tokens.len();
         Ok(remaining)
+    }
+
+    pub(crate) fn expression_until(
+        &mut self,
+        delimiter: TokenKind,
+    ) -> Result<&'source [Token], SourceStatementReaderError> {
+        if self.is_exhausted() {
+            return Err(SourceStatementReaderError::Missing {
+                expected: SourceStatementExpected::Expression,
+                span: self.missing_anchor,
+            });
+        }
+
+        let start = self.position;
+        let mut depth = 0usize;
+        while let Some(token) = self.tokens.get(self.position).copied() {
+            match token.kind() {
+                TokenKind::LParen => depth += 1,
+                TokenKind::RParen => {
+                    depth = depth.saturating_sub(1);
+                }
+                kind if kind == delimiter && depth == 0 => break,
+                _ => {}
+            }
+            self.position += 1;
+        }
+
+        if start == self.position {
+            return Err(SourceStatementReaderError::Missing {
+                expected: SourceStatementExpected::Expression,
+                span: self.missing_anchor,
+            });
+        }
+
+        Ok(&self.tokens[start..self.position])
     }
 
     pub(crate) fn finish(&self) -> Result<(), SourceStatementReaderError> {

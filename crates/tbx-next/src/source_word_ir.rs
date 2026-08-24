@@ -456,6 +456,30 @@ impl SourceProcessingCapabilities {
         self.emit_structural_branch
     }
 
+    pub(crate) const fn allows(self, required: Self) -> bool {
+        (!required.read_name || self.read_name)
+            && (!required.expect_fixed_token || self.expect_fixed_token)
+            && (!required.expect_end || self.expect_end)
+            && (!required.read_line_number || self.read_line_number)
+            && (!required.read_expression || self.read_expression)
+            && (!required.resolve_variable || self.resolve_variable)
+            && (!required.emit_runtime_code || self.emit_runtime_code)
+            && (!required.emit_structural_branch || self.emit_structural_branch)
+    }
+
+    pub(crate) const fn statement_runtime() -> Self {
+        Self {
+            read_name: true,
+            expect_fixed_token: true,
+            expect_end: true,
+            read_line_number: true,
+            read_expression: true,
+            resolve_variable: true,
+            emit_runtime_code: true,
+            emit_structural_branch: false,
+        }
+    }
+
     fn include(&mut self, other: Self) {
         self.read_name |= other.read_name;
         self.expect_fixed_token |= other.expect_fixed_token;
