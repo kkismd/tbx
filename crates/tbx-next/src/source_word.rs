@@ -9,6 +9,7 @@ use crate::lexer::{LexError, Token, TokenKind};
 use crate::name::{NameError, NormalizedName};
 use crate::operator::OperatorLookup;
 use crate::source::{SourceError, SourceId, SourceSpan, SourceView};
+use crate::source_word_ir::SourceWordImplementation;
 use crate::word::WordId;
 use crate::word_resolution::{resolve_binding_name, ResolvedBinding, WordResolutionError};
 
@@ -779,7 +780,7 @@ pub(crate) struct SourceStatementReader<'source> {
 }
 
 impl<'source> SourceStatementReader<'source> {
-    const fn new(tokens: &'source [Token], missing_anchor: SourceSpan) -> Self {
+    pub(crate) const fn new(tokens: &'source [Token], missing_anchor: SourceSpan) -> Self {
         Self {
             tokens,
             position: 0,
@@ -828,6 +829,41 @@ impl<'source> SourceStatementReader<'source> {
         let remaining = &self.tokens[self.position..];
         self.position = self.tokens.len();
         Ok(remaining)
+    }
+
+    pub(crate) fn expression_until(
+        &mut self,
+        delimiter: TokenKind,
+    ) -> Result<&'source [Token], SourceStatementReaderError> {
+        if self.is_exhausted() {
+            return Err(SourceStatementReaderError::Missing {
+                expected: SourceStatementExpected::Expression,
+                span: self.missing_anchor,
+            });
+        }
+
+        let start = self.position;
+        let mut depth = 0usize;
+        while let Some(token) = self.tokens.get(self.position).copied() {
+            match token.kind() {
+                TokenKind::LParen => depth += 1,
+                TokenKind::RParen => {
+                    depth = depth.saturating_sub(1);
+                }
+                kind if kind == delimiter && depth == 0 => break,
+                _ => {}
+            }
+            self.position += 1;
+        }
+
+        if start == self.position {
+            return Err(SourceStatementReaderError::Missing {
+                expected: SourceStatementExpected::Expression,
+                span: self.missing_anchor,
+            });
+        }
+
+        Ok(&self.tokens[start..self.position])
     }
 
     pub(crate) fn finish(&self) -> Result<(), SourceStatementReaderError> {
@@ -1531,6 +1567,7 @@ struct SourceWordEntry {
 #[derive(Debug, Clone)]
 enum SourceWordKind {
     OneShot(NativeSourceWordHandler),
+    UserDefinedOneShot(SourceWordImplementation),
     Structured {
         start: NativeStructuredSourceWordStartHandler,
         grammar: crate::structured_grammar::StructuredGrammar,
@@ -1555,6 +1592,18 @@ impl SourceWordRegistry {
         self.entries.push(SourceWordEntry {
             kind: SourceWordKind::OneShot(handler),
             syntax_markers,
+        });
+        id
+    }
+
+    pub(crate) fn register_user_defined(
+        &mut self,
+        implementation: SourceWordImplementation,
+    ) -> SourceWordId {
+        let id = SourceWordId::from_slot(self.entries.len());
+        self.entries.push(SourceWordEntry {
+            kind: SourceWordKind::UserDefinedOneShot(implementation),
+            syntax_markers: Vec::new(),
         });
         id
     }
@@ -1594,6 +1643,7 @@ pub(crate) struct SourceWordLookup<'a> {
 #[derive(Debug, Clone, Copy)]
 pub(crate) enum SourceWordDispatch<'a> {
     OneShot(NativeSourceWordHandler),
+    UserDefinedOneShot(&'a SourceWordImplementation),
     Structured {
         start: NativeStructuredSourceWordStartHandler,
         grammar: &'a crate::structured_grammar::StructuredGrammar,
@@ -1612,6 +1662,9 @@ impl<'a> SourceWordLookup<'a> {
             .ok_or(SourceWordLookupError::InvalidSourceWordId { id })?;
         Ok(match &entry.kind {
             SourceWordKind::OneShot(handler) => SourceWordDispatch::OneShot(*handler),
+            SourceWordKind::UserDefinedOneShot(implementation) => {
+                SourceWordDispatch::UserDefinedOneShot(implementation)
+            }
             SourceWordKind::Structured { start, grammar } => SourceWordDispatch::Structured {
                 start: *start,
                 grammar,
@@ -1625,7 +1678,7 @@ impl<'a> SourceWordLookup<'a> {
     ) -> Result<NativeSourceWordHandler, SourceWordLookupError> {
         match self.lookup_dispatch(id)? {
             SourceWordDispatch::OneShot(handler) => Ok(handler),
-            SourceWordDispatch::Structured { .. } => {
+            SourceWordDispatch::UserDefinedOneShot(_) | SourceWordDispatch::Structured { .. } => {
                 Err(SourceWordLookupError::InvalidSourceWordId { id })
             }
         }

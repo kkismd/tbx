@@ -31,6 +31,11 @@ use crate::source_word::{
     SourceWordLookupError, SourceWordSyntaxMarker, StructuredBodyCapabilities,
     StructuredBuildTargetScope, StructuredLineNumberScope, StructuredOwnerLocalTarget,
 };
+use crate::source_word_evaluator::{
+    evaluate_source_word, SourceWordEvaluationError, UserDefinedSourceWordContext,
+    UserDefinedSourceWordContextParts,
+};
+use crate::source_word_ir::SourceProcessingCapabilities;
 use crate::static_quotation::{StaticQuotation, StaticQuotationBuildError};
 use crate::structured_grammar::{GrammarAccept, GrammarProgress, MarkerIdentity};
 use crate::value::Value;
@@ -129,6 +134,7 @@ pub(crate) enum SourceProcessorError {
     SourceWordContextUnavailable { id: SourceWordId },
     SourceWordLookup(SourceWordLookupError),
     SourceWord(SourceWordError),
+    SourceWordEvaluation(SourceWordEvaluationError),
     Runtime(RuntimeError),
 }
 
@@ -704,6 +710,12 @@ impl From<SourceWordError> for SourceProcessorError {
     }
 }
 
+impl From<SourceWordEvaluationError> for SourceProcessorError {
+    fn from(error: SourceWordEvaluationError) -> Self {
+        Self::SourceWordEvaluation(error)
+    }
+}
+
 pub(crate) fn compile_source(
     view: SourceView<'_>,
     source_id: SourceId,
@@ -1008,6 +1020,22 @@ where
         return Err(SourceProcessorError::SourceWordContextUnavailable { id });
     };
     let dispatch = source_words.lookup_dispatch(id)?;
+    if let SourceWordDispatch::UserDefinedOneShot(implementation) = dispatch {
+        let mut line_numbers = state.line_numbers.borrow_mut();
+        let mut source_word_context =
+            UserDefinedSourceWordContext::new(UserDefinedSourceWordContextParts {
+                view: traversal.view,
+                source_id: traversal.source_id,
+                tokens,
+                bindings: context.bindings(),
+                operators: context.operators(),
+                code: state.code,
+                line_numbers: &mut line_numbers,
+                capabilities: SourceProcessingCapabilities::statement_runtime(),
+            });
+        evaluate_source_word(implementation, &mut source_word_context)?;
+        return Ok(true);
+    }
     let syntax_markers = source_words.syntax_markers(id)?;
     let operators = context.operators();
     let globals = context
@@ -1050,6 +1078,9 @@ where
                 traversal.cursor,
                 syntax_markers,
             )),
+            SourceWordDispatch::UserDefinedOneShot(_) => {
+                unreachable!("user-defined source words are evaluated before native context setup")
+            }
             SourceWordDispatch::Structured { .. } => None,
         },
         bindings: binding_access,
@@ -1061,6 +1092,9 @@ where
     });
     match dispatch {
         SourceWordDispatch::OneShot(handler) => handler(&mut source_word_context)?,
+        SourceWordDispatch::UserDefinedOneShot(_) => {
+            unreachable!("user-defined source words are evaluated before native dispatch")
+        }
         SourceWordDispatch::Structured { start, grammar } => {
             let instance = start(&mut source_word_context)?;
             let mut frame = StructuredSourceFrame::new(
@@ -2144,6 +2178,7 @@ impl SourceProcessorError {
             Self::InstructionBuild(_) => None,
             Self::SourceWordContextUnavailable { .. } | Self::SourceWordLookup(_) => None,
             Self::SourceWord(error) => error.primary_span(),
+            Self::SourceWordEvaluation(error) => error.primary_span(),
             Self::Runtime(error) => error.source_span().ok().flatten(),
         }
     }
@@ -2228,6 +2263,11 @@ mod tests {
         SourceBlockMarker, SourceWordRegistry, SourceWordSyntaxMarker, SourceWordSyntaxMarkerRole,
         StructuredBodyCapabilities, StructuredBodyContext, StructuredBuildTargetScope,
         StructuredLineNumberScope, StructuredSourceWordInstance, VarSyntaxErrorKind,
+    };
+    use crate::source_word_ir::{
+        FixedToken, LocalBinding, LocalReference, SourceInstructionOrigin,
+        SourceProcessingInstruction, SourceProcessingOperation, SourceWordImplementation,
+        SourceWordImplementationBuilder,
     };
     use crate::structured_grammar::{
         MarkerCardinality, MarkerGroup, MarkerIdentity, StructuredGrammar,
@@ -2821,6 +2861,19 @@ mod tests {
         bindings
             .insert_new(name(word_name), Binding::SourceWord(id))
             .expect("structured source word binding should register");
+        id
+    }
+
+    fn register_user_defined_probe(
+        source_words: &mut SourceWordRegistry,
+        bindings: &mut Bindings,
+        word_name: &str,
+        implementation: SourceWordImplementation,
+    ) -> SourceWordId {
+        let id = source_words.register_user_defined(implementation);
+        bindings
+            .insert_new(name(word_name), Binding::SourceWord(id))
+            .expect("user-defined source word binding should register");
         id
     }
 
@@ -4461,6 +4514,84 @@ mod tests {
             unit.source_span(location(&unit, 5)),
             Ok(Some(span(sources.view(), id, 4, 5)))
         );
+    }
+
+    #[test]
+    fn user_defined_one_shot_source_word_dispatches_completed_ir() {
+        let (words, primitives, operators) = operator_fixture();
+        let mut source_words = SourceWordRegistry::new();
+        let mut bindings = Bindings::new();
+        let mut globals = GlobalVariables::new();
+        let variables = register_builtin_global_variables(&mut globals, &mut bindings)
+            .expect("A-Z variables should bootstrap");
+        let (sources, id) = source("SET A = 1 + 2");
+        let view = sources.view();
+        let mut implementation = SourceWordImplementationBuilder::new();
+        for instruction in [
+            SourceProcessingInstruction::new(
+                SourceProcessingOperation::ReadName {
+                    bind: LocalBinding::new(name("target_name"), span(view, id, 4, 5)),
+                },
+                SourceInstructionOrigin::new(span(view, id, 0, 3)),
+            ),
+            SourceProcessingInstruction::new(
+                SourceProcessingOperation::ResolveVariable {
+                    name: LocalReference::new(name("target_name"), span(view, id, 4, 5)),
+                    bind: LocalBinding::new(name("target"), span(view, id, 4, 5)),
+                },
+                SourceInstructionOrigin::new(span(view, id, 0, 3)),
+            ),
+            SourceProcessingInstruction::new(
+                SourceProcessingOperation::Expect {
+                    token: FixedToken::Equal,
+                },
+                SourceInstructionOrigin::new(span(view, id, 6, 7)),
+            ),
+            SourceProcessingInstruction::new(
+                SourceProcessingOperation::ReadExpression {
+                    bind: LocalBinding::new(name("expr"), span(view, id, 8, 13)),
+                },
+                SourceInstructionOrigin::new(span(view, id, 8, 13)),
+            ),
+            SourceProcessingInstruction::new(
+                SourceProcessingOperation::EmitExpression {
+                    expression: LocalReference::new(name("expr"), span(view, id, 8, 13)),
+                },
+                SourceInstructionOrigin::new(span(view, id, 8, 13)),
+            ),
+            SourceProcessingInstruction::new(
+                SourceProcessingOperation::EmitStore {
+                    target: LocalReference::new(name("target"), span(view, id, 4, 5)),
+                },
+                SourceInstructionOrigin::new(span(view, id, 0, 3)),
+            ),
+        ] {
+            implementation.push(instruction);
+        }
+        register_user_defined_probe(
+            &mut source_words,
+            &mut bindings,
+            "SET",
+            implementation
+                .complete()
+                .expect("user-defined source word should validate"),
+        );
+
+        run_source(
+            view,
+            id,
+            SourceExecutionContext::with_source_words_and_operators(
+                &bindings,
+                source_words.lookup(),
+                operators.lookup(),
+                PublishedWordLookup::new(&words),
+                primitives.lookup(),
+            )
+            .with_mut_globals(globals.view_mut()),
+        )
+        .expect("user-defined source word should compile and run");
+
+        assert_eq!(globals.view().read(variables[0]), Ok(value(3)));
     }
 
     #[test]

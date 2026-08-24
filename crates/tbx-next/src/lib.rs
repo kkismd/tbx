@@ -107,6 +107,11 @@ mod source_word;
 #[allow(dead_code)]
 mod source_word_ir;
 
+// #1556/#1559 evaluate completed user-defined source-word IR through a small
+// source-processing evaluator instead of reusing the runtime VM or data stack.
+#[allow(dead_code)]
+mod source_word_evaluator;
+
 // #1543 keeps ordered syntax-marker grammar legality separate from source
 // traversal, statement payload parsing, and owner-specific lowering state.
 #[allow(dead_code)]
