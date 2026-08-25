@@ -25,14 +25,21 @@ use crate::source_mapping::{
 };
 use crate::source_word::{
     NativeSourceWordBindingAccess, NativeSourceWordContext, NativeSourceWordContextParts,
-    NativeStructuredSourceWordContext, NativeStructuredSourceWordOwner, RuntimeDefinitionPublisher,
-    SourceBlockCursor, SourceBlockMarker, SourceBlockRead, SourceBlockReader, SourceBlockStatement,
-    SourceBlockTerminal, SourceWordDispatch, SourceWordError, SourceWordId, SourceWordLookup,
-    SourceWordLookupError, SourceWordSyntaxMarker, StructuredBodyCapabilities,
+    NativeSourceWordHandler, NativeStructuredSourceWordContext, NativeStructuredSourceWordOwner,
+    OneShotSourceWordDispatch, RuntimeDefinitionPublisher, SourceBlockCursor, SourceBlockMarker,
+    SourceBlockRead, SourceBlockReader, SourceBlockStatement, SourceBlockTerminal,
+    SourceWordDispatch, SourceWordError, SourceWordId, SourceWordLookup, SourceWordLookupError,
+    SourceWordRegistry, SourceWordSyntaxMarker, StructuredBodyCapabilities,
     StructuredBuildTargetScope, StructuredLineNumberScope, StructuredOwnerLocalTarget,
 };
+use crate::source_word_evaluator::{
+    evaluate_source_word, UserDefinedSourceWordContext, UserDefinedSourceWordContextParts,
+};
+use crate::source_word_ir::SourceProcessingCapabilities;
 use crate::static_quotation::{StaticQuotation, StaticQuotationBuildError};
-use crate::structured_grammar::{GrammarAccept, GrammarProgress, MarkerIdentity};
+use crate::structured_grammar::{
+    GrammarAccept, GrammarProgress, MarkerIdentity, StructuredGrammar,
+};
 use crate::value::Value;
 use crate::vm::{ExecutionView, RunOutcome, Vm, VmError};
 use crate::word::{PublishedWords, WordId};
@@ -50,7 +57,7 @@ pub(crate) struct TemporaryExecutionUnit {
 pub(crate) struct SourceCompileContext<'a> {
     bindings: BindingAccess<'a>,
     operators: Option<OperatorLookup>,
-    source_words: Option<SourceWordLookup<'a>>,
+    source_words: Option<SourceWordAccess<'a>>,
     globals: Option<&'a mut GlobalVariables>,
     runtime_definitions: Option<RuntimeDefinitionPublicationAccess<'a>>,
 }
@@ -80,6 +87,11 @@ pub(crate) struct QuotationBodyStatements<'a> {
 enum BindingAccess<'a> {
     Read(&'a Bindings),
     Write(&'a mut Bindings),
+}
+
+enum SourceWordAccess<'a> {
+    Read(SourceWordLookup<'a>),
+    Write(&'a mut SourceWordRegistry),
 }
 
 struct RuntimeDefinitionPublicationAccess<'a> {
@@ -175,6 +187,15 @@ struct StatementTraversal<'source, 'cursor, S> {
     source_id: SourceId,
     cursor: &'cursor mut LogicalStatementCursor<'source, 'source, S>,
     structured_frames: &'cursor mut Vec<StructuredSourceFrame>,
+}
+
+enum StatementSourceWordDispatch {
+    Native(NativeSourceWordHandler),
+    UserDefined(crate::source_word_ir::SourceWordImplementation),
+    Structured {
+        start: crate::source_word::NativeStructuredSourceWordStartHandler,
+        grammar: StructuredGrammar,
+    },
 }
 
 struct StructuredSourceFrame {
@@ -748,7 +769,7 @@ pub(crate) fn compile_definition_body<'source>(
     let context = SourceCompileContext {
         bindings: BindingAccess::Read(context.bindings),
         operators: context.operators,
-        source_words: context.source_words,
+        source_words: context.source_words.map(SourceWordAccess::Read),
         globals: None,
         runtime_definitions: None,
     };
@@ -772,7 +793,7 @@ pub(crate) fn compile_quotation_body<'source>(
     let context = SourceCompileContext {
         bindings: BindingAccess::Read(context.bindings),
         operators: context.operators,
-        source_words: context.source_words,
+        source_words: context.source_words.map(SourceWordAccess::Read),
         // #1516/#1500: quotation bodies reuse statement lowering but have no
         // capability to publish bindings, globals, or runtime definitions.
         globals: None,
@@ -1004,11 +1025,35 @@ where
     let ResolvedBinding::SourceWord(id) = binding else {
         return Ok(false);
     };
-    let Some(source_words) = context.source_words() else {
+    let Some(source_word_access) = &context.source_words else {
         return Err(SourceProcessorError::SourceWordContextUnavailable { id });
     };
-    let dispatch = source_words.lookup_dispatch(id)?;
-    let syntax_markers = source_words.syntax_markers(id)?;
+    let (dispatch, syntax_markers, runtime_definition_source_words) = {
+        let source_words = match source_word_access {
+            SourceWordAccess::Read(lookup) => *lookup,
+            SourceWordAccess::Write(registry) => registry.lookup(),
+        };
+        let dispatch = match source_words.lookup_dispatch(id)? {
+            SourceWordDispatch::OneShot(OneShotSourceWordDispatch::Native(handler)) => {
+                StatementSourceWordDispatch::Native(handler)
+            }
+            SourceWordDispatch::OneShot(OneShotSourceWordDispatch::UserDefined(implementation)) => {
+                StatementSourceWordDispatch::UserDefined(implementation.clone())
+            }
+            SourceWordDispatch::Structured { start, grammar } => {
+                StatementSourceWordDispatch::Structured {
+                    start,
+                    grammar: grammar.clone(),
+                }
+            }
+        };
+        let syntax_markers = source_words.syntax_markers(id)?.to_vec();
+        let runtime_definition_source_words = match source_word_access {
+            SourceWordAccess::Read(lookup) => Some(*lookup),
+            SourceWordAccess::Write(_) => None,
+        };
+        (dispatch, syntax_markers, runtime_definition_source_words)
+    };
     let operators = context.operators();
     let globals = context
         .globals
@@ -1018,11 +1063,13 @@ where
         .runtime_definitions
         .as_mut()
         .filter(|_| state.capabilities.allows_publication())
+        .filter(|_| runtime_definition_source_words.is_some())
         .map(|publication| RuntimeDefinitionPublisherAdapter {
             view: traversal.view,
             source_id: traversal.source_id,
             operators,
-            source_words,
+            source_words: runtime_definition_source_words
+                .expect("source word lookup should be available for runtime definition"),
             code: &mut *publication.code,
             words: &mut *publication.words,
         });
@@ -1040,31 +1087,72 @@ where
             BindingAccess::Write(bindings) => NativeSourceWordBindingAccess::Read(bindings),
         }
     };
-    let mut source_word_context = NativeSourceWordContext::new(NativeSourceWordContextParts {
-        view: traversal.view,
-        source_id: traversal.source_id,
-        tokens,
-        block_reader: match dispatch {
-            SourceWordDispatch::OneShot(_) => Some(SourceBlockReader::new(
-                traversal.view,
-                traversal.cursor,
-                syntax_markers,
-            )),
-            SourceWordDispatch::Structured { .. } => None,
-        },
-        bindings: binding_access,
-        operators,
-        code: state.code,
-        local_line_number_prefix,
-        globals,
-        runtime_definitions,
-    });
     match dispatch {
-        SourceWordDispatch::OneShot(handler) => handler(&mut source_word_context)?,
-        SourceWordDispatch::Structured { start, grammar } => {
+        StatementSourceWordDispatch::Native(handler) => {
+            let source_word_publication = if state.capabilities.allows_publication()
+                && source_name.eq_ignore_ascii_case("SYNTAX")
+            {
+                match &mut context.source_words {
+                    Some(SourceWordAccess::Write(registry)) => Some(&mut **registry),
+                    Some(SourceWordAccess::Read(_)) | None => None,
+                }
+            } else {
+                None
+            };
+            let mut source_word_context =
+                NativeSourceWordContext::new(NativeSourceWordContextParts {
+                    view: traversal.view,
+                    source_id: traversal.source_id,
+                    tokens,
+                    block_reader: Some(SourceBlockReader::new(
+                        traversal.view,
+                        traversal.cursor,
+                        &syntax_markers,
+                    )),
+                    bindings: binding_access,
+                    operators,
+                    code: state.code,
+                    local_line_number_prefix,
+                    globals,
+                    runtime_definitions,
+                    source_word_publication,
+                });
+            handler(&mut source_word_context)?;
+        }
+        StatementSourceWordDispatch::UserDefined(implementation) => {
+            let mut line_numbers = state.line_numbers.borrow_mut();
+            let mut source_word_context =
+                UserDefinedSourceWordContext::new(UserDefinedSourceWordContextParts {
+                    view: traversal.view,
+                    source_id: traversal.source_id,
+                    tokens,
+                    bindings: context.bindings(),
+                    operators,
+                    code: state.code,
+                    line_numbers: &mut line_numbers,
+                    capabilities: SourceProcessingCapabilities::statement_runtime(),
+                });
+            evaluate_source_word(&implementation, &mut source_word_context)
+                .map_err(|source| SourceWordError::UserDefinedEvaluation { source })?;
+        }
+        StatementSourceWordDispatch::Structured { start, grammar } => {
+            let mut source_word_context =
+                NativeSourceWordContext::new(NativeSourceWordContextParts {
+                    view: traversal.view,
+                    source_id: traversal.source_id,
+                    tokens,
+                    block_reader: None,
+                    bindings: binding_access,
+                    operators,
+                    code: state.code,
+                    local_line_number_prefix,
+                    globals,
+                    runtime_definitions,
+                    source_word_publication: None,
+                });
             let instance = start(&mut source_word_context)?;
             let mut frame = StructuredSourceFrame::new(
-                syntax_markers.to_vec(),
+                syntax_markers,
                 grammar.start(),
                 instance.into_owner(),
                 state.target.clone(),
@@ -1108,7 +1196,8 @@ fn compile_simple_tokens(
             | TokenKind::Less
             | TokenKind::LessEqual
             | TokenKind::Greater
-            | TokenKind::GreaterEqual => {
+            | TokenKind::GreaterEqual
+            | TokenKind::FixedTokenLiteral => {
                 return Err(CompileError {
                     span: token.span(),
                     kind: CompileErrorKind::UnsupportedToken { kind: token.kind() },
@@ -1719,7 +1808,7 @@ impl<'a> SourceCompileContext<'a> {
         Self {
             bindings: BindingAccess::Read(bindings),
             operators: None,
-            source_words: Some(source_words),
+            source_words: Some(SourceWordAccess::Read(source_words)),
             globals: None,
             runtime_definitions: None,
         }
@@ -1733,7 +1822,7 @@ impl<'a> SourceCompileContext<'a> {
         Self {
             bindings: BindingAccess::Read(bindings),
             operators: Some(operators),
-            source_words: Some(source_words),
+            source_words: Some(SourceWordAccess::Read(source_words)),
             globals: None,
             runtime_definitions: None,
         }
@@ -1747,7 +1836,7 @@ impl<'a> SourceCompileContext<'a> {
         Self {
             bindings: BindingAccess::Write(bindings),
             operators: None,
-            source_words: Some(source_words),
+            source_words: Some(SourceWordAccess::Read(source_words)),
             globals: Some(globals),
             runtime_definitions: None,
         }
@@ -1762,7 +1851,22 @@ impl<'a> SourceCompileContext<'a> {
         Self {
             bindings: BindingAccess::Write(bindings),
             operators: Some(operators),
-            source_words: Some(source_words),
+            source_words: Some(SourceWordAccess::Read(source_words)),
+            globals: Some(globals),
+            runtime_definitions: None,
+        }
+    }
+
+    pub(crate) fn with_user_source_word_publication_and_operators(
+        bindings: &'a mut Bindings,
+        source_words: &'a mut SourceWordRegistry,
+        operators: OperatorLookup,
+        globals: &'a mut GlobalVariables,
+    ) -> Self {
+        Self {
+            bindings: BindingAccess::Write(bindings),
+            operators: Some(operators),
+            source_words: Some(SourceWordAccess::Write(source_words)),
             globals: Some(globals),
             runtime_definitions: None,
         }
@@ -1779,7 +1883,7 @@ impl<'a> SourceCompileContext<'a> {
         Self {
             bindings: BindingAccess::Write(bindings),
             operators: Some(operators),
-            source_words: Some(source_words),
+            source_words: Some(SourceWordAccess::Read(source_words)),
             globals: Some(globals),
             runtime_definitions: Some(RuntimeDefinitionPublicationAccess { code, words }),
         }
@@ -1796,8 +1900,12 @@ impl<'a> SourceCompileContext<'a> {
         self.operators
     }
 
-    pub(crate) const fn source_words(&self) -> Option<SourceWordLookup<'a>> {
-        self.source_words
+    pub(crate) fn source_words(&self) -> Option<SourceWordLookup<'_>> {
+        match &self.source_words {
+            Some(SourceWordAccess::Read(lookup)) => Some(*lookup),
+            Some(SourceWordAccess::Write(registry)) => Some(registry.lookup()),
+            None => None,
+        }
     }
 
     fn publication_context(&mut self) -> Option<(&mut Bindings, &mut GlobalVariables)> {
@@ -2109,7 +2217,7 @@ impl<'a> SourceExecutionContext<'a> {
         SourceCompileContext {
             bindings: BindingAccess::Read(self.bindings),
             operators: self.operators,
-            source_words: self.source_words,
+            source_words: self.source_words.map(SourceWordAccess::Read),
             globals: None,
             runtime_definitions: None,
         }
@@ -2398,6 +2506,50 @@ mod tests {
         .expect("LET source should run with mutable globals");
 
         (sources, id, result)
+    }
+
+    fn publish_user_source_word(
+        text: &str,
+        bindings: &mut Bindings,
+        globals: &mut GlobalVariables,
+        source_words: &mut SourceWordRegistry,
+        operators: OperatorLookup,
+    ) -> (SourceTexts, SourceId, TemporaryExecutionUnit) {
+        let (sources, id) = source(text);
+        let unit = compile_source(
+            sources.view(),
+            id,
+            SourceCompileContext::with_user_source_word_publication_and_operators(
+                bindings,
+                source_words,
+                operators,
+                globals,
+            ),
+        )
+        .expect("user-defined source word should publish");
+        (sources, id, unit)
+    }
+
+    fn publish_user_source_word_error(
+        text: &str,
+        bindings: &mut Bindings,
+        globals: &mut GlobalVariables,
+        source_words: &mut SourceWordRegistry,
+        operators: OperatorLookup,
+    ) -> (SourceTexts, SourceId, SourceProcessorError) {
+        let (sources, id) = source(text);
+        let error = compile_source(
+            sources.view(),
+            id,
+            SourceCompileContext::with_user_source_word_publication_and_operators(
+                bindings,
+                source_words,
+                operators,
+                globals,
+            ),
+        )
+        .expect_err("user-defined source word should fail");
+        (sources, id, error)
     }
 
     fn emit_source_word_marker(
@@ -3118,6 +3270,19 @@ mod tests {
                 self.operators.lookup(),
                 &mut self.code,
                 &mut self.words,
+            )
+        }
+
+        fn publish_syntax(
+            &mut self,
+            text: &str,
+        ) -> (SourceTexts, SourceId, TemporaryExecutionUnit) {
+            publish_user_source_word(
+                text,
+                &mut self.bindings,
+                &mut self.globals,
+                &mut self.source_words,
+                self.operators.lookup(),
             )
         }
 
@@ -4515,6 +4680,114 @@ mod tests {
         assert_eq!(result.data_stack(), []);
         assert_eq!(globals.view().read(variables[0]), Ok(value(42)));
         assert_eq!(globals.view().read(variables[1]), Ok(value(43)));
+    }
+
+    #[test]
+    fn user_defined_statement_publishes_and_dispatches_let_equivalent() {
+        let (words, primitives, operators, mut source_words, mut bindings, mut globals, variables) =
+            global_source_fixture();
+        publish_user_source_word(
+            "SYNTAX SLET\nSTATEMENT\nREAD_NAME AS name\nRESOLVE_VAR name AS target\nEXPECT \"=\"\nREAD_EXPR AS expr\nEMIT_EXPR expr\nEMIT_STORE target\nENDS",
+            &mut bindings,
+            &mut globals,
+            &mut source_words,
+            operators.lookup(),
+        );
+
+        run_with_source_words_operators_and_mut_globals(
+            "SLET A = 1 + 2 * 3",
+            &bindings,
+            &mut globals,
+            &source_words,
+            &words,
+            &primitives,
+            operators.lookup(),
+        );
+
+        assert_eq!(globals.view().read(variables[0]), Ok(value(7)));
+    }
+
+    #[test]
+    fn user_defined_statement_dispatches_bif_equivalent_with_delimiter_expect() {
+        let (words, primitives, operators, mut source_words, mut bindings, mut globals, variables) =
+            global_source_fixture();
+        publish_user_source_word(
+            "SYNTAX UBIF\nSTATEMENT\nREAD_EXPR_UNTIL \",\" AS condition\nEXPECT \",\"\nREAD_LINE_NUM AS line\nEXPECT_END\nEMIT_EXPR condition\nEMIT_BRANCH_IF_FALSE line\nENDS",
+            &mut bindings,
+            &mut globals,
+            &mut source_words,
+            operators.lookup(),
+        );
+
+        run_with_source_words_operators_and_mut_globals(
+            "UBIF 0, 100\nLET A = 1\n100 LET A = 2",
+            &bindings,
+            &mut globals,
+            &source_words,
+            &words,
+            &primitives,
+            operators.lookup(),
+        );
+
+        assert_eq!(globals.view().read(variables[0]), Ok(value(2)));
+    }
+
+    #[test]
+    fn user_defined_return_equivalent_runs_through_runtime_definition_body() {
+        let mut session = RuntimeDefinitionSession::new();
+        register_builtin_global_variables(&mut session.globals, &mut session.bindings)
+            .expect("A-Z variables should bootstrap");
+        session.publish_syntax("SYNTAX URETURN\nSTATEMENT\nEXPECT_END\nEMIT_RETURN\nENDS");
+        session.publish_def("DEF STOP\nURETURN\nLET A = 1\nEND");
+
+        let (sources, source_id) = source("STOP\nLET A = 2");
+        let unit = compile_source(
+            sources.view(),
+            source_id,
+            SourceCompileContext::with_source_words_and_operators(
+                &session.bindings,
+                session.source_words.lookup(),
+                session.operators.lookup(),
+            ),
+        )
+        .expect("caller should compile with source words");
+        let code_spaces = [session.code.instruction_view()];
+        let source_mappings = [session.code.source_mapping()];
+        run_unit(
+            &unit,
+            SourceExecutionContext::with_code_spaces_and_mappings(
+                &session.bindings,
+                &code_spaces,
+                &source_mappings,
+                PublishedWordLookup::new(&session.words),
+                session.primitives.lookup(),
+            )
+            .with_mut_globals(session.globals.view_mut()),
+        )
+        .expect("caller should run against published code");
+        let Some(Binding::Variable(a)) = session.bindings.get(&name("A")).copied() else {
+            panic!("A should remain a variable binding");
+        };
+        assert_eq!(session.globals.view().read(a), Ok(value(2)));
+    }
+
+    #[test]
+    fn invalid_user_defined_statement_is_not_published() {
+        let (_words, _primitives, operators, mut source_words, mut bindings, mut globals, _vars) =
+            global_source_fixture();
+        let (_sources, _id, error) = publish_user_source_word_error(
+            "SYNTAX BROKEN\nSTATEMENT\nEMIT_STORE missing\nENDS\nBROKEN",
+            &mut bindings,
+            &mut globals,
+            &mut source_words,
+            operators.lookup(),
+        );
+
+        assert!(matches!(
+            error,
+            SourceProcessorError::SourceWord(SourceWordError::SyntaxBuild { .. })
+        ));
+        assert_eq!(bindings.get(&name("BROKEN")), None);
     }
 
     #[test]

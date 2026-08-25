@@ -38,6 +38,7 @@ pub(crate) enum TokenKind {
     LessEqual,
     Greater,
     GreaterEqual,
+    FixedTokenLiteral,
     LineBoundary,
     Eof,
 }
@@ -132,6 +133,7 @@ impl<'a> Lexer<'a> {
             b'(' => self.single_byte_token(TokenKind::LParen),
             b')' => self.single_byte_token(TokenKind::RParen),
             b'=' => self.single_byte_token(TokenKind::Equal),
+            b'"' => self.fixed_token_literal(),
             b'<' => self.less_prefixed_operator(),
             b'>' => self.greater_prefixed_operator(),
             b'\n' => self.line_boundary(1),
@@ -244,6 +246,39 @@ impl<'a> Lexer<'a> {
         let start = self.offset;
         self.offset += 1;
         self.token(kind, start, self.offset)
+    }
+
+    fn fixed_token_literal(&mut self) -> Result<Token, LexError> {
+        let start = self.offset;
+        self.offset += 1;
+
+        while let Some(&byte) = self.source.as_bytes().get(self.offset) {
+            match byte {
+                b'"' => {
+                    self.offset += 1;
+                    return self.token(TokenKind::FixedTokenLiteral, start, self.offset);
+                }
+                b'\n' | b'\r' | 0x00..=0x1f | 0x7f => {
+                    let character = self.char_at(self.offset);
+                    return self.invalid_character(
+                        self.offset,
+                        character,
+                        InvalidCharacterReason::UnsupportedControl,
+                    );
+                }
+                0x80..=0xff => {
+                    let character = self.char_at(self.offset);
+                    return self.invalid_character(
+                        self.offset,
+                        character,
+                        InvalidCharacterReason::NonAscii,
+                    );
+                }
+                _ => self.offset += 1,
+            }
+        }
+
+        self.invalid_character(start, '"', InvalidCharacterReason::UnsupportedPunctuation)
     }
 
     fn less_prefixed_operator(&mut self) -> Result<Token, LexError> {
@@ -514,6 +549,28 @@ mod tests {
         assert_eq!(kinds(&tokens), [TokenKind::Comma, TokenKind::Eof]);
         assert_token(tokens[0], TokenKind::Comma, id, 0, 1);
         assert_eq!(slices(sources.view(), &tokens), [",", ""]);
+    }
+
+    #[test]
+    fn quoted_fixed_tokens_lex_as_authoring_literals() {
+        let (sources, id, tokens) = lex_all(r#""=" "," "<=""#);
+
+        assert_eq!(
+            kinds(&tokens),
+            [
+                TokenKind::FixedTokenLiteral,
+                TokenKind::FixedTokenLiteral,
+                TokenKind::FixedTokenLiteral,
+                TokenKind::Eof
+            ]
+        );
+        assert_token(tokens[0], TokenKind::FixedTokenLiteral, id, 0, 3);
+        assert_token(tokens[1], TokenKind::FixedTokenLiteral, id, 4, 7);
+        assert_token(tokens[2], TokenKind::FixedTokenLiteral, id, 8, 12);
+        assert_eq!(
+            slices(sources.view(), &tokens),
+            [r#""=""#, r#"",""#, r#""<=""#, ""]
+        );
     }
 
     #[test]
