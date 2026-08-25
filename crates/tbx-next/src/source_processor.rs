@@ -5288,6 +5288,169 @@ mod tests {
     }
 
     #[test]
+    fn user_defined_source_words_publish_and_dispatch_later_in_same_processing_session() {
+        let (words, primitives, operators, mut source_words, mut bindings, mut globals, variables) =
+            global_source_fixture();
+        let (sources, source_id) = source(
+            "SYNTAX SLET\n\
+             STATEMENT\n\
+             READ_NAME AS name\n\
+             RESOLVE_VAR name AS target\n\
+             EXPECT \"=\"\n\
+             READ_EXPR AS expr\n\
+             EMIT_EXPR expr\n\
+             EMIT_STORE target\n\
+             ENDS\n\
+             SYNTAX UWHILE\n\
+             BLOCK\n\
+             START\n\
+             POSITION AS loop_start\n\
+             READ_EXPR AS condition\n\
+             EMIT_EXPR condition\n\
+             EMIT_BRANCH_IF_FALSE_COMPLETE\n\
+             LAST ENDUWHILE\n\
+             EXPECT_END\n\
+             EMIT_BRANCH loop_start\n\
+             ENDS\n\
+             SYNTAX UIF\n\
+             BLOCK\n\
+             START\n\
+             READ_EXPR AS condition\n\
+             EMIT_EXPR condition\n\
+             EMIT_BRANCH_IF_FALSE_FOLLOWING\n\
+             MARK_OPTIONAL UELSE\n\
+             EMIT_BRANCH_COMPLETE\n\
+             EXPECT_END\n\
+             LAST ENDUIF\n\
+             EXPECT_END\n\
+             ENDS\n\
+             SLET A = 0\n\
+             UWHILE A < 3\n\
+             UIF A = 1\n\
+             SLET B = B + 10\n\
+             UELSE\n\
+             SLET B = B + 1\n\
+             ENDUIF\n\
+             SLET A = A + 1\n\
+             ENDUWHILE",
+        );
+
+        let unit = compile_source(
+            sources.view(),
+            source_id,
+            SourceCompileContext::with_user_source_word_publication_and_operators(
+                &mut bindings,
+                &mut source_words,
+                operators.lookup(),
+                &mut globals,
+            ),
+        )
+        .expect("same-session source words should publish before later dispatch");
+
+        let Some(Binding::SourceWord(slet)) = bindings.get(&name("SLET")).copied() else {
+            panic!("SLET should publish as a source word");
+        };
+        assert!(matches!(
+            source_words.lookup().lookup_dispatch(slet),
+            Ok(SourceWordDispatch::OneShot(
+                OneShotSourceWordDispatch::UserDefined(_)
+            ))
+        ));
+        let Some(Binding::SourceWord(uwhile)) = bindings.get(&name("UWHILE")).copied() else {
+            panic!("UWHILE should publish as a source word");
+        };
+        assert!(matches!(
+            source_words.lookup().lookup_dispatch(uwhile),
+            Ok(SourceWordDispatch::Structured {
+                implementation: StructuredSourceWordDispatch::UserDefined(_),
+                ..
+            })
+        ));
+        assert_eq!(
+            bindings
+                .syntax_marker_reservation(&name("ENDUWHILE"))
+                .map(|reservation| reservation.owner()),
+            Some(uwhile)
+        );
+
+        let result = run_unit(
+            &unit,
+            SourceExecutionContext::with_source_words_and_operators(
+                &bindings,
+                source_words.lookup(),
+                operators.lookup(),
+                PublishedWordLookup::new(&words),
+                primitives.lookup(),
+            )
+            .with_mut_globals(globals.view_mut()),
+        )
+        .expect("same-session user-defined source words should lower runnable code");
+
+        assert_eq!(result.outcome(), RunOutcome::Halted);
+        assert_eq!(globals.view().read(variables[0]), Ok(value(3)));
+        assert_eq!(globals.view().read(variables[1]), Ok(value(12)));
+    }
+
+    #[test]
+    fn user_defined_processing_failure_preserves_publication_and_later_owner_state() {
+        let (words, primitives, operators, mut source_words, mut bindings, mut globals, variables) =
+            global_source_fixture();
+        publish_user_source_word(
+            "SYNTAX SLET\nSTATEMENT\nREAD_NAME AS name\nRESOLVE_VAR name AS target\nEXPECT \"=\"\nREAD_EXPR AS expr\nEMIT_EXPR expr\nEMIT_STORE target\nENDS",
+            &mut bindings,
+            &mut globals,
+            &mut source_words,
+            operators.lookup(),
+        );
+        publish_user_source_word(
+            "SYNTAX UIF\nBLOCK\nSTART\nREAD_EXPR AS condition\nEMIT_EXPR condition\nEMIT_BRANCH_IF_FALSE_FOLLOWING\nMARK_OPTIONAL UELSE\nEMIT_BRANCH_COMPLETE\nEXPECT_END\nLAST ENDUIF\nEXPECT_END\nENDS",
+            &mut bindings,
+            &mut globals,
+            &mut source_words,
+            operators.lookup(),
+        );
+        let source_words_len = source_words.len();
+
+        let (sources, source_id) = source("UIF 1\nSLET UNKNOWN = 1\nUELSE\nSLET A = 2\nENDUIF");
+        let error = compile_source(
+            sources.view(),
+            source_id,
+            SourceCompileContext::with_source_words_and_operators(
+                &bindings,
+                source_words.lookup(),
+                operators.lookup(),
+            ),
+        )
+        .expect_err("inner user-defined statement failure should fail processing");
+
+        assert_eq!(
+            error.primary_span(),
+            Some(span(sources.view(), source_id, 11, 18))
+        );
+        assert_eq!(source_words.len(), source_words_len);
+        assert!(matches!(
+            bindings.get(&name("SLET")),
+            Some(Binding::SourceWord(_))
+        ));
+        assert!(matches!(
+            bindings.get(&name("UIF")),
+            Some(Binding::SourceWord(_))
+        ));
+
+        run_with_source_words_operators_and_mut_globals(
+            "UIF 1\nSLET A = 5\nUELSE\nSLET A = 9\nENDUIF",
+            &bindings,
+            &mut globals,
+            &source_words,
+            &words,
+            &primitives,
+            operators.lookup(),
+        );
+
+        assert_eq!(globals.view().read(variables[0]), Ok(value(5)));
+    }
+
+    #[test]
     fn user_defined_return_equivalent_runs_through_runtime_definition_body() {
         let mut session = RuntimeDefinitionSession::new();
         register_builtin_global_variables(&mut session.globals, &mut session.bindings)
