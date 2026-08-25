@@ -6592,12 +6592,12 @@ mod tests {
         register_structured_probe(
             &mut source_words,
             &mut bindings,
-            "BLOCK",
+            "PROBE",
             start_no_publication_probe,
             vec![marker("END", SourceWordSyntaxMarkerRole::BlockTerminator)],
             structured_grammar(Vec::new(), "END"),
         );
-        let (sources, source_id) = source("BLOCK\nVAR A\nEND");
+        let (sources, source_id) = source("PROBE\nVAR A\nEND");
 
         let error = compile_source(
             sources.view(),
@@ -7338,32 +7338,58 @@ mod tests {
 
     #[test]
     fn marker_reservation_blocks_publication_through_production_source_processing() {
-        let mut source_words = SourceWordRegistry::new();
-        let mut bindings = Bindings::new();
-        let mut globals = GlobalVariables::new();
-        register_builtin_source_words(&mut source_words, &mut bindings)
-            .expect("built-in source words should bootstrap");
-        let (sources, source_id) = source("VAR ENDIF");
+        for reserved in ["ENDIF", "STATEMENT", "BLOCK", "ENDS"] {
+            let mut source_words = SourceWordRegistry::new();
+            let mut bindings = Bindings::new();
+            let mut globals = GlobalVariables::new();
+            register_builtin_source_words(&mut source_words, &mut bindings)
+                .expect("built-in source words should bootstrap");
+            let source_text = format!("VAR {reserved}");
+            let (sources, source_id) = source(&source_text);
 
-        let error = compile_source(
-            sources.view(),
-            source_id,
-            SourceCompileContext::with_source_word_publication(
-                &mut bindings,
-                source_words.lookup(),
-                &mut globals,
-            ),
-        )
-        .expect_err("syntax-marker reservation should reject variable publication");
+            let error = compile_source(
+                sources.view(),
+                source_id,
+                SourceCompileContext::with_source_word_publication(
+                    &mut bindings,
+                    source_words.lookup(),
+                    &mut globals,
+                ),
+            )
+            .expect_err("syntax-marker reservation should reject variable publication");
+
+            assert_eq!(
+                error,
+                SourceProcessorError::SourceWord(SourceWordError::VarNameConflict {
+                    span: span(sources.view(), source_id, 4, source_text.len())
+                }),
+                "{reserved} should be reserved by a structured source word"
+            );
+            assert_eq!(bindings.get(&name(reserved)), None);
+            assert_eq!(globals.len(), 0);
+        }
+    }
+
+    #[test]
+    fn syntax_body_uses_owned_marker_recognition_for_kind_lines() {
+        let (_words, _primitives, operators, mut source_words, mut bindings, mut globals, _vars) =
+            global_source_fixture();
+        let (sources, source_id, error) = publish_user_source_word_error(
+            "SYNTAX BROKEN\nBLOCK\nENDS",
+            &mut bindings,
+            &mut globals,
+            &mut source_words,
+            operators.lookup(),
+        );
 
         assert_eq!(
             error,
-            SourceProcessorError::SourceWord(SourceWordError::VarNameConflict {
-                span: span(sources.view(), source_id, 4, 9)
+            SourceProcessorError::SourceWord(SourceWordError::SyntaxDefinition {
+                span: span(sources.view(), source_id, 14, 19),
+                kind: crate::source_word::SyntaxDefinitionErrorKind::UnsupportedKind
             })
         );
-        assert_eq!(bindings.get(&name("ENDIF")), None);
-        assert_eq!(globals.len(), 0);
+        assert_eq!(bindings.get(&name("BROKEN")), None);
     }
 
     #[test]

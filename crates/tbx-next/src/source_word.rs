@@ -1365,21 +1365,49 @@ pub(crate) fn syntax_source_word(
     })?;
 
     let view = context.view();
-    let kind = read_syntax_body_statement(context)?;
-    require_standalone_name(
-        view,
-        kind,
-        "STATEMENT",
-        SyntaxDefinitionErrorKind::UnsupportedKind,
-    )?;
+    let kind = read_syntax_body_item(context, SyntaxDefinitionErrorKind::MissingKind)?;
+    let SourceBlockItem::Marker(marker) = kind else {
+        return Err(SourceWordError::SyntaxDefinition {
+            span: syntax_item_span(kind, context.source_word_token().span()),
+            kind: SyntaxDefinitionErrorKind::MissingKind,
+        });
+    };
+    if marker.name().as_str() != "STATEMENT" {
+        return Err(SourceWordError::SyntaxDefinition {
+            span: marker.span(),
+            kind: SyntaxDefinitionErrorKind::UnsupportedKind,
+        });
+    }
+    require_empty_syntax_marker_remainder(&marker, SyntaxDefinitionErrorKind::UnsupportedKind)?;
 
     let mut builder = SourceWordImplementationBuilder::new();
     loop {
-        let statement = read_syntax_body_statement(context)?;
-        if is_standalone_name(view, statement, "ENDS")? {
-            break;
+        match read_syntax_body_item(context, SyntaxDefinitionErrorKind::MissingEnds)? {
+            SourceBlockItem::Statement(statement) => {
+                builder.push(parse_source_processing_statement(view, statement)?);
+            }
+            SourceBlockItem::Marker(marker) if marker.name().as_str() == "ENDS" => {
+                require_empty_syntax_marker_remainder_with(&marker, |token| {
+                    SyntaxDefinitionErrorKind::TrailingOperationToken { kind: token.kind() }
+                })?;
+                break;
+            }
+            SourceBlockItem::Marker(marker) => {
+                return Err(SourceWordError::SyntaxDefinition {
+                    span: marker.span(),
+                    kind: SyntaxDefinitionErrorKind::UnsupportedKind,
+                });
+            }
+            SourceBlockItem::Terminal(SourceBlockTerminal::Eof { span }) => {
+                return Err(SourceWordError::SyntaxDefinition {
+                    span,
+                    kind: SyntaxDefinitionErrorKind::MissingEnds,
+                });
+            }
+            SourceBlockItem::Terminal(SourceBlockTerminal::LexError { error }) => {
+                return Err(SourceWordError::DefLex { source: error });
+            }
         }
-        builder.push(parse_source_processing_statement(view, statement)?);
     }
 
     let implementation = builder
@@ -1389,25 +1417,58 @@ pub(crate) fn syntax_source_word(
     Ok(())
 }
 
-fn read_syntax_body_statement<'source>(
+fn read_syntax_body_item<'source>(
     context: &mut NativeSourceWordContext<'source, '_>,
-) -> Result<SourceBlockStatement<'source>, SourceWordError> {
+    eof_kind: SyntaxDefinitionErrorKind,
+) -> Result<SourceBlockItem<'source>, SourceWordError> {
     let Some(reader) = context.block_reader_mut() else {
         return Err(SourceWordError::SyntaxPublicationContextUnavailable {
             span: context.source_word_token().span(),
         });
     };
-    match reader.next_statement()? {
-        SourceBlockRead::Statement(statement) => Ok(statement),
-        SourceBlockRead::Terminal(SourceBlockTerminal::Eof { span }) => {
+    match reader.next_item()? {
+        SourceBlockItem::Terminal(SourceBlockTerminal::Eof { span }) => {
             Err(SourceWordError::SyntaxDefinition {
                 span,
-                kind: SyntaxDefinitionErrorKind::MissingEnds,
+                kind: eof_kind,
             })
         }
-        SourceBlockRead::Terminal(SourceBlockTerminal::LexError { error }) => {
+        SourceBlockItem::Terminal(SourceBlockTerminal::LexError { error }) => {
             Err(SourceWordError::DefLex { source: error })
         }
+        item => Ok(item),
+    }
+}
+
+fn require_empty_syntax_marker_remainder(
+    marker: &SourceBlockMarker<'_>,
+    kind: SyntaxDefinitionErrorKind,
+) -> Result<(), SourceWordError> {
+    require_empty_syntax_marker_remainder_with(marker, |_| kind)
+}
+
+fn require_empty_syntax_marker_remainder_with(
+    marker: &SourceBlockMarker<'_>,
+    error_kind: impl FnOnce(Token) -> SyntaxDefinitionErrorKind,
+) -> Result<(), SourceWordError> {
+    if let Some(token) = marker.remaining_tokens().first().copied() {
+        return Err(SourceWordError::SyntaxDefinition {
+            span: token.span(),
+            kind: error_kind(token),
+        });
+    }
+    Ok(())
+}
+
+fn syntax_item_span(item: SourceBlockItem<'_>, fallback: SourceSpan) -> SourceSpan {
+    match item {
+        SourceBlockItem::Statement(statement) => statement.span(),
+        SourceBlockItem::Marker(marker) => marker.span(),
+        SourceBlockItem::Terminal(SourceBlockTerminal::Eof { span }) => span,
+        SourceBlockItem::Terminal(SourceBlockTerminal::LexError { error }) => match error {
+            LexError::InvalidCharacter { span, .. } => span,
+            LexError::Source(_) => fallback,
+        },
     }
 }
 
@@ -1590,35 +1651,6 @@ fn fixed_token_from_literal(spelling: &str) -> Option<FixedToken> {
         ">=" => Some(FixedToken::GreaterEqual),
         _ => None,
     }
-}
-
-fn require_standalone_name(
-    view: SourceView<'_>,
-    statement: SourceBlockStatement<'_>,
-    expected: &str,
-    error_kind: SyntaxDefinitionErrorKind,
-) -> Result<(), SourceWordError> {
-    match statement.standalone_name() {
-        Some(token) => require_name_token(view, token, expected, error_kind),
-        None => Err(SourceWordError::SyntaxDefinition {
-            span: statement.span(),
-            kind: error_kind,
-        }),
-    }
-}
-
-fn is_standalone_name(
-    view: SourceView<'_>,
-    statement: SourceBlockStatement<'_>,
-    expected: &str,
-) -> Result<bool, SourceWordError> {
-    let Some(token) = statement.standalone_name() else {
-        return Ok(false);
-    };
-    let source_name = view
-        .slice(token.span())
-        .map_err(|source| SourceWordError::Source { source })?;
-    Ok(source_name.eq_ignore_ascii_case(expected))
 }
 
 fn require_name_token(

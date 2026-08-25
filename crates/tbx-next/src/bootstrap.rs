@@ -193,6 +193,16 @@ pub(crate) fn register_builtin_source_words(
     bindings
         .validate_new_name(&syntax_name)
         .map_err(SourceWordBootstrapError::from_precheck_error)?;
+    bindings
+        .validate_new_source_word_with_markers(
+            &syntax_name,
+            &[
+                builtin_name("STATEMENT"),
+                builtin_name("BLOCK"),
+                builtin_name("ENDS"),
+            ],
+        )
+        .map_err(SourceWordBootstrapError::from_precheck_error)?;
 
     let var = register_native_source_word(source_words, bindings, var_name, var_source_word)
         .expect("prechecked VAR source word should remain available");
@@ -200,9 +210,27 @@ pub(crate) fn register_builtin_source_words(
         .expect("prechecked LET source word should remain available");
     let def = register_native_source_word(source_words, bindings, def_name, def_source_word)
         .expect("prechecked DEF source word should remain available");
-    let syntax =
-        register_native_source_word(source_words, bindings, syntax_name, syntax_source_word)
-            .expect("prechecked SYNTAX source word should remain available");
+    let syntax = register_native_source_word_with_markers(
+        source_words,
+        bindings,
+        syntax_name,
+        syntax_source_word,
+        vec![
+            SourceWordSyntaxMarker::new(
+                builtin_name("STATEMENT"),
+                SourceWordSyntaxMarkerRole::BlockContinuation,
+            ),
+            SourceWordSyntaxMarker::new(
+                builtin_name("BLOCK"),
+                SourceWordSyntaxMarkerRole::BlockContinuation,
+            ),
+            SourceWordSyntaxMarker::new(
+                builtin_name("ENDS"),
+                SourceWordSyntaxMarkerRole::BlockTerminator,
+            ),
+        ],
+    )
+    .expect("prechecked SYNTAX source word should remain available");
     let if_ = register_native_structured_source_word(
         source_words,
         bindings,
@@ -1022,6 +1050,25 @@ mod tests {
         assert_source_word_binding(&bindings, "syntax", ids.syntax());
         assert_source_word_binding(&bindings, "IF", ids.if_());
         assert_source_word_binding(&bindings, "if", ids.if_());
+        assert_eq!(bindings.syntax_marker_reservation_len(), 6);
+        assert_eq!(
+            bindings
+                .syntax_marker_reservation(&name("STATEMENT"))
+                .map(|reservation| reservation.owner()),
+            Some(ids.syntax())
+        );
+        assert_eq!(
+            bindings
+                .syntax_marker_reservation(&name("BLOCK"))
+                .map(|reservation| reservation.owner()),
+            Some(ids.syntax())
+        );
+        assert_eq!(
+            bindings
+                .syntax_marker_reservation(&name("ENDS"))
+                .map(|reservation| reservation.owner()),
+            Some(ids.syntax())
+        );
         assert_eq!(
             bindings
                 .syntax_marker_reservation(&name("ELSIF"))
@@ -1039,6 +1086,26 @@ mod tests {
                 .syntax_marker_reservation(&name("ENDIF"))
                 .map(|reservation| reservation.owner()),
             Some(ids.if_())
+        );
+        let syntax_markers = source_words
+            .lookup()
+            .syntax_markers(ids.syntax())
+            .expect("SYNTAX should have marker metadata");
+        assert_eq!(syntax_markers.len(), 3);
+        assert_eq!(syntax_markers[0].name(), &name("STATEMENT"));
+        assert_eq!(
+            syntax_markers[0].role(),
+            SourceWordSyntaxMarkerRole::BlockContinuation
+        );
+        assert_eq!(syntax_markers[1].name(), &name("BLOCK"));
+        assert_eq!(
+            syntax_markers[1].role(),
+            SourceWordSyntaxMarkerRole::BlockContinuation
+        );
+        assert_eq!(syntax_markers[2].name(), &name("ENDS"));
+        assert_eq!(
+            syntax_markers[2].role(),
+            SourceWordSyntaxMarkerRole::BlockTerminator
         );
     }
 
@@ -1100,6 +1167,28 @@ mod tests {
         assert_eq!(bindings.get(&name("VAR")), None);
         assert_eq!(bindings.get(&name("LET")), None);
         assert_source_word_binding(&bindings, "DEF", existing);
+    }
+
+    #[test]
+    fn builtin_source_word_bootstrap_syntax_marker_conflict_does_not_publish_prefix() {
+        let mut source_words = SourceWordRegistry::new();
+        let mut bindings = Bindings::new();
+        let existing = register_native_source_word(
+            &mut source_words,
+            &mut bindings,
+            name("STATEMENT"),
+            source_handler,
+        )
+        .expect("test STATEMENT source word should register");
+
+        let result = register_builtin_source_words(&mut source_words, &mut bindings);
+
+        assert_eq!(result, Err(SourceWordBootstrapError::NameConflict));
+        assert_eq!(source_words.len(), 1);
+        assert_eq!(bindings.get(&name("VAR")), None);
+        assert_eq!(bindings.get(&name("SYNTAX")), None);
+        assert_source_word_binding(&bindings, "STATEMENT", existing);
+        assert_eq!(bindings.syntax_marker_reservation_len(), 0);
     }
 
     #[test]
