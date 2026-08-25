@@ -11,6 +11,22 @@ pub(crate) struct SourceWordImplementation {
 }
 
 impl SourceWordImplementation {
+    pub(crate) fn from_prevalidated_instructions(
+        instructions: Vec<SourceProcessingInstruction>,
+    ) -> Self {
+        let capabilities = instructions.iter().fold(
+            SourceProcessingCapabilities::empty(),
+            |mut capabilities, instruction| {
+                capabilities.include(instruction.operation.required_capabilities());
+                capabilities
+            },
+        );
+        Self {
+            instructions,
+            capabilities,
+        }
+    }
+
     pub(crate) fn instructions(&self) -> &[SourceProcessingInstruction] {
         &self.instructions
     }
@@ -477,6 +493,13 @@ impl SourceProcessingCapabilities {
             resolve_variable: true,
             emit_runtime_code: true,
             emit_structural_branch: false,
+        }
+    }
+
+    pub(crate) const fn structured_runtime() -> Self {
+        Self {
+            emit_structural_branch: true,
+            ..Self::statement_runtime()
         }
     }
 
