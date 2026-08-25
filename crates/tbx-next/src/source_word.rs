@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use crate::binding::{Binding, BindingInsertError, Bindings};
 use crate::expression::{
     parse_expression, ExpressionError, ExpressionStaging, ExpressionVariableErrorKind,
@@ -1626,6 +1628,12 @@ enum BlockSyntaxSectionKind {
     },
 }
 
+#[derive(Debug, Clone, Copy)]
+struct BlockSectionLocalDefinition {
+    section_index: usize,
+    visible_outside_section: bool,
+}
+
 fn read_block_syntax_sections(
     context: &mut NativeSourceWordContext<'_, '_>,
     view: SourceView<'_>,
@@ -1756,6 +1764,8 @@ fn complete_block_syntax_sections(
     validation
         .complete()
         .map_err(|source| SourceWordError::SyntaxBuild { source })?;
+    validate_block_section_local_visibility(&sections)
+        .map_err(|source| SourceWordError::SyntaxBuild { source })?;
 
     let mut sections = sections.into_iter();
     let start = sections.next().expect("start section was validated above");
@@ -1848,6 +1858,54 @@ fn complete_block_syntax_sections(
             terminator_implementation,
         ),
     })
+}
+
+fn validate_block_section_local_visibility(
+    sections: &[BlockSyntaxSection],
+) -> Result<(), SourceWordBuildError> {
+    let mut locals: HashMap<NormalizedName, BlockSectionLocalDefinition> = HashMap::new();
+
+    for (section_index, section) in sections.iter().enumerate() {
+        let visible_outside_section = block_section_locals_are_visible_outside(section);
+        for instruction in &section.instructions {
+            for reference in instruction.operation().consumed_local_references() {
+                let Some(definition) = locals.get(reference.name()) else {
+                    return Err(SourceWordBuildError::UndefinedLocal {
+                        reference: reference.clone(),
+                    });
+                };
+                if definition.section_index != section_index && !definition.visible_outside_section
+                {
+                    return Err(SourceWordBuildError::UndefinedLocal {
+                        reference: reference.clone(),
+                    });
+                }
+            }
+
+            if let Some(binding) = instruction.operation().produced_binding_for_validation() {
+                locals.insert(
+                    binding.name().clone(),
+                    BlockSectionLocalDefinition {
+                        section_index,
+                        visible_outside_section,
+                    },
+                );
+            }
+        }
+    }
+
+    Ok(())
+}
+
+fn block_section_locals_are_visible_outside(section: &BlockSyntaxSection) -> bool {
+    match &section.kind {
+        BlockSyntaxSectionKind::Start => true,
+        BlockSyntaxSectionKind::Marker {
+            cardinality: MarkerCardinality::One,
+            ..
+        } => true,
+        BlockSyntaxSectionKind::Marker { .. } | BlockSyntaxSectionKind::Last { .. } => false,
+    }
 }
 
 fn section_origin_span(section: &BlockSyntaxSection) -> SourceSpan {

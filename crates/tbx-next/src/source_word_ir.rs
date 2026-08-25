@@ -111,6 +111,17 @@ pub(crate) enum SourceProcessingOperation {
 }
 
 impl SourceProcessingOperation {
+    pub(crate) fn produced_binding_for_validation(&self) -> Option<&LocalBinding> {
+        self.produced_binding()
+    }
+
+    pub(crate) fn consumed_local_references(&self) -> impl Iterator<Item = &LocalReference> {
+        self.consumed_locals()
+            .map(|(reference, _consumer)| reference)
+            .collect::<Vec<_>>()
+            .into_iter()
+    }
+
     fn produced_local_type(&self) -> Option<SourceLocalType> {
         match self {
             Self::ReadName { .. } => Some(SourceLocalType::NameInput),

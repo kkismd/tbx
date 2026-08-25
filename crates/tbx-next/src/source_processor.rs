@@ -5006,6 +5006,152 @@ mod tests {
     }
 
     #[test]
+    fn user_defined_block_allows_start_local_in_later_sections() {
+        let (words, primitives, operators, mut source_words, mut bindings, mut globals, variables) =
+            global_source_fixture();
+        publish_user_source_word(
+            "SYNTAX ASSIGNBLOCK\nBLOCK\nSTART\nREAD_NAME AS name\nRESOLVE_VAR name AS target\nEXPECT_END\nLAST ENDASSIGN\nREAD_EXPR AS expr\nEXPECT_END\nEMIT_EXPR expr\nEMIT_STORE target\nENDS",
+            &mut bindings,
+            &mut globals,
+            &mut source_words,
+            operators.lookup(),
+        );
+
+        run_with_source_words_operators_and_mut_globals(
+            "ASSIGNBLOCK A\nENDASSIGN 8",
+            &bindings,
+            &mut globals,
+            &source_words,
+            &words,
+            &primitives,
+            operators.lookup(),
+        );
+
+        assert_eq!(globals.view().read(variables[0]), Ok(value(8)));
+    }
+
+    #[test]
+    fn user_defined_block_allows_required_marker_local_in_later_sections() {
+        let (words, primitives, operators, mut source_words, mut bindings, mut globals, variables) =
+            global_source_fixture();
+        publish_user_source_word(
+            "SYNTAX MARKASSIGN\nBLOCK\nSTART\nEXPECT_END\nMARK TARGET\nREAD_NAME AS name\nRESOLVE_VAR name AS target\nEXPECT_END\nLAST ENDMARKASSIGN\nREAD_EXPR AS expr\nEXPECT_END\nEMIT_EXPR expr\nEMIT_STORE target\nENDS",
+            &mut bindings,
+            &mut globals,
+            &mut source_words,
+            operators.lookup(),
+        );
+
+        run_with_source_words_operators_and_mut_globals(
+            "MARKASSIGN\nTARGET A\nENDMARKASSIGN 9",
+            &bindings,
+            &mut globals,
+            &source_words,
+            &words,
+            &primitives,
+            operators.lookup(),
+        );
+
+        assert_eq!(globals.view().read(variables[0]), Ok(value(9)));
+    }
+
+    #[test]
+    fn user_defined_block_rejects_optional_marker_local_in_later_sections() {
+        let (_words, _primitives, operators, mut source_words, mut bindings, mut globals, _vars) =
+            global_source_fixture();
+        let (_sources, _source_id, error) = publish_user_source_word_error(
+            "SYNTAX BROKEN\nBLOCK\nSTART\nEXPECT_END\nMARK_OPTIONAL TARGET\nREAD_NAME AS name\nRESOLVE_VAR name AS target\nEXPECT_END\nLAST ENDBROKEN\nREAD_EXPR AS expr\nEXPECT_END\nEMIT_EXPR expr\nEMIT_STORE target\nENDS",
+            &mut bindings,
+            &mut globals,
+            &mut source_words,
+            operators.lookup(),
+        );
+
+        assert!(matches!(
+            error,
+            SourceProcessorError::SourceWord(SourceWordError::SyntaxBuild {
+                source: crate::source_word_ir::SourceWordBuildError::UndefinedLocal { .. }
+            })
+        ));
+        assert_eq!(bindings.get(&name("BROKEN")), None);
+    }
+
+    #[test]
+    fn user_defined_block_rejects_repeating_marker_local_in_later_sections() {
+        for marker_header in ["MARK_ANY TARGET", "MARK_SOME TARGET"] {
+            let (
+                _words,
+                _primitives,
+                operators,
+                mut source_words,
+                mut bindings,
+                mut globals,
+                _vars,
+            ) = global_source_fixture();
+            let source = format!(
+                "SYNTAX BROKEN\nBLOCK\nSTART\nEXPECT_END\n{marker_header}\nREAD_NAME AS name\nRESOLVE_VAR name AS target\nEXPECT_END\nLAST ENDBROKEN\nREAD_EXPR AS expr\nEXPECT_END\nEMIT_EXPR expr\nEMIT_STORE target\nENDS"
+            );
+            let (_sources, _source_id, error) = publish_user_source_word_error(
+                &source,
+                &mut bindings,
+                &mut globals,
+                &mut source_words,
+                operators.lookup(),
+            );
+
+            assert!(matches!(
+                error,
+                SourceProcessorError::SourceWord(SourceWordError::SyntaxBuild {
+                    source: crate::source_word_ir::SourceWordBuildError::UndefinedLocal { .. }
+                })
+            ));
+            assert_eq!(bindings.get(&name("BROKEN")), None);
+        }
+    }
+
+    #[test]
+    fn user_defined_block_allows_optional_and_repeating_marker_local_inside_same_section() {
+        for (marker_header, expected) in [
+            ("MARK_OPTIONAL TARGET", 10),
+            ("MARK_ANY TARGET", 11),
+            ("MARK_SOME TARGET", 12),
+        ] {
+            let (
+                words,
+                primitives,
+                operators,
+                mut source_words,
+                mut bindings,
+                mut globals,
+                variables,
+            ) = global_source_fixture();
+            let source = format!(
+                "SYNTAX LOCALONLY\nBLOCK\nSTART\nEXPECT_END\n{marker_header}\nREAD_NAME AS name\nRESOLVE_VAR name AS target\nEXPECT \"=\"\nREAD_EXPR AS expr\nEXPECT_END\nEMIT_EXPR expr\nEMIT_STORE target\nLAST ENDLOCALONLY\nEXPECT_END\nENDS"
+            );
+
+            publish_user_source_word(
+                &source,
+                &mut bindings,
+                &mut globals,
+                &mut source_words,
+                operators.lookup(),
+            );
+
+            run_with_source_words_operators_and_mut_globals(
+                &format!("LOCALONLY\nTARGET A = {expected}\nENDLOCALONLY"),
+                &bindings,
+                &mut globals,
+                &source_words,
+                &words,
+                &primitives,
+                operators.lookup(),
+            );
+
+            assert_eq!(globals.view().read(variables[0]), Ok(value(expected)));
+        }
+    }
+
+    #[test]
     fn user_defined_return_equivalent_runs_through_runtime_definition_body() {
         let mut session = RuntimeDefinitionSession::new();
         register_builtin_global_variables(&mut session.globals, &mut session.bindings)
