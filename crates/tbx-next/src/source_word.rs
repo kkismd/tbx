@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use crate::binding::{Binding, BindingInsertError, Bindings};
 use crate::expression::{
     parse_expression, ExpressionError, ExpressionStaging, ExpressionVariableErrorKind,
@@ -9,11 +11,17 @@ use crate::lexer::{LexError, Token, TokenKind};
 use crate::name::{NameError, NormalizedName};
 use crate::operator::OperatorLookup;
 use crate::source::{SourceError, SourceId, SourceSpan, SourceView};
-use crate::source_word_evaluator::SourceWordEvaluationError;
+use crate::source_word_evaluator::{
+    evaluate_source_word_with_state, SourceWordEvaluationError, SourceWordEvaluationState,
+    UserDefinedSourceWordContext, UserDefinedSourceWordContextParts,
+};
 use crate::source_word_ir::{
-    FixedToken, LocalBinding, LocalReference, SourceInstructionOrigin, SourceProcessingInstruction,
-    SourceProcessingOperation, SourceWordBuildError, SourceWordImplementation,
-    SourceWordImplementationBuilder,
+    FixedToken, LocalBinding, LocalReference, SourceInstructionOrigin,
+    SourceProcessingCapabilities, SourceProcessingInstruction, SourceProcessingOperation,
+    SourceWordBuildError, SourceWordImplementation, SourceWordImplementationBuilder,
+};
+use crate::structured_grammar::{
+    MarkerCardinality, MarkerGroup, MarkerIdentity, StructuredGrammar,
 };
 use crate::word::WordId;
 use crate::word_resolution::{resolve_binding_name, ResolvedBinding, WordResolutionError};
@@ -46,20 +54,39 @@ pub(crate) type NativeStructuredSourceWordStartHandler =
         &mut NativeSourceWordContext<'_, '_>,
     ) -> Result<StructuredSourceWordInstance, SourceWordError>;
 
+#[derive(Debug, Clone)]
+pub(crate) struct UserDefinedStructuredSourceWordImplementation {
+    start: SourceWordImplementation,
+    markers: Vec<UserDefinedStructuredMarkerImplementation>,
+    terminator: UserDefinedStructuredTerminatorImplementation,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct UserDefinedStructuredMarkerImplementation {
+    name: NormalizedName,
+    implementation: SourceWordImplementation,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct UserDefinedStructuredTerminatorImplementation {
+    name: NormalizedName,
+    implementation: SourceWordImplementation,
+}
+
 pub(crate) trait NativeStructuredSourceWordOwner: std::fmt::Debug {
     fn current_body_context(&self) -> StructuredBodyContext;
 
-    fn accept_marker(
+    fn accept_marker<'source>(
         &mut self,
-        context: &mut NativeStructuredSourceWordContext<'_, '_>,
-        marker: SourceBlockMarker<'_>,
+        context: &mut NativeStructuredSourceWordContext<'source, '_>,
+        marker: SourceBlockMarker<'source>,
         accept: crate::structured_grammar::GrammarAccept,
     ) -> Result<(), SourceWordError>;
 
-    fn complete(
+    fn complete<'source>(
         &mut self,
-        context: &mut NativeStructuredSourceWordContext<'_, '_>,
-        marker: SourceBlockMarker<'_>,
+        context: &mut NativeStructuredSourceWordContext<'source, '_>,
+        marker: SourceBlockMarker<'source>,
     ) -> Result<(), SourceWordError>;
 }
 
@@ -98,7 +125,20 @@ pub(crate) struct NativeStructuredSourceWordContext<'source, 'state> {
     bindings: &'state Bindings,
     operators: Option<OperatorLookup>,
     code: &'state mut dyn InstructionBuildTarget,
+    line_numbers: &'state mut crate::line_number::LocalLineNumberTable,
+    capabilities: SourceProcessingCapabilities,
     owner_local_targets: Vec<StructuredOwnerLocalTarget>,
+}
+
+pub(crate) struct NativeStructuredSourceWordContextParts<'source, 'state> {
+    pub(crate) view: SourceView<'source>,
+    pub(crate) source_id: SourceId,
+    pub(crate) bindings: &'state Bindings,
+    pub(crate) operators: Option<OperatorLookup>,
+    pub(crate) code: &'state mut dyn InstructionBuildTarget,
+    pub(crate) line_numbers: &'state mut crate::line_number::LocalLineNumberTable,
+    pub(crate) capabilities: SourceProcessingCapabilities,
+    pub(crate) owner_local_targets: Vec<StructuredOwnerLocalTarget>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -574,21 +614,16 @@ impl StructuredBodyCapabilities {
 }
 
 impl<'source, 'state> NativeStructuredSourceWordContext<'source, 'state> {
-    pub(crate) fn new(
-        view: SourceView<'source>,
-        source_id: SourceId,
-        bindings: &'state Bindings,
-        operators: Option<OperatorLookup>,
-        code: &'state mut dyn InstructionBuildTarget,
-        owner_local_targets: Vec<StructuredOwnerLocalTarget>,
-    ) -> Self {
+    pub(crate) fn new(parts: NativeStructuredSourceWordContextParts<'source, 'state>) -> Self {
         Self {
-            view,
-            source_id,
-            bindings,
-            operators,
-            code,
-            owner_local_targets,
+            view: parts.view,
+            source_id: parts.source_id,
+            bindings: parts.bindings,
+            operators: parts.operators,
+            code: parts.code,
+            line_numbers: parts.line_numbers,
+            capabilities: parts.capabilities,
+            owner_local_targets: parts.owner_local_targets,
         }
     }
 
@@ -683,6 +718,72 @@ impl<'source, 'state> NativeStructuredSourceWordContext<'source, 'state> {
         let resolver = |source_name: &str| resolve_variable_name(self.bindings, source_name);
         parse_expression(self.view, &expression_tokens, operators, &resolver)
             .map_err(|source| SourceWordError::Expression { source })
+    }
+
+    fn evaluate_user_defined_source_word(
+        &mut self,
+        implementation: &SourceWordImplementation,
+        state: &mut SourceWordEvaluationState,
+        tokens: &'source [Token],
+    ) -> Result<(), SourceWordError> {
+        let mut context = UserDefinedSourceWordContext::new(UserDefinedSourceWordContextParts {
+            view: self.view,
+            source_id: self.source_id,
+            tokens,
+            bindings: self.bindings,
+            operators: self.operators,
+            code: self.code,
+            line_numbers: self.line_numbers,
+            capabilities: self.capabilities,
+        });
+        evaluate_source_word_with_state(implementation, &mut context, state)
+            .map_err(|source| SourceWordError::UserDefinedEvaluation { source })
+    }
+}
+
+impl UserDefinedStructuredSourceWordImplementation {
+    fn new(
+        start: SourceWordImplementation,
+        markers: Vec<UserDefinedStructuredMarkerImplementation>,
+        terminator: UserDefinedStructuredTerminatorImplementation,
+    ) -> Self {
+        Self {
+            start,
+            markers,
+            terminator,
+        }
+    }
+
+    pub(crate) fn start(&self) -> &SourceWordImplementation {
+        &self.start
+    }
+
+    fn marker(&self, group_index: usize) -> Option<&SourceWordImplementation> {
+        self.markers
+            .get(group_index)
+            .map(|marker| &marker.implementation)
+    }
+
+    fn terminator(&self) -> &SourceWordImplementation {
+        &self.terminator.implementation
+    }
+}
+
+impl UserDefinedStructuredMarkerImplementation {
+    fn new(name: NormalizedName, implementation: SourceWordImplementation) -> Self {
+        Self {
+            name,
+            implementation,
+        }
+    }
+}
+
+impl UserDefinedStructuredTerminatorImplementation {
+    fn new(name: NormalizedName, implementation: SourceWordImplementation) -> Self {
+        Self {
+            name,
+            implementation,
+        }
     }
 }
 
@@ -1177,6 +1278,52 @@ impl<'source, 'state> NativeSourceWordContext<'source, 'state> {
         Ok(id)
     }
 
+    pub(crate) fn publish_structured_source_word(
+        &mut self,
+        name: NormalizedName,
+        name_span: SourceSpan,
+        grammar: StructuredGrammar,
+        syntax_markers: Vec<SourceWordSyntaxMarker>,
+        implementation: UserDefinedStructuredSourceWordImplementation,
+    ) -> Result<SourceWordId, SourceWordError> {
+        let Some(source_words) = &mut self.source_word_publication else {
+            return Err(SourceWordError::SyntaxPublicationContextUnavailable {
+                span: self.source_word_token.span(),
+            });
+        };
+        let NativeSourceWordBindingAccess::Write(bindings) = &mut self.bindings else {
+            return Err(SourceWordError::SyntaxPublicationContextUnavailable {
+                span: self.source_word_token.span(),
+            });
+        };
+        let marker_names = syntax_markers
+            .iter()
+            .map(|marker| marker.name().clone())
+            .collect::<Vec<_>>();
+
+        bindings
+            .validate_new_source_word_with_markers(&name, &marker_names)
+            .map_err(|source| match source {
+                BindingInsertError::NameConflict => {
+                    SourceWordError::SyntaxNameConflict { span: name_span }
+                }
+                BindingInsertError::ReservedName => {
+                    SourceWordError::SyntaxReservedName { span: name_span }
+                }
+            })?;
+
+        let id =
+            source_words.register_user_defined_structured(grammar, syntax_markers, implementation);
+        // #1513/#1556 require the user-defined structured artifact, binding,
+        // and marker reservations to become visible as a single unit.
+        bindings
+            .insert_new_source_word_with_markers(name, id, &marker_names)
+            .map_err(|_| SourceWordError::SyntaxBindingCommitInvariantViolated {
+                span: name_span,
+            })?;
+        Ok(id)
+    }
+
     pub(crate) fn resolve_variable_target(
         &self,
         source_name: &str,
@@ -1364,7 +1511,6 @@ pub(crate) fn syntax_source_word(
         source,
     })?;
 
-    let view = context.view();
     let kind = read_syntax_body_item(context, SyntaxDefinitionErrorKind::MissingKind)?;
     let SourceBlockItem::Marker(marker) = kind else {
         return Err(SourceWordError::SyntaxDefinition {
@@ -1372,14 +1518,30 @@ pub(crate) fn syntax_source_word(
             kind: SyntaxDefinitionErrorKind::MissingKind,
         });
     };
-    if marker.name().as_str() != "STATEMENT" {
-        return Err(SourceWordError::SyntaxDefinition {
+    let view = context.view();
+    match marker.name().as_str() {
+        "STATEMENT" => {
+            publish_statement_syntax_definition(context, view, name, name_token.span(), marker)
+        }
+        "BLOCK" => publish_block_syntax_definition(context, view, name, name_token.span(), marker),
+        _ => Err(SourceWordError::SyntaxDefinition {
             span: marker.span(),
             kind: SyntaxDefinitionErrorKind::UnsupportedKind,
-        });
+        }),
     }
-    require_empty_syntax_marker_remainder(&marker, SyntaxDefinitionErrorKind::UnsupportedKind)?;
+}
 
+fn publish_statement_syntax_definition(
+    context: &mut NativeSourceWordContext<'_, '_>,
+    view: SourceView<'_>,
+    name: NormalizedName,
+    name_span: SourceSpan,
+    kind_marker: SourceBlockMarker<'_>,
+) -> Result<(), SourceWordError> {
+    require_empty_syntax_marker_remainder(
+        &kind_marker,
+        SyntaxDefinitionErrorKind::UnsupportedKind,
+    )?;
     let mut builder = SourceWordImplementationBuilder::new();
     loop {
         match read_syntax_body_item(context, SyntaxDefinitionErrorKind::MissingEnds)? {
@@ -1413,8 +1575,345 @@ pub(crate) fn syntax_source_word(
     let implementation = builder
         .complete()
         .map_err(|source| SourceWordError::SyntaxBuild { source })?;
-    context.publish_statement_source_word(name, name_token.span(), implementation)?;
+    context.publish_statement_source_word(name, name_span, implementation)?;
     Ok(())
+}
+
+fn publish_block_syntax_definition(
+    context: &mut NativeSourceWordContext<'_, '_>,
+    view: SourceView<'_>,
+    name: NormalizedName,
+    name_span: SourceSpan,
+    kind_marker: SourceBlockMarker<'_>,
+) -> Result<(), SourceWordError> {
+    require_empty_syntax_marker_remainder(
+        &kind_marker,
+        SyntaxDefinitionErrorKind::UnsupportedKind,
+    )?;
+    let sections = read_block_syntax_sections(context, view)?;
+    let artifacts = complete_block_syntax_sections(sections, kind_marker.span())?;
+    context.publish_structured_source_word(
+        name,
+        name_span,
+        artifacts.grammar,
+        artifacts.syntax_markers,
+        artifacts.implementation,
+    )?;
+    Ok(())
+}
+
+#[derive(Debug)]
+struct BlockSyntaxArtifacts {
+    grammar: StructuredGrammar,
+    syntax_markers: Vec<SourceWordSyntaxMarker>,
+    implementation: UserDefinedStructuredSourceWordImplementation,
+}
+
+#[derive(Debug)]
+struct BlockSyntaxSection {
+    kind: BlockSyntaxSectionKind,
+    header_span: SourceSpan,
+    instructions: Vec<SourceProcessingInstruction>,
+}
+
+#[derive(Debug)]
+enum BlockSyntaxSectionKind {
+    Start,
+    Marker {
+        name: NormalizedName,
+        cardinality: MarkerCardinality,
+    },
+    Last {
+        name: NormalizedName,
+    },
+}
+
+#[derive(Debug, Clone, Copy)]
+struct BlockSectionLocalDefinition {
+    section_index: usize,
+    visible_outside_section: bool,
+}
+
+fn read_block_syntax_sections(
+    context: &mut NativeSourceWordContext<'_, '_>,
+    view: SourceView<'_>,
+) -> Result<Vec<BlockSyntaxSection>, SourceWordError> {
+    let mut sections: Vec<BlockSyntaxSection> = Vec::new();
+
+    loop {
+        match read_syntax_body_item(context, SyntaxDefinitionErrorKind::MissingEnds)? {
+            SourceBlockItem::Statement(statement) => {
+                let Some(section) = sections.last_mut() else {
+                    return Err(SourceWordError::SyntaxDefinition {
+                        span: statement.span(),
+                        kind: SyntaxDefinitionErrorKind::MissingKind,
+                    });
+                };
+                section
+                    .instructions
+                    .push(parse_source_processing_statement(view, statement)?);
+            }
+            SourceBlockItem::Marker(marker) if marker.name().as_str() == "ENDS" => {
+                require_empty_syntax_marker_remainder_with(&marker, |token| {
+                    SyntaxDefinitionErrorKind::TrailingOperationToken { kind: token.kind() }
+                })?;
+                break;
+            }
+            SourceBlockItem::Marker(marker) => {
+                sections.push(parse_block_syntax_section_header(view, marker)?);
+            }
+            SourceBlockItem::Terminal(SourceBlockTerminal::Eof { span }) => {
+                return Err(SourceWordError::SyntaxDefinition {
+                    span,
+                    kind: SyntaxDefinitionErrorKind::MissingEnds,
+                });
+            }
+            SourceBlockItem::Terminal(SourceBlockTerminal::LexError { error }) => {
+                return Err(SourceWordError::DefLex { source: error });
+            }
+        }
+    }
+
+    Ok(sections)
+}
+
+fn parse_block_syntax_section_header(
+    view: SourceView<'_>,
+    marker: SourceBlockMarker<'_>,
+) -> Result<BlockSyntaxSection, SourceWordError> {
+    let kind = match marker.name().as_str() {
+        "START" => {
+            require_empty_syntax_marker_remainder(
+                &marker,
+                SyntaxDefinitionErrorKind::UnsupportedKind,
+            )?;
+            BlockSyntaxSectionKind::Start
+        }
+        "MARK" => BlockSyntaxSectionKind::Marker {
+            name: read_syntax_marker_name(view, &marker)?,
+            cardinality: MarkerCardinality::One,
+        },
+        "MARK_OPTIONAL" => BlockSyntaxSectionKind::Marker {
+            name: read_syntax_marker_name(view, &marker)?,
+            cardinality: MarkerCardinality::Optional,
+        },
+        "MARK_ANY" => BlockSyntaxSectionKind::Marker {
+            name: read_syntax_marker_name(view, &marker)?,
+            cardinality: MarkerCardinality::ZeroOrMore,
+        },
+        "MARK_SOME" => BlockSyntaxSectionKind::Marker {
+            name: read_syntax_marker_name(view, &marker)?,
+            cardinality: MarkerCardinality::OneOrMore,
+        },
+        "LAST" => BlockSyntaxSectionKind::Last {
+            name: read_syntax_marker_name(view, &marker)?,
+        },
+        _ => {
+            return Err(SourceWordError::SyntaxDefinition {
+                span: marker.span(),
+                kind: SyntaxDefinitionErrorKind::UnsupportedKind,
+            });
+        }
+    };
+    Ok(BlockSyntaxSection {
+        kind,
+        header_span: marker.span(),
+        instructions: Vec::new(),
+    })
+}
+
+fn read_syntax_marker_name(
+    view: SourceView<'_>,
+    marker: &SourceBlockMarker<'_>,
+) -> Result<NormalizedName, SourceWordError> {
+    let mut reader = SourceStatementReader::new(marker.remaining_tokens(), marker.token().span());
+    let token = reader.read_name().map_err(syntax_operation_reader_error)?;
+    let name = normalized_token(view, token)?;
+    reader.finish().map_err(syntax_operation_reader_error)?;
+    Ok(name)
+}
+
+fn complete_block_syntax_sections(
+    sections: Vec<BlockSyntaxSection>,
+    fallback_span: SourceSpan,
+) -> Result<BlockSyntaxArtifacts, SourceWordError> {
+    let Some(BlockSyntaxSection {
+        kind: BlockSyntaxSectionKind::Start,
+        header_span,
+        ..
+    }) = sections.first()
+    else {
+        let span = sections
+            .first()
+            .map(|section| section.header_span)
+            .unwrap_or(fallback_span);
+        return Err(SourceWordError::SyntaxDefinition {
+            span,
+            kind: SyntaxDefinitionErrorKind::MissingKind,
+        });
+    };
+    let start_header_span = *header_span;
+
+    let mut validation = SourceWordImplementationBuilder::new();
+    for instruction in sections
+        .iter()
+        .flat_map(|section| section.instructions.iter().cloned())
+    {
+        validation.push(instruction);
+    }
+    validation
+        .complete()
+        .map_err(|source| SourceWordError::SyntaxBuild { source })?;
+    validate_block_section_local_visibility(&sections)
+        .map_err(|source| SourceWordError::SyntaxBuild { source })?;
+
+    let mut sections = sections.into_iter();
+    let start = sections.next().expect("start section was validated above");
+    let start = SourceWordImplementation::from_prevalidated_instructions(start.instructions);
+    let mut groups = Vec::new();
+    let mut syntax_markers = Vec::new();
+    let mut markers = Vec::new();
+    let mut terminator = None;
+    let mut terminator_implementation = None;
+
+    for section in sections {
+        let section_span = section_origin_span(&section);
+        match section.kind {
+            BlockSyntaxSectionKind::Start => {
+                return Err(SourceWordError::SyntaxDefinition {
+                    span: section_span,
+                    kind: SyntaxDefinitionErrorKind::UnsupportedKind,
+                });
+            }
+            BlockSyntaxSectionKind::Marker { name, cardinality } => {
+                if terminator.is_some() {
+                    return Err(SourceWordError::SyntaxDefinition {
+                        span: section_span,
+                        kind: SyntaxDefinitionErrorKind::UnsupportedKind,
+                    });
+                }
+                let marker = MarkerIdentity::new(name.clone());
+                groups.push(MarkerGroup::new(marker, cardinality));
+                syntax_markers.push(SourceWordSyntaxMarker::new(
+                    name.clone(),
+                    SourceWordSyntaxMarkerRole::BlockContinuation,
+                ));
+                markers.push(UserDefinedStructuredMarkerImplementation::new(
+                    name,
+                    SourceWordImplementation::from_prevalidated_instructions(section.instructions),
+                ));
+            }
+            BlockSyntaxSectionKind::Last { name } => {
+                if terminator.is_some() {
+                    return Err(SourceWordError::SyntaxDefinition {
+                        span: section_span,
+                        kind: SyntaxDefinitionErrorKind::UnsupportedKind,
+                    });
+                }
+                terminator = Some(MarkerIdentity::new(name.clone()));
+                syntax_markers.push(SourceWordSyntaxMarker::new(
+                    name.clone(),
+                    SourceWordSyntaxMarkerRole::BlockTerminator,
+                ));
+                terminator_implementation =
+                    Some(UserDefinedStructuredTerminatorImplementation::new(
+                        name,
+                        SourceWordImplementation::from_prevalidated_instructions(
+                            section.instructions,
+                        ),
+                    ));
+            }
+        }
+    }
+
+    let Some(terminator_identity) = terminator else {
+        return Err(SourceWordError::SyntaxDefinition {
+            span: start_header_span,
+            kind: SyntaxDefinitionErrorKind::MissingKind,
+        });
+    };
+    let Some(terminator_implementation) = terminator_implementation else {
+        return Err(SourceWordError::SyntaxDefinition {
+            span: start_header_span,
+            kind: SyntaxDefinitionErrorKind::MissingKind,
+        });
+    };
+    let grammar = StructuredGrammar::new(groups, Some(terminator_identity)).map_err(|_| {
+        SourceWordError::SyntaxDefinition {
+            span: terminator_implementation
+                .implementation
+                .instructions()
+                .first()
+                .map_or(start_header_span, |instruction| instruction.origin().span()),
+            kind: SyntaxDefinitionErrorKind::UnsupportedKind,
+        }
+    })?;
+
+    Ok(BlockSyntaxArtifacts {
+        grammar,
+        syntax_markers,
+        implementation: UserDefinedStructuredSourceWordImplementation::new(
+            start,
+            markers,
+            terminator_implementation,
+        ),
+    })
+}
+
+fn validate_block_section_local_visibility(
+    sections: &[BlockSyntaxSection],
+) -> Result<(), SourceWordBuildError> {
+    let mut locals: HashMap<NormalizedName, BlockSectionLocalDefinition> = HashMap::new();
+
+    for (section_index, section) in sections.iter().enumerate() {
+        let visible_outside_section = block_section_locals_are_visible_outside(section);
+        for instruction in &section.instructions {
+            for reference in instruction.operation().consumed_local_references() {
+                let Some(definition) = locals.get(reference.name()) else {
+                    return Err(SourceWordBuildError::UndefinedLocal {
+                        reference: reference.clone(),
+                    });
+                };
+                if definition.section_index != section_index && !definition.visible_outside_section
+                {
+                    return Err(SourceWordBuildError::UndefinedLocal {
+                        reference: reference.clone(),
+                    });
+                }
+            }
+
+            if let Some(binding) = instruction.operation().produced_binding_for_validation() {
+                locals.insert(
+                    binding.name().clone(),
+                    BlockSectionLocalDefinition {
+                        section_index,
+                        visible_outside_section,
+                    },
+                );
+            }
+        }
+    }
+
+    Ok(())
+}
+
+fn block_section_locals_are_visible_outside(section: &BlockSyntaxSection) -> bool {
+    match &section.kind {
+        BlockSyntaxSectionKind::Start => true,
+        BlockSyntaxSectionKind::Marker {
+            cardinality: MarkerCardinality::One,
+            ..
+        } => true,
+        BlockSyntaxSectionKind::Marker { .. } | BlockSyntaxSectionKind::Last { .. } => false,
+    }
+}
+
+fn section_origin_span(section: &BlockSyntaxSection) -> SourceSpan {
+    section
+        .instructions
+        .first()
+        .map(|instruction| instruction.origin().span())
+        .unwrap_or(section.header_span)
 }
 
 fn read_syntax_body_item<'source>(
@@ -1683,6 +2182,65 @@ fn normalized_token(view: SourceView<'_>, token: Token) -> Result<NormalizedName
 }
 
 #[derive(Debug)]
+pub(crate) struct UserDefinedStructuredSourceWordOwner {
+    implementation: UserDefinedStructuredSourceWordImplementation,
+    state: SourceWordEvaluationState,
+}
+
+impl UserDefinedStructuredSourceWordOwner {
+    pub(crate) fn new(
+        implementation: UserDefinedStructuredSourceWordImplementation,
+        state: SourceWordEvaluationState,
+    ) -> Self {
+        Self {
+            implementation,
+            state,
+        }
+    }
+}
+
+impl NativeStructuredSourceWordOwner for UserDefinedStructuredSourceWordOwner {
+    fn current_body_context(&self) -> StructuredBodyContext {
+        StructuredBodyContext::inherited()
+    }
+
+    fn accept_marker<'source>(
+        &mut self,
+        context: &mut NativeStructuredSourceWordContext<'source, '_>,
+        marker: SourceBlockMarker<'source>,
+        accept: crate::structured_grammar::GrammarAccept,
+    ) -> Result<(), SourceWordError> {
+        let crate::structured_grammar::GrammarAccept::Intermediate { group_index } = accept else {
+            return Err(SourceWordError::UnsupportedSourceWord {
+                span: marker.span(),
+            });
+        };
+        let Some(implementation) = self.implementation.marker(group_index) else {
+            return Err(SourceWordError::UnsupportedSourceWord {
+                span: marker.span(),
+            });
+        };
+        context.evaluate_user_defined_source_word(
+            implementation,
+            &mut self.state,
+            marker.statement().tokens(),
+        )
+    }
+
+    fn complete<'source>(
+        &mut self,
+        context: &mut NativeStructuredSourceWordContext<'source, '_>,
+        marker: SourceBlockMarker<'source>,
+    ) -> Result<(), SourceWordError> {
+        context.evaluate_user_defined_source_word(
+            self.implementation.terminator(),
+            &mut self.state,
+            marker.statement().tokens(),
+        )
+    }
+}
+
+#[derive(Debug)]
 struct IfSourceWordOwner {
     branches: Vec<IfBranch>,
     current_body_index: usize,
@@ -1719,10 +2277,10 @@ impl NativeStructuredSourceWordOwner for IfSourceWordOwner {
         )
     }
 
-    fn accept_marker(
+    fn accept_marker<'source>(
         &mut self,
-        context: &mut NativeStructuredSourceWordContext<'_, '_>,
-        marker: SourceBlockMarker<'_>,
+        context: &mut NativeStructuredSourceWordContext<'source, '_>,
+        marker: SourceBlockMarker<'source>,
         _accept: crate::structured_grammar::GrammarAccept,
     ) -> Result<(), SourceWordError> {
         let condition = if marker.name().as_str() == "ELSIF" {
@@ -1744,10 +2302,10 @@ impl NativeStructuredSourceWordOwner for IfSourceWordOwner {
         Ok(())
     }
 
-    fn complete(
+    fn complete<'source>(
         &mut self,
-        context: &mut NativeStructuredSourceWordContext<'_, '_>,
-        marker: SourceBlockMarker<'_>,
+        context: &mut NativeStructuredSourceWordContext<'source, '_>,
+        marker: SourceBlockMarker<'source>,
     ) -> Result<(), SourceWordError> {
         require_empty_if_marker_remainder(&marker)?;
 
@@ -2043,8 +2601,8 @@ struct SourceWordEntry {
 enum SourceWordKind {
     OneShot(OneShotSourceWordImplementation),
     Structured {
-        start: NativeStructuredSourceWordStartHandler,
-        grammar: crate::structured_grammar::StructuredGrammar,
+        implementation: StructuredSourceWordImplementation,
+        grammar: StructuredGrammar,
     },
 }
 
@@ -2052,6 +2610,12 @@ enum SourceWordKind {
 enum OneShotSourceWordImplementation {
     Native(NativeSourceWordHandler),
     UserDefined(SourceWordImplementation),
+}
+
+#[derive(Debug, Clone)]
+enum StructuredSourceWordImplementation {
+    Native(NativeStructuredSourceWordStartHandler),
+    UserDefined(UserDefinedStructuredSourceWordImplementation),
 }
 
 impl SourceWordRegistry {
@@ -2093,12 +2657,32 @@ impl SourceWordRegistry {
     pub(crate) fn register_structured(
         &mut self,
         start: NativeStructuredSourceWordStartHandler,
-        grammar: crate::structured_grammar::StructuredGrammar,
+        grammar: StructuredGrammar,
         syntax_markers: Vec<SourceWordSyntaxMarker>,
     ) -> SourceWordId {
         let id = SourceWordId::from_slot(self.entries.len());
         self.entries.push(SourceWordEntry {
-            kind: SourceWordKind::Structured { start, grammar },
+            kind: SourceWordKind::Structured {
+                implementation: StructuredSourceWordImplementation::Native(start),
+                grammar,
+            },
+            syntax_markers,
+        });
+        id
+    }
+
+    pub(crate) fn register_user_defined_structured(
+        &mut self,
+        grammar: StructuredGrammar,
+        syntax_markers: Vec<SourceWordSyntaxMarker>,
+        implementation: UserDefinedStructuredSourceWordImplementation,
+    ) -> SourceWordId {
+        let id = SourceWordId::from_slot(self.entries.len());
+        self.entries.push(SourceWordEntry {
+            kind: SourceWordKind::Structured {
+                implementation: StructuredSourceWordImplementation::UserDefined(implementation),
+                grammar,
+            },
             syntax_markers,
         });
         id
@@ -2126,8 +2710,8 @@ pub(crate) struct SourceWordLookup<'a> {
 pub(crate) enum SourceWordDispatch<'a> {
     OneShot(OneShotSourceWordDispatch<'a>),
     Structured {
-        start: NativeStructuredSourceWordStartHandler,
-        grammar: &'a crate::structured_grammar::StructuredGrammar,
+        implementation: StructuredSourceWordDispatch<'a>,
+        grammar: &'a StructuredGrammar,
     },
 }
 
@@ -2135,6 +2719,12 @@ pub(crate) enum SourceWordDispatch<'a> {
 pub(crate) enum OneShotSourceWordDispatch<'a> {
     Native(NativeSourceWordHandler),
     UserDefined(&'a SourceWordImplementation),
+}
+
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum StructuredSourceWordDispatch<'a> {
+    Native(NativeStructuredSourceWordStartHandler),
+    UserDefined(&'a UserDefinedStructuredSourceWordImplementation),
 }
 
 impl<'a> SourceWordLookup<'a> {
@@ -2158,8 +2748,18 @@ impl<'a> SourceWordLookup<'a> {
                     }
                 })
             }
-            SourceWordKind::Structured { start, grammar } => SourceWordDispatch::Structured {
-                start: *start,
+            SourceWordKind::Structured {
+                implementation,
+                grammar,
+            } => SourceWordDispatch::Structured {
+                implementation: match implementation {
+                    StructuredSourceWordImplementation::Native(start) => {
+                        StructuredSourceWordDispatch::Native(*start)
+                    }
+                    StructuredSourceWordImplementation::UserDefined(implementation) => {
+                        StructuredSourceWordDispatch::UserDefined(implementation)
+                    }
+                },
                 grammar,
             },
         })

@@ -42,6 +42,11 @@ pub(crate) struct UserDefinedSourceWordContextParts<'source, 'state> {
     pub(crate) capabilities: SourceProcessingCapabilities,
 }
 
+#[derive(Debug, Default)]
+pub(crate) struct SourceWordEvaluationState {
+    locals: RuntimeLocals,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum SourceWordEvaluationError {
     CapabilityUnavailable {
@@ -180,6 +185,15 @@ pub(crate) fn evaluate_source_word(
     implementation: &SourceWordImplementation,
     context: &mut UserDefinedSourceWordContext<'_, '_>,
 ) -> Result<(), SourceWordEvaluationError> {
+    let mut state = SourceWordEvaluationState::new();
+    evaluate_source_word_with_state(implementation, context, &mut state)
+}
+
+pub(crate) fn evaluate_source_word_with_state(
+    implementation: &SourceWordImplementation,
+    context: &mut UserDefinedSourceWordContext<'_, '_>,
+    state: &mut SourceWordEvaluationState,
+) -> Result<(), SourceWordEvaluationError> {
     if !context.capabilities.allows(implementation.capabilities()) {
         return Err(SourceWordEvaluationError::CapabilityUnavailable {
             required: implementation.capabilities(),
@@ -192,16 +206,21 @@ pub(crate) fn evaluate_source_word(
         });
     }
 
-    let mut locals = RuntimeLocals::default();
     for instruction in implementation.instructions() {
         evaluate_instruction(
             instruction.operation(),
             instruction.origin(),
             context,
-            &mut locals,
+            &mut state.locals,
         )?;
     }
     Ok(())
+}
+
+impl SourceWordEvaluationState {
+    pub(crate) fn new() -> Self {
+        Self::default()
+    }
 }
 
 fn evaluate_instruction(

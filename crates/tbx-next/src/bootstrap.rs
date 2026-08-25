@@ -199,6 +199,12 @@ pub(crate) fn register_builtin_source_words(
             &[
                 builtin_name("STATEMENT"),
                 builtin_name("BLOCK"),
+                builtin_name("START"),
+                builtin_name("MARK"),
+                builtin_name("MARK_OPTIONAL"),
+                builtin_name("MARK_ANY"),
+                builtin_name("MARK_SOME"),
+                builtin_name("LAST"),
                 builtin_name("ENDS"),
             ],
         )
@@ -222,6 +228,30 @@ pub(crate) fn register_builtin_source_words(
             ),
             SourceWordSyntaxMarker::new(
                 builtin_name("BLOCK"),
+                SourceWordSyntaxMarkerRole::BlockContinuation,
+            ),
+            SourceWordSyntaxMarker::new(
+                builtin_name("START"),
+                SourceWordSyntaxMarkerRole::BlockContinuation,
+            ),
+            SourceWordSyntaxMarker::new(
+                builtin_name("MARK"),
+                SourceWordSyntaxMarkerRole::BlockContinuation,
+            ),
+            SourceWordSyntaxMarker::new(
+                builtin_name("MARK_OPTIONAL"),
+                SourceWordSyntaxMarkerRole::BlockContinuation,
+            ),
+            SourceWordSyntaxMarker::new(
+                builtin_name("MARK_ANY"),
+                SourceWordSyntaxMarkerRole::BlockContinuation,
+            ),
+            SourceWordSyntaxMarker::new(
+                builtin_name("MARK_SOME"),
+                SourceWordSyntaxMarkerRole::BlockContinuation,
+            ),
+            SourceWordSyntaxMarker::new(
+                builtin_name("LAST"),
                 SourceWordSyntaxMarkerRole::BlockContinuation,
             ),
             SourceWordSyntaxMarker::new(
@@ -1050,25 +1080,26 @@ mod tests {
         assert_source_word_binding(&bindings, "syntax", ids.syntax());
         assert_source_word_binding(&bindings, "IF", ids.if_());
         assert_source_word_binding(&bindings, "if", ids.if_());
-        assert_eq!(bindings.syntax_marker_reservation_len(), 6);
-        assert_eq!(
-            bindings
-                .syntax_marker_reservation(&name("STATEMENT"))
-                .map(|reservation| reservation.owner()),
-            Some(ids.syntax())
-        );
-        assert_eq!(
-            bindings
-                .syntax_marker_reservation(&name("BLOCK"))
-                .map(|reservation| reservation.owner()),
-            Some(ids.syntax())
-        );
-        assert_eq!(
-            bindings
-                .syntax_marker_reservation(&name("ENDS"))
-                .map(|reservation| reservation.owner()),
-            Some(ids.syntax())
-        );
+        assert_eq!(bindings.syntax_marker_reservation_len(), 12);
+        for reserved in [
+            "STATEMENT",
+            "BLOCK",
+            "START",
+            "MARK",
+            "MARK_OPTIONAL",
+            "MARK_ANY",
+            "MARK_SOME",
+            "LAST",
+            "ENDS",
+        ] {
+            assert_eq!(
+                bindings
+                    .syntax_marker_reservation(&name(reserved))
+                    .map(|reservation| reservation.owner()),
+                Some(ids.syntax()),
+                "{reserved} should be owned by SYNTAX"
+            );
+        }
         assert_eq!(
             bindings
                 .syntax_marker_reservation(&name("ELSIF"))
@@ -1091,7 +1122,7 @@ mod tests {
             .lookup()
             .syntax_markers(ids.syntax())
             .expect("SYNTAX should have marker metadata");
-        assert_eq!(syntax_markers.len(), 3);
+        assert_eq!(syntax_markers.len(), 9);
         assert_eq!(syntax_markers[0].name(), &name("STATEMENT"));
         assert_eq!(
             syntax_markers[0].role(),
@@ -1102,9 +1133,9 @@ mod tests {
             syntax_markers[1].role(),
             SourceWordSyntaxMarkerRole::BlockContinuation
         );
-        assert_eq!(syntax_markers[2].name(), &name("ENDS"));
+        assert_eq!(syntax_markers[8].name(), &name("ENDS"));
         assert_eq!(
-            syntax_markers[2].role(),
+            syntax_markers[8].role(),
             SourceWordSyntaxMarkerRole::BlockTerminator
         );
     }

@@ -25,15 +25,18 @@ use crate::source_mapping::{
 };
 use crate::source_word::{
     NativeSourceWordBindingAccess, NativeSourceWordContext, NativeSourceWordContextParts,
-    NativeSourceWordHandler, NativeStructuredSourceWordContext, NativeStructuredSourceWordOwner,
+    NativeSourceWordHandler, NativeStructuredSourceWordContext,
+    NativeStructuredSourceWordContextParts, NativeStructuredSourceWordOwner,
     OneShotSourceWordDispatch, RuntimeDefinitionPublisher, SourceBlockCursor, SourceBlockMarker,
     SourceBlockRead, SourceBlockReader, SourceBlockStatement, SourceBlockTerminal,
     SourceWordDispatch, SourceWordError, SourceWordId, SourceWordLookup, SourceWordLookupError,
     SourceWordRegistry, SourceWordSyntaxMarker, StructuredBodyCapabilities,
     StructuredBuildTargetScope, StructuredLineNumberScope, StructuredOwnerLocalTarget,
+    StructuredSourceWordDispatch, StructuredSourceWordInstance,
 };
 use crate::source_word_evaluator::{
-    evaluate_source_word, UserDefinedSourceWordContext, UserDefinedSourceWordContextParts,
+    evaluate_source_word, evaluate_source_word_with_state, UserDefinedSourceWordContext,
+    UserDefinedSourceWordContextParts,
 };
 use crate::source_word_ir::SourceProcessingCapabilities;
 use crate::static_quotation::{StaticQuotation, StaticQuotationBuildError};
@@ -193,9 +196,14 @@ enum StatementSourceWordDispatch {
     Native(NativeSourceWordHandler),
     UserDefined(crate::source_word_ir::SourceWordImplementation),
     Structured {
-        start: crate::source_word::NativeStructuredSourceWordStartHandler,
+        implementation: StatementStructuredSourceWordDispatch,
         grammar: StructuredGrammar,
     },
+}
+
+enum StatementStructuredSourceWordDispatch {
+    Native(crate::source_word::NativeStructuredSourceWordStartHandler),
+    UserDefined(crate::source_word::UserDefinedStructuredSourceWordImplementation),
 }
 
 struct StructuredSourceFrame {
@@ -599,6 +607,10 @@ where
         GrammarAccept::Intermediate { .. } => frame.body_target.clone(),
         GrammarAccept::Terminator => frame.enclosing_target.clone(),
     };
+    let callback_line_numbers = match accept {
+        GrammarAccept::Intermediate { .. } => frame.current_line_numbers.clone(),
+        GrammarAccept::Terminator => frame.enclosing_line_numbers.clone(),
+    };
     let owner_local_targets = frame.owner_local_target_snapshots()?;
     let mut owner_target;
     let callback_code = match &callback_target {
@@ -610,14 +622,18 @@ where
             &mut owner_target as &mut dyn InstructionBuildTarget
         }
     };
-    let mut owner_context = NativeStructuredSourceWordContext::new(
-        view,
-        source_id,
-        bindings,
-        operators,
-        callback_code,
-        owner_local_targets,
-    );
+    let mut callback_line_numbers = callback_line_numbers.borrow_mut();
+    let mut owner_context =
+        NativeStructuredSourceWordContext::new(NativeStructuredSourceWordContextParts {
+            view,
+            source_id,
+            bindings,
+            operators,
+            code: callback_code,
+            line_numbers: &mut callback_line_numbers,
+            capabilities: SourceProcessingCapabilities::structured_runtime(),
+            owner_local_targets,
+        });
     match accept {
         GrammarAccept::Intermediate { .. } => {
             frame
@@ -1040,12 +1056,20 @@ where
             SourceWordDispatch::OneShot(OneShotSourceWordDispatch::UserDefined(implementation)) => {
                 StatementSourceWordDispatch::UserDefined(implementation.clone())
             }
-            SourceWordDispatch::Structured { start, grammar } => {
-                StatementSourceWordDispatch::Structured {
-                    start,
-                    grammar: grammar.clone(),
-                }
-            }
+            SourceWordDispatch::Structured {
+                implementation,
+                grammar,
+            } => StatementSourceWordDispatch::Structured {
+                implementation: match implementation {
+                    StructuredSourceWordDispatch::Native(start) => {
+                        StatementStructuredSourceWordDispatch::Native(start)
+                    }
+                    StructuredSourceWordDispatch::UserDefined(implementation) => {
+                        StatementStructuredSourceWordDispatch::UserDefined(implementation.clone())
+                    }
+                },
+                grammar: grammar.clone(),
+            },
         };
         let syntax_markers = source_words.syntax_markers(id)?.to_vec();
         let runtime_definition_source_words = match source_word_access {
@@ -1135,22 +1159,59 @@ where
             evaluate_source_word(&implementation, &mut source_word_context)
                 .map_err(|source| SourceWordError::UserDefinedEvaluation { source })?;
         }
-        StatementSourceWordDispatch::Structured { start, grammar } => {
-            let mut source_word_context =
-                NativeSourceWordContext::new(NativeSourceWordContextParts {
-                    view: traversal.view,
-                    source_id: traversal.source_id,
-                    tokens,
-                    block_reader: None,
-                    bindings: binding_access,
-                    operators,
-                    code: state.code,
-                    local_line_number_prefix,
-                    globals,
-                    runtime_definitions,
-                    source_word_publication: None,
-                });
-            let instance = start(&mut source_word_context)?;
+        StatementSourceWordDispatch::Structured {
+            implementation,
+            grammar,
+        } => {
+            let instance = match implementation {
+                StatementStructuredSourceWordDispatch::Native(start) => {
+                    let mut source_word_context =
+                        NativeSourceWordContext::new(NativeSourceWordContextParts {
+                            view: traversal.view,
+                            source_id: traversal.source_id,
+                            tokens,
+                            block_reader: None,
+                            bindings: binding_access,
+                            operators,
+                            code: state.code,
+                            local_line_number_prefix,
+                            globals,
+                            runtime_definitions,
+                            source_word_publication: None,
+                        });
+                    start(&mut source_word_context)?
+                }
+                StatementStructuredSourceWordDispatch::UserDefined(implementation) => {
+                    let mut evaluation_state =
+                        crate::source_word_evaluator::SourceWordEvaluationState::new();
+                    {
+                        let mut line_numbers = state.line_numbers.borrow_mut();
+                        let mut source_word_context =
+                            UserDefinedSourceWordContext::new(UserDefinedSourceWordContextParts {
+                                view: traversal.view,
+                                source_id: traversal.source_id,
+                                tokens,
+                                bindings: context.bindings(),
+                                operators,
+                                code: state.code,
+                                line_numbers: &mut line_numbers,
+                                capabilities: SourceProcessingCapabilities::structured_runtime(),
+                            });
+                        evaluate_source_word_with_state(
+                            implementation.start(),
+                            &mut source_word_context,
+                            &mut evaluation_state,
+                        )
+                        .map_err(|source| SourceWordError::UserDefinedEvaluation { source })?;
+                    }
+                    StructuredSourceWordInstance::new(Box::new(
+                        crate::source_word::UserDefinedStructuredSourceWordOwner::new(
+                            implementation,
+                            evaluation_state,
+                        ),
+                    ))
+                }
+            };
             let mut frame = StructuredSourceFrame::new(
                 syntax_markers,
                 grammar.start(),
@@ -2856,10 +2917,10 @@ mod tests {
             self.body_contexts[self.context_index]
         }
 
-        fn accept_marker(
+        fn accept_marker<'source>(
             &mut self,
-            context: &mut NativeStructuredSourceWordContext<'_, '_>,
-            marker: SourceBlockMarker<'_>,
+            context: &mut NativeStructuredSourceWordContext<'source, '_>,
+            marker: SourceBlockMarker<'source>,
             _accept: GrammarAccept,
         ) -> Result<(), SourceWordError> {
             context.append_mapped(Instruction::Push(value(self.marker_value)), marker.span())?;
@@ -2867,10 +2928,10 @@ mod tests {
             Ok(())
         }
 
-        fn complete(
+        fn complete<'source>(
             &mut self,
-            context: &mut NativeStructuredSourceWordContext<'_, '_>,
-            marker: SourceBlockMarker<'_>,
+            context: &mut NativeStructuredSourceWordContext<'source, '_>,
+            marker: SourceBlockMarker<'source>,
         ) -> Result<(), SourceWordError> {
             if self.fail_completion {
                 return Err(SourceWordError::UnsupportedSourceWord {
@@ -4730,6 +4791,364 @@ mod tests {
         );
 
         assert_eq!(globals.view().read(variables[0]), Ok(value(2)));
+    }
+
+    #[test]
+    fn user_defined_block_with_only_terminator_dispatches_as_structured_source_word() {
+        let (words, primitives, operators, mut source_words, mut bindings, mut globals, variables) =
+            global_source_fixture();
+        publish_user_source_word(
+            "SYNTAX WRAP\nBLOCK\nSTART\nEXPECT_END\nLAST ENDWRAP\nEXPECT_END\nENDS",
+            &mut bindings,
+            &mut globals,
+            &mut source_words,
+            operators.lookup(),
+        );
+
+        run_with_source_words_operators_and_mut_globals(
+            "WRAP\nLET A = 4\nENDWRAP",
+            &bindings,
+            &mut globals,
+            &source_words,
+            &words,
+            &primitives,
+            operators.lookup(),
+        );
+
+        assert_eq!(globals.view().read(variables[0]), Ok(value(4)));
+    }
+
+    #[test]
+    fn user_defined_block_declares_marker_grammar_and_reservations_from_sections() {
+        let (words, primitives, operators, mut source_words, mut bindings, mut globals, variables) =
+            global_source_fixture();
+        publish_user_source_word(
+            "SYNTAX TWOPART\nBLOCK\nSTART\nEXPECT_END\nMARK MID\nEXPECT_END\nLAST ENDTWO\nEXPECT_END\nENDS",
+            &mut bindings,
+            &mut globals,
+            &mut source_words,
+            operators.lookup(),
+        );
+
+        let Some(Binding::SourceWord(id)) = bindings.get(&name("TWOPART")).copied() else {
+            panic!("TWOPART should publish as a source word");
+        };
+        let SourceWordDispatch::Structured { grammar, .. } = source_words
+            .lookup()
+            .lookup_dispatch(id)
+            .expect("published source word should dispatch")
+        else {
+            panic!("TWOPART should keep the structured source word kind");
+        };
+        assert_eq!(grammar.groups().len(), 1);
+        assert_eq!(grammar.groups()[0].cardinality(), MarkerCardinality::One);
+        assert_eq!(
+            bindings
+                .syntax_marker_reservation(&name("MID"))
+                .map(|reservation| reservation.owner()),
+            Some(id)
+        );
+        assert_eq!(
+            bindings
+                .syntax_marker_reservation(&name("ENDTWO"))
+                .map(|reservation| reservation.owner()),
+            Some(id)
+        );
+
+        run_with_source_words_operators_and_mut_globals(
+            "TWOPART\nLET A = 1\nMID\nLET A = 2\nENDTWO",
+            &bindings,
+            &mut globals,
+            &source_words,
+            &words,
+            &primitives,
+            operators.lookup(),
+        );
+
+        assert_eq!(globals.view().read(variables[0]), Ok(value(2)));
+    }
+
+    #[test]
+    fn user_defined_block_nests_with_native_structured_source_words_both_directions() {
+        let (words, primitives, operators, mut source_words, mut bindings, mut globals, variables) =
+            global_source_fixture();
+        publish_user_source_word(
+            "SYNTAX WRAP\nBLOCK\nSTART\nEXPECT_END\nLAST ENDWRAP\nEXPECT_END\nENDS",
+            &mut bindings,
+            &mut globals,
+            &mut source_words,
+            operators.lookup(),
+        );
+
+        run_with_source_words_operators_and_mut_globals(
+            "IF 1\nWRAP\nLET A = 5\nENDWRAP\nENDIF",
+            &bindings,
+            &mut globals,
+            &source_words,
+            &words,
+            &primitives,
+            operators.lookup(),
+        );
+        assert_eq!(globals.view().read(variables[0]), Ok(value(5)));
+
+        run_with_source_words_operators_and_mut_globals(
+            "WRAP\nIF 1\nLET A = 6\nENDIF\nENDWRAP",
+            &bindings,
+            &mut globals,
+            &source_words,
+            &words,
+            &primitives,
+            operators.lookup(),
+        );
+        assert_eq!(globals.view().read(variables[0]), Ok(value(6)));
+    }
+
+    #[test]
+    fn user_defined_blocks_nest_without_confusing_outer_markers() {
+        let (words, primitives, operators, mut source_words, mut bindings, mut globals, variables) =
+            global_source_fixture();
+        publish_user_source_word(
+            "SYNTAX WRAP\nBLOCK\nSTART\nEXPECT_END\nLAST ENDWRAP\nEXPECT_END\nENDS",
+            &mut bindings,
+            &mut globals,
+            &mut source_words,
+            operators.lookup(),
+        );
+
+        run_with_source_words_operators_and_mut_globals(
+            "WRAP\nWRAP\nLET A = 7\nENDWRAP\nENDWRAP",
+            &bindings,
+            &mut globals,
+            &source_words,
+            &words,
+            &primitives,
+            operators.lookup(),
+        );
+
+        assert_eq!(globals.view().read(variables[0]), Ok(value(7)));
+    }
+
+    #[test]
+    fn user_defined_block_rejects_marker_order_violation_without_binding_fallback() {
+        let (_words, _primitives, operators, mut source_words, mut bindings, mut globals, _vars) =
+            global_source_fixture();
+        publish_user_source_word(
+            "SYNTAX ORDERED\nBLOCK\nSTART\nEXPECT_END\nMARK FIRST\nEXPECT_END\nMARK_OPTIONAL SECOND\nEXPECT_END\nLAST ENDORDER\nEXPECT_END\nENDS",
+            &mut bindings,
+            &mut globals,
+            &mut source_words,
+            operators.lookup(),
+        );
+        let (sources, source_id) = source("ORDERED\nSECOND\nFIRST\nENDORDER");
+
+        let error = compile_source(
+            sources.view(),
+            source_id,
+            SourceCompileContext::with_source_words_and_operators(
+                &bindings,
+                source_words.lookup(),
+                operators.lookup(),
+            ),
+        )
+        .expect_err("out-of-order marker should fail grammar validation");
+
+        assert_eq!(
+            error,
+            SourceProcessorError::SourceWord(SourceWordError::StructuredGrammar {
+                span: span(sources.view(), source_id, 8, 14),
+                source: crate::structured_grammar::GrammarProgressError::RequiredGroupUnmet {
+                    required_group_index: 0,
+                    attempted_group_index: 1,
+                }
+            })
+        );
+    }
+
+    #[test]
+    fn user_defined_block_publication_is_atomic_when_marker_reservation_conflicts() {
+        let (_words, _primitives, operators, mut source_words, mut bindings, mut globals, _vars) =
+            global_source_fixture();
+        let (_sources, _source_id, error) = publish_user_source_word_error(
+            "SYNTAX BROKEN\nBLOCK\nSTART\nEXPECT_END\nLAST ENDIF\nEXPECT_END\nENDS",
+            &mut bindings,
+            &mut globals,
+            &mut source_words,
+            operators.lookup(),
+        );
+
+        assert!(matches!(
+            error,
+            SourceProcessorError::SourceWord(SourceWordError::SyntaxNameConflict { .. })
+        ));
+        assert_eq!(bindings.get(&name("BROKEN")), None);
+    }
+
+    #[test]
+    fn user_defined_block_rejects_missing_last_without_binding_fallback() {
+        let (_words, _primitives, operators, mut source_words, mut bindings, mut globals, _vars) =
+            global_source_fixture();
+        let (_sources, _source_id, error) = publish_user_source_word_error(
+            "SYNTAX BROKEN\nBLOCK\nSTART\nEXPECT_END\nENDS",
+            &mut bindings,
+            &mut globals,
+            &mut source_words,
+            operators.lookup(),
+        );
+
+        assert!(matches!(
+            error,
+            SourceProcessorError::SourceWord(SourceWordError::SyntaxDefinition {
+                kind: crate::source_word::SyntaxDefinitionErrorKind::MissingKind,
+                ..
+            })
+        ));
+        assert_eq!(bindings.get(&name("BROKEN")), None);
+    }
+
+    #[test]
+    fn user_defined_block_allows_start_local_in_later_sections() {
+        let (words, primitives, operators, mut source_words, mut bindings, mut globals, variables) =
+            global_source_fixture();
+        publish_user_source_word(
+            "SYNTAX ASSIGNBLOCK\nBLOCK\nSTART\nREAD_NAME AS name\nRESOLVE_VAR name AS target\nEXPECT_END\nLAST ENDASSIGN\nREAD_EXPR AS expr\nEXPECT_END\nEMIT_EXPR expr\nEMIT_STORE target\nENDS",
+            &mut bindings,
+            &mut globals,
+            &mut source_words,
+            operators.lookup(),
+        );
+
+        run_with_source_words_operators_and_mut_globals(
+            "ASSIGNBLOCK A\nENDASSIGN 8",
+            &bindings,
+            &mut globals,
+            &source_words,
+            &words,
+            &primitives,
+            operators.lookup(),
+        );
+
+        assert_eq!(globals.view().read(variables[0]), Ok(value(8)));
+    }
+
+    #[test]
+    fn user_defined_block_allows_required_marker_local_in_later_sections() {
+        let (words, primitives, operators, mut source_words, mut bindings, mut globals, variables) =
+            global_source_fixture();
+        publish_user_source_word(
+            "SYNTAX MARKASSIGN\nBLOCK\nSTART\nEXPECT_END\nMARK TARGET\nREAD_NAME AS name\nRESOLVE_VAR name AS target\nEXPECT_END\nLAST ENDMARKASSIGN\nREAD_EXPR AS expr\nEXPECT_END\nEMIT_EXPR expr\nEMIT_STORE target\nENDS",
+            &mut bindings,
+            &mut globals,
+            &mut source_words,
+            operators.lookup(),
+        );
+
+        run_with_source_words_operators_and_mut_globals(
+            "MARKASSIGN\nTARGET A\nENDMARKASSIGN 9",
+            &bindings,
+            &mut globals,
+            &source_words,
+            &words,
+            &primitives,
+            operators.lookup(),
+        );
+
+        assert_eq!(globals.view().read(variables[0]), Ok(value(9)));
+    }
+
+    #[test]
+    fn user_defined_block_rejects_optional_marker_local_in_later_sections() {
+        let (_words, _primitives, operators, mut source_words, mut bindings, mut globals, _vars) =
+            global_source_fixture();
+        let (_sources, _source_id, error) = publish_user_source_word_error(
+            "SYNTAX BROKEN\nBLOCK\nSTART\nEXPECT_END\nMARK_OPTIONAL TARGET\nREAD_NAME AS name\nRESOLVE_VAR name AS target\nEXPECT_END\nLAST ENDBROKEN\nREAD_EXPR AS expr\nEXPECT_END\nEMIT_EXPR expr\nEMIT_STORE target\nENDS",
+            &mut bindings,
+            &mut globals,
+            &mut source_words,
+            operators.lookup(),
+        );
+
+        assert!(matches!(
+            error,
+            SourceProcessorError::SourceWord(SourceWordError::SyntaxBuild {
+                source: crate::source_word_ir::SourceWordBuildError::UndefinedLocal { .. }
+            })
+        ));
+        assert_eq!(bindings.get(&name("BROKEN")), None);
+    }
+
+    #[test]
+    fn user_defined_block_rejects_repeating_marker_local_in_later_sections() {
+        for marker_header in ["MARK_ANY TARGET", "MARK_SOME TARGET"] {
+            let (
+                _words,
+                _primitives,
+                operators,
+                mut source_words,
+                mut bindings,
+                mut globals,
+                _vars,
+            ) = global_source_fixture();
+            let source = format!(
+                "SYNTAX BROKEN\nBLOCK\nSTART\nEXPECT_END\n{marker_header}\nREAD_NAME AS name\nRESOLVE_VAR name AS target\nEXPECT_END\nLAST ENDBROKEN\nREAD_EXPR AS expr\nEXPECT_END\nEMIT_EXPR expr\nEMIT_STORE target\nENDS"
+            );
+            let (_sources, _source_id, error) = publish_user_source_word_error(
+                &source,
+                &mut bindings,
+                &mut globals,
+                &mut source_words,
+                operators.lookup(),
+            );
+
+            assert!(matches!(
+                error,
+                SourceProcessorError::SourceWord(SourceWordError::SyntaxBuild {
+                    source: crate::source_word_ir::SourceWordBuildError::UndefinedLocal { .. }
+                })
+            ));
+            assert_eq!(bindings.get(&name("BROKEN")), None);
+        }
+    }
+
+    #[test]
+    fn user_defined_block_allows_optional_and_repeating_marker_local_inside_same_section() {
+        for (marker_header, expected) in [
+            ("MARK_OPTIONAL TARGET", 10),
+            ("MARK_ANY TARGET", 11),
+            ("MARK_SOME TARGET", 12),
+        ] {
+            let (
+                words,
+                primitives,
+                operators,
+                mut source_words,
+                mut bindings,
+                mut globals,
+                variables,
+            ) = global_source_fixture();
+            let source = format!(
+                "SYNTAX LOCALONLY\nBLOCK\nSTART\nEXPECT_END\n{marker_header}\nREAD_NAME AS name\nRESOLVE_VAR name AS target\nEXPECT \"=\"\nREAD_EXPR AS expr\nEXPECT_END\nEMIT_EXPR expr\nEMIT_STORE target\nLAST ENDLOCALONLY\nEXPECT_END\nENDS"
+            );
+
+            publish_user_source_word(
+                &source,
+                &mut bindings,
+                &mut globals,
+                &mut source_words,
+                operators.lookup(),
+            );
+
+            run_with_source_words_operators_and_mut_globals(
+                &format!("LOCALONLY\nTARGET A = {expected}\nENDLOCALONLY"),
+                &bindings,
+                &mut globals,
+                &source_words,
+                &words,
+                &primitives,
+                operators.lookup(),
+            );
+
+            assert_eq!(globals.view().read(variables[0]), Ok(value(expected)));
+        }
     }
 
     #[test]
@@ -7386,7 +7805,7 @@ mod tests {
             error,
             SourceProcessorError::SourceWord(SourceWordError::SyntaxDefinition {
                 span: span(sources.view(), source_id, 14, 19),
-                kind: crate::source_word::SyntaxDefinitionErrorKind::UnsupportedKind
+                kind: crate::source_word::SyntaxDefinitionErrorKind::MissingKind
             })
         );
         assert_eq!(bindings.get(&name("BROKEN")), None);
@@ -7396,8 +7815,8 @@ mod tests {
     fn builtin_if_can_call_published_runtime_word_from_branch_body() {
         let mut session = RuntimeDefinitionSession::new();
         session.register_primitive("PUSH7", push_7);
-        session.publish_def("DEF MARK\nPUSH7\nEND");
-        let (sources, source_id) = source("IF 1\nMARK\nENDIF");
+        session.publish_def("DEF TOUCH\nPUSH7\nEND");
+        let (sources, source_id) = source("IF 1\nTOUCH\nENDIF");
 
         let unit = compile_source(
             sources.view(),
