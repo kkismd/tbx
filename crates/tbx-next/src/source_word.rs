@@ -2236,7 +2236,10 @@ impl NativeStructuredSourceWordOwner for UserDefinedStructuredSourceWordOwner {
             self.implementation.terminator(),
             &mut self.state,
             marker.statement().tokens(),
-        )
+        )?;
+        self.state
+            .complete_structural_branches(context.code)
+            .map_err(|source| SourceWordError::UserDefinedEvaluation { source })
     }
 }
 
