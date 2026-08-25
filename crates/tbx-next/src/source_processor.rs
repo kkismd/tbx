@@ -5175,6 +5175,17 @@ mod tests {
         assert_eq!(globals.view().read(variables[0]), Ok(value(3)));
 
         run_with_source_words_operators_and_mut_globals(
+            "LET A = 2\nUWHILE A < 3\nLET A = A + 1\nENDUWHILE",
+            &bindings,
+            &mut globals,
+            &source_words,
+            &words,
+            &primitives,
+            operators.lookup(),
+        );
+        assert_eq!(globals.view().read(variables[0]), Ok(value(3)));
+
+        run_with_source_words_operators_and_mut_globals(
             "LET A = 9\nUWHILE A < 3\nLET A = 0\nENDUWHILE",
             &bindings,
             &mut globals,
@@ -5208,6 +5219,17 @@ mod tests {
             operators.lookup(),
         );
         assert_eq!(globals.view().read(variables[0]), Ok(value(3)));
+
+        run_with_source_words_operators_and_mut_globals(
+            "UIF 1\nLET A = 1\nUELSIF 1\nLET A = 2\nUELSE\nLET A = 4\nENDUIF",
+            &bindings,
+            &mut globals,
+            &source_words,
+            &words,
+            &primitives,
+            operators.lookup(),
+        );
+        assert_eq!(globals.view().read(variables[0]), Ok(value(1)));
 
         run_with_source_words_operators_and_mut_globals(
             "UIF 0\nLET A = 1\nUELSIF 0\nLET A = 2\nUELSE\nLET A = 4\nENDUIF",

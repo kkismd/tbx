@@ -225,8 +225,7 @@ impl StructuralBranchState {
         code: &mut dyn InstructionBuildTarget,
         target: InstructionAddress,
     ) -> Result<(), SourceWordEvaluationError> {
-        let patches = std::mem::take(&mut self.following);
-        patch_structural_branches(code, patches, target)
+        patch_structural_branches(code, &mut self.following, target)
     }
 
     fn patch_complete_to(
@@ -234,23 +233,27 @@ impl StructuralBranchState {
         code: &mut dyn InstructionBuildTarget,
         target: InstructionAddress,
     ) -> Result<(), SourceWordEvaluationError> {
-        let patches = std::mem::take(&mut self.complete);
-        patch_structural_branches(code, patches, target)
+        patch_structural_branches(code, &mut self.complete, target)
     }
 }
 
 fn patch_structural_branches(
     code: &mut dyn InstructionBuildTarget,
-    patches: Vec<StructuralBranchPatch>,
+    patches: &mut Vec<StructuralBranchPatch>,
     target: InstructionAddress,
 ) -> Result<(), SourceWordEvaluationError> {
-    for patch in patches {
-        code.patch_branch_target(patch.branch, target)
-            .map_err(|source| SourceWordEvaluationError::InstructionBuild {
+    let mut patched = 0;
+    while let Some(patch) = patches.get(patched).copied() {
+        if let Err(source) = code.patch_branch_target(patch.branch, target) {
+            patches.drain(0..patched);
+            return Err(SourceWordEvaluationError::InstructionBuild {
                 source,
                 origin: patch.origin,
-            })?;
+            });
+        }
+        patched += 1;
     }
+    patches.clear();
     Ok(())
 }
 
@@ -738,7 +741,7 @@ impl RuntimeLocal {
 mod tests {
     use super::*;
     use crate::binding::{Binding, Bindings};
-    use crate::block_code::BlockCodeBuilder;
+    use crate::block_code::{BlockCodeBuildError, BlockCodeBuilder};
     use crate::global_variable::GlobalVariables;
     use crate::instruction::Instruction;
     use crate::lexer::Lexer;
@@ -812,6 +815,84 @@ mod tests {
         let mut primitives = PrimitiveRegistry::new();
         let mut words = PublishedWords::new();
         register_operator_primitives(&mut primitives, &mut words).lookup()
+    }
+
+    #[derive(Debug)]
+    struct FailingPatchTarget {
+        len: usize,
+    }
+
+    impl FailingPatchTarget {
+        fn new(len: usize) -> Self {
+            Self { len }
+        }
+    }
+
+    impl InstructionBuildTarget for FailingPatchTarget {
+        fn current_len(&self) -> usize {
+            self.len
+        }
+
+        fn append_mapped(
+            &mut self,
+            _instruction: Instruction,
+            _span: SourceSpan,
+        ) -> Result<InstructionAddress, InstructionBuildError> {
+            unreachable!("patch failure test does not append instructions")
+        }
+
+        fn append_unmapped(
+            &mut self,
+            _instruction: Instruction,
+        ) -> Result<InstructionAddress, InstructionBuildError> {
+            unreachable!("patch failure test does not append instructions")
+        }
+
+        fn append_resolved_mapped(
+            &mut self,
+            _instruction: Instruction,
+            _span: SourceSpan,
+        ) -> Result<InstructionAddress, InstructionBuildError> {
+            unreachable!("patch failure test does not append instructions")
+        }
+
+        fn append_resolved_unmapped(
+            &mut self,
+            _instruction: Instruction,
+        ) -> Result<InstructionAddress, InstructionBuildError> {
+            unreachable!("patch failure test does not append instructions")
+        }
+
+        fn append_mapped_jump_placeholder(
+            &mut self,
+            _span: SourceSpan,
+        ) -> Result<InstructionAddress, InstructionBuildError> {
+            unreachable!("patch failure test does not append instructions")
+        }
+
+        fn append_mapped_jump_if_zero_placeholder(
+            &mut self,
+            _span: SourceSpan,
+        ) -> Result<InstructionAddress, InstructionBuildError> {
+            unreachable!("patch failure test does not append instructions")
+        }
+
+        fn patch_branch_target(
+            &mut self,
+            branch: InstructionAddress,
+            _target: InstructionAddress,
+        ) -> Result<(), InstructionBuildError> {
+            Err(InstructionBuildError::BlockCodeBuild {
+                source: BlockCodeBuildError::UnknownBranchPatch { branch },
+            })
+        }
+
+        fn validate_local_target(
+            &self,
+            _address: InstructionAddress,
+        ) -> Result<(), InstructionBuildError> {
+            Ok(())
+        }
     }
 
     #[test]
@@ -1132,5 +1213,33 @@ mod tests {
             SourceWordEvaluationError::VariableResolution { .. }
         ));
         assert_eq!(code.len(), 0);
+    }
+
+    #[test]
+    fn failed_structural_branch_patch_keeps_unfinished_patch_state() {
+        let (sources, source_id, _tokens) = lex("IF 0");
+        let view = sources.view();
+        let origin = origin(span(view, source_id, 0, 2));
+        let mut state = SourceWordEvaluationState::new();
+        let branch = InstructionAddress::from_index(0);
+        state.structural_branches.record_following(branch, origin);
+        let mut target = FailingPatchTarget::new(1);
+
+        let error = state
+            .complete_structural_branches(&mut target)
+            .expect_err("failed patch should reject structural completion");
+
+        assert!(matches!(
+            error,
+            SourceWordEvaluationError::InstructionBuild {
+                source: InstructionBuildError::BlockCodeBuild {
+                    source: BlockCodeBuildError::UnknownBranchPatch { branch: actual }
+                },
+                ..
+            } if actual == branch
+        ));
+        assert_eq!(state.structural_branches.following.len(), 1);
+        assert_eq!(state.structural_branches.following[0].branch, branch);
+        assert!(state.structural_branches.complete.is_empty());
     }
 }
