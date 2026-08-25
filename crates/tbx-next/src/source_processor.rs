@@ -5152,6 +5152,120 @@ mod tests {
     }
 
     #[test]
+    fn user_defined_while_uses_complete_branch_for_exit_and_explicit_back_branch() {
+        let (words, primitives, operators, mut source_words, mut bindings, mut globals, variables) =
+            global_source_fixture();
+        publish_user_source_word(
+            "SYNTAX UWHILE\nBLOCK\nSTART\nPOSITION AS loop_start\nREAD_EXPR AS condition\nEMIT_EXPR condition\nEMIT_BRANCH_IF_FALSE_COMPLETE\nLAST ENDUWHILE\nEXPECT_END\nEMIT_BRANCH loop_start\nENDS",
+            &mut bindings,
+            &mut globals,
+            &mut source_words,
+            operators.lookup(),
+        );
+
+        run_with_source_words_operators_and_mut_globals(
+            "LET A = 0\nUWHILE A < 3\nLET A = A + 1\nENDUWHILE",
+            &bindings,
+            &mut globals,
+            &source_words,
+            &words,
+            &primitives,
+            operators.lookup(),
+        );
+        assert_eq!(globals.view().read(variables[0]), Ok(value(3)));
+
+        run_with_source_words_operators_and_mut_globals(
+            "LET A = 9\nUWHILE A < 3\nLET A = 0\nENDUWHILE",
+            &bindings,
+            &mut globals,
+            &source_words,
+            &words,
+            &primitives,
+            operators.lookup(),
+        );
+        assert_eq!(globals.view().read(variables[0]), Ok(value(9)));
+    }
+
+    #[test]
+    fn user_defined_if_resolves_following_through_complete_branch_sections() {
+        let (words, primitives, operators, mut source_words, mut bindings, mut globals, variables) =
+            global_source_fixture();
+        publish_user_source_word(
+            "SYNTAX UIF\nBLOCK\nSTART\nREAD_EXPR AS start_condition\nEMIT_EXPR start_condition\nEMIT_BRANCH_IF_FALSE_FOLLOWING\nMARK_ANY UELSIF\nEMIT_BRANCH_COMPLETE\nREAD_EXPR AS elsif_condition\nEMIT_EXPR elsif_condition\nEMIT_BRANCH_IF_FALSE_FOLLOWING\nMARK_OPTIONAL UELSE\nEMIT_BRANCH_COMPLETE\nEXPECT_END\nLAST ENDUIF\nEXPECT_END\nENDS",
+            &mut bindings,
+            &mut globals,
+            &mut source_words,
+            operators.lookup(),
+        );
+
+        run_with_source_words_operators_and_mut_globals(
+            "UIF 0\nLET A = 1\nUELSIF 0\nLET A = 2\nUELSIF 1\nLET A = 3\nUELSE\nLET A = 4\nENDUIF",
+            &bindings,
+            &mut globals,
+            &source_words,
+            &words,
+            &primitives,
+            operators.lookup(),
+        );
+        assert_eq!(globals.view().read(variables[0]), Ok(value(3)));
+
+        run_with_source_words_operators_and_mut_globals(
+            "UIF 0\nLET A = 1\nUELSIF 0\nLET A = 2\nUELSE\nLET A = 4\nENDUIF",
+            &bindings,
+            &mut globals,
+            &source_words,
+            &words,
+            &primitives,
+            operators.lookup(),
+        );
+        assert_eq!(globals.view().read(variables[0]), Ok(value(4)));
+
+        run_with_source_words_operators_and_mut_globals(
+            "UIF 0\nLET A = 1\nENDUIF",
+            &bindings,
+            &mut globals,
+            &source_words,
+            &words,
+            &primitives,
+            operators.lookup(),
+        );
+        assert_eq!(globals.view().read(variables[0]), Ok(value(4)));
+    }
+
+    #[test]
+    fn nested_user_defined_structural_branches_remain_owner_local() {
+        let (words, primitives, operators, mut source_words, mut bindings, mut globals, variables) =
+            global_source_fixture();
+        publish_user_source_word(
+            "SYNTAX UWHILE\nBLOCK\nSTART\nPOSITION AS loop_start\nREAD_EXPR AS condition\nEMIT_EXPR condition\nEMIT_BRANCH_IF_FALSE_COMPLETE\nLAST ENDUWHILE\nEXPECT_END\nEMIT_BRANCH loop_start\nENDS",
+            &mut bindings,
+            &mut globals,
+            &mut source_words,
+            operators.lookup(),
+        );
+        publish_user_source_word(
+            "SYNTAX UIF\nBLOCK\nSTART\nREAD_EXPR AS condition\nEMIT_EXPR condition\nEMIT_BRANCH_IF_FALSE_FOLLOWING\nMARK_OPTIONAL UELSE\nEMIT_BRANCH_COMPLETE\nEXPECT_END\nLAST ENDUIF\nEXPECT_END\nENDS",
+            &mut bindings,
+            &mut globals,
+            &mut source_words,
+            operators.lookup(),
+        );
+
+        run_with_source_words_operators_and_mut_globals(
+            "LET A = 0\nLET B = 0\nUWHILE A < 3\nUIF A = 1\nLET B = B + 10\nUELSE\nLET B = B + 1\nENDUIF\nLET A = A + 1\nENDUWHILE",
+            &bindings,
+            &mut globals,
+            &source_words,
+            &words,
+            &primitives,
+            operators.lookup(),
+        );
+
+        assert_eq!(globals.view().read(variables[0]), Ok(value(3)));
+        assert_eq!(globals.view().read(variables[1]), Ok(value(12)));
+    }
+
+    #[test]
     fn user_defined_return_equivalent_runs_through_runtime_definition_body() {
         let mut session = RuntimeDefinitionSession::new();
         register_builtin_global_variables(&mut session.globals, &mut session.bindings)
