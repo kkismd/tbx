@@ -1,3 +1,5 @@
+use crate::binding::{Binding, BindingInsertError, Bindings};
+use crate::name::NormalizedName;
 use crate::primitive::{PrimitiveContext, PrimitiveError, PrimitiveRegistry};
 use crate::value::{Value, ValueError};
 use crate::word::{CompletedWordDefinition, PublishedWords, WordId};
@@ -39,6 +41,13 @@ pub(crate) struct OperatorLookup {
     words: OperatorWords,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum OperatorBootstrapError {
+    NameConflict,
+    ReservedName,
+    BindingRegistrationInvariantViolated,
+}
+
 /// Registers expression operators without creating surface name bindings.
 ///
 /// Operators are syntax semantics, not normal words: later source processors
@@ -77,6 +86,37 @@ pub(crate) fn register_operator_primitives(
     }
 }
 
+/// Registers expression operators and binds their existing `WordId`s as words.
+///
+/// The operator lookup and user-facing names intentionally share the same
+/// published definitions. Later explicit word redefinition may move a name
+/// binding to a new `WordId`, but this returned lookup remains early-bound to
+/// the original operator definitions.
+pub(crate) fn register_named_operator_primitives(
+    primitives: &mut PrimitiveRegistry,
+    words: &mut PublishedWords,
+    bindings: &mut Bindings,
+) -> Result<OperatorWords, OperatorBootstrapError> {
+    let names = named_operator_word_names();
+
+    for (_, name) in &names {
+        bindings
+            .validate_new_name(name)
+            .map_err(OperatorBootstrapError::from_precheck_error)?;
+    }
+
+    let operators = register_operator_primitives(primitives, words);
+
+    for (semantic, name) in names {
+        let id = operators.lookup().resolve(semantic);
+        bindings
+            .insert_new(name, Binding::Word(id))
+            .map_err(OperatorBootstrapError::from_binding_insert_error)?;
+    }
+
+    Ok(operators)
+}
+
 impl OperatorWords {
     pub(crate) const fn lookup(self) -> OperatorLookup {
         OperatorLookup { words: self }
@@ -109,6 +149,64 @@ fn register_operator(
 ) -> WordId {
     let primitive = primitives.register(handler);
     words.add(CompletedWordDefinition::primitive(primitive))
+}
+
+fn named_operator_word_names() -> [(OperatorSemantic, NormalizedName); 12] {
+    [
+        (OperatorSemantic::Add, named_operator_word_name("ADD")),
+        (
+            OperatorSemantic::Subtract,
+            named_operator_word_name("SUBTRACT"),
+        ),
+        (
+            OperatorSemantic::Multiply,
+            named_operator_word_name("MULTIPLY"),
+        ),
+        (OperatorSemantic::Divide, named_operator_word_name("DIVIDE")),
+        (
+            OperatorSemantic::Remainder,
+            named_operator_word_name("REMAINDER"),
+        ),
+        (OperatorSemantic::Negate, named_operator_word_name("NEGATE")),
+        (OperatorSemantic::Equal, named_operator_word_name("EQUAL?")),
+        (
+            OperatorSemantic::NotEqual,
+            named_operator_word_name("NOT_EQUAL?"),
+        ),
+        (OperatorSemantic::Less, named_operator_word_name("LESS?")),
+        (
+            OperatorSemantic::LessEqual,
+            named_operator_word_name("LESS_EQUAL?"),
+        ),
+        (
+            OperatorSemantic::Greater,
+            named_operator_word_name("GREATER?"),
+        ),
+        (
+            OperatorSemantic::GreaterEqual,
+            named_operator_word_name("GREATER_EQUAL?"),
+        ),
+    ]
+}
+
+fn named_operator_word_name(input: &str) -> NormalizedName {
+    NormalizedName::new(input).expect("named operator word should have a valid name")
+}
+
+impl OperatorBootstrapError {
+    fn from_precheck_error(error: BindingInsertError) -> Self {
+        match error {
+            BindingInsertError::NameConflict => Self::NameConflict,
+            BindingInsertError::ReservedName => Self::ReservedName,
+        }
+    }
+
+    fn from_binding_insert_error(error: BindingInsertError) -> Self {
+        match error {
+            BindingInsertError::NameConflict => Self::BindingRegistrationInvariantViolated,
+            BindingInsertError::ReservedName => Self::BindingRegistrationInvariantViolated,
+        }
+    }
 }
 
 fn add(context: &mut PrimitiveContext<'_>) -> Result<(), PrimitiveError> {
@@ -199,7 +297,7 @@ mod tests {
     use crate::vm::{ExecutionView, RunOutcome, Vm, VmErrorKind};
     use crate::word::{PrimitiveId, WordDefinition};
     use crate::word_lookup::PublishedWordLookup;
-    use crate::word_resolution::{resolve_word_name, WordResolutionError};
+    use crate::word_resolution::resolve_word_name;
 
     const ALL_SEMANTICS: [OperatorSemantic; 12] = [
         OperatorSemantic::Add,
@@ -214,6 +312,21 @@ mod tests {
         OperatorSemantic::LessEqual,
         OperatorSemantic::Greater,
         OperatorSemantic::GreaterEqual,
+    ];
+
+    const NAMED_OPERATORS: [(OperatorSemantic, &str); 12] = [
+        (OperatorSemantic::Add, "ADD"),
+        (OperatorSemantic::Subtract, "SUBTRACT"),
+        (OperatorSemantic::Multiply, "MULTIPLY"),
+        (OperatorSemantic::Divide, "DIVIDE"),
+        (OperatorSemantic::Remainder, "REMAINDER"),
+        (OperatorSemantic::Negate, "NEGATE"),
+        (OperatorSemantic::Equal, "EQUAL?"),
+        (OperatorSemantic::NotEqual, "NOT_EQUAL?"),
+        (OperatorSemantic::Less, "LESS?"),
+        (OperatorSemantic::LessEqual, "LESS_EQUAL?"),
+        (OperatorSemantic::Greater, "GREATER?"),
+        (OperatorSemantic::GreaterEqual, "GREATER_EQUAL?"),
     ];
 
     fn value(value: i16) -> Value {
@@ -368,48 +481,68 @@ mod tests {
     }
 
     #[test]
-    fn operator_registration_does_not_require_surface_bindings() {
-        let mut primitives = PrimitiveRegistry::new();
-        let mut words = PublishedWords::new();
-        let bindings = Bindings::new();
-
-        let operators = register_operator_primitives(&mut primitives, &mut words);
-
-        assert!(bindings.is_empty());
-        assert_eq!(words.len(), ALL_SEMANTICS.len());
-        assert_eq!(
-            resolve_word_name(&bindings, "ADD"),
-            Err(WordResolutionError::UndefinedName)
-        );
-        assert!(matches!(
-            words.get(operators.lookup().resolve(OperatorSemantic::Add)),
-            Ok(WordDefinition::Primitive { .. })
-        ));
-    }
-
-    #[test]
-    fn user_word_redefinition_does_not_change_operator_lookup() {
+    fn named_operator_registration_binds_all_names_to_operator_word_ids() {
         let mut primitives = PrimitiveRegistry::new();
         let mut words = PublishedWords::new();
         let mut bindings = Bindings::new();
-        let operators = register_operator_primitives(&mut primitives, &mut words);
-        let operator_add = operators.lookup().resolve(OperatorSemantic::Add);
-        let user_old = words.add(CompletedWordDefinition::primitive(PrimitiveId::from_slot(
+
+        let operators =
+            register_named_operator_primitives(&mut primitives, &mut words, &mut bindings)
+                .expect("named operators should bootstrap");
+
+        assert_eq!(words.len(), ALL_SEMANTICS.len());
+        assert_eq!(primitives.len(), ALL_SEMANTICS.len());
+        assert_eq!(bindings.len(), ALL_SEMANTICS.len());
+        for (semantic, input) in NAMED_OPERATORS {
+            let operator_id = operators.lookup().resolve(semantic);
+
+            assert_eq!(resolve_word_name(&bindings, input), Ok(operator_id));
+            assert!(matches!(
+                words.get(operator_id),
+                Ok(WordDefinition::Primitive { .. })
+            ));
+        }
+    }
+
+    #[test]
+    fn named_operator_registration_prechecks_name_conflicts() {
+        let mut primitives = PrimitiveRegistry::new();
+        let mut words = PublishedWords::new();
+        let mut bindings = Bindings::new();
+        let existing = words.add(CompletedWordDefinition::primitive(PrimitiveId::from_slot(
             100,
         )));
         bindings
-            .insert_new(name("ADD"), Binding::Word(user_old))
-            .expect("user word should bind");
-        let user_new = CompletedWordDefinition::primitive(PrimitiveId::from_slot(101));
+            .insert_new(name("ADD"), Binding::Word(existing))
+            .expect("test setup should bind ADD");
 
-        let redefinition = redefine_word(&mut words, &mut bindings, &name("ADD"), user_new)
+        let result = register_named_operator_primitives(&mut primitives, &mut words, &mut bindings);
+
+        assert_eq!(result, Err(OperatorBootstrapError::NameConflict));
+        assert_eq!(primitives.len(), 0);
+        assert_eq!(words.len(), 1);
+        assert_eq!(resolve_word_name(&bindings, "ADD"), Ok(existing));
+    }
+
+    #[test]
+    fn named_word_redefinition_does_not_change_operator_lookup() {
+        let mut primitives = PrimitiveRegistry::new();
+        let mut words = PublishedWords::new();
+        let mut bindings = Bindings::new();
+        let operators =
+            register_named_operator_primitives(&mut primitives, &mut words, &mut bindings)
+                .expect("named operators should bootstrap");
+        let operator_add = operators.lookup().resolve(OperatorSemantic::Add);
+        let replacement = CompletedWordDefinition::primitive(PrimitiveId::from_slot(100));
+
+        let redefinition = redefine_word(&mut words, &mut bindings, &name("ADD"), replacement)
             .expect("user word should redefine");
 
         assert_eq!(
             operators.lookup().resolve(OperatorSemantic::Add),
             operator_add
         );
-        assert_ne!(operator_add, user_old);
+        assert_eq!(redefinition.previous(), operator_add);
         assert_ne!(operator_add, redefinition.current());
         assert_eq!(
             resolve_word_name(&bindings, "ADD"),

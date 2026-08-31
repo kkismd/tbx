@@ -2416,7 +2416,10 @@ mod tests {
     use crate::instruction::InstructionSequence;
     use crate::lexer::InvalidCharacterReason;
     use crate::name::NormalizedName;
-    use crate::operator::{register_operator_primitives, OperatorSemantic, OperatorWords};
+    use crate::operator::{
+        register_named_operator_primitives, register_operator_primitives, OperatorSemantic,
+        OperatorWords,
+    };
     use crate::primitive::{PrimitiveContext, PrimitiveError, PrimitiveRegistry};
     use crate::published_code::PublishedCode;
     use crate::redefinition::redefine_word;
@@ -3342,6 +3345,28 @@ mod tests {
             let (words, primitives, operators) = operator_fixture();
             let mut source_words = SourceWordRegistry::new();
             let mut bindings = Bindings::new();
+            register_builtin_source_words(&mut source_words, &mut bindings)
+                .expect("built-in source words should bootstrap");
+
+            Self {
+                words,
+                primitives,
+                operators,
+                source_words,
+                bindings,
+                globals: GlobalVariables::new(),
+                code: PublishedCode::new(),
+            }
+        }
+
+        fn new_with_named_operators() -> Self {
+            let mut words = PublishedWords::new();
+            let mut primitives = PrimitiveRegistry::new();
+            let mut bindings = Bindings::new();
+            let operators =
+                register_named_operator_primitives(&mut primitives, &mut words, &mut bindings)
+                    .expect("named operators should bootstrap");
+            let mut source_words = SourceWordRegistry::new();
             register_builtin_source_words(&mut source_words, &mut bindings)
                 .expect("built-in source words should bootstrap");
 
@@ -9311,6 +9336,54 @@ mod tests {
             Some(&Binding::Word(sum_seven))
         );
         assert_eq!(result.data_stack(), [value(7)]);
+    }
+
+    #[test]
+    fn published_def_body_can_call_named_operator_word() {
+        let mut session = RuntimeDefinitionSession::new_with_named_operators();
+        let add =
+            resolve_word_name(&session.bindings, "ADD").expect("ADD should be a named operator");
+        session.publish_def("DEF SUM\nADD\nEND");
+        let Some(Binding::Word(sum)) = session.bindings.get(&name("SUM")).copied() else {
+            panic!("SUM should be published");
+        };
+        let (caller_sources, caller_id) = source("EVAL SUM(19, 23)");
+
+        let caller = compile_source(
+            caller_sources.view(),
+            caller_id,
+            SourceCompileContext::with_source_words_and_operators(
+                &session.bindings,
+                session.source_words.lookup(),
+                session.operators.lookup(),
+            ),
+        )
+        .expect("caller should compile with named operator word");
+        let result = session
+            .run_unit_with_published_code(&caller)
+            .expect("caller should run named operator word");
+
+        assert_eq!(
+            session.code.instruction_view().get(address(0)),
+            Ok(&Instruction::Call(add))
+        );
+        assert_eq!(
+            session.code.instruction_view().get(address(1)),
+            Ok(&Instruction::Return)
+        );
+        assert_eq!(
+            caller.instructions().get(address(0)),
+            Ok(&Instruction::Push(value(19)))
+        );
+        assert_eq!(
+            caller.instructions().get(address(1)),
+            Ok(&Instruction::Push(value(23)))
+        );
+        assert_eq!(
+            caller.instructions().get(address(2)),
+            Ok(&Instruction::Call(sum))
+        );
+        assert_eq!(result.data_stack(), [value(42)]);
     }
 
     #[test]
