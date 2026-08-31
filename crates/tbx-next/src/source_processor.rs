@@ -9444,6 +9444,111 @@ mod tests {
     }
 
     #[test]
+    fn minimal_user_defined_computation_words_run_e2e_from_later_eval_source() {
+        let mut session = RuntimeDefinitionSession::new_with_named_operators_and_stack_primitives();
+        let add =
+            resolve_word_name(&session.bindings, "ADD").expect("ADD should be a named operator");
+        let multiply = resolve_word_name(&session.bindings, "MULTIPLY")
+            .expect("MULTIPLY should be a named operator");
+        let greater = resolve_word_name(&session.bindings, "GREATER?")
+            .expect("GREATER? should be a named operator");
+        let dup = resolve_word_name(&session.bindings, "DUP").expect("DUP should bootstrap");
+
+        session.publish_def("DEF SUM\nADD\nEND");
+        session.publish_def("DEF DOUBLE\nEVAL 2\nMULTIPLY\nEND");
+        session.publish_def("DEF SQUARE\nDUP\nMULTIPLY\nEND");
+        session.publish_def("DEF IS_POSITIVE\nEVAL 0\nGREATER?\nEND");
+        let Some(Binding::Word(sum)) = session.bindings.get(&name("SUM")).copied() else {
+            panic!("SUM should be published");
+        };
+        let Some(Binding::Word(double)) = session.bindings.get(&name("DOUBLE")).copied() else {
+            panic!("DOUBLE should be published");
+        };
+        let Some(Binding::Word(square)) = session.bindings.get(&name("SQUARE")).copied() else {
+            panic!("SQUARE should be published");
+        };
+        let Some(Binding::Word(is_positive)) = session.bindings.get(&name("IS_POSITIVE")).copied()
+        else {
+            panic!("IS_POSITIVE should be published");
+        };
+        let (caller_sources, caller_id) = source(
+            "EVAL SUM(19, 23)\n\
+             EVAL DOUBLE(21)\n\
+             EVAL SQUARE(-3)\n\
+             EVAL IS_POSITIVE(5)\n\
+             EVAL IS_POSITIVE(0)\n\
+             EVAL IS_POSITIVE(-1)",
+        );
+
+        let caller = compile_source(
+            caller_sources.view(),
+            caller_id,
+            SourceCompileContext::with_source_words_and_operators(
+                &session.bindings,
+                session.source_words.lookup(),
+                session.operators.lookup(),
+            ),
+        )
+        .expect("later EVAL caller should compile");
+        let result = session
+            .run_unit_with_published_code(&caller)
+            .expect("later EVAL caller should run all published computation words");
+
+        assert_eq!(
+            session.code.instruction_view().get(address(0)),
+            Ok(&Instruction::Call(add))
+        );
+        assert_eq!(
+            session.code.instruction_view().get(address(2)),
+            Ok(&Instruction::Push(value(2)))
+        );
+        assert_eq!(
+            session.code.instruction_view().get(address(3)),
+            Ok(&Instruction::Call(multiply))
+        );
+        assert_eq!(
+            session.code.instruction_view().get(address(5)),
+            Ok(&Instruction::Call(dup))
+        );
+        assert_eq!(
+            session.code.instruction_view().get(address(6)),
+            Ok(&Instruction::Call(multiply))
+        );
+        assert_eq!(
+            session.code.instruction_view().get(address(8)),
+            Ok(&Instruction::Push(value(0)))
+        );
+        assert_eq!(
+            session.code.instruction_view().get(address(9)),
+            Ok(&Instruction::Call(greater))
+        );
+        assert_eq!(
+            caller.instructions().get(address(2)),
+            Ok(&Instruction::Call(sum))
+        );
+        assert_eq!(
+            caller.instructions().get(address(4)),
+            Ok(&Instruction::Call(double))
+        );
+        assert_eq!(
+            caller.instructions().get(address(7)),
+            Ok(&Instruction::Call(square))
+        );
+        assert_eq!(
+            caller.instructions().get(address(9)),
+            Ok(&Instruction::Call(is_positive))
+        );
+        assert_eq!(
+            caller.source_span(location(&caller, 4)),
+            Ok(Some(span(caller_sources.view(), caller_id, 22, 28)))
+        );
+        assert_eq!(
+            result.data_stack(),
+            [value(42), value(42), value(9), value(1), value(0), value(0)]
+        );
+    }
+
+    #[test]
     fn published_def_body_can_call_existing_published_runtime_word() {
         let mut session = RuntimeDefinitionSession::new();
         session.register_primitive("PUSH3", push_3);
