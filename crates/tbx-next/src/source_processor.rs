@@ -5,7 +5,6 @@ use crate::binding::Bindings;
 use crate::block_code::{BlockCodeBuildError, BlockCodeBuilder};
 use crate::expression::{
     parse_expression, ExpressionError, ExpressionSyntaxErrorKind, ExpressionVariableErrorKind,
-    ExpressionWordErrorKind,
 };
 use crate::global_variable::{GlobalVariableView, GlobalVariables};
 use crate::instruction::{
@@ -167,7 +166,6 @@ pub(crate) enum CompileErrorKind {
     WordResolution { source: WordResolutionError },
     Expression { source: ExpressionSyntaxErrorKind },
     ExpressionVariable { source: ExpressionVariableErrorKind },
-    ExpressionWord { source: ExpressionWordErrorKind },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1353,9 +1351,8 @@ fn compile_expression_tokens(
         .map_or(0, |token| token.span().end());
     expression_tokens.push(Token::new(TokenKind::Eof, view.span(source_id, end, end)?));
 
-    let variables = |source_name: &str| resolve_variable_name(bindings, source_name);
-    let words = |source_name: &str| resolve_runtime_word_name(bindings, source_name);
-    parse_expression(view, &expression_tokens, operators, &variables, &words)
+    let resolver = |source_name: &str| resolve_variable_name(bindings, source_name);
+    parse_expression(view, &expression_tokens, operators, &resolver)
         .map_err(SourceProcessorError::from_expression_error)?
         .commit_to(code)
         .map_err(SourceProcessorError::from_expression_error)
@@ -1432,23 +1429,6 @@ fn resolve_variable_name(
         Err(WordResolutionError::UndefinedName) => Err(ExpressionVariableErrorKind::UndefinedName),
         Err(WordResolutionError::TargetIsNotWord) => {
             unreachable!("binding lookup does not require a runtime word target")
-        }
-    }
-}
-
-fn resolve_runtime_word_name(
-    bindings: &Bindings,
-    source_name: &str,
-) -> Result<WordId, ExpressionWordErrorKind> {
-    match resolve_binding_name(bindings, source_name) {
-        Ok(ResolvedBinding::RuntimeWord(id)) => Ok(id),
-        Ok(ResolvedBinding::Variable(_) | ResolvedBinding::SourceWord(_)) => {
-            Err(ExpressionWordErrorKind::TargetIsNotRuntimeWord)
-        }
-        Err(WordResolutionError::InvalidWordName) => Err(ExpressionWordErrorKind::InvalidName),
-        Err(WordResolutionError::UndefinedName) => Err(ExpressionWordErrorKind::UndefinedName),
-        Err(WordResolutionError::TargetIsNotWord) => {
-            unreachable!("binding lookup reports concrete binding kinds")
         }
     }
 }
@@ -2349,12 +2329,6 @@ impl SourceProcessorError {
             ExpressionError::Variable(error) => Self::Compile(CompileError {
                 span: error.span(),
                 kind: CompileErrorKind::ExpressionVariable {
-                    source: error.kind(),
-                },
-            }),
-            ExpressionError::Word(error) => Self::Compile(CompileError {
-                span: error.span(),
-                kind: CompileErrorKind::ExpressionWord {
                     source: error.kind(),
                 },
             }),
@@ -3533,12 +3507,6 @@ mod tests {
     fn add_top_two(context: &mut PrimitiveContext<'_>) -> Result<(), PrimitiveError> {
         let (lhs, rhs) = context.pop2()?;
         context.push(value(lhs.as_integer() + rhs.as_integer()));
-        Ok(())
-    }
-
-    fn add_one(context: &mut PrimitiveContext<'_>) -> Result<(), PrimitiveError> {
-        let value = context.pop()?;
-        context.push(Value::integer(value.as_integer() + 1));
         Ok(())
     }
 
@@ -6753,42 +6721,6 @@ mod tests {
         );
 
         assert_eq!(result.data_stack(), [value(3), value(1)]);
-    }
-
-    #[test]
-    fn top_level_eval_reuses_expression_word_call_and_comma_expression() {
-        let (
-            mut words,
-            mut primitives,
-            operators,
-            source_words,
-            mut bindings,
-            mut globals,
-            variables,
-        ) = global_source_fixture();
-        globals
-            .view_mut()
-            .write(variables[0], value(4))
-            .expect("A should be writable");
-        globals
-            .view_mut()
-            .write(variables[1], value(9))
-            .expect("B should be writable");
-        let primitive = primitives.register(add_one);
-        register_primitive(&mut words, &mut bindings, name("INC"), primitive)
-            .expect("INC primitive should register");
-
-        let (_sources, _id, result) = run_with_source_words_operators_and_mut_globals(
-            "EVAL INC(A)\nEVAL A, B",
-            &bindings,
-            &mut globals,
-            &source_words,
-            &words,
-            &primitives,
-            operators.lookup(),
-        );
-
-        assert_eq!(result.data_stack(), [value(5), value(4), value(9)]);
     }
 
     #[test]
