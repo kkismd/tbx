@@ -2435,6 +2435,7 @@ mod tests {
         StructuredBodyContext, StructuredBuildTargetScope, StructuredLineNumberScope,
         StructuredSourceWordInstance, VarSyntaxErrorKind,
     };
+    use crate::stack_primitive::register_stack_primitives;
     use crate::structured_grammar::{
         MarkerCardinality, MarkerGroup, MarkerIdentity, StructuredGrammar,
     };
@@ -3379,6 +3380,17 @@ mod tests {
                 globals: GlobalVariables::new(),
                 code: PublishedCode::new(),
             }
+        }
+
+        fn new_with_named_operators_and_stack_primitives() -> Self {
+            let mut session = Self::new_with_named_operators();
+            register_stack_primitives(
+                &mut session.primitives,
+                &mut session.words,
+                &mut session.bindings,
+            )
+            .expect("stack primitives should bootstrap");
+            session
         }
 
         fn publish_def(&mut self, text: &str) -> (SourceTexts, SourceId, TemporaryExecutionUnit) {
@@ -9384,6 +9396,51 @@ mod tests {
             Ok(&Instruction::Call(sum))
         );
         assert_eq!(result.data_stack(), [value(42)]);
+    }
+
+    #[test]
+    fn published_def_body_can_call_builtin_dup_runtime_word() {
+        let mut session = RuntimeDefinitionSession::new_with_named_operators_and_stack_primitives();
+        let dup = resolve_word_name(&session.bindings, "DUP").expect("DUP should bootstrap");
+        let multiply = resolve_word_name(&session.bindings, "MULTIPLY")
+            .expect("MULTIPLY should be a named operator");
+        session.publish_def("DEF SQUARE\nDUP\nMULTIPLY\nEND");
+        let Some(Binding::Word(square)) = session.bindings.get(&name("SQUARE")).copied() else {
+            panic!("SQUARE should be published");
+        };
+        let (caller_sources, caller_id) = source("EVAL SQUARE(7)");
+
+        let caller = compile_source(
+            caller_sources.view(),
+            caller_id,
+            SourceCompileContext::with_source_words_and_operators(
+                &session.bindings,
+                session.source_words.lookup(),
+                session.operators.lookup(),
+            ),
+        )
+        .expect("caller should compile with DUP-backed runtime word");
+        let result = session
+            .run_unit_with_published_code(&caller)
+            .expect("caller should run DUP-backed runtime word");
+
+        assert_eq!(
+            session.code.instruction_view().get(address(0)),
+            Ok(&Instruction::Call(dup))
+        );
+        assert_eq!(
+            session.code.instruction_view().get(address(1)),
+            Ok(&Instruction::Call(multiply))
+        );
+        assert_eq!(
+            session.code.instruction_view().get(address(2)),
+            Ok(&Instruction::Return)
+        );
+        assert_eq!(
+            caller.instructions().get(address(1)),
+            Ok(&Instruction::Call(square))
+        );
+        assert_eq!(result.data_stack(), [value(49)]);
     }
 
     #[test]

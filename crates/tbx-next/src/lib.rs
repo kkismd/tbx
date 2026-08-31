@@ -122,6 +122,11 @@ mod structured_grammar;
 #[allow(dead_code)]
 mod operator;
 
+// #1580/#1583 add the minimal named data-stack primitive words without exposing
+// return-stack or VM-control access to primitive handlers.
+#[allow(dead_code)]
+mod stack_primitive;
+
 // ADR #1442/#1451 parse minimal expressions into expression-local staging
 // before committing resolved instructions into a temporary execution unit.
 #[allow(dead_code)]
