@@ -2,7 +2,8 @@ use std::collections::HashMap;
 
 use crate::binding::{Binding, BindingInsertError, Bindings};
 use crate::expression::{
-    parse_expression, ExpressionError, ExpressionStaging, ExpressionVariableErrorKind,
+    parse_expression, ExpressionCallErrorKind, ExpressionError, ExpressionStaging,
+    ExpressionVariableErrorKind,
 };
 use crate::global_variable::GlobalVariables;
 use crate::instruction::Instruction;
@@ -726,8 +727,16 @@ impl<'source, 'state> NativeStructuredSourceWordContext<'source, 'state> {
         ));
 
         let resolver = |source_name: &str| resolve_variable_name(self.bindings, source_name);
-        parse_expression(self.view, &expression_tokens, operators, &resolver)
-            .map_err(|source| SourceWordError::Expression { source })
+        let runtime_word_resolver =
+            |source_name: &str| resolve_runtime_word_name(self.bindings, source_name);
+        parse_expression(
+            self.view,
+            &expression_tokens,
+            operators,
+            &resolver,
+            &runtime_word_resolver,
+        )
+        .map_err(|source| SourceWordError::Expression { source })
     }
 
     fn evaluate_user_defined_source_word(
@@ -1368,8 +1377,16 @@ impl<'source, 'state> NativeSourceWordContext<'source, 'state> {
         ));
 
         let resolver = |source_name: &str| resolve_variable_name(self.bindings(), source_name);
-        parse_expression(self.view, &expression_tokens, operators, &resolver)
-            .map_err(|source| SourceWordError::Expression { source })
+        let runtime_word_resolver =
+            |source_name: &str| resolve_runtime_word_name(self.bindings(), source_name);
+        parse_expression(
+            self.view,
+            &expression_tokens,
+            operators,
+            &resolver,
+            &runtime_word_resolver,
+        )
+        .map_err(|source| SourceWordError::Expression { source })
     }
 
     pub(crate) fn commit_staging(
@@ -2621,6 +2638,23 @@ fn resolve_variable_name(
         }
         Err(WordResolutionError::InvalidWordName) => Err(ExpressionVariableErrorKind::InvalidName),
         Err(WordResolutionError::UndefinedName) => Err(ExpressionVariableErrorKind::UndefinedName),
+        Err(WordResolutionError::TargetIsNotWord) => {
+            unreachable!("binding lookup does not require a runtime word target")
+        }
+    }
+}
+
+fn resolve_runtime_word_name(
+    bindings: &Bindings,
+    source_name: &str,
+) -> Result<WordId, ExpressionCallErrorKind> {
+    match resolve_binding_name(bindings, source_name) {
+        Ok(ResolvedBinding::RuntimeWord(id)) => Ok(id),
+        Ok(ResolvedBinding::Variable(_) | ResolvedBinding::SourceWord(_)) => {
+            Err(ExpressionCallErrorKind::TargetIsNotRuntimeWord)
+        }
+        Err(WordResolutionError::InvalidWordName) => Err(ExpressionCallErrorKind::InvalidName),
+        Err(WordResolutionError::UndefinedName) => Err(ExpressionCallErrorKind::UndefinedName),
         Err(WordResolutionError::TargetIsNotWord) => {
             unreachable!("binding lookup does not require a runtime word target")
         }

@@ -134,6 +134,7 @@ impl SourceWordEvaluationError {
                 }
                 ExpressionError::Syntax(error) => Some(error.span()),
                 ExpressionError::Variable(error) => Some(error.span()),
+                ExpressionError::Call(error) => Some(error.span()),
             },
             Self::UndefinedLocal { reference, .. } | Self::LocalTypeMismatch { reference, .. } => {
                 Some(reference.span())
@@ -583,8 +584,16 @@ fn stage_expression(
     ));
 
     let resolver = |source_name: &str| resolve_variable_name(context.bindings, source_name);
-    parse_expression(context.view, &expression_tokens, operators, &resolver)
-        .map_err(|source| SourceWordEvaluationError::Expression { source, origin })
+    let runtime_word_resolver =
+        |source_name: &str| resolve_runtime_word_name(context.bindings, source_name);
+    parse_expression(
+        context.view,
+        &expression_tokens,
+        operators,
+        &resolver,
+        &runtime_word_resolver,
+    )
+    .map_err(|source| SourceWordEvaluationError::Expression { source, origin })
 }
 
 fn parse_line_number(
@@ -624,6 +633,27 @@ fn resolve_variable_name(
         }
         Err(WordResolutionError::UndefinedName) => {
             Err(crate::expression::ExpressionVariableErrorKind::UndefinedName)
+        }
+        Err(WordResolutionError::TargetIsNotWord) => {
+            unreachable!("binding lookup does not require a runtime word target")
+        }
+    }
+}
+
+fn resolve_runtime_word_name(
+    bindings: &Bindings,
+    source_name: &str,
+) -> Result<crate::word::WordId, crate::expression::ExpressionCallErrorKind> {
+    match resolve_binding_name(bindings, source_name) {
+        Ok(ResolvedBinding::RuntimeWord(id)) => Ok(id),
+        Ok(ResolvedBinding::Variable(_) | ResolvedBinding::SourceWord(_)) => {
+            Err(crate::expression::ExpressionCallErrorKind::TargetIsNotRuntimeWord)
+        }
+        Err(WordResolutionError::InvalidWordName) => {
+            Err(crate::expression::ExpressionCallErrorKind::InvalidName)
+        }
+        Err(WordResolutionError::UndefinedName) => {
+            Err(crate::expression::ExpressionCallErrorKind::UndefinedName)
         }
         Err(WordResolutionError::TargetIsNotWord) => {
             unreachable!("binding lookup does not require a runtime word target")
