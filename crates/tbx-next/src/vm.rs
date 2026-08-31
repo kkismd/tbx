@@ -6,10 +6,12 @@ use crate::instruction::{
     InstructionLookupError, InstructionView,
 };
 use crate::primitive::{PrimitiveContext, PrimitiveError, PrimitiveLookup, PrimitiveLookupError};
+use crate::runtime_output::RuntimeOutput;
 use crate::stack::{DataStack, ReturnFrame, ReturnStack, StackError};
 use crate::value::Value;
 use crate::word::{WordDefinition, WordId, WordLookupError};
 use crate::word_lookup::PublishedWordLookup;
+use std::fmt;
 
 /// Mutable execution state for the initial TBX Next VM core.
 ///
@@ -80,12 +82,12 @@ pub(crate) enum VmErrorKind {
     },
 }
 
-#[derive(Debug)]
 pub(crate) struct ExecutionView<'a> {
     instructions: InstructionLookup<'a>,
     words: PublishedWordLookup<'a>,
     primitives: PrimitiveLookup<'a>,
     globals: Option<GlobalExecutionAccess<'a>>,
+    output: Option<&'a mut dyn RuntimeOutput>,
 }
 
 #[derive(Debug)]
@@ -113,6 +115,7 @@ impl<'a> ExecutionView<'a> {
             words,
             primitives,
             globals: None,
+            output: None,
         }
     }
 
@@ -134,6 +137,11 @@ impl<'a> ExecutionView<'a> {
         self
     }
 
+    pub(crate) fn with_output(mut self, output: &'a mut dyn RuntimeOutput) -> Self {
+        self.output = Some(output);
+        self
+    }
+
     pub(crate) const fn instructions(self) -> InstructionLookup<'a> {
         self.instructions
     }
@@ -144,6 +152,19 @@ impl<'a> ExecutionView<'a> {
 
     pub(crate) const fn primitives(self) -> PrimitiveLookup<'a> {
         self.primitives
+    }
+}
+
+impl fmt::Debug for ExecutionView<'_> {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("ExecutionView")
+            .field("instructions", &self.instructions)
+            .field("words", &self.words)
+            .field("primitives", &self.primitives)
+            .field("globals", &self.globals)
+            .field("output", &self.output.is_some())
+            .finish()
     }
 }
 
@@ -160,6 +181,10 @@ pub(crate) trait VmExecutionView<'a> {
     fn read_global(&self, id: GlobalVarId) -> Result<Value, GlobalVariableError>;
 
     fn write_global(&mut self, id: GlobalVarId, value: Value) -> Result<(), GlobalVariableError>;
+
+    fn runtime_output(&mut self) -> Option<&mut (dyn RuntimeOutput + '_)> {
+        None
+    }
 }
 
 impl<'a> VmExecutionView<'a> for ExecutionView<'a> {
@@ -192,6 +217,13 @@ impl<'a> VmExecutionView<'a> for ExecutionView<'a> {
             Some(GlobalExecutionAccess::Read(_)) | None => {
                 Err(GlobalVariableError::InvalidGlobalVarId { id })
             }
+        }
+    }
+
+    fn runtime_output(&mut self) -> Option<&mut (dyn RuntimeOutput + '_)> {
+        match self.output.as_mut() {
+            Some(output) => Some(&mut **output),
+            None => None,
         }
     }
 }
@@ -243,6 +275,10 @@ impl<'a, T: VmExecutionView<'a> + ?Sized> VmExecutionView<'a> for &mut T {
 
     fn write_global(&mut self, id: GlobalVarId, value: Value) -> Result<(), GlobalVariableError> {
         (**self).write_global(id, value)
+    }
+
+    fn runtime_output(&mut self) -> Option<&mut (dyn RuntimeOutput + '_)> {
+        (**self).runtime_output()
     }
 }
 
@@ -449,7 +485,7 @@ impl Vm {
 
     fn step_call<'a, E: VmExecutionView<'a>>(
         &mut self,
-        execution: E,
+        mut execution: E,
         location: CodeLocation,
         id: WordId,
     ) -> Result<StepOutcome, VmError> {
@@ -470,7 +506,8 @@ impl Vm {
                     })?;
 
                 let checkpoint = self.data_stack.clone();
-                let mut context = PrimitiveContext::new(&mut self.data_stack);
+                let mut context =
+                    PrimitiveContext::with_output(&mut self.data_stack, execution.runtime_output());
                 match handler(&mut context) {
                     Ok(()) => {
                         self.instruction_pointer = next;
@@ -629,6 +666,7 @@ mod tests {
     use crate::instruction::InstructionAddressError;
     use crate::instruction::InstructionSequence;
     use crate::primitive::{PrimitiveLookupError, PrimitiveRegistry};
+    use crate::runtime_output::{RuntimeOutputError, TestOutput};
     use crate::word::{CompletedWordDefinition, PrimitiveId, PublishedWords, WordLookupError};
     use crate::word_lookup::PublishedWordLookup;
 
@@ -747,6 +785,23 @@ mod tests {
         context.pop()?;
         context.push(value(99));
         Err(PrimitiveError::Failed)
+    }
+
+    fn write_alpha(context: &mut PrimitiveContext<'_>) -> Result<(), PrimitiveError> {
+        context.write_output("alpha")
+    }
+
+    fn write_beta(context: &mut PrimitiveContext<'_>) -> Result<(), PrimitiveError> {
+        context.write_output("beta")
+    }
+
+    fn write_empty(context: &mut PrimitiveContext<'_>) -> Result<(), PrimitiveError> {
+        context.write_output("")
+    }
+
+    fn pop_then_write_output(context: &mut PrimitiveContext<'_>) -> Result<(), PrimitiveError> {
+        context.pop()?;
+        context.write_output("after-pop")
     }
 
     #[test]
@@ -1607,6 +1662,96 @@ mod tests {
         assert_eq!(vm.return_stack_depth(), 0);
         assert_eq!(vm.data_stack_depth(), 1);
         assert_eq!(vm.peek_data(), Ok(value(7)));
+    }
+
+    #[test]
+    fn primitive_output_writes_completed_chunks_in_order() {
+        let mut primitives = PrimitiveRegistry::new();
+        let alpha = primitives.register(write_alpha);
+        let beta = primitives.register(write_beta);
+        let empty = primitives.register(write_empty);
+        let mut words = PublishedWords::new();
+        let alpha_word = words.add(CompletedWordDefinition::primitive(alpha));
+        let beta_word = words.add(CompletedWordDefinition::primitive(beta));
+        let empty_word = words.add(CompletedWordDefinition::primitive(empty));
+        let mut code = InstructionSequence::new();
+        let entry = code.append(Instruction::Call(alpha_word));
+        code.append(Instruction::Call(beta_word));
+        code.append(Instruction::Call(empty_word));
+        code.append(Instruction::Halt);
+        let mut output = TestOutput::new();
+        let mut vm = new_vm(&code, entry);
+
+        let result = vm.run(execution(&code, &words, &primitives).with_output(&mut output));
+
+        assert_eq!(result, Ok(RunOutcome::Halted));
+        assert_eq!(output.chunks(), ["alpha", "beta", ""]);
+        assert_eq!(vm.data_stack_depth(), 0);
+    }
+
+    #[test]
+    fn primitive_output_failure_propagates_and_restores_vm_state() {
+        let mut primitives = PrimitiveRegistry::new();
+        let primitive = primitives.register(pop_then_write_output);
+        let mut words = PublishedWords::new();
+        let word = words.add(CompletedWordDefinition::primitive(primitive));
+        let mut code = InstructionSequence::new();
+        let entry = code.append(Instruction::Push(value(7)));
+        let call = code.append(Instruction::Call(word));
+        code.append(Instruction::Halt);
+        let mut output = TestOutput::new();
+        output.fail_next_write(RuntimeOutputError::Failed);
+        let mut vm = new_vm(&code, entry);
+
+        assert_eq!(vm.step(code.view()), Ok(StepOutcome::Continued));
+        let before = snapshot(&vm);
+        let result = vm.step(execution(&code, &words, &primitives).with_output(&mut output));
+
+        assert_eq!(
+            result,
+            Err(VmError {
+                location: location(&code, call),
+                kind: VmErrorKind::PrimitiveFailed {
+                    primitive,
+                    source: PrimitiveError::OutputFailed {
+                        source: RuntimeOutputError::Failed,
+                    }
+                }
+            })
+        );
+        assert_vm_state(&vm, before);
+        assert!(output.chunks().is_empty());
+    }
+
+    #[test]
+    fn missing_output_capability_is_a_primitive_failure_without_vm_mutation() {
+        let mut primitives = PrimitiveRegistry::new();
+        let primitive = primitives.register(pop_then_write_output);
+        let mut words = PublishedWords::new();
+        let word = words.add(CompletedWordDefinition::primitive(primitive));
+        let mut code = InstructionSequence::new();
+        let entry = code.append(Instruction::Push(value(11)));
+        let call = code.append(Instruction::Call(word));
+        code.append(Instruction::Halt);
+        let mut vm = new_vm(&code, entry);
+
+        assert_eq!(vm.step(code.view()), Ok(StepOutcome::Continued));
+        let before = snapshot(&vm);
+        let result = vm.step(execution(&code, &words, &primitives));
+
+        assert_eq!(
+            result,
+            Err(VmError {
+                location: location(&code, call),
+                kind: VmErrorKind::PrimitiveFailed {
+                    primitive,
+                    source: PrimitiveError::OutputFailed {
+                        source: RuntimeOutputError::Unavailable,
+                    }
+                }
+            })
+        );
+        assert_vm_state(&vm, before);
     }
 
     #[test]
