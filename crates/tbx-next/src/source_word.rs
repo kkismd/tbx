@@ -3,6 +3,7 @@ use std::collections::HashMap;
 use crate::binding::{Binding, BindingInsertError, Bindings};
 use crate::expression::{
     parse_expression, ExpressionError, ExpressionStaging, ExpressionVariableErrorKind,
+    ExpressionWordErrorKind,
 };
 use crate::global_variable::GlobalVariables;
 use crate::instruction::Instruction;
@@ -221,6 +222,10 @@ pub(crate) enum SourceWordError {
     LetExpressionContextUnavailable {
         span: SourceSpan,
     },
+    EvalSyntax {
+        span: SourceSpan,
+        kind: EvalSyntaxErrorKind,
+    },
     Expression {
         source: ExpressionError,
     },
@@ -317,6 +322,11 @@ pub(crate) enum LetSyntaxErrorKind {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum EvalSyntaxErrorKind {
+    MissingExpression,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum DefSyntaxErrorKind {
     MissingName,
     TrailingToken { kind: TokenKind },
@@ -359,6 +369,7 @@ impl SourceWordError {
             | Self::LetSyntax { span, .. }
             | Self::LetTarget { span, .. }
             | Self::LetExpressionContextUnavailable { span }
+            | Self::EvalSyntax { span, .. }
             | Self::DefSyntax { span, .. }
             | Self::DefName { span, .. }
             | Self::DefNameConflict { span }
@@ -715,8 +726,9 @@ impl<'source, 'state> NativeStructuredSourceWordContext<'source, 'state> {
             })?,
         ));
 
-        let resolver = |source_name: &str| resolve_variable_name(self.bindings, source_name);
-        parse_expression(self.view, &expression_tokens, operators, &resolver)
+        let variables = |source_name: &str| resolve_variable_name(self.bindings, source_name);
+        let words = |source_name: &str| resolve_runtime_word_name(self.bindings, source_name);
+        parse_expression(self.view, &expression_tokens, operators, &variables, &words)
             .map_err(|source| SourceWordError::Expression { source })
     }
 
@@ -1357,8 +1369,9 @@ impl<'source, 'state> NativeSourceWordContext<'source, 'state> {
             })?,
         ));
 
-        let resolver = |source_name: &str| resolve_variable_name(self.bindings(), source_name);
-        parse_expression(self.view, &expression_tokens, operators, &resolver)
+        let variables = |source_name: &str| resolve_variable_name(self.bindings(), source_name);
+        let words = |source_name: &str| resolve_runtime_word_name(self.bindings(), source_name);
+        parse_expression(self.view, &expression_tokens, operators, &variables, &words)
             .map_err(|source| SourceWordError::Expression { source })
     }
 
@@ -1434,6 +1447,22 @@ pub(crate) fn let_source_word(
 
     let mut staging = context.stage_expression(rhs_tokens, equal_span)?;
     staging.append_mapped_instruction(Instruction::StoreVar(target), target_token.span());
+    context.commit_staging(&staging)
+}
+
+pub(crate) fn eval_source_word(
+    context: &mut NativeSourceWordContext<'_, '_>,
+) -> Result<(), SourceWordError> {
+    // ADR #1597 keeps EVAL as one source word for every processing context
+    // that can lower an expression into the current runtime-code target.
+    let (anchor, expression_tokens) = {
+        let anchor = context.source_word_token().span();
+        let reader = context.statement_reader_mut();
+        let expression_tokens = reader.remaining_expression().map_err(eval_reader_error)?;
+        (anchor, expression_tokens)
+    };
+
+    let staging = context.stage_expression(expression_tokens, anchor)?;
     context.commit_staging(&staging)
 }
 
@@ -2552,6 +2581,18 @@ fn let_reader_error(error: SourceStatementReaderError) -> SourceWordError {
     SourceWordError::LetSyntax { span, kind }
 }
 
+fn eval_reader_error(error: SourceStatementReaderError) -> SourceWordError {
+    let span = match error {
+        SourceStatementReaderError::Missing { span, .. } => span,
+        SourceStatementReaderError::Unexpected { actual, .. }
+        | SourceStatementReaderError::TrailingToken { actual } => actual.span(),
+    };
+    SourceWordError::EvalSyntax {
+        span,
+        kind: EvalSyntaxErrorKind::MissingExpression,
+    }
+}
+
 fn let_syntax_kind_for_missing(expected: SourceStatementExpected) -> LetSyntaxErrorKind {
     match expected {
         SourceStatementExpected::Name => LetSyntaxErrorKind::Target,
@@ -2585,6 +2626,23 @@ fn resolve_variable_name(
         Err(WordResolutionError::UndefinedName) => Err(ExpressionVariableErrorKind::UndefinedName),
         Err(WordResolutionError::TargetIsNotWord) => {
             unreachable!("binding lookup does not require a runtime word target")
+        }
+    }
+}
+
+fn resolve_runtime_word_name(
+    bindings: &Bindings,
+    source_name: &str,
+) -> Result<WordId, ExpressionWordErrorKind> {
+    match resolve_binding_name(bindings, source_name) {
+        Ok(ResolvedBinding::RuntimeWord(id)) => Ok(id),
+        Ok(ResolvedBinding::Variable(_) | ResolvedBinding::SourceWord(_)) => {
+            Err(ExpressionWordErrorKind::TargetIsNotRuntimeWord)
+        }
+        Err(WordResolutionError::InvalidWordName) => Err(ExpressionWordErrorKind::InvalidName),
+        Err(WordResolutionError::UndefinedName) => Err(ExpressionWordErrorKind::UndefinedName),
+        Err(WordResolutionError::TargetIsNotWord) => {
+            unreachable!("binding lookup reports concrete binding kinds")
         }
     }
 }

@@ -2,8 +2,8 @@ use crate::binding::{Binding, BindingInsertError, Bindings};
 use crate::global_variable::{GlobalVarId, GlobalVariables};
 use crate::name::NormalizedName;
 use crate::source_word::{
-    def_source_word, if_source_word, let_source_word, syntax_source_word, var_source_word,
-    NativeSourceWordHandler, NativeStructuredSourceWordStartHandler, SourceWordId,
+    def_source_word, eval_source_word, if_source_word, let_source_word, syntax_source_word,
+    var_source_word, NativeSourceWordHandler, NativeStructuredSourceWordStartHandler, SourceWordId,
     SourceWordRegistry, SourceWordSyntaxMarker, SourceWordSyntaxMarkerRole,
 };
 use crate::structured_grammar::{
@@ -168,6 +168,7 @@ pub(crate) fn register_builtin_source_words(
     // occupation; bootstrap must fail rather than silently overwrite a binding.
     let var_name = builtin_name("VAR");
     let let_name = builtin_name("LET");
+    let eval_name = builtin_name("EVAL");
     let def_name = builtin_name("DEF");
     let if_name = builtin_name("IF");
     let syntax_name = builtin_name("SYNTAX");
@@ -176,6 +177,9 @@ pub(crate) fn register_builtin_source_words(
         .map_err(SourceWordBootstrapError::from_precheck_error)?;
     bindings
         .validate_new_name(&let_name)
+        .map_err(SourceWordBootstrapError::from_precheck_error)?;
+    bindings
+        .validate_new_name(&eval_name)
         .map_err(SourceWordBootstrapError::from_precheck_error)?;
     bindings
         .validate_new_name(&def_name)
@@ -214,6 +218,8 @@ pub(crate) fn register_builtin_source_words(
         .expect("prechecked VAR source word should remain available");
     let let_ = register_native_source_word(source_words, bindings, let_name, let_source_word)
         .expect("prechecked LET source word should remain available");
+    let eval = register_native_source_word(source_words, bindings, eval_name, eval_source_word)
+        .expect("prechecked EVAL source word should remain available");
     let def = register_native_source_word(source_words, bindings, def_name, def_source_word)
         .expect("prechecked DEF source word should remain available");
     let syntax = register_native_source_word_with_markers(
@@ -287,6 +293,7 @@ pub(crate) fn register_builtin_source_words(
     Ok(BuiltinSourceWordIds {
         var,
         let_,
+        eval,
         def,
         syntax,
         if_,
@@ -297,6 +304,7 @@ pub(crate) fn register_builtin_source_words(
 pub(crate) struct BuiltinSourceWordIds {
     var: SourceWordId,
     let_: SourceWordId,
+    eval: SourceWordId,
     def: SourceWordId,
     syntax: SourceWordId,
     if_: SourceWordId,
@@ -309,6 +317,10 @@ impl BuiltinSourceWordIds {
 
     pub(crate) const fn let_(self) -> SourceWordId {
         self.let_
+    }
+
+    pub(crate) const fn eval(self) -> SourceWordId {
+        self.eval
     }
 
     pub(crate) const fn def(self) -> SourceWordId {
@@ -1069,11 +1081,13 @@ mod tests {
         let ids = register_builtin_source_words(&mut source_words, &mut bindings)
             .expect("empty namespace should accept built-in source words");
 
-        assert_eq!(source_words.len(), 5);
+        assert_eq!(source_words.len(), 6);
         assert_source_word_binding(&bindings, "VAR", ids.var());
         assert_source_word_binding(&bindings, "var", ids.var());
         assert_source_word_binding(&bindings, "LET", ids.let_());
         assert_source_word_binding(&bindings, "let", ids.let_());
+        assert_source_word_binding(&bindings, "EVAL", ids.eval());
+        assert_source_word_binding(&bindings, "eval", ids.eval());
         assert_source_word_binding(&bindings, "DEF", ids.def());
         assert_source_word_binding(&bindings, "def", ids.def());
         assert_source_word_binding(&bindings, "SYNTAX", ids.syntax());

@@ -5,6 +5,7 @@ use crate::lexer::{Token, TokenKind};
 use crate::operator::{OperatorLookup, OperatorSemantic};
 use crate::source::{SourceError, SourceSpan, SourceView};
 use crate::value::Value;
+use crate::word::WordId;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ExpressionStaging {
@@ -22,6 +23,7 @@ pub(crate) enum ExpressionError {
     Source(SourceError),
     Syntax(ExpressionSyntaxError),
     Variable(ExpressionVariableError),
+    Word(ExpressionWordError),
     InstructionBuild(InstructionBuildError),
 }
 
@@ -48,10 +50,23 @@ pub(crate) struct ExpressionVariableError {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct ExpressionWordError {
+    span: SourceSpan,
+    kind: ExpressionWordErrorKind,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ExpressionVariableErrorKind {
     InvalidName,
     UndefinedName,
     TargetIsNotVariable,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ExpressionWordErrorKind {
+    InvalidName,
+    UndefinedName,
+    TargetIsNotRuntimeWord,
 }
 
 pub(crate) trait ExpressionVariableResolver {
@@ -61,6 +76,10 @@ pub(crate) trait ExpressionVariableResolver {
     ) -> Result<GlobalVarId, ExpressionVariableErrorKind>;
 }
 
+pub(crate) trait ExpressionWordResolver {
+    fn resolve_word(&self, source_name: &str) -> Result<WordId, ExpressionWordErrorKind>;
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct ParsedExpression {
     contains_comparison: bool,
@@ -68,7 +87,7 @@ struct ParsedExpression {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct BinaryOperator {
-    semantic: OperatorSemantic,
+    semantic: Option<OperatorSemantic>,
     precedence: u8,
     comparison: bool,
 }
@@ -79,9 +98,11 @@ struct ExpressionParser<'a, 'r> {
     tokens: &'a [Token],
     operators: OperatorLookup,
     variables: &'r dyn ExpressionVariableResolver,
+    words: &'r dyn ExpressionWordResolver,
     position: usize,
 }
 
+const PRECEDENCE_COMMA: u8 = 0;
 const PRECEDENCE_COMPARISON: u8 = 1;
 const PRECEDENCE_ADDITIVE: u8 = 2;
 const PRECEDENCE_MULTIPLICATIVE: u8 = 3;
@@ -92,8 +113,9 @@ pub(crate) fn parse_expression(
     tokens: &[Token],
     operators: OperatorLookup,
     variables: &dyn ExpressionVariableResolver,
+    words: &dyn ExpressionWordResolver,
 ) -> Result<ExpressionStaging, ExpressionError> {
-    let mut parser = ExpressionParser::new(view, tokens, operators, variables);
+    let mut parser = ExpressionParser::new(view, tokens, operators, variables, words);
     parser.parse_complete()
 }
 
@@ -105,6 +127,15 @@ where
         &self,
         source_name: &str,
     ) -> Result<GlobalVarId, ExpressionVariableErrorKind> {
+        self(source_name)
+    }
+}
+
+impl<F> ExpressionWordResolver for F
+where
+    F: Fn(&str) -> Result<WordId, ExpressionWordErrorKind>,
+{
+    fn resolve_word(&self, source_name: &str) -> Result<WordId, ExpressionWordErrorKind> {
         self(source_name)
     }
 }
@@ -172,6 +203,16 @@ impl ExpressionVariableError {
     }
 }
 
+impl ExpressionWordError {
+    pub(crate) const fn span(self) -> SourceSpan {
+        self.span
+    }
+
+    pub(crate) const fn kind(self) -> ExpressionWordErrorKind {
+        self.kind
+    }
+}
+
 impl From<SourceError> for ExpressionError {
     fn from(error: SourceError) -> Self {
         Self::Source(error)
@@ -184,19 +225,21 @@ impl<'a, 'r> ExpressionParser<'a, 'r> {
         tokens: &'a [Token],
         operators: OperatorLookup,
         variables: &'r dyn ExpressionVariableResolver,
+        words: &'r dyn ExpressionWordResolver,
     ) -> Self {
         Self {
             view,
             tokens,
             operators,
             variables,
+            words,
             position: 0,
         }
     }
 
     fn parse_complete(&mut self) -> Result<ExpressionStaging, ExpressionError> {
         let mut staging = ExpressionStaging::new();
-        self.parse_infix_expression(&mut staging, PRECEDENCE_COMPARISON)?;
+        self.parse_infix_expression(&mut staging, PRECEDENCE_COMMA)?;
 
         match self.peek() {
             Some(token) if is_expression_terminator(token.kind()) => Ok(staging),
@@ -225,11 +268,17 @@ impl<'a, 'r> ExpressionParser<'a, 'r> {
 
             let operator_token = self.advance();
             let rhs = self.parse_infix_expression(staging, operator.precedence + 1)?;
-            parsed.contains_comparison |= operator.comparison || rhs.contains_comparison;
-            staging.append_mapped_instruction(
-                Instruction::Call(self.operators.resolve(operator.semantic)),
-                operator_token.span(),
-            );
+            parsed.contains_comparison = if operator.semantic.is_some() {
+                parsed.contains_comparison || operator.comparison || rhs.contains_comparison
+            } else {
+                rhs.contains_comparison
+            };
+            if let Some(semantic) = operator.semantic {
+                staging.append_mapped_instruction(
+                    Instruction::Call(self.operators.resolve(semantic)),
+                    operator_token.span(),
+                );
+            }
         }
 
         Ok(parsed)
@@ -292,6 +341,44 @@ impl<'a, 'r> ExpressionParser<'a, 'r> {
             TokenKind::Name => {
                 let token = self.advance();
                 let source_name = self.view.slice(token.span())?;
+                if matches!(self.peek().map(Token::kind), Some(TokenKind::LParen)) {
+                    self.advance();
+                    if matches!(self.peek().map(Token::kind), Some(TokenKind::RParen)) {
+                        self.advance();
+                    } else {
+                        // ADR #1575 treats the parentheses as zero or one
+                        // ordinary expression, not as an arity-tracked list.
+                        self.parse_infix_expression(staging, PRECEDENCE_COMMA)?;
+                        match self.peek() {
+                            Some(token) if token.kind() == TokenKind::RParen => {
+                                self.advance();
+                            }
+                            Some(token) if is_expression_terminator(token.kind()) => {
+                                return Err(self.syntax(
+                                    token,
+                                    ExpressionSyntaxErrorKind::UnmatchedParenthesis,
+                                ));
+                            }
+                            Some(token) => return Err(self.syntax(token, unexpected_token(token))),
+                            None => {
+                                return Err(self.syntax(
+                                    token,
+                                    ExpressionSyntaxErrorKind::UnmatchedParenthesis,
+                                ));
+                            }
+                        }
+                    }
+                    let id = self.words.resolve_word(source_name).map_err(|kind| {
+                        ExpressionError::Word(ExpressionWordError {
+                            span: token.span(),
+                            kind,
+                        })
+                    })?;
+                    staging.append_mapped_instruction(Instruction::Call(id), token.span());
+                    return Ok(ParsedExpression {
+                        contains_comparison: false,
+                    });
+                }
                 let id = self
                     .variables
                     .resolve_variable(source_name)
@@ -426,6 +513,7 @@ fn parse_unsigned_i32(source: &str, span: SourceSpan) -> Result<i32, ExpressionE
 
 fn binary_operator(kind: TokenKind) -> Option<BinaryOperator> {
     match kind {
+        TokenKind::Comma => Some(binary_no_call(PRECEDENCE_COMMA)),
         TokenKind::Star => Some(binary(
             OperatorSemantic::Multiply,
             PRECEDENCE_MULTIPLICATIVE,
@@ -475,9 +563,17 @@ fn binary_operator(kind: TokenKind) -> Option<BinaryOperator> {
 
 const fn binary(semantic: OperatorSemantic, precedence: u8, comparison: bool) -> BinaryOperator {
     BinaryOperator {
-        semantic,
+        semantic: Some(semantic),
         precedence,
         comparison,
+    }
+}
+
+const fn binary_no_call(precedence: u8) -> BinaryOperator {
+    BinaryOperator {
+        semantic: None,
+        precedence,
+        comparison: false,
     }
 }
 
@@ -539,7 +635,8 @@ mod tests {
     ) -> (SourceTexts, SourceId, ExpressionStaging) {
         let (sources, id) = source(text);
         let tokens = lex(sources.view(), id);
-        let staging = parse_expression(sources.view(), &tokens, operators(), &variables)
+        let words = empty_words();
+        let staging = parse_expression(sources.view(), &tokens, operators(), &variables, &words)
             .expect("expression should parse");
         (sources, id, staging)
     }
@@ -554,13 +651,18 @@ mod tests {
     ) -> (SourceTexts, SourceId, ExpressionError) {
         let (sources, id) = source(text);
         let tokens = lex(sources.view(), id);
-        let error = parse_expression(sources.view(), &tokens, operators(), &variables)
+        let words = empty_words();
+        let error = parse_expression(sources.view(), &tokens, operators(), &variables, &words)
             .expect_err("expression should fail");
         (sources, id, error)
     }
 
     fn empty_variables() -> impl ExpressionVariableResolver {
         |_source_name: &str| Err(ExpressionVariableErrorKind::UndefinedName)
+    }
+
+    fn empty_words() -> impl ExpressionWordResolver {
+        |_source_name: &str| Err(ExpressionWordErrorKind::UndefinedName)
     }
 
     fn variables(cases: &[(&str, GlobalVarId)]) -> impl ExpressionVariableResolver {
@@ -622,6 +724,19 @@ mod tests {
     ) {
         let ExpressionError::Variable(error) = error else {
             panic!("expected variable resolution error");
+        };
+
+        assert_eq!(error.span(), expected_span);
+        assert_eq!(error.kind(), expected_kind);
+    }
+
+    fn assert_word_error(
+        error: ExpressionError,
+        expected_span: SourceSpan,
+        expected_kind: ExpressionWordErrorKind,
+    ) {
+        let ExpressionError::Word(error) = error else {
+            panic!("expected word resolution error");
         };
 
         assert_eq!(error.span(), expected_span);
@@ -892,17 +1007,17 @@ mod tests {
     }
 
     #[test]
-    fn call_like_name_sequence_still_does_not_fallback_to_call_syntax() {
+    fn call_like_name_sequence_resolves_call_target_without_changing_bare_name() {
         let variable = GlobalVarId::test_invalid(4);
+        let (_sources, _id, staging) = parse_with_variables("FOO", variables(&[("FOO", variable)]));
         let (sources, id, error) =
             parse_error_with_variables("FOO(1)", variables(&[("FOO", variable)]));
 
-        assert_syntax_error(
+        assert_eq!(instructions(&staging), [Instruction::LoadVar(variable)]);
+        assert_word_error(
             error,
-            span(sources.view(), id, 3, 4),
-            ExpressionSyntaxErrorKind::UnexpectedToken {
-                kind: TokenKind::LParen,
-            },
+            span(sources.view(), id, 0, 3),
+            ExpressionWordErrorKind::UndefinedName,
         );
     }
 
