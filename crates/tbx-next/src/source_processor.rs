@@ -2392,11 +2392,12 @@ mod tests {
         InstructionSourceMapping, SourceMappingLookup, SourceMappingLookupError,
     };
     use crate::source_word::{
-        DefSyntaxErrorKind, IfSyntaxErrorKind, LetSyntaxErrorKind, NativeSourceWordContext,
-        NativeStructuredSourceWordContext, NativeStructuredSourceWordOwner, SourceBlockItem,
-        SourceBlockMarker, SourceWordRegistry, SourceWordSyntaxMarker, SourceWordSyntaxMarkerRole,
-        StructuredBodyCapabilities, StructuredBodyContext, StructuredBuildTargetScope,
-        StructuredLineNumberScope, StructuredSourceWordInstance, VarSyntaxErrorKind,
+        DefSyntaxErrorKind, EvalSyntaxErrorKind, IfSyntaxErrorKind, LetSyntaxErrorKind,
+        NativeSourceWordContext, NativeStructuredSourceWordContext,
+        NativeStructuredSourceWordOwner, SourceBlockItem, SourceBlockMarker, SourceWordRegistry,
+        SourceWordSyntaxMarker, SourceWordSyntaxMarkerRole, StructuredBodyCapabilities,
+        StructuredBodyContext, StructuredBuildTargetScope, StructuredLineNumberScope,
+        StructuredSourceWordInstance, VarSyntaxErrorKind,
     };
     use crate::structured_grammar::{
         MarkerCardinality, MarkerGroup, MarkerIdentity, StructuredGrammar,
@@ -4129,6 +4130,40 @@ mod tests {
             code.instruction_view().get(address(3)),
             Ok(&Instruction::StoreVar(variables[0]))
         );
+    }
+
+    #[test]
+    fn definition_body_eval_lowers_expression_without_store() {
+        let (_words, _primitives, operators) = operator_fixture();
+        let mut source_words = SourceWordRegistry::new();
+        let mut bindings = Bindings::new();
+        register_builtin_source_words(&mut source_words, &mut bindings)
+            .expect("built-in source words should bootstrap");
+
+        let (_sources, _id, code) = compile_body(
+            "EVAL 1 + 2",
+            DefinitionBodyCompileContext::with_source_words_and_operators(
+                &bindings,
+                source_words.lookup(),
+                operators.lookup(),
+            ),
+        );
+
+        assert_eq!(
+            code.instruction_view().get(address(0)),
+            Ok(&Instruction::Push(value(1)))
+        );
+        assert_eq!(
+            code.instruction_view().get(address(1)),
+            Ok(&Instruction::Push(value(2)))
+        );
+        assert_eq!(
+            code.instruction_view().get(address(2)),
+            Ok(&Instruction::Call(
+                operators.lookup().resolve(OperatorSemantic::Add)
+            ))
+        );
+        assert_eq!(code.len(), 3);
     }
 
     #[test]
@@ -6649,6 +6684,133 @@ mod tests {
     }
 
     #[test]
+    fn top_level_eval_leaves_constant_expression_result_on_data_stack() {
+        let (words, primitives, operators, source_words, bindings, mut globals, _variables) =
+            global_source_fixture();
+
+        let (_sources, _id, result) = run_with_source_words_operators_and_mut_globals(
+            "EVAL 2",
+            &bindings,
+            &mut globals,
+            &source_words,
+            &words,
+            &primitives,
+            operators.lookup(),
+        );
+
+        assert_eq!(result.data_stack(), [value(2)]);
+    }
+
+    #[test]
+    fn top_level_eval_reuses_expression_variables_arithmetic_and_comparison() {
+        let (words, primitives, operators, source_words, bindings, mut globals, variables) =
+            global_source_fixture();
+        globals
+            .view_mut()
+            .write(variables[0], value(2))
+            .expect("A should be writable");
+
+        let (_sources, _id, result) = run_with_source_words_operators_and_mut_globals(
+            "EVAL A + 1\nEVAL A < 3",
+            &bindings,
+            &mut globals,
+            &source_words,
+            &words,
+            &primitives,
+            operators.lookup(),
+        );
+
+        assert_eq!(result.data_stack(), [value(3), value(1)]);
+    }
+
+    #[test]
+    fn top_level_eval_result_is_available_to_following_runtime_word() {
+        let (
+            mut words,
+            mut primitives,
+            operators,
+            source_words,
+            mut bindings,
+            mut globals,
+            _variables,
+        ) = global_source_fixture();
+        let primitive = primitives.register(add_top_two);
+        register_primitive(&mut words, &mut bindings, name("ADD"), primitive)
+            .expect("ADD primitive should register");
+
+        let (_sources, _id, result) = run_with_source_words_operators_and_mut_globals(
+            "EVAL 2\nEVAL 5\nADD",
+            &bindings,
+            &mut globals,
+            &source_words,
+            &words,
+            &primitives,
+            operators.lookup(),
+        );
+
+        assert_eq!(result.data_stack(), [value(7)]);
+    }
+
+    #[test]
+    fn top_level_eval_reports_missing_expression_at_source_word_span() {
+        let (words, primitives, operators, source_words, bindings, mut globals, _variables) =
+            global_source_fixture();
+        let (sources, id) = source("EVAL");
+
+        let error = run_source(
+            sources.view(),
+            id,
+            SourceExecutionContext::with_source_words_and_operators(
+                &bindings,
+                source_words.lookup(),
+                operators.lookup(),
+                PublishedWordLookup::new(&words),
+                primitives.lookup(),
+            )
+            .with_mut_globals(globals.view_mut()),
+        )
+        .expect_err("EVAL without an expression should fail");
+
+        assert_eq!(
+            error,
+            SourceProcessorError::SourceWord(SourceWordError::EvalSyntax {
+                span: span(sources.view(), id, 0, 4),
+                kind: EvalSyntaxErrorKind::MissingExpression,
+            })
+        );
+    }
+
+    #[test]
+    fn top_level_eval_preserves_existing_expression_name_diagnostic() {
+        let (words, primitives, operators, source_words, bindings, mut globals, _variables) =
+            global_source_fixture();
+        let (sources, id) = source("EVAL MISSING");
+
+        let error = run_source(
+            sources.view(),
+            id,
+            SourceExecutionContext::with_source_words_and_operators(
+                &bindings,
+                source_words.lookup(),
+                operators.lookup(),
+                PublishedWordLookup::new(&words),
+                primitives.lookup(),
+            )
+            .with_mut_globals(globals.view_mut()),
+        )
+        .expect_err("undefined expression name should fail");
+
+        let SourceProcessorError::SourceWord(SourceWordError::Expression {
+            source: ExpressionError::Variable(source),
+        }) = error
+        else {
+            panic!("EVAL should preserve expression variable error");
+        };
+        assert_eq!(source.span(), span(sources.view(), id, 5, 12));
+        assert_eq!(source.kind(), ExpressionVariableErrorKind::UndefinedName);
+    }
+
+    #[test]
     fn source_word_case_variants_dispatch_to_same_handler() {
         let mut source_words = SourceWordRegistry::new();
         let mut bindings = Bindings::new();
@@ -8298,10 +8460,39 @@ mod tests {
             bindings.get(&name("VAR")),
             Some(&Binding::SourceWord(builtin.var()))
         );
+        assert_eq!(
+            bindings.get(&name("EVAL")),
+            Some(&Binding::SourceWord(builtin.eval()))
+        );
         assert_eq!(globals.view().read(id), Ok(value(0)));
         assert_eq!(globals.len(), 1);
         assert_eq!(unit.len(), 1);
         assert_eq!(unit.instructions().get(address(0)), Ok(&Instruction::Halt));
+    }
+
+    #[test]
+    fn eval_source_word_binding_rejects_runtime_word_registration() {
+        let mut source_words = SourceWordRegistry::new();
+        let mut bindings = Bindings::new();
+        let mut words = PublishedWords::new();
+        let builtin = register_builtin_source_words(&mut source_words, &mut bindings)
+            .expect("built-in source words should bootstrap");
+
+        let result = register_primitive(
+            &mut words,
+            &mut bindings,
+            name("EVAL"),
+            PrimitiveId::from_slot(0),
+        );
+
+        assert_eq!(
+            result,
+            Err(crate::bootstrap::PrimitiveBootstrapError::NameConflict)
+        );
+        assert_eq!(
+            bindings.get(&name("EVAL")),
+            Some(&Binding::SourceWord(builtin.eval()))
+        );
     }
 
     #[test]
@@ -8906,6 +9097,41 @@ mod tests {
         assert_eq!(result.data_stack(), [value(7)]);
         assert_eq!(result.instruction_count(), 2);
         assert_eq!(session.code.len(), original_published_len);
+    }
+
+    #[test]
+    fn published_def_body_eval_runs_and_feeds_following_runtime_word() {
+        let mut session = RuntimeDefinitionSession::new();
+        let add = session.register_primitive("ADD", add_top_two);
+        session.publish_def("DEF SUM_SEVEN\nEVAL 2\nEVAL 5\nADD\nEND");
+        let Some(Binding::Word(sum_seven)) = session.bindings.get(&name("SUM_SEVEN")).copied()
+        else {
+            panic!("SUM_SEVEN should be published");
+        };
+
+        let (_caller_sources, _caller_id, result) = session.run_caller("SUM_SEVEN");
+
+        assert_eq!(
+            session.code.instruction_view().get(address(0)),
+            Ok(&Instruction::Push(value(2)))
+        );
+        assert_eq!(
+            session.code.instruction_view().get(address(1)),
+            Ok(&Instruction::Push(value(5)))
+        );
+        assert_eq!(
+            session.code.instruction_view().get(address(2)),
+            Ok(&Instruction::Call(add))
+        );
+        assert_eq!(
+            session.code.instruction_view().get(address(3)),
+            Ok(&Instruction::Return)
+        );
+        assert_eq!(
+            session.bindings.get(&name("SUM_SEVEN")),
+            Some(&Binding::Word(sum_seven))
+        );
+        assert_eq!(result.data_stack(), [value(7)]);
     }
 
     #[test]

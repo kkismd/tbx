@@ -221,6 +221,10 @@ pub(crate) enum SourceWordError {
     LetExpressionContextUnavailable {
         span: SourceSpan,
     },
+    EvalSyntax {
+        span: SourceSpan,
+        kind: EvalSyntaxErrorKind,
+    },
     Expression {
         source: ExpressionError,
     },
@@ -317,6 +321,11 @@ pub(crate) enum LetSyntaxErrorKind {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum EvalSyntaxErrorKind {
+    MissingExpression,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum DefSyntaxErrorKind {
     MissingName,
     TrailingToken { kind: TokenKind },
@@ -359,6 +368,7 @@ impl SourceWordError {
             | Self::LetSyntax { span, .. }
             | Self::LetTarget { span, .. }
             | Self::LetExpressionContextUnavailable { span }
+            | Self::EvalSyntax { span, .. }
             | Self::DefSyntax { span, .. }
             | Self::DefName { span, .. }
             | Self::DefNameConflict { span }
@@ -1434,6 +1444,22 @@ pub(crate) fn let_source_word(
 
     let mut staging = context.stage_expression(rhs_tokens, equal_span)?;
     staging.append_mapped_instruction(Instruction::StoreVar(target), target_token.span());
+    context.commit_staging(&staging)
+}
+
+pub(crate) fn eval_source_word(
+    context: &mut NativeSourceWordContext<'_, '_>,
+) -> Result<(), SourceWordError> {
+    // ADR #1597 keeps EVAL as one source word for every processing context
+    // that can lower an expression into the current runtime-code target.
+    let (anchor, expression_tokens) = {
+        let anchor = context.source_word_token().span();
+        let reader = context.statement_reader_mut();
+        let expression_tokens = reader.remaining_expression().map_err(eval_reader_error)?;
+        (anchor, expression_tokens)
+    };
+
+    let staging = context.stage_expression(expression_tokens, anchor)?;
     context.commit_staging(&staging)
 }
 
@@ -2550,6 +2576,18 @@ fn let_reader_error(error: SourceStatementReaderError) -> SourceWordError {
         }
     };
     SourceWordError::LetSyntax { span, kind }
+}
+
+fn eval_reader_error(error: SourceStatementReaderError) -> SourceWordError {
+    let span = match error {
+        SourceStatementReaderError::Missing { span, .. } => span,
+        SourceStatementReaderError::Unexpected { actual, .. }
+        | SourceStatementReaderError::TrailingToken { actual } => actual.span(),
+    };
+    SourceWordError::EvalSyntax {
+        span,
+        kind: EvalSyntaxErrorKind::MissingExpression,
+    }
 }
 
 fn let_syntax_kind_for_missing(expected: SourceStatementExpected) -> LetSyntaxErrorKind {
