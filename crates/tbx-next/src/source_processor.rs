@@ -4,7 +4,8 @@ use std::rc::Rc;
 use crate::binding::Bindings;
 use crate::block_code::{BlockCodeBuildError, BlockCodeBuilder};
 use crate::expression::{
-    parse_expression, ExpressionError, ExpressionSyntaxErrorKind, ExpressionVariableErrorKind,
+    parse_expression, ExpressionCallErrorKind, ExpressionError, ExpressionSyntaxErrorKind,
+    ExpressionVariableErrorKind,
 };
 use crate::global_variable::{GlobalVariableView, GlobalVariables};
 use crate::instruction::{
@@ -166,6 +167,7 @@ pub(crate) enum CompileErrorKind {
     WordResolution { source: WordResolutionError },
     Expression { source: ExpressionSyntaxErrorKind },
     ExpressionVariable { source: ExpressionVariableErrorKind },
+    ExpressionCall { source: ExpressionCallErrorKind },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1352,10 +1354,18 @@ fn compile_expression_tokens(
     expression_tokens.push(Token::new(TokenKind::Eof, view.span(source_id, end, end)?));
 
     let resolver = |source_name: &str| resolve_variable_name(bindings, source_name);
-    parse_expression(view, &expression_tokens, operators, &resolver)
-        .map_err(SourceProcessorError::from_expression_error)?
-        .commit_to(code)
-        .map_err(SourceProcessorError::from_expression_error)
+    let runtime_word_resolver =
+        |source_name: &str| resolve_runtime_word_name(bindings, source_name);
+    parse_expression(
+        view,
+        &expression_tokens,
+        operators,
+        &resolver,
+        &runtime_word_resolver,
+    )
+    .map_err(SourceProcessorError::from_expression_error)?
+    .commit_to(code)
+    .map_err(SourceProcessorError::from_expression_error)
 }
 
 pub(crate) fn run_source(
@@ -1427,6 +1437,23 @@ fn resolve_variable_name(
         }
         Err(WordResolutionError::InvalidWordName) => Err(ExpressionVariableErrorKind::InvalidName),
         Err(WordResolutionError::UndefinedName) => Err(ExpressionVariableErrorKind::UndefinedName),
+        Err(WordResolutionError::TargetIsNotWord) => {
+            unreachable!("binding lookup does not require a runtime word target")
+        }
+    }
+}
+
+fn resolve_runtime_word_name(
+    bindings: &Bindings,
+    source_name: &str,
+) -> Result<crate::word::WordId, ExpressionCallErrorKind> {
+    match resolve_binding_name(bindings, source_name) {
+        Ok(ResolvedBinding::RuntimeWord(id)) => Ok(id),
+        Ok(ResolvedBinding::Variable(_) | ResolvedBinding::SourceWord(_)) => {
+            Err(ExpressionCallErrorKind::TargetIsNotRuntimeWord)
+        }
+        Err(WordResolutionError::InvalidWordName) => Err(ExpressionCallErrorKind::InvalidName),
+        Err(WordResolutionError::UndefinedName) => Err(ExpressionCallErrorKind::UndefinedName),
         Err(WordResolutionError::TargetIsNotWord) => {
             unreachable!("binding lookup does not require a runtime word target")
         }
@@ -2329,6 +2356,12 @@ impl SourceProcessorError {
             ExpressionError::Variable(error) => Self::Compile(CompileError {
                 span: error.span(),
                 kind: CompileErrorKind::ExpressionVariable {
+                    source: error.kind(),
+                },
+            }),
+            ExpressionError::Call(error) => Self::Compile(CompileError {
+                span: error.span(),
+                kind: CompileErrorKind::ExpressionCall {
                     source: error.kind(),
                 },
             }),
@@ -6749,6 +6782,152 @@ mod tests {
         );
 
         assert_eq!(result.data_stack(), [value(7)]);
+    }
+
+    #[test]
+    fn top_level_eval_can_call_primitive_runtime_word_inside_expression() {
+        let mut session = RuntimeDefinitionSession::new();
+        let add = session.register_primitive("ADD", add_top_two);
+        let (sources, id) = source("EVAL ADD(2, 5)");
+
+        let unit = compile_source(
+            sources.view(),
+            id,
+            SourceCompileContext::with_source_words_and_operators(
+                &session.bindings,
+                session.source_words.lookup(),
+                session.operators.lookup(),
+            ),
+        )
+        .expect("expression runtime primitive call should compile");
+        let result = session
+            .run_unit_with_published_code(&unit)
+            .expect("expression runtime primitive call should run");
+
+        assert_eq!(
+            unit.instructions().get(address(0)),
+            Ok(&Instruction::Push(value(2)))
+        );
+        assert_eq!(
+            unit.instructions().get(address(1)),
+            Ok(&Instruction::Push(value(5)))
+        );
+        assert_eq!(
+            unit.instructions().get(address(2)),
+            Ok(&Instruction::Call(add))
+        );
+        assert_eq!(
+            unit.source_span(location(&unit, 2)),
+            Ok(Some(span(sources.view(), id, 5, 8)))
+        );
+        assert_eq!(result.data_stack(), [value(7)]);
+    }
+
+    #[test]
+    fn top_level_eval_can_call_compiled_runtime_word_inside_expression() {
+        let mut session = RuntimeDefinitionSession::new();
+        let inc_add = session.register_primitive("ADD", add_top_two);
+        session.publish_def("DEF INC\nEVAL 1\nADD\nEND");
+        let Some(Binding::Word(inc)) = session.bindings.get(&name("INC")).copied() else {
+            panic!("INC should be published");
+        };
+        let (sources, id) = source("EVAL INC(6)");
+
+        let unit = compile_source(
+            sources.view(),
+            id,
+            SourceCompileContext::with_source_words_and_operators(
+                &session.bindings,
+                session.source_words.lookup(),
+                session.operators.lookup(),
+            ),
+        )
+        .expect("expression compiled runtime call should compile");
+        let result = session
+            .run_unit_with_published_code(&unit)
+            .expect("expression compiled runtime call should run");
+
+        assert_eq!(
+            unit.instructions().get(address(0)),
+            Ok(&Instruction::Push(value(6)))
+        );
+        assert_eq!(
+            unit.instructions().get(address(1)),
+            Ok(&Instruction::Call(inc))
+        );
+        assert_eq!(
+            session.code.instruction_view().get(address(1)),
+            Ok(&Instruction::Call(inc_add))
+        );
+        assert_eq!(result.data_stack(), [value(7)]);
+    }
+
+    #[test]
+    fn expression_runtime_call_keeps_early_bound_word_id_after_redefinition() {
+        let mut session = RuntimeDefinitionSession::new();
+        session.register_primitive("PUSH41", push_41);
+        session.publish_def("DEF TARGET\nPUSH41\nEND");
+        let Some(Binding::Word(old)) = session.bindings.get(&name("TARGET")).copied() else {
+            panic!("TARGET should be published");
+        };
+        let (old_sources, old_id) = source("EVAL TARGET()");
+        let old_unit = compile_source(
+            old_sources.view(),
+            old_id,
+            SourceCompileContext::with_source_words_and_operators(
+                &session.bindings,
+                session.source_words.lookup(),
+                session.operators.lookup(),
+            ),
+        )
+        .expect("old expression runtime call should compile");
+
+        let (new_sources, new_id) = source("99\nEND");
+        let new_value_span = span(new_sources.view(), new_id, 0, 2);
+        let new_end_span = span(new_sources.view(), new_id, 3, 6);
+        let redefinition = session
+            .code
+            .redefine_word(
+                &mut session.words,
+                &mut session.bindings,
+                &name("TARGET"),
+                |builder| {
+                    builder.append_mapped(Instruction::Push(value(99)), new_value_span)?;
+                    builder.append_mapped(Instruction::Return, new_end_span)?;
+                    Ok(())
+                },
+            )
+            .expect("TARGET should redefine in published code");
+
+        let (new_eval_sources, new_eval_id) = source("EVAL TARGET()");
+        let new_unit = compile_source(
+            new_eval_sources.view(),
+            new_eval_id,
+            SourceCompileContext::with_source_words_and_operators(
+                &session.bindings,
+                session.source_words.lookup(),
+                session.operators.lookup(),
+            ),
+        )
+        .expect("new expression runtime call should compile");
+        let old_result = session
+            .run_unit_with_published_code(&old_unit)
+            .expect("old expression runtime call should run old body");
+        let new_result = session
+            .run_unit_with_published_code(&new_unit)
+            .expect("new expression runtime call should run new body");
+
+        assert_eq!(redefinition.previous(), old);
+        assert_eq!(
+            old_unit.instructions().get(address(0)),
+            Ok(&Instruction::Call(redefinition.previous()))
+        );
+        assert_eq!(
+            new_unit.instructions().get(address(0)),
+            Ok(&Instruction::Call(redefinition.current()))
+        );
+        assert_eq!(old_result.data_stack(), [value(41)]);
+        assert_eq!(new_result.data_stack(), [value(99)]);
     }
 
     #[test]
