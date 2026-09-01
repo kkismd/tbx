@@ -163,6 +163,11 @@ mod diagnostic;
 #[allow(dead_code)]
 mod user_facing;
 
+// #1593 keeps initial file/stdin source acquisition at the CLI boundary and
+// registers acquired text before later source processing sees only SourceId.
+#[allow(dead_code)]
+mod cli_source;
+
 pub const STATUS_MESSAGE: &str =
     "TBX Next is under development; language features are not implemented yet.";
 
