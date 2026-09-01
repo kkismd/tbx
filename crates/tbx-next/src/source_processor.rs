@@ -3502,6 +3502,26 @@ mod tests {
             )
         }
 
+        fn run_unit_with_published_code_and_output(
+            &self,
+            unit: &TemporaryExecutionUnit,
+            output: &mut dyn RuntimeOutput,
+        ) -> Result<SourceRunResult, SourceProcessorError> {
+            let code_spaces = [self.code.instruction_view()];
+            let source_mappings = [self.code.source_mapping()];
+            run_unit(
+                unit,
+                SourceExecutionContext::with_code_spaces_and_mappings(
+                    &self.bindings,
+                    &code_spaces,
+                    &source_mappings,
+                    PublishedWordLookup::new(&self.words),
+                    self.primitives.lookup(),
+                )
+                .with_output(output),
+            )
+        }
+
         fn run_caller(&self, text: &str) -> (SourceTexts, SourceId, SourceRunResult) {
             let (sources, id, unit) = self.compile_caller(text);
             let result = self
@@ -9521,6 +9541,97 @@ mod tests {
         assert_eq!(calls.iter().filter(|id| **id == print).count(), 2);
         assert_eq!(calls.iter().filter(|id| **id == cr).count(), 1);
         assert_eq!(output.chunks(), ["42", "\n", "-7"]);
+        assert_eq!(result.data_stack(), []);
+    }
+
+    #[test]
+    fn top_level_empty_stack_print_runs_without_output_or_newline() {
+        let session = RuntimeDefinitionSession::new_with_named_operators_and_output_primitives();
+        let print = resolve_word_name(&session.bindings, "PRINT").expect("PRINT should bootstrap");
+        let (sources, id) = source("PRINT");
+        let mut output = TestOutput::new();
+
+        let unit = compile_source(
+            sources.view(),
+            id,
+            SourceCompileContext::with_source_words_and_operators(
+                &session.bindings,
+                session.source_words.lookup(),
+                session.operators.lookup(),
+            ),
+        )
+        .expect("empty stack PRINT should compile through normal word resolution");
+        let result = session
+            .run_unit_with_output(&unit, &mut output)
+            .expect("empty stack PRINT should run without output");
+
+        assert_eq!(
+            unit.instructions().get(address(0)),
+            Ok(&Instruction::Call(print))
+        );
+        assert!(output.chunks().is_empty());
+        assert_eq!(result.data_stack(), []);
+    }
+
+    #[test]
+    fn top_level_eval_prints_user_defined_runtime_word_result_e2e() {
+        let mut session =
+            RuntimeDefinitionSession::new_with_named_operators_and_output_primitives();
+        let multiply = resolve_word_name(&session.bindings, "MULTIPLY")
+            .expect("MULTIPLY should be a named operator");
+        let print = resolve_word_name(&session.bindings, "PRINT").expect("PRINT should bootstrap");
+        let cr = resolve_word_name(&session.bindings, "CR").expect("CR should bootstrap");
+
+        session.publish_def("DEF DOUBLE\nEVAL 2\nMULTIPLY\nEND");
+        let Some(Binding::Word(double)) = session.bindings.get(&name("DOUBLE")).copied() else {
+            panic!("DOUBLE should be published");
+        };
+        let (sources, id) = source("EVAL DOUBLE(21)\nPRINT\nCR\nEVAL 1\nPRINT");
+        let mut output = TestOutput::new();
+
+        let unit = compile_source(
+            sources.view(),
+            id,
+            SourceCompileContext::with_source_words_and_operators(
+                &session.bindings,
+                session.source_words.lookup(),
+                session.operators.lookup(),
+            ),
+        )
+        .expect("DOUBLE result printing source should compile");
+        let result = session
+            .run_unit_with_published_code_and_output(&unit, &mut output)
+            .expect("DOUBLE result should run through EVAL, PRINT, CR, and test output");
+
+        assert_eq!(
+            session.code.instruction_view().get(address(0)),
+            Ok(&Instruction::Push(value(2)))
+        );
+        assert_eq!(
+            session.code.instruction_view().get(address(1)),
+            Ok(&Instruction::Call(multiply))
+        );
+        assert_eq!(
+            unit.instructions().get(address(1)),
+            Ok(&Instruction::Call(double))
+        );
+        assert_eq!(
+            unit.instructions().get(address(2)),
+            Ok(&Instruction::Call(print))
+        );
+        assert_eq!(
+            unit.instructions().get(address(3)),
+            Ok(&Instruction::Call(cr))
+        );
+        assert_eq!(
+            unit.instructions().get(address(5)),
+            Ok(&Instruction::Call(print))
+        );
+        assert_eq!(
+            unit.source_span(location(&unit, 1)),
+            Ok(Some(span(sources.view(), id, 5, 11)))
+        );
+        assert_eq!(output.chunks(), ["42", "\n", "1"]);
         assert_eq!(result.data_stack(), []);
     }
 
