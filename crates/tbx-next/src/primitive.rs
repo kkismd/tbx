@@ -1,3 +1,4 @@
+use crate::runtime_output::{RuntimeOutput, RuntimeOutputError};
 use crate::stack::{DataStack, StackError};
 use crate::value::Value;
 use crate::word::PrimitiveId;
@@ -7,6 +8,7 @@ pub(crate) type PrimitiveHandler = fn(&mut PrimitiveContext<'_>) -> Result<(), P
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum PrimitiveError {
     DataStackUnderflow { source: StackError },
+    OutputFailed { source: RuntimeOutputError },
     Failed,
 }
 
@@ -17,16 +19,28 @@ pub(crate) enum PrimitiveLookupError {
 
 /// Limited primitive execution context.
 ///
-/// Handlers receive only data-stack operations. They cannot observe or mutate
-/// the instruction pointer, return stack, halted flag, word tables, bindings,
-/// instruction sequence, or primitive registry.
+/// Handlers receive only data-stack operations and the narrow runtime output
+/// capability. They cannot observe or mutate the instruction pointer, return
+/// stack, halted flag, word tables, bindings, instruction sequence, primitive
+/// registry, compiler, or source-processing state.
 pub(crate) struct PrimitiveContext<'a> {
     data_stack: &'a mut DataStack,
+    output: Option<&'a mut dyn RuntimeOutput>,
 }
 
 impl<'a> PrimitiveContext<'a> {
     pub(crate) fn new(data_stack: &'a mut DataStack) -> Self {
-        Self { data_stack }
+        Self {
+            data_stack,
+            output: None,
+        }
+    }
+
+    pub(crate) fn with_output(
+        data_stack: &'a mut DataStack,
+        output: Option<&'a mut dyn RuntimeOutput>,
+    ) -> Self {
+        Self { data_stack, output }
     }
 
     pub(crate) fn push(&mut self, value: Value) {
@@ -49,6 +63,16 @@ impl<'a> PrimitiveContext<'a> {
         self.data_stack
             .peek()
             .map_err(|source| PrimitiveError::DataStackUnderflow { source })
+    }
+
+    pub(crate) fn write_output(&mut self, text: &str) -> Result<(), PrimitiveError> {
+        self.output
+            .as_deref_mut()
+            .ok_or(PrimitiveError::OutputFailed {
+                source: RuntimeOutputError::Unavailable,
+            })?
+            .write(text)
+            .map_err(|source| PrimitiveError::OutputFailed { source })
     }
 }
 
