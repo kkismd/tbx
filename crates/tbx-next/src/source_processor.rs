@@ -9545,6 +9545,40 @@ mod tests {
     }
 
     #[test]
+    fn top_level_eval_constant_print_cr_runs_e2e() {
+        let session = RuntimeDefinitionSession::new_with_named_operators_and_output_primitives();
+        let print = resolve_word_name(&session.bindings, "PRINT").expect("PRINT should bootstrap");
+        let cr = resolve_word_name(&session.bindings, "CR").expect("CR should bootstrap");
+        let (sources, id) = source("EVAL 42\nPRINT\nCR");
+        let mut output = TestOutput::new();
+
+        let unit = compile_source(
+            sources.view(),
+            id,
+            SourceCompileContext::with_source_words_and_operators(
+                &session.bindings,
+                session.source_words.lookup(),
+                session.operators.lookup(),
+            ),
+        )
+        .expect("constant EVAL, PRINT, and CR source should compile");
+        let result = session
+            .run_unit_with_output(&unit, &mut output)
+            .expect("constant EVAL, PRINT, and CR source should run with test output");
+
+        assert_eq!(
+            unit.instructions().get(address(1)),
+            Ok(&Instruction::Call(print))
+        );
+        assert_eq!(
+            unit.instructions().get(address(2)),
+            Ok(&Instruction::Call(cr))
+        );
+        assert_eq!(output.chunks(), ["42", "\n"]);
+        assert_eq!(result.data_stack(), []);
+    }
+
+    #[test]
     fn top_level_empty_stack_print_runs_without_output_or_newline() {
         let session = RuntimeDefinitionSession::new_with_named_operators_and_output_primitives();
         let print = resolve_word_name(&session.bindings, "PRINT").expect("PRINT should bootstrap");
