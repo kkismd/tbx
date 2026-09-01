@@ -152,6 +152,11 @@ mod global_variable;
 #[allow(dead_code)]
 mod runtime_output;
 
+// ADR #1578 keeps user-facing diagnostic rendering outside compiler and VM
+// errors, deriving display positions from registered sources only.
+#[allow(dead_code)]
+mod diagnostic;
+
 pub const STATUS_MESSAGE: &str =
     "TBX Next is under development; language features are not implemented yet.";
 
