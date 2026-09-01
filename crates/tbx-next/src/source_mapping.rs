@@ -286,7 +286,7 @@ mod tests {
 
     fn source(text: &str) -> (SourceTexts, SourceId) {
         let mut sources = SourceTexts::new();
-        let id = sources.register(text);
+        let id = sources.register(text, "test.tbx");
         (sources, id)
     }
 
@@ -380,7 +380,7 @@ mod tests {
     #[test]
     fn same_local_index_is_separate_per_code_space() {
         let (mut sources, first_source) = source("A");
-        let second_source = sources.register("B");
+        let second_source = sources.register("B", "test.tbx");
         let mut first_code = InstructionSequence::new();
         let mut second_code = InstructionSequence::new();
         let first_address = first_code.append(Instruction::Halt);
@@ -499,7 +499,7 @@ mod tests {
     #[test]
     fn published_code_mapping_uses_code_owner_not_source_owner() {
         let (mut sources, first_source) = source("A");
-        let second_source = sources.register("B");
+        let second_source = sources.register("B", "test.tbx");
         let mut published_code = InstructionSequence::new();
         let entry = published_code.append(Instruction::Halt);
         let first_span = span(sources.view(), first_source, 0, 1);

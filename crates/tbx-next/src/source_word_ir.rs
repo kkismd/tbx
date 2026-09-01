@@ -648,7 +648,7 @@ mod tests {
 
     fn setup_source() -> (SourceTexts, SourceId) {
         let mut sources = SourceTexts::new();
-        let source_id = sources.register("READ_NAME AS name reference span padding\n");
+        let source_id = sources.register("READ_NAME AS name reference span padding\n", "test.tbx");
         (sources, source_id)
     }
 

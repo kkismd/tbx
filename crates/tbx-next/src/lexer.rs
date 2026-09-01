@@ -377,7 +377,7 @@ mod tests {
 
     fn lexer_for(text: &str) -> (SourceTexts, SourceId) {
         let mut sources = SourceTexts::new();
-        let id = sources.register(text);
+        let id = sources.register(text, "test.tbx");
         (sources, id)
     }
 
@@ -885,8 +885,8 @@ mod tests {
     #[test]
     fn same_offsets_in_different_sources_keep_distinct_source_ids() {
         let mut sources = SourceTexts::new();
-        let first = sources.register("A");
-        let second = sources.register("B");
+        let first = sources.register("A", "test.tbx");
+        let second = sources.register("B", "test.tbx");
         let view = sources.view();
         let mut first_lexer = Lexer::new(view, first).expect("first source should lex");
         let mut second_lexer = Lexer::new(view, second).expect("second source should lex");
