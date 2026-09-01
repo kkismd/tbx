@@ -127,6 +127,11 @@ mod operator;
 #[allow(dead_code)]
 mod stack_primitive;
 
+// #1586 publishes PRINT and CR as normal runtime primitive words that use only
+// the narrow completed-text output capability from ADR #1528.
+#[allow(dead_code)]
+mod output_primitive;
+
 // ADR #1442/#1451 parse minimal expressions into expression-local staging
 // before committing resolved instructions into a temporary execution unit.
 #[allow(dead_code)]

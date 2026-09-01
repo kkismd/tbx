@@ -20,6 +20,7 @@ use crate::primitive::PrimitiveLookup;
 use crate::published_code::{
     NewWordPublicationError, PublishedCode, PublishedWordBuilder, WordBodyBuildError,
 };
+use crate::runtime_output::RuntimeOutput;
 use crate::source::{SourceError, SourceId, SourceSpan, SourceView};
 use crate::source_mapping::{
     InstructionSourceMappingView, SourceMappedCode, SourceMappingLookup, SourceMappingLookupError,
@@ -103,7 +104,6 @@ struct RuntimeDefinitionPublicationAccess<'a> {
     words: &'a mut PublishedWords,
 }
 
-#[derive(Debug)]
 pub(crate) struct SourceExecutionContext<'a> {
     bindings: &'a Bindings,
     operators: Option<OperatorLookup>,
@@ -113,6 +113,7 @@ pub(crate) struct SourceExecutionContext<'a> {
     globals: Option<SourceGlobalAccess<'a>>,
     words: PublishedWordLookup<'a>,
     primitives: PrimitiveLookup<'a>,
+    output: Option<&'a mut dyn RuntimeOutput>,
 }
 
 #[derive(Debug)]
@@ -1395,6 +1396,9 @@ fn run_unit(
             SourceGlobalAccess::Write(globals) => execution.with_globals(globals),
         };
     }
+    if let Some(output) = context.output {
+        execution = execution.with_output(output);
+    }
     let mut vm = Vm::new_at_location_in(&mut execution, unit.entry)
         .map_err(|error| map_runtime_error(error, unit, context.source_mappings))?;
     let outcome = vm
@@ -2174,6 +2178,7 @@ impl<'a> SourceExecutionContext<'a> {
             globals: None,
             words,
             primitives,
+            output: None,
         }
     }
 
@@ -2192,6 +2197,7 @@ impl<'a> SourceExecutionContext<'a> {
             globals: None,
             words,
             primitives,
+            output: None,
         }
     }
 
@@ -2210,6 +2216,7 @@ impl<'a> SourceExecutionContext<'a> {
             globals: None,
             words,
             primitives,
+            output: None,
         }
     }
 
@@ -2229,6 +2236,7 @@ impl<'a> SourceExecutionContext<'a> {
             globals: None,
             words,
             primitives,
+            output: None,
         }
     }
 
@@ -2247,6 +2255,7 @@ impl<'a> SourceExecutionContext<'a> {
             globals: None,
             words,
             primitives,
+            output: None,
         }
     }
 
@@ -2266,6 +2275,7 @@ impl<'a> SourceExecutionContext<'a> {
             globals: None,
             words,
             primitives,
+            output: None,
         }
     }
 
@@ -2285,6 +2295,7 @@ impl<'a> SourceExecutionContext<'a> {
             globals: None,
             words,
             primitives,
+            output: None,
         }
     }
 
@@ -2298,6 +2309,11 @@ impl<'a> SourceExecutionContext<'a> {
         globals: crate::global_variable::GlobalVariableViewMut<'a>,
     ) -> Self {
         self.globals = Some(SourceGlobalAccess::Write(globals));
+        self
+    }
+
+    pub(crate) fn with_output(mut self, output: &'a mut dyn RuntimeOutput) -> Self {
+        self.output = Some(output);
         self
     }
 
@@ -2420,9 +2436,11 @@ mod tests {
         register_named_operator_primitives, register_operator_primitives, OperatorSemantic,
         OperatorWords,
     };
+    use crate::output_primitive::register_output_primitives;
     use crate::primitive::{PrimitiveContext, PrimitiveError, PrimitiveRegistry};
     use crate::published_code::PublishedCode;
     use crate::redefinition::redefine_word;
+    use crate::runtime_output::{RuntimeOutput, TestOutput};
     use crate::source::SourceTexts;
     use crate::source_mapping::{
         InstructionSourceMapping, SourceMappingLookup, SourceMappingLookupError,
@@ -3393,6 +3411,17 @@ mod tests {
             session
         }
 
+        fn new_with_named_operators_and_output_primitives() -> Self {
+            let mut session = Self::new_with_named_operators();
+            register_output_primitives(
+                &mut session.primitives,
+                &mut session.words,
+                &mut session.bindings,
+            )
+            .expect("output primitives should bootstrap");
+            session
+        }
+
         fn publish_def(&mut self, text: &str) -> (SourceTexts, SourceId, TemporaryExecutionUnit) {
             compile_with_def(
                 text,
@@ -3452,6 +3481,24 @@ mod tests {
                     PublishedWordLookup::new(&self.words),
                     self.primitives.lookup(),
                 ),
+            )
+        }
+
+        fn run_unit_with_output(
+            &self,
+            unit: &TemporaryExecutionUnit,
+            output: &mut dyn RuntimeOutput,
+        ) -> Result<SourceRunResult, SourceProcessorError> {
+            run_unit(
+                unit,
+                SourceExecutionContext::with_source_words_and_operators(
+                    &self.bindings,
+                    self.source_words.lookup(),
+                    self.operators.lookup(),
+                    PublishedWordLookup::new(&self.words),
+                    self.primitives.lookup(),
+                )
+                .with_output(output),
             )
         }
 
@@ -9441,6 +9488,40 @@ mod tests {
             Ok(&Instruction::Call(square))
         );
         assert_eq!(result.data_stack(), [value(49)]);
+    }
+
+    #[test]
+    fn top_level_source_calls_print_and_cr_as_normal_runtime_words() {
+        let session = RuntimeDefinitionSession::new_with_named_operators_and_output_primitives();
+        let print = resolve_word_name(&session.bindings, "PRINT").expect("PRINT should bootstrap");
+        let cr = resolve_word_name(&session.bindings, "CR").expect("CR should bootstrap");
+        let (sources, id) = source("EVAL 42\nPRINT\nCR\nEVAL -7\nPRINT");
+        let mut output = TestOutput::new();
+
+        let unit = compile_source(
+            sources.view(),
+            id,
+            SourceCompileContext::with_source_words_and_operators(
+                &session.bindings,
+                session.source_words.lookup(),
+                session.operators.lookup(),
+            ),
+        )
+        .expect("PRINT and CR source should compile through normal word resolution");
+        let result = session
+            .run_unit_with_output(&unit, &mut output)
+            .expect("PRINT and CR source should run with runtime output");
+
+        let calls = (0..unit.len())
+            .filter_map(|index| match unit.instructions().get(address(index)) {
+                Ok(Instruction::Call(id)) => Some(*id),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(calls.iter().filter(|id| **id == print).count(), 2);
+        assert_eq!(calls.iter().filter(|id| **id == cr).count(), 1);
+        assert_eq!(output.chunks(), ["42", "\n", "-7"]);
+        assert_eq!(result.data_stack(), []);
     }
 
     #[test]
