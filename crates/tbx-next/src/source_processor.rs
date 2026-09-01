@@ -2345,7 +2345,7 @@ impl<'a> SourceExecutionContext<'a> {
 }
 
 impl SourceProcessorError {
-    fn primary_span(&self) -> Option<SourceSpan> {
+    pub(crate) fn primary_span(&self) -> Option<SourceSpan> {
         match self {
             Self::Source(_) | Self::CodeSpaceLookup(_) | Self::SourceMappingLookup(_) => None,
             Self::Lex(error) => match error {

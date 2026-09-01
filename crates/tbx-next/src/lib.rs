@@ -157,6 +157,12 @@ mod runtime_output;
 #[allow(dead_code)]
 mod diagnostic;
 
+// ADR #1578 maps internal source-processing/runtime outcomes to the
+// user-facing success/program-failure/environment-failure boundary without
+// making the CLI parse internal error strings.
+#[allow(dead_code)]
+mod user_facing;
+
 pub const STATUS_MESSAGE: &str =
     "TBX Next is under development; language features are not implemented yet.";
 
