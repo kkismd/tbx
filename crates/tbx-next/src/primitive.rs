@@ -65,6 +65,10 @@ impl<'a> PrimitiveContext<'a> {
             .map_err(|source| PrimitiveError::DataStackUnderflow { source })
     }
 
+    pub(crate) fn data_stack_is_empty(&self) -> bool {
+        self.data_stack.is_empty()
+    }
+
     pub(crate) fn write_output(&mut self, text: &str) -> Result<(), PrimitiveError> {
         self.output
             .as_deref_mut()
