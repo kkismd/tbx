@@ -231,7 +231,7 @@ mod tests {
 
     fn source(text: &str) -> (SourceTexts, SourceId) {
         let mut sources = SourceTexts::new();
-        let id = sources.register(text);
+        let id = sources.register(text, "test.tbx");
         (sources, id)
     }
 

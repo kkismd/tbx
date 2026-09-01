@@ -2462,7 +2462,7 @@ mod tests {
 
     fn source(text: &str) -> (SourceTexts, SourceId) {
         let mut sources = SourceTexts::new();
-        let id = sources.register(text);
+        let id = sources.register(text, "test.tbx");
         (sources, id)
     }
 
@@ -6467,7 +6467,7 @@ mod tests {
     #[test]
     fn each_run_uses_fresh_vm_state() {
         let (mut sources, first) = source("PUSH1 PUSH2");
-        let second = sources.register("");
+        let second = sources.register("", "test.tbx");
         let mut words = PublishedWords::new();
         let mut bindings = Bindings::new();
         let mut primitives = PrimitiveRegistry::new();
@@ -10324,7 +10324,7 @@ mod tests {
         let original_word_count = words.len();
         let original_published_len = published_code.len();
         let (mut sources, first) = source("user_word user_word");
-        let second = sources.register("user_word");
+        let second = sources.register("user_word", "test.tbx");
         let published_views = [published_code.view()];
         let first_result = run_source(
             sources.view(),
@@ -10429,8 +10429,8 @@ mod tests {
     #[test]
     fn published_runtime_error_maps_to_published_source_span() {
         let mut sources = SourceTexts::new();
-        let published_source = sources.register("fail");
-        let temporary_source = sources.register("bad");
+        let published_source = sources.register("fail", "test.tbx");
+        let temporary_source = sources.register("bad", "test.tbx");
         let mut words = PublishedWords::new();
         let mut bindings = Bindings::new();
         let mut primitives = PrimitiveRegistry::new();
@@ -10484,10 +10484,10 @@ mod tests {
     #[test]
     fn nested_published_runtime_error_uses_deepest_callee_mapping() {
         let mut sources = SourceTexts::new();
-        let inner_source = sources.register("inner_fail");
-        let middle_source = sources.register("middle_call");
-        let outer_source = sources.register("outer_call");
-        let temporary_source = sources.register("outer");
+        let inner_source = sources.register("inner_fail", "test.tbx");
+        let middle_source = sources.register("middle_call", "test.tbx");
+        let outer_source = sources.register("outer_call", "test.tbx");
+        let temporary_source = sources.register("outer", "test.tbx");
         let mut words = PublishedWords::new();
         let mut bindings = Bindings::new();
         let mut primitives = PrimitiveRegistry::new();
@@ -10621,7 +10621,7 @@ mod tests {
     #[test]
     fn runtime_error_mapping_distinguishes_end_out_of_range_and_unmapped() {
         let mut sources = SourceTexts::new();
-        let temporary_source = sources.register("bad");
+        let temporary_source = sources.register("bad", "test.tbx");
         let mut words = PublishedWords::new();
         let mut bindings = Bindings::new();
         let mut primitives = PrimitiveRegistry::new();
@@ -10684,9 +10684,9 @@ mod tests {
             out_of_range_mapping.view(),
             unmapped_mapping.view(),
         ];
-        let end_source = sources.register("endfail");
-        let out_of_range_source = sources.register("rangefail");
-        let unmapped_source = sources.register("unmappedfail");
+        let end_source = sources.register("endfail", "test.tbx");
+        let out_of_range_source = sources.register("rangefail", "test.tbx");
+        let unmapped_source = sources.register("unmappedfail", "test.tbx");
 
         assert_runtime_error(
             run_source(

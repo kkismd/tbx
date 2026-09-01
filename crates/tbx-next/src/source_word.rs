@@ -2877,7 +2877,7 @@ mod tests {
 
     fn statement_tokens(text: &str) -> (SourceTexts, SourceId, Vec<Token>) {
         let mut sources = SourceTexts::new();
-        let source_id = sources.register(text);
+        let source_id = sources.register(text, "test.tbx");
         let mut lexer = crate::lexer::Lexer::new(sources.view(), source_id)
             .expect("test source should create lexer");
         let mut tokens = Vec::new();
@@ -3284,7 +3284,7 @@ mod tests {
     #[test]
     fn native_context_emits_mapped_temporary_instruction() {
         let mut sources = SourceTexts::new();
-        let source_id = sources.register("TEST");
+        let source_id = sources.register("TEST", "test.tbx");
         let mut lexer = crate::lexer::Lexer::new(sources.view(), source_id)
             .expect("test source should create lexer");
         let mut tokens = Vec::new();

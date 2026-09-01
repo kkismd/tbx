@@ -816,7 +816,7 @@ mod tests {
 
     fn lex(text: &str) -> (SourceTexts, SourceId, Vec<Token>) {
         let mut sources = SourceTexts::new();
-        let source_id = sources.register(text);
+        let source_id = sources.register(text, "test.tbx");
         let mut lexer = Lexer::new(sources.view(), source_id).expect("lexer should construct");
         let mut tokens = Vec::new();
         loop {

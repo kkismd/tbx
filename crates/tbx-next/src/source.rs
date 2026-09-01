@@ -101,7 +101,18 @@ pub(crate) enum SourceError {
 #[derive(Debug)]
 pub(crate) struct SourceTexts {
     owner: SourceOwnerId,
-    sources: Vec<Box<str>>,
+    sources: Vec<SourceRecord>,
+}
+
+/// Complete source payload registered under one `SourceId`.
+///
+/// ADR #1529 requires source text and user-facing display information to share
+/// the same registration and lifetime so later diagnostics cannot lose their
+/// association while source mappings may still refer to this `SourceId`.
+#[derive(Debug)]
+struct SourceRecord {
+    text: Box<str>,
+    display_name: Box<str>,
 }
 
 impl SourceTexts {
@@ -112,12 +123,19 @@ impl SourceTexts {
         }
     }
 
-    pub(crate) fn register(&mut self, text: impl Into<Box<str>>) -> SourceId {
+    pub(crate) fn register(
+        &mut self,
+        text: impl Into<Box<str>>,
+        display_name: impl Into<Box<str>>,
+    ) -> SourceId {
         let id = SourceId {
             owner: self.owner,
             slot: self.sources.len(),
         };
-        self.sources.push(text.into());
+        self.sources.push(SourceRecord {
+            text: text.into(),
+            display_name: display_name.into(),
+        });
         id
     }
 
@@ -141,18 +159,25 @@ impl SourceTexts {
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct SourceView<'a> {
     owner: SourceOwnerId,
-    sources: &'a [Box<str>],
+    sources: &'a [SourceRecord],
 }
 
 impl<'a> SourceView<'a> {
     pub(crate) fn source(self, id: SourceId) -> Result<&'a str, SourceError> {
+        self.record(id).map(|source| source.text.as_ref())
+    }
+
+    pub(crate) fn display_name(self, id: SourceId) -> Result<&'a str, SourceError> {
+        self.record(id).map(|source| source.display_name.as_ref())
+    }
+
+    fn record(self, id: SourceId) -> Result<&'a SourceRecord, SourceError> {
         if id.owner != self.owner {
             return Err(SourceError::InvalidSourceId { id });
         }
 
         self.sources
             .get(id.slot)
-            .map(|source| source.as_ref())
             .ok_or(SourceError::InvalidSourceId { id })
     }
 
@@ -231,7 +256,7 @@ mod tests {
 
     fn register(text: &str) -> (SourceTexts, SourceId) {
         let mut sources = SourceTexts::new();
-        let id = sources.register(text);
+        let id = sources.register(text, "test.tbx");
         (sources, id)
     }
 
@@ -255,23 +280,26 @@ mod tests {
     fn registers_empty_ascii_and_utf8_sources() {
         let mut sources = SourceTexts::new();
 
-        let empty = sources.register("");
-        let ascii = sources.register("PRINT 10");
-        let utf8 = sources.register("PRINT \"あ\"");
+        let empty = sources.register("", "empty.tbx");
+        let ascii = sources.register("PRINT 10", "ascii.tbx");
+        let utf8 = sources.register("PRINT \"あ\"", "utf8.tbx");
         let view = sources.view();
 
         assert_eq!(view.source(empty), Ok(""));
         assert_eq!(view.source(ascii), Ok("PRINT 10"));
         assert_eq!(view.source(utf8), Ok("PRINT \"あ\""));
+        assert_eq!(view.display_name(empty), Ok("empty.tbx"));
+        assert_eq!(view.display_name(ascii), Ok("ascii.tbx"));
+        assert_eq!(view.display_name(utf8), Ok("utf8.tbx"));
     }
 
     #[test]
     fn each_registration_receives_distinct_source_id() {
         let mut sources = SourceTexts::new();
 
-        let first = sources.register("A");
-        let second = sources.register("A");
-        let third = sources.register("B");
+        let first = sources.register("A", "same-name.tbx");
+        let second = sources.register("A", "same-name.tbx");
+        let third = sources.register("B", "different-name.tbx");
 
         assert_ne!(first, second);
         assert_ne!(first, third);
@@ -279,6 +307,35 @@ mod tests {
         assert_eq!(sources.view().source(first), Ok("A"));
         assert_eq!(sources.view().source(second), Ok("A"));
         assert_eq!(sources.view().source(third), Ok("B"));
+        assert_eq!(sources.view().display_name(first), Ok("same-name.tbx"));
+        assert_eq!(sources.view().display_name(second), Ok("same-name.tbx"));
+        assert_eq!(sources.view().display_name(third), Ok("different-name.tbx"));
+    }
+
+    #[test]
+    fn each_registration_keeps_text_and_display_name_together() {
+        let mut sources = SourceTexts::new();
+
+        let empty = sources.register("", "<stdin>");
+        let ascii = sources.register("PRINT 10", "program.tbx");
+        let utf8 = sources.register("PRINT \"あ\"", "unicode.tbx");
+        let same_display_name = sources.register("PRINT 20", "program.tbx");
+        let same_text = sources.register("PRINT 10", "copy.tbx");
+        let view = sources.view();
+
+        assert_eq!(view.source(empty), Ok(""));
+        assert_eq!(view.display_name(empty), Ok("<stdin>"));
+        assert_eq!(view.source(ascii), Ok("PRINT 10"));
+        assert_eq!(view.display_name(ascii), Ok("program.tbx"));
+        assert_eq!(view.source(utf8), Ok("PRINT \"あ\""));
+        assert_eq!(view.display_name(utf8), Ok("unicode.tbx"));
+        assert_eq!(view.source(same_display_name), Ok("PRINT 20"));
+        assert_eq!(view.display_name(same_display_name), Ok("program.tbx"));
+        assert_eq!(view.source(same_text), Ok("PRINT 10"));
+        assert_eq!(view.display_name(same_text), Ok("copy.tbx"));
+
+        assert_ne!(ascii, same_display_name);
+        assert_ne!(ascii, same_text);
     }
 
     #[test]
@@ -380,6 +437,10 @@ mod tests {
             Err(SourceError::InvalidSourceId { id: invalid })
         );
         assert_eq!(
+            sources.view().display_name(invalid),
+            Err(SourceError::InvalidSourceId { id: invalid })
+        );
+        assert_eq!(
             sources.view().span(invalid, 0, 0),
             Err(SourceError::InvalidSourceId { id: invalid })
         );
@@ -388,17 +449,21 @@ mod tests {
     #[test]
     fn source_ids_from_different_owners_do_not_collide_at_the_same_slot() {
         let mut first_owner = SourceTexts::new();
-        let first_id = first_owner.register("ABC");
+        let first_id = first_owner.register("ABC", "first.tbx");
         let first_span = span(first_owner.view(), first_id, 0, 1);
 
         let mut second_owner = SourceTexts::new();
-        let second_id = second_owner.register("XYZ");
+        let second_id = second_owner.register("XYZ", "second.tbx");
 
         assert_eq!(first_id.slot, second_id.slot);
         assert_ne!(first_id, second_id);
         assert_eq!(first_owner.view().slice(first_span), Ok("A"));
         assert_eq!(
             second_owner.view().source(first_id),
+            Err(SourceError::InvalidSourceId { id: first_id })
+        );
+        assert_eq!(
+            second_owner.view().display_name(first_id),
             Err(SourceError::InvalidSourceId { id: first_id })
         );
         assert_eq!(
@@ -410,8 +475,8 @@ mod tests {
     #[test]
     fn same_offsets_in_different_sources_are_different_spans() {
         let mut sources = SourceTexts::new();
-        let first = sources.register("ABC");
-        let second = sources.register("XYZ");
+        let first = sources.register("ABC", "first.tbx");
+        let second = sources.register("XYZ", "second.tbx");
         let view = sources.view();
 
         let first_span = span(view, first, 0, 1);
@@ -425,8 +490,8 @@ mod tests {
     #[test]
     fn slice_in_source_rejects_mismatched_source_id() {
         let mut sources = SourceTexts::new();
-        let first = sources.register("ABC");
-        let second = sources.register("XYZ");
+        let first = sources.register("ABC", "first.tbx");
+        let second = sources.register("XYZ", "second.tbx");
         let view = sources.view();
         let first_span = span(view, first, 0, 1);
 
