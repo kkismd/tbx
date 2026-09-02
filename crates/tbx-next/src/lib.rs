@@ -175,21 +175,6 @@ pub fn status_message() -> &'static str {
     STATUS_MESSAGE
 }
 
-pub fn run_cli() -> std::process::ExitCode {
-    use crate::runtime_output::{RuntimeOutput, WriteRuntimeOutput};
-
-    let stdout = std::io::stdout();
-    let mut output = WriteRuntimeOutput::new(stdout.lock());
-
-    match output
-        .write(STATUS_MESSAGE)
-        .and_then(|()| output.write("\n"))
-    {
-        Ok(()) => std::process::ExitCode::SUCCESS,
-        Err(_) => std::process::ExitCode::FAILURE,
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

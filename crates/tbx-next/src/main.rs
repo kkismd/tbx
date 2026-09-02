@@ -1,3 +1,3 @@
-fn main() -> std::process::ExitCode {
-    tbx_next::run_cli()
+fn main() {
+    println!("{}", tbx_next::status_message());
 }
