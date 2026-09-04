@@ -168,6 +168,12 @@ mod user_facing;
 #[allow(dead_code)]
 mod cli_source;
 
+// #1595 composes the existing complete-source pipeline, M20 runtime
+// environment, output capability, and user-facing diagnostics behind one
+// crate-internal batch execution boundary.
+#[allow(dead_code)]
+mod batch_execution;
+
 pub const STATUS_MESSAGE: &str =
     "TBX Next is under development; language features are not implemented yet.";
 
