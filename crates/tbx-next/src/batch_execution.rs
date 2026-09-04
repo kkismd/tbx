@@ -162,6 +162,9 @@ fn user_facing_result(
     match UserFacingRunResult::from_source_result(sources.view(), result) {
         UserFacingRunResult::Success(result) => BatchExecutionResult::Success(result),
         UserFacingRunResult::Failure(failure) => {
+            // #1592 validates a primary span's source ownership and display
+            // information before this boundary. An unresolved span is replaced
+            // with a source-less diagnostic, so #1591 rendering cannot fail here.
             let diagnostic = DiagnosticRenderer::new(sources.view())
                 .render(failure.diagnostic())
                 .expect("user-facing classification must produce a renderable diagnostic");
