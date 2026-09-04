@@ -53,7 +53,7 @@ pub(crate) fn acquire_from_env() -> Result<InitialSource, CliSourceError> {
     })
 }
 
-fn acquire_initial_source<I, S, R, F>(
+pub(crate) fn acquire_initial_source<I, S, R, F>(
     args: I,
     stdin: &mut R,
     read_file: F,
