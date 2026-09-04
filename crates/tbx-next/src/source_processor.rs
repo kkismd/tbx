@@ -1378,7 +1378,7 @@ pub(crate) fn run_source(
     run_unit(&unit, context)
 }
 
-fn run_unit(
+pub(crate) fn run_unit(
     unit: &TemporaryExecutionUnit,
     context: SourceExecutionContext<'_>,
 ) -> Result<SourceRunResult, SourceProcessorError> {
@@ -2164,6 +2164,28 @@ impl<'source> RuntimeDefinitionPublisher<'source>
 }
 
 impl<'a> SourceExecutionContext<'a> {
+    pub(crate) const fn with_runtime_environment(
+        bindings: &'a Bindings,
+        source_words: SourceWordLookup<'a>,
+        operators: OperatorLookup,
+        code_spaces: &'a [InstructionView<'a>],
+        source_mappings: &'a [InstructionSourceMappingView<'a>],
+        words: PublishedWordLookup<'a>,
+        primitives: PrimitiveLookup<'a>,
+    ) -> Self {
+        Self {
+            bindings,
+            operators: Some(operators),
+            source_words: Some(source_words),
+            code_spaces,
+            source_mappings,
+            globals: None,
+            words,
+            primitives,
+            output: None,
+        }
+    }
+
     pub(crate) const fn new(
         bindings: &'a Bindings,
         words: PublishedWordLookup<'a>,
