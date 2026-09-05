@@ -711,6 +711,15 @@ mod tests {
         ));
 
         assert_eq!(result.data_stack(), [Value::integer(3)]);
+
+        let mut writer = RecordingWriter::default();
+        let result = success(execute_with_embedded_standard_library(
+            "LET A = 0\nDO\nLET A = A + 1\nUNTIL A >= 1\nEVAL A",
+            "program.tbx",
+            &mut writer,
+        ));
+
+        assert_eq!(result.data_stack(), [Value::integer(1)]);
     }
 
     #[test]
@@ -733,6 +742,24 @@ mod tests {
         ));
 
         assert_eq!(result.data_stack(), [Value::integer(2)]);
+
+        let mut writer = RecordingWriter::default();
+        let result = success(execute_with_embedded_standard_library(
+            "LET A = 0\nLET B = 0\nWHILE A < 2\nLET B = 0\nWHILE B < 2\nLET B = B + 1\nWEND\nLET A = A + 1\nWEND\nEVAL A\nEVAL B",
+            "program.tbx",
+            &mut writer,
+        ));
+
+        assert_eq!(result.data_stack(), [Value::integer(2), Value::integer(2)]);
+
+        let mut writer = RecordingWriter::default();
+        let result = success(execute_with_embedded_standard_library(
+            "LET A = 0\nLET B = 0\nDO\nLET B = 0\nDO\nLET B = B + 1\nUNTIL B >= 2\nLET A = A + 1\nUNTIL A >= 2\nEVAL A\nEVAL B",
+            "program.tbx",
+            &mut writer,
+        ));
+
+        assert_eq!(result.data_stack(), [Value::integer(2), Value::integer(2)]);
     }
 
     #[test]
