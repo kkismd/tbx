@@ -1,0 +1,4 @@
+DEF BAD
+EVAL 1 / 0
+END
+BAD
