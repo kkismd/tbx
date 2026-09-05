@@ -134,6 +134,7 @@ impl<'a> Lexer<'a> {
             b')' => self.single_byte_token(TokenKind::RParen),
             b'=' => self.single_byte_token(TokenKind::Equal),
             b'"' => self.fixed_token_literal(),
+            b'#' => self.skip_line_comment(),
             b'<' => self.less_prefixed_operator(),
             b'>' => self.greater_prefixed_operator(),
             b'\n' => self.line_boundary(1),
@@ -321,6 +322,25 @@ impl<'a> Lexer<'a> {
         self.token(TokenKind::LineBoundary, start, self.offset)
     }
 
+    pub(crate) fn skip_line_comment(&mut self) -> Result<Token, LexError> {
+        while let Some(&byte) = self.source.as_bytes().get(self.offset) {
+            match byte {
+                b'\n' => return self.line_boundary(1),
+                b'\r' => {
+                    let len = if self.source.as_bytes().get(self.offset + 1) == Some(&b'\n') {
+                        2
+                    } else {
+                        1
+                    };
+                    return self.line_boundary(len);
+                }
+                _ => self.offset += 1,
+            }
+        }
+
+        Ok(self.eof)
+    }
+
     fn token(&self, kind: TokenKind, start: usize, end: usize) -> Result<Token, LexError> {
         let span = self.view.span(self.source_id, start, end)?;
         Ok(Token::new(kind, span))
@@ -365,6 +385,7 @@ fn is_token_boundary(byte: u8) -> bool {
             | b'('
             | b')'
             | b'='
+            | b'#'
             | b'<'
             | b'>'
     )
@@ -776,6 +797,40 @@ mod tests {
             slices(sources.view(), &tokens),
             ["A", "\n", "\r\n", "\r\n", "\n", "\r", "B", ""]
         );
+    }
+
+    #[test]
+    fn hash_comment_skips_to_physical_line_boundary() {
+        let (sources, id, tokens) = lex_all("# ? @ あ\nA # ignored\r\nB#also ignored");
+
+        assert_eq!(
+            kinds(&tokens),
+            [
+                TokenKind::LineBoundary,
+                TokenKind::Name,
+                TokenKind::LineBoundary,
+                TokenKind::Name,
+                TokenKind::Eof
+            ]
+        );
+        assert_token(tokens[0], TokenKind::LineBoundary, id, 9, 10);
+        assert_token(tokens[1], TokenKind::Name, id, 10, 11);
+        assert_token(tokens[2], TokenKind::LineBoundary, id, 21, 23);
+        assert_token(tokens[3], TokenKind::Name, id, 23, 24);
+        assert_eq!(
+            slices(sources.view(), &tokens),
+            ["\n", "A", "\r\n", "B", ""]
+        );
+    }
+
+    #[test]
+    fn hash_comment_may_end_at_eof_without_final_line_boundary() {
+        let (sources, id, tokens) = lex_all("A # ? @ あ");
+
+        assert_eq!(kinds(&tokens), [TokenKind::Name, TokenKind::Eof]);
+        assert_token(tokens[0], TokenKind::Name, id, 0, 1);
+        assert_token(tokens[1], TokenKind::Eof, id, 11, 11);
+        assert_eq!(slices(sources.view(), &tokens), ["A", ""]);
     }
 
     #[test]

@@ -1673,7 +1673,15 @@ impl SegmentedSource {
                 Ok(token) if token.kind() == TokenKind::Eof => {
                     return Ok(collector.finish(Terminal::Eof { span: token.span() }));
                 }
-                Ok(token) => collector.push_token(token),
+                Ok(token) => {
+                    if collector.push_token(view, token)? == CollectorAction::SkipLineComment {
+                        let token = lexer.skip_line_comment()?;
+                        if token.kind() == TokenKind::Eof {
+                            return Ok(collector.finish(Terminal::Eof { span: token.span() }));
+                        }
+                        collector.push_token(view, token)?;
+                    }
+                }
                 Err(error) => return Ok(collector.finish(Terminal::LexError(error))),
             }
         }
@@ -1785,6 +1793,12 @@ struct LogicalStatementCollector {
     depth: usize,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CollectorAction {
+    Continue,
+    SkipLineComment,
+}
+
 impl LogicalStatementCollector {
     fn new() -> Self {
         Self {
@@ -1794,7 +1808,15 @@ impl LogicalStatementCollector {
         }
     }
 
-    fn push_token(&mut self, token: Token) {
+    fn push_token(
+        &mut self,
+        view: SourceView<'_>,
+        token: Token,
+    ) -> Result<CollectorAction, SourceProcessorError> {
+        if self.is_statement_leading_rem(view, token)? {
+            return Ok(CollectorAction::SkipLineComment);
+        }
+
         match token.kind() {
             TokenKind::LParen => {
                 self.depth = self.depth.saturating_add(1);
@@ -1807,6 +1829,20 @@ impl LogicalStatementCollector {
             TokenKind::LineBoundary if self.depth == 0 => self.finish_current_statement(),
             _ => self.current_tokens.push(token),
         }
+
+        Ok(CollectorAction::Continue)
+    }
+
+    fn is_statement_leading_rem(
+        &self,
+        view: SourceView<'_>,
+        token: Token,
+    ) -> Result<bool, SourceProcessorError> {
+        if token.kind() != TokenKind::Name || !self.current_tokens.is_empty() {
+            return Ok(false);
+        }
+
+        Ok(view.slice(token.span())?.eq_ignore_ascii_case("REM"))
     }
 
     fn finish(mut self, terminal: Terminal) -> SegmentedSource {
@@ -3777,6 +3813,54 @@ mod tests {
     }
 
     #[test]
+    fn segmentation_skips_statement_leading_rem_comments() {
+        let (_sources, _id, segmented) = segment("REM ? @ あ\nrem trailing\r\nRUN");
+
+        assert_eq!(segmented.completed_statements().len(), 1);
+        assert_eq!(
+            token_kinds(segmented.completed_statements()[0].tokens()),
+            [TokenKind::Name]
+        );
+        assert_eq!(segmented.incomplete_tail(), []);
+        assert!(matches!(segmented.terminal(), Terminal::Eof { .. }));
+    }
+
+    #[test]
+    fn segmentation_does_not_treat_continued_line_rem_as_comment() {
+        let (sources, id, segmented) = segment("BIF A + (\nREM)\nRUN");
+
+        assert_eq!(segmented.completed_statements().len(), 2);
+        assert_eq!(
+            token_kinds(segmented.completed_statements()[0].tokens()),
+            [
+                TokenKind::Name,
+                TokenKind::Name,
+                TokenKind::Plus,
+                TokenKind::LParen,
+                TokenKind::LineBoundary,
+                TokenKind::Name,
+                TokenKind::RParen
+            ]
+        );
+        assert_eq!(
+            sources
+                .view()
+                .slice(segmented.completed_statements()[0].tokens()[5].span()),
+            Ok("REM")
+        );
+        assert_eq!(
+            token_kinds(segmented.completed_statements()[1].tokens()),
+            [TokenKind::Name]
+        );
+        assert_eq!(
+            segmented.completed_statements()[0].tokens()[5]
+                .span()
+                .source_id(),
+            id
+        );
+    }
+
+    #[test]
     fn segmentation_distinguishes_completed_prefix_from_lexical_failure() {
         let (sources, id, segmented) = segment("VAR SCORE\n@");
 
@@ -3949,6 +4033,79 @@ mod tests {
 
         assert_eq!(result.outcome(), RunOutcome::Halted);
         assert_eq!(result.data_stack(), [value(7)]);
+    }
+
+    #[test]
+    fn comments_do_not_change_statement_meaning_or_source_mapping() {
+        let mut words = PublishedWords::new();
+        let mut bindings = Bindings::new();
+        let mut primitives = PrimitiveRegistry::new();
+        let operators = register_operator_primitives(&mut primitives, &mut words);
+        let push7_id = primitives.register(push_7);
+        let push7_word = register_primitive(&mut words, &mut bindings, name("PUSH7"), push7_id)
+            .expect("primitive should register");
+
+        let (sources, id, unit) = compile_with_bindings_and_operators(
+            "# ? @ あ\r\nREM ignored\n100 PUSH7 # trailing\nBIF 0, 100 # at EOF",
+            &bindings,
+            operators.lookup(),
+        );
+
+        assert_eq!(unit.len(), 4);
+        assert_eq!(
+            unit.instructions().get(address(0)),
+            Ok(&Instruction::Call(push7_word))
+        );
+        assert_eq!(
+            unit.instructions().get(address(2)),
+            Ok(&Instruction::JumpIfZero(address(0)))
+        );
+        assert_eq!(
+            unit.source_span(location(&unit, 0)),
+            Ok(Some(span(sources.view(), id, 27, 32)))
+        );
+        assert_eq!(
+            unit.source_span(location(&unit, 2)),
+            Ok(Some(span(sources.view(), id, 44, 47)))
+        );
+    }
+
+    #[test]
+    fn comment_only_lines_do_not_accept_local_line_number_prefixes() {
+        let mut words = PublishedWords::new();
+        let bindings = Bindings::new();
+        let mut primitives = PrimitiveRegistry::new();
+        let operators = register_operator_primitives(&mut primitives, &mut words);
+
+        for (source_text, start, end) in [("100 # comment", 0, 3), ("100 REM comment", 4, 7)] {
+            let (sources, id) = source(source_text);
+            let error = compile_source(
+                sources.view(),
+                id,
+                SourceCompileContext::with_operators(&bindings, operators.lookup()),
+            )
+            .expect_err("comment-only line number should fail");
+
+            match source_text {
+                "100 # comment" => assert_eq!(
+                    error,
+                    SourceProcessorError::Compile(CompileError {
+                        span: span(sources.view(), id, start, end),
+                        kind: CompileErrorKind::BareExpression,
+                    })
+                ),
+                "100 REM comment" => assert_eq!(
+                    error,
+                    SourceProcessorError::Compile(CompileError {
+                        span: span(sources.view(), id, start, end),
+                        kind: CompileErrorKind::WordResolution {
+                            source: WordResolutionError::UndefinedName,
+                        },
+                    })
+                ),
+                _ => unreachable!(),
+            }
+        }
     }
 
     #[test]
