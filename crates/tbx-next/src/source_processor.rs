@@ -1020,7 +1020,15 @@ where
         .into());
     }
 
-    compile_simple_tokens(traversal.view, tokens, context, state.code)
+    if first.kind() == TokenKind::Name {
+        compile_word_reference(traversal.view, first, context).map(|_| ())
+    } else {
+        Err(CompileError {
+            span: first.span(),
+            kind: CompileErrorKind::BareExpression,
+        }
+        .into())
+    }
 }
 
 fn compile_statement_leading_runtime_word(
@@ -1054,7 +1062,10 @@ fn compile_statement_leading_runtime_word(
         .iter()
         .any(|token| !matches!(token.kind(), TokenKind::LineBoundary | TokenKind::Eof));
     if !has_expression {
-        return Ok(false);
+        state
+            .code
+            .append_mapped(Instruction::Call(word), head.span())?;
+        return Ok(true);
     }
 
     // ADR #1631: a runtime-word statement owns its trailing ordinary
@@ -1289,50 +1300,6 @@ where
         }
     }
     Ok(true)
-}
-
-fn compile_simple_tokens(
-    view: SourceView<'_>,
-    tokens: &[Token],
-    context: &SourceCompileContext<'_>,
-    code: &mut dyn InstructionBuildTarget,
-) -> Result<(), SourceProcessorError> {
-    for token in tokens {
-        match token.kind() {
-            TokenKind::IntegerLiteral => {
-                let value = compile_integer_literal(view, *token)?;
-                code.append_mapped(Instruction::Push(Value::integer(value)), token.span())?;
-            }
-            TokenKind::Name => {
-                let id = compile_word_reference(view, *token, context)?;
-                code.append_mapped(Instruction::Call(id), token.span())?;
-            }
-            TokenKind::LineBoundary | TokenKind::Eof => {}
-            TokenKind::Plus
-            | TokenKind::Minus
-            | TokenKind::Star
-            | TokenKind::Slash
-            | TokenKind::Percent
-            | TokenKind::Comma
-            | TokenKind::LParen
-            | TokenKind::RParen
-            | TokenKind::Equal
-            | TokenKind::NotEqual
-            | TokenKind::Less
-            | TokenKind::LessEqual
-            | TokenKind::Greater
-            | TokenKind::GreaterEqual
-            | TokenKind::FixedTokenLiteral => {
-                return Err(CompileError {
-                    span: token.span(),
-                    kind: CompileErrorKind::UnsupportedToken { kind: token.kind() },
-                }
-                .into());
-            }
-        }
-    }
-
-    Ok(())
 }
 
 fn compile_bif(
@@ -4029,6 +3996,32 @@ mod tests {
                 "{source_text:?} should not compile as a statement"
             );
         }
+    }
+
+    #[test]
+    fn standalone_integer_without_line_number_is_rejected() {
+        let (sources, id, error) = compile_error("1");
+
+        assert_eq!(
+            error,
+            SourceProcessorError::Compile(CompileError {
+                span: span(sources.view(), id, 0, 1),
+                kind: CompileErrorKind::BareExpression,
+            })
+        );
+    }
+
+    #[test]
+    fn line_number_prefix_requires_a_statement_leading_name() {
+        let (sources, id, error) = compile_error("100 1");
+
+        assert_eq!(
+            error,
+            SourceProcessorError::Compile(CompileError {
+                span: span(sources.view(), id, 0, 3),
+                kind: CompileErrorKind::BareExpression,
+            })
+        );
     }
 
     #[test]
