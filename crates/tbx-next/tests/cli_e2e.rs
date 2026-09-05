@@ -16,6 +16,7 @@ fn fixture_path(name: &str) -> PathBuf {
 fn run_with_file(path: &Path) -> Output {
     Command::new(tbx_next_bin())
         .arg(path)
+        .current_dir(fixture_directory())
         .output()
         .expect("tbx-next binary should run")
 }
@@ -29,6 +30,7 @@ fn run_with_args(args: &[&str]) -> Output {
 
 fn run_with_stdin(source: &str) -> Output {
     let mut child = Command::new(tbx_next_bin())
+        .current_dir(fixture_directory())
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -45,6 +47,12 @@ fn run_with_stdin(source: &str) -> Output {
     child
         .wait_with_output()
         .expect("tbx-next binary should finish")
+}
+
+fn fixture_directory() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests")
+        .join("fixtures")
 }
 
 fn stdout_text(output: &Output) -> &str {
@@ -93,6 +101,36 @@ fn stdin_success_evaluates_expression_before_runtime_print_word() {
         stderr_text(&output)
     );
     assert_eq!(stdout_text(&output), "14\n");
+    assert_eq!(stderr_text(&output), "");
+}
+
+#[test]
+fn file_success_runs_stdlib_control_structures_and_user_syntax_through_real_binary() {
+    let path = fixture_path("m21_stdlib_control_e2e.tbx");
+
+    let output = run_with_file(&path);
+
+    assert!(
+        output.status.success(),
+        "expected success, stderr:\n{}",
+        stderr_text(&output)
+    );
+    assert_eq!(stdout_text(&output), "2\n3\n2\n");
+    assert_eq!(stderr_text(&output), "");
+}
+
+#[test]
+fn stdin_success_runs_stdlib_control_structures_and_user_syntax_through_real_binary() {
+    let source = include_str!("fixtures/m21_stdlib_control_e2e.tbx");
+
+    let output = run_with_stdin(source);
+
+    assert!(
+        output.status.success(),
+        "expected success, stderr:\n{}",
+        stderr_text(&output)
+    );
+    assert_eq!(stdout_text(&output), "2\n3\n2\n");
     assert_eq!(stderr_text(&output), "");
 }
 

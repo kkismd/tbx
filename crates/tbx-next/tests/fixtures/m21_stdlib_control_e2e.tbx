@@ -1,0 +1,40 @@
+REM M21 standard-library and source-word binary E2E fixture
+SYNTAX SLET
+STATEMENT
+READ_NAME AS name
+RESOLVE_VAR name AS target
+EXPECT "="
+READ_EXPR AS expr
+EMIT_EXPR expr
+EMIT_STORE target
+ENDS
+
+SLET A = 0
+LET B = 0
+IF 0
+LET B = 99
+ELSIF 1
+WHILE A < 2
+DO
+LET B = B + 1
+UNTIL B >= 2
+LET A = A + 1
+WEND
+ELSE
+LET B = 98
+ENDIF
+PRINT A
+CR
+PRINT B
+CR
+
+LET A = 0
+DO
+LET B = 0
+WHILE B < 2
+LET B = B + 1
+WEND
+LET A = A + 1
+UNTIL A >= 2
+PRINT A
+CR
