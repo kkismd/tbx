@@ -3861,6 +3861,33 @@ mod tests {
     }
 
     #[test]
+    fn segmentation_does_not_treat_nonleading_rem_as_comment() {
+        let (sources, _id, segmented) = segment("PRINT REM\nRUN");
+
+        assert_eq!(segmented.completed_statements().len(), 2);
+        assert_eq!(
+            token_kinds(segmented.completed_statements()[0].tokens()),
+            [TokenKind::Name, TokenKind::Name]
+        );
+        assert_eq!(
+            sources
+                .view()
+                .slice(segmented.completed_statements()[0].tokens()[0].span()),
+            Ok("PRINT")
+        );
+        assert_eq!(
+            sources
+                .view()
+                .slice(segmented.completed_statements()[0].tokens()[1].span()),
+            Ok("REM")
+        );
+        assert_eq!(
+            token_kinds(segmented.completed_statements()[1].tokens()),
+            [TokenKind::Name]
+        );
+    }
+
+    #[test]
     fn segmentation_distinguishes_completed_prefix_from_lexical_failure() {
         let (sources, id, segmented) = segment("VAR SCORE\n@");
 
