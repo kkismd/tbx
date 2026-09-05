@@ -4,8 +4,8 @@ use std::rc::Rc;
 use crate::binding::Bindings;
 use crate::block_code::{BlockCodeBuildError, BlockCodeBuilder};
 use crate::expression::{
-    parse_expression, ExpressionCallErrorKind, ExpressionError, ExpressionSyntaxErrorKind,
-    ExpressionVariableErrorKind,
+    parse_expression, ExpressionCallErrorKind, ExpressionError, ExpressionStaging,
+    ExpressionSyntaxErrorKind, ExpressionVariableErrorKind,
 };
 use crate::global_variable::{GlobalVariableView, GlobalVariables};
 use crate::instruction::{
@@ -1002,6 +1002,16 @@ where
         return Ok(());
     }
 
+    if compile_statement_leading_runtime_word(
+        traversal.view,
+        traversal.source_id,
+        tokens,
+        context,
+        state,
+    )? {
+        return Ok(());
+    }
+
     if contains_expression_syntax(tokens) {
         return Err(CompileError {
             span: first.span(),
@@ -1011,6 +1021,63 @@ where
     }
 
     compile_simple_tokens(traversal.view, tokens, context, state.code)
+}
+
+fn compile_statement_leading_runtime_word(
+    view: SourceView<'_>,
+    source_id: SourceId,
+    tokens: &[Token],
+    context: &SourceCompileContext<'_>,
+    state: &mut StatementCompileState<'_>,
+) -> Result<bool, SourceProcessorError> {
+    let Some(head) = tokens.first().copied() else {
+        return Ok(false);
+    };
+    if head.kind() != TokenKind::Name {
+        return Ok(false);
+    }
+
+    let source_name = view.slice(head.span())?;
+    let binding = match resolve_binding_name(context.bindings(), source_name) {
+        Ok(binding) => binding,
+        Err(WordResolutionError::InvalidWordName | WordResolutionError::UndefinedName) => {
+            return Ok(false);
+        }
+        Err(WordResolutionError::TargetIsNotWord) => unreachable!(),
+    };
+    let ResolvedBinding::RuntimeWord(word) = binding else {
+        return Ok(false);
+    };
+
+    let trailing = &tokens[1..];
+    let has_expression = trailing
+        .iter()
+        .any(|token| !matches!(token.kind(), TokenKind::LineBoundary | TokenKind::Eof));
+    // Keep the established whitespace-separated word/literal sequence path
+    // for statements that do not introduce expression syntax. Once an
+    // operator or comma appears, the complete trailing statement is the
+    // ordinary expression specified by ADR #1631.
+    if !has_expression || !contains_expression_syntax(trailing) {
+        return Ok(false);
+    }
+
+    // ADR #1631: a runtime-word statement owns its trailing ordinary
+    // expression. Stage the expression and its call together so a failure
+    // cannot commit a partial statement.
+    let Some(operators) = context.operators() else {
+        return Err(CompileError {
+            span: head.span(),
+            kind: CompileErrorKind::UnsupportedToken { kind: head.kind() },
+        }
+        .into());
+    };
+    let mut staging =
+        parse_expression_staging(view, source_id, trailing, context.bindings(), operators)?;
+    staging.append_mapped_instruction(Instruction::Call(word), head.span());
+    staging
+        .commit_to(state.code)
+        .map_err(SourceProcessorError::from_expression_error)?;
+    Ok(true)
 }
 
 fn compile_statement_leading_source_word<'source, S>(
@@ -1342,6 +1409,18 @@ fn compile_expression_tokens(
     operators: OperatorLookup,
     code: &mut dyn InstructionBuildTarget,
 ) -> Result<(), SourceProcessorError> {
+    parse_expression_staging(view, source_id, tokens, bindings, operators)?
+        .commit_to(code)
+        .map_err(SourceProcessorError::from_expression_error)
+}
+
+fn parse_expression_staging(
+    view: SourceView<'_>,
+    source_id: SourceId,
+    tokens: &[Token],
+    bindings: &Bindings,
+    operators: OperatorLookup,
+) -> Result<ExpressionStaging, SourceProcessorError> {
     let mut expression_tokens = tokens
         .iter()
         .copied()
@@ -1362,8 +1441,6 @@ fn compile_expression_tokens(
         &resolver,
         &runtime_word_resolver,
     )
-    .map_err(SourceProcessorError::from_expression_error)?
-    .commit_to(code)
     .map_err(SourceProcessorError::from_expression_error)
 }
 
@@ -1584,6 +1661,7 @@ const fn is_expression_syntax_token(kind: TokenKind) -> bool {
             | TokenKind::LessEqual
             | TokenKind::Greater
             | TokenKind::GreaterEqual
+            | TokenKind::Comma
     )
 }
 
@@ -9781,6 +9859,101 @@ mod tests {
         assert_eq!(calls.iter().filter(|id| **id == cr).count(), 1);
         assert_eq!(output.chunks(), ["42", "\n", "-7"]);
         assert_eq!(result.data_stack(), []);
+    }
+
+    #[test]
+    fn runtime_word_statement_evaluates_trailing_expression_before_call() {
+        let session = RuntimeDefinitionSession::new_with_named_operators_and_output_primitives();
+        let multiply = resolve_word_name(&session.bindings, "MULTIPLY")
+            .expect("MULTIPLY should be a named operator");
+        let add =
+            resolve_word_name(&session.bindings, "ADD").expect("ADD should be a named operator");
+        let print = resolve_word_name(&session.bindings, "PRINT").expect("PRINT should bootstrap");
+        let (sources, id) = source("PRINT 2 + 3 * 4\nCR");
+        let mut output = TestOutput::new();
+
+        let unit = compile_source(
+            sources.view(),
+            id,
+            SourceCompileContext::with_source_words_and_operators(
+                &session.bindings,
+                session.source_words.lookup(),
+                session.operators.lookup(),
+            ),
+        )
+        .expect("runtime word trailing expression should compile");
+        let result = session
+            .run_unit_with_output(&unit, &mut output)
+            .expect("runtime word trailing expression should run");
+
+        let expected = [
+            Instruction::Push(value(2)),
+            Instruction::Push(value(3)),
+            Instruction::Push(value(4)),
+            Instruction::Call(multiply),
+            Instruction::Call(add),
+            Instruction::Call(print),
+            Instruction::Call(resolve_word_name(&session.bindings, "CR").unwrap()),
+        ];
+        for (index, instruction) in expected.into_iter().enumerate() {
+            assert_eq!(unit.instructions().get(address(index)), Ok(&instruction));
+        }
+        assert_eq!(
+            unit.source_span(location(&unit, 0)),
+            Ok(Some(span(sources.view(), id, 6, 7)))
+        );
+        assert_eq!(
+            unit.source_span(location(&unit, 5)),
+            Ok(Some(span(sources.view(), id, 0, 5)))
+        );
+        assert_eq!(output.chunks(), ["14", "\n"]);
+        assert_eq!(result.data_stack(), []);
+    }
+
+    #[test]
+    fn runtime_word_trailing_expression_failure_does_not_commit_statement() {
+        let session = RuntimeDefinitionSession::new_with_named_operators_and_output_primitives();
+        let (sources, id) = source("PRINT 1 + MISSING");
+
+        let error = compile_source(
+            sources.view(),
+            id,
+            SourceCompileContext::with_source_words_and_operators(
+                &session.bindings,
+                session.source_words.lookup(),
+                session.operators.lookup(),
+            ),
+        )
+        .expect_err("unresolved trailing expression should fail compilation");
+
+        assert!(matches!(
+            error,
+            SourceProcessorError::Compile(CompileError {
+                kind: CompileErrorKind::ExpressionVariable {
+                    source: ExpressionVariableErrorKind::UndefinedName
+                },
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn runtime_word_statement_expression_is_shared_by_definition_bodies() {
+        let mut session =
+            RuntimeDefinitionSession::new_with_named_operators_and_output_primitives();
+        session.publish_def("DEF SHOW\nPRINT 2 + 3 * 4\nEND");
+        let (caller_sources, caller_id, caller) = session.compile_caller("SHOW");
+        let mut output = TestOutput::new();
+
+        session
+            .run_unit_with_published_code_and_output(&caller, &mut output)
+            .expect("definition body should run its trailing expression");
+
+        assert_eq!(output.chunks(), ["14"]);
+        assert_eq!(
+            caller.source_span(location(&caller, 0)),
+            Ok(Some(span(caller_sources.view(), caller_id, 0, 4)))
+        );
     }
 
     #[test]
