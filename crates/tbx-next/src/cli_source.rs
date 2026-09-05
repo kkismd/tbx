@@ -7,10 +7,17 @@ use std::path::{Path, PathBuf};
 use crate::source::{SourceId, SourceTexts};
 
 const STDIN_DISPLAY_NAME: &str = "<stdin>";
+pub(crate) const STDLIB_DISPLAY_NAME: &str = "<tbx-next-stdlib>";
+pub(crate) const STDLIB_SOURCE: &str = include_str!("../stdlib/basic.tbx");
+
+pub(crate) fn register_embedded_standard_library(sources: &mut SourceTexts) -> SourceId {
+    sources.register(STDLIB_SOURCE, STDLIB_DISPLAY_NAME)
+}
 
 #[derive(Debug)]
 pub(crate) struct InitialSource {
     sources: SourceTexts,
+    stdlib_source_id: SourceId,
     source_id: SourceId,
 }
 
@@ -43,6 +50,10 @@ impl InitialSource {
     pub(crate) const fn source_id(&self) -> SourceId {
         self.source_id
     }
+
+    pub(crate) const fn stdlib_source_id(&self) -> SourceId {
+        self.stdlib_source_id
+    }
 }
 
 pub(crate) fn acquire_from_env() -> Result<InitialSource, CliSourceError> {
@@ -66,6 +77,7 @@ where
 {
     let input = parse_initial_source_args(args)?;
     let mut sources = SourceTexts::new();
+    let stdlib_source_id = register_embedded_standard_library(&mut sources);
 
     let source_id = match input {
         InitialSourceInput::Stdin => {
@@ -84,7 +96,11 @@ where
         }
     };
 
-    Ok(InitialSource { sources, source_id })
+    Ok(InitialSource {
+        sources,
+        stdlib_source_id,
+        source_id,
+    })
 }
 
 fn parse_initial_source_args<I, S>(args: I) -> Result<InitialSourceInput, CliSourceError>
@@ -133,6 +149,9 @@ mod tests {
 
         let view = acquired.sources().view();
         let source_id = acquired.source_id();
+        let stdlib_source_id = acquired.stdlib_source_id();
+        assert_eq!(view.source(stdlib_source_id), Ok(STDLIB_SOURCE));
+        assert_eq!(view.display_name(stdlib_source_id), Ok(STDLIB_DISPLAY_NAME));
         assert_eq!(view.source(source_id), Ok("PRINT 1\nPRINT 2"));
         assert_eq!(view.display_name(source_id), Ok(STDIN_DISPLAY_NAME));
     }
@@ -152,6 +171,7 @@ mod tests {
         let view = acquired.sources().view();
         let source_id = acquired.source_id();
         assert!(path_seen.get());
+        assert_eq!(acquired.sources().len(), 2);
         assert_eq!(view.source(source_id), Ok("PRINT 7"));
         assert_eq!(view.display_name(source_id), Ok("relative/program.tbx"));
     }

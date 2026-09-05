@@ -22,6 +22,9 @@ use crate::user_facing::{UserFacingFailure, UserFacingFailureClass, UserFacingRu
 use crate::word::PublishedWords;
 use crate::word_lookup::PublishedWordLookup;
 
+#[cfg(test)]
+use crate::cli_source::register_embedded_standard_library;
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum BatchExecutionResult {
     Success(SourceRunResult),
@@ -37,6 +40,7 @@ pub(crate) struct BatchExecutionFailure {
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum BatchExecutionFailureCause {
     Setup(BatchSetupError),
+    StandardLibrary(Box<UserFacingFailure>),
     Source(Box<UserFacingFailure>),
 }
 
@@ -62,7 +66,8 @@ struct BatchEnvironment {
 impl BatchExecutionFailure {
     pub(crate) fn class(&self) -> UserFacingFailureClass {
         match &self.cause {
-            BatchExecutionFailureCause::Setup(_) => UserFacingFailureClass::Environment,
+            BatchExecutionFailureCause::Setup(_)
+            | BatchExecutionFailureCause::StandardLibrary(_) => UserFacingFailureClass::Environment,
             BatchExecutionFailureCause::Source(failure) => failure.class(),
         }
     }
@@ -113,10 +118,41 @@ pub(crate) fn execute_registered_source<W>(
 where
     W: Write + ?Sized,
 {
+    execute_registered_sources(sources, source_id, source_id, writer)
+}
+
+pub(crate) fn execute_registered_sources<W>(
+    sources: &SourceTexts,
+    stdlib_source_id: SourceId,
+    source_id: SourceId,
+    writer: &mut W,
+) -> BatchExecutionResult
+where
+    W: Write + ?Sized,
+{
     let mut environment = match BatchEnvironment::new() {
         Ok(environment) => environment,
         Err(error) => return setup_failure(sources, error),
     };
+
+    if stdlib_source_id != source_id {
+        let stdlib_result = compile_source(
+            sources.view(),
+            stdlib_source_id,
+            SourceCompileContext::with_source_word_and_runtime_publication_and_operators(
+                &mut environment.bindings,
+                &mut environment.source_words,
+                environment.operators.lookup(),
+                &mut environment.globals,
+                &mut environment.published_code,
+                &mut environment.words,
+            ),
+        );
+
+        if let Err(error) = stdlib_result {
+            return standard_library_failure(sources, error);
+        }
+    }
 
     let compile_result = compile_source(
         sources.view(),
@@ -153,6 +189,38 @@ where
     };
 
     user_facing_result(sources, source_result)
+}
+
+#[cfg(test)]
+pub(crate) fn execute_with_embedded_standard_library<W>(
+    source: &str,
+    display_name: &str,
+    writer: &mut W,
+) -> BatchExecutionResult
+where
+    W: Write + ?Sized,
+{
+    let mut sources = SourceTexts::new();
+    let stdlib_source_id = register_embedded_standard_library(&mut sources);
+    let source_id = sources.register(source, display_name);
+    execute_registered_sources(&sources, stdlib_source_id, source_id, writer)
+}
+
+fn standard_library_failure(
+    sources: &SourceTexts,
+    error: crate::source_processor::SourceProcessorError,
+) -> BatchExecutionResult {
+    let failure = match UserFacingRunResult::from_source_result(sources.view(), Err(error)) {
+        UserFacingRunResult::Failure(failure) => failure,
+        UserFacingRunResult::Success(_) => unreachable!("an error must classify as a failure"),
+    };
+    let diagnostic = DiagnosticRenderer::new(sources.view())
+        .render(failure.diagnostic())
+        .expect("standard-library diagnostic must render");
+    BatchExecutionResult::Failure(Box::new(BatchExecutionFailure {
+        cause: BatchExecutionFailureCause::StandardLibrary(failure),
+        diagnostic,
+    }))
 }
 
 fn user_facing_result(
@@ -236,6 +304,16 @@ mod tests {
         let mut sources = SourceTexts::new();
         let source_id = sources.register(text, display_name);
         (sources, source_id)
+    }
+
+    fn sources_with_standard_library(
+        standard_library: &str,
+        source: &str,
+    ) -> (SourceTexts, SourceId, SourceId) {
+        let mut sources = SourceTexts::new();
+        let standard_library_id = sources.register(standard_library, "<tbx-next-stdlib>");
+        let source_id = sources.register(source, "program.tbx");
+        (sources, standard_library_id, source_id)
     }
 
     fn success(result: BatchExecutionResult) -> crate::source_processor::SourceRunResult {
@@ -389,5 +467,115 @@ mod tests {
 
         assert_eq!(failure.class(), UserFacingFailureClass::Environment);
         assert_eq!(writer.text(), "7");
+    }
+
+    #[test]
+    fn standard_library_source_word_is_available_to_the_user_source() {
+        let standard_library =
+            "SYNTAX SLET\nSTATEMENT\nREAD_NAME AS name\nRESOLVE_VAR name AS target\nEXPECT \"=\"\nREAD_EXPR AS expr\nEMIT_EXPR expr\nEMIT_STORE target\nENDS";
+        let source = "LET A = 0\nSLET A = 7\nEVAL A";
+        let (sources, standard_library_id, source_id) =
+            sources_with_standard_library(standard_library, source);
+        let mut writer = RecordingWriter::default();
+
+        let result = success(execute_registered_sources(
+            &sources,
+            standard_library_id,
+            source_id,
+            &mut writer,
+        ));
+
+        assert_eq!(result.data_stack(), [Value::integer(7)]);
+    }
+
+    #[test]
+    fn standard_library_runtime_definition_keeps_its_source_mapping() {
+        let (sources, standard_library_id, source_id) =
+            sources_with_standard_library("DEF FAIL\nEVAL 1 / 0\nEND", "FAIL");
+        let mut writer = RecordingWriter::default();
+
+        let failure = failure(execute_registered_sources(
+            &sources,
+            standard_library_id,
+            source_id,
+            &mut writer,
+        ));
+
+        assert_eq!(failure.class(), UserFacingFailureClass::UserProgram);
+        assert_eq!(
+            failure
+                .diagnostic()
+                .primary()
+                .map(|primary| primary.display_name()),
+            Some("<tbx-next-stdlib>")
+        );
+    }
+
+    #[test]
+    fn standard_library_block_source_word_and_marker_are_available_to_user_source() {
+        let standard_library =
+            "SYNTAX WRAP\nBLOCK\nSTART\nEXPECT_END\nLAST ENDWRAP\nEXPECT_END\nENDS";
+        let (sources, standard_library_id, source_id) =
+            sources_with_standard_library(standard_library, "WRAP\nENDWRAP\nEVAL 9");
+        let mut writer = RecordingWriter::default();
+
+        let result = success(execute_registered_sources(
+            &sources,
+            standard_library_id,
+            source_id,
+            &mut writer,
+        ));
+
+        assert_eq!(result.data_stack(), [Value::integer(9)]);
+    }
+
+    #[test]
+    fn standard_library_top_level_unit_is_not_executed() {
+        let (sources, standard_library_id, source_id) =
+            sources_with_standard_library("EVAL 99\nPRINT\nCR", "EVAL 1\nPRINT\nCR");
+        let mut writer = RecordingWriter::default();
+
+        success(execute_registered_sources(
+            &sources,
+            standard_library_id,
+            source_id,
+            &mut writer,
+        ));
+
+        assert_eq!(writer.text(), "1\n");
+    }
+
+    #[test]
+    fn standard_library_failure_short_circuits_user_source_and_is_environment_failure() {
+        let (sources, standard_library_id, source_id) =
+            sources_with_standard_library("UNKNOWN", "EVAL 7\nPRINT");
+        let mut writer = RecordingWriter::default();
+
+        let failure = failure(execute_registered_sources(
+            &sources,
+            standard_library_id,
+            source_id,
+            &mut writer,
+        ));
+
+        assert_eq!(failure.class(), UserFacingFailureClass::Environment);
+        assert!(failure
+            .diagnostic()
+            .primary()
+            .is_some_and(|primary| primary.display_name() == "<tbx-next-stdlib>"));
+        assert_eq!(writer.text(), "");
+    }
+
+    #[test]
+    fn embedded_standard_library_test_entry_uses_the_production_source() {
+        let mut writer = RecordingWriter::default();
+
+        let result = success(execute_with_embedded_standard_library(
+            "EVAL 3 + 4",
+            "program.tbx",
+            &mut writer,
+        ));
+
+        assert_eq!(result.data_stack(), [Value::integer(7)]);
     }
 }
