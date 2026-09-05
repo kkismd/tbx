@@ -1,0 +1,9 @@
+REM A word can consume and transform the value on the data stack.
+DEF DOUBLE
+  DUP
+  ADD
+END
+
+EVAL DOUBLE(7)
+PRINT
+CR
