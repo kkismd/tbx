@@ -1049,10 +1049,10 @@ where
     };
     let (dispatch, syntax_markers, runtime_definition_source_words) = {
         let source_words = match source_word_access {
-            SourceWordAccess::Read(lookup) => *lookup,
+            SourceWordAccess::Read(lookup) => lookup.clone(),
             SourceWordAccess::Write(registry) => registry.lookup(),
         };
-        let dispatch = match source_words.lookup_dispatch(id)? {
+        let dispatch = match source_words.clone().lookup_dispatch(id)? {
             SourceWordDispatch::OneShot(OneShotSourceWordDispatch::Native(handler)) => {
                 StatementSourceWordDispatch::Native(handler)
             }
@@ -1074,11 +1074,11 @@ where
                 grammar: grammar.clone(),
             },
         };
-        let syntax_markers = source_words.syntax_markers(id)?.to_vec();
-        let runtime_definition_source_words = match source_word_access {
-            SourceWordAccess::Read(lookup) => Some(*lookup),
-            SourceWordAccess::Write(_) => None,
-        };
+        let syntax_markers = source_words.syntax_markers(id)?;
+        let runtime_definition_source_words = Some(match source_word_access {
+            SourceWordAccess::Read(lookup) => lookup.clone(),
+            SourceWordAccess::Write(registry) => registry.lookup(),
+        });
         (dispatch, syntax_markers, runtime_definition_source_words)
     };
     let operators = context.operators();
@@ -1116,9 +1116,7 @@ where
     };
     match dispatch {
         StatementSourceWordDispatch::Native(handler) => {
-            let source_word_publication = if state.capabilities.allows_publication()
-                && source_name.eq_ignore_ascii_case("SYNTAX")
-            {
+            let source_word_publication = if state.capabilities.allows_publication() {
                 match &mut context.source_words {
                     Some(SourceWordAccess::Write(registry)) => Some(&mut **registry),
                     Some(SourceWordAccess::Read(_)) | None => None,
@@ -2017,6 +2015,23 @@ impl<'a> SourceCompileContext<'a> {
         }
     }
 
+    pub(crate) fn with_source_word_and_runtime_publication_and_operators(
+        bindings: &'a mut Bindings,
+        source_words: &'a mut SourceWordRegistry,
+        operators: OperatorLookup,
+        globals: &'a mut GlobalVariables,
+        code: &'a mut PublishedCode,
+        words: &'a mut PublishedWords,
+    ) -> Self {
+        Self {
+            bindings: BindingAccess::Write(bindings),
+            operators: Some(operators),
+            source_words: Some(SourceWordAccess::Write(source_words)),
+            globals: Some(globals),
+            runtime_definitions: Some(RuntimeDefinitionPublicationAccess { code, words }),
+        }
+    }
+
     pub(crate) fn bindings(&self) -> &Bindings {
         match &self.bindings {
             BindingAccess::Read(bindings) => bindings,
@@ -2030,7 +2045,7 @@ impl<'a> SourceCompileContext<'a> {
 
     pub(crate) fn source_words(&self) -> Option<SourceWordLookup<'_>> {
         match &self.source_words {
-            Some(SourceWordAccess::Read(lookup)) => Some(*lookup),
+            Some(SourceWordAccess::Read(lookup)) => Some(lookup.clone()),
             Some(SourceWordAccess::Write(registry)) => Some(registry.lookup()),
             None => None,
         }
@@ -2155,7 +2170,7 @@ impl<'source> RuntimeDefinitionPublisher<'source>
                     DefinitionBodyStatements::new(body, Terminal::Eof { span: end_span }),
                     DefinitionBodyCompileContext::with_source_words_and_operators(
                         body_bindings,
-                        self.source_words,
+                        self.source_words.clone(),
                         self.operators
                             .expect("runtime definition publication requires operators"),
                     ),
@@ -2379,7 +2394,7 @@ impl<'a> SourceExecutionContext<'a> {
         SourceCompileContext {
             bindings: BindingAccess::Read(self.bindings),
             operators: self.operators,
-            source_words: self.source_words.map(SourceWordAccess::Read),
+            source_words: self.source_words.clone().map(SourceWordAccess::Read),
             globals: None,
             runtime_definitions: None,
         }

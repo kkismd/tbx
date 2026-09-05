@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::rc::Rc;
 
 use crate::binding::{Binding, BindingInsertError, Bindings};
 use crate::expression::{
@@ -2650,7 +2651,7 @@ fn resolve_runtime_word_name(
 
 #[derive(Debug, Default)]
 pub(crate) struct SourceWordRegistry {
-    entries: Vec<SourceWordEntry>,
+    entries: Rc<Vec<SourceWordEntry>>,
 }
 
 #[derive(Debug, Clone)]
@@ -2695,7 +2696,7 @@ impl SourceWordRegistry {
         syntax_markers: Vec<SourceWordSyntaxMarker>,
     ) -> SourceWordId {
         let id = SourceWordId::from_slot(self.entries.len());
-        self.entries.push(SourceWordEntry {
+        Rc::make_mut(&mut self.entries).push(SourceWordEntry {
             kind: SourceWordKind::OneShot(OneShotSourceWordImplementation::Native(handler)),
             syntax_markers,
         });
@@ -2707,7 +2708,7 @@ impl SourceWordRegistry {
         implementation: SourceWordImplementation,
     ) -> SourceWordId {
         let id = SourceWordId::from_slot(self.entries.len());
-        self.entries.push(SourceWordEntry {
+        Rc::make_mut(&mut self.entries).push(SourceWordEntry {
             kind: SourceWordKind::OneShot(OneShotSourceWordImplementation::UserDefined(
                 implementation,
             )),
@@ -2723,7 +2724,7 @@ impl SourceWordRegistry {
         syntax_markers: Vec<SourceWordSyntaxMarker>,
     ) -> SourceWordId {
         let id = SourceWordId::from_slot(self.entries.len());
-        self.entries.push(SourceWordEntry {
+        Rc::make_mut(&mut self.entries).push(SourceWordEntry {
             kind: SourceWordKind::Structured {
                 implementation: StructuredSourceWordImplementation::Native(start),
                 grammar,
@@ -2740,7 +2741,7 @@ impl SourceWordRegistry {
         implementation: UserDefinedStructuredSourceWordImplementation,
     ) -> SourceWordId {
         let id = SourceWordId::from_slot(self.entries.len());
-        self.entries.push(SourceWordEntry {
+        Rc::make_mut(&mut self.entries).push(SourceWordEntry {
             kind: SourceWordKind::Structured {
                 implementation: StructuredSourceWordImplementation::UserDefined(implementation),
                 grammar,
@@ -2750,8 +2751,11 @@ impl SourceWordRegistry {
         id
     }
 
-    pub(crate) fn lookup(&self) -> SourceWordLookup<'_> {
-        SourceWordLookup { registry: self }
+    pub(crate) fn lookup(&self) -> SourceWordLookup<'static> {
+        SourceWordLookup {
+            entries: Rc::clone(&self.entries),
+            marker: std::marker::PhantomData,
+        }
     }
 
     pub(crate) fn len(&self) -> usize {
@@ -2763,39 +2767,39 @@ impl SourceWordRegistry {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub(crate) struct SourceWordLookup<'a> {
-    registry: &'a SourceWordRegistry,
+    entries: Rc<Vec<SourceWordEntry>>,
+    marker: std::marker::PhantomData<&'a SourceWordRegistry>,
 }
 
-#[derive(Debug, Clone, Copy)]
-pub(crate) enum SourceWordDispatch<'a> {
-    OneShot(OneShotSourceWordDispatch<'a>),
+#[derive(Debug, Clone)]
+pub(crate) enum SourceWordDispatch {
+    OneShot(OneShotSourceWordDispatch),
     Structured {
-        implementation: StructuredSourceWordDispatch<'a>,
-        grammar: &'a StructuredGrammar,
+        implementation: StructuredSourceWordDispatch,
+        grammar: StructuredGrammar,
     },
 }
 
-#[derive(Debug, Clone, Copy)]
-pub(crate) enum OneShotSourceWordDispatch<'a> {
+#[derive(Debug, Clone)]
+pub(crate) enum OneShotSourceWordDispatch {
     Native(NativeSourceWordHandler),
-    UserDefined(&'a SourceWordImplementation),
+    UserDefined(SourceWordImplementation),
 }
 
-#[derive(Debug, Clone, Copy)]
-pub(crate) enum StructuredSourceWordDispatch<'a> {
+#[derive(Debug, Clone)]
+pub(crate) enum StructuredSourceWordDispatch {
     Native(NativeStructuredSourceWordStartHandler),
-    UserDefined(&'a UserDefinedStructuredSourceWordImplementation),
+    UserDefined(UserDefinedStructuredSourceWordImplementation),
 }
 
 impl<'a> SourceWordLookup<'a> {
     pub(crate) fn lookup_dispatch(
         self,
         id: SourceWordId,
-    ) -> Result<SourceWordDispatch<'a>, SourceWordLookupError> {
+    ) -> Result<SourceWordDispatch, SourceWordLookupError> {
         let entry = self
-            .registry
             .entries
             .get(id.as_slot())
             .ok_or(SourceWordLookupError::InvalidSourceWordId { id })?;
@@ -2806,7 +2810,7 @@ impl<'a> SourceWordLookup<'a> {
                         OneShotSourceWordDispatch::Native(*handler)
                     }
                     OneShotSourceWordImplementation::UserDefined(implementation) => {
-                        OneShotSourceWordDispatch::UserDefined(implementation)
+                        OneShotSourceWordDispatch::UserDefined(implementation.clone())
                     }
                 })
             }
@@ -2819,10 +2823,10 @@ impl<'a> SourceWordLookup<'a> {
                         StructuredSourceWordDispatch::Native(*start)
                     }
                     StructuredSourceWordImplementation::UserDefined(implementation) => {
-                        StructuredSourceWordDispatch::UserDefined(implementation)
+                        StructuredSourceWordDispatch::UserDefined(implementation.clone())
                     }
                 },
-                grammar,
+                grammar: grammar.clone(),
             },
         })
     }
@@ -2845,11 +2849,10 @@ impl<'a> SourceWordLookup<'a> {
     pub(crate) fn syntax_markers(
         self,
         id: SourceWordId,
-    ) -> Result<&'a [SourceWordSyntaxMarker], SourceWordLookupError> {
-        self.registry
-            .entries
+    ) -> Result<Vec<SourceWordSyntaxMarker>, SourceWordLookupError> {
+        self.entries
             .get(id.as_slot())
-            .map(|entry| entry.syntax_markers.as_slice())
+            .map(|entry| entry.syntax_markers.clone())
             .ok_or(SourceWordLookupError::InvalidSourceWordId { id })
     }
 }
