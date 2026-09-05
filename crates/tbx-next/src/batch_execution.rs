@@ -121,9 +121,9 @@ where
     let compile_result = compile_source(
         sources.view(),
         source_id,
-        SourceCompileContext::with_runtime_definition_publication_and_operators(
+        SourceCompileContext::with_user_source_word_and_runtime_definition_publication_and_operators(
             &mut environment.bindings,
-            environment.source_words.lookup(),
+            &mut environment.source_words,
             environment.operators.lookup(),
             &mut environment.globals,
             &mut environment.published_code,
@@ -279,6 +279,57 @@ mod tests {
 
         assert_eq!(result.data_stack(), [Value::integer(4)]);
         assert_eq!(writer.text(), "4\n");
+    }
+
+    #[test]
+    fn batch_source_can_publish_statement_syntax_for_later_use() {
+        let text = "SYNTAX SLET\n\
+STATEMENT\n\
+READ_NAME AS name\n\
+RESOLVE_VAR name AS target\n\
+EXPECT \"=\"\n\
+READ_EXPR AS expr\n\
+EMIT_EXPR expr\n\
+EMIT_STORE target\n\
+ENDS\n\
+SLET A = 7\n\
+EVAL A\n\
+PRINT";
+        let (sources, source_id) = source(text, "program.tbx");
+        let mut writer = RecordingWriter::default();
+
+        let result = success(execute_registered_source(&sources, source_id, &mut writer));
+
+        assert_eq!(result.data_stack(), []);
+        assert_eq!(writer.text(), "7");
+    }
+
+    #[test]
+    fn batch_source_can_publish_block_syntax_and_markers_for_later_use() {
+        let text = "SYNTAX UWHILE\n\
+BLOCK\n\
+START\n\
+POSITION AS loop_start\n\
+READ_EXPR AS condition\n\
+EMIT_EXPR condition\n\
+EMIT_BRANCH_IF_FALSE_COMPLETE\n\
+LAST ENDUWHILE\n\
+EXPECT_END\n\
+EMIT_BRANCH loop_start\n\
+ENDS\n\
+LET A = 0\n\
+UWHILE A < 3\n\
+LET A = A + 1\n\
+ENDUWHILE\n\
+EVAL A\n\
+PRINT";
+        let (sources, source_id) = source(text, "program.tbx");
+        let mut writer = RecordingWriter::default();
+
+        let result = success(execute_registered_source(&sources, source_id, &mut writer));
+
+        assert_eq!(result.data_stack(), []);
+        assert_eq!(writer.text(), "3");
     }
 
     #[test]

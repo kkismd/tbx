@@ -1044,13 +1044,16 @@ where
     let ResolvedBinding::SourceWord(id) = binding else {
         return Ok(false);
     };
-    let Some(source_word_access) = &context.source_words else {
+    let Some(mut source_word_access) = context.source_words.take() else {
         return Err(SourceProcessorError::SourceWordContextUnavailable { id });
     };
-    let (dispatch, syntax_markers, runtime_definition_source_words) = {
-        let source_words = match source_word_access {
+    let syntax_definition = source_name.eq_ignore_ascii_case("SYNTAX");
+    let (dispatch, syntax_markers) = {
+        let source_words = match &source_word_access {
             SourceWordAccess::Read(lookup) => *lookup,
-            SourceWordAccess::Write(registry) => registry.lookup(),
+            SourceWordAccess::Write(registry) => unsafe {
+                SourceWordLookup::from_registry_ptr(*registry as *const SourceWordRegistry)
+            },
         };
         let dispatch = match source_words.lookup_dispatch(id)? {
             SourceWordDispatch::OneShot(OneShotSourceWordDispatch::Native(handler)) => {
@@ -1075,11 +1078,17 @@ where
             },
         };
         let syntax_markers = source_words.syntax_markers(id)?.to_vec();
-        let runtime_definition_source_words = match source_word_access {
-            SourceWordAccess::Read(lookup) => Some(*lookup),
-            SourceWordAccess::Write(_) => None,
-        };
-        (dispatch, syntax_markers, runtime_definition_source_words)
+        (dispatch, syntax_markers)
+    };
+    let runtime_definition_source_words = if syntax_definition {
+        None
+    } else {
+        Some(match &source_word_access {
+            SourceWordAccess::Read(lookup) => *lookup,
+            SourceWordAccess::Write(registry) => unsafe {
+                SourceWordLookup::from_registry_ptr(*registry as *const SourceWordRegistry)
+            },
+        })
     };
     let operators = context.operators();
     let globals = context
@@ -1116,16 +1125,15 @@ where
     };
     match dispatch {
         StatementSourceWordDispatch::Native(handler) => {
-            let source_word_publication = if state.capabilities.allows_publication()
-                && source_name.eq_ignore_ascii_case("SYNTAX")
-            {
-                match &mut context.source_words {
-                    Some(SourceWordAccess::Write(registry)) => Some(&mut **registry),
-                    Some(SourceWordAccess::Read(_)) | None => None,
-                }
-            } else {
-                None
-            };
+            let source_word_publication =
+                if state.capabilities.allows_publication() && syntax_definition {
+                    match &mut source_word_access {
+                        SourceWordAccess::Write(registry) => Some(&mut **registry),
+                        SourceWordAccess::Read(_) => None,
+                    }
+                } else {
+                    None
+                };
             let mut source_word_context =
                 NativeSourceWordContext::new(NativeSourceWordContextParts {
                     view: traversal.view,
@@ -1227,6 +1235,7 @@ where
             traversal.structured_frames.push(frame);
         }
     }
+    context.source_words = Some(source_word_access);
     Ok(true)
 }
 
@@ -2012,6 +2021,23 @@ impl<'a> SourceCompileContext<'a> {
             bindings: BindingAccess::Write(bindings),
             operators: Some(operators),
             source_words: Some(SourceWordAccess::Read(source_words)),
+            globals: Some(globals),
+            runtime_definitions: Some(RuntimeDefinitionPublicationAccess { code, words }),
+        }
+    }
+
+    pub(crate) fn with_user_source_word_and_runtime_definition_publication_and_operators(
+        bindings: &'a mut Bindings,
+        source_words: &'a mut SourceWordRegistry,
+        operators: OperatorLookup,
+        globals: &'a mut GlobalVariables,
+        code: &'a mut PublishedCode,
+        words: &'a mut PublishedWords,
+    ) -> Self {
+        Self {
+            bindings: BindingAccess::Write(bindings),
+            operators: Some(operators),
+            source_words: Some(SourceWordAccess::Write(source_words)),
             globals: Some(globals),
             runtime_definitions: Some(RuntimeDefinitionPublicationAccess { code, words }),
         }

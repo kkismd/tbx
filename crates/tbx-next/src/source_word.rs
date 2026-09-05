@@ -2790,6 +2790,25 @@ pub(crate) enum StructuredSourceWordDispatch<'a> {
 }
 
 impl<'a> SourceWordLookup<'a> {
+    /// Creates a read-only lookup while the registry remains owned by a
+    /// publication context.
+    ///
+    /// The caller must keep the registry alive and must not mutate it while
+    /// this lookup is used. Batch compilation satisfies that contract because
+    /// source-word publication is only performed while dispatching `SYNTAX`,
+    /// which does not create a runtime-definition publisher.
+    pub(crate) unsafe fn from_registry_ptr<'registry>(
+        registry: *const SourceWordRegistry,
+    ) -> SourceWordLookup<'registry> {
+        // SAFETY: The caller guarantees that `registry` points to a live
+        // registry and remains unmodified for the lookup's use.
+        SourceWordLookup {
+            registry: std::mem::transmute::<&SourceWordRegistry, &'registry SourceWordRegistry>(
+                &*registry,
+            ),
+        }
+    }
+
     pub(crate) fn lookup_dispatch(
         self,
         id: SourceWordId,
