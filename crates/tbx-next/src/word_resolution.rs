@@ -294,7 +294,7 @@ mod tests {
 
     #[test]
     fn published_source_word_resolves_as_source_binding_not_runtime_word() {
-        let mut source_words = SourceWordRegistry::new();
+        let source_words = SourceWordRegistry::new();
         let id = source_words.register(source_handler);
         let mut bindings = Bindings::new();
         bindings
@@ -314,7 +314,7 @@ mod tests {
     #[test]
     fn binding_resolution_preserves_runtime_source_and_variable_kinds() {
         let mut words = PublishedWords::new();
-        let mut source_words = SourceWordRegistry::new();
+        let source_words = SourceWordRegistry::new();
         let mut globals = GlobalVariables::new();
         let mut bindings = Bindings::new();
         let runtime = publish_initial(&mut words, &mut bindings, "RUNME", completed_primitive(8));

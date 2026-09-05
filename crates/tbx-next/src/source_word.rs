@@ -1,5 +1,5 @@
+use std::cell::RefCell;
 use std::collections::HashMap;
-use std::rc::Rc;
 
 use crate::binding::{Binding, BindingInsertError, Bindings};
 use crate::expression::{
@@ -1089,7 +1089,7 @@ pub(crate) struct NativeSourceWordContext<'source, 'state> {
     local_line_number_prefix: Option<SourceSpan>,
     globals: Option<&'state mut GlobalVariables>,
     runtime_definitions: Option<&'state mut dyn RuntimeDefinitionPublisher<'source>>,
-    source_word_publication: Option<&'state mut SourceWordRegistry>,
+    source_word_publication: Option<&'state SourceWordRegistry>,
 }
 
 pub(crate) struct NativeSourceWordContextParts<'source, 'state> {
@@ -1103,7 +1103,7 @@ pub(crate) struct NativeSourceWordContextParts<'source, 'state> {
     pub(crate) local_line_number_prefix: Option<SourceSpan>,
     pub(crate) globals: Option<&'state mut GlobalVariables>,
     pub(crate) runtime_definitions: Option<&'state mut dyn RuntimeDefinitionPublisher<'source>>,
-    pub(crate) source_word_publication: Option<&'state mut SourceWordRegistry>,
+    pub(crate) source_word_publication: Option<&'state SourceWordRegistry>,
 }
 
 impl<'source, 'state> NativeSourceWordContext<'source, 'state> {
@@ -2651,7 +2651,7 @@ fn resolve_runtime_word_name(
 
 #[derive(Debug, Default)]
 pub(crate) struct SourceWordRegistry {
-    entries: Rc<Vec<SourceWordEntry>>,
+    entries: RefCell<Vec<SourceWordEntry>>,
 }
 
 #[derive(Debug, Clone)]
@@ -2686,17 +2686,17 @@ impl SourceWordRegistry {
         Self::default()
     }
 
-    pub(crate) fn register(&mut self, handler: NativeSourceWordHandler) -> SourceWordId {
+    pub(crate) fn register(&self, handler: NativeSourceWordHandler) -> SourceWordId {
         self.register_with_markers(handler, Vec::new())
     }
 
     pub(crate) fn register_with_markers(
-        &mut self,
+        &self,
         handler: NativeSourceWordHandler,
         syntax_markers: Vec<SourceWordSyntaxMarker>,
     ) -> SourceWordId {
-        let id = SourceWordId::from_slot(self.entries.len());
-        Rc::make_mut(&mut self.entries).push(SourceWordEntry {
+        let id = SourceWordId::from_slot(self.entries.borrow().len());
+        self.entries.borrow_mut().push(SourceWordEntry {
             kind: SourceWordKind::OneShot(OneShotSourceWordImplementation::Native(handler)),
             syntax_markers,
         });
@@ -2704,11 +2704,11 @@ impl SourceWordRegistry {
     }
 
     pub(crate) fn register_user_defined_statement(
-        &mut self,
+        &self,
         implementation: SourceWordImplementation,
     ) -> SourceWordId {
-        let id = SourceWordId::from_slot(self.entries.len());
-        Rc::make_mut(&mut self.entries).push(SourceWordEntry {
+        let id = SourceWordId::from_slot(self.entries.borrow().len());
+        self.entries.borrow_mut().push(SourceWordEntry {
             kind: SourceWordKind::OneShot(OneShotSourceWordImplementation::UserDefined(
                 implementation,
             )),
@@ -2718,13 +2718,13 @@ impl SourceWordRegistry {
     }
 
     pub(crate) fn register_structured(
-        &mut self,
+        &self,
         start: NativeStructuredSourceWordStartHandler,
         grammar: StructuredGrammar,
         syntax_markers: Vec<SourceWordSyntaxMarker>,
     ) -> SourceWordId {
-        let id = SourceWordId::from_slot(self.entries.len());
-        Rc::make_mut(&mut self.entries).push(SourceWordEntry {
+        let id = SourceWordId::from_slot(self.entries.borrow().len());
+        self.entries.borrow_mut().push(SourceWordEntry {
             kind: SourceWordKind::Structured {
                 implementation: StructuredSourceWordImplementation::Native(start),
                 grammar,
@@ -2735,13 +2735,13 @@ impl SourceWordRegistry {
     }
 
     pub(crate) fn register_user_defined_structured(
-        &mut self,
+        &self,
         grammar: StructuredGrammar,
         syntax_markers: Vec<SourceWordSyntaxMarker>,
         implementation: UserDefinedStructuredSourceWordImplementation,
     ) -> SourceWordId {
-        let id = SourceWordId::from_slot(self.entries.len());
-        Rc::make_mut(&mut self.entries).push(SourceWordEntry {
+        let id = SourceWordId::from_slot(self.entries.borrow().len());
+        self.entries.borrow_mut().push(SourceWordEntry {
             kind: SourceWordKind::Structured {
                 implementation: StructuredSourceWordImplementation::UserDefined(implementation),
                 grammar,
@@ -2751,26 +2751,22 @@ impl SourceWordRegistry {
         id
     }
 
-    pub(crate) fn lookup(&self) -> SourceWordLookup<'static> {
-        SourceWordLookup {
-            entries: Rc::clone(&self.entries),
-            marker: std::marker::PhantomData,
-        }
+    pub(crate) fn lookup(&self) -> SourceWordLookup<'_> {
+        SourceWordLookup { registry: self }
     }
 
     pub(crate) fn len(&self) -> usize {
-        self.entries.len()
+        self.entries.borrow().len()
     }
 
     pub(crate) fn is_empty(&self) -> bool {
-        self.entries.is_empty()
+        self.entries.borrow().is_empty()
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy)]
 pub(crate) struct SourceWordLookup<'a> {
-    entries: Rc<Vec<SourceWordEntry>>,
-    marker: std::marker::PhantomData<&'a SourceWordRegistry>,
+    registry: &'a SourceWordRegistry,
 }
 
 #[derive(Debug, Clone)]
@@ -2799,8 +2795,8 @@ impl<'a> SourceWordLookup<'a> {
         self,
         id: SourceWordId,
     ) -> Result<SourceWordDispatch, SourceWordLookupError> {
-        let entry = self
-            .entries
+        let entries = self.registry.entries.borrow();
+        let entry = entries
             .get(id.as_slot())
             .ok_or(SourceWordLookupError::InvalidSourceWordId { id })?;
         Ok(match &entry.kind {
@@ -2850,7 +2846,9 @@ impl<'a> SourceWordLookup<'a> {
         self,
         id: SourceWordId,
     ) -> Result<Vec<SourceWordSyntaxMarker>, SourceWordLookupError> {
-        self.entries
+        self.registry
+            .entries
+            .borrow()
             .get(id.as_slot())
             .map(|entry| entry.syntax_markers.clone())
             .ok_or(SourceWordLookupError::InvalidSourceWordId { id })
@@ -3240,7 +3238,7 @@ mod tests {
 
     #[test]
     fn registry_allocates_monotonic_source_word_ids_without_word_ids() {
-        let mut registry = SourceWordRegistry::new();
+        let registry = SourceWordRegistry::new();
 
         let first = registry.register(push_one);
         let second = registry.register(push_one);
@@ -3254,7 +3252,7 @@ mod tests {
 
     #[test]
     fn read_only_lookup_resolves_registered_handler() {
-        let mut registry = SourceWordRegistry::new();
+        let registry = SourceWordRegistry::new();
         let id = registry.register(push_one);
 
         assert!(registry.lookup().lookup_handler(id).is_ok());

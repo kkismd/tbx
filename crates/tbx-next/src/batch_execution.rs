@@ -304,6 +304,17 @@ mod tests {
     }
 
     #[test]
+    fn batch_top_level_can_publish_multiple_source_words_in_sequence() {
+        let text = "SYNTAX SLET\nSTATEMENT\nREAD_NAME AS name\nRESOLVE_VAR name AS target\nEXPECT \"=\"\nREAD_EXPR AS expr\nEMIT_EXPR expr\nEMIT_STORE target\nENDS\nSYNTAX SADD\nSTATEMENT\nREAD_NAME AS name\nRESOLVE_VAR name AS target\nEXPECT \"=\"\nREAD_EXPR AS expr\nEMIT_EXPR expr\nEMIT_STORE target\nENDS\nLET A = 0\nSLET A = 3\nSADD A = 4\nEVAL A";
+        let (sources, source_id) = source(text, "program.tbx");
+        let mut writer = RecordingWriter::default();
+
+        let result = success(execute_registered_source(&sources, source_id, &mut writer));
+
+        assert_eq!(result.data_stack(), [Value::integer(4)]);
+    }
+
+    #[test]
     fn located_compile_failure_renders_registered_display_name_and_position() {
         for display_name in ["relative/program.tbx", "<stdin>"] {
             let (sources, source_id) = source("UNKNOWN", display_name);

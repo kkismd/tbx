@@ -404,7 +404,7 @@ mod tests {
             Ok(())
         }
 
-        let mut registry = SourceWordRegistry::new();
+        let registry = SourceWordRegistry::new();
         Binding::SourceWord(registry.register(handler))
     }
 
