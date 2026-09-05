@@ -174,11 +174,20 @@ mod cli_source;
 #[allow(dead_code)]
 mod batch_execution;
 
+// #1611 connects the crate-internal batch execution boundary to process
+// arguments, stdin, stdout, stderr, and process exit status.
+#[allow(dead_code)]
+mod process;
+
 pub const STATUS_MESSAGE: &str =
     "TBX Next is under development; language features are not implemented yet.";
 
 pub fn status_message() -> &'static str {
     STATUS_MESSAGE
+}
+
+pub fn run_process() -> std::process::ExitCode {
+    process::run_from_env()
 }
 
 #[cfg(test)]
