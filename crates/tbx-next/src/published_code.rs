@@ -568,7 +568,7 @@ mod tests {
 
     #[test]
     fn reserved_name_is_rejected_before_building_code() {
-        for input in ["END", "end", "End"] {
+        for input in ["REM", "rem", "Rem"] {
             let mut code = PublishedCode::new();
             let mut words = PublishedWords::new();
             let mut bindings = Bindings::new();

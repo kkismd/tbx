@@ -182,10 +182,10 @@ impl Bindings {
     }
 }
 
-// END is reserved by ADR #1500 3.1.1. REM is reserved by ADR #1536 3.7 while
-// still staying outside the lexer keyword set.
+// REM is reserved by ADR #1536 3.7 while still staying outside the lexer
+// keyword set. END is reserved by DEF's syntax-marker declaration instead.
 fn is_semantic_reserved_binding_name(name: &NormalizedName) -> bool {
-    matches!(name.as_str(), "END" | "REM")
+    matches!(name.as_str(), "REM")
 }
 
 #[cfg(test)]
@@ -407,7 +407,7 @@ mod tests {
 
     #[test]
     fn semantic_reserved_name_case_variants_are_rejected() {
-        for input in ["END", "end", "End", "REM", "rem", "Rem"] {
+        for input in ["REM", "rem", "Rem"] {
             let mut words = PublishedWords::new();
             let binding = word_binding(&mut words, 10);
             let mut bindings = Bindings::new();
@@ -421,6 +421,19 @@ mod tests {
                 Err(BindingInsertError::ReservedName)
             );
             assert!(bindings.is_empty());
+        }
+    }
+
+    #[test]
+    fn end_is_not_a_fixed_semantic_reserved_name_before_marker_publication() {
+        for input in ["END", "end", "End"] {
+            let mut words = PublishedWords::new();
+            let binding = word_binding(&mut words, 10);
+            let mut bindings = Bindings::new();
+
+            assert_eq!(bindings.validate_new_name(&name(input)), Ok(()));
+            assert_eq!(bindings.insert_new(name(input), binding), Ok(()));
+            assert_eq!(bindings.get(&name("END")), Some(&binding));
         }
     }
 
@@ -439,7 +452,7 @@ mod tests {
             Err(BindingInsertError::NameConflict)
         );
         assert_eq!(
-            bindings.validate_new_name(&name("END")),
+            bindings.validate_new_name(&name("REM")),
             Err(BindingInsertError::ReservedName)
         );
         assert_eq!(bindings.validate_new_name(&name("AVAILABLE")), Ok(()));

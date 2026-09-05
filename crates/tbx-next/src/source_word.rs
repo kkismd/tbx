@@ -1505,27 +1505,30 @@ pub(crate) fn def_source_word(
         });
     }
 
-    let view = context.view();
     let mut body = Vec::new();
     let end_span = loop {
-        let read = {
+        let item = {
             let Some(reader) = context.block_reader_mut() else {
                 return Err(SourceWordError::DefPublicationContextUnavailable {
                     span: context.source_word_token().span(),
                 });
             };
-            reader.next_statement()?
+            reader.next_item()?
         };
 
-        match read {
-            SourceBlockRead::Statement(statement) if is_standalone_end(view, statement)? => {
-                break statement.span();
+        match item {
+            SourceBlockItem::Marker(marker)
+                if marker.role() == SourceWordSyntaxMarkerRole::BlockTerminator
+                    && marker.remaining_tokens().is_empty() =>
+            {
+                break marker.span();
             }
-            SourceBlockRead::Statement(statement) => body.push(statement),
-            SourceBlockRead::Terminal(SourceBlockTerminal::Eof { span }) => {
+            SourceBlockItem::Marker(marker) => body.push(marker.statement()),
+            SourceBlockItem::Statement(statement) => body.push(statement),
+            SourceBlockItem::Terminal(SourceBlockTerminal::Eof { span }) => {
                 return Err(SourceWordError::DefMissingEnd { span });
             }
-            SourceBlockRead::Terminal(SourceBlockTerminal::LexError { error }) => {
+            SourceBlockItem::Terminal(SourceBlockTerminal::LexError { error }) => {
                 return Err(SourceWordError::DefLex { source: error });
             }
         }
@@ -2526,22 +2529,6 @@ pub(crate) fn unsupported_source_word(
     Err(SourceWordError::UnsupportedSourceWord { span: first.span() })
 }
 
-fn is_standalone_end(
-    view: SourceView<'_>,
-    statement: SourceBlockStatement<'_>,
-) -> Result<bool, SourceWordError> {
-    let Some(token) = statement.standalone_name() else {
-        return Ok(false);
-    };
-    let source_name = view
-        .slice(token.span())
-        .map_err(|source| SourceWordError::Source { source })?;
-    let Ok(name) = NormalizedName::new(source_name) else {
-        return Ok(false);
-    };
-    Ok(name.as_str() == "END")
-}
-
 fn var_reader_error(error: SourceStatementReaderError) -> SourceWordError {
     match error {
         SourceStatementReaderError::Missing { span, .. } => SourceWordError::VarSyntax {
@@ -3326,7 +3313,7 @@ mod tests {
 
     #[test]
     fn var_reserved_name_is_rejected_without_allocating_global_slot() {
-        for input in ["VAR END", "VAR end", "VAR End"] {
+        for input in ["VAR REM", "VAR rem", "VAR Rem"] {
             let (sources, source_id, tokens) = statement_tokens(input);
             let mut code = SourceMappedCode::new();
             let mut builder = BlockCodeBuilder::new(&mut code);

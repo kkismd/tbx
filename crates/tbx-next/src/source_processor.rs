@@ -8707,7 +8707,7 @@ mod tests {
 
     #[test]
     fn marker_reservation_blocks_publication_through_production_source_processing() {
-        for reserved in ["ENDIF", "STATEMENT", "BLOCK", "ENDS"] {
+        for reserved in ["END", "ENDIF", "STATEMENT", "BLOCK", "ENDS"] {
             let mut source_words = SourceWordRegistry::new();
             let mut bindings = Bindings::new();
             let mut globals = GlobalVariables::new();
@@ -9312,7 +9312,7 @@ mod tests {
     }
 
     #[test]
-    fn def_rejects_name_conflicts_and_reserved_end_before_building_body() {
+    fn def_rejects_name_conflicts_and_reserved_names_before_building_body() {
         let (mut words, _primitives, operators) = operator_fixture();
         let mut source_words = SourceWordRegistry::new();
         let mut bindings = Bindings::new();
@@ -9343,6 +9343,24 @@ mod tests {
 
         let (sources, id, error) = compile_with_def_error(
             "DEF END\nMISSING\nEND",
+            &mut bindings,
+            &mut globals,
+            &source_words,
+            operators.lookup(),
+            &mut code,
+            &mut words,
+        );
+        assert_eq!(
+            error,
+            SourceProcessorError::SourceWord(SourceWordError::DefNameConflict {
+                span: span(sources.view(), id, 4, 7)
+            })
+        );
+        assert_eq!(code.len(), 0);
+        assert_eq!(words.len(), initial_words_len);
+
+        let (sources, id, error) = compile_with_def_error(
+            "DEF REM\nMISSING\nEND",
             &mut bindings,
             &mut globals,
             &source_words,
