@@ -121,9 +121,9 @@ where
     let compile_result = compile_source(
         sources.view(),
         source_id,
-        SourceCompileContext::with_runtime_definition_publication_and_operators(
+        SourceCompileContext::with_source_word_and_runtime_publication_and_operators(
             &mut environment.bindings,
-            environment.source_words.lookup(),
+            &mut environment.source_words,
             environment.operators.lookup(),
             &mut environment.globals,
             &mut environment.published_code,
@@ -279,6 +279,39 @@ mod tests {
 
         assert_eq!(result.data_stack(), [Value::integer(4)]);
         assert_eq!(writer.text(), "4\n");
+    }
+
+    #[test]
+    fn batch_top_level_can_publish_and_use_a_source_word_before_a_definition() {
+        let text = "SYNTAX SLET\nSTATEMENT\nREAD_NAME AS name\nRESOLVE_VAR name AS target\nEXPECT \"=\"\nREAD_EXPR AS expr\nEMIT_EXPR expr\nEMIT_STORE target\nENDS\nLET A = 0\nSLET A = 7\nDEF DOUBLE\nDUP\nEND\nEVAL DOUBLE(A)";
+        let (sources, source_id) = source(text, "program.tbx");
+        let mut writer = RecordingWriter::default();
+
+        let result = success(execute_registered_source(&sources, source_id, &mut writer));
+
+        assert_eq!(result.data_stack(), [Value::integer(7), Value::integer(7)]);
+    }
+
+    #[test]
+    fn batch_top_level_can_publish_and_use_a_block_source_word() {
+        let text = "SYNTAX WRAP\nBLOCK\nSTART\nEXPECT_END\nLAST ENDWRAP\nEXPECT_END\nENDS\nWRAP\nENDWRAP\nEVAL 9";
+        let (sources, source_id) = source(text, "program.tbx");
+        let mut writer = RecordingWriter::default();
+
+        let result = success(execute_registered_source(&sources, source_id, &mut writer));
+
+        assert_eq!(result.data_stack(), [Value::integer(9)]);
+    }
+
+    #[test]
+    fn batch_top_level_can_publish_multiple_source_words_in_sequence() {
+        let text = "SYNTAX SLET\nSTATEMENT\nREAD_NAME AS name\nRESOLVE_VAR name AS target\nEXPECT \"=\"\nREAD_EXPR AS expr\nEMIT_EXPR expr\nEMIT_STORE target\nENDS\nSYNTAX SADD\nSTATEMENT\nREAD_NAME AS name\nRESOLVE_VAR name AS target\nEXPECT \"=\"\nREAD_EXPR AS expr\nEMIT_EXPR expr\nEMIT_STORE target\nENDS\nLET A = 0\nSLET A = 3\nSADD A = 4\nEVAL A";
+        let (sources, source_id) = source(text, "program.tbx");
+        let mut writer = RecordingWriter::default();
+
+        let result = success(execute_registered_source(&sources, source_id, &mut writer));
+
+        assert_eq!(result.data_stack(), [Value::integer(4)]);
     }
 
     #[test]

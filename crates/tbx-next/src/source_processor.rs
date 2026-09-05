@@ -96,7 +96,7 @@ enum BindingAccess<'a> {
 
 enum SourceWordAccess<'a> {
     Read(SourceWordLookup<'a>),
-    Write(&'a mut SourceWordRegistry),
+    Write(&'a SourceWordRegistry),
 }
 
 struct RuntimeDefinitionPublicationAccess<'a> {
@@ -1074,11 +1074,11 @@ where
                 grammar: grammar.clone(),
             },
         };
-        let syntax_markers = source_words.syntax_markers(id)?.to_vec();
-        let runtime_definition_source_words = match source_word_access {
-            SourceWordAccess::Read(lookup) => Some(*lookup),
-            SourceWordAccess::Write(_) => None,
-        };
+        let syntax_markers = source_words.syntax_markers(id)?;
+        let runtime_definition_source_words = Some(match source_word_access {
+            SourceWordAccess::Read(lookup) => *lookup,
+            SourceWordAccess::Write(registry) => registry.lookup(),
+        });
         (dispatch, syntax_markers, runtime_definition_source_words)
     };
     let operators = context.operators();
@@ -1116,11 +1116,9 @@ where
     };
     match dispatch {
         StatementSourceWordDispatch::Native(handler) => {
-            let source_word_publication = if state.capabilities.allows_publication()
-                && source_name.eq_ignore_ascii_case("SYNTAX")
-            {
+            let source_word_publication = if state.capabilities.allows_publication() {
                 match &mut context.source_words {
-                    Some(SourceWordAccess::Write(registry)) => Some(&mut **registry),
+                    Some(SourceWordAccess::Write(registry)) => Some(*registry),
                     Some(SourceWordAccess::Read(_)) | None => None,
                 }
             } else {
@@ -1987,7 +1985,7 @@ impl<'a> SourceCompileContext<'a> {
 
     pub(crate) fn with_user_source_word_publication_and_operators(
         bindings: &'a mut Bindings,
-        source_words: &'a mut SourceWordRegistry,
+        source_words: &'a SourceWordRegistry,
         operators: OperatorLookup,
         globals: &'a mut GlobalVariables,
     ) -> Self {
@@ -2012,6 +2010,23 @@ impl<'a> SourceCompileContext<'a> {
             bindings: BindingAccess::Write(bindings),
             operators: Some(operators),
             source_words: Some(SourceWordAccess::Read(source_words)),
+            globals: Some(globals),
+            runtime_definitions: Some(RuntimeDefinitionPublicationAccess { code, words }),
+        }
+    }
+
+    pub(crate) fn with_source_word_and_runtime_publication_and_operators(
+        bindings: &'a mut Bindings,
+        source_words: &'a mut SourceWordRegistry,
+        operators: OperatorLookup,
+        globals: &'a mut GlobalVariables,
+        code: &'a mut PublishedCode,
+        words: &'a mut PublishedWords,
+    ) -> Self {
+        Self {
+            bindings: BindingAccess::Write(bindings),
+            operators: Some(operators),
+            source_words: Some(SourceWordAccess::Write(source_words)),
             globals: Some(globals),
             runtime_definitions: Some(RuntimeDefinitionPublicationAccess { code, words }),
         }
@@ -5667,7 +5682,7 @@ mod tests {
 
     #[test]
     fn user_defined_source_words_publish_and_dispatch_later_in_same_processing_session() {
-        let (words, primitives, operators, mut source_words, mut bindings, mut globals, variables) =
+        let (words, primitives, operators, source_words, mut bindings, mut globals, variables) =
             global_source_fixture();
         let (sources, source_id) = source(
             "SYNTAX SLET\n\
@@ -5718,7 +5733,7 @@ mod tests {
             source_id,
             SourceCompileContext::with_user_source_word_publication_and_operators(
                 &mut bindings,
-                &mut source_words,
+                &source_words,
                 operators.lookup(),
                 &mut globals,
             ),
