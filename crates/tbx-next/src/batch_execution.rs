@@ -108,6 +108,28 @@ impl BatchEnvironment {
             published_code: PublishedCode::new(),
         })
     }
+
+    fn compile(
+        &mut self,
+        sources: &SourceTexts,
+        source_id: SourceId,
+    ) -> Result<
+        crate::source_processor::TemporaryExecutionUnit,
+        crate::source_processor::SourceProcessorError,
+    > {
+        compile_source(
+            sources.view(),
+            source_id,
+            SourceCompileContext::with_source_word_and_runtime_publication_and_operators(
+                &mut self.bindings,
+                &mut self.source_words,
+                self.operators.lookup(),
+                &mut self.globals,
+                &mut self.published_code,
+                &mut self.words,
+            ),
+        )
+    }
 }
 
 pub(crate) fn execute_registered_source<W>(
@@ -136,36 +158,14 @@ where
     };
 
     if stdlib_source_id != source_id {
-        let stdlib_result = compile_source(
-            sources.view(),
-            stdlib_source_id,
-            SourceCompileContext::with_source_word_and_runtime_publication_and_operators(
-                &mut environment.bindings,
-                &mut environment.source_words,
-                environment.operators.lookup(),
-                &mut environment.globals,
-                &mut environment.published_code,
-                &mut environment.words,
-            ),
-        );
+        let stdlib_result = environment.compile(sources, stdlib_source_id);
 
         if let Err(error) = stdlib_result {
             return standard_library_failure(sources, error);
         }
     }
 
-    let compile_result = compile_source(
-        sources.view(),
-        source_id,
-        SourceCompileContext::with_source_word_and_runtime_publication_and_operators(
-            &mut environment.bindings,
-            &mut environment.source_words,
-            environment.operators.lookup(),
-            &mut environment.globals,
-            &mut environment.published_code,
-            &mut environment.words,
-        ),
-    );
+    let compile_result = environment.compile(sources, source_id);
 
     let source_result = match compile_result {
         Ok(unit) => {
@@ -261,9 +261,14 @@ mod tests {
     use std::io::{self, Write};
 
     use super::*;
+    use crate::binding::Binding;
     use crate::source::SourceTexts;
     use crate::user_facing::UserFacingFailureClass;
     use crate::value::Value;
+
+    fn name(value: &str) -> crate::name::NormalizedName {
+        crate::name::NormalizedName::new(value).expect("test name should be valid")
+    }
 
     #[derive(Debug, Default)]
     struct RecordingWriter {
@@ -549,6 +554,31 @@ mod tests {
             .diagnostic()
             .primary()
             .is_some_and(|primary| primary.source_line() == "DEF ENDWRAP"));
+    }
+
+    #[test]
+    fn standard_library_marker_reservation_keeps_the_published_source_word_owner() {
+        let standard_library =
+            "SYNTAX WRAP\nBLOCK\nSTART\nEXPECT_END\nLAST ENDWRAP\nEXPECT_END\nENDS";
+        let mut sources = SourceTexts::new();
+        let standard_library_id = sources.register(standard_library, "<tbx-next-stdlib>");
+        let mut environment = BatchEnvironment::new().expect("batch environment should build");
+
+        environment
+            .compile(&sources, standard_library_id)
+            .expect("standard library should compile");
+
+        let owner = match environment.bindings.get(&name("WRAP")) {
+            Some(Binding::SourceWord(owner)) => *owner,
+            other => panic!("expected published source word, got {other:?}"),
+        };
+        assert_eq!(
+            environment
+                .bindings
+                .syntax_marker_reservation(&name("ENDWRAP"))
+                .map(|reservation| reservation.owner()),
+            Some(owner)
+        );
     }
 
     #[test]
