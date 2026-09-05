@@ -5,7 +5,7 @@ use std::io::{self, Read, Write};
 use std::path::Path;
 use std::process::ExitCode;
 
-use crate::batch_execution::{execute_registered_source, BatchExecutionResult};
+use crate::batch_execution::{execute_registered_sources, BatchExecutionResult};
 use crate::cli_source::{acquire_initial_source, CliSourceError};
 use crate::diagnostic::{DiagnosticRenderer, RenderedDiagnostic, UserDiagnostic};
 use crate::source::SourceTexts;
@@ -66,7 +66,12 @@ where
         }
     };
 
-    match execute_registered_source(source.sources(), source.source_id(), stdout) {
+    match execute_registered_sources(
+        source.sources(),
+        source.stdlib_source_id(),
+        source.source_id(),
+        stdout,
+    ) {
         BatchExecutionResult::Success(_) => ProcessStatus::Success,
         BatchExecutionResult::Failure(failure) => write_diagnostic(stderr, failure.diagnostic()),
     }
