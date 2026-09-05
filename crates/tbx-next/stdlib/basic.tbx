@@ -1,2 +1,22 @@
-REM The initial standard library is intentionally empty.
-REM Control syntax is added in the follow-up standard-library issue.
+SYNTAX WHILE
+BLOCK
+START
+POSITION AS loop_start
+READ_EXPR AS condition
+EMIT_EXPR condition
+EMIT_BRANCH_IF_FALSE_COMPLETE
+LAST WEND
+EXPECT_END
+EMIT_BRANCH loop_start
+ENDS
+
+SYNTAX DO
+BLOCK
+START
+POSITION AS loop_start
+LAST UNTIL
+READ_EXPR AS condition
+EXPECT_END
+EMIT_EXPR condition
+EMIT_BRANCH_IF_FALSE loop_start
+ENDS
