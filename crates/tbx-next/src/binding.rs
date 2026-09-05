@@ -182,11 +182,10 @@ impl Bindings {
     }
 }
 
-// ADR #1500 3.1.1 makes only normalized END a semantic reserved binding name.
-// Keep this as a publication policy: do not turn END into a lexer keyword, mix
-// it into NormalizedName validation, or revive a general reserved spelling set.
+// END is reserved by ADR #1500 3.1.1. REM is reserved by ADR #1536 3.7 while
+// still staying outside the lexer keyword set.
 fn is_semantic_reserved_binding_name(name: &NormalizedName) -> bool {
-    name.as_str() == "END"
+    matches!(name.as_str(), "END" | "REM")
 }
 
 #[cfg(test)]
@@ -407,8 +406,8 @@ mod tests {
     }
 
     #[test]
-    fn end_case_variants_are_rejected_as_reserved_names() {
-        for input in ["END", "end", "End"] {
+    fn semantic_reserved_name_case_variants_are_rejected() {
+        for input in ["END", "end", "End", "REM", "rem", "Rem"] {
             let mut words = PublishedWords::new();
             let binding = word_binding(&mut words, 10);
             let mut bindings = Bindings::new();
