@@ -84,6 +84,19 @@ fn stdin_success_uses_top_level_eval_through_real_binary() {
 }
 
 #[test]
+fn stdin_success_evaluates_expression_before_runtime_print_word() {
+    let output = run_with_stdin("PRINT 2 + 3 * 4\nCR\n");
+
+    assert!(
+        output.status.success(),
+        "expected success, stderr:\n{}",
+        stderr_text(&output)
+    );
+    assert_eq!(stdout_text(&output), "14\n");
+    assert_eq!(stderr_text(&output), "");
+}
+
+#[test]
 fn file_source_failure_reports_file_location_on_stderr_only() {
     let path = fixture_path("compile_failure.tbx");
 

@@ -4,8 +4,8 @@ use std::rc::Rc;
 use crate::binding::Bindings;
 use crate::block_code::{BlockCodeBuildError, BlockCodeBuilder};
 use crate::expression::{
-    parse_expression, ExpressionCallErrorKind, ExpressionError, ExpressionSyntaxErrorKind,
-    ExpressionVariableErrorKind,
+    parse_expression, ExpressionCallErrorKind, ExpressionError, ExpressionStaging,
+    ExpressionSyntaxErrorKind, ExpressionVariableErrorKind,
 };
 use crate::global_variable::{GlobalVariableView, GlobalVariables};
 use crate::instruction::{
@@ -1002,6 +1002,16 @@ where
         return Ok(());
     }
 
+    if compile_statement_leading_runtime_word(
+        traversal.view,
+        traversal.source_id,
+        tokens,
+        context,
+        state,
+    )? {
+        return Ok(());
+    }
+
     if contains_expression_syntax(tokens) {
         return Err(CompileError {
             span: first.span(),
@@ -1010,7 +1020,71 @@ where
         .into());
     }
 
-    compile_simple_tokens(traversal.view, tokens, context, state.code)
+    if first.kind() == TokenKind::Name {
+        compile_word_reference(traversal.view, first, context).map(|_| ())
+    } else {
+        Err(CompileError {
+            span: first.span(),
+            kind: CompileErrorKind::BareExpression,
+        }
+        .into())
+    }
+}
+
+fn compile_statement_leading_runtime_word(
+    view: SourceView<'_>,
+    source_id: SourceId,
+    tokens: &[Token],
+    context: &SourceCompileContext<'_>,
+    state: &mut StatementCompileState<'_>,
+) -> Result<bool, SourceProcessorError> {
+    let Some(head) = tokens.first().copied() else {
+        return Ok(false);
+    };
+    if head.kind() != TokenKind::Name {
+        return Ok(false);
+    }
+
+    let source_name = view.slice(head.span())?;
+    let binding = match resolve_binding_name(context.bindings(), source_name) {
+        Ok(binding) => binding,
+        Err(WordResolutionError::InvalidWordName | WordResolutionError::UndefinedName) => {
+            return Ok(false);
+        }
+        Err(WordResolutionError::TargetIsNotWord) => unreachable!(),
+    };
+    let ResolvedBinding::RuntimeWord(word) = binding else {
+        return Ok(false);
+    };
+
+    let trailing = &tokens[1..];
+    let has_expression = trailing
+        .iter()
+        .any(|token| !matches!(token.kind(), TokenKind::LineBoundary | TokenKind::Eof));
+    if !has_expression {
+        state
+            .code
+            .append_mapped(Instruction::Call(word), head.span())?;
+        return Ok(true);
+    }
+
+    // ADR #1631: a runtime-word statement owns its trailing ordinary
+    // expression. Stage the expression and its call together so a failure
+    // cannot commit a partial statement.
+    let Some(operators) = context.operators() else {
+        return Err(CompileError {
+            span: head.span(),
+            kind: CompileErrorKind::UnsupportedToken { kind: head.kind() },
+        }
+        .into());
+    };
+    let mut staging =
+        parse_expression_staging(view, source_id, trailing, context.bindings(), operators)?;
+    staging.append_mapped_instruction(Instruction::Call(word), head.span());
+    staging
+        .commit_to(state.code)
+        .map_err(SourceProcessorError::from_expression_error)?;
+    Ok(true)
 }
 
 fn compile_statement_leading_source_word<'source, S>(
@@ -1228,50 +1302,6 @@ where
     Ok(true)
 }
 
-fn compile_simple_tokens(
-    view: SourceView<'_>,
-    tokens: &[Token],
-    context: &SourceCompileContext<'_>,
-    code: &mut dyn InstructionBuildTarget,
-) -> Result<(), SourceProcessorError> {
-    for token in tokens {
-        match token.kind() {
-            TokenKind::IntegerLiteral => {
-                let value = compile_integer_literal(view, *token)?;
-                code.append_mapped(Instruction::Push(Value::integer(value)), token.span())?;
-            }
-            TokenKind::Name => {
-                let id = compile_word_reference(view, *token, context)?;
-                code.append_mapped(Instruction::Call(id), token.span())?;
-            }
-            TokenKind::LineBoundary | TokenKind::Eof => {}
-            TokenKind::Plus
-            | TokenKind::Minus
-            | TokenKind::Star
-            | TokenKind::Slash
-            | TokenKind::Percent
-            | TokenKind::Comma
-            | TokenKind::LParen
-            | TokenKind::RParen
-            | TokenKind::Equal
-            | TokenKind::NotEqual
-            | TokenKind::Less
-            | TokenKind::LessEqual
-            | TokenKind::Greater
-            | TokenKind::GreaterEqual
-            | TokenKind::FixedTokenLiteral => {
-                return Err(CompileError {
-                    span: token.span(),
-                    kind: CompileErrorKind::UnsupportedToken { kind: token.kind() },
-                }
-                .into());
-            }
-        }
-    }
-
-    Ok(())
-}
-
 fn compile_bif(
     view: SourceView<'_>,
     source_id: SourceId,
@@ -1342,6 +1372,18 @@ fn compile_expression_tokens(
     operators: OperatorLookup,
     code: &mut dyn InstructionBuildTarget,
 ) -> Result<(), SourceProcessorError> {
+    parse_expression_staging(view, source_id, tokens, bindings, operators)?
+        .commit_to(code)
+        .map_err(SourceProcessorError::from_expression_error)
+}
+
+fn parse_expression_staging(
+    view: SourceView<'_>,
+    source_id: SourceId,
+    tokens: &[Token],
+    bindings: &Bindings,
+    operators: OperatorLookup,
+) -> Result<ExpressionStaging, SourceProcessorError> {
     let mut expression_tokens = tokens
         .iter()
         .copied()
@@ -1362,8 +1404,6 @@ fn compile_expression_tokens(
         &resolver,
         &runtime_word_resolver,
     )
-    .map_err(SourceProcessorError::from_expression_error)?
-    .commit_to(code)
     .map_err(SourceProcessorError::from_expression_error)
 }
 
@@ -1584,6 +1624,7 @@ const fn is_expression_syntax_token(kind: TokenKind) -> bool {
             | TokenKind::LessEqual
             | TokenKind::Greater
             | TokenKind::GreaterEqual
+            | TokenKind::Comma
     )
 }
 
@@ -3955,6 +3996,32 @@ mod tests {
                 "{source_text:?} should not compile as a statement"
             );
         }
+    }
+
+    #[test]
+    fn standalone_integer_without_line_number_is_rejected() {
+        let (sources, id, error) = compile_error("1");
+
+        assert_eq!(
+            error,
+            SourceProcessorError::Compile(CompileError {
+                span: span(sources.view(), id, 0, 1),
+                kind: CompileErrorKind::BareExpression,
+            })
+        );
+    }
+
+    #[test]
+    fn line_number_prefix_requires_a_statement_leading_name() {
+        let (sources, id, error) = compile_error("100 1");
+
+        assert_eq!(
+            error,
+            SourceProcessorError::Compile(CompileError {
+                span: span(sources.view(), id, 0, 3),
+                kind: CompileErrorKind::BareExpression,
+            })
+        );
     }
 
     #[test]
@@ -6687,7 +6754,7 @@ mod tests {
 
     #[test]
     fn each_run_uses_fresh_vm_state() {
-        let (mut sources, first) = source("PUSH1 PUSH2");
+        let (mut sources, first) = source("PUSH1\nPUSH2");
         let second = sources.register("", "test.tbx");
         let mut words = PublishedWords::new();
         let mut bindings = Bindings::new();
@@ -6872,7 +6939,7 @@ mod tests {
         let mut bindings = Bindings::new();
         publish_initial(&mut words, &mut bindings, "PUSH1", completed_primitive(1));
         publish_initial(&mut words, &mut bindings, "PUSH2", completed_primitive(2));
-        let (_sources, _id, unit) = compile_with_bindings("PUSH1 PUSH2", &bindings);
+        let (_sources, _id, unit) = compile_with_bindings("PUSH1\nPUSH2", &bindings);
 
         assert_eq!(
             unit.source_mapping().code_space(),
@@ -6966,35 +7033,27 @@ mod tests {
             completed_compiled(&mut shared_code, 9),
         );
 
-        let (sources, id, unit) = compile_with_bindings("alpha 12 beta?", &bindings);
+        let (sources, id, unit) = compile_with_bindings("alpha\nbeta?", &bindings);
         let view = sources.view();
 
         assert_eq!(unit.entry(), address(0));
-        assert_eq!(unit.len(), 4);
+        assert_eq!(unit.len(), 3);
         assert_eq!(
             unit.instructions().get(address(0)),
             Ok(&Instruction::Call(first))
         );
         assert_eq!(
             unit.instructions().get(address(1)),
-            Ok(&Instruction::Push(value(12)))
-        );
-        assert_eq!(
-            unit.instructions().get(address(2)),
             Ok(&Instruction::Call(second))
         );
-        assert_eq!(unit.instructions().get(address(3)), Ok(&Instruction::Halt));
+        assert_eq!(unit.instructions().get(address(2)), Ok(&Instruction::Halt));
         assert_eq!(
             unit.source_span(location(&unit, 0)),
             Ok(Some(span(view, id, 0, 5)))
         );
         assert_eq!(
             unit.source_span(location(&unit, 1)),
-            Ok(Some(span(view, id, 6, 8)))
-        );
-        assert_eq!(
-            unit.source_span(location(&unit, 2)),
-            Ok(Some(span(view, id, 9, 14)))
+            Ok(Some(span(view, id, 6, 11)))
         );
     }
 
@@ -9486,7 +9545,7 @@ mod tests {
         let initial_words_len = words.len();
 
         let (sources, id, error) = compile_with_def_error(
-            "DEF BAD\nPUSH7 MISSING\nEND",
+            "DEF BAD\nPUSH7\nMISSING\nEND",
             &mut bindings,
             &mut globals,
             &source_words,
@@ -9784,6 +9843,170 @@ mod tests {
     }
 
     #[test]
+    fn runtime_word_statement_evaluates_trailing_expression_before_call() {
+        let session = RuntimeDefinitionSession::new_with_named_operators_and_output_primitives();
+        let multiply = resolve_word_name(&session.bindings, "MULTIPLY")
+            .expect("MULTIPLY should be a named operator");
+        let add =
+            resolve_word_name(&session.bindings, "ADD").expect("ADD should be a named operator");
+        let print = resolve_word_name(&session.bindings, "PRINT").expect("PRINT should bootstrap");
+        let (sources, id) = source("PRINT 2 + 3 * 4\nCR");
+        let mut output = TestOutput::new();
+
+        let unit = compile_source(
+            sources.view(),
+            id,
+            SourceCompileContext::with_source_words_and_operators(
+                &session.bindings,
+                session.source_words.lookup(),
+                session.operators.lookup(),
+            ),
+        )
+        .expect("runtime word trailing expression should compile");
+        let result = session
+            .run_unit_with_output(&unit, &mut output)
+            .expect("runtime word trailing expression should run");
+
+        let expected = [
+            Instruction::Push(value(2)),
+            Instruction::Push(value(3)),
+            Instruction::Push(value(4)),
+            Instruction::Call(multiply),
+            Instruction::Call(add),
+            Instruction::Call(print),
+            Instruction::Call(resolve_word_name(&session.bindings, "CR").unwrap()),
+        ];
+        for (index, instruction) in expected.into_iter().enumerate() {
+            assert_eq!(unit.instructions().get(address(index)), Ok(&instruction));
+        }
+        assert_eq!(
+            unit.source_span(location(&unit, 0)),
+            Ok(Some(span(sources.view(), id, 6, 7)))
+        );
+        assert_eq!(
+            unit.source_span(location(&unit, 5)),
+            Ok(Some(span(sources.view(), id, 0, 5)))
+        );
+        assert_eq!(output.chunks(), ["14", "\n"]);
+        assert_eq!(result.data_stack(), []);
+    }
+
+    #[test]
+    fn runtime_word_statement_accepts_literal_only_expression() {
+        let session = RuntimeDefinitionSession::new_with_named_operators_and_output_primitives();
+        let print = resolve_word_name(&session.bindings, "PRINT").expect("PRINT should bootstrap");
+        let cr = resolve_word_name(&session.bindings, "CR").expect("CR should bootstrap");
+        let (sources, id) = source("PRINT 2\nCR");
+        let mut output = TestOutput::new();
+
+        let unit = compile_source(
+            sources.view(),
+            id,
+            SourceCompileContext::with_source_words_and_operators(
+                &session.bindings,
+                session.source_words.lookup(),
+                session.operators.lookup(),
+            ),
+        )
+        .expect("literal-only trailing expression should compile");
+        session
+            .run_unit_with_output(&unit, &mut output)
+            .expect("literal-only trailing expression should run");
+
+        assert_eq!(
+            unit.instructions().get(address(0)),
+            Ok(&Instruction::Push(value(2)))
+        );
+        assert_eq!(
+            unit.instructions().get(address(1)),
+            Ok(&Instruction::Call(print))
+        );
+        assert_eq!(
+            unit.instructions().get(address(2)),
+            Ok(&Instruction::Call(cr))
+        );
+        assert_eq!(output.chunks(), ["2", "\n"]);
+    }
+
+    #[test]
+    fn runtime_word_statement_accepts_variable_only_expression() {
+        let mut session = RuntimeDefinitionSession::new_with_named_operators_and_stack_primitives();
+        let variable = session.globals.allocate();
+        session
+            .bindings
+            .insert_new(name("A"), Binding::Variable(variable))
+            .expect("variable should register");
+        let dup = resolve_word_name(&session.bindings, "DUP").expect("DUP should bootstrap");
+        let (sources, id) = source("DUP A");
+
+        let unit = compile_source(
+            sources.view(),
+            id,
+            SourceCompileContext::with_source_words_and_operators(
+                &session.bindings,
+                session.source_words.lookup(),
+                session.operators.lookup(),
+            ),
+        )
+        .expect("variable-only trailing expression should compile");
+
+        assert_eq!(
+            unit.instructions().get(address(0)),
+            Ok(&Instruction::LoadVar(variable))
+        );
+        assert_eq!(
+            unit.instructions().get(address(1)),
+            Ok(&Instruction::Call(dup))
+        );
+    }
+
+    #[test]
+    fn runtime_word_trailing_expression_failure_does_not_commit_statement() {
+        let session = RuntimeDefinitionSession::new_with_named_operators_and_output_primitives();
+        let (sources, id) = source("PRINT 1 + MISSING");
+
+        let error = compile_source(
+            sources.view(),
+            id,
+            SourceCompileContext::with_source_words_and_operators(
+                &session.bindings,
+                session.source_words.lookup(),
+                session.operators.lookup(),
+            ),
+        )
+        .expect_err("unresolved trailing expression should fail compilation");
+
+        assert!(matches!(
+            error,
+            SourceProcessorError::Compile(CompileError {
+                kind: CompileErrorKind::ExpressionVariable {
+                    source: ExpressionVariableErrorKind::UndefinedName
+                },
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn runtime_word_statement_expression_is_shared_by_definition_bodies() {
+        let mut session =
+            RuntimeDefinitionSession::new_with_named_operators_and_output_primitives();
+        session.publish_def("DEF SHOW\nPRINT 2 + 3 * 4\nEND");
+        let (caller_sources, caller_id, caller) = session.compile_caller("SHOW");
+        let mut output = TestOutput::new();
+
+        session
+            .run_unit_with_published_code_and_output(&caller, &mut output)
+            .expect("definition body should run its trailing expression");
+
+        assert_eq!(output.chunks(), ["14"]);
+        assert_eq!(
+            caller.source_span(location(&caller, 0)),
+            Ok(Some(span(caller_sources.view(), caller_id, 0, 4)))
+        );
+    }
+
+    #[test]
     fn top_level_eval_constant_print_cr_runs_e2e() {
         let session = RuntimeDefinitionSession::new_with_named_operators_and_output_primitives();
         let print = resolve_word_name(&session.bindings, "PRINT").expect("PRINT should bootstrap");
@@ -10049,7 +10272,7 @@ mod tests {
         session.register_primitive("PUSH7", push_7);
         let fail = session.register_primitive("FAIL", fail_after_partial_stack_update);
         let (definition_sources, definition_id, _unit) =
-            session.publish_def("DEF BAD\nPUSH7 fail\nEND");
+            session.publish_def("DEF BAD\nPUSH7\nfail\nEND");
         let (caller_sources, caller_id, caller) = session.compile_caller("bad");
         let published_views = [session.code.instruction_view()];
         let published_mappings = [session.code.source_mapping()];
@@ -10095,7 +10318,8 @@ mod tests {
         let words_len_before_failure = session.words.len();
         let code_len_before_failure = session.code.len();
 
-        let (bad_sources, bad_id, error) = session.publish_def_error("DEF BAD\nPUSH7 MISSING\nEND");
+        let (bad_sources, bad_id, error) =
+            session.publish_def_error("DEF BAD\nPUSH7\nMISSING\nEND");
 
         assert_eq!(
             error,
@@ -10225,7 +10449,8 @@ mod tests {
         let mut bindings = Bindings::new();
         let id = publish_initial(&mut words, &mut bindings, "ready?", completed_primitive(2));
 
-        let (_sources, _source_id, unit) = compile_with_bindings("ready? Ready? READY?", &bindings);
+        let (_sources, _source_id, unit) =
+            compile_with_bindings("ready?\nReady?\nREADY?", &bindings);
 
         assert_eq!(
             unit.instructions().get(address(0)),
@@ -10254,7 +10479,7 @@ mod tests {
             completed_compiled(&mut shared_code, 10),
         );
 
-        let (_sources, _source_id, unit) = compile_with_bindings("prim user_word", &bindings);
+        let (_sources, _source_id, unit) = compile_with_bindings("prim\nuser_word", &bindings);
 
         assert_eq!(
             unit.instructions().get(address(0)),
@@ -10306,7 +10531,7 @@ mod tests {
         let mut primitives = PrimitiveRegistry::new();
         let id = publish_initial(&mut words, &mut bindings, "KNOWN", completed_primitive(5));
         primitives.register(push_7);
-        let (sources, source_id) = source("known missing");
+        let (sources, source_id) = source("known\nmissing");
 
         let error = compile_source(
             sources.view(),
@@ -10408,7 +10633,7 @@ mod tests {
             .expect("primitive should register");
         register_primitive(&mut words, &mut bindings, name("ADD"), primitive)
             .expect("primitive should register");
-        let (sources, source_id) = source("PUSH2 user_word add");
+        let (sources, source_id) = source("PUSH2\nuser_word\nadd");
         let published_views = [published_code.view()];
 
         let result = run_source(
@@ -10562,7 +10787,7 @@ mod tests {
         published_code.append(Instruction::Return);
         let original_word_count = words.len();
         let original_published_len = published_code.len();
-        let (mut sources, first) = source("user_word user_word");
+        let (mut sources, first) = source("user_word\nuser_word");
         let second = sources.register("user_word", "test.tbx");
         let published_views = [published_code.view()];
         let first_result = run_source(
@@ -10605,7 +10830,7 @@ mod tests {
             .expect("primitive should register");
         register_primitive(&mut words, &mut bindings, name("FAIL"), primitive)
             .expect("primitive should register");
-        let (sources, source_id) = source("PUSH7 fail");
+        let (sources, source_id) = source("PUSH7\nfail");
 
         let error = run_source(
             sources.view(),
@@ -10646,7 +10871,7 @@ mod tests {
             .expect("primitive should register");
         register_primitive(&mut words, &mut bindings, name("FAIL"), primitive)
             .expect("primitive should register");
-        let (sources, source_id, unit) = compile_with_bindings("PUSH7 fail", &bindings);
+        let (sources, source_id, unit) = compile_with_bindings("PUSH7\nfail", &bindings);
 
         let error = run_unit(
             &unit,
