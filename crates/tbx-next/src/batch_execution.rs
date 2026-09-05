@@ -530,6 +530,28 @@ mod tests {
     }
 
     #[test]
+    fn standard_library_marker_reservation_rejects_user_binding_with_same_name() {
+        let standard_library =
+            "SYNTAX WRAP\nBLOCK\nSTART\nEXPECT_END\nLAST ENDWRAP\nEXPECT_END\nENDS";
+        let (sources, standard_library_id, source_id) =
+            sources_with_standard_library(standard_library, "DEF ENDWRAP\nEND");
+        let mut writer = RecordingWriter::default();
+
+        let failure = failure(execute_registered_sources(
+            &sources,
+            standard_library_id,
+            source_id,
+            &mut writer,
+        ));
+
+        assert_eq!(failure.class(), UserFacingFailureClass::UserProgram);
+        assert!(failure
+            .diagnostic()
+            .primary()
+            .is_some_and(|primary| primary.source_line() == "DEF ENDWRAP"));
+    }
+
+    #[test]
     fn standard_library_top_level_unit_is_not_executed() {
         let (sources, standard_library_id, source_id) =
             sources_with_standard_library("EVAL 99\nPRINT\nCR", "EVAL 1\nPRINT\nCR");
@@ -549,6 +571,48 @@ mod tests {
     fn standard_library_failure_short_circuits_user_source_and_is_environment_failure() {
         let (sources, standard_library_id, source_id) =
             sources_with_standard_library("UNKNOWN", "EVAL 7\nPRINT");
+        let mut writer = RecordingWriter::default();
+
+        let failure = failure(execute_registered_sources(
+            &sources,
+            standard_library_id,
+            source_id,
+            &mut writer,
+        ));
+
+        assert_eq!(failure.class(), UserFacingFailureClass::Environment);
+        assert!(failure
+            .diagnostic()
+            .primary()
+            .is_some_and(|primary| primary.display_name() == "<tbx-next-stdlib>"));
+        assert_eq!(writer.text(), "");
+    }
+
+    #[test]
+    fn standard_library_lex_failure_short_circuits_user_source() {
+        let (sources, standard_library_id, source_id) =
+            sources_with_standard_library("?", "EVAL 7\nPRINT");
+        let mut writer = RecordingWriter::default();
+
+        let failure = failure(execute_registered_sources(
+            &sources,
+            standard_library_id,
+            source_id,
+            &mut writer,
+        ));
+
+        assert_eq!(failure.class(), UserFacingFailureClass::Environment);
+        assert!(failure
+            .diagnostic()
+            .primary()
+            .is_some_and(|primary| primary.display_name() == "<tbx-next-stdlib>"));
+        assert_eq!(writer.text(), "");
+    }
+
+    #[test]
+    fn standard_library_publication_failure_short_circuits_user_source() {
+        let (sources, standard_library_id, source_id) =
+            sources_with_standard_library("SYNTAX A\nSTATEMENT\nENDS", "EVAL 7\nPRINT");
         let mut writer = RecordingWriter::default();
 
         let failure = failure(execute_registered_sources(
