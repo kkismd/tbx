@@ -1,0 +1,32 @@
+REM Print the prime numbers from 2 through 30.
+
+VAR NUMBER
+VAR PRIME
+VAR DIVISOR
+
+DEF PRIME?
+  IF DUP() < 2
+    DROP
+    EVAL 0
+  ELSE
+    LET PRIME = 1
+    LET DIVISOR = 2
+    WHILE DUP() >= DIVISOR * DIVISOR
+      IF (DUP() % DIVISOR) = 0
+        LET PRIME = 0
+      ENDIF
+      LET DIVISOR = DIVISOR + 1
+    WEND
+    DROP
+    EVAL PRIME
+  ENDIF
+END
+
+LET NUMBER = 2
+WHILE NUMBER <= 30
+  IF PRIME?(NUMBER)
+    PRINT NUMBER
+    CR
+  ENDIF
+  LET NUMBER = NUMBER + 1
+WEND
