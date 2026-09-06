@@ -120,6 +120,21 @@ fn file_success_runs_stdlib_control_structures_and_user_syntax_through_real_bina
 }
 
 #[test]
+fn file_success_uses_prime_procedure_stack_argument_independent_of_global_variable() {
+    let path = fixture_path("prime_stack_argument.tbx");
+
+    let output = run_with_file(&path);
+
+    assert!(
+        output.status.success(),
+        "expected success, stderr:\n{}",
+        stderr_text(&output)
+    );
+    assert_eq!(stdout_text(&output), "0\n");
+    assert_eq!(stderr_text(&output), "");
+}
+
+#[test]
 fn stdin_success_runs_stdlib_control_structures_and_user_syntax_through_real_binary() {
     let source = include_str!("fixtures/m21_stdlib_control_e2e.tbx");
 
