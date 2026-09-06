@@ -7,6 +7,7 @@ VAR DIVISOR
 DEF PRIME?
   DUP
   IF LESS?(2)
+    DROP
     EVAL 0
   ELSE
     LET PRIME = 1
@@ -17,6 +18,7 @@ DEF PRIME?
       ENDIF
       LET DIVISOR = DIVISOR + 1
     WEND
+    DROP
     EVAL PRIME
   ENDIF
 END
