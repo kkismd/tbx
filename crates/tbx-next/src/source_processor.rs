@@ -26,8 +26,8 @@ use crate::source_mapping::{
     InstructionSourceMappingView, SourceMappedCode, SourceMappingLookup, SourceMappingLookupError,
 };
 use crate::source_word::{
-    NativeSourceWordBindingAccess, NativeSourceWordContext, NativeSourceWordContextParts,
-    NativeSourceWordHandler, NativeStructuredSourceWordContext,
+    AdditionalSourceProcessor, NativeSourceWordBindingAccess, NativeSourceWordContext,
+    NativeSourceWordContextParts, NativeSourceWordHandler, NativeStructuredSourceWordContext,
     NativeStructuredSourceWordContextParts, NativeStructuredSourceWordOwner,
     OneShotSourceWordDispatch, RuntimeDefinitionPublisher, SourceBlockCursor, SourceBlockMarker,
     SourceBlockRead, SourceBlockReader, SourceBlockStatement, SourceBlockTerminal,
@@ -65,6 +65,7 @@ pub(crate) struct SourceCompileContext<'a> {
     source_words: Option<SourceWordAccess<'a>>,
     globals: Option<&'a mut GlobalVariables>,
     runtime_definitions: Option<RuntimeDefinitionPublicationAccess<'a>>,
+    additional_source_processor: Option<&'a RefCell<dyn AdditionalSourceProcessor>>,
 }
 
 pub(crate) struct DefinitionBodyCompileContext<'a> {
@@ -791,6 +792,7 @@ pub(crate) fn compile_definition_body<'source>(
         source_words: context.source_words.map(SourceWordAccess::Read),
         globals: None,
         runtime_definitions: None,
+        additional_source_processor: None,
     };
 
     compile_statements(
@@ -817,6 +819,7 @@ pub(crate) fn compile_quotation_body<'source>(
         // capability to publish bindings, globals, or runtime definitions.
         globals: None,
         runtime_definitions: None,
+        additional_source_processor: None,
     };
 
     StaticQuotation::try_build(|builder| {
@@ -1215,6 +1218,7 @@ where
                     globals,
                     runtime_definitions,
                     source_word_publication,
+                    additional_source_processor: context.additional_source_processor,
                 });
             handler(&mut source_word_context)?;
         }
@@ -1253,6 +1257,7 @@ where
                             globals,
                             runtime_definitions,
                             source_word_publication: None,
+                            additional_source_processor: None,
                         });
                     start(&mut source_word_context)?
                 }
@@ -1955,6 +1960,7 @@ impl<'a> SourceCompileContext<'a> {
             source_words: None,
             globals: None,
             runtime_definitions: None,
+            additional_source_processor: None,
         }
     }
 
@@ -1965,6 +1971,7 @@ impl<'a> SourceCompileContext<'a> {
             source_words: None,
             globals: None,
             runtime_definitions: None,
+            additional_source_processor: None,
         }
     }
 
@@ -1978,6 +1985,7 @@ impl<'a> SourceCompileContext<'a> {
             source_words: Some(SourceWordAccess::Read(source_words)),
             globals: None,
             runtime_definitions: None,
+            additional_source_processor: None,
         }
     }
 
@@ -1992,6 +2000,7 @@ impl<'a> SourceCompileContext<'a> {
             source_words: Some(SourceWordAccess::Read(source_words)),
             globals: None,
             runtime_definitions: None,
+            additional_source_processor: None,
         }
     }
 
@@ -2006,6 +2015,7 @@ impl<'a> SourceCompileContext<'a> {
             source_words: Some(SourceWordAccess::Read(source_words)),
             globals: Some(globals),
             runtime_definitions: None,
+            additional_source_processor: None,
         }
     }
 
@@ -2021,6 +2031,7 @@ impl<'a> SourceCompileContext<'a> {
             source_words: Some(SourceWordAccess::Read(source_words)),
             globals: Some(globals),
             runtime_definitions: None,
+            additional_source_processor: None,
         }
     }
 
@@ -2036,6 +2047,7 @@ impl<'a> SourceCompileContext<'a> {
             source_words: Some(SourceWordAccess::Write(source_words)),
             globals: Some(globals),
             runtime_definitions: None,
+            additional_source_processor: None,
         }
     }
 
@@ -2053,6 +2065,7 @@ impl<'a> SourceCompileContext<'a> {
             source_words: Some(SourceWordAccess::Read(source_words)),
             globals: Some(globals),
             runtime_definitions: Some(RuntimeDefinitionPublicationAccess { code, words }),
+            additional_source_processor: None,
         }
     }
 
@@ -2070,6 +2083,7 @@ impl<'a> SourceCompileContext<'a> {
             source_words: Some(SourceWordAccess::Write(source_words)),
             globals: Some(globals),
             runtime_definitions: Some(RuntimeDefinitionPublicationAccess { code, words }),
+            additional_source_processor: None,
         }
     }
 
@@ -2078,6 +2092,14 @@ impl<'a> SourceCompileContext<'a> {
             BindingAccess::Read(bindings) => bindings,
             BindingAccess::Write(bindings) => bindings,
         }
+    }
+
+    pub(crate) fn with_additional_source_processor(
+        mut self,
+        processor: &'a RefCell<dyn AdditionalSourceProcessor>,
+    ) -> Self {
+        self.additional_source_processor = Some(processor);
+        self
     }
 
     pub(crate) const fn operators(&self) -> Option<OperatorLookup> {
@@ -2438,6 +2460,7 @@ impl<'a> SourceExecutionContext<'a> {
             source_words: self.source_words.map(SourceWordAccess::Read),
             globals: None,
             runtime_definitions: None,
+            additional_source_processor: None,
         }
     }
 
