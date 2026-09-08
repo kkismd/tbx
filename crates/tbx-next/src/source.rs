@@ -31,6 +31,10 @@ pub(crate) struct SourceId {
 }
 
 impl SourceId {
+    pub(crate) const fn slot(self) -> usize {
+        self.slot
+    }
+
     #[cfg(test)]
     const fn test_invalid(owner: SourceOwnerId, slot: usize) -> Self {
         Self { owner, slot }

@@ -4,19 +4,26 @@ use std::fs;
 use std::io::{self, Read};
 use std::path::{Path, PathBuf};
 
-use crate::source::{SourceId, SourceTexts};
+use crate::source::SourceId;
+use crate::source_session::{SourceAcquisition, SourceProcessingSession, SourceSessionError};
 
 const STDIN_DISPLAY_NAME: &str = "<stdin>";
 pub(crate) const STDLIB_DISPLAY_NAME: &str = "<tbx-next-stdlib>";
 pub(crate) const STDLIB_SOURCE: &str = include_str!("../stdlib/basic.tbx");
 
-pub(crate) fn register_embedded_standard_library(sources: &mut SourceTexts) -> SourceId {
-    sources.register(STDLIB_SOURCE, STDLIB_DISPLAY_NAME)
+pub(crate) fn register_embedded_standard_library(
+    session: &mut SourceProcessingSession,
+) -> SourceId {
+    session.register(
+        STDLIB_SOURCE,
+        STDLIB_DISPLAY_NAME,
+        SourceAcquisition::NoFilesystemLocation,
+    )
 }
 
 #[derive(Debug)]
 pub(crate) struct InitialSource {
-    sources: SourceTexts,
+    session: SourceProcessingSession,
     stdlib_source_id: SourceId,
     source_id: SourceId,
 }
@@ -43,8 +50,23 @@ pub(crate) enum CliSourceError {
 }
 
 impl InitialSource {
-    pub(crate) fn sources(&self) -> &SourceTexts {
-        &self.sources
+    pub(crate) fn session(&self) -> &SourceProcessingSession {
+        &self.session
+    }
+
+    pub(crate) fn session_mut(&mut self) -> &mut SourceProcessingSession {
+        &mut self.session
+    }
+
+    pub(crate) fn sources(&self) -> &crate::source::SourceTexts {
+        self.session.sources()
+    }
+
+    pub(crate) fn acquisition(
+        &self,
+        source_id: SourceId,
+    ) -> Result<&SourceAcquisition, SourceSessionError> {
+        self.session.acquisition(source_id)
     }
 
     pub(crate) const fn source_id(&self) -> SourceId {
@@ -75,9 +97,25 @@ where
     R: Read,
     F: FnOnce(&Path) -> io::Result<String>,
 {
+    acquire_initial_source_with_canonicalizer(args, stdin, read_file, |_| Ok(None))
+}
+
+pub(crate) fn acquire_initial_source_with_canonicalizer<I, S, R, F, C>(
+    args: I,
+    stdin: &mut R,
+    read_file: F,
+    canonicalize: C,
+) -> Result<InitialSource, CliSourceError>
+where
+    I: IntoIterator<Item = S>,
+    S: Into<OsString>,
+    R: Read,
+    F: FnOnce(&Path) -> io::Result<String>,
+    C: FnOnce(&Path) -> io::Result<Option<PathBuf>>,
+{
     let input = parse_initial_source_args(args)?;
-    let mut sources = SourceTexts::new();
-    let stdlib_source_id = register_embedded_standard_library(&mut sources);
+    let mut session = SourceProcessingSession::new();
+    let stdlib_source_id = register_embedded_standard_library(&mut session);
 
     let source_id = match input {
         InitialSourceInput::Stdin => {
@@ -85,19 +123,32 @@ where
             stdin
                 .read_to_string(&mut text)
                 .map_err(|source| CliSourceError::ReadStdin { source })?;
-            sources.register(text, STDIN_DISPLAY_NAME)
+            session.register(
+                text,
+                STDIN_DISPLAY_NAME,
+                SourceAcquisition::NoFilesystemLocation,
+            )
         }
         InitialSourceInput::File { path, display_name } => {
             let text = read_file(&path).map_err(|source| CliSourceError::ReadFile {
                 display_name: display_name.clone(),
                 source,
             })?;
-            sources.register(text, display_name)
+            let canonical_path =
+                canonicalize(&path).map_err(|source| CliSourceError::ReadFile {
+                    display_name: display_name.clone(),
+                    source,
+                })?;
+            session.register(
+                text,
+                display_name,
+                SourceAcquisition::Filesystem { canonical_path },
+            )
         }
     };
 
     Ok(InitialSource {
-        sources,
+        session,
         stdlib_source_id,
         source_id,
     })
@@ -174,6 +225,28 @@ mod tests {
         assert_eq!(acquired.sources().len(), 2);
         assert_eq!(view.source(source_id), Ok("PRINT 7"));
         assert_eq!(view.display_name(source_id), Ok("relative/program.tbx"));
+    }
+
+    #[test]
+    fn file_source_keeps_display_name_and_records_supplied_canonical_path() {
+        let mut stdin = io::empty();
+        let acquired = acquire_initial_source_with_canonicalizer(
+            ["./relative/program.tbx"],
+            &mut stdin,
+            |_| Ok("PRINT 7".to_owned()),
+            |_| Ok(Some(PathBuf::from("/workspace/project/program.tbx"))),
+        )
+        .expect("file source acquisition should succeed");
+
+        let source_id = acquired.source_id();
+        assert_eq!(
+            acquired.sources().view().display_name(source_id),
+            Ok("./relative/program.tbx")
+        );
+        assert_eq!(
+            acquired.acquisition(source_id).unwrap().canonical_path(),
+            Some(Path::new("/workspace/project/program.tbx"))
+        );
     }
 
     #[test]

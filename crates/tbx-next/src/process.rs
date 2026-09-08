@@ -5,8 +5,8 @@ use std::io::{self, Read, Write};
 use std::path::Path;
 use std::process::ExitCode;
 
-use crate::batch_execution::{execute_registered_sources, BatchExecutionResult};
-use crate::cli_source::{acquire_initial_source, CliSourceError};
+use crate::batch_execution::{execute_source_session, BatchExecutionResult};
+use crate::cli_source::CliSourceError;
 use crate::diagnostic::{DiagnosticRenderer, RenderedDiagnostic, UserDiagnostic};
 use crate::source::SourceTexts;
 
@@ -58,7 +58,7 @@ where
     E: Write + ?Sized,
     F: FnOnce(&Path) -> io::Result<String>,
 {
-    let source = match acquire_initial_source(args, stdin, read_file) {
+    let mut source = match crate::cli_source::acquire_initial_source(args, stdin, read_file) {
         Ok(source) => source,
         Err(error) => {
             let diagnostic = acquisition_diagnostic(&error);
@@ -66,12 +66,9 @@ where
         }
     };
 
-    match execute_registered_sources(
-        source.sources(),
-        source.stdlib_source_id(),
-        source.source_id(),
-        stdout,
-    ) {
+    let stdlib_source_id = source.stdlib_source_id();
+    let source_id = source.source_id();
+    match execute_source_session(source.session_mut(), stdlib_source_id, source_id, stdout) {
         BatchExecutionResult::Success(_) => ProcessStatus::Success,
         BatchExecutionResult::Failure(failure) => write_diagnostic(stderr, failure.diagnostic()),
     }
