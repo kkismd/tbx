@@ -1,4 +1,6 @@
+use std::fs;
 use std::io::Write;
+use std::path::Path;
 
 use crate::binding::Bindings;
 use crate::bootstrap::{
@@ -12,14 +14,16 @@ use crate::output_primitive::register_output_primitives;
 use crate::primitive::PrimitiveRegistry;
 use crate::published_code::PublishedCode;
 use crate::runtime_output::WriteRuntimeOutput;
-use crate::source::{SourceId, SourceTexts};
+use crate::source::{SourceAcquisition, SourceId, SourceTexts};
 use crate::source_processor::{
-    compile_source, run_unit, SourceCompileContext, SourceExecutionContext, SourceFormCursor,
+    compile_source, run_unit, run_unit_with_data_stack, AdditionalSourceAcquisitionError,
+    SourceCompileContext, SourceExecutionContext, SourceFormCursor, SourceProcessorError,
     SourceRunResult,
 };
 use crate::source_word::{AdditionalSourceRequest, SourceWordRegistry};
 use crate::stack_primitive::register_stack_primitives;
 use crate::user_facing::{UserFacingFailure, UserFacingFailureClass, UserFacingRunResult};
+use crate::value::Value;
 use crate::word::PublishedWords;
 use crate::word_lookup::PublishedWordLookup;
 
@@ -92,6 +96,14 @@ pub(crate) struct SourceProcessingSession {
 impl SourceProcessingSession {
     fn new(sources: SourceTexts, initial_source_id: SourceId) -> Result<Self, BatchSetupError> {
         let environment = BatchEnvironment::new()?;
+        Self::with_environment(sources, environment, initial_source_id)
+    }
+
+    fn with_environment(
+        sources: SourceTexts,
+        environment: BatchEnvironment,
+        initial_source_id: SourceId,
+    ) -> Result<Self, BatchSetupError> {
         let mut session = Self {
             sources,
             environment,
@@ -104,6 +116,23 @@ impl SourceProcessingSession {
             unreachable!("initial source tokenization cannot fail after ownership transfer");
         }
         Ok(session)
+    }
+
+    fn with_environment_and_cursor(
+        sources: SourceTexts,
+        environment: BatchEnvironment,
+        source_id: SourceId,
+        forms: SourceFormCursor,
+    ) -> Self {
+        Self {
+            sources,
+            environment,
+            frames: vec![SourceFrame {
+                source_id,
+                forms,
+                form_index: 0,
+            }],
+        }
     }
 
     pub(crate) fn sources(&self) -> &SourceTexts {
@@ -134,10 +163,12 @@ impl SourceProcessingSession {
         &mut self,
         writer: &mut W,
         hook: &mut AdditionalSourceHook<'_>,
-    ) -> Result<(), crate::source_processor::SourceProcessorError>
+    ) -> Result<Option<SourceRunResult>, crate::source_processor::SourceProcessorError>
     where
         W: Write + ?Sized,
     {
+        let mut last_result = None;
+        let mut data_stack: Vec<Value> = Vec::new();
         while !self.frames.is_empty() {
             let frame_index = self.frames.len() - 1;
             let unit = {
@@ -166,7 +197,12 @@ impl SourceProcessingSession {
                 )
                 .with_mut_globals(self.environment.globals.view_mut())
                 .with_output(&mut output);
-                run_unit(&form.unit, context)?;
+                last_result = Some(run_unit_with_data_stack(&form.unit, context, &data_stack)?);
+                data_stack = last_result
+                    .as_ref()
+                    .expect("the form result was just stored")
+                    .data_stack()
+                    .to_vec();
             }
 
             self.frames[frame_index].form_index += 1;
@@ -176,8 +212,82 @@ impl SourceProcessingSession {
                 }
             }
         }
-        Ok(())
+        Ok(last_result)
     }
+
+    pub(crate) fn run_with_filesystem<W>(
+        &mut self,
+        writer: &mut W,
+    ) -> Result<Option<SourceRunResult>, SourceProcessorError>
+    where
+        W: Write + ?Sized,
+    {
+        let mut hook = |sources: &mut SourceTexts, request: AdditionalSourceRequest| {
+            acquire_filesystem_source(sources, request).map(Some)
+        };
+        self.run_with_hook(writer, &mut hook)
+    }
+}
+
+fn acquire_filesystem_source(
+    sources: &mut SourceTexts,
+    request: AdditionalSourceRequest,
+) -> Result<SourceId, SourceProcessorError> {
+    let view = sources.view();
+    let requested_path = Path::new(request.specification.as_ref());
+    let path = if requested_path.is_absolute() {
+        requested_path.to_path_buf()
+    } else {
+        let acquisition = view.acquisition(request.span.source_id()).map_err(|_| {
+            SourceProcessorError::AdditionalSourceAcquisition {
+                span: request.span,
+                specification: request.specification.clone(),
+                kind: AdditionalSourceAcquisitionError::RelativePathRequiresFileSource,
+            }
+        })?;
+        let SourceAcquisition::FileSystem { canonical_path } = acquisition else {
+            return Err(SourceProcessorError::AdditionalSourceAcquisition {
+                span: request.span,
+                specification: request.specification.clone(),
+                kind: AdditionalSourceAcquisitionError::RelativePathRequiresFileSource,
+            });
+        };
+        let parent = canonical_path.parent().ok_or_else(|| {
+            SourceProcessorError::AdditionalSourceAcquisition {
+                span: request.span,
+                specification: request.specification.clone(),
+                kind: AdditionalSourceAcquisitionError::RelativePathRequiresFileSource,
+            }
+        })?;
+        parent.join(requested_path)
+    };
+
+    let canonical_path = fs::canonicalize(&path).map_err(|source| {
+        SourceProcessorError::AdditionalSourceAcquisition {
+            span: request.span,
+            specification: request.specification.clone(),
+            kind: AdditionalSourceAcquisitionError::Canonicalize {
+                path,
+                message: source.to_string().into_boxed_str(),
+            },
+        }
+    })?;
+    let text = fs::read_to_string(&canonical_path).map_err(|source| {
+        SourceProcessorError::AdditionalSourceAcquisition {
+            span: request.span,
+            specification: request.specification.clone(),
+            kind: AdditionalSourceAcquisitionError::Read {
+                path: canonical_path.clone(),
+                message: source.to_string().into_boxed_str(),
+            },
+        }
+    })?;
+
+    Ok(sources.register_with_acquisition(
+        text,
+        request.specification,
+        SourceAcquisition::FileSystem { canonical_path },
+    ))
 }
 
 impl BatchExecutionFailure {
@@ -318,6 +428,54 @@ where
     };
 
     user_facing_result(sources, source_result)
+}
+
+pub(crate) fn execute_registered_sources_with_filesystem<W>(
+    sources: SourceTexts,
+    stdlib_source_id: SourceId,
+    source_id: SourceId,
+    writer: &mut W,
+) -> BatchExecutionResult
+where
+    W: Write + ?Sized,
+{
+    let mut environment = match BatchEnvironment::new() {
+        Ok(environment) => environment,
+        Err(error) => return setup_failure(&sources, error),
+    };
+
+    if stdlib_source_id != source_id {
+        if let Err(error) = environment.compile(&sources, stdlib_source_id) {
+            return standard_library_failure(&sources, error);
+        }
+    }
+
+    let forms = match SourceFormCursor::new(sources.view(), source_id) {
+        Ok(forms) => forms,
+        Err(error) => return user_facing_result(&sources, Err(error)),
+    };
+    let mut session = SourceProcessingSession::with_environment_and_cursor(
+        sources,
+        environment,
+        source_id,
+        forms,
+    );
+
+    match session.run_with_filesystem(writer) {
+        Ok(Some(result)) => BatchExecutionResult::Success(result),
+        Ok(None) => BatchExecutionResult::Success(
+            // Empty input has no form result. The legacy path supplies the
+            // established empty-run result without adding a second source.
+            match execute_registered_sources(session.sources(), stdlib_source_id, source_id, writer)
+            {
+                BatchExecutionResult::Success(result) => result,
+                BatchExecutionResult::Failure(failure) => {
+                    return BatchExecutionResult::Failure(failure)
+                }
+            },
+        ),
+        Err(error) => user_facing_result(session.sources(), Err(error)),
+    }
 }
 
 #[cfg(test)]
@@ -1054,5 +1212,124 @@ mod tests {
             ),
             "unexpected error: {error:?}"
         );
+    }
+
+    #[test]
+    fn filesystem_hook_resolves_nested_relative_sources_and_keeps_display_names() {
+        let root =
+            std::path::PathBuf::from(".tmp").join(format!("issue-1651-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("sub")).expect("fixture directory should be created");
+        std::fs::create_dir_all(root.join("shared")).expect("fixture directory should be created");
+        let main_path = root.join("main.tbx");
+        let nested_path = root.join("sub/b.tbx");
+        let leaf_path = root.join("shared/c.tbx");
+        std::fs::write(&main_path, "REQUEST sub/b.tbx\nNOOP")
+            .expect("main fixture should be written");
+        std::fs::write(&nested_path, "REQUEST ../shared/c.tbx\nNOOP")
+            .expect("nested fixture should be written");
+        std::fs::write(&leaf_path, "NOOP").expect("leaf fixture should be written");
+
+        let main_canonical = std::fs::canonicalize(&main_path).expect("main path should resolve");
+        let leaf_canonical = std::fs::canonicalize(&leaf_path).expect("leaf path should resolve");
+        let mut sources = SourceTexts::new();
+        let source_id = sources.register_with_acquisition(
+            "REQUEST sub/b.tbx\nNOOP",
+            "requested/main.tbx",
+            crate::source::SourceAcquisition::FileSystem {
+                canonical_path: main_canonical.clone(),
+            },
+        );
+        let span = sources
+            .view()
+            .span(source_id, 0, 1)
+            .expect("request span should be valid");
+        let absolute_id = acquire_filesystem_source(
+            &mut sources,
+            AdditionalSourceRequest {
+                specification: leaf_canonical
+                    .to_string_lossy()
+                    .into_owned()
+                    .into_boxed_str(),
+                span,
+            },
+        )
+        .expect("absolute source should be acquired");
+        let nested_id = acquire_filesystem_source(
+            &mut sources,
+            AdditionalSourceRequest {
+                specification: "sub/b.tbx".into(),
+                span,
+            },
+        )
+        .expect("nested source should be acquired");
+        let nested_span = sources
+            .view()
+            .span(nested_id, 0, 1)
+            .expect("nested request span should be valid");
+        let leaf_id = acquire_filesystem_source(
+            &mut sources,
+            AdditionalSourceRequest {
+                specification: "../shared/c.tbx".into(),
+                span: nested_span,
+            },
+        )
+        .expect("leaf source should be acquired");
+
+        let view = sources.view();
+        assert_eq!(
+            view.display_name(absolute_id),
+            Ok(leaf_canonical.to_string_lossy().as_ref())
+        );
+        assert_eq!(view.source(absolute_id), Ok("NOOP"));
+        assert_eq!(
+            view.acquisition(absolute_id),
+            Ok(&crate::source::SourceAcquisition::FileSystem {
+                canonical_path: leaf_canonical.clone(),
+            })
+        );
+        assert_eq!(view.display_name(nested_id), Ok("sub/b.tbx"));
+        assert_eq!(view.display_name(leaf_id), Ok("../shared/c.tbx"));
+        assert_eq!(
+            view.acquisition(nested_id),
+            Ok(&crate::source::SourceAcquisition::FileSystem {
+                canonical_path: std::fs::canonicalize(&nested_path)
+                    .expect("nested path should resolve"),
+            })
+        );
+        assert_eq!(
+            view.acquisition(leaf_id),
+            Ok(&crate::source::SourceAcquisition::FileSystem {
+                canonical_path: leaf_canonical.clone(),
+            })
+        );
+        assert_eq!(view.source(leaf_id), Ok("NOOP"));
+        std::fs::remove_dir_all(root).expect("fixture directory should be removed");
+    }
+
+    #[test]
+    fn filesystem_hook_rejects_relative_request_from_non_file_source() {
+        let mut sources = SourceTexts::new();
+        let source_id = sources.register("REQUEST child.tbx", "<stdin>");
+        let span = sources
+            .view()
+            .span(source_id, 0, "REQUEST child.tbx".len())
+            .expect("request span should be valid");
+        let error = acquire_filesystem_source(
+            &mut sources,
+            AdditionalSourceRequest {
+                specification: "child.tbx".into(),
+                span,
+            },
+        )
+        .expect_err("stdin relative request must fail");
+        assert!(matches!(
+            error,
+            SourceProcessorError::AdditionalSourceAcquisition {
+                span: actual,
+                specification,
+                kind: AdditionalSourceAcquisitionError::RelativePathRequiresFileSource,
+            } if actual == span && specification.as_ref() == "child.tbx"
+        ));
     }
 }

@@ -396,6 +396,10 @@ impl Vm {
         self.data_stack.pop()
     }
 
+    pub(crate) fn push_data(&mut self, value: Value) {
+        self.data_stack.push(value);
+    }
+
     fn step_push(
         &mut self,
         instructions: InstructionLookup<'_>,

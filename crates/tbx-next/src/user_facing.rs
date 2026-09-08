@@ -114,6 +114,9 @@ fn classify_source_error(error: &SourceProcessorError) -> UserFacingFailureClass
         | SourceProcessorError::SourceMappingLookup(_)
         | SourceProcessorError::SourceWordContextUnavailable { .. }
         | SourceProcessorError::SourceWordLookup(_) => UserFacingFailureClass::Environment,
+        SourceProcessorError::AdditionalSourceAcquisition { .. } => {
+            UserFacingFailureClass::UserProgram
+        }
     }
 }
 
@@ -193,6 +196,9 @@ fn diagnostic_message(error: &SourceProcessorError) -> &'static str {
         }
         SourceProcessorError::SourceWordLookup(_) => "source word lookup failed",
         SourceProcessorError::SourceWord(_) => "source word error",
+        SourceProcessorError::AdditionalSourceAcquisition { .. } => {
+            "additional source acquisition failed"
+        }
         SourceProcessorError::Runtime(error) => {
             if is_runtime_external_output_failure(*error) {
                 "runtime output failed"
@@ -214,6 +220,7 @@ fn diagnostic_target(error: &SourceProcessorError) -> &'static str {
         | SourceProcessorError::SourceWordContextUnavailable { .. }
         | SourceProcessorError::SourceWordLookup(_)
         | SourceProcessorError::SourceWord(_) => "source processing",
+        SourceProcessorError::AdditionalSourceAcquisition { .. } => "additional source acquisition",
     }
 }
 

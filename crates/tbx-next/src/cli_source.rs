@@ -4,7 +4,7 @@ use std::fs;
 use std::io::{self, Read};
 use std::path::{Path, PathBuf};
 
-use crate::source::{SourceId, SourceTexts};
+use crate::source::{SourceAcquisition, SourceId, SourceTexts};
 
 const STDIN_DISPLAY_NAME: &str = "<stdin>";
 pub(crate) const STDLIB_DISPLAY_NAME: &str = "<tbx-next-stdlib>";
@@ -37,6 +37,10 @@ pub(crate) enum CliSourceError {
         display_name: Box<str>,
         source: io::Error,
     },
+    CanonicalizeFile {
+        display_name: Box<str>,
+        source: io::Error,
+    },
     ReadStdin {
         source: io::Error,
     },
@@ -53,6 +57,10 @@ impl InitialSource {
 
     pub(crate) const fn stdlib_source_id(&self) -> SourceId {
         self.stdlib_source_id
+    }
+
+    pub(crate) fn into_parts(self) -> (SourceTexts, SourceId, SourceId) {
+        (self.sources, self.stdlib_source_id, self.source_id)
     }
 }
 
@@ -75,6 +83,22 @@ where
     R: Read,
     F: FnOnce(&Path) -> io::Result<String>,
 {
+    acquire_initial_source_with_canonicalizer(args, stdin, read_file, |path| Ok(path.to_path_buf()))
+}
+
+pub(crate) fn acquire_initial_source_with_canonicalizer<I, S, R, F, C>(
+    args: I,
+    stdin: &mut R,
+    read_file: F,
+    canonicalize_file: C,
+) -> Result<InitialSource, CliSourceError>
+where
+    I: IntoIterator<Item = S>,
+    S: Into<OsString>,
+    R: Read,
+    F: FnOnce(&Path) -> io::Result<String>,
+    C: FnOnce(&Path) -> io::Result<PathBuf>,
+{
     let input = parse_initial_source_args(args)?;
     let mut sources = SourceTexts::new();
     let stdlib_source_id = register_embedded_standard_library(&mut sources);
@@ -88,11 +112,20 @@ where
             sources.register(text, STDIN_DISPLAY_NAME)
         }
         InitialSourceInput::File { path, display_name } => {
-            let text = read_file(&path).map_err(|source| CliSourceError::ReadFile {
+            let canonical_path =
+                canonicalize_file(&path).map_err(|source| CliSourceError::CanonicalizeFile {
+                    display_name: display_name.clone(),
+                    source,
+                })?;
+            let text = read_file(&canonical_path).map_err(|source| CliSourceError::ReadFile {
                 display_name: display_name.clone(),
                 source,
             })?;
-            sources.register(text, display_name)
+            sources.register_with_acquisition(
+                text,
+                display_name,
+                SourceAcquisition::FileSystem { canonical_path },
+            )
         }
     };
 
