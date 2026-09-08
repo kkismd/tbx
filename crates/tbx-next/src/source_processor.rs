@@ -286,10 +286,24 @@ pub(crate) enum SourceProcessorError {
     CodeSpaceLookup(CodeSpaceLookupError),
     InstructionBuild(InstructionBuildError),
     SourceMappingLookup(SourceMappingLookupError),
-    SourceWordContextUnavailable { id: SourceWordId },
+    SourceWordContextUnavailable {
+        id: SourceWordId,
+    },
     SourceWordLookup(SourceWordLookupError),
     SourceWord(SourceWordError),
+    AdditionalSourceAcquisition {
+        span: SourceSpan,
+        specification: Box<str>,
+        kind: AdditionalSourceAcquisitionError,
+    },
     Runtime(RuntimeError),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum AdditionalSourceAcquisitionError {
+    RelativePathRequiresFileSource,
+    Canonicalize { path: Box<str>, message: Box<str> },
+    Read { path: Box<str>, message: Box<str> },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1569,6 +1583,14 @@ pub(crate) fn run_unit(
     unit: &TemporaryExecutionUnit,
     context: SourceExecutionContext<'_>,
 ) -> Result<SourceRunResult, SourceProcessorError> {
+    run_unit_with_data_stack(unit, context, &[])
+}
+
+pub(crate) fn run_unit_with_data_stack(
+    unit: &TemporaryExecutionUnit,
+    context: SourceExecutionContext<'_>,
+    initial_data_stack: &[Value],
+) -> Result<SourceRunResult, SourceProcessorError> {
     let mut code_spaces = Vec::with_capacity(context.code_spaces.len() + 1);
     code_spaces.push(unit.code.instruction_view());
     code_spaces.extend_from_slice(context.code_spaces);
@@ -1588,6 +1610,9 @@ pub(crate) fn run_unit(
     }
     let mut vm = Vm::new_at_location_in(&mut execution, unit.entry)
         .map_err(|error| map_runtime_error(error, unit, context.source_mappings))?;
+    for value in initial_data_stack {
+        vm.push_data(*value);
+    }
     let outcome = vm
         .run(&mut execution)
         .map_err(|error| map_runtime_error(error, unit, context.source_mappings))?;
@@ -2634,6 +2659,7 @@ impl SourceProcessorError {
             Self::InstructionBuild(_) => None,
             Self::SourceWordContextUnavailable { .. } | Self::SourceWordLookup(_) => None,
             Self::SourceWord(error) => error.primary_span(),
+            Self::AdditionalSourceAcquisition { span, .. } => Some(*span),
             Self::Runtime(error) => error.source_span().ok().flatten(),
         }
     }
