@@ -142,6 +142,7 @@ pub(crate) struct SourceProcessingSession {
     environment: BatchEnvironment,
     frames: Vec<SourceFrame>,
     acquisition_states: SourceAcquisitionStates,
+    failed: bool,
 }
 
 impl SourceProcessingSession {
@@ -160,6 +161,7 @@ impl SourceProcessingSession {
             environment,
             frames: Vec::new(),
             acquisition_states: SourceAcquisitionStates::default(),
+            failed: false,
         };
         if let Err(error) = session.push_source(initial_source_id) {
             if let crate::source_processor::SourceProcessorError::Source(source) = error {
@@ -185,6 +187,7 @@ impl SourceProcessingSession {
                 form_index: 0,
             }],
             acquisition_states: SourceAcquisitionStates::default(),
+            failed: false,
         };
         let acquisition = session
             .sources
@@ -223,6 +226,27 @@ impl SourceProcessingSession {
     /// form, when compiler and publication borrows have ended. Returning a
     /// source id pushes that source before the caller frame's next form.
     pub(crate) fn run_with_hook<W>(
+        &mut self,
+        writer: &mut W,
+        hook: &mut AdditionalSourceHook<'_>,
+    ) -> Result<Option<SourceRunResult>, crate::source_processor::SourceProcessorError>
+    where
+        W: Write + ?Sized,
+    {
+        if self.failed {
+            return Err(crate::source_processor::SourceProcessorError::ProcessingSessionFailed);
+        }
+        let result = self.run_with_hook_inner(writer, hook);
+        if result.is_err() {
+            // A session that has started processing cannot be safely resumed:
+            // publication and runtime state may already contain prior forms.
+            // Keeping the session failed avoids defining retry semantics here.
+            self.failed = true;
+        }
+        result
+    }
+
+    fn run_with_hook_inner<W>(
         &mut self,
         writer: &mut W,
         hook: &mut AdditionalSourceHook<'_>,
@@ -370,7 +394,6 @@ fn acquire_filesystem_source_with_states(
         Ok(true) => {}
     }
     let text = fs::read_to_string(&canonical_path).map_err(|source| {
-        states.remove(&canonical_path);
         SourceProcessorError::AdditionalSourceAcquisition {
             span: request.span,
             specification: request.specification.clone(),
@@ -1525,5 +1548,148 @@ mod tests {
             session.acquisition_states.states.get(&canonical_path),
             Some(&SourceIdentityState::Completed)
         );
+    }
+
+    fn register_request_word_for_session(session: &mut SourceProcessingSession) {
+        crate::bootstrap::register_native_source_word(
+            &mut session.environment.source_words,
+            &mut session.environment.bindings,
+            name("REQUEST"),
+            request_source_word,
+        )
+        .expect("test source word should register");
+    }
+
+    #[test]
+    fn filesystem_session_detects_indirect_cycle_before_registering_cycle_source() {
+        let root = std::path::PathBuf::from(".tmp")
+            .join(format!("issue-1658-cycle-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).expect("fixture directory should be created");
+        let a_path = root.join("A");
+        let b_path = root.join("B");
+        std::fs::write(&a_path, "REQUEST B").expect("A fixture should be written");
+        std::fs::write(&b_path, "REQUEST A").expect("B fixture should be written");
+        let a_canonical = std::fs::canonicalize(&a_path).expect("A path should resolve");
+
+        let mut sources = SourceTexts::new();
+        let a_id = sources.register_with_acquisition(
+            "REQUEST B",
+            "A",
+            SourceAcquisition::FileSystem {
+                canonical_path: a_canonical.clone(),
+            },
+        );
+        let mut session =
+            SourceProcessingSession::new(sources, a_id).expect("processing session should build");
+        register_request_word_for_session(&mut session);
+        let mut writer = RecordingWriter::default();
+        let mut hook = |sources: &mut SourceTexts,
+                        states: &mut SourceAcquisitionStates,
+                        request: AdditionalSourceRequest| {
+            acquire_filesystem_source_with_states(sources, states, request)
+        };
+
+        let error = session
+            .run_with_hook(&mut writer, &mut hook)
+            .expect_err("A -> B -> A should be a cycle");
+        assert!(matches!(
+            error,
+            SourceProcessorError::AdditionalSourceAcquisition {
+                specification,
+                kind: AdditionalSourceAcquisitionError::Cycle,
+                ..
+            } if specification.as_ref() == "A"
+        ));
+        assert_eq!(session.sources().len(), 2, "cycle source must not register");
+        assert_eq!(
+            session.acquisition_states.states.get(&a_canonical),
+            Some(&SourceIdentityState::Processing)
+        );
+        std::fs::remove_dir_all(root).expect("fixture directory should be removed");
+    }
+
+    #[test]
+    fn filesystem_session_does_not_reprocess_completed_canonical_alias() {
+        let root = std::path::PathBuf::from(".tmp")
+            .join(format!("issue-1658-alias-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).expect("fixture directory should be created");
+        let a_path = root.join("A");
+        let b_path = root.join("B");
+        let alias_path = root.join("C");
+        std::fs::write(&a_path, "REQUEST B\nREQUEST C\nFOO").expect("A fixture should be written");
+        std::fs::write(&b_path, "DEF FOO\nEND").expect("B fixture should be written");
+        std::os::unix::fs::symlink("B", &alias_path).expect("alias should be created");
+        let a_canonical = std::fs::canonicalize(&a_path).expect("A path should resolve");
+
+        let mut sources = SourceTexts::new();
+        let a_id = sources.register_with_acquisition(
+            "REQUEST B\nREQUEST C\nFOO",
+            "A",
+            SourceAcquisition::FileSystem {
+                canonical_path: a_canonical,
+            },
+        );
+        let mut session =
+            SourceProcessingSession::new(sources, a_id).expect("processing session should build");
+        register_request_word_for_session(&mut session);
+        let mut writer = RecordingWriter::default();
+        let mut hook = |sources: &mut SourceTexts,
+                        states: &mut SourceAcquisitionStates,
+                        request: AdditionalSourceRequest| {
+            acquire_filesystem_source_with_states(sources, states, request)
+        };
+
+        session
+            .run_with_hook(&mut writer, &mut hook)
+            .expect("completed canonical alias should be a no-op");
+        assert_eq!(session.sources().len(), 2, "alias must not register twice");
+        std::fs::remove_dir_all(root).expect("fixture directory should be removed");
+    }
+
+    #[test]
+    fn filesystem_session_leaves_failed_source_uncompleted_and_cannot_resume() {
+        let root = std::path::PathBuf::from(".tmp")
+            .join(format!("issue-1658-failure-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).expect("fixture directory should be created");
+        let a_path = root.join("A");
+        let b_path = root.join("B");
+        std::fs::write(&a_path, "REQUEST B").expect("A fixture should be written");
+        std::fs::write(&b_path, "UNKNOWN").expect("B fixture should be written");
+        let a_canonical = std::fs::canonicalize(&a_path).expect("A path should resolve");
+        let b_canonical = std::fs::canonicalize(&b_path).expect("B path should resolve");
+
+        let mut sources = SourceTexts::new();
+        let a_id = sources.register_with_acquisition(
+            "REQUEST B",
+            "A",
+            SourceAcquisition::FileSystem {
+                canonical_path: a_canonical,
+            },
+        );
+        let mut session =
+            SourceProcessingSession::new(sources, a_id).expect("processing session should build");
+        register_request_word_for_session(&mut session);
+        let mut writer = RecordingWriter::default();
+        let mut hook = |sources: &mut SourceTexts,
+                        states: &mut SourceAcquisitionStates,
+                        request: AdditionalSourceRequest| {
+            acquire_filesystem_source_with_states(sources, states, request)
+        };
+
+        session
+            .run_with_hook(&mut writer, &mut hook)
+            .expect_err("B compilation should fail");
+        assert_eq!(
+            session.acquisition_states.states.get(&b_canonical),
+            Some(&SourceIdentityState::Processing)
+        );
+        let resume_error = session
+            .run_with_hook(&mut writer, &mut hook)
+            .expect_err("failed session must not be resumed");
+        assert_eq!(resume_error, SourceProcessorError::ProcessingSessionFailed);
+        std::fs::remove_dir_all(root).expect("fixture directory should be removed");
     }
 }

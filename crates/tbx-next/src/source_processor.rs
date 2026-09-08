@@ -281,6 +281,7 @@ pub(crate) struct RuntimeError {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum SourceProcessorError {
+    ProcessingSessionFailed,
     Source(SourceError),
     Lex(LexError),
     Compile(CompileError),
@@ -2652,7 +2653,10 @@ impl<'a> SourceExecutionContext<'a> {
 impl SourceProcessorError {
     pub(crate) fn primary_span(&self) -> Option<SourceSpan> {
         match self {
-            Self::Source(_) | Self::CodeSpaceLookup(_) | Self::SourceMappingLookup(_) => None,
+            Self::ProcessingSessionFailed
+            | Self::Source(_)
+            | Self::CodeSpaceLookup(_)
+            | Self::SourceMappingLookup(_) => None,
             Self::Lex(error) => match error {
                 LexError::Source(_) => None,
                 LexError::InvalidCharacter { span, .. } => Some(*span),

@@ -97,6 +97,7 @@ impl UserFacingFailure {
 
 fn classify_source_error(error: &SourceProcessorError) -> UserFacingFailureClass {
     match error {
+        SourceProcessorError::ProcessingSessionFailed => UserFacingFailureClass::Environment,
         SourceProcessorError::Lex(LexError::InvalidCharacter { .. })
         | SourceProcessorError::Compile(_)
         | SourceProcessorError::SourceWord(_) => UserFacingFailureClass::UserProgram,
@@ -183,6 +184,7 @@ fn diagnostic_for_infrastructure_failure(failure: UserFacingDiagnosticFailure) -
 
 fn diagnostic_message(error: &SourceProcessorError) -> &'static str {
     match error {
+        SourceProcessorError::ProcessingSessionFailed => "source processing session failed",
         SourceProcessorError::Lex(LexError::InvalidCharacter { .. }) => "lexical error",
         SourceProcessorError::Lex(LexError::Source(_)) | SourceProcessorError::Source(_) => {
             "source lookup failed"
@@ -211,6 +213,7 @@ fn diagnostic_message(error: &SourceProcessorError) -> &'static str {
 
 fn diagnostic_target(error: &SourceProcessorError) -> &'static str {
     match error {
+        SourceProcessorError::ProcessingSessionFailed => "source processing session",
         SourceProcessorError::Runtime(_) => "runtime",
         SourceProcessorError::Lex(_) | SourceProcessorError::Compile(_) => "source program",
         SourceProcessorError::Source(_)
