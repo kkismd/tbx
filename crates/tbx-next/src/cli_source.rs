@@ -54,6 +54,10 @@ impl InitialSource {
         &self.session
     }
 
+    pub(crate) fn session_mut(&mut self) -> &mut SourceProcessingSession {
+        &mut self.session
+    }
+
     pub(crate) fn sources(&self) -> &crate::source::SourceTexts {
         self.session.sources()
     }
@@ -77,12 +81,9 @@ impl InitialSource {
 pub(crate) fn acquire_from_env() -> Result<InitialSource, CliSourceError> {
     let stdin = io::stdin();
     let mut stdin = stdin.lock();
-    acquire_initial_source_with_canonicalizer(
-        env::args_os().skip(1),
-        &mut stdin,
-        |path| fs::read_to_string(path),
-        |path| fs::canonicalize(path),
-    )
+    acquire_initial_source(env::args_os().skip(1), &mut stdin, |path| {
+        fs::read_to_string(path)
+    })
 }
 
 pub(crate) fn acquire_initial_source<I, S, R, F>(
@@ -96,7 +97,7 @@ where
     R: Read,
     F: FnOnce(&Path) -> io::Result<String>,
 {
-    acquire_initial_source_with_canonicalizer(args, stdin, read_file, |path| Ok(path.to_path_buf()))
+    acquire_initial_source_with_canonicalizer(args, stdin, read_file, |_| Ok(None))
 }
 
 pub(crate) fn acquire_initial_source_with_canonicalizer<I, S, R, F, C>(
@@ -110,7 +111,7 @@ where
     S: Into<OsString>,
     R: Read,
     F: FnOnce(&Path) -> io::Result<String>,
-    C: FnOnce(&Path) -> io::Result<PathBuf>,
+    C: FnOnce(&Path) -> io::Result<Option<PathBuf>>,
 {
     let input = parse_initial_source_args(args)?;
     let mut session = SourceProcessingSession::new();
@@ -141,7 +142,7 @@ where
             session.register(
                 text,
                 display_name,
-                SourceAcquisition::filesystem(canonical_path),
+                SourceAcquisition::Filesystem { canonical_path },
             )
         }
     };
@@ -233,7 +234,7 @@ mod tests {
             ["./relative/program.tbx"],
             &mut stdin,
             |_| Ok("PRINT 7".to_owned()),
-            |_| Ok(PathBuf::from("/workspace/project/program.tbx")),
+            |_| Ok(Some(PathBuf::from("/workspace/project/program.tbx"))),
         )
         .expect("file source acquisition should succeed");
 

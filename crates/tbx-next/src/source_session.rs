@@ -7,7 +7,7 @@ use crate::source::{SourceError, SourceId, SourceSpan, SourceTexts, SourceView};
 /// diagnostics (#1643).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum SourceAcquisition {
-    Filesystem { canonical_path: PathBuf },
+    Filesystem { canonical_path: Option<PathBuf> },
     NoFilesystemLocation,
 }
 
@@ -52,6 +52,13 @@ impl SourceProcessingSession {
         &self.sources
     }
 
+    /// Returns a source snapshot that can be processed while this session is
+    /// mutably borrowed by an acquisition callback. The source owner remains
+    /// unchanged, so existing `SourceId` and `SourceSpan` values stay valid.
+    pub(crate) fn snapshot_sources(&self) -> SourceTexts {
+        self.sources.clone()
+    }
+
     pub(crate) fn source_view(&self) -> SourceView<'_> {
         self.sources.view()
     }
@@ -81,13 +88,19 @@ impl SourceProcessingSession {
 impl SourceAcquisition {
     pub(crate) fn filesystem(canonical_path: impl Into<PathBuf>) -> Self {
         Self::Filesystem {
-            canonical_path: canonical_path.into(),
+            canonical_path: Some(canonical_path.into()),
+        }
+    }
+
+    pub(crate) fn filesystem_pending() -> Self {
+        Self::Filesystem {
+            canonical_path: None,
         }
     }
 
     pub(crate) fn canonical_path(&self) -> Option<&Path> {
         match self {
-            Self::Filesystem { canonical_path } => Some(canonical_path),
+            Self::Filesystem { canonical_path } => canonical_path.as_deref(),
             Self::NoFilesystemLocation => None,
         }
     }
@@ -173,6 +186,41 @@ mod tests {
             Err(SourceSessionError::Source(SourceError::InvalidSourceId {
                 id: foreign
             }))
+        );
+    }
+
+    #[test]
+    fn source_processing_can_register_while_an_existing_source_is_in_flight() {
+        let mut session = SourceProcessingSession::new();
+        let source_a = session.register(
+            "PRINT A",
+            "a.tbx",
+            SourceAcquisition::filesystem("/workspace/a.tbx"),
+        );
+        let in_flight = session.snapshot_sources();
+        let span_a = in_flight.view().span(source_a, 0, 5).unwrap();
+
+        // This models the synchronous acquisition callback invoked while A is
+        // being processed. It mutates the session, not A's borrowed snapshot.
+        let source_b = session.register(
+            "PRINT B",
+            "b.tbx",
+            SourceAcquisition::filesystem("/workspace/b.tbx"),
+        );
+
+        assert_eq!(in_flight.view().source(span_a.source_id()), Ok("PRINT A"));
+        let after_callback = session.snapshot_sources();
+        assert_eq!(after_callback.view().source(source_b), Ok("PRINT B"));
+        assert_eq!(
+            session
+                .acquisition_for_span(after_callback.view().span(source_a, 0, 5).unwrap())
+                .unwrap()
+                .canonical_path(),
+            Some(Path::new("/workspace/a.tbx"))
+        );
+        assert_eq!(
+            session.acquisition(source_b).unwrap().canonical_path(),
+            Some(Path::new("/workspace/b.tbx"))
         );
     }
 }

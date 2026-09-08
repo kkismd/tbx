@@ -149,7 +149,7 @@ where
 /// session, so later acquisition can append source records without replacing
 /// the mapping owner (#1642/#1649).
 pub(crate) fn execute_source_session<W>(
-    session: &SourceProcessingSession,
+    session: &mut SourceProcessingSession,
     stdlib_source_id: SourceId,
     source_id: SourceId,
     writer: &mut W,
@@ -157,7 +157,8 @@ pub(crate) fn execute_source_session<W>(
 where
     W: Write + ?Sized,
 {
-    execute_registered_sources(session.sources(), stdlib_source_id, source_id, writer)
+    let sources = session.snapshot_sources();
+    execute_registered_sources(&sources, stdlib_source_id, source_id, writer)
 }
 
 pub(crate) fn execute_registered_sources<W>(

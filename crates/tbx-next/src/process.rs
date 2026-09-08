@@ -33,13 +33,12 @@ pub(crate) fn run_from_env() -> ExitCode {
     let stderr = io::stderr();
     let mut stderr = stderr.lock();
 
-    run_with_io_and_canonicalizer(
+    run_with_io(
         env::args_os().skip(1),
         &mut stdin,
         &mut stdout,
         &mut stderr,
         |path| fs::read_to_string(path),
-        |path| fs::canonicalize(path),
     )
     .exit_code()
 }
@@ -59,34 +58,7 @@ where
     E: Write + ?Sized,
     F: FnOnce(&Path) -> io::Result<String>,
 {
-    run_with_io_and_canonicalizer(args, stdin, stdout, stderr, read_file, |path| {
-        Ok(path.to_path_buf())
-    })
-}
-
-fn run_with_io_and_canonicalizer<I, S, R, O, E, F, C>(
-    args: I,
-    stdin: &mut R,
-    stdout: &mut O,
-    stderr: &mut E,
-    read_file: F,
-    canonicalize: C,
-) -> ProcessStatus
-where
-    I: IntoIterator<Item = S>,
-    S: Into<OsString>,
-    R: Read,
-    O: Write + ?Sized,
-    E: Write + ?Sized,
-    F: FnOnce(&Path) -> io::Result<String>,
-    C: FnOnce(&Path) -> io::Result<std::path::PathBuf>,
-{
-    let source = match crate::cli_source::acquire_initial_source_with_canonicalizer(
-        args,
-        stdin,
-        read_file,
-        canonicalize,
-    ) {
+    let mut source = match crate::cli_source::acquire_initial_source(args, stdin, read_file) {
         Ok(source) => source,
         Err(error) => {
             let diagnostic = acquisition_diagnostic(&error);
@@ -94,12 +66,9 @@ where
         }
     };
 
-    match execute_source_session(
-        source.session(),
-        source.stdlib_source_id(),
-        source.source_id(),
-        stdout,
-    ) {
+    let stdlib_source_id = source.stdlib_source_id();
+    let source_id = source.source_id();
+    match execute_source_session(source.session_mut(), stdlib_source_id, source_id, stdout) {
         BatchExecutionResult::Success(_) => ProcessStatus::Success,
         BatchExecutionResult::Failure(failure) => write_diagnostic(stderr, failure.diagnostic()),
     }
