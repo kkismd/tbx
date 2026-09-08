@@ -1610,6 +1610,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(unix)]
     fn filesystem_session_does_not_reprocess_completed_canonical_alias() {
         let root = std::path::PathBuf::from(".tmp")
             .join(format!("issue-1658-alias-{}", std::process::id()));
