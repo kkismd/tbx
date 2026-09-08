@@ -376,8 +376,7 @@ impl SourceWordError {
             Self::Source { .. }
             | Self::InstructionBuild { .. }
             | Self::VarPublicationContextUnavailable
-            | Self::Expression { .. }
-            | Self::AdditionalSourceProcessingUnavailable { .. } => None,
+            | Self::Expression { .. } => None,
             Self::UnsupportedSourceWord { span }
             | Self::VarSyntax { span, .. }
             | Self::VarLocalLineNumberPrefix { span }
@@ -406,6 +405,7 @@ impl SourceWordError {
             | Self::SyntaxReservedName { span }
             | Self::SyntaxPublicationContextUnavailable { span }
             | Self::SyntaxBindingCommitInvariantViolated { span }
+            | Self::AdditionalSourceProcessingUnavailable { span }
             | Self::StructuredGrammar { span, .. }
             | Self::StructuredMissingTerminator { span } => Some(*span),
             Self::SyntaxBuild { source } => Some(source.primary_span()),

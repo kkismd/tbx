@@ -235,7 +235,7 @@ mod tests {
     use crate::source_processor::{
         compile_source, run_source, SourceCompileContext, SourceExecutionContext,
     };
-    use crate::source_word::SourceWordRegistry;
+    use crate::source_word::{SourceWordError, SourceWordRegistry};
     use crate::value::Value;
     use crate::vm::{RunOutcome, VmErrorKind};
     use crate::word::{CompletedWordDefinition, PublishedWords};
@@ -388,6 +388,29 @@ mod tests {
         assert_eq!(
             failure(classify(&compile_sources, Err(compile_error))).class(),
             UserFacingFailureClass::UserProgram
+        );
+    }
+
+    #[test]
+    fn unavailable_additional_source_processing_keeps_request_span_in_user_diagnostic() {
+        let (sources, source_id) = source("USE library");
+        let expected_span = span(&sources, source_id, 0, 11);
+        let error = SourceProcessorError::SourceWord(
+            SourceWordError::AdditionalSourceProcessingUnavailable {
+                span: expected_span,
+            },
+        );
+
+        let failure = failure(classify(&sources, Err(error)));
+
+        assert_eq!(failure.class(), UserFacingFailureClass::UserProgram);
+        assert_eq!(failure.original_error().primary_span(), Some(expected_span));
+        let rendered = DiagnosticRenderer::new(sources.view())
+            .render(failure.diagnostic())
+            .expect("source word diagnostic should render");
+        assert_eq!(
+            rendered.primary().map(|primary| primary.source_line()),
+            Some("USE library")
         );
     }
 
