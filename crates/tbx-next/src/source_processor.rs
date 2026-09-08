@@ -303,6 +303,7 @@ pub(crate) enum SourceProcessorError {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum AdditionalSourceAcquisitionError {
     RelativePathRequiresFileSource,
+    Cycle,
     Canonicalize { path: PathBuf, message: Box<str> },
     Read { path: PathBuf, message: Box<str> },
 }
