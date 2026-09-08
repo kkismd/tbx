@@ -2954,6 +2954,29 @@ mod tests {
         context.append_mapped(Instruction::Push(value(99)), first.span())
     }
 
+    fn request_additional_source_for_test(
+        context: &mut NativeSourceWordContext<'_, '_>,
+    ) -> Result<(), SourceWordError> {
+        let specification = context.statement_reader_mut().read_name().map_err(|_| {
+            SourceWordError::UnsupportedSourceWord {
+                span: context.source_word_token().span(),
+            }
+        })?;
+        context.process_additional_source(specification.span())?;
+        context.statement_reader_mut().finish().map_err(|_| {
+            SourceWordError::UnsupportedSourceWord {
+                span: context.source_word_token().span(),
+            }
+        })
+    }
+
+    fn start_requesting_structured_source_word(
+        context: &mut NativeSourceWordContext<'_, '_>,
+    ) -> Result<StructuredSourceWordInstance, SourceWordError> {
+        request_additional_source_for_test(context)?;
+        unreachable!("a structured source request should return an error in its body")
+    }
+
     fn consume_one_following_statement(
         context: &mut NativeSourceWordContext<'_, '_>,
     ) -> Result<(), SourceWordError> {
@@ -4984,6 +5007,36 @@ mod tests {
             quotation.instruction_view().get(address(0)),
             Ok(&Instruction::Push(value(99)))
         );
+    }
+
+    #[test]
+    fn quotation_body_does_not_provide_additional_source_capability() {
+        let (_words, _primitives, operators) = operator_fixture();
+        let mut source_words = SourceWordRegistry::new();
+        let mut bindings = Bindings::new();
+        register_native_source_word(
+            &mut source_words,
+            &mut bindings,
+            name("REQUEST"),
+            request_additional_source_for_test,
+        )
+        .expect("source word should register");
+
+        let (_sources, _id, error) = compile_quotation_error(
+            "REQUEST library",
+            QuotationBodyCompileContext::with_source_words_and_operators(
+                &bindings,
+                source_words.lookup(),
+                operators.lookup(),
+            ),
+        );
+
+        assert!(matches!(
+            error,
+            SourceProcessorError::SourceWord(
+                SourceWordError::AdditionalSourceProcessingUnavailable { .. }
+            )
+        ));
     }
 
     #[test]
@@ -7937,6 +7990,35 @@ mod tests {
             Ok(&Instruction::Push(value(30)))
         );
         assert_eq!(unit.instructions().get(address(3)), Ok(&Instruction::Halt));
+    }
+
+    #[test]
+    fn structured_source_word_body_does_not_provide_additional_source_capability() {
+        let mut source_words = SourceWordRegistry::new();
+        let mut bindings = Bindings::new();
+        register_structured_probe(
+            &mut source_words,
+            &mut bindings,
+            "REQUEST_BLOCK",
+            start_requesting_structured_source_word,
+            Vec::new(),
+            structured_grammar(Vec::new(), "END"),
+        );
+        let (sources, source_id) = source("REQUEST_BLOCK library");
+
+        let error = compile_source(
+            sources.view(),
+            source_id,
+            SourceCompileContext::with_source_words(&bindings, source_words.lookup()),
+        )
+        .expect_err("structured source word body should reject the capability");
+
+        assert!(matches!(
+            error,
+            SourceProcessorError::SourceWord(
+                SourceWordError::AdditionalSourceProcessingUnavailable { .. }
+            )
+        ));
     }
 
     #[test]
