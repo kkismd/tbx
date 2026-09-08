@@ -51,18 +51,13 @@ impl SourceWordId {
 pub(crate) type NativeSourceWordHandler =
     fn(&mut NativeSourceWordContext<'_, '_>) -> Result<(), SourceWordError>;
 
-/// Synchronously processes a source designated by a native source word.
-///
-/// The processor owns acquisition and source-processing state. Keeping this
-/// callback separate from the source-word context prevents native handlers
-/// from receiving filesystem, source storage, compiler, or publication
-/// capabilities directly.
-pub(crate) trait AdditionalSourceProcessor {
-    fn process_additional_source(
-        &mut self,
-        source_specification: &str,
-        request_span: SourceSpan,
-    ) -> Result<(), SourceWordError>;
+/// Result data returned from a top-level native source word to its processing
+/// run. It owns only the requested specification and its source span; it does
+/// not retain source storage, compiler state, or publication borrows.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct AdditionalSourceRequest {
+    pub(crate) specification: Box<str>,
+    pub(crate) span: SourceSpan,
 }
 
 pub(crate) type NativeStructuredSourceWordStartHandler =
@@ -1108,7 +1103,8 @@ pub(crate) struct NativeSourceWordContext<'source, 'state> {
     globals: Option<&'state mut GlobalVariables>,
     runtime_definitions: Option<&'state mut dyn RuntimeDefinitionPublisher<'source>>,
     source_word_publication: Option<&'state SourceWordRegistry>,
-    additional_source_processor: Option<&'state RefCell<dyn AdditionalSourceProcessor>>,
+    additional_source_capability: bool,
+    additional_source_request: Option<AdditionalSourceRequest>,
 }
 
 pub(crate) struct NativeSourceWordContextParts<'source, 'state> {
@@ -1123,7 +1119,7 @@ pub(crate) struct NativeSourceWordContextParts<'source, 'state> {
     pub(crate) globals: Option<&'state mut GlobalVariables>,
     pub(crate) runtime_definitions: Option<&'state mut dyn RuntimeDefinitionPublisher<'source>>,
     pub(crate) source_word_publication: Option<&'state SourceWordRegistry>,
-    pub(crate) additional_source_processor: Option<&'state RefCell<dyn AdditionalSourceProcessor>>,
+    pub(crate) additional_source_capability: bool,
 }
 
 impl<'source, 'state> NativeSourceWordContext<'source, 'state> {
@@ -1147,7 +1143,8 @@ impl<'source, 'state> NativeSourceWordContext<'source, 'state> {
             globals: parts.globals,
             runtime_definitions: parts.runtime_definitions,
             source_word_publication: parts.source_word_publication,
-            additional_source_processor: parts.additional_source_processor,
+            additional_source_capability: parts.additional_source_capability,
+            additional_source_request: None,
         }
     }
 
@@ -1179,29 +1176,36 @@ impl<'source, 'state> NativeSourceWordContext<'source, 'state> {
             .map_err(|source| SourceWordError::Source { source })
     }
 
-    /// Requests synchronous processing of the source named by `span`.
+    /// Records a source request for the enclosing top-level form result.
     ///
-    /// The request completes before this method returns, so a native source
-    /// word resumes only after the source-processing side reports success or
-    /// failure. The source word receives no direct access to source storage or
-    /// compiler state (#1642).
+    /// The request is available only in a top-level native source-word
+    /// context. The source word receives no direct access to source storage or
+    /// compiler state (#1642/#1656).
     pub(crate) fn process_additional_source(
         &mut self,
         specification_span: SourceSpan,
     ) -> Result<(), SourceWordError> {
+        if !self.additional_source_capability {
+            return Err(SourceWordError::AdditionalSourceProcessingUnavailable {
+                span: self.statement_span()?,
+            });
+        }
         let source_specification = self
             .view
             .slice(specification_span)
-            .map_err(|source| SourceWordError::Source { source })?;
+            .map_err(|source| SourceWordError::Source { source })?
+            .to_owned()
+            .into_boxed_str();
         let request_span = self.statement_span()?;
-        let Some(processor) = &mut self.additional_source_processor else {
-            return Err(SourceWordError::AdditionalSourceProcessingUnavailable {
-                span: request_span,
-            });
-        };
-        processor
-            .borrow_mut()
-            .process_additional_source(source_specification, request_span)
+        self.additional_source_request = Some(AdditionalSourceRequest {
+            specification: source_specification,
+            span: request_span,
+        });
+        Ok(())
+    }
+
+    pub(crate) fn take_additional_source_request(&mut self) -> Option<AdditionalSourceRequest> {
+        self.additional_source_request.take()
     }
 
     pub(crate) fn statement_reader_mut(&mut self) -> &mut SourceStatementReader<'source> {
@@ -2987,23 +2991,6 @@ mod tests {
         context.append_mapped(Instruction::Push(Value::integer(1)), first.span())
     }
 
-    struct TestAdditionalSourceProcessor {
-        requests: Vec<(String, SourceSpan)>,
-        result: Result<(), SourceWordError>,
-    }
-
-    impl AdditionalSourceProcessor for TestAdditionalSourceProcessor {
-        fn process_additional_source(
-            &mut self,
-            source_specification: &str,
-            request_span: SourceSpan,
-        ) -> Result<(), SourceWordError> {
-            self.requests
-                .push((source_specification.to_owned(), request_span));
-            self.result.clone()
-        }
-    }
-
     fn request_additional_source(
         context: &mut NativeSourceWordContext<'_, '_>,
     ) -> Result<(), SourceWordError> {
@@ -3025,15 +3012,10 @@ mod tests {
     }
 
     #[test]
-    fn native_context_processes_additional_source_synchronously_with_specification_and_statement_span(
-    ) {
+    fn native_context_returns_additional_source_request_with_specification_and_statement_span() {
         let (sources, source_id, tokens) = statement_tokens("TEST library");
         let mut code = SourceMappedCode::new();
         let mut builder = BlockCodeBuilder::new(&mut code);
-        let processor = RefCell::new(TestAdditionalSourceProcessor {
-            requests: Vec::new(),
-            result: Ok(()),
-        });
         let bindings = Bindings::new();
         let mut context = NativeSourceWordContext::new(NativeSourceWordContextParts {
             view: sources.view(),
@@ -3047,14 +3029,17 @@ mod tests {
             globals: None,
             runtime_definitions: None,
             source_word_publication: None,
-            additional_source_processor: Some(&processor),
+            additional_source_capability: true,
         });
 
         request_additional_source(&mut context).expect("additional source request should succeed");
 
         assert_eq!(
-            processor.borrow().requests,
-            vec![("library".to_owned(), span(sources.view(), source_id, 0, 12))]
+            context.take_additional_source_request(),
+            Some(AdditionalSourceRequest {
+                specification: "library".into(),
+                span: span(sources.view(), source_id, 0, 12),
+            })
         );
         builder
             .finish()
@@ -3080,7 +3065,7 @@ mod tests {
             globals: None,
             runtime_definitions: None,
             source_word_publication: None,
-            additional_source_processor: None,
+            additional_source_capability: false,
         });
 
         assert_eq!(
@@ -3092,17 +3077,10 @@ mod tests {
     }
 
     #[test]
-    fn native_context_propagates_additional_source_processing_failure() {
+    fn native_context_records_only_the_requested_source() {
         let (sources, source_id, tokens) = statement_tokens("TEST library");
         let mut code = SourceMappedCode::new();
         let mut builder = BlockCodeBuilder::new(&mut code);
-        let failure = SourceWordError::UnsupportedSourceWord {
-            span: span(sources.view(), source_id, 0, 12),
-        };
-        let processor = RefCell::new(TestAdditionalSourceProcessor {
-            requests: Vec::new(),
-            result: Err(failure.clone()),
-        });
         let bindings = Bindings::new();
         let mut context = NativeSourceWordContext::new(NativeSourceWordContextParts {
             view: sources.view(),
@@ -3116,10 +3094,17 @@ mod tests {
             globals: None,
             runtime_definitions: None,
             source_word_publication: None,
-            additional_source_processor: Some(&processor),
+            additional_source_capability: true,
         });
 
-        assert_eq!(request_additional_source(&mut context), Err(failure));
+        request_additional_source(&mut context).expect("request should be recorded");
+        assert_eq!(
+            context
+                .take_additional_source_request()
+                .expect("request should be available")
+                .specification,
+            "library".into()
+        );
     }
 
     #[test]
@@ -3274,7 +3259,7 @@ mod tests {
             globals: None,
             runtime_definitions: None,
             source_word_publication: None,
-            additional_source_processor: None,
+            additional_source_capability: false,
         });
 
         let first_body_token = context
@@ -3481,7 +3466,7 @@ mod tests {
                 globals: None,
                 runtime_definitions: None,
                 source_word_publication: None,
-                additional_source_processor: None,
+                additional_source_capability: false,
             });
 
             push_one(&mut context).expect("test source word should emit");
@@ -3518,7 +3503,7 @@ mod tests {
                     globals: Some(&mut globals),
                     runtime_definitions: None,
                     source_word_publication: None,
-                    additional_source_processor: None,
+                    additional_source_capability: false,
                 });
 
                 var_source_word(&mut context)

@@ -12,12 +12,12 @@ use crate::output_primitive::register_output_primitives;
 use crate::primitive::PrimitiveRegistry;
 use crate::published_code::PublishedCode;
 use crate::runtime_output::WriteRuntimeOutput;
-use crate::source::{SourceId, SourceSpan, SourceTexts};
+use crate::source::{SourceId, SourceTexts};
 use crate::source_processor::{
     compile_source, run_unit, SourceCompileContext, SourceExecutionContext, SourceFormCursor,
     SourceRunResult,
 };
-use crate::source_word::SourceWordRegistry;
+use crate::source_word::{AdditionalSourceRequest, SourceWordRegistry};
 use crate::stack_primitive::register_stack_primitives;
 use crate::user_facing::{UserFacingFailure, UserFacingFailureClass, UserFacingRunResult};
 use crate::word::PublishedWords;
@@ -69,15 +69,6 @@ struct SourceFrame {
     source_id: SourceId,
     forms: SourceFormCursor,
     form_index: usize,
-}
-
-/// A source requested after a complete form has returned control to the run.
-/// It owns no compiler or publication references, so it can safely cross the
-/// session's temporary mutable-borrow boundary.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct AdditionalSourceRequest {
-    pub(crate) specification: Box<str>,
-    pub(crate) span: SourceSpan,
 }
 
 /// Test/host seam for acquisition. The callback runs only between complete
@@ -149,7 +140,6 @@ impl SourceProcessingSession {
     {
         while !self.frames.is_empty() {
             let frame_index = self.frames.len() - 1;
-            let source_id = self.frames[frame_index].source_id;
             let unit = {
                 let sources = &self.sources;
                 let environment = &mut self.environment;
@@ -157,17 +147,10 @@ impl SourceProcessingSession {
                 let context = environment.compile_context();
                 frame.forms.compile_next_form(sources.view(), context)?
             };
-            let Some(unit) = unit else {
+            let Some(form) = unit else {
                 self.frames.pop();
                 continue;
             };
-
-            let request_span = unit
-                .source_span(unit.entry_location())
-                .map_err(crate::source_processor::SourceProcessorError::from)?
-                .ok_or(crate::source_processor::SourceProcessorError::Source(
-                    crate::source::SourceError::InvalidSourceId { id: source_id },
-                ))?;
             {
                 let code_spaces = [self.environment.published_code.instruction_view()];
                 let source_mappings = [self.environment.published_code.source_mapping()];
@@ -183,19 +166,14 @@ impl SourceProcessingSession {
                 )
                 .with_mut_globals(self.environment.globals.view_mut())
                 .with_output(&mut output);
-                run_unit(&unit, context)?;
+                run_unit(&form.unit, context)?;
             }
 
             self.frames[frame_index].form_index += 1;
-            let specification: Box<str> = self.sources.view().slice(request_span)?.into();
-            if let Some(additional_source_id) = hook(
-                &mut self.sources,
-                AdditionalSourceRequest {
-                    specification,
-                    span: request_span,
-                },
-            )? {
-                self.push_source(additional_source_id)?;
+            if let Some(request) = form.additional_source {
+                if let Some(additional_source_id) = hook(&mut self.sources, request)? {
+                    self.push_source(additional_source_id)?;
+                }
             }
         }
         Ok(())
@@ -279,6 +257,7 @@ impl BatchEnvironment {
             &mut self.published_code,
             &mut self.words,
         )
+        .with_additional_source_capability()
     }
 }
 
@@ -418,6 +397,28 @@ mod tests {
 
     fn name(value: &str) -> crate::name::NormalizedName {
         crate::name::NormalizedName::new(value).expect("test name should be valid")
+    }
+
+    fn request_source_word(
+        context: &mut crate::source_word::NativeSourceWordContext<'_, '_>,
+    ) -> Result<(), crate::source_word::SourceWordError> {
+        let specification = context.statement_reader_mut().read_name().map_err(|_| {
+            crate::source_word::SourceWordError::UnsupportedSourceWord {
+                span: context.source_word_token().span(),
+            }
+        })?;
+        context.process_additional_source(specification.span())?;
+        context.statement_reader_mut().finish().map_err(|_| {
+            crate::source_word::SourceWordError::UnsupportedSourceWord {
+                span: context.source_word_token().span(),
+            }
+        })
+    }
+
+    fn noop_source_word(
+        _context: &mut crate::source_word::NativeSourceWordContext<'_, '_>,
+    ) -> Result<(), crate::source_word::SourceWordError> {
+        Ok(())
     }
 
     #[derive(Debug, Default)]
@@ -969,45 +970,89 @@ mod tests {
     }
 
     #[test]
-    fn processing_session_adds_and_returns_from_nested_source_at_form_boundary() {
+    fn native_source_word_requests_nested_sources_and_returns_to_each_caller_form() {
         let mut sources = SourceTexts::new();
-        let source_id = sources.register("DEF FOO\nEVAL 1\nEND\nEVAL FOO()", "main.tbx");
+        let source_id = sources.register("REQUEST B\nNOOP", "main.tbx");
         let mut session = SourceProcessingSession::new(sources, source_id)
             .expect("processing session should build");
+        crate::bootstrap::register_native_source_word(
+            &mut session.environment.source_words,
+            &mut session.environment.bindings,
+            name("REQUEST"),
+            request_source_word,
+        )
+        .expect("test source word should register");
+        crate::bootstrap::register_native_source_word(
+            &mut session.environment.source_words,
+            &mut session.environment.bindings,
+            name("NOOP"),
+            noop_source_word,
+        )
+        .expect("test no-op source word should register");
         let mut writer = RecordingWriter::default();
-        let mut added = false;
+        let mut added_b = false;
+        let mut added_c = false;
         let mut order_ids = Vec::new();
         let mut hook = |sources: &mut SourceTexts, request: AdditionalSourceRequest| {
             order_ids.push(request.span.source_id());
-            if added {
-                return Ok(None);
+            match request.specification.as_ref() {
+                "B" if !added_b => {
+                    added_b = true;
+                    Ok(Some(sources.register_with_acquisition(
+                        "REQUEST C\nNOOP",
+                        "nested-display.tbx",
+                        crate::source::SourceAcquisition::FileSystem {
+                            canonical_path: "/canonical/nested.tbx".into(),
+                        },
+                    )))
+                }
+                "C" if !added_c => {
+                    added_c = true;
+                    Ok(Some(sources.register("NOOP", "leaf.tbx")))
+                }
+                specification => panic!("unexpected additional source: {specification}"),
             }
-            added = true;
-            let nested = sources.register_with_acquisition(
-                "EVAL FOO()",
-                "nested-display.tbx",
-                crate::source::SourceAcquisition::FileSystem {
-                    canonical_path: "/canonical/nested.tbx".into(),
-                },
-            );
-            assert_eq!(sources.view().source(nested), Ok("EVAL FOO()"));
-            assert_eq!(
-                sources.view().acquisition(nested),
-                Ok(&crate::source::SourceAcquisition::FileSystem {
-                    canonical_path: "/canonical/nested.tbx".into(),
-                })
-            );
-            Ok(Some(nested))
         };
 
         session
             .run_with_hook(&mut writer, &mut hook)
             .expect("nested source should complete");
         assert_eq!(writer.text(), "");
-        assert_eq!(order_ids.len(), 3);
+        assert_eq!(order_ids.len(), 2);
         assert_eq!(order_ids.first(), Some(&source_id));
-        assert_eq!(order_ids.last(), Some(&source_id));
         assert_ne!(order_ids.get(1), Some(&source_id));
-        assert_eq!(session.sources().len(), 2);
+        assert_eq!(session.sources().len(), 3);
+    }
+
+    #[test]
+    fn additional_source_capability_is_unavailable_inside_definition_body() {
+        let mut sources = SourceTexts::new();
+        let source_id = sources.register("DEF FOO\nREQUEST B\nEND", "main.tbx");
+        let mut session = SourceProcessingSession::new(sources, source_id)
+            .expect("processing session should build");
+        crate::bootstrap::register_native_source_word(
+            &mut session.environment.source_words,
+            &mut session.environment.bindings,
+            name("REQUEST"),
+            request_source_word,
+        )
+        .expect("test source word should register");
+        let mut writer = RecordingWriter::default();
+        let mut hook = |_sources: &mut SourceTexts, _request: AdditionalSourceRequest| {
+            panic!("definition body must not receive additional source capability")
+        };
+
+        let error = session
+            .run_with_hook(&mut writer, &mut hook)
+            .expect_err("definition body request should be unavailable");
+        assert!(
+            matches!(
+                &error,
+                crate::source_processor::SourceProcessorError::SourceWord(
+                    crate::source_word::SourceWordError::DefBodyCompile { .. }
+                )
+            ),
+            "unexpected error: {error:?}"
+        );
     }
 }
