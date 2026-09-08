@@ -59,6 +59,138 @@ pub(crate) struct TemporaryExecutionUnit {
     entry: CodeLocation,
 }
 
+/// Owns the tokenized source while allowing the processing session to return
+/// between complete top-level forms. It intentionally stores no `SourceView`:
+/// registering another source must be possible between calls without keeping a
+/// borrow into `SourceTexts` alive.
+pub(crate) struct SourceFormCursor {
+    source_id: SourceId,
+    segmented: SegmentedSource,
+    position: usize,
+}
+
+impl SourceFormCursor {
+    pub(crate) fn new(
+        view: SourceView<'_>,
+        source_id: SourceId,
+    ) -> Result<Self, SourceProcessorError> {
+        Ok(Self {
+            source_id,
+            segmented: SegmentedSource::collect(view, source_id)?,
+            position: 0,
+        })
+    }
+
+    /// Compiles exactly one complete top-level form, or returns `None` when
+    /// the source has been consumed. A form owns its temporary code unit; the
+    /// caller can execute it and then release all source borrows before adding
+    /// a nested source to the same processing session.
+    pub(crate) fn compile_next_form(
+        &mut self,
+        view: SourceView<'_>,
+        mut context: SourceCompileContext<'_>,
+    ) -> Result<Option<TemporaryExecutionUnit>, SourceProcessorError> {
+        if self.position >= self.segmented.completed_statements.len() {
+            return match self.segmented.terminal() {
+                Terminal::Eof { .. } => Ok(None),
+                Terminal::LexError(error) => Err(error.into()),
+            };
+        }
+
+        let mut code = SourceMappedCode::new();
+        let consumed = {
+            let statements = &self.segmented.completed_statements;
+            let mut cursor = LogicalStatementCursor::new(
+                view,
+                self.source_id,
+                &statements[self.position..],
+                self.segmented.terminal(),
+            );
+            let mut structured_frames = Vec::new();
+            let root_line_numbers = Rc::new(RefCell::new(LocalLineNumberTable::new()));
+            let mut builder = BlockCodeBuilder::new(&mut code);
+
+            let Some(mut statement) = cursor.next_completed_statement() else {
+                return Ok(None);
+            };
+            loop {
+                if dispatch_current_owner_marker(
+                    view,
+                    self.source_id,
+                    context.bindings(),
+                    context.operators(),
+                    statement,
+                    &mut builder,
+                    &mut structured_frames,
+                )? {
+                    // A marker can terminate the current structured form.
+                } else {
+                    let (target_handle, line_numbers, capabilities) =
+                        current_processing_context(&structured_frames, &root_line_numbers);
+                    let mut owner_target;
+                    let statement_code = match &target_handle {
+                        BuildTargetHandle::Parent => {
+                            &mut builder as &mut dyn InstructionBuildTarget
+                        }
+                        BuildTargetHandle::OwnerLocal(target) => {
+                            owner_target = SharedOwnerLocalBuildTarget {
+                                target: target.clone(),
+                            };
+                            &mut owner_target as &mut dyn InstructionBuildTarget
+                        }
+                    };
+                    compile_statement(
+                        statement.tokens(),
+                        &mut context,
+                        &mut StatementCompileState {
+                            code: statement_code,
+                            line_numbers,
+                            capabilities,
+                            target: target_handle,
+                        },
+                        &mut StatementTraversal {
+                            view,
+                            source_id: self.source_id,
+                            cursor: &mut cursor,
+                            structured_frames: &mut structured_frames,
+                        },
+                    )?;
+                }
+
+                if structured_frames.is_empty() {
+                    break;
+                }
+                let Some(next) = cursor.next_completed_statement() else {
+                    let span = match self.segmented.terminal() {
+                        Terminal::Eof { span } => span,
+                        Terminal::LexError(error) => return Err(error.into()),
+                    };
+                    return Err(SourceWordError::StructuredMissingTerminator { span }.into());
+                };
+                statement = next;
+            }
+
+            root_line_numbers
+                .borrow_mut()
+                .resolve(&mut builder)
+                .map_err(|source| SourceProcessorError::from(line_number_compile_error(source)))?;
+            let eof_span = match self.segmented.terminal() {
+                Terminal::Eof { span } => span,
+                Terminal::LexError(error) => return Err(error.into()),
+            };
+            InstructionBuildTarget::append_mapped(&mut builder, Instruction::Halt, eof_span)?;
+            builder.finish().map_err(InstructionBuildError::from)?;
+            cursor.position
+        };
+
+        self.position += consumed;
+        let entry = code
+            .instruction_view()
+            .location(InstructionAddress::from_index(0));
+        Ok(Some(TemporaryExecutionUnit { code, entry }))
+    }
+}
+
 pub(crate) struct SourceCompileContext<'a> {
     bindings: BindingAccess<'a>,
     operators: Option<OperatorLookup>,

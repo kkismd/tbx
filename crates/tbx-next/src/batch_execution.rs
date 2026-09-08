@@ -12,9 +12,10 @@ use crate::output_primitive::register_output_primitives;
 use crate::primitive::PrimitiveRegistry;
 use crate::published_code::PublishedCode;
 use crate::runtime_output::WriteRuntimeOutput;
-use crate::source::{SourceId, SourceTexts};
+use crate::source::{SourceId, SourceSpan, SourceTexts};
 use crate::source_processor::{
-    compile_source, run_unit, SourceCompileContext, SourceExecutionContext, SourceRunResult,
+    compile_source, run_unit, SourceCompileContext, SourceExecutionContext, SourceFormCursor,
+    SourceRunResult,
 };
 use crate::source_word::SourceWordRegistry;
 use crate::stack_primitive::register_stack_primitives;
@@ -51,6 +52,7 @@ enum BatchSetupError {
     Output(PrimitiveBootstrapError),
     SourceWords(SourceWordBootstrapError),
     Globals(BuiltinGlobalBootstrapError),
+    InvalidInitialSource(crate::source::SourceError),
 }
 
 struct BatchEnvironment {
@@ -61,6 +63,143 @@ struct BatchEnvironment {
     source_words: SourceWordRegistry,
     globals: GlobalVariables,
     published_code: PublishedCode,
+}
+
+struct SourceFrame {
+    source_id: SourceId,
+    forms: SourceFormCursor,
+    form_index: usize,
+}
+
+/// A source requested after a complete form has returned control to the run.
+/// It owns no compiler or publication references, so it can safely cross the
+/// session's temporary mutable-borrow boundary.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct AdditionalSourceRequest {
+    pub(crate) specification: Box<str>,
+    pub(crate) span: SourceSpan,
+}
+
+/// Test/host seam for acquisition. The callback runs only between complete
+/// forms and may register a new source in the same `SourceTexts` owner.
+pub(crate) type AdditionalSourceHook<'a> = dyn FnMut(
+        &mut SourceTexts,
+        AdditionalSourceRequest,
+    ) -> Result<Option<SourceId>, crate::source_processor::SourceProcessorError>
+    + 'a;
+
+/// Owns source storage, publication state, and nested source frames for one
+/// processing run. A frame retains only tokenized form data and a position;
+/// it never retains a `SourceView`, allowing source registration at a form
+/// boundary without cloning or snapshotting `SourceTexts`.
+pub(crate) struct SourceProcessingSession {
+    sources: SourceTexts,
+    environment: BatchEnvironment,
+    frames: Vec<SourceFrame>,
+}
+
+impl SourceProcessingSession {
+    fn new(sources: SourceTexts, initial_source_id: SourceId) -> Result<Self, BatchSetupError> {
+        let environment = BatchEnvironment::new()?;
+        let mut session = Self {
+            sources,
+            environment,
+            frames: Vec::new(),
+        };
+        if let Err(error) = session.push_source(initial_source_id) {
+            if let crate::source_processor::SourceProcessorError::Source(source) = error {
+                return Err(BatchSetupError::InvalidInitialSource(source));
+            }
+            unreachable!("initial source tokenization cannot fail after ownership transfer");
+        }
+        Ok(session)
+    }
+
+    pub(crate) fn sources(&self) -> &SourceTexts {
+        &self.sources
+    }
+
+    pub(crate) fn sources_mut(&mut self) -> &mut SourceTexts {
+        &mut self.sources
+    }
+
+    pub(crate) fn push_source(
+        &mut self,
+        source_id: SourceId,
+    ) -> Result<(), crate::source_processor::SourceProcessorError> {
+        let forms = SourceFormCursor::new(self.sources.view(), source_id)?;
+        self.frames.push(SourceFrame {
+            source_id,
+            forms,
+            form_index: 0,
+        });
+        Ok(())
+    }
+
+    /// Runs all frames depth-first. The hook is invoked after each complete
+    /// form, when compiler and publication borrows have ended. Returning a
+    /// source id pushes that source before the caller frame's next form.
+    pub(crate) fn run_with_hook<W>(
+        &mut self,
+        writer: &mut W,
+        hook: &mut AdditionalSourceHook<'_>,
+    ) -> Result<(), crate::source_processor::SourceProcessorError>
+    where
+        W: Write + ?Sized,
+    {
+        while !self.frames.is_empty() {
+            let frame_index = self.frames.len() - 1;
+            let source_id = self.frames[frame_index].source_id;
+            let unit = {
+                let sources = &self.sources;
+                let environment = &mut self.environment;
+                let frame = &mut self.frames[frame_index];
+                let context = environment.compile_context();
+                frame.forms.compile_next_form(sources.view(), context)?
+            };
+            let Some(unit) = unit else {
+                self.frames.pop();
+                continue;
+            };
+
+            let request_span = unit
+                .source_span(unit.entry_location())
+                .map_err(crate::source_processor::SourceProcessorError::from)?
+                .ok_or(crate::source_processor::SourceProcessorError::Source(
+                    crate::source::SourceError::InvalidSourceId { id: source_id },
+                ))?;
+            {
+                let code_spaces = [self.environment.published_code.instruction_view()];
+                let source_mappings = [self.environment.published_code.source_mapping()];
+                let mut output = WriteRuntimeOutput::new(&mut *writer);
+                let context = SourceExecutionContext::with_runtime_environment(
+                    &self.environment.bindings,
+                    self.environment.source_words.lookup(),
+                    self.environment.operators.lookup(),
+                    &code_spaces,
+                    &source_mappings,
+                    PublishedWordLookup::new(&self.environment.words),
+                    self.environment.primitives.lookup(),
+                )
+                .with_mut_globals(self.environment.globals.view_mut())
+                .with_output(&mut output);
+                run_unit(&unit, context)?;
+            }
+
+            self.frames[frame_index].form_index += 1;
+            let specification: Box<str> = self.sources.view().slice(request_span)?.into();
+            if let Some(additional_source_id) = hook(
+                &mut self.sources,
+                AdditionalSourceRequest {
+                    specification,
+                    span: request_span,
+                },
+            )? {
+                self.push_source(additional_source_id)?;
+            }
+        }
+        Ok(())
+    }
 }
 
 impl BatchExecutionFailure {
@@ -128,6 +267,17 @@ impl BatchEnvironment {
                 &mut self.published_code,
                 &mut self.words,
             ),
+        )
+    }
+
+    fn compile_context(&mut self) -> SourceCompileContext<'_> {
+        SourceCompileContext::with_source_word_and_runtime_publication_and_operators(
+            &mut self.bindings,
+            &mut self.source_words,
+            self.operators.lookup(),
+            &mut self.globals,
+            &mut self.published_code,
+            &mut self.words,
         )
     }
 }
@@ -816,5 +966,48 @@ mod tests {
             assert_eq!(failure.class(), UserFacingFailureClass::UserProgram);
             assert!(failure.diagnostic().primary().is_some());
         }
+    }
+
+    #[test]
+    fn processing_session_adds_and_returns_from_nested_source_at_form_boundary() {
+        let mut sources = SourceTexts::new();
+        let source_id = sources.register("DEF FOO\nEVAL 1\nEND\nEVAL FOO()", "main.tbx");
+        let mut session = SourceProcessingSession::new(sources, source_id)
+            .expect("processing session should build");
+        let mut writer = RecordingWriter::default();
+        let mut added = false;
+        let mut order_ids = Vec::new();
+        let mut hook = |sources: &mut SourceTexts, request: AdditionalSourceRequest| {
+            order_ids.push(request.span.source_id());
+            if added {
+                return Ok(None);
+            }
+            added = true;
+            let nested = sources.register_with_acquisition(
+                "EVAL FOO()",
+                "nested-display.tbx",
+                crate::source::SourceAcquisition::FileSystem {
+                    canonical_path: "/canonical/nested.tbx".into(),
+                },
+            );
+            assert_eq!(sources.view().source(nested), Ok("EVAL FOO()"));
+            assert_eq!(
+                sources.view().acquisition(nested),
+                Ok(&crate::source::SourceAcquisition::FileSystem {
+                    canonical_path: "/canonical/nested.tbx".into(),
+                })
+            );
+            Ok(Some(nested))
+        };
+
+        session
+            .run_with_hook(&mut writer, &mut hook)
+            .expect("nested source should complete");
+        assert_eq!(writer.text(), "");
+        assert_eq!(order_ids.len(), 3);
+        assert_eq!(order_ids.first(), Some(&source_id));
+        assert_eq!(order_ids.last(), Some(&source_id));
+        assert_ne!(order_ids.get(1), Some(&source_id));
+        assert_eq!(session.sources().len(), 2);
     }
 }
