@@ -16,6 +16,7 @@ use crate::source::{SourceId, SourceTexts};
 use crate::source_processor::{
     compile_source, run_unit, SourceCompileContext, SourceExecutionContext, SourceRunResult,
 };
+use crate::source_session::SourceProcessingSession;
 use crate::source_word::SourceWordRegistry;
 use crate::stack_primitive::register_stack_primitives;
 use crate::user_facing::{UserFacingFailure, UserFacingFailureClass, UserFacingRunResult};
@@ -23,7 +24,7 @@ use crate::word::PublishedWords;
 use crate::word_lookup::PublishedWordLookup;
 
 #[cfg(test)]
-use crate::cli_source::{register_embedded_standard_library, STDLIB_SOURCE};
+use crate::cli_source::STDLIB_SOURCE;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum BatchExecutionResult {
@@ -143,6 +144,22 @@ where
     execute_registered_sources(sources, source_id, source_id, writer)
 }
 
+/// Executes all sources against one session-owned source store. The batch
+/// environment and publication state live for this call, alongside the
+/// session, so later acquisition can append source records without replacing
+/// the mapping owner (#1642/#1649).
+pub(crate) fn execute_source_session<W>(
+    session: &SourceProcessingSession,
+    stdlib_source_id: SourceId,
+    source_id: SourceId,
+    writer: &mut W,
+) -> BatchExecutionResult
+where
+    W: Write + ?Sized,
+{
+    execute_registered_sources(session.sources(), stdlib_source_id, source_id, writer)
+}
+
 pub(crate) fn execute_registered_sources<W>(
     sources: &SourceTexts,
     stdlib_source_id: SourceId,
@@ -201,7 +218,7 @@ where
     W: Write + ?Sized,
 {
     let mut sources = SourceTexts::new();
-    let stdlib_source_id = register_embedded_standard_library(&mut sources);
+    let stdlib_source_id = sources.register(STDLIB_SOURCE, crate::cli_source::STDLIB_DISPLAY_NAME);
     let source_id = sources.register(source, display_name);
     execute_registered_sources(&sources, stdlib_source_id, source_id, writer)
 }
@@ -765,7 +782,8 @@ mod tests {
     #[test]
     fn embedded_standard_library_control_structure_markers_are_reserved_by_their_owner() {
         let mut sources = SourceTexts::new();
-        let stdlib_source_id = register_embedded_standard_library(&mut sources);
+        let stdlib_source_id =
+            sources.register(STDLIB_SOURCE, crate::cli_source::STDLIB_DISPLAY_NAME);
         let mut environment = BatchEnvironment::new().expect("batch environment should build");
 
         environment

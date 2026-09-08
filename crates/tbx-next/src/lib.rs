@@ -62,6 +62,11 @@ mod word_resolution;
 #[allow(dead_code)]
 mod source;
 
+// #1649 keeps source text, SourceId, and acquisition identity in one session
+// so later source processing can append sources without losing their mapping.
+#[allow(dead_code)]
+mod source_session;
+
 // ADR #1421 keeps source mappings owner-qualified by code space without adding
 // source spans to runtime values, instruction operands, or VM state.
 #[allow(dead_code)]
