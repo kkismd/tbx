@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::fs;
 use std::io::Write;
 use std::path::Path;
@@ -75,10 +76,59 @@ struct SourceFrame {
     form_index: usize,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SourceIdentityState {
+    Processing,
+    Completed,
+}
+
+#[derive(Debug, Default)]
+pub(crate) struct SourceAcquisitionStates {
+    states: HashMap<std::path::PathBuf, SourceIdentityState>,
+}
+
+impl SourceAcquisitionStates {
+    /// Returns whether a canonical identity may be acquired. A processing
+    /// identity is a cycle; a completed identity is an intentional no-op.
+    fn begin(&mut self, path: &std::path::Path) -> Result<bool, ()> {
+        match self.states.get(path) {
+            Some(SourceIdentityState::Processing) => Err(()),
+            Some(SourceIdentityState::Completed) => Ok(false),
+            None => {
+                self.states
+                    .insert(path.to_path_buf(), SourceIdentityState::Processing);
+                Ok(true)
+            }
+        }
+    }
+
+    fn begin_source(&mut self, acquisition: &SourceAcquisition) {
+        if let SourceAcquisition::FileSystem { canonical_path } = acquisition {
+            self.states
+                .entry(canonical_path.clone())
+                .or_insert(SourceIdentityState::Processing);
+        }
+    }
+
+    fn complete(&mut self, acquisition: &SourceAcquisition) {
+        if let SourceAcquisition::FileSystem { canonical_path } = acquisition {
+            if self.states.get(canonical_path) == Some(&SourceIdentityState::Processing) {
+                self.states
+                    .insert(canonical_path.clone(), SourceIdentityState::Completed);
+            }
+        }
+    }
+
+    fn remove(&mut self, path: &std::path::Path) {
+        self.states.remove(path);
+    }
+}
+
 /// Test/host seam for acquisition. The callback runs only between complete
 /// forms and may register a new source in the same `SourceTexts` owner.
 pub(crate) type AdditionalSourceHook<'a> = dyn FnMut(
         &mut SourceTexts,
+        &mut SourceAcquisitionStates,
         AdditionalSourceRequest,
     ) -> Result<Option<SourceId>, crate::source_processor::SourceProcessorError>
     + 'a;
@@ -91,6 +141,8 @@ pub(crate) struct SourceProcessingSession {
     sources: SourceTexts,
     environment: BatchEnvironment,
     frames: Vec<SourceFrame>,
+    acquisition_states: SourceAcquisitionStates,
+    failed: bool,
 }
 
 impl SourceProcessingSession {
@@ -108,6 +160,8 @@ impl SourceProcessingSession {
             sources,
             environment,
             frames: Vec::new(),
+            acquisition_states: SourceAcquisitionStates::default(),
+            failed: false,
         };
         if let Err(error) = session.push_source(initial_source_id) {
             if let crate::source_processor::SourceProcessorError::Source(source) = error {
@@ -124,7 +178,7 @@ impl SourceProcessingSession {
         source_id: SourceId,
         forms: SourceFormCursor,
     ) -> Self {
-        Self {
+        let mut session = Self {
             sources,
             environment,
             frames: vec![SourceFrame {
@@ -132,7 +186,17 @@ impl SourceProcessingSession {
                 forms,
                 form_index: 0,
             }],
-        }
+            acquisition_states: SourceAcquisitionStates::default(),
+            failed: false,
+        };
+        let acquisition = session
+            .sources
+            .view()
+            .acquisition(source_id)
+            .expect("initial source must be registered")
+            .clone();
+        session.acquisition_states.begin_source(&acquisition);
+        session
     }
 
     pub(crate) fn sources(&self) -> &SourceTexts {
@@ -147,6 +211,8 @@ impl SourceProcessingSession {
         &mut self,
         source_id: SourceId,
     ) -> Result<(), crate::source_processor::SourceProcessorError> {
+        let acquisition = self.sources.view().acquisition(source_id)?.clone();
+        self.acquisition_states.begin_source(&acquisition);
         let forms = SourceFormCursor::new(self.sources.view(), source_id)?;
         self.frames.push(SourceFrame {
             source_id,
@@ -167,6 +233,27 @@ impl SourceProcessingSession {
     where
         W: Write + ?Sized,
     {
+        if self.failed {
+            return Err(crate::source_processor::SourceProcessorError::ProcessingSessionFailed);
+        }
+        let result = self.run_with_hook_inner(writer, hook);
+        if result.is_err() {
+            // A session that has started processing cannot be safely resumed:
+            // publication and runtime state may already contain prior forms.
+            // Keeping the session failed avoids defining retry semantics here.
+            self.failed = true;
+        }
+        result
+    }
+
+    fn run_with_hook_inner<W>(
+        &mut self,
+        writer: &mut W,
+        hook: &mut AdditionalSourceHook<'_>,
+    ) -> Result<Option<SourceRunResult>, crate::source_processor::SourceProcessorError>
+    where
+        W: Write + ?Sized,
+    {
         let mut last_result = None;
         let mut data_stack: Vec<Value> = Vec::new();
         while !self.frames.is_empty() {
@@ -179,7 +266,9 @@ impl SourceProcessingSession {
                 frame.forms.compile_next_form(sources.view(), context)?
             };
             let Some(form) = unit else {
-                self.frames.pop();
+                let frame = self.frames.pop().expect("frame exists while running");
+                let acquisition = self.sources.view().acquisition(frame.source_id)?.clone();
+                self.acquisition_states.complete(&acquisition);
                 continue;
             };
             {
@@ -207,7 +296,9 @@ impl SourceProcessingSession {
 
             self.frames[frame_index].form_index += 1;
             if let Some(request) = form.additional_source {
-                if let Some(additional_source_id) = hook(&mut self.sources, request)? {
+                if let Some(additional_source_id) =
+                    hook(&mut self.sources, &mut self.acquisition_states, request)?
+                {
                     self.push_source(additional_source_id)?;
                 }
             }
@@ -222,8 +313,10 @@ impl SourceProcessingSession {
     where
         W: Write + ?Sized,
     {
-        let mut hook = |sources: &mut SourceTexts, request: AdditionalSourceRequest| {
-            acquire_filesystem_source(sources, request).map(Some)
+        let mut hook = |sources: &mut SourceTexts,
+                        states: &mut SourceAcquisitionStates,
+                        request: AdditionalSourceRequest| {
+            acquire_filesystem_source_with_states(sources, states, request)
         };
         self.run_with_hook(writer, &mut hook)
     }
@@ -233,6 +326,23 @@ fn acquire_filesystem_source(
     sources: &mut SourceTexts,
     request: AdditionalSourceRequest,
 ) -> Result<SourceId, SourceProcessorError> {
+    let mut states = SourceAcquisitionStates::default();
+    let span = request.span;
+    let specification = request.specification.clone();
+    acquire_filesystem_source_with_states(sources, &mut states, request)?.ok_or(
+        SourceProcessorError::AdditionalSourceAcquisition {
+            span,
+            specification,
+            kind: AdditionalSourceAcquisitionError::Cycle,
+        },
+    )
+}
+
+fn acquire_filesystem_source_with_states(
+    sources: &mut SourceTexts,
+    states: &mut SourceAcquisitionStates,
+    request: AdditionalSourceRequest,
+) -> Result<Option<SourceId>, SourceProcessorError> {
     let view = sources.view();
     let requested_path = Path::new(request.specification.as_ref());
     let path = if requested_path.is_absolute() {
@@ -272,6 +382,17 @@ fn acquire_filesystem_source(
             },
         }
     })?;
+    match states.begin(&canonical_path) {
+        Ok(false) => return Ok(None),
+        Err(()) => {
+            return Err(SourceProcessorError::AdditionalSourceAcquisition {
+                span: request.span,
+                specification: request.specification.clone(),
+                kind: AdditionalSourceAcquisitionError::Cycle,
+            })
+        }
+        Ok(true) => {}
+    }
     let text = fs::read_to_string(&canonical_path).map_err(|source| {
         SourceProcessorError::AdditionalSourceAcquisition {
             span: request.span,
@@ -283,11 +404,11 @@ fn acquire_filesystem_source(
         }
     })?;
 
-    Ok(sources.register_with_acquisition(
+    Ok(Some(sources.register_with_acquisition(
         text,
         request.specification,
         SourceAcquisition::FileSystem { canonical_path },
-    ))
+    )))
 }
 
 impl BatchExecutionFailure {
@@ -1151,7 +1272,9 @@ mod tests {
         let mut added_b = false;
         let mut added_c = false;
         let mut order_ids = Vec::new();
-        let mut hook = |sources: &mut SourceTexts, request: AdditionalSourceRequest| {
+        let mut hook = |sources: &mut SourceTexts,
+                        _states: &mut SourceAcquisitionStates,
+                        request: AdditionalSourceRequest| {
             order_ids.push(request.span.source_id());
             match request.specification.as_ref() {
                 "B" if !added_b => {
@@ -1196,7 +1319,9 @@ mod tests {
         )
         .expect("test source word should register");
         let mut writer = RecordingWriter::default();
-        let mut hook = |_sources: &mut SourceTexts, _request: AdditionalSourceRequest| {
+        let mut hook = |_sources: &mut SourceTexts,
+                        _states: &mut SourceAcquisitionStates,
+                        _request: AdditionalSourceRequest| {
             panic!("definition body must not receive additional source capability")
         };
 
@@ -1331,5 +1456,241 @@ mod tests {
                 kind: AdditionalSourceAcquisitionError::RelativePathRequiresFileSource,
             } if actual == span && specification.as_ref() == "child.tbx"
         ));
+    }
+
+    #[test]
+    fn filesystem_acquisition_skips_completed_identity_and_rejects_processing_identity() {
+        let root = std::path::PathBuf::from(".tmp")
+            .join(format!("issue-1658-state-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).expect("fixture directory should be created");
+        let path = root.join("child.tbx");
+        std::fs::write(&path, "NOOP").expect("fixture source should be written");
+        let canonical_path = std::fs::canonicalize(&path).expect("fixture path should resolve");
+
+        let mut sources = SourceTexts::new();
+        let parent_id = sources.register("REQUEST child.tbx", "main.tbx");
+        let span = sources
+            .view()
+            .span(parent_id, 0, 1)
+            .expect("request span should be valid");
+        let request = |specification: &str| AdditionalSourceRequest {
+            specification: specification.into(),
+            span,
+        };
+
+        let mut states = SourceAcquisitionStates::default();
+        states
+            .begin(&canonical_path)
+            .expect("identity should begin");
+        let cycle = acquire_filesystem_source_with_states(
+            &mut sources,
+            &mut states,
+            request(canonical_path.to_string_lossy().as_ref()),
+        )
+        .expect_err("processing identity should be a cycle");
+        assert!(matches!(
+            cycle,
+            SourceProcessorError::AdditionalSourceAcquisition {
+                span: actual,
+                specification,
+                kind: AdditionalSourceAcquisitionError::Cycle,
+            } if actual == span && specification.as_ref() == canonical_path.to_string_lossy().as_ref()
+        ));
+        assert_eq!(sources.len(), 1, "cycle must not register a source");
+
+        states.complete(&SourceAcquisition::FileSystem {
+            canonical_path: canonical_path.clone(),
+        });
+        let completed = acquire_filesystem_source_with_states(
+            &mut sources,
+            &mut states,
+            request(canonical_path.to_string_lossy().as_ref()),
+        )
+        .expect("completed identity should be a no-op");
+        assert_eq!(completed, None);
+        assert_eq!(
+            sources.len(),
+            1,
+            "completed identity must not register a source"
+        );
+        std::fs::remove_dir_all(root).expect("fixture directory should be removed");
+    }
+
+    #[test]
+    fn top_level_filesystem_source_is_completed_only_after_its_frame_finishes() {
+        let canonical_path = std::path::PathBuf::from(".tmp")
+            .join(format!("issue-1658-top-level-{}.tbx", std::process::id()));
+        let mut sources = SourceTexts::new();
+        let source_id = sources.register_with_acquisition(
+            "",
+            "main.tbx",
+            SourceAcquisition::FileSystem {
+                canonical_path: canonical_path.clone(),
+            },
+        );
+        let mut session = SourceProcessingSession::new(sources, source_id)
+            .expect("processing session should build");
+        assert_eq!(
+            session.acquisition_states.states.get(&canonical_path),
+            Some(&SourceIdentityState::Processing)
+        );
+        let mut writer = RecordingWriter::default();
+        let mut hook = |_sources: &mut SourceTexts,
+                        _states: &mut SourceAcquisitionStates,
+                        _request: AdditionalSourceRequest| {
+            unreachable!("source has no additional request")
+        };
+        session
+            .run_with_hook(&mut writer, &mut hook)
+            .expect("source should complete");
+        assert_eq!(
+            session.acquisition_states.states.get(&canonical_path),
+            Some(&SourceIdentityState::Completed)
+        );
+    }
+
+    fn register_request_word_for_session(session: &mut SourceProcessingSession) {
+        crate::bootstrap::register_native_source_word(
+            &mut session.environment.source_words,
+            &mut session.environment.bindings,
+            name("REQUEST"),
+            request_source_word,
+        )
+        .expect("test source word should register");
+    }
+
+    #[test]
+    fn filesystem_session_detects_indirect_cycle_before_registering_cycle_source() {
+        let root = std::path::PathBuf::from(".tmp")
+            .join(format!("issue-1658-cycle-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).expect("fixture directory should be created");
+        let a_path = root.join("A");
+        let b_path = root.join("B");
+        std::fs::write(&a_path, "REQUEST B").expect("A fixture should be written");
+        std::fs::write(&b_path, "REQUEST A").expect("B fixture should be written");
+        let a_canonical = std::fs::canonicalize(&a_path).expect("A path should resolve");
+
+        let mut sources = SourceTexts::new();
+        let a_id = sources.register_with_acquisition(
+            "REQUEST B",
+            "A",
+            SourceAcquisition::FileSystem {
+                canonical_path: a_canonical.clone(),
+            },
+        );
+        let mut session =
+            SourceProcessingSession::new(sources, a_id).expect("processing session should build");
+        register_request_word_for_session(&mut session);
+        let mut writer = RecordingWriter::default();
+        let mut hook = |sources: &mut SourceTexts,
+                        states: &mut SourceAcquisitionStates,
+                        request: AdditionalSourceRequest| {
+            acquire_filesystem_source_with_states(sources, states, request)
+        };
+
+        let error = session
+            .run_with_hook(&mut writer, &mut hook)
+            .expect_err("A -> B -> A should be a cycle");
+        assert!(matches!(
+            error,
+            SourceProcessorError::AdditionalSourceAcquisition {
+                specification,
+                kind: AdditionalSourceAcquisitionError::Cycle,
+                ..
+            } if specification.as_ref() == "A"
+        ));
+        assert_eq!(session.sources().len(), 2, "cycle source must not register");
+        assert_eq!(
+            session.acquisition_states.states.get(&a_canonical),
+            Some(&SourceIdentityState::Processing)
+        );
+        std::fs::remove_dir_all(root).expect("fixture directory should be removed");
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn filesystem_session_does_not_reprocess_completed_canonical_alias() {
+        let root = std::path::PathBuf::from(".tmp")
+            .join(format!("issue-1658-alias-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).expect("fixture directory should be created");
+        let a_path = root.join("A");
+        let b_path = root.join("B");
+        let alias_path = root.join("C");
+        std::fs::write(&a_path, "REQUEST B\nREQUEST C\nFOO").expect("A fixture should be written");
+        std::fs::write(&b_path, "DEF FOO\nEND").expect("B fixture should be written");
+        std::os::unix::fs::symlink("B", &alias_path).expect("alias should be created");
+        let a_canonical = std::fs::canonicalize(&a_path).expect("A path should resolve");
+
+        let mut sources = SourceTexts::new();
+        let a_id = sources.register_with_acquisition(
+            "REQUEST B\nREQUEST C\nFOO",
+            "A",
+            SourceAcquisition::FileSystem {
+                canonical_path: a_canonical,
+            },
+        );
+        let mut session =
+            SourceProcessingSession::new(sources, a_id).expect("processing session should build");
+        register_request_word_for_session(&mut session);
+        let mut writer = RecordingWriter::default();
+        let mut hook = |sources: &mut SourceTexts,
+                        states: &mut SourceAcquisitionStates,
+                        request: AdditionalSourceRequest| {
+            acquire_filesystem_source_with_states(sources, states, request)
+        };
+
+        session
+            .run_with_hook(&mut writer, &mut hook)
+            .expect("completed canonical alias should be a no-op");
+        assert_eq!(session.sources().len(), 2, "alias must not register twice");
+        std::fs::remove_dir_all(root).expect("fixture directory should be removed");
+    }
+
+    #[test]
+    fn filesystem_session_leaves_failed_source_uncompleted_and_cannot_resume() {
+        let root = std::path::PathBuf::from(".tmp")
+            .join(format!("issue-1658-failure-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).expect("fixture directory should be created");
+        let a_path = root.join("A");
+        let b_path = root.join("B");
+        std::fs::write(&a_path, "REQUEST B").expect("A fixture should be written");
+        std::fs::write(&b_path, "UNKNOWN").expect("B fixture should be written");
+        let a_canonical = std::fs::canonicalize(&a_path).expect("A path should resolve");
+        let b_canonical = std::fs::canonicalize(&b_path).expect("B path should resolve");
+
+        let mut sources = SourceTexts::new();
+        let a_id = sources.register_with_acquisition(
+            "REQUEST B",
+            "A",
+            SourceAcquisition::FileSystem {
+                canonical_path: a_canonical,
+            },
+        );
+        let mut session =
+            SourceProcessingSession::new(sources, a_id).expect("processing session should build");
+        register_request_word_for_session(&mut session);
+        let mut writer = RecordingWriter::default();
+        let mut hook = |sources: &mut SourceTexts,
+                        states: &mut SourceAcquisitionStates,
+                        request: AdditionalSourceRequest| {
+            acquire_filesystem_source_with_states(sources, states, request)
+        };
+
+        session
+            .run_with_hook(&mut writer, &mut hook)
+            .expect_err("B compilation should fail");
+        assert_eq!(
+            session.acquisition_states.states.get(&b_canonical),
+            Some(&SourceIdentityState::Processing)
+        );
+        let resume_error = session
+            .run_with_hook(&mut writer, &mut hook)
+            .expect_err("failed session must not be resumed");
+        assert_eq!(resume_error, SourceProcessorError::ProcessingSessionFailed);
+        std::fs::remove_dir_all(root).expect("fixture directory should be removed");
     }
 }
