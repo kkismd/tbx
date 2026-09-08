@@ -26,7 +26,7 @@ use crate::source_mapping::{
     InstructionSourceMappingView, SourceMappedCode, SourceMappingLookup, SourceMappingLookupError,
 };
 use crate::source_word::{
-    AdditionalSourceProcessor, NativeSourceWordBindingAccess, NativeSourceWordContext,
+    AdditionalSourceRequest, NativeSourceWordBindingAccess, NativeSourceWordContext,
     NativeSourceWordContextParts, NativeSourceWordHandler, NativeStructuredSourceWordContext,
     NativeStructuredSourceWordContextParts, NativeStructuredSourceWordOwner,
     OneShotSourceWordDispatch, RuntimeDefinitionPublisher, SourceBlockCursor, SourceBlockMarker,
@@ -59,13 +59,155 @@ pub(crate) struct TemporaryExecutionUnit {
     entry: CodeLocation,
 }
 
+#[derive(Debug)]
+pub(crate) struct CompiledTopLevelForm {
+    pub(crate) unit: TemporaryExecutionUnit,
+    pub(crate) additional_source: Option<AdditionalSourceRequest>,
+}
+
+/// Owns the tokenized source while allowing the processing session to return
+/// between complete top-level forms. It intentionally stores no `SourceView`:
+/// registering another source must be possible between calls without keeping a
+/// borrow into `SourceTexts` alive.
+pub(crate) struct SourceFormCursor {
+    source_id: SourceId,
+    segmented: SegmentedSource,
+    position: usize,
+}
+
+impl SourceFormCursor {
+    pub(crate) fn new(
+        view: SourceView<'_>,
+        source_id: SourceId,
+    ) -> Result<Self, SourceProcessorError> {
+        Ok(Self {
+            source_id,
+            segmented: SegmentedSource::collect(view, source_id)?,
+            position: 0,
+        })
+    }
+
+    /// Compiles exactly one complete top-level form, or returns `None` when
+    /// the source has been consumed. A form owns its temporary code unit; the
+    /// caller can execute it and then release all source borrows before adding
+    /// a nested source to the same processing session.
+    pub(crate) fn compile_next_form(
+        &mut self,
+        view: SourceView<'_>,
+        mut context: SourceCompileContext<'_>,
+    ) -> Result<Option<CompiledTopLevelForm>, SourceProcessorError> {
+        if self.position >= self.segmented.completed_statements.len() {
+            return match self.segmented.terminal() {
+                Terminal::Eof { .. } => Ok(None),
+                Terminal::LexError(error) => Err(error.into()),
+            };
+        }
+
+        let mut code = SourceMappedCode::new();
+        let mut additional_source = None;
+        let consumed = {
+            let statements = &self.segmented.completed_statements;
+            let mut cursor = LogicalStatementCursor::new(
+                view,
+                self.source_id,
+                &statements[self.position..],
+                self.segmented.terminal(),
+            );
+            let mut structured_frames = Vec::new();
+            let root_line_numbers = Rc::new(RefCell::new(LocalLineNumberTable::new()));
+            let mut builder = BlockCodeBuilder::new(&mut code);
+
+            let Some(mut statement) = cursor.next_completed_statement() else {
+                return Ok(None);
+            };
+            loop {
+                if dispatch_current_owner_marker(
+                    view,
+                    self.source_id,
+                    context.bindings(),
+                    context.operators(),
+                    statement,
+                    &mut builder,
+                    &mut structured_frames,
+                )? {
+                    // A marker can terminate the current structured form.
+                } else {
+                    let (target_handle, line_numbers, capabilities) =
+                        current_processing_context(&structured_frames, &root_line_numbers);
+                    let mut owner_target;
+                    let statement_code = match &target_handle {
+                        BuildTargetHandle::Parent => {
+                            &mut builder as &mut dyn InstructionBuildTarget
+                        }
+                        BuildTargetHandle::OwnerLocal(target) => {
+                            owner_target = SharedOwnerLocalBuildTarget {
+                                target: target.clone(),
+                            };
+                            &mut owner_target as &mut dyn InstructionBuildTarget
+                        }
+                    };
+                    additional_source = compile_statement(
+                        statement.tokens(),
+                        &mut context,
+                        &mut StatementCompileState {
+                            code: statement_code,
+                            line_numbers,
+                            capabilities,
+                            target: target_handle,
+                        },
+                        &mut StatementTraversal {
+                            view,
+                            source_id: self.source_id,
+                            cursor: &mut cursor,
+                            structured_frames: &mut structured_frames,
+                        },
+                    )?;
+                }
+
+                if structured_frames.is_empty() {
+                    break;
+                }
+                let Some(next) = cursor.next_completed_statement() else {
+                    let span = match self.segmented.terminal() {
+                        Terminal::Eof { span } => span,
+                        Terminal::LexError(error) => return Err(error.into()),
+                    };
+                    return Err(SourceWordError::StructuredMissingTerminator { span }.into());
+                };
+                statement = next;
+            }
+
+            root_line_numbers
+                .borrow_mut()
+                .resolve(&mut builder)
+                .map_err(|source| SourceProcessorError::from(line_number_compile_error(source)))?;
+            let eof_span = match self.segmented.terminal() {
+                Terminal::Eof { span } => span,
+                Terminal::LexError(error) => return Err(error.into()),
+            };
+            InstructionBuildTarget::append_mapped(&mut builder, Instruction::Halt, eof_span)?;
+            builder.finish().map_err(InstructionBuildError::from)?;
+            cursor.position
+        };
+
+        self.position += consumed;
+        let entry = code
+            .instruction_view()
+            .location(InstructionAddress::from_index(0));
+        Ok(Some(CompiledTopLevelForm {
+            unit: TemporaryExecutionUnit { code, entry },
+            additional_source,
+        }))
+    }
+}
+
 pub(crate) struct SourceCompileContext<'a> {
     bindings: BindingAccess<'a>,
     operators: Option<OperatorLookup>,
     source_words: Option<SourceWordAccess<'a>>,
     globals: Option<&'a mut GlobalVariables>,
     runtime_definitions: Option<RuntimeDefinitionPublicationAccess<'a>>,
-    additional_source_processor: Option<&'a RefCell<dyn AdditionalSourceProcessor>>,
+    additional_source_capability: bool,
 }
 
 pub(crate) struct DefinitionBodyCompileContext<'a> {
@@ -792,7 +934,7 @@ pub(crate) fn compile_definition_body<'source>(
         source_words: context.source_words.map(SourceWordAccess::Read),
         globals: None,
         runtime_definitions: None,
-        additional_source_processor: None,
+        additional_source_capability: false,
     };
 
     compile_statements(
@@ -819,7 +961,7 @@ pub(crate) fn compile_quotation_body<'source>(
         // capability to publish bindings, globals, or runtime definitions.
         globals: None,
         runtime_definitions: None,
-        additional_source_processor: None,
+        additional_source_capability: false,
     };
 
     StaticQuotation::try_build(|builder| {
@@ -912,28 +1054,28 @@ fn compile_statement<'source, S>(
     context: &mut SourceCompileContext<'_>,
     state: &mut StatementCompileState<'_>,
     traversal: &mut StatementTraversal<'source, '_, S>,
-) -> Result<(), SourceProcessorError>
+) -> Result<Option<AdditionalSourceRequest>, SourceProcessorError>
 where
     S: LogicalStatementView,
 {
     if statement.is_empty() {
-        return Ok(());
+        return Ok(None);
     }
 
     let (line_number, body) = split_statement_line_number(traversal.view, statement)?;
     let start = state.code.current_address();
     let local_line_number_prefix = line_number.map(|(_, span)| span);
-    compile_statement_body(body, context, local_line_number_prefix, state, traversal)?;
+    let additional_source =
+        compile_statement_body(body, context, local_line_number_prefix, state, traversal)?;
 
     if let Some((line_number, span)) = line_number {
         state
             .line_numbers
             .borrow_mut()
             .define(state.code, line_number, start, span)
-            .map_err(|source| line_number_compile_error(source).into())
-    } else {
-        Ok(())
+            .map_err(|source| SourceProcessorError::from(line_number_compile_error(source)))?;
     }
+    Ok(additional_source)
 }
 
 fn split_statement_line_number<'a>(
@@ -976,33 +1118,34 @@ fn compile_statement_body<'source, S>(
     local_line_number_prefix: Option<SourceSpan>,
     state: &mut StatementCompileState<'_>,
     traversal: &mut StatementTraversal<'source, '_, S>,
-) -> Result<(), SourceProcessorError>
+) -> Result<Option<AdditionalSourceRequest>, SourceProcessorError>
 where
     S: LogicalStatementView,
 {
     let Some((&first, _)) = tokens.split_first() else {
-        return Ok(());
+        return Ok(None);
     };
 
     if is_bif_keyword(traversal.view, first)? {
-        return compile_bif(
+        compile_bif(
             traversal.view,
             traversal.source_id,
             tokens,
             context,
             state.code,
             &mut state.line_numbers.borrow_mut(),
-        );
+        )?;
+        return Ok(None);
     }
 
-    if compile_statement_leading_source_word(
+    if let Some(additional_source) = compile_statement_leading_source_word(
         tokens,
         context,
         local_line_number_prefix,
         state,
         traversal,
     )? {
-        return Ok(());
+        return Ok(additional_source);
     }
 
     if compile_statement_leading_runtime_word(
@@ -1012,7 +1155,7 @@ where
         context,
         state,
     )? {
-        return Ok(());
+        return Ok(None);
     }
 
     if contains_expression_syntax(tokens) {
@@ -1024,7 +1167,7 @@ where
     }
 
     if first.kind() == TokenKind::Name {
-        compile_word_reference(traversal.view, first, context).map(|_| ())
+        compile_word_reference(traversal.view, first, context).map(|_| None)
     } else {
         Err(CompileError {
             span: first.span(),
@@ -1096,22 +1239,22 @@ fn compile_statement_leading_source_word<'source, S>(
     local_line_number_prefix: Option<SourceSpan>,
     state: &mut StatementCompileState<'_>,
     traversal: &mut StatementTraversal<'source, '_, S>,
-) -> Result<bool, SourceProcessorError>
+) -> Result<Option<Option<AdditionalSourceRequest>>, SourceProcessorError>
 where
     S: LogicalStatementView,
 {
     let Some(first) = tokens.first().copied() else {
-        return Ok(false);
+        return Ok(None);
     };
     if first.kind() != TokenKind::Name {
-        return Ok(false);
+        return Ok(None);
     }
 
     let source_name = traversal.view.slice(first.span())?;
     let binding = match resolve_binding_name(context.bindings(), source_name) {
         Ok(binding) => binding,
         Err(WordResolutionError::InvalidWordName | WordResolutionError::UndefinedName) => {
-            return Ok(false);
+            return Ok(None);
         }
         Err(WordResolutionError::TargetIsNotWord) => {
             unreachable!("binding-kind resolution does not classify published bindings as non-word")
@@ -1119,7 +1262,7 @@ where
     };
 
     let ResolvedBinding::SourceWord(id) = binding else {
-        return Ok(false);
+        return Ok(None);
     };
     let Some(source_word_access) = &context.source_words else {
         return Err(SourceProcessorError::SourceWordContextUnavailable { id });
@@ -1218,9 +1361,10 @@ where
                     globals,
                     runtime_definitions,
                     source_word_publication,
-                    additional_source_processor: context.additional_source_processor,
+                    additional_source_capability: context.additional_source_capability,
                 });
             handler(&mut source_word_context)?;
+            return Ok(Some(source_word_context.take_additional_source_request()));
         }
         StatementSourceWordDispatch::UserDefined(implementation) => {
             let mut line_numbers = state.line_numbers.borrow_mut();
@@ -1257,7 +1401,7 @@ where
                             globals,
                             runtime_definitions,
                             source_word_publication: None,
-                            additional_source_processor: None,
+                            additional_source_capability: false,
                         });
                     start(&mut source_word_context)?
                 }
@@ -1304,7 +1448,7 @@ where
             traversal.structured_frames.push(frame);
         }
     }
-    Ok(true)
+    Ok(Some(None))
 }
 
 fn compile_bif(
@@ -1960,7 +2104,7 @@ impl<'a> SourceCompileContext<'a> {
             source_words: None,
             globals: None,
             runtime_definitions: None,
-            additional_source_processor: None,
+            additional_source_capability: false,
         }
     }
 
@@ -1971,7 +2115,7 @@ impl<'a> SourceCompileContext<'a> {
             source_words: None,
             globals: None,
             runtime_definitions: None,
-            additional_source_processor: None,
+            additional_source_capability: false,
         }
     }
 
@@ -1985,7 +2129,7 @@ impl<'a> SourceCompileContext<'a> {
             source_words: Some(SourceWordAccess::Read(source_words)),
             globals: None,
             runtime_definitions: None,
-            additional_source_processor: None,
+            additional_source_capability: false,
         }
     }
 
@@ -2000,7 +2144,7 @@ impl<'a> SourceCompileContext<'a> {
             source_words: Some(SourceWordAccess::Read(source_words)),
             globals: None,
             runtime_definitions: None,
-            additional_source_processor: None,
+            additional_source_capability: false,
         }
     }
 
@@ -2015,7 +2159,7 @@ impl<'a> SourceCompileContext<'a> {
             source_words: Some(SourceWordAccess::Read(source_words)),
             globals: Some(globals),
             runtime_definitions: None,
-            additional_source_processor: None,
+            additional_source_capability: false,
         }
     }
 
@@ -2031,7 +2175,7 @@ impl<'a> SourceCompileContext<'a> {
             source_words: Some(SourceWordAccess::Read(source_words)),
             globals: Some(globals),
             runtime_definitions: None,
-            additional_source_processor: None,
+            additional_source_capability: false,
         }
     }
 
@@ -2047,7 +2191,7 @@ impl<'a> SourceCompileContext<'a> {
             source_words: Some(SourceWordAccess::Write(source_words)),
             globals: Some(globals),
             runtime_definitions: None,
-            additional_source_processor: None,
+            additional_source_capability: false,
         }
     }
 
@@ -2065,7 +2209,7 @@ impl<'a> SourceCompileContext<'a> {
             source_words: Some(SourceWordAccess::Read(source_words)),
             globals: Some(globals),
             runtime_definitions: Some(RuntimeDefinitionPublicationAccess { code, words }),
-            additional_source_processor: None,
+            additional_source_capability: false,
         }
     }
 
@@ -2083,7 +2227,7 @@ impl<'a> SourceCompileContext<'a> {
             source_words: Some(SourceWordAccess::Write(source_words)),
             globals: Some(globals),
             runtime_definitions: Some(RuntimeDefinitionPublicationAccess { code, words }),
-            additional_source_processor: None,
+            additional_source_capability: false,
         }
     }
 
@@ -2094,11 +2238,8 @@ impl<'a> SourceCompileContext<'a> {
         }
     }
 
-    pub(crate) fn with_additional_source_processor(
-        mut self,
-        processor: &'a RefCell<dyn AdditionalSourceProcessor>,
-    ) -> Self {
-        self.additional_source_processor = Some(processor);
+    pub(crate) fn with_additional_source_capability(mut self) -> Self {
+        self.additional_source_capability = true;
         self
     }
 
@@ -2460,7 +2601,7 @@ impl<'a> SourceExecutionContext<'a> {
             source_words: self.source_words.map(SourceWordAccess::Read),
             globals: None,
             runtime_definitions: None,
-            additional_source_processor: None,
+            additional_source_capability: false,
         }
     }
 
@@ -2811,6 +2952,29 @@ mod tests {
     ) -> Result<(), SourceWordError> {
         let first = context.source_word_token();
         context.append_mapped(Instruction::Push(value(99)), first.span())
+    }
+
+    fn request_additional_source_for_test(
+        context: &mut NativeSourceWordContext<'_, '_>,
+    ) -> Result<(), SourceWordError> {
+        let specification = context.statement_reader_mut().read_name().map_err(|_| {
+            SourceWordError::UnsupportedSourceWord {
+                span: context.source_word_token().span(),
+            }
+        })?;
+        context.process_additional_source(specification.span())?;
+        context.statement_reader_mut().finish().map_err(|_| {
+            SourceWordError::UnsupportedSourceWord {
+                span: context.source_word_token().span(),
+            }
+        })
+    }
+
+    fn start_requesting_structured_source_word(
+        context: &mut NativeSourceWordContext<'_, '_>,
+    ) -> Result<StructuredSourceWordInstance, SourceWordError> {
+        request_additional_source_for_test(context)?;
+        unreachable!("a structured source request should return an error in its body")
     }
 
     fn consume_one_following_statement(
@@ -4843,6 +5007,36 @@ mod tests {
             quotation.instruction_view().get(address(0)),
             Ok(&Instruction::Push(value(99)))
         );
+    }
+
+    #[test]
+    fn quotation_body_does_not_provide_additional_source_capability() {
+        let (_words, _primitives, operators) = operator_fixture();
+        let mut source_words = SourceWordRegistry::new();
+        let mut bindings = Bindings::new();
+        register_native_source_word(
+            &mut source_words,
+            &mut bindings,
+            name("REQUEST"),
+            request_additional_source_for_test,
+        )
+        .expect("source word should register");
+
+        let (_sources, _id, error) = compile_quotation_error(
+            "REQUEST library",
+            QuotationBodyCompileContext::with_source_words_and_operators(
+                &bindings,
+                source_words.lookup(),
+                operators.lookup(),
+            ),
+        );
+
+        assert!(matches!(
+            error,
+            SourceProcessorError::SourceWord(
+                SourceWordError::AdditionalSourceProcessingUnavailable { .. }
+            )
+        ));
     }
 
     #[test]
@@ -7796,6 +7990,35 @@ mod tests {
             Ok(&Instruction::Push(value(30)))
         );
         assert_eq!(unit.instructions().get(address(3)), Ok(&Instruction::Halt));
+    }
+
+    #[test]
+    fn structured_source_word_body_does_not_provide_additional_source_capability() {
+        let mut source_words = SourceWordRegistry::new();
+        let mut bindings = Bindings::new();
+        register_structured_probe(
+            &mut source_words,
+            &mut bindings,
+            "REQUEST_BLOCK",
+            start_requesting_structured_source_word,
+            Vec::new(),
+            structured_grammar(Vec::new(), "END"),
+        );
+        let (sources, source_id) = source("REQUEST_BLOCK library");
+
+        let error = compile_source(
+            sources.view(),
+            source_id,
+            SourceCompileContext::with_source_words(&bindings, source_words.lookup()),
+        )
+        .expect_err("structured source word body should reject the capability");
+
+        assert!(matches!(
+            error,
+            SourceProcessorError::SourceWord(
+                SourceWordError::AdditionalSourceProcessingUnavailable { .. }
+            )
+        ));
     }
 
     #[test]

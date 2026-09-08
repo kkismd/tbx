@@ -104,6 +104,16 @@ pub(crate) struct SourceTexts {
     sources: Vec<SourceRecord>,
 }
 
+/// Acquisition identity retained separately from user-facing display text.
+///
+/// The processing session receives canonical paths from its host; resolving or
+/// canonicalizing those paths is deliberately outside this crate boundary.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum SourceAcquisition {
+    FileSystem { canonical_path: Box<str> },
+    NonFileSystem,
+}
+
 /// Complete source payload registered under one `SourceId`.
 ///
 /// ADR #1529 requires source text and user-facing display information to share
@@ -113,6 +123,7 @@ pub(crate) struct SourceTexts {
 struct SourceRecord {
     text: Box<str>,
     display_name: Box<str>,
+    acquisition: SourceAcquisition,
 }
 
 impl SourceTexts {
@@ -128,6 +139,15 @@ impl SourceTexts {
         text: impl Into<Box<str>>,
         display_name: impl Into<Box<str>>,
     ) -> SourceId {
+        self.register_with_acquisition(text, display_name, SourceAcquisition::NonFileSystem)
+    }
+
+    pub(crate) fn register_with_acquisition(
+        &mut self,
+        text: impl Into<Box<str>>,
+        display_name: impl Into<Box<str>>,
+        acquisition: SourceAcquisition,
+    ) -> SourceId {
         let id = SourceId {
             owner: self.owner,
             slot: self.sources.len(),
@@ -135,6 +155,7 @@ impl SourceTexts {
         self.sources.push(SourceRecord {
             text: text.into(),
             display_name: display_name.into(),
+            acquisition,
         });
         id
     }
@@ -169,6 +190,10 @@ impl<'a> SourceView<'a> {
 
     pub(crate) fn display_name(self, id: SourceId) -> Result<&'a str, SourceError> {
         self.record(id).map(|source| source.display_name.as_ref())
+    }
+
+    pub(crate) fn acquisition(self, id: SourceId) -> Result<&'a SourceAcquisition, SourceError> {
+        self.record(id).map(|source| &source.acquisition)
     }
 
     fn record(self, id: SourceId) -> Result<&'a SourceRecord, SourceError> {
@@ -291,6 +316,32 @@ mod tests {
         assert_eq!(view.display_name(empty), Ok("empty.tbx"));
         assert_eq!(view.display_name(ascii), Ok("ascii.tbx"));
         assert_eq!(view.display_name(utf8), Ok("utf8.tbx"));
+    }
+
+    #[test]
+    fn keeps_acquisition_identity_separate_from_display_name() {
+        let mut sources = SourceTexts::new();
+        let file = sources.register_with_acquisition(
+            "PRINT 1",
+            "shown-name.tbx",
+            SourceAcquisition::FileSystem {
+                canonical_path: "/real/path/program.tbx".into(),
+            },
+        );
+        let stdin = sources.register("PRINT 2", "<stdin>");
+        let view = sources.view();
+
+        assert_eq!(view.display_name(file), Ok("shown-name.tbx"));
+        assert_eq!(
+            view.acquisition(file),
+            Ok(&SourceAcquisition::FileSystem {
+                canonical_path: "/real/path/program.tbx".into(),
+            })
+        );
+        assert_eq!(
+            view.acquisition(stdin),
+            Ok(&SourceAcquisition::NonFileSystem)
+        );
     }
 
     #[test]
