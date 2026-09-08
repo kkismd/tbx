@@ -1,3 +1,4 @@
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 static NEXT_SOURCE_OWNER_ID: AtomicUsize = AtomicUsize::new(1);
@@ -110,7 +111,7 @@ pub(crate) struct SourceTexts {
 /// canonicalizing those paths is deliberately outside this crate boundary.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum SourceAcquisition {
-    FileSystem { canonical_path: Box<str> },
+    FileSystem { canonical_path: PathBuf },
     NonFileSystem,
 }
 
@@ -341,6 +342,30 @@ mod tests {
         assert_eq!(
             view.acquisition(stdin),
             Ok(&SourceAcquisition::NonFileSystem)
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn keeps_non_utf8_filesystem_identity_losslessly() {
+        use std::ffi::OsString;
+        use std::os::unix::ffi::OsStringExt;
+
+        let canonical_path = PathBuf::from(OsString::from_vec(vec![
+            b'/', b't', b'm', b'p', b'/', 0xff, b'.', b't', b'b', b'x',
+        ]));
+        let mut sources = SourceTexts::new();
+        let source_id = sources.register_with_acquisition(
+            "PRINT 1",
+            "requested.tbx",
+            SourceAcquisition::FileSystem {
+                canonical_path: canonical_path.clone(),
+            },
+        );
+
+        assert_eq!(
+            sources.view().acquisition(source_id),
+            Ok(&SourceAcquisition::FileSystem { canonical_path })
         );
     }
 

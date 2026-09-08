@@ -124,12 +124,7 @@ where
             sources.register_with_acquisition(
                 text,
                 display_name,
-                SourceAcquisition::FileSystem {
-                    canonical_path: canonical_path
-                        .to_string_lossy()
-                        .into_owned()
-                        .into_boxed_str(),
-                },
+                SourceAcquisition::FileSystem { canonical_path },
             )
         }
     };

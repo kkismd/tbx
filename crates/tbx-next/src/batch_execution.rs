@@ -252,7 +252,7 @@ fn acquire_filesystem_source(
                 kind: AdditionalSourceAcquisitionError::RelativePathRequiresFileSource,
             });
         };
-        let parent = Path::new(canonical_path.as_ref()).parent().ok_or_else(|| {
+        let parent = canonical_path.parent().ok_or_else(|| {
             SourceProcessorError::AdditionalSourceAcquisition {
                 span: request.span,
                 specification: request.specification.clone(),
@@ -267,7 +267,7 @@ fn acquire_filesystem_source(
             span: request.span,
             specification: request.specification.clone(),
             kind: AdditionalSourceAcquisitionError::Canonicalize {
-                path: path.to_string_lossy().into_owned().into_boxed_str(),
+                path,
                 message: source.to_string().into_boxed_str(),
             },
         }
@@ -277,10 +277,7 @@ fn acquire_filesystem_source(
             span: request.span,
             specification: request.specification.clone(),
             kind: AdditionalSourceAcquisitionError::Read {
-                path: canonical_path
-                    .to_string_lossy()
-                    .into_owned()
-                    .into_boxed_str(),
+                path: canonical_path.clone(),
                 message: source.to_string().into_boxed_str(),
             },
         }
@@ -289,12 +286,7 @@ fn acquire_filesystem_source(
     Ok(sources.register_with_acquisition(
         text,
         request.specification,
-        SourceAcquisition::FileSystem {
-            canonical_path: canonical_path
-                .to_string_lossy()
-                .into_owned()
-                .into_boxed_str(),
-        },
+        SourceAcquisition::FileSystem { canonical_path },
     ))
 }
 
@@ -1245,10 +1237,7 @@ mod tests {
             "REQUEST sub/b.tbx\nNOOP",
             "requested/main.tbx",
             crate::source::SourceAcquisition::FileSystem {
-                canonical_path: main_canonical
-                    .to_string_lossy()
-                    .into_owned()
-                    .into_boxed_str(),
+                canonical_path: main_canonical.clone(),
             },
         );
         let span = sources
@@ -1296,10 +1285,7 @@ mod tests {
         assert_eq!(
             view.acquisition(absolute_id),
             Ok(&crate::source::SourceAcquisition::FileSystem {
-                canonical_path: leaf_canonical
-                    .to_string_lossy()
-                    .into_owned()
-                    .into_boxed_str(),
+                canonical_path: leaf_canonical.clone(),
             })
         );
         assert_eq!(view.display_name(nested_id), Ok("sub/b.tbx"));
@@ -1308,20 +1294,13 @@ mod tests {
             view.acquisition(nested_id),
             Ok(&crate::source::SourceAcquisition::FileSystem {
                 canonical_path: std::fs::canonicalize(&nested_path)
-                    .expect("nested path should resolve")
-                    .to_string_lossy()
-                    .into_owned()
-                    .into_boxed_str(),
+                    .expect("nested path should resolve"),
             })
         );
         assert_eq!(
             view.acquisition(leaf_id),
             Ok(&crate::source::SourceAcquisition::FileSystem {
-                canonical_path: std::fs::canonicalize(&leaf_path)
-                    .expect("leaf path should resolve")
-                    .to_string_lossy()
-                    .into_owned()
-                    .into_boxed_str(),
+                canonical_path: leaf_canonical.clone(),
             })
         );
         assert_eq!(view.source(leaf_id), Ok("NOOP"));

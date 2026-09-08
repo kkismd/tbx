@@ -1,4 +1,5 @@
 use std::cell::RefCell;
+use std::path::PathBuf;
 use std::rc::Rc;
 
 use crate::binding::Bindings;
@@ -302,8 +303,8 @@ pub(crate) enum SourceProcessorError {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum AdditionalSourceAcquisitionError {
     RelativePathRequiresFileSource,
-    Canonicalize { path: Box<str>, message: Box<str> },
-    Read { path: Box<str>, message: Box<str> },
+    Canonicalize { path: PathBuf, message: Box<str> },
+    Read { path: PathBuf, message: Box<str> },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

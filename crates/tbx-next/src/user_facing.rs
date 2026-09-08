@@ -219,8 +219,8 @@ fn diagnostic_target(error: &SourceProcessorError) -> &'static str {
         | SourceProcessorError::SourceMappingLookup(_)
         | SourceProcessorError::SourceWordContextUnavailable { .. }
         | SourceProcessorError::SourceWordLookup(_)
-        | SourceProcessorError::SourceWord(_)
-        | SourceProcessorError::AdditionalSourceAcquisition { .. } => "source processing",
+        | SourceProcessorError::SourceWord(_) => "source processing",
+        SourceProcessorError::AdditionalSourceAcquisition { .. } => "additional source acquisition",
     }
 }
 
