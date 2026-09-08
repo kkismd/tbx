@@ -102,7 +102,7 @@ pub(crate) enum SourceError {
 ///
 /// This boundary owns only source-processing input text. It must not be merged
 /// into runtime values, VM state, bindings, or executable word registries.
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub(crate) struct SourceTexts {
     owner: SourceOwnerId,
     sources: Vec<SourceRecord>,
@@ -113,7 +113,7 @@ pub(crate) struct SourceTexts {
 /// ADR #1529 requires source text and user-facing display information to share
 /// the same registration and lifetime so later diagnostics cannot lose their
 /// association while source mappings may still refer to this `SourceId`.
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 struct SourceRecord {
     text: Box<str>,
     display_name: Box<str>,

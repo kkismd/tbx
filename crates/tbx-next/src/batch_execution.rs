@@ -24,7 +24,7 @@ use crate::word::PublishedWords;
 use crate::word_lookup::PublishedWordLookup;
 
 #[cfg(test)]
-use crate::cli_source::STDLIB_SOURCE;
+use crate::cli_source::{register_embedded_standard_library, STDLIB_SOURCE};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum BatchExecutionResult {
@@ -146,8 +146,8 @@ where
 
 /// Executes all sources against one session-owned source store. The batch
 /// environment and publication state live for this call, alongside the
-/// session, so later acquisition can append source records without replacing
-/// the mapping owner (#1642/#1649).
+/// session, so later acquisition can append and process sources without
+/// replacing the mapping owner (#1642/#1649).
 pub(crate) fn execute_source_session<W>(
     session: &mut SourceProcessingSession,
     stdlib_source_id: SourceId,
@@ -157,8 +157,100 @@ pub(crate) fn execute_source_session<W>(
 where
     W: Write + ?Sized,
 {
-    let sources = session.snapshot_sources();
-    execute_registered_sources(&sources, stdlib_source_id, source_id, writer)
+    let mut run = match BatchExecutionRun::new(session) {
+        Ok(run) => run,
+        Err(error) => return setup_failure(session.sources(), error),
+    };
+    run.execute(stdlib_source_id, source_id, writer)
+}
+
+/// Owns one source-processing run's publication state while borrowing the
+/// session that owns all source text and acquisition metadata. Additional
+/// source handling must use this run so nested sources share the same
+/// bindings, source words, published code, and globals.
+struct BatchExecutionRun<'a> {
+    session: &'a mut SourceProcessingSession,
+    environment: BatchEnvironment,
+}
+
+impl<'a> BatchExecutionRun<'a> {
+    fn new(session: &'a mut SourceProcessingSession) -> Result<Self, BatchSetupError> {
+        Ok(Self {
+            session,
+            environment: BatchEnvironment::new()?,
+        })
+    }
+
+    fn compile(
+        &mut self,
+        source_id: SourceId,
+    ) -> Result<
+        crate::source_processor::TemporaryExecutionUnit,
+        crate::source_processor::SourceProcessorError,
+    > {
+        self.environment.compile(self.session.sources(), source_id)
+    }
+
+    /// Compiles an acquired source through the same publication environment as
+    /// its caller. This is the connection point used by the future
+    /// `AdditionalSourceProcessor` integration.
+    fn process_registered_source(
+        &mut self,
+        source_id: SourceId,
+    ) -> Result<
+        crate::source_processor::TemporaryExecutionUnit,
+        crate::source_processor::SourceProcessorError,
+    > {
+        self.compile(source_id)
+    }
+
+    fn execute<W>(
+        &mut self,
+        stdlib_source_id: SourceId,
+        source_id: SourceId,
+        writer: &mut W,
+    ) -> BatchExecutionResult
+    where
+        W: Write + ?Sized,
+    {
+        if stdlib_source_id != source_id {
+            let stdlib_result = self.compile(stdlib_source_id);
+            if let Err(error) = stdlib_result {
+                return standard_library_failure(self.session.sources(), error);
+            }
+        }
+
+        let compile_result = self.compile(source_id);
+        match compile_result {
+            Ok(unit) => self.execute_unit(unit, writer),
+            Err(error) => user_facing_result(self.session.sources(), Err(error)),
+        }
+    }
+
+    fn execute_unit<W>(
+        &mut self,
+        unit: crate::source_processor::TemporaryExecutionUnit,
+        writer: &mut W,
+    ) -> BatchExecutionResult
+    where
+        W: Write + ?Sized,
+    {
+        let code_spaces = [self.environment.published_code.instruction_view()];
+        let source_mappings = [self.environment.published_code.source_mapping()];
+        let mut output = WriteRuntimeOutput::new(writer);
+        let context = SourceExecutionContext::with_runtime_environment(
+            &self.environment.bindings,
+            self.environment.source_words.lookup(),
+            self.environment.operators.lookup(),
+            &code_spaces,
+            &source_mappings,
+            PublishedWordLookup::new(&self.environment.words),
+            self.environment.primitives.lookup(),
+        )
+        .with_mut_globals(self.environment.globals.view_mut())
+        .with_output(&mut output);
+        user_facing_result(self.session.sources(), run_unit(&unit, context))
+    }
 }
 
 pub(crate) fn execute_registered_sources<W>(
@@ -380,6 +472,69 @@ mod tests {
 
         assert_eq!(result.data_stack(), [Value::integer(4)]);
         assert_eq!(writer.text(), "4\n");
+    }
+
+    #[test]
+    fn additional_source_callback_uses_the_same_session_and_publication_environment() {
+        let mut session = SourceProcessingSession::new();
+        let stdlib_source_id = register_embedded_standard_library(&mut session);
+        let source_a = session.register(
+            "EVAL ANSWER()\nPRINT",
+            "a.tbx",
+            crate::source_session::SourceAcquisition::filesystem("/workspace/a.tbx"),
+        );
+        let mut run = BatchExecutionRun::new(&mut session).expect("run should initialize");
+        run.compile(stdlib_source_id)
+            .expect("standard library should compile");
+
+        // This models the synchronous callback point used by additional
+        // source processing. The callback registers and compiles B before A
+        // resumes, using the same run-owned publication environment.
+        let process_callback = |run: &mut BatchExecutionRun<'_>| {
+            let source_b = run.session.register(
+                "DEF ANSWER\nEVAL 42\nEND",
+                "b.tbx",
+                crate::source_session::SourceAcquisition::filesystem("/workspace/b.tbx"),
+            );
+            let unit_b = run
+                .process_registered_source(source_b)
+                .expect("additional source should compile in the same run");
+            assert_eq!(
+                unit_b
+                    .source_span(unit_b.entry_location())
+                    .expect("B mapping should resolve")
+                    .unwrap()
+                    .source_id(),
+                source_b
+            );
+            source_b
+        };
+        let source_b = process_callback(&mut run);
+        let unit_a = run
+            .compile(source_a)
+            .expect("A should resolve B after callback");
+        let mut writer = RecordingWriter::default();
+        let result = run.execute_unit(unit_a, &mut writer);
+        drop(run);
+
+        assert!(matches!(result, BatchExecutionResult::Success(_)));
+        assert_eq!(writer.text(), "42");
+        assert_eq!(
+            session.sources().view().source(source_a),
+            Ok("EVAL ANSWER()\nPRINT")
+        );
+        assert_eq!(
+            session.sources().view().source(source_b),
+            Ok("DEF ANSWER\nEVAL 42\nEND")
+        );
+        assert_eq!(
+            session.acquisition(source_a).unwrap().canonical_path(),
+            Some(std::path::Path::new("/workspace/a.tbx"))
+        );
+        assert_eq!(
+            session.acquisition(source_b).unwrap().canonical_path(),
+            Some(std::path::Path::new("/workspace/b.tbx"))
+        );
     }
 
     #[test]

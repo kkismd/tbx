@@ -52,13 +52,6 @@ impl SourceProcessingSession {
         &self.sources
     }
 
-    /// Returns a source snapshot that can be processed while this session is
-    /// mutably borrowed by an acquisition callback. The source owner remains
-    /// unchanged, so existing `SourceId` and `SourceSpan` values stay valid.
-    pub(crate) fn snapshot_sources(&self) -> SourceTexts {
-        self.sources.clone()
-    }
-
     pub(crate) fn source_view(&self) -> SourceView<'_> {
         self.sources.view()
     }
@@ -197,23 +190,24 @@ mod tests {
             "a.tbx",
             SourceAcquisition::filesystem("/workspace/a.tbx"),
         );
-        let in_flight = session.snapshot_sources();
-        let span_a = in_flight.view().span(source_a, 0, 5).unwrap();
+        let span_a = session.source_view().span(source_a, 0, 5).unwrap();
 
         // This models the synchronous acquisition callback invoked while A is
-        // being processed. It mutates the session, not A's borrowed snapshot.
+        // being processed. The source span remains valid after registration.
         let source_b = session.register(
             "PRINT B",
             "b.tbx",
             SourceAcquisition::filesystem("/workspace/b.tbx"),
         );
 
-        assert_eq!(in_flight.view().source(span_a.source_id()), Ok("PRINT A"));
-        let after_callback = session.snapshot_sources();
-        assert_eq!(after_callback.view().source(source_b), Ok("PRINT B"));
+        assert_eq!(
+            session.source_view().source(span_a.source_id()),
+            Ok("PRINT A")
+        );
+        assert_eq!(session.source_view().source(source_b), Ok("PRINT B"));
         assert_eq!(
             session
-                .acquisition_for_span(after_callback.view().span(source_a, 0, 5).unwrap())
+                .acquisition_for_span(session.source_view().span(source_a, 0, 5).unwrap())
                 .unwrap()
                 .canonical_path(),
             Some(Path::new("/workspace/a.tbx"))
