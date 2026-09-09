@@ -1306,6 +1306,36 @@ mod tests {
     }
 
     #[test]
+    fn builtin_use_source_word_requests_nested_source_with_literal_specification() {
+        let mut sources = SourceTexts::new();
+        let source_id = sources.register("USE \"B\"\nNOOP", "main.tbx");
+        let mut session = SourceProcessingSession::new(sources, source_id)
+            .expect("processing session should build");
+        crate::bootstrap::register_native_source_word(
+            &mut session.environment.source_words,
+            &mut session.environment.bindings,
+            name("NOOP"),
+            noop_source_word,
+        )
+        .expect("test no-op source word should register");
+        let mut writer = RecordingWriter::default();
+        let mut requested = Vec::new();
+        let mut hook = |sources: &mut SourceTexts,
+                        _states: &mut SourceAcquisitionStates,
+                        request: AdditionalSourceRequest| {
+            requested.push((request.specification, request.span.source_id()));
+            Ok(Some(sources.register("NOOP", "nested.tbx")))
+        };
+
+        session
+            .run_with_hook(&mut writer, &mut hook)
+            .expect("USE should complete through the normal source-word path");
+
+        assert_eq!(requested, vec![("B".into(), source_id)]);
+        assert_eq!(session.sources().len(), 2);
+    }
+
+    #[test]
     fn additional_source_capability_is_unavailable_inside_definition_body() {
         let mut sources = SourceTexts::new();
         let source_id = sources.register("DEF FOO\nREQUEST B\nEND", "main.tbx");
@@ -1337,6 +1367,30 @@ mod tests {
             ),
             "unexpected error: {error:?}"
         );
+    }
+
+    #[test]
+    fn builtin_use_in_definition_body_cannot_request_additional_source() {
+        let mut sources = SourceTexts::new();
+        let source_id = sources.register("DEF FOO\nUSE \"B\"\nEND", "main.tbx");
+        let mut session = SourceProcessingSession::new(sources, source_id)
+            .expect("processing session should build");
+        let mut writer = RecordingWriter::default();
+        let mut hook = |_sources: &mut SourceTexts,
+                        _states: &mut SourceAcquisitionStates,
+                        _request: AdditionalSourceRequest| {
+            panic!("definition body must not receive additional source capability")
+        };
+
+        let error = session
+            .run_with_hook(&mut writer, &mut hook)
+            .expect_err("USE in a definition body should be unavailable");
+        assert!(matches!(
+            error,
+            crate::source_processor::SourceProcessorError::SourceWord(
+                crate::source_word::SourceWordError::DefBodyCompile { .. }
+            )
+        ));
     }
 
     #[test]

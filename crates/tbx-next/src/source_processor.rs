@@ -5072,6 +5072,31 @@ mod tests {
     }
 
     #[test]
+    fn builtin_use_in_quotation_body_does_not_provide_additional_source_capability() {
+        let (_words, _primitives, operators) = operator_fixture();
+        let mut source_words = SourceWordRegistry::new();
+        let mut bindings = Bindings::new();
+        register_builtin_source_words(&mut source_words, &mut bindings)
+            .expect("built-in source words should bootstrap");
+
+        let (_sources, _id, error) = compile_quotation_error(
+            "USE \"library\"",
+            QuotationBodyCompileContext::with_source_words_and_operators(
+                &bindings,
+                source_words.lookup(),
+                operators.lookup(),
+            ),
+        );
+
+        assert!(matches!(
+            error,
+            SourceProcessorError::SourceWord(
+                SourceWordError::AdditionalSourceProcessingUnavailable { .. }
+            )
+        ));
+    }
+
+    #[test]
     fn quotation_body_let_lowers_without_publication_capability() {
         let (_words, _primitives, operators) = operator_fixture();
         let mut source_words = SourceWordRegistry::new();
@@ -8044,6 +8069,34 @@ mod tests {
             SourceCompileContext::with_source_words(&bindings, source_words.lookup()),
         )
         .expect_err("structured source word body should reject the capability");
+
+        assert!(matches!(
+            error,
+            SourceProcessorError::SourceWord(
+                SourceWordError::AdditionalSourceProcessingUnavailable { .. }
+            )
+        ));
+    }
+
+    #[test]
+    fn builtin_use_in_structured_body_does_not_provide_additional_source_capability() {
+        let (_words, _primitives, operators) = operator_fixture();
+        let mut source_words = SourceWordRegistry::new();
+        let mut bindings = Bindings::new();
+        register_builtin_source_words(&mut source_words, &mut bindings)
+            .expect("built-in source words should bootstrap");
+        let (sources, source_id) = source("IF 1\nUSE \"library\"\nENDIF");
+
+        let error = compile_source(
+            sources.view(),
+            source_id,
+            SourceCompileContext::with_source_words_and_operators(
+                &bindings,
+                source_words.lookup(),
+                operators.lookup(),
+            ),
+        )
+        .expect_err("USE in a structured body should reject the capability");
 
         assert!(matches!(
             error,
