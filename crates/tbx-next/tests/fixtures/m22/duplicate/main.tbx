@@ -1,0 +1,3 @@
+USE "B.tbx"
+USE "./B.tbx"
+B_WORD

@@ -1,0 +1,7 @@
+EVAL 1
+PRINT
+CR
+USE "sub/B.tbx"
+EVAL 4
+PRINT
+CR

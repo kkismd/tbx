@@ -1,0 +1,9 @@
+EVAL 2
+PRINT
+CR
+DEF B_WORD
+EVAL 20
+PRINT
+CR
+END
+USE "../shared/C.tbx"
