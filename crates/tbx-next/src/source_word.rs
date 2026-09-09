@@ -203,6 +203,10 @@ pub(crate) enum SourceWordError {
     AdditionalSourceProcessingUnavailable {
         span: SourceSpan,
     },
+    UseSyntax {
+        span: SourceSpan,
+        kind: UseSyntaxErrorKind,
+    },
     VarSyntax {
         span: SourceSpan,
         kind: VarSyntaxErrorKind,
@@ -328,6 +332,13 @@ pub(crate) enum VarSyntaxErrorKind {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum UseSyntaxErrorKind {
+    MissingLiteral,
+    ExpectedLiteral,
+    TrailingToken { kind: TokenKind },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum LetSyntaxErrorKind {
     Target,
     Equal,
@@ -401,6 +412,7 @@ impl SourceWordError {
             | Self::SyntaxPublicationContextUnavailable { span }
             | Self::SyntaxBindingCommitInvariantViolated { span }
             | Self::AdditionalSourceProcessingUnavailable { span }
+            | Self::UseSyntax { span, .. }
             | Self::StructuredGrammar { span, .. }
             | Self::StructuredMissingTerminator { span } => Some(*span),
             Self::SyntaxBuild { source } => Some(source.primary_span()),
@@ -2580,6 +2592,48 @@ pub(crate) fn unsupported_source_word(
     Err(SourceWordError::UnsupportedSourceWord { span: first.span() })
 }
 
+/// Requests one additional source from the enclosing top-level processing
+/// session. The quoted token is source syntax, not a runtime string value;
+/// only its inner source span is handed to the generic request capability.
+pub(crate) fn use_source_word(
+    context: &mut NativeSourceWordContext<'_, '_>,
+) -> Result<(), SourceWordError> {
+    let literal = {
+        let reader = context.statement_reader_mut();
+        let token = reader
+            .expect(TokenKind::FixedTokenLiteral)
+            .map_err(use_reader_error)?;
+        reader.finish().map_err(use_reader_error)?;
+        token
+    };
+
+    let span = literal.span();
+    let specification_span = context
+        .view()
+        .span(context.source_id(), span.start() + 1, span.end() - 1)
+        .map_err(|source| SourceWordError::Source { source })?;
+    context.process_additional_source(specification_span)
+}
+
+fn use_reader_error(error: SourceStatementReaderError) -> SourceWordError {
+    match error {
+        SourceStatementReaderError::Missing { span, .. } => SourceWordError::UseSyntax {
+            span,
+            kind: UseSyntaxErrorKind::MissingLiteral,
+        },
+        SourceStatementReaderError::Unexpected { actual, .. } => SourceWordError::UseSyntax {
+            span: actual.span(),
+            kind: UseSyntaxErrorKind::ExpectedLiteral,
+        },
+        SourceStatementReaderError::TrailingToken { actual } => SourceWordError::UseSyntax {
+            span: actual.span(),
+            kind: UseSyntaxErrorKind::TrailingToken {
+                kind: actual.kind(),
+            },
+        },
+    }
+}
+
 fn var_reader_error(error: SourceStatementReaderError) -> SourceWordError {
     match error {
         SourceStatementReaderError::Missing { span, .. } => SourceWordError::VarSyntax {
@@ -3045,6 +3099,81 @@ mod tests {
             .finish()
             .expect("source word continuation should return");
         assert_eq!(code.len(), 1);
+    }
+
+    #[test]
+    fn use_source_word_extracts_fixed_literal_without_quotes() {
+        let text = "USE \"lib/a.tbx\"";
+        let (sources, source_id, tokens) = statement_tokens(text);
+        let mut code = SourceMappedCode::new();
+        let mut builder = BlockCodeBuilder::new(&mut code);
+        let bindings = Bindings::new();
+        let mut context = NativeSourceWordContext::new(NativeSourceWordContextParts {
+            view: sources.view(),
+            source_id,
+            tokens: &tokens,
+            block_reader: None,
+            bindings: NativeSourceWordBindingAccess::Read(&bindings),
+            operators: None,
+            code: &mut builder,
+            local_line_number_prefix: None,
+            globals: None,
+            runtime_definitions: None,
+            source_word_publication: None,
+            additional_source_capability: true,
+        });
+
+        use_source_word(&mut context).expect("USE should request the quoted source");
+
+        assert_eq!(
+            context.take_additional_source_request(),
+            Some(AdditionalSourceRequest {
+                specification: "lib/a.tbx".into(),
+                span: span(sources.view(), source_id, 0, text.len()),
+            })
+        );
+        builder.finish().expect("USE should emit no runtime code");
+    }
+
+    #[test]
+    fn use_source_word_rejects_missing_wrong_and_trailing_tokens() {
+        for (text, expected) in [
+            ("USE", UseSyntaxErrorKind::MissingLiteral),
+            ("USE library", UseSyntaxErrorKind::ExpectedLiteral),
+            (
+                "USE \"library\" extra",
+                UseSyntaxErrorKind::TrailingToken {
+                    kind: TokenKind::Name,
+                },
+            ),
+        ] {
+            let (sources, source_id, tokens) = statement_tokens(text);
+            let mut code = SourceMappedCode::new();
+            let mut builder = BlockCodeBuilder::new(&mut code);
+            let bindings = Bindings::new();
+            let mut context = NativeSourceWordContext::new(NativeSourceWordContextParts {
+                view: sources.view(),
+                source_id,
+                tokens: &tokens,
+                block_reader: None,
+                bindings: NativeSourceWordBindingAccess::Read(&bindings),
+                operators: None,
+                code: &mut builder,
+                local_line_number_prefix: None,
+                globals: None,
+                runtime_definitions: None,
+                source_word_publication: None,
+                additional_source_capability: true,
+            });
+
+            assert!(matches!(
+                use_source_word(&mut context),
+                Err(SourceWordError::UseSyntax { kind, .. }) if kind == expected
+            ));
+            builder
+                .finish()
+                .expect("syntax failure should emit no code");
+        }
     }
 
     #[test]
