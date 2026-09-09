@@ -232,7 +232,7 @@ fn file_use_loads_nested_sources_and_publishes_words_in_order() {
         "expected success, stderr:\n{}",
         stderr_text(&output)
     );
-    assert_eq!(stdout_text(&output), "1\n2\n3\n4\n");
+    assert_eq!(stdout_text(&output), "1\n2\n3\n30\n4\n");
     assert_eq!(stderr_text(&output), "");
 }
 
