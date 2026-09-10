@@ -83,6 +83,9 @@ pub(crate) enum VmErrorKind {
     CallBaseValueCopy {
         source: CallBaseValueError,
     },
+    CallBaseDataStackTruncate {
+        source: CallBaseDataStackTruncateError,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -95,6 +98,15 @@ pub(crate) enum CallBaseValueError {
     DataStackIndexOutOfBounds {
         index: usize,
         depth: usize,
+    },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum CallBaseDataStackTruncateError {
+    NoCompiledWordInvocation,
+    CurrentDepthBelowCallBase {
+        current_depth: usize,
+        call_data_stack_depth: usize,
     },
 }
 
@@ -359,6 +371,9 @@ impl Vm {
             Instruction::CopyFromCallBase { offset } => {
                 self.step_copy_from_call_base(instructions, location, offset)
             }
+            Instruction::TruncateDataStackToCallBase => {
+                self.step_truncate_data_stack_to_call_base(instructions, location)
+            }
             Instruction::Jump(target) => self.step_jump(instructions, location, target),
             Instruction::JumpIfZero(target) => {
                 self.step_jump_if_zero(instructions, location, target)
@@ -545,6 +560,42 @@ impl Vm {
         // validation succeeds do the copy and instruction-pointer transition
         // commit, preserving instruction failure atomicity.
         self.data_stack.push(value);
+        self.instruction_pointer = next;
+
+        Ok(StepOutcome::Continued)
+    }
+
+    fn step_truncate_data_stack_to_call_base(
+        &mut self,
+        instructions: InstructionLookup<'_>,
+        location: CodeLocation,
+    ) -> Result<StepOutcome, VmError> {
+        let next = self.valid_next_location(instructions, location)?;
+        let call_data_stack_depth = self.call_data_stack_depth().map_err(|_| VmError {
+            location,
+            kind: VmErrorKind::CallBaseDataStackTruncate {
+                source: CallBaseDataStackTruncateError::NoCompiledWordInvocation,
+            },
+        })?;
+
+        // This operation only discards values above the call base. It never
+        // restores values that were popped after the call began.
+        self.data_stack
+            .truncate_to_depth(call_data_stack_depth)
+            .map_err(|source| {
+                let StackError::DataStackDepthBelowTarget { target, depth } = source else {
+                    unreachable!("truncate_to_depth only reports a shallow data stack")
+                };
+                VmError {
+                    location,
+                    kind: VmErrorKind::CallBaseDataStackTruncate {
+                        source: CallBaseDataStackTruncateError::CurrentDepthBelowCallBase {
+                            current_depth: depth,
+                            call_data_stack_depth: target,
+                        },
+                    },
+                }
+            })?;
         self.instruction_pointer = next;
 
         Ok(StepOutcome::Continued)
@@ -2183,6 +2234,142 @@ mod tests {
             vm.data_stack.as_slice(),
             &[value(10), value(20), value(20), value(20), value(10)]
         );
+    }
+
+    #[test]
+    fn truncate_data_stack_to_call_base_discards_only_callee_values() {
+        let primitives = PrimitiveRegistry::new();
+        let mut words = PublishedWords::new();
+        let mut code = InstructionSequence::new();
+        let compiled_entry = code.append(Instruction::Push(value(30)));
+        code.append(Instruction::Push(value(40)));
+        code.append(Instruction::TruncateDataStackToCallBase);
+        code.append(Instruction::Return);
+        let word = words.add(
+            CompletedWordDefinition::compiled(location(&code, compiled_entry), code.view())
+                .expect("compiled entry should be valid"),
+        );
+        let entry = code.append(Instruction::Push(value(10)));
+        code.append(Instruction::Push(value(20)));
+        code.append(Instruction::Call(word));
+        let after_call = code.append(Instruction::Halt);
+        let mut vm = new_vm(&code, entry);
+
+        assert_eq!(
+            vm.run(execution(&code, &words, &primitives)),
+            Ok(RunOutcome::Halted)
+        );
+        assert_eq!(vm.instruction_pointer(), location(&code, after_call));
+        assert_eq!(vm.data_stack.as_slice(), &[value(10), value(20)]);
+    }
+
+    #[test]
+    fn truncate_data_stack_to_call_base_is_a_no_op_at_the_call_depth() {
+        let mut code = InstructionSequence::new();
+        let truncate = code.append(Instruction::TruncateDataStackToCallBase);
+        let target = code.append(Instruction::Halt);
+        let mut vm = new_vm(&code, truncate);
+        vm.push_data(value(7));
+        vm.push_return_frame(ReturnFrame::new(location(&code, target), 1));
+
+        assert_eq!(vm.step(code.view()), Ok(StepOutcome::Continued));
+        assert_eq!(vm.instruction_pointer(), location(&code, target));
+        assert_eq!(vm.data_stack.as_slice(), &[value(7)]);
+    }
+
+    #[test]
+    fn truncate_data_stack_to_call_base_rejects_a_shallow_stack_atomically() {
+        let mut code = InstructionSequence::new();
+        let truncate = code.append(Instruction::TruncateDataStackToCallBase);
+        let target = code.append(Instruction::Halt);
+        let mut vm = new_vm(&code, truncate);
+        vm.push_data(value(7));
+        vm.push_return_frame(ReturnFrame::new(location(&code, target), 2));
+        let before = snapshot(&vm);
+
+        assert_eq!(
+            vm.step(code.view()),
+            Err(VmError {
+                location: location(&code, truncate),
+                kind: VmErrorKind::CallBaseDataStackTruncate {
+                    source: CallBaseDataStackTruncateError::CurrentDepthBelowCallBase {
+                        current_depth: 1,
+                        call_data_stack_depth: 2,
+                    },
+                },
+            })
+        );
+        assert_vm_state(&vm, before);
+    }
+
+    #[test]
+    fn truncate_data_stack_to_call_base_does_not_restore_popped_values() {
+        let mut code = InstructionSequence::new();
+        let truncate = code.append(Instruction::TruncateDataStackToCallBase);
+        let target = code.append(Instruction::Halt);
+        let mut vm = new_vm(&code, truncate);
+        vm.push_data(value(10));
+        vm.push_data(value(20));
+        vm.push_return_frame(ReturnFrame::new(location(&code, target), 2));
+        assert_eq!(vm.pop_data(), Ok(value(20)));
+        vm.push_data(value(30));
+
+        assert_eq!(vm.step(code.view()), Ok(StepOutcome::Continued));
+        assert_eq!(vm.data_stack.as_slice(), &[value(10), value(30)]);
+    }
+
+    #[test]
+    fn truncate_data_stack_to_call_base_rejects_top_level_execution() {
+        let mut code = InstructionSequence::new();
+        let truncate = code.append(Instruction::TruncateDataStackToCallBase);
+        code.append(Instruction::Halt);
+        let mut vm = new_vm(&code, truncate);
+        vm.push_data(value(7));
+        let before = snapshot(&vm);
+
+        assert_eq!(
+            vm.step(code.view()),
+            Err(VmError {
+                location: location(&code, truncate),
+                kind: VmErrorKind::CallBaseDataStackTruncate {
+                    source: CallBaseDataStackTruncateError::NoCompiledWordInvocation,
+                },
+            })
+        );
+        assert_vm_state(&vm, before);
+    }
+
+    #[test]
+    fn truncate_data_stack_to_call_base_uses_innermost_nested_frame() {
+        let primitives = PrimitiveRegistry::new();
+        let mut words = PublishedWords::new();
+        let mut code = InstructionSequence::new();
+        let inner_entry = code.append(Instruction::Push(value(40)));
+        code.append(Instruction::TruncateDataStackToCallBase);
+        code.append(Instruction::Return);
+        let inner = words.add(
+            CompletedWordDefinition::compiled(location(&code, inner_entry), code.view())
+                .expect("inner entry should be valid"),
+        );
+        let outer_entry = code.append(Instruction::Push(value(30)));
+        code.append(Instruction::Call(inner));
+        code.append(Instruction::TruncateDataStackToCallBase);
+        code.append(Instruction::Return);
+        let outer = words.add(
+            CompletedWordDefinition::compiled(location(&code, outer_entry), code.view())
+                .expect("outer entry should be valid"),
+        );
+        let entry = code.append(Instruction::Push(value(10)));
+        code.append(Instruction::Call(outer));
+        let after_call = code.append(Instruction::Halt);
+        let mut vm = new_vm(&code, entry);
+
+        assert_eq!(
+            vm.run(execution(&code, &words, &primitives)),
+            Ok(RunOutcome::Halted)
+        );
+        assert_eq!(vm.instruction_pointer(), location(&code, after_call));
+        assert_eq!(vm.data_stack.as_slice(), &[value(10)]);
     }
 
     #[test]
