@@ -705,6 +705,7 @@ fn reject_owner_local_direct_branch(instruction: Instruction) -> Result<(), Inst
         | Instruction::StoreVar(_)
         | Instruction::Call(_)
         | Instruction::CopyFromCallBase { .. }
+        | Instruction::TruncateDataStackToCallBase
         | Instruction::Return
         | Instruction::Halt => Ok(()),
     }

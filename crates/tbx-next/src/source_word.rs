@@ -882,6 +882,7 @@ impl StructuredOwnerLocalTarget {
             | Instruction::StoreVar(_)
             | Instruction::Call(_)
             | Instruction::CopyFromCallBase { .. }
+            | Instruction::TruncateDataStackToCallBase
             | Instruction::Return
             | Instruction::Halt => Ok(instruction),
         }

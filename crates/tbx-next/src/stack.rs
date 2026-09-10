@@ -10,6 +10,7 @@ use crate::value::Value;
 pub(crate) enum StackError {
     DataStackUnderflow,
     DataStackIndexOutOfBounds { index: usize, depth: usize },
+    DataStackDepthBelowTarget { target: usize, depth: usize },
     ReturnStackUnderflow,
 }
 
@@ -66,6 +67,16 @@ impl DataStack {
             return Err(StackError::DataStackUnderflow);
         }
 
+        Ok(())
+    }
+
+    pub(crate) fn truncate_to_depth(&mut self, target: usize) -> Result<(), StackError> {
+        let depth = self.values.len();
+        if depth < target {
+            return Err(StackError::DataStackDepthBelowTarget { target, depth });
+        }
+
+        self.values.truncate(target);
         Ok(())
     }
 

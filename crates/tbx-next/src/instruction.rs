@@ -92,6 +92,7 @@ pub(crate) enum Instruction {
     StoreVar(GlobalVarId),
     Call(WordId),
     CopyFromCallBase { offset: usize },
+    TruncateDataStackToCallBase,
     Jump(InstructionAddress),
     JumpIfZero(InstructionAddress),
     Return,
