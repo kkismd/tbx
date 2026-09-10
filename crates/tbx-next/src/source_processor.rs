@@ -704,6 +704,7 @@ fn reject_owner_local_direct_branch(instruction: Instruction) -> Result<(), Inst
         | Instruction::LoadVar(_)
         | Instruction::StoreVar(_)
         | Instruction::Call(_)
+        | Instruction::CopyFromCallBase { .. }
         | Instruction::Return
         | Instruction::Halt => Ok(()),
     }

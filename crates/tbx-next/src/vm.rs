@@ -80,6 +80,22 @@ pub(crate) enum VmErrorKind {
     InvalidCompiledEntry {
         source: InstructionLookupError,
     },
+    CallBaseValueCopy {
+        source: CallBaseValueError,
+    },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum CallBaseValueError {
+    NoCompiledWordInvocation,
+    InvalidOffset {
+        offset: usize,
+        call_data_stack_depth: usize,
+    },
+    DataStackIndexOutOfBounds {
+        index: usize,
+        depth: usize,
+    },
 }
 
 pub(crate) struct ExecutionView<'a> {
@@ -340,6 +356,9 @@ impl Vm {
             Instruction::LoadVar(id) => self.step_load_var(&mut execution, location, id),
             Instruction::StoreVar(id) => self.step_store_var(&mut execution, location, id),
             Instruction::Call(id) => self.step_call(execution, location, id),
+            Instruction::CopyFromCallBase { offset } => {
+                self.step_copy_from_call_base(instructions, location, offset)
+            }
             Instruction::Jump(target) => self.step_jump(instructions, location, target),
             Instruction::JumpIfZero(target) => {
                 self.step_jump_if_zero(instructions, location, target)
@@ -479,6 +498,53 @@ impl Vm {
         self.data_stack
             .pop()
             .expect("depth was checked before consuming StoreVar value");
+        self.instruction_pointer = next;
+
+        Ok(StepOutcome::Continued)
+    }
+
+    fn step_copy_from_call_base(
+        &mut self,
+        instructions: InstructionLookup<'_>,
+        location: CodeLocation,
+        offset: usize,
+    ) -> Result<StepOutcome, VmError> {
+        let next = self.valid_next_location(instructions, location)?;
+        let call_data_stack_depth = self.call_data_stack_depth().map_err(|_| VmError {
+            location,
+            kind: VmErrorKind::CallBaseValueCopy {
+                source: CallBaseValueError::NoCompiledWordInvocation,
+            },
+        })?;
+        if offset == 0 || offset > call_data_stack_depth {
+            return Err(VmError {
+                location,
+                kind: VmErrorKind::CallBaseValueCopy {
+                    source: CallBaseValueError::InvalidOffset {
+                        offset,
+                        call_data_stack_depth,
+                    },
+                },
+            });
+        }
+
+        let index = call_data_stack_depth - offset;
+        let value = self.data_stack.value_at(index).map_err(|source| {
+            let StackError::DataStackIndexOutOfBounds { index, depth } = source else {
+                unreachable!("value_at only reports indexed data-stack errors")
+            };
+            VmError {
+                location,
+                kind: VmErrorKind::CallBaseValueCopy {
+                    source: CallBaseValueError::DataStackIndexOutOfBounds { index, depth },
+                },
+            }
+        })?;
+
+        // The source is read from its current stack occupant. Only after all
+        // validation succeeds do the copy and instruction-pointer transition
+        // commit, preserving instruction failure atomicity.
+        self.data_stack.push(value);
         self.instruction_pointer = next;
 
         Ok(StepOutcome::Continued)
@@ -1943,6 +2009,180 @@ mod tests {
             vm.instruction_pointer = location(&code, call);
             while vm.data_stack.pop().is_ok() {}
         }
+    }
+
+    #[test]
+    fn copy_from_call_base_copies_one_based_offsets_without_consuming_sources() {
+        let primitives = PrimitiveRegistry::new();
+        let mut words = PublishedWords::new();
+        let mut code = InstructionSequence::new();
+        let compiled_entry = code.append(Instruction::CopyFromCallBase { offset: 1 });
+        code.append(Instruction::CopyFromCallBase { offset: 2 });
+        code.append(Instruction::CopyFromCallBase { offset: 3 });
+        code.append(Instruction::Return);
+        let word = words.add(
+            CompletedWordDefinition::compiled(location(&code, compiled_entry), code.view())
+                .expect("compiled entry should be valid"),
+        );
+        let entry = code.append(Instruction::Push(value(1)));
+        code.append(Instruction::Push(value(2)));
+        code.append(Instruction::Push(value(3)));
+        code.append(Instruction::Call(word));
+        let after_call = code.append(Instruction::Halt);
+        let mut vm = new_vm(&code, entry);
+
+        assert_eq!(
+            vm.run(execution(&code, &words, &primitives)),
+            Ok(RunOutcome::Halted)
+        );
+        assert_eq!(vm.instruction_pointer(), location(&code, after_call));
+        assert_eq!(
+            vm.data_stack.as_slice(),
+            &[value(1), value(2), value(3), value(3), value(2), value(1)]
+        );
+    }
+
+    #[test]
+    fn copy_from_call_base_reads_the_current_occupant_after_stack_reuse() {
+        let mut code = InstructionSequence::new();
+        let copy = code.append(Instruction::CopyFromCallBase { offset: 1 });
+        let target = code.append(Instruction::Halt);
+        let mut vm = new_vm(&code, copy);
+        vm.push_return_frame(ReturnFrame::new(location(&code, target), 1));
+        vm.push_data(value(7));
+        assert_eq!(vm.pop_data(), Ok(value(7)));
+        vm.push_data(value(99));
+
+        assert_eq!(vm.step(code.view()), Ok(StepOutcome::Continued));
+        assert_eq!(vm.instruction_pointer(), location(&code, target));
+        assert_eq!(vm.data_stack.as_slice(), &[value(99), value(99)]);
+    }
+
+    #[test]
+    fn copy_from_call_base_keeps_reference_index_when_values_above_it_change() {
+        let mut code = InstructionSequence::new();
+        let copy = code.append(Instruction::CopyFromCallBase { offset: 1 });
+        let target = code.append(Instruction::Halt);
+        let mut vm = new_vm(&code, copy);
+        vm.push_return_frame(ReturnFrame::new(location(&code, target), 2));
+        vm.push_data(value(10));
+        vm.push_data(value(20));
+        vm.push_data(value(30));
+        assert_eq!(vm.pop_data(), Ok(value(30)));
+        vm.push_data(value(40));
+
+        assert_eq!(vm.step(code.view()), Ok(StepOutcome::Continued));
+        assert_eq!(
+            vm.data_stack.as_slice(),
+            &[value(10), value(20), value(40), value(20)]
+        );
+    }
+
+    #[test]
+    fn copy_from_call_base_rejects_invalid_inputs_without_mutation() {
+        let cases = [
+            (
+                0,
+                3,
+                vec![value(1), value(2), value(3)],
+                CallBaseValueError::InvalidOffset {
+                    offset: 0,
+                    call_data_stack_depth: 3,
+                },
+            ),
+            (
+                4,
+                3,
+                vec![value(1), value(2), value(3)],
+                CallBaseValueError::InvalidOffset {
+                    offset: 4,
+                    call_data_stack_depth: 3,
+                },
+            ),
+            (
+                1,
+                3,
+                vec![value(1)],
+                CallBaseValueError::DataStackIndexOutOfBounds { index: 2, depth: 1 },
+            ),
+        ];
+
+        for (offset, call_depth, values, source) in cases {
+            let mut code = InstructionSequence::new();
+            let copy = code.append(Instruction::CopyFromCallBase { offset });
+            let target = code.append(Instruction::Halt);
+            let mut vm = new_vm(&code, copy);
+            for value in values {
+                vm.push_data(value);
+            }
+            vm.push_return_frame(ReturnFrame::new(location(&code, target), call_depth));
+            let before = snapshot(&vm);
+
+            assert_eq!(
+                vm.step(code.view()),
+                Err(VmError {
+                    location: location(&code, copy),
+                    kind: VmErrorKind::CallBaseValueCopy { source },
+                })
+            );
+            assert_vm_state(&vm, before);
+        }
+    }
+
+    #[test]
+    fn copy_from_call_base_rejects_top_level_execution_without_mutation() {
+        let mut code = InstructionSequence::new();
+        let copy = code.append(Instruction::CopyFromCallBase { offset: 1 });
+        code.append(Instruction::Halt);
+        let mut vm = new_vm(&code, copy);
+        vm.push_data(value(7));
+        let before = snapshot(&vm);
+
+        assert_eq!(
+            vm.step(code.view()),
+            Err(VmError {
+                location: location(&code, copy),
+                kind: VmErrorKind::CallBaseValueCopy {
+                    source: CallBaseValueError::NoCompiledWordInvocation,
+                },
+            })
+        );
+        assert_vm_state(&vm, before);
+    }
+
+    #[test]
+    fn copy_from_call_base_uses_the_innermost_nested_frame() {
+        let primitives = PrimitiveRegistry::new();
+        let mut words = PublishedWords::new();
+        let mut code = InstructionSequence::new();
+        let inner_entry = code.append(Instruction::CopyFromCallBase { offset: 1 });
+        code.append(Instruction::Return);
+        let inner = words.add(
+            CompletedWordDefinition::compiled(location(&code, inner_entry), code.view())
+                .expect("inner entry should be valid"),
+        );
+        let outer_entry = code.append(Instruction::CopyFromCallBase { offset: 1 });
+        code.append(Instruction::Call(inner));
+        code.append(Instruction::CopyFromCallBase { offset: 2 });
+        code.append(Instruction::Return);
+        let outer = words.add(
+            CompletedWordDefinition::compiled(location(&code, outer_entry), code.view())
+                .expect("outer entry should be valid"),
+        );
+        let entry = code.append(Instruction::Push(value(10)));
+        code.append(Instruction::Push(value(20)));
+        code.append(Instruction::Call(outer));
+        code.append(Instruction::Halt);
+        let mut vm = new_vm(&code, entry);
+
+        assert_eq!(
+            vm.run(execution(&code, &words, &primitives)),
+            Ok(RunOutcome::Halted)
+        );
+        assert_eq!(
+            vm.data_stack.as_slice(),
+            &[value(10), value(20), value(20), value(20), value(10)]
+        );
     }
 
     #[test]
