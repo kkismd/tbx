@@ -221,3 +221,88 @@ fn missing_file_failure_mentions_requested_path_without_fake_location() {
     assert!(stderr.contains("failed to read"), "{stderr}");
     assert!(!stderr.contains(":1:1"), "{stderr}");
 }
+
+#[test]
+fn file_use_loads_nested_sources_and_publishes_words_in_order() {
+    let path = fixture_path("m22/normal/main.tbx");
+    let output = run_with_file(&path);
+
+    assert!(
+        output.status.success(),
+        "expected success, stderr:\n{}",
+        stderr_text(&output)
+    );
+    assert_eq!(stdout_text(&output), "1\n2\n3\n30\n4\n");
+    assert_eq!(stderr_text(&output), "");
+}
+
+#[test]
+fn file_use_completed_duplicate_is_a_noop() {
+    let path = fixture_path("m22/duplicate/main.tbx");
+    let output = run_with_file(&path);
+
+    assert!(
+        output.status.success(),
+        "expected success, stderr:\n{}",
+        stderr_text(&output)
+    );
+    assert_eq!(stdout_text(&output), "2\n20\n");
+    assert_eq!(stderr_text(&output), "");
+}
+
+#[test]
+fn file_use_cycle_fails_with_requesting_source_location() {
+    let path = fixture_path("m22/cycle/main.tbx");
+    let output = run_with_file(&path);
+    let stderr = stderr_text(&output);
+
+    assert!(!output.status.success());
+    assert_eq!(stdout_text(&output), "");
+    assert!(stderr.contains("B.tbx:1:1:"), "{stderr}");
+    assert!(stderr.contains("main.tbx"), "{stderr}");
+}
+
+#[test]
+fn file_use_acquisition_failure_keeps_request_location_and_specification() {
+    let path = fixture_path("m22/acquisition-failure/main.tbx");
+    let output = run_with_file(&path);
+    let stderr = stderr_text(&output);
+
+    assert!(!output.status.success());
+    assert_eq!(stdout_text(&output), "");
+    assert!(
+        stderr.contains("m22/acquisition-failure/main.tbx:1:1:"),
+        "{stderr}"
+    );
+    assert!(stderr.contains("missing/dependency.tbx"), "{stderr}");
+    assert!(
+        stderr.contains("additional source acquisition failed"),
+        "{stderr}"
+    );
+}
+
+#[test]
+fn file_use_compile_failure_reports_additional_source_display_name_and_location() {
+    let path = fixture_path("m22/compile-failure/main.tbx");
+    let output = run_with_file(&path);
+    let stderr = stderr_text(&output);
+
+    assert!(!output.status.success());
+    assert_eq!(stdout_text(&output), "");
+    assert!(stderr.contains("bad.tbx:1:7:"), "{stderr}");
+    assert!(stderr.contains("1 | LET A ="), "{stderr}");
+    assert!(stderr.contains("source word error"), "{stderr}");
+}
+
+#[test]
+fn file_use_runtime_failure_maps_to_additional_source() {
+    let path = fixture_path("m22/runtime-failure/main.tbx");
+    let output = run_with_file(&path);
+    let stderr = stderr_text(&output);
+
+    assert!(!output.status.success());
+    assert_eq!(stdout_text(&output), "");
+    assert!(stderr.contains("bad.tbx:2:8:"), "{stderr}");
+    assert!(stderr.contains("2 | EVAL 1 / 0"), "{stderr}");
+    assert!(stderr.contains("runtime error"), "{stderr}");
+}

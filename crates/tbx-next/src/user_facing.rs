@@ -162,9 +162,16 @@ fn build_diagnostic(
         return diagnostic_for_infrastructure_failure(diagnostic_failure);
     }
 
-    match error.primary_span() {
+    let diagnostic = match error.primary_span() {
         Some(span) => UserDiagnostic::at_span(span, diagnostic_message(error)),
         None => UserDiagnostic::without_source(diagnostic_target(error), diagnostic_message(error)),
+    };
+
+    match error {
+        SourceProcessorError::AdditionalSourceAcquisition { specification, .. } => {
+            diagnostic.with_note(format!("requested source specification: `{specification}`"))
+        }
+        _ => diagnostic,
     }
 }
 
