@@ -383,6 +383,16 @@ impl Vm {
         self.return_stack.depth()
     }
 
+    /// Returns the call-time data-stack depth of the innermost compiled word.
+    ///
+    /// The value belongs to VM control state and is intentionally not exposed
+    /// through `Value` or `PrimitiveContext`.
+    pub(crate) fn call_data_stack_depth(&self) -> Result<usize, StackError> {
+        self.return_stack
+            .peek()
+            .map(ReturnFrame::call_data_stack_depth)
+    }
+
     #[cfg(test)]
     fn push_return_frame(&mut self, frame: ReturnFrame) {
         self.return_stack.push(frame);
@@ -533,7 +543,8 @@ impl Vm {
             WordDefinition::Compiled { entry } => {
                 let entry = self.valid_compiled_entry(instructions, location, entry)?;
 
-                self.return_stack.push(ReturnFrame::new(next));
+                self.return_stack
+                    .push(ReturnFrame::new(next, self.data_stack.depth()));
                 self.instruction_pointer = entry;
 
                 Ok(StepOutcome::Continued)
@@ -769,7 +780,7 @@ mod tests {
     }
 
     fn return_frame(code: &InstructionSequence, return_address: InstructionAddress) -> ReturnFrame {
-        ReturnFrame::new(location(code, return_address))
+        ReturnFrame::new(location(code, return_address), 0)
     }
 
     fn push_42(context: &mut PrimitiveContext<'_>) -> Result<(), PrimitiveError> {
@@ -1904,6 +1915,87 @@ mod tests {
     }
 
     #[test]
+    fn compiled_call_records_depth_before_entering_callee() {
+        let primitives = PrimitiveRegistry::new();
+        let mut words = PublishedWords::new();
+        let mut code = InstructionSequence::new();
+        let compiled_entry = code.append(Instruction::Return);
+        let word = words.add(
+            CompletedWordDefinition::compiled(location(&code, compiled_entry), code.view())
+                .expect("compiled entry should be valid"),
+        );
+        let call = code.append(Instruction::Call(word));
+        code.append(Instruction::Halt);
+        let mut vm = new_vm(&code, call);
+        let mut execution = execution(&code, &words, &primitives);
+
+        for value_count in [0, 1, 3] {
+            for n in 0..value_count {
+                vm.data_stack.push(value(n as i16));
+            }
+            assert_eq!(vm.step(&mut execution), Ok(StepOutcome::Continued));
+            assert_eq!(vm.call_data_stack_depth(), Ok(value_count));
+            assert_eq!(vm.step(&mut execution), Ok(StepOutcome::Continued));
+            assert_eq!(
+                vm.call_data_stack_depth(),
+                Err(StackError::ReturnStackUnderflow)
+            );
+            vm.instruction_pointer = location(&code, call);
+            while vm.data_stack.pop().is_ok() {}
+        }
+    }
+
+    #[test]
+    fn nested_compiled_calls_keep_independent_call_depths_and_return_to_outer_frame() {
+        let primitives = PrimitiveRegistry::new();
+        let mut words = PublishedWords::new();
+        let mut code = InstructionSequence::new();
+        let inner_entry = code.append(Instruction::Return);
+        let inner = words.add(
+            CompletedWordDefinition::compiled(location(&code, inner_entry), code.view())
+                .expect("inner entry should be valid"),
+        );
+        let outer_entry = code.append(Instruction::Push(value(7)));
+        code.append(Instruction::Call(inner));
+        code.append(Instruction::Return);
+        let outer = words.add(
+            CompletedWordDefinition::compiled(location(&code, outer_entry), code.view())
+                .expect("outer entry should be valid"),
+        );
+        let outer_call = code.append(Instruction::Call(outer));
+        code.append(Instruction::Halt);
+        let mut vm = new_vm(&code, outer_call);
+        let mut execution = execution(&code, &words, &primitives);
+
+        assert_eq!(vm.step(&mut execution), Ok(StepOutcome::Continued));
+        assert_eq!(vm.call_data_stack_depth(), Ok(0));
+        assert_eq!(vm.step(&mut execution), Ok(StepOutcome::Continued));
+        assert_eq!(vm.step(&mut execution), Ok(StepOutcome::Continued));
+        assert_eq!(vm.instruction_pointer(), location(&code, inner_entry));
+        assert_eq!(vm.call_data_stack_depth(), Ok(1));
+        assert_eq!(vm.step(&mut execution), Ok(StepOutcome::Continued));
+        assert_eq!(vm.call_data_stack_depth(), Ok(0));
+
+        assert_eq!(vm.step(&mut execution), Ok(StepOutcome::Continued));
+        assert_eq!(
+            vm.call_data_stack_depth(),
+            Err(StackError::ReturnStackUnderflow)
+        );
+    }
+
+    #[test]
+    fn top_level_execution_has_no_call_data_stack_depth() {
+        let mut code = InstructionSequence::new();
+        let entry = code.append(Instruction::Halt);
+        let vm = new_vm(&code, entry);
+
+        assert_eq!(
+            vm.call_data_stack_depth(),
+            Err(StackError::ReturnStackUnderflow)
+        );
+    }
+
+    #[test]
     fn compiled_call_enters_published_code_space_and_returns_to_caller_space() {
         let primitives = PrimitiveRegistry::new();
         let mut words = PublishedWords::new();
@@ -2218,7 +2310,7 @@ mod tests {
                 vec![value(11), value(0)],
                 vec![
                     return_frame(&code, after_outer),
-                    return_frame(&code, after_inner),
+                    ReturnFrame::new(location(&code, after_inner), 1),
                 ],
                 false,
             ),
