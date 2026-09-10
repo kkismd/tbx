@@ -9,6 +9,7 @@ use crate::value::Value;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum StackError {
     DataStackUnderflow,
+    DataStackIndexOutOfBounds { index: usize, depth: usize },
     ReturnStackUnderflow,
 }
 
@@ -35,6 +36,16 @@ impl DataStack {
             .last()
             .copied()
             .ok_or(StackError::DataStackUnderflow)
+    }
+
+    pub(crate) fn value_at(&self, index: usize) -> Result<Value, StackError> {
+        self.values
+            .get(index)
+            .copied()
+            .ok_or(StackError::DataStackIndexOutOfBounds {
+                index,
+                depth: self.values.len(),
+            })
     }
 
     pub(crate) fn depth(&self) -> usize {

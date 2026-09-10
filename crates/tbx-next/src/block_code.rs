@@ -234,6 +234,7 @@ fn reject_direct_branch_instruction(instruction: Instruction) -> Result<(), Bloc
         | Instruction::LoadVar(_)
         | Instruction::StoreVar(_)
         | Instruction::Call(_)
+        | Instruction::CopyFromCallBase { .. }
         | Instruction::Return
         | Instruction::Halt => Ok(()),
     }

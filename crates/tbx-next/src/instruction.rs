@@ -91,6 +91,7 @@ pub(crate) enum Instruction {
     LoadVar(GlobalVarId),
     StoreVar(GlobalVarId),
     Call(WordId),
+    CopyFromCallBase { offset: usize },
     Jump(InstructionAddress),
     JumpIfZero(InstructionAddress),
     Return,
