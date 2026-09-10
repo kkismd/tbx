@@ -533,7 +533,8 @@ impl Vm {
             WordDefinition::Compiled { entry } => {
                 let entry = self.valid_compiled_entry(instructions, location, entry)?;
 
-                self.return_stack.push(ReturnFrame::new(next));
+                self.return_stack
+                    .push(ReturnFrame::new(next, self.data_stack.depth()));
                 self.instruction_pointer = entry;
 
                 Ok(StepOutcome::Continued)
@@ -769,7 +770,15 @@ mod tests {
     }
 
     fn return_frame(code: &InstructionSequence, return_address: InstructionAddress) -> ReturnFrame {
-        ReturnFrame::new(location(code, return_address))
+        return_frame_at_depth(code, return_address, 0)
+    }
+
+    fn return_frame_at_depth(
+        code: &InstructionSequence,
+        return_address: InstructionAddress,
+        call_data_stack_depth: usize,
+    ) -> ReturnFrame {
+        ReturnFrame::new(location(code, return_address), call_data_stack_depth)
     }
 
     fn push_42(context: &mut PrimitiveContext<'_>) -> Result<(), PrimitiveError> {
@@ -1889,11 +1898,20 @@ mod tests {
         let call = code.append(Instruction::Call(word));
         let after_call = code.append(Instruction::Halt);
         let mut vm = new_vm(&code, call);
+        vm.data_stack.push(value(1));
+        vm.data_stack.push(value(2));
         let mut execution = execution(&code, &words, &primitives);
 
         assert_eq!(vm.step(&mut execution), Ok(StepOutcome::Continued));
         assert_eq!(vm.instruction_pointer(), location(&code, compiled_entry));
         assert_eq!(vm.return_stack_depth(), 1);
+        assert_eq!(
+            vm.return_stack
+                .peek()
+                .expect("compiled call should push a frame")
+                .call_data_stack_depth(),
+            2
+        );
 
         assert_eq!(vm.step(&mut execution), Ok(StepOutcome::Continued));
         assert_eq!(vm.step(&mut execution), Ok(StepOutcome::Continued));
@@ -1901,6 +1919,7 @@ mod tests {
         assert_eq!(vm.instruction_pointer(), location(&code, after_call));
         assert_eq!(vm.return_stack_depth(), 0);
         assert_eq!(vm.peek_data(), Ok(value(7)));
+        assert_eq!(vm.data_stack.as_slice(), &[value(1), value(2), value(7)]);
     }
 
     #[test]
@@ -2217,8 +2236,8 @@ mod tests {
                 location(&code, failing_branch),
                 vec![value(11), value(0)],
                 vec![
-                    return_frame(&code, after_outer),
-                    return_frame(&code, after_inner),
+                    return_frame_at_depth(&code, after_outer, 0),
+                    return_frame_at_depth(&code, after_inner, 1),
                 ],
                 false,
             ),

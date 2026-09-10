@@ -83,20 +83,28 @@ impl DataStack {
 /// Opaque VM-control frame for the return stack.
 ///
 /// ADR #1366 separates language values from VM control state: the data stack
-/// stores only `Value`, while return addresses stay unobservable through user
-/// data-stack operations.
+/// stores only `Value`, while return locations and call-time data-stack depths
+/// stay unobservable through user data-stack operations.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct ReturnFrame {
     return_location: CodeLocation,
+    call_data_stack_depth: usize,
 }
 
 impl ReturnFrame {
-    pub(crate) const fn new(return_location: CodeLocation) -> Self {
-        Self { return_location }
+    pub(crate) const fn new(return_location: CodeLocation, call_data_stack_depth: usize) -> Self {
+        Self {
+            return_location,
+            call_data_stack_depth,
+        }
     }
 
     pub(crate) const fn return_location(self) -> CodeLocation {
         self.return_location
+    }
+
+    pub(crate) const fn call_data_stack_depth(self) -> usize {
+        self.call_data_stack_depth
     }
 }
 
@@ -266,8 +274,8 @@ mod tests {
             .view()
             .location(crate::instruction::InstructionAddress::from_index(2));
         let mut stack = ReturnStack::new();
-        let first = ReturnFrame::new(first_location);
-        let second = ReturnFrame::new(second_location);
+        let first = ReturnFrame::new(first_location, 1);
+        let second = ReturnFrame::new(second_location, 2);
 
         stack.push(first);
         stack.push(second);
@@ -284,9 +292,20 @@ mod tests {
         let location = code
             .view()
             .location(crate::instruction::InstructionAddress::from_index(4));
-        let frame = ReturnFrame::new(location);
+        let frame = ReturnFrame::new(location, 0);
 
         assert_eq!(frame.return_location(), location);
+    }
+
+    #[test]
+    fn return_frame_exposes_call_data_stack_depth() {
+        let code = crate::instruction::InstructionSequence::new();
+        let location = code
+            .view()
+            .location(crate::instruction::InstructionAddress::from_index(4));
+        let frame = ReturnFrame::new(location, 3);
+
+        assert_eq!(frame.call_data_stack_depth(), 3);
     }
 
     #[test]
@@ -306,7 +325,7 @@ mod tests {
             .view()
             .location(crate::instruction::InstructionAddress::from_index(3));
         let mut stack = ReturnStack::new();
-        let frame = ReturnFrame::new(location);
+        let frame = ReturnFrame::new(location, 0);
 
         stack.push(frame);
 
@@ -324,7 +343,7 @@ mod tests {
             .location(crate::instruction::InstructionAddress::from_index(1));
         let mut data_stack = DataStack::new();
         let mut return_stack = ReturnStack::new();
-        let frame = ReturnFrame::new(location);
+        let frame = ReturnFrame::new(location, 0);
 
         data_stack.push(Value::integer(42));
         return_stack.push(frame);
