@@ -4,8 +4,8 @@ VAR NUMBER
 VAR PRIME
 VAR DIVISOR
 
-DEF PRIME?
-  IF DUP() < 2
+DEF PRIME? candidate
+  IF candidate < 2
     DROP
     EVAL 0
   ELSE
