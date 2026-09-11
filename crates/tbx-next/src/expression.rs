@@ -1,7 +1,10 @@
+use std::collections::HashMap;
+
 use crate::global_variable::GlobalVarId;
 use crate::instruction::Instruction;
 use crate::instruction_builder::{InstructionBuildError, InstructionBuildTarget};
 use crate::lexer::{Token, TokenKind};
+use crate::name::NormalizedName;
 use crate::operator::{OperatorLookup, OperatorSemantic};
 use crate::source::{SourceError, SourceSpan, SourceView};
 use crate::value::Value;
@@ -80,6 +83,40 @@ pub(crate) trait ExpressionRuntimeWordResolver {
     fn resolve_runtime_word(&self, source_name: &str) -> Result<WordId, ExpressionCallErrorKind>;
 }
 
+pub(crate) trait ExpressionLocalResolver {
+    fn resolve_local_reference(&self, source_name: &str) -> Option<usize>;
+}
+
+#[derive(Debug, Default)]
+pub(crate) struct DefinitionLocalReferences {
+    // These are compile-time names for call-base offsets, not runtime slots or
+    // saved values. The VM remains responsible for resolving the current stack
+    // occupant when the lowered CopyFromCallBase instruction executes.
+    offsets: HashMap<NormalizedName, usize>,
+}
+
+impl DefinitionLocalReferences {
+    pub(crate) fn from_names(names: &[NormalizedName]) -> Self {
+        let offsets = names
+            .iter()
+            .enumerate()
+            .map(|(index, name)| (name.clone(), names.len() - index))
+            .collect();
+        Self { offsets }
+    }
+
+    pub(crate) fn resolve(&self, source_name: &str) -> Option<usize> {
+        let name = NormalizedName::new(source_name).ok()?;
+        self.offsets.get(&name).copied()
+    }
+}
+
+impl ExpressionLocalResolver for DefinitionLocalReferences {
+    fn resolve_local_reference(&self, source_name: &str) -> Option<usize> {
+        self.resolve(source_name)
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct ParsedExpression {
     contains_comparison: bool,
@@ -99,6 +136,7 @@ struct ExpressionParser<'a, 'r> {
     operators: OperatorLookup,
     variables: &'r dyn ExpressionVariableResolver,
     runtime_words: &'r dyn ExpressionRuntimeWordResolver,
+    locals: Option<&'r dyn ExpressionLocalResolver>,
     position: usize,
 }
 
@@ -115,7 +153,19 @@ pub(crate) fn parse_expression(
     variables: &dyn ExpressionVariableResolver,
     runtime_words: &dyn ExpressionRuntimeWordResolver,
 ) -> Result<ExpressionStaging, ExpressionError> {
-    let mut parser = ExpressionParser::new(view, tokens, operators, variables, runtime_words);
+    parse_expression_with_locals(view, tokens, operators, variables, runtime_words, None)
+}
+
+pub(crate) fn parse_expression_with_locals(
+    view: SourceView<'_>,
+    tokens: &[Token],
+    operators: OperatorLookup,
+    variables: &dyn ExpressionVariableResolver,
+    runtime_words: &dyn ExpressionRuntimeWordResolver,
+    locals: Option<&dyn ExpressionLocalResolver>,
+) -> Result<ExpressionStaging, ExpressionError> {
+    let mut parser =
+        ExpressionParser::new(view, tokens, operators, variables, runtime_words, locals);
     parser.parse_complete()
 }
 
@@ -226,6 +276,7 @@ impl<'a, 'r> ExpressionParser<'a, 'r> {
         operators: OperatorLookup,
         variables: &'r dyn ExpressionVariableResolver,
         runtime_words: &'r dyn ExpressionRuntimeWordResolver,
+        locals: Option<&'r dyn ExpressionLocalResolver>,
     ) -> Self {
         Self {
             view,
@@ -233,6 +284,7 @@ impl<'a, 'r> ExpressionParser<'a, 'r> {
             operators,
             variables,
             runtime_words,
+            locals,
             position: 0,
         }
     }
@@ -344,6 +396,17 @@ impl<'a, 'r> ExpressionParser<'a, 'r> {
             let parsed = self.parse_call_arguments(staging)?;
             staging.append_mapped_instruction(Instruction::Call(word), name.span());
             return Ok(parsed);
+        }
+
+        if let Some(offset) = self
+            .locals
+            .and_then(|locals| locals.resolve_local_reference(source_name))
+        {
+            staging
+                .append_mapped_instruction(Instruction::CopyFromCallBase { offset }, name.span());
+            return Ok(ParsedExpression {
+                contains_comparison: false,
+            });
         }
 
         let id = self
