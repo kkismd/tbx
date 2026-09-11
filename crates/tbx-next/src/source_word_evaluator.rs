@@ -1,7 +1,10 @@
 use std::collections::HashMap;
 
 use crate::binding::Bindings;
-use crate::expression::{parse_expression, ExpressionError, ExpressionStaging};
+use crate::expression::{
+    parse_expression_with_locals, DefinitionLocalReferences, ExpressionError,
+    ExpressionLocalResolver, ExpressionStaging,
+};
 use crate::global_variable::GlobalVarId;
 use crate::instruction::{Instruction, InstructionAddress};
 use crate::instruction_builder::{InstructionBuildError, InstructionBuildTarget};
@@ -26,6 +29,7 @@ pub(crate) struct UserDefinedSourceWordContext<'source, 'state> {
     reader: SourceStatementReader<'source>,
     bindings: &'state Bindings,
     operators: Option<OperatorLookup>,
+    local_references: Option<&'state DefinitionLocalReferences>,
     code: &'state mut dyn InstructionBuildTarget,
     line_numbers: &'state mut LocalLineNumberTable,
     capabilities: SourceProcessingCapabilities,
@@ -37,6 +41,7 @@ pub(crate) struct UserDefinedSourceWordContextParts<'source, 'state> {
     pub(crate) tokens: &'source [Token],
     pub(crate) bindings: &'state Bindings,
     pub(crate) operators: Option<OperatorLookup>,
+    pub(crate) local_references: Option<&'state DefinitionLocalReferences>,
     pub(crate) code: &'state mut dyn InstructionBuildTarget,
     pub(crate) line_numbers: &'state mut LocalLineNumberTable,
     pub(crate) capabilities: SourceProcessingCapabilities,
@@ -271,6 +276,7 @@ impl<'source, 'state> UserDefinedSourceWordContext<'source, 'state> {
             reader: SourceStatementReader::new(&parts.tokens[1..], source_word_token.span()),
             bindings: parts.bindings,
             operators: parts.operators,
+            local_references: parts.local_references,
             code: parts.code,
             line_numbers: parts.line_numbers,
             capabilities: parts.capabilities,
@@ -586,12 +592,16 @@ fn stage_expression(
     let resolver = |source_name: &str| resolve_variable_name(context.bindings, source_name);
     let runtime_word_resolver =
         |source_name: &str| resolve_runtime_word_name(context.bindings, source_name);
-    parse_expression(
+    let local_resolver = context
+        .local_references
+        .map(|references| references as &dyn ExpressionLocalResolver);
+    parse_expression_with_locals(
         context.view,
         &expression_tokens,
         operators,
         &resolver,
         &runtime_word_resolver,
+        local_resolver,
     )
     .map_err(|source| SourceWordEvaluationError::Expression { source, origin })
 }
@@ -986,6 +996,7 @@ mod tests {
                     tokens: &tokens,
                     bindings: &bindings,
                     operators: Some(operators),
+                    local_references: None,
                     code: &mut builder,
                     line_numbers: &mut line_numbers,
                     capabilities: SourceProcessingCapabilities::statement_runtime(),
@@ -1068,6 +1079,7 @@ mod tests {
                     tokens: &tokens,
                     bindings: &bindings,
                     operators: Some(operator_lookup()),
+                    local_references: None,
                     code: &mut builder,
                     line_numbers: &mut line_numbers,
                     capabilities: SourceProcessingCapabilities::statement_runtime(),
@@ -1128,6 +1140,7 @@ mod tests {
                     tokens: &tokens,
                     bindings: &bindings,
                     operators: Some(operator_lookup()),
+                    local_references: None,
                     code: &mut builder,
                     line_numbers: &mut line_numbers,
                     capabilities: SourceProcessingCapabilities::statement_runtime(),
@@ -1164,6 +1177,7 @@ mod tests {
                     tokens: &tokens,
                     bindings: &bindings,
                     operators: Some(operator_lookup()),
+                    local_references: None,
                     code: &mut builder,
                     line_numbers: &mut line_numbers,
                     capabilities: SourceProcessingCapabilities::empty(),
@@ -1229,6 +1243,7 @@ mod tests {
                     tokens: &tokens,
                     bindings: &bindings,
                     operators: Some(operator_lookup()),
+                    local_references: None,
                     code: &mut builder,
                     line_numbers: &mut line_numbers,
                     capabilities: SourceProcessingCapabilities::statement_runtime(),

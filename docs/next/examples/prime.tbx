@@ -11,8 +11,8 @@ DEF PRIME? candidate
   ELSE
     LET PRIME = 1
     LET DIVISOR = 2
-    WHILE DUP() >= DIVISOR * DIVISOR
-      IF (DUP() % DIVISOR) = 0
+    WHILE candidate >= DIVISOR * DIVISOR
+      IF (candidate % DIVISOR) = 0
         LET PRIME = 0
       ENDIF
       LET DIVISOR = DIVISOR + 1

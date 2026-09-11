@@ -1405,6 +1405,7 @@ where
                     tokens,
                     bindings: context.bindings(),
                     operators,
+                    local_references: context.local_references,
                     code: state.code,
                     line_numbers: &mut line_numbers,
                     capabilities: SourceProcessingCapabilities::statement_runtime(),
@@ -1448,6 +1449,7 @@ where
                                 tokens,
                                 bindings: context.bindings(),
                                 operators,
+                                local_references: context.local_references,
                                 code: state.code,
                                 line_numbers: &mut line_numbers,
                                 capabilities: SourceProcessingCapabilities::structured_runtime(),
@@ -9953,6 +9955,20 @@ mod tests {
         assert_eq!(
             session.code.instruction_view().get(address(1)),
             Ok(&Instruction::Return)
+        );
+    }
+
+    #[test]
+    fn def_header_local_reference_is_available_in_while_condition() {
+        let mut session = RuntimeDefinitionSession::new_with_named_operators();
+        session.publish_syntax(
+            "SYNTAX WHILE\nBLOCK\nSTART\nPOSITION AS loop_start\nREAD_EXPR AS condition\nEMIT_EXPR condition\nEMIT_BRANCH_IF_FALSE_COMPLETE\nLAST WEND\nEXPECT_END\nEMIT_BRANCH loop_start\nENDS",
+        );
+        session.publish_def("DEF LOOP value\nWHILE value\nWEND\nEND");
+
+        assert_eq!(
+            session.code.instruction_view().get(address(0)),
+            Ok(&Instruction::CopyFromCallBase { offset: 1 })
         );
     }
 
