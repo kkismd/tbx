@@ -3,8 +3,8 @@ use std::collections::HashMap;
 
 use crate::binding::{Binding, BindingInsertError, Bindings};
 use crate::expression::{
-    parse_expression, ExpressionCallErrorKind, ExpressionError, ExpressionStaging,
-    ExpressionVariableErrorKind,
+    parse_expression_with_locals, DefinitionLocalReferences, ExpressionCallErrorKind,
+    ExpressionError, ExpressionLocalResolver, ExpressionStaging, ExpressionVariableErrorKind,
 };
 use crate::global_variable::GlobalVariables;
 use crate::instruction::Instruction;
@@ -135,6 +135,7 @@ pub(crate) struct NativeStructuredSourceWordContext<'source, 'state> {
     source_id: SourceId,
     bindings: &'state Bindings,
     operators: Option<OperatorLookup>,
+    local_references: Option<&'state DefinitionLocalReferences>,
     code: &'state mut dyn InstructionBuildTarget,
     line_numbers: &'state mut crate::line_number::LocalLineNumberTable,
     capabilities: SourceProcessingCapabilities,
@@ -146,6 +147,7 @@ pub(crate) struct NativeStructuredSourceWordContextParts<'source, 'state> {
     pub(crate) source_id: SourceId,
     pub(crate) bindings: &'state Bindings,
     pub(crate) operators: Option<OperatorLookup>,
+    pub(crate) local_references: Option<&'state DefinitionLocalReferences>,
     pub(crate) code: &'state mut dyn InstructionBuildTarget,
     pub(crate) line_numbers: &'state mut crate::line_number::LocalLineNumberTable,
     pub(crate) capabilities: SourceProcessingCapabilities,
@@ -657,6 +659,7 @@ impl<'source, 'state> NativeStructuredSourceWordContext<'source, 'state> {
             source_id: parts.source_id,
             bindings: parts.bindings,
             operators: parts.operators,
+            local_references: parts.local_references,
             code: parts.code,
             line_numbers: parts.line_numbers,
             capabilities: parts.capabilities,
@@ -755,12 +758,16 @@ impl<'source, 'state> NativeStructuredSourceWordContext<'source, 'state> {
         let resolver = |source_name: &str| resolve_variable_name(self.bindings, source_name);
         let runtime_word_resolver =
             |source_name: &str| resolve_runtime_word_name(self.bindings, source_name);
-        parse_expression(
+        let local_resolver = self
+            .local_references
+            .map(|references| references as &dyn ExpressionLocalResolver);
+        parse_expression_with_locals(
             self.view,
             &expression_tokens,
             operators,
             &resolver,
             &runtime_word_resolver,
+            local_resolver,
         )
         .map_err(|source| SourceWordError::Expression { source })
     }
@@ -1112,6 +1119,7 @@ pub(crate) struct NativeSourceWordContext<'source, 'state> {
     block_reader: Option<SourceBlockReader<'source, 'state>>,
     bindings: NativeSourceWordBindingAccess<'state>,
     operators: Option<OperatorLookup>,
+    local_references: Option<&'state DefinitionLocalReferences>,
     code: &'state mut dyn InstructionBuildTarget,
     local_line_number_prefix: Option<SourceSpan>,
     globals: Option<&'state mut GlobalVariables>,
@@ -1128,6 +1136,7 @@ pub(crate) struct NativeSourceWordContextParts<'source, 'state> {
     pub(crate) block_reader: Option<SourceBlockReader<'source, 'state>>,
     pub(crate) bindings: NativeSourceWordBindingAccess<'state>,
     pub(crate) operators: Option<OperatorLookup>,
+    pub(crate) local_references: Option<&'state DefinitionLocalReferences>,
     pub(crate) code: &'state mut dyn InstructionBuildTarget,
     pub(crate) local_line_number_prefix: Option<SourceSpan>,
     pub(crate) globals: Option<&'state mut GlobalVariables>,
@@ -1152,6 +1161,7 @@ impl<'source, 'state> NativeSourceWordContext<'source, 'state> {
             block_reader: parts.block_reader,
             bindings: parts.bindings,
             operators: parts.operators,
+            local_references: parts.local_references,
             code: parts.code,
             local_line_number_prefix: parts.local_line_number_prefix,
             globals: parts.globals,
@@ -1444,12 +1454,16 @@ impl<'source, 'state> NativeSourceWordContext<'source, 'state> {
         let resolver = |source_name: &str| resolve_variable_name(self.bindings(), source_name);
         let runtime_word_resolver =
             |source_name: &str| resolve_runtime_word_name(self.bindings(), source_name);
-        parse_expression(
+        let local_resolver = self
+            .local_references
+            .map(|references| references as &dyn ExpressionLocalResolver);
+        parse_expression_with_locals(
             self.view,
             &expression_tokens,
             operators,
             &resolver,
             &runtime_word_resolver,
+            local_resolver,
         )
         .map_err(|source| SourceWordError::Expression { source })
     }
@@ -3080,6 +3094,7 @@ mod tests {
             block_reader: None,
             bindings: NativeSourceWordBindingAccess::Read(&bindings),
             operators: None,
+            local_references: None,
             code: &mut builder,
             local_line_number_prefix: None,
             globals: None,
@@ -3117,6 +3132,7 @@ mod tests {
             block_reader: None,
             bindings: NativeSourceWordBindingAccess::Read(&bindings),
             operators: None,
+            local_references: None,
             code: &mut builder,
             local_line_number_prefix: None,
             globals: None,
@@ -3160,6 +3176,7 @@ mod tests {
                 block_reader: None,
                 bindings: NativeSourceWordBindingAccess::Read(&bindings),
                 operators: None,
+                local_references: None,
                 code: &mut builder,
                 local_line_number_prefix: None,
                 globals: None,
@@ -3191,6 +3208,7 @@ mod tests {
             block_reader: None,
             bindings: NativeSourceWordBindingAccess::Read(&bindings),
             operators: None,
+            local_references: None,
             code: &mut builder,
             local_line_number_prefix: None,
             globals: None,
@@ -3220,6 +3238,7 @@ mod tests {
             block_reader: None,
             bindings: NativeSourceWordBindingAccess::Read(&bindings),
             operators: None,
+            local_references: None,
             code: &mut builder,
             local_line_number_prefix: None,
             globals: None,
@@ -3385,6 +3404,7 @@ mod tests {
             block_reader: None,
             bindings: NativeSourceWordBindingAccess::Read(&bindings),
             operators: None,
+            local_references: None,
             code: &mut builder,
             local_line_number_prefix: None,
             globals: None,
@@ -3592,6 +3612,7 @@ mod tests {
                 block_reader: None,
                 bindings: NativeSourceWordBindingAccess::Read(&bindings),
                 operators: None,
+                local_references: None,
                 code: &mut builder,
                 local_line_number_prefix: None,
                 globals: None,
@@ -3629,6 +3650,7 @@ mod tests {
                     block_reader: None,
                     bindings: NativeSourceWordBindingAccess::Write(&mut bindings),
                     operators: None,
+                    local_references: None,
                     code: &mut builder,
                     local_line_number_prefix: None,
                     globals: Some(&mut globals),

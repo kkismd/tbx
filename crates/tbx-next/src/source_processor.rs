@@ -5,8 +5,9 @@ use std::rc::Rc;
 use crate::binding::Bindings;
 use crate::block_code::{BlockCodeBuildError, BlockCodeBuilder};
 use crate::expression::{
-    parse_expression, ExpressionCallErrorKind, ExpressionError, ExpressionStaging,
-    ExpressionSyntaxErrorKind, ExpressionVariableErrorKind,
+    parse_expression_with_locals, DefinitionLocalReferences, ExpressionCallErrorKind,
+    ExpressionError, ExpressionLocalResolver, ExpressionStaging, ExpressionSyntaxErrorKind,
+    ExpressionVariableErrorKind,
 };
 use crate::global_variable::{GlobalVariableView, GlobalVariables};
 use crate::instruction::{
@@ -125,8 +126,7 @@ impl SourceFormCursor {
                 if dispatch_current_owner_marker(
                     view,
                     self.source_id,
-                    context.bindings(),
-                    context.operators(),
+                    &context,
                     statement,
                     &mut builder,
                     &mut structured_frames,
@@ -209,18 +209,21 @@ pub(crate) struct SourceCompileContext<'a> {
     globals: Option<&'a mut GlobalVariables>,
     runtime_definitions: Option<RuntimeDefinitionPublicationAccess<'a>>,
     additional_source_capability: bool,
+    local_references: Option<&'a DefinitionLocalReferences>,
 }
 
 pub(crate) struct DefinitionBodyCompileContext<'a> {
     bindings: &'a Bindings,
     operators: Option<OperatorLookup>,
     source_words: Option<SourceWordLookup<'a>>,
+    local_references: Option<&'a DefinitionLocalReferences>,
 }
 
 pub(crate) struct QuotationBodyCompileContext<'a> {
     bindings: &'a Bindings,
     operators: Option<OperatorLookup>,
     source_words: Option<SourceWordLookup<'a>>,
+    local_references: Option<&'a DefinitionLocalReferences>,
 }
 
 pub(crate) struct DefinitionBodyStatements<'a> {
@@ -738,8 +741,7 @@ fn current_processing_context(
 fn dispatch_current_owner_marker<'source, S>(
     view: SourceView<'source>,
     source_id: SourceId,
-    bindings: &Bindings,
-    operators: Option<OperatorLookup>,
+    context: &SourceCompileContext<'_>,
     statement: &'source S,
     code: &mut dyn InstructionBuildTarget,
     structured_frames: &mut Vec<StructuredSourceFrame>,
@@ -792,8 +794,9 @@ where
         NativeStructuredSourceWordContext::new(NativeStructuredSourceWordContextParts {
             view,
             source_id,
-            bindings,
-            operators,
+            bindings: context.bindings(),
+            operators: context.operators(),
+            local_references: context.local_references,
             code: callback_code,
             line_numbers: &mut callback_line_numbers,
             capabilities: SourceProcessingCapabilities::structured_runtime(),
@@ -954,6 +957,7 @@ pub(crate) fn compile_definition_body<'source>(
         globals: None,
         runtime_definitions: None,
         additional_source_capability: false,
+        local_references: context.local_references,
     };
 
     compile_statements(
@@ -981,6 +985,7 @@ pub(crate) fn compile_quotation_body<'source>(
         globals: None,
         runtime_definitions: None,
         additional_source_capability: false,
+        local_references: context.local_references,
     };
 
     StaticQuotation::try_build(|builder| {
@@ -1014,8 +1019,7 @@ where
         if dispatch_current_owner_marker(
             view,
             source_id,
-            context.bindings(),
-            context.operators(),
+            &context,
             statement,
             code,
             &mut structured_frames,
@@ -1243,8 +1247,14 @@ fn compile_statement_leading_runtime_word(
         }
         .into());
     };
-    let mut staging =
-        parse_expression_staging(view, source_id, trailing, context.bindings(), operators)?;
+    let mut staging = parse_expression_staging(
+        view,
+        source_id,
+        trailing,
+        context.bindings(),
+        operators,
+        context.local_references,
+    )?;
     staging.append_mapped_instruction(Instruction::Call(word), head.span());
     staging
         .commit_to(state.code)
@@ -1375,6 +1385,7 @@ where
                     )),
                     bindings: binding_access,
                     operators,
+                    local_references: context.local_references,
                     code: state.code,
                     local_line_number_prefix,
                     globals,
@@ -1415,6 +1426,7 @@ where
                             block_reader: None,
                             bindings: binding_access,
                             operators,
+                            local_references: context.local_references,
                             code: state.code,
                             local_line_number_prefix,
                             globals,
@@ -1502,6 +1514,7 @@ fn compile_bif(
         &tokens[1..comma_index],
         context.bindings(),
         operators,
+        context.local_references,
         code,
     )?;
 
@@ -1538,11 +1551,19 @@ fn compile_expression_tokens(
     tokens: &[Token],
     bindings: &Bindings,
     operators: OperatorLookup,
+    local_references: Option<&DefinitionLocalReferences>,
     code: &mut dyn InstructionBuildTarget,
 ) -> Result<(), SourceProcessorError> {
-    parse_expression_staging(view, source_id, tokens, bindings, operators)?
-        .commit_to(code)
-        .map_err(SourceProcessorError::from_expression_error)
+    parse_expression_staging(
+        view,
+        source_id,
+        tokens,
+        bindings,
+        operators,
+        local_references,
+    )?
+    .commit_to(code)
+    .map_err(SourceProcessorError::from_expression_error)
 }
 
 fn parse_expression_staging(
@@ -1551,6 +1572,7 @@ fn parse_expression_staging(
     tokens: &[Token],
     bindings: &Bindings,
     operators: OperatorLookup,
+    local_references: Option<&DefinitionLocalReferences>,
 ) -> Result<ExpressionStaging, SourceProcessorError> {
     let mut expression_tokens = tokens
         .iter()
@@ -1565,12 +1587,15 @@ fn parse_expression_staging(
     let resolver = |source_name: &str| resolve_variable_name(bindings, source_name);
     let runtime_word_resolver =
         |source_name: &str| resolve_runtime_word_name(bindings, source_name);
-    parse_expression(
+    let local_resolver =
+        local_references.map(|references| references as &dyn ExpressionLocalResolver);
+    parse_expression_with_locals(
         view,
         &expression_tokens,
         operators,
         &resolver,
         &runtime_word_resolver,
+        local_resolver,
     )
     .map_err(SourceProcessorError::from_expression_error)
 }
@@ -2135,6 +2160,7 @@ impl<'a> SourceCompileContext<'a> {
             globals: None,
             runtime_definitions: None,
             additional_source_capability: false,
+            local_references: None,
         }
     }
 
@@ -2146,6 +2172,7 @@ impl<'a> SourceCompileContext<'a> {
             globals: None,
             runtime_definitions: None,
             additional_source_capability: false,
+            local_references: None,
         }
     }
 
@@ -2160,6 +2187,7 @@ impl<'a> SourceCompileContext<'a> {
             globals: None,
             runtime_definitions: None,
             additional_source_capability: false,
+            local_references: None,
         }
     }
 
@@ -2175,6 +2203,7 @@ impl<'a> SourceCompileContext<'a> {
             globals: None,
             runtime_definitions: None,
             additional_source_capability: false,
+            local_references: None,
         }
     }
 
@@ -2190,6 +2219,7 @@ impl<'a> SourceCompileContext<'a> {
             globals: Some(globals),
             runtime_definitions: None,
             additional_source_capability: false,
+            local_references: None,
         }
     }
 
@@ -2206,6 +2236,7 @@ impl<'a> SourceCompileContext<'a> {
             globals: Some(globals),
             runtime_definitions: None,
             additional_source_capability: false,
+            local_references: None,
         }
     }
 
@@ -2222,6 +2253,7 @@ impl<'a> SourceCompileContext<'a> {
             globals: Some(globals),
             runtime_definitions: None,
             additional_source_capability: false,
+            local_references: None,
         }
     }
 
@@ -2240,6 +2272,7 @@ impl<'a> SourceCompileContext<'a> {
             globals: Some(globals),
             runtime_definitions: Some(RuntimeDefinitionPublicationAccess { code, words }),
             additional_source_capability: false,
+            local_references: None,
         }
     }
 
@@ -2258,6 +2291,7 @@ impl<'a> SourceCompileContext<'a> {
             globals: Some(globals),
             runtime_definitions: Some(RuntimeDefinitionPublicationAccess { code, words }),
             additional_source_capability: false,
+            local_references: None,
         }
     }
 
@@ -2302,6 +2336,7 @@ impl<'a> DefinitionBodyCompileContext<'a> {
             bindings,
             operators: None,
             source_words: None,
+            local_references: None,
         }
     }
 
@@ -2310,6 +2345,7 @@ impl<'a> DefinitionBodyCompileContext<'a> {
             bindings,
             operators: Some(operators),
             source_words: None,
+            local_references: None,
         }
     }
 
@@ -2322,6 +2358,21 @@ impl<'a> DefinitionBodyCompileContext<'a> {
             bindings,
             operators: Some(operators),
             source_words: Some(source_words),
+            local_references: None,
+        }
+    }
+
+    pub(crate) const fn with_local_references(
+        bindings: &'a Bindings,
+        source_words: SourceWordLookup<'a>,
+        operators: OperatorLookup,
+        local_references: &'a DefinitionLocalReferences,
+    ) -> Self {
+        Self {
+            bindings,
+            operators: Some(operators),
+            source_words: Some(source_words),
+            local_references: Some(local_references),
         }
     }
 }
@@ -2332,6 +2383,7 @@ impl<'a> QuotationBodyCompileContext<'a> {
             bindings,
             operators: None,
             source_words: None,
+            local_references: None,
         }
     }
 
@@ -2340,6 +2392,7 @@ impl<'a> QuotationBodyCompileContext<'a> {
             bindings,
             operators: Some(operators),
             source_words: None,
+            local_references: None,
         }
     }
 
@@ -2352,6 +2405,21 @@ impl<'a> QuotationBodyCompileContext<'a> {
             bindings,
             operators: Some(operators),
             source_words: Some(source_words),
+            local_references: None,
+        }
+    }
+
+    pub(crate) const fn with_local_references(
+        bindings: &'a Bindings,
+        source_words: SourceWordLookup<'a>,
+        operators: OperatorLookup,
+        local_references: &'a DefinitionLocalReferences,
+    ) -> Self {
+        Self {
+            bindings,
+            operators: Some(operators),
+            source_words: Some(source_words),
+            local_references: Some(local_references),
         }
     }
 }
@@ -2632,6 +2700,7 @@ impl<'a> SourceExecutionContext<'a> {
             globals: None,
             runtime_definitions: None,
             additional_source_capability: false,
+            local_references: None,
         }
     }
 
@@ -4729,6 +4798,7 @@ mod tests {
                 bindings: &bindings,
                 operators: None,
                 source_words: Some(source_words.lookup()),
+                local_references: None,
             },
         );
 
@@ -4813,6 +4883,79 @@ mod tests {
     }
 
     #[test]
+    fn definition_body_resolves_local_references_before_global_bindings() {
+        let (_words, _primitives, operators) = operator_fixture();
+        let mut source_words = SourceWordRegistry::new();
+        let mut bindings = Bindings::new();
+        let mut globals = GlobalVariables::new();
+        register_builtin_source_words(&mut source_words, &mut bindings)
+            .expect("built-in source words should bootstrap");
+        let global_width = globals.allocate();
+        bindings
+            .insert_new(name("WIDTH"), Binding::Variable(global_width))
+            .expect("global variable should register");
+        let local_names = [name("WIDTH"), name("HEIGHT")];
+        let local_references = DefinitionLocalReferences::from_names(&local_names);
+
+        let (_sources, _id, code) = compile_body(
+            "EVAL width + height",
+            DefinitionBodyCompileContext::with_local_references(
+                &bindings,
+                source_words.lookup(),
+                operators.lookup(),
+                &local_references,
+            ),
+        );
+
+        assert_eq!(
+            code.instruction_view().get(address(0)),
+            Ok(&Instruction::CopyFromCallBase { offset: 2 })
+        );
+        assert_eq!(
+            code.instruction_view().get(address(1)),
+            Ok(&Instruction::CopyFromCallBase { offset: 1 })
+        );
+        assert_eq!(
+            code.instruction_view().get(address(2)),
+            Ok(&Instruction::Call(
+                operators.lookup().resolve(OperatorSemantic::Add)
+            ))
+        );
+        assert_eq!(
+            bindings.get(&name("WIDTH")),
+            Some(&Binding::Variable(global_width))
+        );
+    }
+
+    #[test]
+    fn definition_body_local_references_are_not_available_without_context() {
+        let (_words, _primitives, operators) = operator_fixture();
+        let mut source_words = SourceWordRegistry::new();
+        let mut bindings = Bindings::new();
+        register_builtin_source_words(&mut source_words, &mut bindings)
+            .expect("source words should bootstrap");
+        let local_names = [name("VALUE")];
+        let local_references = DefinitionLocalReferences::from_names(&local_names);
+        let error = compile_body_error(
+            "EVAL VALUE",
+            DefinitionBodyCompileContext::with_source_words_and_operators(
+                &bindings,
+                source_words.lookup(),
+                operators.lookup(),
+            ),
+        )
+        .2;
+
+        assert!(matches!(
+            error,
+            SourceProcessorError::SourceWord(SourceWordError::Expression {
+                source: ExpressionError::Variable(_)
+            })
+        ));
+        assert_eq!(local_references.resolve("VALUE"), Some(1));
+    }
+
+    #[test]
     fn definition_body_var_fails_without_publication_capability() {
         let mut source_words = SourceWordRegistry::new();
         let mut bindings = Bindings::new();
@@ -4827,6 +4970,7 @@ mod tests {
                 bindings: &bindings,
                 operators: None,
                 source_words: Some(source_words.lookup()),
+                local_references: None,
             },
         );
 
@@ -5135,6 +5279,32 @@ mod tests {
         assert_eq!(
             quotation.instruction_view().get(address(3)),
             Ok(&Instruction::StoreVar(variables[0]))
+        );
+    }
+
+    #[test]
+    fn definition_local_references_are_visible_inside_quotations() {
+        let (_words, _primitives, operators) = operator_fixture();
+        let mut source_words = SourceWordRegistry::new();
+        let mut bindings = Bindings::new();
+        register_builtin_source_words(&mut source_words, &mut bindings)
+            .expect("source words should bootstrap");
+        let local_names = [name("VALUE")];
+        let local_references = DefinitionLocalReferences::from_names(&local_names);
+
+        let (_sources, _id, quotation) = compile_quotation(
+            "EVAL value",
+            QuotationBodyCompileContext::with_local_references(
+                &bindings,
+                source_words.lookup(),
+                operators.lookup(),
+                &local_references,
+            ),
+        );
+
+        assert_eq!(
+            quotation.instruction_view().get(address(0)),
+            Ok(&Instruction::CopyFromCallBase { offset: 1 })
         );
     }
 
@@ -6833,6 +7003,7 @@ mod tests {
             &tokens,
             &bindings,
             operators.lookup(),
+            None,
             &mut builder,
         )
         .expect_err("later unresolved name should fail the expression");
