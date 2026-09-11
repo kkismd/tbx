@@ -29,3 +29,17 @@ cargo run -p tbx-next --bin tbx-next
 ```
 
 TBX Next 全体の案内は [`docs/next/README.md`](../../docs/next/README.md) を参照してください。
+
+## ランタイムワード定義の局所参照名
+
+ランタイムワード定義では、body から参照する call-base の値に名前を付けられます。
+
+```text
+DEF AREA width, height
+  EVAL width * height
+END
+```
+
+名前は call-base の下位から上位の順に記述し、大文字・小文字を区別しません。この列は
+コンパイル時の参照情報であり、runtime arity の宣言や return 時の引数消費は行いません。
+局所参照名を持たない `DEF FOO` も引き続き使用できます。

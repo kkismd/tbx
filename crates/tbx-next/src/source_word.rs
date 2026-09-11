@@ -256,6 +256,16 @@ pub(crate) enum SourceWordError {
         span: SourceSpan,
         source: NameError,
     },
+    DefLocalName {
+        span: SourceSpan,
+        source: NameError,
+    },
+    DefLocalNameConflict {
+        span: SourceSpan,
+    },
+    DefLocalReservedName {
+        span: SourceSpan,
+    },
     DefNameConflict {
         span: SourceSpan,
     },
@@ -398,6 +408,9 @@ impl SourceWordError {
             | Self::EvalSyntax { span, .. }
             | Self::DefSyntax { span, .. }
             | Self::DefName { span, .. }
+            | Self::DefLocalName { span, .. }
+            | Self::DefLocalNameConflict { span }
+            | Self::DefLocalReservedName { span }
             | Self::DefNameConflict { span }
             | Self::DefReservedName { span }
             | Self::DefPublicationContextUnavailable { span }
@@ -498,6 +511,7 @@ pub(crate) trait RuntimeDefinitionPublisher<'source> {
         bindings: &mut Bindings,
         name: NormalizedName,
         name_span: SourceSpan,
+        local_references: &DefinitionLocalReferences,
         body: &[SourceBlockStatement<'source>],
         end_span: SourceSpan,
     ) -> Result<WordId, SourceWordError>;
@@ -1024,6 +1038,10 @@ impl<'source> SourceStatementReader<'source> {
         Ok(token)
     }
 
+    pub(crate) fn peek_kind(&self) -> Option<TokenKind> {
+        self.tokens.get(self.position).map(|token| token.kind())
+    }
+
     pub(crate) fn remaining_expression(
         &mut self,
     ) -> Result<&'source [Token], SourceStatementReaderError> {
@@ -1315,6 +1333,7 @@ impl<'source, 'state> NativeSourceWordContext<'source, 'state> {
         &mut self,
         name: NormalizedName,
         name_span: SourceSpan,
+        local_references: &DefinitionLocalReferences,
         body: &[SourceBlockStatement<'source>],
         end_span: SourceSpan,
     ) -> Result<WordId, SourceWordError> {
@@ -1329,7 +1348,14 @@ impl<'source, 'state> NativeSourceWordContext<'source, 'state> {
             });
         };
 
-        publisher.publish_runtime_definition(bindings, name, name_span, body, end_span)
+        publisher.publish_runtime_definition(
+            bindings,
+            name,
+            name_span,
+            local_references,
+            body,
+            end_span,
+        )
     }
 
     pub(crate) fn publish_statement_source_word(
@@ -1562,11 +1588,31 @@ pub(crate) fn eval_source_word(
 pub(crate) fn def_source_word(
     context: &mut NativeSourceWordContext<'_, '_>,
 ) -> Result<(), SourceWordError> {
-    let name_token = {
+    let (name_token, local_names) = {
         let reader = context.statement_reader_mut();
         let name_token = reader.read_name().map_err(def_reader_error)?;
-        reader.finish().map_err(def_reader_error)?;
-        name_token
+        let mut local_names = Vec::new();
+        if reader.peek_kind() == Some(TokenKind::Comma) {
+            // A comma cannot introduce the list; the first local name is
+            // separated from DEF's name by whitespace.
+            return Err(def_reader_error(
+                reader
+                    .read_name()
+                    .expect_err("comma must be rejected as a local name"),
+            ));
+        }
+        if reader.peek_kind() == Some(TokenKind::Name) {
+            local_names.push(reader.read_name().map_err(def_reader_error)?);
+        }
+        while !reader.is_exhausted() {
+            if reader.peek_kind() != Some(TokenKind::Comma) {
+                reader.finish().map_err(def_reader_error)?;
+            }
+            reader.expect(TokenKind::Comma).map_err(def_reader_error)?;
+            let local_token = reader.read_name().map_err(def_reader_error)?;
+            local_names.push(local_token);
+        }
+        (name_token, local_names)
     };
 
     let source_name = context
@@ -1583,6 +1629,39 @@ pub(crate) fn def_source_word(
             span: context.source_word_token().span(),
         });
     }
+
+    let mut normalized_local_names = Vec::with_capacity(local_names.len());
+    for local_token in local_names {
+        let source_name = context
+            .view()
+            .slice(local_token.span())
+            .map_err(|source| SourceWordError::Source { source })?;
+        let local_name =
+            NormalizedName::new(source_name).map_err(|source| SourceWordError::DefLocalName {
+                span: local_token.span(),
+                source,
+            })?;
+        if normalized_local_names.contains(&local_name) {
+            return Err(SourceWordError::DefLocalNameConflict {
+                span: local_token.span(),
+            });
+        }
+        context
+            .bindings()
+            .validate_local_reference_name(&local_name)
+            .map_err(|source| match source {
+                BindingInsertError::NameConflict => SourceWordError::DefLocalNameConflict {
+                    span: local_token.span(),
+                },
+                BindingInsertError::ReservedName => SourceWordError::DefLocalReservedName {
+                    span: local_token.span(),
+                },
+            })?;
+        normalized_local_names.push(local_name);
+    }
+    // Header names describe compile-time call-base references, not runtime
+    // arity; the VM must not infer argument-count checks from this list.
+    let local_references = DefinitionLocalReferences::from_names(&normalized_local_names);
 
     let mut body = Vec::new();
     let end_span = loop {
@@ -1613,7 +1692,13 @@ pub(crate) fn def_source_word(
         }
     };
 
-    context.publish_runtime_definition(name, name_token.span(), &body, end_span)?;
+    context.publish_runtime_definition(
+        name,
+        name_token.span(),
+        &local_references,
+        &body,
+        end_span,
+    )?;
     Ok(())
 }
 

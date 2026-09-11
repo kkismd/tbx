@@ -90,6 +90,21 @@ impl Bindings {
         Ok(())
     }
 
+    pub(crate) fn validate_local_reference_name(
+        &self,
+        name: &NormalizedName,
+    ) -> Result<(), BindingInsertError> {
+        // END terminates DEF bodies even though it is not a global binding;
+        // local references must not make that terminator ambiguous.
+        if is_semantic_reserved_binding_name(name) || name.as_str() == "END" {
+            return Err(BindingInsertError::ReservedName);
+        }
+        if self.syntax_marker_reservations.contains_key(name) {
+            return Err(BindingInsertError::NameConflict);
+        }
+        Ok(())
+    }
+
     pub(crate) fn insert_new_source_word_with_markers(
         &mut self,
         name: NormalizedName,
