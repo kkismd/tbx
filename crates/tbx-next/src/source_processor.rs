@@ -2459,6 +2459,7 @@ impl<'source> RuntimeDefinitionPublisher<'source>
         bindings: &mut Bindings,
         name: crate::name::NormalizedName,
         name_span: SourceSpan,
+        local_references: &DefinitionLocalReferences,
         body: &[SourceBlockStatement<'source>],
         end_span: SourceSpan,
     ) -> Result<WordId, SourceWordError> {
@@ -2470,11 +2471,12 @@ impl<'source> RuntimeDefinitionPublisher<'source>
                     self.view,
                     self.source_id,
                     DefinitionBodyStatements::new(body, Terminal::Eof { span: end_span }),
-                    DefinitionBodyCompileContext::with_source_words_and_operators(
+                    DefinitionBodyCompileContext::with_local_references(
                         body_bindings,
                         self.source_words,
                         self.operators
                             .expect("runtime definition publication requires operators"),
+                        local_references,
                     ),
                     builder,
                 );
@@ -9845,7 +9847,7 @@ mod tests {
 
     #[test]
     fn def_rejects_header_errors_without_consuming_body_or_publishing() {
-        for source_text in ["DEF", "DEF 123\nEND", "DEF FOO EXTRA\nEND"] {
+        for source_text in ["DEF", "DEF 123\nEND", "DEF FOO x y\nEND"] {
             let (mut words, _primitives, operators) = operator_fixture();
             let mut source_words = SourceWordRegistry::new();
             let mut bindings = Bindings::new();
@@ -9874,8 +9876,8 @@ mod tests {
                     span: span(sources.view(), id, 4, 7),
                     kind: DefSyntaxErrorKind::MissingName,
                 },
-                "DEF FOO EXTRA\nEND" => SourceWordError::DefSyntax {
-                    span: span(sources.view(), id, 8, 13),
+                "DEF FOO x y\nEND" => SourceWordError::DefSyntax {
+                    span: span(sources.view(), id, 10, 11),
                     kind: DefSyntaxErrorKind::TrailingToken {
                         kind: TokenKind::Name,
                     },
@@ -9886,6 +9888,102 @@ mod tests {
             assert_eq!(bindings.get(&name("FOO")), None);
             assert_eq!(words.len(), initial_words_len);
             assert_eq!(code.len(), 0);
+        }
+    }
+
+    #[test]
+    fn def_header_publishes_local_references_with_call_base_offsets() {
+        let mut session = RuntimeDefinitionSession::new_with_named_operators();
+        let multiply = resolve_word_name(&session.bindings, "MULTIPLY")
+            .expect("MULTIPLY should be a named operator");
+        session.publish_def("DEF AREA width, height\nEVAL width * height\nEND");
+
+        let Some(Binding::Word(area)) = session.bindings.get(&name("AREA")).copied() else {
+            panic!("AREA should be published");
+        };
+        assert_eq!(
+            session.code.instruction_view().get(address(0)),
+            Ok(&Instruction::CopyFromCallBase { offset: 2 })
+        );
+        assert_eq!(
+            session.code.instruction_view().get(address(1)),
+            Ok(&Instruction::CopyFromCallBase { offset: 1 })
+        );
+        assert_eq!(
+            session.code.instruction_view().get(address(2)),
+            Ok(&Instruction::Call(multiply))
+        );
+        assert_eq!(
+            session.code.instruction_view().get(address(3)),
+            Ok(&Instruction::Return)
+        );
+
+        let (caller_sources, caller_id) = source("EVAL AREA(6, 7)");
+        let caller = compile_source(
+            caller_sources.view(),
+            caller_id,
+            SourceCompileContext::with_source_words_and_operators(
+                &session.bindings,
+                session.source_words.lookup(),
+                session.operators.lookup(),
+            ),
+        )
+        .expect("AREA caller should compile");
+        let result = session
+            .run_unit_with_published_code(&caller)
+            .expect("AREA caller should run");
+        // Header names are call-base references only; arguments remain on the
+        // data stack because this issue does not add arity or cleanup rules.
+        assert_eq!(result.data_stack(), [value(6), value(7), value(42)]);
+        assert_eq!(
+            caller.instructions().get(address(2)),
+            Ok(&Instruction::Call(area))
+        );
+    }
+
+    #[test]
+    fn def_header_supports_three_local_references_and_rejects_invalid_lists_atomically() {
+        let mut session = RuntimeDefinitionSession::new_with_named_operators();
+        session.publish_def("DEF MIX a, b, c\nEVAL a + b + c\nEND");
+        assert_eq!(
+            session.code.instruction_view().get(address(0)),
+            Ok(&Instruction::CopyFromCallBase { offset: 3 })
+        );
+        assert_eq!(
+            session.code.instruction_view().get(address(1)),
+            Ok(&Instruction::CopyFromCallBase { offset: 2 })
+        );
+        assert_eq!(
+            session.code.instruction_view().get(address(2)),
+            Ok(&Instruction::Call(
+                resolve_word_name(&session.bindings, "ADD").expect("ADD should resolve")
+            ))
+        );
+        assert_eq!(
+            session.code.instruction_view().get(address(3)),
+            Ok(&Instruction::CopyFromCallBase { offset: 1 })
+        );
+
+        for source_text in [
+            "DEF BAD x,\nEND",
+            "DEF BAD , x\nEND",
+            "DEF BAD x,,y\nEND",
+            "DEF BAD x y\nEND",
+            "DEF BAD x, END\nEND",
+            "DEF BAD x, X\nEND",
+        ] {
+            let initial_words_len = session.words.len();
+            let (_sources, _id, error) = session.publish_def_error(source_text);
+            assert!(matches!(
+                error,
+                SourceProcessorError::SourceWord(
+                    SourceWordError::DefSyntax { .. }
+                        | SourceWordError::DefLocalNameConflict { .. }
+                        | SourceWordError::DefLocalReservedName { .. }
+                )
+            ));
+            assert_eq!(session.bindings.get(&name("BAD")), None);
+            assert_eq!(session.words.len(), initial_words_len);
         }
     }
 

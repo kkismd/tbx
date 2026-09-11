@@ -29,3 +29,18 @@ cargo run -p tbx-next --bin tbx-next
 ```
 
 TBX Next 全体の案内は [`docs/next/README.md`](../../docs/next/README.md) を参照してください。
+
+## Runtime definition local references
+
+Runtime word definitions may name the call-base values used by their body:
+
+```text
+DEF AREA width, height
+  EVAL width * height
+END
+```
+
+Names are listed from the lower to the upper call-base value, and are
+case-insensitive. The list is compile-time reference metadata; it does not
+declare runtime arity or consume arguments on return. `DEF FOO` remains valid
+for definitions without local references.
