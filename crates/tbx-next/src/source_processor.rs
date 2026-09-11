@@ -9942,6 +9942,39 @@ mod tests {
     }
 
     #[test]
+    fn def_header_maps_one_local_reference_to_offset_one() {
+        let mut session = RuntimeDefinitionSession::new_with_named_operators();
+        session.publish_def("DEF FOO value\nEVAL value\nEND");
+
+        assert_eq!(
+            session.code.instruction_view().get(address(0)),
+            Ok(&Instruction::CopyFromCallBase { offset: 1 })
+        );
+        assert_eq!(
+            session.code.instruction_view().get(address(1)),
+            Ok(&Instruction::Return)
+        );
+    }
+
+    #[test]
+    fn def_header_rejects_published_syntax_marker_local_reference_atomically() {
+        let mut session = RuntimeDefinitionSession::new_with_named_operators();
+        session.publish_syntax(
+            "SYNTAX WRAP\nBLOCK\nSTART\nEXPECT_END\nLAST ENDWRAP\nEXPECT_END\nENDS",
+        );
+        let initial_words_len = session.words.len();
+
+        let (_sources, _id, error) = session.publish_def_error("DEF BAD value, ENDWRAP\nEND");
+
+        assert!(matches!(
+            error,
+            SourceProcessorError::SourceWord(SourceWordError::DefLocalNameConflict { .. })
+        ));
+        assert_eq!(session.bindings.get(&name("BAD")), None);
+        assert_eq!(session.words.len(), initial_words_len);
+    }
+
+    #[test]
     fn def_header_supports_three_local_references_and_rejects_invalid_lists_atomically() {
         let mut session = RuntimeDefinitionSession::new_with_named_operators();
         session.publish_def("DEF MIX a, b, c\nEVAL a + b + c\nEND");
