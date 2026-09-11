@@ -223,6 +223,7 @@ pub(crate) struct QuotationBodyCompileContext<'a> {
     bindings: &'a Bindings,
     operators: Option<OperatorLookup>,
     source_words: Option<SourceWordLookup<'a>>,
+    local_references: Option<&'a DefinitionLocalReferences>,
 }
 
 pub(crate) struct DefinitionBodyStatements<'a> {
@@ -984,7 +985,7 @@ pub(crate) fn compile_quotation_body<'source>(
         globals: None,
         runtime_definitions: None,
         additional_source_capability: false,
-        local_references: None,
+        local_references: context.local_references,
     };
 
     StaticQuotation::try_build(|builder| {
@@ -2382,6 +2383,7 @@ impl<'a> QuotationBodyCompileContext<'a> {
             bindings,
             operators: None,
             source_words: None,
+            local_references: None,
         }
     }
 
@@ -2390,6 +2392,7 @@ impl<'a> QuotationBodyCompileContext<'a> {
             bindings,
             operators: Some(operators),
             source_words: None,
+            local_references: None,
         }
     }
 
@@ -2402,6 +2405,21 @@ impl<'a> QuotationBodyCompileContext<'a> {
             bindings,
             operators: Some(operators),
             source_words: Some(source_words),
+            local_references: None,
+        }
+    }
+
+    pub(crate) const fn with_local_references(
+        bindings: &'a Bindings,
+        source_words: SourceWordLookup<'a>,
+        operators: OperatorLookup,
+        local_references: &'a DefinitionLocalReferences,
+    ) -> Self {
+        Self {
+            bindings,
+            operators: Some(operators),
+            source_words: Some(source_words),
+            local_references: Some(local_references),
         }
     }
 }
@@ -5261,6 +5279,32 @@ mod tests {
         assert_eq!(
             quotation.instruction_view().get(address(3)),
             Ok(&Instruction::StoreVar(variables[0]))
+        );
+    }
+
+    #[test]
+    fn definition_local_references_are_visible_inside_quotations() {
+        let (_words, _primitives, operators) = operator_fixture();
+        let mut source_words = SourceWordRegistry::new();
+        let mut bindings = Bindings::new();
+        register_builtin_source_words(&mut source_words, &mut bindings)
+            .expect("source words should bootstrap");
+        let local_names = [name("VALUE")];
+        let local_references = DefinitionLocalReferences::from_names(&local_names);
+
+        let (_sources, _id, quotation) = compile_quotation(
+            "EVAL value",
+            QuotationBodyCompileContext::with_local_references(
+                &bindings,
+                source_words.lookup(),
+                operators.lookup(),
+                &local_references,
+            ),
+        );
+
+        assert_eq!(
+            quotation.instruction_view().get(address(0)),
+            Ok(&Instruction::CopyFromCallBase { offset: 1 })
         );
     }
 
