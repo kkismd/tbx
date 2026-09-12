@@ -798,6 +798,7 @@ impl<'source, 'state> NativeStructuredSourceWordContext<'source, 'state> {
             tokens,
             bindings: self.bindings,
             operators: self.operators,
+            local_references: self.local_references,
             code: self.code,
             line_numbers: self.line_numbers,
             capabilities: self.capabilities,

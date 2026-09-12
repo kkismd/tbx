@@ -13,6 +13,15 @@ fn fixture_path(name: &str) -> PathBuf {
         .join(name)
 }
 
+fn example_path(name: &str) -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../..")
+        .join("docs")
+        .join("next")
+        .join("examples")
+        .join(name)
+}
+
 fn run_with_file(path: &Path) -> Output {
     Command::new(tbx_next_bin())
         .arg(path)
@@ -131,6 +140,21 @@ fn file_success_uses_prime_procedure_stack_argument_independent_of_global_variab
         stderr_text(&output)
     );
     assert_eq!(stdout_text(&output), "0\n");
+    assert_eq!(stderr_text(&output), "");
+}
+
+#[test]
+fn file_success_runs_the_prime_example_with_local_references() {
+    let path = example_path("prime.tbx");
+
+    let output = run_with_file(&path);
+
+    assert!(
+        output.status.success(),
+        "expected success, stderr:\n{}",
+        stderr_text(&output)
+    );
+    assert_eq!(stdout_text(&output), "2\n3\n5\n7\n11\n13\n17\n19\n23\n29\n");
     assert_eq!(stderr_text(&output), "");
 }
 

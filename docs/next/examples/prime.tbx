@@ -4,15 +4,15 @@ VAR NUMBER
 VAR PRIME
 VAR DIVISOR
 
-DEF PRIME?
-  IF DUP() < 2
+DEF PRIME? candidate
+  IF candidate < 2
     DROP
     EVAL 0
   ELSE
     LET PRIME = 1
     LET DIVISOR = 2
-    WHILE DUP() >= DIVISOR * DIVISOR
-      IF (DUP() % DIVISOR) = 0
+    WHILE candidate >= DIVISOR * DIVISOR
+      IF (candidate % DIVISOR) = 0
         LET PRIME = 0
       ENDIF
       LET DIVISOR = DIVISOR + 1
