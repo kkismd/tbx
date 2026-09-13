@@ -9,6 +9,7 @@ pub(crate) type PrimitiveHandler = fn(&mut PrimitiveContext<'_>) -> Result<(), P
 pub(crate) enum PrimitiveError {
     DataStackUnderflow { source: StackError },
     OutputFailed { source: RuntimeOutputError },
+    AsciiOutOfRange { value: i16 },
     Failed,
 }
 
