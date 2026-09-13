@@ -259,6 +259,18 @@ mod tests {
         }
     }
 
+    #[derive(Debug, Default)]
+    struct PartialThenFailOutput {
+        chunks: Vec<String>,
+    }
+
+    impl RuntimeOutput for PartialThenFailOutput {
+        fn write(&mut self, text: &str) -> Result<(), RuntimeOutputError> {
+            self.chunks.push(text[..3].to_owned());
+            Err(RuntimeOutputError::Failed)
+        }
+    }
+
     #[test]
     fn print_output_failure_does_not_require_external_effect_rollback() {
         let (primitives, words, _, output_words) = bootstrapped_output_words();
@@ -379,13 +391,13 @@ mod tests {
         let entry = code.append(Instruction::WriteFixedText(Rc::from("prefix")));
         code.append(Instruction::WriteFixedText(Rc::from("after")));
         code.append(Instruction::Halt);
-        let mut output = PartialFailOutput::default();
+        let mut output = PartialThenFailOutput::default();
         let mut vm = Vm::new(code.view(), entry).expect("test entry should be valid");
 
         let result = vm.run(execution(&code, &words, &primitives).with_output(&mut output));
 
         assert!(result.is_err());
-        assert_eq!(output.chunks, ["prefix"]);
+        assert_eq!(output.chunks, ["pre"]);
         assert_eq!(vm.instruction_pointer(), code.view().location(entry));
     }
 }
