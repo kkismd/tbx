@@ -23,6 +23,8 @@ impl Token {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum TokenKind {
     IntegerLiteral,
+    CharacterLiteral,
+    HexIntegerLiteral,
     Name,
     Plus,
     Minus,
@@ -51,6 +53,10 @@ pub(crate) enum LexError {
         character: char,
         reason: InvalidCharacterReason,
     },
+    InvalidLiteral {
+        span: SourceSpan,
+        reason: InvalidLiteralReason,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -59,6 +65,21 @@ pub(crate) enum InvalidCharacterReason {
     UnsupportedPunctuation,
     UnsupportedControl,
     NonAscii,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum InvalidLiteralReason {
+    EmptyCharacter,
+    MultipleCharacters,
+    UnterminatedCharacter,
+    MissingHexDigits,
+    InvalidHexDigit,
+}
+
+impl LexError {
+    fn invalid_literal(span: SourceSpan, reason: InvalidLiteralReason) -> Self {
+        Self::InvalidLiteral { span, reason }
+    }
 }
 
 impl From<SourceError> for LexError {
@@ -123,6 +144,8 @@ impl<'a> Lexer<'a> {
 
         match byte {
             b'0'..=b'9' => self.integer_literal(),
+            b'\'' => self.character_literal(),
+            b'$' => self.hex_integer_literal(),
             b'A'..=b'Z' | b'a'..=b'z' | b'_' => self.name(),
             b'+' => self.single_byte_token(TokenKind::Plus),
             b'-' => self.single_byte_token(TokenKind::Minus),
@@ -183,6 +206,83 @@ impl<'a> Lexer<'a> {
         }
 
         self.token(TokenKind::IntegerLiteral, start, self.offset)
+    }
+
+    fn character_literal(&mut self) -> Result<Token, LexError> {
+        let start = self.offset;
+        self.offset += 1;
+
+        let Some(&byte) = self.source.as_bytes().get(self.offset) else {
+            return self.invalid_literal(
+                start,
+                self.offset,
+                InvalidLiteralReason::UnterminatedCharacter,
+            );
+        };
+        if byte == b'\'' {
+            self.offset += 1;
+            return self.invalid_literal(start, self.offset, InvalidLiteralReason::EmptyCharacter);
+        }
+        if byte == b'\n' || byte == b'\r' || byte < 0x20 || byte == 0x7f {
+            let character = self.char_at(self.offset);
+            return self.invalid_character(
+                self.offset,
+                character,
+                InvalidCharacterReason::UnsupportedControl,
+            );
+        }
+        if byte >= 0x80 {
+            let character = self.char_at(self.offset);
+            return self.invalid_character(
+                self.offset,
+                character,
+                InvalidCharacterReason::NonAscii,
+            );
+        }
+        self.offset += 1;
+
+        match self.source.as_bytes().get(self.offset) {
+            Some(b'\'') => {
+                self.offset += 1;
+                self.token(TokenKind::CharacterLiteral, start, self.offset)
+            }
+            Some(_) => {
+                while let Some(&byte) = self.source.as_bytes().get(self.offset) {
+                    if byte == b'\'' {
+                        self.offset += 1;
+                        break;
+                    }
+                    self.offset += 1;
+                }
+                self.invalid_literal(start, self.offset, InvalidLiteralReason::MultipleCharacters)
+            }
+            None => self.invalid_literal(
+                start,
+                self.offset,
+                InvalidLiteralReason::UnterminatedCharacter,
+            ),
+        }
+    }
+
+    fn hex_integer_literal(&mut self) -> Result<Token, LexError> {
+        let start = self.offset;
+        self.offset += 1;
+        while let Some(&byte) = self.source.as_bytes().get(self.offset) {
+            if is_token_boundary(byte) {
+                break;
+            }
+            self.offset += 1;
+        }
+
+        let source = &self.source[start + 1..self.offset];
+        let reason = if source.is_empty() {
+            InvalidLiteralReason::MissingHexDigits
+        } else if source.bytes().all(is_hex_digit) {
+            return self.token(TokenKind::HexIntegerLiteral, start, self.offset);
+        } else {
+            InvalidLiteralReason::InvalidHexDigit
+        };
+        self.invalid_literal(start, self.offset, reason)
     }
 
     fn name(&mut self) -> Result<Token, LexError> {
@@ -362,6 +462,16 @@ impl<'a> Lexer<'a> {
         })
     }
 
+    fn invalid_literal(
+        &self,
+        start: usize,
+        end: usize,
+        reason: InvalidLiteralReason,
+    ) -> Result<Token, LexError> {
+        let span = self.view.span(self.source_id, start, end)?;
+        Err(LexError::invalid_literal(span, reason))
+    }
+
     fn char_at(&self, offset: usize) -> char {
         self.source[offset..]
             .chars()
@@ -389,6 +499,10 @@ fn is_token_boundary(byte: u8) -> bool {
             | b'<'
             | b'>'
     )
+}
+
+const fn is_hex_digit(byte: u8) -> bool {
+    byte.is_ascii_hexdigit()
 }
 
 #[cfg(test)]
@@ -461,6 +575,55 @@ mod tests {
         assert_token(tokens[0], TokenKind::IntegerLiteral, id, 0, 3);
         assert_token(tokens[1], TokenKind::IntegerLiteral, id, 4, 6);
         assert_eq!(slices(sources.view(), &tokens), ["123", "45", ""]);
+    }
+
+    #[test]
+    fn character_and_hex_literals_keep_source_spans() {
+        let (sources, id, tokens) = lex_all("'A' ' ' $0 $41 $7f $F1");
+
+        assert_eq!(
+            kinds(&tokens),
+            [
+                TokenKind::CharacterLiteral,
+                TokenKind::CharacterLiteral,
+                TokenKind::HexIntegerLiteral,
+                TokenKind::HexIntegerLiteral,
+                TokenKind::HexIntegerLiteral,
+                TokenKind::HexIntegerLiteral,
+                TokenKind::Eof
+            ]
+        );
+        assert_eq!(
+            slices(sources.view(), &tokens),
+            ["'A'", "' '", "$0", "$41", "$7f", "$F1", ""]
+        );
+        assert_token(tokens[0], TokenKind::CharacterLiteral, id, 0, 3);
+        assert_token(tokens[5], TokenKind::HexIntegerLiteral, id, 19, 22);
+    }
+
+    #[test]
+    fn malformed_character_and_hex_literals_are_source_errors() {
+        for (source, reason) in [
+            ("''", InvalidLiteralReason::EmptyCharacter),
+            ("'AB'", InvalidLiteralReason::MultipleCharacters),
+            ("'A", InvalidLiteralReason::UnterminatedCharacter),
+            ("$", InvalidLiteralReason::MissingHexDigits),
+            ("$G1", InvalidLiteralReason::InvalidHexDigit),
+        ] {
+            let (sources, id) = lexer_for(source);
+            let view = sources.view();
+            let mut lexer = Lexer::new(view, id).expect("source should build a lexer");
+            assert_eq!(
+                lexer.next_token(),
+                Err(LexError::InvalidLiteral {
+                    span: view
+                        .span(id, 0, source.len())
+                        .expect("span should be valid"),
+                    reason,
+                }),
+                "{source:?} should be rejected"
+            );
+        }
     }
 
     #[test]

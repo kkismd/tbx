@@ -2739,7 +2739,9 @@ impl SourceProcessorError {
             | Self::SourceMappingLookup(_) => None,
             Self::Lex(error) => match error {
                 LexError::Source(_) => None,
-                LexError::InvalidCharacter { span, .. } => Some(*span),
+                LexError::InvalidCharacter { span, .. } | LexError::InvalidLiteral { span, .. } => {
+                    Some(*span)
+                }
             },
             Self::Compile(error) => Some(error.span()),
             Self::InstructionBuild(_) => None,
@@ -5703,6 +5705,26 @@ mod tests {
         assert_eq!(result.data_stack(), []);
         assert_eq!(globals.view().read(variables[0]), Ok(value(42)));
         assert_eq!(globals.view().read(variables[1]), Ok(value(43)));
+    }
+
+    #[test]
+    fn source_to_vm_e2e_uses_character_and_hex_literals_in_let_expressions() {
+        let (words, primitives, operators, source_words, bindings, mut globals, variables) =
+            global_source_fixture();
+
+        let (_sources, _id, result) = run_with_source_words_operators_and_mut_globals(
+            "LET A = 'A'\nLET B = A + $F1",
+            &bindings,
+            &mut globals,
+            &source_words,
+            &words,
+            &primitives,
+            operators.lookup(),
+        );
+
+        assert_eq!(result.outcome(), RunOutcome::Halted);
+        assert_eq!(globals.view().read(variables[0]), Ok(value(65)));
+        assert_eq!(globals.view().read(variables[1]), Ok(value(306)));
     }
 
     #[test]

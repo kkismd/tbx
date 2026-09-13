@@ -455,7 +455,9 @@ impl<'a, 'r> ExpressionParser<'a, 'r> {
         let token = self.peek().ok_or_else(|| self.missing_at_last_token())?;
 
         match token.kind() {
-            TokenKind::IntegerLiteral => {
+            TokenKind::IntegerLiteral
+            | TokenKind::CharacterLiteral
+            | TokenKind::HexIntegerLiteral => {
                 let token = self.advance();
                 let value = self.parse_unsigned_i16(token)?;
                 staging.append_mapped_instruction(
@@ -500,12 +502,15 @@ impl<'a, 'r> ExpressionParser<'a, 'r> {
         let Some(token) = self.peek() else {
             return Ok(false);
         };
-        if token.kind() != TokenKind::IntegerLiteral {
+        if !matches!(
+            token.kind(),
+            TokenKind::IntegerLiteral | TokenKind::HexIntegerLiteral
+        ) {
             return Ok(false);
         }
 
         let source = self.view.slice(token.span())?;
-        if parse_unsigned_i32(source, token.span())? != 32768 {
+        if parse_unsigned_integer_magnitude(token, source)? != 32768 {
             return Ok(false);
         }
 
@@ -517,7 +522,14 @@ impl<'a, 'r> ExpressionParser<'a, 'r> {
 
     fn parse_unsigned_i16(&self, token: Token) -> Result<i16, ExpressionError> {
         let source = self.view.slice(token.span())?;
-        let value = parse_unsigned_i32(source, token.span())?;
+        let value = match token.kind() {
+            TokenKind::IntegerLiteral => parse_unsigned_i32(source, token.span())?,
+            TokenKind::CharacterLiteral => {
+                i32::from(parse_character_literal(source, token.span())?)
+            }
+            TokenKind::HexIntegerLiteral => parse_unsigned_hex_i32(source, token.span())?,
+            _ => unreachable!("only numeric primary tokens reach literal conversion"),
+        };
         i16::try_from(value)
             .map_err(|_| self.syntax(token, ExpressionSyntaxErrorKind::IntegerLiteralOutOfRange))
     }
@@ -546,6 +558,68 @@ impl<'a, 'r> ExpressionParser<'a, 'r> {
             span: token.span(),
             kind,
         })
+    }
+}
+
+fn parse_unsigned_integer_magnitude(token: Token, source: &str) -> Result<i32, ExpressionError> {
+    match token.kind() {
+        TokenKind::IntegerLiteral => parse_unsigned_i32(source, token.span()),
+        TokenKind::HexIntegerLiteral => parse_unsigned_hex_i32(source, token.span()),
+        _ => unreachable!("only signed integer literal tokens reach magnitude parsing"),
+    }
+}
+
+fn parse_character_literal(source: &str, span: SourceSpan) -> Result<i16, ExpressionError> {
+    let bytes = source.as_bytes();
+    if bytes.len() == 3 && bytes[0] == b'\'' && bytes[2] == b'\'' {
+        return Ok(i16::from(bytes[1]));
+    }
+    Err(ExpressionError::Syntax(ExpressionSyntaxError {
+        span,
+        kind: ExpressionSyntaxErrorKind::IntegerLiteralConversion,
+    }))
+}
+
+fn parse_unsigned_hex_i32(source: &str, span: SourceSpan) -> Result<i32, ExpressionError> {
+    let digits = source.strip_prefix('$').unwrap_or("");
+    if digits.is_empty() {
+        return Err(ExpressionError::Syntax(ExpressionSyntaxError {
+            span,
+            kind: ExpressionSyntaxErrorKind::IntegerLiteralConversion,
+        }));
+    }
+
+    let mut value = 0i32;
+    for byte in digits.bytes() {
+        let Some(digit) = hex_digit(byte) else {
+            return Err(ExpressionError::Syntax(ExpressionSyntaxError {
+                span,
+                kind: ExpressionSyntaxErrorKind::IntegerLiteralConversion,
+            }));
+        };
+        value = value
+            .checked_mul(16)
+            .and_then(|value| value.checked_add(i32::from(digit)))
+            .ok_or(ExpressionError::Syntax(ExpressionSyntaxError {
+                span,
+                kind: ExpressionSyntaxErrorKind::IntegerLiteralOutOfRange,
+            }))?;
+        if value > 32768 {
+            return Err(ExpressionError::Syntax(ExpressionSyntaxError {
+                span,
+                kind: ExpressionSyntaxErrorKind::IntegerLiteralOutOfRange,
+            }));
+        }
+    }
+    Ok(value)
+}
+
+const fn hex_digit(byte: u8) -> Option<u8> {
+    match byte {
+        b'0'..=b'9' => Some(byte - b'0'),
+        b'A'..=b'F' => Some(byte - b'A' + 10),
+        b'a'..=b'f' => Some(byte - b'a' + 10),
+        _ => None,
     }
 }
 
@@ -963,6 +1037,43 @@ mod tests {
                 "{source:?} should lower through operator lookup"
             );
         }
+    }
+
+    #[test]
+    fn character_and_hex_literals_lower_to_integer_pushes() {
+        let (_sources, _id, staging) = parse("'A' + $1");
+
+        assert_eq!(
+            instructions(&staging),
+            [
+                Instruction::Push(value(65)),
+                Instruction::Push(value(1)),
+                call(operators(), OperatorSemantic::Add),
+            ]
+        );
+    }
+
+    #[test]
+    fn character_boundaries_and_hex_range_are_checked() {
+        let (_sources, _id, staging) = parse("' ' + '~'");
+        assert_eq!(
+            instructions(&staging),
+            [
+                Instruction::Push(value(32)),
+                Instruction::Push(value(126)),
+                call(operators(), OperatorSemantic::Add)
+            ]
+        );
+
+        let (_sources, _id, staging) = parse("$7FFF");
+        assert_eq!(instructions(&staging), [Instruction::Push(value(32767))]);
+
+        let (sources, id, error) = parse_error("$8000");
+        assert_syntax_error(
+            error,
+            span(sources.view(), id, 0, 5),
+            ExpressionSyntaxErrorKind::IntegerLiteralOutOfRange,
+        );
     }
 
     #[test]
