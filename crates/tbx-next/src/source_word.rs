@@ -451,7 +451,9 @@ impl SourceWordError {
             Self::UserDefinedEvaluation { source } => source.primary_span(),
             Self::DefLex { source } => match source {
                 LexError::Source(_) => None,
-                LexError::InvalidCharacter { span, .. } => Some(*span),
+                LexError::InvalidCharacter { span, .. } | LexError::InvalidLiteral { span, .. } => {
+                    Some(*span)
+                }
             },
         }
     }
@@ -1699,6 +1701,8 @@ fn is_missing_print_comma(item: &[Token], error: &SourceWordError) -> bool {
         syntax.kind(),
         ExpressionSyntaxErrorKind::UnexpectedToken {
             kind: TokenKind::IntegerLiteral
+                | TokenKind::CharacterLiteral
+                | TokenKind::HexIntegerLiteral
                 | TokenKind::Name
                 | TokenKind::FixedTokenLiteral
                 | TokenKind::LParen
@@ -1715,6 +1719,8 @@ fn is_expression_primary(kind: TokenKind) -> bool {
     matches!(
         kind,
         TokenKind::IntegerLiteral
+            | TokenKind::CharacterLiteral
+            | TokenKind::HexIntegerLiteral
             | TokenKind::Name
             | TokenKind::FixedTokenLiteral
             | TokenKind::LParen
@@ -2330,7 +2336,7 @@ fn syntax_item_span(item: SourceBlockItem<'_>, fallback: SourceSpan) -> SourceSp
         SourceBlockItem::Marker(marker) => marker.span(),
         SourceBlockItem::Terminal(SourceBlockTerminal::Eof { span }) => span,
         SourceBlockItem::Terminal(SourceBlockTerminal::LexError { error }) => match error {
-            LexError::InvalidCharacter { span, .. } => span,
+            LexError::InvalidCharacter { span, .. } | LexError::InvalidLiteral { span, .. } => span,
             LexError::Source(_) => fallback,
         },
     }
