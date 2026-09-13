@@ -1041,16 +1041,24 @@ mod tests {
 
     #[test]
     fn character_and_hex_literals_lower_to_integer_pushes() {
-        let (_sources, _id, staging) = parse("'A' + $1");
+        let (_sources, _id, staging) = parse("''' + 1");
 
         assert_eq!(
             instructions(&staging),
             [
-                Instruction::Push(value(65)),
+                Instruction::Push(value(39)),
                 Instruction::Push(value(1)),
                 call(operators(), OperatorSemantic::Add),
             ]
         );
+    }
+
+    #[test]
+    fn triple_quote_character_literal_matches_hex_integer_value() {
+        let (_sources, _id, triple_quote) = parse("'''");
+        let (_sources, _id, hex) = parse("$27");
+
+        assert_eq!(instructions(&triple_quote), instructions(&hex));
     }
 
     #[test]

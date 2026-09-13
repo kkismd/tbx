@@ -220,6 +220,10 @@ impl<'a> Lexer<'a> {
             );
         };
         if byte == b'\'' {
+            if self.source.as_bytes().get(self.offset + 1) == Some(&b'\'') {
+                self.offset += 1;
+                return self.finish_character_literal(start);
+            }
             self.offset += 1;
             return self.invalid_literal(start, self.offset, InvalidLiteralReason::EmptyCharacter);
         }
@@ -242,10 +246,7 @@ impl<'a> Lexer<'a> {
         self.offset += 1;
 
         match self.source.as_bytes().get(self.offset) {
-            Some(b'\'') => {
-                self.offset += 1;
-                self.token(TokenKind::CharacterLiteral, start, self.offset)
-            }
+            Some(b'\'') => self.finish_character_literal(start),
             Some(_) => {
                 while let Some(&byte) = self.source.as_bytes().get(self.offset) {
                     if byte == b'\'' {
@@ -262,6 +263,21 @@ impl<'a> Lexer<'a> {
                 InvalidLiteralReason::UnterminatedCharacter,
             ),
         }
+    }
+
+    fn finish_character_literal(&mut self, start: usize) -> Result<Token, LexError> {
+        self.offset += 1;
+        if self.source.as_bytes().get(self.offset) == Some(&b'\'') {
+            while self.source.as_bytes().get(self.offset) == Some(&b'\'') {
+                self.offset += 1;
+            }
+            return self.invalid_literal(
+                start,
+                self.offset,
+                InvalidLiteralReason::MultipleCharacters,
+            );
+        }
+        self.token(TokenKind::CharacterLiteral, start, self.offset)
     }
 
     fn hex_integer_literal(&mut self) -> Result<Token, LexError> {
@@ -579,11 +595,12 @@ mod tests {
 
     #[test]
     fn character_and_hex_literals_keep_source_spans() {
-        let (sources, id, tokens) = lex_all("'A' ' ' $0 $41 $7f $F1");
+        let (sources, id, tokens) = lex_all("'A' ' ' ''' $0 $41 $7f $F1");
 
         assert_eq!(
             kinds(&tokens),
             [
+                TokenKind::CharacterLiteral,
                 TokenKind::CharacterLiteral,
                 TokenKind::CharacterLiteral,
                 TokenKind::HexIntegerLiteral,
@@ -595,16 +612,19 @@ mod tests {
         );
         assert_eq!(
             slices(sources.view(), &tokens),
-            ["'A'", "' '", "$0", "$41", "$7f", "$F1", ""]
+            ["'A'", "' '", "'''", "$0", "$41", "$7f", "$F1", ""]
         );
         assert_token(tokens[0], TokenKind::CharacterLiteral, id, 0, 3);
-        assert_token(tokens[5], TokenKind::HexIntegerLiteral, id, 19, 22);
+        assert_token(tokens[2], TokenKind::CharacterLiteral, id, 8, 11);
+        assert_token(tokens[6], TokenKind::HexIntegerLiteral, id, 23, 26);
     }
 
     #[test]
     fn malformed_character_and_hex_literals_are_source_errors() {
         for (source, reason) in [
             ("''", InvalidLiteralReason::EmptyCharacter),
+            ("''''", InvalidLiteralReason::MultipleCharacters),
+            ("'''''", InvalidLiteralReason::MultipleCharacters),
             ("'AB'", InvalidLiteralReason::MultipleCharacters),
             ("'A", InvalidLiteralReason::UnterminatedCharacter),
             ("$", InvalidLiteralReason::MissingHexDigits),

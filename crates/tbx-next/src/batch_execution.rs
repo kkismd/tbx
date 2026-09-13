@@ -887,6 +887,23 @@ mod tests {
     }
 
     #[test]
+    fn invalid_extra_character_literal_quotes_keep_a_source_diagnostic_span() {
+        let text = "EVAL ''''";
+        let (sources, source_id) = source(text, "program.tbx");
+        let mut writer = RecordingWriter::default();
+
+        let failure = failure(execute_registered_source(&sources, source_id, &mut writer));
+        let primary = failure
+            .diagnostic()
+            .primary()
+            .expect("diagnostic should have a span");
+
+        assert_eq!(primary.line_number(), 1);
+        assert_eq!(primary.column_number(), 6);
+        assert_eq!(primary.source_line(), text);
+    }
+
+    #[test]
     fn print_preserves_expression_diagnostics_for_undefined_names() {
         let (sources, source_id) = source("PRINT A + MISSING", "program.tbx");
         let mut writer = RecordingWriter::default();

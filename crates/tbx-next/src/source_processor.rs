@@ -5713,7 +5713,7 @@ mod tests {
             global_source_fixture();
 
         let (_sources, _id, result) = run_with_source_words_operators_and_mut_globals(
-            "LET A = 'A'\nLET B = A + $F1",
+            "LET A = ''' + 1\nLET B = A + $F1\nEVAL '''",
             &bindings,
             &mut globals,
             &source_words,
@@ -5723,8 +5723,32 @@ mod tests {
         );
 
         assert_eq!(result.outcome(), RunOutcome::Halted);
-        assert_eq!(globals.view().read(variables[0]), Ok(value(65)));
-        assert_eq!(globals.view().read(variables[1]), Ok(value(306)));
+        assert_eq!(globals.view().read(variables[0]), Ok(value(40)));
+        assert_eq!(globals.view().read(variables[1]), Ok(value(281)));
+        assert_eq!(result.data_stack(), [value(39)]);
+    }
+
+    #[test]
+    fn source_to_vm_e2e_uses_triple_quote_in_definition_body() {
+        let mut session = RuntimeDefinitionSession::new();
+        session.publish_def("DEF QUOTE\nEVAL '''\nEND");
+        let (sources, id) = source("EVAL QUOTE()");
+
+        let unit = compile_source(
+            sources.view(),
+            id,
+            SourceCompileContext::with_source_words_and_operators(
+                &session.bindings,
+                session.source_words.lookup(),
+                session.operators.lookup(),
+            ),
+        )
+        .expect("definition containing triple quote should compile");
+        let result = session
+            .run_unit_with_published_code(&unit)
+            .expect("definition containing triple quote should run");
+
+        assert_eq!(result.data_stack(), [value(39)]);
     }
 
     #[test]
