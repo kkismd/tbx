@@ -7,7 +7,7 @@ use crate::word::{PublishedWords, WordId};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct OutputPrimitiveWords {
-    print: WordId,
+    putdec: WordId,
     cr: WordId,
 }
 
@@ -16,26 +16,26 @@ pub(crate) fn register_output_primitives(
     words: &mut PublishedWords,
     bindings: &mut Bindings,
 ) -> Result<OutputPrimitiveWords, PrimitiveBootstrapError> {
-    let print_name = builtin_name("PRINT");
+    let putdec_name = builtin_name("PUTDEC");
     let cr_name = builtin_name("CR");
 
-    for name in [&print_name, &cr_name] {
+    for name in [&putdec_name, &cr_name] {
         bindings
             .validate_new_name(name)
             .map_err(primitive_bootstrap_precheck_error)?;
     }
 
-    let print_primitive = primitives.register(print);
+    let putdec_primitive = primitives.register(putdec);
     let cr_primitive = primitives.register(cr);
-    let print = register_primitive(words, bindings, print_name, print_primitive)?;
+    let putdec = register_primitive(words, bindings, putdec_name, putdec_primitive)?;
     let cr = register_primitive(words, bindings, cr_name, cr_primitive)?;
 
-    Ok(OutputPrimitiveWords { print, cr })
+    Ok(OutputPrimitiveWords { putdec, cr })
 }
 
 impl OutputPrimitiveWords {
-    pub(crate) const fn print(self) -> WordId {
-        self.print
+    pub(crate) const fn putdec(self) -> WordId {
+        self.putdec
     }
 
     pub(crate) const fn cr(self) -> WordId {
@@ -54,17 +54,17 @@ fn primitive_bootstrap_precheck_error(error: BindingInsertError) -> PrimitiveBoo
     }
 }
 
-fn print(context: &mut PrimitiveContext<'_>) -> Result<(), PrimitiveError> {
+fn putdec(context: &mut PrimitiveContext<'_>) -> Result<(), PrimitiveError> {
     if context.data_stack_is_empty() {
         return Ok(());
     }
 
     let value = context.peek()?;
-    let text = format_print_value(value);
+    let text = format_putdec_value(value);
     context.write_output(&text)?;
     context
         .pop()
-        .expect("PRINT value was checked before consuming it");
+        .expect("PUTDEC value was checked before consuming it");
     Ok(())
 }
 
@@ -72,7 +72,7 @@ fn cr(context: &mut PrimitiveContext<'_>) -> Result<(), PrimitiveError> {
     context.write_output("\n")
 }
 
-fn format_print_value(value: Value) -> String {
+fn format_putdec_value(value: Value) -> String {
     value.as_integer().to_string()
 }
 
@@ -88,6 +88,7 @@ mod tests {
     use crate::word::{PublishedWords, WordDefinition};
     use crate::word_lookup::PublishedWordLookup;
     use crate::word_resolution::resolve_word_name;
+    use std::rc::Rc;
 
     fn value(value: i16) -> Value {
         Value::integer(value)
@@ -142,7 +143,7 @@ mod tests {
     #[test]
     fn print_succeeds_without_output_on_empty_stack() {
         let (vm, output, result) = run_calls(|code, words| {
-            code.append(Instruction::Call(words.print()));
+            code.append(Instruction::Call(words.putdec()));
         });
 
         assert_eq!(result, Ok(RunOutcome::Halted));
@@ -162,7 +163,7 @@ mod tests {
         ] {
             let (vm, output, result) = run_calls(|code, words| {
                 code.append(Instruction::Push(value(input)));
-                code.append(Instruction::Call(words.print()));
+                code.append(Instruction::Call(words.putdec()));
             });
 
             assert_eq!(result, Ok(RunOutcome::Halted), "input {input}");
@@ -176,7 +177,7 @@ mod tests {
         let (mut vm, output, result) = run_calls(|code, words| {
             code.append(Instruction::Push(value(3)));
             code.append(Instruction::Push(value(5)));
-            code.append(Instruction::Call(words.print()));
+            code.append(Instruction::Call(words.putdec()));
         });
 
         assert_eq!(result, Ok(RunOutcome::Halted));
@@ -202,10 +203,10 @@ mod tests {
     fn print_and_cr_keep_output_order_separate() {
         let (vm, output, result) = run_calls(|code, words| {
             code.append(Instruction::Push(value(42)));
-            code.append(Instruction::Call(words.print()));
+            code.append(Instruction::Call(words.putdec()));
             code.append(Instruction::Call(words.cr()));
             code.append(Instruction::Push(value(-7)));
-            code.append(Instruction::Call(words.print()));
+            code.append(Instruction::Call(words.putdec()));
         });
 
         assert_eq!(result, Ok(RunOutcome::Halted));
@@ -219,7 +220,7 @@ mod tests {
         let mut code = InstructionSequence::new();
         let entry = code.append(Instruction::Push(value(99)));
         code.append(Instruction::Push(value(13)));
-        let call = code.append(Instruction::Call(output_words.print()));
+        let call = code.append(Instruction::Call(output_words.putdec()));
         code.append(Instruction::Halt);
         let mut output = TestOutput::new();
         output.fail_next_write(RuntimeOutputError::Failed);
@@ -229,7 +230,7 @@ mod tests {
         assert_eq!(vm.step(code.view()), Ok(StepOutcome::Continued));
         let result = vm.step(execution(&code, &words, &primitives).with_output(&mut output));
 
-        let error = result.expect_err("failed output should fail PRINT");
+        let error = result.expect_err("failed output should fail PUTDEC");
         assert!(matches!(
             error.kind(),
             VmErrorKind::PrimitiveFailed {
@@ -263,7 +264,7 @@ mod tests {
         let (primitives, words, _, output_words) = bootstrapped_output_words();
         let mut code = InstructionSequence::new();
         let entry = code.append(Instruction::Push(value(21)));
-        code.append(Instruction::Call(output_words.print()));
+        code.append(Instruction::Call(output_words.putdec()));
         code.append(Instruction::Halt);
         let mut output = PartialFailOutput::default();
         let mut vm = Vm::new(code.view(), entry).expect("test entry should be valid");
@@ -284,20 +285,21 @@ mod tests {
         assert_eq!(primitives.len(), 2);
         assert_eq!(words.len(), 2);
         assert_eq!(
-            resolve_word_name(&bindings, "print"),
-            Ok(output_words.print())
+            resolve_word_name(&bindings, "putdec"),
+            Ok(output_words.putdec())
         );
         assert_eq!(resolve_word_name(&bindings, "cr"), Ok(output_words.cr()));
         assert_eq!(
-            bindings.get(&name("PRINT")),
-            Some(&Binding::Word(output_words.print()))
+            bindings.get(&name("PUTDEC")),
+            Some(&Binding::Word(output_words.putdec()))
         );
+        assert!(bindings.get(&name("PRINT")).is_none());
         assert_eq!(
             bindings.get(&name("CR")),
             Some(&Binding::Word(output_words.cr()))
         );
         assert!(matches!(
-            words.get(output_words.print()),
+            words.get(output_words.putdec()),
             Ok(WordDefinition::Primitive { .. })
         ));
         assert!(matches!(
@@ -322,6 +324,51 @@ mod tests {
         assert_eq!(primitives.len(), 0);
         assert_eq!(words.len(), 0);
         assert_eq!(bindings.get(&name("CR")), Some(&Binding::Word(existing)));
-        assert!(bindings.get(&name("PRINT")).is_none());
+        assert!(bindings.get(&name("PUTDEC")).is_none());
+    }
+
+    #[test]
+    fn fixed_text_instruction_emits_exact_compile_time_text() {
+        let (vm, output, result) = run_calls(|code, _| {
+            code.append(Instruction::WriteFixedText(Rc::from(" a  b ")));
+        });
+
+        assert_eq!(result, Ok(RunOutcome::Halted));
+        assert_eq!(output.chunks(), [" a  b "]);
+        assert_eq!(vm.data_stack_depth(), 0);
+    }
+
+    #[test]
+    fn fixed_text_instruction_supports_empty_text() {
+        let (_vm, output, result) = run_calls(|code, _| {
+            code.append(Instruction::WriteFixedText(Rc::from("")));
+        });
+
+        assert_eq!(result, Ok(RunOutcome::Halted));
+        assert_eq!(output.chunks(), [""]);
+    }
+
+    #[test]
+    fn fixed_text_output_failure_stops_before_following_instruction() {
+        let (primitives, words, _, _) = bootstrapped_output_words();
+        let mut code = InstructionSequence::new();
+        let entry = code.append(Instruction::WriteFixedText(Rc::from("text")));
+        code.append(Instruction::WriteFixedText(Rc::from("after")));
+        code.append(Instruction::Halt);
+        let mut output = TestOutput::new();
+        output.fail_next_write(RuntimeOutputError::Failed);
+        let mut vm = Vm::new(code.view(), entry).expect("test entry should be valid");
+
+        let result = vm.run(execution(&code, &words, &primitives).with_output(&mut output));
+
+        let error = result.expect_err("fixed text output should fail");
+        assert!(matches!(
+            error.kind(),
+            VmErrorKind::FixedTextOutputFailed {
+                source: RuntimeOutputError::Failed
+            }
+        ));
+        assert!(output.chunks().is_empty());
+        assert_eq!(vm.instruction_pointer(), code.view().location(entry));
     }
 }

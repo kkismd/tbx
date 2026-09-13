@@ -74,6 +74,9 @@ pub(crate) enum VmErrorKind {
         primitive: crate::word::PrimitiveId,
         source: PrimitiveError,
     },
+    FixedTextOutputFailed {
+        source: crate::runtime_output::RuntimeOutputError,
+    },
     InvalidGlobalVarId {
         source: GlobalVariableError,
     },
@@ -356,8 +359,9 @@ impl Vm {
 
         let location = self.instruction_pointer;
         let instructions = execution.instructions();
-        let instruction = *instructions
+        let instruction = instructions
             .get_location(location)
+            .cloned()
             .map_err(|source| VmError {
                 location,
                 kind: VmErrorKind::InstructionFetch { source },
@@ -365,6 +369,9 @@ impl Vm {
 
         match instruction {
             Instruction::Push(value) => self.step_push(instructions, location, value),
+            Instruction::WriteFixedText(text) => {
+                self.step_write_fixed_text(&mut execution, location, &text)
+            }
             Instruction::LoadVar(id) => self.step_load_var(&mut execution, location, id),
             Instruction::StoreVar(id) => self.step_store_var(&mut execution, location, id),
             Instruction::Call(id) => self.step_call(execution, location, id),
@@ -455,6 +462,26 @@ impl Vm {
         self.data_stack.push(value);
         self.instruction_pointer = next;
 
+        Ok(StepOutcome::Continued)
+    }
+
+    fn step_write_fixed_text<'a, E: VmExecutionView<'a>>(
+        &mut self,
+        execution: &mut E,
+        location: CodeLocation,
+        text: &str,
+    ) -> Result<StepOutcome, VmError> {
+        let instructions = execution.instructions();
+        let next = self.valid_next_location(instructions, location)?;
+        execution
+            .runtime_output()
+            .ok_or(crate::runtime_output::RuntimeOutputError::Unavailable)
+            .and_then(|output| output.write(text))
+            .map_err(|source| VmError {
+                location,
+                kind: VmErrorKind::FixedTextOutputFailed { source },
+            })?;
+        self.instruction_pointer = next;
         Ok(StepOutcome::Continued)
     }
 

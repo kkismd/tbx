@@ -335,7 +335,7 @@ mod tests {
 
     #[test]
     fn renders_middle_line_from_multiline_source() {
-        let (sources, source_id) = source("10 PRINT 1\n20 LET X = 2\n30 END", "multi.tbx");
+        let (sources, source_id) = source("10 PUTDEC 1\n20 LET X = 2\n30 END", "multi.tbx");
         let primary = span(sources.view(), source_id, 18, 19);
         let rendered = DiagnosticRenderer::new(sources.view())
             .render(&UserDiagnostic::at_span(primary, "invalid target"))
@@ -343,7 +343,7 @@ mod tests {
         let primary = rendered.primary().expect("primary span should render");
 
         assert_eq!(primary.line_number(), 2);
-        assert_eq!(primary.column_number(), 8);
+        assert_eq!(primary.column_number(), 7);
         assert_eq!(primary.source_line(), "20 LET X = 2");
         assert_eq!(primary.highlight_columns(), 1);
     }
@@ -378,7 +378,7 @@ mod tests {
 
     #[test]
     fn renders_stdin_display_name_as_display_info() {
-        let (sources, source_id) = source("PRINT 1", "<stdin>");
+        let (sources, source_id) = source("PUTDEC 1", "<stdin>");
         let primary = span(sources.view(), source_id, 0, 5);
         let rendered = DiagnosticRenderer::new(sources.view())
             .render(&UserDiagnostic::at_span(primary, "print failed"))
@@ -396,7 +396,7 @@ mod tests {
 
     #[test]
     fn resolved_runtime_source_span_uses_the_same_renderer() {
-        let (sources, source_id) = source("10 PRINT 1\n20 CR", "runtime.tbx");
+        let (sources, source_id) = source("10 PUTDEC 1\n20 CR", "runtime.tbx");
         let resolved_runtime_span = Some(span(sources.view(), source_id, 14, 16));
         let diagnostic = match resolved_runtime_span {
             Some(span) => UserDiagnostic::at_span(span, "runtime output failed"),
@@ -410,7 +410,7 @@ mod tests {
 
         assert_eq!(primary.display_name(), "runtime.tbx");
         assert_eq!(primary.line_number(), 2);
-        assert_eq!(primary.column_number(), 4);
+        assert_eq!(primary.column_number(), 3);
         assert_eq!(primary.source_line(), "20 CR");
     }
 

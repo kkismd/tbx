@@ -1,6 +1,7 @@
 use crate::global_variable::GlobalVarId;
 use crate::value::Value;
 use crate::word::WordId;
+use std::rc::Rc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 static NEXT_CODE_SPACE_ID: AtomicUsize = AtomicUsize::new(1);
@@ -85,13 +86,17 @@ impl CodeLocation {
 /// This is intentionally a small, orthogonal instruction set. `Call` carries
 /// an already-resolved word identifier so runtime VM execution never performs
 /// name lookup.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum Instruction {
     Push(Value),
+    /// Compile-time-owned output text, kept outside the runtime value domain.
+    WriteFixedText(Rc<str>),
     LoadVar(GlobalVarId),
     StoreVar(GlobalVarId),
     Call(WordId),
-    CopyFromCallBase { offset: usize },
+    CopyFromCallBase {
+        offset: usize,
+    },
     TruncateDataStackToCallBase,
     Jump(InstructionAddress),
     JumpIfZero(InstructionAddress),
@@ -178,7 +183,7 @@ impl InstructionSequence {
         let instruction = self
             .instructions
             .get(branch.as_index())
-            .copied()
+            .cloned()
             .ok_or_else(|| BranchTargetPatchError::InvalidBranch {
                 source: self.view().address_error(branch),
             })?;
@@ -227,7 +232,7 @@ impl Default for InstructionSequence {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum BranchTargetPatchError {
     InvalidBranch {
         source: InstructionAddressError,

@@ -17,12 +17,12 @@ pub(crate) struct StaticQuotation {
     completed: CompletedBlockCode,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum StaticQuotationBuildError {
     Build { source: BlockCodeBuildError },
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum StaticQuotationAttachError {
     LocalSourceMapping { source: SourceMappingLookupError },
     InvalidLocalTarget { target: InstructionAddress },
@@ -110,7 +110,7 @@ impl StaticQuotation {
                 .code
                 .mapped_instruction(local)
                 .map_err(|source| StaticQuotationAttachError::LocalSourceMapping { source })?;
-            let instruction = self.rebase_instruction(*instruction, parent_start)?;
+            let instruction = self.rebase_instruction(instruction.clone(), parent_start)?;
             rebased.push(MappedInstruction { instruction, span });
         }
 
@@ -137,6 +137,7 @@ impl StaticQuotation {
             | Instruction::TruncateDataStackToCallBase
             | Instruction::Return
             | Instruction::Halt => Ok(instruction),
+            Instruction::WriteFixedText(_) => Ok(instruction),
         }
     }
 
@@ -159,7 +160,7 @@ impl StaticQuotation {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 struct MappedInstruction {
     instruction: Instruction,
     span: Option<SourceSpan>,

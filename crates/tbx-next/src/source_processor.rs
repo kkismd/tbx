@@ -593,7 +593,7 @@ impl OwnerLocalBuildTarget {
         for index in 0..self.code.len() {
             let address = InstructionAddress::from_index(index);
             let (instruction, span) = self.code.mapped_instruction(address)?;
-            instructions.push((*instruction, span));
+            instructions.push((instruction.clone(), span));
         }
         Ok(StructuredOwnerLocalTarget::new(instructions))
     }
@@ -609,7 +609,7 @@ impl InstructionBuildTarget for SharedOwnerLocalBuildTarget {
         instruction: Instruction,
         span: SourceSpan,
     ) -> Result<InstructionAddress, InstructionBuildError> {
-        reject_owner_local_direct_branch(instruction)?;
+        reject_owner_local_direct_branch(&instruction)?;
         self.target
             .borrow_mut()
             .code
@@ -623,7 +623,7 @@ impl InstructionBuildTarget for SharedOwnerLocalBuildTarget {
         &mut self,
         instruction: Instruction,
     ) -> Result<InstructionAddress, InstructionBuildError> {
-        reject_owner_local_direct_branch(instruction)?;
+        reject_owner_local_direct_branch(&instruction)?;
         self.target
             .borrow_mut()
             .code
@@ -696,14 +696,19 @@ impl InstructionBuildTarget for SharedOwnerLocalBuildTarget {
     }
 }
 
-fn reject_owner_local_direct_branch(instruction: Instruction) -> Result<(), InstructionBuildError> {
+fn reject_owner_local_direct_branch(
+    instruction: &Instruction,
+) -> Result<(), InstructionBuildError> {
     match instruction {
         Instruction::Jump(_) | Instruction::JumpIfZero(_) => {
             Err(InstructionBuildError::BlockCodeBuild {
-                source: BlockCodeBuildError::BranchInstructionRequiresPatch { instruction },
+                source: BlockCodeBuildError::BranchInstructionRequiresPatch {
+                    instruction: instruction.clone(),
+                },
             })
         }
         Instruction::Push(_)
+        | Instruction::WriteFixedText(_)
         | Instruction::LoadVar(_)
         | Instruction::StoreVar(_)
         | Instruction::Call(_)
@@ -4212,7 +4217,7 @@ mod tests {
 
     #[test]
     fn segmentation_does_not_treat_nonleading_rem_as_comment() {
-        let (sources, _id, segmented) = segment("PRINT REM\nRUN");
+        let (sources, _id, segmented) = segment("PUTDEC REM\nRUN");
 
         assert_eq!(segmented.completed_statements().len(), 2);
         assert_eq!(
@@ -4223,7 +4228,7 @@ mod tests {
             sources
                 .view()
                 .slice(segmented.completed_statements()[0].tokens()[0].span()),
-            Ok("PRINT")
+            Ok("PUTDEC")
         );
         assert_eq!(
             sources
@@ -10462,9 +10467,10 @@ mod tests {
     #[test]
     fn top_level_source_calls_print_and_cr_as_normal_runtime_words() {
         let session = RuntimeDefinitionSession::new_with_named_operators_and_output_primitives();
-        let print = resolve_word_name(&session.bindings, "PRINT").expect("PRINT should bootstrap");
+        let print =
+            resolve_word_name(&session.bindings, "PUTDEC").expect("PUTDEC should bootstrap");
         let cr = resolve_word_name(&session.bindings, "CR").expect("CR should bootstrap");
-        let (sources, id) = source("EVAL 42\nPRINT\nCR\nEVAL -7\nPRINT");
+        let (sources, id) = source("EVAL 42\nPUTDEC\nCR\nEVAL -7\nPUTDEC");
         let mut output = TestOutput::new();
 
         let unit = compile_source(
@@ -10476,10 +10482,10 @@ mod tests {
                 session.operators.lookup(),
             ),
         )
-        .expect("PRINT and CR source should compile through normal word resolution");
+        .expect("PUTDEC and CR source should compile through normal word resolution");
         let result = session
             .run_unit_with_output(&unit, &mut output)
-            .expect("PRINT and CR source should run with runtime output");
+            .expect("PUTDEC and CR source should run with runtime output");
 
         let calls = (0..unit.len())
             .filter_map(|index| match unit.instructions().get(address(index)) {
@@ -10500,8 +10506,9 @@ mod tests {
             .expect("MULTIPLY should be a named operator");
         let add =
             resolve_word_name(&session.bindings, "ADD").expect("ADD should be a named operator");
-        let print = resolve_word_name(&session.bindings, "PRINT").expect("PRINT should bootstrap");
-        let (sources, id) = source("PRINT 2 + 3 * 4\nCR");
+        let print =
+            resolve_word_name(&session.bindings, "PUTDEC").expect("PUTDEC should bootstrap");
+        let (sources, id) = source("PUTDEC 2 + 3 * 4\nCR");
         let mut output = TestOutput::new();
 
         let unit = compile_source(
@@ -10532,11 +10539,11 @@ mod tests {
         }
         assert_eq!(
             unit.source_span(location(&unit, 0)),
-            Ok(Some(span(sources.view(), id, 6, 7)))
+            Ok(Some(span(sources.view(), id, 7, 8)))
         );
         assert_eq!(
             unit.source_span(location(&unit, 5)),
-            Ok(Some(span(sources.view(), id, 0, 5)))
+            Ok(Some(span(sources.view(), id, 0, 6)))
         );
         assert_eq!(output.chunks(), ["14", "\n"]);
         assert_eq!(result.data_stack(), []);
@@ -10545,9 +10552,10 @@ mod tests {
     #[test]
     fn runtime_word_statement_accepts_literal_only_expression() {
         let session = RuntimeDefinitionSession::new_with_named_operators_and_output_primitives();
-        let print = resolve_word_name(&session.bindings, "PRINT").expect("PRINT should bootstrap");
+        let print =
+            resolve_word_name(&session.bindings, "PUTDEC").expect("PUTDEC should bootstrap");
         let cr = resolve_word_name(&session.bindings, "CR").expect("CR should bootstrap");
-        let (sources, id) = source("PRINT 2\nCR");
+        let (sources, id) = source("PUTDEC 2\nCR");
         let mut output = TestOutput::new();
 
         let unit = compile_source(
@@ -10614,7 +10622,7 @@ mod tests {
     #[test]
     fn runtime_word_trailing_expression_failure_does_not_commit_statement() {
         let session = RuntimeDefinitionSession::new_with_named_operators_and_output_primitives();
-        let (sources, id) = source("PRINT 1 + MISSING");
+        let (sources, id) = source("PUTDEC 1 + MISSING");
 
         let error = compile_source(
             sources.view(),
@@ -10642,7 +10650,7 @@ mod tests {
     fn runtime_word_statement_expression_is_shared_by_definition_bodies() {
         let mut session =
             RuntimeDefinitionSession::new_with_named_operators_and_output_primitives();
-        session.publish_def("DEF SHOW\nPRINT 2 + 3 * 4\nEND");
+        session.publish_def("DEF SHOW\nPUTDEC 2 + 3 * 4\nEND");
         let (caller_sources, caller_id, caller) = session.compile_caller("SHOW");
         let mut output = TestOutput::new();
 
@@ -10660,9 +10668,10 @@ mod tests {
     #[test]
     fn top_level_eval_constant_print_cr_runs_e2e() {
         let session = RuntimeDefinitionSession::new_with_named_operators_and_output_primitives();
-        let print = resolve_word_name(&session.bindings, "PRINT").expect("PRINT should bootstrap");
+        let print =
+            resolve_word_name(&session.bindings, "PUTDEC").expect("PUTDEC should bootstrap");
         let cr = resolve_word_name(&session.bindings, "CR").expect("CR should bootstrap");
-        let (sources, id) = source("EVAL 42\nPRINT\nCR");
+        let (sources, id) = source("EVAL 42\nPUTDEC\nCR");
         let mut output = TestOutput::new();
 
         let unit = compile_source(
@@ -10674,10 +10683,10 @@ mod tests {
                 session.operators.lookup(),
             ),
         )
-        .expect("constant EVAL, PRINT, and CR source should compile");
+        .expect("constant EVAL, PUTDEC, and CR source should compile");
         let result = session
             .run_unit_with_output(&unit, &mut output)
-            .expect("constant EVAL, PRINT, and CR source should run with test output");
+            .expect("constant EVAL, PUTDEC, and CR source should run with test output");
 
         assert_eq!(
             unit.instructions().get(address(1)),
@@ -10694,8 +10703,9 @@ mod tests {
     #[test]
     fn top_level_empty_stack_print_runs_without_output_or_newline() {
         let session = RuntimeDefinitionSession::new_with_named_operators_and_output_primitives();
-        let print = resolve_word_name(&session.bindings, "PRINT").expect("PRINT should bootstrap");
-        let (sources, id) = source("PRINT");
+        let print =
+            resolve_word_name(&session.bindings, "PUTDEC").expect("PUTDEC should bootstrap");
+        let (sources, id) = source("PUTDEC");
         let mut output = TestOutput::new();
 
         let unit = compile_source(
@@ -10707,10 +10717,10 @@ mod tests {
                 session.operators.lookup(),
             ),
         )
-        .expect("empty stack PRINT should compile through normal word resolution");
+        .expect("empty stack PUTDEC should compile through normal word resolution");
         let result = session
             .run_unit_with_output(&unit, &mut output)
-            .expect("empty stack PRINT should run without output");
+            .expect("empty stack PUTDEC should run without output");
 
         assert_eq!(
             unit.instructions().get(address(0)),
@@ -10726,14 +10736,15 @@ mod tests {
             RuntimeDefinitionSession::new_with_named_operators_and_output_primitives();
         let multiply = resolve_word_name(&session.bindings, "MULTIPLY")
             .expect("MULTIPLY should be a named operator");
-        let print = resolve_word_name(&session.bindings, "PRINT").expect("PRINT should bootstrap");
+        let print =
+            resolve_word_name(&session.bindings, "PUTDEC").expect("PUTDEC should bootstrap");
         let cr = resolve_word_name(&session.bindings, "CR").expect("CR should bootstrap");
 
         session.publish_def("DEF DOUBLE\nEVAL 2\nMULTIPLY\nEND");
         let Some(Binding::Word(double)) = session.bindings.get(&name("DOUBLE")).copied() else {
             panic!("DOUBLE should be published");
         };
-        let (sources, id) = source("EVAL DOUBLE(21)\nPRINT\nCR\nEVAL 1\nPRINT");
+        let (sources, id) = source("EVAL DOUBLE(21)\nPUTDEC\nCR\nEVAL 1\nPUTDEC");
         let mut output = TestOutput::new();
 
         let unit = compile_source(
@@ -10748,7 +10759,7 @@ mod tests {
         .expect("DOUBLE result printing source should compile");
         let result = session
             .run_unit_with_published_code_and_output(&unit, &mut output)
-            .expect("DOUBLE result should run through EVAL, PRINT, CR, and test output");
+            .expect("DOUBLE result should run through EVAL, PUTDEC, CR, and test output");
 
         assert_eq!(
             session.code.instruction_view().get(address(0)),

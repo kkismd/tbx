@@ -24,7 +24,7 @@ pub(crate) struct PublishedWordBuilder<'a> {
     block: BlockCodeBuilder<'a>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 struct PublishedWordEntry {
     location: CodeLocation,
 }
@@ -35,7 +35,7 @@ pub(crate) struct PublishedWord {
     entry: CodeLocation,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum WordBodyBuildError {
     SourceMappingAppend {
         source: crate::source_mapping::SourceMappingAppendError,
@@ -63,7 +63,7 @@ pub(crate) enum WordBodyBuildError {
     BodyRejected,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum NewWordPublicationError {
     NameConflict,
     ReservedName,
@@ -72,7 +72,7 @@ pub(crate) enum NewWordPublicationError {
     BindingCommitInvariantViolated,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum WordRepublicationError {
     UndefinedName,
     TargetIsNotWord,
@@ -765,7 +765,7 @@ mod tests {
 
         let result =
             code.publish_new_word(&mut words, &mut bindings, name("BRANCH"), |_, builder| {
-                builder.append_unmapped(branch)?;
+                builder.append_unmapped(branch.clone())?;
                 Ok(())
             });
 

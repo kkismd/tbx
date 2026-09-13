@@ -178,10 +178,10 @@ mod tests {
         let mut output = WriteRuntimeOutput::new(writer);
 
         output
-            .write("PRINT text")
+            .write("PUTDEC text")
             .expect("completed output should write");
 
-        assert_eq!(output.writer.chunks, [b"PRINT text".to_vec()]);
+        assert_eq!(output.writer.chunks, [b"PUTDEC text".to_vec()]);
         assert_eq!(output.writer.flushes, 1);
     }
 

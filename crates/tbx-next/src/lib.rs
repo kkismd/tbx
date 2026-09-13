@@ -127,7 +127,7 @@ mod operator;
 #[allow(dead_code)]
 mod stack_primitive;
 
-// #1586 publishes PRINT and CR as normal runtime primitive words that use only
+// #1696 publishes PUTDEC and CR as normal runtime primitive words that use only
 // the narrow completed-text output capability from ADR #1528.
 #[allow(dead_code)]
 mod output_primitive;

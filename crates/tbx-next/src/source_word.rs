@@ -159,7 +159,7 @@ pub(crate) struct StructuredOwnerLocalTarget {
     instructions: Vec<StructuredOwnerLocalInstruction>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 struct StructuredOwnerLocalInstruction {
     instruction: Instruction,
     span: Option<SourceSpan>,
@@ -875,7 +875,8 @@ impl StructuredOwnerLocalTarget {
     ) -> Result<(), SourceWordError> {
         let parent_start = code.current_address();
         for mapped in &self.instructions {
-            let instruction = self.rebase_instruction(mapped.instruction, parent_start, anchor)?;
+            let instruction =
+                self.rebase_instruction(mapped.instruction.clone(), parent_start, anchor)?;
             if let Some(span) = mapped.span {
                 code.append_resolved_mapped(instruction, span)
             } else {
@@ -907,6 +908,7 @@ impl StructuredOwnerLocalTarget {
             | Instruction::TruncateDataStackToCallBase
             | Instruction::Return
             | Instruction::Halt => Ok(instruction),
+            Instruction::WriteFixedText(_) => Ok(instruction),
         }
     }
 
@@ -3441,7 +3443,7 @@ mod tests {
         )];
 
         with_next_block_item(
-            "PRINT ELSE",
+            "PUTDEC ELSE",
             &markers,
             |_view, _source_id, _tokens, item| {
                 assert!(matches!(item, SourceBlockItem::Statement(_)));

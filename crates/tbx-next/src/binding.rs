@@ -244,11 +244,11 @@ mod tests {
         let binding = word_binding(&mut words, 0);
         let mut bindings = Bindings::new();
 
-        assert_eq!(bindings.insert_new(name("PRINT"), binding), Ok(()));
+        assert_eq!(bindings.insert_new(name("PUTDEC"), binding), Ok(()));
 
         assert_eq!(bindings.len(), 1);
         assert!(!bindings.is_empty());
-        assert_eq!(bindings.get(&name("PRINT")), Some(&binding));
+        assert_eq!(bindings.get(&name("PUTDEC")), Some(&binding));
     }
 
     #[test]

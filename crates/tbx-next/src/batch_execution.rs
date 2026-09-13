@@ -784,7 +784,7 @@ mod tests {
 
     #[test]
     fn m20_environment_supports_variables_definitions_stack_words_and_output() {
-        let text = "LET A = 4\nDEF DOUBLE\nDUP\nEND\nEVAL DOUBLE(A)\nPRINT\nCR";
+        let text = "LET A = 4\nDEF DOUBLE\nDUP\nEND\nEVAL DOUBLE(A)\nPUTDEC\nCR";
         let (sources, source_id) = source(text, "program.tbx");
         let mut writer = RecordingWriter::default();
 
@@ -883,7 +883,7 @@ mod tests {
 
     #[test]
     fn runtime_output_failure_is_a_located_environment_failure() {
-        let (sources, source_id) = source("EVAL 7\nPRINT", "program.tbx");
+        let (sources, source_id) = source("EVAL 7\nPUTDEC", "program.tbx");
         let mut writer = RecordingWriter::failing_after(0);
 
         let failure = failure(execute_registered_source(&sources, source_id, &mut writer));
@@ -895,7 +895,7 @@ mod tests {
 
     #[test]
     fn successful_runtime_output_is_not_rolled_back_by_a_later_failure() {
-        let (sources, source_id) = source("EVAL 7\nPRINT\nCR", "program.tbx");
+        let (sources, source_id) = source("EVAL 7\nPUTDEC\nCR", "program.tbx");
         let mut writer = RecordingWriter::failing_after(1);
 
         let failure = failure(execute_registered_source(&sources, source_id, &mut writer));
@@ -1014,7 +1014,7 @@ mod tests {
     #[test]
     fn standard_library_top_level_unit_is_not_executed() {
         let (sources, standard_library_id, source_id) =
-            sources_with_standard_library("EVAL 99\nPRINT\nCR", "EVAL 1\nPRINT\nCR");
+            sources_with_standard_library("EVAL 99\nPUTDEC\nCR", "EVAL 1\nPUTDEC\nCR");
         let mut writer = RecordingWriter::default();
 
         success(execute_registered_sources(
@@ -1030,7 +1030,7 @@ mod tests {
     #[test]
     fn standard_library_failure_short_circuits_user_source_and_is_environment_failure() {
         let (sources, standard_library_id, source_id) =
-            sources_with_standard_library("UNKNOWN", "EVAL 7\nPRINT");
+            sources_with_standard_library("UNKNOWN", "EVAL 7\nPUTDEC");
         let mut writer = RecordingWriter::default();
 
         let failure = failure(execute_registered_sources(
@@ -1051,7 +1051,7 @@ mod tests {
     #[test]
     fn standard_library_lex_failure_short_circuits_user_source() {
         let (sources, standard_library_id, source_id) =
-            sources_with_standard_library("?", "EVAL 7\nPRINT");
+            sources_with_standard_library("?", "EVAL 7\nPUTDEC");
         let mut writer = RecordingWriter::default();
 
         let failure = failure(execute_registered_sources(
@@ -1072,7 +1072,7 @@ mod tests {
     #[test]
     fn standard_library_publication_failure_short_circuits_user_source() {
         let (sources, standard_library_id, source_id) =
-            sources_with_standard_library("SYNTAX A\nSTATEMENT\nENDS", "EVAL 7\nPRINT");
+            sources_with_standard_library("SYNTAX A\nSTATEMENT\nENDS", "EVAL 7\nPUTDEC");
         let mut writer = RecordingWriter::default();
 
         let failure = failure(execute_registered_sources(
