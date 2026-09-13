@@ -5,7 +5,8 @@ use std::rc::Rc;
 use crate::binding::{Binding, BindingInsertError, Bindings};
 use crate::expression::{
     parse_expression_with_locals, DefinitionLocalReferences, ExpressionCallErrorKind,
-    ExpressionError, ExpressionLocalResolver, ExpressionStaging, ExpressionVariableErrorKind,
+    ExpressionError, ExpressionLocalResolver, ExpressionStaging, ExpressionSyntaxErrorKind,
+    ExpressionVariableErrorKind,
 };
 use crate::global_variable::GlobalVariables;
 use crate::instruction::Instruction;
@@ -1666,12 +1667,16 @@ pub(crate) fn print_source_word(
                     kind: PrintSyntaxErrorKind::InvalidItem,
                 });
             }
-            let mut staging = context.stage_expression(item, anchor).map_err(|_| {
-                SourceWordError::PrintSyntax {
-                    span: error_span,
-                    kind: PrintSyntaxErrorKind::InvalidItem,
+            let mut staging = match context.stage_expression(item, anchor) {
+                Ok(staging) => staging,
+                Err(error) if is_missing_print_comma(item, &error) => {
+                    return Err(SourceWordError::PrintSyntax {
+                        span: error_span,
+                        kind: PrintSyntaxErrorKind::InvalidItem,
+                    });
                 }
-            })?;
+                Err(error) => return Err(error),
+            };
             staging.append_mapped_instruction(Instruction::Call(putdec), anchor);
             context.commit_staging(&staging)?;
         }
@@ -1680,6 +1685,40 @@ pub(crate) fn print_source_word(
         }
     }
     Ok(())
+}
+
+fn is_missing_print_comma(item: &[Token], error: &SourceWordError) -> bool {
+    let SourceWordError::Expression {
+        source: ExpressionError::Syntax(syntax),
+    } = error
+    else {
+        return false;
+    };
+
+    if !matches!(
+        syntax.kind(),
+        ExpressionSyntaxErrorKind::UnexpectedToken {
+            kind: TokenKind::IntegerLiteral
+                | TokenKind::Name
+                | TokenKind::FixedTokenLiteral
+                | TokenKind::LParen
+        }
+    ) {
+        return false;
+    }
+
+    item.windows(2)
+        .any(|pair| is_expression_primary(pair[0].kind()) && is_expression_primary(pair[1].kind()))
+}
+
+fn is_expression_primary(kind: TokenKind) -> bool {
+    matches!(
+        kind,
+        TokenKind::IntegerLiteral
+            | TokenKind::Name
+            | TokenKind::FixedTokenLiteral
+            | TokenKind::LParen
+    )
 }
 
 fn print_reader_error(error: SourceStatementReaderError, peeked: Option<Token>) -> SourceWordError {

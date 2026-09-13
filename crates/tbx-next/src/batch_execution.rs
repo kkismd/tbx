@@ -887,6 +887,24 @@ mod tests {
     }
 
     #[test]
+    fn print_preserves_expression_diagnostics_for_undefined_names() {
+        let (sources, source_id) = source("PRINT A + MISSING", "program.tbx");
+        let mut writer = RecordingWriter::default();
+
+        let failure = failure(execute_registered_source(&sources, source_id, &mut writer));
+        let BatchExecutionFailureCause::Source(user_failure) = failure.cause else {
+            panic!("PRINT expression failure should be a source failure");
+        };
+
+        assert!(matches!(
+            user_failure.original_error(),
+            SourceProcessorError::SourceWord(crate::source_word::SourceWordError::Expression {
+                source: crate::expression::ExpressionError::Variable(_),
+            })
+        ));
+    }
+
+    #[test]
     fn batch_top_level_can_publish_and_use_a_source_word_before_a_definition() {
         let text = "SYNTAX SLET\nSTATEMENT\nREAD_NAME AS name\nRESOLVE_VAR name AS target\nEXPECT \"=\"\nREAD_EXPR AS expr\nEMIT_EXPR expr\nEMIT_STORE target\nENDS\nLET A = 0\nSLET A = 7\nDEF DOUBLE\nDUP\nEND\nEVAL DOUBLE(A)";
         let (sources, source_id) = source(text, "program.tbx");
