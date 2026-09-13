@@ -838,6 +838,55 @@ mod tests {
     }
 
     #[test]
+    fn print_does_not_execute_items_after_expression_failure() {
+        let (sources, source_id) = source("PRINT \"before\", 1 / 0, \"after\"", "program.tbx");
+        let mut writer = RecordingWriter::default();
+
+        let failure = failure(execute_registered_source(&sources, source_id, &mut writer));
+
+        assert_eq!(failure.class(), UserFacingFailureClass::UserProgram);
+        assert_eq!(writer.text(), "before");
+    }
+
+    #[test]
+    fn print_does_not_execute_items_after_output_failure() {
+        let (sources, source_id) = source("PRINT \"before\", 7, \"after\"", "program.tbx");
+        let mut writer = RecordingWriter::failing_after(1);
+
+        let failure = failure(execute_registered_source(&sources, source_id, &mut writer));
+
+        assert_eq!(failure.class(), UserFacingFailureClass::Environment);
+        assert_eq!(writer.text(), "before");
+    }
+
+    #[test]
+    fn print_lowers_local_references_inside_a_definition() {
+        let text = "DEF SHOW value\nPRINT \"value=\", value\nEND\nEVAL SHOW(7)";
+        let (sources, source_id) = source(text, "program.tbx");
+        let mut writer = RecordingWriter::default();
+
+        success(execute_registered_source(&sources, source_id, &mut writer));
+
+        assert_eq!(writer.text(), "value=7");
+    }
+
+    #[test]
+    fn print_syntax_diagnostics_point_at_the_invalid_separator_or_item() {
+        for (text, expected_column) in [("PRINT 1,", 8), ("PRINT 1,,2", 9), ("PRINT 1 2", 9)] {
+            let (sources, source_id) = source(text, "program.tbx");
+            let mut writer = RecordingWriter::default();
+
+            let failure = failure(execute_registered_source(&sources, source_id, &mut writer));
+            let primary = failure.diagnostic().primary().unwrap_or_else(|| {
+                panic!("PRINT syntax failure should have a source position: {text}")
+            });
+            assert_eq!(primary.line_number(), 1, "{text}");
+            assert_eq!(primary.column_number(), expected_column, "{text}");
+            assert_eq!(primary.source_line(), text, "{text}");
+        }
+    }
+
+    #[test]
     fn batch_top_level_can_publish_and_use_a_source_word_before_a_definition() {
         let text = "SYNTAX SLET\nSTATEMENT\nREAD_NAME AS name\nRESOLVE_VAR name AS target\nEXPECT \"=\"\nREAD_EXPR AS expr\nEMIT_EXPR expr\nEMIT_STORE target\nENDS\nLET A = 0\nSLET A = 7\nDEF DOUBLE\nDUP\nEND\nEVAL DOUBLE(A)";
         let (sources, source_id) = source(text, "program.tbx");

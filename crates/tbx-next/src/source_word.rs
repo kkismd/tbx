@@ -1654,6 +1654,9 @@ pub(crate) fn print_source_word(
             let anchor = item
                 .first()
                 .map_or(context.source_word_token().span(), |token| token.span());
+            let error_span = item
+                .last()
+                .map_or(context.source_word_token().span(), |token| token.span());
             if item
                 .iter()
                 .any(|token| token.kind() == TokenKind::FixedTokenLiteral)
@@ -1663,7 +1666,12 @@ pub(crate) fn print_source_word(
                     kind: PrintSyntaxErrorKind::InvalidItem,
                 });
             }
-            let mut staging = context.stage_expression(item, anchor)?;
+            let mut staging = context.stage_expression(item, anchor).map_err(|_| {
+                SourceWordError::PrintSyntax {
+                    span: error_span,
+                    kind: PrintSyntaxErrorKind::InvalidItem,
+                }
+            })?;
             staging.append_mapped_instruction(Instruction::Call(putdec), anchor);
             context.commit_staging(&staging)?;
         }
