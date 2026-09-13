@@ -795,6 +795,49 @@ mod tests {
     }
 
     #[test]
+    fn print_lowers_fixed_text_and_integer_expressions_in_source_order() {
+        let text = "LET A = 42\nLET B = 5\nPRINT \"Im \", A, \" years old. TOTAL = \", A + B";
+        let (sources, source_id) = source(text, "program.tbx");
+        let mut writer = RecordingWriter::default();
+
+        success(execute_registered_source(&sources, source_id, &mut writer));
+
+        assert_eq!(writer.text(), "Im 42 years old. TOTAL = 47");
+    }
+
+    #[test]
+    fn print_does_not_emit_for_commas_or_add_a_newline() {
+        let (sources, source_id) = source("PRINT \"A\", \"B\"", "program.tbx");
+        let mut writer = RecordingWriter::default();
+
+        success(execute_registered_source(&sources, source_id, &mut writer));
+
+        assert_eq!(writer.text(), "AB");
+    }
+
+    #[test]
+    fn print_rejects_missing_items_and_invalid_item_separators() {
+        for text in [
+            "PRINT",
+            "PRINT , 1",
+            "PRINT 1,",
+            "PRINT 1,,2",
+            "PRINT \"A\" + 1",
+        ] {
+            let (sources, source_id) = source(text, "program.tbx");
+            let mut writer = RecordingWriter::default();
+
+            assert!(
+                matches!(
+                    execute_registered_source(&sources, source_id, &mut writer),
+                    BatchExecutionResult::Failure(_)
+                ),
+                "{text} should be rejected"
+            );
+        }
+    }
+
+    #[test]
     fn batch_top_level_can_publish_and_use_a_source_word_before_a_definition() {
         let text = "SYNTAX SLET\nSTATEMENT\nREAD_NAME AS name\nRESOLVE_VAR name AS target\nEXPECT \"=\"\nREAD_EXPR AS expr\nEMIT_EXPR expr\nEMIT_STORE target\nENDS\nLET A = 0\nSLET A = 7\nDEF DOUBLE\nDUP\nEND\nEVAL DOUBLE(A)";
         let (sources, source_id) = source(text, "program.tbx");

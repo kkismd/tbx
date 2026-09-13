@@ -1,5 +1,6 @@
 use std::cell::RefCell;
 use std::collections::HashMap;
+use std::rc::Rc;
 
 use crate::binding::{Binding, BindingInsertError, Bindings};
 use crate::expression::{
@@ -245,6 +246,13 @@ pub(crate) enum SourceWordError {
         span: SourceSpan,
         kind: EvalSyntaxErrorKind,
     },
+    PrintSyntax {
+        span: SourceSpan,
+        kind: PrintSyntaxErrorKind,
+    },
+    PrintPutdecUnavailable {
+        span: SourceSpan,
+    },
     Expression {
         source: ExpressionError,
     },
@@ -363,6 +371,12 @@ pub(crate) enum EvalSyntaxErrorKind {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum PrintSyntaxErrorKind {
+    MissingItem,
+    InvalidItem,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum DefSyntaxErrorKind {
     MissingName,
     TrailingToken { kind: TokenKind },
@@ -406,6 +420,8 @@ impl SourceWordError {
             | Self::LetTarget { span, .. }
             | Self::LetExpressionContextUnavailable { span }
             | Self::EvalSyntax { span, .. }
+            | Self::PrintSyntax { span, .. }
+            | Self::PrintPutdecUnavailable { span }
             | Self::DefSyntax { span, .. }
             | Self::DefName { span, .. }
             | Self::DefLocalName { span, .. }
@@ -1045,6 +1061,10 @@ impl<'source> SourceStatementReader<'source> {
         self.tokens.get(self.position).map(|token| token.kind())
     }
 
+    pub(crate) fn peek(&self) -> Option<Token> {
+        self.tokens.get(self.position).copied()
+    }
+
     pub(crate) fn remaining_expression(
         &mut self,
     ) -> Result<&'source [Token], SourceStatementReaderError> {
@@ -1586,6 +1606,91 @@ pub(crate) fn eval_source_word(
 
     let staging = context.stage_expression(expression_tokens, anchor)?;
     context.commit_staging(&staging)
+}
+
+pub(crate) fn print_source_word(
+    context: &mut NativeSourceWordContext<'_, '_>,
+) -> Result<(), SourceWordError> {
+    let putdec = resolve_runtime_word_name(context.bindings(), "PUTDEC").map_err(|_| {
+        SourceWordError::PrintPutdecUnavailable {
+            span: context.source_word_token().span(),
+        }
+    })?;
+
+    loop {
+        let (item, has_comma) = {
+            let reader = context.statement_reader_mut();
+            let item = reader
+                .expression_until(TokenKind::Comma)
+                .map_err(|error| print_reader_error(error, reader.peek()))?;
+            let has_comma = reader.peek_kind() == Some(TokenKind::Comma);
+            if has_comma {
+                reader
+                    .expect(TokenKind::Comma)
+                    .map_err(|error| print_reader_error(error, reader.peek()))?;
+            } else {
+                reader
+                    .finish()
+                    .map_err(|error| print_reader_error(error, reader.peek()))?;
+            }
+            (item, has_comma)
+        };
+        if item.len() == 1 && item[0].kind() == TokenKind::FixedTokenLiteral {
+            let literal = item[0];
+            let text_span = context
+                .view()
+                .span(
+                    context.source_id(),
+                    literal.span().start() + 1,
+                    literal.span().end() - 1,
+                )
+                .map_err(|source| SourceWordError::Source { source })?;
+            let text = context
+                .view()
+                .slice(text_span)
+                .map_err(|source| SourceWordError::Source { source })?;
+            context.append_mapped(Instruction::WriteFixedText(Rc::from(text)), literal.span())?;
+        } else {
+            let anchor = item
+                .first()
+                .map_or(context.source_word_token().span(), |token| token.span());
+            if item
+                .iter()
+                .any(|token| token.kind() == TokenKind::FixedTokenLiteral)
+            {
+                return Err(SourceWordError::PrintSyntax {
+                    span: anchor,
+                    kind: PrintSyntaxErrorKind::InvalidItem,
+                });
+            }
+            let mut staging = context.stage_expression(item, anchor)?;
+            staging.append_mapped_instruction(Instruction::Call(putdec), anchor);
+            context.commit_staging(&staging)?;
+        }
+        if !has_comma {
+            break;
+        }
+    }
+    Ok(())
+}
+
+fn print_reader_error(error: SourceStatementReaderError, peeked: Option<Token>) -> SourceWordError {
+    let span = peeked.map_or_else(
+        || match error {
+            SourceStatementReaderError::Missing { span, .. } => span,
+            SourceStatementReaderError::Unexpected { actual, .. }
+            | SourceStatementReaderError::TrailingToken { actual } => actual.span(),
+        },
+        Token::span,
+    );
+    SourceWordError::PrintSyntax {
+        span,
+        kind: match error {
+            SourceStatementReaderError::Missing { .. } => PrintSyntaxErrorKind::MissingItem,
+            SourceStatementReaderError::Unexpected { .. }
+            | SourceStatementReaderError::TrailingToken { .. } => PrintSyntaxErrorKind::InvalidItem,
+        },
+    }
 }
 
 pub(crate) fn def_source_word(
