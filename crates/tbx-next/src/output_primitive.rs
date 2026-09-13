@@ -371,4 +371,21 @@ mod tests {
         assert!(output.chunks().is_empty());
         assert_eq!(vm.instruction_pointer(), code.view().location(entry));
     }
+
+    #[test]
+    fn fixed_text_partial_output_is_not_rolled_back_and_does_not_advance() {
+        let (primitives, words, _, _) = bootstrapped_output_words();
+        let mut code = InstructionSequence::new();
+        let entry = code.append(Instruction::WriteFixedText(Rc::from("prefix")));
+        code.append(Instruction::WriteFixedText(Rc::from("after")));
+        code.append(Instruction::Halt);
+        let mut output = PartialFailOutput::default();
+        let mut vm = Vm::new(code.view(), entry).expect("test entry should be valid");
+
+        let result = vm.run(execution(&code, &words, &primitives).with_output(&mut output));
+
+        assert!(result.is_err());
+        assert_eq!(output.chunks, ["prefix"]);
+        assert_eq!(vm.instruction_pointer(), code.view().location(entry));
+    }
 }

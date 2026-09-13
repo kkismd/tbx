@@ -2849,6 +2849,7 @@ mod tests {
     };
     use crate::word::{CompletedWordDefinition, PrimitiveId, PublishedWords, WordId};
     use crate::word_lookup::PublishedWordLookup;
+    use std::rc::Rc;
 
     fn source(text: &str) -> (SourceTexts, SourceId) {
         let mut sources = SourceTexts::new();
@@ -2867,6 +2868,52 @@ mod tests {
         let unit = compile_source(sources.view(), id, SourceCompileContext::new(&bindings))
             .expect("source should compile");
         (sources, id, unit)
+    }
+
+    #[test]
+    fn fixed_text_output_failure_preserves_source_mapping_in_user_diagnostic() {
+        let (sources, source_id) = source("\"fixed\"");
+        let fixed_span = span(sources.view(), source_id, 0, 7);
+        let mut code = SourceMappedCode::new();
+        let entry = code
+            .append_mapped(Instruction::WriteFixedText(Rc::from("fixed")), fixed_span)
+            .expect("fixed text instruction should be mapped");
+        code.append_mapped(Instruction::Halt, fixed_span)
+            .expect("halt instruction should be mapped");
+        let unit = TemporaryExecutionUnit {
+            entry: code.instruction_view().location(entry),
+            code,
+        };
+        let bindings = Bindings::new();
+        let words = PublishedWords::new();
+        let primitives = PrimitiveRegistry::new();
+        let mut output = TestOutput::new();
+        output.fail_next_write(crate::runtime_output::RuntimeOutputError::Failed);
+
+        let result = run_unit(
+            &unit,
+            SourceExecutionContext::new(
+                &bindings,
+                PublishedWordLookup::new(&words),
+                primitives.lookup(),
+            )
+            .with_output(&mut output),
+        );
+        let failure =
+            crate::user_facing::UserFacingRunResult::from_source_result(sources.view(), result);
+        let crate::user_facing::UserFacingRunResult::Failure(failure) = failure else {
+            panic!("fixed text output should fail");
+        };
+
+        let rendered = crate::diagnostic::DiagnosticRenderer::new(sources.view())
+            .render(failure.diagnostic())
+            .expect("fixed text failure should render");
+        let primary = rendered
+            .primary()
+            .expect("fixed text should retain its span");
+        assert_eq!(primary.source_line(), "\"fixed\"");
+        assert_eq!(primary.column_number(), 1);
+        assert_eq!(primary.highlight_columns(), 7);
     }
 
     fn compile_with_bindings(
