@@ -32,7 +32,7 @@ struct UnresolvedLineNumberPatch {
     span: SourceSpan,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum LineNumberError {
     Duplicate {
         line_number: LocalLineNumber,
@@ -138,12 +138,12 @@ impl LocalLineNumberTable {
 }
 
 impl LineNumberError {
-    pub(crate) const fn primary_span(self) -> SourceSpan {
+    pub(crate) const fn primary_span(&self) -> SourceSpan {
         match self {
-            Self::Duplicate { duplicate_span, .. } => duplicate_span,
+            Self::Duplicate { duplicate_span, .. } => *duplicate_span,
             Self::Undefined { span, .. }
             | Self::InvalidDefinitionTarget { span, .. }
-            | Self::Patch { span, .. } => span,
+            | Self::Patch { span, .. } => *span,
         }
     }
 }

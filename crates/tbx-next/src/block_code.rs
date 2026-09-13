@@ -19,7 +19,7 @@ pub(crate) struct CompletedBlockCode {
     end: InstructionAddress,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum BlockCodeBuildError {
     SourceMappingAppend { source: SourceMappingAppendError },
     BranchTargetPatch { source: BranchTargetPatchError },
@@ -52,7 +52,7 @@ impl<'a> BlockCodeBuilder<'a> {
         instruction: Instruction,
         span: SourceSpan,
     ) -> Result<InstructionAddress, BlockCodeBuildError> {
-        reject_direct_branch_instruction(instruction)?;
+        reject_direct_branch_instruction(&instruction)?;
         self.code
             .append_mapped(instruction, span)
             .map_err(|source| BlockCodeBuildError::SourceMappingAppend { source })
@@ -62,7 +62,7 @@ impl<'a> BlockCodeBuilder<'a> {
         &mut self,
         instruction: Instruction,
     ) -> Result<InstructionAddress, BlockCodeBuildError> {
-        reject_direct_branch_instruction(instruction)?;
+        reject_direct_branch_instruction(&instruction)?;
         self.code
             .append_unmapped(instruction)
             .map_err(|source| BlockCodeBuildError::SourceMappingAppend { source })
@@ -225,12 +225,15 @@ impl CompletedBlockCode {
     }
 }
 
-fn reject_direct_branch_instruction(instruction: Instruction) -> Result<(), BlockCodeBuildError> {
+fn reject_direct_branch_instruction(instruction: &Instruction) -> Result<(), BlockCodeBuildError> {
     match instruction {
         Instruction::Jump(_) | Instruction::JumpIfZero(_) => {
-            Err(BlockCodeBuildError::BranchInstructionRequiresPatch { instruction })
+            Err(BlockCodeBuildError::BranchInstructionRequiresPatch {
+                instruction: instruction.clone(),
+            })
         }
         Instruction::Push(_)
+        | Instruction::WriteFixedText(_)
         | Instruction::LoadVar(_)
         | Instruction::StoreVar(_)
         | Instruction::Call(_)
@@ -340,7 +343,7 @@ mod tests {
         let branch = Instruction::Jump(address(0));
 
         assert_eq!(
-            builder.append_unmapped(branch),
+            builder.append_unmapped(branch.clone()),
             Err(BlockCodeBuildError::BranchInstructionRequiresPatch {
                 instruction: branch
             })

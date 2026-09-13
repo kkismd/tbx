@@ -307,13 +307,13 @@ mod tests {
         let mut sources = SourceTexts::new();
 
         let empty = sources.register("", "empty.tbx");
-        let ascii = sources.register("PRINT 10", "ascii.tbx");
-        let utf8 = sources.register("PRINT \"あ\"", "utf8.tbx");
+        let ascii = sources.register("PUTDEC 10", "ascii.tbx");
+        let utf8 = sources.register("PUTDEC \"あ\"", "utf8.tbx");
         let view = sources.view();
 
         assert_eq!(view.source(empty), Ok(""));
-        assert_eq!(view.source(ascii), Ok("PRINT 10"));
-        assert_eq!(view.source(utf8), Ok("PRINT \"あ\""));
+        assert_eq!(view.source(ascii), Ok("PUTDEC 10"));
+        assert_eq!(view.source(utf8), Ok("PUTDEC \"あ\""));
         assert_eq!(view.display_name(empty), Ok("empty.tbx"));
         assert_eq!(view.display_name(ascii), Ok("ascii.tbx"));
         assert_eq!(view.display_name(utf8), Ok("utf8.tbx"));
@@ -323,13 +323,13 @@ mod tests {
     fn keeps_acquisition_identity_separate_from_display_name() {
         let mut sources = SourceTexts::new();
         let file = sources.register_with_acquisition(
-            "PRINT 1",
+            "PUTDEC 1",
             "shown-name.tbx",
             SourceAcquisition::FileSystem {
                 canonical_path: "/real/path/program.tbx".into(),
             },
         );
-        let stdin = sources.register("PRINT 2", "<stdin>");
+        let stdin = sources.register("PUTDEC 2", "<stdin>");
         let view = sources.view();
 
         assert_eq!(view.display_name(file), Ok("shown-name.tbx"));
@@ -356,7 +356,7 @@ mod tests {
         ]));
         let mut sources = SourceTexts::new();
         let source_id = sources.register_with_acquisition(
-            "PRINT 1",
+            "PUTDEC 1",
             "requested.tbx",
             SourceAcquisition::FileSystem {
                 canonical_path: canonical_path.clone(),
@@ -393,21 +393,21 @@ mod tests {
         let mut sources = SourceTexts::new();
 
         let empty = sources.register("", "<stdin>");
-        let ascii = sources.register("PRINT 10", "program.tbx");
-        let utf8 = sources.register("PRINT \"あ\"", "unicode.tbx");
-        let same_display_name = sources.register("PRINT 20", "program.tbx");
-        let same_text = sources.register("PRINT 10", "copy.tbx");
+        let ascii = sources.register("PUTDEC 10", "program.tbx");
+        let utf8 = sources.register("PUTDEC \"あ\"", "unicode.tbx");
+        let same_display_name = sources.register("PUTDEC 20", "program.tbx");
+        let same_text = sources.register("PUTDEC 10", "copy.tbx");
         let view = sources.view();
 
         assert_eq!(view.source(empty), Ok(""));
         assert_eq!(view.display_name(empty), Ok("<stdin>"));
-        assert_eq!(view.source(ascii), Ok("PRINT 10"));
+        assert_eq!(view.source(ascii), Ok("PUTDEC 10"));
         assert_eq!(view.display_name(ascii), Ok("program.tbx"));
-        assert_eq!(view.source(utf8), Ok("PRINT \"あ\""));
+        assert_eq!(view.source(utf8), Ok("PUTDEC \"あ\""));
         assert_eq!(view.display_name(utf8), Ok("unicode.tbx"));
-        assert_eq!(view.source(same_display_name), Ok("PRINT 20"));
+        assert_eq!(view.source(same_display_name), Ok("PUTDEC 20"));
         assert_eq!(view.display_name(same_display_name), Ok("program.tbx"));
-        assert_eq!(view.source(same_text), Ok("PRINT 10"));
+        assert_eq!(view.source(same_text), Ok("PUTDEC 10"));
         assert_eq!(view.display_name(same_text), Ok("copy.tbx"));
 
         assert_ne!(ascii, same_display_name);

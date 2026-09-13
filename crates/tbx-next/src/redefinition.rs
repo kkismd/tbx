@@ -167,16 +167,16 @@ mod tests {
         let mut bindings = Bindings::new();
         let old_definition = primitive(1);
         let new_definition = primitive(2);
-        let old = publish_initial(&mut words, &mut bindings, "PRINT", old_definition);
+        let old = publish_initial(&mut words, &mut bindings, "PUTDEC", old_definition);
 
-        let result = redefine_word(&mut words, &mut bindings, &name("PRINT"), new_definition)
+        let result = redefine_word(&mut words, &mut bindings, &name("PUTDEC"), new_definition)
             .expect("existing word should redefine");
 
         assert_eq!(result.previous(), old);
         assert_redefinition(
             &words,
             &bindings,
-            "PRINT",
+            "PUTDEC",
             result,
             old_definition,
             new_definition,

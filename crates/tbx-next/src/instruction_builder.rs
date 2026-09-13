@@ -2,8 +2,9 @@ use crate::block_code::{BlockCodeBuildError, BlockCodeBuilder};
 use crate::instruction::{Instruction, InstructionAddress};
 use crate::published_code::{PublishedWordBuilder, WordBodyBuildError};
 use crate::source::SourceSpan;
+use std::rc::Rc;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum InstructionBuildError {
     BlockCodeBuild { source: BlockCodeBuildError },
     WordBodyBuild { source: WordBodyBuildError },
@@ -43,6 +44,15 @@ pub(crate) trait InstructionBuildTarget {
         &mut self,
         instruction: Instruction,
     ) -> Result<InstructionAddress, InstructionBuildError>;
+
+    /// Adds compile-time-owned output text without introducing a runtime value.
+    fn append_fixed_text(
+        &mut self,
+        text: &str,
+        span: SourceSpan,
+    ) -> Result<InstructionAddress, InstructionBuildError> {
+        self.append_mapped(Instruction::WriteFixedText(Rc::from(text)), span)
+    }
 
     fn append_mapped_jump_placeholder(
         &mut self,
@@ -334,7 +344,7 @@ mod tests {
         let result = code.publish_new_word(&mut words, &mut bindings, name("BAD"), |_, builder| {
             let target: &mut dyn InstructionBuildTarget = builder;
             target
-                .append_mapped(branch, branch_span)
+                .append_mapped(branch.clone(), branch_span)
                 .map(|_| ())
                 .map_err(unwrap_published_build_error)
         });
@@ -392,7 +402,7 @@ mod tests {
         let target: &mut dyn InstructionBuildTarget = &mut builder;
 
         let result = target
-            .append_unmapped(branch)
+            .append_unmapped(branch.clone())
             .map(|_| ())
             .map_err(unwrap_block_build_error);
 

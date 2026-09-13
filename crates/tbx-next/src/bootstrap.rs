@@ -496,12 +496,12 @@ mod tests {
         let mut bindings = Bindings::new();
         let primitive = primitive(0);
 
-        let id = register_primitive(&mut words, &mut bindings, name("PRINT"), primitive)
+        let id = register_primitive(&mut words, &mut bindings, name("PUTDEC"), primitive)
             .expect("new primitive name should register");
 
         assert_eq!(words.len(), 1);
         assert_eq!(bindings.len(), 1);
-        assert_word_binding(&bindings, "PRINT", id);
+        assert_word_binding(&bindings, "PUTDEC", id);
         assert_primitive(&words, id, primitive);
     }
 

@@ -89,7 +89,7 @@ fn file_success_runs_m20_paths_through_real_binary() {
 
 #[test]
 fn stdin_success_uses_top_level_eval_through_real_binary() {
-    let output = run_with_stdin("EVAL 6\nEVAL 7\nADD\nPRINT\nCR\n");
+    let output = run_with_stdin("EVAL 6\nEVAL 7\nADD\nPUTDEC\nCR\n");
 
     assert!(
         output.status.success(),
@@ -102,7 +102,7 @@ fn stdin_success_uses_top_level_eval_through_real_binary() {
 
 #[test]
 fn stdin_success_evaluates_expression_before_runtime_print_word() {
-    let output = run_with_stdin("PRINT 2 + 3 * 4\nCR\n");
+    let output = run_with_stdin("PUTDEC 2 + 3 * 4\nCR\n");
 
     assert!(
         output.status.success(),

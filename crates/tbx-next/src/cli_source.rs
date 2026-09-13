@@ -173,7 +173,7 @@ mod tests {
 
     #[test]
     fn zero_args_reads_stdin_to_eof_and_registers_stdin_display_name() {
-        let mut stdin = "PRINT 1\nPRINT 2".as_bytes();
+        let mut stdin = "PUTDEC 1\nPUTDEC 2".as_bytes();
 
         let acquired = acquire_initial_source(Vec::<OsString>::new(), &mut stdin, |_| {
             panic!("file reader must not be used for stdin")
@@ -185,7 +185,7 @@ mod tests {
         let stdlib_source_id = acquired.stdlib_source_id();
         assert_eq!(view.source(stdlib_source_id), Ok(STDLIB_SOURCE));
         assert_eq!(view.display_name(stdlib_source_id), Ok(STDLIB_DISPLAY_NAME));
-        assert_eq!(view.source(source_id), Ok("PRINT 1\nPRINT 2"));
+        assert_eq!(view.source(source_id), Ok("PUTDEC 1\nPUTDEC 2"));
         assert_eq!(view.display_name(source_id), Ok(STDIN_DISPLAY_NAME));
     }
 
@@ -197,7 +197,7 @@ mod tests {
         let acquired = acquire_initial_source(["relative/program.tbx"], &mut stdin, |path| {
             path_seen.set(true);
             assert_eq!(path, Path::new("relative/program.tbx"));
-            Ok("PRINT 7".to_owned())
+            Ok("PUTDEC 7".to_owned())
         })
         .expect("file source acquisition should succeed");
 
@@ -205,7 +205,7 @@ mod tests {
         let source_id = acquired.source_id();
         assert!(path_seen.get());
         assert_eq!(acquired.sources().len(), 2);
-        assert_eq!(view.source(source_id), Ok("PRINT 7"));
+        assert_eq!(view.source(source_id), Ok("PUTDEC 7"));
         assert_eq!(view.display_name(source_id), Ok("relative/program.tbx"));
     }
 
@@ -265,13 +265,13 @@ mod tests {
 
         let acquired = acquire_initial_source(["-"], &mut stdin, |path| {
             assert_eq!(path, Path::new("-"));
-            Ok("PRINT 9".to_owned())
+            Ok("PUTDEC 9".to_owned())
         })
         .expect("dash should be treated as a file path");
 
         let view = acquired.sources().view();
         let source_id = acquired.source_id();
-        assert_eq!(view.source(source_id), Ok("PRINT 9"));
+        assert_eq!(view.source(source_id), Ok("PUTDEC 9"));
         assert_eq!(view.display_name(source_id), Ok("-"));
     }
 }

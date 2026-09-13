@@ -127,7 +127,7 @@ fn is_runtime_external_output_failure(error: RuntimeError) -> bool {
         crate::vm::VmErrorKind::PrimitiveFailed {
             source: PrimitiveError::OutputFailed { .. },
             ..
-        }
+        } | crate::vm::VmErrorKind::FixedTextOutputFailed { .. }
     )
 }
 
@@ -478,7 +478,7 @@ mod tests {
             &mut bindings,
         )
         .expect("output primitives should register");
-        let (sources, source_id) = source("EVAL 7\nPRINT");
+        let (sources, source_id) = source("EVAL 7\nPUTDEC");
         let mut output = TestOutput::new();
         output.fail_next_write(RuntimeOutputError::Failed);
 

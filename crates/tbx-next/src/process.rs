@@ -199,7 +199,7 @@ mod tests {
 
     #[test]
     fn zero_args_reads_stdin_and_routes_runtime_output_to_stdout() {
-        let mut stdin = "EVAL 7\nPRINT\nCR".as_bytes();
+        let mut stdin = "EVAL 7\nPUTDEC\nCR".as_bytes();
         let mut stdout = RecordingWriter::default();
         let mut stderr = RecordingWriter::default();
 
@@ -231,7 +231,7 @@ mod tests {
             |path| {
                 file_reader_called.set(true);
                 assert_eq!(path, Path::new("relative/program.tbx"));
-                Ok("EVAL 5\nPRINT".to_owned())
+                Ok("EVAL 5\nPUTDEC".to_owned())
             },
         );
 
@@ -331,7 +331,7 @@ mod tests {
 
     #[test]
     fn runtime_output_failure_is_nonzero_and_diagnostic_stays_on_stderr() {
-        let mut stdin = "EVAL 1\nPRINT".as_bytes();
+        let mut stdin = "EVAL 1\nPUTDEC".as_bytes();
         let mut stdout = RecordingWriter::failing();
         let mut stderr = RecordingWriter::default();
 

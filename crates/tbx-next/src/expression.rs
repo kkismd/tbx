@@ -15,13 +15,13 @@ pub(crate) struct ExpressionStaging {
     entries: Vec<StagedInstruction>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct StagedInstruction {
     instruction: Instruction,
     span: SourceSpan,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum ExpressionError {
     Source(SourceError),
     Syntax(ExpressionSyntaxError),
@@ -207,7 +207,7 @@ impl ExpressionStaging {
     ) -> Result<(), ExpressionError> {
         for entry in &self.entries {
             target
-                .append_mapped(entry.instruction, entry.span)
+                .append_mapped(entry.instruction.clone(), entry.span)
                 .map_err(ExpressionError::InstructionBuild)?;
         }
 
@@ -224,11 +224,11 @@ impl ExpressionStaging {
 }
 
 impl StagedInstruction {
-    pub(crate) const fn instruction(self) -> Instruction {
-        self.instruction
+    pub(crate) fn instruction(&self) -> Instruction {
+        self.instruction.clone()
     }
 
-    pub(crate) const fn span(self) -> SourceSpan {
+    pub(crate) const fn span(&self) -> SourceSpan {
         self.span
     }
 }
