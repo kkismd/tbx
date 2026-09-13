@@ -114,6 +114,19 @@ fn stdin_success_evaluates_expression_before_runtime_print_word() {
 }
 
 #[test]
+fn stdin_success_runs_multi_item_print_through_real_binary() {
+    let output = run_with_stdin("LET A = 4\nLET B = 5\nPRINT \"TOTAL = \", A + B, \"!\"\n");
+
+    assert!(
+        output.status.success(),
+        "expected success, stderr:\n{}",
+        stderr_text(&output)
+    );
+    assert_eq!(stdout_text(&output), "TOTAL = 9!");
+    assert_eq!(stderr_text(&output), "");
+}
+
+#[test]
 fn file_success_runs_stdlib_control_structures_and_user_syntax_through_real_binary() {
     let path = fixture_path("m21_stdlib_control_e2e.tbx");
 
