@@ -1,14 +1,15 @@
 use std::env;
 use std::ffi::OsString;
 use std::fs;
-use std::io::{self, Read, Write};
+use std::io::{self, BufReader, Read, Write};
 use std::path::Path;
 use std::process::ExitCode;
 
 use crate::batch_execution::{execute_registered_sources_with_filesystem, BatchExecutionResult};
 use crate::cli_source::{acquire_initial_source_with_canonicalizer, CliSourceError};
 use crate::diagnostic::{DiagnosticRenderer, RenderedDiagnostic, UserDiagnostic};
-use crate::source::SourceTexts;
+use crate::runtime_input::{BufReadRuntimeInput, RuntimeInput};
+use crate::source::{SourceAcquisition, SourceTexts};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ProcessStatus {
@@ -81,9 +82,10 @@ where
     F: FnOnce(&Path) -> io::Result<String>,
     C: FnOnce(&Path) -> io::Result<std::path::PathBuf>,
 {
+    let mut buffered_stdin = BufReader::new(stdin);
     let source = match acquire_initial_source_with_canonicalizer(
         args,
-        stdin,
+        &mut buffered_stdin,
         read_file,
         canonicalize_file,
     ) {
@@ -95,7 +97,19 @@ where
     };
 
     let (sources, stdlib_source_id, source_id) = source.into_parts();
-    match execute_registered_sources_with_filesystem(sources, stdlib_source_id, source_id, stdout) {
+    let file_source = matches!(
+        sources.view().acquisition(source_id),
+        Ok(SourceAcquisition::FileSystem { .. })
+    );
+    let mut runtime_input = BufReadRuntimeInput::new(buffered_stdin);
+    let input = file_source.then_some(&mut runtime_input as &mut dyn RuntimeInput);
+    match execute_registered_sources_with_filesystem(
+        sources,
+        stdlib_source_id,
+        source_id,
+        stdout,
+        input,
+    ) {
         BatchExecutionResult::Success(_) => ProcessStatus::Success,
         BatchExecutionResult::Failure(failure) => write_diagnostic(stderr, failure.diagnostic()),
     }
@@ -239,6 +253,25 @@ mod tests {
         assert!(file_reader_called.get());
         assert_eq!(stdout.text(), "5");
         assert_eq!(stderr.text(), "");
+    }
+
+    #[test]
+    fn file_runtime_input_failure_is_reported_as_a_runtime_failure() {
+        let mut stdin = FailingReader;
+        let mut stdout = RecordingWriter::default();
+        let mut stderr = RecordingWriter::default();
+
+        let status = run_with_io(
+            ["relative/program.tbx"],
+            &mut stdin,
+            &mut stdout,
+            &mut stderr,
+            |_| Ok("INPUT?".to_owned()),
+        );
+
+        assert_eq!(status, ProcessStatus::Failure);
+        assert_eq!(stdout.text(), "");
+        assert!(stderr.text().contains("runtime error"), "{}", stderr.text());
     }
 
     #[test]
