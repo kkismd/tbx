@@ -4,7 +4,8 @@ use crate::stack::{DataStack, StackError};
 use crate::value::Value;
 use crate::word::PrimitiveId;
 
-pub(crate) type PrimitiveHandler = fn(&mut PrimitiveContext<'_>) -> Result<(), PrimitiveError>;
+pub(crate) type PrimitiveHandler =
+    for<'stack, 'cap> fn(&mut PrimitiveContext<'stack, 'cap>) -> Result<(), PrimitiveError>;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum PrimitiveError {
@@ -26,18 +27,18 @@ pub(crate) enum PrimitiveLookupError {
 /// capability. They cannot observe or mutate the instruction pointer, return
 /// stack, halted flag, word tables, bindings, instruction sequence, primitive
 /// registry, compiler, or source-processing state.
-pub(crate) struct PrimitiveContext<'a> {
-    data_stack: &'a mut DataStack,
-    capabilities: PrimitiveCapabilities<'a>,
+pub(crate) struct PrimitiveContext<'stack, 'cap> {
+    data_stack: &'stack mut DataStack,
+    capabilities: PrimitiveCapabilities<'cap>,
 }
 
-struct PrimitiveCapabilities<'a> {
-    output: Option<&'a mut dyn RuntimeOutput>,
-    input: Option<&'a mut dyn RuntimeInput>,
+pub(crate) struct PrimitiveCapabilities<'cap> {
+    pub(crate) output: Option<&'cap mut (dyn RuntimeOutput + 'cap)>,
+    pub(crate) input: Option<&'cap mut (dyn RuntimeInput + 'cap)>,
 }
 
-impl<'a> PrimitiveContext<'a> {
-    pub(crate) fn new(data_stack: &'a mut DataStack) -> Self {
+impl<'stack, 'cap> PrimitiveContext<'stack, 'cap> {
+    pub(crate) fn new(data_stack: &'stack mut DataStack) -> Self {
         Self {
             data_stack,
             capabilities: PrimitiveCapabilities {
@@ -48,8 +49,8 @@ impl<'a> PrimitiveContext<'a> {
     }
 
     pub(crate) fn with_output(
-        data_stack: &'a mut DataStack,
-        output: Option<&'a mut dyn RuntimeOutput>,
+        data_stack: &'stack mut DataStack,
+        output: Option<&'cap mut dyn RuntimeOutput>,
     ) -> Self {
         Self {
             data_stack,
@@ -108,9 +109,24 @@ impl<'a> PrimitiveContext<'a> {
             .map_err(|source| PrimitiveError::InputFailed { source })
     }
 
-    pub(crate) fn with_input(mut self, input: Option<&'a mut dyn RuntimeInput>) -> Self {
+    pub(crate) fn with_input(mut self, input: Option<&'cap mut dyn RuntimeInput>) -> Self {
         self.capabilities.input = input;
         self
+    }
+
+    pub(crate) fn with_capabilities(
+        data_stack: &'stack mut DataStack,
+        output: Option<&'cap mut dyn RuntimeOutput>,
+        input: Option<&'cap mut dyn RuntimeInput>,
+    ) -> Self {
+        Self {
+            data_stack,
+            capabilities: PrimitiveCapabilities { output, input },
+        }
+    }
+
+    pub(crate) fn into_capabilities(self) -> PrimitiveCapabilities<'cap> {
+        self.capabilities
     }
 }
 
@@ -165,7 +181,7 @@ impl<'a> PrimitiveLookup<'a> {
 mod tests {
     use super::*;
 
-    fn push_one(context: &mut PrimitiveContext<'_>) -> Result<(), PrimitiveError> {
+    fn push_one(context: &mut PrimitiveContext<'_, '_>) -> Result<(), PrimitiveError> {
         context.push(Value::integer(1));
         Ok(())
     }

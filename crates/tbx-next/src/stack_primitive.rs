@@ -53,13 +53,13 @@ fn primitive_bootstrap_precheck_error(error: BindingInsertError) -> PrimitiveBoo
     }
 }
 
-fn dup(context: &mut PrimitiveContext<'_>) -> Result<(), PrimitiveError> {
+fn dup(context: &mut PrimitiveContext<'_, '_>) -> Result<(), PrimitiveError> {
     let value = context.peek()?;
     context.push(value);
     Ok(())
 }
 
-fn drop(context: &mut PrimitiveContext<'_>) -> Result<(), PrimitiveError> {
+fn drop(context: &mut PrimitiveContext<'_, '_>) -> Result<(), PrimitiveError> {
     context.pop()?;
     Ok(())
 }

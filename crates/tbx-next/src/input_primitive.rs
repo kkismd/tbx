@@ -33,7 +33,7 @@ impl InputPrimitiveWords {
     }
 }
 
-fn input_question(context: &mut PrimitiveContext<'_>) -> Result<(), PrimitiveError> {
+fn input_question(context: &mut PrimitiveContext<'_, '_>) -> Result<(), PrimitiveError> {
     let Some(line) = context.read_input()? else {
         context.push(Value::integer(0));
         context.push(Value::integer(0));
@@ -73,6 +73,7 @@ mod tests {
     use crate::instruction::{Instruction, InstructionSequence};
     use crate::primitive::PrimitiveRegistry;
     use crate::runtime_input::{RuntimeInput, RuntimeInputError, TestInput};
+    use crate::runtime_output::TestOutput;
     use crate::value::Value;
     use crate::vm::{ExecutionView, RunOutcome, Vm, VmErrorKind};
     use crate::word::PublishedWords;
@@ -237,5 +238,43 @@ mod tests {
             resolve_word_name(&bindings, "input?"),
             Ok(input_words.input_question())
         );
+    }
+
+    #[test]
+    fn input_and_output_capabilities_are_available_to_the_same_execution() {
+        let mut primitives = PrimitiveRegistry::new();
+        let mut words = PublishedWords::new();
+        let mut bindings = Bindings::new();
+        let output_words = crate::output_primitive::register_output_primitives(
+            &mut primitives,
+            &mut words,
+            &mut bindings,
+        )
+        .expect("output primitives should bootstrap");
+        let input_words = register_input_primitives(&mut primitives, &mut words, &mut bindings)
+            .expect("INPUT? should bootstrap");
+
+        let mut code = InstructionSequence::new();
+        let entry = code.append(Instruction::Push(Value::integer(7)));
+        code.append(Instruction::Call(output_words.putdec()));
+        code.append(Instruction::Call(input_words.input_question()));
+        code.append(Instruction::Call(output_words.putdec()));
+        code.append(Instruction::Call(output_words.putdec()));
+        code.append(Instruction::Halt);
+
+        let mut vm = Vm::new(code.view(), entry).expect("entry should be valid");
+        let mut input = TestInput::new([Ok(Some("42".into()))]);
+        let mut output = TestOutput::new();
+        let execution = ExecutionView::new(
+            code.view(),
+            PublishedWordLookup::new(&words),
+            primitives.lookup(),
+        )
+        .with_input(&mut input)
+        .with_output(&mut output);
+
+        assert_eq!(vm.run(execution), Ok(RunOutcome::Halted));
+        assert_eq!(output.chunks(), ["7", "1", "42"]);
+        assert_eq!(vm.data_stack_depth(), 0);
     }
 }

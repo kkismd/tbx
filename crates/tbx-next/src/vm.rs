@@ -229,6 +229,19 @@ pub(crate) trait VmExecutionView<'a> {
     fn runtime_input(&mut self) -> Option<&mut (dyn RuntimeInput + '_)> {
         None
     }
+
+    fn take_runtime_capabilities(&mut self) -> crate::primitive::PrimitiveCapabilities<'a> {
+        crate::primitive::PrimitiveCapabilities {
+            output: None,
+            input: None,
+        }
+    }
+
+    fn restore_runtime_capabilities(
+        &mut self,
+        _capabilities: crate::primitive::PrimitiveCapabilities<'a>,
+    ) {
+    }
 }
 
 impl<'a> VmExecutionView<'a> for ExecutionView<'a> {
@@ -276,6 +289,21 @@ impl<'a> VmExecutionView<'a> for ExecutionView<'a> {
             Some(input) => Some(&mut **input),
             None => None,
         }
+    }
+
+    fn take_runtime_capabilities(&mut self) -> crate::primitive::PrimitiveCapabilities<'a> {
+        crate::primitive::PrimitiveCapabilities {
+            output: self.output.take(),
+            input: self.input.take(),
+        }
+    }
+
+    fn restore_runtime_capabilities(
+        &mut self,
+        capabilities: crate::primitive::PrimitiveCapabilities<'a>,
+    ) {
+        self.output = capabilities.output;
+        self.input = capabilities.input;
     }
 }
 
@@ -334,6 +362,17 @@ impl<'a, T: VmExecutionView<'a> + ?Sized> VmExecutionView<'a> for &mut T {
 
     fn runtime_input(&mut self) -> Option<&mut (dyn RuntimeInput + '_)> {
         (**self).runtime_input()
+    }
+
+    fn take_runtime_capabilities(&mut self) -> crate::primitive::PrimitiveCapabilities<'a> {
+        (**self).take_runtime_capabilities()
+    }
+
+    fn restore_runtime_capabilities(
+        &mut self,
+        capabilities: crate::primitive::PrimitiveCapabilities<'a>,
+    ) {
+        (**self).restore_runtime_capabilities(capabilities)
     }
 }
 
@@ -688,13 +727,16 @@ impl Vm {
                     })?;
 
                 let checkpoint = self.data_stack.clone();
-                let mut context = if execution.runtime_input().is_some() {
-                    PrimitiveContext::with_output(&mut self.data_stack, None)
-                        .with_input(execution.runtime_input())
-                } else {
-                    PrimitiveContext::with_output(&mut self.data_stack, execution.runtime_output())
-                };
-                match handler(&mut context) {
+                let capabilities = execution.take_runtime_capabilities();
+                let mut context = PrimitiveContext::with_capabilities(
+                    &mut self.data_stack,
+                    capabilities.output,
+                    capabilities.input,
+                );
+                let result = handler(&mut context);
+                let capabilities = context.into_capabilities();
+                execution.restore_runtime_capabilities(capabilities);
+                match result {
                     Ok(()) => {
                         self.instruction_pointer = next;
                         Ok(StepOutcome::Continued)
@@ -955,38 +997,38 @@ mod tests {
         ReturnFrame::new(location(code, return_address), 0)
     }
 
-    fn push_42(context: &mut PrimitiveContext<'_>) -> Result<(), PrimitiveError> {
+    fn push_42(context: &mut PrimitiveContext<'_, '_>) -> Result<(), PrimitiveError> {
         context.push(value(42));
         Ok(())
     }
 
-    fn add_top_two(context: &mut PrimitiveContext<'_>) -> Result<(), PrimitiveError> {
+    fn add_top_two(context: &mut PrimitiveContext<'_, '_>) -> Result<(), PrimitiveError> {
         let (lhs, rhs) = context.pop2()?;
         context.push(value(lhs.as_integer() + rhs.as_integer()));
         Ok(())
     }
 
     fn fail_after_partial_stack_update(
-        context: &mut PrimitiveContext<'_>,
+        context: &mut PrimitiveContext<'_, '_>,
     ) -> Result<(), PrimitiveError> {
         context.pop()?;
         context.push(value(99));
         Err(PrimitiveError::Failed)
     }
 
-    fn write_alpha(context: &mut PrimitiveContext<'_>) -> Result<(), PrimitiveError> {
+    fn write_alpha(context: &mut PrimitiveContext<'_, '_>) -> Result<(), PrimitiveError> {
         context.write_output("alpha")
     }
 
-    fn write_beta(context: &mut PrimitiveContext<'_>) -> Result<(), PrimitiveError> {
+    fn write_beta(context: &mut PrimitiveContext<'_, '_>) -> Result<(), PrimitiveError> {
         context.write_output("beta")
     }
 
-    fn write_empty(context: &mut PrimitiveContext<'_>) -> Result<(), PrimitiveError> {
+    fn write_empty(context: &mut PrimitiveContext<'_, '_>) -> Result<(), PrimitiveError> {
         context.write_output("")
     }
 
-    fn pop_then_write_output(context: &mut PrimitiveContext<'_>) -> Result<(), PrimitiveError> {
+    fn pop_then_write_output(context: &mut PrimitiveContext<'_, '_>) -> Result<(), PrimitiveError> {
         context.pop()?;
         context.write_output("after-pop")
     }

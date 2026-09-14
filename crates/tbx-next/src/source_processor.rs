@@ -4014,7 +4014,7 @@ mod tests {
         fn register_primitive(
             &mut self,
             source_name: &str,
-            primitive: fn(&mut PrimitiveContext<'_>) -> Result<(), PrimitiveError>,
+            primitive: fn(&mut PrimitiveContext<'_, '_>) -> Result<(), PrimitiveError>,
         ) -> WordId {
             let primitive = self.primitives.register(primitive);
             register_primitive(
@@ -4086,49 +4086,49 @@ mod tests {
         id
     }
 
-    fn push_7(context: &mut PrimitiveContext<'_>) -> Result<(), PrimitiveError> {
+    fn push_7(context: &mut PrimitiveContext<'_, '_>) -> Result<(), PrimitiveError> {
         context.push(value(7));
         Ok(())
     }
 
-    fn push_1(context: &mut PrimitiveContext<'_>) -> Result<(), PrimitiveError> {
+    fn push_1(context: &mut PrimitiveContext<'_, '_>) -> Result<(), PrimitiveError> {
         context.push(value(1));
         Ok(())
     }
 
-    fn push_2(context: &mut PrimitiveContext<'_>) -> Result<(), PrimitiveError> {
+    fn push_2(context: &mut PrimitiveContext<'_, '_>) -> Result<(), PrimitiveError> {
         context.push(value(2));
         Ok(())
     }
 
-    fn push_3(context: &mut PrimitiveContext<'_>) -> Result<(), PrimitiveError> {
+    fn push_3(context: &mut PrimitiveContext<'_, '_>) -> Result<(), PrimitiveError> {
         context.push(value(3));
         Ok(())
     }
 
-    fn push_4(context: &mut PrimitiveContext<'_>) -> Result<(), PrimitiveError> {
+    fn push_4(context: &mut PrimitiveContext<'_, '_>) -> Result<(), PrimitiveError> {
         context.push(value(4));
         Ok(())
     }
 
-    fn push_5(context: &mut PrimitiveContext<'_>) -> Result<(), PrimitiveError> {
+    fn push_5(context: &mut PrimitiveContext<'_, '_>) -> Result<(), PrimitiveError> {
         context.push(value(5));
         Ok(())
     }
 
-    fn push_41(context: &mut PrimitiveContext<'_>) -> Result<(), PrimitiveError> {
+    fn push_41(context: &mut PrimitiveContext<'_, '_>) -> Result<(), PrimitiveError> {
         context.push(value(41));
         Ok(())
     }
 
-    fn add_top_two(context: &mut PrimitiveContext<'_>) -> Result<(), PrimitiveError> {
+    fn add_top_two(context: &mut PrimitiveContext<'_, '_>) -> Result<(), PrimitiveError> {
         let (lhs, rhs) = context.pop2()?;
         context.push(value(lhs.as_integer() + rhs.as_integer()));
         Ok(())
     }
 
     fn fail_after_partial_stack_update(
-        context: &mut PrimitiveContext<'_>,
+        context: &mut PrimitiveContext<'_, '_>,
     ) -> Result<(), PrimitiveError> {
         context.pop()?;
         context.push(value(99));
