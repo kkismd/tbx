@@ -1,0 +1,385 @@
+REM Render the 80 by 25 Mandelbrot grid from examples/asciiart2.tbx.
+REM Values use a scale of 14629. The X and Y steps, 670 and 1219,
+REM approximate 0.0458 and 0.08333 closely enough to preserve every cell.
+REM 7315 is the nearest-rounding threshold because the scale is odd.
+REM 2*scale is 29258, and 4*scale is 3*16384+9364.
+REM Continued operands reach at most 28957 for this grid. MULRAW uses
+REM base-16384 binary long division; its doubled low cells reach at most
+REM 32766, so every individual operation remains inside i16.
+
+VAR CA
+VAR CB
+VAR OLD_A
+VAR OLD_B
+VAR NEXT_VALUE
+VAR OUTSIDE
+VAR ITERATION
+VAR ESCAPED
+VAR CODE
+
+REM MULRAW requires 0 <= MX,MY <= 29258. It returns the exact product
+REM divided by 14629 as base-16384 quotient MQH:MQL and remainder MR.
+VAR MX
+VAR MY
+VAR MQH
+VAR MQL
+VAR MR
+VAR BIT
+VAR CARRY
+VAR Y_REMAINDER
+
+REM Saved multi-cell products and a signed magnitude used by the recurrence.
+VAR PAH
+VAR PAL
+VAR PAR
+VAR PBH
+VAR PBL
+VAR PBR
+VAR SIGN
+VAR COORDINATE
+VAR CH
+VAR CL
+
+DEF MULRAW
+  LET MQH = 0
+  LET MQL = 0
+  LET MR = 0
+  LET BIT = 16384
+  WHILE BIT > 0
+    IF MQL >= 8192
+      LET MQL = (MQL - 8192) * 2
+      LET MQH = MQH * 2 + 1
+    ELSE
+      LET MQL = MQL * 2
+      LET MQH = MQH * 2
+    ENDIF
+
+    LET CARRY = 0
+    IF MR >= 14629 - MR
+      LET MR = MR - (14629 - MR)
+      LET CARRY = CARRY + 1
+    ELSE
+      LET MR = MR + MR
+    ENDIF
+
+    IF (MX / BIT) % 2
+      IF MY >= 14629
+        LET Y_REMAINDER = MY - 14629
+        LET CARRY = CARRY + 1
+      ELSE
+        LET Y_REMAINDER = MY
+      ENDIF
+      IF MR >= 14629 - Y_REMAINDER
+        LET MR = MR - (14629 - Y_REMAINDER)
+        LET CARRY = CARRY + 1
+      ELSE
+        LET MR = MR + Y_REMAINDER
+      ENDIF
+    ENDIF
+
+    LET MQL = MQL + CARRY
+    IF MQL >= 16384
+      LET MQL = MQL - 16384
+      LET MQH = MQH + 1
+    ENDIF
+    LET BIT = BIT / 2
+  WEND
+END
+
+REM Apply signed MQH:MQL plus COORDINATE. The low-cell bound for 2*scale
+REM is 12874. Values outside +/-2 are flagged before scalar conversion.
+DEF APPLY_COORDINATE
+  LET OUTSIDE = 0
+  IF COORDINATE < 0
+    LET CH = (-COORDINATE) / 16384
+    LET CL = (-COORDINATE) % 16384
+    IF SIGN < 0
+      LET MQL = MQL + CL
+      LET MQH = MQH + CH
+      IF MQL >= 16384
+        LET MQL = MQL - 16384
+        LET MQH = MQH + 1
+      ENDIF
+    ELSE
+      IF MQH > CH
+        IF MQL < CL
+          LET MQL = MQL + (16384 - CL)
+          LET MQH = MQH - CH - 1
+        ELSE
+          LET MQL = MQL - CL
+          LET MQH = MQH - CH
+        ENDIF
+      ELSE
+        IF MQH = CH
+          IF MQL >= CL
+            LET MQL = MQL - CL
+            LET MQH = 0
+          ELSE
+            LET MQL = CL - MQL
+            LET MQH = 0
+            LET SIGN = -1
+          ENDIF
+      ELSE
+        IF CL < MQL
+          LET MQL = CL + (16384 - MQL)
+          LET MQH = CH - MQH - 1
+        ELSE
+          LET MQL = CL - MQL
+          LET MQH = CH - MQH
+        ENDIF
+        LET SIGN = -1
+      ENDIF
+      ENDIF
+    ENDIF
+  ELSE
+    LET CH = COORDINATE / 16384
+    LET CL = COORDINATE % 16384
+    IF SIGN > 0
+      LET MQL = MQL + CL
+      LET MQH = MQH + CH
+      IF MQL >= 16384
+        LET MQL = MQL - 16384
+        LET MQH = MQH + 1
+      ENDIF
+    ELSE
+      IF MQH > CH
+        IF MQL < CL
+          LET MQL = MQL + (16384 - CL)
+          LET MQH = MQH - CH - 1
+        ELSE
+          LET MQL = MQL - CL
+          LET MQH = MQH - CH
+        ENDIF
+      ELSE
+        IF MQH = CH
+          IF MQL >= CL
+            LET MQL = MQL - CL
+            LET MQH = 0
+          ELSE
+            LET MQL = CL - MQL
+            LET MQH = 0
+            LET SIGN = 1
+          ENDIF
+      ELSE
+        IF CL < MQL
+          LET MQL = CL + (16384 - MQL)
+          LET MQH = CH - MQH - 1
+        ELSE
+          LET MQL = CL - MQL
+          LET MQH = CH - MQH
+        ENDIF
+        LET SIGN = 1
+      ENDIF
+      ENDIF
+    ENDIF
+  ENDIF
+
+  IF MQH > 1
+    LET OUTSIDE = 1
+  ELSE
+    IF MQH = 1
+      IF MQL > 12874
+        LET OUTSIDE = 1
+      ENDIF
+    ENDIF
+  ENDIF
+  IF OUTSIDE = 0
+    LET NEXT_VALUE = MQH * 16384 + MQL
+    IF SIGN < 0
+      LET NEXT_VALUE = -NEXT_VALUE
+    ENDIF
+  ENDIF
+END
+
+DEF DRAW_POINT
+  LET A = CA
+  LET B = CB
+  LET ITERATION = 0
+  LET ESCAPED = 0
+  WHILE (ITERATION < 16) * (ESCAPED = 0)
+    LET ITERATION = ITERATION + 1
+    LET OLD_A = A
+    LET OLD_B = B
+
+    LET MX = OLD_A
+    IF MX < 0
+      LET MX = -MX
+    ENDIF
+    LET MY = MX
+    MULRAW
+    LET PAH = MQH
+    LET PAL = MQL
+    LET PAR = MR
+    LET MX = OLD_B
+    IF MX < 0
+      LET MX = -MX
+    ENDIF
+    LET MY = MX
+    MULRAW
+    LET PBH = MQH
+    LET PBL = MQL
+    LET PBR = MR
+
+    LET SIGN = 1
+    IF (PAH < PBH) + ((PAH = PBH) * (PAL < PBL)) + ((PAH = PBH) * (PAL = PBL) * (PAR < PBR))
+      LET SIGN = -1
+      LET MQH = PAH
+      LET PAH = PBH
+      LET PBH = MQH
+      LET MQL = PAL
+      LET PAL = PBL
+      LET PBL = MQL
+      LET MR = PAR
+      LET PAR = PBR
+      LET PBR = MR
+    ENDIF
+    LET MQH = PAH - PBH
+    IF PAL < PBL
+      LET MQL = PAL + (16384 - PBL)
+      LET MQH = MQH - 1
+    ELSE
+      LET MQL = PAL - PBL
+    ENDIF
+    IF PAR < PBR
+      LET MR = PAR + (14629 - PBR)
+      IF MQL = 0
+        LET MQL = 16383
+        LET MQH = MQH - 1
+      ELSE
+        LET MQL = MQL - 1
+      ENDIF
+    ELSE
+      LET MR = PAR - PBR
+    ENDIF
+    IF MR >= 7315
+      LET MQL = MQL + 1
+      IF MQL = 16384
+        LET MQL = 0
+        LET MQH = MQH + 1
+      ENDIF
+    ENDIF
+    LET COORDINATE = CA
+    APPLY_COORDINATE
+    IF OUTSIDE
+      LET ESCAPED = 1
+    ELSE
+      LET A = NEXT_VALUE
+
+      LET MX = OLD_A
+      IF MX < 0
+        LET MX = -MX
+      ENDIF
+      LET MY = OLD_B
+      IF MY < 0
+        LET MY = -MY
+      ENDIF
+      MULRAW
+      LET SIGN = 1
+      IF OLD_A < 0
+        LET SIGN = -SIGN
+      ENDIF
+      IF OLD_B < 0
+        LET SIGN = -SIGN
+      ENDIF
+      IF MR >= 14629 - MR
+        LET MR = MR - (14629 - MR)
+        LET CARRY = 1
+      ELSE
+        LET MR = MR + MR
+        LET CARRY = 0
+      ENDIF
+      IF MQL >= 8192
+        LET MQL = (MQL - 8192) * 2 + CARRY
+        LET MQH = MQH * 2 + 1
+      ELSE
+        LET MQL = MQL * 2 + CARRY
+        LET MQH = MQH * 2
+      ENDIF
+      IF MQL >= 16384
+        LET MQL = MQL - 16384
+        LET MQH = MQH + 1
+      ENDIF
+      IF MR >= 7315
+        LET MQL = MQL + 1
+        IF MQL = 16384
+          LET MQL = 0
+          LET MQH = MQH + 1
+        ENDIF
+      ENDIF
+      LET COORDINATE = CB
+      APPLY_COORDINATE
+      IF OUTSIDE
+        LET ESCAPED = 1
+      ELSE
+        LET B = NEXT_VALUE
+
+        LET MX = A
+        IF MX < 0
+          LET MX = -MX
+        ENDIF
+        LET MY = MX
+        MULRAW
+        LET PAH = MQH
+        LET PAL = MQL
+        LET PAR = MR
+        LET MX = B
+        IF MX < 0
+          LET MX = -MX
+        ENDIF
+        LET MY = MX
+        MULRAW
+        LET PBH = MQH
+        LET PBL = MQL
+        LET PBR = MR
+        LET MQH = PAH + PBH
+        LET MQL = PAL + PBL
+        IF MQL >= 16384
+          LET MQL = MQL - 16384
+          LET MQH = MQH + 1
+        ENDIF
+        LET MR = PAR + PBR
+        IF MR >= 14629
+          LET MR = MR - 14629
+          LET MQL = MQL + 1
+          IF MQL = 16384
+            LET MQL = 0
+            LET MQH = MQH + 1
+          ENDIF
+        ENDIF
+        IF MQH > 3
+          LET ESCAPED = 1
+        ELSE
+          IF MQH = 3
+            IF (MQL > 9364) + ((MQL = 9364) * (MR > 0))
+              LET ESCAPED = 1
+            ENDIF
+          ENDIF
+        ENDIF
+      ENDIF
+    ENDIF
+  WEND
+
+  IF ESCAPED
+    IF ITERATION <= 9
+      LET CODE = ITERATION + 47
+    ELSE
+      LET CODE = ITERATION + 54
+    ENDIF
+    PUTCHR CODE
+  ELSE
+    PUTCHR 32
+  ENDIF
+END
+
+LET Y = 1
+WHILE Y <= 25
+  LET CB = (Y - 13) * 1219
+  LET X = 1
+  WHILE X <= 80
+    LET CA = (X - 40) * 670
+    DRAW_POINT
+    LET X = X + 1
+  WEND
+  CR
+  LET Y = Y + 1
+WEND

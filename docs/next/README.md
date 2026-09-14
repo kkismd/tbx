@@ -37,3 +37,12 @@ crate 単位の詳細は [`crates/tbx-next/README.md`](../../crates/tbx-next/REA
 ```sh
 cargo run -p tbx-next -- docs/next/examples/guess.tbx
 ```
+
+マンデルブロ集合サンプルは、現行TBXの `examples/asciiart2.tbx` を参照し、
+その80文字×25行の表示文字グリッドをTBX-Nextの整数演算で再現します。
+浮動小数点の精度向上を目的としたものではなく、`i16` checked arithmetic内の
+固定小数点演算、反復、条件分岐、`PUTCHR`を組み合わせる例です。
+
+```sh
+cargo run -p tbx-next -- docs/next/examples/mandelbrot.tbx
+```

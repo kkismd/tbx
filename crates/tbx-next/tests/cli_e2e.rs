@@ -265,6 +265,27 @@ fn file_success_runs_the_guess_example_with_runtime_input() {
 }
 
 #[test]
+fn file_success_runs_the_mandelbrot_example_with_the_reference_grid() {
+    let path = example_path("mandelbrot.tbx");
+    let expected = include_str!("fixtures/mandelbrot_expected.txt");
+
+    let output = run_with_file(&path);
+    let stdout = stdout_text(&output);
+
+    assert!(
+        output.status.success(),
+        "expected success, stderr:\n{}",
+        stderr_text(&output)
+    );
+    assert_eq!(stderr_text(&output), "");
+    assert_eq!(stdout, expected);
+
+    let lines = stdout.lines().collect::<Vec<_>>();
+    assert_eq!(lines.len(), 25);
+    assert!(lines.iter().all(|line| line.len() == 80));
+}
+
+#[test]
 fn stdin_success_runs_stdlib_control_structures_and_user_syntax_through_real_binary() {
     let source = include_str!("fixtures/m21_stdlib_control_e2e.tbx");
 
