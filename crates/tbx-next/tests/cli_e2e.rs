@@ -240,6 +240,37 @@ fn file_success_runs_the_prime_example_with_local_references() {
 }
 
 #[test]
+fn file_success_runs_the_guess_example_with_runtime_input() {
+    let path = example_path("guess.tbx");
+    let mut guesses = vec![100];
+    guesses.extend(1..=100);
+    let input = guesses
+        .into_iter()
+        .map(|value| value.to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
+    let output = run_with_file_and_stdin(&path, &format!("invalid\n{input}\n"));
+    let stdout = stdout_text(&output);
+
+    assert!(
+        output.status.success(),
+        "expected success, stderr:\n{}",
+        stderr_text(&output)
+    );
+    assert!(
+        stdout.contains("Guess a number from 1 to 100: "),
+        "{stdout}"
+    );
+    assert!(stdout.contains("Please enter a number.\n"), "{stdout}");
+    assert!(
+        stdout.contains("Too low.\n") || stdout.contains("Too high.\n"),
+        "{stdout}"
+    );
+    assert!(stdout.ends_with("Correct!\n"), "{stdout}");
+    assert_eq!(stderr_text(&output), "");
+}
+
+#[test]
 fn stdin_success_runs_stdlib_control_structures_and_user_syntax_through_real_binary() {
     let source = include_str!("fixtures/m21_stdlib_control_e2e.tbx");
 
