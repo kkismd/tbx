@@ -15,6 +15,8 @@ use crate::operator::{register_named_operator_primitives, OperatorBootstrapError
 use crate::output_primitive::register_output_primitives;
 use crate::primitive::PrimitiveRegistry;
 use crate::published_code::PublishedCode;
+use crate::random::RandomState;
+use crate::random_primitive::register_random_primitives;
 use crate::runtime_input::RuntimeInput;
 use crate::runtime_output::WriteRuntimeOutput;
 use crate::source::{SourceAcquisition, SourceId, SourceTexts};
@@ -58,6 +60,7 @@ enum BatchSetupError {
     Stack(PrimitiveBootstrapError),
     Output(PrimitiveBootstrapError),
     Input(PrimitiveBootstrapError),
+    Random(PrimitiveBootstrapError),
     SourceWords(SourceWordBootstrapError),
     Globals(BuiltinGlobalBootstrapError),
     InvalidInitialSource(crate::source::SourceError),
@@ -71,7 +74,10 @@ struct BatchEnvironment {
     source_words: SourceWordRegistry,
     globals: GlobalVariables,
     published_code: PublishedCode,
+    random: RandomState,
 }
+
+const DEFAULT_RANDOM_SEED: u64 = 0x5442_582D_4E45_5854;
 
 struct SourceFrame {
     source_id: SourceId,
@@ -290,6 +296,7 @@ impl SourceProcessingSession {
                     self.environment.primitives.lookup(),
                 )
                 .with_mut_globals(self.environment.globals.view_mut())
+                .with_random(&mut self.environment.random)
                 .with_output(&mut output);
                 let context = match input.as_deref_mut() {
                     Some(input) => context.with_input(input),
@@ -437,6 +444,10 @@ impl BatchExecutionFailure {
 
 impl BatchEnvironment {
     fn new() -> Result<Self, BatchSetupError> {
+        Self::new_with_seed(DEFAULT_RANDOM_SEED)
+    }
+
+    fn new_with_seed(seed: u64) -> Result<Self, BatchSetupError> {
         let mut bindings = Bindings::new();
         let mut primitives = PrimitiveRegistry::new();
         let mut words = PublishedWords::new();
@@ -449,6 +460,8 @@ impl BatchEnvironment {
             .map_err(BatchSetupError::Output)?;
         register_input_primitives(&mut primitives, &mut words, &mut bindings)
             .map_err(BatchSetupError::Input)?;
+        register_random_primitives(&mut primitives, &mut words, &mut bindings)
+            .map_err(BatchSetupError::Random)?;
 
         let mut source_words = SourceWordRegistry::new();
         register_builtin_source_words(&mut source_words, &mut bindings)
@@ -466,6 +479,7 @@ impl BatchEnvironment {
             source_words,
             globals,
             published_code: PublishedCode::new(),
+            random: RandomState::seeded(seed),
         })
     }
 
@@ -524,7 +538,26 @@ pub(crate) fn execute_registered_sources<W>(
 where
     W: Write + ?Sized,
 {
-    let mut environment = match BatchEnvironment::new() {
+    execute_registered_sources_with_seed(
+        sources,
+        stdlib_source_id,
+        source_id,
+        writer,
+        DEFAULT_RANDOM_SEED,
+    )
+}
+
+pub(crate) fn execute_registered_sources_with_seed<W>(
+    sources: &SourceTexts,
+    stdlib_source_id: SourceId,
+    source_id: SourceId,
+    writer: &mut W,
+    seed: u64,
+) -> BatchExecutionResult
+where
+    W: Write + ?Sized,
+{
+    let mut environment = match BatchEnvironment::new_with_seed(seed) {
         Ok(environment) => environment,
         Err(error) => return setup_failure(sources, error),
     };
@@ -554,6 +587,7 @@ where
                 environment.primitives.lookup(),
             )
             .with_mut_globals(environment.globals.view_mut())
+            .with_random(&mut environment.random)
             .with_output(&mut output);
             run_unit(&unit, context)
         }
@@ -573,7 +607,28 @@ pub(crate) fn execute_registered_sources_with_filesystem<W>(
 where
     W: Write + ?Sized,
 {
-    let mut environment = match BatchEnvironment::new() {
+    execute_registered_sources_with_filesystem_and_seed(
+        sources,
+        stdlib_source_id,
+        source_id,
+        writer,
+        input,
+        DEFAULT_RANDOM_SEED,
+    )
+}
+
+pub(crate) fn execute_registered_sources_with_filesystem_and_seed<W>(
+    sources: SourceTexts,
+    stdlib_source_id: SourceId,
+    source_id: SourceId,
+    writer: &mut W,
+    input: Option<&mut dyn RuntimeInput>,
+    seed: u64,
+) -> BatchExecutionResult
+where
+    W: Write + ?Sized,
+{
+    let mut environment = match BatchEnvironment::new_with_seed(seed) {
         Ok(environment) => environment,
         Err(error) => return setup_failure(&sources, error),
     };
@@ -600,8 +655,13 @@ where
         Ok(None) => BatchExecutionResult::Success(
             // Empty input has no form result. The legacy path supplies the
             // established empty-run result without adding a second source.
-            match execute_registered_sources(session.sources(), stdlib_source_id, source_id, writer)
-            {
+            match execute_registered_sources_with_seed(
+                session.sources(),
+                stdlib_source_id,
+                source_id,
+                writer,
+                seed,
+            ) {
                 BatchExecutionResult::Success(result) => result,
                 BatchExecutionResult::Failure(failure) => {
                     return BatchExecutionResult::Failure(failure)
@@ -1915,5 +1975,46 @@ mod tests {
             .expect_err("failed session must not be resumed");
         assert_eq!(resume_error, SourceProcessorError::ProcessingSessionFailed);
         std::fs::remove_dir_all(root).expect("fixture directory should be removed");
+    }
+
+    #[test]
+    fn seeded_processing_session_continues_rnd_across_top_level_forms() {
+        let (sources, standard_library_id, source_id) =
+            sources_with_standard_library(STDLIB_SOURCE, "PUTDEC RND(10)\nPUTDEC RND(10)");
+        let mut first_output = RecordingWriter::default();
+        let first = success(execute_registered_sources_with_filesystem_and_seed(
+            sources,
+            standard_library_id,
+            source_id,
+            &mut first_output,
+            None,
+            123,
+        ));
+
+        let (sources, standard_library_id, source_id) =
+            sources_with_standard_library(STDLIB_SOURCE, "PUTDEC RND(10)\nPUTDEC RND(10)");
+        let mut second_output = RecordingWriter::default();
+        let second = success(execute_registered_sources_with_filesystem_and_seed(
+            sources,
+            standard_library_id,
+            source_id,
+            &mut second_output,
+            None,
+            123,
+        ));
+
+        let mut expected_random = RandomState::seeded(123);
+        let expected_output = format!(
+            "{}{}",
+            expected_random
+                .next_inclusive(10)
+                .expect("positive bound should succeed"),
+            expected_random
+                .next_inclusive(10)
+                .expect("positive bound should succeed")
+        );
+        assert_eq!(first_output.text(), second_output.text());
+        assert_eq!(first_output.text(), expected_output);
+        assert_eq!(first.data_stack(), second.data_stack());
     }
 }

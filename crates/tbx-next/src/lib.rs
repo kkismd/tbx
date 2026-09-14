@@ -160,6 +160,12 @@ mod runtime_output;
 #[allow(dead_code)]
 mod runtime_input;
 
+#[allow(dead_code)]
+mod random;
+
+#[allow(dead_code)]
+mod random_primitive;
+
 // ADR #1578 keeps user-facing diagnostic rendering outside compiler and VM
 // errors, deriving display positions from registered sources only.
 #[allow(dead_code)]

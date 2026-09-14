@@ -6,6 +6,7 @@ use crate::instruction::{
     InstructionLookupError, InstructionView,
 };
 use crate::primitive::{PrimitiveContext, PrimitiveError, PrimitiveLookup, PrimitiveLookupError};
+use crate::random::RandomState;
 use crate::runtime_input::RuntimeInput;
 use crate::runtime_output::RuntimeOutput;
 use crate::stack::{DataStack, ReturnFrame, ReturnStack, StackError};
@@ -121,6 +122,7 @@ pub(crate) struct ExecutionView<'a> {
     globals: Option<GlobalExecutionAccess<'a>>,
     output: Option<&'a mut dyn RuntimeOutput>,
     input: Option<&'a mut dyn RuntimeInput>,
+    random: Option<&'a mut RandomState>,
 }
 
 #[derive(Debug)]
@@ -150,6 +152,7 @@ impl<'a> ExecutionView<'a> {
             globals: None,
             output: None,
             input: None,
+            random: None,
         }
     }
 
@@ -178,6 +181,11 @@ impl<'a> ExecutionView<'a> {
 
     pub(crate) fn with_input(mut self, input: &'a mut dyn RuntimeInput) -> Self {
         self.input = Some(input);
+        self
+    }
+
+    pub(crate) fn with_random(mut self, random: &'a mut RandomState) -> Self {
+        self.random = Some(random);
         self
     }
 
@@ -234,6 +242,7 @@ pub(crate) trait VmExecutionView<'a> {
         crate::primitive::PrimitiveCapabilities {
             output: None,
             input: None,
+            random: None,
         }
     }
 
@@ -295,6 +304,7 @@ impl<'a> VmExecutionView<'a> for ExecutionView<'a> {
         crate::primitive::PrimitiveCapabilities {
             output: self.output.take(),
             input: self.input.take(),
+            random: self.random.take(),
         }
     }
 
@@ -304,6 +314,7 @@ impl<'a> VmExecutionView<'a> for ExecutionView<'a> {
     ) {
         self.output = capabilities.output;
         self.input = capabilities.input;
+        self.random = capabilities.random;
     }
 }
 
@@ -732,6 +743,7 @@ impl Vm {
                     &mut self.data_stack,
                     capabilities.output,
                     capabilities.input,
+                    capabilities.random,
                 );
                 let result = handler(&mut context);
                 let capabilities = context.into_capabilities();
