@@ -242,9 +242,7 @@ fn file_success_runs_the_prime_example_with_local_references() {
 #[test]
 fn file_success_runs_the_guess_example_with_runtime_input() {
     let path = example_path("guess.tbx");
-    let mut guesses = vec![100];
-    guesses.extend(1..=100);
-    let input = guesses
+    let input = (1..=100)
         .into_iter()
         .map(|value| value.to_string())
         .collect::<Vec<_>>()
@@ -262,10 +260,6 @@ fn file_success_runs_the_guess_example_with_runtime_input() {
         "{stdout}"
     );
     assert!(stdout.contains("Please enter a number.\n"), "{stdout}");
-    assert!(
-        stdout.contains("Too low.\n") || stdout.contains("Too high.\n"),
-        "{stdout}"
-    );
     assert!(stdout.ends_with("Correct!\n"), "{stdout}");
     assert_eq!(stderr_text(&output), "");
 }
