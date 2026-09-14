@@ -2003,12 +2003,18 @@ mod tests {
             123,
         ));
 
-        assert_eq!(first_output.text(), second_output.text());
-        assert_eq!(first.data_stack(), second.data_stack());
-        assert_eq!(first_output.text().len(), 2);
-        assert_ne!(
-            first_output.text().as_bytes()[0],
-            first_output.text().as_bytes()[1]
+        let mut expected_random = RandomState::seeded(123);
+        let expected_output = format!(
+            "{}{}",
+            expected_random
+                .next_inclusive(10)
+                .expect("positive bound should succeed"),
+            expected_random
+                .next_inclusive(10)
+                .expect("positive bound should succeed")
         );
+        assert_eq!(first_output.text(), second_output.text());
+        assert_eq!(first_output.text(), expected_output);
+        assert_eq!(first.data_stack(), second.data_stack());
     }
 }
