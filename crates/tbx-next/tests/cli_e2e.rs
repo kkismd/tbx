@@ -110,6 +110,23 @@ fn file_success_runs_m20_paths_through_real_binary() {
 }
 
 #[test]
+fn file_source_can_use_rnd_without_a_seed_option() {
+    let output = run_with_file(&fixture_path("rnd.tbx"));
+
+    assert!(
+        output.status.success(),
+        "expected success, stderr:\n{}",
+        stderr_text(&output)
+    );
+    let value = stdout_text(&output)
+        .trim()
+        .parse::<i16>()
+        .expect("RND output should be an integer");
+    assert!((1..=10).contains(&value));
+    assert_eq!(stderr_text(&output), "");
+}
+
+#[test]
 fn file_source_uses_process_stdin_for_runtime_input() {
     let output = run_with_file_and_stdin(
         &fixture_path("runtime_input_file.tbx"),
