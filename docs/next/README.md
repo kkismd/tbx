@@ -29,3 +29,11 @@ cargo test --workspace
 ```
 
 crate 単位の詳細は [`crates/tbx-next/README.md`](../../crates/tbx-next/README.md) を参照してください。
+
+## Examples
+
+数当てゲームは、乱数と対話入力を組み合わせたTBX-Nextの縦断サンプルです。
+
+```sh
+cargo run -p tbx-next -- docs/next/examples/guess.tbx
+```

@@ -743,6 +743,7 @@ mod tests {
 
     use super::*;
     use crate::binding::Binding;
+    use crate::runtime_input::TestInput;
     use crate::source::SourceTexts;
     use crate::user_facing::UserFacingFailureClass;
     use crate::value::Value;
@@ -2016,5 +2017,72 @@ mod tests {
         assert_eq!(first_output.text(), second_output.text());
         assert_eq!(first_output.text(), expected_output);
         assert_eq!(first.data_stack(), second.data_stack());
+    }
+
+    #[test]
+    fn guess_example_covers_ordering_branches_with_one_generated_answer() {
+        let source = include_str!("../../../docs/next/examples/guess.tbx");
+        let (sources, standard_library_id, source_id) =
+            sources_with_standard_library(STDLIB_SOURCE, source);
+        let mut expected_random = RandomState::seeded(123);
+        let answer = expected_random
+            .next_inclusive(100)
+            .expect("the sample uses a positive random bound");
+        assert!((2..=99).contains(&answer));
+        let mut input = TestInput::new([
+            Ok(Some((answer - 1).to_string())),
+            Ok(Some((answer + 1).to_string())),
+            Ok(Some(answer.to_string())),
+        ]);
+        let mut writer = RecordingWriter::default();
+
+        let result = execute_registered_sources_with_filesystem_and_seed(
+            sources,
+            standard_library_id,
+            source_id,
+            &mut writer,
+            Some(&mut input),
+            123,
+        );
+
+        success(result);
+        assert_eq!(
+            writer.text(),
+            "Guess a number from 1 to 100: Too low.\n\
+Guess a number from 1 to 100: Too high.\n\
+Guess a number from 1 to 100: Correct!\n"
+        );
+    }
+
+    #[test]
+    fn guess_example_keeps_answer_after_invalid_input() {
+        let source = include_str!("../../../docs/next/examples/guess.tbx");
+        let (sources, standard_library_id, source_id) =
+            sources_with_standard_library(STDLIB_SOURCE, source);
+        let mut expected_random = RandomState::seeded(456);
+        let answer = expected_random
+            .next_inclusive(100)
+            .expect("the sample uses a positive random bound");
+        let mut input = TestInput::new([
+            Ok(Some("not a number".to_owned())),
+            Ok(Some(answer.to_string())),
+        ]);
+        let mut writer = RecordingWriter::default();
+
+        let result = execute_registered_sources_with_filesystem_and_seed(
+            sources,
+            standard_library_id,
+            source_id,
+            &mut writer,
+            Some(&mut input),
+            456,
+        );
+
+        success(result);
+        assert_eq!(
+            writer.text(),
+            "Guess a number from 1 to 100: Please enter a number.\n\
+Guess a number from 1 to 100: Correct!\n"
+        );
     }
 }

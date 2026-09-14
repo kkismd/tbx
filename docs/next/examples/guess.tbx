@@ -1,0 +1,36 @@
+REM Guess the number selected by RND(100).
+
+VAR ANSWER
+VAR DONE
+
+LET ANSWER = RND(100)
+LET DONE = 0
+
+WHILE DONE = 0
+  PRINT "Guess a number from 1 to 100: "
+  INPUT?
+  IF DUP() = 0
+    DROP
+    DROP
+    PRINT "Please enter a number."
+    CR
+  ELSE
+    DROP
+    IF DUP() < ANSWER
+      PRINT "Too low."
+      CR
+      DROP
+    ELSE
+      IF DUP() > ANSWER
+        PRINT "Too high."
+        CR
+        DROP
+      ELSE
+        PRINT "Correct!"
+        CR
+        DROP
+        LET DONE = 1
+      ENDIF
+    ENDIF
+  ENDIF
+WEND
