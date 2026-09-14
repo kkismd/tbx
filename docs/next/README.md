@@ -37,3 +37,19 @@ crate 単位の詳細は [`crates/tbx-next/README.md`](../../crates/tbx-next/REA
 ```sh
 cargo run -p tbx-next -- docs/next/examples/guess.tbx
 ```
+
+整数マンデルブロ集合は、整数演算、反復、条件分岐、`ABS`、`PUTCHR` を
+組み合わせた79×25文字のサンプルです。
+
+```sh
+cargo run -p tbx-next -- docs/next/examples/mandelbrot.tbx
+```
+
+[MSBASIC実数版とTinyBASIC整数版](https://kyo-ta04.github.io/memo/)を参照し、
+実数版と同じ座標点（`X=-39..39`, `Y=-12..12`）をscale 125の単セル固定小数点で
+近似しています。TinyBASIC版のscale 50より細かい量子化を使い、固定小数点乗算では
+両オペランドをscaleによる商と余りへ分解します。固定小数点乗算へ渡す各成分を
+絶対値250以内に制限するため、余り同士の最大中間積は`124 * 124 = 15376`、
+更新値は最大でも1125で、すべて`i16` checked arithmeticの範囲内です。
+これは多セル演算による実数版との
+完全一致を目的とせず、整数近似版自身の出力を回帰テストで固定しています。
