@@ -1,3 +1,4 @@
+use crate::runtime_input::{RuntimeInput, RuntimeInputError};
 use crate::runtime_output::{RuntimeOutput, RuntimeOutputError};
 use crate::stack::{DataStack, StackError};
 use crate::value::Value;
@@ -9,6 +10,7 @@ pub(crate) type PrimitiveHandler = fn(&mut PrimitiveContext<'_>) -> Result<(), P
 pub(crate) enum PrimitiveError {
     DataStackUnderflow { source: StackError },
     OutputFailed { source: RuntimeOutputError },
+    InputFailed { source: RuntimeInputError },
     AsciiOutOfRange { value: i16 },
     Failed,
 }
@@ -26,14 +28,22 @@ pub(crate) enum PrimitiveLookupError {
 /// registry, compiler, or source-processing state.
 pub(crate) struct PrimitiveContext<'a> {
     data_stack: &'a mut DataStack,
+    capabilities: PrimitiveCapabilities<'a>,
+}
+
+struct PrimitiveCapabilities<'a> {
     output: Option<&'a mut dyn RuntimeOutput>,
+    input: Option<&'a mut dyn RuntimeInput>,
 }
 
 impl<'a> PrimitiveContext<'a> {
     pub(crate) fn new(data_stack: &'a mut DataStack) -> Self {
         Self {
             data_stack,
-            output: None,
+            capabilities: PrimitiveCapabilities {
+                output: None,
+                input: None,
+            },
         }
     }
 
@@ -41,7 +51,13 @@ impl<'a> PrimitiveContext<'a> {
         data_stack: &'a mut DataStack,
         output: Option<&'a mut dyn RuntimeOutput>,
     ) -> Self {
-        Self { data_stack, output }
+        Self {
+            data_stack,
+            capabilities: PrimitiveCapabilities {
+                output,
+                input: None,
+            },
+        }
     }
 
     pub(crate) fn push(&mut self, value: Value) {
@@ -71,13 +87,30 @@ impl<'a> PrimitiveContext<'a> {
     }
 
     pub(crate) fn write_output(&mut self, text: &str) -> Result<(), PrimitiveError> {
-        self.output
+        self.capabilities
+            .output
             .as_deref_mut()
             .ok_or(PrimitiveError::OutputFailed {
                 source: RuntimeOutputError::Unavailable,
             })?
             .write(text)
             .map_err(|source| PrimitiveError::OutputFailed { source })
+    }
+
+    pub(crate) fn read_input(&mut self) -> Result<Option<String>, PrimitiveError> {
+        self.capabilities
+            .input
+            .as_deref_mut()
+            .ok_or(PrimitiveError::InputFailed {
+                source: RuntimeInputError::Unavailable,
+            })?
+            .read_line()
+            .map_err(|source| PrimitiveError::InputFailed { source })
+    }
+
+    pub(crate) fn with_input(mut self, input: Option<&'a mut dyn RuntimeInput>) -> Self {
+        self.capabilities.input = input;
+        self
     }
 }
 

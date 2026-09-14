@@ -6,6 +6,7 @@ use crate::instruction::{
     InstructionLookupError, InstructionView,
 };
 use crate::primitive::{PrimitiveContext, PrimitiveError, PrimitiveLookup, PrimitiveLookupError};
+use crate::runtime_input::RuntimeInput;
 use crate::runtime_output::RuntimeOutput;
 use crate::stack::{DataStack, ReturnFrame, ReturnStack, StackError};
 use crate::value::Value;
@@ -119,6 +120,7 @@ pub(crate) struct ExecutionView<'a> {
     primitives: PrimitiveLookup<'a>,
     globals: Option<GlobalExecutionAccess<'a>>,
     output: Option<&'a mut dyn RuntimeOutput>,
+    input: Option<&'a mut dyn RuntimeInput>,
 }
 
 #[derive(Debug)]
@@ -147,6 +149,7 @@ impl<'a> ExecutionView<'a> {
             primitives,
             globals: None,
             output: None,
+            input: None,
         }
     }
 
@@ -173,6 +176,11 @@ impl<'a> ExecutionView<'a> {
         self
     }
 
+    pub(crate) fn with_input(mut self, input: &'a mut dyn RuntimeInput) -> Self {
+        self.input = Some(input);
+        self
+    }
+
     pub(crate) const fn instructions(self) -> InstructionLookup<'a> {
         self.instructions
     }
@@ -195,6 +203,7 @@ impl fmt::Debug for ExecutionView<'_> {
             .field("primitives", &self.primitives)
             .field("globals", &self.globals)
             .field("output", &self.output.is_some())
+            .field("input", &self.input.is_some())
             .finish()
     }
 }
@@ -214,6 +223,10 @@ pub(crate) trait VmExecutionView<'a> {
     fn write_global(&mut self, id: GlobalVarId, value: Value) -> Result<(), GlobalVariableError>;
 
     fn runtime_output(&mut self) -> Option<&mut (dyn RuntimeOutput + '_)> {
+        None
+    }
+
+    fn runtime_input(&mut self) -> Option<&mut (dyn RuntimeInput + '_)> {
         None
     }
 }
@@ -254,6 +267,13 @@ impl<'a> VmExecutionView<'a> for ExecutionView<'a> {
     fn runtime_output(&mut self) -> Option<&mut (dyn RuntimeOutput + '_)> {
         match self.output.as_mut() {
             Some(output) => Some(&mut **output),
+            None => None,
+        }
+    }
+
+    fn runtime_input(&mut self) -> Option<&mut (dyn RuntimeInput + '_)> {
+        match self.input.as_mut() {
+            Some(input) => Some(&mut **input),
             None => None,
         }
     }
@@ -310,6 +330,10 @@ impl<'a, T: VmExecutionView<'a> + ?Sized> VmExecutionView<'a> for &mut T {
 
     fn runtime_output(&mut self) -> Option<&mut (dyn RuntimeOutput + '_)> {
         (**self).runtime_output()
+    }
+
+    fn runtime_input(&mut self) -> Option<&mut (dyn RuntimeInput + '_)> {
+        (**self).runtime_input()
     }
 }
 
@@ -664,8 +688,12 @@ impl Vm {
                     })?;
 
                 let checkpoint = self.data_stack.clone();
-                let mut context =
-                    PrimitiveContext::with_output(&mut self.data_stack, execution.runtime_output());
+                let mut context = if execution.runtime_input().is_some() {
+                    PrimitiveContext::with_output(&mut self.data_stack, None)
+                        .with_input(execution.runtime_input())
+                } else {
+                    PrimitiveContext::with_output(&mut self.data_stack, execution.runtime_output())
+                };
                 match handler(&mut context) {
                     Ok(()) => {
                         self.instruction_pointer = next;

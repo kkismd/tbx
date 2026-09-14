@@ -10,6 +10,7 @@ use crate::bootstrap::{
 };
 use crate::diagnostic::{DiagnosticRenderer, RenderedDiagnostic, UserDiagnostic};
 use crate::global_variable::GlobalVariables;
+use crate::input_primitive::register_input_primitives;
 use crate::operator::{register_named_operator_primitives, OperatorBootstrapError, OperatorWords};
 use crate::output_primitive::register_output_primitives;
 use crate::primitive::PrimitiveRegistry;
@@ -55,6 +56,7 @@ enum BatchSetupError {
     Operators(OperatorBootstrapError),
     Stack(PrimitiveBootstrapError),
     Output(PrimitiveBootstrapError),
+    Input(PrimitiveBootstrapError),
     SourceWords(SourceWordBootstrapError),
     Globals(BuiltinGlobalBootstrapError),
     InvalidInitialSource(crate::source::SourceError),
@@ -437,6 +439,8 @@ impl BatchEnvironment {
             .map_err(BatchSetupError::Stack)?;
         register_output_primitives(&mut primitives, &mut words, &mut bindings)
             .map_err(BatchSetupError::Output)?;
+        register_input_primitives(&mut primitives, &mut words, &mut bindings)
+            .map_err(BatchSetupError::Input)?;
 
         let mut source_words = SourceWordRegistry::new();
         register_builtin_source_words(&mut source_words, &mut bindings)

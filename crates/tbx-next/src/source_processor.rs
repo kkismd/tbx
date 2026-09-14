@@ -22,6 +22,7 @@ use crate::primitive::PrimitiveLookup;
 use crate::published_code::{
     NewWordPublicationError, PublishedCode, PublishedWordBuilder, WordBodyBuildError,
 };
+use crate::runtime_input::RuntimeInput;
 use crate::runtime_output::RuntimeOutput;
 use crate::source::{SourceError, SourceId, SourceSpan, SourceView};
 use crate::source_mapping::{
@@ -261,6 +262,7 @@ pub(crate) struct SourceExecutionContext<'a> {
     words: PublishedWordLookup<'a>,
     primitives: PrimitiveLookup<'a>,
     output: Option<&'a mut dyn RuntimeOutput>,
+    input: Option<&'a mut dyn RuntimeInput>,
 }
 
 #[derive(Debug)]
@@ -1645,6 +1647,9 @@ pub(crate) fn run_unit_with_data_stack(
     if let Some(output) = context.output {
         execution = execution.with_output(output);
     }
+    if let Some(input) = context.input {
+        execution = execution.with_input(input);
+    }
     let mut vm = Vm::new_at_location_in(&mut execution, unit.entry)
         .map_err(|error| map_runtime_error(error, unit, context.source_mappings))?;
     for value in initial_data_stack {
@@ -2545,6 +2550,7 @@ impl<'a> SourceExecutionContext<'a> {
             words,
             primitives,
             output: None,
+            input: None,
         }
     }
 
@@ -2563,6 +2569,7 @@ impl<'a> SourceExecutionContext<'a> {
             words,
             primitives,
             output: None,
+            input: None,
         }
     }
 
@@ -2582,6 +2589,7 @@ impl<'a> SourceExecutionContext<'a> {
             words,
             primitives,
             output: None,
+            input: None,
         }
     }
 
@@ -2601,6 +2609,7 @@ impl<'a> SourceExecutionContext<'a> {
             words,
             primitives,
             output: None,
+            input: None,
         }
     }
 
@@ -2621,6 +2630,7 @@ impl<'a> SourceExecutionContext<'a> {
             words,
             primitives,
             output: None,
+            input: None,
         }
     }
 
@@ -2640,6 +2650,7 @@ impl<'a> SourceExecutionContext<'a> {
             words,
             primitives,
             output: None,
+            input: None,
         }
     }
 
@@ -2660,6 +2671,7 @@ impl<'a> SourceExecutionContext<'a> {
             words,
             primitives,
             output: None,
+            input: None,
         }
     }
 
@@ -2680,6 +2692,7 @@ impl<'a> SourceExecutionContext<'a> {
             words,
             primitives,
             output: None,
+            input: None,
         }
     }
 
@@ -2698,6 +2711,11 @@ impl<'a> SourceExecutionContext<'a> {
 
     pub(crate) fn with_output(mut self, output: &'a mut dyn RuntimeOutput) -> Self {
         self.output = Some(output);
+        self
+    }
+
+    pub(crate) fn with_input(mut self, input: &'a mut dyn RuntimeInput) -> Self {
+        self.input = Some(input);
         self
     }
 
