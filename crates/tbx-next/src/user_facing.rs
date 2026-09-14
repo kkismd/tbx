@@ -285,12 +285,12 @@ mod tests {
         Value::integer(value)
     }
 
-    fn push_7(context: &mut PrimitiveContext<'_>) -> Result<(), PrimitiveError> {
+    fn push_7(context: &mut PrimitiveContext<'_, '_>) -> Result<(), PrimitiveError> {
         context.push(value(7));
         Ok(())
     }
 
-    fn fail(context: &mut PrimitiveContext<'_>) -> Result<(), PrimitiveError> {
+    fn fail(context: &mut PrimitiveContext<'_, '_>) -> Result<(), PrimitiveError> {
         context.push(value(1));
         Err(PrimitiveError::Failed)
     }

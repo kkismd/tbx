@@ -62,7 +62,7 @@ fn primitive_bootstrap_precheck_error(error: BindingInsertError) -> PrimitiveBoo
     }
 }
 
-fn putdec(context: &mut PrimitiveContext<'_>) -> Result<(), PrimitiveError> {
+fn putdec(context: &mut PrimitiveContext<'_, '_>) -> Result<(), PrimitiveError> {
     if context.data_stack_is_empty() {
         return Ok(());
     }
@@ -76,7 +76,7 @@ fn putdec(context: &mut PrimitiveContext<'_>) -> Result<(), PrimitiveError> {
     Ok(())
 }
 
-fn putchr(context: &mut PrimitiveContext<'_>) -> Result<(), PrimitiveError> {
+fn putchr(context: &mut PrimitiveContext<'_, '_>) -> Result<(), PrimitiveError> {
     if context.data_stack_is_empty() {
         return Ok(());
     }
@@ -95,7 +95,7 @@ fn putchr(context: &mut PrimitiveContext<'_>) -> Result<(), PrimitiveError> {
     Ok(())
 }
 
-fn cr(context: &mut PrimitiveContext<'_>) -> Result<(), PrimitiveError> {
+fn cr(context: &mut PrimitiveContext<'_, '_>) -> Result<(), PrimitiveError> {
     context.write_output("\n")
 }
 

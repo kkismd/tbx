@@ -145,7 +145,7 @@ impl OperatorLookup {
 fn register_operator(
     primitives: &mut PrimitiveRegistry,
     words: &mut PublishedWords,
-    handler: fn(&mut PrimitiveContext<'_>) -> Result<(), PrimitiveError>,
+    handler: fn(&mut PrimitiveContext<'_, '_>) -> Result<(), PrimitiveError>,
 ) -> WordId {
     let primitive = primitives.register(handler);
     words.add(CompletedWordDefinition::primitive(primitive))
@@ -209,58 +209,58 @@ impl OperatorBootstrapError {
     }
 }
 
-fn add(context: &mut PrimitiveContext<'_>) -> Result<(), PrimitiveError> {
+fn add(context: &mut PrimitiveContext<'_, '_>) -> Result<(), PrimitiveError> {
     checked_binary(context, Value::checked_add)
 }
 
-fn subtract(context: &mut PrimitiveContext<'_>) -> Result<(), PrimitiveError> {
+fn subtract(context: &mut PrimitiveContext<'_, '_>) -> Result<(), PrimitiveError> {
     checked_binary(context, Value::checked_sub)
 }
 
-fn multiply(context: &mut PrimitiveContext<'_>) -> Result<(), PrimitiveError> {
+fn multiply(context: &mut PrimitiveContext<'_, '_>) -> Result<(), PrimitiveError> {
     checked_binary(context, Value::checked_mul)
 }
 
-fn divide(context: &mut PrimitiveContext<'_>) -> Result<(), PrimitiveError> {
+fn divide(context: &mut PrimitiveContext<'_, '_>) -> Result<(), PrimitiveError> {
     checked_binary(context, Value::checked_div)
 }
 
-fn remainder(context: &mut PrimitiveContext<'_>) -> Result<(), PrimitiveError> {
+fn remainder(context: &mut PrimitiveContext<'_, '_>) -> Result<(), PrimitiveError> {
     checked_binary(context, Value::checked_rem)
 }
 
-fn negate(context: &mut PrimitiveContext<'_>) -> Result<(), PrimitiveError> {
+fn negate(context: &mut PrimitiveContext<'_, '_>) -> Result<(), PrimitiveError> {
     let value = context.pop()?;
     context.push(value.checked_neg().map_err(primitive_value_error)?);
     Ok(())
 }
 
-fn equal(context: &mut PrimitiveContext<'_>) -> Result<(), PrimitiveError> {
+fn equal(context: &mut PrimitiveContext<'_, '_>) -> Result<(), PrimitiveError> {
     comparison(context, i16::eq)
 }
 
-fn not_equal(context: &mut PrimitiveContext<'_>) -> Result<(), PrimitiveError> {
+fn not_equal(context: &mut PrimitiveContext<'_, '_>) -> Result<(), PrimitiveError> {
     comparison(context, i16::ne)
 }
 
-fn less(context: &mut PrimitiveContext<'_>) -> Result<(), PrimitiveError> {
+fn less(context: &mut PrimitiveContext<'_, '_>) -> Result<(), PrimitiveError> {
     comparison(context, i16::lt)
 }
 
-fn less_equal(context: &mut PrimitiveContext<'_>) -> Result<(), PrimitiveError> {
+fn less_equal(context: &mut PrimitiveContext<'_, '_>) -> Result<(), PrimitiveError> {
     comparison(context, i16::le)
 }
 
-fn greater(context: &mut PrimitiveContext<'_>) -> Result<(), PrimitiveError> {
+fn greater(context: &mut PrimitiveContext<'_, '_>) -> Result<(), PrimitiveError> {
     comparison(context, i16::gt)
 }
 
-fn greater_equal(context: &mut PrimitiveContext<'_>) -> Result<(), PrimitiveError> {
+fn greater_equal(context: &mut PrimitiveContext<'_, '_>) -> Result<(), PrimitiveError> {
     comparison(context, i16::ge)
 }
 
 fn checked_binary(
-    context: &mut PrimitiveContext<'_>,
+    context: &mut PrimitiveContext<'_, '_>,
     operation: fn(Value, Value) -> Result<Value, ValueError>,
 ) -> Result<(), PrimitiveError> {
     let (lhs, rhs) = context.pop2()?;
@@ -269,7 +269,7 @@ fn checked_binary(
 }
 
 fn comparison(
-    context: &mut PrimitiveContext<'_>,
+    context: &mut PrimitiveContext<'_, '_>,
     predicate: fn(&i16, &i16) -> bool,
 ) -> Result<(), PrimitiveError> {
     let (lhs, rhs) = context.pop2()?;

@@ -132,6 +132,11 @@ mod stack_primitive;
 #[allow(dead_code)]
 mod output_primitive;
 
+// #1688 keeps runtime input as a narrow, host-supplied line capability and
+// exposes numeric interpretation only through the INPUT? primitive.
+#[allow(dead_code)]
+mod input_primitive;
+
 // ADR #1442/#1451 parse minimal expressions into expression-local staging
 // before committing resolved instructions into a temporary execution unit.
 #[allow(dead_code)]
@@ -151,6 +156,9 @@ mod global_variable;
 // that receives only completed output text.
 #[allow(dead_code)]
 mod runtime_output;
+
+#[allow(dead_code)]
+mod runtime_input;
 
 // ADR #1578 keeps user-facing diagnostic rendering outside compiler and VM
 // errors, deriving display positions from registered sources only.
