@@ -1,0 +1,117 @@
+REM Draw a 79 by 25 Mandelbrot approximation with scale 125 fixed-point integers.
+REM FIXED_MUL splits both magnitudes into quotient and remainder components.
+REM Its callers keep both inputs within 2 * SCALE, so the largest raw product is
+REM 124 * 124 = 15376 and every intermediate remains inside the i16 range.
+
+VAR SCALE
+VAR CA
+VAR CB
+VAR NEXT_A
+VAR NEXT_B
+VAR A_SQUARED
+VAR B_SQUARED
+VAR ESCAPED
+VAR POINT_DONE
+VAR CHAR_CODE
+VAR MUL_SIGN
+VAR MUL_LEFT_ABS
+VAR MUL_RIGHT_ABS
+VAR MUL_LEFT_QUOTIENT
+VAR MUL_RIGHT_QUOTIENT
+VAR MUL_LEFT_REMAINDER
+VAR MUL_RIGHT_REMAINDER
+VAR MUL_HIGH
+VAR MUL_CROSS_LEFT
+VAR MUL_CROSS_RIGHT
+VAR MUL_LOW
+VAR MUL_RESULT
+
+LET SCALE = 125
+
+DEF FIXED_MUL left, right
+  LET MUL_SIGN = 1
+  IF left < 0
+    LET MUL_SIGN = -MUL_SIGN
+  ENDIF
+  IF right < 0
+    LET MUL_SIGN = -MUL_SIGN
+  ENDIF
+
+  LET MUL_LEFT_ABS = ABS(left)
+  LET MUL_RIGHT_ABS = ABS(right)
+  LET MUL_LEFT_QUOTIENT = MUL_LEFT_ABS / SCALE
+  LET MUL_RIGHT_QUOTIENT = MUL_RIGHT_ABS / SCALE
+  LET MUL_LEFT_REMAINDER = MUL_LEFT_ABS % SCALE
+  LET MUL_RIGHT_REMAINDER = MUL_RIGHT_ABS % SCALE
+
+  LET MUL_HIGH = MUL_LEFT_QUOTIENT * MUL_RIGHT_QUOTIENT * SCALE
+  LET MUL_CROSS_LEFT = MUL_LEFT_QUOTIENT * MUL_RIGHT_REMAINDER
+  LET MUL_CROSS_RIGHT = MUL_RIGHT_QUOTIENT * MUL_LEFT_REMAINDER
+  LET MUL_LOW = MUL_LEFT_REMAINDER * MUL_RIGHT_REMAINDER / SCALE
+  LET MUL_RESULT = MUL_HIGH + MUL_CROSS_LEFT + MUL_CROSS_RIGHT + MUL_LOW
+
+  DROP
+  DROP
+  IF MUL_SIGN < 0
+    EVAL -MUL_RESULT
+  ELSE
+    EVAL MUL_RESULT
+  ENDIF
+END
+
+LET Y = -12
+WHILE Y <= 12
+  LET X = -39
+  WHILE X <= 39
+    LET CA = X * 229 / 40
+    LET CB = Y * 125 / 12
+    LET A = CA
+    LET B = CB
+    LET I = 0
+    LET POINT_DONE = 0
+
+    WHILE POINT_DONE = 0
+      LET A_SQUARED = FIXED_MUL(A, A)
+      LET B_SQUARED = FIXED_MUL(B, B)
+      LET NEXT_A = A_SQUARED - B_SQUARED + CA
+      LET NEXT_B = 2 * FIXED_MUL(A, B) + CB
+      LET A = NEXT_A
+      LET B = NEXT_B
+      LET ESCAPED = 0
+
+      IF ABS(A) > 2 * SCALE
+        LET ESCAPED = 1
+      ELSE
+        IF ABS(B) > 2 * SCALE
+          LET ESCAPED = 1
+        ELSE
+          LET A_SQUARED = FIXED_MUL(A, A)
+          LET B_SQUARED = FIXED_MUL(B, B)
+          IF A_SQUARED + B_SQUARED > 4 * SCALE
+            LET ESCAPED = 1
+          ENDIF
+        ENDIF
+      ENDIF
+
+      IF ESCAPED = 1
+        IF I < 10
+          LET CHAR_CODE = 48 + I
+        ELSE
+          LET CHAR_CODE = 55 + I
+        ENDIF
+        LET POINT_DONE = 1
+      ELSE
+        LET I = I + 1
+        IF I >= 16
+          LET CHAR_CODE = 32
+          LET POINT_DONE = 1
+        ENDIF
+      ENDIF
+    WEND
+
+    PUTCHR CHAR_CODE
+    LET X = X + 1
+  WEND
+  CR
+  LET Y = Y + 1
+WEND

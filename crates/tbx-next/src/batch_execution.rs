@@ -3,6 +3,7 @@ use std::fs;
 use std::io::Write;
 use std::path::Path;
 
+use crate::arithmetic_primitive::register_arithmetic_primitives;
 use crate::binding::Bindings;
 use crate::bootstrap::{
     register_builtin_global_variables, register_builtin_source_words, BuiltinGlobalBootstrapError,
@@ -57,6 +58,7 @@ enum BatchExecutionFailureCause {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum BatchSetupError {
     Operators(OperatorBootstrapError),
+    Arithmetic(PrimitiveBootstrapError),
     Stack(PrimitiveBootstrapError),
     Output(PrimitiveBootstrapError),
     Input(PrimitiveBootstrapError),
@@ -454,6 +456,8 @@ impl BatchEnvironment {
         let operators =
             register_named_operator_primitives(&mut primitives, &mut words, &mut bindings)
                 .map_err(BatchSetupError::Operators)?;
+        register_arithmetic_primitives(&mut primitives, &mut words, &mut bindings)
+            .map_err(BatchSetupError::Arithmetic)?;
         register_stack_primitives(&mut primitives, &mut words, &mut bindings)
             .map_err(BatchSetupError::Stack)?;
         register_output_primitives(&mut primitives, &mut words, &mut bindings)
@@ -895,6 +899,32 @@ mod tests {
             );
             assert_eq!(writer.text(), "", "{text}");
         }
+    }
+
+    #[test]
+    fn abs_is_available_as_a_runtime_word_in_ordinary_expressions() {
+        let (sources, source_id) =
+            source("EVAL ABS(0)\nEVAL ABS(42)\nEVAL ABS(-42)", "program.tbx");
+        let mut writer = RecordingWriter::default();
+
+        let result = success(execute_registered_source(&sources, source_id, &mut writer));
+
+        assert_eq!(
+            result.data_stack(),
+            [Value::integer(0), Value::integer(42), Value::integer(42)]
+        );
+        assert_eq!(writer.text(), "");
+    }
+
+    #[test]
+    fn abs_minimum_integer_reports_a_runtime_failure_from_source() {
+        let (sources, source_id) = source("EVAL ABS(-32768)", "program.tbx");
+        let mut writer = RecordingWriter::default();
+
+        let failure = failure(execute_registered_source(&sources, source_id, &mut writer));
+
+        assert_eq!(failure.class(), UserFacingFailureClass::UserProgram);
+        assert_eq!(writer.text(), "");
     }
 
     #[test]

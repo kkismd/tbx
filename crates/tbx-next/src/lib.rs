@@ -122,6 +122,11 @@ mod structured_grammar;
 #[allow(dead_code)]
 mod operator;
 
+// #1692 exposes reusable checked integer arithmetic that is not syntax-bound
+// as ordinary runtime primitive words.
+#[allow(dead_code)]
+mod arithmetic_primitive;
+
 // #1580/#1583 add the minimal named data-stack primitive words without exposing
 // return-stack or VM-control access to primitive handlers.
 #[allow(dead_code)]

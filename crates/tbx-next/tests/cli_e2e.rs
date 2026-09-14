@@ -1,3 +1,4 @@
+use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
@@ -262,6 +263,31 @@ fn file_success_runs_the_guess_example_with_runtime_input() {
     assert!(stdout.contains("Please enter a number.\n"), "{stdout}");
     assert!(stdout.ends_with("Correct!\n"), "{stdout}");
     assert_eq!(stderr_text(&output), "");
+}
+
+#[test]
+fn file_success_runs_the_integer_mandelbrot_example_with_stable_output() {
+    let path = example_path("mandelbrot.tbx");
+    let expected = fs::read_to_string(fixture_path("mandelbrot_expected.txt"))
+        .expect("Mandelbrot output fixture should be readable");
+
+    let output = run_with_file(&path);
+    let stdout = stdout_text(&output);
+
+    assert!(
+        output.status.success(),
+        "expected success, stderr:\n{}",
+        stderr_text(&output)
+    );
+    assert_eq!(stderr_text(&output), "");
+    assert_eq!(stdout, expected);
+
+    let lines = stdout.lines().collect::<Vec<_>>();
+    assert_eq!(lines.len(), 25);
+    assert!(
+        lines.iter().all(|line| line.chars().count() == 79),
+        "all lines should contain 79 characters"
+    );
 }
 
 #[test]
