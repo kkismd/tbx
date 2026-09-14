@@ -5,11 +5,22 @@ use std::io::{self, BufReader, Read, Write};
 use std::path::Path;
 use std::process::ExitCode;
 
-use crate::batch_execution::{execute_registered_sources_with_filesystem, BatchExecutionResult};
+use crate::batch_execution::{
+    execute_registered_sources_with_filesystem_and_seed, BatchExecutionResult,
+};
 use crate::cli_source::{acquire_initial_source_with_canonicalizer, CliSourceError};
 use crate::diagnostic::{DiagnosticRenderer, RenderedDiagnostic, UserDiagnostic};
 use crate::runtime_input::{BufReadRuntimeInput, RuntimeInput};
 use crate::source::{SourceAcquisition, SourceTexts};
+
+#[derive(Debug)]
+struct RandomSeedError(getrandom::Error);
+
+impl std::fmt::Display for RandomSeedError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(formatter, "{0}", self.0)
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ProcessStatus {
@@ -82,6 +93,36 @@ where
     F: FnOnce(&Path) -> io::Result<String>,
     C: FnOnce(&Path) -> io::Result<std::path::PathBuf>,
 {
+    run_with_io_and_canonicalizer_with_seed_provider(
+        args,
+        stdin,
+        stdout,
+        stderr,
+        read_file,
+        canonicalize_file,
+        acquire_random_seed,
+    )
+}
+
+fn run_with_io_and_canonicalizer_with_seed_provider<I, S, R, O, E, F, C, G>(
+    args: I,
+    stdin: &mut R,
+    stdout: &mut O,
+    stderr: &mut E,
+    read_file: F,
+    canonicalize_file: C,
+    seed_provider: G,
+) -> ProcessStatus
+where
+    I: IntoIterator<Item = S>,
+    S: Into<OsString>,
+    R: Read,
+    O: Write + ?Sized,
+    E: Write + ?Sized,
+    F: FnOnce(&Path) -> io::Result<String>,
+    C: FnOnce(&Path) -> io::Result<std::path::PathBuf>,
+    G: FnOnce() -> Result<u64, RandomSeedError>,
+{
     let mut buffered_stdin = BufReader::new(stdin);
     let source = match acquire_initial_source_with_canonicalizer(
         args,
@@ -101,18 +142,38 @@ where
         sources.view().acquisition(source_id),
         Ok(SourceAcquisition::FileSystem { .. })
     );
+    let seed = match seed_provider() {
+        Ok(seed) => seed,
+        Err(error) => {
+            let diagnostic = UserDiagnostic::without_source(
+                "execution environment",
+                format!("failed to acquire random seed: {error}"),
+            );
+            let diagnostic = DiagnosticRenderer::new(SourceTexts::new().view())
+                .render(&diagnostic)
+                .expect("source-less seed diagnostic must render");
+            return write_diagnostic(stderr, &diagnostic);
+        }
+    };
     let mut runtime_input = BufReadRuntimeInput::new(buffered_stdin);
     let input = file_source.then_some(&mut runtime_input as &mut dyn RuntimeInput);
-    match execute_registered_sources_with_filesystem(
+    match execute_registered_sources_with_filesystem_and_seed(
         sources,
         stdlib_source_id,
         source_id,
         stdout,
         input,
+        seed,
     ) {
         BatchExecutionResult::Success(_) => ProcessStatus::Success,
         BatchExecutionResult::Failure(failure) => write_diagnostic(stderr, failure.diagnostic()),
     }
+}
+
+fn acquire_random_seed() -> Result<u64, RandomSeedError> {
+    let mut bytes = [0_u8; std::mem::size_of::<u64>()];
+    getrandom::getrandom(&mut bytes).map_err(RandomSeedError)?;
+    Ok(u64::from_ne_bytes(bytes))
 }
 
 fn acquisition_diagnostic(error: &CliSourceError) -> RenderedDiagnostic {
@@ -253,6 +314,58 @@ mod tests {
         assert!(file_reader_called.get());
         assert_eq!(stdout.text(), "5");
         assert_eq!(stderr.text(), "");
+    }
+
+    #[test]
+    fn processing_session_receives_one_host_seed_for_file_execution() {
+        let mut stdin = io::empty();
+        let mut stdout = RecordingWriter::default();
+        let mut stderr = RecordingWriter::default();
+        let seed_calls = Cell::new(0);
+
+        let status = run_with_io_and_canonicalizer_with_seed_provider(
+            ["relative/program.tbx"],
+            &mut stdin,
+            &mut stdout,
+            &mut stderr,
+            |_| Ok("PUTDEC RND(10)".to_owned()),
+            |path| Ok(path.to_path_buf()),
+            || {
+                seed_calls.set(seed_calls.get() + 1);
+                Ok(42)
+            },
+        );
+
+        assert_eq!(status, ProcessStatus::Success);
+        assert_eq!(seed_calls.get(), 1);
+        let value = stdout
+            .text()
+            .parse::<i16>()
+            .expect("RND output should be an integer");
+        assert!((1..=10).contains(&value));
+        assert_eq!(stderr.text(), "");
+    }
+
+    #[test]
+    fn seed_acquisition_failure_is_an_environment_failure() {
+        let mut stdin = io::empty();
+        let mut stdout = RecordingWriter::default();
+        let mut stderr = RecordingWriter::default();
+
+        let status = run_with_io_and_canonicalizer_with_seed_provider(
+            Vec::<OsString>::new(),
+            &mut stdin,
+            &mut stdout,
+            &mut stderr,
+            |_| panic!("source acquisition must not be reached"),
+            |path| Ok(path.to_path_buf()),
+            || Err(RandomSeedError(getrandom::Error::UNSUPPORTED)),
+        );
+
+        assert_eq!(status, ProcessStatus::Failure);
+        assert_eq!(stdout.text(), "");
+        assert!(stderr.text().contains("execution environment"));
+        assert!(stderr.text().contains("failed to acquire random seed"));
     }
 
     #[test]
