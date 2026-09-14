@@ -30,6 +30,28 @@ fn run_with_file(path: &Path) -> Output {
         .expect("tbx-next binary should run")
 }
 
+fn run_with_file_and_stdin(path: &Path, input: &str) -> Output {
+    let mut child = Command::new(tbx_next_bin())
+        .arg(path)
+        .current_dir(fixture_directory())
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("tbx-next binary should spawn");
+
+    child
+        .stdin
+        .as_mut()
+        .expect("child stdin should be piped")
+        .write_all(input.as_bytes())
+        .expect("runtime input should be written to child");
+
+    child
+        .wait_with_output()
+        .expect("tbx-next binary should finish")
+}
+
 fn run_with_args(args: &[&str]) -> Output {
     Command::new(tbx_next_bin())
         .args(args)
@@ -84,6 +106,35 @@ fn file_success_runs_m20_paths_through_real_binary() {
         stderr_text(&output)
     );
     assert_eq!(stdout_text(&output), "3\n1\n");
+    assert_eq!(stderr_text(&output), "");
+}
+
+#[test]
+fn file_source_uses_process_stdin_for_runtime_input() {
+    let output = run_with_file_and_stdin(
+        &fixture_path("runtime_input_file.tbx"),
+        "not a number\n42\n",
+    );
+
+    assert!(
+        output.status.success(),
+        "expected success, stderr:\n{}",
+        stderr_text(&output)
+    );
+    assert_eq!(stdout_text(&output), "0\n42\n");
+    assert_eq!(stderr_text(&output), "");
+}
+
+#[test]
+fn file_source_runtime_input_eof_is_a_recoverable_failure() {
+    let output = run_with_file_and_stdin(&fixture_path("runtime_input_eof.tbx"), "");
+
+    assert!(
+        output.status.success(),
+        "expected success, stderr:\n{}",
+        stderr_text(&output)
+    );
+    assert_eq!(stdout_text(&output), "0\n");
     assert_eq!(stderr_text(&output), "");
 }
 

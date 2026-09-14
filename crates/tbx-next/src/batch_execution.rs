@@ -15,6 +15,7 @@ use crate::operator::{register_named_operator_primitives, OperatorBootstrapError
 use crate::output_primitive::register_output_primitives;
 use crate::primitive::PrimitiveRegistry;
 use crate::published_code::PublishedCode;
+use crate::runtime_input::RuntimeInput;
 use crate::runtime_output::WriteRuntimeOutput;
 use crate::source::{SourceAcquisition, SourceId, SourceTexts};
 use crate::source_processor::{
@@ -231,6 +232,7 @@ impl SourceProcessingSession {
         &mut self,
         writer: &mut W,
         hook: &mut AdditionalSourceHook<'_>,
+        input: Option<&mut dyn RuntimeInput>,
     ) -> Result<Option<SourceRunResult>, crate::source_processor::SourceProcessorError>
     where
         W: Write + ?Sized,
@@ -238,7 +240,7 @@ impl SourceProcessingSession {
         if self.failed {
             return Err(crate::source_processor::SourceProcessorError::ProcessingSessionFailed);
         }
-        let result = self.run_with_hook_inner(writer, hook);
+        let result = self.run_with_hook_inner(writer, hook, input);
         if result.is_err() {
             // A session that has started processing cannot be safely resumed:
             // publication and runtime state may already contain prior forms.
@@ -252,6 +254,7 @@ impl SourceProcessingSession {
         &mut self,
         writer: &mut W,
         hook: &mut AdditionalSourceHook<'_>,
+        mut input: Option<&mut dyn RuntimeInput>,
     ) -> Result<Option<SourceRunResult>, crate::source_processor::SourceProcessorError>
     where
         W: Write + ?Sized,
@@ -288,6 +291,10 @@ impl SourceProcessingSession {
                 )
                 .with_mut_globals(self.environment.globals.view_mut())
                 .with_output(&mut output);
+                let context = match input.as_deref_mut() {
+                    Some(input) => context.with_input(input),
+                    None => context,
+                };
                 last_result = Some(run_unit_with_data_stack(&form.unit, context, &data_stack)?);
                 data_stack = last_result
                     .as_ref()
@@ -311,6 +318,7 @@ impl SourceProcessingSession {
     pub(crate) fn run_with_filesystem<W>(
         &mut self,
         writer: &mut W,
+        input: Option<&mut dyn RuntimeInput>,
     ) -> Result<Option<SourceRunResult>, SourceProcessorError>
     where
         W: Write + ?Sized,
@@ -320,7 +328,7 @@ impl SourceProcessingSession {
                         request: AdditionalSourceRequest| {
             acquire_filesystem_source_with_states(sources, states, request)
         };
-        self.run_with_hook(writer, &mut hook)
+        self.run_with_hook(writer, &mut hook, input)
     }
 }
 
@@ -560,6 +568,7 @@ pub(crate) fn execute_registered_sources_with_filesystem<W>(
     stdlib_source_id: SourceId,
     source_id: SourceId,
     writer: &mut W,
+    input: Option<&mut dyn RuntimeInput>,
 ) -> BatchExecutionResult
 where
     W: Write + ?Sized,
@@ -586,7 +595,7 @@ where
         forms,
     );
 
-    match session.run_with_filesystem(writer) {
+    match session.run_with_filesystem(writer, input) {
         Ok(Some(result)) => BatchExecutionResult::Success(result),
         Ok(None) => BatchExecutionResult::Success(
             // Empty input has no form result. The legacy path supplies the
@@ -1456,7 +1465,7 @@ mod tests {
         };
 
         session
-            .run_with_hook(&mut writer, &mut hook)
+            .run_with_hook(&mut writer, &mut hook, None)
             .expect("nested source should complete");
         assert_eq!(writer.text(), "");
         assert_eq!(order_ids.len(), 2);
@@ -1488,7 +1497,7 @@ mod tests {
         };
 
         session
-            .run_with_hook(&mut writer, &mut hook)
+            .run_with_hook(&mut writer, &mut hook, None)
             .expect("USE should complete through the normal source-word path");
 
         assert_eq!(requested, vec![("B".into(), source_id)]);
@@ -1516,7 +1525,7 @@ mod tests {
         };
 
         let error = session
-            .run_with_hook(&mut writer, &mut hook)
+            .run_with_hook(&mut writer, &mut hook, None)
             .expect_err("definition body request should be unavailable");
         assert!(
             matches!(
@@ -1543,7 +1552,7 @@ mod tests {
         };
 
         let error = session
-            .run_with_hook(&mut writer, &mut hook)
+            .run_with_hook(&mut writer, &mut hook, None)
             .expect_err("USE in a definition body should be unavailable");
         assert!(matches!(
             error,
@@ -1756,7 +1765,7 @@ mod tests {
             unreachable!("source has no additional request")
         };
         session
-            .run_with_hook(&mut writer, &mut hook)
+            .run_with_hook(&mut writer, &mut hook, None)
             .expect("source should complete");
         assert_eq!(
             session.acquisition_states.states.get(&canonical_path),
@@ -1805,7 +1814,7 @@ mod tests {
         };
 
         let error = session
-            .run_with_hook(&mut writer, &mut hook)
+            .run_with_hook(&mut writer, &mut hook, None)
             .expect_err("A -> B -> A should be a cycle");
         assert!(matches!(
             error,
@@ -1857,7 +1866,7 @@ mod tests {
         };
 
         session
-            .run_with_hook(&mut writer, &mut hook)
+            .run_with_hook(&mut writer, &mut hook, None)
             .expect("completed canonical alias should be a no-op");
         assert_eq!(session.sources().len(), 2, "alias must not register twice");
         std::fs::remove_dir_all(root).expect("fixture directory should be removed");
@@ -1895,14 +1904,14 @@ mod tests {
         };
 
         session
-            .run_with_hook(&mut writer, &mut hook)
+            .run_with_hook(&mut writer, &mut hook, None)
             .expect_err("B compilation should fail");
         assert_eq!(
             session.acquisition_states.states.get(&b_canonical),
             Some(&SourceIdentityState::Processing)
         );
         let resume_error = session
-            .run_with_hook(&mut writer, &mut hook)
+            .run_with_hook(&mut writer, &mut hook, None)
             .expect_err("failed session must not be resumed");
         assert_eq!(resume_error, SourceProcessorError::ProcessingSessionFailed);
         std::fs::remove_dir_all(root).expect("fixture directory should be removed");
