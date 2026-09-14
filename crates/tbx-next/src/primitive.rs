@@ -1,3 +1,4 @@
+use crate::random::{RandomError, RandomState};
 use crate::runtime_input::{RuntimeInput, RuntimeInputError};
 use crate::runtime_output::{RuntimeOutput, RuntimeOutputError};
 use crate::stack::{DataStack, StackError};
@@ -12,6 +13,8 @@ pub(crate) enum PrimitiveError {
     DataStackUnderflow { source: StackError },
     OutputFailed { source: RuntimeOutputError },
     InputFailed { source: RuntimeInputError },
+    RandomUnavailable,
+    InvalidRandomUpperBound { upper_bound: i16 },
     AsciiOutOfRange { value: i16 },
     Failed,
 }
@@ -24,9 +27,9 @@ pub(crate) enum PrimitiveLookupError {
 /// Limited primitive execution context.
 ///
 /// Handlers receive only data-stack operations and the narrow runtime output
-/// capability. They cannot observe or mutate the instruction pointer, return
-/// stack, halted flag, word tables, bindings, instruction sequence, primitive
-/// registry, compiler, or source-processing state.
+/// capabilities. They cannot observe or mutate the instruction pointer,
+/// return stack, halted flag, word tables, bindings, instruction sequence,
+/// primitive registry, compiler, or source-processing state.
 pub(crate) struct PrimitiveContext<'stack, 'cap> {
     data_stack: &'stack mut DataStack,
     capabilities: PrimitiveCapabilities<'cap>,
@@ -35,6 +38,7 @@ pub(crate) struct PrimitiveContext<'stack, 'cap> {
 pub(crate) struct PrimitiveCapabilities<'cap> {
     pub(crate) output: Option<&'cap mut (dyn RuntimeOutput + 'cap)>,
     pub(crate) input: Option<&'cap mut (dyn RuntimeInput + 'cap)>,
+    pub(crate) random: Option<&'cap mut RandomState>,
 }
 
 impl<'stack, 'cap> PrimitiveContext<'stack, 'cap> {
@@ -44,6 +48,7 @@ impl<'stack, 'cap> PrimitiveContext<'stack, 'cap> {
             capabilities: PrimitiveCapabilities {
                 output: None,
                 input: None,
+                random: None,
             },
         }
     }
@@ -57,6 +62,7 @@ impl<'stack, 'cap> PrimitiveContext<'stack, 'cap> {
             capabilities: PrimitiveCapabilities {
                 output,
                 input: None,
+                random: None,
             },
         }
     }
@@ -114,14 +120,32 @@ impl<'stack, 'cap> PrimitiveContext<'stack, 'cap> {
         self
     }
 
+    pub(crate) fn random_inclusive(&mut self, upper_bound: i16) -> Result<i16, PrimitiveError> {
+        self.capabilities
+            .random
+            .as_deref_mut()
+            .ok_or(PrimitiveError::RandomUnavailable)?
+            .next_inclusive(upper_bound)
+            .map_err(|error| match error {
+                RandomError::InvalidUpperBound { upper_bound } => {
+                    PrimitiveError::InvalidRandomUpperBound { upper_bound }
+                }
+            })
+    }
+
     pub(crate) fn with_capabilities(
         data_stack: &'stack mut DataStack,
         output: Option<&'cap mut dyn RuntimeOutput>,
         input: Option<&'cap mut dyn RuntimeInput>,
+        random: Option<&'cap mut RandomState>,
     ) -> Self {
         Self {
             data_stack,
-            capabilities: PrimitiveCapabilities { output, input },
+            capabilities: PrimitiveCapabilities {
+                output,
+                input,
+                random,
+            },
         }
     }
 

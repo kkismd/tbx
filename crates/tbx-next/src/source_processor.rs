@@ -22,6 +22,7 @@ use crate::primitive::PrimitiveLookup;
 use crate::published_code::{
     NewWordPublicationError, PublishedCode, PublishedWordBuilder, WordBodyBuildError,
 };
+use crate::random::RandomState;
 use crate::runtime_input::RuntimeInput;
 use crate::runtime_output::RuntimeOutput;
 use crate::source::{SourceError, SourceId, SourceSpan, SourceView};
@@ -263,6 +264,7 @@ pub(crate) struct SourceExecutionContext<'a> {
     primitives: PrimitiveLookup<'a>,
     output: Option<&'a mut dyn RuntimeOutput>,
     input: Option<&'a mut dyn RuntimeInput>,
+    random: Option<&'a mut RandomState>,
 }
 
 #[derive(Debug)]
@@ -1650,6 +1652,9 @@ pub(crate) fn run_unit_with_data_stack(
     if let Some(input) = context.input {
         execution = execution.with_input(input);
     }
+    if let Some(random) = context.random {
+        execution = execution.with_random(random);
+    }
     let mut vm = Vm::new_at_location_in(&mut execution, unit.entry)
         .map_err(|error| map_runtime_error(error, unit, context.source_mappings))?;
     for value in initial_data_stack {
@@ -2551,6 +2556,7 @@ impl<'a> SourceExecutionContext<'a> {
             primitives,
             output: None,
             input: None,
+            random: None,
         }
     }
 
@@ -2570,6 +2576,7 @@ impl<'a> SourceExecutionContext<'a> {
             primitives,
             output: None,
             input: None,
+            random: None,
         }
     }
 
@@ -2590,6 +2597,7 @@ impl<'a> SourceExecutionContext<'a> {
             primitives,
             output: None,
             input: None,
+            random: None,
         }
     }
 
@@ -2610,6 +2618,7 @@ impl<'a> SourceExecutionContext<'a> {
             primitives,
             output: None,
             input: None,
+            random: None,
         }
     }
 
@@ -2631,6 +2640,7 @@ impl<'a> SourceExecutionContext<'a> {
             primitives,
             output: None,
             input: None,
+            random: None,
         }
     }
 
@@ -2651,6 +2661,7 @@ impl<'a> SourceExecutionContext<'a> {
             primitives,
             output: None,
             input: None,
+            random: None,
         }
     }
 
@@ -2672,6 +2683,7 @@ impl<'a> SourceExecutionContext<'a> {
             primitives,
             output: None,
             input: None,
+            random: None,
         }
     }
 
@@ -2693,6 +2705,7 @@ impl<'a> SourceExecutionContext<'a> {
             primitives,
             output: None,
             input: None,
+            random: None,
         }
     }
 
@@ -2716,6 +2729,11 @@ impl<'a> SourceExecutionContext<'a> {
 
     pub(crate) fn with_input(mut self, input: &'a mut dyn RuntimeInput) -> Self {
         self.input = Some(input);
+        self
+    }
+
+    pub(crate) fn with_random(mut self, random: &'a mut RandomState) -> Self {
+        self.random = Some(random);
         self
     }
 
