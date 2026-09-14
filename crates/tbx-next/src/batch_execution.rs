@@ -795,6 +795,35 @@ mod tests {
     }
 
     #[test]
+    fn putchr_accepts_character_hex_and_triple_quote_literals_from_source() {
+        let text = "PUTCHR 'A'\nPUTCHR $41\nPUTCHR '''\nPUTCHR $27\nPUTCHR $0A";
+        let (sources, source_id) = source(text, "program.tbx");
+        let mut writer = RecordingWriter::default();
+
+        let result = success(execute_registered_source(&sources, source_id, &mut writer));
+
+        assert_eq!(result.data_stack(), []);
+        assert_eq!(writer.text(), "AA''\n");
+    }
+
+    #[test]
+    fn putchr_reports_ascii_range_errors_after_hex_literal_evaluation() {
+        for text in ["PUTCHR -1", "PUTCHR 128", "PUTCHR $F1"] {
+            let (sources, source_id) = source(text, "program.tbx");
+            let mut writer = RecordingWriter::default();
+
+            let failure = failure(execute_registered_source(&sources, source_id, &mut writer));
+
+            assert_eq!(
+                failure.class(),
+                UserFacingFailureClass::UserProgram,
+                "{text}"
+            );
+            assert_eq!(writer.text(), "", "{text}");
+        }
+    }
+
+    #[test]
     fn print_lowers_fixed_text_and_integer_expressions_in_source_order() {
         let text = "LET A = 42\nLET B = 5\nPRINT \"Im \", A, \" years old. TOTAL = \", A + B";
         let (sources, source_id) = source(text, "program.tbx");

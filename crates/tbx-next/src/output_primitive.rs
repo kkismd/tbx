@@ -8,6 +8,7 @@ use crate::word::{PublishedWords, WordId};
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct OutputPrimitiveWords {
     putdec: WordId,
+    putchr: WordId,
     cr: WordId,
 }
 
@@ -17,25 +18,32 @@ pub(crate) fn register_output_primitives(
     bindings: &mut Bindings,
 ) -> Result<OutputPrimitiveWords, PrimitiveBootstrapError> {
     let putdec_name = builtin_name("PUTDEC");
+    let putchr_name = builtin_name("PUTCHR");
     let cr_name = builtin_name("CR");
 
-    for name in [&putdec_name, &cr_name] {
+    for name in [&putdec_name, &putchr_name, &cr_name] {
         bindings
             .validate_new_name(name)
             .map_err(primitive_bootstrap_precheck_error)?;
     }
 
     let putdec_primitive = primitives.register(putdec);
+    let putchr_primitive = primitives.register(putchr);
     let cr_primitive = primitives.register(cr);
     let putdec = register_primitive(words, bindings, putdec_name, putdec_primitive)?;
+    let putchr = register_primitive(words, bindings, putchr_name, putchr_primitive)?;
     let cr = register_primitive(words, bindings, cr_name, cr_primitive)?;
 
-    Ok(OutputPrimitiveWords { putdec, cr })
+    Ok(OutputPrimitiveWords { putdec, putchr, cr })
 }
 
 impl OutputPrimitiveWords {
     pub(crate) const fn putdec(self) -> WordId {
         self.putdec
+    }
+
+    pub(crate) const fn putchr(self) -> WordId {
+        self.putchr
     }
 
     pub(crate) const fn cr(self) -> WordId {
@@ -65,6 +73,25 @@ fn putdec(context: &mut PrimitiveContext<'_>) -> Result<(), PrimitiveError> {
     context
         .pop()
         .expect("PUTDEC value was checked before consuming it");
+    Ok(())
+}
+
+fn putchr(context: &mut PrimitiveContext<'_>) -> Result<(), PrimitiveError> {
+    if context.data_stack_is_empty() {
+        return Ok(());
+    }
+
+    let value = context.peek()?.as_integer();
+    let byte = u8::try_from(value).map_err(|_| PrimitiveError::AsciiOutOfRange { value })?;
+    if byte > 0x7f {
+        return Err(PrimitiveError::AsciiOutOfRange { value });
+    }
+
+    let text = char::from(byte).to_string();
+    context.write_output(&text)?;
+    context
+        .pop()
+        .expect("PUTCHR value was checked before consuming it");
     Ok(())
 }
 
@@ -291,19 +318,107 @@ mod tests {
     }
 
     #[test]
-    fn output_primitive_bootstrap_publishes_print_and_cr_as_runtime_words() {
+    fn putchr_outputs_ascii_representatives_and_consumes_only_the_top_value() {
+        for (input, expected) in [
+            (0, "\0"),
+            (10, "\n"),
+            (32, " "),
+            (39, "'"),
+            (48, "0"),
+            (65, "A"),
+            (97, "a"),
+            (127, "\u{7f}"),
+        ] {
+            let (mut vm, output, result) = run_calls(|code, words| {
+                code.append(Instruction::Push(value(7)));
+                code.append(Instruction::Push(value(input)));
+                code.append(Instruction::Call(words.putchr()));
+            });
+
+            assert_eq!(result, Ok(RunOutcome::Halted), "input {input}");
+            assert_eq!(output.chunks(), [expected], "input {input}");
+            assert_eq!(vm.data_stack_depth(), 1, "input {input}");
+            assert_eq!(vm.pop_data(), Ok(value(7)), "input {input}");
+        }
+    }
+
+    #[test]
+    fn putchr_rejects_values_outside_ascii_without_output_or_stack_consumption() {
+        for input in [-1, 128, 241] {
+            let (mut vm, output, result) = run_calls(|code, words| {
+                code.append(Instruction::Push(value(input)));
+                code.append(Instruction::Call(words.putchr()));
+            });
+
+            let error = result.expect_err("out-of-range PUTCHR should fail");
+            assert!(
+                matches!(
+                    error.kind(),
+                    VmErrorKind::PrimitiveFailed {
+                        source: PrimitiveError::AsciiOutOfRange { value },
+                        ..
+                    } if value == input
+                ),
+                "input {input}"
+            );
+            assert!(output.chunks().is_empty(), "input {input}");
+            assert_eq!(vm.data_stack_depth(), 1, "input {input}");
+            assert_eq!(vm.pop_data(), Ok(value(input)), "input {input}");
+        }
+    }
+
+    #[test]
+    fn putchr_output_failure_leaves_target_value_on_stack() {
+        let (primitives, words, _, output_words) = bootstrapped_output_words();
+        let mut code = InstructionSequence::new();
+        let entry = code.append(Instruction::Push(value(65)));
+        let call = code.append(Instruction::Call(output_words.putchr()));
+        code.append(Instruction::Halt);
+        let mut output = TestOutput::new();
+        output.fail_next_write(RuntimeOutputError::Failed);
+        let mut vm = Vm::new(code.view(), entry).expect("test entry should be valid");
+
+        assert_eq!(vm.step(code.view()), Ok(StepOutcome::Continued));
+        let result = vm.step(execution(&code, &words, &primitives).with_output(&mut output));
+
+        let error = result.expect_err("failed output should fail PUTCHR");
+        assert!(matches!(
+            error.kind(),
+            VmErrorKind::PrimitiveFailed {
+                source: PrimitiveError::OutputFailed {
+                    source: RuntimeOutputError::Failed,
+                },
+                ..
+            }
+        ));
+        assert!(output.chunks().is_empty());
+        assert_eq!(vm.data_stack_depth(), 1);
+        assert_eq!(vm.pop_data(), Ok(value(65)));
+        assert_eq!(vm.instruction_pointer(), code.view().location(call));
+    }
+
+    #[test]
+    fn output_primitive_bootstrap_publishes_putdec_putchr_and_cr_as_runtime_words() {
         let (primitives, words, bindings, output_words) = bootstrapped_output_words();
 
-        assert_eq!(primitives.len(), 2);
-        assert_eq!(words.len(), 2);
+        assert_eq!(primitives.len(), 3);
+        assert_eq!(words.len(), 3);
         assert_eq!(
             resolve_word_name(&bindings, "putdec"),
             Ok(output_words.putdec())
+        );
+        assert_eq!(
+            resolve_word_name(&bindings, "putchr"),
+            Ok(output_words.putchr())
         );
         assert_eq!(resolve_word_name(&bindings, "cr"), Ok(output_words.cr()));
         assert_eq!(
             bindings.get(&name("PUTDEC")),
             Some(&Binding::Word(output_words.putdec()))
+        );
+        assert_eq!(
+            bindings.get(&name("PUTCHR")),
+            Some(&Binding::Word(output_words.putchr()))
         );
         assert!(bindings.get(&name("PRINT")).is_none());
         assert_eq!(
@@ -312,6 +427,10 @@ mod tests {
         );
         assert!(matches!(
             words.get(output_words.putdec()),
+            Ok(WordDefinition::Primitive { .. })
+        ));
+        assert!(matches!(
+            words.get(output_words.putchr()),
             Ok(WordDefinition::Primitive { .. })
         ));
         assert!(matches!(
