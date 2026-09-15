@@ -959,6 +959,8 @@ impl StructuredOwnerLocalTarget {
             Instruction::Push(_)
             | Instruction::LoadVar(_)
             | Instruction::StoreVar(_)
+            | Instruction::LoadArrayElement(_)
+            | Instruction::StoreArrayElement(_)
             | Instruction::Call(_)
             | Instruction::CopyFromCallBase { .. }
             | Instruction::TruncateDataStackToCallBase

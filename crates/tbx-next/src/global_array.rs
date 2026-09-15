@@ -25,6 +25,11 @@ pub(crate) enum GlobalArrayError {
         index: usize,
         len: usize,
     },
+    SurfaceIndexOutOfBounds {
+        id: ArrayId,
+        index: i16,
+        len: usize,
+    },
 }
 
 /// Owns global array elements for the lifetime of a processing session.
@@ -73,6 +78,12 @@ impl GlobalArrayView<'_> {
     pub(crate) fn read(self, id: ArrayId, index: usize) -> Result<Value, GlobalArrayError> {
         read_element(self.arrays, id, index)
     }
+
+    pub(crate) fn read_surface(self, id: ArrayId, index: i16) -> Result<Value, GlobalArrayError> {
+        let len = array_len(self.arrays, id)?;
+        let internal_index = surface_index(id, index, len)?;
+        read_element(self.arrays, id, internal_index)
+    }
 }
 
 #[derive(Debug)]
@@ -83,6 +94,23 @@ pub(crate) struct GlobalArrayViewMut<'a> {
 impl GlobalArrayViewMut<'_> {
     pub(crate) fn read(&self, id: ArrayId, index: usize) -> Result<Value, GlobalArrayError> {
         read_element(self.arrays, id, index)
+    }
+
+    pub(crate) fn read_surface(&self, id: ArrayId, index: i16) -> Result<Value, GlobalArrayError> {
+        let len = array_len(self.arrays, id)?;
+        let internal_index = surface_index(id, index, len)?;
+        read_element(self.arrays, id, internal_index)
+    }
+
+    pub(crate) fn write_surface(
+        &mut self,
+        id: ArrayId,
+        index: i16,
+        value: Value,
+    ) -> Result<(), GlobalArrayError> {
+        let len = array_len(self.arrays, id)?;
+        let internal_index = surface_index(id, index, len)?;
+        self.write(id, internal_index, value)
     }
 
     pub(crate) fn write(
@@ -102,6 +130,20 @@ impl GlobalArrayViewMut<'_> {
         *element = value;
         Ok(())
     }
+}
+
+fn array_len(arrays: &[Vec<Value>], id: ArrayId) -> Result<usize, GlobalArrayError> {
+    arrays
+        .get(id.slot)
+        .map(Vec::len)
+        .ok_or(GlobalArrayError::InvalidArrayId { id })
+}
+
+fn surface_index(id: ArrayId, index: i16, len: usize) -> Result<usize, GlobalArrayError> {
+    if index <= 0 || index as usize > len {
+        return Err(GlobalArrayError::SurfaceIndexOutOfBounds { id, index, len });
+    }
+    Ok(index as usize - 1)
 }
 
 fn read_element(

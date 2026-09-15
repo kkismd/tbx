@@ -717,6 +717,8 @@ fn reject_owner_local_direct_branch(
         | Instruction::WriteFixedText(_)
         | Instruction::LoadVar(_)
         | Instruction::StoreVar(_)
+        | Instruction::LoadArrayElement(_)
+        | Instruction::StoreArrayElement(_)
         | Instruction::Call(_)
         | Instruction::CopyFromCallBase { .. }
         | Instruction::TruncateDataStackToCallBase

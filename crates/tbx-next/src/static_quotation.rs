@@ -132,6 +132,8 @@ impl StaticQuotation {
             Instruction::Push(_)
             | Instruction::LoadVar(_)
             | Instruction::StoreVar(_)
+            | Instruction::LoadArrayElement(_)
+            | Instruction::StoreArrayElement(_)
             | Instruction::Call(_)
             | Instruction::CopyFromCallBase { .. }
             | Instruction::TruncateDataStackToCallBase
@@ -244,6 +246,32 @@ mod tests {
                 .source_mapping()
                 .source_span(parent.instruction_view().location(address(1))),
             Ok(None)
+        );
+    }
+
+    #[test]
+    fn array_instructions_attach_without_address_rebasing() {
+        let mut arrays = crate::global_array::GlobalArrays::new();
+        let id = arrays.allocate(2);
+        let quotation = StaticQuotation::build(|builder| {
+            builder.append_unmapped(Instruction::LoadArrayElement(id))?;
+            builder.append_unmapped(Instruction::StoreArrayElement(id))?;
+            Ok(())
+        })
+        .expect("quotation completes");
+        let parent = build_parent(|builder| {
+            builder.append_unmapped(push(99))?;
+            quotation.attach_to(builder).map_err(|_| unreachable!())?;
+            Ok(())
+        });
+
+        assert_eq!(
+            parent.instruction_view().get(address(1)),
+            Ok(&Instruction::LoadArrayElement(id))
+        );
+        assert_eq!(
+            parent.instruction_view().get(address(2)),
+            Ok(&Instruction::StoreArrayElement(id))
         );
     }
 

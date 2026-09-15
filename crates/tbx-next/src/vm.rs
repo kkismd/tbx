@@ -1,3 +1,4 @@
+use crate::global_array::{ArrayId, GlobalArrayError, GlobalArrayView, GlobalArrayViewMut};
 use crate::global_variable::{
     GlobalVarId, GlobalVariableError, GlobalVariableView, GlobalVariableViewMut,
 };
@@ -82,6 +83,9 @@ pub(crate) enum VmErrorKind {
     InvalidGlobalVarId {
         source: GlobalVariableError,
     },
+    InvalidGlobalArray {
+        source: GlobalArrayError,
+    },
     InvalidCompiledEntry {
         source: InstructionLookupError,
     },
@@ -120,6 +124,7 @@ pub(crate) struct ExecutionView<'a> {
     words: PublishedWordLookup<'a>,
     primitives: PrimitiveLookup<'a>,
     globals: Option<GlobalExecutionAccess<'a>>,
+    arrays: Option<GlobalArrayExecutionAccess<'a>>,
     output: Option<&'a mut dyn RuntimeOutput>,
     input: Option<&'a mut dyn RuntimeInput>,
     random: Option<&'a mut RandomState>,
@@ -129,6 +134,12 @@ pub(crate) struct ExecutionView<'a> {
 enum GlobalExecutionAccess<'a> {
     Read(GlobalVariableView<'a>),
     Write(GlobalVariableViewMut<'a>),
+}
+
+#[derive(Debug)]
+enum GlobalArrayExecutionAccess<'a> {
+    Read(GlobalArrayView<'a>),
+    Write(GlobalArrayViewMut<'a>),
 }
 
 impl<'a> ExecutionView<'a> {
@@ -150,6 +161,7 @@ impl<'a> ExecutionView<'a> {
             words,
             primitives,
             globals: None,
+            arrays: None,
             output: None,
             input: None,
             random: None,
@@ -171,6 +183,16 @@ impl<'a> ExecutionView<'a> {
 
     pub(crate) fn with_global_reader(mut self, globals: GlobalVariableView<'a>) -> Self {
         self.globals = Some(GlobalExecutionAccess::Read(globals));
+        self
+    }
+
+    pub(crate) fn with_arrays(mut self, arrays: GlobalArrayViewMut<'a>) -> Self {
+        self.arrays = Some(GlobalArrayExecutionAccess::Write(arrays));
+        self
+    }
+
+    pub(crate) fn with_array_reader(mut self, arrays: GlobalArrayView<'a>) -> Self {
+        self.arrays = Some(GlobalArrayExecutionAccess::Read(arrays));
         self
     }
 
@@ -230,6 +252,19 @@ pub(crate) trait VmExecutionView<'a> {
 
     fn write_global(&mut self, id: GlobalVarId, value: Value) -> Result<(), GlobalVariableError>;
 
+    fn read_array(&self, id: ArrayId, _index: i16) -> Result<Value, GlobalArrayError> {
+        Err(GlobalArrayError::InvalidArrayId { id })
+    }
+
+    fn write_array(
+        &mut self,
+        id: ArrayId,
+        _index: i16,
+        _value: Value,
+    ) -> Result<(), GlobalArrayError> {
+        Err(GlobalArrayError::InvalidArrayId { id })
+    }
+
     fn runtime_output(&mut self) -> Option<&mut (dyn RuntimeOutput + '_)> {
         None
     }
@@ -282,6 +317,30 @@ impl<'a> VmExecutionView<'a> for ExecutionView<'a> {
             Some(GlobalExecutionAccess::Write(globals)) => globals.write(id, value),
             Some(GlobalExecutionAccess::Read(_)) | None => {
                 Err(GlobalVariableError::InvalidGlobalVarId { id })
+            }
+        }
+    }
+
+    fn read_array(&self, id: ArrayId, index: i16) -> Result<Value, GlobalArrayError> {
+        match &self.arrays {
+            Some(GlobalArrayExecutionAccess::Read(arrays)) => arrays.read_surface(id, index),
+            Some(GlobalArrayExecutionAccess::Write(arrays)) => arrays.read_surface(id, index),
+            None => Err(GlobalArrayError::InvalidArrayId { id }),
+        }
+    }
+
+    fn write_array(
+        &mut self,
+        id: ArrayId,
+        index: i16,
+        value: Value,
+    ) -> Result<(), GlobalArrayError> {
+        match &mut self.arrays {
+            Some(GlobalArrayExecutionAccess::Write(arrays)) => {
+                arrays.write_surface(id, index, value)
+            }
+            Some(GlobalArrayExecutionAccess::Read(_)) | None => {
+                Err(GlobalArrayError::InvalidArrayId { id })
             }
         }
     }
@@ -367,6 +426,19 @@ impl<'a, T: VmExecutionView<'a> + ?Sized> VmExecutionView<'a> for &mut T {
         (**self).write_global(id, value)
     }
 
+    fn read_array(&self, id: ArrayId, index: i16) -> Result<Value, GlobalArrayError> {
+        (**self).read_array(id, index)
+    }
+
+    fn write_array(
+        &mut self,
+        id: ArrayId,
+        index: i16,
+        value: Value,
+    ) -> Result<(), GlobalArrayError> {
+        (**self).write_array(id, index, value)
+    }
+
     fn runtime_output(&mut self) -> Option<&mut (dyn RuntimeOutput + '_)> {
         (**self).runtime_output()
     }
@@ -448,6 +520,10 @@ impl Vm {
             }
             Instruction::LoadVar(id) => self.step_load_var(&mut execution, location, id),
             Instruction::StoreVar(id) => self.step_store_var(&mut execution, location, id),
+            Instruction::LoadArrayElement(id) => self.step_load_array(&mut execution, location, id),
+            Instruction::StoreArrayElement(id) => {
+                self.step_store_array(&mut execution, location, id)
+            }
             Instruction::Call(id) => self.step_call(execution, location, id),
             Instruction::CopyFromCallBase { offset } => {
                 self.step_copy_from_call_base(instructions, location, offset)
@@ -616,6 +692,52 @@ impl Vm {
             .expect("depth was checked before consuming StoreVar value");
         self.instruction_pointer = next;
 
+        Ok(StepOutcome::Continued)
+    }
+
+    fn step_load_array<'a, E: VmExecutionView<'a>>(
+        &mut self,
+        execution: &mut E,
+        location: CodeLocation,
+        id: ArrayId,
+    ) -> Result<StepOutcome, VmError> {
+        self.data_stack.require_depth(1).map_err(|source| VmError {
+            location,
+            kind: VmErrorKind::DataStackUnderflow { source },
+        })?;
+        let index = self.data_stack.peek().expect("depth checked").as_integer();
+        let instructions = execution.instructions();
+        let next = self.valid_next_location(instructions, location)?;
+        let value = execution.read_array(id, index).map_err(|source| VmError {
+            location,
+            kind: VmErrorKind::InvalidGlobalArray { source },
+        })?;
+        self.data_stack.replace_top(value).expect("depth checked");
+        self.instruction_pointer = next;
+        Ok(StepOutcome::Continued)
+    }
+
+    fn step_store_array<'a, E: VmExecutionView<'a>>(
+        &mut self,
+        execution: &mut E,
+        location: CodeLocation,
+        id: ArrayId,
+    ) -> Result<StepOutcome, VmError> {
+        self.data_stack.require_depth(2).map_err(|source| VmError {
+            location,
+            kind: VmErrorKind::DataStackUnderflow { source },
+        })?;
+        let (index, value) = self.data_stack.peek2().expect("depth checked");
+        let instructions = execution.instructions();
+        let next = self.valid_next_location(instructions, location)?;
+        execution
+            .write_array(id, index.as_integer(), value)
+            .map_err(|source| VmError {
+                location,
+                kind: VmErrorKind::InvalidGlobalArray { source },
+            })?;
+        self.data_stack.pop2().expect("depth checked");
+        self.instruction_pointer = next;
         Ok(StepOutcome::Continued)
     }
 
@@ -960,6 +1082,15 @@ mod tests {
         execution(code, words, primitives).with_globals(globals.view_mut())
     }
 
+    fn execution_with_arrays<'a>(
+        code: &'a InstructionSequence,
+        words: &'a PublishedWords,
+        primitives: &'a PrimitiveRegistry,
+        arrays: &'a mut crate::global_array::GlobalArrays,
+    ) -> ExecutionView<'a> {
+        execution(code, words, primitives).with_arrays(arrays.view_mut())
+    }
+
     #[derive(Debug, Clone, PartialEq, Eq)]
     struct VmSnapshot {
         instruction_pointer: CodeLocation,
@@ -1239,6 +1370,270 @@ mod tests {
         assert_eq!(vm.pop_data(), Ok(value(10)));
         assert_eq!(globals.view().read(first), Ok(value(10)));
         assert_eq!(globals.view().read(second), Ok(value(20)));
+    }
+
+    #[test]
+    fn array_load_uses_one_origin_indices_and_replaces_the_index() {
+        let words = PublishedWords::new();
+        let primitives = PrimitiveRegistry::new();
+        let mut arrays = crate::global_array::GlobalArrays::new();
+        let id = arrays.allocate(3);
+        {
+            let mut view = arrays.view_mut();
+            view.write(id, 0, value(11)).unwrap();
+            view.write(id, 1, value(22)).unwrap();
+            view.write(id, 2, value(33)).unwrap();
+        }
+        let mut code = InstructionSequence::new();
+        let entry = code.append(Instruction::Push(value(1)));
+        code.append(Instruction::LoadArrayElement(id));
+        code.append(Instruction::Push(value(3)));
+        code.append(Instruction::LoadArrayElement(id));
+        code.append(Instruction::Halt);
+        let mut vm = new_vm(&code, entry);
+
+        assert_eq!(
+            vm.run(execution_with_arrays(
+                &code,
+                &words,
+                &primitives,
+                &mut arrays
+            )),
+            Ok(RunOutcome::Halted)
+        );
+        assert_eq!(vm.data_stack.as_slice(), &[value(11), value(33)]);
+    }
+
+    #[test]
+    fn array_store_updates_only_selected_element_and_consumes_operands() {
+        let words = PublishedWords::new();
+        let primitives = PrimitiveRegistry::new();
+        let mut arrays = crate::global_array::GlobalArrays::new();
+        let id = arrays.allocate(3);
+        let mut code = InstructionSequence::new();
+        let entry = code.append(Instruction::Push(value(2)));
+        code.append(Instruction::Push(value(42)));
+        code.append(Instruction::StoreArrayElement(id));
+        code.append(Instruction::Halt);
+        let mut vm = new_vm(&code, entry);
+
+        assert_eq!(
+            vm.run(execution_with_arrays(
+                &code,
+                &words,
+                &primitives,
+                &mut arrays
+            )),
+            Ok(RunOutcome::Halted)
+        );
+        assert!(vm.data_stack.is_empty());
+        assert_eq!(arrays.view().read(id, 0), Ok(value(0)));
+        assert_eq!(arrays.view().read(id, 1), Ok(value(42)));
+        assert_eq!(arrays.view().read(id, 2), Ok(value(0)));
+    }
+
+    #[test]
+    fn array_load_failures_preserve_vm_and_storage() {
+        let words = PublishedWords::new();
+        let primitives = PrimitiveRegistry::new();
+        let mut arrays = crate::global_array::GlobalArrays::new();
+        let valid = arrays.allocate(2);
+        arrays.view_mut().write(valid, 0, value(17)).unwrap();
+
+        for (id, index, source) in [
+            (
+                valid,
+                0,
+                GlobalArrayError::SurfaceIndexOutOfBounds {
+                    id: valid,
+                    index: 0,
+                    len: 2,
+                },
+            ),
+            (
+                valid,
+                -1,
+                GlobalArrayError::SurfaceIndexOutOfBounds {
+                    id: valid,
+                    index: -1,
+                    len: 2,
+                },
+            ),
+            (
+                valid,
+                3,
+                GlobalArrayError::SurfaceIndexOutOfBounds {
+                    id: valid,
+                    index: 3,
+                    len: 2,
+                },
+            ),
+            (
+                ArrayId::test_invalid(8),
+                1,
+                GlobalArrayError::InvalidArrayId {
+                    id: ArrayId::test_invalid(8),
+                },
+            ),
+        ] {
+            let mut code = InstructionSequence::new();
+            let entry = code.append(Instruction::LoadArrayElement(id));
+            code.append(Instruction::Halt);
+            let mut vm = new_vm(&code, entry);
+            vm.data_stack.push(value(index));
+            let before = snapshot(&vm);
+
+            assert_eq!(
+                vm.step(execution_with_arrays(
+                    &code,
+                    &words,
+                    &primitives,
+                    &mut arrays
+                )),
+                Err(VmError {
+                    location: location(&code, entry),
+                    kind: VmErrorKind::InvalidGlobalArray { source }
+                })
+            );
+            assert_vm_state(&vm, before);
+            assert_eq!(arrays.view().read(valid, 0), Ok(value(17)));
+        }
+    }
+
+    #[test]
+    fn array_store_failures_preserve_vm_and_storage() {
+        let words = PublishedWords::new();
+        let primitives = PrimitiveRegistry::new();
+        let mut arrays = crate::global_array::GlobalArrays::new();
+        let id = arrays.allocate(1);
+        let mut code = InstructionSequence::new();
+        let entry = code.append(Instruction::StoreArrayElement(id));
+        code.append(Instruction::Halt);
+        let mut vm = new_vm(&code, entry);
+        vm.data_stack.push(value(0));
+        vm.data_stack.push(value(99));
+        let before = snapshot(&vm);
+
+        assert_eq!(
+            vm.step(execution_with_arrays(
+                &code,
+                &words,
+                &primitives,
+                &mut arrays
+            )),
+            Err(VmError {
+                location: location(&code, entry),
+                kind: VmErrorKind::InvalidGlobalArray {
+                    source: GlobalArrayError::SurfaceIndexOutOfBounds {
+                        id,
+                        index: 0,
+                        len: 1
+                    }
+                }
+            })
+        );
+        assert_vm_state(&vm, before);
+        assert_eq!(arrays.view().read(id, 0), Ok(value(0)));
+
+        let invalid = ArrayId::test_invalid(7);
+        let mut invalid_code = InstructionSequence::new();
+        let invalid_entry = invalid_code.append(Instruction::StoreArrayElement(invalid));
+        invalid_code.append(Instruction::Halt);
+        let mut invalid_vm = new_vm(&invalid_code, invalid_entry);
+        invalid_vm.data_stack.push(value(1));
+        invalid_vm.data_stack.push(value(99));
+        let invalid_before = snapshot(&invalid_vm);
+        assert_eq!(
+            invalid_vm.step(execution_with_arrays(
+                &invalid_code,
+                &words,
+                &primitives,
+                &mut arrays
+            )),
+            Err(VmError {
+                location: location(&invalid_code, invalid_entry),
+                kind: VmErrorKind::InvalidGlobalArray {
+                    source: GlobalArrayError::InvalidArrayId { id: invalid }
+                }
+            })
+        );
+        assert_vm_state(&invalid_vm, invalid_before);
+        assert_eq!(arrays.view().read(id, 0), Ok(value(0)));
+    }
+
+    #[test]
+    fn array_stack_underflow_preserves_vm_and_storage() {
+        let words = PublishedWords::new();
+        let primitives = PrimitiveRegistry::new();
+        let mut arrays = crate::global_array::GlobalArrays::new();
+        let id = arrays.allocate(1);
+        let mut code = InstructionSequence::new();
+        let entry = code.append(Instruction::StoreArrayElement(id));
+        code.append(Instruction::Halt);
+        let mut vm = new_vm(&code, entry);
+        let before = snapshot(&vm);
+
+        assert_eq!(
+            vm.step(execution_with_arrays(
+                &code,
+                &words,
+                &primitives,
+                &mut arrays
+            )),
+            Err(VmError {
+                location: location(&code, entry),
+                kind: VmErrorKind::DataStackUnderflow {
+                    source: StackError::DataStackUnderflow
+                }
+            })
+        );
+        assert_vm_state(&vm, before);
+        assert_eq!(arrays.view().read(id, 0), Ok(value(0)));
+
+        let mut one_value_code = InstructionSequence::new();
+        let one_value_entry = one_value_code.append(Instruction::StoreArrayElement(id));
+        one_value_code.append(Instruction::Halt);
+        let mut one_value_vm = new_vm(&one_value_code, one_value_entry);
+        one_value_vm.data_stack.push(value(1));
+        let one_value_before = snapshot(&one_value_vm);
+        assert_eq!(
+            one_value_vm.step(execution_with_arrays(
+                &one_value_code,
+                &words,
+                &primitives,
+                &mut arrays
+            )),
+            Err(VmError {
+                location: location(&one_value_code, one_value_entry),
+                kind: VmErrorKind::DataStackUnderflow {
+                    source: StackError::DataStackUnderflow
+                }
+            })
+        );
+        assert_vm_state(&one_value_vm, one_value_before);
+        assert_eq!(arrays.view().read(id, 0), Ok(value(0)));
+
+        let mut load_code = InstructionSequence::new();
+        let load_entry = load_code.append(Instruction::LoadArrayElement(id));
+        load_code.append(Instruction::Halt);
+        let mut load_vm = new_vm(&load_code, load_entry);
+        let load_before = snapshot(&load_vm);
+        assert_eq!(
+            load_vm.step(execution_with_arrays(
+                &load_code,
+                &words,
+                &primitives,
+                &mut arrays
+            )),
+            Err(VmError {
+                location: location(&load_code, load_entry),
+                kind: VmErrorKind::DataStackUnderflow {
+                    source: StackError::DataStackUnderflow
+                }
+            })
+        );
+        assert_vm_state(&load_vm, load_before);
+        assert_eq!(arrays.view().read(id, 0), Ok(value(0)));
     }
 
     #[test]
