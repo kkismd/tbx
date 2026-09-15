@@ -300,6 +300,7 @@ impl SourceProcessingSession {
                     self.environment.primitives.lookup(),
                 )
                 .with_mut_globals(self.environment.globals.view_mut())
+                .with_mut_arrays(self.environment.arrays.view_mut())
                 .with_random(&mut self.environment.random)
                 .with_output(&mut output);
                 let context = match input.as_deref_mut() {
@@ -596,6 +597,7 @@ where
                 environment.primitives.lookup(),
             )
             .with_mut_globals(environment.globals.view_mut())
+            .with_mut_arrays(environment.arrays.view_mut())
             .with_random(&mut environment.random)
             .with_output(&mut output);
             run_unit(&unit, context)
@@ -875,6 +877,80 @@ mod tests {
 
         assert_eq!(result.data_stack(), [Value::integer(4)]);
         assert_eq!(writer.text(), "4\n");
+    }
+
+    #[test]
+    fn global_arrays_support_expression_reads_and_indexed_writes() {
+        let text = "DIM @DATA[4]\nLET I = 2\nLET @DATA[1] = 7\nLET @DATA[I + 1] = @DATA[1] + 5\nEVAL @DATA[1]\nEVAL @DATA[(I + 1)]\nLET @DATA[4] = 9\nEVAL @DATA[4]";
+        let (sources, source_id) = source(text, "program.tbx");
+        let mut writer = RecordingWriter::default();
+
+        let result = success(execute_registered_source(&sources, source_id, &mut writer));
+
+        assert_eq!(
+            result.data_stack(),
+            [Value::integer(7), Value::integer(12), Value::integer(9)]
+        );
+    }
+
+    #[test]
+    fn array_element_access_resolves_names_case_insensitively() {
+        let (sources, source_id) = source(
+            "DIM @Scores[2]\nLET @sCoReS[2] = 11\nEVAL @SCORES[2]",
+            "program.tbx",
+        );
+        let mut writer = RecordingWriter::default();
+
+        let result = success(execute_registered_source(&sources, source_id, &mut writer));
+
+        assert_eq!(result.data_stack(), [Value::integer(11)]);
+    }
+
+    #[test]
+    fn array_index_runtime_errors_are_preserved() {
+        for index in ["0", "-1", "3"] {
+            let text = format!("DIM @A[2]\nEVAL @A[{index}]");
+            let (sources, source_id) = source(&text, "program.tbx");
+            let mut writer = RecordingWriter::default();
+
+            let failure = failure(execute_registered_source(&sources, source_id, &mut writer));
+
+            assert_eq!(
+                failure.class(),
+                UserFacingFailureClass::UserProgram,
+                "{index}"
+            );
+        }
+    }
+
+    #[test]
+    fn array_access_rejects_non_arrays_and_malformed_forms_at_compile_time() {
+        for text in [
+            "DIM @DATA[2]\nEVAL @DATA",
+            "DIM @DATA[2]\nEVAL @DATA[]",
+            "DIM @DATA[2]\nEVAL @DATA[1",
+            "DIM @DATA[2]\nEVAL @DATA[1] 2",
+            "EVAL @MISSING[1]",
+            "EVAL @Z[1]",
+            "EVAL @ABS[1]",
+            "EVAL @LET[1]",
+        ] {
+            let (sources, source_id) = source(text, "program.tbx");
+            let mut writer = RecordingWriter::default();
+
+            let failure = failure(execute_registered_source(&sources, source_id, &mut writer));
+
+            assert_eq!(
+                failure.class(),
+                UserFacingFailureClass::UserProgram,
+                "{text}"
+            );
+            assert!(
+                failure.diagnostic().primary().is_some(),
+                "{text}: {:?}",
+                failure
+            );
+        }
     }
 
     #[test]
