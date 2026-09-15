@@ -19,6 +19,11 @@ TBX Next は、現行 `tbx` package と同じリポジトリで開発してい�
 
 このディレクトリは TBX Next の入口です。包括的な言語仕様書、VM 設計書、compiler 設計書、関連 issue の固定一覧はここへ置きません。
 
+## Quick Reference
+
+現在実装済みの構文、標準語彙、入出力、サンプルへの実用入口は
+[`tbx-quickref.ja.md`](tbx-quickref.ja.md) を参照してください。
+
 ## Commands
 
 ```sh
