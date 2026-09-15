@@ -14,7 +14,7 @@ pub(crate) enum StackError {
     ReturnStackUnderflow,
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Default)]
 pub(crate) struct DataStack {
     values: Vec<Value>,
 }
@@ -37,6 +37,13 @@ impl DataStack {
             .last()
             .copied()
             .ok_or(StackError::DataStackUnderflow)
+    }
+
+    pub(crate) fn peek2(&self) -> Result<(Value, Value), StackError> {
+        self.require_depth(2)?;
+        let rhs = self.values[self.values.len() - 1];
+        let lhs = self.values[self.values.len() - 2];
+        Ok((lhs, rhs))
     }
 
     pub(crate) fn value_at(&self, index: usize) -> Result<Value, StackError> {
@@ -95,10 +102,6 @@ impl DataStack {
             .expect("depth was checked before popping lhs");
 
         Ok((lhs, rhs))
-    }
-
-    pub(crate) fn restore(&mut self, checkpoint: Self) {
-        *self = checkpoint;
     }
 }
 
@@ -260,6 +263,28 @@ mod tests {
 
         assert_eq!(stack.pop2(), Ok((lhs, rhs)));
         assert!(stack.is_empty());
+    }
+
+    #[test]
+    fn data_stack_peek2_returns_lhs_then_rhs_without_mutation() {
+        let mut stack = DataStack::new();
+        let lhs = Value::integer(10);
+        let rhs = Value::integer(3);
+        stack.push(lhs);
+        stack.push(rhs);
+
+        assert_eq!(stack.peek2(), Ok((lhs, rhs)));
+        assert_eq!(stack.as_slice(), &[lhs, rhs]);
+    }
+
+    #[test]
+    fn data_stack_peek2_underflow_does_not_mutate() {
+        let mut stack = DataStack::new();
+        let only = Value::integer(7);
+        stack.push(only);
+
+        assert_eq!(stack.peek2(), Err(StackError::DataStackUnderflow));
+        assert_eq!(stack.as_slice(), &[only]);
     }
 
     #[test]

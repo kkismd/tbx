@@ -737,7 +737,6 @@ impl Vm {
                         kind: VmErrorKind::InvalidPrimitiveId { source },
                     })?;
 
-                let checkpoint = self.data_stack.clone();
                 let capabilities = execution.take_runtime_capabilities();
                 let mut context = PrimitiveContext::with_capabilities(
                     &mut self.data_stack,
@@ -754,11 +753,8 @@ impl Vm {
                         Ok(StepOutcome::Continued)
                     }
                     Err(source) => {
-                        // Primitive calls are a VM commit boundary: handlers
-                        // may perform multiple data-stack operations, so the VM
-                        // restores the entry checkpoint on failure instead of
-                        // relying on every handler to be internally atomic.
-                        self.data_stack.restore(checkpoint);
+                        // ADR #1720 assigns stack failure atomicity to each
+                        // primitive's validate-then-commit implementation.
                         Err(VmError {
                             location,
                             kind: VmErrorKind::PrimitiveFailed { primitive, source },
@@ -1020,11 +1016,9 @@ mod tests {
         Ok(())
     }
 
-    fn fail_after_partial_stack_update(
-        context: &mut PrimitiveContext<'_, '_>,
+    fn fail_without_stack_update(
+        _context: &mut PrimitiveContext<'_, '_>,
     ) -> Result<(), PrimitiveError> {
-        context.pop()?;
-        context.push(value(99));
         Err(PrimitiveError::Failed)
     }
 
@@ -1040,9 +1034,13 @@ mod tests {
         context.write_output("")
     }
 
-    fn pop_then_write_output(context: &mut PrimitiveContext<'_, '_>) -> Result<(), PrimitiveError> {
-        context.pop()?;
-        context.write_output("after-pop")
+    fn write_then_pop_output(context: &mut PrimitiveContext<'_, '_>) -> Result<(), PrimitiveError> {
+        context.peek()?;
+        context.write_output("after-peek")?;
+        context
+            .pop()
+            .expect("output operand was checked before consumption");
+        Ok(())
     }
 
     #[test]
@@ -1874,9 +1872,9 @@ mod tests {
     }
 
     #[test]
-    fn primitive_failure_restores_data_stack_and_preserves_control_state() {
+    fn primitive_failure_preserves_control_state_and_atomic_handler_stack() {
         let mut primitives = PrimitiveRegistry::new();
-        let primitive = primitives.register(fail_after_partial_stack_update);
+        let primitive = primitives.register(fail_without_stack_update);
         let mut words = PublishedWords::new();
         let word = words.add(CompletedWordDefinition::primitive(primitive));
         let mut code = InstructionSequence::new();
@@ -1931,9 +1929,9 @@ mod tests {
     }
 
     #[test]
-    fn primitive_output_failure_propagates_and_restores_vm_state() {
+    fn primitive_output_failure_preserves_vm_state_without_stack_rollback() {
         let mut primitives = PrimitiveRegistry::new();
-        let primitive = primitives.register(pop_then_write_output);
+        let primitive = primitives.register(write_then_pop_output);
         let mut words = PublishedWords::new();
         let word = words.add(CompletedWordDefinition::primitive(primitive));
         let mut code = InstructionSequence::new();
@@ -1967,7 +1965,7 @@ mod tests {
     #[test]
     fn missing_output_capability_is_a_primitive_failure_without_vm_mutation() {
         let mut primitives = PrimitiveRegistry::new();
-        let primitive = primitives.register(pop_then_write_output);
+        let primitive = primitives.register(write_then_pop_output);
         let mut words = PublishedWords::new();
         let word = words.add(CompletedWordDefinition::primitive(primitive));
         let mut code = InstructionSequence::new();
@@ -1999,7 +1997,7 @@ mod tests {
     fn run_keeps_successful_primitive_state_before_failed_primitive_call() {
         let mut primitives = PrimitiveRegistry::new();
         let push = primitives.register(push_42);
-        let fail = primitives.register(fail_after_partial_stack_update);
+        let fail = primitives.register(fail_without_stack_update);
         let mut words = PublishedWords::new();
         let push_word = words.add(CompletedWordDefinition::primitive(push));
         let fail_word = words.add(CompletedWordDefinition::primitive(fail));

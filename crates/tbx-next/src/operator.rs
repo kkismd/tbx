@@ -230,8 +230,14 @@ fn remainder(context: &mut PrimitiveContext<'_, '_>) -> Result<(), PrimitiveErro
 }
 
 fn negate(context: &mut PrimitiveContext<'_, '_>) -> Result<(), PrimitiveError> {
-    let value = context.pop()?;
-    context.push(value.checked_neg().map_err(primitive_value_error)?);
+    let result = context
+        .peek()?
+        .checked_neg()
+        .map_err(primitive_value_error)?;
+    context
+        .pop()
+        .expect("NEGATE operand was checked before consuming it");
+    context.push(result);
     Ok(())
 }
 
@@ -263,8 +269,14 @@ fn checked_binary(
     context: &mut PrimitiveContext<'_, '_>,
     operation: fn(Value, Value) -> Result<Value, ValueError>,
 ) -> Result<(), PrimitiveError> {
-    let (lhs, rhs) = context.pop2()?;
-    context.push(operation(lhs, rhs).map_err(primitive_value_error)?);
+    // ADR #1720 keeps primitive failures stack-atomic without a VM checkpoint:
+    // compute against non-destructive operands, then commit only on success.
+    let (lhs, rhs) = context.peek2()?;
+    let result = operation(lhs, rhs).map_err(primitive_value_error)?;
+    context
+        .pop2()
+        .expect("binary operands were checked before consuming them");
+    context.push(result);
     Ok(())
 }
 
@@ -358,11 +370,16 @@ mod tests {
         let operators = register_operator_primitives(&mut primitives, &mut words);
         let mut code = InstructionSequence::new();
 
-        let entry = code.append(Instruction::Push(inputs[0]));
-        for value in &inputs[1..] {
-            code.append(Instruction::Push(*value));
-        }
-        code.append(Instruction::Call(operators.lookup().resolve(semantic)));
+        let entry = if let Some((first, rest)) = inputs.split_first() {
+            let entry = code.append(Instruction::Push(*first));
+            for value in rest {
+                code.append(Instruction::Push(*value));
+            }
+            code.append(Instruction::Call(operators.lookup().resolve(semantic)));
+            entry
+        } else {
+            code.append(Instruction::Call(operators.lookup().resolve(semantic)))
+        };
         code.append(Instruction::Halt);
 
         let mut vm = Vm::new(code.view(), entry).expect("test entry should be valid");
@@ -433,6 +450,26 @@ mod tests {
         assert_operator_failure(OperatorSemantic::Divide, &[value(1), value(0)]);
         assert_operator_failure(OperatorSemantic::Remainder, &[value(1), value(0)]);
         assert_operator_failure(OperatorSemantic::Negate, &[value(i16::MIN)]);
+    }
+
+    #[test]
+    fn arithmetic_underflow_preserves_available_operands() {
+        for (semantic, inputs) in [
+            (OperatorSemantic::Add, &[value(7)][..]),
+            (OperatorSemantic::Negate, &[][..]),
+        ] {
+            let (mut vm, result) = run_operator(semantic, inputs);
+            assert!(matches!(
+                result,
+                Err(error) if matches!(error.kind(), VmErrorKind::PrimitiveFailed {
+                    source: PrimitiveError::DataStackUnderflow { .. }, ..
+                })
+            ));
+            assert_eq!(vm.data_stack_depth(), inputs.len());
+            for expected in inputs.iter().rev() {
+                assert_eq!(vm.pop_data(), Ok(*expected));
+            }
+        }
     }
 
     #[test]
