@@ -1,3 +1,4 @@
+use crate::global_array::ArrayId;
 use crate::global_variable::GlobalVarId;
 use crate::value::Value;
 use crate::word::WordId;
@@ -93,6 +94,8 @@ pub(crate) enum Instruction {
     WriteFixedText(Rc<str>),
     LoadVar(GlobalVarId),
     StoreVar(GlobalVarId),
+    LoadArrayElement(ArrayId),
+    StoreArrayElement(ArrayId),
     Call(WordId),
     CopyFromCallBase {
         offset: usize,

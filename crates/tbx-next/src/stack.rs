@@ -39,6 +39,15 @@ impl DataStack {
             .ok_or(StackError::DataStackUnderflow)
     }
 
+    pub(crate) fn replace_top(&mut self, value: Value) -> Result<(), StackError> {
+        let top = self
+            .values
+            .last_mut()
+            .ok_or(StackError::DataStackUnderflow)?;
+        *top = value;
+        Ok(())
+    }
+
     pub(crate) fn peek2(&self) -> Result<(Value, Value), StackError> {
         self.require_depth(2)?;
         let rhs = self.values[self.values.len() - 1];
