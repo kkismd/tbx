@@ -112,6 +112,50 @@ mod tests {
     }
 
     #[test]
+    fn missing_random_capability_preserves_the_entire_data_stack() {
+        let mut primitives = PrimitiveRegistry::new();
+        let mut words = PublishedWords::new();
+        let mut bindings = Bindings::new();
+        let random_words = register_random_primitives(&mut primitives, &mut words, &mut bindings)
+            .expect("RND should bootstrap");
+        let mut code = InstructionSequence::new();
+        let entry = code.append(Instruction::Push(Value::integer(7)));
+        code.append(Instruction::Push(Value::integer(5)));
+        let call = code.append(Instruction::Call(random_words.rnd()));
+        code.append(Instruction::Halt);
+        let mut vm = Vm::new(code.view(), entry).expect("entry should be valid");
+        let mut execution = ExecutionView::new(
+            code.view(),
+            PublishedWordLookup::new(&words),
+            primitives.lookup(),
+        );
+
+        assert_eq!(
+            vm.step(&mut execution),
+            Ok(crate::vm::StepOutcome::Continued)
+        );
+        assert_eq!(
+            vm.step(&mut execution),
+            Ok(crate::vm::StepOutcome::Continued)
+        );
+        let error = vm
+            .step(&mut execution)
+            .expect_err("missing random capability should fail RND");
+
+        assert_eq!(error.address(), call);
+        assert!(matches!(
+            error.kind(),
+            VmErrorKind::PrimitiveFailed {
+                source: PrimitiveError::RandomUnavailable,
+                ..
+            }
+        ));
+        assert_eq!(vm.data_stack_depth(), 2);
+        assert_eq!(vm.pop_data(), Ok(Value::integer(5)));
+        assert_eq!(vm.pop_data(), Ok(Value::integer(7)));
+    }
+
+    #[test]
     fn equal_seeds_reproduce_the_same_first_value() {
         let (_, mut first, first_result) = run(99, 100);
         let (_, mut second, second_result) = run(99, 100);

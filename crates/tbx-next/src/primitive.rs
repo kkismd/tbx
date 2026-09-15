@@ -89,6 +89,12 @@ impl<'stack, 'cap> PrimitiveContext<'stack, 'cap> {
             .map_err(|source| PrimitiveError::DataStackUnderflow { source })
     }
 
+    pub(crate) fn peek2(&self) -> Result<(Value, Value), PrimitiveError> {
+        self.data_stack
+            .peek2()
+            .map_err(|source| PrimitiveError::DataStackUnderflow { source })
+    }
+
     pub(crate) fn data_stack_is_empty(&self) -> bool {
         self.data_stack.is_empty()
     }
