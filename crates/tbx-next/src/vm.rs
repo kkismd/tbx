@@ -1612,6 +1612,28 @@ mod tests {
         );
         assert_vm_state(&one_value_vm, one_value_before);
         assert_eq!(arrays.view().read(id, 0), Ok(value(0)));
+
+        let mut load_code = InstructionSequence::new();
+        let load_entry = load_code.append(Instruction::LoadArrayElement(id));
+        load_code.append(Instruction::Halt);
+        let mut load_vm = new_vm(&load_code, load_entry);
+        let load_before = snapshot(&load_vm);
+        assert_eq!(
+            load_vm.step(execution_with_arrays(
+                &load_code,
+                &words,
+                &primitives,
+                &mut arrays
+            )),
+            Err(VmError {
+                location: location(&load_code, load_entry),
+                kind: VmErrorKind::DataStackUnderflow {
+                    source: StackError::DataStackUnderflow
+                }
+            })
+        );
+        assert_vm_state(&load_vm, load_before);
+        assert_eq!(arrays.view().read(id, 0), Ok(value(0)));
     }
 
     #[test]
