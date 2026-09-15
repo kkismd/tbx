@@ -138,6 +138,35 @@ CR
 LET A = A + 1
 ```
 
+## グローバル配列
+
+`DIM @NAME[n]` でグローバル配列を宣言する。宣言サイズは `1..=32767` の正の整数リテラルに限られ、要素は宣言時にすべて `0` で初期化される。
+
+```tbx
+DIM @SQUARE[10]
+
+LET I = 1
+WHILE I <= 10
+  LET @SQUARE[I] = I * I
+  LET I = I + 1
+WEND
+
+LET I = 1
+WHILE I <= 10
+  PRINT I, " ", @SQUARE[I]
+  CR
+  LET I = I + 1
+WEND
+```
+
+`@` は配列名を示し、`[]` は添字を囲む。要素の読み取りは式中の `@NAME[index]`、書き込みは `LET @NAME[index] = expression` と書く。添字は **1-origin** で、有効範囲は `1..=n`。`0`、負数、宣言サイズを超える添字は実行時エラーになる。`@NAME` 単体は実行時配列値ではなく、配列要素には添字が必要である。
+
+配列名はワード、ソースワード、スカラー変数と同じ大文字小文字を区別しない名前空間を共有するため、同名のbindingは宣言できない。公開済み配列の再宣言やサイズ変更も現行仕様ではできない。
+
+`USE` は同じsource-processing sessionで実行されるため、読み込み前に宣言した配列を読み込み先で使え、読み込み先で宣言した配列も復帰後のソースや入れ子の `USE` から使える。
+
+現行の配列機能はグローバル配列の要素読み書きに限られる。`ARRAY_LEN`、実行時サイズ式、多次元配列、実行時配列値、配列要素アドレスは提供していない。
+
 ## EVAL とデータスタック
 
 `EVAL expression` は式を評価し、結果をデータスタックへ残す。
@@ -357,6 +386,7 @@ USE "sub/B.tbx"
 ```
 
 ファイルから実行している場合、相対パスは読み込みを要求したソースを基準に解決され、入れ子の `USE` も扱える。循環読み込みはエラーになる。すでに正常完了した同一ソースの再読み込みは no-op になる。
+グローバル配列も同じ session で共有されるため、読み込み元と読み込み先の双方から利用できる。
 
 ## SYNTAX によるソース構文拡張
 
@@ -391,7 +421,7 @@ TBX Next は現行 `tbx` の互換実装ではない。特に次をそのまま�
 | 値 | 現在は `i16` 整数のみ |
 | 真偽 | `0` が偽、0 以外が真 |
 | 変数 | A-Z 組み込み + `VAR` によるグローバル変数 |
-| 配列 | 現在の TBX Next 実装には一般的な配列値・`DIM` はない |
+| 配列 | `DIM @NAME[n]` で宣言し、`@NAME[index]` で要素を読む。`@NAME` 単体は値ではない |
 | 文字列 | 一般的な実行時値ではなく、現在は主に `PRINT` / `USE` などのソース構文で使う |
 
 ## 代表的なサンプル
@@ -401,12 +431,14 @@ TBX Next は現行 `tbx` の互換実装ではない。特に次をそのまま�
 - `docs/next/examples/prime.tbx` — 局所参照名、条件分岐、反復
 - `docs/next/examples/guess.tbx` — `RND`, `INPUT?`, `PRINT`
 - `docs/next/examples/mandelbrot.tbx` — 整数演算、反復、`ABS`, `PUTCHR`
+- `docs/next/examples/squares.tbx` — グローバル配列への保存と読み出し
 
 ## 実装を確認する場所
 
 挙動の詳細やエラー条件を確認するときは、まず次を見る。
 
 - CLI と縦断動作: `crates/tbx-next/tests/cli_e2e.rs`
+- グローバル配列のstorage: `crates/tbx-next/src/global_array.rs`
 - ソース処理: `crates/tbx-next/src/source_processor.rs`, `crates/tbx-next/src/source_word.rs`
 - 式: `crates/tbx-next/src/expression.rs`, `crates/tbx-next/src/operator.rs`
 - 実行時値: `crates/tbx-next/src/value.rs`
