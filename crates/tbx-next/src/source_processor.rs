@@ -7063,12 +7063,17 @@ mod tests {
         let mut words = PublishedWords::new();
         let mut bindings = Bindings::new();
         let mut primitives = PrimitiveRegistry::new();
+        let mut arrays = crate::global_array::GlobalArrays::new();
+        let data = arrays.allocate(2);
         let operators = register_operator_primitives(&mut primitives, &mut words);
         let push7_id = primitives.register(push_7);
         register_primitive(&mut words, &mut bindings, name("PUSH7"), push7_id)
             .expect("primitive should register");
         register_builtin_source_words(&mut source_words, &mut bindings)
             .expect("source words should register");
+        bindings
+            .insert_new(name("DATA"), Binding::Array(data))
+            .expect("array should register");
 
         let cases = [
             (
@@ -7087,6 +7092,12 @@ mod tests {
                 "BIF VAR, 100\n100 PUSH7",
                 4,
                 7,
+                ExpressionVariableErrorKind::TargetIsNotVariable,
+            ),
+            (
+                "BIF DATA, 100\n100 PUSH7",
+                4,
+                8,
                 ExpressionVariableErrorKind::TargetIsNotVariable,
             ),
         ];
@@ -7794,6 +7805,44 @@ mod tests {
             Ok(Some(span(sources.view(), id, 5, 8)))
         );
         assert_eq!(result.data_stack(), [value(7)]);
+    }
+
+    #[test]
+    fn top_level_eval_rejects_array_as_runtime_word_call_target() {
+        let (_words, _primitives, operators) = operator_fixture();
+        let mut source_words = SourceWordRegistry::new();
+        let mut arrays = crate::global_array::GlobalArrays::new();
+        let mut bindings = Bindings::new();
+        let data = arrays.allocate(2);
+        register_builtin_source_words(&mut source_words, &mut bindings)
+            .expect("source words should register");
+        bindings
+            .insert_new(name("DATA"), Binding::Array(data))
+            .expect("array should register");
+        let (sources, id) = source("EVAL DATA(1)");
+
+        let error = compile_source(
+            sources.view(),
+            id,
+            SourceCompileContext::with_source_words_and_operators(
+                &bindings,
+                source_words.lookup(),
+                operators.lookup(),
+            ),
+        )
+        .expect_err("array must not resolve as a runtime word call");
+
+        let SourceProcessorError::SourceWord(SourceWordError::Expression {
+            source: ExpressionError::Call(error),
+        }) = error
+        else {
+            panic!("expected expression call target error");
+        };
+        assert_eq!(error.span(), span(sources.view(), id, 5, 9));
+        assert_eq!(
+            error.kind(),
+            ExpressionCallErrorKind::TargetIsNotRuntimeWord
+        );
     }
 
     #[test]
