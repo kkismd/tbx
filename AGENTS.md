@@ -111,6 +111,10 @@ Word definitions use `DEF WORD(params) ... END`. `CompileState` in `src/vm.rs` t
 
 When writing or modifying TBX programs, consult `docs/tbx-quickref.ja.md` first for common syntax, standard vocabulary, and agent-facing pitfalls. The implementation remains the source of truth; check `src/`, `lib/`, and tests for details, edge cases, and current behavior.
 
+## マイルストーン完了時のクイックリファレンス確認
+
+TBX または TBX Next のマイルストーンを完了する前に、実装済みのユーザー向け機能と対象クイックリファレンスの整合性を確認し、必要なら更新する。対象パスとマイルストーン計画・記録の手順は [`docs/milestone-process.md`](docs/milestone-process.md) を参照する。実装・テスト・ADR・仕様を正本とし、クイックリファレンスは実装済み内容の実用的な入口として扱う。
+
 
 ## Core Principles (必ず遵守)
 このプロジェクトでは以下の7原則を最優先とする。これらを無視したコードは拒否・修正する。
