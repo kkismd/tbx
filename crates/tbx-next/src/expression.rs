@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 
+use crate::global_array::ArrayId;
 use crate::global_variable::GlobalVarId;
 use crate::instruction::Instruction;
 use crate::instruction_builder::{InstructionBuildError, InstructionBuildTarget};
@@ -79,6 +80,10 @@ pub(crate) trait ExpressionVariableResolver {
     ) -> Result<GlobalVarId, ExpressionVariableErrorKind>;
 }
 
+pub(crate) trait ExpressionArrayResolver {
+    fn resolve_array(&self, source_name: &str) -> Result<ArrayId, ExpressionVariableErrorKind>;
+}
+
 pub(crate) trait ExpressionRuntimeWordResolver {
     fn resolve_runtime_word(&self, source_name: &str) -> Result<WordId, ExpressionCallErrorKind>;
 }
@@ -136,6 +141,7 @@ struct ExpressionParser<'a, 'r> {
     operators: OperatorLookup,
     variables: &'r dyn ExpressionVariableResolver,
     runtime_words: &'r dyn ExpressionRuntimeWordResolver,
+    arrays: &'r dyn ExpressionArrayResolver,
     locals: Option<&'r dyn ExpressionLocalResolver>,
     position: usize,
 }
@@ -152,8 +158,17 @@ pub(crate) fn parse_expression(
     operators: OperatorLookup,
     variables: &dyn ExpressionVariableResolver,
     runtime_words: &dyn ExpressionRuntimeWordResolver,
+    arrays: &dyn ExpressionArrayResolver,
 ) -> Result<ExpressionStaging, ExpressionError> {
-    parse_expression_with_locals(view, tokens, operators, variables, runtime_words, None)
+    parse_expression_with_locals(
+        view,
+        tokens,
+        operators,
+        variables,
+        runtime_words,
+        arrays,
+        None,
+    )
 }
 
 pub(crate) fn parse_expression_with_locals(
@@ -162,10 +177,18 @@ pub(crate) fn parse_expression_with_locals(
     operators: OperatorLookup,
     variables: &dyn ExpressionVariableResolver,
     runtime_words: &dyn ExpressionRuntimeWordResolver,
+    arrays: &dyn ExpressionArrayResolver,
     locals: Option<&dyn ExpressionLocalResolver>,
 ) -> Result<ExpressionStaging, ExpressionError> {
-    let mut parser =
-        ExpressionParser::new(view, tokens, operators, variables, runtime_words, locals);
+    let mut parser = ExpressionParser::new(
+        view,
+        tokens,
+        operators,
+        variables,
+        runtime_words,
+        arrays,
+        locals,
+    );
     parser.parse_complete()
 }
 
@@ -181,6 +204,15 @@ where
     }
 }
 
+impl<F> ExpressionArrayResolver for F
+where
+    F: Fn(&str) -> Result<ArrayId, ExpressionVariableErrorKind>,
+{
+    fn resolve_array(&self, source_name: &str) -> Result<ArrayId, ExpressionVariableErrorKind> {
+        self(source_name)
+    }
+}
+
 impl<F> ExpressionRuntimeWordResolver for F
 where
     F: Fn(&str) -> Result<WordId, ExpressionCallErrorKind>,
@@ -191,7 +223,7 @@ where
 }
 
 impl ExpressionStaging {
-    fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self {
             entries: Vec::new(),
         }
@@ -276,6 +308,7 @@ impl<'a, 'r> ExpressionParser<'a, 'r> {
         operators: OperatorLookup,
         variables: &'r dyn ExpressionVariableResolver,
         runtime_words: &'r dyn ExpressionRuntimeWordResolver,
+        arrays: &'r dyn ExpressionArrayResolver,
         locals: Option<&'r dyn ExpressionLocalResolver>,
     ) -> Self {
         Self {
@@ -283,6 +316,7 @@ impl<'a, 'r> ExpressionParser<'a, 'r> {
             tokens,
             operators,
             variables,
+            arrays,
             runtime_words,
             locals,
             position: 0,
@@ -474,11 +508,57 @@ impl<'a, 'r> ExpressionParser<'a, 'r> {
                 self.consume_rparen(lparen)?;
                 Ok(parsed)
             }
+            TokenKind::At => self.parse_array_element(staging),
             TokenKind::Eof | TokenKind::LineBoundary | TokenKind::RParen => {
                 Err(self.syntax(token, ExpressionSyntaxErrorKind::MissingOperand))
             }
             _ => Err(self.syntax(token, unexpected_token(token))),
         }
+    }
+
+    fn parse_array_element(
+        &mut self,
+        staging: &mut ExpressionStaging,
+    ) -> Result<ParsedExpression, ExpressionError> {
+        let at = self.advance();
+        let name = match self.peek() {
+            Some(token) if token.kind() == TokenKind::Name => self.advance(),
+            Some(token) => return Err(self.syntax(token, unexpected_token(token))),
+            None => return Err(self.syntax(at, ExpressionSyntaxErrorKind::MissingOperand)),
+        };
+        let source_name = self.view.slice(name.span())?;
+        let id = self.arrays.resolve_array(source_name).map_err(|kind| {
+            ExpressionError::Variable(ExpressionVariableError {
+                span: name.span(),
+                kind,
+            })
+        })?;
+        match self.peek() {
+            Some(token) if token.kind() == TokenKind::LBracket => {
+                self.advance();
+            }
+            Some(token) => return Err(self.syntax(token, unexpected_token(token))),
+            None => return Err(self.syntax(name, ExpressionSyntaxErrorKind::MissingOperand)),
+        }
+        if self
+            .peek()
+            .is_some_and(|token| token.kind() == TokenKind::RBracket)
+        {
+            let token = self.advance();
+            return Err(self.syntax(token, ExpressionSyntaxErrorKind::MissingOperand));
+        }
+        self.parse_infix_expression(staging, PRECEDENCE_COMMA)?;
+        match self.peek() {
+            Some(token) if token.kind() == TokenKind::RBracket => {
+                self.advance();
+            }
+            Some(token) => return Err(self.syntax(token, unexpected_token(token))),
+            None => return Err(self.syntax(name, ExpressionSyntaxErrorKind::UnmatchedParenthesis)),
+        }
+        staging.append_mapped_instruction(Instruction::LoadArrayElement(id), at.span());
+        Ok(ParsedExpression {
+            contains_comparison: false,
+        })
     }
 
     fn consume_rparen(&mut self, lparen: Token) -> Result<(), ExpressionError> {
@@ -800,6 +880,7 @@ mod tests {
             operators(),
             &variables,
             &runtime_words,
+            &empty_arrays(),
         )
         .expect("expression should parse");
         (sources, id, staging)
@@ -829,6 +910,7 @@ mod tests {
             operators(),
             &variables,
             &runtime_words,
+            &empty_arrays(),
         )
         .expect_err("expression should fail");
         (sources, id, error)
@@ -840,6 +922,10 @@ mod tests {
 
     fn empty_runtime_words() -> impl ExpressionRuntimeWordResolver {
         |_source_name: &str| Err(ExpressionCallErrorKind::UndefinedName)
+    }
+
+    fn empty_arrays() -> impl ExpressionArrayResolver {
+        |_source_name: &str| Err(ExpressionVariableErrorKind::UndefinedName)
     }
 
     fn variables(cases: &[(&str, GlobalVarId)]) -> impl ExpressionVariableResolver {

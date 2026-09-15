@@ -590,6 +590,8 @@ fn stage_expression(
     ));
 
     let resolver = |source_name: &str| resolve_variable_name(context.bindings, source_name);
+    let array_resolver =
+        |source_name: &str| crate::source_word::resolve_array_name(context.bindings, source_name);
     let runtime_word_resolver =
         |source_name: &str| resolve_runtime_word_name(context.bindings, source_name);
     let local_resolver = context
@@ -601,6 +603,7 @@ fn stage_expression(
         operators,
         &resolver,
         &runtime_word_resolver,
+        &array_resolver,
         local_resolver,
     )
     .map_err(|source| SourceWordEvaluationError::Expression { source, origin })

@@ -262,6 +262,7 @@ pub(crate) struct SourceExecutionContext<'a> {
     code_spaces: &'a [InstructionView<'a>],
     source_mappings: &'a [InstructionSourceMappingView<'a>],
     globals: Option<SourceGlobalAccess<'a>>,
+    arrays: Option<crate::global_array::GlobalArrayViewMut<'a>>,
     words: PublishedWordLookup<'a>,
     primitives: PrimitiveLookup<'a>,
     output: Option<&'a mut dyn RuntimeOutput>,
@@ -1608,6 +1609,8 @@ fn parse_expression_staging(
     expression_tokens.push(Token::new(TokenKind::Eof, view.span(source_id, end, end)?));
 
     let resolver = |source_name: &str| resolve_variable_name(bindings, source_name);
+    let array_resolver =
+        |source_name: &str| crate::source_word::resolve_array_name(bindings, source_name);
     let runtime_word_resolver =
         |source_name: &str| resolve_runtime_word_name(bindings, source_name);
     let local_resolver =
@@ -1618,6 +1621,7 @@ fn parse_expression_staging(
         operators,
         &resolver,
         &runtime_word_resolver,
+        &array_resolver,
         local_resolver,
     )
     .map_err(SourceProcessorError::from_expression_error)
@@ -1657,6 +1661,9 @@ pub(crate) fn run_unit_with_data_stack(
             SourceGlobalAccess::Read(globals) => execution.with_global_reader(globals),
             SourceGlobalAccess::Write(globals) => execution.with_globals(globals),
         };
+    }
+    if let Some(arrays) = context.arrays {
+        execution = execution.with_arrays(arrays);
     }
     if let Some(output) = context.output {
         execution = execution.with_output(output);
@@ -2582,6 +2589,7 @@ impl<'a> SourceExecutionContext<'a> {
             code_spaces,
             source_mappings,
             globals: None,
+            arrays: None,
             words,
             primitives,
             output: None,
@@ -2602,6 +2610,7 @@ impl<'a> SourceExecutionContext<'a> {
             code_spaces: &[],
             source_mappings: &[],
             globals: None,
+            arrays: None,
             words,
             primitives,
             output: None,
@@ -2623,6 +2632,7 @@ impl<'a> SourceExecutionContext<'a> {
             code_spaces: &[],
             source_mappings: &[],
             globals: None,
+            arrays: None,
             words,
             primitives,
             output: None,
@@ -2644,6 +2654,7 @@ impl<'a> SourceExecutionContext<'a> {
             code_spaces: &[],
             source_mappings: &[],
             globals: None,
+            arrays: None,
             words,
             primitives,
             output: None,
@@ -2666,6 +2677,7 @@ impl<'a> SourceExecutionContext<'a> {
             code_spaces: &[],
             source_mappings: &[],
             globals: None,
+            arrays: None,
             words,
             primitives,
             output: None,
@@ -2687,6 +2699,7 @@ impl<'a> SourceExecutionContext<'a> {
             code_spaces,
             source_mappings: &[],
             globals: None,
+            arrays: None,
             words,
             primitives,
             output: None,
@@ -2709,6 +2722,7 @@ impl<'a> SourceExecutionContext<'a> {
             code_spaces,
             source_mappings: &[],
             globals: None,
+            arrays: None,
             words,
             primitives,
             output: None,
@@ -2731,6 +2745,7 @@ impl<'a> SourceExecutionContext<'a> {
             code_spaces,
             source_mappings,
             globals: None,
+            arrays: None,
             words,
             primitives,
             output: None,
@@ -2749,6 +2764,14 @@ impl<'a> SourceExecutionContext<'a> {
         globals: crate::global_variable::GlobalVariableViewMut<'a>,
     ) -> Self {
         self.globals = Some(SourceGlobalAccess::Write(globals));
+        self
+    }
+
+    pub(crate) fn with_mut_arrays(
+        mut self,
+        arrays: crate::global_array::GlobalArrayViewMut<'a>,
+    ) -> Self {
+        self.arrays = Some(arrays);
         self
     }
 

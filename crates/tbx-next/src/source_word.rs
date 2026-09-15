@@ -439,8 +439,13 @@ impl SourceWordError {
         match self {
             Self::Source { .. }
             | Self::InstructionBuild { .. }
-            | Self::VarPublicationContextUnavailable
-            | Self::Expression { .. } => None,
+            | Self::VarPublicationContextUnavailable => None,
+            Self::Expression { source } => match source {
+                ExpressionError::Source(_) | ExpressionError::InstructionBuild(_) => None,
+                ExpressionError::Syntax(error) => Some(error.span()),
+                ExpressionError::Variable(error) => Some(error.span()),
+                ExpressionError::Call(error) => Some(error.span()),
+            },
             Self::UnsupportedSourceWord { span }
             | Self::VarSyntax { span, .. }
             | Self::VarLocalLineNumberPrefix { span }
@@ -826,6 +831,7 @@ impl<'source, 'state> NativeStructuredSourceWordContext<'source, 'state> {
         ));
 
         let resolver = |source_name: &str| resolve_variable_name(self.bindings, source_name);
+        let array_resolver = |source_name: &str| resolve_array_name(self.bindings, source_name);
         let runtime_word_resolver =
             |source_name: &str| resolve_runtime_word_name(self.bindings, source_name);
         let local_resolver = self
@@ -837,6 +843,7 @@ impl<'source, 'state> NativeStructuredSourceWordContext<'source, 'state> {
             operators,
             &resolver,
             &runtime_word_resolver,
+            &array_resolver,
             local_resolver,
         )
         .map_err(|source| SourceWordError::Expression { source })
@@ -1135,13 +1142,16 @@ impl<'source> SourceStatementReader<'source> {
 
         let start = self.position;
         let mut depth = 0usize;
+        let mut bracket_depth = 0usize;
         while let Some(token) = self.tokens.get(self.position).copied() {
             match token.kind() {
                 TokenKind::LParen => depth += 1,
                 TokenKind::RParen => {
                     depth = depth.saturating_sub(1);
                 }
-                kind if kind == delimiter && depth == 0 => break,
+                TokenKind::LBracket => bracket_depth += 1,
+                TokenKind::RBracket if bracket_depth > 0 => bracket_depth -= 1,
+                kind if kind == delimiter && depth == 0 && bracket_depth == 0 => break,
                 _ => {}
             }
             self.position += 1;
@@ -1576,6 +1586,7 @@ impl<'source, 'state> NativeSourceWordContext<'source, 'state> {
         ));
 
         let resolver = |source_name: &str| resolve_variable_name(self.bindings(), source_name);
+        let array_resolver = |source_name: &str| resolve_array_name(self.bindings(), source_name);
         let runtime_word_resolver =
             |source_name: &str| resolve_runtime_word_name(self.bindings(), source_name);
         let local_resolver = self
@@ -1587,6 +1598,7 @@ impl<'source, 'state> NativeSourceWordContext<'source, 'state> {
             operators,
             &resolver,
             &runtime_word_resolver,
+            &array_resolver,
             local_resolver,
         )
         .map_err(|source| SourceWordError::Expression { source })
@@ -1748,27 +1760,73 @@ fn dim_reader_error(error: SourceStatementReaderError) -> SourceWordError {
 pub(crate) fn let_source_word(
     context: &mut NativeSourceWordContext<'_, '_>,
 ) -> Result<(), SourceWordError> {
-    let (target_token, equal_span, rhs_tokens) = {
+    let (array_target, target_token, equal_span, index_tokens, rhs_tokens) = {
         let reader = context.statement_reader_mut();
-        let target_token = reader.read_name().map_err(let_reader_error)?;
+        let array_target = reader.peek_kind() == Some(TokenKind::At);
+        let (target_token, index_tokens) = if array_target {
+            reader.expect(TokenKind::At).map_err(let_reader_error)?;
+            let target = reader.read_name().map_err(let_reader_error)?;
+            reader
+                .expect(TokenKind::LBracket)
+                .map_err(let_reader_error)?;
+            let index = reader
+                .expression_until(TokenKind::RBracket)
+                .map_err(let_reader_error)?;
+            reader
+                .expect(TokenKind::RBracket)
+                .map_err(let_reader_error)?;
+            (target, Some(index))
+        } else {
+            (reader.read_name().map_err(let_reader_error)?, None)
+        };
         let equal_token = reader.expect(TokenKind::Equal).map_err(let_reader_error)?;
         let rhs_tokens = reader.remaining_expression().map_err(let_reader_error)?;
-        (target_token, equal_token.span(), rhs_tokens)
+        (
+            array_target,
+            target_token,
+            equal_token.span(),
+            index_tokens,
+            rhs_tokens,
+        )
     };
 
     let source_name = context
         .view()
         .slice(target_token.span())
         .map_err(|source| SourceWordError::Source { source })?;
-    let target = context
-        .resolve_variable_target(source_name)
-        .map_err(|source| SourceWordError::LetTarget {
-            span: target_token.span(),
-            source,
+    let staging = if array_target {
+        let target = resolve_array_name(context.bindings(), source_name).map_err(|source| {
+            SourceWordError::LetTarget {
+                span: target_token.span(),
+                source,
+            }
         })?;
-
-    let mut staging = context.stage_expression(rhs_tokens, equal_span)?;
-    staging.append_mapped_instruction(Instruction::StoreVar(target), target_token.span());
+        let index = context.stage_expression(
+            index_tokens.expect("array target has index"),
+            target_token.span(),
+        )?;
+        let mut staging = ExpressionStaging::new();
+        for entry in index.entries() {
+            staging.append_mapped_instruction(entry.instruction(), entry.span());
+        }
+        let value = context.stage_expression(rhs_tokens, equal_span)?;
+        for entry in value.entries() {
+            staging.append_mapped_instruction(entry.instruction(), entry.span());
+        }
+        staging
+            .append_mapped_instruction(Instruction::StoreArrayElement(target), target_token.span());
+        staging
+    } else {
+        let target = context
+            .resolve_variable_target(source_name)
+            .map_err(|source| SourceWordError::LetTarget {
+                span: target_token.span(),
+                source,
+            })?;
+        let mut staging = context.stage_expression(rhs_tokens, equal_span)?;
+        staging.append_mapped_instruction(Instruction::StoreVar(target), target_token.span());
+        staging
+    };
     context.commit_staging(&staging)
 }
 
@@ -3168,6 +3226,25 @@ fn resolve_variable_name(
             ResolvedBinding::RuntimeWord(_)
             | ResolvedBinding::SourceWord(_)
             | ResolvedBinding::Array(_),
+        ) => Err(ExpressionVariableErrorKind::TargetIsNotVariable),
+        Err(WordResolutionError::InvalidWordName) => Err(ExpressionVariableErrorKind::InvalidName),
+        Err(WordResolutionError::UndefinedName) => Err(ExpressionVariableErrorKind::UndefinedName),
+        Err(WordResolutionError::TargetIsNotWord) => {
+            unreachable!("binding lookup does not require a runtime word target")
+        }
+    }
+}
+
+pub(crate) fn resolve_array_name(
+    bindings: &Bindings,
+    source_name: &str,
+) -> Result<crate::global_array::ArrayId, ExpressionVariableErrorKind> {
+    match resolve_binding_name(bindings, source_name) {
+        Ok(ResolvedBinding::Array(id)) => Ok(id),
+        Ok(
+            ResolvedBinding::RuntimeWord(_)
+            | ResolvedBinding::SourceWord(_)
+            | ResolvedBinding::Variable(_),
         ) => Err(ExpressionVariableErrorKind::TargetIsNotVariable),
         Err(WordResolutionError::InvalidWordName) => Err(ExpressionVariableErrorKind::InvalidName),
         Err(WordResolutionError::UndefinedName) => Err(ExpressionVariableErrorKind::UndefinedName),
