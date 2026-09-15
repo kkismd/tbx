@@ -1,4 +1,5 @@
 use crate::binding::{Binding, Bindings};
+use crate::global_array::ArrayId;
 use crate::global_variable::GlobalVarId;
 use crate::name::{NameError, NormalizedName};
 use crate::source_word::SourceWordId;
@@ -16,6 +17,7 @@ pub(crate) enum ResolvedBinding {
     RuntimeWord(WordId),
     SourceWord(SourceWordId),
     Variable(GlobalVarId),
+    Array(ArrayId),
 }
 
 /// Resolves a source word name through the current published binding only.
@@ -38,7 +40,7 @@ pub(crate) fn resolve_normalized_word(
 ) -> Result<WordId, WordResolutionError> {
     match bindings.get(name) {
         Some(Binding::Word(id)) => Ok(*id),
-        Some(Binding::SourceWord(_) | Binding::Variable(_)) => {
+        Some(Binding::SourceWord(_) | Binding::Variable(_) | Binding::Array(_)) => {
             Err(WordResolutionError::TargetIsNotWord)
         }
         None => Err(WordResolutionError::UndefinedName),
@@ -55,6 +57,7 @@ pub(crate) fn resolve_binding_name(
         Some(Binding::Word(id)) => Ok(ResolvedBinding::RuntimeWord(*id)),
         Some(Binding::SourceWord(id)) => Ok(ResolvedBinding::SourceWord(*id)),
         Some(Binding::Variable(id)) => Ok(ResolvedBinding::Variable(*id)),
+        Some(Binding::Array(id)) => Ok(ResolvedBinding::Array(*id)),
         None => Err(WordResolutionError::UndefinedName),
     }
 }
@@ -286,6 +289,25 @@ mod tests {
             .insert_new(name("A"), Binding::Variable(variable))
             .expect("variable should register");
 
+        assert_eq!(
+            resolve_word_name(&bindings, "A"),
+            Err(WordResolutionError::TargetIsNotWord)
+        );
+    }
+
+    #[test]
+    fn array_binding_keeps_its_kind_and_is_not_resolved_as_word() {
+        let mut arrays = crate::global_array::GlobalArrays::new();
+        let array = arrays.allocate(2);
+        let mut bindings = Bindings::new();
+        bindings
+            .insert_new(name("A"), Binding::Array(array))
+            .expect("array should register in the shared namespace");
+
+        assert_eq!(
+            resolve_binding_name(&bindings, "a"),
+            Ok(ResolvedBinding::Array(array))
+        );
         assert_eq!(
             resolve_word_name(&bindings, "A"),
             Err(WordResolutionError::TargetIsNotWord)

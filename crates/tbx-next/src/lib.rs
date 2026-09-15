@@ -157,6 +157,11 @@ mod line_number;
 #[allow(dead_code)]
 mod global_variable;
 
+// ADR #1713 keeps global arrays in distinct session-owned storage, addressed
+// by compile-time IDs and exposed to consumers only through narrow views.
+#[allow(dead_code)]
+mod global_array;
+
 // ADR #1528 keeps runtime external output as a narrow host-supplied capability
 // that receives only completed output text.
 #[allow(dead_code)]

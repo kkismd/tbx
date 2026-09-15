@@ -10,6 +10,7 @@ use crate::bootstrap::{
     PrimitiveBootstrapError, SourceWordBootstrapError,
 };
 use crate::diagnostic::{DiagnosticRenderer, RenderedDiagnostic, UserDiagnostic};
+use crate::global_array::GlobalArrays;
 use crate::global_variable::GlobalVariables;
 use crate::input_primitive::register_input_primitives;
 use crate::operator::{register_named_operator_primitives, OperatorBootstrapError, OperatorWords};
@@ -75,6 +76,7 @@ struct BatchEnvironment {
     operators: OperatorWords,
     source_words: SourceWordRegistry,
     globals: GlobalVariables,
+    arrays: GlobalArrays,
     published_code: PublishedCode,
     random: RandomState,
 }
@@ -482,6 +484,7 @@ impl BatchEnvironment {
             operators,
             source_words,
             globals,
+            arrays: GlobalArrays::new(),
             published_code: PublishedCode::new(),
             random: RandomState::seeded(seed),
         })
