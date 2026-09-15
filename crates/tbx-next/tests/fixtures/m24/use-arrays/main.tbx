@@ -1,0 +1,9 @@
+DIM @ROOT[2]
+LET I = 1
+LET @ROOT[I] = 10
+USE "sub/library.tbx"
+LET @ROOT[2] = @CACHE[1] + @ROOT[1]
+PUTDEC @CACHE[2]
+CR
+PUTDEC @ROOT[2]
+CR

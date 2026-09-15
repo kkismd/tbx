@@ -1,0 +1,5 @@
+LET @ROOT[2] = @ROOT[1] + 1
+DIM @CACHE[2]
+LET @CACHE[1] = @ROOT[2] + 1
+USE "../nested.tbx"
+LET @CACHE[2] = @TEMP[1] + @CACHE[1]

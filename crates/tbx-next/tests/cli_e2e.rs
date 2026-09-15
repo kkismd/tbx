@@ -462,3 +462,40 @@ fn file_use_runtime_failure_maps_to_additional_source() {
     assert!(stderr.contains("2 | EVAL 1 / 0"), "{stderr}");
     assert!(stderr.contains("runtime error"), "{stderr}");
 }
+
+#[test]
+fn file_use_shares_global_arrays_through_nested_sources_in_both_directions() {
+    let output = run_with_file(&fixture_path("m24/use-arrays/main.tbx"));
+
+    assert!(
+        output.status.success(),
+        "expected success, stderr:\n{}",
+        stderr_text(&output)
+    );
+    assert_eq!(stdout_text(&output), "35\n22\n");
+    assert_eq!(stderr_text(&output), "");
+}
+
+#[test]
+fn file_use_array_name_conflict_uses_the_shared_namespace() {
+    let output = run_with_file(&fixture_path("m24/use-array-conflict/main.tbx"));
+    let stderr = stderr_text(&output);
+
+    assert!(!output.status.success());
+    assert_eq!(stdout_text(&output), "");
+    assert!(stderr.contains("library.tbx:1:"), "{stderr}");
+    assert!(stderr.contains("source word error"), "{stderr}");
+    assert!(!stderr.contains("panicked"), "{stderr}");
+}
+
+#[test]
+fn file_use_array_out_of_bounds_is_a_located_runtime_failure() {
+    let output = run_with_file(&fixture_path("m24/use-array-runtime-failure/main.tbx"));
+    let stderr = stderr_text(&output);
+
+    assert!(!output.status.success());
+    assert_eq!(stdout_text(&output), "");
+    assert!(stderr.contains("main.tbx:2:"), "{stderr}");
+    assert!(stderr.contains("runtime error"), "{stderr}");
+    assert!(!stderr.contains("panicked"), "{stderr}");
+}
