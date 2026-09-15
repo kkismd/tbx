@@ -4333,7 +4333,7 @@ mod tests {
 
     #[test]
     fn segmentation_distinguishes_completed_prefix_from_lexical_failure() {
-        let (sources, id, segmented) = segment("VAR SCORE\n@");
+        let (sources, id, segmented) = segment("VAR SCORE\n!");
 
         assert_eq!(segmented.completed_statements().len(), 1);
         assert_eq!(
@@ -4345,7 +4345,7 @@ mod tests {
             segmented.terminal(),
             Terminal::LexError(LexError::InvalidCharacter {
                 span: span(sources.view(), id, 10, 11),
-                character: '@',
+                character: '!',
                 reason: InvalidCharacterReason::UnsupportedPunctuation,
             })
         );
@@ -4353,7 +4353,7 @@ mod tests {
 
     #[test]
     fn segmentation_keeps_unbounded_lexical_failure_prefix_as_incomplete_tail() {
-        let (sources, id, segmented) = segment("VAR SCORE @");
+        let (sources, id, segmented) = segment("VAR SCORE !");
 
         assert_eq!(segmented.completed_statements(), []);
         assert_eq!(
@@ -4364,7 +4364,7 @@ mod tests {
             segmented.terminal(),
             Terminal::LexError(LexError::InvalidCharacter {
                 span: span(sources.view(), id, 10, 11),
-                character: '@',
+                character: '!',
                 reason: InvalidCharacterReason::UnsupportedPunctuation,
             })
         );
@@ -7433,13 +7433,13 @@ mod tests {
 
     #[test]
     fn lexer_errors_are_not_reclassified_as_compile_errors() {
-        let (sources, id, error) = compile_error("@");
+        let (sources, id, error) = compile_error("!");
 
         assert_eq!(
             error,
             SourceProcessorError::Lex(LexError::InvalidCharacter {
                 span: span(sources.view(), id, 0, 1),
-                character: '@',
+                character: '!',
                 reason: InvalidCharacterReason::UnsupportedPunctuation,
             })
         );
@@ -7447,7 +7447,7 @@ mod tests {
 
     #[test]
     fn completed_statement_compile_error_takes_precedence_over_later_lexical_error() {
-        let (sources, id, error) = compile_error("MISSING\n@");
+        let (sources, id, error) = compile_error("MISSING\n!");
 
         assert_eq!(
             error,
@@ -7468,7 +7468,7 @@ mod tests {
         let known = primitives.register(push_7);
         register_primitive(&mut words, &mut bindings, name("KNOWN"), known)
             .expect("primitive should register");
-        let (sources, id) = source("KNOWN\n@");
+        let (sources, id) = source("KNOWN\n!");
 
         let error = compile_source(sources.view(), id, SourceCompileContext::new(&bindings))
             .expect_err("lexical failure should prevent partial unit publication");
@@ -7477,7 +7477,7 @@ mod tests {
             error,
             SourceProcessorError::Lex(LexError::InvalidCharacter {
                 span: span(sources.view(), id, 6, 7),
-                character: '@',
+                character: '!',
                 reason: InvalidCharacterReason::UnsupportedPunctuation,
             })
         );
@@ -7485,13 +7485,13 @@ mod tests {
 
     #[test]
     fn incomplete_tail_is_not_preanalyzed_or_compiled_before_lexical_error() {
-        let (sources, id, error) = compile_error("100 @");
+        let (sources, id, error) = compile_error("100 !");
 
         assert_eq!(
             error,
             SourceProcessorError::Lex(LexError::InvalidCharacter {
                 span: span(sources.view(), id, 4, 5),
-                character: '@',
+                character: '!',
                 reason: InvalidCharacterReason::UnsupportedPunctuation,
             })
         );
@@ -8360,7 +8360,7 @@ mod tests {
             observe_lex_terminal_without_converting_to_eof,
         )
         .expect("block source word should register");
-        let (sources, source_id) = source("BLOCK\n@");
+        let (sources, source_id) = source("BLOCK\n!");
 
         let error = compile_source(
             sources.view(),
@@ -9266,7 +9266,7 @@ mod tests {
     fn failed_if_lexical_input_returns_no_unit_and_independent_source_runs() {
         let (words, primitives, operators, source_words, bindings, mut globals, variables) =
             global_source_fixture();
-        let (sources, source_id) = source("IF 1\nLET A = 2\n@");
+        let (sources, source_id) = source("IF 1\nLET A = 2\n!");
 
         let error = compile_source(
             sources.view(),
@@ -9903,7 +9903,7 @@ mod tests {
 
     #[test]
     fn successful_var_commit_survives_later_statement_and_completed_lexical_failures() {
-        for source_text in ["VAR SCORE\nMISSING", "VAR SCORE\n@"] {
+        for source_text in ["VAR SCORE\nMISSING", "VAR SCORE\n!"] {
             let mut source_words = SourceWordRegistry::new();
             let mut bindings = Bindings::new();
             let mut globals = GlobalVariables::new();
@@ -9937,7 +9937,7 @@ mod tests {
             .expect("VAR source word should bootstrap");
 
         let (_sources, _id, error) =
-            compile_with_var_error("VAR SCORE @", &mut bindings, &mut globals, &source_words);
+            compile_with_var_error("VAR SCORE !", &mut bindings, &mut globals, &source_words);
 
         assert!(matches!(error, SourceProcessorError::Lex(_)));
         assert_eq!(bindings.get(&name("SCORE")), None);
@@ -10328,7 +10328,7 @@ mod tests {
 
     #[test]
     fn def_reports_missing_end_and_lexical_terminal_without_publication() {
-        for source_text in ["DEF FOO", "DEF FOO\n@"] {
+        for source_text in ["DEF FOO", "DEF FOO\n!"] {
             let (mut words, _primitives, operators) = operator_fixture();
             let mut source_words = SourceWordRegistry::new();
             let mut bindings = Bindings::new();
@@ -10355,7 +10355,7 @@ mod tests {
                         span: span(sources.view(), id, 7, 7)
                     })
                 ),
-                "DEF FOO\n@" => assert!(matches!(
+                "DEF FOO\n!" => assert!(matches!(
                     error,
                     SourceProcessorError::SourceWord(SourceWordError::DefLex { .. })
                 )),
