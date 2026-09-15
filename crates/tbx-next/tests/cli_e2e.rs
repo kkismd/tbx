@@ -241,6 +241,24 @@ fn file_success_runs_the_prime_example_with_local_references() {
 }
 
 #[test]
+fn file_success_runs_the_global_array_squares_example_with_stable_output() {
+    let path = example_path("squares.tbx");
+
+    let output = run_with_file(&path);
+
+    assert!(
+        output.status.success(),
+        "expected success, stderr:\n{}",
+        stderr_text(&output)
+    );
+    assert_eq!(
+        stdout_text(&output),
+        "1 1\n2 4\n3 9\n4 16\n5 25\n6 36\n7 49\n8 64\n9 81\n10 100\n"
+    );
+    assert_eq!(stderr_text(&output), "");
+}
+
+#[test]
 fn file_success_runs_the_guess_example_with_runtime_input() {
     let path = example_path("guess.tbx");
     let input = (1..=100)
