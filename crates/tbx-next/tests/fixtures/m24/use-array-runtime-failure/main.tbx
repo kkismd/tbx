@@ -1,0 +1,2 @@
+DIM @ITEMS[2]
+LET @ITEMS[3] = 9

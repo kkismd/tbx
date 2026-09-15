@@ -1,0 +1,2 @@
+DIM @TEMP[1]
+LET @TEMP[1] = @ROOT[2] + @CACHE[1]
