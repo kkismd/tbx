@@ -111,6 +111,14 @@ Word definitions use `DEF WORD(params) ... END`. `CompileState` in `src/vm.rs` t
 
 When writing or modifying TBX programs, consult `docs/tbx-quickref.ja.md` first for common syntax, standard vocabulary, and agent-facing pitfalls. The implementation remains the source of truth; check `src/`, `lib/`, and tests for details, edge cases, and current behavior.
 
+## マイルストーン完了時のクイックリファレンス確認
+
+TBX または TBX Next のマイルストーンを完了する前に、そのマイルストーンで追加・変更したユーザー向け構文、標準語彙、入出力、CLI、実行方法、主要な注意事項がクイックリファレンスに反映されているか確認する。対象は現行 TBX が [`docs/tbx-quickref.ja.md`](docs/tbx-quickref.ja.md)、TBX Next が [`docs/next/tbx-quickref.ja.md`](docs/next/tbx-quickref.ja.md)。実装・テスト・ADR・仕様を正本とし、クイックリファレンスは実装済み内容の実用的な入口として扱う。
+
+未反映の内容があれば、原則としてマイルストーン内の最後の実装 issue でクイックリファレンスを更新する。変更が不要な場合も、確認済みであることをマイルストーン issue など完了状況を追跡できる場所に記録する。マイルストーンを新規作成または再整理するときは、原則として最後にこの確認・必要な更新を行う文書整備 issue を配置する。
+
+各機能 issue で毎回更新することは原則必須としない。同一マイルストーン内で仕様や実装が変わる間に記述が繰り返し揺れることを避け、最後にまとめて整合性を確認するためである。ただし、途中で明らかな誤情報になる場合など、早期更新が必要なときは個別 issue で対応し、その影響を記録する。
+
 
 ## Core Principles (必ず遵守)
 このプロジェクトでは以下の7原則を最優先とする。これらを無視したコードは拒否・修正する。
