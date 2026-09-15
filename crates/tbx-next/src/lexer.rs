@@ -32,6 +32,9 @@ pub(crate) enum TokenKind {
     Slash,
     Percent,
     Comma,
+    At,
+    LBracket,
+    RBracket,
     LParen,
     RParen,
     Equal,
@@ -153,6 +156,9 @@ impl<'a> Lexer<'a> {
             b'/' => self.single_byte_token(TokenKind::Slash),
             b'%' => self.single_byte_token(TokenKind::Percent),
             b',' => self.single_byte_token(TokenKind::Comma),
+            b'@' => self.single_byte_token(TokenKind::At),
+            b'[' => self.single_byte_token(TokenKind::LBracket),
+            b']' => self.single_byte_token(TokenKind::RBracket),
             b'(' => self.single_byte_token(TokenKind::LParen),
             b')' => self.single_byte_token(TokenKind::RParen),
             b'=' => self.single_byte_token(TokenKind::Equal),
@@ -508,6 +514,9 @@ fn is_token_boundary(byte: u8) -> bool {
             | b'/'
             | b'%'
             | b','
+            | b'@'
+            | b'['
+            | b']'
             | b'('
             | b')'
             | b'='
@@ -667,6 +676,63 @@ mod tests {
         assert_eq!(
             slices(sources.view(), &tokens),
             ["a", "_", "A1_b2", "Ready?", ""]
+        );
+    }
+
+    #[test]
+    fn array_punctuation_is_independent_with_or_without_whitespace() {
+        for (source, starts) in [("@A[1]", [0, 1, 2, 3, 4]), ("@ A [ 1 ]", [0, 2, 4, 6, 8])] {
+            let (sources, id, tokens) = lex_all(source);
+            assert_eq!(
+                kinds(&tokens),
+                [
+                    TokenKind::At,
+                    TokenKind::Name,
+                    TokenKind::LBracket,
+                    TokenKind::IntegerLiteral,
+                    TokenKind::RBracket,
+                    TokenKind::Eof,
+                ],
+                "{source:?} should keep each array punctuation token independent"
+            );
+            assert_eq!(
+                slices(sources.view(), &tokens),
+                ["@", "A", "[", "1", "]", ""]
+            );
+            for (token, (kind, start)) in tokens.iter().zip([
+                (TokenKind::At, starts[0]),
+                (TokenKind::Name, starts[1]),
+                (TokenKind::LBracket, starts[2]),
+                (TokenKind::IntegerLiteral, starts[3]),
+                (TokenKind::RBracket, starts[4]),
+            ]) {
+                assert_token(*token, kind, id, start, start + 1);
+            }
+        }
+    }
+
+    #[test]
+    fn array_punctuation_is_a_boundary_for_adjacent_existing_tokens() {
+        let (sources, _id, tokens) = lex_all("A[1]+B $41]2");
+
+        assert_eq!(
+            kinds(&tokens),
+            [
+                TokenKind::Name,
+                TokenKind::LBracket,
+                TokenKind::IntegerLiteral,
+                TokenKind::RBracket,
+                TokenKind::Plus,
+                TokenKind::Name,
+                TokenKind::HexIntegerLiteral,
+                TokenKind::RBracket,
+                TokenKind::IntegerLiteral,
+                TokenKind::Eof,
+            ]
+        );
+        assert_eq!(
+            slices(sources.view(), &tokens),
+            ["A", "[", "1", "]", "+", "B", "$41", "]", "2", ""]
         );
     }
 
@@ -1105,14 +1171,14 @@ mod tests {
 
     #[test]
     fn error_is_terminal_and_does_not_advance_to_later_tokens() {
-        let (sources, id) = lexer_for("@ A");
+        let (sources, id) = lexer_for("! A");
         let view = sources.view();
         let mut lexer = Lexer::new(view, id).expect("test source should build a lexer");
         let expected = LexError::InvalidCharacter {
             span: view
                 .span(id, 0, 1)
                 .expect("punctuation span should validate"),
-            character: '@',
+            character: '!',
             reason: InvalidCharacterReason::UnsupportedPunctuation,
         };
 
