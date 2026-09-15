@@ -73,6 +73,13 @@ impl Bindings {
         Ok(())
     }
 
+    /// Publishes a binding after the caller has validated this name and made
+    /// no intervening changes to this registry.
+    pub(crate) fn insert_validated(&mut self, name: NormalizedName, binding: Binding) {
+        let previous = self.entries.insert(name, binding);
+        debug_assert!(previous.is_none());
+    }
+
     pub(crate) fn validate_new_name(
         &self,
         name: &NormalizedName,
