@@ -8,29 +8,24 @@ LET DONE = 0
 
 WHILE DONE = 0
   PRINT "Guess a number from 1 to 100: "
-  INPUT?
-  IF DUP() = 0
-    DROP
-    DROP
-    PRINT "Please enter a number."
-    CR
-  ELSE
-    DROP
+  IF INPUT?()
     IF DUP() < ANSWER
       PRINT "Too low."
       CR
       DROP
+    ELSIF DUP() > ANSWER
+      PRINT "Too high."
+      CR
+      DROP
     ELSE
-      IF DUP() > ANSWER
-        PRINT "Too high."
-        CR
-        DROP
-      ELSE
-        PRINT "Correct!"
-        CR
-        DROP
-        LET DONE = 1
-      ENDIF
+      PRINT "Correct!"
+      CR
+      DROP
+      LET DONE = 1
     ENDIF
+  ELSE
+    DROP
+    PRINT "Please enter a number."
+    CR
   ENDIF
 WEND
