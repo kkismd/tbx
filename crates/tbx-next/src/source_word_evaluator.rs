@@ -635,9 +635,11 @@ fn resolve_variable_name(
 ) -> Result<GlobalVarId, crate::expression::ExpressionVariableErrorKind> {
     match resolve_binding_name(bindings, source_name) {
         Ok(ResolvedBinding::Variable(id)) => Ok(id),
-        Ok(ResolvedBinding::RuntimeWord(_) | ResolvedBinding::SourceWord(_)) => {
-            Err(crate::expression::ExpressionVariableErrorKind::TargetIsNotVariable)
-        }
+        Ok(
+            ResolvedBinding::RuntimeWord(_)
+            | ResolvedBinding::SourceWord(_)
+            | ResolvedBinding::Array(_),
+        ) => Err(crate::expression::ExpressionVariableErrorKind::TargetIsNotVariable),
         Err(WordResolutionError::InvalidWordName) => {
             Err(crate::expression::ExpressionVariableErrorKind::InvalidName)
         }
@@ -656,9 +658,11 @@ fn resolve_runtime_word_name(
 ) -> Result<crate::word::WordId, crate::expression::ExpressionCallErrorKind> {
     match resolve_binding_name(bindings, source_name) {
         Ok(ResolvedBinding::RuntimeWord(id)) => Ok(id),
-        Ok(ResolvedBinding::Variable(_) | ResolvedBinding::SourceWord(_)) => {
-            Err(crate::expression::ExpressionCallErrorKind::TargetIsNotRuntimeWord)
-        }
+        Ok(
+            ResolvedBinding::Variable(_)
+            | ResolvedBinding::SourceWord(_)
+            | ResolvedBinding::Array(_),
+        ) => Err(crate::expression::ExpressionCallErrorKind::TargetIsNotRuntimeWord),
         Err(WordResolutionError::InvalidWordName) => {
             Err(crate::expression::ExpressionCallErrorKind::InvalidName)
         }

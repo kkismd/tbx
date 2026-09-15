@@ -1,5 +1,6 @@
 use std::collections::{HashMap, HashSet};
 
+use crate::global_array::ArrayId;
 use crate::global_variable::GlobalVarId;
 use crate::name::NormalizedName;
 use crate::source_word::SourceWordId;
@@ -15,6 +16,7 @@ pub(crate) enum Binding {
     Word(WordId),
     SourceWord(SourceWordId),
     Variable(GlobalVarId),
+    Array(ArrayId),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -156,7 +158,7 @@ impl Bindings {
     ) -> Result<WordId, BindingReplaceError> {
         match self.entries.get(name) {
             Some(Binding::Word(id)) => Ok(*id),
-            Some(Binding::SourceWord(_) | Binding::Variable(_)) => {
+            Some(Binding::SourceWord(_) | Binding::Variable(_) | Binding::Array(_)) => {
                 Err(BindingReplaceError::TargetIsNotWord)
             }
             None => Err(BindingReplaceError::MissingName),
@@ -177,7 +179,7 @@ impl Bindings {
             Some(Binding::Word(actual)) => {
                 Err(BindingReplaceError::CurrentWordMismatch { actual: *actual })
             }
-            Some(Binding::SourceWord(_) | Binding::Variable(_)) => {
+            Some(Binding::SourceWord(_) | Binding::Variable(_) | Binding::Array(_)) => {
                 Err(BindingReplaceError::TargetIsNotWord)
             }
             None => Err(BindingReplaceError::MissingName),
@@ -296,7 +298,7 @@ mod tests {
             .expect("binding should exist")
         {
             Binding::Word(actual_id) => assert_eq!(*actual_id, id),
-            Binding::SourceWord(_) | Binding::Variable(_) => {
+            Binding::SourceWord(_) | Binding::Variable(_) | Binding::Array(_) => {
                 panic!("word binding should preserve kind")
             }
         }
@@ -673,5 +675,28 @@ mod tests {
         );
         assert_eq!(bindings.get(&name("TOTAL")), Some(&variable));
         assert_eq!(bindings.len(), 1);
+    }
+
+    #[test]
+    fn array_binding_is_not_a_word_replacement_target() {
+        let mut arrays = crate::global_array::GlobalArrays::new();
+        let array = arrays.allocate(1);
+        let mut words = PublishedWords::new();
+        let expected = add_word(&mut words, 72);
+        let replacement = add_word(&mut words, 73);
+        let mut bindings = Bindings::new();
+        bindings
+            .insert_new(name("DATA"), Binding::Array(array))
+            .expect("array should register");
+
+        assert_eq!(
+            bindings.current_word(&name("DATA")),
+            Err(BindingReplaceError::TargetIsNotWord)
+        );
+        assert_eq!(
+            bindings.replace_word(&name("DATA"), expected, replacement),
+            Err(BindingReplaceError::TargetIsNotWord)
+        );
+        assert_eq!(bindings.get(&name("DATA")), Some(&Binding::Array(array)));
     }
 }
