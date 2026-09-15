@@ -8,6 +8,7 @@ use crate::expression::{
     ExpressionError, ExpressionLocalResolver, ExpressionStaging, ExpressionSyntaxErrorKind,
     ExpressionVariableErrorKind,
 };
+use crate::global_array::GlobalArrays;
 use crate::global_variable::GlobalVariables;
 use crate::instruction::Instruction;
 use crate::instruction_builder::{InstructionBuildError, InstructionBuildTarget};
@@ -232,6 +233,26 @@ pub(crate) enum SourceWordError {
     VarBindingCommitInvariantViolated {
         span: SourceSpan,
     },
+    DimSyntax {
+        span: SourceSpan,
+        kind: DimSyntaxErrorKind,
+    },
+    DimName {
+        span: SourceSpan,
+        source: NameError,
+    },
+    DimNameConflict {
+        span: SourceSpan,
+    },
+    DimReservedName {
+        span: SourceSpan,
+    },
+    DimSize {
+        span: SourceSpan,
+    },
+    DimPublicationContextUnavailable {
+        span: SourceSpan,
+    },
     LetSyntax {
         span: SourceSpan,
         kind: LetSyntaxErrorKind,
@@ -353,6 +374,16 @@ pub(crate) enum VarSyntaxErrorKind {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum DimSyntaxErrorKind {
+    MissingAt,
+    MissingName,
+    MissingLeftBracket,
+    MissingSize,
+    MissingRightBracket,
+    TrailingToken { kind: TokenKind },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum UseSyntaxErrorKind {
     MissingLiteral,
     ExpectedLiteral,
@@ -417,6 +448,12 @@ impl SourceWordError {
             | Self::VarNameConflict { span }
             | Self::VarReservedName { span }
             | Self::VarBindingCommitInvariantViolated { span }
+            | Self::DimSyntax { span, .. }
+            | Self::DimName { span, .. }
+            | Self::DimNameConflict { span }
+            | Self::DimReservedName { span }
+            | Self::DimSize { span }
+            | Self::DimPublicationContextUnavailable { span }
             | Self::LetSyntax { span, .. }
             | Self::LetTarget { span, .. }
             | Self::LetExpressionContextUnavailable { span }
@@ -1167,6 +1204,7 @@ pub(crate) struct NativeSourceWordContext<'source, 'state> {
     code: &'state mut dyn InstructionBuildTarget,
     local_line_number_prefix: Option<SourceSpan>,
     globals: Option<&'state mut GlobalVariables>,
+    arrays: Option<&'state mut GlobalArrays>,
     runtime_definitions: Option<&'state mut dyn RuntimeDefinitionPublisher<'source>>,
     source_word_publication: Option<&'state SourceWordRegistry>,
     additional_source_capability: bool,
@@ -1184,6 +1222,7 @@ pub(crate) struct NativeSourceWordContextParts<'source, 'state> {
     pub(crate) code: &'state mut dyn InstructionBuildTarget,
     pub(crate) local_line_number_prefix: Option<SourceSpan>,
     pub(crate) globals: Option<&'state mut GlobalVariables>,
+    pub(crate) arrays: Option<&'state mut GlobalArrays>,
     pub(crate) runtime_definitions: Option<&'state mut dyn RuntimeDefinitionPublisher<'source>>,
     pub(crate) source_word_publication: Option<&'state SourceWordRegistry>,
     pub(crate) additional_source_capability: bool,
@@ -1209,6 +1248,7 @@ impl<'source, 'state> NativeSourceWordContext<'source, 'state> {
             code: parts.code,
             local_line_number_prefix: parts.local_line_number_prefix,
             globals: parts.globals,
+            arrays: parts.arrays,
             runtime_definitions: parts.runtime_definitions,
             source_word_publication: parts.source_word_publication,
             additional_source_capability: parts.additional_source_capability,
@@ -1335,6 +1375,36 @@ impl<'source, 'state> NativeSourceWordContext<'source, 'state> {
                     SourceWordError::VarBindingCommitInvariantViolated { span }
                 }
             })
+    }
+
+    fn publish_global_array(
+        &mut self,
+        name: NormalizedName,
+        len: usize,
+        span: SourceSpan,
+    ) -> Result<(), SourceWordError> {
+        let Some(arrays) = &mut self.arrays else {
+            return Err(SourceWordError::DimPublicationContextUnavailable { span });
+        };
+        let bindings = match &mut self.bindings {
+            NativeSourceWordBindingAccess::Read(_) => {
+                return Err(SourceWordError::DimPublicationContextUnavailable { span });
+            }
+            NativeSourceWordBindingAccess::Write(bindings) => &mut **bindings,
+        };
+
+        bindings
+            .validate_new_name(&name)
+            .map_err(|source| match source {
+                BindingInsertError::NameConflict => SourceWordError::DimNameConflict { span },
+                BindingInsertError::ReservedName => SourceWordError::DimReservedName { span },
+            })?;
+
+        let id = arrays.allocate(len);
+        // No fallible work remains after allocation: validation and publication
+        // use the same unchanged registry, then the binding becomes visible.
+        bindings.insert_validated(name, Binding::Array(id));
+        Ok(())
     }
 
     pub(crate) fn validate_runtime_definition_name(
@@ -1566,6 +1636,111 @@ pub(crate) fn var_source_word(
     })?;
 
     context.publish_global_variable(name, name_token.span())
+}
+
+pub(crate) fn dim_source_word(
+    context: &mut NativeSourceWordContext<'_, '_>,
+) -> Result<(), SourceWordError> {
+    let (at, name_token, size_token, right_bracket) = {
+        let reader = context.statement_reader_mut();
+        let at = reader.expect(TokenKind::At).map_err(dim_reader_error)?;
+        let name = reader.read_name().map_err(dim_reader_error)?;
+        reader
+            .expect(TokenKind::LBracket)
+            .map_err(dim_reader_error)?;
+        let size = reader.peek().ok_or(SourceWordError::DimSyntax {
+            span: reader.missing_anchor,
+            kind: DimSyntaxErrorKind::MissingSize,
+        })?;
+        if size.kind() != TokenKind::IntegerLiteral {
+            return Err(SourceWordError::DimSize { span: size.span() });
+        }
+        reader
+            .expect(TokenKind::IntegerLiteral)
+            .map_err(dim_reader_error)?;
+        if let Some(next) = reader.peek() {
+            if next.kind() != TokenKind::RBracket {
+                return Err(SourceWordError::DimSize { span: next.span() });
+            }
+        }
+        let right = reader
+            .expect(TokenKind::RBracket)
+            .map_err(dim_reader_error)?;
+        reader.finish().map_err(dim_reader_error)?;
+        (at, name, size, right)
+    };
+
+    let source_name = context
+        .view()
+        .slice(name_token.span())
+        .map_err(|source| SourceWordError::Source { source })?;
+    let name = NormalizedName::new(source_name).map_err(|source| SourceWordError::DimName {
+        span: name_token.span(),
+        source,
+    })?;
+    let source_size = context
+        .view()
+        .slice(size_token.span())
+        .map_err(|source| SourceWordError::Source { source })?;
+    let size = source_size
+        .parse::<usize>()
+        .map_err(|_| SourceWordError::DimSize {
+            span: size_token.span(),
+        })?;
+    if !(1..=32767).contains(&size) {
+        return Err(SourceWordError::DimSize {
+            span: size_token.span(),
+        });
+    }
+    let span = context
+        .view()
+        .span(
+            context.source_id(),
+            at.span().start(),
+            right_bracket.span().end(),
+        )
+        .map_err(|source| SourceWordError::Source { source })?;
+    context.publish_global_array(name, size, span)
+}
+
+fn dim_reader_error(error: SourceStatementReaderError) -> SourceWordError {
+    let (span, kind) = match error {
+        SourceStatementReaderError::Missing { expected, span } => {
+            let kind = match expected {
+                SourceStatementExpected::Name => DimSyntaxErrorKind::MissingName,
+                SourceStatementExpected::Token(TokenKind::At) => DimSyntaxErrorKind::MissingAt,
+                SourceStatementExpected::Token(TokenKind::LBracket) => {
+                    DimSyntaxErrorKind::MissingLeftBracket
+                }
+                SourceStatementExpected::Token(TokenKind::IntegerLiteral) => {
+                    DimSyntaxErrorKind::MissingSize
+                }
+                _ => DimSyntaxErrorKind::MissingRightBracket,
+            };
+            (span, kind)
+        }
+        SourceStatementReaderError::Unexpected { expected, actual } => {
+            let kind = match expected {
+                SourceStatementExpected::Name => DimSyntaxErrorKind::MissingName,
+                SourceStatementExpected::Token(TokenKind::At) => DimSyntaxErrorKind::MissingAt,
+                SourceStatementExpected::Token(TokenKind::LBracket) => {
+                    DimSyntaxErrorKind::MissingLeftBracket
+                }
+                SourceStatementExpected::Token(TokenKind::IntegerLiteral) => {
+                    DimSyntaxErrorKind::MissingSize
+                }
+                _ => DimSyntaxErrorKind::MissingRightBracket,
+            };
+            (actual.span(), kind)
+        }
+        SourceStatementReaderError::TrailingToken { actual } => (
+            actual.span(),
+            DimSyntaxErrorKind::TrailingToken {
+                kind: actual.kind(),
+            },
+        ),
+    };
+    SourceWordError::DimSyntax { span, kind }
 }
 
 pub(crate) fn let_source_word(
@@ -3348,6 +3523,7 @@ mod tests {
             code: &mut builder,
             local_line_number_prefix: None,
             globals: None,
+            arrays: None,
             runtime_definitions: None,
             source_word_publication: None,
             additional_source_capability: true,
@@ -3386,6 +3562,7 @@ mod tests {
             code: &mut builder,
             local_line_number_prefix: None,
             globals: None,
+            arrays: None,
             runtime_definitions: None,
             source_word_publication: None,
             additional_source_capability: true,
@@ -3430,6 +3607,7 @@ mod tests {
                 code: &mut builder,
                 local_line_number_prefix: None,
                 globals: None,
+                arrays: None,
                 runtime_definitions: None,
                 source_word_publication: None,
                 additional_source_capability: true,
@@ -3462,6 +3640,7 @@ mod tests {
             code: &mut builder,
             local_line_number_prefix: None,
             globals: None,
+            arrays: None,
             runtime_definitions: None,
             source_word_publication: None,
             additional_source_capability: false,
@@ -3492,6 +3671,7 @@ mod tests {
             code: &mut builder,
             local_line_number_prefix: None,
             globals: None,
+            arrays: None,
             runtime_definitions: None,
             source_word_publication: None,
             additional_source_capability: true,
@@ -3658,6 +3838,7 @@ mod tests {
             code: &mut builder,
             local_line_number_prefix: None,
             globals: None,
+            arrays: None,
             runtime_definitions: None,
             source_word_publication: None,
             additional_source_capability: false,
@@ -3866,6 +4047,7 @@ mod tests {
                 code: &mut builder,
                 local_line_number_prefix: None,
                 globals: None,
+                arrays: None,
                 runtime_definitions: None,
                 source_word_publication: None,
                 additional_source_capability: false,
@@ -3904,6 +4086,7 @@ mod tests {
                     code: &mut builder,
                     local_line_number_prefix: None,
                     globals: Some(&mut globals),
+                    arrays: None,
                     runtime_definitions: None,
                     source_word_publication: None,
                     additional_source_capability: false,

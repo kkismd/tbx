@@ -508,7 +508,8 @@ impl BatchEnvironment {
                 &mut self.globals,
                 &mut self.published_code,
                 &mut self.words,
-            ),
+            )
+            .with_global_arrays(&mut self.arrays),
         )
     }
 
@@ -521,6 +522,7 @@ impl BatchEnvironment {
             &mut self.published_code,
             &mut self.words,
         )
+        .with_global_arrays(&mut self.arrays)
         .with_additional_source_capability()
     }
 }

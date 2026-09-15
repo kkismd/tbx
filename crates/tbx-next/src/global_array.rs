@@ -57,6 +57,11 @@ impl GlobalArrays {
             arrays: &mut self.arrays,
         }
     }
+
+    #[cfg(test)]
+    pub(crate) fn len(&self) -> usize {
+        self.arrays.len()
+    }
 }
 
 #[derive(Debug, Clone, Copy)]

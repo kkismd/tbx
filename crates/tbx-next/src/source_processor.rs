@@ -9,6 +9,7 @@ use crate::expression::{
     ExpressionError, ExpressionLocalResolver, ExpressionStaging, ExpressionSyntaxErrorKind,
     ExpressionVariableErrorKind,
 };
+use crate::global_array::GlobalArrays;
 use crate::global_variable::{GlobalVariableView, GlobalVariables};
 use crate::instruction::{
     CodeLocation, CodeSpaceLookup, CodeSpaceLookupError, Instruction, InstructionAddress,
@@ -209,6 +210,7 @@ pub(crate) struct SourceCompileContext<'a> {
     operators: Option<OperatorLookup>,
     source_words: Option<SourceWordAccess<'a>>,
     globals: Option<&'a mut GlobalVariables>,
+    arrays: Option<&'a mut GlobalArrays>,
     runtime_definitions: Option<RuntimeDefinitionPublicationAccess<'a>>,
     additional_source_capability: bool,
     local_references: Option<&'a DefinitionLocalReferences>,
@@ -964,6 +966,7 @@ pub(crate) fn compile_definition_body<'source>(
         operators: context.operators,
         source_words: context.source_words.map(SourceWordAccess::Read),
         globals: None,
+        arrays: None,
         runtime_definitions: None,
         additional_source_capability: false,
         local_references: context.local_references,
@@ -992,6 +995,7 @@ pub(crate) fn compile_quotation_body<'source>(
         // #1516/#1500: quotation bodies reuse statement lowering but have no
         // capability to publish bindings, globals, or runtime definitions.
         globals: None,
+        arrays: None,
         runtime_definitions: None,
         additional_source_capability: false,
         local_references: context.local_references,
@@ -1344,6 +1348,10 @@ where
         .globals
         .as_deref_mut()
         .filter(|_| state.capabilities.allows_publication());
+    let arrays = context
+        .arrays
+        .as_deref_mut()
+        .filter(|_| state.capabilities.allows_publication());
     let mut runtime_publisher = context
         .runtime_definitions
         .as_mut()
@@ -1398,6 +1406,7 @@ where
                     code: state.code,
                     local_line_number_prefix,
                     globals,
+                    arrays,
                     runtime_definitions,
                     source_word_publication,
                     additional_source_capability: context.additional_source_capability,
@@ -1440,6 +1449,7 @@ where
                             code: state.code,
                             local_line_number_prefix,
                             globals,
+                            arrays: None,
                             runtime_definitions,
                             source_word_publication: None,
                             additional_source_capability: false,
@@ -2179,6 +2189,7 @@ impl<'a> SourceCompileContext<'a> {
             operators: None,
             source_words: None,
             globals: None,
+            arrays: None,
             runtime_definitions: None,
             additional_source_capability: false,
             local_references: None,
@@ -2191,6 +2202,7 @@ impl<'a> SourceCompileContext<'a> {
             operators: Some(operators),
             source_words: None,
             globals: None,
+            arrays: None,
             runtime_definitions: None,
             additional_source_capability: false,
             local_references: None,
@@ -2206,6 +2218,7 @@ impl<'a> SourceCompileContext<'a> {
             operators: None,
             source_words: Some(SourceWordAccess::Read(source_words)),
             globals: None,
+            arrays: None,
             runtime_definitions: None,
             additional_source_capability: false,
             local_references: None,
@@ -2222,6 +2235,7 @@ impl<'a> SourceCompileContext<'a> {
             operators: Some(operators),
             source_words: Some(SourceWordAccess::Read(source_words)),
             globals: None,
+            arrays: None,
             runtime_definitions: None,
             additional_source_capability: false,
             local_references: None,
@@ -2238,6 +2252,7 @@ impl<'a> SourceCompileContext<'a> {
             operators: None,
             source_words: Some(SourceWordAccess::Read(source_words)),
             globals: Some(globals),
+            arrays: None,
             runtime_definitions: None,
             additional_source_capability: false,
             local_references: None,
@@ -2255,6 +2270,7 @@ impl<'a> SourceCompileContext<'a> {
             operators: Some(operators),
             source_words: Some(SourceWordAccess::Read(source_words)),
             globals: Some(globals),
+            arrays: None,
             runtime_definitions: None,
             additional_source_capability: false,
             local_references: None,
@@ -2272,6 +2288,7 @@ impl<'a> SourceCompileContext<'a> {
             operators: Some(operators),
             source_words: Some(SourceWordAccess::Write(source_words)),
             globals: Some(globals),
+            arrays: None,
             runtime_definitions: None,
             additional_source_capability: false,
             local_references: None,
@@ -2291,6 +2308,7 @@ impl<'a> SourceCompileContext<'a> {
             operators: Some(operators),
             source_words: Some(SourceWordAccess::Read(source_words)),
             globals: Some(globals),
+            arrays: None,
             runtime_definitions: Some(RuntimeDefinitionPublicationAccess { code, words }),
             additional_source_capability: false,
             local_references: None,
@@ -2310,6 +2328,7 @@ impl<'a> SourceCompileContext<'a> {
             operators: Some(operators),
             source_words: Some(SourceWordAccess::Write(source_words)),
             globals: Some(globals),
+            arrays: None,
             runtime_definitions: Some(RuntimeDefinitionPublicationAccess { code, words }),
             additional_source_capability: false,
             local_references: None,
@@ -2325,6 +2344,11 @@ impl<'a> SourceCompileContext<'a> {
 
     pub(crate) fn with_additional_source_capability(mut self) -> Self {
         self.additional_source_capability = true;
+        self
+    }
+
+    pub(crate) fn with_global_arrays(mut self, arrays: &'a mut GlobalArrays) -> Self {
+        self.arrays = Some(arrays);
         self
     }
 
@@ -2747,6 +2771,7 @@ impl<'a> SourceExecutionContext<'a> {
             operators: self.operators,
             source_words: self.source_words.map(SourceWordAccess::Read),
             globals: None,
+            arrays: None,
             runtime_definitions: None,
             additional_source_capability: false,
             local_references: None,
@@ -2860,6 +2885,7 @@ mod tests {
         register_builtin_global_variables, register_builtin_source_words,
         register_native_source_word, register_native_source_word_with_markers, register_primitive,
     };
+    use crate::global_array::GlobalArrays;
     use crate::global_variable::{GlobalVarId, GlobalVariables};
     use crate::instruction::InstructionSequence;
     use crate::lexer::InvalidCharacterReason;
@@ -2878,8 +2904,8 @@ mod tests {
         InstructionSourceMapping, SourceMappingLookup, SourceMappingLookupError,
     };
     use crate::source_word::{
-        DefSyntaxErrorKind, EvalSyntaxErrorKind, IfSyntaxErrorKind, LetSyntaxErrorKind,
-        NativeSourceWordContext, NativeStructuredSourceWordContext,
+        DefSyntaxErrorKind, DimSyntaxErrorKind, EvalSyntaxErrorKind, IfSyntaxErrorKind,
+        LetSyntaxErrorKind, NativeSourceWordContext, NativeStructuredSourceWordContext,
         NativeStructuredSourceWordOwner, SourceBlockItem, SourceBlockMarker, SourceWordRegistry,
         SourceWordSyntaxMarker, SourceWordSyntaxMarkerRole, StructuredBodyCapabilities,
         StructuredBodyContext, StructuredBuildTargetScope, StructuredLineNumberScope,
@@ -3613,6 +3639,23 @@ mod tests {
         )
         .expect("VAR source should compile");
         (sources, id, unit)
+    }
+
+    fn compile_with_dim(
+        text: &str,
+        bindings: &mut Bindings,
+        arrays: &mut GlobalArrays,
+        source_words: &SourceWordRegistry,
+    ) -> Result<(SourceTexts, SourceId, TemporaryExecutionUnit), SourceProcessorError> {
+        let (sources, id) = source(text);
+        let mut globals = GlobalVariables::new();
+        let context = SourceCompileContext::with_source_word_publication(
+            bindings,
+            source_words.lookup(),
+            &mut globals,
+        )
+        .with_global_arrays(arrays);
+        compile_source(sources.view(), id, context).map(|unit| (sources, id, unit))
     }
 
     fn compile_with_var_error(
@@ -9726,6 +9769,191 @@ mod tests {
         assert_eq!(globals.len(), 1);
         assert_eq!(unit.len(), 1);
         assert_eq!(unit.instructions().get(address(0)), Ok(&Instruction::Halt));
+    }
+
+    #[test]
+    fn dim_publishes_normalized_zero_initialized_global_arrays() {
+        let mut source_words = SourceWordRegistry::new();
+        let mut bindings = Bindings::new();
+        register_builtin_source_words(&mut source_words, &mut bindings)
+            .expect("built-in source words should bootstrap");
+        let mut arrays = GlobalArrays::new();
+
+        let (_sources, _id, unit) =
+            compile_with_dim("DIM @MiXeD[1]", &mut bindings, &mut arrays, &source_words)
+                .expect("minimum-size array should compile");
+        let Some(Binding::Array(array)) = bindings.get(&name("mixed")).copied() else {
+            panic!("DIM should publish an array binding using a normalized name");
+        };
+        assert_eq!(arrays.view().read(array, 0), Ok(value(0)));
+        assert_eq!(arrays.len(), 1);
+        assert_eq!(unit.len(), 1);
+
+        compile_with_dim(
+            "DIM @LARGE[32767]",
+            &mut bindings,
+            &mut arrays,
+            &source_words,
+        )
+        .expect("maximum-size array should compile");
+        let Some(Binding::Array(large)) = bindings.get(&name("large")).copied() else {
+            panic!("DIM should publish the second array");
+        };
+        assert_ne!(array, large);
+        assert_eq!(arrays.view().read(large, 32766), Ok(value(0)));
+        assert_eq!(arrays.len(), 2);
+    }
+
+    #[test]
+    fn dim_rejects_invalid_sizes_and_syntax_without_publication_or_storage() {
+        let mut source_words = SourceWordRegistry::new();
+        let mut bindings = Bindings::new();
+        register_builtin_source_words(&mut source_words, &mut bindings)
+            .expect("built-in source words should bootstrap");
+        let mut arrays = GlobalArrays::new();
+
+        let (sources, source_id) = source("DIM @A[0]");
+        let mut globals = GlobalVariables::new();
+        let error = compile_source(
+            sources.view(),
+            source_id,
+            SourceCompileContext::with_source_word_publication(
+                &mut bindings,
+                source_words.lookup(),
+                &mut globals,
+            )
+            .with_global_arrays(&mut arrays),
+        )
+        .expect_err("zero-sized declaration should fail");
+        assert_eq!(
+            error.primary_span(),
+            Some(span(sources.view(), source_id, 7, 8)),
+            "size diagnostics should point at the invalid literal"
+        );
+
+        for (input, expected) in [
+            ("DIM @A[0]", "size"),
+            ("DIM @A[-1]", "size"),
+            ("DIM @A[32768]", "size"),
+            ("DIM @A[1+1]", "size"),
+            ("DIM @A[$10]", "size"),
+        ] {
+            let error = compile_with_dim(input, &mut bindings, &mut arrays, &source_words)
+                .expect_err("invalid array declaration should fail");
+            assert!(
+                matches!(
+                    error,
+                    SourceProcessorError::SourceWord(
+                        crate::source_word::SourceWordError::DimSize { .. }
+                    )
+                ),
+                "{input} should report a size error, got {error:?} ({expected})"
+            );
+            assert!(bindings.get(&name("A")).is_none());
+            assert_eq!(arrays.len(), 0);
+        }
+
+        let error = compile_with_dim("DIM @A[1", &mut bindings, &mut arrays, &source_words)
+            .expect_err("missing closing bracket should fail");
+        assert!(matches!(
+            error,
+            SourceProcessorError::SourceWord(crate::source_word::SourceWordError::DimSyntax {
+                kind: DimSyntaxErrorKind::MissingRightBracket,
+                ..
+            })
+        ));
+        assert_eq!(arrays.len(), 0);
+
+        for input in ["DIM A[1]", "DIM @[1]", "DIM @A 1]", "DIM @A[1] EXTRA"] {
+            let error = compile_with_dim(input, &mut bindings, &mut arrays, &source_words)
+                .expect_err("malformed array declaration should fail");
+            assert!(
+                matches!(
+                    error,
+                    SourceProcessorError::SourceWord(
+                        crate::source_word::SourceWordError::DimSyntax { .. }
+                    )
+                ),
+                "{input} should carry a syntax diagnostic: {error:?}"
+            );
+            assert_eq!(arrays.len(), 0);
+            assert!(bindings.get(&name("A")).is_none());
+        }
+
+        compile_with_dim("DIM @A[2]", &mut bindings, &mut arrays, &source_words)
+            .expect("valid declaration should recover after failed declarations");
+        assert_eq!(arrays.len(), 1);
+        let Some(Binding::Array(existing)) = bindings.get(&name("A")).copied() else {
+            panic!("valid A declaration should remain published");
+        };
+        let conflict = compile_with_dim("DIM @A[3]", &mut bindings, &mut arrays, &source_words)
+            .expect_err("array redefinition should fail");
+        assert!(matches!(
+            conflict,
+            SourceProcessorError::SourceWord(
+                crate::source_word::SourceWordError::DimNameConflict { .. }
+            )
+        ));
+        assert_eq!(bindings.get(&name("A")), Some(&Binding::Array(existing)));
+        assert_eq!(arrays.view().read(existing, 0), Ok(value(0)));
+        assert_eq!(arrays.len(), 1);
+    }
+
+    #[test]
+    fn dim_rejects_single_namespace_and_syntax_marker_conflicts_before_allocation() {
+        let mut source_words = SourceWordRegistry::new();
+        let mut bindings = Bindings::new();
+        register_builtin_source_words(&mut source_words, &mut bindings)
+            .expect("built-in source words should bootstrap");
+        let word = WordId::test_invalid(0);
+        bindings
+            .insert_new(name("WORD"), Binding::Word(word))
+            .unwrap();
+        bindings
+            .insert_new(
+                name("SCALAR"),
+                Binding::Variable(GlobalVarId::test_invalid(0)),
+            )
+            .unwrap();
+        let marker_owner = source_words.register(|_| Ok(()));
+        bindings
+            .insert_new_source_word_with_markers(
+                name("MARK_OWNER"),
+                marker_owner,
+                &[name("CUSTOM_MARK")],
+            )
+            .unwrap();
+        let mut arrays = GlobalArrays::new();
+
+        for input in [
+            "DIM @WORD[1]",
+            "DIM @SCALAR[1]",
+            "DIM @DIM[1]",
+            "DIM @CUSTOM_MARK[1]",
+        ] {
+            let error = compile_with_dim(input, &mut bindings, &mut arrays, &source_words)
+                .expect_err("conflicting name should fail");
+            assert!(
+                matches!(
+                    error,
+                    SourceProcessorError::SourceWord(
+                        crate::source_word::SourceWordError::DimNameConflict { .. }
+                    )
+                ),
+                "{input} should report a name conflict: {error:?}"
+            );
+            assert_eq!(arrays.len(), 0);
+        }
+
+        let reserved = compile_with_dim("DIM @REM[1]", &mut bindings, &mut arrays, &source_words)
+            .expect_err("semantic reserved name should fail");
+        assert!(matches!(
+            reserved,
+            SourceProcessorError::SourceWord(
+                crate::source_word::SourceWordError::DimReservedName { .. }
+            )
+        ));
+        assert_eq!(arrays.len(), 0);
     }
 
     #[test]
