@@ -1,0 +1,17 @@
+REM Store the squares of 1 through 10, then print them from the array.
+
+DIM @SQUARE[10]
+VAR NUMBER
+
+LET NUMBER = 1
+WHILE NUMBER <= 10
+  LET @SQUARE[NUMBER] = NUMBER * NUMBER
+  LET NUMBER = NUMBER + 1
+WEND
+
+LET NUMBER = 1
+WHILE NUMBER <= 10
+  PRINT NUMBER, " ", @SQUARE[NUMBER]
+  CR
+  LET NUMBER = NUMBER + 1
+WEND

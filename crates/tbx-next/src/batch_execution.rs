@@ -2253,4 +2253,25 @@ Guess a number from 1 to 100: Correct!\n"
         let result = success(result);
         assert_eq!(result.data_stack(), []);
     }
+
+    #[test]
+    fn squares_example_leaves_the_data_stack_empty() {
+        let source = std::fs::read_to_string(example_path("squares.tbx"))
+            .expect("squares example should be readable");
+        let (sources, standard_library_id, source_id) =
+            sources_with_standard_library(STDLIB_SOURCE, &source);
+        let mut writer = RecordingWriter::default();
+
+        let result = execute_registered_sources_with_filesystem_and_seed(
+            sources,
+            standard_library_id,
+            source_id,
+            &mut writer,
+            None,
+            123,
+        );
+
+        let result = success(result);
+        assert_eq!(result.data_stack(), []);
+    }
 }
