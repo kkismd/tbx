@@ -273,7 +273,7 @@ DO
 UNTIL A >= 3
 ```
 
-TBX Next の `WHILE` は `ENDWH` で終端する。`ENDWH` は終端として使えない。
+TBX Next の `WHILE` は `ENDWH` で終端する。`WEND` は終端として使えない。
 
 ## 出力
 
