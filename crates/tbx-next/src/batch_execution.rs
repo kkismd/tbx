@@ -1449,7 +1449,7 @@ mod tests {
         let mut writer = RecordingWriter::default();
 
         let result = success(execute_with_embedded_standard_library(
-            "LET A = 0\nWHILE A < 3\nLET A = A + 1\nWEND\nEVAL A",
+            "LET A = 0\nWHILE A < 3\nLET A = A + 1\nENDWH\nEVAL A",
             "program.tbx",
             &mut writer,
         ));
@@ -1457,8 +1457,8 @@ mod tests {
         assert_eq!(result.data_stack(), [Value::integer(3)]);
 
         for (source, expected) in [
-            ("WHILE 0\nLET A = 1\nWEND\nEVAL 0", 0),
-            ("LET A = 0\nWHILE A < 1\nLET A = A + 1\nWEND\nEVAL A", 1),
+            ("WHILE 0\nLET A = 1\nENDWH\nEVAL 0", 0),
+            ("LET A = 0\nWHILE A < 1\nLET A = A + 1\nENDWH\nEVAL A", 1),
         ] {
             let mut writer = RecordingWriter::default();
             let result = success(execute_with_embedded_standard_library(
@@ -1498,7 +1498,7 @@ mod tests {
         let mut writer = RecordingWriter::default();
 
         let result = success(execute_with_embedded_standard_library(
-            "LET A = 0\nLET B = 0\nIF 1\nWHILE A < 2\nDO\nLET B = B + 1\nUNTIL B >= 2\nLET A = A + 1\nWEND\nENDIF\nEVAL A\nEVAL B",
+            "LET A = 0\nLET B = 0\nIF 1\nWHILE A < 2\nDO\nLET B = B + 1\nUNTIL B >= 2\nLET A = A + 1\nENDWH\nENDIF\nEVAL A\nEVAL B",
             "program.tbx",
             &mut writer,
         ));
@@ -1507,7 +1507,7 @@ mod tests {
 
         let mut writer = RecordingWriter::default();
         let result = success(execute_with_embedded_standard_library(
-            "LET A = 0\nDO\nLET B = 0\nWHILE B < 2\nLET B = B + 1\nWEND\nLET A = A + 1\nUNTIL A >= 2\nEVAL A",
+            "LET A = 0\nDO\nLET B = 0\nWHILE B < 2\nLET B = B + 1\nENDWH\nLET A = A + 1\nUNTIL A >= 2\nEVAL A",
             "program.tbx",
             &mut writer,
         ));
@@ -1516,7 +1516,7 @@ mod tests {
 
         let mut writer = RecordingWriter::default();
         let result = success(execute_with_embedded_standard_library(
-            "LET A = 0\nLET B = 0\nWHILE A < 2\nLET B = 0\nWHILE B < 2\nLET B = B + 1\nWEND\nLET A = A + 1\nWEND\nEVAL A\nEVAL B",
+            "LET A = 0\nLET B = 0\nWHILE A < 2\nLET B = 0\nWHILE B < 2\nLET B = B + 1\nENDWH\nLET A = A + 1\nENDWH\nEVAL A\nEVAL B",
             "program.tbx",
             &mut writer,
         ));
@@ -1552,7 +1552,7 @@ mod tests {
         assert_eq!(
             environment
                 .bindings
-                .syntax_marker_reservation(&name("WEND"))
+                .syntax_marker_reservation(&name("ENDWH"))
                 .map(|reservation| reservation.owner()),
             Some(*while_id)
         );
@@ -1570,9 +1570,10 @@ mod tests {
     #[test]
     fn embedded_standard_library_control_structure_markers_reject_binding_and_owner_mismatch() {
         for source in [
-            "DEF WEND\nEND",
+            "DEF ENDWH\nEND",
+            "WHILE 1\nENDWH",
             "WHILE 1\nUNTIL 1",
-            "DO\nWEND",
+            "DO\nENDWH",
             "WHILE 1",
             "DO",
         ] {
@@ -1587,6 +1588,19 @@ mod tests {
             assert_eq!(failure.class(), UserFacingFailureClass::UserProgram);
             assert!(failure.diagnostic().primary().is_some());
         }
+    }
+
+    #[test]
+    fn embedded_standard_library_allows_wend_as_a_regular_word_name() {
+        let mut writer = RecordingWriter::default();
+
+        let result = success(execute_with_embedded_standard_library(
+            "DEF WEND\nEND",
+            "program.tbx",
+            &mut writer,
+        ));
+
+        assert!(result.data_stack().is_empty());
     }
 
     #[test]

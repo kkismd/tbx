@@ -149,14 +149,14 @@ LET I = 1
 WHILE I <= 10
   LET @SQUARE[I] = I * I
   LET I = I + 1
-WEND
+ENDWH
 
 LET I = 1
 WHILE I <= 10
   PRINT I, " ", @SQUARE[I]
   CR
   LET I = I + 1
-WEND
+ENDWH
 ```
 
 `@` は配列名を示し、`[]` は添字を囲む。要素の読み取りは式中の `@NAME[index]`、書き込みは `LET @NAME[index] = expression` と書く。添字は **1-origin** で、有効範囲は `1..=n`。`0`、負数、宣言サイズを超える添字は実行時エラーになる。`@NAME` 単体は実行時配列値ではなく、配列要素には添字が必要である。
@@ -253,7 +253,7 @@ ENDIF
 
 `WHILE` と `DO` は起動時に読み込まれる標準ライブラリ `crates/tbx-next/stdlib/basic.tbx` で TBX Next 自身の `SYNTAX` を使って定義されている。
 
-### WHILE / WEND
+### WHILE / ENDWH
 
 ```tbx
 LET A = 0
@@ -261,7 +261,7 @@ WHILE A < 3
   PUTDEC A
   CR
   LET A = A + 1
-WEND
+ENDWH
 ```
 
 ### DO / UNTIL
@@ -272,8 +272,6 @@ DO
   LET A = A + 1
 UNTIL A >= 3
 ```
-
-現行 TBX の `ENDWH` ではなく、TBX Next では現在 `WEND` を使う。
 
 ## 出力
 
@@ -417,7 +415,6 @@ TBX Next は現行 `tbx` の互換実装ではない。特に次をそのまま�
 | ワード定義 | `DEF NAME local1, local2 ... END` |
 | 戻り値 | `RETURN` ではなく、ワードがデータスタックへ残す値 |
 | 式をスタックへ積む | `EVAL expression` |
-| WHILE 終端 | `WEND` |
 | 値 | 現在は `i16` 整数のみ |
 | 真偽 | `0` が偽、0 以外が真 |
 | 変数 | A-Z 組み込み + `VAR` によるグローバル変数 |

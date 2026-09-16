@@ -14,7 +14,7 @@ DEF PRIME?
         LET PRIME = 0
       ENDIF
       LET DIVISOR = DIVISOR + 1
-    WEND
+    ENDWH
     DROP
     EVAL PRIME
   ENDIF

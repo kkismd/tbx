@@ -107,11 +107,11 @@ WHILE Y <= 12
           LET POINT_DONE = 1
         ENDIF
       ENDIF
-    WEND
+    ENDWH
 
     PUTCHR CHAR_CODE
     LET X = X + 1
-  WEND
+  ENDWH
   CR
   LET Y = Y + 1
-WEND
+ENDWH
