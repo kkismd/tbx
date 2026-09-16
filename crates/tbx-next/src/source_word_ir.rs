@@ -89,6 +89,11 @@ pub(crate) enum SourceProcessingOperation {
         name: LocalReference,
         bind: LocalBinding,
     },
+    ResolveWordLiteral {
+        name: NormalizedName,
+        span: SourceSpan,
+        bind: LocalBinding,
+    },
     EmitExpression {
         expression: LocalReference,
     },
@@ -121,6 +126,9 @@ pub(crate) enum SourceProcessingOperation {
     EmitBranchIfFalseFollowing,
     EmitBranchComplete,
     EmitBranchIfFalseComplete,
+    EmitBranchCompletePrevious {
+        cleanup: Option<LocalReference>,
+    },
 }
 
 impl SourceProcessingOperation {
@@ -145,7 +153,9 @@ impl SourceProcessingOperation {
                 Some(SourceLocalType::ExpressionArtifact)
             }
             Self::ResolveVariable { .. } => Some(SourceLocalType::VariableTarget),
-            Self::ResolveWord { .. } => Some(SourceLocalType::RuntimeWordTarget),
+            Self::ResolveWord { .. } | Self::ResolveWordLiteral { .. } => {
+                Some(SourceLocalType::RuntimeWordTarget)
+            }
             Self::Position { .. } => Some(SourceLocalType::OwnerLocalCodePosition {
                 code_space: SourceCodeSpace::CurrentOwner,
             }),
@@ -162,7 +172,8 @@ impl SourceProcessingOperation {
             | Self::EmitBranchFollowing
             | Self::EmitBranchIfFalseFollowing
             | Self::EmitBranchComplete
-            | Self::EmitBranchIfFalseComplete => None,
+            | Self::EmitBranchIfFalseComplete
+            | Self::EmitBranchCompletePrevious { .. } => None,
         }
     }
 
@@ -174,6 +185,7 @@ impl SourceProcessingOperation {
             | Self::ReadExpressionUntil { bind, .. }
             | Self::ResolveVariable { bind, .. }
             | Self::ResolveWord { bind, .. }
+            | Self::ResolveWordLiteral { bind, .. }
             | Self::Position { bind } => Some(bind),
             Self::Expect { .. }
             | Self::ExpectEnd
@@ -188,7 +200,8 @@ impl SourceProcessingOperation {
             | Self::EmitBranchFollowing
             | Self::EmitBranchIfFalseFollowing
             | Self::EmitBranchComplete
-            | Self::EmitBranchIfFalseComplete => None,
+            | Self::EmitBranchIfFalseComplete
+            | Self::EmitBranchCompletePrevious { .. } => None,
         }
     }
 
@@ -201,6 +214,7 @@ impl SourceProcessingOperation {
             Self::ResolveWord { name, .. } => {
                 locals.push((name, LocalConsumer::Exact(SourceLocalType::NameInput)));
             }
+            Self::ResolveWordLiteral { .. } => {}
             Self::EmitExpression { expression } => {
                 locals.push((
                     expression,
@@ -241,6 +255,14 @@ impl SourceProcessingOperation {
             | Self::EmitBranchIfFalseFollowing
             | Self::EmitBranchComplete
             | Self::EmitBranchIfFalseComplete => {}
+            Self::EmitBranchCompletePrevious { cleanup } => {
+                if let Some(cleanup) = cleanup {
+                    locals.push((
+                        cleanup,
+                        LocalConsumer::Exact(SourceLocalType::RuntimeWordTarget),
+                    ));
+                }
+            }
         }
         locals.into_iter()
     }
@@ -255,7 +277,9 @@ impl SourceProcessingOperation {
                 SourceProcessingCapabilities::read_expression()
             }
             Self::ResolveVariable { .. } => SourceProcessingCapabilities::resolve_variable(),
-            Self::ResolveWord { .. } => SourceProcessingCapabilities::resolve_word(),
+            Self::ResolveWord { .. } | Self::ResolveWordLiteral { .. } => {
+                SourceProcessingCapabilities::resolve_word()
+            }
             Self::EmitExpression { .. }
             | Self::EmitStore { .. }
             | Self::EmitCall { .. }
@@ -269,6 +293,9 @@ impl SourceProcessingOperation {
             | Self::EmitBranchIfFalseFollowing
             | Self::EmitBranchComplete
             | Self::EmitBranchIfFalseComplete => {
+                SourceProcessingCapabilities::emit_structural_branch()
+            }
+            Self::EmitBranchCompletePrevious { .. } => {
                 SourceProcessingCapabilities::emit_structural_branch()
             }
         }
@@ -1072,6 +1099,39 @@ mod tests {
                 reference: reference("not_expr", reference_span),
                 actual: SourceLocalType::NameInput,
                 expected: ExpectedLocalType::Exact(SourceLocalType::ExpressionArtifact),
+            }
+        );
+    }
+
+    #[test]
+    fn branch_complete_previous_requires_runtime_word_cleanup() {
+        let (sources, source_id) = setup_source();
+        let view = sources.view();
+        let op_span = span(view, source_id, 0, 9);
+        let reference_span = span(view, source_id, 18, 22);
+
+        let error = complete([
+            SourceProcessingInstruction::new(
+                SourceProcessingOperation::ReadName {
+                    bind: name("not_word", reference_span),
+                },
+                origin(op_span),
+            ),
+            SourceProcessingInstruction::new(
+                SourceProcessingOperation::EmitBranchCompletePrevious {
+                    cleanup: Some(reference("not_word", reference_span)),
+                },
+                origin(op_span),
+            ),
+        ])
+        .expect_err("cleanup must be a resolved runtime word local");
+
+        assert_eq!(
+            error,
+            SourceWordBuildError::LocalTypeMismatch {
+                reference: reference("not_word", reference_span),
+                actual: SourceLocalType::NameInput,
+                expected: ExpectedLocalType::Exact(SourceLocalType::RuntimeWordTarget),
             }
         );
     }

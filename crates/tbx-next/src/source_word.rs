@@ -2633,6 +2633,19 @@ fn parse_source_processing_statement(
                 bind: read_as_binding(view, &mut reader)?,
             }
         }
+        "RESOLVE_WORD_LITERAL" => {
+            let token = reader.read_name().map_err(syntax_operation_reader_error)?;
+            let name = normalized_token(view, token)?;
+            let as_token = reader.read_name().map_err(syntax_operation_reader_error)?;
+            require_name_token(view, as_token, "AS", SyntaxDefinitionErrorKind::ExpectedAs)?;
+            let bind = read_local_binding(view, &mut reader)?;
+            reader.finish().map_err(syntax_operation_reader_error)?;
+            SourceProcessingOperation::ResolveWordLiteral {
+                name,
+                span: token.span(),
+                bind,
+            }
+        }
         "EMIT_EXPR" => SourceProcessingOperation::EmitExpression {
             expression: read_only_local_reference(view, &mut reader)?,
         },
@@ -2676,6 +2689,16 @@ fn parse_source_processing_statement(
         "EMIT_BRANCH_IF_FALSE_COMPLETE" => {
             reader.finish().map_err(syntax_operation_reader_error)?;
             SourceProcessingOperation::EmitBranchIfFalseComplete
+        }
+        "EMIT_BRANCH_COMPLETE_PREVIOUS" => {
+            let cleanup = if reader.is_exhausted() {
+                None
+            } else {
+                let cleanup = read_local_reference(view, &mut reader)?;
+                reader.finish().map_err(syntax_operation_reader_error)?;
+                Some(cleanup)
+            };
+            SourceProcessingOperation::EmitBranchCompletePrevious { cleanup }
         }
         _ => {
             return Err(SourceWordError::SyntaxDefinition {

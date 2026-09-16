@@ -1172,6 +1172,47 @@ EMIT A DUP";
     }
 
     #[test]
+    fn user_syntax_can_resolve_a_fixed_runtime_word_literal() {
+        let text = "SYNTAX EMITFIX\nSTATEMENT\nEMIT_INT 7\nRESOLVE_WORD_LITERAL DUP AS callable\nEMIT_CALL callable\nENDS\nEMITFIX";
+        let (sources, source_id) = source(text, "program.tbx");
+        let mut writer = RecordingWriter::default();
+
+        let result = success(execute_registered_source(&sources, source_id, &mut writer));
+
+        assert_eq!(result.data_stack(), [Value::integer(7), Value::integer(7)]);
+    }
+
+    #[test]
+    fn fixed_runtime_word_literal_rejects_non_runtime_bindings() {
+        let text = "SYNTAX S\nSTATEMENT\nRESOLVE_WORD_LITERAL A AS word\nENDS\nLET A = 1\nS";
+        let (sources, source_id) = source(text, "program.tbx");
+        let mut writer = RecordingWriter::default();
+
+        let failure = failure(execute_registered_source(&sources, source_id, &mut writer));
+
+        assert!(matches!(
+            failure.cause,
+            BatchExecutionFailureCause::Source(_)
+        ));
+    }
+
+    #[test]
+    fn fixed_runtime_word_literal_reports_undefined_name_at_literal_span() {
+        let text = "SYNTAX S\nSTATEMENT\nRESOLVE_WORD_LITERAL MISSING AS word\nENDS\nS";
+        let (sources, source_id) = source(text, "program.tbx");
+        let mut writer = RecordingWriter::default();
+
+        let failure = failure(execute_registered_source(&sources, source_id, &mut writer));
+        let primary = failure
+            .diagnostic()
+            .primary()
+            .expect("undefined literal should retain a source span");
+
+        assert!(primary.line_number() > 0);
+        assert!(primary.column_number() > 0);
+    }
+
+    #[test]
     fn user_syntax_reports_runtime_emit_binding_and_literal_errors_at_source_spans() {
         for text in [
             "SYNTAX S\nSTATEMENT\nREAD_NAME AS name\nRESOLVE_WORD name AS word\nENDS\nLET A = 1\nS A",

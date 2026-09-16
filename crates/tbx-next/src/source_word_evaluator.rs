@@ -362,7 +362,8 @@ fn evaluate_instruction(
     // values or a generic source-processing stack.
     match operation {
         SourceProcessingOperation::EmitBranchComplete
-        | SourceProcessingOperation::EmitBranchIfFalseComplete => {}
+        | SourceProcessingOperation::EmitBranchIfFalseComplete
+        | SourceProcessingOperation::EmitBranchCompletePrevious { .. } => {}
         _ => structural_branches.patch_following_section_start(context.code)?,
     }
 
@@ -448,6 +449,17 @@ fn evaluate_instruction(
                 },
             )?;
             locals.bind(bind, RuntimeLocal::RuntimeWordTarget { id, span });
+        }
+        SourceProcessingOperation::ResolveWordLiteral { name, span, bind } => {
+            let id =
+                resolve_runtime_word_name(context.bindings, name.as_str()).map_err(|source| {
+                    SourceWordEvaluationError::WordResolution {
+                        span: *span,
+                        source,
+                        origin,
+                    }
+                })?;
+            locals.bind(bind, RuntimeLocal::RuntimeWordTarget { id, span: *span });
         }
         SourceProcessingOperation::EmitExpression { expression } => {
             let expression = locals.expression(expression, origin)?;
@@ -592,6 +604,29 @@ fn evaluate_instruction(
             let branch = context
                 .code
                 .append_mapped_jump_if_zero_placeholder(origin.span())
+                .map_err(|source| SourceWordEvaluationError::InstructionBuild { source, origin })?;
+            structural_branches.record_complete(branch, origin);
+            structural_branches.patch_following_after_complete_branch(context.code)?;
+        }
+        SourceProcessingOperation::EmitBranchCompletePrevious { cleanup } => {
+            if structural_branches.following.is_empty() {
+                return Ok(());
+            }
+
+            if let Some(cleanup) = cleanup {
+                let (id, span) = locals.runtime_word_target(cleanup, origin)?;
+                context
+                    .code
+                    .append_mapped(Instruction::Call(id), span)
+                    .map_err(|source| SourceWordEvaluationError::InstructionBuild {
+                        source,
+                        origin,
+                    })?;
+            }
+
+            let branch = context
+                .code
+                .append_mapped_jump_placeholder(origin.span())
                 .map_err(|source| SourceWordEvaluationError::InstructionBuild { source, origin })?;
             structural_branches.record_complete(branch, origin);
             structural_branches.patch_following_after_complete_branch(context.code)?;
@@ -1356,5 +1391,90 @@ mod tests {
         assert_eq!(state.structural_branches.following.len(), 1);
         assert_eq!(state.structural_branches.following[0].branch, branch);
         assert!(state.structural_branches.complete.is_empty());
+    }
+
+    #[test]
+    fn branch_complete_previous_without_following_is_a_no_op() {
+        let (sources, source_id, tokens) = lex("BRANCH");
+        let view = sources.view();
+        let bindings = Bindings::new();
+        let implementation = complete([instruction(
+            SourceProcessingOperation::EmitBranchCompletePrevious { cleanup: None },
+            span(view, source_id, 0, 6),
+        )]);
+        let mut code = SourceMappedCode::new();
+        {
+            let mut builder = BlockCodeBuilder::new(&mut code);
+            let mut line_numbers = LocalLineNumberTable::new();
+            let mut context =
+                UserDefinedSourceWordContext::new(UserDefinedSourceWordContextParts {
+                    view,
+                    source_id,
+                    tokens: &tokens,
+                    bindings: &bindings,
+                    operators: Some(operator_lookup()),
+                    local_references: None,
+                    code: &mut builder,
+                    line_numbers: &mut line_numbers,
+                    capabilities: SourceProcessingCapabilities::structured_runtime(),
+                });
+
+            evaluate_source_word(&implementation, &mut context).expect("no-op should succeed");
+            builder.finish().expect("empty block should complete");
+        }
+
+        assert_eq!(code.len(), 0);
+    }
+
+    #[test]
+    fn branch_complete_previous_patches_following_before_final_completion() {
+        let (sources, source_id, tokens) = lex("BRANCH");
+        let view = sources.view();
+        let bindings = Bindings::new();
+        let implementation = complete([
+            instruction(
+                SourceProcessingOperation::EmitBranchFollowing,
+                span(view, source_id, 0, 6),
+            ),
+            instruction(
+                SourceProcessingOperation::EmitBranchCompletePrevious { cleanup: None },
+                span(view, source_id, 0, 6),
+            ),
+        ]);
+        let mut code = SourceMappedCode::new();
+        let mut state = SourceWordEvaluationState::new();
+        {
+            let mut builder = BlockCodeBuilder::new(&mut code);
+            let mut line_numbers = LocalLineNumberTable::new();
+            let mut context =
+                UserDefinedSourceWordContext::new(UserDefinedSourceWordContextParts {
+                    view,
+                    source_id,
+                    tokens: &tokens,
+                    bindings: &bindings,
+                    operators: Some(operator_lookup()),
+                    local_references: None,
+                    code: &mut builder,
+                    line_numbers: &mut line_numbers,
+                    capabilities: SourceProcessingCapabilities::structured_runtime(),
+                });
+
+            evaluate_source_word_with_state(&implementation, &mut context, &mut state)
+                .expect("branching should succeed");
+            let end = builder
+                .append_mapped(Instruction::Return, span(view, source_id, 0, 6))
+                .expect("completion target should append");
+            state
+                .complete_structural_branches(&mut builder)
+                .expect("complete branch should patch");
+            builder.finish().expect("block should complete");
+            assert_eq!(end, InstructionAddress::from_index(2));
+        }
+
+        assert_eq!(
+            code.instruction_view()
+                .get(InstructionAddress::from_index(0)),
+            Ok(&Instruction::Jump(InstructionAddress::from_index(2)))
+        );
     }
 }
