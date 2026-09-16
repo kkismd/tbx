@@ -28,4 +28,4 @@ WHILE DONE = 0
     PRINT "Please enter a number."
     CR
   ENDIF
-WEND
+ENDWH

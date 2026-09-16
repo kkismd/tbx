@@ -19,7 +19,7 @@ DO
 LET B = B + 1
 UNTIL B >= 2
 LET A = A + 1
-WEND
+ENDWH
 ELSE
 LET B = 98
 ENDIF
@@ -33,7 +33,7 @@ DO
 LET B = 0
 WHILE B < 2
 LET B = B + 1
-WEND
+ENDWH
 LET A = A + 1
 UNTIL A >= 2
 PUTDEC A

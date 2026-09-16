@@ -16,7 +16,7 @@ DEF PRIME? candidate
         LET PRIME = 0
       ENDIF
       LET DIVISOR = DIVISOR + 1
-    WEND
+    ENDWH
     DROP
     EVAL PRIME
   ENDIF
@@ -29,4 +29,4 @@ WHILE NUMBER <= 30
     CR
   ENDIF
   LET NUMBER = NUMBER + 1
-WEND
+ENDWH

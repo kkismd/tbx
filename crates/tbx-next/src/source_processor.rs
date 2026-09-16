@@ -10402,9 +10402,9 @@ mod tests {
     fn def_header_local_reference_is_available_in_while_condition() {
         let mut session = RuntimeDefinitionSession::new_with_named_operators();
         session.publish_syntax(
-            "SYNTAX WHILE\nBLOCK\nSTART\nPOSITION AS loop_start\nREAD_EXPR AS condition\nEMIT_EXPR condition\nEMIT_BRANCH_IF_FALSE_COMPLETE\nLAST WEND\nEXPECT_END\nEMIT_BRANCH loop_start\nENDS",
+            "SYNTAX WHILE\nBLOCK\nSTART\nPOSITION AS loop_start\nREAD_EXPR AS condition\nEMIT_EXPR condition\nEMIT_BRANCH_IF_FALSE_COMPLETE\nLAST ENDWH\nEXPECT_END\nEMIT_BRANCH loop_start\nENDS",
         );
-        session.publish_def("DEF LOOP value\nWHILE value\nWEND\nEND");
+        session.publish_def("DEF LOOP value\nWHILE value\nENDWH\nEND");
 
         assert_eq!(
             session.code.instruction_view().get(address(0)),

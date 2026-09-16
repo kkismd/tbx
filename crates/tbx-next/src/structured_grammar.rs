@@ -576,11 +576,11 @@ mod tests {
 
     #[test]
     fn while_like_grammar_uses_only_terminator() {
-        let grammar = grammar(Vec::new(), "WEND").expect("valid grammar");
+        let grammar = grammar(Vec::new(), "ENDWH").expect("valid grammar");
         let mut progress = grammar.start();
 
         assert_eq!(
-            progress.accept(&marker("WEND")),
+            progress.accept(&marker("ENDWH")),
             Ok(GrammarAccept::Terminator)
         );
     }
