@@ -992,6 +992,54 @@ mod tests {
             ),
         ])
         .expect("name input should resolve to variable target for EMIT_STORE");
+
+        let call_error = complete([
+            SourceProcessingInstruction::new(
+                SourceProcessingOperation::ReadName {
+                    bind: name("name", bind_span),
+                },
+                origin(op_span),
+            ),
+            SourceProcessingInstruction::new(
+                SourceProcessingOperation::EmitCall {
+                    target: reference("name", reference_span),
+                },
+                origin(op_span),
+            ),
+        ])
+        .expect_err("EMIT_CALL should require a resolved runtime word local");
+        assert_eq!(
+            call_error,
+            SourceWordBuildError::LocalTypeMismatch {
+                reference: reference("name", reference_span),
+                actual: SourceLocalType::NameInput,
+                expected: ExpectedLocalType::Exact(SourceLocalType::RuntimeWordTarget),
+            }
+        );
+
+        let load_error = complete([
+            SourceProcessingInstruction::new(
+                SourceProcessingOperation::ReadExpression {
+                    bind: name("expression", bind_span),
+                },
+                origin(op_span),
+            ),
+            SourceProcessingInstruction::new(
+                SourceProcessingOperation::EmitLoad {
+                    target: reference("expression", reference_span),
+                },
+                origin(op_span),
+            ),
+        ])
+        .expect_err("EMIT_LOAD should require a resolved variable local");
+        assert_eq!(
+            load_error,
+            SourceWordBuildError::LocalTypeMismatch {
+                reference: reference("expression", reference_span),
+                actual: SourceLocalType::ExpressionArtifact,
+                expected: ExpectedLocalType::Exact(SourceLocalType::VariableTarget),
+            }
+        );
     }
 
     #[test]

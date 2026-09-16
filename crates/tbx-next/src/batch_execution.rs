@@ -1190,6 +1190,23 @@ EMIT A DUP";
     }
 
     #[test]
+    fn user_syntax_reports_undefined_runtime_word_at_name_span() {
+        let text =
+            "SYNTAX S\nSTATEMENT\nREAD_NAME AS name\nRESOLVE_WORD name AS word\nENDS\nS MISSING";
+        let (sources, source_id) = source(text, "program.tbx");
+        let mut writer = RecordingWriter::default();
+
+        let failure = failure(execute_registered_source(&sources, source_id, &mut writer));
+        let primary = failure
+            .diagnostic()
+            .primary()
+            .expect("undefined runtime word should retain a source span");
+
+        assert!(!primary.source_line().is_empty());
+        assert!(primary.column_number() > 0);
+    }
+
+    #[test]
     fn batch_top_level_can_publish_and_use_a_block_source_word() {
         let text = "SYNTAX WRAP\nBLOCK\nSTART\nEXPECT_END\nLAST ENDWRAP\nEXPECT_END\nENDS\nWRAP\nENDWRAP\nEVAL 9";
         let (sources, source_id) = source(text, "program.tbx");
@@ -1614,7 +1631,7 @@ EMIT A DUP";
     fn embedded_standard_library_control_structure_markers_reject_binding_and_owner_mismatch() {
         for source in [
             "DEF ENDWH\nEND",
-            "WHILE 1\nENDWH",
+            "WHILE 1\nWEND",
             "WHILE 1\nUNTIL 1",
             "DO\nENDWH",
             "WHILE 1",
