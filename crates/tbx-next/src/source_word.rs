@@ -431,6 +431,9 @@ pub(crate) enum SyntaxDefinitionErrorKind {
     MissingOperand,
     ExpectedAs,
     ExpectedFixedToken,
+    ExpectedIntegerLiteral,
+    IntegerLiteralOutOfRange,
+    IntegerLiteralConversion,
     TrailingOperationToken { kind: TokenKind },
 }
 
@@ -2623,11 +2626,27 @@ fn parse_source_processing_statement(
                 bind: read_as_binding(view, &mut reader)?,
             }
         }
+        "RESOLVE_WORD" => {
+            let name = read_local_reference(view, &mut reader)?;
+            SourceProcessingOperation::ResolveWord {
+                name,
+                bind: read_as_binding(view, &mut reader)?,
+            }
+        }
         "EMIT_EXPR" => SourceProcessingOperation::EmitExpression {
             expression: read_only_local_reference(view, &mut reader)?,
         },
         "EMIT_STORE" => SourceProcessingOperation::EmitStore {
             target: read_only_local_reference(view, &mut reader)?,
+        },
+        "EMIT_CALL" => SourceProcessingOperation::EmitCall {
+            target: read_only_local_reference(view, &mut reader)?,
+        },
+        "EMIT_LOAD" => SourceProcessingOperation::EmitLoad {
+            target: read_only_local_reference(view, &mut reader)?,
+        },
+        "EMIT_INT" => SourceProcessingOperation::EmitInt {
+            value: read_integer_literal(view, &mut reader)?,
         },
         "EMIT_RETURN" => {
             reader.finish().map_err(syntax_operation_reader_error)?;
@@ -2736,6 +2755,71 @@ fn read_fixed_token(
         span: token.span(),
         kind: SyntaxDefinitionErrorKind::ExpectedFixedToken,
     })
+}
+
+fn read_integer_literal(
+    view: SourceView<'_>,
+    reader: &mut SourceStatementReader<'_>,
+) -> Result<i16, SourceWordError> {
+    let negative = reader.peek_kind() == Some(TokenKind::Minus);
+    if negative {
+        reader
+            .expect(TokenKind::Minus)
+            .map_err(syntax_integer_reader_error)?;
+    }
+    let token = match reader.peek() {
+        Some(token)
+            if matches!(
+                token.kind(),
+                TokenKind::IntegerLiteral | TokenKind::HexIntegerLiteral
+            ) =>
+        {
+            token
+        }
+        Some(token) => {
+            return Err(SourceWordError::SyntaxDefinition {
+                span: token.span(),
+                kind: SyntaxDefinitionErrorKind::ExpectedIntegerLiteral,
+            })
+        }
+        None => {
+            return Err(SourceWordError::SyntaxDefinition {
+                span: reader.missing_anchor,
+                kind: SyntaxDefinitionErrorKind::ExpectedIntegerLiteral,
+            })
+        }
+    };
+    reader
+        .expect(token.kind())
+        .expect("peeked integer token must be present");
+    let source = view
+        .slice(token.span())
+        .map_err(|source| SourceWordError::Source { source })?;
+    let digits = source.strip_prefix('$').unwrap_or(source);
+    let magnitude = i32::from_str_radix(digits, if source.starts_with('$') { 16 } else { 10 })
+        .map_err(|_| SourceWordError::SyntaxDefinition {
+            span: token.span(),
+            kind: SyntaxDefinitionErrorKind::IntegerLiteralConversion,
+        })?;
+    let signed = if negative { -magnitude } else { magnitude };
+    let value = i16::try_from(signed).map_err(|_| SourceWordError::SyntaxDefinition {
+        span: token.span(),
+        kind: SyntaxDefinitionErrorKind::IntegerLiteralOutOfRange,
+    })?;
+    reader.finish().map_err(syntax_operation_reader_error)?;
+    Ok(value)
+}
+
+fn syntax_integer_reader_error(error: SourceStatementReaderError) -> SourceWordError {
+    let span = match error {
+        SourceStatementReaderError::Missing { span, .. } => span,
+        SourceStatementReaderError::Unexpected { actual, .. }
+        | SourceStatementReaderError::TrailingToken { actual } => actual.span(),
+    };
+    SourceWordError::SyntaxDefinition {
+        span,
+        kind: SyntaxDefinitionErrorKind::ExpectedIntegerLiteral,
+    }
 }
 
 fn fixed_token_from_literal(spelling: &str) -> Option<FixedToken> {

@@ -1147,6 +1147,66 @@ mod tests {
     }
 
     #[test]
+    fn user_syntax_can_resolve_and_emit_runtime_words_variables_and_integers() {
+        let text = "SYNTAX EMIT
+STATEMENT
+READ_NAME AS variable
+RESOLVE_VAR variable AS target
+EMIT_LOAD target
+READ_NAME AS word
+RESOLVE_WORD word AS callable
+EMIT_CALL callable
+EMIT_INT 7
+ENDS
+LET A = 3
+EMIT A DUP";
+        let (sources, source_id) = source(text, "program.tbx");
+        let mut writer = RecordingWriter::default();
+
+        let result = success(execute_registered_source(&sources, source_id, &mut writer));
+
+        assert_eq!(
+            result.data_stack(),
+            [Value::integer(3), Value::integer(3), Value::integer(7)]
+        );
+    }
+
+    #[test]
+    fn user_syntax_reports_runtime_emit_binding_and_literal_errors_at_source_spans() {
+        for text in [
+            "SYNTAX S\nSTATEMENT\nREAD_NAME AS name\nRESOLVE_WORD name AS word\nENDS\nLET A = 1\nS A",
+            "SYNTAX S\nSTATEMENT\nEMIT_INT 32768\nENDS\nS",
+        ] {
+            let (sources, source_id) = source(text, "program.tbx");
+            let mut writer = RecordingWriter::default();
+            let failure = failure(execute_registered_source(&sources, source_id, &mut writer));
+            let primary = failure
+                .diagnostic()
+                .primary()
+                .expect("invalid emit should retain a source span");
+
+            assert!(!primary.source_line().is_empty());
+        }
+    }
+
+    #[test]
+    fn user_syntax_reports_undefined_runtime_word_at_name_span() {
+        let text =
+            "SYNTAX S\nSTATEMENT\nREAD_NAME AS name\nRESOLVE_WORD name AS word\nENDS\nS MISSING";
+        let (sources, source_id) = source(text, "program.tbx");
+        let mut writer = RecordingWriter::default();
+
+        let failure = failure(execute_registered_source(&sources, source_id, &mut writer));
+        let primary = failure
+            .diagnostic()
+            .primary()
+            .expect("undefined runtime word should retain a source span");
+
+        assert!(!primary.source_line().is_empty());
+        assert!(primary.column_number() > 0);
+    }
+
+    #[test]
     fn batch_top_level_can_publish_and_use_a_block_source_word() {
         let text = "SYNTAX WRAP\nBLOCK\nSTART\nEXPECT_END\nLAST ENDWRAP\nEXPECT_END\nENDS\nWRAP\nENDWRAP\nEVAL 9";
         let (sources, source_id) = source(text, "program.tbx");
@@ -1571,7 +1631,7 @@ mod tests {
     fn embedded_standard_library_control_structure_markers_reject_binding_and_owner_mismatch() {
         for source in [
             "DEF ENDWH\nEND",
-            "WHILE 1\nENDWH",
+            "WHILE 1\nWEND",
             "WHILE 1\nUNTIL 1",
             "DO\nENDWH",
             "WHILE 1",

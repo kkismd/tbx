@@ -85,11 +85,24 @@ pub(crate) enum SourceProcessingOperation {
         name: LocalReference,
         bind: LocalBinding,
     },
+    ResolveWord {
+        name: LocalReference,
+        bind: LocalBinding,
+    },
     EmitExpression {
         expression: LocalReference,
     },
     EmitStore {
         target: LocalReference,
+    },
+    EmitCall {
+        target: LocalReference,
+    },
+    EmitLoad {
+        target: LocalReference,
+    },
+    EmitInt {
+        value: i16,
     },
     EmitReturn,
     Position {
@@ -132,6 +145,7 @@ impl SourceProcessingOperation {
                 Some(SourceLocalType::ExpressionArtifact)
             }
             Self::ResolveVariable { .. } => Some(SourceLocalType::VariableTarget),
+            Self::ResolveWord { .. } => Some(SourceLocalType::RuntimeWordTarget),
             Self::Position { .. } => Some(SourceLocalType::OwnerLocalCodePosition {
                 code_space: SourceCodeSpace::CurrentOwner,
             }),
@@ -139,6 +153,9 @@ impl SourceProcessingOperation {
             | Self::ExpectEnd
             | Self::EmitExpression { .. }
             | Self::EmitStore { .. }
+            | Self::EmitCall { .. }
+            | Self::EmitLoad { .. }
+            | Self::EmitInt { .. }
             | Self::EmitReturn
             | Self::EmitBranch { .. }
             | Self::EmitBranchIfFalse { .. }
@@ -156,11 +173,15 @@ impl SourceProcessingOperation {
             | Self::ReadExpression { bind }
             | Self::ReadExpressionUntil { bind, .. }
             | Self::ResolveVariable { bind, .. }
+            | Self::ResolveWord { bind, .. }
             | Self::Position { bind } => Some(bind),
             Self::Expect { .. }
             | Self::ExpectEnd
             | Self::EmitExpression { .. }
             | Self::EmitStore { .. }
+            | Self::EmitCall { .. }
+            | Self::EmitLoad { .. }
+            | Self::EmitInt { .. }
             | Self::EmitReturn
             | Self::EmitBranch { .. }
             | Self::EmitBranchIfFalse { .. }
@@ -177,6 +198,9 @@ impl SourceProcessingOperation {
             Self::ResolveVariable { name, .. } => {
                 locals.push((name, LocalConsumer::Exact(SourceLocalType::NameInput)));
             }
+            Self::ResolveWord { name, .. } => {
+                locals.push((name, LocalConsumer::Exact(SourceLocalType::NameInput)));
+            }
             Self::EmitExpression { expression } => {
                 locals.push((
                     expression,
@@ -184,6 +208,18 @@ impl SourceProcessingOperation {
                 ));
             }
             Self::EmitStore { target } => {
+                locals.push((
+                    target,
+                    LocalConsumer::Exact(SourceLocalType::VariableTarget),
+                ));
+            }
+            Self::EmitCall { target } => {
+                locals.push((
+                    target,
+                    LocalConsumer::Exact(SourceLocalType::RuntimeWordTarget),
+                ));
+            }
+            Self::EmitLoad { target } => {
                 locals.push((
                     target,
                     LocalConsumer::Exact(SourceLocalType::VariableTarget),
@@ -199,6 +235,7 @@ impl SourceProcessingOperation {
             | Self::ReadExpression { .. }
             | Self::ReadExpressionUntil { .. }
             | Self::EmitReturn
+            | Self::EmitInt { .. }
             | Self::Position { .. }
             | Self::EmitBranchFollowing
             | Self::EmitBranchIfFalseFollowing
@@ -218,8 +255,12 @@ impl SourceProcessingOperation {
                 SourceProcessingCapabilities::read_expression()
             }
             Self::ResolveVariable { .. } => SourceProcessingCapabilities::resolve_variable(),
+            Self::ResolveWord { .. } => SourceProcessingCapabilities::resolve_word(),
             Self::EmitExpression { .. }
             | Self::EmitStore { .. }
+            | Self::EmitCall { .. }
+            | Self::EmitLoad { .. }
+            | Self::EmitInt { .. }
             | Self::EmitReturn
             | Self::Position { .. }
             | Self::EmitBranch { .. }
@@ -332,6 +373,7 @@ impl LocalReference {
 pub(crate) enum SourceLocalType {
     NameInput,
     VariableTarget,
+    RuntimeWordTarget,
     ExpressionArtifact,
     // #1561 requires owner-local code positions and line targets to remain
     // distinct even though both can be consumed as explicit branch destinations.
@@ -376,6 +418,7 @@ pub(crate) struct SourceProcessingCapabilities {
     read_line_number: bool,
     read_expression: bool,
     resolve_variable: bool,
+    resolve_word: bool,
     emit_runtime_code: bool,
     emit_structural_branch: bool,
 }
@@ -423,6 +466,13 @@ impl SourceProcessingCapabilities {
         }
     }
 
+    const fn resolve_word() -> Self {
+        Self {
+            resolve_word: true,
+            ..Self::empty()
+        }
+    }
+
     const fn emit_runtime_code() -> Self {
         Self {
             emit_runtime_code: true,
@@ -446,6 +496,7 @@ impl SourceProcessingCapabilities {
             read_line_number: false,
             read_expression: false,
             resolve_variable: false,
+            resolve_word: false,
             emit_runtime_code: false,
             emit_structural_branch: false,
         }
@@ -490,6 +541,7 @@ impl SourceProcessingCapabilities {
             && (!required.read_line_number || self.read_line_number)
             && (!required.read_expression || self.read_expression)
             && (!required.resolve_variable || self.resolve_variable)
+            && (!required.resolve_word || self.resolve_word)
             && (!required.emit_runtime_code || self.emit_runtime_code)
             && (!required.emit_structural_branch || self.emit_structural_branch)
     }
@@ -502,6 +554,7 @@ impl SourceProcessingCapabilities {
             read_line_number: true,
             read_expression: true,
             resolve_variable: true,
+            resolve_word: true,
             emit_runtime_code: true,
             emit_structural_branch: false,
         }
@@ -521,6 +574,7 @@ impl SourceProcessingCapabilities {
         self.read_line_number |= other.read_line_number;
         self.read_expression |= other.read_expression;
         self.resolve_variable |= other.resolve_variable;
+        self.resolve_word |= other.resolve_word;
         self.emit_runtime_code |= other.emit_runtime_code;
         self.emit_structural_branch |= other.emit_structural_branch;
     }
@@ -938,6 +992,54 @@ mod tests {
             ),
         ])
         .expect("name input should resolve to variable target for EMIT_STORE");
+
+        let call_error = complete([
+            SourceProcessingInstruction::new(
+                SourceProcessingOperation::ReadName {
+                    bind: name("name", bind_span),
+                },
+                origin(op_span),
+            ),
+            SourceProcessingInstruction::new(
+                SourceProcessingOperation::EmitCall {
+                    target: reference("name", reference_span),
+                },
+                origin(op_span),
+            ),
+        ])
+        .expect_err("EMIT_CALL should require a resolved runtime word local");
+        assert_eq!(
+            call_error,
+            SourceWordBuildError::LocalTypeMismatch {
+                reference: reference("name", reference_span),
+                actual: SourceLocalType::NameInput,
+                expected: ExpectedLocalType::Exact(SourceLocalType::RuntimeWordTarget),
+            }
+        );
+
+        let load_error = complete([
+            SourceProcessingInstruction::new(
+                SourceProcessingOperation::ReadExpression {
+                    bind: name("expression", bind_span),
+                },
+                origin(op_span),
+            ),
+            SourceProcessingInstruction::new(
+                SourceProcessingOperation::EmitLoad {
+                    target: reference("expression", reference_span),
+                },
+                origin(op_span),
+            ),
+        ])
+        .expect_err("EMIT_LOAD should require a resolved variable local");
+        assert_eq!(
+            load_error,
+            SourceWordBuildError::LocalTypeMismatch {
+                reference: reference("expression", reference_span),
+                actual: SourceLocalType::ExpressionArtifact,
+                expected: ExpectedLocalType::Exact(SourceLocalType::VariableTarget),
+            }
+        );
     }
 
     #[test]
