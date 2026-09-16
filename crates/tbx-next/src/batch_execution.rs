@@ -1184,7 +1184,7 @@ EMIT A DUP";
 
     #[test]
     fn fixed_runtime_word_literal_rejects_non_runtime_bindings() {
-        let text = "SYNTAX S\nSTATEMENT\nRESOLVE_WORD_LITERAL A AS word\nENDS\nLET A = 1\nS";
+        let text = "LET A = 1\nSYNTAX S\nSTATEMENT\nRESOLVE_WORD_LITERAL A AS word\nENDS\nS";
         let (sources, source_id) = source(text, "program.tbx");
         let mut writer = RecordingWriter::default();
 
@@ -1194,6 +1194,12 @@ EMIT A DUP";
             failure.cause,
             BatchExecutionFailureCause::Source(_)
         ));
+        let primary = failure
+            .diagnostic()
+            .primary()
+            .expect("non-runtime literal should retain a source span");
+        assert!(!primary.source_line().is_empty());
+        assert!(primary.column_number() > 0);
     }
 
     #[test]

@@ -1477,4 +1477,204 @@ mod tests {
             Ok(&Instruction::Jump(InstructionAddress::from_index(2)))
         );
     }
+
+    #[test]
+    fn branch_complete_previous_emits_cleanup_before_complete_branch() {
+        let (sources, source_id, tokens) = lex("BRANCH");
+        let view = sources.view();
+        let cleanup_id = {
+            let mut words = PublishedWords::new();
+            words.add(crate::word::CompletedWordDefinition::primitive(
+                crate::word::PrimitiveId::from_slot(0),
+            ))
+        };
+        let mut bindings = Bindings::new();
+        bindings
+            .insert_new(name("cleanup"), Binding::Word(cleanup_id))
+            .expect("cleanup binding should be available");
+        let implementation = complete([
+            instruction(
+                SourceProcessingOperation::ResolveWordLiteral {
+                    name: name("cleanup"),
+                    span: span(view, source_id, 0, 6),
+                    bind: local("cleanup", span(view, source_id, 0, 6)),
+                },
+                span(view, source_id, 0, 6),
+            ),
+            instruction(
+                SourceProcessingOperation::EmitBranchFollowing,
+                span(view, source_id, 0, 6),
+            ),
+            instruction(
+                SourceProcessingOperation::EmitBranchCompletePrevious {
+                    cleanup: Some(local_ref("cleanup", span(view, source_id, 0, 6))),
+                },
+                span(view, source_id, 0, 6),
+            ),
+        ]);
+        let mut code = SourceMappedCode::new();
+        let mut state = SourceWordEvaluationState::new();
+        {
+            let mut builder = BlockCodeBuilder::new(&mut code);
+            let mut line_numbers = LocalLineNumberTable::new();
+            let mut context =
+                UserDefinedSourceWordContext::new(UserDefinedSourceWordContextParts {
+                    view,
+                    source_id,
+                    tokens: &tokens,
+                    bindings: &bindings,
+                    operators: Some(operator_lookup()),
+                    local_references: None,
+                    code: &mut builder,
+                    line_numbers: &mut line_numbers,
+                    capabilities: SourceProcessingCapabilities::structured_runtime(),
+                });
+
+            evaluate_source_word_with_state(&implementation, &mut context, &mut state)
+                .expect("cleanup branch should succeed");
+            builder
+                .append_mapped(Instruction::Return, span(view, source_id, 0, 6))
+                .expect("completion target should append");
+            state
+                .complete_structural_branches(&mut builder)
+                .expect("complete branch should patch");
+            builder.finish().expect("block should complete");
+        }
+
+        assert_eq!(
+            code.instruction_view()
+                .get(InstructionAddress::from_index(0)),
+            Ok(&Instruction::Jump(InstructionAddress::from_index(3)))
+        );
+        assert_eq!(
+            code.instruction_view()
+                .get(InstructionAddress::from_index(1)),
+            Ok(&Instruction::Call(cleanup_id))
+        );
+        assert_eq!(
+            code.instruction_view()
+                .get(InstructionAddress::from_index(2)),
+            Ok(&Instruction::Jump(InstructionAddress::from_index(4)))
+        );
+    }
+
+    #[test]
+    fn fixed_runtime_word_literal_keeps_non_runtime_name_span() {
+        let (sources, source_id, tokens) = lex("S");
+        let view = sources.view();
+        let fixed_span = span(view, source_id, 0, 1);
+        let variable = GlobalVariables::new().allocate();
+        let mut bindings = Bindings::new();
+        bindings
+            .insert_new(name("A"), Binding::Variable(variable))
+            .expect("variable binding should be available");
+        let implementation = complete([instruction(
+            SourceProcessingOperation::ResolveWordLiteral {
+                name: name("A"),
+                span: fixed_span,
+                bind: local("word", fixed_span),
+            },
+            fixed_span,
+        )]);
+        let mut code = SourceMappedCode::new();
+        let error = {
+            let mut builder = BlockCodeBuilder::new(&mut code);
+            let mut line_numbers = LocalLineNumberTable::new();
+            let mut context =
+                UserDefinedSourceWordContext::new(UserDefinedSourceWordContextParts {
+                    view,
+                    source_id,
+                    tokens: &tokens,
+                    bindings: &bindings,
+                    operators: Some(operator_lookup()),
+                    local_references: None,
+                    code: &mut builder,
+                    line_numbers: &mut line_numbers,
+                    capabilities: SourceProcessingCapabilities::statement_runtime(),
+                });
+
+            evaluate_source_word(&implementation, &mut context)
+                .expect_err("variable must not resolve as a runtime word")
+        };
+
+        assert!(matches!(
+            error,
+            SourceWordEvaluationError::WordResolution { .. }
+        ));
+        assert_eq!(error.primary_span(), Some(fixed_span));
+    }
+
+    #[test]
+    fn nested_structured_source_word_states_keep_following_patches_separate() {
+        let (sources, source_id, tokens) = lex("BRANCH");
+        let view = sources.view();
+        let following = complete([instruction(
+            SourceProcessingOperation::EmitBranchFollowing,
+            span(view, source_id, 0, 6),
+        )]);
+        let inner = complete([
+            instruction(
+                SourceProcessingOperation::EmitBranchFollowing,
+                span(view, source_id, 0, 6),
+            ),
+            instruction(
+                SourceProcessingOperation::EmitBranchCompletePrevious { cleanup: None },
+                span(view, source_id, 0, 6),
+            ),
+        ]);
+        let complete_outer = complete([instruction(
+            SourceProcessingOperation::EmitBranchComplete,
+            span(view, source_id, 0, 6),
+        )]);
+        let bindings = Bindings::new();
+        let mut code = SourceMappedCode::new();
+        let mut outer_state = SourceWordEvaluationState::new();
+        let mut inner_state = SourceWordEvaluationState::new();
+        {
+            let mut builder = BlockCodeBuilder::new(&mut code);
+            let mut line_numbers = LocalLineNumberTable::new();
+            let mut evaluate =
+                |implementation: &SourceWordImplementation,
+                 state: &mut SourceWordEvaluationState| {
+                    let mut context =
+                        UserDefinedSourceWordContext::new(UserDefinedSourceWordContextParts {
+                            view,
+                            source_id,
+                            tokens: &tokens,
+                            bindings: &bindings,
+                            operators: Some(operator_lookup()),
+                            local_references: None,
+                            code: &mut builder,
+                            line_numbers: &mut line_numbers,
+                            capabilities: SourceProcessingCapabilities::structured_runtime(),
+                        });
+                    evaluate_source_word_with_state(implementation, &mut context, state)
+                        .expect("nested state evaluation should succeed")
+                };
+            evaluate(&following, &mut outer_state);
+            evaluate(&inner, &mut inner_state);
+            evaluate(&complete_outer, &mut outer_state);
+            builder
+                .append_mapped(Instruction::Return, span(view, source_id, 0, 6))
+                .expect("completion target should append");
+            inner_state
+                .complete_structural_branches(&mut builder)
+                .expect("inner state should complete");
+            outer_state
+                .complete_structural_branches(&mut builder)
+                .expect("outer state should complete");
+            builder.finish().expect("block should complete");
+        }
+
+        assert_eq!(
+            code.instruction_view()
+                .get(InstructionAddress::from_index(0)),
+            Ok(&Instruction::Jump(InstructionAddress::from_index(4)))
+        );
+        assert_eq!(
+            code.instruction_view()
+                .get(InstructionAddress::from_index(1)),
+            Ok(&Instruction::Jump(InstructionAddress::from_index(3)))
+        );
+    }
 }
