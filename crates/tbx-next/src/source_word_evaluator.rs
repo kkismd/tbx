@@ -21,6 +21,7 @@ use crate::source_word_ir::{
     LocalBinding, LocalReference, SourceInstructionOrigin, SourceProcessingCapabilities,
     SourceProcessingOperation, SourceWordImplementation,
 };
+use crate::word::WordId;
 use crate::word_resolution::{resolve_binding_name, ResolvedBinding, WordResolutionError};
 
 pub(crate) struct UserDefinedSourceWordContext<'source, 'state> {
@@ -85,6 +86,11 @@ pub(crate) enum SourceWordEvaluationError {
         source: crate::expression::ExpressionVariableErrorKind,
         origin: SourceInstructionOrigin,
     },
+    WordResolution {
+        span: SourceSpan,
+        source: crate::expression::ExpressionCallErrorKind,
+        origin: SourceInstructionOrigin,
+    },
     Expression {
         source: ExpressionError,
         origin: SourceInstructionOrigin,
@@ -112,6 +118,7 @@ pub(crate) enum SourceWordEvaluationError {
 pub(crate) enum RuntimeLocalType {
     NameInput,
     VariableTarget,
+    RuntimeWordTarget,
     ExpressionArtifact,
     OwnerLocalCodePosition,
     LocalLineTarget,
@@ -132,6 +139,7 @@ impl SourceWordEvaluationError {
             | Self::LineNumberLiteralOutOfRange { span, .. }
             | Self::LineNumberLiteralConversion { span, .. }
             | Self::VariableResolution { span, .. } => Some(*span),
+            Self::WordResolution { span, .. } => Some(*span),
             Self::InstructionBuild { origin, .. } => Some(origin.span()),
             Self::Expression { source, origin } => match source {
                 ExpressionError::Source(_) | ExpressionError::InstructionBuild(_) => {
@@ -156,6 +164,10 @@ enum RuntimeLocal {
     },
     VariableTarget {
         id: GlobalVarId,
+        span: SourceSpan,
+    },
+    RuntimeWordTarget {
+        id: WordId,
         span: SourceSpan,
     },
     ExpressionArtifact(ExpressionStaging),
@@ -426,6 +438,17 @@ fn evaluate_instruction(
             )?;
             locals.bind(bind, RuntimeLocal::VariableTarget { id, span });
         }
+        SourceProcessingOperation::ResolveWord { name, bind } => {
+            let (source_name, span) = locals.name(name, origin)?;
+            let id = resolve_runtime_word_name(context.bindings, source_name.as_str()).map_err(
+                |source| SourceWordEvaluationError::WordResolution {
+                    span,
+                    source,
+                    origin,
+                },
+            )?;
+            locals.bind(bind, RuntimeLocal::RuntimeWordTarget { id, span });
+        }
         SourceProcessingOperation::EmitExpression { expression } => {
             let expression = locals.expression(expression, origin)?;
             expression
@@ -442,6 +465,29 @@ fn evaluate_instruction(
             context
                 .code
                 .append_mapped(Instruction::StoreVar(id), span)
+                .map_err(|source| SourceWordEvaluationError::InstructionBuild { source, origin })?;
+        }
+        SourceProcessingOperation::EmitCall { target } => {
+            let (id, span) = locals.runtime_word_target(target, origin)?;
+            context
+                .code
+                .append_mapped(Instruction::Call(id), span)
+                .map_err(|source| SourceWordEvaluationError::InstructionBuild { source, origin })?;
+        }
+        SourceProcessingOperation::EmitLoad { target } => {
+            let (id, span) = locals.variable_target(target, origin)?;
+            context
+                .code
+                .append_mapped(Instruction::LoadVar(id), span)
+                .map_err(|source| SourceWordEvaluationError::InstructionBuild { source, origin })?;
+        }
+        SourceProcessingOperation::EmitInt { value } => {
+            context
+                .code
+                .append_mapped(
+                    Instruction::Push(crate::value::Value::integer(*value)),
+                    origin.span(),
+                )
                 .map_err(|source| SourceWordEvaluationError::InstructionBuild { source, origin })?;
         }
         SourceProcessingOperation::EmitReturn => {
@@ -744,6 +790,22 @@ impl RuntimeLocals {
         }
     }
 
+    fn runtime_word_target(
+        &self,
+        reference: &LocalReference,
+        origin: SourceInstructionOrigin,
+    ) -> Result<(WordId, SourceSpan), SourceWordEvaluationError> {
+        match self.get(reference, origin)? {
+            RuntimeLocal::RuntimeWordTarget { id, span } => Ok((*id, *span)),
+            actual => Err(SourceWordEvaluationError::LocalTypeMismatch {
+                reference: reference.clone(),
+                expected: RuntimeLocalType::RuntimeWordTarget,
+                actual: actual.local_type(),
+                origin,
+            }),
+        }
+    }
+
     fn branch_destination(
         &self,
         reference: &LocalReference,
@@ -777,6 +839,7 @@ impl RuntimeLocal {
         match self {
             Self::NameInput { .. } => RuntimeLocalType::NameInput,
             Self::VariableTarget { .. } => RuntimeLocalType::VariableTarget,
+            Self::RuntimeWordTarget { .. } => RuntimeLocalType::RuntimeWordTarget,
             Self::ExpressionArtifact(_) => RuntimeLocalType::ExpressionArtifact,
             Self::OwnerLocalCodePosition(_) => RuntimeLocalType::OwnerLocalCodePosition,
             Self::LocalLineTarget(_) => RuntimeLocalType::LocalLineTarget,
