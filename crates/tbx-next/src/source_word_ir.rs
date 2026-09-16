@@ -98,6 +98,9 @@ pub(crate) enum SourceProcessingOperation {
     EmitCall {
         target: LocalReference,
     },
+    EmitCallWord {
+        name: NormalizedName,
+    },
     EmitLoad {
         target: LocalReference,
     },
@@ -121,6 +124,9 @@ pub(crate) enum SourceProcessingOperation {
     EmitBranchIfFalseFollowing,
     EmitBranchComplete,
     EmitBranchIfFalseComplete,
+    EmitBranchCompletePrevious {
+        cleanup: Option<NormalizedName>,
+    },
 }
 
 impl SourceProcessingOperation {
@@ -154,6 +160,7 @@ impl SourceProcessingOperation {
             | Self::EmitExpression { .. }
             | Self::EmitStore { .. }
             | Self::EmitCall { .. }
+            | Self::EmitCallWord { .. }
             | Self::EmitLoad { .. }
             | Self::EmitInt { .. }
             | Self::EmitReturn
@@ -163,6 +170,7 @@ impl SourceProcessingOperation {
             | Self::EmitBranchIfFalseFollowing
             | Self::EmitBranchComplete
             | Self::EmitBranchIfFalseComplete => None,
+            Self::EmitBranchCompletePrevious { .. } => None,
         }
     }
 
@@ -180,6 +188,7 @@ impl SourceProcessingOperation {
             | Self::EmitExpression { .. }
             | Self::EmitStore { .. }
             | Self::EmitCall { .. }
+            | Self::EmitCallWord { .. }
             | Self::EmitLoad { .. }
             | Self::EmitInt { .. }
             | Self::EmitReturn
@@ -189,6 +198,7 @@ impl SourceProcessingOperation {
             | Self::EmitBranchIfFalseFollowing
             | Self::EmitBranchComplete
             | Self::EmitBranchIfFalseComplete => None,
+            Self::EmitBranchCompletePrevious { .. } => None,
         }
     }
 
@@ -219,6 +229,7 @@ impl SourceProcessingOperation {
                     LocalConsumer::Exact(SourceLocalType::RuntimeWordTarget),
                 ));
             }
+            Self::EmitCallWord { .. } => {}
             Self::EmitLoad { target } => {
                 locals.push((
                     target,
@@ -241,6 +252,7 @@ impl SourceProcessingOperation {
             | Self::EmitBranchIfFalseFollowing
             | Self::EmitBranchComplete
             | Self::EmitBranchIfFalseComplete => {}
+            Self::EmitBranchCompletePrevious { .. } => {}
         }
         locals.into_iter()
     }
@@ -259,6 +271,7 @@ impl SourceProcessingOperation {
             Self::EmitExpression { .. }
             | Self::EmitStore { .. }
             | Self::EmitCall { .. }
+            | Self::EmitCallWord { .. }
             | Self::EmitLoad { .. }
             | Self::EmitInt { .. }
             | Self::EmitReturn
@@ -269,6 +282,9 @@ impl SourceProcessingOperation {
             | Self::EmitBranchIfFalseFollowing
             | Self::EmitBranchComplete
             | Self::EmitBranchIfFalseComplete => {
+                SourceProcessingCapabilities::emit_structural_branch()
+            }
+            Self::EmitBranchCompletePrevious { .. } => {
                 SourceProcessingCapabilities::emit_structural_branch()
             }
         }

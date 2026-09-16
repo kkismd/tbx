@@ -1554,6 +1554,104 @@ EMIT A DUP";
     }
 
     #[test]
+    fn embedded_standard_library_select_matches_once_and_cleans_selector() {
+        let source = "LET A = 0
+LET B = 0
+DEF NEXT
+LET A = A + 1
+EVAL A
+END
+SELECT NEXT()
+CASE 1
+LET B = 10
+CASE 2
+LET B = 20
+CASE_ELSE
+LET B = 30
+ENDSEL
+EVAL A
+EVAL B";
+        let mut writer = RecordingWriter::default();
+
+        let result = success(execute_with_embedded_standard_library(
+            source,
+            "program.tbx",
+            &mut writer,
+        ));
+
+        assert_eq!(result.data_stack(), [Value::integer(1), Value::integer(10)]);
+    }
+
+    #[test]
+    fn embedded_standard_library_select_supports_no_match_nested_blocks_and_cleanup() {
+        for (source, expected) in [
+            (
+                "LET A = 0
+SELECT 9
+CASE 1
+LET A = 1
+ENDSEL
+EVAL A",
+                [Value::integer(0)],
+            ),
+            (
+                "LET A = 0
+SELECT 2
+CASE 1
+LET A = A + 1
+CASE 2
+IF 1
+WHILE A < 2
+LET A = A + 1
+ENDWH
+ENDIF
+LET A = A + 10
+ENDSEL
+EVAL A",
+                [Value::integer(12)],
+            ),
+        ] {
+            let mut writer = RecordingWriter::default();
+            let result = success(execute_with_embedded_standard_library(
+                source,
+                "program.tbx",
+                &mut writer,
+            ));
+            assert_eq!(result.data_stack(), expected);
+        }
+    }
+
+    #[test]
+    fn embedded_standard_library_select_rejects_invalid_case_structure() {
+        for source in [
+            "SELECT 1
+ENDSEL",
+            "SELECT 1
+CASE 1
+CASE_ELSE
+CASE_ELSE
+ENDSEL",
+            "SELECT 1
+CASE_ELSE
+ENDSEL",
+            "SELECT 1
+CASE 1
+CASE 2
+ENDSEL
+CASE 3",
+        ] {
+            let mut writer = RecordingWriter::default();
+            let failure = failure(execute_with_embedded_standard_library(
+                source,
+                "program.tbx",
+                &mut writer,
+            ));
+            assert_eq!(failure.class(), UserFacingFailureClass::UserProgram);
+            assert!(failure.diagnostic().primary().is_some());
+        }
+    }
+
+    #[test]
     fn embedded_standard_library_control_structures_support_nested_and_native_if_blocks() {
         let mut writer = RecordingWriter::default();
 

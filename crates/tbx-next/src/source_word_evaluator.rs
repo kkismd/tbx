@@ -209,6 +209,34 @@ impl StructuralBranchState {
         self.complete.push(StructuralBranchPatch { branch, origin });
     }
 
+    fn emit_complete_previous(
+        &mut self,
+        code: &mut dyn InstructionBuildTarget,
+        origin: SourceInstructionOrigin,
+        cleanup: Option<&NormalizedName>,
+        bindings: &Bindings,
+    ) -> Result<(), SourceWordEvaluationError> {
+        if self.following.is_empty() {
+            return Ok(());
+        }
+        if let Some(cleanup) = cleanup {
+            let id = resolve_runtime_word_name(bindings, cleanup.as_str()).map_err(|source| {
+                SourceWordEvaluationError::WordResolution {
+                    span: origin.span(),
+                    source,
+                    origin,
+                }
+            })?;
+            code.append_mapped(Instruction::Call(id), origin.span())
+                .map_err(|source| SourceWordEvaluationError::InstructionBuild { source, origin })?;
+        }
+        let branch = code
+            .append_mapped_jump_placeholder(origin.span())
+            .map_err(|source| SourceWordEvaluationError::InstructionBuild { source, origin })?;
+        self.record_complete(branch, origin);
+        self.patch_following_after_complete_branch(code)
+    }
+
     fn patch_following_section_start(
         &mut self,
         code: &mut dyn InstructionBuildTarget,
@@ -362,7 +390,8 @@ fn evaluate_instruction(
     // values or a generic source-processing stack.
     match operation {
         SourceProcessingOperation::EmitBranchComplete
-        | SourceProcessingOperation::EmitBranchIfFalseComplete => {}
+        | SourceProcessingOperation::EmitBranchIfFalseComplete
+        | SourceProcessingOperation::EmitBranchCompletePrevious { .. } => {}
         _ => structural_branches.patch_following_section_start(context.code)?,
     }
 
@@ -472,6 +501,20 @@ fn evaluate_instruction(
             context
                 .code
                 .append_mapped(Instruction::Call(id), span)
+                .map_err(|source| SourceWordEvaluationError::InstructionBuild { source, origin })?;
+        }
+        SourceProcessingOperation::EmitCallWord { name } => {
+            let id =
+                resolve_runtime_word_name(context.bindings, name.as_str()).map_err(|source| {
+                    SourceWordEvaluationError::WordResolution {
+                        span: origin.span(),
+                        source,
+                        origin,
+                    }
+                })?;
+            context
+                .code
+                .append_mapped(Instruction::Call(id), origin.span())
                 .map_err(|source| SourceWordEvaluationError::InstructionBuild { source, origin })?;
         }
         SourceProcessingOperation::EmitLoad { target } => {
@@ -595,6 +638,14 @@ fn evaluate_instruction(
                 .map_err(|source| SourceWordEvaluationError::InstructionBuild { source, origin })?;
             structural_branches.record_complete(branch, origin);
             structural_branches.patch_following_after_complete_branch(context.code)?;
+        }
+        SourceProcessingOperation::EmitBranchCompletePrevious { cleanup } => {
+            structural_branches.emit_complete_previous(
+                context.code,
+                origin,
+                cleanup.as_ref(),
+                context.bindings,
+            )?;
         }
     }
     Ok(())

@@ -2642,6 +2642,9 @@ fn parse_source_processing_statement(
         "EMIT_CALL" => SourceProcessingOperation::EmitCall {
             target: read_only_local_reference(view, &mut reader)?,
         },
+        "EMIT_CALL_WORD" => SourceProcessingOperation::EmitCallWord {
+            name: read_word_name_literal(view, &mut reader)?,
+        },
         "EMIT_LOAD" => SourceProcessingOperation::EmitLoad {
             target: read_only_local_reference(view, &mut reader)?,
         },
@@ -2677,6 +2680,17 @@ fn parse_source_processing_statement(
             reader.finish().map_err(syntax_operation_reader_error)?;
             SourceProcessingOperation::EmitBranchIfFalseComplete
         }
+        "EMIT_BRANCH_COMPLETE_PREVIOUS" => {
+            let cleanup = reader
+                .peek()
+                .map(|token| normalized_token(view, token))
+                .transpose()?;
+            if cleanup.is_some() {
+                reader.read_name().map_err(syntax_operation_reader_error)?;
+            }
+            reader.finish().map_err(syntax_operation_reader_error)?;
+            SourceProcessingOperation::EmitBranchCompletePrevious { cleanup }
+        }
         _ => {
             return Err(SourceWordError::SyntaxDefinition {
                 span: first.span(),
@@ -2705,6 +2719,16 @@ fn read_only_local_reference(
     let reference = read_local_reference(view, reader)?;
     reader.finish().map_err(syntax_operation_reader_error)?;
     Ok(reference)
+}
+
+fn read_word_name_literal(
+    view: SourceView<'_>,
+    reader: &mut SourceStatementReader<'_>,
+) -> Result<NormalizedName, SourceWordError> {
+    let token = reader.read_name().map_err(syntax_operation_reader_error)?;
+    let name = normalized_token(view, token)?;
+    reader.finish().map_err(syntax_operation_reader_error)?;
+    Ok(name)
 }
 
 fn read_local_binding(
