@@ -273,8 +273,6 @@ DO
 UNTIL A >= 3
 ```
 
-TBX Next の `WHILE` は `ENDWH` で終端する。`WEND` は終端として使えない。
-
 ## 出力
 
 ### PRINT
@@ -417,7 +415,6 @@ TBX Next は現行 `tbx` の互換実装ではない。特に次をそのまま�
 | ワード定義 | `DEF NAME local1, local2 ... END` |
 | 戻り値 | `RETURN` ではなく、ワードがデータスタックへ残す値 |
 | 式をスタックへ積む | `EVAL expression` |
-| WHILE 終端 | `ENDWH` |
 | 値 | 現在は `i16` 整数のみ |
 | 真偽 | `0` が偽、0 以外が真 |
 | 変数 | A-Z 組み込み + `VAR` によるグローバル変数 |
