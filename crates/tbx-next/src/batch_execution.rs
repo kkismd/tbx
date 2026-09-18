@@ -1192,6 +1192,66 @@ CONTROL 42";
     }
 
     #[test]
+    fn user_syntax_control_value_operations_restore_an_outer_lifo_value() {
+        let text = "SYNTAX PUSH_CONTROL
+STATEMENT
+READ_EXPR AS value
+EXPECT_END
+EMIT_EXPR value
+EMIT_CONTROL_PUSH
+ENDS
+SYNTAX COPY_CONTROL
+STATEMENT
+EXPECT_END
+EMIT_CONTROL_COPY
+ENDS
+SYNTAX DROP_CONTROL
+STATEMENT
+EXPECT_END
+EMIT_CONTROL_DROP
+ENDS
+PUSH_CONTROL 10
+PUSH_CONTROL 20
+COPY_CONTROL
+DROP_CONTROL
+COPY_CONTROL
+DROP_CONTROL";
+        let (sources, source_id) = source(text, "program.tbx");
+        let mut writer = RecordingWriter::default();
+
+        let result = success(execute_registered_source(&sources, source_id, &mut writer));
+
+        assert_eq!(
+            result.data_stack(),
+            [Value::integer(20), Value::integer(10)]
+        );
+    }
+
+    #[test]
+    fn user_syntax_control_value_underflow_reaches_the_runtime_error() {
+        let text = "SYNTAX COPY_CONTROL
+STATEMENT
+EXPECT_END
+EMIT_CONTROL_COPY
+ENDS
+COPY_CONTROL";
+        let (sources, source_id) = source(text, "program.tbx");
+        let mut writer = RecordingWriter::default();
+        let failure = failure(execute_registered_source(&sources, source_id, &mut writer));
+
+        let BatchExecutionFailureCause::Source(user_failure) = failure.cause else {
+            panic!("control-value underflow should be a source runtime failure");
+        };
+        let SourceProcessorError::Runtime(error) = user_failure.original_error() else {
+            panic!("control-value underflow should preserve the runtime error");
+        };
+        assert!(matches!(
+            error.vm().kind(),
+            crate::vm::VmErrorKind::ControlValueStackUnderflow { .. }
+        ));
+    }
+
+    #[test]
     fn control_value_emit_operations_reject_operands() {
         for operation in [
             "EMIT_CONTROL_PUSH",

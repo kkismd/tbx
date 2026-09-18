@@ -1144,6 +1144,58 @@ mod tests {
     }
 
     #[test]
+    fn each_control_value_emit_operation_emits_exactly_one_instruction() {
+        for (operation, expected) in [
+            (
+                SourceProcessingOperation::EmitControlPush,
+                Instruction::PushControlValue,
+            ),
+            (
+                SourceProcessingOperation::EmitControlCopy,
+                Instruction::CopyControlValue,
+            ),
+            (
+                SourceProcessingOperation::EmitControlDrop,
+                Instruction::DropControlValue,
+            ),
+        ] {
+            let (sources, source_id, tokens) = lex("CONTROL");
+            let view = sources.view();
+            let operation_span = span(view, source_id, 0, 7);
+            let implementation = complete([instruction(operation, operation_span)]);
+            let bindings = Bindings::new();
+            let mut code = SourceMappedCode::new();
+            {
+                let mut builder = BlockCodeBuilder::new(&mut code);
+                let mut line_numbers = LocalLineNumberTable::new();
+                let mut context =
+                    UserDefinedSourceWordContext::new(UserDefinedSourceWordContextParts {
+                        view,
+                        source_id,
+                        tokens: &tokens,
+                        bindings: &bindings,
+                        operators: Some(operator_lookup()),
+                        local_references: None,
+                        code: &mut builder,
+                        line_numbers: &mut line_numbers,
+                        capabilities: SourceProcessingCapabilities::statement_runtime(),
+                    });
+
+                evaluate_source_word(&implementation, &mut context)
+                    .expect("control-value emit should succeed");
+                builder.finish().expect("generated block should complete");
+            }
+
+            assert_eq!(code.len(), 1);
+            assert_eq!(
+                code.instruction_view()
+                    .get(InstructionAddress::from_index(0)),
+                Ok(&expected)
+            );
+        }
+    }
+
+    #[test]
     fn read_expression_until_leaves_delimiter_for_following_expect() {
         let (sources, source_id, tokens) = lex("BIF 0, 100");
         let view = sources.view();
