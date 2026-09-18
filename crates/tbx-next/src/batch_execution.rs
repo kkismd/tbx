@@ -1172,6 +1172,42 @@ EMIT A DUP";
     }
 
     #[test]
+    fn user_syntax_can_resolve_a_fixed_runtime_word_at_use_time() {
+        let text = "SYNTAX LATER_CALL\nSTATEMENT\nRESOLVE_WORD_LITERAL LATER AS word\nEMIT_CALL word\nENDS\nDEF LATER\nDUP\nEND\nEVAL 7\nLATER_CALL";
+        let (sources, source_id) = source(text, "program.tbx");
+        let mut writer = RecordingWriter::default();
+
+        let result = success(execute_registered_source(&sources, source_id, &mut writer));
+
+        assert_eq!(result.data_stack(), [Value::integer(7), Value::integer(7)]);
+    }
+
+    #[test]
+    fn fixed_runtime_word_resolution_reports_the_literal_operand_span() {
+        for (text, expected_line) in [
+            (
+                "SYNTAX FIXED_CALL\nSTATEMENT\nRESOLVE_WORD_LITERAL MISSING AS word\nEMIT_CALL word\nENDS\nFIXED_CALL",
+                "RESOLVE_WORD_LITERAL MISSING AS word",
+            ),
+            (
+                "SYNTAX FIXED_CALL\nSTATEMENT\nRESOLVE_WORD_LITERAL A AS word\nEMIT_CALL word\nENDS\nLET A = 1\nFIXED_CALL",
+                "RESOLVE_WORD_LITERAL A AS word",
+            ),
+        ] {
+            let (sources, source_id) = source(text, "program.tbx");
+            let mut writer = RecordingWriter::default();
+            let failure = failure(execute_registered_source(&sources, source_id, &mut writer));
+            let primary = failure
+                .diagnostic()
+                .primary()
+                .expect("fixed runtime word failure should retain a source span");
+
+            assert_eq!(primary.source_line(), expected_line);
+            assert!(primary.column_number() > "RESOLVE_WORD_LITERAL ".len());
+        }
+    }
+
+    #[test]
     fn user_syntax_reports_runtime_emit_binding_and_literal_errors_at_source_spans() {
         for text in [
             "SYNTAX S\nSTATEMENT\nREAD_NAME AS name\nRESOLVE_WORD name AS word\nENDS\nLET A = 1\nS A",
