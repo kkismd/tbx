@@ -1689,6 +1689,137 @@ COPY_CONTROL";
     }
 
     #[test]
+    fn embedded_standard_library_select_matches_cases_without_fallthrough() {
+        for (selector, expected) in [(1, 10), (2, 20), (3, 30), (9, 0)] {
+            let mut writer = RecordingWriter::default();
+            let source = format!(
+                "SELECT {selector}\nCASE 1\nEVAL 10\nCASE 2\nEVAL 20\nCASE 3\nEVAL 30\nENDSEL\nEVAL 0"
+            );
+            let result = success(execute_with_embedded_standard_library(
+                &source,
+                "program.tbx",
+                &mut writer,
+            ));
+
+            let expected_stack = if selector == 9 {
+                vec![Value::integer(0)]
+            } else {
+                vec![Value::integer(expected), Value::integer(0)]
+            };
+            assert_eq!(result.data_stack(), expected_stack);
+        }
+
+        let mut writer = RecordingWriter::default();
+        let result = success(execute_with_embedded_standard_library(
+            "SELECT 9\nCASE 1\nEVAL 10\nCASE_ELSE\nEVAL 99\nENDSEL",
+            "program.tbx",
+            &mut writer,
+        ));
+        assert_eq!(result.data_stack(), [Value::integer(99)]);
+    }
+
+    #[test]
+    fn embedded_standard_library_select_evaluates_selector_once_and_supports_nesting() {
+        let mut writer = RecordingWriter::default();
+        let result = success(execute_with_embedded_standard_library(
+            "DEF INC\nLET A = A + 1\nEVAL A\nEND\nLET A = 0\nSELECT INC()\nCASE 1\nSELECT 2\nCASE 2\nEVAL 7\nENDSEL\nENDSEL\nEVAL A",
+            "program.tbx",
+            &mut writer,
+        ));
+        assert_eq!(result.data_stack(), [Value::integer(7), Value::integer(1)]);
+    }
+
+    #[test]
+    fn embedded_standard_library_select_cleans_up_selector_before_following_runtime_code() {
+        let mut writer = RecordingWriter::default();
+        let failure = failure(execute_with_embedded_standard_library(
+            "SYNTAX COPY_CONTROL\nSTATEMENT\nEXPECT_END\nEMIT_CONTROL_COPY\nENDS\nDEF CHECK\nSELECT 1\nCASE 1\nEVAL 7\nENDSEL\nCOPY_CONTROL\nEND\nCHECK",
+            "program.tbx",
+            &mut writer,
+        ));
+
+        let BatchExecutionFailureCause::Source(user_failure) = failure.cause else {
+            panic!("control-value cleanup probe should fail in user runtime code");
+        };
+        let SourceProcessorError::Runtime(error) = user_failure.original_error() else {
+            panic!("cleanup probe should preserve the runtime error");
+        };
+        assert!(matches!(
+            error.vm().kind(),
+            crate::vm::VmErrorKind::ControlValueStackUnderflow { .. }
+        ));
+    }
+
+    #[test]
+    fn embedded_standard_library_select_nests_inside_if_while_and_do() {
+        let mut writer = RecordingWriter::default();
+        let result = success(execute_with_embedded_standard_library(
+            "LET A = 0\nIF 1\nSELECT 1\nCASE 1\nEVAL 10\nENDSEL\nENDIF\nWHILE A < 1\nSELECT 2\nCASE 2\nEVAL 20\nENDSEL\nLET A = A + 1\nENDWH\nDO\nSELECT 3\nCASE 3\nEVAL 30\nENDSEL\nUNTIL 1\nEVAL A",
+            "program.tbx",
+            &mut writer,
+        ));
+
+        assert_eq!(
+            result.data_stack(),
+            [
+                Value::integer(10),
+                Value::integer(20),
+                Value::integer(30),
+                Value::integer(1)
+            ]
+        );
+    }
+
+    #[test]
+    fn embedded_standard_library_select_contains_if_while_and_do_bodies() {
+        for (selector, body, expected) in [
+            (1, "IF 1\nEVAL 10\nENDIF", 10),
+            (
+                2,
+                "LET A = 0\nWHILE A < 1\nEVAL 20\nLET A = A + 1\nENDWH",
+                20,
+            ),
+            (3, "DO\nEVAL 30\nUNTIL 1", 30),
+        ] {
+            let mut writer = RecordingWriter::default();
+            let source = format!(
+                "SELECT {selector}\nCASE 1\n{}\nCASE 2\n{}\nCASE 3\n{}\nCASE_ELSE\nEVAL 96\nENDSEL",
+                if selector == 1 { body } else { "EVAL 99" },
+                if selector == 2 { body } else { "EVAL 98" },
+                if selector == 3 { body } else { "EVAL 97" },
+            );
+            let result = success(execute_with_embedded_standard_library(
+                &source,
+                "program.tbx",
+                &mut writer,
+            ));
+
+            assert_eq!(result.data_stack(), [Value::integer(expected)]);
+        }
+    }
+
+    #[test]
+    fn embedded_standard_library_select_requires_cases_and_orders_else_last() {
+        for source in [
+            "SELECT 1\nENDSEL",
+            "SELECT 1\nCASE_ELSE\nENDSEL",
+            "SELECT 1\nCASE_ELSE\nCASE 1\nENDSEL",
+            "SELECT 1\nCASE 1\nCASE_ELSE\nCASE_ELSE\nENDSEL",
+        ] {
+            let mut writer = RecordingWriter::default();
+            let failure = failure(execute_with_embedded_standard_library(
+                source,
+                "program.tbx",
+                &mut writer,
+            ));
+            assert!(matches!(
+                failure.cause,
+                BatchExecutionFailureCause::Source(_)
+            ));
+        }
+    }
+
+    #[test]
     fn embedded_standard_library_control_structures_support_nested_and_native_if_blocks() {
         let mut writer = RecordingWriter::default();
 
