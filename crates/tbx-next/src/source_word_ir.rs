@@ -133,6 +133,9 @@ pub(crate) enum SourceProcessingOperation {
     EmitBranchIfFalseFollowing,
     EmitBranchComplete,
     EmitBranchIfFalseComplete,
+    PatchFollowing,
+    PatchComplete,
+    EmitBranchCompleteIfFollowing,
 }
 
 impl SourceProcessingOperation {
@@ -177,7 +180,10 @@ impl SourceProcessingOperation {
             | Self::EmitBranchFollowing
             | Self::EmitBranchIfFalseFollowing
             | Self::EmitBranchComplete
-            | Self::EmitBranchIfFalseComplete => None,
+            | Self::EmitBranchIfFalseComplete
+            | Self::PatchFollowing
+            | Self::PatchComplete
+            | Self::EmitBranchCompleteIfFollowing => None,
         }
     }
 
@@ -206,7 +212,10 @@ impl SourceProcessingOperation {
             | Self::EmitBranchFollowing
             | Self::EmitBranchIfFalseFollowing
             | Self::EmitBranchComplete
-            | Self::EmitBranchIfFalseComplete => None,
+            | Self::EmitBranchIfFalseComplete
+            | Self::PatchFollowing
+            | Self::PatchComplete
+            | Self::EmitBranchCompleteIfFollowing => None,
         }
     }
 
@@ -261,7 +270,10 @@ impl SourceProcessingOperation {
             | Self::EmitBranchFollowing
             | Self::EmitBranchIfFalseFollowing
             | Self::EmitBranchComplete
-            | Self::EmitBranchIfFalseComplete => {}
+            | Self::EmitBranchIfFalseComplete
+            | Self::PatchFollowing
+            | Self::PatchComplete
+            | Self::EmitBranchCompleteIfFollowing => {}
         }
         locals.into_iter()
     }
@@ -295,7 +307,10 @@ impl SourceProcessingOperation {
             Self::EmitBranchFollowing
             | Self::EmitBranchIfFalseFollowing
             | Self::EmitBranchComplete
-            | Self::EmitBranchIfFalseComplete => {
+            | Self::EmitBranchIfFalseComplete
+            | Self::PatchFollowing
+            | Self::PatchComplete
+            | Self::EmitBranchCompleteIfFollowing => {
                 SourceProcessingCapabilities::emit_structural_branch()
             }
         }
@@ -883,11 +898,23 @@ mod tests {
                 SourceProcessingOperation::EmitBranchIfFalseComplete,
                 origin(op_span),
             ),
+            SourceProcessingInstruction::new(
+                SourceProcessingOperation::PatchFollowing,
+                origin(op_span),
+            ),
+            SourceProcessingInstruction::new(
+                SourceProcessingOperation::PatchComplete,
+                origin(op_span),
+            ),
+            SourceProcessingInstruction::new(
+                SourceProcessingOperation::EmitBranchCompleteIfFollowing,
+                origin(op_span),
+            ),
         ];
 
         let implementation = complete(instructions).expect("instruction sequence should validate");
 
-        assert_eq!(implementation.instructions().len(), 17);
+        assert_eq!(implementation.instructions().len(), 20);
         assert_eq!(implementation.instructions()[0].origin().span(), op_span);
         assert_eq!(
             implementation.instructions()[5].operation(),

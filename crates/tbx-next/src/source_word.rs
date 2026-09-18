@@ -2766,6 +2766,18 @@ fn parse_source_processing_statement(
             reader.finish().map_err(syntax_operation_reader_error)?;
             SourceProcessingOperation::EmitBranchIfFalseComplete
         }
+        "PATCH_FOLLOWING" => {
+            reader.finish().map_err(syntax_operation_reader_error)?;
+            SourceProcessingOperation::PatchFollowing
+        }
+        "PATCH_COMPLETE" => {
+            reader.finish().map_err(syntax_operation_reader_error)?;
+            SourceProcessingOperation::PatchComplete
+        }
+        "EMIT_BRANCH_COMPLETE_IF_FOLLOWING" => {
+            reader.finish().map_err(syntax_operation_reader_error)?;
+            SourceProcessingOperation::EmitBranchCompleteIfFollowing
+        }
         _ => {
             return Err(SourceWordError::SyntaxDefinition {
                 span: first.span(),
