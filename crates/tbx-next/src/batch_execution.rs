@@ -1698,6 +1698,15 @@ COPY_CONTROL";
         ));
 
         assert_eq!(result.data_stack(), [Value::integer(6), Value::integer(4)]);
+
+        let mut writer = RecordingWriter::default();
+        let result = success(execute_with_embedded_standard_library(
+            "LET A = 0\nLET B = 3\nFOR I = 1 TO B\nLET A = A + 1\nLET B = 1\nNEXT\nEVAL A\nEVAL I",
+            "program.tbx",
+            &mut writer,
+        ));
+
+        assert_eq!(result.data_stack(), [Value::integer(3), Value::integer(4)]);
     }
 
     #[test]
