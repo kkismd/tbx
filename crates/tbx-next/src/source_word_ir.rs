@@ -116,6 +116,9 @@ pub(crate) enum SourceProcessingOperation {
     EmitInt {
         value: i16,
     },
+    EmitControlPush,
+    EmitControlCopy,
+    EmitControlDrop,
     EmitReturn,
     Position {
         bind: LocalBinding,
@@ -174,6 +177,9 @@ impl SourceProcessingOperation {
             | Self::EmitCall { .. }
             | Self::EmitLoad { .. }
             | Self::EmitInt { .. }
+            | Self::EmitControlPush
+            | Self::EmitControlCopy
+            | Self::EmitControlDrop
             | Self::EmitReturn
             | Self::EmitBranch { .. }
             | Self::EmitBranchIfFalse { .. }
@@ -206,6 +212,9 @@ impl SourceProcessingOperation {
             | Self::EmitCall { .. }
             | Self::EmitLoad { .. }
             | Self::EmitInt { .. }
+            | Self::EmitControlPush
+            | Self::EmitControlCopy
+            | Self::EmitControlDrop
             | Self::EmitReturn
             | Self::EmitBranch { .. }
             | Self::EmitBranchIfFalse { .. }
@@ -266,6 +275,9 @@ impl SourceProcessingOperation {
             | Self::ResolveWordLiteral { .. }
             | Self::EmitReturn
             | Self::EmitInt { .. }
+            | Self::EmitControlPush
+            | Self::EmitControlCopy
+            | Self::EmitControlDrop
             | Self::Position { .. }
             | Self::EmitBranchFollowing
             | Self::EmitBranchIfFalseFollowing
@@ -300,6 +312,9 @@ impl SourceProcessingOperation {
             | Self::EmitCall { .. }
             | Self::EmitLoad { .. }
             | Self::EmitInt { .. }
+            | Self::EmitControlPush
+            | Self::EmitControlCopy
+            | Self::EmitControlDrop
             | Self::EmitReturn
             | Self::Position { .. }
             | Self::EmitBranch { .. }
@@ -910,11 +925,23 @@ mod tests {
                 SourceProcessingOperation::EmitBranchCompleteIfFollowing,
                 origin(op_span),
             ),
+            SourceProcessingInstruction::new(
+                SourceProcessingOperation::EmitControlPush,
+                origin(op_span),
+            ),
+            SourceProcessingInstruction::new(
+                SourceProcessingOperation::EmitControlCopy,
+                origin(op_span),
+            ),
+            SourceProcessingInstruction::new(
+                SourceProcessingOperation::EmitControlDrop,
+                origin(op_span),
+            ),
         ];
 
         let implementation = complete(instructions).expect("instruction sequence should validate");
 
-        assert_eq!(implementation.instructions().len(), 20);
+        assert_eq!(implementation.instructions().len(), 23);
         assert_eq!(implementation.instructions()[0].origin().span(), op_span);
         assert_eq!(
             implementation.instructions()[5].operation(),
