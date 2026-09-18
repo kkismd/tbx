@@ -6509,7 +6509,7 @@ mod tests {
         let (words, primitives, operators, mut source_words, mut bindings, mut globals, variables) =
             global_source_fixture();
         publish_user_source_word(
-            "SYNTAX UIF\nBLOCK\nSTART\nREAD_EXPR AS start_condition\nEMIT_EXPR start_condition\nEMIT_BRANCH_IF_FALSE_FOLLOWING\nMARK_ANY UELSIF\nEMIT_BRANCH_COMPLETE\nREAD_EXPR AS elsif_condition\nEMIT_EXPR elsif_condition\nEMIT_BRANCH_IF_FALSE_FOLLOWING\nMARK_OPTIONAL UELSE\nEMIT_BRANCH_COMPLETE\nEXPECT_END\nLAST ENDUIF\nEXPECT_END\nENDS",
+            "SYNTAX UIF\nBLOCK\nSTART\nREAD_EXPR AS start_condition\nEMIT_EXPR start_condition\nEMIT_BRANCH_IF_FALSE_FOLLOWING\nMARK_ANY UELSIF\nEMIT_BRANCH_COMPLETE_IF_FOLLOWING\nPATCH_FOLLOWING\nREAD_EXPR AS elsif_condition\nEMIT_EXPR elsif_condition\nEMIT_BRANCH_IF_FALSE_FOLLOWING\nMARK_OPTIONAL UELSE\nEMIT_BRANCH_COMPLETE_IF_FOLLOWING\nPATCH_FOLLOWING\nEXPECT_END\nLAST ENDUIF\nEXPECT_END\nPATCH_FOLLOWING\nPATCH_COMPLETE\nENDS",
             &mut bindings,
             &mut globals,
             &mut source_words,
@@ -6573,7 +6573,7 @@ mod tests {
             operators.lookup(),
         );
         publish_user_source_word(
-            "SYNTAX UIF\nBLOCK\nSTART\nREAD_EXPR AS condition\nEMIT_EXPR condition\nEMIT_BRANCH_IF_FALSE_FOLLOWING\nMARK_OPTIONAL UELSE\nEMIT_BRANCH_COMPLETE\nEXPECT_END\nLAST ENDUIF\nEXPECT_END\nENDS",
+            "SYNTAX UIF\nBLOCK\nSTART\nREAD_EXPR AS condition\nEMIT_EXPR condition\nEMIT_BRANCH_IF_FALSE_FOLLOWING\nMARK_OPTIONAL UELSE\nEMIT_BRANCH_COMPLETE_IF_FOLLOWING\nPATCH_FOLLOWING\nEXPECT_END\nLAST ENDUIF\nEXPECT_END\nPATCH_FOLLOWING\nPATCH_COMPLETE\nENDS",
             &mut bindings,
             &mut globals,
             &mut source_words,
@@ -6626,10 +6626,13 @@ mod tests {
              EMIT_EXPR condition\n\
              EMIT_BRANCH_IF_FALSE_FOLLOWING\n\
              MARK_OPTIONAL UELSE\n\
-             EMIT_BRANCH_COMPLETE\n\
+             EMIT_BRANCH_COMPLETE_IF_FOLLOWING\n\
+             PATCH_FOLLOWING\n\
              EXPECT_END\n\
              LAST ENDUIF\n\
              EXPECT_END\n\
+             PATCH_FOLLOWING\n\
+             PATCH_COMPLETE\n\
              ENDS\n\
              SLET A = 0\n\
              UWHILE A < 3\n\
@@ -6710,7 +6713,7 @@ mod tests {
             operators.lookup(),
         );
         publish_user_source_word(
-            "SYNTAX UIF\nBLOCK\nSTART\nREAD_EXPR AS condition\nEMIT_EXPR condition\nEMIT_BRANCH_IF_FALSE_FOLLOWING\nMARK_OPTIONAL UELSE\nEMIT_BRANCH_COMPLETE\nEXPECT_END\nLAST ENDUIF\nEXPECT_END\nENDS",
+            "SYNTAX UIF\nBLOCK\nSTART\nREAD_EXPR AS condition\nEMIT_EXPR condition\nEMIT_BRANCH_IF_FALSE_FOLLOWING\nMARK_OPTIONAL UELSE\nEMIT_BRANCH_COMPLETE_IF_FOLLOWING\nPATCH_FOLLOWING\nEXPECT_END\nLAST ENDUIF\nEXPECT_END\nPATCH_FOLLOWING\nPATCH_COMPLETE\nENDS",
             &mut bindings,
             &mut globals,
             &mut source_words,

@@ -186,7 +186,6 @@ struct StructuralBranchState {
     // private so user-authored source words do not gain a generic TARGET API.
     following: Vec<StructuralBranchPatch>,
     complete: Vec<StructuralBranchPatch>,
-    pending_section_start: Option<InstructionAddress>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -196,10 +195,6 @@ struct StructuralBranchPatch {
 }
 
 impl StructuralBranchState {
-    fn begin_section(&mut self, start: InstructionAddress) {
-        self.pending_section_start = Some(start);
-    }
-
     fn record_following(&mut self, branch: InstructionAddress, origin: SourceInstructionOrigin) {
         self.following
             .push(StructuralBranchPatch { branch, origin });
@@ -209,32 +204,11 @@ impl StructuralBranchState {
         self.complete.push(StructuralBranchPatch { branch, origin });
     }
 
-    fn patch_following_section_start(
-        &mut self,
-        code: &mut dyn InstructionBuildTarget,
-    ) -> Result<(), SourceWordEvaluationError> {
-        let Some(target) = self.pending_section_start.take() else {
-            return Ok(());
-        };
-        self.patch_following_to(code, target)
-    }
-
-    fn patch_following_after_complete_branch(
+    fn patch_complete_to_current_address(
         &mut self,
         code: &mut dyn InstructionBuildTarget,
     ) -> Result<(), SourceWordEvaluationError> {
         let target = code.current_address();
-        self.pending_section_start = None;
-        self.patch_following_to(code, target)
-    }
-
-    fn patch_all_to_current_address(
-        &mut self,
-        code: &mut dyn InstructionBuildTarget,
-    ) -> Result<(), SourceWordEvaluationError> {
-        let target = code.current_address();
-        self.pending_section_start = None;
-        self.patch_following_to(code, target)?;
         self.patch_complete_to(code, target)
     }
 
@@ -321,10 +295,6 @@ pub(crate) fn evaluate_source_word_with_state(
         });
     }
 
-    state
-        .structural_branches
-        .begin_section(context.code.current_address());
-
     for instruction in implementation.instructions() {
         evaluate_instruction(
             instruction.operation(),
@@ -346,7 +316,8 @@ impl SourceWordEvaluationState {
         &mut self,
         code: &mut dyn InstructionBuildTarget,
     ) -> Result<(), SourceWordEvaluationError> {
-        self.structural_branches.patch_all_to_current_address(code)
+        self.structural_branches
+            .patch_complete_to_current_address(code)
     }
 }
 
@@ -357,15 +328,6 @@ fn evaluate_instruction(
     locals: &mut RuntimeLocals,
     structural_branches: &mut StructuralBranchState,
 ) -> Result<(), SourceWordEvaluationError> {
-    // #1556/#1559 keep this as a small source-processing evaluator: operations
-    // are connected only to the current context capabilities, not to runtime VM
-    // values or a generic source-processing stack.
-    match operation {
-        SourceProcessingOperation::EmitBranchComplete
-        | SourceProcessingOperation::EmitBranchIfFalseComplete => {}
-        _ => structural_branches.patch_following_section_start(context.code)?,
-    }
-
     match operation {
         SourceProcessingOperation::ReadName { bind } => {
             let token = context
@@ -637,7 +599,6 @@ fn evaluate_instruction(
                 .append_mapped_jump_placeholder(origin.span())
                 .map_err(|source| SourceWordEvaluationError::InstructionBuild { source, origin })?;
             structural_branches.record_complete(branch, origin);
-            structural_branches.patch_following_after_complete_branch(context.code)?;
         }
         SourceProcessingOperation::EmitBranchIfFalseComplete => {
             let branch = context
@@ -645,7 +606,25 @@ fn evaluate_instruction(
                 .append_mapped_jump_if_zero_placeholder(origin.span())
                 .map_err(|source| SourceWordEvaluationError::InstructionBuild { source, origin })?;
             structural_branches.record_complete(branch, origin);
-            structural_branches.patch_following_after_complete_branch(context.code)?;
+        }
+        SourceProcessingOperation::PatchFollowing => {
+            let target = context.code.current_address();
+            structural_branches.patch_following_to(context.code, target)?;
+        }
+        SourceProcessingOperation::PatchComplete => {
+            structural_branches.patch_complete_to_current_address(context.code)?;
+        }
+        SourceProcessingOperation::EmitBranchCompleteIfFollowing => {
+            if !structural_branches.following.is_empty() {
+                let branch = context
+                    .code
+                    .append_mapped_jump_placeholder(origin.span())
+                    .map_err(|source| SourceWordEvaluationError::InstructionBuild {
+                        source,
+                        origin,
+                    })?;
+                structural_branches.record_complete(branch, origin);
+            }
         }
     }
     Ok(())
@@ -1382,13 +1361,13 @@ mod tests {
     }
 
     #[test]
-    fn failed_structural_branch_patch_keeps_unfinished_patch_state() {
+    fn failed_complete_branch_patch_keeps_unfinished_patch_state() {
         let (sources, source_id, _tokens) = lex("IF 0");
         let view = sources.view();
         let origin = origin(span(view, source_id, 0, 2));
         let mut state = SourceWordEvaluationState::new();
         let branch = InstructionAddress::from_index(0);
-        state.structural_branches.record_following(branch, origin);
+        state.structural_branches.record_complete(branch, origin);
         let mut target = FailingPatchTarget::new(1);
 
         let error = state
@@ -1404,8 +1383,105 @@ mod tests {
                 ..
             } if actual == branch
         ));
-        assert_eq!(state.structural_branches.following.len(), 1);
-        assert_eq!(state.structural_branches.following[0].branch, branch);
-        assert!(state.structural_branches.complete.is_empty());
+        assert!(state.structural_branches.following.is_empty());
+        assert_eq!(state.structural_branches.complete.len(), 1);
+        assert_eq!(state.structural_branches.complete[0].branch, branch);
+    }
+
+    #[test]
+    fn explicit_following_patch_resolves_after_intervening_runtime_emit() {
+        let (sources, source_id, tokens) = lex("IF 0");
+        let view = sources.view();
+        let bindings = Bindings::new();
+        let operation_span = span(view, source_id, 0, 2);
+        let implementation = complete([
+            instruction(
+                SourceProcessingOperation::EmitBranchFollowing,
+                operation_span,
+            ),
+            instruction(
+                SourceProcessingOperation::EmitInt { value: 7 },
+                operation_span,
+            ),
+            instruction(SourceProcessingOperation::PatchFollowing, operation_span),
+        ]);
+        let mut code = SourceMappedCode::new();
+        {
+            let mut builder = BlockCodeBuilder::new(&mut code);
+            let mut line_numbers = LocalLineNumberTable::new();
+            let mut context =
+                UserDefinedSourceWordContext::new(UserDefinedSourceWordContextParts {
+                    view,
+                    source_id,
+                    tokens: &tokens,
+                    bindings: &bindings,
+                    operators: Some(operator_lookup()),
+                    local_references: None,
+                    code: &mut builder,
+                    line_numbers: &mut line_numbers,
+                    capabilities: SourceProcessingCapabilities::statement_runtime(),
+                });
+
+            evaluate_source_word(&implementation, &mut context).expect("evaluation should succeed");
+            builder
+                .finish()
+                .expect("explicit patch should resolve the branch");
+        }
+
+        assert_eq!(
+            code.instruction_view()
+                .get(InstructionAddress::from_index(0)),
+            Ok(&Instruction::Jump(InstructionAddress::from_index(2)))
+        );
+        assert_eq!(
+            code.instruction_view()
+                .get(InstructionAddress::from_index(1)),
+            Ok(&Instruction::Push(Value::integer(7)))
+        );
+    }
+
+    #[test]
+    fn ordinary_runtime_emit_does_not_implicitly_patch_following() {
+        let (sources, source_id, tokens) = lex("IF 0");
+        let view = sources.view();
+        let bindings = Bindings::new();
+        let operation_span = span(view, source_id, 0, 2);
+        let implementation = complete([
+            instruction(
+                SourceProcessingOperation::EmitBranchFollowing,
+                operation_span,
+            ),
+            instruction(
+                SourceProcessingOperation::EmitInt { value: 7 },
+                operation_span,
+            ),
+        ]);
+        let mut code = SourceMappedCode::new();
+        let error = {
+            let mut builder = BlockCodeBuilder::new(&mut code);
+            let mut line_numbers = LocalLineNumberTable::new();
+            let mut context =
+                UserDefinedSourceWordContext::new(UserDefinedSourceWordContextParts {
+                    view,
+                    source_id,
+                    tokens: &tokens,
+                    bindings: &bindings,
+                    operators: Some(operator_lookup()),
+                    local_references: None,
+                    code: &mut builder,
+                    line_numbers: &mut line_numbers,
+                    capabilities: SourceProcessingCapabilities::statement_runtime(),
+                });
+
+            evaluate_source_word(&implementation, &mut context).expect("evaluation should succeed");
+            builder
+                .finish()
+                .expect_err("implicit FOLLOWING patch must be absent")
+        };
+
+        assert!(matches!(
+            error,
+            BlockCodeBuildError::UnresolvedBranchPatch { .. }
+        ));
     }
 }
