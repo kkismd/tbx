@@ -723,6 +723,9 @@ fn reject_owner_local_direct_branch(
         | Instruction::Call(_)
         | Instruction::CopyFromCallBase { .. }
         | Instruction::TruncateDataStackToCallBase
+        | Instruction::PushControlValue
+        | Instruction::CopyControlValue
+        | Instruction::DropControlValue
         | Instruction::Return
         | Instruction::Halt => Ok(()),
     }

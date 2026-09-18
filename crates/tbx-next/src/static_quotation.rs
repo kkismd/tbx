@@ -137,6 +137,9 @@ impl StaticQuotation {
             | Instruction::Call(_)
             | Instruction::CopyFromCallBase { .. }
             | Instruction::TruncateDataStackToCallBase
+            | Instruction::PushControlValue
+            | Instruction::CopyControlValue
+            | Instruction::DropControlValue
             | Instruction::Return
             | Instruction::Halt => Ok(instruction),
             Instruction::WriteFixedText(_) => Ok(instruction),
