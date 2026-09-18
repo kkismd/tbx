@@ -1689,6 +1689,142 @@ COPY_CONTROL";
     }
 
     #[test]
+    fn embedded_standard_library_for_repeats_with_a_fixed_end_value() {
+        let mut writer = RecordingWriter::default();
+        let result = success(execute_with_embedded_standard_library(
+            "LET A = 0\nFOR I = 1 TO 3\nLET A = A + I\nNEXT\nEVAL A\nEVAL I",
+            "program.tbx",
+            &mut writer,
+        ));
+
+        assert_eq!(result.data_stack(), [Value::integer(6), Value::integer(4)]);
+
+        let mut writer = RecordingWriter::default();
+        let result = success(execute_with_embedded_standard_library(
+            "LET A = 0\nLET B = 3\nFOR I = 1 TO B\nLET A = A + 1\nLET B = 1\nNEXT\nEVAL A\nEVAL I",
+            "program.tbx",
+            &mut writer,
+        ));
+
+        assert_eq!(result.data_stack(), [Value::integer(3), Value::integer(4)]);
+    }
+
+    #[test]
+    fn embedded_standard_library_for_evaluates_bounds_in_order_once_and_can_skip_body() {
+        let mut writer = RecordingWriter::default();
+        let result = success(execute_with_embedded_standard_library(
+            "LET A = 0\nFOR I = A + 1 TO A + 2\nLET A = A + 10\nNEXT\nEVAL A\nEVAL I",
+            "program.tbx",
+            &mut writer,
+        ));
+        assert_eq!(result.data_stack(), [Value::integer(20), Value::integer(3)]);
+
+        let mut writer = RecordingWriter::default();
+        let result = success(execute_with_embedded_standard_library(
+            "LET A = 0\nFOR I = 3 TO 1\nLET A = A + 1\nNEXT\nEVAL A\nEVAL I",
+            "program.tbx",
+            &mut writer,
+        ));
+        assert_eq!(result.data_stack(), [Value::integer(0), Value::integer(3)]);
+    }
+
+    #[test]
+    fn embedded_standard_library_for_evaluates_side_effecting_bounds_once_in_order() {
+        let mut writer = RecordingWriter::default();
+        let result = success(execute_with_embedded_standard_library(
+            "LET A = 0\nDEF START_BOUND\nLET A = A + 1\nEVAL A\nEND\nDEF END_BOUND\nLET A = A + 10\nEVAL A\nEND\nFOR I = START_BOUND() TO END_BOUND()\nNEXT\nEVAL A\nEVAL I",
+            "program.tbx",
+            &mut writer,
+        ));
+
+        assert_eq!(
+            result.data_stack(),
+            [Value::integer(11), Value::integer(12)]
+        );
+    }
+
+    #[test]
+    fn embedded_standard_library_for_supports_nested_for_loops() {
+        let mut writer = RecordingWriter::default();
+        let result = success(execute_with_embedded_standard_library(
+            "LET A = 0\nFOR I = 1 TO 2\nFOR J = 1 TO 3\nLET A = A + 1\nNEXT\nNEXT\nEVAL A\nEVAL I\nEVAL J",
+            "program.tbx",
+            &mut writer,
+        ));
+
+        assert_eq!(
+            result.data_stack(),
+            [Value::integer(6), Value::integer(3), Value::integer(4)]
+        );
+    }
+
+    #[test]
+    fn embedded_standard_library_for_uses_the_modified_counter_and_preserves_body_stack_values() {
+        let mut writer = RecordingWriter::default();
+        let result = success(execute_with_embedded_standard_library(
+            "LET A = 0\nFOR I = 1 TO 3\nEVAL I\nLET I = I + 1\nNEXT",
+            "program.tbx",
+            &mut writer,
+        ));
+
+        assert_eq!(result.data_stack(), [Value::integer(1), Value::integer(3)]);
+    }
+
+    #[test]
+    fn embedded_standard_library_for_supports_nested_structured_blocks_and_case_insensitive_to() {
+        let mut writer = RecordingWriter::default();
+        let result = success(execute_with_embedded_standard_library(
+            "LET A = 0\nFOR I = 1 to 2\nIF 1\nWHILE A < 1\nDO\nLET A = A + 1\nUNTIL A >= 1\nENDWH\nENDIF\nSELECT I\nCASE 1\nLET A = A + 10\nCASE 2\nLET A = A + 100\nENDSEL\nNEXT\nEVAL A",
+            "program.tbx",
+            &mut writer,
+        ));
+
+        assert_eq!(result.data_stack(), [Value::integer(111)]);
+    }
+
+    #[test]
+    fn embedded_standard_library_for_rejects_non_variable_bindings_and_cleans_up_control_value() {
+        let mut writer = RecordingWriter::default();
+        let binding_failure = failure(execute_with_embedded_standard_library(
+            "FOR MISSING = 1 TO 2\nNEXT",
+            "program.tbx",
+            &mut writer,
+        ));
+        assert!(matches!(
+            binding_failure.cause,
+            BatchExecutionFailureCause::Source(_)
+        ));
+
+        let mut writer = RecordingWriter::default();
+        let non_variable_failure = failure(execute_with_embedded_standard_library(
+            "FOR ADD = 1 TO 2\nNEXT",
+            "program.tbx",
+            &mut writer,
+        ));
+        assert!(matches!(
+            non_variable_failure.cause,
+            BatchExecutionFailureCause::Source(_)
+        ));
+
+        let mut writer = RecordingWriter::default();
+        let failure = failure(execute_with_embedded_standard_library(
+            "SYNTAX COPY_CONTROL\nSTATEMENT\nEXPECT_END\nEMIT_CONTROL_COPY\nENDS\nDEF CHECK\nFOR I = 1 TO 1\nNEXT\nCOPY_CONTROL\nEND\nCHECK",
+            "program.tbx",
+            &mut writer,
+        ));
+        let BatchExecutionFailureCause::Source(user_failure) = failure.cause else {
+            panic!("control-value cleanup probe should fail in user runtime code");
+        };
+        let SourceProcessorError::Runtime(error) = user_failure.original_error() else {
+            panic!("cleanup probe should preserve the runtime error");
+        };
+        assert!(matches!(
+            error.vm().kind(),
+            crate::vm::VmErrorKind::ControlValueStackUnderflow { .. }
+        ));
+    }
+
+    #[test]
     fn embedded_standard_library_select_matches_cases_without_fallthrough() {
         for (selector, expected) in [(1, 10), (2, 20), (3, 30), (9, 0)] {
             let mut writer = RecordingWriter::default();
