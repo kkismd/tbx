@@ -928,6 +928,38 @@ mod tests {
     }
 
     #[test]
+    fn fixed_name_operations_derive_and_require_the_name_capability() {
+        let (sources, source_id) = setup_source();
+        let view = sources.view();
+        let op_span = span(view, source_id, 0, 9);
+        let bind_span = span(view, source_id, 13, 17);
+        let name_delimiter = NormalizedName::new("TO").expect("valid delimiter name");
+
+        let implementation = complete([
+            SourceProcessingInstruction::new(
+                SourceProcessingOperation::ExpectName {
+                    name: name_delimiter.clone(),
+                },
+                origin(op_span),
+            ),
+            SourceProcessingInstruction::new(
+                SourceProcessingOperation::ReadExpressionUntilName {
+                    delimiter: name_delimiter,
+                    bind: name("expr", bind_span),
+                },
+                origin(op_span),
+            ),
+        ])
+        .expect("fixed Name operations should validate");
+
+        let capabilities = implementation.capabilities();
+        assert!(capabilities.can_expect_name());
+        assert!(capabilities.can_read_expression());
+        assert!(capabilities.allows(capabilities));
+        assert!(!SourceProcessingCapabilities::read_expression().allows(capabilities));
+    }
+
+    #[test]
     fn rejects_use_before_definition() {
         let (sources, source_id) = setup_source();
         let view = sources.view();

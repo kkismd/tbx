@@ -5910,6 +5910,148 @@ mod tests {
     }
 
     #[test]
+    fn user_defined_statement_dispatches_fixed_name_input_case_insensitively() {
+        let mut session = RuntimeDefinitionSession::new();
+        session.publish_syntax("SYNTAX EXPECTTO\nSTATEMENT\nEXPECT_NAME TO\nEXPECT_END\nENDS");
+
+        let (sources, id) = source("EXPECTTO to");
+        let unit = compile_source(
+            sources.view(),
+            id,
+            SourceCompileContext::with_source_words_and_operators(
+                &session.bindings,
+                session.source_words.lookup(),
+                session.operators.lookup(),
+            ),
+        )
+        .expect("fixed Name input should compile");
+        session
+            .run_unit_with_published_code(&unit)
+            .expect("fixed Name input should run");
+    }
+
+    #[test]
+    fn user_defined_statement_stages_expression_until_fixed_name_and_leaves_delimiter() {
+        let mut session = RuntimeDefinitionSession::new();
+        session.publish_syntax(
+            "SYNTAX NAMEEXPR\nSTATEMENT\nREAD_EXPR_UNTIL_NAME TO AS start\nEXPECT_NAME TO\nREAD_EXPR AS end\nEXPECT_END\nEMIT_EXPR start\nEMIT_EXPR end\nENDS",
+        );
+
+        let (sources, id) = source("NAMEEXPR 1 + (2) to 3 + 4");
+        let unit = compile_source(
+            sources.view(),
+            id,
+            SourceCompileContext::with_source_words_and_operators(
+                &session.bindings,
+                session.source_words.lookup(),
+                session.operators.lookup(),
+            ),
+        )
+        .expect("fixed Name expression input should compile");
+        let result = session
+            .run_unit_with_published_code(&unit)
+            .expect("fixed Name expression input should run");
+
+        assert_eq!(result.data_stack(), [value(3), value(7)]);
+    }
+
+    #[test]
+    fn fixed_name_input_rejects_wrong_name_and_missing_delimiter_with_source_spans() {
+        let mut session = RuntimeDefinitionSession::new();
+        session.publish_syntax(
+            "SYNTAX NAMEEXPR\nSTATEMENT\nREAD_EXPR_UNTIL_NAME TO AS start\nEXPECT_NAME TO\nREAD_EXPR AS end\nEXPECT_END\nEMIT_EXPR start\nEMIT_EXPR end\nENDS",
+        );
+        session.publish_syntax("SYNTAX EXPECTTO\nSTATEMENT\nEXPECT_NAME TO\nEXPECT_END\nENDS");
+
+        let (wrong_sources, wrong_id) = source("EXPECTTO FROM");
+        let wrong_error = compile_source(
+            wrong_sources.view(),
+            wrong_id,
+            SourceCompileContext::with_source_words_and_operators(
+                &session.bindings,
+                session.source_words.lookup(),
+                session.operators.lookup(),
+            ),
+        )
+        .expect_err("a different Name must be rejected");
+        assert_eq!(
+            wrong_error.primary_span(),
+            Some(
+                wrong_sources
+                    .view()
+                    .span(wrong_id, 9, 13)
+                    .expect("wrong span")
+            )
+        );
+
+        let (missing_sources, missing_id) = source("NAMEEXPR 1 + 2");
+        let missing_error = compile_source(
+            missing_sources.view(),
+            missing_id,
+            SourceCompileContext::with_source_words_and_operators(
+                &session.bindings,
+                session.source_words.lookup(),
+                session.operators.lookup(),
+            ),
+        )
+        .expect_err("a missing Name delimiter must be rejected");
+        assert_eq!(
+            missing_error.primary_span(),
+            Some(
+                missing_sources
+                    .view()
+                    .span(missing_id, 13, 14)
+                    .expect("missing delimiter span"),
+            )
+        );
+    }
+
+    #[test]
+    fn fixed_name_operations_reject_malformed_source_processing_definitions() {
+        let (
+            _words,
+            _primitives,
+            operators,
+            mut source_words,
+            mut bindings,
+            mut globals,
+            _variables,
+        ) = global_source_fixture();
+
+        let (_sources, _id, missing) = publish_user_source_word_error(
+            "SYNTAX BROKEN\nSTATEMENT\nEXPECT_NAME\nENDS",
+            &mut bindings,
+            &mut globals,
+            &mut source_words,
+            operators.lookup(),
+        );
+        assert!(matches!(
+            missing,
+            SourceProcessorError::SourceWord(SourceWordError::SyntaxDefinition {
+                kind: crate::source_word::SyntaxDefinitionErrorKind::ExpectedName,
+                ..
+            })
+        ));
+
+        let (_sources, _id, trailing) = publish_user_source_word_error(
+            "SYNTAX BROKEN2\nSTATEMENT\nEXPECT_NAME TO EXTRA\nENDS",
+            &mut bindings,
+            &mut globals,
+            &mut source_words,
+            operators.lookup(),
+        );
+        assert!(matches!(
+            trailing,
+            SourceProcessorError::SourceWord(SourceWordError::SyntaxDefinition {
+                kind: crate::source_word::SyntaxDefinitionErrorKind::TrailingOperationToken {
+                    kind: TokenKind::Name
+                },
+                ..
+            })
+        ));
+    }
+
+    #[test]
     fn user_defined_block_with_only_terminator_dispatches_as_structured_source_word() {
         let (words, primitives, operators, mut source_words, mut bindings, mut globals, variables) =
             global_source_fixture();
