@@ -503,6 +503,24 @@ fn evaluate_instruction(
                 )
                 .map_err(|source| SourceWordEvaluationError::InstructionBuild { source, origin })?;
         }
+        SourceProcessingOperation::EmitControlPush => {
+            context
+                .code
+                .append_mapped(Instruction::PushControlValue, origin.span())
+                .map_err(|source| SourceWordEvaluationError::InstructionBuild { source, origin })?;
+        }
+        SourceProcessingOperation::EmitControlCopy => {
+            context
+                .code
+                .append_mapped(Instruction::CopyControlValue, origin.span())
+                .map_err(|source| SourceWordEvaluationError::InstructionBuild { source, origin })?;
+        }
+        SourceProcessingOperation::EmitControlDrop => {
+            context
+                .code
+                .append_mapped(Instruction::DropControlValue, origin.span())
+                .map_err(|source| SourceWordEvaluationError::InstructionBuild { source, origin })?;
+        }
         SourceProcessingOperation::EmitReturn => {
             context
                 .code

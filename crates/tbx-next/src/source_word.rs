@@ -2740,6 +2740,18 @@ fn parse_source_processing_statement(
         "EMIT_INT" => SourceProcessingOperation::EmitInt {
             value: read_integer_literal(view, &mut reader)?,
         },
+        "EMIT_CONTROL_PUSH" => {
+            reader.finish().map_err(syntax_operation_reader_error)?;
+            SourceProcessingOperation::EmitControlPush
+        }
+        "EMIT_CONTROL_COPY" => {
+            reader.finish().map_err(syntax_operation_reader_error)?;
+            SourceProcessingOperation::EmitControlCopy
+        }
+        "EMIT_CONTROL_DROP" => {
+            reader.finish().map_err(syntax_operation_reader_error)?;
+            SourceProcessingOperation::EmitControlDrop
+        }
         "EMIT_RETURN" => {
             reader.finish().map_err(syntax_operation_reader_error)?;
             SourceProcessingOperation::EmitReturn

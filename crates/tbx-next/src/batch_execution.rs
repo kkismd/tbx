@@ -1172,6 +1172,45 @@ EMIT A DUP";
     }
 
     #[test]
+    fn user_syntax_emits_control_value_operations_and_executes_them_as_a_lifo() {
+        let text = "SYNTAX CONTROL
+STATEMENT
+READ_EXPR AS value
+EXPECT_END
+EMIT_EXPR value
+EMIT_CONTROL_PUSH
+EMIT_CONTROL_COPY
+EMIT_CONTROL_DROP
+ENDS
+CONTROL 42";
+        let (sources, source_id) = source(text, "program.tbx");
+        let mut writer = RecordingWriter::default();
+
+        let result = success(execute_registered_source(&sources, source_id, &mut writer));
+
+        assert_eq!(result.data_stack(), [Value::integer(42)]);
+    }
+
+    #[test]
+    fn control_value_emit_operations_reject_operands() {
+        for operation in [
+            "EMIT_CONTROL_PUSH",
+            "EMIT_CONTROL_COPY",
+            "EMIT_CONTROL_DROP",
+        ] {
+            let text = format!("SYNTAX CONTROL\nSTATEMENT\n{operation} EXTRA\nENDS\nCONTROL");
+            let (sources, source_id) = source(&text, "program.tbx");
+            let mut writer = RecordingWriter::default();
+            let failure = failure(execute_registered_source(&sources, source_id, &mut writer));
+
+            assert!(matches!(
+                failure.cause,
+                BatchExecutionFailureCause::Source(_)
+            ));
+        }
+    }
+
+    #[test]
     fn user_syntax_can_resolve_a_fixed_runtime_word_at_use_time() {
         let text = "SYNTAX LATER_CALL\nSTATEMENT\nRESOLVE_WORD_LITERAL LATER AS word\nEMIT_CALL word\nENDS\nDEF LATER\nDUP\nEND\nEVAL 7\nLATER_CALL";
         let (sources, source_id) = source(text, "program.tbx");
