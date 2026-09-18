@@ -1730,6 +1730,26 @@ COPY_CONTROL";
     }
 
     #[test]
+    fn embedded_standard_library_select_nests_inside_if_while_and_do() {
+        let mut writer = RecordingWriter::default();
+        let result = success(execute_with_embedded_standard_library(
+            "LET A = 0\nIF 1\nSELECT 1\nCASE 1\nEVAL 10\nENDSEL\nENDIF\nWHILE A < 1\nSELECT 2\nCASE 2\nEVAL 20\nENDSEL\nLET A = A + 1\nENDWH\nDO\nSELECT 3\nCASE 3\nEVAL 30\nENDSEL\nUNTIL 1\nEVAL A",
+            "program.tbx",
+            &mut writer,
+        ));
+
+        assert_eq!(
+            result.data_stack(),
+            [
+                Value::integer(10),
+                Value::integer(20),
+                Value::integer(30),
+                Value::integer(1)
+            ]
+        );
+    }
+
+    #[test]
     fn embedded_standard_library_select_requires_cases_and_orders_else_last() {
         for source in [
             "SELECT 1\nENDSEL",
