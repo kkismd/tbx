@@ -6049,6 +6049,55 @@ mod tests {
                 ..
             })
         ));
+
+        publish_user_source_word(
+            "SYNTAX BROKEN3\nSTATEMENT\nEXPECT_NAME TO\nEXPECT_END\nENDS",
+            &mut bindings,
+            &mut globals,
+            &mut source_words,
+            operators.lookup(),
+        );
+        let (sources, id) = source("BROKEN3 123");
+        let non_name_use = compile_source(
+            sources.view(),
+            id,
+            SourceCompileContext::with_source_words_and_operators(
+                &bindings,
+                source_words.lookup(),
+                operators.lookup(),
+            ),
+        )
+        .expect_err("a non-Name token must be rejected by EXPECT_NAME");
+        assert_eq!(
+            non_name_use.primary_span(),
+            Some(sources.view().span(id, 8, 11).expect("non-Name span"))
+        );
+
+        for definition in [
+            "SYNTAX BROKEN4\nSTATEMENT\nREAD_EXPR_UNTIL_NAME\nENDS",
+            "SYNTAX BROKEN5\nSTATEMENT\nREAD_EXPR_UNTIL_NAME TO\nENDS",
+            "SYNTAX BROKEN6\nSTATEMENT\nREAD_EXPR_UNTIL_NAME TO AS expr EXTRA\nENDS",
+        ] {
+            let (sources, id) = source(definition);
+            let error = compile_source(
+                sources.view(),
+                id,
+                SourceCompileContext::with_user_source_word_publication_and_operators(
+                    &mut bindings,
+                    &source_words,
+                    operators.lookup(),
+                    &mut globals,
+                ),
+            )
+            .expect_err("READ_EXPR_UNTIL_NAME definition should fail");
+            assert!(
+                matches!(
+                    error,
+                    SourceProcessorError::SourceWord(SourceWordError::SyntaxDefinition { .. })
+                ),
+                "{definition}: {error:?}"
+            );
+        }
     }
 
     #[test]
