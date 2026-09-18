@@ -1720,6 +1720,36 @@ COPY_CONTROL";
     }
 
     #[test]
+    fn embedded_standard_library_for_evaluates_side_effecting_bounds_once_in_order() {
+        let mut writer = RecordingWriter::default();
+        let result = success(execute_with_embedded_standard_library(
+            "LET A = 0\nDEF START_BOUND\nLET A = A + 1\nEVAL A\nEND\nDEF END_BOUND\nLET A = A + 10\nEVAL A\nEND\nFOR I = START_BOUND() TO END_BOUND()\nNEXT\nEVAL A\nEVAL I",
+            "program.tbx",
+            &mut writer,
+        ));
+
+        assert_eq!(
+            result.data_stack(),
+            [Value::integer(11), Value::integer(12)]
+        );
+    }
+
+    #[test]
+    fn embedded_standard_library_for_supports_nested_for_loops() {
+        let mut writer = RecordingWriter::default();
+        let result = success(execute_with_embedded_standard_library(
+            "LET A = 0\nFOR I = 1 TO 2\nFOR J = 1 TO 3\nLET A = A + 1\nNEXT\nNEXT\nEVAL A\nEVAL I\nEVAL J",
+            "program.tbx",
+            &mut writer,
+        ));
+
+        assert_eq!(
+            result.data_stack(),
+            [Value::integer(6), Value::integer(3), Value::integer(4)]
+        );
+    }
+
+    #[test]
     fn embedded_standard_library_for_uses_the_modified_counter_and_preserves_body_stack_values() {
         let mut writer = RecordingWriter::default();
         let result = success(execute_with_embedded_standard_library(
@@ -1757,8 +1787,19 @@ COPY_CONTROL";
         ));
 
         let mut writer = RecordingWriter::default();
+        let non_variable_failure = failure(execute_with_embedded_standard_library(
+            "FOR ADD = 1 TO 2\nNEXT",
+            "program.tbx",
+            &mut writer,
+        ));
+        assert!(matches!(
+            non_variable_failure.cause,
+            BatchExecutionFailureCause::Source(_)
+        ));
+
+        let mut writer = RecordingWriter::default();
         let failure = failure(execute_with_embedded_standard_library(
-            "SYNTAX COPY_CONTROL\nSTATEMENT\nEXPECT_END\nEMIT_CONTROL_COPY\nENDS\nFOR I = 1 TO 1\nNEXT\nCOPY_CONTROL",
+            "SYNTAX COPY_CONTROL\nSTATEMENT\nEXPECT_END\nEMIT_CONTROL_COPY\nENDS\nDEF CHECK\nFOR I = 1 TO 1\nNEXT\nCOPY_CONTROL\nEND\nCHECK",
             "program.tbx",
             &mut writer,
         ));
