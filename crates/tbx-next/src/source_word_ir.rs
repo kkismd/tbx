@@ -67,6 +67,9 @@ pub(crate) enum SourceProcessingOperation {
     Expect {
         token: FixedToken,
     },
+    ExpectName {
+        name: NormalizedName,
+    },
     ExpectEnd,
     ReadLineNumber {
         bind: LocalBinding,
@@ -79,6 +82,10 @@ pub(crate) enum SourceProcessingOperation {
     // Expect operation must consume the delimiter explicitly.
     ReadExpressionUntil {
         delimiter: FixedToken,
+        bind: LocalBinding,
+    },
+    ReadExpressionUntilName {
+        delimiter: NormalizedName,
         bind: LocalBinding,
     },
     ResolveVariable {
@@ -141,15 +148,16 @@ impl SourceProcessingOperation {
             Self::ReadLineNumber { .. } => Some(SourceLocalType::LocalLineTarget {
                 scope: SourceLineNumberScope::CurrentOwner,
             }),
-            Self::ReadExpression { .. } | Self::ReadExpressionUntil { .. } => {
-                Some(SourceLocalType::ExpressionArtifact)
-            }
+            Self::ReadExpression { .. }
+            | Self::ReadExpressionUntil { .. }
+            | Self::ReadExpressionUntilName { .. } => Some(SourceLocalType::ExpressionArtifact),
             Self::ResolveVariable { .. } => Some(SourceLocalType::VariableTarget),
             Self::ResolveWord { .. } => Some(SourceLocalType::RuntimeWordTarget),
             Self::Position { .. } => Some(SourceLocalType::OwnerLocalCodePosition {
                 code_space: SourceCodeSpace::CurrentOwner,
             }),
             Self::Expect { .. }
+            | Self::ExpectName { .. }
             | Self::ExpectEnd
             | Self::EmitExpression { .. }
             | Self::EmitStore { .. }
@@ -172,10 +180,12 @@ impl SourceProcessingOperation {
             | Self::ReadLineNumber { bind }
             | Self::ReadExpression { bind }
             | Self::ReadExpressionUntil { bind, .. }
+            | Self::ReadExpressionUntilName { bind, .. }
             | Self::ResolveVariable { bind, .. }
             | Self::ResolveWord { bind, .. }
             | Self::Position { bind } => Some(bind),
             Self::Expect { .. }
+            | Self::ExpectName { .. }
             | Self::ExpectEnd
             | Self::EmitExpression { .. }
             | Self::EmitStore { .. }
@@ -230,10 +240,12 @@ impl SourceProcessingOperation {
             }
             Self::ReadName { .. }
             | Self::Expect { .. }
+            | Self::ExpectName { .. }
             | Self::ExpectEnd
             | Self::ReadLineNumber { .. }
             | Self::ReadExpression { .. }
             | Self::ReadExpressionUntil { .. }
+            | Self::ReadExpressionUntilName { .. }
             | Self::EmitReturn
             | Self::EmitInt { .. }
             | Self::Position { .. }
@@ -249,10 +261,14 @@ impl SourceProcessingOperation {
         match self {
             Self::ReadName { .. } => SourceProcessingCapabilities::read_name(),
             Self::Expect { .. } => SourceProcessingCapabilities::expect_fixed_token(),
+            Self::ExpectName { .. } => SourceProcessingCapabilities::expect_name(),
             Self::ExpectEnd => SourceProcessingCapabilities::expect_end(),
             Self::ReadLineNumber { .. } => SourceProcessingCapabilities::read_line_number(),
             Self::ReadExpression { .. } | Self::ReadExpressionUntil { .. } => {
                 SourceProcessingCapabilities::read_expression()
+            }
+            Self::ReadExpressionUntilName { .. } => {
+                SourceProcessingCapabilities::read_expression_and_name()
             }
             Self::ResolveVariable { .. } => SourceProcessingCapabilities::resolve_variable(),
             Self::ResolveWord { .. } => SourceProcessingCapabilities::resolve_word(),
@@ -414,6 +430,7 @@ impl LocalConsumer {
 pub(crate) struct SourceProcessingCapabilities {
     read_name: bool,
     expect_fixed_token: bool,
+    expect_name: bool,
     expect_end: bool,
     read_line_number: bool,
     read_expression: bool,
@@ -438,6 +455,13 @@ impl SourceProcessingCapabilities {
         }
     }
 
+    const fn expect_name() -> Self {
+        Self {
+            expect_name: true,
+            ..Self::empty()
+        }
+    }
+
     const fn expect_end() -> Self {
         Self {
             expect_end: true,
@@ -455,6 +479,14 @@ impl SourceProcessingCapabilities {
     const fn read_expression() -> Self {
         Self {
             read_expression: true,
+            ..Self::empty()
+        }
+    }
+
+    const fn read_expression_and_name() -> Self {
+        Self {
+            read_expression: true,
+            expect_name: true,
             ..Self::empty()
         }
     }
@@ -492,6 +524,7 @@ impl SourceProcessingCapabilities {
         Self {
             read_name: false,
             expect_fixed_token: false,
+            expect_name: false,
             expect_end: false,
             read_line_number: false,
             read_expression: false,
@@ -508,6 +541,10 @@ impl SourceProcessingCapabilities {
 
     pub(crate) const fn can_expect_fixed_token(self) -> bool {
         self.expect_fixed_token
+    }
+
+    pub(crate) const fn can_expect_name(self) -> bool {
+        self.expect_name
     }
 
     pub(crate) const fn can_expect_end(self) -> bool {
@@ -537,6 +574,7 @@ impl SourceProcessingCapabilities {
     pub(crate) const fn allows(self, required: Self) -> bool {
         (!required.read_name || self.read_name)
             && (!required.expect_fixed_token || self.expect_fixed_token)
+            && (!required.expect_name || self.expect_name)
             && (!required.expect_end || self.expect_end)
             && (!required.read_line_number || self.read_line_number)
             && (!required.read_expression || self.read_expression)
@@ -550,6 +588,7 @@ impl SourceProcessingCapabilities {
         Self {
             read_name: true,
             expect_fixed_token: true,
+            expect_name: true,
             expect_end: true,
             read_line_number: true,
             read_expression: true,
@@ -570,6 +609,7 @@ impl SourceProcessingCapabilities {
     fn include(&mut self, other: Self) {
         self.read_name |= other.read_name;
         self.expect_fixed_token |= other.expect_fixed_token;
+        self.expect_name |= other.expect_name;
         self.expect_end |= other.expect_end;
         self.read_line_number |= other.read_line_number;
         self.read_expression |= other.read_expression;
@@ -885,6 +925,38 @@ mod tests {
         assert!(capabilities.can_emit_runtime_code());
         assert!(!capabilities.can_read_expression());
         assert!(!capabilities.can_emit_structural_branch());
+    }
+
+    #[test]
+    fn fixed_name_operations_derive_and_require_the_name_capability() {
+        let (sources, source_id) = setup_source();
+        let view = sources.view();
+        let op_span = span(view, source_id, 0, 9);
+        let bind_span = span(view, source_id, 13, 17);
+        let name_delimiter = NormalizedName::new("TO").expect("valid delimiter name");
+
+        let implementation = complete([
+            SourceProcessingInstruction::new(
+                SourceProcessingOperation::ExpectName {
+                    name: name_delimiter.clone(),
+                },
+                origin(op_span),
+            ),
+            SourceProcessingInstruction::new(
+                SourceProcessingOperation::ReadExpressionUntilName {
+                    delimiter: name_delimiter,
+                    bind: name("expr", bind_span),
+                },
+                origin(op_span),
+            ),
+        ])
+        .expect("fixed Name operations should validate");
+
+        let capabilities = implementation.capabilities();
+        assert!(capabilities.can_expect_name());
+        assert!(capabilities.can_read_expression());
+        assert!(capabilities.allows(capabilities));
+        assert!(!SourceProcessingCapabilities::read_expression().allows(capabilities));
     }
 
     #[test]
