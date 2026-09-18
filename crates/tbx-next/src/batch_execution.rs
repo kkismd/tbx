@@ -1750,6 +1750,34 @@ COPY_CONTROL";
     }
 
     #[test]
+    fn embedded_standard_library_select_contains_if_while_and_do_bodies() {
+        for (selector, body, expected) in [
+            (1, "IF 1\nEVAL 10\nENDIF", 10),
+            (
+                2,
+                "LET A = 0\nWHILE A < 1\nEVAL 20\nLET A = A + 1\nENDWH",
+                20,
+            ),
+            (3, "DO\nEVAL 30\nUNTIL 1", 30),
+        ] {
+            let mut writer = RecordingWriter::default();
+            let source = format!(
+                "SELECT {selector}\nCASE 1\n{}\nCASE 2\n{}\nCASE 3\n{}\nCASE_ELSE\nEVAL 96\nENDSEL",
+                if selector == 1 { body } else { "EVAL 99" },
+                if selector == 2 { body } else { "EVAL 98" },
+                if selector == 3 { body } else { "EVAL 97" },
+            );
+            let result = success(execute_with_embedded_standard_library(
+                &source,
+                "program.tbx",
+                &mut writer,
+            ));
+
+            assert_eq!(result.data_stack(), [Value::integer(expected)]);
+        }
+    }
+
+    #[test]
     fn embedded_standard_library_select_requires_cases_and_orders_else_last() {
         for source in [
             "SELECT 1\nENDSEL",
