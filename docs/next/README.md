@@ -58,3 +58,10 @@ cargo run -p tbx-next -- docs/next/examples/mandelbrot.tbx
 更新値は最大でも1125で、すべて`i16` checked arithmeticの範囲内です。
 これは多セル演算による実数版との
 完全一致を目的とせず、整数近似版自身の出力を回帰テストで固定しています。
+
+成績区分サンプルは、固定点数列を `FOR` で走査し、各点数を `SELECT` で
+A/B/C/D/F に分類して合格件数を集計します。
+
+```sh
+cargo run -p tbx-next -- docs/next/examples/grades.tbx
+```

@@ -241,6 +241,24 @@ fn file_success_runs_the_prime_example_with_local_references() {
 }
 
 #[test]
+fn file_success_runs_the_grades_example_with_for_and_select() {
+    let path = example_path("grades.tbx");
+
+    let output = run_with_file(&path);
+
+    assert!(
+        output.status.success(),
+        "expected success, stderr:\n{}",
+        stderr_text(&output)
+    );
+    assert_eq!(
+        stdout_text(&output),
+        "100 -> A\n95 -> A\n82 -> B\n76 -> C\n61 -> D\n58 -> F\nPassed: 5\n"
+    );
+    assert_eq!(stderr_text(&output), "");
+}
+
+#[test]
 fn file_success_runs_the_global_array_squares_example_with_stable_output() {
     let path = example_path("squares.tbx");
 
