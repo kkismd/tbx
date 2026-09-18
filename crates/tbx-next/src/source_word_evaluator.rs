@@ -1389,6 +1389,104 @@ mod tests {
     }
 
     #[test]
+    fn patch_operations_are_no_ops_without_pending_branches() {
+        let mut state = SourceWordEvaluationState::new();
+        let mut target = FailingPatchTarget::new(0);
+
+        state
+            .structural_branches
+            .patch_following_to(&mut target, InstructionAddress::from_index(0))
+            .expect("empty FOLLOWING state should be a no-op");
+        state
+            .structural_branches
+            .patch_complete_to_current_address(&mut target)
+            .expect("empty COMPLETE state should be a no-op");
+    }
+
+    #[test]
+    fn conditional_complete_branch_is_a_no_op_without_following() {
+        let (sources, source_id, tokens) = lex("IF 0");
+        let view = sources.view();
+        let bindings = Bindings::new();
+        let operation_span = span(view, source_id, 0, 2);
+        let implementation = complete([instruction(
+            SourceProcessingOperation::EmitBranchCompleteIfFollowing,
+            operation_span,
+        )]);
+        let mut state = SourceWordEvaluationState::new();
+        let mut code = SourceMappedCode::new();
+        {
+            let mut builder = BlockCodeBuilder::new(&mut code);
+            let mut line_numbers = LocalLineNumberTable::new();
+            let mut context =
+                UserDefinedSourceWordContext::new(UserDefinedSourceWordContextParts {
+                    view,
+                    source_id,
+                    tokens: &tokens,
+                    bindings: &bindings,
+                    operators: Some(operator_lookup()),
+                    local_references: None,
+                    code: &mut builder,
+                    line_numbers: &mut line_numbers,
+                    capabilities: SourceProcessingCapabilities::structured_runtime(),
+                });
+
+            evaluate_source_word_with_state(&implementation, &mut context, &mut state)
+                .expect("conditional COMPLETE without FOLLOWING should succeed");
+            builder
+                .finish()
+                .expect("no branch should remain unresolved");
+        }
+
+        assert_eq!(code.len(), 0);
+        assert!(state.structural_branches.following.is_empty());
+        assert!(state.structural_branches.complete.is_empty());
+    }
+
+    #[test]
+    fn conditional_complete_branch_preserves_following_until_explicit_patch() {
+        let (sources, source_id, tokens) = lex("IF 0");
+        let view = sources.view();
+        let bindings = Bindings::new();
+        let operation_span = span(view, source_id, 0, 2);
+        let implementation = complete([
+            instruction(
+                SourceProcessingOperation::EmitBranchFollowing,
+                operation_span,
+            ),
+            instruction(
+                SourceProcessingOperation::EmitBranchCompleteIfFollowing,
+                operation_span,
+            ),
+        ]);
+        let mut state = SourceWordEvaluationState::new();
+        let mut code = SourceMappedCode::new();
+        {
+            let mut builder = BlockCodeBuilder::new(&mut code);
+            let mut line_numbers = LocalLineNumberTable::new();
+            let mut context =
+                UserDefinedSourceWordContext::new(UserDefinedSourceWordContextParts {
+                    view,
+                    source_id,
+                    tokens: &tokens,
+                    bindings: &bindings,
+                    operators: Some(operator_lookup()),
+                    local_references: None,
+                    code: &mut builder,
+                    line_numbers: &mut line_numbers,
+                    capabilities: SourceProcessingCapabilities::structured_runtime(),
+                });
+
+            evaluate_source_word_with_state(&implementation, &mut context, &mut state)
+                .expect("conditional COMPLETE should emit with FOLLOWING");
+        }
+
+        assert_eq!(code.len(), 2);
+        assert_eq!(state.structural_branches.following.len(), 1);
+        assert_eq!(state.structural_branches.complete.len(), 1);
+    }
+
+    #[test]
     fn explicit_following_patch_resolves_after_intervening_runtime_emit() {
         let (sources, source_id, tokens) = lex("IF 0");
         let view = sources.view();
@@ -1419,7 +1517,7 @@ mod tests {
                     local_references: None,
                     code: &mut builder,
                     line_numbers: &mut line_numbers,
-                    capabilities: SourceProcessingCapabilities::statement_runtime(),
+                    capabilities: SourceProcessingCapabilities::structured_runtime(),
                 });
 
             evaluate_source_word(&implementation, &mut context).expect("evaluation should succeed");
@@ -1470,7 +1568,7 @@ mod tests {
                     local_references: None,
                     code: &mut builder,
                     line_numbers: &mut line_numbers,
-                    capabilities: SourceProcessingCapabilities::statement_runtime(),
+                    capabilities: SourceProcessingCapabilities::structured_runtime(),
                 });
 
             evaluate_source_word(&implementation, &mut context).expect("evaluation should succeed");
