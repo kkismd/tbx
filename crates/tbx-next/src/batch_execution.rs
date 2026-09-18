@@ -1730,6 +1730,27 @@ COPY_CONTROL";
     }
 
     #[test]
+    fn embedded_standard_library_select_cleans_up_selector_before_following_runtime_code() {
+        let mut writer = RecordingWriter::default();
+        let failure = failure(execute_with_embedded_standard_library(
+            "SYNTAX COPY_CONTROL\nSTATEMENT\nEXPECT_END\nEMIT_CONTROL_COPY\nENDS\nDEF CHECK\nSELECT 1\nCASE 1\nEVAL 7\nENDSEL\nCOPY_CONTROL\nEND\nCHECK",
+            "program.tbx",
+            &mut writer,
+        ));
+
+        let BatchExecutionFailureCause::Source(user_failure) = failure.cause else {
+            panic!("control-value cleanup probe should fail in user runtime code");
+        };
+        let SourceProcessorError::Runtime(error) = user_failure.original_error() else {
+            panic!("cleanup probe should preserve the runtime error");
+        };
+        assert!(matches!(
+            error.vm().kind(),
+            crate::vm::VmErrorKind::ControlValueStackUnderflow { .. }
+        ));
+    }
+
+    #[test]
     fn embedded_standard_library_select_nests_inside_if_while_and_do() {
         let mut writer = RecordingWriter::default();
         let result = success(execute_with_embedded_standard_library(
