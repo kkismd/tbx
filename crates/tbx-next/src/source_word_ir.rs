@@ -96,6 +96,11 @@ pub(crate) enum SourceProcessingOperation {
         name: LocalReference,
         bind: LocalBinding,
     },
+    ResolveWordLiteral {
+        name: NormalizedName,
+        name_span: SourceSpan,
+        bind: LocalBinding,
+    },
     EmitExpression {
         expression: LocalReference,
     },
@@ -152,7 +157,9 @@ impl SourceProcessingOperation {
             | Self::ReadExpressionUntil { .. }
             | Self::ReadExpressionUntilName { .. } => Some(SourceLocalType::ExpressionArtifact),
             Self::ResolveVariable { .. } => Some(SourceLocalType::VariableTarget),
-            Self::ResolveWord { .. } => Some(SourceLocalType::RuntimeWordTarget),
+            Self::ResolveWord { .. } | Self::ResolveWordLiteral { .. } => {
+                Some(SourceLocalType::RuntimeWordTarget)
+            }
             Self::Position { .. } => Some(SourceLocalType::OwnerLocalCodePosition {
                 code_space: SourceCodeSpace::CurrentOwner,
             }),
@@ -183,6 +190,7 @@ impl SourceProcessingOperation {
             | Self::ReadExpressionUntilName { bind, .. }
             | Self::ResolveVariable { bind, .. }
             | Self::ResolveWord { bind, .. }
+            | Self::ResolveWordLiteral { bind, .. }
             | Self::Position { bind } => Some(bind),
             Self::Expect { .. }
             | Self::ExpectName { .. }
@@ -246,6 +254,7 @@ impl SourceProcessingOperation {
             | Self::ReadExpression { .. }
             | Self::ReadExpressionUntil { .. }
             | Self::ReadExpressionUntilName { .. }
+            | Self::ResolveWordLiteral { .. }
             | Self::EmitReturn
             | Self::EmitInt { .. }
             | Self::Position { .. }
@@ -271,7 +280,9 @@ impl SourceProcessingOperation {
                 SourceProcessingCapabilities::read_expression_and_name()
             }
             Self::ResolveVariable { .. } => SourceProcessingCapabilities::resolve_variable(),
-            Self::ResolveWord { .. } => SourceProcessingCapabilities::resolve_word(),
+            Self::ResolveWord { .. } | Self::ResolveWordLiteral { .. } => {
+                SourceProcessingCapabilities::resolve_word()
+            }
             Self::EmitExpression { .. }
             | Self::EmitStore { .. }
             | Self::EmitCall { .. }
@@ -1064,6 +1075,24 @@ mod tests {
             ),
         ])
         .expect("name input should resolve to variable target for EMIT_STORE");
+
+        complete([
+            SourceProcessingInstruction::new(
+                SourceProcessingOperation::ResolveWordLiteral {
+                    name: NormalizedName::new("DUP").expect("valid fixed runtime word name"),
+                    name_span: op_span,
+                    bind: name("target", bind_span),
+                },
+                origin(op_span),
+            ),
+            SourceProcessingInstruction::new(
+                SourceProcessingOperation::EmitCall {
+                    target: reference("target", reference_span),
+                },
+                origin(op_span),
+            ),
+        ])
+        .expect("fixed runtime word name should produce a runtime word target");
 
         let call_error = complete([
             SourceProcessingInstruction::new(

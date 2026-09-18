@@ -479,6 +479,27 @@ fn evaluate_instruction(
             )?;
             locals.bind(bind, RuntimeLocal::RuntimeWordTarget { id, span });
         }
+        SourceProcessingOperation::ResolveWordLiteral {
+            name,
+            name_span,
+            bind,
+        } => {
+            let id =
+                resolve_runtime_word_name(context.bindings, name.as_str()).map_err(|source| {
+                    SourceWordEvaluationError::WordResolution {
+                        span: *name_span,
+                        source,
+                        origin,
+                    }
+                })?;
+            locals.bind(
+                bind,
+                RuntimeLocal::RuntimeWordTarget {
+                    id,
+                    span: *name_span,
+                },
+            );
+        }
         SourceProcessingOperation::EmitExpression { expression } => {
             let expression = locals.expression(expression, origin)?;
             expression

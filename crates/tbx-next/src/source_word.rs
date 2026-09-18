@@ -2714,6 +2714,14 @@ fn parse_source_processing_statement(
                 bind: read_as_binding(view, &mut reader)?,
             }
         }
+        "RESOLVE_WORD_LITERAL" => {
+            let (name, name_span) = read_fixed_name_with_span(view, &mut reader)?;
+            SourceProcessingOperation::ResolveWordLiteral {
+                name,
+                name_span,
+                bind: read_as_binding(view, &mut reader)?,
+            }
+        }
         "EMIT_EXPR" => SourceProcessingOperation::EmitExpression {
             expression: read_only_local_reference(view, &mut reader)?,
         },
@@ -2842,6 +2850,13 @@ fn read_fixed_name(
     view: SourceView<'_>,
     reader: &mut SourceStatementReader<'_>,
 ) -> Result<NormalizedName, SourceWordError> {
+    Ok(read_fixed_name_with_span(view, reader)?.0)
+}
+
+fn read_fixed_name_with_span(
+    view: SourceView<'_>,
+    reader: &mut SourceStatementReader<'_>,
+) -> Result<(NormalizedName, SourceSpan), SourceWordError> {
     let token = reader.read_name().map_err(|error| match error {
         SourceStatementReaderError::Missing { span, .. } => SourceWordError::SyntaxDefinition {
             span,
@@ -2856,7 +2871,7 @@ fn read_fixed_name(
         }
     })?;
     let name = normalized_token(view, token)?;
-    Ok(name)
+    Ok((name, token.span()))
 }
 
 fn read_integer_literal(
