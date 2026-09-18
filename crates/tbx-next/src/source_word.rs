@@ -431,6 +431,7 @@ pub(crate) enum SyntaxDefinitionErrorKind {
     MissingOperand,
     ExpectedAs,
     ExpectedFixedToken,
+    ExpectedName,
     ExpectedIntegerLiteral,
     IntegerLiteralOutOfRange,
     IntegerLiteralConversion,
@@ -1093,6 +1094,21 @@ impl<'source> SourceStatementReader<'source> {
         Ok(token)
     }
 
+    pub(crate) fn expect_name(
+        &mut self,
+        matches: impl FnOnce(Token) -> bool,
+    ) -> Result<Token, SourceStatementReaderError> {
+        let token = self.expect_present(SourceStatementExpected::Name)?;
+        if token.kind() != TokenKind::Name || !matches(token) {
+            return Err(SourceStatementReaderError::Unexpected {
+                expected: SourceStatementExpected::Name,
+                actual: token,
+            });
+        }
+        self.consume(token);
+        Ok(token)
+    }
+
     pub(crate) fn expect(
         &mut self,
         expected: TokenKind,
@@ -1164,6 +1180,57 @@ impl<'source> SourceStatementReader<'source> {
             return Err(SourceStatementReaderError::Missing {
                 expected: SourceStatementExpected::Expression,
                 span: self.missing_anchor,
+            });
+        }
+
+        Ok(&self.tokens[start..self.position])
+    }
+
+    pub(crate) fn expression_until_name(
+        &mut self,
+        matches: impl Fn(Token) -> bool,
+    ) -> Result<&'source [Token], SourceStatementReaderError> {
+        if self.is_exhausted() {
+            return Err(SourceStatementReaderError::Missing {
+                expected: SourceStatementExpected::Expression,
+                span: self.missing_anchor,
+            });
+        }
+
+        let start = self.position;
+        let mut depth = 0usize;
+        let mut bracket_depth = 0usize;
+        let mut found_delimiter = false;
+        while let Some(token) = self.tokens.get(self.position).copied() {
+            match token.kind() {
+                TokenKind::LParen => depth += 1,
+                TokenKind::RParen => depth = depth.saturating_sub(1),
+                TokenKind::LBracket => bracket_depth += 1,
+                TokenKind::RBracket if bracket_depth > 0 => bracket_depth -= 1,
+                TokenKind::Name if depth == 0 && bracket_depth == 0 && matches(token) => {
+                    found_delimiter = true;
+                    break;
+                }
+                _ => {}
+            }
+            self.position += 1;
+        }
+
+        if start == self.position {
+            return Err(SourceStatementReaderError::Missing {
+                expected: SourceStatementExpected::Expression,
+                span: self.missing_anchor,
+            });
+        }
+
+        if !found_delimiter {
+            return Err(SourceStatementReaderError::Missing {
+                expected: SourceStatementExpected::Name,
+                span: self
+                    .tokens
+                    .last()
+                    .map(|token| token.span())
+                    .unwrap_or(self.missing_anchor),
             });
         }
 
@@ -2602,6 +2669,13 @@ fn parse_source_processing_statement(
         "EXPECT" => SourceProcessingOperation::Expect {
             token: read_fixed_token(view, &mut reader)?,
         },
+        "EXPECT_NAME" => SourceProcessingOperation::ExpectName {
+            name: {
+                let name = read_fixed_name(view, &mut reader)?;
+                reader.finish().map_err(syntax_operation_reader_error)?;
+                name
+            },
+        },
         "EXPECT_END" => {
             reader.finish().map_err(syntax_operation_reader_error)?;
             SourceProcessingOperation::ExpectEnd
@@ -2615,6 +2689,13 @@ fn parse_source_processing_statement(
         "READ_EXPR_UNTIL" => {
             let delimiter = read_fixed_token(view, &mut reader)?;
             SourceProcessingOperation::ReadExpressionUntil {
+                delimiter,
+                bind: read_as_binding(view, &mut reader)?,
+            }
+        }
+        "READ_EXPR_UNTIL_NAME" => {
+            let delimiter = read_fixed_name(view, &mut reader)?;
+            SourceProcessingOperation::ReadExpressionUntilName {
                 delimiter,
                 bind: read_as_binding(view, &mut reader)?,
             }
@@ -2755,6 +2836,27 @@ fn read_fixed_token(
         span: token.span(),
         kind: SyntaxDefinitionErrorKind::ExpectedFixedToken,
     })
+}
+
+fn read_fixed_name(
+    view: SourceView<'_>,
+    reader: &mut SourceStatementReader<'_>,
+) -> Result<NormalizedName, SourceWordError> {
+    let token = reader.read_name().map_err(|error| match error {
+        SourceStatementReaderError::Missing { span, .. } => SourceWordError::SyntaxDefinition {
+            span,
+            kind: SyntaxDefinitionErrorKind::ExpectedName,
+        },
+        SourceStatementReaderError::Unexpected { actual, .. }
+        | SourceStatementReaderError::TrailingToken { actual } => {
+            SourceWordError::SyntaxDefinition {
+                span: actual.span(),
+                kind: SyntaxDefinitionErrorKind::ExpectedName,
+            }
+        }
+    })?;
+    let name = normalized_token(view, token)?;
+    Ok(name)
 }
 
 fn read_integer_literal(
@@ -4110,6 +4212,54 @@ mod tests {
         reader
             .finish()
             .expect("remaining expression consumes to end");
+    }
+
+    #[test]
+    fn statement_reader_reads_case_insensitive_name_delimiter_without_consuming_it() {
+        let (sources, _source_id, tokens) = statement_tokens("READ 1 + (TO) + A[TO] To 9");
+        let view = sources.view();
+        let delimiter = NormalizedName::new("to").expect("delimiter should be a name");
+        let mut reader = SourceStatementReader::new(&tokens[1..], tokens[0].span());
+
+        let expression = reader
+            .expression_until_name(|token| {
+                view.slice(token.span())
+                    .ok()
+                    .and_then(|spelling| NormalizedName::new(spelling).ok())
+                    .as_ref()
+                    == Some(&delimiter)
+            })
+            .expect("top-level delimiter should end the expression");
+        assert_eq!(
+            expression
+                .iter()
+                .map(|token| token.kind())
+                .collect::<Vec<_>>(),
+            [
+                TokenKind::IntegerLiteral,
+                TokenKind::Plus,
+                TokenKind::LParen,
+                TokenKind::Name,
+                TokenKind::RParen,
+                TokenKind::Plus,
+                TokenKind::Name,
+                TokenKind::LBracket,
+                TokenKind::Name,
+                TokenKind::RBracket,
+            ]
+        );
+
+        reader
+            .expect_name(|token| {
+                view.slice(token.span())
+                    .ok()
+                    .and_then(|spelling| NormalizedName::new(spelling).ok())
+                    .as_ref()
+                    == Some(&delimiter)
+            })
+            .expect("delimiter should remain for explicit consumption");
+        reader.expect(TokenKind::IntegerLiteral).expect("end value");
+        reader.finish().expect("reader should be exhausted");
     }
 
     #[test]

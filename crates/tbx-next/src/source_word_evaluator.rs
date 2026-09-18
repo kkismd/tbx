@@ -397,6 +397,20 @@ fn evaluate_instruction(
                 .expect(token.token_kind())
                 .map_err(|source| SourceWordEvaluationError::Reader { source, origin })?;
         }
+        SourceProcessingOperation::ExpectName { name } => {
+            context
+                .reader
+                .expect_name(|token| {
+                    context
+                        .view
+                        .slice(token.span())
+                        .ok()
+                        .and_then(|spelling| NormalizedName::new(spelling).ok())
+                        .as_ref()
+                        == Some(name)
+                })
+                .map_err(|source| SourceWordEvaluationError::Reader { source, origin })?;
+        }
         SourceProcessingOperation::ExpectEnd => {
             context
                 .reader
@@ -423,6 +437,22 @@ fn evaluate_instruction(
             let tokens = context
                 .reader
                 .expression_until(delimiter.token_kind())
+                .map_err(|source| SourceWordEvaluationError::Reader { source, origin })?;
+            let expression = stage_expression(context, tokens, origin.span(), origin)?;
+            locals.bind(bind, RuntimeLocal::ExpressionArtifact(expression));
+        }
+        SourceProcessingOperation::ReadExpressionUntilName { delimiter, bind } => {
+            let tokens = context
+                .reader
+                .expression_until_name(|token| {
+                    context
+                        .view
+                        .slice(token.span())
+                        .ok()
+                        .and_then(|spelling| NormalizedName::new(spelling).ok())
+                        .as_ref()
+                        == Some(delimiter)
+                })
                 .map_err(|source| SourceWordEvaluationError::Reader { source, origin })?;
             let expression = stage_expression(context, tokens, origin.span(), origin)?;
             locals.bind(bind, RuntimeLocal::ExpressionArtifact(expression));
