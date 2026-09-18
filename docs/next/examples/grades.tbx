@@ -1,0 +1,41 @@
+REM Classify a fixed set of scores with FOR and SELECT, then count passes.
+
+DIM @SCORES[6]
+VAR INDEX
+VAR SCORE
+VAR CATEGORY
+VAR PASSED
+
+LET @SCORES[1] = 100
+LET @SCORES[2] = 95
+LET @SCORES[3] = 82
+LET @SCORES[4] = 76
+LET @SCORES[5] = 61
+LET @SCORES[6] = 58
+LET PASSED = 0
+
+FOR INDEX = 1 TO 6
+  LET SCORE = @SCORES[INDEX]
+  LET CATEGORY = SCORE / 10
+  SELECT CATEGORY
+  CASE 10
+    PRINT SCORE, " -> A"
+  CASE 9
+    PRINT SCORE, " -> A"
+  CASE 8
+    PRINT SCORE, " -> B"
+  CASE 7
+    PRINT SCORE, " -> C"
+  CASE 6
+    PRINT SCORE, " -> D"
+  CASE_ELSE
+    PRINT SCORE, " -> F"
+  ENDSEL
+  CR
+  IF SCORE >= 60
+    LET PASSED = PASSED + 1
+  ENDIF
+NEXT
+
+PRINT "Passed: ", PASSED
+CR

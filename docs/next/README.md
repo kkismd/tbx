@@ -50,6 +50,13 @@ cargo run -p tbx-next -- docs/next/examples/guess.tbx
 cargo run -p tbx-next -- docs/next/examples/mandelbrot.tbx
 ```
 
+成績区分サンプルは、固定点数列を `FOR` で走査し、各点数を `SELECT` で
+A/B/C/D/F に分類して合格件数を集計します。
+
+```sh
+cargo run -p tbx-next -- docs/next/examples/grades.tbx
+```
+
 [MSBASIC実数版とTinyBASIC整数版](https://kyo-ta04.github.io/memo/)を参照し、
 実数版と同じ座標点（`X=-39..39`, `Y=-12..12`）をscale 125の単セル固定小数点で
 近似しています。TinyBASIC版のscale 50より細かい量子化を使い、固定小数点乗算では
