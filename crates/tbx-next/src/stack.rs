@@ -11,6 +11,7 @@ pub(crate) enum StackError {
     DataStackUnderflow,
     DataStackIndexOutOfBounds { index: usize, depth: usize },
     DataStackDepthBelowTarget { target: usize, depth: usize },
+    ControlValueStackUnderflow,
     ReturnStackUnderflow,
 }
 
@@ -111,6 +112,43 @@ impl DataStack {
             .expect("depth was checked before popping lhs");
 
         Ok((lhs, rhs))
+    }
+}
+
+/// VM-owned LIFO for values that structured runtime code keeps across its body.
+///
+/// This is deliberately separate from both the user data stack and the return
+/// stack. It has no public or primitive-facing access path; only dedicated VM
+/// instructions can move values into or out of it.
+#[derive(Debug, Default)]
+pub(crate) struct ControlValueStack {
+    values: Vec<Value>,
+}
+
+impl ControlValueStack {
+    pub(crate) fn new() -> Self {
+        Self::default()
+    }
+
+    pub(crate) fn push(&mut self, value: Value) {
+        self.values.push(value);
+    }
+
+    pub(crate) fn pop(&mut self) -> Result<Value, StackError> {
+        self.values
+            .pop()
+            .ok_or(StackError::ControlValueStackUnderflow)
+    }
+
+    pub(crate) fn peek(&self) -> Result<Value, StackError> {
+        self.values
+            .last()
+            .copied()
+            .ok_or(StackError::ControlValueStackUnderflow)
+    }
+
+    pub(crate) fn depth(&self) -> usize {
+        self.values.len()
     }
 }
 

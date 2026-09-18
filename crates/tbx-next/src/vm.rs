@@ -10,7 +10,7 @@ use crate::primitive::{PrimitiveContext, PrimitiveError, PrimitiveLookup, Primit
 use crate::random::RandomState;
 use crate::runtime_input::RuntimeInput;
 use crate::runtime_output::RuntimeOutput;
-use crate::stack::{DataStack, ReturnFrame, ReturnStack, StackError};
+use crate::stack::{ControlValueStack, DataStack, ReturnFrame, ReturnStack, StackError};
 use crate::value::Value;
 use crate::word::{WordDefinition, WordId, WordLookupError};
 use crate::word_lookup::PublishedWordLookup;
@@ -26,6 +26,7 @@ use std::fmt;
 pub(crate) struct Vm {
     instruction_pointer: CodeLocation,
     data_stack: DataStack,
+    control_value_stack: ControlValueStack,
     return_stack: ReturnStack,
     halted: bool,
 }
@@ -56,6 +57,9 @@ pub(crate) enum VmErrorKind {
         source: InstructionLookupError,
     },
     DataStackUnderflow {
+        source: StackError,
+    },
+    ControlValueStackUnderflow {
         source: StackError,
     },
     ReturnStackUnderflow {
@@ -490,6 +494,7 @@ impl Vm {
         Ok(Self {
             instruction_pointer: entry,
             data_stack: DataStack::new(),
+            control_value_stack: ControlValueStack::new(),
             return_stack: ReturnStack::new(),
             halted: false,
         })
@@ -531,6 +536,9 @@ impl Vm {
             Instruction::TruncateDataStackToCallBase => {
                 self.step_truncate_data_stack_to_call_base(instructions, location)
             }
+            Instruction::PushControlValue => self.step_push_control_value(instructions, location),
+            Instruction::CopyControlValue => self.step_copy_control_value(instructions, location),
+            Instruction::DropControlValue => self.step_drop_control_value(instructions, location),
             Instruction::Jump(target) => self.step_jump(instructions, location, target),
             Instruction::JumpIfZero(target) => {
                 self.step_jump_if_zero(instructions, location, target)
@@ -572,6 +580,11 @@ impl Vm {
 
     pub(crate) fn return_stack_depth(&self) -> usize {
         self.return_stack.depth()
+    }
+
+    #[cfg(test)]
+    fn control_value_stack_depth(&self) -> usize {
+        self.control_value_stack.depth()
     }
 
     /// Returns the call-time data-stack depth of the innermost compiled word.
@@ -821,6 +834,57 @@ impl Vm {
             })?;
         self.instruction_pointer = next;
 
+        Ok(StepOutcome::Continued)
+    }
+
+    fn step_push_control_value(
+        &mut self,
+        instructions: InstructionLookup<'_>,
+        location: CodeLocation,
+    ) -> Result<StepOutcome, VmError> {
+        self.data_stack.require_depth(1).map_err(|source| VmError {
+            location,
+            kind: VmErrorKind::DataStackUnderflow { source },
+        })?;
+        let next = self.valid_next_location(instructions, location)?;
+        let value = self
+            .data_stack
+            .pop()
+            .expect("data-stack depth was checked before PushControlValue");
+        self.control_value_stack.push(value);
+        self.instruction_pointer = next;
+        Ok(StepOutcome::Continued)
+    }
+
+    fn step_copy_control_value(
+        &mut self,
+        instructions: InstructionLookup<'_>,
+        location: CodeLocation,
+    ) -> Result<StepOutcome, VmError> {
+        let value = self.control_value_stack.peek().map_err(|source| VmError {
+            location,
+            kind: VmErrorKind::ControlValueStackUnderflow { source },
+        })?;
+        let next = self.valid_next_location(instructions, location)?;
+        self.data_stack.push(value);
+        self.instruction_pointer = next;
+        Ok(StepOutcome::Continued)
+    }
+
+    fn step_drop_control_value(
+        &mut self,
+        instructions: InstructionLookup<'_>,
+        location: CodeLocation,
+    ) -> Result<StepOutcome, VmError> {
+        self.control_value_stack.peek().map_err(|source| VmError {
+            location,
+            kind: VmErrorKind::ControlValueStackUnderflow { source },
+        })?;
+        let next = self.valid_next_location(instructions, location)?;
+        self.control_value_stack
+            .pop()
+            .expect("control-value depth was checked before DropControlValue");
+        self.instruction_pointer = next;
         Ok(StepOutcome::Continued)
     }
 
@@ -1254,6 +1318,111 @@ mod tests {
         assert_eq!(vm.pop_data(), Ok(value(3)));
         assert_eq!(vm.pop_data(), Ok(value(2)));
         assert_eq!(vm.pop_data(), Ok(value(1)));
+    }
+
+    #[test]
+    fn control_value_instructions_move_copy_and_drop_values() {
+        let mut code = InstructionSequence::new();
+        let entry = code.append(Instruction::Push(value(42)));
+        code.append(Instruction::PushControlValue);
+        code.append(Instruction::CopyControlValue);
+        code.append(Instruction::DropControlValue);
+        code.append(Instruction::Halt);
+        let mut vm = new_vm(&code, entry);
+
+        assert_eq!(vm.run(code.view()), Ok(RunOutcome::Halted));
+
+        assert_eq!(vm.data_stack.as_slice(), &[value(42)]);
+        assert_eq!(vm.control_value_stack_depth(), 0);
+        assert_eq!(vm.return_stack_depth(), 0);
+    }
+
+    #[test]
+    fn control_value_instructions_preserve_lifo_order_for_nested_values() {
+        let mut code = InstructionSequence::new();
+        let entry = code.append(Instruction::Push(value(1)));
+        code.append(Instruction::PushControlValue);
+        code.append(Instruction::Push(value(2)));
+        code.append(Instruction::PushControlValue);
+        code.append(Instruction::CopyControlValue);
+        code.append(Instruction::DropControlValue);
+        code.append(Instruction::CopyControlValue);
+        code.append(Instruction::DropControlValue);
+        code.append(Instruction::Halt);
+        let mut vm = new_vm(&code, entry);
+
+        assert_eq!(vm.run(code.view()), Ok(RunOutcome::Halted));
+
+        assert_eq!(vm.data_stack.as_slice(), &[value(2), value(1)]);
+        assert_eq!(vm.control_value_stack_depth(), 0);
+    }
+
+    #[test]
+    fn push_control_value_underflow_preserves_all_vm_state() {
+        let mut code = InstructionSequence::new();
+        let entry = code.append(Instruction::PushControlValue);
+        code.append(Instruction::Halt);
+        let mut vm = new_vm(&code, entry);
+        let before = snapshot(&vm);
+
+        assert_eq!(
+            vm.step(code.view()),
+            Err(VmError {
+                location: location(&code, entry),
+                kind: VmErrorKind::DataStackUnderflow {
+                    source: StackError::DataStackUnderflow,
+                },
+            })
+        );
+
+        assert_vm_state(&vm, before);
+        assert_eq!(vm.control_value_stack_depth(), 0);
+    }
+
+    #[test]
+    fn copy_control_value_underflow_preserves_data_stack_and_ip() {
+        let mut code = InstructionSequence::new();
+        let entry = code.append(Instruction::CopyControlValue);
+        code.append(Instruction::Halt);
+        let mut vm = new_vm(&code, entry);
+        vm.push_data(value(7));
+        let before = snapshot(&vm);
+
+        assert_eq!(
+            vm.step(code.view()),
+            Err(VmError {
+                location: location(&code, entry),
+                kind: VmErrorKind::ControlValueStackUnderflow {
+                    source: StackError::ControlValueStackUnderflow,
+                },
+            })
+        );
+
+        assert_vm_state(&vm, before);
+        assert_eq!(vm.control_value_stack_depth(), 0);
+    }
+
+    #[test]
+    fn drop_control_value_underflow_preserves_data_stack_and_ip() {
+        let mut code = InstructionSequence::new();
+        let entry = code.append(Instruction::DropControlValue);
+        code.append(Instruction::Halt);
+        let mut vm = new_vm(&code, entry);
+        vm.push_data(value(7));
+        let before = snapshot(&vm);
+
+        assert_eq!(
+            vm.step(code.view()),
+            Err(VmError {
+                location: location(&code, entry),
+                kind: VmErrorKind::ControlValueStackUnderflow {
+                    source: StackError::ControlValueStackUnderflow,
+                },
+            })
+        );
+
+        assert_vm_state(&vm, before);
+        assert_eq!(vm.control_value_stack_depth(), 0);
     }
 
     #[test]

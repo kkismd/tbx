@@ -101,6 +101,12 @@ pub(crate) enum Instruction {
         offset: usize,
     },
     TruncateDataStackToCallBase,
+    /// Move the data-stack top into the VM-private control-value LIFO.
+    PushControlValue,
+    /// Copy the VM-private control-value LIFO top onto the data stack.
+    CopyControlValue,
+    /// Drop the VM-private control-value LIFO top.
+    DropControlValue,
     Jump(InstructionAddress),
     JumpIfZero(InstructionAddress),
     Return,
