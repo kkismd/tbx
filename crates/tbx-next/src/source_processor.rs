@@ -9550,8 +9550,10 @@ mod tests {
             ),
         )
         .expect_err("ELSE payload should be rejected by IF semantics");
-
-        assert!(matches!(error, SourceProcessorError::SourceWord(_)));
+        assert_eq!(
+            error.primary_span(),
+            Some(span(sources.view(), source_id, 10, 11))
+        );
 
         drop((words, primitives));
     }
@@ -9572,8 +9574,10 @@ mod tests {
             ),
         )
         .expect_err("ELSIF requires a condition");
-
-        assert!(matches!(error, SourceProcessorError::SourceWord(_)));
+        assert_eq!(
+            error.primary_span(),
+            Some(span(sources.view(), source_id, 5, 10))
+        );
 
         let (sources, source_id) = source("IF 1\n100 ELSE\nENDIF");
         let error = compile_source(
@@ -9807,8 +9811,18 @@ mod tests {
             Ok(&Instruction::JumpIfZero(address(4)))
         );
         assert_eq!(unit.instructions().get(address(4)), Ok(&Instruction::Halt));
-        assert!(unit.source_span(location(&unit, 1)).unwrap().is_some());
-        assert!(unit.source_span(location(&unit, 2)).unwrap().is_some());
+        assert_eq!(
+            unit.source_span(location(&unit, 1))
+                .unwrap()
+                .map(|span| (span.start(), span.end())),
+            Some((65, 95))
+        );
+        assert_eq!(
+            unit.source_span(location(&unit, 2))
+                .unwrap()
+                .map(|span| (span.start(), span.end())),
+            Some((13, 14))
+        );
     }
 
     #[test]
@@ -9845,8 +9859,19 @@ mod tests {
             unit.instructions().get(address(9)),
             Ok(&Instruction::Jump(address(12)))
         );
-        for index in [1, 4, 6, 9, 7] {
-            assert!(unit.source_span(location(&unit, index)).unwrap().is_some());
+        for (index, expected) in [
+            (1, (65, 95)),
+            (4, (111, 131)),
+            (6, (203, 233)),
+            (9, (253, 273)),
+            (7, (31, 32)),
+        ] {
+            assert_eq!(
+                unit.source_span(location(&unit, index))
+                    .unwrap()
+                    .map(|span| (span.start(), span.end())),
+                Some(expected)
+            );
         }
     }
 
@@ -9876,7 +9901,12 @@ mod tests {
             Ok(&Instruction::Jump(address(7)))
         );
         assert_eq!(unit.instructions().get(address(7)), Ok(&Instruction::Halt));
-        assert!(unit.source_span(location(&unit, 4)).unwrap().is_some());
+        assert_eq!(
+            unit.source_span(location(&unit, 4))
+                .unwrap()
+                .map(|span| (span.start(), span.end())),
+            Some((253, 273))
+        );
     }
 
     #[test]
