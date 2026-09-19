@@ -1667,6 +1667,116 @@ COPY_CONTROL";
     }
 
     #[test]
+    fn embedded_standard_library_break_exits_while_do_and_for_without_running_terminators() {
+        let mut writer = RecordingWriter::default();
+        let result = success(execute_with_embedded_standard_library(
+            "LET A = 0\nWHILE 1\nLET A = A + 1\nBREAK\nLET A = A + 100\nENDWH\nEVAL A",
+            "program.tbx",
+            &mut writer,
+        ));
+        assert_eq!(result.data_stack(), [Value::integer(1)]);
+
+        let mut writer = RecordingWriter::default();
+        let result = success(execute_with_embedded_standard_library(
+            "LET A = 0\nDO\nLET A = A + 1\nBREAK\nLET A = A + 100\nUNTIL 1\nEVAL A",
+            "program.tbx",
+            &mut writer,
+        ));
+        assert_eq!(result.data_stack(), [Value::integer(1)]);
+
+        let mut writer = RecordingWriter::default();
+        let result = success(execute_with_embedded_standard_library(
+            "LET A = 0\nFOR I = 1 TO 3\nLET A = A + I\nBREAK\nLET A = A + 100\nNEXT\nEVAL A\nEVAL I",
+            "program.tbx",
+            &mut writer,
+        ));
+        assert_eq!(result.data_stack(), [Value::integer(1), Value::integer(1)]);
+    }
+
+    #[test]
+    fn embedded_standard_library_break_transparently_exits_through_if_and_select() {
+        let mut writer = RecordingWriter::default();
+        let result = success(execute_with_embedded_standard_library(
+            "LET A = 0\nWHILE A < 1\nIF 1\nBREAK\nENDIF\nLET A = A + 100\nENDWH\nEVAL A",
+            "program.tbx",
+            &mut writer,
+        ));
+        assert_eq!(result.data_stack(), [Value::integer(0)]);
+
+        let mut writer = RecordingWriter::default();
+        let result = success(execute_with_embedded_standard_library(
+            "FOR I = 1 TO 1\nSELECT I\nCASE 1\nBREAK\nENDSEL\nNEXT\nEVAL I",
+            "program.tbx",
+            &mut writer,
+        ));
+        assert_eq!(result.data_stack(), [Value::integer(1)]);
+    }
+
+    #[test]
+    fn embedded_standard_library_break_cleans_nested_control_values() {
+        let mut writer = RecordingWriter::default();
+        let failure = failure(execute_with_embedded_standard_library(
+            "SYNTAX COPY_CONTROL\nSTATEMENT\nEXPECT_END\nEMIT_CONTROL_COPY\nENDS\nFOR I = 1 TO 1\nSELECT I\nCASE 1\nIF 1\nBREAK\nENDIF\nENDSEL\nNEXT\nCOPY_CONTROL",
+            "program.tbx",
+            &mut writer,
+        ));
+        let BatchExecutionFailureCause::Source(user_failure) = failure.cause else {
+            panic!("control-value cleanup probe should fail in user runtime code");
+        };
+        let SourceProcessorError::Runtime(error) = user_failure.original_error() else {
+            panic!("cleanup probe should preserve the runtime error");
+        };
+        assert!(matches!(
+            error.vm().kind(),
+            crate::vm::VmErrorKind::ControlValueStackUnderflow { .. }
+        ));
+
+        let mut writer = RecordingWriter::default();
+        let result = success(execute_with_embedded_standard_library(
+            "LET A = 0\nWHILE A < 2\nLET B = 0\nWHILE B < 1\nBREAK\nENDWH\nLET A = A + 1\nENDWH\nEVAL A",
+            "program.tbx",
+            &mut writer,
+        ));
+        assert_eq!(result.data_stack(), [Value::integer(2)]);
+    }
+
+    #[test]
+    fn embedded_standard_library_break_requires_a_loop_and_rejects_trailing_tokens() {
+        for (source, expected_column) in [("BREAK", 1), ("BREAK X", 7)] {
+            let mut writer = RecordingWriter::default();
+            let failure = failure(execute_with_embedded_standard_library(
+                source,
+                "program.tbx",
+                &mut writer,
+            ));
+            assert_eq!(failure.class(), UserFacingFailureClass::UserProgram);
+            let primary = failure
+                .diagnostic
+                .primary()
+                .expect("BREAK diagnostic should have a primary span");
+            assert_eq!(primary.display_name(), "program.tbx");
+            assert_eq!(primary.line_number(), 1);
+            assert_eq!(primary.column_number(), expected_column);
+        }
+
+        let mut writer = RecordingWriter::default();
+        let result = success(execute_with_embedded_standard_library(
+            "DEF LOOP_BREAK\nWHILE 1\nBREAK\nENDWH\nEND\nWHILE 1\nLOOP_BREAK\nBREAK\nENDWH\nEVAL 1",
+            "program.tbx",
+            &mut writer,
+        ));
+        assert_eq!(result.data_stack(), [Value::integer(1)]);
+
+        let mut writer = RecordingWriter::default();
+        let failure = failure(execute_with_embedded_standard_library(
+            "DEF INVALID_BREAK\nBREAK\nEND",
+            "program.tbx",
+            &mut writer,
+        ));
+        assert_eq!(failure.class(), UserFacingFailureClass::UserProgram);
+    }
+
+    #[test]
     fn embedded_standard_library_while_has_one_line_number_scope_across_body() {
         let mut writer = RecordingWriter::default();
 

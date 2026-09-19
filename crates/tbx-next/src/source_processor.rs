@@ -6414,15 +6414,15 @@ mod tests {
     }
 
     #[test]
-    fn emit_exit_is_validated_and_compiled_against_the_innermost_exit_target() {
+    fn request_exit_is_validated_and_compiled_against_the_innermost_exit_target() {
         let (_words, _primitives, operators, mut source_words, mut bindings, mut globals, _vars) =
             global_source_fixture();
         for definition in [
-            "SYNTAX INVALID1\nSTATEMENT\nEMIT_EXIT\nEMIT_EXIT\nENDS",
-            "SYNTAX INVALID2\nSTATEMENT\nEMIT_EXIT\nEXPECT_END\nENDS",
-            "SYNTAX INVALID3\nBLOCK\nSTART\nEMIT_EXIT\nLAST ENDINVALID3\nEXPECT_END\nENDS",
-            "SYNTAX INVALID4\nBLOCK\nSTART\nEXPECT_END\nMARK MID\nEMIT_EXIT\nLAST ENDINVALID4\nEXPECT_END\nENDS",
-            "SYNTAX INVALID5\nBLOCK\nSTART\nEXPECT_END\nLAST ENDINVALID5\nEMIT_EXIT\nENDS",
+            "SYNTAX INVALID1\nSTATEMENT\nREQUEST_EXIT\nREQUEST_EXIT\nENDS",
+            "SYNTAX INVALID2\nSTATEMENT\nREQUEST_EXIT\nEXPECT_END\nENDS",
+            "SYNTAX INVALID3\nBLOCK\nSTART\nREQUEST_EXIT\nLAST ENDINVALID3\nEXPECT_END\nENDS",
+            "SYNTAX INVALID4\nBLOCK\nSTART\nEXPECT_END\nMARK MID\nREQUEST_EXIT\nLAST ENDINVALID4\nEXPECT_END\nENDS",
+            "SYNTAX INVALID5\nBLOCK\nSTART\nEXPECT_END\nLAST ENDINVALID5\nREQUEST_EXIT\nENDS",
         ] {
             let (_sources, _id, error) = publish_user_source_word_error(
                 definition,
@@ -6434,13 +6434,13 @@ mod tests {
             assert!(matches!(
                 error,
                 SourceProcessorError::SourceWord(SourceWordError::SyntaxDefinition {
-                    kind: SyntaxDefinitionErrorKind::EmitExitPlacement,
+                    kind: SyntaxDefinitionErrorKind::RequestExitPlacement,
                     ..
                 })
             ));
         }
         publish_user_source_word(
-            "SYNTAX BREAK\nSTATEMENT\nEXPECT_END\nEMIT_EXIT\nENDS",
+            "SYNTAX BREAK\nSTATEMENT\nEXPECT_END\nREQUEST_EXIT\nENDS",
             &mut bindings,
             &mut globals,
             &mut source_words,

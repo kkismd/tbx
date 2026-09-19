@@ -206,7 +206,7 @@ fn file_success_runs_stdlib_control_structures_and_user_syntax_through_real_bina
         "expected success, stderr:\n{}",
         stderr_text(&output)
     );
-    assert_eq!(stdout_text(&output), "2\n3\n2\n");
+    assert_eq!(stdout_text(&output), "2\n1\n2\n1\n3\n2\n");
     assert_eq!(stderr_text(&output), "");
 }
 
@@ -337,7 +337,7 @@ fn stdin_success_runs_stdlib_control_structures_and_user_syntax_through_real_bin
         "expected success, stderr:\n{}",
         stderr_text(&output)
     );
-    assert_eq!(stdout_text(&output), "2\n3\n2\n");
+    assert_eq!(stdout_text(&output), "2\n1\n2\n1\n3\n2\n");
     assert_eq!(stderr_text(&output), "");
 }
 

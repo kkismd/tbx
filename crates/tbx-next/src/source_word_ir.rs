@@ -119,7 +119,7 @@ pub(crate) enum SourceProcessingOperation {
     EmitControlPush,
     EmitControlCopy,
     EmitControlDrop,
-    EmitExit,
+    RequestExit,
     EmitReturn,
     Position {
         bind: LocalBinding,
@@ -181,7 +181,7 @@ impl SourceProcessingOperation {
             | Self::EmitControlPush
             | Self::EmitControlCopy
             | Self::EmitControlDrop
-            | Self::EmitExit
+            | Self::RequestExit
             | Self::EmitReturn
             | Self::EmitBranch { .. }
             | Self::EmitBranchIfFalse { .. }
@@ -217,7 +217,7 @@ impl SourceProcessingOperation {
             | Self::EmitControlPush
             | Self::EmitControlCopy
             | Self::EmitControlDrop
-            | Self::EmitExit
+            | Self::RequestExit
             | Self::EmitReturn
             | Self::EmitBranch { .. }
             | Self::EmitBranchIfFalse { .. }
@@ -281,7 +281,7 @@ impl SourceProcessingOperation {
             | Self::EmitControlPush
             | Self::EmitControlCopy
             | Self::EmitControlDrop
-            | Self::EmitExit
+            | Self::RequestExit
             | Self::Position { .. }
             | Self::EmitBranchFollowing
             | Self::EmitBranchIfFalseFollowing
@@ -323,7 +323,7 @@ impl SourceProcessingOperation {
             | Self::Position { .. }
             | Self::EmitBranch { .. }
             | Self::EmitBranchIfFalse { .. } => SourceProcessingCapabilities::emit_runtime_code(),
-            Self::EmitExit => SourceProcessingCapabilities::empty(),
+            Self::RequestExit => SourceProcessingCapabilities::empty(),
             Self::EmitBranchFollowing
             | Self::EmitBranchIfFalseFollowing
             | Self::EmitBranchComplete

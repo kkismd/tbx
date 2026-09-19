@@ -441,7 +441,7 @@ pub(crate) enum SyntaxDefinitionErrorKind {
     ControlValueTerminatorPush,
     ControlValueOwnershipMismatch,
     ControlValueCleanupOrder,
-    EmitExitPlacement,
+    RequestExitPlacement,
 }
 
 impl SourceWordError {
@@ -2271,7 +2271,7 @@ fn publish_statement_syntax_definition(
     let implementation = builder
         .complete()
         .map_err(|source| SourceWordError::SyntaxBuild { source })?;
-    validate_statement_emit_exit(implementation.instructions())?;
+    validate_statement_request_exit(implementation.instructions())?;
     context.publish_statement_source_word(name, name_span, implementation)?;
     Ok(())
 }
@@ -2593,11 +2593,14 @@ fn validate_block_control_value_ownership(
 ) -> Result<usize, SourceWordError> {
     for section in sections {
         if let Some(instruction) = section.instructions.iter().find(|instruction| {
-            matches!(instruction.operation(), SourceProcessingOperation::EmitExit)
+            matches!(
+                instruction.operation(),
+                SourceProcessingOperation::RequestExit
+            )
         }) {
             return Err(SourceWordError::SyntaxDefinition {
                 span: instruction.origin().span(),
-                kind: SyntaxDefinitionErrorKind::EmitExitPlacement,
+                kind: SyntaxDefinitionErrorKind::RequestExitPlacement,
             });
         }
     }
@@ -2703,13 +2706,16 @@ fn validate_block_control_value_ownership(
     Ok(ownership)
 }
 
-fn validate_statement_emit_exit(
+fn validate_statement_request_exit(
     instructions: &[SourceProcessingInstruction],
 ) -> Result<(), SourceWordError> {
     let exits = instructions
         .iter()
         .filter(|instruction| {
-            matches!(instruction.operation(), SourceProcessingOperation::EmitExit)
+            matches!(
+                instruction.operation(),
+                SourceProcessingOperation::RequestExit
+            )
         })
         .collect::<Vec<_>>();
     let Some(exit) = exits.first() else {
@@ -2718,7 +2724,7 @@ fn validate_statement_emit_exit(
     if exits.len() != 1 || !std::ptr::eq(*exit, instructions.last().expect("non-empty exit list")) {
         return Err(SourceWordError::SyntaxDefinition {
             span: exit.origin().span(),
-            kind: SyntaxDefinitionErrorKind::EmitExitPlacement,
+            kind: SyntaxDefinitionErrorKind::RequestExitPlacement,
         });
     }
     Ok(())
@@ -2937,9 +2943,9 @@ fn parse_source_processing_statement(
             reader.finish().map_err(syntax_operation_reader_error)?;
             SourceProcessingOperation::EmitControlDrop
         }
-        "EMIT_EXIT" => {
+        "REQUEST_EXIT" => {
             reader.finish().map_err(syntax_operation_reader_error)?;
-            SourceProcessingOperation::EmitExit
+            SourceProcessingOperation::RequestExit
         }
         "EMIT_RETURN" => {
             reader.finish().map_err(syntax_operation_reader_error)?;

@@ -527,7 +527,7 @@ fn evaluate_instruction(
                 .append_mapped(Instruction::DropControlValue, origin.span())
                 .map_err(|source| SourceWordEvaluationError::InstructionBuild { source, origin })?;
         }
-        SourceProcessingOperation::EmitExit => {
+        SourceProcessingOperation::RequestExit => {
             context.exit_requested = true;
         }
         SourceProcessingOperation::EmitReturn => {
