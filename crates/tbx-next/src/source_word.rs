@@ -331,10 +331,6 @@ pub(crate) enum SourceWordError {
     DefBindingCommitInvariantViolated {
         span: SourceSpan,
     },
-    IfSyntax {
-        span: SourceSpan,
-        kind: IfSyntaxErrorKind,
-    },
     SyntaxDefinition {
         span: SourceSpan,
         kind: SyntaxDefinitionErrorKind,
@@ -423,12 +419,6 @@ pub(crate) enum DefSyntaxErrorKind {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum IfSyntaxErrorKind {
-    MissingCondition,
-    TrailingToken { kind: TokenKind },
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum SyntaxDefinitionErrorKind {
     MissingName,
     TrailingToken { kind: TokenKind },
@@ -490,7 +480,6 @@ impl SourceWordError {
             | Self::DefBodyBuild { span }
             | Self::DefDefinition { span }
             | Self::DefBindingCommitInvariantViolated { span }
-            | Self::IfSyntax { span, .. }
             | Self::SyntaxDefinition { span, .. }
             | Self::SyntaxName { span, .. }
             | Self::SyntaxNameConflict { span }
@@ -3094,197 +3083,6 @@ impl NativeStructuredSourceWordOwner for UserDefinedStructuredSourceWordOwner {
         self.state
             .complete_structural_branches(context.code)
             .map_err(|source| SourceWordError::UserDefinedEvaluation { source })
-    }
-}
-
-#[derive(Debug)]
-struct IfSourceWordOwner {
-    branches: Vec<IfBranch>,
-    current_body_index: usize,
-}
-
-#[derive(Debug)]
-struct IfBranch {
-    condition: Option<ExpressionStaging>,
-    origin_span: SourceSpan,
-}
-
-pub(crate) fn if_source_word(
-    context: &mut NativeSourceWordContext<'_, '_>,
-) -> Result<StructuredSourceWordInstance, SourceWordError> {
-    let condition = parse_required_if_condition_from_reader(context)?;
-    let origin_span = context.statement_span()?;
-    Ok(StructuredSourceWordInstance::new(Box::new(
-        IfSourceWordOwner {
-            branches: vec![IfBranch {
-                condition: Some(condition),
-                origin_span,
-            }],
-            current_body_index: 0,
-        },
-    )))
-}
-
-impl NativeStructuredSourceWordOwner for IfSourceWordOwner {
-    fn current_body_context(&self) -> StructuredBodyContext {
-        StructuredBodyContext::new(
-            StructuredBuildTargetScope::OwnerLocal(self.current_body_index),
-            StructuredLineNumberScope::OwnerLocal(self.current_body_index),
-            StructuredBodyCapabilities::without_publication(),
-        )
-    }
-
-    fn accept_marker<'source>(
-        &mut self,
-        context: &mut NativeStructuredSourceWordContext<'source, '_>,
-        marker: SourceBlockMarker<'source>,
-        _accept: crate::structured_grammar::GrammarAccept,
-    ) -> Result<(), SourceWordError> {
-        let condition = if marker.name().as_str() == "ELSIF" {
-            Some(parse_required_if_condition_from_tokens(
-                marker.remaining_tokens(),
-                marker.token().span(),
-                context,
-            )?)
-        } else {
-            require_empty_if_marker_remainder(&marker)?;
-            None
-        };
-
-        self.branches.push(IfBranch {
-            condition,
-            origin_span: marker.span(),
-        });
-        self.current_body_index += 1;
-        Ok(())
-    }
-
-    fn complete<'source>(
-        &mut self,
-        context: &mut NativeStructuredSourceWordContext<'source, '_>,
-        marker: SourceBlockMarker<'source>,
-    ) -> Result<(), SourceWordError> {
-        require_empty_if_marker_remainder(&marker)?;
-
-        let mut merge_jumps = Vec::new();
-        for index in 0..self.branches.len() {
-            let branch = &self.branches[index];
-            let branch_if_false = if let Some(condition) = &branch.condition {
-                commit_if_condition(context, condition)?;
-                Some(context.append_mapped_jump_if_zero_placeholder(branch.origin_span)?)
-            } else {
-                None
-            };
-
-            context.append_owner_local_target(index, branch.origin_span)?;
-
-            if index + 1 < self.branches.len() {
-                merge_jumps.push(context.append_mapped_jump_placeholder(branch.origin_span)?);
-            }
-
-            if let Some(branch_if_false) = branch_if_false {
-                context.patch_branch_target(branch_if_false, context.current_address())?;
-            }
-        }
-
-        let merge_target = context.current_address();
-        for jump in merge_jumps {
-            context.patch_branch_target(jump, merge_target)?;
-        }
-        Ok(())
-    }
-}
-
-fn parse_required_if_condition_from_reader(
-    context: &mut NativeSourceWordContext<'_, '_>,
-) -> Result<ExpressionStaging, SourceWordError> {
-    let (tokens, anchor) = {
-        let reader = context.statement_reader_mut();
-        let tokens = reader
-            .remaining_expression()
-            .map_err(if_reader_error_for_condition)?;
-        (tokens, context.source_word_token().span())
-    };
-    parse_required_if_condition_from_tokens(tokens, anchor, context)
-}
-
-fn parse_required_if_condition_from_tokens(
-    tokens: &[Token],
-    anchor: SourceSpan,
-    context: &impl IfConditionContext,
-) -> Result<ExpressionStaging, SourceWordError> {
-    if tokens.is_empty() {
-        return Err(SourceWordError::IfSyntax {
-            span: anchor,
-            kind: IfSyntaxErrorKind::MissingCondition,
-        });
-    }
-    context.stage_if_expression(tokens, anchor)
-}
-
-trait IfConditionContext {
-    fn stage_if_expression(
-        &self,
-        tokens: &[Token],
-        anchor: SourceSpan,
-    ) -> Result<ExpressionStaging, SourceWordError>;
-}
-
-impl IfConditionContext for NativeSourceWordContext<'_, '_> {
-    fn stage_if_expression(
-        &self,
-        tokens: &[Token],
-        anchor: SourceSpan,
-    ) -> Result<ExpressionStaging, SourceWordError> {
-        self.stage_expression(tokens, anchor)
-    }
-}
-
-impl IfConditionContext for NativeStructuredSourceWordContext<'_, '_> {
-    fn stage_if_expression(
-        &self,
-        tokens: &[Token],
-        anchor: SourceSpan,
-    ) -> Result<ExpressionStaging, SourceWordError> {
-        self.stage_expression(tokens, anchor)
-    }
-}
-
-fn commit_if_condition(
-    context: &mut NativeStructuredSourceWordContext<'_, '_>,
-    condition: &ExpressionStaging,
-) -> Result<(), SourceWordError> {
-    for entry in condition.entries() {
-        context.append_mapped(entry.instruction(), entry.span())?;
-    }
-    Ok(())
-}
-
-fn require_empty_if_marker_remainder(
-    marker: &SourceBlockMarker<'_>,
-) -> Result<(), SourceWordError> {
-    if let Some(token) = marker.remaining_tokens().first().copied() {
-        return Err(SourceWordError::IfSyntax {
-            span: token.span(),
-            kind: IfSyntaxErrorKind::TrailingToken { kind: token.kind() },
-        });
-    }
-    Ok(())
-}
-
-fn if_reader_error_for_condition(error: SourceStatementReaderError) -> SourceWordError {
-    match error {
-        SourceStatementReaderError::Missing { span, .. } => SourceWordError::IfSyntax {
-            span,
-            kind: IfSyntaxErrorKind::MissingCondition,
-        },
-        SourceStatementReaderError::Unexpected { actual, .. }
-        | SourceStatementReaderError::TrailingToken { actual } => SourceWordError::IfSyntax {
-            span: actual.span(),
-            kind: IfSyntaxErrorKind::TrailingToken {
-                kind: actual.kind(),
-            },
-        },
     }
 }
 

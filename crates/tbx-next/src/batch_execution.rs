@@ -2063,6 +2063,9 @@ COPY_CONTROL";
         let Some(Binding::SourceWord(do_id)) = environment.bindings.get(&name("DO")) else {
             panic!("DO should publish as a source word");
         };
+        let Some(Binding::SourceWord(if_id)) = environment.bindings.get(&name("IF")) else {
+            panic!("IF should publish as a source word from the embedded stdlib");
+        };
         assert_eq!(
             environment
                 .bindings
@@ -2077,8 +2080,19 @@ COPY_CONTROL";
                 .map(|reservation| reservation.owner()),
             Some(*do_id)
         );
+        for marker_name in ["ELSIF", "ELSE", "ENDIF"] {
+            assert_eq!(
+                environment
+                    .bindings
+                    .syntax_marker_reservation(&name(marker_name))
+                    .map(|reservation| reservation.owner()),
+                Some(*if_id),
+                "{marker_name} should be owned by IF"
+            );
+        }
         assert!(STDLIB_SOURCE.contains("SYNTAX WHILE"));
         assert!(STDLIB_SOURCE.contains("SYNTAX DO"));
+        assert!(STDLIB_SOURCE.contains("SYNTAX IF"));
     }
 
     #[test]
