@@ -6421,6 +6421,8 @@ mod tests {
             "SYNTAX INVALID1\nSTATEMENT\nEMIT_EXIT\nEMIT_EXIT\nENDS",
             "SYNTAX INVALID2\nSTATEMENT\nEMIT_EXIT\nEXPECT_END\nENDS",
             "SYNTAX INVALID3\nBLOCK\nSTART\nEMIT_EXIT\nLAST ENDINVALID3\nEXPECT_END\nENDS",
+            "SYNTAX INVALID4\nBLOCK\nSTART\nEXPECT_END\nMARK MID\nEMIT_EXIT\nLAST ENDINVALID4\nEXPECT_END\nENDS",
+            "SYNTAX INVALID5\nBLOCK\nSTART\nEXPECT_END\nLAST ENDINVALID5\nEMIT_EXIT\nENDS",
         ] {
             let (_sources, _id, error) = publish_user_source_word_error(
                 definition,
@@ -6453,6 +6455,13 @@ mod tests {
         );
         publish_user_source_word(
             "SYNTAX WRAP\nBLOCK\nSTART\nEMIT_CONTROL_PUSH\nEXPECT_END\nLAST ENDWRAP\nEXPECT_END\nEMIT_CONTROL_DROP\nENDS",
+            &mut bindings,
+            &mut globals,
+            &mut source_words,
+            operators.lookup(),
+        );
+        publish_user_source_word(
+            "SYNTAX ZERO\nBLOCK EXIT_TARGET\nSTART\nEXPECT_END\nLAST ENDZERO\nEXPECT_END\nENDS",
             &mut bindings,
             &mut globals,
             &mut source_words,
@@ -6503,6 +6512,55 @@ mod tests {
         assert_eq!(unit.source_span(location(&unit, 2)), Ok(Some(break_span)));
         assert_eq!(unit.source_span(location(&unit, 3)), Ok(Some(break_span)));
         assert_eq!(unit.source_span(location(&unit, 4)), Ok(Some(break_span)));
+
+        let (zero_sources, zero_id) = source("ZERO\nBREAK\nENDZERO");
+        let zero = compile_source(
+            zero_sources.view(),
+            zero_id,
+            SourceCompileContext::with_source_words_and_operators(
+                &bindings,
+                source_words.lookup(),
+                operators.lookup(),
+            ),
+        )
+        .expect("zero-ownership target should compile");
+        assert_eq!(
+            zero.instructions().get(address(0)),
+            Ok(&Instruction::Jump(address(1)))
+        );
+        assert_eq!(zero.instructions().get(address(1)), Ok(&Instruction::Halt));
+        assert_eq!(
+            zero.source_span(location(&zero, 0)),
+            Ok(Some(
+                zero_sources
+                    .view()
+                    .span(zero_id, 5, 10)
+                    .expect("BREAK span")
+            ))
+        );
+
+        let (multiple_sources, multiple_id) =
+            source("TARGET\nWRAP\nWRAP\nBREAK\nENDWRAP\nENDWRAP\nENDTARGET");
+        let multiple = compile_source(
+            multiple_sources.view(),
+            multiple_id,
+            SourceCompileContext::with_source_words_and_operators(
+                &bindings,
+                source_words.lookup(),
+                operators.lookup(),
+            ),
+        )
+        .expect("multiple non-target frames should be transparent");
+        for index in 3..6 {
+            assert_eq!(
+                multiple.instructions().get(address(index)),
+                Ok(&Instruction::DropControlValue)
+            );
+        }
+        assert_eq!(
+            multiple.instructions().get(address(6)),
+            Ok(&Instruction::Jump(address(10)))
+        );
 
         let (nested_sources, nested_id) = source("TARGET\nTARGET\nBREAK\nENDTARGET\nENDTARGET");
         let nested = compile_source(
