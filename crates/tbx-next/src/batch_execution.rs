@@ -2066,6 +2066,41 @@ COPY_CONTROL";
         let Some(Binding::SourceWord(if_id)) = environment.bindings.get(&name("IF")) else {
             panic!("IF should publish as a source word from the embedded stdlib");
         };
+        for (source_name, expected_exit_target, expected_ownership) in [
+            ("IF", false, 0),
+            ("WHILE", true, 0),
+            ("DO", true, 0),
+            ("FOR", true, 1),
+            ("SELECT", false, 1),
+        ] {
+            let Some(Binding::SourceWord(id)) =
+                environment.bindings.get(&name(source_name)).copied()
+            else {
+                panic!("{source_name} should publish as a source word");
+            };
+            let crate::source_word::SourceWordDispatch::Structured {
+                implementation:
+                    crate::source_word::StructuredSourceWordDispatch::UserDefined(implementation),
+                ..
+            } = environment
+                .source_words
+                .lookup()
+                .lookup_dispatch(id)
+                .expect("stdlib source word should dispatch")
+            else {
+                panic!("{source_name} should use a user-defined structured implementation");
+            };
+            assert_eq!(
+                implementation.exit_target(),
+                expected_exit_target,
+                "{source_name}"
+            );
+            assert_eq!(
+                implementation.control_value_ownership(),
+                expected_ownership,
+                "{source_name}"
+            );
+        }
         assert_eq!(
             environment
                 .bindings
