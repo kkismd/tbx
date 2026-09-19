@@ -249,9 +249,31 @@ ENDIF
 
 条件値は `0` が偽、0 以外が真である。
 
+### SELECT / CASE / CASE_ELSE / ENDSEL
+
+`SELECT` は1つのselectorを複数の `CASE` と比較する。
+
+```tbx
+SELECT A
+CASE 1
+  PRINT "one"
+CASE 2
+  PRINT "two"
+CASE_ELSE
+  PRINT "other"
+ENDSEL
+```
+
+- selectorは `SELECT` 開始時に1回だけ評価する
+- `CASE` はソース順に評価する
+- 最初に一致した `CASE` bodyだけを実行し、後続CASEへfall-throughしない
+- `CASE` は1回以上必要
+- `CASE_ELSE` は省略可能で、使う場合は最大1回かつ最後に置く
+- 一致するCASEがなく `CASE_ELSE` もなければ何も実行しない
+
 ## 反復
 
-`WHILE` と `DO` は起動時に読み込まれる標準ライブラリ `crates/tbx-next/stdlib/basic.tbx` で TBX Next 自身の `SYNTAX` を使って定義されている。
+`WHILE`, `DO`, `SELECT`, `FOR` は起動時に読み込まれる標準ライブラリ `crates/tbx-next/stdlib/basic.tbx` で TBX Next 自身の `SYNTAX` を使って定義されている。
 
 ### WHILE / ENDWH
 
@@ -264,6 +286,8 @@ WHILE A < 3
 ENDWH
 ```
 
+`WHILE` の正規終端は `ENDWH` である。旧終端 `WEND` は現行構文として残していない。
+
 ### DO / UNTIL
 
 ```tbx
@@ -272,6 +296,27 @@ DO
   LET A = A + 1
 UNTIL A >= 3
 ```
+
+### FOR / NEXT
+
+```tbx
+FOR I = 1 TO 5
+  PRINT I
+  CR
+NEXT
+```
+
+- ループ変数は既存のスカラー変数を使う
+- `start` と `end` はループ開始時にそれぞれ1回だけ、`start` → `end` の順で評価する
+- `start` をループ変数へ代入してから最初の反復可否を判定する
+- 各反復のbody実行前に `loop_variable <= end` を判定する
+- body実行後、現在のループ変数を `+1` する
+- `start > end` の場合は0回反復する
+- end値は開始時の評価結果で固定され、body内の他変数変更によって再評価しない
+- body内でループ変数を書き換えた場合、`NEXT` はその時点の値へ1を加える
+- `STEP`、降順FOR専用構文、`NEXT` への変数名指定は現在未対応
+
+`IF` / `WHILE` / `DO` / `SELECT` / `FOR` は相互に入れ子にできる。
 
 ## 出力
 
@@ -404,7 +449,7 @@ ENDS
 SLET A = 10
 ```
 
-標準ライブラリの `WHILE` と `DO` も `SYNTAX` で実装されている。`SYNTAX` の操作語彙はコンパイラ拡張向けの低水準 API であり、このクイックリファレンスでは網羅しない。新しい構文を書く場合は `crates/tbx-next/stdlib/basic.tbx`、`crates/tbx-next/src/source_word*.rs` と関連テストを確認すること。
+標準ライブラリの `WHILE`, `DO`, `SELECT`, `FOR` も `SYNTAX` で実装されている。`SYNTAX` の操作語彙はコンパイラ拡張向けの低水準 API であり、このクイックリファレンスでは網羅しない。新しい構文を書く場合は `crates/tbx-next/stdlib/basic.tbx`、`crates/tbx-next/src/source_word*.rs` と関連テストを確認すること。
 
 ## 現行 TBX と混同しやすい点
 
@@ -429,6 +474,7 @@ TBX Next は現行 `tbx` の互換実装ではない。特に次をそのまま�
 - `docs/next/examples/guess.tbx` — `RND`, `INPUT?`, `PRINT`
 - `docs/next/examples/mandelbrot.tbx` — 整数演算、反復、`ABS`, `PUTCHR`
 - `docs/next/examples/squares.tbx` — グローバル配列への保存と読み出し
+- `docs/next/examples/grades.tbx` — `FOR` で配列を走査し、`SELECT` で成績区分を判定する統合例
 
 ## 実装を確認する場所
 
