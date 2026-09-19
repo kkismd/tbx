@@ -16,7 +16,9 @@ use crate::instruction::{
     InstructionView,
 };
 use crate::instruction_builder::{InstructionBuildError, InstructionBuildTarget};
-use crate::lexer::{LexError, Lexer, Token, TokenKind};
+#[cfg(test)]
+use crate::lexer::Lexer;
+use crate::lexer::{LexError, Token, TokenKind};
 use crate::line_number::{LineNumberError, LocalLineNumber, LocalLineNumberTable};
 use crate::operator::OperatorLookup;
 use crate::primitive::PrimitiveLookup;
@@ -34,10 +36,9 @@ use crate::source_word::{
     AdditionalSourceRequest, NativeSourceWordBindingAccess, NativeSourceWordContext,
     NativeSourceWordContextParts, NativeSourceWordHandler, NativeStructuredSourceWordContext,
     NativeStructuredSourceWordContextParts, NativeStructuredSourceWordOwner,
-    OneShotSourceWordDispatch, RuntimeDefinitionPublisher, SourceBlockCursor, SourceBlockMarker,
-    SourceBlockRead, SourceBlockReader, SourceBlockStatement, SourceBlockTerminal,
-    SourceWordDispatch, SourceWordError, SourceWordId, SourceWordLookup, SourceWordLookupError,
-    SourceWordRegistry, SourceWordSyntaxMarker, StructuredBodyCapabilities,
+    OneShotSourceWordDispatch, RuntimeDefinitionPublisher, SourceBlockMarker, SourceBlockReader,
+    SourceBlockStatement, SourceWordDispatch, SourceWordError, SourceWordId, SourceWordLookup,
+    SourceWordLookupError, SourceWordRegistry, SourceWordSyntaxMarker, StructuredBodyCapabilities,
     StructuredBuildTargetScope, StructuredLineNumberScope, StructuredOwnerLocalTarget,
     StructuredSourceWordDispatch, StructuredSourceWordInstance,
 };
@@ -57,6 +58,13 @@ use crate::word_lookup::PublishedWordLookup;
 use crate::word_resolution::{
     resolve_binding_name, resolve_word_name, ResolvedBinding, WordResolutionError,
 };
+
+mod segmentation;
+
+use segmentation::{LogicalStatementCursor, LogicalStatementView, SegmentedSource, Terminal};
+
+#[cfg(test)]
+use crate::source_word::{SourceBlockRead, SourceBlockTerminal};
 
 #[derive(Debug)]
 pub(crate) struct TemporaryExecutionUnit {
@@ -101,7 +109,7 @@ impl SourceFormCursor {
         view: SourceView<'_>,
         mut context: SourceCompileContext<'_>,
     ) -> Result<Option<CompiledTopLevelForm>, SourceProcessorError> {
-        if self.position >= self.segmented.completed_statements.len() {
+        if self.position >= self.segmented.completed_statements().len() {
             return match self.segmented.terminal() {
                 Terminal::Eof { .. } => Ok(None),
                 Terminal::LexError(error) => Err(error.into()),
@@ -111,7 +119,7 @@ impl SourceFormCursor {
         let mut code = SourceMappedCode::new();
         let mut additional_source = None;
         let consumed = {
-            let statements = &self.segmented.completed_statements;
+            let statements = self.segmented.completed_statements();
             let mut cursor = LogicalStatementCursor::new(
                 view,
                 self.source_id,
@@ -2007,246 +2015,6 @@ fn line_number_compile_error(source: LineNumberError) -> CompileError {
         kind: CompileErrorKind::LineNumber {
             source: Box::new(source),
         },
-    }
-}
-
-// Segmentation is the source of truth for top-level statement boundaries.
-// Lexical failure keeps already completed statements visible while leaving the
-// unbounded tail unavailable to semantic compilation and source-wide analysis.
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct SegmentedSource {
-    completed_statements: Vec<LogicalStatement>,
-    incomplete_tail: Vec<Token>,
-    terminal: Terminal,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct LogicalStatement {
-    tokens: Vec<Token>,
-}
-
-trait LogicalStatementView {
-    fn tokens(&self) -> &[Token];
-    fn span(&self, view: SourceView<'_>, source_id: SourceId) -> Result<SourceSpan, SourceError>;
-}
-
-#[derive(Debug)]
-struct LogicalStatementCursor<'source, 'statements, S> {
-    view: SourceView<'source>,
-    source_id: SourceId,
-    statements: &'statements [S],
-    terminal: Terminal,
-    position: usize,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Terminal {
-    Eof { span: SourceSpan },
-    LexError(LexError),
-}
-
-impl SegmentedSource {
-    fn collect(view: SourceView<'_>, source_id: SourceId) -> Result<Self, SourceProcessorError> {
-        let mut collector = LogicalStatementCollector::new();
-        let mut lexer = Lexer::new(view, source_id)?;
-
-        loop {
-            match lexer.next_token() {
-                Ok(token) if token.kind() == TokenKind::Eof => {
-                    return Ok(collector.finish(Terminal::Eof { span: token.span() }));
-                }
-                Ok(token) => {
-                    if collector.push_token(view, token)? == CollectorAction::SkipLineComment {
-                        let token = lexer.skip_line_comment()?;
-                        if token.kind() == TokenKind::Eof {
-                            return Ok(collector.finish(Terminal::Eof { span: token.span() }));
-                        }
-                        collector.push_token(view, token)?;
-                    }
-                }
-                Err(error) => return Ok(collector.finish(Terminal::LexError(error))),
-            }
-        }
-    }
-
-    fn completed_statements(&self) -> &[LogicalStatement] {
-        &self.completed_statements
-    }
-
-    fn terminal(&self) -> Terminal {
-        self.terminal
-    }
-
-    #[cfg(test)]
-    fn incomplete_tail(&self) -> &[Token] {
-        &self.incomplete_tail
-    }
-}
-
-impl LogicalStatement {
-    fn new(tokens: Vec<Token>) -> Self {
-        Self { tokens }
-    }
-
-    fn tokens(&self) -> &[Token] {
-        &self.tokens
-    }
-}
-
-impl LogicalStatementView for LogicalStatement {
-    fn tokens(&self) -> &[Token] {
-        self.tokens()
-    }
-
-    fn span(&self, view: SourceView<'_>, source_id: SourceId) -> Result<SourceSpan, SourceError> {
-        let first = self
-            .tokens
-            .first()
-            .expect("logical statements are never empty");
-        let last = self
-            .tokens
-            .last()
-            .expect("logical statements are never empty");
-        view.span(source_id, first.span().start(), last.span().end())
-    }
-}
-
-impl LogicalStatementView for SourceBlockStatement<'_> {
-    fn tokens(&self) -> &[Token] {
-        SourceBlockStatement::tokens(*self)
-    }
-
-    fn span(&self, _view: SourceView<'_>, _source_id: SourceId) -> Result<SourceSpan, SourceError> {
-        Ok(SourceBlockStatement::span(*self))
-    }
-}
-
-impl<'source, 'statements, S> LogicalStatementCursor<'source, 'statements, S> {
-    fn new(
-        view: SourceView<'source>,
-        source_id: SourceId,
-        statements: &'statements [S],
-        terminal: Terminal,
-    ) -> Self {
-        Self {
-            view,
-            source_id,
-            statements,
-            terminal,
-            position: 0,
-        }
-    }
-
-    fn next_completed_statement(&mut self) -> Option<&'statements S> {
-        let statement = self.statements.get(self.position)?;
-        self.position += 1;
-        Some(statement)
-    }
-}
-
-impl<'statements, S> SourceBlockCursor<'statements> for LogicalStatementCursor<'_, 'statements, S>
-where
-    S: LogicalStatementView + 'statements,
-{
-    fn read_next_block_statement(
-        &mut self,
-    ) -> Result<SourceBlockRead<'statements>, SourceWordError> {
-        let Some(statement) = self.next_completed_statement() else {
-            return Ok(SourceBlockRead::Terminal(match self.terminal {
-                Terminal::Eof { span } => SourceBlockTerminal::Eof { span },
-                Terminal::LexError(error) => SourceBlockTerminal::LexError { error },
-            }));
-        };
-
-        let span = statement
-            .span(self.view, self.source_id)
-            .map_err(|source| SourceWordError::Source { source })?;
-        Ok(SourceBlockRead::Statement(SourceBlockStatement::new(
-            statement.tokens(),
-            span,
-        )))
-    }
-}
-
-#[derive(Debug, Default)]
-struct LogicalStatementCollector {
-    completed_statements: Vec<LogicalStatement>,
-    current_tokens: Vec<Token>,
-    depth: usize,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum CollectorAction {
-    Continue,
-    SkipLineComment,
-}
-
-impl LogicalStatementCollector {
-    fn new() -> Self {
-        Self {
-            completed_statements: Vec::new(),
-            current_tokens: Vec::new(),
-            depth: 0,
-        }
-    }
-
-    fn push_token(
-        &mut self,
-        view: SourceView<'_>,
-        token: Token,
-    ) -> Result<CollectorAction, SourceProcessorError> {
-        if self.is_statement_leading_rem(view, token)? {
-            return Ok(CollectorAction::SkipLineComment);
-        }
-
-        match token.kind() {
-            TokenKind::LParen => {
-                self.depth = self.depth.saturating_add(1);
-                self.current_tokens.push(token);
-            }
-            TokenKind::RParen => {
-                self.depth = self.depth.saturating_sub(1);
-                self.current_tokens.push(token);
-            }
-            TokenKind::LineBoundary if self.depth == 0 => self.finish_current_statement(),
-            _ => self.current_tokens.push(token),
-        }
-
-        Ok(CollectorAction::Continue)
-    }
-
-    fn is_statement_leading_rem(
-        &self,
-        view: SourceView<'_>,
-        token: Token,
-    ) -> Result<bool, SourceProcessorError> {
-        if token.kind() != TokenKind::Name || !self.current_tokens.is_empty() {
-            return Ok(false);
-        }
-
-        Ok(view.slice(token.span())?.eq_ignore_ascii_case("REM"))
-    }
-
-    fn finish(mut self, terminal: Terminal) -> SegmentedSource {
-        if matches!(terminal, Terminal::Eof { .. }) {
-            self.finish_current_statement();
-        }
-
-        SegmentedSource {
-            completed_statements: self.completed_statements,
-            incomplete_tail: self.current_tokens,
-            terminal,
-        }
-    }
-
-    fn finish_current_statement(&mut self) {
-        if self.current_tokens.is_empty() {
-            return;
-        }
-
-        let tokens = std::mem::take(&mut self.current_tokens);
-        self.completed_statements
-            .push(LogicalStatement::new(tokens));
     }
 }
 
