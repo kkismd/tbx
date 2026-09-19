@@ -339,6 +339,7 @@ pub(crate) enum CompileErrorKind {
     Expression { source: ExpressionSyntaxErrorKind },
     ExpressionVariable { source: ExpressionVariableErrorKind },
     ExpressionCall { source: ExpressionCallErrorKind },
+    StructuredExitTargetUnavailable,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -391,6 +392,15 @@ struct StructuredSourceFrame {
     current_line_numbers: Rc<RefCell<LocalLineNumberTable>>,
     owner_line_numbers: Vec<OwnerLocalLineNumberScope>,
     owner_targets: Vec<Rc<RefCell<OwnerLocalBuildTarget>>>,
+    exit_target: bool,
+    control_value_ownership: usize,
+    pending_exit_branches: Vec<InstructionAddress>,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct StructuredExitMetadata {
+    exit_target: bool,
+    control_value_ownership: usize,
 }
 
 #[derive(Debug, Clone)]
@@ -423,6 +433,7 @@ impl StructuredSourceFrame {
         enclosing_target: BuildTargetHandle,
         enclosing_line_numbers: Rc<RefCell<LocalLineNumberTable>>,
         enclosing_capabilities: StructuredBodyCapabilities,
+        exit_metadata: StructuredExitMetadata,
     ) -> Self {
         Self {
             syntax_markers,
@@ -436,6 +447,9 @@ impl StructuredSourceFrame {
             enclosing_line_numbers,
             owner_line_numbers: Vec::new(),
             owner_targets: Vec::new(),
+            exit_target: exit_metadata.exit_target,
+            control_value_ownership: exit_metadata.control_value_ownership,
+            pending_exit_branches: Vec::new(),
         }
     }
 
@@ -508,6 +522,17 @@ impl StructuredSourceFrame {
             .iter()
             .map(|target| target.borrow().snapshot())
             .collect()
+    }
+
+    fn patch_pending_exit_branches(
+        &mut self,
+        code: &mut dyn InstructionBuildTarget,
+    ) -> Result<(), SourceProcessorError> {
+        let target = code.current_address();
+        for branch in self.pending_exit_branches.drain(..) {
+            code.patch_branch_target(branch, target)?;
+        }
+        Ok(())
     }
 }
 
@@ -838,9 +863,22 @@ where
         }
         GrammarAccept::Terminator => {
             frame.owner.complete(&mut owner_context, marker)?;
+            drop(owner_context);
+            drop(callback_line_numbers);
             if frame.owner.resolve_line_numbers_at_terminator() {
                 frame.resolve_owner_line_numbers(code)?;
             }
+            let mut patch_target;
+            let completion_code = match &callback_target {
+                BuildTargetHandle::Parent => &mut *code,
+                BuildTargetHandle::OwnerLocal(target) => {
+                    patch_target = SharedOwnerLocalBuildTarget {
+                        target: target.clone(),
+                    };
+                    &mut patch_target as &mut dyn InstructionBuildTarget
+                }
+            };
+            frame.patch_pending_exit_branches(completion_code)?;
         }
     }
 
@@ -1434,26 +1472,44 @@ where
             return Ok(Some(source_word_context.take_additional_source_request()));
         }
         StatementSourceWordDispatch::UserDefined(implementation) => {
-            let mut line_numbers = state.line_numbers.borrow_mut();
-            let mut source_word_context =
-                UserDefinedSourceWordContext::new(UserDefinedSourceWordContextParts {
-                    view: traversal.view,
-                    source_id: traversal.source_id,
-                    tokens,
-                    bindings: context.bindings(),
-                    operators,
-                    local_references: context.local_references,
-                    code: state.code,
-                    line_numbers: &mut line_numbers,
-                    capabilities: SourceProcessingCapabilities::statement_runtime(),
-                });
-            evaluate_source_word(&implementation, &mut source_word_context)
-                .map_err(|source| SourceWordError::UserDefinedEvaluation { source })?;
+            let exit_requested = {
+                let mut line_numbers = state.line_numbers.borrow_mut();
+                let mut source_word_context =
+                    UserDefinedSourceWordContext::new(UserDefinedSourceWordContextParts {
+                        view: traversal.view,
+                        source_id: traversal.source_id,
+                        tokens,
+                        bindings: context.bindings(),
+                        operators,
+                        local_references: context.local_references,
+                        code: state.code,
+                        line_numbers: &mut line_numbers,
+                        capabilities: SourceProcessingCapabilities::statement_runtime(),
+                    });
+                evaluate_source_word(&implementation, &mut source_word_context)
+                    .map_err(|source| SourceWordError::UserDefinedEvaluation { source })?;
+                source_word_context.take_exit_request()
+            };
+            if exit_requested {
+                emit_structured_exit(first.span(), state, traversal.structured_frames)?;
+            }
         }
         StatementSourceWordDispatch::Structured {
             implementation,
             grammar,
         } => {
+            let exit_metadata = match &implementation {
+                StatementStructuredSourceWordDispatch::Native(_) => StructuredExitMetadata {
+                    exit_target: false,
+                    control_value_ownership: 0,
+                },
+                StatementStructuredSourceWordDispatch::UserDefined(implementation) => {
+                    StructuredExitMetadata {
+                        exit_target: implementation.exit_target(),
+                        control_value_ownership: implementation.control_value_ownership(),
+                    }
+                }
+            };
             let instance = match implementation {
                 StatementStructuredSourceWordDispatch::Native(start) => {
                     let mut source_word_context =
@@ -1514,12 +1570,39 @@ where
                 state.target.clone(),
                 state.line_numbers.clone(),
                 state.capabilities,
+                exit_metadata,
             );
             frame.apply_owner_context();
             traversal.structured_frames.push(frame);
         }
     }
     Ok(Some(None))
+}
+
+fn emit_structured_exit(
+    span: SourceSpan,
+    state: &mut StatementCompileState<'_>,
+    frames: &mut [StructuredSourceFrame],
+) -> Result<(), SourceProcessorError> {
+    let Some(target_index) = frames.iter().rposition(|frame| frame.exit_target) else {
+        return Err(CompileError {
+            span,
+            kind: CompileErrorKind::StructuredExitTargetUnavailable,
+        }
+        .into());
+    };
+    let drops = frames[target_index..]
+        .iter()
+        .map(|frame| frame.control_value_ownership)
+        .sum::<usize>();
+    for _ in 0..drops {
+        state
+            .code
+            .append_mapped(Instruction::DropControlValue, span)?;
+    }
+    let branch = state.code.append_mapped_jump_placeholder(span)?;
+    frames[target_index].pending_exit_branches.push(branch);
+    Ok(())
 }
 
 fn compile_bif(
@@ -6328,6 +6411,146 @@ mod tests {
                 .expect("expected primary span");
             assert_eq!(span, expected_span);
         }
+    }
+
+    #[test]
+    fn emit_exit_is_validated_and_compiled_against_the_innermost_exit_target() {
+        let (_words, _primitives, operators, mut source_words, mut bindings, mut globals, _vars) =
+            global_source_fixture();
+        for definition in [
+            "SYNTAX INVALID1\nSTATEMENT\nEMIT_EXIT\nEMIT_EXIT\nENDS",
+            "SYNTAX INVALID2\nSTATEMENT\nEMIT_EXIT\nEXPECT_END\nENDS",
+            "SYNTAX INVALID3\nBLOCK\nSTART\nEMIT_EXIT\nLAST ENDINVALID3\nEXPECT_END\nENDS",
+        ] {
+            let (_sources, _id, error) = publish_user_source_word_error(
+                definition,
+                &mut bindings,
+                &mut globals,
+                &mut source_words,
+                operators.lookup(),
+            );
+            assert!(matches!(
+                error,
+                SourceProcessorError::SourceWord(SourceWordError::SyntaxDefinition {
+                    kind: SyntaxDefinitionErrorKind::EmitExitPlacement,
+                    ..
+                })
+            ));
+        }
+        publish_user_source_word(
+            "SYNTAX BREAK\nSTATEMENT\nEXPECT_END\nEMIT_EXIT\nENDS",
+            &mut bindings,
+            &mut globals,
+            &mut source_words,
+            operators.lookup(),
+        );
+        publish_user_source_word(
+            "SYNTAX TARGET\nBLOCK EXIT_TARGET\nSTART\nEMIT_CONTROL_PUSH\nEXPECT_END\nLAST ENDTARGET\nEXPECT_END\nEMIT_CONTROL_DROP\nENDS",
+            &mut bindings,
+            &mut globals,
+            &mut source_words,
+            operators.lookup(),
+        );
+        publish_user_source_word(
+            "SYNTAX WRAP\nBLOCK\nSTART\nEMIT_CONTROL_PUSH\nEXPECT_END\nLAST ENDWRAP\nEXPECT_END\nEMIT_CONTROL_DROP\nENDS",
+            &mut bindings,
+            &mut globals,
+            &mut source_words,
+            operators.lookup(),
+        );
+
+        let (sources, source_id) = source("TARGET\nWRAP\nBREAK\nENDWRAP\nENDTARGET");
+        let unit = compile_source(
+            sources.view(),
+            source_id,
+            SourceCompileContext::with_source_words_and_operators(
+                &bindings,
+                source_words.lookup(),
+                operators.lookup(),
+            ),
+        )
+        .expect("exit within a target should compile");
+        assert_eq!(
+            unit.instructions().get(address(0)),
+            Ok(&Instruction::PushControlValue)
+        );
+        assert_eq!(
+            unit.instructions().get(address(1)),
+            Ok(&Instruction::PushControlValue)
+        );
+        assert_eq!(
+            unit.instructions().get(address(2)),
+            Ok(&Instruction::DropControlValue)
+        );
+        assert_eq!(
+            unit.instructions().get(address(3)),
+            Ok(&Instruction::DropControlValue)
+        );
+        assert_eq!(
+            unit.instructions().get(address(4)),
+            Ok(&Instruction::Jump(address(7)))
+        );
+        assert_eq!(
+            unit.instructions().get(address(5)),
+            Ok(&Instruction::DropControlValue)
+        );
+        assert_eq!(
+            unit.instructions().get(address(6)),
+            Ok(&Instruction::DropControlValue)
+        );
+        assert_eq!(unit.instructions().get(address(7)), Ok(&Instruction::Halt));
+        let break_span = sources.view().span(source_id, 12, 17).expect("BREAK span");
+        assert_eq!(unit.source_span(location(&unit, 2)), Ok(Some(break_span)));
+        assert_eq!(unit.source_span(location(&unit, 3)), Ok(Some(break_span)));
+        assert_eq!(unit.source_span(location(&unit, 4)), Ok(Some(break_span)));
+
+        let (nested_sources, nested_id) = source("TARGET\nTARGET\nBREAK\nENDTARGET\nENDTARGET");
+        let nested = compile_source(
+            nested_sources.view(),
+            nested_id,
+            SourceCompileContext::with_source_words_and_operators(
+                &bindings,
+                source_words.lookup(),
+                operators.lookup(),
+            ),
+        )
+        .expect("nested targets should compile");
+        assert_eq!(
+            nested.instructions().get(address(2)),
+            Ok(&Instruction::DropControlValue)
+        );
+        assert_eq!(
+            nested.instructions().get(address(3)),
+            Ok(&Instruction::Jump(address(5)))
+        );
+
+        let (outside_sources, outside_id) = source("BREAK");
+        let outside = compile_source(
+            outside_sources.view(),
+            outside_id,
+            SourceCompileContext::with_source_words_and_operators(
+                &bindings,
+                source_words.lookup(),
+                operators.lookup(),
+            ),
+        )
+        .expect_err("exit without a target should fail");
+        assert!(matches!(
+            outside,
+            SourceProcessorError::Compile(CompileError {
+                kind: CompileErrorKind::StructuredExitTargetUnavailable,
+                ..
+            })
+        ));
+        assert_eq!(
+            outside.primary_span(),
+            Some(
+                outside_sources
+                    .view()
+                    .span(outside_id, 0, 5)
+                    .expect("BREAK span")
+            )
+        );
     }
 
     #[test]

@@ -34,6 +34,7 @@ pub(crate) struct UserDefinedSourceWordContext<'source, 'state> {
     code: &'state mut dyn InstructionBuildTarget,
     line_numbers: &'state mut LocalLineNumberTable,
     capabilities: SourceProcessingCapabilities,
+    exit_requested: bool,
 }
 
 pub(crate) struct UserDefinedSourceWordContextParts<'source, 'state> {
@@ -266,7 +267,12 @@ impl<'source, 'state> UserDefinedSourceWordContext<'source, 'state> {
             code: parts.code,
             line_numbers: parts.line_numbers,
             capabilities: parts.capabilities,
+            exit_requested: false,
         }
+    }
+
+    pub(crate) fn take_exit_request(&mut self) -> bool {
+        std::mem::take(&mut self.exit_requested)
     }
 }
 
@@ -520,6 +526,9 @@ fn evaluate_instruction(
                 .code
                 .append_mapped(Instruction::DropControlValue, origin.span())
                 .map_err(|source| SourceWordEvaluationError::InstructionBuild { source, origin })?;
+        }
+        SourceProcessingOperation::EmitExit => {
+            context.exit_requested = true;
         }
         SourceProcessingOperation::EmitReturn => {
             context
