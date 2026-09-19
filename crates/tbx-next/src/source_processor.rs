@@ -6280,6 +6280,11 @@ mod tests {
                 "EMIT_CONTROL_PUSH",
             ),
             (
+                "SYNTAX MARKDROP\nBLOCK\nSTART\nEXPECT_END\nMARK MID\nEMIT_CONTROL_DROP\nEXPECT_END\nLAST ENDMARKDROP\nEXPECT_END\nENDS",
+                SyntaxDefinitionErrorKind::ControlValueMarkerOperation,
+                "EMIT_CONTROL_DROP",
+            ),
+            (
                 "SYNTAX LASTPUSH\nBLOCK\nSTART\nEXPECT_END\nLAST ENDLASTPUSH\nEMIT_CONTROL_PUSH\nEXPECT_END\nENDS",
                 SyntaxDefinitionErrorKind::ControlValueTerminatorPush,
                 "EMIT_CONTROL_PUSH",
@@ -6288,6 +6293,11 @@ mod tests {
                 "SYNTAX MISMATCH\nBLOCK\nSTART\nEMIT_CONTROL_PUSH\nEXPECT_END\nLAST ENDMISMATCH\nEXPECT_END\nENDS",
                 SyntaxDefinitionErrorKind::ControlValueOwnershipMismatch,
                 "LAST ENDMISMATCH",
+            ),
+            (
+                "SYNTAX EXCESSDROP\nBLOCK\nSTART\nEMIT_CONTROL_PUSH\nEXPECT_END\nLAST ENDEXCESSDROP\nEXPECT_END\nEMIT_CONTROL_DROP\nEMIT_CONTROL_DROP\nENDS",
+                SyntaxDefinitionErrorKind::ControlValueOwnershipMismatch,
+                "EMIT_CONTROL_DROP",
             ),
             (
                 "SYNTAX ORDER\nBLOCK\nSTART\nEMIT_CONTROL_PUSH\nEXPECT_END\nLAST ENDORDER\nEMIT_CONTROL_DROP\nEMIT_INT 1\nENDS",
