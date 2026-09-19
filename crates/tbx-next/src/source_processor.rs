@@ -2944,6 +2944,7 @@ mod tests {
     use crate::source_mapping::{
         InstructionSourceMapping, SourceMappingLookup, SourceMappingLookupError,
     };
+    use crate::source_word::SyntaxDefinitionErrorKind;
     use crate::source_word::{
         DefSyntaxErrorKind, DimSyntaxErrorKind, EvalSyntaxErrorKind, LetSyntaxErrorKind,
         NativeSourceWordContext, NativeStructuredSourceWordContext,
@@ -6168,6 +6169,165 @@ mod tests {
         );
 
         assert_eq!(globals.view().read(variables[0]), Ok(value(4)));
+    }
+
+    #[test]
+    fn user_defined_block_publishes_exit_target_and_control_value_metadata() {
+        let (_words, _primitives, operators, mut source_words, mut bindings, mut globals, _vars) =
+            global_source_fixture();
+        publish_user_source_word(
+            "SYNTAX TARGET\nBLOCK EXIT_TARGET\nSTART\nEMIT_CONTROL_PUSH\nEXPECT_END\nLAST ENDTARGET\nEXPECT_END\nEMIT_CONTROL_DROP\nENDS",
+            &mut bindings,
+            &mut globals,
+            &mut source_words,
+            operators.lookup(),
+        );
+
+        let Some(Binding::SourceWord(id)) = bindings.get(&name("TARGET")).copied() else {
+            panic!("TARGET should publish as a source word");
+        };
+        let SourceWordDispatch::Structured {
+            implementation: StructuredSourceWordDispatch::UserDefined(implementation),
+            ..
+        } = source_words
+            .lookup()
+            .lookup_dispatch(id)
+            .expect("published source word should dispatch")
+        else {
+            panic!("TARGET should keep the user-defined structured implementation");
+        };
+        assert!(implementation.exit_target());
+        assert_eq!(implementation.control_value_ownership(), 1);
+
+        publish_user_source_word(
+            "SYNTAX MULTI\nBLOCK\nSTART\nEMIT_CONTROL_PUSH\nEMIT_CONTROL_PUSH\nEXPECT_END\nLAST ENDMULTI\nEXPECT_END\nEMIT_CONTROL_DROP\nEMIT_CONTROL_DROP\nENDS",
+            &mut bindings,
+            &mut globals,
+            &mut source_words,
+            operators.lookup(),
+        );
+        let Some(Binding::SourceWord(id)) = bindings.get(&name("MULTI")).copied() else {
+            panic!("MULTI should publish as a source word");
+        };
+        let SourceWordDispatch::Structured {
+            implementation: StructuredSourceWordDispatch::UserDefined(implementation),
+            ..
+        } = source_words
+            .lookup()
+            .lookup_dispatch(id)
+            .expect("published source word should dispatch")
+        else {
+            panic!("MULTI should keep the user-defined structured implementation");
+        };
+        assert!(!implementation.exit_target());
+        assert_eq!(implementation.control_value_ownership(), 2);
+    }
+
+    #[test]
+    fn block_attributes_and_control_value_contracts_are_validated_at_publication() {
+        let (_words, _primitives, operators, mut source_words, mut bindings, mut globals, _vars) =
+            global_source_fixture();
+        for (definition, expected_kind) in [
+            (
+                "SYNTAX PLAIN\nBLOCK\nSTART\nEXPECT_END\nLAST ENDPLAIN\nEXPECT_END\nENDS",
+                None,
+            ),
+            (
+                "SYNTAX UNKNOWN\nBLOCK OTHER\nSTART\nEXPECT_END\nLAST ENDUNKNOWN\nEXPECT_END\nENDS",
+                Some(SyntaxDefinitionErrorKind::UnsupportedKind),
+            ),
+            (
+                "SYNTAX MULTI\nBLOCK EXIT_TARGET EXTRA\nSTART\nEXPECT_END\nLAST ENDMULTI\nEXPECT_END\nENDS",
+                Some(SyntaxDefinitionErrorKind::TrailingOperationToken {
+                    kind: TokenKind::Name,
+                }),
+            ),
+        ] {
+            if expected_kind.is_none() {
+                publish_user_source_word(
+                    definition,
+                    &mut bindings,
+                    &mut globals,
+                    &mut source_words,
+                    operators.lookup(),
+                );
+                continue;
+            }
+            let (_sources, _id, error) = publish_user_source_word_error(
+                definition,
+                &mut bindings,
+                &mut globals,
+                &mut source_words,
+                operators.lookup(),
+            );
+            let SourceProcessorError::SourceWord(SourceWordError::SyntaxDefinition { kind, .. }) =
+                error
+            else {
+                panic!("invalid BLOCK attribute should be a syntax-definition error");
+            };
+            assert_eq!(Some(kind), expected_kind);
+        }
+
+        let invalid_definitions = [
+            (
+                "SYNTAX STARTDROP\nBLOCK\nSTART\nEMIT_CONTROL_DROP\nEXPECT_END\nLAST ENDSTARTDROP\nEXPECT_END\nENDS",
+                SyntaxDefinitionErrorKind::ControlValueStartDrop,
+                "EMIT_CONTROL_DROP",
+            ),
+            (
+                "SYNTAX MARKPUSH\nBLOCK\nSTART\nEXPECT_END\nMARK MID\nEMIT_CONTROL_PUSH\nEXPECT_END\nLAST ENDMARKPUSH\nEXPECT_END\nENDS",
+                SyntaxDefinitionErrorKind::ControlValueMarkerOperation,
+                "EMIT_CONTROL_PUSH",
+            ),
+            (
+                "SYNTAX MARKDROP\nBLOCK\nSTART\nEXPECT_END\nMARK MID\nEMIT_CONTROL_DROP\nEXPECT_END\nLAST ENDMARKDROP\nEXPECT_END\nENDS",
+                SyntaxDefinitionErrorKind::ControlValueMarkerOperation,
+                "EMIT_CONTROL_DROP",
+            ),
+            (
+                "SYNTAX LASTPUSH\nBLOCK\nSTART\nEXPECT_END\nLAST ENDLASTPUSH\nEMIT_CONTROL_PUSH\nEXPECT_END\nENDS",
+                SyntaxDefinitionErrorKind::ControlValueTerminatorPush,
+                "EMIT_CONTROL_PUSH",
+            ),
+            (
+                "SYNTAX MISMATCH\nBLOCK\nSTART\nEMIT_CONTROL_PUSH\nEXPECT_END\nLAST ENDMISMATCH\nEXPECT_END\nENDS",
+                SyntaxDefinitionErrorKind::ControlValueOwnershipMismatch,
+                "LAST ENDMISMATCH",
+            ),
+            (
+                "SYNTAX EXCESSDROP\nBLOCK\nSTART\nEMIT_CONTROL_PUSH\nEXPECT_END\nLAST ENDEXCESSDROP\nEXPECT_END\nEMIT_CONTROL_DROP\nEMIT_CONTROL_DROP\nENDS",
+                SyntaxDefinitionErrorKind::ControlValueOwnershipMismatch,
+                "EMIT_CONTROL_DROP",
+            ),
+            (
+                "SYNTAX ORDER\nBLOCK\nSTART\nEMIT_CONTROL_PUSH\nEXPECT_END\nLAST ENDORDER\nEMIT_CONTROL_DROP\nEMIT_INT 1\nENDS",
+                SyntaxDefinitionErrorKind::ControlValueCleanupOrder,
+                "EMIT_INT",
+            ),
+        ];
+        for (definition, expected_kind, primary_text) in invalid_definitions {
+            let (sources, source_id, error) = publish_user_source_word_error(
+                definition,
+                &mut bindings,
+                &mut globals,
+                &mut source_words,
+                operators.lookup(),
+            );
+            let SourceProcessorError::SourceWord(SourceWordError::SyntaxDefinition { span, kind }) =
+                error
+            else {
+                panic!("invalid control-value contract should be a syntax-definition error");
+            };
+            assert_eq!(kind, expected_kind);
+            let start = definition
+                .find(primary_text)
+                .expect("primary text should be in definition");
+            let expected_span = sources
+                .view()
+                .span(source_id, start, start + primary_text.len())
+                .expect("expected primary span");
+            assert_eq!(span, expected_span);
+        }
     }
 
     #[test]

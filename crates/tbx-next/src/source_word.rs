@@ -73,6 +73,8 @@ pub(crate) struct UserDefinedStructuredSourceWordImplementation {
     start: SourceWordImplementation,
     markers: Vec<UserDefinedStructuredMarkerImplementation>,
     terminator: UserDefinedStructuredTerminatorImplementation,
+    exit_target: bool,
+    control_value_ownership: usize,
 }
 
 #[derive(Debug, Clone)]
@@ -434,6 +436,11 @@ pub(crate) enum SyntaxDefinitionErrorKind {
     IntegerLiteralOutOfRange,
     IntegerLiteralConversion,
     TrailingOperationToken { kind: TokenKind },
+    ControlValueStartDrop,
+    ControlValueMarkerOperation,
+    ControlValueTerminatorPush,
+    ControlValueOwnershipMismatch,
+    ControlValueCleanupOrder,
 }
 
 impl SourceWordError {
@@ -877,11 +884,15 @@ impl UserDefinedStructuredSourceWordImplementation {
         start: SourceWordImplementation,
         markers: Vec<UserDefinedStructuredMarkerImplementation>,
         terminator: UserDefinedStructuredTerminatorImplementation,
+        exit_target: bool,
+        control_value_ownership: usize,
     ) -> Self {
         Self {
             start,
             markers,
             terminator,
+            exit_target,
+            control_value_ownership,
         }
     }
 
@@ -897,6 +908,14 @@ impl UserDefinedStructuredSourceWordImplementation {
 
     fn terminator(&self) -> &SourceWordImplementation {
         &self.terminator.implementation
+    }
+
+    pub(crate) const fn exit_target(&self) -> bool {
+        self.exit_target
+    }
+
+    pub(crate) const fn control_value_ownership(&self) -> usize {
+        self.control_value_ownership
     }
 }
 
@@ -2262,12 +2281,9 @@ fn publish_block_syntax_definition(
     name_span: SourceSpan,
     kind_marker: SourceBlockMarker<'_>,
 ) -> Result<(), SourceWordError> {
-    require_empty_syntax_marker_remainder(
-        &kind_marker,
-        SyntaxDefinitionErrorKind::UnsupportedKind,
-    )?;
+    let exit_target = parse_block_exit_target(view, &kind_marker)?;
     let sections = read_block_syntax_sections(context, view)?;
-    let artifacts = complete_block_syntax_sections(sections, kind_marker.span())?;
+    let artifacts = complete_block_syntax_sections(sections, kind_marker.span(), exit_target)?;
     context.publish_structured_source_word(
         name,
         name_span,
@@ -2283,6 +2299,35 @@ struct BlockSyntaxArtifacts {
     grammar: StructuredGrammar,
     syntax_markers: Vec<SourceWordSyntaxMarker>,
     implementation: UserDefinedStructuredSourceWordImplementation,
+}
+
+fn parse_block_exit_target(
+    view: SourceView<'_>,
+    marker: &SourceBlockMarker<'_>,
+) -> Result<bool, SourceWordError> {
+    let Some(attribute) = marker.remaining_tokens().first().copied() else {
+        return Ok(false);
+    };
+    if attribute.kind() != TokenKind::Name
+        || !view
+            .slice(attribute.span())
+            .map_err(|source| SourceWordError::Source { source })?
+            .eq_ignore_ascii_case("EXIT_TARGET")
+    {
+        return Err(SourceWordError::SyntaxDefinition {
+            span: attribute.span(),
+            kind: SyntaxDefinitionErrorKind::UnsupportedKind,
+        });
+    }
+    if let Some(trailing) = marker.remaining_tokens().get(1).copied() {
+        return Err(SourceWordError::SyntaxDefinition {
+            span: trailing.span(),
+            kind: SyntaxDefinitionErrorKind::TrailingOperationToken {
+                kind: trailing.kind(),
+            },
+        });
+    }
+    Ok(true)
 }
 
 #[derive(Debug)]
@@ -2412,6 +2457,7 @@ fn read_syntax_marker_name(
 fn complete_block_syntax_sections(
     sections: Vec<BlockSyntaxSection>,
     fallback_span: SourceSpan,
+    exit_target: bool,
 ) -> Result<BlockSyntaxArtifacts, SourceWordError> {
     let Some(BlockSyntaxSection {
         kind: BlockSyntaxSectionKind::Start,
@@ -2429,6 +2475,8 @@ fn complete_block_syntax_sections(
         });
     };
     let start_header_span = *header_span;
+
+    let control_value_ownership = validate_block_control_value_ownership(&sections)?;
 
     let mut validation = SourceWordImplementationBuilder::new();
     for instruction in sections
@@ -2532,8 +2580,115 @@ fn complete_block_syntax_sections(
             start,
             markers,
             terminator_implementation,
+            exit_target,
+            control_value_ownership,
         ),
     })
+}
+
+fn validate_block_control_value_ownership(
+    sections: &[BlockSyntaxSection],
+) -> Result<usize, SourceWordError> {
+    let start = &sections[0];
+    let ownership = start
+        .instructions
+        .iter()
+        .filter(|instruction| {
+            matches!(
+                instruction.operation(),
+                SourceProcessingOperation::EmitControlPush
+            )
+        })
+        .count();
+    if let Some(instruction) = start.instructions.iter().find(|instruction| {
+        matches!(
+            instruction.operation(),
+            SourceProcessingOperation::EmitControlDrop
+        )
+    }) {
+        return Err(SourceWordError::SyntaxDefinition {
+            span: instruction.origin().span(),
+            kind: SyntaxDefinitionErrorKind::ControlValueStartDrop,
+        });
+    }
+
+    let Some(terminator_index) = sections
+        .iter()
+        .position(|section| matches!(section.kind, BlockSyntaxSectionKind::Last { .. }))
+    else {
+        return Ok(ownership);
+    };
+    for section in &sections[1..terminator_index] {
+        if let Some(instruction) = section.instructions.iter().find(|instruction| {
+            matches!(
+                instruction.operation(),
+                SourceProcessingOperation::EmitControlPush
+                    | SourceProcessingOperation::EmitControlDrop
+            )
+        }) {
+            return Err(SourceWordError::SyntaxDefinition {
+                span: instruction.origin().span(),
+                kind: SyntaxDefinitionErrorKind::ControlValueMarkerOperation,
+            });
+        }
+    }
+
+    let terminator = &sections[terminator_index];
+    if let Some(instruction) = terminator.instructions.iter().find(|instruction| {
+        matches!(
+            instruction.operation(),
+            SourceProcessingOperation::EmitControlPush
+        )
+    }) {
+        return Err(SourceWordError::SyntaxDefinition {
+            span: instruction.origin().span(),
+            kind: SyntaxDefinitionErrorKind::ControlValueTerminatorPush,
+        });
+    }
+    let drops = terminator
+        .instructions
+        .iter()
+        .filter(|instruction| {
+            matches!(
+                instruction.operation(),
+                SourceProcessingOperation::EmitControlDrop
+            )
+        })
+        .count();
+    if drops != ownership {
+        let span = terminator
+            .instructions
+            .iter()
+            .find(|instruction| {
+                matches!(
+                    instruction.operation(),
+                    SourceProcessingOperation::EmitControlDrop
+                )
+            })
+            .map_or(terminator.header_span, |instruction| {
+                instruction.origin().span()
+            });
+        return Err(SourceWordError::SyntaxDefinition {
+            span,
+            kind: SyntaxDefinitionErrorKind::ControlValueOwnershipMismatch,
+        });
+    }
+
+    let mut cleanup_started = false;
+    for instruction in &terminator.instructions {
+        if matches!(
+            instruction.operation(),
+            SourceProcessingOperation::EmitControlDrop
+        ) {
+            cleanup_started = true;
+        } else if cleanup_started {
+            return Err(SourceWordError::SyntaxDefinition {
+                span: instruction.origin().span(),
+                kind: SyntaxDefinitionErrorKind::ControlValueCleanupOrder,
+            });
+        }
+    }
+    Ok(ownership)
 }
 
 fn validate_block_section_local_visibility(
