@@ -392,13 +392,13 @@ USE "sub/B.tbx"
 
 ```tbx
 SYNTAX SLET
-STATEMENT
-READ_NAME AS name
-RESOLVE_VAR name AS target
-EXPECT "="
-READ_EXPR AS expr
-EMIT_EXPR expr
-EMIT_STORE target
+  STATEMENT
+  READ_NAME AS name
+  RESOLVE_VAR name AS target
+  EXPECT "="
+  READ_EXPR AS expr
+  EMIT_EXPR expr
+  EMIT_STORE target
 ENDS
 
 SLET A = 10
