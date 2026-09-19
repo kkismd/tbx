@@ -90,6 +90,14 @@ pub(crate) struct UserDefinedStructuredTerminatorImplementation {
 pub(crate) trait NativeStructuredSourceWordOwner: std::fmt::Debug {
     fn current_body_context(&self) -> StructuredBodyContext;
 
+    fn resolve_line_numbers_at_intermediate_marker(&self) -> bool {
+        true
+    }
+
+    fn resolve_line_numbers_at_terminator(&self) -> bool {
+        false
+    }
+
     fn accept_marker<'source>(
         &mut self,
         context: &mut NativeStructuredSourceWordContext<'source, '_>,
@@ -3035,7 +3043,19 @@ impl UserDefinedStructuredSourceWordOwner {
 
 impl NativeStructuredSourceWordOwner for UserDefinedStructuredSourceWordOwner {
     fn current_body_context(&self) -> StructuredBodyContext {
-        StructuredBodyContext::inherited()
+        StructuredBodyContext::new(
+            StructuredBuildTargetScope::Enclosing,
+            StructuredLineNumberScope::OwnerLocal(0),
+            StructuredBodyCapabilities::inherit(),
+        )
+    }
+
+    fn resolve_line_numbers_at_intermediate_marker(&self) -> bool {
+        false
+    }
+
+    fn resolve_line_numbers_at_terminator(&self) -> bool {
+        true
     }
 
     fn accept_marker<'source>(
