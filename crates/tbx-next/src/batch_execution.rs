@@ -1667,6 +1667,58 @@ COPY_CONTROL";
     }
 
     #[test]
+    fn embedded_standard_library_while_has_one_line_number_scope_across_body() {
+        let mut writer = RecordingWriter::default();
+
+        let result = success(execute_with_embedded_standard_library(
+            "LET A = 0\nWHILE A < 1\nBIF 0, 20\n10 LET A = A + 1\n20 LET A = A + 1\nENDWH\nEVAL A",
+            "program.tbx",
+            &mut writer,
+        ));
+
+        assert_eq!(result.data_stack(), [Value::integer(1)]);
+    }
+
+    #[test]
+    fn line_number_on_structured_start_statement_belongs_to_enclosing_scope() {
+        let mut writer = RecordingWriter::default();
+
+        let result = success(execute_with_embedded_standard_library(
+            "BIF 0, 100\n100 WHILE 0\nLET A = 1\nENDWH\nEVAL 7",
+            "program.tbx",
+            &mut writer,
+        ));
+
+        assert_eq!(result.data_stack(), [Value::integer(7)]);
+    }
+
+    #[test]
+    fn structured_body_keeps_enclosing_publication_capability() {
+        let mut writer = RecordingWriter::default();
+
+        let result = success(execute_with_embedded_standard_library(
+            "WHILE 0\nVAR SCORE\nENDWH\nLET SCORE = 3\nEVAL SCORE",
+            "program.tbx",
+            &mut writer,
+        ));
+
+        assert_eq!(result.data_stack(), [Value::integer(3)]);
+    }
+
+    #[test]
+    fn structured_marker_cannot_become_a_line_number_target() {
+        let mut writer = RecordingWriter::default();
+
+        let failure = failure(execute_with_embedded_standard_library(
+            "WHILE 1\n10 ENDWH",
+            "program.tbx",
+            &mut writer,
+        ));
+
+        assert_eq!(failure.class(), UserFacingFailureClass::UserProgram);
+    }
+
+    #[test]
     fn embedded_standard_library_do_runs_once_and_repeats_until_condition_is_true() {
         let mut writer = RecordingWriter::default();
 
