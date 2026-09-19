@@ -786,7 +786,17 @@ where
                 source,
             })?;
 
-    frame.resolve_owner_line_numbers(code)?;
+    if matches!(accept, GrammarAccept::Intermediate { .. })
+        && frame.owner.resolve_line_numbers_at_intermediate_marker()
+    {
+        frame.resolve_owner_line_numbers(code)?;
+    }
+    if matches!(accept, GrammarAccept::Terminator)
+        && !frame.owner.resolve_line_numbers_at_terminator()
+    {
+        frame.resolve_owner_line_numbers(code)?;
+    }
+
     let callback_target = match accept {
         GrammarAccept::Intermediate { .. } => frame.body_target.clone(),
         GrammarAccept::Terminator => frame.enclosing_target.clone(),
@@ -828,6 +838,9 @@ where
         }
         GrammarAccept::Terminator => {
             frame.owner.complete(&mut owner_context, marker)?;
+            if frame.owner.resolve_line_numbers_at_terminator() {
+                frame.resolve_owner_line_numbers(code)?;
+            }
         }
     }
 
@@ -6236,6 +6249,107 @@ mod tests {
         );
 
         assert_eq!(globals.view().read(variables[0]), Ok(value(7)));
+    }
+
+    #[test]
+    fn user_defined_block_shares_one_line_number_scope_across_markers() {
+        let (_words, _primitives, operators, mut source_words, mut bindings, mut globals, _vars) =
+            global_source_fixture();
+        publish_user_source_word(
+            "SYNTAX WRAP\nBLOCK\nSTART\nEXPECT_END\nMARK MID\nEXPECT_END\nLAST ENDWRAP\nEXPECT_END\nENDS",
+            &mut bindings,
+            &mut globals,
+            &mut source_words,
+            operators.lookup(),
+        );
+
+        let (sources, source_id) =
+            source("WRAP\nBIF 0, 20\n10 LET A = 1\nMID\n20 LET A = 2\nENDWRAP");
+        compile_source(
+            sources.view(),
+            source_id,
+            SourceCompileContext::with_source_words_and_operators(
+                &bindings,
+                source_words.lookup(),
+                operators.lookup(),
+            ),
+        )
+        .expect("a line-number branch may cross markers in one structured owner");
+
+        let (duplicate_sources, duplicate_id) =
+            source("WRAP\n10 LET A = 1\nMID\n10 LET A = 2\nENDWRAP");
+        let error = compile_source(
+            duplicate_sources.view(),
+            duplicate_id,
+            SourceCompileContext::with_source_words_and_operators(
+                &bindings,
+                source_words.lookup(),
+                operators.lookup(),
+            ),
+        )
+        .expect_err("one structured block must reject duplicate line numbers across markers");
+        assert!(matches!(
+            error,
+            SourceProcessorError::Compile(CompileError {
+                kind: CompileErrorKind::LineNumber { .. },
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn nested_user_defined_blocks_have_independent_line_number_scopes() {
+        let (_words, _primitives, operators, mut source_words, mut bindings, mut globals, _vars) =
+            global_source_fixture();
+        for (name_text, end_text) in [("OUTER", "ENDOUTER"), ("INNER", "ENDINNER")] {
+            publish_user_source_word(
+                &format!(
+                    "SYNTAX {name_text}\nBLOCK\nSTART\nEXPECT_END\nLAST {end_text}\nEXPECT_END\nENDS"
+                ),
+                &mut bindings,
+                &mut globals,
+                &mut source_words,
+                operators.lookup(),
+            );
+        }
+
+        let (sources, source_id) =
+            source("OUTER\n10 LET A = 1\nINNER\n10 LET A = 2\nENDINNER\nENDOUTER");
+        compile_source(
+            sources.view(),
+            source_id,
+            SourceCompileContext::with_source_words_and_operators(
+                &bindings,
+                source_words.lookup(),
+                operators.lookup(),
+            ),
+        )
+        .expect("nested structured owners may reuse line numbers independently");
+
+        for text in [
+            "OUTER\nBIF 0, 20\nINNER\n20 LET A = 2\nENDINNER\nENDOUTER",
+            "OUTER\n10 LET A = 1\nINNER\nBIF 0, 10\nENDINNER\nENDOUTER",
+            "OUTER\nINNER\n10 LET A = 1\nENDINNER\nINNER\nBIF 0, 10\nENDINNER\nENDOUTER",
+        ] {
+            let (sources, source_id) = source(text);
+            let error = compile_source(
+                sources.view(),
+                source_id,
+                SourceCompileContext::with_source_words_and_operators(
+                    &bindings,
+                    source_words.lookup(),
+                    operators.lookup(),
+                ),
+            )
+            .expect_err("line-number references must not cross structured owner scopes");
+            assert!(matches!(
+                error,
+                SourceProcessorError::Compile(CompileError {
+                    kind: CompileErrorKind::LineNumber { .. },
+                    ..
+                })
+            ));
+        }
     }
 
     #[test]
