@@ -40,6 +40,91 @@ fn global_arrays_support_expression_reads_and_indexed_writes() {
 }
 
 #[test]
+fn pack_stores_expression_values_in_array_order() {
+    let text = "DIM @DATA[3]\nPACK @DATA = 10, 20, 30\nEVAL @DATA[1]\nEVAL @DATA[2]\nEVAL @DATA[3]";
+    let (sources, source_id) = source(text, "program.tbx");
+    let mut writer = RecordingWriter::default();
+
+    let result = success(execute_registered_source(&sources, source_id, &mut writer));
+
+    assert_eq!(
+        result.data_stack(),
+        [Value::integer(10), Value::integer(20), Value::integer(30)]
+    );
+}
+
+#[test]
+fn pack_consumes_only_the_array_sized_stack_suffix() {
+    let text = "DIM @DATA[2]\nEVAL 99\nPACK @DATA = 10, 20\nEVAL @DATA[1]\nEVAL @DATA[2]";
+    let (sources, source_id) = source(text, "program.tbx");
+    let mut writer = RecordingWriter::default();
+
+    let result = success(execute_registered_source(&sources, source_id, &mut writer));
+
+    assert_eq!(
+        result.data_stack(),
+        [Value::integer(99), Value::integer(10), Value::integer(20)]
+    );
+}
+
+#[test]
+fn pack_accepts_general_expressions_and_length_one_arrays() {
+    let text = "LET A = 2\nLET B = 3\nDIM @DATA[3]\nPACK @DATA = A + 1, B * 2, ABS(A)\nEVAL @DATA[1]\nEVAL @DATA[2]\nEVAL @DATA[3]";
+    let (sources, source_id) = source(text, "program.tbx");
+    let mut writer = RecordingWriter::default();
+
+    let result = success(execute_registered_source(&sources, source_id, &mut writer));
+
+    assert_eq!(
+        result.data_stack(),
+        [Value::integer(3), Value::integer(6), Value::integer(2)]
+    );
+
+    let (sources, source_id) = source("DIM @ONE[1]\nPACK @ONE = 42\nEVAL @ONE[1]", "program.tbx");
+    let mut writer = RecordingWriter::default();
+    let result = success(execute_registered_source(&sources, source_id, &mut writer));
+    assert_eq!(result.data_stack(), [Value::integer(42)]);
+}
+
+#[test]
+fn pack_consumes_only_the_top_values_when_rhs_leaves_extras() {
+    let text = "DIM @DATA[2]\nPACK @DATA = 10, 20, 30\nEVAL @DATA[1]\nEVAL @DATA[2]";
+    let (sources, source_id) = source(text, "program.tbx");
+    let mut writer = RecordingWriter::default();
+
+    let result = success(execute_registered_source(&sources, source_id, &mut writer));
+
+    assert_eq!(
+        result.data_stack(),
+        [Value::integer(10), Value::integer(20), Value::integer(30)]
+    );
+}
+
+#[test]
+fn pack_rejects_invalid_targets_and_syntax_with_source_diagnostics() {
+    for text in [
+        "PACK @MISSING = 1",
+        "LET A = 1\nPACK @A = 1",
+        "DIM @DATA[1]\nPACK DATA = 1",
+        "DIM @DATA[1]\nPACK @DATA",
+        "DIM @DATA[1]\nPACK @DATA =",
+        "DIM @DATA[1]\nPACK @DATA = 1 2",
+    ] {
+        let (sources, source_id) = source(text, "program.tbx");
+        let mut writer = RecordingWriter::default();
+
+        let failure = failure(execute_registered_source(&sources, source_id, &mut writer));
+
+        assert_eq!(
+            failure.class(),
+            UserFacingFailureClass::UserProgram,
+            "{text}"
+        );
+        assert!(failure.diagnostic().primary().is_some(), "{text}");
+    }
+}
+
+#[test]
 fn array_element_access_resolves_names_case_insensitively() {
     let (sources, source_id) = source(
         "DIM @Scores[2]\nLET @sCoReS[2] = 11\nEVAL @SCORES[2]",

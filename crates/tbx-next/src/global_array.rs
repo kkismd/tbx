@@ -63,6 +63,10 @@ impl GlobalArrays {
         }
     }
 
+    pub(crate) fn len_of(&self, id: ArrayId) -> Option<usize> {
+        self.arrays.get(id.slot).map(Vec::len)
+    }
+
     #[cfg(test)]
     pub(crate) fn len(&self) -> usize {
         self.arrays.len()
