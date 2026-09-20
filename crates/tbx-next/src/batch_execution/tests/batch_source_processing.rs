@@ -40,6 +40,34 @@ fn global_arrays_support_expression_reads_and_indexed_writes() {
 }
 
 #[test]
+fn pack_stores_expression_values_in_array_order() {
+    let text = "DIM @DATA[3]\nPACK @DATA = 10, 20, 30\nEVAL @DATA[1]\nEVAL @DATA[2]\nEVAL @DATA[3]";
+    let (sources, source_id) = source(text, "program.tbx");
+    let mut writer = RecordingWriter::default();
+
+    let result = success(execute_registered_source(&sources, source_id, &mut writer));
+
+    assert_eq!(
+        result.data_stack(),
+        [Value::integer(10), Value::integer(20), Value::integer(30)]
+    );
+}
+
+#[test]
+fn pack_consumes_only_the_array_sized_stack_suffix() {
+    let text = "DIM @DATA[2]\nEVAL 99\nPACK @DATA = 10, 20\nEVAL @DATA[1]\nEVAL @DATA[2]";
+    let (sources, source_id) = source(text, "program.tbx");
+    let mut writer = RecordingWriter::default();
+
+    let result = success(execute_registered_source(&sources, source_id, &mut writer));
+
+    assert_eq!(
+        result.data_stack(),
+        [Value::integer(99), Value::integer(10), Value::integer(20)]
+    );
+}
+
+#[test]
 fn array_element_access_resolves_names_case_insensitively() {
     let (sources, source_id) = source(
         "DIM @Scores[2]\nLET @sCoReS[2] = 11\nEVAL @SCORES[2]",

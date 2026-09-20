@@ -1652,6 +1652,17 @@ impl<'source, 'state> NativeSourceWordContext<'source, 'state> {
         resolve_variable_name(self.bindings(), source_name)
     }
 
+    pub(crate) fn resolve_runtime_word(
+        &self,
+        source_name: &str,
+    ) -> Result<WordId, ExpressionCallErrorKind> {
+        resolve_runtime_word_name(self.bindings(), source_name)
+    }
+
+    pub(crate) fn array_len(&self, id: crate::global_array::ArrayId) -> Option<usize> {
+        self.arrays.as_deref().and_then(|arrays| arrays.len_of(id))
+    }
+
     pub(crate) fn stage_expression(
         &self,
         tokens: &[Token],
@@ -1920,6 +1931,55 @@ pub(crate) fn let_source_word(
         staging.append_mapped_instruction(Instruction::StoreVar(target), target_token.span());
         staging
     };
+    context.commit_staging(&staging)
+}
+
+pub(crate) fn pack_source_word(
+    context: &mut NativeSourceWordContext<'_, '_>,
+) -> Result<(), SourceWordError> {
+    let (target_token, equal_span, rhs_tokens) = {
+        let reader = context.statement_reader_mut();
+        reader.expect(TokenKind::At).map_err(let_reader_error)?;
+        let target_token = reader.read_name().map_err(let_reader_error)?;
+        let equal_token = reader.expect(TokenKind::Equal).map_err(let_reader_error)?;
+        let rhs_tokens = reader.remaining_expression().map_err(let_reader_error)?;
+        (target_token, equal_token.span(), rhs_tokens)
+    };
+
+    let source_name = context
+        .view()
+        .slice(target_token.span())
+        .map_err(|source| SourceWordError::Source { source })?;
+    let target = resolve_array_name(context.bindings(), source_name).map_err(|source| {
+        SourceWordError::LetTarget {
+            span: target_token.span(),
+            source,
+        }
+    })?;
+    let array_len = context
+        .array_len(target)
+        .ok_or(SourceWordError::UnsupportedSourceWord {
+            span: target_token.span(),
+        })?;
+    let swap = context.resolve_runtime_word("SWAP").map_err(|_| {
+        SourceWordError::UnsupportedSourceWord {
+            span: target_token.span(),
+        }
+    })?;
+
+    let mut staging = context.stage_expression(rhs_tokens, equal_span)?;
+    for index in (1..=array_len).rev() {
+        let index = i16::try_from(index).map_err(|_| SourceWordError::UnsupportedSourceWord {
+            span: target_token.span(),
+        })?;
+        staging.append_mapped_instruction(
+            Instruction::Push(crate::value::Value::integer(index)),
+            target_token.span(),
+        );
+        staging.append_mapped_instruction(Instruction::Call(swap), target_token.span());
+        staging
+            .append_mapped_instruction(Instruction::StoreArrayElement(target), target_token.span());
+    }
     context.commit_staging(&staging)
 }
 
