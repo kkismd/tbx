@@ -1,6 +1,8 @@
 REM Enumerate all eight-queen solutions without recursion.
-REM @ROWS stores one queen per completed column. @TRY stores the next
-REM candidate row to try whenever the search returns to that column.
+REM @ROWS[1..DEPTH-1] is the active placement; entries at and after DEPTH
+REM may retain stale values and are ignored by collision checks. @TRY[DEPTH]
+REM stores the next row for that depth. A newly entered depth is reset to 1,
+REM so backtracking resumes with the next candidate instead of skipping one.
 
 DIM @ROWS[8]
 DIM @TRY[8]
