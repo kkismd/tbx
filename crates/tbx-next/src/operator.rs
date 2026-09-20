@@ -18,6 +18,9 @@ pub(crate) enum OperatorSemantic {
     LessEqual,
     Greater,
     GreaterEqual,
+    And,
+    Or,
+    Not,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -34,6 +37,9 @@ pub(crate) struct OperatorWords {
     less_equal: WordId,
     greater: WordId,
     greater_equal: WordId,
+    and: WordId,
+    or: WordId,
+    not: WordId,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -69,6 +75,9 @@ pub(crate) fn register_operator_primitives(
     let less_equal = register_operator(primitives, words, less_equal);
     let greater = register_operator(primitives, words, greater);
     let greater_equal = register_operator(primitives, words, greater_equal);
+    let and = register_operator(primitives, words, and);
+    let or = register_operator(primitives, words, or);
+    let not = register_operator(primitives, words, not);
 
     OperatorWords {
         add,
@@ -83,6 +92,9 @@ pub(crate) fn register_operator_primitives(
         less_equal,
         greater,
         greater_equal,
+        and,
+        or,
+        not,
     }
 }
 
@@ -138,6 +150,9 @@ impl OperatorLookup {
             OperatorSemantic::LessEqual => self.words.less_equal,
             OperatorSemantic::Greater => self.words.greater,
             OperatorSemantic::GreaterEqual => self.words.greater_equal,
+            OperatorSemantic::And => self.words.and,
+            OperatorSemantic::Or => self.words.or,
+            OperatorSemantic::Not => self.words.not,
         }
     }
 }
@@ -265,6 +280,23 @@ fn greater_equal(context: &mut PrimitiveContext<'_, '_>) -> Result<(), Primitive
     comparison(context, i16::ge)
 }
 
+fn and(context: &mut PrimitiveContext<'_, '_>) -> Result<(), PrimitiveError> {
+    logical_binary(context, |lhs, rhs| lhs != 0 && rhs != 0)
+}
+
+fn or(context: &mut PrimitiveContext<'_, '_>) -> Result<(), PrimitiveError> {
+    logical_binary(context, |lhs, rhs| lhs != 0 || rhs != 0)
+}
+
+fn not(context: &mut PrimitiveContext<'_, '_>) -> Result<(), PrimitiveError> {
+    let operand = context.peek()?.as_integer();
+    context
+        .pop()
+        .expect("NOT operand was checked before consuming it");
+    context.push(Value::integer(if operand == 0 { 1 } else { 0 }));
+    Ok(())
+}
+
 fn checked_binary(
     context: &mut PrimitiveContext<'_, '_>,
     operation: fn(Value, Value) -> Result<Value, ValueError>,
@@ -294,6 +326,23 @@ fn comparison(
     Ok(())
 }
 
+fn logical_binary(
+    context: &mut PrimitiveContext<'_, '_>,
+    operation: fn(i16, i16) -> bool,
+) -> Result<(), PrimitiveError> {
+    let (lhs, rhs) = context.peek2()?;
+    let result = if operation(lhs.as_integer(), rhs.as_integer()) {
+        1
+    } else {
+        0
+    };
+    context
+        .pop2()
+        .expect("binary operands were checked before consuming them");
+    context.push(Value::integer(result));
+    Ok(())
+}
+
 fn primitive_value_error(_error: ValueError) -> PrimitiveError {
     PrimitiveError::Failed
 }
@@ -311,7 +360,7 @@ mod tests {
     use crate::word_lookup::PublishedWordLookup;
     use crate::word_resolution::resolve_word_name;
 
-    const ALL_SEMANTICS: [OperatorSemantic; 12] = [
+    const ALL_SEMANTICS: [OperatorSemantic; 15] = [
         OperatorSemantic::Add,
         OperatorSemantic::Subtract,
         OperatorSemantic::Multiply,
@@ -324,8 +373,13 @@ mod tests {
         OperatorSemantic::LessEqual,
         OperatorSemantic::Greater,
         OperatorSemantic::GreaterEqual,
+        OperatorSemantic::And,
+        OperatorSemantic::Or,
+        OperatorSemantic::Not,
     ];
 
+    // ADR #1839 keeps logical operators as expression-only operators instead
+    // of exposing AND, OR, and NOT as ordinary user-facing bindings.
     const NAMED_OPERATORS: [(OperatorSemantic, &str); 12] = [
         (OperatorSemantic::Add, "ADD"),
         (OperatorSemantic::Subtract, "SUBTRACT"),
@@ -497,6 +551,58 @@ mod tests {
     }
 
     #[test]
+    fn logical_and_returns_zero_or_one_for_all_truth_combinations() {
+        for (lhs, rhs, expected) in [(0, 0, 0), (0, 7, 0), (-3, 0, 0), (2, -4, 1)] {
+            assert_operator_result(
+                OperatorSemantic::And,
+                &[value(lhs), value(rhs)],
+                value(expected),
+            );
+        }
+    }
+
+    #[test]
+    fn logical_or_returns_zero_or_one_for_all_truth_combinations() {
+        for (lhs, rhs, expected) in [(0, 0, 0), (0, 7, 1), (-3, 0, 1), (2, -4, 1)] {
+            assert_operator_result(
+                OperatorSemantic::Or,
+                &[value(lhs), value(rhs)],
+                value(expected),
+            );
+        }
+    }
+
+    #[test]
+    fn logical_not_treats_zero_and_nonzero_values_as_false_and_true() {
+        assert_operator_result(OperatorSemantic::Not, &[value(0)], value(1));
+        assert_operator_result(OperatorSemantic::Not, &[value(7)], value(0));
+        assert_operator_result(OperatorSemantic::Not, &[value(-3)], value(0));
+    }
+
+    #[test]
+    fn logical_operator_underflow_preserves_available_operands() {
+        for (semantic, inputs) in [
+            (OperatorSemantic::And, &[][..]),
+            (OperatorSemantic::And, &[value(7)][..]),
+            (OperatorSemantic::Or, &[][..]),
+            (OperatorSemantic::Or, &[value(7)][..]),
+            (OperatorSemantic::Not, &[][..]),
+        ] {
+            let (mut vm, result) = run_operator(semantic, inputs);
+            assert!(matches!(
+                result,
+                Err(error) if matches!(error.kind(), VmErrorKind::PrimitiveFailed {
+                    source: PrimitiveError::DataStackUnderflow { .. }, ..
+                })
+            ));
+            assert_eq!(vm.data_stack_depth(), inputs.len());
+            for expected in inputs.iter().rev() {
+                assert_eq!(vm.pop_data(), Ok(*expected));
+            }
+        }
+    }
+
+    #[test]
     fn operator_lookup_returns_stable_published_word_ids() {
         let mut primitives = PrimitiveRegistry::new();
         let mut words = PublishedWords::new();
@@ -518,7 +624,7 @@ mod tests {
     }
 
     #[test]
-    fn named_operator_registration_binds_all_names_to_operator_word_ids() {
+    fn named_operator_registration_binds_only_existing_public_operator_names() {
         let mut primitives = PrimitiveRegistry::new();
         let mut words = PublishedWords::new();
         let mut bindings = Bindings::new();
@@ -529,7 +635,7 @@ mod tests {
 
         assert_eq!(words.len(), ALL_SEMANTICS.len());
         assert_eq!(primitives.len(), ALL_SEMANTICS.len());
-        assert_eq!(bindings.len(), ALL_SEMANTICS.len());
+        assert_eq!(bindings.len(), NAMED_OPERATORS.len());
         for (semantic, input) in NAMED_OPERATORS {
             let operator_id = operators.lookup().resolve(semantic);
 
@@ -538,6 +644,9 @@ mod tests {
                 words.get(operator_id),
                 Ok(WordDefinition::Primitive { .. })
             ));
+        }
+        for name in ["AND", "OR", "NOT"] {
+            assert!(resolve_word_name(&bindings, name).is_err());
         }
     }
 
