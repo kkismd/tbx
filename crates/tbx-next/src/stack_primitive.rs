@@ -8,6 +8,7 @@ use crate::word::{PublishedWords, WordId};
 pub(crate) struct StackPrimitiveWords {
     dup: WordId,
     drop: WordId,
+    swap: WordId,
 }
 
 pub(crate) fn register_stack_primitives(
@@ -17,19 +18,25 @@ pub(crate) fn register_stack_primitives(
 ) -> Result<StackPrimitiveWords, PrimitiveBootstrapError> {
     let dup_name = builtin_name("DUP");
     let drop_name = builtin_name("DROP");
+    let swap_name = builtin_name("SWAP");
     bindings
         .validate_new_name(&dup_name)
         .map_err(primitive_bootstrap_precheck_error)?;
     bindings
         .validate_new_name(&drop_name)
         .map_err(primitive_bootstrap_precheck_error)?;
+    bindings
+        .validate_new_name(&swap_name)
+        .map_err(primitive_bootstrap_precheck_error)?;
 
     let dup_primitive = primitives.register(dup);
     let dup = register_primitive(words, bindings, dup_name, dup_primitive)?;
     let drop_primitive = primitives.register(drop);
     let drop = register_primitive(words, bindings, drop_name, drop_primitive)?;
+    let swap_primitive = primitives.register(swap);
+    let swap = register_primitive(words, bindings, swap_name, swap_primitive)?;
 
-    Ok(StackPrimitiveWords { dup, drop })
+    Ok(StackPrimitiveWords { dup, drop, swap })
 }
 
 impl StackPrimitiveWords {
@@ -39,6 +46,10 @@ impl StackPrimitiveWords {
 
     pub(crate) const fn drop(self) -> WordId {
         self.drop
+    }
+
+    pub(crate) const fn swap(self) -> WordId {
+        self.swap
     }
 }
 
@@ -61,6 +72,13 @@ fn dup(context: &mut PrimitiveContext<'_, '_>) -> Result<(), PrimitiveError> {
 
 fn drop(context: &mut PrimitiveContext<'_, '_>) -> Result<(), PrimitiveError> {
     context.pop()?;
+    Ok(())
+}
+
+fn swap(context: &mut PrimitiveContext<'_, '_>) -> Result<(), PrimitiveError> {
+    let (lower, upper) = context.pop2()?;
+    context.push(upper);
+    context.push(lower);
     Ok(())
 }
 
@@ -144,6 +162,30 @@ mod tests {
         (vm, result)
     }
 
+    fn run_swap(inputs: &[Value]) -> (Vm, Result<RunOutcome, crate::vm::VmError>) {
+        let mut primitives = PrimitiveRegistry::new();
+        let mut words = PublishedWords::new();
+        let mut bindings = Bindings::new();
+        let stack_words = register_stack_primitives(&mut primitives, &mut words, &mut bindings)
+            .expect("stack primitives should bootstrap");
+        let mut code = InstructionSequence::new();
+        let entry = if let Some((first, rest)) = inputs.split_first() {
+            let entry = code.append(Instruction::Push(*first));
+            for value in rest {
+                code.append(Instruction::Push(*value));
+            }
+            code.append(Instruction::Call(stack_words.swap()));
+            entry
+        } else {
+            code.append(Instruction::Call(stack_words.swap()))
+        };
+        code.append(Instruction::Halt);
+
+        let mut vm = Vm::new(code.view(), entry).expect("test entry should be valid");
+        let result = vm.run(execution(&code, &words, &primitives));
+        (vm, result)
+    }
+
     #[test]
     fn dup_copies_the_only_stack_value() {
         let (mut vm, result) = run_dup(&[value(7)]);
@@ -207,6 +249,58 @@ mod tests {
     }
 
     #[test]
+    fn swap_exchanges_the_top_two_values() {
+        let (mut vm, result) = run_swap(&[value(3), value(5)]);
+
+        assert_eq!(result, Ok(RunOutcome::Halted));
+        assert_eq!(vm.data_stack_depth(), 2);
+        assert_eq!(vm.pop_data(), Ok(value(3)));
+        assert_eq!(vm.pop_data(), Ok(value(5)));
+    }
+
+    #[test]
+    fn swap_preserves_values_below_the_top_two() {
+        let (mut vm, result) = run_swap(&[value(1), value(3), value(5)]);
+
+        assert_eq!(result, Ok(RunOutcome::Halted));
+        assert_eq!(vm.data_stack_depth(), 3);
+        assert_eq!(vm.pop_data(), Ok(value(3)));
+        assert_eq!(vm.pop_data(), Ok(value(5)));
+        assert_eq!(vm.pop_data(), Ok(value(1)));
+    }
+
+    #[test]
+    fn swap_underflow_fails_without_changing_an_empty_stack() {
+        let (vm, result) = run_swap(&[]);
+        let error = result.expect_err("empty stack should make SWAP fail");
+
+        assert!(matches!(
+            error.kind(),
+            VmErrorKind::PrimitiveFailed {
+                source: PrimitiveError::DataStackUnderflow { .. },
+                ..
+            }
+        ));
+        assert_eq!(vm.data_stack_depth(), 0);
+    }
+
+    #[test]
+    fn swap_underflow_fails_without_changing_a_single_value() {
+        let (mut vm, result) = run_swap(&[value(7)]);
+        let error = result.expect_err("one value should make SWAP fail");
+
+        assert!(matches!(
+            error.kind(),
+            VmErrorKind::PrimitiveFailed {
+                source: PrimitiveError::DataStackUnderflow { .. },
+                ..
+            }
+        ));
+        assert_eq!(vm.data_stack_depth(), 1);
+        assert_eq!(vm.pop_data(), Ok(value(7)));
+    }
+
+    #[test]
     fn stack_primitive_bootstrap_publishes_dup_as_runtime_word() {
         let mut primitives = PrimitiveRegistry::new();
         let mut words = PublishedWords::new();
@@ -215,10 +309,11 @@ mod tests {
         let stack_words = register_stack_primitives(&mut primitives, &mut words, &mut bindings)
             .expect("stack primitives should bootstrap");
 
-        assert_eq!(primitives.len(), 2);
-        assert_eq!(words.len(), 2);
+        assert_eq!(primitives.len(), 3);
+        assert_eq!(words.len(), 3);
         assert_eq!(resolve_word_name(&bindings, "dup"), Ok(stack_words.dup()));
         assert_eq!(resolve_word_name(&bindings, "drop"), Ok(stack_words.drop()));
+        assert_eq!(resolve_word_name(&bindings, "swap"), Ok(stack_words.swap()));
         assert_eq!(
             bindings.get(&name("DUP")),
             Some(&Binding::Word(stack_words.dup()))
@@ -229,6 +324,10 @@ mod tests {
         ));
         assert!(matches!(
             words.get(stack_words.drop()),
+            Ok(WordDefinition::Primitive { .. })
+        ));
+        assert!(matches!(
+            words.get(stack_words.swap()),
             Ok(WordDefinition::Primitive { .. })
         ));
     }
@@ -249,5 +348,23 @@ mod tests {
         assert_eq!(primitives.len(), 0);
         assert_eq!(words.len(), 0);
         assert_eq!(bindings.get(&name("DUP")), Some(&Binding::Word(existing)));
+    }
+
+    #[test]
+    fn stack_primitive_bootstrap_prechecks_swap_name_conflict() {
+        let mut primitives = PrimitiveRegistry::new();
+        let mut words = PublishedWords::new();
+        let mut bindings = Bindings::new();
+        let existing = WordId::test_invalid(0);
+        bindings
+            .insert_new(name("SWAP"), Binding::Word(existing))
+            .expect("test setup should bind SWAP");
+
+        let result = register_stack_primitives(&mut primitives, &mut words, &mut bindings);
+
+        assert_eq!(result, Err(PrimitiveBootstrapError::NameConflict));
+        assert_eq!(primitives.len(), 0);
+        assert_eq!(words.len(), 0);
+        assert_eq!(bindings.get(&name("SWAP")), Some(&Binding::Word(existing)));
     }
 }
