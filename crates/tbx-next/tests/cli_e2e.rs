@@ -277,6 +277,21 @@ fn file_success_runs_the_global_array_squares_example_with_stable_output() {
 }
 
 #[test]
+fn file_success_runs_the_nonrecursive_eight_queen_example() {
+    let path = example_path("eightqueen.tbx");
+
+    let output = run_with_file(&path);
+
+    assert!(
+        output.status.success(),
+        "expected success, stderr:\n{}",
+        stderr_text(&output)
+    );
+    assert_eq!(stdout_text(&output), "92\n");
+    assert_eq!(stderr_text(&output), "");
+}
+
+#[test]
 fn file_success_runs_the_guess_example_with_runtime_input() {
     let path = example_path("guess.tbx");
     let input = (1..=100)

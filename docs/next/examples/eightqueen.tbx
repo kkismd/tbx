@@ -1,0 +1,61 @@
+REM Enumerate all eight-queen solutions without recursion.
+REM @ROWS stores one queen per completed column. @TRY stores the next
+REM candidate row to try whenever the search returns to that column.
+
+DIM @ROWS[8]
+DIM @TRY[8]
+
+VAR DEPTH
+VAR CANDIDATE
+VAR CHECK
+VAR CONFLICT
+VAR FOUND
+VAR DONE
+VAR SOLUTIONS
+
+LET DEPTH = 1
+LET @TRY[1] = 1
+
+WHILE DONE = 0
+  IF DEPTH = 0
+    LET DONE = 1
+  ELSE
+    IF DEPTH = 9
+      LET SOLUTIONS = SOLUTIONS + 1
+      LET DEPTH = DEPTH - 1
+    ELSE
+      LET CANDIDATE = @TRY[DEPTH]
+      LET FOUND = 0
+
+      WHILE CANDIDATE <= 8 AND FOUND = 0
+        LET CONFLICT = 0
+        LET CHECK = 1
+        WHILE CHECK < DEPTH
+          IF @ROWS[CHECK] = CANDIDATE OR ABS(@ROWS[CHECK] - CANDIDATE) = DEPTH - CHECK
+            LET CONFLICT = 1
+          ENDIF
+          LET CHECK = CHECK + 1
+        ENDWH
+
+        IF CONFLICT = 0
+          LET @ROWS[DEPTH] = CANDIDATE
+          LET @TRY[DEPTH] = CANDIDATE + 1
+          LET DEPTH = DEPTH + 1
+          IF DEPTH <= 8
+            LET @TRY[DEPTH] = 1
+          ENDIF
+          LET FOUND = 1
+        ELSE
+          LET CANDIDATE = CANDIDATE + 1
+        ENDIF
+      ENDWH
+
+      IF FOUND = 0
+        LET DEPTH = DEPTH - 1
+      ENDIF
+    ENDIF
+  ENDIF
+ENDWH
+
+PUTDEC SOLUTIONS
+CR
