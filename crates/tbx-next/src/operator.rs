@@ -378,6 +378,8 @@ mod tests {
         OperatorSemantic::Not,
     ];
 
+    // ADR #1839 keeps logical operators as expression-only operators instead
+    // of exposing AND, OR, and NOT as ordinary user-facing bindings.
     const NAMED_OPERATORS: [(OperatorSemantic, &str); 12] = [
         (OperatorSemantic::Add, "ADD"),
         (OperatorSemantic::Subtract, "SUBTRACT"),
@@ -580,8 +582,10 @@ mod tests {
     #[test]
     fn logical_operator_underflow_preserves_available_operands() {
         for (semantic, inputs) in [
+            (OperatorSemantic::And, &[][..]),
             (OperatorSemantic::And, &[value(7)][..]),
             (OperatorSemantic::Or, &[][..]),
+            (OperatorSemantic::Or, &[value(7)][..]),
             (OperatorSemantic::Not, &[][..]),
         ] {
             let (mut vm, result) = run_operator(semantic, inputs);
