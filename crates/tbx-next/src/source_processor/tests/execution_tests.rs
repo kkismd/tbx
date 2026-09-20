@@ -422,11 +422,12 @@ fn pack_reports_pack_specific_target_and_syntax_diagnostics() {
         .insert_new(name("DATA"), Binding::Array(data))
         .expect("array should register");
 
-    for (text, expected) in [
-        ("PACK @MISSING = 1", 0),
-        ("PACK DATA = 1", 1),
-        ("PACK @DATA", 2),
-        ("PACK @DATA =", 3),
+    for (text, expected, start, end) in [
+        ("PACK @MISSING = 1", 0, 6, 13),
+        ("PACK DATA = 1", 1, 5, 9),
+        ("PACK @ = 1", 2, 7, 8),
+        ("PACK @DATA", 3, 6, 10),
+        ("PACK @DATA =", 4, 11, 12),
     ] {
         let (sources, id) = source(text);
         let error = compile_source(
@@ -442,6 +443,7 @@ fn pack_reports_pack_specific_target_and_syntax_diagnostics() {
         .expect_err("PACK should reject invalid syntax or target");
         let primary_span = error.primary_span();
 
+        let expected_span = Some(span(sources.view(), id, start, end));
         if expected == 0 {
             assert!(matches!(
                 error,
@@ -450,11 +452,13 @@ fn pack_reports_pack_specific_target_and_syntax_diagnostics() {
                     ..
                 }) if actual == ExpressionVariableErrorKind::UndefinedName
             ));
+            assert_eq!(primary_span, expected_span);
         } else {
             let expected_kind = match expected {
                 1 => crate::source_word::PackSyntaxErrorKind::At,
-                2 => crate::source_word::PackSyntaxErrorKind::Equal,
-                3 => crate::source_word::PackSyntaxErrorKind::Rhs,
+                2 => crate::source_word::PackSyntaxErrorKind::Target,
+                3 => crate::source_word::PackSyntaxErrorKind::Equal,
+                4 => crate::source_word::PackSyntaxErrorKind::Rhs,
                 _ => unreachable!(),
             };
             assert!(matches!(
@@ -464,8 +468,8 @@ fn pack_reports_pack_specific_target_and_syntax_diagnostics() {
                     ..
                 }) if actual == expected_kind
             ));
+            assert_eq!(primary_span, expected_span);
         }
-        assert!(primary_span.is_some());
     }
 }
 
