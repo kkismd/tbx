@@ -80,6 +80,29 @@ fn logical_and_does_not_skip_a_failing_right_hand_side() {
 }
 
 #[test]
+fn logical_or_does_not_skip_a_failing_right_hand_side() {
+    let (words, primitives, operators, source_words, bindings, mut globals, _variables) =
+        global_source_fixture();
+    let (sources, source_id) = source("EVAL 1 OR 1 / 0");
+
+    let error = run_source(
+        sources.view(),
+        source_id,
+        SourceExecutionContext::with_source_words_and_operators(
+            &bindings,
+            source_words.lookup(),
+            operators.lookup(),
+            PublishedWordLookup::new(&words),
+            primitives.lookup(),
+        )
+        .with_mut_globals(globals.view_mut()),
+    )
+    .expect_err("OR must evaluate its right-hand side");
+
+    assert!(matches!(error, SourceProcessorError::Runtime(_)));
+}
+
+#[test]
 fn top_level_eval_result_is_available_to_following_runtime_word() {
     let (mut words, mut primitives, operators, source_words, mut bindings, mut globals, _variables) =
         global_source_fixture();
