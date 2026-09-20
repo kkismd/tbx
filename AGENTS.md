@@ -47,6 +47,10 @@ TBX は、実用的な言語機能を拡充しながらも、コアを小さく�
 - **[`docs/next/README.md`](docs/next/README.md)** — TBX Next の対象範囲、現行 `tbx` crate との境界、source of truth、参照すべき ADR / milestone を確認する入口文書。`crates/tbx-next` を変更する作業では最初に確認する。
 - 必要に応じて **[`crates/tbx-next/README.md`](crates/tbx-next/README.md)** も確認する。
 
+### 実装issueを作成・再評価・着手前レビューする場合
+
+- **[`docs/implementation-issue-guidelines.md`](docs/implementation-issue-guidelines.md)** — 実装issueの粒度、設計確定性、対象範囲、受け入れ条件、テスト方針、分割判断を確認するための補助指針。実装issueを作成するとき、既存issueを再評価するとき、または着手前レビューを行うときに参照する。通常の実装作業で毎回読む必要はない。
+
 ### Star Trek サンプルゲームを変更する場合
 
 - **[`docs/notes/star-trek-mayfield-1972.md`](docs/notes/star-trek-mayfield-1972.md)** — `lib/trek.tbx`、Star Trek 関連テスト、Mayfield 版仕様に触れる場合に参照する原典ルール抽出メモ。VM、compiler、`crates/tbx-next`、一般的な Rust 実装作業では必読ではない。
