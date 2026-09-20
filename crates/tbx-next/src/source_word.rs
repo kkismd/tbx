@@ -277,6 +277,17 @@ pub(crate) enum SourceWordError {
     LetExpressionContextUnavailable {
         span: SourceSpan,
     },
+    PackSyntax {
+        span: SourceSpan,
+        kind: PackSyntaxErrorKind,
+    },
+    PackTarget {
+        span: SourceSpan,
+        source: ExpressionVariableErrorKind,
+    },
+    PackExpressionContextUnavailable {
+        span: SourceSpan,
+    },
     EvalSyntax {
         span: SourceSpan,
         kind: EvalSyntaxErrorKind,
@@ -407,6 +418,15 @@ pub(crate) enum LetSyntaxErrorKind {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum PackSyntaxErrorKind {
+    At,
+    Target,
+    Equal,
+    Rhs,
+    TrailingToken { kind: TokenKind },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum EvalSyntaxErrorKind {
     MissingExpression,
 }
@@ -475,6 +495,9 @@ impl SourceWordError {
             | Self::LetSyntax { span, .. }
             | Self::LetTarget { span, .. }
             | Self::LetExpressionContextUnavailable { span }
+            | Self::PackSyntax { span, .. }
+            | Self::PackTarget { span, .. }
+            | Self::PackExpressionContextUnavailable { span }
             | Self::EvalSyntax { span, .. }
             | Self::PrintSyntax { span, .. }
             | Self::PrintPutdecUnavailable { span }
@@ -1668,8 +1691,21 @@ impl<'source, 'state> NativeSourceWordContext<'source, 'state> {
         tokens: &[Token],
         anchor: SourceSpan,
     ) -> Result<ExpressionStaging, SourceWordError> {
+        self.stage_expression_with_context_error(
+            tokens,
+            anchor,
+            SourceWordError::LetExpressionContextUnavailable { span: anchor },
+        )
+    }
+
+    pub(crate) fn stage_expression_with_context_error(
+        &self,
+        tokens: &[Token],
+        anchor: SourceSpan,
+        context_error: SourceWordError,
+    ) -> Result<ExpressionStaging, SourceWordError> {
         let Some(operators) = self.operators else {
-            return Err(SourceWordError::LetExpressionContextUnavailable { span: anchor });
+            return Err(context_error);
         };
 
         let mut expression_tokens = tokens
@@ -1939,10 +1975,10 @@ pub(crate) fn pack_source_word(
 ) -> Result<(), SourceWordError> {
     let (target_token, equal_span, rhs_tokens) = {
         let reader = context.statement_reader_mut();
-        reader.expect(TokenKind::At).map_err(let_reader_error)?;
-        let target_token = reader.read_name().map_err(let_reader_error)?;
-        let equal_token = reader.expect(TokenKind::Equal).map_err(let_reader_error)?;
-        let rhs_tokens = reader.remaining_expression().map_err(let_reader_error)?;
+        reader.expect(TokenKind::At).map_err(pack_reader_error)?;
+        let target_token = reader.read_name().map_err(pack_reader_error)?;
+        let equal_token = reader.expect(TokenKind::Equal).map_err(pack_reader_error)?;
+        let rhs_tokens = reader.remaining_expression().map_err(pack_reader_error)?;
         (target_token, equal_token.span(), rhs_tokens)
     };
 
@@ -1951,7 +1987,7 @@ pub(crate) fn pack_source_word(
         .slice(target_token.span())
         .map_err(|source| SourceWordError::Source { source })?;
     let target = resolve_array_name(context.bindings(), source_name).map_err(|source| {
-        SourceWordError::LetTarget {
+        SourceWordError::PackTarget {
             span: target_token.span(),
             source,
         }
@@ -1967,7 +2003,11 @@ pub(crate) fn pack_source_word(
         }
     })?;
 
-    let mut staging = context.stage_expression(rhs_tokens, equal_span)?;
+    let mut staging = context.stage_expression_with_context_error(
+        rhs_tokens,
+        equal_span,
+        SourceWordError::PackExpressionContextUnavailable { span: equal_span },
+    )?;
     for index in (1..=array_len).rev() {
         let index = i16::try_from(index).map_err(|_| SourceWordError::UnsupportedSourceWord {
             span: target_token.span(),
@@ -2425,6 +2465,40 @@ fn let_reader_error(error: SourceStatementReaderError) -> SourceWordError {
         }
     };
     SourceWordError::LetSyntax { span, kind }
+}
+
+fn pack_reader_error(error: SourceStatementReaderError) -> SourceWordError {
+    let (span, kind) = match error {
+        SourceStatementReaderError::Missing { expected, span } => {
+            let kind = match expected {
+                SourceStatementExpected::Name => PackSyntaxErrorKind::Target,
+                SourceStatementExpected::Token(TokenKind::At) => PackSyntaxErrorKind::At,
+                SourceStatementExpected::Token(TokenKind::Equal) => PackSyntaxErrorKind::Equal,
+                SourceStatementExpected::Token(_) | SourceStatementExpected::Expression => {
+                    PackSyntaxErrorKind::Rhs
+                }
+            };
+            (span, kind)
+        }
+        SourceStatementReaderError::Unexpected { expected, actual } => {
+            let kind = match expected {
+                SourceStatementExpected::Name => PackSyntaxErrorKind::Target,
+                SourceStatementExpected::Token(TokenKind::At) => PackSyntaxErrorKind::At,
+                SourceStatementExpected::Token(TokenKind::Equal) => PackSyntaxErrorKind::Equal,
+                SourceStatementExpected::Token(_) | SourceStatementExpected::Expression => {
+                    PackSyntaxErrorKind::Rhs
+                }
+            };
+            (actual.span(), kind)
+        }
+        SourceStatementReaderError::TrailingToken { actual } => (
+            actual.span(),
+            PackSyntaxErrorKind::TrailingToken {
+                kind: actual.kind(),
+            },
+        ),
+    };
+    SourceWordError::PackSyntax { span, kind }
 }
 
 fn eval_reader_error(error: SourceStatementReaderError) -> SourceWordError {

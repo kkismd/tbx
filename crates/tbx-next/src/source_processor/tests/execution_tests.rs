@@ -220,6 +220,54 @@ fn source_to_vm_e2e_rhs_runtime_failure_maps_operator_and_preserves_target() {
 }
 
 #[test]
+fn pack_stack_underflow_preserves_completed_stores() {
+    let mut words = PublishedWords::new();
+    let mut primitives = PrimitiveRegistry::new();
+    let operators = register_operator_primitives(&mut primitives, &mut words);
+    let mut source_words = SourceWordRegistry::new();
+    let mut bindings = Bindings::new();
+    register_stack_primitives(&mut primitives, &mut words, &mut bindings)
+        .expect("stack words should bootstrap");
+    register_builtin_source_words(&mut source_words, &mut bindings)
+        .expect("built-in source words should bootstrap");
+    let mut arrays = GlobalArrays::new();
+    let data = arrays.allocate(3);
+    bindings
+        .insert_new(name("DATA"), Binding::Array(data))
+        .expect("array should register");
+    let (sources, id) = source("PACK @DATA = 10");
+
+    let unit = compile_source(
+        sources.view(),
+        id,
+        SourceCompileContext::with_source_words_and_operators(
+            &bindings,
+            source_words.lookup(),
+            operators.lookup(),
+        )
+        .with_global_arrays(&mut arrays),
+    )
+    .expect("PACK should compile");
+    let error = run_unit(
+        &unit,
+        SourceExecutionContext::with_source_words_and_operators(
+            &bindings,
+            source_words.lookup(),
+            operators.lookup(),
+            PublishedWordLookup::new(&words),
+            primitives.lookup(),
+        )
+        .with_mut_arrays(arrays.view_mut()),
+    )
+    .expect_err("the second SWAP should underflow");
+
+    assert!(matches!(error, SourceProcessorError::Runtime(_)));
+    assert_eq!(arrays.view().read(data, 0), Ok(value(0)));
+    assert_eq!(arrays.view().read(data, 1), Ok(value(0)));
+    assert_eq!(arrays.view().read(data, 2), Ok(value(10)));
+}
+
+#[test]
 fn let_rhs_variable_load_mapping_uses_reference_name_span() {
     let (_words, _primitives, operators) = operator_fixture();
     let mut source_words = SourceWordRegistry::new();
@@ -355,6 +403,110 @@ fn let_rejects_target_resolution_and_syntax_errors_at_primary_span() {
             "{source_text:?} should report LET syntax error"
         );
     }
+}
+
+#[test]
+fn pack_reports_pack_specific_target_and_syntax_diagnostics() {
+    let mut words = PublishedWords::new();
+    let mut primitives = PrimitiveRegistry::new();
+    let operators = register_operator_primitives(&mut primitives, &mut words);
+    let mut bindings = Bindings::new();
+    register_stack_primitives(&mut primitives, &mut words, &mut bindings)
+        .expect("stack words should bootstrap");
+    let mut source_words = SourceWordRegistry::new();
+    register_builtin_source_words(&mut source_words, &mut bindings)
+        .expect("built-in source words should bootstrap");
+    let mut arrays = GlobalArrays::new();
+    let data = arrays.allocate(1);
+    bindings
+        .insert_new(name("DATA"), Binding::Array(data))
+        .expect("array should register");
+
+    for (text, expected) in [
+        ("PACK @MISSING = 1", 0),
+        ("PACK DATA = 1", 1),
+        ("PACK @DATA", 2),
+        ("PACK @DATA =", 3),
+    ] {
+        let (sources, id) = source(text);
+        let error = compile_source(
+            sources.view(),
+            id,
+            SourceCompileContext::with_source_words_and_operators(
+                &bindings,
+                source_words.lookup(),
+                operators.lookup(),
+            )
+            .with_global_arrays(&mut arrays),
+        )
+        .expect_err("PACK should reject invalid syntax or target");
+        let primary_span = error.primary_span();
+
+        if expected == 0 {
+            assert!(matches!(
+                error,
+                SourceProcessorError::SourceWord(SourceWordError::PackTarget {
+                    source: actual,
+                    ..
+                }) if actual == ExpressionVariableErrorKind::UndefinedName
+            ));
+        } else {
+            let expected_kind = match expected {
+                1 => crate::source_word::PackSyntaxErrorKind::At,
+                2 => crate::source_word::PackSyntaxErrorKind::Equal,
+                3 => crate::source_word::PackSyntaxErrorKind::Rhs,
+                _ => unreachable!(),
+            };
+            assert!(matches!(
+                error,
+                SourceProcessorError::SourceWord(SourceWordError::PackSyntax {
+                    kind: actual,
+                    ..
+                }) if actual == expected_kind
+            ));
+        }
+        assert!(primary_span.is_some());
+    }
+}
+
+#[test]
+fn pack_rhs_failure_does_not_publish_partial_runtime_code_or_storage() {
+    let mut words = PublishedWords::new();
+    let mut primitives = PrimitiveRegistry::new();
+    let operators = register_operator_primitives(&mut primitives, &mut words);
+    let mut bindings = Bindings::new();
+    register_stack_primitives(&mut primitives, &mut words, &mut bindings)
+        .expect("stack words should bootstrap");
+    let mut source_words = SourceWordRegistry::new();
+    register_builtin_source_words(&mut source_words, &mut bindings)
+        .expect("built-in source words should bootstrap");
+    let mut arrays = GlobalArrays::new();
+    let data = arrays.allocate(2);
+    bindings
+        .insert_new(name("DATA"), Binding::Array(data))
+        .expect("array should register");
+    let (sources, id) = source("PACK @DATA = 1 + MISSING");
+
+    let error = compile_source(
+        sources.view(),
+        id,
+        SourceCompileContext::with_source_words_and_operators(
+            &bindings,
+            source_words.lookup(),
+            operators.lookup(),
+        )
+        .with_global_arrays(&mut arrays),
+    )
+    .expect_err("undefined RHS name should reject PACK compilation");
+
+    assert!(matches!(
+        error,
+        SourceProcessorError::SourceWord(SourceWordError::Expression {
+            source: ExpressionError::Variable(_),
+        })
+    ));
+    assert_eq!(arrays.view().read(data, 0), Ok(value(0)));
+    assert_eq!(arrays.view().read(data, 1), Ok(value(0)));
 }
 
 #[test]
