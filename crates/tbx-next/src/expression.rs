@@ -147,10 +147,13 @@ struct ExpressionParser<'a, 'r> {
 }
 
 const PRECEDENCE_COMMA: u8 = 0;
-const PRECEDENCE_COMPARISON: u8 = 1;
-const PRECEDENCE_ADDITIVE: u8 = 2;
-const PRECEDENCE_MULTIPLICATIVE: u8 = 3;
-const PRECEDENCE_PREFIX: u8 = 4;
+const PRECEDENCE_OR: u8 = 1;
+const PRECEDENCE_AND: u8 = 2;
+const PRECEDENCE_NOT: u8 = 3;
+const PRECEDENCE_COMPARISON: u8 = 4;
+const PRECEDENCE_ADDITIVE: u8 = 5;
+const PRECEDENCE_MULTIPLICATIVE: u8 = 6;
+const PRECEDENCE_PREFIX: u8 = 7;
 
 pub(crate) fn parse_expression(
     view: SourceView<'_>,
@@ -342,7 +345,7 @@ impl<'a, 'r> ExpressionParser<'a, 'r> {
         let mut parsed = self.parse_prefix(staging)?;
 
         while let Some(token) = self.peek() {
-            let Some(operator) = binary_operator(token.kind()) else {
+            let Some(operator) = self.binary_operator(token)? else {
                 break;
             };
             if operator.precedence < min_precedence {
@@ -371,6 +374,16 @@ impl<'a, 'r> ExpressionParser<'a, 'r> {
         staging: &mut ExpressionStaging,
     ) -> Result<ParsedExpression, ExpressionError> {
         let token = self.peek().ok_or_else(|| self.missing_at_last_token())?;
+
+        if token.kind() == TokenKind::Name && self.is_name(token, "NOT")? {
+            let not = self.advance();
+            let parsed = self.parse_infix_expression(staging, PRECEDENCE_NOT)?;
+            staging.append_mapped_instruction(
+                Instruction::Call(self.operators.resolve(OperatorSemantic::Not)),
+                not.span(),
+            );
+            return Ok(parsed);
+        }
 
         if token.kind() == TokenKind::Minus {
             let minus = self.advance();
@@ -638,6 +651,30 @@ impl<'a, 'r> ExpressionParser<'a, 'r> {
             span: token.span(),
             kind,
         })
+    }
+
+    fn binary_operator(&self, token: Token) -> Result<Option<BinaryOperator>, ExpressionError> {
+        if token.kind() != TokenKind::Name {
+            return Ok(binary_operator(token.kind()));
+        }
+
+        let source_name = self.view.slice(token.span())?;
+        Ok(match source_name {
+            name if name.eq_ignore_ascii_case("AND") => {
+                Some(binary(OperatorSemantic::And, PRECEDENCE_AND, false))
+            }
+            name if name.eq_ignore_ascii_case("OR") => {
+                Some(binary(OperatorSemantic::Or, PRECEDENCE_OR, false))
+            }
+            _ => None,
+        })
+    }
+
+    fn is_name(&self, token: Token, expected: &str) -> Result<bool, ExpressionError> {
+        Ok(self
+            .view
+            .slice(token.span())?
+            .eq_ignore_ascii_case(expected))
     }
 }
 
@@ -1123,6 +1160,69 @@ mod tests {
                 "{source:?} should lower through operator lookup"
             );
         }
+    }
+
+    #[test]
+    fn logical_operators_lower_with_fixed_precedence_and_case_insensitive_names() {
+        let lookup = operators();
+        let (_sources, _id, staging) = parse("1 = 1 aNd 2 = 2 oR 0");
+
+        assert_eq!(
+            instructions(&staging),
+            [
+                Instruction::Push(value(1)),
+                Instruction::Push(value(1)),
+                call(lookup, OperatorSemantic::Equal),
+                Instruction::Push(value(2)),
+                Instruction::Push(value(2)),
+                call(lookup, OperatorSemantic::Equal),
+                call(lookup, OperatorSemantic::And),
+                Instruction::Push(value(0)),
+                call(lookup, OperatorSemantic::Or),
+            ]
+        );
+    }
+
+    #[test]
+    fn logical_not_includes_comparison_but_not_weaker_logical_operators() {
+        let lookup = operators();
+        let (_sources, _id, staging) = parse("NOT 1 = 2 AND 1");
+
+        assert_eq!(
+            instructions(&staging),
+            [
+                Instruction::Push(value(1)),
+                Instruction::Push(value(2)),
+                call(lookup, OperatorSemantic::Equal),
+                call(lookup, OperatorSemantic::Not),
+                Instruction::Push(value(1)),
+                call(lookup, OperatorSemantic::And),
+            ]
+        );
+    }
+
+    #[test]
+    fn logical_operators_work_inside_the_existing_comma_expression() {
+        let lookup = operators();
+        let foo = WordId::test_invalid(50);
+        let (_sources, _id, staging) = parse_with_resolvers(
+            "FOO(0 OR 1, 1 AND 2)",
+            empty_variables(),
+            runtime_words(&[("FOO", foo)]),
+        );
+
+        assert_eq!(
+            instructions(&staging),
+            [
+                Instruction::Push(value(0)),
+                Instruction::Push(value(1)),
+                call(lookup, OperatorSemantic::Or),
+                Instruction::Push(value(1)),
+                Instruction::Push(value(2)),
+                call(lookup, OperatorSemantic::And),
+                Instruction::Call(foo),
+            ]
+        );
     }
 
     #[test]

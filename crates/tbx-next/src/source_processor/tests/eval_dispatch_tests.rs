@@ -39,6 +39,47 @@ fn top_level_eval_reuses_expression_variables_arithmetic_and_comparison() {
 }
 
 #[test]
+fn top_level_eval_executes_logical_expression_syntax() {
+    let (words, primitives, operators, source_words, bindings, mut globals, _variables) =
+        global_source_fixture();
+
+    let (_sources, _id, result) = run_with_source_words_operators_and_mut_globals(
+        "EVAL 1 = 1 AND 2 = 2\nEVAL NOT 0 OR 0 AND 1",
+        &bindings,
+        &mut globals,
+        &source_words,
+        &words,
+        &primitives,
+        operators.lookup(),
+    );
+
+    assert_eq!(result.data_stack(), [value(1), value(1)]);
+}
+
+#[test]
+fn logical_and_does_not_skip_a_failing_right_hand_side() {
+    let (words, primitives, operators, source_words, bindings, mut globals, _variables) =
+        global_source_fixture();
+    let (sources, source_id) = source("EVAL 0 AND 1 / 0");
+
+    let error = run_source(
+        sources.view(),
+        source_id,
+        SourceExecutionContext::with_source_words_and_operators(
+            &bindings,
+            source_words.lookup(),
+            operators.lookup(),
+            PublishedWordLookup::new(&words),
+            primitives.lookup(),
+        )
+        .with_mut_globals(globals.view_mut()),
+    )
+    .expect_err("AND must evaluate its right-hand side");
+
+    assert!(matches!(error, SourceProcessorError::Runtime(_)));
+}
+
+#[test]
 fn top_level_eval_result_is_available_to_following_runtime_word() {
     let (mut words, mut primitives, operators, source_words, mut bindings, mut globals, _variables) =
         global_source_fixture();
