@@ -1010,6 +1010,28 @@ mod tests {
     }
 
     #[test]
+    fn logical_operator_spellings_remain_name_tokens() {
+        let (sources, _id, tokens) = lex_all("AND and Or oR NOT nOt");
+
+        assert_eq!(
+            kinds(&tokens),
+            [
+                TokenKind::Name,
+                TokenKind::Name,
+                TokenKind::Name,
+                TokenKind::Name,
+                TokenKind::Name,
+                TokenKind::Name,
+                TokenKind::Eof,
+            ]
+        );
+        assert_eq!(
+            slices(sources.view(), &tokens),
+            ["AND", "and", "Or", "oR", "NOT", "nOt", ""]
+        );
+    }
+
+    #[test]
     fn skips_space_and_tab_only() {
         let (sources, _id, tokens) = lex_all(" \tA\t 12");
 

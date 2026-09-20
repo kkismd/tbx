@@ -207,9 +207,11 @@ impl Bindings {
 }
 
 // REM is reserved by ADR #1536 3.7 while still staying outside the lexer
-// keyword set. END is reserved by DEF's syntax-marker declaration instead.
+// keyword set. Logical operators are reserved by ADR #1839 for expression
+// parsing, and must not be shadowed by ordinary bindings. END is reserved by
+// DEF's syntax-marker declaration instead.
 fn is_semantic_reserved_binding_name(name: &NormalizedName) -> bool {
-    matches!(name.as_str(), "REM")
+    matches!(name.as_str(), "REM" | "AND" | "OR" | "NOT")
 }
 
 #[cfg(test)]
@@ -431,7 +433,9 @@ mod tests {
 
     #[test]
     fn semantic_reserved_name_case_variants_are_rejected() {
-        for input in ["REM", "rem", "Rem"] {
+        for input in [
+            "REM", "rem", "Rem", "AND", "and", "And", "OR", "or", "Or", "NOT", "not", "Not",
+        ] {
             let mut words = PublishedWords::new();
             let binding = word_binding(&mut words, 10);
             let mut bindings = Bindings::new();
