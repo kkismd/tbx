@@ -2801,6 +2801,32 @@ fn published_def_body_can_call_builtin_dup_runtime_word() {
 }
 
 #[test]
+fn depth_reports_the_user_data_stack_in_source_and_compiled_word_paths() {
+    let mut session = RuntimeDefinitionSession::new_with_named_operators_and_stack_primitives();
+    session.publish_def("DEF OBSERVE\nDEPTH\nEND");
+
+    let (sources, source_id) = source("DEPTH\nDROP\nEVAL 10\nEVAL 20\nDEPTH\nOBSERVE");
+    let unit = compile_source(
+        sources.view(),
+        source_id,
+        SourceCompileContext::with_source_words_and_operators(
+            &session.bindings,
+            session.source_words.lookup(),
+            session.operators.lookup(),
+        ),
+    )
+    .expect("DEPTH should compile as a runtime word");
+    let result = session
+        .run_unit_with_published_code(&unit)
+        .expect("DEPTH should run in source and compiled word paths");
+
+    assert_eq!(
+        result.data_stack(),
+        [value(10), value(20), value(2), value(3)]
+    );
+}
+
+#[test]
 fn top_level_source_calls_print_and_cr_as_normal_runtime_words() {
     let session = RuntimeDefinitionSession::new_with_named_operators_and_output_primitives();
     let print = resolve_word_name(&session.bindings, "PUTDEC").expect("PUTDEC should bootstrap");
