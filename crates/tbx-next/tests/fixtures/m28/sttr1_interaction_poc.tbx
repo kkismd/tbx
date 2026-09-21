@@ -1,0 +1,124 @@
+REM M28 STTR1 interaction and display proof of concept.
+
+DIM @SECTOR[64]
+VAR COMMAND
+VAR COMMAND_VALID
+VAR DONE
+VAR COURSE
+VAR COURSE_VALID
+VAR ROW
+VAR COLUMN
+VAR INDEX
+VAR CELL
+
+REM 0 empty, 1 player, 2 Klingon, 3 star, 4 starbase.
+PACK @SECTOR = 1, 0, 0, 0, 0, 0, 0, 0, 0, 3, 0, 0, 0, 0, 0, 0, 0, 0, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 4, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
+
+LET DONE = 0
+
+PRINT "STTR1 INTERACTION POC"
+CR
+PRINT "DATA STACK START: "
+PUTDEC DEPTH()
+CR
+
+WHILE DONE = 0
+  LET COMMAND_VALID = 0
+  WHILE COMMAND_VALID = 0
+    PRINT "COMMAND (0 NAV, 1 SCAN, 2-7 REPORTS, 9 QUIT):"
+    CR
+    IF INPUT?()
+      LET COMMAND = DUP()
+      DROP
+      IF (COMMAND >= 0 AND COMMAND <= 7) OR COMMAND = 9
+        LET COMMAND_VALID = 1
+      ELSE
+        PRINT "INVALID COMMAND"
+        CR
+      ENDIF
+    ELSE
+      DROP
+      PRINT "COMMAND INPUT ERROR"
+      CR
+    ENDIF
+  ENDWH
+
+  SELECT COMMAND
+  CASE 0
+    LET COURSE_VALID = 0
+    WHILE COURSE_VALID = 0
+      PRINT "COURSE X10 (10=1.0, 15=1.5, ..., 90=9.0):"
+      CR
+      IF INPUT?()
+        LET COURSE = DUP()
+        DROP
+        IF COURSE >= 10 AND COURSE <= 90
+          LET COURSE_VALID = 1
+          PRINT "COURSE ACCEPTED X10 = "
+          PUTDEC COURSE
+          CR
+        ELSE
+          PRINT "COURSE OUT OF RANGE"
+          CR
+        ENDIF
+      ELSE
+        DROP
+        PRINT "COURSE INPUT ERROR"
+        CR
+      ENDIF
+    ENDWH
+  CASE 1
+    PRINT "SHORT RANGE SCAN"
+    CR
+    LET ROW = 1
+    WHILE ROW <= 8
+      LET COLUMN = 1
+      WHILE COLUMN <= 8
+        LET INDEX = (ROW - 1) * 8 + COLUMN
+        LET CELL = @SECTOR[INDEX]
+        IF CELL = 0
+          PRINT "."
+        ELSIF CELL = 1
+          PRINT "P"
+        ELSIF CELL = 2
+          PRINT "K"
+        ELSIF CELL = 3
+          PRINT "*"
+        ELSIF CELL = 4
+          PRINT "B"
+        ELSE
+          PRINT "P"
+        ENDIF
+        LET COLUMN = COLUMN + 1
+      ENDWH
+      CR
+      LET ROW = ROW + 1
+    ENDWH
+  CASE 2
+    PRINT "COMMAND 2 REPORT"
+    CR
+  CASE 3
+    PRINT "COMMAND 3 REPORT"
+    CR
+  CASE 4
+    PRINT "COMMAND 4 REPORT"
+    CR
+  CASE 5
+    PRINT "COMMAND 5 REPORT"
+    CR
+  CASE 6
+    PRINT "COMMAND 6 REPORT"
+    CR
+  CASE 7
+    PRINT "COMMAND 7 REPORT"
+    CR
+  CASE 9
+    LET DONE = 1
+    PRINT "POC COMPLETE"
+    CR
+  ENDSEL
+ENDWH
+
+PRINT "DATA STACK END: "
+PUTDEC DEPTH()
+CR
