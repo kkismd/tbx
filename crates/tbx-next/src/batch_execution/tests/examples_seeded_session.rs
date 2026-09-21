@@ -1,4 +1,5 @@
 use super::*;
+use std::collections::HashSet;
 
 fn example_path(name: &str) -> std::path::PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -176,18 +177,33 @@ fn sttr1_quadrant_setup_places_unique_sector_objects_and_klingon_state() {
     assert_eq!(counts.4, quadrant[4]);
     assert_eq!(counts.0 + counts.1 + counts.2 + counts.3 + counts.4, 64);
 
+    let scanned_klingons = short_scan
+        .iter()
+        .enumerate()
+        .flat_map(|(y, line)| {
+            line.chars()
+                .enumerate()
+                .filter(|(_, cell)| *cell == 'K')
+                .map(move |(x, _)| (x + 1, y + 1))
+        })
+        .collect::<HashSet<_>>();
+    assert_eq!(scanned_klingons.len(), quadrant[2] as usize);
+
     let klingon_state = output_values(writer.text(), "KLINGON_STATE ");
     assert_eq!(klingon_state.len(), 9);
     assert_eq!(klingon_state.chunks_exact(3).len(), 3);
+    let mut state_klingons = HashSet::new();
     for (index, state) in klingon_state.chunks_exact(3).enumerate() {
         if index < quadrant[2] as usize {
             assert!((1..=8).contains(&state[0]));
             assert!((1..=8).contains(&state[1]));
             assert_eq!(state[2], 200);
+            assert!(state_klingons.insert((state[0] as usize, state[1] as usize)));
         } else {
             assert_eq!(state, [0, 0, 0]);
         }
     }
+    assert_eq!(state_klingons, scanned_klingons);
     assert_eq!(result.data_stack(), []);
 }
 
