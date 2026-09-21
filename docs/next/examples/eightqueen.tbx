@@ -1,13 +1,13 @@
 REM Enumerate all eight-queen solutions without recursion.
-REM @ROWS[1..DEPTH-1] is the active placement; entries at and after DEPTH
-REM may retain stale values and are ignored by collision checks. @TRY[DEPTH]
+REM @ROWS[1..LEVEL-1] is the active placement; entries at and after LEVEL
+REM may retain stale values and are ignored by collision checks. @TRY[LEVEL]
 REM stores the next row for that depth. A newly entered depth is reset to 1,
 REM so backtracking resumes with the next candidate instead of skipping one.
 
 DIM @ROWS[8]
 DIM @TRY[8]
 
-VAR DEPTH
+VAR LEVEL
 VAR CANDIDATE
 VAR CHECK
 VAR CONFLICT
@@ -15,36 +15,36 @@ VAR FOUND
 VAR DONE
 VAR SOLUTIONS
 
-LET DEPTH = 1
+LET LEVEL = 1
 LET @TRY[1] = 1
 
 WHILE DONE = 0
-  IF DEPTH = 0
+  IF LEVEL = 0
     LET DONE = 1
   ELSE
-    IF DEPTH = 9
+    IF LEVEL = 9
       LET SOLUTIONS = SOLUTIONS + 1
-      LET DEPTH = DEPTH - 1
+      LET LEVEL = LEVEL - 1
     ELSE
-      LET CANDIDATE = @TRY[DEPTH]
+      LET CANDIDATE = @TRY[LEVEL]
       LET FOUND = 0
 
       WHILE CANDIDATE <= 8 AND FOUND = 0
         LET CONFLICT = 0
         LET CHECK = 1
-        WHILE CHECK < DEPTH
-          IF @ROWS[CHECK] = CANDIDATE OR ABS(@ROWS[CHECK] - CANDIDATE) = DEPTH - CHECK
+        WHILE CHECK < LEVEL
+          IF @ROWS[CHECK] = CANDIDATE OR ABS(@ROWS[CHECK] - CANDIDATE) = LEVEL - CHECK
             LET CONFLICT = 1
           ENDIF
           LET CHECK = CHECK + 1
         ENDWH
 
         IF CONFLICT = 0
-          LET @ROWS[DEPTH] = CANDIDATE
-          LET @TRY[DEPTH] = CANDIDATE + 1
-          LET DEPTH = DEPTH + 1
-          IF DEPTH <= 8
-            LET @TRY[DEPTH] = 1
+          LET @ROWS[LEVEL] = CANDIDATE
+          LET @TRY[LEVEL] = CANDIDATE + 1
+          LET LEVEL = LEVEL + 1
+          IF LEVEL <= 8
+            LET @TRY[LEVEL] = 1
           ENDIF
           LET FOUND = 1
         ELSE
@@ -53,7 +53,7 @@ WHILE DONE = 0
       ENDWH
 
       IF FOUND = 0
-        LET DEPTH = DEPTH - 1
+        LET LEVEL = LEVEL - 1
       ENDIF
     ENDIF
   ENDIF

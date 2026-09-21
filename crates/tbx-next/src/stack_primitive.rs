@@ -2,6 +2,7 @@ use crate::binding::{BindingInsertError, Bindings};
 use crate::bootstrap::{register_primitive, PrimitiveBootstrapError};
 use crate::name::NormalizedName;
 use crate::primitive::{PrimitiveContext, PrimitiveError, PrimitiveRegistry};
+use crate::value::Value;
 use crate::word::{PublishedWords, WordId};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -9,6 +10,7 @@ pub(crate) struct StackPrimitiveWords {
     dup: WordId,
     drop: WordId,
     swap: WordId,
+    depth: WordId,
 }
 
 pub(crate) fn register_stack_primitives(
@@ -19,6 +21,7 @@ pub(crate) fn register_stack_primitives(
     let dup_name = builtin_name("DUP");
     let drop_name = builtin_name("DROP");
     let swap_name = builtin_name("SWAP");
+    let depth_name = builtin_name("DEPTH");
     bindings
         .validate_new_name(&dup_name)
         .map_err(primitive_bootstrap_precheck_error)?;
@@ -28,6 +31,9 @@ pub(crate) fn register_stack_primitives(
     bindings
         .validate_new_name(&swap_name)
         .map_err(primitive_bootstrap_precheck_error)?;
+    bindings
+        .validate_new_name(&depth_name)
+        .map_err(primitive_bootstrap_precheck_error)?;
 
     let dup_primitive = primitives.register(dup);
     let dup = register_primitive(words, bindings, dup_name, dup_primitive)?;
@@ -35,8 +41,15 @@ pub(crate) fn register_stack_primitives(
     let drop = register_primitive(words, bindings, drop_name, drop_primitive)?;
     let swap_primitive = primitives.register(swap);
     let swap = register_primitive(words, bindings, swap_name, swap_primitive)?;
+    let depth_primitive = primitives.register(depth);
+    let depth = register_primitive(words, bindings, depth_name, depth_primitive)?;
 
-    Ok(StackPrimitiveWords { dup, drop, swap })
+    Ok(StackPrimitiveWords {
+        dup,
+        drop,
+        swap,
+        depth,
+    })
 }
 
 impl StackPrimitiveWords {
@@ -50,6 +63,10 @@ impl StackPrimitiveWords {
 
     pub(crate) const fn swap(self) -> WordId {
         self.swap
+    }
+
+    pub(crate) const fn depth(self) -> WordId {
+        self.depth
     }
 }
 
@@ -79,6 +96,14 @@ fn swap(context: &mut PrimitiveContext<'_, '_>) -> Result<(), PrimitiveError> {
     let (lower, upper) = context.pop2()?;
     context.push(upper);
     context.push(lower);
+    Ok(())
+}
+
+fn depth(context: &mut PrimitiveContext<'_, '_>) -> Result<(), PrimitiveError> {
+    let depth = context.data_stack_depth();
+    let value =
+        i16::try_from(depth).map_err(|_| PrimitiveError::DataStackDepthOutOfRange { depth })?;
+    context.push(Value::integer(value));
     Ok(())
 }
 
@@ -178,6 +203,30 @@ mod tests {
             entry
         } else {
             code.append(Instruction::Call(stack_words.swap()))
+        };
+        code.append(Instruction::Halt);
+
+        let mut vm = Vm::new(code.view(), entry).expect("test entry should be valid");
+        let result = vm.run(execution(&code, &words, &primitives));
+        (vm, result)
+    }
+
+    fn run_depth(inputs: &[Value]) -> (Vm, Result<RunOutcome, crate::vm::VmError>) {
+        let mut primitives = PrimitiveRegistry::new();
+        let mut words = PublishedWords::new();
+        let mut bindings = Bindings::new();
+        let stack_words = register_stack_primitives(&mut primitives, &mut words, &mut bindings)
+            .expect("stack primitives should bootstrap");
+        let mut code = InstructionSequence::new();
+        let entry = if let Some((first, rest)) = inputs.split_first() {
+            let entry = code.append(Instruction::Push(*first));
+            for value in rest {
+                code.append(Instruction::Push(*value));
+            }
+            code.append(Instruction::Call(stack_words.depth()));
+            entry
+        } else {
+            code.append(Instruction::Call(stack_words.depth()))
         };
         code.append(Instruction::Halt);
 
@@ -301,6 +350,44 @@ mod tests {
     }
 
     #[test]
+    fn depth_pushes_empty_data_stack_depth() {
+        let (mut vm, result) = run_depth(&[]);
+
+        assert_eq!(result, Ok(RunOutcome::Halted));
+        assert_eq!(vm.data_stack_depth(), 1);
+        assert_eq!(vm.pop_data(), Ok(value(0)));
+    }
+
+    #[test]
+    fn depth_preserves_existing_values_and_pushes_their_count() {
+        let (mut vm, result) = run_depth(&[value(10), value(20)]);
+
+        assert_eq!(result, Ok(RunOutcome::Halted));
+        assert_eq!(vm.data_stack_depth(), 3);
+        assert_eq!(vm.pop_data(), Ok(value(2)));
+        assert_eq!(vm.pop_data(), Ok(value(20)));
+        assert_eq!(vm.pop_data(), Ok(value(10)));
+    }
+
+    #[test]
+    fn depth_rejects_unrepresentable_depth_without_mutating_the_stack() {
+        let mut stack = crate::stack::DataStack::new();
+        for depth_value in 0..=i16::MAX {
+            stack.push(value(depth_value));
+        }
+        let before = stack.as_slice().to_vec();
+        let result = depth(&mut PrimitiveContext::new(&mut stack));
+
+        assert_eq!(
+            result,
+            Err(PrimitiveError::DataStackDepthOutOfRange {
+                depth: i16::MAX as usize + 1,
+            })
+        );
+        assert_eq!(stack.as_slice(), before.as_slice());
+    }
+
+    #[test]
     fn stack_primitive_bootstrap_publishes_dup_as_runtime_word() {
         let mut primitives = PrimitiveRegistry::new();
         let mut words = PublishedWords::new();
@@ -309,11 +396,15 @@ mod tests {
         let stack_words = register_stack_primitives(&mut primitives, &mut words, &mut bindings)
             .expect("stack primitives should bootstrap");
 
-        assert_eq!(primitives.len(), 3);
-        assert_eq!(words.len(), 3);
+        assert_eq!(primitives.len(), 4);
+        assert_eq!(words.len(), 4);
         assert_eq!(resolve_word_name(&bindings, "dup"), Ok(stack_words.dup()));
         assert_eq!(resolve_word_name(&bindings, "drop"), Ok(stack_words.drop()));
         assert_eq!(resolve_word_name(&bindings, "swap"), Ok(stack_words.swap()));
+        assert_eq!(
+            resolve_word_name(&bindings, "depth"),
+            Ok(stack_words.depth())
+        );
         assert_eq!(
             bindings.get(&name("DUP")),
             Some(&Binding::Word(stack_words.dup()))
@@ -328,6 +419,10 @@ mod tests {
         ));
         assert!(matches!(
             words.get(stack_words.swap()),
+            Ok(WordDefinition::Primitive { .. })
+        ));
+        assert!(matches!(
+            words.get(stack_words.depth()),
             Ok(WordDefinition::Primitive { .. })
         ));
     }
@@ -366,5 +461,23 @@ mod tests {
         assert_eq!(primitives.len(), 0);
         assert_eq!(words.len(), 0);
         assert_eq!(bindings.get(&name("SWAP")), Some(&Binding::Word(existing)));
+    }
+
+    #[test]
+    fn stack_primitive_bootstrap_prechecks_depth_name_conflict_atomically() {
+        let mut primitives = PrimitiveRegistry::new();
+        let mut words = PublishedWords::new();
+        let mut bindings = Bindings::new();
+        let existing = WordId::test_invalid(0);
+        bindings
+            .insert_new(name("DEPTH"), Binding::Word(existing))
+            .expect("test setup should bind DEPTH");
+
+        let result = register_stack_primitives(&mut primitives, &mut words, &mut bindings);
+
+        assert_eq!(result, Err(PrimitiveBootstrapError::NameConflict));
+        assert_eq!(primitives.len(), 0);
+        assert_eq!(words.len(), 0);
+        assert_eq!(bindings.get(&name("DEPTH")), Some(&Binding::Word(existing)));
     }
 }

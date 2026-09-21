@@ -11,6 +11,7 @@ pub(crate) type PrimitiveHandler =
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum PrimitiveError {
     DataStackUnderflow { source: StackError },
+    DataStackDepthOutOfRange { depth: usize },
     OutputFailed { source: RuntimeOutputError },
     InputFailed { source: RuntimeInputError },
     RandomUnavailable,
@@ -97,6 +98,10 @@ impl<'stack, 'cap> PrimitiveContext<'stack, 'cap> {
 
     pub(crate) fn data_stack_is_empty(&self) -> bool {
         self.data_stack.is_empty()
+    }
+
+    pub(crate) fn data_stack_depth(&self) -> usize {
+        self.data_stack.depth()
     }
 
     pub(crate) fn write_output(&mut self, text: &str) -> Result<(), PrimitiveError> {
