@@ -525,16 +525,20 @@ fn sttr1_combat_helpers_use_ten_times_distance_and_checked_damage_scaling() {
     let mut source = std::fs::read_to_string(example_path("sttr1/main.tbx"))
         .expect("STTR1 example should be readable");
     source.push_str(
-        "LET ENT_SX = 1\n\
+        "LET ENT_SX = 2\n\
 LET ENT_SY = 1\n\
-LET @KLINGON_X[1] = 5\n\
-LET @KLINGON_Y[1] = 4\n\
+LET @KLINGON_X[1] = 3\n\
+LET @KLINGON_Y[1] = 1\n\
 PUTDEC DIST_TO_KLINGON(1)\n\
 CR\n\
-LET @KLINGON_X[1] = 5\n\
-LET @KLINGON_Y[1] = 5\n\
+LET ENT_SX = 2\n\
+LET ENT_SY = 2\n\
+LET @KLINGON_X[1] = 3\n\
+LET @KLINGON_Y[1] = 3\n\
 PUTDEC DIST_TO_KLINGON(1)\n\
 CR\n\
+LET ENT_SX = 1\n\
+LET ENT_SY = 1\n\
 LET @KLINGON_X[1] = 8\n\
 LET @KLINGON_Y[1] = 8\n\
 PUTDEC DIST_TO_KLINGON(1)\n\
@@ -561,7 +565,7 @@ CR\n",
         .filter_map(|line| line.parse::<i16>().ok())
         .collect::<Vec<_>>();
     assert!(
-        values.ends_with(&[50, 56, 98, 5970]),
+        values.ends_with(&[10, 14, 98, 5970]),
         "values={values:?}\noutput={}",
         writer.text()
     );
@@ -585,6 +589,8 @@ LET KLINGONS_LEFT = 1\n\
 LET @KLINGON_X[1] = 5\n\
 LET @KLINGON_Y[1] = 4\n\
 LET @KLINGON_E[1] = 200\n\
+LET @KLINGON_E[2] = 0\n\
+LET @KLINGON_E[3] = 0\n\
 LET @SECTOR[36] = 0\n\
 LET @SECTOR[29] = 2\n\
 LET ENERGY = 1000\n\
@@ -618,6 +624,183 @@ CR\n",
     assert_eq!(state[3], if state[2] == 0 { 0 } else { 1 });
     assert_eq!(state[4], state[3]);
     assert_eq!(state[5], state[3] * 100);
+    assert_eq!(result.data_stack(), []);
+}
+
+#[test]
+fn sttr1_damaged_computer_scales_phaser_once_without_overflow() {
+    let mut source = std::fs::read_to_string(example_path("sttr1/main.tbx"))
+        .expect("STTR1 example should be readable");
+    source.push_str(
+        "LET ENT_QX = 1\n\
+LET ENT_QY = 1\n\
+LET ENT_SX = 4\n\
+LET ENT_SY = 4\n\
+LET @GALAXY[1] = 100\n\
+LET BASES_HERE = 0\n\
+LET STARS_HERE = 0\n\
+LET KLINGONS_HERE = 1\n\
+LET KLINGONS_LEFT = 1\n\
+LET @KLINGON_X[1] = 5\n\
+LET @KLINGON_Y[1] = 4\n\
+LET @KLINGON_E[1] = 200\n\
+LET @KLINGON_E[2] = 0\n\
+LET @KLINGON_E[3] = 0\n\
+LET @SECTOR[29] = 2\n\
+LET ENERGY = 3000\n\
+LET SHIELDS = 10000\n\
+LET DOCKED = 0\n\
+LET @DAMAGE[4] = 0\n\
+LET @DAMAGE[7] = -1\n\
+PHASER\n\
+PRINT \"DAMAGED_COMPUTER_STATE \", ENERGY, \" \", @KLINGON_E[1], \" \", SHIELDS\n\
+CR\n",
+    );
+    let (sources, standard_library_id, source_id) =
+        sources_with_standard_library(STDLIB_SOURCE, &source);
+    let mut input = TestInput::new([Ok(Some("3000".to_owned()))]);
+    let mut writer = RecordingWriter::default();
+
+    let result = execute_registered_sources_with_filesystem_and_seed(
+        sources,
+        standard_library_id,
+        source_id,
+        &mut writer,
+        Some(&mut input),
+        30,
+    );
+    assert!(
+        matches!(result, BatchExecutionResult::Success(_)),
+        "output={}",
+        writer.text()
+    );
+    let result = success(result);
+
+    let state = output_values(writer.text(), "DAMAGED_COMPUTER_STATE ");
+    assert_eq!(state, [0, 0, 9710]);
+    assert_eq!(result.data_stack(), []);
+}
+
+#[test]
+fn sttr1_shield_defeat_skips_phaser_damage_and_preserves_negative_state() {
+    let mut source = std::fs::read_to_string(example_path("sttr1/main.tbx"))
+        .expect("STTR1 example should be readable");
+    source.push_str(
+        "LET ENT_QX = 1\n\
+LET ENT_QY = 1\n\
+LET ENT_SX = 4\n\
+LET ENT_SY = 4\n\
+LET @GALAXY[1] = 100\n\
+LET BASES_HERE = 0\n\
+LET STARS_HERE = 0\n\
+LET KLINGONS_HERE = 1\n\
+LET KLINGONS_LEFT = 1\n\
+LET @KLINGON_X[1] = 5\n\
+LET @KLINGON_Y[1] = 4\n\
+LET @KLINGON_E[1] = 3000\n\
+LET @SECTOR[29] = 2\n\
+LET ENERGY = 1000\n\
+LET SHIELDS = 1\n\
+LET DOCKED = 0\n\
+LET @DAMAGE[4] = 0\n\
+LET @DAMAGE[7] = 0\n\
+PHASER\n\
+PRINT \"SHIELD_DEFEAT_STATE \", ENERGY, \" \", @KLINGON_E[1], \" \", SHIELDS\n\
+CR\n",
+    );
+    let (sources, standard_library_id, source_id) =
+        sources_with_standard_library(STDLIB_SOURCE, &source);
+    let mut input = TestInput::new([Ok(Some("1000".to_owned()))]);
+    let mut writer = RecordingWriter::default();
+
+    let result = success(execute_registered_sources_with_filesystem_and_seed(
+        sources,
+        standard_library_id,
+        source_id,
+        &mut writer,
+        Some(&mut input),
+        30,
+    ));
+
+    let state = output_values(writer.text(), "SHIELD_DEFEAT_STATE ");
+    assert_eq!(state[0], 0);
+    assert_eq!(state[1], 3000);
+    assert!(state[2] < 0);
+    assert_eq!(result.data_stack(), []);
+}
+
+#[test]
+fn sttr1_klingon_attack_accumulates_survivors_and_skips_destroyed_slots() {
+    let mut source = std::fs::read_to_string(example_path("sttr1/main.tbx"))
+        .expect("STTR1 example should be readable");
+    source.push_str(
+        "LET ENT_SX = 4\n\
+LET ENT_SY = 4\n\
+LET SHIELDS = 1000\n\
+LET DOCKED = 0\n\
+LET KLINGONS_HERE = 2\n\
+LET @KLINGON_X[1] = 5\n\
+LET @KLINGON_Y[1] = 4\n\
+LET @KLINGON_E[1] = 200\n\
+LET @KLINGON_X[2] = 6\n\
+LET @KLINGON_Y[2] = 4\n\
+LET @KLINGON_E[2] = 0\n\
+LET @KLINGON_X[3] = 3\n\
+LET @KLINGON_Y[3] = 4\n\
+LET @KLINGON_E[3] = 200\n\
+KLINGON_ATTACK\n\
+PRINT \"MULTI_ATTACK_STATE \", SHIELDS, \" \", @KLINGON_E[1], \" \", @KLINGON_E[2], \" \", @KLINGON_E[3]\n\
+CR\n",
+    );
+    let (sources, standard_library_id, source_id) =
+        sources_with_standard_library(STDLIB_SOURCE, &source);
+    let mut writer = RecordingWriter::default();
+
+    let result = success(execute_registered_sources_with_filesystem_and_seed(
+        sources,
+        standard_library_id,
+        source_id,
+        &mut writer,
+        None,
+        30,
+    ));
+
+    let state = output_values(writer.text(), "MULTI_ATTACK_STATE ");
+    assert!(state[0] < 1000);
+    assert_eq!(state[1], 200);
+    assert_eq!(state[2], 0);
+    assert_eq!(state[3], 200);
+    assert_eq!(result.data_stack(), []);
+}
+
+#[test]
+fn sttr1_phaser_zero_cancel_preserves_state() {
+    let mut source = std::fs::read_to_string(example_path("sttr1/main.tbx"))
+        .expect("STTR1 example should be readable");
+    source.push_str(
+        "LET KLINGONS_HERE = 1\n\
+LET ENERGY = 777\n\
+LET SHIELDS = 222\n\
+LET @DAMAGE[4] = 0\n\
+PHASER\n\
+PRINT \"CANCEL_STATE \", ENERGY, \" \", SHIELDS\n\
+CR\n",
+    );
+    let (sources, standard_library_id, source_id) =
+        sources_with_standard_library(STDLIB_SOURCE, &source);
+    let mut input = TestInput::new([Ok(Some("0".to_owned()))]);
+    let mut writer = RecordingWriter::default();
+
+    let result = success(execute_registered_sources_with_filesystem_and_seed(
+        sources,
+        standard_library_id,
+        source_id,
+        &mut writer,
+        Some(&mut input),
+        30,
+    ));
+
+    assert_eq!(output_values(writer.text(), "CANCEL_STATE "), [777, 222]);
     assert_eq!(result.data_stack(), []);
 }
 
