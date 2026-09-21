@@ -60,6 +60,28 @@ fn run_with_args(args: &[&str]) -> Output {
         .expect("tbx-next binary should run")
 }
 
+fn run_with_args_and_stdin(args: &[&str], source: &str) -> Output {
+    let mut child = Command::new(tbx_next_bin())
+        .args(args)
+        .current_dir(fixture_directory())
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("tbx-next binary should spawn");
+
+    child
+        .stdin
+        .as_mut()
+        .expect("child stdin should be piped")
+        .write_all(source.as_bytes())
+        .expect("source should be written to child stdin");
+
+    child
+        .wait_with_output()
+        .expect("tbx-next binary should finish")
+}
+
 fn run_with_stdin(source: &str) -> Output {
     let mut child = Command::new(tbx_next_bin())
         .current_dir(fixture_directory())
@@ -125,6 +147,38 @@ fn file_source_can_use_rnd_without_a_seed_option() {
         .expect("RND output should be an integer");
     assert!((1..=10).contains(&value));
     assert_eq!(stderr_text(&output), "");
+}
+
+#[test]
+fn same_seed_reproduces_the_rnd_series_for_a_file_source() {
+    let first = run_with_args(&["--seed", "42", fixture_path("rnd.tbx").to_str().unwrap()]);
+    let second = run_with_args(&["--seed", "42", fixture_path("rnd.tbx").to_str().unwrap()]);
+
+    assert!(first.status.success(), "{}", stderr_text(&first));
+    assert!(second.status.success(), "{}", stderr_text(&second));
+    assert_eq!(stdout_text(&first), stdout_text(&second));
+    assert_eq!(stderr_text(&first), "");
+    assert_eq!(stderr_text(&second), "");
+}
+
+#[test]
+fn seed_option_reproduces_an_rnd_series_for_stdin_source() {
+    let first = run_with_args_and_stdin(&["--seed", "42"], "PUTDEC RND(10)\n");
+    let second = run_with_args_and_stdin(&["--seed", "42"], "PUTDEC RND(10)\n");
+
+    assert!(first.status.success(), "{}", stderr_text(&first));
+    assert!(second.status.success(), "{}", stderr_text(&second));
+    assert_eq!(stdout_text(&first), stdout_text(&second));
+}
+
+#[test]
+fn invalid_seed_fails_before_source_execution() {
+    let output = run_with_args_and_stdin(&["--seed", "oops"], "PUTDEC 1\n");
+
+    assert!(!output.status.success());
+    assert_eq!(stdout_text(&output), "");
+    assert!(stderr_text(&output).contains("invalid arguments"));
+    assert!(stderr_text(&output).contains("seed must be a decimal integer"));
 }
 
 #[test]

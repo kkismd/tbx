@@ -27,6 +27,18 @@ cargo run -p tbx-next -- docs/next/examples/prime.tbx
 printf 'PUTDEC 2 + 3 * 4\nCR\n' | cargo run -p tbx-next --bin tbx-next
 ```
 
+乱数系列を再現したい場合は、ソースファイルより前に `--seed` と10進の
+`0..=u64::MAX` を指定できる。ファイルを省略して標準入力からソースを読む場合も同じである。
+
+```sh
+cargo run -p tbx-next -- --seed 42 docs/next/examples/guess.tbx
+printf 'PUTDEC RND(10)\n' | cargo run -p tbx-next -- --seed 42
+```
+
+同じTBX Next実装で同じソース・入力・seedを使うと、同じ乱数系列を再現できる。
+seedを省略した通常のCLI実行では、ホストが非決定的なseedを選ぶ。乱数アルゴリズムの
+バージョン間互換性は保証しない。
+
 ファイルを実行する場合、プロセスの標準入力は `INPUT?` の実行時入力にも使われる。標準入力からソースを与えるモードでは、ソース読み込みに標準入力を使い切るため、同じ入力が `INPUT?` に暗黙に共有されることはない。
 
 開発時の基本確認は次の通り。

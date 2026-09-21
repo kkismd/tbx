@@ -19,6 +19,7 @@ pub(crate) struct InitialSource {
     sources: SourceTexts,
     stdlib_source_id: SourceId,
     source_id: SourceId,
+    seed: Option<u64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -30,9 +31,15 @@ enum InitialSourceInput {
     },
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct InitialSourceArgs {
+    input: InitialSourceInput,
+    seed: Option<u64>,
+}
+
 #[derive(Debug)]
 pub(crate) enum CliSourceError {
-    Usage,
+    Usage(Box<str>),
     ReadFile {
         display_name: Box<str>,
         source: io::Error,
@@ -59,8 +66,17 @@ impl InitialSource {
         self.stdlib_source_id
     }
 
-    pub(crate) fn into_parts(self) -> (SourceTexts, SourceId, SourceId) {
-        (self.sources, self.stdlib_source_id, self.source_id)
+    pub(crate) const fn seed(&self) -> Option<u64> {
+        self.seed
+    }
+
+    pub(crate) fn into_parts(self) -> (SourceTexts, SourceId, SourceId, Option<u64>) {
+        (
+            self.sources,
+            self.stdlib_source_id,
+            self.source_id,
+            self.seed,
+        )
     }
 }
 
@@ -99,7 +115,7 @@ where
     F: FnOnce(&Path) -> io::Result<String>,
     C: FnOnce(&Path) -> io::Result<PathBuf>,
 {
-    let input = parse_initial_source_args(args)?;
+    let InitialSourceArgs { input, seed } = parse_initial_source_args(args)?;
     let mut sources = SourceTexts::new();
     let stdlib_source_id = register_embedded_standard_library(&mut sources);
 
@@ -133,27 +149,66 @@ where
         sources,
         stdlib_source_id,
         source_id,
+        seed,
     })
 }
 
-fn parse_initial_source_args<I, S>(args: I) -> Result<InitialSourceInput, CliSourceError>
+fn parse_initial_source_args<I, S>(args: I) -> Result<InitialSourceArgs, CliSourceError>
 where
     I: IntoIterator<Item = S>,
     S: Into<OsString>,
 {
     let mut args = args.into_iter().map(Into::into);
     let Some(first) = args.next() else {
-        return Ok(InitialSourceInput::Stdin);
+        return Ok(InitialSourceArgs {
+            input: InitialSourceInput::Stdin,
+            seed: None,
+        });
+    };
+
+    let (seed, source) = if first == "--seed" {
+        let value = args.next().ok_or_else(|| {
+            CliSourceError::Usage("expected a decimal value after `--seed`".into())
+        })?;
+        let seed = value.to_string_lossy().parse::<u64>().map_err(|_| {
+            CliSourceError::Usage("seed must be a decimal integer in `0..=u64::MAX`".into())
+        })?;
+        (Some(seed), args.next())
+    } else if first.to_string_lossy().starts_with("--") {
+        return Err(CliSourceError::Usage("unknown option".into()));
+    } else {
+        (None, Some(first))
+    };
+
+    let Some(source) = source else {
+        if args.next().is_some() {
+            return Err(CliSourceError::Usage("duplicate `--seed` option".into()));
+        }
+        return Ok(InitialSourceArgs {
+            input: InitialSourceInput::Stdin,
+            seed,
+        });
     };
 
     if args.next().is_some() {
-        return Err(CliSourceError::Usage);
+        return Err(CliSourceError::Usage(
+            "expected at most one source file; use `--seed <seed> [source]`".into(),
+        ));
     }
 
-    let display_name = first.to_string_lossy().into_owned().into_boxed_str();
-    Ok(InitialSourceInput::File {
-        path: PathBuf::from(first),
-        display_name,
+    if source.to_string_lossy().starts_with("--") {
+        return Err(CliSourceError::Usage(
+            "seed option must precede the source file".into(),
+        ));
+    }
+
+    let display_name = source.to_string_lossy().into_owned().into_boxed_str();
+    Ok(InitialSourceArgs {
+        input: InitialSourceInput::File {
+            path: PathBuf::from(source),
+            display_name,
+        },
+        seed,
     })
 }
 
@@ -219,8 +274,49 @@ mod tests {
             Ok("must not be read".to_owned())
         });
 
-        assert!(matches!(result, Err(CliSourceError::Usage)));
+        assert!(matches!(result, Err(CliSourceError::Usage(_))));
         assert!(!file_reader_called.get());
+    }
+
+    #[test]
+    fn seed_option_is_parsed_before_a_file_or_stdin_source() {
+        let mut stdin = io::empty();
+        let acquired =
+            acquire_initial_source(["--seed", "42", "program.tbx"], &mut stdin, |path| {
+                assert_eq!(path, Path::new("program.tbx"));
+                Ok("PUTDEC 1".to_owned())
+            })
+            .expect("seeded file source should be accepted");
+
+        assert_eq!(acquired.seed(), Some(42));
+    }
+
+    #[test]
+    fn invalid_seed_is_rejected_before_source_acquisition() {
+        let mut stdin = "must not be read".as_bytes();
+        let file_reader_called = Cell::new(false);
+
+        let result = acquire_initial_source(
+            ["--seed", "not-a-number", "program.tbx"],
+            &mut stdin,
+            |_| {
+                file_reader_called.set(true);
+                Ok("must not be read".to_owned())
+            },
+        );
+
+        assert!(matches!(result, Err(CliSourceError::Usage(_))));
+        assert!(!file_reader_called.get());
+    }
+
+    #[test]
+    fn duplicate_seed_is_rejected_before_source_acquisition() {
+        let mut stdin = io::empty();
+        let result = acquire_initial_source(["--seed", "1", "--seed", "2"], &mut stdin, |_| {
+            panic!("file reader must not be used")
+        });
+
+        assert!(matches!(result, Err(CliSourceError::Usage(_))));
     }
 
     #[test]
