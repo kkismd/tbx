@@ -162,6 +162,22 @@ fn same_seed_reproduces_the_rnd_series_for_a_file_source() {
 }
 
 #[test]
+fn explicit_seed_preserves_the_compatible_rnd_series_for_stdin_source() {
+    let output = run_with_args_and_stdin(
+        &["--seed", "42"],
+        "PUTDEC RND(10)\nCR\nPUTDEC RND(100)\nCR\nPUTDEC RND(97)\nCR\nPUTDEC RND(32767)\nCR\nPUTDEC RND(10)\nCR\n",
+    );
+
+    assert!(
+        output.status.success(),
+        "expected success, stderr:\n{}",
+        stderr_text(&output)
+    );
+    assert_eq!(stdout_text(&output), "1\n99\n38\n12313\n9\n");
+    assert_eq!(stderr_text(&output), "");
+}
+
+#[test]
 fn seed_option_reproduces_an_rnd_series_for_stdin_source() {
     let first = run_with_args_and_stdin(&["--seed", "42"], "PUTDEC RND(10)\n");
     let second = run_with_args_and_stdin(&["--seed", "42"], "PUTDEC RND(10)\n");
