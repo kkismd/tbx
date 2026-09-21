@@ -580,7 +580,7 @@ fn file_success_runs_the_m28_sttr1_numeric_poc() {
     );
     assert_eq!(
         stdout_text(&output),
-        "1\n8\n57\n64\n37\n55\n10 0\n7 7\n0 10\n99 99\n8 3\n0\n10\n14\n98\n1\n1\n0\n0\n99\n199\nRND OK\n0\n500\n16\n29850\n5970\n"
+        "DEPTH START 0\nDEPTH INDEX 0\n1\n8\n57\n64\n37\n55\n10 0\n7 7\n0 10\n99 99\n8 3\n0\nDEPTH ISQRT 0\n10\n14\n98\n1\nDEPTH PERCENT 0\n1\n0\n0\nDEPTH FACTOR 0\n99\n199\nRND OK\n0\nDEPTH DAMAGE 0\n500\n16\n29850\n5970\nDEPTH END 0\n"
     );
     assert_eq!(stderr_text(&output), "");
 }

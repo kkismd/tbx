@@ -74,8 +74,15 @@ END
 PACK @DX = 10, 7, 0, -7, -10, -7, 0, 7, 99
 PACK @DY = 0, 7, 10, 7, 0, -7, -10, -7, 99
 
+PRINT "DEPTH START "
+PUTDEC DEPTH()
+CR
+
 REM Verify the 8 by 8 one-origin mapping and representative state writes.
 LET INDEX_VALUE = INDEX(1, 1)
+PRINT "DEPTH INDEX "
+PUTDEC DEPTH()
+CR
 LET @STATE[INDEX_VALUE] = 11
 PUTDEC INDEX_VALUE
 CR
@@ -113,6 +120,9 @@ CR
 REM Ten-times sector distance: sqrt((dx * dx + dy * dy) * 100).
 PUTDEC ISQRT(0)
 CR
+PRINT "DEPTH ISQRT "
+PUTDEC DEPTH()
+CR
 PUTDEC ISQRT(100)
 CR
 PUTDEC ISQRT(200)
@@ -123,11 +133,17 @@ CR
 REM Fixed-roll percent boundaries and zero..199 coefficient mapping.
 PUTDEC PERCENT(49, 50)
 CR
+PRINT "DEPTH PERCENT "
+PUTDEC DEPTH()
+CR
 PUTDEC PERCENT(50, 50)
 CR
 PUTDEC PERCENT(51, 50)
 CR
 PUTDEC FACTOR(1)
+CR
+PRINT "DEPTH FACTOR "
+PUTDEC DEPTH()
 CR
 PUTDEC FACTOR(100)
 CR
@@ -145,6 +161,9 @@ CR
 REM The first case is normal; the second would overflow as energy * roll.
 PUTDEC DAMAGE(0, 0, 10)
 CR
+PRINT "DEPTH DAMAGE "
+PUTDEC DEPTH()
+CR
 PUTDEC DAMAGE(1000, 50, 10)
 CR
 PUTDEC DAMAGE(500, 1, 3)
@@ -152,4 +171,8 @@ CR
 PUTDEC DAMAGE(3000, 199, 2)
 CR
 PUTDEC DAMAGE(3000, 199, 10)
+CR
+
+PRINT "DEPTH END "
+PUTDEC DEPTH()
 CR
