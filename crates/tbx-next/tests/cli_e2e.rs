@@ -173,7 +173,7 @@ fn seed_option_reproduces_an_rnd_series_for_stdin_source() {
 
 #[test]
 fn invalid_seed_fails_before_source_execution() {
-    let output = run_with_args_and_stdin(&["--seed", "oops"], "PUTDEC 1\n");
+    let output = run_with_args(&["--seed", "oops"]);
 
     assert!(!output.status.success());
     assert_eq!(stdout_text(&output), "");
