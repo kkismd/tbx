@@ -513,6 +513,8 @@ TBX Next は現行 `tbx` の互換実装ではない。特に次をそのまま�
 - `docs/next/examples/mandelbrot.tbx` — 整数演算、反復、`ABS`, `PUTCHR`
 - `docs/next/examples/squares.tbx` — グローバル配列への保存と読み出し
 - `docs/next/examples/grades.tbx` — `FOR` で配列を走査し、`SELECT` で成績区分を判定する統合例
+- `docs/next/examples/eightqueen.tbx` — 1次元配列と明示状態による非再帰の8クィーン全解探索
+- `docs/next/examples/maze.tbx` — 1次元配列を明示スタックとして使う非再帰DFS、backtrack、探索済み領域と最終経路のASCII表示
 
 ## 実装を確認する場所
 
