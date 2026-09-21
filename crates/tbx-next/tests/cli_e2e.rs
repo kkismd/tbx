@@ -302,7 +302,10 @@ fn file_success_runs_the_nonrecursive_maze_example_with_backtracking() {
         "expected success, stderr:\n{}",
         stderr_text(&output)
     );
-    assert_eq!(stdout_text(&output), "MAZE SOLVED\n");
+    assert_eq!(
+        stdout_text(&output),
+        "########\n#S***G##\n#+######\n#++#####\n########\nMAZE SOLVED\n"
+    );
     assert_eq!(stderr_text(&output), "");
 }
 
