@@ -18,8 +18,7 @@ VAR DONE
 
 LET WIDTH = 5
 LET HEIGHT = 5
-LET @MAZE[7] = 1
-LET @MAZE[9] = 1
+PACK @MAZE = 0, 0, 0, 0, 0, 0, 1, 0, 1, 0, 0, 1, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0, 0, 0
 LET X = 2
 LET Y = 2
 LET @VISITED[7] = 1

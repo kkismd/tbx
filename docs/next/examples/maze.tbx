@@ -25,17 +25,7 @@ LET WIDTH = 8
 LET HEIGHT = 5
 
 # The maze is linearized row-major: 0 is a wall and 1 is open.
-LET @MAZE[10] = 1
-LET @MAZE[11] = 1
-LET @MAZE[12] = 1
-LET @MAZE[13] = 1
-LET @MAZE[14] = 1
-LET @MAZE[15] = 1
-LET @MAZE[18] = 1
-LET @MAZE[20] = 1
-LET @MAZE[26] = 1
-LET @MAZE[27] = 1
-LET @MAZE[28] = 1
+PACK @MAZE = 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
 
 LET X = 2
 LET Y = 2
