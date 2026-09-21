@@ -993,6 +993,220 @@ CR\n",
 }
 
 #[test]
+fn sttr1_photon_torpedo_rejects_gate_failures_and_cancel_without_consumption() {
+    let mut source = std::fs::read_to_string(example_path("sttr1/main.tbx"))
+        .expect("STTR1 example should be readable");
+    source.push_str(
+        "LET TORPEDOES = 2\n\
+LET @DAMAGE[5] = -1\n\
+PHOTON_TORPEDO\n\
+LET @DAMAGE[5] = 0\n\
+LET TORPEDOES = 0\n\
+PHOTON_TORPEDO\n\
+LET TORPEDOES = 2\n\
+PHOTON_TORPEDO\n\
+PRINT \"TORPEDO_GATE_STATE \", TORPEDOES\n\
+CR\n",
+    );
+    let (sources, standard_library_id, source_id) =
+        sources_with_standard_library(STDLIB_SOURCE, &source);
+    let mut input = TestInput::new([Ok(Some("0".to_owned()))]);
+    let mut writer = RecordingWriter::default();
+
+    let result = success(execute_registered_sources_with_filesystem_and_seed(
+        sources,
+        standard_library_id,
+        source_id,
+        &mut writer,
+        Some(&mut input),
+        30,
+    ));
+
+    assert_eq!(output_values(writer.text(), "TORPEDO_GATE_STATE "), [2]);
+    assert!(writer.text().contains("PHOTON TUBES ARE DAMAGED"));
+    assert!(writer.text().contains("NO PHOTON TORPEDOES LEFT"));
+    assert_eq!(result.data_stack(), []);
+}
+
+#[test]
+fn sttr1_photon_torpedo_hits_first_non_empty_klingon_and_updates_counts() {
+    let mut source = std::fs::read_to_string(example_path("sttr1/main.tbx"))
+        .expect("STTR1 example should be readable");
+    source.push_str(
+        "LET ENT_QX = 1\n\
+LET ENT_QY = 1\n\
+LET ENT_SX = 4\n\
+LET ENT_SY = 4\n\
+LET @GALAXY[1] = 100\n\
+LET BASES_HERE = 0\n\
+LET STARS_HERE = 0\n\
+LET KLINGONS_HERE = 1\n\
+LET KLINGONS_LEFT = 1\n\
+LET @KLINGON_X[1] = 6\n\
+LET @KLINGON_Y[1] = 4\n\
+LET @KLINGON_E[1] = 200\n\
+LET @SECTOR[30] = 2\n\
+LET TORPEDOES = 2\n\
+LET SHIELDS = 500\n\
+LET DOCKED = 1\n\
+PHOTON_TORPEDO\n\
+PRINT \"TORPEDO_KLINGON_STATE \", TORPEDOES, \" \", @KLINGON_E[1], \" \", @SECTOR[30], \" \", KLINGONS_HERE, \" \", KLINGONS_LEFT, \" \", @GALAXY[1], \" \", SHIELDS\n\
+CR\n",
+    );
+    let (sources, standard_library_id, source_id) =
+        sources_with_standard_library(STDLIB_SOURCE, &source);
+    let mut input = TestInput::new([Ok(Some("10".to_owned()))]);
+    let mut writer = RecordingWriter::default();
+
+    let result = success(execute_registered_sources_with_filesystem_and_seed(
+        sources,
+        standard_library_id,
+        source_id,
+        &mut writer,
+        Some(&mut input),
+        30,
+    ));
+
+    assert_eq!(
+        output_values(writer.text(), "TORPEDO_KLINGON_STATE "),
+        [1, 0, 0, 0, 0, 0, 500]
+    );
+    assert_eq!(result.data_stack(), []);
+}
+
+#[test]
+fn sttr1_photon_torpedo_hits_starbase_without_changing_other_objects() {
+    let mut source = std::fs::read_to_string(example_path("sttr1/main.tbx"))
+        .expect("STTR1 example should be readable");
+    source.push_str(
+        "LET ENT_QX = 1\n\
+LET ENT_QY = 1\n\
+LET ENT_SX = 4\n\
+LET ENT_SY = 4\n\
+LET @GALAXY[1] = 111\n\
+LET BASES_HERE = 1\n\
+LET BASES_LEFT = 1\n\
+LET STARS_HERE = 1\n\
+LET KLINGONS_HERE = 1\n\
+LET @KLINGON_X[1] = 8\n\
+LET @KLINGON_Y[1] = 8\n\
+LET @KLINGON_E[1] = 200\n\
+LET @SECTOR[30] = 3\n\
+LET @SECTOR[64] = 2\n\
+LET TORPEDOES = 2\n\
+LET SHIELDS = 500\n\
+LET DOCKED = 1\n\
+PHOTON_TORPEDO\n\
+PRINT \"TORPEDO_BASE_STATE \", TORPEDOES, \" \", @SECTOR[30], \" \", BASES_HERE, \" \", BASES_LEFT, \" \", @GALAXY[1], \" \", @SECTOR[64], \" \", @KLINGON_E[1], \" \", SHIELDS\n\
+CR\n",
+    );
+    let (sources, standard_library_id, source_id) =
+        sources_with_standard_library(STDLIB_SOURCE, &source);
+    let mut input = TestInput::new([Ok(Some("10".to_owned()))]);
+    let mut writer = RecordingWriter::default();
+
+    let result = success(execute_registered_sources_with_filesystem_and_seed(
+        sources,
+        standard_library_id,
+        source_id,
+        &mut writer,
+        Some(&mut input),
+        30,
+    ));
+
+    assert_eq!(
+        output_values(writer.text(), "TORPEDO_BASE_STATE "),
+        [1, 0, 0, 0, 101, 2, 200, 500]
+    );
+    assert_eq!(result.data_stack(), []);
+}
+
+#[test]
+fn sttr1_photon_torpedo_uses_interpolated_course_and_leaves_star_unchanged() {
+    let mut source = std::fs::read_to_string(example_path("sttr1/main.tbx"))
+        .expect("STTR1 example should be readable");
+    source.push_str(
+        "LET ENT_QX = 1\n\
+LET ENT_QY = 1\n\
+LET ENT_SX = 4\n\
+LET ENT_SY = 4\n\
+LET @GALAXY[1] = 1\n\
+LET BASES_HERE = 0\n\
+LET STARS_HERE = 1\n\
+LET KLINGONS_HERE = 0\n\
+LET @SECTOR[22] = 4\n\
+LET TORPEDOES = 2\n\
+LET SHIELDS = 500\n\
+LET DOCKED = 1\n\
+PHOTON_TORPEDO\n\
+PRINT \"TORPEDO_STAR_STATE \", TORPEDOES, \" \", @SECTOR[22], \" \", STARS_HERE, \" \", @GALAXY[1], \" \", DIRECTION_X, \" \", DIRECTION_Y, \" \", SHIELDS\n\
+CR\n",
+    );
+    let (sources, standard_library_id, source_id) =
+        sources_with_standard_library(STDLIB_SOURCE, &source);
+    let mut input = TestInput::new([Ok(Some("15".to_owned()))]);
+    let mut writer = RecordingWriter::default();
+
+    let result = success(execute_registered_sources_with_filesystem_and_seed(
+        sources,
+        standard_library_id,
+        source_id,
+        &mut writer,
+        Some(&mut input),
+        30,
+    ));
+
+    assert_eq!(
+        output_values(writer.text(), "TORPEDO_STAR_STATE "),
+        [1, 4, 1, 1, 8, -3, 500]
+    );
+    assert_eq!(result.data_stack(), []);
+}
+
+#[test]
+fn sttr1_photon_torpedo_miss_calls_retaliation_and_does_not_cross_quadrant() {
+    let mut source = std::fs::read_to_string(example_path("sttr1/main.tbx"))
+        .expect("STTR1 example should be readable");
+    source.push_str(
+        "LET ENT_QX = 8\n\
+LET ENT_QY = 1\n\
+LET ENT_SX = 8\n\
+LET ENT_SY = 4\n\
+LET @GALAXY[8] = 100\n\
+LET @GALAXY[9] = 200\n\
+LET KLINGONS_HERE = 1\n\
+LET @KLINGON_X[1] = 1\n\
+LET @KLINGON_Y[1] = 1\n\
+LET @KLINGON_E[1] = 200\n\
+LET @SECTOR[32] = 2\n\
+LET TORPEDOES = 2\n\
+LET SHIELDS = 500\n\
+LET DOCKED = 0\n\
+PHOTON_TORPEDO\n\
+PRINT \"TORPEDO_MISS_STATE \", ENT_QX, \" \", ENT_QY, \" \", TORPEDOES, \" \", @GALAXY[8], \" \", @GALAXY[9], \" \", SHIELDS\n\
+CR\n",
+    );
+    let (sources, standard_library_id, source_id) =
+        sources_with_standard_library(STDLIB_SOURCE, &source);
+    let mut input = TestInput::new([Ok(Some("10".to_owned()))]);
+    let mut writer = RecordingWriter::default();
+
+    let result = success(execute_registered_sources_with_filesystem_and_seed(
+        sources,
+        standard_library_id,
+        source_id,
+        &mut writer,
+        Some(&mut input),
+        30,
+    ));
+
+    let state = output_values(writer.text(), "TORPEDO_MISS_STATE ");
+    assert_eq!(state[0..5], [8, 1, 1, 100, 200]);
+    assert!(state[5] < 500);
+    assert_eq!(result.data_stack(), []);
+}
+
+#[test]
 fn guess_example_covers_ordering_branches_with_one_generated_answer() {
     let source = std::fs::read_to_string(example_path("guess.tbx"))
         .expect("guess example should be readable");
