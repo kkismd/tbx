@@ -202,11 +202,12 @@ cargo run
 ## Git Workflow
 
 - **Never commit directly to `main`** — all changes must go through a branch and Pull Request.
+- **One issue, one Pull Request by default** — keep each implementation issue's changes in a separate PR unless the issue explicitly requires coordinated work.
 - **Never merge your own PRs** — leave that to the user.
 - **Never close issues yourself** — leave that to the user.
 - Commit messages must be in **Japanese**.
 - Code comments must be in **English**.
-- **After a PR is merged** — switch back to the PR base branch, update it, and safely delete the merged topic branch with `git branch -d`.
+- **After a PR is merged (local CLI only)** — switch back to the PR base branch, update it, and safely delete the merged topic branch with `git branch -d`. Codex Cloud temporary checkouts follow the Cloud workspace lifecycle instead.
 
 ## 動作確認・デバッグの方針
 
