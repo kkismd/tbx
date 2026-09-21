@@ -1110,6 +1110,8 @@ LET KLINGONS_HERE = 1\n\
 LET @KLINGON_X[1] = 8\n\
 LET @KLINGON_Y[1] = 8\n\
 LET @KLINGON_E[1] = 200\n\
+LET @KLINGON_E[2] = 0\n\
+LET @KLINGON_E[3] = 0\n\
 LET @SECTOR[30] = 3\n\
 LET @SECTOR[64] = 2\n\
 LET TORPEDOES = 2\n\
@@ -1148,11 +1150,17 @@ fn sttr1_photon_torpedo_uses_interpolated_course_and_leaves_star_unchanged() {
 LET ENT_QY = 1\n\
 LET ENT_SX = 4\n\
 LET ENT_SY = 4\n\
-LET @GALAXY[1] = 1\n\
+LET @GALAXY[1] = 101\n\
 LET BASES_HERE = 0\n\
 LET STARS_HERE = 1\n\
-LET KLINGONS_HERE = 0\n\
+LET KLINGONS_HERE = 1\n\
+LET @KLINGON_X[1] = 8\n\
+LET @KLINGON_Y[1] = 8\n\
+LET @KLINGON_E[1] = 200\n\
+LET @KLINGON_E[2] = 0\n\
+LET @KLINGON_E[3] = 0\n\
 LET @SECTOR[22] = 4\n\
+LET @SECTOR[64] = 2\n\
 LET TORPEDOES = 2\n\
 LET SHIELDS = 1\n\
 LET DOCKED = 0\n\
@@ -1175,7 +1183,7 @@ CR\n",
     ));
 
     let state = output_values(writer.text(), "TORPEDO_STAR_STATE ");
-    assert_eq!(state[0..6], [1, 4, 1, 1, 8, -3]);
+    assert_eq!(state[0..6], [1, 4, 1, 101, 8, -3]);
     assert!(state[6] < 0);
     assert_eq!(result.data_stack(), []);
 }
