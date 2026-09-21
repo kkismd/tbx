@@ -310,6 +310,62 @@ fn file_success_runs_the_nonrecursive_maze_example_with_backtracking() {
 }
 
 #[test]
+fn file_success_runs_the_m28_sttr1_interaction_poc() {
+    let output = run_with_file_and_stdin(
+        &fixture_path("m28/sttr1_interaction_poc.tbx"),
+        "invalid\n99\n1\n0\ninvalid\n95\n15\n2\n3\n4\n5\n6\n7\n9\n",
+    );
+
+    assert!(
+        output.status.success(),
+        "expected success, stderr:\n{}",
+        stderr_text(&output)
+    );
+    assert_eq!(
+        stdout_text(&output),
+        "STTR1 INTERACTION POC\n\
+DATA STACK START: 0\n\
+COMMAND (0 NAV, 1 SCAN, 2-7 REPORTS, 9 QUIT):\n\
+COMMAND INPUT ERROR\n\
+COMMAND (0 NAV, 1 SCAN, 2-7 REPORTS, 9 QUIT):\n\
+INVALID COMMAND\n\
+COMMAND (0 NAV, 1 SCAN, 2-7 REPORTS, 9 QUIT):\n\
+SHORT RANGE SCAN\n\
+P.......\n\
+.*......\n\
+..K.....\n\
+........\n\
+........\n\
+.....B..\n\
+........\n\
+........\n\
+COMMAND (0 NAV, 1 SCAN, 2-7 REPORTS, 9 QUIT):\n\
+COURSE X10 (10=1.0, 15=1.5, ..., 90=9.0):\n\
+COURSE INPUT ERROR\n\
+COURSE X10 (10=1.0, 15=1.5, ..., 90=9.0):\n\
+COURSE OUT OF RANGE\n\
+COURSE X10 (10=1.0, 15=1.5, ..., 90=9.0):\n\
+COURSE ACCEPTED X10 = 15\n\
+COMMAND (0 NAV, 1 SCAN, 2-7 REPORTS, 9 QUIT):\n\
+COMMAND 2 REPORT\n\
+COMMAND (0 NAV, 1 SCAN, 2-7 REPORTS, 9 QUIT):\n\
+COMMAND 3 REPORT\n\
+COMMAND (0 NAV, 1 SCAN, 2-7 REPORTS, 9 QUIT):\n\
+COMMAND 4 REPORT\n\
+COMMAND (0 NAV, 1 SCAN, 2-7 REPORTS, 9 QUIT):\n\
+COMMAND 5 REPORT\n\
+COMMAND (0 NAV, 1 SCAN, 2-7 REPORTS, 9 QUIT):\n\
+COMMAND 6 REPORT\n\
+COMMAND (0 NAV, 1 SCAN, 2-7 REPORTS, 9 QUIT):\n\
+COMMAND 7 REPORT\n\
+COMMAND (0 NAV, 1 SCAN, 2-7 REPORTS, 9 QUIT):\n\
+POC COMPLETE\n\
+DATA STACK END: 0\n"
+    );
+    assert_eq!(stderr_text(&output), "");
+}
+
+#[test]
 fn file_success_runs_the_guess_example_with_runtime_input() {
     let path = example_path("guess.tbx");
     let input = (1..=100)
