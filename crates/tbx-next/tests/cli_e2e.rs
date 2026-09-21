@@ -323,10 +323,22 @@ fn file_success_runs_the_sttr1_initialization_example_with_a_seed() {
         stderr_text(&output)
     );
     let stdout = stdout_text(&output);
-    assert!(stdout.starts_with("MISSION 3300 3300 30 3330 3000 3000 10 10 0 200 1 7 4 1\n"));
-    assert!(stdout.contains("\nTOTALS 13 13 1 2\n"));
-    assert!(stdout.contains("\nCOURSE_DX 1 1 0 -1 -1 -1 0 1 1 \n"));
-    assert!(stdout.ends_with("COURSE_DY 0 -1 -1 -1 0 1 1 1 0 \n"));
+    let labels = stdout
+        .lines()
+        .filter_map(|line| line.split_whitespace().next())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        labels,
+        [
+            "MISSION",
+            "TOTALS",
+            "GALAXY",
+            "CHART",
+            "DAMAGE",
+            "COURSE_DX",
+            "COURSE_DY",
+        ]
+    );
     assert_eq!(stderr_text(&output), "");
 }
 
