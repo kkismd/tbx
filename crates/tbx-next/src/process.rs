@@ -137,23 +137,26 @@ where
         }
     };
 
-    let (sources, stdlib_source_id, source_id) = source.into_parts();
+    let (sources, stdlib_source_id, source_id, requested_seed) = source.into_parts();
     let file_source = matches!(
         sources.view().acquisition(source_id),
         Ok(SourceAcquisition::FileSystem { .. })
     );
-    let seed = match seed_provider() {
-        Ok(seed) => seed,
-        Err(error) => {
-            let diagnostic = UserDiagnostic::without_source(
-                "execution environment",
-                format!("failed to acquire random seed: {error}"),
-            );
-            let diagnostic = DiagnosticRenderer::new(SourceTexts::new().view())
-                .render(&diagnostic)
-                .expect("source-less seed diagnostic must render");
-            return write_diagnostic(stderr, &diagnostic);
-        }
+    let seed = match requested_seed {
+        Some(seed) => seed,
+        None => match seed_provider() {
+            Ok(seed) => seed,
+            Err(error) => {
+                let diagnostic = UserDiagnostic::without_source(
+                    "execution environment",
+                    format!("failed to acquire random seed: {error}"),
+                );
+                let diagnostic = DiagnosticRenderer::new(SourceTexts::new().view())
+                    .render(&diagnostic)
+                    .expect("source-less seed diagnostic must render");
+                return write_diagnostic(stderr, &diagnostic);
+            }
+        },
     };
     let mut runtime_input = BufReadRuntimeInput::new(buffered_stdin);
     let input = file_source.then_some(&mut runtime_input as &mut dyn RuntimeInput);
@@ -178,8 +181,8 @@ fn acquire_random_seed() -> Result<u64, RandomSeedError> {
 
 fn acquisition_diagnostic(error: &CliSourceError) -> RenderedDiagnostic {
     let diagnostic = match error {
-        CliSourceError::Usage => {
-            UserDiagnostic::without_source("invalid arguments", "expected at most one source file")
+        CliSourceError::Usage(message) => {
+            UserDiagnostic::without_source("invalid arguments", message.as_ref())
         }
         CliSourceError::ReadFile {
             display_name,
@@ -347,6 +350,32 @@ mod tests {
     }
 
     #[test]
+    fn explicit_seed_skips_host_seed_provider() {
+        let mut stdin = io::empty();
+        let mut stdout = RecordingWriter::default();
+        let mut stderr = RecordingWriter::default();
+        let seed_calls = Cell::new(0);
+
+        let status = run_with_io_and_canonicalizer_with_seed_provider(
+            ["--seed", "42", "relative/program.tbx"],
+            &mut stdin,
+            &mut stdout,
+            &mut stderr,
+            |_| Ok("PUTDEC RND(10)".to_owned()),
+            |path| Ok(path.to_path_buf()),
+            || {
+                seed_calls.set(seed_calls.get() + 1);
+                panic!("host seed provider must not be called for an explicit seed");
+            },
+        );
+
+        assert_eq!(status, ProcessStatus::Success);
+        assert_eq!(seed_calls.get(), 0);
+        assert!((1..=10).contains(&stdout.text().parse::<i16>().unwrap()));
+        assert_eq!(stderr.text(), "");
+    }
+
+    #[test]
     fn seed_acquisition_failure_is_an_environment_failure() {
         let mut stdin = io::empty();
         let mut stdout = RecordingWriter::default();
@@ -409,7 +438,7 @@ mod tests {
         assert!(!file_reader_called.get());
         assert_eq!(stdout.text(), "");
         assert!(stderr.text().contains("invalid arguments"));
-        assert!(stderr.text().contains("expected at most one source file"));
+        assert!(stderr.text().contains("at most one source file"));
         assert!(!stderr.text().contains(":1:1"));
     }
 
