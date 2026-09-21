@@ -1004,13 +1004,15 @@ LET @DAMAGE[5] = 0\n\
 LET TORPEDOES = 0\n\
 PHOTON_TORPEDO\n\
 LET TORPEDOES = 2\n\
+LET KLINGONS_HERE = 0\n\
+LET DOCKED = 1\n\
 PHOTON_TORPEDO\n\
 PRINT \"TORPEDO_GATE_STATE \", TORPEDOES\n\
 CR\n",
     );
     let (sources, standard_library_id, source_id) =
         sources_with_standard_library(STDLIB_SOURCE, &source);
-    let mut input = TestInput::new([Ok(Some("0".to_owned()))]);
+    let mut input = TestInput::new([Ok(Some("7".to_owned())), Ok(Some("10".to_owned()))]);
     let mut writer = RecordingWriter::default();
 
     let result = success(execute_registered_sources_with_filesystem_and_seed(
@@ -1022,9 +1024,10 @@ CR\n",
         30,
     ));
 
-    assert_eq!(output_values(writer.text(), "TORPEDO_GATE_STATE "), [2]);
+    assert_eq!(output_values(writer.text(), "TORPEDO_GATE_STATE "), [1]);
     assert!(writer.text().contains("PHOTON TUBES ARE DAMAGED"));
     assert!(writer.text().contains("NO PHOTON TORPEDOES LEFT"));
+    assert!(writer.text().contains("COURSE OUT OF RANGE"));
     assert_eq!(result.data_stack(), []);
 }
 
@@ -1045,12 +1048,14 @@ LET KLINGONS_LEFT = 1\n\
 LET @KLINGON_X[1] = 6\n\
 LET @KLINGON_Y[1] = 4\n\
 LET @KLINGON_E[1] = 200\n\
+LET @KLINGON_E[2] = 0\n\
+LET @KLINGON_E[3] = 0\n\
 LET @SECTOR[30] = 2\n\
 LET TORPEDOES = 2\n\
 LET SHIELDS = 500\n\
-LET DOCKED = 1\n\
+LET DOCKED = 0\n\
 PHOTON_TORPEDO\n\
-PRINT \"TORPEDO_KLINGON_STATE \", TORPEDOES, \" \", @KLINGON_E[1], \" \", @SECTOR[30], \" \", KLINGONS_HERE, \" \", KLINGONS_LEFT, \" \", @GALAXY[1], \" \", SHIELDS\n\
+PRINT \"TORPEDO_KLINGON_STATE \", TORPEDOES, \" \", @KLINGON_E[1], \" \", @SECTOR[30], \" \", KLINGONS_HERE, \" \", KLINGONS_LEFT, \" \", @GALAXY[1], \" \", SHIELDS, \" \", RND(200)\n\
 CR\n",
     );
     let (sources, standard_library_id, source_id) =
@@ -1067,9 +1072,23 @@ CR\n",
         30,
     ));
 
+    let state = output_values(writer.text(), "TORPEDO_KLINGON_STATE ");
+    assert_eq!(state[0..7], [1, 0, 0, 0, 0, 0, 500]);
+    let control_source = source.replace("\nPHOTON_TORPEDO\n", "\nREM SKIP_TORPEDO\n");
+    let (sources, standard_library_id, source_id) =
+        sources_with_standard_library(STDLIB_SOURCE, &control_source);
+    let mut control_writer = RecordingWriter::default();
+    success(execute_registered_sources_with_filesystem_and_seed(
+        sources,
+        standard_library_id,
+        source_id,
+        &mut control_writer,
+        None,
+        30,
+    ));
     assert_eq!(
-        output_values(writer.text(), "TORPEDO_KLINGON_STATE "),
-        [1, 0, 0, 0, 0, 0, 500]
+        state[7],
+        output_values(control_writer.text(), "TORPEDO_KLINGON_STATE ")[7]
     );
     assert_eq!(result.data_stack(), []);
 }
@@ -1095,7 +1114,7 @@ LET @SECTOR[30] = 3\n\
 LET @SECTOR[64] = 2\n\
 LET TORPEDOES = 2\n\
 LET SHIELDS = 500\n\
-LET DOCKED = 1\n\
+LET DOCKED = 0\n\
 PHOTON_TORPEDO\n\
 PRINT \"TORPEDO_BASE_STATE \", TORPEDOES, \" \", @SECTOR[30], \" \", BASES_HERE, \" \", BASES_LEFT, \" \", @GALAXY[1], \" \", @SECTOR[64], \" \", @KLINGON_E[1], \" \", SHIELDS\n\
 CR\n",
@@ -1114,10 +1133,9 @@ CR\n",
         30,
     ));
 
-    assert_eq!(
-        output_values(writer.text(), "TORPEDO_BASE_STATE "),
-        [1, 0, 0, 0, 101, 2, 200, 500]
-    );
+    let state = output_values(writer.text(), "TORPEDO_BASE_STATE ");
+    assert_eq!(state[0..7], [1, 0, 0, 0, 101, 2, 200]);
+    assert!(state[7] < 500);
     assert_eq!(result.data_stack(), []);
 }
 
@@ -1136,8 +1154,8 @@ LET STARS_HERE = 1\n\
 LET KLINGONS_HERE = 0\n\
 LET @SECTOR[22] = 4\n\
 LET TORPEDOES = 2\n\
-LET SHIELDS = 500\n\
-LET DOCKED = 1\n\
+LET SHIELDS = 1\n\
+LET DOCKED = 0\n\
 PHOTON_TORPEDO\n\
 PRINT \"TORPEDO_STAR_STATE \", TORPEDOES, \" \", @SECTOR[22], \" \", STARS_HERE, \" \", @GALAXY[1], \" \", DIRECTION_X, \" \", DIRECTION_Y, \" \", SHIELDS\n\
 CR\n",
@@ -1156,10 +1174,9 @@ CR\n",
         30,
     ));
 
-    assert_eq!(
-        output_values(writer.text(), "TORPEDO_STAR_STATE "),
-        [1, 4, 1, 1, 8, -3, 500]
-    );
+    let state = output_values(writer.text(), "TORPEDO_STAR_STATE ");
+    assert_eq!(state[0..6], [1, 4, 1, 1, 8, -3]);
+    assert!(state[6] < 0);
     assert_eq!(result.data_stack(), []);
 }
 
