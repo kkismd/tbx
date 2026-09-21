@@ -313,6 +313,36 @@ fn file_success_runs_the_grades_example_with_for_and_select() {
 }
 
 #[test]
+fn file_success_runs_the_sttr1_initialization_example_with_a_seed() {
+    let path = example_path("sttr1/main.tbx");
+    let output = run_with_args(&["--seed", "30", path.to_str().unwrap()]);
+
+    assert!(
+        output.status.success(),
+        "expected success, stderr:\n{}",
+        stderr_text(&output)
+    );
+    let stdout = stdout_text(&output);
+    let labels = stdout
+        .lines()
+        .filter_map(|line| line.split_whitespace().next())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        labels,
+        [
+            "MISSION",
+            "TOTALS",
+            "GALAXY",
+            "CHART",
+            "DAMAGE",
+            "COURSE_DX",
+            "COURSE_DY",
+        ]
+    );
+    assert_eq!(stderr_text(&output), "");
+}
+
+#[test]
 fn file_success_runs_the_global_array_squares_example_with_stable_output() {
     let path = example_path("squares.tbx");
 
@@ -423,7 +453,6 @@ DATA STACK END: 0\n"
 fn file_success_runs_the_guess_example_with_runtime_input() {
     let path = example_path("guess.tbx");
     let input = (1..=100)
-        .into_iter()
         .map(|value| value.to_string())
         .collect::<Vec<_>>()
         .join("\n");
