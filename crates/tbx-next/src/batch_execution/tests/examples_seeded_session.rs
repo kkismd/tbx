@@ -682,6 +682,59 @@ CR\n",
 }
 
 #[test]
+fn sttr1_phaser_uses_reduced_klingon_count_after_first_kill_in_same_volley() {
+    let mut source = std::fs::read_to_string(example_path("sttr1/main.tbx"))
+        .expect("STTR1 example should be readable");
+    source.push_str(
+        "LET ENT_QX = 1\n\
+LET ENT_QY = 1\n\
+LET ENT_SX = 4\n\
+LET ENT_SY = 4\n\
+LET @GALAXY[1] = 200\n\
+LET BASES_HERE = 0\n\
+LET STARS_HERE = 0\n\
+LET KLINGONS_HERE = 2\n\
+LET KLINGONS_LEFT = 2\n\
+LET @KLINGON_X[1] = 5\n\
+LET @KLINGON_Y[1] = 4\n\
+LET @KLINGON_E[1] = 1\n\
+LET @KLINGON_X[2] = 3\n\
+LET @KLINGON_Y[2] = 4\n\
+LET @KLINGON_E[2] = 3000\n\
+LET @KLINGON_E[3] = 0\n\
+LET @SECTOR[29] = 2\n\
+LET @SECTOR[27] = 2\n\
+LET ENERGY = 1000\n\
+LET SHIELDS = 10000\n\
+LET DOCKED = 0\n\
+LET @DAMAGE[4] = 0\n\
+LET @DAMAGE[7] = 0\n\
+PHASER\n\
+PRINT \"VOLLEY_STATE \", @KLINGON_E[1], \" \", @KLINGON_E[2], \" \", KLINGONS_HERE, \" \", @GALAXY[1]\n\
+CR\n",
+    );
+    let (sources, standard_library_id, source_id) =
+        sources_with_standard_library(STDLIB_SOURCE, &source);
+    let mut input = TestInput::new([Ok(Some("1000".to_owned()))]);
+    let mut writer = RecordingWriter::default();
+
+    let result = success(execute_registered_sources_with_filesystem_and_seed(
+        sources,
+        standard_library_id,
+        source_id,
+        &mut writer,
+        Some(&mut input),
+        30,
+    ));
+
+    let state = output_values(writer.text(), "VOLLEY_STATE ");
+    // The second Klingon receives the full current-count divisor after the
+    // first one is destroyed; keeping the initial count would leave 2265.
+    assert_eq!(state, [0, 1530, 1, 100]);
+    assert_eq!(result.data_stack(), []);
+}
+
+#[test]
 fn sttr1_shield_defeat_skips_phaser_damage_and_preserves_negative_state() {
     let mut source = std::fs::read_to_string(example_path("sttr1/main.tbx"))
         .expect("STTR1 example should be readable");
