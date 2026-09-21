@@ -228,3 +228,55 @@ fn eightqueen_example_leaves_the_data_stack_empty() {
     assert_eq!(writer.text(), "92\n");
     assert_eq!(result.data_stack(), []);
 }
+
+#[test]
+fn maze_example_leaves_the_data_stack_empty() {
+    let source =
+        std::fs::read_to_string(example_path("maze.tbx")).expect("maze example should be readable");
+    let (sources, standard_library_id, source_id) =
+        sources_with_standard_library(STDLIB_SOURCE, &source);
+    let mut writer = RecordingWriter::default();
+
+    let result = execute_registered_sources_with_filesystem_and_seed(
+        sources,
+        standard_library_id,
+        source_id,
+        &mut writer,
+        None,
+        123,
+    );
+
+    let result = success(result);
+    assert_eq!(
+        writer.text(),
+        "########\n#S***G##\n#+######\n#++#####\n########\nMAZE SOLVED\n"
+    );
+    assert_eq!(result.data_stack(), []);
+}
+
+#[test]
+fn unreachable_maze_exhausts_the_search_stack_without_runtime_failure() {
+    let source = std::fs::read_to_string(
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/maze_unreachable.tbx"),
+    )
+    .expect("unreachable maze fixture should be readable");
+    let (sources, standard_library_id, source_id) =
+        sources_with_standard_library(STDLIB_SOURCE, &source);
+    let mut writer = RecordingWriter::default();
+
+    let result = execute_registered_sources_with_filesystem_and_seed(
+        sources,
+        standard_library_id,
+        source_id,
+        &mut writer,
+        None,
+        123,
+    );
+
+    let result = success(result);
+    assert_eq!(
+        writer.text(),
+        "#####\n#S#G#\n#+###\n#++##\n#####\nNO PATH\n"
+    );
+    assert_eq!(result.data_stack(), []);
+}

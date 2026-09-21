@@ -1,0 +1,132 @@
+REM Non-recursive DFS for a fixed maze.
+REM @STACK_* is the explicit search stack: each entry remembers the cell
+REM and the next direction to try after returning from a child cell.
+REM Directions are down, right, up, left. The first branch reaches a dead
+REM end, so the solution requires a real pop/backtrack before going right.
+
+DIM @MAZE[40]
+DIM @VISITED[40]
+DIM @STACK_X[40]
+DIM @STACK_Y[40]
+DIM @STACK_NEXT[40]
+DIM @PATH[40]
+
+VAR WIDTH
+VAR HEIGHT
+VAR INDEX
+VAR TURN
+VAR DIRECTION
+VAR CANDIDATE_X
+VAR CANDIDATE_Y
+VAR PATH_INDEX
+VAR ROW
+VAR COLUMN
+VAR DRAW_INDEX
+VAR CHAR_CODE
+VAR DEPTH
+VAR FOUND
+VAR DONE
+
+LET WIDTH = 8
+LET HEIGHT = 5
+
+# The maze is linearized row-major: 0 is a wall and 1 is open.
+PACK @MAZE = 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
+
+LET X = 2
+LET Y = 2
+LET @VISITED[10] = 1
+LET TURN = 1
+
+WHILE DONE = 0
+  IF X = 6 AND Y = 2
+    LET FOUND = 1
+    LET DONE = 1
+  ELSE
+    IF TURN <= 4
+      LET DIRECTION = TURN
+      LET TURN = TURN + 1
+
+      LET CANDIDATE_X = X
+      LET CANDIDATE_Y = Y
+      IF DIRECTION = 1
+        LET CANDIDATE_Y = Y + 1
+      ELSIF DIRECTION = 2
+        LET CANDIDATE_X = X + 1
+      ELSIF DIRECTION = 3
+        LET CANDIDATE_Y = Y - 1
+      ELSE
+        LET CANDIDATE_X = X - 1
+      ENDIF
+
+      # Check coordinates before calculating an array index. Out-of-bounds
+      # coordinates are rejected, never used as an implicit wall lookup.
+      IF CANDIDATE_X >= 1 AND CANDIDATE_X <= WIDTH AND CANDIDATE_Y >= 1 AND CANDIDATE_Y <= HEIGHT
+        LET INDEX = (CANDIDATE_Y - 1) * WIDTH + CANDIDATE_X
+        IF @MAZE[INDEX] <> 0 AND @VISITED[INDEX] = 0
+          LET DEPTH = DEPTH + 1
+          LET @STACK_X[DEPTH] = X
+          LET @STACK_Y[DEPTH] = Y
+          LET @STACK_NEXT[DEPTH] = TURN
+          LET X = CANDIDATE_X
+          LET Y = CANDIDATE_Y
+          LET @VISITED[INDEX] = 1
+          LET TURN = 1
+        ENDIF
+      ENDIF
+    ELSE
+      IF DEPTH = 0
+        LET DONE = 1
+      ELSE
+        LET X = @STACK_X[DEPTH]
+        LET Y = @STACK_Y[DEPTH]
+        LET TURN = @STACK_NEXT[DEPTH]
+        LET DEPTH = DEPTH - 1
+      ENDIF
+    ENDIF
+  ENDIF
+ENDWH
+
+# Keep the final route separately from visited cells. The stack contains the
+# parent of each current cell, so walking it backwards reconstructs the route.
+IF FOUND = 1
+  LET @PATH[14] = 1
+  LET PATH_INDEX = DEPTH
+  WHILE PATH_INDEX >= 1
+    LET INDEX = (@STACK_Y[PATH_INDEX] - 1) * WIDTH + @STACK_X[PATH_INDEX]
+    LET @PATH[INDEX] = 1
+    LET PATH_INDEX = PATH_INDEX - 1
+  ENDWH
+ENDIF
+
+LET ROW = 1
+WHILE ROW <= HEIGHT
+  LET COLUMN = 1
+  WHILE COLUMN <= WIDTH
+    LET DRAW_INDEX = (ROW - 1) * WIDTH + COLUMN
+    IF DRAW_INDEX = 10
+      LET CHAR_CODE = 83
+    ELSIF DRAW_INDEX = 14
+      LET CHAR_CODE = 71
+    ELSIF @MAZE[DRAW_INDEX] = 0
+      LET CHAR_CODE = 35
+    ELSIF @PATH[DRAW_INDEX] = 1
+      LET CHAR_CODE = 42
+    ELSIF @VISITED[DRAW_INDEX] = 1
+      LET CHAR_CODE = 43
+    ELSE
+      LET CHAR_CODE = 46
+    ENDIF
+    PUTCHR CHAR_CODE
+    LET COLUMN = COLUMN + 1
+  ENDWH
+  CR
+  LET ROW = ROW + 1
+ENDWH
+
+IF FOUND = 1
+  PRINT "MAZE SOLVED"
+ELSE
+  PRINT "NO PATH"
+ENDIF
+CR

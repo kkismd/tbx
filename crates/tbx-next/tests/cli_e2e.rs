@@ -292,6 +292,24 @@ fn file_success_runs_the_nonrecursive_eight_queen_example() {
 }
 
 #[test]
+fn file_success_runs_the_nonrecursive_maze_example_with_backtracking() {
+    let path = example_path("maze.tbx");
+
+    let output = run_with_file(&path);
+
+    assert!(
+        output.status.success(),
+        "expected success, stderr:\n{}",
+        stderr_text(&output)
+    );
+    assert_eq!(
+        stdout_text(&output),
+        "########\n#S***G##\n#+######\n#++#####\n########\nMAZE SOLVED\n"
+    );
+    assert_eq!(stderr_text(&output), "");
+}
+
+#[test]
 fn file_success_runs_the_guess_example_with_runtime_input() {
     let path = example_path("guess.tbx");
     let input = (1..=100)
