@@ -125,11 +125,11 @@ fn sttr1_initialization_builds_consistent_mission_state() {
     assert_eq!(output_values(writer.text(), "DAMAGE "), vec![0; 8]);
     assert_eq!(
         output_values(writer.text(), "COURSE_DX "),
-        [1, 1, 0, -1, -1, -1, 0, 1, 1]
+        [10, 7, 0, -7, -10, -7, 0, 7, 10]
     );
     assert_eq!(
         output_values(writer.text(), "COURSE_DY "),
-        [0, -1, -1, -1, 0, 1, 1, 1, 0]
+        [0, 7, 10, 7, 0, -7, -10, -7, 0]
     );
     assert_eq!(result.data_stack(), []);
 }
@@ -232,6 +232,175 @@ fn sttr1_scan_commands_respect_sensor_and_computer_damage_gates() {
     assert_eq!(long_scan_count, 2);
     let chart = output_values(output, "CHART_AFTER ");
     assert!(chart.iter().all(|value| *value == 0));
+    assert_eq!(result.data_stack(), []);
+}
+
+#[test]
+fn sttr1_navigation_interpolates_course_and_applies_small_warp_time_rules() {
+    let mut source = std::fs::read_to_string(example_path("sttr1/main.tbx"))
+        .expect("STTR1 example should be readable");
+    source.push_str(
+        "LET ENT_QX = 1\n\
+LET ENT_QY = 1\n\
+LET ENT_SX = 4\n\
+LET ENT_SY = 4\n\
+LET @GALAXY[1] = 0\n\
+INIT_QUADRANT\n\
+LET STARDATE = 100\n\
+LET ENERGY = 100\n\
+NAVIGATE\n\
+PRINT \"NAVIGATION_STATE \", ENT_QX, \" \", ENT_QY, \" \", ENT_SX, \" \", ENT_SY, \" \", ENERGY, \" \", STARDATE\n\
+CR\n",
+    );
+    let (sources, standard_library_id, source_id) =
+        sources_with_standard_library(STDLIB_SOURCE, &source);
+    let mut input = TestInput::new([Ok(Some("15".to_owned())), Ok(Some("2".to_owned()))]);
+    let mut writer = RecordingWriter::default();
+
+    let result = success(execute_registered_sources_with_filesystem_and_seed(
+        sources,
+        standard_library_id,
+        source_id,
+        &mut writer,
+        Some(&mut input),
+        30,
+    ));
+
+    assert_eq!(
+        output_values(writer.text(), "NAVIGATION_STATE "),
+        [1, 1, 5, 4, 104, 100]
+    );
+    assert_eq!(result.data_stack(), []);
+}
+
+#[test]
+fn sttr1_navigation_stops_before_obstacle_and_charges_planned_steps() {
+    let mut source = std::fs::read_to_string(example_path("sttr1/main.tbx"))
+        .expect("STTR1 example should be readable");
+    source.push_str(
+        "LET ENT_QX = 1\n\
+LET ENT_QY = 1\n\
+LET ENT_SX = 4\n\
+LET ENT_SY = 4\n\
+LET @GALAXY[1] = 0\n\
+INIT_QUADRANT\n\
+LET @SECTOR[29] = 4\n\
+LET STARDATE = 100\n\
+LET ENERGY = 100\n\
+NAVIGATE\n\
+PRINT \"NAVIGATION_STATE \", ENT_SX, \" \", ENT_SY, \" \", ENERGY, \" \", STARDATE\n\
+CR\n",
+    );
+    let (sources, standard_library_id, source_id) =
+        sources_with_standard_library(STDLIB_SOURCE, &source);
+    let mut input = TestInput::new([Ok(Some("10".to_owned())), Ok(Some("10".to_owned()))]);
+    let mut writer = RecordingWriter::default();
+
+    let result = success(execute_registered_sources_with_filesystem_and_seed(
+        sources,
+        standard_library_id,
+        source_id,
+        &mut writer,
+        Some(&mut input),
+        30,
+    ));
+
+    assert_eq!(
+        output_values(writer.text(), "NAVIGATION_STATE "),
+        [4, 4, 97, 101]
+    );
+    assert_eq!(result.data_stack(), []);
+}
+
+#[test]
+fn sttr1_navigation_handles_galaxy_edge_and_returns_to_known_quadrant() {
+    let mut source = std::fs::read_to_string(example_path("sttr1/main.tbx"))
+        .expect("STTR1 example should be readable");
+    source.push_str(
+        "LET ENT_QX = 8\n\
+LET ENT_QY = 1\n\
+LET ENT_SX = 8\n\
+LET ENT_SY = 4\n\
+LET @GALAXY[8] = 0\n\
+INIT_QUADRANT\n\
+LET STARDATE = 100\n\
+LET ENERGY = 100\n\
+NAVIGATE\n\
+NAVIGATE\n\
+PRINT \"NAVIGATION_STATE \", ENT_QX, \" \", ENT_QY, \" \", ENT_SX, \" \", ENT_SY, \" \", ENERGY, \" \", STARDATE\n\
+CR\n",
+    );
+    let (sources, standard_library_id, source_id) =
+        sources_with_standard_library(STDLIB_SOURCE, &source);
+    let mut input = TestInput::new([
+        Ok(Some("10".to_owned())),
+        Ok(Some("10".to_owned())),
+        Ok(Some("50".to_owned())),
+        Ok(Some("10".to_owned())),
+    ]);
+    let mut writer = RecordingWriter::default();
+
+    let result = success(execute_registered_sources_with_filesystem_and_seed(
+        sources,
+        standard_library_id,
+        source_id,
+        &mut writer,
+        Some(&mut input),
+        30,
+    ));
+
+    assert_eq!(
+        output_values(writer.text(), "NAVIGATION_STATE "),
+        [8, 1, 8, 4, 94, 102]
+    );
+    assert_eq!(result.data_stack(), []);
+}
+
+#[test]
+fn sttr1_navigation_retries_from_course_after_invalid_warp_and_cancel_preserves_state() {
+    let mut source = std::fs::read_to_string(example_path("sttr1/main.tbx"))
+        .expect("STTR1 example should be readable");
+    source.push_str(
+        "LET ENT_QX = 1\n\
+LET ENT_QY = 1\n\
+LET ENT_SX = 4\n\
+LET ENT_SY = 4\n\
+LET @GALAXY[1] = 0\n\
+INIT_QUADRANT\n\
+LET @DAMAGE[1] = -1\n\
+LET STARDATE = 100\n\
+LET ENERGY = 100\n\
+NAVIGATE\n\
+PRINT \"NAVIGATION_STATE \", ENT_QX, \" \", ENT_QY, \" \", ENT_SX, \" \", ENT_SY, \" \", ENERGY, \" \", STARDATE\n\
+CR\n",
+    );
+    let (sources, standard_library_id, source_id) =
+        sources_with_standard_library(STDLIB_SOURCE, &source);
+    let mut input = TestInput::new([
+        Ok(Some("7".to_owned())),
+        Ok(Some("10".to_owned())),
+        Ok(Some("3".to_owned())),
+        Ok(Some("0".to_owned())),
+    ]);
+    let mut writer = RecordingWriter::default();
+
+    let result = success(execute_registered_sources_with_filesystem_and_seed(
+        sources,
+        standard_library_id,
+        source_id,
+        &mut writer,
+        Some(&mut input),
+        30,
+    ));
+
+    assert!(writer.text().contains("COURSE OUT OF RANGE"));
+    assert!(writer
+        .text()
+        .contains("WARP ENGINES ARE DAMAGED, MAXIMUM SPEED = WARP .2"));
+    assert_eq!(
+        output_values(writer.text(), "NAVIGATION_STATE "),
+        [1, 1, 4, 4, 100, 100]
+    );
     assert_eq!(result.data_stack(), []);
 }
 
