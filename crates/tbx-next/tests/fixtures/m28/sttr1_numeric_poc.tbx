@@ -1,0 +1,155 @@
+REM M28 STTR1 numeric and state-representation proof of concept.
+
+DIM @DX[9]
+DIM @DY[9]
+DIM @STATE[64]
+VAR INDEX_VALUE
+VAR ROOT
+VAR RANDOM_VALUE
+VAR DAMAGE_VALUE
+VAR DAMAGE_ENERGY_QUOTIENT
+VAR DAMAGE_ENERGY_REMAINDER
+VAR DAMAGE_HIGH
+VAR DAMAGE_LOW
+VAR DAMAGE_PRODUCT
+VAR DAMAGE_DISTANCE_QUOTIENT
+VAR DAMAGE_DISTANCE_REMAINDER
+VAR DAMAGE_BASE
+VAR DAMAGE_FRACTION
+
+DEF INDEX x, y
+  LET INDEX_VALUE = (y - 1) * 8 + x
+  DROP
+  DROP
+  EVAL INDEX_VALUE
+END
+
+DEF ISQRT value
+  LET ROOT = 0
+  WHILE (ROOT + 1) * (ROOT + 1) <= value
+    LET ROOT = ROOT + 1
+  ENDWH
+  DROP
+  EVAL ROOT
+END
+
+DEF PERCENT roll, threshold
+  IF roll <= threshold
+    LET DAMAGE_VALUE = 1
+  ELSE
+    LET DAMAGE_VALUE = 0
+  ENDIF
+  DROP
+  DROP
+  EVAL DAMAGE_VALUE
+END
+
+DEF FACTOR roll
+  LET DAMAGE_VALUE = roll - 1
+  DROP
+  EVAL DAMAGE_VALUE
+END
+
+DEF DAMAGE energy, roll, distance10
+  # Split before multiplication: energy * roll can exceed i16, while each
+  # quotient/remainder term stays within the checked arithmetic range.
+  LET DAMAGE_ENERGY_QUOTIENT = energy / 100
+  LET DAMAGE_ENERGY_REMAINDER = energy % 100
+  LET DAMAGE_HIGH = DAMAGE_ENERGY_QUOTIENT * roll
+  LET DAMAGE_LOW = DAMAGE_ENERGY_REMAINDER * roll / 100
+  LET DAMAGE_PRODUCT = DAMAGE_HIGH + DAMAGE_LOW
+  # Keep the quotient and remainder so scaling happens before the final
+  # division without constructing the overflowing DAMAGE_PRODUCT * 10.
+  LET DAMAGE_DISTANCE_QUOTIENT = DAMAGE_PRODUCT / distance10
+  LET DAMAGE_DISTANCE_REMAINDER = DAMAGE_PRODUCT % distance10
+  LET DAMAGE_BASE = DAMAGE_DISTANCE_QUOTIENT * 10
+  LET DAMAGE_FRACTION = DAMAGE_DISTANCE_REMAINDER * 10 / distance10
+  LET DAMAGE_VALUE = DAMAGE_BASE + DAMAGE_FRACTION
+  DROP
+  DROP
+  DROP
+  EVAL DAMAGE_VALUE
+END
+
+PACK @DX = 10, 7, 0, -7, -10, -7, 0, 7, 99
+PACK @DY = 0, 7, 10, 7, 0, -7, -10, -7, 99
+
+REM Verify the 8 by 8 one-origin mapping and representative state writes.
+LET INDEX_VALUE = INDEX(1, 1)
+LET @STATE[INDEX_VALUE] = 11
+PUTDEC INDEX_VALUE
+CR
+LET INDEX_VALUE = INDEX(8, 1)
+LET @STATE[INDEX_VALUE] = 18
+PUTDEC INDEX_VALUE
+CR
+LET INDEX_VALUE = INDEX(1, 8)
+LET @STATE[INDEX_VALUE] = 81
+PUTDEC INDEX_VALUE
+CR
+LET INDEX_VALUE = INDEX(8, 8)
+LET @STATE[INDEX_VALUE] = 88
+PUTDEC INDEX_VALUE
+CR
+LET INDEX_VALUE = INDEX(5, 5)
+LET @STATE[INDEX_VALUE] = 55
+PUTDEC INDEX_VALUE
+CR
+PUTDEC @STATE[INDEX_VALUE]
+CR
+
+REM Course table and ten-times fixed-point interpolation.
+PRINT @DX[1], " ", @DY[1]
+CR
+PRINT @DX[2], " ", @DY[2]
+CR
+PRINT @DX[3], " ", @DY[3]
+CR
+PRINT @DX[9], " ", @DY[9]
+CR
+PRINT (@DX[1] + @DX[2]) / 2, " ", (@DY[1] + @DY[2]) / 2
+CR
+
+REM Ten-times sector distance: sqrt((dx * dx + dy * dy) * 100).
+PUTDEC ISQRT(0)
+CR
+PUTDEC ISQRT(100)
+CR
+PUTDEC ISQRT(200)
+CR
+PUTDEC ISQRT(9800)
+CR
+
+REM Fixed-roll percent boundaries and zero..199 coefficient mapping.
+PUTDEC PERCENT(49, 50)
+CR
+PUTDEC PERCENT(50, 50)
+CR
+PUTDEC PERCENT(51, 50)
+CR
+PUTDEC FACTOR(1)
+CR
+PUTDEC FACTOR(100)
+CR
+PUTDEC FACTOR(200)
+CR
+
+LET RANDOM_VALUE = RND(200)
+IF (RANDOM_VALUE >= 1) AND (RANDOM_VALUE <= 200)
+  PRINT "RND OK"
+ELSE
+  PRINT "RND BAD"
+ENDIF
+CR
+
+REM The first case is normal; the second would overflow as energy * roll.
+PUTDEC DAMAGE(0, 0, 10)
+CR
+PUTDEC DAMAGE(1000, 50, 10)
+CR
+PUTDEC DAMAGE(500, 1, 3)
+CR
+PUTDEC DAMAGE(3000, 199, 2)
+CR
+PUTDEC DAMAGE(3000, 199, 10)
+CR
