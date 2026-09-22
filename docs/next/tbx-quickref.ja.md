@@ -282,7 +282,7 @@ PRINT "not reached"
 
 ### IF / ELSIF / ELSE / ENDIF
 
-組み込みの `IF` は `ELSIF`, `ELSE`, `ENDIF` を持つ。
+`IF` は `ELSIF`, `ELSE`, `ENDIF` を持つ。
 
 ```tbx
 IF A < 0
