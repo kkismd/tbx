@@ -8,7 +8,6 @@ fn sttr1_game_briefing_and_invalid_command_dispatch_preserve_state() {
             "START_GAME",
             r#"INIT_MISSION
 PRINT_BRIEFING
-PRINT_COMMAND_MENU
 LET COMMAND = 99
 DISPATCH_COMMAND
 IF INPUT?()
@@ -92,30 +91,25 @@ GAME_LOOP
     assert!(output.contains("DAMAGE REPORT"));
     assert!(output.contains("MISSION SUMMARY"));
     assert!(output.contains("RESULT VICTORY"));
-    assert_eq!(output.matches("COMMANDS (0-7)").count(), 2);
+    assert_eq!(output.matches("COMMANDS (0-7)").count(), 1);
     assert_eq!(output.matches("COMMAND (0-7):").count(), 2);
-    assert!(!output.contains("COMMANDS (0-7)\nCOMMANDS (0-7)"));
     assert_eq!(result.data_stack(), []);
 }
 
 #[test]
-fn sttr1_game_loop_reprints_commands_after_a_non_terminal_command() {
+fn sttr1_game_loop_reprints_commands_after_command_input_error() {
     let source = std::fs::read_to_string(example_path("sttr1/main.tbx"))
         .expect("STTR1 entry point should be readable");
     let source = source.replacen(
         "START_GAME",
-        "INIT_MISSION\nLET DEADLINE = START_STARDATE\nGAME_LOOP\n",
+        "INIT_MISSION\nPRINT_BRIEFING\nLET KLINGONS_LEFT = 0\nGAME_LOOP\n",
         1,
     );
     let (sources, standard_library_id, source_id) =
         sttr1_sources_with_standard_library(STDLIB_SOURCE, &source);
     let mut input = TestInput::new([
-        Ok(Some("0".to_owned())),
-        Ok(Some("10".to_owned())),
-        Ok(Some("0".to_owned())),
-        Ok(Some("0".to_owned())),
-        Ok(Some("10".to_owned())),
-        Ok(Some("10".to_owned())),
+        Ok(Some("not a command".to_owned())),
+        Ok(Some("6".to_owned())),
     ]);
     let mut writer = RecordingWriter::default();
 
@@ -131,5 +125,6 @@ fn sttr1_game_loop_reprints_commands_after_a_non_terminal_command() {
     let output = writer.text();
     assert_eq!(output.matches("COMMANDS (0-7)").count(), 2);
     assert_eq!(output.matches("COMMAND (0-7):").count(), 2);
+    assert_eq!(output.matches("COMMAND INPUT ERROR").count(), 1);
     assert_eq!(result.data_stack(), []);
 }
