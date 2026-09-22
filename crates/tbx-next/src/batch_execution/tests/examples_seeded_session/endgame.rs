@@ -132,3 +132,25 @@ CR\n",
     assert!(output.contains("REASON DEAD-IN-SPACE\n"));
     assert_eq!(output_values(&output, "ENDGAME_STATE "), [2, 3, 1]);
 }
+
+#[test]
+fn sttr1_victory_efficiency_avoids_intermediate_overflow_and_caps_result() {
+    let output = run_endgame(
+        "LET GAME_RESULT = 0\n\
+LET KLINGONS_LEFT = 0\n\
+LET KLINGONS_HERE = 0\n\
+LET KLINGONS_INITIAL = 33\n\
+LET STARDATE = START_STARDATE + 2\n\
+CHECK_ENDGAME\n\
+PRINT \"EFFICIENCY_ELAPSED_2 \", EFFICIENCY\n\
+CR\n\
+LET GAME_RESULT = 0\n\
+LET STARDATE = START_STARDATE + 1\n\
+CHECK_ENDGAME\n\
+PRINT \"EFFICIENCY_ELAPSED_1 \", EFFICIENCY\n\
+CR\n",
+        &[],
+    );
+    assert_eq!(output_values(&output, "EFFICIENCY_ELAPSED_2 "), [16500]);
+    assert_eq!(output_values(&output, "EFFICIENCY_ELAPSED_1 "), [32767]);
+}
