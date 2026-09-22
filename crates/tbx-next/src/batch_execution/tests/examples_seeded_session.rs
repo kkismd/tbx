@@ -3,6 +3,7 @@ use super::*;
 mod combat;
 mod computer;
 mod device;
+mod endgame;
 mod examples;
 mod initialization;
 mod navigation;
