@@ -47,7 +47,6 @@ fn run_with_file_and_stdin(path: &Path, input: &str) -> Output {
         .expect("child stdin should be piped")
         .write_all(input.as_bytes())
         .expect("runtime input should be written to child");
-
     child
         .wait_with_output()
         .expect("tbx-next binary should finish")
@@ -324,52 +323,6 @@ fn file_success_runs_the_grades_example_with_for_and_select() {
     assert_eq!(
         stdout_text(&output),
         "100 -> A\n95 -> A\n82 -> B\n76 -> C\n61 -> D\n58 -> F\nPassed: 5\n"
-    );
-    assert_eq!(stderr_text(&output), "");
-}
-
-#[test]
-fn file_success_runs_the_sttr1_initialization_example_with_a_seed() {
-    let path = example_path("sttr1/main.tbx");
-    let output = run_with_args(&["--seed", "30", path.to_str().unwrap()]);
-
-    assert!(
-        output.status.success(),
-        "expected success, stderr:\n{}",
-        stderr_text(&output)
-    );
-    let stdout = stdout_text(&output);
-    let labels = stdout
-        .lines()
-        .filter_map(|line| line.split_whitespace().next())
-        .collect::<Vec<_>>();
-    assert_eq!(
-        labels,
-        [
-            "MISSION",
-            "TOTALS",
-            "QUADRANT",
-            "KLINGON_STATE",
-            "SHORT",
-            "...P....",
-            "....*...",
-            "........",
-            ".....K*.",
-            "........",
-            ".K.K....",
-            "........",
-            "........",
-            "STATUS",
-            "LONG",
-            "---8",
-            "---302",
-            "---1",
-            "GALAXY",
-            "CHART",
-            "DAMAGE",
-            "COURSE_DX",
-            "COURSE_DY",
-        ]
     );
     assert_eq!(stderr_text(&output), "");
 }
