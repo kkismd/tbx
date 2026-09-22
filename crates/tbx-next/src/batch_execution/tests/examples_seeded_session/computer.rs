@@ -49,12 +49,12 @@ fn sttr1_computer_prints_unknown_and_known_chart_cells_in_row_order() {
         .collect::<Vec<_>>();
     assert_eq!(chart.len(), 8);
     assert!(chart[0].contains("--- 005 206 "));
-    assert!(chart[0].starts_with("QY 1 "));
-    assert_eq!(chart[0].split_whitespace().count(), 10);
+    assert!(chart[0].starts_with("1 "));
+    assert_eq!(chart[0].split_whitespace().count(), 9);
     assert!(output.contains("KBS = KLINGONS / BASES / STARS\n"));
     assert!(output.contains("CURRENT QUADRANT 3,4\n"));
-    assert!(output.contains("QX     1   2   3   4   5   6   7   8\n"));
-    assert!(chart[7].starts_with("QY 8 "));
+    assert!(output.contains("    1   2   3   4   5   6   7   8\n"));
+    assert!(chart[7].starts_with("8 "));
 }
 
 #[test]
