@@ -18,7 +18,7 @@ TBX Next の位置付け、設計判断、実装、テスト、開発コマン�
 | 辞書 | ヘッダ層（`Vec<WordEntry>`）とデータ層（`Vec<Cell>`）の二層構造。ユーザー辞書 → 標準ライブラリ辞書 → システム辞書の順に検索（最後に登録されたワードが優先される） |
 | スタック | データスタック（SP / BP によるスタックフレーム管理）とリターンスタック |
 | コンパイラ | 優先度付き演算子を操車場アルゴリズムで RPN 命令列に変換。制御構造の入れ子をコンパイル時専用スタックで管理 |
-| Cell | スタック・辞書の基本単位。Int / Float / Bool / DictAddr / StackAddr / Xt / StringDesc 等を保持する Rust enum |
+| Cell | スタック・辞書の基本単位。Cell variants `Int` / `Float` / `Bool` / `DictAddr` / `StackAddr` / `Xt` / `StringDesc` 等を保持する Rust enum |
 
 プリミティブはすべて Rust で実装され、システム辞書にワードとして登録されます。
 より高レベルな言語機能は TBX 自身で記述されます。
