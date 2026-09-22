@@ -10,6 +10,27 @@ fn example_path(name: &str) -> std::path::PathBuf {
         .join(name)
 }
 
+fn sttr1_sources_with_standard_library(
+    standard_library: &str,
+    source: &str,
+) -> (
+    SourceTexts,
+    crate::source::SourceId,
+    crate::source::SourceId,
+) {
+    let mut sources = SourceTexts::new();
+    let standard_library_id = sources.register(standard_library, "<tbx-next-stdlib>");
+    let main_path = example_path("sttr1/main.tbx");
+    let canonical_path = std::fs::canonicalize(main_path)
+        .expect("STTR1 entry point should have a canonical filesystem path");
+    let source_id = sources.register_with_acquisition(
+        source,
+        "docs/next/examples/sttr1/main.tbx",
+        crate::source::SourceAcquisition::FileSystem { canonical_path },
+    );
+    (sources, standard_library_id, source_id)
+}
+
 fn output_values(output: &str, label: &str) -> Vec<i16> {
     output
         .lines()
@@ -66,7 +87,7 @@ fn sttr1_initialization_builds_consistent_mission_state() {
     let source = std::fs::read_to_string(example_path("sttr1/main.tbx"))
         .expect("STTR1 initialization example should be readable");
     let (sources, standard_library_id, source_id) =
-        sources_with_standard_library(STDLIB_SOURCE, &source);
+        sttr1_sources_with_standard_library(STDLIB_SOURCE, &source);
     let mut writer = RecordingWriter::default();
 
     let result = execute_registered_sources_with_filesystem_and_seed(
@@ -139,7 +160,7 @@ fn sttr1_quadrant_setup_places_unique_sector_objects_and_klingon_state() {
     let source = std::fs::read_to_string(example_path("sttr1/main.tbx"))
         .expect("STTR1 example should be readable");
     let (sources, standard_library_id, source_id) =
-        sources_with_standard_library(STDLIB_SOURCE, &source);
+        sttr1_sources_with_standard_library(STDLIB_SOURCE, &source);
     let mut writer = RecordingWriter::default();
     let result = success(execute_registered_sources_with_filesystem_and_seed(
         sources,
@@ -215,7 +236,7 @@ fn sttr1_scan_commands_respect_sensor_and_computer_damage_gates() {
         "LET @DAMAGE[2] = -1\nPRINT_SHORT_SCAN\nLET @DAMAGE[3] = -1\nPRINT_LONG_SCAN\nLET SECTOR_INDEX = 1\nWHILE SECTOR_INDEX <= 64\nLET @CHART[SECTOR_INDEX] = 0\nLET SECTOR_INDEX = SECTOR_INDEX + 1\nENDWH\nLET @DAMAGE[2] = 0\nLET @DAMAGE[3] = 0\nLET @DAMAGE[7] = -1\nPRINT_LONG_SCAN\nPRINT \"CHART_AFTER \"\nLET SECTOR_INDEX = 1\nWHILE SECTOR_INDEX <= 64\nPRINT @CHART[SECTOR_INDEX], \" \"\nLET SECTOR_INDEX = SECTOR_INDEX + 1\nENDWH\nCR\n",
     );
     let (sources, standard_library_id, source_id) =
-        sources_with_standard_library(STDLIB_SOURCE, &source);
+        sttr1_sources_with_standard_library(STDLIB_SOURCE, &source);
     let mut writer = RecordingWriter::default();
     let result = success(execute_registered_sources_with_filesystem_and_seed(
         sources,
@@ -253,7 +274,7 @@ PRINT \"NAVIGATION_STATE \", ENT_QX, \" \", ENT_QY, \" \", ENT_SX, \" \", ENT_SY
 CR\n",
     );
     let (sources, standard_library_id, source_id) =
-        sources_with_standard_library(STDLIB_SOURCE, &source);
+        sttr1_sources_with_standard_library(STDLIB_SOURCE, &source);
     let mut input = TestInput::new([Ok(Some("15".to_owned())), Ok(Some("2".to_owned()))]);
     let mut writer = RecordingWriter::default();
 
@@ -292,7 +313,7 @@ PRINT \"NAVIGATION_STATE \", ENT_SX, \" \", ENT_SY, \" \", ENERGY, \" \", STARDA
 CR\n",
     );
     let (sources, standard_library_id, source_id) =
-        sources_with_standard_library(STDLIB_SOURCE, &source);
+        sttr1_sources_with_standard_library(STDLIB_SOURCE, &source);
     let mut input = TestInput::new([Ok(Some("15".to_owned())), Ok(Some("0".to_owned()))]);
     let mut writer = RecordingWriter::default();
 
@@ -330,7 +351,7 @@ PRINT \"NAVIGATION_STATE \", ENT_QX, \" \", ENT_QY, \" \", ENT_SX, \" \", ENT_SY
 CR\n",
     );
     let (sources, standard_library_id, source_id) =
-        sources_with_standard_library(STDLIB_SOURCE, &source);
+        sttr1_sources_with_standard_library(STDLIB_SOURCE, &source);
     let mut input = TestInput::new([Ok(Some("10".to_owned())), Ok(Some("80".to_owned()))]);
     let mut writer = RecordingWriter::default();
 
@@ -369,7 +390,7 @@ PRINT \"NAVIGATION_STATE \", ENT_QX, \" \", ENT_QY, \" \", ENT_SX, \" \", ENT_SY
 CR\n",
     );
     let (sources, standard_library_id, source_id) =
-        sources_with_standard_library(STDLIB_SOURCE, &source);
+        sttr1_sources_with_standard_library(STDLIB_SOURCE, &source);
     let mut input = TestInput::new([Ok(Some("10".to_owned())), Ok(Some("10".to_owned()))]);
     let mut writer = RecordingWriter::default();
 
@@ -408,7 +429,7 @@ PRINT \"NAVIGATION_STATE \", ENT_SX, \" \", ENT_SY, \" \", ENERGY, \" \", STARDA
 CR\n",
     );
     let (sources, standard_library_id, source_id) =
-        sources_with_standard_library(STDLIB_SOURCE, &source);
+        sttr1_sources_with_standard_library(STDLIB_SOURCE, &source);
     let mut input = TestInput::new([Ok(Some("10".to_owned())), Ok(Some("10".to_owned()))]);
     let mut writer = RecordingWriter::default();
 
@@ -447,7 +468,7 @@ PRINT \"NAVIGATION_STATE \", ENT_QX, \" \", ENT_QY, \" \", ENT_SX, \" \", ENT_SY
 CR\n",
     );
     let (sources, standard_library_id, source_id) =
-        sources_with_standard_library(STDLIB_SOURCE, &source);
+        sttr1_sources_with_standard_library(STDLIB_SOURCE, &source);
     let mut input = TestInput::new([
         Ok(Some("10".to_owned())),
         Ok(Some("10".to_owned())),
@@ -491,7 +512,7 @@ PRINT \"NAVIGATION_STATE \", ENT_QX, \" \", ENT_QY, \" \", ENT_SX, \" \", ENT_SY
 CR\n",
     );
     let (sources, standard_library_id, source_id) =
-        sources_with_standard_library(STDLIB_SOURCE, &source);
+        sttr1_sources_with_standard_library(STDLIB_SOURCE, &source);
     let mut input = TestInput::new([
         Ok(Some("7".to_owned())),
         Ok(Some("10".to_owned())),
@@ -547,7 +568,7 @@ PUTDEC COMBAT_DAMAGE(3000, 199, 10, 1)\n\
 CR\n",
     );
     let (sources, standard_library_id, source_id) =
-        sources_with_standard_library(STDLIB_SOURCE, &source);
+        sttr1_sources_with_standard_library(STDLIB_SOURCE, &source);
     let mut writer = RecordingWriter::default();
 
     let result = success(execute_registered_sources_with_filesystem_and_seed(
@@ -603,7 +624,7 @@ PRINT \"COMBAT_STATE \", ENERGY, \" \", SHIELDS, \" \", @KLINGON_E[1], \" \", KL
 CR\n",
     );
     let (sources, standard_library_id, source_id) =
-        sources_with_standard_library(STDLIB_SOURCE, &source);
+        sttr1_sources_with_standard_library(STDLIB_SOURCE, &source);
     let mut input = TestInput::new([Ok(Some("1100".to_owned())), Ok(Some("100".to_owned()))]);
     let mut writer = RecordingWriter::default();
 
@@ -657,7 +678,7 @@ PRINT \"DAMAGED_COMPUTER_STATE \", ENERGY, \" \", @KLINGON_E[1], \" \", SHIELDS\
 CR\n",
     );
     let (sources, standard_library_id, source_id) =
-        sources_with_standard_library(STDLIB_SOURCE, &source);
+        sttr1_sources_with_standard_library(STDLIB_SOURCE, &source);
     let mut input = TestInput::new([Ok(Some("3000".to_owned()))]);
     let mut writer = RecordingWriter::default();
 
@@ -714,7 +735,7 @@ PRINT \"VOLLEY_STATE \", @KLINGON_E[1], \" \", @KLINGON_E[2], \" \", KLINGONS_HE
 CR\n",
     );
     let (sources, standard_library_id, source_id) =
-        sources_with_standard_library(STDLIB_SOURCE, &source);
+        sttr1_sources_with_standard_library(STDLIB_SOURCE, &source);
     let mut input = TestInput::new([Ok(Some("1000".to_owned()))]);
     let mut writer = RecordingWriter::default();
 
@@ -762,7 +783,7 @@ PRINT \"SHIELD_DEFEAT_STATE \", ENERGY, \" \", @KLINGON_E[1], \" \", SHIELDS\n\
 CR\n",
     );
     let (sources, standard_library_id, source_id) =
-        sources_with_standard_library(STDLIB_SOURCE, &source);
+        sttr1_sources_with_standard_library(STDLIB_SOURCE, &source);
     let mut input = TestInput::new([Ok(Some("1000".to_owned()))]);
     let mut writer = RecordingWriter::default();
 
@@ -806,7 +827,7 @@ PRINT \"MULTI_ATTACK_STATE \", SHIELDS, \" \", @KLINGON_E[1], \" \", @KLINGON_E[
 CR\n",
     );
     let (sources, standard_library_id, source_id) =
-        sources_with_standard_library(STDLIB_SOURCE, &source);
+        sttr1_sources_with_standard_library(STDLIB_SOURCE, &source);
     let mut writer = RecordingWriter::default();
 
     let result = success(execute_registered_sources_with_filesystem_and_seed(
@@ -840,7 +861,7 @@ PRINT \"CANCEL_STATE \", ENERGY, \" \", SHIELDS\n\
 CR\n",
     );
     let (sources, standard_library_id, source_id) =
-        sources_with_standard_library(STDLIB_SOURCE, &source);
+        sttr1_sources_with_standard_library(STDLIB_SOURCE, &source);
     let mut input = TestInput::new([Ok(Some("0".to_owned()))]);
     let mut writer = RecordingWriter::default();
 
@@ -873,7 +894,7 @@ PRINT \"DOCKED_STATE \", SHIELDS, \" \", @KLINGON_E[1], \" \", RND(200)\n\
 CR\n",
     );
     let (sources, standard_library_id, source_id) =
-        sources_with_standard_library(STDLIB_SOURCE, &source);
+        sttr1_sources_with_standard_library(STDLIB_SOURCE, &source);
     let mut writer = RecordingWriter::default();
 
     let result = success(execute_registered_sources_with_filesystem_and_seed(
@@ -890,7 +911,7 @@ CR\n",
 
     let control_source = source.replace("\nKLINGON_ATTACK\n", "\nREM SKIP_ATTACK\n");
     let (sources, standard_library_id, source_id) =
-        sources_with_standard_library(STDLIB_SOURCE, &control_source);
+        sttr1_sources_with_standard_library(STDLIB_SOURCE, &control_source);
     let mut control_writer = RecordingWriter::default();
     success(execute_registered_sources_with_filesystem_and_seed(
         sources,
@@ -923,7 +944,7 @@ PRINT \"DAMAGED_STATE \", ENERGY, \" \", SHIELDS\n\
 CR\n",
     );
     let (sources, standard_library_id, source_id) =
-        sources_with_standard_library(STDLIB_SOURCE, &source);
+        sttr1_sources_with_standard_library(STDLIB_SOURCE, &source);
     let mut writer = RecordingWriter::default();
 
     let result = success(execute_registered_sources_with_filesystem_and_seed(
@@ -969,7 +990,7 @@ PRINT \"ALL_DESTROYED \", @KLINGON_E[1], \" \", @KLINGON_E[2], \" \", @SECTOR[10
 CR\n",
     );
     let (sources, standard_library_id, source_id) =
-        sources_with_standard_library(STDLIB_SOURCE, &source);
+        sttr1_sources_with_standard_library(STDLIB_SOURCE, &source);
     let mut writer = RecordingWriter::default();
 
     let result = success(execute_registered_sources_with_filesystem_and_seed(
@@ -1011,7 +1032,7 @@ PRINT \"TORPEDO_GATE_STATE \", TORPEDOES\n\
 CR\n",
     );
     let (sources, standard_library_id, source_id) =
-        sources_with_standard_library(STDLIB_SOURCE, &source);
+        sttr1_sources_with_standard_library(STDLIB_SOURCE, &source);
     let mut input = TestInput::new([Ok(Some("7".to_owned())), Ok(Some("10".to_owned()))]);
     let mut writer = RecordingWriter::default();
 
@@ -1059,7 +1080,7 @@ PRINT \"TORPEDO_KLINGON_STATE \", TORPEDOES, \" \", @KLINGON_E[1], \" \", @SECTO
 CR\n",
     );
     let (sources, standard_library_id, source_id) =
-        sources_with_standard_library(STDLIB_SOURCE, &source);
+        sttr1_sources_with_standard_library(STDLIB_SOURCE, &source);
     let mut input = TestInput::new([Ok(Some("10".to_owned()))]);
     let mut writer = RecordingWriter::default();
 
@@ -1076,7 +1097,7 @@ CR\n",
     assert_eq!(state[0..7], [1, 0, 0, 0, 0, 0, 500]);
     let control_source = source.replace("\nPHOTON_TORPEDO\n", "\nREM SKIP_TORPEDO\n");
     let (sources, standard_library_id, source_id) =
-        sources_with_standard_library(STDLIB_SOURCE, &control_source);
+        sttr1_sources_with_standard_library(STDLIB_SOURCE, &control_source);
     let mut control_writer = RecordingWriter::default();
     success(execute_registered_sources_with_filesystem_and_seed(
         sources,
@@ -1122,7 +1143,7 @@ PRINT \"TORPEDO_BASE_STATE \", TORPEDOES, \" \", @SECTOR[30], \" \", BASES_HERE,
 CR\n",
     );
     let (sources, standard_library_id, source_id) =
-        sources_with_standard_library(STDLIB_SOURCE, &source);
+        sttr1_sources_with_standard_library(STDLIB_SOURCE, &source);
     let mut input = TestInput::new([Ok(Some("10".to_owned()))]);
     let mut writer = RecordingWriter::default();
 
@@ -1169,7 +1190,7 @@ PRINT \"TORPEDO_STAR_STATE \", TORPEDOES, \" \", @SECTOR[22], \" \", STARS_HERE,
 CR\n",
     );
     let (sources, standard_library_id, source_id) =
-        sources_with_standard_library(STDLIB_SOURCE, &source);
+        sttr1_sources_with_standard_library(STDLIB_SOURCE, &source);
     let mut input = TestInput::new([Ok(Some("15".to_owned()))]);
     let mut writer = RecordingWriter::default();
 
@@ -1212,7 +1233,7 @@ PRINT \"TORPEDO_MISS_STATE \", ENT_QX, \" \", ENT_QY, \" \", TORPEDOES, \" \", @
 CR\n",
     );
     let (sources, standard_library_id, source_id) =
-        sources_with_standard_library(STDLIB_SOURCE, &source);
+        sttr1_sources_with_standard_library(STDLIB_SOURCE, &source);
     let mut input = TestInput::new([Ok(Some("10".to_owned()))]);
     let mut writer = RecordingWriter::default();
 
