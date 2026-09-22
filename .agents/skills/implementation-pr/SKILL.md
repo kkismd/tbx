@@ -33,6 +33,7 @@ Commit and PR rules:
 - Write the commit message to `.tmp/commit-message.txt`, use `git commit -F`, then delete the file.
 - For PR creation, follow `github-pr-create` and `tmp-file-messaging`.
 - Write the PR body to `.tmp/pr-body.md`, push the topic branch and wait for that push to succeed, then run `gh pr create --body-file`, and finally delete the file.
+- In restricted-network environments, request escalated execution for the first GitHub command and group subsequent required `gh` operations into that approved execution where practical, so approval is not repeated for each network call.
 - Use `Closes #<issue>` in the PR body when the implementation satisfies the issue requirements end to end; use `Refs #<issue>` only when the work is partial or follow-up work remains.
 - Do not parallelize `git push` and `gh pr create`.
 
