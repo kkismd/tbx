@@ -103,6 +103,13 @@ CR\n",
     assert_eq!(state[3], if state[2] == 0 { 0 } else { 1 });
     assert_eq!(state[4], state[3]);
     assert_eq!(state[5], state[3] * 100);
+    assert!(writer.text().contains("PHASER ENERGY AVAILABLE: 1000"));
+    assert!(writer
+        .text()
+        .contains("PHASER HIT KLINGON AT SECTOR 5,4: DAMAGE"));
+    assert!(writer
+        .text()
+        .contains("KLINGON ATTACK FROM SECTOR 5,4: DAMAGE"));
     assert_eq!(result.data_stack(), []);
 }
 
@@ -210,6 +217,13 @@ CR\n",
     // The second Klingon receives the full current-count divisor after the
     // first one is destroyed; keeping the initial count would leave 2265.
     assert_eq!(state, [0, 1530, 1, 100]);
+    assert!(writer
+        .text()
+        .contains("PHASER HIT KLINGON AT SECTOR 5,4: DAMAGE"));
+    assert!(writer.text().contains("KLINGON AT SECTOR 5,4 DESTROYED"));
+    assert!(writer
+        .text()
+        .contains("PHASER HIT KLINGON AT SECTOR 3,4: DAMAGE"));
     assert_eq!(result.data_stack(), []);
 }
 
@@ -302,6 +316,46 @@ CR\n",
     assert_eq!(state[1], 200);
     assert_eq!(state[2], 0);
     assert_eq!(state[3], 200);
+    assert!(writer
+        .text()
+        .contains("KLINGON ATTACK FROM SECTOR 5,4: DAMAGE"));
+    assert!(writer
+        .text()
+        .contains("KLINGON ATTACK FROM SECTOR 3,4: DAMAGE"));
+    assert_eq!(result.data_stack(), []);
+}
+
+#[test]
+fn sttr1_klingon_attack_reports_zero_damage_and_remaining_shields() {
+    let mut source = std::fs::read_to_string(example_path("sttr1/main.tbx"))
+        .expect("STTR1 example should be readable");
+    source.push_str(
+        "LET ENT_SX = 1\n\
+LET ENT_SY = 1\n\
+LET SHIELDS = 100\n\
+LET DOCKED = 0\n\
+LET KLINGONS_HERE = 1\n\
+LET @KLINGON_X[1] = 8\n\
+LET @KLINGON_Y[1] = 8\n\
+LET @KLINGON_E[1] = 1\n\
+KLINGON_ATTACK\n",
+    );
+    let (sources, standard_library_id, source_id) =
+        sttr1_sources_with_standard_library(STDLIB_SOURCE, &source);
+    let mut writer = RecordingWriter::default();
+
+    let result = success(execute_registered_sources_with_filesystem_and_seed(
+        sources,
+        standard_library_id,
+        source_id,
+        &mut writer,
+        None,
+        30,
+    ));
+
+    assert!(writer
+        .text()
+        .contains("KLINGON ATTACK FROM SECTOR 8,8: DAMAGE 0 SHIELDS 100"));
     assert_eq!(result.data_stack(), []);
 }
 
@@ -557,6 +611,13 @@ CR\n",
 
     let state = output_values(writer.text(), "TORPEDO_KLINGON_STATE ");
     assert_eq!(state[0..7], [1, 0, 0, 0, 0, 0, 500]);
+    assert!(writer
+        .text()
+        .contains("PHOTON TORPEDO FIRED; TORPEDOES REMAINING: 1"));
+    assert!(writer
+        .text()
+        .contains("PHOTON TORPEDO HIT KLINGON AT SECTOR 6,4"));
+    assert!(writer.text().contains("KLINGON AT SECTOR 6,4 DESTROYED"));
     let control_source = source.replace("\nPHOTON_TORPEDO\n", "\nREM SKIP_TORPEDO\n");
     let (sources, standard_library_id, source_id) =
         sttr1_sources_with_standard_library(STDLIB_SOURCE, &control_source);
@@ -621,6 +682,9 @@ CR\n",
     let state = output_values(writer.text(), "TORPEDO_BASE_STATE ");
     assert_eq!(state[0..7], [1, 0, 0, 0, 101, 2, 200]);
     assert!(state[7] < 500);
+    assert!(writer
+        .text()
+        .contains("PHOTON TORPEDO HIT STARBASE AT SECTOR 6,4; STARBASE DESTROYED"));
     assert_eq!(result.data_stack(), []);
 }
 
@@ -668,6 +732,9 @@ CR\n",
     let state = output_values(writer.text(), "TORPEDO_STAR_STATE ");
     assert_eq!(state[0..6], [1, 4, 1, 101, 8, -3]);
     assert!(state[6] < 0);
+    assert!(writer
+        .text()
+        .contains("PHOTON TORPEDO HIT STAR AT SECTOR 6,3"));
     assert_eq!(result.data_stack(), []);
 }
 
@@ -711,6 +778,7 @@ CR\n",
     let state = output_values(writer.text(), "TORPEDO_MISS_STATE ");
     assert_eq!(state[0..5], [8, 1, 1, 100, 200]);
     assert!(state[5] < 500);
+    assert!(writer.text().contains("PHOTON TORPEDO MISSED"));
     assert_eq!(result.data_stack(), []);
 }
 
