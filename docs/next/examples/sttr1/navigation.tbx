@@ -5,6 +5,17 @@ DEF PRINT_COURSE_GUIDE
   CR
 END
 
+# Print a quadrant summary as a fixed-width KBS value (Klingons/Bases/Stars).
+DEF PRINT_KBS SUMMARY_VALUE
+  IF SUMMARY_VALUE < 10
+    PRINT "00"
+  ELSIF SUMMARY_VALUE < 100
+    PRINT "0"
+  ENDIF
+  PUTDEC SUMMARY_VALUE
+  DROP
+END
+
 DEF NAVIGATE
   LET NAVIGATION_VALID = 0
   WHILE NAVIGATION_VALID = 0
@@ -195,15 +206,18 @@ DEF PRINT_LONG_SCAN
     CR
     PRINT "CENTER QUADRANT ", ENT_QX, ",", ENT_QY, " (CENTER OF 3X3 SCAN)"
     CR
+    PRINT "KBS = KLINGONS / BASES / STARS"
+    CR
     LET SECTOR_ROW = ENT_QY - 1
     WHILE SECTOR_ROW <= ENT_QY + 1
       LET SECTOR_COLUMN = ENT_QX - 1
       WHILE SECTOR_COLUMN <= ENT_QX + 1
         IF SECTOR_ROW < 1 OR SECTOR_ROW > 8 OR SECTOR_COLUMN < 1 OR SECTOR_COLUMN > 8
-          PRINT "---"
+          PRINT "--- "
         ELSE
           LET SUMMARY = @GALAXY[(SECTOR_ROW - 1) * 8 + SECTOR_COLUMN]
-          PRINT SUMMARY, " "
+          PRINT_KBS(SUMMARY)
+          PRINT " "
           # Chart updates require device 8, the library computer.
           IF @DAMAGE[8] >= 0
             LET @CHART[(SECTOR_ROW - 1) * 8 + SECTOR_COLUMN] = SUMMARY

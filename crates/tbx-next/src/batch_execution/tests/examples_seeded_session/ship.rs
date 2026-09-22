@@ -77,6 +77,10 @@ LET ENT_SY = 4\n\
 LET ENERGY = 123\n\
 LET TORPEDOES = 2\n\
 LET SHIELDS = 77\n\
+LET KLINGONS_HERE = 0\n\
+LET ENERGY = 3000\n\
+CHECK_DOCKING\n\
+PRINT_SHORT_SCAN\n\
 LET @SECTOR[27] = 3\n\
 CHECK_DOCKING\n\
 PRINT_SHORT_SCAN\n\
@@ -98,11 +102,13 @@ PRINT \"UNDOCKED_STATE \", DOCKED, \" \", ENERGY, \" \", TORPEDOES, \" \", SHIEL
 CR\n\
 LET KLINGONS_HERE = 1\n\
 CHECK_DOCKING\n\
+PRINT_SHORT_SCAN\n\
 PRINT \"RED_STATE \", CONDITION\n\
 CR\n\
 LET KLINGONS_HERE = 0\n\
 LET ENERGY = 100\n\
 CHECK_DOCKING\n\
+PRINT_SHORT_SCAN\n\
 PRINT \"YELLOW_STATE \", CONDITION\n\
 CR\n",
     );
@@ -124,6 +130,9 @@ CR\n",
         [1, 3000, 10, 0, 3]
     );
     assert!(writer.text().contains("CONDITION DOCKED"));
+    assert!(writer.text().contains("CONDITION GREEN"));
+    assert!(writer.text().contains("CONDITION RED"));
+    assert!(writer.text().contains("CONDITION YELLOW"));
     assert!(writer.text().contains("STARDATE "));
     assert!(writer.text().contains("QUADRANT "));
     assert!(writer.text().contains("SECTOR "));

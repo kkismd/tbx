@@ -20,6 +20,19 @@ fn sttr1_quadrant_setup_places_unique_sector_objects_and_klingon_state() {
     let quadrant = output_values(writer.text(), "QUADRANT ");
     assert!(writer.text().contains("CENTER QUADRANT "));
     assert!(writer.text().contains("(CENTER OF 3X3 SCAN)"));
+    assert!(writer.text().contains("KBS = KLINGONS / BASES / STARS"));
+    let long_scan = writer
+        .text()
+        .lines()
+        .skip_while(|line| *line != "LONG RANGE SCAN")
+        .skip(3)
+        .take(3)
+        .collect::<Vec<_>>();
+    assert_eq!(long_scan.len(), 3);
+    assert!(long_scan
+        .iter()
+        .flat_map(|line| line.split_whitespace())
+        .all(|cell| cell == "---" || cell.len() == 3));
     let short_scan = writer
         .text()
         .lines()

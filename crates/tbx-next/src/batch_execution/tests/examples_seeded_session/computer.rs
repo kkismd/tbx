@@ -37,16 +37,20 @@ fn sttr1_computer_rejects_a_damaged_library_computer() {
 
 #[test]
 fn sttr1_computer_prints_unknown_and_known_chart_cells_in_row_order() {
-    let output = run_computer("LET @CHART[1] = 0\nLET @CHART[2] = 105\nCOMPUTER\n", ["0"]);
+    let output = run_computer(
+        "LET @CHART[1] = 0\nLET @CHART[2] = 5\nLET @CHART[3] = 206\nCOMPUTER\n",
+        ["0"],
+    );
     let chart = output
         .lines()
         .skip_while(|line| *line != "GALACTIC CHART")
-        .skip(1)
+        .skip(2)
         .take(8)
         .collect::<Vec<_>>();
     assert_eq!(chart.len(), 8);
-    assert!(chart[0].starts_with("--- 105 "));
+    assert!(chart[0].starts_with("--- 005 206 "));
     assert_eq!(chart[0].split_whitespace().count(), 8);
+    assert!(output.contains("KBS = KLINGONS / BASES / STARS\n"));
 }
 
 #[test]
