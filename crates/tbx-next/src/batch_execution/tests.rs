@@ -3,7 +3,7 @@ use std::io::{self, Write};
 use super::*;
 use crate::binding::Binding;
 use crate::runtime_input::TestInput;
-use crate::source::{SourceAcquisition, SourceTexts};
+use crate::source::SourceTexts;
 use crate::user_facing::UserFacingFailureClass;
 use crate::value::Value;
 
@@ -58,20 +58,7 @@ fn sources_with_standard_library(
 ) -> (SourceTexts, SourceId, SourceId) {
     let mut sources = SourceTexts::new();
     let standard_library_id = sources.register(standard_library, "<tbx-next-stdlib>");
-    let source_id = if source.contains("USE \"state.tbx\"") {
-        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../..")
-            .join("docs/next/examples/sttr1/main.tbx");
-        let canonical_path = std::fs::canonicalize(path)
-            .expect("STTR1 entry point should have a canonical filesystem path");
-        sources.register_with_acquisition(
-            source,
-            "docs/next/examples/sttr1/main.tbx",
-            SourceAcquisition::FileSystem { canonical_path },
-        )
-    } else {
-        sources.register(source, "program.tbx")
-    };
+    let source_id = sources.register(source, "program.tbx");
     (sources, standard_library_id, source_id)
 }
 
