@@ -927,6 +927,85 @@ CR\n",
 }
 
 #[test]
+fn sttr1_shield_control_preserves_total_power_and_rejects_excess() {
+    let mut source = std::fs::read_to_string(example_path("sttr1/main.tbx"))
+        .expect("STTR1 example should be readable");
+    source.push_str(
+        "LET ENERGY = 1000\n\
+LET SHIELDS = 500\n\
+LET @DAMAGE[7] = 0\n\
+SHIELD_CONTROL\n\
+PRINT \"SHIELD_TRANSFER_STATE \", ENERGY, \" \", SHIELDS\n\
+CR\n",
+    );
+    let (sources, standard_library_id, source_id) =
+        sttr1_sources_with_standard_library(STDLIB_SOURCE, &source);
+    let mut input = TestInput::new([Ok(Some("2000".to_owned())), Ok(Some("500".to_owned()))]);
+    let mut writer = RecordingWriter::default();
+
+    let result = success(execute_registered_sources_with_filesystem_and_seed(
+        sources,
+        standard_library_id,
+        source_id,
+        &mut writer,
+        Some(&mut input),
+        30,
+    ));
+
+    assert_eq!(
+        output_values(writer.text(), "SHIELD_TRANSFER_STATE "),
+        [1000, 500]
+    );
+    assert!(writer.text().contains("ENERGY EXCEEDED"));
+    assert_eq!(result.data_stack(), []);
+}
+
+#[test]
+fn sttr1_docking_replenishes_ship_and_updates_condition_only_when_adjacent() {
+    let mut source = std::fs::read_to_string(example_path("sttr1/main.tbx"))
+        .expect("STTR1 example should be readable");
+    source.push_str(
+        "LET ENT_SX = 4\n\
+LET ENT_SY = 4\n\
+LET ENERGY = 123\n\
+LET TORPEDOES = 2\n\
+LET SHIELDS = 77\n\
+LET @SECTOR[28] = 3\n\
+CHECK_DOCKING\n\
+PRINT \"DOCKED_STATE \", DOCKED, \" \", ENERGY, \" \", TORPEDOES, \" \", SHIELDS, \" \", CONDITION\n\
+CR\n\
+LET @SECTOR[28] = 0\n\
+LET @SECTOR[64] = 3\n\
+LET KLINGONS_HERE = 0\n\
+CHECK_DOCKING\n\
+PRINT \"UNDOCKED_STATE \", DOCKED, \" \", ENERGY, \" \", TORPEDOES, \" \", SHIELDS, \" \", CONDITION\n\
+CR\n",
+    );
+    let (sources, standard_library_id, source_id) =
+        sttr1_sources_with_standard_library(STDLIB_SOURCE, &source);
+    let mut writer = RecordingWriter::default();
+
+    let result = success(execute_registered_sources_with_filesystem_and_seed(
+        sources,
+        standard_library_id,
+        source_id,
+        &mut writer,
+        None,
+        30,
+    ));
+
+    assert_eq!(
+        output_values(writer.text(), "DOCKED_STATE "),
+        [1, 3000, 10, 0, 3]
+    );
+    assert_eq!(
+        output_values(writer.text(), "UNDOCKED_STATE "),
+        [0, 3000, 10, 0, 0]
+    );
+    assert_eq!(result.data_stack(), []);
+}
+
+#[test]
 fn sttr1_phaser_rejects_missing_target_and_damaged_control_without_state_changes() {
     let mut source = std::fs::read_to_string(example_path("sttr1/main.tbx"))
         .expect("STTR1 example should be readable");

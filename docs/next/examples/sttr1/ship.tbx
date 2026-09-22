@@ -1,0 +1,78 @@
+REM STTR1 shield control, docking, and ship condition.
+
+# Update the user-visible condition code from the current ship state.
+# 0 = GREEN, 1 = YELLOW, 2 = RED, 3 = DOCKED.
+DEF UPDATE_CONDITION
+  IF DOCKED <> 0
+    LET CONDITION = 3
+  ELSIF KLINGONS_HERE > 0
+    LET CONDITION = 2
+  ELSIF ENERGY < MAX_ENERGY / 10
+    LET CONDITION = 1
+  ELSE
+    LET CONDITION = 0
+  ENDIF
+END
+
+# Dock when a starbase occupies one of the eight neighboring sectors.
+# A docked ship is replenished immediately and its shields are lowered as in
+# the original STTR1 program.  The scan remains responsible for displaying the
+# resulting condition, so this helper only updates shared ship state.
+DEF CHECK_DOCKING
+  LET DOCKED = 0
+  LET DOCK_ROW = ENT_SY - 1
+  WHILE DOCK_ROW <= ENT_SY + 1
+    LET DOCK_COLUMN = ENT_SX - 1
+    WHILE DOCK_COLUMN <= ENT_SX + 1
+      IF DOCK_ROW >= 1 AND DOCK_ROW <= 8 AND DOCK_COLUMN >= 1 AND DOCK_COLUMN <= 8
+        LET DOCK_INDEX = (DOCK_ROW - 1) * 8 + DOCK_COLUMN
+        IF @SECTOR[DOCK_INDEX] = 3
+          LET DOCKED = 1
+        ENDIF
+      ENDIF
+      LET DOCK_COLUMN = DOCK_COLUMN + 1
+    ENDWH
+    LET DOCK_ROW = DOCK_ROW + 1
+  ENDWH
+
+  IF DOCKED <> 0
+    LET ENERGY = MAX_ENERGY
+    LET TORPEDOES = MAX_TORPEDOES
+    LET SHIELDS = 0
+  ENDIF
+  UPDATE_CONDITION
+END
+
+# Transfer total available power between energy and shields.
+# A non-positive input cancels; accepted input becomes the complete shield
+# value, preserving ENERGY + SHIELDS and rejecting values above that total.
+DEF SHIELD_CONTROL
+  IF @DAMAGE[7] < 0
+    PRINT "SHIELD CONTROL IS NON-OPERATIONAL"
+    CR
+  ELSE
+    LET SHIELD_VALID = 0
+    WHILE SHIELD_VALID = 0
+      PRINT "ENERGY AVAILABLE = ", ENERGY + SHIELDS, " NUMBER OF UNITS TO SHIELDS:"
+      CR
+      IF INPUT?()
+        LET SHIELD_ENERGY = DUP()
+        DROP
+        IF SHIELD_ENERGY <= 0
+          LET SHIELD_VALID = 1
+        ELSIF SHIELD_ENERGY > ENERGY + SHIELDS
+          PRINT "ENERGY EXCEEDED"
+          CR
+        ELSE
+          LET ENERGY = ENERGY + SHIELDS - SHIELD_ENERGY
+          LET SHIELDS = SHIELD_ENERGY
+          LET SHIELD_VALID = 1
+        ENDIF
+      ELSE
+        DROP
+        PRINT "SHIELD INPUT ERROR"
+        CR
+      ENDIF
+    ENDWH
+  ENDIF
+END

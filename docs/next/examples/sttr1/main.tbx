@@ -2,6 +2,7 @@ REM STTR1 entry point. Implementations are loaded in dependency order.
 
 USE "state.tbx"
 USE "galaxy.tbx"
+USE "ship.tbx"
 USE "navigation.tbx"
 USE "combat.tbx"
 
