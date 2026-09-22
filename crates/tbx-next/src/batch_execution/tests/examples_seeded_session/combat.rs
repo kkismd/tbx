@@ -130,7 +130,7 @@ LET ENERGY = 3000\n\
 LET SHIELDS = 10000\n\
 LET DOCKED = 0\n\
 LET @DAMAGE[4] = 0\n\
-LET @DAMAGE[7] = -1\n\
+LET @DAMAGE[8] = -1\n\
 PHASER\n\
 PRINT \"DAMAGED_COMPUTER_STATE \", ENERGY, \" \", @KLINGON_E[1], \" \", SHIELDS\n\
 CR\n",
@@ -707,5 +707,48 @@ CR\n",
     let state = output_values(writer.text(), "TORPEDO_MISS_STATE ");
     assert_eq!(state[0..5], [8, 1, 1, 100, 200]);
     assert!(state[5] < 500);
+    assert_eq!(result.data_stack(), []);
+}
+
+#[test]
+fn sttr1_klingon_attack_does_not_change_device_damage() {
+    let mut source = std::fs::read_to_string(example_path("sttr1/main.tbx"))
+        .expect("STTR1 example should be readable");
+    source.push_str(
+        "LET ENT_SX = 4\n\
+LET ENT_SY = 4\n\
+LET SHIELDS = 1000\n\
+LET DOCKED = 0\n\
+LET KLINGONS_HERE = 1\n\
+LET @KLINGON_X[1] = 5\n\
+LET @KLINGON_Y[1] = 4\n\
+LET @KLINGON_E[1] = 200\n\
+PACK @DAMAGE = -1, -2, -3, -4, -5, -6, -7, -8\n\
+KLINGON_ATTACK\n\
+PRINT \"DEVICE_DAMAGE_AFTER_ATTACK \"\n\
+LET DEVICE_INDEX = 1\n\
+WHILE DEVICE_INDEX <= 8\n\
+PRINT @DAMAGE[DEVICE_INDEX], \" \"\n\
+LET DEVICE_INDEX = DEVICE_INDEX + 1\n\
+ENDWH\n\
+CR\n",
+    );
+    let (sources, standard_library_id, source_id) =
+        sttr1_sources_with_standard_library(STDLIB_SOURCE, &source);
+    let mut writer = RecordingWriter::default();
+
+    let result = success(execute_registered_sources_with_filesystem_and_seed(
+        sources,
+        standard_library_id,
+        source_id,
+        &mut writer,
+        None,
+        30,
+    ));
+
+    assert_eq!(
+        output_values(writer.text(), "DEVICE_DAMAGE_AFTER_ATTACK "),
+        [-1, -2, -3, -4, -5, -6, -7, -8]
+    );
     assert_eq!(result.data_stack(), []);
 }

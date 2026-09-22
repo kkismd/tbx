@@ -47,6 +47,7 @@ END
 # A non-positive input cancels; accepted input becomes the complete shield
 # value, preserving ENERGY + SHIELDS and rejecting values above that total.
 DEF SHIELD_CONTROL
+  # Device 7 is shield control.
   IF @DAMAGE[7] < 0
     PRINT "SHIELD CONTROL IS NON-OPERATIONAL"
     CR

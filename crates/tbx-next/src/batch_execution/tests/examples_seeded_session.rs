@@ -1,6 +1,7 @@
 use super::*;
 
 mod combat;
+mod device;
 mod examples;
 mod initialization;
 mod navigation;

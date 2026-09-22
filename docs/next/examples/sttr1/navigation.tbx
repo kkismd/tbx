@@ -15,6 +15,7 @@ DEF NAVIGATE
           LET WARP = DUP()
           DROP
           IF WARP >= 0 AND WARP <= 80
+            # Device 1 is warp engines; damaged engines cap warp at .2.
             IF @DAMAGE[1] < 0 AND WARP > 2
               PRINT "WARP ENGINES ARE DAMAGED, MAXIMUM SPEED = WARP .2"
               CR
@@ -42,6 +43,10 @@ DEF NAVIGATE
   ENDWH
 
   IF COURSE <> 0
+    # Valid course/warp input reaches repair and random damage only here,
+    # immediately before sector movement. Invalid input and cancel consume no
+    # event RNG and do not advance repair state.
+    NAVIGATION_DEVICE_EVENTS
     LET COURSE_INDEX = COURSE / 10
     LET COURSE_FRACTION = COURSE % 10
     LET DIRECTION_X = (@COURSE_DX[COURSE_INDEX] * (10 - COURSE_FRACTION) + @COURSE_DX[COURSE_INDEX + 1] * COURSE_FRACTION) / 10
@@ -120,6 +125,7 @@ END
 
 DEF PRINT_SHORT_SCAN
   CHECK_DOCKING
+  # Device 2 is short range sensors.
   IF @DAMAGE[2] < 0
     PRINT "SHORT RANGE SENSORS INOPERABLE"
     CR
@@ -153,6 +159,7 @@ DEF PRINT_SHORT_SCAN
 END
 
 DEF PRINT_LONG_SCAN
+  # Device 3 is long range sensors.
   IF @DAMAGE[3] < 0
     PRINT "LONG RANGE SENSORS INOPERABLE"
     CR
@@ -168,7 +175,8 @@ DEF PRINT_LONG_SCAN
         ELSE
           LET SUMMARY = @GALAXY[(SECTOR_ROW - 1) * 8 + SECTOR_COLUMN]
           PRINT SUMMARY, " "
-          IF @DAMAGE[7] >= 0
+          # Chart updates require device 8, the library computer.
+          IF @DAMAGE[8] >= 0
             LET @CHART[(SECTOR_ROW - 1) * 8 + SECTOR_COLUMN] = SUMMARY
           ENDIF
         ENDIF

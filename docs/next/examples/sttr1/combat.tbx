@@ -63,6 +63,7 @@ DEF KLINGON_ATTACK
 END
 
 DEF PHOTON_TORPEDO
+  # Device 5 is photon tubes.
   IF @DAMAGE[5] < 0
     PRINT "PHOTON TUBES ARE DAMAGED"
     CR
@@ -144,6 +145,7 @@ DEF PHASER
   IF KLINGONS_HERE = 0
     PRINT "NO KLINGONS IN THIS QUADRANT"
     CR
+  # Device 4 is phaser control.
   ELSIF @DAMAGE[4] < 0
     PRINT "PHASER CONTROL IS NON-OPERATIONAL"
     CR
@@ -178,9 +180,9 @@ DEF PHASER
       KLINGON_ATTACK
     ENDIF
     IF PHASER_ENERGY > 0 AND SHIELDS >= 0
-      # STTR1 uses damage slot 7 for computer accuracy despite its device
-      # table naming; device-index cleanup is handled by a later milestone.
-      IF @DAMAGE[7] < 0
+      # Phaser accuracy is reduced by the library computer (device 8), while
+      # shield control remains device 7.
+      IF @DAMAGE[8] < 0
         LET DAMAGE_ROLL = RND(100) - 1
         LET PHASER_ENERGY = (PHASER_ENERGY / 100) * DAMAGE_ROLL + (PHASER_ENERGY % 100) * DAMAGE_ROLL / 100
       ENDIF
@@ -200,4 +202,3 @@ DEF PHASER
     ENDIF
   ENDIF
 END
-
