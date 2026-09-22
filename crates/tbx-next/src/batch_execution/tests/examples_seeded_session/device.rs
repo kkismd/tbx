@@ -105,6 +105,28 @@ fn sttr1_random_device_event_changes_one_slot_without_clamping() {
 }
 
 #[test]
+fn sttr1_random_device_event_non_occurrence_preserves_all_slots() {
+    let (sources, standard_library_id, source_id) = device_source(
+        "PACK @DAMAGE = 1, 2, 3, 4, 5, 6, 7, 8\nRANDOM_DEVICE_EVENT\nPRINT \"NO_EVENT \"\nLET DEVICE_INDEX = 1\nWHILE DEVICE_INDEX <= 8\nPRINT @DAMAGE[DEVICE_INDEX], \" \"\nLET DEVICE_INDEX = DEVICE_INDEX + 1\nENDWH\nCR\n",
+    );
+    let mut writer = RecordingWriter::default();
+    let result = success(execute_registered_sources_with_filesystem_and_seed(
+        sources,
+        standard_library_id,
+        source_id,
+        &mut writer,
+        None,
+        4,
+    ));
+
+    assert_eq!(
+        output_values(writer.text(), "NO_EVENT "),
+        [1, 2, 3, 4, 5, 6, 7, 8]
+    );
+    assert_eq!(result.data_stack(), []);
+}
+
+#[test]
 fn sttr1_random_device_event_can_worsen_a_positive_slot() {
     let mut found_worsening = false;
     for seed in 1..=100 {
