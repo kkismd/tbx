@@ -6,6 +6,7 @@
     },
     "files.associations": {
         "docs/next/**/*.tbx": "tbx-next",
-        "crates/tbx-next/**/*.tbx": "tbx-next"
+        "crates/tbx-next/**/*.tbx": "tbx-next",
+        "editors/vscode-tbx-next/test/**/*.tbx": "tbx-next"
     }
 }
