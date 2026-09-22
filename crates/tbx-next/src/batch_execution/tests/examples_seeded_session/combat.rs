@@ -507,6 +507,10 @@ CR\n",
     assert!(writer.text().contains("PHOTON TUBES ARE DAMAGED"));
     assert!(writer.text().contains("NO PHOTON TORPEDOES LEFT"));
     assert!(writer.text().contains("COURSE OUT OF RANGE"));
+    assert!(writer.text().contains("COURSE SCALE: INPUT 10=1.0"));
+    assert!(writer
+        .text()
+        .contains("DIRECTIONS: 10 E, 20 NE, 30 N, 40 NW"));
     assert_eq!(result.data_stack(), []);
 }
 

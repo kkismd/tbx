@@ -41,6 +41,7 @@ CHECK_ENDGAME
     let output = writer.text();
     assert!(output.contains("DEADLINE "));
     assert!(output.contains("KLINGONS "));
+    assert!(output.contains("STARBASES "));
     for command in [
         "0 NAVIGATE",
         "1 SHORT RANGE SCAN",
@@ -66,6 +67,7 @@ fn sttr1_game_loop_checks_endgame_and_stops_after_terminal_command() {
         .replacen(
             "START_GAME",
             r#"INIT_MISSION
+PRINT_BRIEFING
 LET KLINGONS_LEFT = 0
 GAME_LOOP
 "#,
@@ -89,6 +91,7 @@ GAME_LOOP
     assert!(output.contains("DAMAGE REPORT"));
     assert!(output.contains("MISSION SUMMARY"));
     assert!(output.contains("RESULT VICTORY"));
+    assert!(output.matches("COMMANDS (0-7)").count() >= 2);
     assert_eq!(output.matches("COMMAND (0-7):").count(), 1);
     assert_eq!(result.data_stack(), []);
 }
