@@ -6,6 +6,7 @@ USE "device.tbx"
 USE "ship.tbx"
 USE "navigation.tbx"
 USE "combat.tbx"
+USE "computer.tbx"
 
 LET START_STARDATE = (RND(20) + 19) * 100
 LET STARDATE = START_STARDATE
