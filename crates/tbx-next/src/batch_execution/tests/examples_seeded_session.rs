@@ -1,6 +1,7 @@
 use super::*;
 
 mod combat;
+mod computer;
 mod device;
 mod examples;
 mod initialization;
