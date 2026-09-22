@@ -1,0 +1,149 @@
+{
+  "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+  "name": "TBX Next",
+  "scopeName": "source.tbx-next",
+  "patterns": [
+    { "include": "#comments" },
+    { "include": "#definition-heads" },
+    { "include": "#declaration-heads" },
+    { "include": "#statement-head" },
+    { "include": "#strings" },
+    { "include": "#characters" },
+    { "include": "#numbers" },
+    { "include": "#array-references" },
+    { "include": "#word-calls" },
+    { "include": "#logical-operators" },
+    { "include": "#operators" },
+    { "include": "#punctuation" }
+  ],
+  "repository": {
+    "comments": {
+      "patterns": [
+        {
+          "name": "comment.line.rem.tbx-next",
+          "match": "^\\s*(?i:REM)(?=\\s|$).*$"
+        },
+        {
+          "name": "comment.line.number-sign.tbx-next",
+          "match": "#.*$"
+        }
+      ]
+    },
+    "definition-heads": {
+      "patterns": [
+        {
+          "match": "^(\\s*)(?:(\\d+)(\\s+))?((?i:DEF))(\\s+)([A-Za-z_][A-Za-z0-9_]*\\??)",
+          "captures": {
+            "2": { "name": "constant.numeric.line-number.tbx-next" },
+            "4": { "name": "entity.name.function.statement.tbx-next" },
+            "6": { "name": "entity.name.function.definition.tbx-next" }
+          }
+        },
+        {
+          "match": "^(\\s*)(?:(\\d+)(\\s+))?((?i:SYNTAX))(\\s+)([A-Za-z_][A-Za-z0-9_]*\\??)",
+          "captures": {
+            "2": { "name": "constant.numeric.line-number.tbx-next" },
+            "4": { "name": "entity.name.function.statement.tbx-next" },
+            "6": { "name": "entity.name.function.definition.syntax.tbx-next" }
+          }
+        }
+      ]
+    },
+    "declaration-heads": {
+      "patterns": [
+        {
+          "match": "^(\\s*)(?:(\\d+)(\\s+))?((?i:VAR))(\\s+)([A-Za-z_][A-Za-z0-9_]*\\??)",
+          "captures": {
+            "2": { "name": "constant.numeric.line-number.tbx-next" },
+            "4": { "name": "entity.name.function.statement.tbx-next" },
+            "6": { "name": "variable.other.readwrite.declaration.tbx-next" }
+          }
+        },
+        {
+          "match": "^(\\s*)(?:(\\d+)(\\s+))?((?i:DIM))(\\s+)(@)([A-Za-z_][A-Za-z0-9_]*\\??)",
+          "captures": {
+            "2": { "name": "constant.numeric.line-number.tbx-next" },
+            "4": { "name": "entity.name.function.statement.tbx-next" },
+            "6": { "name": "punctuation.definition.variable.tbx-next" },
+            "7": { "name": "variable.other.array.declaration.tbx-next" }
+          }
+        }
+      ]
+    },
+    "statement-head": {
+      "match": "^(\\s*)(?:(\\d+)(\\s+))?([A-Za-z_][A-Za-z0-9_]*\\??)",
+      "captures": {
+        "2": { "name": "constant.numeric.line-number.tbx-next" },
+        "4": { "name": "entity.name.function.statement.tbx-next" }
+      }
+    },
+    "strings": {
+      "name": "string.quoted.double.tbx-next",
+      "begin": "\"",
+      "end": "\""
+    },
+    "characters": {
+      "name": "constant.character.tbx-next",
+      "match": "'[^'\\r\\n]'"
+    },
+    "numbers": {
+      "patterns": [
+        {
+          "name": "constant.numeric.hex.tbx-next",
+          "match": "\\$[0-9A-Fa-f]+"
+        },
+        {
+          "name": "constant.numeric.decimal.tbx-next",
+          "match": "(?<![A-Za-z0-9_])\\d+(?![A-Za-z0-9_])"
+        }
+      ]
+    },
+    "array-references": {
+      "match": "(@)([A-Za-z_][A-Za-z0-9_]*\\??)(?=\\s*\\[)",
+      "captures": {
+        "1": { "name": "punctuation.definition.variable.tbx-next" },
+        "2": { "name": "variable.other.array.tbx-next" }
+      }
+    },
+    "word-calls": {
+      "name": "entity.name.function.call.tbx-next",
+      "match": "[A-Za-z_][A-Za-z0-9_]*\\??(?=\\s*\\()"
+    },
+    "logical-operators": {
+      "name": "keyword.operator.logical.tbx-next",
+      "match": "(?i)(?<![A-Za-z0-9_?])(?:AND|OR|NOT)(?![A-Za-z0-9_?])"
+    },
+    "operators": {
+      "name": "keyword.operator.tbx-next",
+      "match": "<>|<=|>=|[+\\-*/%=<>]"
+    },
+    "punctuation": {
+      "patterns": [
+        {
+          "name": "punctuation.separator.comma.tbx-next",
+          "match": ","
+        },
+        {
+          "name": "punctuation.section.parens.begin.tbx-next",
+          "match": "\\("
+        },
+        {
+          "name": "punctuation.section.parens.end.tbx-next",
+          "match": "\\)"
+        },
+        {
+          "name": "punctuation.section.brackets.begin.tbx-next",
+          "match": "\\["
+        },
+        {
+          "name": "punctuation.section.brackets.end.tbx-next",
+          "match": "\\]"
+        },
+        {
+          "name": "punctuation.definition.variable.tbx-next",
+          "match": "@"
+        }
+      ]
+    }
+  }
+}

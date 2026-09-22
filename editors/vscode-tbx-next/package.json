@@ -1,0 +1,32 @@
+{
+  "name": "tbx-next",
+  "displayName": "TBX Next",
+  "description": "Syntax highlighting for TBX Next sources.",
+  "version": "0.0.1",
+  "publisher": "kkismd",
+  "engines": {
+    "vscode": "^1.80.0"
+  },
+  "categories": [
+    "Programming Languages"
+  ],
+  "contributes": {
+    "languages": [
+      {
+        "id": "tbx-next",
+        "aliases": [
+          "TBX Next",
+          "tbx-next"
+        ],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "tbx-next",
+        "scopeName": "source.tbx-next",
+        "path": "./syntaxes/tbx-next.tmLanguage.json"
+      }
+    ]
+  }
+}
