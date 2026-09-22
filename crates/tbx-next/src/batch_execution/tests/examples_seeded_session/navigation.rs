@@ -277,7 +277,14 @@ CR\n",
     assert!(writer.text().contains("COURSE OUT OF RANGE"));
     assert!(writer
         .text()
-        .contains("WARP ENGINES ARE DAMAGED, MAXIMUM SPEED = WARP .2"));
+        .contains("WARP ENGINES ARE DAMAGED, MAXIMUM INPUT = 2 (WARP 0.2)"));
+    assert!(writer.text().contains("COURSE SCALE: INPUT 10=1.0"));
+    assert!(writer
+        .text()
+        .contains("DIRECTIONS: 10 E, 20 NE, 30 N, 40 NW, 50 W, 60 SW, 70 S, 80 SE"));
+    assert!(writer
+        .text()
+        .contains("WARP SCALE: INPUT 0-80 = WARP 0.0-8.0 (10=1.0)"));
     assert_eq!(
         output_values(writer.text(), "NAVIGATION_STATE "),
         [1, 1, 4, 4, 100, 100]

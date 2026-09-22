@@ -41,6 +41,7 @@ CHECK_ENDGAME
     let output = writer.text();
     assert!(output.contains("DEADLINE "));
     assert!(output.contains("KLINGONS "));
+    assert!(output.contains("STARBASES "));
     for command in [
         "0 NAVIGATE",
         "1 SHORT RANGE SCAN",
@@ -66,6 +67,7 @@ fn sttr1_game_loop_checks_endgame_and_stops_after_terminal_command() {
         .replacen(
             "START_GAME",
             r#"INIT_MISSION
+PRINT_BRIEFING
 LET KLINGONS_LEFT = 0
 GAME_LOOP
 "#,
@@ -73,7 +75,7 @@ GAME_LOOP
         );
     let (sources, standard_library_id, source_id) =
         sttr1_sources_with_standard_library(STDLIB_SOURCE, &source);
-    let mut input = TestInput::new([Ok(Some("6".to_owned()))]);
+    let mut input = TestInput::new([Ok(Some("99".to_owned())), Ok(Some("6".to_owned()))]);
     let mut writer = RecordingWriter::default();
 
     let result = success(execute_registered_sources_with_filesystem_and_seed(
@@ -89,6 +91,40 @@ GAME_LOOP
     assert!(output.contains("DAMAGE REPORT"));
     assert!(output.contains("MISSION SUMMARY"));
     assert!(output.contains("RESULT VICTORY"));
-    assert_eq!(output.matches("COMMAND (0-7):").count(), 1);
+    assert_eq!(output.matches("COMMANDS (0-7)").count(), 1);
+    assert_eq!(output.matches("COMMAND (0-7):").count(), 2);
+    assert_eq!(result.data_stack(), []);
+}
+
+#[test]
+fn sttr1_game_loop_reprints_commands_after_command_input_error() {
+    let source = std::fs::read_to_string(example_path("sttr1/main.tbx"))
+        .expect("STTR1 entry point should be readable");
+    let source = source.replacen(
+        "START_GAME",
+        "INIT_MISSION\nPRINT_BRIEFING\nLET KLINGONS_LEFT = 0\nGAME_LOOP\n",
+        1,
+    );
+    let (sources, standard_library_id, source_id) =
+        sttr1_sources_with_standard_library(STDLIB_SOURCE, &source);
+    let mut input = TestInput::new([
+        Ok(Some("not a command".to_owned())),
+        Ok(Some("6".to_owned())),
+    ]);
+    let mut writer = RecordingWriter::default();
+
+    let result = success(execute_registered_sources_with_filesystem_and_seed(
+        sources,
+        standard_library_id,
+        source_id,
+        &mut writer,
+        Some(&mut input),
+        30,
+    ));
+
+    let output = writer.text();
+    assert_eq!(output.matches("COMMANDS (0-7)").count(), 2);
+    assert_eq!(output.matches("COMMAND (0-7):").count(), 2);
+    assert_eq!(output.matches("COMMAND INPUT ERROR").count(), 1);
     assert_eq!(result.data_stack(), []);
 }

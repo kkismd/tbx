@@ -2,6 +2,18 @@ REM STTR1 shield control, docking, and ship condition.
 
 # Update the user-visible condition code from the current ship state.
 # 0 = GREEN, 1 = YELLOW, 2 = RED, 3 = DOCKED.
+DEF PRINT_CONDITION
+  IF CONDITION = 0
+    PRINT "GREEN"
+  ELSIF CONDITION = 1
+    PRINT "YELLOW"
+  ELSIF CONDITION = 2
+    PRINT "RED"
+  ELSE
+    PRINT "DOCKED"
+  ENDIF
+END
+
 DEF UPDATE_CONDITION
   IF DOCKED <> 0
     LET CONDITION = 3

@@ -77,8 +77,13 @@ LET ENT_SY = 4\n\
 LET ENERGY = 123\n\
 LET TORPEDOES = 2\n\
 LET SHIELDS = 77\n\
+LET KLINGONS_HERE = 0\n\
+LET ENERGY = 3000\n\
+CHECK_DOCKING\n\
+PRINT_SHORT_SCAN\n\
 LET @SECTOR[27] = 3\n\
 CHECK_DOCKING\n\
+PRINT_SHORT_SCAN\n\
 PRINT \"DOCKED_STATE \", DOCKED, \" \", ENERGY, \" \", TORPEDOES, \" \", SHIELDS, \" \", CONDITION\n\
 CR\n\
 LET SHIELDS = 321\n\
@@ -97,11 +102,13 @@ PRINT \"UNDOCKED_STATE \", DOCKED, \" \", ENERGY, \" \", TORPEDOES, \" \", SHIEL
 CR\n\
 LET KLINGONS_HERE = 1\n\
 CHECK_DOCKING\n\
+PRINT_SHORT_SCAN\n\
 PRINT \"RED_STATE \", CONDITION\n\
 CR\n\
 LET KLINGONS_HERE = 0\n\
 LET ENERGY = 100\n\
 CHECK_DOCKING\n\
+PRINT_SHORT_SCAN\n\
 PRINT \"YELLOW_STATE \", CONDITION\n\
 CR\n",
     );
@@ -122,6 +129,19 @@ CR\n",
         output_values(writer.text(), "DOCKED_STATE "),
         [1, 3000, 10, 0, 3]
     );
+    assert!(writer.text().contains("CONDITION DOCKED"));
+    assert!(writer.text().contains("CONDITION GREEN"));
+    assert!(writer.text().contains("CONDITION RED"));
+    assert!(writer.text().contains("CONDITION YELLOW"));
+    assert!(writer.text().contains("STARDATE "));
+    assert!(writer.text().contains("QUADRANT "));
+    assert!(writer.text().contains("SECTOR "));
+    assert!(writer.text().contains("ENERGY 3000"));
+    assert!(writer.text().contains("TORPEDOES 10"));
+    assert!(writer.text().contains("SHIELDS 0"));
+    assert!(writer
+        .text()
+        .contains("DOCKED: ENERGY AND TORPEDOES REPLENISHED; SHIELDS RESET"));
     assert_eq!(
         output_values(writer.text(), "UNDOCKED_STATE "),
         [0, 3000, 10, 321, 0]
