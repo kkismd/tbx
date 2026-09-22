@@ -3,5 +3,9 @@
         "cargo test": true,
         "gh": true,
         "cargo build": true
+    },
+    "files.associations": {
+        "docs/next/**/*.tbx": "tbx-next",
+        "crates/tbx-next/**/*.tbx": "tbx-next"
     }
 }
