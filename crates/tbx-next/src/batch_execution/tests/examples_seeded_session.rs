@@ -1257,7 +1257,7 @@ fn guess_example_covers_ordering_branches_with_one_generated_answer() {
     let source = std::fs::read_to_string(example_path("guess.tbx"))
         .expect("guess example should be readable");
     let (sources, standard_library_id, source_id) =
-        sttr1_sources_with_standard_library(STDLIB_SOURCE, &source);
+        sources_with_standard_library(STDLIB_SOURCE, &source);
     let mut expected_random = RandomState::seeded(123);
     let answer = expected_random
         .next_inclusive(100)
@@ -1296,7 +1296,7 @@ fn guess_example_keeps_answer_after_invalid_input() {
     let source = std::fs::read_to_string(example_path("guess.tbx"))
         .expect("guess example should be readable");
     let (sources, standard_library_id, source_id) =
-        sttr1_sources_with_standard_library(STDLIB_SOURCE, &source);
+        sources_with_standard_library(STDLIB_SOURCE, &source);
     let mut expected_random = RandomState::seeded(456);
     let answer = expected_random
         .next_inclusive(100)
@@ -1330,7 +1330,7 @@ fn prime_example_leaves_the_data_stack_empty() {
     let source = std::fs::read_to_string(example_path("prime.tbx"))
         .expect("prime example should be readable");
     let (sources, standard_library_id, source_id) =
-        sttr1_sources_with_standard_library(STDLIB_SOURCE, &source);
+        sources_with_standard_library(STDLIB_SOURCE, &source);
     let mut writer = RecordingWriter::default();
 
     let result = execute_registered_sources_with_filesystem_and_seed(
@@ -1351,7 +1351,7 @@ fn grades_example_leaves_the_data_stack_empty() {
     let source = std::fs::read_to_string(example_path("grades.tbx"))
         .expect("grades example should be readable");
     let (sources, standard_library_id, source_id) =
-        sttr1_sources_with_standard_library(STDLIB_SOURCE, &source);
+        sources_with_standard_library(STDLIB_SOURCE, &source);
     let mut writer = RecordingWriter::default();
 
     let result = execute_registered_sources_with_filesystem_and_seed(
@@ -1372,7 +1372,7 @@ fn mandelbrot_example_leaves_the_data_stack_empty() {
     let source = std::fs::read_to_string(example_path("mandelbrot.tbx"))
         .expect("Mandelbrot example should be readable");
     let (sources, standard_library_id, source_id) =
-        sttr1_sources_with_standard_library(STDLIB_SOURCE, &source);
+        sources_with_standard_library(STDLIB_SOURCE, &source);
     let mut writer = RecordingWriter::default();
 
     let result = execute_registered_sources_with_filesystem_and_seed(
@@ -1393,7 +1393,7 @@ fn squares_example_leaves_the_data_stack_empty() {
     let source = std::fs::read_to_string(example_path("squares.tbx"))
         .expect("squares example should be readable");
     let (sources, standard_library_id, source_id) =
-        sttr1_sources_with_standard_library(STDLIB_SOURCE, &source);
+        sources_with_standard_library(STDLIB_SOURCE, &source);
     let mut writer = RecordingWriter::default();
 
     let result = execute_registered_sources_with_filesystem_and_seed(
@@ -1414,7 +1414,7 @@ fn eightqueen_example_leaves_the_data_stack_empty() {
     let source = std::fs::read_to_string(example_path("eightqueen.tbx"))
         .expect("eightqueen example should be readable");
     let (sources, standard_library_id, source_id) =
-        sttr1_sources_with_standard_library(STDLIB_SOURCE, &source);
+        sources_with_standard_library(STDLIB_SOURCE, &source);
     let mut writer = RecordingWriter::default();
 
     let result = execute_registered_sources_with_filesystem_and_seed(
@@ -1436,7 +1436,7 @@ fn maze_example_leaves_the_data_stack_empty() {
     let source =
         std::fs::read_to_string(example_path("maze.tbx")).expect("maze example should be readable");
     let (sources, standard_library_id, source_id) =
-        sttr1_sources_with_standard_library(STDLIB_SOURCE, &source);
+        sources_with_standard_library(STDLIB_SOURCE, &source);
     let mut writer = RecordingWriter::default();
 
     let result = execute_registered_sources_with_filesystem_and_seed(
@@ -1463,7 +1463,7 @@ fn unreachable_maze_exhausts_the_search_stack_without_runtime_failure() {
     )
     .expect("unreachable maze fixture should be readable");
     let (sources, standard_library_id, source_id) =
-        sttr1_sources_with_standard_library(STDLIB_SOURCE, &source);
+        sources_with_standard_library(STDLIB_SOURCE, &source);
     let mut writer = RecordingWriter::default();
 
     let result = execute_registered_sources_with_filesystem_and_seed(
