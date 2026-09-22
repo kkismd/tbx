@@ -5,6 +5,7 @@ mod computer;
 mod device;
 mod endgame;
 mod examples;
+mod game;
 mod initialization;
 mod navigation;
 mod quadrant_scan;
@@ -30,11 +31,28 @@ fn sttr1_sources_with_standard_library(
 ) {
     let mut sources = SourceTexts::new();
     let standard_library_id = sources.register(standard_library, "<tbx-next-stdlib>");
+    let source = source.replace(
+        "\nSTART_GAME\n",
+        r#"
+INIT_MISSION
+PRINT "QUADRANT ", ENT_QX, " ", ENT_QY, " ", KLINGONS_HERE, " ", BASES_HERE, " ", STARS_HERE
+CR
+PRINT "KLINGON_STATE "
+LET KLINGON_INDEX = 1
+WHILE KLINGON_INDEX <= 3
+  PRINT @KLINGON_X[KLINGON_INDEX], " ", @KLINGON_Y[KLINGON_INDEX], " ", @KLINGON_E[KLINGON_INDEX], " "
+  LET KLINGON_INDEX = KLINGON_INDEX + 1
+ENDWH
+CR
+PRINT_SHORT_SCAN
+PRINT_LONG_SCAN
+"#,
+    );
     let main_path = example_path("sttr1/main.tbx");
     let canonical_path = std::fs::canonicalize(main_path)
         .expect("STTR1 entry point should have a canonical filesystem path");
     let source_id = sources.register_with_acquisition(
-        source,
+        source.as_str(),
         "docs/next/examples/sttr1/main.tbx",
         crate::source::SourceAcquisition::FileSystem { canonical_path },
     );

@@ -3,6 +3,53 @@ use super::*;
 fn sttr1_initialization_builds_consistent_mission_state() {
     let source = std::fs::read_to_string(example_path("sttr1/main.tbx"))
         .expect("STTR1 initialization example should be readable");
+    let source = source.replace(
+        "START_GAME",
+        r#"INIT_MISSION
+PRINT_LONG_SCAN
+PRINT "MISSION ", START_STARDATE, " ", STARDATE, " ", MISSION_DURATION, " ", DEADLINE, " ", MAX_ENERGY, " ", ENERGY, " ", MAX_TORPEDOES, " ", TORPEDOES, " ", SHIELDS, " ", KLINGON_INIT_ENERGY, " ", ENT_QX, " ", ENT_QY, " ", ENT_SX, " ", ENT_SY
+CR
+PRINT "TOTALS ", KLINGONS_LEFT, " ", KLINGONS_INITIAL, " ", BASES_LEFT, " ", GENERATION_ATTEMPTS
+CR
+PRINT "QUADRANT ", ENT_QX, " ", ENT_QY, " ", KLINGONS_HERE, " ", BASES_HERE, " ", STARS_HERE
+CR
+PRINT "GALAXY "
+LET QUADRANT_INDEX = 1
+WHILE QUADRANT_INDEX <= 64
+  PRINT @GALAXY[QUADRANT_INDEX], " "
+  LET QUADRANT_INDEX = QUADRANT_INDEX + 1
+ENDWH
+CR
+PRINT "CHART "
+LET QUADRANT_INDEX = 1
+WHILE QUADRANT_INDEX <= 64
+  PRINT @CHART[QUADRANT_INDEX], " "
+  LET QUADRANT_INDEX = QUADRANT_INDEX + 1
+ENDWH
+CR
+PRINT "DAMAGE "
+LET QUADRANT_INDEX = 1
+WHILE QUADRANT_INDEX <= 8
+  PRINT @DAMAGE[QUADRANT_INDEX], " "
+  LET QUADRANT_INDEX = QUADRANT_INDEX + 1
+ENDWH
+CR
+PRINT "COURSE_DX "
+LET QUADRANT_INDEX = 1
+WHILE QUADRANT_INDEX <= 9
+  PRINT @COURSE_DX[QUADRANT_INDEX], " "
+  LET QUADRANT_INDEX = QUADRANT_INDEX + 1
+ENDWH
+CR
+PRINT "COURSE_DY "
+LET QUADRANT_INDEX = 1
+WHILE QUADRANT_INDEX <= 9
+  PRINT @COURSE_DY[QUADRANT_INDEX], " "
+  LET QUADRANT_INDEX = QUADRANT_INDEX + 1
+ENDWH
+CR
+"#,
+    );
     let (sources, standard_library_id, source_id) =
         sttr1_sources_with_standard_library(STDLIB_SOURCE, &source);
     let mut writer = RecordingWriter::default();
