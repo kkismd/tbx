@@ -1,27 +1,44 @@
 REM STTR1 library computer command.
 
-# Convert the relative position of a Klingon into the existing 10..80 course
+# Convert the relative position of a Klingon into the existing 10..89 course
 # scale.  The scale uses the same cardinal and diagonal directions as
-# navigation and photon torpedoes; only the signs are needed for a report.
+# navigation and photon torpedoes.  The shorter component interpolates within
+# each octant so non-diagonal targets retain their fractional course.
 DEF KLINGON_COURSE INDEX
   LET COMPUTER_DX = @KLINGON_X[INDEX] - ENT_SX
   LET COMPUTER_DY = @KLINGON_Y[INDEX] - ENT_SY
   IF COMPUTER_DX > 0 AND COMPUTER_DY = 0
     LET COMPUTER_DIRECTION = 10
   ELSIF COMPUTER_DX > 0 AND COMPUTER_DY < 0
-    LET COMPUTER_DIRECTION = 20
+    IF COMPUTER_DX >= -COMPUTER_DY
+      LET COMPUTER_DIRECTION = 10 + (-COMPUTER_DY) * 10 / COMPUTER_DX
+    ELSE
+      LET COMPUTER_DIRECTION = 30 - COMPUTER_DX * 10 / (-COMPUTER_DY)
+    ENDIF
   ELSIF COMPUTER_DX = 0 AND COMPUTER_DY < 0
     LET COMPUTER_DIRECTION = 30
   ELSIF COMPUTER_DX < 0 AND COMPUTER_DY < 0
-    LET COMPUTER_DIRECTION = 40
+    IF -COMPUTER_DY >= -COMPUTER_DX
+      LET COMPUTER_DIRECTION = 30 + (-COMPUTER_DX) * 10 / (-COMPUTER_DY)
+    ELSE
+      LET COMPUTER_DIRECTION = 50 - (-COMPUTER_DY) * 10 / (-COMPUTER_DX)
+    ENDIF
   ELSIF COMPUTER_DX < 0 AND COMPUTER_DY = 0
     LET COMPUTER_DIRECTION = 50
   ELSIF COMPUTER_DX < 0 AND COMPUTER_DY > 0
-    LET COMPUTER_DIRECTION = 60
+    IF -COMPUTER_DX >= COMPUTER_DY
+      LET COMPUTER_DIRECTION = 50 + COMPUTER_DY * 10 / (-COMPUTER_DX)
+    ELSE
+      LET COMPUTER_DIRECTION = 70 - (-COMPUTER_DX) * 10 / COMPUTER_DY
+    ENDIF
   ELSIF COMPUTER_DX = 0 AND COMPUTER_DY > 0
     LET COMPUTER_DIRECTION = 70
   ELSIF COMPUTER_DX > 0 AND COMPUTER_DY > 0
-    LET COMPUTER_DIRECTION = 80
+    IF COMPUTER_DX >= COMPUTER_DY
+      LET COMPUTER_DIRECTION = 90 - COMPUTER_DY * 10 / COMPUTER_DX
+    ELSE
+      LET COMPUTER_DIRECTION = 70 + COMPUTER_DX * 10 / COMPUTER_DY
+    ENDIF
   ELSE
     LET COMPUTER_DIRECTION = 0
   ENDIF

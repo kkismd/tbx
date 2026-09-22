@@ -74,6 +74,15 @@ fn sttr1_computer_reuses_course_and_distance_for_klingon_report() {
 }
 
 #[test]
+fn sttr1_computer_interpolates_non_diagonal_klingon_course() {
+    let output = run_computer(
+        "LET ENT_SX = 4\nLET ENT_SY = 4\nLET KLINGONS_HERE = 1\nLET @KLINGON_X[1] = 6\nLET @KLINGON_Y[1] = 3\nLET @KLINGON_E[1] = 200\nCOMPUTER\n",
+        ["2"],
+    );
+    assert!(output.contains("KLINGON 1 COURSE 15 DISTANCE 22\n"));
+}
+
+#[test]
 fn sttr1_computer_handles_zero_klingons_and_recovers_from_invalid_input() {
     let output = run_computer(
         "LET KLINGONS_HERE = 0\nCOMPUTER\n",
