@@ -322,3 +322,73 @@ CR\n",
     );
     assert_eq!(result.data_stack(), []);
 }
+
+#[test]
+fn sttr1_invalid_and_cancel_navigation_preserve_damage_and_rng() {
+    let setup = "LET ENT_QX = 1\n\
+LET ENT_QY = 1\n\
+LET ENT_SX = 4\n\
+LET ENT_SY = 4\n\
+LET @GALAXY[1] = 0\n\
+INIT_QUADRANT\n\
+LET @DAMAGE[1] = -100\n\
+";
+    let mut navigation_source = std::fs::read_to_string(example_path("sttr1/main.tbx"))
+        .expect("STTR1 example should be readable");
+    navigation_source.push_str(setup);
+    navigation_source.push_str(
+        "NAVIGATE\n\
+PRINT \"DAMAGE_AFTER_INVALID_CANCEL \"\n\
+PRINT @DAMAGE[1]\n\
+CR\n\
+PRINT \"RNG_AFTER_INVALID_CANCEL \"\n\
+PRINT RND(100)\n\
+CR\n",
+    );
+    let (sources, standard_library_id, source_id) =
+        sttr1_sources_with_standard_library(STDLIB_SOURCE, &navigation_source);
+    let mut input = TestInput::new([Ok(Some("7".to_owned())), Ok(Some("0".to_owned()))]);
+    let mut writer = RecordingWriter::default();
+    let result = success(execute_registered_sources_with_filesystem_and_seed(
+        sources,
+        standard_library_id,
+        source_id,
+        &mut writer,
+        Some(&mut input),
+        30,
+    ));
+
+    let mut control_source = std::fs::read_to_string(example_path("sttr1/main.tbx"))
+        .expect("STTR1 example should be readable");
+    control_source.push_str(setup);
+    control_source.push_str(
+        "PRINT \"DAMAGE_CONTROL \"\n\
+PRINT @DAMAGE[1]\n\
+CR\n\
+PRINT \"RNG_CONTROL \"\n\
+PRINT RND(100)\n\
+CR\n",
+    );
+    let (control_sources, control_standard_library_id, control_source_id) =
+        sttr1_sources_with_standard_library(STDLIB_SOURCE, &control_source);
+    let mut control_writer = RecordingWriter::default();
+    let control_result = success(execute_registered_sources_with_filesystem_and_seed(
+        control_sources,
+        control_standard_library_id,
+        control_source_id,
+        &mut control_writer,
+        None,
+        30,
+    ));
+
+    assert_eq!(
+        output_values(writer.text(), "DAMAGE_AFTER_INVALID_CANCEL "),
+        [-100]
+    );
+    assert_eq!(
+        output_values(writer.text(), "RNG_AFTER_INVALID_CANCEL "),
+        output_values(control_writer.text(), "RNG_CONTROL ")
+    );
+    assert_eq!(result.data_stack(), []);
+    assert_eq!(control_result.data_stack(), []);
+}
