@@ -1,44 +1,44 @@
 ---
 name: implementation-pr
-description: Use this skill when the user asks to implement an issue, fix a bug, make code changes, create a branch, commit the work, and open a GitHub pull request. Use worker sub-agents for bounded implementation tasks when parallel work helps, and use `.tmp/` body files for commit messages and PR bodies.
+description: issueの実装、バグ修正、コード変更、ブランチ作成、コミット、GitHub pull requestの作成を依頼されたときに使用する。並列化が有効な場合は、範囲を限定した実装作業にworker sub-agentを使用し、コミットメッセージとPR本文には`.tmp/`配下のファイルを使用する。
 ---
 
 # Implementation PR
 
-Use this skill for "fix it and make a PR" work.
+「修正してPRを作成する」作業にはこのskillを使用する。
 
-Scope:
+対象範囲:
 
-- Create a topic branch.
-- Before branching or implementation, check the current git branch and worktree state.
-- If the current checkout is on a non-`main` branch and has uncommitted changes, stop and ask the user how to proceed before making implementation changes.
-- When the implementation task references a GitHub issue by number, URL, or `gh issue` context, read both the issue body and its comments before planning or coding. Treat comments as part of the task context for requirements, clarifications, constraints, and prior investigation notes.
-- Implement the requested change.
-- Add or update tests in proportion to risk.
-- Run the required checks.
-- Commit the change.
-- Open a non-draft PR with a clear summary and verification section unless the user explicitly asks for a draft or the work is intentionally incomplete.
+- topic branchを作成する。
+- branch作成または実装の前に、現在のgit branchとworktreeの状態を確認する。
+- 現在のcheckoutが`main`以外のbranchで、未コミットの変更がある場合は、実装変更を行う前に停止し、どう進めるかユーザーに確認する。
+- 実装対象がGitHub issueの番号、URL、または`gh issue`の文脈を参照している場合は、計画やコーディングの前にissue本文とコメントの両方を読む。コメントも要件、補足、制約、過去の調査メモを含むタスク文脈として扱う。
+- 依頼された変更を実装する。
+- リスクに応じてテストを追加または更新する。
+- 必須のチェックを実行する。
+- 変更をコミットする。
+- ユーザーが明示的にdraftを依頼した場合、または作業が意図的に未完了の場合を除き、変更概要と検証結果を含む明確なnon-draft PRを作成する。
 
-Sub-agent guidance:
+Sub-agentの指針:
 
-- Use a `worker` sub-agent only for bounded implementation tasks with clear file ownership.
-- If the next critical step depends on the code change, keep it local rather than blocking on a worker.
-- Good delegation examples:
-  - add tests in one file while the main agent updates core logic
-  - patch a separate module with non-overlapping write scope
+- `worker` sub-agentは、担当ファイルが明確な範囲限定の実装作業にのみ使用する。
+- 次の重要な手順がコード変更に依存する場合は、workerを待つために停止せず、手元で実施する。
+- 委譲に適した例:
+  - main agentがコアロジックを更新する間に、1つのファイルへテストを追加する。
+  - 書き込み範囲が重ならない別モジュールを修正する。
 
-Commit and PR rules:
+CommitとPRのルール:
 
-- For commit messages, follow `git-commit-message` and `tmp-file-messaging`.
-- Write the commit message to `.tmp/commit-message.txt`, use `git commit -F`, then delete the file.
-- For PR creation, follow `github-pr-create` and `tmp-file-messaging`.
-- Write the PR body to `.tmp/pr-body.md`, push the topic branch and wait for that push to succeed, then run `gh pr create --body-file`, and finally delete the file.
-- In restricted-network environments, request escalated execution for the first GitHub command. When the environment offers a reusable approval for the required `gh` command scope, prefer it; otherwise, batch only adjacent `gh` operations that can safely run together. Do not reorder or defer workflow steps solely to reuse an approval.
-- Use `Closes #<issue>` in the PR body when the implementation satisfies the issue requirements end to end; use `Refs #<issue>` only when the work is partial or follow-up work remains.
-- Do not parallelize `git push` and `gh pr create`.
+- commit messageについては`git-commit-message`と`tmp-file-messaging`に従う。
+- commit messageを`.tmp/commit-message.txt`へ書き、`git commit -F`を使用してからファイルを削除する。
+- PR作成については`github-pr-create`と`tmp-file-messaging`に従う。
+- PR本文を`.tmp/pr-body.md`へ書き、topic branchをpushして成功を待ってから`gh pr create --body-file`を実行し、最後にファイルを削除する。
+- 制限されたネットワーク環境では、最初のGitHubコマンドに対して昇格実行を要求する。必要な`gh`コマンドの範囲について再利用可能な承認が環境から提供される場合はそれを優先し、そうでなければ安全に連続実行できる隣接した`gh`操作だけをまとめる。承認を再利用するためだけに、ワークフローの順序を変更または遅延してはならない。
+- 実装がissueの要件を一通り満たす場合はPR本文に`Closes #<issue>`を使用し、部分的な作業または後続作業が残る場合だけ`Refs #<issue>`を使用する。
+- `git push`と`gh pr create`を並列化してはならない。
 
-Verification:
+検証:
 
-- Run repository-required checks before opening the PR.
-- Report any check you could not run.
-- Keep the PR body focused on what changed, why, and how it was verified.
+- PRを作成する前に、リポジトリで必須とされているチェックを実行する。
+- 実行できなかったチェックがあれば報告する。
+- PR本文は、何を変更したか、なぜ変更したか、どのように検証したかに焦点を絞る。
