@@ -284,3 +284,41 @@ CR\n",
     );
     assert_eq!(result.data_stack(), []);
 }
+
+#[test]
+fn sttr1_navigation_repairs_devices_after_valid_input_before_moving() {
+    let mut source = std::fs::read_to_string(example_path("sttr1/main.tbx"))
+        .expect("STTR1 example should be readable");
+    source.push_str(
+        "LET ENT_QX = 1\n\
+LET ENT_QY = 1\n\
+LET ENT_SX = 4\n\
+LET ENT_SY = 4\n\
+LET @GALAXY[1] = 0\n\
+INIT_QUADRANT\n\
+LET @DAMAGE[1] = -100\n\
+NAVIGATE\n\
+PRINT \"DEVICE_AFTER_NAVIGATION \"\n\
+PRINT @DAMAGE[1]\n\
+CR\n",
+    );
+    let (sources, standard_library_id, source_id) =
+        sttr1_sources_with_standard_library(STDLIB_SOURCE, &source);
+    let mut input = TestInput::new([Ok(Some("10".to_owned())), Ok(Some("0".to_owned()))]);
+    let mut writer = RecordingWriter::default();
+
+    let result = success(execute_registered_sources_with_filesystem_and_seed(
+        sources,
+        standard_library_id,
+        source_id,
+        &mut writer,
+        Some(&mut input),
+        30,
+    ));
+
+    assert_ne!(
+        output_values(writer.text(), "DEVICE_AFTER_NAVIGATION "),
+        [-100]
+    );
+    assert_eq!(result.data_stack(), []);
+}

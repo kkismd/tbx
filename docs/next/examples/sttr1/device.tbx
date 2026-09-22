@@ -1,0 +1,63 @@
+REM STTR1 device registry and damage lifecycle.
+# 1 WARP ENGINES, 2 SHORT RANGE SENSORS, 3 LONG RANGE SENSORS,
+# 4 PHASER CONTROL, 5 PHOTON TUBES, 6 DAMAGE CONTROL,
+# 7 SHIELD CONTROL, 8 LIBRARY COMPUTER.
+
+# Advance every damaged device one repair unit.  Positive values are kept:
+# random improvement events intentionally may move a device above zero.
+DEF REPAIR_DEVICES
+  LET DEVICE_INDEX = 1
+  WHILE DEVICE_INDEX <= 8
+    IF @DAMAGE[DEVICE_INDEX] < 0
+      LET @DAMAGE[DEVICE_INDEX] = @DAMAGE[DEVICE_INDEX] + 1
+    ENDIF
+    LET DEVICE_INDEX = DEVICE_INDEX + 1
+  ENDWH
+END
+
+# Apply the original navigation event: a 20% event chooses one device,
+# then worsens or improves it by one to five units without clamping.
+DEF RANDOM_DEVICE_EVENT
+  IF RND(5) = 1
+    LET DEVICE_INDEX = RND(8)
+    LET DEVICE_CHANGE = RND(5)
+    IF RND(2) = 1
+      LET @DAMAGE[DEVICE_INDEX] = @DAMAGE[DEVICE_INDEX] - DEVICE_CHANGE
+    ELSE
+      LET @DAMAGE[DEVICE_INDEX] = @DAMAGE[DEVICE_INDEX] + DEVICE_CHANGE
+    ENDIF
+  ENDIF
+END
+
+DEF NAVIGATION_DEVICE_EVENTS
+  REPAIR_DEVICES
+  RANDOM_DEVICE_EVENT
+END
+
+# Device 6 is the damage-control command itself.  It cannot report damage
+# while damaged; the remaining device names and slots are the fixed registry.
+DEF DAMAGE_CONTROL
+  IF @DAMAGE[6] < 0
+    PRINT "DAMAGE CONTROL IS NON-OPERATIONAL"
+    CR
+  ELSE
+    PRINT "DAMAGE REPORT"
+    CR
+    PRINT "WARP ENGINES ", @DAMAGE[1]
+    CR
+    PRINT "SHORT RANGE SENSORS ", @DAMAGE[2]
+    CR
+    PRINT "LONG RANGE SENSORS ", @DAMAGE[3]
+    CR
+    PRINT "PHASER CONTROL ", @DAMAGE[4]
+    CR
+    PRINT "PHOTON TUBES ", @DAMAGE[5]
+    CR
+    PRINT "DAMAGE CONTROL ", @DAMAGE[6]
+    CR
+    PRINT "SHIELD CONTROL ", @DAMAGE[7]
+    CR
+    PRINT "LIBRARY COMPUTER ", @DAMAGE[8]
+    CR
+  ENDIF
+END

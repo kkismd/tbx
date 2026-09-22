@@ -79,7 +79,7 @@ fn sttr1_scan_commands_respect_sensor_and_computer_damage_gates() {
     let mut source = std::fs::read_to_string(example_path("sttr1/main.tbx"))
         .expect("STTR1 example should be readable");
     source.push_str(
-        "LET @DAMAGE[2] = -1\nPRINT_SHORT_SCAN\nLET @DAMAGE[3] = -1\nPRINT_LONG_SCAN\nLET SECTOR_INDEX = 1\nWHILE SECTOR_INDEX <= 64\nLET @CHART[SECTOR_INDEX] = 0\nLET SECTOR_INDEX = SECTOR_INDEX + 1\nENDWH\nLET @DAMAGE[2] = 0\nLET @DAMAGE[3] = 0\nLET @DAMAGE[7] = -1\nPRINT_LONG_SCAN\nPRINT \"CHART_AFTER \"\nLET SECTOR_INDEX = 1\nWHILE SECTOR_INDEX <= 64\nPRINT @CHART[SECTOR_INDEX], \" \"\nLET SECTOR_INDEX = SECTOR_INDEX + 1\nENDWH\nCR\n",
+        "LET @DAMAGE[2] = -1\nPRINT_SHORT_SCAN\nLET @DAMAGE[3] = -1\nPRINT_LONG_SCAN\nLET SECTOR_INDEX = 1\nWHILE SECTOR_INDEX <= 64\nLET @CHART[SECTOR_INDEX] = 0\nLET SECTOR_INDEX = SECTOR_INDEX + 1\nENDWH\nLET @DAMAGE[2] = 0\nLET @DAMAGE[3] = 0\nLET @DAMAGE[8] = -1\nPRINT_LONG_SCAN\nPRINT \"CHART_AFTER \"\nLET SECTOR_INDEX = 1\nWHILE SECTOR_INDEX <= 64\nPRINT @CHART[SECTOR_INDEX], \" \"\nLET SECTOR_INDEX = SECTOR_INDEX + 1\nENDWH\nCR\n",
     );
     let (sources, standard_library_id, source_id) =
         sttr1_sources_with_standard_library(STDLIB_SOURCE, &source);
