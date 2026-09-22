@@ -1,0 +1,19 @@
+# hash comment
+REM rem comment
+VAR VALUE
+DIM @ITEMS[3]
+
+DEF DOUBLE value
+  EVAL value * 2
+END
+
+SYNTAX CUSTOM
+  STATEMENT
+  EXPECT_END
+ENDS
+
+100 UNKNOWN_HEAD
+CUSTOM
+LET VALUE = RND(10)
+LET @ITEMS[1] = $2A
+PRINT "value # text", VALUE, 'A'
