@@ -44,6 +44,24 @@ fn sttr1_device_registry_reports_all_eight_slots() {
 }
 
 #[test]
+fn sttr1_device_name_outside_registry_prints_nothing() {
+    let (sources, standard_library_id, source_id) =
+        device_source("LET DEVICE_INDEX = 9\nPRINT_DEVICE_NAME\n");
+    let mut writer = RecordingWriter::default();
+    let result = success(execute_registered_sources_with_filesystem_and_seed(
+        sources,
+        standard_library_id,
+        source_id,
+        &mut writer,
+        None,
+        30,
+    ));
+
+    assert_eq!(writer.text(), "");
+    assert_eq!(result.data_stack(), []);
+}
+
+#[test]
 fn sttr1_damaged_control_rejects_damage_report() {
     let (sources, standard_library_id, source_id) =
         device_source("LET @DAMAGE[6] = -1\nDAMAGE_CONTROL\n");
