@@ -331,6 +331,108 @@ CR\n",
 }
 
 #[test]
+fn sttr1_navigation_retaliates_before_movement() {
+    let mut source = std::fs::read_to_string(example_path("sttr1/main.tbx"))
+        .expect("STTR1 example should be readable");
+    source.push_str(
+        "LET ENT_QX = 1\n\
+LET ENT_QY = 1\n\
+LET ENT_SX = 4\n\
+LET ENT_SY = 4\n\
+LET @GALAXY[1] = 100\n\
+INIT_QUADRANT\n\
+LET SECTOR_INDEX = 1\n\
+WHILE SECTOR_INDEX <= 64\n\
+  LET @SECTOR[SECTOR_INDEX] = 0\n\
+  LET SECTOR_INDEX = SECTOR_INDEX + 1\n\
+ENDWH\n\
+LET @SECTOR[28] = 0\n\
+LET KLINGONS_HERE = 1\n\
+LET @KLINGON_X[1] = 8\n\
+LET @KLINGON_Y[1] = 8\n\
+LET @KLINGON_E[1] = 200\n\
+LET SHIELDS = 1000\n\
+LET ENERGY = 100\n\
+NAVIGATE\n\
+PRINT \"NAVIGATION_ATTACK_STATE \"\n\
+PRINT ENT_SX, \" \", ENT_SY, \" \", SHIELDS, \" \", ENERGY\n\
+CR\n",
+    );
+    let (sources, standard_library_id, source_id) =
+        sttr1_sources_with_standard_library(STDLIB_SOURCE, &source);
+    let mut input = TestInput::new([Ok(Some("15".to_owned())), Ok(Some("2".to_owned()))]);
+    let mut writer = RecordingWriter::default();
+
+    let result = success(execute_registered_sources_with_filesystem_and_seed(
+        sources,
+        standard_library_id,
+        source_id,
+        &mut writer,
+        Some(&mut input),
+        30,
+    ));
+
+    let output = writer.text();
+    assert!(output.contains("KLINGON ATTACK FROM SECTOR 8,8: DAMAGE"));
+    assert_eq!(
+        output_values(output, "NAVIGATION_ATTACK_STATE "),
+        [5, 4, 998, 104]
+    );
+    assert!(
+        output.find("KLINGON ATTACK FROM").unwrap()
+            < output.find("NAVIGATION_ATTACK_STATE").unwrap()
+    );
+    assert_eq!(result.data_stack(), []);
+}
+
+#[test]
+fn sttr1_navigation_stops_before_events_and_movement_when_retaliation_destroys_ship() {
+    let mut source = std::fs::read_to_string(example_path("sttr1/main.tbx"))
+        .expect("STTR1 example should be readable");
+    source.push_str(
+        "LET ENT_QX = 1\n\
+LET ENT_QY = 1\n\
+LET ENT_SX = 4\n\
+LET ENT_SY = 4\n\
+LET @GALAXY[1] = 100\n\
+INIT_QUADRANT\n\
+LET KLINGONS_HERE = 1\n\
+LET @KLINGON_X[1] = 5\n\
+LET @KLINGON_Y[1] = 4\n\
+LET @KLINGON_E[1] = 200\n\
+LET SHIELDS = 1\n\
+LET ENERGY = 100\n\
+LET STARDATE = 100\n\
+LET @DAMAGE[1] = -100\n\
+NAVIGATE\n\
+CHECK_ENDGAME\n\
+PRINT \"NAVIGATION_DEFEAT_STATE \"\n\
+PRINT ENT_SX, \" \", ENT_SY, \" \", SHIELDS, \" \", ENERGY, \" \", STARDATE, \" \", @DAMAGE[1]\n\
+CR\n",
+    );
+    let (sources, standard_library_id, source_id) =
+        sttr1_sources_with_standard_library(STDLIB_SOURCE, &source);
+    let mut input = TestInput::new([Ok(Some("10".to_owned())), Ok(Some("2".to_owned()))]);
+    let mut writer = RecordingWriter::default();
+
+    let result = success(execute_registered_sources_with_filesystem_and_seed(
+        sources,
+        standard_library_id,
+        source_id,
+        &mut writer,
+        Some(&mut input),
+        30,
+    ));
+
+    assert_eq!(
+        output_values(writer.text(), "NAVIGATION_DEFEAT_STATE "),
+        [4, 4, -15, 100, 100, -100]
+    );
+    assert!(writer.text().contains("REASON DESTROYED"));
+    assert_eq!(result.data_stack(), []);
+}
+
+#[test]
 fn sttr1_navigation_updates_condition_after_entering_klingon_quadrant_without_scan() {
     let mut source = std::fs::read_to_string(example_path("sttr1/main.tbx"))
         .expect("STTR1 example should be readable");
@@ -344,6 +446,7 @@ LET @GALAXY[2] = 100\n\
 LET @GALAXY[3] = 0\n\
 INIT_QUADRANT\n\
 LET ENERGY = 3000\n\
+LET SHIELDS = 100\n\
 NAVIGATE\n\
 PRINT \"NAVIGATION_STATE \", ENT_QX, \" \", ENT_QY, \" \", KLINGONS_HERE, \" \", CONDITION\n\
 CR\n\

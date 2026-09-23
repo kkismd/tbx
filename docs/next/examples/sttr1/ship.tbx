@@ -1,5 +1,13 @@
 REM STTR1 shield control, docking, and ship condition.
 
+# Shared navigation/combat input guide.
+DEF PRINT_COURSE_GUIDE
+  PRINT "COURSE SCALE: INPUT 10=1.0, 20=2.0, ..., 80=8.0"
+  CR
+  PRINT "DIRECTIONS: 10 E, 20 NE, 30 N, 40 NW, 50 W, 60 SW, 70 S, 80 SE"
+  CR
+END
+
 # Update the user-visible condition code from the current ship state.
 # 0 = GREEN, 1 = YELLOW, 2 = RED, 3 = DOCKED.
 DEF PRINT_CONDITION

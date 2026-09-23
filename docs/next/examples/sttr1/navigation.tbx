@@ -1,10 +1,3 @@
-DEF PRINT_COURSE_GUIDE
-  PRINT "COURSE SCALE: INPUT 10=1.0, 20=2.0, ..., 80=8.0"
-  CR
-  PRINT "DIRECTIONS: 10 E, 20 NE, 30 N, 40 NW, 50 W, 60 SW, 70 S, 80 SE"
-  CR
-END
-
 # Print a quadrant summary as a fixed-width KBS value (Klingons/Bases/Stars).
 DEF PRINT_KBS SUMMARY_VALUE
   IF SUMMARY_VALUE < 10
@@ -64,6 +57,10 @@ DEF NAVIGATE
   ENDWH
 
   IF COURSE <> 0
+    # A valid navigation course triggers the current quadrant's retaliation
+    # before any navigation-side repair/event or movement is applied.
+    KLINGON_ATTACK
+    IF SHIELDS >= 0
     # Valid course/warp input reaches repair and random damage only here,
     # immediately before sector movement. Invalid input and cancel consume no
     # event RNG and do not advance repair state.
@@ -148,6 +145,7 @@ DEF NAVIGATE
       LET STARDATE = STARDATE + 1
     ENDIF
     CHECK_DOCKING
+    ENDIF
   ENDIF
 END
 
