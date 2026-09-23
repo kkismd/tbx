@@ -29,8 +29,11 @@ END
 # Dock when a starbase occupies one of the eight neighboring sectors.
 # A docked ship is replenished immediately and its shields are lowered as in
 # the original STTR1 program.  The scan remains responsible for displaying the
-# resulting condition, so this helper only updates shared ship state.
+# resulting condition; this helper reports a new docking transition while
+# keeping repeated checks quiet.
 DEF CHECK_DOCKING
+  # H holds the previous docked flag only until this check completes.
+  LET H = DOCKED
   LET DOCKED = 0
   # I/J/K are the short-lived docking row, column, and sector index.
   LET I = ENT_SY - 1
@@ -52,6 +55,10 @@ DEF CHECK_DOCKING
     LET ENERGY = MAX_ENERGY
     LET TORPEDOES = MAX_TORPEDOES
     LET SHIELDS = 0
+    IF H = 0
+      PRINT "DOCKED: ENERGY AND TORPEDOES REPLENISHED; SHIELDS RESET TO 0"
+      CR
+    ENDIF
   ENDIF
   UPDATE_CONDITION
 END

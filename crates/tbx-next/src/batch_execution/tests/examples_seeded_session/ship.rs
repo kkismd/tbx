@@ -130,6 +130,9 @@ CR\n",
         [1, 3000, 10, 0, 3]
     );
     assert!(writer.text().contains("CONDITION DOCKED"));
+    assert!(writer
+        .text()
+        .contains("DOCKED: ENERGY AND TORPEDOES REPLENISHED; SHIELDS RESET TO 0"));
     assert!(writer.text().contains("CONDITION GREEN"));
     assert!(writer.text().contains("CONDITION RED"));
     assert!(writer.text().contains("CONDITION YELLOW"));
@@ -148,6 +151,9 @@ CR\n",
     );
     let docked_attack = output_values(writer.text(), "DOCKED_ATTACK_STATE ");
     assert_eq!(docked_attack[0..3], [1, 321, 200]);
+    assert!(writer
+        .text()
+        .contains("STARBASE PROTECTION: KLINGON ATTACKS HAVE NO EFFECT"));
 
     let control_source = source.replace("\nKLINGON_ATTACK\n", "\nREM SKIP_ATTACK\n");
     let (sources, standard_library_id, source_id) =
@@ -163,6 +169,9 @@ CR\n",
     ));
     let control_attack = output_values(control_writer.text(), "DOCKED_ATTACK_STATE ");
     assert_eq!(docked_attack[3], control_attack[3]);
+    assert!(!control_writer
+        .text()
+        .contains("STARBASE PROTECTION: KLINGON ATTACKS HAVE NO EFFECT"));
     assert_eq!(output_values(writer.text(), "RED_STATE "), [2]);
     assert_eq!(output_values(writer.text(), "YELLOW_STATE "), [1]);
     assert_eq!(result.data_stack(), []);

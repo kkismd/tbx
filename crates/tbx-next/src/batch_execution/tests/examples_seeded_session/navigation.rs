@@ -190,6 +190,54 @@ CR\n",
         output_values(writer.text(), "NAVIGATION_STATE "),
         [4, 4, 97, 101]
     );
+    assert!(writer
+        .text()
+        .contains("WARP ENGINES SHUTDOWN AT SECTOR 5,4 DUE TO OBSTACLE"));
+    assert_eq!(result.data_stack(), []);
+}
+
+#[test]
+fn sttr1_combat_quadrant_reports_dangerously_low_shields() {
+    let mut source = std::fs::read_to_string(example_path("sttr1/main.tbx"))
+        .expect("STTR1 example should be readable");
+    source.push_str(
+        "LET ENT_QX = 1\n\
+LET ENT_QY = 1\n\
+LET ENT_SX = 4\n\
+LET ENT_SY = 4\n\
+LET @GALAXY[1] = 100\n\
+LET SHIELDS = 200\n\
+INIT_QUADRANT\n\
+PRINT \"LOW_SHIELDS_STATE \", KLINGONS_HERE, \" \", SHIELDS\n\
+CR\n\
+PRINT \"SAFE_SHIELDS_START\"\n\
+CR\n\
+LET SHIELDS = 201\n\
+INIT_QUADRANT\n",
+    );
+    let (sources, standard_library_id, source_id) =
+        sttr1_sources_with_standard_library(STDLIB_SOURCE, &source);
+    let mut writer = RecordingWriter::default();
+
+    let result = success(execute_registered_sources_with_filesystem_and_seed(
+        sources,
+        standard_library_id,
+        source_id,
+        &mut writer,
+        None,
+        30,
+    ));
+
+    assert_eq!(output_values(writer.text(), "LOW_SHIELDS_STATE "), [1, 200]);
+    assert!(writer
+        .text()
+        .contains("COMBAT AREA: SHIELDS DANGEROUSLY LOW"));
+    let safe_state_output = writer
+        .text()
+        .split("SAFE_SHIELDS_START")
+        .nth(1)
+        .expect("safe-shield marker should be present");
+    assert!(!safe_state_output.contains("COMBAT AREA: SHIELDS DANGEROUSLY LOW"));
     assert_eq!(result.data_stack(), []);
 }
 
