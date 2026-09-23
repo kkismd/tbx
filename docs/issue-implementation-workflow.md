@@ -1,16 +1,20 @@
-# Issue implementation workflow
+# 実装issueからPRを作成するworkflow
 
-`python3 scripts/tbx_implement.py ISSUE_NUMBER` runs the issue-to-PR workflow from a local shell. It requires Python 3, Git, the GitHub CLI (`gh`) authenticated for this repository, and Codex CLI.
+ローカルシェルから `python3 scripts/tbx_implement.py ISSUE_NUMBER` を実行すると、issueの実装からPR作成までを進めます。Python 3、Git、このリポジトリに対して認証済みのGitHub CLI（`gh`）、Codex CLIが必要です。
 
-The workflow only starts from a clean local `main` checkout. It checks the repository root, worktree, and in-progress Git operations, fetches `origin/main`, and stops unless local `main` matches it. It fetches the open issue, its comments, and directly referenced issues and PRs through `gh`, then creates `issue/ISSUE_NUMBER-implement` and starts a finite `codex exec` session with that snapshot and the repository guidance.
+このworkflowは、変更のないローカルの `main` から開始します。リポジトリの場所、worktree、進行中のGit操作を確認し、`origin/main` を取得します。ローカルの `main` が `origin/main` と一致しない場合は停止します。
 
-Codex implements the issue, runs all repository-required checks, and creates one Japanese commit. Its final response uses a JSON Schema with explicit `success`, `failed`, or `human_review_required` status. After success, the parent workflow checks the branch, reported HEAD, single-commit ancestry, and clean worktree again. It pushes the branch and creates a non-draft PR only after those checks pass.
+`gh` でopen状態の対象issueとコメント、および本文やコメントから直接参照されているissueとPRを取得します。その後、`issue/ISSUE_NUMBER-implement` ブランチを作成し、取得した文脈とリポジトリ内のガイドに基づいてCodex CLI（`codex exec`）を実行します。
 
-The parent process owns all routine GitHub communication. The Codex prompt prohibits `gh`, push, PR creation, merge, issue close, and history-rewriting Git commands. A failed phase stops the workflow before later side effects and prints a JSON result with the phase. Once the topic branch is created, failures leave it available for inspection; return to `main` and resolve or remove the topic branch before starting again. If the push succeeds but PR creation fails, the pushed branch is left intact for recovery.
+Codexはissueを実装し、リポジトリで必須とされているチェックをすべて実行してから、日本語のcommitを1つ作成します。Codexの最終応答はJSON Schemaで形式を定め、`success`（成功）、`failed`（失敗）、`human_review_required`（人間の判断が必要）のいずれかを返します。成功時は、親workflowがブランチ、報告されたHEAD、開始時点からのcommit数と親子関係、worktreeがcleanであることを再確認します。これらの確認後にのみブランチをpushし、draftではないPRを作成します。
 
-The command does not merge the PR or close the issue. It does not update `main` automatically; update the checkout and return to a clean `main` before starting.
+通常のGitHub通信は親workflowが担当します。Codexへの指示では、`gh`、push、PR作成、merge、issue close、履歴を書き換えるGitコマンドを禁止しています。いずれかの段階で失敗すると、その後の副作用を実行せず、失敗段階を含むJSON結果を出力します。
 
-Workflow boundary tests can be run with:
+topic branch作成後に失敗した場合も、そのブランチは調査できるよう残します。再実行するには `main` に戻り、topic branchの状態を確認してから対処してください。push成功後にPR作成が失敗した場合、push済みブランチはそのまま残ります。
+
+PRのmergeとissueのcloseは行いません。`main` の更新も自動では行いません。開始前にローカルの `main` を更新し、変更のない状態にしてください。
+
+workflow境界のテストは、次のコマンドで実行できます。
 
 ```sh
 python3 -m unittest discover -s tests -p 'test_issue_workflow.py'
