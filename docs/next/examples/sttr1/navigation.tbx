@@ -172,17 +172,18 @@ DEF PRINT_SHORT_SCAN
       LET SECTOR_COLUMN = 1
       WHILE SECTOR_COLUMN <= 8
         LET SECTOR_INDEX = (SECTOR_ROW - 1) * 8 + SECTOR_COLUMN
-        IF @SECTOR[SECTOR_INDEX] = 0
+        SELECT @SECTOR[SECTOR_INDEX]
+        CASE 0
           PRINT "."
-        ELSIF @SECTOR[SECTOR_INDEX] = 1
+        CASE 1
           PRINT "P"
-        ELSIF @SECTOR[SECTOR_INDEX] = 2
+        CASE 2
           PRINT "K"
-        ELSIF @SECTOR[SECTOR_INDEX] = 3
+        CASE 3
           PRINT "B"
-        ELSE
+        CASE_ELSE
           PRINT "*"
-        ENDIF
+        ENDSEL
         IF SECTOR_COLUMN < 8
           PRINT " "
         ENDIF
