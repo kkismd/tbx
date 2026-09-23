@@ -4,7 +4,7 @@ fn computer_source(source: &str) -> (SourceTexts, SourceId, SourceId) {
     sttr1_sources_with_standard_library(
         STDLIB_SOURCE,
         &format!(
-            "USE \"state.tbx\"\nUSE \"galaxy.tbx\"\nUSE \"device.tbx\"\nUSE \"ship.tbx\"\nUSE \"navigation.tbx\"\nUSE \"combat.tbx\"\nUSE \"computer.tbx\"\n{source}"
+            "USE \"state.tbx\"\nUSE \"galaxy.tbx\"\nUSE \"device.tbx\"\nUSE \"ship.tbx\"\nUSE \"combat.tbx\"\nUSE \"navigation.tbx\"\nUSE \"computer.tbx\"\n{source}"
         ),
     )
 }

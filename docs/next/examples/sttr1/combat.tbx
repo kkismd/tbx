@@ -1,3 +1,11 @@
+# Shared course guide used by navigation and photon torpedo input.
+DEF PRINT_COURSE_GUIDE
+  PRINT "COURSE SCALE: INPUT 10=1.0, 20=2.0, ..., 80=8.0"
+  CR
+  PRINT "DIRECTIONS: 10 E, 20 NE, 30 N, 40 NW, 50 W, 60 SW, 70 S, 80 SE"
+  CR
+END
+
 # Return the integer square root of a non-negative value.  Combat uses this
 # small TBX helper instead of adding a combat-specific VM primitive.
 DEF ISQRT VALUE
