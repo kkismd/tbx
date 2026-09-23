@@ -68,69 +68,76 @@ DEF NAVIGATE
     # immediately before sector movement. Invalid input and cancel consume no
     # event RNG and do not advance repair state.
     NAVIGATION_DEVICE_EVENTS
-    LET COURSE_INDEX = COURSE / 10
-    LET COURSE_FRACTION = COURSE % 10
-    LET DIRECTION_X = (@COURSE_DX[COURSE_INDEX] * (10 - COURSE_FRACTION) + @COURSE_DX[COURSE_INDEX + 1] * COURSE_FRACTION) / 10
-    LET DIRECTION_Y = (@COURSE_DY[COURSE_INDEX] * (10 - COURSE_FRACTION) + @COURSE_DY[COURSE_INDEX + 1] * COURSE_FRACTION) / 10
+    # I/J are the course index and interpolation fraction.
+    LET I = COURSE / 10
+    LET J = COURSE % 10
+    # X/Y are the short-lived interpolated course vector.
+    LET X = (@COURSE_DX[I] * (10 - J) + @COURSE_DX[I + 1] * J) / 10
+    LET Y = (@COURSE_DY[I] * (10 - J) + @COURSE_DY[I + 1] * J) / 10
     LET WARP_STEPS = WARP * 8 / 10
-    LET POSITION_X = ENT_SX * 10
-    LET POSITION_Y = ENT_SY * 10
-    LET START_POSITION_X = POSITION_X
-    LET START_POSITION_Y = POSITION_Y
+    # M/N track the current fixed-point sector position.
+    LET M = ENT_SX * 10
+    LET N = ENT_SY * 10
+    # P/Q preserve the starting position for quadrant crossing.
+    LET P = M
+    LET Q = N
     LET QUADRANT_CROSSED = 0
     LET NAVIGATION_VALID = 0
 
     WHILE NAVIGATION_VALID < WARP_STEPS
-    LET PREVIOUS_X = POSITION_X
-    LET PREVIOUS_Y = POSITION_Y
-    LET NEXT_X = POSITION_X + DIRECTION_X
-    LET NEXT_Y = POSITION_Y + DIRECTION_Y
+    # S/T retain the previous position for collision rollback.
+    LET S = M
+    LET T = N
+    # U/V are the next fixed-point sector position.
+    LET U = M + X
+    LET V = N + Y
 
-    IF NEXT_X >= 5 AND NEXT_X <= 84 AND NEXT_Y >= 5 AND NEXT_Y <= 84
-      LET TARGET_SX = (NEXT_X + 5) / 10
-      LET TARGET_SY = (NEXT_Y + 5) / 10
-      LET TARGET_INDEX = (TARGET_SY - 1) * 8 + TARGET_SX
-      IF @SECTOR[TARGET_INDEX] <> 0
-        LET POSITION_X = PREVIOUS_X
-        LET POSITION_Y = PREVIOUS_Y
+    IF U >= 5 AND U <= 84 AND V >= 5 AND V <= 84
+      # O/L/K are the target x, target y, and sector index.
+      LET O = (U + 5) / 10
+      LET L = (V + 5) / 10
+      LET K = (L - 1) * 8 + O
+      IF @SECTOR[K] <> 0
+        LET M = S
+        LET N = T
         LET NAVIGATION_VALID = WARP_STEPS
       ELSE
         LET @SECTOR[(ENT_SY - 1) * 8 + ENT_SX] = 0
-        LET POSITION_X = NEXT_X
-        LET POSITION_Y = NEXT_Y
-        LET ENT_SX = TARGET_SX
-        LET ENT_SY = TARGET_SY
-        LET @SECTOR[TARGET_INDEX] = 1
+        LET M = U
+        LET N = V
+        LET ENT_SX = O
+        LET ENT_SY = L
+        LET @SECTOR[K] = 1
         LET NAVIGATION_VALID = NAVIGATION_VALID + 1
       ENDIF
     ELSE
       # Crossing follows the original program: calculate the final position
       # from the starting sector and the complete planned distance, then
       # build only the final quadrant.
-      LET POSITION_X = START_POSITION_X + DIRECTION_X * WARP_STEPS
-      LET POSITION_Y = START_POSITION_Y + DIRECTION_Y * WARP_STEPS
-      WHILE POSITION_X < 5
+      LET M = P + X * WARP_STEPS
+      LET N = Q + Y * WARP_STEPS
+      WHILE M < 5
         LET ENT_QX = ENT_QX - 1
-        LET POSITION_X = POSITION_X + 80
+        LET M = M + 80
         LET QUADRANT_CROSSED = 1
       ENDWH
-      WHILE POSITION_X >= 85
+      WHILE M >= 85
         LET ENT_QX = ENT_QX + 1
-        LET POSITION_X = POSITION_X - 80
+        LET M = M - 80
         LET QUADRANT_CROSSED = 1
       ENDWH
-      WHILE POSITION_Y < 5
+      WHILE N < 5
         LET ENT_QY = ENT_QY - 1
-        LET POSITION_Y = POSITION_Y + 80
+        LET N = N + 80
         LET QUADRANT_CROSSED = 1
       ENDWH
-      WHILE POSITION_Y >= 85
+      WHILE N >= 85
         LET ENT_QY = ENT_QY + 1
-        LET POSITION_Y = POSITION_Y - 80
+        LET N = N - 80
         LET QUADRANT_CROSSED = 1
       ENDWH
-      LET ENT_SX = (POSITION_X + 5) / 10
-      LET ENT_SY = (POSITION_Y + 5) / 10
+      LET ENT_SX = (M + 5) / 10
+      LET ENT_SY = (N + 5) / 10
       INIT_QUADRANT
       LET NAVIGATION_VALID = WARP_STEPS
     ENDIF

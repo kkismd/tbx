@@ -712,7 +712,7 @@ LET TORPEDOES = 2\n\
 LET SHIELDS = 1\n\
 LET DOCKED = 0\n\
 PHOTON_TORPEDO\n\
-PRINT \"TORPEDO_STAR_STATE \", TORPEDOES, \" \", @SECTOR[22], \" \", STARS_HERE, \" \", @GALAXY[1], \" \", DIRECTION_X, \" \", DIRECTION_Y, \" \", SHIELDS\n\
+PRINT \"TORPEDO_STAR_STATE \", TORPEDOES, \" \", @SECTOR[22], \" \", STARS_HERE, \" \", @GALAXY[1], \" \", X, \" \", Y, \" \", SHIELDS\n\
 CR\n",
     );
     let (sources, standard_library_id, source_id) =

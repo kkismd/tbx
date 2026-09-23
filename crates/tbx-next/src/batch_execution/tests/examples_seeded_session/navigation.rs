@@ -53,7 +53,7 @@ LET STARDATE = 100\n\
 LET DEADLINE = 99\n\
 LET ENERGY = 100\n\
 NAVIGATE\n\
-PRINT \"NAVIGATION_STATE \", ENT_SX, \" \", ENT_SY, \" \", ENERGY, \" \", STARDATE, \" \", DIRECTION_X, \" \", DIRECTION_Y\n\
+PRINT \"NAVIGATION_STATE \", ENT_SX, \" \", ENT_SY, \" \", ENERGY, \" \", STARDATE, \" \", X, \" \", Y\n\
 CR\n",
     );
     let (sources, standard_library_id, source_id) =

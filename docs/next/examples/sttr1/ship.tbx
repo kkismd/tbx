@@ -32,19 +32,20 @@ END
 # resulting condition, so this helper only updates shared ship state.
 DEF CHECK_DOCKING
   LET DOCKED = 0
-  LET DOCK_ROW = ENT_SY - 1
-  WHILE DOCK_ROW <= ENT_SY + 1
-    LET DOCK_COLUMN = ENT_SX - 1
-    WHILE DOCK_COLUMN <= ENT_SX + 1
-      IF DOCK_ROW >= 1 AND DOCK_ROW <= 8 AND DOCK_COLUMN >= 1 AND DOCK_COLUMN <= 8
-        LET DOCK_INDEX = (DOCK_ROW - 1) * 8 + DOCK_COLUMN
-        IF @SECTOR[DOCK_INDEX] = 3
+  # I/J/K are the short-lived docking row, column, and sector index.
+  LET I = ENT_SY - 1
+  WHILE I <= ENT_SY + 1
+    LET J = ENT_SX - 1
+    WHILE J <= ENT_SX + 1
+      IF I >= 1 AND I <= 8 AND J >= 1 AND J <= 8
+        LET K = (I - 1) * 8 + J
+        IF @SECTOR[K] = 3
           LET DOCKED = 1
         ENDIF
       ENDIF
-      LET DOCK_COLUMN = DOCK_COLUMN + 1
+      LET J = J + 1
     ENDWH
-    LET DOCK_ROW = DOCK_ROW + 1
+    LET I = I + 1
   ENDWH
 
   IF DOCKED <> 0
