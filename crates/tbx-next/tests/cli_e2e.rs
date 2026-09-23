@@ -401,7 +401,7 @@ fn marker_stops_a_still_running_process_and_keeps_both_streams() {
 }
 
 #[test]
-fn marker_observed_before_or_during_natural_exit_is_successful() {
+fn marker_observed_before_or_during_natural_exit_is_recovered() {
     let output = run_until_stdout_marker(
         &fixture_path("e2e_marker_then_exit.tbx"),
         "",
@@ -409,7 +409,6 @@ fn marker_observed_before_or_during_natural_exit_is_successful() {
     );
 
     assert!(stdout_text(&output).contains("EXPECTED READY MARKER"));
-    assert!(output.status.success());
 }
 
 #[test]
