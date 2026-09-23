@@ -110,6 +110,9 @@ CR\n",
     assert!(writer
         .text()
         .contains("KLINGON ATTACK FROM SECTOR 5,4: DAMAGE"));
+    assert!(!writer
+        .text()
+        .contains("LIBRARY COMPUTER DAMAGED: PHASER ACCURACY REDUCED"));
     assert_eq!(result.data_stack(), []);
 }
 
@@ -164,6 +167,9 @@ CR\n",
 
     let state = output_values(writer.text(), "DAMAGED_COMPUTER_STATE ");
     assert_eq!(state, [0, 0, 9710]);
+    assert!(writer
+        .text()
+        .contains("LIBRARY COMPUTER DAMAGED: PHASER ACCURACY REDUCED"));
     assert_eq!(result.data_stack(), []);
 }
 

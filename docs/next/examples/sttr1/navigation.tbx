@@ -95,6 +95,8 @@ DEF NAVIGATE
       LET L = (V + 5) / 10
       LET K = (L - 1) * 8 + O
       IF @SECTOR[K] <> 0
+        PRINT "WARP ENGINES SHUTDOWN AT SECTOR ", O, ",", L, " DUE TO OBSTACLE"
+        CR
         LET M = S
         LET N = T
         LET NAVIGATION_VALID = WARP_STEPS
