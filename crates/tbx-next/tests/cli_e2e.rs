@@ -1,7 +1,32 @@
 use std::fs;
-use std::io::Write;
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
-use std::process::{Command, Output, Stdio};
+use std::process::{Child, Command, Output, Stdio};
+use std::sync::mpsc::{self, Receiver, SyncSender};
+use std::thread;
+use std::time::{Duration, Instant};
+
+const PROCESS_TIMEOUT: Duration = Duration::from_secs(10);
+const OUTPUT_LIMIT: usize = 256 * 1024;
+const OUTPUT_TAIL: usize = 4096;
+
+enum ProcessEvent {
+    Stdout(Vec<u8>),
+    Stderr(Vec<u8>),
+    StdoutDone,
+    StderrDone,
+}
+
+#[derive(Debug)]
+struct CapturedProcess {
+    output: Output,
+}
+
+#[derive(Default)]
+struct ProcessOutput {
+    stdout: Vec<u8>,
+    stderr: Vec<u8>,
+}
 
 fn tbx_next_bin() -> &'static str {
     env!("CARGO_BIN_EXE_tbx-next")
@@ -32,7 +57,7 @@ fn run_with_file(path: &Path) -> Output {
 }
 
 fn run_with_file_and_stdin(path: &Path, input: &str) -> Output {
-    let mut child = Command::new(tbx_next_bin())
+    let child = Command::new(tbx_next_bin())
         .arg(path)
         .current_dir(fixture_directory())
         .stdin(Stdio::piped())
@@ -41,15 +66,14 @@ fn run_with_file_and_stdin(path: &Path, input: &str) -> Output {
         .spawn()
         .expect("tbx-next binary should spawn");
 
-    child
-        .stdin
-        .as_mut()
-        .expect("child stdin should be piped")
-        .write_all(input.as_bytes())
-        .expect("runtime input should be written to child");
-    child
-        .wait_with_output()
-        .expect("tbx-next binary should finish")
+    run_child(
+        child,
+        input,
+        None,
+        "file runtime input",
+        input.lines().count(),
+    )
+    .output
 }
 
 fn run_with_args(args: &[&str]) -> Output {
@@ -60,7 +84,7 @@ fn run_with_args(args: &[&str]) -> Output {
 }
 
 fn run_with_args_and_stdin(args: &[&str], source: &str) -> Output {
-    let mut child = Command::new(tbx_next_bin())
+    let child = Command::new(tbx_next_bin())
         .args(args)
         .current_dir(fixture_directory())
         .stdin(Stdio::piped())
@@ -69,20 +93,11 @@ fn run_with_args_and_stdin(args: &[&str], source: &str) -> Output {
         .spawn()
         .expect("tbx-next binary should spawn");
 
-    child
-        .stdin
-        .as_mut()
-        .expect("child stdin should be piped")
-        .write_all(source.as_bytes())
-        .expect("source should be written to child stdin");
-
-    child
-        .wait_with_output()
-        .expect("tbx-next binary should finish")
+    run_child(child, source, None, "stdin source", source.lines().count()).output
 }
 
 fn run_with_stdin(source: &str) -> Output {
-    let mut child = Command::new(tbx_next_bin())
+    let child = Command::new(tbx_next_bin())
         .current_dir(fixture_directory())
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -90,16 +105,312 @@ fn run_with_stdin(source: &str) -> Output {
         .spawn()
         .expect("tbx-next binary should spawn");
 
-    child
-        .stdin
-        .as_mut()
-        .expect("child stdin should be piped")
-        .write_all(source.as_bytes())
-        .expect("source should be written to child stdin");
+    run_child(child, source, None, "stdin source", source.lines().count()).output
+}
 
-    child
-        .wait_with_output()
-        .expect("tbx-next binary should finish")
+fn run_until_stdout_marker(path: &Path, input: &str, marker: &str) -> Output {
+    assert!(!marker.is_empty(), "stdout marker must not be empty");
+    let child = Command::new(tbx_next_bin())
+        .arg(path)
+        .current_dir(fixture_directory())
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("tbx-next binary should spawn");
+
+    let captured = run_child(
+        child,
+        input,
+        Some(marker.as_bytes()),
+        &format!("stdout marker {marker:?}"),
+        input.lines().count(),
+    );
+    captured.output
+}
+
+fn run_child(
+    child: Child,
+    input: &str,
+    marker: Option<&[u8]>,
+    expectation: &str,
+    input_lines: usize,
+) -> CapturedProcess {
+    run_child_with_timeout(
+        child,
+        input,
+        marker,
+        expectation,
+        input_lines,
+        PROCESS_TIMEOUT,
+    )
+}
+
+fn run_child_with_timeout(
+    mut child: Child,
+    input: &str,
+    marker: Option<&[u8]>,
+    expectation: &str,
+    input_lines: usize,
+    timeout: Duration,
+) -> CapturedProcess {
+    let (tx, rx) = mpsc::sync_channel(16);
+    let stdout = child.stdout.take().expect("child stdout should be piped");
+    let stderr = child.stderr.take().expect("child stderr should be piped");
+    let stdout_tx = tx.clone();
+    let stdout_thread = thread::spawn(move || drain(stdout, stdout_tx, true));
+    let stderr_thread = thread::spawn(move || drain(stderr, tx, false));
+    let mut stdin = child.stdin.take().expect("child stdin should be piped");
+    let input = input.as_bytes().to_vec();
+    let input_thread = thread::spawn(move || {
+        let result = stdin.write_all(&input);
+        drop(stdin);
+        result
+    });
+
+    let deadline = Instant::now() + timeout;
+    let mut exit_status = None;
+    let mut output = ProcessOutput::default();
+    let mut already_exited = false;
+    let mut marker_reached = false;
+    let mut stdout_done = false;
+    let mut stderr_done = false;
+    let mut overflow = false;
+    let mut stop_reason = None;
+
+    loop {
+        receive_events(
+            &rx,
+            &mut output,
+            &mut stdout_done,
+            &mut stderr_done,
+            &mut overflow,
+        );
+        if let Some(expected) = marker {
+            if output
+                .stdout
+                .windows(expected.len())
+                .any(|window| window == expected)
+            {
+                marker_reached = true;
+                stop_reason = Some("marker reached".to_owned());
+                break;
+            }
+        }
+        if overflow {
+            stop_reason = Some(format!("output exceeded {OUTPUT_LIMIT} bytes per stream"));
+            break;
+        }
+        match child.try_wait() {
+            Ok(Some(status)) => {
+                exit_status = Some(status);
+                already_exited = true;
+                if marker.is_none() || (stdout_done && stderr_done) {
+                    break;
+                }
+            }
+            Ok(None) => {}
+            Err(error) => {
+                stop_reason = Some(format!("failed checking child status: {error}"));
+                break;
+            }
+        }
+        if Instant::now() >= deadline {
+            stop_reason = Some(format!("timed out after {timeout:?}"));
+            break;
+        }
+        match rx.recv_timeout(Duration::from_millis(10)) {
+            Ok(event) => apply_event(
+                event,
+                &mut output,
+                &mut stdout_done,
+                &mut stderr_done,
+                &mut overflow,
+            ),
+            Err(mpsc::RecvTimeoutError::Timeout) => {}
+            Err(mpsc::RecvTimeoutError::Disconnected) => break,
+        }
+    }
+
+    let mut marker_stop_requested = false;
+    if marker_reached && !already_exited {
+        if let Ok(Some(status)) = child.try_wait() {
+            exit_status = Some(status);
+            already_exited = true;
+        } else {
+            marker_stop_requested = true;
+        }
+    }
+    if stop_reason.is_some() && !already_exited {
+        let _ = child.kill();
+    }
+    if !already_exited {
+        exit_status = Some(
+            child
+                .wait()
+                .expect("child should be reaped after monitoring"),
+        );
+    }
+    while !stdout_done || !stderr_done {
+        match rx.recv_timeout(Duration::from_secs(1)) {
+            Ok(event) => apply_event(
+                event,
+                &mut output,
+                &mut stdout_done,
+                &mut stderr_done,
+                &mut overflow,
+            ),
+            Err(_) => break,
+        }
+    }
+    let input_write_result = match input_thread.join() {
+        Ok(Ok(())) => Ok(()),
+        Ok(Err(error)) => Err(error.to_string()),
+        Err(_) => Err("stdin writer thread panicked".to_owned()),
+    };
+    let _ = stdout_thread.join();
+    let _ = stderr_thread.join();
+
+    let output = Output {
+        status: exit_status.expect("child exit status should be collected"),
+        stdout: output.stdout,
+        stderr: output.stderr,
+    };
+
+    // A marker-triggered stop may close stdin before a long scripted input is fully written.
+    // All other paths preserve the old helper contract: a failed write fails the test.
+    if let Err(error) = &input_write_result {
+        if stop_reason.is_none() || (marker_reached && !marker_stop_requested) {
+            panic!(
+                "stdin write failed: {error}\n{}\nstdout tail:\n{}\nstderr tail:\n{}",
+                diagnostic(expectation, input_lines, &input_write_result, &output),
+                tail(&output.stdout),
+                tail(&output.stderr)
+            );
+        }
+    }
+
+    if let Some(reason) = stop_reason {
+        if !marker_reached {
+            panic!(
+                "{}\nstdout tail:\n{}\nstderr tail:\n{}",
+                diagnostic(
+                    &format!("{expectation}: {reason}"),
+                    input_lines,
+                    &input_write_result,
+                    &output
+                ),
+                tail(&output.stdout),
+                tail(&output.stderr)
+            );
+        }
+    } else if marker.is_some() && !marker_reached {
+        panic!(
+            "{}\nstdout tail:\n{}\nstderr tail:\n{}",
+            diagnostic(
+                &format!("{expectation} not reached before process exit"),
+                input_lines,
+                &input_write_result,
+                &output
+            ),
+            tail(&output.stdout),
+            tail(&output.stderr)
+        );
+    }
+    CapturedProcess { output }
+}
+
+fn drain<R: Read>(mut reader: R, tx: SyncSender<ProcessEvent>, stdout: bool) {
+    let mut buffer = [0; 8192];
+    loop {
+        match reader.read(&mut buffer) {
+            Ok(0) | Err(_) => break,
+            Ok(size) => {
+                let event = if stdout {
+                    ProcessEvent::Stdout(buffer[..size].to_vec())
+                } else {
+                    ProcessEvent::Stderr(buffer[..size].to_vec())
+                };
+                if tx.send(event).is_err() {
+                    return;
+                }
+            }
+        }
+    }
+    let _ = tx.send(if stdout {
+        ProcessEvent::StdoutDone
+    } else {
+        ProcessEvent::StderrDone
+    });
+}
+
+fn receive_events(
+    rx: &Receiver<ProcessEvent>,
+    output: &mut ProcessOutput,
+    stdout_done: &mut bool,
+    stderr_done: &mut bool,
+    overflow: &mut bool,
+) {
+    while let Ok(event) = rx.try_recv() {
+        apply_event(event, output, stdout_done, stderr_done, overflow);
+    }
+}
+
+fn apply_event(
+    event: ProcessEvent,
+    output: &mut ProcessOutput,
+    stdout_done: &mut bool,
+    stderr_done: &mut bool,
+    overflow: &mut bool,
+) {
+    match event {
+        ProcessEvent::Stdout(bytes) => append_bounded(&mut output.stdout, &bytes, overflow),
+        ProcessEvent::Stderr(bytes) => append_bounded(&mut output.stderr, &bytes, overflow),
+        ProcessEvent::StdoutDone => *stdout_done = true,
+        ProcessEvent::StderrDone => *stderr_done = true,
+    }
+}
+
+fn append_bounded(output: &mut Vec<u8>, bytes: &[u8], overflow: &mut bool) {
+    if output.len() + bytes.len() > OUTPUT_LIMIT {
+        *overflow = true;
+        let excess = (output.len() + bytes.len()).saturating_sub(OUTPUT_LIMIT);
+        if excess >= output.len() {
+            output.clear();
+            output.extend_from_slice(&bytes[bytes.len().saturating_sub(OUTPUT_TAIL)..]);
+        } else {
+            output.drain(..excess);
+            output.extend_from_slice(bytes);
+        }
+        if output.len() > OUTPUT_LIMIT {
+            output.drain(..output.len() - OUTPUT_LIMIT);
+        }
+    } else {
+        output.extend_from_slice(bytes);
+    }
+}
+
+fn tail(bytes: &[u8]) -> String {
+    String::from_utf8_lossy(&bytes[bytes.len().saturating_sub(OUTPUT_TAIL)..]).into_owned()
+}
+
+fn diagnostic(
+    expectation: &str,
+    input_lines: usize,
+    input_write_result: &Result<(), String>,
+    output: &Output,
+) -> String {
+    let input_delivery = match input_write_result {
+        Ok(()) => format!("scripted stdin was fully sent and closed ({input_lines} lines)"),
+        Err(error) => {
+            format!("scripted stdin write did not complete ({input_lines} lines expected): {error}")
+        }
+    };
+    format!(
+        "{expectation}; {input_delivery}\nstdout tail:\n{}\nstderr tail:\n{}",
+        tail(&output.stdout),
+        tail(&output.stderr)
+    )
 }
 
 fn fixture_directory() -> PathBuf {
@@ -114,6 +425,169 @@ fn stdout_text(output: &Output) -> &str {
 
 fn stderr_text(output: &Output) -> &str {
     std::str::from_utf8(&output.stderr).expect("stderr should be UTF-8")
+}
+
+#[test]
+fn marker_stops_a_still_running_process_and_keeps_both_streams() {
+    let input = "x".repeat(16 * 1024 * 1024);
+    let output = run_until_stdout_marker(
+        &fixture_path("e2e_marker_then_loop.tbx"),
+        &input,
+        "EXPECTED READY MARKER",
+    );
+
+    assert!(stdout_text(&output).contains("EXPECTED READY MARKER"));
+    // The marker is the success condition; killing the still-running process is expected.
+    assert!(!output.status.success());
+    assert_eq!(stderr_text(&output), "");
+}
+
+#[test]
+fn marker_observed_before_or_during_natural_exit_is_recovered() {
+    let output = run_until_stdout_marker(
+        &fixture_path("e2e_marker_then_exit.tbx"),
+        "",
+        "EXPECTED READY MARKER",
+    );
+
+    assert!(stdout_text(&output).contains("EXPECTED READY MARKER"));
+}
+
+#[test]
+fn missing_marker_after_natural_exit_fails_with_recovered_output() {
+    let result = std::panic::catch_unwind(|| {
+        run_until_stdout_marker(
+            &fixture_path("e2e_no_marker_exit.tbx"),
+            "first line\nsecond line\n",
+            "EXPECTED READY MARKER",
+        )
+    });
+    let panic = result.expect_err("a naturally exited process without marker should fail");
+    let message = panic
+        .downcast_ref::<String>()
+        .map(String::as_str)
+        .or_else(|| panic.downcast_ref::<&str>().copied())
+        .expect("failure should include a diagnostic");
+
+    assert!(message.contains("not reached before process exit"));
+    assert!(message.contains("scripted stdin was fully sent and closed (2 lines)"));
+    assert!(message.contains("PROCESS EXITED WITHOUT MARKER"));
+}
+
+#[test]
+fn early_process_exit_reports_incomplete_stdin_write() {
+    let input = "x".repeat(16 * 1024 * 1024);
+    let result = std::panic::catch_unwind(|| {
+        run_until_stdout_marker(
+            &fixture_path("e2e_no_marker_exit.tbx"),
+            &input,
+            "EXPECTED READY MARKER",
+        )
+    });
+    let panic = result.expect_err("early child exit should fail an incomplete stdin write");
+    let message = panic
+        .downcast_ref::<String>()
+        .map(String::as_str)
+        .or_else(|| panic.downcast_ref::<&str>().copied())
+        .expect("failure should include a diagnostic");
+
+    assert!(message.contains("stdin write failed"));
+    assert!(message.contains("scripted stdin write did not complete"));
+    assert!(!message.contains("scripted stdin was fully sent and closed"));
+}
+
+#[test]
+fn stdin_eof_reprompt_loop_times_out_with_output_diagnostic() {
+    let child = Command::new(tbx_next_bin())
+        .arg(fixture_path("runtime_input_eof_loop.tbx"))
+        .current_dir(fixture_directory())
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("tbx-next binary should spawn");
+    let result = std::panic::catch_unwind(|| {
+        run_child_with_timeout(
+            child,
+            "",
+            None,
+            "file runtime input",
+            0,
+            Duration::from_millis(250),
+        )
+    });
+    let panic = result.expect_err("an EOF re-prompt loop should be stopped by the timeout");
+    let message = panic
+        .downcast_ref::<String>()
+        .map(String::as_str)
+        .or_else(|| panic.downcast_ref::<&str>().copied())
+        .expect("failure should include a diagnostic");
+
+    assert!(message.contains("timed out"));
+    assert!(message.contains("scripted stdin was fully sent and closed (0 lines)"));
+    assert!(message.contains("PROMPT"));
+}
+
+#[test]
+fn marker_helper_times_out_when_process_stays_alive_without_marker() {
+    let child = Command::new(tbx_next_bin())
+        .arg(fixture_path("e2e_silent_loop.tbx"))
+        .current_dir(fixture_directory())
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("tbx-next binary should spawn");
+    let result = std::panic::catch_unwind(|| {
+        run_child_with_timeout(
+            child,
+            "",
+            Some(b"EXPECTED READY MARKER"),
+            "stdout marker",
+            0,
+            Duration::from_millis(250),
+        )
+    });
+    let panic = result.expect_err("marker helper should fail when marker is not reached");
+    let message = panic
+        .downcast_ref::<String>()
+        .map(String::as_str)
+        .or_else(|| panic.downcast_ref::<&str>().copied())
+        .expect("failure should include a diagnostic");
+
+    assert!(message.contains("timed out"));
+    assert!(message.contains("stdout marker"));
+}
+
+#[test]
+fn excessive_interactive_output_is_bounded_and_stopped() {
+    let child = Command::new(tbx_next_bin())
+        .arg(fixture_path("e2e_output_flood.tbx"))
+        .current_dir(fixture_directory())
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("tbx-next binary should spawn");
+    let result = std::panic::catch_unwind(|| {
+        run_child_with_timeout(
+            child,
+            "",
+            Some(b"NEVER EMITTED MARKER"),
+            "stdout marker",
+            0,
+            Duration::from_secs(3),
+        )
+    });
+    let panic = result.expect_err("excessive output should stop the child");
+    let message = panic
+        .downcast_ref::<String>()
+        .map(String::as_str)
+        .or_else(|| panic.downcast_ref::<&str>().copied())
+        .expect("failure should include a diagnostic");
+
+    assert!(message.contains("output exceeded"));
+    assert!(message.contains("OUTPUT FLOOD"));
 }
 
 #[test]
