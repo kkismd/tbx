@@ -65,3 +65,13 @@ A/B/C/D/F に分類して合格件数を集計します。
 ```sh
 cargo run -p tbx-next -- docs/next/examples/grades.tbx
 ```
+
+
+Mike Mayfield版 `STAR TREK` を基にしたSTTR1は、銀河探索、戦闘、補給、装置損傷、勝敗までを含む中規模の対話サンプルです。
+
+```sh
+cargo run -p tbx-next -- docs/next/examples/sttr1/main.tbx
+```
+
+遊び方、コマンド、各表示の読み方は
+[`examples/sttr1/README.md`](examples/sttr1/README.md) を参照してください。
