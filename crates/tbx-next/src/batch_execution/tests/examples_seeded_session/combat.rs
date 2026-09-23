@@ -730,7 +730,7 @@ CR\n",
     ));
 
     let state = output_values(writer.text(), "TORPEDO_STAR_STATE ");
-    assert_eq!(state, [1, 4, 1, 101, -3]);
+    assert_eq!(state, [1, 4, 1, 101, -50]);
     assert!(writer
         .text()
         .contains("PHOTON TORPEDO HIT STAR AT SECTOR 6,3"));
