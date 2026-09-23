@@ -232,10 +232,13 @@ fn run_child_with_timeout(
         }
     }
 
+    let mut marker_stop_requested = false;
     if marker_reached && !already_exited {
         if let Ok(Some(status)) = child.try_wait() {
             exit_status = Some(status);
             already_exited = true;
+        } else {
+            marker_stop_requested = true;
         }
     }
     if stop_reason.is_some() && !already_exited {
@@ -260,7 +263,11 @@ fn run_child_with_timeout(
             Err(_) => break,
         }
     }
-    let _ = input_thread.join();
+    let input_write_result = match input_thread.join() {
+        Ok(Ok(())) => Ok(()),
+        Ok(Err(error)) => Err(error.to_string()),
+        Err(_) => Err("stdin writer thread panicked".to_owned()),
+    };
     let _ = stdout_thread.join();
     let _ = stderr_thread.join();
 
@@ -270,11 +277,29 @@ fn run_child_with_timeout(
         stderr: output.stderr,
     };
 
+    // A marker-triggered stop may close stdin before a long scripted input is fully written.
+    // All other paths preserve the old helper contract: a failed write fails the test.
+    if let Err(error) = &input_write_result {
+        if stop_reason.is_none() || (marker_reached && !marker_stop_requested) {
+            panic!(
+                "stdin write failed: {error}\n{}\nstdout tail:\n{}\nstderr tail:\n{}",
+                diagnostic(expectation, input_lines, &input_write_result, &output),
+                tail(&output.stdout),
+                tail(&output.stderr)
+            );
+        }
+    }
+
     if let Some(reason) = stop_reason {
         if !marker_reached {
             panic!(
                 "{}\nstdout tail:\n{}\nstderr tail:\n{}",
-                diagnostic(&format!("{expectation}: {reason}"), input_lines, &output),
+                diagnostic(
+                    &format!("{expectation}: {reason}"),
+                    input_lines,
+                    &input_write_result,
+                    &output
+                ),
                 tail(&output.stdout),
                 tail(&output.stderr)
             );
@@ -285,6 +310,7 @@ fn run_child_with_timeout(
             diagnostic(
                 &format!("{expectation} not reached before process exit"),
                 input_lines,
+                &input_write_result,
                 &output
             ),
             tail(&output.stdout),
@@ -368,8 +394,23 @@ fn tail(bytes: &[u8]) -> String {
     String::from_utf8_lossy(&bytes[bytes.len().saturating_sub(OUTPUT_TAIL)..]).into_owned()
 }
 
-fn diagnostic(expectation: &str, input_lines: usize, output: &Output) -> String {
-    format!("{expectation}; scripted stdin was fully sent and closed ({input_lines} lines)\nstdout tail:\n{}\nstderr tail:\n{}", tail(&output.stdout), tail(&output.stderr))
+fn diagnostic(
+    expectation: &str,
+    input_lines: usize,
+    input_write_result: &Result<(), String>,
+    output: &Output,
+) -> String {
+    let input_delivery = match input_write_result {
+        Ok(()) => format!("scripted stdin was fully sent and closed ({input_lines} lines)"),
+        Err(error) => {
+            format!("scripted stdin write did not complete ({input_lines} lines expected): {error}")
+        }
+    };
+    format!(
+        "{expectation}; {input_delivery}\nstdout tail:\n{}\nstderr tail:\n{}",
+        tail(&output.stdout),
+        tail(&output.stderr)
+    )
 }
 
 fn fixture_directory() -> PathBuf {
@@ -388,9 +429,10 @@ fn stderr_text(output: &Output) -> &str {
 
 #[test]
 fn marker_stops_a_still_running_process_and_keeps_both_streams() {
+    let input = "x".repeat(16 * 1024 * 1024);
     let output = run_until_stdout_marker(
         &fixture_path("e2e_marker_then_loop.tbx"),
-        "",
+        &input,
         "EXPECTED READY MARKER",
     );
 
@@ -430,6 +472,28 @@ fn missing_marker_after_natural_exit_fails_with_recovered_output() {
     assert!(message.contains("not reached before process exit"));
     assert!(message.contains("scripted stdin was fully sent and closed (2 lines)"));
     assert!(message.contains("PROCESS EXITED WITHOUT MARKER"));
+}
+
+#[test]
+fn early_process_exit_reports_incomplete_stdin_write() {
+    let input = "x".repeat(16 * 1024 * 1024);
+    let result = std::panic::catch_unwind(|| {
+        run_until_stdout_marker(
+            &fixture_path("e2e_no_marker_exit.tbx"),
+            &input,
+            "EXPECTED READY MARKER",
+        )
+    });
+    let panic = result.expect_err("early child exit should fail an incomplete stdin write");
+    let message = panic
+        .downcast_ref::<String>()
+        .map(String::as_str)
+        .or_else(|| panic.downcast_ref::<&str>().copied())
+        .expect("failure should include a diagnostic");
+
+    assert!(message.contains("stdin write failed"));
+    assert!(message.contains("scripted stdin write did not complete"));
+    assert!(!message.contains("scripted stdin was fully sent and closed"));
 }
 
 #[test]
