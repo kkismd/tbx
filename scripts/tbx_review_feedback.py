@@ -16,6 +16,7 @@ from typing import Callable, Sequence
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 REQUIRED_CHECKS = ("cargo ci-clippy", "cargo ci-test", "cargo ci-fmt")
+MAX_CODEX_DIAGNOSTIC_CHARS = 2_000
 RECORD_MARKER = "<!-- tbx-w01-review-feedback-record:v1 -->"
 FEEDBACK_KINDS = ("issue-comment", "review", "review-comment")
 ID_RE = re.compile(r"^(issue-comment|review|review-comment):([1-9][0-9]*)$")
@@ -252,14 +253,16 @@ class ReviewFeedbackWorkflow:
             schema_path.write_text(json.dumps(RESULT_SCHEMA), encoding="utf-8")
             result = self.run(("codex", "exec", "--json", "--output-schema", str(schema_path), "--output-last-message", str(result_path), "-C", str(REPO_ROOT), "-"), input_text=prompt)
             if result.returncode:
-                raise WorkflowError("codex", result.stderr.strip() or "Codex failed")
+                detail = result.stderr.strip() or result.stdout.strip() or f"exit code {result.returncode}"
+                raise WorkflowError("codex", detail[-MAX_CODEX_DIAGNOSTIC_CHARS:])
             try:
                 codex = json.loads(result_path.read_text(encoding="utf-8"))
             except (OSError, json.JSONDecodeError) as error:
                 raise WorkflowError("codex", f"missing or invalid structured result: {error}") from error
-        if not isinstance(codex, dict) or codex.get("status") != "success":
+        if not isinstance(codex, dict) or codex.get("status") not in ("success", "human_review_required"):
             status = codex.get("status") if isinstance(codex, dict) else None
-            raise WorkflowError("human_review" if status == "human_review_required" else "codex", "Codex did not complete successfully", human=status == "human_review_required")
+            raise WorkflowError("codex", "Codex did not complete successfully")
+        human_review = codex["status"] == "human_review_required"
         if not isinstance(codex.get("summary"), str) or not codex["summary"].strip():
             raise WorkflowError("codex", "Codex result is missing its summary")
         expected_revisions = set(snapshot["candidate_revisions"])
@@ -271,24 +274,30 @@ class ReviewFeedbackWorkflow:
         modified = codex.get("modified_messages")
         if not isinstance(modified, list) or not set(modified).issubset(expected_revisions):
             raise WorkflowError("codex", "Codex reported invalid modified message revisions")
+        allowed_results = {"human_review_required"} if human_review else {"fixed", "no_change"}
+        if any(row.get("result") not in allowed_results for row in results):
+            raise WorkflowError("codex", "Codex candidate results do not match the overall status")
         fixed = {row["revision"] for row in results if row["result"] == "fixed"}
         if len(set(modified)) != len(modified) or set(modified) != fixed:
             raise WorkflowError("codex", "fixed feedback and modified message revisions do not match")
         checks = codex.get("checks_passed")
         commit = codex.get("commit_sha")
-        if modified:
+        if human_review:
+            if modified or checks or commit is not None:
+                raise WorkflowError("codex", "human review results must not report changes, checks, or a commit")
+        elif modified:
             if checks != list(REQUIRED_CHECKS) or not isinstance(commit, str):
                 raise WorkflowError("verification", "modified feedback requires all checks and a commit SHA")
             self.verify_commit(pr["headRefName"], start_sha, commit, {message_key(m) for m in candidates if message_revision(m) in modified})
         elif commit is not None or checks:
             raise WorkflowError("codex", "no-change results must not report a commit or checks")
-        response = {"status": "success", "summary": codex.get("summary", ""), "results": results, "modified_messages": modified, "checks_passed": checks, "commit_sha": commit, "snapshot": snapshot}
+        response = {"status": "human_review_required" if human_review else "success", "summary": codex.get("summary", ""), "results": results, "modified_messages": modified, "checks_passed": checks, "commit_sha": commit, "snapshot": snapshot}
         if modified:
             self.command("push", ("git", "push", "origin", pr["headRefName"]))
         record = {"start_head_sha": start_sha, "head_sha": commit or start_sha, "results": results}
         body = "W01 PRフィードバック処理記録\n\n" + "\n".join(
             f"- `{row['revision']}`: {row['result']} — {row['reason']}" for row in results
-        ) + f"\n\n処理後head: `{record['head_sha']}`\n検証: {', '.join(checks) if checks else '変更なしのため未実行'}\n\n{RECORD_MARKER}\n" + json.dumps(record, ensure_ascii=False)
+        ) + f"\n\n状態: {response['status']}\n理由: {codex.get('summary', '')}\n確認時head: `{start_sha}`\n処理後head: `{record['head_sha']}`\n検証: {', '.join(checks) if checks else '未実行'}\n\n{RECORD_MARKER}\n" + json.dumps(record, ensure_ascii=False)
         self.command("record", ("gh", "pr", "comment", str(number), "--body", body))
         response.pop("snapshot")
         return response
@@ -319,7 +328,7 @@ Snapshot:
 
 RESULT_SCHEMA = {"type": "object", "additionalProperties": False, "required": ["status", "summary", "results", "modified_messages", "checks_passed", "commit_sha"], "properties": {
     "status": {"type": "string", "enum": ["success", "failed", "human_review_required"]}, "summary": {"type": "string"},
-    "results": {"type": "array", "items": {"type": "object", "required": ["revision", "result", "reason"], "properties": {"revision": {"type": "string"}, "result": {"type": "string", "enum": ["fixed", "no_change"]}, "reason": {"type": "string"}}}},
+    "results": {"type": "array", "items": {"type": "object", "required": ["revision", "result", "reason"], "properties": {"revision": {"type": "string"}, "result": {"type": "string", "enum": ["fixed", "no_change", "human_review_required"]}, "reason": {"type": "string"}}}},
     "modified_messages": {"type": "array", "items": {"type": "string"}}, "checks_passed": {"type": "array", "items": {"type": "string", "enum": list(REQUIRED_CHECKS)}}, "commit_sha": {"type": ["string", "null"]}}}
 
 
@@ -334,7 +343,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(json.dumps({"status": status, "phase": error.phase, "error": str(error)}, ensure_ascii=False))
         return 1
     print(json.dumps(result, ensure_ascii=False))
-    return 0
+    return 2 if result["status"] == "human_review_required" else 0
 
 
 if __name__ == "__main__":
