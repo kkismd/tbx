@@ -173,6 +173,42 @@ mod tests {
     }
 
     #[test]
+    fn strict_input_exhaustion_fails_a_followup_input_question() {
+        let mut primitives = PrimitiveRegistry::new();
+        let mut words = PublishedWords::new();
+        let mut bindings = Bindings::new();
+        let input_words = register_input_primitives(&mut primitives, &mut words, &mut bindings)
+            .expect("INPUT? should bootstrap");
+        let mut code = InstructionSequence::new();
+        let entry = code.append(Instruction::Call(input_words.input_question()));
+        code.append(Instruction::Call(input_words.input_question()));
+        code.append(Instruction::Halt);
+        let mut vm = Vm::new(code.view(), entry).expect("entry should be valid");
+        let mut input = TestInput::strict([Ok(Some("42".into()))]);
+        let execution = ExecutionView::new(
+            code.view(),
+            PublishedWordLookup::new(&words),
+            primitives.lookup(),
+        )
+        .with_input(&mut input);
+
+        let error = vm
+            .run(execution)
+            .expect_err("an unexpected followup INPUT? should fail");
+        assert!(matches!(
+            error.kind(),
+            VmErrorKind::PrimitiveFailed {
+                source: PrimitiveError::InputFailed {
+                    source: RuntimeInputError::Failed
+                },
+                ..
+            }
+        ));
+        assert_eq!(vm.pop_data(), Ok(Value::integer(1)));
+        assert_eq!(vm.pop_data(), Ok(Value::integer(42)));
+    }
+
+    #[test]
     fn input_failure_and_missing_capability_do_not_change_the_stack() {
         let mut primitives = PrimitiveRegistry::new();
         let mut words = PublishedWords::new();
