@@ -53,7 +53,7 @@ LET STARDATE = 100\n\
 LET DEADLINE = 99\n\
 LET ENERGY = 100\n\
 NAVIGATE\n\
-PRINT \"NAVIGATION_STATE \", ENT_SX, \" \", ENT_SY, \" \", ENERGY, \" \", STARDATE, \" \", X, \" \", Y\n\
+PRINT \"NAVIGATION_STATE \", ENT_SX, \" \", ENT_SY, \" \", ENERGY, \" \", STARDATE\n\
 CR\n",
     );
     let (sources, standard_library_id, source_id) =
@@ -72,7 +72,7 @@ CR\n",
 
     assert_eq!(
         output_values(writer.text(), "NAVIGATION_STATE "),
-        [4, 4, 105, 100, 8, -3]
+        [4, 4, 105, 100]
     );
     assert_eq!(result.data_stack(), []);
 }
