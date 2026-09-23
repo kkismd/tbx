@@ -21,3 +21,13 @@ workflow境界のテストは、次のコマンドで実行できます。
 ```sh
 python3 -m unittest discover -s tests -p 'test_issue_workflow.py'
 ```
+
+## 既存PRのフィードバックを1回処理する
+
+`python3 scripts/tbx_review_feedback.py PR_NUMBER` は、openかつ未mergeのPRに対してフィードバックを1回処理します。親workflowがPR本文・差分・conversation comment・review・inline comment・review thread・head SHAを取得し、実行開始時点の候補を固定してCodexへ渡します。threadのresolved/outdated状態は文脈として渡し、単独で処理済み判定には使いません。
+
+起動前に、現在のbranchがPRのhead branchと一致し、worktreeがcleanで進行中のGit操作がなく、HEADがPR head SHAと一致することを確認します。不一致時はCodexを起動せず停止します。未処理候補がなければ変更・commit・pushを行いません。
+
+W01の処理記録は機械可読marker付きのPR commentとして投稿します。修正commitには修正対象だけの `Review-Feedback: <kind>:<id>` trailerを含め、Codex終了後に親workflowがbranch、HEAD、worktree、開始時headの祖先関係、trailerを検証してからpushします。push後に処理記録投稿が失敗してもcommitは巻き戻さず、次回はGit履歴のtrailerを使って同じmessage revisionへの重複修正を防ぎます。
+
+変更不要の場合もcommitせずPR処理記録を投稿します。仕様衝突や判断不足など人間判断が必要な場合は、Codexが人間判断待ちで停止します。PR mergeとissue closeは行いません。
