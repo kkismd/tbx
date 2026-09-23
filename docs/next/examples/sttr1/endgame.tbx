@@ -52,26 +52,28 @@ DEF CHECK_ENDGAME
       IF GAME_RESULT = 1
         # Add one 1000-point contribution at a time so no product exceeds i16.
         LET EFFICIENCY = 0
-        LET EFFICIENCY_INDEX = 1
-        LET EFFICIENCY_REMAINDER = 0
-        LET EFFICIENCY_CAPPED = 0
-        WHILE EFFICIENCY_INDEX <= KLINGONS_INITIAL AND EFFICIENCY_CAPPED = 0
+        # I/J/K/L are the short-lived efficiency index, remainder, increment,
+        # and cap flag.
+        LET I = 1
+        LET J = 0
+        LET L = 0
+        WHILE I <= KLINGONS_INITIAL AND L = 0
           # Avoid remainder + 1000 overflow when elapsed is near i16::MAX.
-          IF ELAPSED > 1000 AND EFFICIENCY_REMAINDER >= ELAPSED - 1000
-            LET EFFICIENCY_REMAINDER = EFFICIENCY_REMAINDER - ELAPSED + 1000
-            LET EFFICIENCY_INCREMENT = 1
+          IF ELAPSED > 1000 AND J >= ELAPSED - 1000
+            LET J = J - ELAPSED + 1000
+            LET K = 1
           ELSE
-            LET EFFICIENCY_REMAINDER = EFFICIENCY_REMAINDER + 1000
-            LET EFFICIENCY_INCREMENT = EFFICIENCY_REMAINDER / ELAPSED
-            LET EFFICIENCY_REMAINDER = EFFICIENCY_REMAINDER % ELAPSED
+            LET J = J + 1000
+            LET K = J / ELAPSED
+            LET J = J % ELAPSED
           ENDIF
-          IF EFFICIENCY > 32767 - EFFICIENCY_INCREMENT
+          IF EFFICIENCY > 32767 - K
             LET EFFICIENCY = 32767
-            LET EFFICIENCY_CAPPED = 1
+            LET L = 1
           ELSE
-            LET EFFICIENCY = EFFICIENCY + EFFICIENCY_INCREMENT
+            LET EFFICIENCY = EFFICIENCY + K
           ENDIF
-          LET EFFICIENCY_INDEX = EFFICIENCY_INDEX + 1
+          LET I = I + 1
         ENDWH
       ELSE
         LET EFFICIENCY = 0

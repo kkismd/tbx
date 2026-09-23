@@ -712,7 +712,7 @@ LET TORPEDOES = 2\n\
 LET SHIELDS = 1\n\
 LET DOCKED = 0\n\
 PHOTON_TORPEDO\n\
-PRINT \"TORPEDO_STAR_STATE \", TORPEDOES, \" \", @SECTOR[22], \" \", STARS_HERE, \" \", @GALAXY[1], \" \", DIRECTION_X, \" \", DIRECTION_Y, \" \", SHIELDS\n\
+PRINT \"TORPEDO_STAR_STATE \", TORPEDOES, \" \", @SECTOR[22], \" \", STARS_HERE, \" \", @GALAXY[1], \" \", SHIELDS\n\
 CR\n",
     );
     let (sources, standard_library_id, source_id) =
@@ -730,8 +730,7 @@ CR\n",
     ));
 
     let state = output_values(writer.text(), "TORPEDO_STAR_STATE ");
-    assert_eq!(state[0..6], [1, 4, 1, 101, 8, -3]);
-    assert!(state[6] < 0);
+    assert_eq!(state, [1, 4, 1, 101, -50]);
     assert!(writer
         .text()
         .contains("PHOTON TORPEDO HIT STAR AT SECTOR 6,3"));
