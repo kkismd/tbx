@@ -331,6 +331,118 @@ CR\n",
 }
 
 #[test]
+fn sttr1_navigation_updates_condition_after_entering_klingon_quadrant_without_scan() {
+    let mut source = std::fs::read_to_string(example_path("sttr1/main.tbx"))
+        .expect("STTR1 example should be readable");
+    source.push_str(
+        "LET ENT_QX = 1\n\
+LET ENT_QY = 1\n\
+LET ENT_SX = 8\n\
+LET ENT_SY = 4\n\
+LET @GALAXY[1] = 0\n\
+LET @GALAXY[2] = 100\n\
+LET @GALAXY[3] = 0\n\
+INIT_QUADRANT\n\
+LET ENERGY = 3000\n\
+NAVIGATE\n\
+PRINT \"NAVIGATION_STATE \", ENT_QX, \" \", ENT_QY, \" \", KLINGONS_HERE, \" \", CONDITION\n\
+CR\n\
+LET ENERGY = 100\n\
+NAVIGATE\n\
+PRINT \"SAFE_NAVIGATION_STATE \", ENT_QX, \" \", ENT_QY, \" \", KLINGONS_HERE, \" \", CONDITION\n\
+CR\n",
+    );
+    let (sources, standard_library_id, source_id) =
+        sttr1_sources_with_standard_library(STDLIB_SOURCE, &source);
+    let mut input = TestInput::new([
+        Ok(Some("10".to_owned())),
+        Ok(Some("10".to_owned())),
+        Ok(Some("10".to_owned())),
+        Ok(Some("10".to_owned())),
+    ]);
+    let mut writer = RecordingWriter::default();
+
+    let result = success(execute_registered_sources_with_filesystem_and_seed(
+        sources,
+        standard_library_id,
+        source_id,
+        &mut writer,
+        Some(&mut input),
+        30,
+    ));
+
+    assert_eq!(
+        output_values(writer.text(), "NAVIGATION_STATE "),
+        [2, 1, 1, 2]
+    );
+    assert_eq!(
+        output_values(writer.text(), "SAFE_NAVIGATION_STATE "),
+        [3, 1, 0, 1]
+    );
+    assert_eq!(writer.text().matches("SHORT RANGE SCAN").count(), 1);
+    assert_eq!(result.data_stack(), []);
+}
+
+#[test]
+fn sttr1_navigation_updates_condition_and_docking_after_same_quadrant_move() {
+    let mut source = std::fs::read_to_string(example_path("sttr1/main.tbx"))
+        .expect("STTR1 example should be readable");
+    source.push_str(
+        "LET ENT_QX = 1\n\
+LET ENT_QY = 1\n\
+LET ENT_SX = 4\n\
+LET ENT_SY = 4\n\
+LET @GALAXY[1] = 0\n\
+INIT_QUADRANT\n\
+LET SECTOR_INDEX = 1\n\
+WHILE SECTOR_INDEX <= 64\n\
+  LET @SECTOR[SECTOR_INDEX] = 0\n\
+  LET SECTOR_INDEX = SECTOR_INDEX + 1\n\
+ENDWH\n\
+LET @SECTOR[28] = 1\n\
+LET @SECTOR[30] = 3\n\
+LET KLINGONS_HERE = 0\n\
+LET ENERGY = 123\n\
+LET TORPEDOES = 2\n\
+LET SHIELDS = 77\n\
+NAVIGATE\n\
+PRINT \"NAVIGATION_STATE \", ENT_SX, \" \", ENT_SY, \" \", DOCKED, \" \", ENERGY, \" \", TORPEDOES, \" \", SHIELDS, \" \", CONDITION\n\
+CR\n\
+LET @SECTOR[37] = 2\n\
+LET @KLINGON_X[1] = 5\n\
+LET @KLINGON_Y[1] = 5\n\
+LET @KLINGON_E[1] = 200\n\
+LET KLINGONS_HERE = 1\n\
+KLINGON_ATTACK\n\
+PRINT \"DOCKED_ATTACK_STATE \", DOCKED, \" \", SHIELDS, \" \", @KLINGON_E[1]\n\
+CR\n",
+    );
+    let (sources, standard_library_id, source_id) =
+        sttr1_sources_with_standard_library(STDLIB_SOURCE, &source);
+    let mut input = TestInput::new([Ok(Some("10".to_owned())), Ok(Some("10".to_owned()))]);
+    let mut writer = RecordingWriter::default();
+
+    let result = success(execute_registered_sources_with_filesystem_and_seed(
+        sources,
+        standard_library_id,
+        source_id,
+        &mut writer,
+        Some(&mut input),
+        30,
+    ));
+
+    assert_eq!(
+        output_values(writer.text(), "NAVIGATION_STATE "),
+        [5, 4, 1, 3000, 10, 0, 3]
+    );
+    assert_eq!(
+        output_values(writer.text(), "DOCKED_ATTACK_STATE "),
+        [1, 0, 200]
+    );
+    assert_eq!(result.data_stack(), []);
+}
+
+#[test]
 fn sttr1_invalid_and_cancel_navigation_preserve_damage_and_rng() {
     let setup = "LET ENT_QX = 1\n\
 LET ENT_QY = 1\n\
@@ -338,6 +450,18 @@ LET ENT_SX = 4\n\
 LET ENT_SY = 4\n\
 LET @GALAXY[1] = 0\n\
 INIT_QUADRANT\n\
+LET SECTOR_INDEX = 1\n\
+WHILE SECTOR_INDEX <= 64\n\
+  LET @SECTOR[SECTOR_INDEX] = 0\n\
+  LET SECTOR_INDEX = SECTOR_INDEX + 1\n\
+ENDWH\n\
+LET @SECTOR[28] = 1\n\
+LET @SECTOR[29] = 3\n\
+LET DOCKED = 0\n\
+LET CONDITION = 2\n\
+LET ENERGY = 123\n\
+LET TORPEDOES = 2\n\
+LET SHIELDS = 77\n\
 LET @DAMAGE[1] = -100\n\
 ";
     let mut navigation_source = std::fs::read_to_string(example_path("sttr1/main.tbx"))
@@ -347,6 +471,9 @@ LET @DAMAGE[1] = -100\n\
         "NAVIGATE\n\
 PRINT \"DAMAGE_AFTER_INVALID_CANCEL \"\n\
 PRINT @DAMAGE[1]\n\
+CR\n\
+PRINT \"SHIP_STATE_AFTER_INVALID_CANCEL \"\n\
+PRINT DOCKED, \" \", CONDITION, \" \", ENERGY, \" \", TORPEDOES, \" \", SHIELDS\n\
 CR\n\
 PRINT \"RNG_AFTER_INVALID_CANCEL \"\n\
 PRINT RND(100)\n\
@@ -372,6 +499,9 @@ CR\n",
         "PRINT \"DAMAGE_CONTROL \"\n\
 PRINT @DAMAGE[1]\n\
 CR\n\
+PRINT \"SHIP_STATE_CONTROL \"\n\
+PRINT DOCKED, \" \", CONDITION, \" \", ENERGY, \" \", TORPEDOES, \" \", SHIELDS\n\
+CR\n\
 PRINT \"RNG_CONTROL \"\n\
 PRINT RND(100)\n\
 CR\n",
@@ -391,6 +521,14 @@ CR\n",
     assert_eq!(
         output_values(writer.text(), "DAMAGE_AFTER_INVALID_CANCEL "),
         [-100]
+    );
+    assert_eq!(
+        output_values(writer.text(), "SHIP_STATE_AFTER_INVALID_CANCEL "),
+        [0, 2, 123, 2, 77]
+    );
+    assert_eq!(
+        output_values(control_writer.text(), "SHIP_STATE_CONTROL "),
+        [0, 2, 123, 2, 77]
     );
     assert_eq!(
         output_values(writer.text(), "RNG_AFTER_INVALID_CANCEL "),
