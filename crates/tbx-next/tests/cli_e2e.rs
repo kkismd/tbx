@@ -109,8 +109,20 @@ fn run_with_stdin(source: &str) -> Output {
 }
 
 fn run_until_stdout_marker(path: &Path, input: &str, marker: &str) -> Output {
+    run_until_nth_stdout_marker_with_args(&[], path, input, marker, 1)
+}
+
+fn run_until_nth_stdout_marker_with_args(
+    args: &[&str],
+    path: &Path,
+    input: &str,
+    marker: &str,
+    occurrence: usize,
+) -> Output {
     assert!(!marker.is_empty(), "stdout marker must not be empty");
+    assert!(occurrence > 0, "stdout marker occurrence must be positive");
     let child = Command::new(tbx_next_bin())
+        .args(args)
         .arg(path)
         .current_dir(fixture_directory())
         .stdin(Stdio::piped())
@@ -122,8 +134,8 @@ fn run_until_stdout_marker(path: &Path, input: &str, marker: &str) -> Output {
     let captured = run_child(
         child,
         input,
-        Some(marker.as_bytes()),
-        &format!("stdout marker {marker:?}"),
+        Some((marker.as_bytes(), occurrence)),
+        &format!("stdout marker {marker:?} occurrence {occurrence}"),
         input.lines().count(),
     );
     captured.output
@@ -132,7 +144,7 @@ fn run_until_stdout_marker(path: &Path, input: &str, marker: &str) -> Output {
 fn run_child(
     child: Child,
     input: &str,
-    marker: Option<&[u8]>,
+    marker: Option<(&[u8], usize)>,
     expectation: &str,
     input_lines: usize,
 ) -> CapturedProcess {
@@ -149,7 +161,7 @@ fn run_child(
 fn run_child_with_timeout(
     mut child: Child,
     input: &str,
-    marker: Option<&[u8]>,
+    marker: Option<(&[u8], usize)>,
     expectation: &str,
     input_lines: usize,
     timeout: Duration,
@@ -186,11 +198,14 @@ fn run_child_with_timeout(
             &mut stderr_done,
             &mut overflow,
         );
-        if let Some(expected) = marker {
+        if let Some((expected, occurrence)) = marker {
             if output
                 .stdout
                 .windows(expected.len())
-                .any(|window| window == expected)
+                .filter(|window| *window == expected)
+                .take(occurrence)
+                .count()
+                == occurrence
             {
                 marker_reached = true;
                 stop_reason = Some("marker reached".to_owned());
@@ -542,7 +557,7 @@ fn marker_helper_times_out_when_process_stays_alive_without_marker() {
         run_child_with_timeout(
             child,
             "",
-            Some(b"EXPECTED READY MARKER"),
+            Some((b"EXPECTED READY MARKER", 1)),
             "stdout marker",
             0,
             Duration::from_millis(250),
@@ -573,7 +588,7 @@ fn excessive_interactive_output_is_bounded_and_stopped() {
         run_child_with_timeout(
             child,
             "",
-            Some(b"NEVER EMITTED MARKER"),
+            Some((b"NEVER EMITTED MARKER", 1)),
             "stdout marker",
             0,
             Duration::from_secs(3),
@@ -905,6 +920,38 @@ COMMAND (0 NAV, 1 SCAN, 2-7 REPORTS, 9 QUIT):\n\
 POC COMPLETE\n\
 DATA STACK END: 0\n"
     );
+    assert_eq!(stderr_text(&output), "");
+}
+
+#[test]
+fn seeded_sttr1_entry_point_returns_to_command_after_the_normal_trace() {
+    let output = run_until_nth_stdout_marker_with_args(
+        &["--seed", "42"],
+        &example_path("sttr1/main.tbx"),
+        "1\n2\n6\n7\n1\n",
+        "COMMAND (0-7):",
+        5,
+    );
+    let stdout = stdout_text(&output);
+
+    assert!(stdout.contains("STAR TREK MISSION"), "{stdout}");
+    assert!(stdout.contains("DEADLINE "), "{stdout}");
+    assert!(stdout.contains("KLINGONS "), "{stdout}");
+    assert!(stdout.contains("STARBASES "), "{stdout}");
+    assert!(stdout.contains("COMMANDS (0-7)"), "{stdout}");
+    assert!(stdout.contains("SHORT RANGE SCAN"), "{stdout}");
+    assert!(stdout.contains("LONG RANGE SCAN"), "{stdout}");
+    assert!(stdout.contains("DAMAGE REPORT"), "{stdout}");
+    assert!(
+        stdout.contains("COMPUTER OPTION (0 CHART, 1 STATUS, 2 KLINGONS):"),
+        "{stdout}"
+    );
+    assert!(stdout.contains("KLINGONS_LEFT "), "{stdout}");
+    assert!(stdout.contains("DEADLINE - STARDATE "), "{stdout}");
+    assert!(stdout.contains("BASES_LEFT "), "{stdout}");
+    assert!(stdout.matches("COMMAND (0-7):").count() >= 5, "{stdout}");
+    // Reaching the fifth prompt is the success condition; the game remains interactive.
+    assert!(!output.status.success());
     assert_eq!(stderr_text(&output), "");
 }
 
