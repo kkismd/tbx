@@ -129,6 +129,8 @@ class IssueWorkflow:
         comments = issue.get("comments")
         if not isinstance(body, str) or not isinstance(comments, list):
             raise WorkflowError("issue_fetch", "issue response is missing its body or comments")
+        if "**種別: 実装**" not in body:
+            raise WorkflowError("issue_validation", "issue body must contain the explicit kind marker **種別: 実装**")
 
         linked_issues: dict[str, dict] = {}
         linked_prs: dict[str, dict] = {}

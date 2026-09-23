@@ -9,19 +9,39 @@ import tbx_implement
 
 
 class FakeWorkflow(tbx_implement.IssueWorkflow):
-    def __init__(self, *, codex_status="success", checks=None, codex_exit=0, push_fails=False, pr_fails=False):
+    def __init__(
+        self, *, codex_status="success", checks=None, codex_exit=0, push_fails=False, pr_fails=False,
+        issue_state="OPEN", issue_kind="実装", issue_body=None, returned_issue_number=1917,
+        issue_fetch_fails=False,
+    ):
         self.calls = []
         self.codex_status = codex_status
         self.checks = list(tbx_implement.REQUIRED_CHECKS) if checks is None else checks
         self.codex_exit = codex_exit
         self.push_fails = push_fails
         self.pr_fails = pr_fails
+        self.issue_state = issue_state
+        self.issue_body = issue_body if issue_body is not None else f"**種別: {issue_kind}**"
+        self.returned_issue_number = returned_issue_number
+        self.issue_fetch_fails = issue_fetch_fails
         self.branch = "main"
         super().__init__(self.fake_run)
 
     def fake_run(self, args, **kwargs):
         args = tuple(args)
         self.calls.append(args)
+        if args[:3] == ("gh", "issue", "view"):
+            if self.issue_fetch_fails:
+                return tbx_implement.CommandResult(1, "", "issue unavailable")
+            issue = {
+                "number": self.returned_issue_number,
+                "title": "Work item",
+                "body": self.issue_body,
+                "state": self.issue_state,
+                "url": "https://github.com/kkismd/tbx/issues/1917",
+                "comments": [],
+            }
+            return tbx_implement.CommandResult(0, json.dumps(issue))
         if args[:3] == ("git", "show-ref", "--verify"):
             return tbx_implement.CommandResult(1, "")
         if args[:3] == ("git", "switch", "-c"):
@@ -50,10 +70,6 @@ class FakeWorkflow(tbx_implement.IssueWorkflow):
     def preflight(self):
         self.calls.append(("preflight",))
         return "base-sha"
-
-    def fetch_issue(self, number):
-        self.calls.append(("fetch-issue", number))
-        return ({"number": number, "title": "Work item"}, {}, {})
 
     def verify_commit(self, branch, start_sha, reported_sha):
         self.calls.append(("verify-commit", branch, start_sha, reported_sha))
@@ -188,19 +204,39 @@ class IssueWorkflowTests(unittest.TestCase):
         self.assertTrue(any(call[:3] == ("git", "push", "--set-upstream") for call in workflow.calls))
 
     def test_issue_fetch_failure_does_not_create_branch(self):
-        class FetchFailure(FakeWorkflow):
-            def fetch_issue(self, number):
-                raise tbx_implement.WorkflowError("issue_fetch", "unavailable")
-
-        workflow = FetchFailure()
+        workflow = FakeWorkflow(issue_fetch_fails=True)
         with self.assertRaises(tbx_implement.WorkflowError):
             workflow.run_issue(1917)
+        self.assert_no_later_side_effects(workflow)
+
+    def test_only_open_implementation_issue_is_accepted_before_side_effects(self):
+        rejected_inputs = (
+            {"issue_kind": "ADR"},
+            {"issue_kind": "調査・計画"},
+            {"issue_body": "種別表示なし"},
+            {"issue_state": "CLOSED"},
+            {"returned_issue_number": 9999},
+        )
+        for options in rejected_inputs:
+            with self.subTest(options=options):
+                workflow = FakeWorkflow(**options)
+                with self.assertRaises(tbx_implement.WorkflowError):
+                    workflow.run_issue(1917)
+                self.assert_no_later_side_effects(workflow)
+
+        accepted = FakeWorkflow(issue_state="OPEN", issue_kind="実装")
+        self.assertEqual(accepted.run_issue(1917)["status"], "success")
+
+    def assert_no_later_side_effects(self, workflow):
         self.assertFalse(any(call[:3] == ("git", "switch", "-c") for call in workflow.calls))
+        self.assertFalse(any(call[:2] == ("codex", "exec") for call in workflow.calls))
+        self.assertFalse(any(call[:2] == ("git", "push") for call in workflow.calls))
+        self.assertFalse(any(call[:3] == ("gh", "pr", "create") for call in workflow.calls))
 
     def test_linked_issues_and_prs_are_fetched_separately(self):
         workflow = tbx_implement.IssueWorkflow()
         responses = iter([
-            {"number": 1917, "title": "Implement", "body": "See #1916 and PR #1908", "state": "OPEN", "url": "", "comments": []},
+            {"number": 1917, "title": "Implement", "body": "**種別: 実装**\nSee #1916 and PR #1908", "state": "OPEN", "url": "", "comments": []},
             {"number": 1908, "title": "Prior PR"},
             {"number": 1916, "title": "ADR"},
         ])
