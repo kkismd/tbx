@@ -53,6 +53,14 @@ impl<R: BufRead> RuntimeInput for BufReadRuntimeInput<R> {
 pub(crate) struct TestInput {
     lines: Vec<Result<Option<String>, RuntimeInputError>>,
     next: usize,
+    exhausted: TestInputExhaustion,
+}
+
+#[cfg(test)]
+#[derive(Debug, Clone, Copy)]
+enum TestInputExhaustion {
+    Eof,
+    Failure,
 }
 
 #[cfg(test)]
@@ -63,6 +71,18 @@ impl TestInput {
         Self {
             lines: lines.into_iter().collect(),
             next: 0,
+            exhausted: TestInputExhaustion::Eof,
+        }
+    }
+
+    /// Fails with a runtime input error when a test reads beyond its scripted input.
+    pub(crate) fn strict(
+        lines: impl IntoIterator<Item = Result<Option<String>, RuntimeInputError>>,
+    ) -> Self {
+        Self {
+            lines: lines.into_iter().collect(),
+            next: 0,
+            exhausted: TestInputExhaustion::Failure,
         }
     }
 }
@@ -70,8 +90,16 @@ impl TestInput {
 #[cfg(test)]
 impl RuntimeInput for TestInput {
     fn read_line(&mut self) -> Result<Option<String>, RuntimeInputError> {
-        let result = self.lines.get(self.next).cloned().unwrap_or(Ok(None));
-        self.next += 1;
+        let result = match self.lines.get(self.next).cloned() {
+            Some(result) => result,
+            None => match self.exhausted {
+                TestInputExhaustion::Eof => Ok(None),
+                TestInputExhaustion::Failure => Err(RuntimeInputError::Failed),
+            },
+        };
+        if self.next < self.lines.len() {
+            self.next += 1;
+        }
         result
     }
 }
@@ -87,5 +115,21 @@ mod tests {
         assert_eq!(input.read_line(), Ok(Some("42".into())));
         assert_eq!(input.read_line(), Ok(Some("-7".into())));
         assert_eq!(input.read_line(), Ok(None));
+    }
+
+    #[test]
+    fn test_input_defaults_to_repeated_eof_after_scripted_lines() {
+        let mut input = TestInput::new([Ok(Some("42".into()))]);
+        assert_eq!(input.read_line(), Ok(Some("42".into())));
+        assert_eq!(input.read_line(), Ok(None));
+        assert_eq!(input.read_line(), Ok(None));
+    }
+
+    #[test]
+    fn strict_test_input_fails_after_scripted_lines() {
+        let mut input = TestInput::strict([Ok(Some("42".into()))]);
+        assert_eq!(input.read_line(), Ok(Some("42".into())));
+        assert_eq!(input.read_line(), Err(RuntimeInputError::Failed));
+        assert_eq!(input.read_line(), Err(RuntimeInputError::Failed));
     }
 }
