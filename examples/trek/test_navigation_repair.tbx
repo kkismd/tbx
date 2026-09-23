@@ -11,6 +11,7 @@ USE "../../lib/tests/helper.tbx"
 DEF SET_POS(QX, QY, SX, SY)
   LET ENT_QX = QX
   LET ENT_QY = QY
+  LET KLINGONS_HERE = 0
   CLEAR_SECTOR
   LET ENT_SX = SX
   LET ENT_SY = SY
