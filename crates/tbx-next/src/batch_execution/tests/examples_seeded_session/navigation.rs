@@ -555,27 +555,36 @@ CR\n",
 
 #[test]
 fn sttr1_navigation_with_no_energy_and_shields_stops_for_dead_in_space_check() {
-    let mut source = std::fs::read_to_string(example_path("sttr1/main.tbx"))
-        .expect("STTR1 example should be readable");
-    source.push_str(
-        "LET ENT_QX = 1\n\
+    let source = std::fs::read_to_string(example_path("sttr1/main.tbx"))
+        .expect("STTR1 example should be readable")
+        .replacen(
+            "START_GAME",
+            "INIT_MISSION\n\
+LET ENT_QX = 1\n\
 LET ENT_QY = 1\n\
 LET ENT_SX = 4\n\
 LET ENT_SY = 4\n\
 LET @GALAXY[1] = 0\n\
 INIT_QUADRANT\n\
+LET KLINGONS_LEFT = 1\n\
 LET DOCKED = 0\n\
+LET @DAMAGE[8] = -1\n\
 LET ENERGY = 0\n\
 LET SHIELDS = 0\n\
 LET STARDATE = 100\n\
-NAVIGATE\n\
-CHECK_ENDGAME\n\
-PRINT \"DEAD_IN_SPACE_NAVIGATION_STATE \", ENT_SX, \" \", ENT_SY, \" \", ENERGY, \" \", STARDATE, \" \", GAME_RESULT, \" \", END_REASON\n\
+LET DEADLINE = 130\n\
+GAME_LOOP\n\
+PRINT \"DEAD_IN_SPACE_NAVIGATION_STATE \", ENT_SX, \" \", ENT_SY, \" \", ENERGY, \" \", STARDATE, \" \", GAME_RESULT, \" \", END_REASON, \" \", @DAMAGE[8]\n\
 CR\n",
-    );
+            1,
+        );
     let (sources, standard_library_id, source_id) =
         sttr1_sources_with_standard_library(STDLIB_SOURCE, &source);
-    let mut input = TestInput::new([Ok(Some("10".to_owned())), Ok(Some("10".to_owned()))]);
+    let mut input = TestInput::new([
+        Ok(Some("0".to_owned())),
+        Ok(Some("10".to_owned())),
+        Ok(Some("10".to_owned())),
+    ]);
     let mut writer = RecordingWriter::default();
 
     let result = success(execute_registered_sources_with_filesystem_and_seed(
@@ -589,9 +598,16 @@ CR\n",
 
     assert_eq!(
         output_values(writer.text(), "DEAD_IN_SPACE_NAVIGATION_STATE "),
-        [4, 4, 0, 100, 2, 3]
+        [4, 4, 0, 100, 2, 3, -1]
     );
     assert!(writer.text().contains("REASON DEAD-IN-SPACE"));
+    assert!(writer.text().contains("MISSION SUMMARY"));
+    assert_eq!(
+        writer.text().matches("COURSE (0 CANCEL, 10-89):").count(),
+        1
+    );
+    assert_eq!(writer.text().matches("WARP (0-80):").count(), 1);
+    assert_eq!(writer.text().matches("COMMAND (0-7):").count(), 1);
     assert_eq!(result.data_stack(), []);
 }
 
