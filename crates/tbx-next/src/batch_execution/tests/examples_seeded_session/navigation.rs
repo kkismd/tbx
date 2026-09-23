@@ -433,6 +433,157 @@ CR\n",
 }
 
 #[test]
+fn sttr1_navigation_without_klingons_consumes_no_retaliation_rng() {
+    let setup = "LET ENT_QX = 1\n\
+LET ENT_QY = 1\n\
+LET ENT_SX = 4\n\
+LET ENT_SY = 4\n\
+LET @GALAXY[1] = 0\n\
+INIT_QUADRANT\n\
+LET DOCKED = 0\n\
+LET DEVICE_INDEX = 1\n\
+WHILE DEVICE_INDEX <= 8\n\
+  LET @DAMAGE[DEVICE_INDEX] = 0\n\
+  LET DEVICE_INDEX = DEVICE_INDEX + 1\n\
+ENDWH\n\
+";
+    let mut navigation_source = std::fs::read_to_string(example_path("sttr1/main.tbx"))
+        .expect("STTR1 example should be readable");
+    navigation_source.push_str(setup);
+    navigation_source.push_str(
+        "NAVIGATE\n\
+PRINT \"RNG_AFTER_EMPTY_NAVIGATION \"\n\
+PRINT RND(100), \" \", RND(100), \" \", RND(100)\n\
+CR\n",
+    );
+    let (sources, standard_library_id, source_id) =
+        sttr1_sources_with_standard_library(STDLIB_SOURCE, &navigation_source);
+    let mut input = TestInput::new([Ok(Some("10".to_owned())), Ok(Some("0".to_owned()))]);
+    let mut writer = RecordingWriter::default();
+    let navigation_result = success(execute_registered_sources_with_filesystem_and_seed(
+        sources,
+        standard_library_id,
+        source_id,
+        &mut writer,
+        Some(&mut input),
+        30,
+    ));
+
+    let mut control_source = std::fs::read_to_string(example_path("sttr1/main.tbx"))
+        .expect("STTR1 example should be readable");
+    control_source.push_str(setup);
+    control_source.push_str(
+        "NAVIGATION_DEVICE_EVENTS\n\
+PRINT \"RNG_EMPTY_NAVIGATION_CONTROL \"\n\
+PRINT RND(100), \" \", RND(100), \" \", RND(100)\n\
+CR\n",
+    );
+    let (control_sources, control_standard_library_id, control_source_id) =
+        sttr1_sources_with_standard_library(STDLIB_SOURCE, &control_source);
+    let mut control_writer = RecordingWriter::default();
+    let control_result = success(execute_registered_sources_with_filesystem_and_seed(
+        control_sources,
+        control_standard_library_id,
+        control_source_id,
+        &mut control_writer,
+        None,
+        30,
+    ));
+
+    assert_eq!(
+        output_values(writer.text(), "RNG_AFTER_EMPTY_NAVIGATION "),
+        output_values(control_writer.text(), "RNG_EMPTY_NAVIGATION_CONTROL ")
+    );
+    assert_eq!(navigation_result.data_stack(), []);
+    assert_eq!(control_result.data_stack(), []);
+}
+
+#[test]
+fn sttr1_docked_navigation_preserves_shields_and_retaliation_rng_while_moving() {
+    let setup = "LET ENT_QX = 1\n\
+LET ENT_QY = 1\n\
+LET ENT_SX = 4\n\
+LET ENT_SY = 4\n\
+LET @GALAXY[1] = 0\n\
+INIT_QUADRANT\n\
+LET SECTOR_INDEX = 1\n\
+WHILE SECTOR_INDEX <= 64\n\
+  LET @SECTOR[SECTOR_INDEX] = 0\n\
+  LET SECTOR_INDEX = SECTOR_INDEX + 1\n\
+ENDWH\n\
+LET @SECTOR[64] = 2\n\
+LET KLINGONS_HERE = 1\n\
+LET @KLINGON_X[1] = 8\n\
+LET @KLINGON_Y[1] = 8\n\
+LET @KLINGON_E[1] = 200\n\
+LET DOCKED = 1\n\
+LET SHIELDS = 77\n\
+LET DEVICE_INDEX = 1\n\
+WHILE DEVICE_INDEX <= 8\n\
+  LET @DAMAGE[DEVICE_INDEX] = 0\n\
+  LET DEVICE_INDEX = DEVICE_INDEX + 1\n\
+ENDWH\n\
+";
+    let mut navigation_source = std::fs::read_to_string(example_path("sttr1/main.tbx"))
+        .expect("STTR1 example should be readable");
+    navigation_source.push_str(setup);
+    navigation_source.push_str(
+        "NAVIGATE\n\
+PRINT \"DOCKED_NAVIGATION_STATE \"\n\
+PRINT ENT_SX, \" \", ENT_SY, \" \", SHIELDS\n\
+CR\n\
+PRINT \"DOCKED_NAVIGATION_RNG \"\n\
+PRINT RND(100), \" \", RND(100), \" \", RND(100)\n\
+CR\n",
+    );
+    let (sources, standard_library_id, source_id) =
+        sttr1_sources_with_standard_library(STDLIB_SOURCE, &navigation_source);
+    let mut input = TestInput::new([Ok(Some("10".to_owned())), Ok(Some("2".to_owned()))]);
+    let mut writer = RecordingWriter::default();
+    let navigation_result = success(execute_registered_sources_with_filesystem_and_seed(
+        sources,
+        standard_library_id,
+        source_id,
+        &mut writer,
+        Some(&mut input),
+        30,
+    ));
+
+    let mut control_source = std::fs::read_to_string(example_path("sttr1/main.tbx"))
+        .expect("STTR1 example should be readable");
+    control_source.push_str(setup);
+    control_source.push_str(
+        "NAVIGATION_DEVICE_EVENTS\n\
+PRINT \"DOCKED_NAVIGATION_CONTROL_RNG \"\n\
+PRINT RND(100), \" \", RND(100), \" \", RND(100)\n\
+CR\n",
+    );
+    let (control_sources, control_standard_library_id, control_source_id) =
+        sttr1_sources_with_standard_library(STDLIB_SOURCE, &control_source);
+    let mut control_writer = RecordingWriter::default();
+    let control_result = success(execute_registered_sources_with_filesystem_and_seed(
+        control_sources,
+        control_standard_library_id,
+        control_source_id,
+        &mut control_writer,
+        None,
+        30,
+    ));
+
+    assert_eq!(
+        output_values(writer.text(), "DOCKED_NAVIGATION_STATE "),
+        [5, 4, 77]
+    );
+    assert!(!writer.text().contains("KLINGON ATTACK FROM"));
+    assert_eq!(
+        output_values(writer.text(), "DOCKED_NAVIGATION_RNG "),
+        output_values(control_writer.text(), "DOCKED_NAVIGATION_CONTROL_RNG ")
+    );
+    assert_eq!(navigation_result.data_stack(), []);
+    assert_eq!(control_result.data_stack(), []);
+}
+
+#[test]
 fn sttr1_navigation_updates_condition_after_entering_klingon_quadrant_without_scan() {
     let mut source = std::fs::read_to_string(example_path("sttr1/main.tbx"))
         .expect("STTR1 example should be readable");

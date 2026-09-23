@@ -97,6 +97,64 @@ GAME_LOOP
 }
 
 #[test]
+fn sttr1_game_loop_navigation_retaliation_defeat_stops_the_mission() {
+    let source = std::fs::read_to_string(example_path("sttr1/main.tbx"))
+        .expect("STTR1 entry point should be readable")
+        .replacen(
+            "START_GAME",
+            r#"INIT_MISSION
+LET ENT_QX = 1
+LET ENT_QY = 1
+LET ENT_SX = 4
+LET ENT_SY = 4
+LET @GALAXY[1] = 100
+INIT_QUADRANT
+LET SECTOR_INDEX = 1
+WHILE SECTOR_INDEX <= 64
+  LET @SECTOR[SECTOR_INDEX] = 0
+  LET SECTOR_INDEX = SECTOR_INDEX + 1
+ENDWH
+LET KLINGONS_HERE = 1
+LET KLINGONS_LEFT = 1
+LET @KLINGON_X[1] = 5
+LET @KLINGON_Y[1] = 4
+LET @KLINGON_E[1] = 200
+LET SHIELDS = 1
+LET ENERGY = 100
+LET STARDATE = 100
+LET DEADLINE = 130
+LET @DAMAGE[1] = -100
+GAME_LOOP
+"#,
+            1,
+        );
+    let (sources, standard_library_id, source_id) =
+        sttr1_sources_with_standard_library(STDLIB_SOURCE, &source);
+    let mut input = TestInput::new([
+        Ok(Some("0".to_owned())),
+        Ok(Some("10".to_owned())),
+        Ok(Some("2".to_owned())),
+    ]);
+    let mut writer = RecordingWriter::default();
+
+    let result = success(execute_registered_sources_with_filesystem_and_seed(
+        sources,
+        standard_library_id,
+        source_id,
+        &mut writer,
+        Some(&mut input),
+        30,
+    ));
+
+    let output = writer.text();
+    assert!(output.contains("KLINGON ATTACK FROM SECTOR 5,4: DAMAGE"));
+    assert!(output.contains("REASON DESTROYED"));
+    assert_eq!(output.matches("COMMAND (0-7):").count(), 1);
+    assert!(output.contains("MISSION SUMMARY"));
+    assert_eq!(result.data_stack(), []);
+}
+
+#[test]
 fn sttr1_game_loop_reprints_commands_after_command_input_error() {
     let source = std::fs::read_to_string(example_path("sttr1/main.tbx"))
         .expect("STTR1 entry point should be readable");
