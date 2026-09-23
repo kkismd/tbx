@@ -41,18 +41,50 @@ fn sttr1_quadrant_setup_places_unique_sector_objects_and_klingon_state() {
         .take(8)
         .collect::<Vec<_>>();
     assert_eq!(short_scan.len(), 8);
-    assert!(short_scan.iter().all(|line| line.chars().count() == 8));
-    let counts = short_scan.iter().flat_map(|line| line.chars()).fold(
-        (0, 0, 0, 0, 0),
-        |(empty, player, klingon, base, star), cell| match cell {
-            '.' => (empty + 1, player, klingon, base, star),
-            'P' => (empty, player + 1, klingon, base, star),
-            'K' => (empty, player, klingon + 1, base, star),
-            'B' => (empty, player, klingon, base + 1, star),
-            '*' => (empty, player, klingon, base, star + 1),
-            _ => panic!("unexpected sector cell {cell:?}"),
-        },
-    );
+    for line in &short_scan {
+        let (grid, _status) = line
+            .split_once(" | ")
+            .expect("short scan rows should contain a status separator");
+        assert_eq!(grid.split_whitespace().count(), 8);
+        assert!(grid
+            .chars()
+            .enumerate()
+            .all(|(index, character)| index % 2 == 0 || character == ' '));
+    }
+    let status_labels = [
+        "STARDATE ",
+        "CONDITION ",
+        "QUADRANT ",
+        "SECTOR ",
+        "ENERGY ",
+        "TORPEDOES ",
+        "SHIELDS ",
+    ];
+    for (line, label) in short_scan.iter().zip(status_labels) {
+        let status = line.split_once(" | ").expect("status separator").1;
+        assert!(
+            status.starts_with(label),
+            "{status:?} should start with {label:?}"
+        );
+    }
+    let short_scan_grids = short_scan
+        .iter()
+        .map(|line| line.split_once(" | ").expect("status separator").0)
+        .collect::<Vec<_>>();
+    let counts = short_scan_grids
+        .iter()
+        .flat_map(|line| line.split_whitespace())
+        .fold(
+            (0, 0, 0, 0, 0),
+            |(empty, player, klingon, base, star), cell| match cell {
+                "." => (empty + 1, player, klingon, base, star),
+                "P" => (empty, player + 1, klingon, base, star),
+                "K" => (empty, player, klingon + 1, base, star),
+                "B" => (empty, player, klingon, base + 1, star),
+                "*" => (empty, player, klingon, base, star + 1),
+                _ => panic!("unexpected sector cell {cell:?}"),
+            },
+        );
     assert_eq!(counts.1, 1);
     assert_eq!(counts.2, quadrant[2]);
     assert_eq!(counts.3, quadrant[3]);
@@ -63,9 +95,12 @@ fn sttr1_quadrant_setup_places_unique_sector_objects_and_klingon_state() {
         .iter()
         .enumerate()
         .flat_map(|(y, line)| {
-            line.chars()
+            line.split_once(" | ")
+                .expect("status separator")
+                .0
+                .split_whitespace()
                 .enumerate()
-                .filter(|(_, cell)| *cell == 'K')
+                .filter(|(_, cell)| *cell == "K")
                 .map(move |(x, _)| (x + 1, y + 1))
         })
         .collect::<HashSet<_>>();
