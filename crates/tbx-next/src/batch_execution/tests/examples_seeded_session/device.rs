@@ -81,6 +81,56 @@ fn sttr1_repair_tick_only_advances_negative_damage() {
         output_values(writer.text(), "REPAIRED "),
         [0, -1, 0, 3, -4, 0, 2, -7]
     );
+    assert!(!writer.text().contains("DAMAGED"));
+    assert!(!writer.text().contains("STATE OF REPAIR IMPROVED"));
+    assert_eq!(result.data_stack(), []);
+}
+
+#[test]
+fn sttr1_random_device_event_reports_improvement_without_extra_randomness() {
+    let (sources, standard_library_id, source_id) = device_source(
+        "PACK @DAMAGE = 0, 0, 0, 0, 0, 0, 0, 0\nRANDOM_DEVICE_EVENT\nPRINT \"RNG_AFTER \"\nPRINT RND(100)\nCR\n",
+    );
+    let mut writer = RecordingWriter::default();
+    let result = success(execute_registered_sources_with_filesystem_and_seed(
+        sources,
+        standard_library_id,
+        source_id,
+        &mut writer,
+        None,
+        1,
+    ));
+
+    let output = writer.text();
+    assert!(
+        output.contains("DAMAGE CONTROL STATE OF REPAIR IMPROVED"),
+        "{output}"
+    );
+    assert!(output.contains("RNG_AFTER 29"), "{output}");
+    assert_eq!(result.data_stack(), []);
+}
+
+#[test]
+fn sttr1_random_device_event_reports_worsening_without_extra_randomness() {
+    let (sources, standard_library_id, source_id) = device_source(
+        "PACK @DAMAGE = 0, 0, 0, 0, 0, 0, 0, 0\nRANDOM_DEVICE_EVENT\nPRINT \"RNG_AFTER \"\nPRINT RND(100)\nCR\n",
+    );
+    let mut writer = RecordingWriter::default();
+    let result = success(execute_registered_sources_with_filesystem_and_seed(
+        sources,
+        standard_library_id,
+        source_id,
+        &mut writer,
+        None,
+        3,
+    ));
+
+    let output = writer.text();
+    assert!(
+        output.contains("DAMAGE CONTROL REPORT: LIBRARY COMPUTER DAMAGED"),
+        "{output}"
+    );
+    assert!(output.contains("RNG_AFTER 12"), "{output}");
     assert_eq!(result.data_stack(), []);
 }
 
@@ -123,6 +173,8 @@ fn sttr1_random_device_event_non_occurrence_preserves_all_slots() {
         output_values(writer.text(), "NO_EVENT "),
         [1, 2, 3, 4, 5, 6, 7, 8]
     );
+    assert!(!writer.text().contains("DAMAGED"));
+    assert!(!writer.text().contains("STATE OF REPAIR IMPROVED"));
     assert_eq!(result.data_stack(), []);
 }
 
