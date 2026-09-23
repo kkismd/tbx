@@ -481,6 +481,188 @@ CR\n",
 }
 
 #[test]
+fn sttr1_navigation_with_no_klingons_and_no_energy_stops_before_events_and_movement() {
+    let setup = "LET ENT_QX = 1\n\
+LET ENT_QY = 1\n\
+LET ENT_SX = 4\n\
+LET ENT_SY = 4\n\
+LET @GALAXY[1] = 0\n\
+INIT_QUADRANT\n\
+LET DOCKED = 0\n\
+LET SHIELDS = 20\n\
+LET ENERGY = 0\n\
+LET STARDATE = 100\n\
+LET @DAMAGE[2] = -1\n\
+";
+    let mut source = std::fs::read_to_string(example_path("sttr1/main.tbx"))
+        .expect("STTR1 example should be readable");
+    source.push_str(setup);
+    source.push_str(
+        "NAVIGATE\n\
+PRINT \"ENERGY_GATE_STATE \", ENT_QX, \" \", ENT_QY, \" \", ENT_SX, \" \", ENT_SY, \" \", ENERGY, \" \", STARDATE, \" \", SHIELDS, \" \", @DAMAGE[2]\n\
+CR\n\
+PRINT \"ENERGY_GATE_RNG \"\n\
+PRINT RND(100), \" \", RND(100), \" \", RND(100)\n\
+CR\n",
+    );
+    let (sources, standard_library_id, source_id) =
+        sttr1_sources_with_standard_library(STDLIB_SOURCE, &source);
+    let mut input = TestInput::new([Ok(Some("10".to_owned())), Ok(Some("10".to_owned()))]);
+    let mut writer = RecordingWriter::default();
+    let result = success(execute_registered_sources_with_filesystem_and_seed(
+        sources,
+        standard_library_id,
+        source_id,
+        &mut writer,
+        Some(&mut input),
+        30,
+    ));
+
+    let mut control_source = std::fs::read_to_string(example_path("sttr1/main.tbx"))
+        .expect("STTR1 example should be readable");
+    control_source.push_str(setup);
+    control_source.push_str(
+        "PRINT \"ENERGY_GATE_CONTROL_RNG \"\n\
+PRINT RND(100), \" \", RND(100), \" \", RND(100)\n\
+CR\n",
+    );
+    let (control_sources, control_standard_library_id, control_source_id) =
+        sttr1_sources_with_standard_library(STDLIB_SOURCE, &control_source);
+    let mut control_writer = RecordingWriter::default();
+    let control_result = success(execute_registered_sources_with_filesystem_and_seed(
+        control_sources,
+        control_standard_library_id,
+        control_source_id,
+        &mut control_writer,
+        None,
+        30,
+    ));
+
+    let output = writer.text();
+    assert_eq!(
+        output_values(output, "ENERGY_GATE_STATE "),
+        [1, 1, 4, 4, 0, 100, 20, -1]
+    );
+    assert!(output.contains("INSUFFICIENT ENERGY: 0; SHIELDS AVAILABLE: 20"));
+    assert!(output.contains("USE SHIELD CONTROL TO TRANSFER ENERGY"));
+    assert_eq!(
+        output_values(output, "ENERGY_GATE_RNG "),
+        output_values(control_writer.text(), "ENERGY_GATE_CONTROL_RNG ")
+    );
+    assert_eq!(result.data_stack(), []);
+    assert_eq!(control_result.data_stack(), []);
+}
+
+#[test]
+fn sttr1_navigation_with_no_energy_and_shields_stops_for_dead_in_space_check() {
+    let source = std::fs::read_to_string(example_path("sttr1/main.tbx"))
+        .expect("STTR1 example should be readable")
+        .replacen(
+            "START_GAME",
+            "INIT_MISSION\n\
+LET ENT_QX = 1\n\
+LET ENT_QY = 1\n\
+LET ENT_SX = 4\n\
+LET ENT_SY = 4\n\
+LET @GALAXY[1] = 0\n\
+INIT_QUADRANT\n\
+LET KLINGONS_LEFT = 1\n\
+LET DOCKED = 0\n\
+LET @DAMAGE[8] = -1\n\
+LET ENERGY = 0\n\
+LET SHIELDS = 0\n\
+LET STARDATE = 100\n\
+LET DEADLINE = 130\n\
+GAME_LOOP\n\
+PRINT \"DEAD_IN_SPACE_NAVIGATION_STATE \", ENT_SX, \" \", ENT_SY, \" \", ENERGY, \" \", STARDATE, \" \", GAME_RESULT, \" \", END_REASON, \" \", @DAMAGE[8]\n\
+CR\n",
+            1,
+        );
+    let (sources, standard_library_id, source_id) =
+        sttr1_sources_with_standard_library(STDLIB_SOURCE, &source);
+    let mut input = TestInput::new([
+        Ok(Some("0".to_owned())),
+        Ok(Some("10".to_owned())),
+        Ok(Some("10".to_owned())),
+    ]);
+    let mut writer = RecordingWriter::default();
+
+    let result = success(execute_registered_sources_with_filesystem_and_seed(
+        sources,
+        standard_library_id,
+        source_id,
+        &mut writer,
+        Some(&mut input),
+        30,
+    ));
+
+    assert_eq!(
+        output_values(writer.text(), "DEAD_IN_SPACE_NAVIGATION_STATE "),
+        [4, 4, 0, 100, 2, 3, -1]
+    );
+    assert!(writer.text().contains("REASON DEAD-IN-SPACE"));
+    assert!(writer.text().contains("MISSION SUMMARY"));
+    assert_eq!(
+        writer.text().matches("COURSE (0 CANCEL, 10-89):").count(),
+        1
+    );
+    assert_eq!(writer.text().matches("WARP (0-80):").count(), 1);
+    assert_eq!(writer.text().matches("COMMAND (0-7):").count(), 1);
+    assert_eq!(result.data_stack(), []);
+}
+
+#[test]
+fn sttr1_navigation_with_klingons_continues_at_zero_energy_after_surviving_retaliation() {
+    let mut source = std::fs::read_to_string(example_path("sttr1/main.tbx"))
+        .expect("STTR1 example should be readable");
+    source.push_str(
+        "LET ENT_QX = 1\n\
+LET ENT_QY = 1\n\
+LET ENT_SX = 4\n\
+LET ENT_SY = 4\n\
+LET @GALAXY[1] = 100\n\
+INIT_QUADRANT\n\
+LET KLINGONS_HERE = 1\n\
+LET @KLINGON_X[1] = 8\n\
+LET @KLINGON_Y[1] = 8\n\
+LET @KLINGON_E[1] = 200\n\
+LET SHIELDS = 10000\n\
+LET ENERGY = 0\n\
+LET STARDATE = 100\n\
+NAVIGATE\n\
+PRINT \"KLINGON_ENERGY_NAVIGATION_STATE \", ENT_SX, \" \", ENT_SY, \" \", ENERGY, \" \", STARDATE, \" \", SHIELDS\n\
+CR\n",
+    );
+    let (sources, standard_library_id, source_id) =
+        sttr1_sources_with_standard_library(STDLIB_SOURCE, &source);
+    let mut input = TestInput::new([Ok(Some("15".to_owned())), Ok(Some("2".to_owned()))]);
+    let mut writer = RecordingWriter::default();
+
+    let result = success(execute_registered_sources_with_filesystem_and_seed(
+        sources,
+        standard_library_id,
+        source_id,
+        &mut writer,
+        Some(&mut input),
+        30,
+    ));
+
+    let output = writer.text();
+    assert!(output.contains("KLINGON ATTACK FROM SECTOR 8,8: DAMAGE"));
+    assert_eq!(
+        output_values(output, "KLINGON_ENERGY_NAVIGATION_STATE ").len(),
+        5
+    );
+    let state = output_values(output, "KLINGON_ENERGY_NAVIGATION_STATE ");
+    assert_eq!(&state[..2], &[5, 4]);
+    assert_eq!(state[2], 4);
+    assert_eq!(state[3], 100);
+    assert!(state[4] > 0);
+    assert!(!output.contains("INSUFFICIENT ENERGY"));
+    assert_eq!(result.data_stack(), []);
+}
+
+#[test]
 fn sttr1_navigation_without_klingons_consumes_no_retaliation_rng() {
     let setup = "LET ENT_QX = 1\n\
 LET ENT_QY = 1\n\

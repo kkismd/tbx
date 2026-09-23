@@ -60,7 +60,7 @@ DEF NAVIGATE
     # A valid navigation course triggers the current quadrant's retaliation
     # before any navigation-side repair/event or movement is applied.
     KLINGON_ATTACK
-    IF SHIELDS >= 0
+    IF SHIELDS >= 0 AND (KLINGONS_HERE > 0 OR ENERGY > 0)
     # Valid course/warp input reaches repair and random damage only here,
     # immediately before sector movement. Invalid input and cancel consume no
     # event RNG and do not advance repair state.
@@ -147,6 +147,12 @@ DEF NAVIGATE
       LET STARDATE = STARDATE + 1
     ENDIF
     CHECK_DOCKING
+    ENDIF
+    IF SHIELDS >= 1 AND KLINGONS_HERE <= 0 AND ENERGY <= 0
+      PRINT "INSUFFICIENT ENERGY: ", ENERGY, "; SHIELDS AVAILABLE: ", SHIELDS
+      CR
+      PRINT "USE SHIELD CONTROL TO TRANSFER ENERGY"
+      CR
     ENDIF
   ENDIF
 END
