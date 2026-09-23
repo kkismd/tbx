@@ -450,6 +450,18 @@ LET ENT_SX = 4\n\
 LET ENT_SY = 4\n\
 LET @GALAXY[1] = 0\n\
 INIT_QUADRANT\n\
+LET SECTOR_INDEX = 1\n\
+WHILE SECTOR_INDEX <= 64\n\
+  LET @SECTOR[SECTOR_INDEX] = 0\n\
+  LET SECTOR_INDEX = SECTOR_INDEX + 1\n\
+ENDWH\n\
+LET @SECTOR[28] = 1\n\
+LET @SECTOR[29] = 3\n\
+LET DOCKED = 0\n\
+LET CONDITION = 2\n\
+LET ENERGY = 123\n\
+LET TORPEDOES = 2\n\
+LET SHIELDS = 77\n\
 LET @DAMAGE[1] = -100\n\
 ";
     let mut navigation_source = std::fs::read_to_string(example_path("sttr1/main.tbx"))
@@ -459,6 +471,9 @@ LET @DAMAGE[1] = -100\n\
         "NAVIGATE\n\
 PRINT \"DAMAGE_AFTER_INVALID_CANCEL \"\n\
 PRINT @DAMAGE[1]\n\
+CR\n\
+PRINT \"SHIP_STATE_AFTER_INVALID_CANCEL \"\n\
+PRINT DOCKED, \" \", CONDITION, \" \", ENERGY, \" \", TORPEDOES, \" \", SHIELDS\n\
 CR\n\
 PRINT \"RNG_AFTER_INVALID_CANCEL \"\n\
 PRINT RND(100)\n\
@@ -484,6 +499,9 @@ CR\n",
         "PRINT \"DAMAGE_CONTROL \"\n\
 PRINT @DAMAGE[1]\n\
 CR\n\
+PRINT \"SHIP_STATE_CONTROL \"\n\
+PRINT DOCKED, \" \", CONDITION, \" \", ENERGY, \" \", TORPEDOES, \" \", SHIELDS\n\
+CR\n\
 PRINT \"RNG_CONTROL \"\n\
 PRINT RND(100)\n\
 CR\n",
@@ -503,6 +521,14 @@ CR\n",
     assert_eq!(
         output_values(writer.text(), "DAMAGE_AFTER_INVALID_CANCEL "),
         [-100]
+    );
+    assert_eq!(
+        output_values(writer.text(), "SHIP_STATE_AFTER_INVALID_CANCEL "),
+        [0, 2, 123, 2, 77]
+    );
+    assert_eq!(
+        output_values(control_writer.text(), "SHIP_STATE_CONTROL "),
+        [0, 2, 123, 2, 77]
     );
     assert_eq!(
         output_values(writer.text(), "RNG_AFTER_INVALID_CANCEL "),
