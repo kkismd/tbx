@@ -4,7 +4,9 @@
 
 このworkflowは、変更のないローカルの `main` から開始します。リポジトリの場所、worktree、進行中のGit操作を確認し、`origin/main` を取得します。ローカルの `main` が `origin/main` と一致しない場合は停止します。
 
-`gh` でopen状態の対象issueとコメント、および本文やコメントから直接参照されているissueとPRを取得します。その後、`issue/ISSUE_NUMBER-implement` ブランチを作成し、取得した文脈とリポジトリ内のガイドに基づいてCodex CLI（`codex exec`）を実行します。
+入力できるのは、GitHub上に存在し、open状態で、本文に `**種別: 実装**` を含むissueだけです。ADR、調査・計画、種別表示のないissue、closed issueは、topic branchを作る前に拒否します。
+
+`gh` で対象issueとコメント、および本文やコメントから直接参照されているissueとPRを取得します。入力条件を確認した後、`issue/ISSUE_NUMBER-implement` ブランチを作成し、取得した文脈とリポジトリ内のガイドに基づいてCodex CLI（`codex exec`）を実行します。
 
 Codexはissueを実装し、リポジトリで必須とされているチェックをすべて実行してから、日本語のcommitを1つ作成します。Codexの最終応答はJSON Schemaで形式を定め、`success`（成功）、`failed`（失敗）、`human_review_required`（人間の判断が必要）のいずれかを返します。成功時は、親workflowがブランチ、報告されたHEAD、開始時点からのcommit数と親子関係、worktreeがcleanであることを再確認します。これらの確認後にのみブランチをpushし、draftではないPRを作成します。
 
