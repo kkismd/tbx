@@ -9,9 +9,11 @@ import tbx_implement
 
 
 class FakeWorkflow(tbx_implement.IssueWorkflow):
-    def __init__(self, *, codex_status="success", push_fails=False, pr_fails=False):
+    def __init__(self, *, codex_status="success", checks=None, codex_exit=0, push_fails=False, pr_fails=False):
         self.calls = []
         self.codex_status = codex_status
+        self.checks = list(tbx_implement.REQUIRED_CHECKS) if checks is None else checks
+        self.codex_exit = codex_exit
         self.push_fails = push_fails
         self.pr_fails = pr_fails
         self.branch = "main"
@@ -26,11 +28,13 @@ class FakeWorkflow(tbx_implement.IssueWorkflow):
             self.branch = args[3]
             return tbx_implement.CommandResult(0, "")
         if args[:2] == ("codex", "exec"):
+            if self.codex_exit:
+                return tbx_implement.CommandResult(self.codex_exit, "", "Codex failed")
             schema = args[args.index("--output-last-message") + 1]
             result = {
                 "status": self.codex_status,
                 "summary": "Implemented issue.",
-                "checks_passed": list(tbx_implement.REQUIRED_CHECKS) if self.codex_status == "success" else [],
+                "checks_passed": self.checks if self.codex_status == "success" else [],
                 "commit_sha": "new-sha" if self.codex_status == "success" else None,
             }
             Path(schema).write_text(json.dumps(result), encoding="utf-8")
@@ -110,6 +114,64 @@ class IssueWorkflowTests(unittest.TestCase):
                     workflow.run_issue(1917)
                 self.assertFalse(any(call[:2] == ("git", "push") for call in workflow.calls))
                 self.assertFalse(any(call[:3] == ("gh", "pr", "create") for call in workflow.calls))
+
+    def test_failed_codex_process_does_not_push(self):
+        workflow = FakeWorkflow(codex_exit=1)
+        with self.assertRaises(tbx_implement.WorkflowError) as error:
+            workflow.run_issue(1917)
+        self.assertEqual(error.exception.phase, "codex")
+        self.assertFalse(any(call[:2] == ("git", "push") for call in workflow.calls))
+
+    def test_incomplete_check_results_do_not_push(self):
+        workflow = FakeWorkflow(checks=list(tbx_implement.REQUIRED_CHECKS[:-1]))
+        with self.assertRaises(tbx_implement.WorkflowError) as error:
+            workflow.run_issue(1917)
+        self.assertEqual(error.exception.phase, "verification")
+        self.assertFalse(any(call[:2] == ("git", "push") for call in workflow.calls))
+
+    def test_post_codex_commit_verification_gates_push(self):
+        class InvalidCommit(FakeWorkflow):
+            def verify_commit(self, branch, start_sha, reported_sha):
+                raise tbx_implement.WorkflowError("post_codex", "unexpected HEAD")
+
+        workflow = InvalidCommit()
+        with self.assertRaises(tbx_implement.WorkflowError) as error:
+            workflow.run_issue(1917)
+        self.assertEqual(error.exception.phase, "post_codex")
+        self.assertFalse(any(call[:2] == ("git", "push") for call in workflow.calls))
+
+    def test_verify_commit_checks_branch_head_parent_count_and_clean_worktree(self):
+        class VerifyRunner:
+            values = {}
+
+            def __call__(self, args, **kwargs):
+                args = tuple(args)
+                key = args[1:]
+                defaults = {
+                    ("branch", "--show-current"): "issue/1917-implement",
+                    ("rev-parse", "HEAD"): "new-sha",
+                    ("rev-parse", "HEAD^"): "base-sha",
+                    ("rev-list", "--count", "base-sha..HEAD"): "1",
+                    ("status", "--porcelain=v1", "--untracked-files=all"): "",
+                }
+                return tbx_implement.CommandResult(0, self.values.get(key, defaults[key]))
+
+        runner = VerifyRunner()
+        workflow = tbx_implement.IssueWorkflow(runner)
+        workflow.verify_commit("issue/1917-implement", "base-sha", "new-sha")
+        invalid_states = (
+            ({("branch", "--show-current"): "other"}, "new-sha"),
+            ({("rev-parse", "HEAD"): "other"}, "new-sha"),
+            ({("rev-parse", "HEAD^"): "other"}, "new-sha"),
+            ({("rev-list", "--count", "base-sha..HEAD"): "2"}, "new-sha"),
+            ({("status", "--porcelain=v1", "--untracked-files=all"): "?? leftover"}, "new-sha"),
+            ({}, "reported-sha-mismatch"),
+        )
+        for values, reported_sha in invalid_states:
+            with self.subTest(values=values, reported_sha=reported_sha):
+                runner.values = values
+                with self.assertRaises(tbx_implement.WorkflowError):
+                    workflow.verify_commit("issue/1917-implement", "base-sha", reported_sha)
 
     def test_push_failure_does_not_create_pr(self):
         workflow = FakeWorkflow(push_fails=True)
