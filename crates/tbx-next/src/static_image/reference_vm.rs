@@ -96,6 +96,11 @@ impl ReferenceVm {
         self.halted
     }
 
+    #[cfg(test)]
+    pub(super) fn data_stack(&self) -> &[i16] {
+        &self.data
+    }
+
     pub(super) fn step(
         &mut self,
         capabilities: &mut Capabilities<'_>,

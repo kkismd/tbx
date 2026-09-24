@@ -306,6 +306,119 @@ fn lower(
 }
 
 #[cfg(test)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct TestImageStatistics {
+    pub(crate) instruction_count: usize,
+    pub(crate) variant_counts: [usize; 17],
+    pub(crate) relocation_count: usize,
+    pub(crate) fixed_text_bytes: usize,
+    pub(crate) fixed_text_count: usize,
+    pub(crate) global_count: usize,
+    pub(crate) array_lengths: Vec<usize>,
+}
+
+#[cfg(test)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct TestReferenceResult {
+    pub(crate) halted: bool,
+    pub(crate) data_stack: Vec<i16>,
+    pub(crate) statistics: TestImageStatistics,
+}
+
+#[cfg(test)]
+pub(crate) fn test_lower_and_run<W: std::io::Write>(
+    owners: &[InstructionView<'_>],
+    words: &PublishedWords,
+    primitive_words: (
+        OperatorWords,
+        WordId,
+        [WordId; 3],
+        [WordId; 3],
+        WordId,
+        WordId,
+    ),
+    globals: &GlobalVariables,
+    arrays: &GlobalArrays,
+    writer: &mut W,
+) -> Result<TestReferenceResult, ()> {
+    let image = lower(
+        owners,
+        words,
+        PrimitiveWordIds {
+            operators: primitive_words.0,
+            abs: primitive_words.1,
+            stack: primitive_words.2,
+            output: primitive_words.3,
+            input: primitive_words.4,
+            rnd: primitive_words.5,
+        },
+        globals,
+        arrays,
+    )
+    .map_err(|_| ())?;
+    let statistics = image.statistics();
+    let mut vm = reference_vm::ReferenceVm::new(image, CodePosition(0))
+        .expect("lowered temporary unit has a valid entry");
+    let mut output = crate::runtime_output::WriteRuntimeOutput::new(writer);
+    let outcome = vm
+        .run(Some(&mut output), None, None)
+        .expect("test source executes");
+    Ok(TestReferenceResult {
+        halted: outcome == reference_vm::RunOutcome::Halted,
+        data_stack: vm.data_stack().to_vec(),
+        statistics,
+    })
+}
+
+#[cfg(test)]
+impl StaticImage {
+    fn statistics(&self) -> TestImageStatistics {
+        let mut variant_counts = [0; 17];
+        let mut relocation_count = 0;
+        for instruction in &self.code {
+            let index = match instruction {
+                LogicalInstruction::PushI16(_) => 0,
+                LogicalInstruction::WriteText(_) => 1,
+                LogicalInstruction::LoadGlobal(_) => 2,
+                LogicalInstruction::StoreGlobal(_) => 3,
+                LogicalInstruction::LoadArray(_) => 4,
+                LogicalInstruction::StoreArray(_) => 5,
+                LogicalInstruction::CallPrimitive(_) => 6,
+                LogicalInstruction::CallCode(_) => {
+                    relocation_count += 1;
+                    7
+                }
+                LogicalInstruction::CopyCallBase(_) => 8,
+                LogicalInstruction::TruncateCallBase => 9,
+                LogicalInstruction::ControlPush => 10,
+                LogicalInstruction::ControlCopy => 11,
+                LogicalInstruction::ControlDrop => 12,
+                LogicalInstruction::Jump(_) => {
+                    relocation_count += 1;
+                    13
+                }
+                LogicalInstruction::JumpIfZero(_) => {
+                    relocation_count += 1;
+                    14
+                }
+                LogicalInstruction::Return => 15,
+                LogicalInstruction::Halt => 16,
+            };
+            variant_counts[index] += 1;
+        }
+        TestImageStatistics {
+            instruction_count: self.code.len(),
+            variant_counts,
+            relocation_count,
+            fixed_text_bytes: self.texts.iter().map(String::len).sum(),
+            fixed_text_count: self.texts.len(),
+            global_count: self.global_count,
+            array_lengths: self.array_lengths.clone(),
+        }
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use crate::arithmetic_primitive::register_arithmetic_primitives;
@@ -323,6 +436,43 @@ mod tests {
     use crate::value::Value;
     use crate::word::{CompletedWordDefinition, PrimitiveId};
     use std::rc::Rc;
+
+    #[test]
+    fn static_image_statistics_count_variants_relocations_and_text_bytes() {
+        let image = StaticImage {
+            code: vec![
+                LogicalInstruction::PushI16(1),
+                LogicalInstruction::WriteText(TextSlot(0)),
+                LogicalInstruction::LoadGlobal(GlobalSlot(0)),
+                LogicalInstruction::StoreGlobal(GlobalSlot(0)),
+                LogicalInstruction::LoadArray(ArraySlot(0)),
+                LogicalInstruction::StoreArray(ArraySlot(0)),
+                LogicalInstruction::CallPrimitive(PrimitiveOp::Add),
+                LogicalInstruction::CallCode(CodePosition(0)),
+                LogicalInstruction::CopyCallBase(1),
+                LogicalInstruction::TruncateCallBase,
+                LogicalInstruction::ControlPush,
+                LogicalInstruction::ControlCopy,
+                LogicalInstruction::ControlDrop,
+                LogicalInstruction::Jump(CodePosition(0)),
+                LogicalInstruction::JumpIfZero(CodePosition(0)),
+                LogicalInstruction::Return,
+                LogicalInstruction::Halt,
+            ],
+            texts: vec!["é".to_owned()],
+            global_count: 1,
+            array_lengths: vec![3],
+        };
+
+        let statistics = image.statistics();
+        assert_eq!(statistics.instruction_count, 17);
+        assert_eq!(statistics.variant_counts, [1; 17]);
+        assert_eq!(statistics.relocation_count, 3);
+        assert_eq!(statistics.fixed_text_bytes, 2);
+        assert_eq!(statistics.fixed_text_count, 1);
+        assert_eq!(statistics.global_count, 1);
+        assert_eq!(statistics.array_lengths, [3]);
+    }
 
     struct Fixture {
         bindings: Bindings,
