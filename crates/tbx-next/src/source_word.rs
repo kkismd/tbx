@@ -900,6 +900,7 @@ impl<'source, 'state> NativeStructuredSourceWordContext<'source, 'state> {
             code: self.code,
             line_numbers: self.line_numbers,
             capabilities: self.capabilities,
+            return_allowed: false,
         });
         evaluate_source_word_with_state(implementation, &mut context, state)
             .map_err(|source| SourceWordError::UserDefinedEvaluation { source })
