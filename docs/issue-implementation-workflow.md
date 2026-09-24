@@ -8,6 +8,8 @@
 
 `gh` で対象issueとコメント、および本文やコメントから直接参照されているissueとPRを取得します。入力条件を確認した後、`issue/ISSUE_NUMBER-implement` ブランチを作成し、取得した文脈とリポジトリ内のガイドに基づいてCodex CLI（`codex exec`）を実行します。
 
+workflowの段階とCodex実行中の要約はstderrへ逐次表示されます。CodexのJSONLイベントは人間向けの短い表示に変換し、未知のイベントや不正なイベント行は無視します。reasoningイベントは開始・完了のみを表示し、その内容は表示しません。stdoutには完了時の機械可読JSON結果だけが出力されるため、後続コマンドから利用できます。
+
 Codexはissueを実装し、リポジトリで必須とされているチェックをすべて実行してから、日本語のcommitを1つ作成します。Codexの最終応答はJSON Schemaで形式を定め、`success`（成功）、`failed`（失敗）、`human_review_required`（人間の判断が必要）のいずれかを返します。成功時は、親workflowがブランチ、報告されたHEAD、開始時点からのcommit数と親子関係、worktreeがcleanであることを再確認します。これらの確認後にのみブランチをpushし、draftではないPRを作成します。
 
 通常のGitHub通信は親workflowが担当します。Codexへの指示では、`gh`、push、PR作成、merge、issue close、履歴を書き換えるGitコマンドを禁止しています。いずれかの段階で失敗すると、その後の副作用を実行せず、失敗段階を含むJSON結果を出力します。
