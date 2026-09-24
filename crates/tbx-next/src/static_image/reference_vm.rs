@@ -585,14 +585,44 @@ mod tests {
         assert_eq!(vm.data, [i16::MIN, i16::MAX]);
         assert_eq!(vm.globals, [i16::MIN, 0]);
         assert_eq!(vm.arrays, [vec![0, i16::MAX]]);
-        let mut bad = make_vm(vec![
-            LogicalInstruction::PushI16(0),
-            LogicalInstruction::LoadArray(ArraySlot(0)),
-        ]);
-        tick(&mut bad).unwrap();
-        let error = tick(&mut bad).unwrap_err();
-        assert_eq!(error.position, CodePosition(1));
-        assert_eq!(bad.data, [0]);
+        for (index, expected) in [(1, 17), (2, i16::MAX)] {
+            let mut candidate = make_vm(vec![
+                LogicalInstruction::PushI16(index),
+                LogicalInstruction::LoadArray(ArraySlot(0)),
+                LogicalInstruction::Halt,
+            ]);
+            candidate.arrays[0] = vec![17, i16::MAX];
+            assert_eq!(candidate.run(None, None, None), Ok(RunOutcome::Halted));
+            assert_eq!(candidate.data, [expected]);
+        }
+        for index in [0, -1, 3] {
+            let mut candidate = make_vm(vec![
+                LogicalInstruction::PushI16(index),
+                LogicalInstruction::LoadArray(ArraySlot(0)),
+            ]);
+            let error = {
+                tick(&mut candidate).unwrap();
+                tick(&mut candidate).unwrap_err()
+            };
+            assert_eq!(error.position, CodePosition(1));
+            assert_eq!(candidate.data, [index]);
+        }
+        for index in [0, -1, 3] {
+            let mut candidate = make_vm(vec![
+                LogicalInstruction::PushI16(index),
+                LogicalInstruction::PushI16(9),
+                LogicalInstruction::StoreArray(ArraySlot(0)),
+                LogicalInstruction::Halt,
+            ]);
+            let error = {
+                tick(&mut candidate).unwrap();
+                tick(&mut candidate).unwrap();
+                tick(&mut candidate).unwrap_err()
+            };
+            assert_eq!(error.position, CodePosition(2));
+            assert_eq!(candidate.data, [index, 9]);
+            assert_eq!(candidate.arrays, [vec![0, 0]]);
+        }
     }
 
     #[test]
@@ -616,6 +646,60 @@ mod tests {
     }
 
     #[test]
+    fn recursive_calls_restore_each_invocations_control_depth() {
+        let mut vm = make_vm(vec![
+            LogicalInstruction::PushI16(3),
+            LogicalInstruction::CallCode(CodePosition(3)),
+            LogicalInstruction::Halt,
+            LogicalInstruction::CopyCallBase(1),
+            LogicalInstruction::PushI16(1),
+            LogicalInstruction::CallPrimitive(PrimitiveOp::Subtract),
+            LogicalInstruction::CallPrimitive(PrimitiveOp::Dup),
+            LogicalInstruction::JumpIfZero(CodePosition(12)),
+            LogicalInstruction::CallPrimitive(PrimitiveOp::Dup),
+            LogicalInstruction::ControlPush,
+            LogicalInstruction::CallCode(CodePosition(3)),
+            LogicalInstruction::Return,
+            LogicalInstruction::Return,
+        ]);
+
+        assert_eq!(vm.run(None, None, None), Ok(RunOutcome::Halted));
+        assert_eq!(vm.data, [3, 2, 1, 0]);
+        assert_eq!(vm.control, []);
+        assert_eq!(vm.returns, []);
+    }
+
+    #[test]
+    fn return_with_control_depth_below_call_base_is_atomic() {
+        let mut vm = make_vm(vec![
+            LogicalInstruction::PushI16(7),
+            LogicalInstruction::ControlPush,
+            LogicalInstruction::CallCode(CodePosition(4)),
+            LogicalInstruction::Halt,
+            LogicalInstruction::ControlDrop,
+            LogicalInstruction::Return,
+        ]);
+        tick(&mut vm).unwrap();
+        tick(&mut vm).unwrap();
+        tick(&mut vm).unwrap();
+        tick(&mut vm).unwrap();
+        assert_eq!(vm.data, []);
+        assert_eq!(vm.control, []);
+        let saved_frames = vm.returns.clone();
+        assert_eq!(saved_frames.len(), 1);
+        let position = vm.position();
+
+        let error = tick(&mut vm).unwrap_err();
+
+        assert_eq!(error.position, position);
+        assert_eq!(error.kind, RuntimeErrorKind::ControlUnderflow);
+        assert_eq!(vm.position(), position);
+        assert_eq!(vm.data, []);
+        assert_eq!(vm.control, []);
+        assert_eq!(vm.returns, saved_frames);
+    }
+
+    #[test]
     fn call_base_copy_uses_one_origin_offsets_and_truncates_to_each_frame() {
         let mut vm = make_vm(vec![
             LogicalInstruction::PushI16(11),
@@ -632,6 +716,60 @@ mod tests {
 
         assert_eq!(vm.run(None, None, None), Ok(RunOutcome::Halted));
         assert_eq!(vm.data, [11, 22]);
+    }
+
+    #[test]
+    fn call_base_copy_reads_the_current_occupant_and_failures_are_atomic() {
+        let mut vm = make_vm(vec![
+            LogicalInstruction::PushI16(11),
+            LogicalInstruction::PushI16(22),
+            LogicalInstruction::CallCode(CodePosition(5)),
+            LogicalInstruction::Halt,
+            LogicalInstruction::Halt,
+            LogicalInstruction::CallPrimitive(PrimitiveOp::Drop),
+            LogicalInstruction::CallPrimitive(PrimitiveOp::Drop),
+            LogicalInstruction::PushI16(99),
+            LogicalInstruction::PushI16(22),
+            LogicalInstruction::CopyCallBase(2),
+            LogicalInstruction::Return,
+        ]);
+        assert_eq!(vm.run(None, None, None), Ok(RunOutcome::Halted));
+        assert_eq!(vm.data, [99, 22, 99]);
+
+        for offset in [0, 3] {
+            let mut candidate = make_vm(vec![
+                LogicalInstruction::PushI16(4),
+                LogicalInstruction::PushI16(5),
+                LogicalInstruction::CallCode(CodePosition(4)),
+                LogicalInstruction::Halt,
+                LogicalInstruction::CopyCallBase(offset),
+            ]);
+            tick(&mut candidate).unwrap();
+            tick(&mut candidate).unwrap();
+            tick(&mut candidate).unwrap();
+            let before = candidate.data.clone();
+            let position = candidate.position();
+            let error = tick(&mut candidate).unwrap_err();
+            assert_eq!(error.kind, RuntimeErrorKind::InvalidCallBase);
+            assert_eq!(candidate.data, before);
+            assert_eq!(candidate.position(), position);
+        }
+
+        let mut out_of_depth = make_vm(vec![
+            LogicalInstruction::PushI16(4),
+            LogicalInstruction::CallCode(CodePosition(3)),
+            LogicalInstruction::Halt,
+            LogicalInstruction::CallPrimitive(PrimitiveOp::Drop),
+            LogicalInstruction::CopyCallBase(1),
+        ]);
+        tick(&mut out_of_depth).unwrap();
+        tick(&mut out_of_depth).unwrap();
+        tick(&mut out_of_depth).unwrap();
+        let position = out_of_depth.position();
+        let error = tick(&mut out_of_depth).unwrap_err();
+        assert_eq!(error.kind, RuntimeErrorKind::InvalidCallBase);
+        assert_eq!(out_of_depth.data, []);
+        assert_eq!(out_of_depth.position(), position);
     }
 
     #[test]
@@ -655,6 +793,225 @@ mod tests {
         tick(&mut halted).unwrap();
         assert_eq!(halted.position(), CodePosition(0));
         assert_eq!(halted.data, []);
+    }
+
+    #[test]
+    fn checked_arithmetic_covers_normal_boundaries_and_preserves_failed_operands() {
+        let successful = [
+            (PrimitiveOp::Add, vec![2, 3], 5),
+            (PrimitiveOp::Subtract, vec![7, 2], 5),
+            (PrimitiveOp::Multiply, vec![-2, 3], -6),
+            (PrimitiveOp::Divide, vec![7, 2], 3),
+            (PrimitiveOp::Remainder, vec![7, 2], 1),
+            (PrimitiveOp::Negate, vec![i16::MAX], -i16::MAX),
+            (PrimitiveOp::Abs, vec![i16::MIN + 1], i16::MAX),
+        ];
+        for (op, operands, expected) in successful {
+            let mut code: Vec<_> = operands
+                .iter()
+                .copied()
+                .map(LogicalInstruction::PushI16)
+                .collect();
+            code.extend([
+                LogicalInstruction::CallPrimitive(op),
+                LogicalInstruction::Halt,
+            ]);
+            let mut vm = make_vm(code);
+            assert_eq!(vm.run(None, None, None), Ok(RunOutcome::Halted), "{op:?}");
+            assert_eq!(vm.data, [expected], "{op:?}");
+        }
+
+        let failures = [
+            (PrimitiveOp::Add, vec![i16::MAX, 1]),
+            (PrimitiveOp::Subtract, vec![i16::MIN, 1]),
+            (PrimitiveOp::Multiply, vec![i16::MAX, 2]),
+            (PrimitiveOp::Divide, vec![1, 0]),
+            (PrimitiveOp::Remainder, vec![1, 0]),
+            (PrimitiveOp::Negate, vec![i16::MIN]),
+            (PrimitiveOp::Abs, vec![i16::MIN]),
+        ];
+        for (op, operands) in failures {
+            let mut code: Vec<_> = operands
+                .iter()
+                .copied()
+                .map(LogicalInstruction::PushI16)
+                .collect();
+            code.extend([
+                LogicalInstruction::CallPrimitive(op),
+                LogicalInstruction::Halt,
+            ]);
+            let mut vm = make_vm(code);
+            for _ in &operands {
+                tick(&mut vm).unwrap();
+            }
+            let position = vm.position();
+            let error = tick(&mut vm).unwrap_err();
+            assert_eq!(error.position, position, "{op:?}");
+            assert_eq!(error.kind, RuntimeErrorKind::Arithmetic, "{op:?}");
+            assert_eq!(vm.data, operands, "{op:?}");
+            assert_eq!(vm.position(), position, "{op:?}");
+        }
+
+        for op in [
+            PrimitiveOp::Add,
+            PrimitiveOp::Subtract,
+            PrimitiveOp::Multiply,
+            PrimitiveOp::Divide,
+            PrimitiveOp::Remainder,
+            PrimitiveOp::Negate,
+            PrimitiveOp::Abs,
+            PrimitiveOp::Not,
+            PrimitiveOp::Dup,
+            PrimitiveOp::Drop,
+            PrimitiveOp::Swap,
+            PrimitiveOp::Rnd,
+        ] {
+            let mut vm = make_vm(vec![
+                LogicalInstruction::CallPrimitive(op),
+                LogicalInstruction::Halt,
+            ]);
+            let error = tick(&mut vm).unwrap_err();
+            assert_eq!(error.kind, RuntimeErrorKind::DataUnderflow, "{op:?}");
+            assert_eq!(vm.data, [], "{op:?}");
+            assert_eq!(vm.position(), CodePosition(0), "{op:?}");
+        }
+        for op in [
+            PrimitiveOp::Add,
+            PrimitiveOp::Subtract,
+            PrimitiveOp::Multiply,
+            PrimitiveOp::Divide,
+            PrimitiveOp::Remainder,
+            PrimitiveOp::Equal,
+            PrimitiveOp::NotEqual,
+            PrimitiveOp::Less,
+            PrimitiveOp::LessEqual,
+            PrimitiveOp::Greater,
+            PrimitiveOp::GreaterEqual,
+            PrimitiveOp::And,
+            PrimitiveOp::Or,
+        ] {
+            let mut vm = make_vm(vec![
+                LogicalInstruction::PushI16(77),
+                LogicalInstruction::CallPrimitive(op),
+                LogicalInstruction::Halt,
+            ]);
+            tick(&mut vm).unwrap();
+            let error = tick(&mut vm).unwrap_err();
+            assert_eq!(error.kind, RuntimeErrorKind::DataUnderflow, "{op:?}");
+            assert_eq!(vm.data, [77], "{op:?}");
+            assert_eq!(vm.position(), CodePosition(1), "{op:?}");
+        }
+    }
+
+    #[test]
+    fn comparison_logic_stack_and_output_primitives_have_expected_effects() {
+        let successful = [
+            (PrimitiveOp::Equal, vec![4, 4], vec![1]),
+            (PrimitiveOp::NotEqual, vec![4, 5], vec![1]),
+            (PrimitiveOp::Less, vec![4, 5], vec![1]),
+            (PrimitiveOp::LessEqual, vec![5, 5], vec![1]),
+            (PrimitiveOp::Greater, vec![6, 5], vec![1]),
+            (PrimitiveOp::GreaterEqual, vec![5, 5], vec![1]),
+            (PrimitiveOp::And, vec![1, -1], vec![1]),
+            (PrimitiveOp::Or, vec![0, -1], vec![1]),
+            (PrimitiveOp::Not, vec![0], vec![1]),
+            (PrimitiveOp::Not, vec![-1], vec![0]),
+            (PrimitiveOp::Dup, vec![7], vec![7, 7]),
+            (PrimitiveOp::Drop, vec![7], vec![]),
+            (PrimitiveOp::Swap, vec![1, 2], vec![2, 1]),
+        ];
+        for (op, operands, expected) in successful {
+            let mut code: Vec<_> = operands
+                .iter()
+                .copied()
+                .map(LogicalInstruction::PushI16)
+                .collect();
+            code.extend([
+                LogicalInstruction::CallPrimitive(op),
+                LogicalInstruction::Halt,
+            ]);
+            let mut vm = make_vm(code);
+            assert_eq!(vm.run(None, None, None), Ok(RunOutcome::Halted), "{op:?}");
+            assert_eq!(vm.data, expected, "{op:?}");
+        }
+
+        let mut vm = make_vm(vec![
+            LogicalInstruction::PushI16(-42),
+            LogicalInstruction::CallPrimitive(PrimitiveOp::PutDec),
+            LogicalInstruction::PushI16(65),
+            LogicalInstruction::CallPrimitive(PrimitiveOp::PutChr),
+            LogicalInstruction::CallPrimitive(PrimitiveOp::Cr),
+            LogicalInstruction::Halt,
+        ]);
+        let mut output = TestOutput::new();
+        assert_eq!(
+            vm.run(Some(&mut output), None, None),
+            Ok(RunOutcome::Halted)
+        );
+        assert_eq!(output.chunks(), ["-42", "A", "\n"]);
+        assert_eq!(vm.data, []);
+
+        let mut empty_output = make_vm(vec![
+            LogicalInstruction::CallPrimitive(PrimitiveOp::PutDec),
+            LogicalInstruction::CallPrimitive(PrimitiveOp::PutChr),
+            LogicalInstruction::Halt,
+        ]);
+        assert_eq!(
+            empty_output.run(None, None, None),
+            Ok(RunOutcome::Halted),
+            "empty PUTDEC and PUTCHR are no-ops like the host primitives"
+        );
+        assert_eq!(empty_output.data, []);
+    }
+
+    #[test]
+    fn output_primitive_failures_preserve_operands_and_instruction_position() {
+        for op in [PrimitiveOp::PutDec, PrimitiveOp::PutChr, PrimitiveOp::Cr] {
+            let mut vm = make_vm(vec![
+                LogicalInstruction::PushI16(if op == PrimitiveOp::PutDec { 42 } else { 65 }),
+                LogicalInstruction::CallPrimitive(op),
+                LogicalInstruction::Halt,
+            ]);
+            tick(&mut vm).unwrap();
+            let position = vm.position();
+            let error = tick(&mut vm).unwrap_err();
+            assert_eq!(error.kind, RuntimeErrorKind::OutputUnavailable, "{op:?}");
+            assert_eq!(vm.position(), position, "{op:?}");
+            if op != PrimitiveOp::Cr {
+                assert_eq!(vm.data, [if op == PrimitiveOp::PutDec { 42 } else { 65 }]);
+            }
+        }
+
+        let mut vm = make_vm(vec![
+            LogicalInstruction::PushI16(42),
+            LogicalInstruction::CallPrimitive(PrimitiveOp::PutDec),
+            LogicalInstruction::Halt,
+        ]);
+        tick(&mut vm).unwrap();
+        let mut output = TestOutput::new();
+        output.fail_next_write(RuntimeOutputError::Failed);
+        let mut capabilities = Capabilities {
+            output: Some(&mut output),
+            input: None,
+            random: None,
+        };
+        let position = vm.position();
+        let error = vm.step(&mut capabilities).unwrap_err();
+        assert_eq!(error.kind, RuntimeErrorKind::OutputFailed);
+        assert_eq!(vm.data, [42]);
+        assert_eq!(vm.position(), position);
+
+        let mut invalid_character = make_vm(vec![
+            LogicalInstruction::PushI16(256),
+            LogicalInstruction::CallPrimitive(PrimitiveOp::PutChr),
+            LogicalInstruction::Halt,
+        ]);
+        tick(&mut invalid_character).unwrap();
+        let position = invalid_character.position();
+        let error = tick(&mut invalid_character).unwrap_err();
+        assert_eq!(error.kind, RuntimeErrorKind::InvalidCharacter);
+        assert_eq!(invalid_character.data, [256]);
+        assert_eq!(invalid_character.position(), position);
     }
 
     #[test]
