@@ -826,7 +826,9 @@ mod tests {
             (PrimitiveOp::Subtract, vec![i16::MIN, 1]),
             (PrimitiveOp::Multiply, vec![i16::MAX, 2]),
             (PrimitiveOp::Divide, vec![1, 0]),
+            (PrimitiveOp::Divide, vec![i16::MIN, -1]),
             (PrimitiveOp::Remainder, vec![1, 0]),
+            (PrimitiveOp::Remainder, vec![i16::MIN, -1]),
             (PrimitiveOp::Negate, vec![i16::MIN]),
             (PrimitiveOp::Abs, vec![i16::MIN]),
         ];
