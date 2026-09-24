@@ -155,6 +155,7 @@ pub(crate) struct NativeStructuredSourceWordContext<'source, 'state> {
     code: &'state mut dyn InstructionBuildTarget,
     line_numbers: &'state mut crate::line_number::LocalLineNumberTable,
     capabilities: SourceProcessingCapabilities,
+    return_allowed: bool,
     owner_local_targets: Vec<StructuredOwnerLocalTarget>,
 }
 
@@ -167,6 +168,7 @@ pub(crate) struct NativeStructuredSourceWordContextParts<'source, 'state> {
     pub(crate) code: &'state mut dyn InstructionBuildTarget,
     pub(crate) line_numbers: &'state mut crate::line_number::LocalLineNumberTable,
     pub(crate) capabilities: SourceProcessingCapabilities,
+    pub(crate) return_allowed: bool,
     pub(crate) owner_local_targets: Vec<StructuredOwnerLocalTarget>,
 }
 
@@ -773,6 +775,7 @@ impl<'source, 'state> NativeStructuredSourceWordContext<'source, 'state> {
             code: parts.code,
             line_numbers: parts.line_numbers,
             capabilities: parts.capabilities,
+            return_allowed: parts.return_allowed,
             owner_local_targets: parts.owner_local_targets,
         }
     }
@@ -900,7 +903,7 @@ impl<'source, 'state> NativeStructuredSourceWordContext<'source, 'state> {
             code: self.code,
             line_numbers: self.line_numbers,
             capabilities: self.capabilities,
-            return_allowed: false,
+            return_allowed: self.return_allowed,
         });
         evaluate_source_word_with_state(implementation, &mut context, state)
             .map_err(|source| SourceWordError::UserDefinedEvaluation { source })

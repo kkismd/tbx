@@ -487,6 +487,7 @@ where
             code: callback_code,
             line_numbers: &mut callback_line_numbers,
             capabilities: SourceProcessingCapabilities::structured_runtime(),
+            return_allowed: context.return_allowed,
             owner_local_targets,
         });
     match accept {
