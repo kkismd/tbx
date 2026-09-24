@@ -20,6 +20,11 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 REQUIRED_CHECKS = ("cargo ci-clippy", "cargo ci-test", "cargo ci-fmt")
 MAX_CODEX_DIAGNOSTIC_CHARS = 2_000
 RECORD_MARKER = "<!-- tbx-w01-review-feedback-record:v1 -->"
+REVIEW_RESULT_MARKER_RE = re.compile(
+    r"<!-- tbx-w01-review-result:v1 head=([0-9a-f]{40}) "
+    r"result=(changes_required|no_additional_changes) -->"
+)
+REVIEW_RESULT_LIKE_RE = re.compile(r"tbx-w01-review-result")
 FEEDBACK_KINDS = ("issue-comment", "review", "review-comment")
 ID_RE = re.compile(r"^(issue-comment|review|review-comment):([1-9][0-9]*)$")
 SHA_RE = re.compile(r"^(?:[0-9a-f]{40}|[0-9a-f]{64})$")
@@ -69,6 +74,45 @@ def timestamp(value: str) -> datetime | None:
     if parsed.tzinfo is None:
         return None
     return parsed.astimezone(timezone.utc)
+
+
+def derive_review_result(pr: dict, comments: list[dict], messages: list[dict]) -> dict:
+    """Derive the latest unexpired result for the PR's current head."""
+    head_sha = pr.get("headRefOid")
+    current_head = head_sha if isinstance(head_sha, str) else None
+    markers = []
+    for comment in comments:
+        body = comment.get("body")
+        created_at = comment.get("created_at")
+        if not isinstance(body, str) or not isinstance(created_at, str):
+            continue
+        match = REVIEW_RESULT_MARKER_RE.search(body)
+        if not match or match.group(1) != current_head:
+            continue
+        posted_at = timestamp(created_at)
+        identifier = comment.get("id")
+        if posted_at is None or not isinstance(identifier, int):
+            continue
+        markers.append((posted_at, identifier, match.group(2)))
+
+    if not markers:
+        return {"status": "none", "head_sha": current_head}
+
+    posted_at, _, result = max(markers, key=lambda marker: (marker[0], marker[1]))
+    for message in messages:
+        updated_at = message.get("updatedAt")
+        created_at = message.get("createdAt")
+        latest_feedback = timestamp(updated_at) if isinstance(updated_at, str) else None
+        if latest_feedback is None and isinstance(created_at, str):
+            latest_feedback = timestamp(created_at)
+        if latest_feedback is not None and latest_feedback > posted_at:
+            return {"status": "none", "head_sha": current_head}
+    return {"status": result, "head_sha": current_head}
+
+
+def is_review_result_comment(body: object) -> bool:
+    """Exclude valid and malformed review-result comments from feedback."""
+    return isinstance(body, str) and REVIEW_RESULT_LIKE_RE.search(body) is not None
 
 
 def parse_records(comments: list[dict]) -> dict[str, dict]:
@@ -164,7 +208,8 @@ class ReviewFeedbackWorkflow:
         pr["comments"], pr["reviews"] = comments, reviews
         messages: list[dict] = []
         for row in comments:
-            if isinstance(row, dict) and isinstance(row.get("body"), str) and RECORD_MARKER not in row["body"]:
+            if (isinstance(row, dict) and isinstance(row.get("body"), str)
+                    and RECORD_MARKER not in row["body"] and not is_review_result_comment(row["body"])):
                 messages.append({"kind": "issue-comment", "id": row.get("id"), "body": row["body"], "createdAt": row.get("created_at"), "updatedAt": row.get("updated_at"), "url": row.get("html_url")})
         for row in reviews:
             if isinstance(row, dict) and isinstance(row.get("body"), str) and row["body"].strip():
@@ -172,11 +217,20 @@ class ReviewFeedbackWorkflow:
         for row in inline:
             if isinstance(row, dict) and isinstance(row.get("body"), str):
                 messages.append({"kind": "review-comment", "id": row.get("id"), "body": row["body"], "createdAt": row.get("created_at"), "updatedAt": row.get("updated_at"), "url": row.get("html_url"), "inReplyToId": row.get("in_reply_to_id"), "path": row.get("path"), "line": row.get("line"), "commitId": row.get("commit_id")})
-        threads = self.gh_json("pr_fetch", ("gh", "api", "graphql", "-f", "query=query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){pullRequest(number:$number){reviewThreads(first:100){nodes{id isResolved isOutdated comments(first:100){nodes{databaseId}}}}}}}", "-F", f"owner={slug.split('/')[0]}", "-F", f"name={slug.split('/')[1]}", "-F", f"number={number}"))
+        threads = self.gh_json("pr_fetch", ("gh", "api", "graphql", "-f", "query=query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){pullRequest(number:$number){reviews(first:100){nodes{databaseId updatedAt}} reviewThreads(first:100){nodes{id isResolved isOutdated comments(first:100){nodes{databaseId}}}}}}}", "-F", f"owner={slug.split('/')[0]}", "-F", f"name={slug.split('/')[1]}", "-F", f"number={number}"))
         try:
-            thread_nodes = threads["data"]["repository"]["pullRequest"]["reviewThreads"]["nodes"]
+            pull_request_data = threads["data"]["repository"]["pullRequest"]
+            thread_nodes = pull_request_data["reviewThreads"]["nodes"]
+            review_nodes = pull_request_data["reviews"]["nodes"]
         except (TypeError, KeyError):
             raise WorkflowError("pr_fetch", "review thread response is invalid") from None
+        review_updated_at = {node.get("databaseId"): node.get("updatedAt") for node in review_nodes}
+        for message in messages:
+            if message["kind"] == "review":
+                updated_at = review_updated_at.get(int(message["id"]))
+                if not isinstance(updated_at, str):
+                    raise WorkflowError("pr_fetch", f"review {message['id']} is missing its GitHub updatedAt")
+                message["updatedAt"] = updated_at
         thread_by_comment = {}
         for thread in thread_nodes:
             for order, node in enumerate(thread.get("comments", {}).get("nodes", [])):
@@ -249,10 +303,12 @@ class ReviewFeedbackWorkflow:
         }
         candidates = extract_candidates(messages, comments, trailers, valid_record_heads)
         snapshot = {"pr": pr, "start_head_sha": start_sha, "candidate_revisions": [message_revision(m) for m in candidates], "candidates": candidates,
-                    "context_messages": messages}
+                    "context_messages": messages,
+                    "review_result": derive_review_result(pr, comments, messages)}
         if not candidates:
             progress("未処理フィードバックなし。正常終了")
-            return {"status": "success", "summary": "No unprocessed feedback.", "results": [], "modified_messages": [], "checks_passed": [], "commit_sha": None}
+            return {"status": "success", "summary": "No unprocessed feedback.", "results": [], "modified_messages": [], "checks_passed": [], "commit_sha": None,
+                    "review_result": snapshot["review_result"]}
         prompt = self.build_prompt(snapshot)
         temp_root = REPO_ROOT / ".tmp"
         temp_root.mkdir(exist_ok=True)
@@ -305,6 +361,7 @@ class ReviewFeedbackWorkflow:
         elif commit is not None or checks:
             raise WorkflowError("codex", "no-change results must not report a commit or checks")
         response = {"status": "human_review_required" if human_review else "success", "summary": codex.get("summary", ""), "results": results, "modified_messages": modified, "checks_passed": checks, "commit_sha": commit, "snapshot": snapshot}
+        response["review_result"] = snapshot["review_result"]
         if modified:
             progress(f"push開始: {pr['headRefName']}")
             self.command("push", ("git", "push", "origin", pr["headRefName"]))
