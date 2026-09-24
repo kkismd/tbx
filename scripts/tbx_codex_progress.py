@@ -4,14 +4,18 @@ from __future__ import annotations
 
 import codecs
 import json
+import os
+import signal
 import subprocess
 import sys
 import threading
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Sequence
 
 MAX_DIAGNOSTIC_CHARS = 2_000
+INTERRUPT_GRACE_SECONDS = 5
 
 
 @dataclass(frozen=True)
@@ -19,6 +23,33 @@ class CommandResult:
     returncode: int
     stdout: str
     stderr: str = ""
+
+
+class CodexInterrupted(Exception):
+    """Raised after an interrupted Codex process group has been stopped."""
+
+
+class CodexStopError(Exception):
+    """Raised when the interrupted Codex process group could not be confirmed stopped."""
+
+
+def interruption_git_state(cwd: Path) -> dict[str, object]:
+    """Return a best-effort local Git snapshot without changing repository state."""
+    def git(*args: str) -> str | None:
+        try:
+            result = subprocess.run(("git", *args), cwd=cwd, text=True, capture_output=True, check=False)
+        except OSError:
+            return None
+        return result.stdout.strip() if result.returncode == 0 else None
+
+    branch = git("branch", "--show-current")
+    head = git("rev-parse", "HEAD")
+    status = git("status", "--porcelain=v1", "--untracked-files=all")
+    return {
+        "branch": branch,
+        "head": head,
+        "worktree": "unknown" if status is None else "dirty" if status else "clean",
+    }
 
 
 def progress(message: str) -> None:
@@ -54,6 +85,45 @@ def event_diagnostic(event: object) -> str | None:
 
 def _append_bounded(current: str, value: str, limit: int = MAX_DIAGNOSTIC_CHARS) -> str:
     return (current + value)[-limit:]
+
+
+def _process_group_exists(pgid: int) -> bool:
+    try:
+        os.killpg(pgid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
+
+
+def _wait_for_process_group_exit(process: subprocess.Popen, timeout: float) -> bool:
+    deadline = time.monotonic() + timeout
+    pgid = process.pid
+    while _process_group_exists(pgid):
+        process.poll()
+        if time.monotonic() >= deadline:
+            return False
+        time.sleep(0.05)
+    process.wait()
+    return True
+
+
+def _stop_process_group(process: subprocess.Popen) -> None:
+    """Escalate signals only while the isolated Codex process group remains alive."""
+    pgid = process.pid
+    for sig in (signal.SIGINT, signal.SIGTERM, signal.SIGKILL):
+        if not _process_group_exists(pgid):
+            process.wait()
+            return
+        try:
+            os.killpg(pgid, sig)
+        except ProcessLookupError:
+            process.wait()
+            return
+        if _wait_for_process_group_exit(process, INTERRUPT_GRACE_SECONDS):
+            return
+    raise CodexStopError(f"Codex process group {pgid} remained after SIGKILL")
 
 
 def describe_event(event: object) -> str | None:
@@ -103,7 +173,7 @@ def run_codex_jsonl(args: Sequence[str], *, cwd: Path, input_text: str | None = 
     try:
         process = subprocess.Popen(
             list(args), cwd=cwd, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
+            stderr=subprocess.PIPE, start_new_session=True,
         )
     except OSError as error:
         return CommandResult(127, "", str(error))
@@ -127,9 +197,6 @@ def run_codex_jsonl(args: Sequence[str], *, cwd: Path, input_text: str | None = 
             sys.stderr.flush()
             stderr_detail = _append_bounded(stderr_detail, remainder)
 
-    stderr_reader = threading.Thread(target=drain_stderr, daemon=True)
-    stderr_reader.start()
-
     def write_stdin() -> None:
         if process.stdin is None:
             return
@@ -140,22 +207,45 @@ def run_codex_jsonl(args: Sequence[str], *, cwd: Path, input_text: str | None = 
         except BrokenPipeError:
             pass
 
+    stderr_reader = threading.Thread(target=drain_stderr, daemon=True)
     stdin_writer = threading.Thread(target=write_stdin, daemon=True)
-    stdin_writer.start()
     stdout_diagnostic = ""
-    for line in process.stdout or ():
+    stdin_started = False
+    stderr_started = False
+    try:
+        stderr_reader.start()
+        stderr_started = True
+        stdin_writer.start()
+        stdin_started = True
+        for line in process.stdout or ():
+            try:
+                event = json.loads(line)
+            except json.JSONDecodeError:
+                progress("未解釈のCodex出力を受信")
+                continue
+            message = describe_event(event)
+            if message:
+                progress(message)
+            diagnostic = event_diagnostic(event)
+            if diagnostic:
+                stdout_diagnostic = _append_bounded(stdout_diagnostic, diagnostic)
+        returncode = process.wait()
+        stdin_writer.join()
+        stderr_reader.join()
+    except KeyboardInterrupt:
+        progress("中断を受信。Codexプロセスグループを停止します")
+        previous_sigint_handler = signal.signal(signal.SIGINT, signal.SIG_IGN)
         try:
-            event = json.loads(line)
-        except json.JSONDecodeError:
-            progress("未解釈のCodex出力を受信")
-            continue
-        message = describe_event(event)
-        if message:
-            progress(message)
-        diagnostic = event_diagnostic(event)
-        if diagnostic:
-            stdout_diagnostic = _append_bounded(stdout_diagnostic, diagnostic)
-    returncode = process.wait()
-    stdin_writer.join()
-    stderr_reader.join()
+            _stop_process_group(process)
+        except CodexStopError:
+            raise
+        except Exception as error:
+            raise CodexStopError(f"could not stop Codex process group: {error}") from error
+        finally:
+            signal.signal(signal.SIGINT, previous_sigint_handler)
+            if stdin_started:
+                stdin_writer.join(timeout=1)
+            if stderr_started:
+                stderr_reader.join(timeout=1)
+        raise CodexInterrupted("Codex execution interrupted") from None
     return CommandResult(returncode, stdout_diagnostic, stderr_detail.strip())

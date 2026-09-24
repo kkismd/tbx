@@ -1,6 +1,8 @@
 import json
+import io
 import sys
 import unittest
+from contextlib import redirect_stderr, redirect_stdout
 from unittest.mock import patch
 from pathlib import Path
 
@@ -14,6 +16,7 @@ class FakeWorkflow(tbx_implement.IssueWorkflow):
         self, *, codex_status="success", checks=None, codex_exit=0, push_fails=False, pr_fails=False,
         issue_state="OPEN", issue_kind="実装", issue_body=None, returned_issue_number=1917,
         issue_fetch_fails=False,
+        interrupt_codex=False,
     ):
         self.calls = []
         self.codex_status = codex_status
@@ -25,6 +28,7 @@ class FakeWorkflow(tbx_implement.IssueWorkflow):
         self.issue_body = issue_body if issue_body is not None else f"**種別: {issue_kind}**"
         self.returned_issue_number = returned_issue_number
         self.issue_fetch_fails = issue_fetch_fails
+        self.interrupt_codex = interrupt_codex
         self.branch = "main"
         super().__init__(self.fake_run)
 
@@ -49,6 +53,8 @@ class FakeWorkflow(tbx_implement.IssueWorkflow):
             self.branch = args[3]
             return tbx_implement.CommandResult(0, "")
         if args[:2] == ("codex", "exec"):
+            if self.interrupt_codex:
+                raise tbx_implement.CodexInterrupted()
             if self.codex_exit:
                 return tbx_implement.CommandResult(self.codex_exit, "", "Codex failed")
             schema = args[args.index("--output-last-message") + 1]
@@ -79,6 +85,15 @@ class FakeWorkflow(tbx_implement.IssueWorkflow):
 
 
 class IssueWorkflowTests(unittest.TestCase):
+    def test_codex_interrupt_stops_before_commit_validation_push_and_pr_creation(self):
+        workflow = FakeWorkflow(interrupt_codex=True)
+        with self.assertRaises(tbx_implement.CodexInterrupted):
+            workflow.run_issue(1917)
+        self.assertTrue(any(call[:2] == ("codex", "exec") for call in workflow.calls))
+        self.assertFalse(any(call[:2] == ("git", "push") for call in workflow.calls))
+        self.assertFalse(any(call[:3] == ("gh", "pr", "create") for call in workflow.calls))
+        self.assertFalse(any(call[:1] == ("verify-commit",) for call in workflow.calls))
+
     def test_issue_number_must_be_positive_decimal(self):
         self.assertEqual(tbx_implement.positive_issue_number("1917"), 1917)
         for value in ("0", "-1", "1.2", "01", "word"):
@@ -205,6 +220,32 @@ class IssueWorkflowTests(unittest.TestCase):
             workflow.run_issue(1917)
         self.assertEqual(error.exception.phase, "push")
         self.assertFalse(any(call[:3] == ("gh", "pr", "create") for call in workflow.calls))
+
+    def test_cli_reports_interruption_once_and_preserves_local_state(self):
+        stdout, stderr = io.StringIO(), io.StringIO()
+        with patch.object(tbx_implement.IssueWorkflow, "run_issue", side_effect=tbx_implement.CodexInterrupted()), \
+                patch.object(tbx_implement, "interruption_git_state", return_value={"branch": "issue/1-implement", "head": "abc", "worktree": "dirty"}), \
+                redirect_stdout(stdout), redirect_stderr(stderr):
+            code = tbx_implement.main(["1"])
+        result = json.loads(stdout.getvalue())
+        self.assertEqual(code, 130)
+        self.assertEqual(result["status"], "interrupted")
+        self.assertEqual(result["stage"], "codex_execution")
+        self.assertEqual((result["branch"], result["head"], result["worktree"]), ("issue/1-implement", "abc", "dirty"))
+        self.assertTrue(result["codex_process_group_stopped"])
+        self.assertEqual(len(stdout.getvalue().splitlines()), 1)
+
+    def test_unconfirmed_codex_stop_is_not_reported_as_success(self):
+        stdout = io.StringIO()
+        with patch.object(tbx_implement.IssueWorkflow, "run_issue", side_effect=tbx_implement.CodexStopError("still running")), \
+                patch.object(tbx_implement, "interruption_git_state", return_value={"branch": None, "head": None, "worktree": "unknown"}), \
+                redirect_stdout(stdout), redirect_stderr(io.StringIO()):
+            code = tbx_implement.main(["1"])
+        result = json.loads(stdout.getvalue())
+        self.assertEqual(code, 130)
+        self.assertEqual(result["status"], "interrupted")
+        self.assertFalse(result["codex_process_group_stopped"])
+        self.assertEqual(result["error"], "still running")
 
     def test_pr_failure_happens_only_after_successful_push(self):
         workflow = FakeWorkflow(pr_fails=True)

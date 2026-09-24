@@ -1,5 +1,6 @@
 import io
 import json
+import signal
 import sys
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
@@ -12,6 +13,88 @@ import tbx_codex_progress as progress
 
 
 class CodexProgressTests(unittest.TestCase):
+    def test_codex_starts_in_its_own_process_group(self):
+        class Process:
+            stdin = None
+            stderr = None
+            stdout = iter([])
+
+            def wait(self):
+                return 0
+
+        with patch.object(progress.subprocess, "Popen", return_value=Process()) as popen:
+            progress.run_codex_jsonl(["codex", "exec", "--json"], cwd=Path("."))
+        self.assertTrue(popen.call_args.kwargs["start_new_session"])
+
+    def test_interrupt_sends_sigint_to_process_group_and_waits(self):
+        class Process:
+            pid = 4321
+
+            def poll(self):
+                return None
+
+            def wait(self):
+                return -signal.SIGINT
+
+        with patch.object(progress, "_process_group_exists", side_effect=[True, False]), \
+                patch.object(progress.os, "killpg") as killpg:
+            progress._stop_process_group(Process())
+        killpg.assert_called_once_with(4321, signal.SIGINT)
+
+    def test_interrupt_escalates_only_after_each_timeout(self):
+        class Process:
+            pid = 4322
+
+            def poll(self):
+                return None
+
+            def wait(self):
+                return -signal.SIGKILL
+
+        with patch.object(progress, "_process_group_exists", return_value=True), \
+                patch.object(progress, "_wait_for_process_group_exit", side_effect=[False, False, True]), \
+                patch.object(progress.os, "killpg") as killpg:
+            progress._stop_process_group(Process())
+        self.assertEqual(killpg.call_args_list, [
+            unittest.mock.call(4322, signal.SIGINT),
+            unittest.mock.call(4322, signal.SIGTERM),
+            unittest.mock.call(4322, signal.SIGKILL),
+        ])
+
+    def test_unresponsive_group_is_escalated_through_sigkill_and_fails_closed(self):
+        class Process:
+            pid = 4324
+
+            def poll(self):
+                return None
+
+        with patch.object(progress, "_process_group_exists", return_value=True), \
+                patch.object(progress, "_wait_for_process_group_exit", return_value=False) as wait_for_exit, \
+                patch.object(progress.os, "killpg") as killpg:
+            with self.assertRaises(progress.CodexStopError):
+                progress._stop_process_group(Process())
+        self.assertEqual([call.args[1] for call in killpg.call_args_list], [signal.SIGINT, signal.SIGTERM, signal.SIGKILL])
+        self.assertEqual([call.args[1] for call in wait_for_exit.call_args_list], [5, 5, 5])
+
+    def test_keyboard_interrupt_stops_group_and_returns_interrupted_signal(self):
+        class Process:
+            pid = 4323
+            stdin = None
+            stderr = None
+
+            class InterruptingOutput:
+                def __iter__(self):
+                    raise KeyboardInterrupt
+
+            stdout = InterruptingOutput()
+
+        with patch.object(progress.subprocess, "Popen", return_value=Process()) as popen, \
+                patch.object(progress, "_stop_process_group") as stop:
+            with self.assertRaises(progress.CodexInterrupted):
+                progress.run_codex_jsonl(["codex", "exec", "--json"], cwd=Path("."))
+        self.assertTrue(popen.call_args.kwargs["start_new_session"])
+        stop.assert_called_once()
+
     def test_known_events_are_rendered_and_unknown_events_are_ignored(self):
         cases = [
             ({"type": "item.completed", "item": {"type": "reasoning", "text": "Inspecting"}}, "Codex要約: Inspecting"),

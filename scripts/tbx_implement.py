@@ -13,7 +13,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Sequence
 
-from tbx_codex_progress import progress, run_codex_jsonl
+from tbx_codex_progress import CodexInterrupted, CodexStopError, interruption_git_state, progress, run_codex_jsonl
 
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -282,6 +282,16 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = parser.parse_args(argv)
     try:
         result = IssueWorkflow().run_issue(args.issue)
+    except (CodexInterrupted, CodexStopError) as error:
+        progress("workflow interrupted: codex_execution")
+        print(json.dumps({
+            "status": "interrupted",
+            "stage": "codex_execution",
+            **interruption_git_state(REPO_ROOT),
+            "codex_process_group_stopped": isinstance(error, CodexInterrupted),
+            **({"error": str(error)} if isinstance(error, CodexStopError) else {}),
+        }, ensure_ascii=False))
+        return 130
     except WorkflowError as error:
         status = "human_review_required" if error.phase == "human_review" else "failed"
         progress(f"workflow {status}: {error.phase}")
