@@ -3,7 +3,7 @@ use crate::global_variable::{GlobalVarId, GlobalVariables};
 use crate::instruction::{CodeLocation, Instruction, InstructionAddress, InstructionView};
 use crate::operator::{OperatorSemantic, OperatorWords};
 use crate::word::{PrimitiveId, PublishedWords, WordDefinition, WordId};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 struct CodePosition(usize);
@@ -83,6 +83,7 @@ enum LowerError {
     InvalidArray(ArrayId),
     UnknownPrimitive(PrimitiveId),
     ImageTooLarge,
+    DuplicateCodeOwner,
 }
 
 struct PrimitiveMap(HashMap<PrimitiveId, PrimitiveOp>);
@@ -182,9 +183,13 @@ fn lower(
         ],
     )?;
     let mut positions = HashMap::new();
+    let mut code_spaces = HashSet::with_capacity(owners.len());
     let mut total = 0usize;
     for owner in owners {
-        for index in 0..=owner.len() {
+        if !code_spaces.insert(owner.code_space()) {
+            return Err(LowerError::DuplicateCodeOwner);
+        }
+        for index in 0..owner.len() {
             positions.insert((owner.code_space(), index), CodePosition(total + index));
         }
         total = total
@@ -302,11 +307,12 @@ fn lower(
 mod tests {
     use super::*;
     use crate::arithmetic_primitive::register_arithmetic_primitives;
-    use crate::binding::Bindings;
+    use crate::binding::{Binding, Bindings};
     use crate::global_array::GlobalArrays;
     use crate::global_variable::GlobalVariables;
     use crate::input_primitive::register_input_primitives;
     use crate::instruction::InstructionSequence;
+    use crate::name::NormalizedName;
     use crate::operator::register_named_operator_primitives;
     use crate::output_primitive::register_output_primitives;
     use crate::primitive::PrimitiveRegistry;
@@ -486,6 +492,43 @@ mod tests {
     }
 
     #[test]
+    fn existing_call_keeps_old_entry_after_same_name_is_redefined() {
+        let mut fixture = Fixture::new();
+        let name = NormalizedName::new("FOO").expect("test name is valid");
+        let mut owner = InstructionSequence::new();
+        let old_entry = owner.append(Instruction::Push(Value::integer(1)));
+        let old_id = fixture.words.add(
+            CompletedWordDefinition::compiled(owner.view().location(old_entry), owner.view())
+                .expect("old entry is valid"),
+        );
+        fixture
+            .bindings
+            .insert_new(name.clone(), Binding::Word(old_id))
+            .expect("initial word binding should publish");
+        let mut caller = InstructionSequence::new();
+        caller.append(Instruction::Call(old_id));
+
+        let new_entry = owner.append(Instruction::Push(Value::integer(2)));
+        let replacement =
+            CompletedWordDefinition::compiled(owner.view().location(new_entry), owner.view())
+                .expect("replacement entry is valid");
+        let changed = crate::redefinition::redefine_word(
+            &mut fixture.words,
+            &mut fixture.bindings,
+            &name,
+            replacement,
+        )
+        .expect("same-name word should be redefined");
+        assert_eq!(changed.previous(), old_id);
+        assert_eq!(fixture.bindings.current_word(&name), Ok(changed.current()));
+
+        let image = fixture
+            .lower(&[caller.view(), owner.view()])
+            .expect("early-bound call should lower");
+        assert_eq!(image.code[0], LogicalInstruction::CallCode(CodePosition(1)));
+    }
+
+    #[test]
     fn resolves_all_registered_primitive_words_without_using_slots() {
         let fixture = Fixture::new();
         let op = fixture.operators.lookup();
@@ -550,6 +593,13 @@ mod tests {
     #[test]
     fn invalid_and_unknown_references_fail_without_an_image() {
         let fixture = Fixture::new();
+        let mut duplicate_owner = InstructionSequence::new();
+        duplicate_owner.append(Instruction::Halt);
+        assert!(matches!(
+            fixture.lower(&[duplicate_owner.view(), duplicate_owner.view()]),
+            Err(LowerError::DuplicateCodeOwner)
+        ));
+
         let mut bad_word = InstructionSequence::new();
         bad_word.append(Instruction::Call(WordId::test_invalid(usize::MAX)));
         assert!(matches!(
@@ -558,9 +608,11 @@ mod tests {
         ));
 
         let mut bad_branch = InstructionSequence::new();
-        bad_branch.append(Instruction::Jump(InstructionAddress::from_index(8)));
+        bad_branch.append(Instruction::Jump(InstructionAddress::from_index(1)));
+        let mut following_owner = InstructionSequence::new();
+        following_owner.append(Instruction::Halt);
         assert!(matches!(
-            fixture.lower(&[bad_branch.view()]),
+            fixture.lower(&[bad_branch.view(), following_owner.view()]),
             Err(LowerError::InvalidCodeLocation(_))
         ));
 
