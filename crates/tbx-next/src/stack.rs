@@ -12,6 +12,7 @@ pub(crate) enum StackError {
     DataStackIndexOutOfBounds { index: usize, depth: usize },
     DataStackDepthBelowTarget { target: usize, depth: usize },
     ControlValueStackUnderflow,
+    ControlValueStackDepthBelowTarget { target: usize, depth: usize },
     ReturnStackUnderflow,
 }
 
@@ -150,6 +151,16 @@ impl ControlValueStack {
     pub(crate) fn depth(&self) -> usize {
         self.values.len()
     }
+
+    pub(crate) fn truncate_to_depth(&mut self, target: usize) -> Result<(), StackError> {
+        let depth = self.values.len();
+        if depth < target {
+            return Err(StackError::ControlValueStackDepthBelowTarget { target, depth });
+        }
+
+        self.values.truncate(target);
+        Ok(())
+    }
 }
 
 /// Opaque VM-control frame for the return stack.
@@ -161,6 +172,8 @@ impl ControlValueStack {
 pub(crate) struct ReturnFrame {
     return_location: CodeLocation,
     call_data_stack_depth: usize,
+    // ADR #1936: the boundary for control values owned by this invocation.
+    call_control_value_stack_depth: usize,
 }
 
 impl ReturnFrame {
@@ -168,6 +181,19 @@ impl ReturnFrame {
         Self {
             return_location,
             call_data_stack_depth,
+            call_control_value_stack_depth: 0,
+        }
+    }
+
+    pub(crate) const fn with_control_value_stack_depth(
+        return_location: CodeLocation,
+        call_data_stack_depth: usize,
+        call_control_value_stack_depth: usize,
+    ) -> Self {
+        Self {
+            return_location,
+            call_data_stack_depth,
+            call_control_value_stack_depth,
         }
     }
 
@@ -177,6 +203,10 @@ impl ReturnFrame {
 
     pub(crate) const fn call_data_stack_depth(self) -> usize {
         self.call_data_stack_depth
+    }
+
+    pub(crate) const fn call_control_value_stack_depth(self) -> usize {
+        self.call_control_value_stack_depth
     }
 }
 
@@ -390,6 +420,28 @@ mod tests {
 
         assert_eq!(frame.return_location(), location);
         assert_eq!(frame.call_data_stack_depth(), 3);
+        assert_eq!(frame.call_control_value_stack_depth(), 0);
+    }
+
+    #[test]
+    fn control_value_stack_truncates_to_saved_depth_atomically() {
+        let mut stack = ControlValueStack::new();
+        stack.push(Value::integer(1));
+        stack.push(Value::integer(2));
+        stack.push(Value::integer(3));
+
+        assert_eq!(stack.truncate_to_depth(1), Ok(()));
+        assert_eq!(stack.depth(), 1);
+        assert_eq!(stack.peek(), Ok(Value::integer(1)));
+        assert_eq!(
+            stack.truncate_to_depth(2),
+            Err(StackError::ControlValueStackDepthBelowTarget {
+                target: 2,
+                depth: 1
+            })
+        );
+        assert_eq!(stack.depth(), 1);
+        assert_eq!(stack.peek(), Ok(Value::integer(1)));
     }
 
     #[test]
