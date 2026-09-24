@@ -13,6 +13,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Sequence
 
+from tbx_codex_progress import progress, run_codex_jsonl
+
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 REQUIRED_CHECKS = ("cargo ci-clippy", "cargo ci-test", "cargo ci-fmt")
@@ -53,6 +55,8 @@ class WorkflowError(Exception):
 
 
 def run_command(args: Sequence[str], *, cwd: Path = REPO_ROOT, input_text: str | None = None) -> CommandResult:
+    if args and args[0] == "codex" and "--json" in args:
+        return run_codex_jsonl(args, cwd=cwd, input_text=input_text)
     try:
         result = subprocess.run(
             list(args),
@@ -92,6 +96,7 @@ class IssueWorkflow:
         return value
 
     def preflight(self) -> str:
+        progress("事前確認を開始")
         root = Path(self.git("rev-parse", "--show-toplevel"))
         if root.resolve() != REPO_ROOT:
             raise WorkflowError("worktree", f"run from this repository: {REPO_ROOT}")
@@ -119,6 +124,7 @@ class IssueWorkflow:
         return self.git("rev-parse", "HEAD")
 
     def fetch_issue(self, number: int) -> tuple[dict, dict[str, dict], dict[str, dict]]:
+        progress(f"GitHub文脈を取得: issue #{number}")
         issue = self.gh_json(
             "issue_fetch",
             ("gh", "issue", "view", str(number), "--comments", "--json", "number,title,body,state,url,comments"),
@@ -150,6 +156,7 @@ class IssueWorkflow:
             linked_issues[ref] = self.gh_json(
                 "issue_fetch", ("gh", "issue", "view", ref, "--comments", "--json", "number,title,body,state,url,comments"),
             )
+        progress("GitHub文脈の取得が完了")
         return issue, linked_issues, linked_prs
 
     def build_prompt(self, issue: dict, linked_issues: dict[str, dict], linked_prs: dict[str, dict]) -> str:
@@ -178,11 +185,13 @@ GitHub context retrieved by the parent workflow:
 
     def run_issue(self, number: int) -> dict:
         start_sha = self.preflight()
+        progress("事前確認が完了")
         issue, linked_issues, linked_prs = self.fetch_issue(number)
         branch = f"issue/{number}-implement"
         if self.run(("git", "show-ref", "--verify", "--quiet", f"refs/heads/{branch}")).returncode == 0:
             raise WorkflowError("branch", f"topic branch already exists: {branch}")
         self.command("branch", ("git", "switch", "-c", branch))
+        progress(f"Codex実行開始: issue #{number}")
 
         prompt = self.build_prompt(issue, linked_issues, linked_prs)
         temp_root = REPO_ROOT / ".tmp"
@@ -197,6 +206,7 @@ GitHub context retrieved by the parent workflow:
                 "--output-last-message", str(result_path), "-C", str(REPO_ROOT), "-",
             )
             result = self.run(command, input_text=prompt)
+            progress("Codex実行終了")
             if result.returncode:
                 detail = result.stderr.strip() or result.stdout.strip() or f"exit code {result.returncode}"
                 raise WorkflowError("codex", f"Codex exited with code {result.returncode}: {detail[-2000:]}")
@@ -215,13 +225,18 @@ GitHub context retrieved by the parent workflow:
         if not isinstance(codex_result.get("summary"), str) or not codex_result["summary"].strip():
             raise WorkflowError("codex", "Codex result is missing its implementation summary")
 
+        progress("Codex後のGit検証を開始")
         self.verify_commit(branch, start_sha, codex_result.get("commit_sha"))
+        progress("Codex後のGit検証が完了")
+        progress(f"push開始: {branch}")
         self.command("push", ("git", "push", "--set-upstream", "origin", branch))
+        progress("push完了")
         pr_body = f"## Summary\n\n{codex_result['summary']}\n\n## Verification\n\n" + "\n".join(f"- `{check}`" for check in REQUIRED_CHECKS) + f"\n\nCloses #{number}\n"
         pr_result = self.command(
             "pr_create",
             ("gh", "pr", "create", "--title", issue["title"], "--body", pr_body, "--base", BASE_BRANCH, "--head", branch),
         )
+        progress("PR作成完了")
         match = PR_URL.search(pr_result)
         if not match:
             raise WorkflowError("pr_create", "PR was created but its number could not be parsed from gh output")
@@ -269,8 +284,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         result = IssueWorkflow().run_issue(args.issue)
     except WorkflowError as error:
         status = "human_review_required" if error.phase == "human_review" else "failed"
+        progress(f"workflow {status}: {error.phase}")
         print(json.dumps({"status": status, "phase": error.phase, "error": str(error)}, ensure_ascii=False))
         return 1
+    progress("workflow 正常終了")
     print(json.dumps(result, ensure_ascii=False))
     return 0
 

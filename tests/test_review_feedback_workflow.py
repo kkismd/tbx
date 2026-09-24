@@ -1,5 +1,6 @@
 import sys
 import unittest
+from unittest.mock import patch
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
@@ -159,6 +160,16 @@ class FeedbackRunPrTests(unittest.TestCase):
         workflow, runner = self.workflow(self.result("success", "fixed", modified=["issue-comment:44@2026-01-01T00:00:00Z"], checks=list(feedback.REQUIRED_CHECKS), commit="b" * 40))
         workflow.run_pr(42)
         self.assertEqual(runner.events, ["codex", "verify", "push", "record"])
+
+    def test_successful_workflow_reports_major_stages_in_order(self):
+        outcome = self.result("success", "fixed", modified=["issue-comment:44@2026-01-01T00:00:00Z"], checks=list(feedback.REQUIRED_CHECKS), commit="b" * 40)
+        workflow, _ = self.workflow(outcome)
+        with patch.object(feedback, "progress") as display:
+            workflow.run_pr(42)
+        messages = [call.args[0] for call in display.call_args_list]
+        stages = ["事前確認が完了", "Codex実行開始", "Codex実行終了", "Codex後のGit検証が完了", "push完了", "処理記録投稿完了"]
+        positions = [next(i for i, message in enumerate(messages) if message.startswith(stage)) for stage in stages]
+        self.assertEqual(positions, sorted(positions))
 
     def test_no_change_records_without_commit_or_push(self):
         workflow, runner = self.workflow(self.result())
