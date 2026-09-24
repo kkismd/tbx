@@ -5,6 +5,8 @@ use crate::operator::{OperatorSemantic, OperatorWords};
 use crate::word::{PrimitiveId, PublishedWords, WordDefinition, WordId};
 use std::collections::{HashMap, HashSet};
 
+mod reference_vm;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 struct CodePosition(usize);
 
@@ -451,6 +453,24 @@ mod tests {
         assert_eq!(image.code[15], LogicalInstruction::Halt);
         assert_eq!(image.global_count, 2);
         assert_eq!(image.array_lengths, [3, 1]);
+    }
+
+    #[test]
+    fn lowered_static_image_is_accepted_by_reference_vm() {
+        let fixture = Fixture::new();
+        let mut code = InstructionSequence::new();
+        code.append(Instruction::Push(Value::integer(i16::MIN)));
+        code.append(Instruction::Halt);
+
+        let image = fixture.lower(&[code.view()]).expect("program should lower");
+        let mut vm = reference_vm::ReferenceVm::new(image, CodePosition(0))
+            .expect("lowered image should be executable");
+
+        assert_eq!(
+            vm.run(None, None, None),
+            Ok(reference_vm::RunOutcome::Halted)
+        );
+        assert!(vm.is_halted());
     }
 
     #[test]
