@@ -192,7 +192,11 @@ fn prime_source_matches_host_execution_and_reports_static_image() {
     assert!(statistics.instruction_count > 0);
     assert_eq!(
         statistics.instruction_count,
-        statistics.variant_counts.iter().sum()
+        statistics
+            .variant_counts
+            .iter()
+            .map(|(_, count)| count)
+            .sum()
     );
 }
 

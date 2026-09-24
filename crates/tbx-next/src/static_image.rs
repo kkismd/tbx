@@ -306,10 +306,55 @@ fn lower(
 }
 
 #[cfg(test)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum LogicalInstructionKind {
+    PushI16,
+    WriteText,
+    LoadGlobal,
+    StoreGlobal,
+    LoadArray,
+    StoreArray,
+    CallPrimitive,
+    CallCode,
+    CopyCallBase,
+    TruncateCallBase,
+    ControlPush,
+    ControlCopy,
+    ControlDrop,
+    Jump,
+    JumpIfZero,
+    Return,
+    Halt,
+}
+
+#[cfg(test)]
+impl LogicalInstructionKind {
+    const ALL: [Self; 17] = [
+        Self::PushI16,
+        Self::WriteText,
+        Self::LoadGlobal,
+        Self::StoreGlobal,
+        Self::LoadArray,
+        Self::StoreArray,
+        Self::CallPrimitive,
+        Self::CallCode,
+        Self::CopyCallBase,
+        Self::TruncateCallBase,
+        Self::ControlPush,
+        Self::ControlCopy,
+        Self::ControlDrop,
+        Self::Jump,
+        Self::JumpIfZero,
+        Self::Return,
+        Self::Halt,
+    ];
+}
+
+#[cfg(test)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct TestImageStatistics {
     pub(crate) instruction_count: usize,
-    pub(crate) variant_counts: [usize; 17],
+    pub(crate) variant_counts: Vec<(LogicalInstructionKind, usize)>,
     pub(crate) relocation_count: usize,
     pub(crate) fixed_text_bytes: usize,
     pub(crate) fixed_text_count: usize,
@@ -373,42 +418,49 @@ pub(crate) fn test_lower_and_run<W: std::io::Write>(
 #[cfg(test)]
 impl StaticImage {
     fn statistics(&self) -> TestImageStatistics {
-        let mut variant_counts = [0; 17];
+        let mut counts = [0; LogicalInstructionKind::ALL.len()];
         let mut relocation_count = 0;
         for instruction in &self.code {
-            let index = match instruction {
-                LogicalInstruction::PushI16(_) => 0,
-                LogicalInstruction::WriteText(_) => 1,
-                LogicalInstruction::LoadGlobal(_) => 2,
-                LogicalInstruction::StoreGlobal(_) => 3,
-                LogicalInstruction::LoadArray(_) => 4,
-                LogicalInstruction::StoreArray(_) => 5,
-                LogicalInstruction::CallPrimitive(_) => 6,
+            let kind = match instruction {
+                LogicalInstruction::PushI16(_) => LogicalInstructionKind::PushI16,
+                LogicalInstruction::WriteText(_) => LogicalInstructionKind::WriteText,
+                LogicalInstruction::LoadGlobal(_) => LogicalInstructionKind::LoadGlobal,
+                LogicalInstruction::StoreGlobal(_) => LogicalInstructionKind::StoreGlobal,
+                LogicalInstruction::LoadArray(_) => LogicalInstructionKind::LoadArray,
+                LogicalInstruction::StoreArray(_) => LogicalInstructionKind::StoreArray,
+                LogicalInstruction::CallPrimitive(_) => LogicalInstructionKind::CallPrimitive,
                 LogicalInstruction::CallCode(_) => {
                     relocation_count += 1;
-                    7
+                    LogicalInstructionKind::CallCode
                 }
-                LogicalInstruction::CopyCallBase(_) => 8,
-                LogicalInstruction::TruncateCallBase => 9,
-                LogicalInstruction::ControlPush => 10,
-                LogicalInstruction::ControlCopy => 11,
-                LogicalInstruction::ControlDrop => 12,
+                LogicalInstruction::CopyCallBase(_) => LogicalInstructionKind::CopyCallBase,
+                LogicalInstruction::TruncateCallBase => LogicalInstructionKind::TruncateCallBase,
+                LogicalInstruction::ControlPush => LogicalInstructionKind::ControlPush,
+                LogicalInstruction::ControlCopy => LogicalInstructionKind::ControlCopy,
+                LogicalInstruction::ControlDrop => LogicalInstructionKind::ControlDrop,
                 LogicalInstruction::Jump(_) => {
                     relocation_count += 1;
-                    13
+                    LogicalInstructionKind::Jump
                 }
                 LogicalInstruction::JumpIfZero(_) => {
                     relocation_count += 1;
-                    14
+                    LogicalInstructionKind::JumpIfZero
                 }
-                LogicalInstruction::Return => 15,
-                LogicalInstruction::Halt => 16,
+                LogicalInstruction::Return => LogicalInstructionKind::Return,
+                LogicalInstruction::Halt => LogicalInstructionKind::Halt,
             };
-            variant_counts[index] += 1;
+            let index = LogicalInstructionKind::ALL
+                .iter()
+                .position(|candidate| *candidate == kind)
+                .expect("every instruction kind is listed");
+            counts[index] += 1;
         }
         TestImageStatistics {
             instruction_count: self.code.len(),
-            variant_counts,
+            variant_counts: LogicalInstructionKind::ALL
+                .into_iter()
+                .zip(counts)
+                .collect(),
             relocation_count,
             fixed_text_bytes: self.texts.iter().map(String::len).sum(),
             fixed_text_count: self.texts.len(),
@@ -466,7 +518,10 @@ mod tests {
 
         let statistics = image.statistics();
         assert_eq!(statistics.instruction_count, 17);
-        assert_eq!(statistics.variant_counts, [1; 17]);
+        assert_eq!(
+            statistics.variant_counts,
+            LogicalInstructionKind::ALL.map(|kind| (kind, 1))
+        );
         assert_eq!(statistics.relocation_count, 3);
         assert_eq!(statistics.fixed_text_bytes, 2);
         assert_eq!(statistics.fixed_text_count, 1);
