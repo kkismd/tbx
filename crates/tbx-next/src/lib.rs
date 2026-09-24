@@ -7,6 +7,11 @@ mod value;
 #[allow(dead_code)]
 mod instruction;
 
+// Issue #1840 keeps static image lowering private to the crate and separate
+// from product execution.
+#[allow(dead_code)]
+mod static_image;
+
 // Phase 2 exposes the internal stack contract before the VM consumes it.
 #[allow(dead_code)]
 mod stack;
