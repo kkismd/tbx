@@ -317,7 +317,7 @@ class ReviewFeedbackWorkflow:
             schema_path, result_path = temp / "result.schema.json", temp / "result.json"
             schema_path.write_text(json.dumps(RESULT_SCHEMA), encoding="utf-8")
             progress(f"Codex実行開始: PR #{number}")
-            result = self.run(("codex", "exec", "--json", "--output-schema", str(schema_path), "--output-last-message", str(result_path), "-C", str(REPO_ROOT), "-"), input_text=prompt)
+            result = self.run(("codex", "exec", "-c", 'sandbox_mode="workspace-write"', "-c", 'approval_policy="never"', "--json", "--output-schema", str(schema_path), "--output-last-message", str(result_path), "-C", str(REPO_ROOT), "-"), input_text=prompt)
             progress("Codex実行終了")
             if result.returncode:
                 detail = result.stderr.strip() or result.stdout.strip() or f"exit code {result.returncode}"

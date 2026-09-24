@@ -134,6 +134,9 @@ class IssueWorkflowTests(unittest.TestCase):
         workflow = FakeWorkflow()
         result = workflow.run_issue(1917)
         self.assertEqual(result["pull_request"], 2222)
+        codex_command = next(call for call in workflow.calls if call[:2] == ("codex", "exec"))
+        self.assertIn('sandbox_mode="workspace-write"', codex_command)
+        self.assertIn('approval_policy="never"', codex_command)
         ordered = [call[0:2] for call in workflow.calls]
         self.assertLess(ordered.index(("verify-commit", "issue/1917-implement")), ordered.index(("git", "push")))
         self.assertLess(ordered.index(("git", "push")), ordered.index(("gh", "pr")))
