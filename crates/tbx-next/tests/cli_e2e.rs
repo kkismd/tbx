@@ -247,13 +247,10 @@ fn run_child_with_timeout(
         }
     }
 
-    let mut marker_stop_requested = false;
     if marker_reached && !already_exited {
         if let Ok(Some(status)) = child.try_wait() {
             exit_status = Some(status);
             already_exited = true;
-        } else {
-            marker_stop_requested = true;
         }
     }
     if stop_reason.is_some() && !already_exited {
@@ -292,10 +289,12 @@ fn run_child_with_timeout(
         stderr: output.stderr,
     };
 
-    // A marker-triggered stop may close stdin before a long scripted input is fully written.
-    // All other paths preserve the old helper contract: a failed write fails the test.
+    // Interpret stdin delivery only after the child stop reason is known. A marker-triggered
+    // stop and a natural exit without the marker can both close stdin before writing completes.
     if let Err(error) = &input_write_result {
-        if stop_reason.is_none() || (marker_reached && !marker_stop_requested) {
+        let natural_exit_without_marker =
+            marker.is_some() && !marker_reached && stop_reason.is_none() && already_exited;
+        if !marker_reached && !natural_exit_without_marker && stop_reason.is_none() {
             panic!(
                 "stdin write failed: {error}\n{}\nstdout tail:\n{}\nstderr tail:\n{}",
                 diagnostic(expectation, input_lines, &input_write_result, &output),
@@ -485,7 +484,10 @@ fn missing_marker_after_natural_exit_fails_with_recovered_output() {
         .expect("failure should include a diagnostic");
 
     assert!(message.contains("not reached before process exit"));
-    assert!(message.contains("scripted stdin was fully sent and closed (2 lines)"));
+    assert!(
+        message.contains("scripted stdin was fully sent and closed (2 lines)")
+            || message.contains("scripted stdin write did not complete (2 lines expected)")
+    );
     assert!(message.contains("PROCESS EXITED WITHOUT MARKER"));
 }
 
@@ -506,7 +508,8 @@ fn early_process_exit_reports_incomplete_stdin_write() {
         .or_else(|| panic.downcast_ref::<&str>().copied())
         .expect("failure should include a diagnostic");
 
-    assert!(message.contains("stdin write failed"));
+    assert!(message.contains("not reached before process exit"));
+    assert!(message.contains("PROCESS EXITED WITHOUT MARKER"));
     assert!(message.contains("scripted stdin write did not complete"));
     assert!(!message.contains("scripted stdin was fully sent and closed"));
 }
