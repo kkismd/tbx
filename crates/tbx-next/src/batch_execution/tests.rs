@@ -85,3 +85,4 @@ mod batch_source_processing;
 mod builtin_user_source_words;
 mod embedded_standard_library_control;
 mod examples_seeded_session;
+mod static_image_harness;
