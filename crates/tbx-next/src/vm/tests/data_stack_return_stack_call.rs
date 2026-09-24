@@ -1,5 +1,22 @@
 use super::*;
 
+fn decrement_top(context: &mut PrimitiveContext<'_, '_>) -> Result<(), PrimitiveError> {
+    let value = context.pop()?;
+    context.push(Value::integer(value.as_integer() - 1));
+    Ok(())
+}
+
+fn duplicate_top(context: &mut PrimitiveContext<'_, '_>) -> Result<(), PrimitiveError> {
+    let value = context.peek()?;
+    context.push(value);
+    Ok(())
+}
+
+fn drop_top(context: &mut PrimitiveContext<'_, '_>) -> Result<(), PrimitiveError> {
+    context.pop()?;
+    Ok(())
+}
+
 #[test]
 fn multiple_pushes_preserve_order() {
     let mut code = InstructionSequence::new();
@@ -114,6 +131,146 @@ fn compiled_call_records_depth_before_entering_callee() {
         vm.instruction_pointer = location(&code, call);
         while vm.data_stack.pop().is_ok() {}
     }
+}
+
+#[test]
+fn compiled_return_discards_only_control_values_added_by_the_callee() {
+    let primitives = PrimitiveRegistry::new();
+    let mut words = PublishedWords::new();
+    let mut code = InstructionSequence::new();
+    let callee_entry = code.append(Instruction::Push(value(30)));
+    code.append(Instruction::PushControlValue);
+    code.append(Instruction::Push(value(99)));
+    code.append(Instruction::Return);
+    let callee = words.add(
+        CompletedWordDefinition::compiled(location(&code, callee_entry), code.view())
+            .expect("callee entry should be valid"),
+    );
+    let caller_entry = code.append(Instruction::Push(value(10)));
+    code.append(Instruction::PushControlValue);
+    let call = code.append(Instruction::Call(callee));
+    let after_call = code.append(Instruction::Halt);
+    let mut vm = new_vm(&code, caller_entry);
+    let mut execution = execution(&code, &words, &primitives);
+
+    for _ in 0..3 {
+        assert_eq!(vm.step(&mut execution), Ok(StepOutcome::Continued));
+    }
+    assert_eq!(vm.step(&mut execution), Ok(StepOutcome::Continued));
+    assert_eq!(vm.call_control_value_stack_depth(), Ok(1));
+    assert_eq!(vm.step(&mut execution), Ok(StepOutcome::Continued));
+    assert_eq!(vm.step(&mut execution), Ok(StepOutcome::Continued));
+    assert_eq!(vm.step(&mut execution), Ok(StepOutcome::Continued));
+    assert_eq!(vm.instruction_pointer(), location(&code, after_call));
+    assert_eq!(vm.control_value_stack_depth(), 1);
+    assert_eq!(vm.data_stack_depth(), 1);
+    assert_eq!(vm.peek_data(), Ok(value(99)));
+    assert_eq!(vm.return_stack_depth(), 0);
+    assert_eq!(
+        vm.instruction_pointer().code_space(),
+        location(&code, call).code_space()
+    );
+}
+
+#[test]
+fn nested_compiled_returns_restore_each_invocations_control_depth() {
+    let primitives = PrimitiveRegistry::new();
+    let mut words = PublishedWords::new();
+    let mut code = InstructionSequence::new();
+
+    let inner_entry = code.append(Instruction::Push(value(3)));
+    code.append(Instruction::PushControlValue);
+    code.append(Instruction::Return);
+    let inner = words.add(
+        CompletedWordDefinition::compiled(location(&code, inner_entry), code.view())
+            .expect("inner entry should be valid"),
+    );
+
+    let outer_entry = code.append(Instruction::Push(value(2)));
+    code.append(Instruction::PushControlValue);
+    code.append(Instruction::Call(inner));
+    let outer_return = code.append(Instruction::Return);
+    let outer = words.add(
+        CompletedWordDefinition::compiled(location(&code, outer_entry), code.view())
+            .expect("outer entry should be valid"),
+    );
+
+    let caller_entry = code.append(Instruction::Push(value(1)));
+    code.append(Instruction::PushControlValue);
+    code.append(Instruction::Call(outer));
+    let after_outer = code.append(Instruction::Halt);
+    let mut vm = new_vm(&code, caller_entry);
+    let mut execution = execution(&code, &words, &primitives);
+
+    for _ in 0..6 {
+        assert_eq!(vm.step(&mut execution), Ok(StepOutcome::Continued));
+    }
+    assert_eq!(vm.control_value_stack_depth(), 2);
+    assert_eq!(vm.call_control_value_stack_depth(), Ok(2));
+    for _ in 0..3 {
+        assert_eq!(vm.step(&mut execution), Ok(StepOutcome::Continued));
+    }
+    assert_eq!(vm.instruction_pointer(), location(&code, outer_return));
+    assert_eq!(vm.control_value_stack_depth(), 2);
+    assert_eq!(vm.return_stack_depth(), 1);
+    assert_eq!(vm.call_control_value_stack_depth(), Ok(1));
+
+    assert_eq!(vm.step(&mut execution), Ok(StepOutcome::Continued));
+    assert_eq!(vm.instruction_pointer(), location(&code, after_outer));
+    assert_eq!(vm.control_value_stack_depth(), 1);
+    assert_eq!(vm.return_stack_depth(), 0);
+}
+
+#[test]
+fn recursive_compiled_returns_restore_each_invocations_control_depth() {
+    let mut primitives = PrimitiveRegistry::new();
+    let decrement = primitives.register(decrement_top);
+    let duplicate = primitives.register(duplicate_top);
+    let drop = primitives.register(drop_top);
+    let mut words = PublishedWords::new();
+    let mut code = InstructionSequence::new();
+    let recursive_id = WordId::test_invalid(0);
+    let decrement_id = WordId::test_invalid(1);
+    let duplicate_id = WordId::test_invalid(2);
+    let drop_id = WordId::test_invalid(3);
+
+    let recursive_entry = code.append(Instruction::Push(value(55)));
+    code.append(Instruction::PushControlValue);
+    code.append(Instruction::Call(decrement_id));
+    code.append(Instruction::Call(duplicate_id));
+    let base_return = code.append(Instruction::JumpIfZero(address(0)));
+    code.append(Instruction::Call(recursive_id));
+    code.append(Instruction::Return);
+    let base_return_target = code.append(Instruction::Call(drop_id));
+    code.append(Instruction::Return);
+    code.patch_branch_target(base_return, base_return_target)
+        .expect("recursive base target should be patchable");
+    let recursive = words.add(
+        CompletedWordDefinition::compiled(location(&code, recursive_entry), code.view())
+            .expect("recursive entry should be valid"),
+    );
+    assert_eq!(recursive, recursive_id);
+    assert_eq!(
+        words.add(CompletedWordDefinition::primitive(decrement)),
+        decrement_id
+    );
+    assert_eq!(
+        words.add(CompletedWordDefinition::primitive(duplicate)),
+        duplicate_id
+    );
+    assert_eq!(words.add(CompletedWordDefinition::primitive(drop)), drop_id);
+
+    let caller_entry = code.append(Instruction::Push(value(3)));
+    code.append(Instruction::Call(recursive));
+    let after_call = code.append(Instruction::Halt);
+    let mut vm = new_vm(&code, caller_entry);
+    let mut execution = execution(&code, &words, &primitives);
+
+    assert_eq!(vm.run(&mut execution), Ok(RunOutcome::Halted));
+    assert_eq!(vm.instruction_pointer(), location(&code, after_call));
+    assert_eq!(vm.return_stack_depth(), 0);
+    assert_eq!(vm.control_value_stack_depth(), 0);
+    assert_eq!(vm.data_stack_depth(), 0);
 }
 
 #[test]

@@ -62,6 +62,10 @@ pub(crate) enum VmErrorKind {
     ControlValueStackUnderflow {
         source: StackError,
     },
+    ControlValueStackDepthBelowCall {
+        call_depth: usize,
+        current_depth: usize,
+    },
     ReturnStackUnderflow {
         source: StackError,
     },
@@ -598,6 +602,13 @@ impl Vm {
     }
 
     #[cfg(test)]
+    fn call_control_value_stack_depth(&self) -> Result<usize, StackError> {
+        self.return_stack
+            .peek()
+            .map(ReturnFrame::call_control_value_stack_depth)
+    }
+
+    #[cfg(test)]
     fn push_return_frame(&mut self, frame: ReturnFrame) {
         self.return_stack.push(frame);
     }
@@ -952,7 +963,11 @@ impl Vm {
                 let entry = self.valid_compiled_entry(instructions, location, entry)?;
 
                 self.return_stack
-                    .push(ReturnFrame::new(next, self.data_stack.depth()));
+                    .push(ReturnFrame::with_control_value_stack_depth(
+                        next,
+                        self.data_stack.depth(),
+                        self.control_value_stack.depth(),
+                    ));
                 self.instruction_pointer = entry;
 
                 Ok(StepOutcome::Continued)
@@ -999,7 +1014,23 @@ impl Vm {
             kind: VmErrorKind::ReturnStackUnderflow { source },
         })?;
         let target = self.valid_return_target(instructions, location, frame.return_location())?;
+        let call_depth = frame.call_control_value_stack_depth();
+        let current_depth = self.control_value_stack.depth();
+        if current_depth < call_depth {
+            return Err(VmError {
+                location,
+                kind: VmErrorKind::ControlValueStackDepthBelowCall {
+                    call_depth,
+                    current_depth,
+                },
+            });
+        }
 
+        // ADR #1936 makes Return restore only callee-owned control values. Validate
+        // the target and saved depth before changing the stack, frame, or IP.
+        self.control_value_stack
+            .truncate_to_depth(call_depth)
+            .expect("control-value depth was checked before Return truncation");
         self.return_stack
             .pop()
             .expect("return frame was checked before consuming Return frame");

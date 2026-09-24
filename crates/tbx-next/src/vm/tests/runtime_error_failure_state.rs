@@ -496,6 +496,7 @@ fn return_rejects_out_of_range_target_without_popping_frame_or_mutation() {
     let entry = code.append(Instruction::Return);
     let invalid = address(usize::MAX);
     let mut vm = new_vm(&code, entry);
+    vm.control_value_stack.push(value(8));
     vm.push_return_frame(return_frame(&code, invalid));
 
     let result = vm.step(code.view());
@@ -515,6 +516,40 @@ fn return_rejects_out_of_range_target_without_popping_frame_or_mutation() {
     assert!(!vm.is_halted());
     assert_eq!(vm.return_stack_depth(), 1);
     assert_eq!(vm.data_stack_depth(), 0);
+    assert_eq!(vm.control_value_stack_depth(), 1);
+}
+
+#[test]
+fn return_rejects_control_value_depth_below_call_depth_without_mutation() {
+    let mut code = InstructionSequence::new();
+    let target = code.append(Instruction::Halt);
+    let entry = code.append(Instruction::Return);
+    let mut vm = new_vm(&code, entry);
+    vm.data_stack.push(value(7));
+    vm.push_return_frame(ReturnFrame::with_control_value_stack_depth(
+        location(&code, target),
+        0,
+        1,
+    ));
+
+    let result = vm.step(code.view());
+
+    assert_eq!(
+        result,
+        Err(VmError {
+            location: location(&code, entry),
+            kind: VmErrorKind::ControlValueStackDepthBelowCall {
+                call_depth: 1,
+                current_depth: 0,
+            },
+        })
+    );
+    assert_eq!(vm.instruction_pointer(), location(&code, entry));
+    assert!(!vm.is_halted());
+    assert_eq!(vm.return_stack_depth(), 1);
+    assert_eq!(vm.data_stack_depth(), 1);
+    assert_eq!(vm.peek_data(), Ok(value(7)));
+    assert_eq!(vm.control_value_stack_depth(), 0);
 }
 
 #[test]
@@ -652,6 +687,7 @@ fn cross_space_compiled_call_rejects_invalid_entry_address_atomically() {
     let mut vm = Vm::new_at_location_in(&mut execution, location(&caller_code, call))
         .expect("caller entry should be valid");
     vm.data_stack.push(value(4));
+    vm.control_value_stack.push(value(5));
     let before = snapshot(&vm);
 
     let result = vm.step(&mut execution);
@@ -668,6 +704,7 @@ fn cross_space_compiled_call_rejects_invalid_entry_address_atomically() {
         })
     );
     assert_vm_state(&vm, before);
+    assert_eq!(vm.control_value_stack_depth(), 1);
 }
 
 #[test]
