@@ -223,6 +223,8 @@ pub(crate) struct SourceCompileContext<'a> {
     runtime_definitions: Option<RuntimeDefinitionPublicationAccess<'a>>,
     additional_source_capability: bool,
     local_references: Option<&'a DefinitionLocalReferences>,
+    // #1936: only a compiled runtime word body has a return frame to target.
+    return_allowed: bool,
 }
 
 pub(crate) struct DefinitionBodyCompileContext<'a> {
@@ -485,6 +487,7 @@ where
             code: callback_code,
             line_numbers: &mut callback_line_numbers,
             capabilities: SourceProcessingCapabilities::structured_runtime(),
+            return_allowed: context.return_allowed,
             owner_local_targets,
         });
     match accept {
@@ -660,6 +663,7 @@ pub(crate) fn compile_definition_body<'source>(
         runtime_definitions: None,
         additional_source_capability: false,
         local_references: context.local_references,
+        return_allowed: true,
     };
 
     compile_statements(
@@ -689,6 +693,7 @@ pub(crate) fn compile_quotation_body<'source>(
         runtime_definitions: None,
         additional_source_capability: false,
         local_references: context.local_references,
+        return_allowed: false,
     };
 
     StaticQuotation::try_build(|builder| {
@@ -1118,6 +1123,7 @@ where
                         code: state.code,
                         line_numbers: &mut line_numbers,
                         capabilities: SourceProcessingCapabilities::statement_runtime(),
+                        return_allowed: context.return_allowed,
                     });
                 evaluate_source_word(&implementation, &mut source_word_context)
                     .map_err(|source| SourceWordError::UserDefinedEvaluation { source })?;
@@ -1180,6 +1186,7 @@ where
                                 code: state.code,
                                 line_numbers: &mut line_numbers,
                                 capabilities: SourceProcessingCapabilities::structured_runtime(),
+                                return_allowed: context.return_allowed,
                             });
                         evaluate_source_word_with_state(
                             implementation.start(),
@@ -1694,6 +1701,7 @@ impl<'a> SourceCompileContext<'a> {
             runtime_definitions: None,
             additional_source_capability: false,
             local_references: None,
+            return_allowed: false,
         }
     }
 
@@ -1707,6 +1715,7 @@ impl<'a> SourceCompileContext<'a> {
             runtime_definitions: None,
             additional_source_capability: false,
             local_references: None,
+            return_allowed: false,
         }
     }
 
@@ -1723,6 +1732,7 @@ impl<'a> SourceCompileContext<'a> {
             runtime_definitions: None,
             additional_source_capability: false,
             local_references: None,
+            return_allowed: false,
         }
     }
 
@@ -1740,6 +1750,7 @@ impl<'a> SourceCompileContext<'a> {
             runtime_definitions: None,
             additional_source_capability: false,
             local_references: None,
+            return_allowed: false,
         }
     }
 
@@ -1757,6 +1768,7 @@ impl<'a> SourceCompileContext<'a> {
             runtime_definitions: None,
             additional_source_capability: false,
             local_references: None,
+            return_allowed: false,
         }
     }
 
@@ -1775,6 +1787,7 @@ impl<'a> SourceCompileContext<'a> {
             runtime_definitions: None,
             additional_source_capability: false,
             local_references: None,
+            return_allowed: false,
         }
     }
 
@@ -1793,6 +1806,7 @@ impl<'a> SourceCompileContext<'a> {
             runtime_definitions: None,
             additional_source_capability: false,
             local_references: None,
+            return_allowed: false,
         }
     }
 
@@ -1813,6 +1827,7 @@ impl<'a> SourceCompileContext<'a> {
             runtime_definitions: Some(RuntimeDefinitionPublicationAccess { code, words }),
             additional_source_capability: false,
             local_references: None,
+            return_allowed: false,
         }
     }
 
@@ -1833,6 +1848,7 @@ impl<'a> SourceCompileContext<'a> {
             runtime_definitions: Some(RuntimeDefinitionPublicationAccess { code, words }),
             additional_source_capability: false,
             local_references: None,
+            return_allowed: false,
         }
     }
 
@@ -2292,6 +2308,7 @@ impl<'a> SourceExecutionContext<'a> {
             runtime_definitions: None,
             additional_source_capability: false,
             local_references: None,
+            return_allowed: false,
         }
     }
 

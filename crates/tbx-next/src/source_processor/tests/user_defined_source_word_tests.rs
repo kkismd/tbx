@@ -1,4 +1,5 @@
 use super::*;
+use crate::source_word_evaluator::SourceWordEvaluationError;
 
 #[test]
 fn user_defined_statement_publishes_and_dispatches_let_equivalent() {
@@ -1343,7 +1344,78 @@ fn user_defined_return_equivalent_runs_through_runtime_definition_body() {
     register_builtin_global_variables(&mut session.globals, &mut session.bindings)
         .expect("A-Z variables should bootstrap");
     session.publish_syntax("SYNTAX URETURN\nSTATEMENT\nEXPECT_END\nEMIT_RETURN\nENDS");
-    session.publish_def("DEF STOP\nURETURN\nLET A = 1\nEND");
+    session.publish_def("DEF STOP\nEVAL 42\nIF 1\nURETURN\nENDIF\nLET A = 1\nEND");
+
+    let (sources, source_id) = source("EVAL 7\nSTOP\nLET A = 2");
+    let unit = compile_source(
+        sources.view(),
+        source_id,
+        SourceCompileContext::with_source_words_and_operators(
+            &session.bindings,
+            session.source_words.lookup(),
+            session.operators.lookup(),
+        ),
+    )
+    .expect("caller should compile with source words");
+    let code_spaces = [session.code.instruction_view()];
+    let source_mappings = [session.code.source_mapping()];
+    let result = run_unit(
+        &unit,
+        SourceExecutionContext::with_code_spaces_and_mappings(
+            &session.bindings,
+            &code_spaces,
+            &source_mappings,
+            PublishedWordLookup::new(&session.words),
+            session.primitives.lookup(),
+        )
+        .with_mut_globals(session.globals.view_mut()),
+    )
+    .expect("caller should run against published code");
+    assert_eq!(result.data_stack(), [value(7), value(42)]);
+    let Some(Binding::Variable(a)) = session.bindings.get(&name("A")).copied() else {
+        panic!("A should remain a variable binding");
+    };
+    assert_eq!(session.globals.view().read(a), Ok(value(2)));
+}
+
+#[test]
+fn user_defined_return_equivalent_is_rejected_outside_runtime_word_body_at_call_span() {
+    let mut session = RuntimeDefinitionSession::new();
+    session.publish_syntax("SYNTAX URETURN\nSTATEMENT\nEXPECT_END\nEMIT_RETURN\nENDS");
+
+    let (sources, source_id) = source("URETURN");
+    let error = compile_source(
+        sources.view(),
+        source_id,
+        SourceCompileContext::with_source_words_and_operators(
+            &session.bindings,
+            session.source_words.lookup(),
+            session.operators.lookup(),
+        ),
+    )
+    .expect_err("top-level return must fail during source processing");
+
+    assert!(matches!(
+        error,
+        SourceProcessorError::SourceWord(SourceWordError::UserDefinedEvaluation {
+            source: SourceWordEvaluationError::ReturnOutsideRuntimeWord { .. }
+        })
+    ));
+    assert_eq!(
+        error.primary_span(),
+        Some(span(sources.view(), source_id, 0, 7))
+    );
+}
+
+#[test]
+fn structured_terminator_return_is_allowed_in_runtime_word_and_rejected_at_top_level() {
+    let mut session = RuntimeDefinitionSession::new();
+    register_builtin_global_variables(&mut session.globals, &mut session.bindings)
+        .expect("A-Z variables should bootstrap");
+    session.publish_syntax(
+        "SYNTAX UBLOCK\nBLOCK\nSTART\nEXPECT_END\nLAST ENDUBLOCK\nEXPECT_END\nEMIT_RETURN\nENDS",
+    );
+    session.publish_def("DEF STOP\nUBLOCK\nENDUBLOCK\nLET A = 1\nEND");
 
     let (sources, source_id) = source("STOP\nLET A = 2");
     let unit = compile_source(
@@ -1355,7 +1427,7 @@ fn user_defined_return_equivalent_runs_through_runtime_definition_body() {
             session.operators.lookup(),
         ),
     )
-    .expect("caller should compile with source words");
+    .expect("structured terminator EMIT_RETURN should compile inside DEF");
     let code_spaces = [session.code.instruction_view()];
     let source_mappings = [session.code.source_mapping()];
     run_unit(
@@ -1369,9 +1441,32 @@ fn user_defined_return_equivalent_runs_through_runtime_definition_body() {
         )
         .with_mut_globals(session.globals.view_mut()),
     )
-    .expect("caller should run against published code");
+    .expect("structured terminator EMIT_RETURN should return from DEF");
     let Some(Binding::Variable(a)) = session.bindings.get(&name("A")).copied() else {
         panic!("A should remain a variable binding");
     };
     assert_eq!(session.globals.view().read(a), Ok(value(2)));
+
+    let (sources, source_id) = source("UBLOCK\nENDUBLOCK");
+    let error = compile_source(
+        sources.view(),
+        source_id,
+        SourceCompileContext::with_source_words_and_operators(
+            &session.bindings,
+            session.source_words.lookup(),
+            session.operators.lookup(),
+        ),
+    )
+    .expect_err("structured terminator EMIT_RETURN must fail at top level");
+
+    assert!(matches!(
+        &error,
+        SourceProcessorError::SourceWord(SourceWordError::UserDefinedEvaluation {
+            source: SourceWordEvaluationError::ReturnOutsideRuntimeWord { .. }
+        })
+    ));
+    assert_eq!(
+        error.primary_span(),
+        Some(span(sources.view(), source_id, 7, 16))
+    );
 }

@@ -772,6 +772,21 @@ fn file_success_runs_stdlib_control_structures_and_user_syntax_through_real_bina
 }
 
 #[test]
+fn file_success_returns_early_from_runtime_word_inside_for_loop() {
+    let path = fixture_path("early_return.tbx");
+
+    let output = run_with_file(&path);
+
+    assert!(
+        output.status.success(),
+        "expected success, stderr:\n{}",
+        stderr_text(&output)
+    );
+    assert_eq!(stdout_text(&output), "11\n1\n");
+    assert_eq!(stderr_text(&output), "");
+}
+
+#[test]
 fn file_success_uses_prime_procedure_stack_argument_independent_of_global_variable() {
     let path = fixture_path("prime_stack_argument.tbx");
 

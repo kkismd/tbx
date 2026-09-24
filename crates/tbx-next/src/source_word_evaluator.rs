@@ -34,6 +34,8 @@ pub(crate) struct UserDefinedSourceWordContext<'source, 'state> {
     code: &'state mut dyn InstructionBuildTarget,
     line_numbers: &'state mut LocalLineNumberTable,
     capabilities: SourceProcessingCapabilities,
+    return_allowed: bool,
+    statement_span: SourceSpan,
     exit_requested: bool,
 }
 
@@ -47,6 +49,7 @@ pub(crate) struct UserDefinedSourceWordContextParts<'source, 'state> {
     pub(crate) code: &'state mut dyn InstructionBuildTarget,
     pub(crate) line_numbers: &'state mut LocalLineNumberTable,
     pub(crate) capabilities: SourceProcessingCapabilities,
+    pub(crate) return_allowed: bool,
 }
 
 #[derive(Debug, Default)]
@@ -113,6 +116,9 @@ pub(crate) enum SourceWordEvaluationError {
     UnsupportedStructuralBranch {
         origin: SourceInstructionOrigin,
     },
+    ReturnOutsideRuntimeWord {
+        span: SourceSpan,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -130,6 +136,7 @@ impl SourceWordEvaluationError {
         match self {
             Self::CapabilityUnavailable { origin, .. }
             | Self::UnsupportedStructuralBranch { origin } => Some(origin.span()),
+            Self::ReturnOutsideRuntimeWord { span } => Some(*span),
             Self::Source { .. } => None,
             Self::Reader { source, origin: _ } => Some(match source {
                 SourceStatementReaderError::Missing { span, .. } => *span,
@@ -257,6 +264,7 @@ impl<'source, 'state> UserDefinedSourceWordContext<'source, 'state> {
             .first()
             .copied()
             .expect("user-defined source word context requires its leading token");
+        let statement_span = source_word_token.span();
         Self {
             view: parts.view,
             source_id: parts.source_id,
@@ -267,6 +275,8 @@ impl<'source, 'state> UserDefinedSourceWordContext<'source, 'state> {
             code: parts.code,
             line_numbers: parts.line_numbers,
             capabilities: parts.capabilities,
+            return_allowed: parts.return_allowed,
+            statement_span,
             exit_requested: false,
         }
     }
@@ -531,6 +541,12 @@ fn evaluate_instruction(
             context.exit_requested = true;
         }
         SourceProcessingOperation::EmitReturn => {
+            // #1936: RETURN belongs to a compiled runtime word invocation.
+            if !context.return_allowed {
+                return Err(SourceWordEvaluationError::ReturnOutsideRuntimeWord {
+                    span: context.statement_span,
+                });
+            }
             context
                 .code
                 .append_mapped(Instruction::Return, origin.span())
@@ -1127,6 +1143,7 @@ mod tests {
                     code: &mut builder,
                     line_numbers: &mut line_numbers,
                     capabilities: SourceProcessingCapabilities::statement_runtime(),
+                    return_allowed: false,
                 });
 
             evaluate_source_word(&implementation, &mut context).expect("evaluation should succeed");
@@ -1188,6 +1205,7 @@ mod tests {
                         code: &mut builder,
                         line_numbers: &mut line_numbers,
                         capabilities: SourceProcessingCapabilities::statement_runtime(),
+                        return_allowed: false,
                     });
 
                 evaluate_source_word(&implementation, &mut context)
@@ -1262,6 +1280,7 @@ mod tests {
                     code: &mut builder,
                     line_numbers: &mut line_numbers,
                     capabilities: SourceProcessingCapabilities::statement_runtime(),
+                    return_allowed: false,
                 });
 
             evaluate_source_word(&implementation, &mut context).expect("evaluation should succeed");
@@ -1323,6 +1342,7 @@ mod tests {
                     code: &mut builder,
                     line_numbers: &mut line_numbers,
                     capabilities: SourceProcessingCapabilities::statement_runtime(),
+                    return_allowed: false,
                 });
 
             evaluate_source_word(&implementation, &mut context).expect("evaluation should succeed");
@@ -1360,6 +1380,7 @@ mod tests {
                     code: &mut builder,
                     line_numbers: &mut line_numbers,
                     capabilities: SourceProcessingCapabilities::empty(),
+                    return_allowed: false,
                 });
 
             evaluate_source_word(&implementation, &mut context)
@@ -1426,6 +1447,7 @@ mod tests {
                     code: &mut builder,
                     line_numbers: &mut line_numbers,
                     capabilities: SourceProcessingCapabilities::statement_runtime(),
+                    return_allowed: false,
                 });
 
             evaluate_source_word(&implementation, &mut context)
@@ -1508,6 +1530,7 @@ mod tests {
                     code: &mut builder,
                     line_numbers: &mut line_numbers,
                     capabilities: SourceProcessingCapabilities::structured_runtime(),
+                    return_allowed: false,
                 });
 
             evaluate_source_word_with_state(&implementation, &mut context, &mut state)
@@ -1554,6 +1577,7 @@ mod tests {
                     code: &mut builder,
                     line_numbers: &mut line_numbers,
                     capabilities: SourceProcessingCapabilities::structured_runtime(),
+                    return_allowed: false,
                 });
 
             evaluate_source_word_with_state(&implementation, &mut context, &mut state)
@@ -1597,6 +1621,7 @@ mod tests {
                     code: &mut builder,
                     line_numbers: &mut line_numbers,
                     capabilities: SourceProcessingCapabilities::structured_runtime(),
+                    return_allowed: false,
                 });
 
             evaluate_source_word(&implementation, &mut context).expect("evaluation should succeed");
@@ -1648,6 +1673,7 @@ mod tests {
                     code: &mut builder,
                     line_numbers: &mut line_numbers,
                     capabilities: SourceProcessingCapabilities::structured_runtime(),
+                    return_allowed: false,
                 });
 
             evaluate_source_word(&implementation, &mut context).expect("evaluation should succeed");
