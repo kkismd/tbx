@@ -262,8 +262,9 @@ class IssueWorkflowTests(unittest.TestCase):
 
     def test_only_open_implementation_issue_is_accepted_before_side_effects(self):
         rejected_inputs = (
-            {"issue_kind": "ADR"},
-            {"issue_kind": "調査・計画"},
+            {"issue_body": "種別: 調査・計画"},
+            {"issue_body": "種別: ADR"},
+            {"issue_body": "本文中に実装という語があるだけ"},
             {"issue_body": "種別表示なし"},
             {"issue_state": "CLOSED"},
             {"returned_issue_number": 9999},
@@ -271,12 +272,24 @@ class IssueWorkflowTests(unittest.TestCase):
         for options in rejected_inputs:
             with self.subTest(options=options):
                 workflow = FakeWorkflow(**options)
-                with self.assertRaises(tbx_implement.WorkflowError):
+                with self.assertRaises(tbx_implement.WorkflowError) as error:
                     workflow.run_issue(1917)
+                if "issue_body" in options:
+                    self.assertEqual(error.exception.phase, "issue_validation")
                 self.assert_no_later_side_effects(workflow)
 
-        accepted = FakeWorkflow(issue_state="OPEN", issue_kind="実装")
-        self.assertEqual(accepted.run_issue(1917)["status"], "success")
+        accepted_markers = (
+            "**種別: 実装**",
+            "種別: **実装**",
+            "**種別:** 実装",
+            "種別 : 実装",
+            "  種別 : **実装**  ",
+            "__種別__: __実装__",
+        )
+        for marker in accepted_markers:
+            with self.subTest(marker=marker):
+                accepted = FakeWorkflow(issue_state="OPEN", issue_body=marker)
+                self.assertEqual(accepted.run_issue(1917)["status"], "success")
 
     def assert_no_later_side_effects(self, workflow):
         self.assertFalse(any(call[:3] == ("git", "switch", "-c") for call in workflow.calls))

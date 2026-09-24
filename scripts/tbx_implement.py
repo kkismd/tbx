@@ -41,6 +41,14 @@ PR_URL = re.compile(r"https://github\.com/[^\s]+/pull/([1-9][0-9]*)\b")
 PR_REF = re.compile(r"(?i)\bPR\s*#([1-9][0-9]*)\b")
 
 
+def has_implementation_kind(body: str) -> bool:
+    for line in body.splitlines():
+        candidate = line.strip().replace("**", "").replace("__", "")
+        if "".join(candidate.split()) == "種別:実装":
+            return True
+    return False
+
+
 @dataclass(frozen=True)
 class CommandResult:
     returncode: int
@@ -135,7 +143,7 @@ class IssueWorkflow:
         comments = issue.get("comments")
         if not isinstance(body, str) or not isinstance(comments, list):
             raise WorkflowError("issue_fetch", "issue response is missing its body or comments")
-        if "**種別: 実装**" not in body:
+        if not has_implementation_kind(body):
             raise WorkflowError("issue_validation", "issue body must contain the explicit kind marker **種別: 実装**")
 
         linked_issues: dict[str, dict] = {}
