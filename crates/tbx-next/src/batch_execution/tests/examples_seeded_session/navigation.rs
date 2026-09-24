@@ -303,6 +303,7 @@ NAVIGATE\n\
 PRINT \"NAVIGATION_STATE \", ENT_QX, \" \", ENT_QY, \" \", ENT_SX, \" \", ENT_SY, \" \", ENERGY, \" \", STARDATE\n\
 CR\n",
     );
+    source.push_str("PRINT \"NAVIGATION_FLAGS \", COURSE, \" \", NAVIGATION_VALID\nCR\n");
     let (sources, standard_library_id, source_id) =
         sttr1_sources_with_standard_library(STDLIB_SOURCE, &source);
     let mut input = TestInput::new([
@@ -337,6 +338,7 @@ CR\n",
         output_values(writer.text(), "NAVIGATION_STATE "),
         [1, 1, 4, 4, 100, 100]
     );
+    assert_eq!(output_values(writer.text(), "NAVIGATION_FLAGS "), [0, 1]);
     assert_eq!(result.data_stack(), []);
 }
 

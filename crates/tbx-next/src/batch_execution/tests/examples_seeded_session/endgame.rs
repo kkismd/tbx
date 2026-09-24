@@ -134,6 +134,24 @@ CR\n",
 }
 
 #[test]
+fn sttr1_endgame_is_noop_after_result_is_already_set() {
+    let output = run_endgame(
+        "LET GAME_RESULT = 1\n\
+LET ELAPSED = 77\n\
+LET EFFICIENCY = 88\n\
+CHECK_ENDGAME\n\
+PRINT \"REPEATED_ENDGAME_STATE \", GAME_RESULT, \" \", ELAPSED, \" \", EFFICIENCY\n\
+CR\n",
+        &[],
+    );
+    assert_eq!(
+        output_values(&output, "REPEATED_ENDGAME_STATE "),
+        [1, 77, 88]
+    );
+    assert!(!output.contains("MISSION SUMMARY"));
+}
+
+#[test]
 fn sttr1_victory_efficiency_avoids_intermediate_overflow_and_caps_result() {
     let output = run_endgame(
         "LET GAME_RESULT = 0\n\

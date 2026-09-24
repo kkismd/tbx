@@ -40,9 +40,11 @@ END
 # Apply the original navigation event: a 20% event chooses one device,
 # then worsens or improves it by one to five units without clamping.
 DEF RANDOM_DEVICE_EVENT
-  IF RND(5) = 1
-    LET DEVICE_INDEX = RND(8)
-    IF RND(2) = 1
+  IF RND(5) <> 1
+    RETURN
+  ENDIF
+  LET DEVICE_INDEX = RND(8)
+  IF RND(2) = 1
       # R is the short-lived device damage change.
       LET R = RND(5)
       LET @DAMAGE[DEVICE_INDEX] = @DAMAGE[DEVICE_INDEX] - R
@@ -56,7 +58,6 @@ DEF RANDOM_DEVICE_EVENT
       PRINT_DEVICE_NAME
       PRINT " STATE OF REPAIR IMPROVED"
       CR
-    ENDIF
   ENDIF
 END
 
@@ -71,9 +72,10 @@ DEF DAMAGE_CONTROL
   IF @DAMAGE[6] < 0
     PRINT "DAMAGE CONTROL IS NON-OPERATIONAL"
     CR
-  ELSE
-    PRINT "DAMAGE REPORT"
-    CR
+    RETURN
+  ENDIF
+  PRINT "DAMAGE REPORT"
+  CR
     LET DEVICE_INDEX = 1
     PRINT_DEVICE_NAME
     PRINT " ", @DAMAGE[DEVICE_INDEX]
@@ -106,5 +108,4 @@ DEF DAMAGE_CONTROL
     PRINT_DEVICE_NAME
     PRINT " ", @DAMAGE[DEVICE_INDEX]
     CR
-  ENDIF
 END

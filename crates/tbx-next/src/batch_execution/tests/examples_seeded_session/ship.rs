@@ -46,9 +46,10 @@ SHIELD_CONTROL\n\
 PRINT \"SHIELD_CANCEL_STATE \", ENERGY, \" \", SHIELDS\n\
 CR\n",
     );
+    source.push_str("PRINT \"SHIELD_CANCEL_FLAGS \", SHIELD_ENERGY, \" \", SHIELD_VALID\nCR\n");
     let (sources, standard_library_id, source_id) =
         sttr1_sources_with_standard_library(STDLIB_SOURCE, &source);
-    let mut input = TestInput::new([Ok(Some("0".to_owned()))]);
+    let mut input = TestInput::new([Ok(Some("-5".to_owned()))]);
     let mut writer = RecordingWriter::default();
 
     let result = success(execute_registered_sources_with_filesystem_and_seed(
@@ -63,6 +64,10 @@ CR\n",
     assert_eq!(
         output_values(writer.text(), "SHIELD_CANCEL_STATE "),
         [1000, 500]
+    );
+    assert_eq!(
+        output_values(writer.text(), "SHIELD_CANCEL_FLAGS "),
+        [-5, 1]
     );
     assert_eq!(result.data_stack(), []);
 }
