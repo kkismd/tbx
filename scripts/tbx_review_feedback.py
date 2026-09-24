@@ -217,11 +217,20 @@ class ReviewFeedbackWorkflow:
         for row in inline:
             if isinstance(row, dict) and isinstance(row.get("body"), str):
                 messages.append({"kind": "review-comment", "id": row.get("id"), "body": row["body"], "createdAt": row.get("created_at"), "updatedAt": row.get("updated_at"), "url": row.get("html_url"), "inReplyToId": row.get("in_reply_to_id"), "path": row.get("path"), "line": row.get("line"), "commitId": row.get("commit_id")})
-        threads = self.gh_json("pr_fetch", ("gh", "api", "graphql", "-f", "query=query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){pullRequest(number:$number){reviewThreads(first:100){nodes{id isResolved isOutdated comments(first:100){nodes{databaseId}}}}}}}", "-F", f"owner={slug.split('/')[0]}", "-F", f"name={slug.split('/')[1]}", "-F", f"number={number}"))
+        threads = self.gh_json("pr_fetch", ("gh", "api", "graphql", "-f", "query=query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){pullRequest(number:$number){reviews(first:100){nodes{databaseId updatedAt}} reviewThreads(first:100){nodes{id isResolved isOutdated comments(first:100){nodes{databaseId}}}}}}}", "-F", f"owner={slug.split('/')[0]}", "-F", f"name={slug.split('/')[1]}", "-F", f"number={number}"))
         try:
-            thread_nodes = threads["data"]["repository"]["pullRequest"]["reviewThreads"]["nodes"]
+            pull_request_data = threads["data"]["repository"]["pullRequest"]
+            thread_nodes = pull_request_data["reviewThreads"]["nodes"]
+            review_nodes = pull_request_data["reviews"]["nodes"]
         except (TypeError, KeyError):
             raise WorkflowError("pr_fetch", "review thread response is invalid") from None
+        review_updated_at = {node.get("databaseId"): node.get("updatedAt") for node in review_nodes}
+        for message in messages:
+            if message["kind"] == "review":
+                updated_at = review_updated_at.get(int(message["id"]))
+                if not isinstance(updated_at, str):
+                    raise WorkflowError("pr_fetch", f"review {message['id']} is missing its GitHub updatedAt")
+                message["updatedAt"] = updated_at
         thread_by_comment = {}
         for thread in thread_nodes:
             for order, node in enumerate(thread.get("comments", {}).get("nodes", [])):

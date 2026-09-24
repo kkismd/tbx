@@ -257,6 +257,40 @@ class FeedbackRunPrTests(unittest.TestCase):
         self.assertEqual(result["review_result"], {"status": "no_additional_changes", "head_sha": head})
         self.assertEqual(runner.events, [])
 
+    def test_fetch_snapshot_uses_graphql_review_updated_at_to_invalidate_marker(self):
+        head = "a" * 40
+        marker = {"id": 50, "body": f"<!-- tbx-w01-review-result:v1 head={head} result=no_additional_changes -->", "created_at": "2026-01-02T00:00:00Z"}
+        review = {"id": 60, "body": "review body", "submitted_at": "2026-01-01T00:00:00Z", "html_url": "review-url"}
+
+        class Runner:
+            def __call__(self, args, *, input_text=None):
+                args = tuple(args)
+                if args[:3] == ("gh", "pr", "view"):
+                    return feedback.CommandResult(0, json.dumps({"number": 42, "state": "OPEN", "mergedAt": None, "headRefName": "topic", "headRefOid": head, "body": ""}))
+                if args[:3] == ("gh", "repo", "view"):
+                    return feedback.CommandResult(0, json.dumps({"nameWithOwner": "owner/repo"}))
+                if args[:3] == ("gh", "pr", "diff"):
+                    return feedback.CommandResult(0, "diff")
+                if args[:4] == ("gh", "api", "--paginate", "--slurp"):
+                    endpoint = args[4]
+                    rows = [marker] if "issues/42/comments" in endpoint else [review] if "pulls/42/reviews" in endpoint else []
+                    return feedback.CommandResult(0, json.dumps([rows]))
+                if args[:3] == ("gh", "api", "graphql"):
+                    self.query = args[args.index("-f") + 1]
+                    payload = {"data": {"repository": {"pullRequest": {
+                        "reviews": {"nodes": [{"databaseId": 60, "updatedAt": "2026-01-03T00:00:00Z"}]},
+                        "reviewThreads": {"nodes": []},
+                    }}}}
+                    return feedback.CommandResult(0, json.dumps(payload))
+                raise AssertionError(args)
+
+        runner = Runner()
+        workflow = feedback.ReviewFeedbackWorkflow(runner)
+        pr, messages = workflow.fetch_snapshot(42)
+        self.assertIn("updatedAt", runner.query)
+        self.assertEqual(messages[0]["updatedAt"], "2026-01-03T00:00:00Z")
+        self.assertEqual(feedback.derive_review_result(pr, pr["comments"], messages), {"status": "none", "head_sha": head})
+
     def test_fixed_verifies_before_push_then_records(self):
         workflow, runner = self.workflow(self.result("success", "fixed", modified=["issue-comment:44@2026-01-01T00:00:00Z"], checks=list(feedback.REQUIRED_CHECKS), commit="b" * 40))
         workflow.run_pr(42)
