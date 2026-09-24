@@ -326,12 +326,13 @@ class ReviewFeedbackWorkflow:
                 codex = json.loads(result_path.read_text(encoding="utf-8"))
             except (OSError, json.JSONDecodeError) as error:
                 raise WorkflowError("codex", f"missing or invalid structured result: {error}") from error
-        if not isinstance(codex, dict) or codex.get("status") not in ("success", "human_review_required"):
-            status = codex.get("status") if isinstance(codex, dict) else None
-            raise WorkflowError("codex", "Codex did not complete successfully")
-        human_review = codex["status"] == "human_review_required"
+        if not isinstance(codex, dict) or codex.get("status") not in ("success", "failed", "human_review_required"):
+            raise WorkflowError("codex", "missing or invalid structured result: invalid status")
         if not isinstance(codex.get("summary"), str) or not codex["summary"].strip():
             raise WorkflowError("codex", "Codex result is missing its summary")
+        if codex["status"] == "failed":
+            raise WorkflowError("codex", codex["summary"])
+        human_review = codex["status"] == "human_review_required"
         expected_revisions = set(snapshot["candidate_revisions"])
         results = codex.get("results")
         if not isinstance(results, list) or {row.get("revision") for row in results if isinstance(row, dict)} != expected_revisions:

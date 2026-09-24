@@ -365,11 +365,22 @@ class FeedbackRunPrTests(unittest.TestCase):
         message = {"kind": "issue-comment", "id": 44, "createdAt": "2026-01-01T00:00:00Z", "updatedAt": "2026-01-01T00:00:00Z"}
         self.assertEqual(feedback.extract_candidates([message], [], {"issue-comment:44": "2026-01-02T00:00:00Z"}), [])
 
-    def test_failed_codex_status_does_not_record(self):
-        workflow, runner = self.workflow(self.result("failed", "no_change"))
-        with self.assertRaises(feedback.WorkflowError):
+    def test_failed_codex_status_preserves_summary_and_does_not_record(self):
+        workflow, runner = self.workflow(self.result("failed", "no_change", reason="原因A"))
+        with self.assertRaisesRegex(feedback.WorkflowError, "原因A") as raised:
             workflow.run_pr(42)
+        self.assertEqual(raised.exception.phase, "codex")
         self.assertEqual(runner.events, ["codex"])
+
+    def test_failed_codex_summary_is_preserved_in_final_json_error(self):
+        stdout = io.StringIO()
+        stderr = io.StringIO()
+        with patch.object(feedback.ReviewFeedbackWorkflow, "run_pr", side_effect=feedback.WorkflowError("codex", "原因A")):
+            with redirect_stdout(stdout), redirect_stderr(stderr):
+                exit_code = feedback.main(["42"])
+        self.assertEqual(exit_code, 1)
+        self.assertEqual(json.loads(stdout.getvalue()), {"status": "failed", "phase": "codex", "error": "原因A"})
+        self.assertIn("workflow failed: codex", stderr.getvalue())
 
     def test_codex_nonzero_errors_use_stderr_stdout_or_exit_code(self):
         for codex_result, expected in (
