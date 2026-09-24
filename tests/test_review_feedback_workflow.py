@@ -189,6 +189,7 @@ class FeedbackRunPrTests(unittest.TestCase):
             args = tuple(args)
             if args[:2] == ("codex", "exec"):
                 self.events.append("codex")
+                self.codex_command = args
                 self.prompt = input_text
                 if self.interrupt_codex:
                     raise feedback.CodexInterrupted()
@@ -295,6 +296,8 @@ class FeedbackRunPrTests(unittest.TestCase):
         workflow, runner = self.workflow(self.result("success", "fixed", modified=["issue-comment:44@2026-01-01T00:00:00Z"], checks=list(feedback.REQUIRED_CHECKS), commit="b" * 40))
         workflow.run_pr(42)
         self.assertEqual(runner.events, ["codex", "verify", "push", "record"])
+        self.assertIn('sandbox_mode="workspace-write"', runner.codex_command)
+        self.assertIn('approval_policy="never"', runner.codex_command)
 
     def test_successful_workflow_reports_major_stages_in_order(self):
         outcome = self.result("success", "fixed", modified=["issue-comment:44@2026-01-01T00:00:00Z"], checks=list(feedback.REQUIRED_CHECKS), commit="b" * 40)

@@ -210,7 +210,8 @@ GitHub context retrieved by the parent workflow:
             result_path = temp / "codex-result.json"
             schema_path.write_text(json.dumps(CODEX_RESULT_SCHEMA), encoding="utf-8")
             command = (
-                "codex", "exec", "--json", "--output-schema", str(schema_path),
+                "codex", "exec", "-c", 'sandbox_mode="workspace-write"',
+                "-c", 'approval_policy="never"', "--json", "--output-schema", str(schema_path),
                 "--output-last-message", str(result_path), "-C", str(REPO_ROOT), "-",
             )
             result = self.run(command, input_text=prompt)
