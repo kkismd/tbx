@@ -42,6 +42,21 @@ class FeedbackCandidateTests(unittest.TestCase):
         self.assertEqual(feedback.extract_candidates([message], [record], {}, set()), [message])
 
 
+class FeedbackSchemaTests(unittest.TestCase):
+    def test_every_object_schema_disallows_additional_properties(self):
+        def assert_object_constraints(schema):
+            if isinstance(schema, dict):
+                if schema.get("type") == "object":
+                    self.assertIs(schema.get("additionalProperties"), False)
+                for value in schema.values():
+                    assert_object_constraints(value)
+            elif isinstance(schema, list):
+                for value in schema:
+                    assert_object_constraints(value)
+
+        assert_object_constraints(feedback.RESULT_SCHEMA)
+
+
 class FeedbackPreflightTests(unittest.TestCase):
     def test_clean_matching_head_is_required(self):
         class Runner:

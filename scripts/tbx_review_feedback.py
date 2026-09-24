@@ -328,7 +328,7 @@ Snapshot:
 
 RESULT_SCHEMA = {"type": "object", "additionalProperties": False, "required": ["status", "summary", "results", "modified_messages", "checks_passed", "commit_sha"], "properties": {
     "status": {"type": "string", "enum": ["success", "failed", "human_review_required"]}, "summary": {"type": "string"},
-    "results": {"type": "array", "items": {"type": "object", "required": ["revision", "result", "reason"], "properties": {"revision": {"type": "string"}, "result": {"type": "string", "enum": ["fixed", "no_change", "human_review_required"]}, "reason": {"type": "string"}}}},
+    "results": {"type": "array", "items": {"type": "object", "additionalProperties": False, "required": ["revision", "result", "reason"], "properties": {"revision": {"type": "string"}, "result": {"type": "string", "enum": ["fixed", "no_change", "human_review_required"]}, "reason": {"type": "string"}}}},
     "modified_messages": {"type": "array", "items": {"type": "string"}}, "checks_passed": {"type": "array", "items": {"type": "string", "enum": list(REQUIRED_CHECKS)}}, "commit_sha": {"type": ["string", "null"]}}}
 
 
