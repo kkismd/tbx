@@ -45,6 +45,69 @@ class FeedbackCandidateTests(unittest.TestCase):
         self.assertEqual(feedback.extract_candidates([message], [record], {}, {"old-head"}), [])
         self.assertEqual(feedback.extract_candidates([message], [record], {}, set()), [message])
 
+    def test_review_result_comments_are_excluded_even_when_marker_is_malformed(self):
+        for body in (
+            "<!-- tbx-w01-review-result:v1 head=" + "a" * 40 + " result=no_additional_changes -->",
+            "<!-- tbx-w01-review-result:v2 head=" + "a" * 40 + " result=no_additional_changes -->",
+            "<!-- tbx-w01-review-result:v1 head=bad result=unknown -->",
+            "broken tbx-w01-review-result marker",
+        ):
+            self.assertTrue(feedback.is_review_result_comment(body))
+        self.assertFalse(feedback.is_review_result_comment("no_change feedback"))
+
+
+class ReviewResultTests(unittest.TestCase):
+    HEAD = "a" * 40
+
+    def comment(self, identifier, result, posted="2026-01-02T00:00:00Z", *, head=None):
+        target = head or self.HEAD
+        body = f"<!-- tbx-w01-review-result:v1 head={target} result={result} -->"
+        return {"id": identifier, "body": body, "created_at": posted}
+
+    def derive(self, comments, messages=(), head=None):
+        pr = {"headRefOid": head or self.HEAD}
+        return feedback.derive_review_result(pr, comments, list(messages))
+
+    def test_missing_marker_does_not_infer_result_from_free_text_or_no_change(self):
+        self.assertEqual(self.derive([]), {"status": "none", "head_sha": self.HEAD})
+        comments = [{"id": 1, "body": "LGTM merge ok", "created_at": "2026-01-02T00:00:00Z"}]
+        message = {"kind": "issue-comment", "id": 1, "body": "no_change", "createdAt": "2026-01-01T00:00:00Z", "updatedAt": "2026-01-01T00:00:00Z"}
+        self.assertEqual(self.derive(comments, [message])["status"], "none")
+
+    def test_only_current_head_and_well_formed_v1_markers_are_accepted(self):
+        comments = [
+            self.comment(10, "no_additional_changes", head="b" * 40),
+            {"id": 11, "body": f"<!-- tbx-w01-review-result:v2 head={self.HEAD} result=no_additional_changes -->", "created_at": "2026-01-03T00:00:00Z"},
+            {"id": 12, "body": f"<!-- tbx-w01-review-result:v1 head={self.HEAD[:-1]}x result=no_additional_changes -->", "created_at": "2026-01-04T00:00:00Z"},
+            self.comment(13, "changes_required"),
+        ]
+        self.assertEqual(self.derive(comments)["status"], "changes_required")
+        self.assertEqual(self.derive(comments, head="b" * 40)["status"], "no_additional_changes")
+
+    def test_latest_same_head_marker_uses_time_then_numeric_comment_id(self):
+        comments = [
+            self.comment(20, "changes_required", "2026-01-02T00:00:00Z"),
+            self.comment(21, "no_additional_changes", "2026-01-03T00:00:00Z"),
+            self.comment(22, "changes_required", "2026-01-03T00:00:00Z"),
+        ]
+        self.assertEqual(self.derive(comments)["status"], "changes_required")
+
+    def test_new_or_edited_feedback_after_marker_invalidates_result(self):
+        marker = self.comment(20, "no_additional_changes")
+        for message in (
+            {"kind": "issue-comment", "id": 1, "createdAt": "2026-01-03T00:00:00Z", "updatedAt": "2026-01-03T00:00:00Z"},
+            {"kind": "review", "id": 2, "createdAt": "2026-01-01T00:00:00Z", "updatedAt": "2026-01-03T00:00:00Z"},
+            {"kind": "review-comment", "id": 3, "createdAt": "2026-01-01T00:00:00Z", "updatedAt": "2026-01-03T00:00:00Z"},
+        ):
+            self.assertEqual(self.derive([marker], [message])["status"], "none")
+
+    def test_feedback_before_marker_does_not_invalidate_and_cannot_override_newer_marker(self):
+        marker = self.comment(20, "no_additional_changes")
+        old_message = {"kind": "issue-comment", "id": 1, "createdAt": "2026-01-01T00:00:00Z", "updatedAt": "2026-01-01T12:00:00Z"}
+        self.assertEqual(self.derive([marker], [old_message])["status"], "no_additional_changes")
+        newer = self.comment(21, "changes_required", "2026-01-04T00:00:00Z")
+        self.assertEqual(self.derive([marker, newer], [old_message])["status"], "changes_required")
+
 
 class FeedbackSchemaTests(unittest.TestCase):
     def test_every_object_schema_disallows_additional_properties(self):
@@ -182,6 +245,16 @@ class FeedbackRunPrTests(unittest.TestCase):
         workflow.fetch_snapshot = lambda number: ({"headRefName": "topic", "comments": [], "diff": ""}, [])
         result = workflow.run_pr(42)
         self.assertEqual(result["status"], "success")
+        self.assertEqual(result["review_result"], {"status": "none", "head_sha": None})
+        self.assertEqual(runner.events, [])
+
+    def test_no_candidates_returns_structured_review_result_without_running_codex(self):
+        workflow, runner = self.workflow()
+        head = "a" * 40
+        marker = {"id": 50, "body": f"<!-- tbx-w01-review-result:v1 head={head} result=no_additional_changes -->", "created_at": "2026-01-02T00:00:00Z"}
+        workflow.fetch_snapshot = lambda number: ({"headRefName": "topic", "headRefOid": head, "comments": [marker], "diff": ""}, [])
+        result = workflow.run_pr(42)
+        self.assertEqual(result["review_result"], {"status": "no_additional_changes", "head_sha": head})
         self.assertEqual(runner.events, [])
 
     def test_fixed_verifies_before_push_then_records(self):
