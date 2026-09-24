@@ -575,6 +575,54 @@ CR\n",
 }
 
 #[test]
+fn sttr1_photon_torpedo_course_cancel_preserves_state_and_rng() {
+    let mut source = std::fs::read_to_string(example_path("sttr1/main.tbx"))
+        .expect("STTR1 example should be readable");
+    source.push_str(
+        "LET TORPEDOES = 2\n\
+LET COURSE = 19\n\
+LET TORPEDO_VALID = 0\n\
+PHOTON_TORPEDO\n\
+PRINT \"CANCEL_STATE \", TORPEDOES, \" \", COURSE, \" \", TORPEDO_VALID, \" \", RND(200)\n\
+CR\n",
+    );
+    let (sources, standard_library_id, source_id) =
+        sttr1_sources_with_standard_library(STDLIB_SOURCE, &source);
+    let mut input = TestInput::new([Ok(Some("0".to_owned()))]);
+    let mut writer = RecordingWriter::default();
+
+    let result = success(execute_registered_sources_with_filesystem_and_seed(
+        sources,
+        standard_library_id,
+        source_id,
+        &mut writer,
+        Some(&mut input),
+        30,
+    ));
+
+    let state = output_values(writer.text(), "CANCEL_STATE ");
+    assert_eq!(state[..3], [2, 0, 1]);
+    assert_eq!(result.data_stack(), []);
+
+    let control_source = source.replace("PHOTON_TORPEDO\n", "REM SKIP_TORPEDO\n");
+    let (sources, standard_library_id, source_id) =
+        sttr1_sources_with_standard_library(STDLIB_SOURCE, &control_source);
+    let mut control_writer = RecordingWriter::default();
+    success(execute_registered_sources_with_filesystem_and_seed(
+        sources,
+        standard_library_id,
+        source_id,
+        &mut control_writer,
+        None,
+        30,
+    ));
+    assert_eq!(
+        state[3],
+        output_values(control_writer.text(), "CANCEL_STATE ")[3]
+    );
+}
+
+#[test]
 fn sttr1_photon_torpedo_hits_first_non_empty_klingon_and_updates_counts() {
     let mut source = std::fs::read_to_string(example_path("sttr1/main.tbx"))
         .expect("STTR1 example should be readable");

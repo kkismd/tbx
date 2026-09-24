@@ -20,6 +20,7 @@ DEF NAVIGATE
       DROP
       IF COURSE = 0
         LET NAVIGATION_VALID = 1
+        RETURN
       ELSIF COURSE >= 10 AND COURSE <= 89
         PRINT "WARP SCALE: INPUT 0-80 = WARP 0.0-8.0 (10=1.0); 10 WARP = ONE QUADRANT"
         CR
@@ -56,7 +57,6 @@ DEF NAVIGATE
     ENDIF
   ENDWH
 
-  IF COURSE <> 0
     # A valid navigation course triggers the current quadrant's retaliation
     # before any navigation-side repair/event or movement is applied.
     KLINGON_ATTACK
@@ -154,7 +154,6 @@ DEF NAVIGATE
       PRINT "USE SHIELD CONTROL TO TRANSFER ENERGY"
       CR
     ENDIF
-  ENDIF
 END
 
 
@@ -164,8 +163,9 @@ DEF PRINT_SHORT_SCAN
   IF @DAMAGE[2] < 0
     PRINT "SHORT RANGE SENSORS INOPERABLE"
     CR
-  ELSE
-    PRINT "SHORT RANGE SCAN"
+    RETURN
+  ENDIF
+  PRINT "SHORT RANGE SCAN"
     CR
     LET SECTOR_ROW = 1
     WHILE SECTOR_ROW <= 8
@@ -214,7 +214,6 @@ DEF PRINT_SHORT_SCAN
       CR
       LET SECTOR_ROW = SECTOR_ROW + 1
     ENDWH
-  ENDIF
 END
 
 DEF PRINT_LONG_SCAN
@@ -222,8 +221,9 @@ DEF PRINT_LONG_SCAN
   IF @DAMAGE[3] < 0
     PRINT "LONG RANGE SENSORS INOPERABLE"
     CR
-  ELSE
-    PRINT "LONG RANGE SCAN"
+    RETURN
+  ENDIF
+  PRINT "LONG RANGE SCAN"
     CR
     PRINT "CENTER QUADRANT ", ENT_QX, ",", ENT_QY, " (CENTER OF 3X3 SCAN)"
     CR
@@ -249,5 +249,4 @@ DEF PRINT_LONG_SCAN
       CR
       LET SECTOR_ROW = SECTOR_ROW + 1
     ENDWH
-  ENDIF
 END
