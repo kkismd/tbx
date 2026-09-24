@@ -100,6 +100,9 @@ fn test_trek_command_loop_refreshes_docking_after_navigation_before_next_prompt(
         "USE \"command.tbx\"\n",
         "DEF RUN()\n",
         "  INIT_GAME\n",
+        // One navigation event can subtract at most RND(5) = 5, leaving damage at 0.
+        // DEVICE_DISABLED requires damage < 0, so the later warp 1.0 passes its gate.
+        "  SET_DEVICE_DAMAGE DAMAGE_SLOT_WARP_ENGINES(), 5\n",
         "  CLEAR_SECTOR\n",
         "  LET ENT_SX = 4\n",
         "  LET ENT_SY = 4\n",
