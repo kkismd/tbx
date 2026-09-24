@@ -378,6 +378,7 @@ PHASER\n\
 PRINT \"CANCEL_STATE \", ENERGY, \" \", SHIELDS\n\
 CR\n",
     );
+    source.push_str("PRINT \"CANCEL_FLAGS \", PHASER_ENERGY, \" \", PHASER_VALID\nCR\n");
     let (sources, standard_library_id, source_id) =
         sttr1_sources_with_standard_library(STDLIB_SOURCE, &source);
     let mut input = TestInput::new([Ok(Some("0".to_owned()))]);
@@ -393,6 +394,7 @@ CR\n",
     ));
 
     assert_eq!(output_values(writer.text(), "CANCEL_STATE "), [777, 222]);
+    assert_eq!(output_values(writer.text(), "CANCEL_FLAGS "), [0, 1]);
     assert_eq!(result.data_stack(), []);
 }
 

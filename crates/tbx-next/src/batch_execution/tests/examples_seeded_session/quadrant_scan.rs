@@ -151,3 +151,43 @@ fn sttr1_scan_commands_respect_sensor_and_computer_damage_gates() {
     assert!(chart.iter().all(|value| *value == 0));
     assert_eq!(result.data_stack(), []);
 }
+
+#[test]
+fn sttr1_damaged_short_scan_still_checks_docking() {
+    let mut source = std::fs::read_to_string(example_path("sttr1/main.tbx"))
+        .expect("STTR1 example should be readable");
+    source.push_str(
+        "LET ENT_SX = 4\n\
+LET ENT_SY = 4\n\
+LET @SECTOR[27] = 3\n\
+LET DOCKED = 0\n\
+LET ENERGY = 100\n\
+LET TORPEDOES = 1\n\
+LET SHIELDS = 90\n\
+LET @DAMAGE[2] = -1\n\
+PRINT_SHORT_SCAN\n\
+PRINT \"DAMAGED_SCAN_DOCKING \", DOCKED, \" \", CONDITION, \" \", ENERGY, \" \", TORPEDOES, \" \", SHIELDS\n\
+CR\n",
+    );
+    let (sources, standard_library_id, source_id) =
+        sttr1_sources_with_standard_library(STDLIB_SOURCE, &source);
+    let mut writer = RecordingWriter::default();
+    let result = success(execute_registered_sources_with_filesystem_and_seed(
+        sources,
+        standard_library_id,
+        source_id,
+        &mut writer,
+        None,
+        30,
+    ));
+
+    assert!(writer.text().contains("SHORT RANGE SENSORS INOPERABLE"));
+    assert_eq!(
+        output_values(writer.text(), "DAMAGED_SCAN_DOCKING "),
+        [1, 3, 3000, 10, 0]
+    );
+    assert!(writer
+        .text()
+        .contains("DOCKED: ENERGY AND TORPEDOES REPLENISHED; SHIELDS RESET TO 0"));
+    assert_eq!(result.data_stack(), []);
+}
