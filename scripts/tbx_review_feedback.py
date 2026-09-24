@@ -14,6 +14,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable, Sequence
 
+from tbx_codex_progress import progress, run_codex_jsonl
+
 REPO_ROOT = Path(__file__).resolve().parent.parent
 REQUIRED_CHECKS = ("cargo ci-clippy", "cargo ci-test", "cargo ci-fmt")
 MAX_CODEX_DIAGNOSTIC_CHARS = 2_000
@@ -39,6 +41,8 @@ class WorkflowError(Exception):
 
 
 def run_command(args: Sequence[str], *, cwd: Path = REPO_ROOT, input_text: str | None = None) -> CommandResult:
+    if args and args[0] == "codex" and "--json" in args:
+        return run_codex_jsonl(args, cwd=cwd, input_text=input_text)
     try:
         result = subprocess.run(list(args), cwd=cwd, input=input_text, text=True, capture_output=True, check=False)
     except OSError as error:
@@ -143,6 +147,7 @@ class ReviewFeedbackWorkflow:
         return [row for page in pages for row in page if isinstance(row, dict)]
 
     def fetch_snapshot(self, number: int) -> tuple[dict, list[dict]]:
+        progress(f"GitHub PR文脈を取得: #{number}")
         pr = self.gh_json("pr_fetch", ("gh", "pr", "view", str(number), "--json", "number,state,isDraft,mergedAt,headRefName,headRefOid,title,body,baseRefName"))
         if not isinstance(pr, dict) or pr.get("number") != number or pr.get("state") != "OPEN" or pr.get("mergedAt"):
             raise WorkflowError("pr_fetch", "pull request must exist, be open, and be unmerged")
@@ -191,9 +196,11 @@ class ReviewFeedbackWorkflow:
                 raise WorkflowError("pr_fetch", f"could not validate referenced issue #{reference}")
             linked_issues[reference] = issue
         pr["linked_issues"] = linked_issues
+        progress("GitHub PR文脈の取得が完了")
         return pr, messages
 
     def preflight(self, pr: dict) -> str:
+        progress("事前確認を開始")
         if Path(self.git("rev-parse", "--show-toplevel")).resolve() != REPO_ROOT:
             raise WorkflowError("preflight", "run from this repository")
         branch = self.git("branch", "--show-current")
@@ -232,6 +239,7 @@ class ReviewFeedbackWorkflow:
     def run_pr(self, number: int) -> dict:
         pr, messages = self.fetch_snapshot(number)
         start_sha = self.preflight(pr)
+        progress(f"事前確認が完了: PR #{number}")
         trailers = self.trailer_keys(start_sha)
         comments = pr["comments"]
         records = parse_records(comments)
@@ -243,6 +251,7 @@ class ReviewFeedbackWorkflow:
         snapshot = {"pr": pr, "start_head_sha": start_sha, "candidate_revisions": [message_revision(m) for m in candidates], "candidates": candidates,
                     "context_messages": messages}
         if not candidates:
+            progress("未処理フィードバックなし。正常終了")
             return {"status": "success", "summary": "No unprocessed feedback.", "results": [], "modified_messages": [], "checks_passed": [], "commit_sha": None}
         prompt = self.build_prompt(snapshot)
         temp_root = REPO_ROOT / ".tmp"
@@ -251,7 +260,9 @@ class ReviewFeedbackWorkflow:
             temp = Path(temp_dir)
             schema_path, result_path = temp / "result.schema.json", temp / "result.json"
             schema_path.write_text(json.dumps(RESULT_SCHEMA), encoding="utf-8")
+            progress(f"Codex実行開始: PR #{number}")
             result = self.run(("codex", "exec", "--json", "--output-schema", str(schema_path), "--output-last-message", str(result_path), "-C", str(REPO_ROOT), "-"), input_text=prompt)
+            progress("Codex実行終了")
             if result.returncode:
                 detail = result.stderr.strip() or result.stdout.strip() or f"exit code {result.returncode}"
                 raise WorkflowError("codex", detail[-MAX_CODEX_DIAGNOSTIC_CHARS:])
@@ -288,17 +299,25 @@ class ReviewFeedbackWorkflow:
         elif modified:
             if checks != list(REQUIRED_CHECKS) or not isinstance(commit, str):
                 raise WorkflowError("verification", "modified feedback requires all checks and a commit SHA")
+            progress("Codex後のGit検証を開始")
             self.verify_commit(pr["headRefName"], start_sha, commit, {message_key(m) for m in candidates if message_revision(m) in modified})
+            progress("Codex後のGit検証が完了")
         elif commit is not None or checks:
             raise WorkflowError("codex", "no-change results must not report a commit or checks")
         response = {"status": "human_review_required" if human_review else "success", "summary": codex.get("summary", ""), "results": results, "modified_messages": modified, "checks_passed": checks, "commit_sha": commit, "snapshot": snapshot}
         if modified:
+            progress(f"push開始: {pr['headRefName']}")
             self.command("push", ("git", "push", "origin", pr["headRefName"]))
+            progress("push完了")
         record = {"start_head_sha": start_sha, "head_sha": commit or start_sha, "results": results}
         body = "W01 PRフィードバック処理記録\n\n" + "\n".join(
             f"- `{row['revision']}`: {row['result']} — {row['reason']}" for row in results
         ) + f"\n\n状態: {response['status']}\n理由: {codex.get('summary', '')}\n確認時head: `{start_sha}`\n処理後head: `{record['head_sha']}`\n検証: {', '.join(checks) if checks else '未実行'}\n\n{RECORD_MARKER}\n" + json.dumps(record, ensure_ascii=False)
+        progress("PR処理記録を投稿")
         self.command("record", ("gh", "pr", "comment", str(number), "--body", body))
+        progress("処理記録投稿完了")
+        if human_review:
+            progress("人間判断待ち")
         response.pop("snapshot")
         return response
 
@@ -340,8 +359,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         result = ReviewFeedbackWorkflow().run_pr(args.pull_request)
     except WorkflowError as error:
         status = "human_review_required" if error.human else "failed"
+        progress(f"workflow {status}: {error.phase}")
         print(json.dumps({"status": status, "phase": error.phase, "error": str(error)}, ensure_ascii=False))
         return 1
+    progress(f"workflow {result['status']}")
     print(json.dumps(result, ensure_ascii=False))
     return 2 if result["status"] == "human_review_required" else 0
 

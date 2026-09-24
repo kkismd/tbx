@@ -1,6 +1,7 @@
 import json
 import sys
 import unittest
+from unittest.mock import patch
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
@@ -121,6 +122,15 @@ class IssueWorkflowTests(unittest.TestCase):
         ordered = [call[0:2] for call in workflow.calls]
         self.assertLess(ordered.index(("verify-commit", "issue/1917-implement")), ordered.index(("git", "push")))
         self.assertLess(ordered.index(("git", "push")), ordered.index(("gh", "pr")))
+
+    def test_successful_workflow_reports_major_stages_in_order(self):
+        workflow = FakeWorkflow()
+        with patch.object(tbx_implement, "progress") as display:
+            workflow.run_issue(1917)
+        messages = [call.args[0] for call in display.call_args_list]
+        stages = ["事前確認が完了", "GitHub文脈の取得が完了", "Codex実行開始", "Codex実行終了", "Codex後のGit検証が完了", "push完了", "PR作成完了"]
+        positions = [next(i for i, message in enumerate(messages) if message.startswith(stage)) for stage in stages]
+        self.assertEqual(positions, sorted(positions))
 
     def test_codex_failure_does_not_push_or_create_pr(self):
         for status in ("failed", "human_review_required"):
