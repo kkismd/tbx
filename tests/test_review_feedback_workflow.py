@@ -1,5 +1,8 @@
 import sys
+import io
+import json
 import unittest
+from contextlib import redirect_stderr, redirect_stdout
 from unittest.mock import patch
 from pathlib import Path
 
@@ -87,12 +90,35 @@ class FeedbackPreflightTests(unittest.TestCase):
 
 
 class FeedbackRunPrTests(unittest.TestCase):
+    def test_cli_reports_codex_interruption_once_with_worktree_state(self):
+        stdout = io.StringIO()
+        with patch.object(feedback.ReviewFeedbackWorkflow, "run_pr", side_effect=feedback.CodexInterrupted()), \
+                patch.object(feedback, "interruption_git_state", return_value={"branch": "feature", "head": "def", "worktree": "clean"}), \
+                redirect_stdout(stdout), redirect_stderr(io.StringIO()):
+            code = feedback.main(["42"])
+        result = json.loads(stdout.getvalue())
+        self.assertEqual(code, 130)
+        self.assertEqual(result["status"], "interrupted")
+        self.assertEqual(result["stage"], "codex_execution")
+        self.assertEqual((result["branch"], result["head"], result["worktree"]), ("feature", "def", "clean"))
+        self.assertTrue(result["codex_process_group_stopped"])
+        self.assertEqual(len(stdout.getvalue().splitlines()), 1)
+
+    def test_codex_interrupt_skips_verification_push_and_processing_record(self):
+        outcome = self.result("success", "fixed", modified=["issue-comment:44@2026-01-01T00:00:00Z"], checks=list(feedback.REQUIRED_CHECKS), commit="b" * 40)
+        runner = self.Runner(outcome, interrupt_codex=True)
+        workflow = self.Workflow(runner)
+        with self.assertRaises(feedback.CodexInterrupted):
+            workflow.run_pr(42)
+        self.assertEqual(runner.events, ["codex"])
+
     class Runner:
-        def __init__(self, outcome=None, *, codex_result=None, fail_push=False, fail_record=False):
+        def __init__(self, outcome=None, *, codex_result=None, fail_push=False, fail_record=False, interrupt_codex=False):
             self.outcome = outcome
             self.codex_result = codex_result or feedback.CommandResult(0, "")
             self.fail_push = fail_push
             self.fail_record = fail_record
+            self.interrupt_codex = interrupt_codex
             self.events = []
             self.prompt = ""
 
@@ -101,6 +127,8 @@ class FeedbackRunPrTests(unittest.TestCase):
             if args[:2] == ("codex", "exec"):
                 self.events.append("codex")
                 self.prompt = input_text
+                if self.interrupt_codex:
+                    raise feedback.CodexInterrupted()
                 if self.codex_result.returncode:
                     return self.codex_result
                 result_path = Path(args[args.index("--output-last-message") + 1])

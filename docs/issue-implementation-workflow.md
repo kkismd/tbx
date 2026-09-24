@@ -14,6 +14,8 @@ Codexはissueを実装し、リポジトリで必須とされているチェッ�
 
 workflowの段階表示とCodex実行イベントは標準エラーへ逐次表示します。CodexのJSONLイベントは共通表示層で人間向けに整形し、未対応イベントは無視します。標準出力には最後の機械可読JSON結果だけを出力します。Codex側のイベントにreasoning要約が含まれる場合も、その要約だけを表示します。
 
+Codex実行中に Ctrl-C で中断すると、親workflowはCodex専用プロセスグループへSIGINTを送り、終了を最大5秒待ちます。まだ動作していればSIGTERMを送り、さらに最大5秒後も終了しなければSIGKILLを送ります。各段階でグループ終了を確認してから後始末します。中断時はstdoutへ `status: "interrupted"`、`stage`、branch、HEAD、worktree状態（`clean` / `dirty` / `unknown`）を含むJSONを1件出力し、終了コード130を返します。停止を確認できなかった場合も成功として扱わず、JSONにその旨を含めます。中断時にtopic branchや未commit変更を自動削除・巻き戻ししません。表示されたbranch、HEAD、worktree状態を復旧調査の起点にしてください。
+
 topic branch作成後に失敗した場合も、そのブランチは調査できるよう残します。再実行するには `main` に戻り、topic branchの状態を確認してから対処してください。push成功後にPR作成が失敗した場合、push済みブランチはそのまま残ります。
 
 PRのmergeとissueのcloseは行いません。`main` の更新も自動では行いません。開始前にローカルの `main` を更新し、変更のない状態にしてください。
