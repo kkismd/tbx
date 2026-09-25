@@ -243,7 +243,12 @@ fn run_child_with_timeout(
                 &mut overflow,
             ),
             Err(mpsc::RecvTimeoutError::Timeout) => {}
-            Err(mpsc::RecvTimeoutError::Disconnected) => break,
+            // Reader completion only means both pipes have closed. The child may
+            // still be running, so keep checking its status until exit or deadline.
+            // Avoid repeatedly polling a disconnected channel without a pause.
+            Err(mpsc::RecvTimeoutError::Disconnected) => {
+                thread::sleep(Duration::from_millis(10));
+            }
         }
     }
 
@@ -293,7 +298,7 @@ fn run_child_with_timeout(
     // stop and a natural exit without the marker can both close stdin before writing completes.
     if let Err(error) = &input_write_result {
         let natural_exit_without_marker =
-            marker.is_some() && !marker_reached && stop_reason.is_none() && already_exited;
+            marker.is_some() && !marker_reached && stop_reason.is_none() && exit_status.is_some();
         if !marker_reached && !natural_exit_without_marker && stop_reason.is_none() {
             panic!(
                 "stdin write failed: {error}\n{}\nstdout tail:\n{}\nstderr tail:\n{}",
