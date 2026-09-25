@@ -17,42 +17,39 @@ DEF NAVIGATION_MOVE
     # M/N track the current fixed-point sector position.
     LET M = ENT_SX * 10
     LET N = ENT_SY * 10
-    # P/Q preserve the starting position for quadrant crossing.
-    LET P = M
-    LET Q = N
     LET QUADRANT_CROSSED = 0
     LET NAVIGATION_VALID = 0
 
     WHILE NAVIGATION_VALID < WARP_STEPS
-    # U/V are the next fixed-point sector position.
-    LET U = M + X
-    LET V = N + Y
+    # I/J are candidates; M/N remain the last accepted position until checked.
+    LET I = M + X
+    LET J = N + Y
 
-    IF U >= 5 AND U <= 84 AND V >= 5 AND V <= 84
-      # O/L/K are the target x, target y, and sector index.
-      LET O = (U + 5) / 10
-      LET L = (V + 5) / 10
-      LET K = (L - 1) * 8 + O
-      IF @SECTOR[K] <> 0
-        PRINT "WARP ENGINES SHUTDOWN AT SECTOR ", O, ",", L, " DUE TO OBSTACLE"
+    IF I >= 5 AND I <= 84 AND J >= 5 AND J <= 84
+      # K/L are the candidate sector coordinates. Recompute the index inline
+      # to keep the fixed scratch set small without changing state or stack.
+      LET K = (I + 5) / 10
+      LET L = (J + 5) / 10
+      IF @SECTOR[(L - 1) * 8 + K] <> 0
+        PRINT "WARP ENGINES SHUTDOWN AT SECTOR ", K, ",", L, " DUE TO OBSTACLE"
         CR
-        # M/N still hold the last accepted position because U/V are only candidates.
+        # M/N still hold the last accepted position because I/J are candidates.
         LET NAVIGATION_VALID = WARP_STEPS
       ELSE
         LET @SECTOR[(ENT_SY - 1) * 8 + ENT_SX] = 0
-        LET M = U
-        LET N = V
-        LET ENT_SX = O
+        LET M = I
+        LET N = J
+        LET ENT_SX = K
         LET ENT_SY = L
-        LET @SECTOR[K] = 1
+        LET @SECTOR[(L - 1) * 8 + K] = 1
         LET NAVIGATION_VALID = NAVIGATION_VALID + 1
       ENDIF
     ELSE
       # Crossing follows the original program: calculate the final position
-      # from the starting sector and the complete planned distance, then
-      # build only the final quadrant.
-      LET M = P + X * WARP_STEPS
-      LET N = Q + Y * WARP_STEPS
+      # from the current accepted position and remaining planned steps, then
+      # build only the final quadrant. This equals start + full planned distance.
+      LET M = M + X * (WARP_STEPS - NAVIGATION_VALID)
+      LET N = N + Y * (WARP_STEPS - NAVIGATION_VALID)
       WHILE M < 5
         LET ENT_QX = ENT_QX - 1
         LET M = M + 80
