@@ -1,5 +1,7 @@
 # TBX プロジェクト
 
+> **対象: 旧TBX。** 旧TBXはADR [#2013](https://github.com/kkismd/tbx/issues/2013) により、通常の新機能・仕様変更の対象外です。この文書はTBX-Nextの現在仕様を示しません。TBX-Nextの入口は [`docs/next/README.md`](docs/next/README.md) です。
+
 ## 概要 (Overview)
 
 Tiny BASIC のミニマリズムと Forth の動的な自己拡張性を融合させた処理系。最小限のコアプリミティブから出発し、言語自身を用いて段階的にブートストラップする。

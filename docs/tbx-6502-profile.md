@@ -1,5 +1,7 @@
 # tbx-6502 初期ターゲットプロファイル
 
+> **対象: 旧TBX。** 旧TBXはADR [#2013](https://github.com/kkismd/tbx/issues/2013) により、通常の新機能・仕様変更の対象外です。この文書はTBX-Nextの現在仕様を示しません。TBX-Nextの入口は [`docs/next/README.md`](next/README.md) です。
+
 この文書は、最初の `tbx-6502` 実装が受け付ける TBX サブセットと、6502 上の実行モデルを定義する。
 
 対象は `generic-6502` プロファイルである。C64、Apple II などの実機向け差分は、後述する platform profile で上書きする。
