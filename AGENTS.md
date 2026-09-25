@@ -38,13 +38,13 @@ TBX は、実用的な言語機能を拡充しながらも、コアを小さく�
 - 適用される `AGENTS.md`
 - 選択した skill の `SKILL.md`
 
-### 現行 `tbx` crate / TBX 言語実装を変更する場合
+### 旧TBX（ルート `tbx` crate）を変更する場合
 
-- **[`docs/agent-notes.md`](docs/agent-notes.md)** — 現行 `tbx` crate、TBX 構文、標準ライブラリ、`lib/` 配下の TBX プログラムに関する注意・落とし穴・レビュー由来の知見をまとめた日本語の共有ノート。`crates/tbx-next` のみを変更する作業では、issue や変更対象が明示的に関連しない限り必読ではない。
+- **[`docs/agent-notes.md`](docs/agent-notes.md)** — 旧TBX crate、TBX 構文、標準ライブラリ、`lib/` 配下の TBX プログラムに関する注意・落とし穴・レビュー由来の知見をまとめた日本語のノート。`crates/tbx-next` のみを変更する作業では、issue や変更対象が明示的に関連しない限り必読ではない。
 
 ### `crates/tbx-next` を変更する場合
 
-- **[`docs/next/README.md`](docs/next/README.md)** — TBX Next の対象範囲、現行 `tbx` crate との境界、source of truth、参照すべき ADR / milestone を確認する入口文書。`crates/tbx-next` を変更する作業では最初に確認する。
+- **[`docs/next/README.md`](docs/next/README.md)** — TBX Next の対象範囲、旧TBXとの関係、source of truth、参照すべき ADR / milestone を確認する入口文書。`crates/tbx-next` を変更する作業では最初に確認する。
 - 必要に応じて **[`crates/tbx-next/README.md`](crates/tbx-next/README.md)** も確認する。
 
 ### 実装issueを作成・再評価・着手前レビューする場合
@@ -122,14 +122,14 @@ TBX または TBX Next のマイルストーンを完了する前に、実装済
 ## Commands
 
 ```bash
-# Build
-cargo build
+# Build TBX-Next (通常の開発対象)
+cargo build -p tbx-next
 
-# Run tests (includes both Rust unit tests and .tbx integration tests)
-cargo test
+# Run TBX-Next tests
+cargo test -p tbx-next
 
-# Run a single test by name
-cargo test test_name
+# Run a single TBX-Next test by name
+cargo test -p tbx-next test_name
 
 # Lint (must pass with zero warnings across the workspace)
 cargo ci-clippy
@@ -140,11 +140,22 @@ cargo fmt --check
 # Fix formatting
 cargo fmt
 
-# Run the interpreter on a file
-cargo run -- path/to/file.tbx
+# Run TBX-Next on a file
+cargo run -p tbx-next -- path/to/file.tbx
 
-# Run the interpreter in REPL mode (reads from stdin)
-cargo run
+# Run the TBX-Next REPL (reads from stdin)
+cargo run -p tbx-next --bin tbx-next
+```
+
+### 旧TBX専用コマンド
+
+ルートpackage `tbx` の既定コマンドは旧TBXだけをbuild、test、runする。旧TBXを明示的に変更・確認する場合に限り使用する。
+
+```bash
+cargo build -p tbx
+cargo test -p tbx
+cargo run -p tbx -- path/to/file.tbx
+cargo run -p tbx
 ```
 
 ## Git Workflow
