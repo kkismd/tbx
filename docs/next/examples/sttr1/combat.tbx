@@ -141,7 +141,7 @@ DEF TORPEDO_FLIGHT
           IF @SECTOR[K] <> 0
             LET TORPEDO_ACTIVE = 0
             LET TORPEDO_HIT = @SECTOR[K]
-            TORPEDO_RESOLVE_HIT(O, L, K)
+            TORPEDO_RESOLVE_HIT O, L, K
           ENDIF
         ENDIF
       ENDWH
