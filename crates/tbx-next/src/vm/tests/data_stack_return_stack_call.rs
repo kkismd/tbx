@@ -103,6 +103,40 @@ fn compiled_call_pushes_return_frame_and_return_resumes_after_call() {
 }
 
 #[test]
+fn nested_compiled_calls_start_zeroed_scratch_and_restore_caller_values() {
+    let primitives = PrimitiveRegistry::new();
+    let mut words = PublishedWords::new();
+    let mut code = InstructionSequence::new();
+    let inner_entry = code.append(Instruction::Return);
+    let inner = words.add(
+        CompletedWordDefinition::compiled(location(&code, inner_entry), code.view())
+            .expect("inner entry should be valid"),
+    );
+    let outer_entry = code.append(Instruction::Call(inner));
+    let outer_return = code.append(Instruction::Return);
+    let outer = words.add(
+        CompletedWordDefinition::compiled(location(&code, outer_entry), code.view())
+            .expect("outer entry should be valid"),
+    );
+    let call = code.append(Instruction::Call(outer));
+    code.append(Instruction::Halt);
+    let mut vm = new_vm(&code, call);
+    let mut execution = execution(&code, &words, &primitives);
+
+    assert_eq!(vm.step(&mut execution), Ok(StepOutcome::Continued));
+    assert_eq!(vm.scratch(ScratchSlot::I), Ok(0));
+    vm.set_scratch(ScratchSlot::I, 1234).unwrap();
+    assert_eq!(vm.step(&mut execution), Ok(StepOutcome::Continued));
+    assert_eq!(vm.scratch(ScratchSlot::I), Ok(0));
+    vm.set_scratch(ScratchSlot::I, -23).unwrap();
+    assert_eq!(vm.step(&mut execution), Ok(StepOutcome::Continued));
+
+    assert_eq!(vm.instruction_pointer(), location(&code, outer_return));
+    assert_eq!(vm.return_stack_depth(), 1);
+    assert_eq!(vm.scratch(ScratchSlot::I), Ok(1234));
+}
+
+#[test]
 fn compiled_call_records_depth_before_entering_callee() {
     let primitives = PrimitiveRegistry::new();
     let mut words = PublishedWords::new();

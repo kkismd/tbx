@@ -497,7 +497,9 @@ fn return_rejects_out_of_range_target_without_popping_frame_or_mutation() {
     let invalid = address(usize::MAX);
     let mut vm = new_vm(&code, entry);
     vm.control_value_stack.push(value(8));
-    vm.push_return_frame(return_frame(&code, invalid));
+    let mut frame = return_frame(&code, invalid);
+    frame.set_scratch(ScratchSlot::X, 77);
+    vm.push_return_frame(frame);
 
     let result = vm.step(code.view());
 
@@ -517,6 +519,7 @@ fn return_rejects_out_of_range_target_without_popping_frame_or_mutation() {
     assert_eq!(vm.return_stack_depth(), 1);
     assert_eq!(vm.data_stack_depth(), 0);
     assert_eq!(vm.control_value_stack_depth(), 1);
+    assert_eq!(vm.scratch(ScratchSlot::X), Ok(77));
 }
 
 #[test]
@@ -526,11 +529,9 @@ fn return_rejects_control_value_depth_below_call_depth_without_mutation() {
     let entry = code.append(Instruction::Return);
     let mut vm = new_vm(&code, entry);
     vm.data_stack.push(value(7));
-    vm.push_return_frame(ReturnFrame::with_control_value_stack_depth(
-        location(&code, target),
-        0,
-        1,
-    ));
+    let mut frame = ReturnFrame::with_control_value_stack_depth(location(&code, target), 0, 1);
+    frame.set_scratch(ScratchSlot::N, -31);
+    vm.push_return_frame(frame);
 
     let result = vm.step(code.view());
 
@@ -550,6 +551,7 @@ fn return_rejects_control_value_depth_below_call_depth_without_mutation() {
     assert_eq!(vm.data_stack_depth(), 1);
     assert_eq!(vm.peek_data(), Ok(value(7)));
     assert_eq!(vm.control_value_stack_depth(), 0);
+    assert_eq!(vm.scratch(ScratchSlot::N), Ok(-31));
 }
 
 #[test]
@@ -754,6 +756,41 @@ fn run_preserves_nested_call_state_when_inner_compiled_word_fails() {
             false,
         ),
     );
+}
+
+#[test]
+fn runtime_error_keeps_active_invocation_scratch_unchanged() {
+    let primitives = PrimitiveRegistry::new();
+    let mut words = PublishedWords::new();
+    let mut code = InstructionSequence::new();
+    let inner_entry = code.append(Instruction::Push(value(0)));
+    let bad_branch = code.append(Instruction::JumpIfZero(address(99)));
+    code.append(Instruction::Return);
+    let inner = words.add(
+        CompletedWordDefinition::compiled(location(&code, inner_entry), code.view())
+            .expect("inner entry should be valid"),
+    );
+    let call = code.append(Instruction::Call(inner));
+    code.append(Instruction::Halt);
+    let mut vm = new_vm(&code, call);
+    let mut execution = execution(&code, &words, &primitives);
+
+    assert_eq!(vm.step(&mut execution), Ok(StepOutcome::Continued));
+    vm.set_scratch(ScratchSlot::Y, i16::MIN).unwrap();
+    assert_eq!(vm.step(&mut execution), Ok(StepOutcome::Continued));
+    assert_eq!(
+        vm.step(&mut execution),
+        Err(VmError {
+            location: location(&code, bad_branch),
+            kind: VmErrorKind::InvalidJumpTarget {
+                source: address_lookup_error(InstructionAddressError::InvalidAddress {
+                    address: address(99),
+                }),
+            },
+        })
+    );
+    assert_eq!(vm.return_stack_depth(), 1);
+    assert_eq!(vm.scratch(ScratchSlot::Y), Ok(i16::MIN));
 }
 
 #[test]

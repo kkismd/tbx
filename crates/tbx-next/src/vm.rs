@@ -10,7 +10,9 @@ use crate::primitive::{PrimitiveContext, PrimitiveError, PrimitiveLookup, Primit
 use crate::random::RandomState;
 use crate::runtime_input::RuntimeInput;
 use crate::runtime_output::RuntimeOutput;
-use crate::stack::{ControlValueStack, DataStack, ReturnFrame, ReturnStack, StackError};
+use crate::stack::{
+    ControlValueStack, DataStack, ReturnFrame, ReturnStack, ScratchSlot, StackError,
+};
 use crate::value::Value;
 use crate::word::{WordDefinition, WordId, WordLookupError};
 use crate::word_lookup::PublishedWordLookup;
@@ -599,6 +601,14 @@ impl Vm {
         self.return_stack
             .peek()
             .map(ReturnFrame::call_data_stack_depth)
+    }
+
+    pub(crate) fn scratch(&self, slot: ScratchSlot) -> Result<i16, StackError> {
+        self.return_stack.current_scratch(slot)
+    }
+
+    pub(crate) fn set_scratch(&mut self, slot: ScratchSlot, value: i16) -> Result<(), StackError> {
+        self.return_stack.set_current_scratch(slot, value)
     }
 
     #[cfg(test)]

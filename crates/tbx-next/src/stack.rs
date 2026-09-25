@@ -174,6 +174,36 @@ pub(crate) struct ReturnFrame {
     call_data_stack_depth: usize,
     // ADR #1936: the boundary for control values owned by this invocation.
     call_control_value_stack_depth: usize,
+    // ADR #2031: scratch shares the invocation lifetime but remains separate
+    // from VM control fields and their accessors.
+    scratch: [i16; 8],
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ScratchSlot {
+    I,
+    J,
+    K,
+    L,
+    M,
+    N,
+    X,
+    Y,
+}
+
+impl ScratchSlot {
+    const fn index(self) -> usize {
+        match self {
+            Self::I => 0,
+            Self::J => 1,
+            Self::K => 2,
+            Self::L => 3,
+            Self::M => 4,
+            Self::N => 5,
+            Self::X => 6,
+            Self::Y => 7,
+        }
+    }
 }
 
 impl ReturnFrame {
@@ -182,6 +212,7 @@ impl ReturnFrame {
             return_location,
             call_data_stack_depth,
             call_control_value_stack_depth: 0,
+            scratch: [0; 8],
         }
     }
 
@@ -194,6 +225,7 @@ impl ReturnFrame {
             return_location,
             call_data_stack_depth,
             call_control_value_stack_depth,
+            scratch: [0; 8],
         }
     }
 
@@ -207,6 +239,14 @@ impl ReturnFrame {
 
     pub(crate) const fn call_control_value_stack_depth(self) -> usize {
         self.call_control_value_stack_depth
+    }
+
+    pub(crate) const fn scratch(self, slot: ScratchSlot) -> i16 {
+        self.scratch[slot.index()]
+    }
+
+    pub(crate) fn set_scratch(&mut self, slot: ScratchSlot, value: i16) {
+        self.scratch[slot.index()] = value;
     }
 }
 
@@ -232,6 +272,24 @@ impl ReturnStack {
         self.frames
             .last()
             .copied()
+            .ok_or(StackError::ReturnStackUnderflow)
+    }
+
+    pub(crate) fn current_scratch(&self, slot: ScratchSlot) -> Result<i16, StackError> {
+        self.frames
+            .last()
+            .map(|frame| frame.scratch(slot))
+            .ok_or(StackError::ReturnStackUnderflow)
+    }
+
+    pub(crate) fn set_current_scratch(
+        &mut self,
+        slot: ScratchSlot,
+        value: i16,
+    ) -> Result<(), StackError> {
+        self.frames
+            .last_mut()
+            .map(|frame| frame.set_scratch(slot, value))
             .ok_or(StackError::ReturnStackUnderflow)
     }
 
@@ -421,6 +479,39 @@ mod tests {
         assert_eq!(frame.return_location(), location);
         assert_eq!(frame.call_data_stack_depth(), 3);
         assert_eq!(frame.call_control_value_stack_depth(), 0);
+        for slot in [
+            ScratchSlot::I,
+            ScratchSlot::J,
+            ScratchSlot::K,
+            ScratchSlot::L,
+            ScratchSlot::M,
+            ScratchSlot::N,
+            ScratchSlot::X,
+            ScratchSlot::Y,
+        ] {
+            assert_eq!(frame.scratch(slot), 0);
+        }
+    }
+
+    #[test]
+    fn return_stack_scratch_access_only_changes_current_frame() {
+        let code = crate::instruction::InstructionSequence::new();
+        let first = code
+            .view()
+            .location(crate::instruction::InstructionAddress::from_index(1));
+        let second = code
+            .view()
+            .location(crate::instruction::InstructionAddress::from_index(2));
+        let mut stack = ReturnStack::new();
+        stack.push(ReturnFrame::new(first, 0));
+        stack.set_current_scratch(ScratchSlot::I, 41).unwrap();
+        stack.push(ReturnFrame::new(second, 0));
+
+        assert_eq!(stack.current_scratch(ScratchSlot::I), Ok(0));
+        stack.set_current_scratch(ScratchSlot::I, -12).unwrap();
+        assert_eq!(stack.current_scratch(ScratchSlot::I), Ok(-12));
+        stack.pop().unwrap();
+        assert_eq!(stack.current_scratch(ScratchSlot::I), Ok(41));
     }
 
     #[test]
