@@ -1,5 +1,7 @@
 # 旧TBX エージェント向け実装ノート
 
+> **対象: 旧TBX。** 旧TBXはADR [#2013](https://github.com/kkismd/tbx/issues/2013) により、通常の新機能・仕様変更の対象外です。この文書はTBX-Nextの現在仕様を示しません。TBX-Nextの入口は [`docs/next/README.md`](next/README.md) です。
+
 この文書は旧TBX（ルート package `tbx`、`src/`、`lib/`）の実装エージェントが詰まりやすい箇所、PRレビューで繰り返し指摘された事項、再利用できる注意点をまとめる。TBX-Next (`crates/tbx-next/`) の仕様や実装構造を示す文書ではない。
 
 旧TBXを変更する場合に参照する。詳細は各リンク先 docs や issue を参照。

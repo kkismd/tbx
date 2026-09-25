@@ -1,5 +1,7 @@
 # TBX Compiler Design Principles
 
+> **対象: 旧TBX。** 旧TBXはADR [#2013](https://github.com/kkismd/tbx/issues/2013) により、通常の新機能・仕様変更の対象外です。この文書はTBX-Nextの現在仕様を示しません。TBX-Nextの入口は [`docs/next/README.md`](docs/next/README.md) です。
+
 > このファイルは TBX 設計書の一部です。`blueprint.md`（VM・辞書のアーキテクチャ）と `blueprint-language.md`（コア言語仕様）と合わせて参照してください。
 
 ## この文書の目的

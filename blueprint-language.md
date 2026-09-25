@@ -1,5 +1,7 @@
 # TBX コア言語仕様
 
+> **対象: 旧TBX。** 旧TBXはADR [#2013](https://github.com/kkismd/tbx/issues/2013) により、通常の新機能・仕様変更の対象外です。この文書はTBX-Nextの現在仕様を示しません。TBX-Nextの入口は [`docs/next/README.md`](docs/next/README.md) です。
+
 > このファイルはTBX設計書の一部です。`blueprint.md`（VM・辞書のアーキテクチャ）と合わせて参照してください。
 
 ## この文書の役割
