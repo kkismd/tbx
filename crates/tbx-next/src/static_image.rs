@@ -83,6 +83,7 @@ enum LowerError {
     UnknownCodeOwner(CodeLocation),
     InvalidGlobal(GlobalVarId),
     InvalidArray(ArrayId),
+    ScratchInstructionUnsupported,
     UnknownPrimitive(PrimitiveId),
     ImageTooLarge,
     DuplicateCodeOwner,
@@ -256,6 +257,9 @@ fn lower(
                     } else {
                         LogicalInstruction::StoreArray(slot)
                     }
+                }
+                Instruction::LoadScratch(_) | Instruction::StoreScratch(_) => {
+                    return Err(LowerError::ScratchInstructionUnsupported);
                 }
                 Instruction::Call(word) => match words
                     .get(*word)

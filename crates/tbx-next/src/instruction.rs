@@ -1,5 +1,6 @@
 use crate::global_array::ArrayId;
 use crate::global_variable::GlobalVarId;
+use crate::stack::ScratchSlot;
 use crate::value::Value;
 use crate::word::WordId;
 use std::rc::Rc;
@@ -94,6 +95,8 @@ pub(crate) enum Instruction {
     WriteFixedText(Rc<str>),
     LoadVar(GlobalVarId),
     StoreVar(GlobalVarId),
+    LoadScratch(ScratchSlotOperand),
+    StoreScratch(ScratchSlotOperand),
     LoadArrayElement(ArrayId),
     StoreArrayElement(ArrayId),
     Call(WordId),
@@ -111,6 +114,40 @@ pub(crate) enum Instruction {
     JumpIfZero(InstructionAddress),
     Return,
     Halt,
+}
+
+/// Raw VM operand: validation belongs at execution because corrupted internal
+/// instruction streams must fail as runtime errors instead of indexing panic.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct ScratchSlotOperand(u8);
+
+impl ScratchSlotOperand {
+    pub(crate) const fn from_slot(slot: ScratchSlot) -> Self {
+        Self(slot as u8)
+    }
+
+    #[cfg(test)]
+    pub(crate) const fn from_raw(index: u8) -> Self {
+        Self(index)
+    }
+
+    pub(crate) const fn raw(self) -> u8 {
+        self.0
+    }
+
+    pub(crate) fn validate(self) -> Option<ScratchSlot> {
+        match self.0 {
+            0 => Some(ScratchSlot::I),
+            1 => Some(ScratchSlot::J),
+            2 => Some(ScratchSlot::K),
+            3 => Some(ScratchSlot::L),
+            4 => Some(ScratchSlot::M),
+            5 => Some(ScratchSlot::N),
+            6 => Some(ScratchSlot::X),
+            7 => Some(ScratchSlot::Y),
+            _ => None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

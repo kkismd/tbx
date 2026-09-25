@@ -132,6 +132,8 @@ impl StaticQuotation {
             Instruction::Push(_)
             | Instruction::LoadVar(_)
             | Instruction::StoreVar(_)
+            | Instruction::LoadScratch(_)
+            | Instruction::StoreScratch(_)
             | Instruction::LoadArrayElement(_)
             | Instruction::StoreArrayElement(_)
             | Instruction::Call(_)

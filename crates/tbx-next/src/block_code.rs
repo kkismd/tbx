@@ -236,6 +236,8 @@ fn reject_direct_branch_instruction(instruction: &Instruction) -> Result<(), Blo
         | Instruction::WriteFixedText(_)
         | Instruction::LoadVar(_)
         | Instruction::StoreVar(_)
+        | Instruction::LoadScratch(_)
+        | Instruction::StoreScratch(_)
         | Instruction::LoadArrayElement(_)
         | Instruction::StoreArrayElement(_)
         | Instruction::Call(_)
