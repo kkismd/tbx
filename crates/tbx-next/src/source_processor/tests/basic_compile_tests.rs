@@ -865,6 +865,40 @@ fn definition_body_resolves_local_references_before_global_bindings() {
 }
 
 #[test]
+fn scratch_name_does_not_capture_array_reference_syntax() {
+    let (_words, _primitives, operators) = operator_fixture();
+    let mut source_words = SourceWordRegistry::new();
+    let mut bindings = Bindings::new();
+    register_builtin_source_words(&mut source_words, &mut bindings)
+        .expect("built-in source words should bootstrap");
+    let mut arrays = GlobalArrays::new();
+    let array = arrays.allocate(1);
+    bindings
+        .insert_new(name("I"), Binding::Array(array))
+        .expect("isolated resolver fixture should bind array I");
+    let local_references = DefinitionLocalReferences::default();
+
+    let (_sources, _id, code) = compile_body(
+        "EVAL @I[1]",
+        DefinitionBodyCompileContext::with_local_references(
+            &bindings,
+            source_words.lookup(),
+            operators.lookup(),
+            &local_references,
+        ),
+    );
+
+    assert_eq!(
+        code.instruction_view().get(address(0)),
+        Ok(&Instruction::Push(value(1)))
+    );
+    assert_eq!(
+        code.instruction_view().get(address(1)),
+        Ok(&Instruction::LoadArrayElement(array))
+    );
+}
+
+#[test]
 fn definition_body_local_references_are_not_available_without_context() {
     let (_words, _primitives, operators) = operator_fixture();
     let mut source_words = SourceWordRegistry::new();
