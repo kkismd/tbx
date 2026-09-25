@@ -20,6 +20,47 @@ struct ArraySlot(usize);
 struct TextSlot(usize);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ScratchSlot {
+    I,
+    J,
+    K,
+    L,
+    M,
+    N,
+    X,
+    Y,
+}
+
+impl ScratchSlot {
+    fn from_operand(operand: crate::instruction::ScratchSlotOperand) -> Option<Self> {
+        use crate::stack::ScratchSlot as HostSlot;
+        Some(match operand.validate()? {
+            HostSlot::I => Self::I,
+            HostSlot::J => Self::J,
+            HostSlot::K => Self::K,
+            HostSlot::L => Self::L,
+            HostSlot::M => Self::M,
+            HostSlot::N => Self::N,
+            HostSlot::X => Self::X,
+            HostSlot::Y => Self::Y,
+        })
+    }
+
+    const fn index(self) -> usize {
+        match self {
+            Self::I => 0,
+            Self::J => 1,
+            Self::K => 2,
+            Self::L => 3,
+            Self::M => 4,
+            Self::N => 5,
+            Self::X => 6,
+            Self::Y => 7,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum PrimitiveOp {
     Add,
     Subtract,
@@ -55,6 +96,8 @@ enum LogicalInstruction {
     StoreGlobal(GlobalSlot),
     LoadArray(ArraySlot),
     StoreArray(ArraySlot),
+    LoadScratch(ScratchSlot),
+    StoreScratch(ScratchSlot),
     CallPrimitive(PrimitiveOp),
     CallCode(CodePosition),
     CopyCallBase(usize),
@@ -83,7 +126,7 @@ enum LowerError {
     UnknownCodeOwner(CodeLocation),
     InvalidGlobal(GlobalVarId),
     InvalidArray(ArrayId),
-    ScratchInstructionUnsupported,
+    InvalidScratchSlot,
     UnknownPrimitive(PrimitiveId),
     ImageTooLarge,
     DuplicateCodeOwner,
@@ -258,9 +301,12 @@ fn lower(
                         LogicalInstruction::StoreArray(slot)
                     }
                 }
-                Instruction::LoadScratch(_) | Instruction::StoreScratch(_) => {
-                    return Err(LowerError::ScratchInstructionUnsupported);
-                }
+                Instruction::LoadScratch(operand) => LogicalInstruction::LoadScratch(
+                    ScratchSlot::from_operand(*operand).ok_or(LowerError::InvalidScratchSlot)?,
+                ),
+                Instruction::StoreScratch(operand) => LogicalInstruction::StoreScratch(
+                    ScratchSlot::from_operand(*operand).ok_or(LowerError::InvalidScratchSlot)?,
+                ),
                 Instruction::Call(word) => match words
                     .get(*word)
                     .map_err(|_| LowerError::InvalidWord(*word))?
@@ -318,6 +364,8 @@ pub(crate) enum LogicalInstructionKind {
     StoreGlobal,
     LoadArray,
     StoreArray,
+    LoadScratch,
+    StoreScratch,
     CallPrimitive,
     CallCode,
     CopyCallBase,
@@ -333,13 +381,15 @@ pub(crate) enum LogicalInstructionKind {
 
 #[cfg(test)]
 impl LogicalInstructionKind {
-    const ALL: [Self; 17] = [
+    const ALL: [Self; 19] = [
         Self::PushI16,
         Self::WriteText,
         Self::LoadGlobal,
         Self::StoreGlobal,
         Self::LoadArray,
         Self::StoreArray,
+        Self::LoadScratch,
+        Self::StoreScratch,
         Self::CallPrimitive,
         Self::CallCode,
         Self::CopyCallBase,
@@ -432,6 +482,8 @@ impl StaticImage {
                 LogicalInstruction::StoreGlobal(_) => LogicalInstructionKind::StoreGlobal,
                 LogicalInstruction::LoadArray(_) => LogicalInstructionKind::LoadArray,
                 LogicalInstruction::StoreArray(_) => LogicalInstructionKind::StoreArray,
+                LogicalInstruction::LoadScratch(_) => LogicalInstructionKind::LoadScratch,
+                LogicalInstruction::StoreScratch(_) => LogicalInstructionKind::StoreScratch,
                 LogicalInstruction::CallPrimitive(_) => LogicalInstructionKind::CallPrimitive,
                 LogicalInstruction::CallCode(_) => {
                     relocation_count += 1;
@@ -503,6 +555,8 @@ mod tests {
                 LogicalInstruction::StoreGlobal(GlobalSlot(0)),
                 LogicalInstruction::LoadArray(ArraySlot(0)),
                 LogicalInstruction::StoreArray(ArraySlot(0)),
+                LogicalInstruction::LoadScratch(ScratchSlot::I),
+                LogicalInstruction::StoreScratch(ScratchSlot::I),
                 LogicalInstruction::CallPrimitive(PrimitiveOp::Add),
                 LogicalInstruction::CallCode(CodePosition(0)),
                 LogicalInstruction::CopyCallBase(1),
@@ -521,7 +575,7 @@ mod tests {
         };
 
         let statistics = image.statistics();
-        assert_eq!(statistics.instruction_count, 17);
+        assert_eq!(statistics.instruction_count, 19);
         assert_eq!(
             statistics.variant_counts,
             LogicalInstructionKind::ALL.map(|kind| (kind, 1))
@@ -820,17 +874,57 @@ mod tests {
     }
 
     #[test]
-    fn lowering_explicitly_rejects_both_host_scratch_instructions() {
+    fn lowering_maps_all_scratch_slots_and_rejects_invalid_operands() {
         let fixture = Fixture::new();
+        let host_slots = [
+            crate::stack::ScratchSlot::I,
+            crate::stack::ScratchSlot::J,
+            crate::stack::ScratchSlot::K,
+            crate::stack::ScratchSlot::L,
+            crate::stack::ScratchSlot::M,
+            crate::stack::ScratchSlot::N,
+            crate::stack::ScratchSlot::X,
+            crate::stack::ScratchSlot::Y,
+        ];
+        let logical_slots = [
+            ScratchSlot::I,
+            ScratchSlot::J,
+            ScratchSlot::K,
+            ScratchSlot::L,
+            ScratchSlot::M,
+            ScratchSlot::N,
+            ScratchSlot::X,
+            ScratchSlot::Y,
+        ];
+        let mut code = InstructionSequence::new();
+        for &slot in &host_slots {
+            let operand = crate::instruction::ScratchSlotOperand::from_slot(slot);
+            code.append(Instruction::LoadScratch(operand));
+            code.append(Instruction::StoreScratch(operand));
+        }
+        let image = fixture
+            .lower(&[code.view()])
+            .expect("all slots should lower");
+        let expected: Vec<_> = logical_slots
+            .into_iter()
+            .flat_map(|slot| {
+                [
+                    LogicalInstruction::LoadScratch(slot),
+                    LogicalInstruction::StoreScratch(slot),
+                ]
+            })
+            .collect();
+        assert_eq!(image.code, expected);
+
         for instruction in [
-            Instruction::LoadScratch(crate::instruction::ScratchSlotOperand::from_raw(0)),
-            Instruction::StoreScratch(crate::instruction::ScratchSlotOperand::from_raw(0)),
+            Instruction::LoadScratch(crate::instruction::ScratchSlotOperand::from_raw(8)),
+            Instruction::StoreScratch(crate::instruction::ScratchSlotOperand::from_raw(255)),
         ] {
-            let mut code = InstructionSequence::new();
-            code.append(instruction);
+            let mut invalid = InstructionSequence::new();
+            invalid.append(instruction);
             assert_eq!(
-                fixture.lower(&[code.view()]),
-                Err(LowerError::ScratchInstructionUnsupported)
+                fixture.lower(&[invalid.view()]),
+                Err(LowerError::InvalidScratchSlot)
             );
         }
     }

@@ -9,6 +9,7 @@ struct ReturnFrame {
     position: CodePosition,
     data_depth: usize,
     control_depth: usize,
+    scratch: [i16; 8],
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -29,6 +30,7 @@ pub(super) enum RuntimeErrorKind {
     InvalidGlobal,
     InvalidArray,
     InvalidArrayIndex,
+    NoInvocation,
     InvalidText,
     Arithmetic,
     InputUnavailable,
@@ -222,6 +224,37 @@ impl ReferenceVm {
                 self.data.truncate(depth - 2);
                 self.position = next;
             }
+            LogicalInstruction::LoadScratch(slot) => {
+                let value = self
+                    .returns
+                    .last()
+                    .ok_or(RuntimeError {
+                        position,
+                        kind: RuntimeErrorKind::NoInvocation,
+                    })?
+                    .scratch[slot.index()];
+                let next = next()?;
+                self.data.push(value);
+                self.position = next;
+            }
+            LogicalInstruction::StoreScratch(slot) => {
+                let value = *self.data.last().ok_or(RuntimeError {
+                    position,
+                    kind: RuntimeErrorKind::DataUnderflow,
+                })?;
+                self.returns.last().ok_or(RuntimeError {
+                    position,
+                    kind: RuntimeErrorKind::NoInvocation,
+                })?;
+                let next = next()?;
+                let frame = self.returns.last_mut().ok_or(RuntimeError {
+                    position,
+                    kind: RuntimeErrorKind::NoInvocation,
+                })?;
+                frame.scratch[slot.index()] = value;
+                self.data.pop();
+                self.position = next;
+            }
             LogicalInstruction::CallPrimitive(op) => {
                 self.call_primitive(op, position, next()?, capabilities)?;
             }
@@ -232,6 +265,7 @@ impl ReferenceVm {
                     position: next,
                     data_depth: self.data.len(),
                     control_depth: self.control.len(),
+                    scratch: [0; 8],
                 });
                 self.position = target;
             }
@@ -1129,5 +1163,169 @@ mod tests {
         assert_eq!(error.kind, RuntimeErrorKind::DataBelowCallBase);
         assert_eq!(vm.data, []);
         assert_eq!(vm.returns.len(), 1);
+    }
+
+    #[test]
+    fn scratch_is_zeroed_local_to_each_invocation_and_restored_on_return() {
+        use crate::static_image::ScratchSlot;
+
+        let mut vm = make_vm(vec![
+            LogicalInstruction::CallCode(CodePosition(2)),
+            LogicalInstruction::Halt,
+            LogicalInstruction::LoadScratch(ScratchSlot::I),
+            LogicalInstruction::PushI16(41),
+            LogicalInstruction::StoreScratch(ScratchSlot::I),
+            LogicalInstruction::CallCode(CodePosition(8)),
+            LogicalInstruction::LoadScratch(ScratchSlot::I),
+            LogicalInstruction::Return,
+            LogicalInstruction::LoadScratch(ScratchSlot::I),
+            LogicalInstruction::PushI16(99),
+            LogicalInstruction::StoreScratch(ScratchSlot::I),
+            LogicalInstruction::Return,
+        ]);
+        for _ in 0..11 {
+            tick(&mut vm).unwrap();
+        }
+        assert_eq!(vm.data, [0, 0, 41]);
+        assert!(vm.returns.is_empty());
+    }
+
+    #[test]
+    fn scratch_failures_leave_reference_state_unchanged() {
+        use crate::static_image::ScratchSlot;
+
+        let mut no_frame = make_vm(vec![
+            LogicalInstruction::PushI16(7),
+            LogicalInstruction::StoreScratch(ScratchSlot::X),
+            LogicalInstruction::Halt,
+        ]);
+        tick(&mut no_frame).unwrap();
+        let before = (
+            no_frame.position,
+            no_frame.data.clone(),
+            no_frame.control.clone(),
+            no_frame.returns.clone(),
+            no_frame.globals.clone(),
+            no_frame.arrays.clone(),
+        );
+        assert_eq!(
+            tick(&mut no_frame).unwrap_err().kind,
+            RuntimeErrorKind::NoInvocation
+        );
+        assert_eq!(
+            before,
+            (
+                no_frame.position,
+                no_frame.data.clone(),
+                no_frame.control.clone(),
+                no_frame.returns.clone(),
+                no_frame.globals.clone(),
+                no_frame.arrays.clone(),
+            )
+        );
+
+        let mut no_frame_bad_next = make_vm(vec![
+            LogicalInstruction::PushI16(23),
+            LogicalInstruction::StoreScratch(ScratchSlot::Y),
+        ]);
+        tick(&mut no_frame_bad_next).unwrap();
+        let before = (
+            no_frame_bad_next.position,
+            no_frame_bad_next.data.clone(),
+            no_frame_bad_next.control.clone(),
+            no_frame_bad_next.returns.clone(),
+            no_frame_bad_next.globals.clone(),
+            no_frame_bad_next.arrays.clone(),
+        );
+        assert_eq!(
+            tick(&mut no_frame_bad_next).unwrap_err().kind,
+            RuntimeErrorKind::NoInvocation
+        );
+        assert_eq!(
+            before,
+            (
+                no_frame_bad_next.position,
+                no_frame_bad_next.data.clone(),
+                no_frame_bad_next.control.clone(),
+                no_frame_bad_next.returns.clone(),
+                no_frame_bad_next.globals.clone(),
+                no_frame_bad_next.arrays.clone(),
+            )
+        );
+
+        let mut underflow = make_vm(vec![
+            LogicalInstruction::CallCode(CodePosition(2)),
+            LogicalInstruction::Halt,
+            LogicalInstruction::StoreScratch(ScratchSlot::Y),
+            LogicalInstruction::Return,
+        ]);
+        tick(&mut underflow).unwrap();
+        let before = (
+            underflow.position,
+            underflow.data.clone(),
+            underflow.returns.clone(),
+        );
+        assert_eq!(
+            tick(&mut underflow).unwrap_err().kind,
+            RuntimeErrorKind::DataUnderflow
+        );
+        assert_eq!(
+            before,
+            (
+                underflow.position,
+                underflow.data.clone(),
+                underflow.returns.clone()
+            )
+        );
+
+        let mut bad_next = make_vm(vec![
+            LogicalInstruction::CallCode(CodePosition(2)),
+            LogicalInstruction::Halt,
+            LogicalInstruction::PushI16(13),
+            LogicalInstruction::StoreScratch(ScratchSlot::Y),
+        ]);
+        tick(&mut bad_next).unwrap();
+        tick(&mut bad_next).unwrap();
+        let before = (
+            bad_next.position,
+            bad_next.data.clone(),
+            bad_next.returns.clone(),
+        );
+        assert_eq!(
+            tick(&mut bad_next).unwrap_err().kind,
+            RuntimeErrorKind::InvalidTarget
+        );
+        assert_eq!(
+            before,
+            (
+                bad_next.position,
+                bad_next.data.clone(),
+                bad_next.returns.clone()
+            )
+        );
+
+        let mut bad_load_next = make_vm(vec![
+            LogicalInstruction::CallCode(CodePosition(2)),
+            LogicalInstruction::Halt,
+            LogicalInstruction::LoadScratch(ScratchSlot::Y),
+        ]);
+        tick(&mut bad_load_next).unwrap();
+        let before = (
+            bad_load_next.position,
+            bad_load_next.data.clone(),
+            bad_load_next.returns.clone(),
+        );
+        assert_eq!(
+            tick(&mut bad_load_next).unwrap_err().kind,
+            RuntimeErrorKind::InvalidTarget
+        );
+        assert_eq!(
+            before,
+            (
+                bad_load_next.position,
+                bad_load_next.data.clone(),
+                bad_load_next.returns.clone()
+            )
+        );
     }
 }
