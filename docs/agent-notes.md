@@ -1,8 +1,58 @@
-# エージェント向け実装ノート
+# 旧TBX エージェント向け実装ノート
 
-実装エージェントが詰まりやすい箇所・PR レビューで繰り返し指摘された事項・後続タスクで再利用できる注意点をまとめる。
+この文書は旧TBX（ルート package `tbx`、`src/`、`lib/`）の実装エージェントが詰まりやすい箇所、PRレビューで繰り返し指摘された事項、再利用できる注意点をまとめる。TBX-Next (`crates/tbx-next/`) の仕様や実装構造を示す文書ではない。
 
-実装前に一読すること。詳細は各リンク先 docs や issue を参照。
+旧TBXを変更する場合に参照する。詳細は各リンク先 docs や issue を参照。
+
+## 旧TBX Architecture（旧ルート `AGENTS.md` から移管）
+
+以下は旧TBXの現行実装に関する案内であり、変更時は必ずコードとテストで現状を確認する。
+
+### 実行モデルと起動
+
+旧TBXは Tiny BASIC と Forth 的な自己拡張機能を持つインタープリタで、bootstrapped VM と Indirect Threaded Code (ITC) を使う。`src/vm.rs` の VM は `dictionary: Vec<Cell>`（コード・データ層）、`headers: Vec<WordEntry>`（word名・flag・kind層）、`data_stack: Vec<Cell>`、`return_stack: Vec<ReturnFrame>` を持つ。
+
+`Xt` (`src/cell.rs`) は `dictionary` ではなく `headers` の型付きindex。`EntryKind` (`src/dict.rs`) は `Primitive(PrimFn)`、`Word(usize)`（dictionary offset）、`Variable(usize)`、`Constant(Cell)` または VM 内部命令（`Call`、`Exit`、`ReturnVal`、`BranchIfFalse` 等）を表す。inner interpreter の `VM::exec_xt` は `Xt` 列を読み、`EntryKind` をdispatchして制御フローを処理する。top-level実行は `ReturnFrame::TopLevel` sentinel で終了する。
+
+`lib::init_vm()` が VM を作り、`primitives::register_all()` でsystem dictionaryを登録し、`vm.seal_sys()` で `DP_SYS` を記録する。
+
+### 旧TBXの層と辞書
+
+- `src/cell.rs`: `Cell`（`Int`、`Float`、`DictAddr`、`StackAddr`、`Str`、`Marker`、`Xt` 等）、`Xt`、`ReturnFrame`、`CompileEntry`
+- `src/constants.rs`: VM上限（`MAX_DICTIONARY_CELLS` 1M、`MAX_DATA_STACK_DEPTH` 65536、`MAX_RETURN_STACK_DEPTH` 4096）
+- `src/dict.rs`: `WordEntry`、`EntryKind`、`FLAG_SYSTEM` / `FLAG_IMMEDIATE`
+- `src/error.rs`: VM・compiler errorを含む `TbxError`
+- `src/lexer.rs`: `Token` / `SpannedToken` tokenizer
+- `src/expr.rs`: Shunting-Yard Algorithmによる式compiler。infix式をRPNの `Vec<Cell>` に変換
+- `src/vm.rs`: VM、`CompileState`、inner interpreter
+- `src/primitives.rs` と `src/primitives/`: primitive実装。`primitives.rs` は façade / `register_all` 登録入口であり、低依存の分類moduleを下位directoryに置ける
+- `src/interpreter.rs`: outer interpreter。tokenizeし、`compile_program` / `exec_source` / `exec_line` を駆動
+
+System、Library（`USE` で読み込む標準library）、Userの三層は一つの `Vec<Cell>` を共有し、境界はそれぞれ `DP_SYS`、`DP_LIB`、`DP_USER`。`DP` は次の空きcellを指す。headersは `prev: Option<usize>` linked listでshadowingとlookup順を表す。session中、headersとdictionaryは単調増加するが、`DEF ... END` の失敗時には部分compileをrollbackする。
+
+配列は `DIM @A[n]` で作る名前付きmutable storageで、surface上のfirst-class値ではない。内部の `Cell::Array(ArrayRef)` は `Rc<RefCell<Vec<Cell>>>` handleで、`Cell::Array` / `Cell::ArrayAddr` handleが全て解放されると配列も解放される。`Cell::ArrayAddr { array, elem_idx }` は `ArrayRef` を直接保持し、`FETCH` / `STORE` が要素へ間接参照なしでアクセスする。文字列は `Cell::Str(Rc<str>)` の不変shared handleで、stack・variable slot・array element間で共有できる。どちらもpool境界による寿命管理は不要。完全resetはVM再作成またはsourceからの再compactで行う。文字列literalは `Cell::Str(Rc<str>)` としてdictionaryへcompileされる。
+
+### Compile、integration test、設計資料
+
+word定義は `DEF WORD(params) ... END`。`CompileState` (`src/vm.rs`) はparameter/local table、GOTO labelと自己再帰 `CALL` のback-patch list、error recovery用rollback情報を保持する。式compileは `ExprCompiler` (`src/expr.rs`) が担当する。
+
+`build.rs` は `lib/tests/test_*.tbx` ごとにtestを生成し、`$OUT_DIR/tbx_lib_tests_generated.rs` を `tests/tbx_lib_tests.rs` から `include!` する。TBX-level testは `lib/tests/test_<name>.tbx` を追加する。
+
+旧TBXの設計文書は `blueprint.md`（VM architecture、dictionary、memory layout）、`blueprint-language.md`（構文・statement・expression・型）、`blueprint-compiler.md`（`DEF`/`END`、control structure、compile-time stack primitive）。`blueprint.md` は設計判断・仕様を記録し、安定した実装詳細は `src/` が正本。旧TBX programを書く場合は `docs/tbx-quickref.ja.md` を入口とし、現挙動やedge caseは `src/`、`lib/`、testsで確認する。
+
+### 旧ルート `AGENTS.md` のArchitecture節棚卸し
+
+| 旧節 | 扱い | 対応 |
+| --- | --- | --- |
+| Architecture / Execution model | agent-notesへ移管 | 上記「実行モデルと起動」 |
+| Entry point | agent-notesへ移管 | 上記 `lib::init_vm()` の説明 |
+| Layers | agent-notesへ移管 | 上記「旧TBXの層と辞書」 |
+| Dictionary structure | agent-notesへ移管 | 上記の三層、lookup、rollback、配列・文字列の説明 |
+| Compilation | agent-notesへ移管 | 上記「Compile、integration test、設計資料」 |
+| Integration tests | agent-notesへ移管 | 同節の `build.rs` 生成契約 |
+| Design documents | 旧TBX情報はagent-notesへ移管、世代をまたぐ規則は重複のため削除 | 同節に旧blueprintとquick referenceの入口を記載。旧 `AGENTS.md` のTBX program向けquick reference指示は対象別参照に整理 |
+
+適用対象とする共通コア設計原則、issue/PR運用規則、実装issueガイドラインへの参照は、世代別Architecture説明ではなく共通ルールとしてルート `AGENTS.md` に残している。
 
 ---
 

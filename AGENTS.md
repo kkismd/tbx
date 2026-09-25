@@ -38,13 +38,13 @@ TBX は、実用的な言語機能を拡充しながらも、コアを小さく�
 - 適用される `AGENTS.md`
 - 選択した skill の `SKILL.md`
 
-### 現行 `tbx` crate / TBX 言語実装を変更する場合
+### 旧TBX（ルート `tbx` crate）を変更する場合
 
-- **[`docs/agent-notes.md`](docs/agent-notes.md)** — 現行 `tbx` crate、TBX 構文、標準ライブラリ、`lib/` 配下の TBX プログラムに関する注意・落とし穴・レビュー由来の知見をまとめた日本語の共有ノート。`crates/tbx-next` のみを変更する作業では、issue や変更対象が明示的に関連しない限り必読ではない。
+- **[`docs/agent-notes.md`](docs/agent-notes.md)** — 旧TBX crate、TBX 構文、標準ライブラリ、`lib/` 配下の TBX プログラムに関する注意・落とし穴・レビュー由来の知見をまとめた日本語のノート。`crates/tbx-next` のみを変更する作業では、issue や変更対象が明示的に関連しない限り必読ではない。
 
 ### `crates/tbx-next` を変更する場合
 
-- **[`docs/next/README.md`](docs/next/README.md)** — TBX Next の対象範囲、現行 `tbx` crate との境界、source of truth、参照すべき ADR / milestone を確認する入口文書。`crates/tbx-next` を変更する作業では最初に確認する。
+- **[`docs/next/README.md`](docs/next/README.md)** — TBX Next の対象範囲、旧TBXとの関係、source of truth、参照すべき ADR / milestone を確認する入口文書。`crates/tbx-next` を変更する作業では最初に確認する。
 - 必要に応じて **[`crates/tbx-next/README.md`](crates/tbx-next/README.md)** も確認する。
 
 ### 実装issueを作成・再評価・着手前レビューする場合
@@ -55,65 +55,13 @@ TBX は、実用的な言語機能を拡充しながらも、コアを小さく�
 
 - **[`docs/notes/star-trek-mayfield-1972.md`](docs/notes/star-trek-mayfield-1972.md)** — `lib/trek.tbx`、Star Trek 関連テスト、Mayfield 版仕様に触れる場合に参照する原典ルール抽出メモ。VM、compiler、`crates/tbx-next`、一般的な Rust 実装作業では必読ではない。
 
-## Architecture
+## 主実装と変更対象別の参照入口
 
-TBX is a Tiny BASIC interpreter with Forth-like self-extension capabilities. The design follows a bootstrapped VM with Indirect Threaded Code (ITC).
+通常の主実装は TBX-Next (`crates/tbx-next/`) である。TBX-Next の範囲、旧TBXとの境界、source of truth、設計資料の入口は [`docs/next/README.md`](docs/next/README.md) を参照する。実装事実はコードとテストを正本とし、重要な設計判断は関連ADRを参照する。
 
-### Execution model
+旧TBXの `src/`、`lib/`、従来の blueprint 文書を変更する場合に限り、旧実装の構造・落とし穴を [`docs/agent-notes.md`](docs/agent-notes.md) と変更対象に応じた文書から確認する。旧TBXの情報をTBX-Nextの仕様として扱わない。
 
-The VM (`src/vm.rs`) is the core. It holds:
-- `dictionary: Vec<Cell>` — flat code/data array (the data layer)
-- `headers: Vec<WordEntry>` — word name/flag/kind table (the header layer)
-- `data_stack: Vec<Cell>` — argument passing and computation
-- `return_stack: Vec<ReturnFrame>` — call/return with saved PC and BP
-
-`Xt` (`src/cell.rs`) is a typed index into `headers`, not into `dictionary`. `EntryKind` in `src/dict.rs` determines how a word is executed: `Primitive(PrimFn)`, `Word(usize)` (dictionary offset), `Variable(usize)`, `Constant(Cell)`, or VM-internal instructions (`Call`, `Exit`, `ReturnVal`, `BranchIfFalse`, etc.).
-
-The inner interpreter (`VM::exec_xt`) reads a sequence of `Xt` values, dispatches through `EntryKind`, and handles control flow. `ReturnFrame::TopLevel` is the sentinel used to terminate top-level execution cleanly.
-
-### Entry point
-
-`lib::init_vm()` creates a VM, calls `primitives::register_all()` to populate the system dictionary, then calls `vm.seal_sys()` to record the system boundary (`DP_SYS`).
-
-### Layers
-
-1. **`src/cell.rs`** — `Cell` (the value union: `Int`, `Float`, `DictAddr`, `StackAddr`, `Str`, `Marker`, `Xt`), `Xt`, `ReturnFrame`, `CompileEntry`
-2. **`src/constants.rs`** — VM limits: `MAX_DICTIONARY_CELLS` (1M), `MAX_DATA_STACK_DEPTH` (65536), `MAX_RETURN_STACK_DEPTH` (4096)
-3. **`src/dict.rs`** — `WordEntry`, `EntryKind`, dictionary flags (`FLAG_SYSTEM`, `FLAG_IMMEDIATE`)
-4. **`src/error.rs`** — `TbxError` enum (all VM and compiler errors)
-5. **`src/lexer.rs`** — tokenizer; produces `Token` / `SpannedToken`
-6. **`src/expr.rs`** — expression compiler using the Shunting-Yard Algorithm; converts infix expressions to RPN `Vec<Cell>`
-7. **`src/vm.rs`** — `VM` struct, `CompileState` (active DEF..END state), inner interpreter
-8. **`src/primitives.rs` / `src/primitives/`** — built-in `PrimFn` implementations. `src/primitives.rs` remains the façade and registration entry point (`register_all`); low-dependency category modules may live under `src/primitives/` (e.g. `stack.rs`, `numeric.rs`, `logic.rs`).
-9. **`src/interpreter.rs`** — outer interpreter (`Interpreter`); tokenizes source, drives `compile_program` / `exec_source` / `exec_line`
-
-### Dictionary structure
-
-Three logical layers share one flat `Vec<Cell>`:
-- **System dictionary** — primitives registered by `register_all`; boundary at `DP_SYS`
-- **Library dictionary** — standard library loaded via `USE`; boundary at `DP_LIB`
-- **User dictionary** — user-defined words; boundary at `DP_USER`, with `DP` pointing to the next free cell
-
-Headers use a linked-list (`prev: Option<usize>`) for shadowing and lookup order. Within a session, `headers` and `dictionary` entries grow monotonically, except for the internal rollback that undoes a partially-compiled definition when `DEF ... END` fails. Arrays are named mutable storage created by `DIM @A[n]`; they are not surface first-class values. Internally they are represented as `Cell::Array(ArrayRef)`, where `ArrayRef` is an `Rc<RefCell<Vec<Cell>>>` handle. Array lifetime is managed by `Rc` reference counting: an array is freed when all `Cell::Array` and `Cell::ArrayAddr` handles to it go out of scope. No pool-boundary-based lifetime management is needed. `Cell::ArrayAddr { array: ArrayRef, elem_idx }` holds an `ArrayRef` directly so that `FETCH` / `STORE` can access elements without indirection. Strings are represented as `Cell::Str(Rc<str>)` — reference-counted immutable handles — and also need no pool-based lifetime management; a `Cell::Str` may be safely shared across the data stack, variable slots, and array elements. A full reset is achieved by re-creating the VM or by recompacting from source. String literals are compiled as `Cell::Str(Rc<str>)` directly into the dictionary.
-
-### Compilation
-
-Word definitions use `DEF WORD(params) ... END`. `CompileState` in `src/vm.rs` tracks the in-progress compilation: parameter/local variable table, back-patch lists for GOTO labels and self-recursive `CALL` instructions, and rollback info for error recovery. Expression compilation is handled by `ExprCompiler` in `src/expr.rs`.
-
-### Integration tests
-
-`build.rs` generates one `#[test]` per `lib/tests/test_*.tbx` file and writes them to `$OUT_DIR/tbx_lib_tests_generated.rs`, which is `include!`-ed by `tests/tbx_lib_tests.rs`. To add a TBX-level test, add a `test_<name>.tbx` file to `lib/tests/`; no Rust code changes needed.
-
-### Design documents
-
-- `blueprint.md` — VM architecture, dictionary structure, memory layout
-- `blueprint-language.md` — language syntax, statements, expressions, types
-- `blueprint-compiler.md` — `DEF`/`END`, control structures, compile-time stack primitives
-- `docs/tbx-quickref.ja.md` — TBX プログラムを書く人間およびエージェント向けの実用クイックリファレンス
-
-`blueprint.md` records design decisions and specifications only; stable implementation details live in `src/`, not in blueprint docs.
-
-When writing or modifying TBX programs, consult `docs/tbx-quickref.ja.md` first for common syntax, standard vocabulary, and agent-facing pitfalls. The implementation remains the source of truth; check `src/`, `lib/`, and tests for details, edge cases, and current behavior.
+TBX-Next のプログラムを書くときは [`docs/next/tbx-quickref.ja.md`](docs/next/tbx-quickref.ja.md) を参照する。旧TBXプログラムの変更では [`docs/tbx-quickref.ja.md`](docs/tbx-quickref.ja.md) を参照する。どちらも現在の実装とテストを置き換える仕様書ではない。
 
 ## マイルストーン完了時のクイックリファレンス確認
 
@@ -174,14 +122,14 @@ TBX または TBX Next のマイルストーンを完了する前に、実装済
 ## Commands
 
 ```bash
-# Build
-cargo build
+# Build TBX-Next (通常の開発対象)
+cargo build -p tbx-next
 
-# Run tests (includes both Rust unit tests and .tbx integration tests)
-cargo test
+# Run TBX-Next tests
+cargo test -p tbx-next
 
-# Run a single test by name
-cargo test test_name
+# Run a single TBX-Next test by name
+cargo test -p tbx-next test_name
 
 # Lint (must pass with zero warnings across the workspace)
 cargo ci-clippy
@@ -192,11 +140,22 @@ cargo fmt --check
 # Fix formatting
 cargo fmt
 
-# Run the interpreter on a file
-cargo run -- path/to/file.tbx
+# Run TBX-Next on a file
+cargo run -p tbx-next -- path/to/file.tbx
 
-# Run the interpreter in REPL mode (reads from stdin)
-cargo run
+# Run the TBX-Next REPL (reads from stdin)
+cargo run -p tbx-next --bin tbx-next
+```
+
+### 旧TBX専用コマンド
+
+ルートpackage `tbx` の既定コマンドは旧TBXだけをbuild、test、runする。旧TBXを明示的に変更・確認する場合に限り使用する。
+
+```bash
+cargo build -p tbx
+cargo test -p tbx
+cargo run -p tbx -- path/to/file.tbx
+cargo run -p tbx
 ```
 
 ## Git Workflow
