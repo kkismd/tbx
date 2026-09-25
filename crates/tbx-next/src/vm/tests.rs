@@ -158,3 +158,4 @@ mod global_variable_array;
 mod instruction_ip_halt;
 mod primitive_capability_io_random;
 mod runtime_error_failure_state;
+mod scratch_instruction;

@@ -4,7 +4,7 @@ use crate::global_variable::{
 };
 use crate::instruction::{
     CodeLocation, CodeSpaceLookup, Instruction, InstructionAddress, InstructionLookup,
-    InstructionLookupError, InstructionView,
+    InstructionLookupError, InstructionView, ScratchSlotOperand,
 };
 use crate::primitive::{PrimitiveContext, PrimitiveError, PrimitiveLookup, PrimitiveLookupError};
 use crate::random::RandomState;
@@ -95,6 +95,10 @@ pub(crate) enum VmErrorKind {
     },
     InvalidGlobalArray {
         source: GlobalArrayError,
+    },
+    NoScratchInvocation,
+    InvalidScratchSlot {
+        slot: u8,
     },
     InvalidCompiledEntry {
         source: InstructionLookupError,
@@ -531,6 +535,10 @@ impl Vm {
             }
             Instruction::LoadVar(id) => self.step_load_var(&mut execution, location, id),
             Instruction::StoreVar(id) => self.step_store_var(&mut execution, location, id),
+            Instruction::LoadScratch(slot) => self.step_load_scratch(instructions, location, slot),
+            Instruction::StoreScratch(slot) => {
+                self.step_store_scratch(instructions, location, slot)
+            }
             Instruction::LoadArrayElement(id) => self.step_load_array(&mut execution, location, id),
             Instruction::StoreArrayElement(id) => {
                 self.step_store_array(&mut execution, location, id)
@@ -726,6 +734,69 @@ impl Vm {
             .expect("depth was checked before consuming StoreVar value");
         self.instruction_pointer = next;
 
+        Ok(StepOutcome::Continued)
+    }
+
+    fn step_load_scratch(
+        &mut self,
+        instructions: InstructionLookup<'_>,
+        location: CodeLocation,
+        operand: ScratchSlotOperand,
+    ) -> Result<StepOutcome, VmError> {
+        let slot = operand.validate().ok_or(VmError {
+            location,
+            kind: VmErrorKind::InvalidScratchSlot {
+                slot: operand.raw(),
+            },
+        })?;
+        let value = self
+            .return_stack
+            .current_scratch(slot)
+            .map_err(|_| VmError {
+                location,
+                kind: VmErrorKind::NoScratchInvocation,
+            })?;
+        let next = self.valid_next_location(instructions, location)?;
+
+        self.data_stack.push(Value::integer(value));
+        self.instruction_pointer = next;
+        Ok(StepOutcome::Continued)
+    }
+
+    fn step_store_scratch(
+        &mut self,
+        instructions: InstructionLookup<'_>,
+        location: CodeLocation,
+        operand: ScratchSlotOperand,
+    ) -> Result<StepOutcome, VmError> {
+        let slot = operand.validate().ok_or(VmError {
+            location,
+            kind: VmErrorKind::InvalidScratchSlot {
+                slot: operand.raw(),
+            },
+        })?;
+        self.data_stack.require_depth(1).map_err(|source| VmError {
+            location,
+            kind: VmErrorKind::DataStackUnderflow { source },
+        })?;
+        let value = self
+            .data_stack
+            .peek()
+            .expect("depth checked above")
+            .as_integer();
+        self.return_stack
+            .current_scratch(slot)
+            .map_err(|_| VmError {
+                location,
+                kind: VmErrorKind::NoScratchInvocation,
+            })?;
+        let next = self.valid_next_location(instructions, location)?;
+
+        self.return_stack
+            .set_current_scratch(slot, value)
+            .expect("scratch frame validated before commit");
+        self.data_stack.pop().expect("depth checked above");
+        self.instruction_pointer = next;
         Ok(StepOutcome::Continued)
     }
 

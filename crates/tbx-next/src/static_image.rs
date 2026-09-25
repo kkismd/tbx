@@ -83,6 +83,7 @@ enum LowerError {
     UnknownCodeOwner(CodeLocation),
     InvalidGlobal(GlobalVarId),
     InvalidArray(ArrayId),
+    ScratchInstructionUnsupported,
     UnknownPrimitive(PrimitiveId),
     ImageTooLarge,
     DuplicateCodeOwner,
@@ -256,6 +257,9 @@ fn lower(
                     } else {
                         LogicalInstruction::StoreArray(slot)
                     }
+                }
+                Instruction::LoadScratch(_) | Instruction::StoreScratch(_) => {
+                    return Err(LowerError::ScratchInstructionUnsupported);
                 }
                 Instruction::Call(word) => match words
                     .get(*word)
@@ -813,6 +817,22 @@ mod tests {
             .map(|(_, operation)| LogicalInstruction::CallPrimitive(operation))
             .collect();
         assert_eq!(image.code, expected);
+    }
+
+    #[test]
+    fn lowering_explicitly_rejects_both_host_scratch_instructions() {
+        let fixture = Fixture::new();
+        for instruction in [
+            Instruction::LoadScratch(crate::instruction::ScratchSlotOperand::from_raw(0)),
+            Instruction::StoreScratch(crate::instruction::ScratchSlotOperand::from_raw(0)),
+        ] {
+            let mut code = InstructionSequence::new();
+            code.append(instruction);
+            assert_eq!(
+                fixture.lower(&[code.view()]),
+                Err(LowerError::ScratchInstructionUnsupported)
+            );
+        }
     }
 
     #[test]

@@ -376,6 +376,8 @@ fn reject_owner_local_direct_branch(
         | Instruction::WriteFixedText(_)
         | Instruction::LoadVar(_)
         | Instruction::StoreVar(_)
+        | Instruction::LoadScratch(_)
+        | Instruction::StoreScratch(_)
         | Instruction::LoadArrayElement(_)
         | Instruction::StoreArrayElement(_)
         | Instruction::Call(_)
