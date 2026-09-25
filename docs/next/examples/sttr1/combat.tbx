@@ -6,6 +6,20 @@ DEF PRINT_COURSE_GUIDE
   CR
 END
 
+# Return one interpolated component of the course vector (axis 1 = x, 2 = y).
+DEF COURSE_COMPONENT COURSE_VALUE, AXIS
+  LET I = COURSE_VALUE / 10
+  LET J = COURSE_VALUE % 10
+  IF AXIS = 1
+    LET K = (@COURSE_DX[I] * (10 - J) + @COURSE_DX[I + 1] * J) / 10
+  ELSE
+    LET K = (@COURSE_DY[I] * (10 - J) + @COURSE_DY[I + 1] * J) / 10
+  ENDIF
+  DROP
+  DROP
+  EVAL K
+END
+
 # Return the integer square root of a non-negative value.  Combat uses this
 # small TBX helper instead of adding a combat-specific VM primitive.
 DEF ISQRT VALUE
@@ -116,12 +130,9 @@ DEF TORPEDO_RESOLVE_HIT TARGET_X, TARGET_Y, TARGET_SECTOR_INDEX
 END
 
 DEF TORPEDO_FLIGHT
-      # I/J are the course index and interpolation fraction.
-      LET I = COURSE / 10
-      LET J = COURSE % 10
       # X/Y are the short-lived interpolated torpedo vector.
-      LET X = (@COURSE_DX[I] * (10 - J) + @COURSE_DX[I + 1] * J) / 10
-      LET Y = (@COURSE_DY[I] * (10 - J) + @COURSE_DY[I + 1] * J) / 10
+      LET X = COURSE_COMPONENT(COURSE, 1)
+      LET Y = COURSE_COMPONENT(COURSE, 2)
       # M/N track the torpedo's fixed-point sector position.
       LET M = ENT_SX * 10
       LET N = ENT_SY * 10

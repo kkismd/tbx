@@ -10,12 +10,9 @@ DEF PRINT_KBS SUMMARY_VALUE
 END
 
 DEF NAVIGATION_MOVE
-    # I/J are the course index and interpolation fraction.
-    LET I = COURSE / 10
-    LET J = COURSE % 10
     # X/Y are the short-lived interpolated course vector.
-    LET X = (@COURSE_DX[I] * (10 - J) + @COURSE_DX[I + 1] * J) / 10
-    LET Y = (@COURSE_DY[I] * (10 - J) + @COURSE_DY[I + 1] * J) / 10
+    LET X = COURSE_COMPONENT(COURSE, 1)
+    LET Y = COURSE_COMPONENT(COURSE, 2)
     LET WARP_STEPS = WARP * 8 / 10
     # M/N track the current fixed-point sector position.
     LET M = ENT_SX * 10
@@ -27,9 +24,6 @@ DEF NAVIGATION_MOVE
     LET NAVIGATION_VALID = 0
 
     WHILE NAVIGATION_VALID < WARP_STEPS
-    # S/T retain the previous position for collision rollback.
-    LET S = M
-    LET T = N
     # U/V are the next fixed-point sector position.
     LET U = M + X
     LET V = N + Y
@@ -42,8 +36,7 @@ DEF NAVIGATION_MOVE
       IF @SECTOR[K] <> 0
         PRINT "WARP ENGINES SHUTDOWN AT SECTOR ", O, ",", L, " DUE TO OBSTACLE"
         CR
-        LET M = S
-        LET N = T
+        # M/N still hold the last accepted position because U/V are only candidates.
         LET NAVIGATION_VALID = WARP_STEPS
       ELSE
         LET @SECTOR[(ENT_SY - 1) * 8 + ENT_SX] = 0
