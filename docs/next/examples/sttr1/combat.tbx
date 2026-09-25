@@ -82,6 +82,72 @@ DEF KLINGON_ATTACK
   ENDWH
 END
 
+DEF TORPEDO_RESOLVE_HIT
+  IF TORPEDO_HIT = 2
+    IF @KLINGON_E[1] > 0 AND @KLINGON_X[1] = O AND @KLINGON_Y[1] = L
+      PRINT "PHOTON TORPEDO HIT KLINGON AT SECTOR ", O, ",", L
+      CR
+      DESTROY_KLINGON(1)
+    ELSIF @KLINGON_E[2] > 0 AND @KLINGON_X[2] = O AND @KLINGON_Y[2] = L
+      PRINT "PHOTON TORPEDO HIT KLINGON AT SECTOR ", O, ",", L
+      CR
+      DESTROY_KLINGON(2)
+    ELSIF @KLINGON_E[3] > 0 AND @KLINGON_X[3] = O AND @KLINGON_Y[3] = L
+      PRINT "PHOTON TORPEDO HIT KLINGON AT SECTOR ", O, ",", L
+      CR
+      DESTROY_KLINGON(3)
+    ENDIF
+  ELSIF TORPEDO_HIT = 3
+    PRINT "PHOTON TORPEDO HIT STARBASE AT SECTOR ", O, ",", L, "; STARBASE DESTROYED"
+    CR
+    LET @SECTOR[K] = 0
+    LET BASES_HERE = BASES_HERE - 1
+    LET BASES_LEFT = BASES_LEFT - 1
+    IF ENT_QX >= 1 AND ENT_QX <= 8 AND ENT_QY >= 1 AND ENT_QY <= 8
+      LET @GALAXY[(ENT_QY - 1) * 8 + ENT_QX] = KLINGONS_HERE * 100 + BASES_HERE * 10 + STARS_HERE
+    ENDIF
+  ELSIF TORPEDO_HIT = 4
+    PRINT "PHOTON TORPEDO HIT STAR AT SECTOR ", O, ",", L
+    CR
+  ENDIF
+END
+
+DEF TORPEDO_FLIGHT
+      # I/J are the course index and interpolation fraction.
+      LET I = COURSE / 10
+      LET J = COURSE % 10
+      # X/Y are the short-lived interpolated torpedo vector.
+      LET X = (@COURSE_DX[I] * (10 - J) + @COURSE_DX[I + 1] * J) / 10
+      LET Y = (@COURSE_DY[I] * (10 - J) + @COURSE_DY[I + 1] * J) / 10
+      # M/N track the torpedo's fixed-point sector position.
+      LET M = ENT_SX * 10
+      LET N = ENT_SY * 10
+      LET TORPEDO_ACTIVE = 1
+      LET TORPEDO_HIT = 0
+
+      WHILE TORPEDO_ACTIVE <> 0
+        LET M = M + X
+        LET N = N + Y
+        IF M < 5 OR M > 84 OR N < 5 OR N > 84
+          LET TORPEDO_ACTIVE = 0
+        ELSE
+          # O/L/K are the target x, target y, and sector index.
+          LET O = (M + 5) / 10
+          LET L = (N + 5) / 10
+          LET K = (L - 1) * 8 + O
+          IF @SECTOR[K] <> 0
+            LET TORPEDO_ACTIVE = 0
+            LET TORPEDO_HIT = @SECTOR[K]
+            TORPEDO_RESOLVE_HIT
+          ENDIF
+        ENDIF
+      ENDWH
+      IF TORPEDO_HIT = 0
+        PRINT "PHOTON TORPEDO MISSED"
+        CR
+      ENDIF
+END
+
 DEF PHOTON_TORPEDO
   # Device 5 is photon tubes.
   IF @DAMAGE[5] < 0
@@ -118,68 +184,10 @@ DEF PHOTON_TORPEDO
       ENDIF
     ENDWH
 
-      # I/J are the course index and interpolation fraction.
-      LET I = COURSE / 10
-      LET J = COURSE % 10
-      # X/Y are the short-lived interpolated torpedo vector.
-      LET X = (@COURSE_DX[I] * (10 - J) + @COURSE_DX[I + 1] * J) / 10
-      LET Y = (@COURSE_DY[I] * (10 - J) + @COURSE_DY[I + 1] * J) / 10
       LET TORPEDOES = TORPEDOES - 1
       PRINT "PHOTON TORPEDO FIRED; TORPEDOES REMAINING: ", TORPEDOES
       CR
-      # M/N track the torpedo's fixed-point sector position.
-      LET M = ENT_SX * 10
-      LET N = ENT_SY * 10
-      LET TORPEDO_ACTIVE = 1
-      LET TORPEDO_HIT = 0
-
-      WHILE TORPEDO_ACTIVE <> 0
-        LET M = M + X
-        LET N = N + Y
-        IF M < 5 OR M > 84 OR N < 5 OR N > 84
-          LET TORPEDO_ACTIVE = 0
-        ELSE
-          # O/L/K are the target x, target y, and sector index.
-          LET O = (M + 5) / 10
-          LET L = (N + 5) / 10
-          LET K = (L - 1) * 8 + O
-          IF @SECTOR[K] <> 0
-            LET TORPEDO_ACTIVE = 0
-            LET TORPEDO_HIT = @SECTOR[K]
-            IF TORPEDO_HIT = 2
-              IF @KLINGON_E[1] > 0 AND @KLINGON_X[1] = O AND @KLINGON_Y[1] = L
-                PRINT "PHOTON TORPEDO HIT KLINGON AT SECTOR ", O, ",", L
-                CR
-                DESTROY_KLINGON(1)
-              ELSIF @KLINGON_E[2] > 0 AND @KLINGON_X[2] = O AND @KLINGON_Y[2] = L
-                PRINT "PHOTON TORPEDO HIT KLINGON AT SECTOR ", O, ",", L
-                CR
-                DESTROY_KLINGON(2)
-              ELSIF @KLINGON_E[3] > 0 AND @KLINGON_X[3] = O AND @KLINGON_Y[3] = L
-                PRINT "PHOTON TORPEDO HIT KLINGON AT SECTOR ", O, ",", L
-                CR
-                DESTROY_KLINGON(3)
-              ENDIF
-            ELSIF TORPEDO_HIT = 3
-              PRINT "PHOTON TORPEDO HIT STARBASE AT SECTOR ", O, ",", L, "; STARBASE DESTROYED"
-              CR
-              LET @SECTOR[K] = 0
-              LET BASES_HERE = BASES_HERE - 1
-              LET BASES_LEFT = BASES_LEFT - 1
-              IF ENT_QX >= 1 AND ENT_QX <= 8 AND ENT_QY >= 1 AND ENT_QY <= 8
-                LET @GALAXY[(ENT_QY - 1) * 8 + ENT_QX] = KLINGONS_HERE * 100 + BASES_HERE * 10 + STARS_HERE
-              ENDIF
-            ELSIF TORPEDO_HIT = 4
-              PRINT "PHOTON TORPEDO HIT STAR AT SECTOR ", O, ",", L
-              CR
-            ENDIF
-          ENDIF
-        ENDIF
-      ENDWH
-      IF TORPEDO_HIT = 0
-        PRINT "PHOTON TORPEDO MISSED"
-        CR
-      ENDIF
+      TORPEDO_FLIGHT
       KLINGON_ATTACK
 END
 
