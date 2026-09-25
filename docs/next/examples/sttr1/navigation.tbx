@@ -9,62 +9,7 @@ DEF PRINT_KBS SUMMARY_VALUE
   DROP
 END
 
-DEF NAVIGATE
-  LET NAVIGATION_VALID = 0
-  WHILE NAVIGATION_VALID = 0
-    PRINT_COURSE_GUIDE
-    PRINT "COURSE (0 CANCEL, 10-89):"
-    CR
-    IF INPUT?()
-      LET COURSE = DUP()
-      DROP
-      IF COURSE = 0
-        LET NAVIGATION_VALID = 1
-        RETURN
-      ELSIF COURSE >= 10 AND COURSE <= 89
-        PRINT "WARP SCALE: INPUT 0-80 = WARP 0.0-8.0 (10=1.0); 10 WARP = ONE QUADRANT"
-        CR
-        PRINT "WARP (0-80):"
-        CR
-        IF INPUT?()
-          LET WARP = DUP()
-          DROP
-          IF WARP >= 0 AND WARP <= 80
-            # Device 1 is warp engines; damaged engines cap warp at .2.
-            IF @DAMAGE[1] < 0 AND WARP > 2
-              PRINT "WARP ENGINES ARE DAMAGED, MAXIMUM INPUT = 2 (WARP 0.2)"
-              CR
-            ELSE
-              LET NAVIGATION_VALID = 1
-            ENDIF
-          ELSE
-            PRINT "WARP OUT OF RANGE"
-            CR
-          ENDIF
-        ELSE
-          DROP
-          PRINT "WARP INPUT ERROR"
-          CR
-        ENDIF
-      ELSE
-        PRINT "COURSE OUT OF RANGE"
-        CR
-      ENDIF
-    ELSE
-      DROP
-      PRINT "COURSE INPUT ERROR"
-      CR
-    ENDIF
-  ENDWH
-
-    # A valid navigation course triggers the current quadrant's retaliation
-    # before any navigation-side repair/event or movement is applied.
-    KLINGON_ATTACK
-    IF SHIELDS >= 0 AND (KLINGONS_HERE > 0 OR ENERGY > 0)
-    # Valid course/warp input reaches repair and random damage only here,
-    # immediately before sector movement. Invalid input and cancel consume no
-    # event RNG and do not advance repair state.
-    NAVIGATION_DEVICE_EVENTS
+DEF NAVIGATION_MOVE
     # I/J are the course index and interpolation fraction.
     LET I = COURSE / 10
     LET J = COURSE % 10
@@ -141,12 +86,74 @@ DEF NAVIGATE
       LET NAVIGATION_VALID = WARP_STEPS
     ENDIF
     ENDWH
+END
 
+DEF NAVIGATION_SETTLE
     LET ENERGY = ENERGY - WARP_STEPS + 5
     IF QUADRANT_CROSSED <> 0 OR WARP >= 10
       LET STARDATE = STARDATE + 1
     ENDIF
     CHECK_DOCKING
+END
+
+DEF NAVIGATE
+  LET NAVIGATION_VALID = 0
+  WHILE NAVIGATION_VALID = 0
+    PRINT_COURSE_GUIDE
+    PRINT "COURSE (0 CANCEL, 10-89):"
+    CR
+    IF INPUT?()
+      LET COURSE = DUP()
+      DROP
+      IF COURSE = 0
+        LET NAVIGATION_VALID = 1
+        RETURN
+      ELSIF COURSE >= 10 AND COURSE <= 89
+        PRINT "WARP SCALE: INPUT 0-80 = WARP 0.0-8.0 (10=1.0); 10 WARP = ONE QUADRANT"
+        CR
+        PRINT "WARP (0-80):"
+        CR
+        IF INPUT?()
+          LET WARP = DUP()
+          DROP
+          IF WARP >= 0 AND WARP <= 80
+            # Device 1 is warp engines; damaged engines cap warp at .2.
+            IF @DAMAGE[1] < 0 AND WARP > 2
+              PRINT "WARP ENGINES ARE DAMAGED, MAXIMUM INPUT = 2 (WARP 0.2)"
+              CR
+            ELSE
+              LET NAVIGATION_VALID = 1
+            ENDIF
+          ELSE
+            PRINT "WARP OUT OF RANGE"
+            CR
+          ENDIF
+        ELSE
+          DROP
+          PRINT "WARP INPUT ERROR"
+          CR
+        ENDIF
+      ELSE
+        PRINT "COURSE OUT OF RANGE"
+        CR
+      ENDIF
+    ELSE
+      DROP
+      PRINT "COURSE INPUT ERROR"
+      CR
+    ENDIF
+  ENDWH
+
+    # A valid navigation course triggers the current quadrant's retaliation
+    # before any navigation-side repair/event or movement is applied.
+    KLINGON_ATTACK
+    IF SHIELDS >= 0 AND (KLINGONS_HERE > 0 OR ENERGY > 0)
+    # Valid course/warp input reaches repair and random damage only here,
+    # immediately before sector movement. Invalid input and cancel consume no
+    # event RNG and do not advance repair state.
+    NAVIGATION_DEVICE_EVENTS
+    NAVIGATION_MOVE
+    NAVIGATION_SETTLE
     ENDIF
     IF SHIELDS >= 1 AND KLINGONS_HERE <= 0 AND ENERGY <= 0
       PRINT "INSUFFICIENT ENERGY: ", ENERGY, "; SHIELDS AVAILABLE: ", SHIELDS
