@@ -8,6 +8,7 @@ use crate::lexer::{Token, TokenKind};
 use crate::name::NormalizedName;
 use crate::operator::{OperatorLookup, OperatorSemantic};
 use crate::source::{SourceError, SourceSpan, SourceView};
+use crate::stack::ScratchSlot;
 use crate::value::Value;
 use crate::word::WordId;
 
@@ -90,6 +91,10 @@ pub(crate) trait ExpressionRuntimeWordResolver {
 
 pub(crate) trait ExpressionLocalResolver {
     fn resolve_local_reference(&self, source_name: &str) -> Option<usize>;
+
+    fn resolve_scratch(&self, _source_name: &str) -> Option<ScratchSlot> {
+        None
+    }
 }
 
 #[derive(Debug, Default)]
@@ -101,6 +106,20 @@ pub(crate) struct DefinitionLocalReferences {
 }
 
 impl DefinitionLocalReferences {
+    pub(crate) fn scratch_slot(source_name: &str) -> Option<ScratchSlot> {
+        match source_name.to_ascii_uppercase().as_str() {
+            "I" => Some(ScratchSlot::I),
+            "J" => Some(ScratchSlot::J),
+            "K" => Some(ScratchSlot::K),
+            "L" => Some(ScratchSlot::L),
+            "M" => Some(ScratchSlot::M),
+            "N" => Some(ScratchSlot::N),
+            "X" => Some(ScratchSlot::X),
+            "Y" => Some(ScratchSlot::Y),
+            _ => None,
+        }
+    }
+
     pub(crate) fn from_names(names: &[NormalizedName]) -> Self {
         let offsets = names
             .iter()
@@ -119,6 +138,10 @@ impl DefinitionLocalReferences {
 impl ExpressionLocalResolver for DefinitionLocalReferences {
     fn resolve_local_reference(&self, source_name: &str) -> Option<usize> {
         self.resolve(source_name)
+    }
+
+    fn resolve_scratch(&self, source_name: &str) -> Option<ScratchSlot> {
+        Self::scratch_slot(source_name)
     }
 }
 
@@ -451,6 +474,21 @@ impl<'a, 'r> ExpressionParser<'a, 'r> {
         {
             staging
                 .append_mapped_instruction(Instruction::CopyFromCallBase { offset }, name.span());
+            return Ok(ParsedExpression {
+                contains_comparison: false,
+            });
+        }
+
+        // ADR #2031: compiled definitions resolve fixed scratch names only in
+        // value position. Calls above retain their existing binding semantics.
+        if let Some(slot) = self
+            .locals
+            .and_then(|locals| locals.resolve_scratch(source_name))
+        {
+            staging.append_mapped_instruction(
+                Instruction::LoadScratch(crate::instruction::ScratchSlotOperand::from_slot(slot)),
+                name.span(),
+            );
             return Ok(ParsedExpression {
                 contains_comparison: false,
             });

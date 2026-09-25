@@ -1963,6 +1963,18 @@ pub(crate) fn let_source_word(
             .append_mapped_instruction(Instruction::StoreArrayElement(target), target_token.span());
         staging
     } else {
+        if let Some(slot) = context
+            .local_references
+            .and_then(|references| references.resolve_scratch(source_name))
+        {
+            let mut staging = context.stage_expression(rhs_tokens, equal_span)?;
+            staging.append_mapped_instruction(
+                Instruction::StoreScratch(crate::instruction::ScratchSlotOperand::from_slot(slot)),
+                target_token.span(),
+            );
+            context.commit_staging(&staging)?;
+            return Ok(());
+        }
         let target = context
             .resolve_variable_target(source_name)
             .map_err(|source| SourceWordError::LetTarget {
@@ -2236,6 +2248,11 @@ pub(crate) fn def_source_word(
                 span: local_token.span(),
                 source,
             })?;
+        if DefinitionLocalReferences::scratch_slot(local_name.as_str()).is_some() {
+            return Err(SourceWordError::DefLocalNameConflict {
+                span: local_token.span(),
+            });
+        }
         if normalized_local_names.contains(&local_name) {
             return Err(SourceWordError::DefLocalNameConflict {
                 span: local_token.span(),

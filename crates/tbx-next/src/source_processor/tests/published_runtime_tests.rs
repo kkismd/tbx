@@ -2289,6 +2289,171 @@ fn def_header_publishes_local_references_with_call_base_offsets() {
 }
 
 #[test]
+fn compiled_word_resolves_scratch_reads_and_writes_and_preserves_top_level_globals() {
+    let mut session = RuntimeDefinitionSession::new_with_named_operators();
+    register_builtin_global_variables(&mut session.globals, &mut session.bindings)
+        .expect("legacy A-Z globals should be available for this migration step");
+    let global_i = match session.bindings.get(&name("I")) {
+        Some(Binding::Variable(id)) => *id,
+        other => panic!("expected global I, got {other:?}"),
+    };
+    session
+        .globals
+        .view_mut()
+        .write(global_i, value(91))
+        .expect("global I should accept a test value");
+    let (definition_sources, definition_id, _) =
+        session.publish_def("DEF SCRATCH\nLET I = 7\nEVAL I\nEND");
+
+    let (sources, id) = source("EVAL SCRATCH()");
+    let caller = compile_source(
+        sources.view(),
+        id,
+        SourceCompileContext::with_source_words_and_operators(
+            &session.bindings,
+            session.source_words.lookup(),
+            session.operators.lookup(),
+        ),
+    )
+    .expect("scratch caller should compile");
+    let code_spaces = [session.code.instruction_view()];
+    let source_mappings = [session.code.source_mapping()];
+    let result = run_unit(
+        &caller,
+        SourceExecutionContext::with_code_spaces_and_mappings(
+            &session.bindings,
+            &code_spaces,
+            &source_mappings,
+            PublishedWordLookup::new(&session.words),
+            session.primitives.lookup(),
+        )
+        .with_globals(session.globals.view()),
+    )
+    .expect("compiled word should run");
+    assert_eq!(result.data_stack(), [value(7)]);
+    assert_eq!(session.globals.view().read(global_i), Ok(value(91)));
+    let (top_sources, top_id) = source("EVAL I");
+    let top_level = compile_source(
+        top_sources.view(),
+        top_id,
+        SourceCompileContext::with_source_words_and_operators(
+            &session.bindings,
+            session.source_words.lookup(),
+            session.operators.lookup(),
+        ),
+    )
+    .expect("top-level I should remain a global variable");
+    assert_eq!(
+        top_level.instructions().get(address(0)),
+        Ok(&Instruction::LoadVar(global_i))
+    );
+
+    let code = session.code.instruction_view();
+    assert_eq!(code.get(address(0)), Ok(&Instruction::Push(value(7))));
+    assert_eq!(
+        code.get(address(1)),
+        Ok(&Instruction::StoreScratch(
+            crate::instruction::ScratchSlotOperand::from_slot(crate::stack::ScratchSlot::I,)
+        ))
+    );
+    assert_eq!(
+        code.get(address(2)),
+        Ok(&Instruction::LoadScratch(
+            crate::instruction::ScratchSlotOperand::from_slot(crate::stack::ScratchSlot::I,)
+        ))
+    );
+    assert_eq!(
+        session
+            .code
+            .source_mapping()
+            .source_span(code.location(address(1))),
+        Ok(Some(span(definition_sources.view(), definition_id, 16, 17)))
+    );
+    assert_eq!(
+        session
+            .code
+            .source_mapping()
+            .source_span(code.location(address(2))),
+        Ok(Some(span(definition_sources.view(), definition_id, 27, 28)))
+    );
+}
+
+#[test]
+fn def_header_rejects_scratch_local_reference_before_publication() {
+    let mut session = RuntimeDefinitionSession::new_with_named_operators();
+    let initial_words_len = session.words.len();
+
+    let (_sources, _id, error) = session.publish_def_error("DEF BAD I\nMISSING\nEND");
+
+    assert!(matches!(
+        error,
+        SourceProcessorError::SourceWord(SourceWordError::DefLocalNameConflict { .. })
+    ));
+    assert_eq!(session.bindings.get(&name("BAD")), None);
+    assert_eq!(session.words.len(), initial_words_len);
+    assert_eq!(session.code.len(), 0);
+}
+
+#[test]
+fn scratch_context_flows_through_structured_bodies_and_nested_calls() {
+    let mut session = RuntimeDefinitionSession::new();
+    session.publish_def("DEF CALLEE\nLET I = 2\nEND");
+    session
+        .publish_def("DEF CALLER\nLET I = 1\nIF 1\nCALLEE\nLET J = I + 3\nENDIF\nEVAL I + J\nEND");
+
+    let (sources, id) = source("CALLER");
+    let caller = compile_source(
+        sources.view(),
+        id,
+        SourceCompileContext::with_source_words_and_operators(
+            &session.bindings,
+            session.source_words.lookup(),
+            session.operators.lookup(),
+        ),
+    )
+    .expect("caller should compile");
+    let result = session
+        .run_unit_with_published_code(&caller)
+        .expect("nested scratch calls should run");
+
+    // CALLEE owns its I and cannot overwrite CALLER's I. The IF body keeps the
+    // same CALLER scratch context, so J receives caller I + 3.
+    assert_eq!(result.data_stack(), [value(5)]);
+}
+
+#[test]
+fn scratch_name_does_not_capture_statement_or_expression_word_calls() {
+    let mut session = RuntimeDefinitionSession::new_with_named_operators();
+    let word_i = session.register_primitive("I", push_7);
+    session.publish_def("DEF CHECK\nLET I = 9\nI\nEVAL I()\nEVAL I\nEND");
+
+    let (sources, id) = source("CHECK");
+    let caller = compile_source(
+        sources.view(),
+        id,
+        SourceCompileContext::with_source_words_and_operators(
+            &session.bindings,
+            session.source_words.lookup(),
+            session.operators.lookup(),
+        ),
+    )
+    .expect("word call fixture should compile");
+    let result = session
+        .run_unit_with_published_code(&caller)
+        .expect("same-spelled calls should run");
+
+    assert_eq!(result.data_stack(), [value(7), value(7), value(9)]);
+    assert_eq!(
+        session.code.instruction_view().get(address(2)),
+        Ok(&Instruction::Call(word_i))
+    );
+    assert_eq!(
+        session.code.instruction_view().get(address(3)),
+        Ok(&Instruction::Call(word_i))
+    );
+}
+
+#[test]
 fn def_header_maps_one_local_reference_to_offset_one() {
     let mut session = RuntimeDefinitionSession::new_with_named_operators();
     session.publish_def("DEF FOO value\nEVAL value\nEND");

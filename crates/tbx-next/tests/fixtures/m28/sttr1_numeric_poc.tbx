@@ -17,8 +17,8 @@ VAR DAMAGE_DISTANCE_REMAINDER
 VAR DAMAGE_BASE
 VAR DAMAGE_FRACTION
 
-DEF INDEX x, y
-  LET INDEX_VALUE = (y - 1) * 8 + x
+DEF INDEX column_value, row_value
+  LET INDEX_VALUE = (row_value - 1) * 8 + column_value
   DROP
   DROP
   EVAL INDEX_VALUE
