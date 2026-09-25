@@ -242,6 +242,10 @@ impl ReferenceVm {
                     position,
                     kind: RuntimeErrorKind::DataUnderflow,
                 })?;
+                self.returns.last().ok_or(RuntimeError {
+                    position,
+                    kind: RuntimeErrorKind::NoInvocation,
+                })?;
                 let next = next()?;
                 let frame = self.returns.last_mut().ok_or(RuntimeError {
                     position,
@@ -1217,6 +1221,35 @@ mod tests {
                 no_frame.returns.clone(),
                 no_frame.globals.clone(),
                 no_frame.arrays.clone(),
+            )
+        );
+
+        let mut no_frame_bad_next = make_vm(vec![
+            LogicalInstruction::PushI16(23),
+            LogicalInstruction::StoreScratch(ScratchSlot::Y),
+        ]);
+        tick(&mut no_frame_bad_next).unwrap();
+        let before = (
+            no_frame_bad_next.position,
+            no_frame_bad_next.data.clone(),
+            no_frame_bad_next.control.clone(),
+            no_frame_bad_next.returns.clone(),
+            no_frame_bad_next.globals.clone(),
+            no_frame_bad_next.arrays.clone(),
+        );
+        assert_eq!(
+            tick(&mut no_frame_bad_next).unwrap_err().kind,
+            RuntimeErrorKind::NoInvocation
+        );
+        assert_eq!(
+            before,
+            (
+                no_frame_bad_next.position,
+                no_frame_bad_next.data.clone(),
+                no_frame_bad_next.control.clone(),
+                no_frame_bad_next.returns.clone(),
+                no_frame_bad_next.globals.clone(),
+                no_frame_bad_next.arrays.clone(),
             )
         );
 
