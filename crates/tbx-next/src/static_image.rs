@@ -820,6 +820,22 @@ mod tests {
     }
 
     #[test]
+    fn lowering_explicitly_rejects_both_host_scratch_instructions() {
+        let fixture = Fixture::new();
+        for instruction in [
+            Instruction::LoadScratch(crate::instruction::ScratchSlotOperand::from_raw(0)),
+            Instruction::StoreScratch(crate::instruction::ScratchSlotOperand::from_raw(0)),
+        ] {
+            let mut code = InstructionSequence::new();
+            code.append(instruction);
+            assert_eq!(
+                fixture.lower(&[code.view()]),
+                Err(LowerError::ScratchInstructionUnsupported)
+            );
+        }
+    }
+
+    #[test]
     fn invalid_and_unknown_references_fail_without_an_image() {
         let fixture = Fixture::new();
         let mut duplicate_owner = InstructionSequence::new();
