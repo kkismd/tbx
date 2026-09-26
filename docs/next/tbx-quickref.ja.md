@@ -154,11 +154,9 @@ CR
 `DEF ... END` で定義したcompiled wordの本体では、`I,J,K,L,M,N,X,Y` の8個を宣言なしのローカルスクラッチとして使える。
 
 ```tbx
-DEF DOUBLE_PLUS_ONE
+DEF SCRATCH_DEMO
   LET I = 1
-  ADD
-  EVAL I
-  ADD
+  EVAL I + 1
 END
 ```
 
