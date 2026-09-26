@@ -133,7 +133,7 @@ fn sttr1_start_game_sets_docking_and_condition_before_the_first_command() {
 
     for (name, docked, klingons, expected) in scenarios {
         let setup = format!(
-            "  INIT_QUADRANT\n  LET ENT_SX = 4\n  LET ENT_SY = 4\n  LET I = 1\n  WHILE I <= 64\n    LET @SECTOR[I] = 0\n    LET I = I + 1\n  ENDWH\n  LET KLINGONS_HERE = {klingons}\n  LET DOCKED = 0\n  LET ENERGY = 3000\n  LET TORPEDOES = 10\n  LET SHIELDS = 77\n{}\nEND\n\nDEF PRINT_BRIEFING",
+            "  INIT_QUADRANT\n  LET ENT_SX = 4\n  LET ENT_SY = 4\n  LET SECTOR_INDEX = 1\n  WHILE SECTOR_INDEX <= 64\n    LET @SECTOR[SECTOR_INDEX] = 0\n    LET SECTOR_INDEX = SECTOR_INDEX + 1\n  ENDWH\n  LET KLINGONS_HERE = {klingons}\n  LET DOCKED = 0\n  LET ENERGY = 3000\n  LET TORPEDOES = 10\n  LET SHIELDS = 77\n{}\nEND\n\nDEF PRINT_BRIEFING",
             if docked == 1 { "  LET @SECTOR[27] = 3" } else { "" }
         );
         let scenario_game = game.replace("  INIT_QUADRANT\nEND\n\nDEF PRINT_BRIEFING", &setup);

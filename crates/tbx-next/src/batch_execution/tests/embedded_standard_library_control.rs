@@ -4,7 +4,7 @@ use super::*;
 fn standard_library_source_word_is_available_to_the_user_source() {
     let standard_library =
         "SYNTAX SLET\nSTATEMENT\nREAD_NAME AS name\nRESOLVE_VAR name AS target\nEXPECT \"=\"\nREAD_EXPR AS expr\nEMIT_EXPR expr\nEMIT_STORE target\nENDS";
-    let source = "LET A = 0\nSLET A = 7\nEVAL A";
+    let source = "VAR COUNT\nLET COUNT = 0\nSLET COUNT = 7\nEVAL COUNT";
     let (sources, standard_library_id, source_id) =
         sources_with_standard_library(standard_library, source);
     let mut writer = RecordingWriter::default();
@@ -201,7 +201,7 @@ fn embedded_standard_library_while_repeats_until_condition_is_false() {
     let mut writer = RecordingWriter::default();
 
     let result = success(execute_with_embedded_standard_library(
-        "LET A = 0\nWHILE A < 3\nLET A = A + 1\nENDWH\nEVAL A",
+        "VAR COUNT\nLET COUNT = 0\nWHILE COUNT < 3\nLET COUNT = COUNT + 1\nENDWH\nEVAL COUNT",
         "program.tbx",
         &mut writer,
     ));
@@ -209,8 +209,11 @@ fn embedded_standard_library_while_repeats_until_condition_is_false() {
     assert_eq!(result.data_stack(), [Value::integer(3)]);
 
     for (source, expected) in [
-        ("WHILE 0\nLET A = 1\nENDWH\nEVAL 0", 0),
-        ("LET A = 0\nWHILE A < 1\nLET A = A + 1\nENDWH\nEVAL A", 1),
+        ("VAR COUNT\nWHILE 0\nLET COUNT = 1\nENDWH\nEVAL 0", 0),
+        (
+            "VAR COUNT\nLET COUNT = 0\nWHILE COUNT < 1\nLET COUNT = COUNT + 1\nENDWH\nEVAL COUNT",
+            1,
+        ),
     ] {
         let mut writer = RecordingWriter::default();
         let result = success(execute_with_embedded_standard_library(
@@ -227,7 +230,7 @@ fn embedded_standard_library_while_repeats_until_condition_is_false() {
 fn embedded_standard_library_break_exits_while_do_and_for_without_running_terminators() {
     let mut writer = RecordingWriter::default();
     let result = success(execute_with_embedded_standard_library(
-        "LET A = 0\nWHILE 1\nLET A = A + 1\nBREAK\nLET A = A + 100\nENDWH\nEVAL A",
+        "VAR COUNT\nLET COUNT = 0\nWHILE 1\nLET COUNT = COUNT + 1\nBREAK\nLET COUNT = COUNT + 100\nENDWH\nEVAL COUNT",
         "program.tbx",
         &mut writer,
     ));
@@ -235,7 +238,7 @@ fn embedded_standard_library_break_exits_while_do_and_for_without_running_termin
 
     let mut writer = RecordingWriter::default();
     let result = success(execute_with_embedded_standard_library(
-        "LET A = 0\nDO\nLET A = A + 1\nBREAK\nLET A = A + 100\nUNTIL 1\nEVAL A",
+        "VAR COUNT\nLET COUNT = 0\nDO\nLET COUNT = COUNT + 1\nBREAK\nLET COUNT = COUNT + 100\nUNTIL 1\nEVAL COUNT",
         "program.tbx",
         &mut writer,
     ));
@@ -243,7 +246,7 @@ fn embedded_standard_library_break_exits_while_do_and_for_without_running_termin
 
     let mut writer = RecordingWriter::default();
     let result = success(execute_with_embedded_standard_library(
-        "LET A = 0\nFOR I = 1 TO 3\nLET A = A + I\nBREAK\nLET A = A + 100\nNEXT\nEVAL A\nEVAL I",
+        "VAR COUNT\nVAR LOOP_INDEX\nLET COUNT = 0\nFOR LOOP_INDEX = 1 TO 3\nLET COUNT = COUNT + LOOP_INDEX\nBREAK\nLET COUNT = COUNT + 100\nNEXT\nEVAL COUNT\nEVAL LOOP_INDEX",
         "program.tbx",
         &mut writer,
     ));
@@ -254,7 +257,7 @@ fn embedded_standard_library_break_exits_while_do_and_for_without_running_termin
 fn embedded_standard_library_break_transparently_exits_through_if_and_select() {
     let mut writer = RecordingWriter::default();
     let result = success(execute_with_embedded_standard_library(
-        "LET A = 0\nWHILE A < 1\nIF 1\nBREAK\nENDIF\nLET A = A + 100\nENDWH\nEVAL A",
+        "VAR COUNT\nLET COUNT = 0\nWHILE COUNT < 1\nIF 1\nBREAK\nENDIF\nLET COUNT = COUNT + 100\nENDWH\nEVAL COUNT",
         "program.tbx",
         &mut writer,
     ));
@@ -262,7 +265,7 @@ fn embedded_standard_library_break_transparently_exits_through_if_and_select() {
 
     let mut writer = RecordingWriter::default();
     let result = success(execute_with_embedded_standard_library(
-        "FOR I = 1 TO 1\nSELECT I\nCASE 1\nBREAK\nENDSEL\nNEXT\nEVAL I",
+        "VAR LOOP_INDEX\nFOR LOOP_INDEX = 1 TO 1\nSELECT LOOP_INDEX\nCASE 1\nBREAK\nENDSEL\nNEXT\nEVAL LOOP_INDEX",
         "program.tbx",
         &mut writer,
     ));
@@ -273,7 +276,7 @@ fn embedded_standard_library_break_transparently_exits_through_if_and_select() {
 fn embedded_standard_library_break_cleans_nested_control_values() {
     let mut writer = RecordingWriter::default();
     let failure = failure(execute_with_embedded_standard_library(
-        "SYNTAX COPY_CONTROL\nSTATEMENT\nEXPECT_END\nEMIT_CONTROL_COPY\nENDS\nFOR I = 1 TO 1\nSELECT I\nCASE 1\nIF 1\nBREAK\nENDIF\nENDSEL\nNEXT\nCOPY_CONTROL",
+        "VAR LOOP_INDEX\nSYNTAX COPY_CONTROL\nSTATEMENT\nEXPECT_END\nEMIT_CONTROL_COPY\nENDS\nFOR LOOP_INDEX = 1 TO 1\nSELECT LOOP_INDEX\nCASE 1\nIF 1\nBREAK\nENDIF\nENDSEL\nNEXT\nCOPY_CONTROL",
         "program.tbx",
         &mut writer,
     ));
@@ -290,7 +293,7 @@ fn embedded_standard_library_break_cleans_nested_control_values() {
 
     let mut writer = RecordingWriter::default();
     let result = success(execute_with_embedded_standard_library(
-        "LET A = 0\nWHILE A < 2\nLET B = 0\nWHILE B < 1\nBREAK\nENDWH\nLET A = A + 1\nENDWH\nEVAL A",
+        "VAR COUNT\nVAR INNER_COUNT\nLET COUNT = 0\nWHILE COUNT < 2\nLET INNER_COUNT = 0\nWHILE INNER_COUNT < 1\nBREAK\nENDWH\nLET COUNT = COUNT + 1\nENDWH\nEVAL COUNT",
         "program.tbx",
         &mut writer,
     ));
@@ -338,7 +341,7 @@ fn embedded_standard_library_while_has_one_line_number_scope_across_body() {
     let mut writer = RecordingWriter::default();
 
     let result = success(execute_with_embedded_standard_library(
-        "LET A = 0\nWHILE A < 1\nBIF 0, 20\n10 LET A = A + 1\n20 LET A = A + 1\nENDWH\nEVAL A",
+        "VAR COUNT\nLET COUNT = 0\nWHILE COUNT < 1\nBIF 0, 20\n10 LET COUNT = COUNT + 1\n20 LET COUNT = COUNT + 1\nENDWH\nEVAL COUNT",
         "program.tbx",
         &mut writer,
     ));
@@ -351,7 +354,7 @@ fn line_number_on_structured_start_statement_belongs_to_enclosing_scope() {
     let mut writer = RecordingWriter::default();
 
     let result = success(execute_with_embedded_standard_library(
-        "BIF 0, 100\n100 WHILE 0\nLET A = 1\nENDWH\nEVAL 7",
+        "VAR COUNT\nBIF 0, 100\n100 WHILE 0\nLET COUNT = 1\nENDWH\nEVAL 7",
         "program.tbx",
         &mut writer,
     ));
@@ -390,7 +393,7 @@ fn embedded_standard_library_do_runs_once_and_repeats_until_condition_is_true() 
     let mut writer = RecordingWriter::default();
 
     let result = success(execute_with_embedded_standard_library(
-        "LET A = 0\nDO\nLET A = A + 1\nUNTIL A >= 3\nEVAL A",
+        "VAR COUNT\nLET COUNT = 0\nDO\nLET COUNT = COUNT + 1\nUNTIL COUNT >= 3\nEVAL COUNT",
         "program.tbx",
         &mut writer,
     ));
@@ -399,7 +402,7 @@ fn embedded_standard_library_do_runs_once_and_repeats_until_condition_is_true() 
 
     let mut writer = RecordingWriter::default();
     let result = success(execute_with_embedded_standard_library(
-        "LET A = 0\nDO\nLET A = A + 1\nUNTIL A >= 1\nEVAL A",
+        "VAR COUNT\nLET COUNT = 0\nDO\nLET COUNT = COUNT + 1\nUNTIL COUNT >= 1\nEVAL COUNT",
         "program.tbx",
         &mut writer,
     ));
@@ -411,7 +414,7 @@ fn embedded_standard_library_do_runs_once_and_repeats_until_condition_is_true() 
 fn embedded_standard_library_for_repeats_with_a_fixed_end_value() {
     let mut writer = RecordingWriter::default();
     let result = success(execute_with_embedded_standard_library(
-        "LET A = 0\nFOR I = 1 TO 3\nLET A = A + I\nNEXT\nEVAL A\nEVAL I",
+        "VAR COUNT\nVAR LOOP_INDEX\nLET COUNT = 0\nFOR LOOP_INDEX = 1 TO 3\nLET COUNT = COUNT + LOOP_INDEX\nNEXT\nEVAL COUNT\nEVAL LOOP_INDEX",
         "program.tbx",
         &mut writer,
     ));
@@ -420,7 +423,7 @@ fn embedded_standard_library_for_repeats_with_a_fixed_end_value() {
 
     let mut writer = RecordingWriter::default();
     let result = success(execute_with_embedded_standard_library(
-        "LET A = 0\nLET B = 3\nFOR I = 1 TO B\nLET A = A + 1\nLET B = 1\nNEXT\nEVAL A\nEVAL I",
+        "VAR COUNT\nVAR INNER_COUNT\nVAR LOOP_INDEX\nLET COUNT = 0\nLET INNER_COUNT = 3\nFOR LOOP_INDEX = 1 TO INNER_COUNT\nLET COUNT = COUNT + 1\nLET INNER_COUNT = 1\nNEXT\nEVAL COUNT\nEVAL LOOP_INDEX",
         "program.tbx",
         &mut writer,
     ));
@@ -432,7 +435,7 @@ fn embedded_standard_library_for_repeats_with_a_fixed_end_value() {
 fn embedded_standard_library_for_evaluates_bounds_in_order_once_and_can_skip_body() {
     let mut writer = RecordingWriter::default();
     let result = success(execute_with_embedded_standard_library(
-        "LET A = 0\nFOR I = A + 1 TO A + 2\nLET A = A + 10\nNEXT\nEVAL A\nEVAL I",
+        "VAR COUNT\nVAR LOOP_INDEX\nLET COUNT = 0\nFOR LOOP_INDEX = COUNT + 1 TO COUNT + 2\nLET COUNT = COUNT + 10\nNEXT\nEVAL COUNT\nEVAL LOOP_INDEX",
         "program.tbx",
         &mut writer,
     ));
@@ -440,7 +443,7 @@ fn embedded_standard_library_for_evaluates_bounds_in_order_once_and_can_skip_bod
 
     let mut writer = RecordingWriter::default();
     let result = success(execute_with_embedded_standard_library(
-        "LET A = 0\nFOR I = 3 TO 1\nLET A = A + 1\nNEXT\nEVAL A\nEVAL I",
+        "VAR COUNT\nVAR LOOP_INDEX\nLET COUNT = 0\nFOR LOOP_INDEX = 3 TO 1\nLET COUNT = COUNT + 1\nNEXT\nEVAL COUNT\nEVAL LOOP_INDEX",
         "program.tbx",
         &mut writer,
     ));
@@ -451,7 +454,7 @@ fn embedded_standard_library_for_evaluates_bounds_in_order_once_and_can_skip_bod
 fn embedded_standard_library_for_evaluates_side_effecting_bounds_once_in_order() {
     let mut writer = RecordingWriter::default();
     let result = success(execute_with_embedded_standard_library(
-        "LET A = 0\nDEF START_BOUND\nLET A = A + 1\nEVAL A\nEND\nDEF END_BOUND\nLET A = A + 10\nEVAL A\nEND\nFOR I = START_BOUND() TO END_BOUND()\nNEXT\nEVAL A\nEVAL I",
+        "VAR COUNT\nVAR LOOP_INDEX\nLET COUNT = 0\nDEF START_BOUND\nLET COUNT = COUNT + 1\nEVAL COUNT\nEND\nDEF END_BOUND\nLET COUNT = COUNT + 10\nEVAL COUNT\nEND\nFOR LOOP_INDEX = START_BOUND() TO END_BOUND()\nNEXT\nEVAL COUNT\nEVAL LOOP_INDEX",
         "program.tbx",
         &mut writer,
     ));
@@ -466,7 +469,7 @@ fn embedded_standard_library_for_evaluates_side_effecting_bounds_once_in_order()
 fn embedded_standard_library_for_supports_nested_for_loops() {
     let mut writer = RecordingWriter::default();
     let result = success(execute_with_embedded_standard_library(
-        "LET A = 0\nFOR I = 1 TO 2\nFOR J = 1 TO 3\nLET A = A + 1\nNEXT\nNEXT\nEVAL A\nEVAL I\nEVAL J",
+        "VAR COUNT\nVAR LOOP_INDEX\nVAR INNER_LOOP_INDEX\nLET COUNT = 0\nFOR LOOP_INDEX = 1 TO 2\nFOR INNER_LOOP_INDEX = 1 TO 3\nLET COUNT = COUNT + 1\nNEXT\nNEXT\nEVAL COUNT\nEVAL LOOP_INDEX\nEVAL INNER_LOOP_INDEX",
         "program.tbx",
         &mut writer,
     ));
@@ -481,7 +484,7 @@ fn embedded_standard_library_for_supports_nested_for_loops() {
 fn embedded_standard_library_for_uses_the_modified_counter_and_preserves_body_stack_values() {
     let mut writer = RecordingWriter::default();
     let result = success(execute_with_embedded_standard_library(
-        "LET A = 0\nFOR I = 1 TO 3\nEVAL I\nLET I = I + 1\nNEXT",
+        "VAR COUNT\nVAR LOOP_INDEX\nLET COUNT = 0\nFOR LOOP_INDEX = 1 TO 3\nEVAL LOOP_INDEX\nLET LOOP_INDEX = LOOP_INDEX + 1\nNEXT",
         "program.tbx",
         &mut writer,
     ));
@@ -493,7 +496,7 @@ fn embedded_standard_library_for_uses_the_modified_counter_and_preserves_body_st
 fn embedded_standard_library_for_supports_nested_structured_blocks_and_case_insensitive_to() {
     let mut writer = RecordingWriter::default();
     let result = success(execute_with_embedded_standard_library(
-        "LET A = 0\nFOR I = 1 to 2\nIF 1\nWHILE A < 1\nDO\nLET A = A + 1\nUNTIL A >= 1\nENDWH\nENDIF\nSELECT I\nCASE 1\nLET A = A + 10\nCASE 2\nLET A = A + 100\nENDSEL\nNEXT\nEVAL A",
+        "VAR COUNT\nVAR LOOP_INDEX\nLET COUNT = 0\nFOR LOOP_INDEX = 1 to 2\nIF 1\nWHILE COUNT < 1\nDO\nLET COUNT = COUNT + 1\nUNTIL COUNT >= 1\nENDWH\nENDIF\nSELECT LOOP_INDEX\nCASE 1\nLET COUNT = COUNT + 10\nCASE 2\nLET COUNT = COUNT + 100\nENDSEL\nNEXT\nEVAL COUNT",
         "program.tbx",
         &mut writer,
     ));
@@ -527,7 +530,7 @@ fn embedded_standard_library_for_rejects_non_variable_bindings_and_cleans_up_con
 
     let mut writer = RecordingWriter::default();
     let failure = failure(execute_with_embedded_standard_library(
-        "SYNTAX COPY_CONTROL\nSTATEMENT\nEXPECT_END\nEMIT_CONTROL_COPY\nENDS\nDEF CHECK\nFOR I = 1 TO 1\nNEXT\nCOPY_CONTROL\nEND\nCHECK",
+        "VAR LOOP_INDEX\nSYNTAX COPY_CONTROL\nSTATEMENT\nEXPECT_END\nEMIT_CONTROL_COPY\nENDS\nDEF CHECK\nFOR LOOP_INDEX = 1 TO 1\nNEXT\nCOPY_CONTROL\nEND\nCHECK",
         "program.tbx",
         &mut writer,
     ));
@@ -577,7 +580,7 @@ fn embedded_standard_library_select_matches_cases_without_fallthrough() {
 fn embedded_standard_library_select_evaluates_selector_once_and_supports_nesting() {
     let mut writer = RecordingWriter::default();
     let result = success(execute_with_embedded_standard_library(
-        "DEF INC\nLET A = A + 1\nEVAL A\nEND\nLET A = 0\nSELECT INC()\nCASE 1\nSELECT 2\nCASE 2\nEVAL 7\nENDSEL\nENDSEL\nEVAL A",
+        "VAR COUNT\nDEF INC\nLET COUNT = COUNT + 1\nEVAL COUNT\nEND\nLET COUNT = 0\nSELECT INC()\nCASE 1\nSELECT 2\nCASE 2\nEVAL 7\nENDSEL\nENDSEL\nEVAL COUNT",
         "program.tbx",
         &mut writer,
     ));
@@ -609,7 +612,7 @@ fn embedded_standard_library_select_cleans_up_selector_before_following_runtime_
 fn embedded_standard_library_select_nests_inside_if_while_and_do() {
     let mut writer = RecordingWriter::default();
     let result = success(execute_with_embedded_standard_library(
-        "LET A = 0\nIF 1\nSELECT 1\nCASE 1\nEVAL 10\nENDSEL\nENDIF\nWHILE A < 1\nSELECT 2\nCASE 2\nEVAL 20\nENDSEL\nLET A = A + 1\nENDWH\nDO\nSELECT 3\nCASE 3\nEVAL 30\nENDSEL\nUNTIL 1\nEVAL A",
+        "VAR COUNT\nLET COUNT = 0\nIF 1\nSELECT 1\nCASE 1\nEVAL 10\nENDSEL\nENDIF\nWHILE COUNT < 1\nSELECT 2\nCASE 2\nEVAL 20\nENDSEL\nLET COUNT = COUNT + 1\nENDWH\nDO\nSELECT 3\nCASE 3\nEVAL 30\nENDSEL\nUNTIL 1\nEVAL COUNT",
         "program.tbx",
         &mut writer,
     ));
@@ -631,7 +634,7 @@ fn embedded_standard_library_select_contains_if_while_and_do_bodies() {
         (1, "IF 1\nEVAL 10\nENDIF", 10),
         (
             2,
-            "LET A = 0\nWHILE A < 1\nEVAL 20\nLET A = A + 1\nENDWH",
+            "VAR COUNT\nLET COUNT = 0\nWHILE COUNT < 1\nEVAL 20\nLET COUNT = COUNT + 1\nENDWH",
             20,
         ),
         (3, "DO\nEVAL 30\nUNTIL 1", 30),
@@ -679,7 +682,7 @@ fn embedded_standard_library_control_structures_support_nested_and_native_if_blo
     let mut writer = RecordingWriter::default();
 
     let result = success(execute_with_embedded_standard_library(
-        "LET A = 0\nLET B = 0\nIF 1\nWHILE A < 2\nDO\nLET B = B + 1\nUNTIL B >= 2\nLET A = A + 1\nENDWH\nENDIF\nEVAL A\nEVAL B",
+        "VAR COUNT\nVAR INNER_COUNT\nLET COUNT = 0\nLET INNER_COUNT = 0\nIF 1\nWHILE COUNT < 2\nDO\nLET INNER_COUNT = INNER_COUNT + 1\nUNTIL INNER_COUNT >= 2\nLET COUNT = COUNT + 1\nENDWH\nENDIF\nEVAL COUNT\nEVAL INNER_COUNT",
         "program.tbx",
         &mut writer,
     ));
@@ -688,7 +691,7 @@ fn embedded_standard_library_control_structures_support_nested_and_native_if_blo
 
     let mut writer = RecordingWriter::default();
     let result = success(execute_with_embedded_standard_library(
-        "LET A = 0\nDO\nLET B = 0\nWHILE B < 2\nLET B = B + 1\nENDWH\nLET A = A + 1\nUNTIL A >= 2\nEVAL A",
+        "VAR COUNT\nVAR INNER_COUNT\nLET COUNT = 0\nDO\nLET INNER_COUNT = 0\nWHILE INNER_COUNT < 2\nLET INNER_COUNT = INNER_COUNT + 1\nENDWH\nLET COUNT = COUNT + 1\nUNTIL COUNT >= 2\nEVAL COUNT",
         "program.tbx",
         &mut writer,
     ));
@@ -697,7 +700,7 @@ fn embedded_standard_library_control_structures_support_nested_and_native_if_blo
 
     let mut writer = RecordingWriter::default();
     let result = success(execute_with_embedded_standard_library(
-        "LET A = 0\nLET B = 0\nWHILE A < 2\nLET B = 0\nWHILE B < 2\nLET B = B + 1\nENDWH\nLET A = A + 1\nENDWH\nEVAL A\nEVAL B",
+        "VAR COUNT\nVAR INNER_COUNT\nLET COUNT = 0\nLET INNER_COUNT = 0\nWHILE COUNT < 2\nLET INNER_COUNT = 0\nWHILE INNER_COUNT < 2\nLET INNER_COUNT = INNER_COUNT + 1\nENDWH\nLET COUNT = COUNT + 1\nENDWH\nEVAL COUNT\nEVAL INNER_COUNT",
         "program.tbx",
         &mut writer,
     ));
@@ -706,7 +709,7 @@ fn embedded_standard_library_control_structures_support_nested_and_native_if_blo
 
     let mut writer = RecordingWriter::default();
     let result = success(execute_with_embedded_standard_library(
-        "LET A = 0\nLET B = 0\nDO\nLET B = 0\nDO\nLET B = B + 1\nUNTIL B >= 2\nLET A = A + 1\nUNTIL A >= 2\nEVAL A\nEVAL B",
+        "VAR COUNT\nVAR INNER_COUNT\nLET COUNT = 0\nLET INNER_COUNT = 0\nDO\nLET INNER_COUNT = 0\nDO\nLET INNER_COUNT = INNER_COUNT + 1\nUNTIL INNER_COUNT >= 2\nLET COUNT = COUNT + 1\nUNTIL COUNT >= 2\nEVAL COUNT\nEVAL INNER_COUNT",
         "program.tbx",
         &mut writer,
     ));

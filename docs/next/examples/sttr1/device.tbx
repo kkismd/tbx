@@ -45,16 +45,16 @@ DEF RANDOM_DEVICE_EVENT
   ENDIF
   LET DEVICE_INDEX = RND(8)
   IF RND(2) = 1
-      # R is the short-lived device damage change.
-      LET R = RND(5)
-      LET @DAMAGE[DEVICE_INDEX] = @DAMAGE[DEVICE_INDEX] - R
+      # I is the short-lived device damage change.
+      LET I = RND(5)
+      LET @DAMAGE[DEVICE_INDEX] = @DAMAGE[DEVICE_INDEX] - I
       PRINT "DAMAGE CONTROL REPORT: "
       PRINT_DEVICE_NAME
       PRINT " DAMAGED"
       CR
     ELSE
-      LET R = RND(5)
-      LET @DAMAGE[DEVICE_INDEX] = @DAMAGE[DEVICE_INDEX] + R
+      LET I = RND(5)
+      LET @DAMAGE[DEVICE_INDEX] = @DAMAGE[DEVICE_INDEX] + I
       PRINT_DEVICE_NAME
       PRINT " STATE OF REPAIR IMPROVED"
       CR

@@ -2,7 +2,7 @@ use super::*;
 
 #[test]
 fn batch_top_level_can_publish_and_use_a_source_word_before_a_definition() {
-    let text = "SYNTAX SLET\nSTATEMENT\nREAD_NAME AS name\nRESOLVE_VAR name AS target\nEXPECT \"=\"\nREAD_EXPR AS expr\nEMIT_EXPR expr\nEMIT_STORE target\nENDS\nLET A = 0\nSLET A = 7\nDEF DOUBLE\nDUP\nEND\nEVAL DOUBLE(A)";
+    let text = "VAR SCORE\nSYNTAX SLET\nSTATEMENT\nREAD_NAME AS name\nRESOLVE_VAR name AS target\nEXPECT \"=\"\nREAD_EXPR AS expr\nEMIT_EXPR expr\nEMIT_STORE target\nENDS\nLET SCORE = 0\nSLET SCORE = 7\nDEF DOUBLE\nDUP\nEND\nEVAL DOUBLE(SCORE)";
     let (sources, source_id) = source(text, "program.tbx");
     let mut writer = RecordingWriter::default();
 
@@ -13,7 +13,7 @@ fn batch_top_level_can_publish_and_use_a_source_word_before_a_definition() {
 
 #[test]
 fn user_syntax_can_resolve_and_emit_runtime_words_variables_and_integers() {
-    let text = "SYNTAX EMIT
+    let text = "VAR COUNT\nSYNTAX EMIT
 STATEMENT
 READ_NAME AS variable
 RESOLVE_VAR variable AS target
@@ -23,8 +23,8 @@ RESOLVE_WORD word AS callable
 EMIT_CALL callable
 EMIT_INT 7
 ENDS
-LET A = 3
-EMIT A DUP";
+LET COUNT = 3
+EMIT COUNT DUP";
     let (sources, source_id) = source(text, "program.tbx");
     let mut writer = RecordingWriter::default();
 
@@ -154,8 +154,8 @@ fn fixed_runtime_word_resolution_reports_the_literal_operand_span() {
             "RESOLVE_WORD_LITERAL MISSING AS word",
         ),
         (
-            "SYNTAX FIXED_CALL\nSTATEMENT\nRESOLVE_WORD_LITERAL A AS word\nEMIT_CALL word\nENDS\nLET A = 1\nFIXED_CALL",
-            "RESOLVE_WORD_LITERAL A AS word",
+            "VAR VALUE\nSYNTAX FIXED_CALL\nSTATEMENT\nRESOLVE_WORD_LITERAL VALUE AS word\nEMIT_CALL word\nENDS\nLET VALUE = 1\nFIXED_CALL",
+            "RESOLVE_WORD_LITERAL VALUE AS word",
         ),
     ] {
         let (sources, source_id) = source(text, "program.tbx");
@@ -174,7 +174,7 @@ fn fixed_runtime_word_resolution_reports_the_literal_operand_span() {
 #[test]
 fn user_syntax_reports_runtime_emit_binding_and_literal_errors_at_source_spans() {
     for text in [
-        "SYNTAX S\nSTATEMENT\nREAD_NAME AS name\nRESOLVE_WORD name AS word\nENDS\nLET A = 1\nS A",
+        "VAR VALUE\nSYNTAX S\nSTATEMENT\nREAD_NAME AS name\nRESOLVE_WORD name AS word\nENDS\nLET VALUE = 1\nS VALUE",
         "SYNTAX S\nSTATEMENT\nEMIT_INT 32768\nENDS\nS",
     ] {
         let (sources, source_id) = source(text, "program.tbx");
@@ -218,7 +218,7 @@ fn batch_top_level_can_publish_and_use_a_block_source_word() {
 
 #[test]
 fn batch_top_level_can_publish_multiple_source_words_in_sequence() {
-    let text = "SYNTAX SLET\nSTATEMENT\nREAD_NAME AS name\nRESOLVE_VAR name AS target\nEXPECT \"=\"\nREAD_EXPR AS expr\nEMIT_EXPR expr\nEMIT_STORE target\nENDS\nSYNTAX SADD\nSTATEMENT\nREAD_NAME AS name\nRESOLVE_VAR name AS target\nEXPECT \"=\"\nREAD_EXPR AS expr\nEMIT_EXPR expr\nEMIT_STORE target\nENDS\nLET A = 0\nSLET A = 3\nSADD A = 4\nEVAL A";
+    let text = "VAR SCORE\nSYNTAX SLET\nSTATEMENT\nREAD_NAME AS name\nRESOLVE_VAR name AS target\nEXPECT \"=\"\nREAD_EXPR AS expr\nEMIT_EXPR expr\nEMIT_STORE target\nENDS\nSYNTAX SADD\nSTATEMENT\nREAD_NAME AS name\nRESOLVE_VAR name AS target\nEXPECT \"=\"\nREAD_EXPR AS expr\nEMIT_EXPR expr\nEMIT_STORE target\nENDS\nLET SCORE = 0\nSLET SCORE = 3\nSADD SCORE = 4\nEVAL SCORE";
     let (sources, source_id) = source(text, "program.tbx");
     let mut writer = RecordingWriter::default();
 
