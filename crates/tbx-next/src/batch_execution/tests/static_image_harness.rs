@@ -10,7 +10,9 @@ use crate::random::RandomState;
 use crate::random_primitive::register_random_primitives;
 use crate::source_processor::{run_unit, SourceCompileContext, SourceExecutionContext};
 use crate::stack_primitive::register_stack_primitives;
-use crate::static_image::{test_lower_and_encode, test_lower_and_run, TestImageStatistics};
+use crate::static_image::{
+    test_lower_and_encode, test_lower_and_run, CodePosition, TestImageStatistics,
+};
 use crate::word::PublishedWords;
 use crate::word_lookup::PublishedWordLookup;
 use std::io::Write;
@@ -162,6 +164,7 @@ fn evaluate(source: &str, display_name: &str, compare_execution: bool) -> TestIm
             fixture.primitive_words,
             &fixture.globals,
             &fixture.arrays,
+            CodePosition(0),
         )
         .expect("prime source encodes as M32 bytecode");
         assert!(!artifact.code().is_empty());

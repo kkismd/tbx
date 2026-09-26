@@ -28,10 +28,14 @@ pub(crate) enum EncodeError {
     GlobalSlotOutOfRange(usize),
     CallBaseOffsetOutOfRange(usize),
     InvalidCodeTarget(usize),
+    InvalidEntry(usize),
     ImageTooLarge,
 }
 
-pub(crate) fn encode(image: &StaticImage) -> Result<BytecodeArtifact, EncodeError> {
+pub(crate) fn encode(
+    image: &StaticImage,
+    entry: CodePosition,
+) -> Result<BytecodeArtifact, EncodeError> {
     let mut offsets = Vec::with_capacity(image.code.len() + 1);
     let mut byte_len = 0usize;
     for (index, instruction) in image.code.iter().enumerate() {
@@ -45,6 +49,11 @@ pub(crate) fn encode(image: &StaticImage) -> Result<BytecodeArtifact, EncodeErro
     if byte_len > usize::from(u16::MAX) + 1 || image.global_count > usize::from(u8::MAX) + 1 {
         return Err(EncodeError::ImageTooLarge);
     }
+    let entry_offset = offsets
+        .get(entry.0)
+        .copied()
+        .filter(|offset| entry.0 < image.code.len() && *offset <= usize::from(u16::MAX))
+        .ok_or(EncodeError::InvalidEntry(entry.0))? as u16;
     let mut code = Vec::with_capacity(byte_len);
     for (index, instruction) in image.code.iter().enumerate() {
         let target = |position: CodePosition| {
@@ -106,7 +115,7 @@ pub(crate) fn encode(image: &StaticImage) -> Result<BytecodeArtifact, EncodeErro
     }
     Ok(BytecodeArtifact {
         code,
-        entry_offset: 0,
+        entry_offset,
         global_slot_count: image.global_count as u16,
     })
 }
@@ -194,7 +203,8 @@ mod tests {
         instructions[4] = LogicalInstruction::CallCode(CodePosition(18));
         instructions[7] = LogicalInstruction::Jump(CodePosition(18));
         instructions[8] = LogicalInstruction::JumpIfZero(CodePosition(18));
-        let bytes = encode(&image_with_globals(instructions, 256)).expect("subset encodes");
+        let bytes = encode(&image_with_globals(instructions, 256), CodePosition(0))
+            .expect("subset encodes");
         assert_eq!(
             bytes.code(),
             &[
@@ -208,12 +218,15 @@ mod tests {
 
     #[test]
     fn encodes_signed_immediates_as_little_endian() {
-        let artifact = encode(&image(vec![
-            LogicalInstruction::PushI16(0x1234),
-            LogicalInstruction::PushI16(-2),
-            LogicalInstruction::PushI16(i16::MAX),
-            LogicalInstruction::Halt,
-        ]))
+        let artifact = encode(
+            &image(vec![
+                LogicalInstruction::PushI16(0x1234),
+                LogicalInstruction::PushI16(-2),
+                LogicalInstruction::PushI16(i16::MAX),
+                LogicalInstruction::Halt,
+            ]),
+            CodePosition(0),
+        )
         .expect("immediates encode");
         assert_eq!(
             artifact.code(),
@@ -223,13 +236,16 @@ mod tests {
 
     #[test]
     fn relocations_resolve_variable_width_forward_and_backward_targets() {
-        let artifact = encode(&image(vec![
-            LogicalInstruction::Jump(CodePosition(3)),
-            LogicalInstruction::PushI16(9),
-            LogicalInstruction::JumpIfZero(CodePosition(0)),
-            LogicalInstruction::CallCode(CodePosition(1)),
-            LogicalInstruction::Return,
-        ]))
+        let artifact = encode(
+            &image(vec![
+                LogicalInstruction::Jump(CodePosition(3)),
+                LogicalInstruction::PushI16(9),
+                LogicalInstruction::JumpIfZero(CodePosition(0)),
+                LogicalInstruction::CallCode(CodePosition(1)),
+                LogicalInstruction::Return,
+            ]),
+            CodePosition(0),
+        )
         .expect("relocations resolve");
         assert_eq!(
             artifact.code(),
@@ -240,15 +256,19 @@ mod tests {
     #[test]
     fn rejects_unsupported_logical_instructions_and_primitives() {
         assert_eq!(
-            encode(&image(vec![LogicalInstruction::WriteText(
-                super::super::TextSlot(0)
-            )])),
+            encode(
+                &image(vec![LogicalInstruction::WriteText(super::super::TextSlot(
+                    0
+                ))]),
+                CodePosition(0)
+            ),
             Err(EncodeError::UnsupportedInstruction(0))
         );
         assert_eq!(
-            encode(&image(vec![LogicalInstruction::CallPrimitive(
-                PrimitiveOp::Divide
-            )])),
+            encode(
+                &image(vec![LogicalInstruction::CallPrimitive(PrimitiveOp::Divide)]),
+                CodePosition(0)
+            ),
             Err(EncodeError::UnsupportedPrimitive(0))
         );
     }
@@ -256,34 +276,75 @@ mod tests {
     #[test]
     fn rejects_unrepresentable_operands_targets_and_image_sizes() {
         assert_eq!(
-            encode(&image(vec![LogicalInstruction::LoadGlobal(
-                super::super::GlobalSlot(256)
-            )])),
+            encode(
+                &image(vec![LogicalInstruction::LoadGlobal(
+                    super::super::GlobalSlot(256)
+                )]),
+                CodePosition(0)
+            ),
             Err(EncodeError::GlobalSlotOutOfRange(256))
         );
         assert_eq!(
-            encode(&image(vec![LogicalInstruction::CopyCallBase(256)])),
+            encode(
+                &image(vec![LogicalInstruction::CopyCallBase(256)]),
+                CodePosition(0)
+            ),
             Err(EncodeError::CallBaseOffsetOutOfRange(256))
         );
         assert_eq!(
-            encode(&image(vec![LogicalInstruction::Jump(CodePosition(1))])),
+            encode(
+                &image(vec![LogicalInstruction::Jump(CodePosition(1))]),
+                CodePosition(0)
+            ),
             Err(EncodeError::InvalidCodeTarget(1))
         );
         let mut too_many_globals = image(vec![LogicalInstruction::Halt]);
         too_many_globals.global_count = 257;
-        assert_eq!(encode(&too_many_globals), Err(EncodeError::ImageTooLarge));
+        assert_eq!(
+            encode(&too_many_globals, CodePosition(0)),
+            Err(EncodeError::ImageTooLarge)
+        );
         let too_many_bytes = image(vec![LogicalInstruction::PushI16(0); 21_846]);
-        assert_eq!(encode(&too_many_bytes), Err(EncodeError::ImageTooLarge));
+        assert_eq!(
+            encode(&too_many_bytes, CodePosition(0)),
+            Err(EncodeError::ImageTooLarge)
+        );
     }
 
     #[test]
     fn encoding_is_deterministic_and_reports_global_count() {
         let mut source = image(vec![LogicalInstruction::Halt]);
         source.global_count = 256;
-        let first = encode(&source).expect("image encodes");
-        let second = encode(&source).expect("same image encodes");
+        let first = encode(&source, CodePosition(0)).expect("image encodes");
+        let second = encode(&source, CodePosition(0)).expect("same image encodes");
         assert_eq!(first, second);
         assert_eq!(first.global_slot_count(), 256);
         assert_eq!(first.code(), &[0x01]);
+    }
+
+    #[test]
+    fn resolves_nonzero_entry_after_variable_width_instructions() {
+        let artifact = encode(
+            &image_with_globals(
+                vec![
+                    LogicalInstruction::PushI16(-4),
+                    LogicalInstruction::LoadGlobal(super::super::GlobalSlot(0)),
+                    LogicalInstruction::Halt,
+                ],
+                1,
+            ),
+            CodePosition(1),
+        )
+        .expect("nonzero entry resolves");
+
+        assert_eq!(artifact.entry_offset(), 3);
+    }
+
+    #[test]
+    fn rejects_invalid_entry_positions() {
+        assert_eq!(
+            encode(&image(vec![LogicalInstruction::Halt]), CodePosition(1)),
+            Err(EncodeError::InvalidEntry(1))
+        );
     }
 }

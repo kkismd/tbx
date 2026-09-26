@@ -9,7 +9,7 @@ pub(crate) mod bytecode_6502;
 mod reference_vm;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-struct CodePosition(usize);
+pub(crate) struct CodePosition(pub(crate) usize);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 struct GlobalSlot(usize);
@@ -484,6 +484,7 @@ pub(crate) fn test_lower_and_encode(
     ),
     globals: &GlobalVariables,
     arrays: &GlobalArrays,
+    entry: CodePosition,
 ) -> Result<bytecode_6502::BytecodeArtifact, bytecode_6502::EncodeError> {
     let image = lower(
         owners,
@@ -500,7 +501,7 @@ pub(crate) fn test_lower_and_encode(
         arrays,
     )
     .expect("test source lowers to a static image");
-    bytecode_6502::encode(&image)
+    bytecode_6502::encode(&image, entry)
 }
 
 #[cfg(test)]
