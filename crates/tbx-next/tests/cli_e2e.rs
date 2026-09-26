@@ -750,7 +750,7 @@ fn stdin_success_evaluates_expression_before_runtime_print_word() {
 
 #[test]
 fn stdin_success_runs_multi_item_print_through_real_binary() {
-    let output = run_with_stdin("LET A = 4\nLET B = 5\nPRINT \"TOTAL = \", A + B, \"!\"\n");
+    let output = run_with_stdin("VAR LEFT_VALUE\nVAR RIGHT_VALUE\nLET LEFT_VALUE = 4\nLET RIGHT_VALUE = 5\nPRINT \"TOTAL = \", LEFT_VALUE + RIGHT_VALUE, \"!\"\n");
 
     assert!(
         output.status.success(),

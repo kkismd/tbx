@@ -3,20 +3,20 @@ DEF INIT_GALAXY
   LET BASES_LEFT = 0
   LET QUADRANT_INDEX = 1
   WHILE QUADRANT_INDEX <= 64
-    # R is the short-lived quadrant distribution roll.
-    LET R = RND(100)
-    IF R <= 80
+    # I is the short-lived quadrant distribution roll.
+    LET I = RND(100)
+    IF I <= 80
       LET KLINGONS_HERE = 0
-    ELSIF R <= 95
+    ELSIF I <= 95
       LET KLINGONS_HERE = 1
-    ELSIF R <= 98
+    ELSIF I <= 98
       LET KLINGONS_HERE = 2
     ELSE
       LET KLINGONS_HERE = 3
     ENDIF
 
-    LET R = RND(100)
-    IF R <= 96
+    LET I = RND(100)
+    IF I <= 96
       LET BASES_HERE = 0
     ELSE
       LET BASES_HERE = 1

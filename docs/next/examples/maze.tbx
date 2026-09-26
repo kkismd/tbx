@@ -26,6 +26,8 @@ VAR CHAR_CODE
 VAR STACK_LEVEL
 VAR FOUND
 VAR DONE
+VAR PLAYER_X
+VAR PLAYER_Y
 
 LET WIDTH = 8
 LET HEIGHT = 5
@@ -33,13 +35,13 @@ LET HEIGHT = 5
 # The maze is linearized row-major: 0 is a wall and 1 is open.
 PACK @MAZE = 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
 
-LET X = 2
-LET Y = 2
+LET PLAYER_X = 2
+LET PLAYER_Y = 2
 LET @VISITED[10] = 1
 LET TURN = 1
 
 WHILE DONE = 0
-  IF X = 6 AND Y = 2
+  IF PLAYER_X = 6 AND PLAYER_Y = 2
     LET FOUND = 1
     LET DONE = 1
   ELSE
@@ -47,16 +49,16 @@ WHILE DONE = 0
       LET DIRECTION = TURN
       LET TURN = TURN + 1
 
-      LET CANDIDATE_X = X
-      LET CANDIDATE_Y = Y
+      LET CANDIDATE_X = PLAYER_X
+      LET CANDIDATE_Y = PLAYER_Y
       IF DIRECTION = 1
-        LET CANDIDATE_Y = Y + 1
+          LET CANDIDATE_Y = PLAYER_Y + 1
       ELSIF DIRECTION = 2
-        LET CANDIDATE_X = X + 1
+          LET CANDIDATE_X = PLAYER_X + 1
       ELSIF DIRECTION = 3
-        LET CANDIDATE_Y = Y - 1
+          LET CANDIDATE_Y = PLAYER_Y - 1
       ELSE
-        LET CANDIDATE_X = X - 1
+        LET CANDIDATE_X = PLAYER_X - 1
       ENDIF
 
       # Check coordinates before calculating an array index. Out-of-bounds
@@ -65,11 +67,11 @@ WHILE DONE = 0
         LET INDEX = (CANDIDATE_Y - 1) * WIDTH + CANDIDATE_X
         IF @MAZE[INDEX] <> 0 AND @VISITED[INDEX] = 0
           LET STACK_LEVEL = STACK_LEVEL + 1
-          LET @STACK_X[STACK_LEVEL] = X
-          LET @STACK_Y[STACK_LEVEL] = Y
+          LET @STACK_X[STACK_LEVEL] = PLAYER_X
+          LET @STACK_Y[STACK_LEVEL] = PLAYER_Y
           LET @STACK_NEXT[STACK_LEVEL] = TURN
-          LET X = CANDIDATE_X
-          LET Y = CANDIDATE_Y
+          LET PLAYER_X = CANDIDATE_X
+          LET PLAYER_Y = CANDIDATE_Y
           LET @VISITED[INDEX] = 1
           LET TURN = 1
         ENDIF
@@ -78,8 +80,8 @@ WHILE DONE = 0
       IF STACK_LEVEL = 0
         LET DONE = 1
       ELSE
-        LET X = @STACK_X[STACK_LEVEL]
-        LET Y = @STACK_Y[STACK_LEVEL]
+        LET PLAYER_X = @STACK_X[STACK_LEVEL]
+        LET PLAYER_Y = @STACK_Y[STACK_LEVEL]
         LET TURN = @STACK_NEXT[STACK_LEVEL]
         LET STACK_LEVEL = STACK_LEVEL - 1
       ENDIF

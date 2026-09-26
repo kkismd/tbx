@@ -15,7 +15,7 @@ fn registered_file_and_stdin_sources_share_the_same_execution_path() {
 
 #[test]
 fn m20_environment_supports_variables_definitions_stack_words_and_output() {
-    let text = "LET A = 4\nDEF DOUBLE\nDUP\nEND\nEVAL DOUBLE(A)\nPUTDEC\nCR";
+    let text = "VAR VALUE\nLET VALUE = 4\nDEF DOUBLE\nDUP\nEND\nEVAL DOUBLE(VALUE)\nPUTDEC\nCR";
     let (sources, source_id) = source(text, "program.tbx");
     let mut writer = RecordingWriter::default();
 
@@ -27,7 +27,7 @@ fn m20_environment_supports_variables_definitions_stack_words_and_output() {
 
 #[test]
 fn global_arrays_support_expression_reads_and_indexed_writes() {
-    let text = "DIM @DATA[4]\nLET I = 2\nLET @DATA[1] = 7\nLET @DATA[I + 1] = @DATA[1] + 5\nEVAL @DATA[1]\nEVAL @DATA[(I + 1)]\nLET @DATA[4] = 9\nEVAL @DATA[4]";
+    let text = "DIM @DATA[4]\nVAR INDEX\nLET INDEX = 2\nLET @DATA[1] = 7\nLET @DATA[INDEX + 1] = @DATA[1] + 5\nEVAL @DATA[1]\nEVAL @DATA[(INDEX + 1)]\nLET @DATA[4] = 9\nEVAL @DATA[4]";
     let (sources, source_id) = source(text, "program.tbx");
     let mut writer = RecordingWriter::default();
 
@@ -69,7 +69,7 @@ fn pack_consumes_only_the_array_sized_stack_suffix() {
 
 #[test]
 fn pack_accepts_general_expressions_and_length_one_arrays() {
-    let text = "LET A = 2\nLET B = 3\nDIM @DATA[3]\nPACK @DATA = A + 1, B * 2, ABS(A)\nEVAL @DATA[1]\nEVAL @DATA[2]\nEVAL @DATA[3]";
+    let text = "VAR LEFT_VALUE\nVAR RIGHT_VALUE\nLET LEFT_VALUE = 2\nLET RIGHT_VALUE = 3\nDIM @DATA[3]\nPACK @DATA = LEFT_VALUE + 1, RIGHT_VALUE * 2, ABS(LEFT_VALUE)\nEVAL @DATA[1]\nEVAL @DATA[2]\nEVAL @DATA[3]";
     let (sources, source_id) = source(text, "program.tbx");
     let mut writer = RecordingWriter::default();
 
@@ -104,7 +104,7 @@ fn pack_consumes_only_the_top_values_when_rhs_leaves_extras() {
 fn pack_rejects_invalid_targets_and_syntax_with_source_diagnostics() {
     for text in [
         "PACK @MISSING = 1",
-        "LET A = 1\nPACK @A = 1",
+        "VAR VALUE\nLET VALUE = 1\nPACK @VALUE = 1",
         "DIM @DATA[1]\nPACK DATA = 1",
         "DIM @DATA[1]\nPACK @DATA",
         "DIM @DATA[1]\nPACK @DATA =",
@@ -240,7 +240,7 @@ fn abs_minimum_integer_reports_a_runtime_failure_from_source() {
 
 #[test]
 fn print_lowers_fixed_text_and_integer_expressions_in_source_order() {
-    let text = "LET A = 42\nLET B = 5\nPRINT \"Im \", A, \" years old. TOTAL = \", A + B";
+    let text = "VAR AGE\nVAR BONUS\nLET AGE = 42\nLET BONUS = 5\nPRINT \"Im \", AGE, \" years old. TOTAL = \", AGE + BONUS";
     let (sources, source_id) = source(text, "program.tbx");
     let mut writer = RecordingWriter::default();
 
