@@ -52,7 +52,7 @@ fn status_description(status: ExitStatus) -> String {
     )
 }
 
-fn build_and_run(fixture: &str, cycle_limit: &str) -> ExitStatus {
+fn build_and_run(fixture: &str, cycle_limit: &str) -> Output {
     let workspace = Path::new(env!("CARGO_MANIFEST_DIR"));
     let source = workspace.join(FIXTURES).join(format!("{fixture}.s"));
     let temp = TempDir::new(workspace);
@@ -98,26 +98,27 @@ fn build_and_run(fixture: &str, cycle_limit: &str) -> ExitStatus {
         &format!("running {fixture}"),
     )
     .unwrap_or_else(|error| panic!("{error}"));
-    run.status
+    run
 }
 
 #[test]
 #[ignore = "requires ca65, ld65, and sim65; run with --ignored"]
 fn sim65_assembly_smoke_fixtures() {
-    // Each fixture has a known target result; sim65 exit statuses 1 and 2 are
-    // reserved for simulator failure and cycle exhaustion respectively.
-    assert_eq!(
-        status_description(build_and_run("exit_zero", CYCLE_LIMIT)),
-        "0"
-    );
-    assert_eq!(
-        status_description(build_and_run("exit_seven", CYCLE_LIMIT)),
-        "7"
-    );
-    assert_eq!(
-        status_description(build_and_run("infinite_loop", CYCLE_LIMIT)),
-        "2",
-        "cycle exhaustion must never be treated as successful target execution"
+    // Check cycle exhaustion by its diagnostic because cc65 releases may map
+    // the simulator's internal timeout result to different process statuses.
+    let zero = build_and_run("exit_zero", CYCLE_LIMIT);
+    assert_eq!(status_description(zero.status), "0");
+
+    let seven = build_and_run("exit_seven", CYCLE_LIMIT);
+    assert_eq!(status_description(seven.status), "7");
+
+    let timeout = build_and_run("infinite_loop", CYCLE_LIMIT);
+    assert!(!timeout.status.success(), "cycle exhaustion must fail");
+    assert!(
+        String::from_utf8_lossy(&timeout.stderr).contains("Maximum number of cycles reached."),
+        "sim65 did not report cycle exhaustion (status {}):\n{}",
+        status_description(timeout.status),
+        String::from_utf8_lossy(&timeout.stderr)
     );
 }
 
