@@ -66,12 +66,19 @@ fn require_success(output: &Output, stage: &str) -> Result<(), String> {
     if output.status.success() {
         Ok(())
     } else {
-        Err(format!(
-            "{stage}: exit status {:?}: {}",
+        Err(format_nonzero_status(
+            stage,
             output.status.code(),
-            String::from_utf8_lossy(&output.stderr)
+            &output.stderr,
         ))
     }
+}
+
+fn format_nonzero_status(stage: &str, status_code: Option<i32>, stderr: &[u8]) -> String {
+    format!(
+        "{stage}: exit status {status_code:?}: {}",
+        String::from_utf8_lossy(stderr)
+    )
 }
 
 fn require_matching_stdout(actual: &[u8], expected: &[u8]) -> Result<(), String> {
@@ -181,17 +188,13 @@ fn e2e_failures_identify_the_stage() {
         assert!(error.contains(&format!("{stage}: could not start")));
     }
 
-    let failed = Command::new("sh")
-        .args(["-c", "echo broken >&2; exit 7"])
-        .output()
-        .expect("shell starts");
     for stage in [
         "assemble runtime",
         "assemble wrapper",
         "link",
         "sim65 exit status or cycle limit",
     ] {
-        let error = require_success(&failed, stage).expect_err("nonzero status must fail");
+        let error = format_nonzero_status(stage, Some(7), b"broken\n");
         assert!(error.contains(stage));
         assert!(error.contains("exit status Some(7)"));
         assert!(error.contains("broken"));
