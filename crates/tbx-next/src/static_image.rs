@@ -5,6 +5,7 @@ use crate::operator::{OperatorSemantic, OperatorWords};
 use crate::word::{PrimitiveId, PublishedWords, WordDefinition, WordId};
 use std::collections::{HashMap, HashSet};
 
+pub(crate) mod bytecode_6502;
 mod reference_vm;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -112,7 +113,7 @@ enum LogicalInstruction {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct StaticImage {
+pub(crate) struct StaticImage {
     code: Vec<LogicalInstruction>,
     texts: Vec<String>,
     global_count: usize,
@@ -467,6 +468,39 @@ pub(crate) fn test_lower_and_run<W: std::io::Write>(
         data_stack: vm.data_stack().to_vec(),
         statistics,
     })
+}
+
+#[cfg(test)]
+pub(crate) fn test_lower_and_encode(
+    owners: &[InstructionView<'_>],
+    words: &PublishedWords,
+    primitive_words: (
+        OperatorWords,
+        WordId,
+        [WordId; 3],
+        [WordId; 3],
+        WordId,
+        WordId,
+    ),
+    globals: &GlobalVariables,
+    arrays: &GlobalArrays,
+) -> Result<bytecode_6502::BytecodeArtifact, bytecode_6502::EncodeError> {
+    let image = lower(
+        owners,
+        words,
+        PrimitiveWordIds {
+            operators: primitive_words.0,
+            abs: primitive_words.1,
+            stack: primitive_words.2,
+            output: primitive_words.3,
+            input: primitive_words.4,
+            rnd: primitive_words.5,
+        },
+        globals,
+        arrays,
+    )
+    .expect("test source lowers to a static image");
+    bytecode_6502::encode(&image)
 }
 
 #[cfg(test)]
