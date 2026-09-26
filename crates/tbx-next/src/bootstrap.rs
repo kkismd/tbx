@@ -1,5 +1,4 @@
 use crate::binding::{Binding, BindingInsertError, Bindings};
-use crate::global_variable::{GlobalVarId, GlobalVariables};
 use crate::name::NormalizedName;
 use crate::source_word::{
     def_source_word, dim_source_word, eval_source_word, let_source_word, pack_source_word,
@@ -10,22 +9,11 @@ use crate::source_word::{
 use crate::structured_grammar::StructuredGrammar;
 use crate::word::{CompletedWordDefinition, PrimitiveId, PublishedWords, WordId};
 
-const BUILTIN_GLOBAL_VARIABLE_NAMES: [&str; 26] = [
-    "A", "B", "C", "D", "E", "F", "G", "H", "I", "J", "K", "L", "M", "N", "O", "P", "Q", "R", "S",
-    "T", "U", "V", "W", "X", "Y", "Z",
-];
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum PrimitiveBootstrapError {
     NameConflict,
     ReservedName,
     BindingRegistrationInvariantViolated,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum BuiltinGlobalBootstrapError {
-    NameConflict,
-    ReservedName,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -60,37 +48,6 @@ pub(crate) fn register_primitive(
         .map_err(PrimitiveBootstrapError::from_binding_insert_error)?;
 
     Ok(id)
-}
-
-/// Registers the Tiny BASIC A-Z built-in scalar variables.
-///
-/// The A-Z variables are ordinary bindings in the shared namespace, backed by
-/// session-owned global variable slots initialized by `GlobalVariables`.
-/// Bootstrap checks every name before allocating storage so a conflict cannot
-/// publish a partial prefix or leave unused variable slots behind.
-pub(crate) fn register_builtin_global_variables(
-    globals: &mut GlobalVariables,
-    bindings: &mut Bindings,
-) -> Result<Vec<GlobalVarId>, BuiltinGlobalBootstrapError> {
-    let names = builtin_global_variable_names();
-
-    for name in &names {
-        bindings
-            .validate_new_name(name)
-            .map_err(BuiltinGlobalBootstrapError::from)?;
-    }
-
-    let mut ids = Vec::with_capacity(names.len());
-
-    for name in names {
-        let id = globals.allocate();
-        bindings
-            .insert_new(name, Binding::Variable(id))
-            .expect("prechecked A-Z bootstrap names should remain available");
-        ids.push(id);
-    }
-
-    Ok(ids)
 }
 
 /// Registers one native source word in the shared published name table.
@@ -353,12 +310,6 @@ impl BuiltinSourceWordIds {
     }
 }
 
-fn builtin_global_variable_names() -> [NormalizedName; 26] {
-    BUILTIN_GLOBAL_VARIABLE_NAMES.map(|name| {
-        NormalizedName::new(name).expect("built-in global variable name should be valid")
-    })
-}
-
 fn builtin_name(input: &str) -> NormalizedName {
     NormalizedName::new(input).expect("built-in source word name should be valid")
 }
@@ -375,15 +326,6 @@ impl PrimitiveBootstrapError {
         match error {
             BindingInsertError::NameConflict => Self::BindingRegistrationInvariantViolated,
             BindingInsertError::ReservedName => Self::BindingRegistrationInvariantViolated,
-        }
-    }
-}
-
-impl From<BindingInsertError> for BuiltinGlobalBootstrapError {
-    fn from(error: BindingInsertError) -> Self {
-        match error {
-            BindingInsertError::NameConflict => Self::NameConflict,
-            BindingInsertError::ReservedName => Self::ReservedName,
         }
     }
 }
@@ -412,9 +354,7 @@ mod tests {
         NativeSourceWordContext, SourceWordError, SourceWordSyntaxMarker,
         SourceWordSyntaxMarkerRole,
     };
-    use crate::value::Value;
     use crate::word::WordDefinition;
-    use std::collections::HashSet;
 
     fn name(input: &str) -> NormalizedName {
         NormalizedName::new(input).expect("test input should be a valid word name")
@@ -447,7 +387,11 @@ mod tests {
         assert_eq!(bindings.get(&name(input)), Some(&Binding::Word(expected)));
     }
 
-    fn assert_variable_binding(bindings: &Bindings, input: &str, expected: GlobalVarId) {
+    fn assert_variable_binding(
+        bindings: &Bindings,
+        input: &str,
+        expected: crate::global_variable::GlobalVarId,
+    ) {
         assert_eq!(
             bindings.get(&name(input)),
             Some(&Binding::Variable(expected))
@@ -459,12 +403,6 @@ mod tests {
             bindings.get(&name(input)),
             Some(&Binding::SourceWord(expected))
         );
-    }
-
-    fn assert_distinct_variable_ids(ids: &[GlobalVarId]) {
-        let distinct: HashSet<_> = ids.iter().copied().collect();
-
-        assert_eq!(distinct.len(), ids.len());
     }
 
     #[test]
@@ -1260,114 +1198,5 @@ mod tests {
         assert_eq!(bindings.get(&name("SYNTAX")), None);
         assert_source_word_binding(&bindings, "STATEMENT", existing);
         assert_eq!(bindings.syntax_marker_reservation_len(), 0);
-    }
-
-    #[test]
-    fn builtin_global_bootstrap_registers_a_to_z_variables() {
-        let mut globals = GlobalVariables::new();
-        let mut bindings = Bindings::new();
-
-        let ids = register_builtin_global_variables(&mut globals, &mut bindings)
-            .expect("empty namespace should accept built-in globals");
-
-        assert_eq!(ids.len(), 26);
-        assert_distinct_variable_ids(&ids);
-        assert_eq!(globals.len(), 26);
-        assert_eq!(bindings.len(), 26);
-
-        for (index, letter) in BUILTIN_GLOBAL_VARIABLE_NAMES.iter().enumerate() {
-            let id = ids[index];
-            assert_variable_binding(&bindings, letter, id);
-            assert_eq!(globals.view().read(id), Ok(Value::integer(0)));
-        }
-    }
-
-    #[test]
-    fn builtin_global_bootstrap_uses_case_insensitive_lookup() {
-        let mut globals = GlobalVariables::new();
-        let mut bindings = Bindings::new();
-
-        let ids = register_builtin_global_variables(&mut globals, &mut bindings)
-            .expect("empty namespace should accept built-in globals");
-
-        assert_variable_binding(&bindings, "a", ids[0]);
-        assert_variable_binding(&bindings, "A", ids[0]);
-        assert_variable_binding(&bindings, "z", ids[25]);
-        assert_variable_binding(&bindings, "Z", ids[25]);
-    }
-
-    #[test]
-    fn builtin_global_bootstrap_duplicate_run_preserves_existing_variables() {
-        let mut globals = GlobalVariables::new();
-        let mut bindings = Bindings::new();
-        let ids = register_builtin_global_variables(&mut globals, &mut bindings)
-            .expect("first A-Z bootstrap should register");
-
-        let result = register_builtin_global_variables(&mut globals, &mut bindings);
-
-        assert_eq!(result, Err(BuiltinGlobalBootstrapError::NameConflict));
-        assert_eq!(globals.len(), 26);
-        assert_eq!(bindings.len(), 26);
-        assert_distinct_variable_ids(&ids);
-
-        for (index, letter) in BUILTIN_GLOBAL_VARIABLE_NAMES.iter().enumerate() {
-            assert_variable_binding(&bindings, letter, ids[index]);
-            assert_eq!(globals.view().read(ids[index]), Ok(Value::integer(0)));
-        }
-    }
-
-    #[test]
-    fn builtin_global_bootstrap_conflicts_with_existing_word_binding() {
-        let mut words = PublishedWords::new();
-        let mut globals = GlobalVariables::new();
-        let mut bindings = Bindings::new();
-        let existing = words.add(CompletedWordDefinition::primitive(primitive(70)));
-        bindings
-            .insert_new(name("A"), Binding::Word(existing))
-            .expect("test word should register");
-
-        let result = register_builtin_global_variables(&mut globals, &mut bindings);
-
-        assert_eq!(result, Err(BuiltinGlobalBootstrapError::NameConflict));
-        assert_eq!(globals.len(), 0);
-        assert_eq!(bindings.len(), 1);
-        assert_word_binding(&bindings, "a", existing);
-    }
-
-    #[test]
-    fn builtin_global_bootstrap_conflicts_with_existing_case_variant() {
-        let mut globals = GlobalVariables::new();
-        let existing = globals.allocate();
-        let mut bindings = Bindings::new();
-        bindings
-            .insert_new(name("m"), Binding::Variable(existing))
-            .expect("test variable should register");
-
-        let result = register_builtin_global_variables(&mut globals, &mut bindings);
-
-        assert_eq!(result, Err(BuiltinGlobalBootstrapError::NameConflict));
-        assert_eq!(globals.len(), 1);
-        assert_eq!(globals.view().read(existing), Ok(Value::integer(0)));
-        assert_eq!(bindings.len(), 1);
-        assert_variable_binding(&bindings, "M", existing);
-    }
-
-    #[test]
-    fn builtin_global_bootstrap_conflict_after_prefix_does_not_publish_partial_names() {
-        let mut globals = GlobalVariables::new();
-        let existing = globals.allocate();
-        let mut bindings = Bindings::new();
-        bindings
-            .insert_new(name("Z"), Binding::Variable(existing))
-            .expect("test variable should register");
-
-        let result = register_builtin_global_variables(&mut globals, &mut bindings);
-
-        assert_eq!(result, Err(BuiltinGlobalBootstrapError::NameConflict));
-        assert_eq!(globals.len(), 1);
-        assert_eq!(bindings.len(), 1);
-        assert_eq!(bindings.get(&name("A")), None);
-        assert_eq!(bindings.get(&name("Y")), None);
-        assert_variable_binding(&bindings, "z", existing);
     }
 }

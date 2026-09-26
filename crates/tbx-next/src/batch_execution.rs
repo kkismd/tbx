@@ -6,8 +6,7 @@ use std::path::Path;
 use crate::arithmetic_primitive::register_arithmetic_primitives;
 use crate::binding::Bindings;
 use crate::bootstrap::{
-    register_builtin_global_variables, register_builtin_source_words, BuiltinGlobalBootstrapError,
-    PrimitiveBootstrapError, SourceWordBootstrapError,
+    register_builtin_source_words, PrimitiveBootstrapError, SourceWordBootstrapError,
 };
 use crate::diagnostic::{DiagnosticRenderer, RenderedDiagnostic, UserDiagnostic};
 use crate::global_array::GlobalArrays;
@@ -65,7 +64,6 @@ enum BatchSetupError {
     Input(PrimitiveBootstrapError),
     Random(PrimitiveBootstrapError),
     SourceWords(SourceWordBootstrapError),
-    Globals(BuiltinGlobalBootstrapError),
     InvalidInitialSource(crate::source::SourceError),
 }
 
@@ -474,9 +472,7 @@ impl BatchEnvironment {
         register_builtin_source_words(&mut source_words, &mut bindings)
             .map_err(BatchSetupError::SourceWords)?;
 
-        let mut globals = GlobalVariables::new();
-        register_builtin_global_variables(&mut globals, &mut bindings)
-            .map_err(BatchSetupError::Globals)?;
+        let globals = GlobalVariables::new();
 
         Ok(Self {
             bindings,

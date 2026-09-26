@@ -2013,14 +2013,13 @@ fn var_rejects_duplicate_and_cross_kind_name_collisions_at_declared_name_span() 
 }
 
 #[test]
-fn var_rejects_existing_source_word_and_builtin_variable_collisions_normally() {
+fn var_rejects_existing_source_word_and_explicit_global_collisions_normally() {
     let mut source_words = SourceWordRegistry::new();
     let mut bindings = Bindings::new();
     let mut globals = GlobalVariables::new();
     register_builtin_source_words(&mut source_words, &mut bindings)
         .expect("VAR source word should bootstrap");
-    register_builtin_global_variables(&mut globals, &mut bindings)
-        .expect("A-Z variables should bootstrap after VAR/LET");
+    register_test_global(&mut globals, &mut bindings, "A");
 
     for (source_text, start, end) in [("VAR VAR", 4, 7), ("VAR let", 4, 7), ("VAR A", 4, 5)] {
         let (sources, id, error) =
@@ -2036,6 +2035,103 @@ fn var_rejects_existing_source_word_and_builtin_variable_collisions_normally() {
     assert!(bindings.get(&name("VAR")).is_some());
     assert!(bindings.get(&name("LET")).is_some());
     assert!(bindings.get(&name("A")).is_some());
+}
+
+#[test]
+fn single_letter_names_follow_ordinary_global_declaration_rules() {
+    let (words, primitives, operators) = operator_fixture();
+    let mut source_words = SourceWordRegistry::new();
+    let mut bindings = Bindings::new();
+    let mut globals = GlobalVariables::new();
+    register_builtin_source_words(&mut source_words, &mut bindings)
+        .expect("built-in source words should bootstrap");
+
+    for source_text in ["I", "LET I = 1"] {
+        let (sources, id) = source(source_text);
+        let error = compile_source(
+            sources.view(),
+            id,
+            SourceCompileContext::with_source_word_publication(
+                &mut bindings,
+                source_words.lookup(),
+                &mut globals,
+            ),
+        )
+        .expect_err("undeclared single-letter global should fail");
+        match source_text {
+            "I" => {
+                assert!(matches!(
+                    &error,
+                    SourceProcessorError::Compile(CompileError {
+                        kind: CompileErrorKind::WordResolution {
+                            source: WordResolutionError::UndefinedName
+                        },
+                        ..
+                    })
+                ));
+                assert_eq!(error.primary_span(), Some(span(sources.view(), id, 0, 1)));
+            }
+            "LET I = 1" => {
+                assert!(matches!(
+                    &error,
+                    SourceProcessorError::SourceWord(SourceWordError::LetTarget {
+                        source: ExpressionVariableErrorKind::UndefinedName,
+                        ..
+                    })
+                ));
+                assert_eq!(error.primary_span(), Some(span(sources.view(), id, 4, 5)));
+            }
+            _ => unreachable!(),
+        }
+        assert_eq!(globals.len(), 0);
+    }
+
+    let (sources, id) = source("VAR I\nLET I = 1\nEVAL I");
+    let unit = compile_source(
+        sources.view(),
+        id,
+        SourceCompileContext::with_source_word_publication_and_operators(
+            &mut bindings,
+            source_words.lookup(),
+            operators.lookup(),
+            &mut globals,
+        ),
+    )
+    .expect("VAR I should declare an ordinary global");
+    let result = run_unit(
+        &unit,
+        SourceExecutionContext::with_source_words_and_operators(
+            &bindings,
+            source_words.lookup(),
+            operators.lookup(),
+            PublishedWordLookup::new(&words),
+            primitives.lookup(),
+        )
+        .with_mut_globals(globals.view_mut()),
+    )
+    .expect("declared single-letter global should read and write");
+    assert_eq!(result.data_stack(), [value(1)]);
+    assert_eq!(globals.len(), 1);
+
+    let (sources, id) = source("VAR i");
+    let error = compile_source(
+        sources.view(),
+        id,
+        SourceCompileContext::with_source_word_publication_and_operators(
+            &mut bindings,
+            source_words.lookup(),
+            operators.lookup(),
+            &mut globals,
+        ),
+    )
+    .expect_err("a case-insensitive redeclaration should collide normally");
+    assert_eq!(
+        error,
+        SourceProcessorError::SourceWord(SourceWordError::VarNameConflict {
+            span: span(sources.view(), id, 4, 5)
+        })
+    );
+    assert_eq!(globals.len(), 1);
 }
 
 #[test]
@@ -2289,14 +2385,9 @@ fn def_header_publishes_local_references_with_call_base_offsets() {
 }
 
 #[test]
-fn compiled_word_resolves_scratch_reads_and_writes_and_preserves_top_level_globals() {
+fn compiled_word_scratch_is_independent_from_an_explicit_same_named_global() {
     let mut session = RuntimeDefinitionSession::new_with_named_operators();
-    register_builtin_global_variables(&mut session.globals, &mut session.bindings)
-        .expect("legacy A-Z globals should be available for this migration step");
-    let global_i = match session.bindings.get(&name("I")) {
-        Some(Binding::Variable(id)) => *id,
-        other => panic!("expected global I, got {other:?}"),
-    };
+    let global_i = register_test_global(&mut session.globals, &mut session.bindings, "I");
     session
         .globals
         .view_mut()

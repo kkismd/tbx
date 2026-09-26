@@ -26,6 +26,17 @@ fn m20_environment_supports_variables_definitions_stack_words_and_output() {
 }
 
 #[test]
+fn single_letter_global_works_after_an_explicit_batch_declaration() {
+    let (sources, source_id) = source("VAR I\nLET I = 1\nEVAL I", "program.tbx");
+    let mut writer = RecordingWriter::default();
+
+    let result = success(execute_registered_source(&sources, source_id, &mut writer));
+
+    assert_eq!(result.data_stack(), [Value::integer(1)]);
+    assert_eq!(writer.text(), "");
+}
+
+#[test]
 fn global_arrays_support_expression_reads_and_indexed_writes() {
     let text = "DIM @DATA[4]\nVAR INDEX\nLET INDEX = 2\nLET @DATA[1] = 7\nLET @DATA[INDEX + 1] = @DATA[1] + 5\nEVAL @DATA[1]\nEVAL @DATA[(INDEX + 1)]\nLET @DATA[4] = 9\nEVAL @DATA[4]";
     let (sources, source_id) = source(text, "program.tbx");

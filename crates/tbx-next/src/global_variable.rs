@@ -109,6 +109,14 @@ mod tests {
     use super::*;
 
     #[test]
+    fn fresh_storage_has_no_preallocated_slots() {
+        let globals = GlobalVariables::new();
+
+        assert!(globals.is_empty());
+        assert_eq!(globals.len(), 0);
+    }
+
+    #[test]
     fn allocation_initializes_slot_to_integer_zero() {
         let mut globals = GlobalVariables::new();
 

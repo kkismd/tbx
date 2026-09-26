@@ -52,6 +52,21 @@ fn source(text: &str, display_name: &str) -> (SourceTexts, crate::source::Source
     (sources, source_id)
 }
 
+#[test]
+fn fresh_batch_environment_does_not_publish_or_allocate_single_letter_globals() {
+    let environment = BatchEnvironment::new().expect("batch environment should build");
+
+    assert_eq!(environment.globals.len(), 0);
+    for letter in 'A'..='Z' {
+        let name = name(&letter.to_string());
+        assert_eq!(
+            environment.bindings.get(&name),
+            None,
+            "{letter} should not have an implicit binding"
+        );
+    }
+}
+
 fn sources_with_standard_library(
     standard_library: &str,
     source: &str,
