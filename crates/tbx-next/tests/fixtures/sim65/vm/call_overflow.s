@@ -3,6 +3,7 @@ VM_HEADER entry, 1
 entry:
 failure:
     CALL failure
+    HALT
 VM_END
 expected_frame:
     .word failure + 3 - _tbx_code_start

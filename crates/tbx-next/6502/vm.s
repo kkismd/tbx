@@ -229,6 +229,23 @@ read_word:
     sta left+1
     rts
 
+; A fallthrough instruction must have a real successor before it changes VM
+; state. Jump, Return, and a taken conditional branch do not fall through.
+validate_next:
+    lda cursor+1
+    cmp tbx_end+1
+    bcc next_good
+    bne next_bad
+    lda cursor
+    cmp tbx_end
+    bcc next_good
+next_bad:
+    sec
+    rts
+next_good:
+    clc
+    rts
+
 commit_cursor:
     lda cursor
     sta tbx_pc
@@ -271,10 +288,12 @@ op_push:
     lda #3
     jsr need_bytes
     jcs fail_bytecode
+    jsr read_word
+    jsr validate_next
+    jcs fail_bytecode
     lda tbx_data_depth
     cmp #64
     jcs fail_overflow
-    jsr read_word
     ldx tbx_data_depth
     txa
     asl
@@ -322,6 +341,8 @@ op_load:
     jcs fail_bytecode
     jsr global_pointer
     jcs fail_global
+    jsr validate_next
+    jcs fail_bytecode
     lda tbx_data_depth
     cmp #64
     jcs fail_overflow
@@ -349,6 +370,8 @@ op_store:
     jcs fail_bytecode
     jsr global_pointer
     jcs fail_global
+    jsr validate_next
+    jcs fail_bytecode
     lda tbx_data_depth
     jeq fail_underflow
     sec
@@ -379,6 +402,8 @@ op_call:
     jcs fail_bytecode
     jsr read_word
     jsr validate_target
+    jcs fail_bytecode
+    jsr validate_next
     jcs fail_bytecode
     lda tbx_call_depth
     cmp #16
@@ -419,6 +444,8 @@ op_copy_base:
     jcs fail_bytecode
     jsr read_operand
     sta count
+    jsr validate_next
+    jcs fail_bytecode
     lda tbx_call_depth
     jeq fail_call_underflow
     sec
@@ -506,8 +533,6 @@ op_jump_zero:
     lda tbx_data_depth
     jeq fail_underflow
     jsr read_word
-    jsr validate_target
-    jcs fail_bytecode
     lda tbx_data_depth
     sec
     sbc #1
@@ -516,18 +541,23 @@ op_jump_zero:
     lda tbx_data_stack,x
     inx
     ora tbx_data_stack,x
-    sta count
+    bne jump_zero_untaken
+    jsr validate_target
+    jcs fail_bytecode
     dec tbx_data_depth
-    lda count
-    bne :+
     jsr commit_target
     jmp dispatch
-:
+jump_zero_untaken:
+    jsr validate_next
+    jcs fail_bytecode
+    dec tbx_data_depth
     jmp commit_cursor
 
 op_drop:
     lda #1
     jsr need_bytes
+    jcs fail_bytecode
+    jsr validate_next
     jcs fail_bytecode
     lda tbx_data_depth
     jeq fail_underflow
@@ -537,6 +567,8 @@ op_drop:
 op_binary:
     lda #1
     jsr need_bytes
+    jcs fail_bytecode
+    jsr validate_next
     jcs fail_bytecode
     lda tbx_data_depth
     cmp #2
@@ -802,6 +834,8 @@ op_putdec:
     lda #1
     jsr need_bytes
     jcs fail_bytecode
+    jsr validate_next
+    jcs fail_bytecode
     lda tbx_data_depth
     jeq commit_cursor
     sec
@@ -878,6 +912,8 @@ decimal_emit:
 op_cr:
     lda #1
     jsr need_bytes
+    jcs fail_bytecode
+    jsr validate_next
     jcs fail_bytecode
     lda #10
     jsr emit_char

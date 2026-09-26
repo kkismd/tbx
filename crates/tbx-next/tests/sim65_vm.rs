@@ -152,6 +152,9 @@ fn vm_success_fixtures() {
         ("encoder_immediates", ""),
         ("nonzero_entry", "0\n99\n"),
         ("arithmetic_edges", "32761\n-2\n1\n1\n1\n0\n1\n1\n"),
+        ("jz_invalid_untaken", "42\n"),
+        ("terminal_jz_taken", ""),
+        ("terminal_jump", ""),
     ] {
         let result = build_and_run(fixture, false);
         if result.output.status.code() != Some(0) || result.output.stdout != stdout.as_bytes() {
@@ -179,6 +182,11 @@ fn vm_failure_fixtures_observe_atomic_state() {
         ("invalid_global", 16),
         ("truncated", 11),
         ("invalid_target", 11),
+        ("jz_invalid_taken", 11),
+        ("terminal_push", 11),
+        ("terminal_putdec", 11),
+        ("terminal_call", 11),
+        ("terminal_jz_untaken", 11),
         ("unsupported_zero", 10),
         ("unsupported_unassigned", 10),
         ("return_underflow", 14),
