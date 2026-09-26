@@ -165,7 +165,7 @@ fn standard_library_lex_failure_short_circuits_user_source() {
 #[test]
 fn standard_library_publication_failure_short_circuits_user_source() {
     let (sources, standard_library_id, source_id) =
-        sources_with_standard_library("SYNTAX A\nSTATEMENT\nENDS", "EVAL 7\nPUTDEC");
+        sources_with_standard_library("SYNTAX EVAL\nSTATEMENT\nENDS", "EVAL 7\nPUTDEC");
     let mut writer = RecordingWriter::default();
 
     let failure = failure(execute_registered_sources(

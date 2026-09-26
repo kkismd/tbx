@@ -275,8 +275,10 @@ fn let_rhs_variable_load_mapping_uses_reference_name_span() {
     let mut globals = GlobalVariables::new();
     register_builtin_source_words(&mut source_words, &mut bindings)
         .expect("built-in source words should bootstrap");
-    let variables = register_builtin_global_variables(&mut globals, &mut bindings)
-        .expect("A-Z variables should bootstrap");
+    let variables = [
+        register_test_global(&mut globals, &mut bindings, "A"),
+        register_test_global(&mut globals, &mut bindings, "B"),
+    ];
     let (sources, id) = source("LET A = B + 1");
 
     let unit = compile_source(
@@ -314,8 +316,7 @@ fn let_rejects_target_resolution_and_syntax_errors_at_primary_span() {
     let operators = register_operator_primitives(&mut primitives, &mut words);
     register_builtin_source_words(&mut source_words, &mut bindings)
         .expect("built-in source words should bootstrap");
-    register_builtin_global_variables(&mut globals, &mut bindings)
-        .expect("A-Z variables should bootstrap");
+    register_test_global(&mut globals, &mut bindings, "A");
     let push7_id = primitives.register(push_7);
     register_primitive(&mut words, &mut bindings, name("PUSH7"), push7_id)
         .expect("runtime word should register");
@@ -521,8 +522,10 @@ fn failed_let_expression_does_not_compile_prior_rhs_instructions() {
     let mut globals = GlobalVariables::new();
     register_builtin_source_words(&mut source_words, &mut bindings)
         .expect("built-in source words should bootstrap");
-    let variables = register_builtin_global_variables(&mut globals, &mut bindings)
-        .expect("A-Z variables should bootstrap");
+    let variables = [
+        register_test_global(&mut globals, &mut bindings, "A"),
+        register_test_global(&mut globals, &mut bindings, "B"),
+    ];
     let (sources, id) = source("LET A = B + MISSING");
 
     let error = compile_source(
@@ -556,8 +559,7 @@ fn line_number_prefixed_let_jumps_to_rhs_start_and_runs_store_var() {
     let mut globals = GlobalVariables::new();
     register_builtin_source_words(&mut source_words, &mut bindings)
         .expect("built-in source words should bootstrap");
-    let variables = register_builtin_global_variables(&mut globals, &mut bindings)
-        .expect("A-Z variables should bootstrap");
+    let variables = [register_test_global(&mut globals, &mut bindings, "A")];
 
     globals
         .view_mut()
@@ -582,8 +584,7 @@ fn bif_condition_variable_reads_from_global_storage_at_runtime() {
     let mut bindings = Bindings::new();
     let mut primitives = PrimitiveRegistry::new();
     let mut globals = GlobalVariables::new();
-    let variables = register_builtin_global_variables(&mut globals, &mut bindings)
-        .expect("A-Z variables should bootstrap");
+    let variables = [register_test_global(&mut globals, &mut bindings, "A")];
     let operators = register_operator_primitives(&mut primitives, &mut words);
     let push7_id = primitives.register(push_7);
     register_primitive(&mut words, &mut bindings, name("PUSH7"), push7_id)
@@ -624,8 +625,7 @@ fn bif_load_var_runtime_failure_maps_to_name_span() {
     let mut bindings = Bindings::new();
     let mut primitives = PrimitiveRegistry::new();
     let mut globals = GlobalVariables::new();
-    let variables = register_builtin_global_variables(&mut globals, &mut bindings)
-        .expect("A-Z variables should bootstrap");
+    let variables = [register_test_global(&mut globals, &mut bindings, "A")];
     let operators = register_operator_primitives(&mut primitives, &mut words);
     let push7_id = primitives.register(push_7);
     register_primitive(&mut words, &mut bindings, name("PUSH7"), push7_id)

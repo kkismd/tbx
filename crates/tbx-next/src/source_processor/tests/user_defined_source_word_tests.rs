@@ -1341,8 +1341,7 @@ fn user_defined_processing_failure_preserves_publication_and_later_owner_state()
 #[test]
 fn user_defined_return_equivalent_runs_through_runtime_definition_body() {
     let mut session = RuntimeDefinitionSession::new();
-    register_builtin_global_variables(&mut session.globals, &mut session.bindings)
-        .expect("A-Z variables should bootstrap");
+    register_test_global(&mut session.globals, &mut session.bindings, "A");
     session.publish_syntax("SYNTAX URETURN\nSTATEMENT\nEXPECT_END\nEMIT_RETURN\nENDS");
     session.publish_def("DEF STOP\nEVAL 42\nIF 1\nURETURN\nENDIF\nLET A = 1\nEND");
 
@@ -1410,8 +1409,7 @@ fn user_defined_return_equivalent_is_rejected_outside_runtime_word_body_at_call_
 #[test]
 fn structured_terminator_return_is_allowed_in_runtime_word_and_rejected_at_top_level() {
     let mut session = RuntimeDefinitionSession::new();
-    register_builtin_global_variables(&mut session.globals, &mut session.bindings)
-        .expect("A-Z variables should bootstrap");
+    register_test_global(&mut session.globals, &mut session.bindings, "A");
     session.publish_syntax(
         "SYNTAX UBLOCK\nBLOCK\nSTART\nEXPECT_END\nLAST ENDUBLOCK\nEXPECT_END\nEMIT_RETURN\nENDS",
     );

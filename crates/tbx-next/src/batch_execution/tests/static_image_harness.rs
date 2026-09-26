@@ -1,6 +1,6 @@
 use super::*;
 use crate::arithmetic_primitive::register_arithmetic_primitives;
-use crate::bootstrap::{register_builtin_global_variables, register_builtin_source_words};
+use crate::bootstrap::register_builtin_source_words;
 use crate::global_array::GlobalArrays;
 use crate::global_variable::GlobalVariables;
 use crate::input_primitive::register_input_primitives;
@@ -57,9 +57,7 @@ impl Fixture {
         let mut source_words = SourceWordRegistry::new();
         register_builtin_source_words(&mut source_words, &mut bindings)
             .expect("source word bootstrap succeeds");
-        let mut globals = GlobalVariables::new();
-        register_builtin_global_variables(&mut globals, &mut bindings)
-            .expect("global bootstrap succeeds");
+        let globals = GlobalVariables::new();
         Self {
             bindings,
             primitives,

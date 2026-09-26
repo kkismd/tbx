@@ -2416,8 +2416,8 @@ mod tests {
     use super::*;
     use crate::binding::{Binding, Bindings};
     use crate::bootstrap::{
-        register_builtin_global_variables, register_builtin_source_words,
-        register_native_source_word, register_native_source_word_with_markers, register_primitive,
+        register_builtin_source_words, register_native_source_word,
+        register_native_source_word_with_markers, register_primitive,
     };
     use crate::global_array::GlobalArrays;
     use crate::global_variable::{GlobalVarId, GlobalVariables};
@@ -3360,6 +3360,18 @@ mod tests {
         CompletedWordDefinition::primitive(PrimitiveId::from_slot(slot))
     }
 
+    fn register_test_global(
+        globals: &mut GlobalVariables,
+        bindings: &mut Bindings,
+        input: &str,
+    ) -> GlobalVarId {
+        let id = globals.allocate();
+        bindings
+            .insert_new(name(input), Binding::Variable(id))
+            .expect("test global should register");
+        id
+    }
+
     fn operator_fixture() -> (PublishedWords, PrimitiveRegistry, OperatorWords) {
         let mut words = PublishedWords::new();
         let mut primitives = PrimitiveRegistry::new();
@@ -3374,7 +3386,7 @@ mod tests {
         SourceWordRegistry,
         Bindings,
         GlobalVariables,
-        Vec<GlobalVarId>,
+        [GlobalVarId; 3],
     ) {
         let mut words = PublishedWords::new();
         let mut primitives = PrimitiveRegistry::new();
@@ -3384,8 +3396,9 @@ mod tests {
         register_builtin_source_words(&mut source_words, &mut bindings)
             .expect("built-in source words should bootstrap");
         let mut globals = GlobalVariables::new();
-        let variables = register_builtin_global_variables(&mut globals, &mut bindings)
-            .expect("A-Z variables should bootstrap");
+        let variable_a = register_test_global(&mut globals, &mut bindings, "A");
+        let variable_b = register_test_global(&mut globals, &mut bindings, "B");
+        let variable_c = register_test_global(&mut globals, &mut bindings, "C");
         publish_user_source_word(
             "SYNTAX IF\nBLOCK\nSTART\nREAD_EXPR AS condition\nEMIT_EXPR condition\nEMIT_BRANCH_IF_FALSE_FOLLOWING\nMARK_ANY ELSIF\nEMIT_BRANCH_COMPLETE\nPATCH_FOLLOWING\nREAD_EXPR AS elsif_condition\nEMIT_EXPR elsif_condition\nEMIT_BRANCH_IF_FALSE_FOLLOWING\nMARK_OPTIONAL ELSE\nEMIT_BRANCH_COMPLETE\nPATCH_FOLLOWING\nEXPECT_END\nLAST ENDIF\nEXPECT_END\nPATCH_FOLLOWING\nPATCH_COMPLETE\nENDS",
             &mut bindings,
@@ -3401,7 +3414,7 @@ mod tests {
             source_words,
             bindings,
             globals,
-            variables,
+            [variable_a, variable_b, variable_c],
         )
     }
 

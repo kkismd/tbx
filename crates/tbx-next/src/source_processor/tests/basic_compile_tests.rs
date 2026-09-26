@@ -621,8 +621,10 @@ fn bif_condition_lowers_builtin_variable_names_to_load_var() {
     let mut words = PublishedWords::new();
     let mut bindings = Bindings::new();
     let mut globals = GlobalVariables::new();
-    let variables = register_builtin_global_variables(&mut globals, &mut bindings)
-        .expect("A-Z variables should bootstrap");
+    let variables = [
+        register_test_global(&mut globals, &mut bindings, "A"),
+        register_test_global(&mut globals, &mut bindings, "B"),
+    ];
     let push7_id = words.add(completed_primitive(0));
     bindings
         .insert_new(name("PUSH7"), Binding::Word(push7_id))
@@ -753,8 +755,10 @@ fn definition_body_let_lowers_expression_to_published_builder() {
     let mut globals = GlobalVariables::new();
     register_builtin_source_words(&mut source_words, &mut bindings)
         .expect("built-in source words should bootstrap");
-    let variables = register_builtin_global_variables(&mut globals, &mut bindings)
-        .expect("A-Z variables should bootstrap");
+    let variables = [
+        register_test_global(&mut globals, &mut bindings, "A"),
+        register_test_global(&mut globals, &mut bindings, "B"),
+    ];
 
     let (_sources, _id, code) = compile_body(
         "LET A = 1 + 2",
@@ -1221,8 +1225,10 @@ fn quotation_body_let_lowers_without_publication_capability() {
     let mut globals = GlobalVariables::new();
     register_builtin_source_words(&mut source_words, &mut bindings)
         .expect("built-in source words should bootstrap");
-    let variables = register_builtin_global_variables(&mut globals, &mut bindings)
-        .expect("A-Z variables should bootstrap");
+    let variables = [
+        register_test_global(&mut globals, &mut bindings, "A"),
+        register_test_global(&mut globals, &mut bindings, "B"),
+    ];
 
     let (_sources, _id, quotation) = compile_quotation(
         "LET A = 1 + 2",
@@ -1512,8 +1518,10 @@ fn let_lowers_rhs_expression_then_store_var_with_source_mapping() {
     let mut globals = GlobalVariables::new();
     register_builtin_source_words(&mut source_words, &mut bindings)
         .expect("built-in source words should bootstrap");
-    let variables = register_builtin_global_variables(&mut globals, &mut bindings)
-        .expect("A-Z variables should bootstrap");
+    let variables = [
+        register_test_global(&mut globals, &mut bindings, "A"),
+        register_test_global(&mut globals, &mut bindings, "B"),
+    ];
     let (sources, id) = source("LET A = 1 + 2 * 3");
 
     let unit = compile_source(
@@ -1574,8 +1582,10 @@ fn let_updates_builtin_and_user_variables_with_case_insensitive_resolution() {
     let mut globals = GlobalVariables::new();
     register_builtin_source_words(&mut source_words, &mut bindings)
         .expect("built-in source words should bootstrap");
-    let variables = register_builtin_global_variables(&mut globals, &mut bindings)
-        .expect("A-Z variables should bootstrap");
+    let variables = [
+        register_test_global(&mut globals, &mut bindings, "A"),
+        register_test_global(&mut globals, &mut bindings, "B"),
+    ];
     compile_with_var("VAR Score", &mut bindings, &mut globals, &source_words);
     let Some(Binding::Variable(score)) = bindings.get(&name("score")).copied() else {
         panic!("SCORE should be a published variable");
