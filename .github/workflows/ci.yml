@@ -66,6 +66,7 @@ jobs:
             - run: sudo apt-get update && sudo apt-get install --yes cc65
             - run: cargo test -p tbx-next --test sim65_smoke
             - run: cargo test -p tbx-next --test sim65_smoke -- --ignored
+            - run: cargo test -p tbx-next --test sim65_vm -- --ignored
 
     clippy:
         name: Workspace / Clippy

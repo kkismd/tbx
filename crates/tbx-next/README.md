@@ -26,7 +26,7 @@ cargo test -p tbx-next
 cargo run -p tbx-next --bin tbx-next
 ```
 
-## 6502 assembly smoke checks
+## 6502 sim65 checks
 
 The explicit sim65 smoke check requires the cc65 toolchain (`ca65`, `ld65`,
 `sim65`, and `sim6502.lib`). On Ubuntu, install it with `sudo apt-get install
@@ -34,7 +34,15 @@ cc65`. Run the dedicated checks with:
 
 ```sh
 cargo test -p tbx-next --test sim65_smoke -- --ignored
+cargo test -p tbx-next --test sim65_vm -- --ignored
 ```
+
+The VM check assembles the M32 runtime with hand-written bytecode fixtures,
+then runs each image under a cycle limit. Error fixtures use a private
+`_tbx_error_probe` hook immediately before target exit to verify PC, stack,
+globals, and invocation frames. The private `_tbx_before_init` hook poisons
+state in one fixture to verify explicit runtime initialization. The check also
+examines the linker map and labels for the M32 segment and capacity contract.
 
 The regular `cargo test -p tbx-next` and `cargo run -p tbx-next` commands do not
 invoke cc65. The dedicated check fails with a tool-specific diagnostic if a
