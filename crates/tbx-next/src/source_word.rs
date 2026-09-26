@@ -276,6 +276,9 @@ pub(crate) enum SourceWordError {
         span: SourceSpan,
         source: ExpressionVariableErrorKind,
     },
+    ReadOnlyLocalTarget {
+        span: SourceSpan,
+    },
     LetExpressionContextUnavailable {
         span: SourceSpan,
     },
@@ -496,6 +499,7 @@ impl SourceWordError {
             | Self::DimPublicationContextUnavailable { span }
             | Self::LetSyntax { span, .. }
             | Self::LetTarget { span, .. }
+            | Self::ReadOnlyLocalTarget { span }
             | Self::LetExpressionContextUnavailable { span }
             | Self::PackSyntax { span, .. }
             | Self::PackTarget { span, .. }
@@ -1995,6 +1999,13 @@ fn resolve_scalar_store_instruction(
     source_name: &str,
     target_span: SourceSpan,
 ) -> Result<Instruction, SourceWordError> {
+    if context
+        .local_references
+        .and_then(|references| references.resolve(source_name))
+        .is_some()
+    {
+        return Err(SourceWordError::ReadOnlyLocalTarget { span: target_span });
+    }
     if let Some(slot) = context
         .local_references
         .and_then(|references| references.resolve_scratch(source_name))
