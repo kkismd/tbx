@@ -180,8 +180,7 @@ DEF PHOTON_TORPEDO
       PRINT "COURSE (0 CANCEL, 10-89):"
       CR
       IF INPUT?()
-        LET COURSE = DUP()
-        DROP
+        POP_TO COURSE
         IF COURSE = 0
           LET TORPEDO_VALID = 1
           RETURN
@@ -226,8 +225,7 @@ DEF PHASER
       PRINT "PHASER ENERGY:"
       CR
       IF INPUT?()
-        LET PHASER_ENERGY = DUP()
-        DROP
+        POP_TO PHASER_ENERGY
         IF PHASER_ENERGY <= 0
           LET PHASER_ENERGY = 0
           LET PHASER_VALID = 1
