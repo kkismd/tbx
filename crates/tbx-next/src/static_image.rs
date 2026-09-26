@@ -9,7 +9,7 @@ pub(crate) mod bytecode_6502;
 mod reference_vm;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub(crate) struct CodePosition(pub(crate) usize);
+struct CodePosition(usize);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 struct GlobalSlot(usize);
@@ -115,6 +115,7 @@ enum LogicalInstruction {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct StaticImage {
     code: Vec<LogicalInstruction>,
+    entry: CodePosition,
     texts: Vec<String>,
     global_count: usize,
     array_lengths: Vec<usize>,
@@ -164,6 +165,7 @@ impl PrimitiveMap {
 
 fn lower(
     owners: &[InstructionView<'_>],
+    entry: CodeLocation,
     words: &PublishedWords,
     primitive_words: PrimitiveWordIds,
     globals: &GlobalVariables,
@@ -243,6 +245,18 @@ fn lower(
             .checked_add(owner.len())
             .ok_or(LowerError::ImageTooLarge)?;
     }
+
+    let entry_owner = owners
+        .iter()
+        .find(|owner| owner.code_space() == entry.code_space())
+        .ok_or(LowerError::UnknownCodeOwner(entry))?;
+    entry_owner
+        .validate_location(entry)
+        .map_err(|_| LowerError::InvalidCodeLocation(entry))?;
+    let entry_position = positions
+        .get(&(entry.code_space(), entry.address().as_index()))
+        .copied()
+        .ok_or(LowerError::InvalidCodeLocation(entry))?;
 
     let mut code = Vec::with_capacity(total);
     let mut texts = Vec::new();
@@ -350,6 +364,7 @@ fn lower(
     }
     Ok(StaticImage {
         code,
+        entry: entry_position,
         texts,
         global_count: globals_map.len(),
         array_lengths,
@@ -428,6 +443,7 @@ pub(crate) struct TestReferenceResult {
 #[cfg(test)]
 pub(crate) fn test_lower_and_run<W: std::io::Write>(
     owners: &[InstructionView<'_>],
+    entry: CodeLocation,
     words: &PublishedWords,
     primitive_words: (
         OperatorWords,
@@ -443,6 +459,7 @@ pub(crate) fn test_lower_and_run<W: std::io::Write>(
 ) -> Result<TestReferenceResult, ()> {
     let image = lower(
         owners,
+        entry,
         words,
         PrimitiveWordIds {
             operators: primitive_words.0,
@@ -457,7 +474,8 @@ pub(crate) fn test_lower_and_run<W: std::io::Write>(
     )
     .map_err(|_| ())?;
     let statistics = image.statistics();
-    let mut vm = reference_vm::ReferenceVm::new(image, CodePosition(0))
+    let entry = image.entry;
+    let mut vm = reference_vm::ReferenceVm::new(image, entry)
         .expect("lowered temporary unit has a valid entry");
     let mut output = crate::runtime_output::WriteRuntimeOutput::new(writer);
     let outcome = vm
@@ -473,6 +491,7 @@ pub(crate) fn test_lower_and_run<W: std::io::Write>(
 #[cfg(test)]
 pub(crate) fn test_lower_and_encode(
     owners: &[InstructionView<'_>],
+    entry: CodeLocation,
     words: &PublishedWords,
     primitive_words: (
         OperatorWords,
@@ -484,10 +503,10 @@ pub(crate) fn test_lower_and_encode(
     ),
     globals: &GlobalVariables,
     arrays: &GlobalArrays,
-    entry: CodePosition,
 ) -> Result<bytecode_6502::BytecodeArtifact, bytecode_6502::EncodeError> {
     let image = lower(
         owners,
+        entry,
         words,
         PrimitiveWordIds {
             operators: primitive_words.0,
@@ -501,7 +520,7 @@ pub(crate) fn test_lower_and_encode(
         arrays,
     )
     .expect("test source lowers to a static image");
-    bytecode_6502::encode(&image, entry)
+    bytecode_6502::encode(&image)
 }
 
 #[cfg(test)]
@@ -604,6 +623,7 @@ mod tests {
                 LogicalInstruction::Return,
                 LogicalInstruction::Halt,
             ],
+            entry: CodePosition(0),
             texts: vec!["é".to_owned()],
             global_count: 1,
             array_lengths: vec![3],
@@ -671,6 +691,18 @@ mod tests {
         }
 
         fn lower(&self, owners: &[InstructionView<'_>]) -> Result<StaticImage, LowerError> {
+            let entry = owners
+                .first()
+                .expect("test image has an owner")
+                .location(InstructionAddress::from_index(0));
+            self.lower_with_entry(owners, entry)
+        }
+
+        fn lower_with_entry(
+            &self,
+            owners: &[InstructionView<'_>],
+            entry: CodeLocation,
+        ) -> Result<StaticImage, LowerError> {
             let primitive_words = PrimitiveWordIds {
                 operators: self.operators,
                 abs: self.abs,
@@ -681,6 +713,7 @@ mod tests {
             };
             lower(
                 owners,
+                entry,
                 &self.words,
                 primitive_words,
                 &self.globals,
@@ -807,6 +840,28 @@ mod tests {
         assert_eq!(image.code[3], LogicalInstruction::Return);
         assert_eq!(image.code[4], LogicalInstruction::PushI16(9));
         assert_eq!(image.code[5], LogicalInstruction::Halt);
+    }
+
+    #[test]
+    fn lower_preserves_entry_when_owner_order_changes() {
+        let fixture = Fixture::new();
+        let mut earlier_owner = InstructionSequence::new();
+        earlier_owner.append(Instruction::Push(Value::integer(7)));
+        earlier_owner.append(Instruction::Halt);
+        let mut entry_owner = InstructionSequence::new();
+        entry_owner.append(Instruction::Push(Value::integer(9)));
+        entry_owner.append(Instruction::Halt);
+        let entry = entry_owner
+            .view()
+            .location(InstructionAddress::from_index(0));
+
+        let image = fixture
+            .lower_with_entry(&[earlier_owner.view(), entry_owner.view()], entry)
+            .expect("entry resolves through its code owner");
+        assert_eq!(image.entry, CodePosition(2));
+
+        let artifact = bytecode_6502::encode(&image).expect("entry encodes");
+        assert_eq!(artifact.entry_offset(), 4);
     }
 
     #[test]
