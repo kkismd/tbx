@@ -1,0 +1,11 @@
+.include "vm_fixture.inc"
+VM_HEADER entry, 0
+entry:
+    PUSH 32767
+    PUSH 1
+failure:
+    ADD
+    HALT
+VM_END
+expected_stack: .word 32767, 1
+VM_EXPECT 17, failure, 2, 0, expected_stack, 4, $ff, 0, 0, 0
