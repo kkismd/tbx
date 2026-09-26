@@ -67,6 +67,7 @@ jobs:
             - run: cargo test -p tbx-next --test sim65_smoke
             - run: cargo test -p tbx-next --test sim65_smoke -- --ignored
             - run: cargo test -p tbx-next --test sim65_vm -- --ignored
+            - run: cargo test -p tbx-next --lib prime_source_matches_sim65_execution -- --ignored
 
     clippy:
         name: Workspace / Clippy
