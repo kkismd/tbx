@@ -56,8 +56,8 @@ TBX Next は BASIC 風のソース構文を持つ一方、実行時にはデー�
 - 現在の実行時値は符号付き 16 bit 整数 (`i16`) のみ
 - 算術は checked arithmetic であり、オーバーフローは実行時エラー
 - `0` は偽、`0` 以外は真として条件判定する
-- `A` から `Z` までの 26 個のスカラー変数は起動時から存在する
-- `VAR` で追加のグローバル変数を公開できる
+- グローバル変数は `VAR` で明示的に公開する
+- compiled word (`DEF ... END`) 内では `I,J,K,L,M,N,X,Y` を invocation-local scratch として宣言なしで使える
 - ランタイムワードはデータスタック上の値を消費・生成できる
 - `VAR`, `LET`, `EVAL`, `DEF`, `IF`, `SYNTAX`, `USE`, `PRINT` はソース処理ワードであり、通常のランタイムワードとは役割が異なる
 
@@ -68,8 +68,9 @@ TBX Next は BASIC 風のソース構文を持つ一方、実行時にはデー�
 ワード名と変数名は ASCII の大文字小文字を区別しない。
 
 ```tbx
-LET A = 1
-putdec a
+VAR COUNT
+LET count = 1
+putdec COUNT
 CR
 ```
 
@@ -86,15 +87,16 @@ CR
 TBX Next は `#` と `REM` の行コメントを使える。どちらも物理行末または EOF で終わる。
 
 ```tbx
+VAR COUNT
 # This is a comment.
-LET A = 42
-LET A = A + 1 # 行の途中からもコメントにできる
+LET COUNT = 42
+LET COUNT = COUNT + 1 # 行の途中からもコメントにできる
 REM This is also a comment.
 ```
 
-`#` は文字列リテラルや文字リテラルの内部を除き、行の途中でもコメントを開始する。開始後の文字は字句検証されない。`REM` は大文字小文字を区別せず、局所行番号のない論理文の先頭でだけコメントを開始する。したがって `PUTDEC A REM note` は行内コメントにならず、`REM` は通常のワード名や変数名としても使えない。
+`#` は文字列リテラルや文字リテラルの内部を除き、行の途中でもコメントを開始する。開始後の文字は字句検証されない。`REM` は大文字小文字を区別せず、局所行番号のない論理文の先頭でだけコメントを開始する。したがって `PUTDEC COUNT REM note` は行内コメントにならず、`REM` は通常のワード名や変数名としても使えない。
 
-コメントだけの行には局所行番号を付けられない。実行可能な文には局所行番号と行内 `#` コメントを併用できる（例: `100 PRINT A # note`）。局所行番号を分岐先として使う方法は「条件分岐」の `BIF` を参照する。
+コメントだけの行には局所行番号を付けられない。実行可能な文には局所行番号と行内 `#` コメントを併用できる（例: `100 PRINT COUNT # note`）。局所行番号を分岐先として使う方法は「条件分岐」の `BIF` を参照する。
 
 ## 整数と式
 
@@ -110,8 +112,9 @@ REM This is also a comment.
 例:
 
 ```tbx
-LET A = 2 + 3 * 4
-IF (A % 2) = 0
+VAR VALUE
+LET VALUE = 2 + 3 * 4
+IF (VALUE % 2) = 0
   PRINT "even"
 ENDIF
 ```
@@ -124,52 +127,9 @@ ENDIF
 
 ## 変数
 
-### 組み込み変数 A-Z
+### グローバル変数
 
-`A` から `Z` は最初から存在する。
-
-```tbx
-LET A = 10
-LET B = A + 5
-PUTDEC B
-CR
-```
-
-### 1文字組み込み変数をスクラッチとして使う規律
-
-`A` から `Z` は通常のグローバルスカラーである。短命な計算途中値、ループの
-インデックス、座標、乱数値など、単一の処理内で完結する作業値には1文字変数を使う
-ことを推奨する。新しい意味を割り当てる最初の代入付近では、値の意味をコメントに残す。
-
-**原則として、1文字変数の値をランタイムワード呼出しの前後で継続利用しない。**
-
-`I` / `J` / `K` をインデックス、`R` を乱数値、`X` / `Y` を座標に使うことは
-読みやすい慣習になり得るが、各文字の用途は固定しない。
-
-```tbx
-LET I = 1 # sector index
-WHILE I <= 64
-  LET @SECTOR[I] = 0
-  LET I = I + 1
-ENDWH
-```
-
-ランタイムワード呼出しをまたいで必要な値や長寿命の状態には、意味を表す名前付き
-`VAR` を使う。ループのインデックスも例外ではない。
-
-```tbx
-VAR KLINGON_INDEX
-FOR KLINGON_INDEX = 1 TO 3
-  PROCESS_KLINGON KLINGON_INDEX
-NEXT
-```
-
-呼出し元が `I` / `J` / `K` を使用中であることを理由に、呼出し先が同じ1文字変数を
-避けるという暗黙の呼出し規約は置かない。ワード間の値渡しにはデータスタックを使う。
-
-### VAR
-
-追加のグローバル変数は `VAR NAME` で宣言する。
+グローバル変数は `VAR NAME` で明示的に宣言する。起動時に暗黙作成される `A` から `Z` の変数はない。
 
 ```tbx
 VAR COUNT
@@ -178,14 +138,60 @@ PUTDEC COUNT
 CR
 ```
 
-現在の `VAR` はグローバルな名前を公開する。現行 TBX のローカル `VAR` と同じものとして扱わないこと。
+現在の `VAR` はsource-processing session全体へグローバルな名前を公開する。宣言された値はワード呼出しをまたいで保持される。現行 TBX のローカル `VAR` と同じものとして扱わないこと。
+
+一文字名も特別扱いされないため、必要なら通常のグローバルとして宣言できる。
+
+```tbx
+VAR I
+LET I = 10
+PRINT I
+CR
+```
+
+### compiled word のローカルスクラッチ
+
+`DEF ... END` で定義したcompiled wordの本体では、`I,J,K,L,M,N,X,Y` の8個を宣言なしのローカルスクラッチとして使える。
+
+```tbx
+DEF DOUBLE_PLUS_ONE
+  LET I = 1
+  ADD
+  EVAL I
+  ADD
+END
+```
+
+スクラッチには次の規則がある。
+
+- 各compiled word呼出しごとに8個の独立したslotを持つ
+- 呼出し開始時はすべて `0`
+- 呼出し元と呼出し先は別のscratchを持つため、calleeが同じ文字を使ってもcallerの値を変更しない
+- 通常の `END` 到達または `RETURN` でその呼出しが終わると、そのscratchの寿命も終わる
+- top-levelにはscratchはなく、未宣言の `I` などは通常の未定義名エラーになる
+- 各文字の用途は言語仕様として固定されていない
+
+`VAR I` のような同名globalを宣言すること自体は許される。ただしcompiled word内の**裸の値参照 `I`** と **`LET I = ...`** は、そのglobalではなく現在の呼出しのscratchへ解決される。top-levelの `I` は宣言済みglobalへ解決される。
+
+scratch名はglobal binding tableへ公開されない。そのため構文位置が明確にword callやarray参照を要求する場合はscratchが横取りしない。たとえば、その名前のwordまたはarray bindingが存在するなら、statement先頭の `I` と `I()` はword call、`@I[index]` はarray参照として扱われる。
+
+`DEF` headerの局所参照名にはscratch名を使えない。次はエラーになる。
+
+```tbx
+DEF BAD I
+  EVAL I
+END
+```
+
+8個で足りない場合は、まず値の再利用・再計算・小さなdata stack退避・処理の分割を検討する。scratch不足だけを理由に短命値をglobalへ移すことは避ける。長寿命または呼出しをまたいで共有すべき状態には、意味を表す名前の `VAR` を使う。
 
 ### LET
 
-代入は `LET name = expression` で行う。
+代入は `LET name = expression` で行う。top-levelのtargetは宣言済みglobalでなければならない。compiled word内では、固定scratch名への `LET` は現在の呼出しのscratchへ書き込む。
 
 ```tbx
-LET A = A + 1
+VAR COUNT
+LET COUNT = COUNT + 1
 ```
 
 ## グローバル配列
@@ -194,18 +200,19 @@ LET A = A + 1
 
 ```tbx
 DIM @SQUARE[10]
+VAR INDEX
 
-LET I = 1
-WHILE I <= 10
-  LET @SQUARE[I] = I * I
-  LET I = I + 1
+LET INDEX = 1
+WHILE INDEX <= 10
+  LET @SQUARE[INDEX] = INDEX * INDEX
+  LET INDEX = INDEX + 1
 ENDWH
 
-LET I = 1
-WHILE I <= 10
-  PRINT I, " ", @SQUARE[I]
+LET INDEX = 1
+WHILE INDEX <= 10
+  PRINT INDEX, " ", @SQUARE[INDEX]
   CR
-  LET I = I + 1
+  LET INDEX = INDEX + 1
 ENDWH
 ```
 
@@ -294,6 +301,9 @@ END
 
 実際のスタック効果はワード本体に依存するため、定義を読むときは局所参照名だけで引数個数や戻り値個数を判断しないこと。
 
+局所参照名は同じdefinition内のscratchと名前を共有できない。
+`I,J,K,L,M,N,X,Y` をheaderの局所参照名に指定するとdefinition時にエラーになる。
+
 ## 条件分岐
 
 ### 局所行番号と BIF
@@ -301,13 +311,14 @@ END
 `BIF condition, line-number` は条件付きの直接分岐である。conditionを通常の式として評価し、結果が `0` のとき、指定した局所行番号へ分岐する。0以外なら次の文へ進む。
 
 ```tbx
-LET A = 0
-BIF A, 100
+VAR FLAG
+LET FLAG = 0
+BIF FLAG, 100
 PRINT "not reached"
 100 PRINT "done"
 ```
 
-この例では `A` が0なので、`BIF A, 100` は局所行番号 `100` の文へ分岐する。
+この例では `FLAG` が0なので、`BIF FLAG, 100` は局所行番号 `100` の文へ分岐する。
 
 - 分岐先の数値は通常の式ではなく、局所行番号の識別子である
 - 局所行番号は、分岐先として必要な実行可能文だけに付ければよい
@@ -319,9 +330,10 @@ PRINT "not reached"
 `IF` は `ELSIF`, `ELSE`, `ENDIF` を持つ。
 
 ```tbx
-IF A < 0
+VAR VALUE
+IF VALUE < 0
   PRINT "negative"
-ELSIF A = 0
+ELSIF VALUE = 0
   PRINT "zero"
 ELSE
   PRINT "positive"
@@ -339,7 +351,8 @@ ENDIF
 `SELECT` は1つのselectorを複数の `CASE` と比較する。
 
 ```tbx
-SELECT A
+VAR CHOICE
+SELECT CHOICE
 CASE 1
   PRINT "one"
 CASE 2
@@ -363,11 +376,12 @@ ENDSEL
 ### WHILE / ENDWH
 
 ```tbx
-LET A = 0
-WHILE A < 3
-  PUTDEC A
+VAR COUNT
+LET COUNT = 0
+WHILE COUNT < 3
+  PUTDEC COUNT
   CR
-  LET A = A + 1
+  LET COUNT = COUNT + 1
 ENDWH
 ```
 
@@ -376,17 +390,19 @@ ENDWH
 ### DO / UNTIL
 
 ```tbx
-LET A = 0
+VAR COUNT
+LET COUNT = 0
 DO
-  LET A = A + 1
-UNTIL A >= 3
+  LET COUNT = COUNT + 1
+UNTIL COUNT >= 3
 ```
 
 ### FOR / NEXT
 
 ```tbx
-FOR I = 1 TO 5
-  PRINT I
+VAR LOOP_INDEX
+FOR LOOP_INDEX = 1 TO 5
+  PRINT LOOP_INDEX
   CR
 NEXT
 ```
@@ -407,10 +423,11 @@ NEXT
 `WHILE`、`DO`、`FOR` である。
 
 ```tbx
-LET A = 0
-WHILE A < 10
-  LET A = A + 1
-  IF A = 3
+VAR COUNT
+LET COUNT = 0
+WHILE COUNT < 10
+  LET COUNT = COUNT + 1
+  IF COUNT = 3
     BREAK
   ENDIF
 ENDWH
@@ -431,9 +448,11 @@ ENDWH
 `PRINT` は複数の文字列リテラルと整数式をカンマ区切りで連結して出力する。自動では改行しない。
 
 ```tbx
-LET A = 4
-LET B = 5
-PRINT "TOTAL = ", A + B, "!"
+VAR LEFT_VALUE
+VAR RIGHT_VALUE
+LET LEFT_VALUE = 4
+LET RIGHT_VALUE = 5
+PRINT "TOTAL = ", LEFT_VALUE + RIGHT_VALUE, "!"
 CR
 ```
 
@@ -499,7 +518,8 @@ ENDIF
 `RND(N)` は `1..=N` の疑似乱数整数を返す。`N` は正でなければならない。
 
 ```tbx
-LET A = RND(100)
+VAR ROLL
+LET ROLL = RND(100)
 ```
 
 通常の CLI 実行では乱数生成器はホスト側で seed されるため、ユーザープログラムで seed を設定しなくても利用できる。
@@ -527,7 +547,7 @@ seedの意味を変えず、同じsource・入力・seed・`RND`呼出し列か�
 | `GREATER_EQUAL?` | 以上 |
 | `ABS` | 絶対値 |
 
-演算子を使える場所では通常 `A + B` や `A < B` の方が読みやすい。これらの名前付きワードは、スタック志向の定義や低水準の組み合わせで有用である。
+演算子を使える場所では通常 `LEFT_VALUE + RIGHT_VALUE` や `VALUE < LIMIT` の方が読みやすい。これらの名前付きワードは、スタック志向の定義や低水準の組み合わせで有用である。
 
 ## USE
 
@@ -555,7 +575,8 @@ SYNTAX SLET
   EMIT_STORE target
 ENDS
 
-SLET A = 10
+VAR VALUE
+SLET VALUE = 10
 ```
 
 標準ライブラリの `WHILE`, `DO`, `SELECT`, `FOR` も `SYNTAX` で実装されている。`SYNTAX` の操作語彙はコンパイラ拡張向けの低水準 API であり、このクイックリファレンスでは網羅しない。新しい構文を書く場合は `crates/tbx-next/stdlib/basic.tbx`、`crates/tbx-next/src/source_word*.rs` と関連テストを確認すること。
@@ -571,7 +592,7 @@ TBX Next は現行 `tbx` の互換実装ではない。特に次をそのまま�
 | 式をスタックへ積む | `EVAL expression` |
 | 値 | 現在は `i16` 整数のみ |
 | 真偽 | `0` が偽、0 以外が真 |
-| 変数 | A-Z 組み込み + `VAR` によるグローバル変数 |
+| 変数 | persistent stateは `VAR` で宣言するグローバル変数。compiled word内では `I..N,X,Y` が呼出しごとのローカルスクラッチ |
 | 配列 | `DIM @NAME[n]` で宣言し、`@NAME[index]` で要素を読む。`@NAME` 単体は値ではない |
 | 文字列 | 一般的な実行時値ではなく、現在は主に `PRINT` / `USE` などのソース構文で使う |
 
