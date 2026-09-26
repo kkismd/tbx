@@ -2559,6 +2559,92 @@ fn def_header_rejects_scratch_local_reference_before_publication() {
 }
 
 #[test]
+fn def_local_references_are_read_only_store_targets() {
+    for has_global in [false, true] {
+        for statement in ["LET ARG = 1", "EVAL 1\nPOP_TO ARG"] {
+            let mut session = RuntimeDefinitionSession::new_with_named_operators();
+            if has_global {
+                compile_with_var(
+                    "VAR ARG",
+                    &mut session.bindings,
+                    &mut session.globals,
+                    &session.source_words,
+                );
+            }
+            let text = format!("DEF F ARG\n{statement}\nEND");
+            let original_code_len = session.code.len();
+            let (sources, id, error) = session.publish_def_error(&text);
+
+            let target_start = if statement.starts_with("LET") {
+                text.find("ARG =").unwrap()
+            } else {
+                text.rfind("ARG").unwrap()
+            };
+            assert!(matches!(
+                error,
+                SourceProcessorError::SourceWord(SourceWordError::DefBodyCompile { .. })
+            ));
+            assert_eq!(
+                error.primary_span(),
+                Some(span(sources.view(), id, target_start, target_start + 3))
+            );
+            assert_eq!(session.bindings.get(&name("F")), None);
+            let accepted_body_instructions = usize::from(statement.starts_with("EVAL"));
+            assert_eq!(
+                session.code.len(),
+                original_code_len + accepted_body_instructions
+            );
+            assert!(
+                (original_code_len..session.code.len()).all(|index| !matches!(
+                    session
+                        .code
+                        .instruction_view()
+                        .get(address(index))
+                        .expect("published instruction should exist"),
+                    Instruction::StoreVar(_) | Instruction::StoreScratch(_)
+                ))
+            );
+        }
+    }
+}
+
+#[test]
+fn def_local_reference_reads_shadow_same_named_global() {
+    let mut session = RuntimeDefinitionSession::new_with_named_operators();
+    compile_with_var(
+        "VAR ARG",
+        &mut session.bindings,
+        &mut session.globals,
+        &session.source_words,
+    );
+    session.publish_def("DEF F ARG\nEVAL ARG\nEND");
+
+    assert_eq!(
+        session.code.instruction_view().get(address(0)),
+        Ok(&Instruction::CopyFromCallBase { offset: 1 })
+    );
+}
+
+#[test]
+fn all_scratch_names_remain_invalid_local_references() {
+    let mut session = RuntimeDefinitionSession::new_with_named_operators();
+    for scratch in ["I", "J", "K", "L", "M", "N", "X", "Y"] {
+        let source = format!("DEF BAD {scratch}\nEND");
+        let initial_code_len = session.code.len();
+        let initial_word_len = session.words.len();
+        let (_sources, _id, error) = session.publish_def_error(&source);
+
+        assert!(matches!(
+            error,
+            SourceProcessorError::SourceWord(SourceWordError::DefLocalNameConflict { .. })
+        ));
+        assert_eq!(session.bindings.get(&name("BAD")), None);
+        assert_eq!(session.code.len(), initial_code_len);
+        assert_eq!(session.words.len(), initial_word_len);
+    }
+}
+
+#[test]
 fn scratch_context_flows_through_structured_bodies_and_nested_calls() {
     let mut session = RuntimeDefinitionSession::new();
     session.publish_def("DEF CALLEE\nLET I = 2\nEND");
