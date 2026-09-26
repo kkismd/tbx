@@ -15,6 +15,14 @@ use crate::word::PublishedWords;
 use crate::word_lookup::PublishedWordLookup;
 use std::io::Write;
 
+mod sim65_e2e;
+
+struct Evaluation {
+    statistics: TestImageStatistics,
+    host_output: Option<Vec<u8>>,
+    artifact: Option<crate::static_image::bytecode_6502::BytecodeArtifact>,
+}
+
 struct Fixture {
     bindings: Bindings,
     primitives: PrimitiveRegistry,
@@ -97,7 +105,7 @@ impl Fixture {
             )
             .with_global_arrays(&mut self.arrays),
         )
-        .expect("source compiles")
+        .unwrap_or_else(|error| panic!("compile source: {error:?}"))
     }
 }
 
@@ -114,7 +122,7 @@ impl Write for Output {
     }
 }
 
-fn evaluate(source: &str, display_name: &str, compare_execution: bool) -> TestImageStatistics {
+fn evaluate(source: &str, display_name: &str, compare_execution: bool) -> Evaluation {
     let mut sources = SourceTexts::new();
     let stdlib_id = register_embedded_standard_library(&mut sources);
     let program_id = sources.register(source, display_name);
@@ -164,7 +172,7 @@ fn evaluate(source: &str, display_name: &str, compare_execution: bool) -> TestIm
             &fixture.globals,
             &fixture.arrays,
         )
-        .expect("prime source encodes as M32 bytecode");
+        .unwrap_or_else(|error| panic!("encode prime source as M32 bytecode: {error:?}"));
         assert!(!artifact.code().is_empty());
         assert_eq!(artifact.entry_offset(), 0);
         Some(artifact)
@@ -182,16 +190,16 @@ fn evaluate(source: &str, display_name: &str, compare_execution: bool) -> TestIm
         &mut poc_output,
     )
     .expect("source lowers and executes in the reference VM");
-    if let Some(artifact) = encoded_artifact {
+    if let Some(ref artifact) = encoded_artifact {
         assert_eq!(
             artifact.global_slot_count() as usize,
             poc.statistics.global_count
         );
     }
-    if let Some((host, host_output)) = host {
+    if let Some((ref host, ref host_output)) = host {
         assert!(poc.halted);
         assert_eq!(host.outcome(), crate::vm::RunOutcome::Halted);
-        assert_eq!(host_output, poc_output.0);
+        assert_eq!(host_output, &poc_output.0);
         assert_eq!(
             host.data_stack()
                 .iter()
@@ -200,7 +208,11 @@ fn evaluate(source: &str, display_name: &str, compare_execution: bool) -> TestIm
             poc.data_stack
         );
     }
-    poc.statistics
+    Evaluation {
+        statistics: poc.statistics,
+        host_output: host.map(|(_, output)| output),
+        artifact: encoded_artifact,
+    }
 }
 
 #[test]
@@ -209,7 +221,8 @@ fn prime_source_matches_host_execution_and_reports_static_image() {
         include_str!("../../../../../docs/next/examples/prime.tbx"),
         "prime.tbx",
         true,
-    );
+    )
+    .statistics;
     assert!(statistics.instruction_count > 0);
     assert_eq!(
         statistics.instruction_count,
@@ -227,13 +240,15 @@ fn representative_sources_compile_and_lower() {
         include_str!("../../../../../docs/next/examples/mandelbrot.tbx"),
         "mandelbrot.tbx",
         false,
-    );
+    )
+    .statistics;
     assert!(mandelbrot.instruction_count > 0);
     let grades = evaluate(
         include_str!("../../../../../docs/next/examples/grades.tbx"),
         "grades.tbx",
         false,
-    );
+    )
+    .statistics;
     assert!(grades.instruction_count > 0);
     assert!(!grades.array_lengths.is_empty());
 }
