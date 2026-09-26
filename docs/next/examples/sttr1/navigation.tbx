@@ -93,8 +93,7 @@ DEF NAVIGATE
     PRINT "COURSE (0 CANCEL, 10-89):"
     CR
     IF INPUT?()
-      LET COURSE = DUP()
-      DROP
+      POP_TO COURSE
       IF COURSE = 0
         LET NAVIGATION_VALID = 1
         RETURN
@@ -104,8 +103,7 @@ DEF NAVIGATE
         PRINT "WARP (0-80):"
         CR
         IF INPUT?()
-          LET WARP = DUP()
-          DROP
+          POP_TO WARP
           IF WARP >= 0 AND WARP <= 80
             # Device 1 is warp engines; damaged engines cap warp at .2.
             IF @DAMAGE[1] < 0 AND WARP > 2
