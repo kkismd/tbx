@@ -1963,29 +1963,54 @@ pub(crate) fn let_source_word(
             .append_mapped_instruction(Instruction::StoreArrayElement(target), target_token.span());
         staging
     } else {
-        if let Some(slot) = context
-            .local_references
-            .and_then(|references| references.resolve_scratch(source_name))
-        {
-            let mut staging = context.stage_expression(rhs_tokens, equal_span)?;
-            staging.append_mapped_instruction(
-                Instruction::StoreScratch(crate::instruction::ScratchSlotOperand::from_slot(slot)),
-                target_token.span(),
-            );
-            context.commit_staging(&staging)?;
-            return Ok(());
-        }
-        let target = context
-            .resolve_variable_target(source_name)
-            .map_err(|source| SourceWordError::LetTarget {
-                span: target_token.span(),
-                source,
-            })?;
+        let store = resolve_scalar_store_instruction(context, source_name, target_token.span())?;
         let mut staging = context.stage_expression(rhs_tokens, equal_span)?;
-        staging.append_mapped_instruction(Instruction::StoreVar(target), target_token.span());
+        staging.append_mapped_instruction(store, target_token.span());
         staging
     };
     context.commit_staging(&staging)
+}
+
+pub(crate) fn pop_to_source_word(
+    context: &mut NativeSourceWordContext<'_, '_>,
+) -> Result<(), SourceWordError> {
+    let target_token = {
+        let reader = context.statement_reader_mut();
+        let target = reader.read_name().map_err(let_reader_error)?;
+        reader.finish().map_err(let_reader_error)?;
+        target
+    };
+    let source_name = context
+        .view()
+        .slice(target_token.span())
+        .map_err(|source| SourceWordError::Source { source })?;
+    let instruction = resolve_scalar_store_instruction(context, source_name, target_token.span())?;
+    let mut staging = ExpressionStaging::new();
+    staging.append_mapped_instruction(instruction, target_token.span());
+    context.commit_staging(&staging)
+}
+
+fn resolve_scalar_store_instruction(
+    context: &NativeSourceWordContext<'_, '_>,
+    source_name: &str,
+    target_span: SourceSpan,
+) -> Result<Instruction, SourceWordError> {
+    if let Some(slot) = context
+        .local_references
+        .and_then(|references| references.resolve_scratch(source_name))
+    {
+        Ok(Instruction::StoreScratch(
+            crate::instruction::ScratchSlotOperand::from_slot(slot),
+        ))
+    } else {
+        let target = context
+            .resolve_variable_target(source_name)
+            .map_err(|source| SourceWordError::LetTarget {
+                span: target_span,
+                source,
+            })?;
+        Ok(Instruction::StoreVar(target))
+    }
 }
 
 pub(crate) fn pack_source_word(
