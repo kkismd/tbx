@@ -55,6 +55,18 @@ jobs:
             - uses: Swatinem/rust-cache@v2
             - run: cargo test -p tbx-next
 
+    next-6502-smoke:
+        name: Next / 6502 Smoke
+        runs-on: ubuntu-latest
+        steps:
+            - uses: actions/checkout@v4
+            - uses: dtolnay/rust-toolchain@stable
+              with:
+                  toolchain: stable
+            - run: sudo apt-get update && sudo apt-get install --yes cc65
+            - run: cargo test -p tbx-next --test sim65_smoke
+            - run: cargo test -p tbx-next --test sim65_smoke -- --ignored
+
     clippy:
         name: Workspace / Clippy
         runs-on: ubuntu-latest

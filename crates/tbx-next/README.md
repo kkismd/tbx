@@ -26,6 +26,20 @@ cargo test -p tbx-next
 cargo run -p tbx-next --bin tbx-next
 ```
 
+## 6502 assembly smoke checks
+
+The explicit sim65 smoke check requires the cc65 toolchain (`ca65`, `ld65`,
+`sim65`, and `sim6502.lib`). On Ubuntu, install it with `sudo apt-get install
+cc65`. Run the dedicated checks with:
+
+```sh
+cargo test -p tbx-next --test sim65_smoke -- --ignored
+```
+
+The regular `cargo test -p tbx-next` and `cargo run -p tbx-next` commands do not
+invoke cc65. The dedicated check fails with a tool-specific diagnostic if a
+required executable is unavailable.
+
 TBX Next 全体の案内は [`docs/next/README.md`](../../docs/next/README.md) を参照してください。
 
 ## ランタイムワード定義の局所参照名
