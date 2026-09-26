@@ -587,6 +587,7 @@ mod tests {
     fn image(code: Vec<LogicalInstruction>) -> StaticImage {
         StaticImage {
             code,
+            entry: CodePosition(0),
             texts: vec!["hello".into()],
             global_count: 2,
             array_lengths: vec![2],

@@ -10,7 +10,7 @@ use crate::random::RandomState;
 use crate::random_primitive::register_random_primitives;
 use crate::source_processor::{run_unit, SourceCompileContext, SourceExecutionContext};
 use crate::stack_primitive::register_stack_primitives;
-use crate::static_image::{test_lower_and_run, TestImageStatistics};
+use crate::static_image::{test_lower_and_encode, test_lower_and_run, TestImageStatistics};
 use crate::word::PublishedWords;
 use crate::word_lookup::PublishedWordLookup;
 use std::io::Write;
@@ -150,14 +150,31 @@ fn evaluate(source: &str, display_name: &str, compare_execution: bool) -> TestIm
 
     let temporary = unit.instructions();
     let published = fixture.published_code.instruction_view();
-    // The temporary owner is first, so its entry is exactly CodePosition(0).
+    let entry = unit.entry_location();
     assert_eq!(
         unit.entry(),
         crate::instruction::InstructionAddress::from_index(0)
     );
+    let encoded_artifact = if display_name == "prime.tbx" {
+        let artifact = test_lower_and_encode(
+            &[temporary, published],
+            entry,
+            &fixture.words,
+            fixture.primitive_words,
+            &fixture.globals,
+            &fixture.arrays,
+        )
+        .expect("prime source encodes as M32 bytecode");
+        assert!(!artifact.code().is_empty());
+        assert_eq!(artifact.entry_offset(), 0);
+        Some(artifact)
+    } else {
+        None
+    };
     let mut poc_output = Output::default();
     let poc = test_lower_and_run(
         &[temporary, published],
+        entry,
         &fixture.words,
         fixture.primitive_words,
         &fixture.globals,
@@ -165,6 +182,12 @@ fn evaluate(source: &str, display_name: &str, compare_execution: bool) -> TestIm
         &mut poc_output,
     )
     .expect("source lowers and executes in the reference VM");
+    if let Some(artifact) = encoded_artifact {
+        assert_eq!(
+            artifact.global_slot_count() as usize,
+            poc.statistics.global_count
+        );
+    }
     if let Some((host, host_output)) = host {
         assert!(poc.halted);
         assert_eq!(host.outcome(), crate::vm::RunOutcome::Halted);
