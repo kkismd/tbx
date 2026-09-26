@@ -2470,6 +2470,79 @@ fn compiled_word_scratch_is_independent_from_an_explicit_same_named_global() {
 }
 
 #[test]
+fn pop_to_uses_invocation_local_scratch_and_preserves_same_named_global() {
+    let mut session = RuntimeDefinitionSession::new_with_named_operators();
+    let global_i = register_test_global(&mut session.globals, &mut session.bindings, "I");
+    session
+        .globals
+        .view_mut()
+        .write(global_i, value(91))
+        .expect("global I should accept a test value");
+    let (_, _, _) = session.publish_def("DEF SCRATCH\nEVAL 7\nPOP_TO I\nEVAL I\nEND");
+    let (sources, id) = source("EVAL SCRATCH()");
+    let caller = compile_source(
+        sources.view(),
+        id,
+        SourceCompileContext::with_source_words_and_operators(
+            &session.bindings,
+            session.source_words.lookup(),
+            session.operators.lookup(),
+        ),
+    )
+    .expect("scratch caller should compile");
+    let code_spaces = [session.code.instruction_view()];
+    let source_mappings = [session.code.source_mapping()];
+    let result = run_unit(
+        &caller,
+        SourceExecutionContext::with_code_spaces_and_mappings(
+            &session.bindings,
+            &code_spaces,
+            &source_mappings,
+            PublishedWordLookup::new(&session.words),
+            session.primitives.lookup(),
+        )
+        .with_globals(session.globals.view()),
+    )
+    .expect("compiled word should run");
+
+    assert_eq!(result.data_stack(), [value(7)]);
+    assert_eq!(session.globals.view().read(global_i), Ok(value(91)));
+}
+
+#[test]
+fn nested_pop_to_scratch_store_does_not_change_caller_invocation() {
+    let mut session = RuntimeDefinitionSession::new_with_named_operators();
+    session.publish_def("DEF CALLEE\nEVAL 2\nPOP_TO I\nEND");
+    session.publish_def("DEF CALLER\nEVAL 1\nPOP_TO I\nCALLEE\nEVAL I\nEND");
+    let (sources, id) = source("EVAL CALLER()");
+    let caller = compile_source(
+        sources.view(),
+        id,
+        SourceCompileContext::with_source_words_and_operators(
+            &session.bindings,
+            session.source_words.lookup(),
+            session.operators.lookup(),
+        ),
+    )
+    .expect("CALLER should compile");
+    let code_spaces = [session.code.instruction_view()];
+    let source_mappings = [session.code.source_mapping()];
+    let result = run_unit(
+        &caller,
+        SourceExecutionContext::with_code_spaces_and_mappings(
+            &session.bindings,
+            &code_spaces,
+            &source_mappings,
+            PublishedWordLookup::new(&session.words),
+            session.primitives.lookup(),
+        ),
+    )
+    .expect("CALLER should run");
+
+    assert_eq!(result.data_stack(), [value(1)]);
+}
+
+#[test]
 fn def_header_rejects_scratch_local_reference_before_publication() {
     let mut session = RuntimeDefinitionSession::new_with_named_operators();
     let initial_words_len = session.words.len();

@@ -26,6 +26,20 @@ fn m20_environment_supports_variables_definitions_stack_words_and_output() {
 }
 
 #[test]
+fn batch_execution_runs_pop_to_from_bootstrap_through_runtime() {
+    let (sources, source_id) = source(
+        "VAR VALUE\nEVAL 42\nPOP_TO VALUE\nPRINT VALUE\nCR",
+        "program.tbx",
+    );
+    let mut writer = RecordingWriter::default();
+
+    let result = success(execute_registered_source(&sources, source_id, &mut writer));
+
+    assert_eq!(result.data_stack(), []);
+    assert_eq!(writer.text(), "42\n");
+}
+
+#[test]
 fn single_letter_global_works_after_an_explicit_batch_declaration() {
     let (sources, source_id) = source("VAR I\nLET I = 1\nEVAL I", "program.tbx");
     let mut writer = RecordingWriter::default();

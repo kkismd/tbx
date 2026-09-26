@@ -2,7 +2,7 @@ use crate::binding::{Binding, BindingInsertError, Bindings};
 use crate::name::NormalizedName;
 use crate::source_word::{
     def_source_word, dim_source_word, eval_source_word, let_source_word, pack_source_word,
-    print_source_word, syntax_source_word, use_source_word, var_source_word,
+    pop_to_source_word, print_source_word, syntax_source_word, use_source_word, var_source_word,
     NativeSourceWordHandler, NativeStructuredSourceWordStartHandler, SourceWordId,
     SourceWordRegistry, SourceWordSyntaxMarker, SourceWordSyntaxMarkerRole,
 };
@@ -125,6 +125,7 @@ pub(crate) fn register_builtin_source_words(
     let var_name = builtin_name("VAR");
     let dim_name = builtin_name("DIM");
     let let_name = builtin_name("LET");
+    let pop_to_name = builtin_name("POP_TO");
     let pack_name = builtin_name("PACK");
     let eval_name = builtin_name("EVAL");
     let def_name = builtin_name("DEF");
@@ -140,6 +141,9 @@ pub(crate) fn register_builtin_source_words(
         .map_err(SourceWordBootstrapError::from_precheck_error)?;
     bindings
         .validate_new_name(&let_name)
+        .map_err(SourceWordBootstrapError::from_precheck_error)?;
+    bindings
+        .validate_new_name(&pop_to_name)
         .map_err(SourceWordBootstrapError::from_precheck_error)?;
     bindings
         .validate_new_name(&pack_name)
@@ -182,6 +186,9 @@ pub(crate) fn register_builtin_source_words(
         .expect("prechecked DIM source word should remain available");
     let let_ = register_native_source_word(source_words, bindings, let_name, let_source_word)
         .expect("prechecked LET source word should remain available");
+    let pop_to =
+        register_native_source_word(source_words, bindings, pop_to_name, pop_to_source_word)
+            .expect("prechecked POP_TO source word should remain available");
     let pack = register_native_source_word(source_words, bindings, pack_name, pack_source_word)
         .expect("prechecked PACK source word should remain available");
     let eval = register_native_source_word(source_words, bindings, eval_name, eval_source_word)
@@ -250,6 +257,7 @@ pub(crate) fn register_builtin_source_words(
         var,
         dim,
         let_,
+        pop_to,
         pack,
         eval,
         def,
@@ -264,6 +272,7 @@ pub(crate) struct BuiltinSourceWordIds {
     var: SourceWordId,
     dim: SourceWordId,
     let_: SourceWordId,
+    pop_to: SourceWordId,
     pack: SourceWordId,
     eval: SourceWordId,
     def: SourceWordId,
@@ -283,6 +292,10 @@ impl BuiltinSourceWordIds {
 
     pub(crate) const fn let_(self) -> SourceWordId {
         self.let_
+    }
+
+    pub(crate) const fn pop_to(self) -> SourceWordId {
+        self.pop_to
     }
 
     pub(crate) const fn pack(self) -> SourceWordId {
@@ -1019,13 +1032,15 @@ mod tests {
         let ids = register_builtin_source_words(&mut source_words, &mut bindings)
             .expect("empty namespace should accept built-in source words");
 
-        assert_eq!(source_words.len(), 9);
+        assert_eq!(source_words.len(), 10);
         assert_source_word_binding(&bindings, "VAR", ids.var());
         assert_source_word_binding(&bindings, "var", ids.var());
         assert_source_word_binding(&bindings, "DIM", ids.dim());
         assert_source_word_binding(&bindings, "dim", ids.dim());
         assert_source_word_binding(&bindings, "LET", ids.let_());
         assert_source_word_binding(&bindings, "let", ids.let_());
+        assert_source_word_binding(&bindings, "POP_TO", ids.pop_to());
+        assert_source_word_binding(&bindings, "pop_to", ids.pop_to());
         assert_source_word_binding(&bindings, "PACK", ids.pack());
         assert_source_word_binding(&bindings, "pack", ids.pack());
         assert_source_word_binding(&bindings, "EVAL", ids.eval());
@@ -1136,6 +1151,27 @@ mod tests {
         assert_eq!(source_words.len(), 1);
         assert_eq!(bindings.get(&name("VAR")), None);
         assert_source_word_binding(&bindings, "LET", existing);
+    }
+
+    #[test]
+    fn builtin_source_word_bootstrap_pop_to_conflict_does_not_publish_prefix() {
+        let mut source_words = SourceWordRegistry::new();
+        let mut bindings = Bindings::new();
+        let existing = register_native_source_word(
+            &mut source_words,
+            &mut bindings,
+            name("pop_to"),
+            source_handler,
+        )
+        .expect("test POP_TO source word should register");
+
+        let result = register_builtin_source_words(&mut source_words, &mut bindings);
+
+        assert_eq!(result, Err(SourceWordBootstrapError::NameConflict));
+        assert_eq!(source_words.len(), 1);
+        assert_eq!(bindings.get(&name("VAR")), None);
+        assert_eq!(bindings.get(&name("LET")), None);
+        assert_source_word_binding(&bindings, "POP_TO", existing);
     }
 
     #[test]

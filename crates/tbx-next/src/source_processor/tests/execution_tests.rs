@@ -58,6 +58,78 @@ fn source_to_vm_e2e_publishes_user_var_for_later_let_in_same_source() {
 }
 
 #[test]
+fn source_to_vm_e2e_pop_to_stores_and_consumes_global_stack_top() {
+    let (words, primitives, operators, source_words, mut bindings, mut globals, _variables) =
+        global_source_fixture();
+    let (sources, id) = source("VAR VALUE\nEVAL 42\nPOP_TO VALUE");
+    let unit = compile_source(
+        sources.view(),
+        id,
+        SourceCompileContext::with_source_word_publication_and_operators(
+            &mut bindings,
+            source_words.lookup(),
+            operators.lookup(),
+            &mut globals,
+        ),
+    )
+    .expect("POP_TO global target should compile");
+    let Some(Binding::Variable(value_id)) = bindings.get(&name("VALUE")).copied() else {
+        panic!("VALUE should be published by VAR");
+    };
+    let result = run_unit(
+        &unit,
+        SourceExecutionContext::with_source_words_and_operators(
+            &bindings,
+            source_words.lookup(),
+            operators.lookup(),
+            PublishedWordLookup::new(&words),
+            primitives.lookup(),
+        )
+        .with_mut_globals(globals.view_mut()),
+    )
+    .expect("POP_TO unit should run");
+
+    assert_eq!(result.outcome(), RunOutcome::Halted);
+    assert_eq!(result.data_stack(), []);
+    assert_eq!(globals.view().read(value_id), Ok(value(42)));
+    assert_eq!(
+        unit.instructions().get(address(1)),
+        Ok(&Instruction::StoreVar(value_id))
+    );
+    assert_eq!(
+        unit.source_mapping()
+            .source_span(unit.instructions().location(address(1))),
+        Ok(Some(span(sources.view(), id, 25, 30)))
+    );
+}
+
+#[test]
+fn pop_to_rejects_missing_unknown_extra_and_array_targets_during_processing() {
+    for statement in [
+        "POP_TO",
+        "POP_TO MISSING",
+        "POP_TO VALUE EXTRA",
+        "POP_TO @A[1]",
+    ] {
+        let (_words, _primitives, operators, source_words, mut bindings, mut globals, _variables) =
+            global_source_fixture();
+        let source_text = format!("VAR VALUE\n{statement}");
+        let (sources, id) = source(&source_text);
+        let result = compile_source(
+            sources.view(),
+            id,
+            SourceCompileContext::with_source_word_publication_and_operators(
+                &mut bindings,
+                source_words.lookup(),
+                operators.lookup(),
+                &mut globals,
+            ),
+        );
+        assert!(result.is_err(), "{statement:?} should be rejected");
+    }
+}
+
+#[test]
 fn source_to_vm_e2e_successful_var_survives_later_statement_failure() {
     let (_words, _primitives, operators, source_words, mut bindings, mut globals, _variables) =
         global_source_fixture();
