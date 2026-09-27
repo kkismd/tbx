@@ -52,6 +52,47 @@ CR\n",
 }
 
 #[test]
+fn sttr1_torpedo_klingon_resolution_preserves_klingon_index_with_and_without_hit() {
+    let mut source = std::fs::read_to_string(example_path("sttr1/main.tbx"))
+        .expect("STTR1 example should be readable");
+    source.push_str(
+        "LET KLINGONS_HERE = 1\n\
+LET KLINGONS_LEFT = 1\n\
+LET @KLINGON_X[1] = 6\n\
+LET @KLINGON_Y[1] = 4\n\
+LET @KLINGON_E[1] = 200\n\
+LET @SECTOR[30] = 2\n\
+LET TORPEDO_HIT = 2\n\
+LET KLINGON_INDEX = 2\n\
+TORPEDO_RESOLVE_HIT(6, 4, 30)\n\
+PRINT \"TORPEDO_INDEX_HIT \", KLINGON_INDEX, \" \", KLINGONS_HERE\nCR\n\
+LET KLINGON_INDEX = 3\n\
+TORPEDO_RESOLVE_HIT(1, 1, 1)\n\
+PRINT \"TORPEDO_INDEX_MISS \", KLINGON_INDEX, \" \", KLINGONS_HERE\nCR\n",
+    );
+    let (sources, standard_library_id, source_id) =
+        sttr1_sources_with_standard_library(STDLIB_SOURCE, &source);
+    let mut writer = RecordingWriter::default();
+
+    let result = success(execute_registered_sources_with_filesystem_and_seed(
+        sources,
+        standard_library_id,
+        source_id,
+        &mut writer,
+        None,
+        30,
+    ));
+
+    assert_eq!(output_values(writer.text(), "TORPEDO_INDEX_HIT "), [2, 0]);
+    assert_eq!(output_values(writer.text(), "TORPEDO_INDEX_MISS "), [3, 0]);
+    assert_eq!(
+        writer.text().matches("PHOTON TORPEDO HIT KLINGON").count(),
+        1
+    );
+    assert_eq!(result.data_stack(), []);
+}
+
+#[test]
 fn sttr1_phaser_deducts_energy_then_retaliates_and_updates_klingon_state() {
     let mut source = std::fs::read_to_string(example_path("sttr1/main.tbx"))
         .expect("STTR1 example should be readable");
