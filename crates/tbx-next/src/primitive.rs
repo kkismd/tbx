@@ -96,10 +96,6 @@ impl<'stack, 'cap> PrimitiveContext<'stack, 'cap> {
             .map_err(|source| PrimitiveError::DataStackUnderflow { source })
     }
 
-    pub(crate) fn data_stack_is_empty(&self) -> bool {
-        self.data_stack.is_empty()
-    }
-
     pub(crate) fn data_stack_depth(&self) -> usize {
         self.data_stack.depth()
     }

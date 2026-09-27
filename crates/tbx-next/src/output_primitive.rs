@@ -63,10 +63,6 @@ fn primitive_bootstrap_precheck_error(error: BindingInsertError) -> PrimitiveBoo
 }
 
 fn putdec(context: &mut PrimitiveContext<'_, '_>) -> Result<(), PrimitiveError> {
-    if context.data_stack_is_empty() {
-        return Ok(());
-    }
-
     let value = context.peek()?;
     let text = format_putdec_value(value);
     context.write_output(&text)?;
@@ -77,10 +73,6 @@ fn putdec(context: &mut PrimitiveContext<'_, '_>) -> Result<(), PrimitiveError> 
 }
 
 fn putchr(context: &mut PrimitiveContext<'_, '_>) -> Result<(), PrimitiveError> {
-    if context.data_stack_is_empty() {
-        return Ok(());
-    }
-
     let value = context.peek()?.as_integer();
     let byte = u8::try_from(value).map_err(|_| PrimitiveError::AsciiOutOfRange { value })?;
     if byte > 0x7f {
@@ -168,14 +160,35 @@ mod tests {
     }
 
     #[test]
-    fn print_succeeds_without_output_on_empty_stack() {
-        let (vm, output, result) = run_calls(|code, words| {
-            code.append(Instruction::Call(words.putdec()));
-        });
+    fn putdec_and_putchr_fail_without_operands() {
+        for putchr in [false, true] {
+            let (primitives, words, _, output_words) = bootstrapped_output_words();
+            let mut code = InstructionSequence::new();
+            let call = code.append(Instruction::Call(if putchr {
+                output_words.putchr()
+            } else {
+                output_words.putdec()
+            }));
+            code.append(Instruction::Halt);
+            let mut output = TestOutput::new();
+            let entry = crate::instruction::InstructionAddress::from_index(0);
+            let mut vm = Vm::new(code.view(), entry).expect("test entry should be valid");
 
-        assert_eq!(result, Ok(RunOutcome::Halted));
-        assert!(output.chunks().is_empty());
-        assert_eq!(vm.data_stack_depth(), 0);
+            let error = vm
+                .step(execution(&code, &words, &primitives).with_output(&mut output))
+                .expect_err("empty output primitive should underflow");
+
+            assert!(matches!(
+                error.kind(),
+                VmErrorKind::PrimitiveFailed {
+                    source: PrimitiveError::DataStackUnderflow { .. },
+                    ..
+                }
+            ));
+            assert!(output.chunks().is_empty());
+            assert_eq!(vm.data_stack_depth(), 0);
+            assert_eq!(vm.instruction_pointer(), code.view().location(call));
+        }
     }
 
     #[test]

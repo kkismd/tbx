@@ -499,24 +499,24 @@ impl ReferenceVm {
                 self.data.swap(depth - 1, depth - 2);
             }
             PrimitiveOp::PutDec | PrimitiveOp::PutChr => {
-                if let Some(&value) = self.data.last() {
-                    let text = if op == PrimitiveOp::PutDec {
-                        value.to_string()
-                    } else {
-                        let byte = u8::try_from(value)
-                            .ok()
-                            .filter(|byte| *byte <= 0x7f)
-                            .ok_or_else(|| fail(RuntimeErrorKind::InvalidCharacter))?;
-                        char::from(byte).to_string()
-                    };
-                    capabilities
-                        .output
-                        .as_mut()
-                        .ok_or_else(|| fail(RuntimeErrorKind::OutputUnavailable))?
-                        .write(&text)
-                        .map_err(|_| fail(RuntimeErrorKind::OutputFailed))?;
-                    self.data.pop();
-                }
+                // ADR #2083 requires output words to report underflow when their operand is missing.
+                let value = unary()?;
+                let text = if op == PrimitiveOp::PutDec {
+                    value.to_string()
+                } else {
+                    let byte = u8::try_from(value)
+                        .ok()
+                        .filter(|byte| *byte <= 0x7f)
+                        .ok_or_else(|| fail(RuntimeErrorKind::InvalidCharacter))?;
+                    char::from(byte).to_string()
+                };
+                capabilities
+                    .output
+                    .as_mut()
+                    .ok_or_else(|| fail(RuntimeErrorKind::OutputUnavailable))?
+                    .write(&text)
+                    .map_err(|_| fail(RuntimeErrorKind::OutputFailed))?;
+                self.data.pop();
             }
             PrimitiveOp::Cr => capabilities
                 .output
@@ -993,17 +993,21 @@ mod tests {
         assert_eq!(output.chunks(), ["-42", "A", "\n"]);
         assert_eq!(vm.data, []);
 
-        let mut empty_output = make_vm(vec![
-            LogicalInstruction::CallPrimitive(PrimitiveOp::PutDec),
-            LogicalInstruction::CallPrimitive(PrimitiveOp::PutChr),
-            LogicalInstruction::Halt,
-        ]);
-        assert_eq!(
-            empty_output.run(None, None, None),
-            Ok(RunOutcome::Halted),
-            "empty PUTDEC and PUTCHR are no-ops like the host primitives"
-        );
-        assert_eq!(empty_output.data, []);
+        for op in [PrimitiveOp::PutDec, PrimitiveOp::PutChr] {
+            let mut vm = make_vm(vec![
+                LogicalInstruction::CallPrimitive(op),
+                LogicalInstruction::Halt,
+            ]);
+            let mut output = TestOutput::new();
+            let error = vm
+                .run(Some(&mut output), None, None)
+                .expect_err("empty output primitive should underflow");
+
+            assert_eq!(error.kind, RuntimeErrorKind::DataUnderflow, "{op:?}");
+            assert!(output.chunks().is_empty(), "{op:?}");
+            assert_eq!(vm.data, [], "{op:?}");
+            assert_eq!(vm.position(), CodePosition(0), "{op:?}");
+        }
     }
 
     #[test]
