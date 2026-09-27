@@ -99,6 +99,77 @@ fn require_matching_stdout(actual: &[u8], expected: &[u8]) -> Result<(), String>
     }
 }
 
+fn tool_version(tool: &str) -> Result<String, String> {
+    let output = run_tool(
+        tool,
+        &[OsStr::new("--version")],
+        Path::new("."),
+        "tool version",
+    )?;
+    require_success(&output, "tool version")?;
+    let version = if output.stdout.is_empty() {
+        &output.stderr
+    } else {
+        &output.stdout
+    };
+    Ok(String::from_utf8_lossy(version).trim().to_owned())
+}
+
+fn vm_object_segments(output: &str) -> Result<Vec<(String, usize)>, String> {
+    let mut segments = Vec::new();
+    let mut name = None;
+    for line in output.lines() {
+        let line = line.trim();
+        if let Some(value) = line.strip_prefix("Name:") {
+            name = Some(value.trim().trim_matches('"').to_owned());
+        } else if let Some(value) = line.strip_prefix("Size:") {
+            let name = name
+                .take()
+                .ok_or_else(|| "od65 segment size has no preceding name".to_owned())?;
+            let value = value.trim();
+            let size = if let Some(hex) = value.strip_prefix("0x") {
+                usize::from_str_radix(hex, 16).ok()
+            } else {
+                value.parse().ok()
+            }
+            .ok_or_else(|| format!("invalid od65 segment size: {value}"))?;
+            segments.push((name, size));
+        }
+    }
+    if segments.is_empty() {
+        return Err("od65 reported no object segments".to_owned());
+    }
+    Ok(segments)
+}
+
+fn git_revision(crate_root: &Path) -> Result<String, String> {
+    let output = run_tool(
+        "git",
+        &[OsStr::new("rev-parse"), OsStr::new("HEAD")],
+        crate_root,
+        "read source revision",
+    )?;
+    require_success(&output, "read source revision")?;
+    Ok(String::from_utf8_lossy(&output.stdout).trim().to_owned())
+}
+
+fn cycle_count(report: &[u8], expected_stdout: &[u8]) -> Result<String, String> {
+    let report = report
+        .strip_prefix(expected_stdout)
+        .ok_or_else(|| "sim65 cycle measurement changed program stdout".to_owned())?;
+    let report = String::from_utf8_lossy(report);
+    let count = report
+        .split_whitespace()
+        .find(|field| {
+            field
+                .trim_matches(|c: char| !c.is_ascii_digit())
+                .parse::<u64>()
+                .is_ok()
+        })
+        .ok_or_else(|| format!("could not parse sim65 cycle report: {}", report.trim()))?;
+    Ok(count.trim_matches(|c: char| !c.is_ascii_digit()).to_owned())
+}
+
 fn build_and_run(
     artifact: &BytecodeArtifact,
     expected_stdout: &[u8],
@@ -112,6 +183,11 @@ fn build_and_run(
     let runtime_object = temp.0.join("vm.o");
     let wrapper_object = temp.0.join("wrapper.o");
     let executable = temp.0.join("program");
+    let sample = if cycle_limit == PRIME_CYCLE_LIMIT {
+        "prime"
+    } else {
+        "mandelbrot"
+    };
 
     fs::write(&program, artifact.code())
         .map_err(|error| format!("write temporary artifact {}: {error}", program.display()))?;
@@ -157,6 +233,38 @@ fn build_and_run(
     )?;
     require_success(&link, "link")?;
 
+    let mut measurement = None;
+    if std::env::var_os("TBX_MEASURE_SIM65_RESOURCES").is_some() {
+        let output = run_tool(
+            "od65",
+            &[OsStr::new("--dump-segments"), runtime_object.as_os_str()],
+            &temp.0,
+            "inspect VM object",
+        )?;
+        require_success(&output, "inspect VM object")?;
+        let segments = vm_object_segments(&String::from_utf8_lossy(&output.stdout))?;
+        let size = |name: &str| {
+            segments
+                .iter()
+                .find(|(segment, _)| segment == name)
+                .map(|(_, size)| *size)
+                .unwrap_or(0)
+        };
+        if size("ZEROPAGE") != 31 || size("BSS") != 966 {
+            return Err(format!(
+                "unexpected VM RAM segment sizes: ZEROPAGE={} BSS={}",
+                size("ZEROPAGE"),
+                size("BSS")
+            ));
+        }
+        measurement = Some((
+            segments,
+            tool_version("ca65")?,
+            tool_version("ld65")?,
+            tool_version("sim65")?,
+        ));
+    }
+
     let target = run_tool(
         "sim65",
         &[
@@ -192,6 +300,38 @@ fn build_and_run(
         eprintln!(
             "sim65 cycle report: {}",
             String::from_utf8_lossy(report).trim()
+        );
+    }
+    if let Some((segments, ca65_version, ld65_version, sim65_version)) = measurement {
+        let output = run_tool(
+            "sim65",
+            &[
+                OsStr::new("-c"),
+                OsStr::new("-x"),
+                OsStr::new(cycle_limit),
+                executable.as_os_str(),
+            ],
+            &temp.0,
+            "sim65 cycle measurement",
+        )?;
+        require_success(&output, "sim65 cycle measurement")?;
+        let cycles = cycle_count(&output.stdout, expected_stdout)?;
+        let segment_sizes = ["CODE", "RODATA", "BSS", "ZEROPAGE"]
+            .iter()
+            .map(|name| {
+                let size = segments
+                    .iter()
+                    .find(|(segment, _)| segment == name)
+                    .map(|(_, size)| *size)
+                    .unwrap_or(0);
+                format!("{name}={size}")
+            })
+            .collect::<Vec<_>>()
+            .join(" ");
+        eprintln!(
+            "sim65 resources: sample={sample} revision={} ca65=\"{ca65_version}\" ld65=\"{ld65_version}\" sim65=\"{sim65_version}\" bytecode={} VM[{segment_sizes}] cycles={cycles} command=\"sim65 -c -x {cycle_limit} program\"",
+            git_revision(crate_root)?,
+            artifact.code().len()
         );
     }
     Ok(())
@@ -255,4 +395,9 @@ fn e2e_failures_identify_the_stage() {
 
     let error = require_matching_stdout(b"target", b"host").expect_err("output differs");
     assert!(error.contains("stdout mismatch"));
+
+    let segments =
+        vm_object_segments("Name: \"CODE\"\nSize: 0x0012\nName: \"BSS\"\nSize: 0x03c6\n")
+            .expect("parse object segment sizes");
+    assert_eq!(segments, [("CODE".to_owned(), 18), ("BSS".to_owned(), 966)]);
 }
