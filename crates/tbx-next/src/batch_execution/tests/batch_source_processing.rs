@@ -79,6 +79,38 @@ fn pack_stores_expression_values_in_array_order() {
 }
 
 #[test]
+fn pack_in_definition_uses_declared_array_length_on_each_call() {
+    let text = "DIM @DATA[3]\nDEF RESET_DATA\nPACK @DATA = 10, 20, 30\nEND\nEVAL @DATA[1]\nEVAL @DATA[2]\nEVAL @DATA[3]\nRESET_DATA\nEVAL @DATA[1]\nLET @DATA[2] = 99\nRESET_DATA\nEVAL @DATA[2]\nEVAL @DATA[3]";
+    let (sources, source_id) = source(text, "program.tbx");
+    let mut writer = RecordingWriter::default();
+
+    let result = success(execute_registered_source(&sources, source_id, &mut writer));
+
+    assert_eq!(
+        result.data_stack(),
+        [
+            Value::integer(0),
+            Value::integer(0),
+            Value::integer(0),
+            Value::integer(10),
+            Value::integer(20),
+            Value::integer(30),
+        ]
+    );
+}
+
+#[test]
+fn definition_cannot_declare_an_array_when_pack_can_read_array_length() {
+    let (sources, source_id) = source("DEF BAD\nDIM @DATA[2]\nEND", "program.tbx");
+    let mut writer = RecordingWriter::default();
+
+    let failure = failure(execute_registered_source(&sources, source_id, &mut writer));
+
+    assert_eq!(failure.class(), UserFacingFailureClass::UserProgram);
+    assert!(failure.diagnostic().primary().is_some());
+}
+
+#[test]
 fn pack_consumes_only_the_array_sized_stack_suffix() {
     let text = "DIM @DATA[2]\nEVAL 99\nPACK @DATA = 10, 20\nEVAL @DATA[1]\nEVAL @DATA[2]";
     let (sources, source_id) = source(text, "program.tbx");

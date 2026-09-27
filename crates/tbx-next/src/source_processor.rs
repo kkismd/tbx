@@ -33,13 +33,13 @@ use crate::source_mapping::{
     InstructionSourceMappingView, SourceMappedCode, SourceMappingLookup, SourceMappingLookupError,
 };
 use crate::source_word::{
-    AdditionalSourceRequest, NativeSourceWordBindingAccess, NativeSourceWordContext,
-    NativeSourceWordContextParts, NativeSourceWordHandler, NativeStructuredSourceWordContext,
-    NativeStructuredSourceWordContextParts, OneShotSourceWordDispatch, RuntimeDefinitionPublisher,
-    SourceBlockMarker, SourceBlockReader, SourceBlockStatement, SourceWordDispatch,
-    SourceWordError, SourceWordId, SourceWordLookup, SourceWordLookupError, SourceWordRegistry,
-    SourceWordSyntaxMarker, StructuredBodyCapabilities, StructuredSourceWordDispatch,
-    StructuredSourceWordInstance,
+    AdditionalSourceRequest, NativeSourceWordArrayAccess, NativeSourceWordBindingAccess,
+    NativeSourceWordContext, NativeSourceWordContextParts, NativeSourceWordHandler,
+    NativeStructuredSourceWordContext, NativeStructuredSourceWordContextParts,
+    OneShotSourceWordDispatch, RuntimeDefinitionPublisher, SourceBlockMarker, SourceBlockReader,
+    SourceBlockStatement, SourceWordDispatch, SourceWordError, SourceWordId, SourceWordLookup,
+    SourceWordLookupError, SourceWordRegistry, SourceWordSyntaxMarker, StructuredBodyCapabilities,
+    StructuredSourceWordDispatch, StructuredSourceWordInstance,
 };
 use crate::source_word_evaluator::{
     evaluate_source_word, evaluate_source_word_with_state, UserDefinedSourceWordContext,
@@ -219,7 +219,7 @@ pub(crate) struct SourceCompileContext<'a> {
     operators: Option<OperatorLookup>,
     source_words: Option<SourceWordAccess<'a>>,
     globals: Option<&'a mut GlobalVariables>,
-    arrays: Option<&'a mut GlobalArrays>,
+    arrays: Option<NativeSourceWordArrayAccess<'a>>,
     runtime_definitions: Option<RuntimeDefinitionPublicationAccess<'a>>,
     additional_source_capability: bool,
     local_references: Option<&'a DefinitionLocalReferences>,
@@ -232,6 +232,7 @@ pub(crate) struct DefinitionBodyCompileContext<'a> {
     operators: Option<OperatorLookup>,
     source_words: Option<SourceWordLookup<'a>>,
     local_references: Option<&'a DefinitionLocalReferences>,
+    arrays: Option<&'a GlobalArrays>,
 }
 
 pub(crate) struct QuotationBodyCompileContext<'a> {
@@ -659,7 +660,7 @@ pub(crate) fn compile_definition_body<'source>(
         operators: context.operators,
         source_words: context.source_words.map(SourceWordAccess::Read),
         globals: None,
-        arrays: None,
+        arrays: context.arrays.map(NativeSourceWordArrayAccess::Read),
         runtime_definitions: None,
         additional_source_capability: false,
         local_references: context.local_references,
@@ -1045,8 +1046,8 @@ where
         .filter(|_| state.capabilities.allows_publication());
     let arrays = context
         .arrays
-        .as_deref_mut()
-        .filter(|_| state.capabilities.allows_publication());
+        .as_mut()
+        .map(|arrays| arrays.reborrow(state.capabilities.allows_publication()));
     let mut runtime_publisher = context
         .runtime_definitions
         .as_mut()
@@ -1865,7 +1866,7 @@ impl<'a> SourceCompileContext<'a> {
     }
 
     pub(crate) fn with_global_arrays(mut self, arrays: &'a mut GlobalArrays) -> Self {
-        self.arrays = Some(arrays);
+        self.arrays = Some(NativeSourceWordArrayAccess::Write(arrays));
         self
     }
 
@@ -1899,6 +1900,7 @@ impl<'a> DefinitionBodyCompileContext<'a> {
             operators: None,
             source_words: None,
             local_references: None,
+            arrays: None,
         }
     }
 
@@ -1908,6 +1910,7 @@ impl<'a> DefinitionBodyCompileContext<'a> {
             operators: Some(operators),
             source_words: None,
             local_references: None,
+            arrays: None,
         }
     }
 
@@ -1921,6 +1924,7 @@ impl<'a> DefinitionBodyCompileContext<'a> {
             operators: Some(operators),
             source_words: Some(source_words),
             local_references: None,
+            arrays: None,
         }
     }
 
@@ -1935,7 +1939,13 @@ impl<'a> DefinitionBodyCompileContext<'a> {
             operators: Some(operators),
             source_words: Some(source_words),
             local_references: Some(local_references),
+            arrays: None,
         }
+    }
+
+    pub(crate) fn with_global_arrays(mut self, arrays: &'a GlobalArrays) -> Self {
+        self.arrays = Some(arrays);
+        self
     }
 }
 
@@ -2018,28 +2028,33 @@ impl<'source> RuntimeDefinitionPublisher<'source>
 {
     fn publish_runtime_definition(
         &mut self,
-        bindings: &mut Bindings,
+        storage: (&mut Bindings, Option<&GlobalArrays>),
         name: crate::name::NormalizedName,
         name_span: SourceSpan,
         local_references: &DefinitionLocalReferences,
         body: &[SourceBlockStatement<'source>],
         end_span: SourceSpan,
     ) -> Result<WordId, SourceWordError> {
+        let (bindings, arrays) = storage;
         let mut body_error = None;
         let published = self
             .code
             .publish_new_word(self.words, bindings, name, |body_bindings, builder| {
+                let mut compile_context = DefinitionBodyCompileContext::with_local_references(
+                    body_bindings,
+                    self.source_words,
+                    self.operators
+                        .expect("runtime definition publication requires operators"),
+                    local_references,
+                );
+                if let Some(arrays) = arrays {
+                    compile_context = compile_context.with_global_arrays(arrays);
+                }
                 let result = compile_definition_body(
                     self.view,
                     self.source_id,
                     DefinitionBodyStatements::new(body, Terminal::Eof { span: end_span }),
-                    DefinitionBodyCompileContext::with_local_references(
-                        body_bindings,
-                        self.source_words,
-                        self.operators
-                            .expect("runtime definition publication requires operators"),
-                        local_references,
-                    ),
+                    compile_context,
                     builder,
                 );
                 if let Err(error) = result {
