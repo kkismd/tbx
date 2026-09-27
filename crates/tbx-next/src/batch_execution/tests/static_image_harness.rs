@@ -254,7 +254,6 @@ fn representative_sources_compile_and_lower() {
         &fixture.globals,
         &fixture.arrays,
     );
-    panic!("M34 #2068 measurement\nstatistics={mandelbrot:#?}\nimage={dump}");
     let grades = evaluate(
         include_str!("../../../../../docs/next/examples/grades.tbx"),
         "grades.tbx",
@@ -263,4 +262,5 @@ fn representative_sources_compile_and_lower() {
     .statistics;
     assert!(grades.instruction_count > 0);
     assert!(!grades.array_lengths.is_empty());
+    panic!("M34 #2068 measurement\nstatistics={mandelbrot:#?}\nimage={dump}");
 }
