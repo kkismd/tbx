@@ -64,6 +64,7 @@ pub(super) struct ReferenceVm {
     globals: Vec<i16>,
     arrays: Vec<Vec<i16>>,
     halted: bool,
+    steps: usize,
 }
 
 impl ReferenceVm {
@@ -87,6 +88,7 @@ impl ReferenceVm {
             control: Vec::new(),
             returns: Vec::new(),
             halted: false,
+            steps: 0,
         })
     }
 
@@ -103,6 +105,11 @@ impl ReferenceVm {
         &self.data
     }
 
+    #[cfg(test)]
+    pub(super) fn step_count(&self) -> usize {
+        self.steps
+    }
+
     pub(super) fn step(
         &mut self,
         capabilities: &mut Capabilities<'_>,
@@ -111,6 +118,7 @@ impl ReferenceVm {
             return Ok(RunOutcome::Halted);
         }
         let position = self.position;
+        self.steps += 1;
         let instruction = self
             .image
             .code
