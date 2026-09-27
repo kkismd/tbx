@@ -2,11 +2,14 @@ use super::evaluate;
 use crate::static_image::bytecode_6502::BytecodeArtifact;
 use std::ffi::OsStr;
 use std::fs;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 use std::sync::atomic::{AtomicU64, Ordering};
 
-const CYCLE_LIMIT: &str = "50000000";
+const PRIME_CYCLE_LIMIT: &str = "50000000";
+// sim65 measured 2,315,181,850 cycles; this limit adds about 30% headroom.
+const MANDELBROT_CYCLE_LIMIT: &str = "3000000000";
 static NEXT_DIRECTORY: AtomicU64 = AtomicU64::new(0);
 
 struct TempArtifacts(PathBuf);
@@ -18,7 +21,10 @@ impl TempArtifacts {
             .map_err(|error| format!("write temporary artifact directory: {error}"))?;
         loop {
             let sequence = NEXT_DIRECTORY.fetch_add(1, Ordering::Relaxed);
-            let path = root.join(format!("prime-sim65-{}-{sequence}", std::process::id()));
+            let path = root.join(format!(
+                "static-image-sim65-{}-{sequence}",
+                std::process::id()
+            ));
             match fs::create_dir(&path) {
                 Ok(()) => return Ok(Self(path)),
                 Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
@@ -93,7 +99,11 @@ fn require_matching_stdout(actual: &[u8], expected: &[u8]) -> Result<(), String>
     }
 }
 
-fn build_and_run(artifact: &BytecodeArtifact, expected_stdout: &[u8]) -> Result<(), String> {
+fn build_and_run(
+    artifact: &BytecodeArtifact,
+    expected_stdout: &[u8],
+    cycle_limit: &str,
+) -> Result<(), String> {
     let crate_root = Path::new(env!("CARGO_MANIFEST_DIR"));
     let temp = TempArtifacts::new(crate_root)?;
     let program = temp.0.join("program.bin");
@@ -151,14 +161,40 @@ fn build_and_run(artifact: &BytecodeArtifact, expected_stdout: &[u8]) -> Result<
         "sim65",
         &[
             OsStr::new("-x"),
-            OsStr::new(CYCLE_LIMIT),
+            OsStr::new(cycle_limit),
             executable.as_os_str(),
         ],
         &temp.0,
         "sim65 execute",
     )?;
     require_success(&target, "sim65 exit status or cycle limit")?;
-    require_matching_stdout(&target.stdout, expected_stdout)
+    require_matching_stdout(&target.stdout, expected_stdout)?;
+    if std::env::var_os("TBX_SHOW_SIM65_STDOUT").is_some() {
+        std::io::stdout()
+            .write_all(&target.stdout)
+            .map_err(|error| format!("write sim65 stdout: {error}"))?;
+        let measurement = run_tool(
+            "sim65",
+            &[
+                OsStr::new("-c"),
+                OsStr::new("-x"),
+                OsStr::new(cycle_limit),
+                executable.as_os_str(),
+            ],
+            &temp.0,
+            "sim65 cycle measurement",
+        )?;
+        require_success(&measurement, "sim65 cycle measurement")?;
+        let report = measurement
+            .stdout
+            .strip_prefix(expected_stdout)
+            .ok_or_else(|| "sim65 cycle measurement changed program stdout".to_owned())?;
+        eprintln!(
+            "sim65 cycle report: {}",
+            String::from_utf8_lossy(report).trim()
+        );
+    }
+    Ok(())
 }
 
 #[test]
@@ -168,10 +204,27 @@ fn prime_source_matches_sim65_execution() {
         include_str!("../../../../../../docs/next/examples/prime.tbx"),
         "prime.tbx",
         true,
+        true,
     );
     let artifact = result.artifact.expect("encode prime source");
     let host_output = result.host_output.expect("host executes prime source");
-    build_and_run(&artifact, &host_output).unwrap_or_else(|error| panic!("{error}"));
+    build_and_run(&artifact, &host_output, PRIME_CYCLE_LIMIT)
+        .unwrap_or_else(|error| panic!("{error}"));
+}
+
+#[test]
+#[ignore = "requires ca65, ld65, and sim65; run with --ignored"]
+fn mandelbrot_source_matches_sim65_execution() {
+    let result = evaluate(
+        include_str!("../../../../../../docs/next/examples/mandelbrot.tbx"),
+        "mandelbrot.tbx",
+        true,
+        true,
+    );
+    let artifact = result.artifact.expect("encode mandelbrot source");
+    let host_output = result.host_output.expect("host executes mandelbrot source");
+    build_and_run(&artifact, &host_output, MANDELBROT_CYCLE_LIMIT)
+        .unwrap_or_else(|error| panic!("{error}"));
 }
 
 #[test]

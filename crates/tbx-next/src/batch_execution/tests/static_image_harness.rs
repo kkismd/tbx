@@ -122,7 +122,12 @@ impl Write for Output {
     }
 }
 
-fn evaluate(source: &str, display_name: &str, compare_execution: bool) -> Evaluation {
+fn evaluate(
+    source: &str,
+    display_name: &str,
+    compare_execution: bool,
+    encode_artifact: bool,
+) -> Evaluation {
     let mut sources = SourceTexts::new();
     let stdlib_id = register_embedded_standard_library(&mut sources);
     let program_id = sources.register(source, display_name);
@@ -163,7 +168,7 @@ fn evaluate(source: &str, display_name: &str, compare_execution: bool) -> Evalua
         unit.entry(),
         crate::instruction::InstructionAddress::from_index(0)
     );
-    let encoded_artifact = if display_name == "prime.tbx" {
+    let encoded_artifact = if encode_artifact {
         let artifact = test_lower_and_encode(
             &[temporary, published],
             entry,
@@ -172,7 +177,7 @@ fn evaluate(source: &str, display_name: &str, compare_execution: bool) -> Evalua
             &fixture.globals,
             &fixture.arrays,
         )
-        .unwrap_or_else(|error| panic!("encode prime source as M32 bytecode: {error:?}"));
+        .unwrap_or_else(|error| panic!("encode source as M34 bytecode: {error:?}"));
         assert!(!artifact.code().is_empty());
         assert_eq!(artifact.entry_offset(), 0);
         Some(artifact)
@@ -221,6 +226,7 @@ fn prime_source_matches_host_execution_and_reports_static_image() {
         include_str!("../../../../../docs/next/examples/prime.tbx"),
         "prime.tbx",
         true,
+        false,
     )
     .statistics;
     assert!(statistics.instruction_count > 0);
@@ -240,12 +246,14 @@ fn representative_sources_compile_and_lower() {
         include_str!("../../../../../docs/next/examples/mandelbrot.tbx"),
         "mandelbrot.tbx",
         false,
+        false,
     )
     .statistics;
     assert!(mandelbrot.instruction_count > 0);
     let grades = evaluate(
         include_str!("../../../../../docs/next/examples/grades.tbx"),
         "grades.tbx",
+        false,
         false,
     )
     .statistics;
