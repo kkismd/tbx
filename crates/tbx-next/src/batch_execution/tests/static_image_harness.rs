@@ -10,7 +10,7 @@ use crate::random::RandomState;
 use crate::random_primitive::register_random_primitives;
 use crate::source_processor::{run_unit, SourceCompileContext, SourceExecutionContext};
 use crate::stack_primitive::register_stack_primitives;
-use crate::static_image::{test_lower_and_encode, test_lower_and_run, TestImageStatistics};
+use crate::static_image::{test_lower_and_encode, test_lower_and_run, test_lower_debug, TestImageStatistics};
 use crate::word::PublishedWords;
 use crate::word_lookup::PublishedWordLookup;
 use std::io::Write;
@@ -236,13 +236,25 @@ fn prime_source_matches_host_execution_and_reports_static_image() {
 
 #[test]
 fn representative_sources_compile_and_lower() {
-    let mandelbrot = evaluate(
-        include_str!("../../../../../docs/next/examples/mandelbrot.tbx"),
-        "mandelbrot.tbx",
-        false,
-    )
-    .statistics;
+    let mandelbrot_source = include_str!("../../../../../docs/next/examples/mandelbrot.tbx");
+    let mandelbrot = evaluate(mandelbrot_source, "mandelbrot.tbx", false).statistics;
     assert!(mandelbrot.instruction_count > 0);
+
+    let mut sources = SourceTexts::new();
+    let stdlib_id = register_embedded_standard_library(&mut sources);
+    let program_id = sources.register(mandelbrot_source, "mandelbrot.tbx");
+    let mut fixture = Fixture::new();
+    let _stdlib = fixture.compile(&sources, stdlib_id);
+    let unit = fixture.compile(&sources, program_id);
+    let dump = test_lower_debug(
+        &[unit.instructions(), fixture.published_code.instruction_view()],
+        unit.entry_location(),
+        &fixture.words,
+        fixture.primitive_words,
+        &fixture.globals,
+        &fixture.arrays,
+    );
+    panic!("M34 #2068 measurement\nstatistics={mandelbrot:#?}\nimage={dump}");
     let grades = evaluate(
         include_str!("../../../../../docs/next/examples/grades.tbx"),
         "grades.tbx",
