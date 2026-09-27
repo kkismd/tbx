@@ -141,13 +141,19 @@ fn primitive_opcode(operation: PrimitiveOp) -> Option<u8> {
         PrimitiveOp::Add => 0x40,
         PrimitiveOp::Multiply => 0x41,
         PrimitiveOp::Remainder => 0x42,
+        PrimitiveOp::Subtract => 0x43,
+        PrimitiveOp::Divide => 0x44,
+        PrimitiveOp::Negate => 0x45,
+        PrimitiveOp::Abs => 0x46,
         PrimitiveOp::Equal => 0x48,
         PrimitiveOp::Less => 0x49,
         PrimitiveOp::LessEqual => 0x4a,
         PrimitiveOp::GreaterEqual => 0x4b,
+        PrimitiveOp::Greater => 0x4c,
         PrimitiveOp::Drop => 0x50,
         PrimitiveOp::PutDec => 0x60,
         PrimitiveOp::Cr => 0x61,
+        PrimitiveOp::PutChr => 0x62,
         _ => return None,
     })
 }
@@ -221,6 +227,21 @@ mod tests {
     }
 
     #[test]
+    fn encodes_m34_mandelbrot_primitive_opcodes() {
+        let artifact = encode(&image(vec![
+            LogicalInstruction::CallPrimitive(PrimitiveOp::Subtract),
+            LogicalInstruction::CallPrimitive(PrimitiveOp::Divide),
+            LogicalInstruction::CallPrimitive(PrimitiveOp::Negate),
+            LogicalInstruction::CallPrimitive(PrimitiveOp::Abs),
+            LogicalInstruction::CallPrimitive(PrimitiveOp::Greater),
+            LogicalInstruction::CallPrimitive(PrimitiveOp::PutChr),
+        ]))
+        .expect("M34 Mandelbrot primitives encode");
+
+        assert_eq!(artifact.code(), &[0x43, 0x44, 0x45, 0x46, 0x4c, 0x62]);
+    }
+
+    #[test]
     fn encodes_signed_immediates_as_little_endian() {
         let artifact = encode(&image(vec![
             LogicalInstruction::PushI16(0x1234),
@@ -261,7 +282,7 @@ mod tests {
         );
         assert_eq!(
             encode(&image(vec![LogicalInstruction::CallPrimitive(
-                PrimitiveOp::Divide
+                PrimitiveOp::NotEqual
             )]),),
             Err(EncodeError::UnsupportedPrimitive(0))
         );
