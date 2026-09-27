@@ -438,6 +438,7 @@ pub(crate) struct TestReferenceResult {
     pub(crate) halted: bool,
     pub(crate) data_stack: Vec<i16>,
     pub(crate) statistics: TestImageStatistics,
+    pub(crate) step_count: usize,
 }
 
 #[cfg(test)]
@@ -485,6 +486,7 @@ pub(crate) fn test_lower_and_run<W: std::io::Write>(
         halted: outcome == reference_vm::RunOutcome::Halted,
         data_stack: vm.data_stack().to_vec(),
         statistics,
+        step_count: vm.step_count(),
     })
 }
 
