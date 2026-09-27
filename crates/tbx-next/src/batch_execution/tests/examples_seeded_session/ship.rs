@@ -1,6 +1,33 @@
 use super::*;
 
 #[test]
+fn sttr1_print_condition_preserves_all_condition_labels() {
+    let mut source = std::fs::read_to_string(example_path("sttr1/main.tbx"))
+        .expect("STTR1 example should be readable");
+    source.push_str(
+        "LET CONDITION = 0\nPRINT_CONDITION\nCR\n\
+LET CONDITION = 1\nPRINT_CONDITION\nCR\n\
+LET CONDITION = 2\nPRINT_CONDITION\nCR\n\
+LET CONDITION = 3\nPRINT_CONDITION\nCR\n",
+    );
+    let (sources, standard_library_id, source_id) =
+        sttr1_sources_with_standard_library(STDLIB_SOURCE, &source);
+    let mut writer = RecordingWriter::default();
+
+    let result = success(execute_registered_sources_with_filesystem_and_seed(
+        sources,
+        standard_library_id,
+        source_id,
+        &mut writer,
+        None,
+        30,
+    ));
+
+    assert!(writer.text().ends_with("GREEN\nYELLOW\nRED\nDOCKED\n"));
+    assert_eq!(result.data_stack(), []);
+}
+
+#[test]
 fn sttr1_shield_control_preserves_total_power_and_rejects_excess() {
     let mut source = std::fs::read_to_string(example_path("sttr1/main.tbx"))
         .expect("STTR1 example should be readable");

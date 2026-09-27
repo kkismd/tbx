@@ -16,7 +16,7 @@ fn device_source(
 #[test]
 fn sttr1_device_registry_reports_all_eight_slots() {
     let (sources, standard_library_id, source_id) =
-        device_source("PACK @DAMAGE = -1, -2, -3, -4, -5, 0, -7, -8\nDAMAGE_CONTROL\n");
+        device_source("PACK @DAMAGE = -1, -2, -3, -4, -5, 0, -7, -8\nDAMAGE_CONTROL\nPRINT \"DEVICE_INDEX_AFTER_REPORT \", DEVICE_INDEX\nCR\n");
     let mut writer = RecordingWriter::default();
     let result = success(execute_registered_sources_with_filesystem_and_seed(
         sources,
@@ -40,6 +40,7 @@ fn sttr1_device_registry_reports_all_eight_slots() {
     ] {
         assert!(output.contains(name), "missing {name:?} in {output}");
     }
+    assert_eq!(output_values(output, "DEVICE_INDEX_AFTER_REPORT "), [8]);
     assert_eq!(result.data_stack(), []);
 }
 

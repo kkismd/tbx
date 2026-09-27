@@ -6,13 +6,11 @@ REM STTR1 device registry and damage lifecycle.
 # Advance every damaged device one repair unit.  Positive values are kept:
 # random improvement events intentionally may move a device above zero.
 DEF REPAIR_DEVICES
-  LET DEVICE_INDEX = 1
-  WHILE DEVICE_INDEX <= 8
+  FOR DEVICE_INDEX = 1 TO 8
     IF @DAMAGE[DEVICE_INDEX] < 0
       LET @DAMAGE[DEVICE_INDEX] = @DAMAGE[DEVICE_INDEX] + 1
     ENDIF
-    LET DEVICE_INDEX = DEVICE_INDEX + 1
-  ENDWH
+  NEXT
 END
 
 # Print the fixed registry name selected by DEVICE_INDEX.
@@ -76,36 +74,10 @@ DEF DAMAGE_CONTROL
   ENDIF
   PRINT "DAMAGE REPORT"
   CR
-    LET DEVICE_INDEX = 1
+  FOR DEVICE_INDEX = 1 TO 8
     PRINT_DEVICE_NAME
     PRINT " ", @DAMAGE[DEVICE_INDEX]
     CR
-    LET DEVICE_INDEX = 2
-    PRINT_DEVICE_NAME
-    PRINT " ", @DAMAGE[DEVICE_INDEX]
-    CR
-    LET DEVICE_INDEX = 3
-    PRINT_DEVICE_NAME
-    PRINT " ", @DAMAGE[DEVICE_INDEX]
-    CR
-    LET DEVICE_INDEX = 4
-    PRINT_DEVICE_NAME
-    PRINT " ", @DAMAGE[DEVICE_INDEX]
-    CR
-    LET DEVICE_INDEX = 5
-    PRINT_DEVICE_NAME
-    PRINT " ", @DAMAGE[DEVICE_INDEX]
-    CR
-    LET DEVICE_INDEX = 6
-    PRINT_DEVICE_NAME
-    PRINT " ", @DAMAGE[DEVICE_INDEX]
-    CR
-    LET DEVICE_INDEX = 7
-    PRINT_DEVICE_NAME
-    PRINT " ", @DAMAGE[DEVICE_INDEX]
-    CR
-    LET DEVICE_INDEX = 8
-    PRINT_DEVICE_NAME
-    PRINT " ", @DAMAGE[DEVICE_INDEX]
-    CR
+  NEXT
+  LET DEVICE_INDEX = 8
 END
