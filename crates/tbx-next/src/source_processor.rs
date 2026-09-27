@@ -232,6 +232,7 @@ pub(crate) struct DefinitionBodyCompileContext<'a> {
     operators: Option<OperatorLookup>,
     source_words: Option<SourceWordLookup<'a>>,
     local_references: Option<&'a DefinitionLocalReferences>,
+    arrays: Option<&'a mut GlobalArrays>,
 }
 
 pub(crate) struct QuotationBodyCompileContext<'a> {
@@ -659,7 +660,7 @@ pub(crate) fn compile_definition_body<'source>(
         operators: context.operators,
         source_words: context.source_words.map(SourceWordAccess::Read),
         globals: None,
-        arrays: None,
+        arrays: context.arrays,
         runtime_definitions: None,
         additional_source_capability: false,
         local_references: context.local_references,
@@ -1043,10 +1044,7 @@ where
         .globals
         .as_deref_mut()
         .filter(|_| state.capabilities.allows_publication());
-    let arrays = context
-        .arrays
-        .as_deref_mut()
-        .filter(|_| state.capabilities.allows_publication());
+    let arrays = context.arrays.as_deref_mut();
     let mut runtime_publisher = context
         .runtime_definitions
         .as_mut()
@@ -1899,6 +1897,7 @@ impl<'a> DefinitionBodyCompileContext<'a> {
             operators: None,
             source_words: None,
             local_references: None,
+            arrays: None,
         }
     }
 
@@ -1908,6 +1907,7 @@ impl<'a> DefinitionBodyCompileContext<'a> {
             operators: Some(operators),
             source_words: None,
             local_references: None,
+            arrays: None,
         }
     }
 
@@ -1921,6 +1921,7 @@ impl<'a> DefinitionBodyCompileContext<'a> {
             operators: Some(operators),
             source_words: Some(source_words),
             local_references: None,
+            arrays: None,
         }
     }
 
@@ -1935,7 +1936,13 @@ impl<'a> DefinitionBodyCompileContext<'a> {
             operators: Some(operators),
             source_words: Some(source_words),
             local_references: Some(local_references),
+            arrays: None,
         }
+    }
+
+    pub(crate) fn with_global_arrays(mut self, arrays: &'a mut GlobalArrays) -> Self {
+        self.arrays = Some(arrays);
+        self
     }
 }
 
@@ -2018,28 +2025,33 @@ impl<'source> RuntimeDefinitionPublisher<'source>
 {
     fn publish_runtime_definition(
         &mut self,
-        bindings: &mut Bindings,
+        storage: (&mut Bindings, Option<&mut GlobalArrays>),
         name: crate::name::NormalizedName,
         name_span: SourceSpan,
         local_references: &DefinitionLocalReferences,
         body: &[SourceBlockStatement<'source>],
         end_span: SourceSpan,
     ) -> Result<WordId, SourceWordError> {
+        let (bindings, arrays) = storage;
         let mut body_error = None;
         let published = self
             .code
             .publish_new_word(self.words, bindings, name, |body_bindings, builder| {
+                let mut compile_context = DefinitionBodyCompileContext::with_local_references(
+                    body_bindings,
+                    self.source_words,
+                    self.operators
+                        .expect("runtime definition publication requires operators"),
+                    local_references,
+                );
+                if let Some(arrays) = arrays {
+                    compile_context = compile_context.with_global_arrays(arrays);
+                }
                 let result = compile_definition_body(
                     self.view,
                     self.source_id,
                     DefinitionBodyStatements::new(body, Terminal::Eof { span: end_span }),
-                    DefinitionBodyCompileContext::with_local_references(
-                        body_bindings,
-                        self.source_words,
-                        self.operators
-                            .expect("runtime definition publication requires operators"),
-                        local_references,
-                    ),
+                    compile_context,
                     builder,
                 );
                 if let Err(error) = result {

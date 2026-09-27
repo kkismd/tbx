@@ -610,7 +610,7 @@ pub(crate) struct SourceBlockReader<'source, 'cursor> {
 pub(crate) trait RuntimeDefinitionPublisher<'source> {
     fn publish_runtime_definition(
         &mut self,
-        bindings: &mut Bindings,
+        storage: (&mut Bindings, Option<&mut GlobalArrays>),
         name: NormalizedName,
         name_span: SourceSpan,
         local_references: &DefinitionLocalReferences,
@@ -1583,7 +1583,7 @@ impl<'source, 'state> NativeSourceWordContext<'source, 'state> {
         };
 
         publisher.publish_runtime_definition(
-            bindings,
+            (bindings, self.arrays.as_deref_mut()),
             name,
             name_span,
             local_references,

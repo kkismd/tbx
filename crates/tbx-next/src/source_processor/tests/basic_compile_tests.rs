@@ -738,6 +738,7 @@ fn definition_body_dispatches_source_word_through_binding_capability() {
             operators: None,
             source_words: Some(source_words.lookup()),
             local_references: None,
+            arrays: None,
         },
     );
 
@@ -946,6 +947,7 @@ fn definition_body_var_fails_without_publication_capability() {
             operators: None,
             source_words: Some(source_words.lookup()),
             local_references: None,
+            arrays: None,
         },
     );
 
