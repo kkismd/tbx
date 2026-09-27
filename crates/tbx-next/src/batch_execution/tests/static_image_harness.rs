@@ -19,6 +19,7 @@ mod sim65_e2e;
 
 struct Evaluation {
     statistics: TestImageStatistics,
+    step_count: usize,
     host_output: Option<Vec<u8>>,
     artifact: Option<crate::static_image::bytecode_6502::BytecodeArtifact>,
 }
@@ -210,6 +211,7 @@ fn evaluate(source: &str, display_name: &str, compare_execution: bool) -> Evalua
     }
     Evaluation {
         statistics: poc.statistics,
+        step_count: poc.step_count,
         host_output: host.map(|(_, output)| output),
         artifact: encoded_artifact,
     }
@@ -237,7 +239,9 @@ fn prime_source_matches_host_execution_and_reports_static_image() {
 #[test]
 fn representative_sources_compile_and_lower() {
     let mandelbrot_source = include_str!("../../../../../docs/next/examples/mandelbrot.tbx");
-    let mandelbrot = evaluate(mandelbrot_source, "mandelbrot.tbx", false).statistics;
+    let mandelbrot_evaluation = evaluate(mandelbrot_source, "mandelbrot.tbx", false);
+    let mandelbrot = mandelbrot_evaluation.statistics;
+    let mandelbrot_steps = mandelbrot_evaluation.step_count;
     assert!(mandelbrot.instruction_count > 0);
 
     let mut sources = SourceTexts::new();
@@ -262,5 +266,5 @@ fn representative_sources_compile_and_lower() {
     .statistics;
     assert!(grades.instruction_count > 0);
     assert!(!grades.array_lengths.is_empty());
-    panic!("M34 #2068 measurement\nstatistics={mandelbrot:#?}\nimage={dump}");
+    panic!("M34 #2068 measurement\nreference_steps={mandelbrot_steps}\nstatistics={mandelbrot:#?}\nimage={dump}");
 }
