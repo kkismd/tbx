@@ -52,6 +52,18 @@ _tbx_code_end:
 .macro REM
     .byte $42
 .endmacro
+.macro SUB
+    .byte $43
+.endmacro
+.macro DIV
+    .byte $44
+.endmacro
+.macro NEG
+    .byte $45
+.endmacro
+.macro ABS
+    .byte $46
+.endmacro
 .macro EQ
     .byte $48
 .endmacro
@@ -64,6 +76,9 @@ _tbx_code_end:
 .macro GE
     .byte $4b
 .endmacro
+.macro GT
+    .byte $4c
+.endmacro
 .macro DROP
     .byte $50
 .endmacro
@@ -72,6 +87,9 @@ _tbx_code_end:
 .endmacro
 .macro CR
     .byte $61
+.endmacro
+.macro PUTCHR
+    .byte $62
 .endmacro
 
 ; Error probe record: code, opcode address, depths, stack bytes, global,
