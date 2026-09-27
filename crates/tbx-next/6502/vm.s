@@ -161,6 +161,10 @@ dispatch:
     jeq op_binary
     cmp #$42
     jeq op_binary
+    cmp #$43
+    jeq op_binary
+    cmp #$44
+    jeq op_binary
     cmp #$48
     jeq op_binary
     cmp #$49
@@ -169,12 +173,20 @@ dispatch:
     jeq op_binary
     cmp #$4b
     jeq op_binary
+    cmp #$4c
+    jeq op_binary
+    cmp #$45
+    jeq op_unary
+    cmp #$46
+    jeq op_unary
     cmp #$50
     jeq op_drop
     cmp #$60
     jeq op_putdec
     cmp #$61
     jeq op_cr
+    cmp #$62
+    jeq op_putchr
     jmp fail_opcode
 
 op_halt:
@@ -591,6 +603,10 @@ op_binary:
     lda opcode
     cmp #$40
     jeq binary_add
+    cmp #$43
+    jeq binary_subtract
+    cmp #$44
+    jeq binary_divide
     cmp #$41
     jeq binary_multiply
     cmp #$42
@@ -604,6 +620,17 @@ binary_add:
     sta value
     lda left+1
     adc right+1
+    sta value+1
+    jvc binary_commit
+    jmp fail_arithmetic
+
+binary_subtract:
+    sec
+    lda left
+    sbc right
+    sta value
+    lda left+1
+    sbc right+1
     sta value+1
     jvc binary_commit
     jmp fail_arithmetic
@@ -636,6 +663,8 @@ compare_saved:
     lda opcode
     cmp #$48
     jeq compare_equal
+    cmp #$4c
+    jeq compare_greater
     lda opcode
     cmp #$49
     jeq compare_less
@@ -647,6 +676,11 @@ compare_saved:
     jmp compare_false
 compare_equal:
     lda count
+    jeq compare_true
+    jmp compare_false
+compare_greater:
+    lda count
+    cmp #$ff
     jeq compare_true
     jmp compare_false
 compare_less:
@@ -815,6 +849,80 @@ remainder_subtract:
     lda #0
     sbc value+1
     sta value+1
+    jmp binary_commit
+
+; Divide magnitudes with a restoring 16-step quotient. Signed division truncates
+; toward zero; MIN/-1 is rejected, while MIN/1 is representable.
+binary_divide:
+    lda right
+    ora right+1
+    jeq fail_arithmetic
+    lda left
+    jne divide_min_check_done
+    lda left+1
+    cmp #$80
+    jne divide_min_check_done
+    lda right
+    cmp #$ff
+    jne divide_min_check_done
+    lda right+1
+    cmp #$ff
+    jeq fail_arithmetic
+divide_min_check_done:
+    lda left+1
+    eor right+1
+    and #$80
+    sta sign
+    jsr absolute_pair
+    lda #0
+    sta value
+    sta value+1
+    lda #16
+    sta count
+divide_loop:
+    asl left
+    rol left+1
+    rol value
+    rol value+1
+    lda value+1
+    cmp right+1
+    bcc divide_skip_subtract
+    bne divide_subtract
+    lda value
+    cmp right
+    bcc divide_skip_subtract
+divide_subtract:
+    sec
+    lda value
+    sbc right
+    sta value
+    lda value+1
+    sbc right+1
+    sta value+1
+    inc left
+divide_skip_subtract:
+    dec count
+    jne divide_loop
+    lda sign
+    jeq divide_positive
+    sec
+    lda #0
+    sbc left
+    sta value
+    lda #0
+    sbc left+1
+    sta value+1
+    jmp binary_commit
+divide_positive:
+    lda left+1
+    bpl :+
+    jmp fail_arithmetic
+:
+    lda left
+    sta value
+    lda left+1
+    sta value+1
+    jmp binary_commit
 
 binary_commit:
     lda tbx_data_depth
@@ -830,6 +938,62 @@ binary_commit:
     dec tbx_data_depth
     jmp commit_cursor
 
+op_unary:
+    lda #1
+    jsr need_bytes
+    jcs fail_bytecode
+    jsr validate_next
+    jcs fail_bytecode
+    lda tbx_data_depth
+    jeq fail_underflow
+    sec
+    sbc #1
+    asl
+    tax
+    lda tbx_data_stack,x
+    sta value
+    inx
+    lda tbx_data_stack,x
+    sta value+1
+    lda opcode
+    cmp #$45
+    jeq unary_negate
+    lda value
+    jne unary_abs_ready
+    lda value+1
+    cmp #$80
+    jeq fail_arithmetic
+unary_abs_ready:
+    lda value+1
+    bpl unary_commit
+    jmp unary_negate_value
+unary_negate:
+    lda value
+    jne unary_negate_value
+    lda value+1
+    cmp #$80
+    jeq fail_arithmetic
+unary_negate_value:
+    sec
+    lda #0
+    sbc value
+    sta value
+    lda #0
+    sbc value+1
+    sta value+1
+unary_commit:
+    lda tbx_data_depth
+    sec
+    sbc #1
+    asl
+    tax
+    lda value
+    sta tbx_data_stack,x
+    inx
+    lda value+1
+    sta tbx_data_stack,x
+    jmp commit_cursor
+
 op_putdec:
     lda #1
     jsr need_bytes
@@ -837,7 +1001,7 @@ op_putdec:
     jsr validate_next
     jcs fail_bytecode
     lda tbx_data_depth
-    jeq commit_cursor
+    jeq fail_underflow
     sec
     sbc #1
     asl
@@ -906,6 +1070,31 @@ decimal_emit:
     jcs fail_output
     lda count
     jne decimal_emit
+    dec tbx_data_depth
+    jmp commit_cursor
+
+op_putchr:
+    lda #1
+    jsr need_bytes
+    jcs fail_bytecode
+    jsr validate_next
+    jcs fail_bytecode
+    lda tbx_data_depth
+    jeq fail_underflow
+    sec
+    sbc #1
+    asl
+    tax
+    lda tbx_data_stack,x
+    sta value
+    inx
+    lda tbx_data_stack,x
+    sta value+1
+    jne fail_arithmetic
+    lda value
+    bmi fail_arithmetic
+    jsr emit_char
+    jcs fail_output
     dec tbx_data_depth
     jmp commit_cursor
 

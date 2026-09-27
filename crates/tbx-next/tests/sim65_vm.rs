@@ -152,6 +152,11 @@ fn vm_success_fixtures() {
         ("encoder_immediates", ""),
         ("nonzero_entry", "0\n99\n"),
         ("arithmetic_edges", "32761\n-2\n1\n1\n1\n0\n1\n1\n"),
+        (
+            "m34_arithmetic",
+            "7\n-3\n-3\n3\n-32768\n-5\n32767\n0\n1\n1\n",
+        ),
+        ("m34_putchr", "\0\x7f"),
         ("jz_invalid_untaken", "42\n"),
         ("terminal_jz_taken", ""),
         ("terminal_jump", ""),
@@ -174,10 +179,18 @@ fn vm_success_fixtures() {
 fn vm_failure_fixtures_observe_atomic_state() {
     for (fixture, exit) in [
         ("add_overflow", 17),
+        ("subtract_overflow_positive", 17),
+        ("subtract_overflow_negative", 17),
         ("multiply_overflow", 17),
+        ("divide_zero", 17),
+        ("divide_overflow", 17),
+        ("negate_min", 17),
+        ("abs_min", 17),
         ("remainder_zero", 17),
         ("remainder_overflow", 17),
         ("data_underflow", 12),
+        ("putdec_underflow", 12),
+        ("putchr_underflow", 12),
         ("data_overflow", 13),
         ("invalid_global", 16),
         ("truncated", 11),
@@ -196,6 +209,9 @@ fn vm_failure_fixtures_observe_atomic_state() {
         ("invalid_call_base", 19),
         ("poison_init", 10),
         ("output_failure", 18),
+        ("putchr_negative", 17),
+        ("putchr_too_large", 17),
+        ("putchr_output_failure", 18),
     ] {
         let result = build_and_run(fixture, true);
         assert_eq!(
