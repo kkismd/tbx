@@ -1001,7 +1001,7 @@ op_putdec:
     jsr validate_next
     jcs fail_bytecode
     lda tbx_data_depth
-    jeq commit_cursor
+    jeq fail_underflow
     sec
     sbc #1
     asl
@@ -1080,7 +1080,7 @@ op_putchr:
     jsr validate_next
     jcs fail_bytecode
     lda tbx_data_depth
-    jeq commit_cursor
+    jeq fail_underflow
     sec
     sbc #1
     asl

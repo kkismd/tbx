@@ -189,6 +189,8 @@ fn vm_failure_fixtures_observe_atomic_state() {
         ("remainder_zero", 17),
         ("remainder_overflow", 17),
         ("data_underflow", 12),
+        ("putdec_underflow", 12),
+        ("putchr_underflow", 12),
         ("data_overflow", 13),
         ("invalid_global", 16),
         ("truncated", 11),

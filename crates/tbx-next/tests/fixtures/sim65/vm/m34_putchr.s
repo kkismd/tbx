@@ -5,6 +5,5 @@ entry:
     PUTCHR
     PUSH 127
     PUTCHR
-    PUTCHR
     HALT
 VM_END
