@@ -113,6 +113,7 @@ DEF GAME_LOOP
     PRINT "COMMAND (0-7):"
     CR
     IF INPUT?()
+      REM I holds the command entered for this game-loop iteration.
       POP_TO I
       IF DISPATCH_COMMAND(I)
         CHECK_ENDGAME
