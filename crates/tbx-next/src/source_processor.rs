@@ -33,13 +33,13 @@ use crate::source_mapping::{
     InstructionSourceMappingView, SourceMappedCode, SourceMappingLookup, SourceMappingLookupError,
 };
 use crate::source_word::{
-    AdditionalSourceRequest, NativeSourceWordBindingAccess, NativeSourceWordContext,
-    NativeSourceWordContextParts, NativeSourceWordHandler, NativeStructuredSourceWordContext,
-    NativeStructuredSourceWordContextParts, OneShotSourceWordDispatch, RuntimeDefinitionPublisher,
-    SourceBlockMarker, SourceBlockReader, SourceBlockStatement, SourceWordDispatch,
-    SourceWordError, SourceWordId, SourceWordLookup, SourceWordLookupError, SourceWordRegistry,
-    SourceWordSyntaxMarker, StructuredBodyCapabilities, StructuredSourceWordDispatch,
-    StructuredSourceWordInstance,
+    AdditionalSourceRequest, NativeSourceWordArrayAccess, NativeSourceWordBindingAccess,
+    NativeSourceWordContext, NativeSourceWordContextParts, NativeSourceWordHandler,
+    NativeStructuredSourceWordContext, NativeStructuredSourceWordContextParts,
+    OneShotSourceWordDispatch, RuntimeDefinitionPublisher, SourceBlockMarker, SourceBlockReader,
+    SourceBlockStatement, SourceWordDispatch, SourceWordError, SourceWordId, SourceWordLookup,
+    SourceWordLookupError, SourceWordRegistry, SourceWordSyntaxMarker, StructuredBodyCapabilities,
+    StructuredSourceWordDispatch, StructuredSourceWordInstance,
 };
 use crate::source_word_evaluator::{
     evaluate_source_word, evaluate_source_word_with_state, UserDefinedSourceWordContext,
@@ -219,7 +219,7 @@ pub(crate) struct SourceCompileContext<'a> {
     operators: Option<OperatorLookup>,
     source_words: Option<SourceWordAccess<'a>>,
     globals: Option<&'a mut GlobalVariables>,
-    arrays: Option<&'a mut GlobalArrays>,
+    arrays: Option<NativeSourceWordArrayAccess<'a>>,
     runtime_definitions: Option<RuntimeDefinitionPublicationAccess<'a>>,
     additional_source_capability: bool,
     local_references: Option<&'a DefinitionLocalReferences>,
@@ -232,7 +232,7 @@ pub(crate) struct DefinitionBodyCompileContext<'a> {
     operators: Option<OperatorLookup>,
     source_words: Option<SourceWordLookup<'a>>,
     local_references: Option<&'a DefinitionLocalReferences>,
-    arrays: Option<&'a mut GlobalArrays>,
+    arrays: Option<&'a GlobalArrays>,
 }
 
 pub(crate) struct QuotationBodyCompileContext<'a> {
@@ -660,7 +660,7 @@ pub(crate) fn compile_definition_body<'source>(
         operators: context.operators,
         source_words: context.source_words.map(SourceWordAccess::Read),
         globals: None,
-        arrays: context.arrays,
+        arrays: context.arrays.map(NativeSourceWordArrayAccess::Read),
         runtime_definitions: None,
         additional_source_capability: false,
         local_references: context.local_references,
@@ -1044,7 +1044,10 @@ where
         .globals
         .as_deref_mut()
         .filter(|_| state.capabilities.allows_publication());
-    let arrays = context.arrays.as_deref_mut();
+    let arrays = context
+        .arrays
+        .as_mut()
+        .map(|arrays| arrays.reborrow(state.capabilities.allows_publication()));
     let mut runtime_publisher = context
         .runtime_definitions
         .as_mut()
@@ -1863,7 +1866,7 @@ impl<'a> SourceCompileContext<'a> {
     }
 
     pub(crate) fn with_global_arrays(mut self, arrays: &'a mut GlobalArrays) -> Self {
-        self.arrays = Some(arrays);
+        self.arrays = Some(NativeSourceWordArrayAccess::Write(arrays));
         self
     }
 
@@ -1940,7 +1943,7 @@ impl<'a> DefinitionBodyCompileContext<'a> {
         }
     }
 
-    pub(crate) fn with_global_arrays(mut self, arrays: &'a mut GlobalArrays) -> Self {
+    pub(crate) fn with_global_arrays(mut self, arrays: &'a GlobalArrays) -> Self {
         self.arrays = Some(arrays);
         self
     }
@@ -2025,7 +2028,7 @@ impl<'source> RuntimeDefinitionPublisher<'source>
 {
     fn publish_runtime_definition(
         &mut self,
-        storage: (&mut Bindings, Option<&mut GlobalArrays>),
+        storage: (&mut Bindings, Option<&GlobalArrays>),
         name: crate::name::NormalizedName,
         name_span: SourceSpan,
         local_references: &DefinitionLocalReferences,

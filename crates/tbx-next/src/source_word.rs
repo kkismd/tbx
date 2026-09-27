@@ -610,13 +610,40 @@ pub(crate) struct SourceBlockReader<'source, 'cursor> {
 pub(crate) trait RuntimeDefinitionPublisher<'source> {
     fn publish_runtime_definition(
         &mut self,
-        storage: (&mut Bindings, Option<&mut GlobalArrays>),
+        storage: (&mut Bindings, Option<&GlobalArrays>),
         name: NormalizedName,
         name_span: SourceSpan,
         local_references: &DefinitionLocalReferences,
         body: &[SourceBlockStatement<'source>],
         end_span: SourceSpan,
     ) -> Result<WordId, SourceWordError>;
+}
+
+pub(crate) enum NativeSourceWordArrayAccess<'a> {
+    Read(&'a GlobalArrays),
+    Write(&'a mut GlobalArrays),
+}
+
+impl NativeSourceWordArrayAccess<'_> {
+    pub(crate) fn read(&self) -> &GlobalArrays {
+        match self {
+            Self::Read(arrays) => arrays,
+            Self::Write(arrays) => arrays,
+        }
+    }
+
+    pub(crate) fn reborrow(&mut self, allow_write: bool) -> NativeSourceWordArrayAccess<'_> {
+        match self {
+            Self::Read(arrays) => NativeSourceWordArrayAccess::Read(arrays),
+            Self::Write(arrays) => {
+                if allow_write {
+                    NativeSourceWordArrayAccess::Write(arrays)
+                } else {
+                    NativeSourceWordArrayAccess::Read(arrays)
+                }
+            }
+        }
+    }
 }
 
 impl<'source> SourceBlockStatement<'source> {
@@ -1342,7 +1369,7 @@ pub(crate) struct NativeSourceWordContext<'source, 'state> {
     code: &'state mut dyn InstructionBuildTarget,
     local_line_number_prefix: Option<SourceSpan>,
     globals: Option<&'state mut GlobalVariables>,
-    arrays: Option<&'state mut GlobalArrays>,
+    arrays: Option<NativeSourceWordArrayAccess<'state>>,
     runtime_definitions: Option<&'state mut dyn RuntimeDefinitionPublisher<'source>>,
     source_word_publication: Option<&'state SourceWordRegistry>,
     additional_source_capability: bool,
@@ -1360,7 +1387,7 @@ pub(crate) struct NativeSourceWordContextParts<'source, 'state> {
     pub(crate) code: &'state mut dyn InstructionBuildTarget,
     pub(crate) local_line_number_prefix: Option<SourceSpan>,
     pub(crate) globals: Option<&'state mut GlobalVariables>,
-    pub(crate) arrays: Option<&'state mut GlobalArrays>,
+    pub(crate) arrays: Option<NativeSourceWordArrayAccess<'state>>,
     pub(crate) runtime_definitions: Option<&'state mut dyn RuntimeDefinitionPublisher<'source>>,
     pub(crate) source_word_publication: Option<&'state SourceWordRegistry>,
     pub(crate) additional_source_capability: bool,
@@ -1521,7 +1548,7 @@ impl<'source, 'state> NativeSourceWordContext<'source, 'state> {
         len: usize,
         span: SourceSpan,
     ) -> Result<(), SourceWordError> {
-        let Some(arrays) = &mut self.arrays else {
+        let Some(NativeSourceWordArrayAccess::Write(arrays)) = &mut self.arrays else {
             return Err(SourceWordError::DimPublicationContextUnavailable { span });
         };
         let bindings = match &mut self.bindings {
@@ -1583,7 +1610,10 @@ impl<'source, 'state> NativeSourceWordContext<'source, 'state> {
         };
 
         publisher.publish_runtime_definition(
-            (bindings, self.arrays.as_deref_mut()),
+            (
+                bindings,
+                self.arrays.as_ref().map(NativeSourceWordArrayAccess::read),
+            ),
             name,
             name_span,
             local_references,
@@ -1693,7 +1723,9 @@ impl<'source, 'state> NativeSourceWordContext<'source, 'state> {
     }
 
     pub(crate) fn array_len(&self, id: crate::global_array::ArrayId) -> Option<usize> {
-        self.arrays.as_deref().and_then(|arrays| arrays.len_of(id))
+        self.arrays
+            .as_ref()
+            .and_then(|arrays| arrays.read().len_of(id))
     }
 
     pub(crate) fn stage_expression(
