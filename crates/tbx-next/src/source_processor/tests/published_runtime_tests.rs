@@ -3472,7 +3472,7 @@ fn top_level_eval_constant_print_cr_runs_e2e() {
 }
 
 #[test]
-fn top_level_empty_stack_print_runs_without_output_or_newline() {
+fn top_level_empty_stack_putdec_fails_without_output() {
     let session = RuntimeDefinitionSession::new_with_named_operators_and_output_primitives();
     let print = resolve_word_name(&session.bindings, "PUTDEC").expect("PUTDEC should bootstrap");
     let (sources, id) = source("PUTDEC");
@@ -3488,16 +3488,25 @@ fn top_level_empty_stack_print_runs_without_output_or_newline() {
         ),
     )
     .expect("empty stack PUTDEC should compile through normal word resolution");
-    let result = session
+    let error = session
         .run_unit_with_output(&unit, &mut output)
-        .expect("empty stack PUTDEC should run without output");
+        .expect_err("empty stack PUTDEC should underflow");
+    let SourceProcessorError::Runtime(error) = error else {
+        panic!("empty stack PUTDEC should fail at runtime");
+    };
 
     assert_eq!(
         unit.instructions().get(address(0)),
         Ok(&Instruction::Call(print))
     );
+    assert!(matches!(
+        error.vm().kind(),
+        crate::vm::VmErrorKind::PrimitiveFailed {
+            source: PrimitiveError::DataStackUnderflow { .. },
+            ..
+        }
+    ));
     assert!(output.chunks().is_empty());
-    assert_eq!(result.data_stack(), []);
 }
 
 #[test]
