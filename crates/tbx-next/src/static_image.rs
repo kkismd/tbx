@@ -489,6 +489,41 @@ pub(crate) fn test_lower_and_run<W: std::io::Write>(
 }
 
 #[cfg(test)]
+pub(crate) fn test_lower_debug(
+    owners: &[InstructionView<'_>],
+    entry: CodeLocation,
+    words: &PublishedWords,
+    primitive_words: (
+        OperatorWords,
+        WordId,
+        [WordId; 3],
+        [WordId; 3],
+        WordId,
+        WordId,
+    ),
+    globals: &GlobalVariables,
+    arrays: &GlobalArrays,
+) -> String {
+    let image = lower(
+        owners,
+        entry,
+        words,
+        PrimitiveWordIds {
+            operators: primitive_words.0,
+            abs: primitive_words.1,
+            stack: primitive_words.2,
+            output: primitive_words.3,
+            input: primitive_words.4,
+            rnd: primitive_words.5,
+        },
+        globals,
+        arrays,
+    )
+    .expect("test source lowers to a static image");
+    format!("{image:#?}")
+}
+
+#[cfg(test)]
 pub(crate) fn test_lower_and_encode(
     owners: &[InstructionView<'_>],
     entry: CodeLocation,
