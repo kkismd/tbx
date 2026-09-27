@@ -2,14 +2,14 @@ use super::evaluate;
 use crate::static_image::bytecode_6502::BytecodeArtifact;
 use std::ffi::OsStr;
 use std::fs;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 const PRIME_CYCLE_LIMIT: &str = "50000000";
-// The 5,131,645 ReferenceVm instructions make this substantially heavier than
-// prime; the sim65 E2E uses a separate finite budget with extra headroom.
-const MANDELBROT_CYCLE_LIMIT: &str = "500000000";
+// sim65 measured 2,315,181,850 cycles; this limit adds about 30% headroom.
+const MANDELBROT_CYCLE_LIMIT: &str = "3000000000";
 static NEXT_DIRECTORY: AtomicU64 = AtomicU64::new(0);
 
 struct TempArtifacts(PathBuf);
@@ -173,6 +173,26 @@ fn build_and_run(
         std::io::stdout()
             .write_all(&target.stdout)
             .map_err(|error| format!("write sim65 stdout: {error}"))?;
+        let measurement = run_tool(
+            "sim65",
+            &[
+                OsStr::new("-c"),
+                OsStr::new("-x"),
+                OsStr::new(cycle_limit),
+                executable.as_os_str(),
+            ],
+            &temp.0,
+            "sim65 cycle measurement",
+        )?;
+        require_success(&measurement, "sim65 cycle measurement")?;
+        let report = measurement
+            .stdout
+            .strip_prefix(expected_stdout)
+            .ok_or_else(|| "sim65 cycle measurement changed program stdout".to_owned())?;
+        eprintln!(
+            "sim65 cycle report: {}",
+            String::from_utf8_lossy(report).trim()
+        );
     }
     Ok(())
 }
