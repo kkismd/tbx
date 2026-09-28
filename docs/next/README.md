@@ -34,6 +34,9 @@ crate 単位の詳細は [`crates/tbx-next/README.md`](../../crates/tbx-next/REA
 
 ## Examples
 
+ファイル実行時の標準入力は、実行時入力ワード `TRY_INPUT` に接続されます。
+`TRY_INPUT` の返却値と失敗時の扱いは、[quick reference](tbx-quickref.ja.md#入力) を参照してください。
+
 数当てゲームは、乱数と対話入力を組み合わせたTBX-Nextの縦断サンプルです。
 
 ```sh

@@ -683,7 +683,7 @@ mod tests {
                 abs,
                 stack: [stack.dup(), stack.drop(), stack.swap()],
                 output: [output.putdec(), output.putchr(), output.cr()],
-                input: input.input_question(),
+                input: input.try_input(),
                 rnd: rnd.rnd(),
                 globals: GlobalVariables::new(),
                 arrays: GlobalArrays::new(),

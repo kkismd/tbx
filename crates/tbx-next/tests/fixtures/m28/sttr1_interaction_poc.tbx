@@ -27,7 +27,7 @@ WHILE DONE = 0
   WHILE COMMAND_VALID = 0
     PRINT "COMMAND (0 NAV, 1 SCAN, 2-7 REPORTS, 9 QUIT):"
     CR
-    IF INPUT?()
+    IF TRY_INPUT()
       LET COMMAND = DUP()
       DROP
       IF (COMMAND >= 0 AND COMMAND <= 7) OR COMMAND = 9
@@ -49,7 +49,7 @@ WHILE DONE = 0
     WHILE COURSE_VALID = 0
       PRINT "COURSE X10 (10=1.0, 15=1.5, ..., 90=9.0):"
       CR
-      IF INPUT?()
+      IF TRY_INPUT()
         LET COURSE = DUP()
         DROP
         IF COURSE >= 10 AND COURSE <= 90

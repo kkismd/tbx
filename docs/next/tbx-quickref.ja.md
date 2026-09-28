@@ -40,7 +40,7 @@ printf 'PUTDEC RND(10)\n' | cargo run -p tbx-next -- --seed 42
 CLI実行では、ホストが非決定的なseedを選ぶ。この場合の乱数生成器は将来変更される
 可能性があり、明示seedの互換系列とは別の扱いになる。
 
-ファイルを実行する場合、プロセスの標準入力は `INPUT?` の実行時入力にも使われる。標準入力からソースを与えるモードでは、ソース読み込みに標準入力を使い切るため、同じ入力が `INPUT?` に暗黙に共有されることはない。
+ファイルを実行する場合、プロセスの標準入力は `TRY_INPUT` の実行時入力にも使われる。標準入力からソースを与えるモードでは、ソース読み込みに標準入力を使い切るため、同じ入力が `TRY_INPUT` に暗黙に共有されることはない。
 
 開発時の基本確認は次の通り。
 
@@ -80,7 +80,8 @@ CR
 [A-Za-z_][A-Za-z0-9_]*\??
 ```
 
-末尾の `?` は `PRIME?` や `INPUT?` のような名前に使える。
+末尾の `?` は `PRIME?` のような述語ワードに使う。`?` 付きワードは真偽値を返す。
+通常失敗を実行時エラーにせず、単一値と成否を返す回復可能な取得ワードは `TRY_` prefixを使う。
 
 ## コメント
 
@@ -220,12 +221,12 @@ CR
 - 定義ワード内で同名グローバルが存在しても、一時変数名は一時変数を優先する
 - 配列要素 `@NAME[index]` は現在の `POP_TO` の対象ではない
 
-`INPUT?` の成功側では、条件判定で成功フラグが消費された後に入力値がスタック最上位へ残るため、その値の取り込みに使える。
+`TRY_INPUT` の成功側では、条件判定で成功フラグが消費された後に入力値がスタック最上位へ残るため、その値の取り込みに使える。
 
 ```tbx
 VAR VALUE
 
-IF INPUT?()
+IF TRY_INPUT()
   POP_TO VALUE
   PRINT VALUE
   CR
@@ -529,18 +530,24 @@ CR
 
 ## 入力
 
-`INPUT?` は 1 行を読み、スタックへ **値、成功フラグ** の順で 2 値を積む。
+`TRY_INPUT` は 1 行を読み、ADR #2109 の回復可能な単一値取得契約に従って
+スタックへ **値、成功フラグ** の順で 2 値を積む（`(-- value success)`）。
+成功フラグは `0` または `1` で、スタック最上位に置かれる。成功時だけ値が有効であり、
+失敗時の値は意味を持たないdummy値である。
 
 - 正しい `i16` 10進整数: `value 1`
-- 不正な入力または EOF: `0 0`
+- 不正な入力または EOF: `0 0`（値はdummy値で、使用しない）
 - 実行時入力能力がない場合や入力I/Oに失敗した場合: 実行時エラー
 - 先頭・末尾の空白とタブ、先頭の `+` / `-` は受け付ける
 - 部分的な数値や `i16` 範囲外は失敗する
 
 成功フラグがスタック最上位になる。
 
+この名前はADR #2110の規約に従う。`?` suffixは述語用、`TRY_` prefixは回復可能な単一値取得用であり、
+`TRY_INPUT` に旧名 `INPUT?` のaliasはない。
+
 ```tbx
-INPUT?
+TRY_INPUT
 IF DUP() = 0
   DROP
   DROP
@@ -644,7 +651,7 @@ TBX Next は現行 `tbx` の互換実装ではない。特に次をそのまま�
 - `docs/next/examples/demo.tbx` — 最小実行例
 - `docs/next/examples/stack_function.tbx` — スタックを使うワード
 - `docs/next/examples/prime.tbx` — 局所参照名、条件分岐、反復
-- `docs/next/examples/guess.tbx` — `RND`, `INPUT?`, `PRINT`
+- `docs/next/examples/guess.tbx` — `RND`, `TRY_INPUT`, `PRINT`
 - `docs/next/examples/mandelbrot.tbx` — 整数演算、反復、`ABS`, `PUTCHR`
 - `docs/next/examples/squares.tbx` — グローバル配列への保存と読み出し
 - `docs/next/examples/grades.tbx` — `FOR` で配列を走査し、`SELECT` で成績区分を判定する統合例

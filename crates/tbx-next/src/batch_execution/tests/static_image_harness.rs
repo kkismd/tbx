@@ -81,7 +81,7 @@ impl Fixture {
                 abs,
                 [stack.dup(), stack.drop(), stack.swap()],
                 [output.putdec(), output.putchr(), output.cr()],
-                input.input_question(),
+                input.try_input(),
                 rnd.rnd(),
             ),
         }
