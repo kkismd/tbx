@@ -62,6 +62,28 @@ fn sttr1_device_name_outside_registry_prints_nothing() {
 }
 
 #[test]
+fn sttr1_device_name_explicit_argument_maps_all_eight_indices() {
+    let (sources, standard_library_id, source_id) = device_source(
+        "EVAL 1\nPRINT_DEVICE_NAME\nCR\nEVAL 2\nPRINT_DEVICE_NAME\nCR\nEVAL 3\nPRINT_DEVICE_NAME\nCR\nEVAL 4\nPRINT_DEVICE_NAME\nCR\nEVAL 5\nPRINT_DEVICE_NAME\nCR\nEVAL 6\nPRINT_DEVICE_NAME\nCR\nEVAL 7\nPRINT_DEVICE_NAME\nCR\nEVAL 8\nPRINT_DEVICE_NAME\nCR\n",
+    );
+    let mut writer = RecordingWriter::default();
+    let result = success(execute_registered_sources_with_filesystem_and_seed(
+        sources,
+        standard_library_id,
+        source_id,
+        &mut writer,
+        None,
+        30,
+    ));
+
+    assert_eq!(
+        writer.text(),
+        "WARP ENGINES\nSHORT RANGE SENSORS\nLONG RANGE SENSORS\nPHASER CONTROL\nPHOTON TUBES\nDAMAGE CONTROL\nSHIELD CONTROL\nLIBRARY COMPUTER\n"
+    );
+    assert_eq!(result.data_stack(), []);
+}
+
+#[test]
 fn sttr1_damaged_control_rejects_damage_report() {
     let (sources, standard_library_id, source_id) =
         device_source("LET @DAMAGE[6] = -1\nDAMAGE_CONTROL\n");
