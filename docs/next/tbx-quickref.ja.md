@@ -221,21 +221,28 @@ CR
 - 定義ワード内で同名グローバルが存在しても、一時変数名は一時変数を優先する
 - 配列要素 `@NAME[index]` は現在の `POP_TO` の対象ではない
 
-`TRY_INPUT` の成功側では、条件判定で成功フラグが消費された後に入力値がスタック最上位へ残るため、その値の取り込みに使える。
+複数の値を返すワードの結果を複数のスカラーへ分けて格納するときにも使える。たとえば幅10の2次元マップを1次元indexで表す場合、次のワードは `(index -- x y)` の順で座標を返す。
 
 ```tbx
-VAR VALUE
-
-IF TRY_INPUT()
-  POP_TO VALUE
-  PRINT VALUE
-  CR
-ELSE
+DEF INDEX_TO_XY INDEX
+  LET I = INDEX
   DROP
-ENDIF
+  EVAL I % 10
+  EVAL I / 10
+END
+
+VAR X, Y
+
+EVAL INDEX_TO_XY(27)
+POP_TO Y
+POP_TO X
+PRINT X, ",", Y
+CR
 ```
 
-この構文は「スタック最上位をスカラーへ移す」用途のためのものであり、値の複製や破棄そのものが必要な場面では引き続き `DUP` / `DROP` を使う。
+`INDEX` は読み取り専用の局所参照なので、最初に `I` へ退避してから `DROP` で元引数を消費する。`EVAL` が `x`、続いて `y` を積み、呼出し側はLIFO順に `Y`、`X` へ取り込む。この用途は、右辺式を1値だけ評価する `LET` では置き換えにくい。値の複製や破棄そのものが必要な場面では引き続き `DUP` / `DROP` を使う。
+
+`TRY_` wordの `value success` protocolから成功値を受け取る場合は、手書きの `IF` / `POP_TO` / `DROP` ではなく `IF_LET` を使う。成功フラグの消費、成功値の格納、失敗時のdummy値破棄は `IF_LET` が行う。構文の詳細は「[`IF_LET` による成功値の束縛](#if_let-による成功値の束縛)」を参照。
 
 ## グローバル配列
 
