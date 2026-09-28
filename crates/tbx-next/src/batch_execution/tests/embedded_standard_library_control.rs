@@ -432,6 +432,28 @@ fn embedded_standard_library_for_repeats_with_a_fixed_end_value() {
 }
 
 #[test]
+fn embedded_standard_library_for_treats_top_level_scratch_names_as_globals_only_when_declared() {
+    let mut writer = RecordingWriter::default();
+    let undeclared = failure(execute_with_embedded_standard_library(
+        "FOR I = 1 TO 3\nNEXT",
+        "program.tbx",
+        &mut writer,
+    ));
+    assert!(matches!(
+        undeclared.cause,
+        BatchExecutionFailureCause::Source(_)
+    ));
+
+    let mut writer = RecordingWriter::default();
+    let declared = success(execute_with_embedded_standard_library(
+        "VAR I\nFOR I = 1 TO 3\nNEXT\nEVAL I",
+        "program.tbx",
+        &mut writer,
+    ));
+    assert_eq!(declared.data_stack(), [Value::integer(4)]);
+}
+
+#[test]
 fn embedded_standard_library_for_evaluates_bounds_in_order_once_and_can_skip_body() {
     let mut writer = RecordingWriter::default();
     let result = success(execute_with_embedded_standard_library(
