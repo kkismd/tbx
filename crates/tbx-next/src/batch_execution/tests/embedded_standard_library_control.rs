@@ -481,6 +481,48 @@ fn embedded_standard_library_for_supports_nested_for_loops() {
 }
 
 #[test]
+fn embedded_standard_library_for_uses_compiled_word_scratch_targets() {
+    let mut writer = RecordingWriter::default();
+    let result = success(execute_with_embedded_standard_library(
+        "VAR TOTAL\nVAR I\nLET TOTAL = 0\nLET I = 77\nDEF COUNT_UP\nFOR I = 1 TO 3\nLET TOTAL = TOTAL + I\nNEXT\nEND\nCOUNT_UP\nEVAL TOTAL\nEVAL I",
+        "program.tbx",
+        &mut writer,
+    ));
+
+    assert_eq!(result.data_stack(), [Value::integer(6), Value::integer(77)]);
+}
+
+#[test]
+fn embedded_standard_library_for_uses_independent_nested_compiled_word_scratch_targets() {
+    let mut writer = RecordingWriter::default();
+    let result = success(execute_with_embedded_standard_library(
+        "VAR TOTAL\nLET TOTAL = 0\nDEF COUNT_PAIRS\nFOR I = 1 TO 2\nFOR J = 1 TO 3\nLET TOTAL = TOTAL + 1\nNEXT\nNEXT\nEND\nCOUNT_PAIRS\nEVAL TOTAL",
+        "program.tbx",
+        &mut writer,
+    ));
+
+    assert_eq!(result.data_stack(), [Value::integer(6)]);
+}
+
+#[test]
+fn embedded_standard_library_for_rejects_read_only_local_reference_targets() {
+    for global_declaration in ["", "VAR ARG\n"] {
+        let mut writer = RecordingWriter::default();
+        let source = format!("{global_declaration}DEF BAD ARG\nFOR ARG = 1 TO 2\nNEXT\nEND");
+        let result = failure(execute_with_embedded_standard_library(
+            &source,
+            "program.tbx",
+            &mut writer,
+        ));
+
+        assert!(matches!(
+            result.cause,
+            BatchExecutionFailureCause::Source(_)
+        ));
+    }
+}
+
+#[test]
 fn embedded_standard_library_for_uses_the_modified_counter_and_preserves_body_stack_values() {
     let mut writer = RecordingWriter::default();
     let result = success(execute_with_embedded_standard_library(
