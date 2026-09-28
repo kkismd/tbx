@@ -150,8 +150,38 @@ LET @KLINGON_E[2] = 200\n\
 LET @KLINGON_X[3] = 6\n\
 LET @KLINGON_Y[3] = 4\n\
 LET @KLINGON_E[3] = 300\n\
+LET KLINGONS_HERE = 2\n\
+LET KLINGONS_LEFT = 7\n\
+LET @SECTOR[30] = 2\n\
+LET @GALAXY[1] = 217\n\
 TRY_FIND_KLINGON_AT(6, 4)\n\
-TRY_FIND_KLINGON_AT(1, 1)\n",
+EVAL @KLINGON_X[1]\n\
+EVAL @KLINGON_Y[1]\n\
+EVAL @KLINGON_E[1]\n\
+EVAL @KLINGON_X[2]\n\
+EVAL @KLINGON_Y[2]\n\
+EVAL @KLINGON_E[2]\n\
+EVAL @KLINGON_X[3]\n\
+EVAL @KLINGON_Y[3]\n\
+EVAL @KLINGON_E[3]\n\
+EVAL KLINGONS_HERE\n\
+EVAL KLINGONS_LEFT\n\
+EVAL @SECTOR[30]\n\
+EVAL @GALAXY[1]\n\
+TRY_FIND_KLINGON_AT(1, 1)\n\
+EVAL @KLINGON_X[1]\n\
+EVAL @KLINGON_Y[1]\n\
+EVAL @KLINGON_E[1]\n\
+EVAL @KLINGON_X[2]\n\
+EVAL @KLINGON_Y[2]\n\
+EVAL @KLINGON_E[2]\n\
+EVAL @KLINGON_X[3]\n\
+EVAL @KLINGON_Y[3]\n\
+EVAL @KLINGON_E[3]\n\
+EVAL KLINGONS_HERE\n\
+EVAL KLINGONS_LEFT\n\
+EVAL @SECTOR[30]\n\
+EVAL @GALAXY[1]\n",
     );
     let (sources, standard_library_id, source_id) =
         sttr1_sources_with_standard_library(STDLIB_SOURCE, &source);
@@ -166,15 +196,11 @@ TRY_FIND_KLINGON_AT(1, 1)\n",
         30,
     ));
 
-    assert_eq!(
-        result.data_stack(),
-        [
-            Value::integer(2),
-            Value::integer(1),
-            Value::integer(0),
-            Value::integer(0)
-        ]
-    );
+    let stack = result.data_stack();
+    assert_eq!(stack.len(), 30);
+    assert_eq!(stack[..2], [Value::integer(2), Value::integer(1)]);
+    assert_eq!(stack[15..17], [Value::integer(0), Value::integer(0)]);
+    assert_eq!(stack[2..15], stack[17..30]);
 }
 
 #[test]
