@@ -210,12 +210,12 @@ fn embedded_standard_library_if_let_cleans_success_and_failure_results_before_bo
         ("invalid", false, 7, -1, -1),
     ] {
         let failure_clause = if has_failure_clause {
-            "LET_ELSE\nDEPTH\nPOP_TO FAILURE_DEPTH\nENDLET"
+            "LET_ELSE\nDEPTH\nPOP_TO FAILURE_DEPTH"
         } else {
-            "ENDLET"
+            ""
         };
         let source = format!(
-            "VAR TARGET\nVAR SUCCESS_DEPTH\nVAR FAILURE_DEPTH\nLET TARGET = 7\nLET SUCCESS_DEPTH = -1\nLET FAILURE_DEPTH = -1\nIF_LET TARGET = TRY_INPUT()\nDEPTH\nPOP_TO SUCCESS_DEPTH\n{failure_clause}\nEVAL TARGET\nEVAL SUCCESS_DEPTH\nEVAL FAILURE_DEPTH"
+            "VAR TARGET\nVAR SUCCESS_DEPTH\nVAR FAILURE_DEPTH\nVAR POST_DEPTH\nLET TARGET = 7\nLET SUCCESS_DEPTH = -1\nLET FAILURE_DEPTH = -1\nLET POST_DEPTH = -1\nIF_LET TARGET = TRY_INPUT()\nDEPTH\nPOP_TO SUCCESS_DEPTH\n{failure_clause}\nENDLET\nDEPTH\nPOP_TO POST_DEPTH\nEVAL TARGET\nEVAL SUCCESS_DEPTH\nEVAL FAILURE_DEPTH\nEVAL POST_DEPTH"
         );
         let (sources, standard_library_id, source_id) =
             sources_with_standard_library(STDLIB_SOURCE, &source);
@@ -236,6 +236,7 @@ fn embedded_standard_library_if_let_cleans_success_and_failure_results_before_bo
                 Value::integer(expected_target),
                 Value::integer(expected_success_depth),
                 Value::integer(expected_failure_depth),
+                Value::integer(0),
             ]
         );
     }
@@ -294,11 +295,11 @@ fn embedded_standard_library_if_let_supports_nested_blocks_and_empty_failure_cla
 fn embedded_standard_library_if_let_uses_scratch_targets_and_rejects_read_only_locals() {
     let mut writer = RecordingWriter::default();
     let result = success(execute_with_embedded_standard_library(
-        "VAR I\nLET I = 77\nDEF RESULT\nEVAL 5\nEVAL 1\nEND\nDEF SET_SCRATCH\nIF_LET I = RESULT()\nENDLET\nEND\nSET_SCRATCH\nEVAL I",
+        "VAR I\nLET I = 77\nDEF RESULT\nEVAL 5\nEVAL 1\nEND\nDEF SET_SCRATCH\nIF_LET I = RESULT()\nENDLET\nEVAL I\nEND\nSET_SCRATCH\nEVAL I",
         "program.tbx",
         &mut writer,
     ));
-    assert_eq!(result.data_stack(), [Value::integer(77)]);
+    assert_eq!(result.data_stack(), [Value::integer(5), Value::integer(77)]);
 
     for global_declaration in ["", "VAR ARG\n"] {
         let mut writer = RecordingWriter::default();

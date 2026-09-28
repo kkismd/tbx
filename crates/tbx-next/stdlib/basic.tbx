@@ -38,7 +38,7 @@ SYNTAX IF_LET
     EXPECT_END
   LAST ENDLET
     EXPECT_END
-    # Let fall-through skip cleanup; unresolved failure branches enter it directly.
+    # Failure bodies from LET_ELSE also skip fallback cleanup; unresolved branches enter it directly.
     EMIT_BRANCH_COMPLETE
     PATCH_FOLLOWING
     EMIT_CALL drop
