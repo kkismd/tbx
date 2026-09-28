@@ -125,11 +125,68 @@ fn sttr1_quadrant_setup_places_unique_sector_objects_and_klingon_state() {
 }
 
 #[test]
+fn sttr1_center_long_scan_visits_all_quadrants_in_row_order_and_updates_chart() {
+    let mut source = std::fs::read_to_string(example_path("sttr1/main.tbx"))
+        .expect("STTR1 example should be readable");
+    source.push_str(
+        "LET ENT_QX = 4\n\
+LET ENT_QY = 4\n\
+LET @GALAXY[19] = 101\n\
+LET @GALAXY[20] = 112\n\
+LET @GALAXY[21] = 103\n\
+LET @GALAXY[27] = 114\n\
+LET @GALAXY[28] = 205\n\
+LET @GALAXY[29] = 316\n\
+LET @GALAXY[35] = 107\n\
+LET @GALAXY[36] = 208\n\
+LET @GALAXY[37] = 318\n\
+LET @DAMAGE[8] = 0\n\
+PRINT_LONG_SCAN\n\
+PRINT \"CENTER_CHART \", @CHART[19], \" \", @CHART[20], \" \", @CHART[21], \" \", @CHART[27], \" \", @CHART[28], \" \", @CHART[29], \" \", @CHART[35], \" \", @CHART[36], \" \", @CHART[37]\n\
+CR\n",
+    );
+    let (sources, standard_library_id, source_id) =
+        sttr1_sources_with_standard_library(STDLIB_SOURCE, &source);
+    let mut writer = RecordingWriter::default();
+    let result = success(execute_registered_sources_with_filesystem_and_seed(
+        sources,
+        standard_library_id,
+        source_id,
+        &mut writer,
+        None,
+        30,
+    ));
+
+    let output = writer.text();
+    let lines = output.lines().collect::<Vec<_>>();
+    let long_scan_start = lines
+        .iter()
+        .rposition(|line| *line == "LONG RANGE SCAN")
+        .expect("center long scan should be printed");
+    let chart_line = lines
+        .iter()
+        .position(|line| line.starts_with("CENTER_CHART "))
+        .expect("center chart values should be printed after the scan");
+    let long_scan = &lines[long_scan_start + 3..chart_line];
+    assert_eq!(
+        long_scan.len(),
+        3,
+        "center scan should contain exactly three rows"
+    );
+    assert_eq!(long_scan, ["101 112 103 ", "114 205 316 ", "107 208 318 "]);
+    assert_eq!(
+        output_values(output, "CENTER_CHART "),
+        [101, 112, 103, 114, 205, 316, 107, 208, 318]
+    );
+    assert_eq!(result.data_stack(), []);
+}
+
+#[test]
 fn sttr1_scan_commands_respect_sensor_and_computer_damage_gates() {
     let mut source = std::fs::read_to_string(example_path("sttr1/main.tbx"))
         .expect("STTR1 example should be readable");
     source.push_str(
-        "LET @DAMAGE[2] = -1\nPRINT_SHORT_SCAN\nLET @DAMAGE[3] = -1\nPRINT_LONG_SCAN\nLET SECTOR_INDEX = 1\nWHILE SECTOR_INDEX <= 64\nLET @CHART[SECTOR_INDEX] = 0\nLET SECTOR_INDEX = SECTOR_INDEX + 1\nENDWH\nLET @DAMAGE[2] = 0\nLET @DAMAGE[3] = 0\nLET @DAMAGE[8] = -1\nPRINT_LONG_SCAN\nPRINT \"CHART_AFTER \"\nLET SECTOR_INDEX = 1\nWHILE SECTOR_INDEX <= 64\nPRINT @CHART[SECTOR_INDEX], \" \"\nLET SECTOR_INDEX = SECTOR_INDEX + 1\nENDWH\nCR\n",
+        "LET @DAMAGE[2] = -1\nPRINT_SHORT_SCAN\nLET @DAMAGE[3] = -1\nPRINT_LONG_SCAN\nLET TEST_INDEX = 1\nWHILE TEST_INDEX <= 64\nLET @CHART[TEST_INDEX] = 0\nLET TEST_INDEX = TEST_INDEX + 1\nENDWH\nLET @DAMAGE[2] = 0\nLET @DAMAGE[3] = 0\nLET @DAMAGE[8] = -1\nPRINT_LONG_SCAN\nPRINT \"CHART_AFTER \"\nLET TEST_INDEX = 1\nWHILE TEST_INDEX <= 64\nPRINT @CHART[TEST_INDEX], \" \"\nLET TEST_INDEX = TEST_INDEX + 1\nENDWH\nCR\n",
     );
     let (sources, standard_library_id, source_id) =
         sttr1_sources_with_standard_library(STDLIB_SOURCE, &source);

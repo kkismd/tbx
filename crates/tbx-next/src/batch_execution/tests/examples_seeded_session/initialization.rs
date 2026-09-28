@@ -14,38 +14,38 @@ CR
 PRINT "QUADRANT ", ENT_QX, " ", ENT_QY, " ", KLINGONS_HERE, " ", BASES_HERE, " ", STARS_HERE
 CR
 PRINT "GALAXY "
-LET QUADRANT_INDEX = 1
-WHILE QUADRANT_INDEX <= 64
-  PRINT @GALAXY[QUADRANT_INDEX], " "
-  LET QUADRANT_INDEX = QUADRANT_INDEX + 1
+LET TEST_INDEX = 1
+WHILE TEST_INDEX <= 64
+  PRINT @GALAXY[TEST_INDEX], " "
+  LET TEST_INDEX = TEST_INDEX + 1
 ENDWH
 CR
 PRINT "CHART "
-LET QUADRANT_INDEX = 1
-WHILE QUADRANT_INDEX <= 64
-  PRINT @CHART[QUADRANT_INDEX], " "
-  LET QUADRANT_INDEX = QUADRANT_INDEX + 1
+LET TEST_INDEX = 1
+WHILE TEST_INDEX <= 64
+  PRINT @CHART[TEST_INDEX], " "
+  LET TEST_INDEX = TEST_INDEX + 1
 ENDWH
 CR
 PRINT "DAMAGE "
-LET QUADRANT_INDEX = 1
-WHILE QUADRANT_INDEX <= 8
-  PRINT @DAMAGE[QUADRANT_INDEX], " "
-  LET QUADRANT_INDEX = QUADRANT_INDEX + 1
+LET TEST_INDEX = 1
+WHILE TEST_INDEX <= 8
+  PRINT @DAMAGE[TEST_INDEX], " "
+  LET TEST_INDEX = TEST_INDEX + 1
 ENDWH
 CR
 PRINT "COURSE_DX "
-LET QUADRANT_INDEX = 1
-WHILE QUADRANT_INDEX <= 9
-  PRINT @COURSE_DX[QUADRANT_INDEX], " "
-  LET QUADRANT_INDEX = QUADRANT_INDEX + 1
+LET TEST_INDEX = 1
+WHILE TEST_INDEX <= 9
+  PRINT @COURSE_DX[TEST_INDEX], " "
+  LET TEST_INDEX = TEST_INDEX + 1
 ENDWH
 CR
 PRINT "COURSE_DY "
-LET QUADRANT_INDEX = 1
-WHILE QUADRANT_INDEX <= 9
-  PRINT @COURSE_DY[QUADRANT_INDEX], " "
-  LET QUADRANT_INDEX = QUADRANT_INDEX + 1
+LET TEST_INDEX = 1
+WHILE TEST_INDEX <= 9
+  PRINT @COURSE_DY[TEST_INDEX], " "
+  LET TEST_INDEX = TEST_INDEX + 1
 ENDWH
 CR
 "#,
@@ -133,7 +133,7 @@ fn sttr1_start_game_sets_docking_and_condition_before_the_first_command() {
 
     for (name, docked, klingons, expected) in scenarios {
         let setup = format!(
-            "  INIT_QUADRANT\n  LET ENT_SX = 4\n  LET ENT_SY = 4\n  LET SECTOR_INDEX = 1\n  WHILE SECTOR_INDEX <= 64\n    LET @SECTOR[SECTOR_INDEX] = 0\n    LET SECTOR_INDEX = SECTOR_INDEX + 1\n  ENDWH\n  LET KLINGONS_HERE = {klingons}\n  LET DOCKED = 0\n  LET ENERGY = 3000\n  LET TORPEDOES = 10\n  LET SHIELDS = 77\n{}\nEND\n\nDEF PRINT_BRIEFING",
+            "  INIT_QUADRANT\n  LET ENT_SX = 4\n  LET ENT_SY = 4\n  LET TEST_INDEX = 1\n  WHILE TEST_INDEX <= 64\n    LET @SECTOR[TEST_INDEX] = 0\n    LET TEST_INDEX = TEST_INDEX + 1\n  ENDWH\n  LET KLINGONS_HERE = {klingons}\n  LET DOCKED = 0\n  LET ENERGY = 3000\n  LET TORPEDOES = 10\n  LET SHIELDS = 77\n{}\nEND\n\nDEF PRINT_BRIEFING",
             if docked == 1 { "  LET @SECTOR[27] = 3" } else { "" }
         );
         let scenario_game = game.replace("  INIT_QUADRANT\nEND\n\nDEF PRINT_BRIEFING", &setup);
@@ -141,7 +141,10 @@ fn sttr1_start_game_sets_docking_and_condition_before_the_first_command() {
             "  GAME_LOOP\nEND\n",
             "  PRINT \"INITIAL_STATE \", DOCKED, \" \", ENERGY, \" \", TORPEDOES, \" \", SHIELDS, \" \", CONDITION\n  CR\n  CHECK_DOCKING\n  CHECK_DOCKING\n  PRINT \"REPEATED_STATE \", DOCKED, \" \", ENERGY, \" \", TORPEDOES, \" \", SHIELDS, \" \", CONDITION, \" \", RND(200)\n  CR\nEND\n",
         );
-        let source = original.replace("USE \"game.tbx\"", &scenario_game);
+        let source = format!(
+            "VAR TEST_INDEX\n{}",
+            original.replace("USE \"game.tbx\"", &scenario_game)
+        );
         // Keep the real START_GAME entry point while replacing only its interactive loop.
         let mut sources = SourceTexts::new();
         let standard_library_id = sources.register(STDLIB_SOURCE, "<tbx-next-stdlib>");
@@ -191,7 +194,10 @@ fn sttr1_start_game_sets_docking_and_condition_before_the_first_command() {
             "  INIT_MISSION\n  CHECK_DOCKING\n  PRINT_BRIEFING",
             "  INIT_MISSION\n  PRINT_BRIEFING",
         );
-        let control_source = original.replace("USE \"game.tbx\"", &control_game);
+        let control_source = format!(
+            "VAR TEST_INDEX\n{}",
+            original.replace("USE \"game.tbx\"", &control_game)
+        );
         let mut control_sources = SourceTexts::new();
         let control_stdlib_id = control_sources.register(STDLIB_SOURCE, "<tbx-next-stdlib>");
         let control_source_id = control_sources.register_with_acquisition(
