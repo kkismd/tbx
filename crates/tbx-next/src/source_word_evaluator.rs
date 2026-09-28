@@ -6,7 +6,7 @@ use crate::expression::{
     ExpressionLocalResolver, ExpressionStaging,
 };
 use crate::global_variable::GlobalVarId;
-use crate::instruction::{Instruction, InstructionAddress};
+use crate::instruction::{Instruction, InstructionAddress, ScratchSlotOperand};
 use crate::instruction_builder::{InstructionBuildError, InstructionBuildTarget};
 use crate::lexer::{Token, TokenKind};
 use crate::line_number::LocalLineNumber;
@@ -21,6 +21,7 @@ use crate::source_word_ir::{
     LocalBinding, LocalReference, SourceInstructionOrigin, SourceProcessingCapabilities,
     SourceProcessingOperation, SourceWordImplementation,
 };
+use crate::stack::ScratchSlot;
 use crate::word::WordId;
 use crate::word_resolution::{resolve_binding_name, ResolvedBinding, WordResolutionError};
 
@@ -171,7 +172,7 @@ enum RuntimeLocal {
         span: SourceSpan,
     },
     VariableTarget {
-        id: GlobalVarId,
+        target: VariableTarget,
         span: SourceSpan,
     },
     RuntimeWordTarget {
@@ -181,6 +182,12 @@ enum RuntimeLocal {
     ExpressionArtifact(ExpressionStaging),
     OwnerLocalCodePosition(InstructionAddress),
     LocalLineTarget(LocalLineNumber),
+}
+
+#[derive(Debug, Clone, Copy)]
+enum VariableTarget {
+    Global(GlobalVarId),
+    Scratch(ScratchSlot),
 }
 
 #[derive(Debug, Default)]
@@ -437,14 +444,13 @@ fn evaluate_instruction(
         }
         SourceProcessingOperation::ResolveVariable { name, bind } => {
             let (source_name, span) = locals.name(name, origin)?;
-            let id = resolve_variable_name(context.bindings, source_name.as_str()).map_err(
-                |source| SourceWordEvaluationError::VariableResolution {
+            let target = resolve_source_word_variable_target(context, source_name.as_str())
+                .map_err(|source| SourceWordEvaluationError::VariableResolution {
                     span,
                     source,
                     origin,
-                },
-            )?;
-            locals.bind(bind, RuntimeLocal::VariableTarget { id, span });
+                })?;
+            locals.bind(bind, RuntimeLocal::VariableTarget { target, span });
         }
         SourceProcessingOperation::ResolveWord { name, bind } => {
             let (source_name, span) = locals.name(name, origin)?;
@@ -490,10 +496,16 @@ fn evaluate_instruction(
                 })?;
         }
         SourceProcessingOperation::EmitStore { target } => {
-            let (id, span) = locals.variable_target(target, origin)?;
+            let (target, span) = locals.variable_target(target, origin)?;
+            let instruction = match target {
+                VariableTarget::Global(id) => Instruction::StoreVar(id),
+                VariableTarget::Scratch(slot) => {
+                    Instruction::StoreScratch(ScratchSlotOperand::from_slot(slot))
+                }
+            };
             context
                 .code
-                .append_mapped(Instruction::StoreVar(id), span)
+                .append_mapped(instruction, span)
                 .map_err(|source| SourceWordEvaluationError::InstructionBuild { source, origin })?;
         }
         SourceProcessingOperation::EmitCall { target } => {
@@ -504,10 +516,16 @@ fn evaluate_instruction(
                 .map_err(|source| SourceWordEvaluationError::InstructionBuild { source, origin })?;
         }
         SourceProcessingOperation::EmitLoad { target } => {
-            let (id, span) = locals.variable_target(target, origin)?;
+            let (target, span) = locals.variable_target(target, origin)?;
+            let instruction = match target {
+                VariableTarget::Global(id) => Instruction::LoadVar(id),
+                VariableTarget::Scratch(slot) => {
+                    Instruction::LoadScratch(ScratchSlotOperand::from_slot(slot))
+                }
+            };
             context
                 .code
-                .append_mapped(Instruction::LoadVar(id), span)
+                .append_mapped(instruction, span)
                 .map_err(|source| SourceWordEvaluationError::InstructionBuild { source, origin })?;
         }
         SourceProcessingOperation::EmitInt { value } => {
@@ -774,6 +792,23 @@ fn resolve_variable_name(
     }
 }
 
+fn resolve_source_word_variable_target(
+    context: &UserDefinedSourceWordContext<'_, '_>,
+    source_name: &str,
+) -> Result<VariableTarget, crate::expression::ExpressionVariableErrorKind> {
+    if let Some(references) = context.local_references {
+        // A read-only definition-local reference must never fall through to a
+        // same-named global target.
+        if references.resolve(source_name).is_some() {
+            return Err(crate::expression::ExpressionVariableErrorKind::TargetIsNotVariable);
+        }
+        if let Some(slot) = DefinitionLocalReferences::scratch_slot(source_name) {
+            return Ok(VariableTarget::Scratch(slot));
+        }
+    }
+    resolve_variable_name(context.bindings, source_name).map(VariableTarget::Global)
+}
+
 fn resolve_runtime_word_name(
     bindings: &Bindings,
     source_name: &str,
@@ -851,9 +886,9 @@ impl RuntimeLocals {
         &self,
         reference: &LocalReference,
         origin: SourceInstructionOrigin,
-    ) -> Result<(GlobalVarId, SourceSpan), SourceWordEvaluationError> {
+    ) -> Result<(VariableTarget, SourceSpan), SourceWordEvaluationError> {
         match self.get(reference, origin)? {
-            RuntimeLocal::VariableTarget { id, span } => Ok((*id, *span)),
+            RuntimeLocal::VariableTarget { target, span } => Ok((*target, *span)),
             actual => Err(SourceWordEvaluationError::LocalTypeMismatch {
                 reference: reference.clone(),
                 expected: RuntimeLocalType::VariableTarget,

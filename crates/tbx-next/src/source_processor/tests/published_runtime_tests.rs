@@ -2470,6 +2470,37 @@ fn compiled_word_scratch_is_independent_from_an_explicit_same_named_global() {
 }
 
 #[test]
+fn resolve_var_scratch_load_and_store_keep_the_source_name_mapping() {
+    let mut session = RuntimeDefinitionSession::new_with_named_operators();
+    session.publish_syntax(
+        "SYNTAX SETVAR\nSTATEMENT\nREAD_NAME AS target_name\nRESOLVE_VAR target_name AS target\nEXPECT \"=\"\nREAD_EXPR AS value\nEMIT_EXPR value\nEMIT_STORE target\nENDS",
+    );
+    session.publish_syntax(
+        "SYNTAX GETVAR\nSTATEMENT\nREAD_NAME AS target_name\nRESOLVE_VAR target_name AS target\nEMIT_LOAD target\nENDS",
+    );
+    let (sources, source_id, _) = session.publish_def("DEF TARGETS\nSETVAR I = 7\nGETVAR I\nEND");
+    let code = session.code.instruction_view();
+    let slot = crate::instruction::ScratchSlotOperand::from_slot(crate::stack::ScratchSlot::I);
+
+    assert_eq!(code.get(address(1)), Ok(&Instruction::StoreScratch(slot)));
+    assert_eq!(code.get(address(2)), Ok(&Instruction::LoadScratch(slot)));
+    assert_eq!(
+        session
+            .code
+            .source_mapping()
+            .source_span(code.location(address(1))),
+        Ok(Some(span(sources.view(), source_id, 19, 20)))
+    );
+    assert_eq!(
+        session
+            .code
+            .source_mapping()
+            .source_span(code.location(address(2))),
+        Ok(Some(span(sources.view(), source_id, 32, 33)))
+    );
+}
+
+#[test]
 fn pop_to_uses_invocation_local_scratch_and_preserves_same_named_global() {
     let mut session = RuntimeDefinitionSession::new_with_named_operators();
     let global_i = register_test_global(&mut session.globals, &mut session.bindings, "I");
