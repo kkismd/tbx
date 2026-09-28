@@ -1,5 +1,5 @@
 .include "vm_fixture.inc"
-VM_HEADER entry, 1
+VM_HEADER entry, 1, 0, 0
 entry:
     PUSH 7
 failure:

@@ -1,10 +1,13 @@
 ; M32 private bytecode contract shared by hand-written sim65 fixtures.
-.macro VM_HEADER entry, globals
+.macro VM_HEADER entry, globals, arrays, descriptors
     .export _tbx_code_start, _tbx_code_end
     .export _tbx_entry_offset, _tbx_global_count
+    .export _tbx_array_count, _tbx_array_descriptors
     .segment "RODATA"
 _tbx_entry_offset: .word entry - _tbx_code_start
 _tbx_global_count: .word globals
+_tbx_array_count: .word arrays
+_tbx_array_descriptors: .word descriptors
 _tbx_code_start:
 .endmacro
 
@@ -21,6 +24,12 @@ _tbx_code_end:
 .endmacro
 .macro STORE slot
     .byte $11, slot
+.endmacro
+.macro LOAD_ARRAY slot
+    .byte $12, slot
+.endmacro
+.macro STORE_ARRAY slot
+    .byte $13, slot
 .endmacro
 .macro CALL target
     .byte $20

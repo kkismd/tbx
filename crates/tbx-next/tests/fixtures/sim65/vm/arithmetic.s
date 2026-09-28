@@ -1,5 +1,5 @@
 .include "vm_fixture.inc"
-VM_HEADER entry, 2
+VM_HEADER entry, 2, 0, 0
 entry:
     PUSH 0
     PUTDEC

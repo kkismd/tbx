@@ -150,6 +150,7 @@ fn vm_success_fixtures() {
         ("call", "44\n22\n"),
         ("encoder_contract", "4658\n"),
         ("encoder_immediates", ""),
+        ("array_access", "1234\n-5678\n-42\n"),
         ("nonzero_entry", "0\n99\n"),
         ("arithmetic_edges", "32761\n-2\n1\n1\n1\n0\n1\n1\n"),
         (
@@ -227,7 +228,11 @@ fn vm_failure_fixtures_observe_atomic_state() {
 #[test]
 #[ignore = "requires ca65, ld65, and sim65; run with --ignored"]
 fn vm_rejects_invalid_startup_metadata() {
-    for (fixture, exit) in [("invalid_entry", 11), ("invalid_global_count", 16)] {
+    for (fixture, exit) in [
+        ("invalid_entry", 11),
+        ("invalid_global_count", 16),
+        ("invalid_array_count", 20),
+    ] {
         let result = build_and_run(fixture, false);
         assert_eq!(result.output.status.code(), Some(exit), "{fixture}");
     }
@@ -286,7 +291,13 @@ fn vm_linker_layout_obeys_m32_segments_and_capacity() {
     ] {
         assert!((code.0..code.1).contains(&address));
     }
-    for name in ["_tbx_code_start", "_tbx_entry_offset", "_tbx_global_count"] {
+    for name in [
+        "_tbx_code_start",
+        "_tbx_entry_offset",
+        "_tbx_global_count",
+        "_tbx_array_count",
+        "_tbx_array_descriptors",
+    ] {
         assert!((rodata.0..rodata.1).contains(&symbol(&result.labels, name)));
     }
     assert!((rodata.0..=rodata.1).contains(&symbol(&result.labels, "_tbx_code_end")));
@@ -299,6 +310,7 @@ fn vm_linker_layout_obeys_m32_segments_and_capacity() {
         ("tbx_call_depth", 8),
         ("tbx_global_count", 9),
         ("tbx_last_error", 11),
+        ("tbx_array_count", 12),
     ] {
         assert_eq!(
             symbol(&result.labels, name),

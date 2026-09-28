@@ -1,6 +1,6 @@
 .include "vm_fixture.inc"
 .export _putchar
-VM_HEADER entry, 0
+VM_HEADER entry, 0, 0, 0
 entry:
     PUSH 65
 failure:
