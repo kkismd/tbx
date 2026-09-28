@@ -143,7 +143,7 @@ mod stack_primitive;
 mod output_primitive;
 
 // #1688 keeps runtime input as a narrow, host-supplied line capability and
-// exposes numeric interpretation only through the INPUT? primitive.
+// exposes numeric interpretation only through the TRY_INPUT primitive.
 #[allow(dead_code)]
 mod input_primitive;
 

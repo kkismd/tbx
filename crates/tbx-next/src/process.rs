@@ -408,7 +408,7 @@ mod tests {
             &mut stdin,
             &mut stdout,
             &mut stderr,
-            |_| Ok("INPUT?".to_owned()),
+            |_| Ok("TRY_INPUT".to_owned()),
         );
 
         assert_eq!(status, ProcessStatus::Failure);

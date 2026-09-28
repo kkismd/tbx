@@ -8,7 +8,7 @@ LET DONE = 0
 
 WHILE DONE = 0
   PRINT "Guess a number from 1 to 100: "
-  IF INPUT?()
+  IF TRY_INPUT()
     IF DUP() < ANSWER
       PRINT "Too low."
       CR

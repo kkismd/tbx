@@ -7,7 +7,7 @@ use crate::word::{PublishedWords, WordId};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct InputPrimitiveWords {
-    input_question: WordId,
+    try_input: WordId,
 }
 
 pub(crate) fn register_input_primitives(
@@ -15,25 +15,25 @@ pub(crate) fn register_input_primitives(
     words: &mut PublishedWords,
     bindings: &mut Bindings,
 ) -> Result<InputPrimitiveWords, PrimitiveBootstrapError> {
-    let name = NormalizedName::new("INPUT?").expect("built-in input primitive name is valid");
+    let name = NormalizedName::new("TRY_INPUT").expect("built-in input primitive name is valid");
     bindings
         .validate_new_name(&name)
         .map_err(|error| match error {
             BindingInsertError::NameConflict => PrimitiveBootstrapError::NameConflict,
             BindingInsertError::ReservedName => PrimitiveBootstrapError::ReservedName,
         })?;
-    let primitive = primitives.register(input_question);
-    let input_question = register_primitive(words, bindings, name, primitive)?;
-    Ok(InputPrimitiveWords { input_question })
+    let primitive = primitives.register(try_input);
+    let try_input = register_primitive(words, bindings, name, primitive)?;
+    Ok(InputPrimitiveWords { try_input })
 }
 
 impl InputPrimitiveWords {
-    pub(crate) const fn input_question(self) -> WordId {
-        self.input_question
+    pub(crate) const fn try_input(self) -> WordId {
+        self.try_input
     }
 }
 
-fn input_question(context: &mut PrimitiveContext<'_, '_>) -> Result<(), PrimitiveError> {
+fn try_input(context: &mut PrimitiveContext<'_, '_>) -> Result<(), PrimitiveError> {
     let Some(line) = context.read_input()? else {
         context.push(Value::integer(0));
         context.push(Value::integer(0));
@@ -113,9 +113,9 @@ mod tests {
         let mut words = PublishedWords::new();
         let mut bindings = Bindings::new();
         let input_words = register_input_primitives(&mut primitives, &mut words, &mut bindings)
-            .expect("INPUT? should bootstrap");
+            .expect("TRY_INPUT should bootstrap");
         let mut code = InstructionSequence::new();
-        let entry = code.append(Instruction::Call(input_words.input_question()));
+        let entry = code.append(Instruction::Call(input_words.try_input()));
         code.append(Instruction::Halt);
         let mut vm = Vm::new(code.view(), entry).expect("entry should be valid");
         let mut input = TestInput::new(lines);
@@ -130,7 +130,7 @@ mod tests {
     }
 
     #[test]
-    fn input_question_returns_value_then_success_flag() {
+    fn try_input_returns_value_then_success_flag() {
         let (mut vm, result) = run_input(vec![Ok(Some("  -42\t".into()))]);
         assert_eq!(result, Ok(RunOutcome::Halted));
         assert_eq!(vm.pop_data(), Ok(Value::integer(1)));
@@ -138,15 +138,15 @@ mod tests {
     }
 
     #[test]
-    fn input_question_consumes_invalid_line_and_reads_the_next_line() {
+    fn try_input_consumes_invalid_line_and_reads_the_next_line() {
         let mut primitives = PrimitiveRegistry::new();
         let mut words = PublishedWords::new();
         let mut bindings = Bindings::new();
         let input_words = register_input_primitives(&mut primitives, &mut words, &mut bindings)
-            .expect("INPUT? should bootstrap");
+            .expect("TRY_INPUT should bootstrap");
         let mut code = InstructionSequence::new();
-        let entry = code.append(Instruction::Call(input_words.input_question()));
-        code.append(Instruction::Call(input_words.input_question()));
+        let entry = code.append(Instruction::Call(input_words.try_input()));
+        code.append(Instruction::Call(input_words.try_input()));
         code.append(Instruction::Halt);
         let mut vm = Vm::new(code.view(), entry).expect("entry should be valid");
         let mut input = TestInput::new([Ok(Some("abc".into())), Ok(Some("42".into()))]);
@@ -165,7 +165,7 @@ mod tests {
     }
 
     #[test]
-    fn input_question_maps_eof_to_zero_zero() {
+    fn try_input_maps_eof_to_zero_zero() {
         let (mut vm, result) = run_input(vec![Ok(None)]);
         assert_eq!(result, Ok(RunOutcome::Halted));
         assert_eq!(vm.pop_data(), Ok(Value::integer(0)));
@@ -173,15 +173,15 @@ mod tests {
     }
 
     #[test]
-    fn strict_input_exhaustion_fails_a_followup_input_question() {
+    fn strict_input_exhaustion_fails_a_followup_try_input() {
         let mut primitives = PrimitiveRegistry::new();
         let mut words = PublishedWords::new();
         let mut bindings = Bindings::new();
         let input_words = register_input_primitives(&mut primitives, &mut words, &mut bindings)
-            .expect("INPUT? should bootstrap");
+            .expect("TRY_INPUT should bootstrap");
         let mut code = InstructionSequence::new();
-        let entry = code.append(Instruction::Call(input_words.input_question()));
-        code.append(Instruction::Call(input_words.input_question()));
+        let entry = code.append(Instruction::Call(input_words.try_input()));
+        code.append(Instruction::Call(input_words.try_input()));
         code.append(Instruction::Halt);
         let mut vm = Vm::new(code.view(), entry).expect("entry should be valid");
         let mut input = TestInput::strict([Ok(Some("42".into()))]);
@@ -194,7 +194,7 @@ mod tests {
 
         let error = vm
             .run(execution)
-            .expect_err("an unexpected followup INPUT? should fail");
+            .expect_err("an unexpected followup TRY_INPUT should fail");
         assert!(matches!(
             error.kind(),
             VmErrorKind::PrimitiveFailed {
@@ -214,10 +214,10 @@ mod tests {
         let mut words = PublishedWords::new();
         let mut bindings = Bindings::new();
         let input_words = register_input_primitives(&mut primitives, &mut words, &mut bindings)
-            .expect("INPUT? should bootstrap");
+            .expect("TRY_INPUT should bootstrap");
         let mut code = InstructionSequence::new();
         let entry = code.append(Instruction::Push(Value::integer(7)));
-        code.append(Instruction::Call(input_words.input_question()));
+        code.append(Instruction::Call(input_words.try_input()));
         code.append(Instruction::Halt);
         let mut vm = Vm::new(code.view(), entry).expect("entry should be valid");
         let mut input = TestInput::new([Err(RuntimeInputError::Failed)]);
@@ -269,11 +269,12 @@ mod tests {
         let mut words = PublishedWords::new();
         let mut bindings = Bindings::new();
         let input_words = register_input_primitives(&mut primitives, &mut words, &mut bindings)
-            .expect("INPUT? should bootstrap");
+            .expect("TRY_INPUT should bootstrap");
         assert_eq!(
-            resolve_word_name(&bindings, "input?"),
-            Ok(input_words.input_question())
+            resolve_word_name(&bindings, "try_input"),
+            Ok(input_words.try_input())
         );
+        assert!(resolve_word_name(&bindings, "INPUT?").is_err());
     }
 
     #[test]
@@ -288,12 +289,12 @@ mod tests {
         )
         .expect("output primitives should bootstrap");
         let input_words = register_input_primitives(&mut primitives, &mut words, &mut bindings)
-            .expect("INPUT? should bootstrap");
+            .expect("TRY_INPUT should bootstrap");
 
         let mut code = InstructionSequence::new();
         let entry = code.append(Instruction::Push(Value::integer(7)));
         code.append(Instruction::Call(output_words.putdec()));
-        code.append(Instruction::Call(input_words.input_question()));
+        code.append(Instruction::Call(input_words.try_input()));
         code.append(Instruction::Call(output_words.putdec()));
         code.append(Instruction::Call(output_words.putdec()));
         code.append(Instruction::Halt);

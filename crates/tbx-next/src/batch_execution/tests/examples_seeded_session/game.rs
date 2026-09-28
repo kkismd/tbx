@@ -10,7 +10,7 @@ fn sttr1_game_briefing_and_invalid_command_dispatch_preserve_state() {
 PRINT_BRIEFING
 EVAL DISPATCH_COMMAND(99)
 DROP
-IF INPUT?()
+IF TRY_INPUT()
   DROP
 ELSE
   DROP
