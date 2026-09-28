@@ -105,6 +105,79 @@ PRINT \"TORPEDO_MISS_STATE \", @KLINGON_E[1], \" \", @KLINGON_E[2], \" \", @KLIN
 }
 
 #[test]
+fn sttr1_try_find_klingon_at_returns_the_first_living_match_and_consumes_inputs() {
+    let mut source = std::fs::read_to_string(example_path("sttr1/main.tbx"))
+        .expect("STTR1 example should be readable");
+    source.push_str(
+        "LET @KLINGON_X[1] = 6\n\
+LET @KLINGON_Y[1] = 4\n\
+LET @KLINGON_E[1] = 100\n\
+LET @KLINGON_X[2] = 6\n\
+LET @KLINGON_Y[2] = 4\n\
+LET @KLINGON_E[2] = 200\n\
+LET @KLINGON_X[3] = 6\n\
+LET @KLINGON_Y[3] = 4\n\
+LET @KLINGON_E[3] = 300\n\
+TRY_FIND_KLINGON_AT(6, 4)\n",
+    );
+    let (sources, standard_library_id, source_id) =
+        sttr1_sources_with_standard_library(STDLIB_SOURCE, &source);
+    let mut writer = RecordingWriter::default();
+
+    let result = success(execute_registered_sources_with_filesystem_and_seed(
+        sources,
+        standard_library_id,
+        source_id,
+        &mut writer,
+        None,
+        30,
+    ));
+
+    assert_eq!(result.data_stack(), [Value::integer(1), Value::integer(1)]);
+}
+
+#[test]
+fn sttr1_try_find_klingon_at_skips_destroyed_slots_and_returns_dummy_on_miss() {
+    let mut source = std::fs::read_to_string(example_path("sttr1/main.tbx"))
+        .expect("STTR1 example should be readable");
+    source.push_str(
+        "LET @KLINGON_X[1] = 6\n\
+LET @KLINGON_Y[1] = 4\n\
+LET @KLINGON_E[1] = 0\n\
+LET @KLINGON_X[2] = 6\n\
+LET @KLINGON_Y[2] = 4\n\
+LET @KLINGON_E[2] = 200\n\
+LET @KLINGON_X[3] = 6\n\
+LET @KLINGON_Y[3] = 4\n\
+LET @KLINGON_E[3] = 300\n\
+TRY_FIND_KLINGON_AT(6, 4)\n\
+TRY_FIND_KLINGON_AT(1, 1)\n",
+    );
+    let (sources, standard_library_id, source_id) =
+        sttr1_sources_with_standard_library(STDLIB_SOURCE, &source);
+    let mut writer = RecordingWriter::default();
+
+    let result = success(execute_registered_sources_with_filesystem_and_seed(
+        sources,
+        standard_library_id,
+        source_id,
+        &mut writer,
+        None,
+        30,
+    ));
+
+    assert_eq!(
+        result.data_stack(),
+        [
+            Value::integer(2),
+            Value::integer(1),
+            Value::integer(0),
+            Value::integer(0)
+        ]
+    );
+}
+
+#[test]
 fn sttr1_phaser_deducts_energy_then_retaliates_and_updates_klingon_state() {
     let mut source = std::fs::read_to_string(example_path("sttr1/main.tbx"))
         .expect("STTR1 example should be readable");

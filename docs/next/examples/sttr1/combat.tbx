@@ -76,6 +76,26 @@ DEF DESTROY_KLINGON INDEX
   DROP
 END
 
+DEF TRY_FIND_KLINGON_AT TARGET_X, TARGET_Y
+  # I is local to this lookup and stops at the first living match.
+  LET I = 0
+  FOR N = 1 TO 3
+    IF @KLINGON_E[N] > 0 AND @KLINGON_X[N] = TARGET_X AND @KLINGON_Y[N] = TARGET_Y
+      LET I = N
+      BREAK
+    ENDIF
+  NEXT
+  DROP
+  DROP
+  IF I > 0
+    EVAL I
+    EVAL 1
+  ELSE
+    EVAL 0
+    EVAL 0
+  ENDIF
+END
+
 
 DEF KLINGON_ATTACK
   IF DOCKED <> 0
@@ -103,15 +123,15 @@ END
 
 DEF TORPEDO_RESOLVE_HIT TARGET_X, TARGET_Y, TARGET_SECTOR_INDEX
   IF TORPEDO_HIT = 2
-    # N is the current slot in the torpedo coordinate search.
-    FOR N = 1 TO 3
-      IF @KLINGON_E[N] > 0 AND @KLINGON_X[N] = TARGET_X AND @KLINGON_Y[N] = TARGET_Y
-        PRINT "PHOTON TORPEDO HIT KLINGON AT SECTOR ", TARGET_X, ",", TARGET_Y
-        CR
-        DESTROY_KLINGON(N)
-        BREAK
-      ENDIF
-    NEXT
+    IF TRY_FIND_KLINGON_AT(TARGET_X, TARGET_Y)
+      # The lookup leaves its index below the consumed success flag.
+      POP_TO N
+      PRINT "PHOTON TORPEDO HIT KLINGON AT SECTOR ", TARGET_X, ",", TARGET_Y
+      CR
+      DESTROY_KLINGON(N)
+    ELSE
+      DROP
+    ENDIF
   ELSIF TORPEDO_HIT = 3
     PRINT "PHOTON TORPEDO HIT STARBASE AT SECTOR ", TARGET_X, ",", TARGET_Y, "; STARBASE DESTROYED"
     CR
