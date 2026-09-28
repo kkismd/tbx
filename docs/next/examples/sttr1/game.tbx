@@ -106,18 +106,16 @@ DEF GAME_LOOP
   WHILE GAME_RESULT = 0
     PRINT "COMMAND (0-7):"
     CR
-    IF TRY_INPUT()
+    IF_LET I = TRY_INPUT()
       REM I holds the command entered for this game-loop iteration.
-      POP_TO I
       IF DISPATCH_COMMAND(I)
         CHECK_ENDGAME
       ENDIF
-    ELSE
-      DROP
+    LET_ELSE
       PRINT "COMMAND INPUT ERROR"
       CR
       PRINT_COMMAND_MENU
-    ENDIF
+    ENDLET
   ENDWH
 END
 

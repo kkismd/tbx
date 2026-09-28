@@ -200,8 +200,7 @@ DEF PHOTON_TORPEDO
       PRINT_COURSE_GUIDE
       PRINT "COURSE (0 CANCEL, 10-89):"
       CR
-      IF TRY_INPUT()
-        POP_TO COURSE
+      IF_LET COURSE = TRY_INPUT()
         IF COURSE = 0
           LET TORPEDO_VALID = 1
           RETURN
@@ -211,11 +210,10 @@ DEF PHOTON_TORPEDO
           PRINT "COURSE OUT OF RANGE"
           CR
         ENDIF
-      ELSE
-        DROP
+      LET_ELSE
         PRINT "COURSE INPUT ERROR"
         CR
-      ENDIF
+      ENDLET
     ENDWH
 
       LET TORPEDOES = TORPEDOES - 1
@@ -245,8 +243,7 @@ DEF PHASER
       CR
       PRINT "PHASER ENERGY:"
       CR
-      IF TRY_INPUT()
-        POP_TO PHASER_ENERGY
+      IF_LET PHASER_ENERGY = TRY_INPUT()
         IF PHASER_ENERGY <= 0
           LET PHASER_ENERGY = 0
           LET PHASER_VALID = 1
@@ -258,11 +255,10 @@ DEF PHASER
         ELSE
           LET PHASER_VALID = 1
         ENDIF
-      ELSE
-        DROP
+      LET_ELSE
         PRINT "PHASER INPUT ERROR"
         CR
-      ENDIF
+      ENDLET
     ENDWH
 
   LET ENERGY = ENERGY - PHASER_ENERGY
