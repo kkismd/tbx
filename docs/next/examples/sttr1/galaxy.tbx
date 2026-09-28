@@ -50,23 +50,23 @@ DEF INIT_QUADRANT
     LET @SECTOR[N] = 0
   NEXT
 
-  FOR KLINGON_INDEX = 1 TO 3
-    LET @KLINGON_X[KLINGON_INDEX] = 0
-    LET @KLINGON_Y[KLINGON_INDEX] = 0
-    LET @KLINGON_E[KLINGON_INDEX] = 0
+  FOR N = 1 TO 3
+    LET @KLINGON_X[N] = 0
+    LET @KLINGON_Y[N] = 0
+    LET @KLINGON_E[N] = 0
   NEXT
 
   LET @SECTOR[(ENT_SY - 1) * 8 + ENT_SX] = 1
 
-  FOR KLINGON_INDEX = 1 TO KLINGONS_HERE
+  FOR L = 1 TO KLINGONS_HERE
     # I is the short-lived empty-sector index.
     DO
       LET I = RND(8) + (RND(8) - 1) * 8
     UNTIL @SECTOR[I] = 0
     LET @SECTOR[I] = 2
-    LET @KLINGON_X[KLINGON_INDEX] = (I - 1) % 8 + 1
-    LET @KLINGON_Y[KLINGON_INDEX] = (I - 1) / 8 + 1
-    LET @KLINGON_E[KLINGON_INDEX] = KLINGON_INIT_ENERGY
+    LET @KLINGON_X[L] = (I - 1) % 8 + 1
+    LET @KLINGON_Y[L] = (I - 1) / 8 + 1
+    LET @KLINGON_E[L] = KLINGON_INIT_ENERGY
   NEXT
 
   # N counts base placements; its earlier clearing-loop value is no longer needed.
