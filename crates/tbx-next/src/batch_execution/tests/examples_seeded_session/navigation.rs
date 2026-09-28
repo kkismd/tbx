@@ -673,10 +673,10 @@ LET ENT_SY = 4\n\
 LET @GALAXY[1] = 0\n\
 INIT_QUADRANT\n\
 LET DOCKED = 0\n\
-LET DEVICE_INDEX = 1\n\
-WHILE DEVICE_INDEX <= 8\n\
-  LET @DAMAGE[DEVICE_INDEX] = 0\n\
-  LET DEVICE_INDEX = DEVICE_INDEX + 1\n\
+LET TEST_INDEX = 1\n\
+WHILE TEST_INDEX <= 8\n\
+  LET @DAMAGE[TEST_INDEX] = 0\n\
+  LET TEST_INDEX = TEST_INDEX + 1\n\
 ENDWH\n\
 ";
     let mut navigation_source = std::fs::read_to_string(example_path("sttr1/main.tbx"))
@@ -750,10 +750,10 @@ LET @KLINGON_Y[1] = 8\n\
 LET @KLINGON_E[1] = 200\n\
 LET DOCKED = 1\n\
 LET SHIELDS = 77\n\
-LET DEVICE_INDEX = 1\n\
-WHILE DEVICE_INDEX <= 8\n\
-  LET @DAMAGE[DEVICE_INDEX] = 0\n\
-  LET DEVICE_INDEX = DEVICE_INDEX + 1\n\
+LET TEST_INDEX = 1\n\
+WHILE TEST_INDEX <= 8\n\
+  LET @DAMAGE[TEST_INDEX] = 0\n\
+  LET TEST_INDEX = TEST_INDEX + 1\n\
 ENDWH\n\
 ";
     let mut navigation_source = std::fs::read_to_string(example_path("sttr1/main.tbx"))
