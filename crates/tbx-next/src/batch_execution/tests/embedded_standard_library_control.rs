@@ -197,6 +197,216 @@ fn embedded_standard_library_test_entry_uses_the_production_source() {
 }
 
 #[test]
+fn embedded_standard_library_if_let_cleans_success_and_failure_results_before_bodies() {
+    for (
+        input_line,
+        has_failure_clause,
+        expected_target,
+        expected_success_depth,
+        expected_failure_depth,
+    ) in [
+        ("42", true, 42, 0, -1),
+        ("invalid", true, 7, -1, 0),
+        ("invalid", false, 7, -1, -1),
+    ] {
+        let failure_clause = if has_failure_clause {
+            "LET_ELSE\nDEPTH\nPOP_TO FAILURE_DEPTH\nENDLET"
+        } else {
+            "ENDLET"
+        };
+        let source = format!(
+            "VAR TARGET\nVAR SUCCESS_DEPTH\nVAR FAILURE_DEPTH\nLET TARGET = 7\nLET SUCCESS_DEPTH = -1\nLET FAILURE_DEPTH = -1\nIF_LET TARGET = TRY_INPUT()\nDEPTH\nPOP_TO SUCCESS_DEPTH\n{failure_clause}\nEVAL TARGET\nEVAL SUCCESS_DEPTH\nEVAL FAILURE_DEPTH"
+        );
+        let (sources, standard_library_id, source_id) =
+            sources_with_standard_library(STDLIB_SOURCE, &source);
+        let mut input = TestInput::new([Ok(Some(input_line.to_owned()))]);
+        let mut writer = RecordingWriter::default();
+        let result = success(execute_registered_sources_with_filesystem_and_seed(
+            sources,
+            standard_library_id,
+            source_id,
+            &mut writer,
+            Some(&mut input),
+            1,
+        ));
+
+        assert_eq!(
+            result.data_stack(),
+            [
+                Value::integer(expected_target),
+                Value::integer(expected_success_depth),
+                Value::integer(expected_failure_depth),
+            ]
+        );
+    }
+}
+
+#[test]
+fn embedded_standard_library_if_let_supports_nested_blocks_and_empty_failure_clause() {
+    let mut writer = RecordingWriter::default();
+    let source = "VAR TARGET\nVAR I\nVAR DEPTH_AT_BODY\nIF 1\nIF_LET TARGET = TRY_INPUT()\nIF_LET I = TRY_INPUT()\nDEPTH\nPOP_TO DEPTH_AT_BODY\nENDLET\nENDLET\nENDIF\nEVAL TARGET\nEVAL DEPTH_AT_BODY";
+    let (sources, standard_library_id, source_id) =
+        sources_with_standard_library(STDLIB_SOURCE, source);
+    let mut input = TestInput::new([Ok(Some("12".to_owned())), Ok(Some("13".to_owned()))]);
+    let result = success(execute_registered_sources_with_filesystem_and_seed(
+        sources,
+        standard_library_id,
+        source_id,
+        &mut writer,
+        Some(&mut input),
+        1,
+    ));
+
+    assert_eq!(result.data_stack(), [Value::integer(12), Value::integer(0)]);
+
+    let mut writer = RecordingWriter::default();
+    let source = "VAR TARGET\nLET TARGET = 8\nIF_LET TARGET = TRY_INPUT()\nLET TARGET = 100\nLET_ELSE\n# only a comment\nENDLET\nEVAL TARGET";
+    let (sources, standard_library_id, source_id) =
+        sources_with_standard_library(STDLIB_SOURCE, source);
+    let mut input = TestInput::new([Ok(Some("invalid".to_owned()))]);
+    let result = success(execute_registered_sources_with_filesystem_and_seed(
+        sources,
+        standard_library_id,
+        source_id,
+        &mut writer,
+        Some(&mut input),
+        1,
+    ));
+    assert_eq!(result.data_stack(), [Value::integer(8)]);
+
+    let mut writer = RecordingWriter::default();
+    let source = "VAR TARGET\nLET TARGET = 8\nIF_LET TARGET = TRY_INPUT()\nLET TARGET = 100\nLET_ELSE\nENDLET\nEVAL TARGET";
+    let (sources, standard_library_id, source_id) =
+        sources_with_standard_library(STDLIB_SOURCE, source);
+    let mut input = TestInput::new([Ok(Some("invalid".to_owned()))]);
+    let result = success(execute_registered_sources_with_filesystem_and_seed(
+        sources,
+        standard_library_id,
+        source_id,
+        &mut writer,
+        Some(&mut input),
+        1,
+    ));
+    assert_eq!(result.data_stack(), [Value::integer(8)]);
+}
+
+#[test]
+fn embedded_standard_library_if_let_uses_scratch_targets_and_rejects_read_only_locals() {
+    let mut writer = RecordingWriter::default();
+    let result = success(execute_with_embedded_standard_library(
+        "VAR I\nLET I = 77\nDEF RESULT\nEVAL 5\nEVAL 1\nEND\nDEF SET_SCRATCH\nIF_LET I = RESULT()\nENDLET\nEND\nSET_SCRATCH\nEVAL I",
+        "program.tbx",
+        &mut writer,
+    ));
+    assert_eq!(result.data_stack(), [Value::integer(77)]);
+
+    for global_declaration in ["", "VAR ARG\n"] {
+        let mut writer = RecordingWriter::default();
+        let source = format!(
+            "{global_declaration}DEF BAD ARG\nIF_LET ARG = RESULT()\nENDLET\nEND\nDEF RESULT\nEVAL 1\nEVAL 1\nEND"
+        );
+        let failure = failure(execute_with_embedded_standard_library(
+            &source,
+            "program.tbx",
+            &mut writer,
+        ));
+        assert!(matches!(
+            failure.cause,
+            BatchExecutionFailureCause::Source(_)
+        ));
+    }
+}
+
+#[test]
+fn embedded_standard_library_if_let_cleans_up_before_return_and_break() {
+    for (input_line, expected) in [("5", 5), ("invalid", 0)] {
+        let source = "VAR RESULT\nVAR VALUE\nLET RESULT = -1\nDEF STOP_EARLY\nIF_LET VALUE = TRY_INPUT()\nLET RESULT = VALUE\nRETURN\nLET_ELSE\nLET RESULT = 0\nRETURN\nENDLET\nLET RESULT = 100\nEND\nSTOP_EARLY\nEVAL RESULT";
+        let (sources, standard_library_id, source_id) =
+            sources_with_standard_library(STDLIB_SOURCE, source);
+        let mut input = TestInput::new([Ok(Some(input_line.to_owned()))]);
+        let mut writer = RecordingWriter::default();
+        let result = success(execute_registered_sources_with_filesystem_and_seed(
+            sources,
+            standard_library_id,
+            source_id,
+            &mut writer,
+            Some(&mut input),
+            1,
+        ));
+
+        assert_eq!(result.data_stack(), [Value::integer(expected)]);
+    }
+
+    for (input_line, expected) in [("5", 1), ("invalid", 2)] {
+        let source = "VAR COUNT\nVAR VALUE\nLET COUNT = 0\nWHILE 1\nIF_LET VALUE = TRY_INPUT()\nLET COUNT = 1\nBREAK\nLET_ELSE\nLET COUNT = 2\nBREAK\nENDLET\nENDWH\nEVAL COUNT";
+        let (sources, standard_library_id, source_id) =
+            sources_with_standard_library(STDLIB_SOURCE, source);
+        let mut input = TestInput::new([Ok(Some(input_line.to_owned()))]);
+        let mut writer = RecordingWriter::default();
+        let result = success(execute_registered_sources_with_filesystem_and_seed(
+            sources,
+            standard_library_id,
+            source_id,
+            &mut writer,
+            Some(&mut input),
+            1,
+        ));
+
+        assert_eq!(result.data_stack(), [Value::integer(expected)]);
+    }
+}
+
+#[test]
+fn embedded_standard_library_if_let_rejects_malformed_blocks() {
+    for source in [
+        "VAR VALUE\nIF_LET = TRY_INPUT()\nENDLET",
+        "VAR VALUE\nIF_LET VALUE TRY_INPUT()\nENDLET",
+        "VAR VALUE\nIF_LET VALUE = TRY_INPUT()",
+        "IF_LET MISSING = TRY_INPUT()\nENDLET",
+        "VAR VALUE\nIF_LET VALUE = TRY_INPUT()\nLET_ELSE\nLET_ELSE\nENDLET",
+    ] {
+        let mut writer = RecordingWriter::default();
+        let result = failure(execute_with_embedded_standard_library(
+            source,
+            "program.tbx",
+            &mut writer,
+        ));
+        assert!(matches!(
+            result.cause,
+            BatchExecutionFailureCause::Source(_)
+        ));
+    }
+}
+
+#[test]
+fn guess_example_uses_if_let_for_success_and_invalid_input() {
+    let source = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/next/examples/guess.tbx"),
+    )
+    .expect("guess example should be readable")
+    .replace("LET ANSWER = RND(100)", "LET ANSWER = 1");
+    let (sources, standard_library_id, source_id) =
+        sources_with_standard_library(STDLIB_SOURCE, &source);
+    let mut input = TestInput::new([
+        Ok(Some("not a number".to_owned())),
+        Ok(Some("1".to_owned())),
+    ]);
+    let mut writer = RecordingWriter::default();
+    let result = success(execute_registered_sources_with_filesystem_and_seed(
+        sources,
+        standard_library_id,
+        source_id,
+        &mut writer,
+        Some(&mut input),
+        1,
+    ));
+
+    assert_eq!(result.data_stack(), []);
+    assert!(writer.text().contains("Please enter a number."));
+    assert!(writer.text().contains("Correct!"));
+}
+
+#[test]
 fn embedded_standard_library_while_repeats_until_condition_is_false() {
     let mut writer = RecordingWriter::default();
 

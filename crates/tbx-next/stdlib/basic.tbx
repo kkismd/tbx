@@ -20,6 +20,31 @@ SYNTAX IF
     PATCH_COMPLETE
 ENDS
 
+SYNTAX IF_LET
+  BLOCK
+  START
+    RESOLVE_WORD_LITERAL DROP AS drop
+    READ_NAME AS target_name
+    RESOLVE_VAR target_name AS target
+    EXPECT "="
+    READ_EXPR AS expression
+    EMIT_EXPR expression
+    EMIT_BRANCH_IF_FALSE_FOLLOWING
+    EMIT_STORE target
+  MARK_OPTIONAL LET_ELSE
+    EMIT_BRANCH_COMPLETE
+    PATCH_FOLLOWING
+    EMIT_CALL drop
+    EXPECT_END
+  LAST ENDLET
+    EXPECT_END
+    # Let fall-through skip cleanup; unresolved failure branches enter it directly.
+    EMIT_BRANCH_COMPLETE
+    PATCH_FOLLOWING
+    EMIT_CALL drop
+    PATCH_COMPLETE
+ENDS
+
 SYNTAX BREAK
   STATEMENT
   EXPECT_END
