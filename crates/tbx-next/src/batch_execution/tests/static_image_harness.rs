@@ -260,3 +260,52 @@ fn representative_sources_compile_and_lower() {
     assert!(grades.instruction_count > 0);
     assert!(!grades.array_lengths.is_empty());
 }
+
+#[test]
+fn array_resource_measurements_are_available_on_request() {
+    let minimal = evaluate(
+        "DIM @VALUES[3]\nLET @VALUES[1] = 7\nPRINT @VALUES[1]\nCR\n",
+        "array-minimal.tbx",
+        false,
+        false,
+    )
+    .statistics;
+    let squares = evaluate(
+        include_str!("../../../../../docs/next/examples/squares.tbx"),
+        "squares.tbx",
+        false,
+        false,
+    )
+    .statistics;
+    let grades = evaluate(
+        include_str!("../../../../../docs/next/examples/grades.tbx"),
+        "grades.tbx",
+        false,
+        false,
+    )
+    .statistics;
+
+    assert!(!minimal.array_lengths.is_empty());
+    let variants = format!("{:?}", minimal.variant_counts);
+    assert!(variants.contains("LoadArray") && variants.contains("StoreArray"));
+    for (name, statistics) in [
+        ("array-minimal", minimal),
+        ("squares", squares),
+        ("grades", grades),
+    ] {
+        assert!(statistics.instruction_count > 0, "{name}");
+        if std::env::var_os("TBX_MEASURE_STATIC_IMAGES").is_some() {
+            let array_cells: usize = statistics.array_lengths.iter().sum();
+            eprintln!(
+                "static image: sample={name} instructions={} variants={:?} relocations={} fixed_text_count={} fixed_text_bytes={} globals={} array_lengths={:?} array_cells={array_cells}",
+                statistics.instruction_count,
+                statistics.variant_counts,
+                statistics.relocation_count,
+                statistics.fixed_text_count,
+                statistics.fixed_text_bytes,
+                statistics.global_count,
+                statistics.array_lengths,
+            );
+        }
+    }
+}
