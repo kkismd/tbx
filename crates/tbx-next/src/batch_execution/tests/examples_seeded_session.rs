@@ -48,6 +48,7 @@ PRINT_SHORT_SCAN
 PRINT_LONG_SCAN
 "#,
     );
+    let source = format!("VAR TEST_INDEX\n{source}");
     let main_path = example_path("sttr1/main.tbx");
     let canonical_path = std::fs::canonicalize(main_path)
         .expect("STTR1 entry point should have a canonical filesystem path");

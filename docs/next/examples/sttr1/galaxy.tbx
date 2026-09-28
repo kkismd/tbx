@@ -1,7 +1,8 @@
 DEF INIT_GALAXY
   LET KLINGONS_LEFT = 0
   LET BASES_LEFT = 0
-  FOR QUADRANT_INDEX = 1 TO 64
+  # N is the current quadrant index while initializing the galaxy.
+  FOR N = 1 TO 64
     # I is the short-lived quadrant distribution roll.
     LET I = RND(100)
     IF I <= 80
@@ -22,7 +23,7 @@ DEF INIT_GALAXY
     ENDIF
 
     LET STARS_HERE = RND(8)
-    LET @GALAXY[QUADRANT_INDEX] = KLINGONS_HERE * 100 + BASES_HERE * 10 + STARS_HERE
+    LET @GALAXY[N] = KLINGONS_HERE * 100 + BASES_HERE * 10 + STARS_HERE
     LET KLINGONS_LEFT = KLINGONS_LEFT + KLINGONS_HERE
     LET BASES_LEFT = BASES_LEFT + BASES_HERE
   NEXT
@@ -44,8 +45,9 @@ DEF INIT_QUADRANT
     CR
   ENDIF
 
-  FOR SECTOR_INDEX = 1 TO 64
-    LET @SECTOR[SECTOR_INDEX] = 0
+  # N is the current sector index while clearing the quadrant.
+  FOR N = 1 TO 64
+    LET @SECTOR[N] = 0
   NEXT
 
   FOR KLINGON_INDEX = 1 TO 3
@@ -67,14 +69,16 @@ DEF INIT_QUADRANT
     LET @KLINGON_E[KLINGON_INDEX] = KLINGON_INIT_ENERGY
   NEXT
 
-  FOR SECTOR_INDEX = 1 TO BASES_HERE
+  # N counts base placements; its earlier clearing-loop value is no longer needed.
+  FOR N = 1 TO BASES_HERE
     DO
       LET I = RND(8) + (RND(8) - 1) * 8
     UNTIL @SECTOR[I] = 0
     LET @SECTOR[I] = 3
   NEXT
 
-  FOR SECTOR_INDEX = 1 TO STARS_HERE
+  # N counts star placements; its earlier base-loop value is no longer needed.
+  FOR N = 1 TO STARS_HERE
     DO
       LET I = RND(8) + (RND(8) - 1) * 8
     UNTIL @SECTOR[I] = 0

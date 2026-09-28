@@ -36,21 +36,17 @@ DEF CHECK_DOCKING
   # N holds the previous docked flag only until this check completes.
   LET N = DOCKED
   LET DOCKED = 0
-  # I/J/K are the short-lived docking row, column, and sector index.
-  LET I = ENT_SY - 1
-  WHILE I <= ENT_SY + 1
-    LET J = ENT_SX - 1
-    WHILE J <= ENT_SX + 1
+  # I/J visit the 3x3 sector neighborhood; K is its one-based sector index.
+  FOR I = ENT_SY - 1 TO ENT_SY + 1
+    FOR J = ENT_SX - 1 TO ENT_SX + 1
       IF I >= 1 AND I <= 8 AND J >= 1 AND J <= 8
         LET K = (I - 1) * 8 + J
         IF @SECTOR[K] = 3
           LET DOCKED = 1
         ENDIF
       ENDIF
-      LET J = J + 1
-    ENDWH
-    LET I = I + 1
-  ENDWH
+    NEXT
+  NEXT
 
   IF DOCKED <> 0
     LET ENERGY = MAX_ENERGY

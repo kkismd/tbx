@@ -162,12 +162,11 @@ DEF PRINT_SHORT_SCAN
   ENDIF
   PRINT "SHORT RANGE SCAN"
     CR
-    LET SECTOR_ROW = 1
-    WHILE SECTOR_ROW <= 8
-      LET SECTOR_COLUMN = 1
-      WHILE SECTOR_COLUMN <= 8
-        LET SECTOR_INDEX = (SECTOR_ROW - 1) * 8 + SECTOR_COLUMN
-        SELECT @SECTOR[SECTOR_INDEX]
+    # I/J walk rows and columns; K is their one-based sector array index.
+    FOR I = 1 TO 8
+      FOR J = 1 TO 8
+        LET K = (I - 1) * 8 + J
+        SELECT @SECTOR[K]
         CASE 0
           PRINT "."
         CASE 1
@@ -179,13 +178,12 @@ DEF PRINT_SHORT_SCAN
         CASE_ELSE
           PRINT "*"
         ENDSEL
-        IF SECTOR_COLUMN < 8
+        IF J < 8
           PRINT " "
         ENDIF
-        LET SECTOR_COLUMN = SECTOR_COLUMN + 1
-      ENDWH
+      NEXT
       PRINT " | "
-      SELECT SECTOR_ROW
+      SELECT I
       CASE 1
         PRINT "STARDATE ", STARDATE
       CASE 2
@@ -207,8 +205,7 @@ DEF PRINT_SHORT_SCAN
         ENDIF
       ENDSEL
       CR
-      LET SECTOR_ROW = SECTOR_ROW + 1
-    ENDWH
+    NEXT
 END
 
 DEF PRINT_LONG_SCAN
@@ -224,25 +221,22 @@ DEF PRINT_LONG_SCAN
     CR
     PRINT "KBS = KLINGONS / BASES / STARS"
     CR
-    LET SECTOR_ROW = ENT_QY - 1
-    WHILE SECTOR_ROW <= ENT_QY + 1
-      LET SECTOR_COLUMN = ENT_QX - 1
-      WHILE SECTOR_COLUMN <= ENT_QX + 1
-        IF SECTOR_ROW < 1 OR SECTOR_ROW > 8 OR SECTOR_COLUMN < 1 OR SECTOR_COLUMN > 8
+    # X/Y are the scanned quadrant coordinates; I remains the quadrant summary.
+    FOR X = ENT_QY - 1 TO ENT_QY + 1
+      FOR Y = ENT_QX - 1 TO ENT_QX + 1
+        IF X < 1 OR X > 8 OR Y < 1 OR Y > 8
           PRINT "--- "
         ELSE
           # I holds this quadrant summary for display and chart recording.
-          LET I = @GALAXY[(SECTOR_ROW - 1) * 8 + SECTOR_COLUMN]
+          LET I = @GALAXY[(X - 1) * 8 + Y]
           PRINT_KBS(I)
           PRINT " "
           # Chart updates require device 8, the library computer.
           IF @DAMAGE[8] >= 0
-            LET @CHART[(SECTOR_ROW - 1) * 8 + SECTOR_COLUMN] = I
+            LET @CHART[(X - 1) * 8 + Y] = I
           ENDIF
         ENDIF
-        LET SECTOR_COLUMN = SECTOR_COLUMN + 1
-      ENDWH
+      NEXT
       CR
-      LET SECTOR_ROW = SECTOR_ROW + 1
-    ENDWH
+    NEXT
 END
