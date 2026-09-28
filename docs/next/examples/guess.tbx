@@ -2,30 +2,27 @@ REM Guess the number selected by RND(100).
 
 VAR ANSWER
 VAR DONE
+VAR GUESS
 
 LET ANSWER = RND(100)
 LET DONE = 0
 
 WHILE DONE = 0
   PRINT "Guess a number from 1 to 100: "
-  IF TRY_INPUT()
-    IF DUP() < ANSWER
+  IF_LET GUESS = TRY_INPUT()
+    IF GUESS < ANSWER
       PRINT "Too low."
       CR
-      DROP
-    ELSIF DUP() > ANSWER
+    ELSIF GUESS > ANSWER
       PRINT "Too high."
       CR
-      DROP
     ELSE
       PRINT "Correct!"
       CR
-      DROP
       LET DONE = 1
     ENDIF
-  ELSE
-    DROP
+  LET_ELSE
     PRINT "Please enter a number."
     CR
-  ENDIF
+  ENDLET
 ENDWH

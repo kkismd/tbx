@@ -563,6 +563,25 @@ ENDIF
 
 対話入力を使う完全な例は `docs/next/examples/guess.tbx` を参照する。
 
+### `IF_LET` による成功値の束縛
+
+`IF_LET target = expression` は、`expression` が `value success` を返す回復可能な
+単一値取得の結果を受け取る。成功時は値を `target` へ格納してから成功節を実行する。
+失敗時はdummy値を破棄し、targetを変更しない。`LET_ELSE` は省略でき、省略時は
+失敗節を実行せず `ENDLET` の後へ進む。書いた場合も失敗節は空またはコメントだけでよい。
+`ENDLET` は必須で、成功・失敗どちらも各節または後続コードの開始時点で取得した2値は
+data stackに残らない。
+
+```tbx
+IF_LET VALUE = TRY_INPUT()
+  PRINT "value = ", VALUE
+  CR
+LET_ELSE
+  PRINT "Please enter a number."
+  CR
+ENDLET
+```
+
 ## 乱数
 
 `RND(N)` は `1..=N` の疑似乱数整数を返す。`N` は正でなければならない。
