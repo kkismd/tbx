@@ -23,20 +23,23 @@ END
 # Return the integer square root of a non-negative value.  Combat uses this
 # small TBX helper instead of adding a combat-specific VM primitive.
 DEF ISQRT VALUE
-  LET DAMAGE_VALUE = 0
-  WHILE (DAMAGE_VALUE + 1) * (DAMAGE_VALUE + 1) <= VALUE
-    LET DAMAGE_VALUE = DAMAGE_VALUE + 1
+  # I tracks the greatest candidate whose square does not exceed VALUE.
+  LET I = 0
+  WHILE (I + 1) * (I + 1) <= VALUE
+    LET I = I + 1
   ENDWH
   DROP
-  EVAL DAMAGE_VALUE
+  EVAL I
 END
 
 # Return distance in tenths of a sector between Enterprise and Klingon INDEX.
 DEF DIST_TO_KLINGON INDEX
-  LET DAMAGE_VALUE = (@KLINGON_X[INDEX] - ENT_SX) * (@KLINGON_X[INDEX] - ENT_SX) + (@KLINGON_Y[INDEX] - ENT_SY) * (@KLINGON_Y[INDEX] - ENT_SY)
-  LET DAMAGE_VALUE = ISQRT(DAMAGE_VALUE * 100)
+  # I holds the squared sector distance before conversion to tenths.
+  LET I = (@KLINGON_X[INDEX] - ENT_SX) * (@KLINGON_X[INDEX] - ENT_SX) + (@KLINGON_Y[INDEX] - ENT_SY) * (@KLINGON_Y[INDEX] - ENT_SY)
+  # I now holds the distance in tenths returned by ISQRT.
+  LET I = ISQRT(I * 100)
   DROP
-  EVAL DAMAGE_VALUE
+  EVAL I
 END
 
 # Calculate floor(ENERGY * ROLL * 10 / (DISTANCE10 * DIVISOR * 100)) without
@@ -49,12 +52,13 @@ DEF COMBAT_DAMAGE ENERGY, ROLL, DISTANCE10, DIVISOR
   LET L = DISTANCE10 * DIVISOR
   LET M = K / L
   LET N = K % L
-  LET DAMAGE_VALUE = M * 10 + N * 10 / L
+  # I now holds the final damage after its earlier quotient was consumed.
+  LET I = M * 10 + N * 10 / L
   DROP
   DROP
   DROP
   DROP
-  EVAL DAMAGE_VALUE
+  EVAL I
 END
 
 DEF DESTROY_KLINGON INDEX
@@ -83,12 +87,14 @@ DEF KLINGON_ATTACK
   ENDIF
   FOR KLINGON_INDEX = 1 TO 3
     IF @KLINGON_E[KLINGON_INDEX] > 0
-      LET DAMAGE_DISTANCE = DIST_TO_KLINGON(KLINGON_INDEX)
+      # J holds the current Klingon's distance in tenths of a sector.
+      LET J = DIST_TO_KLINGON(KLINGON_INDEX)
       # I is the short-lived Klingon attack roll.
       LET I = RND(200) - 1
-      LET DAMAGE_VALUE = COMBAT_DAMAGE(@KLINGON_E[KLINGON_INDEX], I, DAMAGE_DISTANCE, 1)
-      LET SHIELDS = SHIELDS - DAMAGE_VALUE
-      PRINT "KLINGON ATTACK FROM SECTOR ", @KLINGON_X[KLINGON_INDEX], ",", @KLINGON_Y[KLINGON_INDEX], ": DAMAGE ", DAMAGE_VALUE, " SHIELDS ", SHIELDS
+      # K holds this attack's damage for the shield update and report.
+      LET K = COMBAT_DAMAGE(@KLINGON_E[KLINGON_INDEX], I, J, 1)
+      LET SHIELDS = SHIELDS - K
+      PRINT "KLINGON ATTACK FROM SECTOR ", @KLINGON_X[KLINGON_INDEX], ",", @KLINGON_Y[KLINGON_INDEX], ": DAMAGE ", K, " SHIELDS ", SHIELDS
       CR
     ENDIF
   NEXT
@@ -255,10 +261,11 @@ DEF PHASER
       ENDIF
       FOR KLINGON_INDEX = 1 TO 3
         IF @KLINGON_E[KLINGON_INDEX] > 0
-          LET DAMAGE_DISTANCE = DIST_TO_KLINGON(KLINGON_INDEX)
+          # K holds the current Klingon's distance in tenths of a sector.
+          LET K = DIST_TO_KLINGON(KLINGON_INDEX)
           LET I = RND(200) - 1
           # J is the short-lived damage returned by COMBAT_DAMAGE.
-          LET J = COMBAT_DAMAGE(PHASER_ENERGY, I, DAMAGE_DISTANCE, KLINGONS_HERE)
+          LET J = COMBAT_DAMAGE(PHASER_ENERGY, I, K, KLINGONS_HERE)
           LET @KLINGON_E[KLINGON_INDEX] = @KLINGON_E[KLINGON_INDEX] - J
           PRINT "PHASER HIT KLINGON AT SECTOR ", @KLINGON_X[KLINGON_INDEX], ",", @KLINGON_Y[KLINGON_INDEX], ": DAMAGE ", J, " ENERGY ", @KLINGON_E[KLINGON_INDEX]
           CR
