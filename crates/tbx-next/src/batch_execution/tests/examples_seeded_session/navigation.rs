@@ -343,6 +343,43 @@ CR\n",
 }
 
 #[test]
+fn sttr1_navigation_retries_after_non_numeric_course_and_warp_input() {
+    let mut source = std::fs::read_to_string(example_path("sttr1/main.tbx"))
+        .expect("STTR1 example should be readable");
+    source.push_str(
+        "LET ENT_QX = 1\nLET ENT_QY = 1\nLET ENT_SX = 4\nLET ENT_SY = 4\n\
+LET @GALAXY[1] = 0\nINIT_QUADRANT\nLET STARDATE = 100\nLET ENERGY = 100\nNAVIGATE\n\
+PRINT \"NAV_INPUT_STATE \", COURSE, \" \", WARP, \" \", ENT_SX, \" \", ENT_SY, \" \", ENERGY\nCR\n",
+    );
+    let (sources, standard_library_id, source_id) =
+        sttr1_sources_with_standard_library(STDLIB_SOURCE, &source);
+    let mut input = TestInput::new([
+        Ok(Some("bad course".to_owned())),
+        Ok(Some("20".to_owned())),
+        Ok(Some("bad warp".to_owned())),
+        Ok(Some("0".to_owned())),
+    ]);
+    let mut writer = RecordingWriter::default();
+
+    let result = success(execute_registered_sources_with_filesystem_and_seed(
+        sources,
+        standard_library_id,
+        source_id,
+        &mut writer,
+        Some(&mut input),
+        30,
+    ));
+
+    assert!(writer.text().contains("COURSE INPUT ERROR"));
+    assert!(writer.text().contains("WARP INPUT ERROR"));
+    assert_eq!(
+        output_values(writer.text(), "NAV_INPUT_STATE "),
+        [0, 0, 4, 4, 100]
+    );
+    assert_eq!(result.data_stack(), []);
+}
+
+#[test]
 fn sttr1_navigation_repairs_devices_after_valid_input_before_moving() {
     let mut source = std::fs::read_to_string(example_path("sttr1/main.tbx"))
         .expect("STTR1 example should be readable");

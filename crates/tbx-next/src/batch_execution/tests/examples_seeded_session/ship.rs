@@ -100,6 +100,39 @@ CR\n",
 }
 
 #[test]
+fn sttr1_shield_control_retries_after_non_numeric_input_without_changing_energy() {
+    let mut source = std::fs::read_to_string(example_path("sttr1/main.tbx"))
+        .expect("STTR1 example should be readable");
+    source.push_str(
+        "LET ENERGY = 1000\nLET SHIELDS = 500\nLET @DAMAGE[7] = 0\nSHIELD_CONTROL\n\
+PRINT \"SHIELD_INPUT_STATE \", ENERGY, \" \", SHIELDS\nCR\n",
+    );
+    let (sources, standard_library_id, source_id) =
+        sttr1_sources_with_standard_library(STDLIB_SOURCE, &source);
+    let mut input = TestInput::new([
+        Ok(Some("not a number".to_owned())),
+        Ok(Some("700".to_owned())),
+    ]);
+    let mut writer = RecordingWriter::default();
+
+    let result = success(execute_registered_sources_with_filesystem_and_seed(
+        sources,
+        standard_library_id,
+        source_id,
+        &mut writer,
+        Some(&mut input),
+        30,
+    ));
+
+    assert!(writer.text().contains("SHIELD INPUT ERROR"));
+    assert_eq!(
+        output_values(writer.text(), "SHIELD_INPUT_STATE "),
+        [800, 700]
+    );
+    assert_eq!(result.data_stack(), []);
+}
+
+#[test]
 fn sttr1_docking_replenishes_ship_and_updates_condition_only_when_adjacent() {
     let mut source = std::fs::read_to_string(example_path("sttr1/main.tbx"))
         .expect("STTR1 example should be readable");

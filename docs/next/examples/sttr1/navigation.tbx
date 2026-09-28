@@ -92,8 +92,7 @@ DEF NAVIGATE
     PRINT_COURSE_GUIDE
     PRINT "COURSE (0 CANCEL, 10-89):"
     CR
-    IF TRY_INPUT()
-      POP_TO COURSE
+    IF_LET COURSE = TRY_INPUT()
       IF COURSE = 0
         LET NAVIGATION_VALID = 1
         RETURN
@@ -102,8 +101,7 @@ DEF NAVIGATE
         CR
         PRINT "WARP (0-80):"
         CR
-        IF TRY_INPUT()
-          POP_TO WARP
+        IF_LET WARP = TRY_INPUT()
           IF WARP >= 0 AND WARP <= 80
             # Device 1 is warp engines; damaged engines cap warp at .2.
             IF @DAMAGE[1] < 0 AND WARP > 2
@@ -116,20 +114,18 @@ DEF NAVIGATE
             PRINT "WARP OUT OF RANGE"
             CR
           ENDIF
-        ELSE
-          DROP
+        LET_ELSE
           PRINT "WARP INPUT ERROR"
           CR
-        ENDIF
+        ENDLET
       ELSE
         PRINT "COURSE OUT OF RANGE"
         CR
       ENDIF
-    ELSE
-      DROP
+    LET_ELSE
       PRINT "COURSE INPUT ERROR"
       CR
-    ENDIF
+    ENDLET
   ENDWH
 
     # A valid navigation course triggers the current quadrant's retaliation
