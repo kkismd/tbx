@@ -16,7 +16,7 @@ fn device_source(
 #[test]
 fn sttr1_device_registry_reports_all_eight_slots() {
     let (sources, standard_library_id, source_id) =
-        device_source("PACK @DAMAGE = -1, -2, -3, -4, -5, 0, -7, -8\nDAMAGE_CONTROL\nPRINT \"DEVICE_INDEX_AFTER_REPORT \", DEVICE_INDEX\nCR\n");
+        device_source("PACK @DAMAGE = -1, -2, -3, -4, -5, 0, -7, -8\nDAMAGE_CONTROL\n");
     let mut writer = RecordingWriter::default();
     let result = success(execute_registered_sources_with_filesystem_and_seed(
         sources,
@@ -40,14 +40,13 @@ fn sttr1_device_registry_reports_all_eight_slots() {
     ] {
         assert!(output.contains(name), "missing {name:?} in {output}");
     }
-    assert_eq!(output_values(output, "DEVICE_INDEX_AFTER_REPORT "), [8]);
     assert_eq!(result.data_stack(), []);
 }
 
 #[test]
 fn sttr1_device_name_outside_registry_prints_nothing() {
     let (sources, standard_library_id, source_id) =
-        device_source("LET DEVICE_INDEX = 9\nPRINT_DEVICE_NAME\n");
+        device_source("VAR TEST_SENTINEL\nEVAL 77\nEVAL 9\nPRINT_DEVICE_NAME\nPOP_TO TEST_SENTINEL\nPRINT TEST_SENTINEL\n");
     let mut writer = RecordingWriter::default();
     let result = success(execute_registered_sources_with_filesystem_and_seed(
         sources,
@@ -58,7 +57,29 @@ fn sttr1_device_name_outside_registry_prints_nothing() {
         30,
     ));
 
-    assert_eq!(writer.text(), "");
+    assert_eq!(writer.text(), "77");
+    assert_eq!(result.data_stack(), []);
+}
+
+#[test]
+fn sttr1_device_name_explicit_argument_maps_all_eight_indices() {
+    let (sources, standard_library_id, source_id) = device_source(
+        "EVAL 1\nPRINT_DEVICE_NAME\nCR\nEVAL 2\nPRINT_DEVICE_NAME\nCR\nEVAL 3\nPRINT_DEVICE_NAME\nCR\nEVAL 4\nPRINT_DEVICE_NAME\nCR\nEVAL 5\nPRINT_DEVICE_NAME\nCR\nEVAL 6\nPRINT_DEVICE_NAME\nCR\nEVAL 7\nPRINT_DEVICE_NAME\nCR\nEVAL 8\nPRINT_DEVICE_NAME\nCR\n",
+    );
+    let mut writer = RecordingWriter::default();
+    let result = success(execute_registered_sources_with_filesystem_and_seed(
+        sources,
+        standard_library_id,
+        source_id,
+        &mut writer,
+        None,
+        30,
+    ));
+
+    assert_eq!(
+        writer.text(),
+        "WARP ENGINES\nSHORT RANGE SENSORS\nLONG RANGE SENSORS\nPHASER CONTROL\nPHOTON TUBES\nDAMAGE CONTROL\nSHIELD CONTROL\nLIBRARY COMPUTER\n"
+    );
     assert_eq!(result.data_stack(), []);
 }
 
@@ -84,7 +105,7 @@ fn sttr1_damaged_control_rejects_damage_report() {
 #[test]
 fn sttr1_repair_tick_only_advances_negative_damage() {
     let (sources, standard_library_id, source_id) = device_source(
-        "PACK @DAMAGE = -1, -2, 0, 3, -5, 0, 2, -8\nREPAIR_DEVICES\nPRINT \"REPAIRED \"\nLET DEVICE_INDEX = 1\nWHILE DEVICE_INDEX <= 8\nPRINT @DAMAGE[DEVICE_INDEX], \" \"\nLET DEVICE_INDEX = DEVICE_INDEX + 1\nENDWH\nCR\n",
+        "PACK @DAMAGE = -1, -2, 0, 3, -5, 0, 2, -8\nREPAIR_DEVICES\nPRINT \"REPAIRED \"\nLET TEST_INDEX = 1\nWHILE TEST_INDEX <= 8\nPRINT @DAMAGE[TEST_INDEX], \" \"\nLET TEST_INDEX = TEST_INDEX + 1\nENDWH\nCR\n",
     );
     let mut writer = RecordingWriter::default();
     let result = success(execute_registered_sources_with_filesystem_and_seed(
@@ -156,7 +177,7 @@ fn sttr1_random_device_event_reports_worsening_without_extra_randomness() {
 #[test]
 fn sttr1_random_device_event_changes_one_slot_without_clamping() {
     let (sources, standard_library_id, source_id) = device_source(
-        "LET @DAMAGE[1] = -1\nLET @DAMAGE[2] = 0\nLET @DAMAGE[3] = 0\nLET @DAMAGE[4] = 0\nLET @DAMAGE[5] = 0\nLET @DAMAGE[6] = 0\nLET @DAMAGE[7] = 0\nLET @DAMAGE[8] = 0\nRANDOM_DEVICE_EVENT\nPRINT \"EVENT \"\nLET DEVICE_INDEX = 1\nWHILE DEVICE_INDEX <= 8\nPRINT @DAMAGE[DEVICE_INDEX], \" \"\nLET DEVICE_INDEX = DEVICE_INDEX + 1\nENDWH\nCR\n",
+        "LET @DAMAGE[1] = -1\nLET @DAMAGE[2] = 0\nLET @DAMAGE[3] = 0\nLET @DAMAGE[4] = 0\nLET @DAMAGE[5] = 0\nLET @DAMAGE[6] = 0\nLET @DAMAGE[7] = 0\nLET @DAMAGE[8] = 0\nRANDOM_DEVICE_EVENT\nPRINT \"EVENT \"\nLET TEST_INDEX = 1\nWHILE TEST_INDEX <= 8\nPRINT @DAMAGE[TEST_INDEX], \" \"\nLET TEST_INDEX = TEST_INDEX + 1\nENDWH\nCR\n",
     );
     let mut writer = RecordingWriter::default();
     let result = success(execute_registered_sources_with_filesystem_and_seed(
@@ -176,7 +197,7 @@ fn sttr1_random_device_event_changes_one_slot_without_clamping() {
 #[test]
 fn sttr1_random_device_event_non_occurrence_preserves_all_slots() {
     let (sources, standard_library_id, source_id) = device_source(
-        "PACK @DAMAGE = 1, 2, 3, 4, 5, 6, 7, 8\nRANDOM_DEVICE_EVENT\nPRINT \"NO_EVENT \"\nLET DEVICE_INDEX = 1\nWHILE DEVICE_INDEX <= 8\nPRINT @DAMAGE[DEVICE_INDEX], \" \"\nLET DEVICE_INDEX = DEVICE_INDEX + 1\nENDWH\nCR\n",
+        "PACK @DAMAGE = 1, 2, 3, 4, 5, 6, 7, 8\nRANDOM_DEVICE_EVENT\nPRINT \"NO_EVENT \"\nLET TEST_INDEX = 1\nWHILE TEST_INDEX <= 8\nPRINT @DAMAGE[TEST_INDEX], \" \"\nLET TEST_INDEX = TEST_INDEX + 1\nENDWH\nCR\n",
     );
     let mut writer = RecordingWriter::default();
     let result = success(execute_registered_sources_with_filesystem_and_seed(
@@ -202,7 +223,7 @@ fn sttr1_random_device_event_can_worsen_a_positive_slot() {
     let mut found_worsening = false;
     for seed in 1..=100 {
         let (sources, standard_library_id, source_id) = device_source(
-            "PACK @DAMAGE = 10, 10, 10, 10, 10, 10, 10, 10\nRANDOM_DEVICE_EVENT\nPRINT \"EVENT \"\nLET DEVICE_INDEX = 1\nWHILE DEVICE_INDEX <= 8\nPRINT @DAMAGE[DEVICE_INDEX], \" \"\nLET DEVICE_INDEX = DEVICE_INDEX + 1\nENDWH\nCR\n",
+            "PACK @DAMAGE = 10, 10, 10, 10, 10, 10, 10, 10\nRANDOM_DEVICE_EVENT\nPRINT \"EVENT \"\nLET TEST_INDEX = 1\nWHILE TEST_INDEX <= 8\nPRINT @DAMAGE[TEST_INDEX], \" \"\nLET TEST_INDEX = TEST_INDEX + 1\nENDWH\nCR\n",
         );
         let mut writer = RecordingWriter::default();
         let result = success(execute_registered_sources_with_filesystem_and_seed(
