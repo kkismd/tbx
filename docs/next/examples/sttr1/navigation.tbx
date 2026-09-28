@@ -231,12 +231,13 @@ DEF PRINT_LONG_SCAN
         IF SECTOR_ROW < 1 OR SECTOR_ROW > 8 OR SECTOR_COLUMN < 1 OR SECTOR_COLUMN > 8
           PRINT "--- "
         ELSE
-          LET SUMMARY = @GALAXY[(SECTOR_ROW - 1) * 8 + SECTOR_COLUMN]
-          PRINT_KBS(SUMMARY)
+          # I holds this quadrant summary for display and chart recording.
+          LET I = @GALAXY[(SECTOR_ROW - 1) * 8 + SECTOR_COLUMN]
+          PRINT_KBS(I)
           PRINT " "
           # Chart updates require device 8, the library computer.
           IF @DAMAGE[8] >= 0
-            LET @CHART[(SECTOR_ROW - 1) * 8 + SECTOR_COLUMN] = SUMMARY
+            LET @CHART[(SECTOR_ROW - 1) * 8 + SECTOR_COLUMN] = I
           ENDIF
         ENDIF
         LET SECTOR_COLUMN = SECTOR_COLUMN + 1

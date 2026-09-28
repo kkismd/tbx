@@ -8,43 +8,44 @@ DEF KLINGON_COURSE INDEX
   # X/Y are the short-lived relative Klingon coordinates.
   LET X = @KLINGON_X[INDEX] - ENT_SX
   LET Y = @KLINGON_Y[INDEX] - ENT_SY
+  # I holds the computed course on the shared 10..89 direction scale.
   IF X > 0 AND Y = 0
-    LET COMPUTER_DIRECTION = 10
+    LET I = 10
   ELSIF X > 0 AND Y < 0
     IF X >= -Y
-      LET COMPUTER_DIRECTION = 10 + (-Y) * 10 / X
+      LET I = 10 + (-Y) * 10 / X
     ELSE
-      LET COMPUTER_DIRECTION = 30 - X * 10 / (-Y)
+      LET I = 30 - X * 10 / (-Y)
     ENDIF
   ELSIF X = 0 AND Y < 0
-    LET COMPUTER_DIRECTION = 30
+    LET I = 30
   ELSIF X < 0 AND Y < 0
     IF -Y >= -X
-      LET COMPUTER_DIRECTION = 30 + (-X) * 10 / (-Y)
+      LET I = 30 + (-X) * 10 / (-Y)
     ELSE
-      LET COMPUTER_DIRECTION = 50 - (-Y) * 10 / (-X)
+      LET I = 50 - (-Y) * 10 / (-X)
     ENDIF
   ELSIF X < 0 AND Y = 0
-    LET COMPUTER_DIRECTION = 50
+    LET I = 50
   ELSIF X < 0 AND Y > 0
     IF -X >= Y
-      LET COMPUTER_DIRECTION = 50 + Y * 10 / (-X)
+      LET I = 50 + Y * 10 / (-X)
     ELSE
-      LET COMPUTER_DIRECTION = 70 - (-X) * 10 / Y
+      LET I = 70 - (-X) * 10 / Y
     ENDIF
   ELSIF X = 0 AND Y > 0
-    LET COMPUTER_DIRECTION = 70
+    LET I = 70
   ELSIF X > 0 AND Y > 0
     IF X >= Y
-      LET COMPUTER_DIRECTION = 90 - Y * 10 / X
+      LET I = 90 - Y * 10 / X
     ELSE
-      LET COMPUTER_DIRECTION = 70 + X * 10 / Y
+      LET I = 70 + X * 10 / Y
     ENDIF
   ELSE
-    LET COMPUTER_DIRECTION = 0
+    LET I = 0
   ENDIF
   DROP
-  EVAL COMPUTER_DIRECTION
+  EVAL I
 END
 
 DEF PRINT_CHART
@@ -89,9 +90,10 @@ DEF PRINT_KLINGON_REPORT
   ENDIF
   FOR KLINGON_INDEX = 1 TO 3
     IF @KLINGON_E[KLINGON_INDEX] > 0
-      LET COMPUTER_DIRECTION = KLINGON_COURSE(KLINGON_INDEX)
-      LET DAMAGE_DISTANCE = DIST_TO_KLINGON(KLINGON_INDEX)
-      PRINT "KLINGON ", KLINGON_INDEX, " COURSE ", COMPUTER_DIRECTION, " DISTANCE ", DAMAGE_DISTANCE
+      # X/Y keep this target's course and distance while helpers run in their own frames.
+      LET X = KLINGON_COURSE(KLINGON_INDEX)
+      LET Y = DIST_TO_KLINGON(KLINGON_INDEX)
+      PRINT "KLINGON ", KLINGON_INDEX, " COURSE ", X, " DISTANCE ", Y
       CR
     ENDIF
   NEXT
