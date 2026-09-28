@@ -5,6 +5,7 @@ pub(crate) struct BytecodeArtifact {
     code: Vec<u8>,
     entry_offset: u16,
     global_slot_count: u16,
+    array_lengths: Vec<u16>,
 }
 
 impl BytecodeArtifact {
@@ -19,6 +20,27 @@ impl BytecodeArtifact {
     pub(crate) const fn global_slot_count(&self) -> u16 {
         self.global_slot_count
     }
+
+    pub(crate) fn array_count(&self) -> usize {
+        self.array_lengths.len()
+    }
+
+    pub(crate) fn array_lengths(&self) -> &[u16] {
+        &self.array_lengths
+    }
+
+    pub(crate) fn array_storage_bytes(&self) -> Option<usize> {
+        self.array_lengths
+            .iter()
+            .try_fold(0usize, |cells, length| {
+                cells.checked_add(usize::from(*length))
+            })?
+            .checked_mul(2)
+    }
+
+    pub(crate) fn array_descriptor_bytes(&self) -> Option<usize> {
+        self.array_count().checked_mul(4)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -26,6 +48,10 @@ pub(crate) enum EncodeError {
     UnsupportedInstruction(usize),
     UnsupportedPrimitive(usize),
     GlobalSlotOutOfRange(usize),
+    ArraySlotOutOfRange(usize),
+    TooManyArrays(usize),
+    ArrayLengthOutOfRange(usize),
+    ArrayStorageTooLarge,
     CallBaseOffsetOutOfRange(usize),
     InvalidCodeTarget(usize),
     InvalidEntry(usize),
@@ -33,12 +59,33 @@ pub(crate) enum EncodeError {
 }
 
 pub(crate) fn encode(image: &StaticImage) -> Result<BytecodeArtifact, EncodeError> {
+    let array_count = image.array_lengths.len();
+    if array_count > usize::from(u8::MAX) + 1 {
+        return Err(EncodeError::TooManyArrays(array_count));
+    }
+    let mut array_lengths = Vec::with_capacity(array_count);
+    let mut array_cells = 0usize;
+    for &length in &image.array_lengths {
+        array_lengths
+            .push(u16::try_from(length).map_err(|_| EncodeError::ArrayLengthOutOfRange(length))?);
+        array_cells = array_cells
+            .checked_add(length)
+            .ok_or(EncodeError::ArrayStorageTooLarge)?;
+    }
+    array_cells
+        .checked_mul(2)
+        .filter(|bytes| *bytes <= usize::from(u16::MAX))
+        .ok_or(EncodeError::ArrayStorageTooLarge)?;
+    array_count
+        .checked_mul(4)
+        .ok_or(EncodeError::ArrayStorageTooLarge)?;
+
     let mut offsets = Vec::with_capacity(image.code.len() + 1);
     let mut byte_len = 0usize;
     for (index, instruction) in image.code.iter().enumerate() {
         offsets.push(byte_len);
         byte_len = byte_len
-            .checked_add(encoded_len(instruction, index)?)
+            .checked_add(encoded_len(instruction, index, image)?)
             .ok_or(EncodeError::ImageTooLarge)?;
     }
     offsets.push(byte_len);
@@ -81,6 +128,20 @@ pub(crate) fn encode(image: &StaticImage) -> Result<BytecodeArtifact, EncodeErro
                 );
                 code.push(slot);
             }
+            LogicalInstruction::LoadArray(slot) | LogicalInstruction::StoreArray(slot) => {
+                if slot.0 >= image.array_lengths.len() {
+                    return Err(EncodeError::ArraySlotOutOfRange(slot.0));
+                }
+                let slot =
+                    u8::try_from(slot.0).map_err(|_| EncodeError::ArraySlotOutOfRange(slot.0))?;
+                // 0x12 and 0x13 extend the existing 0x10/0x11 global access pair.
+                code.push(if matches!(instruction, LogicalInstruction::LoadArray(_)) {
+                    0x12
+                } else {
+                    0x13
+                });
+                code.push(slot);
+            }
             LogicalInstruction::CallCode(position) => {
                 code.push(0x20);
                 code.extend_from_slice(&target(*position)?.to_le_bytes());
@@ -114,13 +175,25 @@ pub(crate) fn encode(image: &StaticImage) -> Result<BytecodeArtifact, EncodeErro
         code,
         entry_offset,
         global_slot_count: image.global_count as u16,
+        array_lengths,
     })
 }
 
-fn encoded_len(instruction: &LogicalInstruction, index: usize) -> Result<usize, EncodeError> {
+fn encoded_len(
+    instruction: &LogicalInstruction,
+    index: usize,
+    image: &StaticImage,
+) -> Result<usize, EncodeError> {
     match instruction {
         LogicalInstruction::PushI16(_) => Ok(3),
         LogicalInstruction::LoadGlobal(_) | LogicalInstruction::StoreGlobal(_) => Ok(2),
+        LogicalInstruction::LoadArray(slot) | LogicalInstruction::StoreArray(slot) => {
+            if slot.0 >= image.array_lengths.len() {
+                Err(EncodeError::ArraySlotOutOfRange(slot.0))
+            } else {
+                Ok(2)
+            }
+        }
         LogicalInstruction::CallCode(_)
         | LogicalInstruction::Jump(_)
         | LogicalInstruction::JumpIfZero(_) => Ok(3),
@@ -186,6 +259,13 @@ mod tests {
         }
     }
 
+    fn image_with_arrays(code: Vec<LogicalInstruction>, array_lengths: Vec<usize>) -> StaticImage {
+        StaticImage {
+            array_lengths,
+            ..image(code)
+        }
+    }
+
     #[test]
     fn encodes_each_m32_instruction_and_primitive_opcode() {
         let instructions = vec![
@@ -239,6 +319,94 @@ mod tests {
         .expect("M34 Mandelbrot primitives encode");
 
         assert_eq!(artifact.code(), &[0x43, 0x44, 0x45, 0x46, 0x4c, 0x62]);
+    }
+
+    #[test]
+    fn encodes_array_accesses_and_reports_artifact_metadata() {
+        let artifact = encode(&image_with_arrays(
+            vec![
+                LogicalInstruction::LoadArray(super::super::ArraySlot(0)),
+                LogicalInstruction::StoreArray(super::super::ArraySlot(1)),
+                LogicalInstruction::LoadArray(super::super::ArraySlot(1)),
+                LogicalInstruction::Halt,
+            ],
+            vec![3, 7],
+        ))
+        .expect("array accesses encode");
+
+        assert_eq!(artifact.code(), &[0x12, 0, 0x13, 1, 0x12, 1, 0x01]);
+        assert_eq!(artifact.array_count(), 2);
+        assert_eq!(artifact.array_lengths(), &[3, 7]);
+        assert_eq!(artifact.array_storage_bytes(), Some(20));
+        assert_eq!(artifact.array_descriptor_bytes(), Some(8));
+    }
+
+    #[test]
+    fn supports_256_arrays_and_rejects_the_257th() {
+        let lengths = vec![1; 256];
+        let artifact = encode(&image_with_arrays(
+            vec![LogicalInstruction::LoadArray(super::super::ArraySlot(255))],
+            lengths.clone(),
+        ))
+        .expect("256 arrays fit in u8 slots");
+        assert_eq!(artifact.code(), &[0x12, 255]);
+        assert_eq!(artifact.array_count(), 256);
+        assert_eq!(artifact.array_descriptor_bytes(), Some(1024));
+
+        assert_eq!(
+            encode(&image_with_arrays(
+                vec![LogicalInstruction::Halt],
+                vec![1; 257]
+            )),
+            Err(EncodeError::TooManyArrays(257))
+        );
+    }
+
+    #[test]
+    fn rejects_invalid_array_slots_lengths_and_storage_sizes() {
+        assert_eq!(
+            encode(&image_with_arrays(
+                vec![LogicalInstruction::LoadArray(super::super::ArraySlot(0))],
+                Vec::new(),
+            )),
+            Err(EncodeError::ArraySlotOutOfRange(0))
+        );
+        assert_eq!(
+            encode(&image_with_arrays(
+                vec![LogicalInstruction::StoreArray(super::super::ArraySlot(1))],
+                vec![1]
+            )),
+            Err(EncodeError::ArraySlotOutOfRange(1))
+        );
+        assert_eq!(
+            encode(&image_with_arrays(
+                vec![LogicalInstruction::Halt],
+                vec![u16::MAX as usize + 1]
+            )),
+            Err(EncodeError::ArrayLengthOutOfRange(u16::MAX as usize + 1))
+        );
+        assert_eq!(
+            encode(&image_with_arrays(
+                vec![LogicalInstruction::Halt],
+                vec![32_768]
+            )),
+            Err(EncodeError::ArrayStorageTooLarge)
+        );
+    }
+
+    #[test]
+    fn empty_array_metadata_has_zero_sizes() {
+        let artifact = encode(&image(vec![LogicalInstruction::Halt])).expect("empty image encodes");
+        assert_eq!(artifact.array_count(), 0);
+        assert_eq!(artifact.array_lengths(), &[]);
+        assert_eq!(artifact.array_storage_bytes(), Some(0));
+        assert_eq!(artifact.array_descriptor_bytes(), Some(0));
+
+        let one = encode(&image_with_arrays(vec![LogicalInstruction::Halt], vec![4]))
+            .expect("one array encodes");
+        assert_eq!(one.array_count(), 1);
+        assert_eq!(one.array_lengths(), &[4]);
+        assert_eq!(one.array_descriptor_bytes(), Some(4));
     }
 
     #[test]
