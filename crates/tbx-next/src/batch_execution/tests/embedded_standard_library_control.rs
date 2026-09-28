@@ -20,6 +20,159 @@ fn standard_library_source_word_is_available_to_the_user_source() {
 }
 
 #[test]
+fn embedded_standard_library_push_evaluates_expressions_and_preserves_multiple_results() {
+    let (sources, standard_library_id, source_id) = sources_with_standard_library(
+        STDLIB_SOURCE,
+        "VAR A\nLET A = 4\nDEF TWO\nPUSH 8\nPUSH 9\nEND\nPUSH A + 3\nPUSH TWO()",
+    );
+    let mut writer = RecordingWriter::default();
+
+    let result = success(execute_registered_sources(
+        &sources,
+        standard_library_id,
+        source_id,
+        &mut writer,
+    ));
+
+    assert_eq!(
+        result.data_stack(),
+        [Value::integer(7), Value::integer(8), Value::integer(9)]
+    );
+}
+
+#[test]
+fn push_and_eval_produce_the_same_data_stack_for_expressions_and_runtime_calls() {
+    let mut results = Vec::new();
+
+    for form in ["EVAL", "PUSH"] {
+        let source = format!(
+            "VAR A\nLET A = 4\nDEF INC\nPUSH 1\nADD\nEND\n{form} 42\n{form} A + 3\n{form} INC(6)"
+        );
+        let (sources, standard_library_id, source_id) =
+            sources_with_standard_library(STDLIB_SOURCE, &source);
+        let mut writer = RecordingWriter::default();
+
+        results.push(success(execute_registered_sources(
+            &sources,
+            standard_library_id,
+            source_id,
+            &mut writer,
+        )));
+    }
+
+    assert_eq!(
+        results[0].data_stack(),
+        [Value::integer(42), Value::integer(7), Value::integer(7)]
+    );
+    assert_eq!(results[1].data_stack(), results[0].data_stack());
+}
+
+#[test]
+fn push_and_eval_lower_the_same_expression_to_identical_runtime_instructions() {
+    let mut environment = BatchEnvironment::new().expect("batch environment should build");
+    let (stdlib_sources, stdlib_id) = source(STDLIB_SOURCE, "<tbx-next-stdlib>");
+    environment
+        .compile(&stdlib_sources, stdlib_id)
+        .expect("embedded standard library should compile");
+
+    let (definitions, definitions_id) =
+        source("VAR A\nDEF INC\nPUSH 1\nADD\nEND", "definitions.tbx");
+    environment
+        .compile(&definitions, definitions_id)
+        .expect("test definitions should compile");
+
+    for expression in ["42", "A + 3", "INC(6)"] {
+        let eval_source = format!("EVAL {expression}");
+        let (eval_sources, eval_id) = source(&eval_source, "eval.tbx");
+        let eval_unit = environment
+            .compile(&eval_sources, eval_id)
+            .expect("EVAL expression should compile");
+
+        let push_source = format!("PUSH {expression}");
+        let (push_sources, push_id) = source(&push_source, "push.tbx");
+        let push_unit = environment
+            .compile(&push_sources, push_id)
+            .expect("PUSH expression should compile");
+
+        assert_eq!(eval_unit.len(), push_unit.len());
+        for index in 0..eval_unit.len() {
+            let address = crate::instruction::InstructionAddress::from_index(index);
+            assert_eq!(
+                eval_unit.instructions().get(address),
+                push_unit.instructions().get(address),
+                "lowering differs for {expression} at instruction {index}"
+            );
+        }
+    }
+}
+
+#[test]
+fn embedded_standard_library_push_preserves_expression_runtime_failure() {
+    let mut diagnostics = Vec::new();
+
+    for form in ["EVAL", "PUSH"] {
+        let source = format!("{form} 1 / 0");
+        let (sources, standard_library_id, source_id) =
+            sources_with_standard_library(STDLIB_SOURCE, &source);
+        let mut writer = RecordingWriter::default();
+
+        let failure = failure(execute_registered_sources(
+            &sources,
+            standard_library_id,
+            source_id,
+            &mut writer,
+        ));
+
+        assert_eq!(failure.class(), UserFacingFailureClass::UserProgram);
+        let primary = failure
+            .diagnostic()
+            .primary()
+            .expect("expression failure should have a primary span");
+        assert_eq!(primary.source_line(), source);
+        diagnostics.push(primary.clone());
+    }
+
+    assert_eq!(
+        diagnostics[0].highlight_start_column(),
+        diagnostics[1].highlight_start_column()
+    );
+    assert_eq!(
+        diagnostics[0].highlight_columns(),
+        diagnostics[1].highlight_columns()
+    );
+}
+
+#[test]
+fn embedded_standard_library_push_preserves_expression_name_failure_span() {
+    let (sources, standard_library_id, source_id) =
+        sources_with_standard_library(STDLIB_SOURCE, "PUSH MISSING");
+    let mut writer = RecordingWriter::default();
+
+    let failure = failure(execute_registered_sources(
+        &sources,
+        standard_library_id,
+        source_id,
+        &mut writer,
+    ));
+
+    assert_eq!(failure.class(), UserFacingFailureClass::UserProgram);
+    assert_eq!(
+        failure
+            .diagnostic()
+            .primary()
+            .map(|primary| primary.source_line()),
+        Some("PUSH MISSING")
+    );
+    assert_eq!(
+        failure
+            .diagnostic()
+            .primary()
+            .map(|primary| primary.highlight_start_column()),
+        Some(6)
+    );
+}
+
+#[test]
 fn standard_library_runtime_definition_keeps_its_source_mapping() {
     let (sources, standard_library_id, source_id) =
         sources_with_standard_library("DEF FAIL\nEVAL 1 / 0\nEND", "FAIL");
