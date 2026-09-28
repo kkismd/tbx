@@ -153,6 +153,51 @@ fn git_revision(crate_root: &Path) -> Result<String, String> {
     Ok(String::from_utf8_lossy(&output.stdout).trim().to_owned())
 }
 
+fn linked_segment(output: &str, wanted: &str) -> Result<(usize, usize, usize), String> {
+    let mut in_segment_list = false;
+    for line in output.lines() {
+        if line.trim() == "Segment list:" {
+            in_segment_list = true;
+            continue;
+        }
+        if !in_segment_list {
+            continue;
+        }
+        let fields = line.split_whitespace().collect::<Vec<_>>();
+        if fields.first() == Some(&wanted) && fields.len() >= 4 {
+            let parse = |field: &str| {
+                usize::from_str_radix(field.trim_start_matches('$'), 16)
+                    .map_err(|_| format!("invalid {wanted} linker map value: {field}"))
+            };
+            let start = parse(fields[1])?;
+            let end = parse(fields[2])?;
+            let size = parse(fields[3])?;
+            return Ok((start, end, size));
+        }
+    }
+    Err(format!("linker map has no {wanted} segment"))
+}
+
+fn label_value(output: &str, wanted: &str) -> Result<usize, String> {
+    for line in output.lines() {
+        let fields = line.split_whitespace().collect::<Vec<_>>();
+        if let Some(index) = fields
+            .iter()
+            .position(|name| name.trim_start_matches('.') == wanted)
+        {
+            let value = if index == 0 {
+                fields.get(1)
+            } else {
+                fields.get(index - 1)
+            }
+            .ok_or_else(|| format!("linker label {wanted} has no value"))?;
+            return usize::from_str_radix(value.trim_start_matches('$'), 16)
+                .map_err(|_| format!("invalid linker label {wanted}: {value}"));
+        }
+    }
+    Err(format!("linker labels have no {wanted}"))
+}
+
 fn cycle_count(report: &[u8], expected_stdout: &[u8]) -> Result<String, String> {
     let report = report
         .strip_prefix(expected_stdout)
@@ -183,6 +228,8 @@ fn build_and_run(
     let runtime_object = temp.0.join("vm.o");
     let wrapper_object = temp.0.join("wrapper.o");
     let executable = temp.0.join("program");
+    let map_path = temp.0.join("program.map");
+    let labels_path = temp.0.join("program.lbl");
     let sample = if cycle_limit == PRIME_CYCLE_LIMIT {
         "prime"
     } else {
@@ -217,24 +264,31 @@ fn build_and_run(
         require_success(&output, stage)?;
     }
 
-    let link = run_tool(
-        "ld65",
-        &[
-            OsStr::new("-t"),
-            OsStr::new("sim6502"),
-            OsStr::new("-o"),
-            executable.as_os_str(),
-            runtime_object.as_os_str(),
-            wrapper_object.as_os_str(),
-            OsStr::new("sim6502.lib"),
-        ],
-        &temp.0,
-        "link",
-    )?;
+    let measure_resources = std::env::var_os("TBX_MEASURE_SIM65_RESOURCES").is_some();
+    let mut link_args = vec![
+        OsStr::new("-t"),
+        OsStr::new("sim6502"),
+        OsStr::new("-o"),
+        executable.as_os_str(),
+    ];
+    if measure_resources {
+        link_args.extend([
+            OsStr::new("-m"),
+            map_path.as_os_str(),
+            OsStr::new("-Ln"),
+            labels_path.as_os_str(),
+        ]);
+    }
+    link_args.extend([
+        runtime_object.as_os_str(),
+        wrapper_object.as_os_str(),
+        OsStr::new("sim6502.lib"),
+    ]);
+    let link = run_tool("ld65", &link_args, &temp.0, "link")?;
     require_success(&link, "link")?;
 
     let mut measurement = None;
-    if std::env::var_os("TBX_MEASURE_SIM65_RESOURCES").is_some() {
+    if measure_resources {
         let output = run_tool(
             "od65",
             &[OsStr::new("--dump-segments"), runtime_object.as_os_str()],
@@ -259,6 +313,9 @@ fn build_and_run(
         }
         measurement = Some((
             segments,
+            fs::read_to_string(&map_path).map_err(|error| format!("read linker map: {error}"))?,
+            fs::read_to_string(&labels_path)
+                .map_err(|error| format!("read linker labels: {error}"))?,
             tool_version("ca65")?,
             tool_version("ld65")?,
             tool_version("sim65")?,
@@ -302,7 +359,7 @@ fn build_and_run(
             String::from_utf8_lossy(report).trim()
         );
     }
-    if let Some((segments, ca65_version, ld65_version, sim65_version)) = measurement {
+    if let Some((segments, map, labels, ca65_version, ld65_version, sim65_version)) = measurement {
         let output = run_tool(
             "sim65",
             &[
@@ -316,6 +373,14 @@ fn build_and_run(
         )?;
         require_success(&output, "sim65 cycle measurement")?;
         let cycles = cycle_count(&output.stdout, expected_stdout)?;
+        let (zp_start, zp_end, zp_size) = linked_segment(&map, "ZEROPAGE")?;
+        let (bss_start, bss_end, bss_size) = linked_segment(&map, "BSS")?;
+        let main_start = label_value(&labels, "__MAIN_START__")?;
+        let main_size = label_value(&labels, "__MAIN_SIZE__")?;
+        let stack_boundary = main_start + main_size;
+        let headroom = stack_boundary.checked_sub(bss_end + 1).ok_or_else(|| {
+            format!("BSS ends beyond software stack boundary: BSS end={bss_end:#06x}, boundary={stack_boundary:#06x}")
+        })?;
         let segment_sizes = ["CODE", "RODATA", "BSS", "ZEROPAGE"]
             .iter()
             .map(|name| {
@@ -329,7 +394,7 @@ fn build_and_run(
             .collect::<Vec<_>>()
             .join(" ");
         eprintln!(
-            "sim65 resources: sample={sample} revision={} ca65=\"{ca65_version}\" ld65=\"{ld65_version}\" sim65=\"{sim65_version}\" bytecode={} VM[{segment_sizes}] cycles={cycles} command=\"sim65 -c -x {cycle_limit} program\"",
+            "sim65 resources: sample={sample} revision={} ca65=\"{ca65_version}\" ld65=\"{ld65_version}\" sim65=\"{sim65_version}\" bytecode={} VM[{segment_sizes}] ZEROPAGE={zp_start:#06x}..={zp_end:#06x}({zp_size}) BSS={bss_start:#06x}..={bss_end:#06x}({bss_size}) __MAIN_START__={main_start:#06x} __MAIN_SIZE__={main_size} software_stack_boundary={stack_boundary:#06x} bss_to_stack_headroom={headroom} cycles={cycles} command=\"TBX_MEASURE_SIM65_RESOURCES=1 cargo test -p tbx-next --lib prime_source_matches_sim65_execution -- --ignored --nocapture\"",
             git_revision(crate_root)?,
             artifact.code().len()
         );
@@ -400,4 +465,20 @@ fn e2e_failures_identify_the_stage() {
         vm_object_segments("Name: \"CODE\"\nSize: 0x0012\nName: \"BSS\"\nSize: 0x03c6\n")
             .expect("parse object segment sizes");
     assert_eq!(segments, [("CODE".to_owned(), 18), ("BSS".to_owned(), 966)]);
+
+    let map = "Modules list:\nBSS Offs=000000 Size=0003C6\nSegment list:\nName Start End Size Align\nZEROPAGE 000000 000038 000039 00001\nBSS 000D40 001105 0003C6 00001\n";
+    assert_eq!(linked_segment(map, "ZEROPAGE").unwrap(), (0, 0x38, 0x39));
+    assert_eq!(linked_segment(map, "BSS").unwrap(), (0xD40, 0x1105, 0x3C6));
+    assert_eq!(
+        label_value(
+            "al 000200 .__MAIN_START__\nal 00F5F0 .__MAIN_SIZE__\n",
+            "__MAIN_START__"
+        )
+        .unwrap(),
+        0x200
+    );
+    assert_eq!(
+        label_value("__MAIN_SIZE__ 00F5F0 RLA\n", "__MAIN_SIZE__").unwrap(),
+        0xF5F0
+    );
 }
