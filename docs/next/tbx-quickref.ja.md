@@ -227,20 +227,20 @@ CR
 DEF INDEX_TO_XY INDEX
   LET I = INDEX
   DROP
-  EVAL I % 10
-  EVAL I / 10
+  PUSH I % 10
+  PUSH I / 10
 END
 
 VAR X, Y
 
-EVAL INDEX_TO_XY(27)
+PUSH INDEX_TO_XY(27)
 POP_TO Y
 POP_TO X
 PRINT X, ",", Y
 CR
 ```
 
-`INDEX` は読み取り専用の局所参照なので、最初に `I` へ退避してから `DROP` で元引数を消費する。`EVAL` が `x`、続いて `y` を積み、呼出し側はLIFO順に `Y`、`X` へ取り込む。この用途は、右辺式を1値だけ評価する `LET` では置き換えにくい。値の複製や破棄そのものが必要な場面では引き続き `DUP` / `DROP` を使う。
+`INDEX` は読み取り専用の局所参照なので、最初に `I` へ退避してから `DROP` で元引数を消費する。`PUSH` が `x`、続いて `y` を積み、呼出し側はLIFO順に `Y`、`X` へ取り込む。値の複製や破棄そのものが必要な場面では引き続き `DUP` / `DROP` を使う。
 
 `TRY_` wordの `value success` protocolから成功値を受け取る場合は、手書きの `IF` / `POP_TO` / `DROP` ではなく `IF_LET` を使う。成功フラグの消費、成功値の格納、失敗時のdummy値破棄は `IF_LET` が行う。構文の詳細は「[`IF_LET` による成功値の束縛](#if_let-による成功値の束縛)」を参照。
 
@@ -285,9 +285,11 @@ PACK @DATA = 10, 20, 30
 
 現行の配列機能はグローバル配列の要素読み書きと `PACK` による固定長配列への複数値格納を提供する。`ARRAY_LEN`、実行時サイズ式、多次元配列、実行時配列値、配列要素アドレスは提供していない。
 
-## EVAL とデータスタック
+## EVAL / PUSH とデータスタック
 
-`EVAL expression` は式を評価し、結果をデータスタックへ残す。
+`EVAL expression` と `PUSH expression` は、同じ式文法で式を評価し、同じ結果をデータスタックへ残す。両者は同じruntime instruction列へ変換され、data stack効果、評価順、runtime failureも同じである。`PUSH` は複数値を残すワード呼出しにも使え、1値には制限されない。
+
+どちらを使うかは任意のスタイル上の目安である。式の計算・評価を強調するなら `EVAL`、値をデータスタックへ置く意図を強調するなら `PUSH` が読みやすい場合がある。意味論上の使い分け規則はない。
 
 ```tbx
 EVAL 6
@@ -296,6 +298,8 @@ ADD
 PUTDEC
 CR
 ```
+
+同じ処理は `PUSH 6`、`PUSH 7` と書ける。
 
 上のコードは `13` を出力する。
 
@@ -665,7 +669,7 @@ TBX Next は現行 `tbx` の互換実装ではない。特に次をそのまま�
 | --- | --- |
 | ワード定義 | `DEF NAME local1, local2 ... END` |
 | 戻り値 | ワードがデータスタックへ残す値。`RETURN` は値指定ではなく、ワードからの早期復帰 |
-| 式をスタックへ積む | `EVAL expression` |
+| 式を評価して結果をスタックへ残す | `EVAL expression` または `PUSH expression` |
 | 値 | 現在は `i16` 整数のみ |
 | 真偽 | `0` が偽、0 以外が真 |
 | 変数 | 長寿命の状態は `VAR` で宣言するグローバル変数。定義ワード内では `I..N,X,Y` が呼出しごとの一時変数 |
