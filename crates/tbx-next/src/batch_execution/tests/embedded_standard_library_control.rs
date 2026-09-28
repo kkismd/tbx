@@ -124,13 +124,12 @@ fn embedded_standard_library_push_preserves_expression_runtime_failure() {
         ));
 
         assert_eq!(failure.class(), UserFacingFailureClass::UserProgram);
-        diagnostics.push(
-            failure
-                .diagnostic()
-                .primary()
-                .cloned()
-                .expect("expression failure should have a primary span"),
-        );
+        let primary = failure
+            .diagnostic()
+            .primary()
+            .expect("expression failure should have a primary span");
+        assert_eq!(primary.source_line(), source);
+        diagnostics.push(primary.clone());
     }
 
     assert_eq!(
