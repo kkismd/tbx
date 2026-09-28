@@ -89,12 +89,13 @@ DEF PRINT_KLINGON_REPORT
     CR
     RETURN
   ENDIF
-  FOR KLINGON_INDEX = 1 TO 3
-    IF @KLINGON_E[KLINGON_INDEX] > 0
+  # N is the current slot; X/Y hold the course and distance.
+  FOR N = 1 TO 3
+    IF @KLINGON_E[N] > 0
       # X/Y keep this target's course and distance while helpers run in their own frames.
-      LET X = KLINGON_COURSE(KLINGON_INDEX)
-      LET Y = DIST_TO_KLINGON(KLINGON_INDEX)
-      PRINT "KLINGON ", KLINGON_INDEX, " COURSE ", X, " DISTANCE ", Y
+      LET X = KLINGON_COURSE(N)
+      LET Y = DIST_TO_KLINGON(N)
+      PRINT "KLINGON ", N, " COURSE ", X, " DISTANCE ", Y
       CR
     ENDIF
   NEXT

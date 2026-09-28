@@ -52,23 +52,29 @@ CR\n",
 }
 
 #[test]
-fn sttr1_torpedo_klingon_resolution_preserves_klingon_index_with_and_without_hit() {
+fn sttr1_torpedo_klingon_resolution_destroys_only_the_matching_slot() {
     let mut source = std::fs::read_to_string(example_path("sttr1/main.tbx"))
         .expect("STTR1 example should be readable");
     source.push_str(
-        "LET KLINGONS_HERE = 1\n\
-LET KLINGONS_LEFT = 1\n\
-LET @KLINGON_X[1] = 6\n\
-LET @KLINGON_Y[1] = 4\n\
-LET @KLINGON_E[1] = 200\n\
+        "LET KLINGONS_HERE = 3\n\
+LET KLINGONS_LEFT = 3\n\
+LET @KLINGON_X[1] = 2\n\
+LET @KLINGON_Y[1] = 2\n\
+LET @KLINGON_E[1] = 150\n\
+LET @KLINGON_X[2] = 6\n\
+LET @KLINGON_Y[2] = 4\n\
+LET @KLINGON_E[2] = 200\n\
+LET @KLINGON_X[3] = 7\n\
+LET @KLINGON_Y[3] = 7\n\
+LET @KLINGON_E[3] = 100\n\
+LET @SECTOR[10] = 2\n\
 LET @SECTOR[30] = 2\n\
+LET @SECTOR[55] = 2\n\
 LET TORPEDO_HIT = 2\n\
-LET KLINGON_INDEX = 2\n\
 TORPEDO_RESOLVE_HIT(6, 4, 30)\n\
-PRINT \"TORPEDO_INDEX_HIT \", KLINGON_INDEX, \" \", KLINGONS_HERE\nCR\n\
-LET KLINGON_INDEX = 3\n\
+PRINT \"TORPEDO_HIT_STATE \", @KLINGON_E[1], \" \", @KLINGON_E[2], \" \", @KLINGON_E[3], \" \", KLINGONS_HERE, \" \", KLINGONS_LEFT, \" \", @SECTOR[10], \" \", @SECTOR[30], \" \", @SECTOR[55]\nCR\n\
 TORPEDO_RESOLVE_HIT(1, 1, 1)\n\
-PRINT \"TORPEDO_INDEX_MISS \", KLINGON_INDEX, \" \", KLINGONS_HERE\nCR\n",
+PRINT \"TORPEDO_MISS_STATE \", @KLINGON_E[1], \" \", @KLINGON_E[2], \" \", @KLINGON_E[3], \" \", KLINGONS_HERE, \" \", KLINGONS_LEFT, \" \", @SECTOR[10], \" \", @SECTOR[30], \" \", @SECTOR[55]\nCR\n",
     );
     let (sources, standard_library_id, source_id) =
         sttr1_sources_with_standard_library(STDLIB_SOURCE, &source);
@@ -83,8 +89,14 @@ PRINT \"TORPEDO_INDEX_MISS \", KLINGON_INDEX, \" \", KLINGONS_HERE\nCR\n",
         30,
     ));
 
-    assert_eq!(output_values(writer.text(), "TORPEDO_INDEX_HIT "), [2, 0]);
-    assert_eq!(output_values(writer.text(), "TORPEDO_INDEX_MISS "), [3, 0]);
+    assert_eq!(
+        output_values(writer.text(), "TORPEDO_HIT_STATE "),
+        [150, 0, 100, 2, 2, 2, 0, 2]
+    );
+    assert_eq!(
+        output_values(writer.text(), "TORPEDO_MISS_STATE "),
+        [150, 0, 100, 2, 2, 2, 0, 2]
+    );
     assert_eq!(
         writer.text().matches("PHOTON TORPEDO HIT KLINGON").count(),
         1

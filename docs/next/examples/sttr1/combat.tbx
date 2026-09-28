@@ -85,16 +85,17 @@ DEF KLINGON_ATTACK
     ENDIF
     RETURN
   ENDIF
-  FOR KLINGON_INDEX = 1 TO 3
-    IF @KLINGON_E[KLINGON_INDEX] > 0
+  # N is the current Klingon slot; attack rolls use I independently.
+  FOR N = 1 TO 3
+    IF @KLINGON_E[N] > 0
       # J holds the current Klingon's distance in tenths of a sector.
-      LET J = DIST_TO_KLINGON(KLINGON_INDEX)
+      LET J = DIST_TO_KLINGON(N)
       # I is the short-lived Klingon attack roll.
       LET I = RND(200) - 1
       # K holds this attack's damage for the shield update and report.
-      LET K = COMBAT_DAMAGE(@KLINGON_E[KLINGON_INDEX], I, J, 1)
+      LET K = COMBAT_DAMAGE(@KLINGON_E[N], I, J, 1)
       LET SHIELDS = SHIELDS - K
-      PRINT "KLINGON ATTACK FROM SECTOR ", @KLINGON_X[KLINGON_INDEX], ",", @KLINGON_Y[KLINGON_INDEX], ": DAMAGE ", K, " SHIELDS ", SHIELDS
+      PRINT "KLINGON ATTACK FROM SECTOR ", @KLINGON_X[N], ",", @KLINGON_Y[N], ": DAMAGE ", K, " SHIELDS ", SHIELDS
       CR
     ENDIF
   NEXT
@@ -102,16 +103,15 @@ END
 
 DEF TORPEDO_RESOLVE_HIT TARGET_X, TARGET_Y, TARGET_SECTOR_INDEX
   IF TORPEDO_HIT = 2
-    LET I = KLINGON_INDEX
-    FOR KLINGON_INDEX = 1 TO 3
-      IF @KLINGON_E[KLINGON_INDEX] > 0 AND @KLINGON_X[KLINGON_INDEX] = TARGET_X AND @KLINGON_Y[KLINGON_INDEX] = TARGET_Y
+    # N is the current slot in the torpedo coordinate search.
+    FOR N = 1 TO 3
+      IF @KLINGON_E[N] > 0 AND @KLINGON_X[N] = TARGET_X AND @KLINGON_Y[N] = TARGET_Y
         PRINT "PHOTON TORPEDO HIT KLINGON AT SECTOR ", TARGET_X, ",", TARGET_Y
         CR
-        DESTROY_KLINGON(KLINGON_INDEX)
+        DESTROY_KLINGON(N)
         BREAK
       ENDIF
     NEXT
-    LET KLINGON_INDEX = I
   ELSIF TORPEDO_HIT = 3
     PRINT "PHOTON TORPEDO HIT STARBASE AT SECTOR ", TARGET_X, ",", TARGET_Y, "; STARBASE DESTROYED"
     CR
@@ -259,18 +259,19 @@ DEF PHASER
         LET I = RND(100) - 1
         LET PHASER_ENERGY = (PHASER_ENERGY / 100) * I + (PHASER_ENERGY % 100) * I / 100
       ENDIF
-      FOR KLINGON_INDEX = 1 TO 3
-        IF @KLINGON_E[KLINGON_INDEX] > 0
+      # N is the current slot; I remains available for each attack roll.
+      FOR N = 1 TO 3
+        IF @KLINGON_E[N] > 0
           # K holds the current Klingon's distance in tenths of a sector.
-          LET K = DIST_TO_KLINGON(KLINGON_INDEX)
+          LET K = DIST_TO_KLINGON(N)
           LET I = RND(200) - 1
           # J is the short-lived damage returned by COMBAT_DAMAGE.
           LET J = COMBAT_DAMAGE(PHASER_ENERGY, I, K, KLINGONS_HERE)
-          LET @KLINGON_E[KLINGON_INDEX] = @KLINGON_E[KLINGON_INDEX] - J
-          PRINT "PHASER HIT KLINGON AT SECTOR ", @KLINGON_X[KLINGON_INDEX], ",", @KLINGON_Y[KLINGON_INDEX], ": DAMAGE ", J, " ENERGY ", @KLINGON_E[KLINGON_INDEX]
+          LET @KLINGON_E[N] = @KLINGON_E[N] - J
+          PRINT "PHASER HIT KLINGON AT SECTOR ", @KLINGON_X[N], ",", @KLINGON_Y[N], ": DAMAGE ", J, " ENERGY ", @KLINGON_E[N]
           CR
-          IF @KLINGON_E[KLINGON_INDEX] <= 0
-            DESTROY_KLINGON(KLINGON_INDEX)
+          IF @KLINGON_E[N] <= 0
+            DESTROY_KLINGON(N)
           ENDIF
         ENDIF
       NEXT
