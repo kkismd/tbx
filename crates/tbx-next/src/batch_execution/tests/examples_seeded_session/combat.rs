@@ -783,7 +783,8 @@ fn sttr1_photon_torpedo_retries_after_non_numeric_course_input() {
     source.push_str(
         "LET TORPEDOES = 2\nLET COURSE = 19\nLET TORPEDO_VALID = 0\n\
 LET KLINGONS_HERE = 0\nLET DOCKED = 1\nPHOTON_TORPEDO\n\
-PRINT \"TORPEDO_INPUT_STATE \", TORPEDOES, \" \", COURSE, \" \", TORPEDO_VALID\nCR\n",
+PRINT \"TORPEDO_INPUT_STATE \", TORPEDOES, \" \", COURSE, \" \", TORPEDO_VALID\nCR\n\
+PRINT \"TORPEDO_INPUT_RNG \", RND(200)\nCR\n",
     );
     let (sources, standard_library_id, source_id) =
         sttr1_sources_with_standard_library(STDLIB_SOURCE, &source);
@@ -803,7 +804,25 @@ PRINT \"TORPEDO_INPUT_STATE \", TORPEDOES, \" \", COURSE, \" \", TORPEDO_VALID\n
         output_values(writer.text(), "TORPEDO_INPUT_STATE "),
         [2, 0, 1]
     );
+
+    let (control_sources, control_standard_library_id, control_source_id) =
+        sttr1_sources_with_standard_library(STDLIB_SOURCE, &source);
+    let mut control_input = TestInput::new([Ok(Some("0".to_owned()))]);
+    let mut control_writer = RecordingWriter::default();
+    let control_result = success(execute_registered_sources_with_filesystem_and_seed(
+        control_sources,
+        control_standard_library_id,
+        control_source_id,
+        &mut control_writer,
+        Some(&mut control_input),
+        30,
+    ));
+    assert_eq!(
+        output_values(writer.text(), "TORPEDO_INPUT_RNG "),
+        output_values(control_writer.text(), "TORPEDO_INPUT_RNG ")
+    );
     assert_eq!(result.data_stack(), []);
+    assert_eq!(control_result.data_stack(), []);
 }
 
 #[test]
@@ -813,8 +832,9 @@ fn sttr1_phaser_retries_after_non_numeric_energy_input() {
     source.push_str(
         "LET ENERGY = 500\nLET SHIELDS = 500\nLET KLINGONS_HERE = 1\n\
 LET @KLINGON_X[1] = 5\nLET @KLINGON_Y[1] = 4\nLET @KLINGON_E[1] = 200\n\
-LET DOCKED = 1\nPHASER\n\
-PRINT \"PHASER_INPUT_STATE \", ENERGY, \" \", PHASER_ENERGY, \" \", PHASER_VALID\nCR\n",
+LET DOCKED = 1\nLET @DAMAGE[8] = -1\nPHASER\n\
+PRINT \"PHASER_INPUT_STATE \", ENERGY, \" \", PHASER_ENERGY, \" \", PHASER_VALID\nCR\n\
+PRINT \"PHASER_INPUT_RNG \", RND(200)\nCR\n",
     );
     let (sources, standard_library_id, source_id) =
         sttr1_sources_with_standard_library(STDLIB_SOURCE, &source);
@@ -835,9 +855,27 @@ PRINT \"PHASER_INPUT_STATE \", ENERGY, \" \", PHASER_ENERGY, \" \", PHASER_VALID
     assert!(writer.text().contains("PHASER INPUT ERROR"));
     assert_eq!(
         output_values(writer.text(), "PHASER_INPUT_STATE "),
-        [400, 100, 1]
+        [400, 45, 1]
+    );
+
+    let (control_sources, control_standard_library_id, control_source_id) =
+        sttr1_sources_with_standard_library(STDLIB_SOURCE, &source);
+    let mut control_input = TestInput::new([Ok(Some("100".to_owned()))]);
+    let mut control_writer = RecordingWriter::default();
+    let control_result = success(execute_registered_sources_with_filesystem_and_seed(
+        control_sources,
+        control_standard_library_id,
+        control_source_id,
+        &mut control_writer,
+        Some(&mut control_input),
+        30,
+    ));
+    assert_eq!(
+        output_values(writer.text(), "PHASER_INPUT_RNG "),
+        output_values(control_writer.text(), "PHASER_INPUT_RNG ")
     );
     assert_eq!(result.data_stack(), []);
+    assert_eq!(control_result.data_stack(), []);
 }
 
 #[test]
