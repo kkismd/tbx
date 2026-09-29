@@ -232,6 +232,9 @@ pub(crate) fn encode(image: &StaticImage) -> Result<BytecodeArtifact, EncodeErro
                     primitive_opcode(*operation).ok_or(EncodeError::UnsupportedPrimitive(index))?;
                 code.push(opcode);
             }
+            LogicalInstruction::ControlPush => code.push(0x70),
+            LogicalInstruction::ControlCopy => code.push(0x71),
+            LogicalInstruction::ControlDrop => code.push(0x72),
             LogicalInstruction::Return => code.push(0x22),
             LogicalInstruction::Halt => code.push(0x01),
             _ => return Err(EncodeError::UnsupportedInstruction(index)),
@@ -274,7 +277,11 @@ fn encoded_len(
             Ok(1)
         }
         LogicalInstruction::CallPrimitive(_) => Err(EncodeError::UnsupportedPrimitive(index)),
-        LogicalInstruction::Return | LogicalInstruction::Halt => Ok(1),
+        LogicalInstruction::ControlPush
+        | LogicalInstruction::ControlCopy
+        | LogicalInstruction::ControlDrop
+        | LogicalInstruction::Return
+        | LogicalInstruction::Halt => Ok(1),
         _ => Err(EncodeError::UnsupportedInstruction(index)),
     }
 }
@@ -653,6 +660,25 @@ mod tests {
         assert_eq!(
             artifact.code(),
             &[0x30, 0x09, 0x00, 0x02, 9, 0, 0x31, 0, 0, 0x20, 3, 0, 0x22]
+        );
+    }
+
+    #[test]
+    fn control_value_opcodes_are_single_byte_and_preserve_relocations() {
+        let artifact = encode(&image(vec![
+            LogicalInstruction::Jump(CodePosition(5)),
+            LogicalInstruction::ControlPush,
+            LogicalInstruction::ControlCopy,
+            LogicalInstruction::CallCode(CodePosition(1)),
+            LogicalInstruction::JumpIfZero(CodePosition(0)),
+            LogicalInstruction::ControlDrop,
+            LogicalInstruction::Return,
+        ]))
+        .expect("control-value opcodes encode");
+
+        assert_eq!(
+            artifact.code(),
+            &[0x30, 0x0b, 0x00, 0x70, 0x71, 0x20, 0x03, 0x00, 0x31, 0x00, 0x00, 0x72, 0x22]
         );
     }
 
