@@ -594,7 +594,7 @@ PUTSTR G   \ "inside" を出力する
 
 このとき `"inside"` はコンパイル時に `Cell::Str(Rc<str>)` として辞書に埋め込まれ、`SET &G, ...` は `Rc` handle をそのままグローバル変数スロットにコピーする。`STR_CONCAT` などで実行時に生成した文字列も同様にグローバル変数へ格納できる。
 
-回帰テストは `src/vm.rs` の `test_str_literal_inside_word_can_be_assigned_to_global_var` / `test_str_literal_assigned_to_global_var_at_top_level_succeeds` を参照。
+回帰テストは `crates/tbx-1st/src/vm.rs` の `test_str_literal_inside_word_can_be_assigned_to_global_var` / `test_str_literal_assigned_to_global_var_at_top_level_succeeds` を参照。
 
 ### 等値比較
 
@@ -683,4 +683,4 @@ Phase 5B-D2（issue #588）以降、文字列リテラルおよび動的文字�
 
 - VM の構造、辞書層、実行モデル: `blueprint.md`
 - コンパイルワード、制御構造の展開、低レベルなコンパイル操作: `blueprint-compiler.md`
-- 現在有効な primitive 群、内部表現、境界条件、具体エラー: `src/`
+- 現在有効な primitive 群、内部表現、境界条件、具体エラー: `crates/tbx-1st/src/`

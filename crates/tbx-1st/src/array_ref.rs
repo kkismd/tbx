@@ -114,8 +114,8 @@ impl ArrayRef {
     /// # Example
     ///
     /// ```
-    /// # use tbx::array_ref::ArrayRef;
-    /// # use tbx::cell::Cell;
+    /// # use tbx_1st::array_ref::ArrayRef;
+    /// # use tbx_1st::cell::Cell;
     /// let a = ArrayRef::new(vec![Cell::Int(1)]);
     /// let b = a.clone();                         // same allocation
     /// let c = ArrayRef::new(vec![Cell::Int(1)]); // different allocation

@@ -5,8 +5,8 @@
 // paths like `USE "lib/tests/helper.tbx"` work correctly regardless of the
 // process CWD.
 use std::path::{Path, PathBuf};
-use tbx::interpreter::Interpreter;
-use tbx::vm::InputFlushMode;
+use tbx_1st::interpreter::Interpreter;
+use tbx_1st::vm::InputFlushMode;
 
 fn run_tbx_test(path: &PathBuf, base_dir: &Path) -> Result<(), String> {
     let mut interp = Interpreter::new();
@@ -34,7 +34,7 @@ include!(concat!(env!("OUT_DIR"), "/tbx_lib_tests_generated.rs"));
 /// at runtime with a `TypeError`.
 #[test]
 fn test_unterminated_string_in_def_is_compile_error() {
-    use tbx::interpreter::Interpreter;
+    use tbx_1st::interpreter::Interpreter;
     let mut interp = Interpreter::new();
     // The closing `"` is intentionally omitted to produce Token::Error.
     let src = "DEF BAD_WORD\n  PUTSTR \"unterminated\nEND\n";

@@ -1,8 +1,8 @@
 use std::io::Cursor;
 use std::path::PathBuf;
 
-use tbx::interpreter::Interpreter;
-use tbx::vm::InputFlushMode;
+use tbx_1st::interpreter::Interpreter;
+use tbx_1st::vm::InputFlushMode;
 
 fn run_trek_interaction(src: &str, input: &str) -> String {
     let mut interp = Interpreter::new();

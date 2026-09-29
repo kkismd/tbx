@@ -1,6 +1,6 @@
 use std::io::{self, Write};
-use tbx::error::TbxError;
-use tbx::interpreter::{Interpreter, InterpreterError};
+use tbx_1st::error::TbxError;
+use tbx_1st::interpreter::{Interpreter, InterpreterError};
 
 fn print_error(err: &InterpreterError) {
     eprintln!("Error: {err}");
@@ -110,7 +110,7 @@ fn main() -> std::process::ExitCode {
         [_] => run_stdin(),
         [_, path] => run_file(path),
         _ => {
-            eprintln!("Usage: tbx [source_file]");
+            eprintln!("Usage: tbx-1st [source_file]");
             std::process::ExitCode::FAILURE
         }
     }

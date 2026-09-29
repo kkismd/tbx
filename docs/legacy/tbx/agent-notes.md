@@ -1,10 +1,10 @@
 # 旧TBX エージェント向け実装ノート
 
-> **対象: 旧TBX。** 旧TBXはADR [#2013](https://github.com/kkismd/tbx/issues/2013) により、通常の新機能・仕様変更の対象外です。この文書はTBX-Nextの現在仕様を示しません。TBX-Nextの入口は [`docs/next/README.md`](../../next/README.md) です。
+> **対象: TBX 1st。** TBX 1st (`crates/tbx-1st/`) はADR [#2013](https://github.com/kkismd/tbx/issues/2013) により、通常の新機能・仕様変更の対象外です。この文書はTBX-Nextの現在仕様を示しません。TBX-Nextの入口は [`docs/next/README.md`](../../next/README.md) です。
 
-この文書は旧TBX（ルート package `tbx`、`src/`、`lib/`）の実装エージェントが詰まりやすい箇所、PRレビューで繰り返し指摘された事項、再利用できる注意点をまとめる。TBX-Next (`crates/tbx-next/`) の仕様や実装構造を示す文書ではない。
+この文書は旧TBX（package `tbx-1st`、`crates/tbx-1st/src/`、`crates/tbx-1st/lib/`）の実装エージェントが詰まりやすい箇所、PRレビューで繰り返し指摘された事項、再利用できる注意点をまとめる。TBX-Next (`crates/tbx-next/`) の仕様や実装構造を示す文書ではない。
 
-旧TBXを変更する場合に参照する。詳細は各リンク先 docs や issue を参照。
+TBX 1stを変更する場合に参照する。詳細は各リンク先 docs や issue を参照。
 
 ## 旧TBX Architecture（旧ルート `AGENTS.md` から移管）
 
@@ -12,23 +12,23 @@
 
 ### 実行モデルと起動
 
-旧TBXは Tiny BASIC と Forth 的な自己拡張機能を持つインタープリタで、bootstrapped VM と Indirect Threaded Code (ITC) を使う。`src/vm.rs` の VM は `dictionary: Vec<Cell>`（コード・データ層）、`headers: Vec<WordEntry>`（word名・flag・kind層）、`data_stack: Vec<Cell>`、`return_stack: Vec<ReturnFrame>` を持つ。
+旧TBXは Tiny BASIC と Forth 的な自己拡張機能を持つインタープリタで、bootstrapped VM と Indirect Threaded Code (ITC) を使う。`crates/tbx-1st/src/vm.rs` の VM は `dictionary: Vec<Cell>`（コード・データ層）、`headers: Vec<WordEntry>`（word名・flag・kind層）、`data_stack: Vec<Cell>`、`return_stack: Vec<ReturnFrame>` を持つ。
 
-`Xt` (`src/cell.rs`) は `dictionary` ではなく `headers` の型付きindex。`EntryKind` (`src/dict.rs`) は `Primitive(PrimFn)`、`Word(usize)`（dictionary offset）、`Variable(usize)`、`Constant(Cell)` または VM 内部命令（`Call`、`Exit`、`ReturnVal`、`BranchIfFalse` 等）を表す。inner interpreter の `VM::exec_xt` は `Xt` 列を読み、`EntryKind` をdispatchして制御フローを処理する。top-level実行は `ReturnFrame::TopLevel` sentinel で終了する。
+`Xt` (`crates/tbx-1st/src/cell.rs`) は `dictionary` ではなく `headers` の型付きindex。`EntryKind` (`crates/tbx-1st/src/dict.rs`) は `Primitive(PrimFn)`、`Word(usize)`（dictionary offset）、`Variable(usize)`、`Constant(Cell)` または VM 内部命令（`Call`、`Exit`、`ReturnVal`、`BranchIfFalse` 等）を表す。inner interpreter の `VM::exec_xt` は `Xt` 列を読み、`EntryKind` をdispatchして制御フローを処理する。top-level実行は `ReturnFrame::TopLevel` sentinel で終了する。
 
 `lib::init_vm()` が VM を作り、`primitives::register_all()` でsystem dictionaryを登録し、`vm.seal_sys()` で `DP_SYS` を記録する。
 
 ### 旧TBXの層と辞書
 
-- `src/cell.rs`: `Cell`（`Int`、`Float`、`DictAddr`、`StackAddr`、`Str`、`Marker`、`Xt` 等）、`Xt`、`ReturnFrame`、`CompileEntry`
-- `src/constants.rs`: VM上限（`MAX_DICTIONARY_CELLS` 1M、`MAX_DATA_STACK_DEPTH` 65536、`MAX_RETURN_STACK_DEPTH` 4096）
-- `src/dict.rs`: `WordEntry`、`EntryKind`、`FLAG_SYSTEM` / `FLAG_IMMEDIATE`
-- `src/error.rs`: VM・compiler errorを含む `TbxError`
-- `src/lexer.rs`: `Token` / `SpannedToken` tokenizer
-- `src/expr.rs`: Shunting-Yard Algorithmによる式compiler。infix式をRPNの `Vec<Cell>` に変換
-- `src/vm.rs`: VM、`CompileState`、inner interpreter
-- `src/primitives.rs` と `src/primitives/`: primitive実装。`primitives.rs` は façade / `register_all` 登録入口であり、低依存の分類moduleを下位directoryに置ける
-- `src/interpreter.rs`: outer interpreter。tokenizeし、`compile_program` / `exec_source` / `exec_line` を駆動
+- `crates/tbx-1st/src/cell.rs`: `Cell`（`Int`、`Float`、`DictAddr`、`StackAddr`、`Str`、`Marker`、`Xt` 等）、`Xt`、`ReturnFrame`、`CompileEntry`
+- `crates/tbx-1st/src/constants.rs`: VM上限（`MAX_DICTIONARY_CELLS` 1M、`MAX_DATA_STACK_DEPTH` 65536、`MAX_RETURN_STACK_DEPTH` 4096）
+- `crates/tbx-1st/src/dict.rs`: `WordEntry`、`EntryKind`、`FLAG_SYSTEM` / `FLAG_IMMEDIATE`
+- `crates/tbx-1st/src/error.rs`: VM・compiler errorを含む `TbxError`
+- `crates/tbx-1st/src/lexer.rs`: `Token` / `SpannedToken` tokenizer
+- `crates/tbx-1st/src/expr.rs`: Shunting-Yard Algorithmによる式compiler。infix式をRPNの `Vec<Cell>` に変換
+- `crates/tbx-1st/src/vm.rs`: VM、`CompileState`、inner interpreter
+- `crates/tbx-1st/src/primitives.rs` と `crates/tbx-1st/src/primitives/`: primitive実装。`primitives.rs` は façade / `register_all` 登録入口であり、低依存の分類moduleを下位directoryに置ける
+- `crates/tbx-1st/src/interpreter.rs`: outer interpreter。tokenizeし、`compile_program` / `exec_source` / `exec_line` を駆動
 
 System、Library（`USE` で読み込む標準library）、Userの三層は一つの `Vec<Cell>` を共有し、境界はそれぞれ `DP_SYS`、`DP_LIB`、`DP_USER`。`DP` は次の空きcellを指す。headersは `prev: Option<usize>` linked listでshadowingとlookup順を表す。session中、headersとdictionaryは単調増加するが、`DEF ... END` の失敗時には部分compileをrollbackする。
 
@@ -36,13 +36,13 @@ System、Library（`USE` で読み込む標準library）、Userの三層は一�
 
 ### Compile、integration test、設計資料
 
-word定義は `DEF WORD(params) ... END`。`CompileState` (`src/vm.rs`) はparameter/local table、GOTO labelと自己再帰 `CALL` のback-patch list、error recovery用rollback情報を保持する。式compileは `ExprCompiler` (`src/expr.rs`) が担当する。
+word定義は `DEF WORD(params) ... END`。`CompileState` (`crates/tbx-1st/src/vm.rs`) はparameter/local table、GOTO labelと自己再帰 `CALL` のback-patch list、error recovery用rollback情報を保持する。式compileは `ExprCompiler` (`crates/tbx-1st/src/expr.rs`) が担当する。
 
-`build.rs` は `lib/tests/test_*.tbx` ごとにtestを生成し、`$OUT_DIR/tbx_lib_tests_generated.rs` を `tests/tbx_lib_tests.rs` から `include!` する。TBX-level testは `lib/tests/test_<name>.tbx` を追加する。
+`crates/tbx-1st/build.rs` は `crates/tbx-1st/lib/tests/test_*.tbx` ごとにtestを生成し、`$OUT_DIR/tbx_lib_tests_generated.rs` を `crates/tbx-1st/tests/tbx_lib_tests.rs` から `include!` する。TBX-level testは `crates/tbx-1st/lib/tests/test_<name>.tbx` を追加する。
 
-旧TBXの設計文書は [`blueprint.md`](blueprint.md)（VM architecture、dictionary、memory layout）、[`blueprint-language.md`](blueprint-language.md)（構文・statement・expression・型）、[`blueprint-compiler.md`](blueprint-compiler.md)（`DEF`/`END`、control structure、compile-time stack primitive）。`blueprint.md` は設計判断・仕様を記録し、安定した実装詳細は `src/` が正本。旧TBX programを書く場合は [`tbx-quickref.ja.md`](tbx-quickref.ja.md) を入口とし、現挙動やedge caseは `src/`、`lib/`、testsで確認する。
+旧TBXの設計文書は [`blueprint.md`](blueprint.md)（VM architecture、dictionary、memory layout）、[`blueprint-language.md`](blueprint-language.md)（構文・statement・expression・型）、[`blueprint-compiler.md`](blueprint-compiler.md)（`DEF`/`END`、control structure、compile-time stack primitive）。`blueprint.md` は設計判断・仕様を記録し、安定した実装詳細は `crates/tbx-1st/src/` が正本。旧TBX programを書く場合は [`tbx-quickref.ja.md`](tbx-quickref.ja.md) を入口とし、現挙動やedge caseは `crates/tbx-1st/src/`、`crates/tbx-1st/lib/`、`crates/tbx-1st/tests/` で確認する。
 
-### 旧ルート `AGENTS.md` のArchitecture節棚卸し
+### 旧 `AGENTS.md` のArchitecture節棚卸し
 
 | 旧節 | 扱い | 対応 |
 | --- | --- | --- |
@@ -70,7 +70,7 @@ word定義は `DEF WORD(params) ... END`。`CompileState` (`src/vm.rs`) はparam
 
 ### `ExprAst` は当面「解決済み寄り」の単一 AST として扱う
 
-`src/expr.rs` の現行パイプラインは `tokens -> ExprResolver-assisted ExprAst -> Vec<Cell)` であり、`ExprAst` は純粋な raw parse tree ではない。
+`crates/tbx-1st/src/expr.rs` の現行パイプラインは `tokens -> ExprResolver-assisted ExprAst -> Vec<Cell)` であり、`ExprAst` は純粋な raw parse tree ではない。
 
 - `LocalRead` / `GlobalRead` による local-global 解決
 - `Invoke { xt, ... }` による callable `Xt` の確定
@@ -187,7 +187,7 @@ ENDIF
 
 **テストでの使い方**
 
-`lib/tests/helper.tbx` に `ASSERT` (truthy を期待) と `ASSERT_FALSE` (falsy を期待) がある。
+`crates/tbx-1st/lib/tests/helper.tbx` に `ASSERT` (truthy を期待) と `ASSERT_FALSE` (falsy を期待) がある。
 
 ```tbx
 ASSERT IS_VALID_COURSE(1)        # 有効 course → truthy であることを確認
@@ -373,4 +373,4 @@ USE "../../lib/tests/helper.tbx"  # OK
 USE "examples/trek/state.tbx"     # NG: examples/trek/examples/trek/state.tbx になる
 ```
 
-`cargo test` 経由で `lib/tests/` 配下のファイルを実行するとき、テストランナーが `set_base_dir` でプロジェクトルートを設定するため `USE "lib/tests/helper.tbx"` が通る。`tbx` バイナリで直接実行するときはファイル基準の相対パスになる（PR #775 の事例）。
+`cargo test` 経由で `crates/tbx-1st/lib/tests/` 配下のファイルを実行するとき、テストランナーが `set_base_dir` でpackage rootを設定するため `USE "lib/tests/helper.tbx"` が通る。`tbx-1st` バイナリで直接実行するときはファイル基準の相対パスになる（PR #775 の事例）。

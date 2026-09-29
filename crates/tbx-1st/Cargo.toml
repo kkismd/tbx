@@ -1,0 +1,20 @@
+[package]
+name = "tbx-1st"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.76"
+description = "Tiny BASIC eXtensible - a bootstrappable BASIC interpreter"
+
+[lib]
+name = "tbx_1st"
+path = "src/lib.rs"
+
+[[bin]]
+name = "tbx-1st"
+path = "src/main.rs"
+
+[dependencies]
+rand = { version = "0.8", features = ["small_rng"] }
+
+[dev-dependencies]
+tempfile = "3"
