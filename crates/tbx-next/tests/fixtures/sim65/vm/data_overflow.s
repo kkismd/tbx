@@ -12,4 +12,4 @@ expected_stack:
     .repeat 64
         .word 1
     .endrepeat
-VM_EXPECT 13, failure, 64, 0, expected_stack, 128, $ff, 0, 0, 0
+VM_EXPECT 13, failure, 64, 0, expected_stack, 128, $ff, 0, 0, 0, 0, 0, 0

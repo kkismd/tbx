@@ -101,9 +101,9 @@ _tbx_code_end:
     .byte $62
 .endmacro
 
-; Error probe record: code, opcode address, depths, stack bytes, global,
-; and active frame bytes. $ff disables the global check.
-.macro VM_EXPECT code, pc, data_depth, call_depth, stack_ptr, stack_len, global_slot, global_value, frame_ptr, frame_len
+; Error probe record: code, opcode address, depths, stack, optional global,
+; active frame, and optional unchanged array storage bytes.
+.macro VM_EXPECT code, pc, data_depth, call_depth, stack_ptr, stack_len, global_slot, global_value, frame_ptr, frame_len, array_ptr, expected_array_ptr, array_len
     .export _tbx_test_expect
     .segment "RODATA"
 _tbx_test_expect:
@@ -116,4 +116,7 @@ _tbx_test_expect:
     .word global_value
     .byte frame_len
     .word frame_ptr
+    .word array_ptr
+    .word expected_array_ptr
+    .byte array_len
 .endmacro

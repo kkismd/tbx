@@ -5,4 +5,4 @@ failure:
     RET
     HALT
 VM_END
-VM_EXPECT 14, failure, 0, 0, 0, 0, $ff, 0, 0, 0
+VM_EXPECT 14, failure, 0, 0, 0, 0, $ff, 0, 0, 0, 0, 0, 0

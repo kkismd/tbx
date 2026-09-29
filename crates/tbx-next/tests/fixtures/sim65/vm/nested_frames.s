@@ -24,4 +24,4 @@ expected_frames:
     .repeat 16
         .byte 0
     .endrepeat
-VM_EXPECT 10, failure, 2, 2, expected_stack, 4, $ff, 0, expected_frames, 40
+VM_EXPECT 10, failure, 2, 2, expected_stack, 4, $ff, 0, expected_frames, 40, 0, 0, 0

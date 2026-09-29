@@ -151,6 +151,7 @@ fn vm_success_fixtures() {
         ("encoder_contract", "4658\n"),
         ("encoder_immediates", ""),
         ("array_access", "1234\n-5678\n-42\n"),
+        ("array_count_256", ""),
         ("nonzero_entry", "0\n99\n"),
         ("arithmetic_edges", "32761\n-2\n1\n1\n1\n0\n1\n1\n"),
         (
@@ -194,6 +195,20 @@ fn vm_failure_fixtures_observe_atomic_state() {
         ("putchr_underflow", 12),
         ("data_overflow", 13),
         ("invalid_global", 16),
+        ("array_load_underflow", 12),
+        ("array_store_underflow_zero", 12),
+        ("array_store_underflow_one", 12),
+        ("array_invalid_slot", 20),
+        ("array_index_zero", 21),
+        ("array_index_negative", 21),
+        ("array_index_too_large", 21),
+        ("array_truncated", 11),
+        ("array_store_truncated", 11),
+        ("array_no_successor", 11),
+        ("array_length_zero", 20),
+        ("array_length_negative", 20),
+        ("array_descriptor_wrap", 20),
+        ("array_element_wrap", 20),
         ("truncated", 11),
         ("invalid_target", 11),
         ("jz_invalid_taken", 11),
@@ -218,7 +233,8 @@ fn vm_failure_fixtures_observe_atomic_state() {
         assert_eq!(
             result.output.status.code(),
             Some(exit),
-            "{fixture}: error probe reported an invariant failure or sim65 failed: {}",
+            "{fixture}: error probe reported an invariant failure or sim65 failed: stdout {:?}, stderr {}",
+            String::from_utf8_lossy(&result.output.stdout),
             String::from_utf8_lossy(&result.output.stderr)
         );
         assert!(result.output.stdout.is_empty(), "{fixture} produced output");
@@ -310,7 +326,6 @@ fn vm_linker_layout_obeys_m32_segments_and_capacity() {
         ("tbx_call_depth", 8),
         ("tbx_global_count", 9),
         ("tbx_last_error", 11),
-        ("tbx_array_count", 12),
     ] {
         assert_eq!(
             symbol(&result.labels, name),

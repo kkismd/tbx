@@ -7,4 +7,4 @@ failure:
     HALT
 VM_END
 expected_stack: .word $ffff
-VM_EXPECT 17, failure, 1, 0, expected_stack, 2, $ff, 0, 0, 0
+VM_EXPECT 17, failure, 1, 0, expected_stack, 2, $ff, 0, 0, 0, 0, 0, 0

@@ -11,7 +11,6 @@
 .export tbx_pc, tbx_base, tbx_end, tbx_data_depth, tbx_control_depth
 .export tbx_call_depth, tbx_global_count, tbx_last_error
 .export tbx_data_stack, tbx_globals, tbx_frames
-.export tbx_array_count
 
 .segment "ZEROPAGE"
 tbx_pc:             .res 2
@@ -22,7 +21,6 @@ tbx_control_depth:  .res 1
 tbx_call_depth:     .res 1
 tbx_global_count:   .res 2
 tbx_last_error:     .res 1
-tbx_array_count:    .res 2
 cursor:             .res 2
 target:             .res 2
 ptr:                .res 2
@@ -61,10 +59,6 @@ _main:
     sta tbx_global_count
     lda _tbx_global_count+1
     sta tbx_global_count+1
-    lda _tbx_array_count
-    sta tbx_array_count
-    lda _tbx_array_count+1
-    sta tbx_array_count+1
     lda #0
     sta tbx_data_depth
     sta tbx_control_depth
@@ -78,11 +72,11 @@ _main:
     lda tbx_global_count
     jne fail_global
 :
-    lda tbx_array_count+1
+    lda _tbx_array_count+1
     beq :+
     cmp #1
     jne fail_array_metadata
-    lda tbx_array_count
+    lda _tbx_array_count
     jne fail_array_metadata
 :
     lda tbx_base
@@ -423,17 +417,18 @@ op_store:
 array_descriptor:
     jsr read_operand
     sta count
-    lda tbx_array_count+1
-    beq :+
+    lda _tbx_array_count+1
+    beq array_count_u8
     cmp #1
     bne array_slot_bad
-    lda tbx_array_count
+    lda _tbx_array_count
     bne array_slot_bad
     jmp array_slot_valid
-:
+array_count_u8:
     lda count
-    cmp tbx_array_count
-    jcs array_slot_bad
+    cmp _tbx_array_count
+    bcc array_slot_valid
+    jmp array_slot_bad
 array_slot_valid:
     lda count
     asl
@@ -471,9 +466,13 @@ array_slot_valid:
     clc
     rts
 array_slot_bad:
-    jmp fail_array_slot
+    lda #20
+    sec
+    rts
 array_metadata_bad:
-    jmp fail_array_metadata
+    lda #20
+    sec
+    rts
 
 array_access:
     ; value contains the signed one-based index.
@@ -494,7 +493,9 @@ array_index_positive:
     bcc array_index_in_range
     beq array_index_in_range
 array_index_bad:
-    jmp fail_array_index
+    lda #21
+    sec
+    rts
 array_index_in_range:
     sec
     lda value
@@ -537,6 +538,7 @@ op_load_array:
     dec cursor+1
 :
     jsr array_descriptor
+    jcs fail
     ldx tbx_data_depth
     dex
     txa
@@ -548,6 +550,7 @@ op_load_array:
     lda tbx_data_stack,x
     sta value+1
     jsr array_access
+    jcs fail
     ldy #0
     lda (target),y
     sta value
@@ -585,6 +588,7 @@ op_store_array:
     dec cursor+1
 :
     jsr array_descriptor
+    jcs fail
     ; value is the cell to store; the index is the cell beneath it.
     ldx tbx_data_depth
     dex
@@ -605,6 +609,7 @@ op_store_array:
     lda tbx_data_stack,x
     sta value+1
     jsr array_access
+    jcs fail
     ; No failure is possible after this point: commit storage, stack, and PC.
     ldy #0
     lda work
