@@ -67,6 +67,7 @@ jobs:
             - run: cargo test -p tbx-next --test sim65_smoke
             - run: cargo test -p tbx-next --test sim65_smoke -- --ignored
             - run: cargo test -p tbx-next --test sim65_vm -- --ignored
+            - run: cargo test -p tbx-next --lib wrapper_text_bytes_assemble_with_special_and_utf8_bytes -- --ignored
             - run: cargo test -p tbx-next --lib prime_source_matches_sim65_execution -- --ignored
             - run: cargo test -p tbx-next --lib mandelbrot_source_matches_sim65_execution -- --ignored
             - run: cargo test -p tbx-next --lib minimal_array_source_matches_sim65_execution -- --ignored
