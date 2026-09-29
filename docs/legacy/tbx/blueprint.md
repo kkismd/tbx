@@ -45,7 +45,7 @@ TBX は、Tiny BASIC 風の表面構文を、Forth 的な辞書・Xt・スタッ
   * リターンスタック: 手続きからの戻り先アドレスと呼び出し元のBPを退避する。リターンスタックはシステム専用であり、ユーザーコードからの直接アクセス手段（Forthにおける `>R` / `R>` / `R@` 相当）は提供しない。TBXはワード定義に引数リストを持ち、CALL時にスタックフレームを構成するアーキテクチャのため、ローカル変数によりリターンスタックの一時退避用途が不要となる。
     * EXIT: void returnプリミティブ。`data_stack.truncate(bp)` で引数・ローカル変数を解放し、リターンスタックから戻り先アドレスと元のBPを復元して呼び出し元に制御を戻す
     * RETURN_VAL: 値returnプリミティブ（新設）。スタックトップを退避 → `data_stack.truncate(bp)` → 戻り値を再pushし、リターンスタックから戻り先アドレスと元のBPを復元して呼び出し元に制御を戻す
-    * `ReturnFrame` 列挙型: リターンスタックに積まれるフレームの種別を表す型。`Call`（戻り先PC・保存BP・実引数個数 `actual_arity`）と `TopLevel`（番哨フレーム）の2バリアントを持つ（実装: `src/cell.rs`）。文字列は `Cell::Str(Rc<str>)` として参照カウントで管理されるため、フレーム退出時に巻き戻す文字列プールは存在しない。配列は `Cell::Array(ArrayRef)` として `Rc` 参照カウントで管理されるため、フレーム退出時に配列プールを巻き戻す処理は不要である。`actual_arity` は可変引数ワード内で `VA_COUNT` が参照する。
+    * `ReturnFrame` 列挙型: リターンスタックに積まれるフレームの種別を表す型。`Call`（戻り先PC・保存BP・実引数個数 `actual_arity`）と `TopLevel`（番哨フレーム）の2バリアントを持つ（実装: `crates/tbx-1st/src/cell.rs`）。文字列は `Cell::Str(Rc<str>)` として参照カウントで管理されるため、フレーム退出時に巻き戻す文字列プールは存在しない。配列は `Cell::Array(ArrayRef)` として `Rc` 参照カウントで管理されるため、フレーム退出時に配列プールを巻き戻す処理は不要である。`actual_arity` は可変引数ワード内で `VA_COUNT` が参照する。
 
 > Issue #116「ワード本体の終端判定機構（EXIT規約）が仕様に明記されていない」に基づく設計方針
 
@@ -125,7 +125,7 @@ TBX は、Tiny BASIC 風の表面構文を、Forth 的な辞書・Xt・スタッ
 
 **データ層**はフラットな `Vec<Cell>` 配列であり、`pc` はこの配列へのインデックスとして機能する。DP_SYS / DP_LIB / DP_USER / DP もこの配列へのオフセットとして管理する。
 
-`WordEntry` はエントリの種別を `EntryKind` enum として保持する。`Cell`（データスタックや変数の値）と `EntryKind`（辞書エントリの属性）を明確に分離することで、辞書の多様なエントリをひとつの型で統一的に扱える。実装の詳細は `src/dict.rs`・`src/cell.rs`・`src/vm.rs` を参照。
+`WordEntry` はエントリの種別を `EntryKind` enum として保持する。`Cell`（データスタックや変数の値）と `EntryKind`（辞書エントリの属性）を明確に分離することで、辞書の多様なエントリをひとつの型で統一的に扱える。実装の詳細は `crates/tbx-1st/src/dict.rs`・`crates/tbx-1st/src/cell.rs`・`crates/tbx-1st/src/vm.rs` を参照。
 
 #### ヒープ
 

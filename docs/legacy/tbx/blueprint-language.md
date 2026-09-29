@@ -594,7 +594,7 @@ PUTSTR G   \ "inside" を出力する
 
 このとき `"inside"` はコンパイル時に `Cell::Str(Rc<str>)` として辞書に埋め込まれ、`SET &G, ...` は `Rc` handle をそのままグローバル変数スロットにコピーする。`STR_CONCAT` などで実行時に生成した文字列も同様にグローバル変数へ格納できる。
 
-回帰テストは `src/vm.rs` の `test_str_literal_inside_word_can_be_assigned_to_global_var` / `test_str_literal_assigned_to_global_var_at_top_level_succeeds` を参照。
+回帰テストは `crates/tbx-1st/src/vm.rs` の `test_str_literal_inside_word_can_be_assigned_to_global_var` / `test_str_literal_assigned_to_global_var_at_top_level_succeeds` を参照。
 
 ### 等値比較
 

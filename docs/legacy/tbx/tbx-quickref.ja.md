@@ -267,7 +267,7 @@ PRINT_ALL "a", "b", "c"
 
 ## 制御構造
 
-制御構造の多くは `lib/basic.tbx` の IMMEDIATE ワードとして定義されている。`IF`, `WHILE`, `DO`, `SELECT`, `FOR` はいずれも `DEF ... END` の内部で使う。
+制御構造の多くは `crates/tbx-1st/lib/basic.tbx` の IMMEDIATE ワードとして定義されている。`IF`, `WHILE`, `DO`, `SELECT`, `FOR` はいずれも `DEF ... END` の内部で使う。
 
 ### IF / ELSIF / ELSE / ENDIF
 
@@ -409,7 +409,7 @@ PRINTLN TUPLE_LEN(P)
 
 ### Result 風ヘルパ
 
-`lib/result.tbx` には `TUPLE(value, ok)` 形式を扱うヘルパがある。
+`crates/tbx-1st/lib/result.tbx` には `TUPLE(value, ok)` 形式を扱うヘルパがある。
 
 - `RESULT_VAL(R)` — 値を取り出す
 - `RESULT_OK(R)` — 成功フラグを取り出す

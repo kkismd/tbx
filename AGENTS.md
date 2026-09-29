@@ -38,7 +38,7 @@ TBX は、実用的な言語機能を拡充しながらも、コアを小さく�
 - 適用される `AGENTS.md`
 - 選択した skill の `SKILL.md`
 
-### 旧TBX（ルート `tbx` crate）を変更する場合
+### TBX 1st (`crates/tbx-1st/`) を変更する場合
 
 - **[`docs/legacy/tbx/agent-notes.md`](docs/legacy/tbx/agent-notes.md)** — TBX 1st crate、TBX 構文、標準ライブラリ、`crates/tbx-1st/lib/` 配下の TBX プログラムに関する注意・落とし穴・レビュー由来の知見をまとめた日本語のノート。`crates/tbx-next` のみを変更する作業では、issue や変更対象が明示的に関連しない限り必読ではない。
 
@@ -53,7 +53,7 @@ TBX は、実用的な言語機能を拡充しながらも、コアを小さく�
 
 ### Star Trek サンプルゲームを変更する場合
 
-- **[`docs/notes/star-trek-mayfield-1972.md`](docs/notes/star-trek-mayfield-1972.md)** — `lib/trek.tbx`、Star Trek 関連テスト、Mayfield 版仕様に触れる場合に参照する原典ルール抽出メモ。VM、compiler、`crates/tbx-next`、一般的な Rust 実装作業では必読ではない。
+- **[`docs/notes/star-trek-mayfield-1972.md`](docs/notes/star-trek-mayfield-1972.md)** — `crates/tbx-1st/examples/trek/`、Star Trek 関連テスト、Mayfield 版仕様に触れる場合に参照する原典ルール抽出メモ。VM、compiler、`crates/tbx-next`、一般的な Rust 実装作業では必読ではない。
 
 ## 主実装と変更対象別の参照入口
 
