@@ -7,10 +7,12 @@
 .import _tbx_code_start, _tbx_code_end, _tbx_entry_offset, _tbx_global_count
 .import _tbx_before_init, _tbx_error_probe, _putchar
 .import _tbx_array_count, _tbx_array_descriptors
+.import _tbx_text_count, _tbx_text_descriptors
 .export _main
 .export tbx_pc, tbx_base, tbx_end, tbx_data_depth, tbx_control_depth
 .export tbx_call_depth, tbx_global_count, tbx_last_error
 .export tbx_data_stack, tbx_globals, tbx_frames
+.export vm_zp_end, vm_bss_end
 
 .segment "ZEROPAGE"
 tbx_pc:             .res 2
@@ -31,12 +33,14 @@ work:               .res 2
 sign:               .res 1
 count:              .res 1
 opcode:             .res 1
+vm_zp_end:
 
 .segment "BSS"
 tbx_data_stack: .res 128
 tbx_frames:     .res 320
 tbx_globals:    .res 512
 digits:         .res 6
+vm_bss_end:
 
 .segment "RODATA"
 frame_addresses:
@@ -78,6 +82,13 @@ _main:
     jne fail_array_metadata
     lda _tbx_array_count
     jne fail_array_metadata
+:
+    lda _tbx_text_count+1
+    cmp #1
+    bcc :+
+    jne fail_text_metadata
+    lda _tbx_text_count
+    jne fail_text_metadata
 :
     lda tbx_base
     cmp tbx_end
@@ -199,6 +210,8 @@ dispatch:
     jeq op_cr
     cmp #$62
     jeq op_putchr
+    cmp #$63
+    jeq op_write_text
     jmp fail_opcode
 
 op_halt:
@@ -1301,11 +1314,123 @@ op_putchr:
     sta value+1
     jne fail_arithmetic
     lda value
-    bmi fail_arithmetic
+    jmi fail_arithmetic
     jsr emit_char
     jcs fail_output
     dec tbx_data_depth
     jmp commit_cursor
+
+; WRITE_TEXT validates all metadata and the fallthrough address before output.
+op_write_text:
+    lda #2
+    jsr need_bytes
+    jcs fail_bytecode
+    ldy #0
+    lda (cursor),y
+    sta count
+    jsr read_operand
+    jsr validate_next
+    jcs fail_bytecode
+    jsr text_descriptor
+    jcs fail_text_metadata
+    ; right is the byte length. Empty text does not dereference its base.
+    lda right
+    ora right+1
+    jeq write_text_done
+    ; Validate base + (length - 1), allowing the final byte at $ffff.
+    sec
+    lda right
+    sbc #1
+    sta work
+    lda right+1
+    sbc #0
+    sta work+1
+    clc
+    lda target
+    adc work
+    sta work
+    lda target+1
+    adc work+1
+    jcs fail_text_metadata
+    ; Restore length for the output loop; work becomes its remaining count.
+    lda right
+    sta work
+    lda right+1
+    sta work+1
+write_text_loop:
+    ldy #0
+    lda (target),y
+    jsr emit_char
+    jcs fail_output
+    inc target
+    bne :+
+    inc target+1
+:
+    lda work
+    bne :+
+    dec work+1
+:
+    dec work
+    lda work
+    ora work+1
+    jne write_text_loop
+write_text_done:
+    jmp commit_cursor
+
+; Resolve the saved slot to target=base and right=length.
+text_descriptor:
+    lda _tbx_text_count+1
+    beq text_count_u8
+    cmp #1
+    bne text_metadata_bad
+    lda _tbx_text_count
+    bne text_metadata_bad
+    jmp text_slot_valid
+text_count_u8:
+    lda count
+    cmp _tbx_text_count
+    bcc text_slot_valid
+    jmp text_metadata_bad
+text_slot_valid:
+    lda count
+    asl
+    sta left
+    lda #0
+    rol
+    asl left
+    rol
+    sta left+1
+    clc
+    lda _tbx_text_descriptors
+    adc left
+    sta ptr
+    lda _tbx_text_descriptors+1
+    adc left+1
+    sta ptr+1
+    jcs text_metadata_bad
+    clc
+    lda ptr
+    adc #3
+    lda ptr+1
+    adc #0
+    bcs text_metadata_bad
+    ldy #0
+    lda (ptr),y
+    sta target
+    iny
+    lda (ptr),y
+    sta target+1
+    iny
+    lda (ptr),y
+    sta right
+    iny
+    lda (ptr),y
+    sta right+1
+    clc
+    rts
+text_metadata_bad:
+    sec
+    rts
 
 op_cr:
     lda #1
@@ -1367,6 +1492,9 @@ fail_array_slot:
     jne fail
 fail_array_metadata:
     lda #20
+    jne fail
+fail_text_metadata:
+    lda #22
     jne fail
 fail_array_index:
     lda #21
