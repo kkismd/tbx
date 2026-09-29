@@ -1,7 +1,7 @@
 use std::iter::Peekable;
 use std::str::CharIndices;
 
-// TOKEN kind codes (mirrors blueprint-language.md "トークン・ディスクリプタ")
+// TOKEN kind codes (mirrors docs/legacy/tbx/blueprint-language.md "トークン・ディスクリプタ")
 pub const TOK_ID: i64 = 0;
 pub const TOK_NUM: i64 = 1;
 pub const TOK_OP: i64 = 2;

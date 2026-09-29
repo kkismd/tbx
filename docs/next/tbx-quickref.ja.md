@@ -11,7 +11,7 @@ TBX Next は開発中であり、**現在の挙動の正本は `crates/tbx-next/
 - 実行例: `docs/next/examples/`
 - 実用入口: この文書
 
-現行 TBX の `blueprint.md`、`blueprint-language.md`、`blueprint-compiler.md` および `docs/tbx-quickref.ja.md` は TBX Next の仕様ではない。構文や語彙をそのまま流用しないこと。
+旧TBXの [`blueprint.md`](../legacy/tbx/blueprint.md)、[`blueprint-language.md`](../legacy/tbx/blueprint-language.md)、[`blueprint-compiler.md`](../legacy/tbx/blueprint-compiler.md)、[`tbx-quickref.ja.md`](../legacy/tbx/tbx-quickref.ja.md) は TBX Next の仕様ではない。構文や語彙をそのまま流用しないこと。
 
 ## 実行方法
 

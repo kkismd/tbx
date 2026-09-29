@@ -16,4 +16,4 @@ cargo run -p tbx-next --bin tbx-next -- docs/next/examples/guess.tbx
 
 ルート package `tbx` は旧実装です。通常の新機能開発や仕様変更の対象ではありません。旧実装のコードと利用方法はリポジトリ内に残っていますが、現在のTBXの仕様や主実装を示すものではありません。
 
-旧TBXに関する設計資料は [`blueprint.md`](./blueprint.md)、[`blueprint-language.md`](./blueprint-language.md)、[`blueprint-compiler.md`](./blueprint-compiler.md)、[`docs/tbx-6502-profile.md`](./docs/tbx-6502-profile.md) を参照してください。
+旧TBXに関する設計資料は [`blueprint.md`](./docs/legacy/tbx/blueprint.md)、[`blueprint-language.md`](./docs/legacy/tbx/blueprint-language.md)、[`blueprint-compiler.md`](./docs/legacy/tbx/blueprint-compiler.md)、[`tbx-6502-profile.md`](./docs/legacy/tbx/tbx-6502-profile.md) を参照してください。

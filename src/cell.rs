@@ -90,7 +90,7 @@ pub enum Cell {
     ///
     /// Surface operations that would expose `Cell::Array` as a value are
     /// unsupported: `LET B = A`, `SET &B, A`, `RETURN A`, `TUPLE(A)`,
-    /// `PUTVAL A`, `A = B`, `EQ(A, B)`.  See `blueprint-language.md` §配列の
+    /// `PUTVAL A`, `A = B`, `EQ(A, B)`.  See `docs/legacy/tbx/blueprint-language.md` §配列の
     /// surface policy for the complete list.
     ///
     /// Created by the `ARRAY(N)` primitive.  The underlying `ArrayRef` holds

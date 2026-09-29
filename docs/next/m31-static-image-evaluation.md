@@ -102,7 +102,7 @@ The resulting code bytes are calculated per instruction as `sum(variant count ×
 | target runtime ROM、cycle count | 未計測 | 実target runtime / encoderがない。logical imageからは導けない。 |
 | resource overflow閾値 | 未計測 | candidate profile validatorはなく、本issueで新設もしない。 |
 
-## 旧 `docs/tbx-6502-profile.md` の継承
+## 旧 [`tbx-6502-profile.md`](../legacy/tbx/tbx-6502-profile.md) の継承
 
 引き続き有効な調査上の前提は、host compile後のtarget runtime、16-bit cellの大きさ、文字列を静的payloadとして分離する考え方、配列を連続したcell payloadとして数える考え方である。今回の2 B/cell換算は規模比較の仮定としてのみ使う。
 
