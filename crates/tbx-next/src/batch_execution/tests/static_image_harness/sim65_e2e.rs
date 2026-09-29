@@ -711,6 +711,31 @@ fn minimal_fixed_text_source_matches_sim65_execution() {
 }
 
 #[test]
+#[ignore = "requires ca65, ld65, and sim65; run with --ignored"]
+fn squares_source_matches_sim65_execution() {
+    let result = evaluate(
+        include_str!("../../../../../../docs/next/examples/squares.tbx"),
+        "squares.tbx",
+        true,
+        true,
+    );
+    let artifact = result.artifact.expect("encode squares source");
+    let host_output = result.host_output.expect("host executes squares source");
+    assert_eq!(artifact.array_lengths(), &[10]);
+    assert_eq!(artifact.text_count(), 1);
+    assert_eq!(artifact.text_storage_bytes(), Some(1));
+    assert_eq!(artifact.text_descriptor_bytes(), Some(4));
+    build_and_run(
+        &artifact,
+        &host_output,
+        PRIME_CYCLE_LIMIT,
+        "squares",
+        "squares_source_matches_sim65_execution",
+    )
+    .unwrap_or_else(|error| panic!("{error}"));
+}
+
+#[test]
 fn e2e_failures_identify_the_stage() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
     for stage in [
