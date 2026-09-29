@@ -6,6 +6,23 @@ pub(crate) struct BytecodeArtifact {
     entry_offset: u16,
     global_slot_count: u16,
     array_lengths: Vec<u16>,
+    texts: Vec<FixedText>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct FixedText {
+    bytes: Vec<u8>,
+    byte_length: u16,
+}
+
+impl FixedText {
+    pub(crate) fn bytes(&self) -> &[u8] {
+        &self.bytes
+    }
+
+    pub(crate) const fn byte_length(&self) -> u16 {
+        self.byte_length
+    }
 }
 
 impl BytecodeArtifact {
@@ -41,6 +58,24 @@ impl BytecodeArtifact {
     pub(crate) fn array_descriptor_bytes(&self) -> Option<usize> {
         self.array_count().checked_mul(4)
     }
+
+    pub(crate) fn text_count(&self) -> usize {
+        self.texts.len()
+    }
+
+    pub(crate) fn texts(&self) -> &[FixedText] {
+        &self.texts
+    }
+
+    pub(crate) fn text_storage_bytes(&self) -> Option<usize> {
+        self.texts.iter().try_fold(0usize, |bytes, text| {
+            bytes.checked_add(usize::from(text.byte_length()))
+        })
+    }
+
+    pub(crate) fn text_descriptor_bytes(&self) -> Option<usize> {
+        self.text_count().checked_mul(4)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -52,6 +87,10 @@ pub(crate) enum EncodeError {
     TooManyArrays(usize),
     ArrayLengthOutOfRange(usize),
     ArrayStorageTooLarge,
+    TextSlotOutOfRange(usize),
+    TooManyTexts(usize),
+    TextLengthOutOfRange(usize),
+    TextStorageTooLarge,
     CallBaseOffsetOutOfRange(usize),
     InvalidCodeTarget(usize),
     InvalidEntry(usize),
@@ -79,6 +118,28 @@ pub(crate) fn encode(image: &StaticImage) -> Result<BytecodeArtifact, EncodeErro
     array_count
         .checked_mul(4)
         .ok_or(EncodeError::ArrayStorageTooLarge)?;
+
+    let text_count = image.texts.len();
+    if text_count > usize::from(u8::MAX) + 1 {
+        return Err(EncodeError::TooManyTexts(text_count));
+    }
+    let mut texts = Vec::with_capacity(text_count);
+    let mut text_bytes = 0usize;
+    for text in &image.texts {
+        let bytes = text.as_bytes();
+        let byte_length = u16::try_from(bytes.len())
+            .map_err(|_| EncodeError::TextLengthOutOfRange(bytes.len()))?;
+        text_bytes = text_bytes
+            .checked_add(bytes.len())
+            .ok_or(EncodeError::TextStorageTooLarge)?;
+        texts.push(FixedText {
+            bytes: bytes.to_vec(),
+            byte_length,
+        });
+    }
+    text_count
+        .checked_mul(4)
+        .ok_or(EncodeError::TextStorageTooLarge)?;
 
     let mut offsets = Vec::with_capacity(image.code.len() + 1);
     let mut byte_len = 0usize;
@@ -142,6 +203,11 @@ pub(crate) fn encode(image: &StaticImage) -> Result<BytecodeArtifact, EncodeErro
                 });
                 code.push(slot);
             }
+            LogicalInstruction::WriteText(slot) => {
+                let slot = text_slot_operand(slot.0, image.texts.len())?;
+                code.push(0x63);
+                code.push(slot);
+            }
             LogicalInstruction::CallCode(position) => {
                 code.push(0x20);
                 code.extend_from_slice(&target(*position)?.to_le_bytes());
@@ -176,6 +242,7 @@ pub(crate) fn encode(image: &StaticImage) -> Result<BytecodeArtifact, EncodeErro
         entry_offset,
         global_slot_count: image.global_count as u16,
         array_lengths,
+        texts,
     })
 }
 
@@ -194,6 +261,9 @@ fn encoded_len(
                 Ok(2)
             }
         }
+        LogicalInstruction::WriteText(slot) => {
+            text_slot_operand(slot.0, image.texts.len()).map(|_| 2)
+        }
         LogicalInstruction::CallCode(_)
         | LogicalInstruction::Jump(_)
         | LogicalInstruction::JumpIfZero(_) => Ok(3),
@@ -207,6 +277,13 @@ fn encoded_len(
         LogicalInstruction::Return | LogicalInstruction::Halt => Ok(1),
         _ => Err(EncodeError::UnsupportedInstruction(index)),
     }
+}
+
+fn text_slot_operand(slot: usize, text_count: usize) -> Result<u8, EncodeError> {
+    if slot >= text_count {
+        return Err(EncodeError::TextSlotOutOfRange(slot));
+    }
+    u8::try_from(slot).map_err(|_| EncodeError::TextSlotOutOfRange(slot))
 }
 
 fn primitive_opcode(operation: PrimitiveOp) -> Option<u8> {
@@ -264,6 +341,138 @@ mod tests {
             array_lengths,
             ..image(code)
         }
+    }
+
+    fn image_with_texts(code: Vec<LogicalInstruction>, texts: Vec<String>) -> StaticImage {
+        StaticImage {
+            texts,
+            ..image(code)
+        }
+    }
+
+    #[test]
+    fn encodes_write_text_and_preserves_utf8_metadata_in_slot_order() {
+        let artifact = encode(&image_with_texts(
+            vec![LogicalInstruction::WriteText(super::super::TextSlot(0))],
+            vec![
+                "hello".into(),
+                "é".into(),
+                String::new(),
+                "A".into(),
+                "A".into(),
+            ],
+        ))
+        .expect("text encodes");
+
+        assert_eq!(artifact.code(), &[0x63, 0]);
+        assert_eq!(artifact.text_count(), 5);
+        assert_eq!(
+            artifact
+                .texts()
+                .iter()
+                .map(|text| text.bytes())
+                .collect::<Vec<_>>(),
+            vec![
+                b"hello".as_slice(),
+                "é".as_bytes(),
+                b"".as_slice(),
+                b"A".as_slice(),
+                b"A".as_slice()
+            ]
+        );
+        assert_eq!(
+            artifact
+                .texts()
+                .iter()
+                .map(|text| text.byte_length())
+                .collect::<Vec<_>>(),
+            vec![5, 2, 0, 1, 1]
+        );
+        assert_eq!(artifact.text_storage_bytes(), Some(9));
+        assert_eq!(artifact.text_descriptor_bytes(), Some(20));
+    }
+
+    #[test]
+    fn supports_256_text_slots_and_rejects_the_257th() {
+        let artifact = encode(&image_with_texts(
+            vec![LogicalInstruction::WriteText(super::super::TextSlot(255))],
+            vec!["x".into(); 256],
+        ))
+        .expect("256 text slots encode");
+        assert_eq!(artifact.code(), &[0x63, 255]);
+        assert_eq!(artifact.text_count(), 256);
+        assert_eq!(artifact.text_storage_bytes(), Some(256));
+        assert_eq!(artifact.text_descriptor_bytes(), Some(1024));
+
+        assert_eq!(
+            encode(&image_with_texts(
+                vec![LogicalInstruction::Halt],
+                vec![String::new(); 257]
+            )),
+            Err(EncodeError::TooManyTexts(257))
+        );
+    }
+
+    #[test]
+    fn accepts_maximum_text_length_without_limiting_total_text_storage() {
+        let artifact = encode(&image_with_texts(
+            vec![LogicalInstruction::Halt],
+            vec!["x".repeat(usize::from(u16::MAX)), "y".into()],
+        ))
+        .expect("per-text lengths fit even when total exceeds 64 KiB");
+        assert_eq!(artifact.texts()[0].byte_length(), u16::MAX);
+        assert_eq!(
+            artifact.text_storage_bytes(),
+            Some(usize::from(u16::MAX) + 1)
+        );
+        assert_eq!(artifact.text_descriptor_bytes(), Some(8));
+    }
+
+    #[test]
+    fn rejects_invalid_text_slots_and_unrepresentable_byte_lengths() {
+        assert_eq!(
+            encode(&image_with_texts(
+                vec![LogicalInstruction::WriteText(super::super::TextSlot(0))],
+                Vec::new(),
+            )),
+            Err(EncodeError::TextSlotOutOfRange(0))
+        );
+        assert_eq!(
+            encode(&image_with_texts(
+                vec![LogicalInstruction::WriteText(super::super::TextSlot(1))],
+                vec!["x".into()],
+            )),
+            Err(EncodeError::TextSlotOutOfRange(1))
+        );
+        assert_eq!(
+            encode(&image_with_texts(
+                vec![LogicalInstruction::Halt],
+                vec!["x".repeat(usize::from(u16::MAX) + 1)],
+            )),
+            Err(EncodeError::TextLengthOutOfRange(usize::from(u16::MAX) + 1))
+        );
+    }
+
+    #[test]
+    fn write_text_has_fixed_width_in_entry_call_and_jump_relocations() {
+        let mut source = image_with_texts(
+            vec![
+                LogicalInstruction::Jump(CodePosition(4)),
+                LogicalInstruction::WriteText(super::super::TextSlot(0)),
+                LogicalInstruction::CallCode(CodePosition(1)),
+                LogicalInstruction::JumpIfZero(CodePosition(1)),
+                LogicalInstruction::WriteText(super::super::TextSlot(0)),
+                LogicalInstruction::Return,
+            ],
+            vec!["x".into()],
+        );
+        source.entry = CodePosition(1);
+        let artifact = encode(&source).expect("relocations encode");
+        assert_eq!(artifact.entry_offset(), 3);
+        assert_eq!(
+            artifact.code(),
+            &[0x30, 0x0b, 0x00, 0x63, 0, 0x20, 3, 0, 0x31, 3, 0, 0x63, 0, 0x22]
+        );
     }
 
     #[test]
@@ -397,10 +606,17 @@ mod tests {
     #[test]
     fn empty_array_metadata_has_zero_sizes() {
         let artifact = encode(&image(vec![LogicalInstruction::Halt])).expect("empty image encodes");
+        assert_eq!(artifact.code(), &[0x01]);
+        assert_eq!(artifact.entry_offset(), 0);
+        assert_eq!(artifact.global_slot_count(), 0);
         assert_eq!(artifact.array_count(), 0);
         assert_eq!(artifact.array_lengths(), &[]);
         assert_eq!(artifact.array_storage_bytes(), Some(0));
         assert_eq!(artifact.array_descriptor_bytes(), Some(0));
+        assert_eq!(artifact.text_count(), 0);
+        assert!(artifact.texts().is_empty());
+        assert_eq!(artifact.text_storage_bytes(), Some(0));
+        assert_eq!(artifact.text_descriptor_bytes(), Some(0));
 
         let one = encode(&image_with_arrays(vec![LogicalInstruction::Halt], vec![4]))
             .expect("one array encodes");
@@ -443,8 +659,8 @@ mod tests {
     #[test]
     fn rejects_unsupported_logical_instructions_and_primitives() {
         assert_eq!(
-            encode(&image(vec![LogicalInstruction::WriteText(
-                super::super::TextSlot(0)
+            encode(&image(vec![LogicalInstruction::LoadScratch(
+                super::super::ScratchSlot::I
             )]),),
             Err(EncodeError::UnsupportedInstruction(0))
         );
