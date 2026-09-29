@@ -5,7 +5,7 @@ TBX-Next は、TBX の現在の主実装です。旧TBXを引き継ぐ互換実�
 ## Scope
 
 - TBX-Next の実装 crate は [`crates/tbx-next/`](../../crates/tbx-next/) です。
-- 旧TBXのルート package `tbx` には依存せず、旧TBXとの互換性を保証しません。
+- TBX 1st package `tbx-1st` には依存せず、旧TBXとの互換性を保証しません。
 - 旧TBX向けの [`blueprint.md`](../legacy/tbx/blueprint.md)、[`blueprint-language.md`](../legacy/tbx/blueprint-language.md)、[`blueprint-compiler.md`](../legacy/tbx/blueprint-compiler.md) は TBX-Next の仕様ではありません。
 
 ## Source of Truth

@@ -1,10 +1,10 @@
 # 旧TBX エージェント向け実装ノート
 
-> **対象: 旧TBX。** 旧TBXはADR [#2013](https://github.com/kkismd/tbx/issues/2013) により、通常の新機能・仕様変更の対象外です。この文書はTBX-Nextの現在仕様を示しません。TBX-Nextの入口は [`docs/next/README.md`](../../next/README.md) です。
+> **対象: TBX 1st。** TBX 1st (`crates/tbx-1st/`) はADR [#2013](https://github.com/kkismd/tbx/issues/2013) により、通常の新機能・仕様変更の対象外です。この文書はTBX-Nextの現在仕様を示しません。TBX-Nextの入口は [`docs/next/README.md`](../../next/README.md) です。
 
-この文書は旧TBX（ルート package `tbx`、`src/`、`lib/`）の実装エージェントが詰まりやすい箇所、PRレビューで繰り返し指摘された事項、再利用できる注意点をまとめる。TBX-Next (`crates/tbx-next/`) の仕様や実装構造を示す文書ではない。
+この文書は旧TBX（package `tbx-1st`、`crates/tbx-1st/src/`、`crates/tbx-1st/lib/`）の実装エージェントが詰まりやすい箇所、PRレビューで繰り返し指摘された事項、再利用できる注意点をまとめる。TBX-Next (`crates/tbx-next/`) の仕様や実装構造を示す文書ではない。
 
-旧TBXを変更する場合に参照する。詳細は各リンク先 docs や issue を参照。
+TBX 1stを変更する場合に参照する。詳細は各リンク先 docs や issue を参照。
 
 ## 旧TBX Architecture（旧ルート `AGENTS.md` から移管）
 
@@ -42,7 +42,7 @@ word定義は `DEF WORD(params) ... END`。`CompileState` (`src/vm.rs`) はparam
 
 旧TBXの設計文書は [`blueprint.md`](blueprint.md)（VM architecture、dictionary、memory layout）、[`blueprint-language.md`](blueprint-language.md)（構文・statement・expression・型）、[`blueprint-compiler.md`](blueprint-compiler.md)（`DEF`/`END`、control structure、compile-time stack primitive）。`blueprint.md` は設計判断・仕様を記録し、安定した実装詳細は `src/` が正本。旧TBX programを書く場合は [`tbx-quickref.ja.md`](tbx-quickref.ja.md) を入口とし、現挙動やedge caseは `src/`、`lib/`、testsで確認する。
 
-### 旧ルート `AGENTS.md` のArchitecture節棚卸し
+### 旧 `AGENTS.md` のArchitecture節棚卸し
 
 | 旧節 | 扱い | 対応 |
 | --- | --- | --- |

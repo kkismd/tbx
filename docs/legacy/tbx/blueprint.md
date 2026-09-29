@@ -12,7 +12,7 @@ eXtensibleなTiny BASICという意味で TBX という名前をつける。
 
 > Issue #74「blueprintのコード例がソースコードと重複している」に基づく設計方針
 >
-> 実装済みで安定したコンポーネントのRustコード例はblueprint.mdに記載しない。ソースコード（`src/` 以下）を正の実装定義とし、blueprint.mdには設計方針と仕様の記述に留める。
+> 実装済みで安定したコンポーネントのRustコード例はblueprint.mdに記載しない。ソースコード（`crates/tbx-1st/src/` 以下）を正の実装定義とし、blueprint.mdには設計方針と仕様の記述に留める。
 
 ## アーキテクチャ (System Architecture)
 

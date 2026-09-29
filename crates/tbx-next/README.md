@@ -1,6 +1,6 @@
 # TBX-Next
 
-TBX-Next は TBX の現在の主実装です。ルート package `tbx` の旧実装とは独立しており、旧TBXとの互換性を保証しません。
+TBX-Next は TBX の現在の主実装です。package `tbx-1st` の旧実装とは独立しており、旧TBXとの互換性を保証しません。
 
 ## Crate Boundary
 
@@ -10,7 +10,7 @@ TBX-Next は TBX の現在の主実装です。ルート package `tbx` の旧実
 - source: [`src/`](./src/)
 - tests: current unit tests in [`src/lib.rs`](./src/lib.rs)
 
-旧実装のルート package は `tbx` です。TBX-Next と旧TBXの間に crate dependency はありません。
+旧実装の package は `tbx-1st` です。TBX-Next とTBX 1stの間に crate dependency はありません。
 
 ## Source of Truth
 

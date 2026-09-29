@@ -683,4 +683,4 @@ Phase 5B-D2（issue #588）以降、文字列リテラルおよび動的文字�
 
 - VM の構造、辞書層、実行モデル: `blueprint.md`
 - コンパイルワード、制御構造の展開、低レベルなコンパイル操作: `blueprint-compiler.md`
-- 現在有効な primitive 群、内部表現、境界条件、具体エラー: `src/`
+- 現在有効な primitive 群、内部表現、境界条件、具体エラー: `crates/tbx-1st/src/`

@@ -11,8 +11,8 @@ env:
     RUSTFLAGS: -Dwarnings
 
 jobs:
-    current-check:
-        name: Current / Check
+    first-check:
+        name: TBX 1st / Check
         runs-on: ubuntu-latest
         steps:
             - uses: actions/checkout@v4
@@ -20,10 +20,10 @@ jobs:
               with:
                   toolchain: stable
             - uses: Swatinem/rust-cache@v2
-            - run: cargo check -p tbx --all-targets
+            - run: cargo check -p tbx-1st --all-targets
 
-    current-test:
-        name: Current / Test
+    first-test:
+        name: TBX 1st / Test
         runs-on: ubuntu-latest
         steps:
             - uses: actions/checkout@v4
@@ -31,7 +31,7 @@ jobs:
               with:
                   toolchain: stable
             - uses: Swatinem/rust-cache@v2
-            - run: cargo test -p tbx
+            - run: cargo test -p tbx-1st
 
     next-check:
         name: Next / Check

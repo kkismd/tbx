@@ -219,7 +219,7 @@ impl VM {
     ///
     /// ```no_run
     /// use std::io::Cursor;
-    /// use tbx::vm::VM;
+    /// use tbx_1st::vm::VM;
     ///
     /// let mut vm = VM::new();
     /// vm.input_reader = Box::new(Cursor::new("42\n"));

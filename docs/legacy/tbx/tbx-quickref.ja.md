@@ -1,14 +1,14 @@
 # TBX クイックリファレンス
 
-> **対象: 旧TBX。** 旧TBXはADR [#2013](https://github.com/kkismd/tbx/issues/2013) により、通常の新機能・仕様変更の対象外です。この文書はTBX-Nextの現在仕様を示しません。TBX-Nextの入口は [`docs/next/README.md`](../../next/README.md) です。
+> **対象: TBX 1st。** TBX 1st (`crates/tbx-1st/`) はADR [#2013](https://github.com/kkismd/tbx/issues/2013) により、通常の新機能・仕様変更の対象外です。この文書はTBX-Nextの現在仕様を示しません。TBX-Nextの入口は [`docs/next/README.md`](../../next/README.md) です。
 
 この文書は、TBX プログラムを書く人間およびエージェント向けの実用メモである。
 
-TBX は開発中であり、実装が正である。この文書は完全な仕様書ではなく、よく使う構文・標準語彙・書き方の入口を示す。詳細な仕様、境界条件、エラー型は `src/`、`lib/`、テストを確認すること。
+TBX は開発中であり、実装が正である。この文書は完全な仕様書ではなく、よく使う構文・標準語彙・書き方の入口を示す。詳細な仕様、境界条件、エラー型は `crates/tbx-1st/src/`、`crates/tbx-1st/lib/`、`crates/tbx-1st/tests/` を確認すること。
 
 ## この文書の位置づけ
 
-- 正の実装定義: `src/`, `lib/`, テスト
+- 正の実装定義: `crates/tbx-1st/src/`, `crates/tbx-1st/lib/`, `crates/tbx-1st/tests/`
 - 設計意図: [`blueprint.md`](blueprint.md), [`blueprint-language.md`](blueprint-language.md), [`blueprint-compiler.md`](blueprint-compiler.md)
 - 実用入口: この文書
 
@@ -576,7 +576,7 @@ USE "lib/foo.tbx"
 
 ## 標準語彙の一覧
 
-実装が正であり、この一覧は代表的な入口である。完全性が必要な場合は `src/primitives.rs` の `register_all()` と `lib/*.tbx` を確認する。
+実装が正であり、この一覧は代表的な入口である。完全性が必要な場合は `crates/tbx-1st/src/primitives.rs` の `register_all()` と `crates/tbx-1st/lib/*.tbx` を確認する。
 
 ### スタック・メモリ
 
@@ -641,16 +641,16 @@ USE "lib/foo.tbx"
 - `FOR` の変数参照には `&` が必要: `FOR &I, 5`。
 - 配列要素の添字は 1-based。`@A[0]` は通常使わない。
 - `FOR` は 1 始まり・ステップ 1 固定。必要なら `WHILE` を使う。
-- 文字列、タプル、Result 風ヘルパ、配列、乱数、時刻関数がある。自前で再実装する前にこの文書と `src/primitives.rs` / `lib/*.tbx` を確認する。
+- 文字列、タプル、Result 風ヘルパ、配列、乱数、時刻関数がある。自前で再実装する前にこの文書と `crates/tbx-1st/src/primitives.rs` / `crates/tbx-1st/lib/*.tbx` を確認する。
 - 未確認の構文や標準語彙を発明しない。
 
 ## 実装を確認する場所
 
-- `src/lexer.rs` — トークン、コメント、文字列リテラル、演算子
-- `src/statement_reader.rs` — 論理ステートメント、改行、セミコロン、行番号ラベル
-- `src/expr.rs` — 式、演算子、関数呼び出し、配列・タプル projection
-- `src/primitives.rs` / `src/primitives/` — primitive の登録と実装
-- `lib/basic.tbx` — 制御構造、`LET`, `FOR`, `PRINT`, `PRINTLN`, `CR`, `HMS`
-- `lib/result.tbx` — Result 風ヘルパ
+- `crates/tbx-1st/src/lexer.rs` — トークン、コメント、文字列リテラル、演算子
+- `crates/tbx-1st/src/statement_reader.rs` — 論理ステートメント、改行、セミコロン、行番号ラベル
+- `crates/tbx-1st/src/expr.rs` — 式、演算子、関数呼び出し、配列・タプル projection
+- `crates/tbx-1st/src/primitives.rs` / `crates/tbx-1st/src/primitives/` — primitive の登録と実装
+- `crates/tbx-1st/lib/basic.tbx` — 制御構造、`LET`, `FOR`, `PRINT`, `PRINTLN`, `CR`, `HMS`
+- `crates/tbx-1st/lib/result.tbx` — Result 風ヘルパ
 - [`blueprint-language.md`](blueprint-language.md) — 言語仕様上の設計意図
 - [`blueprint-compiler.md`](blueprint-compiler.md) — コンパイル時語彙と IMMEDIATE ワードの設計意図
