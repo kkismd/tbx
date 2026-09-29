@@ -262,6 +262,37 @@ fn representative_sources_compile_and_lower() {
 }
 
 #[test]
+fn grades_source_encodes_control_value_instructions_and_metadata() {
+    let grades = evaluate(
+        include_str!("../../../../../docs/next/examples/grades.tbx"),
+        "grades.tbx",
+        false,
+        true,
+    );
+    let artifact = grades.artifact.expect("grades artifact encodes");
+
+    for expected in [
+        crate::static_image::LogicalInstructionKind::ControlPush,
+        crate::static_image::LogicalInstructionKind::ControlCopy,
+        crate::static_image::LogicalInstructionKind::ControlDrop,
+    ] {
+        assert!(
+            grades
+                .statistics
+                .variant_counts
+                .iter()
+                .any(|(kind, count)| *kind == expected && *count > 0),
+            "grades StaticImage contains {expected:?}"
+        );
+    }
+
+    assert_eq!(artifact.array_lengths(), &[6]);
+    assert_eq!(artifact.text_count(), 7);
+    assert_eq!(artifact.text_storage_bytes(), Some(38));
+    assert_eq!(artifact.text_descriptor_bytes(), Some(28));
+}
+
+#[test]
 fn array_resource_measurements_are_available_on_request() {
     let minimal = evaluate(
         "DIM @VALUES[3]\nLET @VALUES[1] = 7\nPRINT @VALUES[1]\nCR\n",
