@@ -151,6 +151,7 @@ fn vm_success_fixtures() {
         ("encoder_contract", "4658\n"),
         ("encoder_immediates", ""),
         ("array_access", "1234\n-5678\n-42\n"),
+        ("array_page_boundary", "321\n"),
         ("array_count_256", ""),
         ("nonzero_entry", "0\n99\n"),
         ("arithmetic_edges", "32761\n-2\n1\n1\n1\n0\n1\n1\n"),

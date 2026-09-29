@@ -415,8 +415,7 @@ op_store:
 ; Array descriptors are four-byte base/length pairs owned by the wrapper.
 ; ptr receives the selected descriptor address; target receives element address.
 array_descriptor:
-    jsr read_operand
-    sta count
+    ; The opcode handler already consumed and preserved the slot operand.
     lda _tbx_array_count+1
     beq array_count_u8
     cmp #1
@@ -531,12 +530,6 @@ op_load_array:
     jcs fail_bytecode
     lda tbx_data_depth
     jeq fail_underflow
-    ; Restore the slot operand cursor for the shared descriptor reader.
-    dec cursor
-    lda cursor
-    bne :+
-    dec cursor+1
-:
     jsr array_descriptor
     jcs fail
     ldx tbx_data_depth
@@ -582,11 +575,6 @@ op_store_array:
     lda tbx_data_depth
     cmp #2
     jcc fail_underflow
-    dec cursor
-    lda cursor
-    bne :+
-    dec cursor+1
-:
     jsr array_descriptor
     jcs fail
     ; value is the cell to store; the index is the cell beneath it.
