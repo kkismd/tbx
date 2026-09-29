@@ -3,11 +3,30 @@
     .export _tbx_code_start, _tbx_code_end
     .export _tbx_entry_offset, _tbx_global_count
     .export _tbx_array_count, _tbx_array_descriptors
+    .export _tbx_text_count, _tbx_text_descriptors
     .segment "RODATA"
 _tbx_entry_offset: .word entry - _tbx_code_start
 _tbx_global_count: .word globals
 _tbx_array_count: .word arrays
 _tbx_array_descriptors: .word descriptors
+_tbx_text_count: .word 0
+_tbx_text_descriptors: .word empty_text_descriptors
+empty_text_descriptors: .word 0, 0
+_tbx_code_start:
+.endmacro
+
+.macro VM_TEXT_HEADER entry, globals, arrays, descriptors, texts, text_descriptors
+    .export _tbx_code_start, _tbx_code_end
+    .export _tbx_entry_offset, _tbx_global_count
+    .export _tbx_array_count, _tbx_array_descriptors
+    .export _tbx_text_count, _tbx_text_descriptors
+    .segment "RODATA"
+_tbx_entry_offset: .word entry - _tbx_code_start
+_tbx_global_count: .word globals
+_tbx_array_count: .word arrays
+_tbx_array_descriptors: .word descriptors
+_tbx_text_count: .word texts
+_tbx_text_descriptors: .word text_descriptors
 _tbx_code_start:
 .endmacro
 
@@ -99,6 +118,9 @@ _tbx_code_end:
 .endmacro
 .macro PUTCHR
     .byte $62
+.endmacro
+.macro WRITE_TEXT slot
+    .byte $63, slot
 .endmacro
 
 ; Error probe record: code, opcode address, depths, stack, optional global,

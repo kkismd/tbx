@@ -144,28 +144,30 @@ fn vm_success_fixtures() {
     for (fixture, stdout) in [
         (
             "arithmetic",
-            "0\n-1\n-32768\n-1\n1\n0\n1\n0\n1\n0\n1\n0\n-32768\n",
+            &b"0\n-1\n-32768\n-1\n1\n0\n1\n0\n1\n0\n1\n0\n-32768\n"[..],
         ),
-        ("control", "0\n5\n4\n3\n2\n1\n0\n"),
-        ("call", "44\n22\n"),
-        ("encoder_contract", "4658\n"),
-        ("encoder_immediates", ""),
-        ("array_access", "1234\n-5678\n-42\n"),
-        ("array_page_boundary", "321\n"),
-        ("array_count_256", ""),
-        ("nonzero_entry", "0\n99\n"),
-        ("arithmetic_edges", "32761\n-2\n1\n1\n1\n0\n1\n1\n"),
+        ("control", b"0\n5\n4\n3\n2\n1\n0\n"),
+        ("call", b"44\n22\n"),
+        ("encoder_contract", b"4658\n"),
+        ("encoder_immediates", b""),
+        ("array_access", b"1234\n-5678\n-42\n"),
+        ("array_page_boundary", b"321\n"),
+        ("array_count_256", b""),
+        ("write_text", b"AB\0\x80C"),
+        ("write_text_count_256", b"Z"),
+        ("nonzero_entry", b"0\n99\n"),
+        ("arithmetic_edges", b"32761\n-2\n1\n1\n1\n0\n1\n1\n"),
         (
             "m34_arithmetic",
-            "7\n-3\n-3\n3\n-32768\n-5\n32767\n0\n1\n1\n",
+            b"7\n-3\n-3\n3\n-32768\n-5\n32767\n0\n1\n1\n",
         ),
-        ("m34_putchr", "\0\x7f"),
-        ("jz_invalid_untaken", "42\n"),
-        ("terminal_jz_taken", ""),
-        ("terminal_jump", ""),
+        ("m34_putchr", b"\0\x7f"),
+        ("jz_invalid_untaken", b"42\n"),
+        ("terminal_jz_taken", b""),
+        ("terminal_jump", b""),
     ] {
         let result = build_and_run(fixture, false);
-        if result.output.status.code() != Some(0) || result.output.stdout != stdout.as_bytes() {
+        if result.output.status.code() != Some(0) || result.output.stdout.as_slice() != stdout {
             failures.push(format!(
                 "{fixture}: status {:?}, stdout {:?}, stderr {:?}",
                 result.output.status.code(),
@@ -229,6 +231,13 @@ fn vm_failure_fixtures_observe_atomic_state() {
         ("putchr_negative", 17),
         ("putchr_too_large", 17),
         ("putchr_output_failure", 18),
+        ("write_text_output_failure", 18),
+        ("write_text_late_output_failure", 18),
+        ("write_text_invalid_slot", 22),
+        ("write_text_truncated", 11),
+        ("write_text_no_successor", 11),
+        ("write_text_descriptor_wrap", 22),
+        ("write_text_range_wrap", 22),
     ] {
         let result = build_and_run(fixture, true);
         assert_eq!(
@@ -249,10 +258,13 @@ fn vm_rejects_invalid_startup_metadata() {
         ("invalid_entry", 11),
         ("invalid_global_count", 16),
         ("invalid_array_count", 20),
+        ("invalid_text_count", 22),
     ] {
         let result = build_and_run(fixture, false);
         assert_eq!(result.output.status.code(), Some(exit), "{fixture}");
     }
+    let boundary = build_and_run("write_text_last_address", false);
+    assert_eq!(boundary.output.status.code(), Some(0), "text byte at $ffff");
 }
 
 fn symbol(labels: &str, name: &str) -> usize {
@@ -297,8 +309,16 @@ fn vm_linker_layout_obeys_m32_segments_and_capacity() {
     let rodata = segment(&result.map, "RODATA");
     let bss = segment(&result.map, "BSS");
     assert!(zp.1 <= 0x100);
+    assert_eq!(
+        symbol(&result.labels, "vm_zp_end") - symbol(&result.labels, "tbx_pc"),
+        31
+    );
     assert!(code.0 >= 0x200);
     assert!(bss.1 <= 0xffc0);
+    assert_eq!(
+        symbol(&result.labels, "vm_bss_end") - symbol(&result.labels, "tbx_data_stack"),
+        966
+    );
     let main_end =
         symbol(&result.labels, "__MAIN_START__") + symbol(&result.labels, "__MAIN_SIZE__");
     assert!(bss.1 <= main_end, "VM BSS overlaps the cc65 software stack");
@@ -314,6 +334,8 @@ fn vm_linker_layout_obeys_m32_segments_and_capacity() {
         "_tbx_global_count",
         "_tbx_array_count",
         "_tbx_array_descriptors",
+        "_tbx_text_count",
+        "_tbx_text_descriptors",
     ] {
         assert!((rodata.0..rodata.1).contains(&symbol(&result.labels, name)));
     }
