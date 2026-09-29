@@ -11,6 +11,7 @@ const PRIME_CYCLE_LIMIT: &str = "50000000";
 // sim65 measured 2,315,181,850 cycles; this limit adds about 30% headroom.
 const MANDELBROT_CYCLE_LIMIT: &str = "3000000000";
 static NEXT_DIRECTORY: AtomicU64 = AtomicU64::new(0);
+const MINIMAL_ARRAY_SOURCE: &str = "DIM @VALUES[3]\nPRINT @VALUES[2]\nCR\nLET @VALUES[1] = 7\nLET @VALUES[3] = -2\nPRINT @VALUES[1]\nCR\nPRINT @VALUES[3]\nCR\n";
 
 struct TempArtifacts(PathBuf);
 
@@ -40,8 +41,10 @@ impl Drop for TempArtifacts {
     }
 }
 
-fn wrapper(artifact: &BytecodeArtifact) -> String {
-    format!(
+fn wrapper(artifact: &BytecodeArtifact) -> Result<String, String> {
+    let count = u16::try_from(artifact.array_count())
+        .map_err(|_| "array count exceeds wrapper metadata".to_owned())?;
+    let mut source = format!(
         ".setcpu \"6502\"\n\
          .export _tbx_code_start, _tbx_code_end, _tbx_entry_offset, _tbx_global_count\n\
          .export _tbx_array_count, _tbx_array_descriptors\n\
@@ -52,16 +55,46 @@ fn wrapper(artifact: &BytecodeArtifact) -> String {
          _tbx_code_end:\n\
          _tbx_entry_offset: .word {}\n\
          _tbx_global_count: .word {}\n\
-         _tbx_array_count: .word 0\n\
-         _tbx_array_descriptors: .word _tbx_empty_array_descriptor\n\
-         _tbx_empty_array_descriptor: .word 0\n\
-         .segment \"CODE\"\n\
-         _tbx_before_init:\n\
-         _tbx_error_probe:\n\
-             rts\n",
+         _tbx_array_count: .word {count}\n\
+         _tbx_array_descriptors:\n",
         artifact.entry_offset(),
         artifact.global_slot_count()
-    )
+    );
+    if count == 0 {
+        source.push_str(
+            "    .word _tbx_empty_array_descriptor\n_tbx_empty_array_descriptor: .word 0\n",
+        );
+    } else {
+        source.push_str("    .word _tbx_array_descriptor_table\n_tbx_array_descriptor_table:\n");
+        let mut storage_bytes = 0usize;
+        let mut descriptor_bytes = 0usize;
+        for (slot, &length) in artifact.array_lengths().iter().enumerate() {
+            let bytes = usize::from(length)
+                .checked_mul(2)
+                .ok_or_else(|| "array storage size overflows".to_owned())?;
+            storage_bytes = storage_bytes
+                .checked_add(bytes)
+                .ok_or_else(|| "total array storage size overflows".to_owned())?;
+            descriptor_bytes = descriptor_bytes
+                .checked_add(4)
+                .ok_or_else(|| "array descriptor size overflows".to_owned())?;
+            source.push_str(&format!("    .word _tbx_array_{slot}, {length}\n"));
+        }
+        if Some(storage_bytes) != artifact.array_storage_bytes()
+            || Some(descriptor_bytes) != artifact.array_descriptor_bytes()
+        {
+            return Err("array wrapper sizes disagree with artifact".to_owned());
+        }
+        source.push_str(".segment \"BSS\"\n");
+        for (slot, &length) in artifact.array_lengths().iter().enumerate() {
+            let bytes = usize::from(length)
+                .checked_mul(2)
+                .ok_or_else(|| "array storage size overflows".to_owned())?;
+            source.push_str(&format!("_tbx_array_{slot}: .res {bytes}\n"));
+        }
+    }
+    source.push_str(".segment \"CODE\"\n_tbx_before_init:\n_tbx_error_probe:\n    rts\n");
+    Ok(source)
 }
 
 fn run_tool(tool: &str, args: &[&OsStr], directory: &Path, stage: &str) -> Result<Output, String> {
@@ -223,6 +256,8 @@ fn build_and_run(
     artifact: &BytecodeArtifact,
     expected_stdout: &[u8],
     cycle_limit: &str,
+    sample: &str,
+    test_name: &str,
 ) -> Result<(), String> {
     let crate_root = Path::new(env!("CARGO_MANIFEST_DIR"));
     let temp = TempArtifacts::new(crate_root)?;
@@ -234,15 +269,10 @@ fn build_and_run(
     let executable = temp.0.join("program");
     let map_path = temp.0.join("program.map");
     let labels_path = temp.0.join("program.lbl");
-    let sample = if cycle_limit == PRIME_CYCLE_LIMIT {
-        "prime"
-    } else {
-        "mandelbrot"
-    };
 
     fs::write(&program, artifact.code())
         .map_err(|error| format!("write temporary artifact {}: {error}", program.display()))?;
-    fs::write(&wrapper_source, wrapper(artifact)).map_err(|error| {
+    fs::write(&wrapper_source, wrapper(artifact)?).map_err(|error| {
         format!(
             "write temporary artifact {}: {error}",
             wrapper_source.display()
@@ -308,7 +338,7 @@ fn build_and_run(
                 .map(|(_, size)| *size)
                 .unwrap_or(0)
         };
-        if size("ZEROPAGE") != 29 || size("BSS") != 966 {
+        if size("ZEROPAGE") != 31 || size("BSS") != 966 {
             return Err(format!(
                 "unexpected VM RAM segment sizes: ZEROPAGE={} BSS={}",
                 size("ZEROPAGE"),
@@ -379,6 +409,22 @@ fn build_and_run(
         let cycles = cycle_count(&output.stdout, expected_stdout)?;
         let (zp_start, zp_end, zp_size) = linked_segment(&map, "ZEROPAGE")?;
         let (bss_start, bss_end, bss_size) = linked_segment(&map, "BSS")?;
+        let vm_bss_size = segments
+            .iter()
+            .find(|(name, _)| name == "BSS")
+            .map(|(_, size)| *size)
+            .ok_or_else(|| "VM object has no BSS segment".to_owned())?;
+        let linked_bss_delta = bss_size
+            .checked_sub(vm_bss_size)
+            .ok_or_else(|| "linked BSS is smaller than VM BSS".to_owned())?;
+        let array_storage_bytes = artifact
+            .array_storage_bytes()
+            .ok_or_else(|| "array storage size overflows".to_owned())?;
+        if linked_bss_delta != array_storage_bytes {
+            return Err(format!(
+                "linked BSS delta {linked_bss_delta} differs from array storage {array_storage_bytes}"
+            ));
+        }
         let main_start = label_value(&labels, "__MAIN_START__")?;
         let main_size = label_value(&labels, "__MAIN_SIZE__")?;
         let stack_boundary = main_start + main_size;
@@ -398,9 +444,10 @@ fn build_and_run(
             .collect::<Vec<_>>()
             .join(" ");
         eprintln!(
-            "sim65 resources: sample={sample} revision={} ca65=\"{ca65_version}\" ld65=\"{ld65_version}\" sim65=\"{sim65_version}\" bytecode={} VM[{segment_sizes}] ZEROPAGE={zp_start:#06x}..={zp_end:#06x}({zp_size}) BSS={bss_start:#06x}..={bss_end:#06x}({bss_size}) __MAIN_START__={main_start:#06x} __MAIN_SIZE__={main_size} software_stack_boundary={stack_boundary:#06x} bss_to_stack_headroom={headroom} cycles={cycles} command=\"TBX_MEASURE_SIM65_RESOURCES=1 cargo test -p tbx-next --lib prime_source_matches_sim65_execution -- --ignored --nocapture\"",
+            "sim65 resources: sample={sample} revision={} ca65=\"{ca65_version}\" ld65=\"{ld65_version}\" sim65=\"{sim65_version}\" bytecode={} VM[{segment_sizes}] array_storage_bytes={array_storage_bytes} array_descriptor_bytes={} linked_bss_delta={linked_bss_delta} ZEROPAGE={zp_start:#06x}..={zp_end:#06x}({zp_size}) BSS={bss_start:#06x}..={bss_end:#06x}({bss_size}) __MAIN_START__={main_start:#06x} __MAIN_SIZE__={main_size} software_stack_boundary={stack_boundary:#06x} bss_to_stack_headroom={headroom} cycles={cycles} command=\"TBX_MEASURE_SIM65_RESOURCES=1 cargo test -p tbx-next --lib {test_name} -- --ignored --nocapture\"",
             git_revision(crate_root)?,
-            artifact.code().len()
+            artifact.code().len(),
+            artifact.array_descriptor_bytes().ok_or_else(|| "array descriptor size overflows".to_owned())?
         );
     }
     Ok(())
@@ -417,8 +464,14 @@ fn prime_source_matches_sim65_execution() {
     );
     let artifact = result.artifact.expect("encode prime source");
     let host_output = result.host_output.expect("host executes prime source");
-    build_and_run(&artifact, &host_output, PRIME_CYCLE_LIMIT)
-        .unwrap_or_else(|error| panic!("{error}"));
+    build_and_run(
+        &artifact,
+        &host_output,
+        PRIME_CYCLE_LIMIT,
+        "prime",
+        "prime_source_matches_sim65_execution",
+    )
+    .unwrap_or_else(|error| panic!("{error}"));
 }
 
 #[test]
@@ -432,8 +485,71 @@ fn mandelbrot_source_matches_sim65_execution() {
     );
     let artifact = result.artifact.expect("encode mandelbrot source");
     let host_output = result.host_output.expect("host executes mandelbrot source");
-    build_and_run(&artifact, &host_output, MANDELBROT_CYCLE_LIMIT)
-        .unwrap_or_else(|error| panic!("{error}"));
+    build_and_run(
+        &artifact,
+        &host_output,
+        MANDELBROT_CYCLE_LIMIT,
+        "mandelbrot",
+        "mandelbrot_source_matches_sim65_execution",
+    )
+    .unwrap_or_else(|error| panic!("{error}"));
+}
+
+#[test]
+fn wrapper_array_metadata_matches_artifact() {
+    let no_arrays = evaluate("PUTDEC 1\nCR\n", "no-arrays.tbx", false, true)
+        .artifact
+        .expect("encode no-array source");
+    let empty = wrapper(&no_arrays).expect("generate empty wrapper");
+    assert!(empty.contains("_tbx_array_count: .word 0"));
+    assert!(empty.contains("_tbx_array_descriptors:"));
+    assert!(!empty.contains(".segment \"BSS\""));
+    assert_eq!(no_arrays.array_storage_bytes(), Some(0));
+    assert_eq!(no_arrays.array_descriptor_bytes(), Some(0));
+
+    let one = evaluate(MINIMAL_ARRAY_SOURCE, "array-minimal.tbx", false, true)
+        .artifact
+        .expect("encode one-array source");
+    let one_wrapper = wrapper(&one).expect("generate one-array wrapper");
+    assert_eq!(one.array_lengths(), &[3]);
+    assert!(one_wrapper.contains("_tbx_array_count: .word 1"));
+    assert!(one_wrapper.contains("_tbx_array_descriptors:\n    .word _tbx_array_descriptor_table\n_tbx_array_descriptor_table:\n    .word _tbx_array_0, 3"));
+    assert!(one_wrapper.contains("_tbx_array_0: .res 6"));
+    assert_eq!(one.array_storage_bytes(), Some(6));
+    assert_eq!(one.array_descriptor_bytes(), Some(4));
+
+    let many = evaluate(
+        "DIM @FIRST[2]\nDIM @SECOND[5]\nPRINT @FIRST[1]\nCR\nPRINT @SECOND[1]\nCR\n",
+        "two-arrays.tbx",
+        false,
+        true,
+    )
+    .artifact
+    .expect("encode two-array source");
+    let many_wrapper = wrapper(&many).expect("generate two-array wrapper");
+    assert_eq!(many.array_lengths(), &[2, 5]);
+    assert!(many_wrapper.contains("_tbx_array_count: .word 2"));
+    assert!(many_wrapper.contains("_tbx_array_descriptors:\n    .word _tbx_array_descriptor_table\n_tbx_array_descriptor_table:\n    .word _tbx_array_0, 2\n    .word _tbx_array_1, 5"));
+    assert!(many_wrapper.contains("_tbx_array_0: .res 4\n_tbx_array_1: .res 10"));
+    assert_eq!(many.array_storage_bytes(), Some(14));
+    assert_eq!(many.array_descriptor_bytes(), Some(8));
+}
+
+#[test]
+#[ignore = "requires ca65, ld65, and sim65; run with --ignored"]
+fn minimal_array_source_matches_sim65_execution() {
+    let result = evaluate(MINIMAL_ARRAY_SOURCE, "array-minimal.tbx", true, true);
+    let artifact = result.artifact.expect("encode array source");
+    let host_output = result.host_output.expect("host executes array source");
+    assert_eq!(host_output, b"0\n7\n-2\n");
+    build_and_run(
+        &artifact,
+        &host_output,
+        PRIME_CYCLE_LIMIT,
+        "array-minimal",
+        "minimal_array_source_matches_sim65_execution",
+    )
+    .unwrap_or_else(|error| panic!("{error}"));
 }
 
 #[test]
