@@ -12,6 +12,7 @@ const PRIME_CYCLE_LIMIT: &str = "50000000";
 const MANDELBROT_CYCLE_LIMIT: &str = "3000000000";
 static NEXT_DIRECTORY: AtomicU64 = AtomicU64::new(0);
 const MINIMAL_ARRAY_SOURCE: &str = "DIM @VALUES[3]\nPRINT @VALUES[2]\nCR\nLET @VALUES[1] = 7\nLET @VALUES[3] = -2\nPRINT @VALUES[1]\nCR\nPRINT @VALUES[3]\nCR\n";
+const MINIMAL_FIXED_TEXT_SOURCE: &str = "PRINT \"A\"\n";
 
 struct TempArtifacts(PathBuf);
 
@@ -469,6 +470,12 @@ fn build_and_run(
         let array_storage_bytes = artifact
             .array_storage_bytes()
             .ok_or_else(|| "array storage size overflows".to_owned())?;
+        let text_storage_bytes = artifact
+            .text_storage_bytes()
+            .ok_or_else(|| "text storage size overflows".to_owned())?;
+        let text_descriptor_bytes = artifact
+            .text_descriptor_bytes()
+            .ok_or_else(|| "text descriptor size overflows".to_owned())?;
         if linked_bss_delta != array_storage_bytes {
             return Err(format!(
                 "linked BSS delta {linked_bss_delta} differs from array storage {array_storage_bytes}"
@@ -493,7 +500,7 @@ fn build_and_run(
             .collect::<Vec<_>>()
             .join(" ");
         eprintln!(
-            "sim65 resources: sample={sample} revision={} ca65=\"{ca65_version}\" ld65=\"{ld65_version}\" sim65=\"{sim65_version}\" bytecode={} VM[{segment_sizes}] array_storage_bytes={array_storage_bytes} array_descriptor_bytes={} linked_bss_delta={linked_bss_delta} ZEROPAGE={zp_start:#06x}..={zp_end:#06x}({zp_size}) BSS={bss_start:#06x}..={bss_end:#06x}({bss_size}) __MAIN_START__={main_start:#06x} __MAIN_SIZE__={main_size} software_stack_boundary={stack_boundary:#06x} bss_to_stack_headroom={headroom} cycles={cycles} command=\"TBX_MEASURE_SIM65_RESOURCES=1 cargo test -p tbx-next --lib {test_name} -- --ignored --nocapture\"",
+            "sim65 resources: sample={sample} revision={} ca65=\"{ca65_version}\" ld65=\"{ld65_version}\" sim65=\"{sim65_version}\" bytecode={} VM[{segment_sizes}] array_storage_bytes={array_storage_bytes} array_descriptor_bytes={} text_storage_bytes={text_storage_bytes} text_descriptor_bytes={text_descriptor_bytes} linked_bss_delta={linked_bss_delta} ZEROPAGE={zp_start:#06x}..={zp_end:#06x}({zp_size}) BSS={bss_start:#06x}..={bss_end:#06x}({bss_size}) __MAIN_START__={main_start:#06x} __MAIN_SIZE__={main_size} software_stack_boundary={stack_boundary:#06x} bss_to_stack_headroom={headroom} cycles={cycles} command=\"TBX_MEASURE_SIM65_RESOURCES=1 cargo test -p tbx-next --lib {test_name} -- --ignored --nocapture\"",
             git_revision(crate_root)?,
             artifact.code().len(),
             artifact.array_descriptor_bytes().ok_or_else(|| "array descriptor size overflows".to_owned())?
@@ -674,6 +681,31 @@ fn minimal_array_source_matches_sim65_execution() {
         PRIME_CYCLE_LIMIT,
         "array-minimal",
         "minimal_array_source_matches_sim65_execution",
+    )
+    .unwrap_or_else(|error| panic!("{error}"));
+}
+
+#[test]
+#[ignore = "requires ca65, ld65, and sim65; run with --ignored"]
+fn minimal_fixed_text_source_matches_sim65_execution() {
+    let result = evaluate(
+        MINIMAL_FIXED_TEXT_SOURCE,
+        "fixed-text-minimal.tbx",
+        true,
+        true,
+    );
+    let artifact = result.artifact.expect("encode fixed-text source");
+    let host_output = result.host_output.expect("host executes fixed-text source");
+    assert_eq!(artifact.text_count(), 1);
+    assert_eq!(artifact.text_storage_bytes(), Some(1));
+    assert_eq!(artifact.text_descriptor_bytes(), Some(4));
+    assert_eq!(host_output, b"A");
+    build_and_run(
+        &artifact,
+        &host_output,
+        PRIME_CYCLE_LIMIT,
+        "fixed-text-minimal",
+        "minimal_fixed_text_source_matches_sim65_execution",
     )
     .unwrap_or_else(|error| panic!("{error}"));
 }
