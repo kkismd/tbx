@@ -6,6 +6,7 @@
 
 .import _tbx_code_start, _tbx_code_end, _tbx_entry_offset, _tbx_global_count
 .import _tbx_before_init, _tbx_error_probe, _putchar
+.import _tbx_array_count, _tbx_array_descriptors
 .export _main
 .export tbx_pc, tbx_base, tbx_end, tbx_data_depth, tbx_control_depth
 .export tbx_call_depth, tbx_global_count, tbx_last_error
@@ -70,6 +71,13 @@ _main:
     jne fail_global
     lda tbx_global_count
     jne fail_global
+:
+    lda _tbx_array_count+1
+    beq :+
+    cmp #1
+    jne fail_array_metadata
+    lda _tbx_array_count
+    jne fail_array_metadata
 :
     lda tbx_base
     cmp tbx_end
@@ -145,6 +153,10 @@ dispatch:
     jeq op_load
     cmp #$11
     jeq op_store
+    cmp #$12
+    jeq op_load_array
+    cmp #$13
+    jeq op_store_array
     cmp #$20
     jeq op_call
     cmp #$21
@@ -397,6 +409,203 @@ op_store:
     iny
     lda tbx_data_stack,x
     sta (ptr),y
+    dec tbx_data_depth
+    jmp commit_cursor
+
+; Array descriptors are four-byte base/length pairs owned by the wrapper.
+; ptr receives the selected descriptor address; target receives element address.
+array_descriptor:
+    ; The opcode handler already consumed and preserved the slot operand.
+    lda _tbx_array_count+1
+    beq array_count_u8
+    cmp #1
+    bne array_slot_bad
+    lda _tbx_array_count
+    bne array_slot_bad
+    jmp array_slot_valid
+array_count_u8:
+    lda count
+    cmp _tbx_array_count
+    bcc array_slot_valid
+    jmp array_slot_bad
+array_slot_valid:
+    lda count
+    asl
+    sta left
+    lda #0
+    rol
+    asl left
+    rol
+    sta left+1
+    clc
+    lda _tbx_array_descriptors
+    adc left
+    sta ptr
+    lda _tbx_array_descriptors+1
+    adc left+1
+    sta ptr+1
+    jcs array_metadata_bad
+    ldy #0
+    lda (ptr),y
+    sta target
+    iny
+    lda (ptr),y
+    sta target+1
+    iny
+    lda (ptr),y
+    sta right
+    iny
+    lda (ptr),y
+    sta right+1
+    ; Length must be positive and fit the signed positive i16 range.
+    lda right+1
+    bmi array_metadata_bad
+    ora right
+    jeq array_metadata_bad
+    clc
+    rts
+array_slot_bad:
+    lda #20
+    sec
+    rts
+array_metadata_bad:
+    lda #20
+    sec
+    rts
+
+array_access:
+    ; value contains the signed one-based index.
+    lda value+1
+    and #$80
+    bne array_index_bad
+    lda value+1
+    ora value
+    bne array_index_positive
+    jmp array_index_bad
+array_index_positive:
+    lda value+1
+    cmp right+1
+    bcc array_index_in_range
+    bne array_index_bad
+    lda value
+    cmp right
+    bcc array_index_in_range
+    beq array_index_in_range
+array_index_bad:
+    lda #21
+    sec
+    rts
+array_index_in_range:
+    sec
+    lda value
+    sbc #1
+    sta value
+    lda value+1
+    sbc #0
+    sta value+1
+    asl value
+    rol value+1
+    bcs array_metadata_bad
+    clc
+    lda target
+    adc value
+    sta target
+    lda target+1
+    adc value+1
+    sta target+1
+    bcs array_metadata_bad
+    clc
+    rts
+
+op_load_array:
+    lda #2
+    jsr need_bytes
+    jcs fail_bytecode
+    ; Preserve slot while checking the successor and stack before metadata.
+    ldy #0
+    lda (cursor),y
+    sta count
+    jsr read_operand
+    jsr validate_next
+    jcs fail_bytecode
+    lda tbx_data_depth
+    jeq fail_underflow
+    jsr array_descriptor
+    jcs fail
+    ldx tbx_data_depth
+    dex
+    txa
+    asl
+    tax
+    lda tbx_data_stack,x
+    sta value
+    inx
+    lda tbx_data_stack,x
+    sta value+1
+    jsr array_access
+    jcs fail
+    ldy #0
+    lda (target),y
+    sta value
+    iny
+    lda (target),y
+    sta value+1
+    ldx tbx_data_depth
+    dex
+    txa
+    asl
+    tax
+    lda value
+    sta tbx_data_stack,x
+    inx
+    lda value+1
+    sta tbx_data_stack,x
+    jmp commit_cursor
+
+op_store_array:
+    lda #2
+    jsr need_bytes
+    jcs fail_bytecode
+    ldy #0
+    lda (cursor),y
+    sta count
+    jsr read_operand
+    jsr validate_next
+    jcs fail_bytecode
+    lda tbx_data_depth
+    cmp #2
+    jcc fail_underflow
+    jsr array_descriptor
+    jcs fail
+    ; value is the cell to store; the index is the cell beneath it.
+    ldx tbx_data_depth
+    dex
+    txa
+    asl
+    tax
+    lda tbx_data_stack,x
+    sta work
+    inx
+    lda tbx_data_stack,x
+    sta work+1
+    dex
+    dex
+    dex
+    lda tbx_data_stack,x
+    sta value
+    inx
+    lda tbx_data_stack,x
+    sta value+1
+    jsr array_access
+    jcs fail
+    ; No failure is possible after this point: commit storage, stack, and PC.
+    ldy #0
+    lda work
+    sta (target),y
+    iny
+    lda work+1
+    sta (target),y
+    dec tbx_data_depth
     dec tbx_data_depth
     jmp commit_cursor
 
@@ -1152,6 +1361,15 @@ fail_output:
     jne fail
 fail_invariant:
     lda #19
+    jne fail
+fail_array_slot:
+    lda #20
+    jne fail
+fail_array_metadata:
+    lda #20
+    jne fail
+fail_array_index:
+    lda #21
 fail:
     sta tbx_last_error
     jsr _tbx_error_probe

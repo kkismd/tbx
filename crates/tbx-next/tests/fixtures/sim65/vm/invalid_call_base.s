@@ -1,5 +1,5 @@
 .include "vm_fixture.inc"
-VM_HEADER entry, 0
+VM_HEADER entry, 0, 0, 0
 entry:
     PUSH 7
     CALL callee
@@ -16,4 +16,4 @@ expected_frame:
     .repeat 16
         .byte 0
     .endrepeat
-VM_EXPECT 19, failure, 1, 1, expected_stack, 2, $ff, 0, expected_frame, 20
+VM_EXPECT 19, failure, 1, 1, expected_stack, 2, $ff, 0, expected_frame, 20, 0, 0, 0

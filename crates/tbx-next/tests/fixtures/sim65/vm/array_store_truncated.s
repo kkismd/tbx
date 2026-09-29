@@ -1,0 +1,12 @@
+.include "vm_fixture.inc"
+VM_HEADER entry, 0, 1, descriptors
+entry:
+failure:
+    .byte $13
+VM_END
+.segment "RODATA"
+descriptors: .word storage, 1
+.segment "DATA"
+storage: .word 321
+expected: .word 321
+VM_EXPECT 11, failure, 0, 0, 0, 0, $ff, 0, 0, 0, storage, expected, 2

@@ -1,5 +1,5 @@
 .include "vm_fixture.inc"
-VM_HEADER entry, 1
+VM_HEADER entry, 1, 0, 0
 entry:
 failure:
     CALL failure
@@ -11,4 +11,4 @@ expected_frame:
     .repeat 16
         .byte 0
     .endrepeat
-VM_EXPECT 15, failure, 0, 16, 0, 0, 0, 0, expected_frame, 20
+VM_EXPECT 15, failure, 0, 16, 0, 0, 0, 0, expected_frame, 20, 0, 0, 0

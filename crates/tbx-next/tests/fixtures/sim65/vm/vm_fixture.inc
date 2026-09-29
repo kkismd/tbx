@@ -1,10 +1,13 @@
 ; M32 private bytecode contract shared by hand-written sim65 fixtures.
-.macro VM_HEADER entry, globals
+.macro VM_HEADER entry, globals, arrays, descriptors
     .export _tbx_code_start, _tbx_code_end
     .export _tbx_entry_offset, _tbx_global_count
+    .export _tbx_array_count, _tbx_array_descriptors
     .segment "RODATA"
 _tbx_entry_offset: .word entry - _tbx_code_start
 _tbx_global_count: .word globals
+_tbx_array_count: .word arrays
+_tbx_array_descriptors: .word descriptors
 _tbx_code_start:
 .endmacro
 
@@ -21,6 +24,12 @@ _tbx_code_end:
 .endmacro
 .macro STORE slot
     .byte $11, slot
+.endmacro
+.macro LOAD_ARRAY slot
+    .byte $12, slot
+.endmacro
+.macro STORE_ARRAY slot
+    .byte $13, slot
 .endmacro
 .macro CALL target
     .byte $20
@@ -92,9 +101,9 @@ _tbx_code_end:
     .byte $62
 .endmacro
 
-; Error probe record: code, opcode address, depths, stack bytes, global,
-; and active frame bytes. $ff disables the global check.
-.macro VM_EXPECT code, pc, data_depth, call_depth, stack_ptr, stack_len, global_slot, global_value, frame_ptr, frame_len
+; Error probe record: code, opcode address, depths, stack, optional global,
+; active frame, and optional unchanged array storage bytes.
+.macro VM_EXPECT code, pc, data_depth, call_depth, stack_ptr, stack_len, global_slot, global_value, frame_ptr, frame_len, array_ptr, expected_array_ptr, array_len
     .export _tbx_test_expect
     .segment "RODATA"
 _tbx_test_expect:
@@ -107,4 +116,7 @@ _tbx_test_expect:
     .word global_value
     .byte frame_len
     .word frame_ptr
+    .word array_ptr
+    .word expected_array_ptr
+    .byte array_len
 .endmacro

@@ -1,5 +1,5 @@
 .include "vm_fixture.inc"
-VM_HEADER entry, 1
+VM_HEADER entry, 1, 0, 0
 entry:
     PUSH 7
 failure:
@@ -7,4 +7,4 @@ failure:
     HALT
 VM_END
 expected_stack: .word 7
-VM_EXPECT 16, failure, 1, 0, expected_stack, 2, 0, 0, 0, 0
+VM_EXPECT 16, failure, 1, 0, expected_stack, 2, 0, 0, 0, 0, 0, 0, 0

@@ -44,6 +44,7 @@ fn wrapper(artifact: &BytecodeArtifact) -> String {
     format!(
         ".setcpu \"6502\"\n\
          .export _tbx_code_start, _tbx_code_end, _tbx_entry_offset, _tbx_global_count\n\
+         .export _tbx_array_count, _tbx_array_descriptors\n\
          .export _tbx_before_init, _tbx_error_probe\n\
          .segment \"RODATA\"\n\
          _tbx_code_start:\n\
@@ -51,6 +52,9 @@ fn wrapper(artifact: &BytecodeArtifact) -> String {
          _tbx_code_end:\n\
          _tbx_entry_offset: .word {}\n\
          _tbx_global_count: .word {}\n\
+         _tbx_array_count: .word 0\n\
+         _tbx_array_descriptors: .word _tbx_empty_array_descriptor\n\
+         _tbx_empty_array_descriptor: .word 0\n\
          .segment \"CODE\"\n\
          _tbx_before_init:\n\
          _tbx_error_probe:\n\
@@ -304,7 +308,7 @@ fn build_and_run(
                 .map(|(_, size)| *size)
                 .unwrap_or(0)
         };
-        if size("ZEROPAGE") != 31 || size("BSS") != 966 {
+        if size("ZEROPAGE") != 29 || size("BSS") != 966 {
             return Err(format!(
                 "unexpected VM RAM segment sizes: ZEROPAGE={} BSS={}",
                 size("ZEROPAGE"),

@@ -1,5 +1,5 @@
 .include "vm_fixture.inc"
-VM_HEADER entry, 256
+VM_HEADER entry, 256, 0, 0
     .byte $00
 entry:
     LOAD 255
