@@ -44,10 +44,13 @@ impl Drop for TempArtifacts {
 fn wrapper(artifact: &BytecodeArtifact) -> Result<String, String> {
     let count = u16::try_from(artifact.array_count())
         .map_err(|_| "array count exceeds wrapper metadata".to_owned())?;
+    let text_count = u16::try_from(artifact.text_count())
+        .map_err(|_| "text count exceeds wrapper metadata".to_owned())?;
     let mut source = format!(
         ".setcpu \"6502\"\n\
          .export _tbx_code_start, _tbx_code_end, _tbx_entry_offset, _tbx_global_count\n\
          .export _tbx_array_count, _tbx_array_descriptors\n\
+         .export _tbx_text_count, _tbx_text_descriptors\n\
          .export _tbx_before_init, _tbx_error_probe\n\
          .segment \"RODATA\"\n\
          _tbx_code_start:\n\
@@ -93,8 +96,54 @@ fn wrapper(artifact: &BytecodeArtifact) -> Result<String, String> {
             source.push_str(&format!("_tbx_array_{slot}: .res {bytes}\n"));
         }
     }
+    source.push_str(&format!(
+        ".segment \"RODATA\"\n_tbx_text_count: .word {text_count}\n_tbx_text_descriptors:\n"
+    ));
+    let mut storage_bytes = 0usize;
+    let mut descriptor_bytes = 0usize;
+    if text_count == 0 {
+        source.push_str(
+            "    .word _tbx_empty_text_descriptor\n_tbx_empty_text_descriptor: .word 0\n",
+        );
+    } else {
+        source.push_str("    .word _tbx_text_descriptor_table\n_tbx_text_descriptor_table:\n");
+        for (slot, text) in artifact.texts().iter().enumerate() {
+            storage_bytes = storage_bytes
+                .checked_add(text.bytes().len())
+                .ok_or_else(|| "total text storage size overflows".to_owned())?;
+            descriptor_bytes = descriptor_bytes
+                .checked_add(4)
+                .ok_or_else(|| "text descriptor size overflows".to_owned())?;
+            source.push_str(&format!(
+                "    .word _tbx_text_{slot}, {}\n",
+                text.byte_length()
+            ));
+        }
+        for (slot, text) in artifact.texts().iter().enumerate() {
+            source.push_str(&format!("_tbx_text_{slot}:\n"));
+            source.push_str(&text_bytes_assembly(text.bytes()));
+        }
+    }
+    if Some(storage_bytes) != artifact.text_storage_bytes()
+        || Some(descriptor_bytes) != artifact.text_descriptor_bytes()
+    {
+        return Err("text wrapper sizes disagree with artifact".to_owned());
+    }
     source.push_str(".segment \"CODE\"\n_tbx_before_init:\n_tbx_error_probe:\n    rts\n");
     Ok(source)
+}
+
+fn text_bytes_assembly(bytes: &[u8]) -> String {
+    let mut source = String::new();
+    for chunk in bytes.chunks(16) {
+        let literals = chunk
+            .iter()
+            .map(|byte| format!("${byte:02X}"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        source.push_str(&format!("    .byte {literals}\n"));
+    }
+    source
 }
 
 fn run_tool(tool: &str, args: &[&OsStr], directory: &Path, stage: &str) -> Result<Output, String> {
@@ -533,6 +582,83 @@ fn wrapper_array_metadata_matches_artifact() {
     assert!(many_wrapper.contains("_tbx_array_0: .res 4\n_tbx_array_1: .res 10"));
     assert_eq!(many.array_storage_bytes(), Some(14));
     assert_eq!(many.array_descriptor_bytes(), Some(8));
+}
+
+#[test]
+fn wrapper_text_metadata_matches_artifact() {
+    let no_texts = evaluate("PUTDEC 1\nCR\n", "no-texts.tbx", false, true)
+        .artifact
+        .expect("encode no-text source");
+    let empty = wrapper(&no_texts).expect("generate empty wrapper");
+    assert!(empty.contains("_tbx_text_count: .word 0"));
+    assert!(empty.contains("_tbx_text_descriptors:\n    .word _tbx_empty_text_descriptor\n_tbx_empty_text_descriptor: .word 0"));
+    assert!(!empty.contains("_tbx_text_0:"));
+    assert_eq!(no_texts.text_storage_bytes(), Some(0));
+    assert_eq!(no_texts.text_descriptor_bytes(), Some(0));
+
+    let one = evaluate("PRINT \"A\"\n", "one-text.tbx", false, true)
+        .artifact
+        .expect("encode one text");
+    let one_wrapper = wrapper(&one).expect("generate one-text wrapper");
+    assert!(one_wrapper.contains("_tbx_text_count: .word 1"));
+    assert!(one_wrapper.contains("_tbx_text_descriptors:\n    .word _tbx_text_descriptor_table\n_tbx_text_descriptor_table:\n    .word _tbx_text_0, 1"));
+    assert!(one_wrapper.contains("_tbx_text_0:\n    .byte $41\n"));
+    assert_eq!(one.text_storage_bytes(), Some(1));
+    assert_eq!(one.text_descriptor_bytes(), Some(4));
+
+    let many = evaluate(
+        "PRINT \"A\"\nPRINT \"BC\"\nPRINT \"\"\nPRINT \"A\"\n",
+        "many-texts.tbx",
+        false,
+        true,
+    )
+    .artifact
+    .expect("encode multiple texts");
+    let many_wrapper = wrapper(&many).expect("generate multiple-text wrapper");
+    assert_eq!(many.text_count(), 4);
+    assert!(many_wrapper.contains("_tbx_text_count: .word 4"));
+    assert!(many_wrapper.contains("_tbx_text_descriptor_table:\n    .word _tbx_text_0, 1\n    .word _tbx_text_1, 2\n    .word _tbx_text_2, 0\n    .word _tbx_text_3, 1\n"));
+    assert!(many_wrapper.contains("_tbx_text_0:\n    .byte $41\n_tbx_text_1:\n    .byte $42, $43\n_tbx_text_2:\n_tbx_text_3:\n    .byte $41\n"));
+    assert_eq!(many.text_storage_bytes(), Some(4));
+    assert_eq!(many.text_descriptor_bytes(), Some(16));
+}
+
+#[test]
+fn wrapper_text_bytes_use_numeric_assembly_literals() {
+    assert_eq!(
+        text_bytes_assembly(&[0, b'"', b'\\', 0xc3, 0xa9]),
+        "    .byte $00, $22, $5C, $C3, $A9\n"
+    );
+    assert_eq!(text_bytes_assembly(&[]), "");
+}
+
+#[test]
+#[ignore = "requires ca65; run with --ignored"]
+fn wrapper_text_bytes_assemble_with_special_and_utf8_bytes() {
+    let artifact = evaluate("PRINT \"A\"\n", "assemble-text.tbx", false, true)
+        .artifact
+        .expect("encode text source");
+    let crate_root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let temp = TempArtifacts::new(crate_root).expect("create temporary artifact directory");
+    fs::write(temp.0.join("program.bin"), artifact.code()).expect("write program bytes");
+    let mut source = wrapper(&artifact).expect("generate wrapper");
+    source.push_str(".segment \"RODATA\"\n_tbx_special_bytes:\n");
+    source.push_str(&text_bytes_assembly(&[0, b'"', b'\\', 0xc3, 0xa9]));
+    fs::write(temp.0.join("wrapper.s"), source).expect("write wrapper source");
+    let output = run_tool(
+        "ca65",
+        &[
+            OsStr::new("-t"),
+            OsStr::new("sim6502"),
+            OsStr::new("wrapper.s"),
+            OsStr::new("-o"),
+            OsStr::new("wrapper.o"),
+        ],
+        &temp.0,
+        "assemble wrapper",
+    )
+    .expect("start ca65");
+    require_success(&output, "assemble wrapper").expect("assemble wrapper");
 }
 
 #[test]
