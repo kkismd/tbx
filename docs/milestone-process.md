@@ -2,7 +2,7 @@
 
 TBX または TBX Next のマイルストーンを完了する前に、そのマイルストーンで追加・変更したユーザー向け構文、標準語彙、入出力、CLI、実行方法、主要な注意事項が対象クイックリファレンスに反映されているか確認する。
 
-対象は現行 TBX が [`tbx-quickref.ja.md`](tbx-quickref.ja.md)、TBX Next が [`next/tbx-quickref.ja.md`](next/tbx-quickref.ja.md)。実装・テスト・ADR・仕様を正本とし、クイックリファレンスは実装済み内容の実用的な入口として扱う。
+対象は旧TBXが [`tbx-quickref.ja.md`](legacy/tbx/tbx-quickref.ja.md)、TBX Next が [`next/tbx-quickref.ja.md`](next/tbx-quickref.ja.md)。実装・テスト・ADR・仕様を正本とし、クイックリファレンスは実装済み内容の実用的な入口として扱う。
 
 ## 計画と更新
 

@@ -3128,7 +3128,7 @@ PUTSTR T"#;
     fn test_exec_line_goto_outside_def_is_error() {
         // GOTO appearing at ground level (outside a DEF block) must produce an error
         // in interpreter mode (exec_line) just as it does in full-program mode.
-        // This verifies the spec documented in blueprint-language.md §"GOTO/BIF scope constraints".
+        // This verifies the spec documented in docs/legacy/tbx/blueprint-language.md §"GOTO/BIF scope constraints".
         // The interpreter must remain usable (REPL can continue) after the error.
         let mut interp = Interpreter::new();
         let result = interp.exec_line("GOTO 10", 1);
@@ -4969,7 +4969,7 @@ PUTDEC 1; PUTDEC ADD(
     fn test_stmt_call_with_nonempty_parens_is_currently_accepted() {
         // NAME(args...) at statement level is indistinguishable from the grouped-expression
         // form `NAME (args...)` at the token level, so it is currently accepted.
-        // Only the zero-argument form NAME() is rejected (see blueprint-language.md §544).
+        // Only the zero-argument form NAME() is rejected (see docs/legacy/tbx/blueprint-language.md §544).
         let mut interp = Interpreter::new();
         interp
             .exec_source("DEF FOO(X)\n  PUTDEC X\nEND\nFOO(1)")

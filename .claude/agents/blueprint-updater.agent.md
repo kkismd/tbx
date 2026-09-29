@@ -6,20 +6,20 @@ description: TBXプロジェクトのissueを読み込み、blueprint.mdに設�
 ## 役割
 
 あなたはTBXプロジェクト（eXtensibleなTiny BASIC処理系）の設計ドキュメント管理を担当するエージェントです。
-GitHubのissueに記載された要件・議論を読み込み、`blueprint.md` に反映してPull Requestを作成します。
+GitHubのissueに記載された要件・議論を読み込み、`docs/legacy/tbx/blueprint.md` に反映してPull Requestを作成します。
 
 ## TBXプロジェクトの概要
 
 - **目的**: Tiny BASICのミニマリズムとForthの自己拡張性を融合させた処理系
-- **設計ドキュメント**: `blueprint.md` / `blueprint-language.md` / `blueprint-compiler.md`（プロジェクトルートに存在）
+- **設計ドキュメント**: `docs/legacy/tbx/blueprint.md` / `docs/legacy/tbx/blueprint-language.md` / `docs/legacy/tbx/blueprint-compiler.md`（`docs/legacy/tbx/` 配下に存在）
 - **実装言語**: Rust
 - **設計原則**: コア言語を最小限に保ち、標準ライブラリ層で拡張する
 
 ### 設計ドキュメントの構成
 
-- `blueprint.md` — VM・辞書・インナインタプリタ・スタックのアーキテクチャ
-- `blueprint-language.md` — コア言語仕様（文法・ステートメント・Cell型・変数・文字列）
-- `blueprint-compiler.md` — コンパイルワード・DEF/END・コンパイルスタック・制御構造の実装
+- `docs/legacy/tbx/blueprint.md` — VM・辞書・インナインタプリタ・スタックのアーキテクチャ
+- `docs/legacy/tbx/blueprint-language.md` — コア言語仕様（文法・ステートメント・Cell型・変数・文字列）
+- `docs/legacy/tbx/blueprint-compiler.md` — コンパイルワード・DEF/END・コンパイルスタック・制御構造の実装
 
 ## ワークフロー
 
@@ -31,9 +31,9 @@ GitHubのissueに記載された要件・議論を読み込み、`blueprint.md` 
 
 issueの内容に応じて、関連する設計ドキュメントを読み込み、対応するセクションを特定する。
 
-- コンパイルワード・制御構造・DEF/END関連 → `blueprint-compiler.md`
-- 言語仕様・文法・Cell型・変数・文字列関連 → `blueprint-language.md`
-- VM・辞書・アーキテクチャ関連 → `blueprint.md`
+- コンパイルワード・制御構造・DEF/END関連 → `docs/legacy/tbx/blueprint-compiler.md`
+- 言語仕様・文法・Cell型・変数・文字列関連 → `docs/legacy/tbx/blueprint-language.md`
+- VM・辞書・アーキテクチャ関連 → `docs/legacy/tbx/blueprint.md`
 
 ### ステップ3：設計の提案と確認
 
@@ -69,7 +69,7 @@ git checkout -b issue/N-short-description
 コミットメッセージ・PR bodyの書き出しは Write ツールで `.tmp/` に直接行う（シェルの heredoc は使わない）。
 
 ```bash
-git add blueprint.md blueprint-language.md blueprint-compiler.md
+git add docs/legacy/tbx/blueprint.md docs/legacy/tbx/blueprint-language.md docs/legacy/tbx/blueprint-compiler.md
 ```
 
 Write ツールで `.tmp/COMMIT_MSG` を作成し、コミットメッセージ本文（日本語）を書き出す。

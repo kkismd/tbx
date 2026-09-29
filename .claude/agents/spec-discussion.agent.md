@@ -13,7 +13,7 @@ issueに記載された課題について設計の選択肢を提示し、ユー
 
 - **目的**: Tiny BASICのミニマリズムとForthの自己拡張性を融合させた処理系
 - **実装言語**: Rust
-- **設計ドキュメント**: `blueprint.md` / `blueprint-language.md` / `blueprint-compiler.md`（プロジェクトルートに存在）
+- **設計ドキュメント**: `docs/legacy/tbx/blueprint.md` / `docs/legacy/tbx/blueprint-language.md` / `docs/legacy/tbx/blueprint-compiler.md`（`docs/legacy/tbx/` 配下に存在）
 - **設計原則**: コア言語を最小限に保ち、標準ライブラリ層で拡張する
 
 ## ワークフロー
@@ -23,7 +23,7 @@ issueに記載された課題について設計の選択肢を提示し、ユー
 `github-mcp-server-issue_read`（method: `get`）でissueの本文を、（method: `get_comments`）で既存コメントを取得する。
 既存コメントに `## 仕様決定` セクションが含まれている場合は仕様決定済みと判断し、その旨を日本語でユーザーに報告して終了する。新たな選択肢提示・対話・コメント投稿は行わない。
 
-`blueprint.md`（およびそこから参照される `blueprint-language.md`・`blueprint-compiler.md`）を読み込み、issueに関連する設計方針・制約・既存の仕様を特定する。
+`docs/legacy/tbx/blueprint.md`（およびそこから参照される `docs/legacy/tbx/blueprint-language.md`・`docs/legacy/tbx/blueprint-compiler.md`）を読み込み、issueに関連する設計方針・制約・既存の仕様を特定する。
 
 ### ステップ2：設計の選択肢を提示する
 
@@ -32,7 +32,7 @@ issueに記載された課題について設計の選択肢を提示し、ユー
 - **TBXの設計原則との整合性**: ミニマリズム・自己拡張性・コア言語の最小化
 - **実装コスト**: Rustでの実装難易度・既存コードへの影響範囲
 - **将来の拡張性**: 選択肢がレガシーになるリスク・後方互換の維持可能性
-- **blueprint.mdとの整合**: 既存の設計方針と矛盾しないか
+- **`docs/legacy/tbx/blueprint.md`との整合**: 既存の設計方針と矛盾しないか
 
 選択肢を提示するときは、**必ず各案のpros/consを整理して同時に提示する**。ユーザーから求められてから説明するのではなく、最初から比較表や箇条書きで示す。
 「どちらでもよい」という曖昧な提示はしない。

@@ -9,7 +9,7 @@
 //!
 //! Whole-array surface operations (`LET B = A`, `RETURN A`, `TUPLE(A)`,
 //! `PUTVAL A`, `A = B`, `EQ(A, B)`) are unsupported.  See
-//! `blueprint-language.md` §配列の surface policy for details.
+//! `docs/legacy/tbx/blueprint-language.md` §配列の surface policy for details.
 //!
 //! # Design discipline
 //!

@@ -3165,7 +3165,7 @@ mod tests {
     fn test_statement_call_with_parens_is_rejected() {
         // Non-formal statement call: NAME() with empty parentheses.
         // The current parser rejects this with an error (MarkerNotFound).
-        // This is consistent with the spec in blueprint-language.md
+        // This is consistent with the spec in docs/legacy/tbx/blueprint-language.md
         // §ステートメント呼び出しと式内呼び出しの構文: statement calls must
         // use the no-parentheses form.  This test documents the rejection so
         // that an accidental regression (silently accepting NAME()) is caught.

@@ -11,7 +11,7 @@ description: TBX リポジトリのコード変更時に、TBX 固有の実装�
 
 - 適用される `AGENTS.md` の指示を読む。
 - `crates/tbx-next` 配下を変更する場合は、最初に `docs/next/README.md` を読み、必要に応じて `crates/tbx-next/README.md` を確認する。
-- 現行 `tbx` crateを変更する場合は、`docs/agent-notes.md` を読む。
+- 旧 `tbx` crateを変更する場合は、`docs/legacy/tbx/agent-notes.md` を読む。
 - 実装issueの作成、再評価、着手前レビューでは、`docs/implementation-issue-guidelines.md` を読む。
 - Star Trekサンプルまたは関連テストを変更する場合は、`docs/notes/star-trek-mayfield-1972.md` を読む。
 - TBX Core Design Principlesを守る。特に、コアを小さく保つこと、直交的なプリミティブを優先すること、可能な限りTBX側で構文を定義すること、実行時値・コンパイル時値・字句トークンを分離すること、ad hocな拡張より再利用可能な抽象化を優先することを確認する。

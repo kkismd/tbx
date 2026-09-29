@@ -40,7 +40,7 @@ TBX は、実用的な言語機能を拡充しながらも、コアを小さく�
 
 ### 旧TBX（ルート `tbx` crate）を変更する場合
 
-- **[`docs/agent-notes.md`](docs/agent-notes.md)** — 旧TBX crate、TBX 構文、標準ライブラリ、`lib/` 配下の TBX プログラムに関する注意・落とし穴・レビュー由来の知見をまとめた日本語のノート。`crates/tbx-next` のみを変更する作業では、issue や変更対象が明示的に関連しない限り必読ではない。
+- **[`docs/legacy/tbx/agent-notes.md`](docs/legacy/tbx/agent-notes.md)** — 旧TBX crate、TBX 構文、標準ライブラリ、`lib/` 配下の TBX プログラムに関する注意・落とし穴・レビュー由来の知見をまとめた日本語のノート。`crates/tbx-next` のみを変更する作業では、issue や変更対象が明示的に関連しない限り必読ではない。
 
 ### `crates/tbx-next` を変更する場合
 
@@ -59,9 +59,9 @@ TBX は、実用的な言語機能を拡充しながらも、コアを小さく�
 
 通常の主実装は TBX-Next (`crates/tbx-next/`) である。TBX-Next の範囲、旧TBXとの境界、source of truth、設計資料の入口は [`docs/next/README.md`](docs/next/README.md) を参照する。実装事実はコードとテストを正本とし、重要な設計判断は関連ADRを参照する。
 
-旧TBXの `src/`、`lib/`、従来の blueprint 文書を変更する場合に限り、旧実装の構造・落とし穴を [`docs/agent-notes.md`](docs/agent-notes.md) と変更対象に応じた文書から確認する。旧TBXの情報をTBX-Nextの仕様として扱わない。
+旧TBXの `src/`、`lib/`、従来の blueprint 文書を変更する場合に限り、旧実装の構造・落とし穴を [`docs/legacy/tbx/agent-notes.md`](docs/legacy/tbx/agent-notes.md) と変更対象に応じた文書から確認する。旧TBXの情報をTBX-Nextの仕様として扱わない。
 
-TBX-Next のプログラムを書くときは [`docs/next/tbx-quickref.ja.md`](docs/next/tbx-quickref.ja.md) を参照する。旧TBXプログラムの変更では [`docs/tbx-quickref.ja.md`](docs/tbx-quickref.ja.md) を参照する。どちらも現在の実装とテストを置き換える仕様書ではない。
+TBX-Next のプログラムを書くときは [`docs/next/tbx-quickref.ja.md`](docs/next/tbx-quickref.ja.md) を参照する。旧TBXプログラムの変更では [`docs/legacy/tbx/tbx-quickref.ja.md`](docs/legacy/tbx/tbx-quickref.ja.md) を参照する。どちらも現在の実装とテストを置き換える仕様書ではない。
 
 ## マイルストーン完了時のクイックリファレンス確認
 

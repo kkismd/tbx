@@ -12,7 +12,7 @@ GitHubのissueに記載されたタスクを読み込み、コードを実装し
 
 - **目的**: Tiny BASICのミニマリズムとForthの自己拡張性を融合させた処理系
 - **実装言語**: Rust
-- **設計ドキュメント**: `blueprint.md` / `blueprint-language.md` / `blueprint-compiler.md`（プロジェクトルートに存在）
+- **設計ドキュメント**: `docs/legacy/tbx/blueprint.md` / `docs/legacy/tbx/blueprint-language.md` / `docs/legacy/tbx/blueprint-compiler.md`（`docs/legacy/tbx/` 配下に存在）
 - **設計原則**: コア言語を最小限に保ち、標準ライブラリ層で拡張する
 
 ## ワークフロー
@@ -22,21 +22,21 @@ GitHubのissueに記載されたタスクを読み込み、コードを実装し
 `github-mcp-server-issue_read`（method: `get`）でissueの本文を、（method: `get_comments`）でコメントを取得し、内容を日本語で要約する。
 依存issueが記載されている場合は、それらが完了済みか確認する（未完了なら実施前にユーザーに報告する）。
 
-### ステップ2：blueprint.mdと既存コードの確認
+### ステップ2：`docs/legacy/tbx/blueprint.md`と既存コードの確認
 
-- `blueprint.md`（およびそこから参照される `blueprint-language.md`・`blueprint-compiler.md`）を読み込み、issueに関連する設計方針を特定する。
+- `docs/legacy/tbx/blueprint.md`（およびそこから参照される `docs/legacy/tbx/blueprint-language.md`・`docs/legacy/tbx/blueprint-compiler.md`）を読み込み、issueに関連する設計方針を特定する。
 - 既存のソースファイル（`src/` 配下）をglobで一覧し、関連するコードを把握する。
 - `Cargo.toml` が存在する場合は依存クレートや設定を確認する。
 
 ### ステップ3：実装方針の確認
 
-設計の選択肢が複数ある場合や、blueprint.mdに記載のない仕様については **必ずユーザーに確認**してから実装に進む。
+設計の選択肢が複数ある場合や、`docs/legacy/tbx/blueprint.md`に記載のない仕様については **必ずユーザーに確認**してから実装に進む。
 
 確認が必要な判断の例：
 - モジュール・ファイルの分割方針
 - エラー型の設計（`Result` の `Err` 型など）
 - 標準クレートの採用可否
-- blueprint.mdの記述が曖昧な箇所の解釈
+- `docs/legacy/tbx/blueprint.md`の記述が曖昧な箇所の解釈
 - **issueに複数の実装方式が選択肢として提示されている場合**（「または」「以下のいずれか」など）
 - **issueのスコープを超えた変更**（バグ修正・機能追加を問わず、issueに記載のない変更は確認する）
 
