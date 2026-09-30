@@ -388,7 +388,7 @@ fn build_and_run(
                 .map(|(_, size)| *size)
                 .unwrap_or(0)
         };
-        if size("ZEROPAGE") != 31 || size("BSS") != 966 {
+        if size("ZEROPAGE") != 31 || size("BSS") != 998 {
             return Err(format!(
                 "unexpected VM RAM segment sizes: ZEROPAGE={} BSS={}",
                 size("ZEROPAGE"),
@@ -736,6 +736,31 @@ fn squares_source_matches_sim65_execution() {
 }
 
 #[test]
+#[ignore = "requires ca65, ld65, and sim65; run with --ignored"]
+fn grades_source_matches_sim65_execution() {
+    let result = evaluate(
+        include_str!("../../../../../../docs/next/examples/grades.tbx"),
+        "grades.tbx",
+        true,
+        true,
+    );
+    let artifact = result.artifact.expect("encode grades source");
+    let host_output = result.host_output.expect("host executes grades source");
+    assert_eq!(artifact.array_lengths(), &[6]);
+    assert_eq!(artifact.text_count(), 7);
+    assert_eq!(artifact.text_storage_bytes(), Some(38));
+    assert_eq!(artifact.text_descriptor_bytes(), Some(28));
+    build_and_run(
+        &artifact,
+        &host_output,
+        PRIME_CYCLE_LIMIT,
+        "grades",
+        "grades_source_matches_sim65_execution",
+    )
+    .unwrap_or_else(|error| panic!("{error}"));
+}
+
+#[test]
 fn e2e_failures_identify_the_stage() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
     for stage in [
@@ -765,13 +790,13 @@ fn e2e_failures_identify_the_stage() {
     assert!(error.contains("stdout mismatch"));
 
     let segments =
-        vm_object_segments("Name: \"CODE\"\nSize: 0x0012\nName: \"BSS\"\nSize: 0x03c6\n")
+        vm_object_segments("Name: \"CODE\"\nSize: 0x0012\nName: \"BSS\"\nSize: 0x03e6\n")
             .expect("parse object segment sizes");
-    assert_eq!(segments, [("CODE".to_owned(), 18), ("BSS".to_owned(), 966)]);
+    assert_eq!(segments, [("CODE".to_owned(), 18), ("BSS".to_owned(), 998)]);
 
-    let map = "Modules list:\nBSS Offs=000000 Size=0003C6\nSegment list:\nName Start End Size Align\nZEROPAGE 000000 000038 000039 00001\nBSS 000D40 001105 0003C6 00001\n";
+    let map = "Modules list:\nBSS Offs=000000 Size=0003E6\nSegment list:\nName Start End Size Align\nZEROPAGE 000000 000038 000039 00001\nBSS 000D40 001125 0003E6 00001\n";
     assert_eq!(linked_segment(map, "ZEROPAGE").unwrap(), (0, 0x38, 0x39));
-    assert_eq!(linked_segment(map, "BSS").unwrap(), (0xD40, 0x1105, 0x3C6));
+    assert_eq!(linked_segment(map, "BSS").unwrap(), (0xD40, 0x1125, 0x3E6));
     assert_eq!(
         label_value(
             "al 000200 .__MAIN_START__\nal 00F5F0 .__MAIN_SIZE__\n",
