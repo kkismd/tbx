@@ -74,6 +74,7 @@ jobs:
             - run: cargo test -p tbx-next --lib minimal_fixed_text_source_matches_sim65_execution -- --ignored
             - run: cargo test -p tbx-next --lib squares_source_matches_sim65_execution -- --ignored
             - run: cargo test -p tbx-next --lib grades_source_matches_sim65_execution -- --ignored
+            - run: cargo test -p tbx-next --lib issue_2172_reports_eightqueen_and_maze_requirements -- --ignored --nocapture
 
     clippy:
         name: Workspace / Clippy
