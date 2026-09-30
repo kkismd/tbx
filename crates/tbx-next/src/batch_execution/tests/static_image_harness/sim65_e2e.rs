@@ -10,6 +10,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 const PRIME_CYCLE_LIMIT: &str = "50000000";
 // sim65 measured 2,315,181,850 cycles; this limit adds about 30% headroom.
 const MANDELBROT_CYCLE_LIMIT: &str = "3000000000";
+// sim65 measured 932,429,359 cycles; this limit adds about 34% headroom.
+const EIGHTQUEEN_CYCLE_LIMIT: &str = "1250000000";
 static NEXT_DIRECTORY: AtomicU64 = AtomicU64::new(0);
 const MINIMAL_ARRAY_SOURCE: &str = "DIM @VALUES[3]\nPRINT @VALUES[2]\nCR\nLET @VALUES[1] = 7\nLET @VALUES[3] = -2\nPRINT @VALUES[1]\nCR\nPRINT @VALUES[3]\nCR\n";
 const MINIMAL_FIXED_TEXT_SOURCE: &str = "PRINT \"A\"\n";
@@ -756,6 +758,34 @@ fn grades_source_matches_sim65_execution() {
         PRIME_CYCLE_LIMIT,
         "grades",
         "grades_source_matches_sim65_execution",
+    )
+    .unwrap_or_else(|error| panic!("{error}"));
+}
+
+#[test]
+#[ignore = "requires ca65, ld65, and sim65; run with --ignored"]
+fn eightqueen_source_matches_sim65_execution() {
+    let result = evaluate(
+        include_str!("../../../../../../docs/next/examples/eightqueen.tbx"),
+        "eightqueen.tbx",
+        true,
+        true,
+    );
+    let artifact = result.artifact.expect("encode eightqueen source");
+    let host_output = result.host_output.expect("host executes eightqueen source");
+    assert_eq!(artifact.array_lengths(), &[8, 8]);
+    assert_eq!(artifact.array_storage_bytes(), Some(32));
+    assert_eq!(artifact.array_descriptor_bytes(), Some(8));
+    assert_eq!(artifact.text_count(), 0);
+    assert_eq!(artifact.text_storage_bytes(), Some(0));
+    assert_eq!(artifact.text_descriptor_bytes(), Some(0));
+    assert_eq!(host_output, b"92\n");
+    build_and_run(
+        &artifact,
+        &host_output,
+        EIGHTQUEEN_CYCLE_LIMIT,
+        "eightqueen",
+        "eightqueen_source_matches_sim65_execution",
     )
     .unwrap_or_else(|error| panic!("{error}"));
 }
