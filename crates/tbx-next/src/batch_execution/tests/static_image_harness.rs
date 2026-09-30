@@ -340,3 +340,49 @@ fn array_resource_measurements_are_available_on_request() {
         }
     }
 }
+
+
+#[test]
+#[ignore = "research probe for issue #2172"]
+fn issue_2172_reports_eightqueen_and_maze_requirements() {
+    fn probe(source: &str, display_name: &str) {
+        let evaluation = evaluate(source, display_name, false, false);
+        let statistics = evaluation.statistics;
+        let array_cells: usize = statistics.array_lengths.iter().sum();
+        eprintln!(
+            "issue2172 stats: sample={display_name} instructions={} variants={:?} relocations={} fixed_text_count={} fixed_text_bytes={} globals={} array_lengths={:?} array_cells={array_cells}",
+            statistics.instruction_count,
+            statistics.variant_counts,
+            statistics.relocation_count,
+            statistics.fixed_text_count,
+            statistics.fixed_text_bytes,
+            statistics.global_count,
+            statistics.array_lengths,
+        );
+
+        let mut sources = SourceTexts::new();
+        let stdlib_id = register_embedded_standard_library(&mut sources);
+        let program_id = sources.register(source, display_name);
+        let mut fixture = Fixture::new();
+        let _stdlib = fixture.compile(&sources, stdlib_id);
+        let unit = fixture.compile(&sources, program_id);
+        let result = test_lower_and_encode(
+            &[unit.instructions(), fixture.published_code.instruction_view()],
+            unit.entry_location(),
+            &fixture.words,
+            fixture.primitive_words,
+            &fixture.globals,
+            &fixture.arrays,
+        );
+        eprintln!("issue2172 encode: sample={display_name} result={result:?}");
+    }
+
+    probe(
+        include_str!("../../../../../docs/next/examples/eightqueen.tbx"),
+        "eightqueen.tbx",
+    );
+    probe(
+        include_str!("../../../../../docs/next/examples/maze.tbx"),
+        "maze.tbx",
+    );
+}
