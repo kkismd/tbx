@@ -302,11 +302,13 @@ fn primitive_opcode(operation: PrimitiveOp) -> Option<u8> {
         PrimitiveOp::Divide => 0x44,
         PrimitiveOp::Negate => 0x45,
         PrimitiveOp::Abs => 0x46,
+        PrimitiveOp::And => 0x47,
         PrimitiveOp::Equal => 0x48,
         PrimitiveOp::Less => 0x49,
         PrimitiveOp::LessEqual => 0x4a,
         PrimitiveOp::GreaterEqual => 0x4b,
         PrimitiveOp::Greater => 0x4c,
+        PrimitiveOp::Or => 0x4d,
         PrimitiveOp::Drop => 0x50,
         PrimitiveOp::PutDec => 0x60,
         PrimitiveOp::Cr => 0x61,
@@ -538,6 +540,17 @@ mod tests {
     }
 
     #[test]
+    fn encodes_and_or_as_single_byte_primitives() {
+        let artifact = encode(&image(vec![
+            LogicalInstruction::CallPrimitive(PrimitiveOp::And),
+            LogicalInstruction::CallPrimitive(PrimitiveOp::Or),
+        ]))
+        .expect("AND and OR encode");
+
+        assert_eq!(artifact.code(), &[0x47, 0x4d]);
+    }
+
+    #[test]
     fn encodes_array_accesses_and_reports_artifact_metadata() {
         let artifact = encode(&image_with_arrays(
             vec![
@@ -679,6 +692,24 @@ mod tests {
         assert_eq!(
             artifact.code(),
             &[0x30, 0x0b, 0x00, 0x70, 0x71, 0x20, 0x03, 0x00, 0x31, 0x00, 0x00, 0x72, 0x22]
+        );
+    }
+
+    #[test]
+    fn and_or_widths_are_included_in_forward_and_backward_relocations() {
+        let artifact = encode(&image(vec![
+            LogicalInstruction::Jump(CodePosition(5)),
+            LogicalInstruction::CallPrimitive(PrimitiveOp::And),
+            LogicalInstruction::CallPrimitive(PrimitiveOp::Or),
+            LogicalInstruction::JumpIfZero(CodePosition(0)),
+            LogicalInstruction::CallCode(CodePosition(1)),
+            LogicalInstruction::Return,
+        ]))
+        .expect("AND/OR relocation targets resolve");
+
+        assert_eq!(
+            artifact.code(),
+            &[0x30, 0x0b, 0x00, 0x47, 0x4d, 0x31, 0x00, 0x00, 0x20, 0x03, 0x00, 0x22]
         );
     }
 

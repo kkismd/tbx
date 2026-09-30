@@ -293,6 +293,22 @@ fn grades_source_encodes_control_value_instructions_and_metadata() {
 }
 
 #[test]
+fn eightqueen_source_encodes_artifact_and_array_metadata() {
+    let eightqueen = evaluate(
+        include_str!("../../../../../docs/next/examples/eightqueen.tbx"),
+        "eightqueen.tbx",
+        false,
+        true,
+    );
+    let artifact = eightqueen.artifact.expect("eightqueen artifact encodes");
+
+    assert_eq!(artifact.array_lengths(), &[8, 8]);
+    assert_eq!(artifact.text_count(), 0);
+    assert_eq!(artifact.text_storage_bytes(), Some(0));
+    assert_eq!(artifact.text_descriptor_bytes(), Some(0));
+}
+
+#[test]
 fn array_resource_measurements_are_available_on_request() {
     let minimal = evaluate(
         "DIM @VALUES[3]\nLET @VALUES[1] = 7\nPRINT @VALUES[1]\nCR\n",
