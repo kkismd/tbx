@@ -147,6 +147,9 @@ fn vm_success_fixtures() {
             &b"0\n-1\n-32768\n-1\n1\n0\n1\n0\n1\n0\n1\n0\n-32768\n"[..],
         ),
         ("control", b"0\n5\n4\n3\n2\n1\n0\n"),
+        ("control_values", b"-3\n7\n"),
+        ("control_capacity", b"16\n"),
+        ("control_return_truncate", b"4\n"),
         ("call", b"44\n22\n"),
         ("encoder_contract", b"4658\n"),
         ("encoder_immediates", b""),
@@ -197,6 +200,13 @@ fn vm_failure_fixtures_observe_atomic_state() {
         ("putdec_underflow", 12),
         ("putchr_underflow", 12),
         ("data_overflow", 13),
+        ("control_push_underflow", 12),
+        ("control_copy_underflow", 23),
+        ("control_drop_underflow", 23),
+        ("control_overflow", 24),
+        ("control_copy_data_overflow", 13),
+        ("control_return_underflow", 19),
+        ("control_return_truncate_check", 23),
         ("invalid_global", 16),
         ("array_load_underflow", 12),
         ("array_store_underflow_zero", 12),
@@ -317,7 +327,7 @@ fn vm_linker_layout_obeys_m32_segments_and_capacity() {
     assert!(bss.1 <= 0xffc0);
     assert_eq!(
         symbol(&result.labels, "vm_bss_end") - symbol(&result.labels, "tbx_data_stack"),
-        966
+        998
     );
     let main_end =
         symbol(&result.labels, "__MAIN_START__") + symbol(&result.labels, "__MAIN_SIZE__");
@@ -357,9 +367,12 @@ fn vm_linker_layout_obeys_m32_segments_and_capacity() {
     }
     assert!((zp.0..zp.1).contains(&symbol(&result.labels, "tbx_pc")));
     let data = symbol(&result.labels, "tbx_data_stack");
+    let control = symbol(&result.labels, "tbx_control_stack");
     let frames = symbol(&result.labels, "tbx_frames");
     let globals = symbol(&result.labels, "tbx_globals");
     assert_eq!(frames - data, 64 * 2);
     assert_eq!(globals - frames, 16 * 20);
+    assert_eq!(control - globals, 256 * 2 + 6);
+    assert_eq!(symbol(&result.labels, "vm_bss_end") - control, 32);
     assert!(data >= bss.0 && globals + 256 * 2 <= bss.1);
 }
