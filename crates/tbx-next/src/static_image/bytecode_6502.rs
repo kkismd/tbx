@@ -309,6 +309,8 @@ fn primitive_opcode(operation: PrimitiveOp) -> Option<u8> {
         PrimitiveOp::GreaterEqual => 0x4b,
         PrimitiveOp::Greater => 0x4c,
         PrimitiveOp::Or => 0x4d,
+        PrimitiveOp::Swap => 0x4e,
+        PrimitiveOp::NotEqual => 0x4f,
         PrimitiveOp::Drop => 0x50,
         PrimitiveOp::PutDec => 0x60,
         PrimitiveOp::Cr => 0x61,
@@ -551,6 +553,17 @@ mod tests {
     }
 
     #[test]
+    fn encodes_swap_and_not_equal_as_single_byte_primitives() {
+        let artifact = encode(&image(vec![
+            LogicalInstruction::CallPrimitive(PrimitiveOp::Swap),
+            LogicalInstruction::CallPrimitive(PrimitiveOp::NotEqual),
+        ]))
+        .expect("SWAP and NotEqual encode");
+
+        assert_eq!(artifact.code(), &[0x4e, 0x4f]);
+    }
+
+    #[test]
     fn encodes_array_accesses_and_reports_artifact_metadata() {
         let artifact = encode(&image_with_arrays(
             vec![
@@ -714,6 +727,24 @@ mod tests {
     }
 
     #[test]
+    fn swap_and_not_equal_widths_are_included_in_forward_and_backward_relocations() {
+        let artifact = encode(&image(vec![
+            LogicalInstruction::Jump(CodePosition(5)),
+            LogicalInstruction::CallPrimitive(PrimitiveOp::Swap),
+            LogicalInstruction::CallPrimitive(PrimitiveOp::NotEqual),
+            LogicalInstruction::JumpIfZero(CodePosition(0)),
+            LogicalInstruction::CallCode(CodePosition(1)),
+            LogicalInstruction::Return,
+        ]))
+        .expect("SWAP/NotEqual relocation targets resolve");
+
+        assert_eq!(
+            artifact.code(),
+            &[0x30, 0x0b, 0x00, 0x4e, 0x4f, 0x31, 0x00, 0x00, 0x20, 0x03, 0x00, 0x22]
+        );
+    }
+
+    #[test]
     fn rejects_unsupported_logical_instructions_and_primitives() {
         assert_eq!(
             encode(&image(vec![LogicalInstruction::LoadScratch(
@@ -723,7 +754,7 @@ mod tests {
         );
         assert_eq!(
             encode(&image(vec![LogicalInstruction::CallPrimitive(
-                PrimitiveOp::NotEqual
+                PrimitiveOp::Not
             )]),),
             Err(EncodeError::UnsupportedPrimitive(0))
         );
