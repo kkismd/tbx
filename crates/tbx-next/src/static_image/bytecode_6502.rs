@@ -228,8 +228,11 @@ pub(crate) fn encode(image: &StaticImage) -> Result<BytecodeArtifact, EncodeErro
                 code.extend_from_slice(&target(*position)?.to_le_bytes());
             }
             LogicalInstruction::CallPrimitive(operation) => {
-                let opcode =
-                    primitive_opcode(*operation).ok_or(EncodeError::UnsupportedPrimitive(index))?;
+                let opcode = primitive_opcode(*operation).ok_or_else(|| {
+                    #[cfg(test)]
+                    eprintln!("issue2172 unsupported primitive: index={index} operation={operation:?}");
+                    EncodeError::UnsupportedPrimitive(index)
+                })?;
                 code.push(opcode);
             }
             LogicalInstruction::ControlPush => code.push(0x70),
@@ -276,7 +279,11 @@ fn encoded_len(
         LogicalInstruction::CallPrimitive(operation) if primitive_opcode(*operation).is_some() => {
             Ok(1)
         }
-        LogicalInstruction::CallPrimitive(_) => Err(EncodeError::UnsupportedPrimitive(index)),
+        LogicalInstruction::CallPrimitive(operation) => {
+            #[cfg(test)]
+            eprintln!("issue2172 unsupported primitive: index={index} operation={operation:?}");
+            Err(EncodeError::UnsupportedPrimitive(index))
+        },
         LogicalInstruction::ControlPush
         | LogicalInstruction::ControlCopy
         | LogicalInstruction::ControlDrop
