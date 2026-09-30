@@ -309,6 +309,24 @@ fn eightqueen_source_encodes_artifact_and_array_metadata() {
 }
 
 #[test]
+fn maze_source_encodes_artifact_and_resource_metadata() {
+    let maze = evaluate(
+        include_str!("../../../../../docs/next/examples/maze.tbx"),
+        "maze.tbx",
+        false,
+        true,
+    );
+    let artifact = maze.artifact.expect("maze artifact encodes");
+
+    assert_eq!(artifact.array_lengths(), &[40, 40, 40, 40, 40, 40]);
+    assert_eq!(artifact.array_storage_bytes(), Some(480));
+    assert_eq!(artifact.array_descriptor_bytes(), Some(24));
+    assert_eq!(artifact.text_count(), 2);
+    assert_eq!(artifact.text_storage_bytes(), Some(18));
+    assert_eq!(artifact.text_descriptor_bytes(), Some(8));
+}
+
+#[test]
 fn array_resource_measurements_are_available_on_request() {
     let minimal = evaluate(
         "DIM @VALUES[3]\nLET @VALUES[1] = 7\nPRINT @VALUES[1]\nCR\n",
