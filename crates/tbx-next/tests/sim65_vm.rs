@@ -149,7 +149,7 @@ fn vm_success_fixtures() {
         ("control", b"0\n5\n4\n3\n2\n1\n0\n"),
         ("control_values", b"-3\n7\n"),
         ("control_capacity", b"16\n"),
-        ("control_return_truncate", b"4\n"),
+        ("control_return_truncate", b"9\n4\n"),
         ("call", b"44\n22\n"),
         ("encoder_contract", b"4658\n"),
         ("encoder_immediates", b""),

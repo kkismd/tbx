@@ -4,6 +4,10 @@ entry:
     PUSH 9
     CONTROL_PUSH
     CALL callee
+    CONTROL_COPY
+    PUTDEC
+    CR
+    CONTROL_DROP
     PUSH 4
     PUTDEC
     CR
