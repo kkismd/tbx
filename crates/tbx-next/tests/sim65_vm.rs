@@ -203,6 +203,7 @@ fn vm_failure_fixtures_observe_atomic_state() {
         ("data_underflow", 12),
         ("and_underflow_zero", 12),
         ("and_underflow_one", 12),
+        ("swap_depth", 12),
         ("swap_underflow_zero", 12),
         ("swap_underflow_one", 12),
         ("not_equal_underflow_zero", 12),
