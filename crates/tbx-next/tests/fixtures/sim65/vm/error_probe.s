@@ -1,7 +1,7 @@
 .macpack longbranch
 .import _tbx_test_expect
 .importzp tbx_pc, tbx_data_depth, tbx_control_depth, tbx_call_depth, tbx_last_error
-.import tbx_data_stack, tbx_globals, tbx_frames
+.import tbx_data_stack, tbx_control_stack, tbx_globals, tbx_frames
 .export _tbx_error_probe
 
 .segment "ZEROPAGE"
@@ -85,7 +85,7 @@ frames_check:
     ldx #0
 frame_loop:
     cpx _tbx_test_expect+12
-    beq array_check
+    beq control_check
     txa
     tay
     lda (probe_ptr),y
@@ -93,6 +93,24 @@ frame_loop:
     jne bad
     inx
     jmp frame_loop
+control_check:
+    lda _tbx_test_expect+20
+    sta probe_byte
+    lda _tbx_test_expect+21
+    sta probe_ptr
+    lda _tbx_test_expect+22
+    sta probe_ptr+1
+    ldx #0
+control_loop:
+    cpx probe_byte
+    beq array_check
+    txa
+    tay
+    lda (probe_ptr),y
+    cmp tbx_control_stack,x
+    jne bad
+    inx
+    jmp control_loop
 array_check:
     lda _tbx_test_expect+15
     sta probe_ptr

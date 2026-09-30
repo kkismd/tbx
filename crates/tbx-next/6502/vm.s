@@ -11,7 +11,7 @@
 .export _main
 .export tbx_pc, tbx_base, tbx_end, tbx_data_depth, tbx_control_depth
 .export tbx_call_depth, tbx_global_count, tbx_last_error
-.export tbx_data_stack, tbx_globals, tbx_frames
+.export tbx_data_stack, tbx_control_stack, tbx_globals, tbx_frames
 .export vm_zp_end, vm_bss_end
 
 .segment "ZEROPAGE"
@@ -40,6 +40,7 @@ tbx_data_stack: .res 128
 tbx_frames:     .res 320
 tbx_globals:    .res 512
 digits:         .res 6
+tbx_control_stack: .res 32
 vm_bss_end:
 
 .segment "RODATA"
@@ -174,6 +175,12 @@ dispatch:
     jeq op_copy_base
     cmp #$22
     jeq op_return
+    cmp #$70
+    jeq op_control_push
+    cmp #$71
+    jeq op_control_copy
+    cmp #$72
+    jeq op_control_drop
     cmp #$30
     jeq op_jump
     cmp #$31
@@ -749,6 +756,84 @@ op_return:
     dec tbx_call_depth
     jsr commit_target
     jmp dispatch
+
+; Control values are signed i16 cells indexed by the current depth.
+op_control_push:
+    lda #1
+    jsr need_bytes
+    jcs fail_bytecode
+    jsr validate_next
+    jcs fail_bytecode
+    lda tbx_data_depth
+    jeq fail_underflow
+    lda tbx_control_depth
+    cmp #16
+    jcs fail_control_overflow
+    ; Copy the data top before committing either depth.
+    lda tbx_data_depth
+    sec
+    sbc #1
+    asl
+    tax
+    lda tbx_data_stack,x
+    sta left
+    inx
+    lda tbx_data_stack,x
+    sta left+1
+    lda tbx_control_depth
+    asl
+    tax
+    lda left
+    sta tbx_control_stack,x
+    inx
+    lda left+1
+    sta tbx_control_stack,x
+    dec tbx_data_depth
+    inc tbx_control_depth
+    jmp commit_cursor
+
+op_control_copy:
+    lda #1
+    jsr need_bytes
+    jcs fail_bytecode
+    jsr validate_next
+    jcs fail_bytecode
+    lda tbx_control_depth
+    jeq fail_control_underflow
+    lda tbx_data_depth
+    cmp #64
+    jcs fail_overflow
+    lda tbx_control_depth
+    sec
+    sbc #1
+    asl
+    tax
+    lda tbx_control_stack,x
+    sta left
+    inx
+    lda tbx_control_stack,x
+    sta left+1
+    lda tbx_data_depth
+    asl
+    tax
+    lda left
+    sta tbx_data_stack,x
+    inx
+    lda left+1
+    sta tbx_data_stack,x
+    inc tbx_data_depth
+    jmp commit_cursor
+
+op_control_drop:
+    lda #1
+    jsr need_bytes
+    jcs fail_bytecode
+    jsr validate_next
+    jcs fail_bytecode
+    lda tbx_control_depth
+    jeq fail_control_underflow
+    dec tbx_control_depth
+    jmp commit_cursor
 
 op_jump:
     lda #3
@@ -1498,6 +1583,12 @@ fail_text_metadata:
     jne fail
 fail_array_index:
     lda #21
+    jne fail
+fail_control_underflow:
+    lda #23
+    jne fail
+fail_control_overflow:
+    lda #24
 fail:
     sta tbx_last_error
     jsr _tbx_error_probe

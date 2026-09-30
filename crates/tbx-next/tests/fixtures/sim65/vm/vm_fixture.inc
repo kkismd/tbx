@@ -122,6 +122,15 @@ _tbx_code_end:
 .macro WRITE_TEXT slot
     .byte $63, slot
 .endmacro
+.macro CONTROL_PUSH
+    .byte $70
+.endmacro
+.macro CONTROL_COPY
+    .byte $71
+.endmacro
+.macro CONTROL_DROP
+    .byte $72
+.endmacro
 
 ; Error probe record: code, opcode address, depths, stack, optional global,
 ; active frame, and optional unchanged array storage bytes.
@@ -141,4 +150,25 @@ _tbx_test_expect:
     .word array_ptr
     .word expected_array_ptr
     .byte array_len
+    .byte 0
+    .word 0
+.endmacro
+
+.macro VM_EXPECT_CONTROL code, pc, data_depth, control_depth, call_depth, stack_ptr, stack_len, control_ptr, control_len, frame_ptr, frame_len
+    .export _tbx_test_expect
+    .segment "RODATA"
+_tbx_test_expect:
+    .byte code
+    .word pc
+    .byte data_depth, control_depth, call_depth
+    .byte stack_len
+    .word stack_ptr
+    .byte $ff
+    .word 0
+    .byte frame_len
+    .word frame_ptr
+    .word 0, 0
+    .byte 0
+    .byte control_len
+    .word control_ptr
 .endmacro
