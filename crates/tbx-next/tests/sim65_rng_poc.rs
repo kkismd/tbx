@@ -97,6 +97,12 @@ fn tool_version(name: &str) -> String {
     .to_owned()
 }
 
+fn emit_eight_probe_bytes(label: &str, operand: &str) -> String {
+    format!(
+        "    lda #0\n    sta probe_index\n{label}:\n    ldx probe_index\n    lda {operand},x\n    jsr _putchar\n    inc probe_index\n    lda probe_index\n    cmp #8\n    bne {label}\n"
+    )
+}
+
 #[test]
 #[ignore = "requires ca65, ld65, od65, sim65, and sim6502.lib; run with --ignored"]
 fn explicit_seed_rng_matches_host_golden_vectors_and_measures_resources() {
@@ -114,6 +120,78 @@ fn explicit_seed_rng_matches_host_golden_vectors_and_measures_resources() {
     ];
     let bounds = [10_u16, 100, 97, 32_767, 10];
     let seed_marker = "seed_bytes: .byte $00,$00,$00,$00,$00,$00,$00,$00";
+
+    let seed_zero_probe = source
+        .replace("result: .res 2", "result: .res 2\nprobe_index: .res 1")
+        .replace(
+            "run_bounds:\n    ldx #0",
+            &format!(
+                "run_bounds:\n{}    ldx #0",
+                emit_eight_probe_bytes("probe_normalized", "state")
+            ),
+        )
+        .replace(
+            seed_marker,
+            "seed_bytes: .byte $00,$00,$00,$00,$00,$00,$00,$00",
+        );
+    let output = sim_output(
+        &seed_zero_probe,
+        repo_root,
+        &temp.0,
+        "probe-seed-zero",
+        false,
+    );
+    let normalized_seed = [0x15, 0x7c, 0x4a, 0x7f, 0xb9, 0x79, 0x37, 0x9e];
+    assert!(output.stdout.len() >= normalized_seed.len());
+    let seed_zero_vector = expected[0]
+        .iter()
+        .flat_map(|value| value.to_le_bytes())
+        .collect::<Vec<_>>();
+    assert_eq!(&output.stdout[..8], &normalized_seed);
+    assert_eq!(&output.stdout[8..], seed_zero_vector);
+
+    let seed_42_probe = source
+        .replace(
+            "result: .res 2",
+            "result: .res 2\nprobe_index: .res 1",
+        )
+        .replace(
+            "    lda state\n    sta multiplicand",
+            &format!(
+                "{}    lda state\n    sta multiplicand",
+                emit_eight_probe_bytes("probe_updated_state", "state")
+            ),
+        )
+        .replace(
+            "    lda #0\n    sta remainder\n    sta remainder+1\n    ldx #7\ndivide_byte:",
+            &format!(
+                "{}    lda #0\n    sta remainder\n    sta remainder+1\n    ldx #7\ndivide_byte:",
+                emit_eight_probe_bytes("probe_product", "product")
+            ),
+        )
+        .replace(
+            "    dex\n    bpl divide_byte\n    clc\n    lda remainder",
+            "    dex\n    bpl divide_byte\n    lda remainder\n    jsr _putchar\n    lda remainder+1\n    jsr _putchar\n    clc\n    lda remainder",
+        )
+        .replace(
+            "    sta result+1\n    rts",
+            "    sta result+1\n    lda result\n    jsr _putchar\n    lda result+1\n    jsr _putchar\n    rts",
+        )
+        .replace(seed_marker, "seed_bytes: .byte $2a,$00,$00,$00,$00,$00,$00,$00")
+        .replace("bounds: .word 10, 100, 97, 32767, 10", "bounds: .word 97, 100, 97, 32767, 10");
+    let output = sim_output(&seed_42_probe, repo_root, &temp.0, "probe-seed-42", false);
+    let stage_bytes = [
+        0x20, 0x00, 0x00, 0x54, 0x00, 0x00, 0x00, 0x00, // xorshift state
+        0xa0, 0xa3, 0x9b, 0x71, 0xb7, 0x4a, 0xce, 0x56, // low 64-bit product
+        71, 0, // remainder for bound 97
+        72, 0, // remainder + 1
+    ];
+    assert!(
+        output.stdout.starts_with(&stage_bytes),
+        "seed 42 intermediate values: {:?}",
+        &output.stdout[..stage_bytes.len().min(output.stdout.len())]
+    );
+
     for (seed_index, seed) in seeds.into_iter().enumerate() {
         let bytes = (0..8)
             .map(|index| format!("${:02x}", (seed >> (index * 8)) & 0xff))
@@ -193,7 +271,7 @@ fn explicit_seed_rng_matches_host_golden_vectors_and_measures_resources() {
         let baseline_source = measured_source.replace("jsr next_random", "jsr baseline_random");
         let baseline_source = baseline_source.replace(
             "; ADR #1889 defines xorshift updates",
-            "baseline_random:\n    lda #0\n    sta result\n    sta result+1\n    rts\n\n; ADR #1889 defines xorshift updates",
+            "baseline_random:\n    rts\n\n; ADR #1889 defines xorshift updates",
         );
         let measured = sim_output(&measured_source, repo_root, &temp.0, "rng-cycles", true);
         let baseline = sim_output(
