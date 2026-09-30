@@ -86,6 +86,9 @@ _tbx_code_end:
 .macro DIV
     .byte $44
 .endmacro
+.macro LOGICAL_AND
+    .byte $47
+.endmacro
 .macro NEG
     .byte $45
 .endmacro
@@ -106,6 +109,9 @@ _tbx_code_end:
 .endmacro
 .macro GT
     .byte $4c
+.endmacro
+.macro LOGICAL_OR
+    .byte $4d
 .endmacro
 .macro DROP
     .byte $50
@@ -165,6 +171,25 @@ _tbx_test_expect:
     .word stack_ptr
     .byte $ff
     .word 0
+    .byte frame_len
+    .word frame_ptr
+    .word 0, 0
+    .byte 0
+    .byte control_len
+    .word control_ptr
+.endmacro
+
+.macro VM_EXPECT_STATE code, pc, data_depth, control_depth, call_depth, stack_ptr, stack_len, global_slot, global_value, frame_ptr, frame_len, control_ptr, control_len
+    .export _tbx_test_expect
+    .segment "RODATA"
+_tbx_test_expect:
+    .byte code
+    .word pc
+    .byte data_depth, control_depth, call_depth
+    .byte stack_len
+    .word stack_ptr
+    .byte global_slot
+    .word global_value
     .byte frame_len
     .word frame_ptr
     .word 0, 0
