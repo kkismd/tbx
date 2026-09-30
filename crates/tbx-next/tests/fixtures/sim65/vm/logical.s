@@ -51,5 +51,39 @@ entry:
     LOGICAL_OR
     PUTDEC
     CR
+    PUSH 0
+    PUSH -32768
+    SWAP
+    PUTDEC
+    CR
+    PUTDEC
+    CR
+    PUSH 123
+    PUSH -45
+    SWAP
+    PUTDEC
+    CR
+    PUTDEC
+    CR
+    PUSH 32767
+    PUSH -32768
+    NOT_EQUAL
+    PUTDEC
+    CR
+    PUSH -32768
+    PUSH -32768
+    NOT_EQUAL
+    PUTDEC
+    CR
+    PUSH -1
+    PUSH 0
+    NOT_EQUAL
+    PUTDEC
+    CR
+    PUSH 123
+    PUSH 123
+    NOT_EQUAL
+    PUTDEC
+    CR
     HALT
 VM_END

@@ -113,6 +113,12 @@ _tbx_code_end:
 .macro LOGICAL_OR
     .byte $4d
 .endmacro
+.macro SWAP
+    .byte $4e
+.endmacro
+.macro NOT_EQUAL
+    .byte $4f
+.endmacro
 .macro DROP
     .byte $50
 .endmacro

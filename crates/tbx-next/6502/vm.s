@@ -209,6 +209,10 @@ dispatch:
     jeq op_binary
     cmp #$4d
     jeq op_binary
+    cmp #$4f
+    jeq op_binary
+    cmp #$4e
+    jeq op_swap
     cmp #$45
     jeq op_unary
     cmp #$46
@@ -887,6 +891,48 @@ op_drop:
     dec tbx_data_depth
     jmp commit_cursor
 
+op_swap:
+    lda #1
+    jsr need_bytes
+    jcs fail_bytecode
+    jsr validate_next
+    jcs fail_bytecode
+    lda tbx_data_depth
+    cmp #2
+    jcc fail_underflow
+    sec
+    sbc #2
+    asl
+    tax
+    lda tbx_data_stack,x
+    sta left
+    inx
+    lda tbx_data_stack,x
+    sta left+1
+    inx
+    lda tbx_data_stack,x
+    sta right
+    inx
+    lda tbx_data_stack,x
+    sta right+1
+    sec
+    lda tbx_data_depth
+    sbc #2
+    asl
+    tax
+    lda right
+    sta tbx_data_stack,x
+    inx
+    lda right+1
+    sta tbx_data_stack,x
+    inx
+    lda left
+    sta tbx_data_stack,x
+    inx
+    lda left+1
+    sta tbx_data_stack,x
+    jmp commit_cursor
+
 op_binary:
     lda #1
     jsr need_bytes
@@ -1006,6 +1052,8 @@ compare_saved:
     lda opcode
     cmp #$48
     jeq compare_equal
+    cmp #$4f
+    jeq compare_not_equal
     cmp #$4c
     jeq compare_greater
     lda opcode
@@ -1020,6 +1068,10 @@ compare_saved:
 compare_equal:
     lda count
     jeq compare_true
+    jmp compare_false
+compare_not_equal:
+    lda count
+    jne compare_true
     jmp compare_false
 compare_greater:
     lda count
