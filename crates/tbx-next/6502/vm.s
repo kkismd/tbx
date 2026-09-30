@@ -195,6 +195,8 @@ dispatch:
     jeq op_binary
     cmp #$44
     jeq op_binary
+    cmp #$47
+    jeq op_binary
     cmp #$48
     jeq op_binary
     cmp #$49
@@ -204,6 +206,8 @@ dispatch:
     cmp #$4b
     jeq op_binary
     cmp #$4c
+    jeq op_binary
+    cmp #$4d
     jeq op_binary
     cmp #$45
     jeq op_unary
@@ -918,7 +922,39 @@ op_binary:
     jeq binary_multiply
     cmp #$42
     jeq binary_remainder
+    cmp #$47
+    jeq binary_and
+    cmp #$4d
+    jeq binary_or
     jmp binary_compare
+
+; Logical operands are already evaluated; normalize signed i16 truthiness to 0/1.
+binary_and:
+    lda left
+    ora left+1
+    jeq binary_logic_false
+    lda right
+    ora right+1
+    jeq binary_logic_false
+    lda #1
+    bne binary_logic_commit
+binary_or:
+    lda left
+    ora left+1
+    jne binary_logic_true
+    lda right
+    ora right+1
+    jeq binary_logic_false
+binary_logic_true:
+    lda #1
+    bne binary_logic_commit
+binary_logic_false:
+    lda #0
+binary_logic_commit:
+    sta value
+    lda #0
+    sta value+1
+    jmp binary_commit
 
 binary_add:
     clc
