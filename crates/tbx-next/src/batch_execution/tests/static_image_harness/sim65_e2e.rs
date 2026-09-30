@@ -12,6 +12,8 @@ const PRIME_CYCLE_LIMIT: &str = "50000000";
 const MANDELBROT_CYCLE_LIMIT: &str = "3000000000";
 // sim65 measured 932,429,359 cycles; this limit adds about 34% headroom.
 const EIGHTQUEEN_CYCLE_LIMIT: &str = "1250000000";
+// sim65 measured 1,343,363 cycles; this dedicated limit adds about 34% headroom.
+const MAZE_CYCLE_LIMIT: &str = "1800000";
 static NEXT_DIRECTORY: AtomicU64 = AtomicU64::new(0);
 const MINIMAL_ARRAY_SOURCE: &str = "DIM @VALUES[3]\nPRINT @VALUES[2]\nCR\nLET @VALUES[1] = 7\nLET @VALUES[3] = -2\nPRINT @VALUES[1]\nCR\nPRINT @VALUES[3]\nCR\n";
 const MINIMAL_FIXED_TEXT_SOURCE: &str = "PRINT \"A\"\n";
@@ -786,6 +788,33 @@ fn eightqueen_source_matches_sim65_execution() {
         EIGHTQUEEN_CYCLE_LIMIT,
         "eightqueen",
         "eightqueen_source_matches_sim65_execution",
+    )
+    .unwrap_or_else(|error| panic!("{error}"));
+}
+
+#[test]
+#[ignore = "requires ca65, ld65, and sim65; run with --ignored"]
+fn maze_source_matches_sim65_execution() {
+    let result = evaluate(
+        include_str!("../../../../../../docs/next/examples/maze.tbx"),
+        "maze.tbx",
+        true,
+        true,
+    );
+    let artifact = result.artifact.expect("encode maze source");
+    let host_output = result.host_output.expect("host executes maze source");
+    assert_eq!(artifact.array_lengths(), &[40, 40, 40, 40, 40, 40]);
+    assert_eq!(artifact.array_storage_bytes(), Some(480));
+    assert_eq!(artifact.array_descriptor_bytes(), Some(24));
+    assert_eq!(artifact.text_count(), 2);
+    assert_eq!(artifact.text_storage_bytes(), Some(18));
+    assert_eq!(artifact.text_descriptor_bytes(), Some(8));
+    build_and_run(
+        &artifact,
+        &host_output,
+        MAZE_CYCLE_LIMIT,
+        "maze",
+        "maze_source_matches_sim65_execution",
     )
     .unwrap_or_else(|error| panic!("{error}"));
 }
