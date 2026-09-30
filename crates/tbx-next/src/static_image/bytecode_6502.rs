@@ -279,9 +279,9 @@ fn encoded_len(
         LogicalInstruction::CallPrimitive(operation) if primitive_opcode(*operation).is_some() => {
             Ok(1)
         }
-        LogicalInstruction::CallPrimitive(operation) => {
+        LogicalInstruction::CallPrimitive(_operation) => {
             #[cfg(test)]
-            eprintln!("issue2172 unsupported primitive: index={index} operation={operation:?}");
+            eprintln!("issue2172 unsupported primitive: index={index} operation={_operation:?}");
             Err(EncodeError::UnsupportedPrimitive(index))
         },
         LogicalInstruction::ControlPush
