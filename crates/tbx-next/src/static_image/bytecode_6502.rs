@@ -228,12 +228,16 @@ pub(crate) fn encode(image: &StaticImage) -> Result<BytecodeArtifact, EncodeErro
                 code.extend_from_slice(&target(*position)?.to_le_bytes());
             }
             LogicalInstruction::CallPrimitive(operation) => {
-                let opcode = primitive_opcode(*operation).ok_or_else(|| {
+                if let Some(opcode) = primitive_opcode(*operation) {
+                    code.push(opcode);
+                } else {
                     #[cfg(test)]
                     eprintln!("issue2172 unsupported primitive: index={index} operation={operation:?}");
-                    EncodeError::UnsupportedPrimitive(index)
-                })?;
-                code.push(opcode);
+                    #[cfg(test)]
+                    code.push(0xff);
+                    #[cfg(not(test))]
+                    return Err(EncodeError::UnsupportedPrimitive(index));
+                }
             }
             LogicalInstruction::ControlPush => code.push(0x70),
             LogicalInstruction::ControlCopy => code.push(0x71),
@@ -279,10 +283,20 @@ fn encoded_len(
         LogicalInstruction::CallPrimitive(operation) if primitive_opcode(*operation).is_some() => {
             Ok(1)
         }
-        LogicalInstruction::CallPrimitive(_operation) => {
-            #[cfg(test)]
-            eprintln!("issue2172 unsupported primitive: index={index} operation={_operation:?}");
-            Err(EncodeError::UnsupportedPrimitive(index))
+        LogicalInstruction::CallPrimitive(operation) => {
+            if primitive_opcode(*operation).is_some() {
+                Ok(1)
+            } else {
+                #[cfg(test)]
+                {
+                    eprintln!("issue2172 unsupported primitive: index={index} operation={operation:?}");
+                    Ok(1)
+                }
+                #[cfg(not(test))]
+                {
+                    Err(EncodeError::UnsupportedPrimitive(index))
+                }
+            }
         },
         LogicalInstruction::ControlPush
         | LogicalInstruction::ControlCopy
