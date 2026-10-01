@@ -526,7 +526,7 @@ impl Interpreter {
                     .with_output_base_dp(output_base_dp);
             compiler
                 .compile_expr(arg_tokens)
-                .map_err(&make_err)
+                .map_err(make_err)
                 .map(|cells| {
                     let offsets = std::mem::take(&mut compiler.patch_offsets);
                     (cells, offsets)
@@ -539,11 +539,11 @@ impl Interpreter {
         let (arg_cells, expr_patch_offsets) = compile_result?;
 
         // Determine arity from top-level comma count.
-        let arity = count_top_level_arity(arg_tokens).map_err(&make_err)?;
+        let arity = count_top_level_arity(arg_tokens).map_err(make_err)?;
 
         self.vm.headers[stmt_xt.index()]
             .check_variadic_arity(arity)
-            .map_err(&make_err)?;
+            .map_err(make_err)?;
 
         // Look up required system words for building the code buffer.
         // These must always be present after init_vm(); return a proper error if missing.
@@ -560,12 +560,12 @@ impl Interpreter {
         //   Xt(DROP_TO_MARKER)
         self.vm
             .dict_write(Cell::Xt(lit_marker_xt))
-            .map_err(&make_err)?;
+            .map_err(make_err)?;
         // Record base_dp after LIT_MARKER so that expr_patch_offsets can be
         // translated to absolute dictionary positions.
         let base_dp = self.vm.dp;
         for cell in arg_cells {
-            self.vm.dict_write(cell).map_err(&make_err)?;
+            self.vm.dict_write(cell).map_err(make_err)?;
         }
         // Register self-recursive local_count placeholder positions found inside
         // the argument expression.
@@ -577,7 +577,7 @@ impl Interpreter {
         self.write_stmt_callee_suffix_to_dict(stmt_xt, arity, err_line, err_col, source_excerpt)?;
         self.vm
             .dict_write(Cell::Xt(drop_to_marker_xt))
-            .map_err(&make_err)?;
+            .map_err(make_err)?;
 
         Ok(())
     }
@@ -619,15 +619,15 @@ impl Interpreter {
                 .map(|s| stmt_xt.index() == s.word_hdr_idx())
                 .unwrap_or(false);
 
-            self.vm.dict_write(Cell::Xt(call_xt)).map_err(&make_err)?;
-            self.vm.dict_write(Cell::Xt(stmt_xt)).map_err(&make_err)?;
+            self.vm.dict_write(Cell::Xt(call_xt)).map_err(make_err)?;
+            self.vm.dict_write(Cell::Xt(stmt_xt)).map_err(make_err)?;
             self.vm
                 .dict_write(Cell::Int(arity as i64))
-                .map_err(&make_err)?;
+                .map_err(make_err)?;
 
             if is_self_recursive {
                 let patch_pos = self.vm.dp;
-                self.vm.dict_write(Cell::Int(0)).map_err(&make_err)?;
+                self.vm.dict_write(Cell::Int(0)).map_err(make_err)?;
                 if let Some(state) = &mut self.vm.compile_state {
                     state.call_patch_list.push(patch_pos);
                 }
@@ -635,7 +635,7 @@ impl Interpreter {
                 let callee_local_count = self.vm.headers[stmt_xt.index()].local_count;
                 self.vm
                     .dict_write(Cell::Int(callee_local_count as i64))
-                    .map_err(&make_err)?;
+                    .map_err(make_err)?;
             }
 
             return Ok(());
@@ -649,12 +649,12 @@ impl Interpreter {
         ) && self.vm.headers[stmt_xt.index()].is_variadic;
         if is_variadic_prim {
             let lit_xt = self.lookup_required("LIT", err_line, err_col, source_excerpt)?;
-            self.vm.dict_write(Cell::Xt(lit_xt)).map_err(&make_err)?;
+            self.vm.dict_write(Cell::Xt(lit_xt)).map_err(make_err)?;
             self.vm
                 .dict_write(Cell::Int(arity as i64))
-                .map_err(&make_err)?;
+                .map_err(make_err)?;
         }
-        self.vm.dict_write(Cell::Xt(stmt_xt)).map_err(&make_err)?;
+        self.vm.dict_write(Cell::Xt(stmt_xt)).map_err(make_err)?;
         Ok(())
     }
 
