@@ -455,8 +455,9 @@ pub(crate) fn test_lower_and_run<W: std::io::Write>(
     ),
     globals: &GlobalVariables,
     arrays: &GlobalArrays,
-    writer: &mut W,
+    runtime: (&mut W, &mut crate::random::RandomState),
 ) -> Result<TestReferenceResult, ()> {
+    let (writer, random) = runtime;
     let image = lower(
         owners,
         entry,
@@ -479,7 +480,7 @@ pub(crate) fn test_lower_and_run<W: std::io::Write>(
         .expect("lowered temporary unit has a valid entry");
     let mut output = crate::runtime_output::WriteRuntimeOutput::new(writer);
     let outcome = vm
-        .run(Some(&mut output), None, None)
+        .run(Some(&mut output), None, Some(random))
         .expect("test source executes");
     Ok(TestReferenceResult {
         halted: outcome == reference_vm::RunOutcome::Halted,

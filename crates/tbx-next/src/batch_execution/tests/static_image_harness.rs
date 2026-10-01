@@ -45,6 +45,10 @@ struct Fixture {
 
 impl Fixture {
     fn new() -> Self {
+        Self::with_seed(0x5442_582D_4E45_5854)
+    }
+
+    fn with_seed(seed: u64) -> Self {
         let mut bindings = Bindings::new();
         let mut primitives = PrimitiveRegistry::new();
         let mut words = PublishedWords::new();
@@ -75,7 +79,7 @@ impl Fixture {
             globals,
             arrays: GlobalArrays::new(),
             published_code: PublishedCode::new(),
-            random: RandomState::seeded(0x5442_582D_4E45_5854),
+            random: RandomState::seeded(seed),
             primitive_words: (
                 operators,
                 abs,
@@ -128,10 +132,26 @@ fn evaluate(
     compare_execution: bool,
     encode_artifact: bool,
 ) -> Evaluation {
+    evaluate_with_seed(
+        source,
+        display_name,
+        compare_execution,
+        encode_artifact,
+        0x5442_582D_4E45_5854,
+    )
+}
+
+fn evaluate_with_seed(
+    source: &str,
+    display_name: &str,
+    compare_execution: bool,
+    encode_artifact: bool,
+    seed: u64,
+) -> Evaluation {
     let mut sources = SourceTexts::new();
     let stdlib_id = register_embedded_standard_library(&mut sources);
     let program_id = sources.register(source, display_name);
-    let mut fixture = Fixture::new();
+    let mut fixture = Fixture::with_seed(seed);
     let _stdlib = fixture.compile(&sources, stdlib_id);
     let unit = fixture.compile(&sources, program_id);
 
@@ -185,6 +205,7 @@ fn evaluate(
         None
     };
     let mut poc_output = Output::default();
+    let mut poc_random = RandomState::seeded(seed);
     let poc = test_lower_and_run(
         &[temporary, published],
         entry,
@@ -192,7 +213,7 @@ fn evaluate(
         fixture.primitive_words,
         &fixture.globals,
         &fixture.arrays,
-        &mut poc_output,
+        (&mut poc_output, &mut poc_random),
     )
     .expect("source lowers and executes in the reference VM");
     if let Some(ref artifact) = encoded_artifact {
