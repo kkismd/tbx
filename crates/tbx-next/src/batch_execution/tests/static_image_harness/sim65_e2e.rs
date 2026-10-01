@@ -1,4 +1,4 @@
-use super::evaluate;
+use super::{evaluate, evaluate_with_seed};
 use crate::static_image::bytecode_6502::BytecodeArtifact;
 use std::ffi::OsStr;
 use std::fs;
@@ -17,6 +17,7 @@ const MAZE_CYCLE_LIMIT: &str = "1800000";
 static NEXT_DIRECTORY: AtomicU64 = AtomicU64::new(0);
 const MINIMAL_ARRAY_SOURCE: &str = "DIM @VALUES[3]\nPRINT @VALUES[2]\nCR\nLET @VALUES[1] = 7\nLET @VALUES[3] = -2\nPRINT @VALUES[1]\nCR\nPRINT @VALUES[3]\nCR\n";
 const MINIMAL_FIXED_TEXT_SOURCE: &str = "PRINT \"A\"\n";
+const SEEDED_RND_SOURCE: &str = "PUTDEC RND(10)\nCR\nPUTDEC RND(97)\nCR\nPUTDEC RND(100)\nCR\nPUTDEC RND(32767)\nCR\nPUTDEC RND(10)\nCR\n";
 
 struct TempArtifacts(PathBuf);
 
@@ -46,7 +47,7 @@ impl Drop for TempArtifacts {
     }
 }
 
-fn wrapper(artifact: &BytecodeArtifact) -> Result<String, String> {
+fn wrapper(artifact: &BytecodeArtifact, seed: Option<u64>) -> Result<String, String> {
     let count = u16::try_from(artifact.array_count())
         .map_err(|_| "array count exceeds wrapper metadata".to_owned())?;
     let text_count = u16::try_from(artifact.text_count())
@@ -134,7 +135,17 @@ fn wrapper(artifact: &BytecodeArtifact) -> Result<String, String> {
     {
         return Err("text wrapper sizes disagree with artifact".to_owned());
     }
-    source.push_str(".segment \"CODE\"\n_tbx_before_init:\n_tbx_error_probe:\n    rts\n");
+    if let Some(seed) = seed {
+        source.push_str(".import tbx_rng_state\n.segment \"CODE\"\n_tbx_before_init:\n");
+        for (index, byte) in seed.to_le_bytes().iter().enumerate() {
+            source.push_str(&format!(
+                "    lda #${byte:02X}\n    sta tbx_rng_state+{index}\n"
+            ));
+        }
+        source.push_str("    rts\n_tbx_error_probe:\n    rts\n");
+    } else {
+        source.push_str(".segment \"CODE\"\n_tbx_before_init:\n_tbx_error_probe:\n    rts\n");
+    }
     Ok(source)
 }
 
@@ -308,6 +319,7 @@ fn cycle_count(report: &[u8], expected_stdout: &[u8]) -> Result<String, String> 
 
 fn build_and_run(
     artifact: &BytecodeArtifact,
+    seed: Option<u64>,
     expected_stdout: &[u8],
     cycle_limit: &str,
     sample: &str,
@@ -326,7 +338,7 @@ fn build_and_run(
 
     fs::write(&program, artifact.code())
         .map_err(|error| format!("write temporary artifact {}: {error}", program.display()))?;
-    fs::write(&wrapper_source, wrapper(artifact)?).map_err(|error| {
+    fs::write(&wrapper_source, wrapper(artifact, seed)?).map_err(|error| {
         format!(
             "write temporary artifact {}: {error}",
             wrapper_source.display()
@@ -392,7 +404,7 @@ fn build_and_run(
                 .map(|(_, size)| *size)
                 .unwrap_or(0)
         };
-        if size("ZEROPAGE") != 31 || size("BSS") != 998 {
+        if size("ZEROPAGE") != 31 || size("BSS") != 1045 {
             return Err(format!(
                 "unexpected VM RAM segment sizes: ZEROPAGE={} BSS={}",
                 size("ZEROPAGE"),
@@ -526,6 +538,7 @@ fn prime_source_matches_sim65_execution() {
     let host_output = result.host_output.expect("host executes prime source");
     build_and_run(
         &artifact,
+        None,
         &host_output,
         PRIME_CYCLE_LIMIT,
         "prime",
@@ -547,6 +560,7 @@ fn mandelbrot_source_matches_sim65_execution() {
     let host_output = result.host_output.expect("host executes mandelbrot source");
     build_and_run(
         &artifact,
+        None,
         &host_output,
         MANDELBROT_CYCLE_LIMIT,
         "mandelbrot",
@@ -560,7 +574,7 @@ fn wrapper_array_metadata_matches_artifact() {
     let no_arrays = evaluate("PUTDEC 1\nCR\n", "no-arrays.tbx", false, true)
         .artifact
         .expect("encode no-array source");
-    let empty = wrapper(&no_arrays).expect("generate empty wrapper");
+    let empty = wrapper(&no_arrays, None).expect("generate empty wrapper");
     assert!(empty.contains("_tbx_array_count: .word 0"));
     assert!(empty.contains("_tbx_array_descriptors:"));
     assert!(!empty.contains(".segment \"BSS\""));
@@ -570,7 +584,7 @@ fn wrapper_array_metadata_matches_artifact() {
     let one = evaluate(MINIMAL_ARRAY_SOURCE, "array-minimal.tbx", false, true)
         .artifact
         .expect("encode one-array source");
-    let one_wrapper = wrapper(&one).expect("generate one-array wrapper");
+    let one_wrapper = wrapper(&one, None).expect("generate one-array wrapper");
     assert_eq!(one.array_lengths(), &[3]);
     assert!(one_wrapper.contains("_tbx_array_count: .word 1"));
     assert!(one_wrapper.contains("_tbx_array_descriptors:\n    .word _tbx_array_descriptor_table\n_tbx_array_descriptor_table:\n    .word _tbx_array_0, 3"));
@@ -586,7 +600,7 @@ fn wrapper_array_metadata_matches_artifact() {
     )
     .artifact
     .expect("encode two-array source");
-    let many_wrapper = wrapper(&many).expect("generate two-array wrapper");
+    let many_wrapper = wrapper(&many, None).expect("generate two-array wrapper");
     assert_eq!(many.array_lengths(), &[2, 5]);
     assert!(many_wrapper.contains("_tbx_array_count: .word 2"));
     assert!(many_wrapper.contains("_tbx_array_descriptors:\n    .word _tbx_array_descriptor_table\n_tbx_array_descriptor_table:\n    .word _tbx_array_0, 2\n    .word _tbx_array_1, 5"));
@@ -600,7 +614,7 @@ fn wrapper_text_metadata_matches_artifact() {
     let no_texts = evaluate("PUTDEC 1\nCR\n", "no-texts.tbx", false, true)
         .artifact
         .expect("encode no-text source");
-    let empty = wrapper(&no_texts).expect("generate empty wrapper");
+    let empty = wrapper(&no_texts, None).expect("generate empty wrapper");
     assert!(empty.contains("_tbx_text_count: .word 0"));
     assert!(empty.contains("_tbx_text_descriptors:\n    .word _tbx_empty_text_descriptor\n_tbx_empty_text_descriptor: .word 0"));
     assert!(!empty.contains("_tbx_text_0:"));
@@ -610,7 +624,7 @@ fn wrapper_text_metadata_matches_artifact() {
     let one = evaluate("PRINT \"A\"\n", "one-text.tbx", false, true)
         .artifact
         .expect("encode one text");
-    let one_wrapper = wrapper(&one).expect("generate one-text wrapper");
+    let one_wrapper = wrapper(&one, None).expect("generate one-text wrapper");
     assert!(one_wrapper.contains("_tbx_text_count: .word 1"));
     assert!(one_wrapper.contains("_tbx_text_descriptors:\n    .word _tbx_text_descriptor_table\n_tbx_text_descriptor_table:\n    .word _tbx_text_0, 1"));
     assert!(one_wrapper.contains("_tbx_text_0:\n    .byte $41\n"));
@@ -625,7 +639,7 @@ fn wrapper_text_metadata_matches_artifact() {
     )
     .artifact
     .expect("encode multiple texts");
-    let many_wrapper = wrapper(&many).expect("generate multiple-text wrapper");
+    let many_wrapper = wrapper(&many, None).expect("generate multiple-text wrapper");
     assert_eq!(many.text_count(), 4);
     assert!(many_wrapper.contains("_tbx_text_count: .word 4"));
     assert!(many_wrapper.contains("_tbx_text_descriptor_table:\n    .word _tbx_text_0, 1\n    .word _tbx_text_1, 2\n    .word _tbx_text_2, 0\n    .word _tbx_text_3, 1\n"));
@@ -644,6 +658,45 @@ fn wrapper_text_bytes_use_numeric_assembly_literals() {
 }
 
 #[test]
+fn wrapper_seed_is_little_endian_and_unseeded_hook_stays_empty() {
+    let artifact = evaluate("PUTDEC 1\n", "seed-wrapper.tbx", false, true)
+        .artifact
+        .expect("encode seed wrapper source");
+    let unseeded = wrapper(&artifact, None).expect("generate unseeded wrapper");
+    assert!(unseeded.contains("_tbx_before_init:\n_tbx_error_probe:\n    rts"));
+    assert!(!unseeded.contains("tbx_rng_state"));
+
+    let seeded = wrapper(&artifact, Some(0x0102_0304_0506_0708)).expect("generate seeded wrapper");
+    assert!(seeded.contains(".import tbx_rng_state"));
+    assert!(
+        seeded.contains("lda #$08\n    sta tbx_rng_state+0\n    lda #$07\n    sta tbx_rng_state+1")
+    );
+    assert!(seeded.contains("lda #$01\n    sta tbx_rng_state+7"));
+}
+
+#[test]
+#[ignore = "requires ca65, ld65, and sim65; run with --ignored"]
+fn seeded_rnd_source_matches_sim65_for_representative_seeds() {
+    let mut outputs = Vec::new();
+    for seed in [0, 1, 42, u64::MAX] {
+        let result = evaluate_with_seed(SEEDED_RND_SOURCE, "seeded-rnd.tbx", true, true, seed);
+        let artifact = result.artifact.expect("encode seeded RND source");
+        let host_output = result.host_output.expect("host executes seeded RND source");
+        outputs.push(host_output.clone());
+        build_and_run(
+            &artifact,
+            Some(seed),
+            &host_output,
+            PRIME_CYCLE_LIMIT,
+            "seeded-rnd",
+            "seeded_rnd_source_matches_sim65_for_representative_seeds",
+        )
+        .unwrap_or_else(|error| panic!("seed {seed}: {error}"));
+    }
+    assert!(outputs.windows(2).all(|pair| pair[0] != pair[1]));
+}
+
+#[test]
 #[ignore = "requires ca65; run with --ignored"]
 fn wrapper_text_bytes_assemble_with_special_and_utf8_bytes() {
     let artifact = evaluate("PRINT \"A\"\n", "assemble-text.tbx", false, true)
@@ -652,7 +705,7 @@ fn wrapper_text_bytes_assemble_with_special_and_utf8_bytes() {
     let crate_root = Path::new(env!("CARGO_MANIFEST_DIR"));
     let temp = TempArtifacts::new(crate_root).expect("create temporary artifact directory");
     fs::write(temp.0.join("program.bin"), artifact.code()).expect("write program bytes");
-    let mut source = wrapper(&artifact).expect("generate wrapper");
+    let mut source = wrapper(&artifact, None).expect("generate wrapper");
     source.push_str(".segment \"RODATA\"\n_tbx_special_bytes:\n");
     source.push_str(&text_bytes_assembly(&[0, b'"', b'\\', 0xc3, 0xa9]));
     fs::write(temp.0.join("wrapper.s"), source).expect("write wrapper source");
@@ -681,6 +734,7 @@ fn minimal_array_source_matches_sim65_execution() {
     assert_eq!(host_output, b"0\n7\n-2\n");
     build_and_run(
         &artifact,
+        None,
         &host_output,
         PRIME_CYCLE_LIMIT,
         "array-minimal",
@@ -706,6 +760,7 @@ fn minimal_fixed_text_source_matches_sim65_execution() {
     assert_eq!(host_output, b"A");
     build_and_run(
         &artifact,
+        None,
         &host_output,
         PRIME_CYCLE_LIMIT,
         "fixed-text-minimal",
@@ -731,6 +786,7 @@ fn squares_source_matches_sim65_execution() {
     assert_eq!(artifact.text_descriptor_bytes(), Some(4));
     build_and_run(
         &artifact,
+        None,
         &host_output,
         PRIME_CYCLE_LIMIT,
         "squares",
@@ -756,6 +812,7 @@ fn grades_source_matches_sim65_execution() {
     assert_eq!(artifact.text_descriptor_bytes(), Some(28));
     build_and_run(
         &artifact,
+        None,
         &host_output,
         PRIME_CYCLE_LIMIT,
         "grades",
@@ -784,6 +841,7 @@ fn eightqueen_source_matches_sim65_execution() {
     assert_eq!(host_output, b"92\n");
     build_and_run(
         &artifact,
+        None,
         &host_output,
         EIGHTQUEEN_CYCLE_LIMIT,
         "eightqueen",
@@ -811,6 +869,7 @@ fn maze_source_matches_sim65_execution() {
     assert_eq!(artifact.text_descriptor_bytes(), Some(8));
     build_and_run(
         &artifact,
+        None,
         &host_output,
         MAZE_CYCLE_LIMIT,
         "maze",
