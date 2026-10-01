@@ -10,11 +10,18 @@ struct SourceOwnerId {
 
 impl SourceOwnerId {
     fn next() -> Self {
-        let id = NEXT_SOURCE_OWNER_ID
-            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |next| {
-                next.checked_add(1)
-            })
-            .expect("source owner id space exhausted");
+        let id = loop {
+            let current = NEXT_SOURCE_OWNER_ID.load(Ordering::Relaxed);
+            let next = current
+                .checked_add(1)
+                .expect("source owner id space exhausted");
+            if NEXT_SOURCE_OWNER_ID
+                .compare_exchange_weak(current, next, Ordering::Relaxed, Ordering::Relaxed)
+                .is_ok()
+            {
+                break current;
+            }
+        };
 
         Self { id }
     }
