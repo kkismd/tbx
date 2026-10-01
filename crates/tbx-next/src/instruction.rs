@@ -49,11 +49,18 @@ pub(crate) struct CodeSpaceId {
 
 impl CodeSpaceId {
     fn next() -> Self {
-        let raw = NEXT_CODE_SPACE_ID
-            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
-                current.checked_add(1)
-            })
-            .expect("code-space ID allocation overflowed");
+        let raw = loop {
+            let current = NEXT_CODE_SPACE_ID.load(Ordering::Relaxed);
+            let next = current
+                .checked_add(1)
+                .expect("code-space ID allocation overflowed");
+            if NEXT_CODE_SPACE_ID
+                .compare_exchange_weak(current, next, Ordering::Relaxed, Ordering::Relaxed)
+                .is_ok()
+            {
+                break current;
+            }
+        };
 
         Self { raw }
     }

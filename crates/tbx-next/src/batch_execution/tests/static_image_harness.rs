@@ -327,6 +327,37 @@ fn maze_source_encodes_artifact_and_resource_metadata() {
 }
 
 #[test]
+fn rnd_source_lowers_and_encodes_into_the_6502_artifact() {
+    let mut sources = SourceTexts::new();
+    let stdlib_id = register_embedded_standard_library(&mut sources);
+    let program_id = sources.register("PUTDEC RND(10)", "rnd.tbx");
+    let mut fixture = Fixture::new();
+    let _stdlib = fixture.compile(&sources, stdlib_id);
+    let unit = fixture.compile(&sources, program_id);
+    let temporary = unit.instructions();
+    let published = fixture.published_code.instruction_view();
+
+    let artifact = test_lower_and_encode(
+        &[temporary, published],
+        unit.entry_location(),
+        &fixture.words,
+        fixture.primitive_words,
+        &fixture.globals,
+        &fixture.arrays,
+    )
+    .expect("RND source lowers and encodes");
+
+    assert!(
+        artifact
+            .code()
+            .windows(2)
+            .any(|bytes| bytes == [0x51, 0x60]),
+        "RND must lower to private opcode 0x51 before PUTDEC: {:?}",
+        artifact.code()
+    );
+}
+
+#[test]
 fn array_resource_measurements_are_available_on_request() {
     let minimal = evaluate(
         "DIM @VALUES[3]\nLET @VALUES[1] = 7\nPRINT @VALUES[1]\nCR\n",
