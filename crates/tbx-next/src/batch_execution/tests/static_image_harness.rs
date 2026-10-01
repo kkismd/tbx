@@ -379,6 +379,37 @@ fn rnd_source_lowers_and_encodes_into_the_6502_artifact() {
 }
 
 #[test]
+fn try_input_source_lowers_and_encodes_without_running_the_reference_vm() {
+    let mut sources = SourceTexts::new();
+    let stdlib_id = register_embedded_standard_library(&mut sources);
+    let program_id = sources.register(
+        "VAR VALUE\nIF_LET VALUE = TRY_INPUT()\nENDLET",
+        "try-input.tbx",
+    );
+    let mut fixture = Fixture::new();
+    let _stdlib = fixture.compile(&sources, stdlib_id);
+    let unit = fixture.compile(&sources, program_id);
+    let temporary = unit.instructions();
+    let published = fixture.published_code.instruction_view();
+
+    let artifact = test_lower_and_encode(
+        &[temporary, published],
+        unit.entry_location(),
+        &fixture.words,
+        fixture.primitive_words,
+        &fixture.globals,
+        &fixture.arrays,
+    )
+    .expect("TRY_INPUT source lowers and encodes");
+
+    assert!(
+        artifact.code().contains(&0x52),
+        "TRY_INPUT must lower to private opcode 0x52: {:?}",
+        artifact.code()
+    );
+}
+
+#[test]
 fn array_resource_measurements_are_available_on_request() {
     let minimal = evaluate(
         "DIM @VALUES[3]\nLET @VALUES[1] = 7\nPRINT @VALUES[1]\nCR\n",
