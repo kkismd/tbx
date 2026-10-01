@@ -122,6 +122,9 @@ _tbx_code_end:
 .macro DROP
     .byte $50
 .endmacro
+.macro RND
+    .byte $51
+.endmacro
 .macro PUTDEC
     .byte $60
 .endmacro

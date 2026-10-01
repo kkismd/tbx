@@ -2,6 +2,7 @@
 .import _tbx_test_expect
 .importzp tbx_pc, tbx_data_depth, tbx_control_depth, tbx_call_depth, tbx_last_error
 .import tbx_data_stack, tbx_control_stack, tbx_globals, tbx_frames
+.import tbx_rng_state
 .export _tbx_error_probe
 
 .segment "ZEROPAGE"
@@ -11,6 +12,31 @@ probe_byte: .res 1
 
 .segment "CODE"
 _tbx_error_probe:
+    ; Every VM failure must leave the initialized RNG state untouched.
+    lda tbx_rng_state
+    cmp #$15
+    jne bad
+    lda tbx_rng_state+1
+    cmp #$7c
+    jne bad
+    lda tbx_rng_state+2
+    cmp #$4a
+    jne bad
+    lda tbx_rng_state+3
+    cmp #$7f
+    jne bad
+    lda tbx_rng_state+4
+    cmp #$b9
+    jne bad
+    lda tbx_rng_state+5
+    cmp #$79
+    jne bad
+    lda tbx_rng_state+6
+    cmp #$37
+    jne bad
+    lda tbx_rng_state+7
+    cmp #$9e
+    jne bad
     lda tbx_last_error
     cmp _tbx_test_expect
     beq :+

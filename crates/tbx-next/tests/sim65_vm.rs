@@ -61,11 +61,14 @@ fn build_and_run(fixture: &str, error_probe: bool) -> FixtureRun {
     } else {
         "success_probe.s"
     });
-    let hook_source = source_root.join(if fixture == "poison_init" {
-        "poison_init_hook.s"
+    let fixture_hook = source_root.join(format!("{fixture}_hook.s"));
+    let hook_source = if fixture_hook.exists() {
+        fixture_hook
+    } else if fixture == "poison_init" {
+        source_root.join("poison_init_hook.s")
     } else {
-        "before_init.s"
-    });
+        source_root.join("before_init.s")
+    };
     let runtime_object = temp.0.join("vm.o");
     let fixture_object = temp.0.join("fixture.o");
     let probe_object = temp.0.join("probe.o");
@@ -130,6 +133,30 @@ fn build_and_run(fixture: &str, error_probe: bool) -> FixtureRun {
         ],
         &format!("running {fixture}"),
     );
+    if fixture.starts_with("rnd_cycle") {
+        let cycles = run(
+            "sim65",
+            &[
+                OsStr::new("-c"),
+                OsStr::new("-x"),
+                OsStr::new(CYCLE_LIMIT),
+                executable.as_os_str(),
+            ],
+            "measuring VM instruction cycles",
+        );
+        require_success("sim65", "measuring VM instruction cycles", &cycles);
+        let report = format!(
+            "{}{}",
+            String::from_utf8_lossy(&cycles.stdout),
+            String::from_utf8_lossy(&cycles.stderr)
+        );
+        let count = report
+            .strip_suffix(" cycles\n")
+            .expect("sim65 cycle report suffix")
+            .parse::<u64>()
+            .expect("sim65 cycle count");
+        eprintln!("{fixture} cycles={count}");
+    }
     FixtureRun {
         output,
         map: fs::read_to_string(map_path).expect("read linker map"),
@@ -169,6 +196,12 @@ fn vm_success_fixtures() {
             b"7\n-3\n-3\n3\n-32768\n-5\n32767\n0\n1\n1\n",
         ),
         ("m34_putchr", b"\0\x7f"),
+        ("rnd_success", b"1\n88\n1\n30210\n8\n1\n"),
+        ("rnd_seed_1", b"6\n18\n43\n18428\n9\n1\n"),
+        ("rnd_seed_42", b"1\n99\n38\n12313\n9\n1\n"),
+        ("rnd_seed_max", b"7\n80\n94\n16256\n8\n1\n"),
+        ("rnd_cycle", b""),
+        ("rnd_cycle_baseline", b""),
         ("jz_invalid_untaken", b"42\n"),
         ("terminal_jz_taken", b""),
         ("terminal_jump", b""),
@@ -211,6 +244,11 @@ fn vm_failure_fixtures_observe_atomic_state() {
         ("or_underflow_zero", 12),
         ("or_underflow_one", 12),
         ("putdec_underflow", 12),
+        ("rnd_underflow", 12),
+        ("rnd_bound_zero", 25),
+        ("rnd_bound_negative", 25),
+        ("rnd_atomic_state", 25),
+        ("rnd_no_successor", 11),
         ("putchr_underflow", 12),
         ("data_overflow", 13),
         ("control_push_underflow", 12),
@@ -340,7 +378,7 @@ fn vm_linker_layout_obeys_m32_segments_and_capacity() {
     assert!(bss.1 <= 0xffc0);
     assert_eq!(
         symbol(&result.labels, "vm_bss_end") - symbol(&result.labels, "tbx_data_stack"),
-        998
+        1045
     );
     let main_end =
         symbol(&result.labels, "__MAIN_START__") + symbol(&result.labels, "__MAIN_SIZE__");
@@ -386,6 +424,6 @@ fn vm_linker_layout_obeys_m32_segments_and_capacity() {
     assert_eq!(frames - data, 64 * 2);
     assert_eq!(globals - frames, 16 * 20);
     assert_eq!(control - globals, 256 * 2 + 6);
-    assert_eq!(symbol(&result.labels, "vm_bss_end") - control, 32);
+    assert_eq!(symbol(&result.labels, "vm_bss_end") - control, 79);
     assert!(data >= bss.0 && globals + 256 * 2 <= bss.1);
 }

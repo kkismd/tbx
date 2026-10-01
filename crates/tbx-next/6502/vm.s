@@ -12,6 +12,7 @@
 .export tbx_pc, tbx_base, tbx_end, tbx_data_depth, tbx_control_depth
 .export tbx_call_depth, tbx_global_count, tbx_last_error
 .export tbx_data_stack, tbx_control_stack, tbx_globals, tbx_frames
+.export tbx_rng_state
 .export vm_zp_end, vm_bss_end
 
 .segment "ZEROPAGE"
@@ -41,6 +42,17 @@ tbx_frames:     .res 320
 tbx_globals:    .res 512
 digits:         .res 6
 tbx_control_stack: .res 32
+; ADR #1889 explicit seeds require the same xorshift/multiply sequence on all targets.
+tbx_rng_state: .res 8
+rng_work: .res 8
+rng_shift: .res 8
+rng_multiplicand: .res 8
+rng_product: .res 8
+rng_bound: .res 2
+rng_remainder: .res 2
+rng_shift_count: .res 1
+rng_bit_count: .res 1
+rng_bit_value: .res 1
 vm_bss_end:
 
 .segment "RODATA"
@@ -69,6 +81,34 @@ _main:
     sta tbx_control_depth
     sta tbx_call_depth
     sta tbx_last_error
+    ; The private fixture may provide a seed before VM startup. Seed zero uses
+    ; the ADR #1889 normalization value, matching the host RandomState.
+    lda tbx_rng_state
+    ora tbx_rng_state+1
+    ora tbx_rng_state+2
+    ora tbx_rng_state+3
+    ora tbx_rng_state+4
+    ora tbx_rng_state+5
+    ora tbx_rng_state+6
+    ora tbx_rng_state+7
+    bne :+
+    lda #$15
+    sta tbx_rng_state
+    lda #$7c
+    sta tbx_rng_state+1
+    lda #$4a
+    sta tbx_rng_state+2
+    lda #$7f
+    sta tbx_rng_state+3
+    lda #$b9
+    sta tbx_rng_state+4
+    lda #$79
+    sta tbx_rng_state+5
+    lda #$37
+    sta tbx_rng_state+6
+    lda #$9e
+    sta tbx_rng_state+7
+:
     ; Count is bounded before touching the globals allocation.
     lda tbx_global_count+1
     beq :+
@@ -219,6 +259,8 @@ dispatch:
     jeq op_unary
     cmp #$50
     jeq op_drop
+    cmp #$51
+    jeq op_rnd
     cmp #$60
     jeq op_putdec
     cmp #$61
@@ -890,6 +932,240 @@ op_drop:
     jeq fail_underflow
     dec tbx_data_depth
     jmp commit_cursor
+
+op_rnd:
+    lda #1
+    jsr need_bytes
+    jcs fail_bytecode
+    jsr validate_next
+    jcs fail_bytecode
+    lda tbx_data_depth
+    jeq fail_underflow
+    sec
+    sbc #1
+    asl
+    tax
+    lda tbx_data_stack,x
+    sta rng_bound
+    inx
+    lda tbx_data_stack,x
+    sta rng_bound+1
+    ; The upper bound is a positive signed i16, including 32767.
+    bpl rnd_nonnegative_bound
+    jmp fail_random_bound
+rnd_nonnegative_bound:
+    ora rng_bound
+    jeq fail_random_bound
+    ; Work on a private copy so every subsequent arithmetic step is speculative.
+    ldx #7
+rnd_copy_state:
+    lda tbx_rng_state,x
+    sta rng_work,x
+    dex
+    bpl rnd_copy_state
+    ; xorshift64: x ^= x >> 12; x ^= x << 25; x ^= x >> 27.
+    lda #12
+    sta rng_shift_count
+rnd_shift_right_12:
+    lsr rng_work+7
+    ror rng_work+6
+    ror rng_work+5
+    ror rng_work+4
+    ror rng_work+3
+    ror rng_work+2
+    ror rng_work+1
+    ror rng_work
+    dec rng_shift_count
+    bne rnd_shift_right_12
+    ldx #0
+rnd_xor_right_12:
+    lda tbx_rng_state,x
+    eor rng_work,x
+    sta rng_work,x
+    inx
+    cpx #8
+    bne rnd_xor_right_12
+    ldx #7
+rnd_copy_left_source:
+    lda rng_work,x
+    sta rng_shift,x
+    dex
+    bpl rnd_copy_left_source
+    lda #25
+    sta rng_shift_count
+rnd_shift_left_25:
+    asl rng_shift
+    rol rng_shift+1
+    rol rng_shift+2
+    rol rng_shift+3
+    rol rng_shift+4
+    rol rng_shift+5
+    rol rng_shift+6
+    rol rng_shift+7
+    dec rng_shift_count
+    bne rnd_shift_left_25
+    ldx #0
+rnd_xor_left_25:
+    lda rng_work,x
+    eor rng_shift,x
+    sta rng_work,x
+    inx
+    cpx #8
+    bne rnd_xor_left_25
+    ldx #7
+rnd_copy_right_source:
+    lda rng_work,x
+    sta rng_shift,x
+    dex
+    bpl rnd_copy_right_source
+    lda #27
+    sta rng_shift_count
+rnd_shift_right_27:
+    lsr rng_shift+7
+    ror rng_shift+6
+    ror rng_shift+5
+    ror rng_shift+4
+    ror rng_shift+3
+    ror rng_shift+2
+    ror rng_shift+1
+    ror rng_shift
+    dec rng_shift_count
+    bne rnd_shift_right_27
+    ldx #0
+rnd_xor_right_27:
+    lda rng_work,x
+    eor rng_shift,x
+    sta rng_work,x
+    inx
+    cpx #8
+    bne rnd_xor_right_27
+    ; Multiply by 0x2545_F491_4F6C_DD1D modulo 2^64.
+    ldx #7
+rnd_copy_multiplicand:
+    lda rng_work,x
+    sta rng_multiplicand,x
+    dex
+    bpl rnd_copy_multiplicand
+    ldx #7
+rnd_clear_product:
+    lda #0
+    sta rng_product,x
+    dex
+    bpl rnd_clear_product
+    ldx #0
+rnd_multiply_byte:
+    lda rnd_multiplier,x
+    sta rng_bit_value
+    ldy #8
+rnd_multiply_bit:
+    lsr rng_bit_value
+    bcc rnd_multiply_skip_add
+    clc
+    lda rng_product
+    adc rng_multiplicand
+    sta rng_product
+    lda rng_product+1
+    adc rng_multiplicand+1
+    sta rng_product+1
+    lda rng_product+2
+    adc rng_multiplicand+2
+    sta rng_product+2
+    lda rng_product+3
+    adc rng_multiplicand+3
+    sta rng_product+3
+    lda rng_product+4
+    adc rng_multiplicand+4
+    sta rng_product+4
+    lda rng_product+5
+    adc rng_multiplicand+5
+    sta rng_product+5
+    lda rng_product+6
+    adc rng_multiplicand+6
+    sta rng_product+6
+    lda rng_product+7
+    adc rng_multiplicand+7
+    sta rng_product+7
+rnd_multiply_skip_add:
+    cpx #7
+    bne rnd_multiply_shift
+    cpy #1
+    beq rnd_multiply_no_shift
+rnd_multiply_shift:
+    asl rng_multiplicand
+    rol rng_multiplicand+1
+    rol rng_multiplicand+2
+    rol rng_multiplicand+3
+    rol rng_multiplicand+4
+    rol rng_multiplicand+5
+    rol rng_multiplicand+6
+    rol rng_multiplicand+7
+rnd_multiply_no_shift:
+    dey
+    bne rnd_multiply_bit
+    inx
+    cpx #8
+    bne rnd_multiply_byte
+    ; Long division yields product % bound. Remainder always remains < bound.
+    lda #0
+    sta rng_remainder
+    sta rng_remainder+1
+    ldx #7
+rnd_divide_byte:
+    lda #8
+    sta rng_bit_count
+rnd_divide_bit:
+    asl rng_product,x
+    rol rng_remainder
+    rol rng_remainder+1
+    lda rng_remainder+1
+    cmp rng_bound+1
+    bcc rnd_divide_no_subtract
+    bne rnd_divide_subtract
+    lda rng_remainder
+    cmp rng_bound
+    bcc rnd_divide_no_subtract
+rnd_divide_subtract:
+    sec
+    lda rng_remainder
+    sbc rng_bound
+    sta rng_remainder
+    lda rng_remainder+1
+    sbc rng_bound+1
+    sta rng_remainder+1
+rnd_divide_no_subtract:
+    dec rng_bit_count
+    bne rnd_divide_bit
+    dex
+    bpl rnd_divide_byte
+    ; All fallible validation is complete: publish state and replace the bound.
+    ldx #7
+rnd_commit_state:
+    lda rng_work,x
+    sta tbx_rng_state,x
+    dex
+    bpl rnd_commit_state
+    clc
+    lda rng_remainder
+    adc #1
+    sta value
+    lda rng_remainder+1
+    adc #0
+    sta value+1
+    sec
+    lda tbx_data_depth
+    sbc #1
+    asl
+    tax
+    lda value
+    sta tbx_data_stack,x
+    inx
+    lda value+1
+    sta tbx_data_stack,x
+    jmp commit_cursor
+
+.segment "RODATA"
+rnd_multiplier: .byte $1d,$dd,$6c,$4f,$91,$f4,$45,$25
+.segment "CODE"
 
 op_swap:
     lda #1
@@ -1653,6 +1929,9 @@ fail_global:
     jne fail
 fail_arithmetic:
     lda #17
+    jne fail
+fail_random_bound:
+    lda #25
     jne fail
 fail_output:
     lda #18
