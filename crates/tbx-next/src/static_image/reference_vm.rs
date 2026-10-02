@@ -524,7 +524,7 @@ impl ReferenceVm {
                 .ok_or_else(|| fail(RuntimeErrorKind::OutputUnavailable))?
                 .write("\n")
                 .map_err(|_| fail(RuntimeErrorKind::OutputFailed))?,
-            PrimitiveOp::InputQuestion => {
+            PrimitiveOp::TryInput => {
                 let line = capabilities
                     .input
                     .as_mut()
@@ -1133,7 +1133,7 @@ mod tests {
     #[test]
     fn input_and_random_are_injected() {
         let mut vm = make_vm(vec![
-            LogicalInstruction::CallPrimitive(PrimitiveOp::InputQuestion),
+            LogicalInstruction::CallPrimitive(PrimitiveOp::TryInput),
             LogicalInstruction::CallPrimitive(PrimitiveOp::Drop),
             LogicalInstruction::CallPrimitive(PrimitiveOp::Drop),
             LogicalInstruction::PushI16(1),

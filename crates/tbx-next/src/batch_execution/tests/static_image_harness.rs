@@ -10,7 +10,10 @@ use crate::random::RandomState;
 use crate::random_primitive::register_random_primitives;
 use crate::source_processor::{run_unit, SourceCompileContext, SourceExecutionContext};
 use crate::stack_primitive::register_stack_primitives;
-use crate::static_image::{test_lower_and_encode, test_lower_and_run, TestImageStatistics};
+use crate::static_image::{
+    test_lower_and_encode, test_lower_and_encode_with_statistics, test_lower_and_run,
+    LogicalInstructionKind, TestImageStatistics,
+};
 use crate::word::PublishedWords;
 use crate::word_lookup::PublishedWordLookup;
 use std::io::Write;
@@ -392,7 +395,7 @@ fn try_input_source_lowers_and_encodes_without_running_the_reference_vm() {
     let temporary = unit.instructions();
     let published = fixture.published_code.instruction_view();
 
-    let artifact = test_lower_and_encode(
+    let (statistics, _artifact) = test_lower_and_encode_with_statistics(
         &[temporary, published],
         unit.entry_location(),
         &fixture.words,
@@ -403,9 +406,12 @@ fn try_input_source_lowers_and_encodes_without_running_the_reference_vm() {
     .expect("TRY_INPUT source lowers and encodes");
 
     assert!(
-        artifact.code().contains(&0x52),
-        "TRY_INPUT must lower to private opcode 0x52: {:?}",
-        artifact.code()
+        statistics
+            .variant_counts
+            .iter()
+            .any(|(kind, count)| *kind == LogicalInstructionKind::CallTryInput && *count > 0),
+        "TRY_INPUT source must lower to a TRY_INPUT primitive call: {:?}",
+        statistics.variant_counts
     );
 }
 

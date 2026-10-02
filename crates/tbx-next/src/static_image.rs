@@ -85,7 +85,7 @@ enum PrimitiveOp {
     PutDec,
     PutChr,
     Cr,
-    InputQuestion,
+    TryInput,
     Rnd,
 }
 
@@ -227,7 +227,7 @@ fn lower(
             (primitive_words.output[0], PrimitiveOp::PutDec),
             (primitive_words.output[1], PrimitiveOp::PutChr),
             (primitive_words.output[2], PrimitiveOp::Cr),
-            (primitive_words.input, PrimitiveOp::InputQuestion),
+            (primitive_words.input, PrimitiveOp::TryInput),
             (primitive_words.rnd, PrimitiveOp::Rnd),
         ],
     )?;
@@ -383,6 +383,7 @@ pub(crate) enum LogicalInstructionKind {
     LoadScratch,
     StoreScratch,
     CallPrimitive,
+    CallTryInput,
     CallCode,
     CopyCallBase,
     TruncateCallBase,
@@ -397,7 +398,7 @@ pub(crate) enum LogicalInstructionKind {
 
 #[cfg(test)]
 impl LogicalInstructionKind {
-    const ALL: [Self; 19] = [
+    const ALL: [Self; 20] = [
         Self::PushI16,
         Self::WriteText,
         Self::LoadGlobal,
@@ -407,6 +408,7 @@ impl LogicalInstructionKind {
         Self::LoadScratch,
         Self::StoreScratch,
         Self::CallPrimitive,
+        Self::CallTryInput,
         Self::CallCode,
         Self::CopyCallBase,
         Self::TruncateCallBase,
@@ -505,6 +507,26 @@ pub(crate) fn test_lower_and_encode(
     globals: &GlobalVariables,
     arrays: &GlobalArrays,
 ) -> Result<bytecode_6502::BytecodeArtifact, bytecode_6502::EncodeError> {
+    test_lower_and_encode_with_statistics(owners, entry, words, primitive_words, globals, arrays)
+        .map(|(_, artifact)| artifact)
+}
+
+#[cfg(test)]
+pub(crate) fn test_lower_and_encode_with_statistics(
+    owners: &[InstructionView<'_>],
+    entry: CodeLocation,
+    words: &PublishedWords,
+    primitive_words: (
+        OperatorWords,
+        WordId,
+        [WordId; 3],
+        [WordId; 3],
+        WordId,
+        WordId,
+    ),
+    globals: &GlobalVariables,
+    arrays: &GlobalArrays,
+) -> Result<(TestImageStatistics, bytecode_6502::BytecodeArtifact), bytecode_6502::EncodeError> {
     let image = lower(
         owners,
         entry,
@@ -521,7 +543,9 @@ pub(crate) fn test_lower_and_encode(
         arrays,
     )
     .expect("test source lowers to a static image");
-    bytecode_6502::encode(&image)
+    let statistics = image.statistics();
+    let artifact = bytecode_6502::encode(&image)?;
+    Ok((statistics, artifact))
 }
 
 #[cfg(test)]
@@ -539,6 +563,9 @@ impl StaticImage {
                 LogicalInstruction::StoreArray(_) => LogicalInstructionKind::StoreArray,
                 LogicalInstruction::LoadScratch(_) => LogicalInstructionKind::LoadScratch,
                 LogicalInstruction::StoreScratch(_) => LogicalInstructionKind::StoreScratch,
+                LogicalInstruction::CallPrimitive(PrimitiveOp::TryInput) => {
+                    LogicalInstructionKind::CallTryInput
+                }
                 LogicalInstruction::CallPrimitive(_) => LogicalInstructionKind::CallPrimitive,
                 LogicalInstruction::CallCode(_) => {
                     relocation_count += 1;
@@ -634,7 +661,12 @@ mod tests {
         assert_eq!(statistics.instruction_count, 19);
         assert_eq!(
             statistics.variant_counts,
-            LogicalInstructionKind::ALL.map(|kind| (kind, 1))
+            LogicalInstructionKind::ALL.map(|kind| {
+                (
+                    kind,
+                    usize::from(kind != LogicalInstructionKind::CallTryInput),
+                )
+            })
         );
         assert_eq!(statistics.relocation_count, 3);
         assert_eq!(statistics.fixed_text_bytes, 2);
@@ -947,7 +979,7 @@ mod tests {
             (fixture.output[0], PrimitiveOp::PutDec),
             (fixture.output[1], PrimitiveOp::PutChr),
             (fixture.output[2], PrimitiveOp::Cr),
-            (fixture.input, PrimitiveOp::InputQuestion),
+            (fixture.input, PrimitiveOp::TryInput),
             (fixture.rnd, PrimitiveOp::Rnd),
         ];
         let mut code = InstructionSequence::new();
