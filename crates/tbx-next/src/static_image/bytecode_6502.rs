@@ -313,6 +313,7 @@ fn primitive_opcode(operation: PrimitiveOp) -> Option<u8> {
         PrimitiveOp::NotEqual => 0x4f,
         PrimitiveOp::Drop => 0x50,
         PrimitiveOp::Rnd => 0x51,
+        PrimitiveOp::TryInput => 0x52,
         PrimitiveOp::PutDec => 0x60,
         PrimitiveOp::Cr => 0x61,
         PrimitiveOp::PutChr => 0x62,
@@ -782,10 +783,23 @@ mod tests {
         );
         assert_eq!(
             encode(&image(vec![LogicalInstruction::CallPrimitive(
-                PrimitiveOp::InputQuestion
+                PrimitiveOp::Not
             )]),),
             Err(EncodeError::UnsupportedPrimitive(0))
         );
+    }
+
+    #[test]
+    fn try_input_is_a_single_byte_primitive_and_preserves_relocations() {
+        let artifact = encode(&image(vec![
+            LogicalInstruction::Jump(CodePosition(3)),
+            LogicalInstruction::CallPrimitive(PrimitiveOp::TryInput),
+            LogicalInstruction::CallPrimitive(PrimitiveOp::Rnd),
+            LogicalInstruction::Return,
+        ]))
+        .expect("input primitive encodes");
+
+        assert_eq!(artifact.code(), &[0x30, 0x05, 0x00, 0x52, 0x51, 0x22]);
     }
 
     #[test]

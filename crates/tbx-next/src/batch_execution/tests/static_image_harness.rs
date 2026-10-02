@@ -10,7 +10,10 @@ use crate::random::RandomState;
 use crate::random_primitive::register_random_primitives;
 use crate::source_processor::{run_unit, SourceCompileContext, SourceExecutionContext};
 use crate::stack_primitive::register_stack_primitives;
-use crate::static_image::{test_lower_and_encode, test_lower_and_run, TestImageStatistics};
+use crate::static_image::{
+    test_lower_and_encode, test_lower_and_encode_with_statistics, test_lower_and_run,
+    LogicalInstructionKind, TestImageStatistics,
+};
 use crate::word::PublishedWords;
 use crate::word_lookup::PublishedWordLookup;
 use std::io::Write;
@@ -375,6 +378,40 @@ fn rnd_source_lowers_and_encodes_into_the_6502_artifact() {
             .any(|bytes| bytes == [0x51, 0x60]),
         "RND must lower to private opcode 0x51 before PUTDEC: {:?}",
         artifact.code()
+    );
+}
+
+#[test]
+fn try_input_source_lowers_and_encodes_without_running_the_reference_vm() {
+    let mut sources = SourceTexts::new();
+    let stdlib_id = register_embedded_standard_library(&mut sources);
+    let program_id = sources.register(
+        "VAR VALUE\nIF_LET VALUE = TRY_INPUT()\nENDLET",
+        "try-input.tbx",
+    );
+    let mut fixture = Fixture::new();
+    let _stdlib = fixture.compile(&sources, stdlib_id);
+    let unit = fixture.compile(&sources, program_id);
+    let temporary = unit.instructions();
+    let published = fixture.published_code.instruction_view();
+
+    let (statistics, _artifact) = test_lower_and_encode_with_statistics(
+        &[temporary, published],
+        unit.entry_location(),
+        &fixture.words,
+        fixture.primitive_words,
+        &fixture.globals,
+        &fixture.arrays,
+    )
+    .expect("TRY_INPUT source lowers and encodes");
+
+    assert!(
+        statistics
+            .variant_counts
+            .iter()
+            .any(|(kind, count)| *kind == LogicalInstructionKind::CallTryInput && *count > 0),
+        "TRY_INPUT source must lower to a TRY_INPUT primitive call: {:?}",
+        statistics.variant_counts
     );
 }
 
