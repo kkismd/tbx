@@ -394,7 +394,27 @@ input_consume:
     lda #2
     sta input_state
 input_digit:
-    ; magnitude = magnitude * 10 + digit, bounded to 32767/32768.
+    ; Reject an out-of-range next digit before the 16-bit multiply can wrap.
+    lda input_accumulator+1
+    cmp #$0c
+    jcc input_digit_accumulate
+    jne input_invalid
+    lda input_accumulator
+    cmp #$cc
+    jcc input_digit_accumulate
+    jne input_invalid
+    lda input_sign
+    beq input_positive_limit
+    lda input_digit_value
+    cmp #9
+    jcs input_invalid
+    jmp input_digit_accumulate
+input_positive_limit:
+    lda input_digit_value
+    cmp #8
+    jcs input_invalid
+input_digit_accumulate:
+    ; magnitude = magnitude * 10 + digit; the precheck bounds it to i16.
     lda input_accumulator
     sta left
     lda input_accumulator+1
@@ -422,7 +442,6 @@ input_digit:
     lda input_accumulator+1
     adc right+1
     sta input_accumulator+1
-    bcs input_invalid
     clc
     lda input_accumulator
     adc input_digit_value
@@ -430,16 +449,6 @@ input_digit:
     lda input_accumulator+1
     adc #0
     sta input_accumulator+1
-    bcs input_invalid
-    lda input_accumulator+1
-    cmp #$80
-    bcc input_consume_done
-    bne input_invalid
-    lda input_sign
-    jeq input_invalid
-input_negative_limit:
-    lda input_accumulator
-    bne input_invalid
 input_consume_done:
     rts
 input_space:

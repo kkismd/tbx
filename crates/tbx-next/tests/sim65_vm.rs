@@ -155,7 +155,7 @@ fn build_and_run(fixture: &str, error_probe: bool) -> FixtureRun {
         ],
         &format!("running {fixture}"),
     );
-    if fixture.starts_with("rnd_cycle") || fixture == "try_input" {
+    if fixture.starts_with("rnd_cycle") || fixture == "try_input" || fixture == "try_input_cycle" {
         let cycles = run(
             "sim65",
             &[
@@ -226,12 +226,13 @@ fn vm_success_fixtures() {
         ("rnd_seed_max", b"7\n80\n94\n16256\n8\n1\n"),
         ("rnd_cycle", b""),
         ("rnd_cycle_baseline", b""),
+        ("try_input_cycle", b""),
         ("jz_invalid_untaken", b"42\n"),
         ("terminal_jz_taken", b""),
         ("terminal_jump", b""),
         (
             "try_input",
-            b"1\n0\n1\n42\n1\n-42\n1\n32767\n1\n-32768\n1\n0\n0\n0\n0\n0\n0\n0\n0\n0\n0\n0\n0\n0\n0\n0\n1\n12\n0\n0\n1\n42\n0\n0\n",
+            b"1\n0\n1\n42\n1\n-42\n1\n32767\n1\n-32768\n1\n0\n0\n0\n0\n0\n0\n0\n0\n0\n0\n0\n0\n0\n0\n0\n0\n0\n1\n91\n0\n0\n1\n12\n1\n13\n0\n0\n1\n42\n0\n0\n",
         ),
         ("try_input_depth_62", b"1\n7\n"),
     ] {
@@ -417,7 +418,7 @@ fn vm_linker_layout_obeys_m32_segments_and_capacity() {
     let vm_rodata =
         symbol(&result.labels, "vm_rodata_end") - symbol(&result.labels, "vm_rodata_start");
     eprintln!(
-        "6502 VM resources (ca65/ld65/sim65 V2.18, base 1982ddc): CODE={vm_code} (+558), RODATA object=40 (+0; frame table={vm_rodata}), BSS={} (+9), ZEROPAGE={} (+0)",
+        "6502 VM resources (ca65/ld65/sim65 V2.18, base 1982ddc): CODE={vm_code} (+590), RODATA object=40 (+0; frame table={vm_rodata}), BSS={} (+9), ZEROPAGE={} (+0)",
         symbol(&result.labels, "vm_bss_end") - symbol(&result.labels, "tbx_data_stack"),
         symbol(&result.labels, "vm_zp_end") - symbol(&result.labels, "tbx_pc")
     );

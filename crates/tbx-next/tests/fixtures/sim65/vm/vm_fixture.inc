@@ -125,6 +125,9 @@ _tbx_code_end:
 .macro RND
     .byte $51
 .endmacro
+.macro TRY_INPUT
+    .byte $52
+.endmacro
 .macro PUTDEC
     .byte $60
 .endmacro

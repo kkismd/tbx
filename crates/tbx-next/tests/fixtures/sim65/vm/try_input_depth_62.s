@@ -4,7 +4,7 @@ entry:
     .repeat 62
     PUSH 0
     .endrepeat
-    .byte $52
+    TRY_INPUT
     PUTDEC
     CR
     PUTDEC

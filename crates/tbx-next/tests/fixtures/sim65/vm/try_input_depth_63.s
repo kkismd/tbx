@@ -5,7 +5,7 @@ entry:
     PUSH 0
     .endrepeat
 failure:
-    .byte $52
+    TRY_INPUT
     HALT
 VM_END
 expected_stack: .res 126, 0

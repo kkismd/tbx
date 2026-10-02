@@ -4,4 +4,3 @@ entry:
     TRY_INPUT
     HALT
 VM_END
-VM_EXPECT 26, entry, 0, 0, 0, 0, $ff, 0, 0, 0, 0, 0, 0

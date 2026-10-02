@@ -1,8 +1,8 @@
 .include "vm_fixture.inc"
 VM_HEADER entry, 0, 0, 0
 entry:
-    .repeat 17
-    .byte $52
+    .repeat 21
+    TRY_INPUT
     PUTDEC
     CR
     PUTDEC

@@ -9,7 +9,7 @@ entry:
     HALT
 body:
 input_failure:
-    .byte $52
+    TRY_INPUT
     RET
 VM_END
 expected_frame:
