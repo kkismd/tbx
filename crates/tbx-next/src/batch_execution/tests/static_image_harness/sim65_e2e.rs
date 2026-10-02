@@ -146,6 +146,9 @@ fn wrapper(artifact: &BytecodeArtifact, seed: Option<u64>) -> Result<String, Str
     } else {
         source.push_str(".segment \"CODE\"\n_tbx_before_init:\n_tbx_error_probe:\n    rts\n");
     }
+    // Existing generated wrappers have no input capability. Keep them linkable
+    // and report capability failure only if TRY_INPUT actually executes.
+    source.push_str(".export _tbx_read_byte\n_tbx_read_byte:\n    lda #2\n    rts\n");
     Ok(source)
 }
 
