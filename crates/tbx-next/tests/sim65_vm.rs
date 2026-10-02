@@ -69,10 +69,17 @@ fn build_and_run(fixture: &str, error_probe: bool) -> FixtureRun {
     } else {
         source_root.join("before_init.s")
     };
+    let input_hook = source_root.join(format!("{fixture}_input.s"));
+    let input_hook_source = if input_hook.exists() {
+        input_hook
+    } else {
+        source_root.join("input_unavailable.s")
+    };
     let runtime_object = temp.0.join("vm.o");
     let fixture_object = temp.0.join("fixture.o");
     let probe_object = temp.0.join("probe.o");
     let hook_object = temp.0.join("hook.o");
+    let input_object = temp.0.join("input.o");
     for (source, object) in [
         (&runtime, &runtime_object),
         (&fixture_source, &fixture_object),
@@ -94,6 +101,20 @@ fn build_and_run(fixture: &str, error_probe: bool) -> FixtureRun {
         );
         require_success("ca65", &format!("assembling {}", source.display()), &output);
     }
+    let output = run(
+        "ca65",
+        &[
+            OsStr::new("-t"),
+            OsStr::new("sim6502"),
+            OsStr::new("-I"),
+            source_root.as_os_str(),
+            input_hook_source.as_os_str(),
+            OsStr::new("-o"),
+            input_object.as_os_str(),
+        ],
+        &format!("assembling input hook for {fixture}"),
+    );
+    require_success("ca65", "assembling input hook", &output);
 
     let executable = temp.0.join("program");
     let map_path = temp.0.join("program.map");
@@ -113,6 +134,7 @@ fn build_and_run(fixture: &str, error_probe: bool) -> FixtureRun {
             fixture_object.as_os_str(),
             probe_object.as_os_str(),
             hook_object.as_os_str(),
+            input_object.as_os_str(),
             OsStr::new("sim6502.lib"),
         ],
         &format!("linking {fixture}"),
@@ -133,7 +155,7 @@ fn build_and_run(fixture: &str, error_probe: bool) -> FixtureRun {
         ],
         &format!("running {fixture}"),
     );
-    if fixture.starts_with("rnd_cycle") {
+    if fixture.starts_with("rnd_cycle") || fixture == "try_input" {
         let cycles = run(
             "sim65",
             &[
@@ -151,7 +173,9 @@ fn build_and_run(fixture: &str, error_probe: bool) -> FixtureRun {
             String::from_utf8_lossy(&cycles.stderr)
         );
         let count = report
-            .strip_suffix(" cycles\n")
+            .lines()
+            .last()
+            .and_then(|line| line.strip_suffix(" cycles"))
             .expect("sim65 cycle report suffix")
             .parse::<u64>()
             .expect("sim65 cycle count");
@@ -205,6 +229,11 @@ fn vm_success_fixtures() {
         ("jz_invalid_untaken", b"42\n"),
         ("terminal_jz_taken", b""),
         ("terminal_jump", b""),
+        (
+            "try_input",
+            b"1\n0\n1\n42\n1\n-42\n1\n32767\n1\n-32768\n1\n0\n0\n0\n0\n0\n0\n0\n0\n0\n0\n0\n0\n0\n0\n0\n1\n12\n0\n0\n1\n42\n0\n0\n",
+        ),
+        ("try_input_depth_62", b"1\n7\n"),
     ] {
         let result = build_and_run(fixture, false);
         if result.output.status.code() != Some(0) || result.output.stdout.as_slice() != stdout {
@@ -299,6 +328,10 @@ fn vm_failure_fixtures_observe_atomic_state() {
         ("write_text_no_successor", 11),
         ("write_text_descriptor_wrap", 22),
         ("write_text_range_wrap", 22),
+        ("try_input_unavailable", 26),
+        ("try_input_depth_63", 13),
+        ("try_input_no_successor", 11),
+        ("try_input_atomic", 26),
     ] {
         let result = build_and_run(fixture, true);
         assert_eq!(
@@ -378,7 +411,15 @@ fn vm_linker_layout_obeys_m32_segments_and_capacity() {
     assert!(bss.1 <= 0xffc0);
     assert_eq!(
         symbol(&result.labels, "vm_bss_end") - symbol(&result.labels, "tbx_data_stack"),
-        1045
+        1054
+    );
+    let vm_code = symbol(&result.labels, "vm_code_end") - symbol(&result.labels, "vm_code_start");
+    let vm_rodata =
+        symbol(&result.labels, "vm_rodata_end") - symbol(&result.labels, "vm_rodata_start");
+    eprintln!(
+        "6502 VM resources (ca65/ld65/sim65 V2.18, base 1982ddc): CODE={vm_code} (+558), RODATA object=40 (+0; frame table={vm_rodata}), BSS={} (+9), ZEROPAGE={} (+0)",
+        symbol(&result.labels, "vm_bss_end") - symbol(&result.labels, "tbx_data_stack"),
+        symbol(&result.labels, "vm_zp_end") - symbol(&result.labels, "tbx_pc")
     );
     let main_end =
         symbol(&result.labels, "__MAIN_START__") + symbol(&result.labels, "__MAIN_SIZE__");
@@ -424,6 +465,6 @@ fn vm_linker_layout_obeys_m32_segments_and_capacity() {
     assert_eq!(frames - data, 64 * 2);
     assert_eq!(globals - frames, 16 * 20);
     assert_eq!(control - globals, 256 * 2 + 6);
-    assert_eq!(symbol(&result.labels, "vm_bss_end") - control, 79);
+    assert_eq!(symbol(&result.labels, "vm_bss_end") - control, 88);
     assert!(data >= bss.0 && globals + 256 * 2 <= bss.1);
 }

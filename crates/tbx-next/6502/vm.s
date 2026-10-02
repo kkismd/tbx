@@ -8,12 +8,14 @@
 .import _tbx_before_init, _tbx_error_probe, _putchar
 .import _tbx_array_count, _tbx_array_descriptors
 .import _tbx_text_count, _tbx_text_descriptors
+.import _tbx_read_byte
 .export _main
 .export tbx_pc, tbx_base, tbx_end, tbx_data_depth, tbx_control_depth
 .export tbx_call_depth, tbx_global_count, tbx_last_error
 .export tbx_data_stack, tbx_control_stack, tbx_globals, tbx_frames
 .export tbx_rng_state
 .export vm_zp_end, vm_bss_end
+.export vm_code_start, vm_code_end, vm_rodata_start, vm_rodata_end
 
 .segment "ZEROPAGE"
 tbx_pc:             .res 2
@@ -53,15 +55,26 @@ rng_remainder: .res 2
 rng_shift_count: .res 1
 rng_bit_count: .res 1
 rng_bit_value: .res 1
+input_status: .res 1
+input_byte: .res 1
+input_state: .res 1
+input_sign: .res 1
+input_seen: .res 1
+input_overflow: .res 1
+input_digit_value: .res 1
+input_accumulator: .res 2
 vm_bss_end:
 
 .segment "RODATA"
+vm_rodata_start:
 frame_addresses:
 .repeat 16, I
     .word tbx_frames + I * 20
 .endrepeat
+vm_rodata_end:
 
 .segment "CODE"
+vm_code_start:
 _main:
     jsr _tbx_before_init
     lda #<_tbx_code_start
@@ -261,6 +274,8 @@ dispatch:
     jeq op_drop
     cmp #$51
     jeq op_rnd
+    cmp #$52
+    jeq op_try_input
     cmp #$60
     jeq op_putdec
     cmp #$61
@@ -274,6 +289,240 @@ dispatch:
 op_halt:
     lda #0
     rts
+
+; TRY_INPUT validates both commit prerequisites before calling the external
+; hook. It parses and drains incrementally without a line buffer. Parser scratch
+; is private VM state; architectural state commits only after the full line.
+op_try_input:
+    lda #1
+    jsr need_bytes
+    jcs fail_bytecode
+    jsr validate_next
+    jcs fail_bytecode
+    lda tbx_data_depth
+    cmp #63
+    jcs fail_overflow
+    lda #0
+    sta input_state
+    sta input_sign
+    sta input_seen
+    sta input_overflow
+    sta input_accumulator
+    sta input_accumulator+1
+input_read:
+    ; The hook returns A=0/X=byte, A=1 for EOF, and A=2 for I/O failure.
+    jsr _tbx_read_byte
+    cmp #2
+    jeq fail_input
+    cmp #1
+    jeq input_eof
+    cmp #0
+    jne fail_input
+    stx input_byte
+    lda input_byte
+    cmp #10
+    jeq input_line_end
+    cmp #13
+    jeq input_cr
+    jsr input_consume
+    jmp input_read
+input_cr:
+    ; CR is only ignored when immediately followed by LF.
+    jsr _tbx_read_byte
+    cmp #2
+    jeq fail_input
+    cmp #1
+    jeq input_invalid_eof
+    cmp #0
+    jne fail_input
+    cpx #10
+    jne input_invalid_cr
+    jmp input_line_end
+input_invalid_cr:
+    lda #1
+    sta input_overflow
+    stx input_byte
+    lda input_byte
+    cmp #10
+    jeq input_line_end
+    jsr input_consume
+    jmp input_read
+input_invalid_eof:
+    lda #1
+    sta input_overflow
+    jmp input_finish
+input_eof:
+    lda input_seen
+    beq input_empty
+    jmp input_finish
+input_line_end:
+    lda input_seen
+    beq input_empty
+    jmp input_finish
+input_empty:
+    lda #0
+    sta input_accumulator
+    sta input_accumulator+1
+    sta input_overflow
+    sta input_status
+    jmp input_push
+input_consume:
+    lda #1
+    sta input_seen
+    lda input_overflow
+    jne input_consume_done
+    lda input_byte
+    cmp #' '
+    jeq input_space
+    cmp #9
+    jeq input_space
+    lda input_state
+    cmp #3
+    jeq input_invalid
+    lda input_byte
+    cmp #'+'
+    jeq input_plus
+    cmp #'-'
+    jeq input_minus
+    cmp #'0'
+    jcc input_invalid
+    cmp #'9'+1
+    jcs input_invalid
+    sec
+    sbc #'0'
+    sta input_digit_value
+    lda #2
+    sta input_state
+input_digit:
+    ; magnitude = magnitude * 10 + digit, bounded to 32767/32768.
+    lda input_accumulator
+    sta left
+    lda input_accumulator+1
+    sta left+1
+    lda left
+    asl
+    sta right
+    lda left+1
+    rol
+    sta right+1
+    lda left
+    asl
+    sta input_accumulator
+    lda left+1
+    rol
+    sta input_accumulator+1
+    asl input_accumulator
+    rol input_accumulator+1
+    asl input_accumulator
+    rol input_accumulator+1
+    clc
+    lda input_accumulator
+    adc right
+    sta input_accumulator
+    lda input_accumulator+1
+    adc right+1
+    sta input_accumulator+1
+    bcs input_invalid
+    clc
+    lda input_accumulator
+    adc input_digit_value
+    sta input_accumulator
+    lda input_accumulator+1
+    adc #0
+    sta input_accumulator+1
+    bcs input_invalid
+    lda input_accumulator+1
+    cmp #$80
+    bcc input_consume_done
+    bne input_invalid
+    lda input_sign
+    jeq input_invalid
+input_negative_limit:
+    lda input_accumulator
+    bne input_invalid
+input_consume_done:
+    rts
+input_space:
+    lda input_state
+    cmp #2
+    beq input_trailing_start
+    cmp #1
+    jeq input_invalid
+    rts
+input_trailing_start:
+    lda #3
+    sta input_state
+    rts
+input_plus:
+    jmp input_sign_char
+input_minus:
+    lda #1
+    sta input_sign
+input_sign_char:
+    lda input_state
+    bne input_invalid
+    lda #1
+    sta input_state
+    rts
+input_invalid:
+    lda #1
+    sta input_overflow
+    rts
+input_finish:
+    lda input_state
+    cmp #2
+    jeq input_finish_valid
+    cmp #3
+    jne input_empty
+input_finish_valid:
+    lda input_overflow
+    jne input_empty
+    lda input_accumulator
+    sta value
+    lda input_accumulator+1
+    sta value+1
+    lda input_sign
+    beq input_push_success
+    sec
+    lda #0
+    sbc value
+    sta value
+    lda #0
+    sbc value+1
+    sta value+1
+input_push_success:
+    lda #1
+    sta input_status
+    lda value
+    sta left
+    lda value+1
+    sta left+1
+    lda #1
+    bne input_store
+input_push:
+    lda #0
+    sta left
+    sta left+1
+    lda #0
+input_store:
+    ldx tbx_data_depth
+    txa
+    asl
+    tax
+    lda left
+    sta tbx_data_stack,x
+    inx
+    lda left+1
+    sta tbx_data_stack,x
+    inx
+    lda input_status
+    sta tbx_data_stack,x
+    inx
+    lda #0
+    sta tbx_data_stack,x
+    inc tbx_data_depth
+    inc tbx_data_depth
+    jmp commit_cursor
 
 ; Input A is the full instruction length. Carry set means truncated/wrapped.
 need_bytes:
@@ -1933,6 +2182,9 @@ fail_arithmetic:
 fail_random_bound:
     lda #25
     jne fail
+fail_input:
+    lda #26
+    jne fail
 fail_output:
     lda #18
     jne fail
@@ -1961,3 +2213,4 @@ fail:
     jsr _tbx_error_probe
     lda tbx_last_error
     rts
+vm_code_end:
