@@ -18,6 +18,7 @@ static NEXT_DIRECTORY: AtomicU64 = AtomicU64::new(0);
 const MINIMAL_ARRAY_SOURCE: &str = "DIM @VALUES[3]\nPRINT @VALUES[2]\nCR\nLET @VALUES[1] = 7\nLET @VALUES[3] = -2\nPRINT @VALUES[1]\nCR\nPRINT @VALUES[3]\nCR\n";
 const MINIMAL_FIXED_TEXT_SOURCE: &str = "PRINT \"A\"\n";
 const SEEDED_RND_SOURCE: &str = "PUTDEC RND(10)\nCR\nPUTDEC RND(97)\nCR\nPUTDEC RND(100)\nCR\nPUTDEC RND(32767)\nCR\nPUTDEC RND(10)\nCR\n";
+const SCRIPTED_INPUT_SOURCE: &str = "VAR VALUE\nPRINT \"?\"\nIF_LET VALUE = TRY_INPUT()\nPUTDEC VALUE\nCR\nLET_ELSE\nPUTDEC 0\nCR\nENDLET\nPRINT \"?\"\nIF_LET VALUE = TRY_INPUT()\nPUTDEC VALUE\nCR\nLET_ELSE\nPUTDEC 0\nCR\nENDLET\nPRINT \"?\"\nIF_LET VALUE = TRY_INPUT()\nPUTDEC VALUE\nCR\nLET_ELSE\nPUTDEC 0\nCR\nENDLET\nPRINT \"?\"\nIF_LET VALUE = TRY_INPUT()\nPUTDEC VALUE\nCR\nLET_ELSE\nPUTDEC 0\nCR\nENDLET\n";
 
 struct TempArtifacts(PathBuf);
 
@@ -48,6 +49,14 @@ impl Drop for TempArtifacts {
 }
 
 fn wrapper(artifact: &BytecodeArtifact, seed: Option<u64>) -> Result<String, String> {
+    wrapper_with_input(artifact, seed, None)
+}
+
+fn wrapper_with_input(
+    artifact: &BytecodeArtifact,
+    seed: Option<u64>,
+    input: Option<(&[u8], bool)>,
+) -> Result<String, String> {
     let count = u16::try_from(artifact.array_count())
         .map_err(|_| "array count exceeds wrapper metadata".to_owned())?;
     let text_count = u16::try_from(artifact.text_count())
@@ -146,9 +155,35 @@ fn wrapper(artifact: &BytecodeArtifact, seed: Option<u64>) -> Result<String, Str
     } else {
         source.push_str(".segment \"CODE\"\n_tbx_before_init:\n_tbx_error_probe:\n    rts\n");
     }
-    // Existing generated wrappers have no input capability. Keep them linkable
-    // and report capability failure only if TRY_INPUT actually executes.
-    source.push_str(".export _tbx_read_byte\n_tbx_read_byte:\n    lda #2\n    rts\n");
+    source.push_str(".export _tbx_read_byte\n.segment \"BSS\"\n_tbx_input_position: .res 1\n.segment \"CODE\"\n_tbx_read_byte:\n");
+    if let Some((bytes, strict)) = input {
+        if bytes.len() > u8::MAX as usize {
+            return Err("scripted input exceeds 255 bytes".to_owned());
+        }
+        source.push_str("    ldx _tbx_input_position\n    cpx #");
+        source.push_str(&bytes.len().to_string());
+        source.push_str("\n    bcs _tbx_input_exhausted\n    lda _tbx_input_script,x\n    pha\n    inc _tbx_input_position\n    pla\n    tax\n    lda #0\n    rts\n_tbx_input_exhausted:\n    lda #");
+        source.push_str(if strict { "2\n" } else { "1\n" });
+        source.push_str("    rts\n.segment \"RODATA\"\n_tbx_input_script:\n");
+        if bytes.is_empty() {
+            source.push_str("    .byte 0\n");
+        } else {
+            for chunk in bytes.chunks(16) {
+                source.push_str("    .byte ");
+                source.push_str(
+                    &chunk
+                        .iter()
+                        .map(u8::to_string)
+                        .collect::<Vec<_>>()
+                        .join(", "),
+                );
+                source.push('\n');
+            }
+        }
+    } else {
+        // Existing generated wrappers report capability failure only if input executes.
+        source.push_str("    lda #2\n    rts\n");
+    }
     Ok(source)
 }
 
@@ -328,6 +363,27 @@ fn build_and_run(
     sample: &str,
     test_name: &str,
 ) -> Result<(), String> {
+    build_and_run_with_input(
+        artifact,
+        seed,
+        expected_stdout,
+        cycle_limit,
+        sample,
+        test_name,
+        (None, false),
+    )
+}
+
+fn build_and_run_with_input(
+    artifact: &BytecodeArtifact,
+    seed: Option<u64>,
+    expected_stdout: &[u8],
+    cycle_limit: &str,
+    sample: &str,
+    test_name: &str,
+    input_and_expect_failure: (Option<(&[u8], bool)>, bool),
+) -> Result<(), String> {
+    let (input, expect_failure) = input_and_expect_failure;
     let crate_root = Path::new(env!("CARGO_MANIFEST_DIR"));
     let temp = TempArtifacts::new(crate_root)?;
     let program = temp.0.join("program.bin");
@@ -341,7 +397,7 @@ fn build_and_run(
 
     fs::write(&program, artifact.code())
         .map_err(|error| format!("write temporary artifact {}: {error}", program.display()))?;
-    fs::write(&wrapper_source, wrapper(artifact, seed)?).map_err(|error| {
+    fs::write(&wrapper_source, wrapper_with_input(artifact, seed, input)?).map_err(|error| {
         format!(
             "write temporary artifact {}: {error}",
             wrapper_source.display()
@@ -407,7 +463,7 @@ fn build_and_run(
                 .map(|(_, size)| *size)
                 .unwrap_or(0)
         };
-        if size("ZEROPAGE") != 31 || size("BSS") != 1045 {
+        if size("ZEROPAGE") != 31 || size("BSS") != 1054 {
             return Err(format!(
                 "unexpected VM RAM segment sizes: ZEROPAGE={} BSS={}",
                 size("ZEROPAGE"),
@@ -435,9 +491,15 @@ fn build_and_run(
         &temp.0,
         "sim65 execute",
     )?;
-    require_success(&target, "sim65 exit status or cycle limit")?;
+    if target.status.success() == expect_failure {
+        return Err(format_nonzero_status(
+            "sim65 exit status or cycle limit",
+            target.status.code(),
+            &target.stderr,
+        ));
+    }
     require_matching_stdout(&target.stdout, expected_stdout)?;
-    if std::env::var_os("TBX_SHOW_SIM65_STDOUT").is_some() {
+    if !expect_failure && std::env::var_os("TBX_SHOW_SIM65_STDOUT").is_some() {
         std::io::stdout()
             .write_all(&target.stdout)
             .map_err(|error| format!("write sim65 stdout: {error}"))?;
@@ -462,7 +524,9 @@ fn build_and_run(
             String::from_utf8_lossy(report).trim()
         );
     }
-    if let Some((segments, map, labels, ca65_version, ld65_version, sim65_version)) = measurement {
+    if let Some((segments, map, labels, ca65_version, ld65_version, sim65_version)) =
+        measurement.filter(|_| !expect_failure)
+    {
         let output = run_tool(
             "sim65",
             &[
@@ -546,6 +610,56 @@ fn prime_source_matches_sim65_execution() {
         PRIME_CYCLE_LIMIT,
         "prime",
         "prime_source_matches_sim65_execution",
+    )
+    .unwrap_or_else(|error| panic!("{error}"));
+}
+
+#[test]
+#[ignore = "requires ca65, ld65, and sim65; run with --ignored"]
+fn scripted_try_input_source_matches_host_execution() {
+    let lines = ["42", "invalid", "-7"];
+    let result = super::evaluate_with_seed_and_input(
+        SCRIPTED_INPUT_SOURCE,
+        "scripted-input.tbx",
+        true,
+        true,
+        0x5442_582D_4E45_5854,
+        Some(&lines),
+    );
+    let artifact = result.artifact.expect("encode scripted input source");
+    let host_output = result
+        .host_output
+        .expect("host executes scripted input source");
+    assert_eq!(host_output, b"?42\n?0\n?-7\n?0\n");
+    let mut bytes = lines.join("\n").into_bytes();
+    bytes.push(b'\n');
+    build_and_run_with_input(
+        &artifact,
+        None,
+        &host_output,
+        "10000000",
+        "scripted-input",
+        "scripted_try_input_source_matches_host_execution",
+        (Some((&bytes, false)), false),
+    )
+    .unwrap_or_else(|error| panic!("{error}"));
+}
+
+#[test]
+#[ignore = "requires ca65, ld65, and sim65; run with --ignored"]
+fn strict_scripted_try_input_fails_after_stdout_prefix() {
+    let (host_prefix, reference_prefix, artifact) =
+        super::evaluate_strict_input_failure("PRINT \"?\"\nTRY_INPUT\n");
+    assert_eq!(host_prefix, b"?");
+    assert_eq!(reference_prefix, host_prefix);
+    build_and_run_with_input(
+        &artifact,
+        None,
+        b"?",
+        "10000000",
+        "strict-input",
+        "strict_scripted_try_input_fails_after_stdout_prefix",
+        (Some((&[], true)), true),
     )
     .unwrap_or_else(|error| panic!("{error}"));
 }
@@ -675,6 +789,21 @@ fn wrapper_seed_is_little_endian_and_unseeded_hook_stays_empty() {
         seeded.contains("lda #$08\n    sta tbx_rng_state+0\n    lda #$07\n    sta tbx_rng_state+1")
     );
     assert!(seeded.contains("lda #$01\n    sta tbx_rng_state+7"));
+}
+
+#[test]
+fn wrapper_input_adapter_maps_script_exhaustion_to_eof_or_failure() {
+    let artifact = evaluate("TRY_INPUT\n", "input-wrapper.tbx", false, true)
+        .artifact
+        .expect("encode input source");
+    let eof = wrapper_with_input(&artifact, None, Some((b"12\n", false)))
+        .expect("generate EOF input wrapper");
+    assert!(eof.contains("_tbx_input_script:\n    .byte 49, 50, 10"));
+    assert!(eof.contains("_tbx_input_exhausted:\n    lda #1\n    rts"));
+    let strict = wrapper_with_input(&artifact, None, Some((b"12\n", true)))
+        .expect("generate strict input wrapper");
+    assert!(strict.contains("_tbx_input_exhausted:\n    lda #2\n    rts"));
+    assert!(wrapper_with_input(&artifact, None, Some((&[0; 256], false))).is_err());
 }
 
 #[test]

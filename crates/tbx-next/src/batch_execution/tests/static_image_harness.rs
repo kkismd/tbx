@@ -8,6 +8,7 @@ use crate::operator::register_named_operator_primitives;
 use crate::output_primitive::register_output_primitives;
 use crate::random::RandomState;
 use crate::random_primitive::register_random_primitives;
+use crate::runtime_input::TestInput;
 use crate::source_processor::{run_unit, SourceCompileContext, SourceExecutionContext};
 use crate::stack_primitive::register_stack_primitives;
 use crate::static_image::{
@@ -151,6 +152,24 @@ fn evaluate_with_seed(
     encode_artifact: bool,
     seed: u64,
 ) -> Evaluation {
+    evaluate_with_seed_and_input(
+        source,
+        display_name,
+        compare_execution,
+        encode_artifact,
+        seed,
+        None,
+    )
+}
+
+fn evaluate_with_seed_and_input(
+    source: &str,
+    display_name: &str,
+    compare_execution: bool,
+    encode_artifact: bool,
+    seed: u64,
+    input_lines: Option<&[&str]>,
+) -> Evaluation {
     let mut sources = SourceTexts::new();
     let stdlib_id = register_embedded_standard_library(&mut sources);
     let program_id = sources.register(source, display_name);
@@ -164,7 +183,9 @@ fn evaluate_with_seed(
         let mut output = Output::default();
         let result = {
             let mut runtime_output = WriteRuntimeOutput::new(&mut output);
-            let context = SourceExecutionContext::with_runtime_environment(
+            let mut input = input_lines
+                .map(|lines| TestInput::new(lines.iter().map(|line| Ok(Some((*line).to_owned())))));
+            let mut context = SourceExecutionContext::with_runtime_environment(
                 &fixture.bindings,
                 fixture.source_words.lookup(),
                 fixture.operators.lookup(),
@@ -177,6 +198,9 @@ fn evaluate_with_seed(
             .with_mut_arrays(fixture.arrays.view_mut())
             .with_random(&mut fixture.random)
             .with_output(&mut runtime_output);
+            if let Some(ref mut input) = input {
+                context = context.with_input(input);
+            }
             run_unit(&unit, context).expect("host executes source")
         };
         Some((result, output.0))
@@ -208,7 +232,10 @@ fn evaluate_with_seed(
         None
     };
     let mut poc_output = Output::default();
+    let mut poc_runtime_output = WriteRuntimeOutput::new(&mut poc_output);
     let mut poc_random = RandomState::seeded(seed);
+    let mut reference_input = input_lines
+        .map(|lines| TestInput::new(lines.iter().map(|line| Ok(Some((*line).to_owned())))));
     let poc = test_lower_and_run(
         &[temporary, published],
         entry,
@@ -216,7 +243,13 @@ fn evaluate_with_seed(
         fixture.primitive_words,
         &fixture.globals,
         &fixture.arrays,
-        (&mut poc_output, &mut poc_random),
+        (
+            &mut poc_runtime_output,
+            &mut poc_random,
+            reference_input
+                .as_mut()
+                .map(|input| input as &mut dyn crate::runtime_input::RuntimeInput),
+        ),
     )
     .expect("source lowers and executes in the reference VM");
     if let Some(ref artifact) = encoded_artifact {
@@ -242,6 +275,78 @@ fn evaluate_with_seed(
         host_output: host.map(|(_, output)| output),
         artifact: encoded_artifact,
     }
+}
+
+fn evaluate_strict_input_failure(
+    source: &str,
+) -> (
+    Vec<u8>,
+    Vec<u8>,
+    crate::static_image::bytecode_6502::BytecodeArtifact,
+) {
+    let mut sources = SourceTexts::new();
+    let stdlib_id = register_embedded_standard_library(&mut sources);
+    let program_id = sources.register(source, "strict-input.tbx");
+    let mut fixture = Fixture::new();
+    let _stdlib = fixture.compile(&sources, stdlib_id);
+    let unit = fixture.compile(&sources, program_id);
+    let code_spaces = [fixture.published_code.instruction_view()];
+    let source_mappings = [fixture.published_code.source_mapping()];
+
+    let mut host_output = Output::default();
+    let mut host_runtime_output = WriteRuntimeOutput::new(&mut host_output);
+    let mut host_input = TestInput::strict(std::iter::empty());
+    let context = SourceExecutionContext::with_runtime_environment(
+        &fixture.bindings,
+        fixture.source_words.lookup(),
+        fixture.operators.lookup(),
+        &code_spaces,
+        &source_mappings,
+        PublishedWordLookup::new(&fixture.words),
+        fixture.primitives.lookup(),
+    )
+    .with_mut_globals(fixture.globals.view_mut())
+    .with_mut_arrays(fixture.arrays.view_mut())
+    .with_random(&mut fixture.random)
+    .with_output(&mut host_runtime_output)
+    .with_input(&mut host_input);
+    assert!(run_unit(&unit, context).is_err());
+
+    let temporary = unit.instructions();
+    let published = fixture.published_code.instruction_view();
+    let entry = unit.entry_location();
+    let artifact = test_lower_and_encode(
+        &[temporary, published],
+        entry,
+        &fixture.words,
+        fixture.primitive_words,
+        &fixture.globals,
+        &fixture.arrays,
+    )
+    .expect("strict input source encodes");
+
+    let mut reference_output = Output::default();
+    let mut reference_runtime_output = WriteRuntimeOutput::new(&mut reference_output);
+    let mut reference_random = RandomState::seeded(0x5442_582D_4E45_5854);
+    let mut reference_input = TestInput::strict(std::iter::empty());
+    let result = test_lower_and_run(
+        &[temporary, published],
+        entry,
+        &fixture.words,
+        fixture.primitive_words,
+        &fixture.globals,
+        &fixture.arrays,
+        (
+            &mut reference_runtime_output,
+            &mut reference_random,
+            Some(&mut reference_input),
+        ),
+    );
+    assert!(
+        result.is_err(),
+        "ReferenceVm must preserve strict input failure"
+    );
+    (host_output.0, reference_output.0, artifact)
 }
 
 #[test]
