@@ -617,7 +617,7 @@ fn multisource_runtime_sequence_matches_host_reference_and_sim65() {
     let mut sources = SourceTexts::new();
     let stdlib_id = crate::cli_source::register_embedded_standard_library(&mut sources);
     let main_id = sources.register(
-        "PUSH 42\nPUTDEC\nPRINT 1\nUSE \"lib.tbx\"\nCROSS\nPRINT SHARED\nPRINT @VALUES[1]\nPRINT 5\n",
+        "PUSH 42\nPRINT 1\nUSE \"lib.tbx\"\nPUTDEC\nCROSS\nPRINT SHARED\nPRINT @VALUES[1]\nPRINT 5\n",
         "main.tbx",
     );
     let mut environment = BatchEnvironment::new().expect("batch environment builds");
@@ -671,7 +671,7 @@ fn multisource_runtime_sequence_matches_host_reference_and_sim65() {
         (&mut reference_runtime_output, &mut random, None),
     )
     .expect("composed source sequence runs in ReferenceVm");
-    let expected = b"4212B346785";
+    let expected = b"12B34426785";
     assert_eq!(host_output, expected);
     assert_eq!(reference_output, expected);
     assert!(reference.halted);
