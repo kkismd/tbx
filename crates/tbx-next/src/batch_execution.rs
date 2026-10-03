@@ -154,6 +154,8 @@ pub(crate) struct SourceProcessingSession {
     frames: Vec<SourceFrame>,
     acquisition_states: SourceAcquisitionStates,
     failed: bool,
+    #[cfg(test)]
+    runtime_units: Vec<crate::source_processor::TemporaryExecutionUnit>,
 }
 
 impl SourceProcessingSession {
@@ -173,6 +175,8 @@ impl SourceProcessingSession {
             frames: Vec::new(),
             acquisition_states: SourceAcquisitionStates::default(),
             failed: false,
+            #[cfg(test)]
+            runtime_units: Vec::new(),
         };
         if let Err(error) = session.push_source(initial_source_id) {
             if let crate::source_processor::SourceProcessorError::Source(source) = error {
@@ -199,6 +203,8 @@ impl SourceProcessingSession {
             }],
             acquisition_states: SourceAcquisitionStates::default(),
             failed: false,
+            #[cfg(test)]
+            runtime_units: Vec::new(),
         };
         let acquisition = session
             .sources
@@ -212,6 +218,11 @@ impl SourceProcessingSession {
 
     pub(crate) fn sources(&self) -> &SourceTexts {
         &self.sources
+    }
+
+    #[cfg(test)]
+    pub(crate) fn runtime_units(&self) -> &[crate::source_processor::TemporaryExecutionUnit] {
+        &self.runtime_units
     }
 
     pub(crate) fn sources_mut(&mut self) -> &mut SourceTexts {
@@ -284,6 +295,10 @@ impl SourceProcessingSession {
                 self.acquisition_states.complete(&acquisition);
                 continue;
             };
+            let crate::source_processor::CompiledTopLevelForm {
+                unit,
+                additional_source,
+            } = form;
             {
                 let code_spaces = [self.environment.published_code.instruction_view()];
                 let source_mappings = [self.environment.published_code.source_mapping()];
@@ -305,7 +320,10 @@ impl SourceProcessingSession {
                     Some(input) => context.with_input(input),
                     None => context,
                 };
-                last_result = Some(run_unit_with_data_stack(&form.unit, context, &data_stack)?);
+                let execution = run_unit_with_data_stack(&unit, context, &data_stack);
+                #[cfg(test)]
+                self.runtime_units.push(unit);
+                last_result = Some(execution?);
                 data_stack = last_result
                     .as_ref()
                     .expect("the form result was just stored")
@@ -314,7 +332,7 @@ impl SourceProcessingSession {
             }
 
             self.frames[frame_index].form_index += 1;
-            if let Some(request) = form.additional_source {
+            if let Some(request) = additional_source {
                 if let Some(additional_source_id) =
                     hook(&mut self.sources, &mut self.acquisition_states, request)?
                 {

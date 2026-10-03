@@ -1,4 +1,8 @@
 use super::{evaluate, evaluate_with_seed};
+use crate::batch_execution::{BatchEnvironment, SourceAcquisitionStates, SourceProcessingSession};
+use crate::source::SourceTexts;
+use crate::source_processor::SourceFormCursor;
+use crate::source_word::AdditionalSourceRequest;
 use crate::static_image::bytecode_6502::BytecodeArtifact;
 use std::ffi::OsStr;
 use std::fs;
@@ -605,6 +609,202 @@ fn build_and_run_with_input(
         );
     }
     Ok(())
+}
+
+#[test]
+#[ignore = "requires ca65, ld65, and sim65; run with --ignored"]
+fn multisource_runtime_sequence_matches_host_reference_and_sim65() {
+    let mut sources = SourceTexts::new();
+    let stdlib_id = crate::cli_source::register_embedded_standard_library(&mut sources);
+    let main_id = sources.register(
+        "PUSH 42\nPUTDEC\nPRINT 1\nUSE \"lib.tbx\"\nCROSS\nPRINT SHARED\nPRINT @VALUES[1]\nPRINT 5\n",
+        "main.tbx",
+    );
+    let mut environment = BatchEnvironment::new().expect("batch environment builds");
+    environment
+        .compile(&sources, stdlib_id)
+        .expect("embedded standard library compiles without runtime execution");
+    let forms = SourceFormCursor::new(sources.view(), main_id).expect("main source tokenizes");
+    let mut session =
+        SourceProcessingSession::with_environment_and_cursor(sources, environment, main_id, forms);
+    let mut host_output = Vec::new();
+    let mut hook = |sources: &mut SourceTexts,
+                    _states: &mut SourceAcquisitionStates,
+                    request: AdditionalSourceRequest| {
+        let (name, text) = match request.specification.as_ref() {
+            "lib.tbx" => (
+                "lib.tbx",
+                "PRINT 2\nPRINT \"B\"\nUSE \"nested.tbx\"\nPRINT 4\nVAR SHARED\nLET SHARED = 7\nDIM @VALUES[1]\nLET @VALUES[1] = 8\nDEF CROSS\nPRINT 6\nEND\n",
+            ),
+            "nested.tbx" => ("nested.tbx", "PRINT 3\n"),
+            other => panic!("unexpected source request: {other}"),
+        };
+        Ok(Some(sources.register(text, name)))
+    };
+    session
+        .run_with_hook(&mut host_output, &mut hook, None)
+        .expect("source graph executes in depth-first order");
+
+    let units = session.runtime_units();
+    let mut owners = units
+        .iter()
+        .map(|unit| unit.instructions())
+        .collect::<Vec<_>>();
+    let entries = units
+        .iter()
+        .map(|unit| unit.entry_location())
+        .collect::<Vec<_>>();
+    owners.push(session.environment.published_code.instruction_view());
+    let primitive_words = super::Fixture::new().primitive_words;
+    let mut reference_output = Vec::new();
+    let mut reference_runtime_output =
+        crate::runtime_output::WriteRuntimeOutput::new(&mut reference_output);
+    let mut random = crate::random::RandomState::seeded(0x5442_582D_4E45_5854);
+    let reference = crate::static_image::test_lower_and_run_sequence(
+        &owners,
+        &entries,
+        units.len(),
+        &session.environment.words,
+        primitive_words,
+        &session.environment.globals,
+        &session.environment.arrays,
+        (&mut reference_runtime_output, &mut random, None),
+    )
+    .expect("composed source sequence runs in ReferenceVm");
+    let expected = b"4212B346785";
+    assert_eq!(host_output, expected);
+    assert_eq!(reference_output, expected);
+    assert!(reference.halted);
+
+    let artifact = crate::static_image::test_lower_and_encode_sequence(
+        &owners,
+        &entries,
+        units.len(),
+        &session.environment.words,
+        primitive_words,
+        &session.environment.globals,
+        &session.environment.arrays,
+    )
+    .expect("composed source sequence encodes");
+    build_and_run(
+        &artifact,
+        None,
+        expected,
+        "50000000",
+        "multisource",
+        "multisource_runtime_sequence_matches_host_reference_and_sim65",
+    )
+    .expect("sim65 output matches host and ReferenceVm");
+}
+
+#[test]
+#[ignore = "requires ca65, ld65, and sim65; run with --ignored"]
+fn multisource_runtime_failure_keeps_prefix_and_stops_later_forms() {
+    let mut sources = SourceTexts::new();
+    let stdlib_id = crate::cli_source::register_embedded_standard_library(&mut sources);
+    let main_id = sources.register(
+        "PRINT \"A\"\nUSE \"lib.tbx\"\nTRY_INPUT\nPRINT \"BAD\"\n",
+        "main.tbx",
+    );
+    let mut environment = BatchEnvironment::new().expect("batch environment builds");
+    environment
+        .compile(&sources, stdlib_id)
+        .expect("embedded standard library compiles");
+    let forms = SourceFormCursor::new(sources.view(), main_id).expect("main source tokenizes");
+    let mut session =
+        SourceProcessingSession::with_environment_and_cursor(sources, environment, main_id, forms);
+    let mut host_output = Vec::new();
+    let mut hook = |sources: &mut SourceTexts,
+                    _states: &mut SourceAcquisitionStates,
+                    request: AdditionalSourceRequest| {
+        assert_eq!(request.specification.as_ref(), "lib.tbx");
+        Ok(Some(sources.register("PRINT \"B\"\n", "lib.tbx")))
+    };
+    let mut host_input = crate::runtime_input::TestInput::strict(std::iter::empty());
+    let error = session
+        .run_with_hook(&mut host_output, &mut hook, Some(&mut host_input))
+        .expect_err("strict input exhaustion fails the source run");
+    assert!(matches!(
+        error,
+        crate::source_processor::SourceProcessorError::Runtime(ref error)
+            if error.is_input_failure()
+    ));
+    assert_eq!(host_output, b"AB");
+
+    // Include a later compiled form in the artifact to prove failure prevents
+    // the runtime sequence from reaching it.
+    let suffix_id = session
+        .sources_mut()
+        .register("PRINT \"BAD\"\n", "after-failure.tbx");
+    let suffix = {
+        let crate::batch_execution::SourceProcessingSession {
+            sources,
+            environment,
+            ..
+        } = &mut session;
+        environment
+            .compile(sources, suffix_id)
+            .expect("later form compiles for the target stop check")
+    };
+    let units = session.runtime_units();
+    let mut owners = units
+        .iter()
+        .map(|unit| unit.instructions())
+        .collect::<Vec<_>>();
+    let entries = units
+        .iter()
+        .map(|unit| unit.entry_location())
+        .chain(std::iter::once(suffix.entry_location()))
+        .collect::<Vec<_>>();
+    owners.push(suffix.instructions());
+    owners.push(session.environment.published_code.instruction_view());
+    let runtime_owner_count = entries.len();
+    let primitive_words = super::Fixture::new().primitive_words;
+    let mut reference_output = Vec::new();
+    let mut reference_runtime_output =
+        crate::runtime_output::WriteRuntimeOutput::new(&mut reference_output);
+    let mut random = crate::random::RandomState::seeded(0x5442_582D_4E45_5854);
+    let mut reference_input = crate::runtime_input::TestInput::strict(std::iter::empty());
+    let result = crate::static_image::test_lower_and_run_sequence(
+        &owners,
+        &entries,
+        runtime_owner_count,
+        &session.environment.words,
+        primitive_words,
+        &session.environment.globals,
+        &session.environment.arrays,
+        (
+            &mut reference_runtime_output,
+            &mut random,
+            Some(&mut reference_input),
+        ),
+    );
+    assert_eq!(reference_output, host_output);
+    assert_eq!(
+        result,
+        Err(crate::static_image::TestReferenceError::InputFailed)
+    );
+
+    let artifact = crate::static_image::test_lower_and_encode_sequence(
+        &owners,
+        &entries,
+        runtime_owner_count,
+        &session.environment.words,
+        primitive_words,
+        &session.environment.globals,
+        &session.environment.arrays,
+    )
+    .expect("failing source sequence encodes");
+    build_and_run_with_input(
+        &artifact,
+        None,
+        b"AB",
+        "10000000",
+        "multisource-failure",
+        "multisource_runtime_failure_keeps_prefix_and_stops_later_forms",
+        (Some((&[], true)), Some(26)),
+    )
+    .expect("sim65 preserves the output prefix and exits before BAD");
 }
 
 #[test]
