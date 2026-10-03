@@ -310,7 +310,12 @@ fn evaluate_strict_input_failure(
     .with_random(&mut fixture.random)
     .with_output(&mut host_runtime_output)
     .with_input(&mut host_input);
-    assert!(run_unit(&unit, context).is_err());
+    let host_error = run_unit(&unit, context).expect_err("strict input exhaustion must fail");
+    assert!(matches!(
+        host_error,
+        crate::source_processor::SourceProcessorError::Runtime(error)
+            if error.is_input_failure()
+    ));
 
     let temporary = unit.instructions();
     let published = fixture.published_code.instruction_view();
@@ -342,8 +347,9 @@ fn evaluate_strict_input_failure(
             Some(&mut reference_input),
         ),
     );
-    assert!(
-        result.is_err(),
+    assert_eq!(
+        result,
+        Err(crate::static_image::TestReferenceError::InputFailed),
         "ReferenceVm must preserve strict input failure"
     );
     (host_output.0, reference_output.0, artifact)

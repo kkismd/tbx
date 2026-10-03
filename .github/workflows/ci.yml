@@ -76,6 +76,8 @@ jobs:
             - run: cargo test -p tbx-next --lib grades_source_matches_sim65_execution -- --ignored
             - run: cargo test -p tbx-next --lib eightqueen_source_matches_sim65_execution -- --ignored
             - run: cargo test -p tbx-next --lib maze_source_matches_sim65_execution -- --ignored
+            - run: cargo test -p tbx-next --lib scripted_try_input_source_matches_host_execution -- --ignored
+            - run: cargo test -p tbx-next --lib strict_scripted_try_input_fails_after_stdout_prefix -- --ignored
 
     clippy:
         name: Workspace / Clippy

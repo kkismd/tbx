@@ -155,11 +155,11 @@ fn wrapper_with_input(
     } else {
         source.push_str(".segment \"CODE\"\n_tbx_before_init:\n_tbx_error_probe:\n    rts\n");
     }
-    source.push_str(".export _tbx_read_byte\n.segment \"BSS\"\n_tbx_input_position: .res 1\n.segment \"CODE\"\n_tbx_read_byte:\n");
     if let Some((bytes, strict)) = input {
         if bytes.len() > u8::MAX as usize {
             return Err("scripted input exceeds 255 bytes".to_owned());
         }
+        source.push_str(".export _tbx_read_byte\n.segment \"BSS\"\n_tbx_input_position: .res 1\n.segment \"CODE\"\n_tbx_read_byte:\n");
         source.push_str("    ldx _tbx_input_position\n    cpx #");
         source.push_str(&bytes.len().to_string());
         source.push_str("\n    bcs _tbx_input_exhausted\n    lda _tbx_input_script,x\n    pha\n    inc _tbx_input_position\n    pla\n    tax\n    lda #0\n    rts\n_tbx_input_exhausted:\n    lda #");
@@ -182,7 +182,9 @@ fn wrapper_with_input(
         }
     } else {
         // Existing generated wrappers report capability failure only if input executes.
-        source.push_str("    lda #2\n    rts\n");
+        source.push_str(
+            ".export _tbx_read_byte\n.segment \"CODE\"\n_tbx_read_byte:\n    lda #2\n    rts\n",
+        );
     }
     Ok(source)
 }
@@ -370,7 +372,7 @@ fn build_and_run(
         cycle_limit,
         sample,
         test_name,
-        (None, false),
+        (None, None),
     )
 }
 
@@ -381,9 +383,10 @@ fn build_and_run_with_input(
     cycle_limit: &str,
     sample: &str,
     test_name: &str,
-    input_and_expect_failure: (Option<(&[u8], bool)>, bool),
+    input_and_expected_exit_code: (Option<(&[u8], bool)>, Option<i32>),
 ) -> Result<(), String> {
-    let (input, expect_failure) = input_and_expect_failure;
+    let (input, expected_exit_code) = input_and_expected_exit_code;
+    let expect_failure = expected_exit_code.is_some();
     let crate_root = Path::new(env!("CARGO_MANIFEST_DIR"));
     let temp = TempArtifacts::new(crate_root)?;
     let program = temp.0.join("program.bin");
@@ -491,7 +494,15 @@ fn build_and_run_with_input(
         &temp.0,
         "sim65 execute",
     )?;
-    if target.status.success() == expect_failure {
+    if let Some(expected_exit_code) = expected_exit_code {
+        if target.status.code() != Some(expected_exit_code) {
+            return Err(format_nonzero_status(
+                "sim65 exit status or cycle limit",
+                target.status.code(),
+                &target.stderr,
+            ));
+        }
+    } else if !target.status.success() {
         return Err(format_nonzero_status(
             "sim65 exit status or cycle limit",
             target.status.code(),
@@ -559,11 +570,15 @@ fn build_and_run_with_input(
         let text_descriptor_bytes = artifact
             .text_descriptor_bytes()
             .ok_or_else(|| "text descriptor size overflows".to_owned())?;
-        if linked_bss_delta != array_storage_bytes {
+        let input_adapter_cursor_bytes = usize::from(input.is_some());
+        let expected_linked_bss_delta = array_storage_bytes + input_adapter_cursor_bytes;
+        if linked_bss_delta != expected_linked_bss_delta {
             return Err(format!(
-                "linked BSS delta {linked_bss_delta} differs from array storage {array_storage_bytes}"
+                "linked BSS delta {linked_bss_delta} differs from expected wrapper storage {expected_linked_bss_delta} (arrays={array_storage_bytes}, input cursor={input_adapter_cursor_bytes})"
             ));
         }
+        let input_adapter_script_bytes = input.map(|(bytes, _)| bytes.len().max(1)).unwrap_or(0);
+        let input_adapter_bytes = input_adapter_script_bytes + input_adapter_cursor_bytes;
         let main_start = label_value(&labels, "__MAIN_START__")?;
         let main_size = label_value(&labels, "__MAIN_SIZE__")?;
         let stack_boundary = main_start + main_size;
@@ -583,7 +598,7 @@ fn build_and_run_with_input(
             .collect::<Vec<_>>()
             .join(" ");
         eprintln!(
-            "sim65 resources: sample={sample} revision={} ca65=\"{ca65_version}\" ld65=\"{ld65_version}\" sim65=\"{sim65_version}\" bytecode={} VM[{segment_sizes}] array_storage_bytes={array_storage_bytes} array_descriptor_bytes={} text_storage_bytes={text_storage_bytes} text_descriptor_bytes={text_descriptor_bytes} linked_bss_delta={linked_bss_delta} ZEROPAGE={zp_start:#06x}..={zp_end:#06x}({zp_size}) BSS={bss_start:#06x}..={bss_end:#06x}({bss_size}) __MAIN_START__={main_start:#06x} __MAIN_SIZE__={main_size} software_stack_boundary={stack_boundary:#06x} bss_to_stack_headroom={headroom} cycles={cycles} command=\"TBX_MEASURE_SIM65_RESOURCES=1 cargo test -p tbx-next --lib {test_name} -- --ignored --nocapture\"",
+            "sim65 resources: sample={sample} revision={} ca65=\"{ca65_version}\" ld65=\"{ld65_version}\" sim65=\"{sim65_version}\" bytecode={} VM[{segment_sizes}] array_storage_bytes={array_storage_bytes} array_descriptor_bytes={} text_storage_bytes={text_storage_bytes} text_descriptor_bytes={text_descriptor_bytes} input_adapter_script_bytes={input_adapter_script_bytes} input_adapter_cursor_bytes={input_adapter_cursor_bytes} input_adapter_total_bytes={input_adapter_bytes} linked_bss_delta={linked_bss_delta} ZEROPAGE={zp_start:#06x}..={zp_end:#06x}({zp_size}) BSS={bss_start:#06x}..={bss_end:#06x}({bss_size}) __MAIN_START__={main_start:#06x} __MAIN_SIZE__={main_size} software_stack_boundary={stack_boundary:#06x} bss_to_stack_headroom={headroom} cycles={cycles} command=\"TBX_MEASURE_SIM65_RESOURCES=1 cargo test -p tbx-next --lib {test_name} -- --ignored --nocapture\"",
             git_revision(crate_root)?,
             artifact.code().len(),
             artifact.array_descriptor_bytes().ok_or_else(|| "array descriptor size overflows".to_owned())?
@@ -640,7 +655,7 @@ fn scripted_try_input_source_matches_host_execution() {
         "10000000",
         "scripted-input",
         "scripted_try_input_source_matches_host_execution",
-        (Some((&bytes, false)), false),
+        (Some((&bytes, false)), None),
     )
     .unwrap_or_else(|error| panic!("{error}"));
 }
@@ -659,7 +674,7 @@ fn strict_scripted_try_input_fails_after_stdout_prefix() {
         "10000000",
         "strict-input",
         "strict_scripted_try_input_fails_after_stdout_prefix",
-        (Some((&[], true)), true),
+        (Some((&[], true)), Some(26)),
     )
     .unwrap_or_else(|error| panic!("{error}"));
 }
@@ -793,9 +808,17 @@ fn wrapper_seed_is_little_endian_and_unseeded_hook_stays_empty() {
 
 #[test]
 fn wrapper_input_adapter_maps_script_exhaustion_to_eof_or_failure() {
-    let artifact = evaluate("TRY_INPUT\n", "input-wrapper.tbx", false, true)
-        .artifact
-        .expect("encode input source");
+    let input_lines = ["12"];
+    let artifact = super::evaluate_with_seed_and_input(
+        "TRY_INPUT\n",
+        "input-wrapper.tbx",
+        false,
+        true,
+        0x5442_582D_4E45_5854,
+        Some(&input_lines),
+    )
+    .artifact
+    .expect("encode input source with input-aware reference run");
     let eof = wrapper_with_input(&artifact, None, Some((b"12\n", false)))
         .expect("generate EOF input wrapper");
     assert!(eof.contains("_tbx_input_script:\n    .byte 49, 50, 10"));
