@@ -525,6 +525,148 @@ pub(crate) fn test_lower_and_encode(
         .map(|(_, artifact)| artifact)
 }
 
+/// Lowers the ordered runtime forms collected by the test-only source session
+/// into one image. Intermediate form terminators continue at the next form;
+/// the final form retains the ordinary Halt instruction.
+#[cfg(test)]
+pub(crate) fn test_lower_and_encode_sequence(
+    owners: &[InstructionView<'_>],
+    entries: &[CodeLocation],
+    runtime_owner_count: usize,
+    words: &PublishedWords,
+    primitive_words: (
+        OperatorWords,
+        WordId,
+        [WordId; 3],
+        [WordId; 3],
+        WordId,
+        WordId,
+    ),
+    globals: &GlobalVariables,
+    arrays: &GlobalArrays,
+) -> Result<bytecode_6502::BytecodeArtifact, bytecode_6502::EncodeError> {
+    let image = lower_sequence_image(
+        owners,
+        entries,
+        runtime_owner_count,
+        words,
+        primitive_words,
+        globals,
+        arrays,
+    );
+    bytecode_6502::encode(&image)
+}
+
+#[cfg(test)]
+fn lower_sequence_image(
+    owners: &[InstructionView<'_>],
+    entries: &[CodeLocation],
+    runtime_owner_count: usize,
+    words: &PublishedWords,
+    primitive_words: (
+        OperatorWords,
+        WordId,
+        [WordId; 3],
+        [WordId; 3],
+        WordId,
+        WordId,
+    ),
+    globals: &GlobalVariables,
+    arrays: &GlobalArrays,
+) -> StaticImage {
+    assert_eq!(entries.len(), runtime_owner_count);
+    assert!(runtime_owner_count > 0);
+    let mut image = lower(
+        owners,
+        entries[0],
+        words,
+        PrimitiveWordIds {
+            operators: primitive_words.0,
+            abs: primitive_words.1,
+            stack: primitive_words.2,
+            output: primitive_words.3,
+            input: primitive_words.4,
+            rnd: primitive_words.5,
+        },
+        globals,
+        arrays,
+    )
+    .expect("test source sequence lowers to a static image");
+    let mut starts = Vec::with_capacity(runtime_owner_count);
+    let mut offset = 0usize;
+    for (owner, entry) in owners.iter().zip(entries.iter()) {
+        if starts.len() == runtime_owner_count {
+            break;
+        }
+        starts.push(offset + entry.address().as_index());
+        offset += owner.len();
+    }
+    for index in 0..runtime_owner_count - 1 {
+        let start = owners[..index]
+            .iter()
+            .map(|owner| owner.len())
+            .sum::<usize>();
+        let end = start + owners[index].len();
+        let continuation = CodePosition(starts[index + 1]);
+        for instruction in &mut image.code[start..end] {
+            if let LogicalInstruction::Halt = instruction {
+                *instruction = LogicalInstruction::Jump(continuation);
+            }
+        }
+    }
+    image
+}
+
+#[cfg(test)]
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn test_lower_and_run_sequence<'a>(
+    owners: &[InstructionView<'_>],
+    entries: &[CodeLocation],
+    runtime_owner_count: usize,
+    words: &PublishedWords,
+    primitive_words: (
+        OperatorWords,
+        WordId,
+        [WordId; 3],
+        [WordId; 3],
+        WordId,
+        WordId,
+    ),
+    globals: &GlobalVariables,
+    arrays: &GlobalArrays,
+    runtime: (
+        &'a mut dyn crate::runtime_output::RuntimeOutput,
+        &'a mut crate::random::RandomState,
+        Option<&'a mut dyn crate::runtime_input::RuntimeInput>,
+    ),
+) -> Result<TestReferenceResult, TestReferenceError> {
+    let (output, random, input) = runtime;
+    let image = lower_sequence_image(
+        owners,
+        entries,
+        runtime_owner_count,
+        words,
+        primitive_words,
+        globals,
+        arrays,
+    );
+    let statistics = image.statistics();
+    let mut vm = reference_vm::ReferenceVm::new(image, CodePosition(0))
+        .expect("lowered source sequence has a valid entry");
+    let outcome = vm.run(Some(output), input, Some(random)).map_err(|error| {
+        if matches!(error.kind, reference_vm::RuntimeErrorKind::InputFailed) {
+            TestReferenceError::InputFailed
+        } else {
+            TestReferenceError::Other
+        }
+    })?;
+    Ok(TestReferenceResult {
+        halted: outcome == reference_vm::RunOutcome::Halted,
+        data_stack: vm.data_stack().to_vec(),
+        statistics,
+    })
+}
+
 #[cfg(test)]
 pub(crate) fn test_lower_and_encode_with_statistics(
     owners: &[InstructionView<'_>],
