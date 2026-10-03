@@ -443,7 +443,14 @@ pub(crate) struct TestReferenceResult {
 }
 
 #[cfg(test)]
-pub(crate) fn test_lower_and_run<W: std::io::Write>(
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum TestReferenceError {
+    InputFailed,
+    Other,
+}
+
+#[cfg(test)]
+pub(crate) fn test_lower_and_run<'a>(
     owners: &[InstructionView<'_>],
     entry: CodeLocation,
     words: &PublishedWords,
@@ -457,9 +464,13 @@ pub(crate) fn test_lower_and_run<W: std::io::Write>(
     ),
     globals: &GlobalVariables,
     arrays: &GlobalArrays,
-    runtime: (&mut W, &mut crate::random::RandomState),
-) -> Result<TestReferenceResult, ()> {
-    let (writer, random) = runtime;
+    runtime: (
+        &'a mut dyn crate::runtime_output::RuntimeOutput,
+        &'a mut crate::random::RandomState,
+        Option<&'a mut dyn crate::runtime_input::RuntimeInput>,
+    ),
+) -> Result<TestReferenceResult, TestReferenceError> {
+    let (output, random, input) = runtime;
     let image = lower(
         owners,
         entry,
@@ -475,15 +486,18 @@ pub(crate) fn test_lower_and_run<W: std::io::Write>(
         globals,
         arrays,
     )
-    .map_err(|_| ())?;
+    .map_err(|_| TestReferenceError::Other)?;
     let statistics = image.statistics();
     let entry = image.entry;
     let mut vm = reference_vm::ReferenceVm::new(image, entry)
         .expect("lowered temporary unit has a valid entry");
-    let mut output = crate::runtime_output::WriteRuntimeOutput::new(writer);
-    let outcome = vm
-        .run(Some(&mut output), None, Some(random))
-        .expect("test source executes");
+    let outcome = vm.run(Some(output), input, Some(random)).map_err(|error| {
+        if matches!(error.kind, reference_vm::RuntimeErrorKind::InputFailed) {
+            TestReferenceError::InputFailed
+        } else {
+            TestReferenceError::Other
+        }
+    })?;
     Ok(TestReferenceResult {
         halted: outcome == reference_vm::RunOutcome::Halted,
         data_stack: vm.data_stack().to_vec(),

@@ -2414,6 +2414,19 @@ impl RuntimeError {
     pub(crate) const fn source_span(self) -> Result<Option<SourceSpan>, SourceMappingLookupError> {
         self.source_span
     }
+
+    #[cfg(test)]
+    pub(crate) fn is_input_failure(&self) -> bool {
+        matches!(
+            self.vm.kind(),
+            crate::vm::VmErrorKind::PrimitiveFailed {
+                source: crate::primitive::PrimitiveError::InputFailed {
+                    source: crate::runtime_input::RuntimeInputError::Failed
+                },
+                ..
+            }
+        )
+    }
 }
 
 impl CompileError {
