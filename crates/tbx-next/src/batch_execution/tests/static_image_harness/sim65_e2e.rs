@@ -681,6 +681,48 @@ fn strict_scripted_try_input_fails_after_stdout_prefix() {
 
 #[test]
 #[ignore = "requires ca65, ld65, and sim65; run with --ignored"]
+fn guess_source_matches_sim65_execution() {
+    let lines = ["invalid", "0", "101", "1"];
+    let result = super::evaluate_with_seed_and_strict_input(
+        include_str!("../../../../../../docs/next/examples/guess.tbx"),
+        "guess.tbx",
+        true,
+        true,
+        42,
+        &lines,
+    );
+    let artifact = result.artifact.expect("encode guess source");
+    let host_output = result.host_output.expect("host executes guess source");
+    let output = String::from_utf8(host_output.clone()).expect("guess output is UTF-8");
+    let mut search_from = 0;
+    for marker in [
+        "Please enter a number.",
+        "Too low.",
+        "Too high.",
+        "Correct!",
+    ] {
+        let relative = output[search_from..]
+            .find(marker)
+            .unwrap_or_else(|| panic!("host output is missing {marker:?}: {output:?}"));
+        search_from += relative + marker.len();
+    }
+
+    let mut input_bytes = lines.join("\n").into_bytes();
+    input_bytes.push(b'\n');
+    build_and_run_with_input(
+        &artifact,
+        Some(42),
+        &host_output,
+        "10000000",
+        "guess",
+        "guess_source_matches_sim65_execution",
+        (Some((&input_bytes, true)), None),
+    )
+    .unwrap_or_else(|error| panic!("{error}"));
+}
+
+#[test]
+#[ignore = "requires ca65, ld65, and sim65; run with --ignored"]
 fn mandelbrot_source_matches_sim65_execution() {
     let result = evaluate(
         include_str!("../../../../../../docs/next/examples/mandelbrot.tbx"),

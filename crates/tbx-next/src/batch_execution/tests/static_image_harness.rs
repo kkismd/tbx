@@ -170,6 +170,45 @@ fn evaluate_with_seed_and_input(
     seed: u64,
     input_lines: Option<&[&str]>,
 ) -> Evaluation {
+    evaluate_with_seed_and_input_policy(
+        source,
+        display_name,
+        compare_execution,
+        encode_artifact,
+        seed,
+        input_lines,
+        false,
+    )
+}
+
+fn evaluate_with_seed_and_strict_input(
+    source: &str,
+    display_name: &str,
+    compare_execution: bool,
+    encode_artifact: bool,
+    seed: u64,
+    input_lines: &[&str],
+) -> Evaluation {
+    evaluate_with_seed_and_input_policy(
+        source,
+        display_name,
+        compare_execution,
+        encode_artifact,
+        seed,
+        Some(input_lines),
+        true,
+    )
+}
+
+fn evaluate_with_seed_and_input_policy(
+    source: &str,
+    display_name: &str,
+    compare_execution: bool,
+    encode_artifact: bool,
+    seed: u64,
+    input_lines: Option<&[&str]>,
+    strict_input: bool,
+) -> Evaluation {
     let mut sources = SourceTexts::new();
     let stdlib_id = register_embedded_standard_library(&mut sources);
     let program_id = sources.register(source, display_name);
@@ -183,8 +222,17 @@ fn evaluate_with_seed_and_input(
         let mut output = Output::default();
         let result = {
             let mut runtime_output = WriteRuntimeOutput::new(&mut output);
-            let mut input = input_lines
-                .map(|lines| TestInput::new(lines.iter().map(|line| Ok(Some((*line).to_owned())))));
+            let mut input = input_lines.map(|lines| {
+                let scripted = lines
+                    .iter()
+                    .map(|line| Ok(Some((*line).to_owned())))
+                    .collect::<Vec<_>>();
+                if strict_input {
+                    TestInput::strict(scripted)
+                } else {
+                    TestInput::new(scripted)
+                }
+            });
             let mut context = SourceExecutionContext::with_runtime_environment(
                 &fixture.bindings,
                 fixture.source_words.lookup(),
@@ -234,8 +282,17 @@ fn evaluate_with_seed_and_input(
     let mut poc_output = Output::default();
     let mut poc_runtime_output = WriteRuntimeOutput::new(&mut poc_output);
     let mut poc_random = RandomState::seeded(seed);
-    let mut reference_input = input_lines
-        .map(|lines| TestInput::new(lines.iter().map(|line| Ok(Some((*line).to_owned())))));
+    let mut reference_input = input_lines.map(|lines| {
+        let scripted = lines
+            .iter()
+            .map(|line| Ok(Some((*line).to_owned())))
+            .collect::<Vec<_>>();
+        if strict_input {
+            TestInput::strict(scripted)
+        } else {
+            TestInput::new(scripted)
+        }
+    });
     let poc = test_lower_and_run(
         &[temporary, published],
         entry,
