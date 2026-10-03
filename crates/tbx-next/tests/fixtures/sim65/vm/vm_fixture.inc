@@ -50,6 +50,12 @@ _tbx_code_end:
 .macro STORE_ARRAY slot
     .byte $13, slot
 .endmacro
+.macro LOAD_SCRATCH slot
+    .byte $14, slot
+.endmacro
+.macro STORE_SCRATCH slot
+    .byte $15, slot
+.endmacro
 .macro CALL target
     .byte $20
     .word target - _tbx_code_start

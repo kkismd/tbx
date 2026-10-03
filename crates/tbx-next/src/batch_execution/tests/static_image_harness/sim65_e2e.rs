@@ -23,6 +23,7 @@ const MINIMAL_ARRAY_SOURCE: &str = "DIM @VALUES[3]\nPRINT @VALUES[2]\nCR\nLET @V
 const MINIMAL_FIXED_TEXT_SOURCE: &str = "PRINT \"A\"\n";
 const SEEDED_RND_SOURCE: &str = "PUTDEC RND(10)\nCR\nPUTDEC RND(97)\nCR\nPUTDEC RND(100)\nCR\nPUTDEC RND(32767)\nCR\nPUTDEC RND(10)\nCR\n";
 const SCRIPTED_INPUT_SOURCE: &str = "VAR VALUE\nPRINT \"?\"\nIF_LET VALUE = TRY_INPUT()\nPUTDEC VALUE\nCR\nLET_ELSE\nPUTDEC 0\nCR\nENDLET\nPRINT \"?\"\nIF_LET VALUE = TRY_INPUT()\nPUTDEC VALUE\nCR\nLET_ELSE\nPUTDEC 0\nCR\nENDLET\nPRINT \"?\"\nIF_LET VALUE = TRY_INPUT()\nPUTDEC VALUE\nCR\nLET_ELSE\nPUTDEC 0\nCR\nENDLET\nPRINT \"?\"\nIF_LET VALUE = TRY_INPUT()\nPUTDEC VALUE\nCR\nLET_ELSE\nPUTDEC 0\nCR\nENDLET\n";
+const SCRATCH_SOURCE: &str = "DEF CHILD\nPRINT I\nCR\nLET I = -32768\nPRINT I\nCR\nEND\nDEF CHECK_SCRATCH\nPRINT I\nCR\nPRINT J\nCR\nPRINT K\nCR\nPRINT L\nCR\nPRINT M\nCR\nPRINT N\nCR\nPRINT X\nCR\nPRINT Y\nCR\nLET I = -32767\nLET J = -123\nLET K = -1\nLET L = 0\nLET M = 1\nLET N = 123\nLET X = 32767\nLET Y = 42\nPRINT I\nCR\nPRINT J\nCR\nPRINT K\nCR\nPRINT L\nCR\nPRINT M\nCR\nPRINT N\nCR\nPRINT X\nCR\nPRINT Y\nCR\nCHILD\nPRINT I\nCR\nEND\nCHECK_SCRATCH\nCHECK_SCRATCH\n";
 
 struct TempArtifacts(PathBuf);
 
@@ -699,6 +700,26 @@ fn multisource_runtime_sequence_matches_host_reference_and_sim65() {
 
 #[test]
 #[ignore = "requires ca65, ld65, and sim65; run with --ignored"]
+fn scratch_slots_match_host_reference_and_sim65() {
+    let result = evaluate(SCRATCH_SOURCE, "scratch.tbx", true, true);
+    let artifact = result.artifact.expect("encode scratch source");
+    let host_output = result.host_output.expect("host executes scratch source");
+    let invocation_output =
+        b"0\n0\n0\n0\n0\n0\n0\n0\n-32767\n-123\n-1\n0\n1\n123\n32767\n42\n0\n-32768\n-32767\n";
+    assert_eq!(host_output, invocation_output.repeat(2));
+    build_and_run(
+        &artifact,
+        None,
+        &host_output,
+        PRIME_CYCLE_LIMIT,
+        "scratch",
+        "scratch_slots_match_host_reference_and_sim65",
+    )
+    .unwrap_or_else(|error| panic!("{error}"));
+}
+
+#[test]
+#[ignore = "requires ca65, ld65, and sim65; run with --ignored"]
 fn sttr1_all_sources_encode_and_measure_sim65_resources() {
     let crate_root = Path::new(env!("CARGO_MANIFEST_DIR"));
     let main_path = crate_root.join("../../docs/next/examples/sttr1/main.tbx");
@@ -801,29 +822,8 @@ fn sttr1_all_sources_encode_and_measure_sim65_resources() {
         super::Fixture::new().primitive_words,
         &session.environment.globals,
         &session.environment.arrays,
-    );
-    let artifact = match artifact {
-        Ok(artifact) => artifact,
-        Err(error)
-            if error.starts_with("UnsupportedInstruction(")
-                && error.contains(": StoreScratch(N);") =>
-        {
-            eprintln!(
-                "STTR1 artifact blocker: {error}; revision={}; command=\"TBX_MEASURE_SIM65_RESOURCES=1 cargo test -p tbx-next --lib sttr1_all_sources_encode_and_measure_sim65_resources -- --ignored --nocapture\"",
-                git_revision(crate_root).unwrap_or_else(|_| "unavailable".to_owned())
-            );
-            if std::env::var_os("TBX_MEASURE_SIM65_RESOURCES").is_some() {
-                eprintln!(
-                    "STTR1 tool versions: ca65=\"{}\" ld65=\"{}\" sim65=\"{}\"",
-                    tool_version("ca65").expect("ca65 version is available"),
-                    tool_version("ld65").expect("ld65 version is available"),
-                    tool_version("sim65").expect("sim65 version is available")
-                );
-            }
-            return;
-        }
-        Err(error) => panic!("all STTR1 definitions lower and encode: {error}"),
-    };
+    )
+    .unwrap_or_else(|error| panic!("all STTR1 definitions lower and encode: {error}"));
     assert_eq!(artifact.global_slot_count(), 40);
     assert_eq!(artifact.array_count(), 9);
     assert_eq!(

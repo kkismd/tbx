@@ -222,6 +222,10 @@ dispatch:
     jeq op_load_array
     cmp #$13
     jeq op_store_array
+    cmp #$14
+    jeq op_load_scratch
+    cmp #$15
+    jeq op_store_scratch
     cmp #$20
     jeq op_call
     cmp #$21
@@ -731,6 +735,91 @@ op_store:
     asl
     tax
     ldy #0
+    lda tbx_data_stack,x
+    sta (ptr),y
+    inx
+    iny
+    lda tbx_data_stack,x
+    sta (ptr),y
+    dec tbx_data_depth
+    jmp commit_cursor
+
+; The operand selects one of eight i16 cells after the frame control header.
+; Validate all instruction and stack conditions before changing architectural state.
+scratch_pointer:
+    jsr read_operand
+    cmp #8
+    jcs scratch_slot_bad
+    asl
+    clc
+    adc #4
+    sta count
+    clc
+    rts
+scratch_slot_bad:
+    sec
+    rts
+
+; Scratch frame lookup runs only after the handler has validated its inputs.
+scratch_frame_pointer:
+    lda tbx_call_depth
+    sec
+    sbc #1
+    asl
+    tax
+    jmp frame_at_x
+
+op_load_scratch:
+    lda #2
+    jsr need_bytes
+    jcs fail_bytecode
+    jsr scratch_pointer
+    jcs fail_scratch_slot
+    jsr validate_next
+    jcs fail_bytecode
+    lda tbx_call_depth
+    jeq fail_call_underflow
+    lda tbx_data_depth
+    cmp #64
+    jcs fail_overflow
+    jsr scratch_frame_pointer
+    ldy count
+    lda (ptr),y
+    sta left
+    iny
+    lda (ptr),y
+    sta left+1
+    ldx tbx_data_depth
+    txa
+    asl
+    tax
+    lda left
+    sta tbx_data_stack,x
+    inx
+    lda left+1
+    sta tbx_data_stack,x
+    inc tbx_data_depth
+    jmp commit_cursor
+
+op_store_scratch:
+    lda #2
+    jsr need_bytes
+    jcs fail_bytecode
+    jsr scratch_pointer
+    jcs fail_scratch_slot
+    jsr validate_next
+    jcs fail_bytecode
+    lda tbx_call_depth
+    jeq fail_call_underflow
+    lda tbx_data_depth
+    jeq fail_underflow
+    jsr scratch_frame_pointer
+    lda tbx_data_depth
+    sec
+    sbc #1
+    asl
+    tax
+    ldy count
     lda tbx_data_stack,x
     sta (ptr),y
     inx
@@ -2184,6 +2273,9 @@ fail_call_overflow:
     jne fail
 fail_global:
     lda #16
+    jne fail
+fail_scratch_slot:
+    lda #27
     jne fail
 fail_arithmetic:
     lda #17
