@@ -777,6 +777,7 @@ fn sttr1_all_sources_encode_and_measure_sim65_resources() {
 
     assert_eq!(session.environment.globals.len(), 40);
     assert_eq!(session.environment.arrays.len(), 9);
+    assert_eq!(session.environment.arrays.total_cells(), 227);
     let units = session.runtime_units();
     let mut owners = units
         .iter()
