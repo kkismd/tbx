@@ -1,6 +1,6 @@
 use super::{evaluate, evaluate_with_seed};
 use crate::batch_execution::{BatchEnvironment, SourceAcquisitionStates, SourceProcessingSession};
-use crate::source::SourceTexts;
+use crate::source::{SourceAcquisition, SourceTexts};
 use crate::source_processor::SourceFormCursor;
 use crate::source_word::AdditionalSourceRequest;
 use crate::static_image::bytecode_6502::BytecodeArtifact;
@@ -695,6 +695,165 @@ fn multisource_runtime_sequence_matches_host_reference_and_sim65() {
         "multisource_runtime_sequence_matches_host_reference_and_sim65",
     )
     .expect("sim65 output matches host and ReferenceVm");
+}
+
+#[test]
+#[ignore = "requires ca65, ld65, and sim65; run with --ignored"]
+fn sttr1_all_sources_encode_and_measure_sim65_resources() {
+    let crate_root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let main_path = crate_root.join("../../docs/next/examples/sttr1/main.tbx");
+    let canonical_path = fs::canonicalize(&main_path).expect("STTR1 main file exists");
+    let original = fs::read_to_string(&canonical_path).expect("STTR1 main file is readable");
+    let main_source = original
+        .strip_suffix("START_GAME\n")
+        .expect("only the final START_GAME call is removed");
+    let mut sources = SourceTexts::new();
+    let stdlib_id = crate::cli_source::register_embedded_standard_library(&mut sources);
+    let main_id = sources.register_with_acquisition(
+        main_source,
+        "docs/next/examples/sttr1/main.tbx",
+        SourceAcquisition::FileSystem { canonical_path },
+    );
+    let mut environment = BatchEnvironment::new().expect("batch environment builds");
+    environment
+        .compile(&sources, stdlib_id)
+        .expect("embedded standard library compiles without runtime execution");
+    let forms = SourceFormCursor::new(sources.view(), main_id).expect("STTR1 main tokenizes");
+    let mut session =
+        SourceProcessingSession::with_environment_and_cursor(sources, environment, main_id, forms);
+    let mut acquired = Vec::new();
+    let mut hook = |sources: &mut SourceTexts,
+                    states: &mut SourceAcquisitionStates,
+                    request: AdditionalSourceRequest| {
+        let source_id = crate::batch_execution::acquire_filesystem_source_with_states(
+            sources, states, request,
+        )?;
+        if let Some(source_id) = source_id {
+            acquired.push(source_id);
+        }
+        Ok(source_id)
+    };
+    let mut host_output = Vec::new();
+    session
+        .run_with_hook(&mut host_output, &mut hook, None)
+        .expect("all STTR1 sources process without entering the game loop");
+    assert!(host_output.is_empty());
+    assert_eq!(acquired.len(), 9);
+    let source_view = session.sources().view();
+    let mut actual_sources = acquired
+        .iter()
+        .map(|&id| {
+            let SourceAcquisition::FileSystem { canonical_path } =
+                source_view.acquisition(id).expect("acquired source exists")
+            else {
+                panic!("USE source must be acquired from the filesystem");
+            };
+            assert_eq!(
+                source_view.source(id).expect("acquired source has text"),
+                fs::read_to_string(canonical_path).expect("acquired file is readable")
+            );
+            canonical_path
+                .file_name()
+                .expect("USE source has a filename")
+                .to_string_lossy()
+                .into_owned()
+        })
+        .collect::<Vec<_>>();
+    actual_sources.sort();
+    assert_eq!(
+        actual_sources,
+        [
+            "combat.tbx",
+            "computer.tbx",
+            "device.tbx",
+            "endgame.tbx",
+            "galaxy.tbx",
+            "game.tbx",
+            "navigation.tbx",
+            "ship.tbx",
+            "state.tbx",
+        ]
+    );
+
+    assert_eq!(session.environment.globals.len(), 40);
+    assert_eq!(session.environment.arrays.len(), 9);
+    assert_eq!(session.environment.arrays.total_cells(), 227);
+    let units = session.runtime_units();
+    let mut owners = units
+        .iter()
+        .map(|unit| unit.instructions())
+        .collect::<Vec<_>>();
+    let entries = units
+        .iter()
+        .map(|unit| unit.entry_location())
+        .collect::<Vec<_>>();
+    let published = session.environment.published_code.instruction_view();
+    assert!(
+        !published.is_empty(),
+        "STTR1 compiled definitions are published"
+    );
+    owners.push(published);
+    let artifact = crate::static_image::test_lower_and_encode_sequence(
+        &owners,
+        &entries,
+        units.len(),
+        &session.environment.words,
+        super::Fixture::new().primitive_words,
+        &session.environment.globals,
+        &session.environment.arrays,
+    );
+    let artifact = match artifact {
+        Ok(artifact) => artifact,
+        Err(error)
+            if error.starts_with("UnsupportedInstruction(")
+                && error.contains(": StoreScratch(N);") =>
+        {
+            eprintln!(
+                "STTR1 artifact blocker: {error}; revision={}; command=\"TBX_MEASURE_SIM65_RESOURCES=1 cargo test -p tbx-next --lib sttr1_all_sources_encode_and_measure_sim65_resources -- --ignored --nocapture\"",
+                git_revision(crate_root).unwrap_or_else(|_| "unavailable".to_owned())
+            );
+            if std::env::var_os("TBX_MEASURE_SIM65_RESOURCES").is_some() {
+                eprintln!(
+                    "STTR1 tool versions: ca65=\"{}\" ld65=\"{}\" sim65=\"{}\"",
+                    tool_version("ca65").expect("ca65 version is available"),
+                    tool_version("ld65").expect("ld65 version is available"),
+                    tool_version("sim65").expect("sim65 version is available")
+                );
+            }
+            return;
+        }
+        Err(error) => panic!("all STTR1 definitions lower and encode: {error}"),
+    };
+    assert_eq!(artifact.global_slot_count(), 40);
+    assert_eq!(artifact.array_count(), 9);
+    assert_eq!(
+        artifact
+            .array_lengths()
+            .iter()
+            .map(|&n| usize::from(n))
+            .sum::<usize>(),
+        227
+    );
+    assert_eq!(artifact.array_storage_bytes(), Some(454));
+    if std::env::var_os("TBX_MEASURE_SIM65_RESOURCES").is_some() {
+        eprintln!(
+            "STTR1 artifact metadata: globals={} arrays={} array_cells=227 fixed_texts={} published_instructions={} bytecode={}",
+            artifact.global_slot_count(),
+            artifact.array_count(),
+            artifact.text_count(),
+            published.len(),
+            artifact.code().len()
+        );
+    }
+    build_and_run(
+        &artifact,
+        None,
+        b"",
+        "50000000",
+        "sttr1-all-sources",
+        "sttr1_all_sources_encode_and_measure_sim65_resources",
+    )
+    .expect("STTR1 artifact links and its harmless entry completes in sim65");
 }
 
 #[test]

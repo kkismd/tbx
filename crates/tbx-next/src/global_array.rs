@@ -71,6 +71,11 @@ impl GlobalArrays {
     pub(crate) fn len(&self) -> usize {
         self.arrays.len()
     }
+
+    #[cfg(test)]
+    pub(crate) fn total_cells(&self) -> usize {
+        self.arrays.iter().map(Vec::len).sum()
+    }
 }
 
 #[derive(Debug, Clone, Copy)]

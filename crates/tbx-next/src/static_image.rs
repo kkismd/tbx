@@ -544,7 +544,7 @@ pub(crate) fn test_lower_and_encode_sequence(
     ),
     globals: &GlobalVariables,
     arrays: &GlobalArrays,
-) -> Result<bytecode_6502::BytecodeArtifact, bytecode_6502::EncodeError> {
+) -> Result<bytecode_6502::BytecodeArtifact, String> {
     let image = lower_sequence_image(
         owners,
         entries,
@@ -554,7 +554,25 @@ pub(crate) fn test_lower_and_encode_sequence(
         globals,
         arrays,
     );
-    bytecode_6502::encode(&image)
+    bytecode_6502::encode(&image).map_err(|error| {
+        let detail = match error {
+            bytecode_6502::EncodeError::UnsupportedInstruction(index)
+            | bytecode_6502::EncodeError::UnsupportedPrimitive(index) => {
+                format!(" at logical instruction {index}: {:?}", image.code[index])
+            }
+            _ => String::new(),
+        };
+        format!(
+            "{error:?}{detail}; logical_instructions={} fixed_texts={} text_storage_bytes={} text_descriptor_bytes={} globals={} arrays={} array_cells={}",
+            image.code.len(),
+            image.texts.len(),
+            image.texts.iter().map(String::len).sum::<usize>(),
+            image.texts.len() * 4,
+            image.global_count,
+            image.array_lengths.len(),
+            image.array_lengths.iter().sum::<usize>()
+        )
+    })
 }
 
 #[cfg(test)]
