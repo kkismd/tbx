@@ -1,4 +1,4 @@
-use super::{CodePosition, LogicalInstruction, PrimitiveOp, StaticImage};
+use super::{CodePosition, LogicalInstruction, PrimitiveOp, ScratchSlot, StaticImage};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct BytecodeArtifact {
@@ -203,6 +203,16 @@ pub(crate) fn encode(image: &StaticImage) -> Result<BytecodeArtifact, EncodeErro
                 });
                 code.push(slot);
             }
+            LogicalInstruction::LoadScratch(slot) | LogicalInstruction::StoreScratch(slot) => {
+                code.push(
+                    if matches!(instruction, LogicalInstruction::LoadScratch(_)) {
+                        0x14
+                    } else {
+                        0x15
+                    },
+                );
+                code.push(scratch_slot_operand(*slot));
+            }
             LogicalInstruction::WriteText(slot) => {
                 let slot = text_slot_operand(slot.0, image.texts.len())?;
                 code.push(0x63);
@@ -257,6 +267,7 @@ fn encoded_len(
     match instruction {
         LogicalInstruction::PushI16(_) => Ok(3),
         LogicalInstruction::LoadGlobal(_) | LogicalInstruction::StoreGlobal(_) => Ok(2),
+        LogicalInstruction::LoadScratch(_) | LogicalInstruction::StoreScratch(_) => Ok(2),
         LogicalInstruction::LoadArray(slot) | LogicalInstruction::StoreArray(slot) => {
             if slot.0 >= image.array_lengths.len() {
                 Err(EncodeError::ArraySlotOutOfRange(slot.0))
@@ -283,6 +294,19 @@ fn encoded_len(
         | LogicalInstruction::Return
         | LogicalInstruction::Halt => Ok(1),
         _ => Err(EncodeError::UnsupportedInstruction(index)),
+    }
+}
+
+fn scratch_slot_operand(slot: ScratchSlot) -> u8 {
+    match slot {
+        ScratchSlot::I => 0,
+        ScratchSlot::J => 1,
+        ScratchSlot::K => 2,
+        ScratchSlot::L => 3,
+        ScratchSlot::M => 4,
+        ScratchSlot::N => 5,
+        ScratchSlot::X => 6,
+        ScratchSlot::Y => 7,
     }
 }
 
@@ -774,18 +798,53 @@ mod tests {
     }
 
     #[test]
-    fn rejects_unsupported_logical_instructions_and_primitives() {
-        assert_eq!(
-            encode(&image(vec![LogicalInstruction::LoadScratch(
-                super::super::ScratchSlot::I
-            )]),),
-            Err(EncodeError::UnsupportedInstruction(0))
-        );
+    fn rejects_unsupported_logical_primitives() {
         assert_eq!(
             encode(&image(vec![LogicalInstruction::CallPrimitive(
                 PrimitiveOp::Not
             )]),),
             Err(EncodeError::UnsupportedPrimitive(0))
+        );
+    }
+
+    #[test]
+    fn scratch_slots_have_explicit_operands_and_two_byte_width() {
+        use super::super::ScratchSlot;
+        let slots = [
+            ScratchSlot::I,
+            ScratchSlot::J,
+            ScratchSlot::K,
+            ScratchSlot::L,
+            ScratchSlot::M,
+            ScratchSlot::N,
+            ScratchSlot::X,
+            ScratchSlot::Y,
+        ];
+        let mut code = Vec::new();
+        let mut expected = Vec::new();
+        for (operand, slot) in slots.into_iter().enumerate() {
+            code.push(LogicalInstruction::LoadScratch(slot));
+            code.push(LogicalInstruction::StoreScratch(slot));
+            expected.extend_from_slice(&[0x14, operand as u8, 0x15, operand as u8]);
+        }
+        assert_eq!(encode(&image(code)).unwrap().code(), expected);
+    }
+
+    #[test]
+    fn scratch_width_is_included_in_branch_and_call_targets() {
+        use super::super::ScratchSlot;
+        let artifact = encode(&image(vec![
+            LogicalInstruction::Jump(CodePosition(4)),
+            LogicalInstruction::LoadScratch(ScratchSlot::N),
+            LogicalInstruction::StoreScratch(ScratchSlot::N),
+            LogicalInstruction::JumpIfZero(CodePosition(1)),
+            LogicalInstruction::CallCode(CodePosition(2)),
+            LogicalInstruction::Return,
+        ]))
+        .unwrap();
+        assert_eq!(
+            artifact.code(),
+            &[0x30, 0x0a, 0x00, 0x14, 5, 0x15, 5, 0x31, 0x03, 0x00, 0x20, 0x05, 0x00, 0x22]
         );
     }
 
