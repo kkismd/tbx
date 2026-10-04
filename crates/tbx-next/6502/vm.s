@@ -9,6 +9,10 @@
 .ifdef TBX_TEST_INPUT_PROBE
 .import _tbx_input_consumed_probe
 .endif
+.ifdef TBX_TEST_HIGH_WATER_PROBE
+.import _tbx_high_water_probe
+.export tbx_call_high_water, tbx_data_high_water, tbx_control_high_water
+.endif
 .import _tbx_array_count, _tbx_array_descriptors
 .import _tbx_text_count, _tbx_text_descriptors
 .import _tbx_read_byte
@@ -66,6 +70,11 @@ input_seen: .res 1
 input_overflow: .res 1
 input_digit_value: .res 1
 input_accumulator: .res 2
+.ifdef TBX_TEST_HIGH_WATER_PROBE
+tbx_call_high_water: .res 1
+tbx_data_high_water: .res 1
+tbx_control_high_water: .res 1
+.endif
 vm_bss_end:
 
 .segment "RODATA"
@@ -97,6 +106,11 @@ _main:
     sta tbx_control_depth
     sta tbx_call_depth
     sta tbx_last_error
+.ifdef TBX_TEST_HIGH_WATER_PROBE
+    sta tbx_call_high_water
+    sta tbx_data_high_water
+    sta tbx_control_high_water
+.endif
     ; The private fixture may provide a seed before VM startup. Seed zero uses
     ; the ADR #1889 normalization value, matching the host RandomState.
     lda tbx_rng_state
@@ -193,6 +207,27 @@ init_entry:
     jsr commit_target
 
 dispatch:
+.ifdef TBX_TEST_HIGH_WATER_PROBE
+    ; Observe only depths committed before returning to dispatch.
+    lda tbx_call_high_water
+    cmp tbx_call_depth
+    bcs :+
+    lda tbx_call_depth
+    sta tbx_call_high_water
+:
+    lda tbx_data_high_water
+    cmp tbx_data_depth
+    bcs :+
+    lda tbx_data_depth
+    sta tbx_data_high_water
+:
+    lda tbx_control_high_water
+    cmp tbx_control_depth
+    bcs :+
+    lda tbx_control_depth
+    sta tbx_control_high_water
+:
+.endif
     ; PC always names the current opcode. Cursor is speculative.
     lda tbx_pc+1
     cmp tbx_base+1
@@ -300,6 +335,9 @@ op_halt:
     jne fail_invariant
     jsr _tbx_input_consumed_probe
     jcs fail_input
+.endif
+.ifdef TBX_TEST_HIGH_WATER_PROBE
+    jsr _tbx_high_water_probe
 .endif
     lda #0
     rts
