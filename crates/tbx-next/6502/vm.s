@@ -6,6 +6,9 @@
 
 .import _tbx_code_start, _tbx_code_end, _tbx_entry_offset, _tbx_global_count
 .import _tbx_before_init, _tbx_error_probe, _putchar
+.ifdef TBX_TEST_INPUT_PROBE
+.import _tbx_input_consumed_probe
+.endif
 .import _tbx_array_count, _tbx_array_descriptors
 .import _tbx_text_count, _tbx_text_descriptors
 .import _tbx_read_byte
@@ -291,6 +294,13 @@ dispatch:
     jmp fail_opcode
 
 op_halt:
+.ifdef TBX_TEST_INPUT_PROBE
+    ; Test builds reject a leftover data stack or scripted input at normal halt.
+    lda tbx_data_depth
+    jne fail_invariant
+    jsr _tbx_input_consumed_probe
+    jcs fail_input
+.endif
     lda #0
     rts
 
