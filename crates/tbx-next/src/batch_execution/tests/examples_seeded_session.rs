@@ -21,7 +21,7 @@ fn example_path(name: &str) -> std::path::PathBuf {
         .join(name)
 }
 
-fn sttr1_sources_with_standard_library(
+pub(super) fn sttr1_sources_with_standard_library(
     standard_library: &str,
     source: &str,
 ) -> (
@@ -58,6 +58,48 @@ PRINT_LONG_SCAN
         crate::source::SourceAcquisition::FileSystem { canonical_path },
     );
     (sources, standard_library_id, source_id)
+}
+
+pub(super) const STTR1_VICTORY_SEED: u64 = 30;
+pub(super) const STTR1_VICTORY_INPUT: [&str; 2] = ["4", "10"];
+pub(super) const STTR1_VICTORY_INPUT_BYTES: &[u8] = b"4\n10\n";
+
+pub(super) fn sttr1_victory_source() -> String {
+    std::fs::read_to_string(example_path("sttr1/main.tbx"))
+        .expect("STTR1 entry point should be readable")
+        .replacen(
+            "START_GAME",
+            r#"INIT_MISSION
+LET GAME_RESULT = 0
+LET ENT_QX = 1
+LET ENT_QY = 1
+LET ENT_SX = 4
+LET ENT_SY = 4
+LET TEST_INDEX = 1
+WHILE TEST_INDEX <= 64
+  LET @SECTOR[TEST_INDEX] = 0
+  LET TEST_INDEX = TEST_INDEX + 1
+ENDWH
+LET @SECTOR[28] = 1
+LET @SECTOR[29] = 2
+LET KLINGONS_HERE = 1
+LET KLINGONS_LEFT = 1
+LET KLINGONS_INITIAL = 1
+LET @KLINGON_X[1] = 5
+LET @KLINGON_Y[1] = 4
+LET @KLINGON_E[1] = 200
+LET @KLINGON_E[2] = 0
+LET @KLINGON_E[3] = 0
+LET TORPEDOES = 1
+LET @DAMAGE[5] = 0
+LET DOCKED = 0
+LET STARDATE = START_STARDATE + 1
+GAME_LOOP
+PRINT "VICTORY_GAME_LOOP_STATE ", KLINGONS_LEFT, " ", GAME_RESULT
+CR
+"#,
+            1,
+        )
 }
 
 fn output_values(output: &str, label: &str) -> Vec<i16> {
