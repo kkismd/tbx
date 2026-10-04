@@ -85,6 +85,10 @@ impl TestInput {
             exhausted: TestInputExhaustion::Failure,
         }
     }
+
+    pub(crate) fn is_fully_consumed(&self) -> bool {
+        self.next == self.lines.len()
+    }
 }
 
 #[cfg(test)]

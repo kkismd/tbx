@@ -98,44 +98,10 @@ GAME_LOOP
 
 #[test]
 fn sttr1_game_loop_reaches_victory_after_destroying_the_last_klingon() {
-    let source = std::fs::read_to_string(example_path("sttr1/main.tbx"))
-        .expect("STTR1 entry point should be readable")
-        .replacen(
-            "START_GAME",
-            r#"INIT_MISSION
-LET GAME_RESULT = 0
-LET ENT_QX = 1
-LET ENT_QY = 1
-LET ENT_SX = 4
-LET ENT_SY = 4
-LET TEST_INDEX = 1
-WHILE TEST_INDEX <= 64
-  LET @SECTOR[TEST_INDEX] = 0
-  LET TEST_INDEX = TEST_INDEX + 1
-ENDWH
-LET @SECTOR[28] = 1
-LET @SECTOR[29] = 2
-LET KLINGONS_HERE = 1
-LET KLINGONS_LEFT = 1
-LET KLINGONS_INITIAL = 1
-LET @KLINGON_X[1] = 5
-LET @KLINGON_Y[1] = 4
-LET @KLINGON_E[1] = 200
-LET @KLINGON_E[2] = 0
-LET @KLINGON_E[3] = 0
-LET TORPEDOES = 1
-LET @DAMAGE[5] = 0
-LET DOCKED = 0
-LET STARDATE = START_STARDATE + 1
-GAME_LOOP
-PRINT "VICTORY_GAME_LOOP_STATE ", KLINGONS_LEFT, " ", GAME_RESULT
-CR
-"#,
-            1,
-        );
+    let source = sttr1_victory_source();
     let (sources, standard_library_id, source_id) =
         sttr1_sources_with_standard_library(STDLIB_SOURCE, &source);
-    let mut input = TestInput::strict([Ok(Some("4".to_owned())), Ok(Some("10".to_owned()))]);
+    let mut input = TestInput::strict(STTR1_VICTORY_INPUT.map(|line| Ok(Some(line.to_owned()))));
     let mut writer = RecordingWriter::default();
 
     let result = success(execute_registered_sources_with_filesystem_and_seed(
@@ -144,7 +110,7 @@ CR
         source_id,
         &mut writer,
         Some(&mut input),
-        30,
+        STTR1_VICTORY_SEED,
     ));
 
     let output = writer.text();
@@ -157,6 +123,7 @@ CR
     assert!(output.contains("EFFICIENCY 1000"));
     assert_eq!(output_values(output, "VICTORY_GAME_LOOP_STATE "), [0, 1]);
     assert_eq!(output.matches("COMMAND (0-7):").count(), 1);
+    assert!(input.is_fully_consumed());
     assert_eq!(result.data_stack(), []);
 }
 

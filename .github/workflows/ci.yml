@@ -82,6 +82,7 @@ jobs:
             - run: cargo test -p tbx-next --lib multisource_runtime_sequence_matches_host_reference_and_sim65 -- --ignored
             - run: cargo test -p tbx-next --lib scratch_slots_match_host_reference_and_sim65 -- --ignored
             - run: cargo test -p tbx-next --lib sttr1_all_sources_encode_and_measure_sim65_resources -- --ignored
+            - run: cargo test -p tbx-next --lib sttr1_victory_game_loop_matches_host_reference_and_sim65 -- --ignored
             - run: cargo test -p tbx-next --lib multisource_runtime_failure_keeps_prefix_and_stops_later_forms -- --ignored
 
     clippy:

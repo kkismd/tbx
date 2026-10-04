@@ -62,6 +62,15 @@ fn wrapper_with_input(
     seed: Option<u64>,
     input: Option<(&[u8], bool)>,
 ) -> Result<String, String> {
+    wrapper_with_input_probe(artifact, seed, input, false)
+}
+
+fn wrapper_with_input_probe(
+    artifact: &BytecodeArtifact,
+    seed: Option<u64>,
+    input: Option<(&[u8], bool)>,
+    check_input_consumed: bool,
+) -> Result<String, String> {
     let count = u16::try_from(artifact.array_count())
         .map_err(|_| "array count exceeds wrapper metadata".to_owned())?;
     let text_count = u16::try_from(artifact.text_count())
@@ -190,6 +199,15 @@ fn wrapper_with_input(
         source.push_str(
             ".export _tbx_read_byte\n.segment \"CODE\"\n_tbx_read_byte:\n    lda #2\n    rts\n",
         );
+    }
+    if check_input_consumed {
+        let bytes = input
+            .ok_or_else(|| "input probe requires a script".to_owned())?
+            .0;
+        source.push_str(&format!(
+            ".export _tbx_input_consumed_probe\n.segment \"CODE\"\n_tbx_input_consumed_probe:\n    lda _tbx_input_position\n    cmp #{}\n    beq :+\n    sec\n    rts\n:\n    clc\n    rts\n",
+            bytes.len()
+        ));
     }
     Ok(source)
 }
@@ -390,6 +408,29 @@ fn build_and_run_with_input(
     test_name: &str,
     input_and_expected_exit_code: (Option<(&[u8], bool)>, Option<i32>),
 ) -> Result<(), String> {
+    build_and_run_with_input_probe(
+        artifact,
+        seed,
+        expected_stdout,
+        cycle_limit,
+        sample,
+        test_name,
+        input_and_expected_exit_code,
+        false,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn build_and_run_with_input_probe(
+    artifact: &BytecodeArtifact,
+    seed: Option<u64>,
+    expected_stdout: &[u8],
+    cycle_limit: &str,
+    sample: &str,
+    test_name: &str,
+    input_and_expected_exit_code: (Option<(&[u8], bool)>, Option<i32>),
+    check_input_consumed: bool,
+) -> Result<(), String> {
     let (input, expected_exit_code) = input_and_expected_exit_code;
     let expect_failure = expected_exit_code.is_some();
     let crate_root = Path::new(env!("CARGO_MANIFEST_DIR"));
@@ -405,7 +446,11 @@ fn build_and_run_with_input(
 
     fs::write(&program, artifact.code())
         .map_err(|error| format!("write temporary artifact {}: {error}", program.display()))?;
-    fs::write(&wrapper_source, wrapper_with_input(artifact, seed, input)?).map_err(|error| {
+    fs::write(
+        &wrapper_source,
+        wrapper_with_input_probe(artifact, seed, input, check_input_consumed)?,
+    )
+    .map_err(|error| {
         format!(
             "write temporary artifact {}: {error}",
             wrapper_source.display()
@@ -416,18 +461,17 @@ fn build_and_run_with_input(
         (&runtime_source, &runtime_object, "assemble runtime"),
         (&wrapper_source, &wrapper_object, "assemble wrapper"),
     ] {
-        let output = run_tool(
-            "ca65",
-            &[
-                OsStr::new("-t"),
-                OsStr::new("sim6502"),
-                source.as_os_str(),
-                OsStr::new("-o"),
-                object.as_os_str(),
-            ],
-            &temp.0,
-            stage,
-        )?;
+        let mut args = vec![
+            OsStr::new("-t"),
+            OsStr::new("sim6502"),
+            source.as_os_str(),
+            OsStr::new("-o"),
+            object.as_os_str(),
+        ];
+        if check_input_consumed && source == &runtime_source {
+            args.extend([OsStr::new("-D"), OsStr::new("TBX_TEST_INPUT_PROBE")]);
+        }
+        let output = run_tool("ca65", &args, &temp.0, stage)?;
         require_success(&output, stage)?;
     }
 
@@ -854,6 +898,152 @@ fn sttr1_all_sources_encode_and_measure_sim65_resources() {
         "sttr1_all_sources_encode_and_measure_sim65_resources",
     )
     .expect("STTR1 artifact links and its harmless entry completes in sim65");
+}
+
+#[test]
+#[ignore = "requires ca65, ld65, and sim65; run with --ignored"]
+fn sttr1_victory_game_loop_matches_host_reference_and_sim65() {
+    use crate::batch_execution::tests::examples_seeded_session::{
+        sttr1_sources_with_standard_library, sttr1_victory_source, STTR1_VICTORY_INPUT,
+        STTR1_VICTORY_INPUT_BYTES, STTR1_VICTORY_SEED,
+    };
+    use crate::runtime_input::TestInput;
+
+    assert_eq!(
+        STTR1_VICTORY_INPUT
+            .iter()
+            .map(|line| format!("{line}\n"))
+            .collect::<String>()
+            .as_bytes(),
+        STTR1_VICTORY_INPUT_BYTES
+    );
+    let (sources, stdlib_id, main_id) = sttr1_sources_with_standard_library(
+        crate::cli_source::STDLIB_SOURCE,
+        &sttr1_victory_source(),
+    );
+    let mut environment = BatchEnvironment::new_with_seed(STTR1_VICTORY_SEED)
+        .expect("seeded batch environment builds");
+    environment
+        .compile(&sources, stdlib_id)
+        .expect("embedded standard library compiles");
+    let forms = SourceFormCursor::new(sources.view(), main_id).expect("STTR1 main tokenizes");
+    let mut session =
+        SourceProcessingSession::with_environment_and_cursor(sources, environment, main_id, forms);
+    let mut acquired = Vec::new();
+    let mut hook = |sources: &mut SourceTexts,
+                    states: &mut SourceAcquisitionStates,
+                    request: AdditionalSourceRequest| {
+        let source_id = crate::batch_execution::acquire_filesystem_source_with_states(
+            sources, states, request,
+        )?;
+        if let Some(source_id) = source_id {
+            acquired.push(source_id);
+        }
+        Ok(source_id)
+    };
+    let mut host_input = TestInput::strict(STTR1_VICTORY_INPUT.map(|line| Ok(Some(line.into()))));
+    let mut host_output = Vec::new();
+    let host = session
+        .run_with_hook(&mut host_output, &mut hook, Some(&mut host_input))
+        .expect("host reaches victory")
+        .expect("STTR1 has an entry result");
+    assert!(host_input.is_fully_consumed());
+    assert_eq!(acquired.len(), 9);
+    for source_id in acquired {
+        let SourceAcquisition::FileSystem { canonical_path } = session
+            .sources()
+            .view()
+            .acquisition(source_id)
+            .expect("acquired source exists")
+        else {
+            panic!("USE source must come from the filesystem");
+        };
+        assert_eq!(
+            session
+                .sources()
+                .view()
+                .source(source_id)
+                .expect("source text"),
+            fs::read_to_string(canonical_path).expect("filesystem source is readable")
+        );
+    }
+    assert!(host.data_stack().is_empty());
+    let host_text = std::str::from_utf8(&host_output).expect("STTR1 output is UTF-8");
+    for expected in [
+        "PHOTON TORPEDO FIRED",
+        "PHOTON TORPEDO HIT KLINGON AT SECTOR 5,4",
+        "KLINGON AT SECTOR 5,4 DESTROYED",
+        "MISSION SUMMARY",
+        "RESULT VICTORY",
+        "ELAPSED 1",
+        "EFFICIENCY 1000",
+        "VICTORY_GAME_LOOP_STATE 0 1",
+    ] {
+        assert!(
+            host_text.contains(expected),
+            "missing victory output: {expected}"
+        );
+    }
+    assert_eq!(host_text.matches("COMMAND (0-7):").count(), 1);
+
+    let units = session.runtime_units();
+    let mut owners = units
+        .iter()
+        .map(|unit| unit.instructions())
+        .collect::<Vec<_>>();
+    let entries = units
+        .iter()
+        .map(|unit| unit.entry_location())
+        .collect::<Vec<_>>();
+    owners.push(session.environment.published_code.instruction_view());
+    let primitive_words = super::Fixture::new().primitive_words;
+    let mut reference_output = Vec::new();
+    let mut reference_runtime_output =
+        crate::runtime_output::WriteRuntimeOutput::new(&mut reference_output);
+    let mut reference_random = crate::random::RandomState::seeded(STTR1_VICTORY_SEED);
+    let mut reference_input =
+        TestInput::strict(STTR1_VICTORY_INPUT.map(|line| Ok(Some(line.into()))));
+    let reference = crate::static_image::test_lower_and_run_sequence(
+        &owners,
+        &entries,
+        units.len(),
+        &session.environment.words,
+        primitive_words,
+        &session.environment.globals,
+        &session.environment.arrays,
+        (
+            &mut reference_runtime_output,
+            &mut reference_random,
+            Some(&mut reference_input),
+        ),
+    )
+    .expect("ReferenceVm reaches victory");
+    assert!(reference.halted);
+    assert!(reference_input.is_fully_consumed());
+    assert!(reference.data_stack.is_empty());
+    assert_eq!(reference_output, host_output);
+
+    let artifact = crate::static_image::test_lower_and_encode_sequence(
+        &owners,
+        &entries,
+        units.len(),
+        &session.environment.words,
+        primitive_words,
+        &session.environment.globals,
+        &session.environment.arrays,
+    )
+    .expect("STTR1 victory source graph encodes");
+    build_and_run_with_input_probe(
+        &artifact,
+        Some(STTR1_VICTORY_SEED),
+        &host_output,
+        "50000000",
+        "sttr1-victory",
+        "sttr1_victory_game_loop_matches_host_reference_and_sim65",
+        (Some((STTR1_VICTORY_INPUT_BYTES, true)), None),
+        true,
+    )
+    .expect("sim65 reaches the same victory output");
 }
 
 #[test]
