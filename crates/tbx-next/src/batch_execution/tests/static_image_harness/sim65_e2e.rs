@@ -24,6 +24,141 @@ const MINIMAL_FIXED_TEXT_SOURCE: &str = "PRINT \"A\"\n";
 const SEEDED_RND_SOURCE: &str = "PUTDEC RND(10)\nCR\nPUTDEC RND(97)\nCR\nPUTDEC RND(100)\nCR\nPUTDEC RND(32767)\nCR\nPUTDEC RND(10)\nCR\n";
 const SCRIPTED_INPUT_SOURCE: &str = "VAR VALUE\nPRINT \"?\"\nIF_LET VALUE = TRY_INPUT()\nPUTDEC VALUE\nCR\nLET_ELSE\nPUTDEC 0\nCR\nENDLET\nPRINT \"?\"\nIF_LET VALUE = TRY_INPUT()\nPUTDEC VALUE\nCR\nLET_ELSE\nPUTDEC 0\nCR\nENDLET\nPRINT \"?\"\nIF_LET VALUE = TRY_INPUT()\nPUTDEC VALUE\nCR\nLET_ELSE\nPUTDEC 0\nCR\nENDLET\nPRINT \"?\"\nIF_LET VALUE = TRY_INPUT()\nPUTDEC VALUE\nCR\nLET_ELSE\nPUTDEC 0\nCR\nENDLET\n";
 const SCRATCH_SOURCE: &str = "DEF CHILD\nPRINT I\nCR\nLET I = -32768\nPRINT I\nCR\nEND\nDEF CHECK_SCRATCH\nPRINT I\nCR\nPRINT J\nCR\nPRINT K\nCR\nPRINT L\nCR\nPRINT M\nCR\nPRINT N\nCR\nPRINT X\nCR\nPRINT Y\nCR\nLET I = -32767\nLET J = -123\nLET K = -1\nLET L = 0\nLET M = 1\nLET N = 123\nLET X = 32767\nLET Y = 42\nPRINT I\nCR\nPRINT J\nCR\nPRINT K\nCR\nPRINT L\nCR\nPRINT M\nCR\nPRINT N\nCR\nPRINT X\nCR\nPRINT Y\nCR\nCHILD\nPRINT I\nCR\nEND\nCHECK_SCRATCH\nCHECK_SCRATCH\n";
+const HIGH_WATER_MARKER: &[u8; 4] = b"\0TBX";
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct StackPeaks {
+    call: u8,
+    data: u8,
+    control: u8,
+}
+
+fn split_high_water_stdout<'a>(
+    stdout: &'a [u8],
+    expected: &[u8],
+) -> Result<(&'a [u8], StackPeaks), String> {
+    let (program_stdout, suffix) = stdout
+        .split_at_checked(expected.len())
+        .ok_or_else(|| "sim65 stdout is shorter than host output".to_owned())?;
+    require_matching_stdout(program_stdout, expected)?;
+    let bytes: [u8; 7] = suffix
+        .try_into()
+        .map_err(|_| format!("invalid high-water suffix length: {}", suffix.len()))?;
+    if &bytes[..4] != HIGH_WATER_MARKER {
+        return Err(format!("invalid high-water marker: {:?}", &bytes[..4]));
+    }
+    Ok((
+        program_stdout,
+        StackPeaks {
+            call: bytes[4],
+            data: bytes[5],
+            control: bytes[6],
+        },
+    ))
+}
+
+#[test]
+fn high_water_suffix_is_separate_from_program_stdout() {
+    assert_eq!(
+        split_high_water_stdout(b"ok\0TBX\x03\x05\x02", b"ok").unwrap(),
+        (
+            b"ok".as_slice(),
+            StackPeaks {
+                call: 3,
+                data: 5,
+                control: 2
+            }
+        )
+    );
+    assert!(split_high_water_stdout(b"other\0TBX\x03\x05\x02", b"ok").is_err());
+    assert!(split_high_water_stdout(b"ok\0TBY\x03\x05\x02", b"ok").is_err());
+    assert!(split_high_water_stdout(b"ok\0TBX\x03\x05", b"ok").is_err());
+}
+
+#[test]
+#[ignore = "requires ca65, ld65, and sim65; run with --ignored"]
+fn high_water_fixtures_measure_committed_stack_peaks() {
+    for (name, source, stdout, expected) in [
+        (
+            "data",
+            "PUSH 1\nPUSH 2\nDROP\nPUSH 3\nDROP\nDROP\n",
+            b"".as_slice(),
+            StackPeaks {
+                call: 0,
+                data: 2,
+                control: 0,
+            },
+        ),
+        (
+            "call",
+            "DEF INNER\nPUSH 2\nDROP\nEND\nDEF OUTER\nPUSH 1\nINNER\nDROP\nEND\nOUTER\n",
+            b"",
+            StackPeaks {
+                call: 2,
+                data: 2,
+                control: 0,
+            },
+        ),
+        (
+            "control",
+            "SELECT 1\nCASE 1\nSELECT 2\nCASE 2\nPRINT \"X\"\nENDSEL\nENDSEL\n",
+            b"X",
+            StackPeaks {
+                call: 0,
+                data: 2,
+                control: 2,
+            },
+        ),
+    ] {
+        let artifact = evaluate(source, &format!("high-water-{name}.tbx"), false, true)
+            .artifact
+            .expect("high-water fixture encodes");
+        let actual = build_and_run_with_probes(
+            &artifact,
+            None,
+            stdout,
+            PRIME_CYCLE_LIMIT,
+            name,
+            "high_water_fixtures_measure_committed_stack_peaks",
+            (None, None),
+            false,
+            true,
+        )
+        .expect("high-water fixture runs")
+        .expect("high-water probe is enabled");
+        assert_eq!(actual, expected, "fixture {name}");
+    }
+}
+
+#[test]
+#[ignore = "requires ca65, ld65, and sim65; run with --ignored"]
+fn failed_push_does_not_increase_high_water() {
+    let source = "PUSH 1\n".repeat(65);
+    let artifact = evaluate(&source, "high-water-overflow.tbx", false, true)
+        .artifact
+        .expect("overflow fixture encodes");
+    let peaks = build_and_run_with_probes(
+        &artifact,
+        None,
+        b"",
+        PRIME_CYCLE_LIMIT,
+        "overflow",
+        "failed_push_does_not_increase_high_water",
+        (None, Some(13)),
+        false,
+        true,
+    )
+    .expect("overflow exits with its VM error code")
+    .expect("error probe reports committed peaks");
+    assert_eq!(
+        peaks,
+        StackPeaks {
+            call: 0,
+            data: 64,
+            control: 0
+        }
+    );
+}
 
 struct TempArtifacts(PathBuf);
 
@@ -70,6 +205,16 @@ fn wrapper_with_input_probe(
     seed: Option<u64>,
     input: Option<(&[u8], bool)>,
     check_input_consumed: bool,
+) -> Result<String, String> {
+    wrapper_with_probes(artifact, seed, input, check_input_consumed, false)
+}
+
+fn wrapper_with_probes(
+    artifact: &BytecodeArtifact,
+    seed: Option<u64>,
+    input: Option<(&[u8], bool)>,
+    check_input_consumed: bool,
+    high_water: bool,
 ) -> Result<String, String> {
     let count = u16::try_from(artifact.array_count())
         .map_err(|_| "array count exceeds wrapper metadata".to_owned())?;
@@ -165,10 +310,19 @@ fn wrapper_with_input_probe(
                 "    lda #${byte:02X}\n    sta tbx_rng_state+{index}\n"
             ));
         }
-        source.push_str("    rts\n_tbx_error_probe:\n    rts\n");
+        source.push_str("    rts\n_tbx_error_probe:\n");
     } else {
-        source.push_str(".segment \"CODE\"\n_tbx_before_init:\n_tbx_error_probe:\n    rts\n");
+        source.push_str(".segment \"CODE\"\n_tbx_before_init:\n");
+        if high_water {
+            source.push_str("    rts\n");
+        }
+        source.push_str("_tbx_error_probe:\n");
     }
+    source.push_str(if high_water {
+        "    jmp _tbx_high_water_probe\n"
+    } else {
+        "    rts\n"
+    });
     if let Some((bytes, strict)) = input {
         if bytes.len() > u8::MAX as usize {
             return Err("scripted input exceeds 255 bytes".to_owned());
@@ -208,6 +362,23 @@ fn wrapper_with_input_probe(
             ".export _tbx_input_consumed_probe\n.segment \"CODE\"\n_tbx_input_consumed_probe:\n    lda _tbx_input_position\n    cmp #{}\n    beq :+\n    sec\n    rts\n:\n    clc\n    rts\n",
             bytes.len()
         ));
+    }
+    if high_water {
+        source.push_str(".import tbx_call_high_water, tbx_data_high_water, tbx_control_high_water\n.import _putchar\n.segment \"CODE\"\n_tbx_high_water_probe:\n");
+        for byte in HIGH_WATER_MARKER {
+            source.push_str(&format!(
+                "    lda #${byte:02X}\n    ldx #0\n    jsr _putchar\n"
+            ));
+        }
+        for symbol in [
+            "tbx_call_high_water",
+            "tbx_data_high_water",
+            "tbx_control_high_water",
+        ] {
+            source.push_str(&format!("    lda {symbol}\n    ldx #0\n    jsr _putchar\n"));
+        }
+        source.push_str("    rts\n");
+        source.push_str(".export _tbx_high_water_probe\n");
     }
     Ok(source)
 }
@@ -431,6 +602,32 @@ fn build_and_run_with_input_probe(
     input_and_expected_exit_code: (Option<(&[u8], bool)>, Option<i32>),
     check_input_consumed: bool,
 ) -> Result<(), String> {
+    build_and_run_with_probes(
+        artifact,
+        seed,
+        expected_stdout,
+        cycle_limit,
+        sample,
+        test_name,
+        input_and_expected_exit_code,
+        check_input_consumed,
+        false,
+    )
+    .map(|_| ())
+}
+
+#[allow(clippy::too_many_arguments)]
+fn build_and_run_with_probes(
+    artifact: &BytecodeArtifact,
+    seed: Option<u64>,
+    expected_stdout: &[u8],
+    cycle_limit: &str,
+    sample: &str,
+    test_name: &str,
+    input_and_expected_exit_code: (Option<(&[u8], bool)>, Option<i32>),
+    check_input_consumed: bool,
+    high_water: bool,
+) -> Result<Option<StackPeaks>, String> {
     let (input, expected_exit_code) = input_and_expected_exit_code;
     let expect_failure = expected_exit_code.is_some();
     let crate_root = Path::new(env!("CARGO_MANIFEST_DIR"));
@@ -448,7 +645,7 @@ fn build_and_run_with_input_probe(
         .map_err(|error| format!("write temporary artifact {}: {error}", program.display()))?;
     fs::write(
         &wrapper_source,
-        wrapper_with_input_probe(artifact, seed, input, check_input_consumed)?,
+        wrapper_with_probes(artifact, seed, input, check_input_consumed, high_water)?,
     )
     .map_err(|error| {
         format!(
@@ -470,6 +667,9 @@ fn build_and_run_with_input_probe(
         ];
         if check_input_consumed && source == &runtime_source {
             args.extend([OsStr::new("-D"), OsStr::new("TBX_TEST_INPUT_PROBE")]);
+        }
+        if high_water && source == &runtime_source {
+            args.extend([OsStr::new("-D"), OsStr::new("TBX_TEST_HIGH_WATER_PROBE")]);
         }
         let output = run_tool("ca65", &args, &temp.0, stage)?;
         require_success(&output, stage)?;
@@ -515,12 +715,26 @@ fn build_and_run_with_input_probe(
                 .map(|(_, size)| *size)
                 .unwrap_or(0)
         };
-        if size("ZEROPAGE") != 31 || size("BSS") != 1054 {
+        if size("ZEROPAGE") != 31 || size("BSS") != 1054 + usize::from(high_water) * 3 {
             return Err(format!(
                 "unexpected VM RAM segment sizes: ZEROPAGE={} BSS={}",
                 size("ZEROPAGE"),
                 size("BSS")
             ));
+        }
+        let expected_code = match (check_input_consumed, high_water) {
+            (false, false) => Some(4834),
+            (true, false) => Some(4849),
+            (true, true) => Some(4897),
+            (false, true) => None,
+        };
+        if let Some(expected_code) = expected_code {
+            if size("CODE") != expected_code {
+                return Err(format!(
+                    "unexpected VM CODE size: {} (expected {expected_code})",
+                    size("CODE")
+                ));
+            }
         }
         measurement = Some((
             segments,
@@ -558,10 +772,15 @@ fn build_and_run_with_input_probe(
             &target.stderr,
         ));
     }
-    require_matching_stdout(&target.stdout, expected_stdout)?;
+    let peaks = if high_water {
+        Some(split_high_water_stdout(&target.stdout, expected_stdout)?.1)
+    } else {
+        require_matching_stdout(&target.stdout, expected_stdout)?;
+        None
+    };
     if !expect_failure && std::env::var_os("TBX_SHOW_SIM65_STDOUT").is_some() {
         std::io::stdout()
-            .write_all(&target.stdout)
+            .write_all(expected_stdout)
             .map_err(|error| format!("write sim65 stdout: {error}"))?;
         let measurement = run_tool(
             "sim65",
@@ -577,7 +796,7 @@ fn build_and_run_with_input_probe(
         require_success(&measurement, "sim65 cycle measurement")?;
         let report = measurement
             .stdout
-            .strip_prefix(expected_stdout)
+            .strip_prefix(target.stdout.as_slice())
             .ok_or_else(|| "sim65 cycle measurement changed program stdout".to_owned())?;
         eprintln!(
             "sim65 cycle report: {}",
@@ -599,7 +818,7 @@ fn build_and_run_with_input_probe(
             "sim65 cycle measurement",
         )?;
         require_success(&output, "sim65 cycle measurement")?;
-        let cycles = cycle_count(&output.stdout, expected_stdout)?;
+        let cycles = cycle_count(&output.stdout, &target.stdout)?;
         let (zp_start, zp_end, zp_size) = linked_segment(&map, "ZEROPAGE")?;
         let (bss_start, bss_end, bss_size) = linked_segment(&map, "BSS")?;
         let vm_bss_size = segments
@@ -647,13 +866,13 @@ fn build_and_run_with_input_probe(
             .collect::<Vec<_>>()
             .join(" ");
         eprintln!(
-            "sim65 resources: sample={sample} revision={} ca65=\"{ca65_version}\" ld65=\"{ld65_version}\" sim65=\"{sim65_version}\" bytecode={} VM[{segment_sizes}] array_storage_bytes={array_storage_bytes} array_descriptor_bytes={} text_storage_bytes={text_storage_bytes} text_descriptor_bytes={text_descriptor_bytes} input_adapter_script_bytes={input_adapter_script_bytes} input_adapter_cursor_bytes={input_adapter_cursor_bytes} input_adapter_total_bytes={input_adapter_bytes} linked_bss_delta={linked_bss_delta} ZEROPAGE={zp_start:#06x}..={zp_end:#06x}({zp_size}) BSS={bss_start:#06x}..={bss_end:#06x}({bss_size}) __MAIN_START__={main_start:#06x} __MAIN_SIZE__={main_size} software_stack_boundary={stack_boundary:#06x} bss_to_stack_headroom={headroom} cycles={cycles} command=\"TBX_MEASURE_SIM65_RESOURCES=1 cargo test -p tbx-next --lib {test_name} -- --ignored --nocapture\"",
+            "sim65 resources: sample={sample} high_water_probe={high_water} input_probe={check_input_consumed} revision={} ca65=\"{ca65_version}\" ld65=\"{ld65_version}\" sim65=\"{sim65_version}\" bytecode={} VM[{segment_sizes}] array_storage_bytes={array_storage_bytes} array_descriptor_bytes={} text_storage_bytes={text_storage_bytes} text_descriptor_bytes={text_descriptor_bytes} input_adapter_script_bytes={input_adapter_script_bytes} input_adapter_cursor_bytes={input_adapter_cursor_bytes} input_adapter_total_bytes={input_adapter_bytes} linked_bss_delta={linked_bss_delta} ZEROPAGE={zp_start:#06x}..={zp_end:#06x}({zp_size}) BSS={bss_start:#06x}..={bss_end:#06x}({bss_size}) __MAIN_START__={main_start:#06x} __MAIN_SIZE__={main_size} software_stack_boundary={stack_boundary:#06x} bss_to_stack_headroom={headroom} cycles={cycles} command=\"TBX_MEASURE_SIM65_RESOURCES=1 cargo test -p tbx-next --lib {test_name} -- --ignored --nocapture\"",
             git_revision(crate_root)?,
             artifact.code().len(),
             artifact.array_descriptor_bytes().ok_or_else(|| "array descriptor size overflows".to_owned())?
         );
     }
-    Ok(())
+    Ok(peaks)
 }
 
 #[test]
@@ -1033,7 +1252,7 @@ fn sttr1_victory_game_loop_matches_host_reference_and_sim65() {
         &session.environment.arrays,
     )
     .expect("STTR1 victory source graph encodes");
-    build_and_run_with_input_probe(
+    let peaks = build_and_run_with_probes(
         &artifact,
         Some(STTR1_VICTORY_SEED),
         &host_output,
@@ -1042,8 +1261,37 @@ fn sttr1_victory_game_loop_matches_host_reference_and_sim65() {
         "sttr1_victory_game_loop_matches_host_reference_and_sim65",
         (Some((STTR1_VICTORY_INPUT_BYTES, true)), None),
         true,
+        true,
     )
-    .expect("sim65 reaches the same victory output");
+    .expect("sim65 reaches the same victory output")
+    .expect("high-water probe is enabled");
+    assert_eq!(
+        peaks,
+        StackPeaks {
+            call: 6,
+            data: 10,
+            control: 2
+        }
+    );
+    eprintln!(
+        "STTR1 victory stack peaks: call={}/16 (remaining={}, use={:.1}%), data={}/64 (remaining={}, use={:.1}%), control={}/16 (remaining={}, use={:.1}%)",
+        peaks.call, 16 - usize::from(peaks.call), f64::from(peaks.call) * 100.0 / 16.0,
+        peaks.data, 64 - usize::from(peaks.data), f64::from(peaks.data) * 100.0 / 64.0,
+        peaks.control, 16 - usize::from(peaks.control), f64::from(peaks.control) * 100.0 / 16.0,
+    );
+    if std::env::var_os("TBX_MEASURE_SIM65_RESOURCES").is_some() {
+        build_and_run_with_input_probe(
+            &artifact,
+            Some(STTR1_VICTORY_SEED),
+            &host_output,
+            "50000000",
+            "sttr1-victory-input-probe-only",
+            "sttr1_victory_game_loop_matches_host_reference_and_sim65",
+            (Some((STTR1_VICTORY_INPUT_BYTES, true)), None),
+            true,
+        )
+        .expect("input-only probe preserves the victory output");
+    }
 }
 
 #[test]
