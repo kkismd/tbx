@@ -15,4 +15,4 @@ expected_control:
         .word 1
     .endrepeat
 expected_data: .word 99
-VM_EXPECT_CONTROL 24, failure, 1, 16, 0, expected_data, 2, expected_control, 32, 0, 0
+VM_EXPECT_CONTROL 24, failure, 1, 16, 0, expected_data, 2, expected_control, 32, 0, 0, VM_CHECK_DATA_DEPTH | VM_CHECK_DATA_STACK | VM_CHECK_CONTROL_DEPTH | VM_CHECK_CONTROL_STACK

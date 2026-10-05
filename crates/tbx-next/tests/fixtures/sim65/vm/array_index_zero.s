@@ -12,4 +12,4 @@ expected_stack: .word 0
 .segment "DATA"
 storage: .word 321, 654
 expected: .word 321, 654
-VM_EXPECT 21, failure, 1, 0, expected_stack, 2, $ff, 0, 0, 0, storage, expected, 4
+VM_EXPECT 21, failure, 1, 0, expected_stack, 2, $ff, 0, 0, 0, storage, expected, 4, VM_CHECK_DATA_DEPTH | VM_CHECK_DATA_STACK

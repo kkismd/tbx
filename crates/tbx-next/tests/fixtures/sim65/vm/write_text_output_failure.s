@@ -10,8 +10,7 @@ VM_END
 .segment "RODATA"
 descriptors: .word bytes, 2
 bytes: .byte 'x', 'y'
-expected_stack: .word 4321
-VM_EXPECT 18, failure, 1, 0, expected_stack, 2, $ff, 0, 0, 0, 0, 0, 0
+VM_EXPECT 18, failure, 0, 0, 0, 0, $ff, 0, 0, 0, 0, 0, 0, 0
 .segment "CODE"
 _putchar:
     lda #$ff

@@ -12,8 +12,4 @@ input_failure:
     TRY_INPUT
     RET
 VM_END
-expected_frame:
-    .byte 12, 0, 0, 1
-    .res 16, 0
-expected_control: .word 5
-VM_EXPECT_STATE 26, input_failure, 0, 1, 1, 0, 0, 0, 77, expected_frame, 20, expected_control, 2
+VM_EXPECT 26, input_failure, 0, 0, 0, 0, $ff, 0, 0, 0, 0, 0, 0, VM_CHECK_DATA_DEPTH

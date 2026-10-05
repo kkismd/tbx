@@ -8,7 +8,7 @@ failure:
     HALT
 VM_END
 expected_stack: .word 65
-VM_EXPECT 18, failure, 1, 0, expected_stack, 2, $ff, 0, 0, 0, 0, 0, 0
+VM_EXPECT 18, failure, 1, 0, expected_stack, 2, $ff, 0, 0, 0, 0, 0, 0, VM_CHECK_DATA_DEPTH | VM_CHECK_DATA_STACK
 .segment "CODE"
 _putchar:
     lda #$ff

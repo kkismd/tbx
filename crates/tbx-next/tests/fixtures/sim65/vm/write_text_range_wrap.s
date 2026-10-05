@@ -7,4 +7,4 @@ failure:
 VM_END
 .segment "RODATA"
 descriptors: .word $ffff, 2
-VM_EXPECT 22, failure, 0, 0, 0, 0, $ff, 0, 0, 0, 0, 0, 0
+VM_EXPECT 22, failure, 0, 0, 0, 0, $ff, 0, 0, 0, 0, 0, 0, 0

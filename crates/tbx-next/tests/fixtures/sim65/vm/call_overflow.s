@@ -11,4 +11,4 @@ expected_frame:
     .repeat 16
         .byte 0
     .endrepeat
-VM_EXPECT 15, failure, 0, 16, 0, 0, 0, 0, expected_frame, 20, 0, 0, 0
+VM_EXPECT 15, failure, 0, 16, 0, 0, 0, 0, expected_frame, 20, 0, 0, 0, VM_CHECK_CALL_DEPTH | VM_CHECK_FRAME

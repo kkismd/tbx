@@ -156,9 +156,19 @@ _tbx_code_end:
     .byte $72
 .endmacro
 
-; Error probe record: code, opcode address, depths, stack, optional global,
-; active frame, and optional unchanged array storage bytes.
-.macro VM_EXPECT code, pc, data_depth, call_depth, stack_ptr, stack_len, global_slot, global_value, frame_ptr, frame_len, array_ptr, expected_array_ptr, array_len
+; Test-only observation flags. Error code and failed PC are always checked.
+VM_CHECK_DATA_DEPTH = $0001
+VM_CHECK_DATA_STACK = $0002
+VM_CHECK_CONTROL_DEPTH = $0004
+VM_CHECK_CONTROL_STACK = $0008
+VM_CHECK_CALL_DEPTH = $0010
+VM_CHECK_FRAME = $0020
+VM_CHECK_GLOBAL = $0040
+VM_CHECK_BYTES = $0080
+VM_CHECK_RNG = $0100
+
+; Error probe record: code, opcode address, optional state, then checks.
+.macro VM_EXPECT code, pc, data_depth, call_depth, stack_ptr, stack_len, global_slot, global_value, frame_ptr, frame_len, array_ptr, expected_array_ptr, array_len, checks
     .export _tbx_test_expect
     .segment "RODATA"
 _tbx_test_expect:
@@ -176,9 +186,10 @@ _tbx_test_expect:
     .byte array_len
     .byte 0
     .word 0
+    .word checks
 .endmacro
 
-.macro VM_EXPECT_CONTROL code, pc, data_depth, control_depth, call_depth, stack_ptr, stack_len, control_ptr, control_len, frame_ptr, frame_len
+.macro VM_EXPECT_CONTROL code, pc, data_depth, control_depth, call_depth, stack_ptr, stack_len, control_ptr, control_len, frame_ptr, frame_len, checks
     .export _tbx_test_expect
     .segment "RODATA"
 _tbx_test_expect:
@@ -195,9 +206,10 @@ _tbx_test_expect:
     .byte 0
     .byte control_len
     .word control_ptr
+    .word checks
 .endmacro
 
-.macro VM_EXPECT_STATE code, pc, data_depth, control_depth, call_depth, stack_ptr, stack_len, global_slot, global_value, frame_ptr, frame_len, control_ptr, control_len
+.macro VM_EXPECT_STATE code, pc, data_depth, control_depth, call_depth, stack_ptr, stack_len, global_slot, global_value, frame_ptr, frame_len, control_ptr, control_len, checks
     .export _tbx_test_expect
     .segment "RODATA"
 _tbx_test_expect:
@@ -214,4 +226,5 @@ _tbx_test_expect:
     .byte 0
     .byte control_len
     .word control_ptr
+    .word checks
 .endmacro

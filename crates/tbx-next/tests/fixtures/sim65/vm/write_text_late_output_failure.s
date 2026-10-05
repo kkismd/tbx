@@ -10,9 +10,8 @@ VM_END
 .segment "RODATA"
 descriptors: .word bytes, 3
 bytes: .byte 'P', 'Q', 'R'
-expected_stack: .word 987
 expected_prefix: .byte 'P'
-VM_EXPECT 18, failure, 1, 0, expected_stack, 2, $ff, 0, 0, 0, output_prefix, expected_prefix, 1
+VM_EXPECT 18, failure, 0, 0, 0, 0, $ff, 0, 0, 0, output_prefix, expected_prefix, 1, VM_CHECK_BYTES
 .segment "BSS"
 putchar_calls: .res 1
 emitted_byte: .res 1

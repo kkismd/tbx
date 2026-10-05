@@ -5,4 +5,4 @@ failure:
     .byte $ff
     HALT
 VM_END
-VM_EXPECT 10, failure, 0, 0, 0, 0, $ff, 0, 0, 0, 0, 0, 0
+VM_EXPECT 10, failure, 0, 0, 0, 0, $ff, 0, 0, 0, 0, 0, 0, 0

@@ -292,6 +292,7 @@ fn vm_failure_fixtures_observe_atomic_state() {
         ("control_return_underflow", 19),
         ("control_return_truncate_check", 23),
         ("invalid_global", 16),
+        ("store_no_successor", 11),
         ("array_load_underflow", 12),
         ("array_store_underflow_zero", 12),
         ("array_store_underflow_one", 12),

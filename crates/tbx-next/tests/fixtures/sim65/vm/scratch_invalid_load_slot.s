@@ -17,4 +17,4 @@ expected_frame:
     .byte 1, 0
     .res 14, 0
     .word $ff85
-VM_EXPECT 27, failure, 1, 1, expected_stack, 2, $ff, 0, expected_frame, 20, 0, 0, 0
+VM_EXPECT 27, failure, 1, 1, expected_stack, 2, $ff, 0, expected_frame, 20, 0, 0, 0, VM_CHECK_DATA_DEPTH | VM_CHECK_DATA_STACK

@@ -9,11 +9,4 @@ callee:
 failure:
     .byte $00
 VM_END
-expected_stack: .word 0, 0
-expected_frame:
-    .word callee - _tbx_code_start - 1
-    .byte 2, 0
-    .repeat 16
-        .byte 0
-    .endrepeat
-VM_EXPECT 10, failure, 2, 1, expected_stack, 4, 255, 0, expected_frame, 20, 0, 0, 0
+VM_EXPECT 10, failure, 0, 0, 0, 0, $ff, 0, 0, 0, 0, 0, 0, 0

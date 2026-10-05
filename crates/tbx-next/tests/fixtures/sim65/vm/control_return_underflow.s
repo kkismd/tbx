@@ -16,4 +16,4 @@ expected_frame:
     .word after_call - _tbx_code_start
     .byte 0, 1
     .res 16, 0
-VM_EXPECT_CONTROL 19, failure, 0, 0, 1, 0, 0, expected_control, 2, expected_frame, 20
+VM_EXPECT_CONTROL 19, failure, 0, 0, 1, 0, 0, expected_control, 2, expected_frame, 20, VM_CHECK_DATA_DEPTH | VM_CHECK_DATA_STACK | VM_CHECK_CONTROL_DEPTH | VM_CHECK_CONTROL_STACK | VM_CHECK_CALL_DEPTH | VM_CHECK_FRAME
