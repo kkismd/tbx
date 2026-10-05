@@ -715,7 +715,7 @@ fn build_and_run_with_probes(
                 .map(|(_, size)| *size)
                 .unwrap_or(0)
         };
-        if size("ZEROPAGE") != 31 || size("BSS") != 1054 + usize::from(high_water) * 3 {
+        if size("ZEROPAGE") != 31 || size("BSS") != 1046 + usize::from(high_water) * 3 {
             return Err(format!(
                 "unexpected VM RAM segment sizes: ZEROPAGE={} BSS={}",
                 size("ZEROPAGE"),
@@ -723,9 +723,9 @@ fn build_and_run_with_probes(
             ));
         }
         let expected_code = match (check_input_consumed, high_water) {
-            (false, false) => Some(4834),
-            (true, false) => Some(4849),
-            (true, true) => Some(4897),
+            (false, false) => Some(4823),
+            (true, false) => Some(4838),
+            (true, true) => Some(4886),
             (false, true) => None,
         };
         if let Some(expected_code) = expected_code {
