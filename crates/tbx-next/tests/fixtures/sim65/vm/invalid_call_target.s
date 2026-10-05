@@ -7,4 +7,5 @@ failure:
     HALT
 VM_END
 expected_stack: .word 7
-VM_EXPECT 11, failure, 1, 0, expected_stack, 2, $ff, 0, 0, 0, 0, 0, 0, VM_CHECK_CALL_DEPTH | VM_CHECK_FRAME
+expected_frame: .res 20, $a5
+VM_EXPECT 11, failure, 1, 0, expected_stack, 2, $ff, 0, expected_frame, 20, 0, 0, 0, VM_CHECK_CALL_DEPTH | VM_CHECK_FRAME
