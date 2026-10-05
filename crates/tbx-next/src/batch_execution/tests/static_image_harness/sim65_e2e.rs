@@ -940,7 +940,7 @@ fn multisource_runtime_sequence_matches_host_reference_and_sim65() {
     assert_eq!(reference_output, expected);
     assert!(reference.halted);
 
-    let artifact = crate::static_image::test_lower_and_encode_sequence(
+    let artifact = crate::static_image::lower_and_encode_sequence(
         &owners,
         &entries,
         units.len(),
@@ -1077,7 +1077,7 @@ fn sttr1_all_sources_encode_and_measure_sim65_resources() {
         "STTR1 compiled definitions are published"
     );
     owners.push(published);
-    let artifact = crate::static_image::test_lower_and_encode_sequence(
+    let artifact = crate::static_image::lower_and_encode_sequence(
         &owners,
         &entries,
         units.len(),
@@ -1086,7 +1086,7 @@ fn sttr1_all_sources_encode_and_measure_sim65_resources() {
         &session.environment.globals,
         &session.environment.arrays,
     )
-    .unwrap_or_else(|error| panic!("all STTR1 definitions lower and encode: {error}"));
+    .unwrap_or_else(|error| panic!("all STTR1 definitions lower and encode: {error:?}"));
     assert_eq!(artifact.global_slot_count(), 40);
     assert_eq!(artifact.array_count(), 9);
     assert_eq!(
@@ -1242,7 +1242,7 @@ fn sttr1_victory_game_loop_matches_host_reference_and_sim65() {
     assert!(reference.data_stack.is_empty());
     assert_eq!(reference_output, host_output);
 
-    let artifact = crate::static_image::test_lower_and_encode_sequence(
+    let artifact = crate::static_image::lower_and_encode_sequence(
         &owners,
         &entries,
         units.len(),
@@ -1382,7 +1382,7 @@ fn multisource_runtime_failure_keeps_prefix_and_stops_later_forms() {
         Err(crate::static_image::TestReferenceError::InputFailed)
     );
 
-    let artifact = crate::static_image::test_lower_and_encode_sequence(
+    let artifact = crate::static_image::lower_and_encode_sequence(
         &owners,
         &entries,
         runtime_owner_count,

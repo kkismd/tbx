@@ -122,7 +122,7 @@ pub(crate) struct StaticImage {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum LowerError {
+pub(crate) enum LowerError {
     InvalidWord(WordId),
     InvalidCodeLocation(CodeLocation),
     UnknownCodeOwner(CodeLocation),
@@ -132,6 +132,16 @@ enum LowerError {
     UnknownPrimitive(PrimitiveId),
     ImageTooLarge,
     DuplicateCodeOwner,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum SequenceError {
+    EmptyRuntimeSequence,
+    EntryCountMismatch,
+    MissingRuntimeOwner,
+    InvalidRuntimeEntry(CodeLocation),
+    Lower(LowerError),
+    Encode(bytecode_6502::EncodeError),
 }
 
 struct PrimitiveMap(HashMap<PrimitiveId, PrimitiveOp>);
@@ -525,11 +535,7 @@ pub(crate) fn test_lower_and_encode(
         .map(|(_, artifact)| artifact)
 }
 
-/// Lowers the ordered runtime forms collected by the test-only source session
-/// into one image. Intermediate form terminators continue at the next form;
-/// the final form retains the ordinary Halt instruction.
-#[cfg(test)]
-pub(crate) fn test_lower_and_encode_sequence(
+pub(crate) fn lower_and_encode_sequence(
     owners: &[InstructionView<'_>],
     entries: &[CodeLocation],
     runtime_owner_count: usize,
@@ -544,7 +550,7 @@ pub(crate) fn test_lower_and_encode_sequence(
     ),
     globals: &GlobalVariables,
     arrays: &GlobalArrays,
-) -> Result<bytecode_6502::BytecodeArtifact, String> {
+) -> Result<bytecode_6502::BytecodeArtifact, SequenceError> {
     let image = lower_sequence_image(
         owners,
         entries,
@@ -553,29 +559,12 @@ pub(crate) fn test_lower_and_encode_sequence(
         primitive_words,
         globals,
         arrays,
-    );
-    bytecode_6502::encode(&image).map_err(|error| {
-        let detail = match error {
-            bytecode_6502::EncodeError::UnsupportedInstruction(index)
-            | bytecode_6502::EncodeError::UnsupportedPrimitive(index) => {
-                format!(" at logical instruction {index}: {:?}", image.code[index])
-            }
-            _ => String::new(),
-        };
-        format!(
-            "{error:?}{detail}; logical_instructions={} fixed_texts={} text_storage_bytes={} text_descriptor_bytes={} globals={} arrays={} array_cells={}",
-            image.code.len(),
-            image.texts.len(),
-            image.texts.iter().map(String::len).sum::<usize>(),
-            image.texts.len() * 4,
-            image.global_count,
-            image.array_lengths.len(),
-            image.array_lengths.iter().sum::<usize>()
-        )
-    })
+    )?;
+    bytecode_6502::encode(&image).map_err(SequenceError::Encode)
 }
 
-#[cfg(test)]
+/// Runtime owners and their entries are ordered together. Additional owners
+/// follow them and never participate in form continuation.
 fn lower_sequence_image(
     owners: &[InstructionView<'_>],
     entries: &[CodeLocation],
@@ -591,9 +580,31 @@ fn lower_sequence_image(
     ),
     globals: &GlobalVariables,
     arrays: &GlobalArrays,
-) -> StaticImage {
-    assert_eq!(entries.len(), runtime_owner_count);
-    assert!(runtime_owner_count > 0);
+) -> Result<StaticImage, SequenceError> {
+    if runtime_owner_count == 0 {
+        return Err(SequenceError::EmptyRuntimeSequence);
+    }
+    if entries.len() != runtime_owner_count {
+        return Err(SequenceError::EntryCountMismatch);
+    }
+    if owners.len() < runtime_owner_count {
+        return Err(SequenceError::MissingRuntimeOwner);
+    }
+    let mut ranges = Vec::with_capacity(runtime_owner_count);
+    let mut offset = 0usize;
+    for (owner, entry) in owners.iter().zip(entries) {
+        if owner.code_space() != entry.code_space() || owner.validate_location(*entry).is_err() {
+            return Err(SequenceError::InvalidRuntimeEntry(*entry));
+        }
+        let end = offset
+            .checked_add(owner.len())
+            .ok_or(SequenceError::Lower(LowerError::ImageTooLarge))?;
+        let entry_position = offset
+            .checked_add(entry.address().as_index())
+            .ok_or(SequenceError::Lower(LowerError::ImageTooLarge))?;
+        ranges.push((offset, end, CodePosition(entry_position)));
+        offset = end;
+    }
     let mut image = lower(
         owners,
         entries[0],
@@ -609,30 +620,16 @@ fn lower_sequence_image(
         globals,
         arrays,
     )
-    .expect("test source sequence lowers to a static image");
-    let mut starts = Vec::with_capacity(runtime_owner_count);
-    let mut offset = 0usize;
-    for (owner, entry) in owners.iter().zip(entries.iter()) {
-        if starts.len() == runtime_owner_count {
-            break;
-        }
-        starts.push(offset + entry.address().as_index());
-        offset += owner.len();
-    }
-    for index in 0..runtime_owner_count - 1 {
-        let start = owners[..index]
-            .iter()
-            .map(|owner| owner.len())
-            .sum::<usize>();
-        let end = start + owners[index].len();
-        let continuation = CodePosition(starts[index + 1]);
+    .map_err(SequenceError::Lower)?;
+    for (index, &(start, end, _)) in ranges.iter().enumerate().take(runtime_owner_count - 1) {
+        let continuation = ranges[index + 1].2;
         for instruction in &mut image.code[start..end] {
             if let LogicalInstruction::Halt = instruction {
                 *instruction = LogicalInstruction::Jump(continuation);
             }
         }
     }
-    image
+    Ok(image)
 }
 
 #[cfg(test)]
@@ -667,9 +664,11 @@ pub(crate) fn test_lower_and_run_sequence<'a>(
         primitive_words,
         globals,
         arrays,
-    );
+    )
+    .map_err(|_| TestReferenceError::Other)?;
     let statistics = image.statistics();
-    let mut vm = reference_vm::ReferenceVm::new(image, CodePosition(0))
+    let entry = image.entry;
+    let mut vm = reference_vm::ReferenceVm::new(image, entry)
         .expect("lowered source sequence has a valid entry");
     let outcome = vm.run(Some(output), input, Some(random)).map_err(|error| {
         if matches!(error.kind, reference_vm::RuntimeErrorKind::InputFailed) {
@@ -927,6 +926,167 @@ mod tests {
                 &self.arrays,
             )
         }
+    }
+
+    #[test]
+    fn sequence_lowering_continues_runtime_forms_but_leaves_published_code_intact() {
+        let fixture = Fixture::new();
+        let mut first = InstructionSequence::new();
+        first.append(Instruction::Push(Value::integer(1)));
+        first.append(Instruction::Halt);
+        let mut second = InstructionSequence::new();
+        second.append(Instruction::Push(Value::integer(99)));
+        second.append(Instruction::Push(Value::integer(2)));
+        second.append(Instruction::Halt);
+        let mut published = InstructionSequence::new();
+        published.append(Instruction::Halt);
+        let owners = [first.view(), second.view(), published.view()];
+        let entries = [
+            first.view().location(InstructionAddress::from_index(0)),
+            second.view().location(InstructionAddress::from_index(1)),
+        ];
+
+        let image = lower_sequence_image(
+            &owners,
+            &entries,
+            2,
+            &fixture.words,
+            (
+                fixture.operators,
+                fixture.abs,
+                fixture.stack,
+                fixture.output,
+                fixture.input,
+                fixture.rnd,
+            ),
+            &fixture.globals,
+            &fixture.arrays,
+        )
+        .expect("valid sequence lowers");
+        assert_eq!(image.code[1], LogicalInstruction::Jump(CodePosition(3)));
+        assert_eq!(image.code[4], LogicalInstruction::Halt);
+        assert_eq!(image.code[5], LogicalInstruction::Halt);
+
+        let artifact = lower_and_encode_sequence(
+            &owners,
+            &entries,
+            2,
+            &fixture.words,
+            (
+                fixture.operators,
+                fixture.abs,
+                fixture.stack,
+                fixture.output,
+                fixture.input,
+                fixture.rnd,
+            ),
+            &fixture.globals,
+            &fixture.arrays,
+        )
+        .expect("valid sequence encodes");
+        assert_eq!(
+            artifact.code(),
+            &[0x02, 1, 0, 0x30, 9, 0, 0x02, 99, 0, 0x02, 2, 0, 0x01, 0x01]
+        );
+    }
+
+    #[test]
+    fn sequence_lowering_rejects_invalid_inputs_and_propagates_lower_errors() {
+        let fixture = Fixture::new();
+        let mut owner = InstructionSequence::new();
+        owner.append(Instruction::Halt);
+        let entry = owner.view().location(InstructionAddress::from_index(0));
+        let primitives = (
+            fixture.operators,
+            fixture.abs,
+            fixture.stack,
+            fixture.output,
+            fixture.input,
+            fixture.rnd,
+        );
+        let lower_sequence = |owners: &[InstructionView<'_>], entries: &[CodeLocation], count| {
+            lower_sequence_image(
+                owners,
+                entries,
+                count,
+                &fixture.words,
+                primitives,
+                &fixture.globals,
+                &fixture.arrays,
+            )
+        };
+        assert_eq!(
+            lower_sequence(&[], &[], 0),
+            Err(SequenceError::EmptyRuntimeSequence)
+        );
+        assert_eq!(
+            lower_sequence(&[owner.view()], &[], 1),
+            Err(SequenceError::EntryCountMismatch)
+        );
+        assert_eq!(
+            lower_sequence(&[], &[entry], 1),
+            Err(SequenceError::MissingRuntimeOwner)
+        );
+        let mut other = InstructionSequence::new();
+        other.append(Instruction::Halt);
+        assert_eq!(
+            lower_sequence(&[other.view()], &[entry], 1),
+            Err(SequenceError::InvalidRuntimeEntry(entry))
+        );
+        let out_of_bounds = owner.view().location(InstructionAddress::from_index(1));
+        assert_eq!(
+            lower_sequence(&[owner.view()], &[out_of_bounds], 1),
+            Err(SequenceError::InvalidRuntimeEntry(out_of_bounds))
+        );
+        let mut bad = InstructionSequence::new();
+        bad.append(Instruction::Call(WordId::test_invalid(usize::MAX)));
+        let bad_entry = bad.view().location(InstructionAddress::from_index(0));
+        assert!(matches!(
+            lower_sequence(&[bad.view()], &[bad_entry], 1),
+            Err(SequenceError::Lower(LowerError::InvalidWord(_)))
+        ));
+        assert!(matches!(
+            lower_and_encode_sequence(
+                &[bad.view()],
+                &[bad_entry],
+                1,
+                &fixture.words,
+                primitives,
+                &fixture.globals,
+                &fixture.arrays,
+            ),
+            Err(SequenceError::Lower(LowerError::InvalidWord(_)))
+        ));
+    }
+
+    #[test]
+    fn sequence_encode_error_keeps_its_error_type() {
+        let fixture = Fixture::new();
+        let mut owner = InstructionSequence::new();
+        owner.append(Instruction::WriteFixedText(Rc::from("x".repeat(65536))));
+        owner.append(Instruction::Halt);
+        let entry = owner.view().location(InstructionAddress::from_index(0));
+        assert_eq!(
+            lower_and_encode_sequence(
+                &[owner.view()],
+                &[entry],
+                1,
+                &fixture.words,
+                (
+                    fixture.operators,
+                    fixture.abs,
+                    fixture.stack,
+                    fixture.output,
+                    fixture.input,
+                    fixture.rnd,
+                ),
+                &fixture.globals,
+                &fixture.arrays,
+            ),
+            Err(SequenceError::Encode(
+                bytecode_6502::EncodeError::TextLengthOutOfRange(65536)
+            ))
+        );
     }
 
     #[test]
