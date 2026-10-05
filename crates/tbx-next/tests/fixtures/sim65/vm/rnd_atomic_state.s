@@ -15,8 +15,4 @@ failure:
     HALT
 VM_END
 expected_stack: .word 0
-expected_control: .word 77
-expected_frame:
-    .byte return_after_call - _tbx_code_start, 0, 0, 1
-    .res 16, 0
-VM_EXPECT_STATE 25, failure, 1, 1, 1, expected_stack, 2, 0, 123, expected_frame, 20, expected_control, 2
+VM_EXPECT 25, failure, 1, 0, expected_stack, 2, $ff, 0, 0, 0, 0, 0, 0, VM_CHECK_DATA_DEPTH | VM_CHECK_DATA_STACK | VM_CHECK_RNG

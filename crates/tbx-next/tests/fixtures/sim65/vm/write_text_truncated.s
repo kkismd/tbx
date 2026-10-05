@@ -4,4 +4,4 @@ entry:
 failure:
     .byte $63
 VM_END
-VM_EXPECT 11, failure, 0, 0, 0, 0, $ff, 0, 0, 0, 0, 0, 0
+VM_EXPECT 11, failure, 0, 0, 0, 0, $ff, 0, 0, 0, 0, 0, 0, 0

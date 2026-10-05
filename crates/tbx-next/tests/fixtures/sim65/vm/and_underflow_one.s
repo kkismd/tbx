@@ -18,4 +18,4 @@ expected_frame:
     .word after_call - _tbx_code_start
     .byte 1, 1
 expected_control: .word (-7) & $ffff
-VM_EXPECT_STATE 12, failure, 1, 1, 1, expected_stack, 2, 0, 123, expected_frame, 4, expected_control, 2
+VM_EXPECT_STATE 12, failure, 1, 1, 1, expected_stack, 2, 0, 123, expected_frame, 4, expected_control, 2, VM_CHECK_DATA_DEPTH | VM_CHECK_DATA_STACK

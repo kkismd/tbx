@@ -15,4 +15,4 @@ expected_frame:
     .byte 0, 0
     .res 14, 0
     .word $ff85
-VM_EXPECT 12, failure, 0, 1, 0, 0, $ff, 0, expected_frame, 20, 0, 0, 0
+VM_EXPECT 12, failure, 0, 1, 0, 0, $ff, 0, expected_frame, 20, 0, 0, 0, VM_CHECK_DATA_DEPTH | VM_CHECK_DATA_STACK | VM_CHECK_FRAME
