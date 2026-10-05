@@ -425,13 +425,13 @@ fn vm_linker_layout_obeys_m32_segments_and_capacity() {
     assert!(bss.1 <= 0xffc0);
     assert_eq!(
         symbol(&result.labels, "vm_bss_end") - symbol(&result.labels, "tbx_data_stack"),
-        1054
+        1046
     );
     let vm_code = symbol(&result.labels, "vm_code_end") - symbol(&result.labels, "vm_code_start");
     let vm_rodata =
         symbol(&result.labels, "vm_rodata_end") - symbol(&result.labels, "vm_rodata_start");
     eprintln!(
-        "6502 VM resources (ca65/ld65/sim65 V2.18, base 1982ddc): CODE={vm_code} (+590), RODATA object=40 (+0; frame table={vm_rodata}), BSS={} (+9), ZEROPAGE={} (+0)",
+        "6502 VM resources (ca65/ld65/sim65 V2.18, base 1982ddc): CODE={vm_code} (+579), RODATA object=40 (+0; frame table={vm_rodata}), BSS={} (+1), ZEROPAGE={} (+0)",
         symbol(&result.labels, "vm_bss_end") - symbol(&result.labels, "tbx_data_stack"),
         symbol(&result.labels, "vm_zp_end") - symbol(&result.labels, "tbx_pc")
     );
@@ -479,6 +479,6 @@ fn vm_linker_layout_obeys_m32_segments_and_capacity() {
     assert_eq!(frames - data, 64 * 2);
     assert_eq!(globals - frames, 16 * 20);
     assert_eq!(control - globals, 256 * 2 + 6);
-    assert_eq!(symbol(&result.labels, "vm_bss_end") - control, 88);
+    assert_eq!(symbol(&result.labels, "vm_bss_end") - control, 80);
     assert!(data >= bss.0 && globals + 256 * 2 <= bss.1);
 }
