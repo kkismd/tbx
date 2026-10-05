@@ -53,7 +53,6 @@ digits:         .res 6
 tbx_control_stack: .res 32
 ; ADR #1889 explicit seeds require the same xorshift/multiply sequence on all targets.
 tbx_rng_state: .res 8
-rng_work: .res 8
 rng_shift: .res 8
 rng_multiplicand: .res 8
 rng_product: .res 8
@@ -1351,38 +1350,40 @@ op_rnd:
 rnd_nonnegative_bound:
     ora rng_bound
     jeq fail_random_bound
-    ; Work on a private copy so every subsequent arithmetic step is speculative.
+    ; #2218 permits publishing the next RNG state once all fallible
+    ; validation has completed. Keep only the shift scratch required by
+    ; ADR #2161's compatible xorshift sequence instead of a restart shadow.
     ldx #7
-rnd_copy_state:
+rnd_copy_shift_source:
     lda tbx_rng_state,x
-    sta rng_work,x
+    sta rng_shift,x
     dex
-    bpl rnd_copy_state
+    bpl rnd_copy_shift_source
     ; xorshift64: x ^= x >> 12; x ^= x << 25; x ^= x >> 27.
     lda #12
     sta rng_shift_count
 rnd_shift_right_12:
-    lsr rng_work+7
-    ror rng_work+6
-    ror rng_work+5
-    ror rng_work+4
-    ror rng_work+3
-    ror rng_work+2
-    ror rng_work+1
-    ror rng_work
+    lsr rng_shift+7
+    ror rng_shift+6
+    ror rng_shift+5
+    ror rng_shift+4
+    ror rng_shift+3
+    ror rng_shift+2
+    ror rng_shift+1
+    ror rng_shift
     dec rng_shift_count
     bne rnd_shift_right_12
     ldx #0
 rnd_xor_right_12:
     lda tbx_rng_state,x
-    eor rng_work,x
-    sta rng_work,x
+    eor rng_shift,x
+    sta tbx_rng_state,x
     inx
     cpx #8
     bne rnd_xor_right_12
     ldx #7
 rnd_copy_left_source:
-    lda rng_work,x
+    lda tbx_rng_state,x
     sta rng_shift,x
     dex
     bpl rnd_copy_left_source
@@ -1401,15 +1402,15 @@ rnd_shift_left_25:
     bne rnd_shift_left_25
     ldx #0
 rnd_xor_left_25:
-    lda rng_work,x
+    lda tbx_rng_state,x
     eor rng_shift,x
-    sta rng_work,x
+    sta tbx_rng_state,x
     inx
     cpx #8
     bne rnd_xor_left_25
     ldx #7
 rnd_copy_right_source:
-    lda rng_work,x
+    lda tbx_rng_state,x
     sta rng_shift,x
     dex
     bpl rnd_copy_right_source
@@ -1428,16 +1429,16 @@ rnd_shift_right_27:
     bne rnd_shift_right_27
     ldx #0
 rnd_xor_right_27:
-    lda rng_work,x
+    lda tbx_rng_state,x
     eor rng_shift,x
-    sta rng_work,x
+    sta tbx_rng_state,x
     inx
     cpx #8
     bne rnd_xor_right_27
     ; Multiply by 0x2545_F491_4F6C_DD1D modulo 2^64.
     ldx #7
 rnd_copy_multiplicand:
-    lda rng_work,x
+    lda tbx_rng_state,x
     sta rng_multiplicand,x
     dex
     bpl rnd_copy_multiplicand
@@ -1532,13 +1533,6 @@ rnd_divide_no_subtract:
     bne rnd_divide_bit
     dex
     bpl rnd_divide_byte
-    ; All fallible validation is complete: publish state and replace the bound.
-    ldx #7
-rnd_commit_state:
-    lda rng_work,x
-    sta tbx_rng_state,x
-    dex
-    bpl rnd_commit_state
     clc
     lda rng_remainder
     adc #1
